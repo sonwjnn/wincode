@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import { createSessionHost } from "./session-host";
 import type {
@@ -22,12 +23,15 @@ type ManagedHostEntry = {
 	unsubscribeEvents: (() => void) | undefined;
 	unsubscribeSnapshot: (() => void) | undefined;
 	views: number;
+	pluginRuntime?: PluginRuntime;
+	pluginSessionContext: Readonly<{ sessionId: string; workspace: string }>;
 };
 
 let interactiveManager: SessionHostManager | undefined;
 
 export const createSessionHostManager = (
-	createDelegationRuntime: SessionDelegationRuntimeFactory
+	createDelegationRuntime: SessionDelegationRuntimeFactory,
+	processPluginRuntime?: PluginRuntime
 ): SessionHostManager => {
 	const entries = new Map<SessionId, ManagedHostEntry>();
 	const eventListeners = new Set<(event: SessionHostManagerEvent) => void>();
@@ -120,6 +124,7 @@ export const createSessionHostManager = (
 			try {
 				await closing;
 			} finally {
+				await entry.pluginRuntime?.stopSession(entry.pluginSessionContext);
 				entry.unsubscribeEvents?.();
 				entry.unsubscribeSnapshot?.();
 				delegation.onHostClosed(entry.sessionId);
@@ -167,14 +172,32 @@ export const createSessionHostManager = (
 			unsubscribeEvents: undefined,
 			unsubscribeSnapshot: undefined,
 			views: 0,
+			pluginRuntime: capabilities.getPluginRuntime?.() ?? processPluginRuntime,
+			pluginSessionContext: {
+				sessionId,
+				workspace: capabilities.getConfig().workspace,
+			},
 		};
 		entries.set(sessionId, entry);
 		delegation.onHostOpening(sessionId);
-		void createSessionHost({
-			capabilities,
-			...(executionMode === undefined ? {} : { executionMode }),
-			sessionId,
-		} satisfies SessionHostOptions).then(
+		const opening = (async () => {
+			try {
+				await entry.pluginRuntime?.startSession(entry.pluginSessionContext);
+			} catch {
+				// Plugin lifecycle failures never prevent a Session from opening.
+			}
+			try {
+				return await createSessionHost({
+					capabilities,
+					...(executionMode === undefined ? {} : { executionMode }),
+					sessionId,
+				} satisfies SessionHostOptions);
+			} catch (error) {
+				await entry.pluginRuntime?.stopSession(entry.pluginSessionContext);
+				throw error;
+			}
+		})();
+		void opening.then(
 			(host) => {
 				entry.host = host;
 				delegation.onHostOpened(sessionId, host);
@@ -311,6 +334,11 @@ export const createSessionHostManager = (
 				result.status === "fulfilled" ? [result.value] : []
 			);
 			await Promise.allSettled(hosts.map((host) => host.shutdown()));
+			await Promise.allSettled(
+				[...entries.values()].map((entry) =>
+					entry.pluginRuntime?.stopSession(entry.pluginSessionContext)
+				)
+			);
 			await delegation.cancelActiveTasks([...entries.values()]);
 			for (const entry of entries.values()) {
 				if (entry.host !== undefined) {
@@ -354,8 +382,12 @@ export const createSessionHostManager = (
 };
 
 export const getInteractiveSessionHostManager = (
-	createDelegationRuntime: SessionDelegationRuntimeFactory
+	createDelegationRuntime: SessionDelegationRuntimeFactory,
+	pluginRuntime?: PluginRuntime
 ): SessionHostManager => {
-	interactiveManager ??= createSessionHostManager(createDelegationRuntime);
+	interactiveManager ??= createSessionHostManager(
+		createDelegationRuntime,
+		pluginRuntime
+	);
 	return interactiveManager;
 };

@@ -19,6 +19,10 @@ import {
 	createToolPermissionRuntime,
 	type ToolPermissionRuntime,
 } from "@/modules/permissions/tool-permission-runtime";
+import {
+	createPluginRuntime,
+	type PluginRuntime,
+} from "@/modules/plugins/runtime";
 import { mcpPlugin } from "@/plugins/mcp";
 import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -65,6 +69,7 @@ export type SessionCapabilitiesOptions = Readonly<{
 	registry?: AgentRegistry | null;
 	runtimeFactory?: () => AgentRuntime;
 	store?: SessionStore;
+	pluginRuntime?: PluginRuntime;
 	workspace: string;
 	cwd: string;
 }>;
@@ -134,6 +139,7 @@ export const createSessionCapabilities = async ({
 	registry: providedRegistry,
 	runtimeFactory,
 	store: providedStore,
+	pluginRuntime: providedPluginRuntime,
 	workspace,
 }: SessionCapabilitiesOptions): Promise<SessionCapabilitiesAssembly> => {
 	const configStore =
@@ -146,6 +152,7 @@ export const createSessionCapabilities = async ({
 		homeRoot: os.homedir(),
 		workspace,
 	};
+	const pluginRuntime = providedPluginRuntime ?? createPluginRuntime([], []);
 	let ownedDatabase: OpenedSessionDatabase | undefined;
 	let ownedMcp: McpPluginResource | undefined;
 	const closeOwnedMcp = async (
@@ -201,6 +208,7 @@ export const createSessionCapabilities = async ({
 			registry,
 			service: permissionService,
 			workspace,
+			configRuntime,
 		});
 		const compactionSettings = createCompactionSettingsOperations({
 			configStore,
@@ -214,7 +222,8 @@ export const createSessionCapabilities = async ({
 			summaryGenerator: createDirectSummaryGenerator(connections),
 		});
 		const sessionHostManager = createSessionHostManager(
-			createApplicationSessionDelegationRuntime
+			createApplicationSessionDelegationRuntime,
+			pluginRuntime
 		);
 		if (mcpResource !== undefined) {
 			await mcpResource.initialize();
@@ -227,6 +236,7 @@ export const createSessionCapabilities = async ({
 			const closing = (async () => {
 				try {
 					await sessionHostManager.shutdownAll();
+					await pluginRuntime.shutdown();
 				} finally {
 					if (ownedMcp !== undefined) {
 						await closeOwnedMcp(ownedMcp, "shutdown");
@@ -248,6 +258,7 @@ export const createSessionCapabilities = async ({
 			getStore: () => store,
 			getSessionHostManager: () => sessionHostManager,
 			getToolPermission: () => toolPermission,
+			getPluginRuntime: () => pluginRuntime,
 			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),
 		};
 		return {

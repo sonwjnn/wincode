@@ -97,6 +97,8 @@ const logRpcFatalDiagnostic = (
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: This controller owns the JSONL lifecycle, output ordering, and teardown boundary.
 export async function runRpc({
 	autoApproval,
+	configRuntime,
+	pluginRuntime,
 	composeCapabilities: providedComposer,
 	input,
 	signal,
@@ -179,7 +181,7 @@ export async function runRpc({
 	let lastState: Record<string, unknown> | undefined;
 	const getRuntime = async (): Promise<RuntimeModules> => {
 		if (runtime === undefined) {
-			runtime = await loadRuntime();
+			runtime = await loadRuntime({ configRuntime, pluginRuntime });
 		}
 		return runtime;
 	};

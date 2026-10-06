@@ -1,3 +1,5 @@
+import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { JsonlInput } from "../rpc/protocol";
 import type { OutputWriter as RpcOutputWriter } from "../rpc/types";
@@ -15,6 +17,7 @@ export type InvocationOptions = Readonly<{
 	reasoningMode?: string;
 	session?: string;
 	effort?: string;
+	pluginPaths?: readonly string[];
 }>;
 
 export type ApplicationContext = Readonly<{
@@ -28,6 +31,8 @@ export type ApplicationContext = Readonly<{
 	stdin?: JsonlInput;
 	stdinIsTTY: boolean;
 	stdout: TextWriter;
+	configRuntime?: ConfigRuntime;
+	pluginRuntime?: PluginRuntime;
 }>;
 
 export class InvocationError extends Error {

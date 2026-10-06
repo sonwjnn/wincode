@@ -4,7 +4,10 @@ import {
 	MAX_FLATTENED_PERMISSION_RULES,
 	type PermissionRules,
 } from "@/modules/permissions/policy";
-import { resolveAgentPermission } from "@/modules/permissions/resolve";
+import {
+	resolveAgentPermission,
+	resolvePluginToolPermission,
+} from "@/modules/permissions/resolve";
 import type {
 	ConfigDocument,
 	ConfigSnapshot,
@@ -122,6 +125,59 @@ describe("resolveAgentPermission effective rules", () => {
 			"build"
 		);
 		expect(rules.edit).toBe("deny");
+	});
+});
+
+describe("resolvePluginToolPermission", () => {
+	const action = "plugin:jira:search_issues" as const;
+
+	test("defaults Plugin Tools to a manual ask for each Agent", () => {
+		expect(resolvePluginToolPermission(snapshot([]), "build", action)).toEqual({
+			decision: "ask",
+			safety: true,
+		});
+	});
+
+	test("only user rules grant Plugin Tools and project policy can only tighten", () => {
+		const resolved = resolvePluginToolPermission(
+			snapshot([
+				source("/home/.config/wincode/wincode.json", {
+					permission: { [action]: "allow" },
+				}),
+				source("/w/wincode.json", {
+					permission: { [action]: "ask" },
+				}),
+			]),
+			"build",
+			action
+		);
+
+		expect(resolved).toEqual({ decision: "ask", safety: true });
+	});
+
+	test("a project allow cannot relax the default ask or a user deny", () => {
+		const defaulted = resolvePluginToolPermission(
+			snapshot([
+				source("/w/wincode.json", { permission: { [action]: "allow" } }),
+			]),
+			"build",
+			action
+		);
+		const denied = resolvePluginToolPermission(
+			snapshot([
+				source("/home/.config/wincode/wincode.json", {
+					permission: { [action]: "deny" },
+				}),
+				source("/w/wincode.json", {
+					permission: { [action]: "allow" },
+				}),
+			]),
+			"build",
+			action
+		);
+
+		expect(defaulted).toEqual({ decision: "ask", safety: true });
+		expect(denied).toEqual({ decision: "deny", safety: false });
 	});
 });
 

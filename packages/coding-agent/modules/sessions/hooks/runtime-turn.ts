@@ -58,6 +58,10 @@ import type {
 	TurnToolPluginContext,
 } from "@/modules/application/plugins/turn-context";
 import {
+	createPluginTools,
+	type PluginToolContext,
+} from "@/modules/plugins/tools";
+import {
 	formatSkillUserContext,
 	type SkillRequestContext,
 	sampleSkillResources,
@@ -447,8 +451,37 @@ const skillToolProvider: ToolProviderRegistration<
 	},
 };
 
+const selectPluginToolProviderContext = (
+	context: TurnToolPluginContext
+): PluginToolContext => ({
+	...(context.agentId === undefined ? {} : { agentId: context.agentId }),
+	existingToolNames: context.existingToolNames ?? [],
+	gate: context.gate,
+	...(context.resolvePluginPermission === undefined
+		? {}
+		: { permissionForAction: context.resolvePluginPermission }),
+	...(context.pluginRuntime === undefined
+		? {}
+		: { runtime: context.pluginRuntime }),
+	...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+	...(context.workspace === undefined ? {} : { workspace: context.workspace }),
+});
+
+const pluginToolsPlugin: Plugin<TurnToolPluginContext> = (api) => {
+	api.registerToolProvider({
+		id: "plugin-tools",
+		policyCategory: "plugin",
+		selectContext: (context) => context,
+		adapter: {
+			policyCategory: "plugin",
+			resolve: (context) =>
+				createPluginTools(selectPluginToolProviderContext(context)),
+		},
+	});
+};
+
 const applicationToolRegistry = createApplicationToolRegistry({
-	plugins: [codingPlugin, mcpPlugin, subagentsPlugin],
+	plugins: [codingPlugin, mcpPlugin, subagentsPlugin, pluginToolsPlugin],
 	nativeToolProviders: [skillToolProvider],
 });
 

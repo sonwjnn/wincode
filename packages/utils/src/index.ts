@@ -18,6 +18,7 @@ export * from "./sensitive-key";
 
 export type JsonValueValidationOptions = Readonly<{
 	maxDepth?: number;
+	rejectToJSON?: boolean;
 }>;
 
 const isJsonPrimitive = (
@@ -40,8 +41,12 @@ const hasValidMaxDepth = (maxDepth: number): boolean =>
 const enqueueJsonChildren = (
 	value: UnknownRecord,
 	depth: number,
-	pending: PendingJsonValue[]
+	pending: PendingJsonValue[],
+	rejectToJSON: boolean
 ): boolean => {
+	if (rejectToJSON && Object.hasOwn(value, "toJSON")) {
+		return false;
+	}
 	if (isArray(value)) {
 		for (const item of value) {
 			pending.push({ depth, value: item });
@@ -62,7 +67,8 @@ const enqueueJsonChildren = (
  *
  * Objects must have Object.prototype or a null prototype. Repeated object
  * references and cyclic values are rejected because JSON values are trees.
- * The default depth is unbounded; callers handling untrusted data should set
+ * Set rejectToJSON when host serialization must not invoke object hooks. The
+ * default depth is unbounded; callers handling untrusted data should set
  * maxDepth.
  */
 export const isJsonValue = (
@@ -90,7 +96,14 @@ export const isJsonValue = (
 				return false;
 			}
 			seen.add(current.value);
-			if (!enqueueJsonChildren(current.value, current.depth + 1, pending)) {
+			if (
+				!enqueueJsonChildren(
+					current.value,
+					current.depth + 1,
+					pending,
+					options.rejectToJSON ?? false
+				)
+			) {
 				return false;
 			}
 		}

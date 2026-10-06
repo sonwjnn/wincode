@@ -26,6 +26,12 @@ export const runRpcExecutionMode = async (
 	try {
 		return await runRpc({
 			autoApproval: context.invocation.auto,
+			...(context.configRuntime === undefined
+				? {}
+				: { configRuntime: context.configRuntime }),
+			...(context.pluginRuntime === undefined
+				? {}
+				: { pluginRuntime: context.pluginRuntime }),
 			input: context.stdin,
 			signal: controller.signal,
 			signalExitCode: context.signalExitCode ?? (() => signalExitCode),

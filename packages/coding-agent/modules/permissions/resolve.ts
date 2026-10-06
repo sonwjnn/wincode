@@ -5,12 +5,16 @@ import type {
 	ConfigSnapshot,
 } from "@/shared/config/config-store";
 import {
+	composePermissionDecisions,
 	countFlattenedPermissionRules,
+	createResolvedToolPermission,
 	DEFAULT_PERMISSION_RULES,
 	findUnmatchedActionKeys,
 	foldPermissionRules,
 	MAX_FLATTENED_PERMISSION_RULES,
 	PERMISSION_TOOL_ACTIONS,
+	type PermissionAction,
+	type PermissionDecision,
 	type PermissionRules,
 } from "./policy";
 import { topLevelPermissionSchema } from "./schema";
@@ -140,4 +144,54 @@ export const resolveAgentPermission = (
 		});
 	}
 	return { diagnostics, rules, safetyCeiling };
+};
+
+export type ResolvedPluginToolPermission = Readonly<{
+	decision: PermissionDecision;
+	safety: boolean;
+}>;
+
+/**
+ * Resolves one Plugin Tool action with an `ask` default. Global user rules may
+ * grant it; each project layer is composed most-restrictively and can never
+ * turn a user ask or the default ask into an allow.
+ */
+export const resolvePluginToolPermission = (
+	snapshot: ConfigSnapshot,
+	agentId: string,
+	action: PermissionAction
+): ResolvedPluginToolPermission => {
+	const globalLayers: PermissionRules[] = [
+		{ [action]: "ask" } as PermissionRules,
+	];
+	const projectLayers: PermissionRules[] = [];
+	for (const source of snapshot.sources) {
+		const sourceLayers = [
+			parsePermissionRules(source.document.permission),
+			parsePermissionRules(agentPermissionRaw(source.document, agentId)),
+		].filter((rules): rules is PermissionRules => !isUndefined(rules));
+		if (source.scope === "global") {
+			globalLayers.push(...sourceLayers);
+		} else {
+			projectLayers.push(...sourceLayers);
+		}
+	}
+
+	let decision = createResolvedToolPermission(
+		foldPermissionRules(globalLayers)
+	).decide(action, "*");
+	let safety =
+		decision === "ask" ||
+		resolveAgentPermission(snapshot, agentId).safetyCeiling;
+	for (const rules of projectLayers) {
+		const projectDecision = createResolvedToolPermission(rules).decide(
+			action,
+			"*"
+		);
+		decision = composePermissionDecisions(decision, projectDecision);
+		if (projectDecision === "ask") {
+			safety = true;
+		}
+	}
+	return { decision, safety };
 };

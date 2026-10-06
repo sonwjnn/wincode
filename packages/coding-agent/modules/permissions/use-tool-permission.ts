@@ -29,7 +29,8 @@ export function useToolPermission(): ToolPermissionRuntime {
 				registry,
 				service,
 				workspace: config.workspace,
+				configRuntime: config,
 			}),
-		[agent, config.workspace, policyState, registry, service]
+		[agent, config, policyState, registry, service]
 	);
 }

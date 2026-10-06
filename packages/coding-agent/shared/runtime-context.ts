@@ -1,7 +1,11 @@
 import { isUndefined } from "@wincode/utils";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 export type StartInteractiveInput = {
 	args: readonly string[];
 	cwd: string;
+	configRuntime?: ConfigRuntime;
+	pluginRuntime?: PluginRuntime;
 };
 
 let runtimeContext: StartInteractiveInput | undefined;
@@ -18,3 +22,6 @@ export const getInteractiveRuntimeContext = (): StartInteractiveInput => {
 	}
 	return runtimeContext;
 };
+
+export const getInteractivePluginRuntime = (): PluginRuntime | undefined =>
+	runtimeContext?.pluginRuntime;

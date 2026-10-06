@@ -29,6 +29,17 @@ export type DispatchModeRunners = Readonly<
 
 export type DispatchModeLoader = () => Promise<DispatchModeRunners>;
 
+export type DispatchRuntime = Pick<
+	ApplicationContext,
+	"configRuntime" | "pluginRuntime"
+>;
+export type DispatchDependencies = Readonly<{
+	initializeRuntime?: (input: {
+		cwd: string;
+		pluginPaths: readonly string[];
+	}) => Promise<DispatchRuntime>;
+}>;
+
 const USAGE_EXIT_CODE = 2;
 const HELP_TEXT = [
 	"Usage: wincode [options]",
@@ -47,6 +58,7 @@ const HELP_TEXT = [
 	"      --effort <id>    Select an Effort",
 	"      --reasoning-mode <id>  Select a Reasoning Mode",
 	"      --auto           Auto-approve ordinary tool requests",
+	"      --plugin <path>  Enable a Plugin (repeatable)",
 	"  -h, --help           Show this help",
 	"  -v, --version        Show the version",
 ].join("\n");
@@ -115,6 +127,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	let session: string | undefined;
 	let effort: string | undefined;
 	let reasoningMode: string | undefined;
+	const pluginPaths: string[] = [];
 	let help = false;
 	let version = false;
 	let oneShotOption = false;
@@ -149,6 +162,12 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			equalsIndex === -1 ? argument : argument.slice(0, equalsIndex);
 		const inlineValue =
 			equalsIndex === -1 ? undefined : argument.slice(equalsIndex + 1);
+		if (option === "--plugin") {
+			const next = nextValue(args, index, option, inlineValue);
+			index = next.index;
+			pluginPaths.push(next.value);
+			continue;
+		}
 		if (option === "--mode" || option === "-m") {
 			const next = nextValue(args, index, option, inlineValue);
 			index = next.index;
@@ -252,6 +271,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			...(session === undefined ? {} : { session }),
 			...(effort === undefined ? {} : { effort }),
 			...(reasoningMode === undefined ? {} : { reasoningMode }),
+			...(pluginPaths.length === 0 ? {} : { pluginPaths }),
 		},
 	};
 }
@@ -280,8 +300,10 @@ export const getCliHelpText = (): string => HELP_TEXT;
 
 export const dispatch = async (
 	input: DispatchInput,
-	runners: DispatchModeRunners | DispatchModeLoader
+	runners: DispatchModeRunners | DispatchModeLoader,
+	dependencies: DispatchDependencies = {}
 ): Promise<number> => {
+	let pluginRuntime: ApplicationContext["pluginRuntime"];
 	try {
 		const parsed = parseInvocation(input.args);
 		if (parsed.help) {
@@ -292,7 +314,19 @@ export const dispatch = async (
 			writeLine(input.stdout, await getVersion());
 			return 0;
 		}
+		const runtime = await dependencies.initializeRuntime?.({
+			cwd: input.cwd,
+			pluginPaths: parsed.invocation.pluginPaths ?? [],
+		});
+		pluginRuntime = runtime?.pluginRuntime;
+		for (const diagnostic of pluginRuntime?.diagnostics ?? []) {
+			writeLine(
+				input.stderr,
+				`Plugin: ${diagnostic.message} (${diagnostic.sourcePath})`
+			);
+		}
 		const context: ApplicationContext = {
+			...(runtime ?? {}),
 			args: input.args,
 			cwd: input.cwd,
 			invocation: parsed.invocation,
@@ -316,5 +350,11 @@ export const dispatch = async (
 		}
 		writeLine(input.stderr, `error: ${message}`);
 		return error instanceof InvocationError ? error.exitCode : 1;
+	} finally {
+		try {
+			await pluginRuntime?.shutdown();
+		} catch {
+			// Runtime cleanup must not replace the selected mode's outcome.
+		}
 	}
 };

@@ -43,6 +43,7 @@ export type PromptToolFamily =
 	| "coding"
 	| "delegation"
 	| "mcp"
+	| "plugin"
 	| "other"
 	| "skill";
 export type PromptToolPermission = "allow" | "ask" | "deny";
@@ -141,6 +142,7 @@ const TOOL_FAMILY_LABEL: Record<PromptToolFamily, string> = {
 	coding: "Coding",
 	delegation: "Delegation",
 	mcp: "MCP",
+	plugin: "Plugin",
 	other: "Other",
 	skill: "Skill",
 };
@@ -225,6 +227,9 @@ const toolFamilyForName = (
 	}
 	if (name === "skill") {
 		return "skill";
+	}
+	if (name.startsWith("plugin_")) {
+		return "plugin";
 	}
 	return CODING_TOOL_FAMILY[name] === true ? "coding" : fallback;
 };
@@ -318,6 +323,7 @@ const toolPolicyBlock = (
 		"mcp",
 		"delegation",
 		"skill",
+		"plugin",
 		"other",
 	] as const) {
 		const group = normalized.filter((tool) => tool.family === family);
@@ -406,6 +412,7 @@ const policyForDescribedTool = (
 		readonly codingPermission?: PromptToolPermission;
 		readonly codingPermissions?: ReadonlyMap<string, PromptToolPermission>;
 		readonly mcpPolicies?: ReadonlyMap<string, PromptToolPermission>;
+		readonly pluginPolicies?: ReadonlyMap<string, PromptToolPermission>;
 		readonly requiresManualApproval?: boolean;
 		readonly skillPermission?: PromptToolPermission;
 		readonly skillPermissions?: ReadonlyMap<string, PromptToolPermission>;
@@ -428,6 +435,9 @@ const policyForDescribedTool = (
 			(input.requiresManualApproval === true ? "ask" : "allow")
 		);
 	}
+	if (family === "plugin") {
+		return input.pluginPolicies?.get(name) ?? "ask";
+	}
 	return "allow";
 };
 
@@ -439,6 +449,7 @@ export const describeEffectiveVisibleTools = (input: {
 	readonly codingPermission?: PromptToolPermission;
 	readonly codingPermissions?: ReadonlyMap<string, PromptToolPermission>;
 	readonly mcpPolicies?: ReadonlyMap<string, PromptToolPermission>;
+	readonly pluginPolicies?: ReadonlyMap<string, PromptToolPermission>;
 	readonly requiresManualApproval?: boolean;
 	readonly skillPermission?: PromptToolPermission;
 	readonly skillPermissions?: ReadonlyMap<string, PromptToolPermission>;
@@ -462,6 +473,7 @@ type PromptAgentCapabilities = {
 export const describeAgentTurnTools = (input: {
 	readonly agent: PromptAgentCapabilities;
 	readonly mcpTools: ReadonlyMap<string, PromptMcpToolSnapshot>;
+	readonly pluginPolicies?: ReadonlyMap<string, PromptToolPermission>;
 	readonly permission?: ToolPermission;
 	readonly tools: readonly ResolvedTool[];
 }): readonly EffectiveVisibleTool[] => {
@@ -489,6 +501,7 @@ export const describeAgentTurnTools = (input: {
 	return describeEffectiveVisibleTools({
 		codingPermissions,
 		mcpPolicies,
+		pluginPolicies: input.pluginPolicies,
 		requiresManualApproval: input.agent.requiresManualApproval,
 		skillPermission,
 		tools: input.tools,
@@ -548,12 +561,20 @@ export const prepareAgentTurnPrompt = async (
 		readonly agent: ResolvedAgent & PromptAgentCapabilities;
 		readonly delegation?: AgentTurnDelegation;
 		readonly mcpTools: ReadonlyMap<string, PromptMcpToolSnapshot>;
+		readonly pluginPolicies?: ReadonlyMap<string, PromptToolPermission>;
 		readonly permission?: ToolPermission;
 		readonly tools: readonly ResolvedTool[];
 	}
 ): Promise<PromptCompositionResult> => {
-	const { agent, delegation, mcpTools, permission, tools, ...snapshotInput } =
-		input;
+	const {
+		agent,
+		delegation,
+		mcpTools,
+		pluginPolicies,
+		permission,
+		tools,
+		...snapshotInput
+	} = input;
 	return prepareNormalTurnPrompt({
 		...snapshotInput,
 		agent,
@@ -561,6 +582,7 @@ export const prepareAgentTurnPrompt = async (
 		effectiveVisibleTools: describeAgentTurnTools({
 			agent,
 			mcpTools,
+			pluginPolicies,
 			permission,
 			tools,
 		}),

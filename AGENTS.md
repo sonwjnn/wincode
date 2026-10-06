@@ -34,6 +34,7 @@ When authorized to create or edit a PR, follow the checklist below.
 - No `any` unless absolutely necessary.
 - **NEVER use `ReturnType<>`** — use the actual type name.
 - **NEVER use inline imports** — no `await import()`, no `import("pkg").Type` in type positions, no dynamic type imports. Always top-level.
+- **Plugin loader exception**: Only the dedicated runtime loader may use Bun `require(path)` to load an explicitly enabled TypeScript Plugin file. Keep all other module imports top-level.
 - Check `node_modules` for external API types instead of guessing.
 - **NEVER use preserve backward compatibility** unless the user asks for it.
 - **Barrel exports**: prefer `export * from "./module"` over named re-exports, including `export type { ... } from`. In pure `index.ts` barrels, use star re-exports even for single-specifier cases. If stars create ambiguity, remove the redundant export path; do not keep duplicates.

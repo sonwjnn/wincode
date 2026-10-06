@@ -1359,6 +1359,44 @@ test("rewrites an approved external edit patch to its canonical resource", async
 	}
 });
 
+describe("Plugin Tool approvals", () => {
+	test("--auto cannot silently approve a default Plugin Tool ask", async () => {
+		const requests: ToolApprovalRequest[] = [];
+		const service = createPermissionService({ autoApproval: true });
+		const gate = createGate(
+			undefined,
+			settlingApprovalPort(
+				{ decision: "reject", feedback: "not now" },
+				requests
+			),
+			undefined,
+			service
+		);
+
+		const outcome = await gate.gate({
+			action: "plugin:jira:search_issues",
+			decision: "ask",
+			description: "Use the Jira Plugin Tool.",
+			family: "plugin",
+			input: { query: "bug" },
+			pluginId: "jira",
+			safety: true,
+			toolCallId: makeToolCallId("plugin-tool-call"),
+			toolName: "plugin_jira_search_issues",
+		});
+
+		expect(outcome).toMatchObject({
+			kind: "reject",
+			errorText: "Plugin Tool 'plugin_jira_search_issues' was not approved",
+		});
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.identity).toContainEqual({
+			label: "plugin",
+			value: "jira",
+		});
+	});
+});
+
 describe("approval settlement through the Agent Session", () => {
 	const createTestAgentSession = () =>
 		new AgentSessionImpl({

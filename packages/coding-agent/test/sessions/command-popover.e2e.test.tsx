@@ -26,6 +26,9 @@ import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
 import { getFileMentionOptions } from "@/modules/file-mentions";
+import { loadPlugins } from "@/modules/plugins/loader";
+import { createConfigStore } from "@/shared/config/config-store";
+import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClientModule,
 	createFakeModelClientRecorder,
@@ -60,9 +63,24 @@ await Bun.write(
 	join(testDirectory, ".wincode", "skills", "model-4o", "SKILL.md"),
 	"---\nname: model-4o\ndescription: Model helper skill\n---\nUse the model helper skill."
 );
+const pluginRuntime = await loadPlugins({
+	cliPaths: [
+		join(process.cwd(), "packages/coding-agent/test/fixtures/jira-plugin.ts"),
+	],
+	config: {
+		configStore: createConfigStore({
+			configRoot: testDirectory,
+			homeRoot: testDirectory,
+		}),
+		cwd: testDirectory,
+		homeRoot: testDirectory,
+		workspace: testDirectory,
+	},
+});
 afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();
+	await pluginRuntime.shutdown();
 	await rm(testDirectory, { force: true, recursive: true });
 	await rm(mentionFixtureDirectory, { force: true, recursive: true });
 });
@@ -94,6 +112,51 @@ const waitForInteractiveSession = async (
 		frame.includes("Ask anything...")
 	);
 };
+
+test("selecting a Plugin Command forwards arguments and displays its result", async () => {
+	setInteractiveRuntimeContext({
+		args: [],
+		cwd: testDirectory,
+		pluginRuntime,
+	});
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			pricing: createE2ePricing(20_000),
+			sessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+		await waitForInteractiveSession(activeSetup);
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("/open-issue");
+		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Open a Jira issue.")
+		);
+		await act(() => activeSetup.mockInput.pressEnter());
+		await settleSessionUi(activeSetup);
+		expect(activeSetup.captureCharFrame()).toContain("/open-issue ");
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText("WCO-12");
+		});
+		await act(() => activeSetup.mockInput.pressEnter());
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Opened WCO-12")
+		);
+		expect(activeSetup.captureCharFrame()).toContain("Opened WCO-12");
+	} finally {
+		setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
+		if (setup) {
+			writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
 
 test("Tab opens a Built-in Command that does not accept invocation arguments", async () => {
 	let setup: TestRendererSetup | undefined;

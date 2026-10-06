@@ -5,6 +5,7 @@ import { useMcp } from "@/modules/mcp/context/mcp-provider";
 import { useToolPermission } from "@/modules/permissions/use-tool-permission";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { createSessionCompaction } from "../compaction/compaction";
 import { estimateCompactionTokens } from "../compaction/config";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
@@ -56,6 +57,7 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	// The refs this object closes over are stable for the component's life, so
 	// the capabilities object is composed once: a session is never reopened
 	// because a provider re-rendered.
+	const pluginRuntime = getInteractivePluginRuntime();
 	return useMemo(
 		() => ({
 			getCompactionModule: () => compactionModuleRef.current,
@@ -67,10 +69,14 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			getStore: () => getSessionStore(),
 			getSessionHostManager: () =>
 				getInteractiveSessionHostManager(
-					createApplicationSessionDelegationRuntime
+					createApplicationSessionDelegationRuntime,
+					pluginRuntime
 				),
+			...(pluginRuntime === undefined
+				? {}
+				: { getPluginRuntime: () => pluginRuntime }),
 			getToolPermission: () => toolPermissionRef.current,
 		}),
-		[]
+		[pluginRuntime]
 	);
 };

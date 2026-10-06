@@ -7,6 +7,7 @@ import type {
 	InvocationOptions,
 	TextWriter,
 } from "../modules/application/modes/types";
+import type { PluginRuntime } from "../modules/plugins/runtime";
 
 const capture = (): { output: string; writer: TextWriter } => {
 	const state = { output: "" };
@@ -115,6 +116,114 @@ describe("application dispatch", () => {
 			prompt: "hello",
 			reasoningMode: "thinking",
 		});
+	});
+
+	test("retains every explicitly enabled Plugin path in CLI order", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		let routedInvocation: InvocationOptions | undefined;
+		await dispatch(
+			input(stdout.writer, stderr.writer, [
+				"--plugin",
+				"./plugins/jira.ts",
+				"--plugin=/opt/wincode/calendar.ts",
+			]),
+			{
+				...noOpRunners,
+				interactive: async (context) => {
+					routedInvocation = context.invocation;
+					return 0;
+				},
+			}
+		);
+		expect(routedInvocation?.pluginPaths).toEqual([
+			"./plugins/jira.ts",
+			"/opt/wincode/calendar.ts",
+		]);
+	});
+
+	test("keeps Plugin diagnostics on stderr while JSON stdout stays parseable", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const pluginRuntime: PluginRuntime = {
+			diagnostics: [
+				{
+					message: "Plugin file must export a default factory function.",
+					sourcePath: "/workspace/plugins/broken.ts",
+				},
+			],
+			disablePlugin: () => undefined,
+			executeCommand: async () => "",
+			getCommands: () => [],
+			getToolDescriptors: () => [],
+			shutdown: async () => undefined,
+			startSession: async () => undefined,
+			stopSession: async () => undefined,
+		};
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, ["--mode=json", "--prompt=hello"]),
+			{
+				...noOpRunners,
+				json: async (context) => {
+					context.stdout.write('{"ok":true}\n');
+					return 0;
+				},
+			},
+			{
+				initializeRuntime: async () => ({ pluginRuntime }),
+			}
+		);
+
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.output)).toEqual({ ok: true });
+		expect(stderr.output).toContain(
+			"Plugin: Plugin file must export a default factory function."
+		);
+		expect(stderr.output).toContain("/workspace/plugins/broken.ts");
+	});
+
+	test("passes repeatable Plugin paths to startup and releases the runtime after the mode", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		let initializedPaths: readonly string[] = [];
+		let shutdownCount = 0;
+		const runtime: PluginRuntime = {
+			diagnostics: [],
+			disablePlugin: () => undefined,
+			executeCommand: async () => "",
+			getCommands: () => [],
+			getToolDescriptors: () => [],
+			shutdown: async () => {
+				shutdownCount += 1;
+			},
+			startSession: async () => undefined,
+			stopSession: async () => undefined,
+		};
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, [
+				"--plugin",
+				"./plugins/jira.ts",
+				"--plugin",
+				"/opt/calendar.ts",
+			]),
+			{
+				...noOpRunners,
+				interactive: async (context) => {
+					expect(context.pluginRuntime).toBe(runtime);
+					return 0;
+				},
+			},
+			{
+				initializeRuntime: async ({ pluginPaths }) => {
+					initializedPaths = pluginPaths;
+					return { pluginRuntime: runtime };
+				},
+			}
+		);
+
+		expect(exitCode).toBe(0);
+		expect(initializedPaths).toEqual(["./plugins/jira.ts", "/opt/calendar.ts"]);
+		expect(shutdownCount).toBe(1);
 	});
 
 	test("routes long print mode and prompt to its runner", async () => {
