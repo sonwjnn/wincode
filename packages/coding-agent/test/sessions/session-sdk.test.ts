@@ -222,7 +222,7 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 	}
 });
 
-test("the public Session SDK admits a prompt and streams its Agent Turn event", async () => {
+test("the public Session SDK durably delivers a message and streams its Agent Turn event", async () => {
 	const recorder = createFakeModelClientRecorder();
 	const runtime = createAgentRuntime({
 		modelClient: createFakeModelClient(recorder),
@@ -257,11 +257,15 @@ test("the public Session SDK admits a prompt and streams its Agent Turn event", 
 		}
 	});
 	try {
-		const admission = await handle.prompt({ text: "Say hello." });
+		const admission = await handle.deliver("Say hello.");
 		await completed.promise;
 
 		expect(admission.rejected).toBe(false);
 		expect(recorder.requests).toHaveLength(1);
+		expect(recorder.requests[0]).toMatchObject({
+			kind: "chat",
+			messages: expect.arrayContaining([{ role: "user", text: "Say hello." }]),
+		});
 	} finally {
 		unsubscribe();
 		await handle.dispose();

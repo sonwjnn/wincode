@@ -30,6 +30,8 @@ export type SessionSdkCreateOptions = Readonly<{
 export type SessionSdkHandle = Readonly<{
 	continue: () => SessionContinuationOutcome;
 	dispose: () => Promise<void>;
+	/** Durably queues a message and wakes this Session at its next safe boundary. */
+	deliver: (text: string) => Promise<SessionSubmissionAdmission>;
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
 	prompt: (input: SessionSdkPrompt) => Promise<SessionSubmissionAdmission>;
 	sessionId: SessionId;

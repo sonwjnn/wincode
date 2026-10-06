@@ -149,6 +149,14 @@ const handleFor = (
 	const { capabilities } = assembly;
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
+	const prompt: SessionSdkHandle["prompt"] = async (input) => {
+		if (disposed) {
+			return { reason: "Session handle is disposed.", rejected: true };
+		}
+		return host.agentSession.prompt(
+			promptInputFor(input, defaults, capabilities.getRegistry())
+		);
+	};
 	return Object.freeze({
 		continue: () => host.agentSession.continue(),
 		dispose: () => {
@@ -162,15 +170,9 @@ const handleFor = (
 			disposePromise = closing;
 			return closing;
 		},
+		deliver: (text) => prompt({ text }),
 		onEvent: host.onEvent,
-		prompt: async (input) => {
-			if (disposed) {
-				return { reason: "Session handle is disposed.", rejected: true };
-			}
-			return host.agentSession.prompt(
-				promptInputFor(input, defaults, capabilities.getRegistry())
-			);
-		},
+		prompt,
 		sessionId,
 		subscribe: (listener) => {
 			if (disposed) {
