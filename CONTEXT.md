@@ -181,6 +181,15 @@ The user-facing command-line entry point for the Coding-Agent Application. A bar
 **Coding-Agent Application**:
 The user-facing Wincode application that runs an Agent through Interactive, Print, JSON, or RPC Mode. It owns application lifetime and active conversation runtimes independently of the currently displayed view; Stateful Agents own their respective live state. _Avoid_: Wincode TUI, CLI package, agent core
 
+**Plugin**:
+A statically installed Coding-Agent Application module that contributes executable behavior through the host-provided interface. Registration alone does not expose a tool to an Agent or grant Tool Permission. _Avoid_: extension, Skill, MCP Server
+
+**MCP Plugin**:
+The built-in Plugin that connects configured MCP Servers and adapts their tools to the Agent tool contract. An MCP Server is a managed resource, not a Plugin. _Avoid_: MCP server plugin
+
+**MCP Server**:
+A configured MCP endpoint or process that supplies tools through the MCP protocol. Its configuration and connection are managed by the MCP Plugin. _Avoid_: MCP Plugin
+
 **Execution Mode**:
 A user-facing way to run the Coding-Agent Application. Each mode chooses input, output, and process lifecycle but does not own Session state. _Avoid_: Coding Mode, agent loop
 
@@ -292,7 +301,7 @@ A fixed UI control the CLI ships with, dispatched by kind to an adapter
 A user-defined prompt template whose invocation expands once into Submission content through shared input preparation. Its expanded prompt remains part of the Submission when queued or steered and is not re-executed during delivery or retry. _Avoid_: Command, slash command
 
 **Skill**:
-A named set of instructions that augments an Agent for one Agent Turn. Skill context is untrusted and turn-scoped; explicit Skill instructions have higher authority than Agent-loaded Skill instructions, but neither can override Wincode safety, Tool Permission, direct user intent, or Project Instructions. _Avoid_: Agent, session mode, Custom Command
+A named set of instructions that augments an Agent for one Agent Turn. Skill context is untrusted and turn-scoped; explicit Skill instructions have higher authority than Agent-loaded Skill instructions, but neither can override Wincode safety, Tool Permission, direct user intent, or Project Instructions. A Skill is instruction content, not a Plugin. _Avoid_: Agent, session mode, Custom Command
 
 **Skill Activation**:
 The selection of a Skill for the current user turn. Activation does not persist to later turns. _Avoid_: Skill installation, session Skill
@@ -457,6 +466,14 @@ The definition-only collection of Tool Definitions recognized by the Agent
 Runtime; it carries no executor or Tool Permission decision. The Coding-Agent
 Application composes selected catalog tools as Resolved Tools through the Tool
 Gate for each Agent Turn. _Avoid_: Coding Tool Catalog, executable registry
+
+**Application Tool Registry**:
+The process-owned host through which built-in Plugins and native providers, such
+as Skills, contribute tools for immutable per-turn resolution. The Subagents
+Plugin also registers its process-lifetime task runtime through this interface.
+Membership alone exposes no tool to an Agent and grants no Tool Permission; each
+provider retains its family-specific Tool Gate path. _Avoid_: Runtime Tool
+Registry, Plugin Manager
 
 **Resolved Tool**:
 A tool definition whose executable path has been composed through the Tool Gate

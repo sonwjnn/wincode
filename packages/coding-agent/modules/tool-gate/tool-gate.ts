@@ -1,16 +1,14 @@
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentId, ToolCallId } from "@wincode/agent-core";
+import { mcpDeniedByPolicyText } from "@wincode/mcp";
 import {
 	isObjectLike,
 	isPlainObject,
 	isString,
 	isUndefined,
 } from "@wincode/utils";
-import {
-	MCP_PERMISSION_RESOURCE,
-	mcpDeniedByPolicyText,
-} from "@/modules/mcp/registry";
+import { MCP_PERMISSION_RESOURCE } from "@/modules/mcp/capability";
 import { resolveApproval } from "@/modules/permissions/approval-resolution";
 import { canonicalizeResource } from "@/modules/permissions/canonical";
 import {

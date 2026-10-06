@@ -53,12 +53,13 @@
       "dependencies": {
         "@deepseek-ai/node-addon-system": "0.1.2",
         "@lickle/lock": "0.0.1",
-        "@modelcontextprotocol/client": "^2.0.0",
         "@opentui/core": "0.4.5",
         "@opentui/react": "0.4.5",
         "@tanstack/react-router": "catalog:",
         "@wincode/agent-core": "workspace:*",
         "@wincode/ai": "workspace:*",
+        "@wincode/mcp": "workspace:*",
+        "@wincode/subagents": "workspace:*",
         "@wincode/utils": "workspace:*",
         "diff": "catalog:",
         "drizzle-orm": "^0.45.2",
@@ -89,6 +90,34 @@
     "packages/config": {
       "name": "@wincode/config",
       "version": "0.0.0",
+    },
+    "packages/mcp": {
+      "name": "@wincode/mcp",
+      "dependencies": {
+        "@modelcontextprotocol/client": "^2.0.0",
+        "@wincode/agent-core": "workspace:*",
+        "@wincode/utils": "workspace:*",
+        "type-fest": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@modelcontextprotocol/server": "^2.0.0",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/subagents": {
+      "name": "@wincode/subagents",
+      "dependencies": {
+        "@wincode/agent-core": "workspace:*",
+        "@wincode/utils": "workspace:*",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@wincode/config": "workspace:*",
+        "typescript": "catalog:",
+      },
     },
     "packages/utils": {
       "name": "@wincode/utils",
@@ -396,6 +425,10 @@
     "@wincode/coding-agent": ["@wincode/coding-agent@workspace:packages/coding-agent"],
 
     "@wincode/config": ["@wincode/config@workspace:packages/config"],
+
+    "@wincode/mcp": ["@wincode/mcp@workspace:packages/mcp"],
+
+    "@wincode/subagents": ["@wincode/subagents@workspace:packages/subagents"],
 
     "@wincode/utils": ["@wincode/utils@workspace:packages/utils"],
 

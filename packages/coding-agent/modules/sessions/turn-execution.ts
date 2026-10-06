@@ -12,18 +12,17 @@ import type {
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
+import type { McpCatalogSnapshot } from "@wincode/mcp";
+import type { DelegationExecutor } from "@wincode/subagents";
 import { omitUndefined } from "@wincode/utils";
-import type { McpCatalogSnapshot } from "@/modules/mcp";
 import type {
 	SkillExecution,
 	SkillRequestContext,
 	SkillToolDefinition,
 } from "@/modules/skills";
+import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import type { ResolvedCodingAgent } from "../agents/built-ins";
-import type {
-	DelegationExecutor,
-	SessionViewState,
-} from "./hooks/runtime-turn";
+import type { SessionViewState } from "./hooks/runtime-turn";
 
 /** The Skill catalog an execution armed for its own turn. */
 export type TurnExecutionSkill = {
@@ -76,7 +75,7 @@ export type TurnExecution = {
 	 * The delegation bookkeeping created with the execution, so a React
 	 * re-render between a Subagent's start and end cannot reset it.
 	 */
-	delegate?: DelegationExecutor;
+	delegate?: DelegationExecutor<SessionId, DelegationTaskId>;
 	/** The MCP capability snapshot the execution runs against. */
 	mcpSnapshot: McpCatalogSnapshot | null;
 	/** The Skill, if any, this execution's turn must load. */

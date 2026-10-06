@@ -1,12 +1,9 @@
 import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
-import type {
-	DelegationReportEnvelope,
-	DelegationTask,
-} from "../delegation/types";
-import type { SessionStore } from "../storage/session-store";
 import { createSessionHost } from "./session-host";
 import type {
 	SessionCapabilities,
+	SessionDelegationPort,
+	SessionDelegationRuntimeFactory,
 	SessionHost,
 	SessionHostManager,
 	SessionHostManagerEvent,
@@ -27,36 +24,14 @@ type ManagedHostEntry = {
 	views: number;
 };
 
-type DelegatedTaskWaiter = Readonly<{
-	parentSessionId: SessionId;
-	promise: Promise<void>;
-	resolve: () => void;
-}>;
-
-const recoveredStores = new WeakMap<SessionStore, Promise<void>>();
 let interactiveManager: SessionHostManager | undefined;
 
-const recoverStore = async (
-	store: SessionStore,
-	excludeTaskIds: readonly DelegationTaskId[] = []
-): Promise<void> => {
-	let recovery = recoveredStores.get(store);
-	if (recovery === undefined) {
-		recovery = store.recoverUncleanDelegationTasks(excludeTaskIds);
-		recoveredStores.set(store, recovery);
-	}
-	try {
-		await recovery;
-	} catch (error) {
-		recoveredStores.delete(store);
-		throw error;
-	}
-};
-
-export const createSessionHostManager = (): SessionHostManager => {
+export const createSessionHostManager = (
+	createDelegationRuntime: SessionDelegationRuntimeFactory
+): SessionHostManager => {
 	const entries = new Map<SessionId, ManagedHostEntry>();
-	const taskWaiters = new Map<DelegationTaskId, DelegatedTaskWaiter>();
 	const eventListeners = new Set<(event: SessionHostManagerEvent) => void>();
+	let delegation: SessionDelegationPort;
 	let shuttingDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 
@@ -88,14 +63,6 @@ export const createSessionHostManager = (): SessionHostManager => {
 			sessionId: entry.sessionId,
 			type: "session-approval-notice",
 		});
-	};
-	const finishDelegatedTask = (taskId: DelegationTaskId): void => {
-		const waiter = taskWaiters.get(taskId);
-		if (waiter === undefined) {
-			return;
-		}
-		taskWaiters.delete(taskId);
-		waiter.resolve();
 	};
 	const canUnload = (host: SessionHost): boolean => {
 		const snapshot = host.agentSession.getSnapshot();
@@ -137,11 +104,8 @@ export const createSessionHostManager = (): SessionHostManager => {
 			const store = entry.capabilities.getStore();
 			const hasActiveDelegation =
 				delegatedTaskId === null
-					? (await store.listDelegationTasks(entry.sessionId)).some(
-							(task) => task.status === "active"
-						)
-					: (await store.getDelegationTask(delegatedTaskId))?.status ===
-						"active";
+					? await delegation.hasActiveTasks(store, entry.sessionId)
+					: await delegation.isTaskActive(store, delegatedTaskId);
 			if (
 				hasActiveDelegation ||
 				entry.views > 0 ||
@@ -158,6 +122,7 @@ export const createSessionHostManager = (): SessionHostManager => {
 			} finally {
 				entry.unsubscribeEvents?.();
 				entry.unsubscribeSnapshot?.();
+				delegation.onHostClosed(entry.sessionId);
 				if (entries.get(entry.sessionId) === entry) {
 					entries.delete(entry.sessionId);
 				}
@@ -169,6 +134,20 @@ export const createSessionHostManager = (): SessionHostManager => {
 			unloadCheck.resolve();
 		}
 	};
+	delegation = createDelegationRuntime({
+		emitTaskEvent: (task, report) =>
+			emit({
+				...(report === undefined ? {} : { report }),
+				task,
+				type: "delegation-task",
+			}),
+		requestHostUnload: (sessionId) => {
+			const entry = entries.get(sessionId);
+			if (entry !== undefined) {
+				void maybeUnload(entry);
+			}
+		},
+	});
 	const createEntry = (
 		capabilities: SessionCapabilities,
 		sessionId: SessionId,
@@ -190,6 +169,7 @@ export const createSessionHostManager = (): SessionHostManager => {
 			views: 0,
 		};
 		entries.set(sessionId, entry);
+		delegation.onHostOpening(sessionId);
 		void createSessionHost({
 			capabilities,
 			...(executionMode === undefined ? {} : { executionMode }),
@@ -197,6 +177,7 @@ export const createSessionHostManager = (): SessionHostManager => {
 		} satisfies SessionHostOptions).then(
 			(host) => {
 				entry.host = host;
+				delegation.onHostOpened(sessionId, host);
 				updateApprovalNotice(entry, host);
 				entry.unsubscribeEvents = host.onEvent((event) =>
 					emit({ event, sessionId, type: "agent-turn-event" })
@@ -208,6 +189,7 @@ export const createSessionHostManager = (): SessionHostManager => {
 				opened.resolve(host);
 			},
 			(error: unknown) => {
+				delegation.onHostClosed(sessionId);
 				if (entries.get(sessionId) === entry) {
 					entries.delete(sessionId);
 				}
@@ -291,13 +273,14 @@ export const createSessionHostManager = (): SessionHostManager => {
 		sessionId,
 		view = false,
 	}) => {
-		await recoverStore(capabilities.getStore(), [...taskWaiters.keys()]);
+		await delegation.recoverStore(capabilities.getStore());
 		if (shuttingDown) {
 			throw new Error("The Session Host manager is shutting down.");
 		}
-		const task = await capabilities
-			.getStore()
-			.getDelegationTaskForChild(sessionId);
+		const task = await delegation.getTaskForChild(
+			capabilities.getStore(),
+			sessionId
+		);
 		const entry = await getOpenEntry(
 			capabilities,
 			sessionId,
@@ -307,31 +290,6 @@ export const createSessionHostManager = (): SessionHostManager => {
 		);
 		return entry.opening;
 	};
-	const publishDelegationTask = (
-		task: DelegationTask,
-		report?: DelegationReportEnvelope
-	): void => {
-		emit({
-			...(report === undefined ? {} : { report }),
-			task,
-			type: "delegation-task",
-		});
-		if (task.status !== "active") {
-			finishDelegatedTask(task.id);
-			const child = entries.get(task.childSessionId);
-			if (child !== undefined) {
-				void maybeUnload(child);
-			}
-		}
-		if (report !== undefined) {
-			const parent = entries.get(report.parentSessionId);
-			if (parent !== undefined) {
-				void parent.opening
-					.then((host) => host.publishDelegationReport(report))
-					.catch(() => undefined);
-			}
-		}
-	};
 	const releaseView: SessionHostManager["releaseView"] = async (sessionId) => {
 		const entry = entries.get(sessionId);
 		if (entry === undefined) {
@@ -339,70 +297,6 @@ export const createSessionHostManager = (): SessionHostManager => {
 		}
 		entry.views = Math.max(0, entry.views - 1);
 		await maybeUnload(entry);
-	};
-	const waitForDelegatedTasks: SessionHostManager["waitForDelegatedTasks"] =
-		async (store, parentSessionId) => {
-			while (true) {
-				const sessions = [parentSessionId];
-				const visitedSessions = new Set<SessionId>();
-				const tasks = new Map<DelegationTaskId, DelegationTask>();
-				while (sessions.length > 0) {
-					const sessionId = sessions.pop();
-					if (sessionId === undefined || visitedSessions.has(sessionId)) {
-						continue;
-					}
-					visitedSessions.add(sessionId);
-					for (const task of await store.listDelegationTasks(sessionId)) {
-						tasks.set(task.id, task);
-						sessions.push(task.childSessionId);
-					}
-				}
-				const active = [...tasks.values()].filter(
-					(task) => task.status === "active"
-				);
-				if (active.length === 0) {
-					return [...tasks.values()];
-				}
-				await Promise.all(
-					active.map((task) => {
-						const waiter = taskWaiters.get(task.id);
-						if (waiter === undefined) {
-							throw new Error(
-								`Active Delegation Task ${task.id} has no live runtime.`
-							);
-						}
-						return waiter.promise;
-					})
-				);
-			}
-		};
-	const cancelActiveDelegatedTask = async (
-		entry: ManagedHostEntry
-	): Promise<void> => {
-		const store = entry.capabilities.getStore();
-		const task = await store.getDelegationTaskForChild(entry.sessionId);
-		if (task?.status !== "active") {
-			return;
-		}
-		const report = await store.settleDelegationTask({
-			outcome: {
-				kind: "cancelled",
-				reason: "Application shutdown cancelled the delegated task.",
-			},
-			taskId: task.id,
-		});
-		if (report === null) {
-			return;
-		}
-		const settled = await store.getDelegationTask(task.id);
-		if (settled !== null) {
-			publishDelegationTask(settled, report);
-		}
-	};
-	const cancelActiveDelegatedTasks = async (): Promise<void> => {
-		for (const entry of entries.values()) {
-			await cancelActiveDelegatedTask(entry);
-		}
 	};
 	const shutdownAll: SessionHostManager["shutdownAll"] = () => {
 		if (shutdownPromise !== undefined) {
@@ -417,10 +311,13 @@ export const createSessionHostManager = (): SessionHostManager => {
 				result.status === "fulfilled" ? [result.value] : []
 			);
 			await Promise.allSettled(hosts.map((host) => host.shutdown()));
-			await cancelActiveDelegatedTasks();
-			for (const taskId of taskWaiters.keys()) {
-				finishDelegatedTask(taskId);
+			await delegation.cancelActiveTasks([...entries.values()]);
+			for (const entry of entries.values()) {
+				if (entry.host !== undefined) {
+					delegation.onHostClosed(entry.sessionId);
+				}
 			}
+			delegation.finishAllTasks();
 			for (const entry of entries.values()) {
 				entry.unsubscribeEvents?.();
 				entry.unsubscribeSnapshot?.();
@@ -432,7 +329,6 @@ export const createSessionHostManager = (): SessionHostManager => {
 	};
 
 	return {
-		finishDelegatedTask,
 		onEvent: (listener) => {
 			eventListeners.add(listener);
 			for (const entry of entries.values()) {
@@ -451,25 +347,15 @@ export const createSessionHostManager = (): SessionHostManager => {
 			return () => eventListeners.delete(listener);
 		},
 		openHost,
-		publishDelegationTask,
-		registerDelegatedTask: (task) => {
-			if (!taskWaiters.has(task.id)) {
-				const waiter = Promise.withResolvers<void>();
-				taskWaiters.set(task.id, {
-					parentSessionId: task.parentSessionId,
-					promise: waiter.promise,
-					resolve: waiter.resolve,
-				});
-			}
-			publishDelegationTask(task);
-		},
 		releaseView,
 		shutdownAll,
-		waitForDelegatedTasks,
+		delegation,
 	};
 };
 
-export const getInteractiveSessionHostManager = (): SessionHostManager => {
-	interactiveManager ??= createSessionHostManager();
+export const getInteractiveSessionHostManager = (
+	createDelegationRuntime: SessionDelegationRuntimeFactory
+): SessionHostManager => {
+	interactiveManager ??= createSessionHostManager(createDelegationRuntime);
 	return interactiveManager;
 };

@@ -10,10 +10,11 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
+import { createMcpRegistry } from "@wincode/mcp";
 import { act } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { createMcpRegistry, McpProvider } from "@/modules/mcp";
+import { McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	createPermissionService,
@@ -82,7 +83,6 @@ describe("NewSessionView composer focus", () => {
 																	workspace,
 																})
 															}
-															workspace={workspace}
 														>
 															<RouterContextProvider router={router}>
 																<CommandControllerProvider>

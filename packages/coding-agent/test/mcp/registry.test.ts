@@ -1,29 +1,34 @@
 import { describe, expect, test } from "bun:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
 import { fromAny } from "@total-typescript/shoehorn";
-import { isNull, isUndefined } from "@wincode/utils";
-import type { McpClient, McpClientTool } from "@/modules/mcp/client";
 import type {
 	LocalMcpServerConfig,
+	McpCatalogSnapshot,
+	McpClient,
+	McpClientTool,
 	McpConfigResult,
+	McpExecutionPolicy,
 	McpTimeouts,
 	RemoteMcpServerConfig,
 	ResolvedMcpServerConfig,
-} from "@/modules/mcp/config";
-import type { McpExecutionPolicy } from "@/modules/mcp/policy";
+} from "@wincode/mcp";
 import {
 	createMcpRegistry,
-	type McpAgentPolicy,
-	type McpRegistry,
 	type McpRegistryDeps,
 	mcpDeniedByPolicyText,
-} from "@/modules/mcp/registry";
+} from "@wincode/mcp";
+import { isNull, isUndefined } from "@wincode/utils";
+import type { McpAgentPolicy } from "@/modules/mcp/capability";
 import {
 	createToolPermission,
 	type PermissionRules,
 } from "@/modules/permissions";
 import { resolveToolPermissionPolicies } from "@/modules/permissions/tool-permission-runtime";
 import { agentId } from "../support/identifiers";
+import {
+	addAgentPolicyResolver,
+	type PolicyAwareMcpRegistry,
+} from "../support/mcp-registry";
 
 class FakeMcpClient implements McpClient {
 	readonly name: string;
@@ -164,7 +169,7 @@ type HarnessOptions = {
 
 type Harness = {
 	clients: Map<string, FakeMcpClient>;
-	registry: McpRegistry;
+	registry: PolicyAwareMcpRegistry;
 };
 
 const harness = (options: HarnessOptions = {}): Harness => {
@@ -173,7 +178,7 @@ const harness = (options: HarnessOptions = {}): Harness => {
 		clients.set(name, client);
 	}
 	const configs = options.configs ?? [];
-	const registry = createMcpRegistry({
+	const mcpRegistry = createMcpRegistry({
 		env: {},
 		workspace: "/workspace",
 		createClient: (config) => {
@@ -193,7 +198,7 @@ const harness = (options: HarnessOptions = {}): Harness => {
 		}),
 		...options.deps,
 	});
-	return { clients, registry };
+	return { clients, registry: addAgentPolicyResolver(mcpRegistry) };
 };
 
 describe("createMcpRegistry", () => {
@@ -1164,7 +1169,7 @@ describe("createMcpRegistry", () => {
 
 describe("agent + server policy composition", () => {
 	const findByLogicalName = (
-		snapshot: Awaited<ReturnType<McpRegistry["createSnapshot"]>>,
+		snapshot: McpCatalogSnapshot,
 		logicalName: string
 	) => {
 		for (const entry of snapshot.tools.values()) {

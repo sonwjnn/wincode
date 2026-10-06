@@ -12,10 +12,10 @@ import {
 	type ReasoningSelection,
 	reasoningModeSchema,
 } from "@wincode/ai/models";
+import { createMcpToolExecutor } from "@wincode/mcp";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
-import { createMcpToolExecutor } from "@/modules/mcp/result";
 import type { ToolPermission } from "@/modules/permissions/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
@@ -34,6 +34,13 @@ import {
 	codingToolCatalog,
 	type VersionedEditingContext,
 } from "@/modules/tools";
+import {
+	createDelegationExecutor,
+	createSubmitResultExecutor,
+	failDelegatedTask,
+	hasDelegationTargets,
+	settleDelegatedTaskAfterTurn,
+} from "@/plugins/subagents/delegation";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
@@ -51,16 +58,11 @@ import type {
 } from "../agent-session/types";
 import { primaryEntry } from "../agent-session/utils";
 import { SessionCompactionError } from "../compaction/error";
-import type {
-	DelegationResult,
-	DelegationTask,
-	DelegationTaskOutcome,
-} from "../delegation/types";
-import { createDelegationExecutor } from "../hooks/delegation";
+import type { DelegationTask } from "../delegation/types";
 import {
 	buildAgentTurn,
-	createGatedCodingTools,
 	type RuntimeGatedTooling,
+	resolveTurnTools,
 	runAgentTurnToText,
 } from "../hooks/runtime-turn";
 import type { SessionMessage } from "../message";
@@ -199,21 +201,6 @@ export const createSessionPorts = ({
 				"Session Host is shutting down before compaction persistence."
 			);
 		}
-	};
-	const publishTaskOutcome = async (
-		taskId: DelegationTask["id"],
-		outcome: DelegationTaskOutcome
-	): Promise<boolean> => {
-		const store = capabilities.getStore();
-		const report = await store.settleDelegationTask({ outcome, taskId });
-		if (report === null) {
-			return false;
-		}
-		const task = await store.getDelegationTask(taskId);
-		if (task !== null) {
-			capabilities.getSessionHostManager().publishDelegationTask(task, report);
-		}
-		return true;
 	};
 	/**
 	 * The execution scopes the ports run, keyed by Agent Turn Identifier. A
@@ -497,15 +484,11 @@ export const createSessionPorts = ({
 		const submitResult =
 			submitTask === null
 				? undefined
-				: (report: DelegationResult) =>
-						publishTaskOutcome(submitTask.id, {
-							kind: "result",
-							report,
-						});
+				: createSubmitResultExecutor(capabilities, submitTask.id);
 		const resourceLimits = await tooling.resolveResourceLimits?.(
 			execution.agent
 		);
-		const tools = createGatedCodingTools({
+		const tools = await resolveTurnTools({
 			agentId: execution.agent,
 			agentTools: resolvedAgent.visibleCodingTools,
 			delegate: scope.delegate,
@@ -513,7 +496,9 @@ export const createSessionPorts = ({
 			executeMcpTool,
 			gate: tooling.gate,
 			mcpSnapshot: snapshot,
-			parentTurnId: execution.turnId,
+			...(scope.delegate === undefined
+				? {}
+				: { parentTurnId: execution.turnId }),
 			resourceLimits,
 			resolveResourceLimits: tooling.resolveResourceLimits,
 			skillExecution: scope.armedSkill?.execution,
@@ -549,32 +534,8 @@ export const createSessionPorts = ({
 			turnId: execution.turnId,
 		});
 	};
-	const settleDelegatedTask = async (
-		sessionStore: SessionStore,
-		task: DelegationTask,
-		event: AgentTurnTerminalEvent
-	): Promise<void> => {
-		if (event.type === "agent-turn-completed") {
-			await sessionStore.markDelegationTaskAwaitingReport(task.id);
-			const current = await sessionStore.getDelegationTask(task.id);
-			if (current?.status === "awaiting_report") {
-				capabilities.getSessionHostManager().publishDelegationTask(current);
-			}
-			return;
-		}
-		let outcome: DelegationTaskOutcome;
-		if (event.type === "agent-turn-cancelled") {
-			outcome = { kind: "cancelled", reason: event.failure.message };
-		} else if (event.type === "agent-turn-interrupted") {
-			outcome = { kind: "interrupted", reason: event.failure.message };
-		} else {
-			outcome = { kind: "failure", reason: event.failure.message };
-		}
-		await publishTaskOutcome(task.id, outcome);
-	};
 	const handleTurnTerminal = async (
 		callbacks: SessionTurnRequest["callbacks"],
-		sessionStore: SessionStore,
 		task: DelegationTask | null,
 		event: AgentTurnTerminalEvent
 	): Promise<void> => {
@@ -583,9 +544,9 @@ export const createSessionPorts = ({
 			return;
 		}
 		try {
-			await settleDelegatedTask(sessionStore, task, event);
+			await settleDelegatedTaskAfterTurn(capabilities, task, event);
 		} catch {
-			capabilities.getSessionHostManager().finishDelegatedTask(task.id);
+			capabilities.getSessionHostManager().delegation.finishTask(task.id);
 		}
 	};
 	const handleTurnFailure = async (
@@ -595,14 +556,10 @@ export const createSessionPorts = ({
 		if (task === null) {
 			return;
 		}
-		const reason =
-			error instanceof Error && error.message.length > 0
-				? error.message
-				: "Delegated task failed.";
 		try {
-			await publishTaskOutcome(task.id, { kind: "failure", reason });
+			await failDelegatedTask(capabilities, task.id, error);
 		} catch {
-			capabilities.getSessionHostManager().finishDelegatedTask(task.id);
+			capabilities.getSessionHostManager().delegation.finishTask(task.id);
 		}
 	};
 	/**
@@ -624,8 +581,9 @@ export const createSessionPorts = ({
 		let delegationTaskForTurn: DelegationTask | null = null;
 		try {
 			const sessionStore = capabilities.getStore();
-			delegationTaskForTurn =
-				await sessionStore.getDelegationTaskForChild(sessionId);
+			delegationTaskForTurn = await capabilities
+				.getSessionHostManager()
+				.delegation.getTaskForChild(sessionStore, sessionId);
 			turn = await prepareAgentTurn(
 				request,
 				scope,
@@ -637,12 +595,7 @@ export const createSessionPorts = ({
 				onToolCheckpoint: callbacks.commitToolCall,
 				onEvent: (event: AgentTurnEvent) => callbacks.onEvent(event),
 				onTerminal: (event: AgentTurnTerminalEvent) =>
-					handleTurnTerminal(
-						callbacks,
-						sessionStore,
-						delegationTaskForTurn,
-						event
-					),
+					handleTurnTerminal(callbacks, delegationTaskForTurn, event),
 				onViewState: (viewState) => callbacks.onViewState(viewState),
 				getAssistantMessageId: request.getAssistantMessageId,
 				runtime: statefulAgent,
@@ -798,12 +751,3 @@ export const createSessionPorts = ({
 		skills: { createTurnSkill, resolveSkill },
 	};
 };
-
-/** Whether the registry offers a Subagent the session can delegate to. */
-const hasDelegationTargets = (capabilities: SessionCapabilities): boolean =>
-	capabilities
-		.getRegistry()
-		?.agents.some(
-			({ isAvailable, role }) =>
-				isAvailable && (role === "subagent" || role === "all")
-		) === true;

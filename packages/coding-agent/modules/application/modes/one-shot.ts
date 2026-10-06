@@ -498,7 +498,7 @@ const runOneShot = async (
 			if (outcome.rejected) {
 				throw new Error(outcome.reason);
 			}
-			const tasks = await manager.waitForDelegatedTasks(
+			const tasks = await manager.delegation.waitForTasks(
 				assembly.store,
 				sessionId
 			);

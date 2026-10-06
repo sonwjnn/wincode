@@ -10,7 +10,7 @@ import { join } from "node:path";
  */
 const testDirectory = mkdtempSync(join(tmpdir(), "wincode-session-host-"));
 
-import { fromPartial } from "@total-typescript/shoehorn";
+import { fromAny, fromPartial } from "@total-typescript/shoehorn";
 import {
 	type AgentTurnEvent,
 	createOperationalFailure,
@@ -22,9 +22,21 @@ import type {
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import {
+	createMcpRegistry,
+	type McpClient,
+	type McpConfigResult,
+	qualifyMcpToolName,
+	type ResolvedMcpServerConfig,
+	toMcpSnapshotId,
+} from "@wincode/mcp";
 import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
+import {
+	createMcpSessionCapability,
+	type McpSessionCapability,
+} from "@/modules/mcp/capability";
 import type {
 	SessionSteeringAdmission,
 	SessionSubmissionAdmission,
@@ -38,7 +50,7 @@ import type {
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
 import type { DelegationTask } from "@/modules/sessions/delegation/types";
-import { createSessionHostManager } from "@/modules/sessions/host/session-host-manager";
+import { createSessionHostManager as createSessionHostManagerWithRuntime } from "@/modules/sessions/host/session-host-manager";
 import type {
 	SessionCapabilities,
 	SessionHost,
@@ -55,10 +67,10 @@ import {
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
+import { createSubagentTaskRuntime } from "@/plugins/subagents/task-runtime";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
-import { toMcpSnapshotId } from "@/shared/identifiers";
 import {
 	readLoggerRecords,
 	withDebugProject,
@@ -98,6 +110,8 @@ const { createPermissionService } = await import(
 );
 const { createToolPermissionPolicyState, createToolPermissionRuntime } =
 	await import("@/modules/permissions/tool-permission-runtime");
+const createSessionHostManager = () =>
+	createSessionHostManagerWithRuntime(createSubagentTaskRuntime);
 const sessionHostManager = createSessionHostManager();
 
 const model: ChatModelSelection = {
@@ -263,18 +277,26 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
  * built-in Agent registry, the Tool Permission runtime, and the Session
  * Compaction module the Agent Session contract tests fake the same way.
  */
+type SessionHostTestCapabilitiesOptions = Readonly<{
+	configSources?: ConfigSnapshot["sources"];
+	homeRoot?: string;
+	mcp?: McpSessionCapability;
+	workspace?: string;
+}>;
+
 const createCapabilities = (
 	sessionStore: SessionStore = store,
 	document: ConfigSnapshot["document"] = {},
-	manager: SessionHostManager = sessionHostManager
+	manager: SessionHostManager = sessionHostManager,
+	options: SessionHostTestCapabilitiesOptions = {}
 ): SessionCapabilities => {
-	const workspace = process.cwd();
+	const workspace = options.workspace ?? process.cwd();
 	const registry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
 			diagnostics: [],
 			document,
 			sourceFor: () => undefined,
-			sources: [],
+			sources: options.configSources ?? [],
 		})
 	);
 	const config = {
@@ -287,7 +309,8 @@ const createCapabilities = (
 				},
 			},
 		}),
-		homeRoot: homedir(),
+		cwd: workspace,
+		homeRoot: options.homeRoot ?? homedir(),
 		workspace,
 	};
 	const toolPermission = createToolPermissionRuntime({
@@ -322,20 +345,72 @@ const createCapabilities = (
 			connect: async () => undefined,
 			listProviders: async () => [],
 		}),
-		getMcp: () => ({
-			createSnapshot: async (agent) => ({
-				agent,
-				id: toMcpSnapshotId("session-host"),
-				manifest: [],
-				tools: new Map(),
-			}),
-		}),
+		getMcp: () =>
+			options.mcp ?? {
+				createSnapshot: async (agent) => ({
+					agent,
+					id: toMcpSnapshotId("session-host"),
+					manifest: [],
+					tools: new Map(),
+				}),
+			},
 		getRegistry: () => registry,
 		getStore: () => sessionStore,
 		getSessionHostManager: () => manager,
 		getToolPermission: () => toolPermission,
 	};
 };
+
+const createHostMcpRegistry = (executedServers: string[]) => {
+	const serverConfigs: ResolvedMcpServerConfig[] = [
+		"server-denied",
+		"agent-denied",
+		"allowed",
+	].map(
+		(name): ResolvedMcpServerConfig => ({
+			name,
+			type: "local",
+			command: ["unused-host-test-command"],
+			disabled: false,
+			permission: name === "server-denied" ? "deny" : "allow",
+			timeout: { startup: 1000, catalog: 1000, execution: 1000 },
+		})
+	);
+	return createMcpRegistry({
+		createClient: (config): McpClient => ({
+			callTool: async (toolName) => {
+				executedServers.push(config.name);
+				return fromAny({
+					content: [{ text: `${config.name}:${toolName}`, type: "text" }],
+					isError: false,
+				});
+			},
+			close: async () => undefined,
+			connect: async () => undefined,
+			listTools: async () => [
+				{
+					description: "Echo text through the test MCP server.",
+					inputSchema: {
+						properties: { text: { type: "string" } },
+						required: ["text"],
+						type: "object",
+					},
+					name: "echo",
+				},
+			],
+			setToolsChangedListener: () => undefined,
+		}),
+		env: {},
+		loadConfig: async (): Promise<McpConfigResult> => ({
+			diagnostics: [],
+			servers: Object.fromEntries(
+				serverConfigs.map((config) => [config.name, config])
+			),
+		}),
+		workspace: process.cwd(),
+	});
+};
+
 const createDelayedTerminalStore = (base: SessionStore) => {
 	const terminalCommitStarted = Promise.withResolvers<void>();
 	const allowTerminalCommit = Promise.withResolvers<void>();
@@ -384,6 +459,168 @@ const textOf = (parts: SessionMessage["parts"]): string =>
 afterAll(async () => {
 	await sessionHostManager.shutdownAll();
 	rmSync(testDirectory, { force: true, recursive: true });
+});
+
+test("Session Host composes MCP visibility from Agent and server policies", async () => {
+	const executedServers: string[] = [];
+	const mcpRegistry = createHostMcpRegistry(executedServers);
+	const manager = createSessionHostManager();
+	const configDocument = {
+		agents: {
+			build: {
+				permission: {
+					"server-denied_echo": "allow",
+					"agent-denied_echo": "deny",
+				},
+			},
+		},
+	};
+	const capabilities = createCapabilities(store, configDocument, manager, {
+		configSources: [
+			{
+				document: configDocument,
+				path: join(testDirectory, "mcp-policy.json"),
+				scope: "project",
+			},
+		],
+		mcp: createMcpSessionCapability(mcpRegistry),
+	});
+	const { id: sessionId } = await store.createSession({
+		agent: buildId,
+		message: message(
+			"mcp-policy-composition-user",
+			"user",
+			"Use the available MCP server and report its result."
+		),
+		model,
+		turnId: agentTurnId("mcp-policy-composition-turn"),
+	});
+	const host = await manager.openHost({ capabilities, sessionId });
+	const allowedToolName = await qualifyMcpToolName("allowed", "echo");
+	let visibleMcpTools: string[] = [];
+	let returnedToModel = false;
+	const previousStepScript = recorder.stepScript;
+	recorder.stepScript = async function* (
+		request: ModelStepRequest
+	): AsyncGenerator<ModelStreamPart> {
+		visibleMcpTools = (request.tools ?? [])
+			.filter(({ name }) => name.startsWith("mcp_"))
+			.map(({ name }) => name);
+		const hasToolResult = request.messages
+			.flatMap(({ content }) => content)
+			.some(({ type }) => type === "tool-result");
+		if (hasToolResult) {
+			returnedToModel = true;
+			yield {
+				delta: "The allowed MCP result was received.",
+				type: "text-delta",
+			};
+		} else {
+			yield {
+				input: { text: "through host" },
+				toolCallId: toolCallId("mcp-policy-composition-call"),
+				toolName: allowedToolName,
+				type: "tool-call",
+			};
+		}
+		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+	};
+
+	try {
+		const outcome = await host.agentSession.send(
+			sendInput(
+				capabilities,
+				"Use the available MCP server and report its result."
+			)
+		);
+
+		expect(outcome.rejected).toBe(false);
+		expect(visibleMcpTools).toEqual([allowedToolName]);
+		expect(executedServers).toEqual(["allowed"]);
+		expect(returnedToModel).toBe(true);
+	} finally {
+		recorder.stepScript = previousStepScript;
+		await manager.shutdownAll();
+		await mcpRegistry.close();
+	}
+});
+
+test("Session Host reports an unavailable Skill target without activating it", async () => {
+	const workspace = join(testDirectory, "unavailable-skill-workspace");
+	const availableSkillBody = "Do not load this unrelated available Skill.";
+	await Bun.write(
+		join(workspace, ".wincode", "skills", "available", "SKILL.md"),
+		`---\nname: available\ndescription: An unrelated available Skill.\n---\n${availableSkillBody}`
+	);
+	const manager = createSessionHostManager();
+	const capabilities = createCapabilities(store, {}, manager, {
+		homeRoot: workspace,
+		workspace,
+	});
+	const { id: sessionId } = await store.createSession({
+		agent: buildId,
+		message: message(
+			"unavailable-skill-user",
+			"user",
+			"Try the unavailable Skill and report its status."
+		),
+		model,
+		turnId: agentTurnId("unavailable-skill-turn"),
+	});
+	const host = await manager.openHost({ capabilities, sessionId });
+	const previousStepScript = recorder.stepScript;
+	let modelStep = 0;
+	let skillToolVisible = false;
+	let skillResult: unknown;
+	let availableSkillBodyLoaded = false;
+	recorder.stepScript = async function* (
+		request: ModelStepRequest
+	): AsyncGenerator<ModelStreamPart> {
+		modelStep += 1;
+		if (modelStep === 1) {
+			skillToolVisible = (request.tools ?? []).some(
+				({ name }) => name === "skill"
+			);
+			yield {
+				input: { name: "not-in-catalog" },
+				toolCallId: toolCallId("unavailable-skill-call"),
+				toolName: "skill",
+				type: "tool-call",
+			};
+		} else {
+			const result = request.messages
+				.flatMap(({ content }) => content)
+				.find(({ type }) => type === "tool-result");
+			skillResult = result?.type === "tool-result" ? result.output : undefined;
+			availableSkillBodyLoaded =
+				request.system?.includes(availableSkillBody) ?? false;
+			yield {
+				delta: "The requested Skill was unavailable.",
+				type: "text-delta",
+			};
+		}
+		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+	};
+
+	try {
+		const outcome = await host.agentSession.send(
+			sendInput(
+				capabilities,
+				"Try the unavailable Skill and report its status."
+			)
+		);
+
+		expect(outcome.rejected).toBe(false);
+		expect(skillToolVisible).toBe(true);
+		expect(modelStep).toBe(2);
+		expect(JSON.stringify(skillResult)).toContain("Unknown Skill");
+		expect(JSON.stringify(skillResult)).toContain('"status":"failed"');
+		expect(availableSkillBodyLoaded).toBe(false);
+		expect(host.agentSession.getSnapshot().approvals).toEqual([]);
+	} finally {
+		recorder.stepScript = previousStepScript;
+		await manager.shutdownAll();
+	}
 });
 
 describe("Session Host opening", () => {

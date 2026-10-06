@@ -14,6 +14,7 @@ import {
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { toSubmissionId } from "@wincode/agent-core";
+import { createMcpRegistry } from "@wincode/mcp";
 import { act, useCallback, useEffect, useRef, useState } from "react";
 import type {
 	SessionQueuedSubmission,
@@ -52,7 +53,7 @@ const { createConnections: createDefaultConnections } = await import(
 	"@wincode/ai/connections"
 );
 const { ConnectionsProvider } = await import("@/modules/connections");
-const { createMcpRegistry, McpProvider } = await import("@/modules/mcp");
+const { McpProvider } = await import("@/modules/mcp");
 const { ModelPricingProvider } = await import("@/modules/model-pricing");
 const { createPermissionService, PermissionServiceProvider } = await import(
 	"@/modules/permissions"
@@ -497,7 +498,6 @@ describe("SessionView initial submission", () => {
 																	workspace,
 																})
 															}
-															workspace={workspace}
 														>
 															<RouterContextProvider router={router}>
 																<CommandControllerProvider>
@@ -613,7 +613,6 @@ describe("SessionView initial submission", () => {
 																	workspace,
 																})
 															}
-															workspace={workspace}
 														>
 															<RouterContextProvider router={router}>
 																<CommandControllerProvider>
@@ -713,7 +712,6 @@ const renderSessionView = async ({
 																workspace,
 															})
 														}
-														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
 															<CommandControllerProvider>

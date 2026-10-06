@@ -1,6 +1,7 @@
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
+import { createMcpRegistry } from "@wincode/mcp";
 import { isUndefined } from "@wincode/utils";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import {
@@ -56,7 +57,7 @@ const {
 const { AgentRegistryProvider } = await import("@/modules/agents");
 const { createConnections } = await import("@wincode/ai/connections");
 const { ConnectionsProvider } = await import("@/modules/connections");
-const { createMcpRegistry, McpProvider } = await import("@/modules/mcp");
+const { McpProvider } = await import("@/modules/mcp");
 const { ModelPricingProvider } = await import("@/modules/model-pricing");
 const { createPermissionService, PermissionServiceProvider } = await import(
 	"@/modules/permissions"
@@ -349,7 +350,6 @@ const renderChatShell = async (
 																workspace,
 															})
 														}
-														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
 															<CommandControllerProvider>

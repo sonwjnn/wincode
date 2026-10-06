@@ -1,0 +1,329 @@
+import {
+	AgentInvariantError,
+	isResolvedTool,
+	type ResolvedTool,
+	type ToolDefinition,
+	type ToolJsonSchema,
+} from "@wincode/agent-core";
+import { isNonEmptyString, isObjectLike, isPlainObject } from "@wincode/utils";
+import type {
+	SessionDelegationPort,
+	SessionDelegationRuntimeFactory,
+	SessionDelegationRuntimePorts,
+} from "@/modules/sessions/host/types";
+
+export const toolPolicyCategories = Object.freeze([
+	"coding",
+	"shell",
+	"mcp",
+	"skill",
+	"delegation",
+] as const);
+export type ToolPolicyCategory = (typeof toolPolicyCategories)[number];
+
+export type ToolFamilyAdapter<
+	ProviderContext,
+	Category extends ToolPolicyCategory = ToolPolicyCategory,
+> = Readonly<{
+	/** Declares the family-specific policy adapter required by this provider. */
+	policyCategory: Category;
+	/** Resolves tools through this family's execution and permission boundary. */
+	resolve: (
+		context: ProviderContext
+	) => readonly ResolvedTool[] | Promise<readonly ResolvedTool[]>;
+}>;
+
+export type ToolProviderRegistration<
+	Context,
+	ProviderContext = Context,
+	Category extends ToolPolicyCategory = ToolPolicyCategory,
+> = Readonly<{
+	/** Stable identity used for diagnostics and duplicate checks. */
+	id: string;
+	/** The adapter category whose existing execution policy must be preserved. */
+	policyCategory: Category;
+	/** Projects the turn context onto only this provider's capabilities. */
+	selectContext: (context: Context) => ProviderContext;
+	/** Required family adapter matching the declared policy category. */
+	adapter: ToolFamilyAdapter<ProviderContext, Category>;
+}>;
+
+type RegisteredToolProvider<Context> = Readonly<{
+	id: string;
+	resolve: (
+		context: Context
+	) => readonly ResolvedTool[] | Promise<readonly ResolvedTool[]>;
+}>;
+
+export type PluginAPI<Context> = Readonly<{
+	registerSessionDelegationRuntime: (
+		factory: SessionDelegationRuntimeFactory
+	) => void;
+	registerToolProvider: <ProviderContext, Category extends ToolPolicyCategory>(
+		registration: ToolProviderRegistration<Context, ProviderContext, Category>
+	) => void;
+}>;
+
+/** A built-in Plugin registers its application capabilities through the host API. */
+export type Plugin<Context> = (api: PluginAPI<Context>) => void;
+
+export type ApplicationToolRegistry<Context> = Readonly<{
+	createSessionDelegationRuntime: (
+		ports: SessionDelegationRuntimePorts
+	) => SessionDelegationPort;
+	resolve: (context: Context) => Promise<readonly ResolvedTool[]>;
+}>;
+
+export type CreateApplicationToolRegistryOptions<
+	Context,
+	NativeProviderContext = Context,
+> = Readonly<{
+	/** Native application providers are composed beside Plugins, not as Plugins. */
+	nativeToolProviders?: readonly ToolProviderRegistration<
+		Context,
+		NativeProviderContext
+	>[];
+	plugins: readonly Plugin<Context>[];
+}>;
+
+const isToolPolicyCategory = (value: unknown): value is ToolPolicyCategory =>
+	toolPolicyCategories.some((category) => category === value);
+
+const freezeJsonValue = (value: unknown): unknown => {
+	if (Array.isArray(value)) {
+		return Object.freeze(value.map(freezeJsonValue));
+	}
+	if (isPlainObject(value)) {
+		return Object.freeze(
+			Object.fromEntries(
+				Object.entries(value).map(([key, child]) => [
+					key,
+					freezeJsonValue(child),
+				])
+			)
+		);
+	}
+	return value;
+};
+
+const snapshotToolDefinition = (definition: ToolDefinition): ToolDefinition => {
+	const inputSchema = definition.inputSchema;
+	if ("jsonSchema" in inputSchema) {
+		const snapshotInputSchema: ToolJsonSchema = Object.freeze({
+			...inputSchema,
+			jsonSchema: freezeJsonValue(
+				inputSchema.jsonSchema
+			) as ToolJsonSchema["jsonSchema"],
+		});
+		return Object.freeze({ ...definition, inputSchema: snapshotInputSchema });
+	}
+	return Object.freeze({ ...definition });
+};
+
+const validateProvider = <
+	Context,
+	ProviderContext,
+	Category extends ToolPolicyCategory,
+>(
+	value: unknown,
+	index: number
+): ToolProviderRegistration<Context, ProviderContext, Category> => {
+	if (
+		!isObjectLike(value) ||
+		Array.isArray(value) ||
+		!isNonEmptyString(value.id) ||
+		!isToolPolicyCategory(value.policyCategory) ||
+		!isObjectLike(value.adapter) ||
+		Array.isArray(value.adapter) ||
+		value.adapter.policyCategory !== value.policyCategory ||
+		typeof value.adapter.resolve !== "function" ||
+		typeof value.selectContext !== "function"
+	) {
+		throw new AgentInvariantError(
+			"invalid-registry",
+			`Tool provider registration at index ${index} must declare an id, a known policy category, its matching family adapter, and a context selector.`,
+			{ cause: value }
+		);
+	}
+	return value as ToolProviderRegistration<Context, ProviderContext, Category>;
+};
+
+/**
+ * Creates the application-owned tool host. Built-in Plugin factories run once
+ * and register providers through PluginAPI; native providers such as Skill
+ * activation join the same resolver without becoming Plugins. The Subagents
+ * Plugin also registers the process-lifetime Session Delegation runtime used
+ * by SessionHostManager. Tool Gate decisions remain inside the family adapters
+ * and are evaluated per call.
+ */
+export const createApplicationToolRegistry = <
+	Context,
+	NativeProviderContext = Context,
+>({
+	nativeToolProviders = [],
+	plugins,
+}: CreateApplicationToolRegistryOptions<
+	Context,
+	NativeProviderContext
+>): ApplicationToolRegistry<Context> => {
+	if (!(Array.isArray(plugins) && Array.isArray(nativeToolProviders))) {
+		throw new AgentInvariantError(
+			"invalid-registry",
+			"Application tool registry requires Plugin and native-provider arrays."
+		);
+	}
+
+	const providerIds = new Set<string>();
+	const providers: RegisteredToolProvider<Context>[] = [];
+	let sessionDelegationRuntimeFactory:
+		| SessionDelegationRuntimeFactory
+		| undefined;
+	let registrationOpen = true;
+	const registerToolProvider = <
+		ProviderContext,
+		Category extends ToolPolicyCategory,
+	>(
+		value: ToolProviderRegistration<Context, ProviderContext, Category>
+	): void => {
+		if (!registrationOpen) {
+			throw new AgentInvariantError(
+				"invalid-registry",
+				"Tool providers cannot be registered after Plugin initialization.",
+				{ cause: value }
+			);
+		}
+		const provider = validateProvider<Context, ProviderContext, Category>(
+			value,
+			providers.length
+		);
+		if (providerIds.has(provider.id)) {
+			throw new AgentInvariantError(
+				"invalid-registry",
+				`Tool provider '${provider.id}' was registered more than once.`,
+				{ cause: provider }
+			);
+		}
+		providerIds.add(provider.id);
+		const registered = Object.freeze({
+			...provider,
+			adapter: Object.freeze({ ...provider.adapter }),
+		});
+		providers.push(
+			Object.freeze({
+				id: registered.id,
+				resolve: (context: Context) =>
+					registered.adapter.resolve(registered.selectContext(context)),
+			})
+		);
+	};
+	const registerSessionDelegationRuntime = (
+		factory: SessionDelegationRuntimeFactory
+	): void => {
+		if (!registrationOpen) {
+			throw new AgentInvariantError(
+				"invalid-registry",
+				"Session Delegation runtime cannot be registered after Plugin initialization.",
+				{ cause: factory }
+			);
+		}
+		if (typeof factory !== "function") {
+			throw new AgentInvariantError(
+				"invalid-registry",
+				"Session Delegation runtime registration must be a factory function.",
+				{ cause: factory }
+			);
+		}
+		if (sessionDelegationRuntimeFactory !== undefined) {
+			throw new AgentInvariantError(
+				"invalid-registry",
+				"Only one Session Delegation runtime may be registered.",
+				{ cause: factory }
+			);
+		}
+		sessionDelegationRuntimeFactory = factory;
+	};
+	const api: PluginAPI<Context> = Object.freeze({
+		registerSessionDelegationRuntime,
+		registerToolProvider,
+	});
+
+	try {
+		for (const plugin of plugins) {
+			if (typeof plugin !== "function") {
+				throw new AgentInvariantError(
+					"invalid-registry",
+					"Every built-in Plugin must be a registration function.",
+					{ cause: plugin }
+				);
+			}
+			const result: unknown = plugin(api);
+			if (isObjectLike(result) && typeof result.then === "function") {
+				void Promise.resolve(result).catch(() => undefined);
+				throw new AgentInvariantError(
+					"invalid-registry",
+					"Plugin registration must complete synchronously.",
+					{ cause: plugin }
+				);
+			}
+		}
+		for (const provider of nativeToolProviders) {
+			registerToolProvider(provider);
+		}
+	} finally {
+		registrationOpen = false;
+	}
+
+	return Object.freeze({
+		createSessionDelegationRuntime: (
+			ports: SessionDelegationRuntimePorts
+		): SessionDelegationPort => {
+			if (sessionDelegationRuntimeFactory === undefined) {
+				throw new AgentInvariantError(
+					"invalid-registry",
+					"No Session Delegation runtime was registered by a built-in Plugin."
+				);
+			}
+			return sessionDelegationRuntimeFactory(ports);
+		},
+		resolve: async (context: Context): Promise<readonly ResolvedTool[]> => {
+			const names = new Map<string, string>();
+			const resolved: ResolvedTool[] = [];
+			for (const provider of providers) {
+				const tools = await provider.resolve(context);
+				if (!Array.isArray(tools)) {
+					throw new AgentInvariantError(
+						"invalid-registry",
+						`Tool provider '${provider.id}' did not return a tool array.`,
+						{ cause: tools }
+					);
+				}
+				for (const tool of tools) {
+					if (!isResolvedTool(tool)) {
+						throw new AgentInvariantError(
+							"invalid-registry",
+							`Tool provider '${provider.id}' returned an invalid Resolved Tool.`,
+							{ cause: tool }
+						);
+					}
+					const toolName = tool.definition.name;
+					const existingProvider = names.get(toolName);
+					if (existingProvider !== undefined) {
+						throw new AgentInvariantError(
+							"invalid-registry",
+							`Tool providers '${existingProvider}' and '${provider.id}' both resolved the model-visible tool '${toolName}'.`,
+							{ cause: tool }
+						);
+					}
+					names.set(toolName, provider.id);
+					resolved.push(
+						Object.freeze({
+							definition: snapshotToolDefinition(tool.definition),
+							execute: tool.execute,
+						})
+					);
+				}
+			}
+			return Object.freeze(resolved);
+		},
+	});
+};

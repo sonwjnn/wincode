@@ -1,22 +1,27 @@
-import { createAgentTurnId } from "@wincode/agent-core";
 import {
-	type AgentCallSelection,
-	prepareAgentCall,
-} from "@/modules/agents/agent-call";
-import type { ExecutionMode } from "@/shared/execution-mode";
-import type { SessionId } from "@/shared/identifiers";
-import type {
-	DelegationTask,
-	DelegationTaskOutcome,
-} from "../delegation/types";
-import type { SessionCapabilities } from "../host/types";
-import { createSessionUserMessage } from "../message";
-import type { TurnExecution } from "../turn-execution";
+	type AgentTurnTerminalEvent,
+	createAgentTurnId,
+} from "@wincode/agent-core";
 import type {
 	DelegationExecutor,
 	DelegationRequest,
 	DelegationTaskStart,
-} from "./runtime-turn";
+	SubmitResultExecutor,
+} from "@wincode/subagents";
+import { getErrorMessage } from "@wincode/utils";
+import {
+	type AgentCallSelection,
+	prepareAgentCall,
+} from "@/modules/agents/agent-call";
+import type {
+	DelegationTask,
+	DelegationTaskOutcome,
+} from "@/modules/sessions/delegation/types";
+import type { SessionCapabilities } from "@/modules/sessions/host/types";
+import { createSessionUserMessage } from "@/modules/sessions/message";
+import type { TurnExecution } from "@/modules/sessions/turn-execution";
+import type { ExecutionMode } from "@/shared/execution-mode";
+import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 
 export type CreateDelegationExecutorOptions = Readonly<{
 	capabilities: SessionCapabilities;
@@ -24,6 +29,11 @@ export type CreateDelegationExecutorOptions = Readonly<{
 	executionMode?: ExecutionMode;
 	sessionId: SessionId;
 }>;
+
+const errorMessageOrFallback = (error: unknown, fallback: string): string => {
+	const message = getErrorMessage(error);
+	return message.length > 0 ? message : fallback;
+};
 
 const selectedAgentCall = (
 	execution: TurnExecution,
@@ -45,21 +55,80 @@ const selectedAgentCall = (
 	}
 	return { agent, model: execution.model };
 };
-const publishTerminalTask = async (
+export const publishDelegationTaskOutcome = async (
 	capabilities: SessionCapabilities,
-	taskId: DelegationTaskStart["taskId"],
+	taskId: DelegationTaskId,
 	outcome: DelegationTaskOutcome
-): Promise<void> => {
+): Promise<boolean> => {
 	const store = capabilities.getStore();
 	const report = await store.settleDelegationTask({ outcome, taskId });
 	if (report === null) {
-		return;
+		return false;
 	}
 	const task = await store.getDelegationTask(taskId);
 	if (task !== null) {
-		capabilities.getSessionHostManager().publishDelegationTask(task, report);
+		capabilities.getSessionHostManager().delegation.publishTask(task, report);
 	}
+	return true;
 };
+
+export const createSubmitResultExecutor =
+	(
+		capabilities: SessionCapabilities,
+		taskId: DelegationTaskId
+	): SubmitResultExecutor =>
+	(report) =>
+		publishDelegationTaskOutcome(capabilities, taskId, {
+			kind: "result",
+			report,
+		});
+
+export const settleDelegatedTaskAfterTurn = async (
+	capabilities: SessionCapabilities,
+	task: DelegationTask,
+	event: AgentTurnTerminalEvent
+): Promise<void> => {
+	const store = capabilities.getStore();
+	if (event.type === "agent-turn-completed") {
+		await store.markDelegationTaskAwaitingReport(task.id);
+		const current = await store.getDelegationTask(task.id);
+		if (current?.status === "awaiting_report") {
+			capabilities.getSessionHostManager().delegation.publishTask(current);
+		}
+		return;
+	}
+	let outcome: DelegationTaskOutcome;
+	if (event.type === "agent-turn-cancelled") {
+		outcome = { kind: "cancelled", reason: event.failure.message };
+	} else if (event.type === "agent-turn-interrupted") {
+		outcome = { kind: "interrupted", reason: event.failure.message };
+	} else {
+		outcome = { kind: "failure", reason: event.failure.message };
+	}
+	await publishDelegationTaskOutcome(capabilities, task.id, outcome);
+};
+
+export const failDelegatedTask = async (
+	capabilities: SessionCapabilities,
+	taskId: DelegationTaskId,
+	error: unknown
+): Promise<void> => {
+	const reason = errorMessageOrFallback(error, "Delegated task failed.");
+	await publishDelegationTaskOutcome(capabilities, taskId, {
+		kind: "failure",
+		reason,
+	});
+};
+
+export const hasDelegationTargets = (
+	capabilities: SessionCapabilities
+): boolean =>
+	capabilities
+		.getRegistry()
+		?.agents.some(
+			({ isAvailable, role }) =>
+				isAvailable && (role === "subagent" || role === "all")
+		) === true;
 
 const prepareDelegationCall = (
 	capabilities: SessionCapabilities,
@@ -97,12 +166,9 @@ const startDelegatedTask = async (
 			throw new Error(started.reason);
 		}
 	} catch (error) {
-		await publishTerminalTask(capabilities, task.id, {
+		await publishDelegationTaskOutcome(capabilities, task.id, {
 			kind: "failure",
-			reason:
-				error instanceof Error && error.message.length > 0
-					? error.message
-					: "Delegated task failed to start.",
+			reason: errorMessageOrFallback(error, "Delegated task failed to start."),
 		});
 		throw error;
 	}
@@ -113,10 +179,15 @@ export const createDelegationExecutor = ({
 	execution,
 	executionMode,
 	sessionId,
-}: CreateDelegationExecutorOptions): DelegationExecutor => {
+}: CreateDelegationExecutorOptions): DelegationExecutor<
+	SessionId,
+	DelegationTaskId
+> => {
 	const store = capabilities.getStore();
 	const manager = capabilities.getSessionHostManager();
-	return async (request: DelegationRequest): Promise<DelegationTaskStart> => {
+	return async (
+		request: DelegationRequest
+	): Promise<DelegationTaskStart<SessionId, DelegationTaskId>> => {
 		const prepared = prepareDelegationCall(
 			capabilities,
 			execution,
@@ -143,7 +214,7 @@ export const createDelegationExecutor = ({
 				? {}
 				: { reasoningMode: prepared.reasoningMode }),
 		});
-		manager.registerDelegatedTask(task);
+		manager.delegation.registerTask(task);
 		await startDelegatedTask(capabilities, task, executionMode);
 		return {
 			childSessionId: task.childSessionId,

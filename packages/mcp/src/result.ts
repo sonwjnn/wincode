@@ -11,9 +11,9 @@ import {
 import type { JsonValue } from "type-fest";
 import { MAX_MCP_RESULT_BYTES } from "./manifest";
 import type { McpCatalogSnapshot } from "./registry";
+import { utf8ByteLength } from "./utf8-byte-length";
 
 export type { JsonValue } from "type-fest";
-export { MAX_MCP_RESULT_BYTES } from "./manifest";
 
 export type McpNormalizedResult = {
 	content: JsonValue[];
@@ -56,9 +56,7 @@ export const createMcpToolExecutor = (
 			: { output: result, type: "success" };
 	};
 };
-const encoder = new TextEncoder();
-const size = (value: unknown): number =>
-	encoder.encode(JSON.stringify(value)).byteLength;
+const size = (value: unknown): number => utf8ByteLength(JSON.stringify(value));
 const stringValue = (value: unknown): string =>
 	isString(value) ? value : "unknown";
 const HIGH_SURROGATE_START = 0xd8_00;

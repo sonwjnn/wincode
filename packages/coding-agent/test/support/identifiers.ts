@@ -10,9 +10,9 @@ import {
 	toSessionMessageId,
 } from "@wincode/agent-core";
 import type { ModelId, SupportedChatModelId } from "@wincode/ai/models";
+import type { McpSnapshotId } from "@wincode/mcp";
 import type {
 	CompactionId,
-	McpSnapshotId,
 	QueuedSubmissionId,
 	SessionId,
 	SteeringMessageId,

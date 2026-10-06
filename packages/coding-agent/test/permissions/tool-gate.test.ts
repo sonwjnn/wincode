@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
+import { mcpDeniedByPolicyText } from "@wincode/mcp";
 import { isUndefined } from "@wincode/utils";
-import { mcpDeniedByPolicyText } from "@/modules/mcp/registry";
 import {
 	applyManualApprovalSafetyCeiling,
 	canonicalizeExternalPath,

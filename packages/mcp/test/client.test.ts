@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/client";
+import type {
+	LocalMcpServerConfig,
+	RemoteMcpServerConfig,
+	ResolvedMcpServerConfig,
+} from "@wincode/mcp";
 import {
 	createSdkMcpClient,
 	McpClientError,
 	type McpClientFactoryDeps,
 	type McpClientTool,
-} from "@/modules/mcp/client";
-import type {
-	LocalMcpServerConfig,
-	RemoteMcpServerConfig,
-	ResolvedMcpServerConfig,
-} from "@/modules/mcp/config";
+} from "@wincode/mcp";
 
 type FakeClient = {
 	close(): Promise<void>;

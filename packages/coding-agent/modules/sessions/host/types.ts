@@ -94,26 +94,71 @@ export type SessionHostManagerEvent =
 			sessionId: SessionId;
 			type: "session-approval-notice";
 	  }>;
-export type SessionHostManager = Readonly<{
-	onEvent: (listener: (event: SessionHostManagerEvent) => void) => () => void;
-	publishDelegationTask: (
+export type SessionDelegationSession = Readonly<{
+	capabilities: SessionCapabilities;
+	sessionId: SessionId;
+}>;
+
+/** Ports that the session owner provides to an injected delegation runtime. */
+export type SessionDelegationRuntimePorts = Readonly<{
+	emitTaskEvent: (
 		task: DelegationTask,
 		report?: DelegationReportEnvelope
 	) => void;
-	finishDelegatedTask: (taskId: DelegationTaskId) => void;
+	requestHostUnload: (sessionId: SessionId) => void;
+}>;
+
+/** Neutral session-boundary contract implemented by the delegation runtime. */
+export type SessionDelegationPort = Readonly<{
+	activeTaskIds: () => readonly DelegationTaskId[];
+	cancelActiveTasks: (
+		sessions: readonly SessionDelegationSession[]
+	) => Promise<void>;
+	finishAllTasks: () => void;
+	finishTask: (taskId: DelegationTaskId) => void;
+	getTaskForChild: (
+		store: SessionStore,
+		childSessionId: SessionId
+	) => Promise<DelegationTask | null>;
+	hasActiveTasks: (
+		store: SessionStore,
+		parentSessionId: SessionId
+	) => Promise<boolean>;
+	isTaskActive: (
+		store: SessionStore,
+		taskId: DelegationTaskId
+	) => Promise<boolean>;
+	onHostClosed: (sessionId: SessionId) => void;
+	onHostOpened: (sessionId: SessionId, host: SessionHost) => void;
+	onHostOpening: (sessionId: SessionId) => void;
+	publishTask: (
+		task: DelegationTask,
+		report?: DelegationReportEnvelope
+	) => void;
+	recoverStore: (store: SessionStore) => Promise<void>;
+	registerTask: (task: DelegationTask) => void;
+	waitForTasks: (
+		store: SessionStore,
+		parentSessionId: SessionId
+	) => Promise<DelegationTask[]>;
+}>;
+
+/** The built-in application composition supplies the concrete runtime factory. */
+export type SessionDelegationRuntimeFactory = (
+	ports: SessionDelegationRuntimePorts
+) => SessionDelegationPort;
+
+export type SessionHostManager = Readonly<{
+	delegation: SessionDelegationPort;
+	onEvent: (listener: (event: SessionHostManagerEvent) => void) => () => void;
 	openHost: (input: {
 		capabilities: SessionCapabilities;
 		executionMode?: ExecutionMode;
 		sessionId: SessionId;
 		view?: boolean;
 	}) => Promise<SessionHost>;
-	registerDelegatedTask: (task: DelegationTask) => void;
 	releaseView: (sessionId: SessionId) => Promise<void>;
 	shutdownAll: () => Promise<void>;
-	waitForDelegatedTasks: (
-		store: SessionStore,
-		parentSessionId: SessionId
-	) => Promise<DelegationTask[]>;
 }>;
 
 export type SessionHostOptions = Readonly<{

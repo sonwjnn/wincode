@@ -8,6 +8,7 @@ import {
 	isString,
 } from "./guards";
 
+export * from "./display-sanitize";
 export { getErrorMessage } from "./errors";
 export * from "./file-io";
 export * from "./guards";

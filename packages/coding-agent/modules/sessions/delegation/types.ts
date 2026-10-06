@@ -1,4 +1,5 @@
 import type { AgentId, AgentTurnId, ToolCallId } from "@wincode/agent-core";
+import { delegationResultSchema } from "@wincode/subagents";
 import { z } from "zod";
 import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 
@@ -10,13 +11,6 @@ export const delegationTaskStatusSchema = z.enum([
 	"cancelled",
 	"interrupted",
 ]);
-
-export const delegationResultSchema = z
-	.object({
-		details: z.string().optional(),
-		summary: z.string().trim().min(1),
-	})
-	.strict();
 
 export const delegationTaskOutcomeSchema = z.discriminatedUnion("kind", [
 	z.object({
@@ -38,7 +32,6 @@ export const delegationTaskOutcomeSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type DelegationTaskStatus = z.infer<typeof delegationTaskStatusSchema>;
-export type DelegationResult = z.infer<typeof delegationResultSchema>;
 export type DelegationTaskOutcome = z.infer<typeof delegationTaskOutcomeSchema>;
 
 export type DelegationTask = Readonly<{

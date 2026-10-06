@@ -9,6 +9,7 @@ import type {
 } from "@wincode/ai/model-client";
 import { act } from "react";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
+import { createSubagentTaskRuntime } from "@/plugins/subagents/task-runtime";
 import type { SessionId } from "@/shared/identifiers";
 import {
 	createFakeModelClientModule,
@@ -193,7 +194,7 @@ test("shows a minimal parent notice for a background child's pending approval", 
 		1,
 		"background-approval"
 	);
-	const manager = getInteractiveSessionHostManager();
+	const manager = getInteractiveSessionHostManager(createSubagentTaskRuntime);
 	const priorStepScript = recorder.stepScript;
 	const callId = toolCallId("background-approval-delegation");
 	const childReadCallId = toolCallId("background-child-read");

@@ -1,18 +1,20 @@
-import { homedir } from "node:os";
+import * as os from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
 import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { createMcpRegistry, McpProvider } from "@/modules/mcp";
+import { McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	createPermissionService,
 	PermissionServiceProvider,
 } from "@/modules/permissions";
+import { createApplicationSessionDelegationRuntime } from "@/modules/sessions/hooks/runtime-turn";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
+import { mcpPlugin } from "@/plugins/mcp";
 import { parseCliOptions } from "@/shared/cli-options";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -32,14 +34,16 @@ const configStore = createConfigStore();
 const configContext = Object.freeze({
 	configStore,
 	cwd,
-	homeRoot: homedir(),
+	homeRoot: os.homedir(),
 	workspace,
 });
-const mcpRegistry = createMcpRegistry({ configStore, workspace });
+const mcpResource = mcpPlugin.createResource({ configStore, workspace });
 const permissionService = createPermissionService(parseCliOptions(args));
 setInteractiveCleanup(async () => {
-	await getInteractiveSessionHostManager().shutdownAll();
-	await mcpRegistry.close();
+	await getInteractiveSessionHostManager(
+		createApplicationSessionDelegationRuntime
+	).shutdownAll();
+	await mcpResource.close();
 });
 
 export function RootLayout() {
@@ -68,9 +72,8 @@ export function RootLayout() {
 											<DialogProvider>
 												<McpProvider
 													closeRegistryOnUnmount={false}
-													createRegistry={() => mcpRegistry}
 													refreshKey={currentPath}
-													workspace={workspace}
+													resource={mcpResource}
 												>
 													<CopyOnSelectFromSettings />
 													<DialogProvider>

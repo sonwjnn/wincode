@@ -19,21 +19,24 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { fromAny } from "@total-typescript/shoehorn";
-import { z } from "zod";
 import type {
 	McpConfigResult,
+	McpExecutionPolicy,
 	ResolvedMcpServerConfig,
-} from "@/modules/mcp/config";
-import type { McpExecutionPolicy } from "@/modules/mcp/policy";
+} from "@wincode/mcp";
 import {
 	createMcpRegistry,
-	type McpAgentPolicy,
 	type McpCatalogSnapshot,
-	type McpRegistry,
 	type McpSnapshotTool,
-} from "@/modules/mcp/registry";
+} from "@wincode/mcp";
+import { z } from "zod";
+import type { McpAgentPolicy } from "@/modules/mcp/capability";
 import type { PermissionRules } from "@/modules/permissions";
 import { agentId } from "../support/identifiers";
+import {
+	addAgentPolicyResolver,
+	type PolicyAwareMcpRegistry,
+} from "../support/mcp-registry";
 
 const FIXTURE = path.join(import.meta.dir, "../support/mcp-stdio-server.ts");
 
@@ -74,15 +77,19 @@ const remoteServerConfig = (
 // Real registry with the production SDK client factory wiring. Only the
 // file-based config loader is injected so tests point at real transports
 // without touching the user's Wincode configuration.
-const createRegistry = (config: ResolvedMcpServerConfig): McpRegistry =>
-	createMcpRegistry({
-		env: { ...process.env },
-		workspace: import.meta.dir,
-		loadConfig: async (): Promise<McpConfigResult> => ({
-			diagnostics: [],
-			servers: { [config.name]: config },
-		}),
-	});
+const createRegistry = (
+	config: ResolvedMcpServerConfig
+): PolicyAwareMcpRegistry =>
+	addAgentPolicyResolver(
+		createMcpRegistry({
+			env: { ...process.env },
+			workspace: import.meta.dir,
+			loadConfig: async (): Promise<McpConfigResult> => ({
+				diagnostics: [],
+				servers: { [config.name]: config },
+			}),
+		})
+	);
 
 const echoToolName = (snapshot: McpCatalogSnapshot): string => {
 	const entry = snapshot.manifest[0];
@@ -334,7 +341,7 @@ const dispatchNameOf = (snapshot: McpCatalogSnapshot): string => {
 };
 
 describe("MCP policy composition over the real catalog", () => {
-	const buildStdioRegistry = (): McpRegistry =>
+	const buildStdioRegistry = (): PolicyAwareMcpRegistry =>
 		createRegistry(
 			stdioServerConfig("stdio-echo", [process.execPath, "run", FIXTURE])
 		);

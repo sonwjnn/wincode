@@ -38,12 +38,14 @@
   "dependencies": {
     "@deepseek-ai/node-addon-system": "0.1.2",
     "@lickle/lock": "0.0.1",
-    "@modelcontextprotocol/client": "^2.0.0",
+
     "@opentui/core": "0.4.5",
     "@opentui/react": "0.4.5",
     "@tanstack/react-router": "catalog:",
     "@wincode/agent-core": "workspace:*",
     "@wincode/ai": "workspace:*",
+    "@wincode/mcp": "workspace:*",
+    "@wincode/subagents": "workspace:*",
     "@wincode/utils": "workspace:*",
     "diff": "catalog:",
     "drizzle-orm": "^0.45.2",

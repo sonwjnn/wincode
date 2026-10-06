@@ -1,4 +1,9 @@
 import type { AgentId } from "@wincode/agent-core";
+import type {
+	McpCatalogSnapshot,
+	McpRegistry,
+	McpServerStatus,
+} from "@wincode/mcp";
 import { isNull, isUndefined } from "@wincode/utils";
 import {
 	createContext,
@@ -12,15 +17,12 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { useToast } from "@/shared/providers/toast/toast-provider";
-import type { McpSessionCapability } from "../capability";
 import {
-	createMcpRegistry,
+	createMcpSessionCapability,
 	type McpAgentPolicy,
-	type McpCatalogSnapshot,
-	type McpRegistry,
-	type McpRegistryDeps,
-	type McpServerStatus,
-} from "../registry";
+	type McpPluginResource,
+	type McpSessionCapability,
+} from "../capability";
 
 export type McpContextValue = McpSessionCapability & {
 	close(): Promise<void>;
@@ -63,9 +65,9 @@ export function useMcp(): McpContextValue {
 export type McpProviderProps = {
 	children: ReactNode;
 	closeRegistryOnUnmount?: boolean;
-	createRegistry?: (deps: McpRegistryDeps) => McpRegistry;
+	createRegistry?: () => McpRegistry;
 	refreshKey?: string;
-	workspace: string;
+	resource?: McpPluginResource;
 };
 
 export function McpProvider({
@@ -73,11 +75,23 @@ export function McpProvider({
 	closeRegistryOnUnmount = true,
 	createRegistry,
 	refreshKey,
-	workspace,
+	resource,
 }: McpProviderProps) {
 	const toast = useToast();
-	const [registry] = useState<McpRegistry>(() =>
-		(createRegistry ?? createMcpRegistry)({ workspace })
+	const [registry] = useState<McpRegistry>(() => {
+		if (resource !== undefined) {
+			return resource.registry;
+		}
+		if (createRegistry !== undefined) {
+			return createRegistry();
+		}
+		throw new Error(
+			"McpProvider requires a Plugin resource or registry factory."
+		);
+	});
+	const capability = useMemo(
+		() => resource?.capability ?? createMcpSessionCapability(registry),
+		[registry, resource]
 	);
 	const summaryToastShownRef = useRef(false);
 	const initializeCountRef = useRef(0);
@@ -100,7 +114,9 @@ export function McpProvider({
 	const initialize = useCallback(async (): Promise<void> => {
 		await runWithLoading(async () => {
 			try {
-				await registry.initialize();
+				await (resource === undefined
+					? registry.initialize()
+					: resource.initialize());
 				const summary = buildMcpSummary(registry.getStatuses());
 				if (!isNull(summary)) {
 					summaryToastShownRef.current = true;
@@ -111,7 +127,7 @@ export function McpProvider({
 				throw error;
 			}
 		});
-	}, [registry, runWithLoading, toast.show]);
+	}, [registry, resource, runWithLoading, toast.show]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey intentionally retriggers config reconciliation.
 	useEffect(() => {
@@ -121,10 +137,10 @@ export function McpProvider({
 	useEffect(
 		() => () => {
 			if (closeRegistryOnUnmount) {
-				void registry.close();
+				void (resource === undefined ? registry.close() : resource.close());
 			}
 		},
-		[closeRegistryOnUnmount, registry]
+		[closeRegistryOnUnmount, registry, resource]
 	);
 	const createSnapshot = useCallback(
 		async (
@@ -132,7 +148,7 @@ export function McpProvider({
 			agentPolicy?: McpAgentPolicy,
 			trackLatest = true
 		): Promise<McpCatalogSnapshot> => {
-			const snapshot = await registry.createSnapshot(
+			const snapshot = await capability.createSnapshot(
 				agent,
 				agentPolicy,
 				trackLatest
@@ -146,7 +162,7 @@ export function McpProvider({
 			}
 			return snapshot;
 		},
-		[registry, toast.show]
+		[capability, registry, toast.show]
 	);
 
 	const statusesCacheRef = useRef<readonly McpServerStatus[] | null>(null);
@@ -208,7 +224,8 @@ export function McpProvider({
 
 	const value = useMemo<McpContextValue>(
 		() => ({
-			close: () => registry.close(),
+			close: () =>
+				resource === undefined ? registry.close() : resource.close(),
 			createSnapshot,
 			execute: (snapshot, toolName, input, signal) =>
 				registry.execute(snapshot, toolName, input, signal),
@@ -225,6 +242,7 @@ export function McpProvider({
 			isLoading,
 			reconnect,
 			registry,
+			resource,
 			statuses,
 			toggle,
 		]
