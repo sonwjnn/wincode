@@ -71,7 +71,7 @@ Plugin Commands appear in the Interactive command menu and run only after a trac
 
 ## Session SDK
 
-The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. SDK callers opt into bundled optional Plugins explicitly. A Session SDK can create a child SDK with an explicit `enabledPlugins` list; the child does not inherit the parent's optional or file-loaded Plugin selection. For example, Subagents selects its child set deliberately:
+The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. `handle.deliver(text)` durably queues a message and wakes the Session at its next safe boundary; `handle.prompt(input)` also permits Agent/model selection. SDK callers opt into bundled optional Plugins explicitly. A Session SDK can create a child SDK with an explicit `enabledPlugins` list; the child does not inherit the parent's optional or file-loaded Plugin selection. For example, Subagents selects its child set deliberately:
 
 ```ts
 const childSdk = await parentSdk.createChildSdk({ enabledPlugins: ["subagents"] });
