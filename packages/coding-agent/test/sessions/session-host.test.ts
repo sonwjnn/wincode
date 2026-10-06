@@ -38,6 +38,7 @@ import {
 	createMcpSessionCapability,
 	type McpSessionCapability,
 } from "@/modules/mcp/capability";
+import { loadPlugins } from "@/modules/plugins/loader";
 import {
 	createPluginRuntime,
 	type LoadedPlugin,
@@ -66,6 +67,8 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import { createSessionSdkChildFactory } from "@/modules/sessions/sdk";
+import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
 import {
 	buildUserSessionRecord,
 	projectSessionRecords,
@@ -291,6 +294,25 @@ type SessionHostTestCapabilitiesOptions = Readonly<{
 	pluginRuntime?: PluginRuntime;
 }>;
 
+const bundledComposition = createApplicationPluginComposition({
+	createMcpResource: false,
+	enabledPlugins: ["mcp", "subagents"],
+	workspace: testDirectory,
+});
+const bundledPluginRuntime = await loadPlugins({
+	bundledPlugins: bundledComposition.bundledPlugins,
+	cliPaths: [],
+	config: {
+		configStore: createConfigStore({
+			configRoot: join(testDirectory, "config"),
+			homeRoot: testDirectory,
+		}),
+		cwd: testDirectory,
+		homeRoot: testDirectory,
+		workspace: testDirectory,
+	},
+});
+
 const createCapabilities = (
 	sessionStore: SessionStore = store,
 	document: ConfigSnapshot["document"] = {},
@@ -327,13 +349,14 @@ const createCapabilities = (
 		service: createPermissionService(),
 		workspace,
 	});
-	const pluginRuntime = options.pluginRuntime;
+	const pluginRuntime = options.pluginRuntime ?? bundledPluginRuntime;
 	const composition = createApplicationPluginComposition({
 		configStore: config.configStore,
 		createMcpResource: false,
 		enabledPlugins: ["mcp", "subagents"],
 		workspace,
 	});
+	let sessionSdk: SessionSdkChildFactory | undefined;
 	const capabilities: SessionCapabilities = {
 		getCompactionModule: () =>
 			compactionModule(async () => ({ text: "summary" })),
@@ -371,14 +394,25 @@ const createCapabilities = (
 		getRegistry: () => registry,
 		getStore: () => sessionStore,
 		getSessionHostManager: () => manager,
-		...(pluginRuntime === undefined
-			? {}
-			: { getPluginRuntime: () => pluginRuntime }),
+		getSessionSdk: () => sessionSdk,
+		getPluginRuntime: () => pluginRuntime,
 		getToolPermission: () => toolPermission,
 		getTurnToolResolver: () => composition.turnToolResolver,
 		getDelegationAdapter: () =>
 			composition.createDelegationAdapter?.(capabilities),
 	};
+	sessionSdk = createSessionSdkChildFactory(
+		{
+			configRuntime: config,
+			connections: capabilities.getConnections(),
+			cwd: workspace,
+			registry,
+			store: sessionStore,
+			workspace,
+		},
+		manager,
+		sessionStore
+	);
 	return capabilities;
 };
 
@@ -537,6 +571,7 @@ const textOf = (parts: SessionMessage["parts"]): string =>
 
 afterAll(async () => {
 	await sessionHostManager.shutdownAll();
+	await bundledPluginRuntime.shutdown();
 	rmSync(testDirectory, { force: true, recursive: true });
 });
 
@@ -2245,8 +2280,16 @@ test("keeps delegated Sessions live and resumes their report after interruption"
 		).toHaveLength(0);
 		unsubscribeChild();
 		unsubscribeChild = undefined;
+		const childReportTurnCompleted = Promise.withResolvers<void>();
+		const unsubscribeChildReport = child.onEvent((event) => {
+			if (event.type === "agent-turn-completed") {
+				childReportTurnCompleted.resolve();
+			}
+		});
 		await child.agentSession.send(scoutInput(childReportPrompt));
 		const succeeded = await taskSucceeded.promise;
+		await childReportTurnCompleted.promise;
+		unsubscribeChildReport();
 		expect(succeeded).toMatchObject({
 			childSessionId: activeTask.childSessionId,
 			status: "succeeded",

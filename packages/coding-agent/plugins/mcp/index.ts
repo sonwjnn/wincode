@@ -10,16 +10,15 @@ import {
 	type McpSnapshotTool,
 } from "@wincode/mcp";
 import { isUndefined, omitUndefined } from "@wincode/utils";
-import type { Plugin } from "@/modules/application/plugins/registry";
-import type {
-	McpToolProviderContext,
-	TurnToolPluginContext,
-} from "@/modules/application/plugins/turn-context";
+import type { McpToolProviderContext } from "@/modules/application/plugins/turn-context";
 import {
 	createMcpSessionCapability,
 	type McpPluginResource,
 } from "@/modules/mcp/capability";
 import { createWincodeMcpConfigLoader } from "@/modules/mcp/config";
+import { withBundledToolGate } from "@/modules/plugins/bundled-tools";
+import { getPluginHostContext } from "@/modules/plugins/host-context";
+import type { PluginFactory } from "@/modules/plugins/public";
 import { evaluateGateWithAbort } from "@/modules/tool-gate/evaluate-with-abort";
 import type { ConfigStore } from "@/shared/config/config-store";
 
@@ -116,26 +115,33 @@ const createMcpTools = ({
 	});
 };
 
-const registerMcpTools: Plugin<TurnToolPluginContext> = (api) => {
-	api.registerToolProvider({
-		id: "mcp-tools",
-		policyCategory: "mcp",
-		selectContext: (context): McpToolProviderContext => ({
-			agentId: context.agentId,
-			executeMcpTool: context.executeMcpTool,
-			gate: context.gate,
-			mcpSnapshot: context.mcpSnapshot,
-		}),
-		adapter: {
-			policyCategory: "mcp",
-			resolve: createMcpTools,
-		},
+const mcpPlugin: PluginFactory = (api) => {
+	const plugin = api.definePlugin({ id: "mcp" });
+	plugin.onBeforeAgentTurn((context, registration) => {
+		const turn = getPluginHostContext<McpToolProviderContext>(context);
+		if (turn === undefined) {
+			return;
+		}
+		for (const tool of createMcpTools(turn)) {
+			registration.registerTool(
+				withBundledToolGate(
+					{
+						description: tool.definition.description,
+						handler: (input, toolContext) =>
+							tool.execute(
+								{ input, toolCallId: toolContext.toolCallId },
+								{ signal: toolContext.signal }
+							),
+						inputSchema: tool.definition.inputSchema,
+						modelName: tool.definition.name,
+						name: tool.definition.name,
+					},
+					"mcp"
+				)
+			);
+		}
 	});
 };
 
-/** MCP is one built-in Plugin: it registers tools and owns configured Servers. */
-export const mcpPlugin = Object.freeze(
-	Object.assign(registerMcpTools, {
-		createResource: createMcpPluginResource,
-	})
-);
+/** MCP is a bundled Plugin registered through the public Plugin API. */
+export const mcpPluginFactory = mcpPlugin;

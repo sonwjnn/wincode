@@ -5,6 +5,7 @@ import {
 	isPlainObject,
 } from "@wincode/utils";
 import { z } from "zod";
+import { bundledToolGateSymbol } from "./bundled-tools";
 import type {
 	PluginCommandRegistration,
 	PluginInputSchema,
@@ -14,6 +15,7 @@ import type { PluginCommand, PluginTool } from "./types";
 
 const pluginToolNamePattern = /^[a-z0-9_]+$/u;
 const pluginCommandNamePattern = /^[a-z0-9_-]+$/u;
+const pluginModelNamePattern = /^[a-zA-Z0-9_-]+$/u;
 
 /** Validates one Plugin Tool before it can replace an owner's registration. */
 export const validatePluginTool = (candidate: unknown): PluginTool => {
@@ -23,7 +25,8 @@ export const validatePluginTool = (candidate: unknown): PluginTool => {
 		!pluginToolNamePattern.test(candidate.name) ||
 		!isNonEmptyString(candidate.description) ||
 		!isObjectLike(candidate.inputSchema) ||
-		typeof candidate.handler !== "function"
+		typeof candidate.handler !== "function" ||
+		("exclusiveInBatch" in candidate && candidate.exclusiveInBatch !== true)
 	) {
 		throw new Error(
 			"Plugin Tool registrations require a valid local name, description, input schema, and handler."
@@ -51,10 +54,35 @@ export const validatePluginTool = (candidate: unknown): PluginTool => {
 	}
 	const tool =
 		candidate as unknown as PluginToolRegistration<PluginInputSchema>;
+	const modelName = tool.modelName;
+	if (
+		modelName !== undefined &&
+		!(isNonEmptyString(modelName) && pluginModelNamePattern.test(modelName))
+	) {
+		throw new Error(
+			`Plugin Tool '${tool.name}' has an invalid model-visible name.`
+		);
+	}
+	const gateFamily =
+		bundledToolGateSymbol in candidate
+			? candidate[bundledToolGateSymbol]
+			: undefined;
+	if (
+		gateFamily !== undefined &&
+		gateFamily !== "mcp" &&
+		gateFamily !== "delegation"
+	) {
+		throw new Error(
+			`Plugin Tool '${tool.name}' has an unsupported Gate family.`
+		);
+	}
 	return Object.freeze({
 		description: tool.description,
+		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
+		...(gateFamily === undefined ? {} : { gateFamily }),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,
+		...(modelName === undefined ? {} : { modelName }),
 		name: tool.name,
 	});
 };

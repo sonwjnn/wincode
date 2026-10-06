@@ -106,6 +106,17 @@ export type GateCall =
 			decision: PermissionDecision;
 	  }
 	| {
+			action: "delegate" | "submit_result";
+			agentId?: AgentId;
+			decision: PermissionDecision;
+			description: string;
+			family: "delegation";
+			input: unknown;
+			safety: boolean;
+			toolCallId: ToolCallId;
+			toolName: string;
+	  }
+	| {
 			agentId?: AgentId;
 			family: "shell";
 			toolCall: { input: unknown; toolCallId: ToolCallId };
@@ -1144,6 +1155,44 @@ export const createToolGate = ({
 	 * Gates one Plugin Tool call. An ask remains manual even when --auto is
 	 * enabled, so enabling trusted code cannot silently authorize its calls.
 	 */
+	const gateDelegationToolCall = async (
+		call: Extract<GateCall, { family: "delegation" }>,
+		doomAsk: boolean
+	): Promise<GateOutcome> => {
+		const decision =
+			call.safety && call.decision !== "deny" ? "ask" : call.decision;
+		const settled = await settleApproval(
+			{
+				checks: [
+					{
+						action: call.action,
+						decision,
+						resource: MCP_PERMISSION_RESOURCE,
+					},
+				],
+				doomAsk,
+				request: {
+					description: call.description,
+					identity: [
+						{ label: "tool", value: call.toolName },
+						{ label: "resource", value: MCP_PERMISSION_RESOURCE },
+					],
+					input: call.input,
+					safety: call.safety,
+					toolCallId: call.toolCallId,
+				},
+				safety: call.safety,
+			},
+			approvalDeps,
+			() => service.grant(call.action, MCP_PERMISSION_RESOURCE)
+		);
+		return withErrorText(
+			settled,
+			`${call.toolName} denied by policy.`,
+			() => `${call.toolName} was rejected.`
+		);
+	};
+
 	const gatePluginToolCall = async (
 		call: Extract<GateCall, { family: "plugin" }>,
 		doomAsk: boolean
@@ -1239,6 +1288,9 @@ export const createToolGate = ({
 		if (call.family === "plugin") {
 			return `plugin:${call.action}:${JSON.stringify(call.input)}`;
 		}
+		if (call.family === "delegation") {
+			return `delegation:${call.action}:${JSON.stringify(call.input)}`;
+		}
 		if (call.family === "skill") {
 			return `skill:${call.name}:${JSON.stringify({ name: call.name })}`;
 		}
@@ -1267,6 +1319,9 @@ export const createToolGate = ({
 		}
 		if (call.family === "plugin") {
 			return gatePluginToolCall(call, trackDoomLoop(call));
+		}
+		if (call.family === "delegation") {
+			return gateDelegationToolCall(call, trackDoomLoop(call));
 		}
 		if (call.family === "skill") {
 			return gateSkillCall(call, trackDoomLoop(call));

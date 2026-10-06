@@ -64,7 +64,11 @@ const boundedOutput = (result: unknown): ToolCallOutput => {
 		) {
 			return failure("Plugin Tool output exceeded the 64 KiB limit.");
 		}
-		return { output: JSON.parse(serialized) as unknown, type: "success" };
+		return {
+			output: JSON.parse(serialized) as unknown,
+			...(result.stopTurn === true ? { stopTurn: true } : {}),
+			type: "success",
+		};
 	} catch {
 		return failure("Plugin Tool returned a non-JSON result.");
 	}
@@ -109,6 +113,7 @@ const pluginTool = (
 ): ResolvedTool => ({
 	definition: {
 		description: `Plugin '${tool.pluginId}' capability. ${tool.description}`,
+		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 		inputSchema: tool.inputSchema,
 		name: tool.name,
 	},
@@ -126,31 +131,33 @@ const pluginTool = (
 		if (context.agentId === undefined) {
 			return failure("Plugin Tool Agent identity is unavailable.");
 		}
-		const permission = await context.permissionForAction?.(
-			tool.action,
-			context.agentId
-		);
-		if (permission === undefined) {
-			return failure("Plugin Tool Permission is unavailable.");
-		}
-		const outcome = await evaluateGateWithAbort(
-			() =>
-				context.gate.gate({
-					action: tool.action,
-					agentId: context.agentId,
-					decision: permission.decision,
-					description: `Use Plugin Tool '${tool.name}' (${tool.pluginId}).`,
-					family: "plugin",
-					input,
-					pluginId: tool.pluginId,
-					safety: permission.safety,
-					toolCallId,
-					toolName: tool.name,
-				}),
-			signal ?? context.signal
-		);
-		if (outcome.kind !== "allow") {
-			return failure(outcome.errorText);
+		if (tool.gateFamily === undefined) {
+			const permission = await context.permissionForAction?.(
+				tool.action,
+				context.agentId
+			);
+			if (permission === undefined) {
+				return failure("Plugin Tool Permission is unavailable.");
+			}
+			const outcome = await evaluateGateWithAbort(
+				() =>
+					context.gate.gate({
+						action: tool.action,
+						agentId: context.agentId,
+						decision: permission.decision,
+						description: `Use Plugin Tool '${tool.name}' (${tool.pluginId}).`,
+						family: "plugin",
+						input,
+						pluginId: tool.pluginId,
+						safety: permission.safety,
+						toolCallId,
+						toolName: tool.name,
+					}),
+				signal ?? context.signal
+			);
+			if (outcome.kind !== "allow") {
+				return failure(outcome.errorText);
+			}
 		}
 		try {
 			const result = await tool.handler(parsed.value, {
@@ -176,7 +183,8 @@ export const createPluginTools = (
 		context.pluginTools === undefined ||
 		context.sessionId === undefined ||
 		context.workspace === undefined ||
-		context.permissionForAction === undefined
+		(context.permissionForAction === undefined &&
+			context.pluginTools.some(({ gateFamily }) => gateFamily === undefined))
 	) {
 		return [];
 	}

@@ -52,11 +52,13 @@ export type PluginCommandContext = Readonly<{
 export type PluginToolRegistration<Schema extends PluginInputSchema> =
 	Readonly<{
 		description: string;
+		exclusiveInBatch?: true;
 		handler: (
 			input: Schema extends z.ZodType ? z.output<Schema> : unknown,
 			context: PluginToolContext
 		) => PluginToolResult | Promise<PluginToolResult>;
 		inputSchema: Schema;
+		modelName?: string;
 		name: string;
 	}>;
 

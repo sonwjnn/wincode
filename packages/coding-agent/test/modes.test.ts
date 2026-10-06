@@ -24,10 +24,19 @@ import type {
 } from "../modules/application/modes/types";
 import { createApplicationPluginComposition } from "../modules/application/plugin-composition";
 import { createPermissionService } from "../modules/permissions/permission-service";
+import { loadPlugins } from "../modules/plugins/loader";
 import type { SessionCapabilitiesAssembly } from "../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
 import { createSessionHost } from "../modules/sessions/host/session-host";
-import type { ConfigSnapshot } from "../shared/config/config-store";
+import {
+	createSessionSdkChildFactory,
+	type SessionSdkOptions,
+} from "../modules/sessions/sdk";
+import type { SessionSdkChildFactory } from "../modules/sessions/sdk-contract";
+import {
+	type ConfigSnapshot,
+	createConfigStore,
+} from "../shared/config/config-store";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
@@ -94,20 +103,48 @@ const composeCapabilitiesFor =
 	(agentRegistry: AgentRegistry) =>
 	async ({
 		autoApproval,
+		configRuntime,
 		cwd,
+		pluginRuntime: providedPluginRuntime,
 		workspace: root,
 		enabledPlugins = ["mcp", "subagents"],
 	}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> => {
+		const configStore = configRuntime?.configStore ?? createConfigStore();
+		if (configRuntime === undefined) {
+			await configStore.setValue(
+				root,
+				"project",
+				["permission", "delegate"],
+				"allow"
+			);
+		}
 		const composition = createApplicationPluginComposition({
+			configStore,
 			createMcpResource: false,
 			enabledPlugins,
 			workspace: root,
 		});
-		return createSessionCapabilities({
+		const resolvedConfigRuntime = configRuntime ?? {
+			configStore,
+			cwd,
+			homeRoot: root,
+			workspace: root,
+		};
+		const pluginRuntime =
+			providedPluginRuntime ??
+			(await loadPlugins({
+				bundledPlugins: composition.bundledPlugins,
+				cliPaths: [],
+				config: resolvedConfigRuntime,
+			}));
+		let sessionSdk: SessionSdkChildFactory | undefined;
+		const assembly = await createSessionCapabilities({
 			approvalMode: "non-interactive",
 			cwd,
 			databasePath: path.join(root, "sessions.sqlite"),
 			permissionService: createPermissionService({ autoApproval }),
+			pluginRuntime,
+			getSessionSdk: () => sessionSdk,
 			registry: agentRegistry,
 			runtimeFactory: () => fakeRuntime,
 			...(composition.createDelegationAdapter === undefined
@@ -120,6 +157,22 @@ const composeCapabilitiesFor =
 			workspace: root,
 			connections,
 		});
+		sessionSdk = createSessionSdkChildFactory(
+			{
+				configRuntime: resolvedConfigRuntime,
+				configStore,
+				connections,
+				cwd,
+				enabledPlugins,
+				registry: agentRegistry,
+				runtimeFactory: () => fakeRuntime,
+				store: assembly.store,
+				workspace: root,
+			} satisfies SessionSdkOptions,
+			assembly.capabilities.getSessionHostManager(),
+			assembly.store
+		);
+		return assembly;
 	};
 const composeCapabilities = composeCapabilitiesFor(registry);
 const composeConfiguredReview = composeCapabilitiesFor(

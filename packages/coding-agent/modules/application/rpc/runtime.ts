@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import {
 	effortSchema,
 	isSupportedModelEffort,
@@ -5,6 +6,9 @@ import {
 	modelSelectionSchema,
 	reasoningModeSchema,
 } from "@wincode/ai/models";
+import { loadPlugins } from "@/modules/plugins/loader";
+import { createSessionSdkChildFactory } from "@/modules/sessions/sdk";
+import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
 import { createConfigStore } from "@/shared/config/config-store";
 import { createPermissionService } from "../../../modules/permissions/permission-service";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
@@ -30,15 +34,26 @@ export const loadRuntime = async (
 			enabledPlugins: input.enabledPlugins ?? ["mcp", "subagents"],
 			workspace: sessionComposition.workspace,
 		});
-		return createSessionCapabilities({
+		const configRuntime = input.configRuntime ?? {
 			configStore,
 			cwd: sessionComposition.cwd,
-			...(input.configRuntime === undefined
-				? {}
-				: { configRuntime: input.configRuntime }),
-			...(input.pluginRuntime === undefined
-				? {}
-				: { pluginRuntime: input.pluginRuntime }),
+			homeRoot: os.homedir(),
+			workspace: sessionComposition.workspace,
+		};
+		const pluginRuntime =
+			input.pluginRuntime ??
+			(await loadPlugins({
+				bundledPlugins: pluginComposition.bundledPlugins,
+				cliPaths: [],
+				config: configRuntime,
+			}));
+		let sessionSdk: SessionSdkChildFactory | undefined;
+		const assembly = await createSessionCapabilities({
+			configStore,
+			cwd: sessionComposition.cwd,
+			configRuntime,
+			getSessionSdk: () => sessionSdk,
+			pluginRuntime,
 			...(pluginComposition.mcpResource === undefined
 				? {}
 				: { mcpResource: pluginComposition.mcpResource }),
@@ -58,7 +73,25 @@ export const loadRuntime = async (
 			}),
 			workspace: sessionComposition.workspace,
 		});
+		sessionSdk = createSessionSdkChildFactory(
+			{
+				configRuntime,
+				connections: assembly.capabilities.getConnections(),
+				cwd: sessionComposition.cwd,
+				enabledPlugins: input.enabledPlugins ?? ["mcp", "subagents"],
+				permissionService: createPermissionService({
+					autoApproval: sessionComposition.autoApproval,
+				}),
+				registry: assembly.capabilities.getRegistry(),
+				store: assembly.store,
+				workspace: sessionComposition.workspace,
+			},
+			assembly.capabilities.getSessionHostManager(),
+			assembly.store
+		);
+		return assembly;
 	},
+
 	createSessionHost: (sessionInput) =>
 		sessionInput.capabilities.getSessionHostManager().openHost({
 			...sessionInput,

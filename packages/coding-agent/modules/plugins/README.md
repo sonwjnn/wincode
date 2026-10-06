@@ -69,6 +69,17 @@ Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeA
 
 Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened and do not pass through Tool Permission or open a second approval dialog.
 
+## Session SDK
+
+The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. SDK callers opt into bundled optional Plugins explicitly. A Session SDK can create a child SDK with an explicit `enabledPlugins` list; the child does not inherit the parent's optional or file-loaded Plugin selection. For example, Subagents selects its child set deliberately:
+
+```ts
+const childSdk = await parentSdk.createChildSdk({ enabledPlugins: ["subagents"] });
+const child = await childSdk.openSession(childSessionId);
+```
+
+Dispose child handles and child SDKs when their work is complete. Coding and shell remain native Session tools; Skills remain native host capabilities.
+
 ## Lifecycle
 
 The default factory runs once per Wincode process. A Plugin may register one `onSessionStart`, `onSessionShutdown`, `onBeforeAgentTurn`, and `onShutdown` hook. Session hooks follow each loaded Session runtime: when an idle runtime unloads and later reopens, Wincode sends a new start/shutdown pair. A failed start disables the Plugin only for that Session; a failed pre-Turn hook omits that Plugin's tools only for the affected Turn. Cleanup hooks are idempotent. Plugin file changes take effect on the next Wincode start; hot reload is not supported.

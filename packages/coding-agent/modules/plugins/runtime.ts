@@ -1,4 +1,5 @@
 import { getErrorMessage, isNonEmptyString, logger } from "@wincode/utils";
+import { attachPluginHostContext } from "./host-context";
 import type {
 	PluginBeforeAgentTurnContext,
 	PluginBeforeAgentTurnHook,
@@ -25,6 +26,8 @@ export type PluginDiagnostic = Readonly<{
 export type PluginToolDescriptor = Readonly<{
 	action: `plugin:${string}:${string}`;
 	description: string;
+	exclusiveInBatch?: true;
+	gateFamily?: "delegation" | "mcp";
 	handler: PluginTool["handler"];
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
@@ -65,7 +68,8 @@ export type PluginRuntime = Readonly<{
 	getCommands: (sessionId?: string) => readonly PluginCommandDescriptor[];
 	getToolDescriptors: (sessionId: string) => readonly PluginToolDescriptor[];
 	resolveToolsForTurn: (
-		context: PluginBeforeAgentTurnContext
+		context: PluginBeforeAgentTurnContext,
+		hostContext?: unknown
 	) => Promise<readonly PluginToolDescriptor[]>;
 	shutdown: () => Promise<void>;
 	startSession: (context: PluginSessionContext) => Promise<void>;
@@ -104,10 +108,12 @@ const descriptorForTool = (
 	Object.freeze({
 		action: `plugin:${plugin.id}:${tool.name}`,
 		description: tool.description,
+		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
+		...(tool.gateFamily === undefined ? {} : { gateFamily: tool.gateFamily }),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,
 		localName: tool.name,
-		name: toolNameFor(plugin.id, tool.name),
+		name: tool.modelName ?? toolNameFor(plugin.id, tool.name),
 		pluginId: plugin.id,
 		sourcePath: plugin.sourcePath,
 	});
@@ -207,7 +213,7 @@ export const createPluginRuntime = (
 		): void => {
 			try {
 				const tool = validatePluginTool(candidate);
-				const modelName = toolNameFor(plugin.id, tool.name);
+				const modelName = tool.modelName ?? toolNameFor(plugin.id, tool.name);
 				const owner =
 					options.turnToolOwners?.get(modelName) ??
 					findToolOwner(modelName, options.sessionId);
@@ -406,6 +412,7 @@ export const createPluginRuntime = (
 	const resolvePluginToolsForTurn = async (
 		plugin: LoadedPlugin,
 		context: PluginBeforeAgentTurnContext,
+		hostContext: unknown,
 		turnToolOwners: Map<string, string>
 	): Promise<readonly PluginToolDescriptor[] | null> => {
 		if (!isEnabledForSession(plugin, context.sessionId)) {
@@ -419,7 +426,9 @@ export const createPluginRuntime = (
 		if (plugin.onBeforeAgentTurn !== undefined) {
 			try {
 				await plugin.onBeforeAgentTurn(
-					context,
+					hostContext === undefined
+						? context
+						: attachPluginHostContext(context, hostContext),
 					createScopeApi(plugin, scope, {
 						commandsAllowed: false,
 						sessionId: context.sessionId,
@@ -453,7 +462,8 @@ export const createPluginRuntime = (
 		return pluginTools;
 	};
 	const resolveToolsForTurn = async (
-		context: PluginBeforeAgentTurnContext
+		context: PluginBeforeAgentTurnContext,
+		hostContext?: unknown
 	): Promise<readonly PluginToolDescriptor[]> => {
 		const resolved: PluginToolDescriptor[] = [];
 		const turnToolOwners = new Map<string, string>();
@@ -466,6 +476,7 @@ export const createPluginRuntime = (
 			const pluginTools = await resolvePluginToolsForTurn(
 				plugin,
 				context,
+				hostContext,
 				turnToolOwners
 			);
 			if (pluginTools !== null) {

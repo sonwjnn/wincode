@@ -8,8 +8,8 @@ import { isObjectLike } from "@wincode/utils";
 import { z } from "zod";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import {
+	type ApplicationToolProviderFactory,
 	createApplicationToolRegistry,
-	type Plugin,
 	type ToolProviderRegistration,
 } from "@/modules/application/plugins/registry";
 import { createSessionHostManager } from "@/modules/sessions/host/session-host-manager";
@@ -24,10 +24,13 @@ const resolvedTool = (name: string): ResolvedTool => ({
 	execute: async () => ({ output: null, type: "success" }),
 });
 
-test("PluginAPI projects only provider capabilities for each per-turn resolution", async () => {
+test("Native Tool Registry projects only provider capabilities for each per-turn resolution", async () => {
 	let pluginInitializations = 0;
 	const projectedContexts: { toolName: string }[] = [];
-	const plugin: Plugin<{ toolName: string; secret: string }> = (api) => {
+	const plugin: ApplicationToolProviderFactory<{
+		toolName: string;
+		secret: string;
+	}> = (api) => {
 		pluginInitializations += 1;
 		api.registerToolProvider({
 			id: "coding",
@@ -42,7 +45,7 @@ test("PluginAPI projects only provider capabilities for each per-turn resolution
 			},
 		});
 	};
-	const registry = createApplicationToolRegistry({ plugins: [plugin] });
+	const registry = createApplicationToolRegistry({ providers: [plugin] });
 
 	const firstTurn = await registry.resolve({
 		toolName: "read",
@@ -74,11 +77,11 @@ test("provider registration snapshots resolver functions before the Plugin retur
 			resolve: () => [resolvedTool("read")],
 		},
 	};
-	const plugin: Plugin<undefined> = (api) => {
+	const plugin: ApplicationToolProviderFactory<undefined> = (api) => {
 		api.registerToolProvider(provider);
 		provider.adapter.resolve = () => [resolvedTool("write")];
 	};
-	const registry = createApplicationToolRegistry({ plugins: [plugin] });
+	const registry = createApplicationToolRegistry({ providers: [plugin] });
 
 	const tools = await registry.resolve(undefined);
 
@@ -101,6 +104,7 @@ test("the composition root selects the Subagents Plugin and its Session adapter"
 	try {
 		expect(base.createDelegationRuntime).toBeUndefined();
 		expect(base.createDelegationAdapter).toBeUndefined();
+		expect(selected.bundledPlugins.map(({ id }) => id)).toEqual(["subagents"]);
 		expect(selected.createDelegationRuntime).toBeFunction();
 		expect(selected.createDelegationAdapter).toBeFunction();
 		expect(manager.delegation.activeTaskIds()).toEqual([]);
@@ -121,7 +125,7 @@ test("native Skill tools join the same registry without being a Plugin", async (
 	};
 	const registry = createApplicationToolRegistry({
 		nativeToolProviders: [skillProvider],
-		plugins: [],
+		providers: [],
 	});
 
 	const tools = await registry.resolve(undefined);
@@ -131,7 +135,7 @@ test("native Skill tools join the same registry without being a Plugin", async (
 
 test("duplicate model-visible names fail before an Agent Turn receives tools", async () => {
 	const registry = createApplicationToolRegistry<{ collision: boolean }>({
-		plugins: [
+		providers: [
 			(api) =>
 				api.registerToolProvider({
 					id: "coding",
@@ -172,10 +176,10 @@ test("an undeclared policy category is rejected during plugin registration", () 
 			resolve: () => [],
 		},
 	} as unknown as ToolProviderRegistration<undefined>;
-	const plugin: Plugin<undefined> = (api) =>
+	const plugin: ApplicationToolProviderFactory<undefined> = (api) =>
 		api.registerToolProvider(invalidProvider);
 
-	expect(() => createApplicationToolRegistry({ plugins: [plugin] })).toThrow(
+	expect(() => createApplicationToolRegistry({ providers: [plugin] })).toThrow(
 		AgentInvariantError
 	);
 });
@@ -186,10 +190,10 @@ test("a declared policy category without its family adapter is rejected", () => 
 		policyCategory: "coding",
 		selectContext: (context: undefined) => context,
 	} as unknown as ToolProviderRegistration<undefined>;
-	const plugin: Plugin<undefined> = (api) =>
+	const plugin: ApplicationToolProviderFactory<undefined> = (api) =>
 		api.registerToolProvider(invalidProvider);
 
-	expect(() => createApplicationToolRegistry({ plugins: [plugin] })).toThrow(
+	expect(() => createApplicationToolRegistry({ providers: [plugin] })).toThrow(
 		AgentInvariantError
 	);
 });
@@ -204,10 +208,10 @@ test("a family adapter must match its declared policy category", () => {
 			resolve: () => [],
 		},
 	} as unknown as ToolProviderRegistration<undefined>;
-	const plugin: Plugin<undefined> = (api) =>
+	const plugin: ApplicationToolProviderFactory<undefined> = (api) =>
 		api.registerToolProvider(invalidProvider);
 
-	expect(() => createApplicationToolRegistry({ plugins: [plugin] })).toThrow(
+	expect(() => createApplicationToolRegistry({ providers: [plugin] })).toThrow(
 		AgentInvariantError
 	);
 });
@@ -221,10 +225,10 @@ test("providers without a context projection are rejected before resolution", ()
 			resolve: () => [],
 		},
 	} as unknown as ToolProviderRegistration<undefined>;
-	const plugin: Plugin<undefined> = (api) =>
+	const plugin: ApplicationToolProviderFactory<undefined> = (api) =>
 		api.registerToolProvider(invalidProvider);
 
-	expect(() => createApplicationToolRegistry({ plugins: [plugin] })).toThrow(
+	expect(() => createApplicationToolRegistry({ providers: [plugin] })).toThrow(
 		AgentInvariantError
 	);
 });
@@ -239,13 +243,13 @@ test("duplicate provider identities are rejected during registration", () => {
 			resolve: () => [],
 		},
 	};
-	const plugin: Plugin<undefined> = (api) =>
+	const plugin: ApplicationToolProviderFactory<undefined> = (api) =>
 		api.registerToolProvider(duplicateProvider);
 
 	expect(() =>
 		createApplicationToolRegistry({
 			nativeToolProviders: [duplicateProvider],
-			plugins: [plugin],
+			providers: [plugin],
 		})
 	).toThrow(AgentInvariantError);
 });
@@ -253,7 +257,7 @@ test("duplicate provider identities are rejected during registration", () => {
 test("plugins cannot change tool registration after host initialization", () => {
 	let registerAgain: (() => void) | undefined;
 	const registry = createApplicationToolRegistry({
-		plugins: [
+		providers: [
 			(api) => {
 				registerAgain = () =>
 					api.registerToolProvider({
@@ -288,7 +292,7 @@ test("JSON Schema snapshots detach and freeze their nested per-turn shape", asyn
 		execute: async () => ({ output: null, type: "success" }),
 	};
 	const registry = createApplicationToolRegistry<undefined>({
-		plugins: [
+		providers: [
 			(api) =>
 				api.registerToolProvider({
 					id: "coding",
@@ -328,7 +332,7 @@ test("JSON Schema snapshots detach and freeze their nested per-turn shape", asyn
 test("resolved tools form an immutable per-turn snapshot", async () => {
 	const tool = resolvedTool("read");
 	const registry = createApplicationToolRegistry<undefined>({
-		plugins: [
+		providers: [
 			(api) =>
 				api.registerToolProvider({
 					id: "coding",

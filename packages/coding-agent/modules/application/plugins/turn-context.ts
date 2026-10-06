@@ -6,6 +6,7 @@ import type {
 	PluginToolDescriptor,
 } from "@/modules/plugins/runtime";
 import type { PluginPermissionResolution } from "@/modules/plugins/tools";
+import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
 import type { SkillExecution, SkillToolDefinition } from "@/modules/skills";
 import type { ToolGate } from "@/modules/tool-gate/tool-gate";
 import type {
@@ -46,6 +47,10 @@ export type TurnToolPluginContext = Readonly<
 			action: `plugin:${string}:${string}`,
 			agentId?: AgentId
 		) => Promise<PluginPermissionResolution>;
+		resolveDelegationPermission?: (
+			agentId?: AgentId
+		) => Promise<PluginPermissionResolution>;
+		sessionSdk?: SessionSdkChildFactory;
 	}
 >;
 
@@ -78,7 +83,13 @@ export type PluginToolProviderContext = Pick<
 	| "signal"
 	| "workspace"
 >;
-export type SubagentsToolProviderContext = SubagentToolContext<
-	SessionId,
-	DelegationTaskId
+export type SubagentsToolProviderContext = Pick<
+	TurnToolPluginContext,
+	| "agentId"
+	| "delegate"
+	| "delegationTaskId"
+	| "gate"
+	| "parentTurnId"
+	| "resolveDelegationPermission"
+	| "submitResult"
 >;

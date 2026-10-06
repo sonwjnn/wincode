@@ -6,6 +6,7 @@ import {
 	dispatch,
 } from "../modules/application/dispatch";
 import type { ApplicationContext } from "../modules/application/modes/types";
+import { createApplicationPluginComposition } from "../modules/application/plugin-composition";
 import { loadPlugins } from "../modules/plugins/loader";
 import { resolveWorkspaceRoot } from "../modules/tools";
 import { createConfigStore } from "../shared/config/config-store";
@@ -78,14 +79,20 @@ process.exitCode = await dispatch(
 	},
 	loadModeRunners,
 	{
-		initializeRuntime: async ({ cwd, pluginPaths }) => {
+		initializeRuntime: async ({ cwd, enabledPlugins, pluginPaths }) => {
 			const configRuntime = Object.freeze({
 				configStore: createConfigStore(),
 				cwd,
 				homeRoot: os.homedir(),
 				workspace: resolveWorkspaceRoot(cwd),
 			});
+			const composition = createApplicationPluginComposition({
+				createMcpResource: false,
+				enabledPlugins,
+				workspace: configRuntime.workspace,
+			});
 			const pluginRuntime = await loadPlugins({
+				bundledPlugins: composition.bundledPlugins,
 				cliPaths: pluginPaths,
 				config: configRuntime,
 			});

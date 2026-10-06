@@ -16,6 +16,7 @@ import {
 import { createMcpToolExecutor } from "@wincode/mcp";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
+import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import type {
 	PermissionDecision,
@@ -44,7 +45,6 @@ import {
 	codingToolCatalog,
 	type VersionedEditingContext,
 } from "@/modules/tools";
-import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
@@ -81,7 +81,6 @@ export type SessionPortsOptions = Readonly<{
 	capabilities: SessionCapabilities;
 	/** The Agent Session whose ports these are, available once it is constructed. */
 	agentSession: () => AgentSessionInternalPort;
-	executionMode?: ExecutionMode;
 	delegationTask?: DelegationTask;
 	isShutDown: () => boolean;
 	sessionId: SessionId;
@@ -103,6 +102,7 @@ type PluginTurnResolution = Readonly<{
 const resolvePluginTurnContext = async (
 	input: Readonly<{
 		agentId: AgentId;
+		hostContext: TurnToolPluginContext;
 		pluginRuntime?: PluginRuntime;
 		sessionId: SessionId;
 		signal: AbortSignal;
@@ -113,21 +113,26 @@ const resolvePluginTurnContext = async (
 	const pluginTools =
 		input.pluginRuntime === undefined
 			? []
-			: await input.pluginRuntime.resolveToolsForTurn({
-					agentId: input.agentId,
-					sessionId: input.sessionId,
-					signal: input.signal,
-					workspace: input.workspace,
-				});
-	const policies = await Promise.all(
-		pluginTools.map(async ({ action, name }) => {
-			const permission =
-				await input.toolPermission.resolvePluginPermissionForAgent(
-					action,
-					input.agentId
+			: await input.pluginRuntime.resolveToolsForTurn(
+					{
+						agentId: input.agentId,
+						sessionId: input.sessionId,
+						signal: input.signal,
+						workspace: input.workspace,
+					},
+					input.hostContext
 				);
-			return [name, permission.decision] as const;
-		})
+	const policies = await Promise.all(
+		pluginTools
+			.filter(({ gateFamily }) => gateFamily === undefined)
+			.map(async ({ action, name }) => {
+				const permission =
+					await input.toolPermission.resolvePluginPermissionForAgent(
+						action,
+						input.agentId
+					);
+				return [name, permission.decision] as const;
+			})
 	);
 	return {
 		options: {
@@ -147,15 +152,9 @@ const resolvePluginTurnContext = async (
 
 const collectExistingToolNames = (
 	codingTools: readonly string[],
-	mcpTools: readonly string[],
-	hasDelegate: boolean,
-	hasSubmitResult: boolean,
 	skillToolName: string | undefined
 ): readonly string[] => [
 	...codingTools,
-	...mcpTools,
-	...(hasDelegate ? ["delegate"] : []),
-	...(hasSubmitResult ? ["submit_result"] : []),
 	...(skillToolName === undefined ? [] : [skillToolName]),
 ];
 
@@ -262,7 +261,6 @@ const activateExplicitSkill = async (
 export const createSessionPorts = ({
 	capabilities,
 	agentSession,
-	executionMode,
 	delegationTask,
 	isShutDown,
 	sessionId,
@@ -546,7 +544,6 @@ export const createSessionPorts = ({
 			delegationAdapter?.hasTargets() === true
 				? delegationAdapter.createExecutor({
 						execution: scope,
-						executionMode,
 						sessionId,
 					})
 				: undefined;
@@ -565,9 +562,38 @@ export const createSessionPorts = ({
 			execution.agent
 		);
 		const pluginRuntime = capabilities.getPluginRuntime?.();
+		const sessionSdk = capabilities.getSessionSdk?.();
 		const pluginTurn = await resolvePluginTurnContext({
 			agentId: execution.agent,
 			...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+			hostContext: {
+				agentId: execution.agent,
+				agentTools: resolvedAgent.visibleCodingTools,
+				delegate: scope.delegate,
+				delegationTaskId: submitTask?.id,
+				executeMcpTool,
+				gate: tooling.gate,
+				mcpSnapshot: snapshot,
+				...(scope.delegate === undefined
+					? {}
+					: { parentTurnId: execution.turnId }),
+				resourceLimits,
+				resolveResourceLimits: tooling.resolveResourceLimits,
+				resolveDelegationPermission: async (agentId) => {
+					const permission = await toolPermission.resolvePermissionForAgent(
+						agentId ?? execution.agent
+					);
+					return {
+						decision: permission.decide("delegate", "*"),
+						safety: permission.safety,
+					};
+				},
+				sessionId,
+				signal,
+				submitResult,
+				...(sessionSdk === undefined ? {} : { sessionSdk }),
+				workspace: config.workspace,
+			},
 			sessionId,
 			signal,
 			toolPermission,
@@ -575,9 +601,6 @@ export const createSessionPorts = ({
 		});
 		const existingToolNames = collectExistingToolNames(
 			resolvedAgent.visibleCodingTools,
-			snapshot.manifest.map(({ name }) => name),
-			scope.delegate !== undefined,
-			submitResult !== undefined,
 			scope.armedSkill?.tool?.name
 		);
 		const tools = await (

@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import {
 	type AgentId,
 	type AgentTurnEvent,
@@ -23,7 +24,13 @@ import {
 } from "@wincode/ai/models";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
 import { selectOptionalApplicationPlugins } from "@/modules/application/plugin-composition";
+import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import {
+	createSessionSdkChildFactory,
+	type SessionSdkOptions,
+} from "@/modules/sessions/sdk";
+import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import {
 	type ConfigRuntime,
@@ -328,12 +335,26 @@ const composeDefaultCapabilities = async ({
 		enabledPlugins,
 		workspace,
 	});
-	return createSessionCapabilities({
+	const resolvedPluginRuntime =
+		pluginRuntime ??
+		(await loadPlugins({
+			bundledPlugins: composition.bundledPlugins,
+			cliPaths: [],
+			config: configRuntime ?? {
+				configStore,
+				cwd,
+				homeRoot: os.homedir(),
+				workspace,
+			},
+		}));
+	let sessionSdk: SessionSdkChildFactory | undefined;
+	const assembly = await createSessionCapabilities({
 		approvalMode: "non-interactive",
 		configStore,
 		cwd,
 		...(configRuntime === undefined ? {} : { configRuntime }),
-		...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+		pluginRuntime: resolvedPluginRuntime,
+		getSessionSdk: () => sessionSdk,
 		...(composition.mcpResource === undefined
 			? {}
 			: { mcpResource: composition.mcpResource }),
@@ -347,6 +368,21 @@ const composeDefaultCapabilities = async ({
 		permissionService: createPermissionService({ autoApproval }),
 		workspace,
 	});
+	sessionSdk = createSessionSdkChildFactory(
+		{
+			configStore,
+			configRuntime: configRuntime ?? assembly.capabilities.getConfig(),
+			connections: assembly.capabilities.getConnections(),
+			cwd,
+			registry: assembly.capabilities.getRegistry(),
+			runtimeFactory: assembly.capabilities.getRuntime,
+			store: assembly.store,
+			workspace,
+		} satisfies SessionSdkOptions,
+		assembly.capabilities.getSessionHostManager(),
+		assembly.store
+	);
+	return assembly;
 };
 
 const sendInputFor = (

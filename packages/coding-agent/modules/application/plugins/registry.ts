@@ -50,14 +50,16 @@ type RegisteredToolProvider<Context> = Readonly<{
 	) => readonly ResolvedTool[] | Promise<readonly ResolvedTool[]>;
 }>;
 
-export type PluginAPI<Context> = Readonly<{
+export type ApplicationToolProviderApi<Context> = Readonly<{
 	registerToolProvider: <ProviderContext, Category extends ToolPolicyCategory>(
 		registration: ToolProviderRegistration<Context, ProviderContext, Category>
 	) => void;
 }>;
 
-/** A built-in Plugin registers its application capabilities through the host API. */
-export type Plugin<Context> = (api: PluginAPI<Context>) => void;
+/** Registers native application tools through the host-owned provider API. */
+export type ApplicationToolProviderFactory<Context> = (
+	api: ApplicationToolProviderApi<Context>
+) => void;
 
 export type ApplicationToolRegistry<Context> = Readonly<{
 	resolve: (context: Context) => Promise<readonly ResolvedTool[]>;
@@ -67,12 +69,12 @@ export type CreateApplicationToolRegistryOptions<
 	Context,
 	NativeProviderContext = Context,
 > = Readonly<{
-	/** Native application providers are composed beside Plugins, not as Plugins. */
+	/** Native tool providers use this internal host adapter, not public PluginAPI. */
 	nativeToolProviders?: readonly ToolProviderRegistration<
 		Context,
 		NativeProviderContext
 	>[];
-	plugins: readonly Plugin<Context>[];
+	providers: readonly ApplicationToolProviderFactory<Context>[];
 }>;
 
 const isToolPolicyCategory = (value: unknown): value is ToolPolicyCategory =>
@@ -138,9 +140,9 @@ const validateProvider = <
 };
 
 /**
- * Creates the application-owned tool host. Built-in Plugin factories run once
- * and register providers through PluginAPI; native providers such as Skill
- * activation join the same resolver without becoming Plugins. Tool Gate
+ * Creates the application-owned native tool host. Native providers such as
+ * coding, shell, and Skill activation join one resolver. Bundled and
+ * file-loaded Plugins use the public PluginRuntime separately. Tool Gate
  * decisions remain inside the family adapters and are evaluated per call.
  */
 export const createApplicationToolRegistry = <
@@ -148,20 +150,20 @@ export const createApplicationToolRegistry = <
 	NativeProviderContext = Context,
 >({
 	nativeToolProviders = [],
-	plugins,
+	providers,
 }: CreateApplicationToolRegistryOptions<
 	Context,
 	NativeProviderContext
 >): ApplicationToolRegistry<Context> => {
-	if (!(Array.isArray(plugins) && Array.isArray(nativeToolProviders))) {
+	if (!(Array.isArray(providers) && Array.isArray(nativeToolProviders))) {
 		throw new AgentInvariantError(
 			"invalid-registry",
-			"Application tool registry requires Plugin and native-provider arrays."
+			"Application tool registry requires provider and native-provider arrays."
 		);
 	}
 
 	const providerIds = new Set<string>();
-	const providers: RegisteredToolProvider<Context>[] = [];
+	const registeredProviders: RegisteredToolProvider<Context>[] = [];
 	let registrationOpen = true;
 	const registerToolProvider = <
 		ProviderContext,
@@ -178,7 +180,7 @@ export const createApplicationToolRegistry = <
 		}
 		const provider = validateProvider<Context, ProviderContext, Category>(
 			value,
-			providers.length
+			registeredProviders.length
 		);
 		if (providerIds.has(provider.id)) {
 			throw new AgentInvariantError(
@@ -192,7 +194,7 @@ export const createApplicationToolRegistry = <
 			...provider,
 			adapter: Object.freeze({ ...provider.adapter }),
 		});
-		providers.push(
+		registeredProviders.push(
 			Object.freeze({
 				id: registered.id,
 				resolve: (context: Context) =>
@@ -200,24 +202,26 @@ export const createApplicationToolRegistry = <
 			})
 		);
 	};
-	const api: PluginAPI<Context> = Object.freeze({ registerToolProvider });
+	const api: ApplicationToolProviderApi<Context> = Object.freeze({
+		registerToolProvider,
+	});
 
 	try {
-		for (const plugin of plugins) {
-			if (typeof plugin !== "function") {
+		for (const provider of providers) {
+			if (typeof provider !== "function") {
 				throw new AgentInvariantError(
 					"invalid-registry",
-					"Every built-in Plugin must be a registration function.",
-					{ cause: plugin }
+					"Every native provider must be a registration function.",
+					{ cause: provider }
 				);
 			}
-			const result: unknown = plugin(api);
+			const result: unknown = provider(api);
 			if (isObjectLike(result) && typeof result.then === "function") {
 				void Promise.resolve(result).catch(() => undefined);
 				throw new AgentInvariantError(
 					"invalid-registry",
-					"Plugin registration must complete synchronously.",
-					{ cause: plugin }
+					"Native provider registration must complete synchronously.",
+					{ cause: provider }
 				);
 			}
 		}
@@ -232,7 +236,7 @@ export const createApplicationToolRegistry = <
 		resolve: async (context: Context): Promise<readonly ResolvedTool[]> => {
 			const names = new Map<string, string>();
 			const resolved: ResolvedTool[] = [];
-			for (const provider of providers) {
+			for (const provider of registeredProviders) {
 				const tools = await provider.resolve(context);
 				if (!Array.isArray(tools)) {
 					throw new AgentInvariantError(

@@ -16,6 +16,8 @@ import { z } from "zod";
 import { buildAgent } from "@/modules/agents/built-ins";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { RetiredModelError } from "@/modules/model-target";
+import { loadPlugins } from "@/modules/plugins/loader";
+import { createPluginTools } from "@/modules/plugins/tools";
 import {
 	buildAgentTurn,
 	resolveTurnTools,
@@ -23,10 +25,12 @@ import {
 } from "@/modules/sessions/hooks/runtime-turn";
 import { buildAssistantFailureSessionRecord } from "@/modules/sessions/turn-records";
 import type { SkillExecution, SkillToolDefinition } from "@/modules/skills";
+import type { ToolGate } from "@/modules/tool-gate/tool-gate";
 import {
 	createMemoryFileObservationStore,
 	getToolResourceLimits,
 } from "@/modules/tools";
+import { createConfigStore } from "@/shared/config/config-store";
 import {
 	agentId,
 	agentTurnId,
@@ -347,27 +351,50 @@ test("MCP Plugin tools pass through the MCP Tool Gate before server execution", 
 			],
 		]),
 	});
+	const workspace = process.cwd();
+	const configStore = createConfigStore();
 	const composition = createApplicationPluginComposition({
+		configStore,
 		createMcpResource: false,
 		enabledPlugins: ["mcp"],
-		workspace: process.cwd(),
+		workspace,
 	});
-	const mcpTool = (
-		await composition.turnToolResolver({
+	const executionGate: ToolGate = {
+		gate: async (call) => {
+			calls.push(call);
+			return { errorText: "MCP denied by policy.", kind: "deny" as const };
+		},
+	};
+	const pluginRuntime = await loadPlugins({
+		bundledPlugins: composition.bundledPlugins,
+		cliPaths: [],
+		config: { configStore, cwd: workspace, homeRoot: workspace, workspace },
+	});
+	const pluginTools = await pluginRuntime.resolveToolsForTurn(
+		{
+			agentId: agentId("build"),
+			sessionId: "runtime-mcp-test",
+			signal: new AbortController().signal,
+			workspace,
+		},
+		{
+			agentId: agentId("build"),
 			agentTools: [],
 			executeMcpTool: async () => {
 				executions += 1;
 				return { output: null, type: "success" };
 			},
-			gate: {
-				gate: async (call) => {
-					calls.push(call);
-					return { errorText: "MCP denied by policy.", kind: "deny" };
-				},
-			},
+			gate: executionGate,
 			mcpSnapshot: snapshot,
-		})
-	).find(({ definition }) => definition.name === "mcp_search");
+		}
+	);
+	const mcpTool = createPluginTools({
+		agentId: agentId("build"),
+		gate: executionGate,
+		pluginTools,
+		sessionId: "runtime-mcp-test",
+		workspace,
+	}).find(({ definition }) => definition.name === "mcp_search");
 	if (isUndefined(mcpTool)) {
 		throw new Error("The MCP Plugin did not resolve the snapshot tool.");
 	}

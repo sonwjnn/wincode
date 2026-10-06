@@ -30,9 +30,16 @@ import {
 } from "./runtime";
 import type { PluginCommand, PluginTool } from "./types";
 
+export type BundledPluginFactory = Readonly<{
+	factory: PluginFactory;
+	id: string;
+}>;
+
 export type LoadPluginsInput = Readonly<{
+	bundledPlugins?: readonly BundledPluginFactory[];
 	cliPaths: readonly string[];
 	config: ConfigRuntime;
+	ignoreConfiguredPlugins?: boolean;
 }>;
 
 type MutablePluginDraft = {
@@ -48,6 +55,7 @@ type MutablePluginDraft = {
 };
 
 type PluginPath = Readonly<{
+	factory?: PluginFactory;
 	path: string;
 	source: string;
 }>;
@@ -59,12 +67,7 @@ const isTypeScriptPluginPath = (candidatePath: string): boolean =>
 	typescriptPluginExtensions.has(path.extname(candidatePath)) &&
 	!declarationFilePattern.test(candidatePath);
 const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
-const RESERVED_TOOL_NAMES = new Set([
-	...codingToolNames,
-	"delegate",
-	"skill",
-	"submit_result",
-]);
+const RESERVED_TOOL_NAMES = new Set([...codingToolNames, "skill"]);
 
 const own = (value: object, key: string): boolean => Object.hasOwn(value, key);
 
@@ -284,7 +287,7 @@ const loadedPluginFromDraft = (
 			);
 		}
 		localToolNames.add(tool.name);
-		const modelName = `plugin_${draft.id}_${tool.name}`;
+		const modelName = tool.modelName ?? `plugin_${draft.id}_${tool.name}`;
 		if (toolNames.has(modelName)) {
 			throw new Error(
 				`Plugin Tool name '${modelName}' collides with an active tool.`
@@ -316,10 +319,12 @@ const loadedPluginFromDraft = (
 		Object.freeze({
 			action: `plugin:${draft.id}:${tool.name}`,
 			description: tool.description,
+			...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
+			...(tool.gateFamily === undefined ? {} : { gateFamily: tool.gateFamily }),
 			handler: tool.handler,
 			inputSchema: tool.inputSchema,
 			localName: tool.name,
-			name: `plugin_${draft.id}_${tool.name}`,
+			name: tool.modelName ?? `plugin_${draft.id}_${tool.name}`,
 			pluginId: draft.id,
 			sourcePath: draft.sourcePath,
 		})
@@ -360,14 +365,54 @@ const loadFactory = (sourcePath: string): unknown => {
 	return isObjectLike(loaded) ? loaded.default : undefined;
 };
 
+const factoryForCandidate = (
+	candidate: PluginPath,
+	diagnostics: PluginDiagnostic[]
+): PluginFactory | undefined => {
+	if (candidate.factory !== undefined) {
+		return candidate.factory;
+	}
+	if (!isTypeScriptPluginPath(candidate.path)) {
+		addDiagnostic(
+			diagnostics,
+			"Plugin path must point to an executable TypeScript file (.ts, .tsx, .mts, or .cts).",
+			candidate.path
+		);
+		return;
+	}
+	let factory: unknown;
+	try {
+		factory = loadFactory(candidate.path);
+	} catch (error) {
+		addDiagnostic(
+			diagnostics,
+			`Could not load Plugin from ${candidate.source}: ${messageFor(error)}`,
+			candidate.path
+		);
+		return;
+	}
+	if (!isFactory(factory)) {
+		addDiagnostic(
+			diagnostics,
+			"Plugin file must export a default factory function.",
+			candidate.path
+		);
+		return;
+	}
+	return factory;
+};
+
 const sourcePaths = async (
 	input: LoadPluginsInput,
 	diagnostics: PluginDiagnostic[]
 ): Promise<readonly PluginPath[]> => {
-	const snapshot = await input.config.configStore.getSnapshot(
-		input.config.workspace
-	);
-	const configured = pluginPathsFromSources(snapshot.sources, diagnostics);
+	const snapshot = input.ignoreConfiguredPlugins
+		? undefined
+		: await input.config.configStore.getSnapshot(input.config.workspace);
+	const configured =
+		snapshot === undefined
+			? []
+			: pluginPathsFromSources(snapshot.sources, diagnostics);
 	const cli = input.cliPaths.map((value) => ({
 		path: path.resolve(input.config.workspace, value),
 		source: "--plugin",
@@ -413,32 +458,18 @@ export const loadPlugins = async (
 	const loadedPlugins: LoadedPlugin[] = [];
 	const pluginSources = new Map<string, string>();
 
-	for (const candidate of distinctPaths) {
-		if (!isTypeScriptPluginPath(candidate.path)) {
-			addDiagnostic(
-				diagnostics,
-				"Plugin path must point to an executable TypeScript file (.ts, .tsx, .mts, or .cts).",
-				candidate.path
-			);
-			continue;
-		}
-		let factory: unknown;
-		try {
-			factory = loadFactory(candidate.path);
-		} catch (error) {
-			addDiagnostic(
-				diagnostics,
-				`Could not load Plugin from ${candidate.source}: ${messageFor(error)}`,
-				candidate.path
-			);
-			continue;
-		}
-		if (!isFactory(factory)) {
-			addDiagnostic(
-				diagnostics,
-				"Plugin file must export a default factory function.",
-				candidate.path
-			);
+	const candidates: readonly PluginPath[] = [
+		...(input.bundledPlugins ?? []).map(({ factory, id }) => ({
+			factory,
+			path: `bundled:${id}`,
+			source: `bundled Plugin '${id}'`,
+		})),
+		...distinctPaths,
+	];
+
+	for (const candidate of candidates) {
+		const factory = factoryForCandidate(candidate, diagnostics);
+		if (factory === undefined) {
 			continue;
 		}
 

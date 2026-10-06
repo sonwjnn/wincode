@@ -19,16 +19,32 @@ import type {
 } from "@/modules/sessions/delegation/types";
 import type { SessionCapabilities } from "@/modules/sessions/host/types";
 import { createSessionUserMessage } from "@/modules/sessions/message";
+import type {
+	SessionSdk,
+	SessionSdkHandle,
+} from "@/modules/sessions/sdk-contract";
 import type { TurnExecution } from "@/modules/sessions/turn-execution";
-import type { ExecutionMode } from "@/shared/execution-mode";
 import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 
 export type CreateDelegationExecutorOptions = Readonly<{
 	capabilities: SessionCapabilities;
 	execution: TurnExecution;
-	executionMode?: ExecutionMode;
 	sessionId: SessionId;
 }>;
+
+const sdkChildren = new Map<
+	DelegationTaskId,
+	Readonly<{ sdk: SessionSdk; handle: SessionSdkHandle }>
+>();
+
+const releaseSdkChild = async (taskId: DelegationTaskId): Promise<void> => {
+	const child = sdkChildren.get(taskId);
+	if (child === undefined) {
+		return;
+	}
+	sdkChildren.delete(taskId);
+	await Promise.allSettled([child.handle.dispose(), child.sdk.dispose()]);
+};
 
 const errorMessageOrFallback = (error: unknown, fallback: string): string => {
 	const message = getErrorMessage(error);
@@ -95,6 +111,7 @@ export const settleDelegatedTaskAfterTurn = async (
 		if (current?.status === "awaiting_report") {
 			capabilities.getSessionHostManager().delegation.publishTask(current);
 		}
+		await releaseSdkChild(task.id);
 		return;
 	}
 	let outcome: DelegationTaskOutcome;
@@ -106,6 +123,7 @@ export const settleDelegatedTaskAfterTurn = async (
 		outcome = { kind: "failure", reason: event.failure.message };
 	}
 	await publishDelegationTaskOutcome(capabilities, task.id, outcome);
+	await releaseSdkChild(task.id);
 };
 
 export const failDelegatedTask = async (
@@ -151,25 +169,27 @@ const prepareDelegationCall = (
 };
 const startDelegatedTask = async (
 	capabilities: SessionCapabilities,
-	task: DelegationTask,
-	executionMode: ExecutionMode | undefined
+	task: DelegationTask
 ): Promise<void> => {
-	const manager = capabilities.getSessionHostManager();
+	const sdk = capabilities.getSessionSdk?.();
+	if (sdk === undefined) {
+		throw new Error("The Subagents Plugin requires the public Session SDK.");
+	}
+	const childSdk = await sdk.createChildSdk({
+		enabledPlugins: ["subagents"],
+	});
 	try {
-		const child = await manager.openHost({
-			capabilities,
-			...(executionMode === undefined ? {} : { executionMode }),
-			sessionId: task.childSessionId,
+		const handle = await childSdk.openSession(task.childSessionId, {
+			view: true,
 		});
-		const started = child.agentSession.continue();
+		sdkChildren.set(task.id, { handle, sdk: childSdk });
+		const started = handle.continue();
 		if (started.kind === "rejected") {
 			throw new Error(started.reason);
 		}
 	} catch (error) {
-		await publishDelegationTaskOutcome(capabilities, task.id, {
-			kind: "failure",
-			reason: errorMessageOrFallback(error, "Delegated task failed to start."),
-		});
+		await releaseSdkChild(task.id);
+		await childSdk.dispose();
 		throw error;
 	}
 };
@@ -177,7 +197,6 @@ const startDelegatedTask = async (
 export const createDelegationExecutor = ({
 	capabilities,
 	execution,
-	executionMode,
 	sessionId,
 }: CreateDelegationExecutorOptions): DelegationExecutor<
 	SessionId,
@@ -215,7 +234,7 @@ export const createDelegationExecutor = ({
 				: { reasoningMode: prepared.reasoningMode }),
 		});
 		manager.delegation.registerTask(task);
-		await startDelegatedTask(capabilities, task, executionMode);
+		await startDelegatedTask(capabilities, task);
 		return {
 			childSessionId: task.childSessionId,
 			status: "active",

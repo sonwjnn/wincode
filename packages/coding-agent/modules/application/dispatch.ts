@@ -6,6 +6,7 @@ import type {
 	TextWriter,
 } from "./modes/types";
 import { InvocationError } from "./modes/types";
+import { selectOptionalApplicationPlugins } from "./plugin-composition";
 import type { OutputWriter as RpcOutputWriter } from "./rpc/types";
 
 export type DispatchInput = Readonly<{
@@ -37,6 +38,7 @@ export type DispatchRuntime = Pick<
 export type DispatchDependencies = Readonly<{
 	initializeRuntime?: (input: {
 		cwd: string;
+		enabledPlugins: readonly OptionalPluginId[];
 		pluginPaths: readonly string[];
 	}) => Promise<DispatchRuntime>;
 }>;
@@ -333,6 +335,9 @@ export const dispatch = async (
 		}
 		const runtime = await dependencies.initializeRuntime?.({
 			cwd: input.cwd,
+			enabledPlugins: selectOptionalApplicationPlugins(
+				parsed.invocation.disabledPlugins
+			),
 			pluginPaths: parsed.invocation.pluginPaths ?? [],
 		});
 		pluginRuntime = runtime?.pluginRuntime;

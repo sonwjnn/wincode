@@ -47,8 +47,8 @@ import {
 } from "@wincode/utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import {
+	type ApplicationToolProviderFactory,
 	createApplicationToolRegistry,
-	type Plugin,
 	type ToolProviderRegistration,
 } from "@/modules/application/plugins/registry";
 import type {
@@ -416,7 +416,9 @@ const selectSkillToolProviderContext = (
 	skillTool: context.skillTool,
 });
 
-const codingPlugin: Plugin<TurnToolPluginContext> = (api) => {
+const codingProvider: ApplicationToolProviderFactory<TurnToolPluginContext> = (
+	api
+) => {
 	api.registerToolProvider({
 		id: "coding-tools",
 		policyCategory: "coding",
@@ -467,7 +469,9 @@ const selectPluginToolProviderContext = (
 	...(context.workspace === undefined ? {} : { workspace: context.workspace }),
 });
 
-const pluginToolsPlugin: Plugin<TurnToolPluginContext> = (api) => {
+const pluginToolsProvider: ApplicationToolProviderFactory<
+	TurnToolPluginContext
+> = (api) => {
 	api.registerToolProvider({
 		id: "plugin-tools",
 		policyCategory: "plugin",
@@ -481,10 +485,10 @@ const pluginToolsPlugin: Plugin<TurnToolPluginContext> = (api) => {
 };
 
 export const createTurnToolRegistry = (
-	plugins: readonly Plugin<TurnToolPluginContext>[] = []
+	providers: readonly ApplicationToolProviderFactory<TurnToolPluginContext>[] = []
 ) =>
 	createApplicationToolRegistry({
-		plugins: [codingPlugin, ...plugins, pluginToolsPlugin],
+		providers: [codingProvider, ...providers, pluginToolsProvider],
 		nativeToolProviders: [skillToolProvider],
 	});
 

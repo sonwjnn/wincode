@@ -13,6 +13,7 @@ export type PermissionAction =
 	| "glob"
 	| "grep"
 	| "shell"
+	| "delegate"
 	| "recover"
 	| "recover:cross-session"
 	| "recover:discard"
@@ -90,6 +91,7 @@ export const PERMISSION_TOOL_ACTIONS = [
 	"list",
 	"glob",
 	"grep",
+	"delegate",
 	"recover",
 	"recover:cross-session",
 	"recover:discard",

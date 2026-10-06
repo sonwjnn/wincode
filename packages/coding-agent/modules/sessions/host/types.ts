@@ -24,6 +24,7 @@ import type {
 	DelegationTask,
 } from "../delegation/types";
 import type { TurnToolResolver } from "../hooks/runtime-turn";
+import type { SessionSdkChildFactory } from "../sdk-contract";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
 import type { TurnExecution } from "../turn-execution";
@@ -54,6 +55,7 @@ export type SessionCapabilities = Readonly<{
 	/** Optional runtime factory for non-default application adapters and tests. */
 	getRuntime?: () => AgentRuntime;
 	getSessionHostManager: () => SessionHostManager;
+	getSessionSdk?: () => SessionSdkChildFactory | undefined;
 	getPluginRuntime?: () => PluginRuntime;
 	getTurnToolResolver?: () => TurnToolResolver;
 	getDelegationAdapter?: () => SessionDelegationAdapter | undefined;
@@ -111,7 +113,6 @@ export type SessionHostManagerEvent =
 export type SessionDelegationAdapter = Readonly<{
 	createExecutor: (input: {
 		execution: TurnExecution;
-		executionMode?: ExecutionMode;
 		sessionId: SessionId;
 	}) => DelegationExecutor<SessionId, DelegationTaskId>;
 	createSubmitResultExecutor: (

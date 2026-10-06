@@ -1,11 +1,9 @@
 import * as os from "node:os";
-import type { AgentId, AgentTurnEvent } from "@wincode/agent-core";
+import type { AgentId } from "@wincode/agent-core";
 import { agentIdSchema } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
-	type Effort,
-	type ReasoningMode,
 } from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/utils";
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
@@ -17,49 +15,39 @@ import {
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type {
-	LiveSessionSnapshot,
-	SessionContinuationOutcome,
-	SessionSubmissionAdmission,
-} from "@/modules/sessions/agent-session/types";
+	SessionSdk,
+	SessionSdkChildFactory,
+	SessionSdkCreateOptions,
+	SessionSdkHandle,
+	SessionSdkPrompt,
+} from "./sdk-contract";
+
+export type {
+	SessionSdk,
+	SessionSdkChildFactory,
+	SessionSdkCreateOptions,
+	SessionSdkHandle,
+	SessionSdkPrompt,
+} from "./sdk-contract";
+
 import {
 	createSessionCapabilities,
 	type SessionCapabilitiesAssembly,
 	type SessionCapabilitiesOptions,
 } from "@/modules/sessions/host/session-capabilities";
-import type { SessionHost } from "@/modules/sessions/host/types";
+import type {
+	SessionHost,
+	SessionHostManager,
+} from "@/modules/sessions/host/types";
+import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
 
-export type SessionSdkPrompt = Readonly<{
-	agent?: AgentId | string;
-	effort?: Effort;
-	model?: ChatModelSelection;
-	reasoningMode?: ReasoningMode;
-	text: string;
-}>;
-
-export type SessionSdkCreateOptions = Readonly<{
-	agent?: AgentId | string;
-	effort?: Effort;
-	initialPrompt?: string;
-	model?: ChatModelSelection;
-	reasoningMode?: ReasoningMode;
-}>;
-
-export type SessionSdkHandle = Readonly<{
-	continue: () => SessionContinuationOutcome;
-	dispose: () => Promise<void>;
-	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
-	prompt: (input: SessionSdkPrompt) => Promise<SessionSubmissionAdmission>;
-	sessionId: SessionId;
-	subscribe: (listener: (snapshot: LiveSessionSnapshot) => void) => () => void;
-}>;
-
 export type SessionSdkOptions = Omit<
 	SessionCapabilitiesOptions,
-	"cwd" | "pluginRuntime" | "workspace"
+	"cwd" | "pluginRuntime" | "sessionHostManager" | "getSessionSdk" | "workspace"
 > &
 	Readonly<{
 		agent?: AgentId | string;
@@ -69,14 +57,6 @@ export type SessionSdkOptions = Omit<
 		pluginPaths?: readonly string[];
 		workspace?: string;
 	}>;
-
-export type SessionSdk = Readonly<{
-	createSession: (
-		options?: SessionSdkCreateOptions
-	) => Promise<SessionSdkHandle>;
-	dispose: () => Promise<void>;
-	openSession: (sessionId: SessionId | string) => Promise<SessionSdkHandle>;
-}>;
 
 type SessionSelectionDefaults = Readonly<{
 	agent: AgentId;
@@ -202,9 +182,15 @@ const handleFor = (
 	});
 };
 
-/** Creates a public, caller-owned Session SDK over the Coding-Agent Host. */
-export const createSessionSdk = async (
-	options: SessionSdkOptions = {}
+type SharedSessionSdkResources = Readonly<{
+	ignoreConfiguredPlugins: boolean;
+	manager: SessionHostManager;
+	store: SessionStore;
+}>;
+
+const createSessionSdkInternal = async (
+	options: SessionSdkOptions,
+	shared?: SharedSessionSdkResources
 ): Promise<SessionSdk> => {
 	const workspace = options.workspace ?? process.cwd();
 	const cwd = options.cwd ?? workspace;
@@ -218,9 +204,18 @@ export const createSessionSdk = async (
 		homeRoot: os.homedir(),
 		workspace,
 	};
+	const composition = createApplicationPluginComposition({
+		configStore,
+		enabledPlugins: options.enabledPlugins ?? [],
+		workspace,
+	});
 	const pluginRuntime: PluginRuntime = await loadPlugins({
+		bundledPlugins: composition.bundledPlugins,
 		cliPaths: options.pluginPaths ?? [],
 		config: configRuntime,
+		...(shared?.ignoreConfiguredPlugins === true
+			? { ignoreConfiguredPlugins: true }
+			: {}),
 	});
 	const {
 		agent,
@@ -231,16 +226,19 @@ export const createSessionSdk = async (
 		workspace: _workspace,
 		...capabilityOptions
 	} = options;
-	const composition = createApplicationPluginComposition({
-		configStore,
-		enabledPlugins,
-		workspace,
-	});
+	let sdk: SessionSdk | undefined;
 	const assembly = await createSessionCapabilities({
 		...capabilityOptions,
 		configRuntime,
 		cwd,
 		pluginRuntime,
+		getSessionSdk: () => sdk,
+		...(shared === undefined
+			? {}
+			: {
+					store: shared.store,
+					sessionHostManager: shared.manager,
+				}),
 		...(composition.mcpResource === undefined
 			? {}
 			: { mcpResource: composition.mcpResource }),
@@ -254,6 +252,7 @@ export const createSessionSdk = async (
 		workspace,
 	});
 	const handles = new Set<SessionSdkHandle>();
+	const childSdks = new Set<SessionSdk>();
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
 	const defaultSelection = defaultsFor(assembly.capabilities.getRegistry(), {
@@ -262,6 +261,7 @@ export const createSessionSdk = async (
 	});
 	const openSession = async (
 		id: SessionId | string,
+		openOptions: Readonly<{ view?: boolean }> = {},
 		selection = defaultSelection
 	): Promise<SessionSdkHandle> => {
 		if (disposed) {
@@ -271,7 +271,7 @@ export const createSessionSdk = async (
 		const host = await assembly.capabilities.getSessionHostManager().openHost({
 			capabilities: assembly.capabilities,
 			sessionId,
-			view: true,
+			view: openOptions.view ?? true,
 		});
 		const stored = await assembly.store.getSession(sessionId);
 		const prior = host.getSelection();
@@ -303,7 +303,7 @@ export const createSessionSdk = async (
 				reasoningMode: createOptions?.reasoningMode,
 			})
 		);
-		const handle = await openSession(id, selection);
+		const handle = await openSession(id, {}, selection);
 		if (createOptions?.initialPrompt !== undefined) {
 			const admission = await handle.prompt({
 				text: createOptions.initialPrompt,
@@ -321,7 +321,33 @@ export const createSessionSdk = async (
 		}
 		return handle;
 	};
-	return Object.freeze({
+	const createChildSdk: SessionSdk["createChildSdk"] = async (
+		childOptions
+	): Promise<SessionSdk> => {
+		if (disposed) {
+			throw new Error("Session SDK is disposed.");
+		}
+		const childSdk = await createSessionSdkInternal(
+			{
+				...options,
+				cwd,
+				configRuntime,
+				enabledPlugins: childOptions.enabledPlugins,
+				pluginPaths: childOptions.pluginPaths ?? [],
+				store: assembly.store,
+				workspace,
+			},
+			{
+				ignoreConfiguredPlugins: true,
+				manager: assembly.capabilities.getSessionHostManager(),
+				store: assembly.store,
+			}
+		);
+		childSdks.add(childSdk);
+		return childSdk;
+	};
+	const sdkApi: SessionSdk = Object.freeze({
+		createChildSdk,
 		createSession,
 		dispose: () => {
 			if (disposePromise !== undefined) {
@@ -332,6 +358,9 @@ export const createSessionSdk = async (
 				await Promise.allSettled(
 					[...handles].map((handle) => handle.dispose())
 				);
+				await Promise.allSettled(
+					[...childSdks].map((childSdk) => childSdk.dispose())
+				);
 				await assembly.shutdown();
 			})();
 			disposePromise = closing;
@@ -339,4 +368,29 @@ export const createSessionSdk = async (
 		},
 		openSession,
 	});
+	sdk = sdkApi;
+	return sdkApi;
 };
+
+/** Creates a public, caller-owned Session SDK over the Coding-Agent Host. */
+export const createSessionSdk = (
+	options: SessionSdkOptions = {}
+): Promise<SessionSdk> => createSessionSdkInternal(options);
+
+/** Creates explicitly selected child SDKs that share the owning Session Host. */
+export const createSessionSdkChildFactory = (
+	options: SessionSdkOptions,
+	manager: SessionHostManager,
+	store: SessionStore
+): SessionSdkChildFactory => ({
+	createChildSdk: (childOptions) =>
+		createSessionSdkInternal(
+			{
+				...options,
+				enabledPlugins: childOptions.enabledPlugins,
+				pluginPaths: childOptions.pluginPaths ?? [],
+				store,
+			},
+			{ ignoreConfiguredPlugins: true, manager, store }
+		),
+});

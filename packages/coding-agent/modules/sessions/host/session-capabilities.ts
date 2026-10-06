@@ -42,6 +42,7 @@ import { estimateCompactionTokens } from "../compaction/config";
 import { createCompactionSettingsOperations } from "../compaction/settings-operations";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { resolveTurnTools, type TurnToolResolver } from "../hooks/runtime-turn";
+import type { SessionSdkChildFactory } from "../sdk-contract";
 import {
 	createDatabase,
 	type SessionDatabase,
@@ -64,6 +65,7 @@ import type {
 	SessionCapabilities,
 	SessionDelegationAdapter,
 	SessionDelegationRuntimeFactory,
+	SessionHostManager,
 } from "./types";
 
 export type SessionCapabilitiesOptions = Readonly<{
@@ -81,6 +83,8 @@ export type SessionCapabilitiesOptions = Readonly<{
 	store?: SessionStore;
 	pluginRuntime?: PluginRuntime;
 	mcpResource?: McpPluginResource;
+	sessionHostManager?: SessionHostManager;
+	getSessionSdk?: () => SessionSdkChildFactory | undefined;
 	createDelegationRuntime?: SessionDelegationRuntimeFactory;
 	createDelegationAdapter?: (
 		capabilities: SessionCapabilities
@@ -111,6 +115,13 @@ const workspaceIdentity = (workspace: string): WorkspaceId =>
 	toWorkspaceId(
 		new Bun.CryptoHasher("sha256").update(workspace).digest("hex").slice(0, 16)
 	);
+
+const sessionHostManagerFor = (
+	provided: SessionHostManager | undefined,
+	createDelegationRuntime: SessionDelegationRuntimeFactory | undefined,
+	pluginRuntime: PluginRuntime
+): SessionHostManager =>
+	provided ?? createSessionHostManager(createDelegationRuntime, pluginRuntime);
 
 type OpenSessionDatabaseInput = Readonly<{
 	databasePath?: string;
@@ -166,6 +177,8 @@ export const createSessionCapabilities = async ({
 	store: providedStore,
 	pluginRuntime: providedPluginRuntime,
 	mcpResource: providedMcpResource,
+	sessionHostManager: providedSessionHostManager,
+	getSessionSdk,
 	createDelegationRuntime,
 	createDelegationAdapter,
 	turnToolResolver,
@@ -250,7 +263,8 @@ export const createSessionCapabilities = async ({
 			store,
 			summaryGenerator: createDirectSummaryGenerator(connections),
 		});
-		const sessionHostManager = createSessionHostManager(
+		const sessionHostManager = sessionHostManagerFor(
+			providedSessionHostManager,
 			createDelegationRuntime,
 			pluginRuntime
 		);
@@ -264,7 +278,9 @@ export const createSessionCapabilities = async ({
 			}
 			const closing = (async () => {
 				try {
-					await sessionHostManager.shutdownAll();
+					if (providedSessionHostManager === undefined) {
+						await sessionHostManager.shutdownAll();
+					}
 					await pluginRuntime.shutdown();
 				} finally {
 					if (ownedMcp !== undefined) {
@@ -286,6 +302,7 @@ export const createSessionCapabilities = async ({
 			getRegistry: () => registry,
 			getStore: () => store,
 			getSessionHostManager: () => sessionHostManager,
+			...(getSessionSdk === undefined ? {} : { getSessionSdk }),
 			getToolPermission: () => toolPermission,
 			getPluginRuntime: () => pluginRuntime,
 			getTurnToolResolver: () => turnToolResolver ?? resolveTurnTools,

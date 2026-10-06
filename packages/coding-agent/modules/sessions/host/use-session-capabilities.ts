@@ -18,6 +18,8 @@ import { createSessionCompaction } from "../compaction/compaction";
 import { estimateCompactionTokens } from "../compaction/config";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { useCompactionSettings } from "../compaction/use-compaction-settings";
+import { createSessionSdkChildFactory } from "../sdk";
+import type { SessionSdkChildFactory } from "../sdk-contract";
 import { getSessionStore } from "../storage/get-session-store";
 import { getInteractiveSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities } from "./types";
@@ -80,6 +82,12 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 		[config.configStore, config.workspace, disabledPlugins]
 	);
 	return useMemo(() => {
+		let sessionSdk: SessionSdkChildFactory | undefined;
+		const sessionStore = getSessionStore();
+		const sessionHostManager = getInteractiveSessionHostManager(
+			composition.createDelegationRuntime,
+			pluginRuntime
+		);
 		const capabilities: SessionCapabilities = {
 			getCompactionModule: () => compactionModuleRef.current,
 			getCompactionSettings: (model) => getCompactionSettingsRef.current(model),
@@ -88,11 +96,8 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			getMcp: () => mcpRef.current,
 			getRegistry: () => registryRef.current,
 			getStore: () => getSessionStore(),
-			getSessionHostManager: () =>
-				getInteractiveSessionHostManager(
-					composition.createDelegationRuntime,
-					pluginRuntime
-				),
+			getSessionHostManager: () => sessionHostManager,
+			getSessionSdk: () => sessionSdk,
 			getTurnToolResolver: () => composition.turnToolResolver,
 			getDelegationAdapter: () =>
 				composition.createDelegationAdapter?.(capabilities),
@@ -101,6 +106,19 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 				: { getPluginRuntime: () => pluginRuntime }),
 			getToolPermission: () => toolPermissionRef.current,
 		};
+		sessionSdk = createSessionSdkChildFactory(
+			{
+				configRuntime: configRef.current,
+				configStore: configRef.current.configStore,
+				connections: connectionsRef.current,
+				cwd: configRef.current.cwd ?? configRef.current.workspace,
+				registry: registryRef.current,
+				store: sessionStore,
+				workspace: configRef.current.workspace,
+			},
+			sessionHostManager,
+			sessionStore
+		);
 		return capabilities;
 	}, [composition, pluginRuntime]);
 };

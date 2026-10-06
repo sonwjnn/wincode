@@ -428,7 +428,6 @@ export const createSessionHost = async ({
 				agentSession: getAgentSessionInternalPort,
 				isShutDown: () => isShutDown,
 				sessionId,
-				executionMode,
 				delegationTask: opened.delegationTask,
 				statefulAgent,
 			}),
