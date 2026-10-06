@@ -22,6 +22,7 @@ import {
 	type ReasoningSelection,
 } from "@wincode/ai/models";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
+import { selectOptionalApplicationPlugins } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import {
@@ -80,8 +81,8 @@ const composeOneShotCapabilities = (
 			configRuntime: context.configRuntime,
 			pluginRuntime: context.pluginRuntime,
 		}),
-		enabledPlugins: (["mcp", "subagents"] as const).filter(
-			(pluginId) => !context.invocation.disabledPlugins?.includes(pluginId)
+		enabledPlugins: selectOptionalApplicationPlugins(
+			context.invocation.disabledPlugins
 		),
 		workspace,
 	});

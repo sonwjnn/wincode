@@ -28,6 +28,18 @@ import { createConfigStore } from "@/shared/config/config-store";
 
 export type OptionalApplicationPluginId = "mcp" | "subagents";
 
+const optionalApplicationPluginIds: readonly OptionalApplicationPluginId[] = [
+	"mcp",
+	"subagents",
+];
+
+export const selectOptionalApplicationPlugins = (
+	disabled: readonly OptionalApplicationPluginId[] = []
+): readonly OptionalApplicationPluginId[] =>
+	optionalApplicationPluginIds.filter(
+		(pluginId) => !disabled.includes(pluginId)
+	);
+
 export type ApplicationPluginComposition = Readonly<{
 	createDelegationAdapter?: (
 		capabilities: SessionCapabilities

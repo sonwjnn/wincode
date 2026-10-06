@@ -16,5 +16,3 @@ export type PluginCommand = Readonly<{
 	handler: PluginCommandRegistration["handler"];
 	name: string;
 }>;
-
-export type { PluginCommandContext, PluginToolContext } from "./public";

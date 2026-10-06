@@ -126,7 +126,9 @@ const pluginPathsFromSources = (
 const createRegistrationAPI = (
 	plugin: MutablePluginDraft,
 	isOpen: () => boolean,
-	diagnostics: PluginDiagnostic[]
+	diagnostics: PluginDiagnostic[],
+	toolNames: ReadonlySet<string>,
+	commandNames: ReadonlySet<string>
 ): PluginDefinitionAPI => {
 	const assertOpen = (): void => {
 		if (!isOpen()) {
@@ -184,7 +186,13 @@ const createRegistrationAPI = (
 			assertOpen();
 			try {
 				const validated = validatePluginCommand(command);
-				plugin.commands.set(validated.name.toLowerCase(), validated);
+				const key = validated.name.toLowerCase();
+				if (commandNames.has(key)) {
+					throw new Error(
+						`Plugin Command '/${validated.name}' collides with an active command.`
+					);
+				}
+				plugin.commands.set(key, validated);
 			} catch (error) {
 				addDiagnostic(
 					diagnostics,
@@ -198,6 +206,12 @@ const createRegistrationAPI = (
 			assertOpen();
 			try {
 				const validated = validatePluginTool(tool);
+				const modelName = `plugin_${plugin.id}_${validated.name}`;
+				if (toolNames.has(modelName)) {
+					throw new Error(
+						`Plugin Tool name '${modelName}' collides with an active tool.`
+					);
+				}
 				plugin.tools.set(validated.name, validated);
 			} catch (error) {
 				addDiagnostic(
@@ -219,7 +233,9 @@ const createPluginAPI = (
 	context: PluginLoadContext,
 	setDraft: (draft: MutablePluginDraft) => void,
 	isOpen: () => boolean,
-	diagnostics: PluginDiagnostic[]
+	diagnostics: PluginDiagnostic[],
+	toolNames: ReadonlySet<string>,
+	commandNames: ReadonlySet<string>
 ): PluginAPI =>
 	Object.freeze({
 		definePlugin(identity) {
@@ -238,7 +254,13 @@ const createPluginAPI = (
 				workspace: context.workspace,
 			};
 			setDraft(draft);
-			return createRegistrationAPI(draft, isOpen, diagnostics);
+			return createRegistrationAPI(
+				draft,
+				isOpen,
+				diagnostics,
+				toolNames,
+				commandNames
+			);
 		},
 	});
 
@@ -438,7 +460,9 @@ export const loadPlugins = async (
 					factoryContext,
 					setDraft,
 					() => registrationOpen,
-					diagnostics
+					diagnostics,
+					toolNames,
+					commandNames
 				),
 				factoryContext
 			);

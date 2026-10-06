@@ -3,7 +3,10 @@ import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
 import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
-import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
+import {
+	createApplicationPluginComposition,
+	selectOptionalApplicationPlugins,
+} from "@/modules/application/plugin-composition";
 import { ConnectionsProvider } from "@/modules/connections";
 import { McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
@@ -44,9 +47,7 @@ const configContext =
 const cliOptions = parseCliOptions(args);
 const applicationPlugins = createApplicationPluginComposition({
 	configStore,
-	enabledPlugins: (["mcp", "subagents"] as const).filter(
-		(pluginId) => !cliOptions.disabledPlugins.includes(pluginId)
-	),
+	enabledPlugins: selectOptionalApplicationPlugins(cliOptions.disabledPlugins),
 	workspace,
 });
 const mcpResource = applicationPlugins.mcpResource;

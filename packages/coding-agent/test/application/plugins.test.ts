@@ -216,7 +216,7 @@ test("CLI Plugin paths win when a configured path declares the same stable ident
 	await runtime.shutdown();
 });
 
-test("a colliding Plugin publishes no partial registrations and later Plugins still load", async () => {
+test("a caught registration collision preserves earlier tools and later Plugins still load", async () => {
 	const atomicWorkspace = path.join(installedRoot, "atomic-workspace");
 	const pluginsDirectory = path.join(atomicWorkspace, "plugins");
 	const configRootPath = path.join(root, "atomic-config");
@@ -241,11 +241,15 @@ export default (api) => {
 		inputSchema: z.object({}),
 		name: "leaked_tool",
 	});
-	plugin.registerCommand({
-		description: "Collides with an active command.",
-		handler: () => "collision",
-		name: "lookup_issue168",
-	});
+	try {
+		plugin.registerCommand({
+			description: "Collides with an active command.",
+			handler: () => "collision",
+			name: "lookup_issue168",
+		});
+	} catch {
+		// The failed call must not discard the earlier valid tool registration.
+	}
 };`
 		),
 		Bun.write(
@@ -280,7 +284,11 @@ export default (api) => {
 		"lookup_issue168",
 		"later_issue168",
 	]);
-	expect(runtime.getToolDescriptors("session")).toEqual([]);
+	expect(runtime.getToolDescriptors("session")).toMatchObject([
+		expect.objectContaining({
+			name: "plugin_colliding_leaked_tool",
+		}),
+	]);
 	expect(runtime.diagnostics).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({

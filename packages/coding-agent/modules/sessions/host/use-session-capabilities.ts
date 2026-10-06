@@ -1,6 +1,9 @@
 import { useMemo } from "react";
 import { useAgentRegistry } from "@/modules/agents/agent-registry-provider";
-import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
+import {
+	createApplicationPluginComposition,
+	selectOptionalApplicationPlugins,
+} from "@/modules/application/plugin-composition";
 import { useConnections } from "@/modules/connections";
 import { useMcp } from "@/modules/mcp/context/mcp-provider";
 import { useToolPermission } from "@/modules/permissions/use-tool-permission";
@@ -71,9 +74,7 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			createApplicationPluginComposition({
 				configStore: config.configStore,
 				createMcpResource: false,
-				enabledPlugins: (["mcp", "subagents"] as const).filter(
-					(pluginId) => !disabledPlugins.includes(pluginId)
-				),
+				enabledPlugins: selectOptionalApplicationPlugins(disabledPlugins),
 				workspace: config.workspace,
 			}),
 		[config.configStore, config.workspace, disabledPlugins]
