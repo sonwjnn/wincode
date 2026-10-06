@@ -1,4 +1,5 @@
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import type { PluginCommandDescriptor } from "@/modules/plugins/runtime";
 import type { Skill, SkillContext } from "@/modules/skills";
 import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
 import {
@@ -8,6 +9,7 @@ import {
 	filterCommandItems,
 	getCommandInvocation,
 	getCommandLabel,
+	type PluginCommandSpec,
 } from "./command-item";
 import {
 	COMMANDS,
@@ -45,7 +47,7 @@ export type CommandSuggestions = {
 export type CommandSuggestionScope = "root" | "skill";
 
 export type CommandSelectionIntent = Readonly<{
-	kind: "builtin" | "custom" | "skill";
+	kind: "builtin" | "custom" | "plugin" | "skill";
 	name: string;
 }>;
 
@@ -97,6 +99,7 @@ export type CommandControllerOptions = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onError: (message: string) => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	sessionId?: string;
 };
 
 /** Creates a controller bound to the current view's supported actions. */
@@ -106,11 +109,18 @@ export type CommandControllerFactory = {
 
 export type CreateCommandControllerOptions = {
 	customCommands: readonly CustomCommandSpec[];
+	pluginCommands?: readonly PluginCommandDescriptor[];
 	discoverCustomCommands: () => Promise<CustomCommandSpec[]>;
 	discoverSkills: () => Promise<Skill[]>;
 	executeCommand: (command: CommandSpec) => void | Promise<void>;
+	executePluginCommand?: (
+		command: PluginCommandSpec,
+		argument: string,
+		sessionId?: string
+	) => void | Promise<void>;
 	unavailableCapabilities?: readonly CommandCapability[];
 	onError: (message: string) => void;
+	sessionId?: string;
 	skills: readonly Skill[];
 };
 
@@ -144,6 +154,42 @@ const builtinFromIntent = (
 	return argument ? { ...spec, argument } : spec;
 };
 
+const preparePluginSubmission = (
+	input: CommandSubmissionInput,
+	intent: SubmissionIntent & { kind: "plugin" },
+	pluginCommands: readonly PluginCommandSpec[],
+	options: Pick<
+		CreateCommandControllerOptions,
+		"executePluginCommand" | "onError" | "sessionId"
+	>
+): CommandSubmissionPlan | undefined => {
+	const command = pluginCommands.find(
+		(candidate) => candidate.name === intent.name
+	);
+	if (command === undefined) {
+		options.onError(`Unknown Plugin command "/${intent.name}".`);
+		return;
+	}
+	if (input.hasAttachments) {
+		options.onError("Plugin Commands do not accept attachments.");
+		return;
+	}
+	const argument =
+		intent.end === undefined
+			? input.text.trim()
+			: input.text.slice(intent.end).trim();
+	return {
+		accept: async () => true,
+		execute: async () => {
+			if (options.executePluginCommand === undefined) {
+				options.onError(`Plugin command "/${command.name}" is unavailable.`);
+				return;
+			}
+			await options.executePluginCommand(command, argument, options.sessionId);
+		},
+	};
+};
+
 /**
  * Owns slash-command discovery, matching, selection, and submission intent.
  * Input surfaces only render the suggestions and apply the returned plans.
@@ -152,11 +198,21 @@ export function createCommandController(
 	options: CreateCommandControllerOptions
 ): CommandController {
 	const skills = createSkillCommandSpecs(options.skills);
+	const pluginCommands: PluginCommandSpec[] = (
+		options.pluginCommands ?? []
+	).map(({ description, name, pluginId, value }) => ({
+		description,
+		kind: "plugin",
+		name,
+		pluginId,
+		value,
+	}));
 	const baseCommands: CommandItem[] = [
 		...getVisibleCommands({
 			unavailableCapabilities: options.unavailableCapabilities,
 		}),
 		...options.customCommands,
+		...pluginCommands,
 	];
 	const skillSearch =
 		skills.length > 0 ? createSkillSearchCommandSpec(skills.length) : undefined;
@@ -225,6 +281,19 @@ export function createCommandController(
 				};
 			}
 
+			const pluginIntent = input.intents.find(
+				(intent): intent is SubmissionIntent & { kind: "plugin" } =>
+					intent.kind === "plugin"
+			);
+			if (pluginIntent !== undefined) {
+				return preparePluginSubmission(
+					input,
+					pluginIntent,
+					pluginCommands,
+					options
+				);
+			}
+
 			const resolution = await resolveSubmissionPrompt({
 				discoverCustomCommands: options.discoverCustomCommands,
 				discoverSkills: options.discoverSkills,
@@ -260,6 +329,7 @@ export function createCommandController(
 			}
 			if (
 				item.kind === "custom" ||
+				item.kind === "plugin" ||
 				item.kind === "skill" ||
 				(source === "tab" &&
 					item.kind === "builtin" &&

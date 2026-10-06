@@ -17,6 +17,7 @@ export type PermissionAction =
 	| "recover:cross-session"
 	| "recover:discard"
 	| "skill"
+	| `plugin:${string}:${string}`
 	| "external_directory";
 export type PermissionResourceRules = Readonly<
 	Record<string, PermissionDecision>
@@ -94,6 +95,7 @@ export const PERMISSION_TOOL_ACTIONS = [
 	"recover:discard",
 	"shell",
 	"skill",
+	"plugin:*:*",
 	"external_directory",
 ] as const satisfies readonly PermissionAction[];
 
@@ -182,7 +184,10 @@ export const mergePermissionRules = (
 	base: PermissionRules,
 	patch: PermissionRules
 ): PermissionRules => {
-	const merged: Record<string, PermissionDecision | PermissionResourceRules> = {
+	const merged: Record<
+		string,
+		PermissionDecision | PermissionResourceRules | undefined
+	> = {
 		...base,
 	};
 	for (const action of Object.keys(patch) as PermissionAction[]) {

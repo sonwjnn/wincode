@@ -139,6 +139,8 @@ To disable automatic clipboard writes, set this value in a global config file:
 > [!WARNING]
 > A local MCP server runs the configured command in your workspace. Only configure servers you trust; set `enabled` to `false` to prevent startup.
 
+File-loaded Plugins are also trusted in-process TypeScript code. Enable them with `--plugin <path>` or absolute paths in a personal `plugins` configuration array; project configuration cannot authorize Plugin code. See [File-loaded Plugins](packages/coding-agent/modules/plugins/README.md) for setup and authoring.
+
 Detailed configuration references:
 
 - [Agents](packages/coding-agent/modules/agents/README.md)
@@ -146,6 +148,7 @@ Detailed configuration references:
 - [Skills](packages/coding-agent/modules/skills/README.md)
 - [Custom commands](packages/coding-agent/modules/commands/custom/README.md)
 - [MCP servers](packages/coding-agent/modules/mcp/README.md)
+- [File-loaded Plugins](packages/coding-agent/modules/plugins/README.md)
 - [Configuration precedence](packages/coding-agent/shared/config/README.md)
 
 ### Skills

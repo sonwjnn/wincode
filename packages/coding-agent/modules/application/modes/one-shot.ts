@@ -21,8 +21,10 @@ import {
 	type ReasoningMode,
 	type ReasoningSelection,
 } from "@wincode/ai/models";
-import { getErrorMessage } from "@wincode/utils";
+import { getErrorMessage, omitUndefined } from "@wincode/utils";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveWorkspaceRoot } from "@/modules/tools";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
 import { createPermissionService } from "../../../modules/permissions/permission-service";
 import type { DelegationTask } from "../../../modules/sessions/delegation/types";
@@ -46,7 +48,9 @@ type OneShotFormat = "json" | "print";
 
 type OneShotCompositionInput = Readonly<{
 	autoApproval: boolean;
+	configRuntime?: ConfigRuntime;
 	cwd: string;
+	pluginRuntime?: PluginRuntime;
 	workspace: string;
 }>;
 
@@ -55,6 +59,21 @@ type OneShotDependencies = Readonly<{
 		input: OneShotCompositionInput
 	) => Promise<SessionCapabilitiesAssembly>;
 }>;
+
+const composeOneShotCapabilities = (
+	context: ApplicationContext,
+	workspace: string,
+	compose: NonNullable<OneShotDependencies["composeCapabilities"]>
+): Promise<SessionCapabilitiesAssembly> =>
+	compose({
+		autoApproval: context.invocation.auto,
+		cwd: context.cwd,
+		...omitUndefined({
+			configRuntime: context.configRuntime,
+			pluginRuntime: context.pluginRuntime,
+		}),
+		workspace,
+	});
 
 type ResolvedSelection = Readonly<{
 	agent: AgentId;
@@ -285,12 +304,16 @@ const resolveSelection = ({
 
 const composeDefaultCapabilities = async ({
 	autoApproval,
+	configRuntime,
 	cwd,
+	pluginRuntime,
 	workspace,
 }: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> =>
 	createSessionCapabilities({
 		approvalMode: "non-interactive",
 		cwd,
+		...(configRuntime === undefined ? {} : { configRuntime }),
+		...(pluginRuntime === undefined ? {} : { pluginRuntime }),
 		permissionService: createPermissionService({ autoApproval }),
 		workspace,
 	});
@@ -411,11 +434,11 @@ const runOneShot = async (
 	const workspace = resolveWorkspaceRoot(context.cwd);
 	const compose =
 		dependencies.composeCapabilities ?? composeDefaultCapabilities;
-	const assembly = await compose({
-		autoApproval: context.invocation.auto,
-		cwd: context.cwd,
+	const assembly = await composeOneShotCapabilities(
+		context,
 		workspace,
-	});
+		compose
+	);
 	let host: SessionHost | undefined;
 	let manager: SessionHostManager | undefined;
 	let removeEventListener: (() => void) | undefined;

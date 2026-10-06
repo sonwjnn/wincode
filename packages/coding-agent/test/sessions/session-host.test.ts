@@ -37,6 +37,11 @@ import {
 	createMcpSessionCapability,
 	type McpSessionCapability,
 } from "@/modules/mcp/capability";
+import {
+	createPluginRuntime,
+	type LoadedPlugin,
+	type PluginRuntime,
+} from "@/modules/plugins/runtime";
 import type {
 	SessionSteeringAdmission,
 	SessionSubmissionAdmission,
@@ -282,6 +287,7 @@ type SessionHostTestCapabilitiesOptions = Readonly<{
 	homeRoot?: string;
 	mcp?: McpSessionCapability;
 	workspace?: string;
+	pluginRuntime?: PluginRuntime;
 }>;
 
 const createCapabilities = (
@@ -320,6 +326,7 @@ const createCapabilities = (
 		service: createPermissionService(),
 		workspace,
 	});
+	const pluginRuntime = options.pluginRuntime;
 	return {
 		getCompactionModule: () =>
 			compactionModule(async () => ({ text: "summary" })),
@@ -357,9 +364,70 @@ const createCapabilities = (
 		getRegistry: () => registry,
 		getStore: () => sessionStore,
 		getSessionHostManager: () => manager,
+		...(pluginRuntime === undefined
+			? {}
+			: { getPluginRuntime: () => pluginRuntime }),
 		getToolPermission: () => toolPermission,
 	};
 };
+
+test("Plugin lifecycle restarts for a reopened Session runtime", async () => {
+	const events: string[] = [];
+	const plugin: LoadedPlugin = {
+		commands: [],
+		id: "jira",
+		onSessionShutdown: ({ sessionId }) => {
+			events.push(`stop:${sessionId}`);
+		},
+		onSessionStart: ({ sessionId }) => {
+			events.push(`start:${sessionId}`);
+		},
+		onShutdown: () => {
+			events.push("process-stop");
+		},
+		sourcePath: "/plugins/jira.ts",
+		tools: [],
+		workspace: testDirectory,
+	};
+	const pluginRuntime = createPluginRuntime([plugin], []);
+	const manager = createSessionHostManagerWithRuntime(
+		createSubagentTaskRuntime,
+		pluginRuntime
+	);
+	const capabilities = createCapabilities(store, {}, manager, {
+		pluginRuntime,
+		workspace: testDirectory,
+	});
+	const { id: openedSessionId } = await store.createSession({
+		agent: buildId,
+		message: message("plugin-lifecycle-user", "user", "Open the issue."),
+		model,
+		turnId: agentTurnId("plugin-lifecycle-turn"),
+	});
+
+	await manager.openHost({
+		capabilities,
+		sessionId: openedSessionId,
+		view: true,
+	});
+	await manager.releaseView(openedSessionId);
+	await manager.openHost({
+		capabilities,
+		sessionId: openedSessionId,
+		view: true,
+	});
+	await manager.releaseView(openedSessionId);
+	await manager.shutdownAll();
+	await pluginRuntime.shutdown();
+
+	expect(events).toEqual([
+		`start:${openedSessionId}`,
+		`stop:${openedSessionId}`,
+		`start:${openedSessionId}`,
+		`stop:${openedSessionId}`,
+		"process-stop",
+	]);
+});
 
 const createHostMcpRegistry = (executedServers: string[]) => {
 	const serverConfigs: ResolvedMcpServerConfig[] = [

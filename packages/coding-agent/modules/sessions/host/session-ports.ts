@@ -1,4 +1,5 @@
 import type {
+	AgentId,
 	AgentTurn,
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
@@ -16,7 +17,13 @@ import { createMcpToolExecutor } from "@wincode/mcp";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
-import type { ToolPermission } from "@/modules/permissions/policy";
+import type {
+	PermissionDecision,
+	ToolPermission,
+} from "@/modules/permissions/policy";
+import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { PluginPermissionResolution } from "@/modules/plugins/tools";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
 import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
@@ -84,6 +91,66 @@ export type SessionPortsOptions = Readonly<{
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
 }>;
+
+type PluginTurnResolution = Readonly<{
+	options: Readonly<{
+		pluginRuntime?: PluginRuntime;
+		resolvePluginPermission: (
+			action: `plugin:${string}:${string}`,
+			agentId?: AgentId
+		) => Promise<PluginPermissionResolution>;
+	}>;
+	policies: Map<string, PermissionDecision>;
+}>;
+
+const resolvePluginTurnContext = async (
+	input: Readonly<{
+		agentId: AgentId;
+		pluginRuntime?: PluginRuntime;
+		sessionId: SessionId;
+		toolPermission: ToolPermissionRuntime;
+	}>
+): Promise<PluginTurnResolution> => {
+	const policies = await Promise.all(
+		(input.pluginRuntime?.getToolDescriptors(input.sessionId) ?? []).map(
+			async ({ action, name }) => {
+				const permission =
+					await input.toolPermission.resolvePluginPermissionForAgent(
+						action,
+						input.agentId
+					);
+				return [name, permission.decision] as const;
+			}
+		)
+	);
+	return {
+		options: {
+			...(input.pluginRuntime === undefined
+				? {}
+				: { pluginRuntime: input.pluginRuntime }),
+			resolvePluginPermission: (action, agentId) =>
+				input.toolPermission.resolvePluginPermissionForAgent(
+					action,
+					agentId ?? input.agentId
+				),
+		},
+		policies: new Map(policies),
+	};
+};
+
+const collectExistingToolNames = (
+	codingTools: readonly string[],
+	mcpTools: readonly string[],
+	hasDelegate: boolean,
+	hasSubmitResult: boolean,
+	skillToolName: string | undefined
+): readonly string[] => [
+	...codingTools,
+	...mcpTools,
+	...(hasDelegate ? ["delegate"] : []),
+	...(hasSubmitResult ? ["submit_result"] : []),
+	...(skillToolName === undefined ? [] : [skillToolName]),
+];
 
 const strictReasoningSelection = (
 	model: ChatModelSelection,
@@ -488,6 +555,20 @@ export const createSessionPorts = ({
 		const resourceLimits = await tooling.resolveResourceLimits?.(
 			execution.agent
 		);
+		const pluginRuntime = capabilities.getPluginRuntime?.();
+		const pluginTurn = await resolvePluginTurnContext({
+			agentId: execution.agent,
+			...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+			sessionId,
+			toolPermission,
+		});
+		const existingToolNames = collectExistingToolNames(
+			resolvedAgent.visibleCodingTools,
+			snapshot.manifest.map(({ name }) => name),
+			scope.delegate !== undefined,
+			submitResult !== undefined,
+			scope.armedSkill?.tool?.name
+		);
 		const tools = await resolveTurnTools({
 			agentId: execution.agent,
 			agentTools: resolvedAgent.visibleCodingTools,
@@ -501,6 +582,10 @@ export const createSessionPorts = ({
 				: { parentTurnId: execution.turnId }),
 			resourceLimits,
 			resolveResourceLimits: tooling.resolveResourceLimits,
+			...pluginTurn.options,
+			sessionId,
+			workspace: config.workspace,
+			existingToolNames,
 			skillExecution: scope.armedSkill?.execution,
 			skillTool: scope.armedSkill?.tool,
 			submitResult,
@@ -514,6 +599,7 @@ export const createSessionPorts = ({
 			cwd: config.cwd,
 			delegation: execution.parent,
 			mcpTools: snapshot.tools,
+			pluginPolicies: pluginTurn.policies,
 			model: {
 				modelId: modelTarget.modelId,
 				providerId: modelTarget.providerId,

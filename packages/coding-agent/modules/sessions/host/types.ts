@@ -4,6 +4,7 @@ import type { ChatModelSelection } from "@wincode/ai/models";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { McpSessionCapability } from "@/modules/mcp/capability";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
@@ -43,6 +44,7 @@ export type SessionCapabilities = Readonly<{
 	/** Optional runtime factory for non-default application adapters and tests. */
 	getRuntime?: () => AgentRuntime;
 	getSessionHostManager: () => SessionHostManager;
+	getPluginRuntime?: () => PluginRuntime;
 	/**
 	 * Approval settlement policy for surfaces without an interactive approval
 	 * channel. Omitted means the historical interactive behavior.

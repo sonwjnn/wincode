@@ -36,6 +36,21 @@ describe("runtime JSON predicates", () => {
 		expect(isJsonValue(cyclic)).toBe(false);
 	});
 
+	test("rejects custom JSON serialization hooks when requested", () => {
+		const arrayWithSerializer = ["value"];
+		Object.defineProperty(arrayWithSerializer, "toJSON", {
+			value: () => "replacement",
+		});
+
+		expect(isJsonValue(arrayWithSerializer)).toBe(true);
+		expect(isJsonValue(arrayWithSerializer, { rejectToJSON: true })).toBe(
+			false
+		);
+		expect(isJsonValue({ toJSON: "metadata" }, { rejectToJSON: true })).toBe(
+			false
+		);
+	});
+
 	test("requires an object root and enforces an optional depth limit", () => {
 		let nested: unknown = "leaf";
 		for (let index = 0; index < 3; index += 1) {

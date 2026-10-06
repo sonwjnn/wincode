@@ -25,6 +25,7 @@ import { discoverSkills, type Skill } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { createCommandHandlers } from "./command-strategies";
 
 export function CommandControllerProvider({
@@ -33,6 +34,7 @@ export function CommandControllerProvider({
 	children: ReactNode;
 }) {
 	const config = useConfig();
+	const pluginRuntime = getInteractivePluginRuntime();
 	const renderer = useRenderer();
 	const router = useRouter();
 	const dialog = useDialog();
@@ -113,6 +115,32 @@ export function CommandControllerProvider({
 			return createCommandController({
 				...options,
 				customCommands,
+				pluginCommands: pluginRuntime?.getCommands(options.sessionId) ?? [],
+				executePluginCommand: async (command, argument, sessionId) => {
+					if (pluginRuntime === undefined) {
+						options.onError(
+							`Plugin command "/${command.name}" is unavailable.`
+						);
+						return;
+					}
+					try {
+						const message = await pluginRuntime.executeCommand(
+							command.pluginId,
+							command.name,
+							{
+								argument,
+								...(sessionId === undefined ? {} : { sessionId }),
+								workspace: config.workspace,
+							}
+						);
+						toast.show({
+							message: message || "Plugin command completed.",
+							variant: "info",
+						});
+					} catch (error) {
+						options.onError(getErrorMessage(error, "Plugin command failed."));
+					}
+				},
 				discoverCustomCommands,
 				discoverSkills: discoverAvailableSkills,
 				executeCommand,
@@ -121,6 +149,7 @@ export function CommandControllerProvider({
 		},
 		[
 			connections,
+			config.workspace,
 			customCommands,
 			dialog,
 			discoverAvailableSkills,
@@ -131,6 +160,7 @@ export function CommandControllerProvider({
 			router,
 			skills,
 			toast,
+			pluginRuntime,
 		]
 	);
 	const factory = useMemo<CommandControllerFactory>(

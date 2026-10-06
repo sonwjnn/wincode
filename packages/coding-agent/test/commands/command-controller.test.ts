@@ -4,6 +4,7 @@ import {
 	createCommandController,
 } from "@/modules/commands/command-controller";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import type { PluginCommandDescriptor } from "@/modules/plugins/runtime";
 import type { Skill } from "@/modules/skills";
 
 const REVIEW_SKILL: Skill = {
@@ -28,6 +29,15 @@ const COMMIT_COMMAND: CustomCommandSpec = {
 	name: "git-commit",
 	template: "Commit the staged changes.",
 	value: "/git-commit",
+};
+
+const OPEN_ISSUE_COMMAND: PluginCommandDescriptor = {
+	description: "Open a Jira issue.",
+	handler: async ({ argument }) => `Opened ${argument}`,
+	name: "open-issue",
+	pluginId: "jira",
+	sourcePath: "/plugins/jira.ts",
+	value: "/open-issue",
 };
 
 const createController = (
@@ -137,6 +147,77 @@ describe("select", () => {
 			kind: "insert",
 			reopen: false,
 		});
+	});
+
+	test("runs a Plugin Command only after tracked menu selection and forwards its arguments", async () => {
+		const calls: Array<{
+			argument: string;
+			pluginId: string;
+			sessionId?: string;
+		}> = [];
+		const submittedPrompts: string[] = [];
+		const controller = createController({
+			pluginCommands: [OPEN_ISSUE_COMMAND],
+			executePluginCommand: (command, argument, sessionId) => {
+				calls.push({
+					argument,
+					pluginId: command.pluginId,
+					...(sessionId === undefined ? {} : { sessionId }),
+				});
+			},
+			sessionId: "session-1",
+		});
+		const command = controller.getSuggestions("open-issue").items[0];
+		if (command === undefined) {
+			throw new Error("expected the Plugin Command row");
+		}
+		const selection = controller.select(command.id, "enter");
+		if (selection?.kind !== "insert") {
+			throw new Error(
+				"expected selecting the Plugin Command to insert a tracked intent"
+			);
+		}
+		expect(selection.intent).toEqual({ kind: "plugin", name: "open-issue" });
+		const typedOnlyPlan = await controller.prepareSubmission({
+			hasAttachments: false,
+			intents: [],
+			text: "/open-issue WCO-12",
+		});
+		if (typedOnlyPlan === undefined) {
+			throw new Error("expected typed command text to remain a prompt");
+		}
+		await typedOnlyPlan.accept((prompt) => {
+			submittedPrompts.push(prompt.text);
+			return true;
+		});
+		await typedOnlyPlan.execute();
+		const selectedPlan = await controller.prepareSubmission({
+			hasAttachments: false,
+			intents: [
+				{
+					end: "/open-issue".length,
+					kind: "plugin",
+					marker: "/open-issue",
+					name: "open-issue",
+					start: 0,
+				},
+			],
+			text: "/open-issue WCO-12",
+		});
+		if (selectedPlan === undefined) {
+			throw new Error("expected the selected Plugin Command plan");
+		}
+		await selectedPlan.accept(() => {
+			throw new Error(
+				"a direct Plugin Command must not submit an Agent prompt"
+			);
+		});
+		await selectedPlan.execute();
+
+		expect(submittedPrompts).toEqual(["/open-issue WCO-12"]);
+		expect(calls).toEqual([
+			{ argument: "WCO-12", pluginId: "jira", sessionId: "session-1" },
+		]);
 	});
 
 	test("executes a Built-in selected with Enter", () => {

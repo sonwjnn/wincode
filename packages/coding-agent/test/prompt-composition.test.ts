@@ -158,6 +158,30 @@ describe("Prompt Composition", () => {
 		expect(result.metadata.renderedLength).toBe(result.instructions.length);
 	});
 
+	test("describes Plugin capabilities with their effective approval policy", () => {
+		const result = composeSystemPrompt({
+			agent,
+			effectiveVisibleTools: [
+				{
+					family: "plugin",
+					name: "plugin_jira_search_issues",
+					permission: "ask",
+				},
+			],
+			environment,
+			projectInstructions: {
+				diagnostics: [],
+				sources: [],
+				totalByteLength: 0,
+				workspace: "/repo",
+			},
+		});
+
+		expect(result.instructions).toContain(
+			"- Plugin tools: plugin_jira_search_issues; approval-gated: plugin_jira_search_issues"
+		);
+	});
+
 	test("escapes control characters in prompt metadata", () => {
 		const result = composeSystemPrompt({
 			agent: fromAny({

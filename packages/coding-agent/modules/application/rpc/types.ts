@@ -3,7 +3,9 @@ import type {
 	ReasoningMode,
 	ReasoningSelection,
 } from "@wincode/ai/models";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SkillContext } from "@/modules/skills";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import type {
 	AgentTurnId,
 	ChatModelSelection,
@@ -100,12 +102,16 @@ export type RpcAssembly = Omit<
 
 export type RpcCompositionInput = Readonly<{
 	autoApproval?: boolean;
+	configRuntime?: ConfigRuntime;
 	cwd: string;
+	pluginRuntime?: PluginRuntime;
 	workspace: string;
 }>;
 
 export type RpcRunnerOptions = Readonly<{
 	autoApproval?: boolean;
+	configRuntime?: ConfigRuntime;
+	pluginRuntime?: PluginRuntime;
 	composeCapabilities?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	input: JsonlInput;
 	signal?: AbortSignal;

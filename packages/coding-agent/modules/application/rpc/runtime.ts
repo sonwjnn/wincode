@@ -13,17 +13,25 @@ import {
 	resolveWorkspaceRoot,
 	toSessionId,
 } from "../../../modules/sessions/host/session-rpc";
-import type { RuntimeModules } from "./types";
+import type { RpcCompositionInput, RuntimeModules } from "./types";
 
-export const loadRuntime = async (): Promise<RuntimeModules> => ({
+export const loadRuntime = async (
+	input: Pick<RpcCompositionInput, "configRuntime" | "pluginRuntime"> = {}
+): Promise<RuntimeModules> => ({
 	createAgentTurnId,
-	createSessionCapabilities: (input) =>
+	createSessionCapabilities: (composition) =>
 		createSessionCapabilities({
-			cwd: input.cwd,
+			cwd: composition.cwd,
+			...(input.configRuntime === undefined
+				? {}
+				: { configRuntime: input.configRuntime }),
+			...(input.pluginRuntime === undefined
+				? {}
+				: { pluginRuntime: input.pluginRuntime }),
 			permissionService: createPermissionService({
-				autoApproval: input.autoApproval,
+				autoApproval: composition.autoApproval,
 			}),
-			workspace: input.workspace,
+			workspace: composition.workspace,
 		}),
 	createSessionHost: (input) =>
 		input.capabilities.getSessionHostManager().openHost({

@@ -23,6 +23,10 @@
     "./session-rpc": {
       "types": "./modules/sessions/host/session-rpc.ts",
       "import": "./modules/sessions/host/session-rpc.ts"
+    },
+    "./plugin": {
+      "types": "./modules/plugins/public.ts",
+      "import": "./modules/plugins/public.ts"
     }
   },
   "scripts": {

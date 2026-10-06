@@ -27,23 +27,36 @@ import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
 import { CommandControllerProvider } from "../commands/command-controller-provider";
 import { SettingsProviders } from "./settings-providers";
 
-const { args, cwd } = getInteractiveRuntimeContext();
+const interactiveRuntime = getInteractiveRuntimeContext();
+const { args, cwd, pluginRuntime } = interactiveRuntime;
 const connections = createConnections();
-const workspace = resolveWorkspaceRoot(cwd);
-const configStore = createConfigStore();
-const configContext = Object.freeze({
-	configStore,
-	cwd,
-	homeRoot: os.homedir(),
-	workspace,
-});
+const workspace =
+	interactiveRuntime.configRuntime?.workspace ?? resolveWorkspaceRoot(cwd);
+const configStore =
+	interactiveRuntime.configRuntime?.configStore ?? createConfigStore();
+const configContext =
+	interactiveRuntime.configRuntime ??
+	Object.freeze({
+		configStore,
+		cwd,
+		homeRoot: os.homedir(),
+		workspace,
+	});
 const mcpResource = mcpPlugin.createResource({ configStore, workspace });
 const permissionService = createPermissionService(parseCliOptions(args));
 setInteractiveCleanup(async () => {
-	await getInteractiveSessionHostManager(
-		createApplicationSessionDelegationRuntime
-	).shutdownAll();
-	await mcpResource.close();
+	try {
+		await getInteractiveSessionHostManager(
+			createApplicationSessionDelegationRuntime,
+			pluginRuntime
+		).shutdownAll();
+	} finally {
+		try {
+			await pluginRuntime?.shutdown();
+		} finally {
+			await mcpResource.close();
+		}
+	}
 });
 
 export function RootLayout() {

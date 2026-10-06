@@ -94,6 +94,7 @@ const getTrackedPastedTexts = (
 
 type ChatTextAreaProps = {
 	id: string;
+	sessionId?: string;
 	disabled?: boolean;
 	draftKey?: string;
 	unavailableCommandCapabilities?: readonly CommandCapability[];
@@ -149,6 +150,7 @@ const readPastedImageOrPath = async (pastedText: string) => {
 };
 export function ChatTextArea({
 	id,
+	sessionId,
 	disabled = false,
 	draftKey,
 	unavailableCommandCapabilities:
@@ -262,6 +264,7 @@ export function ChatTextArea({
 		() =>
 			commandControllerFactory.create({
 				unavailableCapabilities: unavailableCommandCapabilities,
+				sessionId,
 				onCompact,
 				onError: handleSubmitError,
 				onOpenSettings,
@@ -271,6 +274,7 @@ export function ChatTextArea({
 			handleSubmitError,
 			onCompact,
 			onOpenSettings,
+			sessionId,
 			unavailableCommandCapabilities,
 		]
 	);

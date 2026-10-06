@@ -1,10 +1,14 @@
 #!/usr/bin/env bun
 
+import * as os from "node:os";
 import {
 	type DispatchModeRunners,
 	dispatch,
 } from "../modules/application/dispatch";
 import type { ApplicationContext } from "../modules/application/modes/types";
+import { loadPlugins } from "../modules/plugins/loader";
+import { resolveWorkspaceRoot } from "../modules/tools";
+import { createConfigStore } from "../shared/config/config-store";
 import { installCrashGuard } from "../shared/crash-guard";
 import { setInteractiveRuntimeContext } from "../shared/runtime-context";
 
@@ -46,6 +50,12 @@ const loadModeRunners = async (): Promise<DispatchModeRunners> => {
 			setInteractiveRuntimeContext({
 				args: context.args,
 				cwd: context.cwd,
+				...(context.configRuntime === undefined
+					? {}
+					: { configRuntime: context.configRuntime }),
+				...(context.pluginRuntime === undefined
+					? {}
+					: { pluginRuntime: context.pluginRuntime }),
 			});
 			const { runInteractive } = await import("../tui/runtime");
 			return runInteractive();
@@ -66,5 +76,20 @@ process.exitCode = await dispatch(
 		stdinIsTTY: process.stdin.isTTY === true,
 		rpcStdout,
 	},
-	loadModeRunners
+	loadModeRunners,
+	{
+		initializeRuntime: async ({ cwd, pluginPaths }) => {
+			const configRuntime = Object.freeze({
+				configStore: createConfigStore(),
+				cwd,
+				homeRoot: os.homedir(),
+				workspace: resolveWorkspaceRoot(cwd),
+			});
+			const pluginRuntime = await loadPlugins({
+				cliPaths: pluginPaths,
+				config: configRuntime,
+			});
+			return { configRuntime, pluginRuntime };
+		},
+	}
 );

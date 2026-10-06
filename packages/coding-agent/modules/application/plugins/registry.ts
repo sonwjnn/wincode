@@ -16,6 +16,7 @@ export const toolPolicyCategories = Object.freeze([
 	"coding",
 	"shell",
 	"mcp",
+	"plugin",
 	"skill",
 	"delegation",
 ] as const);

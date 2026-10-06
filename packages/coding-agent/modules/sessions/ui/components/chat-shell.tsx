@@ -311,6 +311,7 @@ export function ChatShell({
 								onSubmit={handleSubmit}
 								recalledSubmissions={recalledSubmissions}
 								recallRevision={recallRevision}
+								sessionId={viewId}
 								sessionPromptHistory={promptHistory}
 							/>
 						</box>

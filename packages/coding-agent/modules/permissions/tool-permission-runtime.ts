@@ -8,6 +8,7 @@ import {
 	getToolResourceLimits,
 	type ToolResourceLimits,
 } from "@/modules/tools";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { PermissionService } from "./permission-service";
 import {
 	applyManualApprovalSafetyCeiling,
@@ -15,14 +16,21 @@ import {
 	createToolPermission,
 	DEFAULT_PERMISSION_RULES,
 	type EffectiveAgentPolicy,
+	type PermissionAction,
+	type PermissionDecision,
 	type ToolPermission,
 } from "./policy";
+import { resolvePluginToolPermission } from "./resolve";
 
 export type ToolPermissionRuntime = {
 	resolveMcpPolicy: () => Promise<EffectiveAgentPolicy>;
 	resolveMcpPolicyForAgent: (agent: AgentId) => Promise<EffectiveAgentPolicy>;
 	resolvePermission: () => Promise<ToolPermission>;
 	resolvePermissionForAgent: (agent: AgentId) => Promise<ToolPermission>;
+	resolvePluginPermissionForAgent: (
+		action: PermissionAction,
+		agent?: AgentId
+	) => Promise<Readonly<{ decision: PermissionDecision; safety: boolean }>>;
 	resolveResourceLimits: () => Promise<ToolResourceLimits>;
 	resolveResourceLimitsForAgent: (
 		agent: AgentId
@@ -47,6 +55,7 @@ export type ToolPermissionRuntimeDeps = {
 	registry: AgentRegistry | null;
 	service: PermissionService;
 	workspace: string;
+	configRuntime?: ConfigRuntime;
 };
 
 type ResolvedToolPermissionPolicies = {
@@ -122,6 +131,7 @@ export const createToolPermissionRuntime = ({
 	registry,
 	service,
 	workspace,
+	configRuntime,
 }: ToolPermissionRuntimeDeps): ToolPermissionRuntime => {
 	const sandbox = createWorkspaceSandbox(workspace);
 	const resolved = resolveToolPermissionPolicies(
@@ -152,6 +162,29 @@ export const createToolPermissionRuntime = ({
 			resolvedPromise.then((resolvedPolicies) => resolvedPolicies.permission),
 		resolvePermissionForAgent: (targetAgent) =>
 			Promise.resolve(resolvePoliciesForAgent(targetAgent).permission),
+		resolvePluginPermissionForAgent: async (action, targetAgent = agent) => {
+			if (configRuntime === undefined) {
+				return { decision: "ask", safety: true };
+			}
+			const snapshot = await configRuntime.configStore.getSnapshot(workspace);
+			const pluginPermission = resolvePluginToolPermission(
+				snapshot,
+				targetAgent,
+				action as `plugin:${string}:${string}`
+			);
+			const agentPermission = resolvePoliciesForAgent(targetAgent).permission;
+			const decision =
+				agentPermission.safety && pluginPermission.decision !== "deny"
+					? "ask"
+					: pluginPermission.decision;
+			return {
+				decision,
+				safety:
+					pluginPermission.safety ||
+					agentPermission.safety ||
+					decision === "ask",
+			};
+		},
 		resolveResourceLimits: () =>
 			resolvedPromise.then(
 				(resolvedPolicies) => resolvedPolicies.resourceLimits

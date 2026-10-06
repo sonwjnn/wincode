@@ -16,7 +16,7 @@ import {
  */
 export type SubmissionIntent = Readonly<{
 	end?: number;
-	kind: "builtin" | "custom" | "skill";
+	kind: "builtin" | "custom" | "plugin" | "skill";
 	marker?: string;
 	name: string;
 	start?: number;

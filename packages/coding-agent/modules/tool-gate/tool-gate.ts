@@ -71,8 +71,9 @@ export type GateOutcome =
  * One tool call to gate. `coding` and `shell` resolve their own resource,
  * policy decision, and external-directory boundary from the raw call input.
  * `mcp` carries the independent Agent and server decisions for composition by
- * the gate. `skill` carries catalog availability so denies settle before an
- * unavailable lookup while asks never prompt for an unavailable Skill.
+ * the gate. `plugin` carries the calling Agent's Plugin Tool decision. `skill`
+ * carries catalog availability so denies settle before an unavailable lookup
+ * while asks never prompt for an unavailable Skill.
  */
 export type GateCall =
 	| {
@@ -91,6 +92,18 @@ export type GateCall =
 			serverDecision: PermissionDecision;
 			toolCallId: ToolCallId;
 			toolName: string;
+	  }
+	| {
+			agentId?: AgentId;
+			action: string;
+			description: string;
+			family: "plugin";
+			input: unknown;
+			pluginId: string;
+			safety: boolean;
+			toolCallId: ToolCallId;
+			toolName: string;
+			decision: PermissionDecision;
 	  }
 	| {
 			agentId?: AgentId;
@@ -261,6 +274,12 @@ const mcpRejectionText = (toolName: string, feedback?: string): string =>
 	isUndefined(feedback)
 		? `MCP tool '${toolName}' was not approved`
 		: `MCP tool '${toolName}' was not approved — ${feedback}`;
+
+const pluginDenialText = (toolName: string): string =>
+	`Plugin Tool '${toolName}' is denied by policy`;
+
+const pluginRejectionText = (toolName: string): string =>
+	`Plugin Tool '${toolName}' was not approved`;
 
 const skillDenialText = (name: string): string =>
 	`Skill "${name}" is denied by policy`;
@@ -1122,6 +1141,47 @@ export const createToolGate = ({
 	};
 
 	/**
+	 * Gates one Plugin Tool call. An ask remains manual even when --auto is
+	 * enabled, so enabling trusted code cannot silently authorize its calls.
+	 */
+	const gatePluginToolCall = async (
+		call: Extract<GateCall, { family: "plugin" }>,
+		doomAsk: boolean
+	): Promise<GateOutcome> => {
+		const decision =
+			call.safety && call.decision !== "deny" ? "ask" : call.decision;
+		const settled = await settleApproval(
+			{
+				checks: [
+					{
+						action: call.action,
+						decision,
+						resource: MCP_PERMISSION_RESOURCE,
+					},
+				],
+				doomAsk,
+				request: {
+					description: call.description,
+					identity: [
+						{ label: "tool", value: call.action },
+						{ label: "plugin", value: call.pluginId },
+						{ label: "resource", value: MCP_PERMISSION_RESOURCE },
+					],
+					input: call.input,
+					safety: call.safety,
+					toolCallId: call.toolCallId,
+				},
+				safety: call.safety,
+			},
+			approvalDeps,
+			() => service.grant(call.action, MCP_PERMISSION_RESOURCE)
+		);
+		return withErrorText(settled, pluginDenialText(call.toolName), () =>
+			pluginRejectionText(call.toolName)
+		);
+	};
+
+	/**
 	 * Gates one Skill Activation approval, resolving policy inside the gate.
 	 * Skill wording never carries rejection feedback: the Skill runners surface a
 	 * structured rejection result instead.
@@ -1176,6 +1236,9 @@ export const createToolGate = ({
 		if (call.family === "mcp") {
 			return `mcp:${call.action}:${JSON.stringify(call.input)}`;
 		}
+		if (call.family === "plugin") {
+			return `plugin:${call.action}:${JSON.stringify(call.input)}`;
+		}
 		if (call.family === "skill") {
 			return `skill:${call.name}:${JSON.stringify({ name: call.name })}`;
 		}
@@ -1201,6 +1264,9 @@ export const createToolGate = ({
 	const gate = async (call: GateCall): Promise<GateOutcome> => {
 		if (call.family === "mcp") {
 			return gateMcpToolCall(call, trackDoomLoop(call));
+		}
+		if (call.family === "plugin") {
+			return gatePluginToolCall(call, trackDoomLoop(call));
 		}
 		if (call.family === "skill") {
 			return gateSkillCall(call, trackDoomLoop(call));

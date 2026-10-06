@@ -9,10 +9,15 @@ export type SkillCommandSpec = BaseSpec & { kind: "skill" };
 
 /** A single slash suggestion that enters the Skill namespace search. */
 export type SkillSearchCommandSpec = BaseSpec & { kind: "skill-search" };
+export type PluginCommandSpec = BaseSpec & {
+	kind: "plugin";
+	pluginId: string;
+};
 
 export type CommandItem =
 	| CommandSpec
 	| CustomCommandSpec
+	| PluginCommandSpec
 	| SkillCommandSpec
 	| SkillSearchCommandSpec;
 
