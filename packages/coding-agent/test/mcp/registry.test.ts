@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { CallToolResult } from "@modelcontextprotocol/client";
 import { fromAny } from "@total-typescript/shoehorn";
 import type {
 	LocalMcpServerConfig,
@@ -41,7 +40,7 @@ class FakeMcpClient implements McpClient {
 		name: string,
 		input: unknown,
 		signal?: AbortSignal
-	) => Promise<CallToolResult> = async () => ({ content: [] });
+	) => Promise<unknown> = async () => ({ content: [] });
 	private listener: ((tools: readonly McpClientTool[]) => void) | undefined;
 
 	constructor(name: string, tools: readonly McpClientTool[] = []) {
@@ -78,13 +77,8 @@ class FakeMcpClient implements McpClient {
 		return this.tools;
 	}
 
-	async callTool(
-		name: string,
-		input: unknown,
-		signal?: AbortSignal
-	): Promise<CallToolResult> {
-		return this.callImpl(name, input, signal);
-	}
+	callTool: McpClient["callTool"] = async (name, input, signal) =>
+		fromAny(await this.callImpl(name, input, signal));
 
 	setToolsChangedListener(
 		listener: (tools: readonly McpClientTool[]) => void
@@ -104,17 +98,16 @@ class FakeMcpClient implements McpClient {
 const openRules = (rules: Record<string, "allow" | "ask" | "deny">) =>
 	fromAny<PermissionRules, typeof rules>(rules);
 
-const hangingCall =
-	(): NonNullable<FakeMcpClient["callImpl"]> => (_name, _input, signal) =>
-		new Promise<CallToolResult>((_resolve, reject) => {
-			if (signal?.aborted) {
-				reject(new DOMException("Aborted", "AbortError"));
-				return;
-			}
-			signal?.addEventListener("abort", () =>
-				reject(new DOMException("Aborted", "AbortError"))
-			);
-		});
+const hangingCall = (): FakeMcpClient["callImpl"] => (_name, _input, signal) =>
+	new Promise<unknown>((_resolve, reject) => {
+		if (signal?.aborted) {
+			reject(new DOMException("Aborted", "AbortError"));
+			return;
+		}
+		signal?.addEventListener("abort", () =>
+			reject(new DOMException("Aborted", "AbortError"))
+		);
+	});
 
 const tool = (name: string, description?: string): McpClientTool => ({
 	name,
@@ -505,7 +498,7 @@ describe("createMcpRegistry", () => {
 		const demo = new FakeMcpClient("demo", [tool("one")]);
 		let release: (() => void) | undefined;
 		demo.callImpl = () =>
-			new Promise<CallToolResult>((resolve) => {
+			new Promise<unknown>((resolve) => {
 				release = () => resolve({ content: [] });
 			});
 		const { registry } = harness({
