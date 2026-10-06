@@ -2,7 +2,11 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ResolvedTool, ToolCallOutput } from "@wincode/agent-core";
+import {
+	agentIdSchema,
+	type ResolvedTool,
+	type ToolCallOutput,
+} from "@wincode/agent-core";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { createPluginTools } from "@/modules/plugins/tools";
@@ -45,12 +49,21 @@ const loadTool = async (
 			return { kind: "allow" };
 		},
 	};
+	const sessionId = "tool-test-session";
+	const agentId = agentIdSchema.parse("build");
+	const pluginTools = await pluginRuntime.resolveToolsForTurn({
+		agentId,
+		sessionId,
+		signal: new AbortController().signal,
+		workspace,
+	});
 	const tool = createPluginTools({
+		agentId,
 		existingToolNames: [],
 		gate,
 		permissionForAction: async () => ({ decision: "allow", safety: false }),
-		runtime: pluginRuntime,
-		sessionId: "tool-test-session",
+		pluginTools,
+		sessionId,
 		workspace,
 	})[0];
 	if (tool === undefined) {
@@ -138,6 +151,31 @@ test("mutable Plugin Tool JSON is delivered as the bounded snapshot", async () =
 		}
 
 		expect(JSON.stringify(result.output)).toBe('{"query":"small"}');
+	} finally {
+		await pluginRuntime.shutdown();
+	}
+});
+
+test("JSON Schema Plugin inputs validate before the Tool Gate", async () => {
+	const jsonSchemaPluginPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/json-schema-plugin.ts"
+	);
+	const { gateCalls, pluginRuntime, tool } =
+		await loadTool(jsonSchemaPluginPath);
+	try {
+		const invalid = await executeTool(tool, { query: 12 });
+		const valid = await executeTool(tool, { query: "WCO-12" });
+
+		expect(invalid).toMatchObject({
+			errorText: "Plugin Tool input did not match its declared schema.",
+			type: "failure",
+		});
+		expect(valid).toMatchObject({
+			output: { query: "WCO-12" },
+			type: "success",
+		});
+		expect(gateCalls()).toBe(1);
 	} finally {
 		await pluginRuntime.shutdown();
 	}

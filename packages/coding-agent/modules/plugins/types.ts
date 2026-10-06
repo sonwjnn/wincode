@@ -1,22 +1,20 @@
-import type { z } from "zod";
 import type {
-	PluginCommandContext,
-	PluginToolContext,
-	PluginToolResult,
+	PluginCommandRegistration,
+	PluginInputSchema,
+	PluginToolRegistration,
 } from "./public";
 
 export type PluginTool = Readonly<{
 	description: string;
-	handler: (
-		input: unknown,
-		context: PluginToolContext
-	) => PluginToolResult | Promise<PluginToolResult>;
-	inputSchema: z.ZodType;
+	handler: PluginToolRegistration<PluginInputSchema>["handler"];
+	inputSchema: PluginInputSchema;
 	name: string;
 }>;
 
 export type PluginCommand = Readonly<{
 	description: string;
-	handler: (context: PluginCommandContext) => string | Promise<string>;
+	handler: PluginCommandRegistration["handler"];
 	name: string;
 }>;
+
+export type { PluginCommandContext, PluginToolContext } from "./public";

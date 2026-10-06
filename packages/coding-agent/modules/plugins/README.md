@@ -42,7 +42,10 @@ const jiraPlugin: PluginFactory = (api) => {
         `https://jira.example/issues?q=${encodeURIComponent(query)}`,
         { signal },
       );
-      return { workspace, issues: await response.json() };
+      return {
+        type: "success",
+        output: { workspace, issues: await response.json() },
+      };
     },
   });
 
@@ -60,10 +63,12 @@ export default jiraPlugin;
 
 The stable Plugin Identifier and local tool names use lowercase ASCII letters, digits, and underscores. Wincode exposes `plugin_jira_search_issues` to the Agent and uses `plugin:jira:search_issues` as the Tool Permission action. A Plugin Tool's effective permission defaults to `ask` for each calling Agent. Only user-controlled rules may grant `allow`; project rules may tighten the decision to `ask` or `deny`. The normal Interactive approval flow applies, while Print and JSON Modes fail closed on an unresolved `ask`. RPC uses its existing approval protocol.
 
-Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas are validated by Wincode, and results are bounded to 64 KiB of UTF-8 text or JSON. Tool failures become safe failed Tool Calls.
+Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas may be Zod or JSON Schema. Handlers return the common Tool outcome shape: `{ type: "success", output }` or `{ type: "failure", errorText }`. Successful output is bounded to 64 KiB of UTF-8 text or JSON; failures become safe failed Tool Calls.
+
+Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeAgentTurn(context, scope)`. The pre-Turn context contains the Session ID, Agent ID, workspace, and abort signal. Within one Plugin, Turn registrations override Session registrations, which override factory registrations. A same-scope registration replaces that Plugin's previous definition; `unregisterTool(name)` masks an outer definition only in that scope. Other Plugins cannot replace its tools. A failed pre-Turn hook contributes no tools for that Plugin on the affected Turn.
 
 Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened and do not pass through Tool Permission or open a second approval dialog.
 
 ## Lifecycle
 
-The default factory runs once per Wincode process. A Plugin may register one `onSessionStart`, `onSessionShutdown`, and `onShutdown` hook. Session hooks follow each loaded Session runtime: when an idle runtime unloads and later reopens, Wincode sends a new start/shutdown pair. A failed start disables the Plugin only for that Session. Cleanup hooks are idempotent. Plugin file changes take effect on the next Wincode start; hot reload is not supported.
+The default factory runs once per Wincode process. A Plugin may register one `onSessionStart`, `onSessionShutdown`, `onBeforeAgentTurn`, and `onShutdown` hook. Session hooks follow each loaded Session runtime: when an idle runtime unloads and later reopens, Wincode sends a new start/shutdown pair. A failed start disables the Plugin only for that Session; a failed pre-Turn hook omits that Plugin's tools only for the affected Turn. Cleanup hooks are idempotent. Plugin file changes take effect on the next Wincode start; hot reload is not supported.

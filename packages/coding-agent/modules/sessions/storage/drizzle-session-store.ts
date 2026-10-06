@@ -1391,6 +1391,25 @@ export const createDrizzleSessionStore = (
 
 			return { id };
 		},
+		createEmptySession: async ({ model, effort, reasoningMode }) => {
+			const id = createSessionId();
+			const now = new Date();
+			db.insert(session)
+				.values({
+					createdAt: now,
+					id,
+					lastMessageAt: null,
+					modelJson: model === undefined ? undefined : serializeJson(model),
+					pinned: false,
+					title: UNTITLED_SESSION_TITLE,
+					updatedAt: now,
+					effort,
+					reasoningMode,
+					workspaceId: workspace.id,
+				})
+				.run();
+			return { id };
+		},
 
 		createDelegatedTask,
 		consumeDelegationReport,

@@ -182,6 +182,19 @@ const createTestDelegationTask = (
 		turnId: agentTurnId(`${prefix}-child-turn`),
 	});
 
+test("creates an SDK-ready empty Session without inventing a user Submission", async () => {
+	const { store } = await createTestStore();
+	const { id } = await store.createEmptySession({ model });
+
+	expect(await store.listSessionRecords(id)).toEqual([]);
+	expect(await store.getSession(id)).toMatchObject({
+		id,
+		lastMessageAt: null,
+		model,
+		title: "Untitled Session",
+	});
+});
+
 test("persists the accepted user message as an ordinary record", async () => {
 	const { store } = await createTestStore();
 	const { id, initialRecord } = await createSession(store, "first");

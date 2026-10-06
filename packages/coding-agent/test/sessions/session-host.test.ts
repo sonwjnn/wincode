@@ -33,6 +33,7 @@ import {
 import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import {
 	createMcpSessionCapability,
 	type McpSessionCapability,
@@ -327,7 +328,13 @@ const createCapabilities = (
 		workspace,
 	});
 	const pluginRuntime = options.pluginRuntime;
-	return {
+	const composition = createApplicationPluginComposition({
+		configStore: config.configStore,
+		createMcpResource: false,
+		enabledPlugins: ["mcp", "subagents"],
+		workspace,
+	});
+	const capabilities: SessionCapabilities = {
 		getCompactionModule: () =>
 			compactionModule(async () => ({ text: "summary" })),
 		getCompactionSettings: async () =>
@@ -368,7 +375,11 @@ const createCapabilities = (
 			? {}
 			: { getPluginRuntime: () => pluginRuntime }),
 		getToolPermission: () => toolPermission,
+		getTurnToolResolver: () => composition.turnToolResolver,
+		getDelegationAdapter: () =>
+			composition.createDelegationAdapter?.(capabilities),
 	};
+	return capabilities;
 };
 
 test("Plugin lifecycle restarts for a reopened Session runtime", async () => {

@@ -14,6 +14,7 @@ import type { McpCatalogSnapshot, McpSnapshotTool } from "@wincode/mcp";
 import { isObjectLike, isUndefined } from "@wincode/utils";
 import { z } from "zod";
 import { buildAgent } from "@/modules/agents/built-ins";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { RetiredModelError } from "@/modules/model-target";
 import {
 	buildAgentTurn,
@@ -346,8 +347,13 @@ test("MCP Plugin tools pass through the MCP Tool Gate before server execution", 
 			],
 		]),
 	});
+	const composition = createApplicationPluginComposition({
+		createMcpResource: false,
+		enabledPlugins: ["mcp"],
+		workspace: process.cwd(),
+	});
 	const mcpTool = (
-		await resolveTurnTools({
+		await composition.turnToolResolver({
 			agentTools: [],
 			executeMcpTool: async () => {
 				executions += 1;

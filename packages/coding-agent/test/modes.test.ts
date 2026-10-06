@@ -22,6 +22,7 @@ import type {
 	ApplicationContext,
 	TextWriter,
 } from "../modules/application/modes/types";
+import { createApplicationPluginComposition } from "../modules/application/plugin-composition";
 import { createPermissionService } from "../modules/permissions/permission-service";
 import type { SessionCapabilitiesAssembly } from "../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
@@ -95,17 +96,31 @@ const composeCapabilitiesFor =
 		autoApproval,
 		cwd,
 		workspace: root,
-	}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> =>
-		createSessionCapabilities({
+		enabledPlugins = ["mcp", "subagents"],
+	}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> => {
+		const composition = createApplicationPluginComposition({
+			createMcpResource: false,
+			enabledPlugins,
+			workspace: root,
+		});
+		return createSessionCapabilities({
 			approvalMode: "non-interactive",
 			cwd,
 			databasePath: path.join(root, "sessions.sqlite"),
 			permissionService: createPermissionService({ autoApproval }),
 			registry: agentRegistry,
 			runtimeFactory: () => fakeRuntime,
+			...(composition.createDelegationAdapter === undefined
+				? {}
+				: { createDelegationAdapter: composition.createDelegationAdapter }),
+			...(composition.createDelegationRuntime === undefined
+				? {}
+				: { createDelegationRuntime: composition.createDelegationRuntime }),
+			turnToolResolver: composition.turnToolResolver,
 			workspace: root,
 			connections,
 		});
+	};
 const composeCapabilities = composeCapabilitiesFor(registry);
 const composeConfiguredReview = composeCapabilitiesFor(
 	configuredReviewRegistry

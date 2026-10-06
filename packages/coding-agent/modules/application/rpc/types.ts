@@ -3,6 +3,7 @@ import type {
 	ReasoningMode,
 	ReasoningSelection,
 } from "@wincode/ai/models";
+import type { OptionalApplicationPluginId } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SkillContext } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -111,6 +112,7 @@ export type RpcCompositionInput = Readonly<{
 export type RpcRunnerOptions = Readonly<{
 	autoApproval?: boolean;
 	configRuntime?: ConfigRuntime;
+	enabledPlugins?: readonly OptionalApplicationPluginId[];
 	pluginRuntime?: PluginRuntime;
 	composeCapabilities?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	input: JsonlInput;

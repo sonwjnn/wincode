@@ -29,8 +29,34 @@ type ManagedHostEntry = {
 
 let interactiveManager: SessionHostManager | undefined;
 
+const createNoopDelegationRuntime: SessionDelegationRuntimeFactory = ({
+	emitTaskEvent: _emitTaskEvent,
+	requestHostUnload: _requestHostUnload,
+}) => ({
+	activeTaskIds: () => [],
+	cancelActiveTasks: async () => undefined,
+	finishAllTasks: () => undefined,
+	finishTask: () => undefined,
+	getTaskForChild: (store, childSessionId) =>
+		store.getDelegationTaskForChild(childSessionId),
+	hasActiveTasks: async (store, parentSessionId) =>
+		(await store.listDelegationTasks(parentSessionId)).some(
+			(task) => task.status === "active"
+		),
+	isTaskActive: async (store, taskId) =>
+		(await store.getDelegationTask(taskId))?.status === "active",
+	onHostClosed: () => undefined,
+	onHostOpened: () => undefined,
+	onHostOpening: () => undefined,
+	publishTask: () => undefined,
+	recoverStore: async () => undefined,
+	registerTask: () => undefined,
+	waitForTasks: (store, parentSessionId) =>
+		store.listDelegationTasks(parentSessionId),
+});
+
 export const createSessionHostManager = (
-	createDelegationRuntime: SessionDelegationRuntimeFactory,
+	createDelegationRuntime?: SessionDelegationRuntimeFactory,
 	processPluginRuntime?: PluginRuntime
 ): SessionHostManager => {
 	const entries = new Map<SessionId, ManagedHostEntry>();
@@ -139,7 +165,7 @@ export const createSessionHostManager = (
 			unloadCheck.resolve();
 		}
 	};
-	delegation = createDelegationRuntime({
+	delegation = (createDelegationRuntime ?? createNoopDelegationRuntime)({
 		emitTaskEvent: (task, report) =>
 			emit({
 				...(report === undefined ? {} : { report }),
@@ -382,7 +408,7 @@ export const createSessionHostManager = (
 };
 
 export const getInteractiveSessionHostManager = (
-	createDelegationRuntime: SessionDelegationRuntimeFactory,
+	createDelegationRuntime?: SessionDelegationRuntimeFactory,
 	pluginRuntime?: PluginRuntime
 ): SessionHostManager => {
 	interactiveManager ??= createSessionHostManager(

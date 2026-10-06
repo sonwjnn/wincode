@@ -98,6 +98,7 @@ const logRpcFatalDiagnostic = (
 export async function runRpc({
 	autoApproval,
 	configRuntime,
+	enabledPlugins,
 	pluginRuntime,
 	composeCapabilities: providedComposer,
 	input,
@@ -181,7 +182,11 @@ export async function runRpc({
 	let lastState: Record<string, unknown> | undefined;
 	const getRuntime = async (): Promise<RuntimeModules> => {
 		if (runtime === undefined) {
-			runtime = await loadRuntime({ configRuntime, pluginRuntime });
+			runtime = await loadRuntime({
+				configRuntime,
+				enabledPlugins,
+				pluginRuntime,
+			});
 		}
 		return runtime;
 	};

@@ -4,11 +4,9 @@ import type {
 	SubagentsToolProviderContext,
 	TurnToolPluginContext,
 } from "@/modules/application/plugins/turn-context";
-import { createSubagentTaskRuntime } from "./task-runtime";
 
 /** Registers durable task lifecycle and generic delegation tools. */
 export const subagentsPlugin: Plugin<TurnToolPluginContext> = (api) => {
-	api.registerSessionDelegationRuntime(createSubagentTaskRuntime);
 	api.registerToolProvider({
 		id: "delegation-tools",
 		policyCategory: "delegation",

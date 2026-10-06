@@ -53,14 +53,12 @@ import {
 } from "@/modules/application/plugins/registry";
 import type {
 	CodingToolProviderContext,
+	PluginToolProviderContext,
 	ShellToolProviderContext,
 	SkillToolProviderContext,
 	TurnToolPluginContext,
 } from "@/modules/application/plugins/turn-context";
-import {
-	createPluginTools,
-	type PluginToolContext,
-} from "@/modules/plugins/tools";
+import { createPluginTools } from "@/modules/plugins/tools";
 import {
 	formatSkillUserContext,
 	type SkillRequestContext,
@@ -80,8 +78,6 @@ import {
 	toCodingToolFailure,
 	type VersionedEditingContext,
 } from "@/modules/tools";
-import { mcpPlugin } from "@/plugins/mcp";
-import { subagentsPlugin } from "@/plugins/subagents";
 import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
 import { evaluateGateWithAbort } from "../../tool-gate/evaluate-with-abort";
@@ -186,6 +182,9 @@ const runCodingToolThroughGate = async ({
 };
 
 export type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";
+export type TurnToolResolver = (
+	context: TurnToolPluginContext
+) => Promise<readonly ResolvedTool[]>;
 
 /**
  * The application Tool Gate plus its resource-profile resolver, supplied
@@ -453,16 +452,17 @@ const skillToolProvider: ToolProviderRegistration<
 
 const selectPluginToolProviderContext = (
 	context: TurnToolPluginContext
-): PluginToolContext => ({
+): PluginToolProviderContext => ({
 	...(context.agentId === undefined ? {} : { agentId: context.agentId }),
 	existingToolNames: context.existingToolNames ?? [],
 	gate: context.gate,
+	...(context.pluginTools === undefined
+		? {}
+		: { pluginTools: context.pluginTools }),
+	...(context.signal === undefined ? {} : { signal: context.signal }),
 	...(context.resolvePluginPermission === undefined
 		? {}
 		: { permissionForAction: context.resolvePluginPermission }),
-	...(context.pluginRuntime === undefined
-		? {}
-		: { runtime: context.pluginRuntime }),
 	...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
 	...(context.workspace === undefined ? {} : { workspace: context.workspace }),
 });
@@ -480,19 +480,19 @@ const pluginToolsPlugin: Plugin<TurnToolPluginContext> = (api) => {
 	});
 };
 
-const applicationToolRegistry = createApplicationToolRegistry({
-	plugins: [codingPlugin, mcpPlugin, subagentsPlugin, pluginToolsPlugin],
-	nativeToolProviders: [skillToolProvider],
-});
+export const createTurnToolRegistry = (
+	plugins: readonly Plugin<TurnToolPluginContext>[] = []
+) =>
+	createApplicationToolRegistry({
+		plugins: [codingPlugin, ...plugins, pluginToolsPlugin],
+		nativeToolProviders: [skillToolProvider],
+	});
 
-/** Resolves the single immutable set of tools visible to one Agent Turn. */
-export const resolveTurnTools = (
-	context: TurnToolPluginContext
-): Promise<readonly ResolvedTool[]> => applicationToolRegistry.resolve(context);
+const nativeToolRegistry = createTurnToolRegistry();
 
-/** Creates the Session Delegation runtime registered by the built-in Plugin. */
-export const createApplicationSessionDelegationRuntime =
-	applicationToolRegistry.createSessionDelegationRuntime;
+/** Resolves native coding/shell, Skill, and explicitly loaded file Plugin tools. */
+export const resolveTurnTools: TurnToolResolver = (context) =>
+	nativeToolRegistry.resolve(context);
 
 const settledToolName = (
 	type: string,

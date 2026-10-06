@@ -6,12 +6,6 @@ import {
 	type ToolJsonSchema,
 } from "@wincode/agent-core";
 import { isNonEmptyString, isObjectLike, isPlainObject } from "@wincode/utils";
-import type {
-	SessionDelegationPort,
-	SessionDelegationRuntimeFactory,
-	SessionDelegationRuntimePorts,
-} from "@/modules/sessions/host/types";
-
 export const toolPolicyCategories = Object.freeze([
 	"coding",
 	"shell",
@@ -57,9 +51,6 @@ type RegisteredToolProvider<Context> = Readonly<{
 }>;
 
 export type PluginAPI<Context> = Readonly<{
-	registerSessionDelegationRuntime: (
-		factory: SessionDelegationRuntimeFactory
-	) => void;
 	registerToolProvider: <ProviderContext, Category extends ToolPolicyCategory>(
 		registration: ToolProviderRegistration<Context, ProviderContext, Category>
 	) => void;
@@ -69,9 +60,6 @@ export type PluginAPI<Context> = Readonly<{
 export type Plugin<Context> = (api: PluginAPI<Context>) => void;
 
 export type ApplicationToolRegistry<Context> = Readonly<{
-	createSessionDelegationRuntime: (
-		ports: SessionDelegationRuntimePorts
-	) => SessionDelegationPort;
 	resolve: (context: Context) => Promise<readonly ResolvedTool[]>;
 }>;
 
@@ -152,10 +140,8 @@ const validateProvider = <
 /**
  * Creates the application-owned tool host. Built-in Plugin factories run once
  * and register providers through PluginAPI; native providers such as Skill
- * activation join the same resolver without becoming Plugins. The Subagents
- * Plugin also registers the process-lifetime Session Delegation runtime used
- * by SessionHostManager. Tool Gate decisions remain inside the family adapters
- * and are evaluated per call.
+ * activation join the same resolver without becoming Plugins. Tool Gate
+ * decisions remain inside the family adapters and are evaluated per call.
  */
 export const createApplicationToolRegistry = <
 	Context,
@@ -176,9 +162,6 @@ export const createApplicationToolRegistry = <
 
 	const providerIds = new Set<string>();
 	const providers: RegisteredToolProvider<Context>[] = [];
-	let sessionDelegationRuntimeFactory:
-		| SessionDelegationRuntimeFactory
-		| undefined;
 	let registrationOpen = true;
 	const registerToolProvider = <
 		ProviderContext,
@@ -217,36 +200,7 @@ export const createApplicationToolRegistry = <
 			})
 		);
 	};
-	const registerSessionDelegationRuntime = (
-		factory: SessionDelegationRuntimeFactory
-	): void => {
-		if (!registrationOpen) {
-			throw new AgentInvariantError(
-				"invalid-registry",
-				"Session Delegation runtime cannot be registered after Plugin initialization.",
-				{ cause: factory }
-			);
-		}
-		if (typeof factory !== "function") {
-			throw new AgentInvariantError(
-				"invalid-registry",
-				"Session Delegation runtime registration must be a factory function.",
-				{ cause: factory }
-			);
-		}
-		if (sessionDelegationRuntimeFactory !== undefined) {
-			throw new AgentInvariantError(
-				"invalid-registry",
-				"Only one Session Delegation runtime may be registered.",
-				{ cause: factory }
-			);
-		}
-		sessionDelegationRuntimeFactory = factory;
-	};
-	const api: PluginAPI<Context> = Object.freeze({
-		registerSessionDelegationRuntime,
-		registerToolProvider,
-	});
+	const api: PluginAPI<Context> = Object.freeze({ registerToolProvider });
 
 	try {
 		for (const plugin of plugins) {
@@ -275,17 +229,6 @@ export const createApplicationToolRegistry = <
 	}
 
 	return Object.freeze({
-		createSessionDelegationRuntime: (
-			ports: SessionDelegationRuntimePorts
-		): SessionDelegationPort => {
-			if (sessionDelegationRuntimeFactory === undefined) {
-				throw new AgentInvariantError(
-					"invalid-registry",
-					"No Session Delegation runtime was registered by a built-in Plugin."
-				);
-			}
-			return sessionDelegationRuntimeFactory(ports);
-		},
 		resolve: async (context: Context): Promise<readonly ResolvedTool[]> => {
 			const names = new Map<string, string>();
 			const resolved: ResolvedTool[] = [];

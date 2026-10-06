@@ -1,7 +1,10 @@
 import type { AgentId, ToolCallOutput } from "@wincode/agent-core";
 import type { McpCatalogSnapshot } from "@wincode/mcp";
 import type { SubagentToolContext } from "@wincode/subagents";
-import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type {
+	PluginRuntime,
+	PluginToolDescriptor,
+} from "@/modules/plugins/runtime";
 import type { PluginPermissionResolution } from "@/modules/plugins/tools";
 import type { SkillExecution, SkillToolDefinition } from "@/modules/skills";
 import type { ToolGate } from "@/modules/tool-gate/tool-gate";
@@ -34,7 +37,9 @@ export type TurnToolPluginContext = Readonly<
 		skillTool?: SkillToolDefinition;
 		versionedEditing?: VersionedEditingContext;
 		pluginRuntime?: PluginRuntime;
+		pluginTools?: readonly PluginToolDescriptor[];
 		sessionId?: SessionId;
+		signal?: AbortSignal;
 		workspace?: string;
 		existingToolNames?: readonly string[];
 		resolvePluginPermission?: (
@@ -61,6 +66,17 @@ export type McpToolProviderContext = Pick<
 export type SkillToolProviderContext = Pick<
 	TurnToolPluginContext,
 	"agentId" | "gate" | "skillExecution" | "skillTool"
+>;
+export type PluginToolProviderContext = Pick<
+	TurnToolPluginContext,
+	| "agentId"
+	| "existingToolNames"
+	| "gate"
+	| "pluginTools"
+	| "resolvePluginPermission"
+	| "sessionId"
+	| "signal"
+	| "workspace"
 >;
 export type SubagentsToolProviderContext = SubagentToolContext<
 	SessionId,

@@ -5,7 +5,10 @@ const jiraPlugin: PluginFactory = (api) => {
 	const plugin = api.definePlugin({ id: "jira" });
 	plugin.registerTool({
 		description: "Search Jira issues.",
-		handler: async ({ query }) => ({ query }),
+		handler: async ({ query }) => ({
+			output: { query },
+			type: "success",
+		}),
 		inputSchema: z.object({ query: z.string() }),
 		name: "search_issues",
 	});

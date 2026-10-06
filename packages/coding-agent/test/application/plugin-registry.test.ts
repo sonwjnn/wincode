@@ -6,16 +6,13 @@ import {
 } from "@wincode/agent-core";
 import { isObjectLike } from "@wincode/utils";
 import { z } from "zod";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import {
 	createApplicationToolRegistry,
 	type Plugin,
 	type ToolProviderRegistration,
 } from "@/modules/application/plugins/registry";
 import { createSessionHostManager } from "@/modules/sessions/host/session-host-manager";
-import {
-	createSubagentTaskRuntime,
-	subagentsPlugin,
-} from "@/plugins/subagents";
 
 const definition = (name: string): ToolDefinition => ({
 	description: `${name} tool`,
@@ -88,30 +85,28 @@ test("provider registration snapshots resolver functions before the Plugin retur
 	expect(tools.map(({ definition: tool }) => tool.name)).toEqual(["read"]);
 });
 
-test("the Subagents Plugin supplies the Session Host runtime through the registry", async () => {
-	const registry = createApplicationToolRegistry({
-		plugins: [subagentsPlugin],
+test("the composition root selects the Subagents Plugin and its Session adapter", async () => {
+	const base = createApplicationPluginComposition({
+		createMcpResource: false,
+		enabledPlugins: [],
+		workspace: "/workspace",
 	});
-	const manager = createSessionHostManager(
-		registry.createSessionDelegationRuntime
-	);
+	const selected = createApplicationPluginComposition({
+		createMcpResource: false,
+		enabledPlugins: ["subagents"],
+		workspace: "/workspace",
+	});
+	const manager = createSessionHostManager(selected.createDelegationRuntime);
 
 	try {
+		expect(base.createDelegationRuntime).toBeUndefined();
+		expect(base.createDelegationAdapter).toBeUndefined();
+		expect(selected.createDelegationRuntime).toBeFunction();
+		expect(selected.createDelegationAdapter).toBeFunction();
 		expect(manager.delegation.activeTaskIds()).toEqual([]);
 	} finally {
 		await manager.shutdownAll();
 	}
-});
-
-test("duplicate Session Delegation runtimes fail during Plugin initialization", () => {
-	const plugin: Plugin<undefined> = (api) => {
-		api.registerSessionDelegationRuntime(createSubagentTaskRuntime);
-		api.registerSessionDelegationRuntime(createSubagentTaskRuntime);
-	};
-
-	expect(() => createApplicationToolRegistry({ plugins: [plugin] })).toThrow(
-		AgentInvariantError
-	);
 });
 
 test("native Skill tools join the same registry without being a Plugin", async () => {

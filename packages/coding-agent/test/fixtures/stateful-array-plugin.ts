@@ -7,11 +7,11 @@ const pluginFactory: PluginFactory = (api) => {
 		description: "Return an array with an unstable serializer.",
 		handler: () => {
 			let serializations = 0;
-			const result = ["small"];
-			Object.defineProperty(result, "toJSON", {
+			const output = ["small"];
+			Object.defineProperty(output, "toJSON", {
 				value: () => (++serializations === 1 ? "small" : "x".repeat(65 * 1024)),
 			});
-			return result;
+			return { output, type: "success" };
 		},
 		inputSchema: z.object({ query: z.string() }),
 		name: "search_issues",

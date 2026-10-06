@@ -68,6 +68,11 @@ export type CreateSessionInput = {
 	effort?: Effort;
 	reasoningMode?: ReasoningMode;
 };
+export type CreateEmptySessionInput = Readonly<{
+	model?: ChatModelSelection;
+	effort?: Effort;
+	reasoningMode?: ReasoningMode;
+}>;
 export type CreateDelegationTaskInput = CreateSessionInput & {
 	parentSessionId: SessionId;
 	parentToolCallId: ToolCallId;
@@ -114,6 +119,9 @@ export type SessionStore = {
 		input: AppendSessionCompactionInput
 	) => Promise<SessionCompaction>;
 	createSession: (input: CreateSessionInput) => Promise<{ id: SessionId }>;
+	createEmptySession: (
+		input: CreateEmptySessionInput
+	) => Promise<{ id: SessionId }>;
 	deleteSession: (sessionId: SessionId) => Promise<void>;
 	resetSessionData: () => Promise<void>;
 	getCompactions: (sessionId: SessionId) => Promise<SessionCompaction[]>;

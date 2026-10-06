@@ -24,7 +24,10 @@ import {
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveWorkspaceRoot } from "@/modules/tools";
-import type { ConfigRuntime } from "@/shared/config/config-store";
+import {
+	type ConfigRuntime,
+	createConfigStore,
+} from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
 import { createPermissionService } from "../../../modules/permissions/permission-service";
 import type { DelegationTask } from "../../../modules/sessions/delegation/types";
@@ -40,6 +43,10 @@ import { createSessionUserMessage } from "../../../modules/sessions/message";
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
+import {
+	createApplicationPluginComposition,
+	type OptionalApplicationPluginId,
+} from "../plugin-composition";
 import { projectAgentEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
 import { InvocationError } from "./types";
@@ -51,6 +58,7 @@ type OneShotCompositionInput = Readonly<{
 	configRuntime?: ConfigRuntime;
 	cwd: string;
 	pluginRuntime?: PluginRuntime;
+	enabledPlugins?: readonly OptionalApplicationPluginId[];
 	workspace: string;
 }>;
 
@@ -72,6 +80,9 @@ const composeOneShotCapabilities = (
 			configRuntime: context.configRuntime,
 			pluginRuntime: context.pluginRuntime,
 		}),
+		enabledPlugins: (["mcp", "subagents"] as const).filter(
+			(pluginId) => !context.invocation.disabledPlugins?.includes(pluginId)
+		),
 		workspace,
 	});
 
@@ -307,16 +318,35 @@ const composeDefaultCapabilities = async ({
 	configRuntime,
 	cwd,
 	pluginRuntime,
+	enabledPlugins = ["mcp", "subagents"],
 	workspace,
-}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> =>
-	createSessionCapabilities({
+}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> => {
+	const configStore = configRuntime?.configStore ?? createConfigStore();
+	const composition = createApplicationPluginComposition({
+		configStore,
+		enabledPlugins,
+		workspace,
+	});
+	return createSessionCapabilities({
 		approvalMode: "non-interactive",
+		configStore,
 		cwd,
 		...(configRuntime === undefined ? {} : { configRuntime }),
 		...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+		...(composition.mcpResource === undefined
+			? {}
+			: { mcpResource: composition.mcpResource }),
+		...(composition.createDelegationAdapter === undefined
+			? {}
+			: { createDelegationAdapter: composition.createDelegationAdapter }),
+		...(composition.createDelegationRuntime === undefined
+			? {}
+			: { createDelegationRuntime: composition.createDelegationRuntime }),
+		turnToolResolver: composition.turnToolResolver,
 		permissionService: createPermissionService({ autoApproval }),
 		workspace,
 	});
+};
 
 const sendInputFor = (
 	selection: ResolvedSelection,

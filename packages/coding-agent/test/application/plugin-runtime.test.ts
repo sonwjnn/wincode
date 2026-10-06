@@ -30,7 +30,7 @@ const jiraPlugin = (): LoadedPlugin => ({
 		{
 			action: "plugin:jira:search_issues",
 			description: "Search Jira issues.",
-			handler: async () => ({ query: "fixed" }),
+			handler: async () => ({ output: { query: "fixed" }, type: "success" }),
 			inputSchema: z.object({ query: z.string() }),
 			localName: "search_issues",
 			name: "plugin_jira_search_issues",

@@ -1,16 +1,20 @@
 import { useMemo } from "react";
 import { useAgentRegistry } from "@/modules/agents/agent-registry-provider";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { useConnections } from "@/modules/connections";
 import { useMcp } from "@/modules/mcp/context/mcp-provider";
 import { useToolPermission } from "@/modules/permissions/use-tool-permission";
+import { parseCliOptions } from "@/shared/cli-options";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
-import { getInteractivePluginRuntime } from "@/shared/runtime-context";
+import {
+	getInteractivePluginRuntime,
+	getInteractiveRuntimeContext,
+} from "@/shared/runtime-context";
 import { createSessionCompaction } from "../compaction/compaction";
 import { estimateCompactionTokens } from "../compaction/config";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { useCompactionSettings } from "../compaction/use-compaction-settings";
-import { createApplicationSessionDelegationRuntime } from "../hooks/runtime-turn";
 import { getSessionStore } from "../storage/get-session-store";
 import { getInteractiveSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities } from "./types";
@@ -58,8 +62,24 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	// the capabilities object is composed once: a session is never reopened
 	// because a provider re-rendered.
 	const pluginRuntime = getInteractivePluginRuntime();
-	return useMemo(
-		() => ({
+	const disabledPlugins = useMemo(
+		() => parseCliOptions(getInteractiveRuntimeContext().args).disabledPlugins,
+		[]
+	);
+	const composition = useMemo(
+		() =>
+			createApplicationPluginComposition({
+				configStore: config.configStore,
+				createMcpResource: false,
+				enabledPlugins: (["mcp", "subagents"] as const).filter(
+					(pluginId) => !disabledPlugins.includes(pluginId)
+				),
+				workspace: config.workspace,
+			}),
+		[config.configStore, config.workspace, disabledPlugins]
+	);
+	return useMemo(() => {
+		const capabilities: SessionCapabilities = {
 			getCompactionModule: () => compactionModuleRef.current,
 			getCompactionSettings: (model) => getCompactionSettingsRef.current(model),
 			getConfig: () => configRef.current,
@@ -69,14 +89,17 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			getStore: () => getSessionStore(),
 			getSessionHostManager: () =>
 				getInteractiveSessionHostManager(
-					createApplicationSessionDelegationRuntime,
+					composition.createDelegationRuntime,
 					pluginRuntime
 				),
+			getTurnToolResolver: () => composition.turnToolResolver,
+			getDelegationAdapter: () =>
+				composition.createDelegationAdapter?.(capabilities),
 			...(pluginRuntime === undefined
 				? {}
 				: { getPluginRuntime: () => pluginRuntime }),
 			getToolPermission: () => toolPermissionRef.current,
-		}),
-		[pluginRuntime]
-	);
+		};
+		return capabilities;
+	}, [composition, pluginRuntime]);
 };

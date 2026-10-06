@@ -29,6 +29,9 @@ export const runRpcExecutionMode = async (
 			...(context.configRuntime === undefined
 				? {}
 				: { configRuntime: context.configRuntime }),
+			enabledPlugins: (["mcp", "subagents"] as const).filter(
+				(pluginId) => !context.invocation.disabledPlugins?.includes(pluginId)
+			),
 			...(context.pluginRuntime === undefined
 				? {}
 				: { pluginRuntime: context.pluginRuntime }),

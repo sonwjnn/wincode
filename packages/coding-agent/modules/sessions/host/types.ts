@@ -1,6 +1,14 @@
-import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
+import type {
+	AgentRuntime,
+	AgentTurnEvent,
+	AgentTurnTerminalEvent,
+} from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type {
+	DelegationExecutor,
+	SubmitResultExecutor,
+} from "@wincode/subagents";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { McpSessionCapability } from "@/modules/mcp/capability";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
@@ -15,8 +23,10 @@ import type {
 	DelegationReportEnvelope,
 	DelegationTask,
 } from "../delegation/types";
+import type { TurnToolResolver } from "../hooks/runtime-turn";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
+import type { TurnExecution } from "../turn-execution";
 export type SessionApprovalMode = "interactive" | "non-interactive";
 
 /**
@@ -45,6 +55,8 @@ export type SessionCapabilities = Readonly<{
 	getRuntime?: () => AgentRuntime;
 	getSessionHostManager: () => SessionHostManager;
 	getPluginRuntime?: () => PluginRuntime;
+	getTurnToolResolver?: () => TurnToolResolver;
+	getDelegationAdapter?: () => SessionDelegationAdapter | undefined;
 	/**
 	 * Approval settlement policy for surfaces without an interactive approval
 	 * channel. Omitted means the historical interactive behavior.
@@ -96,6 +108,23 @@ export type SessionHostManagerEvent =
 			sessionId: SessionId;
 			type: "session-approval-notice";
 	  }>;
+export type SessionDelegationAdapter = Readonly<{
+	createExecutor: (input: {
+		execution: TurnExecution;
+		executionMode?: ExecutionMode;
+		sessionId: SessionId;
+	}) => DelegationExecutor<SessionId, DelegationTaskId>;
+	createSubmitResultExecutor: (
+		taskId: DelegationTaskId
+	) => SubmitResultExecutor;
+	failTask: (taskId: DelegationTaskId, error: unknown) => Promise<void>;
+	hasTargets: () => boolean;
+	settleAfterTurn: (
+		task: DelegationTask,
+		event: AgentTurnTerminalEvent
+	) => Promise<void>;
+}>;
+
 export type SessionDelegationSession = Readonly<{
 	capabilities: SessionCapabilities;
 	sessionId: SessionId;

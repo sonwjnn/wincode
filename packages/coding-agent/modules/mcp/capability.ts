@@ -1,9 +1,10 @@
 import type { AgentId } from "@wincode/agent-core";
-import type {
-	McpAgentDecisionResolver,
-	McpCatalogSnapshot,
-	McpRegistry,
-	McpToolExecutor,
+import {
+	type McpAgentDecisionResolver,
+	type McpCatalogSnapshot,
+	type McpRegistry,
+	type McpToolExecutor,
+	toMcpSnapshotId,
 } from "@wincode/mcp";
 import {
 	DEFAULT_EFFECTIVE_AGENT_POLICY,
@@ -24,7 +25,7 @@ export type McpSessionCapability = Readonly<{
 	releaseSnapshot?: (snapshot: McpCatalogSnapshot) => void;
 }>;
 
-/** Lifecycle wrapper for the MCP registry owned by the built-in Plugin. */
+/** Lifecycle wrapper for the registry resource owned by the bundled MCP Plugin. */
 export type McpPluginResource = Readonly<{
 	capability: McpSessionCapability;
 	close(): Promise<void>;
@@ -58,3 +59,33 @@ export const createMcpSessionCapability = (
 		registry.execute(snapshot, toolName, input, signal),
 	releaseSnapshot: (snapshot) => registry.releaseSnapshot?.(snapshot),
 });
+
+/** Supplies the neutral empty resource used when the application disables MCP. */
+export const createDisabledMcpPluginResource = (): McpPluginResource => {
+	const registry: McpRegistry = {
+		close: async () => undefined,
+		initialize: async () => undefined,
+		createSnapshot: async (agent) => ({
+			agent,
+			id: toMcpSnapshotId(crypto.randomUUID()),
+			manifest: [],
+			tools: new Map(),
+		}),
+		execute: async () => ({
+			content: [],
+			isError: true,
+			owner: "registry",
+			truncated: false,
+		}),
+		getStatuses: () => [],
+		reconnect: async () => undefined,
+		subscribe: () => () => undefined,
+		toggle: async () => undefined,
+	};
+	return Object.freeze({
+		capability: Object.freeze(createMcpSessionCapability(registry)),
+		close: () => registry.close(),
+		initialize: () => registry.initialize(),
+		registry,
+	});
+};

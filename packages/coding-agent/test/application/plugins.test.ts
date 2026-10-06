@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createAgentRuntime } from "@wincode/agent-core";
+import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
 import type {
 	ModelStepRequest,
 	ModelStreamPart,
@@ -676,5 +676,128 @@ test("JSON Mode streams Plugin Tool outcomes as machine-readable events", async 
 		);
 	} finally {
 		await pluginRuntime.shutdown();
+	}
+});
+
+test("a rejected later registration preserves prior tools and reports a diagnostic", async () => {
+	const pluginPathWithLateFailure = path.resolve(
+		import.meta.dir,
+		"../fixtures/late-registration-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [path.relative(workspace, pluginPathWithLateFailure)],
+		config: createConfigRuntime(workspace, configRoot),
+	});
+	try {
+		expect(
+			runtime
+				.getToolDescriptors("late-registration-session")
+				.map(({ name }) => name)
+		).toEqual(["plugin_late_registration_valid_tool"]);
+		expect(runtime.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					message: expect.stringContaining("Plugin Tool registration failed"),
+					sourcePath: pluginPathWithLateFailure,
+				}),
+			])
+		);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("Turn-scoped Plugin registrations override, mask, and preserve outer tools by scope", async () => {
+	const scopedPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/scoped-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [path.relative(workspace, scopedPath)],
+		config: createConfigRuntime(workspace, configRoot),
+	});
+	const sessionContext = { sessionId: "scope-session", workspace };
+	const turnContext = {
+		...sessionContext,
+		agentId: agentIdSchema.parse("build"),
+		signal: new AbortController().signal,
+	};
+
+	try {
+		await runtime.startSession(sessionContext);
+		const first = await runtime.resolveToolsForTurn(turnContext);
+		const firstTool = first[0];
+		const second = await runtime.resolveToolsForTurn(turnContext);
+		const third = await runtime.resolveToolsForTurn(turnContext);
+		const callContext = {
+			agentId: agentIdSchema.parse("build"),
+			sessionId: sessionContext.sessionId,
+			signal: new AbortController().signal,
+			toolCallId: toolCallId("scope-tool-call"),
+			workspace,
+		};
+
+		expect(
+			runtime.diagnostics.filter(({ sourcePath }) => sourcePath === scopedPath)
+		).toEqual([]);
+		expect(first.map(({ name, description }) => [name, description])).toEqual([
+			["plugin_scoped_lookup", "Turn version."],
+		]);
+		expect(firstTool?.description).toBe("Turn version.");
+		expect(second).toEqual([]);
+		expect(third[0]?.description).toBe("Session version.");
+		expect(firstTool?.handler).toBeDefined();
+		expect(await firstTool?.handler({}, callContext)).toMatchObject({
+			output: "turn",
+			type: "success",
+		});
+		expect(await third[0]?.handler({}, callContext)).toMatchObject({
+			output: "session",
+			type: "success",
+		});
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("a failed pre-Agent-Turn hook omits only that Plugin's tools", async () => {
+	const failingPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/failing-pre-turn-plugin.ts"
+	);
+	const healthyPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/healthy-pre-turn-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [
+			path.relative(workspace, failingPath),
+			path.relative(workspace, healthyPath),
+		],
+		config: createConfigRuntime(workspace, configRoot),
+	});
+	const session = { sessionId: "isolated-turn-session", workspace };
+
+	try {
+		await runtime.startSession(session);
+		const tools = await runtime.resolveToolsForTurn({
+			...session,
+			agentId: agentIdSchema.parse("build"),
+			signal: new AbortController().signal,
+		});
+
+		expect(tools.map(({ name }) => name)).toEqual([
+			"plugin_healthy_pre_turn_lookup",
+		]);
+		expect(runtime.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					message: expect.stringContaining("failed; its tools were omitted"),
+					sourcePath: failingPath,
+				}),
+			])
+		);
+	} finally {
+		await runtime.shutdown();
 	}
 });

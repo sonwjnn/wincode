@@ -3,6 +3,7 @@ import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
 import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { ConnectionsProvider } from "@/modules/connections";
 import { McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
@@ -10,11 +11,9 @@ import {
 	createPermissionService,
 	PermissionServiceProvider,
 } from "@/modules/permissions";
-import { createApplicationSessionDelegationRuntime } from "@/modules/sessions/hooks/runtime-turn";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
-import { mcpPlugin } from "@/plugins/mcp";
 import { parseCliOptions } from "@/shared/cli-options";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -42,12 +41,23 @@ const configContext =
 		homeRoot: os.homedir(),
 		workspace,
 	});
-const mcpResource = mcpPlugin.createResource({ configStore, workspace });
-const permissionService = createPermissionService(parseCliOptions(args));
+const cliOptions = parseCliOptions(args);
+const applicationPlugins = createApplicationPluginComposition({
+	configStore,
+	enabledPlugins: (["mcp", "subagents"] as const).filter(
+		(pluginId) => !cliOptions.disabledPlugins.includes(pluginId)
+	),
+	workspace,
+});
+const mcpResource = applicationPlugins.mcpResource;
+if (mcpResource === undefined) {
+	throw new Error("The selected MCP Plugin did not provide its resource.");
+}
+const permissionService = createPermissionService(cliOptions);
 setInteractiveCleanup(async () => {
 	try {
 		await getInteractiveSessionHostManager(
-			createApplicationSessionDelegationRuntime,
+			applicationPlugins.createDelegationRuntime,
 			pluginRuntime
 		).shutdownAll();
 	} finally {

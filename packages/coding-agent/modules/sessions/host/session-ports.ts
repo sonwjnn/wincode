@@ -22,7 +22,10 @@ import type {
 	ToolPermission,
 } from "@/modules/permissions/policy";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
-import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type {
+	PluginRuntime,
+	PluginToolDescriptor,
+} from "@/modules/plugins/runtime";
 import type { PluginPermissionResolution } from "@/modules/plugins/tools";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
@@ -41,13 +44,6 @@ import {
 	codingToolCatalog,
 	type VersionedEditingContext,
 } from "@/modules/tools";
-import {
-	createDelegationExecutor,
-	createSubmitResultExecutor,
-	failDelegatedTask,
-	hasDelegationTargets,
-	settleDelegatedTaskAfterTurn,
-} from "@/plugins/subagents/delegation";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
@@ -95,6 +91,7 @@ export type SessionPortsOptions = Readonly<{
 type PluginTurnResolution = Readonly<{
 	options: Readonly<{
 		pluginRuntime?: PluginRuntime;
+		pluginTools?: readonly PluginToolDescriptor[];
 		resolvePluginPermission: (
 			action: `plugin:${string}:${string}`,
 			agentId?: AgentId
@@ -108,26 +105,36 @@ const resolvePluginTurnContext = async (
 		agentId: AgentId;
 		pluginRuntime?: PluginRuntime;
 		sessionId: SessionId;
+		signal: AbortSignal;
 		toolPermission: ToolPermissionRuntime;
+		workspace: string;
 	}>
 ): Promise<PluginTurnResolution> => {
+	const pluginTools =
+		input.pluginRuntime === undefined
+			? []
+			: await input.pluginRuntime.resolveToolsForTurn({
+					agentId: input.agentId,
+					sessionId: input.sessionId,
+					signal: input.signal,
+					workspace: input.workspace,
+				});
 	const policies = await Promise.all(
-		(input.pluginRuntime?.getToolDescriptors(input.sessionId) ?? []).map(
-			async ({ action, name }) => {
-				const permission =
-					await input.toolPermission.resolvePluginPermissionForAgent(
-						action,
-						input.agentId
-					);
-				return [name, permission.decision] as const;
-			}
-		)
+		pluginTools.map(async ({ action, name }) => {
+			const permission =
+				await input.toolPermission.resolvePluginPermissionForAgent(
+					action,
+					input.agentId
+				);
+			return [name, permission.decision] as const;
+		})
 	);
 	return {
 		options: {
 			...(input.pluginRuntime === undefined
 				? {}
 				: { pluginRuntime: input.pluginRuntime }),
+			pluginTools,
 			resolvePluginPermission: (action, agentId) =>
 				input.toolPermission.resolvePluginPermissionForAgent(
 					action,
@@ -534,15 +541,17 @@ export const createSessionPorts = ({
 					: toolPermission.resolveResourceLimitsForAgent(agentId),
 			versionedEditing,
 		};
-		scope.delegate = hasDelegationTargets(capabilities)
-			? createDelegationExecutor({
-					capabilities,
-					execution: scope,
-					executionMode,
-					sessionId,
-				})
-			: undefined;
+		const delegationAdapter = capabilities.getDelegationAdapter?.();
+		scope.delegate =
+			delegationAdapter?.hasTargets() === true
+				? delegationAdapter.createExecutor({
+						execution: scope,
+						executionMode,
+						sessionId,
+					})
+				: undefined;
 		const submitTask =
+			delegationAdapter !== undefined &&
 			delegationTask !== null &&
 			(delegationTask.status === "active" ||
 				delegationTask.status === "awaiting_report")
@@ -551,7 +560,7 @@ export const createSessionPorts = ({
 		const submitResult =
 			submitTask === null
 				? undefined
-				: createSubmitResultExecutor(capabilities, submitTask.id);
+				: delegationAdapter?.createSubmitResultExecutor(submitTask.id);
 		const resourceLimits = await tooling.resolveResourceLimits?.(
 			execution.agent
 		);
@@ -560,7 +569,9 @@ export const createSessionPorts = ({
 			agentId: execution.agent,
 			...(pluginRuntime === undefined ? {} : { pluginRuntime }),
 			sessionId,
+			signal,
 			toolPermission,
+			workspace: config.workspace,
 		});
 		const existingToolNames = collectExistingToolNames(
 			resolvedAgent.visibleCodingTools,
@@ -569,7 +580,9 @@ export const createSessionPorts = ({
 			submitResult !== undefined,
 			scope.armedSkill?.tool?.name
 		);
-		const tools = await resolveTurnTools({
+		const tools = await (
+			capabilities.getTurnToolResolver?.() ?? resolveTurnTools
+		)({
 			agentId: execution.agent,
 			agentTools: resolvedAgent.visibleCodingTools,
 			delegate: scope.delegate,
@@ -626,11 +639,12 @@ export const createSessionPorts = ({
 		event: AgentTurnTerminalEvent
 	): Promise<void> => {
 		await callbacks.onTerminal(event);
-		if (task === null) {
+		const delegationAdapter = capabilities.getDelegationAdapter?.();
+		if (task === null || delegationAdapter === undefined) {
 			return;
 		}
 		try {
-			await settleDelegatedTaskAfterTurn(capabilities, task, event);
+			await delegationAdapter.settleAfterTurn(task, event);
 		} catch {
 			capabilities.getSessionHostManager().delegation.finishTask(task.id);
 		}
@@ -639,11 +653,12 @@ export const createSessionPorts = ({
 		task: DelegationTask | null,
 		error: unknown
 	): Promise<void> => {
-		if (task === null) {
+		const delegationAdapter = capabilities.getDelegationAdapter?.();
+		if (task === null || delegationAdapter === undefined) {
 			return;
 		}
 		try {
-			await failDelegatedTask(capabilities, task.id, error);
+			await delegationAdapter.failTask(task.id, error);
 		} catch {
 			capabilities.getSessionHostManager().delegation.finishTask(task.id);
 		}

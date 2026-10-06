@@ -3,25 +3,23 @@ import {
 	getErrorMessage,
 	isNonEmptyString,
 	isObjectLike,
-	isPlainObject,
 	logger,
 } from "@wincode/utils";
-import { z } from "zod";
 import { COMMANDS } from "@/modules/commands/commands";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { codingToolNames } from "@/modules/tools";
 import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
 import type {
 	PluginAPI,
-	PluginCommandRegistration,
+	PluginBeforeAgentTurnHook,
 	PluginDefinitionAPI,
 	PluginFactory,
 	PluginLoadContext,
-	PluginSessionHook,
+	PluginSessionShutdownHook,
+	PluginSessionStartHook,
 	PluginShutdownHook,
-	PluginToolContext,
-	PluginToolRegistration,
 } from "./public";
+import { validatePluginCommand, validatePluginTool } from "./registration";
 import {
 	createPluginRuntime,
 	type LoadedPlugin,
@@ -38,13 +36,14 @@ export type LoadPluginsInput = Readonly<{
 }>;
 
 type MutablePluginDraft = {
-	commands: unknown[];
+	commands: Map<string, PluginCommand>;
 	id: string;
-	onSessionShutdown?: PluginSessionHook;
-	onSessionStart?: PluginSessionHook;
+	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
+	onSessionShutdown?: PluginSessionShutdownHook;
+	onSessionStart?: PluginSessionStartHook;
 	onShutdown?: PluginShutdownHook;
 	sourcePath: string;
-	tools: unknown[];
+	tools: Map<string, PluginTool>;
 	workspace: string;
 };
 
@@ -60,8 +59,6 @@ const isTypeScriptPluginPath = (candidatePath: string): boolean =>
 	typescriptPluginExtensions.has(path.extname(candidatePath)) &&
 	!declarationFilePattern.test(candidatePath);
 const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
-const pluginToolNamePattern = /^[a-z0-9_]+$/u;
-const pluginCommandNamePattern = /^[a-z0-9_-]+$/u;
 const RESERVED_TOOL_NAMES = new Set([
 	...codingToolNames,
 	"delegate",
@@ -128,22 +125,31 @@ const pluginPathsFromSources = (
 
 const createRegistrationAPI = (
 	plugin: MutablePluginDraft,
-	isOpen: () => boolean
+	isOpen: () => boolean,
+	diagnostics: PluginDiagnostic[]
 ): PluginDefinitionAPI => {
 	const assertOpen = (): void => {
 		if (!isOpen()) {
 			throw new Error("Plugin registration is closed.");
 		}
 	};
-	const registerSessionHook = (
-		name: "onSessionStart" | "onSessionShutdown",
-		hook: PluginSessionHook
+	const registerSessionStartHook = (hook: PluginSessionStartHook): void => {
+		assertOpen();
+		if (typeof hook !== "function" || plugin.onSessionStart !== undefined) {
+			throw new Error("Plugin hook 'onSessionStart' must be registered once.");
+		}
+		plugin.onSessionStart = hook;
+	};
+	const registerSessionShutdownHook = (
+		hook: PluginSessionShutdownHook
 	): void => {
 		assertOpen();
-		if (typeof hook !== "function" || plugin[name] !== undefined) {
-			throw new Error(`Plugin hook '${name}' must be registered once.`);
+		if (typeof hook !== "function" || plugin.onSessionShutdown !== undefined) {
+			throw new Error(
+				"Plugin hook 'onSessionShutdown' must be registered once."
+			);
 		}
-		plugin[name] = hook;
+		plugin.onSessionShutdown = hook;
 	};
 	const registerProcessHook = (hook: PluginShutdownHook): void => {
 		assertOpen();
@@ -154,29 +160,57 @@ const createRegistrationAPI = (
 	};
 	return Object.freeze({
 		onSessionStart(handler) {
-			registerSessionHook("onSessionStart", handler);
+			registerSessionStartHook(handler);
 		},
 		onSessionShutdown(handler) {
-			registerSessionHook("onSessionShutdown", handler);
+			registerSessionShutdownHook(handler);
+		},
+		onBeforeAgentTurn(handler) {
+			assertOpen();
+			if (
+				typeof handler !== "function" ||
+				plugin.onBeforeAgentTurn !== undefined
+			) {
+				throw new Error(
+					"Plugin hook 'onBeforeAgentTurn' must be registered once."
+				);
+			}
+			plugin.onBeforeAgentTurn = handler;
 		},
 		onShutdown(handler) {
 			registerProcessHook(handler);
 		},
-		registerCommand(command: PluginCommandRegistration) {
+		registerCommand(command) {
 			assertOpen();
-			plugin.commands.push(command);
+			try {
+				const validated = validatePluginCommand(command);
+				plugin.commands.set(validated.name.toLowerCase(), validated);
+			} catch (error) {
+				addDiagnostic(
+					diagnostics,
+					`Plugin Command registration failed: ${messageFor(error)}`,
+					plugin.sourcePath
+				);
+				throw error;
+			}
 		},
-		registerTool<Schema extends z.ZodType>(
-			tool: PluginToolRegistration<Schema>
-		) {
+		registerTool(tool) {
 			assertOpen();
-			plugin.tools.push({
-				description: tool.description,
-				handler: (input: unknown, context: PluginToolContext) =>
-					tool.handler(input as z.output<Schema>, context),
-				inputSchema: tool.inputSchema,
-				name: tool.name,
-			});
+			try {
+				const validated = validatePluginTool(tool);
+				plugin.tools.set(validated.name, validated);
+			} catch (error) {
+				addDiagnostic(
+					diagnostics,
+					`Plugin Tool registration failed: ${messageFor(error)}`,
+					plugin.sourcePath
+				);
+				throw error;
+			}
+		},
+		unregisterTool(name) {
+			assertOpen();
+			plugin.tools.delete(name);
 		},
 	});
 };
@@ -184,7 +218,8 @@ const createRegistrationAPI = (
 const createPluginAPI = (
 	context: PluginLoadContext,
 	setDraft: (draft: MutablePluginDraft) => void,
-	isOpen: () => boolean
+	isOpen: () => boolean,
+	diagnostics: PluginDiagnostic[]
 ): PluginAPI =>
 	Object.freeze({
 		definePlugin(identity) {
@@ -196,68 +231,16 @@ const createPluginAPI = (
 				throw new Error("A Plugin must declare one non-empty identifier.");
 			}
 			const draft: MutablePluginDraft = {
-				commands: [],
+				commands: new Map(),
 				id: identity.id,
 				sourcePath: context.sourcePath,
-				tools: [],
+				tools: new Map(),
 				workspace: context.workspace,
 			};
 			setDraft(draft);
-			return createRegistrationAPI(draft, isOpen);
+			return createRegistrationAPI(draft, isOpen, diagnostics);
 		},
 	});
-
-const validateTool = (candidate: unknown): PluginTool => {
-	if (
-		!isPlainObject(candidate) ||
-		typeof candidate.name !== "string" ||
-		!pluginToolNamePattern.test(candidate.name) ||
-		!isNonEmptyString(candidate.description) ||
-		!isObjectLike(candidate.inputSchema) ||
-		typeof candidate.inputSchema.safeParse !== "function" ||
-		typeof candidate.handler !== "function"
-	) {
-		throw new Error(
-			"Plugin Tool registrations require a valid local name, description, Zod schema, and handler."
-		);
-	}
-	try {
-		z.toJSONSchema(
-			candidate.inputSchema as unknown as PluginTool["inputSchema"]
-		);
-	} catch (error) {
-		throw new Error(
-			`Plugin Tool '${String(candidate.name)}' has an unsupported Zod input schema: ${messageFor(error)}`
-		);
-	}
-	const tool = candidate as unknown as PluginTool;
-	return Object.freeze({
-		description: tool.description,
-		handler: tool.handler,
-		inputSchema: tool.inputSchema,
-		name: tool.name,
-	});
-};
-
-const validateCommand = (candidate: unknown): PluginCommand => {
-	if (
-		!isPlainObject(candidate) ||
-		typeof candidate.name !== "string" ||
-		!pluginCommandNamePattern.test(candidate.name) ||
-		!isNonEmptyString(candidate.description) ||
-		typeof candidate.handler !== "function"
-	) {
-		throw new Error(
-			"Plugin Command registrations require a short name, description, and handler."
-		);
-	}
-	const command = candidate as unknown as PluginCommand;
-	return Object.freeze({
-		description: command.description,
-		handler: command.handler,
-		name: command.name,
-	});
-};
 
 const loadedPluginFromDraft = (
 	draft: MutablePluginDraft,
@@ -269,8 +252,8 @@ const loadedPluginFromDraft = (
 			"Plugin Identifier must contain only lowercase ASCII letters, digits, and underscores."
 		);
 	}
-	const tools = draft.tools.map(validateTool);
-	const commands = draft.commands.map(validateCommand);
+	const tools = [...draft.tools.values()];
+	const commands = [...draft.commands.values()];
 	const localToolNames = new Set<string>();
 	for (const tool of tools) {
 		if (localToolNames.has(tool.name)) {
@@ -333,6 +316,7 @@ const loadedPluginFromDraft = (
 	return Object.freeze({
 		commands: Object.freeze(registeredCommands),
 		id: draft.id,
+		onBeforeAgentTurn: draft.onBeforeAgentTurn,
 		onSessionShutdown: draft.onSessionShutdown,
 		onSessionStart: draft.onSessionStart,
 		onShutdown: draft.onShutdown,
@@ -398,10 +382,11 @@ export const loadPlugins = async (
 	}
 	const customCommands =
 		distinctPaths.length === 0 ? [] : await getCustomCommands(input.config);
-	const commandNames = new Set([
+	const reservedCommandNames = [
 		...COMMANDS.map(({ name }) => name.toLowerCase()),
 		...customCommands.map(({ name }) => name.toLowerCase()),
-	]);
+	];
+	const commandNames = new Set(reservedCommandNames);
 	const toolNames = new Set<string>(RESERVED_TOOL_NAMES);
 	const loadedPlugins: LoadedPlugin[] = [];
 	const pluginSources = new Map<string, string>();
@@ -449,7 +434,12 @@ export const loadPlugins = async (
 		};
 		try {
 			await factory(
-				createPluginAPI(factoryContext, setDraft, () => registrationOpen),
+				createPluginAPI(
+					factoryContext,
+					setDraft,
+					() => registrationOpen,
+					diagnostics
+				),
 				factoryContext
 			);
 		} catch (error) {
@@ -493,5 +483,7 @@ export const loadPlugins = async (
 	}
 
 	await reportDiagnostics(diagnostics);
-	return createPluginRuntime(loadedPlugins, diagnostics);
+	return createPluginRuntime(loadedPlugins, diagnostics, reservedCommandNames, [
+		...RESERVED_TOOL_NAMES,
+	]);
 };
