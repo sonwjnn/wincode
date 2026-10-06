@@ -687,6 +687,36 @@ test("JSON Mode streams Plugin Tool outcomes as machine-readable events", async 
 	}
 });
 
+test("file Plugins cannot escape their namespaced tool names", async () => {
+	const pluginPathWithCustomName = path.resolve(
+		import.meta.dir,
+		"../fixtures/namespaced-tool-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [path.relative(workspace, pluginPathWithCustomName)],
+		config: createConfigRuntime(workspace, configRoot),
+	});
+	try {
+		await runtime.startSession({
+			sessionId: "namespace-escape-session",
+			workspace,
+		});
+		expect(runtime.getToolDescriptors("namespace-escape-session")).toEqual([]);
+		expect(runtime.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					message: expect.stringContaining(
+						"cannot override its namespaced model-visible name"
+					),
+					sourcePath: pluginPathWithCustomName,
+				}),
+			])
+		);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
 test("a rejected later registration preserves prior tools and reports a diagnostic", async () => {
 	const pluginPathWithLateFailure = path.resolve(
 		import.meta.dir,

@@ -70,10 +70,10 @@ export const subagentsPluginFactory: PluginFactory = (api) => {
 							);
 						},
 						inputSchema: tool.definition.inputSchema,
-						modelName: tool.definition.name,
 						name: tool.definition.name,
 					},
-					"delegation"
+					"delegation",
+					tool.definition.name
 				)
 			);
 		}

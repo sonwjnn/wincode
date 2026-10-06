@@ -88,6 +88,40 @@ afterAll(async () => {
 	await rm(root, { force: true, recursive: true });
 });
 
+test("a colliding final Plugin tool name does not discard unrelated tools", async () => {
+	const { pluginRuntime } = await loadTool();
+	try {
+		const [collidingTool] =
+			pluginRuntime.getToolDescriptors("tool-test-session");
+		if (collidingTool === undefined) {
+			throw new Error("Expected the Jira Plugin Tool descriptor.");
+		}
+		const unrelatedTool = {
+			...collidingTool,
+			localName: "unrelated",
+			name: "plugin_jira_unrelated",
+		};
+		const result = createPluginTools({
+			agentId: agentIdSchema.parse("build"),
+			existingToolNames: [collidingTool.name],
+			gate: { gate: async () => ({ kind: "allow" }) },
+			permissionForAction: async () => ({
+				decision: "allow",
+				safety: false,
+			}),
+			pluginTools: [collidingTool, unrelatedTool],
+			sessionId: "tool-test-session",
+			workspace,
+		});
+
+		expect(result.map(({ definition }) => definition.name)).toEqual([
+			"plugin_jira_unrelated",
+		]);
+	} finally {
+		await pluginRuntime.shutdown();
+	}
+});
+
 test("invalid Plugin Tool input fails before approval or handler execution", async () => {
 	const { gateCalls, pluginRuntime, tool } = await loadTool();
 	try {

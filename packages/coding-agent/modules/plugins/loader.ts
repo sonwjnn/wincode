@@ -209,7 +209,8 @@ const createRegistrationAPI = (
 			assertOpen();
 			try {
 				const validated = validatePluginTool(tool);
-				const modelName = `plugin_${plugin.id}_${validated.name}`;
+				const modelName =
+					validated.modelName ?? `plugin_${plugin.id}_${validated.name}`;
 				if (toolNames.has(modelName)) {
 					throw new Error(
 						`Plugin Tool name '${modelName}' collides with an active tool.`

@@ -133,10 +133,10 @@ const mcpPlugin: PluginFactory = (api) => {
 								{ signal: toolContext.signal }
 							),
 						inputSchema: tool.definition.inputSchema,
-						modelName: tool.definition.name,
 						name: tool.definition.name,
 					},
-					"mcp"
+					"mcp",
+					tool.definition.name
 				)
 			);
 		}

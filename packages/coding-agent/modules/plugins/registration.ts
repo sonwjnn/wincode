@@ -5,7 +5,7 @@ import {
 	isPlainObject,
 } from "@wincode/utils";
 import { z } from "zod";
-import { bundledToolGateSymbol } from "./bundled-tools";
+import { bundledToolGateSymbol, bundledToolNameSymbol } from "./bundled-tools";
 import type {
 	PluginCommandRegistration,
 	PluginInputSchema,
@@ -16,6 +16,33 @@ import type { PluginCommand, PluginTool } from "./types";
 const pluginToolNamePattern = /^[a-z0-9_]+$/u;
 const pluginCommandNamePattern = /^[a-z0-9_-]+$/u;
 const pluginModelNamePattern = /^[a-zA-Z0-9_-]+$/u;
+
+const getBundledModelName = (
+	candidate: object,
+	toolName: string
+): string | undefined => {
+	const record = candidate as {
+		modelName?: unknown;
+		[bundledToolNameSymbol]?: unknown;
+	};
+	if ("modelName" in record) {
+		throw new Error(
+			`Plugin Tool '${toolName}' cannot override its namespaced model-visible name.`
+		);
+	}
+	const modelName = record[bundledToolNameSymbol];
+	if (modelName === undefined) {
+		return;
+	}
+	if (
+		!(isNonEmptyString(modelName) && pluginModelNamePattern.test(modelName))
+	) {
+		throw new Error(
+			`Bundled Plugin Tool '${toolName}' has an invalid model-visible name.`
+		);
+	}
+	return modelName;
+};
 
 /** Validates one Plugin Tool before it can replace an owner's registration. */
 export const validatePluginTool = (candidate: unknown): PluginTool => {
@@ -54,15 +81,7 @@ export const validatePluginTool = (candidate: unknown): PluginTool => {
 	}
 	const tool =
 		candidate as unknown as PluginToolRegistration<PluginInputSchema>;
-	const modelName = tool.modelName;
-	if (
-		modelName !== undefined &&
-		!(isNonEmptyString(modelName) && pluginModelNamePattern.test(modelName))
-	) {
-		throw new Error(
-			`Plugin Tool '${tool.name}' has an invalid model-visible name.`
-		);
-	}
+	const modelName = getBundledModelName(candidate, tool.name);
 	const gateFamily =
 		bundledToolGateSymbol in candidate
 			? candidate[bundledToolGateSymbol]

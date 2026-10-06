@@ -189,11 +189,13 @@ export const createPluginTools = (
 		return [];
 	}
 	const reserved = new Set(context.existingToolNames ?? []);
+	const resolved: ResolvedTool[] = [];
 	for (const tool of context.pluginTools) {
 		if (reserved.has(tool.name)) {
-			return [];
+			continue;
 		}
 		reserved.add(tool.name);
+		resolved.push(pluginTool(tool, context));
 	}
-	return context.pluginTools.map((tool) => pluginTool(tool, context));
+	return resolved;
 };

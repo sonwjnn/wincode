@@ -58,7 +58,6 @@ export type PluginToolRegistration<Schema extends PluginInputSchema> =
 			context: PluginToolContext
 		) => PluginToolResult | Promise<PluginToolResult>;
 		inputSchema: Schema;
-		modelName?: string;
 		name: string;
 	}>;
 
