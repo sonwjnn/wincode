@@ -1,5 +1,4 @@
-import { getErrorMessage, isUndefined } from "@wincode/runtime-utils";
-import { sanitizeText } from "@/shared/display-sanitize";
+import { getErrorMessage, isUndefined, sanitizeText } from "@wincode/utils";
 import type { ResolvedMcpServerConfig } from "./config";
 
 const MAX_SANITIZED_MESSAGE_LENGTH = 2048;

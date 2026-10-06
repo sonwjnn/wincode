@@ -6,7 +6,7 @@ import { isUndefined } from "./guards";
  *
  * Shallow by design — nested values are left untouched. Symbol-keyed
  * properties are not copied because the filter walks string keys; call it with
- * the object literals it exists for. Native on purpose: `@wincode/runtime-utils`
+ * the object literals it exists for. Native on purpose: `@wincode/utils`
  * stays a runtime-dependency-free leaf (ADR-0018).
  */
 export const omitBy = <T extends Record<string, unknown>>(

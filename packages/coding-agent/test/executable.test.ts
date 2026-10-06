@@ -69,7 +69,7 @@ describe("wincode executable", () => {
 						capabilities: {},
 						clientInfo: { name: "executable-smoke" },
 						cwd: executableTestRoot,
-						protocolVersion: 3,
+						protocolVersion: 4,
 					},
 				}),
 				JSON.stringify({
@@ -101,7 +101,7 @@ describe("wincode executable", () => {
 					submissionEvents: true,
 					transcriptPagination: true,
 				},
-				protocolVersion: 3,
+				protocolVersion: 4,
 			},
 		});
 		expect(frames[1]).toEqual({

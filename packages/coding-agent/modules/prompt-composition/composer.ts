@@ -3,7 +3,7 @@ import type {
 	ResolvedAgent,
 	ResolvedTool,
 } from "@wincode/agent-core";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 import {
 	describeVisibleToolPermission,
 	STATIC_TOOL_PERMISSION_ACTIONS,

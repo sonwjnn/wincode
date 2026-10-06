@@ -6,11 +6,7 @@ import {
 	toSessionMessageId,
 	toSubmissionId,
 } from "@wincode/agent-core";
-import {
-	getErrorMessage,
-	isUndefined,
-	omitUndefined,
-} from "@wincode/runtime-utils";
+import { getErrorMessage, isUndefined, omitUndefined } from "@wincode/utils";
 import { toQueuedSubmissionId } from "@/shared/identifiers";
 import { createSessionUserMessage, type SessionFilePart } from "../message";
 import type {
@@ -24,6 +20,7 @@ import type {
 	SessionQueuedSendInput,
 	SessionQueuedSubmission,
 	SessionSteeringAdmission,
+	SessionSteeringCommitReceipt,
 	SessionSteeringMessage,
 	SessionSubmissionAdmission,
 	SessionSubmissionEvent,
@@ -46,39 +43,33 @@ type PreparedAdmission = Readonly<{
 	turnId: AgentTurnId;
 }>;
 
-/** Session-owned queue and lane transitions requested by the input workflow. */
+/** Application effects for opaque inputs scheduled by the Stateful Agent. */
 export type SessionInputLanePort = Readonly<{
 	addExternalization: (
 		id: SessionQueuedSubmission["id"],
 		controller: AbortController,
 		completion: Promise<SessionSendOutcome>
 	) => void;
-	appendQueuedSubmission: (submission: SessionQueuedSubmission) => void;
-	beginSteeringCommit: (id: SessionQueuedSubmission["id"]) => boolean;
 	canDrainQueue: () => boolean;
 	commitSteeringSubmission: (
 		submission: SessionQueuedSubmission
-	) => Promise<SessionSteeringAdmission>;
-	endSteeringCommit: (id: SessionQueuedSubmission["id"]) => void;
+	) => Promise<SessionSteeringCommitReceipt>;
+	completeSteeringSubmission: (
+		submission: SessionQueuedSubmission,
+		receipt: SessionSteeringCommitReceipt
+	) => void;
 	getExternalization: (
 		id: SessionQueuedSubmission["id"]
 	) => SessionInputExternalization | undefined;
 	getSnapshot: () => LiveSessionSnapshot;
+	inputScheduler: AgentSessionPorts["inputScheduler"];
 	isClosed: () => boolean;
 	isExecutionBusy: () => boolean;
 	isExternalizing: (id: SessionQueuedSubmission["id"]) => boolean;
 	isQueueDraining: () => boolean;
-	isSteeringCommitting: () => boolean;
 	isSubmissionBusy: () => boolean;
+	publishQueueChange: () => void;
 	removeExternalization: (id: SessionQueuedSubmission["id"]) => void;
-	removeQueuedSubmission: (
-		id: SessionQueuedSubmission["id"]
-	) => SessionQueuedSubmission | undefined;
-	replaceInputLanes: (
-		queuedSubmissions: readonly SessionQueuedSubmission[],
-		steeringMessages: readonly SessionSteeringMessage[]
-	) => void;
-	replaceQueuedSubmission: (submission: SessionQueuedSubmission) => void;
 	reportSubmissionFailure: (
 		input: SessionSendInput,
 		messageId: SessionMessageId | undefined,
@@ -94,9 +85,6 @@ export type SessionInputLanePort = Readonly<{
 		message: SessionSteeringMessage
 	) => Promise<SessionSendOutcome>;
 	setQueueDraining: (draining: boolean) => void;
-	takeQueuedSubmission: (
-		id: SessionQueuedSubmission["id"]
-	) => SessionQueuedSubmission | undefined;
 	trackBackgroundTask: (task: Promise<unknown>) => void;
 	emitSubmissionEvent: (event: SessionSubmissionEvent) => void;
 	externalizeAttachments: AgentSessionPorts["attachments"]["externalize"];
@@ -167,7 +155,7 @@ const recalledSubmissionEvent = (
 	}),
 });
 
-/** Input-lane policy and queue orchestration; all authoritative transitions return to Agent Session. */
+/** Application preparation and persistence effects around Stateful Agent input scheduling. */
 export const createSessionInputLaneWorkflow = (
 	port: SessionInputLanePort
 ): SessionInputLaneWorkflow => {
@@ -211,10 +199,11 @@ export const createSessionInputLaneWorkflow = (
 		if (port.isExternalizing(next.id)) {
 			return false;
 		}
-		const started = port.takeQueuedSubmission(next.id);
+		const started = port.inputScheduler.takeQueuedSubmission(next.id);
 		if (started === undefined) {
 			return true;
 		}
+		port.publishQueueChange();
 		try {
 			const outcome = await port.runSubmission(started.input);
 			if (outcome.rejected) {
@@ -228,26 +217,31 @@ export const createSessionInputLaneWorkflow = (
 		}
 		return true;
 	};
-	const drainQueueContents = async (): Promise<void> => {
-		while (true) {
-			if (port.isClosed() || port.isSteeringCommitting()) {
-				break;
-			}
-			const snapshot = port.getSnapshot();
+	const drainQueueHead = async (): Promise<boolean> => {
+		if (
+			port.isClosed() ||
+			port.inputScheduler.hasPendingSubmissionTransition()
+		) {
+			return false;
+		}
+		const snapshot = port.getSnapshot();
+		const nextInput = port.inputScheduler.selectNextInput({
+			hasSteeringMessages: snapshot.steeringMessages.length > 0,
+			hasDelegationReports: snapshot.pendingDelegationReports.length > 0,
+		});
+		if (nextInput === "steering") {
 			const steering = snapshot.steeringMessages[0];
-			if (steering !== undefined) {
-				if (!(await drainSteeringHead(steering))) {
-					break;
-				}
-				continue;
-			}
-			const next = snapshot.queuedSubmissions[0];
-			if (next === undefined) {
-				break;
-			}
-			if (!(await drainQueuedHead(next))) {
-				break;
-			}
+			return steering === undefined ? false : drainSteeringHead(steering);
+		}
+		if (nextInput !== "submission") {
+			return false;
+		}
+		const next = port.inputScheduler.getQueuedSubmissions()[0];
+		return next === undefined ? false : drainQueuedHead(next);
+	};
+	const drainQueueContents = async (): Promise<void> => {
+		while (await drainQueueHead()) {
+			// Continue only after the current head has been delivered.
 		}
 	};
 	const drainQueuedSubmissions = async (): Promise<void> => {
@@ -267,27 +261,27 @@ export const createSessionInputLaneWorkflow = (
 			port.setQueueDraining(false);
 		}
 	};
-	const removeQueuedSubmission = (
-		id: SessionQueuedSubmission["id"]
-	): SessionQueuedSubmission | undefined => {
-		const removed = port.removeQueuedSubmission(id);
-		if (removed !== undefined) {
-			releaseQueuedAttachments([removed]);
-		}
-		return removed;
-	};
 	const failQueuedSubmissionAttachments = (
 		queued: SessionQueuedSubmission
 	): SessionSendOutcome => {
-		if (removeQueuedSubmission(queued.id) === undefined) {
-			return port.isClosed()
-				? { rejected: true, reason: SESSION_SHUT_DOWN_ERROR }
-				: { rejected: false };
-		}
 		const reason = port.isClosed()
 			? SESSION_SHUT_DOWN_ERROR
 			: QUEUED_ATTACHMENT_ERROR;
-		port.reportSubmissionFailure(queued.input, queued.messageId, reason);
+		const cleanup = port.inputScheduler
+			.recallQueuedSubmissions((submission) => submission.id === queued.id)
+			.then((removed) => {
+				if (removed.length === 0) {
+					return;
+				}
+				port.publishQueueChange();
+				for (const submission of removed) {
+					port.getExternalization(submission.id)?.controller.abort();
+				}
+				releaseQueuedAttachments(removed);
+				port.reportSubmissionFailure(queued.input, queued.messageId, reason);
+				port.trackBackgroundTask(drainQueuedSubmissions());
+			});
+		port.trackBackgroundTask(cleanup);
 		return { rejected: true, reason };
 	};
 	const publishQueuedSubmissionAttachments = (
@@ -310,9 +304,9 @@ export const createSessionInputLaneWorkflow = (
 			originalAttachmentIds,
 			storedAttachmentIds
 		);
-		const stillQueued = port
-			.getSnapshot()
-			.queuedSubmissions.some((submission) => submission.id === queued.id);
+		const stillQueued = port.inputScheduler
+			.getQueuedSubmissions()
+			.some((submission) => submission.id === queued.id);
 		if (port.isClosed() || controller.signal.aborted || !stillQueued) {
 			if (newAttachmentIds.length > 0) {
 				port.releaseAttachments(newAttachmentIds);
@@ -327,7 +321,13 @@ export const createSessionInputLaneWorkflow = (
 		if (releasedAttachmentIds.length > 0) {
 			port.releaseAttachments(releasedAttachmentIds);
 		}
-		port.replaceQueuedSubmission({ ...queued, input });
+		if (!port.inputScheduler.replaceQueuedSubmission({ ...queued, input })) {
+			if (newAttachmentIds.length > 0) {
+				port.releaseAttachments(newAttachmentIds);
+			}
+			return { rejected: false };
+		}
+		port.publishQueueChange();
 		return { rejected: false };
 	};
 	const finishQueuedSubmissionAttachments = async (
@@ -389,7 +389,15 @@ export const createSessionInputLaneWorkflow = (
 			attachmentController,
 			completion.promise
 		);
-		port.appendQueuedSubmission(queued);
+		if (!port.inputScheduler.enqueueSubmission(queued)) {
+			port.removeExternalization(queued.id);
+			releaseQueuedAttachments([queued]);
+			return Promise.resolve({
+				rejected: true,
+				reason: SESSION_SHUT_DOWN_ERROR,
+			});
+		}
+		port.publishQueueChange();
 		const pending = finishQueuedSubmissionAttachments(
 			queued,
 			attachmentController,
@@ -406,16 +414,9 @@ export const createSessionInputLaneWorkflow = (
 			port.trackBackgroundTask(drainQueuedSubmissions());
 		});
 	};
-	let steeringTail: Promise<void> = Promise.resolve();
-	const deferredRecalls: {
-		readonly ids: readonly SessionWaitingMessageId[] | undefined;
-		readonly reason: "recall" | "turn-failed";
-		readonly resolve: (messages: SessionWaitingMessage[]) => void;
-		readonly reject: (reason?: unknown) => void;
-	}[] = [];
 	const commitQueuedSteering = async (
 		queued: SessionQueuedSubmission
-	): Promise<SessionSteeringAdmission> => {
+	): Promise<SessionSteeringCommitReceipt> => {
 		try {
 			const externalization = port.getExternalization(queued.id);
 			if (externalization !== undefined) {
@@ -423,113 +424,84 @@ export const createSessionInputLaneWorkflow = (
 				if (outcome.rejected) {
 					return {
 						kind: "rejected",
-						messageId: queued.messageId,
-						reason: outcome.reason,
-						submissionId: queued.submissionId,
+						admission: {
+							kind: "rejected",
+							messageId: queued.messageId,
+							reason: outcome.reason,
+							submissionId: queued.submissionId,
+						},
 					};
 				}
 			}
-			const current = port.getSnapshot().queuedSubmissions[0];
+			const current = port.inputScheduler.getQueuedSubmissions()[0];
 			if (current?.id !== queued.id) {
 				return {
 					kind: "rejected",
-					messageId: queued.messageId,
-					reason: "The queued Submission is no longer waiting.",
-					submissionId: queued.submissionId,
+					admission: {
+						kind: "rejected",
+						messageId: queued.messageId,
+						reason: "The queued Submission is no longer waiting.",
+						submissionId: queued.submissionId,
+					},
 				};
 			}
 			return await port.commitSteeringSubmission(current);
 		} catch (error) {
 			return {
 				kind: "rejected",
-				messageId: queued.messageId,
-				reason: getErrorMessage(error, "Could not commit the Submission."),
-				submissionId: queued.submissionId,
+				admission: {
+					kind: "rejected",
+					reason: getErrorMessage(error, "Could not commit the Submission."),
+					messageId: queued.messageId,
+					submissionId: queued.submissionId,
+				},
 			};
 		}
 	};
-	const steer = (): Promise<SessionSteeringAdmission> => {
-		const operation = steeringTail.then(
-			async (): Promise<SessionSteeringAdmission> => {
-				if (port.isClosed()) {
-					return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
-				}
-				const queued = port.getSnapshot().queuedSubmissions[0];
-				if (queued === undefined) {
-					return { kind: "empty" };
-				}
-				if (!port.beginSteeringCommit(queued.id)) {
-					return {
-						kind: "rejected",
-						messageId: queued.messageId,
-						reason: "The queued Submission is no longer waiting.",
-						submissionId: queued.submissionId,
-					};
-				}
-				try {
-					return await commitQueuedSteering(queued);
-				} finally {
-					try {
-						port.endSteeringCommit(queued.id);
-					} finally {
-						flushDeferredRecalls();
-						port.trackBackgroundTask(drainQueuedSubmissions());
-					}
-				}
-			}
-		);
-		steeringTail = operation.then(
-			() => undefined,
-			() => undefined
-		);
-		return operation;
-	};
-	const recallWaitingMessagesNow = (
-		ids: readonly SessionWaitingMessageId[] | undefined,
-		reason: "recall" | "turn-failed"
-	): SessionWaitingMessage[] => {
-		const snapshot = port.getSnapshot();
-		const queued = snapshot.queuedSubmissions.filter((submission) =>
-			waitingMessageMatches(ids, submission.id, submission.submissionId)
-		);
-		if (queued.length === 0) {
-			return [];
+	const steer = async (): Promise<SessionSteeringAdmission> => {
+		if (port.isClosed()) {
+			return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
 		}
-		port.replaceInputLanes(
-			snapshot.queuedSubmissions.filter(
-				(submission) => !queued.includes(submission)
-			),
-			snapshot.steeringMessages
+		const result = await port.inputScheduler.steerQueuedSubmission(
+			async (queued) => {
+				const receipt = await commitQueuedSteering(queued);
+				return {
+					committed: receipt.kind === "committed",
+					receipt,
+				};
+			},
+			(queued, receipt) => port.completeSteeringSubmission(queued, receipt)
 		);
-		for (const submission of queued) {
-			port.getExternalization(submission.id)?.controller.abort();
+		if (result.kind === "empty") {
+			return { kind: "empty" };
 		}
-		releaseQueuedAttachments(queued);
-		for (const submission of queued) {
-			port.emitSubmissionEvent(recalledSubmissionEvent(submission, reason));
-		}
-		return queued;
-	};
-	const flushDeferredRecalls = (): void => {
-		for (const recall of deferredRecalls.splice(0)) {
-			try {
-				recall.resolve(recallWaitingMessagesNow(recall.ids, recall.reason));
-			} catch (error) {
-				recall.reject(error);
-			}
-		}
+		port.trackBackgroundTask(drainQueuedSubmissions());
+		return result.receipt.admission;
 	};
 	const recallWaitingMessagesWithReason = (
 		ids: readonly SessionWaitingMessageId[] | undefined,
 		reason: "recall" | "turn-failed"
 	): Promise<SessionWaitingMessage[]> => {
-		if (!port.isSteeringCommitting()) {
-			return Promise.resolve(recallWaitingMessagesNow(ids, reason));
-		}
-		const { promise, resolve, reject } =
-			Promise.withResolvers<SessionWaitingMessage[]>();
-		deferredRecalls.push({ ids, reason, resolve, reject });
-		return promise;
+		const recalled = port.inputScheduler.recallQueuedSubmissions(
+			(submission) =>
+				waitingMessageMatches(ids, submission.id, submission.submissionId),
+			(submissions) => {
+				port.publishQueueChange();
+				for (const submission of submissions) {
+					port.getExternalization(submission.id)?.controller.abort();
+				}
+				releaseQueuedAttachments(submissions);
+				for (const submission of submissions) {
+					port.emitSubmissionEvent(recalledSubmissionEvent(submission, reason));
+				}
+			}
+		);
+		return recalled.then((submissions) => {
+			if (submissions.length > 0) {
+				port.trackBackgroundTask(drainQueuedSubmissions());
+			}
+			return [...submissions];
+		});
 	};
 	const recallWaitingMessages = (
 		ids?: readonly SessionWaitingMessageId[]

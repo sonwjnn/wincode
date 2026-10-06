@@ -1,5 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
-import { isNull } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/utils";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { WorkspacePolicy } from "@/modules/tools";
 import {

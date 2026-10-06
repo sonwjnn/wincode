@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { ModelId } from "@wincode/ai/models";
-import { isNull, isString, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isString, isUndefined } from "@wincode/utils";
 import { getGitBranch } from "@/shared/git/get-git-branch";
 import {
 	formatGitStatusSummary,

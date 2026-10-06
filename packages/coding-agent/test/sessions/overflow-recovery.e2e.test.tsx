@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 
 const previousEnvironment = {
 	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
@@ -98,6 +98,7 @@ const {
 	seedCompactionHistory,
 	settleSessionUi,
 	waitForSessionCondition,
+	waitForSessionFrame,
 	writeE2EFrame,
 } = await import("@/test/support/e2e-fixture");
 
@@ -122,6 +123,9 @@ test("continues the compacted Session Context after a provider context overflow"
 		const activeSetup = rendered.setup;
 		setup = activeSetup;
 		await rendered.registryReady;
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Ask anything...")
+		);
 		await act(async () => {
 			await activeSetup.flush();
 			await activeSetup.flush();

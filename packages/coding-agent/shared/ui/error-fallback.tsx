@@ -5,7 +5,7 @@ import {
 	isError,
 	isString,
 	resolveLogFilePath,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { useEffect, useState } from "react";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { useErrorRecovery } from "@/shared/providers/error-recovery/error-recovery-provider";

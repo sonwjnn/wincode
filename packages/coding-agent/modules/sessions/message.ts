@@ -34,7 +34,7 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import { z } from "zod";
@@ -103,8 +103,12 @@ type NamedToolPart<Name extends string> = ToolPartFields & {
 };
 
 export type SessionStaticToolPart = {
-	[Name in CodingToolName | "delegate" | "skill"]: NamedToolPart<Name>;
-}[CodingToolName | "delegate" | "skill"];
+	[Name in
+		| CodingToolName
+		| "delegate"
+		| "skill"
+		| "submit_result"]: NamedToolPart<Name>;
+}[CodingToolName | "delegate" | "skill" | "submit_result"];
 
 export type SessionDynamicToolPart = ToolPartFields & {
 	readonly dynamic?: boolean;

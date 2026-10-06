@@ -21,11 +21,12 @@ import type {
 	ChatModelSelection,
 	ConnectionProviderId,
 } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { createMcpRegistry } from "@wincode/mcp";
+import { isUndefined } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { createMcpRegistry, McpProvider } from "@/modules/mcp";
+import { McpProvider } from "@/modules/mcp";
 import {
 	ModelPricingProvider,
 	type ModelPricingTable,
@@ -36,6 +37,7 @@ import {
 } from "@/modules/permissions";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
+import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -45,6 +47,7 @@ import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
 import { SessionSurface } from "@/modules/sessions/ui/views/session-surface";
 import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/session-view";
+import { createSubagentTaskRuntime } from "@/plugins/subagents/task-runtime";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
@@ -302,7 +305,6 @@ export const renderSession = async ({
 																workspace,
 															})
 														}
-														workspace={workspace}
 													>
 														<RouterContextProvider router={router}>
 															<CommandControllerProvider>
@@ -335,6 +337,9 @@ export const renderSession = async ({
 export const cleanupSessionRender = (): void => {
 	setMarkdownTreeSitterClientForTests(null);
 };
+
+export const shutdownSessionHosts = (): Promise<void> =>
+	getInteractiveSessionHostManager(createSubagentTaskRuntime).shutdownAll();
 
 export const writeE2EFrame = (setup: TestRendererSetup): void => {
 	const framePath = process.env.WINCODE_E2E_FRAME_PATH;

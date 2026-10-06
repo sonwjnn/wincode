@@ -7,7 +7,7 @@ import {
 	type LogFields,
 	logger,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { SessionId } from "@/shared/identifiers";
 import type {
 	CompactSessionInput,

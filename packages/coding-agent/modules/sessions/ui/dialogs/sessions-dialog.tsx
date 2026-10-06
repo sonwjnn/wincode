@@ -1,6 +1,6 @@
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { getErrorMessage } from "@wincode/runtime-utils";
+import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLatest } from "@/shared/hooks/use-latest";
 import type { SessionId } from "@/shared/identifiers";

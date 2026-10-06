@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import { AgentInvariantError } from "./errors";
 import {
 	type AgentTurnCancelledEvent,

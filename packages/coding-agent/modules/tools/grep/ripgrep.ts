@@ -5,7 +5,7 @@ import {
 	isObjectLike,
 	isPlainObject,
 	isString,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import { truncateUtf8 } from "../output-bounds";
 import { getToolResourceLimits } from "../resource-limits";

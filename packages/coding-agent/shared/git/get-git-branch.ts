@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { isNull } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/utils";
 import { runBoundedGitCommand } from "./get-git-status";
 
 /** Resolves the current git branch for `cwd`, or `null` when it isn't a git repo (or HEAD is detached). */

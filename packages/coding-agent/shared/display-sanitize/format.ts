@@ -4,7 +4,7 @@ import {
 	formatModelLabel,
 	normalizeChatModelSelection,
 } from "@wincode/ai/models";
-import { isNull, isString, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isString, isUndefined } from "@wincode/utils";
 
 const CAMEL_CASE_BOUNDARY_PATTERN = /([a-z0-9])([A-Z])/g;
 const FIRST_CHARACTER_PATTERN = /^./;

@@ -9,6 +9,7 @@ import type {
 	SessionRecord,
 	SessionRecordId,
 	SessionSubmissionStatus,
+	StatefulAgentInputScheduler,
 	SubmissionId,
 	ToolCallId,
 } from "@wincode/agent-core";
@@ -26,6 +27,7 @@ import type {
 } from "@/modules/skills";
 import type { CodingToolName } from "@/modules/tools";
 import type {
+	DelegationTaskId,
 	QueuedSubmissionId,
 	SessionId,
 	SteeringMessageId,
@@ -42,6 +44,7 @@ import type {
 	CompactionTriggerReason,
 	SessionCompaction,
 } from "../compaction/types";
+import type { DelegationReportEnvelope } from "../delegation/types";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import type { FileMentionPart, SessionMessage } from "../message";
 import type {
@@ -81,6 +84,18 @@ export type SessionSteeringAdmission =
 			readonly submissionId: SubmissionId;
 			readonly turnId?: AgentTurnId;
 	  };
+
+/** Application data published after the Stateful Agent removes a committed head. */
+export type SessionSteeringCommitReceipt =
+	| Readonly<{
+			kind: "rejected";
+			admission: Extract<SessionSteeringAdmission, { kind: "rejected" }>;
+	  }>
+	| Readonly<{
+			kind: "committed";
+			admission: Extract<SessionSteeringAdmission, { kind: "steered" }>;
+			steeringMessage: SessionSteeringMessage;
+	  }>;
 
 export type SessionContinuationOutcome =
 	| { readonly kind: "rejected"; readonly reason: string }
@@ -123,7 +138,7 @@ export type SessionExecution = ReadonlyDeep<{
 	submissionId?: SubmissionId;
 	/** The Agent the execution runs as. */
 	agent: AgentId;
-	/** The assistant Session Message the execution streams into. */
+	/** The first assistant Session Message for this execution. */
 	assistantId: SessionMessageId;
 	/** The Model Target selection the execution runs against. */
 	model: ChatModelSelection;
@@ -161,9 +176,9 @@ export type SessionQueuedSendInput = SessionSendInput & {
 
 /**
  * One Submission a busy session accepted and holds instead of running: the send
- * it will run, and its identifier. It is transient Agent Session state, never
- * a Session Record, and it enters the Session Transcript only when it starts
- * running.
+ * it will run, and its identifier. The Stateful Agent holds this opaque
+ * application payload transiently; it is never a Session Record and enters the
+ * Session Transcript only when it starts running.
  */
 export type SessionQueuedSubmission = ReadonlyDeep<{
 	id: QueuedSubmissionId;
@@ -234,6 +249,8 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 	 * after failure. Unlike queued Submissions, these cannot be recalled.
 	 */
 	steeringMessages: SessionSteeringMessage[];
+	/** Inbox reports not yet consumed as parent Session input. */
+	pendingDelegationReports: DelegationReportEnvelope[];
 	/** Whether the session is running a submission, from its command to its settle. */
 	turnActive: boolean;
 	/** Session Transcript: the messages the session presents to the user. */
@@ -381,9 +398,10 @@ export type SessionTurnRequest = Readonly<{
 	callbacks: SessionTurnCallbacks;
 	/** The Agent Turn execution the host runs. */
 	execution: SessionExecution;
+	/** The assistant message ID for the current follow-up segment. */
+	getAssistantMessageId?: () => SessionMessageId;
 	/** The hydrated messages the Agent Turn sends to the model. */
 	messages: readonly SessionMessage[];
-	/** The resolved Agent the execution runs as. */
 	resolvedAgent: SessionResolvedAgent;
 	/** The Skill this execution's turn must load, when the submission asked for one. */
 	skillRequest?: SkillRequestContext;
@@ -393,6 +411,8 @@ export type SessionTurnRequest = Readonly<{
 	 * after persisting their processing state and preparing their model input.
 	 */
 	takeSteeringMessages: () => Promise<readonly SessionMessage[]>;
+	/** Takes committed Delegation Reports for delivery as safe Stateful Agent follow-ups. */
+	takeFollowUpMessages: () => Promise<readonly SessionMessage[]>;
 }>;
 
 /** What one Agent Turn execution reported to the Agent Session. */
@@ -417,14 +437,23 @@ export type SessionTurnRunner = Readonly<{
  */
 export type AgentSessionPorts = Readonly<{
 	attachments: SessionAttachmentPort;
+	/** The Stateful Agent's transient Submission queue and lane selector. */
+	inputScheduler: StatefulAgentInputScheduler<SessionQueuedSubmission>;
 	/** The Session Compaction module whose per-session in-flight map owns admission. */
 	compaction: SessionCompactionPort;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
+	consumeDelegationReport: (input: {
+		assistantCheckpoint?: SessionRecord;
+		record: SessionRecord;
+		taskId: DelegationTaskId;
+	}) => Promise<boolean>;
+	listPendingDelegationReports: () => Promise<DelegationReportEnvelope[]>;
 	/** Persists one exact committed Submission's processing state. */
 	updateSubmissionStatus: (
 		input: SessionSubmissionStatusUpdate
 	) => Promise<void>;
+	persistReportContinuationPaused: (paused: boolean) => Promise<void>;
 	/** Resolves the Agent, Model, and reasoning selection when a Submission starts. */
 	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
 	/** Resolves the @path file mentions of a prompt. */
@@ -441,7 +470,10 @@ export type AgentSessionOptions = Readonly<{
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
-	initialDelegatedMessageIds?: ReadonlySet<SessionMessageId>;
+	/** Enables automatic idle report continuation for this Session Host. */
+	autoContinueDelegationReports?: boolean;
+	initialPendingDelegationReports?: readonly DelegationReportEnvelope[];
+	initialReportContinuationSuppressed?: boolean;
 	initialSessionModel?: ChatModelSelection;
 	initialSessionEffort?: Effort;
 	initialSessionReasoningMode?: ReasoningMode;
@@ -547,6 +579,8 @@ export type AgentSessionInternalPort = Readonly<{
 	requestApproval: (
 		request: ToolApprovalRequest
 	) => Promise<SessionApprovalOutcome>;
+	/** Publishes a committed report for safe active-turn delivery or idle continuation. */
+	publishDelegationReport: (report: DelegationReportEnvelope) => void;
 	/** Ends the session after active durable cleanup has completed. */
 	shutdown: () => Promise<void>;
 	/** Replaces one execution's Session View State, never another's. */

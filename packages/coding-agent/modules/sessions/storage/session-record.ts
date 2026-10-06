@@ -3,7 +3,6 @@ import {
 	type AgentId,
 	AgentInvariantError,
 	type AgentTurnId,
-	isAgentTurnDelegation,
 	isAgentTurnMessageRecord,
 	isAgentTurnTextPart,
 	isOperationalFailure,
@@ -14,14 +13,12 @@ import {
 	SESSION_RECORD_VERSION,
 	type SessionAttachmentReferencePart,
 	type SessionFileMentionPart,
-	type SessionMessageId,
 	type SessionMessageMetadataRecord,
 	type SessionMessagePart,
 	type SessionMessageRecord,
 	type SessionRecord,
 	type SessionRecordOutcome,
 	type SessionToolCallPart,
-	toSessionMessageId,
 	toSessionRecordId,
 } from "@wincode/agent-core";
 import {
@@ -42,7 +39,7 @@ import {
 	isUndefined,
 	omitUndefined,
 	pickTruthy,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
 import { codingToolNames } from "@/modules/tools";
@@ -179,7 +176,16 @@ const isSessionRecordOutcome = (
 		return false;
 	}
 	const outcome = value as UnknownRecord;
-	if (outcome.kind === "user" || outcome.kind === "tool") {
+	if (outcome.kind === "user") {
+		return (
+			Object.keys(outcome).every(
+				(key) => key === "kind" || key === "delegationReportTaskId"
+			) &&
+			(isUndefined(outcome.delegationReportTaskId) ||
+				isNonEmptyString(outcome.delegationReportTaskId))
+		);
+	}
+	if (outcome.kind === "tool" || outcome.kind === "assistant-checkpoint") {
 		return Object.keys(outcome).length === 1;
 	}
 	return (
@@ -223,13 +229,6 @@ export const getSessionRecordValidationError = (
 	if (!isNonEmptyString(record.agentId)) {
 		return "record agent id must be a non-empty string";
 	}
-	if (
-		!(
-			isUndefined(record.delegation) || isAgentTurnDelegation(record.delegation)
-		)
-	) {
-		return "record delegation correlation is invalid";
-	}
 	if (!isRecordModel(record.model)) {
 		return "record model must name a provider and model id";
 	}
@@ -251,7 +250,9 @@ export const getSessionRecordValidationError = (
 	}
 	if (
 		(record.outcome.kind === "user" && message.role !== "user") ||
-		(record.outcome.kind === "assistant" && message.role !== "assistant") ||
+		((record.outcome.kind === "assistant" ||
+			record.outcome.kind === "assistant-checkpoint") &&
+			message.role !== "assistant") ||
 		(record.outcome.kind === "tool" &&
 			(message.role !== "assistant" ||
 				!message.parts.some(isSessionToolCallPart)))
@@ -517,7 +518,6 @@ const toDurableSessionPart = (
 };
 export const buildUserSessionRecord = ({
 	agentId,
-	delegation,
 	message,
 	model,
 	turnId,
@@ -525,7 +525,6 @@ export const buildUserSessionRecord = ({
 	reasoningMode,
 }: {
 	agentId: AgentId;
-	delegation?: SessionRecord["delegation"];
 	message: SessionMessage;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	turnId: AgentTurnId;
@@ -541,7 +540,6 @@ export const buildUserSessionRecord = ({
 	const hasChoice = !isUndefined(effort ?? reasoningMode);
 	return {
 		agentId,
-		...omitUndefined({ delegation }),
 		id: toSessionRecordId(`record-${randomUUIDv7()}`),
 		messages: [durableMessage],
 		model: {
@@ -579,28 +577,8 @@ export const toDurableSessionMessageRecord = (
 	};
 };
 
-/** The identity prefix a delegated Subagent row's projected messages carry. */
-const DELEGATED_MESSAGE_ID_PREFIX = "delegated-turn:";
-
-/**
- * Whether a projected message identity belongs to a delegated Subagent row:
- * the Transcript presents those grouped after the primary turns, while a
- * Session Context leaves them out.
- */
-export const isDelegatedSessionMessageId = (id: SessionMessageId): boolean =>
-	id.startsWith(DELEGATED_MESSAGE_ID_PREFIX);
-
-const delegatedMessageId = (
-	record: SessionRecord,
-	message: SessionMessageRecord,
-	index: number
-): SessionMessageId =>
-	toSessionMessageId(
-		`${DELEGATED_MESSAGE_ID_PREFIX}${record.turnId}:${index}:${message.id}`
-	);
-
 const projectRecord = (record: SessionRecord): SessionMessage[] =>
-	record.messages.flatMap((message, index) => {
+	record.messages.flatMap((message) => {
 		if (message.id === "skill-context") {
 			return [];
 		}
@@ -610,38 +588,22 @@ const projectRecord = (record: SessionRecord): SessionMessage[] =>
 			record.outcome.terminal.kind !== "completed"
 				? record.outcome.terminal.kind
 				: undefined;
-		const projectedWithOutcome = isUndefined(terminalOutcome)
-			? projected
-			: {
-					...projected,
-					metadata: {
-						...(projected.metadata ?? {}),
-						...(terminalOutcome === "interrupted" ? { interrupted: true } : {}),
-						terminalOutcome,
-					},
-				};
+		if (isUndefined(terminalOutcome)) {
+			return [projected];
+		}
 		return [
-			isUndefined(record.delegation)
-				? projectedWithOutcome
-				: {
-						...projectedWithOutcome,
-						id: delegatedMessageId(record, message, index),
-					},
+			{
+				...projected,
+				metadata: {
+					...(projected.metadata ?? {}),
+					...(terminalOutcome === "interrupted" ? { interrupted: true } : {}),
+					terminalOutcome,
+				},
+			},
 		];
 	});
 
-/**
- * Projects committed rows into the presentation-owned message contract.
- * Primary rows retain storage order; delegated rows remain grouped after the
- * primary transcript so child records cannot absorb the parent's later rows.
- */
+/** Projects committed rows into presentation messages in storage order. */
 export const projectSessionRecords = (
 	records: readonly SessionRecord[]
-): SessionMessage[] => [
-	...records
-		.filter((record) => isUndefined(record.delegation))
-		.flatMap(projectRecord),
-	...records
-		.filter((record) => !isUndefined(record.delegation))
-		.flatMap(projectRecord),
-];
+): SessionMessage[] => records.flatMap(projectRecord);

@@ -18,6 +18,11 @@ import { logUnhandledUiError } from "../shared/utils/ui-error-log";
 import { ThemedRoot } from "./layouts/themed-root";
 import { routeTree } from "./routeTree.gen";
 
+// The terminal router has memory history and no browser viewport to scroll.
+if (typeof Reflect.get(globalThis, "scrollTo") !== "function") {
+	Reflect.set(globalThis, "scrollTo", () => undefined);
+}
+
 const PendingFallback = () => {
 	const { colors } = useTheme();
 	return <text fg={colors.text}>Loading...</text>;
@@ -39,6 +44,8 @@ const router = createRouter({
 	defaultPendingComponent: PendingFallback,
 	history: createMemoryHistory({ initialEntries: ["/"] }),
 	isServer: false,
+	// Memory history has no browser window from which the router can infer origin.
+	origin: "http://localhost",
 	routeTree,
 });
 
@@ -73,12 +80,14 @@ const finishRenderer = async (
 	}
 };
 
-export const runInteractive = async (): Promise<number> => {
+export const runInteractive = async (
+	rendererFactory: typeof createCliRenderer = createCliRenderer
+): Promise<number> => {
 	await router.load();
 	// OpenTUI has no DOM Transitioner to acknowledge this render.
 	router._rendered ??= [];
 
-	const renderer = await createCliRenderer({
+	const renderer = await rendererFactory({
 		enableMouseMovement: true,
 		exitOnCtrlC: false,
 		targetFps: 60,

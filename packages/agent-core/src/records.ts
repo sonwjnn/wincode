@@ -15,7 +15,7 @@ import {
 	isPositiveInteger,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { ReadonlyDeep } from "type-fest";
 import { isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
@@ -30,7 +30,6 @@ import type {
 import type { SkillActivationSource } from "./skill-activation";
 import { isToolFailureDetails, type ToolFailureDetails } from "./tools";
 import type {
-	AgentTurnDelegation,
 	AgentTurnId,
 	AgentTurnInterruptionReason,
 	AgentTurnTextPart,
@@ -179,16 +178,20 @@ export type AgentTurnOutcomeRecord = ReadonlyDeep<
 >;
 
 /**
- * Durable meaning of one Session Record row. User and Tool rows are
- * ordinary content checkpoints; assistant rows also carry the terminal Agent
- * Turn outcome that produced the assistant content.
+ * Durable meaning of one Session Record row. User and Tool rows are ordinary
+ * content checkpoints; assistant rows are either non-terminal output
+ * checkpoints or terminal Agent Turn outcomes.
  */
 export type SessionRecordOutcome = ReadonlyDeep<
 	| {
+			delegationReportTaskId?: string;
 			kind: "user";
 	  }
 	| {
 			kind: "tool";
+	  }
+	| {
+			kind: "assistant-checkpoint";
 	  }
 	| {
 			kind: "assistant";
@@ -203,7 +206,6 @@ export type SessionRecordOutcome = ReadonlyDeep<
  */
 export type SessionRecord = ReadonlyDeep<{
 	agentId: AgentId;
-	delegation?: AgentTurnDelegation;
 	id: SessionRecordId;
 	messages: SessionMessageRecord[];
 	model: {

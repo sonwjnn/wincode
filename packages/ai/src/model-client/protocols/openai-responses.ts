@@ -1,4 +1,4 @@
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike } from "@wincode/utils";
 import { normalizeModelUsage } from "../../model-usage";
 import { readSseEvents } from "../sse";
 import type {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isJsonValue } from "@/modules/mcp";
+import { isJsonValue } from "@wincode/mcp";
 
 const nestedValue = (depth: number): unknown => {
 	let value: unknown = "leaf";

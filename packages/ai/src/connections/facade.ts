@@ -1,5 +1,5 @@
 import type { ConnectionProviderId } from "@wincode/ai/models";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 import type {
 	AuthorizationByProvider,
 	ConnectionProviderSummary,

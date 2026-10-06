@@ -14,7 +14,7 @@ import {
 	getSupportedReasoningModes,
 	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
-import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { CommandSuggestion } from "@/modules/commands/command-controller";

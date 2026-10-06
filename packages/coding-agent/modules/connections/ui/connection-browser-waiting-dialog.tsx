@@ -1,6 +1,6 @@
 import { useKeyboard } from "@opentui/react";
 import type { ConnectionProviderId as ProviderId } from "@wincode/ai/models";
-import { getErrorMessage as getRuntimeErrorMessage } from "@wincode/runtime-utils";
+import { getErrorMessage as getRuntimeErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	useDialog,

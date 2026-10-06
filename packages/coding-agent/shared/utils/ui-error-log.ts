@@ -1,4 +1,4 @@
-import { isObjectLike, type LogFields, logger } from "@wincode/runtime-utils";
+import { isObjectLike, type LogFields, logger } from "@wincode/utils";
 import { errorDiagnosticFields } from "./error-log-fields";
 
 export type UiErrorScope = "route" | "root";

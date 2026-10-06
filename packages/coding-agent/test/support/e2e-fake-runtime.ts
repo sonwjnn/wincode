@@ -29,6 +29,8 @@ export type FakeModelClientRecorder = {
 	readonly summaryText: string;
 	/** A per-test hook that can hold a real model request in flight. */
 	beforeStep?: (request: ModelStepRequest) => Promise<void>;
+	/** A test-specific script for conversation-level integration journeys. */
+	stepScript?: FakeModelStepScript;
 	/** Pauses after streamed text reaches the Session Snapshot. */
 	afterTextDelta?: () => Promise<void>;
 };
@@ -47,6 +49,10 @@ const defaultModelStepScript: FakeModelStepScript = async function* (
 	request,
 	recorder
 ): AsyncGenerator<ModelStreamPart> {
+	if (recorder.stepScript !== undefined) {
+		yield* recorder.stepScript(request, recorder);
+		return;
+	}
 	recorder.requests.push({
 		kind: "chat",
 		messages: request.messages.map((message) => ({

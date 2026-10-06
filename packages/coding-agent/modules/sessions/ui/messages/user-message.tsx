@@ -1,5 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
-import { isObjectLike, isString, isUndefined } from "@wincode/runtime-utils";
+import { isObjectLike, isString, isUndefined } from "@wincode/utils";
 import { findFileMentionRanges } from "@/modules/file-mentions";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useTheme } from "@/shared/providers/theme/theme-provider";

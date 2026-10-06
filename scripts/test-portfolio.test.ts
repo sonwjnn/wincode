@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { access, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { isError } from "@wincode/runtime-utils";
+import { isError } from "@wincode/utils";
 import { spawnSync } from "bun";
 
 const repositoryRoot = resolve(import.meta.dir, "..");

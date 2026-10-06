@@ -6,10 +6,9 @@ one Workspace, binds exactly once to one Session Host, and keeps that Host until
 shutdown; the Agent Session is the sole state authority behind the adapter.
 
 Status: accepted
-Application-boundary note: ADR-0027 moved ownership of the RPC adapter from
-the CLI package into RPC Mode of `@wincode/coding-agent` without changing the
-one-Host-per-process lifecycle. This decision's wire contract is revised for
-issue #149 below.
+Application-boundary note: ADR-0027 moved the RPC adapter into `@wincode/coding-agent`; its former one-Host-per-process rule is subsequently superseded by ADR-0035. The explicit command-intent wire revision for issue #149 below remains a separate contract.
+
+Session-binding revision: ADR-0035 supersedes the one-Host-per-process rule, single-session binding, session-switch teardown, and their protocol shape. RPC keeps one active Session for default commands and realtime events, but switching views preserves other running Sessions and permits opening a child Session. The structured input, steering, attachment, and error semantics below remain historical constraints where they do not conflict.
 
 Wire-contract revision: Submission input carries one explicit
 `intent: { kind: "custom" | "skill", name }`. Text inference for commands and

@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { isObjectLike, isString, isUndefined } from "@wincode/runtime-utils";
-import type { McpCatalogSnapshot } from "@/modules/mcp/registry";
+import { agentIdSchema } from "@wincode/agent-core";
 import {
 	createMcpToolExecutor,
 	MAX_MCP_RESULT_BYTES,
+	type McpCatalogSnapshot,
 	normalizeMcpResult,
-} from "@/modules/mcp/result";
-import { agentId, mcpSnapshotId } from "../support/identifiers";
+	toMcpSnapshotId,
+} from "@wincode/mcp";
+import { isObjectLike, isString, isUndefined } from "@wincode/utils";
+
+const agentId = (value: string) => agentIdSchema.parse(value);
 
 describe("MCP result normalization", () => {
 	test("keeps safe text/structured values and metadata only", () => {
@@ -28,7 +31,7 @@ describe("MCP result normalization", () => {
 		let receivedSignal: AbortSignal | undefined;
 		const snapshot: McpCatalogSnapshot = {
 			agent: agentId("build"),
-			id: mcpSnapshotId("snapshot-1"),
+			id: toMcpSnapshotId("snapshot-1"),
 			manifest: [],
 			tools: new Map(),
 		};

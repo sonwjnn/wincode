@@ -1,4 +1,4 @@
-import { type LogFields, logger } from "@wincode/runtime-utils";
+import { type LogFields, logger } from "@wincode/utils";
 import { errorLogFields } from "./error-log-fields";
 
 export const logSessionPersistenceFailure = (

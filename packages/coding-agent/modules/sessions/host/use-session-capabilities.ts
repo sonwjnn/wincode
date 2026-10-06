@@ -9,7 +9,9 @@ import { createSessionCompaction } from "../compaction/compaction";
 import { estimateCompactionTokens } from "../compaction/config";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { useCompactionSettings } from "../compaction/use-compaction-settings";
+import { createApplicationSessionDelegationRuntime } from "../hooks/runtime-turn";
 import { getSessionStore } from "../storage/get-session-store";
+import { getInteractiveSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities } from "./types";
 
 /**
@@ -63,6 +65,10 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			getMcp: () => mcpRef.current,
 			getRegistry: () => registryRef.current,
 			getStore: () => getSessionStore(),
+			getSessionHostManager: () =>
+				getInteractiveSessionHostManager(
+					createApplicationSessionDelegationRuntime
+				),
 			getToolPermission: () => toolPermissionRef.current,
 		}),
 		[]

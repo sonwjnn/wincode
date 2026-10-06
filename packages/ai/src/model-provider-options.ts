@@ -4,7 +4,7 @@ import {
 	isNumber,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
 import type { ModelMetadataEntry } from "./model-metadata";

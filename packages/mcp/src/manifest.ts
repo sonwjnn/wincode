@@ -3,9 +3,10 @@ import {
 	isJsonObject as isRuntimeJsonObject,
 	isJsonValue as isRuntimeJsonValue,
 	isString,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { JsonObject, JsonValue, UnknownRecord } from "type-fest";
 import { z } from "zod";
+import { utf8ByteLength } from "./utf8-byte-length";
 
 export const MAX_MCP_TOOL_COUNT = 128;
 export const MAX_MCP_TOOL_NAME_LENGTH = 64;
@@ -22,9 +23,6 @@ export const isJsonValue = (value: unknown): value is JsonValue =>
 
 export const isJsonObject = (value: unknown): value is JsonObject =>
 	isRuntimeJsonObject(value, { maxDepth: MAX_JSON_NESTING_DEPTH });
-
-const byteLength = (value: string): number =>
-	new TextEncoder().encode(value).byteLength;
 
 export type McpToolManifestEntry = {
 	name: string;
@@ -58,7 +56,7 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 			if (!isString(entry.description)) {
 				return false;
 			}
-			if (byteLength(entry.description) > MAX_MCP_TOOL_DESCRIPTION_BYTES) {
+			if (utf8ByteLength(entry.description) > MAX_MCP_TOOL_DESCRIPTION_BYTES) {
 				return false;
 			}
 			if (!isJsonObject(entry.inputSchema)) {
@@ -66,7 +64,7 @@ export const mcpToolManifestEntrySchema: z.ZodType<McpToolManifestEntry> =
 			}
 			try {
 				if (
-					byteLength(JSON.stringify(entry.inputSchema)) >
+					utf8ByteLength(JSON.stringify(entry.inputSchema)) >
 					MAX_MCP_TOOL_SCHEMA_BYTES
 				) {
 					return false;
@@ -93,7 +91,7 @@ export const mcpToolManifestSchema = z
 			}
 			names.add(tool.name);
 		}
-		if (byteLength(JSON.stringify(tools)) > MAX_MCP_MANIFEST_BYTES) {
+		if (utf8ByteLength(JSON.stringify(tools)) > MAX_MCP_MANIFEST_BYTES) {
 			context.addIssue({
 				code: "custom",
 				message: "manifest exceeds byte limit",

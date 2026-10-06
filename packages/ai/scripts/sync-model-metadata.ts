@@ -10,7 +10,7 @@
 // to fail when the committed file is not what the current inputs produce.
 
 import * as path from "node:path";
-import { readUtf8File } from "@wincode/runtime-utils";
+import { readUtf8File } from "@wincode/utils";
 import { modelCatalog } from "../src/catalog";
 import { buildModelMetadataFile, MANUAL_OVERLAYS } from "./metadata-model";
 

@@ -16,10 +16,9 @@ live state. The hook binds that Engine and never writes session state.
 
 Status: accepted
 
-Revised 2026-09-20: the clause that "the port surface is the TUI's rather than a
-second host's" is superseded by ADR-0023, which builds the non-TUI host this ADR
-anticipated and makes that surface UI-neutral. Nothing else here changes — the
-Engine keeps one owner, one command lane, and per-execution scope.
+Revised by ADR-0035: the one-live-writer and per-execution-scope principles remain, but a Stateful Agent in `@wincode/agent-core` now owns live conversation state, and a delegated conversation is its own durable Session. The historical Session Engine ownership and view-bound delegated execution described below no longer apply.
+
+Revised 2026-09-20: ADR-0023 made the host port surface UI-neutral. That revision preceded ADR-0035, which later moved the live owner to agent-core while retaining the one-writer and per-execution-scope principles.
 
 The state-ownership half of this decision has shipped, and so has execution
 scoping: the Engine tracks the live Agent Turn executions of a session with

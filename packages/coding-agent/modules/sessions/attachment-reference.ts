@@ -1,5 +1,5 @@
 import type { AttachmentId } from "@wincode/agent-core";
-import { omitUndefined } from "@wincode/runtime-utils";
+import { omitUndefined } from "@wincode/utils";
 import type { Merge } from "type-fest";
 import { z } from "zod";
 import type { SessionFilePart } from "./message";

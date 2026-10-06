@@ -4,7 +4,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { JsonObject, Promisable, UnknownRecord } from "type-fest";
 import type { z } from "zod";
 import { AgentInvariantError } from "./errors";
@@ -34,6 +34,7 @@ type ToolValidationResult =
  */
 export type ToolDefinition = Readonly<{
 	description: string;
+	exclusiveInBatch?: true;
 	inputSchema: z.ZodType | ToolJsonSchema;
 	name: string;
 	outputSchema?: z.ZodType;
@@ -57,8 +58,16 @@ export const isToolDefinition = (value: unknown): value is ToolDefinition => {
 	if (
 		Object.keys(definition).some(
 			(key) =>
-				!["description", "inputSchema", "name", "outputSchema"].includes(key)
-		)
+				![
+					"description",
+					"exclusiveInBatch",
+					"inputSchema",
+					"name",
+					"outputSchema",
+				].includes(key)
+		) ||
+		(!isUndefined(definition.exclusiveInBatch) &&
+			definition.exclusiveInBatch !== true)
 	) {
 		return false;
 	}
@@ -79,6 +88,7 @@ export type ToolCallRequest = Readonly<{
 /** One Tool Call finished successfully with its output. */
 export type ToolCallSuccess = Readonly<{
 	output: unknown;
+	stopTurn?: true;
 	type: "success";
 }>;
 
@@ -122,7 +132,10 @@ export const isToolCallOutput = (value: unknown): value is ToolCallOutput => {
 	const output = value as UnknownRecord;
 	if (output.type === "success") {
 		return (
-			Object.keys(output).every((key) => key === "output" || key === "type") &&
+			Object.keys(output).every(
+				(key) => key === "output" || key === "stopTurn" || key === "type"
+			) &&
+			("stopTurn" in output ? output.stopTurn === true : true) &&
 			"output" in output
 		);
 	}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { LogFields } from "@wincode/runtime-utils";
+import type { LogFields } from "@wincode/utils";
 import {
 	type CrashGuardDeps,
 	createCrashHandler,

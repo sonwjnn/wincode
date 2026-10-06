@@ -10,7 +10,7 @@ it opens the session — the transcript, context, and compactions the Engine is
 born with — before the Engine exists.
 
 Status: accepted
-Package placement note: ADR-0027 revises the temporary `@wincode/tui` location and the deferral of a coding-agent application package. The Session Host's UI-neutral contract, opening, lease, subscription, and shutdown decisions remain accepted.
+Package placement note: ADR-0027 moved the temporary `@wincode/tui` location into the coding-agent application. ADR-0035 retains the UI-neutral opening and capability boundary but moves running Host lifetime to the application process: switching views no longer shuts it down, and different Session IDs may have concurrent Hosts.
 
 ## Decision
 

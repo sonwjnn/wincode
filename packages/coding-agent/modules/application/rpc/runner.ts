@@ -1,14 +1,16 @@
-import { logger } from "@wincode/runtime-utils";
+import { logger } from "@wincode/utils";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { resolveSubmissionPrompt } from "@/modules/commands/submission-resolution";
 import { expandPastedText } from "@/modules/sessions/pasted-text";
 import { discoverSkills } from "@/modules/skills";
+import type { SessionId } from "@/shared/identifiers";
 import { errorLogFields } from "@/shared/utils/error-log-fields";
 import type {
 	LiveSessionSnapshot,
 	SessionHost,
 	SessionSubmissionEvent,
 } from "../../../modules/sessions/host/session-rpc";
+import type { SessionHostManagerEvent } from "../../../modules/sessions/host/types";
 import { type DeferredNotification, SerializedWriter } from "./output";
 import {
 	operationalStatus,
@@ -153,6 +155,9 @@ export async function runRpc({
 	let deferredBytes = 0;
 	let deferredOverflow = false;
 	const unsubscribers: Array<() => void> = [];
+	const boundUnsubscribers: Array<() => void> = [];
+	const ownedSessionIds = new Set<SessionId>();
+	let managerEventUnsubscribe: (() => void) | undefined;
 	let runtime: RuntimeModules | undefined;
 	const state: RpcSessionState = {
 		lifecycle: "uninitialized",
@@ -240,19 +245,18 @@ export async function runRpc({
 						void logger.warn("RPC shutdown deadline exceeded", fields);
 					}
 				};
-				const activeHost = state.host;
-				const hostShutdown = Promise.resolve().then(async () => {
-					await activeHost?.shutdown();
-				});
-				await settle(hostShutdown, "host");
-				state.host = undefined;
-				for (const unsubscribe of unsubscribers.splice(0)) {
-					unsubscribe();
-				}
 				const assemblyShutdown = Promise.resolve().then(async () => {
 					await state.assembly?.shutdown();
 				});
 				await settle(assemblyShutdown, "capability");
+				state.host = undefined;
+				state.boundSessionId = undefined;
+				for (const unsubscribe of boundUnsubscribers.splice(0)) {
+					unsubscribe();
+				}
+				for (const unsubscribe of unsubscribers.splice(0)) {
+					unsubscribe();
+				}
 				state.lifecycle = "closed";
 				signal?.removeEventListener("abort", onAbort);
 			})();
@@ -450,14 +454,110 @@ export async function runRpc({
 		}
 	};
 
-	const bind = (nextHost: SessionHost, sessionId: string): void => {
-		if (state.signalRequested || state.lifecycle !== "initialized") {
-			void nextHost.shutdown().catch(() => undefined);
+	const projectDelegationTaskEvent = (
+		event: Extract<SessionHostManagerEvent, { type: "delegation-task" }>
+	): void => {
+		if (event.task.parentSessionId !== state.boundSessionId) {
+			return;
+		}
+		ownedSessionIds.add(event.task.childSessionId);
+		emit("session/event", {
+			event: {
+				...(event.report === undefined ? {} : { report: event.report }),
+				kind: "delegation-task",
+				task: event.task,
+			},
+		});
+	};
+	const projectApprovalNotice = (
+		event: Extract<SessionHostManagerEvent, { type: "session-approval-notice" }>
+	): void => {
+		if (
+			!ownedSessionIds.has(event.sessionId) ||
+			event.sessionId === state.boundSessionId
+		) {
+			return;
+		}
+		emit("session/event", {
+			event: {
+				kind: "session-approval-notice",
+				pendingApprovalCount: event.pendingApprovalCount,
+				sessionId: event.sessionId,
+			},
+		});
+	};
+	const projectManagerEvent = (event: SessionHostManagerEvent): void => {
+		switch (event.type) {
+			case "delegation-task":
+				projectDelegationTaskEvent(event);
+				break;
+			case "session-approval-notice":
+				projectApprovalNotice(event);
+				break;
+			case "agent-turn-event":
+				break;
+			default:
+				throw new Error("Unknown Session Host manager event.");
+		}
+	};
+	const subscribeManagerEvents = (): void => {
+		if (state.assembly === undefined) {
+			return;
+		}
+		managerEventUnsubscribe?.();
+		const manager = state.assembly.capabilities.getSessionHostManager();
+		const unsubscribe = manager.onEvent((event) => {
+			try {
+				projectManagerEvent(event);
+			} catch (error) {
+				void fatalShutdown(error);
+			}
+		});
+		managerEventUnsubscribe = unsubscribe;
+		unsubscribers.push(unsubscribe);
+	};
+
+	const releaseSessionView = (sessionId: SessionId): void => {
+		const manager = state.assembly?.capabilities.getSessionHostManager();
+		if (manager !== undefined) {
+			void manager.releaseView(sessionId).catch((error: unknown) => {
+				void logger.warn("RPC Session view release failed", {
+					...errorLogFields(error),
+					sessionId,
+				});
+			});
+		}
+	};
+	const unbind = (): void => {
+		const previousSessionId = state.boundSessionId;
+		for (const unsubscribe of boundUnsubscribers.splice(0)) {
+			unsubscribe();
+		}
+		state.host = undefined;
+		state.boundSessionId = undefined;
+		if (state.lifecycle === "bound") {
+			state.lifecycle = "initialized";
+		}
+		if (previousSessionId !== undefined) {
+			releaseSessionView(previousSessionId);
+		}
+	};
+	const bind = (nextHost: SessionHost, sessionId: SessionId): void => {
+		const previousSessionId = state.boundSessionId;
+		if (
+			state.signalRequested ||
+			(state.lifecycle !== "initialized" && state.lifecycle !== "bound")
+		) {
+			releaseSessionView(sessionId);
 			throw appError("server_closing", "The RPC server is closing.");
+		}
+		for (const unsubscribe of boundUnsubscribers.splice(0)) {
+			unsubscribe();
 		}
 		state.host = nextHost;
 		state.boundSessionId = sessionId;
 		state.lifecycle = "bound";
+		ownedSessionIds.add(sessionId);
 		lastStateSignature = "";
 		lastTranscriptSignature = "";
 		try {
@@ -465,7 +565,7 @@ export async function runRpc({
 		} catch (error) {
 			void fatalShutdown(error);
 		}
-		unsubscribers.push(
+		boundUnsubscribers.push(
 			nextHost.onEvent((event) => {
 				try {
 					emit("session/event", {
@@ -491,6 +591,10 @@ export async function runRpc({
 			),
 			nextHost.subscribe(notifyState)
 		);
+		subscribeManagerEvents();
+		if (previousSessionId !== undefined) {
+			releaseSessionView(previousSessionId);
+		}
 	};
 
 	const requireInitialized = (): void => {
@@ -550,6 +654,7 @@ export async function runRpc({
 	const handleRequest = createRpcRequestHandler({
 		autoApproval,
 		bind,
+		unbind,
 		currentState,
 		getRuntime,
 		parseSelection,

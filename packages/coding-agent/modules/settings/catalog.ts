@@ -3,7 +3,7 @@ import {
 	isBoolean,
 	isPlainObject,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import {
 	DEFAULT_COMPACTION_SETTINGS,

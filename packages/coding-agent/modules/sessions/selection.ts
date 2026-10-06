@@ -8,7 +8,7 @@ import {
 	type ReasoningMode,
 	type ReasoningSelection,
 } from "@wincode/ai/models";
-import { isPlainObject, isString, isUndefined } from "@wincode/runtime-utils";
+import { isPlainObject, isString, isUndefined } from "@wincode/utils";
 import type { SkillRequestContext } from "@/modules/skills";
 import type { SessionMessage } from "./message";
 import {

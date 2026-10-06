@@ -1,41 +1,48 @@
-# Agent Session owns session state across Agent Turns
+# Agent Session ownership boundary across Agent Turns
 
 Status: accepted
 
-The session state owner in `@wincode/coding-agent` is an Agent Session. One
-Agent Session owns the Session Context, Session Transcript, committed pending
-and failed Steering Messages, transient Submission Queue, approvals, compaction
-state, and scheduling for one user session. Agent and Model selections resolve
-through Host capabilities when a Submission starts; mid-turn steering preserves
-the active execution's selection. This keeps one live state authority while
-revising the input and delivery policy in ADR-0021 and ADR-0022. The Session
-Host still opens the session, assembles dependencies, connects persistence, and
-owns shutdown as ADR-0023 specifies. It exposes the owner as `agentSession`.
+Ownership revision: ADR-0035 moves live conversation state to the Stateful Agent in `@wincode/agent-core`; issue #164 moves the transient Submission FIFO and input-lane arbitration there as well. The `AgentSession` class remains the application command and projection boundary, and the prompt, FIFO steering, durable acceptance, continuation, and failure contracts recorded below remain accepted.
 
-The Agent Session calls `AgentRuntime.run()` for each resolved Agent Turn. The
-runtime owns the Model Step and tool loop, which continues while the model
-requests tools. The fixed 20-step limit is removed: a turn ends when the model
+The Agent Session is the application-level boundary in `@wincode/coding-agent`.
+The Stateful Agent owns the live Session Context, model execution, transient FIFO
+Submission Queue, and input scheduling for one loaded conversation. The Agent
+Session owns the Session Transcript projection, durable pending/failed Steering
+Message ledger, composition and attachment preparation, approvals, compaction
+state, and persistence policy; it projects the core-owned queue into the Live
+Session Snapshot without maintaining a second queue authority. Agent and Model
+selections resolve through Host capabilities when a Submission starts;
+mid-turn steering preserves the active execution's selection. The Session Host
+opens the session, assembles dependencies, connects persistence, and owns
+shutdown as ADR-0023 specifies. It exposes the application boundary as
+`agentSession`.
+
+The Agent Session requests each resolved Agent Turn through the Session Host's
+`SessionTurnRunner`. The Stateful Agent runs the `AgentRuntime`, which owns the
+Model Step and tool loop, continuing while the model requests tools. The fixed 20-step limit is removed: a turn ends when the model
 returns without tool calls, or when the run aborts, reaches its existing
 deadline, is interrupted, or fails. This revises ADR-0029's prior preservation
 of the old step limit. No step-limit completion reason or cross-turn
 continuation state is needed.
 
 `prompt(input: SessionSendInput)` admits exactly one new Submission and never
-auto-steers: it starts a turn when idle and joins the FIFO Submission Queue
-when busy. `SessionSendInput` carries `userText`, `files`, explicit `skill`
-intent, and `composition`; shared preparation expands Custom Commands once and
-retains their expanded prompt while queued. Unsteered queued Submissions remain
+auto-steers: it starts a turn when idle and asks the Stateful Agent to append
+the opaque application-prepared payload to its FIFO Submission Queue when busy.
+`SessionSendInput` carries `userText`, `files`, explicit `skill` intent, and
+`composition`; shared preparation expands Custom Commands once and retains
+their expanded prompt while queued. Unsteered queued Submissions remain
 transient and are not reconstructed or replayed after restart.
 
 `steer()` is an asynchronous, no-argument command. It returns an explicit
 empty-queue or refusal outcome, or an accepted/steered outcome with stable
-Submission and message identities. With a queued item, it atomically takes
-exactly the oldest Queued Submission, commits a distinct user Session Record,
-and reports acceptance only after the durable commit. The accepted message
-immediately enters the Session Transcript and Stored Session History. The
-Agent Session never auto-selects steering for `prompt()` and does not expose
-direct-text steering or a compatibility `send()` policy that chooses lanes
-automatically.
+Submission and message identities. With a queued item, the Stateful Agent
+reserves exactly the oldest Queued Submission while the application commits a
+distinct user Session Record; core removes the item only after durable success.
+The accepted message immediately enters the Session Transcript and Stored
+Session History, and a failed commit leaves the queue head available for retry
+or Recall. The Agent Session never auto-selects steering for `prompt()` and
+does not expose direct-text steering or a compatibility `send()` policy that
+chooses lanes automatically.
 
 Every committed Steering Message has observable durable pending/failed
 processing state. Acceptance is not tied to a narrow Model Step window: a busy
@@ -66,14 +73,15 @@ completion/wait path after Submission admission. That path does not restore
 automatic lane selection or turn a busy Submission into a Steering Message.
 
 `continue()` rejects while a turn, compaction, queued attachment admission, or
-overflow recovery is active. When idle, it resumes committed pending Steering
-Messages first, in order and without appending another user message; only then
-does the oldest unsteered Queued Submission start. With no waiting input, it
-resumes only when the last Session Context message is a user message or a
-complete retained Tool Call result, and no incomplete Tool Call/result remains
-in the context. It runs against the existing context without appending a user
-message or executing completed tools again. Other context endpoints are
-rejected.
+overflow recovery is active. When idle, it asks the Stateful Agent to select
+committed pending Steering Messages first, then the oldest Delegation Report,
+then the oldest unsteered Queued Submission. The application prepares and runs
+the selected input without appending a duplicate user message. With no waiting
+input, it resumes only when the last Session Context message is a user message
+or a complete retained Tool Call result, and no incomplete Tool Call/result
+remains in the context. It runs against the existing context without appending
+a user message or executing completed tools again. Other context endpoints
+are rejected.
 
 Overflow recovery uses the same context-only continuation after compaction
 prepares the Session Context. It no longer replays the original user message

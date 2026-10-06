@@ -1,7 +1,7 @@
 import { type InputRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { ConnectionProviderSummary } from "@wincode/ai/connections";
-import { getErrorMessage } from "@wincode/runtime-utils";
+import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	useDialogEscape,

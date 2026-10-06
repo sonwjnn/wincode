@@ -1,5 +1,4 @@
 import {
-	AGENT_ID_PATTERN,
 	type AgentId,
 	type AgentRole,
 	type AgentRuntime,
@@ -13,16 +12,13 @@ import {
 	type AgentTurnMessage,
 	type AgentTurnPart,
 	type AgentTurnTerminalEvent,
-	agentIdSchema,
 	createAgentRuntime,
 	createAgentTurnAbortEvent,
 	createAgentTurnLifecycle,
 	createOperationalFailure,
-	createToolRegistry,
 	getAgentTurnFailureDetails,
 	isAgentInvariantError,
 	isToolCallId,
-	MAX_AGENT_ID_LENGTH,
 	type ResolvedTool,
 	type SessionMessageId,
 	type SessionRecord,
@@ -31,11 +27,15 @@ import {
 	type ToolDefinition,
 	type ToolExecutorOptions,
 	type ToolFailureDetails,
-	type ToolRegistry,
 	toSessionMessageId,
 } from "@wincode/agent-core";
 import { createModelClient } from "@wincode/ai/model-client";
 import type { ModelTarget } from "@wincode/ai/model-target";
+import type { McpCatalogSnapshot } from "@wincode/mcp";
+import type {
+	DelegationExecutor,
+	SubmitResultExecutor,
+} from "@wincode/subagents";
 import {
 	getErrorMessage,
 	isNonEmptyString,
@@ -44,15 +44,22 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
-import { z } from "zod";
-import type { McpCatalogSnapshot, McpSnapshotTool } from "@/modules/mcp";
+import {
+	createApplicationToolRegistry,
+	type Plugin,
+	type ToolProviderRegistration,
+} from "@/modules/application/plugins/registry";
+import type {
+	CodingToolProviderContext,
+	ShellToolProviderContext,
+	SkillToolProviderContext,
+	TurnToolPluginContext,
+} from "@/modules/application/plugins/turn-context";
 import {
 	formatSkillUserContext,
-	type SkillExecution,
 	type SkillRequestContext,
-	type SkillToolDefinition,
 	sampleSkillResources,
 	skillToolInputSchema,
 } from "@/modules/skills";
@@ -61,7 +68,6 @@ import {
 	type CodingToolRunnerOptions,
 	codingToolCatalog,
 	codingToolDefinitionFor,
-	codingToolNames,
 	type EditMode,
 	editInputSchemaForMode,
 	type ShellPlatform,
@@ -70,8 +76,12 @@ import {
 	toCodingToolFailure,
 	type VersionedEditingContext,
 } from "@/modules/tools";
+import { mcpPlugin } from "@/plugins/mcp";
+import { subagentsPlugin } from "@/plugins/subagents";
+import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
-import type { GateOutcome, ToolGate } from "../../tool-gate/tool-gate";
+import { evaluateGateWithAbort } from "../../tool-gate/evaluate-with-abort";
+import type { ToolGate } from "../../tool-gate/tool-gate";
 import type { SessionMessage } from "../message";
 import { expandSessionMessagesForModel } from "../message";
 import {
@@ -127,13 +137,6 @@ const runtimeSkillToolDefinition: ToolDefinition = {
 };
 
 /** The application Tool Registry of runtime-eligible tools. */
-export const runtimeToolRegistry: ToolRegistry = createToolRegistry([
-	...codingToolNames.map((name) =>
-		runtimeToolDefinition(name, HOST_SHELL_PLATFORM)
-	),
-	runtimeSkillToolDefinition,
-]);
-
 const runCodingToolThroughGate = async ({
 	input,
 	name,
@@ -177,28 +180,8 @@ const runCodingToolThroughGate = async ({
 				};
 	}
 };
-export type GatedCodingToolsDeps = {
-	/** The resolved Agent identity used for policy evaluation. */
-	agentId?: AgentId;
-	/** The tools the resolved Agent may use; deny-filtered by policy already. */
-	agentTools: readonly CodingToolName[];
-	gate: ToolGate;
-	mcpSnapshot?: McpCatalogSnapshot;
-	executeMcpTool?: (
-		snapshot: McpCatalogSnapshot,
-		toolName: string,
-		input: unknown,
-		signal?: AbortSignal
-	) => Promise<ToolCallOutput>;
-	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
-	/** Active profile snapshot used to shape model-facing tool schemas. */
-	resourceLimits?: ToolResourceLimits;
-	skillExecution?: SkillExecution;
-	skillTool?: SkillToolDefinition;
-	delegate?: DelegationExecutor;
-	parentTurnId?: AgentTurnId;
-	versionedEditing?: VersionedEditingContext;
-};
+
+export type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";
 
 /**
  * The application Tool Gate plus its resource-profile resolver, supplied
@@ -207,275 +190,152 @@ export type GatedCodingToolsDeps = {
 export type RuntimeGatedTooling = {
 	gate: ToolGate;
 	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
-	delegate?: DelegationExecutor;
+	delegate?: DelegationExecutor<SessionId, DelegationTaskId>;
+	submitResult?: SubmitResultExecutor;
+	delegationTaskId?: DelegationTaskId;
 	registerChildAbort?: (
 		toolCallId: ToolCallId,
 		abort: () => void
 	) => () => void;
 	mcpSnapshot?: McpCatalogSnapshot;
-	executeMcpTool?: GatedCodingToolsDeps["executeMcpTool"];
+	executeMcpTool?: TurnToolPluginContext["executeMcpTool"];
 	versionedEditing?: VersionedEditingContext;
 };
-export type DelegationRequest = {
-	readonly agent: AgentId;
-	readonly parentToolCallId: ToolCallId;
-	readonly parentTurnId: AgentTurnId;
-	readonly prompt: string;
-};
+type GatedCodingToolOptions = Readonly<{
+	agentId?: AgentId;
+	gate: ToolGate;
+	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
+	resourceLimits?: ToolResourceLimits;
+	versionedEditing?: VersionedEditingContext;
+}> &
+	(
+		| Readonly<{
+				family: "coding";
+				name: Exclude<CodingToolName, "shell">;
+		  }>
+		| Readonly<{ family: "shell"; name: "shell" }>
+	);
 
-export type DelegationExecutor = (
-	request: DelegationRequest,
-	signal: AbortSignal | undefined
-) => Promise<string>;
-
-const ABORTED_TOOL_TEXT = "Tool call aborted";
-
-/**
- * Settles a Gate evaluation against the executor abort signal: an aborted
- * execution denies the pending evaluation immediately instead of awaiting an
- * approval that can no longer be answered.
- */
-const evaluateGateWithAbort = (
-	evaluate: () => Promise<GateOutcome>,
-	signal: AbortSignal | undefined
-): Promise<GateOutcome> => {
-	if (isUndefined(signal)) {
-		return evaluate();
-	}
-	if (signal.aborted) {
-		return Promise.resolve({ errorText: ABORTED_TOOL_TEXT, kind: "deny" });
-	}
-	const { promise, resolve } = Promise.withResolvers<GateOutcome>();
-	let settled = false;
-	const settle = (outcome: GateOutcome): void => {
-		if (settled) {
-			return;
-		}
-		settled = true;
-		signal.removeEventListener("abort", onAbort);
-		resolve(outcome);
-	};
-	const onAbort = (): void => {
-		settle({ errorText: ABORTED_TOOL_TEXT, kind: "deny" });
-	};
-	signal.addEventListener("abort", onAbort, { once: true });
-	void evaluate().then(settle, (error: unknown) => {
-		settle(
-			signal.aborted
-				? { errorText: ABORTED_TOOL_TEXT, kind: "deny" }
-				: {
-						errorText: getErrorMessage(error, "Tool execution failed."),
-						kind: "deny",
-					}
-		);
-	});
-	return promise;
-};
-
-const delegationInputSchema = z.object({
-	agent: agentIdSchema,
-	prompt: z.string().min(1),
-});
-
-const createDelegationTool = (
-	delegate: DelegationExecutor,
-	parentTurnId: AgentTurnId
-): ResolvedTool => ({
-	definition: {
-		description:
-			"Delegate a focused task to a configured Subagent and return its result.",
-		inputSchema: {
-			jsonSchema: {
-				additionalProperties: false,
-				properties: {
-					agent: {
-						maxLength: MAX_AGENT_ID_LENGTH,
-						minLength: 1,
-						pattern: AGENT_ID_PATTERN.source,
-						type: "string",
-					},
-					prompt: { minLength: 1, type: "string" },
-				},
-				required: ["agent", "prompt"],
-				type: "object",
-			},
-		},
-		name: "delegate",
-	},
-	execute: async (
-		{ input, toolCallId },
-		{ signal }: ToolExecutorOptions = {}
-	): Promise<ToolCallOutput> => {
-		const parsed = delegationInputSchema.safeParse(input);
-		if (!parsed.success) {
-			return {
-				errorText: "Invalid delegation input; expected { agent, prompt }",
-				type: "failure",
-			};
-		}
-		try {
-			return {
-				output: await delegate(
-					{
-						agent: parsed.data.agent,
-						parentToolCallId: toolCallId,
-						parentTurnId,
-						prompt: parsed.data.prompt,
-					},
-					signal
-				),
-				type: "success",
-			};
-		} catch (error) {
-			if (isAgentInvariantError(error)) {
-				throw error;
-			}
-			return {
-				errorText: getErrorMessage(error, "Tool execution failed."),
-				type: "failure",
-			};
-		}
-	},
-});
-
-const createMcpTools = (
-	snapshot: McpCatalogSnapshot | undefined,
-	executeMcpTool: GatedCodingToolsDeps["executeMcpTool"],
-	gate: ToolGate,
-	agentId: AgentId | undefined
-): readonly ResolvedTool[] => {
-	if (isUndefined(snapshot) || isUndefined(executeMcpTool)) {
-		return [];
-	}
-	return snapshot.manifest.flatMap((entry) => {
-		const tool: McpSnapshotTool | undefined = snapshot.tools.get(entry.name);
-		if (isUndefined(tool)) {
-			return [];
-		}
-		return [
-			{
-				definition: {
-					description: entry.description,
-					inputSchema: { jsonSchema: entry.inputSchema },
-					name: entry.name,
-				},
-				execute: async (
-					{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
-					{ signal }: ToolExecutorOptions = {}
-				): Promise<ToolCallOutput> => {
-					const outcome = await evaluateGateWithAbort(
-						() =>
-							gate.gate({
-								agentDecision: tool.agentDecision,
-								agentId,
-								action: tool.logicalName,
-								description: tool.description,
-								family: "mcp",
-								input,
-								safety: tool.safety,
-								serverDecision: tool.serverDecision,
-								toolCallId,
-								toolName: entry.name,
-							}),
-						signal
-					);
-					if (outcome.kind !== "allow") {
-						return {
-							errorText: outcome.errorText,
-							type: "failure",
-						};
-					}
-					return executeMcpTool(snapshot, entry.name, input, signal);
-				},
-			} satisfies ResolvedTool,
-		];
-	});
-};
-/**
- * Composes one Resolved Tool per visible runtime-eligible coding family. Each
-
- * executor evaluates the actual Tool Call through the application Tool Gate
- * (allow, ask, deny, rejection, actual-resource evaluation, resource-profile
- * ceilings) before the runner executes; a Resolved Tool therefore never
- * reaches the Agent Runtime with an ungated executable. The executor abort
- * signal short-circuits a pending Gate evaluation; approvals themselves are
- * settled by the application stop path, and every outcome of an aborted turn
- * is dropped by the runtime, preserving cancellation semantics.
- */
-export const createGatedCodingTools = ({
+/** Keeps coding and shell calls on their distinct Tool Gate family paths. */
+const createGatedCodingTool = ({
 	agentId,
-	agentTools,
-	delegate,
-	executeMcpTool,
+	family,
 	gate,
-	mcpSnapshot,
-	parentTurnId,
+	name,
 	resolveResourceLimits,
 	resourceLimits,
+	versionedEditing,
+}: GatedCodingToolOptions): ResolvedTool => ({
+	definition: runtimeToolDefinition(
+		name,
+		HOST_SHELL_PLATFORM,
+		versionedEditing?.editMode,
+		resourceLimits
+	),
+	execute: async (
+		{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
+		{ signal }: ToolExecutorOptions = {}
+	): Promise<ToolCallOutput> => {
+		const toolCall = { input, toolCallId };
+		const gateCall =
+			family === "coding"
+				? {
+						agentId,
+						family,
+						toolCall: { ...toolCall, toolName: name },
+					}
+				: { agentId, family, toolCall };
+		const outcome = await evaluateGateWithAbort(
+			() => gate.gate(gateCall),
+			signal
+		);
+		if (outcome.kind !== "allow") {
+			return {
+				errorText: outcome.errorText ?? "Tool call was blocked",
+				type: "failure",
+			};
+		}
+		const approvedInput = outcome.input ?? input;
+		return runCodingToolThroughGate({
+			input: approvedInput,
+			name,
+			options: {
+				allowExternalPath: !isUndefined(outcome.input),
+				allowSloppy: isSloppyCodingInput(approvedInput),
+				...omitUndefined({
+					approvedWorkspacePaths: outcome.approvedWorkspacePaths,
+					approvedExternalPaths: outcome.approvedExternalPaths,
+					allowCrossSession:
+						outcome.approvedCrossSession === true ? true : undefined,
+					resourceLimits: isUndefined(resolveResourceLimits)
+						? undefined
+						: await resolveResourceLimits(agentId),
+				}),
+				signal,
+				versionedEditing,
+			},
+		});
+	},
+});
+
+/**
+ * Resolves visible coding tools with actual-call Tool Gate evaluation before
+ * the runner executes. Aborts short-circuit pending approvals; the runtime
+ * drops any outcome belonging to an aborted turn.
+ */
+const createCodingTools = ({
+	agentId,
+	agentTools,
+	gate,
+	resolveResourceLimits,
+	resourceLimits,
+	versionedEditing,
+}: CodingToolProviderContext): readonly ResolvedTool[] =>
+	agentTools
+		.filter(
+			(name): name is Exclude<CodingToolName, "shell"> => name !== "shell"
+		)
+		.map((name) =>
+			createGatedCodingTool({
+				agentId,
+				family: "coding",
+				gate,
+				name,
+				resolveResourceLimits,
+				resourceLimits,
+				versionedEditing,
+			})
+		);
+
+const createShellTools = (
+	context: ShellToolProviderContext
+): readonly ResolvedTool[] =>
+	context.agentTools.includes("shell")
+		? [
+				createGatedCodingTool({
+					agentId: context.agentId,
+					family: "shell",
+					gate: context.gate,
+					name: "shell",
+					resolveResourceLimits: context.resolveResourceLimits,
+					resourceLimits: context.resourceLimits,
+					versionedEditing: context.versionedEditing,
+				}),
+			]
+		: [];
+
+const createSkillTools = ({
+	agentId,
+	gate,
 	skillExecution,
 	skillTool,
-	versionedEditing,
-}: GatedCodingToolsDeps): readonly ResolvedTool[] => {
-	const codingTools = agentTools.map((name) => ({
-		definition: runtimeToolDefinition(
-			name,
-			HOST_SHELL_PLATFORM,
-			versionedEditing?.editMode,
-			resourceLimits
-		),
-		execute: async (
-			{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
-			{ signal }: ToolExecutorOptions = {}
-		): Promise<ToolCallOutput> => {
-			const outcome = await evaluateGateWithAbort(
-				() =>
-					gate.gate({
-						agentId,
-						family: "coding",
-						toolCall: { input, toolCallId, toolName: name },
-					}),
-				signal
-			);
-			if (outcome.kind !== "allow") {
-				return {
-					errorText: outcome.errorText ?? "Tool call was blocked",
-					type: "failure",
-				};
-			}
-			return runCodingToolThroughGate({
-				input: outcome.input ?? input,
-				name,
-				options: {
-					allowExternalPath: !isUndefined(outcome.input),
-					allowSloppy: isSloppyCodingInput(outcome.input ?? input),
-					...omitUndefined({
-						approvedWorkspacePaths: outcome.approvedWorkspacePaths,
-						approvedExternalPaths: outcome.approvedExternalPaths,
-						allowCrossSession:
-							outcome.approvedCrossSession === true ? true : undefined,
-						resourceLimits: isUndefined(resolveResourceLimits)
-							? undefined
-							: await resolveResourceLimits(agentId),
-					}),
-					signal,
-					versionedEditing,
-				},
-			});
-		},
-	}));
-	const tools = [
-		...codingTools,
-		...createMcpTools(mcpSnapshot, executeMcpTool, gate, agentId),
-	];
+}: SkillToolProviderContext): readonly ResolvedTool[] => {
 	if (isUndefined(skillTool) || isUndefined(skillExecution)) {
-		if (!(isUndefined(delegate) || isUndefined(parentTurnId))) {
-			tools.push(createDelegationTool(delegate, parentTurnId));
-		}
-		return tools;
+		return [];
 	}
-	const skill = {
+	const skill: ResolvedTool = {
 		definition: {
-			...runtimeToolRegistry.require("skill"),
+			...runtimeSkillToolDefinition,
 			description: skillTool.description,
 		},
 		execute: async (
@@ -530,13 +390,76 @@ export const createGatedCodingTools = ({
 			}
 			return { output: result, type: "success" };
 		},
-	} satisfies ResolvedTool;
-	tools.push(skill);
-	if (!(isUndefined(delegate) || isUndefined(parentTurnId))) {
-		tools.push(createDelegationTool(delegate, parentTurnId));
-	}
-	return tools;
+	};
+	return [skill];
 };
+
+const selectCodingToolProviderContext = (
+	context: TurnToolPluginContext
+): CodingToolProviderContext => ({
+	agentId: context.agentId,
+	agentTools: context.agentTools,
+	gate: context.gate,
+	resolveResourceLimits: context.resolveResourceLimits,
+	resourceLimits: context.resourceLimits,
+	versionedEditing: context.versionedEditing,
+});
+const selectSkillToolProviderContext = (
+	context: TurnToolPluginContext
+): SkillToolProviderContext => ({
+	agentId: context.agentId,
+	gate: context.gate,
+	skillExecution: context.skillExecution,
+	skillTool: context.skillTool,
+});
+
+const codingPlugin: Plugin<TurnToolPluginContext> = (api) => {
+	api.registerToolProvider({
+		id: "coding-tools",
+		policyCategory: "coding",
+		selectContext: selectCodingToolProviderContext,
+		adapter: {
+			policyCategory: "coding",
+			resolve: createCodingTools,
+		},
+	});
+	api.registerToolProvider({
+		id: "shell-tools",
+		policyCategory: "shell",
+		selectContext: selectCodingToolProviderContext,
+		adapter: {
+			policyCategory: "shell",
+			resolve: createShellTools,
+		},
+	});
+};
+
+const skillToolProvider: ToolProviderRegistration<
+	TurnToolPluginContext,
+	SkillToolProviderContext
+> = {
+	id: "skill-tools",
+	policyCategory: "skill",
+	selectContext: selectSkillToolProviderContext,
+	adapter: {
+		policyCategory: "skill",
+		resolve: createSkillTools,
+	},
+};
+
+const applicationToolRegistry = createApplicationToolRegistry({
+	plugins: [codingPlugin, mcpPlugin, subagentsPlugin],
+	nativeToolProviders: [skillToolProvider],
+});
+
+/** Resolves the single immutable set of tools visible to one Agent Turn. */
+export const resolveTurnTools = (
+	context: TurnToolPluginContext
+): Promise<readonly ResolvedTool[]> => applicationToolRegistry.resolve(context);
+
+/** Creates the Session Delegation runtime registered by the built-in Plugin. */
+export const createApplicationSessionDelegationRuntime =
+	applicationToolRegistry.createSessionDelegationRuntime;
 
 const settledToolName = (
 	type: string,
@@ -545,8 +468,18 @@ const settledToolName = (
 	if (type === "dynamic-tool") {
 		return isNonEmptyString(toolName) ? toolName : undefined;
 	}
-	if (type === "tool-skill" || type === "tool-delegate") {
-		return type === "tool-skill" ? "skill" : "delegate";
+	if (
+		type === "tool-skill" ||
+		type === "tool-delegate" ||
+		type === "tool-submit_result"
+	) {
+		if (type === "tool-skill") {
+			return "skill";
+		}
+		if (type === "tool-delegate") {
+			return "delegate";
+		}
+		return "submit_result";
 	}
 	if (type === "tool-read") {
 		return "read";
@@ -833,6 +766,9 @@ type AgentTurnEventConsumerOptions = {
 	takeSteeringMessages?: () =>
 		| readonly AgentTurnMessage[]
 		| Promise<readonly AgentTurnMessage[]>;
+	takeFollowUpMessages?: () =>
+		| readonly AgentTurnMessage[]
+		| Promise<readonly AgentTurnMessage[]>;
 	turn: AgentTurn;
 	onEvent: (event: AgentTurnEvent) => void | Promise<void>;
 	onTerminal: (event: AgentTurnTerminalEvent) => void | Promise<void>;
@@ -858,6 +794,7 @@ const consumeAgentTurnEvents = async ({
 	runtime,
 	signal,
 	takeSteeringMessages,
+	takeFollowUpMessages,
 	turn,
 }: AgentTurnEventConsumerOptions): Promise<void> => {
 	const lifecycle = providedLifecycle ?? createAgentTurnLifecycle(turn.id);
@@ -901,7 +838,7 @@ const consumeAgentTurnEvents = async ({
 		}
 	};
 	for await (const event of runtime.run(turn, {
-		...omitUndefined({ takeSteeringMessages }),
+		...omitUndefined({ takeFollowUpMessages, takeSteeringMessages }),
 		signal,
 	})) {
 		if (
@@ -981,6 +918,7 @@ const terminalEventForOutcome = (
 		: event;
 
 export const runAgentTurnToText = async ({
+	getAssistantMessageId,
 	onCheckpoint,
 	onEvent,
 	onTerminal,
@@ -990,8 +928,10 @@ export const runAgentTurnToText = async ({
 	signal,
 	sourceUserMessageId,
 	takeSteeringMessages,
+	takeFollowUpMessages,
 	turn,
 }: {
+	getAssistantMessageId?: () => SessionMessageId;
 	onCheckpoint?: CheckpointCommitter;
 	onEvent?: (event: AgentTurnEvent) => void | Promise<void>;
 	onTerminal?: (event: AgentTurnTerminalEvent) => void | Promise<void>;
@@ -1003,9 +943,13 @@ export const runAgentTurnToText = async ({
 	takeSteeringMessages?: () =>
 		| readonly SessionMessage[]
 		| Promise<readonly SessionMessage[]>;
+	takeFollowUpMessages?: () =>
+		| readonly SessionMessage[]
+		| Promise<readonly SessionMessage[]>;
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
+	let checkpointedAssistantTextLength = 0;
 	let terminal: AgentTurnTerminalEvent | undefined;
 	let lastSequence = -1;
 	let completedToolCalls = 0;
@@ -1067,6 +1011,15 @@ export const runAgentTurnToText = async ({
 		runtime,
 		signal,
 		...omitUndefined({
+			takeFollowUpMessages: isUndefined(takeFollowUpMessages)
+				? undefined
+				: async () => {
+						const messages = await takeFollowUpMessages();
+						if (messages.length > 0) {
+							checkpointedAssistantTextLength = assistantText.length;
+						}
+						return messages.flatMap(toAgentTurnMessages);
+					},
 			takeSteeringMessages: isUndefined(takeSteeringMessages)
 				? undefined
 				: async () =>
@@ -1080,7 +1033,8 @@ export const runAgentTurnToText = async ({
 		signal
 	);
 	const record = buildTerminalSessionRecord({
-		assistantText,
+		assistantMessageId: getAssistantMessageId?.(),
+		assistantText: assistantText.slice(checkpointedAssistantTextLength),
 		hasCompletedToolCalls: completedToolCalls > 0,
 		event: terminalEvent,
 		sourceUserMessageId,

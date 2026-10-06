@@ -1,6 +1,8 @@
 # Agent Session class owns session run state
 
-Status: accepted
+Status: superseded by ADR-0035
+
+ADR-0035 moves live run-state authority into `@wincode/agent-core`'s Stateful Agent and separates each durable delegated conversation into its own Session. The class ownership and Host-bound shutdown decisions below describe the former architecture; their surviving caller-facing behavior is retained by ADR-0035 and ADR-0031.
 
 ADR-0031 establishes the Agent Session as the sole owner of live session state.
 The class now holds the authoritative Session Context, transcript, input lanes,

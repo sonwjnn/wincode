@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { logger, readUtf8File } from "@wincode/runtime-utils";
+import { logger, readUtf8File } from "@wincode/utils";
 import { COMMANDS } from "@/modules/commands/commands";
 import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";

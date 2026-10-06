@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { isObjectLike } from "@wincode/runtime-utils";
+import { isObjectLike } from "@wincode/utils";
 import {
 	getToolResourceLimits,
 	type ResourceLimitOptions,

@@ -10,10 +10,11 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
+import { createMcpRegistry } from "@wincode/mcp";
 import { act } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { createMcpRegistry, McpProvider } from "@/modules/mcp";
+import { McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	createPermissionService,
@@ -82,7 +83,6 @@ describe("NewSessionView composer focus", () => {
 																	workspace,
 																})
 															}
-															workspace={workspace}
 														>
 															<RouterContextProvider router={router}>
 																<CommandControllerProvider>
@@ -130,6 +130,8 @@ describe("NewSessionView composer focus", () => {
 				await setup.mockInput.typeText("before");
 			});
 			expect(composer.cursorOffset).toBe(6);
+			// Commit the edited draft frame before injecting pointer input.
+			await setup.flush({ maxPasses: 20 });
 
 			await act(async () => {
 				composer.blur();
@@ -139,7 +141,9 @@ describe("NewSessionView composer focus", () => {
 				await setup.mockMouse.moveTo(targetX, 0);
 			});
 			await setup.flush({ maxPasses: 20 });
-			expect(setup.renderer.currentFocusedRenderable).toBe(composer);
+			expect(setup.renderer.currentFocusedRenderable?.id ?? null).toBe(
+				composer.id
+			);
 
 			await act(async () => {
 				composer.blur();

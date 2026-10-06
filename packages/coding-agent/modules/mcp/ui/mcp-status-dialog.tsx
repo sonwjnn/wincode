@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
-import { isUndefined } from "@wincode/runtime-utils";
+import type { McpServerState, McpServerStatus } from "@wincode/mcp";
+import { isUndefined } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { redactSensitiveText } from "@/shared/display-sanitize";
 import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
@@ -9,7 +10,6 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import { useMcp } from "../context/mcp-provider";
-import type { McpServerState, McpServerStatus } from "../registry";
 
 export const MCP_LOCAL_WARNING =
 	"Local commands run with your OS permissions and inherited environment.";

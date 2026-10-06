@@ -1,4 +1,4 @@
-import path from "node:path";
+import * as path from "node:path";
 import {
 	type CallToolResult,
 	Client,
@@ -7,7 +7,7 @@ import {
 	type Tool,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { isNull, isUndefined, omitUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import type { ResolvedMcpServerConfig } from "./config";
 import { sanitizeMessage } from "./sanitize";
 

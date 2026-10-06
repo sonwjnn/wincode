@@ -1,5 +1,5 @@
 import type { SkillActivationSource } from "@wincode/agent-core";
-import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
+import { isObjectLike, isUndefined } from "@wincode/utils";
 import type { ReadonlyDeep } from "type-fest";
 import { SKILL_TOOL_INPUT_JSON_SCHEMA } from "./context";
 import { hashSkillBody } from "./hash";

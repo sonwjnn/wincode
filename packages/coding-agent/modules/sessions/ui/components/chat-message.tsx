@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import type { SessionMessageId } from "@wincode/agent-core";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import { buildAgent } from "@/modules/agents";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useTheme } from "@/shared/providers/theme/theme-provider";

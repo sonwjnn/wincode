@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import type { AgentId } from "@wincode/agent-core";
+import type {
+	McpCatalogSnapshot,
+	McpNormalizedResult,
+	McpRegistry,
+	McpServerStatus,
+} from "@wincode/mcp";
 import { act, useState } from "react";
 import type { McpContextValue } from "@/modules/mcp/context/mcp-provider";
 import {
@@ -8,12 +14,6 @@ import {
 	McpProvider,
 	useMcp,
 } from "@/modules/mcp/context/mcp-provider";
-import type {
-	McpCatalogSnapshot,
-	McpRegistry,
-	McpServerStatus,
-} from "@/modules/mcp/registry";
-import type { McpNormalizedResult } from "@/modules/mcp/result";
 import { McpActiveIndicator } from "@/modules/mcp/ui/mcp-active-indicator";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -56,7 +56,7 @@ const renderProvider = async (registry: McpRegistry) => {
 			<KeyboardLayerProvider>
 				<ToastProvider>
 					<DialogProvider>
-						<McpProvider createRegistry={() => registry} workspace="/tmp">
+						<McpProvider createRegistry={() => registry}>
 							<Consumer />
 						</McpProvider>
 					</DialogProvider>
@@ -173,7 +173,6 @@ test("provider does not close an externally owned registry on unmount", async ()
 						<McpProvider
 							closeRegistryOnUnmount={false}
 							createRegistry={() => registry}
-							workspace="/tmp"
 						>
 							<text>consumer</text>
 						</McpProvider>
@@ -276,11 +275,7 @@ test("provider refreshes without closing the registry when the route changes", a
 		const [route, updateRoute] = useState("/sessions/one");
 		setRoute = updateRoute;
 		return (
-			<McpProvider
-				createRegistry={() => registry}
-				refreshKey={route}
-				workspace="/tmp"
-			>
+			<McpProvider createRegistry={() => registry} refreshKey={route}>
 				<text>consumer</text>
 			</McpProvider>
 		);
@@ -339,7 +334,7 @@ test("provider exposes loading state through the MCP active indicator", async ()
 	const setup = await testRender(
 		<ThemeProvider>
 			<ToastProvider>
-				<McpProvider createRegistry={() => registry} workspace="/tmp">
+				<McpProvider createRegistry={() => registry}>
 					<McpActiveIndicator />
 				</McpProvider>
 			</ToastProvider>

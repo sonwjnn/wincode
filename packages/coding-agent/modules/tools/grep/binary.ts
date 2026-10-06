@@ -18,7 +18,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import { truncateUtf8 } from "../output-bounds";
 
 export const RIPGREP_VERSION = "15.1.0";

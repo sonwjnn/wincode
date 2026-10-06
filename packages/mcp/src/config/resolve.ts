@@ -1,19 +1,12 @@
-import path from "node:path";
+import * as path from "node:path";
 import {
 	isNull,
 	isPlainObject,
 	isString,
 	isUndefined,
 	omitUndefined,
-} from "@wincode/runtime-utils";
-import type { Merge, OverrideProperties } from "type-fest";
-import type { ZodError } from "zod";
-import type {
-	ConfigDiagnostic,
-	ConfigOrigin,
-	ConfigSnapshot,
-	ConfigSource,
-} from "@/shared/config/config-store";
+} from "@wincode/utils";
+import type { ZodError, infer as ZodInfer } from "zod";
 import {
 	DEFAULT_MCP_TIMEOUTS,
 	mergedServerSchema,
@@ -24,8 +17,19 @@ import {
 
 const ENV_PATTERN = /^\{env:([^{}]+)\}$/;
 
-type McpDiagnosticCode =
-	| ConfigDiagnostic["code"]
+export type McpConfigOrigin = Readonly<{
+	path: string;
+	scope: string;
+}>;
+
+export type McpConfigSource = McpConfigOrigin &
+	Readonly<{ document: Readonly<Record<string, unknown>> }>;
+
+export type McpConfigDiagnosticCode =
+	| "duplicate-config"
+	| "parse-error"
+	| "read-error"
+	| "unsafe-key"
 	| "invalid-field"
 	| "invalid-scope"
 	| "invalid-server"
@@ -34,25 +38,40 @@ type McpDiagnosticCode =
 	| "missing-env"
 	| "unsupported-auth";
 
-export type McpConfigDiagnostic = Merge<
-	OverrideProperties<ConfigDiagnostic, { readonly code: McpDiagnosticCode }>,
+export type McpConfigDiagnostic = McpConfigOrigin &
 	Readonly<{
+		code: McpConfigDiagnosticCode;
+		message: string;
 		serverName?: string;
-	}>
->;
+	}>;
 
-export type InvalidMcpServerConfig = {
+export type McpConfigSnapshot = Readonly<{
+	diagnostics: readonly McpConfigDiagnostic[];
+	document: Readonly<Record<string, unknown>>;
+	sourceFor(path: readonly string[]): McpConfigOrigin | undefined;
+	sources: readonly McpConfigSource[];
+}>;
+
+export type McpConfigResult = Readonly<{
+	diagnostics: readonly McpConfigDiagnostic[];
+	invalidServers?: Readonly<Record<string, InvalidMcpServerConfig>>;
+	servers: Readonly<Record<string, ResolvedMcpServerConfig>>;
+}>;
+
+export type InvalidMcpServerConfig = Readonly<{
 	error: string;
 	name: string;
 	transport: "local" | "remote";
-};
+}>;
+
+type McpDiagnosticCode = McpConfigDiagnosticCode;
 
 const serverPath = (name: string, field: readonly string[] = []): string =>
 	["mcp", name, ...field].join(".");
 
 const addDiagnostic = (
 	diagnostics: McpConfigDiagnostic[],
-	origin: ConfigOrigin,
+	origin: McpConfigOrigin,
 	code: McpDiagnosticCode,
 	message: string,
 	suffix: string,
@@ -70,16 +89,16 @@ const addDiagnostic = (
 type ResolutionContext = {
 	diagnostics: McpConfigDiagnostic[];
 	env: Record<string, string | undefined>;
-	fallbackSource: ConfigOrigin;
+	fallbackSource: McpConfigOrigin;
 	name: string;
-	snapshot: ConfigSnapshot;
+	snapshot: McpConfigSnapshot;
 	workspace: string;
 };
 
 const owner = (
 	context: ResolutionContext,
 	field: readonly string[]
-): ConfigOrigin =>
+): McpConfigOrigin =>
 	context.snapshot.sourceFor(["mcp", context.name, ...field]) ??
 	context.fallbackSource;
 
@@ -240,7 +259,7 @@ const resolveRemoteServer = (
 
 const resolveServer = (
 	context: ResolutionContext,
-	raw: ReturnType<typeof rawServerPatchSchema.parse>
+	raw: ZodInfer<typeof rawServerPatchSchema>
 ): ResolvedMcpServerConfig | undefined => {
 	const mergedServer = mergedServerSchema.safeParse(raw);
 	if (!mergedServer.success) {
@@ -260,7 +279,7 @@ const resolveServer = (
 };
 
 const diagnoseMalformedEntries = (
-	sources: readonly ConfigSource[],
+	sources: readonly McpConfigSource[],
 	diagnostics: McpConfigDiagnostic[]
 ): void => {
 	for (const source of sources) {
@@ -294,8 +313,8 @@ const diagnoseMalformedEntries = (
 };
 
 type ResolveInput = {
-	env: Record<string, string | undefined>;
-	snapshot: ConfigSnapshot;
+	env: Readonly<Record<string, string | undefined>>;
+	snapshot: McpConfigSnapshot;
 	workspace: string;
 };
 
@@ -303,11 +322,7 @@ export const resolveServers = ({
 	env,
 	snapshot,
 	workspace,
-}: ResolveInput): {
-	diagnostics: McpConfigDiagnostic[];
-	invalidServers?: Record<string, InvalidMcpServerConfig>;
-	servers: Record<string, ResolvedMcpServerConfig>;
-} => {
+}: ResolveInput): McpConfigResult => {
 	const diagnostics: McpConfigDiagnostic[] = snapshot.diagnostics.map(
 		(diagnostic) => ({ ...diagnostic })
 	);

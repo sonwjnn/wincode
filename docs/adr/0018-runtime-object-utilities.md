@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Wincode introduces `@wincode/runtime-utils` as a leaf package with no runtime or Wincode-package dependencies. Its object predicates are separated by accepted-value semantics: `isPlainObject` is for plain parsed/config data, while `isObjectLike` is for non-null objects where arrays and special objects are valid; string, numeric, and JSON-value predicates remain provider- and domain-neutral. JSON predicates validate tree-shaped JSON compatibility, while callers own semantic limits such as MCP's depth, byte, and tool-count policies. Callers use only the predicate matching their invariant, and domain validators, key-presence checks, allowlists, parsers, and schema policies remain local. `isRecord`, `isNonArrayObject`, and `isDictionary` are not introduced, and `es-toolkit` is intentionally outside this extraction.
+Wincode introduces `@wincode/utils` as a leaf package with no runtime or Wincode-package dependencies. Its object predicates are separated by accepted-value semantics: `isPlainObject` is for plain parsed/config data, while `isObjectLike` is for non-null objects where arrays and special objects are valid; string, numeric, and JSON-value predicates remain provider- and domain-neutral. JSON predicates validate tree-shaped JSON compatibility, while callers own semantic limits such as MCP's depth, byte, and tool-count policies. Callers use only the predicate matching their invariant, and domain validators, key-presence checks, allowlists, parsers, and schema policies remain local. `isRecord`, `isNonArrayObject`, and `isDictionary` are not introduced, and `es-toolkit` is intentionally outside this extraction.
 
 ## Considered Options
 

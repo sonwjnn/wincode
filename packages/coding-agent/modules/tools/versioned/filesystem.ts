@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isObjectLike, isString } from "@wincode/runtime-utils";
+import { isObjectLike, isString } from "@wincode/utils";
 import type { ToolResourceLimits } from "../resource-limits";
 import { defaultWorkspaceSandbox, type WorkspacePolicy } from "../workspace";
 import {

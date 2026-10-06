@@ -1,4 +1,4 @@
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import type { SessionMessage } from "./message";
 import { isSessionToolPart, isTerminalSessionToolPart } from "./message";
 

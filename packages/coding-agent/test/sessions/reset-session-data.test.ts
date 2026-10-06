@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import { isUndefined } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import {
 	createSessionCapabilities,
 	type SessionCapabilitiesAssembly,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isBoolean, isUndefined } from "@wincode/runtime-utils";
+import { isBoolean, isUndefined } from "@wincode/utils";
 import {
 	EDIT_MODE_SETTING,
 	EDIT_MODE_SETTING_ID,

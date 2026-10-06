@@ -22,7 +22,7 @@ import {
 	isUndefined,
 	logger,
 	omitUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import {
 	createSkillSnapshot,
 	type SkillRequestContext,
@@ -75,6 +75,7 @@ export type SubmissionDeps = Readonly<{
 	beginExecution: (input: SessionExecutionInput) => SessionExecution;
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	endExecution: (turnId: AgentTurnId) => void;
+	getAssistantMessageId: (turnId: AgentTurnId) => SessionMessageId;
 	isShutDown: () => boolean;
 	/** Persists delivered Steering Message state transitions. */
 	acknowledgeSteeringMessages: (
@@ -117,6 +118,11 @@ export type SubmissionDeps = Readonly<{
 	takeSteeringMessages: (
 		execution: SessionExecution,
 		armedSkill: SessionSkillCatalog,
+		signal: AbortSignal
+	) => Promise<SessionMessage[]>;
+	/** Takes committed Delegation Reports at the Agent Runtime's safe follow-up boundary. */
+	takeDelegationReportMessages: (
+		execution: SessionExecution,
 		signal: AbortSignal
 	) => Promise<SessionMessage[]>;
 }>;
@@ -844,10 +850,13 @@ const handleSafeAssistantOutcome = async ({
 };
 
 /** The durable record inputs every terminal failure row of an execution shares. */
-const failureRecordInput = (execution: SessionExecution) => ({
+const failureRecordInput = (
+	execution: SessionExecution,
+	assistantMessageId: SessionMessageId
+) => ({
 	agentId: execution.agent,
+	assistantMessageId,
 	...omitUndefined({
-		delegation: execution.parent,
 		sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 		effort: execution.effort,
 		reasoningMode: execution.reasoningMode,
@@ -1064,7 +1073,10 @@ const handleTurnFailure = async ({
 				deps,
 				execution,
 				record: buildAssistantCancelledSessionRecord(
-					failureRecordInput(execution)
+					failureRecordInput(
+						execution,
+						deps.getAssistantMessageId(execution.turnId)
+					)
 				),
 			});
 		}
@@ -1074,7 +1086,10 @@ const handleTurnFailure = async ({
 			deps,
 			execution,
 			record: buildAssistantFailureSessionRecord({
-				...failureRecordInput(execution),
+				...failureRecordInput(
+					execution,
+					deps.getAssistantMessageId(execution.turnId)
+				),
 				error,
 			}),
 		});
@@ -1082,6 +1097,7 @@ const handleTurnFailure = async ({
 	if (!(terminalObserved || isUndefined(currentTurn))) {
 		const fallbackRecord = signal.aborted
 			? buildTerminalSessionRecord({
+					assistantMessageId: deps.getAssistantMessageId(execution.turnId),
 					assistantText: "",
 					event: createAgentTurnAbortEvent(currentTurn, signal, 0),
 					...omitUndefined({
@@ -1090,7 +1106,10 @@ const handleTurnFailure = async ({
 					turn: currentTurn,
 				})
 			: buildAssistantFailureSessionRecord({
-					...failureRecordInput(execution),
+					...failureRecordInput(
+						execution,
+						deps.getAssistantMessageId(execution.turnId)
+					),
 					error,
 				});
 		if (!isUndefined(fallbackRecord)) {
@@ -1230,9 +1249,13 @@ const runTurn = async ({
 			if (event.type === "model-step-finished") {
 				await deps.acknowledgeSteeringMessages(execution.turnId, "processed");
 			}
+			const currentExecution = {
+				...execution,
+				assistantId: deps.getAssistantMessageId(execution.turnId),
+			};
 			const projected = projectAgentTurnEvent(
 				deps.getContext(),
-				execution,
+				currentExecution,
 				event
 			);
 			if (isUndefined(projected)) {
@@ -1267,9 +1290,13 @@ const runTurn = async ({
 			}
 			terminalFailure =
 				event.type === "agent-turn-failed" ? event.failure : undefined;
+			const currentExecution = {
+				...execution,
+				assistantId: deps.getAssistantMessageId(execution.turnId),
+			};
 			const messages = projectAgentTurnTerminal(
 				deps.getContext(),
-				execution,
+				currentExecution,
 				event
 			);
 			deps.applyContext(messages);
@@ -1307,6 +1334,7 @@ const runTurn = async ({
 			armedSkill: context.armedSkill,
 			callbacks,
 			execution,
+			getAssistantMessageId: () => deps.getAssistantMessageId(execution.turnId),
 			messages: hydrated,
 			resolvedAgent: context.resolvedAgent,
 			...omitUndefined({ skillRequest: context.skill }),
@@ -1314,6 +1342,10 @@ const runTurn = async ({
 			takeSteeringMessages: async () =>
 				turnIsLive()
 					? deps.takeSteeringMessages(execution, context.armedSkill, signal)
+					: [],
+			takeFollowUpMessages: async () =>
+				turnIsLive()
+					? deps.takeDelegationReportMessages(execution, signal)
 					: [],
 		});
 		if (!turnIsLive()) {

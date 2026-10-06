@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import type { AgentId } from "@wincode/agent-core";
-import { act, useEffect } from "react";
-import { McpProvider } from "@/modules/mcp/context/mcp-provider";
 import {
 	createMcpRegistry,
 	type McpCatalogSnapshot,
 	type McpRegistry,
 	type McpServerStatus,
-} from "@/modules/mcp/registry";
+} from "@wincode/mcp";
+import { act, useEffect } from "react";
+import { McpProvider } from "@/modules/mcp/context/mcp-provider";
 import {
 	formatStatusRow,
 	MCP_LOCAL_WARNING,
@@ -98,7 +98,7 @@ const renderStatusDialog = async (registry: McpRegistry) => {
 					 * useMcp call resolves.
 					 */}
 					<DialogProvider>
-						<McpProvider createRegistry={() => registry} workspace="/tmp">
+						<McpProvider createRegistry={() => registry}>
 							<DialogProvider>
 								<Harness />
 							</DialogProvider>

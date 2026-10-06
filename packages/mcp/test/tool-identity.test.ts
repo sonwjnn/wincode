@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { qualifyMcpToolName } from "@/modules/mcp/tool-identity";
+import { qualifyMcpToolName } from "@wincode/mcp";
 
 const IDENTITY_PATTERN = /^mcp_[A-Za-z0-9_-]+$/;
 const IDENTITY_WITH_HASH_PATTERN =

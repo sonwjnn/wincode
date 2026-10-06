@@ -5,6 +5,7 @@ import {
 	agentIdSchema,
 	createAgentRuntime,
 	createAgentTurnMessage,
+	createStatefulAgent,
 	type ResolvedTool,
 	type ToolCallId,
 	type ToolDefinition,
@@ -248,6 +249,340 @@ test("pending steering continues the same turn after a text-only model step", as
 		}),
 	]);
 });
+test("steering committed during a follow-up read precedes the report in later turns", async () => {
+	const followUpReadStarted = Promise.withResolvers<void>();
+	const releaseFollowUpRead = Promise.withResolvers<void>();
+	const turn = buildTurn();
+	const steering = createAgentTurnMessage(
+		"user",
+		"Correct the parent before the report.",
+		toSessionMessageId("late-steering")
+	);
+	const report = createAgentTurnMessage(
+		"user",
+		"The delegated report.",
+		toSessionMessageId("late-steering-report")
+	);
+	const { client, requests } = scriptedClient((_request, index) =>
+		scriptedParts(
+			{
+				delta: index === 0 ? "The parent response." : "Both messages handled.",
+				type: "text-delta",
+			},
+			{ type: "finish" }
+		)
+	);
+	let reportAvailable = true;
+	let steeringAvailable = false;
+	const statefulAgent = createStatefulAgent({
+		runtime: createAgentRuntime({ modelClient: client }),
+	});
+	const runningTurn = consume(
+		statefulAgent.run(turn, {
+			takeFollowUpMessages: async () => {
+				if (!reportAvailable) {
+					return [];
+				}
+				followUpReadStarted.resolve();
+				await releaseFollowUpRead.promise;
+				reportAvailable = false;
+				return [report];
+			},
+			takeSteeringMessages: () => {
+				if (!steeringAvailable) {
+					return [];
+				}
+				steeringAvailable = false;
+				return [steering];
+			},
+		})
+	);
+
+	try {
+		await followUpReadStarted.promise;
+		steeringAvailable = true;
+		releaseFollowUpRead.resolve();
+		await runningTurn;
+
+		expect(requests).toHaveLength(2);
+		expect(
+			requests[1]?.messages.map((message) => ({
+				role: message.role,
+				text: message.content
+					.flatMap((part) => (part.type === "text" ? [part.text] : []))
+					.join("\n"),
+			}))
+		).toEqual([
+			{ role: "user", text: "Inspect the file" },
+			{ role: "assistant", text: "The parent response." },
+			{ role: "user", text: "Correct the parent before the report." },
+			{ role: "user", text: "The delegated report." },
+		]);
+		const nextUserMessage = createAgentTurnMessage(
+			"user",
+			"Continue after the report.",
+			toSessionMessageId("late-steering-next-turn")
+		);
+		await consume(
+			statefulAgent.run({
+				...buildTurn(),
+				id: toAgentTurnId("turn-after-late-steering"),
+				input: {
+					messages: [...statefulAgent.getSnapshot().context, nextUserMessage],
+				},
+			})
+		);
+		expect(requests).toHaveLength(3);
+		expect(
+			requests[2]?.messages.map((message) => ({
+				role: message.role,
+				text: message.content
+					.flatMap((part) => (part.type === "text" ? [part.text] : []))
+					.join("\n"),
+			}))
+		).toEqual([
+			{ role: "user", text: "Inspect the file" },
+			{ role: "assistant", text: "The parent response." },
+			{ role: "user", text: "Correct the parent before the report." },
+			{ role: "user", text: "The delegated report." },
+			{ role: "assistant", text: "Both messages handled." },
+			{ role: "user", text: "Continue after the report." },
+		]);
+	} finally {
+		releaseFollowUpRead.resolve();
+		await statefulAgent.shutdown();
+	}
+});
+
+test("Stateful Agent delivers queued steering before follow-ups at safe boundaries", async () => {
+	const toolStarted = Promise.withResolvers<void>();
+	const releaseTool = Promise.withResolvers<void>();
+	const executionInputs: unknown[] = [];
+	const observedPrompts: { role: string; text: string }[][] = [];
+	const tool: ResolvedTool = {
+		definition: readDefinition,
+		execute: async (request) => {
+			toolStarted.resolve();
+			await releaseTool.promise;
+			executionInputs.push(request.input);
+			return { output: { content: "source text" }, type: "success" };
+		},
+	};
+	const { client, requests } = scriptedClient((request, index) => {
+		observedPrompts.push(
+			request.messages.map(({ content, role }) => ({
+				role,
+				text: content
+					.flatMap((part) => (part.type === "text" ? [part.text] : []))
+					.join("\n"),
+			}))
+		);
+		if (index === 0) {
+			return scriptedParts(
+				{
+					input: { path: "src/main.ts" },
+					toolCallId: "follow-up-read",
+					toolName: "read",
+					type: "tool-call",
+				},
+				{ type: "finish" }
+			);
+		}
+		return scriptedParts(
+			{
+				delta: "The parent handled steering and the report.",
+				type: "text-delta",
+			},
+			{ type: "finish" }
+		);
+	});
+	const statefulAgent = createStatefulAgent({
+		runtime: createAgentRuntime({ modelClient: client }),
+	});
+	const pendingSteering = createAgentTurnMessage(
+		"user",
+		"Finish the queued correction first.",
+		toSessionMessageId("queued-steering")
+	);
+	const pendingReport = createAgentTurnMessage(
+		"user",
+		"The delegated report.",
+		toSessionMessageId("delegated-report-follow-up")
+	);
+	const runningTurn = consume(statefulAgent.run(buildTurn([tool])));
+
+	try {
+		await toolStarted.promise;
+		statefulAgent.steer(pendingSteering);
+		statefulAgent.followUp(pendingReport);
+
+		releaseTool.resolve();
+		await runningTurn;
+		expect(executionInputs).toEqual([{ path: "src/main.ts" }]);
+		expect(observedPrompts[1]?.map(({ role }) => role)).toEqual([
+			"user",
+			"assistant",
+			"tool",
+			"user",
+			"user",
+		]);
+		expect(observedPrompts[1]?.at(-2)?.text).toBe(
+			"Finish the queued correction first."
+		);
+		expect(observedPrompts[1]?.at(-1)?.text).toBe("The delegated report.");
+		expect(requests).toHaveLength(2);
+	} finally {
+		releaseTool.resolve();
+		await statefulAgent.shutdown();
+	}
+});
+
+test("aborting a Stateful Agent drops queued follow-ups before the next Model Step", async () => {
+	const toolStarted = Promise.withResolvers<void>();
+	const releaseTool = Promise.withResolvers<void>();
+	const tool: ResolvedTool = {
+		definition: readDefinition,
+		execute: async () => {
+			toolStarted.resolve();
+			await releaseTool.promise;
+			return { output: { content: "source text" }, type: "success" };
+		},
+	};
+	const { client, requests } = scriptedClient((_request, index) =>
+		index === 0
+			? scriptedParts(
+					{
+						input: { path: "src/main.ts" },
+						toolCallId: "interrupted-read",
+						toolName: "read",
+						type: "tool-call",
+					},
+					{ type: "finish" }
+				)
+			: scriptedParts(
+					{ delta: "The new user turn completed.", type: "text-delta" },
+					{ type: "finish" }
+				)
+	);
+	const statefulAgent = createStatefulAgent({
+		runtime: createAgentRuntime({ modelClient: client }),
+	});
+	const interruptedTurn = buildTurn([tool]);
+	const firstUser = interruptedTurn.input.messages[0];
+	if (firstUser === undefined) {
+		throw new Error("The interrupted turn has no user message.");
+	}
+	const report = createAgentTurnMessage(
+		"user",
+		"The report queued before interruption.",
+		toSessionMessageId("interrupted-report-follow-up")
+	);
+	const runningTurn = consume(statefulAgent.run(interruptedTurn));
+
+	try {
+		await toolStarted.promise;
+		statefulAgent.followUp(report);
+		statefulAgent.abort();
+		releaseTool.resolve();
+		await runningTurn;
+
+		expect(requests).toHaveLength(1);
+		const nextTurn = {
+			...buildTurn(),
+			id: toAgentTurnId("turn-after-report-interrupt"),
+			input: {
+				messages: [
+					firstUser,
+					report,
+					createAgentTurnMessage(
+						"user",
+						"Handle new work.",
+						toSessionMessageId("post-interrupt-prompt")
+					),
+				],
+			},
+		};
+		await consume(statefulAgent.run(nextTurn));
+
+		expect(requests).toHaveLength(2);
+		const reportParts = requests[1]?.messages
+			.flatMap(({ content }) => content)
+			.filter(
+				(part) =>
+					part.type === "text" &&
+					part.text === "The report queued before interruption."
+			);
+		expect(reportParts).toHaveLength(1);
+	} finally {
+		releaseTool.resolve();
+		await statefulAgent.shutdown();
+	}
+});
+
+test("does not redeliver a follow-up already restored from durable Session history", async () => {
+	const { client, requests } = scriptedClient(() =>
+		scriptedParts(
+			{ delta: "The active parent response.", type: "text-delta" },
+			{ type: "finish" }
+		)
+	);
+	const statefulAgent = createStatefulAgent({
+		runtime: createAgentRuntime({ modelClient: client }),
+	});
+	const firstTurn = buildTurn();
+	const firstUser = firstTurn.input.messages[0];
+	if (firstUser === undefined) {
+		throw new Error("The first turn has no user message.");
+	}
+	const report = createAgentTurnMessage(
+		"user",
+		"The committed delegated report.",
+		toSessionMessageId("restored-delegation-report")
+	);
+	const currentRun = statefulAgent.run(firstTurn)[Symbol.asyncIterator]();
+
+	try {
+		let turnCompleted = false;
+		while (!turnCompleted) {
+			const next = await currentRun.next();
+			if (next.done) {
+				break;
+			}
+			turnCompleted = next.value.type === "agent-turn-completed";
+		}
+		statefulAgent.followUp(report);
+		await currentRun.next();
+
+		const nextTurn = {
+			...buildTurn(),
+			id: toAgentTurnId("turn-restored-report"),
+			input: {
+				messages: [
+					firstUser,
+					report,
+					createAgentTurnMessage(
+						"user",
+						"Continue after restart.",
+						toSessionMessageId("restored-report-follow-up")
+					),
+				],
+			},
+		};
+		await consume(statefulAgent.run(nextTurn));
+
+		expect(requests).toHaveLength(2);
+		const reportParts = requests[1]?.messages
+			.flatMap(({ content }) => content)
+			.filter(
+				(part) =>
+					part.type === "text" &&
+					part.text === "The committed delegated report."
+			);
+		expect(reportParts).toHaveLength(1);
+	} finally {
+		await statefulAgent.shutdown();
+	}
+});
 
 test("invalid model tool input fails visibly without executing the tool", async () => {
 	let executed = false;
@@ -379,4 +714,77 @@ test("runtime deadlines fail the turn with the deadline disposition", async () =
 		failure: { code: "deadline-exceeded", source: "runtime" },
 		type: "agent-turn-failed",
 	});
+});
+
+test("refuses every Tool Call in a batch that includes an exclusive submit_result", async () => {
+	const executions: string[] = [];
+	const submitResultTool: ResolvedTool = {
+		definition: {
+			...readDefinition,
+			exclusiveInBatch: true,
+			name: "submit_result",
+		},
+		execute: async () => {
+			executions.push("submit_result");
+			return { output: "unexpected", type: "success" };
+		},
+	};
+	const readTool: ResolvedTool = {
+		definition: readDefinition,
+		execute: async () => {
+			executions.push("read");
+			return { output: "unexpected", type: "success" };
+		},
+	};
+	const { client } = scriptedClient((_request, index) =>
+		index === 0
+			? scriptedParts(
+					{
+						input: { path: "final report" },
+						toolCallId: "call-submit-result",
+						toolName: "submit_result",
+						type: "tool-call",
+					},
+					{
+						input: { path: "src/main.ts" },
+						toolCallId: "call-read",
+						toolName: "read",
+						type: "tool-call",
+					},
+					{ type: "finish" }
+				)
+			: scriptedParts(
+					{ delta: "No batch side effect ran.", type: "text-delta" },
+					{ type: "finish" }
+				)
+	);
+	const events = await consume(
+		createAgentRuntime({ modelClient: client }).run(
+			buildTurn([submitResultTool, readTool])
+		)
+	);
+	const outcomes = events.filter(
+		(event) => event.type === "tool-call-finished"
+	);
+
+	expect(executions).toEqual([]);
+	expect(outcomes).toMatchObject([
+		{
+			outcome: {
+				errorText:
+					"submit_result must be the only Tool Call in this Model Step; no Tool Calls in the batch ran.",
+				type: "failure",
+			},
+			toolCallId: "call-submit-result",
+		},
+		{
+			outcome: {
+				errorText:
+					"submit_result must be the only Tool Call in this Model Step; no Tool Calls in the batch ran.",
+				type: "failure",
+			},
+			toolCallId: "call-read",
+		},
+	]);
+	expect(events.at(-1)?.type).toBe("agent-turn-completed");
 });

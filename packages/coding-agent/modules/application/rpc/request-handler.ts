@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AttachmentReferenceResolver } from "@/modules/sessions/attachment-reference";
 import { createSkillSnapshot } from "@/modules/skills";
+import type { SessionId } from "@/shared/identifiers";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
 import type {
 	SessionHost,
@@ -47,7 +48,8 @@ import {
 
 export type RpcRequestHandlerContext = Readonly<{
 	autoApproval?: boolean;
-	bind: (host: SessionHost, sessionId: string) => void;
+	bind: (host: SessionHost, sessionId: SessionId) => void;
+	unbind: () => void;
 	currentState: () => Record<string, unknown>;
 	getRuntime: () => Promise<RuntimeModules>;
 	parseSelection: (value: unknown) => Promise<Selection>;
@@ -116,6 +118,7 @@ export const createRpcRequestHandler = (
 	const {
 		autoApproval,
 		bind,
+		unbind,
 		currentState,
 		getRuntime,
 		parseSelection,
@@ -256,12 +259,6 @@ export const createRpcRequestHandler = (
 		}
 		requireInitialized();
 		if (request.method === "session/create") {
-			if (state.lifecycle === "bound") {
-				throw appError(
-					"session_already_bound",
-					"This process already owns a Session."
-				);
-			}
 			if (state.assembly === undefined || state.assembly.store === undefined) {
 				throw appError(
 					"not_initialized",
@@ -334,14 +331,29 @@ export const createRpcRequestHandler = (
 					: { reasoningMode: selection.reasoningMode }),
 			});
 			const createdId = activeRuntime.toSessionId(String(created.id));
+			const previousSessionId = state.boundSessionId;
+			const manager = activeAssembly.capabilities.getSessionHostManager();
+			const restorePreviousBinding = async (): Promise<void> => {
+				if (previousSessionId === undefined || state.signalRequested) {
+					return;
+				}
+				const restoredHost = await activeRuntime.createSessionHost({
+					capabilities: activeAssembly.capabilities,
+					sessionId: previousSessionId,
+				});
+				bind(restoredHost, previousSessionId);
+			};
 			let createdHost: SessionHost | undefined;
 			try {
 				createdHost = await activeRuntime.createSessionHost({
 					capabilities: activeAssembly.capabilities,
 					sessionId: createdId,
 				});
-				if (state.signalRequested || state.lifecycle !== "initialized") {
-					await createdHost.shutdown().catch(() => undefined);
+				if (
+					state.signalRequested ||
+					(state.lifecycle !== "initialized" && state.lifecycle !== "bound")
+				) {
+					await manager.releaseView(createdId).catch(() => undefined);
 					createdHost = undefined;
 					throw appError("server_closing", "The RPC server is closing.");
 				}
@@ -353,12 +365,9 @@ export const createRpcRequestHandler = (
 					})
 				);
 				if (admission === undefined || admission.rejected) {
-					const failedHost = state.host;
-					state.host = undefined;
-					state.boundSessionId = undefined;
-					state.lifecycle = "initialized";
+					unbind();
 					createdHost = undefined;
-					await failedHost?.shutdown().catch(() => undefined);
+					await restorePreviousBinding();
 					throw appError(
 						"session_created_but_unbound",
 						"Session admission failed after creation.",
@@ -378,11 +387,11 @@ export const createRpcRequestHandler = (
 					const failedHost = createdHost;
 					createdHost = undefined;
 					if (state.host === failedHost) {
-						state.host = undefined;
-						state.boundSessionId = undefined;
-						state.lifecycle = "initialized";
+						unbind();
+						await restorePreviousBinding();
+					} else {
+						await manager.releaseView(createdId).catch(() => undefined);
 					}
-					await failedHost.shutdown().catch(() => undefined);
 				}
 				if (error instanceof RpcApplicationError) {
 					throw error;
@@ -402,12 +411,6 @@ export const createRpcRequestHandler = (
 			}
 		}
 		if (request.method === "session/open") {
-			if (state.lifecycle === "bound") {
-				throw appError(
-					"session_already_bound",
-					"This process already owns a Session."
-				);
-			}
 			if (state.assembly === undefined || state.assembly.store === undefined) {
 				throw appError(
 					"not_initialized",
@@ -441,8 +444,14 @@ export const createRpcRequestHandler = (
 					capabilities: activeAssembly.capabilities,
 					sessionId,
 				});
-				if (state.signalRequested || state.lifecycle !== "initialized") {
-					await openedHost.shutdown().catch(() => undefined);
+				if (
+					state.signalRequested ||
+					(state.lifecycle !== "initialized" && state.lifecycle !== "bound")
+				) {
+					await activeAssembly.capabilities
+						.getSessionHostManager()
+						.releaseView(sessionId)
+						.catch(() => undefined);
 					throw appError("server_closing", "The RPC server is closing.");
 				}
 				bind(openedHost, sessionId);

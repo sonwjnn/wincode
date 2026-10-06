@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { isUndefined } from "@wincode/runtime-utils";
-import { mcpDeniedByPolicyText } from "@/modules/mcp/registry";
+import { mcpDeniedByPolicyText } from "@wincode/mcp";
+import { isUndefined } from "@wincode/utils";
 import {
 	applyManualApprovalSafetyCeiling,
 	canonicalizeExternalPath,
@@ -32,6 +32,7 @@ import {
 	toolCallId as makeToolCallId,
 	sessionId,
 } from "../support/identifiers";
+import { createTestInputScheduler } from "../support/stateful-agent";
 
 const createGate = (
 	permission = createToolPermission(),
@@ -1363,7 +1364,9 @@ describe("approval settlement through the Agent Session", () => {
 		new AgentSessionImpl({
 			initialTranscript: [],
 			ports: fromPartial<AgentSessionPorts>({
+				inputScheduler: createTestInputScheduler(),
 				turnRunner: { requestOverheadTokens: () => 0 },
+				persistReportContinuationPaused: async () => undefined,
 				// Compaction is not part of this seam; the Agent Session only needs the port.
 				compaction: {
 					compact: () =>

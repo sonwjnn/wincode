@@ -6,7 +6,7 @@ import {
 	createPermissionService,
 	createToolPermission,
 } from "@/modules/permissions";
-import { createGatedCodingTools } from "@/modules/sessions/hooks/runtime-turn";
+import { resolveTurnTools } from "@/modules/sessions/hooks/runtime-turn";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
@@ -66,7 +66,7 @@ const observationStoreFor = (store: SessionStore): FileObservationStore => {
 	}
 	return store.fileObservationStore;
 };
-const createTools = (
+const createTools = async (
 	root: string,
 	context: VersionedEditingContext,
 	requests: ToolApprovalRequest[],
@@ -79,7 +79,7 @@ const createTools = (
 		sandbox: createWorkspaceSandbox(root),
 		service: createPermissionService(),
 	});
-	const tools = createGatedCodingTools({
+	const tools = await resolveTurnTools({
 		agentTools: ["read", "write", "edit", "recover"],
 		gate,
 		resolveResourceLimits: async () => resourceLimits,
@@ -126,7 +126,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 			store: observationStoreFor(store),
 		});
 		const requests: ToolApprovalRequest[] = [];
-		const tools = createTools(root, context(), requests);
+		const tools = await createTools(root, context(), requests);
 		const readResult = await tools
 			.find("read")
 			.execute(
@@ -185,7 +185,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 			)
 		).toEqual(artifact);
 		const restartedRequests: ToolApprovalRequest[] = [];
-		const restartedTools = createTools(
+		const restartedTools = await createTools(
 			root,
 			restartedContext(),
 			restartedRequests
@@ -233,7 +233,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 			store: observationStoreFor(store),
 		};
 		const sloppyRequests: ToolApprovalRequest[] = [];
-		const sloppyTools = createTools(root, sloppyContext, sloppyRequests);
+		const sloppyTools = await createTools(root, sloppyContext, sloppyRequests);
 		const sloppyResult = await sloppyTools.find("edit").execute(
 			{
 				input: {
@@ -312,7 +312,7 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 				maxFullDiffArtifactBytes: 10_000,
 			},
 		};
-		const tools = createTools(
+		const tools = await createTools(
 			root,
 			context("apply_patch"),
 			requests,
@@ -409,7 +409,7 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 			await observationStoreFor(store).recovery?.listUnresolvedRecoveries();
 		const recoveryId = unresolved?.[0]?.id;
 		expect(recoveryId).toBeString();
-		const restartedTools = createTools(root, context(), requests);
+		const restartedTools = await createTools(root, context(), requests);
 		const inspection = await restartedTools.find("recover").execute(
 			{
 				input: { action: "inspect", recoveryId },

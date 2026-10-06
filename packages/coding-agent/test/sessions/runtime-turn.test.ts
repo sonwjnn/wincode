@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as path from "node:path";
+import { fromPartial } from "@total-typescript/shoehorn";
 import type {
 	AgentRuntime,
 	AgentTurn,
@@ -9,16 +10,18 @@ import type {
 } from "@wincode/agent-core";
 import { createOperationalFailure } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
-import { isObjectLike, isUndefined } from "@wincode/runtime-utils";
+import type { McpCatalogSnapshot, McpSnapshotTool } from "@wincode/mcp";
+import { isObjectLike, isUndefined } from "@wincode/utils";
 import { z } from "zod";
 import { buildAgent } from "@/modules/agents/built-ins";
 import { RetiredModelError } from "@/modules/model-target";
 import {
 	buildAgentTurn,
-	createGatedCodingTools,
+	resolveTurnTools,
 	runAgentTurnToText,
 } from "@/modules/sessions/hooks/runtime-turn";
 import { buildAssistantFailureSessionRecord } from "@/modules/sessions/turn-records";
+import type { SkillExecution, SkillToolDefinition } from "@/modules/skills";
 import {
 	createMemoryFileObservationStore,
 	getToolResourceLimits,
@@ -26,6 +29,7 @@ import {
 import {
 	agentId,
 	agentTurnId,
+	mcpSnapshotId,
 	modelId,
 	sessionId,
 	sessionMessageId,
@@ -243,13 +247,15 @@ class AbortOnSecondReadSignal extends EventTarget implements AbortSignal {
 	}
 }
 
-test("Agent Turn shell schemas enforce the active resource profile command limit", () => {
-	const shellToolFor = (profile: "standard" | "extended" | "deep") => {
-		const tool = createGatedCodingTools({
-			agentTools: ["shell"],
-			gate: { gate: async () => ({ kind: "allow" }) },
-			resourceLimits: getToolResourceLimits(profile),
-		})[0];
+test("Agent Turn shell schemas enforce the active resource profile command limit", async () => {
+	const shellToolFor = async (profile: "standard" | "extended" | "deep") => {
+		const tool = (
+			await resolveTurnTools({
+				agentTools: ["shell"],
+				gate: { gate: async () => ({ kind: "allow" }) },
+				resourceLimits: getToolResourceLimits(profile),
+			})
+		)[0];
 		if (isUndefined(tool)) {
 			throw new Error("The shell tool was not registered.");
 		}
@@ -263,7 +269,7 @@ test("Agent Turn shell schemas enforce the active resource profile command limit
 	for (const profile of ["standard", "extended", "deep"] as const) {
 		const maxCommandChars =
 			getToolResourceLimits(profile).shell.maxCommandChars;
-		const schema = shellToolFor(profile);
+		const schema = await shellToolFor(profile);
 
 		expect(
 			schema.safeParse({ command: `:${" ".repeat(maxCommandChars - 1)}` })
@@ -282,8 +288,160 @@ test("Agent Turn shell schemas enforce the active resource profile command limit
 	}
 });
 
+test("shell Plugin tools use the shell-specific Tool Gate policy", async () => {
+	const calls: unknown[] = [];
+	const input = { command: "echo gated" };
+	const id = toolCallId("shell-policy-test");
+	const shellTool = (
+		await resolveTurnTools({
+			agentTools: ["shell"],
+			gate: {
+				gate: async (call) => {
+					calls.push(call);
+					return { errorText: "Shell denied by policy.", kind: "deny" };
+				},
+			},
+		})
+	).find(({ definition }) => definition.name === "shell");
+	if (isUndefined(shellTool)) {
+		throw new Error("The selected shell tool was not resolved.");
+	}
+
+	const result = await shellTool.execute({ input, toolCallId: id });
+
+	expect(calls).toHaveLength(1);
+	expect(calls[0]).toMatchObject({
+		family: "shell",
+		toolCall: { input, toolCallId: id },
+	});
+	expect(result).toMatchObject({
+		errorText: "Shell denied by policy.",
+		type: "failure",
+	});
+});
+
+test("MCP Plugin tools pass through the MCP Tool Gate before server execution", async () => {
+	const calls: unknown[] = [];
+	let executions = 0;
+	const snapshot = fromPartial<McpCatalogSnapshot>({
+		agent: agentId("build"),
+		id: mcpSnapshotId("plugin-test"),
+		manifest: [
+			{
+				description: "Search the workspace index.",
+				inputSchema: { type: "object" },
+				name: "mcp_search",
+			},
+		],
+		tools: new Map([
+			[
+				"mcp_search",
+				fromPartial<McpSnapshotTool>({
+					agentDecision: "allow",
+					description: "Search the workspace index.",
+					logicalName: "search",
+					safety: false,
+					serverDecision: "allow",
+				}),
+			],
+		]),
+	});
+	const mcpTool = (
+		await resolveTurnTools({
+			agentTools: [],
+			executeMcpTool: async () => {
+				executions += 1;
+				return { output: null, type: "success" };
+			},
+			gate: {
+				gate: async (call) => {
+					calls.push(call);
+					return { errorText: "MCP denied by policy.", kind: "deny" };
+				},
+			},
+			mcpSnapshot: snapshot,
+		})
+	).find(({ definition }) => definition.name === "mcp_search");
+	if (isUndefined(mcpTool)) {
+		throw new Error("The MCP Plugin did not resolve the snapshot tool.");
+	}
+
+	const toolCall = {
+		input: { query: "private" },
+		toolCallId: toolCallId("mcp-gate"),
+	};
+	const result = await mcpTool.execute(toolCall);
+
+	expect(calls).toHaveLength(1);
+	expect(calls[0]).toMatchObject({ family: "mcp", toolName: "mcp_search" });
+	expect(result).toMatchObject({
+		errorText: "MCP denied by policy.",
+		type: "failure",
+	});
+	expect(executions).toBe(0);
+});
+
+test("native Skill tools use the Skill Tool Gate before activation", async () => {
+	const calls: unknown[] = [];
+	let activations = 0;
+	let rejections = 0;
+	const skillTool: SkillToolDefinition = {
+		description: "Activate an available Skill.",
+		inputSchema: {
+			additionalProperties: false,
+			properties: { name: { type: "string" } },
+			required: ["name"],
+			type: "object",
+		},
+		name: "skill",
+	};
+	const skillExecution = fromPartial<SkillExecution>({
+		activate: () => {
+			activations += 1;
+			return { status: "rejected" };
+		},
+		catalog: {
+			entries: [{ description: "A permitted Skill.", name: "permitted" }],
+		},
+		markRejected: () => {
+			rejections += 1;
+		},
+		setResourceSample: () => undefined,
+	});
+	const skill = (
+		await resolveTurnTools({
+			agentTools: [],
+			gate: {
+				gate: async (call) => {
+					calls.push(call);
+					return { errorText: "Skill denied by policy.", kind: "deny" };
+				},
+			},
+			skillExecution,
+			skillTool,
+		})
+	).find(({ definition }) => definition.name === "skill");
+	if (isUndefined(skill)) {
+		throw new Error("The native Skill provider did not resolve its tool.");
+	}
+
+	const result = await skill.execute({
+		input: { name: "permitted" },
+		toolCallId: toolCallId("skill-gate"),
+	});
+
+	expect(calls).toHaveLength(1);
+	expect(calls[0]).toMatchObject({ family: "skill", name: "permitted" });
+	expect(result).toMatchObject({
+		output: { name: "permitted", status: "rejected" },
+		type: "success",
+	});
+	expect(activations).toBe(0);
+	expect(rejections).toBe(1);
+});
+
 test("forwards cancellation to a running coding tool", async () => {
-	const [shellTool] = createGatedCodingTools({
+	const [shellTool] = await resolveTurnTools({
 		agentTools: ["shell"],
 		gate: { gate: async () => ({ kind: "allow" }) },
 	});
@@ -313,15 +471,17 @@ test("coding tools execute only after the gate and remain Agent-selective", asyn
 	const deniedPath = path.join(root, "denied.txt");
 	try {
 		let allowedGateCalls = 0;
-		const allowedTool = createGatedCodingTools({
-			agentTools: ["write"],
-			gate: {
-				gate: async () => {
-					allowedGateCalls += 1;
-					return { kind: "allow" };
+		const allowedTool = (
+			await resolveTurnTools({
+				agentTools: ["write"],
+				gate: {
+					gate: async () => {
+						allowedGateCalls += 1;
+						return { kind: "allow" };
+					},
 				},
-			},
-		}).find(({ definition }) => definition.name === "write");
+			})
+		).find(({ definition }) => definition.name === "write");
 		if (isUndefined(allowedTool)) {
 			throw new Error("The selected write tool was not resolved.");
 		}
@@ -338,15 +498,17 @@ test("coding tools execute only after the gate and remain Agent-selective", asyn
 		expect(await Bun.file(allowedPath).text()).toBe("gated write\n");
 
 		let deniedGateCalls = 0;
-		const deniedTool = createGatedCodingTools({
-			agentTools: ["write"],
-			gate: {
-				gate: async () => {
-					deniedGateCalls += 1;
-					return { errorText: "Write denied by policy.", kind: "deny" };
+		const deniedTool = (
+			await resolveTurnTools({
+				agentTools: ["write"],
+				gate: {
+					gate: async () => {
+						deniedGateCalls += 1;
+						return { errorText: "Write denied by policy.", kind: "deny" };
+					},
 				},
-			},
-		}).find(({ definition }) => definition.name === "write");
+			})
+		).find(({ definition }) => definition.name === "write");
 		if (isUndefined(deniedTool)) {
 			throw new Error("The selected write tool was not resolved.");
 		}
@@ -365,7 +527,7 @@ test("coding tools execute only after the gate and remain Agent-selective", asyn
 		expect(deniedGateCalls).toBe(1);
 		expect(await Bun.file(deniedPath).exists()).toBe(false);
 
-		const readOnlyTools = createGatedCodingTools({
+		const readOnlyTools = await resolveTurnTools({
 			agentTools: ["read"],
 			gate: { gate: async () => ({ kind: "allow" }) },
 		});
@@ -377,16 +539,18 @@ test("coding tools execute only after the gate and remain Agent-selective", asyn
 	}
 });
 
-test("Agent Turn definitions restrict edit input to the active mode", () => {
-	const editTool = createGatedCodingTools({
-		agentTools: ["edit"],
-		gate: { gate: async () => ({ kind: "allow" }) },
-		versionedEditing: {
-			editMode: "replace",
-			sessionId: sessionId("catalog-edit-mode"),
-			store: createMemoryFileObservationStore(),
-		},
-	}).find(({ definition }) => definition.name === "edit");
+test("Agent Turn definitions restrict edit input to the active mode", async () => {
+	const editTool = (
+		await resolveTurnTools({
+			agentTools: ["edit"],
+			gate: { gate: async () => ({ kind: "allow" }) },
+			versionedEditing: {
+				editMode: "replace",
+				sessionId: sessionId("catalog-edit-mode"),
+				store: createMemoryFileObservationStore(),
+			},
+		})
+	).find(({ definition }) => definition.name === "edit");
 	if (isUndefined(editTool)) {
 		throw new Error("The selected edit tool was not resolved.");
 	}

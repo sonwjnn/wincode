@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { ResolvedMcpServerConfig } from "@/modules/mcp/config";
-import { collectSecrets, sanitizeMessage } from "@/modules/mcp/sanitize";
+import {
+	collectSecrets,
+	type ResolvedMcpServerConfig,
+	sanitizeMessage,
+} from "@wincode/mcp";
 
 const localConfig = (): ResolvedMcpServerConfig => ({
 	name: "demo",

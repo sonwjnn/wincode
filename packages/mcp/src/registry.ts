@@ -1,14 +1,6 @@
 import type { AgentId } from "@wincode/agent-core";
-import { isUndefined, pickTruthy } from "@wincode/runtime-utils";
+import { isUndefined } from "@wincode/utils";
 import type { JsonObject } from "type-fest";
-import {
-	composePermissionDecisions,
-	DEFAULT_EFFECTIVE_AGENT_POLICY,
-	decideOpenActionPermission,
-	type EffectiveAgentPolicy,
-} from "@/modules/permissions/policy";
-import type { ConfigStore } from "@/shared/config/config-store";
-import { type McpSnapshotId, toMcpSnapshotId } from "@/shared/identifiers";
 import {
 	createSdkMcpClient,
 	createSdkMcpClientDeps,
@@ -16,12 +8,12 @@ import {
 	type McpClientFactoryDeps,
 	type McpClientTool,
 } from "./client";
-import {
-	loadMcpConfig,
-	type McpConfigInput,
-	type McpConfigResult,
-	type ResolvedMcpServerConfig,
+import type {
+	McpConfigLoader,
+	McpConfigResult,
+	ResolvedMcpServerConfig,
 } from "./config";
+import { type McpSnapshotId, toMcpSnapshotId } from "./identifiers";
 import {
 	isJsonObject,
 	MAX_MCP_TOOL_COUNT,
@@ -34,20 +26,6 @@ import { sanitizeMessage } from "./sanitize";
 import { logicalMcpToolName, qualifyMcpToolName } from "./tool-identity";
 
 /**
- * The Agent's effective Permission policy as it applies to MCP tools: the folded
- * rules matched against logical tool names and whether the Agent runs under the
- * manual-only safety ceiling. Composed most-restrictively with each server's own
- * execution policy when a snapshot is built. Defaults to an empty, non-safety
- * policy so callers without an Agent see the server policy unchanged.
- */
-export type McpAgentPolicy = EffectiveAgentPolicy;
-
-// Every MCP tool gates against the single `*` resource in this version; only the
-// logical tool name distinguishes rules. Exported so the chat approval gate keys
-// grants against the identical resource the snapshot composed with.
-export const MCP_PERMISSION_RESOURCE = "*";
-
-/**
  * The single denial wording for MCP tools, owned here so the gate and the
  * registry guard can never drift. The registry emits it for a denied dispatch
  * entry and the Tool Gate emits it for a composed policy deny.
@@ -55,28 +33,37 @@ export const MCP_PERMISSION_RESOURCE = "*";
 export const mcpDeniedByPolicyText = (toolName: string): string =>
 	`MCP tool '${toolName}' is denied by policy`;
 
-/**
- * Composes an Agent's MCP policy for one logical tool name with the server's
- * independent execution policy, most-restrictively, then applies the Agent's
- * manual-only safety ceiling: under the ceiling every non-deny decision becomes
- * a manual `ask` so remembered grants and auto approval cannot bypass it.
- */
 const composeMcpToolDecision = (
-	serverPolicy: McpExecutionPolicy,
-	agentPolicy: McpAgentPolicy,
-	logicalName: string
+	serverDecision: McpExecutionPolicy,
+	agentDecision: McpExecutionPolicy,
+	safety: boolean
 ): McpExecutionPolicy => {
-	const agentDecision = decideOpenActionPermission(
-		agentPolicy.rules,
-		logicalName,
-		MCP_PERMISSION_RESOURCE
-	);
-	const composed = composePermissionDecisions(serverPolicy, agentDecision);
-	if (agentPolicy.safety && composed !== "deny") {
-		return "ask";
+	let composed: McpExecutionPolicy;
+	if (serverDecision === "deny" || agentDecision === "deny") {
+		composed = "deny";
+	} else if (serverDecision === "ask" || agentDecision === "ask") {
+		composed = "ask";
+	} else {
+		composed = "allow";
 	}
-	return composed;
+	return safety && composed !== "deny" ? "ask" : composed;
 };
+
+/** Agent policy is supplied by the application without importing its policy model. */
+export type McpAgentToolRequest = Readonly<{
+	logicalName: string;
+	serverName: string;
+	toolName: string;
+}>;
+
+export type McpAgentToolDecision = Readonly<{
+	decision: McpExecutionPolicy;
+	safety: boolean;
+}>;
+
+export type McpAgentDecisionResolver = (
+	tool: McpAgentToolRequest
+) => McpAgentToolDecision;
 
 export type McpServerState =
 	| "disabled"
@@ -127,7 +114,7 @@ export type McpRegistry = {
 	initialize(): Promise<void>;
 	createSnapshot(
 		agent: AgentId,
-		agentPolicy?: McpAgentPolicy,
+		resolveAgentDecision: McpAgentDecisionResolver,
 		trackLatest?: boolean
 	): Promise<McpCatalogSnapshot>;
 	execute(
@@ -143,15 +130,12 @@ export type McpRegistry = {
 	toggle(serverName: string): Promise<void>;
 };
 
-export type McpRegistryDeps = {
-	configRoot?: string;
-	configStore?: ConfigStore;
+export type McpRegistryDeps = Readonly<{
 	createClient?: (config: ResolvedMcpServerConfig) => McpClient;
-	env?: Record<string, string | undefined>;
-	homeRoot?: string;
-	loadConfig?: (input: McpConfigInput) => Promise<McpConfigResult>;
+	env?: Readonly<Record<string, string | undefined>>;
+	loadConfig: McpConfigLoader;
 	workspace: string;
-};
+}>;
 
 type ServerEntry = {
 	client: McpClient | undefined;
@@ -214,8 +198,7 @@ const defaultSdkClientFactory = (
 
 export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const workspace = input.workspace;
-	const env = input.env ?? { ...process.env };
-	const loadConfig = input.loadConfig ?? loadMcpConfig;
+	const env = input.env === undefined ? { ...process.env } : { ...input.env };
 	const createClient =
 		input.createClient ?? defaultSdkClientFactory(workspace, env);
 
@@ -304,16 +287,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	};
 
 	const loadCurrentConfig = (refresh = false): Promise<McpConfigResult> =>
-		loadConfig({
-			env,
-			refresh,
-			workspace,
-			...pickTruthy({
-				configRoot: input.configRoot,
-				configStore: input.configStore,
-				homeRoot: input.homeRoot,
-			}),
-		});
+		input.loadConfig({ env, refresh, workspace });
 
 	const refreshEntryConfig = async (
 		entry: ServerEntry,
@@ -419,7 +393,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 
 	const buildSnapshot = async (
 		agent: AgentId,
-		agentPolicy: McpAgentPolicy
+		resolveAgentDecision: McpAgentDecisionResolver
 	): Promise<McpCatalogSnapshot> => {
 		type Candidate = {
 			client: McpClient;
@@ -461,17 +435,18 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				candidate.config.name,
 				candidate.tool.name
 			);
+			const agentPolicy = resolveAgentDecision({
+				logicalName,
+				serverName: candidate.config.name,
+				toolName: candidate.tool.name,
+			});
+			const agentDecision = agentPolicy.decision;
 			const policy = composeMcpToolDecision(
 				candidate.serverPolicy,
-				agentPolicy,
-				logicalName
+				agentDecision,
+				agentPolicy.safety
 			);
 			const description = candidate.tool.description ?? "";
-			const agentDecision = decideOpenActionPermission(
-				agentPolicy.rules,
-				logicalName,
-				MCP_PERMISSION_RESOURCE
-			);
 			tools.set(name, {
 				agentDecision,
 				client: candidate.client,
@@ -525,7 +500,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 
 	const createSnapshot = async (
 		agent: AgentId,
-		agentPolicy: McpAgentPolicy = DEFAULT_EFFECTIVE_AGENT_POLICY,
+		resolveAgentDecision: McpAgentDecisionResolver,
 		trackLatest = true
 	): Promise<McpCatalogSnapshot> => {
 		if (closed) {
@@ -541,7 +516,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		await init();
 		while (!closed) {
 			const generation = catalogGeneration;
-			const snapshot = await buildSnapshot(agent, agentPolicy);
+			const snapshot = await buildSnapshot(agent, resolveAgentDecision);
 			if (generation === catalogGeneration) {
 				retainSnapshot(snapshot, trackLatest);
 				return snapshot;

@@ -1,4 +1,4 @@
-import { isPlainObject } from "@wincode/runtime-utils";
+import { isPlainObject } from "@wincode/utils";
 import type {
 	AttachmentReference,
 	AttachmentReferenceResolver,

@@ -5,7 +5,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import {
 	RipgrepUnavailableError,
 	resolveRipgrepExecutable,

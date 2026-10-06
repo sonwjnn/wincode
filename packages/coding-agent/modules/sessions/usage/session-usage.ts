@@ -3,7 +3,7 @@ import {
 	getModelContextTokens,
 } from "@wincode/ai/model-usage";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import { isNull } from "@wincode/runtime-utils";
+import { isNull } from "@wincode/utils";
 import type {
 	ModelPricingEntry,
 	ModelPricingTable,

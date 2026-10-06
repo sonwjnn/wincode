@@ -9,7 +9,7 @@
         "@total-typescript/shoehorn": "^0.1.2",
         "@types/bun": "catalog:",
         "@wincode/config": "workspace:*",
-        "@wincode/runtime-utils": "workspace:*",
+        "@wincode/utils": "workspace:*",
         "lefthook": "latest",
         "typescript": "catalog:",
         "ultracite": "7.6.5",
@@ -19,7 +19,7 @@
       "name": "@wincode/agent-core",
       "dependencies": {
         "@wincode/ai": "workspace:*",
-        "@wincode/runtime-utils": "workspace:*",
+        "@wincode/utils": "workspace:*",
         "type-fest": "catalog:",
         "zod": "catalog:",
       },
@@ -32,7 +32,7 @@
     "packages/ai": {
       "name": "@wincode/ai",
       "dependencies": {
-        "@wincode/runtime-utils": "workspace:*",
+        "@wincode/utils": "workspace:*",
         "oauth4webapi": "^3.8.3",
         "open": "^10.2.0",
         "type-fest": "catalog:",
@@ -53,13 +53,14 @@
       "dependencies": {
         "@deepseek-ai/node-addon-system": "0.1.2",
         "@lickle/lock": "0.0.1",
-        "@modelcontextprotocol/client": "^2.0.0",
         "@opentui/core": "0.4.5",
         "@opentui/react": "0.4.5",
         "@tanstack/react-router": "catalog:",
         "@wincode/agent-core": "workspace:*",
         "@wincode/ai": "workspace:*",
-        "@wincode/runtime-utils": "workspace:*",
+        "@wincode/mcp": "workspace:*",
+        "@wincode/subagents": "workspace:*",
+        "@wincode/utils": "workspace:*",
         "diff": "catalog:",
         "drizzle-orm": "^0.45.2",
         "ignore": "^5.3.2",
@@ -90,8 +91,36 @@
       "name": "@wincode/config",
       "version": "0.0.0",
     },
+    "packages/mcp": {
+      "name": "@wincode/mcp",
+      "dependencies": {
+        "@modelcontextprotocol/client": "^2.0.0",
+        "@wincode/agent-core": "workspace:*",
+        "@wincode/utils": "workspace:*",
+        "type-fest": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@modelcontextprotocol/server": "^2.0.0",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/subagents": {
+      "name": "@wincode/subagents",
+      "dependencies": {
+        "@wincode/agent-core": "workspace:*",
+        "@wincode/utils": "workspace:*",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@wincode/config": "workspace:*",
+        "typescript": "catalog:",
+      },
+    },
     "packages/utils": {
-      "name": "@wincode/runtime-utils",
+      "name": "@wincode/utils",
       "dependencies": {
         "type-fest": "catalog:",
       },
@@ -397,7 +426,11 @@
 
     "@wincode/config": ["@wincode/config@workspace:packages/config"],
 
-    "@wincode/runtime-utils": ["@wincode/runtime-utils@workspace:packages/utils"],
+    "@wincode/mcp": ["@wincode/mcp@workspace:packages/mcp"],
+
+    "@wincode/subagents": ["@wincode/subagents@workspace:packages/subagents"],
+
+    "@wincode/utils": ["@wincode/utils@workspace:packages/utils"],
 
     "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
 

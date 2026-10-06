@@ -8,7 +8,7 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
-} from "@wincode/runtime-utils";
+} from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import { type AgentId, isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";

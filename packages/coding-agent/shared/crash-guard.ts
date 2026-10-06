@@ -1,8 +1,4 @@
-import {
-	type LogFields,
-	logger,
-	resolveLogFilePath,
-} from "@wincode/runtime-utils";
+import { type LogFields, logger, resolveLogFilePath } from "@wincode/utils";
 import {
 	describeReason,
 	errorDiagnosticFields,

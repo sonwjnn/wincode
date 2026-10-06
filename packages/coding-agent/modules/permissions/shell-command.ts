@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { isNull, isUndefined } from "@wincode/runtime-utils";
+import { isNull, isUndefined } from "@wincode/utils";
 import { Language, type Node, Parser } from "web-tree-sitter";
 
 /**

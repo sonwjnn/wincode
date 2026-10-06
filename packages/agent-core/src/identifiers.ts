@@ -18,3 +18,12 @@ export const toSessionMessageId = (value: string): SessionMessageId =>
 	value as SessionMessageId;
 export const toSessionRecordId = (value: string): SessionRecordId =>
 	value as SessionRecordId;
+export const agentTurnAssistantMessageId = (
+	turnId: AgentTurnId,
+	segmentIndex = 0
+): SessionMessageId =>
+	toSessionMessageId(
+		segmentIndex === 0
+			? `assistant-${turnId}`
+			: `assistant-${turnId}-segment-${segmentIndex}`
+	);
