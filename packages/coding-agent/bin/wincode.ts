@@ -87,7 +87,6 @@ process.exitCode = await dispatch(
 				workspace: resolveWorkspaceRoot(cwd),
 			});
 			const composition = createApplicationPluginComposition({
-				createMcpResource: false,
 				enabledPlugins,
 				workspace: configRuntime.workspace,
 			});

@@ -1,26 +1,21 @@
 import {
 	type AgentId,
-	type AgentTurnDelegation,
 	type AgentTurnId,
 	agentTurnAssistantMessageId,
 	createAgentTurnId,
 	type SessionMessageId,
-	type ToolCallId,
 } from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
-import type { McpCatalogSnapshot } from "@wincode/mcp";
-import type { DelegationExecutor } from "@wincode/subagents";
 import { omitUndefined } from "@wincode/utils";
 import type {
 	SkillExecution,
 	SkillRequestContext,
 	SkillToolDefinition,
 } from "@/modules/skills";
-import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import type { ResolvedCodingAgent } from "../agents/built-ins";
 import type { SessionViewState } from "./hooks/runtime-turn";
 
@@ -33,31 +28,19 @@ export type TurnExecutionSkill = {
 /**
  * One Agent Turn execution's turn-scoped values. The scope is created when the
  * execution starts and discarded when it ends, so no value can leak into
- * another execution: a delegated Subagent execution carries its parent linkage
- * and never reads its parent's identity, selection, or capabilities through a
- * session-scope holder.
+ * another execution.
  *
- * `armedSkill`, `delegate`, and `mcpSnapshot` are attached by the execution that
- * owns them while its turn starts — the Skill catalog is armed during
- * submission preparation and the MCP snapshot is created per Agent Turn — and
- * are never rebuilt on render.
+ * `armedSkill` is attached by the execution that owns it while its turn
+ * starts — the Skill catalog is armed during submission preparation — and is
+ * never rebuilt on render.
  */
 export type TurnExecution = {
 	/** The Agent the execution runs as. */
 	readonly agent: AgentId;
 	/** The first assistant Session Message for this execution. */
 	readonly assistantId: SessionMessageId;
-	/**
-	 * Abort index for this execution tree's in-flight delegated Tool Calls. A
-	 * delegated execution shares the index of the execution that started the
-	 * tree, so the session's single Tool Gate can route an approval abort to the
-	 * execution that owes the call.
-	 */
-	readonly childAborts: Map<ToolCallId, () => void>;
 	/** The Model Target selection the execution runs against. */
 	readonly model: ChatModelSelection;
-	/** Set for a delegated Subagent execution: the turn and Tool Call it came from. */
-	readonly parent?: AgentTurnDelegation;
 	readonly resolvedAgent?: ResolvedCodingAgent;
 	/** The session-level selection recorded on this execution's Session Records. */
 	readonly sessionModel: ChatModelSelection;
@@ -71,13 +54,8 @@ export type TurnExecution = {
 	readonly reasoningMode?: ReasoningMode;
 	/** The Skill catalog armed for the execution's turn, when one was built. */
 	armedSkill?: TurnExecutionSkill;
-	/**
-	 * The delegation bookkeeping created with the execution, so a React
-	 * re-render between a Subagent's start and end cannot reset it.
-	 */
-	delegate?: DelegationExecutor<SessionId, DelegationTaskId>;
-	/** The MCP capability snapshot the execution runs against. */
-	mcpSnapshot: McpCatalogSnapshot | null;
+	/** Cleanup callbacks registered by Plugins for this Agent Turn. */
+	pluginCleanups: (() => void)[];
 	/** The Skill, if any, this execution's turn must load. */
 	readonly skillRequest?: SkillRequestContext;
 };
@@ -86,10 +64,7 @@ export type BeginTurnExecutionInput = {
 	readonly agent: AgentId;
 	/** The Skill catalog armed for the execution's turn, when one was built. */
 	readonly armedSkill?: TurnExecutionSkill;
-	/** Shares the spawning execution's abort index for a delegated execution. */
-	readonly childAborts?: Map<ToolCallId, () => void>;
 	readonly model: ChatModelSelection;
-	readonly parent?: AgentTurnDelegation;
 	readonly resolvedAgent?: ResolvedCodingAgent;
 	readonly sessionModel: ChatModelSelection;
 	readonly sessionEffort?: Effort;
@@ -108,9 +83,7 @@ export type BeginTurnExecutionInput = {
 export const createTurnExecution = ({
 	agent,
 	armedSkill,
-	childAborts,
 	model,
-	parent,
 	resolvedAgent,
 	sessionModel,
 	sessionEffort,
@@ -127,7 +100,6 @@ export const createTurnExecution = ({
 		agent,
 		...omitUndefined({
 			armedSkill,
-			parent,
 			resolvedAgent,
 			sessionEffort,
 			sessionReasoningMode,
@@ -136,8 +108,7 @@ export const createTurnExecution = ({
 			reasoningMode,
 		}),
 		assistantId: agentTurnAssistantMessageId(turnId),
-		childAborts: childAborts ?? new Map(),
-		mcpSnapshot: null,
+		pluginCleanups: [],
 		model,
 		sessionModel,
 		sourceUserMessageId: sourceUserMessageId ?? null,
@@ -148,8 +119,7 @@ export const createTurnExecution = ({
 
 /**
  * Starts, ends, and publishes the Session View State of Agent Turn
- * executions. The binding supplies it, so delegation never reaches for
- * session-scope state to create the execution it spawns.
+ * executions. The binding supplies it, so each execution stays independent.
  */
 export type TurnExecutionHost = {
 	begin: (input: BeginTurnExecutionInput) => TurnExecution;

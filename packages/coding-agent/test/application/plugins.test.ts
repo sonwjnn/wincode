@@ -35,6 +35,11 @@ const configRoot = path.join(root, "config");
 const installedRoot = path.join(root, "installed");
 const workspace = path.join(installedRoot, "workspace");
 const pluginPath = path.join(workspace, "plugins", "jira.ts");
+const permissionOverridePath = path.join(
+	workspace,
+	"plugins",
+	"permission-override.ts"
+);
 
 await Promise.all([
 	mkdir(path.dirname(pluginPath), { recursive: true }),
@@ -52,12 +57,16 @@ await symlink(
 	path.join(installedRoot, "node_modules", "zod"),
 	"dir"
 );
-await Bun.write(
-	pluginPath,
-	await Bun.file(
-		path.join(import.meta.dir, "../fixtures/jira-plugin.ts")
-	).text()
-);
+const [jiraPluginSource, permissionOverridePluginSource] = await Promise.all([
+	Bun.file(path.join(import.meta.dir, "../fixtures/jira-plugin.ts")).text(),
+	Bun.file(
+		path.join(import.meta.dir, "../fixtures/permission-override-plugin.ts")
+	).text(),
+]);
+await Promise.all([
+	Bun.write(pluginPath, jiraPluginSource),
+	Bun.write(permissionOverridePath, permissionOverridePluginSource),
+]);
 await Bun.write(
 	path.join(workspace, "wincode.json"),
 	JSON.stringify({ plugins: ["./plugins/jira.ts"] })
@@ -124,6 +133,53 @@ test("rejects JavaScript paths before evaluating them as Plugins", async () => {
 			}),
 		])
 	);
+	await runtime.shutdown();
+});
+
+test("file Plugins expose generic resources to host UI integrations", async () => {
+	const resourcePath = path.join(workspace, "plugins", "resource.ts");
+	await Bun.write(
+		resourcePath,
+		`export default async (api) => {
+			const plugin = api.definePlugin({ id: "resource_fixture" });
+			plugin.registerResource("service", { state: "ready" });
+		};`
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [resourcePath],
+		config: configRuntime,
+	});
+
+	expect(
+		runtime.getResource<{ state: string }>("resource_fixture", "service")
+	).toEqual({
+		state: "ready",
+	});
+	await runtime.shutdown();
+});
+
+test("failed Plugin initialization releases factory-owned resources", async () => {
+	let shutdownCount = 0;
+	const runtime = await loadPlugins({
+		bundledPlugins: [
+			{
+				id: "failed_resource",
+				factory: async (api) => {
+					const plugin = api.definePlugin({ id: "failed_resource" });
+					plugin.registerResource("service", { state: "initializing" });
+					plugin.onShutdown(() => {
+						shutdownCount += 1;
+					});
+					throw new Error("initialization failed");
+				},
+			},
+		],
+		cliPaths: [],
+		config: configRuntime,
+	});
+
+	expect(shutdownCount).toBe(1);
+	expect(runtime.getResource("failed_resource", "service")).toBeUndefined();
 	await runtime.shutdown();
 });
 
@@ -592,8 +648,8 @@ const runPluginToolInOneShot = async (
 			cwd,
 			pluginRuntime: modePluginRuntime,
 			workspace: modeWorkspace,
-		}: OneShotCompositionInput) =>
-			createSessionCapabilities({
+		}: OneShotCompositionInput) => ({
+			assembly: await createSessionCapabilities({
 				approvalMode: "non-interactive",
 				configRuntime: modeConfigRuntime,
 				cwd,
@@ -603,7 +659,8 @@ const runPluginToolInOneShot = async (
 				pluginRuntime: modePluginRuntime,
 				workspace: modeWorkspace,
 				connections,
-			});
+			}),
+		});
 	const stdout = captureText();
 	const stderr = captureText();
 	const context: ApplicationContext = {
@@ -685,6 +742,26 @@ test("JSON Mode streams Plugin Tool outcomes as machine-readable events", async 
 	} finally {
 		await pluginRuntime.shutdown();
 	}
+});
+
+test("file Plugins cannot replace the default ask permission with an Agent policy category", async () => {
+	const runtime = await loadPlugins({
+		cliPaths: [permissionOverridePath],
+		config: configRuntime,
+	});
+
+	expect(runtime.getToolDescriptors("permission-session")).toEqual([]);
+	expect(runtime.diagnostics).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				message: expect.stringContaining(
+					"cannot override its permission category"
+				),
+				sourcePath: permissionOverridePath,
+			}),
+		])
+	);
+	await runtime.shutdown();
 });
 
 test("file Plugins cannot escape their namespaced tool names", async () => {
@@ -772,6 +849,7 @@ test("Turn-scoped Plugin registrations override, mask, and preserve outer tools 
 			sessionId: sessionContext.sessionId,
 			signal: new AbortController().signal,
 			toolCallId: toolCallId("scope-tool-call"),
+			registerBackgroundWork: () => undefined,
 			workspace,
 		};
 

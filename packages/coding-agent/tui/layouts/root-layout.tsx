@@ -3,12 +3,12 @@ import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
 import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
-import {
-	createApplicationPluginComposition,
-	selectOptionalApplicationPlugins,
-} from "@/modules/application/plugin-composition";
 import { ConnectionsProvider } from "@/modules/connections";
 import { McpProvider } from "@/modules/mcp";
+import {
+	createDisabledMcpPluginResource,
+	type McpPluginResource,
+} from "@/modules/mcp/capability";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	createPermissionService,
@@ -31,6 +31,7 @@ import { SettingsProviders } from "./settings-providers";
 
 const interactiveRuntime = getInteractiveRuntimeContext();
 const { args, cwd, pluginRuntime } = interactiveRuntime;
+const cliOptions = parseCliOptions(args);
 const connections = createConnections();
 const workspace =
 	interactiveRuntime.configRuntime?.workspace ?? resolveWorkspaceRoot(cwd);
@@ -44,29 +45,15 @@ const configContext =
 		homeRoot: os.homedir(),
 		workspace,
 	});
-const cliOptions = parseCliOptions(args);
-const applicationPlugins = createApplicationPluginComposition({
-	configStore,
-	enabledPlugins: selectOptionalApplicationPlugins(cliOptions.disabledPlugins),
-	workspace,
-});
-const mcpResource = applicationPlugins.mcpResource;
-if (mcpResource === undefined) {
-	throw new Error("The selected MCP Plugin did not provide its resource.");
-}
+const mcpResource =
+	pluginRuntime?.getResource<McpPluginResource>("mcp", "runtime") ??
+	createDisabledMcpPluginResource();
 const permissionService = createPermissionService(cliOptions);
 setInteractiveCleanup(async () => {
 	try {
-		await getInteractiveSessionHostManager(
-			applicationPlugins.createDelegationRuntime,
-			pluginRuntime
-		).shutdownAll();
+		await getInteractiveSessionHostManager(pluginRuntime).shutdownAll();
 	} finally {
-		try {
-			await pluginRuntime?.shutdown();
-		} finally {
-			await mcpResource.close();
-		}
+		await pluginRuntime?.shutdown();
 	}
 });
 

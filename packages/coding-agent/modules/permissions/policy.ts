@@ -31,11 +31,9 @@ export type PermissionRules = Readonly<
 >;
 
 /**
- * A snapshot of one Agent's effective Tool Permission as it applies to
- * open-glob-action tools such as MCP: the folded rules to match logical tool
- * names against, and whether the Agent runs under the manual-only safety
- * ceiling. Tool-family neutral so the engine — not any one tool module — owns
- * the shape.
+ * A snapshot of one Agent's effective Tool Permission rules for open action
+ * names, together with the Agent's manual-only safety ceiling. Tool-family
+ * neutral so consumers do not need to own the host permission model.
  */
 export type EffectiveAgentPolicy = {
 	rules: PermissionRules;
@@ -44,8 +42,8 @@ export type EffectiveAgentPolicy = {
 
 /**
  * The permissive default effective policy: no rules and no safety ceiling. A
- * consumer that resolves a tool family's policy (e.g. MCP snapshots) uses this
- * until the executing Agent's real policy is known, so composition starts from
+ * consumer that resolves a tool family's policy uses this until the executing
+ * Agent's real policy is known, so composition starts from
  * "the Agent imposes nothing" rather than from a hidden restriction.
  */
 export const DEFAULT_EFFECTIVE_AGENT_POLICY: EffectiveAgentPolicy = {

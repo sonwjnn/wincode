@@ -12,7 +12,6 @@ export const toolPolicyCategories = Object.freeze([
 	"mcp",
 	"plugin",
 	"skill",
-	"delegation",
 ] as const);
 export type ToolPolicyCategory = (typeof toolPolicyCategories)[number];
 

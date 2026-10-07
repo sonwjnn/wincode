@@ -22,6 +22,7 @@ const previousEnvironment = {
 	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
 	WINCODE_LOCAL_DB_PATH: process.env.WINCODE_LOCAL_DB_PATH,
 	WINCODE_MODEL_PRICING_OFFLINE: process.env.WINCODE_MODEL_PRICING_OFFLINE,
+	WINCODE_SUBAGENTS_DB_PATH: process.env.WINCODE_SUBAGENTS_DB_PATH,
 };
 
 export const testDirectory = await fs.mkdtemp(
@@ -35,6 +36,10 @@ process.env.WINCODE_LOCAL_DB_PATH = path.join(
 	"conversation.sqlite"
 );
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
+process.env.WINCODE_SUBAGENTS_DB_PATH = path.join(
+	testDirectory,
+	"subagents.sqlite"
+);
 setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
 
 export const recorder = createFakeModelClientRecorder();

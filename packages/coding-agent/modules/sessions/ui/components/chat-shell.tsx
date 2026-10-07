@@ -22,7 +22,6 @@ import {
 	type SessionCompaction,
 } from "../../compaction";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
-import type { SessionViewState } from "../../hooks/runtime-turn";
 import type { SessionSubmissionComposition } from "../../submission-types";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptSubmission } from "../../utils";
@@ -67,18 +66,15 @@ type ChatShellProps = {
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
 	viewId: string;
-	viewState?: SessionViewState;
 };
 function ActivityFooter({
 	agent,
 	isCompacting,
 	isInterruptArmed,
-	viewState,
 }: {
 	agent: AgentId;
 	isCompacting: boolean;
 	isInterruptArmed: boolean;
-	viewState?: SessionViewState;
 }) {
 	const { colors } = useTheme();
 	const agentColor = getAgentColor(colors, agent);
@@ -92,19 +88,12 @@ function ActivityFooter({
 					<span fg={colors.textMuted}> cancel</span>
 				</text>
 			) : (
-				<>
-					{viewState?.delegation ? (
-						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-							Subagent {viewState.turnId}
-						</text>
-					) : null}
-					<text>
-						<span fg={agentColor}>Esc</span>
-						<span fg={colors.textMuted}>
-							{isInterruptArmed ? " again to interrupt" : " interrupt"}
-						</span>
-					</text>
-				</>
+				<text>
+					<span fg={agentColor}>Esc</span>
+					<span fg={colors.textMuted}>
+						{isInterruptArmed ? " again to interrupt" : " interrupt"}
+					</span>
+				</text>
 			)}
 		</>
 	);
@@ -139,7 +128,6 @@ export function ChatShell({
 	queuedSubmissions = EMPTY_QUEUED_SUBMISSIONS,
 	recalledSubmissions,
 	recallRevision,
-	viewState,
 	viewId,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
@@ -336,7 +324,6 @@ export function ChatShell({
 										agent={agent}
 										isCompacting={isCompacting}
 										isInterruptArmed={isInterruptArmed}
-										viewState={viewState}
 									/>
 								) : (
 									<WorkspacePath />

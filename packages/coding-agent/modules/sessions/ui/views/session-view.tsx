@@ -825,7 +825,6 @@ export function SessionView({
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
 					viewId={sessionId}
-					viewState={snapshot.viewState}
 				/>
 			</box>
 		</box>

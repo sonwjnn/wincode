@@ -186,25 +186,8 @@ describe("Agent Turn Event contract", () => {
 	});
 });
 
-describe("delegated Agent Turn correlation", () => {
-	test("validates delegation on the turn start event", () => {
-		const event = {
-			...baseEvent("agent-turn-started"),
-			delegation: {
-				parentToolCallId: toolCallId("call-1"),
-				parentTurnId: turnId("turn-primary"),
-			},
-		};
-		expect(isAgentTurnEvent(event)).toBe(true);
-		expect(
-			isAgentTurnEvent({
-				...event,
-				delegation: { parentTurnId: "turn-primary" },
-			})
-		).toBe(false);
-	});
-
-	test("keeps delegated turns distinct from their parent identity", () => {
+describe("Agent Turn execution identity", () => {
+	test("keeps different Session Turn executions distinct", () => {
 		const parent: AgentTurn = {
 			agent: {
 				id: agentId("build"),
@@ -215,18 +198,13 @@ describe("delegated Agent Turn correlation", () => {
 			input: { messages: [] },
 			model: testModelTarget,
 		};
-		const delegated: AgentTurn = {
+		const subagentTurn: AgentTurn = {
 			...parent,
 			agent: { ...parent.agent, id: agentId("research"), role: "subagent" },
-			delegation: {
-				parentToolCallId: toolCallId("call-1"),
-				parentTurnId: parent.id,
-			},
 			id: turnId("turn-subagent"),
 		};
-		expect(delegated.id).not.toBe(parent.id);
-		expect(delegated.delegation?.parentTurnId).toBe(parent.id);
-		expect(delegated.delegation?.parentToolCallId).toBe(toolCallId("call-1"));
+		expect(subagentTurn.id).not.toBe(parent.id);
+		expect(subagentTurn.agent.role).toBe("subagent");
 	});
 });
 

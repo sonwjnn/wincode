@@ -167,21 +167,6 @@ const createSession = async (
 	return { id, initialRecord };
 };
 
-const createTestDelegationTask = (
-	store: SessionStore,
-	parentSessionId: SessionId,
-	prefix: string
-) =>
-	store.createDelegatedTask({
-		agent: agentId("build"),
-		message: userMessage(`${prefix} child prompt`, `${prefix}-child-user`),
-		model,
-		parentSessionId,
-		parentToolCallId: toolCallId(`${prefix}-parent-call`),
-		parentTurnId: agentTurnId(`${prefix}-parent-turn`),
-		turnId: agentTurnId(`${prefix}-child-turn`),
-	});
-
 test("creates an SDK-ready empty Session without inventing a user Submission", async () => {
 	const { store } = await createTestStore();
 	const { id } = await store.createEmptySession({ model });
@@ -278,6 +263,36 @@ test("round-trips assistant and tool records independently", async () => {
 		tool,
 		assistant,
 	]);
+});
+
+test("persists an optional Plugin tool without adding a built-in tool name", async () => {
+	const { store } = await createTestStore();
+	const { id } = await createSession(store);
+	const source = toolRecord("record-plugin-tool");
+	const message = source.messages[0];
+	const part = message?.parts[0];
+	if (message === undefined || part?.type !== "tool-call") {
+		throw new Error("Expected a tool call in the test record.");
+	}
+	const pluginRecord: SessionRecord = {
+		...source,
+		messages: [
+			{
+				...message,
+				parts: [{ ...part, toolName: "jira:create_issue" }],
+			},
+		],
+	};
+
+	await store.commitSessionRecord({ record: pluginRecord, sessionId: id });
+
+	const storedTool = projectSessionRecords(
+		await store.listSessionRecords(id)
+	)[1]?.parts[0];
+	expect(storedTool).toMatchObject({
+		toolName: "jira:create_issue",
+		type: "dynamic-tool",
+	});
 });
 
 test("round-trips a failed assistant record with its safe failure", async () => {
@@ -408,77 +423,6 @@ test("deletes Conversation Records with their session", async () => {
 	await store.deleteSession(id);
 
 	expect(await store.listSessionRecords(id)).toEqual([]);
-});
-
-test("deleting a parent Session removes settled task links but retains the child", async () => {
-	const { store } = await createTestStore();
-	const { id: parentSessionId } = await createSession(
-		store,
-		"delegation parent"
-	);
-	const task = await createTestDelegationTask(
-		store,
-		parentSessionId,
-		"delete-parent"
-	);
-	await store.settleDelegationTask({
-		outcome: { kind: "failure", reason: "The task has settled." },
-		taskId: task.id,
-	});
-
-	await store.deleteSession(parentSessionId);
-
-	expect(await store.getSession(task.childSessionId)).not.toBeNull();
-	expect(await store.listPendingDelegationReports(parentSessionId)).toEqual([]);
-	await store.deleteSession(task.childSessionId);
-});
-
-test("deleting a child Session removes its settled parent task and inbox", async () => {
-	const { store } = await createTestStore();
-	const { id: parentSessionId } = await createSession(
-		store,
-		"delegation parent"
-	);
-	const task = await createTestDelegationTask(
-		store,
-		parentSessionId,
-		"delete-child"
-	);
-	await store.settleDelegationTask({
-		outcome: { kind: "failure", reason: "The task has settled." },
-		taskId: task.id,
-	});
-
-	await store.deleteSession(task.childSessionId);
-
-	expect(await store.getSession(parentSessionId)).not.toBeNull();
-	expect(await store.listPendingDelegationReports(parentSessionId)).toEqual([]);
-	await store.deleteSession(parentSessionId);
-});
-
-test("refuses to delete Sessions linked to an active Delegated Task", async () => {
-	const { store } = await createTestStore();
-	const { id: parentSessionId } = await createSession(
-		store,
-		"active delegation parent"
-	);
-	const task = await createTestDelegationTask(
-		store,
-		parentSessionId,
-		"active-delete"
-	);
-
-	await expect(store.deleteSession(parentSessionId)).rejects.toThrow(
-		"Cannot delete a Session while it has an active Delegated Task."
-	);
-	await expect(store.deleteSession(task.childSessionId)).rejects.toThrow(
-		"Cannot delete a Session while it has an active Delegated Task."
-	);
-	expect(await store.getSession(parentSessionId)).not.toBeNull();
-	expect(await store.getSession(task.childSessionId)).not.toBeNull();
-	expect(await store.getDelegationTask(task.id)).toMatchObject({
-		status: "active",
-	});
 });
 
 test("projects user attachments and metadata into stable transcript messages", () => {

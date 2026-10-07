@@ -12,8 +12,14 @@ import type { SessionId } from "@/shared/identifiers";
 import type {
 	LiveSessionSnapshot,
 	SessionContinuationOutcome,
+	SessionInterruptResult,
 	SessionSubmissionAdmission,
 } from "./agent-session/types";
+
+/** Model-visible tool names a child Session is permitted to invoke. */
+export type SessionSdkCapabilityCeiling = Readonly<{
+	tools: readonly string[];
+}>;
 
 export type SessionSdkPrompt = Readonly<{
 	agent?: AgentId | string;
@@ -38,10 +44,17 @@ export type SessionSdkCreateOptions = Readonly<{
 	reasoningMode?: ReasoningMode;
 }>;
 
+export type SessionSdkAgent = Readonly<{
+	id: AgentId;
+	isAvailable: boolean;
+	role: string;
+}>;
+
 export type SessionSdkHandle = Readonly<{
 	continue: () => SessionContinuationOutcome;
 	dispose: () => Promise<void>;
-	/** Durably queues a message and wakes this Session at its next safe boundary. */
+	interrupt: () => Promise<SessionInterruptResult>;
+	/** Queues FIFO input, starts an idle Session, and resolves after its Session Record commits. */
 	deliver: (input: SessionSdkDelivery) => Promise<SessionSubmissionAdmission>;
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
 	prompt: (input: SessionSdkPrompt) => Promise<SessionSubmissionAdmission>;
@@ -52,19 +65,32 @@ export type SessionSdkHandle = Readonly<{
 export type SessionSdk = Readonly<{
 	createChildSdk: (
 		options: Readonly<{
+			capabilityCeiling?: SessionSdkCapabilityCeiling;
 			enabledPlugins: readonly ("mcp" | "subagents")[];
 			pluginPaths?: readonly string[];
 		}>
 	) => Promise<SessionSdk>;
 	createEmptySession: (options?: SessionSdkCreateOptions) => Promise<SessionId>;
+	getAgentCatalog: () => Promise<readonly SessionSdkAgent[]>;
 	createSession: (
 		options?: SessionSdkCreateOptions
 	) => Promise<SessionSdkHandle>;
+	deliverToSession: (
+		sessionId: SessionId | string,
+		input: SessionSdkDelivery
+	) => Promise<SessionSubmissionAdmission>;
 	dispose: () => Promise<void>;
 	openSession: (
 		sessionId: SessionId | string,
-		options?: Readonly<{ view?: boolean }>
+		options?: Readonly<{ autoContinue?: boolean; view?: boolean }>
 	) => Promise<SessionSdkHandle>;
 }>;
 
-export type SessionSdkChildFactory = Pick<SessionSdk, "createChildSdk">;
+export type SessionSdkChildFactory = Pick<
+	SessionSdk,
+	| "createChildSdk"
+	| "createEmptySession"
+	| "deliverToSession"
+	| "getAgentCatalog"
+	| "openSession"
+>;

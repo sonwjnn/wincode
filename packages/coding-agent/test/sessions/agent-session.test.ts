@@ -36,7 +36,6 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import type { DelegationReportEnvelope } from "@/modules/sessions/delegation/types";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -128,7 +127,6 @@ const createPorts = ({
 	},
 	inputScheduler: createTestInputScheduler(),
 	resolveSubmission: (input) => input,
-	listPendingDelegationReports: async () => [],
 	compaction,
 	resolveCompactionSettings: async () =>
 		fromPartial<ResolvedCompactionSettings>({
@@ -155,12 +153,8 @@ const createPorts = ({
 	},
 	...overrides,
 	commitRecord: overrides.commitRecord ?? (async () => undefined),
-	consumeDelegationReport:
-		overrides.consumeDelegationReport ?? (async () => true),
 	updateSubmissionStatus:
 		overrides.updateSubmissionStatus ?? (async () => undefined),
-	persistReportContinuationPaused:
-		overrides.persistReportContinuationPaused ?? (async () => undefined),
 });
 
 const createTestAgentSession = (
@@ -5112,49 +5106,4 @@ test("reflects a durable prompt when interruption lands during its commit", asyn
 	expect(userPrompts(engine.getSnapshot().transcript)).toEqual([
 		"durable prompt",
 	]);
-});
-
-test("keeps a report pending after one inbox read failure without retrying in a loop", async () => {
-	const errorMessage = "The report inbox is temporarily unavailable.";
-	let listReads = 0;
-	const inboxError = Promise.withResolvers<void>();
-	const report = fromPartial<DelegationReportEnvelope>({
-		childSessionId: sessionId("inbox-failure-child"),
-		createdAt: new Date(),
-		outcome: { kind: "result", report: { summary: "Persist this report." } },
-		parentSessionId: sessionId("inbox-failure-parent"),
-		parentToolCallId: toolCallId("inbox-failure-call"),
-		parentTurnId: agentTurnId("inbox-failure-parent-turn"),
-		taskId: "inbox-failure-task",
-	});
-	const engine = new AgentSessionImpl({
-		autoContinueDelegationReports: true,
-		initialTranscript: [
-			message("inbox-failure-anchor", "Continue the parent."),
-		],
-		ports: createPorts({
-			compaction: createCompactionModule(async () => ({ text: "summary" })),
-			listPendingDelegationReports: async () => {
-				listReads += 1;
-				throw new Error(errorMessage);
-			},
-		}),
-		sessionId: sessionId("inbox-failure-session"),
-	});
-	const unsubscribe = engine.subscribe(() => {
-		if (engine.getSnapshot().error?.message === errorMessage) {
-			inboxError.resolve();
-		}
-	});
-
-	try {
-		engine.internalPort.publishDelegationReport(report);
-		await inboxError.promise;
-		await Bun.sleep(10);
-		expect(engine.getSnapshot().pendingDelegationReports).toHaveLength(1);
-		expect(listReads).toBe(1);
-	} finally {
-		unsubscribe();
-		await engine.internalPort.shutdown();
-	}
 });

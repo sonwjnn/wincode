@@ -24,24 +24,13 @@ export const exposedViewState = (
 	return;
 };
 
-/**
- * The newest entry that is not a delegated Subagent, else the newest entry: the
- * Agent Turn execution the session's own sends run as, and the execution an
- * interrupt or an approval abort reaches. A delegated Subagent never takes that
- * place while its parent is live, and an entry that is gone simply is not there.
- */
-export const primaryEntry = <T extends { readonly parent?: unknown }>(
-	entries: Iterable<T>
-): T | undefined => {
-	let primary: T | undefined;
+/** Returns the most recently active execution, if any. */
+export const latestEntry = <T>(entries: Iterable<T>): T | undefined => {
 	let last: T | undefined;
 	for (const entry of entries) {
 		last = entry;
-		if (isUndefined(entry.parent)) {
-			primary = entry;
-		}
 	}
-	return primary ?? last;
+	return last;
 };
 
 /**

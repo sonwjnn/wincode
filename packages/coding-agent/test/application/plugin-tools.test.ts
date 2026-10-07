@@ -63,6 +63,8 @@ const loadTool = async (
 		gate,
 		permissionForAction: async () => ({ decision: "allow", safety: false }),
 		pluginTools,
+		registerBackgroundWork: (activeSessionId, work) =>
+			pluginRuntime.registerBackgroundWork(activeSessionId, work),
 		sessionId,
 		workspace,
 	})[0];
@@ -86,6 +88,27 @@ const executeTool = (
 
 afterAll(async () => {
 	await rm(root, { force: true, recursive: true });
+});
+
+test("a file Plugin can register work that One-Shot waits for generically", async () => {
+	const backgroundPluginPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/background-work-plugin.ts"
+	);
+	const { pluginRuntime, tool } = await loadTool(backgroundPluginPath);
+	try {
+		await expect(executeTool(tool, { inspect: false })).resolves.toMatchObject({
+			output: "started",
+			type: "success",
+		});
+		await pluginRuntime.waitForBackgroundWork("tool-test-session");
+		await expect(executeTool(tool, { inspect: true })).resolves.toMatchObject({
+			output: true,
+			type: "success",
+		});
+	} finally {
+		await pluginRuntime.shutdown();
+	}
 });
 
 test("a colliding final Plugin tool name does not discard unrelated tools", async () => {

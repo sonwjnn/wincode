@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
+import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClientModule,
 	createFakeModelClientRecorder,
@@ -37,6 +38,7 @@ const testDirectory = await mkdtemp(
 process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
+setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
 afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();

@@ -25,6 +25,7 @@ import {
 	type LoadedPlugin,
 	type PluginCommandDescriptor,
 	type PluginDiagnostic,
+	type PluginResourceDescriptor,
 	type PluginRuntime,
 	type PluginToolDescriptor,
 } from "./runtime";
@@ -43,7 +44,9 @@ export type LoadPluginsInput = Readonly<{
 }>;
 
 type MutablePluginDraft = {
+	trustedBundled: boolean;
 	commands: Map<string, PluginCommand>;
+	resources: Map<string, PluginResourceDescriptor>;
 	id: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
@@ -56,6 +59,7 @@ type MutablePluginDraft = {
 
 type PluginPath = Readonly<{
 	factory?: PluginFactory;
+	trustedBundled?: boolean;
 	path: string;
 	source: string;
 }>;
@@ -67,6 +71,7 @@ const isTypeScriptPluginPath = (candidatePath: string): boolean =>
 	typescriptPluginExtensions.has(path.extname(candidatePath)) &&
 	!declarationFilePattern.test(candidatePath);
 const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
+const pluginResourceNamePattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const RESERVED_TOOL_NAMES = new Set([...codingToolNames, "skill"]);
 
 const own = (value: object, key: string): boolean => Object.hasOwn(value, key);
@@ -80,6 +85,26 @@ const addDiagnostic = (
 	sourcePath: string
 ): void => {
 	diagnostics.push({ message, sourcePath });
+};
+
+const shutdownFailedPluginDraft = async (
+	draft: MutablePluginDraft | undefined,
+	context: PluginLoadContext,
+	diagnostics: PluginDiagnostic[],
+	sourcePath: string
+): Promise<void> => {
+	if (draft?.onShutdown === undefined) {
+		return;
+	}
+	try {
+		await draft.onShutdown(context);
+	} catch (error) {
+		addDiagnostic(
+			diagnostics,
+			`Plugin cleanup after failed loading failed: ${messageFor(error)}`,
+			sourcePath
+		);
+	}
 };
 
 const pluginPathsFromSources = (
@@ -156,6 +181,18 @@ const createRegistrationAPI = (
 		}
 		plugin.onSessionShutdown = hook;
 	};
+	const registerResource = (name: string, value: unknown): void => {
+		assertOpen();
+		if (!pluginResourceNamePattern.test(name) || value === undefined) {
+			throw new Error(
+				"Plugin Resources require a short name and defined value."
+			);
+		}
+		if (plugin.resources.has(name)) {
+			throw new Error(`Plugin Resource '${name}' is already registered.`);
+		}
+		plugin.resources.set(name, Object.freeze({ name, value }));
+	};
 	const registerProcessHook = (hook: PluginShutdownHook): void => {
 		assertOpen();
 		if (typeof hook !== "function" || plugin.onShutdown !== undefined) {
@@ -164,6 +201,7 @@ const createRegistrationAPI = (
 		plugin.onShutdown = hook;
 	};
 	return Object.freeze({
+		registerResource,
 		onSessionStart(handler) {
 			registerSessionStartHook(handler);
 		},
@@ -208,7 +246,7 @@ const createRegistrationAPI = (
 		registerTool(tool) {
 			assertOpen();
 			try {
-				const validated = validatePluginTool(tool);
+				const validated = validatePluginTool(tool, plugin.trustedBundled);
 				const modelName =
 					validated.modelName ?? `plugin_${plugin.id}_${validated.name}`;
 				if (toolNames.has(modelName)) {
@@ -235,6 +273,7 @@ const createRegistrationAPI = (
 
 const createPluginAPI = (
 	context: PluginLoadContext,
+	trustedBundled: boolean,
 	setDraft: (draft: MutablePluginDraft) => void,
 	isOpen: () => boolean,
 	diagnostics: PluginDiagnostic[],
@@ -251,7 +290,9 @@ const createPluginAPI = (
 				throw new Error("A Plugin must declare one non-empty identifier.");
 			}
 			const draft: MutablePluginDraft = {
+				trustedBundled,
 				commands: new Map(),
+				resources: new Map(),
 				id: identity.id,
 				sourcePath: context.sourcePath,
 				tools: new Map(),
@@ -321,7 +362,18 @@ const loadedPluginFromDraft = (
 			action: `plugin:${draft.id}:${tool.name}`,
 			description: tool.description,
 			...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
-			...(tool.gateFamily === undefined ? {} : { gateFamily: tool.gateFamily }),
+			...(tool.permissionAction === undefined
+				? {}
+				: { permissionAction: tool.permissionAction }),
+			...(tool.permissionResource === undefined
+				? {}
+				: { permissionResource: tool.permissionResource }),
+			...(tool.permissionDecision === undefined
+				? {}
+				: { permissionDecision: tool.permissionDecision }),
+			...(tool.permissionSafety === undefined
+				? {}
+				: { permissionSafety: tool.permissionSafety }),
 			handler: tool.handler,
 			inputSchema: tool.inputSchema,
 			localName: tool.name,
@@ -344,6 +396,8 @@ const loadedPluginFromDraft = (
 	return Object.freeze({
 		commands: Object.freeze(registeredCommands),
 		id: draft.id,
+		trustedBundled: draft.trustedBundled,
+		resources: Object.freeze([...draft.resources.values()]),
 		onBeforeAgentTurn: draft.onBeforeAgentTurn,
 		onSessionShutdown: draft.onSessionShutdown,
 		onSessionStart: draft.onSessionStart,
@@ -462,6 +516,7 @@ export const loadPlugins = async (
 	const candidates: readonly PluginPath[] = [
 		...(input.bundledPlugins ?? []).map(({ factory, id }) => ({
 			factory,
+			trustedBundled: true,
 			path: `bundled:${id}`,
 			source: `bundled Plugin '${id}'`,
 		})),
@@ -490,6 +545,7 @@ export const loadPlugins = async (
 			await factory(
 				createPluginAPI(
 					factoryContext,
+					candidate.trustedBundled === true,
 					setDraft,
 					() => registrationOpen,
 					diagnostics,
@@ -499,9 +555,16 @@ export const loadPlugins = async (
 				factoryContext
 			);
 		} catch (error) {
+			registrationOpen = false;
 			addDiagnostic(
 				diagnostics,
 				`Plugin factory failed: ${messageFor(error)}`,
+				candidate.path
+			);
+			await shutdownFailedPluginDraft(
+				draft,
+				factoryContext,
+				diagnostics,
 				candidate.path
 			);
 			continue;
@@ -523,6 +586,12 @@ export const loadPlugins = async (
 				`Duplicate Plugin Identifier '${draft.id}' was disabled; '${earlierSource}' was loaded first.`,
 				candidate.path
 			);
+			await shutdownFailedPluginDraft(
+				draft,
+				factoryContext,
+				diagnostics,
+				candidate.path
+			);
 			continue;
 		}
 		try {
@@ -533,6 +602,12 @@ export const loadPlugins = async (
 			addDiagnostic(
 				diagnostics,
 				`Plugin registration was disabled: ${messageFor(error)}`,
+				candidate.path
+			);
+			await shutdownFailedPluginDraft(
+				draft,
+				factoryContext,
+				diagnostics,
 				candidate.path
 			);
 		}

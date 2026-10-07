@@ -27,7 +27,6 @@ import type {
 } from "@/modules/skills";
 import type { CodingToolName } from "@/modules/tools";
 import type {
-	DelegationTaskId,
 	QueuedSubmissionId,
 	SessionId,
 	SteeringMessageId,
@@ -44,7 +43,6 @@ import type {
 	CompactionTriggerReason,
 	SessionCompaction,
 } from "../compaction/types";
-import type { DelegationReportEnvelope } from "../delegation/types";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import type { FileMentionPart, SessionMessage } from "../message";
 import type {
@@ -130,8 +128,8 @@ export type SessionInterruptResult = Readonly<{
 
 /**
  * One live Agent Turn execution the Agent Session tracks, oldest first. Its
- * view state belongs to that execution alone, so a delegated Subagent never
- * replaces the view of the execution that spawned it.
+ * view state belongs to that execution alone, so concurrent executions cannot
+ * overwrite each other's view state.
  */
 export type SessionExecution = ReadonlyDeep<{
 	/** The Submission that admitted this execution, when user-originated. */
@@ -142,8 +140,6 @@ export type SessionExecution = ReadonlyDeep<{
 	assistantId: SessionMessageId;
 	/** The Model Target selection the execution runs against. */
 	model: ChatModelSelection;
-	/** Set for a delegated Subagent execution: the turn and Tool Call it came from. */
-	parent?: AgentTurn["delegation"];
 	/** The session-level selection recorded on this execution's Session Records. */
 	sessionModel: ChatModelSelection;
 	sessionEffort?: Effort;
@@ -249,18 +245,13 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 	 * after failure. Unlike queued Submissions, these cannot be recalled.
 	 */
 	steeringMessages: SessionSteeringMessage[];
-	/** Inbox reports not yet consumed as parent Session input. */
-	pendingDelegationReports: DelegationReportEnvelope[];
 	/** Whether the session is running a submission, from its command to its settle. */
 	turnActive: boolean;
 	/** Session Transcript: the messages the session presents to the user. */
 	transcript: SessionMessage[];
 	/** Monotonic internal revision for durable transcript changes. */
 	transcriptRevision?: number;
-	/**
-	 * The live view of the most recently active execution, so the parent's view
-	 * returns when a delegated Subagent ends.
-	 */
+	/** The live view of the most recently active execution, if any. */
 	viewState: SessionViewState | undefined;
 }>;
 
@@ -268,7 +259,6 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 export type SessionExecutionInput = ReadonlyDeep<{
 	agent: AgentId;
 	model: ChatModelSelection;
-	parent?: AgentTurn["delegation"];
 	sessionModel: ChatModelSelection;
 	sessionEffort?: Effort;
 	sessionReasoningMode?: ReasoningMode;
@@ -398,7 +388,7 @@ export type SessionTurnRequest = Readonly<{
 	callbacks: SessionTurnCallbacks;
 	/** The Agent Turn execution the host runs. */
 	execution: SessionExecution;
-	/** The assistant message ID for the current follow-up segment. */
+	/** The assistant message ID for the current Agent Turn. */
 	getAssistantMessageId?: () => SessionMessageId;
 	/** The hydrated messages the Agent Turn sends to the model. */
 	messages: readonly SessionMessage[];
@@ -411,8 +401,6 @@ export type SessionTurnRequest = Readonly<{
 	 * after persisting their processing state and preparing their model input.
 	 */
 	takeSteeringMessages: () => Promise<readonly SessionMessage[]>;
-	/** Takes committed Delegation Reports for delivery as safe Stateful Agent follow-ups. */
-	takeFollowUpMessages: () => Promise<readonly SessionMessage[]>;
 }>;
 
 /** What one Agent Turn execution reported to the Agent Session. */
@@ -443,17 +431,10 @@ export type AgentSessionPorts = Readonly<{
 	compaction: SessionCompactionPort;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
-	consumeDelegationReport: (input: {
-		assistantCheckpoint?: SessionRecord;
-		record: SessionRecord;
-		taskId: DelegationTaskId;
-	}) => Promise<boolean>;
-	listPendingDelegationReports: () => Promise<DelegationReportEnvelope[]>;
 	/** Persists one exact committed Submission's processing state. */
 	updateSubmissionStatus: (
 		input: SessionSubmissionStatusUpdate
 	) => Promise<void>;
-	persistReportContinuationPaused: (paused: boolean) => Promise<void>;
 	/** Resolves the Agent, Model, and reasoning selection when a Submission starts. */
 	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
 	/** Resolves the @path file mentions of a prompt. */
@@ -470,10 +451,6 @@ export type AgentSessionOptions = Readonly<{
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
-	/** Enables automatic idle report continuation for this Session Host. */
-	autoContinueDelegationReports?: boolean;
-	initialPendingDelegationReports?: readonly DelegationReportEnvelope[];
-	initialReportContinuationSuppressed?: boolean;
 	initialSessionModel?: ChatModelSelection;
 	initialSessionEffort?: Effort;
 	initialSessionReasoningMode?: ReasoningMode;
@@ -579,8 +556,6 @@ export type AgentSessionInternalPort = Readonly<{
 	requestApproval: (
 		request: ToolApprovalRequest
 	) => Promise<SessionApprovalOutcome>;
-	/** Publishes a committed report for safe active-turn delivery or idle continuation. */
-	publishDelegationReport: (report: DelegationReportEnvelope) => void;
 	/** Ends the session after active durable cleanup has completed. */
 	shutdown: () => Promise<void>;
 	/** Replaces one execution's Session View State, never another's. */

@@ -41,6 +41,7 @@ import {
 	SessionWriterLockFailureError,
 } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionId } from "@/shared/identifiers";
+import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClientModule,
 	createFakeModelClientRecorder,
@@ -60,6 +61,7 @@ const databasePath = join(testDirectory, "conversation.sqlite");
 process.env.WINCODE_LOCAL_DB_PATH = databasePath;
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
+setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
 const aliasDatabasePath = join(
 	testDirectory,
 	"conversation-owner-alias.sqlite"

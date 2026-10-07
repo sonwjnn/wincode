@@ -1,27 +1,11 @@
-import {
-	createDisabledMcpPluginResource,
-	type McpPluginResource,
-} from "@/modules/mcp/capability";
+import { createDisabledMcpPluginResource } from "@/modules/mcp/capability";
 import type { BundledPluginFactory } from "@/modules/plugins/loader";
 import {
 	createTurnToolRegistry,
 	type TurnToolResolver,
 } from "@/modules/sessions/hooks/runtime-turn";
-import type {
-	SessionCapabilities,
-	SessionDelegationAdapter,
-	SessionDelegationRuntimeFactory,
-} from "@/modules/sessions/host/types";
-import { createMcpPluginResource, mcpPluginFactory } from "@/plugins/mcp";
-import {
-	createSubagentsSessionAdapter,
-	createSubagentsSessionRuntime,
-	subagentsPluginFactory,
-} from "@/plugins/subagents";
-import {
-	getSharedSubagentsTaskStore,
-	resolveSubagentsDatabasePath,
-} from "@/plugins/subagents/store";
+import { createMcpPluginFactory, createMcpPluginResource } from "@/plugins/mcp";
+import { createSubagentsPluginFactory } from "@/plugins/subagents";
 import type { ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 
@@ -40,11 +24,7 @@ export const selectOptionalApplicationPlugins = (
 	);
 
 export type ApplicationPluginComposition = Readonly<{
-	createDelegationAdapter?: (
-		capabilities: SessionCapabilities
-	) => SessionDelegationAdapter;
-	createDelegationRuntime?: SessionDelegationRuntimeFactory;
-	mcpResource?: McpPluginResource;
+	enabledPlugins: readonly OptionalApplicationPluginId[];
 	bundledPlugins: readonly BundledPluginFactory[];
 	turnToolResolver: TurnToolResolver;
 }>;
@@ -53,8 +33,6 @@ export type CreateApplicationPluginCompositionOptions = Readonly<{
 	configStore?: ConfigStore;
 	enabledPlugins: readonly OptionalApplicationPluginId[];
 	createMcpResource?: boolean;
-	mcpResource?: McpPluginResource;
-	subagentsDatabasePath?: string;
 	workspace: string;
 }>;
 
@@ -63,41 +41,28 @@ export const createApplicationPluginComposition = ({
 	configStore = createConfigStore(),
 	createMcpResource = true,
 	enabledPlugins,
-	mcpResource: providedMcpResource,
-	subagentsDatabasePath,
 	workspace,
 }: CreateApplicationPluginCompositionOptions): ApplicationPluginComposition => {
 	const bundledPlugins: BundledPluginFactory[] = [];
-	let mcpResource =
-		providedMcpResource ??
-		(enabledPlugins.includes("mcp")
-			? undefined
-			: createDisabledMcpPluginResource());
+	const mcpResource =
+		enabledPlugins.includes("mcp") && createMcpResource
+			? createMcpPluginResource({ configStore, workspace })
+			: createDisabledMcpPluginResource();
 	if (enabledPlugins.includes("mcp")) {
-		if (mcpResource === undefined && createMcpResource) {
-			mcpResource = createMcpPluginResource({ configStore, workspace });
-		}
-		bundledPlugins.push({ factory: mcpPluginFactory, id: "mcp" });
+		bundledPlugins.push({
+			factory: createMcpPluginFactory(mcpResource),
+			id: "mcp",
+		});
 	}
-	const subagentsTaskStore = enabledPlugins.includes("subagents")
-		? getSharedSubagentsTaskStore(
-				subagentsDatabasePath ?? resolveSubagentsDatabasePath(workspace)
-			)
-		: undefined;
 	if (enabledPlugins.includes("subagents")) {
-		bundledPlugins.push({ factory: subagentsPluginFactory, id: "subagents" });
+		bundledPlugins.push({
+			factory: createSubagentsPluginFactory(),
+			id: "subagents",
+		});
 	}
 	const registry = createTurnToolRegistry();
 	return {
-		...(mcpResource === undefined ? {} : { mcpResource }),
-		...(subagentsTaskStore === undefined
-			? {}
-			: {
-					createDelegationAdapter: (capabilities) =>
-						createSubagentsSessionAdapter(capabilities, subagentsTaskStore),
-					createDelegationRuntime: (ports) =>
-						createSubagentsSessionRuntime(ports, subagentsTaskStore),
-				}),
+		enabledPlugins: Object.freeze([...enabledPlugins]),
 		bundledPlugins: Object.freeze(bundledPlugins),
 		turnToolResolver: registry.resolve,
 	};

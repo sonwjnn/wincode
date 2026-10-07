@@ -1,10 +1,9 @@
+import type { PluginSessionContext } from "@/modules/plugins/public";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
+import type { SessionId } from "@/shared/identifiers";
 import { createSessionHost } from "./session-host";
 import type {
 	SessionCapabilities,
-	SessionDelegationPort,
-	SessionDelegationRuntimeFactory,
 	SessionHost,
 	SessionHostManager,
 	SessionHostManagerEvent,
@@ -14,48 +13,28 @@ import type {
 type ManagedHostEntry = {
 	capabilities: SessionCapabilities;
 	closing: Promise<void> | undefined;
-	unloadCheck: Promise<void> | undefined;
-	delegatedTaskId: DelegationTaskId | null;
+	executionMode: SessionHostOptions["executionMode"];
 	host: SessionHost | undefined;
 	pendingApprovalCount: number;
 	opening: Promise<SessionHost>;
+	openingComplete: boolean;
 	sessionId: SessionId;
 	unsubscribeEvents: (() => void) | undefined;
 	unsubscribeSnapshot: (() => void) | undefined;
+	unsubscribeBackgroundWork: (() => void) | undefined;
 	views: number;
 	pluginRuntime?: PluginRuntime;
-	pluginSessionContext: Readonly<{ sessionId: string; workspace: string }>;
+	pluginSessionContext: PluginSessionContext;
+	unloadCheck: Promise<void> | undefined;
 };
 
 let interactiveManager: SessionHostManager | undefined;
 
-const createNoopDelegationRuntime: SessionDelegationRuntimeFactory = ({
-	emitTaskEvent: _emitTaskEvent,
-	requestHostUnload: _requestHostUnload,
-}) => ({
-	activeTaskIds: () => [],
-	cancelActiveTasks: async () => undefined,
-	finishAllTasks: () => undefined,
-	finishTask: () => undefined,
-	getTaskForChild: async () => null,
-	hasActiveTasks: async () => false,
-	isTaskActive: async () => false,
-	onHostClosed: () => undefined,
-	onHostOpened: () => undefined,
-	onHostOpening: () => undefined,
-	publishTask: () => undefined,
-	recoverStore: async () => undefined,
-	registerTask: () => undefined,
-	waitForTasks: async () => [],
-});
-
 export const createSessionHostManager = (
-	createDelegationRuntime?: SessionDelegationRuntimeFactory,
 	processPluginRuntime?: PluginRuntime
 ): SessionHostManager => {
 	const entries = new Map<SessionId, ManagedHostEntry>();
 	const eventListeners = new Set<(event: SessionHostManagerEvent) => void>();
-	let delegation: SessionDelegationPort;
 	let shuttingDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 
@@ -88,24 +67,24 @@ export const createSessionHostManager = (
 			type: "session-approval-notice",
 		});
 	};
-	const canUnload = (host: SessionHost): boolean => {
+	const canUnload = (entry: ManagedHostEntry, host: SessionHost): boolean => {
+		if (entry.pluginRuntime?.hasBackgroundWork(entry.sessionId) === true) {
+			return false;
+		}
 		const snapshot = host.agentSession.getSnapshot();
 		if (snapshot.turnActive || snapshot.isCompacting) {
 			return false;
 		}
-		if (
+		return !(
 			snapshot.executions.length > 0 ||
 			snapshot.approvals.some(({ decision }) => decision === undefined) ||
 			snapshot.queuedSubmissions.length > 0 ||
 			snapshot.steeringMessages.length > 0 ||
 			snapshot.error !== null
-		) {
-			return false;
-		}
-		return true;
+		);
 	};
 	const maybeUnload = async (entry: ManagedHostEntry): Promise<void> => {
-		if (shuttingDown) {
+		if (shuttingDown || !entry.openingComplete) {
 			return;
 		}
 		if (entry.unloadCheck !== undefined) {
@@ -117,24 +96,18 @@ export const createSessionHostManager = (
 			entry.views > 0 ||
 			host === undefined ||
 			entry.closing !== undefined ||
-			!canUnload(host)
+			!canUnload(entry, host)
 		) {
 			return;
 		}
 		const unloadCheck = Promise.withResolvers<void>();
 		entry.unloadCheck = unloadCheck.promise;
 		try {
-			const delegatedTaskId = entry.delegatedTaskId;
-			const hasActiveDelegation =
-				delegatedTaskId === null
-					? await delegation.hasActiveTasks(entry.sessionId)
-					: await delegation.isTaskActive(delegatedTaskId);
 			if (
-				hasActiveDelegation ||
 				entry.views > 0 ||
 				entry.host !== host ||
 				entry.closing !== undefined ||
-				!canUnload(host)
+				!canUnload(entry, host)
 			) {
 				return;
 			}
@@ -146,7 +119,7 @@ export const createSessionHostManager = (
 				await entry.pluginRuntime?.stopSession(entry.pluginSessionContext);
 				entry.unsubscribeEvents?.();
 				entry.unsubscribeSnapshot?.();
-				delegation.onHostClosed(entry.sessionId);
+				entry.unsubscribeBackgroundWork?.();
 				if (entries.get(entry.sessionId) === entry) {
 					entries.delete(entry.sessionId);
 				}
@@ -158,86 +131,75 @@ export const createSessionHostManager = (
 			unloadCheck.resolve();
 		}
 	};
-	delegation = (createDelegationRuntime ?? createNoopDelegationRuntime)({
-		emitTaskEvent: (task, report) =>
-			emit({
-				...(report === undefined ? {} : { report }),
-				task,
-				type: "delegation-task",
-			}),
-		requestHostUnload: (sessionId) => {
-			const entry = entries.get(sessionId);
-			if (entry !== undefined) {
-				void maybeUnload(entry);
-			}
-		},
-	});
 	const createEntry = (
 		capabilities: SessionCapabilities,
 		sessionId: SessionId,
 		executionMode: SessionHostOptions["executionMode"],
-		delegatedTaskId: DelegationTaskId | null
+		autoContinue: boolean
 	): ManagedHostEntry => {
 		const opened = Promise.withResolvers<SessionHost>();
+		const sessionSdk = capabilities.getSessionSdk?.();
 		const entry: ManagedHostEntry = {
 			capabilities,
-			delegatedTaskId,
-			unloadCheck: undefined,
 			closing: undefined,
-			pendingApprovalCount: 0,
+			executionMode,
 			host: undefined,
+			pendingApprovalCount: 0,
 			opening: opened.promise,
+			openingComplete: false,
 			sessionId,
 			unsubscribeEvents: undefined,
 			unsubscribeSnapshot: undefined,
 			views: 0,
+			unsubscribeBackgroundWork: undefined,
 			pluginRuntime: capabilities.getPluginRuntime?.() ?? processPluginRuntime,
 			pluginSessionContext: {
+				...(executionMode === undefined ? {} : { executionMode }),
 				sessionId,
+				...(sessionSdk === undefined ? {} : { sessionSdk }),
 				workspace: capabilities.getConfig().workspace,
 			},
+			unloadCheck: undefined,
 		};
 		entries.set(sessionId, entry);
-		delegation.onHostOpening(sessionId);
-		const opening = (async () => {
-			try {
-				await entry.pluginRuntime?.startSession(entry.pluginSessionContext);
-			} catch {
-				// Plugin lifecycle failures never prevent a Session from opening.
-			}
-			try {
-				return await createSessionHost({
+		entry.unsubscribeBackgroundWork =
+			entry.pluginRuntime?.onBackgroundWorkChange(sessionId, () => {
+				void maybeUnload(entry);
+			});
+		const sessionStart =
+			entry.pluginRuntime
+				?.startSession(entry.pluginSessionContext)
+				.catch(() => undefined) ?? Promise.resolve();
+		void sessionStart
+			.then(() =>
+				createSessionHost({
+					autoContinue,
 					capabilities,
 					...(executionMode === undefined ? {} : { executionMode }),
 					sessionId,
-				} satisfies SessionHostOptions);
-			} catch (error) {
-				await entry.pluginRuntime?.stopSession(entry.pluginSessionContext);
-				throw error;
-			}
-		})();
-		void opening.then(
-			(host) => {
-				entry.host = host;
-				delegation.onHostOpened(sessionId, host);
-				updateApprovalNotice(entry, host);
-				entry.unsubscribeEvents = host.onEvent((event) =>
-					emit({ event, sessionId, type: "agent-turn-event" })
-				);
-				entry.unsubscribeSnapshot = host.subscribe(() => {
+				} satisfies SessionHostOptions)
+			)
+			.then(
+				(host) => {
+					entry.host = host;
 					updateApprovalNotice(entry, host);
-					void maybeUnload(entry);
-				});
-				opened.resolve(host);
-			},
-			(error: unknown) => {
-				delegation.onHostClosed(sessionId);
-				if (entries.get(sessionId) === entry) {
-					entries.delete(sessionId);
+					entry.unsubscribeEvents = host.onEvent((event) =>
+						emit({ event, sessionId, type: "agent-turn-event" })
+					);
+					entry.unsubscribeSnapshot = host.subscribe(() => {
+						updateApprovalNotice(entry, host);
+						void maybeUnload(entry);
+					});
+					entry.openingComplete = true;
+					opened.resolve(host);
+				},
+				(error: unknown) => {
+					if (entries.get(sessionId) === entry) {
+						entries.delete(sessionId);
+					}
+					opened.reject(error);
 				}
-				opened.reject(error);
-			}
-		);
+			);
 		return entry;
 	};
 	const waitForEntryTransition = async (
@@ -272,60 +234,93 @@ export const createSessionHostManager = (
 			throw error;
 		}
 	};
+	const createOpenEntry = async (
+		capabilities: SessionCapabilities,
+		sessionId: SessionId,
+		executionMode: SessionHostOptions["executionMode"],
+		view: boolean,
+		autoContinue: boolean
+	): Promise<ManagedHostEntry> => {
+		const entry = createEntry(
+			capabilities,
+			sessionId,
+			executionMode,
+			autoContinue
+		);
+		if (view) {
+			entry.views += 1;
+		}
+		await awaitEntryOpening(entry, view);
+		return entry;
+	};
+	const continuePendingSteering = (entry: ManagedHostEntry): void => {
+		const host = entry.host;
+		if (host?.getSnapshot().steeringMessages[0]?.status === "pending") {
+			host.agentSession.continue();
+		}
+	};
+	const reuseOpenEntry = async (
+		entry: ManagedHostEntry,
+		view: boolean,
+		autoContinue: boolean
+	): Promise<ManagedHostEntry | undefined> => {
+		if (await waitForEntryTransition(entry)) {
+			return;
+		}
+		if (view) {
+			entry.views += 1;
+		}
+		await awaitEntryOpening(entry, view);
+		if (entry.closing !== undefined) {
+			releaseViewReference(entry, view);
+			await entry.closing.catch(() => undefined);
+			return;
+		}
+		if (autoContinue) {
+			continuePendingSteering(entry);
+		}
+		return entry;
+	};
 	const getOpenEntry = async (
 		capabilities: SessionCapabilities,
 		sessionId: SessionId,
 		executionMode: SessionHostOptions["executionMode"],
-		delegatedTaskId: DelegationTaskId | null,
-		view: boolean
+		view: boolean,
+		autoContinue: boolean
 	): Promise<ManagedHostEntry> => {
 		while (true) {
 			const entry = entries.get(sessionId);
 			if (entry === undefined) {
-				const created = createEntry(
+				return createOpenEntry(
 					capabilities,
 					sessionId,
 					executionMode,
-					delegatedTaskId
+					view,
+					autoContinue
 				);
-				if (view) {
-					created.views += 1;
-				}
-				await awaitEntryOpening(created, view);
-				return created;
 			}
-			if (await waitForEntryTransition(entry)) {
-				continue;
+			const reusable = await reuseOpenEntry(entry, view, autoContinue);
+			if (reusable !== undefined) {
+				return reusable;
 			}
-			entry.delegatedTaskId ??= delegatedTaskId;
-			if (view) {
-				entry.views += 1;
-			}
-			await awaitEntryOpening(entry, view);
-			if (entry.closing === undefined) {
-				return entry;
-			}
-			releaseViewReference(entry, view);
-			await entry.closing.catch(() => undefined);
 		}
 	};
 	const openHost: SessionHostManager["openHost"] = async ({
+		autoContinue = true,
 		capabilities,
 		executionMode,
 		sessionId,
 		view = false,
 	}) => {
-		await delegation.recoverStore(capabilities.getStore());
 		if (shuttingDown) {
 			throw new Error("The Session Host manager is shutting down.");
 		}
-		const task = await delegation.getTaskForChild(sessionId);
 		const entry = await getOpenEntry(
 			capabilities,
 			sessionId,
 			executionMode,
-			task?.id ?? null,
-			view
+			view,
+			autoContinue
 		);
 		return entry.opening;
 	};
@@ -355,16 +350,10 @@ export const createSessionHostManager = (
 					entry.pluginRuntime?.stopSession(entry.pluginSessionContext)
 				)
 			);
-			await delegation.cancelActiveTasks([...entries.values()]);
-			for (const entry of entries.values()) {
-				if (entry.host !== undefined) {
-					delegation.onHostClosed(entry.sessionId);
-				}
-			}
-			delegation.finishAllTasks();
 			for (const entry of entries.values()) {
 				entry.unsubscribeEvents?.();
 				entry.unsubscribeSnapshot?.();
+				entry.unsubscribeBackgroundWork?.();
 			}
 			entries.clear();
 		})();
@@ -393,17 +382,12 @@ export const createSessionHostManager = (
 		openHost,
 		releaseView,
 		shutdownAll,
-		delegation,
 	};
 };
 
 export const getInteractiveSessionHostManager = (
-	createDelegationRuntime?: SessionDelegationRuntimeFactory,
 	pluginRuntime?: PluginRuntime
 ): SessionHostManager => {
-	interactiveManager ??= createSessionHostManager(
-		createDelegationRuntime,
-		pluginRuntime
-	);
+	interactiveManager ??= createSessionHostManager(pluginRuntime);
 	return interactiveManager;
 };

@@ -109,7 +109,6 @@ export {
 } from "./tools";
 export type {
 	AgentTurn,
-	AgentTurnDelegation,
 	AgentTurnFilePart,
 	AgentTurnId,
 	AgentTurnInput,
@@ -129,7 +128,6 @@ export {
 	AGENT_TURN_TERMINAL_STATUSES,
 	createAgentTurnId,
 	createAgentTurnMessage,
-	isAgentTurnDelegation,
 	isAgentTurnFilePart,
 	isAgentTurnPart,
 	isAgentTurnTerminalStatus,

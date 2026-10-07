@@ -1,26 +1,24 @@
 import { Database } from "bun:sqlite";
-import * as fs from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentId, AgentTurnId, ToolCallId } from "@wincode/agent-core";
 import { randomUUIDv7 } from "bun";
+import { type SessionId, toSessionId } from "@/shared/identifiers";
+import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import {
 	type DelegationReportEnvelope,
 	type DelegationTask,
+	type DelegationTaskId,
 	type DelegationTaskOutcome,
 	type DelegationTaskStatus,
 	delegationTaskOutcomeSchema,
 	delegationTaskStatusSchema,
-} from "@/modules/sessions/delegation/types";
-import {
-	type DelegationTaskId,
-	type SessionId,
 	toDelegationTaskId,
-	toSessionId,
-} from "@/shared/identifiers";
-import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+} from "./task-types";
 
 const SUBAGENTS_DATABASE_FILE = "subagents.sqlite";
-const sharedStores = new Map<string, SubagentsTaskStore>();
+const sharedStores = new Map<string, Promise<SubagentsTaskStore>>();
+const sharedStoreLeaseCounts = new Map<string, number>();
 
 export const resolveSubagentsDatabasePath = (workspace: string): string => {
 	const configuredPath = process.env.WINCODE_SUBAGENTS_DB_PATH;
@@ -97,11 +95,10 @@ export type CreateSubagentsTaskInput = Readonly<{
 export type SubagentsTaskStore = Readonly<{
 	close: () => void;
 	createTask: (input: CreateSubagentsTaskInput) => DelegationTask;
-	importTask: (task: DelegationTask, reportPending: boolean) => boolean;
 	getTask: (taskId: DelegationTaskId) => DelegationTask | null;
 	getTaskForChild: (childSessionId: SessionId) => DelegationTask | null;
 	listTasks: (parentSessionId: SessionId) => DelegationTask[];
-	listActiveTasks: () => DelegationTask[];
+	listUnsettledTasks: () => DelegationTask[];
 	listPendingReports: (
 		parentSessionId: SessionId
 	) => DelegationReportEnvelope[];
@@ -114,13 +111,14 @@ export type SubagentsTaskStore = Readonly<{
 }>;
 
 /** Opens Subagents' independent durable task/report database. */
-export const createSubagentsTaskStore = (
+export const createSubagentsTaskStore = async (
 	databasePath = path.join(resolveUserDataDir(), SUBAGENTS_DATABASE_FILE)
-): SubagentsTaskStore => {
+): Promise<SubagentsTaskStore> => {
 	if (databasePath !== ":memory:") {
-		fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+		await fs.mkdir(path.dirname(databasePath), { recursive: true });
 	}
 	const database = new Database(databasePath, { create: true });
+	let databaseClosed = false;
 	try {
 		database.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
 		database.exec(`
@@ -156,8 +154,8 @@ export const createSubagentsTaskStore = (
 	const selectTasksForParent = database.query(
 		"SELECT * FROM subagents_task WHERE parent_session_id = ? ORDER BY created_at, id"
 	);
-	const selectActiveTasks = database.query(
-		"SELECT * FROM subagents_task WHERE status = 'active' ORDER BY created_at, id"
+	const selectUnsettledTasks = database.query(
+		"SELECT * FROM subagents_task WHERE status IN ('active', 'awaiting_report') ORDER BY created_at, id"
 	);
 	const selectPendingReports = database.query(
 		`SELECT * FROM subagents_task
@@ -196,28 +194,6 @@ export const createSubagentsTaskStore = (
 			);
 		return task;
 	};
-	const importTask: SubagentsTaskStore["importTask"] = (task, reportPending) =>
-		database
-			.query(
-				`INSERT OR IGNORE INTO subagents_task (
-					id, agent_id, child_session_id, parent_session_id,
-					parent_tool_call_id, parent_turn_id, status, outcome_json,
-					created_at, updated_at, report_consumed_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-			)
-			.run(
-				task.id,
-				task.agentId,
-				task.childSessionId,
-				task.parentSessionId,
-				task.parentToolCallId,
-				task.parentTurnId,
-				task.status,
-				task.outcome === null ? null : JSON.stringify(task.outcome),
-				task.createdAt.getTime(),
-				task.updatedAt.getTime(),
-				task.outcome === null || reportPending ? null : task.updatedAt.getTime()
-			).changes > 0;
 	const getTask: SubagentsTaskStore["getTask"] = (taskId) => {
 		const row = selectTask.get(taskId) as TaskRow | null;
 		return row === null ? null : taskFromRow(row);
@@ -230,8 +206,8 @@ export const createSubagentsTaskStore = (
 	};
 	const listTasks: SubagentsTaskStore["listTasks"] = (parentSessionId) =>
 		(selectTasksForParent.all(parentSessionId) as TaskRow[]).map(taskFromRow);
-	const listActiveTasks: SubagentsTaskStore["listActiveTasks"] = () =>
-		(selectActiveTasks.all() as TaskRow[]).map(taskFromRow);
+	const listUnsettledTasks: SubagentsTaskStore["listUnsettledTasks"] = () =>
+		(selectUnsettledTasks.all() as TaskRow[]).map(taskFromRow);
 	const listPendingReports: SubagentsTaskStore["listPendingReports"] = (
 		parentSessionId
 	) =>
@@ -297,13 +273,18 @@ export const createSubagentsTaskStore = (
 	};
 
 	return Object.freeze({
-		close: () => database.close(),
+		close: () => {
+			if (databaseClosed) {
+				return;
+			}
+			databaseClosed = true;
+			database.close();
+		},
 		createTask,
-		importTask,
 		getTask,
 		getTaskForChild,
 		listTasks,
-		listActiveTasks,
+		listUnsettledTasks,
 		listPendingReports,
 		markAwaitingReport,
 		consumeReport,
@@ -311,14 +292,65 @@ export const createSubagentsTaskStore = (
 	});
 };
 
+const sharedStoreKey = (databasePath: string): string =>
+	databasePath === ":memory:" ? databasePath : path.resolve(databasePath);
+
 export const getSharedSubagentsTaskStore = (
 	databasePath = resolveSubagentsDatabasePath(process.cwd())
-): SubagentsTaskStore => {
-	const key = path.resolve(databasePath);
+): Promise<SubagentsTaskStore> => {
+	const key = sharedStoreKey(databasePath);
 	let store = sharedStores.get(key);
 	if (store === undefined) {
-		store = createSubagentsTaskStore(key);
+		let sharedStore: Promise<SubagentsTaskStore>;
+		sharedStore = createSubagentsTaskStore(key).then((taskStore) =>
+			Object.freeze({
+				...taskStore,
+				close: () => {
+					if (sharedStores.get(key) === sharedStore) {
+						sharedStores.delete(key);
+					}
+					taskStore.close();
+				},
+			})
+		);
+		store = sharedStore;
 		sharedStores.set(key, store);
+		void store.catch(() => {
+			if (sharedStores.get(key) === store) {
+				sharedStores.delete(key);
+			}
+		});
 	}
 	return store;
+};
+
+export type SubagentsTaskStoreLease = Readonly<{
+	release: () => void;
+	store: SubagentsTaskStore;
+}>;
+
+/** Acquires a shared database handle for one Plugin Runtime lifetime. */
+export const acquireSharedSubagentsTaskStore = async (
+	databasePath = resolveSubagentsDatabasePath(process.cwd())
+): Promise<SubagentsTaskStoreLease> => {
+	const key = sharedStoreKey(databasePath);
+	const store = await getSharedSubagentsTaskStore(key);
+	sharedStoreLeaseCounts.set(key, (sharedStoreLeaseCounts.get(key) ?? 0) + 1);
+	let released = false;
+	return Object.freeze({
+		release: () => {
+			if (released) {
+				return;
+			}
+			released = true;
+			const leaseCount = (sharedStoreLeaseCounts.get(key) ?? 1) - 1;
+			if (leaseCount > 0) {
+				sharedStoreLeaseCounts.set(key, leaseCount);
+				return;
+			}
+			sharedStoreLeaseCounts.delete(key);
+			store.close();
+		},
+		store,
+	});
 };

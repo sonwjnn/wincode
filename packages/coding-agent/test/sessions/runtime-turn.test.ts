@@ -10,31 +10,25 @@ import type {
 } from "@wincode/agent-core";
 import { createOperationalFailure } from "@wincode/agent-core";
 import { createModelTarget } from "@wincode/ai/model-target";
-import type { McpCatalogSnapshot, McpSnapshotTool } from "@wincode/mcp";
 import { isObjectLike, isUndefined } from "@wincode/utils";
 import { z } from "zod";
 import { buildAgent } from "@/modules/agents/built-ins";
-import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { RetiredModelError } from "@/modules/model-target";
-import { loadPlugins } from "@/modules/plugins/loader";
-import { createPluginTools } from "@/modules/plugins/tools";
 import {
 	buildAgentTurn,
+	isSettledSessionToolCallPart,
 	resolveTurnTools,
 	runAgentTurnToText,
 } from "@/modules/sessions/hooks/runtime-turn";
 import { buildAssistantFailureSessionRecord } from "@/modules/sessions/turn-records";
 import type { SkillExecution, SkillToolDefinition } from "@/modules/skills";
-import type { ToolGate } from "@/modules/tool-gate/tool-gate";
 import {
 	createMemoryFileObservationStore,
 	getToolResourceLimits,
 } from "@/modules/tools";
-import { createConfigStore } from "@/shared/config/config-store";
 import {
 	agentId,
 	agentTurnId,
-	mcpSnapshotId,
 	modelId,
 	sessionId,
 	sessionMessageId,
@@ -45,6 +39,24 @@ const model = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 } as const;
+
+test("replays namespaced Plugin tool calls without core-specific tool names", () => {
+	const pluginTool = {
+		input: { title: "Investigate" },
+		output: { issue: "W-42" },
+		state: "output-available",
+		toolCallId: toolCallId("plugin-call"),
+		type: "tool-jira:create_issue",
+	};
+
+	expect(isSettledSessionToolCallPart(pluginTool)).toBe(true);
+	expect(
+		isSettledSessionToolCallPart({
+			...pluginTool,
+			type: "tool-",
+		})
+	).toBe(false);
+});
 
 test("preserves the actionable retired-model refusal in the failure message", () => {
 	// Regression #57: retired sessions must tell the user how to recover.
@@ -323,95 +335,6 @@ test("shell Plugin tools use the shell-specific Tool Gate policy", async () => {
 		errorText: "Shell denied by policy.",
 		type: "failure",
 	});
-});
-
-test("MCP Plugin tools pass through the MCP Tool Gate before server execution", async () => {
-	const calls: unknown[] = [];
-	let executions = 0;
-	const snapshot = fromPartial<McpCatalogSnapshot>({
-		agent: agentId("build"),
-		id: mcpSnapshotId("plugin-test"),
-		manifest: [
-			{
-				description: "Search the workspace index.",
-				inputSchema: { type: "object" },
-				name: "mcp_search",
-			},
-		],
-		tools: new Map([
-			[
-				"mcp_search",
-				fromPartial<McpSnapshotTool>({
-					agentDecision: "allow",
-					description: "Search the workspace index.",
-					logicalName: "search",
-					safety: false,
-					serverDecision: "allow",
-				}),
-			],
-		]),
-	});
-	const workspace = process.cwd();
-	const configStore = createConfigStore();
-	const composition = createApplicationPluginComposition({
-		configStore,
-		createMcpResource: false,
-		enabledPlugins: ["mcp"],
-		workspace,
-	});
-	const executionGate: ToolGate = {
-		gate: async (call) => {
-			calls.push(call);
-			return { errorText: "MCP denied by policy.", kind: "deny" as const };
-		},
-	};
-	const pluginRuntime = await loadPlugins({
-		bundledPlugins: composition.bundledPlugins,
-		cliPaths: [],
-		config: { configStore, cwd: workspace, homeRoot: workspace, workspace },
-	});
-	const pluginTools = await pluginRuntime.resolveToolsForTurn(
-		{
-			agentId: agentId("build"),
-			sessionId: "runtime-mcp-test",
-			signal: new AbortController().signal,
-			workspace,
-		},
-		{
-			agentId: agentId("build"),
-			agentTools: [],
-			executeMcpTool: async () => {
-				executions += 1;
-				return { output: null, type: "success" };
-			},
-			gate: executionGate,
-			mcpSnapshot: snapshot,
-		}
-	);
-	const mcpTool = createPluginTools({
-		agentId: agentId("build"),
-		gate: executionGate,
-		pluginTools,
-		sessionId: "runtime-mcp-test",
-		workspace,
-	}).find(({ definition }) => definition.name === "mcp_search");
-	if (isUndefined(mcpTool)) {
-		throw new Error("The MCP Plugin did not resolve the snapshot tool.");
-	}
-
-	const toolCall = {
-		input: { query: "private" },
-		toolCallId: toolCallId("mcp-gate"),
-	};
-	const result = await mcpTool.execute(toolCall);
-
-	expect(calls).toHaveLength(1);
-	expect(calls[0]).toMatchObject({ family: "mcp", toolName: "mcp_search" });
-	expect(result).toMatchObject({
-		errorText: "MCP denied by policy.",
-		type: "failure",
-	});
-	expect(executions).toBe(0);
 });
 
 test("native Skill tools use the Skill Tool Gate before activation", async () => {

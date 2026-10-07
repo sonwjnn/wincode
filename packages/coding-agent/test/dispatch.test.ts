@@ -174,6 +174,11 @@ describe("application dispatch", () => {
 			executeCommand: async () => "",
 			getCommands: () => [],
 			getToolDescriptors: () => [],
+			getResource: () => undefined,
+			registerBackgroundWork: () => undefined,
+			hasBackgroundWork: () => false,
+			onBackgroundWorkChange: () => () => undefined,
+			waitForBackgroundWork: async () => undefined,
 			resolveToolsForTurn: async () => [],
 			shutdown: async () => undefined,
 			startSession: async () => undefined,
@@ -212,6 +217,11 @@ describe("application dispatch", () => {
 			executeCommand: async () => "",
 			getCommands: () => [],
 			getToolDescriptors: () => [],
+			getResource: () => undefined,
+			registerBackgroundWork: () => undefined,
+			hasBackgroundWork: () => false,
+			onBackgroundWorkChange: () => () => undefined,
+			waitForBackgroundWork: async () => undefined,
 			resolveToolsForTurn: async () => [],
 			shutdown: async () => {
 				shutdownCount += 1;

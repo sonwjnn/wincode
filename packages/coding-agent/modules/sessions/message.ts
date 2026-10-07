@@ -103,12 +103,8 @@ type NamedToolPart<Name extends string> = ToolPartFields & {
 };
 
 export type SessionStaticToolPart = {
-	[Name in
-		| CodingToolName
-		| "delegate"
-		| "skill"
-		| "submit_result"]: NamedToolPart<Name>;
-}[CodingToolName | "delegate" | "skill" | "submit_result"];
+	[Name in CodingToolName | "skill"]: NamedToolPart<Name>;
+}[CodingToolName | "skill"];
 
 export type SessionDynamicToolPart = ToolPartFields & {
 	readonly dynamic?: boolean;

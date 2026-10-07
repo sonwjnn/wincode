@@ -3,7 +3,6 @@ import {
 	type AgentRole,
 	type AgentRuntime,
 	type AgentTurn,
-	type AgentTurnDelegation,
 	type AgentTurnEvent,
 	type AgentTurnFilePart,
 	type AgentTurnId,
@@ -31,11 +30,6 @@ import {
 } from "@wincode/agent-core";
 import { createModelClient } from "@wincode/ai/model-client";
 import type { ModelTarget } from "@wincode/ai/model-target";
-import type { McpCatalogSnapshot } from "@wincode/mcp";
-import type {
-	DelegationExecutor,
-	SubmitResultExecutor,
-} from "@wincode/subagents";
 import {
 	getErrorMessage,
 	isNonEmptyString,
@@ -78,7 +72,6 @@ import {
 	toCodingToolFailure,
 	type VersionedEditingContext,
 } from "@/modules/tools";
-import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
 import { evaluateGateWithAbort } from "../../tool-gate/evaluate-with-abort";
 import type { ToolGate } from "../../tool-gate/tool-gate";
@@ -193,15 +186,6 @@ export type TurnToolResolver = (
 export type RuntimeGatedTooling = {
 	gate: ToolGate;
 	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
-	delegate?: DelegationExecutor<SessionId, DelegationTaskId>;
-	submitResult?: SubmitResultExecutor;
-	delegationTaskId?: DelegationTaskId;
-	registerChildAbort?: (
-		toolCallId: ToolCallId,
-		abort: () => void
-	) => () => void;
-	mcpSnapshot?: McpCatalogSnapshot;
-	executeMcpTool?: TurnToolPluginContext["executeMcpTool"];
 	versionedEditing?: VersionedEditingContext;
 };
 type GatedCodingToolOptions = Readonly<{
@@ -465,6 +449,12 @@ const selectPluginToolProviderContext = (
 	...(context.resolvePluginPermission === undefined
 		? {}
 		: { permissionForAction: context.resolvePluginPermission }),
+	...(context.pluginRuntime === undefined
+		? {}
+		: { registerBackgroundWork: context.pluginRuntime.registerBackgroundWork }),
+	...(context.resolveToolPermission === undefined
+		? {}
+		: { resolvePermissionForAction: context.resolveToolPermission }),
 	...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
 	...(context.workspace === undefined ? {} : { workspace: context.workspace }),
 });
@@ -505,36 +495,9 @@ const settledToolName = (
 	if (type === "dynamic-tool") {
 		return isNonEmptyString(toolName) ? toolName : undefined;
 	}
-	if (
-		type === "tool-skill" ||
-		type === "tool-delegate" ||
-		type === "tool-submit_result"
-	) {
-		if (type === "tool-skill") {
-			return "skill";
-		}
-		if (type === "tool-delegate") {
-			return "delegate";
-		}
-		return "submit_result";
-	}
-	if (type === "tool-read") {
-		return "read";
-	}
-	if (type === "tool-write") {
-		return "write";
-	}
-	if (type === "tool-edit") {
-		return "edit";
-	}
-	if (type === "tool-glob") {
-		return "glob";
-	}
-	if (type === "tool-grep") {
-		return "grep";
-	}
-	if (type === "tool-shell") {
-		return "shell";
+	if (type.startsWith("tool-")) {
+		const name = type.slice("tool-".length);
+		return isNonEmptyString(name) ? name : undefined;
 	}
 	return;
 };
@@ -725,10 +688,8 @@ export const buildAgentTurn = ({
 	systemInstructions,
 	tools = [],
 	turnId,
-	delegation,
 }: {
 	agent: AgentId;
-	delegation?: AgentTurnDelegation;
 	modelMessages: readonly SessionMessage[];
 	modelTarget: ModelTarget;
 	resolvedAgent: ResolvedCodingAgent;
@@ -740,9 +701,7 @@ export const buildAgentTurn = ({
 }): AgentTurn => {
 	const messages =
 		expandSessionMessagesForModel(modelMessages).flatMap(toAgentTurnMessages);
-	const effectiveRole = isUndefined(delegation)
-		? (role ?? "primary")
-		: "subagent";
+	const effectiveRole = role ?? "primary";
 	if (!isUndefined(skill)) {
 		// The Skill context belongs to the submission's own user message, which
 		// is the last model message; a Skill-only submission records an empty
@@ -773,7 +732,6 @@ export const buildAgentTurn = ({
 				`${BASE_AGENT_INSTRUCTIONS}\n\n${resolvedAgent.instructions}`,
 			role: effectiveRole,
 		},
-		...omitUndefined({ delegation }),
 		id: turnId,
 		input: { messages },
 		model: modelTarget,
@@ -786,7 +744,6 @@ export const buildAgentTurn = ({
  * transient and never becomes a Session Record.
  */
 export type SessionViewState = ReadonlyDeep<{
-	delegation?: AgentTurn["delegation"];
 	lastEventType?: AgentTurnEvent["type"];
 	lastSequence: number;
 	reasoningText: string;
@@ -801,9 +758,6 @@ type AgentTurnEventConsumerOptions = {
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
 	takeSteeringMessages?: () =>
-		| readonly AgentTurnMessage[]
-		| Promise<readonly AgentTurnMessage[]>;
-	takeFollowUpMessages?: () =>
 		| readonly AgentTurnMessage[]
 		| Promise<readonly AgentTurnMessage[]>;
 	turn: AgentTurn;
@@ -831,12 +785,10 @@ const consumeAgentTurnEvents = async ({
 	runtime,
 	signal,
 	takeSteeringMessages,
-	takeFollowUpMessages,
 	turn,
 }: AgentTurnEventConsumerOptions): Promise<void> => {
 	const lifecycle = providedLifecycle ?? createAgentTurnLifecycle(turn.id);
 	let viewState: SessionViewState = {
-		delegation: turn.delegation,
 		lastSequence: -1,
 		reasoningText: "",
 		status: "idle",
@@ -875,7 +827,7 @@ const consumeAgentTurnEvents = async ({
 		}
 	};
 	for await (const event of runtime.run(turn, {
-		...omitUndefined({ takeFollowUpMessages, takeSteeringMessages }),
+		...omitUndefined({ takeSteeringMessages }),
 		signal,
 	})) {
 		if (
@@ -965,7 +917,6 @@ export const runAgentTurnToText = async ({
 	signal,
 	sourceUserMessageId,
 	takeSteeringMessages,
-	takeFollowUpMessages,
 	turn,
 }: {
 	getAssistantMessageId?: () => SessionMessageId;
@@ -980,13 +931,9 @@ export const runAgentTurnToText = async ({
 	takeSteeringMessages?: () =>
 		| readonly SessionMessage[]
 		| Promise<readonly SessionMessage[]>;
-	takeFollowUpMessages?: () =>
-		| readonly SessionMessage[]
-		| Promise<readonly SessionMessage[]>;
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
-	let checkpointedAssistantTextLength = 0;
 	let terminal: AgentTurnTerminalEvent | undefined;
 	let lastSequence = -1;
 	let completedToolCalls = 0;
@@ -1048,15 +995,6 @@ export const runAgentTurnToText = async ({
 		runtime,
 		signal,
 		...omitUndefined({
-			takeFollowUpMessages: isUndefined(takeFollowUpMessages)
-				? undefined
-				: async () => {
-						const messages = await takeFollowUpMessages();
-						if (messages.length > 0) {
-							checkpointedAssistantTextLength = assistantText.length;
-						}
-						return messages.flatMap(toAgentTurnMessages);
-					},
 			takeSteeringMessages: isUndefined(takeSteeringMessages)
 				? undefined
 				: async () =>
@@ -1071,7 +1009,7 @@ export const runAgentTurnToText = async ({
 	);
 	const record = buildTerminalSessionRecord({
 		assistantMessageId: getAssistantMessageId?.(),
-		assistantText: assistantText.slice(checkpointedAssistantTextLength),
+		assistantText,
 		hasCompletedToolCalls: completedToolCalls > 0,
 		event: terminalEvent,
 		sourceUserMessageId,

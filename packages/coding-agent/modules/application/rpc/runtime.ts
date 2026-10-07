@@ -31,6 +31,7 @@ export const loadRuntime = async (
 		const configStore = input.configRuntime?.configStore ?? createConfigStore();
 		const pluginComposition = createApplicationPluginComposition({
 			configStore,
+			createMcpResource: input.pluginRuntime === undefined,
 			enabledPlugins: input.enabledPlugins ?? ["mcp", "subagents"],
 			workspace: sessionComposition.workspace,
 		});
@@ -54,19 +55,6 @@ export const loadRuntime = async (
 			configRuntime,
 			getSessionSdk: () => sessionSdk,
 			pluginRuntime,
-			...(pluginComposition.mcpResource === undefined
-				? {}
-				: { mcpResource: pluginComposition.mcpResource }),
-			...(pluginComposition.createDelegationAdapter === undefined
-				? {}
-				: {
-						createDelegationAdapter: pluginComposition.createDelegationAdapter,
-					}),
-			...(pluginComposition.createDelegationRuntime === undefined
-				? {}
-				: {
-						createDelegationRuntime: pluginComposition.createDelegationRuntime,
-					}),
 			turnToolResolver: pluginComposition.turnToolResolver,
 			permissionService: createPermissionService({
 				autoApproval: sessionComposition.autoApproval,

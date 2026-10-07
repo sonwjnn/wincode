@@ -23,8 +23,10 @@ import {
 import { resolvePluginToolPermission } from "./resolve";
 
 export type ToolPermissionRuntime = {
-	resolveMcpPolicy: () => Promise<EffectiveAgentPolicy>;
-	resolveMcpPolicyForAgent: (agent: AgentId) => Promise<EffectiveAgentPolicy>;
+	resolveAgentActionPolicy: () => Promise<EffectiveAgentPolicy>;
+	resolveAgentActionPolicyForAgent: (
+		agent: AgentId
+	) => Promise<EffectiveAgentPolicy>;
 	resolvePermission: () => Promise<ToolPermission>;
 	resolvePermissionForAgent: (agent: AgentId) => Promise<ToolPermission>;
 	resolvePluginPermissionForAgent: (
@@ -59,12 +61,12 @@ export type ToolPermissionRuntimeDeps = {
 };
 
 type ResolvedToolPermissionPolicies = {
-	mcpPolicy: EffectiveAgentPolicy;
+	agentActionPolicy: EffectiveAgentPolicy;
 	permission: ToolPermission;
 	resourceLimits: ToolResourceLimits;
 };
 
-const FAIL_CLOSED_MCP_POLICY: EffectiveAgentPolicy = {
+const FAIL_CLOSED_AGENT_ACTION_POLICY: EffectiveAgentPolicy = {
 	rules: { "*": "deny" } as EffectiveAgentPolicy["rules"],
 	safety: true,
 };
@@ -74,17 +76,17 @@ export const createToolPermissionPolicyState =
 		permission: createToolPermission(),
 	});
 
-/** Resolves one Agent's static and MCP policies without loosening MCP on failure. */
+/** Resolves one Agent's action policy without loosening it on failure. */
 export const resolveToolPermissionPolicies = (
 	registry: AgentRegistry | null,
 	agent: AgentId,
 	getFallbackPermission: () => ToolPermission
 ): ResolvedToolPermissionPolicies => {
 	// An unavailable registry fails closed: the caller's fallback permission
-	// applies and no MCP tool is visible until the registry resolves.
+	// applies and no open-action tool is visible until the registry resolves.
 	if (isNull(registry)) {
 		return {
-			mcpPolicy: FAIL_CLOSED_MCP_POLICY,
+			agentActionPolicy: FAIL_CLOSED_AGENT_ACTION_POLICY,
 			permission: getFallbackPermission(),
 			resourceLimits: getToolResourceLimits(DEFAULT_RESOURCE_LIMIT_PROFILE),
 		};
@@ -105,10 +107,9 @@ export const resolveToolPermissionPolicies = (
 		registry.resourceProfile ??
 		DEFAULT_RESOURCE_LIMIT_PROFILE;
 	return {
-		// MCP composition consumes the raw folded rules plus the safety flag;
-		// the ceiling is applied by the registry when it composes with each
-		// server's own policy, so it must not be pre-applied here.
-		mcpPolicy: { rules, safety },
+		// Open-action consumers receive the folded Agent rules and safety flag
+		// and compose them with their own resource policy.
+		agentActionPolicy: { rules, safety },
 		permission: safety
 			? applyManualApprovalSafetyCeiling(permission)
 			: permission,
@@ -154,10 +155,12 @@ export const createToolPermissionRuntime = ({
 		);
 
 	return {
-		resolveMcpPolicy: () =>
-			resolvedPromise.then((resolvedPolicies) => resolvedPolicies.mcpPolicy),
-		resolveMcpPolicyForAgent: (targetAgent) =>
-			Promise.resolve(resolvePoliciesForAgent(targetAgent).mcpPolicy),
+		resolveAgentActionPolicy: () =>
+			resolvedPromise.then(
+				(resolvedPolicies) => resolvedPolicies.agentActionPolicy
+			),
+		resolveAgentActionPolicyForAgent: (targetAgent) =>
+			Promise.resolve(resolvePoliciesForAgent(targetAgent).agentActionPolicy),
 		resolvePermission: () =>
 			resolvedPromise.then((resolvedPolicies) => resolvedPolicies.permission),
 		resolvePermissionForAgent: (targetAgent) =>

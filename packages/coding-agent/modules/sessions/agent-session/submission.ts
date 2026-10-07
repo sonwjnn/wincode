@@ -120,11 +120,6 @@ export type SubmissionDeps = Readonly<{
 		armedSkill: SessionSkillCatalog,
 		signal: AbortSignal
 	) => Promise<SessionMessage[]>;
-	/** Takes committed Delegation Reports at the Agent Runtime's safe follow-up boundary. */
-	takeDelegationReportMessages: (
-		execution: SessionExecution,
-		signal: AbortSignal
-	) => Promise<SessionMessage[]>;
 }>;
 class SessionClosedError extends Error {
 	constructor() {
@@ -633,7 +628,6 @@ const executionInputForSubmit = ({
 	sessionModel: input.sessionModel,
 	startedAt,
 	...omitUndefined({
-		parent: input.delegation,
 		sessionEffort: input.sessionEffort,
 		sessionReasoningMode: input.sessionReasoningMode,
 		sourceUserMessageId,
@@ -747,23 +741,16 @@ const applyPreparedMessages = (
 	assertSessionOpen(deps);
 };
 
-/**
- * Commits one Session Record of an execution: a delegated execution's records
- * carry no session-level selection, because the Subagent runs its own.
- */
+/** Commits one Session Record for a live Session execution. */
 const commitExecutionRecord = (
 	deps: SubmissionDeps,
 	execution: SessionExecution,
 	record: SessionRecord
 ): Promise<void> =>
 	deps.ports.commitRecord({
-		...(isUndefined(execution.parent)
-			? {
-					sessionModel: execution.sessionModel,
-					sessionEffort: execution.sessionEffort,
-					sessionReasoningMode: execution.sessionReasoningMode,
-				}
-			: {}),
+		sessionModel: execution.sessionModel,
+		sessionEffort: execution.sessionEffort,
+		sessionReasoningMode: execution.sessionReasoningMode,
 		record,
 		sessionId: deps.sessionId,
 	});
@@ -1343,10 +1330,6 @@ const runTurn = async ({
 			takeSteeringMessages: async () =>
 				turnIsLive()
 					? deps.takeSteeringMessages(execution, context.armedSkill, signal)
-					: [],
-			takeFollowUpMessages: async () =>
-				turnIsLive()
-					? deps.takeDelegationReportMessages(execution, signal)
 					: [],
 		});
 		if (!turnIsLive()) {

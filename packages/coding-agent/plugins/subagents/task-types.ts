@@ -1,7 +1,12 @@
 import type { AgentId, AgentTurnId, ToolCallId } from "@wincode/agent-core";
 import { delegationResultSchema } from "@wincode/subagents";
+import type { Tagged } from "type-fest";
 import { z } from "zod";
-import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
+import type { SessionId } from "@/shared/identifiers";
+
+export type DelegationTaskId = Tagged<string, "DelegationTaskId">;
+export const toDelegationTaskId = (value: string): DelegationTaskId =>
+	value as DelegationTaskId;
 
 export const delegationTaskStatusSchema = z.enum([
 	"active",

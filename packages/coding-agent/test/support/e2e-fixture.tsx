@@ -47,7 +47,6 @@ import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
 import { SessionSurface } from "@/modules/sessions/ui/views/session-surface";
 import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/session-view";
-import { createSubagentTaskRuntime } from "@/plugins/subagents/task-runtime";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
@@ -339,7 +338,7 @@ export const cleanupSessionRender = (): void => {
 };
 
 export const shutdownSessionHosts = (): Promise<void> =>
-	getInteractiveSessionHostManager(createSubagentTaskRuntime).shutdownAll();
+	getInteractiveSessionHostManager().shutdownAll();
 
 export const writeE2EFrame = (setup: TestRendererSetup): void => {
 	const framePath = process.env.WINCODE_E2E_FRAME_PATH;

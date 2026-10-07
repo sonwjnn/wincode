@@ -575,7 +575,6 @@ type ExecuteModelStepsOptions = Readonly<{
 	modelClient: ModelClient;
 	modelMessages: ModelPromptMessage[];
 	runtimeSignal?: AbortSignal;
-	takeFollowUpMessages?: AgentRuntimeRunOptions["takeFollowUpMessages"];
 	takeSteeringMessages?: AgentRuntimeRunOptions["takeSteeringMessages"];
 	tools: readonly ResolvedTool[];
 	toolsByName: ReadonlyMap<string, ResolvedTool>;
@@ -602,23 +601,20 @@ const appendSteeringMessages = (
 	}
 	modelMessages.push(...messages.map(modelPromptMessage));
 };
-const appendFollowUpOrLateSteering = async (
+const appendLateSteeringMessages = async (
 	modelMessages: ModelPromptMessage[],
 	output: ModelStepOutput,
 	assistantOutputAlreadyAppended: boolean,
-	takeFollowUpMessages: AgentRuntimeRunOptions["takeFollowUpMessages"],
 	takeSteeringMessages: AgentRuntimeRunOptions["takeSteeringMessages"]
 ): Promise<boolean> => {
-	const followUpMessages = (await takeFollowUpMessages?.()) ?? [];
-	const lateSteeringMessages = (await takeSteeringMessages?.()) ?? [];
-	if (followUpMessages.length === 0 && lateSteeringMessages.length === 0) {
+	const messages = (await takeSteeringMessages?.()) ?? [];
+	if (messages.length === 0) {
 		return false;
 	}
 	if (!assistantOutputAlreadyAppended) {
 		appendAssistantOutput(modelMessages, output);
 	}
-	modelMessages.push(...lateSteeringMessages.map(modelPromptMessage));
-	modelMessages.push(...followUpMessages.map(modelPromptMessage));
+	modelMessages.push(...messages.map(modelPromptMessage));
 	return true;
 };
 
@@ -628,7 +624,6 @@ const runLoop = async function* ({
 	modelClient,
 	modelMessages,
 	runtimeSignal,
-	takeFollowUpMessages,
 	takeSteeringMessages,
 	tools,
 	toolsByName,
@@ -714,11 +709,10 @@ const runLoop = async function* ({
 		if (hasSteeringMessages) {
 			appendSteeringMessages(modelMessages, output, steeringMessages ?? []);
 		}
-		const additionalMessagesDelivered = await appendFollowUpOrLateSteering(
+		const additionalMessagesDelivered = await appendLateSteeringMessages(
 			modelMessages,
 			output,
 			output.toolCalls.length > 0 || hasSteeringMessages,
-			takeFollowUpMessages,
 			takeSteeringMessages
 		);
 		if (
@@ -741,12 +735,7 @@ const runLoop = async function* ({
 
 const runAgentTurn = async function* (
 	turn: AgentTurn,
-	{
-		deadlineMs,
-		signal,
-		takeFollowUpMessages,
-		takeSteeringMessages,
-	}: AgentRuntimeRunOptions,
+	{ deadlineMs, signal, takeSteeringMessages }: AgentRuntimeRunOptions,
 	modelClient: ModelClient
 ): AsyncGenerator<AgentTurnEvent, void, undefined> {
 	const lifecycle = createAgentTurnLifecycle(turn.id);
@@ -763,7 +752,6 @@ const runAgentTurn = async function* (
 	);
 	yield emit({
 		agentId: turn.agent.id,
-		...omitUndefined({ delegation: turn.delegation }),
 		sequence: emit.nextSequence(),
 		startedAt: Date.now(),
 		turnId: turn.id,
@@ -783,7 +771,6 @@ const runAgentTurn = async function* (
 			modelMessages,
 			...omitUndefined({
 				runtimeSignal,
-				takeFollowUpMessages,
 				takeSteeringMessages,
 			}),
 			tools,

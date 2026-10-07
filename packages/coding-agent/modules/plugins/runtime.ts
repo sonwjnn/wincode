@@ -27,13 +27,21 @@ export type PluginToolDescriptor = Readonly<{
 	action: `plugin:${string}:${string}`;
 	description: string;
 	exclusiveInBatch?: true;
-	gateFamily?: "delegation" | "mcp";
+	permissionAction?: string;
+	permissionResource?: string;
+	permissionDecision?: "allow" | "ask" | "deny";
+	permissionSafety?: boolean;
 	handler: PluginTool["handler"];
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
 	name: string;
 	pluginId: string;
 	sourcePath: string;
+}>;
+
+export type PluginResourceDescriptor = Readonly<{
+	name: string;
+	value: unknown;
 }>;
 
 export type PluginCommandDescriptor = Readonly<{
@@ -47,7 +55,9 @@ export type PluginCommandDescriptor = Readonly<{
 
 export type LoadedPlugin = Readonly<{
 	commands: readonly PluginCommandDescriptor[];
+	trustedBundled?: boolean;
 	id: string;
+	resources?: readonly PluginResourceDescriptor[];
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
@@ -67,6 +77,17 @@ export type PluginRuntime = Readonly<{
 	) => Promise<string>;
 	getCommands: (sessionId?: string) => readonly PluginCommandDescriptor[];
 	getToolDescriptors: (sessionId: string) => readonly PluginToolDescriptor[];
+	getResource: <Resource = unknown>(
+		pluginId: string,
+		name: string
+	) => Resource | undefined;
+	registerBackgroundWork: (sessionId: string, work: Promise<unknown>) => void;
+	hasBackgroundWork: (sessionId: string) => boolean;
+	onBackgroundWorkChange: (
+		sessionId: string,
+		listener: () => void
+	) => () => void;
+	waitForBackgroundWork: (sessionId: string) => Promise<void>;
 	resolveToolsForTurn: (
 		context: PluginBeforeAgentTurnContext,
 		hostContext?: unknown
@@ -93,6 +114,13 @@ type SessionPluginState = {
 	tools: Map<string, PluginToolDescriptor>;
 };
 
+class PluginRegistrationError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PluginRegistrationError";
+	}
+}
+
 const commandFailure = (name: string): Error =>
 	new Error(`Plugin command "/${name}" failed.`);
 
@@ -109,7 +137,18 @@ const descriptorForTool = (
 		action: `plugin:${plugin.id}:${tool.name}`,
 		description: tool.description,
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
-		...(tool.gateFamily === undefined ? {} : { gateFamily: tool.gateFamily }),
+		...(tool.permissionAction === undefined
+			? {}
+			: { permissionAction: tool.permissionAction }),
+		...(tool.permissionResource === undefined
+			? {}
+			: { permissionResource: tool.permissionResource }),
+		...(tool.permissionDecision === undefined
+			? {}
+			: { permissionDecision: tool.permissionDecision }),
+		...(tool.permissionSafety === undefined
+			? {}
+			: { permissionSafety: tool.permissionSafety }),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,
 		localName: tool.name,
@@ -155,6 +194,20 @@ export const createPluginRuntime = (
 	const diagnostics = [...initialDiagnostics];
 	const disabledPlugins = new Set<string>();
 	const sessionStates = new Map<string, SessionPluginState>();
+	const backgroundWork = new Map<string, Set<Promise<void>>>();
+	const backgroundWorkErrors = new Map<string, unknown[]>();
+	const backgroundWorkListeners = new Map<string, Set<() => void>>();
+	const notifyBackgroundWorkChange = (sessionId: string): void => {
+		for (const listener of [
+			...(backgroundWorkListeners.get(sessionId) ?? []),
+		]) {
+			try {
+				listener();
+			} catch {
+				// A listener cannot interrupt Plugin work or another Session.
+			}
+		}
+	};
 	const reservedCommands = new Set(reservedCommandNames.map(commandKey));
 	const reservedTools = new Set(reservedToolNames);
 	let shutdownPromise: Promise<void> | undefined;
@@ -212,7 +265,10 @@ export const createPluginRuntime = (
 			candidate: PluginToolRegistration<Schema>
 		): void => {
 			try {
-				const tool = validatePluginTool(candidate);
+				const tool = validatePluginTool(
+					candidate,
+					plugin.trustedBundled === true
+				);
 				const modelName = tool.modelName ?? toolNameFor(plugin.id, tool.name);
 				const owner =
 					options.turnToolOwners?.get(modelName) ??
@@ -228,15 +284,16 @@ export const createPluginRuntime = (
 				scope.tools.set(tool.name, descriptorForTool(plugin, tool));
 				scope.maskedTools.delete(tool.name);
 			} catch (error) {
-				addDiagnostic(plugin, getErrorMessage(error, String(error)));
-				throw error;
+				const message = getErrorMessage(error, String(error));
+				addDiagnostic(plugin, message);
+				throw new PluginRegistrationError(message);
 			}
 		};
 		const unregisterTool = (name: string): void => {
 			if (!isNonEmptyString(name)) {
-				const error = new Error("Plugin Tool name must be a non-empty string.");
-				addDiagnostic(plugin, error.message);
-				throw error;
+				const message = "Plugin Tool name must be a non-empty string.";
+				addDiagnostic(plugin, message);
+				throw new PluginRegistrationError(message);
 			}
 			scope.tools.delete(name);
 			scope.maskedTools.add(name);
@@ -264,8 +321,9 @@ export const createPluginRuntime = (
 				}
 				scope.commands.set(key, descriptorForCommand(plugin, command));
 			} catch (error) {
-				addDiagnostic(plugin, getErrorMessage(error, String(error)));
-				throw error;
+				const message = getErrorMessage(error, String(error));
+				addDiagnostic(plugin, message);
+				throw new PluginRegistrationError(message);
 			}
 		};
 		return Object.freeze({ registerTool, unregisterTool, registerCommand });
@@ -318,14 +376,7 @@ export const createPluginRuntime = (
 			maskedTools: new Set(),
 			tools: new Map(),
 		};
-		try {
-			await plugin.onSessionStart?.(
-				state.context,
-				createScopeApi(plugin, scope, {
-					commandsAllowed: true,
-					sessionId: state.context.sessionId,
-				}) as PluginRegistrationAPI
-			);
+		const publishScope = (): void => {
 			for (const [name, tool] of scope.tools) {
 				state.tools.set(name, tool);
 			}
@@ -335,8 +386,23 @@ export const createPluginRuntime = (
 			for (const [name, command] of scope.commands) {
 				state.commands.set(name, command);
 			}
+		};
+		try {
+			await plugin.onSessionStart?.(
+				state.context,
+				createScopeApi(plugin, scope, {
+					commandsAllowed: true,
+					sessionId: state.context.sessionId,
+				}) as PluginRegistrationAPI
+			);
+			publishScope();
 			state.started.add(plugin.id);
 		} catch (error) {
+			if (error instanceof PluginRegistrationError) {
+				publishScope();
+				state.started.add(plugin.id);
+				return;
+			}
 			state.disabled.add(plugin.id);
 			addDiagnostic(
 				plugin,
@@ -538,6 +604,67 @@ export const createPluginRuntime = (
 					.filter((plugin) => isEnabledForSession(plugin, sessionId))
 					.flatMap((plugin) => pluginToolsForSession(plugin, sessionId ?? ""))
 			);
+		},
+		getResource<Resource>(pluginId: string, name: string) {
+			const resource = plugins
+				.find((plugin) => plugin.id === pluginId)
+				?.resources?.find((candidate) => candidate.name === name)?.value;
+			return resource as Resource | undefined;
+		},
+		registerBackgroundWork(sessionId, work) {
+			let sessionWork = backgroundWork.get(sessionId);
+			if (sessionWork === undefined) {
+				sessionWork = new Set();
+				backgroundWork.set(sessionId, sessionWork);
+			}
+			const tracked = Promise.resolve(work).then(
+				() => undefined,
+				(error: unknown) => {
+					const errors = backgroundWorkErrors.get(sessionId) ?? [];
+					errors.push(error);
+					backgroundWorkErrors.set(sessionId, errors);
+				}
+			);
+			sessionWork.add(tracked);
+			notifyBackgroundWorkChange(sessionId);
+			void tracked.then(() => {
+				sessionWork?.delete(tracked);
+				if (sessionWork?.size === 0) {
+					backgroundWork.delete(sessionId);
+				}
+				notifyBackgroundWorkChange(sessionId);
+			});
+		},
+		hasBackgroundWork(sessionId) {
+			return (backgroundWork.get(sessionId)?.size ?? 0) > 0;
+		},
+		onBackgroundWorkChange(sessionId, listener) {
+			let listeners = backgroundWorkListeners.get(sessionId);
+			if (listeners === undefined) {
+				listeners = new Set();
+				backgroundWorkListeners.set(sessionId, listeners);
+			}
+			listeners.add(listener);
+			return () => {
+				listeners?.delete(listener);
+				if (listeners?.size === 0) {
+					backgroundWorkListeners.delete(sessionId);
+				}
+			};
+		},
+		async waitForBackgroundWork(sessionId) {
+			while (true) {
+				const sessionWork = backgroundWork.get(sessionId);
+				if (sessionWork === undefined || sessionWork.size === 0) {
+					break;
+				}
+				await Promise.all([...sessionWork]);
+			}
+			const errors = backgroundWorkErrors.get(sessionId);
+			backgroundWorkErrors.delete(sessionId);
+			if (errors?.length) {
+				throw errors[0];
+			}
 		},
 		resolveToolsForTurn,
 		shutdown() {

@@ -1,9 +1,11 @@
 import * as os from "node:os";
-import type { AgentId } from "@wincode/agent-core";
+import type { AgentId, SubmissionId } from "@wincode/agent-core";
 import { agentIdSchema, toSubmissionId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
+	type Effort,
+	type ReasoningMode,
 } from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/utils";
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
@@ -16,6 +18,7 @@ import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type {
 	SessionSdk,
+	SessionSdkCapabilityCeiling,
 	SessionSdkChildFactory,
 	SessionSdkCreateOptions,
 	SessionSdkHandle,
@@ -24,6 +27,8 @@ import type {
 
 export type {
 	SessionSdk,
+	SessionSdkAgent,
+	SessionSdkCapabilityCeiling,
 	SessionSdkChildFactory,
 	SessionSdkCreateOptions,
 	SessionSdkDelivery,
@@ -54,15 +59,70 @@ export type SessionSdkOptions = Omit<
 	Readonly<{
 		agent?: AgentId | string;
 		cwd?: string;
+		effort?: Effort;
 		enabledPlugins?: readonly OptionalApplicationPluginId[];
 		model?: ChatModelSelection;
+		reasoningMode?: ReasoningMode;
 		pluginPaths?: readonly string[];
 		workspace?: string;
 	}>;
 
+const snapshotCapabilityCeiling = (
+	...ceilings: readonly (SessionSdkCapabilityCeiling | undefined)[]
+): SessionSdkCapabilityCeiling | undefined => {
+	const present = ceilings.filter(
+		(ceiling): ceiling is SessionSdkCapabilityCeiling => ceiling !== undefined
+	);
+	if (present.length === 0) {
+		return;
+	}
+	for (const ceiling of present) {
+		if (
+			!Array.isArray(ceiling.tools) ||
+			ceiling.tools.some(
+				(tool) => typeof tool !== "string" || tool.trim().length === 0
+			)
+		) {
+			throw new Error(
+				"Session capability ceilings require non-empty tool names."
+			);
+		}
+	}
+	const [first, ...rest] = present;
+	const tools = new Set(first?.tools ?? []);
+	for (const ceiling of rest) {
+		for (const tool of tools) {
+			if (!ceiling.tools.includes(tool)) {
+				tools.delete(tool);
+			}
+		}
+	}
+	return Object.freeze({ tools: Object.freeze([...tools]) });
+};
+
+const optionsForChild = (
+	options: SessionSdkOptions,
+	capabilityCeiling: SessionSdkCapabilityCeiling | undefined
+): SessionSdkOptions => {
+	const {
+		agent: _agent,
+		capabilityCeiling: _parentCapabilityCeiling,
+		effort: _effort,
+		model: _model,
+		reasoningMode: _reasoningMode,
+		...sharedOptions
+	} = options;
+	return {
+		...sharedOptions,
+		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
+	};
+};
+
 type SessionSelectionDefaults = Readonly<{
 	agent: AgentId;
+	effort?: Effort;
 	model: ChatModelSelection;
+	reasoningMode?: ReasoningMode;
 }>;
 
 const parseAgent = (value: AgentId | string): AgentId => {
@@ -75,7 +135,10 @@ const parseAgent = (value: AgentId | string): AgentId => {
 
 const defaultsFor = (
 	registry: AgentRegistry | null,
-	options: Pick<SessionSdkOptions, "agent" | "model">
+	options: Pick<
+		SessionSdkOptions,
+		"agent" | "effort" | "model" | "reasoningMode"
+	>
 ): SessionSelectionDefaults => {
 	const agent =
 		options.agent === undefined
@@ -87,6 +150,10 @@ const defaultsFor = (
 	return {
 		agent,
 		model: options.model ?? selectedAgent?.model ?? defaultChatModelSelection,
+		...omitUndefined({
+			effort: options.effort ?? selectedAgent?.effort,
+			reasoningMode: options.reasoningMode ?? selectedAgent?.reasoningMode,
+		}),
 	};
 };
 
@@ -118,7 +185,13 @@ const promptInputFor = (
 	defaults: SessionSelectionDefaults,
 	registry: AgentRegistry | null
 ): SessionSendInput => {
-	if (input.effort !== undefined && input.reasoningMode !== undefined) {
+	const hasExplicitReasoningSelection =
+		input.effort !== undefined || input.reasoningMode !== undefined;
+	const effort = hasExplicitReasoningSelection ? input.effort : defaults.effort;
+	const reasoningMode = hasExplicitReasoningSelection
+		? input.reasoningMode
+		: defaults.reasoningMode;
+	if (effort !== undefined && reasoningMode !== undefined) {
 		throw new Error("Select either Effort or Reasoning Mode, not both.");
 	}
 	const agent =
@@ -130,14 +203,11 @@ const promptInputFor = (
 		model,
 		resolvedAgent: resolvedAgentFor(registry, agent),
 		sessionModel: defaults.model,
-		...(input.effort === undefined ? {} : { effort: input.effort }),
-		...(input.reasoningMode === undefined
-			? {}
-			: { reasoningMode: input.reasoningMode }),
-		...(input.effort === undefined ? {} : { sessionEffort: input.effort }),
-		...(input.reasoningMode === undefined
-			? {}
-			: { sessionReasoningMode: input.reasoningMode }),
+		...omitUndefined({ effort, reasoningMode }),
+		...omitUndefined({
+			sessionEffort: effort,
+			sessionReasoningMode: reasoningMode,
+		}),
 		...(input.submissionId === undefined
 			? {}
 			: { submissionId: input.submissionId }),
@@ -190,17 +260,6 @@ const handleFor = (
 			return;
 		}
 		const snapshot = host.getSnapshot();
-		const queued = snapshot.queuedSubmissions.find(
-			(submission) => submission.submissionId === submissionId
-		);
-		if (queued !== undefined) {
-			return {
-				disposition: "queued",
-				messageId: queued.messageId,
-				rejected: false,
-				submissionId,
-			};
-		}
 		for (const message of snapshot.transcript) {
 			if (message.metadata?.submissionId === submissionId) {
 				return {
@@ -226,6 +285,61 @@ const handleFor = (
 		}
 		return;
 	};
+	const promptAndWaitForDurableDelivery = async (
+		submissionId: SubmissionId,
+		prompt: () => Promise<SessionSubmissionAdmission>
+	): Promise<SessionSubmissionAdmission> => {
+		const committed = Promise.withResolvers<SessionSubmissionAdmission>();
+		let accepted:
+			| Extract<SessionSubmissionAdmission, { readonly rejected: false }>
+			| undefined;
+		let failureReason: string | undefined;
+		let settled = false;
+		const settle = (): void => {
+			if (accepted === undefined || settled) {
+				return;
+			}
+			const message = host
+				.getSnapshot()
+				.transcript.find(
+					(entry) => entry.metadata?.submissionId === submissionId
+				);
+			if (message !== undefined) {
+				settled = true;
+				committed.resolve({ ...accepted, messageId: message.id });
+				return;
+			}
+			if (failureReason !== undefined) {
+				settled = true;
+				committed.resolve({ rejected: true, reason: failureReason });
+			}
+		};
+		const unsubscribeSnapshot = host.subscribe(settle);
+		const unsubscribeSubmission = host.agentSession.onSubmissionEvent(
+			(event) => {
+				if (event.submissionId !== submissionId) {
+					return;
+				}
+				if (event.kind === "failed" || event.kind === "recalled") {
+					failureReason =
+						event.reason ?? "The Session message was not committed.";
+				}
+				settle();
+			}
+		);
+		try {
+			const admission = await prompt();
+			if (admission.rejected) {
+				return admission;
+			}
+			accepted = admission;
+			settle();
+			return await committed.promise;
+		} finally {
+			unsubscribeSnapshot();
+			unsubscribeSubmission();
+		}
+	};
 	const deliver: SessionSdkHandle["deliver"] = (input) => {
 		const previous = deliveries.get(input.idempotencyKey);
 		if (previous !== undefined) {
@@ -234,18 +348,39 @@ const handleFor = (
 		const submissionId = deliverySubmissionId(input.idempotencyKey);
 		const pending = (async () => {
 			const existing = await existingDeliveryAdmission(submissionId);
-			return existing ?? prompt({ text: input.text, submissionId });
+			if (existing !== undefined) {
+				return existing;
+			}
+			if (disposed) {
+				return {
+					reason: "Session handle is disposed.",
+					rejected: true as const,
+				};
+			}
+			return promptAndWaitForDurableDelivery(submissionId, () =>
+				host.agentSession.prompt({
+					...promptInputFor(
+						{ text: input.text, submissionId },
+						defaults,
+						capabilities.getRegistry()
+					),
+				})
+			);
 		})();
 		deliveries.set(input.idempotencyKey, pending);
-		void pending.then((admission) => {
-			if (admission.rejected) {
-				deliveries.delete(input.idempotencyKey);
-			}
-		});
+		void pending.then(
+			(admission) => {
+				if (admission.rejected) {
+					deliveries.delete(input.idempotencyKey);
+				}
+			},
+			() => deliveries.delete(input.idempotencyKey)
+		);
 		return pending;
 	};
 	return Object.freeze({
 		continue: () => host.agentSession.continue(),
+		interrupt: () => host.agentSession.interruptAll(),
 		dispose: () => {
 			if (disposePromise !== undefined) {
 				return disposePromise;
@@ -281,6 +416,9 @@ const createSessionSdkInternal = async (
 	options: SessionSdkOptions,
 	shared?: SharedSessionSdkResources
 ): Promise<SessionSdk> => {
+	const capabilityCeiling = snapshotCapabilityCeiling(
+		options.capabilityCeiling
+	);
 	const workspace = options.workspace ?? process.cwd();
 	const cwd = options.cwd ?? workspace;
 	const configStore =
@@ -308,16 +446,20 @@ const createSessionSdkInternal = async (
 	});
 	const {
 		agent,
+		capabilityCeiling: _capabilityCeiling,
 		cwd: _cwd,
+		effort,
 		enabledPlugins = [],
 		model,
 		pluginPaths: _pluginPaths,
+		reasoningMode,
 		workspace: _workspace,
 		...capabilityOptions
 	} = options;
 	let sdk: SessionSdk | undefined;
 	const assembly = await createSessionCapabilities({
 		...capabilityOptions,
+		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 		configRuntime,
 		cwd,
 		pluginRuntime,
@@ -328,15 +470,6 @@ const createSessionSdkInternal = async (
 					store: shared.store,
 					sessionHostManager: shared.manager,
 				}),
-		...(composition.mcpResource === undefined
-			? {}
-			: { mcpResource: composition.mcpResource }),
-		...(composition.createDelegationAdapter === undefined
-			? {}
-			: { createDelegationAdapter: composition.createDelegationAdapter }),
-		...(composition.createDelegationRuntime === undefined
-			? {}
-			: { createDelegationRuntime: composition.createDelegationRuntime }),
 		turnToolResolver: composition.turnToolResolver,
 		workspace,
 	});
@@ -346,11 +479,13 @@ const createSessionSdkInternal = async (
 	let disposePromise: Promise<void> | undefined;
 	const defaultSelection = defaultsFor(assembly.capabilities.getRegistry(), {
 		...(agent === undefined ? {} : { agent }),
+		...(effort === undefined ? {} : { effort }),
 		...(model === undefined ? {} : { model }),
+		...(reasoningMode === undefined ? {} : { reasoningMode }),
 	});
 	const openSession = async (
 		id: SessionId | string,
-		openOptions: Readonly<{ view?: boolean }> = {},
+		openOptions: Readonly<{ autoContinue?: boolean; view?: boolean }> = {},
 		selection = defaultSelection
 	): Promise<SessionSdkHandle> => {
 		if (disposed) {
@@ -358,15 +493,23 @@ const createSessionSdkInternal = async (
 		}
 		const sessionId = toSessionId(id);
 		const host = await assembly.capabilities.getSessionHostManager().openHost({
+			autoContinue: openOptions.autoContinue ?? true,
 			capabilities: assembly.capabilities,
 			sessionId,
 			view: openOptions.view ?? true,
 		});
 		const stored = await assembly.store.getSession(sessionId);
 		const prior = host.getSelection();
-		const defaults = {
+		const defaults: SessionSelectionDefaults = {
 			agent: prior?.agent ?? selection.agent,
 			model: prior?.model ?? stored.model ?? selection.model,
+			...omitUndefined({
+				effort: prior?.effort ?? stored.effort ?? selection.effort,
+				reasoningMode:
+					prior?.reasoningMode ??
+					stored.reasoningMode ??
+					selection.reasoningMode,
+			}),
 		};
 		const handle = handleFor(assembly, host, sessionId, defaults);
 		handles.add(handle);
@@ -382,15 +525,17 @@ const createSessionSdkInternal = async (
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,
+				effort: createOptions?.effort ?? effort,
 				model: createOptions?.model ?? model,
+				reasoningMode: createOptions?.reasoningMode ?? reasoningMode,
 			})
 		);
 		const { id } = await assembly.store.createEmptySession(
 			omitUndefined({
 				id: createOptions?.sessionId,
 				model: selection.model,
-				effort: createOptions?.effort,
-				reasoningMode: createOptions?.reasoningMode,
+				effort: selection.effort,
+				reasoningMode: selection.reasoningMode,
 			})
 		);
 		return id;
@@ -405,13 +550,17 @@ const createSessionSdkInternal = async (
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,
+				effort: createOptions?.effort ?? effort,
 				model: createOptions?.model ?? model,
+				reasoningMode: createOptions?.reasoningMode ?? reasoningMode,
 			})
 		);
 		const id = await createEmptySession({
 			...createOptions,
 			agent: selection.agent,
 			model: selection.model,
+			effort: createOptions?.effort ?? selection.effort,
+			reasoningMode: createOptions?.reasoningMode ?? selection.reasoningMode,
 		});
 		const handle = await openSession(id, {}, selection);
 		if (createOptions?.initialPrompt !== undefined) {
@@ -437,9 +586,13 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
+		const childCapabilityCeiling = snapshotCapabilityCeiling(
+			capabilityCeiling,
+			childOptions.capabilityCeiling
+		);
 		const childSdk = await createSessionSdkInternal(
 			{
-				...options,
+				...optionsForChild(options, childCapabilityCeiling),
 				cwd,
 				configRuntime,
 				enabledPlugins: childOptions.enabledPlugins,
@@ -456,10 +609,25 @@ const createSessionSdkInternal = async (
 		childSdks.add(childSdk);
 		return childSdk;
 	};
+	const getAgentCatalog: SessionSdk["getAgentCatalog"] = async () =>
+		Object.freeze(
+			(assembly.capabilities.getRegistry()?.agents ?? []).map(
+				({ id, isAvailable, role }) => ({ id, isAvailable, role })
+			)
+		);
 	const sdkApi: SessionSdk = Object.freeze({
 		createChildSdk,
 		createEmptySession,
+		getAgentCatalog,
 		createSession,
+		deliverToSession: async (sessionId, input) => {
+			const handle = await openSession(sessionId, { view: true });
+			try {
+				return await handle.deliver(input);
+			} finally {
+				await handle.dispose();
+			}
+		},
 		dispose: () => {
 			if (disposePromise !== undefined) {
 				return disposePromise;
@@ -493,15 +661,75 @@ export const createSessionSdkChildFactory = (
 	options: SessionSdkOptions,
 	manager: SessionHostManager,
 	store: SessionStore
-): SessionSdkChildFactory => ({
-	createChildSdk: (childOptions) =>
-		createSessionSdkInternal(
-			{
-				...options,
-				enabledPlugins: childOptions.enabledPlugins,
-				pluginPaths: childOptions.pluginPaths ?? [],
-				store,
-			},
+): SessionSdkChildFactory => {
+	const capabilityCeiling = snapshotCapabilityCeiling(
+		options.capabilityCeiling
+	);
+	const withChildSdk = async <Result>(
+		operation: (sdk: SessionSdk) => Promise<Result>
+	): Promise<Result> => {
+		const sdk = await createSessionSdkInternal(
+			{ ...optionsForChild(options, capabilityCeiling), store },
 			{ ignoreConfiguredPlugins: true, manager, store }
-		),
-});
+		);
+		try {
+			return await operation(sdk);
+		} finally {
+			await sdk.dispose();
+		}
+	};
+	return {
+		createChildSdk: (childOptions) => {
+			const childCapabilityCeiling = snapshotCapabilityCeiling(
+				capabilityCeiling,
+				childOptions.capabilityCeiling
+			);
+			return createSessionSdkInternal(
+				{
+					...optionsForChild(options, childCapabilityCeiling),
+					enabledPlugins: childOptions.enabledPlugins,
+					pluginPaths: childOptions.pluginPaths ?? [],
+					store,
+				},
+				{ ignoreConfiguredPlugins: true, manager, store }
+			);
+		},
+		createEmptySession: (createOptions) =>
+			withChildSdk((sdk) => sdk.createEmptySession(createOptions)),
+		getAgentCatalog: () => withChildSdk((sdk) => sdk.getAgentCatalog()),
+		deliverToSession: (sessionId, input) =>
+			withChildSdk((sdk) => sdk.deliverToSession(sessionId, input)),
+		openSession: async (sessionId, openOptions) => {
+			const sdk = await createSessionSdkInternal(
+				{ ...optionsForChild(options, capabilityCeiling), store },
+				{ ignoreConfiguredPlugins: true, manager, store }
+			);
+			try {
+				const handle = await sdk.openSession(sessionId, openOptions);
+				let disposePromise: Promise<void> | undefined;
+				return Object.freeze({
+					continue: handle.continue,
+					deliver: handle.deliver,
+					dispose: () => {
+						if (disposePromise !== undefined) {
+							return disposePromise;
+						}
+						disposePromise = (async () => {
+							await handle.dispose();
+							await sdk.dispose();
+						})();
+						return disposePromise;
+					},
+					interrupt: handle.interrupt,
+					onEvent: handle.onEvent,
+					prompt: handle.prompt,
+					sessionId: handle.sessionId,
+					subscribe: handle.subscribe,
+				});
+			} catch (error) {
+				await sdk.dispose();
+				throw error;
+			}
+		},
+	};
+};

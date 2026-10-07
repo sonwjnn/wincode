@@ -1,10 +1,16 @@
 import type {
 	AgentId,
+	AgentTurnId,
 	ToolCallId,
 	ToolCallOutput,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
 import type { z } from "zod";
+import type {
+	SessionSdkCapabilityCeiling,
+	SessionSdkChildFactory,
+} from "@/modules/sessions/sdk-contract";
+import type { ExecutionMode } from "@/shared/execution-mode";
 
 export type PluginJsonValue =
 	| null
@@ -18,20 +24,41 @@ export type PluginJsonValue =
 export type PluginToolResult = ToolCallOutput;
 export type PluginInputSchema = z.ZodType | ToolJsonSchema;
 
+export type PluginPermissionDecision = "allow" | "ask" | "deny";
+export type PluginPermissionResourceRules = Readonly<
+	Record<string, PluginPermissionDecision>
+>;
+export type PluginPermissionRules = Readonly<
+	Record<
+		string,
+		PluginPermissionDecision | PluginPermissionResourceRules | undefined
+	>
+>;
+export type PluginAgentPermissionPolicy = Readonly<{
+	rules: PluginPermissionRules;
+	safety: boolean;
+}>;
+
 export type PluginLoadContext = Readonly<{
 	sourcePath: string;
 	workspace: string;
 }>;
 
 export type PluginSessionContext = Readonly<{
+	executionMode?: ExecutionMode;
 	sessionId: string;
+	sessionSdk?: SessionSdkChildFactory;
 	workspace: string;
 }>;
 
 export type PluginBeforeAgentTurnContext = PluginSessionContext &
 	Readonly<{
 		agentId: AgentId;
+		capabilityCeiling?: SessionSdkCapabilityCeiling;
+		getAgentPermissionPolicy?: () => Promise<PluginAgentPermissionPolicy>;
+		registerTurnCleanup?: (cleanup: () => void) => void;
 		signal: AbortSignal;
+		turnId?: AgentTurnId;
 	}>;
 
 export type PluginProcessContext = PluginLoadContext;
@@ -41,6 +68,7 @@ export type PluginToolContext = PluginSessionContext &
 		agentId: AgentId;
 		signal: AbortSignal;
 		toolCallId: ToolCallId;
+		registerBackgroundWork: (work: Promise<unknown>) => void;
 	}>;
 
 export type PluginCommandContext = Readonly<{
@@ -53,6 +81,10 @@ export type PluginToolRegistration<Schema extends PluginInputSchema> =
 	Readonly<{
 		description: string;
 		exclusiveInBatch?: true;
+		permissionAction?: string;
+		permissionResource?: string;
+		permissionDecision?: "allow" | "ask" | "deny";
+		permissionSafety?: boolean;
 		handler: (
 			input: Schema extends z.ZodType ? z.output<Schema> : unknown,
 			context: PluginToolContext
@@ -99,6 +131,7 @@ export type PluginShutdownHook = (
 
 export type PluginDefinitionAPI = PluginRegistrationAPI &
 	Readonly<{
+		registerResource: (name: string, resource: unknown) => void;
 		onSessionStart: (handler: PluginSessionStartHook) => void;
 		onSessionShutdown: (handler: PluginSessionShutdownHook) => void;
 		onBeforeAgentTurn: (handler: PluginBeforeAgentTurnHook) => void;

@@ -5,7 +5,6 @@ import {
 	selectOptionalApplicationPlugins,
 } from "@/modules/application/plugin-composition";
 import { useConnections } from "@/modules/connections";
-import { useMcp } from "@/modules/mcp/context/mcp-provider";
 import { useToolPermission } from "@/modules/permissions/use-tool-permission";
 import { parseCliOptions } from "@/shared/cli-options";
 import { useConfig } from "@/shared/config/config-provider";
@@ -36,13 +35,11 @@ import type { SessionCapabilities } from "./types";
  */
 export const useSessionCapabilities = (): SessionCapabilities => {
 	const connections = useConnections();
-	const mcp = useMcp();
 	const config = useConfig();
 	const registry = useAgentRegistry();
 	const toolPermission = useToolPermission();
 	const { getCompactionSettings } = useCompactionSettings();
 	const connectionsRef = useLatest(connections);
-	const mcpRef = useLatest(mcp);
 	const configRef = useLatest(config);
 	const registryRef = useLatest(registry);
 	const toolPermissionRef = useLatest(toolPermission);
@@ -66,10 +63,13 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	// The refs this object closes over are stable for the component's life, so
 	// the capabilities object is composed once: a session is never reopened
 	// because a provider re-rendered.
+	const runtimeContext = getInteractiveRuntimeContext();
 	const pluginRuntime = getInteractivePluginRuntime();
+	const runtimeFactory = runtimeContext.runtimeFactory;
+	const runtimeArgs = runtimeContext.args;
 	const disabledPlugins = useMemo(
-		() => parseCliOptions(getInteractiveRuntimeContext().args).disabledPlugins,
-		[]
+		() => parseCliOptions(runtimeArgs).disabledPlugins,
+		[runtimeArgs]
 	);
 	const composition = useMemo(
 		() =>
@@ -84,23 +84,19 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	return useMemo(() => {
 		let sessionSdk: SessionSdkChildFactory | undefined;
 		const sessionStore = getSessionStore();
-		const sessionHostManager = getInteractiveSessionHostManager(
-			composition.createDelegationRuntime,
-			pluginRuntime
-		);
+		const sessionHostManager = getInteractiveSessionHostManager(pluginRuntime);
 		const capabilities: SessionCapabilities = {
+			getCapabilityCeiling: () => undefined,
 			getCompactionModule: () => compactionModuleRef.current,
 			getCompactionSettings: (model) => getCompactionSettingsRef.current(model),
 			getConfig: () => configRef.current,
 			getConnections: () => connectionsRef.current,
-			getMcp: () => mcpRef.current,
 			getRegistry: () => registryRef.current,
 			getStore: () => getSessionStore(),
 			getSessionHostManager: () => sessionHostManager,
 			getSessionSdk: () => sessionSdk,
 			getTurnToolResolver: () => composition.turnToolResolver,
-			getDelegationAdapter: () =>
-				composition.createDelegationAdapter?.(capabilities),
+			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),
 			...(pluginRuntime === undefined
 				? {}
 				: { getPluginRuntime: () => pluginRuntime }),
@@ -112,7 +108,10 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 				configStore: configRef.current.configStore,
 				connections: connectionsRef.current,
 				cwd: configRef.current.cwd ?? configRef.current.workspace,
+				enabledPlugins: composition.enabledPlugins,
 				registry: registryRef.current,
+				getRegistry: () => registryRef.current,
+				...(runtimeFactory === undefined ? {} : { runtimeFactory }),
 				store: sessionStore,
 				workspace: configRef.current.workspace,
 			},
@@ -120,5 +119,5 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			sessionStore
 		);
 		return capabilities;
-	}, [composition, pluginRuntime]);
+	}, [composition, pluginRuntime, runtimeFactory]);
 };

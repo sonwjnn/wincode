@@ -118,45 +118,18 @@ export type AgentTurnInput = ReadonlyDeep<{
 }>;
 
 /**
- * Correlation for a delegated Subagent execution. Both identifiers are
- * present together so a delegated turn can be located from either side.
- */
-export type AgentTurnDelegation = Readonly<{
-	parentToolCallId: ToolCallId;
-	parentTurnId: AgentTurnId;
-}>;
-
-/**
  * A fully resolved Agent Turn ready for one runtime invocation: the Agent,
  * the transient Model Target, the input session, and the gated Tools
- * the Agent may invoke. Delegated turns retain the parent turn and Tool Call
- * that created them while keeping their own identity and lifecycle.
+ * the Agent may invoke.
  */
 export type AgentTurn = Readonly<{
 	agent: ResolvedAgent;
-	delegation?: AgentTurnDelegation;
 	id: AgentTurnId;
 	input: AgentTurnInput;
 	model: ModelTarget;
 	tools?: readonly ResolvedTool[];
 }>;
 
-export const isAgentTurnDelegation = (
-	value: unknown
-): value is AgentTurnDelegation => {
-	if (!isObjectLike(value)) {
-		return false;
-	}
-	const delegation = value as UnknownRecord;
-	const keys = Object.keys(delegation);
-	return (
-		keys.length === 2 &&
-		keys.includes("parentTurnId") &&
-		keys.includes("parentToolCallId") &&
-		isNonEmptyString(delegation.parentTurnId) &&
-		isToolCallId(delegation.parentToolCallId)
-	);
-};
 export const createAgentTurnMessage = (
 	role: AgentTurnMessage["role"],
 	text: string,

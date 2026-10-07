@@ -210,7 +210,7 @@ describe("createMcpRegistry", () => {
 
 		const snapshot = await registry.createSnapshot(
 			agentId("build"),
-			resolution.mcpPolicy
+			resolution.agentActionPolicy
 		);
 
 		expect(resolution.permission).toBe(fallbackPermission);

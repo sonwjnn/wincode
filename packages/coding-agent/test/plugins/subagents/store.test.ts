@@ -13,13 +13,13 @@ import {
 const directory = await mkdtemp(
 	path.join(os.tmpdir(), "wincode-subagents-store-")
 );
-const databasePath = path.join(directory, "subagents.sqlite");
+const databasePath = path.join(directory, "nested", "subagents.sqlite");
 
 afterAll(async () => {
 	await rm(directory, { force: true, recursive: true });
 });
 
-test("Subagents task outcomes and report acknowledgments persist in its own database", async () => {
+test("Subagents creates its store directory and persists outcomes and acknowledgments", async () => {
 	const store = await createSubagentsTaskStore(databasePath);
 	const task = store.createTask({
 		agentId: agentId("scout"),

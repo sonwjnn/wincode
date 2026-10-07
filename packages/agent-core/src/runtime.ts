@@ -166,15 +166,6 @@ export type AgentRuntimeRunOptions = Readonly<{
 	takeSteeringMessages?: () =>
 		| readonly AgentTurnMessage[]
 		| Promise<readonly AgentTurnMessage[]>;
-	/**
-	 * Returns prepared follow-up messages when the current turn would otherwise
-	 * complete: after the model step has no Tool Calls and steering is drained.
-	 * Follow-ups start another Model Step in this turn; they never interrupt
-	 * active model or tool work.
-	 */
-	takeFollowUpMessages?: () =>
-		| readonly AgentTurnMessage[]
-		| Promise<readonly AgentTurnMessage[]>;
 }>;
 
 /**

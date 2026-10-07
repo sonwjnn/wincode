@@ -12,7 +12,6 @@ import {
 	createApplicationToolRegistry,
 	type ToolProviderRegistration,
 } from "@/modules/application/plugins/registry";
-import { createSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 
 const definition = (name: string): ToolDefinition => ({
 	description: `${name} tool`,
@@ -88,7 +87,7 @@ test("provider registration snapshots resolver functions before the Plugin retur
 	expect(tools.map(({ definition: tool }) => tool.name)).toEqual(["read"]);
 });
 
-test("the composition root selects the Subagents Plugin and its Session adapter", async () => {
+test("the composition root selects the Subagents Plugin without Session adapters", () => {
 	const base = createApplicationPluginComposition({
 		createMcpResource: false,
 		enabledPlugins: [],
@@ -99,18 +98,9 @@ test("the composition root selects the Subagents Plugin and its Session adapter"
 		enabledPlugins: ["subagents"],
 		workspace: "/workspace",
 	});
-	const manager = createSessionHostManager(selected.createDelegationRuntime);
-
-	try {
-		expect(base.createDelegationRuntime).toBeUndefined();
-		expect(base.createDelegationAdapter).toBeUndefined();
-		expect(selected.bundledPlugins.map(({ id }) => id)).toEqual(["subagents"]);
-		expect(selected.createDelegationRuntime).toBeFunction();
-		expect(selected.createDelegationAdapter).toBeFunction();
-		expect(manager.delegation.activeTaskIds()).toEqual([]);
-	} finally {
-		await manager.shutdownAll();
-	}
+	expect(base.bundledPlugins).toEqual([]);
+	expect(selected.bundledPlugins.map(({ id }) => id)).toEqual(["subagents"]);
+	expect(selected.enabledPlugins).toEqual(["subagents"]);
 });
 
 test("native Skill tools join the same registry without being a Plugin", async () => {

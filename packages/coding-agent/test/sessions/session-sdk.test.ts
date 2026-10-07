@@ -14,6 +14,10 @@ import { buildAgentRegistry } from "@/modules/agents/registry";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
+	getSharedSubagentsTaskStore,
+	resolveSubagentsDatabasePath,
+} from "@/plugins/subagents/store";
+import {
 	type ConfigSnapshot,
 	createConfigStore,
 } from "@/shared/config/config-store";
@@ -133,19 +137,89 @@ test("the public Session SDK creates a child SDK with an explicit Plugin set", a
 	}
 });
 
+test("a child SDK snapshots its tool ceiling so later changes cannot expose tools", async () => {
+	const recorder = createFakeModelClientRecorder();
+	const visibleTools: string[][] = [];
+	recorder.beforeStep = async (request) => {
+		visibleTools.push((request.tools ?? []).map(({ name }) => name));
+	};
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {
+				agents: {
+					scout: {
+						description: "Inspect and report findings.",
+						role: "subagent",
+					},
+				},
+			},
+			sourceFor: () => undefined,
+			sources: [],
+		}),
+		{ connectedProviderIds: new Set(["openai"]) }
+	);
+	const sdk = await createSessionSdk({
+		configStore,
+		connections: {
+			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
+			connect: async () => undefined,
+			listProviders: async () => [
+				{
+					connected: true,
+					connectionMethod: "api-key",
+					displayName: "OpenAI",
+					id: "openai",
+					methods: ["api-key", "browser"],
+				},
+			],
+		},
+		cwd: workspace,
+		enabledPlugins: [],
+		pluginPaths: [],
+		registry,
+		runtimeFactory: () =>
+			createAgentRuntime({ modelClient: createFakeModelClient(recorder) }),
+		store,
+		workspace,
+	});
+	const allowedTools = ["read"];
+	const childSdk = await sdk.createChildSdk({
+		capabilityCeiling: { tools: allowedTools },
+		enabledPlugins: [],
+	});
+	allowedTools.push("write");
+	const child = await childSdk.createSession({ agent: "scout" });
+	const completed = Promise.withResolvers<void>();
+	const unsubscribe = child.onEvent((event) => {
+		if (event.type === "agent-turn-completed") {
+			completed.resolve();
+		}
+	});
+	try {
+		const admission = await child.prompt({
+			text: "Check the child tool ceiling.",
+		});
+		await completed.promise;
+
+		expect(admission.rejected).toBe(false);
+		expect(visibleTools).toEqual([["read"]]);
+	} finally {
+		unsubscribe();
+		await child.dispose();
+		await childSdk.dispose();
+		await sdk.dispose();
+	}
+});
+
 test("Subagents use the public Session SDK for explicitly selected child Sessions", async () => {
 	const recorder = createFakeModelClientRecorder();
-	const childTaskSettled = Promise.withResolvers<void>();
-	const originalSettle = store.settleDelegationTask.bind(store);
-	store.settleDelegationTask = async (input) => {
-		const outcome = await originalSettle(input);
-		if (outcome !== null) {
-			childTaskSettled.resolve();
-		}
-		return outcome;
-	};
+	const subagentsStore = await getSharedSubagentsTaskStore(
+		resolveSubagentsDatabasePath(workspace)
+	);
 	const parentPrompt = "Delegate the inspection to scout.";
 	const childPrompt = "Inspect the SDK child boundary.";
+	const visibleToolSets: { prompt: string; tools: string[] }[] = [];
 	recorder.stepScript = async function* (
 		request: ModelStepRequest,
 		_recorder
@@ -157,22 +231,27 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 				?.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
 				.join("\n") ?? "";
 		const hasToolResult = request.messages.some(({ role }) => role === "tool");
-		if (
-			latestUserText.includes("Durable report for delegated Task") ||
-			(latestUserText === parentPrompt && hasToolResult)
-		) {
-			await childTaskSettled.promise;
+		visibleToolSets.push({
+			prompt: latestUserText,
+			tools: (request.tools ?? []).map(({ name }) => name),
+		});
+		if (latestUserText.includes("Durable report for delegated Task")) {
 			yield { delta: "The child report is ready.", type: "text-delta" };
 			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
 			return;
 		}
-		if (latestUserText === parentPrompt) {
+		if (latestUserText === parentPrompt && !hasToolResult) {
 			yield {
 				input: { agent: "scout", prompt: childPrompt },
 				toolCallId: "sdk-subagents-delegate",
 				toolName: "delegate",
 				type: "tool-call",
 			};
+			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			return;
+		}
+		if (latestUserText === parentPrompt && hasToolResult) {
+			yield { delta: "Delegation started.", type: "text-delta" };
 			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
 			return;
 		}
@@ -193,9 +272,12 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 			diagnostics: [],
 			document: {
 				agents: {
+					build: { capability_ceiling: { tools: ["submit_result"] } },
 					scout: {
 						description: "Inspect and report findings.",
+						effort: "high",
 						instructions: "Use the child Session tools.",
+						model: "anthropic/claude-sonnet-5",
 						role: "subagent",
 					},
 				},
@@ -203,7 +285,7 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 			sourceFor: () => undefined,
 			sources: [],
 		}),
-		{ connectedProviderIds: new Set(["openai"]) }
+		{ connectedProviderIds: new Set(["openai", "anthropic"]) }
 	);
 	const sdk = await createSessionSdk({
 		configStore,
@@ -231,24 +313,134 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 	});
 	const parent = await sdk.createSession();
 	const parentCompleted = Promise.withResolvers<void>();
+	let completedTurns = 0;
 	const unsubscribe = parent.onEvent((event) => {
 		if (event.type === "agent-turn-completed") {
-			parentCompleted.resolve();
+			completedTurns += 1;
+			if (completedTurns === 2) {
+				parentCompleted.resolve();
+			}
 		}
 	});
 	try {
 		const admission = await parent.prompt({ text: parentPrompt });
 		await parentCompleted.promise;
-		const tasks = await store.listDelegationTasks(parent.sessionId);
+		const tasks = subagentsStore.listTasks(parent.sessionId);
 
 		expect(admission.rejected).toBe(false);
 		expect(tasks).toHaveLength(1);
 		expect(tasks[0]?.status).toBe("succeeded");
+		expect(
+			visibleToolSets.find(({ prompt }) => prompt === childPrompt)?.tools
+		).toEqual(["submit_result"]);
+		expect(
+			await store.getSession(
+				tasks[0]?.childSessionId ?? sessionId("missing-child")
+			)
+		).toMatchObject({
+			effort: "high",
+			model: { modelId: "claude-sonnet-5", providerId: "anthropic" },
+		});
 	} finally {
 		unsubscribe();
 		await parent.dispose();
 		await sdk.dispose();
-		store.settleDelegationTask = originalSettle;
+	}
+});
+
+test("SDK deliveries preserve FIFO order behind earlier queued Submissions", async () => {
+	const recorder = createFakeModelClientRecorder();
+	const firstRequestStarted = Promise.withResolvers<void>();
+	const releaseFirstRequest = Promise.withResolvers<void>();
+	let requestCount = 0;
+	recorder.beforeStep = async () => {
+		requestCount += 1;
+		if (requestCount === 1) {
+			firstRequestStarted.resolve();
+			await releaseFirstRequest.promise;
+		}
+	};
+	const runtime = createAgentRuntime({
+		modelClient: createFakeModelClient(recorder),
+	});
+	const sdk = await createSessionSdk({
+		configStore,
+		connections: {
+			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
+			connect: async () => undefined,
+			listProviders: async () => [
+				{
+					connected: true,
+					connectionMethod: "api-key",
+					displayName: "OpenAI",
+					id: "openai",
+					methods: ["api-key", "browser"],
+				},
+			],
+		},
+		cwd: workspace,
+		enabledPlugins: [],
+		pluginPaths: [],
+		runtimeFactory: () => runtime,
+		store,
+		workspace,
+	});
+	const handle = await sdk.createSession({ model: defaultChatModelSelection });
+	const allTurnsComplete = Promise.withResolvers<void>();
+	let completedTurns = 0;
+	const unsubscribe = handle.onEvent((event) => {
+		if (event.type === "agent-turn-completed") {
+			completedTurns += 1;
+			if (completedTurns === 3) {
+				allTurnsComplete.resolve();
+			}
+		}
+	});
+	try {
+		const first = await handle.prompt({ text: "first turn" });
+		await firstRequestStarted.promise;
+		const ordinary = await handle.prompt({ text: "ordinary queued input" });
+		const deliveryPromise = handle.deliver({
+			idempotencyKey: "delivery-after-ordinary",
+			text: "delivered message",
+		});
+		let deliveryResolved = false;
+		void deliveryPromise.then(() => {
+			deliveryResolved = true;
+		});
+		await Bun.sleep(0);
+		expect(first.rejected).toBe(false);
+		expect(ordinary).toMatchObject({ disposition: "queued", rejected: false });
+		expect(deliveryResolved).toBe(false);
+
+		releaseFirstRequest.resolve();
+		const delivery = await deliveryPromise;
+		expect(delivery).toMatchObject({ disposition: "queued", rejected: false });
+		if (delivery.rejected) {
+			throw new Error(delivery.reason);
+		}
+		const committedMessages = (await store.listSessionRecords(handle.sessionId))
+			.flatMap((record) => record.messages)
+			.filter(
+				(message) => message.metadata?.submissionId === delivery.submissionId
+			);
+		expect(committedMessages).toHaveLength(1);
+		await allTurnsComplete.promise;
+		const lastUserMessages = recorder.requests.map((request) =>
+			request.kind === "chat"
+				? request.messages.filter(({ role }) => role === "user").at(-1)?.text
+				: undefined
+		);
+		expect(lastUserMessages).toEqual([
+			"first turn",
+			"ordinary queued input",
+			"delivered message",
+		]);
+	} finally {
+		releaseFirstRequest.resolve();
+		unsubscribe();
+		await handle.dispose();
+		await sdk.dispose();
 	}
 });
 

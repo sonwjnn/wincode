@@ -69,6 +69,10 @@ Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeA
 
 Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened and do not pass through Tool Permission or open a second approval dialog.
 
+A Plugin factory may also register named process resources with `registerResource(name, value)`. Host integrations retrieve them through the generic `PluginRuntime.getResource(pluginId, name)` API; resource types and ownership stay with the Plugin. Resource names are unique within a Plugin and values must be defined. The Plugin should release owned resources from `onShutdown`.
+
+Tool handlers can register background promises with `context.registerBackgroundWork(promise)`. One-Shot waits for all work registered to that Session before exiting. Interactive Mode and RPC keep the parent Session Host alive while registered work is pending, even after its last view is released; normal idle unloading resumes when the work settles.
+
 ## Session SDK
 
 The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. `handle.deliver(text)` durably queues a message and wakes the Session at its next safe boundary; `handle.prompt(input)` also permits Agent/model selection. SDK callers opt into bundled optional Plugins explicitly. A Session SDK can create a child SDK with an explicit `enabledPlugins` list; the child does not inherit the parent's optional or file-loaded Plugin selection. For example, Subagents selects its child set deliberately:

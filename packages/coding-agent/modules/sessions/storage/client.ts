@@ -72,14 +72,6 @@ const ensureSessionEditModeColumn = (sqlite: Database): void => {
 		"ALTER TABLE session ADD COLUMN edit_mode TEXT DEFAULT 'hashline' NOT NULL;"
 	);
 };
-const ensureReportContinuationPausedColumn = (sqlite: Database): void => {
-	if (columnNames(sqlite, "session").has("report_continuation_paused")) {
-		return;
-	}
-	sqlite.exec(
-		"ALTER TABLE session ADD COLUMN report_continuation_paused INTEGER DEFAULT 0 NOT NULL;"
-	);
-};
 const initializeSchema = (
 	sqlite: Database,
 	allowIncompatibleSessionSchema: boolean
@@ -119,7 +111,6 @@ const initializeSchema = (
 			model_json TEXT,
 			effort TEXT,
 			reasoning_mode TEXT,
-			report_continuation_paused INTEGER DEFAULT 0 NOT NULL,
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
@@ -314,39 +305,6 @@ const initializeSchema = (
 			ON session_record (session_id, turn_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_record_session_position
 			ON session_record (session_id, position);
-		CREATE TABLE IF NOT EXISTS delegation_task (
-			id TEXT PRIMARY KEY NOT NULL,
-			parent_session_id TEXT NOT NULL REFERENCES session(id)
-				ON UPDATE CASCADE ON DELETE RESTRICT,
-			child_session_id TEXT NOT NULL UNIQUE REFERENCES session(id)
-				ON UPDATE CASCADE ON DELETE RESTRICT,
-			parent_turn_id TEXT NOT NULL,
-			parent_tool_call_id TEXT NOT NULL,
-			agent_id TEXT NOT NULL,
-			status TEXT NOT NULL,
-			outcome_json TEXT,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_delegation_task_parent_created
-			ON delegation_task (parent_session_id, created_at);
-		CREATE INDEX IF NOT EXISTS idx_delegation_task_child
-			ON delegation_task (child_session_id);
-		CREATE INDEX IF NOT EXISTS idx_delegation_task_parent_status
-			ON delegation_task (parent_session_id, status);
-
-		CREATE TABLE IF NOT EXISTS delegation_inbox (
-			task_id TEXT PRIMARY KEY NOT NULL REFERENCES delegation_task(id)
-				ON UPDATE CASCADE ON DELETE RESTRICT,
-			parent_session_id TEXT NOT NULL REFERENCES session(id)
-				ON UPDATE CASCADE ON DELETE RESTRICT,
-			created_at INTEGER NOT NULL,
-			consumed_at INTEGER
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_delegation_inbox_parent_consumed_created
-			ON delegation_inbox (parent_session_id, consumed_at, created_at);
 	`);
 	if (
 		!(
@@ -358,7 +316,6 @@ const initializeSchema = (
 	}
 	ensureSessionEditModeColumn(sqlite);
 	ensureReasoningSelectionColumns(sqlite);
-	ensureReportContinuationPausedColumn(sqlite);
 };
 
 const openDatabase = (

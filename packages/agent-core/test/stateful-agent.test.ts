@@ -120,7 +120,7 @@ test("an empty queue-head Steer cannot claim a Submission admitted afterward", a
 	await agent.shutdown();
 });
 
-test("idle input selection prioritizes steering, reports, then FIFO Submissions", async () => {
+test("idle input selection prioritizes steering before FIFO Submissions", async () => {
 	let runtimeStarts = 0;
 	const agent = createStatefulAgent<{ id: string; text: string }>({
 		getQueuedSubmissionId: ({ id }) => id,
@@ -138,24 +138,14 @@ test("idle input selection prioritizes steering, reports, then FIFO Submissions"
 	agent.enqueueSubmission({ id: "first", text: "first submission" });
 	agent.enqueueSubmission({ id: "second", text: "second submission" });
 
-	expect(
-		agent.selectNextInput({
-			hasSteeringMessages: true,
-			hasDelegationReports: true,
-		})
-	).toBe("steering");
-	expect(
-		agent.selectNextInput({
-			hasSteeringMessages: false,
-			hasDelegationReports: true,
-		})
-	).toBe("delegation-report");
-	expect(
-		agent.selectNextInput({
-			hasSteeringMessages: false,
-			hasDelegationReports: false,
-		})
-	).toBe("submission");
+	expect(agent.selectNextInput({ hasSteeringMessages: true })).toBe("steering");
+	expect(agent.selectNextInput({ hasSteeringMessages: false })).toBe(
+		"submission"
+	);
+	expect(agent.getQueuedSubmissions().map(({ id }) => id)).toEqual([
+		"first",
+		"second",
+	]);
 	expect(runtimeStarts).toBe(0);
 	await agent.shutdown();
 });

@@ -1,8 +1,10 @@
 import type { AgentId } from "@wincode/agent-core";
 import {
+	createMcpToolExecutor,
 	type McpAgentDecisionResolver,
 	type McpCatalogSnapshot,
 	type McpRegistry,
+	type McpToolCallExecutor,
 	type McpToolExecutor,
 	toMcpSnapshotId,
 } from "@wincode/mcp";
@@ -22,6 +24,7 @@ export type McpSessionCapability = Readonly<{
 		trackLatest?: boolean
 	) => Promise<McpCatalogSnapshot>;
 	execute?: McpToolExecutor;
+	executeToolCall?: McpToolCallExecutor;
 	releaseSnapshot?: (snapshot: McpCatalogSnapshot) => void;
 }>;
 
@@ -55,8 +58,8 @@ export const createMcpSessionCapability = (
 			createMcpAgentDecisionResolver(policy),
 			trackLatest
 		),
-	execute: (snapshot, toolName, input, signal) =>
-		registry.execute(snapshot, toolName, input, signal),
+	execute: registry.execute,
+	executeToolCall: createMcpToolExecutor(registry.execute),
 	releaseSnapshot: (snapshot) => registry.releaseSnapshot?.(snapshot),
 });
 

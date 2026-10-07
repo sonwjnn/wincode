@@ -1,21 +1,10 @@
 import type { Database } from "bun:sqlite";
 import * as os from "node:os";
-import type { AgentId, AgentRuntime } from "@wincode/agent-core";
+import type { AgentRuntime } from "@wincode/agent-core";
 import { type Connections, createConnections } from "@wincode/ai/connections";
-import {
-	type McpCatalogSnapshot,
-	type McpRegistry,
-	toMcpSnapshotId,
-} from "@wincode/mcp";
-import { logger } from "@wincode/utils";
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { resolveAgentRegistry } from "@/modules/agents/registry";
-import {
-	createMcpSessionCapability,
-	type McpPluginResource,
-	type McpSessionCapability,
-} from "@/modules/mcp/capability";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import {
 	createPermissionService,
@@ -33,7 +22,6 @@ import {
 import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { toWorkspaceId, type WorkspaceId } from "@/shared/identifiers";
-import { errorLogFields } from "@/shared/utils/error-log-fields";
 import {
 	createSessionCompaction,
 	type SessionCompactionModule,
@@ -42,7 +30,10 @@ import { estimateCompactionTokens } from "../compaction/config";
 import { createCompactionSettingsOperations } from "../compaction/settings-operations";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { resolveTurnTools, type TurnToolResolver } from "../hooks/runtime-turn";
-import type { SessionSdkChildFactory } from "../sdk-contract";
+import type {
+	SessionSdkCapabilityCeiling,
+	SessionSdkChildFactory,
+} from "../sdk-contract";
 import {
 	createDatabase,
 	type SessionDatabase,
@@ -61,34 +52,25 @@ import {
 import { resetLocalSessionData } from "../storage/reset-local-session-data";
 import type { SessionStore } from "../storage/session-store";
 import { createSessionHostManager } from "./session-host-manager";
-import type {
-	SessionCapabilities,
-	SessionDelegationAdapter,
-	SessionDelegationRuntimeFactory,
-	SessionHostManager,
-} from "./types";
+import type { SessionCapabilities, SessionHostManager } from "./types";
 
 export type SessionCapabilitiesOptions = Readonly<{
 	approvalMode?: "interactive" | "non-interactive";
+	capabilityCeiling?: SessionSdkCapabilityCeiling;
 	connections?: Connections;
 	configRuntime?: ConfigRuntime;
 	configStore?: ConfigStore;
 	database?: SessionDatabase;
 	databasePath?: string;
-	mcp?: McpRegistry;
 	permissionService?: PermissionService;
 	pricing?: ModelPricingTable;
 	registry?: AgentRegistry | null;
+	getRegistry?: () => AgentRegistry | null;
 	runtimeFactory?: () => AgentRuntime;
 	store?: SessionStore;
 	pluginRuntime?: PluginRuntime;
-	mcpResource?: McpPluginResource;
 	sessionHostManager?: SessionHostManager;
 	getSessionSdk?: () => SessionSdkChildFactory | undefined;
-	createDelegationRuntime?: SessionDelegationRuntimeFactory;
-	createDelegationAdapter?: (
-		capabilities: SessionCapabilities
-	) => SessionDelegationAdapter;
 	turnToolResolver?: TurnToolResolver;
 	workspace: string;
 	cwd: string;
@@ -102,15 +84,6 @@ export type SessionCapabilitiesAssembly = Readonly<{
 	workspaceId: WorkspaceId;
 }>;
 
-const emptyMcpCapability: McpSessionCapability = {
-	createSnapshot: async (agent: AgentId): Promise<McpCatalogSnapshot> => ({
-		agent,
-		id: toMcpSnapshotId(crypto.randomUUID()),
-		manifest: [],
-		tools: new Map(),
-	}),
-};
-
 const workspaceIdentity = (workspace: string): WorkspaceId =>
 	toWorkspaceId(
 		new Bun.CryptoHasher("sha256").update(workspace).digest("hex").slice(0, 16)
@@ -118,10 +91,8 @@ const workspaceIdentity = (workspace: string): WorkspaceId =>
 
 const sessionHostManagerFor = (
 	provided: SessionHostManager | undefined,
-	createDelegationRuntime: SessionDelegationRuntimeFactory | undefined,
 	pluginRuntime: PluginRuntime
-): SessionHostManager =>
-	provided ?? createSessionHostManager(createDelegationRuntime, pluginRuntime);
+): SessionHostManager => provided ?? createSessionHostManager(pluginRuntime);
 
 type OpenSessionDatabaseInput = Readonly<{
 	databasePath?: string;
@@ -166,21 +137,19 @@ export const createSessionCapabilities = async ({
 	connections: providedConnections,
 	configRuntime: providedConfigRuntime,
 	configStore: providedConfigStore,
+	capabilityCeiling,
 	cwd,
 	database: providedDatabase,
 	databasePath,
-	mcp: providedMcp,
 	permissionService: providedPermissionService,
 	pricing = {},
 	registry: providedRegistry,
+	getRegistry: providedGetRegistry,
 	runtimeFactory,
 	store: providedStore,
 	pluginRuntime: providedPluginRuntime,
-	mcpResource: providedMcpResource,
 	sessionHostManager: providedSessionHostManager,
 	getSessionSdk,
-	createDelegationRuntime,
-	createDelegationAdapter,
 	turnToolResolver,
 	workspace,
 }: SessionCapabilitiesOptions): Promise<SessionCapabilitiesAssembly> => {
@@ -195,36 +164,12 @@ export const createSessionCapabilities = async ({
 		workspace,
 	};
 	const pluginRuntime = providedPluginRuntime ?? createPluginRuntime([], []);
-	let delegationAdapter: SessionDelegationAdapter | undefined;
 	let ownedDatabase: OpenedSessionDatabase | undefined;
-	let ownedMcp: McpPluginResource | undefined;
-	const closeOwnedMcp = async (
-		mcp: McpPluginResource,
-		phase: "shutdown" | "initialization-failure"
-	): Promise<void> => {
-		try {
-			await mcp.close();
-		} catch (error) {
-			void logger.warn("MCP cleanup failed", {
-				...errorLogFields(error),
-				operation: "session-capabilities.mcp",
-				phase,
-			});
-		}
-	};
 	try {
 		if (providedDatabase === undefined && providedStore === undefined) {
 			ownedDatabase = await openSessionDatabase({ databasePath, workspace });
 		}
 		const connections = providedConnections ?? createConnections();
-		const mcpResource = providedMcpResource;
-		const mcp = providedMcp ?? mcpResource?.registry;
-		const mcpCapability =
-			mcpResource?.capability ??
-			(mcp === undefined
-				? emptyMcpCapability
-				: createMcpSessionCapability(mcp));
-		ownedMcp = mcpResource;
 		const permissionService =
 			providedPermissionService ?? createPermissionService();
 		const database = providedDatabase ?? ownedDatabase?.db;
@@ -243,6 +188,7 @@ export const createSessionCapabilities = async ({
 						),
 					})
 				: providedRegistry;
+		const getRegistry = providedGetRegistry ?? (() => registry);
 		const policyState = createToolPermissionPolicyState();
 		const toolPermission: ToolPermissionRuntime = createToolPermissionRuntime({
 			agent: registry?.defaultAgentId ?? DEFAULT_AGENT_ID,
@@ -265,12 +211,8 @@ export const createSessionCapabilities = async ({
 		});
 		const sessionHostManager = sessionHostManagerFor(
 			providedSessionHostManager,
-			createDelegationRuntime,
 			pluginRuntime
 		);
-		if (mcpResource !== undefined) {
-			await mcpResource.initialize();
-		}
 		let shutdownPromise: Promise<void> | undefined;
 		const shutdown = (): Promise<void> => {
 			if (shutdownPromise !== undefined) {
@@ -283,9 +225,6 @@ export const createSessionCapabilities = async ({
 					}
 					await pluginRuntime.shutdown();
 				} finally {
-					if (ownedMcp !== undefined) {
-						await closeOwnedMcp(ownedMcp, "shutdown");
-					}
 					ownedDatabase?.sqlite.close();
 				}
 			})();
@@ -294,22 +233,20 @@ export const createSessionCapabilities = async ({
 		};
 		const capabilities: SessionCapabilities = {
 			getApprovalMode: () => approvalMode ?? "interactive",
+			getCapabilityCeiling: () => capabilityCeiling,
 			getCompactionModule: () => compaction,
 			getCompactionSettings: compactionSettings.getCompactionSettings,
 			getConfig: () => configRuntime,
 			getConnections: () => connections,
-			getMcp: () => mcpCapability,
-			getRegistry: () => registry,
+			getRegistry,
 			getStore: () => store,
 			getSessionHostManager: () => sessionHostManager,
 			...(getSessionSdk === undefined ? {} : { getSessionSdk }),
 			getToolPermission: () => toolPermission,
 			getPluginRuntime: () => pluginRuntime,
 			getTurnToolResolver: () => turnToolResolver ?? resolveTurnTools,
-			getDelegationAdapter: () => delegationAdapter,
 			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),
 		};
-		delegationAdapter = createDelegationAdapter?.(capabilities);
 		return {
 			capabilities,
 			shutdown,
@@ -318,9 +255,6 @@ export const createSessionCapabilities = async ({
 			workspaceId: workspaceIdentity(workspace),
 		};
 	} catch (error) {
-		if (ownedMcp !== undefined) {
-			await closeOwnedMcp(ownedMcp, "initialization-failure");
-		}
 		ownedDatabase?.sqlite.close();
 		throw error;
 	}
