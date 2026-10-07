@@ -58,7 +58,6 @@ temp
 .slim
 .opencode
 .claude
-.agents
 wincode.json
 wincode.jsonc
 
