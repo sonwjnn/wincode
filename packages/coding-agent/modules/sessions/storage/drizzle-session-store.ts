@@ -90,6 +90,7 @@ import {
 	type ConsumeDelegationReportInput,
 	type CreateDelegationTaskInput,
 	type CreateSessionInput,
+	type LinkDelegationTaskInput,
 	type PromptHistoryEntry,
 	type Session,
 	type SessionStore,
@@ -960,6 +961,59 @@ export const createDrizzleSessionStore = (
 			updatedAt: now,
 		};
 	};
+	const linkDelegatedTask = async ({
+		id = createDelegationTaskId(),
+		agent,
+		childSessionId,
+		parentSessionId,
+		parentToolCallId,
+		parentTurnId,
+	}: LinkDelegationTaskInput): Promise<DelegationTask> => {
+		const now = new Date();
+		db.transaction((tx) => {
+			for (const sessionId of [parentSessionId, childSessionId]) {
+				const existing = tx
+					.select({ id: session.id })
+					.from(session)
+					.where(
+						and(
+							eq(session.id, sessionId),
+							eq(session.workspaceId, workspace.id)
+						)
+					)
+					.get();
+				if (existing === undefined) {
+					throw new Error("Linked Session not found in this workspace.");
+				}
+			}
+			tx.insert(delegationTask)
+				.values({
+					agentId: agent,
+					childSessionId,
+					createdAt: now,
+					id,
+					outcomeJson: null,
+					parentSessionId,
+					parentToolCallId,
+					parentTurnId,
+					status: "active",
+					updatedAt: now,
+				})
+				.run();
+		});
+		return {
+			agentId: agent,
+			childSessionId,
+			createdAt: now,
+			id,
+			outcome: null,
+			parentSessionId,
+			parentToolCallId,
+			parentTurnId,
+			status: "active",
+			updatedAt: now,
+		};
+	};
 	const getDelegationTask = async (
 		taskId: DelegationTaskId
 	): Promise<DelegationTask | null> => {
@@ -1006,6 +1060,15 @@ export const createDrizzleSessionStore = (
 				)
 			)
 			.orderBy(desc(delegationTask.createdAt))
+			.all()
+			.map(({ task }) => toDelegationTask(task));
+	const listAllDelegationTasks = async (): Promise<DelegationTask[]> =>
+		db
+			.select({ task: delegationTask })
+			.from(delegationTask)
+			.innerJoin(session, eq(delegationTask.parentSessionId, session.id))
+			.where(eq(session.workspaceId, workspace.id))
+			.orderBy(asc(delegationTask.createdAt), asc(delegationTask.id))
 			.all()
 			.map(({ task }) => toDelegationTask(task));
 	const listPendingDelegationReports = async (
@@ -1391,8 +1454,12 @@ export const createDrizzleSessionStore = (
 
 			return { id };
 		},
-		createEmptySession: async ({ model, effort, reasoningMode }) => {
-			const id = createSessionId();
+		createEmptySession: async ({
+			id = createSessionId(),
+			model,
+			effort,
+			reasoningMode,
+		}) => {
 			const now = new Date();
 			db.insert(session)
 				.values({
@@ -1412,10 +1479,12 @@ export const createDrizzleSessionStore = (
 		},
 
 		createDelegatedTask,
+		linkDelegatedTask,
 		consumeDelegationReport,
 		getDelegationTask,
 		getDelegationTaskForChild,
 		listDelegationTasks,
+		listAllDelegationTasks,
 		listPendingDelegationReports,
 		markDelegationTaskAwaitingReport,
 		recoverUncleanDelegationTasks,

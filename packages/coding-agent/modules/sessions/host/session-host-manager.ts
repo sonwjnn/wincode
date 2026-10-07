@@ -37,22 +37,16 @@ const createNoopDelegationRuntime: SessionDelegationRuntimeFactory = ({
 	cancelActiveTasks: async () => undefined,
 	finishAllTasks: () => undefined,
 	finishTask: () => undefined,
-	getTaskForChild: (store, childSessionId) =>
-		store.getDelegationTaskForChild(childSessionId),
-	hasActiveTasks: async (store, parentSessionId) =>
-		(await store.listDelegationTasks(parentSessionId)).some(
-			(task) => task.status === "active"
-		),
-	isTaskActive: async (store, taskId) =>
-		(await store.getDelegationTask(taskId))?.status === "active",
+	getTaskForChild: async () => null,
+	hasActiveTasks: async () => false,
+	isTaskActive: async () => false,
 	onHostClosed: () => undefined,
 	onHostOpened: () => undefined,
 	onHostOpening: () => undefined,
 	publishTask: () => undefined,
 	recoverStore: async () => undefined,
 	registerTask: () => undefined,
-	waitForTasks: (store, parentSessionId) =>
-		store.listDelegationTasks(parentSessionId),
+	waitForTasks: async () => [],
 });
 
 export const createSessionHostManager = (
@@ -131,11 +125,10 @@ export const createSessionHostManager = (
 		entry.unloadCheck = unloadCheck.promise;
 		try {
 			const delegatedTaskId = entry.delegatedTaskId;
-			const store = entry.capabilities.getStore();
 			const hasActiveDelegation =
 				delegatedTaskId === null
-					? await delegation.hasActiveTasks(store, entry.sessionId)
-					: await delegation.isTaskActive(store, delegatedTaskId);
+					? await delegation.hasActiveTasks(entry.sessionId)
+					: await delegation.isTaskActive(delegatedTaskId);
 			if (
 				hasActiveDelegation ||
 				entry.views > 0 ||
@@ -326,10 +319,7 @@ export const createSessionHostManager = (
 		if (shuttingDown) {
 			throw new Error("The Session Host manager is shutting down.");
 		}
-		const task = await delegation.getTaskForChild(
-			capabilities.getStore(),
-			sessionId
-		);
+		const task = await delegation.getTaskForChild(sessionId);
 		const entry = await getOpenEntry(
 			capabilities,
 			sessionId,

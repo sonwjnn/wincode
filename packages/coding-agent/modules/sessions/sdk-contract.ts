@@ -1,4 +1,8 @@
-import type { AgentId, AgentTurnEvent } from "@wincode/agent-core";
+import type {
+	AgentId,
+	AgentTurnEvent,
+	SubmissionId,
+} from "@wincode/agent-core";
 import type {
 	ChatModelSelection,
 	Effort,
@@ -16,10 +20,17 @@ export type SessionSdkPrompt = Readonly<{
 	effort?: Effort;
 	model?: ChatModelSelection;
 	reasoningMode?: ReasoningMode;
+	submissionId?: SubmissionId;
+	text: string;
+}>;
+
+export type SessionSdkDelivery = Readonly<{
+	idempotencyKey: string;
 	text: string;
 }>;
 
 export type SessionSdkCreateOptions = Readonly<{
+	sessionId?: SessionId;
 	agent?: AgentId | string;
 	effort?: Effort;
 	initialPrompt?: string;
@@ -31,7 +42,7 @@ export type SessionSdkHandle = Readonly<{
 	continue: () => SessionContinuationOutcome;
 	dispose: () => Promise<void>;
 	/** Durably queues a message and wakes this Session at its next safe boundary. */
-	deliver: (text: string) => Promise<SessionSubmissionAdmission>;
+	deliver: (input: SessionSdkDelivery) => Promise<SessionSubmissionAdmission>;
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
 	prompt: (input: SessionSdkPrompt) => Promise<SessionSubmissionAdmission>;
 	sessionId: SessionId;
@@ -45,6 +56,7 @@ export type SessionSdk = Readonly<{
 			pluginPaths?: readonly string[];
 		}>
 	) => Promise<SessionSdk>;
+	createEmptySession: (options?: SessionSdkCreateOptions) => Promise<SessionId>;
 	createSession: (
 		options?: SessionSdkCreateOptions
 	) => Promise<SessionSdkHandle>;

@@ -149,17 +149,10 @@ export type SessionDelegationPort = Readonly<{
 	finishAllTasks: () => void;
 	finishTask: (taskId: DelegationTaskId) => void;
 	getTaskForChild: (
-		store: SessionStore,
 		childSessionId: SessionId
 	) => Promise<DelegationTask | null>;
-	hasActiveTasks: (
-		store: SessionStore,
-		parentSessionId: SessionId
-	) => Promise<boolean>;
-	isTaskActive: (
-		store: SessionStore,
-		taskId: DelegationTaskId
-	) => Promise<boolean>;
+	hasActiveTasks: (parentSessionId: SessionId) => Promise<boolean>;
+	isTaskActive: (taskId: DelegationTaskId) => Promise<boolean>;
 	onHostClosed: (sessionId: SessionId) => void;
 	onHostOpened: (sessionId: SessionId, host: SessionHost) => void;
 	onHostOpening: (sessionId: SessionId) => void;
@@ -169,10 +162,7 @@ export type SessionDelegationPort = Readonly<{
 	) => void;
 	recoverStore: (store: SessionStore) => Promise<void>;
 	registerTask: (task: DelegationTask) => void;
-	waitForTasks: (
-		store: SessionStore,
-		parentSessionId: SessionId
-	) => Promise<DelegationTask[]>;
+	waitForTasks: (parentSessionId: SessionId) => Promise<DelegationTask[]>;
 }>;
 
 /** The built-in application composition supplies the concrete runtime factory. */

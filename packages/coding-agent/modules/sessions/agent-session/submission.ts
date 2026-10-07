@@ -291,6 +291,7 @@ const createSubmitMetadata = (
 	...omitUndefined({
 		effort: input.effort,
 		reasoningMode: input.reasoningMode,
+		submissionId: input.submissionId,
 		skill: isUndefined(skill)
 			? undefined
 			: createSkillSnapshot(skill, "explicit"),

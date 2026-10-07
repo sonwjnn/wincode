@@ -1,7 +1,4 @@
-import {
-	type AgentTurnTerminalEvent,
-	createAgentTurnId,
-} from "@wincode/agent-core";
+import type { AgentTurnTerminalEvent } from "@wincode/agent-core";
 import type {
 	DelegationExecutor,
 	DelegationRequest,
@@ -9,6 +6,7 @@ import type {
 	SubmitResultExecutor,
 } from "@wincode/subagents";
 import { getErrorMessage } from "@wincode/utils";
+import { randomUUIDv7 } from "bun";
 import {
 	type AgentCallSelection,
 	prepareAgentCall,
@@ -18,16 +16,22 @@ import type {
 	DelegationTaskOutcome,
 } from "@/modules/sessions/delegation/types";
 import type { SessionCapabilities } from "@/modules/sessions/host/types";
-import { createSessionUserMessage } from "@/modules/sessions/message";
+
 import type {
 	SessionSdk,
 	SessionSdkHandle,
 } from "@/modules/sessions/sdk-contract";
 import type { TurnExecution } from "@/modules/sessions/turn-execution";
-import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
+import {
+	type DelegationTaskId,
+	type SessionId,
+	toSessionId,
+} from "@/shared/identifiers";
+import type { SubagentsTaskStore } from "./store";
 
 export type CreateDelegationExecutorOptions = Readonly<{
 	capabilities: SessionCapabilities;
+	taskStore: SubagentsTaskStore;
 	execution: TurnExecution;
 	sessionId: SessionId;
 }>;
@@ -73,17 +77,25 @@ const selectedAgentCall = (
 };
 export const publishDelegationTaskOutcome = async (
 	capabilities: SessionCapabilities,
+	taskStore: SubagentsTaskStore,
 	taskId: DelegationTaskId,
 	outcome: DelegationTaskOutcome
 ): Promise<boolean> => {
 	const store = capabilities.getStore();
-	const report = await store.settleDelegationTask({ outcome, taskId });
-	if (report === null) {
+	const report = taskStore.settleTask({ outcome, taskId });
+	const legacyTask = await store.getDelegationTask(taskId);
+	const legacyReport =
+		legacyTask === null
+			? null
+			: await store.settleDelegationTask({ outcome, taskId });
+	if (report === null && legacyReport === null) {
 		return false;
 	}
-	const task = await store.getDelegationTask(taskId);
+	const task = taskStore.getTask(taskId) ?? legacyTask;
 	if (task !== null) {
-		capabilities.getSessionHostManager().delegation.publishTask(task, report);
+		capabilities
+			.getSessionHostManager()
+			.delegation.publishTask(task, legacyReport ?? undefined);
 	}
 	return true;
 };
@@ -91,23 +103,26 @@ export const publishDelegationTaskOutcome = async (
 export const createSubmitResultExecutor =
 	(
 		capabilities: SessionCapabilities,
+		taskStore: SubagentsTaskStore,
 		taskId: DelegationTaskId
 	): SubmitResultExecutor =>
 	(report) =>
-		publishDelegationTaskOutcome(capabilities, taskId, {
+		publishDelegationTaskOutcome(capabilities, taskStore, taskId, {
 			kind: "result",
 			report,
 		});
 
 export const settleDelegatedTaskAfterTurn = async (
 	capabilities: SessionCapabilities,
+	taskStore: SubagentsTaskStore,
 	task: DelegationTask,
 	event: AgentTurnTerminalEvent
 ): Promise<void> => {
 	const store = capabilities.getStore();
 	if (event.type === "agent-turn-completed") {
+		taskStore.markAwaitingReport(task.id);
 		await store.markDelegationTaskAwaitingReport(task.id);
-		const current = await store.getDelegationTask(task.id);
+		const current = taskStore.getTask(task.id);
 		if (current?.status === "awaiting_report") {
 			capabilities.getSessionHostManager().delegation.publishTask(current);
 		}
@@ -122,17 +137,18 @@ export const settleDelegatedTaskAfterTurn = async (
 	} else {
 		outcome = { kind: "failure", reason: event.failure.message };
 	}
-	await publishDelegationTaskOutcome(capabilities, task.id, outcome);
+	await publishDelegationTaskOutcome(capabilities, taskStore, task.id, outcome);
 	await releaseSdkChild(task.id);
 };
 
 export const failDelegatedTask = async (
 	capabilities: SessionCapabilities,
+	taskStore: SubagentsTaskStore,
 	taskId: DelegationTaskId,
 	error: unknown
 ): Promise<void> => {
 	const reason = errorMessageOrFallback(error, "Delegated task failed.");
-	await publishDelegationTaskOutcome(capabilities, taskId, {
+	await publishDelegationTaskOutcome(capabilities, taskStore, taskId, {
 		kind: "failure",
 		reason,
 	});
@@ -167,35 +183,10 @@ const prepareDelegationCall = (
 		allowSubagent: true,
 	});
 };
-const startDelegatedTask = async (
-	capabilities: SessionCapabilities,
-	task: DelegationTask
-): Promise<void> => {
-	const sdk = capabilities.getSessionSdk?.();
-	if (sdk === undefined) {
-		throw new Error("The Subagents Plugin requires the public Session SDK.");
-	}
-	const childSdk = await sdk.createChildSdk({
-		enabledPlugins: ["subagents"],
-	});
-	try {
-		const handle = await childSdk.openSession(task.childSessionId, {
-			view: true,
-		});
-		sdkChildren.set(task.id, { handle, sdk: childSdk });
-		const started = handle.continue();
-		if (started.kind === "rejected") {
-			throw new Error(started.reason);
-		}
-	} catch (error) {
-		await releaseSdkChild(task.id);
-		await childSdk.dispose();
-		throw error;
-	}
-};
-/** Creates a separate durable child Session and starts its manager-owned Host. */
+/** Creates a child through the public SDK with an explicit Plugin set. */
 export const createDelegationExecutor = ({
 	capabilities,
+	taskStore,
 	execution,
 	sessionId,
 }: CreateDelegationExecutorOptions): DelegationExecutor<
@@ -212,33 +203,69 @@ export const createDelegationExecutor = ({
 			execution,
 			request.agent
 		);
-		const message = createSessionUserMessage(request.prompt, {
-			agent: prepared.agent,
-			model: prepared.model,
-			...(prepared.effort === undefined ? {} : { effort: prepared.effort }),
-			...(prepared.reasoningMode === undefined
-				? {}
-				: { reasoningMode: prepared.reasoningMode }),
+		const parentSdk = capabilities.getSessionSdk?.();
+		if (parentSdk === undefined) {
+			throw new Error("The Subagents Plugin requires the public Session SDK.");
+		}
+		const childSdk = await parentSdk.createChildSdk({
+			enabledPlugins: ["subagents"],
 		});
-		const task = await store.createDelegatedTask({
-			agent: prepared.agent,
-			message,
-			model: prepared.model,
-			parentSessionId: sessionId,
-			parentToolCallId: request.parentToolCallId,
-			parentTurnId: request.parentTurnId,
-			turnId: createAgentTurnId(),
-			...(prepared.effort === undefined ? {} : { effort: prepared.effort }),
-			...(prepared.reasoningMode === undefined
-				? {}
-				: { reasoningMode: prepared.reasoningMode }),
-		});
-		manager.delegation.registerTask(task);
-		await startDelegatedTask(capabilities, task);
-		return {
-			childSessionId: task.childSessionId,
-			status: "active",
-			taskId: task.id,
-		};
+		const childSessionId = toSessionId(randomUUIDv7());
+		let task: DelegationTask | null = null;
+		let childHandle: SessionSdkHandle | undefined;
+		try {
+			await childSdk.createEmptySession({
+				sessionId: childSessionId,
+				agent: prepared.agent,
+				model: prepared.model,
+				...(prepared.effort === undefined ? {} : { effort: prepared.effort }),
+				...(prepared.reasoningMode === undefined
+					? {}
+					: { reasoningMode: prepared.reasoningMode }),
+			});
+			task = taskStore.createTask({
+				agentId: prepared.agent,
+				childSessionId,
+				parentSessionId: sessionId,
+				parentToolCallId: request.parentToolCallId,
+				parentTurnId: request.parentTurnId,
+			});
+			manager.delegation.registerTask(task);
+			await store.linkDelegatedTask({
+				id: task.id,
+				agent: prepared.agent,
+				childSessionId,
+				parentSessionId: sessionId,
+				parentToolCallId: request.parentToolCallId,
+				parentTurnId: request.parentTurnId,
+			});
+			childHandle = await childSdk.openSession(childSessionId, { view: true });
+			sdkChildren.set(task.id, { handle: childHandle, sdk: childSdk });
+			const admission = await childHandle.prompt({
+				text: request.prompt,
+				agent: prepared.agent,
+				model: prepared.model,
+				...(prepared.effort === undefined ? {} : { effort: prepared.effort }),
+				...(prepared.reasoningMode === undefined
+					? {}
+					: { reasoningMode: prepared.reasoningMode }),
+			});
+			if (admission.rejected) {
+				throw new Error(admission.reason);
+			}
+			return {
+				childSessionId: task.childSessionId,
+				status: "active",
+				taskId: task.id,
+			};
+		} catch (error) {
+			if (task === null) {
+				await childSdk.dispose();
+			} else {
+				await failDelegatedTask(capabilities, taskStore, task.id, error);
+				await releaseSdkChild(task.id);
+			}
+			throw error;
+		}
 	};
 };

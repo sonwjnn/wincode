@@ -21,6 +21,7 @@ import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
 } from "../support/e2e-fake-runtime";
+import { sessionId } from "../support/identifiers";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
@@ -74,6 +75,35 @@ test("the public Session SDK creates an empty durable Session and reopens it", a
 		unsubscribe();
 		await created.dispose();
 		await reopened.dispose();
+	} finally {
+		await sdk.dispose();
+	}
+});
+
+test("the public Session SDK reserves an empty Session before opening it", async () => {
+	const sdk = await createSessionSdk({
+		configStore,
+		cwd: workspace,
+		database: database.db,
+		enabledPlugins: [],
+		pluginPaths: [],
+		store,
+		workspace,
+	});
+	try {
+		const reservedId = sessionId("sdk-reserved-session");
+		const createdId = await sdk.createEmptySession({
+			sessionId: reservedId,
+			model: defaultChatModelSelection,
+		});
+		expect(createdId).toBe(reservedId);
+		expect(await store.listSessionRecords(createdId)).toEqual([]);
+		const handle = await sdk.openSession(createdId);
+		try {
+			expect(handle.sessionId).toBe(createdId);
+		} finally {
+			await handle.dispose();
+		}
 	} finally {
 		await sdk.dispose();
 	}
@@ -257,7 +287,11 @@ test("the public Session SDK durably delivers a message and streams its Agent Tu
 		}
 	});
 	try {
-		const admission = await handle.deliver("Say hello.");
+		const delivery = {
+			idempotencyKey: "hello-once",
+			text: "Say hello.",
+		};
+		const admission = await handle.deliver(delivery);
 		await completed.promise;
 
 		expect(admission.rejected).toBe(false);
@@ -266,6 +300,18 @@ test("the public Session SDK durably delivers a message and streams its Agent Tu
 			kind: "chat",
 			messages: expect.arrayContaining([{ role: "user", text: "Say hello." }]),
 		});
+		await handle.dispose();
+		const reopened = await sdk.openSession(handle.sessionId);
+		try {
+			const duplicate = await reopened.deliver(delivery);
+			expect(duplicate).toMatchObject({
+				messageId: admission.rejected ? undefined : admission.messageId,
+				rejected: false,
+			});
+			expect(recorder.requests).toHaveLength(1);
+		} finally {
+			await reopened.dispose();
+		}
 	} finally {
 		unsubscribe();
 		await handle.dispose();

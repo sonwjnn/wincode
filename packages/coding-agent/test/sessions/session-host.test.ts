@@ -9,6 +9,8 @@ import { join } from "node:path";
  * process shares.
  */
 const testDirectory = mkdtempSync(join(tmpdir(), "wincode-session-host-"));
+const previousSubagentsDatabasePath = process.env.WINCODE_SUBAGENTS_DB_PATH;
+process.env.WINCODE_SUBAGENTS_DB_PATH = join(testDirectory, "subagents.sqlite");
 
 import { fromAny, fromPartial } from "@total-typescript/shoehorn";
 import {
@@ -572,6 +574,11 @@ const textOf = (parts: SessionMessage["parts"]): string =>
 afterAll(async () => {
 	await sessionHostManager.shutdownAll();
 	await bundledPluginRuntime.shutdown();
+	if (previousSubagentsDatabasePath === undefined) {
+		delete process.env.WINCODE_SUBAGENTS_DB_PATH;
+	} else {
+		process.env.WINCODE_SUBAGENTS_DB_PATH = previousSubagentsDatabasePath;
+	}
 	rmSync(testDirectory, { force: true, recursive: true });
 });
 

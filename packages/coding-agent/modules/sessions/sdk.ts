@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import type { AgentId } from "@wincode/agent-core";
-import { agentIdSchema } from "@wincode/agent-core";
+import { agentIdSchema, toSubmissionId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
@@ -26,10 +26,12 @@ export type {
 	SessionSdk,
 	SessionSdkChildFactory,
 	SessionSdkCreateOptions,
+	SessionSdkDelivery,
 	SessionSdkHandle,
 	SessionSdkPrompt,
 } from "./sdk-contract";
 
+import type { SessionSubmissionAdmission } from "@/modules/sessions/agent-session/types";
 import {
 	createSessionCapabilities,
 	type SessionCapabilitiesAssembly,
@@ -136,9 +138,17 @@ const promptInputFor = (
 		...(input.reasoningMode === undefined
 			? {}
 			: { sessionReasoningMode: input.reasoningMode }),
+		...(input.submissionId === undefined
+			? {}
+			: { submissionId: input.submissionId }),
 		userText: input.text,
 	};
 };
+
+const deliveryTransactions = new WeakMap<
+	SessionHost,
+	Map<string, Promise<SessionSubmissionAdmission>>
+>();
 
 const handleFor = (
 	assembly: SessionCapabilitiesAssembly,
@@ -157,6 +167,83 @@ const handleFor = (
 			promptInputFor(input, defaults, capabilities.getRegistry())
 		);
 	};
+	let deliveries = deliveryTransactions.get(host);
+	if (deliveries === undefined) {
+		deliveries = new Map();
+		deliveryTransactions.set(host, deliveries);
+	}
+	const deliverySubmissionId = (idempotencyKey: string) => {
+		if (idempotencyKey.length === 0 || idempotencyKey.length > 256) {
+			throw new Error(
+				"Session SDK delivery keys must contain 1–256 characters."
+			);
+		}
+		const digest = new Bun.CryptoHasher("sha256")
+			.update(idempotencyKey)
+			.digest("hex");
+		return toSubmissionId(`delivery-${digest}`);
+	};
+	const existingDeliveryAdmission = async (
+		submissionId: SessionSdkPrompt["submissionId"]
+	): Promise<SessionSubmissionAdmission | undefined> => {
+		if (submissionId === undefined) {
+			return;
+		}
+		const snapshot = host.getSnapshot();
+		const queued = snapshot.queuedSubmissions.find(
+			(submission) => submission.submissionId === submissionId
+		);
+		if (queued !== undefined) {
+			return {
+				disposition: "queued",
+				messageId: queued.messageId,
+				rejected: false,
+				submissionId,
+			};
+		}
+		for (const message of snapshot.transcript) {
+			if (message.metadata?.submissionId === submissionId) {
+				return {
+					disposition: "queued",
+					messageId: message.id,
+					rejected: false,
+					submissionId,
+				};
+			}
+		}
+		const records = await assembly.store.listSessionRecords(sessionId);
+		for (const record of records) {
+			for (const message of record.messages) {
+				if (message.metadata?.submissionId === submissionId) {
+					return {
+						disposition: "queued",
+						messageId: message.id,
+						rejected: false,
+						submissionId,
+					};
+				}
+			}
+		}
+		return;
+	};
+	const deliver: SessionSdkHandle["deliver"] = (input) => {
+		const previous = deliveries.get(input.idempotencyKey);
+		if (previous !== undefined) {
+			return previous;
+		}
+		const submissionId = deliverySubmissionId(input.idempotencyKey);
+		const pending = (async () => {
+			const existing = await existingDeliveryAdmission(submissionId);
+			return existing ?? prompt({ text: input.text, submissionId });
+		})();
+		deliveries.set(input.idempotencyKey, pending);
+		void pending.then((admission) => {
+			if (admission.rejected) {
+				deliveries.delete(input.idempotencyKey);
+			}
+		});
+		return pending;
+	};
 	return Object.freeze({
 		continue: () => host.agentSession.continue(),
 		dispose: () => {
@@ -170,7 +257,7 @@ const handleFor = (
 			disposePromise = closing;
 			return closing;
 		},
-		deliver: (text) => prompt({ text }),
+		deliver,
 		onEvent: host.onEvent,
 		prompt,
 		sessionId,
@@ -285,6 +372,29 @@ const createSessionSdkInternal = async (
 		handles.add(handle);
 		return handle;
 	};
+	const createEmptySession: SessionSdk["createEmptySession"] = async (
+		createOptions
+	) => {
+		if (disposed) {
+			throw new Error("Session SDK is disposed.");
+		}
+		const selection = defaultsFor(
+			assembly.capabilities.getRegistry(),
+			omitUndefined({
+				agent: createOptions?.agent ?? agent,
+				model: createOptions?.model ?? model,
+			})
+		);
+		const { id } = await assembly.store.createEmptySession(
+			omitUndefined({
+				id: createOptions?.sessionId,
+				model: selection.model,
+				effort: createOptions?.effort,
+				reasoningMode: createOptions?.reasoningMode,
+			})
+		);
+		return id;
+	};
 	const createSession = async (
 		createOptions?: SessionSdkCreateOptions
 	): Promise<SessionSdkHandle> => {
@@ -298,13 +408,11 @@ const createSessionSdkInternal = async (
 				model: createOptions?.model ?? model,
 			})
 		);
-		const { id } = await assembly.store.createEmptySession(
-			omitUndefined({
-				model: selection.model,
-				effort: createOptions?.effort,
-				reasoningMode: createOptions?.reasoningMode,
-			})
-		);
+		const id = await createEmptySession({
+			...createOptions,
+			agent: selection.agent,
+			model: selection.model,
+		});
 		const handle = await openSession(id, {}, selection);
 		if (createOptions?.initialPrompt !== undefined) {
 			const admission = await handle.prompt({
@@ -350,6 +458,7 @@ const createSessionSdkInternal = async (
 	};
 	const sdkApi: SessionSdk = Object.freeze({
 		createChildSdk,
+		createEmptySession,
 		createSession,
 		dispose: () => {
 			if (disposePromise !== undefined) {

@@ -69,6 +69,7 @@ export type CreateSessionInput = {
 	reasoningMode?: ReasoningMode;
 };
 export type CreateEmptySessionInput = Readonly<{
+	id?: SessionId;
 	model?: ChatModelSelection;
 	effort?: Effort;
 	reasoningMode?: ReasoningMode;
@@ -78,6 +79,14 @@ export type CreateDelegationTaskInput = CreateSessionInput & {
 	parentToolCallId: ToolCallId;
 	parentTurnId: AgentTurnId;
 };
+export type LinkDelegationTaskInput = Readonly<{
+	id?: DelegationTaskId;
+	agent: AgentId;
+	childSessionId: SessionId;
+	parentSessionId: SessionId;
+	parentToolCallId: ToolCallId;
+	parentTurnId: AgentTurnId;
+}>;
 export type ConsumeDelegationReportInput = {
 	assistantCheckpoint?: SessionRecord;
 	parentSessionId: SessionId;
@@ -140,6 +149,9 @@ export type SessionStore = {
 	createDelegatedTask: (
 		input: CreateDelegationTaskInput
 	) => Promise<DelegationTask>;
+	linkDelegatedTask: (
+		input: LinkDelegationTaskInput
+	) => Promise<DelegationTask>;
 	consumeDelegationReport: (
 		input: ConsumeDelegationReportInput
 	) => Promise<boolean>;
@@ -152,6 +164,7 @@ export type SessionStore = {
 	listDelegationTasks: (
 		parentSessionId: SessionId
 	) => Promise<DelegationTask[]>;
+	listAllDelegationTasks: () => Promise<DelegationTask[]>;
 	listPendingDelegationReports: (
 		parentSessionId: SessionId
 	) => Promise<DelegationReportEnvelope[]>;

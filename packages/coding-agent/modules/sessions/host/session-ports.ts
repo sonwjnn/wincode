@@ -707,7 +707,7 @@ export const createSessionPorts = ({
 			const sessionStore = capabilities.getStore();
 			delegationTaskForTurn = await capabilities
 				.getSessionHostManager()
-				.delegation.getTaskForChild(sessionStore, sessionId);
+				.delegation.getTaskForChild(sessionId);
 			turn = await prepareAgentTurn(
 				request,
 				scope,

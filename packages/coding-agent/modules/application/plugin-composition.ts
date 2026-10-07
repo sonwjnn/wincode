@@ -18,6 +18,10 @@ import {
 	createSubagentsSessionRuntime,
 	subagentsPluginFactory,
 } from "@/plugins/subagents";
+import {
+	getSharedSubagentsTaskStore,
+	resolveSubagentsDatabasePath,
+} from "@/plugins/subagents/store";
 import type { ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 
@@ -50,6 +54,7 @@ export type CreateApplicationPluginCompositionOptions = Readonly<{
 	enabledPlugins: readonly OptionalApplicationPluginId[];
 	createMcpResource?: boolean;
 	mcpResource?: McpPluginResource;
+	subagentsDatabasePath?: string;
 	workspace: string;
 }>;
 
@@ -59,6 +64,7 @@ export const createApplicationPluginComposition = ({
 	createMcpResource = true,
 	enabledPlugins,
 	mcpResource: providedMcpResource,
+	subagentsDatabasePath,
 	workspace,
 }: CreateApplicationPluginCompositionOptions): ApplicationPluginComposition => {
 	const bundledPlugins: BundledPluginFactory[] = [];
@@ -73,18 +79,25 @@ export const createApplicationPluginComposition = ({
 		}
 		bundledPlugins.push({ factory: mcpPluginFactory, id: "mcp" });
 	}
+	const subagentsTaskStore = enabledPlugins.includes("subagents")
+		? getSharedSubagentsTaskStore(
+				subagentsDatabasePath ?? resolveSubagentsDatabasePath(workspace)
+			)
+		: undefined;
 	if (enabledPlugins.includes("subagents")) {
 		bundledPlugins.push({ factory: subagentsPluginFactory, id: "subagents" });
 	}
 	const registry = createTurnToolRegistry();
 	return {
 		...(mcpResource === undefined ? {} : { mcpResource }),
-		...(enabledPlugins.includes("subagents")
-			? {
-					createDelegationAdapter: createSubagentsSessionAdapter,
-					createDelegationRuntime: createSubagentsSessionRuntime,
-				}
-			: {}),
+		...(subagentsTaskStore === undefined
+			? {}
+			: {
+					createDelegationAdapter: (capabilities) =>
+						createSubagentsSessionAdapter(capabilities, subagentsTaskStore),
+					createDelegationRuntime: (ports) =>
+						createSubagentsSessionRuntime(ports, subagentsTaskStore),
+				}),
 		bundledPlugins: Object.freeze(bundledPlugins),
 		turnToolResolver: registry.resolve,
 	};

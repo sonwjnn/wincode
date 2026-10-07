@@ -16,6 +16,7 @@ import {
 	hasDelegationTargets,
 	settleDelegatedTaskAfterTurn,
 } from "./delegation";
+import type { SubagentsTaskStore } from "./store";
 import { createSubagentTaskRuntime } from "./task-runtime";
 
 /** Registers delegation tools through the shared public Plugin API. */
@@ -82,20 +83,25 @@ export const subagentsPluginFactory: PluginFactory = (api) => {
 
 /** Owns the private host integration used to execute Subagents Sessions. */
 export const createSubagentsSessionAdapter = (
-	capabilities: SessionCapabilities
+	capabilities: SessionCapabilities,
+	taskStore: SubagentsTaskStore
 ): SessionDelegationAdapter => ({
 	createExecutor: ({ execution, sessionId }) =>
-		createDelegationExecutor({ capabilities, execution, sessionId }),
+		createDelegationExecutor({ capabilities, execution, sessionId, taskStore }),
 	createSubmitResultExecutor: (taskId) =>
-		createSubmitResultExecutor(capabilities, taskId),
-	failTask: (taskId, error) => failDelegatedTask(capabilities, taskId, error),
+		createSubmitResultExecutor(capabilities, taskStore, taskId),
+	failTask: (taskId, error) =>
+		failDelegatedTask(capabilities, taskStore, taskId, error),
 	hasTargets: () => hasDelegationTargets(capabilities),
 	settleAfterTurn: (task, event) =>
-		settleDelegatedTaskAfterTurn(capabilities, task, event),
+		settleDelegatedTaskAfterTurn(capabilities, taskStore, task, event),
 });
 
-export const createSubagentsSessionRuntime: SessionDelegationRuntimeFactory =
-	createSubagentTaskRuntime;
+export const createSubagentsSessionRuntime = (
+	ports: Parameters<SessionDelegationRuntimeFactory>[0],
+	taskStore: SubagentsTaskStore
+): ReturnType<SessionDelegationRuntimeFactory> =>
+	createSubagentTaskRuntime(ports, taskStore);
 
 export * from "./delegation";
 export * from "./task-runtime";

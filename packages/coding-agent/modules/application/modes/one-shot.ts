@@ -588,10 +588,7 @@ const runOneShot = async (
 			if (outcome.rejected) {
 				throw new Error(outcome.reason);
 			}
-			const tasks = await manager.delegation.waitForTasks(
-				assembly.store,
-				sessionId
-			);
+			const tasks = await manager.delegation.waitForTasks(sessionId);
 			for (const task of tasks) {
 				if (seenTaskStatuses.get(task.id) !== task.status) {
 					seenTaskStatuses.set(task.id, task.status);

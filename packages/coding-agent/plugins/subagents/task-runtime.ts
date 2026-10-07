@@ -2,6 +2,7 @@ import { createSubagentTaskWaiters } from "@wincode/subagents";
 import type {
 	DelegationReportEnvelope,
 	DelegationTask,
+	DelegationTaskOutcome,
 } from "@/modules/sessions/delegation/types";
 import type {
 	SessionDelegationPort,
@@ -10,15 +11,123 @@ import type {
 	SessionHost,
 } from "@/modules/sessions/host/types";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import { SessionInUseError } from "@/modules/sessions/storage/session-writer-lock";
 import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
+import { getSharedSubagentsTaskStore, type SubagentsTaskStore } from "./store";
 
 const recoveredStores = new WeakMap<SessionStore, Promise<void>>();
+type PublishTask = (
+	task: DelegationTask,
+	report?: DelegationReportEnvelope
+) => void;
+
+const importLegacyTasks = async (
+	store: SessionStore,
+	taskStore: SubagentsTaskStore
+): Promise<void> => {
+	const tasks = await store.listAllDelegationTasks();
+	const parents = new Set(tasks.map((task) => task.parentSessionId));
+	const pendingReports = new Set(
+		(
+			await Promise.all(
+				[...parents].map((sessionId) =>
+					store.listPendingDelegationReports(sessionId)
+				)
+			)
+		).flatMap((reports) => reports.map((report) => report.taskId))
+	);
+	for (const task of tasks) {
+		taskStore.importTask(task, pendingReports.has(task.id));
+	}
+};
+
+const acquireAvailableSessionWriter = async (
+	store: SessionStore,
+	sessionId: SessionId
+) => {
+	try {
+		return await store.acquireSessionWriter(sessionId);
+	} catch (error) {
+		if (error instanceof SessionInUseError) {
+			return null;
+		}
+		throw error;
+	}
+};
+
+const recoverUnownedTask = async (
+	task: DelegationTask,
+	store: SessionStore,
+	taskStore: SubagentsTaskStore,
+	activeTaskIds: readonly DelegationTaskId[],
+	publishTask: PublishTask
+): Promise<void> => {
+	if (activeTaskIds.includes(task.id)) {
+		return;
+	}
+	const parentLock = await acquireAvailableSessionWriter(
+		store,
+		task.parentSessionId
+	);
+	if (parentLock === null) {
+		return;
+	}
+	try {
+		const childLock = await acquireAvailableSessionWriter(
+			store,
+			task.childSessionId
+		);
+		if (childLock === null) {
+			return;
+		}
+		try {
+			const outcome: DelegationTaskOutcome = {
+				kind: "interrupted",
+				reason:
+					"The process stopped before a result was committed; the task outcome is unknown.",
+			};
+			const report = taskStore.settleTask({ outcome, taskId: task.id });
+			const legacyTask = await store.getDelegationTask(task.id);
+			const legacyReport =
+				legacyTask === null
+					? null
+					: await store.settleDelegationTask({ outcome, taskId: task.id });
+			const settled = taskStore.getTask(task.id);
+			if (settled !== null) {
+				publishTask(settled, legacyReport ?? undefined);
+			} else if (report !== null && legacyReport !== null) {
+				publishTask(task, legacyReport);
+			}
+		} finally {
+			await childLock.release();
+		}
+	} finally {
+		await parentLock.release();
+	}
+};
+
+const recoverUnownedTasks = async (
+	store: SessionStore,
+	taskStore: SubagentsTaskStore,
+	activeTaskIds: readonly DelegationTaskId[],
+	publishTask: PublishTask
+): Promise<void> => {
+	for (const task of taskStore.listActiveTasks()) {
+		await recoverUnownedTask(
+			task,
+			store,
+			taskStore,
+			activeTaskIds,
+			publishTask
+		);
+	}
+};
 
 /** Creates the process-lifetime task coordinator for the Subagents Plugin. */
-export const createSubagentTaskRuntime = ({
-	emitTaskEvent,
-	requestHostUnload,
-}: SessionDelegationRuntimePorts): SessionDelegationPort => {
+export const createSubagentTaskRuntime = (
+	{ emitTaskEvent, requestHostUnload }: SessionDelegationRuntimePorts,
+	taskStore: SubagentsTaskStore = getSharedSubagentsTaskStore()
+): SessionDelegationPort => {
 	const hosts = new Map<SessionId, SessionHost>();
 	const openingHosts = new Set<SessionId>();
 	const pendingReports = new Map<SessionId, DelegationReportEnvelope[]>();
@@ -44,22 +153,6 @@ export const createSubagentTaskRuntime = ({
 	};
 	const taskWaiters = createSubagentTaskWaiters<DelegationTaskId, SessionId>();
 
-	const recoverStore = async (store: SessionStore): Promise<void> => {
-		let recovery = recoveredStores.get(store);
-		if (recovery === undefined) {
-			recovery = store.recoverUncleanDelegationTasks(
-				taskWaiters.activeTaskIds()
-			);
-			recoveredStores.set(store, recovery);
-		}
-		try {
-			await recovery;
-		} catch (error) {
-			recoveredStores.delete(store);
-			throw error;
-		}
-	};
-
 	const publishTask = (
 		task: DelegationTask,
 		report?: DelegationReportEnvelope
@@ -82,55 +175,71 @@ export const createSubagentTaskRuntime = ({
 		}
 	};
 
+	const recoverStore = async (store: SessionStore): Promise<void> => {
+		let recovery = recoveredStores.get(store);
+		if (recovery === undefined) {
+			recovery = (async () => {
+				await importLegacyTasks(store, taskStore);
+				await recoverUnownedTasks(
+					store,
+					taskStore,
+					taskWaiters.activeTaskIds(),
+					publishTask
+				);
+			})();
+			recoveredStores.set(store, recovery);
+		}
+		try {
+			await recovery;
+		} catch (error) {
+			recoveredStores.delete(store);
+			throw error;
+		}
+	};
+
 	const cancelActiveTasks: SessionDelegationPort["cancelActiveTasks"] = async (
 		sessions: readonly SessionDelegationSession[]
 	): Promise<void> => {
 		for (const { capabilities, sessionId } of sessions) {
-			const store = capabilities.getStore();
-			const task = await store.getDelegationTaskForChild(sessionId);
+			const sessionStore = capabilities.getStore();
+			const task = taskStore.getTaskForChild(sessionId);
 			if (task?.status !== "active") {
 				continue;
 			}
-			const report = await store.settleDelegationTask({
-				outcome: {
-					kind: "cancelled",
-					reason: "Application shutdown cancelled the delegated task.",
-				},
+			const outcome: DelegationTaskOutcome = {
+				kind: "cancelled",
+				reason: "Application shutdown cancelled the delegated task.",
+			};
+			const report = taskStore.settleTask({ outcome, taskId: task.id });
+			const legacyReport = await sessionStore.settleDelegationTask({
+				outcome,
 				taskId: task.id,
 			});
-			if (report === null) {
-				continue;
-			}
-			const settled = await store.getDelegationTask(task.id);
+			const settled = taskStore.getTask(task.id);
 			if (settled !== null) {
-				publishTask(settled, report);
+				publishTask(settled, legacyReport ?? report ?? undefined);
 			}
 		}
 	};
 
-	const getTaskForChild: SessionDelegationPort["getTaskForChild"] = (
-		store,
+	const getTaskForChild: SessionDelegationPort["getTaskForChild"] = async (
 		childSessionId
-	) => store.getDelegationTaskForChild(childSessionId);
+	) => taskStore.getTaskForChild(childSessionId);
 	const hasActiveTasks: SessionDelegationPort["hasActiveTasks"] = async (
-		store,
 		parentSessionId
 	) =>
-		(await store.listDelegationTasks(parentSessionId)).some(
-			(task) => task.status === "active"
-		);
-	const isTaskActive: SessionDelegationPort["isTaskActive"] = async (
-		store,
-		taskId
-	) => (await store.getDelegationTask(taskId))?.status === "active";
+		taskStore
+			.listTasks(parentSessionId)
+			.some((task) => task.status === "active");
+	const isTaskActive: SessionDelegationPort["isTaskActive"] = async (taskId) =>
+		taskStore.getTask(taskId)?.status === "active";
 
 	const waitForTasks: SessionDelegationPort["waitForTasks"] = async (
-		store,
 		parentSessionId
 	) => {
 		const tasks = await taskWaiters.waitForDescendants<DelegationTask>({
 			isActive: (task) => task.status === "active",
-			listTasks: (sessionId) => store.listDelegationTasks(sessionId),
+			listTasks: async (sessionId) => taskStore.listTasks(sessionId),
 			parentSessionId,
 		});
 		return [...tasks];
