@@ -5,16 +5,18 @@ import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
 import { McpProvider } from "@/modules/mcp";
+import {
+	createDisabledMcpPluginResource,
+	type McpPluginResource,
+} from "@/modules/mcp/capability";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	createPermissionService,
 	PermissionServiceProvider,
 } from "@/modules/permissions";
-import { createApplicationSessionDelegationRuntime } from "@/modules/sessions/hooks/runtime-turn";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
-import { mcpPlugin } from "@/plugins/mcp";
 import { parseCliOptions } from "@/shared/cli-options";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -29,6 +31,7 @@ import { SettingsProviders } from "./settings-providers";
 
 const interactiveRuntime = getInteractiveRuntimeContext();
 const { args, cwd, pluginRuntime } = interactiveRuntime;
+const cliOptions = parseCliOptions(args);
 const connections = createConnections();
 const workspace =
 	interactiveRuntime.configRuntime?.workspace ?? resolveWorkspaceRoot(cwd);
@@ -42,20 +45,15 @@ const configContext =
 		homeRoot: os.homedir(),
 		workspace,
 	});
-const mcpResource = mcpPlugin.createResource({ configStore, workspace });
-const permissionService = createPermissionService(parseCliOptions(args));
+const mcpResource =
+	pluginRuntime?.getResource<McpPluginResource>("mcp", "runtime") ??
+	createDisabledMcpPluginResource();
+const permissionService = createPermissionService(cliOptions);
 setInteractiveCleanup(async () => {
 	try {
-		await getInteractiveSessionHostManager(
-			createApplicationSessionDelegationRuntime,
-			pluginRuntime
-		).shutdownAll();
+		await getInteractiveSessionHostManager(pluginRuntime).shutdownAll();
 	} finally {
-		try {
-			await pluginRuntime?.shutdown();
-		} finally {
-			await mcpResource.close();
-		}
+		await pluginRuntime?.shutdown();
 	}
 });
 

@@ -227,7 +227,6 @@ export const createSessionInputLaneWorkflow = (
 		const snapshot = port.getSnapshot();
 		const nextInput = port.inputScheduler.selectNextInput({
 			hasSteeringMessages: snapshot.steeringMessages.length > 0,
-			hasDelegationReports: snapshot.pendingDelegationReports.length > 0,
 		});
 		if (nextInput === "steering") {
 			const steering = snapshot.steeringMessages[0];

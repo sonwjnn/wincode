@@ -58,6 +58,24 @@ describe("application dispatch", () => {
 		expect(stderr.output).toBe("");
 	});
 
+	test("routes independent bundled Plugin disables to the application", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		let routedInvocation: InvocationOptions | undefined;
+		await dispatch(
+			input(stdout.writer, stderr.writer, ["--no-mcp", "--no-subagents"]),
+			{
+				...noOpRunners,
+				interactive: async (context) => {
+					routedInvocation = context.invocation;
+					return 0;
+				},
+			}
+		);
+
+		expect(routedInvocation?.disabledPlugins).toEqual(["mcp", "subagents"]);
+	});
+
 	test("routes Effort selectors through the JSON CLI contract", async () => {
 		const stdout = capture();
 		const stderr = capture();
@@ -156,6 +174,12 @@ describe("application dispatch", () => {
 			executeCommand: async () => "",
 			getCommands: () => [],
 			getToolDescriptors: () => [],
+			getResource: () => undefined,
+			registerBackgroundWork: () => undefined,
+			hasBackgroundWork: () => false,
+			onBackgroundWorkChange: () => () => undefined,
+			waitForBackgroundWork: async () => undefined,
+			resolveToolsForTurn: async () => [],
 			shutdown: async () => undefined,
 			startSession: async () => undefined,
 			stopSession: async () => undefined,
@@ -193,6 +217,12 @@ describe("application dispatch", () => {
 			executeCommand: async () => "",
 			getCommands: () => [],
 			getToolDescriptors: () => [],
+			getResource: () => undefined,
+			registerBackgroundWork: () => undefined,
+			hasBackgroundWork: () => false,
+			onBackgroundWorkChange: () => () => undefined,
+			waitForBackgroundWork: async () => undefined,
+			resolveToolsForTurn: async () => [],
 			shutdown: async () => {
 				shutdownCount += 1;
 			},

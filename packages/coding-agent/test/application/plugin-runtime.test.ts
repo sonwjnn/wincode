@@ -30,7 +30,7 @@ const jiraPlugin = (): LoadedPlugin => ({
 		{
 			action: "plugin:jira:search_issues",
 			description: "Search Jira issues.",
-			handler: async () => ({ query: "fixed" }),
+			handler: async () => ({ output: { query: "fixed" }, type: "success" }),
 			inputSchema: z.object({ query: z.string() }),
 			localName: "search_issues",
 			name: "plugin_jira_search_issues",
@@ -39,6 +39,73 @@ const jiraPlugin = (): LoadedPlugin => ({
 		},
 	],
 	workspace,
+});
+
+test("One-Shot can await background work registered by any Plugin for its Session", async () => {
+	const runtime = createPluginRuntime([], []);
+	const deferred = Promise.withResolvers<void>();
+	let complete = false;
+	runtime.registerBackgroundWork("background-session", deferred.promise);
+	const waiting = runtime
+		.waitForBackgroundWork("background-session")
+		.then(() => {
+			complete = true;
+		});
+
+	try {
+		await Promise.resolve();
+		expect(complete).toBe(false);
+		deferred.resolve();
+		await waiting;
+		expect(complete).toBe(true);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("a failed later Session registration keeps earlier tools available for that Session", async () => {
+	const sessionContext = { sessionId: "partial-session", workspace };
+	let shutdownCalled = false;
+	const plugin: LoadedPlugin = {
+		commands: [],
+		id: "jira",
+		onSessionShutdown: () => {
+			shutdownCalled = true;
+		},
+		onSessionStart: (_context, api) => {
+			api.registerTool({
+				description: "A valid earlier registration.",
+				handler: async () => ({ output: {}, type: "success" }),
+				inputSchema: z.object({}),
+				name: "kept_tool",
+			});
+			api.registerTool({
+				description: "An invalid later registration.",
+				handler: async () => ({ output: {}, type: "success" }),
+				inputSchema: z.object({}),
+				name: "",
+			});
+		},
+		sourcePath: pluginSource,
+		tools: [],
+		workspace,
+	};
+	const runtime = createPluginRuntime([plugin], []);
+
+	try {
+		await runtime.startSession(sessionContext);
+
+		expect(
+			runtime
+				.getToolDescriptors(sessionContext.sessionId)
+				.map(({ localName }) => localName)
+		).toEqual(["kept_tool"]);
+		expect(runtime.diagnostics).toHaveLength(1);
+		await runtime.stopSession(sessionContext);
+		expect(shutdownCalled).toBe(true);
+	} finally {
+		await runtime.shutdown();
+	}
 });
 
 test("a failed Session start disables Plugin commands and tools only for that Session", async () => {

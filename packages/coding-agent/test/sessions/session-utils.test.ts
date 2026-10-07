@@ -10,7 +10,6 @@ describe("getMostRecentSession", () => {
 				id: sessionId("older"),
 				lastMessageAt: new Date("2026-07-03T00:00:00.000Z"),
 				pinned: true,
-				reportContinuationPaused: false,
 				title: "Older",
 			},
 			{
@@ -18,7 +17,6 @@ describe("getMostRecentSession", () => {
 				id: sessionId("newer"),
 				lastMessageAt: new Date("2026-07-04T00:00:00.000Z"),
 				pinned: false,
-				reportContinuationPaused: false,
 				title: "Newer",
 			},
 		]);

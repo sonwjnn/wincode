@@ -1,13 +1,23 @@
-import { getErrorMessage, logger } from "@wincode/utils";
-import { isPluginOutputWithinLimit } from "./output";
+import { getErrorMessage, isNonEmptyString, logger } from "@wincode/utils";
+import type { PermissionActionFamily } from "@/modules/permissions/policy";
+import { attachPluginHostContext } from "./host-context";
 import type {
+	PluginBeforeAgentTurnContext,
+	PluginBeforeAgentTurnHook,
 	PluginCommandContext,
+	PluginCommandRegistration,
+	PluginInputSchema,
 	PluginProcessContext,
+	PluginRegistrationAPI,
 	PluginSessionContext,
-	PluginSessionHook,
+	PluginSessionShutdownHook,
+	PluginSessionStartHook,
 	PluginShutdownHook,
+	PluginToolRegistration,
+	PluginToolRegistrationAPI,
 } from "./public";
-import type { PluginTool } from "./types";
+import { validatePluginCommand, validatePluginTool } from "./registration";
+import type { PluginCommand, PluginTool } from "./types";
 
 export type PluginDiagnostic = Readonly<{
 	message: string;
@@ -17,12 +27,23 @@ export type PluginDiagnostic = Readonly<{
 export type PluginToolDescriptor = Readonly<{
 	action: `plugin:${string}:${string}`;
 	description: string;
+	exclusiveInBatch?: true;
+	permissionAction?: string;
+	permissionActionFamily?: PermissionActionFamily;
+	permissionResource?: string;
+	permissionDecision?: "allow" | "ask" | "deny";
+	permissionSafety?: boolean;
 	handler: PluginTool["handler"];
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
 	name: string;
 	pluginId: string;
 	sourcePath: string;
+}>;
+
+export type PluginResourceDescriptor = Readonly<{
+	name: string;
+	value: unknown;
 }>;
 
 export type PluginCommandDescriptor = Readonly<{
@@ -36,9 +57,12 @@ export type PluginCommandDescriptor = Readonly<{
 
 export type LoadedPlugin = Readonly<{
 	commands: readonly PluginCommandDescriptor[];
+	trustedBundled?: boolean;
 	id: string;
-	onSessionShutdown?: PluginSessionHook;
-	onSessionStart?: PluginSessionHook;
+	resources?: readonly PluginResourceDescriptor[];
+	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
+	onSessionShutdown?: PluginSessionShutdownHook;
+	onSessionStart?: PluginSessionStartHook;
 	onShutdown?: PluginShutdownHook;
 	sourcePath: string;
 	tools: readonly PluginToolDescriptor[];
@@ -55,21 +79,104 @@ export type PluginRuntime = Readonly<{
 	) => Promise<string>;
 	getCommands: (sessionId?: string) => readonly PluginCommandDescriptor[];
 	getToolDescriptors: (sessionId: string) => readonly PluginToolDescriptor[];
+	getResource: <Resource = unknown>(
+		pluginId: string,
+		name: string
+	) => Resource | undefined;
+	registerBackgroundWork: (sessionId: string, work: Promise<unknown>) => void;
+	hasBackgroundWork: (sessionId: string) => boolean;
+	onBackgroundWorkChange: (
+		sessionId: string,
+		listener: () => void
+	) => () => void;
+	waitForBackgroundWork: (sessionId: string) => Promise<void>;
+	resolveToolsForTurn: (
+		context: PluginBeforeAgentTurnContext,
+		hostContext?: unknown
+	) => Promise<readonly PluginToolDescriptor[]>;
 	shutdown: () => Promise<void>;
 	startSession: (context: PluginSessionContext) => Promise<void>;
 	stopSession: (context: PluginSessionContext) => Promise<void>;
 }>;
 
+type MutablePluginScope = {
+	commands: Map<string, PluginCommandDescriptor>;
+	maskedTools: Set<string>;
+	tools: Map<string, PluginToolDescriptor>;
+};
+
 type SessionPluginState = {
+	commands: Map<string, PluginCommandDescriptor>;
 	context: PluginSessionContext;
 	disabled: Set<string>;
+	maskedTools: Set<string>;
 	started: Set<string>;
 	startPromise: Promise<void>;
 	stopPromise?: Promise<void>;
+	tools: Map<string, PluginToolDescriptor>;
 };
+
+class PluginRegistrationError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PluginRegistrationError";
+	}
+}
 
 const commandFailure = (name: string): Error =>
 	new Error(`Plugin command "/${name}" failed.`);
+
+const toolNameFor = (pluginId: string, localName: string): string =>
+	`plugin_${pluginId}_${localName}`;
+
+const commandKey = (name: string): string => name.toLowerCase();
+
+const descriptorForTool = (
+	plugin: LoadedPlugin,
+	tool: PluginTool
+): PluginToolDescriptor =>
+	Object.freeze({
+		action: `plugin:${plugin.id}:${tool.name}`,
+		description: tool.description,
+		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
+		...(tool.permissionAction === undefined
+			? {}
+			: {
+					permissionAction: tool.permissionAction,
+					permissionActionFamily:
+						plugin.trustedBundled === true && plugin.id === "mcp"
+							? "mcp"
+							: "plugin",
+				}),
+		...(tool.permissionResource === undefined
+			? {}
+			: { permissionResource: tool.permissionResource }),
+		...(tool.permissionDecision === undefined
+			? {}
+			: { permissionDecision: tool.permissionDecision }),
+		...(tool.permissionSafety === undefined
+			? {}
+			: { permissionSafety: tool.permissionSafety }),
+		handler: tool.handler,
+		inputSchema: tool.inputSchema,
+		localName: tool.name,
+		name: tool.modelName ?? toolNameFor(plugin.id, tool.name),
+		pluginId: plugin.id,
+		sourcePath: plugin.sourcePath,
+	});
+
+const descriptorForCommand = (
+	plugin: LoadedPlugin,
+	command: PluginCommand
+): PluginCommandDescriptor =>
+	Object.freeze({
+		description: command.description,
+		handler: command.handler,
+		name: command.name,
+		pluginId: plugin.id,
+		sourcePath: plugin.sourcePath,
+		value: `/${command.name}`,
+	});
 
 const logPluginFailure = async (
 	message: string,
@@ -85,16 +192,43 @@ const logPluginFailure = async (
 	});
 };
 
-/** Owns the immutable registrations and per-Session runtime state of loaded Plugins. */
+/** Owns immutable factory registrations and replaceable scoped registrations. */
 export const createPluginRuntime = (
 	plugins: readonly LoadedPlugin[],
-	initialDiagnostics: readonly PluginDiagnostic[]
+	initialDiagnostics: readonly PluginDiagnostic[],
+	reservedCommandNames: readonly string[] = [],
+	reservedToolNames: readonly string[] = []
 ): PluginRuntime => {
 	const diagnostics = [...initialDiagnostics];
 	const disabledPlugins = new Set<string>();
 	const sessionStates = new Map<string, SessionPluginState>();
+	const backgroundWork = new Map<string, Set<Promise<void>>>();
+	const backgroundWorkErrors = new Map<string, unknown[]>();
+	const backgroundWorkListeners = new Map<string, Set<() => void>>();
+	const notifyBackgroundWorkChange = (sessionId: string): void => {
+		for (const listener of [
+			...(backgroundWorkListeners.get(sessionId) ?? []),
+		]) {
+			try {
+				listener();
+			} catch {
+				// A listener cannot interrupt Plugin work or another Session.
+			}
+		}
+	};
+	const reservedCommands = new Set(reservedCommandNames.map(commandKey));
+	const reservedTools = new Set(reservedToolNames);
 	let shutdownPromise: Promise<void> | undefined;
 
+	const addDiagnostic = (plugin: LoadedPlugin, message: string): void => {
+		diagnostics.push({ message, sourcePath: plugin.sourcePath });
+		void logger.warn("Plugin registration diagnostic", {
+			message,
+			operation: "plugin.registration",
+			pluginId: plugin.id,
+			sourcePath: plugin.sourcePath,
+		});
+	};
 	const isEnabledForSession = (
 		plugin: LoadedPlugin,
 		sessionId?: string
@@ -102,8 +236,217 @@ export const createPluginRuntime = (
 		!disabledPlugins.has(plugin.id) &&
 		(sessionId === undefined ||
 			!sessionStates.get(sessionId)?.disabled.has(plugin.id));
-	const addDiagnostic = (plugin: LoadedPlugin, message: string): void => {
-		diagnostics.push({ message, sourcePath: plugin.sourcePath });
+	const commandsForPlugin = (
+		plugin: LoadedPlugin,
+		sessionId?: string
+	): readonly PluginCommandDescriptor[] => {
+		const commands = new Map(
+			plugin.commands.map((command) => [commandKey(command.name), command])
+		);
+		const session =
+			sessionId === undefined ? undefined : sessionStates.get(sessionId);
+		if (session !== undefined && !session.disabled.has(plugin.id)) {
+			for (const command of session.commands.values()) {
+				if (command.pluginId === plugin.id) {
+					commands.set(commandKey(command.name), command);
+				}
+			}
+		}
+		return [...commands.values()];
+	};
+	const allCommands = (
+		sessionId?: string
+	): readonly PluginCommandDescriptor[] =>
+		plugins
+			.filter((plugin) => isEnabledForSession(plugin, sessionId))
+			.flatMap((plugin) => commandsForPlugin(plugin, sessionId));
+	const createScopeApi = (
+		plugin: LoadedPlugin,
+		scope: MutablePluginScope,
+		options: Readonly<{
+			commandsAllowed: boolean;
+			sessionId?: string;
+			turnToolOwners?: Map<string, string>;
+		}>
+	): PluginToolRegistrationAPI | PluginRegistrationAPI => {
+		const registerTool = <Schema extends PluginInputSchema>(
+			candidate: PluginToolRegistration<Schema>
+		): void => {
+			try {
+				const tool = validatePluginTool(
+					candidate,
+					plugin.trustedBundled === true
+				);
+				const modelName = tool.modelName ?? toolNameFor(plugin.id, tool.name);
+				const owner =
+					options.turnToolOwners?.get(modelName) ??
+					findToolOwner(modelName, options.sessionId);
+				if (
+					reservedTools.has(modelName) ||
+					(owner !== undefined && owner !== plugin.id)
+				) {
+					throw new Error(
+						`Plugin Tool name '${modelName}' is owned by another capability.`
+					);
+				}
+				scope.tools.set(tool.name, descriptorForTool(plugin, tool));
+				scope.maskedTools.delete(tool.name);
+			} catch (error) {
+				const message = getErrorMessage(error, String(error));
+				addDiagnostic(plugin, message);
+				throw new PluginRegistrationError(message);
+			}
+		};
+		const unregisterTool = (name: string): void => {
+			if (!isNonEmptyString(name)) {
+				const message = "Plugin Tool name must be a non-empty string.";
+				addDiagnostic(plugin, message);
+				throw new PluginRegistrationError(message);
+			}
+			scope.tools.delete(name);
+			scope.maskedTools.add(name);
+		};
+		if (!options.commandsAllowed) {
+			return Object.freeze({ registerTool, unregisterTool });
+		}
+		const registerCommand = (candidate: PluginCommandRegistration): void => {
+			try {
+				const command = validatePluginCommand(candidate);
+				const key = commandKey(command.name);
+				if (reservedCommands.has(key)) {
+					throw new Error(
+						`Plugin Command '/${command.name}' collides with an active command.`
+					);
+				}
+				const collision = allCommands(options.sessionId).find(
+					(existing) =>
+						commandKey(existing.name) === key && existing.pluginId !== plugin.id
+				);
+				if (collision !== undefined) {
+					throw new Error(
+						`Plugin Command '/${command.name}' is owned by Plugin '${collision.pluginId}'.`
+					);
+				}
+				scope.commands.set(key, descriptorForCommand(plugin, command));
+			} catch (error) {
+				const message = getErrorMessage(error, String(error));
+				addDiagnostic(plugin, message);
+				throw new PluginRegistrationError(message);
+			}
+		};
+		return Object.freeze({ registerTool, unregisterTool, registerCommand });
+	};
+	const pluginToolsForSession = (
+		plugin: LoadedPlugin,
+		sessionId: string
+	): readonly PluginToolDescriptor[] => {
+		const state = sessionStates.get(sessionId);
+		if (state?.disabled.has(plugin.id)) {
+			return [];
+		}
+		const tools = new Map(plugin.tools.map((tool) => [tool.localName, tool]));
+		if (state === undefined) {
+			return [...tools.values()];
+		}
+		for (const name of state.maskedTools) {
+			tools.delete(name);
+		}
+		for (const [name, tool] of state.tools) {
+			if (tool.pluginId === plugin.id) {
+				tools.set(name, tool);
+			}
+		}
+		return [...tools.values()];
+	};
+	const findToolOwner = (
+		modelName: string,
+		sessionId?: string
+	): string | undefined => {
+		for (const candidate of plugins) {
+			if (
+				pluginToolsForSession(candidate, sessionId ?? "").some(
+					(tool) => tool.name === modelName
+				)
+			) {
+				return candidate.id;
+			}
+		}
+	};
+	const initializePluginSession = async (
+		plugin: LoadedPlugin,
+		state: SessionPluginState
+	): Promise<void> => {
+		if (disabledPlugins.has(plugin.id)) {
+			return;
+		}
+		const scope: MutablePluginScope = {
+			commands: new Map(),
+			maskedTools: new Set(),
+			tools: new Map(),
+		};
+		const publishScope = (): void => {
+			for (const [name, tool] of scope.tools) {
+				state.tools.set(name, tool);
+			}
+			for (const name of scope.maskedTools) {
+				state.maskedTools.add(name);
+			}
+			for (const [name, command] of scope.commands) {
+				state.commands.set(name, command);
+			}
+		};
+		try {
+			await plugin.onSessionStart?.(
+				state.context,
+				createScopeApi(plugin, scope, {
+					commandsAllowed: true,
+					sessionId: state.context.sessionId,
+				}) as PluginRegistrationAPI
+			);
+			publishScope();
+			state.started.add(plugin.id);
+		} catch (error) {
+			if (error instanceof PluginRegistrationError) {
+				publishScope();
+				state.started.add(plugin.id);
+				return;
+			}
+			state.disabled.add(plugin.id);
+			addDiagnostic(
+				plugin,
+				`Plugin Session start hook failed; disabled for this Session: ${getErrorMessage(error, String(error))}`
+			);
+			await logPluginFailure(
+				"Plugin Session start hook failed; disabled for this Session",
+				plugin,
+				"session-start",
+				error
+			);
+		}
+	};
+	const startSession = async (context: PluginSessionContext): Promise<void> => {
+		const existing = sessionStates.get(context.sessionId);
+		if (existing !== undefined) {
+			await existing.startPromise;
+			return;
+		}
+		const deferred = Promise.withResolvers<void>();
+		const state: SessionPluginState = {
+			commands: new Map(),
+			context,
+			disabled: new Set(),
+			maskedTools: new Set(),
+			started: new Set(),
+			startPromise: deferred.promise,
+			tools: new Map(),
+		};
+		sessionStates.set(context.sessionId, state);
+		void (async () => {
+			for (const plugin of plugins) {
+				await initializePluginSession(plugin, state);
+			}
+		})().then(deferred.resolve, deferred.reject);
+		await state.startPromise;
 	};
 	const stopSession = async (context: PluginSessionContext): Promise<void> => {
 		const state = sessionStates.get(context.sessionId);
@@ -140,6 +483,82 @@ export const createPluginRuntime = (
 		state.stopPromise = closing;
 		return closing;
 	};
+	const resolvePluginToolsForTurn = async (
+		plugin: LoadedPlugin,
+		context: PluginBeforeAgentTurnContext,
+		hostContext: unknown,
+		turnToolOwners: Map<string, string>
+	): Promise<readonly PluginToolDescriptor[] | null> => {
+		if (!isEnabledForSession(plugin, context.sessionId)) {
+			return null;
+		}
+		const scope: MutablePluginScope = {
+			commands: new Map(),
+			maskedTools: new Set(),
+			tools: new Map(),
+		};
+		if (plugin.onBeforeAgentTurn !== undefined) {
+			try {
+				await plugin.onBeforeAgentTurn(
+					hostContext === undefined
+						? context
+						: attachPluginHostContext(context, hostContext),
+					createScopeApi(plugin, scope, {
+						commandsAllowed: false,
+						sessionId: context.sessionId,
+						turnToolOwners,
+					}) as PluginToolRegistrationAPI
+				);
+			} catch (error) {
+				addDiagnostic(
+					plugin,
+					`Plugin pre-Agent-Turn hook failed; its tools were omitted for this Turn: ${getErrorMessage(error, String(error))}`
+				);
+				return null;
+			}
+		}
+		const tools = new Map(
+			pluginToolsForSession(plugin, context.sessionId).map((tool) => [
+				tool.localName,
+				tool,
+			])
+		);
+		for (const name of scope.maskedTools) {
+			tools.delete(name);
+		}
+		for (const [name, tool] of scope.tools) {
+			tools.set(name, tool);
+		}
+		const pluginTools = [...tools.values()];
+		for (const tool of pluginTools) {
+			turnToolOwners.set(tool.name, plugin.id);
+		}
+		return pluginTools;
+	};
+	const resolveToolsForTurn = async (
+		context: PluginBeforeAgentTurnContext,
+		hostContext?: unknown
+	): Promise<readonly PluginToolDescriptor[]> => {
+		const resolved: PluginToolDescriptor[] = [];
+		const turnToolOwners = new Map<string, string>();
+		for (const plugin of plugins) {
+			for (const tool of pluginToolsForSession(plugin, context.sessionId)) {
+				turnToolOwners.set(tool.name, plugin.id);
+			}
+		}
+		for (const plugin of plugins) {
+			const pluginTools = await resolvePluginToolsForTurn(
+				plugin,
+				context,
+				hostContext,
+				turnToolOwners
+			);
+			if (pluginTools !== null) {
+				resolved.push(...pluginTools);
+			}
+		}
+		return Object.freeze(resolved);
+	};
 
 	return Object.freeze({
 		get diagnostics() {
@@ -152,18 +571,15 @@ export const createPluginRuntime = (
 			}
 			disabledPlugins.add(pluginId);
 			addDiagnostic(plugin, message);
-			void logger.warn("Plugin disabled", {
-				message,
-				operation: "plugin.registration",
-				pluginId,
-				sourcePath: plugin.sourcePath,
-			});
 		},
 		async executeCommand(pluginId, name, context) {
 			const plugin = plugins.find(({ id }) => id === pluginId);
-			const command = plugin?.commands.find(
-				(candidate) => candidate.name === name
-			);
+			const command =
+				plugin === undefined
+					? undefined
+					: commandsForPlugin(plugin, context.sessionId).find(
+							(candidate) => candidate.name === name
+						);
 			if (
 				plugin === undefined ||
 				command === undefined ||
@@ -173,8 +589,8 @@ export const createPluginRuntime = (
 			}
 			try {
 				const result = await command.handler(context);
-				if (typeof result !== "string" || !isPluginOutputWithinLimit(result)) {
-					throw new Error("Plugin Command returned invalid or oversized text.");
+				if (typeof result !== "string") {
+					throw new Error("Plugin Command returned invalid text.");
 				}
 				return result;
 			} catch (error) {
@@ -188,19 +604,77 @@ export const createPluginRuntime = (
 			}
 		},
 		getCommands(sessionId) {
-			return Object.freeze(
-				plugins
-					.filter((plugin) => isEnabledForSession(plugin, sessionId))
-					.flatMap(({ commands }) => commands)
-			);
+			return Object.freeze(allCommands(sessionId));
 		},
 		getToolDescriptors(sessionId) {
 			return Object.freeze(
 				plugins
 					.filter((plugin) => isEnabledForSession(plugin, sessionId))
-					.flatMap(({ tools }) => tools)
+					.flatMap((plugin) => pluginToolsForSession(plugin, sessionId ?? ""))
 			);
 		},
+		getResource<Resource>(pluginId: string, name: string) {
+			const resource = plugins
+				.find((plugin) => plugin.id === pluginId)
+				?.resources?.find((candidate) => candidate.name === name)?.value;
+			return resource as Resource | undefined;
+		},
+		registerBackgroundWork(sessionId, work) {
+			let sessionWork = backgroundWork.get(sessionId);
+			if (sessionWork === undefined) {
+				sessionWork = new Set();
+				backgroundWork.set(sessionId, sessionWork);
+			}
+			const tracked = Promise.resolve(work).then(
+				() => undefined,
+				(error: unknown) => {
+					const errors = backgroundWorkErrors.get(sessionId) ?? [];
+					errors.push(error);
+					backgroundWorkErrors.set(sessionId, errors);
+				}
+			);
+			sessionWork.add(tracked);
+			notifyBackgroundWorkChange(sessionId);
+			void tracked.then(() => {
+				sessionWork?.delete(tracked);
+				if (sessionWork?.size === 0) {
+					backgroundWork.delete(sessionId);
+				}
+				notifyBackgroundWorkChange(sessionId);
+			});
+		},
+		hasBackgroundWork(sessionId) {
+			return (backgroundWork.get(sessionId)?.size ?? 0) > 0;
+		},
+		onBackgroundWorkChange(sessionId, listener) {
+			let listeners = backgroundWorkListeners.get(sessionId);
+			if (listeners === undefined) {
+				listeners = new Set();
+				backgroundWorkListeners.set(sessionId, listeners);
+			}
+			listeners.add(listener);
+			return () => {
+				listeners?.delete(listener);
+				if (listeners?.size === 0) {
+					backgroundWorkListeners.delete(sessionId);
+				}
+			};
+		},
+		async waitForBackgroundWork(sessionId) {
+			while (true) {
+				const sessionWork = backgroundWork.get(sessionId);
+				if (sessionWork === undefined || sessionWork.size === 0) {
+					break;
+				}
+				await Promise.all([...sessionWork]);
+			}
+			const errors = backgroundWorkErrors.get(sessionId);
+			backgroundWorkErrors.delete(sessionId);
+			if (errors?.length) {
+				throw errors[0];
+			}
+		},
+		resolveToolsForTurn,
 		shutdown() {
 			if (shutdownPromise !== undefined) {
 				return shutdownPromise;
@@ -235,41 +709,7 @@ export const createPluginRuntime = (
 			shutdownPromise = closing;
 			return closing;
 		},
-		async startSession(context) {
-			const existing = sessionStates.get(context.sessionId);
-			if (existing !== undefined) {
-				await existing.startPromise;
-				return;
-			}
-			const deferred = Promise.withResolvers<void>();
-			const state: SessionPluginState = {
-				context,
-				disabled: new Set(),
-				started: new Set(),
-				startPromise: deferred.promise,
-			};
-			sessionStates.set(context.sessionId, state);
-			void (async () => {
-				for (const plugin of plugins) {
-					if (disabledPlugins.has(plugin.id)) {
-						continue;
-					}
-					try {
-						await plugin.onSessionStart?.(context);
-						state.started.add(plugin.id);
-					} catch (error) {
-						state.disabled.add(plugin.id);
-						await logPluginFailure(
-							"Plugin Session start hook failed; disabled for this Session",
-							plugin,
-							"session-start",
-							error
-						);
-					}
-				}
-			})().then(deferred.resolve, deferred.reject);
-			await state.startPromise;
-		},
+		startSession,
 		stopSession,
 	});
 };

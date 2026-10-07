@@ -1,16 +1,24 @@
 import { useMemo } from "react";
 import { useAgentRegistry } from "@/modules/agents/agent-registry-provider";
+import {
+	createApplicationPluginComposition,
+	selectOptionalApplicationPlugins,
+} from "@/modules/application/plugin-composition";
 import { useConnections } from "@/modules/connections";
-import { useMcp } from "@/modules/mcp/context/mcp-provider";
 import { useToolPermission } from "@/modules/permissions/use-tool-permission";
+import { parseCliOptions } from "@/shared/cli-options";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
-import { getInteractivePluginRuntime } from "@/shared/runtime-context";
+import {
+	getInteractivePluginRuntime,
+	getInteractiveRuntimeContext,
+} from "@/shared/runtime-context";
 import { createSessionCompaction } from "../compaction/compaction";
 import { estimateCompactionTokens } from "../compaction/config";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { useCompactionSettings } from "../compaction/use-compaction-settings";
-import { createApplicationSessionDelegationRuntime } from "../hooks/runtime-turn";
+import { createSessionSdkChildFactory } from "../sdk";
+import type { SessionSdkChildFactory } from "../sdk-contract";
 import { getSessionStore } from "../storage/get-session-store";
 import { getInteractiveSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities } from "./types";
@@ -27,13 +35,11 @@ import type { SessionCapabilities } from "./types";
  */
 export const useSessionCapabilities = (): SessionCapabilities => {
 	const connections = useConnections();
-	const mcp = useMcp();
 	const config = useConfig();
 	const registry = useAgentRegistry();
 	const toolPermission = useToolPermission();
 	const { getCompactionSettings } = useCompactionSettings();
 	const connectionsRef = useLatest(connections);
-	const mcpRef = useLatest(mcp);
 	const configRef = useLatest(config);
 	const registryRef = useLatest(registry);
 	const toolPermissionRef = useLatest(toolPermission);
@@ -57,26 +63,61 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	// The refs this object closes over are stable for the component's life, so
 	// the capabilities object is composed once: a session is never reopened
 	// because a provider re-rendered.
+	const runtimeContext = getInteractiveRuntimeContext();
 	const pluginRuntime = getInteractivePluginRuntime();
-	return useMemo(
-		() => ({
+	const runtimeFactory = runtimeContext.runtimeFactory;
+	const runtimeArgs = runtimeContext.args;
+	const disabledPlugins = useMemo(
+		() => parseCliOptions(runtimeArgs).disabledPlugins,
+		[runtimeArgs]
+	);
+	const composition = useMemo(
+		() =>
+			createApplicationPluginComposition({
+				configStore: config.configStore,
+				createMcpResource: false,
+				enabledPlugins: selectOptionalApplicationPlugins(disabledPlugins),
+				workspace: config.workspace,
+			}),
+		[config.configStore, config.workspace, disabledPlugins]
+	);
+	return useMemo(() => {
+		let sessionSdk: SessionSdkChildFactory | undefined;
+		const sessionStore = getSessionStore();
+		const sessionHostManager = getInteractiveSessionHostManager(pluginRuntime);
+		const capabilities: SessionCapabilities = {
+			getCapabilityCeiling: () => undefined,
 			getCompactionModule: () => compactionModuleRef.current,
 			getCompactionSettings: (model) => getCompactionSettingsRef.current(model),
 			getConfig: () => configRef.current,
 			getConnections: () => connectionsRef.current,
-			getMcp: () => mcpRef.current,
 			getRegistry: () => registryRef.current,
 			getStore: () => getSessionStore(),
-			getSessionHostManager: () =>
-				getInteractiveSessionHostManager(
-					createApplicationSessionDelegationRuntime,
-					pluginRuntime
-				),
+			getSessionHostManager: () => sessionHostManager,
+			getSessionSdk: () => sessionSdk,
+			getTurnToolResolver: () => composition.turnToolResolver,
+			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),
 			...(pluginRuntime === undefined
 				? {}
 				: { getPluginRuntime: () => pluginRuntime }),
 			getToolPermission: () => toolPermissionRef.current,
-		}),
-		[pluginRuntime]
-	);
+		};
+		sessionSdk = createSessionSdkChildFactory(
+			{
+				configRuntime: configRef.current,
+				configStore: configRef.current.configStore,
+				connections: connectionsRef.current,
+				cwd: configRef.current.cwd ?? configRef.current.workspace,
+				enabledPlugins: composition.enabledPlugins,
+				registry: registryRef.current,
+				getRegistry: () => registryRef.current,
+				...(runtimeFactory === undefined ? {} : { runtimeFactory }),
+				store: sessionStore,
+				workspace: configRef.current.workspace,
+			},
+			sessionHostManager,
+			sessionStore
+		);
+		return capabilities;
+	}, [composition, pluginRuntime, runtimeFactory]);
 };

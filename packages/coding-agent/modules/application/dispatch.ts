@@ -1,3 +1,4 @@
+import type { OptionalPluginId } from "@/shared/cli-options";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type {
 	ApplicationContext,
@@ -5,6 +6,7 @@ import type {
 	TextWriter,
 } from "./modes/types";
 import { InvocationError } from "./modes/types";
+import { selectOptionalApplicationPlugins } from "./plugin-composition";
 import type { OutputWriter as RpcOutputWriter } from "./rpc/types";
 
 export type DispatchInput = Readonly<{
@@ -36,6 +38,7 @@ export type DispatchRuntime = Pick<
 export type DispatchDependencies = Readonly<{
 	initializeRuntime?: (input: {
 		cwd: string;
+		enabledPlugins: readonly OptionalPluginId[];
 		pluginPaths: readonly string[];
 	}) => Promise<DispatchRuntime>;
 }>;
@@ -59,6 +62,8 @@ const HELP_TEXT = [
 	"      --reasoning-mode <id>  Select a Reasoning Mode",
 	"      --auto           Auto-approve ordinary tool requests",
 	"      --plugin <path>  Enable a Plugin (repeatable)",
+	"      --no-mcp         Disable the bundled MCP Plugin",
+	"      --no-subagents   Disable the bundled Subagents Plugin",
 	"  -h, --help           Show this help",
 	"  -v, --version        Show the version",
 ].join("\n");
@@ -128,6 +133,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	let effort: string | undefined;
 	let reasoningMode: string | undefined;
 	const pluginPaths: string[] = [];
+	const disabledPlugins: OptionalPluginId[] = [];
 	let help = false;
 	let version = false;
 	let oneShotOption = false;
@@ -155,6 +161,14 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 		}
 		if (argument === "--auto") {
 			auto = true;
+			continue;
+		}
+		if (argument === "--no-mcp") {
+			disabledPlugins.push("mcp");
+			continue;
+		}
+		if (argument === "--no-subagents") {
+			disabledPlugins.push("subagents");
 			continue;
 		}
 		const equalsIndex = argument.indexOf("=");
@@ -238,7 +252,11 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 		return {
 			help,
 			version,
-			invocation: { auto, mode },
+			invocation: {
+				auto,
+				mode,
+				...(disabledPlugins.length === 0 ? {} : { disabledPlugins }),
+			},
 		};
 	}
 	if (effort !== undefined && reasoningMode !== undefined) {
@@ -272,6 +290,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			...(effort === undefined ? {} : { effort }),
 			...(reasoningMode === undefined ? {} : { reasoningMode }),
 			...(pluginPaths.length === 0 ? {} : { pluginPaths }),
+			...(disabledPlugins.length === 0 ? {} : { disabledPlugins }),
 		},
 	};
 }
@@ -316,6 +335,9 @@ export const dispatch = async (
 		}
 		const runtime = await dependencies.initializeRuntime?.({
 			cwd: input.cwd,
+			enabledPlugins: selectOptionalApplicationPlugins(
+				parsed.invocation.disabledPlugins
+			),
 			pluginPaths: parsed.invocation.pluginPaths ?? [],
 		});
 		pluginRuntime = runtime?.pluginRuntime;

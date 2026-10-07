@@ -321,21 +321,6 @@ const projectAgentUsage = (value: unknown): unknown => {
 	return safeJson(usage);
 };
 
-const projectAgentDelegation = (value: unknown): unknown => {
-	const delegation = asRecord(value);
-	if (
-		delegation === undefined ||
-		Object.keys(delegation).length !== 2 ||
-		typeof delegation.parentTurnId !== "string" ||
-		delegation.parentTurnId.length === 0 ||
-		typeof delegation.parentToolCallId !== "string" ||
-		delegation.parentToolCallId.length === 0
-	) {
-		throw new Error("Agent event delegation is invalid.");
-	}
-	return safeJson(delegation);
-};
-
 const projectToolFailureDetails = (value: unknown): unknown => {
 	const failure = asRecord(value);
 	if (
@@ -456,7 +441,6 @@ const projectOperationalFailure = (value: unknown): unknown => {
 	return safeJson(failure);
 };
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: This projector preserves every Agent event discriminant and payload explicitly.
 export const projectAgentEvent = (value: unknown): Record<string, unknown> => {
 	const event = asRecord(value);
 	if (
@@ -476,9 +460,6 @@ export const projectAgentEvent = (value: unknown): Record<string, unknown> => {
 			return {
 				...base,
 				agentId: requiredEventString(event, "agentId"),
-				...(event.delegation === undefined
-					? {}
-					: { delegation: projectAgentDelegation(event.delegation) }),
 				startedAt: requiredEventNumber(event, "startedAt"),
 			};
 		case "model-step-started":

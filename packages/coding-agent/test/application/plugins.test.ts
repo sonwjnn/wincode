@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createAgentRuntime } from "@wincode/agent-core";
+import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
 import type {
 	ModelStepRequest,
 	ModelStreamPart,
@@ -35,6 +35,11 @@ const configRoot = path.join(root, "config");
 const installedRoot = path.join(root, "installed");
 const workspace = path.join(installedRoot, "workspace");
 const pluginPath = path.join(workspace, "plugins", "jira.ts");
+const permissionOverridePath = path.join(
+	workspace,
+	"plugins",
+	"permission-override.ts"
+);
 
 await Promise.all([
 	mkdir(path.dirname(pluginPath), { recursive: true }),
@@ -52,12 +57,16 @@ await symlink(
 	path.join(installedRoot, "node_modules", "zod"),
 	"dir"
 );
-await Bun.write(
-	pluginPath,
-	await Bun.file(
-		path.join(import.meta.dir, "../fixtures/jira-plugin.ts")
-	).text()
-);
+const [jiraPluginSource, permissionOverridePluginSource] = await Promise.all([
+	Bun.file(path.join(import.meta.dir, "../fixtures/jira-plugin.ts")).text(),
+	Bun.file(
+		path.join(import.meta.dir, "../fixtures/permission-override-plugin.ts")
+	).text(),
+]);
+await Promise.all([
+	Bun.write(pluginPath, jiraPluginSource),
+	Bun.write(permissionOverridePath, permissionOverridePluginSource),
+]);
 await Bun.write(
 	path.join(workspace, "wincode.json"),
 	JSON.stringify({ plugins: ["./plugins/jira.ts"] })
@@ -124,6 +133,53 @@ test("rejects JavaScript paths before evaluating them as Plugins", async () => {
 			}),
 		])
 	);
+	await runtime.shutdown();
+});
+
+test("file Plugins expose generic resources to host UI integrations", async () => {
+	const resourcePath = path.join(workspace, "plugins", "resource.ts");
+	await Bun.write(
+		resourcePath,
+		`export default async (api) => {
+			const plugin = api.definePlugin({ id: "resource_fixture" });
+			plugin.registerResource("service", { state: "ready" });
+		};`
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [resourcePath],
+		config: configRuntime,
+	});
+
+	expect(
+		runtime.getResource<{ state: string }>("resource_fixture", "service")
+	).toEqual({
+		state: "ready",
+	});
+	await runtime.shutdown();
+});
+
+test("failed Plugin initialization releases factory-owned resources", async () => {
+	let shutdownCount = 0;
+	const runtime = await loadPlugins({
+		bundledPlugins: [
+			{
+				id: "failed_resource",
+				factory: async (api) => {
+					const plugin = api.definePlugin({ id: "failed_resource" });
+					plugin.registerResource("service", { state: "initializing" });
+					plugin.onShutdown(() => {
+						shutdownCount += 1;
+					});
+					throw new Error("initialization failed");
+				},
+			},
+		],
+		cliPaths: [],
+		config: configRuntime,
+	});
+
+	expect(shutdownCount).toBe(1);
+	expect(runtime.getResource("failed_resource", "service")).toBeUndefined();
 	await runtime.shutdown();
 });
 
@@ -216,7 +272,7 @@ test("CLI Plugin paths win when a configured path declares the same stable ident
 	await runtime.shutdown();
 });
 
-test("a colliding Plugin publishes no partial registrations and later Plugins still load", async () => {
+test("a caught registration collision preserves earlier tools and later Plugins still load", async () => {
 	const atomicWorkspace = path.join(installedRoot, "atomic-workspace");
 	const pluginsDirectory = path.join(atomicWorkspace, "plugins");
 	const configRootPath = path.join(root, "atomic-config");
@@ -241,11 +297,15 @@ export default (api) => {
 		inputSchema: z.object({}),
 		name: "leaked_tool",
 	});
-	plugin.registerCommand({
-		description: "Collides with an active command.",
-		handler: () => "collision",
-		name: "lookup_issue168",
-	});
+	try {
+		plugin.registerCommand({
+			description: "Collides with an active command.",
+			handler: () => "collision",
+			name: "lookup_issue168",
+		});
+	} catch {
+		// The failed call must not discard the earlier valid tool registration.
+	}
 };`
 		),
 		Bun.write(
@@ -280,7 +340,11 @@ export default (api) => {
 		"lookup_issue168",
 		"later_issue168",
 	]);
-	expect(runtime.getToolDescriptors("session")).toEqual([]);
+	expect(runtime.getToolDescriptors("session")).toMatchObject([
+		expect.objectContaining({
+			name: "plugin_colliding_leaked_tool",
+		}),
+	]);
 	expect(runtime.diagnostics).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({
@@ -584,8 +648,8 @@ const runPluginToolInOneShot = async (
 			cwd,
 			pluginRuntime: modePluginRuntime,
 			workspace: modeWorkspace,
-		}: OneShotCompositionInput) =>
-			createSessionCapabilities({
+		}: OneShotCompositionInput) => ({
+			assembly: await createSessionCapabilities({
 				approvalMode: "non-interactive",
 				configRuntime: modeConfigRuntime,
 				cwd,
@@ -595,7 +659,8 @@ const runPluginToolInOneShot = async (
 				pluginRuntime: modePluginRuntime,
 				workspace: modeWorkspace,
 				connections,
-			});
+			}),
+		});
 	const stdout = captureText();
 	const stderr = captureText();
 	const context: ApplicationContext = {
@@ -676,5 +741,179 @@ test("JSON Mode streams Plugin Tool outcomes as machine-readable events", async 
 		);
 	} finally {
 		await pluginRuntime.shutdown();
+	}
+});
+
+test("file Plugins cannot replace the default ask permission with an Agent policy category", async () => {
+	const runtime = await loadPlugins({
+		cliPaths: [permissionOverridePath],
+		config: configRuntime,
+	});
+
+	expect(runtime.getToolDescriptors("permission-session")).toEqual([]);
+	expect(runtime.diagnostics).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				message: expect.stringContaining(
+					"cannot override its permission category"
+				),
+				sourcePath: permissionOverridePath,
+			}),
+		])
+	);
+	await runtime.shutdown();
+});
+
+test("file Plugins cannot escape their namespaced tool names", async () => {
+	const pluginPathWithCustomName = path.resolve(
+		import.meta.dir,
+		"../fixtures/namespaced-tool-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [path.relative(workspace, pluginPathWithCustomName)],
+		config: createConfigRuntime(workspace, configRoot),
+	});
+	try {
+		await runtime.startSession({
+			sessionId: "namespace-escape-session",
+			workspace,
+		});
+		expect(runtime.getToolDescriptors("namespace-escape-session")).toEqual([]);
+		expect(runtime.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					message: expect.stringContaining(
+						"cannot override its namespaced model-visible name"
+					),
+					sourcePath: pluginPathWithCustomName,
+				}),
+			])
+		);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("a rejected later registration preserves prior tools and reports a diagnostic", async () => {
+	const pluginPathWithLateFailure = path.resolve(
+		import.meta.dir,
+		"../fixtures/late-registration-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [path.relative(workspace, pluginPathWithLateFailure)],
+		config: createConfigRuntime(workspace, configRoot),
+	});
+	try {
+		expect(
+			runtime
+				.getToolDescriptors("late-registration-session")
+				.map(({ name }) => name)
+		).toEqual(["plugin_late_registration_valid_tool"]);
+		expect(runtime.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					message: expect.stringContaining("Plugin Tool registration failed"),
+					sourcePath: pluginPathWithLateFailure,
+				}),
+			])
+		);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("Turn-scoped Plugin registrations override, mask, and preserve outer tools by scope", async () => {
+	const scopedPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/scoped-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [path.relative(workspace, scopedPath)],
+		config: createConfigRuntime(workspace, configRoot),
+	});
+	const sessionContext = { sessionId: "scope-session", workspace };
+	const turnContext = {
+		...sessionContext,
+		agentId: agentIdSchema.parse("build"),
+		signal: new AbortController().signal,
+	};
+
+	try {
+		await runtime.startSession(sessionContext);
+		const first = await runtime.resolveToolsForTurn(turnContext);
+		const firstTool = first[0];
+		const second = await runtime.resolveToolsForTurn(turnContext);
+		const third = await runtime.resolveToolsForTurn(turnContext);
+		const callContext = {
+			agentId: agentIdSchema.parse("build"),
+			sessionId: sessionContext.sessionId,
+			signal: new AbortController().signal,
+			toolCallId: toolCallId("scope-tool-call"),
+			registerBackgroundWork: () => undefined,
+			workspace,
+		};
+
+		expect(
+			runtime.diagnostics.filter(({ sourcePath }) => sourcePath === scopedPath)
+		).toEqual([]);
+		expect(first.map(({ name, description }) => [name, description])).toEqual([
+			["plugin_scoped_lookup", "Turn version."],
+		]);
+		expect(firstTool?.description).toBe("Turn version.");
+		expect(second).toEqual([]);
+		expect(third[0]?.description).toBe("Session version.");
+		expect(firstTool?.handler).toBeDefined();
+		expect(await firstTool?.handler({}, callContext)).toMatchObject({
+			output: "turn",
+			type: "success",
+		});
+		expect(await third[0]?.handler({}, callContext)).toMatchObject({
+			output: "session",
+			type: "success",
+		});
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("a failed pre-Agent-Turn hook omits only that Plugin's tools", async () => {
+	const failingPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/failing-pre-turn-plugin.ts"
+	);
+	const healthyPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/healthy-pre-turn-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [
+			path.relative(workspace, failingPath),
+			path.relative(workspace, healthyPath),
+		],
+		config: createConfigRuntime(workspace, configRoot),
+	});
+	const session = { sessionId: "isolated-turn-session", workspace };
+
+	try {
+		await runtime.startSession(session);
+		const tools = await runtime.resolveToolsForTurn({
+			...session,
+			agentId: agentIdSchema.parse("build"),
+			signal: new AbortController().signal,
+		});
+
+		expect(tools.map(({ name }) => name)).toEqual([
+			"plugin_healthy_pre_turn_lookup",
+		]);
+		expect(runtime.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					message: expect.stringContaining("failed; its tools were omitted"),
+					sourcePath: failingPath,
+				}),
+			])
+		);
+	} finally {
+		await runtime.shutdown();
 	}
 });

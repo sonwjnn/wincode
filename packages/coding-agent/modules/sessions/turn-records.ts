@@ -23,8 +23,6 @@ import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
 import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import { RetiredModelError } from "../model-target";
-import type { SessionMessage } from "./message";
-import { toDurableSessionMessageRecord } from "./storage/session-record";
 
 /**
  * Durable Session Record synthesis for one Agent Turn: non-terminal assistant
@@ -104,62 +102,6 @@ const assistantRecordMetadata = (
 		providerId: turn.model.providerId,
 	},
 });
-
-/** Persists assistant text emitted before a non-terminal follow-up boundary. */
-export const buildAssistantCheckpointSessionRecord = ({
-	assistantMessage,
-	agentId,
-	effort,
-	model,
-	reasoningMode,
-	sourceUserMessageId,
-	turnId,
-}: {
-	assistantMessage: SessionMessage;
-	agentId: AgentId;
-	effort?: SessionRecord["model"]["effort"];
-	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
-	reasoningMode?: SessionRecord["model"]["reasoningMode"];
-	sourceUserMessageId?: SessionMessageId;
-	turnId: AgentTurnId;
-}): SessionRecord | undefined => {
-	const durableMessage = toDurableSessionMessageRecord({
-		...assistantMessage,
-		metadata: {
-			agent: agentId,
-			...omitUndefined({
-				effort,
-				model: assistantMessage.metadata?.model,
-				reasoningMode,
-				sourceUserMessageId,
-			}),
-		},
-		parts: assistantMessage.parts.filter(
-			(part) => part.type === "text" && part.text.length > 0
-		),
-		role: "assistant",
-	});
-	if (
-		durableMessage === undefined ||
-		durableMessage.role !== "assistant" ||
-		durableMessage.parts.length === 0
-	) {
-		return;
-	}
-	return {
-		agentId,
-		id: toSessionRecordId(`record-${randomUUIDv7()}`),
-		messages: [durableMessage],
-		model: {
-			modelId: model.modelId,
-			providerId: model.providerId,
-			...omitUndefined({ effort, reasoningMode }),
-		},
-		outcome: { kind: "assistant-checkpoint" },
-		turnId,
-		version: SESSION_RECORD_VERSION,
-	};
-};
 
 /**
  * Builds one durable assistant row for a terminal Agent Turn. Tool Call rows

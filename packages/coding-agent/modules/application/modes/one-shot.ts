@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import {
 	type AgentId,
 	type AgentTurnEvent,
@@ -22,24 +23,36 @@ import {
 	type ReasoningSelection,
 } from "@wincode/ai/models";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
+import { selectOptionalApplicationPlugins } from "@/modules/application/plugin-composition";
+import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import {
+	createSessionSdkChildFactory,
+	type SessionSdkOptions,
+} from "@/modules/sessions/sdk";
+import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
 import { resolveWorkspaceRoot } from "@/modules/tools";
-import type { ConfigRuntime } from "@/shared/config/config-store";
+import {
+	type ConfigRuntime,
+	createConfigStore,
+} from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
 import { createPermissionService } from "../../../modules/permissions/permission-service";
-import type { DelegationTask } from "../../../modules/sessions/delegation/types";
 import type { SessionCapabilitiesAssembly } from "../../../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
 import type {
 	SessionHost,
 	SessionHostManager,
-	SessionHostManagerEvent,
 } from "../../../modules/sessions/host/types";
 import type { SessionMessage } from "../../../modules/sessions/message";
 import { createSessionUserMessage } from "../../../modules/sessions/message";
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
+import {
+	createApplicationPluginComposition,
+	type OptionalApplicationPluginId,
+} from "../plugin-composition";
 import { projectAgentEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
 import { InvocationError } from "./types";
@@ -51,20 +64,26 @@ type OneShotCompositionInput = Readonly<{
 	configRuntime?: ConfigRuntime;
 	cwd: string;
 	pluginRuntime?: PluginRuntime;
+	enabledPlugins?: readonly OptionalApplicationPluginId[];
 	workspace: string;
+}>;
+
+type OneShotComposition = Readonly<{
+	assembly: SessionCapabilitiesAssembly;
+	waitForPluginWork?: (sessionId: string) => Promise<void>;
 }>;
 
 type OneShotDependencies = Readonly<{
 	composeCapabilities?: (
 		input: OneShotCompositionInput
-	) => Promise<SessionCapabilitiesAssembly>;
+	) => Promise<OneShotComposition>;
 }>;
 
-const composeOneShotCapabilities = (
+const composeOneShotCapabilities = async (
 	context: ApplicationContext,
 	workspace: string,
 	compose: NonNullable<OneShotDependencies["composeCapabilities"]>
-): Promise<SessionCapabilitiesAssembly> =>
+): Promise<OneShotComposition> =>
 	compose({
 		autoApproval: context.invocation.auto,
 		cwd: context.cwd,
@@ -72,6 +91,9 @@ const composeOneShotCapabilities = (
 			configRuntime: context.configRuntime,
 			pluginRuntime: context.pluginRuntime,
 		}),
+		enabledPlugins: selectOptionalApplicationPlugins(
+			context.invocation.disabledPlugins
+		),
 		workspace,
 	});
 
@@ -307,16 +329,60 @@ const composeDefaultCapabilities = async ({
 	configRuntime,
 	cwd,
 	pluginRuntime,
+	enabledPlugins = ["mcp", "subagents"],
 	workspace,
-}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> =>
-	createSessionCapabilities({
+}: OneShotCompositionInput): Promise<OneShotComposition> => {
+	const configStore = configRuntime?.configStore ?? createConfigStore();
+	const composition = createApplicationPluginComposition({
+		configStore,
+		createMcpResource: pluginRuntime === undefined,
+		enabledPlugins,
+		workspace,
+	});
+	const resolvedPluginRuntime =
+		pluginRuntime ??
+		(await loadPlugins({
+			bundledPlugins: composition.bundledPlugins,
+			cliPaths: [],
+			config: configRuntime ?? {
+				configStore,
+				cwd,
+				homeRoot: os.homedir(),
+				workspace,
+			},
+		}));
+	let sessionSdk: SessionSdkChildFactory | undefined;
+	const assembly = await createSessionCapabilities({
 		approvalMode: "non-interactive",
+		configStore,
 		cwd,
 		...(configRuntime === undefined ? {} : { configRuntime }),
-		...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+		pluginRuntime: resolvedPluginRuntime,
+		getSessionSdk: () => sessionSdk,
+		turnToolResolver: composition.turnToolResolver,
 		permissionService: createPermissionService({ autoApproval }),
 		workspace,
 	});
+	sessionSdk = createSessionSdkChildFactory(
+		{
+			configStore,
+			configRuntime: configRuntime ?? assembly.capabilities.getConfig(),
+			connections: assembly.capabilities.getConnections(),
+			cwd,
+			registry: assembly.capabilities.getRegistry(),
+			runtimeFactory: assembly.capabilities.getRuntime,
+			store: assembly.store,
+			workspace,
+		} satisfies SessionSdkOptions,
+		assembly.capabilities.getSessionHostManager(),
+		assembly.store
+	);
+	return {
+		assembly,
+		waitForPluginWork: (sessionId) =>
+			resolvedPluginRuntime.waitForBackgroundWork(sessionId),
+	};
+};
 
 const sendInputFor = (
 	selection: ResolvedSelection,
@@ -342,30 +408,17 @@ const sendInputFor = (
 
 const emitJsonEvent = (
 	context: ApplicationContext,
-	event: AgentTurnEvent
+	event: AgentTurnEvent,
+	sessionId?: SessionId
 ): void => {
-	context.stdout.write(`${JSON.stringify(projectAgentEvent(event))}\n`);
-};
-const emitJsonManagerEvent = (
-	context: ApplicationContext,
-	event: SessionHostManagerEvent
-): void => {
-	if (event.type === "session-approval-notice") {
-		return;
-	}
-	const projected =
-		event.type === "agent-turn-event"
-			? {
-					event: projectAgentEvent(event.event),
-					sessionId: event.sessionId,
-					type: "delegated-agent-turn-event",
-				}
-			: {
-					...(event.report === undefined ? {} : { report: event.report }),
-					task: event.task,
-					type: "delegation-task",
-				};
-	context.stdout.write(`${JSON.stringify(projected)}\n`);
+	const projectedEvent = projectAgentEvent(event);
+	context.stdout.write(
+		`${JSON.stringify(
+			sessionId === undefined
+				? projectedEvent
+				: { ...projectedEvent, sessionId }
+		)}\n`
+	);
 };
 const initializeOneShotSession = async (
 	context: ApplicationContext,
@@ -434,29 +487,34 @@ const runOneShot = async (
 	const workspace = resolveWorkspaceRoot(context.cwd);
 	const compose =
 		dependencies.composeCapabilities ?? composeDefaultCapabilities;
-	const assembly = await composeOneShotCapabilities(
+	const oneShotComposition = await composeOneShotCapabilities(
 		context,
 		workspace,
 		compose
 	);
+	const { assembly } = oneShotComposition;
 	let host: SessionHost | undefined;
 	let manager: SessionHostManager | undefined;
+	let sessionId: SessionId | undefined;
 	let removeEventListener: (() => void) | undefined;
-	let removeManagerEventListener: (() => void) | undefined;
 	let terminalFailureMessage: string | undefined;
 	let terminalSucceeded = false;
 	try {
-		const { initialMessage, sessionId } = await initializeOneShotSession(
+		const initializedSession = await initializeOneShotSession(
 			context,
 			assembly,
 			text
 		);
-		manager = assembly.capabilities.getSessionHostManager();
-		host = await manager.openHost({
+		sessionId = initializedSession.sessionId;
+		const sessionHostManager = assembly.capabilities.getSessionHostManager();
+		manager = sessionHostManager;
+		host = await sessionHostManager.openHost({
 			capabilities: assembly.capabilities,
 			executionMode: format,
 			sessionId,
+			view: true,
 		});
+		const { initialMessage } = initializedSession;
 		const registry = assembly.capabilities.getRegistry();
 		const restored = host.getSelection();
 		const selection = resolveSelection({
@@ -467,37 +525,18 @@ const runOneShot = async (
 			restored,
 			reasoningModeOption: context.invocation.reasoningMode,
 		});
-		const taskSessions = new Set<SessionId>([sessionId]);
-		const seenTaskStatuses = new Map<
-			DelegationTask["id"],
-			DelegationTask["status"]
-		>();
-		if (format === "json") {
-			removeManagerEventListener = manager.onEvent((event) => {
-				if (
-					event.type === "agent-turn-event" &&
-					event.sessionId !== sessionId &&
-					taskSessions.has(event.sessionId)
-				) {
-					emitJsonManagerEvent(context, event);
-					return;
-				}
-				if (
-					event.type === "delegation-task" &&
-					taskSessions.has(event.task.parentSessionId)
-				) {
-					taskSessions.add(event.task.childSessionId);
-					seenTaskStatuses.set(event.task.id, event.task.status);
-					emitJsonManagerEvent(context, event);
-				}
-			});
-		}
-		removeEventListener = host.onEvent((event) => {
+		removeEventListener = sessionHostManager.onEvent((managedEvent) => {
+			if (managedEvent.type !== "agent-turn-event") {
+				return;
+			}
+			const { event } = managedEvent;
+			const isParentEvent = managedEvent.sessionId === sessionId;
 			if (
-				event.type === "agent-turn-completed" ||
-				event.type === "agent-turn-failed" ||
-				event.type === "agent-turn-cancelled" ||
-				event.type === "agent-turn-interrupted"
+				isParentEvent &&
+				(event.type === "agent-turn-completed" ||
+					event.type === "agent-turn-failed" ||
+					event.type === "agent-turn-cancelled" ||
+					event.type === "agent-turn-interrupted")
 			) {
 				if (event.type === "agent-turn-completed") {
 					terminalSucceeded = true;
@@ -507,8 +546,12 @@ const runOneShot = async (
 				}
 			}
 			if (format === "json") {
-				emitJsonEvent(context, event);
-			} else if (event.type === "text-delta") {
+				emitJsonEvent(
+					context,
+					event,
+					isParentEvent ? undefined : managedEvent.sessionId
+				);
+			} else if (isParentEvent && event.type === "text-delta") {
 				context.stdout.write(event.delta);
 			}
 		});
@@ -521,30 +564,7 @@ const runOneShot = async (
 			if (outcome.rejected) {
 				throw new Error(outcome.reason);
 			}
-			const tasks = await manager.delegation.waitForTasks(
-				assembly.store,
-				sessionId
-			);
-			for (const task of tasks) {
-				if (seenTaskStatuses.get(task.id) !== task.status) {
-					seenTaskStatuses.set(task.id, task.status);
-					taskSessions.add(task.childSessionId);
-					if (format === "json") {
-						emitJsonManagerEvent(context, {
-							task,
-							type: "delegation-task",
-						});
-					}
-				}
-			}
-			const unfinishedTask = tasks.find((task) => task.status !== "succeeded");
-			if (unfinishedTask !== undefined) {
-				terminalSucceeded = false;
-				terminalFailureMessage =
-					unfinishedTask.status === "awaiting_report"
-						? `Delegation Task ${unfinishedTask.id} is awaiting_report. One-Shot mode will not continue the parent Session automatically; submit its report explicitly.`
-						: `Delegation Task ${unfinishedTask.id} ended with status '${unfinishedTask.status}'.`;
-			}
+			await oneShotComposition.waitForPluginWork?.(sessionId);
 			if (!terminalSucceeded) {
 				if (format === "json" && terminalFailureMessage !== undefined) {
 					return { terminalFailureMessage, terminalSucceeded: false };
@@ -559,8 +579,13 @@ const runOneShot = async (
 		return { terminalSucceeded };
 	} finally {
 		removeEventListener?.();
-		removeManagerEventListener?.();
-		await assembly.shutdown();
+		try {
+			if (manager !== undefined && sessionId !== undefined) {
+				await manager.releaseView(sessionId);
+			}
+		} finally {
+			await assembly.shutdown();
+		}
 	}
 };
 
@@ -600,4 +625,8 @@ export const runJsonMode = async (
 	}
 };
 
-export type { OneShotCompositionInput, OneShotDependencies };
+export type {
+	OneShotComposition,
+	OneShotCompositionInput,
+	OneShotDependencies,
+};

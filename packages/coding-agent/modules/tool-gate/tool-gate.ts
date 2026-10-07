@@ -1,14 +1,12 @@
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentId, ToolCallId } from "@wincode/agent-core";
-import { mcpDeniedByPolicyText } from "@wincode/mcp";
 import {
 	isObjectLike,
 	isPlainObject,
 	isString,
 	isUndefined,
 } from "@wincode/utils";
-import { MCP_PERMISSION_RESOURCE } from "@/modules/mcp/capability";
 import { resolveApproval } from "@/modules/permissions/approval-resolution";
 import { canonicalizeResource } from "@/modules/permissions/canonical";
 import {
@@ -30,6 +28,7 @@ import {
 	type ShellCommandNode,
 } from "@/modules/permissions/shell-command";
 import type { SessionApprovalOutcome } from "@/modules/sessions/approval-contract";
+import type { SessionSdkCapabilityCeiling } from "@/modules/sessions/sdk-contract";
 import type { WorkspacePolicy } from "@/modules/tools";
 import {
 	byteLength,
@@ -54,7 +53,7 @@ import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
  * clears the call to run; `deny` and `reject` block it and carry the
  * model-visible error text in the family's exact wording. `reject` outcomes
  * additionally carry the bounded correction feedback where the family surfaces
- * it (coding, shell, and MCP).
+ * it (coding and shell).
  */
 export type GateOutcome =
 	| {
@@ -70,28 +69,15 @@ export type GateOutcome =
 /**
  * One tool call to gate. `coding` and `shell` resolve their own resource,
  * policy decision, and external-directory boundary from the raw call input.
- * `mcp` carries the independent Agent and server decisions for composition by
- * the gate. `plugin` carries the calling Agent's Plugin Tool decision. `skill`
- * carries catalog availability so denies settle before an unavailable lookup
- * while asks never prompt for an unavailable Skill.
+ * `plugin` carries the calling Agent's Plugin Tool decision. `skill` carries
+ * catalog availability so denies settle before an unavailable lookup while
+ * asks never prompt for an unavailable Skill.
  */
 export type GateCall =
 	| {
 			agentId?: AgentId;
 			family: "coding";
 			toolCall: { input: unknown; toolCallId: ToolCallId; toolName: string };
-	  }
-	| {
-			agentId?: AgentId;
-			family: "mcp";
-			action: string;
-			agentDecision: PermissionDecision;
-			description: string;
-			input: unknown;
-			safety: boolean;
-			serverDecision: PermissionDecision;
-			toolCallId: ToolCallId;
-			toolName: string;
 	  }
 	| {
 			agentId?: AgentId;
@@ -134,6 +120,7 @@ export type ToolGateApprovalPort = {
 
 export type ToolGateDeps = {
 	approvals: ToolGateApprovalPort;
+	capabilityCeiling?: SessionSdkCapabilityCeiling;
 	onAbort?: (request: ToolApprovalRequest) => void;
 	recoveryWarning?: () => Promise<string | undefined>;
 	resolvePermission: (agentId?: AgentId) => Promise<ToolPermission>;
@@ -146,6 +133,19 @@ export type ToolGateDeps = {
 	sandbox: WorkspacePolicy;
 	service: PermissionService;
 	sessionId?: string;
+};
+
+const toolNameForGateCall = (call: GateCall): string => {
+	switch (call.family) {
+		case "coding":
+			return call.toolCall.toolName;
+		case "shell":
+			return "shell";
+		case "skill":
+			return "skill";
+		default:
+			return call.toolName;
+	}
 };
 
 const STATIC_TOOL_LABELS = {
@@ -270,10 +270,7 @@ const staticRejectionText = (
 		? `${label} was not approved: ${resource}`
 		: `${label} was not approved: ${resource} — ${feedback}`;
 
-const mcpRejectionText = (toolName: string, feedback?: string): string =>
-	isUndefined(feedback)
-		? `MCP tool '${toolName}' was not approved`
-		: `MCP tool '${toolName}' was not approved — ${feedback}`;
+const PLUGIN_PERMISSION_RESOURCE = "*";
 
 const pluginDenialText = (toolName: string): string =>
 	`Plugin Tool '${toolName}' is denied by policy`;
@@ -460,6 +457,7 @@ const withErrorText = (
  */
 export const createToolGate = ({
 	approvals,
+	capabilityCeiling,
 	onAbort,
 	recoveryWarning,
 	resolvePermission,
@@ -1090,60 +1088,6 @@ export const createToolGate = ({
 		);
 	};
 
-	/**
-	 * Gates one dynamic MCP tool call through the shared approval path, keyed by
-	 * the tool's logical name and the single `*` resource. The composed decision
-	 * already baked the Agent+server policy and any safety ceiling into the
-	 * snapshot tool, so grants and auto approval may satisfy an ordinary ask, a
-	 * safety ask always prompts, and an explicit deny is never bypassed. An
-	 * "always" outcome grants the exact logical name.
-	 */
-	const gateMcpToolCall = async (
-		call: Extract<GateCall, { family: "mcp" }>,
-		doomAsk: boolean
-	) => {
-		const composedDecision = composePermissionDecisions(
-			call.serverDecision,
-			call.agentDecision
-		);
-		const decision =
-			call.safety && composedDecision !== "deny" ? "ask" : composedDecision;
-		const settled = await settleApproval(
-			{
-				checks: [
-					{
-						action: call.action,
-						decision,
-						resource: MCP_PERMISSION_RESOURCE,
-					},
-				],
-				doomAsk,
-				request: {
-					description: call.description,
-					identity: [
-						{ label: "tool", value: call.action },
-						{ label: "resource", value: MCP_PERMISSION_RESOURCE },
-					],
-					input: call.input,
-					safety: call.safety,
-					toolCallId: call.toolCallId,
-				},
-				safety: call.safety,
-			},
-			approvalDeps,
-			() => service.grant(call.action, MCP_PERMISSION_RESOURCE)
-		);
-		return withErrorText(
-			settled,
-			mcpDeniedByPolicyText(call.toolName),
-			(feedback) => mcpRejectionText(call.toolName, feedback)
-		);
-	};
-
-	/**
-	 * Gates one Plugin Tool call. An ask remains manual even when --auto is
-	 * enabled, so enabling trusted code cannot silently authorize its calls.
-	 */
 	const gatePluginToolCall = async (
 		call: Extract<GateCall, { family: "plugin" }>,
 		doomAsk: boolean
@@ -1156,7 +1100,7 @@ export const createToolGate = ({
 					{
 						action: call.action,
 						decision,
-						resource: MCP_PERMISSION_RESOURCE,
+						resource: PLUGIN_PERMISSION_RESOURCE,
 					},
 				],
 				doomAsk,
@@ -1165,7 +1109,7 @@ export const createToolGate = ({
 					identity: [
 						{ label: "tool", value: call.action },
 						{ label: "plugin", value: call.pluginId },
-						{ label: "resource", value: MCP_PERMISSION_RESOURCE },
+						{ label: "resource", value: PLUGIN_PERMISSION_RESOURCE },
 					],
 					input: call.input,
 					safety: call.safety,
@@ -1174,7 +1118,7 @@ export const createToolGate = ({
 				safety: call.safety,
 			},
 			approvalDeps,
-			() => service.grant(call.action, MCP_PERMISSION_RESOURCE)
+			() => service.grant(call.action, PLUGIN_PERMISSION_RESOURCE)
 		);
 		return withErrorText(settled, pluginDenialText(call.toolName), () =>
 			pluginRejectionText(call.toolName)
@@ -1233,9 +1177,6 @@ export const createToolGate = ({
 	let lastDoomKey: string | undefined;
 	let doomRepeatCount = 0;
 	const doomKeyOf = (call: GateCall): string => {
-		if (call.family === "mcp") {
-			return `mcp:${call.action}:${JSON.stringify(call.input)}`;
-		}
 		if (call.family === "plugin") {
 			return `plugin:${call.action}:${JSON.stringify(call.input)}`;
 		}
@@ -1262,8 +1203,15 @@ export const createToolGate = ({
 	};
 
 	const gate = async (call: GateCall): Promise<GateOutcome> => {
-		if (call.family === "mcp") {
-			return gateMcpToolCall(call, trackDoomLoop(call));
+		const toolName = toolNameForGateCall(call);
+		if (
+			capabilityCeiling !== undefined &&
+			!capabilityCeiling.tools.includes(toolName)
+		) {
+			return {
+				errorText: `Tool '${toolName}' is outside the Session capability ceiling.`,
+				kind: "deny",
+			};
 		}
 		if (call.family === "plugin") {
 			return gatePluginToolCall(call, trackDoomLoop(call));

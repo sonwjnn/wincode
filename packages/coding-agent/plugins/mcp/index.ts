@@ -1,26 +1,13 @@
-import type {
-	ResolvedTool,
-	ToolCallId,
-	ToolCallOutput,
-	ToolExecutorOptions,
-} from "@wincode/agent-core";
-import {
-	createMcpRegistry,
-	type McpRegistryDeps,
-	type McpSnapshotTool,
-} from "@wincode/mcp";
-import { isUndefined, omitUndefined } from "@wincode/utils";
-import type { Plugin } from "@/modules/application/plugins/registry";
-import type {
-	McpToolProviderContext,
-	TurnToolPluginContext,
-} from "@/modules/application/plugins/turn-context";
+import type { ToolCallOutput } from "@wincode/agent-core";
+import { createMcpRegistry, type McpRegistryDeps } from "@wincode/mcp";
+import { omitUndefined } from "@wincode/utils";
 import {
 	createMcpSessionCapability,
 	type McpPluginResource,
 } from "@/modules/mcp/capability";
 import { createWincodeMcpConfigLoader } from "@/modules/mcp/config";
-import { evaluateGateWithAbort } from "@/modules/tool-gate/evaluate-with-abort";
+import { withBundledToolName } from "@/modules/plugins/bundled-tools";
+import type { PluginFactory } from "@/modules/plugins/public";
 import type { ConfigStore } from "@/shared/config/config-store";
 
 export type McpPluginResourceDependencies = Omit<
@@ -62,80 +49,57 @@ export const createMcpPluginResource = (
 	});
 };
 
-const createMcpTools = ({
-	agentId,
-	executeMcpTool,
-	gate,
-	mcpSnapshot: snapshot,
-}: McpToolProviderContext): readonly ResolvedTool[] => {
-	if (isUndefined(snapshot) || isUndefined(executeMcpTool)) {
-		return [];
-	}
-	return snapshot.manifest.flatMap((entry) => {
-		const tool: McpSnapshotTool | undefined = snapshot.tools.get(entry.name);
-		if (isUndefined(tool)) {
-			return [];
-		}
-		return [
-			{
-				definition: {
-					description: entry.description,
-					inputSchema: { jsonSchema: entry.inputSchema },
-					name: entry.name,
-				},
-				execute: async (
-					{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
-					{ signal }: ToolExecutorOptions = {}
-				): Promise<ToolCallOutput> => {
-					const outcome = await evaluateGateWithAbort(
-						() =>
-							gate.gate({
-								agentDecision: tool.agentDecision,
-								agentId,
-								action: tool.logicalName,
-								description: tool.description,
-								family: "mcp",
-								input,
-								safety: tool.safety,
-								serverDecision: tool.serverDecision,
-								toolCallId,
-								toolName: entry.name,
-							}),
-						signal
-					);
-					if (outcome.kind !== "allow") {
-						return {
-							errorText: outcome.errorText,
-							type: "failure",
-						};
-					}
-					return executeMcpTool(snapshot, entry.name, input, signal);
-				},
-			} satisfies ResolvedTool,
-		];
-	});
-};
+const failure = (errorText: string): ToolCallOutput => ({
+	errorText,
+	type: "failure",
+});
 
-const registerMcpTools: Plugin<TurnToolPluginContext> = (api) => {
-	api.registerToolProvider({
-		id: "mcp-tools",
-		policyCategory: "mcp",
-		selectContext: (context): McpToolProviderContext => ({
-			agentId: context.agentId,
-			executeMcpTool: context.executeMcpTool,
-			gate: context.gate,
-			mcpSnapshot: context.mcpSnapshot,
-		}),
-		adapter: {
-			policyCategory: "mcp",
-			resolve: createMcpTools,
-		},
-	});
-};
-
-/** MCP is one built-in Plugin: it registers tools and owns configured Servers. */
-export const mcpPlugin = Object.freeze(
-	Object.assign(registerMcpTools, {
-		createResource: createMcpPluginResource,
-	})
-);
+/** Creates the MCP Plugin; the Plugin owns its registry and turn snapshots. */
+export const createMcpPluginFactory =
+	(resource: McpPluginResource): PluginFactory =>
+	async (api) => {
+		const plugin = api.definePlugin({ id: "mcp" });
+		plugin.registerResource("runtime", resource);
+		plugin.onShutdown(() => resource.close());
+		await resource.initialize();
+		plugin.onBeforeAgentTurn(async (context, registration) => {
+			const policy = await context.getAgentPermissionPolicy?.();
+			if (policy === undefined) {
+				return;
+			}
+			const snapshot = await resource.capability.createSnapshot(
+				context.agentId,
+				policy
+			);
+			context.registerTurnCleanup?.(() =>
+				resource.capability.releaseSnapshot?.(snapshot)
+			);
+			for (const entry of snapshot.manifest) {
+				const tool = snapshot.tools.get(entry.name);
+				if (tool === undefined) {
+					continue;
+				}
+				registration.registerTool(
+					withBundledToolName(
+						{
+							description: entry.description,
+							inputSchema: { jsonSchema: entry.inputSchema },
+							name: entry.name,
+							permissionAction: tool.logicalName,
+							permissionDecision: tool.serverDecision,
+							permissionResource: "*",
+							permissionSafety: tool.safety,
+							handler: async (input, toolContext) => {
+								const execute = resource.capability.executeToolCall;
+								if (execute === undefined) {
+									return failure("MCP execution is unavailable.");
+								}
+								return execute(snapshot, entry.name, input, toolContext.signal);
+							},
+						},
+						entry.name
+					)
+				);
+			}
+		});
+	};

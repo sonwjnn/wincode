@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { mcpDeniedByPolicyText } from "@wincode/mcp";
 import { isUndefined } from "@wincode/utils";
 import {
 	applyManualApprovalSafetyCeiling,
@@ -39,10 +38,12 @@ const createGate = (
 	approvals: ToolGateApprovalPort = allowOnceApproval().approvals,
 	onAbort?: Parameters<typeof createToolGate>[0]["onAbort"],
 	service: PermissionService = createPermissionService(),
-	resourceLimits: ToolResourceLimits = getToolResourceLimits()
+	resourceLimits: ToolResourceLimits = getToolResourceLimits(),
+	capabilityCeiling?: { readonly tools: readonly string[] }
 ) =>
 	createToolGate({
 		approvals,
+		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 		onAbort,
 		resolvePermission: async () => permission,
 		resolveResourceLimits: async () => resourceLimits,
@@ -89,6 +90,24 @@ const allowOnceApproval = (): {
 };
 
 describe("shell posture defaults", () => {
+	test("a child capability ceiling denies a Tool Call even when it bypasses visibility", async () => {
+		const { approvals, requests } = allowOnceApproval();
+		const gate = createGate(
+			createToolPermission(),
+			approvals,
+			undefined,
+			createPermissionService(),
+			getToolResourceLimits(),
+			{ tools: ["submit_result"] }
+		);
+
+		await expect(gate.gate(shellCall("pwd"))).resolves.toEqual({
+			errorText: "Tool 'shell' is outside the Session capability ceiling.",
+			kind: "deny",
+		});
+		expect(requests).toHaveLength(0);
+	});
+
 	test("pwd, ls -la, and git status run without any approval", async () => {
 		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(createToolPermission(), approvals);
@@ -983,28 +1002,28 @@ describe("doom_loop", () => {
 		expect(requests).toHaveLength(1);
 	});
 
-	test("doom_loop applies to MCP tools and a differing input resets the run", async () => {
+	test("doom_loop applies to Plugin Tools and a differing input resets the run", async () => {
 		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(createToolPermission(), approvals);
-		const mcpCall = (text: string, toolCallId: string) => ({
+		const pluginCall = (text: string, toolCallId: string) => ({
 			action: "demo_echo",
-			agentDecision: "allow" as const,
 			description: "Echo",
-			family: "mcp" as const,
+			family: "plugin" as const,
 			input: { text },
+			pluginId: "mcp",
 			safety: false,
-			serverDecision: "allow" as const,
+			decision: "allow" as const,
 			toolCallId: makeToolCallId(toolCallId),
 			toolName: "mcp_demo_echo",
 		});
-		await gate.gate(mcpCall("hello", "call-1"));
-		await gate.gate(mcpCall("hello", "call-2"));
+		await gate.gate(pluginCall("hello", "call-1"));
+		await gate.gate(pluginCall("hello", "call-2"));
 		// A differing input resets the run.
-		await gate.gate(mcpCall("other", "call-3"));
-		await gate.gate(mcpCall("hello", "call-4"));
-		await gate.gate(mcpCall("hello", "call-5"));
+		await gate.gate(pluginCall("other", "call-3"));
+		await gate.gate(pluginCall("hello", "call-4"));
+		await gate.gate(pluginCall("hello", "call-5"));
 		// The third identical echo is an ordinary ask, allow-once runs it.
-		await expect(gate.gate(mcpCall("hello", "call-6"))).resolves.toEqual({
+		await expect(gate.gate(pluginCall("hello", "call-6"))).resolves.toEqual({
 			kind: "allow",
 		});
 		expect(requests).toHaveLength(1);
@@ -1014,14 +1033,14 @@ describe("doom_loop", () => {
 		const { approvals, requests } = allowOnceApproval();
 		const gate = createGate(createToolPermission(), approvals);
 
-		const mcpCall = (toolCallId: string) => ({
+		const pluginCall = (toolCallId: string) => ({
 			action: "demo_echo",
-			agentDecision: "allow" as const,
 			description: "Echo",
-			family: "mcp" as const,
+			family: "plugin" as const,
 			input: { text: "hello" },
+			pluginId: "mcp",
 			safety: false,
-			serverDecision: "allow" as const,
+			decision: "allow" as const,
 			toolCallId: makeToolCallId(toolCallId),
 			toolName: "mcp_demo_echo",
 		});
@@ -1036,8 +1055,8 @@ describe("doom_loop", () => {
 
 		await gate.gate(shellCall("pwd", "call-1"));
 		await gate.gate(shellCall("pwd", "call-2"));
-		// An MCP call is a different family and resets the repeat run.
-		await gate.gate(mcpCall("call-3"));
+		// A Plugin call is a different family and resets the repeat run.
+		await gate.gate(pluginCall("call-3"));
 		// A coding tool call is a different tool and resets the run again.
 		await gate.gate(readCall("call-4"));
 		await gate.gate(readCall("call-5"));
@@ -1140,7 +1159,7 @@ test("an unavailable ask-gated Skill does not open approval", async () => {
 	expect(requests).toHaveLength(0);
 });
 
-test("MCP policy and safety are composed inside the gate", async () => {
+test("Plugin Tool safety ceiling is enforced by the generic gate", async () => {
 	const requests: ToolApprovalRequest[] = [];
 	const gate = createGate(
 		createToolPermission(),
@@ -1150,20 +1169,20 @@ test("MCP policy and safety are composed inside the gate", async () => {
 	await expect(
 		gate.gate({
 			action: "demo_echo",
-			agentDecision: "allow",
 			description: "Echo",
-			family: "mcp",
+			family: "plugin",
 			input: {},
+			pluginId: "mcp",
 			safety: true,
-			serverDecision: "allow",
-			toolCallId: makeToolCallId("call-mcp"),
+			decision: "allow",
+			toolCallId: makeToolCallId("call-plugin"),
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({ kind: "allow" });
 	expect(requests).toHaveLength(1);
 });
 
-test("rejects one approval without notifying the session abort path", async () => {
+test("rejects one Plugin Tool approval without notifying the session abort path", async () => {
 	let abortCount = 0;
 	const gate = createGate(
 		createToolPermission(),
@@ -1176,23 +1195,23 @@ test("rejects one approval without notifying the session abort path", async () =
 	await expect(
 		gate.gate({
 			action: "demo_echo",
-			agentDecision: "ask",
 			description: "Echo",
-			family: "mcp",
+			family: "plugin",
 			input: {},
+			pluginId: "mcp",
 			safety: false,
-			serverDecision: "allow",
+			decision: "ask",
 			toolCallId: makeToolCallId("call-rejected"),
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({
-		errorText: "MCP tool 'mcp_demo_echo' was not approved",
+		errorText: "Plugin Tool 'mcp_demo_echo' was not approved",
 		kind: "reject",
 	});
 	expect(abortCount).toBe(0);
 });
 
-test("abort notifies the session with the active tool call", async () => {
+test("Plugin Tool abort notifies the session with the active tool call", async () => {
 	let abortedToolCallId: string | undefined;
 	const gate = createGate(
 		createToolPermission(),
@@ -1205,17 +1224,17 @@ test("abort notifies the session with the active tool call", async () => {
 	await expect(
 		gate.gate({
 			action: "demo_echo",
-			agentDecision: "ask",
 			description: "Echo",
-			family: "mcp",
+			family: "plugin",
 			input: {},
+			pluginId: "mcp",
 			safety: false,
-			serverDecision: "allow",
+			decision: "ask",
 			toolCallId: makeToolCallId("call-aborted"),
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({
-		errorText: "MCP tool 'mcp_demo_echo' was not approved",
+		errorText: "Plugin Tool 'mcp_demo_echo' was not approved",
 		kind: "reject",
 	});
 	expect(abortedToolCallId).toBe("call-aborted");
@@ -1245,23 +1264,23 @@ test("identifies an explicit Skill abort without an in-flight tool call", async 
 	expect(abortedToolCallId).toBeUndefined();
 });
 
-test("MCP denial wording is the shared registry constant", async () => {
+test("Plugin Tool denial wording is owned by the generic gate", async () => {
 	const gate = createGate(createToolPermission());
 
 	await expect(
 		gate.gate({
 			action: "demo_echo",
-			agentDecision: "deny",
 			description: "Echo",
-			family: "mcp",
+			family: "plugin",
 			input: {},
+			pluginId: "mcp",
 			safety: false,
-			serverDecision: "deny",
-			toolCallId: makeToolCallId("call-mcp"),
+			decision: "deny",
+			toolCallId: makeToolCallId("call-plugin"),
 			toolName: "mcp_demo_echo",
 		})
 	).resolves.toEqual({
-		errorText: mcpDeniedByPolicyText("mcp_demo_echo"),
+		errorText: "Plugin Tool 'mcp_demo_echo' is denied by policy",
 		kind: "deny",
 	});
 });
@@ -1404,7 +1423,6 @@ describe("approval settlement through the Agent Session", () => {
 			ports: fromPartial<AgentSessionPorts>({
 				inputScheduler: createTestInputScheduler(),
 				turnRunner: { requestOverheadTokens: () => 0 },
-				persistReportContinuationPaused: async () => undefined,
 				// Compaction is not part of this seam; the Agent Session only needs the port.
 				compaction: {
 					compact: () =>

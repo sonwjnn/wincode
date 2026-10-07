@@ -1,4 +1,5 @@
 import {
+	type AgentId,
 	type AgentTurn,
 	type AgentTurnId,
 	createAgentTurnAbortEvent,
@@ -118,11 +119,6 @@ export type SubmissionDeps = Readonly<{
 	takeSteeringMessages: (
 		execution: SessionExecution,
 		armedSkill: SessionSkillCatalog,
-		signal: AbortSignal
-	) => Promise<SessionMessage[]>;
-	/** Takes committed Delegation Reports at the Agent Runtime's safe follow-up boundary. */
-	takeDelegationReportMessages: (
-		execution: SessionExecution,
 		signal: AbortSignal
 	) => Promise<SessionMessage[]>;
 }>;
@@ -291,6 +287,7 @@ const createSubmitMetadata = (
 	...omitUndefined({
 		effort: input.effort,
 		reasoningMode: input.reasoningMode,
+		submissionId: input.submissionId,
 		skill: isUndefined(skill)
 			? undefined
 			: createSkillSnapshot(skill, "explicit"),
@@ -305,12 +302,15 @@ const prepareSubmitContext = async ({
 	signal,
 }: {
 	activeMessages: readonly SessionMessage[];
-	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
+	armSkill: (
+		agentId: AgentId,
+		signal: AbortSignal
+	) => Promise<SessionSkillCatalog>;
 	input: SessionSendInput;
 	resolveSkill: AgentSessionPorts["skills"]["resolveSkill"];
 	signal: AbortSignal;
 }): Promise<SubmitContextResult> => {
-	const armedSkill = await armSkill(signal);
+	const armedSkill = await armSkill(input.agent, signal);
 	if (signal.aborted) {
 		return { kind: "cancelled" };
 	}
@@ -485,7 +485,10 @@ const prepareSessionSubmission = async ({
 	resolveSkill,
 	signal,
 }: {
-	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
+	armSkill: (
+		agentId: AgentId,
+		signal: AbortSignal
+	) => Promise<SessionSkillCatalog>;
 	deps: SubmissionDeps;
 	input: SessionSendInput;
 	isContextContinuation: boolean;
@@ -632,7 +635,6 @@ const executionInputForSubmit = ({
 	sessionModel: input.sessionModel,
 	startedAt,
 	...omitUndefined({
-		parent: input.delegation,
 		sessionEffort: input.sessionEffort,
 		sessionReasoningMode: input.sessionReasoningMode,
 		sourceUserMessageId,
@@ -746,23 +748,16 @@ const applyPreparedMessages = (
 	assertSessionOpen(deps);
 };
 
-/**
- * Commits one Session Record of an execution: a delegated execution's records
- * carry no session-level selection, because the Subagent runs its own.
- */
+/** Commits one Session Record for a live Session execution. */
 const commitExecutionRecord = (
 	deps: SubmissionDeps,
 	execution: SessionExecution,
 	record: SessionRecord
 ): Promise<void> =>
 	deps.ports.commitRecord({
-		...(isUndefined(execution.parent)
-			? {
-					sessionModel: execution.sessionModel,
-					sessionEffort: execution.sessionEffort,
-					sessionReasoningMode: execution.sessionReasoningMode,
-				}
-			: {}),
+		sessionModel: execution.sessionModel,
+		sessionEffort: execution.sessionEffort,
+		sessionReasoningMode: execution.sessionReasoningMode,
 		record,
 		sessionId: deps.sessionId,
 	});
@@ -1343,10 +1338,6 @@ const runTurn = async ({
 				turnIsLive()
 					? deps.takeSteeringMessages(execution, context.armedSkill, signal)
 					: [],
-			takeFollowUpMessages: async () =>
-				turnIsLive()
-					? deps.takeDelegationReportMessages(execution, signal)
-					: [],
 		});
 		if (!turnIsLive()) {
 			await deps.acknowledgeSteeringMessages(execution.turnId, "failed");
@@ -1447,9 +1438,10 @@ export const createSubmissionPipeline = (
 	deps: SubmissionDeps
 ): SubmissionPipeline => {
 	const armSkill = async (
+		agentId: AgentId,
 		signal: AbortSignal
 	): Promise<SessionSkillCatalog> => {
-		const catalog = await deps.ports.skills.createTurnSkill();
+		const catalog = await deps.ports.skills.createTurnSkill(agentId);
 		if (signal.aborted || deps.isShutDown()) {
 			return catalog;
 		}

@@ -22,11 +22,21 @@ import type {
 	ApplicationContext,
 	TextWriter,
 } from "../modules/application/modes/types";
+import { createApplicationPluginComposition } from "../modules/application/plugin-composition";
 import { createPermissionService } from "../modules/permissions/permission-service";
-import type { SessionCapabilitiesAssembly } from "../modules/sessions/host/session-capabilities";
+import { loadPlugins } from "../modules/plugins/loader";
+
 import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
 import { createSessionHost } from "../modules/sessions/host/session-host";
-import type { ConfigSnapshot } from "../shared/config/config-store";
+import {
+	createSessionSdkChildFactory,
+	type SessionSdkOptions,
+} from "../modules/sessions/sdk";
+import type { SessionSdkChildFactory } from "../modules/sessions/sdk-contract";
+import {
+	type ConfigSnapshot,
+	createConfigStore,
+} from "../shared/config/config-store";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
@@ -89,23 +99,81 @@ const connections = {
 	],
 };
 
-const composeCapabilitiesFor =
+const composeCapabilitiesDetailedFor =
 	(agentRegistry: AgentRegistry) =>
 	async ({
 		autoApproval,
+		configRuntime,
 		cwd,
+		pluginRuntime: providedPluginRuntime,
 		workspace: root,
-	}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> =>
-		createSessionCapabilities({
+		enabledPlugins = ["mcp", "subagents"],
+	}: OneShotCompositionInput) => {
+		const configStore = configRuntime?.configStore ?? createConfigStore();
+		if (configRuntime === undefined) {
+			await configStore.setValue(
+				root,
+				"project",
+				["permission", "delegate"],
+				"allow"
+			);
+		}
+		const composition = createApplicationPluginComposition({
+			configStore,
+			createMcpResource: false,
+			enabledPlugins,
+			workspace: root,
+		});
+		const resolvedConfigRuntime = configRuntime ?? {
+			configStore,
+			cwd,
+			homeRoot: root,
+			workspace: root,
+		};
+		const pluginRuntime =
+			providedPluginRuntime ??
+			(await loadPlugins({
+				bundledPlugins: composition.bundledPlugins,
+				cliPaths: [],
+				config: resolvedConfigRuntime,
+			}));
+		let sessionSdk: SessionSdkChildFactory | undefined;
+		const assembly = await createSessionCapabilities({
 			approvalMode: "non-interactive",
 			cwd,
 			databasePath: path.join(root, "sessions.sqlite"),
 			permissionService: createPermissionService({ autoApproval }),
+			pluginRuntime,
+			getSessionSdk: () => sessionSdk,
 			registry: agentRegistry,
 			runtimeFactory: () => fakeRuntime,
+			turnToolResolver: composition.turnToolResolver,
 			workspace: root,
 			connections,
 		});
+		sessionSdk = createSessionSdkChildFactory(
+			{
+				configRuntime: resolvedConfigRuntime,
+				configStore,
+				connections,
+				cwd,
+				enabledPlugins,
+				registry: agentRegistry,
+				runtimeFactory: () => fakeRuntime,
+				store: assembly.store,
+				workspace: root,
+			} satisfies SessionSdkOptions,
+			assembly.capabilities.getSessionHostManager(),
+			assembly.store
+		);
+		return {
+			assembly,
+			waitForPluginWork: (sessionId: string) =>
+				pluginRuntime.waitForBackgroundWork(sessionId),
+		};
+	};
+const composeCapabilitiesFor = (agentRegistry: AgentRegistry) =>
+	composeCapabilitiesDetailedFor(agentRegistry);
 const composeCapabilities = composeCapabilitiesFor(registry);
 const composeConfiguredReview = composeCapabilitiesFor(
 	configuredReviewRegistry
@@ -373,11 +441,13 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	expect(overrideExitCode).toBe(0);
 	expect(overridden.text).toBe("E2E chat response");
 	expect(overrideErrors.text).toBe("");
-	const finalVerification = await composeCapabilities({
-		autoApproval: false,
-		cwd: workspace,
-		workspace,
-	});
+	const finalVerification = (
+		await composeCapabilities({
+			autoApproval: false,
+			cwd: workspace,
+			workspace,
+		})
+	).assembly;
 	try {
 		const [session] = await finalVerification.store.listSessions();
 		if (session === undefined) {
@@ -416,11 +486,13 @@ test("one-shot Effort selectors override configured and restored choices", async
 		expect(initialExitCode).toBe(0);
 		expect(initialOutput.text).toBe("E2E chat response");
 		expect(initialErrors.text).toBe("");
-		const firstVerification = await composeConfiguredReview({
-			autoApproval: false,
-			cwd: reasoningWorkspace,
-			workspace: reasoningWorkspace,
-		});
+		const firstVerification = (
+			await composeConfiguredReview({
+				autoApproval: false,
+				cwd: reasoningWorkspace,
+				workspace: reasoningWorkspace,
+			})
+		).assembly;
 		let sessionId: string | undefined;
 		try {
 			const sessions = await firstVerification.store.listSessions();
@@ -455,11 +527,13 @@ test("one-shot Effort selectors override configured and restored choices", async
 		expect(continuationExitCode).toBe(0);
 		expect(continuationOutput.text).toBe("E2E chat response");
 		expect(continuationErrors.text).toBe("");
-		const finalVerification = await composeConfiguredReview({
-			autoApproval: false,
-			cwd: reasoningWorkspace,
-			workspace: reasoningWorkspace,
-		});
+		const finalVerification = (
+			await composeConfiguredReview({
+				autoApproval: false,
+				cwd: reasoningWorkspace,
+				workspace: reasoningWorkspace,
+			})
+		).assembly;
 		try {
 			const sessions = await finalVerification.store.listSessions();
 			expect(sessions).toHaveLength(1);
@@ -520,9 +594,9 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 			workspace: invalidWorkspace,
 		});
 		try {
-			expect(await verification.store.listSessions()).toHaveLength(0);
+			expect(await verification.assembly.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.shutdown();
+			await verification.assembly.shutdown();
 		}
 	} finally {
 		await rm(invalidWorkspace, { force: true, recursive: true });
@@ -559,11 +633,13 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 		throw new Error("Expected a seeded Session for the writer conflict test.");
 	}
 
-	const holderAssembly = await composeCapabilities({
-		autoApproval: false,
-		cwd: workspace,
-		workspace,
-	});
+	const holderAssembly = (
+		await composeCapabilities({
+			autoApproval: false,
+			cwd: workspace,
+			workspace,
+		})
+	).assembly;
 	const holder = await createSessionHost({
 		capabilities: holderAssembly.capabilities,
 		sessionId,
@@ -683,9 +759,9 @@ test("one-shot input rejects empty submissions before creating a Session", async
 			workspace: emptyWorkspace,
 		});
 		try {
-			expect(await verification.store.listSessions()).toHaveLength(0);
+			expect(await verification.assembly.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.shutdown();
+			await verification.assembly.shutdown();
 		}
 	} finally {
 		await rm(emptyWorkspace, { force: true, recursive: true });
@@ -722,9 +798,9 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 			workspace: disconnectedWorkspace,
 		});
 		try {
-			expect(await verification.store.listSessions()).toHaveLength(0);
+			expect(await verification.assembly.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.shutdown();
+			await verification.assembly.shutdown();
 		}
 	} finally {
 		await rm(disconnectedWorkspace, { force: true, recursive: true });
@@ -775,7 +851,7 @@ const noCapabilities: OneShotDependencies = {
 	},
 };
 
-test("one-shot waits for delegated outcomes, tags JSON child events, and keeps Print output parent-only", async () => {
+test("one-shot keeps Print parent-only and tags JSON child Session events", async () => {
 	const printWorkspace = await mkdtemp(
 		path.join("/tmp", "wincode-one-shot-delegation-print-")
 	);
@@ -788,7 +864,7 @@ test("one-shot waits for delegated outcomes, tags JSON child events, and keeps P
 			role: "subagent",
 		},
 	});
-	const composeDelegated = composeCapabilitiesFor(delegatedRegistry);
+	const composeDelegated = composeCapabilitiesDetailedFor(delegatedRegistry);
 	const dependencies: OneShotDependencies = {
 		composeCapabilities: async (input) => composeDelegated(input),
 	};
@@ -873,21 +949,30 @@ test("one-shot waits for delegated outcomes, tags JSON child events, and keeps P
 			.split("\n")
 			.map((line) => JSON.parse(line) as Record<string, unknown>);
 		expect(jsonExitCode).toBe(1);
-		expect(events).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					type: "delegated-agent-turn-event",
-					event: expect.objectContaining({
-						delta: "Child internal output.",
-						type: "text-delta",
-					}),
-				}),
-				expect.objectContaining({
-					type: "delegation-task",
-					task: expect.objectContaining({ status: "awaiting_report" }),
-				}),
-			])
-		);
+		expect(jsonStdout.text).toContain("Parent-only result.");
+		expect(jsonStdout.text).toContain("Child internal output.");
+		expect(
+			events.some(
+				({ type, delta, sessionId }) =>
+					type === "text-delta" &&
+					delta === "Child internal output." &&
+					typeof sessionId === "string"
+			)
+		).toBe(true);
+		expect(
+			events.some(
+				({ type, sessionId }) =>
+					type === "agent-turn-completed" && typeof sessionId === "string"
+			)
+		).toBe(true);
+		const parentTextDeltas = events
+			.filter(
+				({ type, sessionId }) =>
+					type === "text-delta" && sessionId === undefined
+			)
+			.map(({ delta }) => delta);
+		expect(parentTextDeltas).toContain("Parent-only result.");
+		expect(parentTextDeltas).not.toContain("Child internal output.");
 		expect(jsonStderr.text).toContain("awaiting_report");
 		expect(jsonStderr.text).toContain(
 			"will not continue the parent Session automatically"

@@ -2,19 +2,19 @@ import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { AgentRegistry } from "@/modules/agents/registry";
-import type { McpSessionCapability } from "@/modules/mcp/capability";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
-import type { DelegationTaskId, SessionId } from "@/shared/identifiers";
+import type { SessionId } from "@/shared/identifiers";
 import type { AgentSession, LiveSessionSnapshot } from "../agent-session/types";
 import type { SessionCompactionModule } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
+import type { TurnToolResolver } from "../hooks/runtime-turn";
 import type {
-	DelegationReportEnvelope,
-	DelegationTask,
-} from "../delegation/types";
+	SessionSdkCapabilityCeiling,
+	SessionSdkChildFactory,
+} from "../sdk-contract";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
 export type SessionApprovalMode = "interactive" | "non-interactive";
@@ -35,7 +35,6 @@ export type SessionCapabilities = Readonly<{
 	) => Promise<ResolvedCompactionSettings>;
 	getConfig: () => ConfigRuntime;
 	getConnections: () => Connections;
-	getMcp: () => McpSessionCapability;
 	/** The Agent registry, which resolves only after the session opened. */
 	getRegistry: () => AgentRegistry | null;
 	/** The durable store this session's records, compactions, and attachments live in. */
@@ -44,12 +43,15 @@ export type SessionCapabilities = Readonly<{
 	/** Optional runtime factory for non-default application adapters and tests. */
 	getRuntime?: () => AgentRuntime;
 	getSessionHostManager: () => SessionHostManager;
+	getSessionSdk?: () => SessionSdkChildFactory | undefined;
 	getPluginRuntime?: () => PluginRuntime;
+	getTurnToolResolver?: () => TurnToolResolver;
 	/**
 	 * Approval settlement policy for surfaces without an interactive approval
 	 * channel. Omitted means the historical interactive behavior.
 	 */
 	getApprovalMode?: () => SessionApprovalMode;
+	getCapabilityCeiling: () => SessionSdkCapabilityCeiling | undefined;
 }>;
 
 /**
@@ -68,18 +70,16 @@ export type SessionHost = Readonly<{
 	getSelection: () => ResolvedSessionSelection | null;
 	getSnapshot: () => LiveSessionSnapshot;
 	/**
-	 * Observes Agent Turn Events the Agent Session emits, in order, terminal
-	 * ones included: the stream a consumer renders without reading full Snapshots
-	 * per token.
+	 * Observes Agent Turn Events the Agent Session emits, in order: the stream a
+	 * consumer renders without reading full Snapshots per token.
 	 */
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
 	/** Ends the session and resolves after active durable cleanup completes. */
 	shutdown: () => Promise<void>;
-	/** Publishes a committed report; active Hosts queue follow-up, idle Hosts retain it. */
-	publishDelegationReport: (report: DelegationReportEnvelope) => void;
 	/** Notifies that session facts changed; no payload, as the Agent Session publishes. */
 	subscribe: (listener: () => void) => () => void;
 }>;
+
 export type SessionHostManagerEvent =
 	| Readonly<{
 			event: AgentTurnEvent;
@@ -87,73 +87,15 @@ export type SessionHostManagerEvent =
 			type: "agent-turn-event";
 	  }>
 	| Readonly<{
-			report?: DelegationReportEnvelope;
-			task: DelegationTask;
-			type: "delegation-task";
-	  }>
-	| Readonly<{
 			pendingApprovalCount: number;
 			sessionId: SessionId;
 			type: "session-approval-notice";
 	  }>;
-export type SessionDelegationSession = Readonly<{
-	capabilities: SessionCapabilities;
-	sessionId: SessionId;
-}>;
-
-/** Ports that the session owner provides to an injected delegation runtime. */
-export type SessionDelegationRuntimePorts = Readonly<{
-	emitTaskEvent: (
-		task: DelegationTask,
-		report?: DelegationReportEnvelope
-	) => void;
-	requestHostUnload: (sessionId: SessionId) => void;
-}>;
-
-/** Neutral session-boundary contract implemented by the delegation runtime. */
-export type SessionDelegationPort = Readonly<{
-	activeTaskIds: () => readonly DelegationTaskId[];
-	cancelActiveTasks: (
-		sessions: readonly SessionDelegationSession[]
-	) => Promise<void>;
-	finishAllTasks: () => void;
-	finishTask: (taskId: DelegationTaskId) => void;
-	getTaskForChild: (
-		store: SessionStore,
-		childSessionId: SessionId
-	) => Promise<DelegationTask | null>;
-	hasActiveTasks: (
-		store: SessionStore,
-		parentSessionId: SessionId
-	) => Promise<boolean>;
-	isTaskActive: (
-		store: SessionStore,
-		taskId: DelegationTaskId
-	) => Promise<boolean>;
-	onHostClosed: (sessionId: SessionId) => void;
-	onHostOpened: (sessionId: SessionId, host: SessionHost) => void;
-	onHostOpening: (sessionId: SessionId) => void;
-	publishTask: (
-		task: DelegationTask,
-		report?: DelegationReportEnvelope
-	) => void;
-	recoverStore: (store: SessionStore) => Promise<void>;
-	registerTask: (task: DelegationTask) => void;
-	waitForTasks: (
-		store: SessionStore,
-		parentSessionId: SessionId
-	) => Promise<DelegationTask[]>;
-}>;
-
-/** The built-in application composition supplies the concrete runtime factory. */
-export type SessionDelegationRuntimeFactory = (
-	ports: SessionDelegationRuntimePorts
-) => SessionDelegationPort;
 
 export type SessionHostManager = Readonly<{
-	delegation: SessionDelegationPort;
 	onEvent: (listener: (event: SessionHostManagerEvent) => void) => () => void;
 	openHost: (input: {
+		autoContinue?: boolean;
 		capabilities: SessionCapabilities;
 		executionMode?: ExecutionMode;
 		sessionId: SessionId;
@@ -164,6 +106,7 @@ export type SessionHostManager = Readonly<{
 }>;
 
 export type SessionHostOptions = Readonly<{
+	autoContinue?: boolean;
 	capabilities: SessionCapabilities;
 	executionMode?: ExecutionMode;
 	sessionId: SessionId;

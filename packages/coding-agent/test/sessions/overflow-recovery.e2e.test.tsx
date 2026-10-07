@@ -29,6 +29,7 @@ import type {
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import { act } from "react";
+import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import type { FakeModelStepScript } from "@/test/support/e2e-fake-runtime";
 import {
 	createFakeModelClientModule,
@@ -41,6 +42,7 @@ const testDirectory = await mkdtemp(
 process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
+setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
 afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();

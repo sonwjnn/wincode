@@ -1,20 +1,36 @@
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
+import { createAgentRuntime } from "@wincode/agent-core";
 import type {
 	ModelStepRequest,
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import { act } from "react";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
+import { loadPlugins } from "@/modules/plugins/loader";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
-import { createSubagentTaskRuntime } from "@/plugins/subagents/task-runtime";
+import { getSharedSubagentsTaskStore } from "@/plugins/subagents/store";
+import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
+import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientModule,
+	createFakeModelClient,
 	createFakeModelClientRecorder,
 } from "@/test/support/e2e-fake-runtime";
+import {
+	cleanupSessionRender,
+	createE2ePricing,
+	createE2eStore,
+	renderSession,
+	seedCompactionHistory,
+	settleSessionUi,
+	waitForSessionCondition,
+	waitForSessionFrame,
+	writeE2EFrame,
+} from "@/test/support/e2e-fixture";
 import { toolCallId } from "../support/identifiers";
 
 const previousEnvironment = {
@@ -22,9 +38,11 @@ const previousEnvironment = {
 	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
 	WINCODE_LOCAL_DB_PATH: process.env.WINCODE_LOCAL_DB_PATH,
 	WINCODE_MODEL_PRICING_OFFLINE: process.env.WINCODE_MODEL_PRICING_OFFLINE,
+	WINCODE_SUBAGENTS_DB_PATH: process.env.WINCODE_SUBAGENTS_DB_PATH,
 };
 const testDirectory = await mkdtemp(join(tmpdir(), "wincode-delegation-e2e-"));
 process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
+process.env.WINCODE_SUBAGENTS_DB_PATH = join(testDirectory, "subagents.sqlite");
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
@@ -40,23 +58,41 @@ const restoreEnvironment = (): void => {
 };
 
 const recorder = createFakeModelClientRecorder();
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
+const runtimeFactory = () =>
+	createAgentRuntime({ modelClient: createFakeModelClient(recorder) });
+const taskStore = await getSharedSubagentsTaskStore(
+	join(testDirectory, "subagents.sqlite")
 );
-const {
-	cleanupSessionRender,
-	createE2ePricing,
-	createE2eStore,
-	renderSession,
-	seedCompactionHistory,
-	waitForSessionCondition,
-	waitForSessionFrame,
-	settleSessionUi,
-	writeE2EFrame,
-} = await import("@/test/support/e2e-fixture");
+const composition = createApplicationPluginComposition({
+	createMcpResource: false,
+	enabledPlugins: ["mcp", "subagents"],
+	workspace: testDirectory,
+});
+const pluginRuntime = await loadPlugins({
+	bundledPlugins: composition.bundledPlugins,
+	cliPaths: [],
+	config: {
+		configStore: createConfigStore({
+			configRoot: testDirectory,
+			homeRoot: testDirectory,
+		}),
+		cwd: testDirectory,
+		homeRoot: testDirectory,
+		workspace: testDirectory,
+	},
+});
+setInteractiveRuntimeContext({
+	args: [],
+	cwd: testDirectory,
+	pluginRuntime,
+	runtimeFactory,
+});
+const sessionHostManager = getInteractiveSessionHostManager(pluginRuntime);
 
 afterAll(async () => {
-	mock.restore();
+	await sessionHostManager.shutdownAll();
+	await pluginRuntime.shutdown();
+	taskStore.close();
 	restoreEnvironment();
 	await rm(testDirectory, { force: true, recursive: true });
 });
@@ -134,16 +170,29 @@ test("projects delegated work as a separate durable Session, not parent transcri
 			setup?.mockInput.pressEnter();
 		});
 		await waitForSessionCondition(async () =>
-			(await store.listDelegationTasks(parentSessionId)).some(
-				(task) =>
-					task.parentToolCallId === callId && task.status === "awaiting_report"
-			)
-		);
+			taskStore
+				.listTasks(parentSessionId)
+				.some(
+					(task) =>
+						task.parentToolCallId === callId &&
+						task.status === "awaiting_report"
+				)
+		).catch((error: unknown) => {
+			throw new Error(
+				[
+					error instanceof Error ? error.message : String(error),
+					setup?.captureCharFrame(),
+					JSON.stringify(taskStore.listTasks(parentSessionId), null, 2),
+				]
+					.filter(Boolean)
+					.join("\n")
+			);
+		});
 		await waitForSessionFrame(setup, (frame) => frame.includes(PARENT_OUTPUT));
 		await settleSessionUi(setup);
-		const task = (await store.listDelegationTasks(parentSessionId)).find(
-			(candidate) => candidate.parentToolCallId === callId
-		);
+		const task = taskStore
+			.listTasks(parentSessionId)
+			.find((candidate) => candidate.parentToolCallId === callId);
 		expect(task).toMatchObject({
 			parentSessionId,
 			status: "awaiting_report",
@@ -194,7 +243,7 @@ test("shows a minimal parent notice for a background child's pending approval", 
 		1,
 		"background-approval"
 	);
-	const manager = getInteractiveSessionHostManager(createSubagentTaskRuntime);
+	const manager = sessionHostManager;
 	const priorStepScript = recorder.stepScript;
 	const callId = toolCallId("background-approval-delegation");
 	const childReadCallId = toolCallId("background-child-read");
@@ -270,9 +319,9 @@ test("shows a minimal parent notice for a background child's pending approval", 
 		});
 		const notice = await pendingApprovalNotice.promise;
 		expect(notice.pendingApprovalCount).toBe(1);
-		const task = (await store.listDelegationTasks(parentSessionId)).find(
-			(candidate) => candidate.parentToolCallId === callId
-		);
+		const task = taskStore
+			.listTasks(parentSessionId)
+			.find((candidate) => candidate.parentToolCallId === callId);
 		if (task === undefined) {
 			throw new Error("The approval task was not durably recorded.");
 		}

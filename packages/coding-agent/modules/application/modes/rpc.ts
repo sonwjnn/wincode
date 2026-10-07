@@ -1,3 +1,4 @@
+import { selectOptionalApplicationPlugins } from "../plugin-composition";
 import { runRpc } from "../rpc/runner";
 import type { ApplicationContext } from "./types";
 
@@ -29,6 +30,9 @@ export const runRpcExecutionMode = async (
 			...(context.configRuntime === undefined
 				? {}
 				: { configRuntime: context.configRuntime }),
+			enabledPlugins: selectOptionalApplicationPlugins(
+				context.invocation.disabledPlugins
+			),
 			...(context.pluginRuntime === undefined
 				? {}
 				: { pluginRuntime: context.pluginRuntime }),

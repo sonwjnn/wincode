@@ -9,9 +9,8 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 `NewSessionView` collects user input and writes the accepted user message as
 an ordinary durable Session Record in the local SQLite store.
 It then navigates to `/sessions/$id` with transient startup state. That state
-starts the first Agent Turn once. Opening later restores durable records.
-Interactive/RPC Hosts automatically continue from pending reports unless an
-explicit parent interrupt has paused delivery.
+starts the first Agent Turn once. Opening later restores durable records and
+accepted SDK deliveries as ordinary user messages.
 ### Join a session
 
 `SessionSurface` opens the session and renders it: it constructs the Session Host, which loads the transcript and ordered local compaction entries, validates the messages, rebuilds the Session Context around the latest compaction, and constructs the Agent Session with all three. The Host exposes it as `agentSession`, shows the opening state until loading resolves, and hands the open Host to `SessionView`.
@@ -68,36 +67,21 @@ under the existing policy but never withdraw a committed Steering Message.
 Recalled compositions land below the composer's draft, oldest first.
 
 `agentSession.continue()` rejects while the Agent Session is active or
-compacting. When idle, it asks the Stateful Agent to select committed Steering
-Messages first, then the oldest Delegation Report, then queued Submissions.
-Consuming a report atomically writes it as an ordinary parent Session Record
-and starts a continuation.
-Interactive/RPC Hosts invoke this automatically when a report arrives or is
-found in the inbox on open. A normal prompt accepted while a report waits is
-queued behind it and cannot bypass it.
-An explicit `continue()`, `prompt()`, or `send()` resumes the paused queue after
-reopen, preserving Steering Message, report, then Submission ordering.
+compacting. When idle, it selects committed Steering Messages first, then the
+oldest queued Submission. With no waiting work, it resumes only from a last
+user message or a complete retained Tool Call result; incomplete Tool
+Calls/results and other context endpoints are rejected. Overflow recovery uses
+this context-only continuation after compaction.
 
-While the parent is active, the Agent Session supplies its durable report
-source to the Stateful Agent at the runtime's safe follow-up boundary. Core
-requests the oldest report only after committed steering and current
-model/Tool Call work; it never interrupts an in-flight request or tool. If a
-report arrives after the last safe boundary, the idle Host requests a
-continuation after the active turn ends. Reports are delivered oldest-first and
-consumed exactly once; the durable parent record survives runtime unload or
-restart.
+Subagents reports are durable user messages delivered by the Subagents Plugin
+through the public Session SDK. They follow ordinary Session FIFO ordering and
+never interrupt active model or Tool Call work. The SDK's idempotency key makes
+retry safe; the Plugin acknowledges its outbox row only after Session accepts
+the message. A later Session open can retry any still-pending report.
 
-Without a report, continuation starts the oldest unsteered queued Submission.
-With no waiting work, it resumes only from a last user message or a complete
-retained Tool Call result; incomplete Tool Calls/results and other context
-endpoints are rejected. Overflow recovery uses this context-only continuation
-after compaction.
-
-One-shot consumers do not auto-start an idle report continuation. Print waits
-for the child but writes only parent assistant text to stdout. JSON tags child
-events and task outcomes; `awaiting_report` is an explicit nonzero error rather
-than a hidden follow-up prompt. Reports that arrive during an already-running
-parent turn are still delivered at safe runtime boundaries.
+One-shot execution does not start background report continuations. Print writes
+only parent assistant text to stdout; JSON reports the parent Agent Turn rather
+than exposing Plugin-owned task lifecycle details.
 
 The Agent Runtime consumer lives with the Stateful Agent it consumes
 (`hooks/runtime-turn.ts`), and the Interactive TUI projects its events into
@@ -105,14 +89,15 @@ OpenTUI message state.
 
 `StatefulAgent` owns the live model context, serializes Agent Runtime turns,
 holds the transient FIFO of opaque Queued Submissions, selects idle input
-precedence, and schedules distinct steering and follow-up messages without
-interrupting active model or Tool Call work. Its queue is process-local and is
-never restored. The Coding-Agent Application owns the Session Transcript,
-composition, attachment retention/preparation, committed Steering Message
-status, approvals, compaction and recovery attempts, the durable Delegation
-Report inbox, and operation maps; it projects the core queue into the Live
-Session Snapshot rather than keeping a second queue authority. The Stateful
-Agent also owns turn cancellation and shutdown for one Session Host. The Host
+precedence, and schedules Steering Messages without interrupting active model
+or Tool Call work. Its queue is process-local and is never restored. The
+Coding-Agent Application owns the Session Transcript, composition, attachment
+retention/preparation, committed Steering Message status, approvals, compaction
+and recovery attempts, and operation maps; it projects the core queue into the
+Live Session Snapshot rather than keeping a second queue authority. Subagents
+owns its task/report database and coordinates child Sessions through the public
+Session SDK. The Stateful Agent also owns turn cancellation and shutdown for
+one Session Host. The Host
 publishes immutable Snapshots and ordered events through the Agent Session
 interface; it does not expose state-write capabilities.
 `useAgentSession` binds an already-open Host, mirrors its Snapshot in React
@@ -121,28 +106,23 @@ state. The Host owns teardown. Pending approvals and compaction contribute to
 `isSessionBusy`.
 
 Each process-scoped `SessionHostManager` retains Hosts across view switches and
-enforces one writer for each Session. A delegated task has a separate durable
-child Session and Stateful Agent, linked to the parent Session, Turn, and
-delegation Tool Call. The child starts from its explicit task prompt and
-instructions, not a copy of the parent transcript. Its Agent identity and
-instructions come from the Delegated Task, including subagent roles, and survive
-opening, steering, and restore. Spawning returns task and Session IDs promptly;
-the parent turn does not wait for child completion. A view can open the child,
-submit input, or steer it through its one writer. Interrupting the parent does
-not cancel a child. Interrupting a running child Session aborts its run and
-records cancellation; process shutdown cancels live children; a crash marks
+enforces one writer for each Session. The Subagents Plugin creates child
+Sessions through the public Session SDK and records their task identity,
+outcome, and report outbox in its own database. A child starts from its explicit
+task prompt and instructions, not a copy of the parent transcript. Spawning
+returns task and Session IDs promptly; the parent turn does not wait for child
+completion. A view can open the child, submit input, or steer it through its
+one writer. Interrupting the parent turn does not cancel a child. Closing the
+parent Session or process cancels live children; crash recovery marks
 unfinished tasks interrupted without replay.
-
-Deleting a Session removes settled task links and inbox rows; a Session linked
-to an active task cannot be deleted. Deleting a parent leaves its child as an
-ordinary Session.
 
 `submit_result` is the only successful task settlement. A batch containing it
 is preflighted before any Tool executes, and it must be the sole Tool Call in
-that batch. Its report is committed to the durable parent inbox before the
-child receives success, and it ends that child turn. A child that completes
-without a result enters `awaiting_report`; failures, cancellation, and crash
-recovery remain distinct terminal outcomes.
+that batch. Its report is durably committed by the Subagents Plugin before the
+child receives success, and it ends that child turn. The Plugin delivers the
+report as an idempotent ordinary parent user message through the Session SDK.
+A child that completes without a result enters `awaiting_report`; failures,
+cancellation, and crash recovery remain distinct terminal outcomes.
 
 An ordinary accepted user message and every accepted steer are committed
 before runtime processing begins. A steered message is a durable pending
@@ -216,23 +196,17 @@ never resolves co-selected Skill or Custom Command intents.
 `storage/` isolates local persistence behind the `SessionStore` interface.
 The local Drizzle store persists sessions, ordinary Wincode Session Records,
 compactions, and content-addressed attachment blobs.
-`session_record` rows contain one durable user message, an assistant output
-checkpoint or terminal outcome, or a completed Tool Call. Active report
-checkpoints precede their report record so reopening preserves output order.
-`delegation_task` links a parent Session/Turn/Tool Call to a dedicated child
-Session, prompt, and lifecycle outcome; `delegation_inbox` holds a committed
-report until consumption. Interactive/RPC Hosts automatically consume it
-through continuation, with committed Steering Messages first and queued
-Submissions after reports. They also resume from a committed report record on
-reopen if shutdown precedes its first model response. Print/JSON leave an idle
-report pending; active parents consume it at the safe follow-up boundary.
+`session_record` rows contain one durable user message, a terminal assistant
+outcome, or a completed Tool Call. The Subagents Plugin persists task outcomes
+and pending report deliveries in its own database file; Session storage has no
+delegation task or report tables. The Plugin uses SDK message delivery and
+acknowledges an outbox row only after the parent Session accepts it.
 
 Each Session projects only its own records in storage order and rebuilds model
 context from successful history and completed Tool Calls. Child output never
-enters the parent transcript automatically. Consuming a report atomically
-appends it as a parent user message and marks the inbox item consumed. A
-restart retains that record in context without replaying child work or
-duplicating the report. An interrupted Agent Turn is not reconstructed or
+enters the parent transcript automatically. An accepted SDK delivery becomes
+an ordinary parent user message; its idempotency key prevents a repeated report
+from being appended. An interrupted Agent Turn is not reconstructed or
 replayed.
 The durable pending/failed processing status of committed Steering
 Messages is reconciled from history so accepted-but-unread input continues
@@ -286,13 +260,12 @@ history and workspace/configuration data.
 - `turn-records.ts` — durable Session Records produced by Agent Turns, shared by the Agent Session and runtime consumer.
 - `hooks/runtime-turn.ts` — adapts Agent Runtime events to the Stateful Agent's turn consumer and synthesizes missing terminal events.
 - `host/session-host.ts` — opens one Session, rebuilds its context, assembles capabilities and the Agent Session, and exposes its public command/snapshot/event API. React-free; exported through `@wincode/coding-agent/session-host`.
-- `host/session-host-manager.ts` — process-lifetime Host ownership across view switches, one-writer enforcement, child-task tracking, waiters, and background Session events.
-- `host/session-ports.ts` — `createSessionPorts`: materializes Host capabilities required by the `SessionTurnRunner`, Tools, Tool Gate, Skills, prompt composition, attachments, delegation, and persistence.
-- `delegation/` — durable child-task lifecycle and report contracts.
+- `host/session-host-manager.ts` — process-lifetime Host ownership across view switches, one-writer enforcement, and background Session events.
+- `host/session-ports.ts` — `createSessionPorts`: materializes Host capabilities required by the `SessionTurnRunner`, Tools, Tool Gate, Skills, prompt composition, attachments, and persistence.
 - `host/use-session-capabilities.ts` — composes Host capabilities from lazy application-provider getters.
 - `approval-projection.ts` — projects Agent Session approvals into read-only panel entries.
 - `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, forwards public commands, and projects approvals.
-- `SessionSurface` — opens or retains a manager-owned Host, renders the opening state until it resolves and the failure when it rejects, and releases its view reference on unmount without cancelling background children.
+- `SessionSurface` — opens or retains a manager-owned Host, renders the opening state until it resolves and the failure when it rejects, and releases its view reference on unmount. Background task lifecycle belongs to the Subagents Plugin.
 - `useChatInputController(options)` — command and file-mention input state.
 - `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea`, `WaitingMessageStrip` — session UI.
 - `SessionsDialog`, `RenameSessionDialog` — session management UI.

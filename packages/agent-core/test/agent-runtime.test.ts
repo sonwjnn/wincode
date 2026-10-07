@@ -249,59 +249,45 @@ test("pending steering continues the same turn after a text-only model step", as
 		}),
 	]);
 });
-test("steering committed during a follow-up read precedes the report in later turns", async () => {
-	const followUpReadStarted = Promise.withResolvers<void>();
-	const releaseFollowUpRead = Promise.withResolvers<void>();
-	const turn = buildTurn();
+test("late steering committed during the final safe-boundary read continues the current turn", async () => {
+	const steeringReadStarted = Promise.withResolvers<void>();
+	const releaseSteeringRead = Promise.withResolvers<void>();
 	const steering = createAgentTurnMessage(
 		"user",
-		"Correct the parent before the report.",
+		"Correct the parent before it completes.",
 		toSessionMessageId("late-steering")
-	);
-	const report = createAgentTurnMessage(
-		"user",
-		"The delegated report.",
-		toSessionMessageId("late-steering-report")
 	);
 	const { client, requests } = scriptedClient((_request, index) =>
 		scriptedParts(
 			{
-				delta: index === 0 ? "The parent response." : "Both messages handled.",
+				delta:
+					index === 0 ? "The parent response." : "The steering was handled.",
 				type: "text-delta",
 			},
 			{ type: "finish" }
 		)
 	);
-	let reportAvailable = true;
-	let steeringAvailable = false;
+	let steeringReadCount = 0;
 	const statefulAgent = createStatefulAgent({
 		runtime: createAgentRuntime({ modelClient: client }),
 	});
 	const runningTurn = consume(
-		statefulAgent.run(turn, {
-			takeFollowUpMessages: async () => {
-				if (!reportAvailable) {
+		statefulAgent.run(buildTurn(), {
+			takeSteeringMessages: async () => {
+				steeringReadCount += 1;
+				if (steeringReadCount === 1) {
 					return [];
 				}
-				followUpReadStarted.resolve();
-				await releaseFollowUpRead.promise;
-				reportAvailable = false;
-				return [report];
-			},
-			takeSteeringMessages: () => {
-				if (!steeringAvailable) {
-					return [];
-				}
-				steeringAvailable = false;
+				steeringReadStarted.resolve();
+				await releaseSteeringRead.promise;
 				return [steering];
 			},
 		})
 	);
 
 	try {
-		await followUpReadStarted.promise;
-		steeringAvailable = true;
-		releaseFollowUpRead.resolve();
+		await steeringReadStarted.promise;
+		releaseSteeringRead.resolve();
 		await runningTurn;
 
 		expect(requests).toHaveLength(2);
@@ -315,46 +301,15 @@ test("steering committed during a follow-up read precedes the report in later tu
 		).toEqual([
 			{ role: "user", text: "Inspect the file" },
 			{ role: "assistant", text: "The parent response." },
-			{ role: "user", text: "Correct the parent before the report." },
-			{ role: "user", text: "The delegated report." },
-		]);
-		const nextUserMessage = createAgentTurnMessage(
-			"user",
-			"Continue after the report.",
-			toSessionMessageId("late-steering-next-turn")
-		);
-		await consume(
-			statefulAgent.run({
-				...buildTurn(),
-				id: toAgentTurnId("turn-after-late-steering"),
-				input: {
-					messages: [...statefulAgent.getSnapshot().context, nextUserMessage],
-				},
-			})
-		);
-		expect(requests).toHaveLength(3);
-		expect(
-			requests[2]?.messages.map((message) => ({
-				role: message.role,
-				text: message.content
-					.flatMap((part) => (part.type === "text" ? [part.text] : []))
-					.join("\n"),
-			}))
-		).toEqual([
-			{ role: "user", text: "Inspect the file" },
-			{ role: "assistant", text: "The parent response." },
-			{ role: "user", text: "Correct the parent before the report." },
-			{ role: "user", text: "The delegated report." },
-			{ role: "assistant", text: "Both messages handled." },
-			{ role: "user", text: "Continue after the report." },
+			{ role: "user", text: "Correct the parent before it completes." },
 		]);
 	} finally {
-		releaseFollowUpRead.resolve();
+		releaseSteeringRead.resolve();
 		await statefulAgent.shutdown();
 	}
 });
 
-test("Stateful Agent delivers queued steering before follow-ups at safe boundaries", async () => {
+test("Stateful Agent delivers queued steering at safe boundaries after tool results", async () => {
 	const toolStarted = Promise.withResolvers<void>();
 	const releaseTool = Promise.withResolvers<void>();
 	const executionInputs: unknown[] = [];
@@ -381,7 +336,7 @@ test("Stateful Agent delivers queued steering before follow-ups at safe boundari
 			return scriptedParts(
 				{
 					input: { path: "src/main.ts" },
-					toolCallId: "follow-up-read",
+					toolCallId: "steering-read",
 					toolName: "read",
 					type: "tool-call",
 				},
@@ -390,7 +345,7 @@ test("Stateful Agent delivers queued steering before follow-ups at safe boundari
 		}
 		return scriptedParts(
 			{
-				delta: "The parent handled steering and the report.",
+				delta: "The parent handled the steering.",
 				type: "text-delta",
 			},
 			{ type: "finish" }
@@ -404,17 +359,11 @@ test("Stateful Agent delivers queued steering before follow-ups at safe boundari
 		"Finish the queued correction first.",
 		toSessionMessageId("queued-steering")
 	);
-	const pendingReport = createAgentTurnMessage(
-		"user",
-		"The delegated report.",
-		toSessionMessageId("delegated-report-follow-up")
-	);
 	const runningTurn = consume(statefulAgent.run(buildTurn([tool])));
 
 	try {
 		await toolStarted.promise;
 		statefulAgent.steer(pendingSteering);
-		statefulAgent.followUp(pendingReport);
 
 		releaseTool.resolve();
 		await runningTurn;
@@ -424,12 +373,10 @@ test("Stateful Agent delivers queued steering before follow-ups at safe boundari
 			"assistant",
 			"tool",
 			"user",
-			"user",
 		]);
-		expect(observedPrompts[1]?.at(-2)?.text).toBe(
+		expect(observedPrompts[1]?.at(-1)?.text).toBe(
 			"Finish the queued correction first."
 		);
-		expect(observedPrompts[1]?.at(-1)?.text).toBe("The delegated report.");
 		expect(requests).toHaveLength(2);
 	} finally {
 		releaseTool.resolve();
@@ -437,7 +384,7 @@ test("Stateful Agent delivers queued steering before follow-ups at safe boundari
 	}
 });
 
-test("aborting a Stateful Agent drops queued follow-ups before the next Model Step", async () => {
+test("aborting a Stateful Agent drops queued steering before the next Model Step", async () => {
 	const toolStarted = Promise.withResolvers<void>();
 	const releaseTool = Promise.withResolvers<void>();
 	const tool: ResolvedTool = {
@@ -472,16 +419,16 @@ test("aborting a Stateful Agent drops queued follow-ups before the next Model St
 	if (firstUser === undefined) {
 		throw new Error("The interrupted turn has no user message.");
 	}
-	const report = createAgentTurnMessage(
+	const steering = createAgentTurnMessage(
 		"user",
-		"The report queued before interruption.",
-		toSessionMessageId("interrupted-report-follow-up")
+		"The steering queued before interruption.",
+		toSessionMessageId("interrupted-steering")
 	);
 	const runningTurn = consume(statefulAgent.run(interruptedTurn));
 
 	try {
 		await toolStarted.promise;
-		statefulAgent.followUp(report);
+		statefulAgent.steer(steering);
 		statefulAgent.abort();
 		releaseTool.resolve();
 		await runningTurn;
@@ -493,7 +440,6 @@ test("aborting a Stateful Agent drops queued follow-ups before the next Model St
 			input: {
 				messages: [
 					firstUser,
-					report,
 					createAgentTurnMessage(
 						"user",
 						"Handle new work.",
@@ -505,81 +451,16 @@ test("aborting a Stateful Agent drops queued follow-ups before the next Model St
 		await consume(statefulAgent.run(nextTurn));
 
 		expect(requests).toHaveLength(2);
-		const reportParts = requests[1]?.messages
+		const steeringParts = requests[1]?.messages
 			.flatMap(({ content }) => content)
 			.filter(
 				(part) =>
 					part.type === "text" &&
-					part.text === "The report queued before interruption."
+					part.text === "The steering queued before interruption."
 			);
-		expect(reportParts).toHaveLength(1);
+		expect(steeringParts).toHaveLength(0);
 	} finally {
 		releaseTool.resolve();
-		await statefulAgent.shutdown();
-	}
-});
-
-test("does not redeliver a follow-up already restored from durable Session history", async () => {
-	const { client, requests } = scriptedClient(() =>
-		scriptedParts(
-			{ delta: "The active parent response.", type: "text-delta" },
-			{ type: "finish" }
-		)
-	);
-	const statefulAgent = createStatefulAgent({
-		runtime: createAgentRuntime({ modelClient: client }),
-	});
-	const firstTurn = buildTurn();
-	const firstUser = firstTurn.input.messages[0];
-	if (firstUser === undefined) {
-		throw new Error("The first turn has no user message.");
-	}
-	const report = createAgentTurnMessage(
-		"user",
-		"The committed delegated report.",
-		toSessionMessageId("restored-delegation-report")
-	);
-	const currentRun = statefulAgent.run(firstTurn)[Symbol.asyncIterator]();
-
-	try {
-		let turnCompleted = false;
-		while (!turnCompleted) {
-			const next = await currentRun.next();
-			if (next.done) {
-				break;
-			}
-			turnCompleted = next.value.type === "agent-turn-completed";
-		}
-		statefulAgent.followUp(report);
-		await currentRun.next();
-
-		const nextTurn = {
-			...buildTurn(),
-			id: toAgentTurnId("turn-restored-report"),
-			input: {
-				messages: [
-					firstUser,
-					report,
-					createAgentTurnMessage(
-						"user",
-						"Continue after restart.",
-						toSessionMessageId("restored-report-follow-up")
-					),
-				],
-			},
-		};
-		await consume(statefulAgent.run(nextTurn));
-
-		expect(requests).toHaveLength(2);
-		const reportParts = requests[1]?.messages
-			.flatMap(({ content }) => content)
-			.filter(
-				(part) =>
-					part.type === "text" &&
-					part.text === "The committed delegated report."
-			);
-		expect(reportParts).toHaveLength(1);
-	} finally {
 		await statefulAgent.shutdown();
 	}
 });

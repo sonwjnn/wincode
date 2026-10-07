@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fromAny } from "@total-typescript/shoehorn";
-import type { AgentTurnDelegation, ResolvedTool } from "@wincode/agent-core";
+import type { ResolvedTool } from "@wincode/agent-core";
 import { isString, isUndefined } from "@wincode/utils";
 import {
 	applyManualApprovalSafetyCeiling,
@@ -17,12 +17,7 @@ import {
 	createProjectInstructionSnapshot,
 	type ProjectInstructionFileStats,
 } from "@/modules/prompt-composition/project-instructions";
-import {
-	agentId,
-	agentTurnId,
-	modelIdentity,
-	toolCallId,
-} from "./support/identifiers";
+import { agentId, modelIdentity } from "./support/identifiers";
 
 const projectRoots = ["/repo", "/repo/packages", "/repo/packages/coding-agent"];
 
@@ -96,10 +91,6 @@ const agent = {
 	role: "primary" as const,
 };
 
-const delegation: AgentTurnDelegation = {
-	parentToolCallId: toolCallId("call-1"),
-	parentTurnId: agentTurnId("turn-1"),
-};
 const resolvedTool = (name: string): ResolvedTool => ({
 	definition: {
 		description: `${name} tool`,
@@ -127,13 +118,12 @@ describe("Prompt Composition", () => {
 		};
 		const result = composeSystemPrompt({
 			agent,
-			delegation,
 			effectiveVisibleTools: [
 				{ family: "coding", name: "read", permission: "allow" },
 				{ family: "coding", name: "edit", permission: "ask" },
 				{ family: "coding", name: "write", permission: "deny" },
-				{ family: "mcp", name: "mcp_search", permission: "allow" },
-				{ family: "delegation", name: "delegate", permission: "allow" },
+				{ family: "plugin", name: "mcp_search", permission: "allow" },
+				{ family: "plugin", name: "delegate", permission: "allow" },
 				{ family: "skill", name: "skill", permission: "ask" },
 			],
 			environment,
@@ -217,7 +207,7 @@ describe("Prompt Composition", () => {
 				["edit", "ask"],
 				["write", "deny"],
 			]),
-			mcpPolicies: new Map([
+			pluginPolicies: new Map([
 				["mcp_search", "ask"],
 				["mcp_secret", "deny"],
 			]),
@@ -235,7 +225,7 @@ describe("Prompt Composition", () => {
 		expect(described).toEqual([
 			{ family: "coding", name: "read", permission: "allow" },
 			{ family: "coding", name: "edit", permission: "ask" },
-			{ family: "mcp", name: "mcp_search", permission: "ask" },
+			{ family: "plugin", name: "mcp_search", permission: "ask" },
 			{ family: "skill", name: "skill", permission: "ask" },
 		]);
 	});

@@ -4,7 +4,6 @@ import type {
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
-import { sql } from "drizzle-orm";
 import {
 	index,
 	integer,
@@ -15,12 +14,7 @@ import {
 } from "drizzle-orm/sqlite-core";
 import type { Jsonify } from "type-fest";
 import type { EditMode, FileVersion } from "@/modules/tools";
-import type { SessionId } from "@/shared/identifiers";
 import type { SessionCompaction } from "../compaction/types";
-import type {
-	DelegationTaskOutcome,
-	DelegationTaskStatus,
-} from "../delegation/types";
 import type {
 	PromptHistoryEntry,
 	SessionRecordStorageOutcome,
@@ -53,11 +47,6 @@ export const session = sqliteTable(
 		}),
 		title: text("title"),
 		pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
-		reportContinuationPaused: integer("report_continuation_paused", {
-			mode: "boolean",
-		})
-			.notNull()
-			.default(sql`0`),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 		lastMessageAt: integer("last_message_at", { mode: "timestamp_ms" }),
@@ -414,77 +403,7 @@ export const sessionRecord = sqliteTable(
 		index("idx_session_record_session_turn").on(table.sessionId, table.turnId),
 	]
 );
-export const delegationTask = sqliteTable(
-	"delegation_task",
-	{
-		id: text("id").primaryKey(),
-		parentSessionId: text("parent_session_id")
-			.$type<SessionId>()
-			.notNull()
-			.references(() => session.id, {
-				onDelete: "restrict",
-				onUpdate: "cascade",
-			}),
-		childSessionId: text("child_session_id")
-			.$type<SessionId>()
-			.notNull()
-			.unique()
-			.references(() => session.id, {
-				onDelete: "restrict",
-				onUpdate: "cascade",
-			}),
-		parentTurnId: text("parent_turn_id").notNull(),
-		parentToolCallId: text("parent_tool_call_id").notNull(),
-		agentId: text("agent_id").notNull(),
-		status: text("status").$type<DelegationTaskStatus>().notNull(),
-		outcomeJson: text("outcome_json", {
-			mode: "json",
-		}).$type<SerializedJson<DelegationTaskOutcome | null> | null>(),
-		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-		updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
-	},
-	(table) => [
-		index("idx_delegation_task_parent_created").on(
-			table.parentSessionId,
-			table.createdAt
-		),
-		index("idx_delegation_task_child").on(table.childSessionId),
-		index("idx_delegation_task_parent_status").on(
-			table.parentSessionId,
-			table.status
-		),
-	]
-);
-export const delegationInbox = sqliteTable(
-	"delegation_inbox",
-	{
-		taskId: text("task_id")
-			.primaryKey()
-			.references(() => delegationTask.id, {
-				onDelete: "restrict",
-				onUpdate: "cascade",
-			}),
-		parentSessionId: text("parent_session_id")
-			.$type<SessionId>()
-			.notNull()
-			.references(() => session.id, {
-				onDelete: "restrict",
-				onUpdate: "cascade",
-			}),
-		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-		consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
-	},
-	(table) => [
-		index("idx_delegation_inbox_parent_consumed_created").on(
-			table.parentSessionId,
-			table.consumedAt,
-			table.createdAt
-		),
-	]
-);
 export const sessionSchema = {
-	delegationTask,
-	delegationInbox,
 	fileTransaction,
 	fileTransactionPath,
 	fullDiffArtifact,

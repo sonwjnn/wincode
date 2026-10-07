@@ -35,6 +35,7 @@ import type {
 } from "@wincode/ai/model-client";
 import { act } from "react";
 import { SessionInUseError } from "@/modules/sessions/storage/session-writer-lock";
+import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import type { FakeModelStepScript } from "@/test/support/e2e-fake-runtime";
 import {
 	createFakeModelClientModule,
@@ -50,6 +51,7 @@ process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 // The coding Tools resolve relative paths against the process working
 // directory, so the workspace is also the workspace the Tools run in.
 process.chdir(testDirectory);
+setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
 
 const READ_CALL = toolCallId("read-approval-1");
 /** The turn a journey ends by unmounting carries its own Tool Call Identifiers. */

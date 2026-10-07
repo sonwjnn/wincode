@@ -22,10 +22,8 @@ import {
 } from "./tools";
 import {
 	AGENT_TURN_INTERRUPTION_REASONS,
-	type AgentTurnDelegation,
 	type AgentTurnId,
 	type AgentTurnInterruptionReason,
-	isAgentTurnDelegation,
 } from "./turn";
 
 /**
@@ -42,7 +40,6 @@ export type AgentTurnEventBase = Readonly<{
 export type AgentTurnStartedEvent = AgentTurnEventBase &
 	Readonly<{
 		agentId: AgentId;
-		delegation?: AgentTurnDelegation;
 		startedAt: number;
 		type: "agent-turn-started";
 	}>;
@@ -193,10 +190,7 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 	switch (event.type) {
 		case "agent-turn-started":
 			return (
-				isAgentId(event.agentId) &&
-				(isUndefined(event.delegation) ||
-					isAgentTurnDelegation(event.delegation)) &&
-				isFiniteNonNegativeNumber(event.startedAt)
+				isAgentId(event.agentId) && isFiniteNonNegativeNumber(event.startedAt)
 			);
 		case "model-step-started":
 			return (

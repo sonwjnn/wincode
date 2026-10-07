@@ -98,6 +98,7 @@ const logRpcFatalDiagnostic = (
 export async function runRpc({
 	autoApproval,
 	configRuntime,
+	enabledPlugins,
 	pluginRuntime,
 	composeCapabilities: providedComposer,
 	input,
@@ -181,7 +182,11 @@ export async function runRpc({
 	let lastState: Record<string, unknown> | undefined;
 	const getRuntime = async (): Promise<RuntimeModules> => {
 		if (runtime === undefined) {
-			runtime = await loadRuntime({ configRuntime, pluginRuntime });
+			runtime = await loadRuntime({
+				configRuntime,
+				enabledPlugins,
+				pluginRuntime,
+			});
 		}
 		return runtime;
 	};
@@ -388,9 +393,7 @@ export async function runRpc({
 		}
 		const snapshot: LiveSessionSnapshot = state.host.getSnapshot();
 		const executions = snapshot.executions.map(projectExecution);
-		const primary = [...snapshot.executions]
-			.reverse()
-			.find((execution) => execution.parent === undefined);
+		const primary = snapshot.executions.at(-1);
 		const pendingApprovals = snapshot.approvals.filter(
 			(approval) => approval.decision === undefined
 		);
@@ -456,21 +459,6 @@ export async function runRpc({
 		}
 	};
 
-	const projectDelegationTaskEvent = (
-		event: Extract<SessionHostManagerEvent, { type: "delegation-task" }>
-	): void => {
-		if (event.task.parentSessionId !== state.boundSessionId) {
-			return;
-		}
-		ownedSessionIds.add(event.task.childSessionId);
-		emit("session/event", {
-			event: {
-				...(event.report === undefined ? {} : { report: event.report }),
-				kind: "delegation-task",
-				task: event.task,
-			},
-		});
-	};
 	const projectApprovalNotice = (
 		event: Extract<SessionHostManagerEvent, { type: "session-approval-notice" }>
 	): void => {
@@ -488,29 +476,18 @@ export async function runRpc({
 			},
 		});
 	};
-	const projectManagerEvent = (event: SessionHostManagerEvent): void => {
-		switch (event.type) {
-			case "delegation-task":
-				projectDelegationTaskEvent(event);
-				break;
-			case "session-approval-notice":
-				projectApprovalNotice(event);
-				break;
-			case "agent-turn-event":
-				break;
-			default:
-				throw new Error("Unknown Session Host manager event.");
-		}
-	};
 	const subscribeManagerEvents = (): void => {
-		if (state.assembly === undefined) {
+		const manager = state.assembly?.capabilities.getSessionHostManager();
+		if (manager === undefined) {
 			return;
 		}
 		managerEventUnsubscribe?.();
-		const manager = state.assembly.capabilities.getSessionHostManager();
 		const unsubscribe = manager.onEvent((event) => {
+			if (event.type !== "session-approval-notice") {
+				return;
+			}
 			try {
-				projectManagerEvent(event);
+				projectApprovalNotice(event);
 			} catch (error) {
 				void fatalShutdown(error);
 			}
@@ -518,7 +495,6 @@ export async function runRpc({
 		managerEventUnsubscribe = unsubscribe;
 		unsubscribers.push(unsubscribe);
 	};
-
 	const releaseSessionView = (sessionId: SessionId): void => {
 		const manager = state.assembly?.capabilities.getSessionHostManager();
 		if (manager !== undefined) {

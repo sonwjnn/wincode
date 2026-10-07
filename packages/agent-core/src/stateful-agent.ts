@@ -24,11 +24,7 @@ export type StatefulAgentSnapshot<TQueuedSubmission = never> = Readonly<{
 	turnCount: number;
 }>;
 
-export type StatefulAgentNextInput =
-	| "steering"
-	| "delegation-report"
-	| "submission"
-	| "none";
+export type StatefulAgentNextInput = "steering" | "submission" | "none";
 
 export type StatefulAgentQueueCommit<TReceipt> = Readonly<{
 	committed: boolean;
@@ -49,15 +45,12 @@ export type StatefulAgent<TQueuedSubmission = never> = Readonly<{
 	enqueueSubmission: (submission: TQueuedSubmission) => boolean;
 	/** Queues prepared input for the next safe Model Step boundary. */
 	steer: (message: AgentTurnMessage) => void;
-	/** Queues prepared input for a safe follow-up boundary without starting or interrupting a turn. */
-	followUp: (message: AgentTurnMessage) => void;
 	getQueuedSubmissions: () => readonly TQueuedSubmission[];
 	getSnapshot: () => StatefulAgentSnapshot<TQueuedSubmission>;
 	hasPendingSubmissionTransition: () => boolean;
 	/** Selects the next idle input lane when an application explicitly requests execution. */
 	selectNextInput: (pending: {
 		hasSteeringMessages: boolean;
-		hasDelegationReports: boolean;
 	}) => StatefulAgentNextInput;
 	/** Replaces the payload for a waiting Submission without changing its FIFO position. */
 	replaceQueuedSubmission: (submission: TQueuedSubmission) => boolean;
@@ -99,7 +92,6 @@ export type StatefulAgentOptions<TQueuedSubmission = never> = Readonly<{
 }>;
 
 type AgentTurnContextProjector = Readonly<{
-	appendFollowUpMessages: (messages: readonly AgentTurnMessage[]) => void;
 	appendSteeringMessages: (messages: readonly AgentTurnMessage[]) => void;
 	observe: (event: AgentTurnEvent) => void;
 }>;
@@ -144,7 +136,6 @@ const createAgentTurnContextProjector = (
 	getContext: () => readonly AgentTurnMessage[],
 	setContext: (context: readonly AgentTurnMessage[]) => void
 ): AgentTurnContextProjector => {
-	let assistantSegmentIndex = 0;
 	let assistantParts: AgentTurnPart[] = [];
 	let toolResults: AgentTurnMessage[] = [];
 	const flushModelStep = (): void => {
@@ -153,10 +144,7 @@ const createAgentTurnContextProjector = (
 		}
 		const messages = [...getContext()];
 		if (assistantParts.length > 0) {
-			const assistantId = agentTurnAssistantMessageId(
-				turn.id,
-				assistantSegmentIndex
-			);
+			const assistantId = agentTurnAssistantMessageId(turn.id);
 			const assistantIndex = messages.findIndex(
 				(message) => message.id === assistantId
 			);
@@ -188,16 +176,7 @@ const createAgentTurnContextProjector = (
 			setContext([...getContext(), ...messages]);
 		}
 	};
-	const appendFollowUpMessages = (
-		messages: readonly AgentTurnMessage[]
-	): void => {
-		appendMessages(messages);
-		if (messages.length > 0) {
-			assistantSegmentIndex += 1;
-		}
-	};
 	return {
-		appendFollowUpMessages,
 		appendSteeringMessages: appendMessages,
 		observe: (event) => {
 			switch (event.type) {
@@ -273,7 +252,6 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 	let activeTurnId: AgentTurnId | null = null;
 	let closed = false;
 	let context: readonly AgentTurnMessage[] = [];
-	const followUpMessages: AgentTurnMessage[] = [];
 	const steeringMessages: AgentTurnMessage[] = [];
 	const queuedSubmissions: TQueuedSubmission[] = [];
 	let queuedSubmissionCommitId: string | undefined;
@@ -313,7 +291,6 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 		turnCount,
 	});
 	const abort = (): void => {
-		followUpMessages.length = 0;
 		steeringMessages.length = 0;
 		activeController?.abort();
 	};
@@ -336,15 +313,6 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 			);
 		}
 		steeringMessages.push(message);
-	};
-	const followUp = (message: AgentTurnMessage): void => {
-		if (closed) {
-			throw new AgentInvariantError(
-				"invalid-runtime",
-				"A closed Stateful Agent cannot accept a follow-up message."
-			);
-		}
-		followUpMessages.push(message);
 	};
 	const scheduleQueueTransition = <TResult>(
 		transition: () => Promise<TResult>
@@ -524,13 +492,9 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 	};
 	const selectNextInput = (pending: {
 		hasSteeringMessages: boolean;
-		hasDelegationReports: boolean;
 	}): StatefulAgentNextInput => {
 		if (pending.hasSteeringMessages) {
 			return "steering";
-		}
-		if (pending.hasDelegationReports) {
-			return "delegation-report";
 		}
 		if (queuedSubmissions.length > 0) {
 			return "submission";
@@ -634,46 +598,19 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 				options.signal === undefined
 					? controller.signal
 					: AbortSignal.any([controller.signal, options.signal]);
-			let followUpsAwaitingSteering = EMPTY_AGENT_TURN_MESSAGES;
 			const takeRuntimeSteeringMessages = async (): Promise<
 				readonly AgentTurnMessage[]
-			> => {
-				const deferredFollowUps = followUpsAwaitingSteering;
-				const steering = await takePreparedAgentTurnMessages({
-					append:
-						deferredFollowUps.length === 0
-							? projector.appendSteeringMessages
-							: () => undefined,
+			> =>
+				takePreparedAgentTurnMessages({
+					append: projector.appendSteeringMessages,
 					context,
 					queue: steeringMessages,
 					requested: options.takeSteeringMessages,
 				});
-				if (deferredFollowUps.length > 0) {
-					if (steering.length > 0) {
-						projector.appendSteeringMessages(steering);
-					}
-					projector.appendFollowUpMessages(deferredFollowUps);
-					followUpsAwaitingSteering = EMPTY_AGENT_TURN_MESSAGES;
-				}
-				return steering;
-			};
-			const takeRuntimeFollowUpMessages = async (): Promise<
-				readonly AgentTurnMessage[]
-			> => {
-				const messages = await takePreparedAgentTurnMessages({
-					append: () => undefined,
-					context,
-					queue: followUpMessages,
-					requested: options.takeFollowUpMessages,
-				});
-				followUpsAwaitingSteering = messages;
-				return messages;
-			};
 			try {
 				for await (const event of runtime.run(runtimeTurn, {
 					...options,
 					signal,
-					takeFollowUpMessages: takeRuntimeFollowUpMessages,
 					takeSteeringMessages: takeRuntimeSteeringMessages,
 				})) {
 					projector.observe(event);
@@ -704,7 +641,6 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 	return {
 		abort,
 		enqueueSubmission,
-		followUp,
 		getQueuedSubmissions,
 		getSnapshot,
 		hasPendingSubmissionTransition,

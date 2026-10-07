@@ -19,7 +19,6 @@ import type {
 	TextWriter,
 } from "../modules/application/modes/types";
 import { createPermissionService } from "../modules/permissions/permission-service";
-import type { SessionCapabilitiesAssembly } from "../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
@@ -101,12 +100,12 @@ const output = (): CapturedOutput => {
 	};
 };
 
-const composeCapabilities = async ({
+const composeCapabilities: OneShotDependencies["composeCapabilities"] = async ({
 	autoApproval,
 	cwd,
 	workspace: root,
-}: OneShotCompositionInput): Promise<SessionCapabilitiesAssembly> =>
-	createSessionCapabilities({
+}: OneShotCompositionInput) => ({
+	assembly: await createSessionCapabilities({
 		approvalMode: "non-interactive",
 		cwd,
 		databasePath: path.join(root, "sessions.sqlite"),
@@ -115,7 +114,8 @@ const composeCapabilities = async ({
 		runtimeFactory: () => fakeRuntime,
 		workspace: root,
 		connections,
-	});
+	}),
+});
 
 const context = (
 	stdout: TextWriter,

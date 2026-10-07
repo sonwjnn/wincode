@@ -36,6 +36,7 @@ import {
 	resolveAgentPermission,
 } from "@/modules/permissions/resolve";
 import { topLevelPermissionSchema } from "@/modules/permissions/schema";
+import type { SessionSdkCapabilityCeiling } from "@/modules/sessions/sdk-contract";
 import {
 	type CodingToolName,
 	DEFAULT_RESOURCE_LIMIT_PROFILE,
@@ -65,7 +66,14 @@ export const configuredAgentVisibleCodingTools = [
 	"shell",
 ] as const satisfies readonly CodingToolName[];
 
+const capabilityCeilingSchema = z
+	.object({
+		tools: z.array(z.string().trim().min(1).max(512)).max(512),
+	})
+	.strict();
+
 const agentPatchFields = {
+	capability_ceiling: capabilityCeilingSchema,
 	description: z.string().min(1).max(MAX_CONFIGURED_AGENT_DESCRIPTION_LENGTH),
 	disable: z.boolean(),
 	effort: effortSchema,
@@ -94,6 +102,7 @@ const hasExclusiveReasoningSelection = <
 
 const configuredAgentPatchFieldsSchema = z
 	.object({
+		capability_ceiling: agentPatchFields.capability_ceiling.optional(),
 		description: agentPatchFields.description.optional(),
 		disable: agentPatchFields.disable.optional(),
 		effort: agentPatchFields.effort.optional(),
@@ -117,6 +126,7 @@ const completeConfiguredAgentSchema = configuredAgentPatchFieldsSchema
 
 const builtInAgentPatchSchema = z
 	.object({
+		capability_ceiling: agentPatchFields.capability_ceiling.optional(),
 		description: agentPatchFields.description.optional(),
 		effort: agentPatchFields.effort.optional(),
 		instructions: agentPatchFields.instructions.optional(),
@@ -147,6 +157,7 @@ export type AgentDiagnostic = {
 };
 
 export type RegistryAgent = AgentDefinition & {
+	readonly capabilityCeiling?: SessionSdkCapabilityCeiling;
 	readonly effort?: Effort;
 	readonly visibleCodingTools: readonly CodingToolName[];
 	readonly isConfigured: boolean;
@@ -523,6 +534,9 @@ const resolveConfiguredAgentEntry = (
 			id: idResult.data,
 			instructions: definition.data.instructions ?? "",
 			...availability,
+			...(definition.data.capability_ceiling === undefined
+				? {}
+				: { capabilityCeiling: definition.data.capability_ceiling }),
 			isConfigured: true,
 			isSelectable: definition.data.role !== "subagent" && !modelRetired,
 			...pickTruthy({ model }),
@@ -699,6 +713,7 @@ const resolveBuiltInAgent = (
 		options.connectedProviderIds
 	);
 	const {
+		capability_ceiling: capabilityCeiling,
 		effort: _configuredEffort,
 		model: _configuredModel,
 		reasoningMode: _configuredReasoningMode,
@@ -707,6 +722,7 @@ const resolveBuiltInAgent = (
 	return {
 		...shippedAgent,
 		...validatedPatch,
+		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 		...availability,
 		...pickTruthy({ model }),
 		...(isUndefined(effort) ? {} : { effort }),

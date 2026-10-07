@@ -177,15 +177,9 @@ const isSessionRecordOutcome = (
 	}
 	const outcome = value as UnknownRecord;
 	if (outcome.kind === "user") {
-		return (
-			Object.keys(outcome).every(
-				(key) => key === "kind" || key === "delegationReportTaskId"
-			) &&
-			(isUndefined(outcome.delegationReportTaskId) ||
-				isNonEmptyString(outcome.delegationReportTaskId))
-		);
+		return Object.keys(outcome).length === 1;
 	}
-	if (outcome.kind === "tool" || outcome.kind === "assistant-checkpoint") {
+	if (outcome.kind === "tool") {
 		return Object.keys(outcome).length === 1;
 	}
 	return (
@@ -250,9 +244,7 @@ export const getSessionRecordValidationError = (
 	}
 	if (
 		(record.outcome.kind === "user" && message.role !== "user") ||
-		((record.outcome.kind === "assistant" ||
-			record.outcome.kind === "assistant-checkpoint") &&
-			message.role !== "assistant") ||
+		(record.outcome.kind === "assistant" && message.role !== "assistant") ||
 		(record.outcome.kind === "tool" &&
 			(message.role !== "assistant" ||
 				!message.parts.some(isSessionToolCallPart)))
@@ -261,7 +253,7 @@ export const getSessionRecordValidationError = (
 	}
 	return null;
 };
-const STATIC_TOOL_NAMES = [...codingToolNames, "delegate", "skill"] as const;
+const STATIC_TOOL_NAMES = [...codingToolNames, "skill"] as const;
 type StaticToolName = (typeof STATIC_TOOL_NAMES)[number];
 
 const isStaticToolName = (name: string): name is StaticToolName =>

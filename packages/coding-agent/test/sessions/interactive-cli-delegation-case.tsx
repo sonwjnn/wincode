@@ -12,6 +12,10 @@ import type {
 } from "@wincode/ai/model-client";
 import type { DispatchModeRunners } from "@/modules/application/dispatch";
 import { dispatch } from "@/modules/application/dispatch";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
+import { loadPlugins } from "@/modules/plugins/loader";
+import { getSharedSubagentsTaskStore } from "@/plugins/subagents/store";
+import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
@@ -51,6 +55,7 @@ const REPORT_DETAILS =
 const PARENT_START_OUTPUT = "Interactive CLI started the delegated inspection.";
 const PARENT_OUTPUT = "Interactive CLI incorporated the durable child report.";
 const SUBMISSION = "Delegate an inspection from the interactive CLI.";
+const subagentsTaskStore = await getSharedSubagentsTaskStore();
 const DELEGATION_CALL_ID = toolCallId("interactive-cli-delegation");
 const SUBMIT_RESULT_CALL_ID = toolCallId("interactive-cli-submit-result");
 
@@ -94,6 +99,7 @@ recorder.stepScript = async function* (
 };
 
 afterAll(async () => {
+	subagentsTaskStore.close();
 	mock.restore();
 	restoreScrollTo();
 	restoreEnvironment();
@@ -117,7 +123,12 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 	};
 	const runners: DispatchModeRunners = {
 		interactive: async (context) => {
-			setInteractiveRuntimeContext({ args: context.args, cwd: context.cwd });
+			setInteractiveRuntimeContext({
+				args: context.args,
+				configRuntime: context.configRuntime,
+				cwd: context.cwd,
+				pluginRuntime: context.pluginRuntime,
+			});
 			return runInteractive(rendererFactory);
 		},
 		json: async () => 0,
@@ -132,7 +143,30 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 			stdinIsTTY: true,
 			stdout: { write: () => undefined },
 		},
-		runners
+		runners,
+		{
+			initializeRuntime: async ({ cwd, enabledPlugins, pluginPaths }) => {
+				const configRuntime = {
+					configStore: createConfigStore({
+						configRoot: testDirectory,
+						homeRoot: testDirectory,
+					}),
+					cwd,
+					homeRoot: testDirectory,
+					workspace: cwd,
+				};
+				const composition = createApplicationPluginComposition({
+					enabledPlugins,
+					workspace: cwd,
+				});
+				const pluginRuntime = await loadPlugins({
+					bundledPlugins: composition.bundledPlugins,
+					cliPaths: pluginPaths,
+					config: configRuntime,
+				});
+				return { configRuntime, pluginRuntime };
+			},
+		}
 	);
 
 	try {
@@ -152,9 +186,11 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 		let parentSessionId: SessionId | undefined;
 		await waitForSessionCondition(async () => {
 			for (const session of await store.listSessions()) {
-				const task = (await store.listDelegationTasks(session.id)).find(
-					(candidate) => candidate.parentToolCallId === DELEGATION_CALL_ID
-				);
+				const task = subagentsTaskStore
+					.listTasks(session.id)
+					.find(
+						(candidate) => candidate.parentToolCallId === DELEGATION_CALL_ID
+					);
 				if (task?.status === "succeeded") {
 					parentSessionId = session.id;
 					return true;
@@ -171,9 +207,9 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 		if (parentSessionId === undefined) {
 			throw new Error("Interactive CLI did not create a delegated task.");
 		}
-		const task = (await store.listDelegationTasks(parentSessionId)).find(
-			(candidate) => candidate.parentToolCallId === DELEGATION_CALL_ID
-		);
+		const task = subagentsTaskStore
+			.listTasks(parentSessionId)
+			.find((candidate) => candidate.parentToolCallId === DELEGATION_CALL_ID);
 		if (task === undefined) {
 			throw new Error("The delegated task was not durably recorded.");
 		}
@@ -228,9 +264,9 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 		);
 		expect(reportRecordIndex).toBeGreaterThanOrEqual(0);
 		expect(incorporatedReportIndex).toBeGreaterThan(reportRecordIndex);
-		expect(
-			await store.listPendingDelegationReports(parentSessionId)
-		).toHaveLength(0);
+		expect(subagentsTaskStore.listPendingReports(parentSessionId)).toHaveLength(
+			0
+		);
 		expect(setup.captureCharFrame()).toContain(PARENT_OUTPUT);
 		expect(setup.captureCharFrame()).not.toContain(CHILD_OUTPUT);
 

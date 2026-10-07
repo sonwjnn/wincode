@@ -121,21 +121,21 @@ describe("Agent Turn lifecycle", () => {
 	});
 });
 
-test("parent and delegated lifecycles settle independently", () => {
+test("independent Agent Turn lifecycles settle independently", () => {
 	const parent = createAgentTurnLifecycle(turnId("turn-parent"));
-	const delegated = createAgentTurnLifecycle(turnId("turn-subagent"));
+	const subagent = createAgentTurnLifecycle(turnId("turn-subagent"));
 	parent.apply({ ...started, turnId: turnId("turn-parent") });
-	delegated.apply({
+	subagent.apply({
 		...started,
 		agentId: agentId("research"),
 		turnId: turnId("turn-subagent"),
 	});
 	parent.apply(completed(1, "turn-parent"));
-	const delegatedTerminal = delegated.interrupt(1);
+	const subagentTerminal = subagent.interrupt(1);
 
 	expect(parent.getState().status).toBe("completed");
-	expect(delegated.getState().status).toBe("interrupted");
-	expect(delegatedTerminal.turnId).toBe(turnId("turn-subagent"));
+	expect(subagent.getState().status).toBe("interrupted");
+	expect(subagentTerminal.turnId).toBe(turnId("turn-subagent"));
 });
 
 describe("Operational Failure boundary", () => {

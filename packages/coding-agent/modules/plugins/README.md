@@ -42,7 +42,10 @@ const jiraPlugin: PluginFactory = (api) => {
         `https://jira.example/issues?q=${encodeURIComponent(query)}`,
         { signal },
       );
-      return { workspace, issues: await response.json() };
+      return {
+        type: "success",
+        output: { workspace, issues: await response.json() },
+      };
     },
   });
 
@@ -60,10 +63,27 @@ export default jiraPlugin;
 
 The stable Plugin Identifier and local tool names use lowercase ASCII letters, digits, and underscores. Wincode exposes `plugin_jira_search_issues` to the Agent and uses `plugin:jira:search_issues` as the Tool Permission action. A Plugin Tool's effective permission defaults to `ask` for each calling Agent. Only user-controlled rules may grant `allow`; project rules may tighten the decision to `ask` or `deny`. The normal Interactive approval flow applies, while Print and JSON Modes fail closed on an unresolved `ask`. RPC uses its existing approval protocol.
 
-Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas are validated by Wincode, and results are bounded to 64 KiB of UTF-8 text or JSON. Tool failures become safe failed Tool Calls.
+Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas may be Zod or JSON Schema. Handlers return the common Tool outcome shape: `{ type: "success", output }` or `{ type: "failure", errorText }`. Successful output is bounded to 64 KiB of UTF-8 text or JSON; failures become safe failed Tool Calls.
+
+Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeAgentTurn(context, scope)`. The pre-Turn context contains the Session ID, Agent ID, workspace, and abort signal. Within one Plugin, Turn registrations override Session registrations, which override factory registrations. A same-scope registration replaces that Plugin's previous definition; `unregisterTool(name)` masks an outer definition only in that scope. Other Plugins cannot replace its tools. A failed pre-Turn hook contributes no tools for that Plugin on the affected Turn.
 
 Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened and do not pass through Tool Permission or open a second approval dialog.
 
+A Plugin factory may also register named process resources with `registerResource(name, value)`. Host integrations retrieve them through the generic `PluginRuntime.getResource(pluginId, name)` API; resource types and ownership stay with the Plugin. Resource names are unique within a Plugin and values must be defined. The Plugin should release owned resources from `onShutdown`.
+
+Tool handlers can register background promises with `context.registerBackgroundWork(promise)`. One-Shot waits for all work registered to that Session before exiting. Interactive Mode and RPC keep the parent Session Host alive while registered work is pending, even after its last view is released; normal idle unloading resumes when the work settles.
+
+## Session SDK
+
+The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. `handle.deliver(text)` durably queues a message and wakes the Session at its next safe boundary; `handle.prompt(input)` also permits Agent/model selection. SDK callers opt into bundled optional Plugins explicitly. A Session SDK can create a child SDK with an explicit `enabledPlugins` list; the child does not inherit the parent's optional or file-loaded Plugin selection. For example, Subagents selects its child set deliberately:
+
+```ts
+const childSdk = await parentSdk.createChildSdk({ enabledPlugins: ["subagents"] });
+const child = await childSdk.openSession(childSessionId);
+```
+
+Dispose child handles and child SDKs when their work is complete. Coding and shell remain native Session tools; Skills remain native host capabilities.
+
 ## Lifecycle
 
-The default factory runs once per Wincode process. A Plugin may register one `onSessionStart`, `onSessionShutdown`, and `onShutdown` hook. Session hooks follow each loaded Session runtime: when an idle runtime unloads and later reopens, Wincode sends a new start/shutdown pair. A failed start disables the Plugin only for that Session. Cleanup hooks are idempotent. Plugin file changes take effect on the next Wincode start; hot reload is not supported.
+The default factory runs once per Wincode process. A Plugin may register one `onSessionStart`, `onSessionShutdown`, `onBeforeAgentTurn`, and `onShutdown` hook. Session hooks follow each loaded Session runtime: when an idle runtime unloads and later reopens, Wincode sends a new start/shutdown pair. A failed start disables the Plugin only for that Session; a failed pre-Turn hook omits that Plugin's tools only for the affected Turn. Cleanup hooks are idempotent. Plugin file changes take effect on the next Wincode start; hot reload is not supported.

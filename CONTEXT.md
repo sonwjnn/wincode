@@ -100,13 +100,16 @@ The specific work a parent assigns to a Delegated Conversation, identified indep
 The durable success, failure, or cancellation outcome of one Delegated Task, correlated with its parent Tool Call and child Session. It becomes ordinary parent input at a safe active-turn boundary or an automatic idle continuation; it never interrupts in-flight model or Tool Call work. _Avoid_: user prompt, raw child transcript
 
 **Delegated Task Status**:
-The observable state of one assigned task, distinct from whether its child Session is open. A task has one confirmed terminal outcome; after an unclean shutdown without confirmation, its outcome is interrupted or unknown, not assumed cancelled. _Avoid_: child Session lifetime, live stream event
+The observable state of one assigned task, distinct from whether its child Session is open. A task has one confirmed terminal outcome; after an unclean shutdown, unconfirmed work is marked interrupted and reported without assuming cancellation or success. _Avoid_: child Session lifetime, live stream event
 
 **Delegation Cancellation**:
 An explicit tool action the parent Agent may choose to stop one delegated task or all active descendant tasks without aborting its own turn. A user prompt does not itself cancel child work, and cancellation does not delete child Sessions or their history. _Avoid_: automatic cancellation on parent prompt, closing a child Session
 
 **Agent Session**:
 The application-level conversation boundary that connects the Stateful Agent to durable session history and coding-specific policies. It owns composition, attachment preparation, durable status and presentation, while projecting the Stateful Agent's transient queue without maintaining a second queue authority. _Avoid_: Stateful Agent, Session Store
+
+**Session SDK**:
+The public Coding-Agent interface for creating, reopening, driving, observing, and disposing Agent Sessions. A caller may choose Session capabilities and storage without taking ownership of the Stateful Agent's internal state. _Avoid_: Subagents runtime, raw Session object
 
 **Session Host**:
 The application-level composition that opens one Session and connects its Stateful Agent to session capabilities. Its lifetime is independent of which conversation the UI displays; it may release an idle runtime without deleting durable history. _Avoid_: UI view, Session Store, Stateful Agent
@@ -182,7 +185,10 @@ The user-facing command-line entry point for the Coding-Agent Application. A bar
 The user-facing Wincode application that runs an Agent through Interactive, Print, JSON, or RPC Mode. It owns application lifetime and active conversation runtimes independently of the currently displayed view; Stateful Agents own their respective live state. _Avoid_: Wincode TUI, CLI package, agent core
 
 **Plugin**:
-A Coding-Agent Application module that contributes executable behavior through a host-provided interface. A Plugin may be built into Wincode or explicitly loaded from a user-chosen file; registration alone does not expose a tool to an Agent or grant Tool Permission. _Avoid_: extension, Skill, MCP Server
+A Coding-Agent module that contributes executable behavior through the public PluginAPI. A Plugin may be built into Wincode or explicitly loaded from a user-chosen file; registration alone does not expose a tool to an Agent or grant Tool Permission. _Avoid_: extension, Skill, MCP Server
+
+**PluginAPI**:
+The common registration contract through which built-in and file-loaded Plugins contribute tools, commands, and lifecycle behavior. A Plugin's Identifier owns its contributions across factory, Session, and Agent Turn scopes. _Avoid_: built-in-only registry, file-only extension API
 
 **Built-in Plugin**:
 A Plugin bundled with Wincode and registered by the application as part of its shipped behavior. _Avoid_: file-loaded Plugin
@@ -197,7 +203,7 @@ The built-in Plugin that connects configured MCP Servers and adapts their tools 
 A configured MCP endpoint or process that supplies tools through the MCP protocol. Its configuration and connection are managed by the MCP Plugin. _Avoid_: MCP Plugin
 
 **Plugin Identifier**:
-The stable identity a Plugin loaded from a file declares independently of that path. It identifies the Plugin across tool names, Tool Permission rules, and Sessions. _Avoid_: filename, display label
+The stable identity declared by a built-in or file-loaded Plugin. It identifies ownership of tools, commands, diagnostics, and lifecycle across Sessions; a file path is only a loading location. _Avoid_: filename, display label
 
 **Execution Mode**:
 A user-facing way to run the Coding-Agent Application. Each mode chooses input, output, and process lifecycle but does not own Session state. _Avoid_: Coding Mode, agent loop
@@ -445,6 +451,9 @@ Agents with the `primary` or `all` role are Primary Agents. _Avoid_: Main Agent
 An Agent eligible to execute work delegated by another Agent. Agents with the
 `subagent` or `all` role are Subagents. _Avoid_: Child agent, secondary agent
 
+**Capability Ceiling**:
+An optional restriction on the tools and permissions a new Agent Session may use, supplied by Agent configuration or a parent Plugin and fixed when that Session is created. It intersects with the child's own configuration rather than replacing the Tool Gate's per-call decision. _Avoid_: inherited permission, parent policy
+
 **Tool Permission**:
 The effective decision governing whether an Agent may invoke a tool for a
 resource: `allow`, `ask`, or `deny`. Tool Permission is independent of Agent
@@ -469,7 +478,7 @@ deny/reject wording each family emits. _Avoid_:
 approval service, permission middleware
 
 **Plugin Tool**:
-An Agent-callable operation supplied by a Plugin loaded from a file. Its registration makes it eligible for an Agent Turn, while its Tool Permission is evaluated when called and defaults to `ask`. _Avoid_: Plugin Command, automatically approved tool
+An Agent-callable operation supplied by a built-in or file-loaded Plugin. Registration makes it eligible for an Agent Turn; the Tool Gate evaluates its source-specific Tool Permission when called, with file-loaded Plugin Tools defaulting to `ask`. _Avoid_: Plugin Command, automatically approved tool
 
 **Coding Tool Catalog**:
 The set of coding tools the application knows how to describe and execute.
@@ -484,12 +493,10 @@ Application composes selected catalog tools as Resolved Tools through the Tool
 Gate for each Agent Turn. _Avoid_: Coding Tool Catalog, executable registry
 
 **Application Tool Registry**:
-The process-owned host through which Plugins and native providers, such
-as Skills, contribute tools for immutable per-turn resolution. The Subagents
-Plugin also registers its process-lifetime task runtime through this interface.
-Membership alone exposes no tool to an Agent and grants no Tool Permission; each
-provider retains its family-specific Tool Gate path. _Avoid_: Runtime Tool
-Registry, Plugin Manager
+The application composition point that selects registered Plugin Tools and
+native capabilities, such as Skill Activation, for an Agent Turn. Membership
+alone exposes no tool to an Agent or grants Tool Permission; each tool retains
+its source-specific Tool Gate path. _Avoid_: Runtime Tool Registry, PluginAPI
 
 **Resolved Tool**:
 A tool definition whose executable path has been composed through the Tool Gate

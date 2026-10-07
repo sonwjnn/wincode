@@ -570,7 +570,7 @@ export const createSessionSteeringWorkflow = (
 		armedSkill: SessionSkillCatalog,
 		signal: AbortSignal
 	): Promise<SessionMessage[]> => {
-		if (port.isClosed() || !isUndefined(execution.parent)) {
+		if (port.isClosed()) {
 			return [];
 		}
 		const snapshot = port.getSnapshot();

@@ -1,3 +1,4 @@
+import type { AgentRuntime } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -6,6 +7,7 @@ export type StartInteractiveInput = {
 	cwd: string;
 	configRuntime?: ConfigRuntime;
 	pluginRuntime?: PluginRuntime;
+	runtimeFactory?: () => AgentRuntime;
 };
 
 let runtimeContext: StartInteractiveInput | undefined;

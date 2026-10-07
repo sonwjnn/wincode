@@ -10,4 +10,11 @@ describe("parseCliOptions", () => {
 	test("enables auto approval with --auto", () => {
 		expect(parseCliOptions(["node", "cli", "--auto"]).autoApproval).toBe(true);
 	});
+
+	test("disables each bundled optional Plugin independently", () => {
+		expect(
+			parseCliOptions(["node", "cli", "--no-mcp", "--no-subagents"])
+				.disabledPlugins
+		).toEqual(["mcp", "subagents"]);
+	});
 });

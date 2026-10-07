@@ -2,7 +2,6 @@ import type {
 	AgentId,
 	AgentTurn,
 	AgentTurnEvent,
-	AgentTurnTerminalEvent,
 	StatefulAgent,
 } from "@wincode/agent-core";
 import {
@@ -13,16 +12,22 @@ import {
 	type ReasoningSelection,
 	reasoningModeSchema,
 } from "@wincode/ai/models";
-import { createMcpToolExecutor } from "@wincode/mcp";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
+import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
-import type {
-	PermissionDecision,
-	ToolPermission,
+import {
+	composePermissionDecisions,
+	decideToolPermissionAction,
+	type PermissionActionFamily,
+	type PermissionDecision,
+	type ToolPermission,
 } from "@/modules/permissions/policy";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
-import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type {
+	PluginRuntime,
+	PluginToolDescriptor,
+} from "@/modules/plugins/runtime";
 import type { PluginPermissionResolution } from "@/modules/plugins/tools";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
@@ -41,14 +46,6 @@ import {
 	codingToolCatalog,
 	type VersionedEditingContext,
 } from "@/modules/tools";
-import {
-	createDelegationExecutor,
-	createSubmitResultExecutor,
-	failDelegatedTask,
-	hasDelegationTargets,
-	settleDelegatedTaskAfterTurn,
-} from "@/plugins/subagents/delegation";
-import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
@@ -63,9 +60,8 @@ import type {
 	SessionTurnOutcome,
 	SessionTurnRequest,
 } from "../agent-session/types";
-import { primaryEntry } from "../agent-session/utils";
+import { latestEntry } from "../agent-session/utils";
 import { SessionCompactionError } from "../compaction/error";
-import type { DelegationTask } from "../delegation/types";
 import {
 	buildAgentTurn,
 	type RuntimeGatedTooling,
@@ -85,8 +81,6 @@ export type SessionPortsOptions = Readonly<{
 	capabilities: SessionCapabilities;
 	/** The Agent Session whose ports these are, available once it is constructed. */
 	agentSession: () => AgentSessionInternalPort;
-	executionMode?: ExecutionMode;
-	delegationTask?: DelegationTask;
 	isShutDown: () => boolean;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
@@ -95,43 +89,117 @@ export type SessionPortsOptions = Readonly<{
 type PluginTurnResolution = Readonly<{
 	options: Readonly<{
 		pluginRuntime?: PluginRuntime;
+		pluginTools?: readonly PluginToolDescriptor[];
 		resolvePluginPermission: (
 			action: `plugin:${string}:${string}`,
 			agentId?: AgentId
+		) => Promise<PluginPermissionResolution>;
+		resolveToolPermission: (
+			action: string,
+			resource: string,
+			agentId: AgentId | undefined,
+			family: PermissionActionFamily
 		) => Promise<PluginPermissionResolution>;
 	}>;
 	policies: Map<string, PermissionDecision>;
 }>;
 
+const resolvePermissionForAction = async (
+	toolPermission: ToolPermissionRuntime,
+	action: string,
+	resource: string,
+	agentId: AgentId,
+	family: PermissionActionFamily
+): Promise<PluginPermissionResolution> => {
+	const permission = await toolPermission.resolvePermissionForAgent(agentId);
+	return {
+		decision: decideToolPermissionAction(permission, action, resource, family),
+		safety: permission.safety,
+	};
+};
+
 const resolvePluginTurnContext = async (
 	input: Readonly<{
 		agentId: AgentId;
+		hostContext: TurnToolPluginContext;
 		pluginRuntime?: PluginRuntime;
 		sessionId: SessionId;
+		signal: AbortSignal;
 		toolPermission: ToolPermissionRuntime;
+		workspace: string;
 	}>
 ): Promise<PluginTurnResolution> => {
+	const pluginTools =
+		input.pluginRuntime === undefined
+			? []
+			: await input.pluginRuntime.resolveToolsForTurn(
+					{
+						agentId: input.agentId,
+						...(input.hostContext.capabilityCeiling === undefined
+							? {}
+							: { capabilityCeiling: input.hostContext.capabilityCeiling }),
+						...(input.hostContext.sessionSdk === undefined
+							? {}
+							: { sessionSdk: input.hostContext.sessionSdk }),
+						...(input.hostContext.turnId === undefined
+							? {}
+							: { turnId: input.hostContext.turnId }),
+						getAgentPermissionPolicy: () =>
+							input.toolPermission.resolveAgentActionPolicyForAgent(
+								input.agentId
+							),
+						registerTurnCleanup: (cleanup) =>
+							input.hostContext.registerTurnCleanup?.(cleanup),
+						sessionId: input.sessionId,
+						signal: input.signal,
+						workspace: input.workspace,
+					},
+					input.hostContext
+				);
 	const policies = await Promise.all(
-		(input.pluginRuntime?.getToolDescriptors(input.sessionId) ?? []).map(
-			async ({ action, name }) => {
-				const permission =
-					await input.toolPermission.resolvePluginPermissionForAgent(
-						action,
-						input.agentId
-					);
-				return [name, permission.decision] as const;
-			}
-		)
+		pluginTools.map(async (tool) => {
+			const permission =
+				tool.permissionAction === undefined
+					? await input.toolPermission.resolvePluginPermissionForAgent(
+							tool.action,
+							input.agentId
+						)
+					: await resolvePermissionForAction(
+							input.toolPermission,
+							tool.permissionAction,
+							tool.permissionResource ?? "*",
+							input.agentId,
+							tool.permissionActionFamily ?? "plugin"
+						);
+			return [
+				tool.name,
+				tool.permissionDecision === undefined
+					? permission.decision
+					: composePermissionDecisions(
+							permission.decision,
+							tool.permissionDecision
+						),
+			] as const;
+		})
 	);
 	return {
 		options: {
 			...(input.pluginRuntime === undefined
 				? {}
 				: { pluginRuntime: input.pluginRuntime }),
+			pluginTools,
 			resolvePluginPermission: (action, agentId) =>
 				input.toolPermission.resolvePluginPermissionForAgent(
 					action,
 					agentId ?? input.agentId
+				),
+			resolveToolPermission: (action, resource, agentId, family) =>
+				resolvePermissionForAction(
+					input.toolPermission,
+					action,
+					resource,
+					agentId ?? input.agentId,
+					family
 				),
 		},
 		policies: new Map(policies),
@@ -140,15 +208,9 @@ const resolvePluginTurnContext = async (
 
 const collectExistingToolNames = (
 	codingTools: readonly string[],
-	mcpTools: readonly string[],
-	hasDelegate: boolean,
-	hasSubmitResult: boolean,
 	skillToolName: string | undefined
 ): readonly string[] => [
 	...codingTools,
-	...mcpTools,
-	...(hasDelegate ? ["delegate"] : []),
-	...(hasSubmitResult ? ["submit_result"] : []),
 	...(skillToolName === undefined ? [] : [skillToolName]),
 ];
 
@@ -208,10 +270,15 @@ const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
  */
 const activateExplicitSkill = async (
 	name: string,
-	{ execution, gate }: { execution: SkillExecution; gate: ToolGate }
+	{
+		agentId,
+		execution,
+		gate,
+	}: { agentId: AgentId; execution: SkillExecution; gate: ToolGate }
 ): Promise<SessionSkillResolution> => {
 	const entry = execution.catalog.entries.find((entry) => entry.name === name);
 	const policyOutcome = await gate.gate({
+		agentId,
 		available: !isUndefined(entry),
 		description: entry?.description ?? `Activate Skill ${name}`,
 		family: "skill",
@@ -247,7 +314,7 @@ const activateExplicitSkill = async (
 
 /**
  * Materializes the Agent Session's ports from one session's capabilities and
- * owns no lifetime: it holds the Agent Runtime, MCP snapshots, Tools and the
+ * owns no lifetime: it holds the Agent Runtime, Plugin snapshots, Tools and the
  * Tool Gate, Skill catalogs, prompt composition, attachments, and durable
  * records, and keeps no session state — every fact it observes comes from the
  * Agent Session Snapshot.
@@ -255,12 +322,15 @@ const activateExplicitSkill = async (
 export const createSessionPorts = ({
 	capabilities,
 	agentSession,
-	executionMode,
-	delegationTask,
 	isShutDown,
 	sessionId,
 	statefulAgent,
 }: SessionPortsOptions): AgentSessionPorts => {
+	const capabilityCeiling = capabilities.getCapabilityCeiling();
+	const allowedToolNames =
+		capabilityCeiling === undefined
+			? undefined
+			: new Set(capabilityCeiling.tools);
 	const assertHostOpen = (): void => {
 		if (isShutDown()) {
 			throw new SessionCompactionError(
@@ -271,14 +341,13 @@ export const createSessionPorts = ({
 	};
 	/**
 	 * The execution scopes the ports run, keyed by Agent Turn Identifier. A
-	 * scope holds what only the Host can own — the MCP snapshot, the child abort
-	 * registry, and delegation bookkeeping — while the Agent Session owns the
-	 * session state every observer reads.
+	 * scope holds what only the Host can own — per-turn Plugin cleanup — while the Agent
+	 * Session owns the state every observer reads.
 	 */
 	const scopes = new Map<string, TurnExecution>();
-	/** The newest execution scope that is not a delegated Subagent. */
-	const primaryScope = (): TurnExecution | undefined =>
-		primaryEntry(scopes.values());
+	/** The most recently active execution scope. */
+	const latestScope = (): TurnExecution | undefined =>
+		latestEntry(scopes.values());
 	/**
 	 * The scope of one Agent Turn execution: the Agent Session's execution record
 	 * plus the capabilities only the Host can hold.
@@ -301,7 +370,6 @@ export const createSessionPorts = ({
 			startedAt: execution.startedAt,
 			turnId: execution.turnId,
 			...omitUndefined({
-				parent: execution.parent,
 				sessionEffort: execution.sessionEffort,
 				sessionReasoningMode: execution.sessionReasoningMode,
 				skillRequest: turn.skillRequest,
@@ -310,10 +378,8 @@ export const createSessionPorts = ({
 			}),
 		});
 	const releaseScope = (scope: TurnExecution): void => {
-		const snapshot = scope.mcpSnapshot;
-		if (!isNull(snapshot)) {
-			capabilities.getMcp().releaseSnapshot?.(snapshot);
-			scope.mcpSnapshot = null;
+		for (const cleanup of scope.pluginCleanups.reverse()) {
+			cleanup();
 		}
 		scopes.delete(scope.turnId);
 	};
@@ -329,15 +395,9 @@ export const createSessionPorts = ({
 					: agentSession().requestApproval(request),
 		},
 		onAbort: (request) => {
-			if (isUndefined(request.toolCallId)) {
-				return;
+			if (!isUndefined(request.toolCallId)) {
+				agentSession().abortApprovalTurn(request.toolCallId);
 			}
-			const abortChild = primaryScope()?.childAborts.get(request.toolCallId);
-			if (!isUndefined(abortChild)) {
-				abortChild();
-				return;
-			}
-			agentSession().abortApprovalTurn(request.toolCallId);
 		},
 		resolvePermission: (agentId) => {
 			const permission = capabilities.getToolPermission();
@@ -381,14 +441,15 @@ export const createSessionPorts = ({
 		sandbox: capabilities.getToolPermission().sandbox,
 		service: capabilities.getToolPermission().service,
 		sessionId,
+		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 	});
 	/**
 	 * The request overhead of the Agent Turn execution in flight: the bounded
-	 * project block plus the serialized tools, instructions, and MCP manifest a
+	 * project block plus the serialized tools, instructions, and Plugin manifest a
 	 * compaction must reserve for the next normal turn.
 	 */
 	const requestOverheadTokens = (): number => {
-		const scope = primaryScope();
+		const scope = latestScope();
 		const resolvedAgent = scope?.resolvedAgent;
 		const codingTools =
 			resolvedAgent?.visibleCodingTools.map((name) => {
@@ -399,7 +460,6 @@ export const createSessionPorts = ({
 		const serializedContext = JSON.stringify({
 			agentInstructions: resolvedAgent?.instructions ?? "",
 			codingTools,
-			mcpTools: scope?.mcpSnapshot?.manifest ?? [],
 			skillTool: skillTool
 				? {
 						description: skillTool.description,
@@ -416,10 +476,10 @@ export const createSessionPorts = ({
 	};
 	/**
 	 * Arms one Skill catalog from the workspace and the permission that decides
-	 * which Skills it may offer, for the Agent Turn a session starts and for the
-	 * Subagents it delegates to.
+	 * which Skills it may offer for the current Agent Turn.
 	 */
 	const armSkillCatalog = async (
+		agentId: AgentId,
 		permission: ToolPermission
 	): Promise<SessionSkillCatalog> => {
 		const catalog = await discoverSkillCatalog(
@@ -428,15 +488,19 @@ export const createSessionPorts = ({
 		);
 		const tool = buildSkillToolDefinition(catalog);
 		return {
+			agentId,
 			diagnostic: summarizeCatalogDiagnostics(catalog),
 			execution: createSkillExecution(catalog),
 			...omitUndefined({ tool }),
 		};
 	};
 	/** Arms the Skill catalog one Agent Turn runs with. */
-	const createTurnSkill = async (): Promise<SessionSkillCatalog> =>
+	const createTurnSkill = async (
+		agentId: AgentId
+	): Promise<SessionSkillCatalog> =>
 		await armSkillCatalog(
-			await capabilities.getToolPermission().resolvePermission()
+			agentId,
+			await capabilities.getToolPermission().resolvePermissionForAgent(agentId)
 		);
 	/**
 	 * Resolves the Skill a submission asks for: the one it names, or the one
@@ -447,9 +511,10 @@ export const createSessionPorts = ({
 		anchoredMessage: SessionMessage | undefined,
 		armedSkill: SessionSkillCatalog
 	): Promise<SessionSkillResolution> => {
-		const execution = armedSkill.execution;
+		const { agentId, execution } = armedSkill;
 		if (!isUndefined(explicitSkill)) {
 			return activateExplicitSkill(explicitSkill.name, {
+				agentId,
 				execution,
 				gate: toolGate,
 			});
@@ -474,11 +539,13 @@ export const createSessionPorts = ({
 				};
 			}
 			return activateExplicitSkill(parsedSkill.data.name, {
+				agentId,
 				execution,
 				gate: toolGate,
 			});
 		}
 		return activateExplicitSkill(parsedSkill.data.name, {
+			agentId,
 			execution,
 			gate: toolGate,
 		});
@@ -487,13 +554,11 @@ export const createSessionPorts = ({
 	const prepareAgentTurn = async (
 		request: SessionTurnRequest,
 		scope: TurnExecution,
-		delegationTask: DelegationTask | null,
 		sessionStore: SessionStore
 	): Promise<AgentTurn> => {
 		const { execution, messages, resolvedAgent, signal } = request;
 		const config = capabilities.getConfig();
 		const connections = capabilities.getConnections();
-		const mcp = capabilities.getMcp();
 		const toolPermission = capabilities.getToolPermission();
 		const versionedEditing: VersionedEditingContext | undefined =
 			sessionStore.fileObservationStore === undefined
@@ -514,72 +579,71 @@ export const createSessionPorts = ({
 			connections,
 			{ ...reasoningSelection, signal }
 		);
-		const mcpPolicy = await toolPermission.resolveMcpPolicyForAgent(
-			execution.agent
-		);
-		const snapshot = await mcp.createSnapshot(execution.agent, mcpPolicy);
-		scope.mcpSnapshot = snapshot;
-		const executeMcpTool = createMcpToolExecutor(mcp.execute);
 		const tooling: RuntimeGatedTooling = {
 			gate: toolGate,
-			mcpSnapshot: snapshot,
-			executeMcpTool,
-			registerChildAbort: (toolCallId, abort) => {
-				scope.childAborts.set(toolCallId, abort);
-				return () => scope.childAborts.delete(toolCallId);
-			},
 			resolveResourceLimits: (agentId) =>
 				isUndefined(agentId)
 					? toolPermission.resolveResourceLimits()
 					: toolPermission.resolveResourceLimitsForAgent(agentId),
 			versionedEditing,
 		};
-		scope.delegate = hasDelegationTargets(capabilities)
-			? createDelegationExecutor({
-					capabilities,
-					execution: scope,
-					executionMode,
-					sessionId,
-				})
-			: undefined;
-		const submitTask =
-			delegationTask !== null &&
-			(delegationTask.status === "active" ||
-				delegationTask.status === "awaiting_report")
-				? delegationTask
-				: null;
-		const submitResult =
-			submitTask === null
-				? undefined
-				: createSubmitResultExecutor(capabilities, submitTask.id);
 		const resourceLimits = await tooling.resolveResourceLimits?.(
 			execution.agent
 		);
 		const pluginRuntime = capabilities.getPluginRuntime?.();
+		const sessionSdk = capabilities.getSessionSdk?.();
+		const parentCapabilityCeiling = capabilities
+			.getRegistry()
+			?.agents.find(({ id }) => id === execution.agent)?.capabilityCeiling;
 		const pluginTurn = await resolvePluginTurnContext({
 			agentId: execution.agent,
 			...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+			hostContext: {
+				agentId: execution.agent,
+				agentTools: resolvedAgent.visibleCodingTools,
+				...(parentCapabilityCeiling === undefined
+					? {}
+					: { capabilityCeiling: parentCapabilityCeiling }),
+				effort: execution.effort,
+				model: execution.model,
+				reasoningMode: execution.reasoningMode,
+				turnId: execution.turnId,
+				registerTurnCleanup: (cleanup) => scope.pluginCleanups.push(cleanup),
+				gate: tooling.gate,
+				resourceLimits,
+				resolveResourceLimits: tooling.resolveResourceLimits,
+				resolveToolPermission: (action, resource, agentId, family) =>
+					resolvePermissionForAction(
+						toolPermission,
+						action,
+						resource,
+						agentId ?? execution.agent,
+						family
+					),
+				sessionId,
+				signal,
+				...(sessionSdk === undefined ? {} : { sessionSdk }),
+				workspace: config.workspace,
+			},
 			sessionId,
+			signal,
 			toolPermission,
+			workspace: config.workspace,
 		});
 		const existingToolNames = collectExistingToolNames(
 			resolvedAgent.visibleCodingTools,
-			snapshot.manifest.map(({ name }) => name),
-			scope.delegate !== undefined,
-			submitResult !== undefined,
 			scope.armedSkill?.tool?.name
 		);
-		const tools = await resolveTurnTools({
+		const tools = await (
+			capabilities.getTurnToolResolver?.() ?? resolveTurnTools
+		)({
 			agentId: execution.agent,
 			agentTools: resolvedAgent.visibleCodingTools,
-			delegate: scope.delegate,
-			delegationTaskId: submitTask?.id,
-			executeMcpTool,
+			effort: execution.effort,
+			model: execution.model,
+			reasoningMode: execution.reasoningMode,
+			turnId: execution.turnId,
 			gate: tooling.gate,
-			mcpSnapshot: snapshot,
-			...(scope.delegate === undefined
-				? {}
-				: { parentTurnId: execution.turnId }),
 			resourceLimits,
 			resolveResourceLimits: tooling.resolveResourceLimits,
 			...pluginTurn.options,
@@ -588,69 +652,44 @@ export const createSessionPorts = ({
 			existingToolNames,
 			skillExecution: scope.armedSkill?.execution,
 			skillTool: scope.armedSkill?.tool,
-			submitResult,
 			versionedEditing,
 		});
+		const availableTools =
+			allowedToolNames === undefined
+				? tools
+				: tools.filter(({ definition }) =>
+						allowedToolNames.has(definition.name)
+					);
 		const agentPermission = await toolPermission.resolvePermissionForAgent(
 			execution.agent
 		);
 		const prompt = await prepareAgentTurnPrompt({
 			agent: resolvedAgent,
 			cwd: config.cwd,
-			delegation: execution.parent,
-			mcpTools: snapshot.tools,
 			pluginPolicies: pluginTurn.policies,
 			model: {
 				modelId: modelTarget.modelId,
 				providerId: modelTarget.providerId,
 			},
 			permission: agentPermission,
-			tools,
+			tools: availableTools,
 			workspace: config.workspace,
 		});
 		return buildAgentTurn({
 			agent: execution.agent,
-			delegation: execution.parent,
 			modelMessages: messages,
 			modelTarget,
 			resolvedAgent,
+			role: resolvedAgent.role,
 			skill: request.skillRequest,
 			systemInstructions: prompt.instructions,
-			tools,
+			tools: availableTools,
 			turnId: execution.turnId,
 		});
 	};
-	const handleTurnTerminal = async (
-		callbacks: SessionTurnRequest["callbacks"],
-		task: DelegationTask | null,
-		event: AgentTurnTerminalEvent
-	): Promise<void> => {
-		await callbacks.onTerminal(event);
-		if (task === null) {
-			return;
-		}
-		try {
-			await settleDelegatedTaskAfterTurn(capabilities, task, event);
-		} catch {
-			capabilities.getSessionHostManager().delegation.finishTask(task.id);
-		}
-	};
-	const handleTurnFailure = async (
-		task: DelegationTask | null,
-		error: unknown
-	): Promise<void> => {
-		if (task === null) {
-			return;
-		}
-		try {
-			await failDelegatedTask(capabilities, task.id, error);
-		} catch {
-			capabilities.getSessionHostManager().delegation.finishTask(task.id);
-		}
-	};
 	/**
 	 * Runs one Agent Turn execution: it resolves the Model Target, snapshots
-	 * MCP, composes the Tools and prompt, and consumes the Agent Runtime,
+	 * resolves Plugin Tools, composes the prompt, and consumes the Agent Runtime,
 	 * reporting every event and checkpoint to the Agent Session.
 	 */
 	const runTurn = async (
@@ -664,24 +703,14 @@ export const createSessionPorts = ({
 		});
 		scopes.set(execution.turnId, scope);
 		let turn: AgentTurn | undefined;
-		let delegationTaskForTurn: DelegationTask | null = null;
 		try {
 			const sessionStore = capabilities.getStore();
-			delegationTaskForTurn = await capabilities
-				.getSessionHostManager()
-				.delegation.getTaskForChild(sessionStore, sessionId);
-			turn = await prepareAgentTurn(
-				request,
-				scope,
-				delegationTaskForTurn,
-				sessionStore
-			);
+			turn = await prepareAgentTurn(request, scope, sessionStore);
 			await runAgentTurnToText({
 				onCheckpoint: callbacks.commitTerminal,
 				onToolCheckpoint: callbacks.commitToolCall,
 				onEvent: (event: AgentTurnEvent) => callbacks.onEvent(event),
-				onTerminal: (event: AgentTurnTerminalEvent) =>
-					handleTurnTerminal(callbacks, delegationTaskForTurn, event),
+				onTerminal: callbacks.onTerminal,
 				onViewState: (viewState) => callbacks.onViewState(viewState),
 				getAssistantMessageId: request.getAssistantMessageId,
 				runtime: statefulAgent,
@@ -689,16 +718,13 @@ export const createSessionPorts = ({
 				...omitUndefined({
 					sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
 				}),
-				// The Agent Session prepares durable Steering and Delegation inputs.
-				// Stateful Agent owns their runtime queues and polls each source only
-				// at the corresponding safe boundary.
+				// Stateful Agent owns runtime queues and polls each source only at the
+				// corresponding safe boundary.
 				takeSteeringMessages: request.takeSteeringMessages,
-				takeFollowUpMessages: request.takeFollowUpMessages,
 				turn,
 			});
 			return { turn };
 		} catch (error) {
-			await handleTurnFailure(delegationTaskForTurn, error);
 			return { error, turn };
 		} finally {
 			releaseScope(scope);
@@ -732,21 +758,8 @@ export const createSessionPorts = ({
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
 		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
-		consumeDelegationReport: ({ assistantCheckpoint, record, taskId }) =>
-			capabilities.getStore().consumeDelegationReport({
-				assistantCheckpoint,
-				parentSessionId: sessionId,
-				record,
-				taskId,
-			}),
-		listPendingDelegationReports: () =>
-			capabilities.getStore().listPendingDelegationReports(sessionId),
 		updateSubmissionStatus: (input) =>
 			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
-		persistReportContinuationPaused: (paused) =>
-			capabilities
-				.getStore()
-				.updateSession(sessionId, { reportContinuationPaused: paused }),
 		compaction: {
 			compact: (input) =>
 				capabilities.getCompactionModule().compact({
@@ -758,52 +771,26 @@ export const createSessionPorts = ({
 				capabilities.getCompactionModule().needsCompaction(messages, settings),
 		},
 		resolveSubmission: (input) => {
-			const delegatedInput =
-				delegationTask === undefined
-					? input
-					: {
-							...input,
-							agent: delegationTask.agentId,
-							delegation: {
-								parentToolCallId: delegationTask.parentToolCallId,
-								parentTurnId: delegationTask.parentTurnId,
-							},
-						};
 			const selection = strictReasoningSelection(
-				delegatedInput.model,
-				delegatedInput.effort,
-				delegatedInput.reasoningMode
+				input.model,
+				input.effort,
+				input.reasoningMode
 			);
 			strictReasoningSelection(
-				delegatedInput.sessionModel,
-				delegatedInput.sessionEffort,
-				delegatedInput.sessionReasoningMode
+				input.sessionModel,
+				input.sessionEffort,
+				input.sessionReasoningMode
 			);
 			const registry = capabilities.getRegistry();
 			if (isNull(registry)) {
-				if (delegationTask === undefined) {
-					return delegatedInput;
-				}
-				const { resolvedAgent: _resolvedAgent, ...unresolvedInput } =
-					delegatedInput;
-				return unresolvedInput;
-			}
-			if (
-				delegationTask !== undefined &&
-				!registry.agents.some(
-					({ id, isAvailable }) => id === delegationTask.agentId && isAvailable
-				)
-			) {
-				const { resolvedAgent: _resolvedAgent, ...unresolvedInput } =
-					delegatedInput;
-				return unresolvedInput;
+				return input;
 			}
 			const effective = resolveEffectiveAgentSelection(
 				registry,
-				delegatedInput.agent,
-				delegatedInput.model,
+				input.agent,
+				input.model,
 				selection,
-				delegationTask !== undefined
+				true
 			);
 			strictReasoningSelection(
 				effective.model,
@@ -815,7 +802,7 @@ export const createSessionPorts = ({
 				effort: _effort,
 				reasoningMode: _reasoningMode,
 				...unresolvedInput
-			} = delegatedInput;
+			} = input;
 			return {
 				...unresolvedInput,
 				agent: effective.agent,

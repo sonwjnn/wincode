@@ -1,4 +1,5 @@
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { OptionalPluginId } from "@/shared/cli-options";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { JsonlInput } from "../rpc/protocol";
@@ -18,6 +19,7 @@ export type InvocationOptions = Readonly<{
 	session?: string;
 	effort?: string;
 	pluginPaths?: readonly string[];
+	disabledPlugins?: readonly OptionalPluginId[];
 }>;
 
 export type ApplicationContext = Readonly<{

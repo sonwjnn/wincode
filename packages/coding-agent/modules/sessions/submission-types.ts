@@ -1,6 +1,5 @@
 import type {
 	AgentId,
-	AgentTurnDelegation,
 	AgentTurnId,
 	SessionMessageId,
 	SubmissionId,
@@ -44,8 +43,6 @@ export type SessionSendInput = Readonly<{
 	effort?: Effort;
 	reasoningMode?: ReasoningMode;
 	resolvedAgent?: SessionResolvedAgent;
-	/** Correlation for an internally delegated Subagent execution. */
-	delegation?: AgentTurnDelegation;
 	/** Prompt to append as a fresh user message. */
 	userText?: string;
 	files?: readonly SessionFilePart[];

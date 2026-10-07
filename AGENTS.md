@@ -24,7 +24,7 @@
 
 When authorized to create or edit a PR, follow the checklist below.
 
-- MUST `.github/pull_request_template.md` first. Preserve the template sections and checklist, including when shortening an existing description.
+- MUST use `.agents/skills/pr/SKILL.md` this skill first. Preserve the template sections and checklist, including when shortening an existing description.
 - MUST read back the published PR description after creating or editing it. Check only verified checklist items; explain skipped or inapplicable checks in `Testing`.
 
 ---
@@ -82,7 +82,7 @@ Prefer Bun-native APIs whenever they preserve the required observable behavior; 
 
 | Operation       | Use                                                                                                           | Not                                                                   |
 | --------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| File read/write | `readUtf8File()` / `decodeUtf8()` (`@wincode/utils`); `Bun.file().bytes()`, `Bun.write()`             | `readFileSync`, `writeFileSync`                                       |
+| File read/write | `readUtf8File()` / `decodeUtf8()` (`@wincode/utils`); `Bun.file().bytes()`, `Bun.write()`                     | `readFileSync`, `writeFileSync`                                       |
 | Spawn process   | `$cmd`, `Bun.spawn()`                                                                                         | `child_process`                                                       |
 | Sleep           | `Bun.sleep(ms)`                                                                                               | `setTimeout` promise                                                  |
 | Binary lookup   | `$which("git")` from `@oh-my-pi/pi-utils`                                                                     | `spawnSync(["which", "git"])`                                         |

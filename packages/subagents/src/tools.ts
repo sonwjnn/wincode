@@ -72,7 +72,7 @@ const createDelegationTool = <SessionId extends string, TaskId extends string>(
 ): ResolvedTool => ({
 	definition: {
 		description:
-			"Start a durable child Session and return its Task ID and Session ID immediately. The child reports through submit_result; a live parent receives the report at a safe follow-up boundary, and an idle Interactive/RPC parent continues automatically.",
+			"Start a durable child Session and return its Task ID and Session ID immediately. The child reports through submit_result; a live parent receives the report as a durable user message queued after earlier submissions.",
 		inputSchema: {
 			jsonSchema: {
 				additionalProperties: false,
