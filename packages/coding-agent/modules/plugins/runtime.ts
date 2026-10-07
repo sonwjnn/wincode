@@ -1,4 +1,5 @@
 import { getErrorMessage, isNonEmptyString, logger } from "@wincode/utils";
+import type { PermissionActionFamily } from "@/modules/permissions/policy";
 import { attachPluginHostContext } from "./host-context";
 import type {
 	PluginBeforeAgentTurnContext,
@@ -28,6 +29,7 @@ export type PluginToolDescriptor = Readonly<{
 	description: string;
 	exclusiveInBatch?: true;
 	permissionAction?: string;
+	permissionActionFamily?: PermissionActionFamily;
 	permissionResource?: string;
 	permissionDecision?: "allow" | "ask" | "deny";
 	permissionSafety?: boolean;
@@ -139,7 +141,13 @@ const descriptorForTool = (
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 		...(tool.permissionAction === undefined
 			? {}
-			: { permissionAction: tool.permissionAction }),
+			: {
+					permissionAction: tool.permissionAction,
+					permissionActionFamily:
+						plugin.trustedBundled === true && plugin.id === "mcp"
+							? "mcp"
+							: "plugin",
+				}),
 		...(tool.permissionResource === undefined
 			? {}
 			: { permissionResource: tool.permissionResource }),

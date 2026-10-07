@@ -153,33 +153,67 @@ const createCoordinator = (
 	};
 	const deliverReport = async (
 		report: DelegationReportEnvelope
-	): Promise<void> => {
+	): Promise<boolean> => {
 		const parent = activeSessions.get(report.parentSessionId);
 		if (
 			parent?.sessionSdk === undefined ||
 			parent.executionMode === "print" ||
 			parent.executionMode === "json"
 		) {
-			return;
+			return false;
 		}
 		try {
 			const admission = await parent.sessionSdk.deliverToSession(
 				report.parentSessionId,
 				deliveryForReport(report)
 			);
-			if (!admission.rejected) {
-				taskStore.consumeReport(report.taskId);
+			if (admission.rejected) {
+				return false;
 			}
+			taskStore.consumeReport(report.taskId);
+			return true;
 		} catch {
 			// Keep the durable outbox row pending when no Host can accept delivery.
+			return false;
 		}
 	};
-	const deliverPendingReports = async (
+	const pendingReportDrains = new Map<
+		SessionId,
+		{ promise: Promise<void>; requested: boolean }
+	>();
+	const deliverPendingReports = (
 		parentSessionId: DelegationTask["parentSessionId"]
 	): Promise<void> => {
-		for (const report of taskStore.listPendingReports(parentSessionId)) {
-			await deliverReport(report);
+		const currentDrain = pendingReportDrains.get(parentSessionId);
+		if (currentDrain !== undefined) {
+			currentDrain.requested = true;
+			return currentDrain.promise;
 		}
+
+		const drain = { promise: Promise.resolve(), requested: false };
+		const promise = Promise.resolve()
+			.then(async () => {
+				do {
+					drain.requested = false;
+					for (const report of taskStore.listPendingReports(parentSessionId)) {
+						if (!(await deliverReport(report))) {
+							return;
+						}
+					}
+				} while (drain.requested);
+			})
+			.finally(() => {
+				if (pendingReportDrains.get(parentSessionId) !== drain) {
+					return;
+				}
+				pendingReportDrains.delete(parentSessionId);
+				if (drain.requested) {
+					void deliverPendingReports(parentSessionId);
+				}
+			});
+		drain.promise = promise;
+		pendingReportDrains.set(parentSessionId, drain);
+		return promise;
 	};
 	const settleTask: SubagentsTaskCoordinator["settleTask"] = async (
 		taskId,
@@ -191,7 +225,7 @@ const createCoordinator = (
 			return false;
 		}
 		waiters.finishTask(taskId);
-		await deliverReport(report);
+		await deliverPendingReports(report.parentSessionId);
 		if (currentTask?.status === "awaiting_report") {
 			await releaseTask(taskId);
 		}

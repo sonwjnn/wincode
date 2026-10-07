@@ -18,7 +18,8 @@ import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-c
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import {
 	composePermissionDecisions,
-	type PermissionAction,
+	decideToolPermissionAction,
+	type PermissionActionFamily,
 	type PermissionDecision,
 	type ToolPermission,
 } from "@/modules/permissions/policy";
@@ -96,11 +97,26 @@ type PluginTurnResolution = Readonly<{
 		resolveToolPermission: (
 			action: string,
 			resource: string,
-			agentId?: AgentId
+			agentId: AgentId | undefined,
+			family: PermissionActionFamily
 		) => Promise<PluginPermissionResolution>;
 	}>;
 	policies: Map<string, PermissionDecision>;
 }>;
+
+const resolvePermissionForAction = async (
+	toolPermission: ToolPermissionRuntime,
+	action: string,
+	resource: string,
+	agentId: AgentId,
+	family: PermissionActionFamily
+): Promise<PluginPermissionResolution> => {
+	const permission = await toolPermission.resolvePermissionForAgent(agentId);
+	return {
+		decision: decideToolPermissionAction(permission, action, resource, family),
+		safety: permission.safety,
+	};
+};
 
 const resolvePluginTurnContext = async (
 	input: Readonly<{
@@ -148,15 +164,13 @@ const resolvePluginTurnContext = async (
 							tool.action,
 							input.agentId
 						)
-					: await input.toolPermission
-							.resolvePermissionForAgent(input.agentId)
-							.then((policy) => ({
-								decision: policy.decide(
-									tool.permissionAction as PermissionAction,
-									tool.permissionResource ?? "*"
-								),
-								safety: policy.safety,
-							}));
+					: await resolvePermissionForAction(
+							input.toolPermission,
+							tool.permissionAction,
+							tool.permissionResource ?? "*",
+							input.agentId,
+							tool.permissionActionFamily ?? "plugin"
+						);
 			return [
 				tool.name,
 				tool.permissionDecision === undefined
@@ -179,15 +193,14 @@ const resolvePluginTurnContext = async (
 					action,
 					agentId ?? input.agentId
 				),
-			resolveToolPermission: async (action, resource, agentId) => {
-				const permission = await input.toolPermission.resolvePermissionForAgent(
-					agentId ?? input.agentId
-				);
-				return {
-					decision: permission.decide(action as PermissionAction, resource),
-					safety: permission.safety,
-				};
-			},
+			resolveToolPermission: (action, resource, agentId, family) =>
+				resolvePermissionForAction(
+					input.toolPermission,
+					action,
+					resource,
+					agentId ?? input.agentId,
+					family
+				),
 		},
 		policies: new Map(policies),
 	};
@@ -257,10 +270,15 @@ const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
  */
 const activateExplicitSkill = async (
 	name: string,
-	{ execution, gate }: { execution: SkillExecution; gate: ToolGate }
+	{
+		agentId,
+		execution,
+		gate,
+	}: { agentId: AgentId; execution: SkillExecution; gate: ToolGate }
 ): Promise<SessionSkillResolution> => {
 	const entry = execution.catalog.entries.find((entry) => entry.name === name);
 	const policyOutcome = await gate.gate({
+		agentId,
 		available: !isUndefined(entry),
 		description: entry?.description ?? `Activate Skill ${name}`,
 		family: "skill",
@@ -461,6 +479,7 @@ export const createSessionPorts = ({
 	 * which Skills it may offer for the current Agent Turn.
 	 */
 	const armSkillCatalog = async (
+		agentId: AgentId,
 		permission: ToolPermission
 	): Promise<SessionSkillCatalog> => {
 		const catalog = await discoverSkillCatalog(
@@ -469,15 +488,19 @@ export const createSessionPorts = ({
 		);
 		const tool = buildSkillToolDefinition(catalog);
 		return {
+			agentId,
 			diagnostic: summarizeCatalogDiagnostics(catalog),
 			execution: createSkillExecution(catalog),
 			...omitUndefined({ tool }),
 		};
 	};
 	/** Arms the Skill catalog one Agent Turn runs with. */
-	const createTurnSkill = async (): Promise<SessionSkillCatalog> =>
+	const createTurnSkill = async (
+		agentId: AgentId
+	): Promise<SessionSkillCatalog> =>
 		await armSkillCatalog(
-			await capabilities.getToolPermission().resolvePermission()
+			agentId,
+			await capabilities.getToolPermission().resolvePermissionForAgent(agentId)
 		);
 	/**
 	 * Resolves the Skill a submission asks for: the one it names, or the one
@@ -488,9 +511,10 @@ export const createSessionPorts = ({
 		anchoredMessage: SessionMessage | undefined,
 		armedSkill: SessionSkillCatalog
 	): Promise<SessionSkillResolution> => {
-		const execution = armedSkill.execution;
+		const { agentId, execution } = armedSkill;
 		if (!isUndefined(explicitSkill)) {
 			return activateExplicitSkill(explicitSkill.name, {
+				agentId,
 				execution,
 				gate: toolGate,
 			});
@@ -515,11 +539,13 @@ export const createSessionPorts = ({
 				};
 			}
 			return activateExplicitSkill(parsedSkill.data.name, {
+				agentId,
 				execution,
 				gate: toolGate,
 			});
 		}
 		return activateExplicitSkill(parsedSkill.data.name, {
+			agentId,
 			execution,
 			gate: toolGate,
 		});
@@ -586,19 +612,14 @@ export const createSessionPorts = ({
 				gate: tooling.gate,
 				resourceLimits,
 				resolveResourceLimits: tooling.resolveResourceLimits,
-				resolveToolPermission: async (
-					action: string,
-					resource: string,
-					agentId
-				) => {
-					const permission = await toolPermission.resolvePermissionForAgent(
-						agentId ?? execution.agent
-					);
-					return {
-						decision: permission.decide(action as PermissionAction, resource),
-						safety: permission.safety,
-					};
-				},
+				resolveToolPermission: (action, resource, agentId, family) =>
+					resolvePermissionForAction(
+						toolPermission,
+						action,
+						resource,
+						agentId ?? execution.agent,
+						family
+					),
 				sessionId,
 				signal,
 				...(sessionSdk === undefined ? {} : { sessionSdk }),

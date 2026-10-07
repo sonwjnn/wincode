@@ -851,7 +851,7 @@ const noCapabilities: OneShotDependencies = {
 	},
 };
 
-test("one-shot waits for Subagents outcomes and keeps Print and JSON output parent-only", async () => {
+test("one-shot keeps Print parent-only and tags JSON child Session events", async () => {
 	const printWorkspace = await mkdtemp(
 		path.join("/tmp", "wincode-one-shot-delegation-print-")
 	);
@@ -950,13 +950,29 @@ test("one-shot waits for Subagents outcomes and keeps Print and JSON output pare
 			.map((line) => JSON.parse(line) as Record<string, unknown>);
 		expect(jsonExitCode).toBe(1);
 		expect(jsonStdout.text).toContain("Parent-only result.");
-		expect(jsonStdout.text).not.toContain("Child internal output.");
+		expect(jsonStdout.text).toContain("Child internal output.");
 		expect(
-			events.every(
-				({ type }) =>
-					type !== "delegated-agent-turn-event" && type !== "delegation-task"
+			events.some(
+				({ type, delta, sessionId }) =>
+					type === "text-delta" &&
+					delta === "Child internal output." &&
+					typeof sessionId === "string"
 			)
 		).toBe(true);
+		expect(
+			events.some(
+				({ type, sessionId }) =>
+					type === "agent-turn-completed" && typeof sessionId === "string"
+			)
+		).toBe(true);
+		const parentTextDeltas = events
+			.filter(
+				({ type, sessionId }) =>
+					type === "text-delta" && sessionId === undefined
+			)
+			.map(({ delta }) => delta);
+		expect(parentTextDeltas).toContain("Parent-only result.");
+		expect(parentTextDeltas).not.toContain("Child internal output.");
 		expect(jsonStderr.text).toContain("awaiting_report");
 		expect(jsonStderr.text).toContain(
 			"will not continue the parent Session automatically"

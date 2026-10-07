@@ -191,9 +191,9 @@ export const createSessionCapabilities = async ({
 		const getRegistry = providedGetRegistry ?? (() => registry);
 		const policyState = createToolPermissionPolicyState();
 		const toolPermission: ToolPermissionRuntime = createToolPermissionRuntime({
-			agent: registry?.defaultAgentId ?? DEFAULT_AGENT_ID,
+			agent: getRegistry()?.defaultAgentId ?? DEFAULT_AGENT_ID,
 			policyState,
-			registry,
+			getRegistry,
 			service: permissionService,
 			workspace,
 			configRuntime,

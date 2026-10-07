@@ -1040,7 +1040,7 @@ export const decideOpenActionPermission = (
 			continue;
 		}
 		// Preserve the decision accumulated from earlier matching keys when this
-		// map matches no resource pattern, so a later `demo_*: { "some/path": ... }`
+		// map matches no resource pattern, so a later `demo_*: { "some/path": ...}`
 		// rule can never silently bypass an earlier explicit `"*": "deny"`.
 		decision = decideByResourceMap(
 			Object.entries(rule).map(([pattern, patternDecision]) => ({
@@ -1052,4 +1052,27 @@ export const decideOpenActionPermission = (
 		);
 	}
 	return decision;
+};
+
+const isFixedPermissionAction = (action: string): action is PermissionAction =>
+	action === "write" ||
+	(action !== "plugin:*:*" &&
+		PERMISSION_TOOL_ACTIONS.includes(
+			action as (typeof PERMISSION_TOOL_ACTIONS)[number]
+		));
+
+export type PermissionActionFamily = "mcp" | "plugin";
+
+/** Resolves an action by family and applies the Agent's manual-only ceiling. */
+export const decideToolPermissionAction = (
+	permission: ToolPermission,
+	action: string,
+	resource: string,
+	family: PermissionActionFamily = "plugin"
+): PermissionDecision => {
+	const decision =
+		family === "mcp" || !isFixedPermissionAction(action)
+			? decideOpenActionPermission(permission.rules ?? {}, action, resource)
+			: permission.decide(action, resource);
+	return permission.safety && decision !== "deny" ? "ask" : decision;
 };

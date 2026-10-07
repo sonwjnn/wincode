@@ -9,6 +9,7 @@ import {
 	DEFAULT_READ_PERMISSION_RULES,
 	DEFAULT_SHELL_PERMISSION_RULES,
 	decideOpenActionPermission,
+	decideToolPermissionAction,
 	findUnmatchedActionKeys,
 	foldPermissionRules,
 	matchesResourcePattern,
@@ -471,6 +472,40 @@ describe("decideOpenActionPermission", () => {
 				"demo_echo",
 				"*"
 			)
+		).toBe("allow");
+	});
+
+	test("manual-only Agents keep a safety ask for open action globs", () => {
+		const permission = applyManualApprovalSafetyCeiling(
+			createToolPermission(openRules({ "demo_*": "allow" }))
+		);
+		expect(decideToolPermissionAction(permission, "demo_echo", "*")).toBe(
+			"ask"
+		);
+
+		const deniedPermission = applyManualApprovalSafetyCeiling(
+			createToolPermission(openRules({ "demo_*": "deny" }))
+		);
+		expect(decideToolPermissionAction(deniedPermission, "demo_echo", "*")).toBe(
+			"deny"
+		);
+	});
+
+	test("MCP action family resolves logical names that collide with fixed actions", () => {
+		const permission = createToolPermission(
+			openRules({ "external_*": "allow" })
+		);
+
+		expect(
+			decideToolPermissionAction(
+				permission,
+				"external_directory",
+				"*",
+				"plugin"
+			)
+		).toBe("ask");
+		expect(
+			decideToolPermissionAction(permission, "external_directory", "*", "mcp")
 		).toBe("allow");
 	});
 });

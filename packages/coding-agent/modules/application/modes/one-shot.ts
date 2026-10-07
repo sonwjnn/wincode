@@ -408,9 +408,17 @@ const sendInputFor = (
 
 const emitJsonEvent = (
 	context: ApplicationContext,
-	event: AgentTurnEvent
+	event: AgentTurnEvent,
+	sessionId?: SessionId
 ): void => {
-	context.stdout.write(`${JSON.stringify(projectAgentEvent(event))}\n`);
+	const projectedEvent = projectAgentEvent(event);
+	context.stdout.write(
+		`${JSON.stringify(
+			sessionId === undefined
+				? projectedEvent
+				: { ...projectedEvent, sessionId }
+		)}\n`
+	);
 };
 const initializeOneShotSession = async (
 	context: ApplicationContext,
@@ -498,8 +506,9 @@ const runOneShot = async (
 			text
 		);
 		sessionId = initializedSession.sessionId;
-		manager = assembly.capabilities.getSessionHostManager();
-		host = await manager.openHost({
+		const sessionHostManager = assembly.capabilities.getSessionHostManager();
+		manager = sessionHostManager;
+		host = await sessionHostManager.openHost({
 			capabilities: assembly.capabilities,
 			executionMode: format,
 			sessionId,
@@ -516,12 +525,18 @@ const runOneShot = async (
 			restored,
 			reasoningModeOption: context.invocation.reasoningMode,
 		});
-		removeEventListener = host.onEvent((event) => {
+		removeEventListener = sessionHostManager.onEvent((managedEvent) => {
+			if (managedEvent.type !== "agent-turn-event") {
+				return;
+			}
+			const { event } = managedEvent;
+			const isParentEvent = managedEvent.sessionId === sessionId;
 			if (
-				event.type === "agent-turn-completed" ||
-				event.type === "agent-turn-failed" ||
-				event.type === "agent-turn-cancelled" ||
-				event.type === "agent-turn-interrupted"
+				isParentEvent &&
+				(event.type === "agent-turn-completed" ||
+					event.type === "agent-turn-failed" ||
+					event.type === "agent-turn-cancelled" ||
+					event.type === "agent-turn-interrupted")
 			) {
 				if (event.type === "agent-turn-completed") {
 					terminalSucceeded = true;
@@ -531,8 +546,12 @@ const runOneShot = async (
 				}
 			}
 			if (format === "json") {
-				emitJsonEvent(context, event);
-			} else if (event.type === "text-delta") {
+				emitJsonEvent(
+					context,
+					event,
+					isParentEvent ? undefined : managedEvent.sessionId
+				);
+			} else if (isParentEvent && event.type === "text-delta") {
 				context.stdout.write(event.delta);
 			}
 		});

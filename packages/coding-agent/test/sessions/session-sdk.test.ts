@@ -10,7 +10,11 @@ import type {
 } from "@wincode/ai/model-client";
 import { defaultChatModelSelection } from "@wincode/ai/models";
 import { createSessionSdk } from "@wincode/coding-agent";
-import { buildAgentRegistry } from "@/modules/agents/registry";
+import {
+	type AgentRegistry,
+	buildAgentRegistry,
+} from "@/modules/agents/registry";
+import { createSessionCapabilities } from "@/modules/sessions/host/session-capabilities";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
@@ -25,7 +29,7 @@ import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
 } from "../support/e2e-fake-runtime";
-import { sessionId } from "../support/identifiers";
+import { agentId, sessionId } from "../support/identifiers";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
@@ -46,6 +50,51 @@ const configStore = createConfigStore({ configRoot, homeRoot });
 afterAll(async () => {
 	database.sqlite.close();
 	await rm(root, { force: true, recursive: true });
+});
+
+test("a Session's Tool Permission follows its Agent registry after hydration", async () => {
+	let registry: AgentRegistry | null = null;
+	const assembly = await createSessionCapabilities({
+		cwd: workspace,
+		database: database.db,
+		getRegistry: () => registry,
+		registry,
+		store,
+		workspace,
+	});
+	try {
+		registry = buildAgentRegistry(
+			fromPartial<ConfigSnapshot>({
+				diagnostics: [],
+				document: {
+					agents: {
+						scout: {
+							description: "Inspect and report findings.",
+							role: "subagent",
+						},
+					},
+				},
+				sourceFor: () => undefined,
+				sources: [
+					{
+						document: fromPartial<ConfigSnapshot["document"]>({
+							agents: { scout: { permission: { read: "deny" } } },
+						}),
+						path: path.join(workspace, "wincode.json"),
+						scope: "project",
+					},
+				],
+			}),
+			{ connectedProviderIds: new Set(["openai"]) }
+		);
+		const permission = await assembly.capabilities
+			.getToolPermission()
+			.resolvePermissionForAgent(agentId("scout"));
+
+		expect(permission.decide("read", `${workspace}/secret.txt`)).toBe("deny");
+	} finally {
+		await assembly.shutdown();
+	}
 });
 
 test("the public Session SDK creates an empty durable Session and reopens it", async () => {

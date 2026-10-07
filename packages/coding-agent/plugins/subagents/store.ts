@@ -92,6 +92,10 @@ export type CreateSubagentsTaskInput = Readonly<{
 	parentTurnId: AgentTurnId;
 }>;
 
+export type SubagentsTaskStoreOptions = Readonly<{
+	now?: () => number;
+}>;
+
 export type SubagentsTaskStore = Readonly<{
 	close: () => void;
 	createTask: (input: CreateSubagentsTaskInput) => DelegationTask;
@@ -112,7 +116,8 @@ export type SubagentsTaskStore = Readonly<{
 
 /** Opens Subagents' independent durable task/report database. */
 export const createSubagentsTaskStore = async (
-	databasePath = path.join(resolveUserDataDir(), SUBAGENTS_DATABASE_FILE)
+	databasePath = path.join(resolveUserDataDir(), SUBAGENTS_DATABASE_FILE),
+	{ now = Date.now }: SubagentsTaskStoreOptions = {}
 ): Promise<SubagentsTaskStore> => {
 	if (databasePath !== ":memory:") {
 		await fs.mkdir(path.dirname(databasePath), { recursive: true });
@@ -139,6 +144,14 @@ export const createSubagentsTaskStore = async (
 				ON subagents_task (parent_session_id, status, created_at, id);
 			CREATE INDEX IF NOT EXISTS idx_subagents_task_child_status
 				ON subagents_task (child_session_id, status);
+			CREATE TABLE IF NOT EXISTS subagents_report_order (
+				sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+				task_id TEXT NOT NULL UNIQUE
+			);
+			INSERT OR IGNORE INTO subagents_report_order (task_id)
+				SELECT id FROM subagents_task
+				WHERE outcome_json IS NOT NULL AND report_consumed_at IS NULL
+				ORDER BY updated_at, id;
 		`);
 	} catch (error) {
 		database.close();
@@ -158,20 +171,22 @@ export const createSubagentsTaskStore = async (
 		"SELECT * FROM subagents_task WHERE status IN ('active', 'awaiting_report') ORDER BY created_at, id"
 	);
 	const selectPendingReports = database.query(
-		`SELECT * FROM subagents_task
-		 WHERE parent_session_id = ? AND outcome_json IS NOT NULL
-			AND report_consumed_at IS NULL
-		 ORDER BY updated_at, id`
+		`SELECT task.* FROM subagents_task AS task
+		 INNER JOIN subagents_report_order AS report_order
+			ON report_order.task_id = task.id
+		 WHERE task.parent_session_id = ? AND task.outcome_json IS NOT NULL
+			AND task.report_consumed_at IS NULL
+		 ORDER BY report_order.sequence`
 	);
 	const createTask: SubagentsTaskStore["createTask"] = (input) => {
-		const now = Date.now();
+		const timestamp = now();
 		const task: DelegationTask = {
 			...input,
-			createdAt: new Date(now),
+			createdAt: new Date(timestamp),
 			id: input.id ?? toDelegationTaskId(randomUUIDv7()),
 			outcome: null,
 			status: "active",
-			updatedAt: new Date(now),
+			updatedAt: new Date(timestamp),
 		};
 		database
 			.query(
@@ -189,8 +204,8 @@ export const createSubagentsTaskStore = async (
 				task.parentToolCallId,
 				task.parentTurnId,
 				task.status,
-				now,
-				now
+				timestamp,
+				timestamp
 			);
 		return task;
 	};
@@ -233,43 +248,55 @@ export const createSubagentsTaskStore = async (
 			.query(
 				"UPDATE subagents_task SET status = 'awaiting_report', updated_at = ? WHERE id = ? AND status = 'active' AND outcome_json IS NULL"
 			)
-			.run(Date.now(), taskId).changes > 0;
+			.run(now(), taskId).changes > 0;
 	const consumeReport: SubagentsTaskStore["consumeReport"] = (taskId) =>
 		database
 			.query(
 				"UPDATE subagents_task SET report_consumed_at = ? WHERE id = ? AND outcome_json IS NOT NULL AND report_consumed_at IS NULL"
 			)
-			.run(Date.now(), taskId).changes > 0;
+			.run(now(), taskId).changes > 0;
 	const settleTask: SubagentsTaskStore["settleTask"] = ({
 		outcome: rawOutcome,
 		taskId,
 	}) => {
 		const outcome = delegationTaskOutcomeSchema.parse(rawOutcome);
-		const now = Date.now();
-		const updated = database
-			.query(
-				`UPDATE subagents_task
-				SET outcome_json = ?, status = ?, updated_at = ?
-				WHERE id = ? AND outcome_json IS NULL
-					AND status IN ('active', 'awaiting_report', 'interrupted')`
-			)
-			.run(JSON.stringify(outcome), statusForOutcome(outcome), now, taskId);
-		if (updated.changes === 0) {
-			return null;
-		}
-		const task = getTask(taskId);
-		if (task === null) {
-			return null;
-		}
-		return {
-			childSessionId: task.childSessionId,
-			createdAt: task.updatedAt,
-			outcome,
-			parentSessionId: task.parentSessionId,
-			parentToolCallId: task.parentToolCallId,
-			parentTurnId: task.parentTurnId,
-			taskId: task.id,
-		};
+		const timestamp = now();
+		return database
+			.transaction(() => {
+				const updated = database
+					.query(
+						`UPDATE subagents_task
+						SET outcome_json = ?, status = ?, updated_at = ?
+						WHERE id = ? AND outcome_json IS NULL
+							AND status IN ('active', 'awaiting_report', 'interrupted')`
+					)
+					.run(
+						JSON.stringify(outcome),
+						statusForOutcome(outcome),
+						timestamp,
+						taskId
+					);
+				if (updated.changes === 0) {
+					return null;
+				}
+				database
+					.query("INSERT INTO subagents_report_order (task_id) VALUES (?)")
+					.run(taskId);
+				const task = getTask(taskId);
+				if (task === null) {
+					return null;
+				}
+				return {
+					childSessionId: task.childSessionId,
+					createdAt: task.updatedAt,
+					outcome,
+					parentSessionId: task.parentSessionId,
+					parentToolCallId: task.parentToolCallId,
+					parentTurnId: task.parentTurnId,
+					taskId: task.id,
+				};
+			})
+			.immediate();
 	};
 
 	return Object.freeze({

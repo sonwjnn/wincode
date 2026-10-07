@@ -1,4 +1,5 @@
 import {
+	type AgentId,
 	type AgentTurn,
 	type AgentTurnId,
 	createAgentTurnAbortEvent,
@@ -301,12 +302,15 @@ const prepareSubmitContext = async ({
 	signal,
 }: {
 	activeMessages: readonly SessionMessage[];
-	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
+	armSkill: (
+		agentId: AgentId,
+		signal: AbortSignal
+	) => Promise<SessionSkillCatalog>;
 	input: SessionSendInput;
 	resolveSkill: AgentSessionPorts["skills"]["resolveSkill"];
 	signal: AbortSignal;
 }): Promise<SubmitContextResult> => {
-	const armedSkill = await armSkill(signal);
+	const armedSkill = await armSkill(input.agent, signal);
 	if (signal.aborted) {
 		return { kind: "cancelled" };
 	}
@@ -481,7 +485,10 @@ const prepareSessionSubmission = async ({
 	resolveSkill,
 	signal,
 }: {
-	armSkill: (signal: AbortSignal) => Promise<SessionSkillCatalog>;
+	armSkill: (
+		agentId: AgentId,
+		signal: AbortSignal
+	) => Promise<SessionSkillCatalog>;
 	deps: SubmissionDeps;
 	input: SessionSendInput;
 	isContextContinuation: boolean;
@@ -1431,9 +1438,10 @@ export const createSubmissionPipeline = (
 	deps: SubmissionDeps
 ): SubmissionPipeline => {
 	const armSkill = async (
+		agentId: AgentId,
 		signal: AbortSignal
 	): Promise<SessionSkillCatalog> => {
-		const catalog = await deps.ports.skills.createTurnSkill();
+		const catalog = await deps.ports.skills.createTurnSkill(agentId);
 		if (signal.aborted || deps.isShutDown()) {
 			return catalog;
 		}

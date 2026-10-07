@@ -11,6 +11,7 @@ import {
 import { isJsonValue, logger } from "@wincode/utils";
 import {
 	composePermissionDecisions,
+	type PermissionActionFamily,
 	type PermissionDecision,
 } from "@/modules/permissions/policy";
 import { evaluateGateWithAbort } from "@/modules/tool-gate/evaluate-with-abort";
@@ -37,7 +38,8 @@ export type PluginToolsContext = Readonly<{
 	resolvePermissionForAction?: (
 		action: string,
 		resource: string,
-		agentId?: AgentId
+		agentId: AgentId | undefined,
+		family: PermissionActionFamily
 	) => Promise<PluginPermissionResolution>;
 	sessionId?: string;
 	signal?: AbortSignal;
@@ -131,7 +133,8 @@ const resolvePluginToolPermission = async (
 		: await context.resolvePermissionForAction(
 				tool.permissionAction,
 				tool.permissionResource ?? "*",
-				agentId
+				agentId,
+				tool.permissionActionFamily ?? "plugin"
 			);
 };
 

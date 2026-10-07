@@ -318,6 +318,8 @@ export type SessionHydrationRequest = ReadonlyDeep<{
 
 /** The Skill catalog one Agent Turn arms and runs with, created by the host. */
 export type SessionSkillCatalog = Readonly<{
+	/** The Agent whose permissions filtered and gate this execution's Skills. */
+	agentId: AgentId;
 	/** The catalog diagnostic the Session Snapshot publishes, when there is one. */
 	diagnostic: string | null;
 	execution: SkillExecution;
@@ -332,7 +334,7 @@ export type SessionSkillResolution =
 /** The Skills one session may arm and load. */
 export type SessionSkillPort = Readonly<{
 	/** Arms the Skill catalog the next Agent Turn runs with. */
-	createTurnSkill: () => Promise<SessionSkillCatalog>;
+	createTurnSkill: (agentId: AgentId) => Promise<SessionSkillCatalog>;
 	/**
 	 * Resolves the Skill a submission asks for — the one it names, or the one
 	 * its source message recorded — against an armed catalog.

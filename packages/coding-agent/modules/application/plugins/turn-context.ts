@@ -4,6 +4,7 @@ import type {
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
+import type { PermissionActionFamily } from "@/modules/permissions/policy";
 import type {
 	PluginRuntime,
 	PluginToolDescriptor,
@@ -55,7 +56,8 @@ export type TurnToolPluginContext = Readonly<{
 	resolveToolPermission?: (
 		action: string,
 		resource: string,
-		agentId?: AgentId
+		agentId: AgentId | undefined,
+		family: PermissionActionFamily
 	) => Promise<PluginPermissionResolution>;
 	sessionSdk?: SessionSdkChildFactory;
 }>;

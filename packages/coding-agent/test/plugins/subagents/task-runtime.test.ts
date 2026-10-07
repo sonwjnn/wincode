@@ -131,6 +131,84 @@ test("a durable Subagents report is idempotently delivered through the public Se
 	}
 });
 
+test("concurrent task completions deliver durable reports in FIFO order", async () => {
+	const taskStore = await createSubagentsTaskStore(":memory:", {
+		now: () => 1_700_000_000_000,
+	});
+	const firstDeliveryStarted = Promise.withResolvers<void>();
+	const releaseFirstDelivery = Promise.withResolvers<void>();
+	const deliveries: string[] = [];
+	let firstSettlement: Promise<boolean> | undefined;
+	let secondSettlement: Promise<boolean> | undefined;
+	try {
+		const firstTask = taskStore.createTask({
+			id: toDelegationTaskId("task-z"),
+			agentId: agentId("build"),
+			childSessionId,
+			parentSessionId,
+			parentToolCallId: toolCallId("delegate-call-z"),
+			parentTurnId: agentTurnId("parent-turn-z"),
+		});
+		const secondTask = taskStore.createTask({
+			id: toDelegationTaskId("task-a"),
+			agentId: agentId("build"),
+			childSessionId: sessionId("child-session-a"),
+			parentSessionId,
+			parentToolCallId: toolCallId("delegate-call-a"),
+			parentTurnId: agentTurnId("parent-turn-a"),
+		});
+		const sessionSdk = fromPartial<SessionSdkChildFactory>({
+			deliverToSession: async (
+				_recipient: string,
+				input: SessionSdkDelivery
+			) => {
+				deliveries.push(input.idempotencyKey);
+				if (deliveries.length === 1) {
+					firstDeliveryStarted.resolve();
+					await releaseFirstDelivery.promise;
+				}
+				return {
+					disposition: "queued",
+					messageId: sessionMessageId(`delivered-report-${deliveries.length}`),
+					rejected: false,
+					submissionId: toSubmissionId(`report-delivery-${deliveries.length}`),
+				};
+			},
+		});
+		const coordinator = getSubagentsTaskCoordinator(taskStore);
+		coordinator.onSessionStart(pluginSessionContext(sessionSdk));
+		await Bun.sleep(0);
+
+		firstSettlement = coordinator.settleTask(firstTask.id, {
+			kind: "result",
+			report: { summary: "First" },
+		});
+		secondSettlement = coordinator.settleTask(secondTask.id, {
+			kind: "result",
+			report: { summary: "Second" },
+		});
+		await firstDeliveryStarted.promise;
+
+		expect(deliveries).toEqual([`subagents-report-${firstTask.id}`]);
+		releaseFirstDelivery.resolve();
+		await Promise.all([firstSettlement, secondSettlement]);
+
+		expect(deliveries).toEqual([
+			`subagents-report-${firstTask.id}`,
+			`subagents-report-${secondTask.id}`,
+		]);
+		expect(taskStore.listPendingReports(parentSessionId)).toEqual([]);
+	} finally {
+		releaseFirstDelivery.resolve();
+		await Promise.allSettled(
+			[firstSettlement, secondSettlement].filter(
+				(settlement): settlement is Promise<boolean> => settlement !== undefined
+			)
+		);
+		taskStore.close();
+	}
+});
+
 test("a rejected SDK delivery leaves the durable report available for retry", async () => {
 	const taskStore = await createSubagentsTaskStore(":memory:");
 	const deliveryAttempted = Promise.withResolvers<void>();

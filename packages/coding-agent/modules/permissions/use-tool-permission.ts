@@ -25,8 +25,9 @@ export function useToolPermission(): ToolPermissionRuntime {
 		() =>
 			createToolPermissionRuntime({
 				agent,
+				getActiveAgent: () => agent,
 				policyState,
-				registry,
+				getRegistry: () => registry,
 				service,
 				workspace: config.workspace,
 				configRuntime: config,

@@ -13,7 +13,6 @@ import type { PermissionService } from "./permission-service";
 import {
 	applyManualApprovalSafetyCeiling,
 	createResolvedToolPermission,
-	createToolPermission,
 	DEFAULT_PERMISSION_RULES,
 	type EffectiveAgentPolicy,
 	type PermissionAction,
@@ -42,19 +41,18 @@ export type ToolPermissionRuntime = {
 };
 
 /**
- * The permission a resolution falls back to while no Agent registry has
- * resolved. It is held by the composer rather than the runtime, so a runtime
- * recomposed for a new Agent or registry still fails back to the last resolved
- * policy instead of loosening to the default one.
+ * Per-Agent fallbacks retained while the Agent registry is unavailable. A
+ * resolution for one Agent can never replace another Agent's last known policy.
  */
 export type ToolPermissionPolicyState = {
-	permission: ToolPermission;
+	permissions: Map<AgentId, ToolPermission>;
 };
 
 export type ToolPermissionRuntimeDeps = {
 	agent: AgentId;
+	getActiveAgent?: () => AgentId;
 	policyState: ToolPermissionPolicyState;
-	registry: AgentRegistry | null;
+	getRegistry: () => AgentRegistry | null;
 	service: PermissionService;
 	workspace: string;
 	configRuntime?: ConfigRuntime;
@@ -71,9 +69,15 @@ const FAIL_CLOSED_AGENT_ACTION_POLICY: EffectiveAgentPolicy = {
 	safety: true,
 };
 
+const FAIL_CLOSED_TOOL_PERMISSION: ToolPermission = {
+	decide: () => "deny",
+	rules: {},
+	safety: true,
+};
+
 export const createToolPermissionPolicyState =
 	(): ToolPermissionPolicyState => ({
-		permission: createToolPermission(),
+		permissions: new Map(),
 	});
 
 /** Resolves one Agent's action policy without loosening it on failure. */
@@ -128,54 +132,61 @@ export const resolveToolPermissionPolicies = (
  */
 export const createToolPermissionRuntime = ({
 	agent,
+	getActiveAgent,
 	policyState,
-	registry,
+	getRegistry,
 	service,
 	workspace,
 	configRuntime,
 }: ToolPermissionRuntimeDeps): ToolPermissionRuntime => {
 	const sandbox = createWorkspaceSandbox(workspace);
-	const resolved = resolveToolPermissionPolicies(
-		registry,
-		agent,
-		() => policyState.permission
-	);
-	// While the registry is loading, resolution fails closed but the state
-	// keeps its previous value: a transient null never loosens a resolved
-	// policy.
-	if (!isNull(registry)) {
-		policyState.permission = resolved.permission;
-	}
-	const resolvedPromise = Promise.resolve(resolved);
-	const resolvePoliciesForAgent = (targetAgent: AgentId) =>
-		resolveToolPermissionPolicies(
-			registry,
-			targetAgent,
-			() => policyState.permission
+	const fallbackPermissionForAgent = (targetAgent: AgentId): ToolPermission =>
+		policyState.permissions.get(targetAgent) ?? FAIL_CLOSED_TOOL_PERMISSION;
+	const initialRegistry = getRegistry();
+	if (!isNull(initialRegistry)) {
+		const resolved = resolveToolPermissionPolicies(initialRegistry, agent, () =>
+			fallbackPermissionForAgent(agent)
 		);
+		policyState.permissions.set(agent, resolved.permission);
+	}
+	const resolvePoliciesForAgent = (targetAgent: AgentId) => {
+		const registry = getRegistry();
+		const resolved = resolveToolPermissionPolicies(registry, targetAgent, () =>
+			fallbackPermissionForAgent(targetAgent)
+		);
+		// Retain only this Agent's last resolved policy across registry gaps.
+		if (!isNull(registry)) {
+			policyState.permissions.set(targetAgent, resolved.permission);
+		}
+		return resolved;
+	};
+	const currentAgent = (): AgentId =>
+		getActiveAgent?.() ?? getRegistry()?.defaultAgentId ?? agent;
 
 	return {
 		resolveAgentActionPolicy: () =>
-			resolvedPromise.then(
-				(resolvedPolicies) => resolvedPolicies.agentActionPolicy
+			Promise.resolve(
+				resolvePoliciesForAgent(currentAgent()).agentActionPolicy
 			),
 		resolveAgentActionPolicyForAgent: (targetAgent) =>
 			Promise.resolve(resolvePoliciesForAgent(targetAgent).agentActionPolicy),
 		resolvePermission: () =>
-			resolvedPromise.then((resolvedPolicies) => resolvedPolicies.permission),
+			Promise.resolve(resolvePoliciesForAgent(currentAgent()).permission),
 		resolvePermissionForAgent: (targetAgent) =>
 			Promise.resolve(resolvePoliciesForAgent(targetAgent).permission),
-		resolvePluginPermissionForAgent: async (action, targetAgent = agent) => {
+		resolvePluginPermissionForAgent: async (action, targetAgent) => {
 			if (configRuntime === undefined) {
 				return { decision: "ask", safety: true };
 			}
 			const snapshot = await configRuntime.configStore.getSnapshot(workspace);
+			const effectiveAgent = targetAgent ?? currentAgent();
 			const pluginPermission = resolvePluginToolPermission(
 				snapshot,
-				targetAgent,
+				effectiveAgent,
 				action as `plugin:${string}:${string}`
 			);
-			const agentPermission = resolvePoliciesForAgent(targetAgent).permission;
+			const agentPermission =
+				resolvePoliciesForAgent(effectiveAgent).permission;
 			const decision =
 				agentPermission.safety && pluginPermission.decision !== "deny"
 					? "ask"
@@ -189,9 +200,7 @@ export const createToolPermissionRuntime = ({
 			};
 		},
 		resolveResourceLimits: () =>
-			resolvedPromise.then(
-				(resolvedPolicies) => resolvedPolicies.resourceLimits
-			),
+			Promise.resolve(resolvePoliciesForAgent(currentAgent()).resourceLimits),
 		resolveResourceLimitsForAgent: (targetAgent) =>
 			Promise.resolve(resolvePoliciesForAgent(targetAgent).resourceLimits),
 		sandbox,
