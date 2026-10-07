@@ -1,6 +1,6 @@
 # Minimal Plugin authoring interface
 
-Status: accepted
+Status: superseded by ADR-0039 and ADR-0040
 
 A Plugin loaded from a file exports an asynchronous-capable default factory that registers Agent tools and Interactive Mode commands through a host-provided interface. Wincode publishes the registrations only after the factory completes successfully, so a failed Plugin cannot leave partially registered behavior. Plugin Tools declare Zod input schemas and return bounded text or JSON results; their Tool Permission is decided for the tool action as a whole, without a Plugin-defined resource extractor. Plugin Commands execute a handler and return text for Wincode to display. The initial interface does not include custom rendering, media or streamed tool output, Session storage, or Agent control. These capabilities were deferred to keep the public contract small and avoid exposing internal Session and UI objects to user code.
 
