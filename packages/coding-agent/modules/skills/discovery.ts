@@ -1,10 +1,15 @@
-import { dirname, join, resolve } from "node:path";
+import * as path from "node:path";
 import {
 	isArray,
 	isNonEmptyString,
 	isPlainObject,
 	isUndefined,
 } from "@wincode/utils";
+import {
+	isTrustedProjectRoot,
+	LEGACY_PROJECT_SKILL_ROOTS,
+	WINCODE_PROJECT_SKILL_ROOT,
+} from "@/modules/project-trust/project-resource-roots";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { resolveConfigRelativePath } from "@/shared/config/resolve-config-relative-path";
 import { getProjectRoots } from "@/shared/paths/project-roots";
@@ -13,13 +18,6 @@ import {
 	type SkillCandidate,
 	type SkillRootDescriptor,
 } from "./filesystem";
-
-const LEGACY_LOCATIONS = [
-	".agents/skills",
-	".claude/skills",
-	".opencode/skills",
-] as const;
-const WINCODE_SKILLS_DIR = join(".wincode", "skills");
 
 const ROOT_SOURCE = {
 	configured: "configured",
@@ -62,30 +60,30 @@ export function buildSkillRootDescriptors(
 ): SkillRootDescriptor[] {
 	const roots: SkillRootDescriptor[] = [];
 	const addRoot = (
-		path: string,
+		rootPath: string,
 		scope: SkillRootDescriptor["scope"],
 		source: string
 	): void => {
 		roots.push({
-			path,
+			path: rootPath,
 			scope,
 			source,
 			precedence: roots.length,
 		});
 	};
 
-	for (const location of LEGACY_LOCATIONS) {
-		addRoot(join(input.homeRoot, location), "global", ROOT_SOURCE.legacy);
+	for (const location of LEGACY_PROJECT_SKILL_ROOTS) {
+		addRoot(path.join(input.homeRoot, location), "global", ROOT_SOURCE.legacy);
 	}
 	addRoot(
-		join(input.homeRoot, ".config", "opencode", "skills"),
+		path.join(input.homeRoot, ".config", "opencode", "skills"),
 		"global",
 		ROOT_SOURCE.legacy
 	);
 	for (const source of input.snapshot.sources) {
 		if (source.scope === "global") {
 			addRoot(
-				join(dirname(source.path), "skills"),
+				path.join(path.dirname(source.path), "skills"),
 				"global",
 				ROOT_SOURCE.wincode
 			);
@@ -98,17 +96,14 @@ export function buildSkillRootDescriptors(
 	}
 
 	for (const projectRoot of getProjectRoots(input.workspace)) {
-		if (
-			input.trustedProjectRoots !== undefined &&
-			!input.trustedProjectRoots.includes(resolve(projectRoot))
-		) {
+		if (!isTrustedProjectRoot(projectRoot, input.trustedProjectRoots)) {
 			continue;
 		}
-		for (const location of LEGACY_LOCATIONS) {
-			addRoot(join(projectRoot, location), "project", ROOT_SOURCE.legacy);
+		for (const location of LEGACY_PROJECT_SKILL_ROOTS) {
+			addRoot(path.join(projectRoot, location), "project", ROOT_SOURCE.legacy);
 		}
 		addRoot(
-			join(projectRoot, WINCODE_SKILLS_DIR),
+			path.join(projectRoot, WINCODE_PROJECT_SKILL_ROOT),
 			"project",
 			ROOT_SOURCE.wincode
 		);

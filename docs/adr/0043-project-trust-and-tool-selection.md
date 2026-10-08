@@ -1,7 +1,7 @@
+---
+status: accepted
+---
+
 # Trust Protected Project Resources and Select Tools, Not Calls
 
-Status: accepted; supersedes prior per-call Tool Permission and project-resource trust decisions where they conflict, including ADR-0005, ADR-0008, ADR-0036, ADR-0040, and ADR-0041.
-
-Project configuration can select executable Plugins and local MCP processes, so Wincode resolves protected project resources against user-owned trust decisions before loading them. Trust is tied to canonical project roots and applies directionally: a trusted ancestor covers descendants, but a trusted descendant does not authorize its ancestors. Interactive TTY sessions may prompt and persist a decision outside the project; non-interactive modes and SDK callers never prompt or infer trust. `AGENTS.md` remains contextual guidance and does not trigger trust. Project trust authorizes resource loading, not process isolation: trusted code runs with Wincode's operating-system privileges, and stronger containment requires OS-level isolation.
-
-Remove Wincode's per-call `allow`/`ask`/`deny` Tool Permission layer. Tool selection determines which model-visible tools an Agent can choose; capability ceilings may further restrict delegated Sessions, while resource profiles continue to bound coding-tool operations. Startup trust is the boundary for protected project resources, not a promise that an in-process approval dialog can sandbox individual tool calls.
+Because project configuration can start MCP processes or load executable Plugins, Wincode gates protected project configuration and resources on user-owned canonical directory trust before loading them; interactive TTY sessions may prompt, but non-interactive modes and SDK callers never infer trust. Trust is directional (ancestors authorize descendants, not vice versa), `AGENTS.md` remains ungated untrusted guidance, and trusted code retains Wincode's operating-system privileges, so Project trust is not a sandbox; this decision supersedes conflicting project-resource trust or per-call Tool Permission choices in ADR-0005, ADR-0008, ADR-0036, ADR-0040, and ADR-0041 while preserving accepted Plugin package ownership, public Session SDK, and CLI distribution boundaries. Wincode removes its per-call `allow`/`ask`/`deny` layer: Agent tool selection controls exposure, capability ceilings restrict delegated Sessions, and resource profiles bound coding-tool operations.

@@ -1,9 +1,9 @@
-import { existsSync } from "node:fs";
+import * as fs from "node:fs";
 import { realpath } from "node:fs/promises";
-import { dirname, join, resolve, sep } from "node:path";
+import * as path from "node:path";
 
-export const canonicalPath = async (path: string): Promise<string> => {
-	const resolvedPath = resolve(path);
+export const canonicalPath = async (pathValue: string): Promise<string> => {
+	const resolvedPath = path.resolve(pathValue);
 	try {
 		return await realpath(resolvedPath);
 	} catch {
@@ -11,16 +11,26 @@ export const canonicalPath = async (path: string): Promise<string> => {
 	}
 };
 
+/** Synchronous counterpart for discovery APIs that must resolve roots inline. */
+export const canonicalPathSync = (pathValue: string): string => {
+	const resolvedPath = path.resolve(pathValue);
+	try {
+		return fs.realpathSync(resolvedPath);
+	} catch {
+		return resolvedPath;
+	}
+};
+
 export const getProjectRoots = (workspace: string): string[] => {
-	const start = resolve(workspace);
+	const start = path.resolve(workspace);
 	const ancestors: string[] = [];
 	let current = start;
 	while (true) {
 		ancestors.push(current);
-		if (existsSync(join(current, ".git"))) {
+		if (fs.existsSync(path.join(current, ".git"))) {
 			return ancestors.reverse();
 		}
-		const parent = dirname(current);
+		const parent = path.dirname(current);
 		if (parent === current) {
 			return [start];
 		}
@@ -36,11 +46,11 @@ export const getProjectRootsWithinWorkspace = (
 	workspace: string,
 	cwd = workspace
 ): string[] => {
-	const resolvedWorkspace = resolve(workspace);
-	const resolvedCwd = resolve(cwd);
-	const workspacePrefix = `${resolvedWorkspace}${sep}`;
+	const resolvedWorkspace = path.resolve(workspace);
+	const resolvedCwd = path.resolve(cwd);
+	const workspacePrefix = `${resolvedWorkspace}${path.sep}`;
 	const cwdIsWithinWorkspace =
-		resolvedWorkspace === sep ||
+		resolvedWorkspace === path.sep ||
 		resolvedCwd === resolvedWorkspace ||
 		resolvedCwd.startsWith(workspacePrefix);
 	let current = cwdIsWithinWorkspace ? resolvedCwd : resolvedWorkspace;
@@ -50,7 +60,7 @@ export const getProjectRootsWithinWorkspace = (
 		if (current === resolvedWorkspace) {
 			break;
 		}
-		const parent = dirname(current);
+		const parent = path.dirname(current);
 		if (parent === current) {
 			return [resolvedWorkspace];
 		}

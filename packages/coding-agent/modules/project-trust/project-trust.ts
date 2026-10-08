@@ -1,8 +1,12 @@
-import type { Dirent } from "node:fs";
+import type * as fs from "node:fs";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { logger, readUtf8File } from "@wincode/utils";
 import { canonicalPath, getProjectRoots } from "@/shared/paths/project-roots";
+import {
+	PROJECT_COMMAND_ROOT,
+	PROJECT_SKILL_ROOTS,
+} from "./project-resource-roots";
 
 export type ProjectTrustDecision = "trust" | "deny";
 export type ProjectTrustOverride = ProjectTrustDecision;
@@ -36,13 +40,6 @@ type TrustFile = Readonly<{
 
 const TRUST_FILE_NAME = "project-trust.json";
 const CONFIG_NAMES = ["wincode.json", "wincode.jsonc"] as const;
-const PROJECT_SKILL_ROOTS = [
-	".agents/skills",
-	".claude/skills",
-	".opencode/skills",
-	".wincode/skills",
-] as const;
-const PROJECT_COMMAND_ROOT = ".wincode/commands";
 
 const pathContains = (parent: string, target: string): boolean => {
 	const relative = path.relative(parent, target);
@@ -60,7 +57,7 @@ const exists = async (filePath: string): Promise<boolean> =>
 const hasProjectSkill = async (projectRoot: string): Promise<boolean> => {
 	for (const relativeRoot of PROJECT_SKILL_ROOTS) {
 		const skillRoot = path.join(projectRoot, relativeRoot);
-		let entries: Dirent[];
+		let entries: fs.Dirent[];
 		try {
 			entries = await readdir(skillRoot, { withFileTypes: true });
 		} catch {
@@ -201,7 +198,7 @@ export const resolveProjectTrust = async ({
 	}
 	const decisions = [...decisionsByCanonicalDirectory.values()];
 	const promptDecisions: StoredTrustDecision[] = [];
-	const trustedProjectRoots = new Set<string>();
+	const trustedCanonicalRoots = new Set<string>();
 	const diagnostics: string[] = [];
 
 	for (const projectRoot of protectedRoots) {
@@ -219,7 +216,7 @@ export const resolveProjectTrust = async ({
 			promptDecisions.push({ decision, directory: projectRoot });
 		}
 		if (decision === "trust") {
-			trustedProjectRoots.add(projectRoot);
+			trustedCanonicalRoots.add(projectRoot);
 			continue;
 		}
 		diagnostics.push(
@@ -249,7 +246,7 @@ export const resolveProjectTrust = async ({
 	return Object.freeze({
 		diagnostics: Object.freeze(diagnostics),
 		trustedProjectRoots: Object.freeze(
-			[...trustedProjectRoots].flatMap((root) => [root, path.resolve(root)])
+			[...trustedCanonicalRoots].flatMap((root) => [root, path.resolve(root)])
 		),
 	});
 };
