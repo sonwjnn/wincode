@@ -1,7 +1,9 @@
 # @wincode/coding-agent
 
-Private application package for the `wincode` executable. It owns Interactive,
-Print, JSON, and RPC execution modes plus the shared Session Host composition.
+Application and SDK package that owns the `wincode` executable, Interactive,
+Print, JSON, and RPC execution modes, and the shared Session Host composition.
+It declares MCP and Subagents as runtime dependencies for its application defaults;
+public Session SDK callers select Plugin paths explicitly.
 
 The canonical application import is `@wincode/coding-agent`, backed by the
 package-root `index.ts` barrel. `bin/`, `tui/`, and `modules/application/` are

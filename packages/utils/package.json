@@ -1,5 +1,6 @@
 {
   "name": "@wincode/utils",
+  "version": "0.1.0",
   "type": "module",
   "exports": {
     ".": {

@@ -1,6 +1,6 @@
 # Distribute MCP and Subagents through the public Plugin boundary
 
-Status: accepted
+Status: accepted (distribution package placement superseded by ADR-0042)
 
 The MCP and Subagents package implementations are split across Coding-Agent built-in adapters and their own domain packages. Move each entire Plugin factory and Plugin-owned behavior, with its unit tests, into `@wincode/mcp` and `@wincode/subagents`. Coding-Agent owns the general Plugin loader, Session SDK, config snapshot interface, Tool Gate, and Session lifecycle, not MCP servers or Subagents task orchestration. The packages must work through the public Plugin boundary rather than internal host imports or Plugin-specific host branches.
 

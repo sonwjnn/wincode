@@ -17,6 +17,7 @@
     },
     "packages/agent-core": {
       "name": "@wincode/agent-core",
+      "version": "0.1.0",
       "dependencies": {
         "@wincode/ai": "workspace:*",
         "@wincode/utils": "workspace:*",
@@ -31,6 +32,7 @@
     },
     "packages/ai": {
       "name": "@wincode/ai",
+      "version": "0.1.0",
       "dependencies": {
         "@wincode/utils": "workspace:*",
         "oauth4webapi": "^3.8.3",
@@ -44,21 +46,12 @@
         "typescript": "catalog:",
       },
     },
-    "packages/cli": {
-      "name": "@wincode/cli",
+    "packages/coding-agent": {
+      "name": "@wincode/coding-agent",
       "version": "0.1.0",
       "bin": {
         "wincode": "./bin/wincode.ts",
       },
-      "dependencies": {
-        "@wincode/coding-agent": "workspace:*",
-        "@wincode/mcp": "workspace:*",
-        "@wincode/subagents": "workspace:*",
-      },
-    },
-    "packages/coding-agent": {
-      "name": "@wincode/coding-agent",
-      "version": "0.1.0",
       "dependencies": {
         "@deepseek-ai/node-addon-system": "0.1.2",
         "@lickle/lock": "0.0.1",
@@ -67,6 +60,8 @@
         "@tanstack/react-router": "catalog:",
         "@wincode/agent-core": "workspace:*",
         "@wincode/ai": "workspace:*",
+        "@wincode/mcp": "workspace:*",
+        "@wincode/subagents": "workspace:*",
         "@wincode/utils": "workspace:*",
         "diff": "catalog:",
         "drizzle-orm": "^0.45.2",
@@ -88,8 +83,6 @@
         "@types/node": "^26.3.0",
         "@types/react": "^19.2.10",
         "@types/react-dom": "catalog:",
-        "@wincode/mcp": "workspace:*",
-        "@wincode/subagents": "workspace:*",
         "drizzle-kit": "^0.31.10",
       },
       "peerDependencies": {
@@ -140,6 +133,7 @@
     },
     "packages/utils": {
       "name": "@wincode/utils",
+      "version": "0.1.0",
       "dependencies": {
         "type-fest": "catalog:",
       },
@@ -440,8 +434,6 @@
     "@wincode/agent-core": ["@wincode/agent-core@workspace:packages/agent-core"],
 
     "@wincode/ai": ["@wincode/ai@workspace:packages/ai"],
-
-    "@wincode/cli": ["@wincode/cli@workspace:packages/cli"],
 
     "@wincode/coding-agent": ["@wincode/coding-agent@workspace:packages/coding-agent"],
 

@@ -300,6 +300,7 @@ const renderChatShell = async (
 ): Promise<ChatShellSetup> => {
 	const workspace = process.cwd();
 	const agent = { current: "" };
+	// Isolate the rendered layout from the developer's home/project config.
 	const configStore = configuredAgent
 		? createConfigStore({
 				fs: {
@@ -320,7 +321,15 @@ const renderChatShell = async (
 					},
 				},
 			})
-		: createConfigStore();
+		: createConfigStore({
+				fs: {
+					readFile: async () => {
+						throw Object.assign(new Error("Test config is unavailable."), {
+							code: "ENOENT",
+						});
+					},
+				},
+			});
 	const holder: { current: ChatShellProbeHandle | null } = { current: null };
 	const router = buildTestRouter();
 	// Each rendered shell owns its composer draft key; drop drafts earlier cases left.
@@ -1238,8 +1247,10 @@ describe("ChatShell activity footer", () => {
 			await setup.renderOnce();
 			expect(setup.captureCharFrame()).toMatch(ACTIVE_PROGRESS_REGEX);
 
-			holder.current?.setCompactions([completedCompaction()]);
-			holder.current?.setCompacting(false);
+			await act(async () => {
+				holder.current?.setCompactions([completedCompaction()]);
+				holder.current?.setCompacting(false);
+			});
 			await flushUi(setup);
 			const completedFrame = setup.captureCharFrame();
 			expect(completedFrame).toContain("Compacted (manual) · 7.3K→4.9K tokens");

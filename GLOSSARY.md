@@ -175,6 +175,9 @@ The resumption of an idle Agent Session without a caller-supplied Submission. Th
 
 ## Language
 
+**Project trust**:
+A user decision about whether Wincode may load protected resources supplied by a project. It is distinct from permission to invoke an Agent Tool. _Avoid_: Tool approval, project permission
+
 **Diagnostic Log**:
 A persistent, non-user-facing record of Wincode runtime diagnostics. It is distinct from Execution Mode output, CLI Command output, and the JSON Event Stream. _Avoid_: CLI output, protocol event, session transcript
 
