@@ -40,8 +40,6 @@ export type SkillActivation = {
 	source: SkillActivationSource;
 };
 
-export type SkillPermissionDecision = "allow" | "ask" | "deny";
-
 export type SkillToolDefinition = {
 	description: string;
 	inputSchema: {

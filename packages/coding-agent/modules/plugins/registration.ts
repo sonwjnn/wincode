@@ -88,25 +88,6 @@ const validatePluginInputSchema = (
 	}
 };
 
-const validatePluginPermissionMetadata = (
-	tool: PluginToolRegistration<PluginInputSchema>
-): void => {
-	if (
-		(tool.permissionAction !== undefined &&
-			!isNonEmptyString(tool.permissionAction)) ||
-		(tool.permissionResource !== undefined &&
-			typeof tool.permissionResource !== "string") ||
-		(tool.permissionDecision !== undefined &&
-			!(["allow", "ask", "deny"] as const).includes(tool.permissionDecision)) ||
-		(tool.permissionSafety !== undefined &&
-			typeof tool.permissionSafety !== "boolean")
-	) {
-		throw new Error(
-			`Plugin Tool '${tool.name}' has an invalid Permission action or resource.`
-		);
-	}
-};
-
 /** Validates one Plugin Tool before it can replace an owner's registration. */
 export const validatePluginTool = (candidate: unknown): PluginTool => {
 	if (!isPluginToolCandidate(candidate)) {
@@ -120,23 +101,10 @@ export const validatePluginTool = (candidate: unknown): PluginTool => {
 		tool.name,
 		tool.inputSchema as PluginInputSchema & object
 	);
-	validatePluginPermissionMetadata(tool);
 	const modelName = getModelName(candidate, tool.name);
 	return Object.freeze({
 		description: tool.description,
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
-		...(tool.permissionAction === undefined
-			? {}
-			: { permissionAction: tool.permissionAction }),
-		...(tool.permissionResource === undefined
-			? {}
-			: { permissionResource: tool.permissionResource }),
-		...(tool.permissionDecision === undefined
-			? {}
-			: { permissionDecision: tool.permissionDecision }),
-		...(tool.permissionSafety === undefined
-			? {}
-			: { permissionSafety: tool.permissionSafety }),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,
 		...(modelName === undefined ? {} : { modelName }),

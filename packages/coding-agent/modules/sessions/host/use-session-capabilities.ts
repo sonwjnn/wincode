@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { useAgentRegistry } from "@/modules/agents/agent-registry-provider";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { useConnections } from "@/modules/connections";
-import { useToolPermission } from "@/modules/permissions/use-tool-permission";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
 import {
@@ -33,12 +32,10 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	const connections = useConnections();
 	const config = useConfig();
 	const registry = useAgentRegistry();
-	const toolPermission = useToolPermission();
 	const { getCompactionSettings } = useCompactionSettings();
 	const connectionsRef = useLatest(connections);
 	const configRef = useLatest(config);
 	const registryRef = useLatest(registry);
-	const toolPermissionRef = useLatest(toolPermission);
 	const getCompactionSettingsRef = useLatest(getCompactionSettings);
 	const summaryGenerator = useMemo(
 		() => createDirectSummaryGenerator(connections),
@@ -82,7 +79,6 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			...(pluginRuntime === undefined
 				? {}
 				: { getPluginRuntime: () => pluginRuntime }),
-			getToolPermission: () => toolPermissionRef.current,
 		};
 		sessionSdk = createSessionSdkChildFactory(
 			{

@@ -34,15 +34,12 @@ export const latestEntry = <T>(entries: Iterable<T>): T | undefined => {
 };
 
 /**
- * Whether the session is busy: an Agent Turn is running, a compaction is in
- * flight, or the session is waiting on an approval it asked for. It is derived
- * from the snapshot's facts, so a view never keeps its own notion of a running
- * session.
+ * Whether the session is busy: an Agent Turn is running or a compaction is in
+ * flight. It is derived from the snapshot's facts, so a view never keeps its
+ * own notion of a running session.
  */
 export const isSessionBusy = (snapshot: LiveSessionSnapshot): boolean =>
-	snapshot.turnActive ||
-	snapshot.isCompacting ||
-	snapshot.approvals.some((approval) => isUndefined(approval.decision));
+	snapshot.turnActive || snapshot.isCompacting;
 
 /**
  * Whether an execution is available to receive a Steering Message at its next

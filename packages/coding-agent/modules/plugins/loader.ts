@@ -120,49 +120,65 @@ const shutdownFailedPluginDraft = async (
 	}
 };
 
-const pluginPathsFromSources = (
+const highestPrecedenceSource = (
 	sources: readonly ConfigSource[],
+	scope: ConfigSource["scope"],
+	key: string
+): ConfigSource | undefined =>
+	[...sources]
+		.reverse()
+		.find((source) => source.scope === scope && own(source.document, key));
+
+const pathsFromSource = (
+	source: ConfigSource,
 	diagnostics: PluginDiagnostic[]
 ): readonly PluginPath[] => {
-	let configuredPaths: unknown[] = [];
-	let configuredSource: string | undefined;
-	for (const source of sources) {
-		if (!own(source.document, PLUGIN_KEY)) {
-			continue;
-		}
-		if (source.scope === "project") {
-			addDiagnostic(
-				diagnostics,
-				"Ignored Plugin paths in project configuration; enable Plugins through user configuration or --plugin.",
-				source.path
-			);
-			continue;
-		}
-		configuredSource = source.path;
-		const value = source.document[PLUGIN_KEY];
-		if (!Array.isArray(value)) {
-			configuredPaths = [];
-			addDiagnostic(
-				diagnostics,
-				`The ${PLUGIN_KEY} setting must be an array of absolute paths.`,
-				source.path
-			);
-			continue;
-		}
-		configuredPaths = value;
+	const configuredPaths = source.document[PLUGIN_KEY];
+	if (!Array.isArray(configuredPaths)) {
+		addDiagnostic(
+			diagnostics,
+			`The ${PLUGIN_KEY} setting must be an array of file paths.`,
+			source.path
+		);
+		return [];
 	}
 	return configuredPaths.flatMap((value) => {
-		if (typeof value !== "string" || !path.isAbsolute(value)) {
+		if (typeof value !== "string" || value.length === 0) {
 			addDiagnostic(
 				diagnostics,
-				`Ignored a persisted Plugin path that is not absolute: ${String(value)}.`,
-				configuredSource ?? "user configuration"
+				`Ignored an invalid Plugin path: ${String(value)}.`,
+				source.path
 			);
 			return [];
 		}
-		return [{ path: value, source: configuredSource ?? "user configuration" }];
+		if (source.scope !== "project" && !path.isAbsolute(value)) {
+			addDiagnostic(
+				diagnostics,
+				`Ignored a persisted Plugin path that is not absolute: ${value}.`,
+				source.path
+			);
+			return [];
+		}
+		return [
+			{
+				path:
+					source.scope === "project"
+						? path.resolve(path.dirname(source.path), value)
+						: value,
+				source: source.path,
+			},
+		];
 	});
 };
+
+const pluginPathsFromSources = (
+	sources: readonly ConfigSource[],
+	diagnostics: PluginDiagnostic[]
+): readonly PluginPath[] =>
+	(["global", "project"] as const).flatMap((scope) => {
+		const source = highestPrecedenceSource(sources, scope, PLUGIN_KEY);
+		return source === undefined ? [] : pathsFromSource(source, diagnostics);
+	});
 
 const createRegistrationAPI = (
 	plugin: MutablePluginDraft,
@@ -419,18 +435,6 @@ const loadedPluginFromDraft = (
 			action: `plugin:${draft.id}:${tool.name}`,
 			description: tool.description,
 			...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
-			...(tool.permissionAction === undefined
-				? {}
-				: { permissionAction: tool.permissionAction }),
-			...(tool.permissionResource === undefined
-				? {}
-				: { permissionResource: tool.permissionResource }),
-			...(tool.permissionDecision === undefined
-				? {}
-				: { permissionDecision: tool.permissionDecision }),
-			...(tool.permissionSafety === undefined
-				? {}
-				: { permissionSafety: tool.permissionSafety }),
 			handler: tool.handler,
 			inputSchema: tool.inputSchema,
 			localName: tool.name,
@@ -569,14 +573,6 @@ const disabledPluginsFromSources = (
 	let disabledPlugins: string[] = [];
 	for (const source of sources) {
 		if (!own(source.document, "disabledPlugins")) {
-			continue;
-		}
-		if (source.scope === "project") {
-			addDiagnostic(
-				diagnostics,
-				"Ignored Plugin disablement in project configuration; only known default Plugins can be disabled by ID, and file-loaded Plugins must be unloaded by removing their path.",
-				source.path
-			);
 			continue;
 		}
 		const value = source.document.disabledPlugins;
@@ -884,7 +880,7 @@ const publishPluginDraft = async (
 	}
 };
 
-/** Loads only user-authorized paths and atomically publishes each valid Plugin. */
+/** Resolves configured and distributed candidates, then publishes each valid Plugin atomically. */
 export const loadPlugins = async (
 	input: LoadPluginsInput
 ): Promise<PluginRuntime> => {

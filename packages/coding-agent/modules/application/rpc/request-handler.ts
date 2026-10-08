@@ -47,7 +47,6 @@ import {
 } from "./validation";
 
 export type RpcRequestHandlerContext = Readonly<{
-	autoApproval?: boolean;
 	bind: (host: SessionHost, sessionId: SessionId) => void;
 	unbind: () => void;
 	currentState: () => Record<string, unknown>;
@@ -60,7 +59,6 @@ export type RpcRequestHandlerContext = Readonly<{
 	providedComposer?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	requireBound: () => SessionHost;
 	requireInitialized: () => void;
-	resolveApprovalId: (wireApprovalId: string) => string | undefined;
 	sendInput: (
 		selection: Selection,
 		submission: RpcPreparedSubmission,
@@ -116,7 +114,6 @@ export const createRpcRequestHandler = (
 	context: RpcRequestHandlerContext
 ): ((request: RpcRequest) => Promise<RpcResponse>) => {
 	const {
-		autoApproval,
 		bind,
 		unbind,
 		currentState,
@@ -127,7 +124,6 @@ export const createRpcRequestHandler = (
 		providedComposer,
 		requireBound,
 		requireInitialized,
-		resolveApprovalId,
 		sendInput,
 		state,
 	} = context;
@@ -207,7 +203,6 @@ export const createRpcRequestHandler = (
 			let composed: RpcAssembly;
 			try {
 				composed = await composer({
-					autoApproval,
 					cwd: requestedCwd,
 					workspace,
 				});
@@ -231,7 +226,6 @@ export const createRpcRequestHandler = (
 			state.lifecycle = "initialized";
 			return success(request.id, {
 				capabilities: {
-					approvalResponses: true,
 					explicitSteering: true,
 					failedSubmissionRetry: true,
 					stateNotifications: true,
@@ -585,7 +579,6 @@ export const createRpcRequestHandler = (
 			const result = await activeHost.agentSession.interruptAll();
 			return success(request.id, {
 				recalled: result.recalled.map(submissionFromWaiting),
-				settledApprovals: result.approvalsSettled,
 				stopped: result.kind,
 			});
 		}
@@ -677,60 +670,6 @@ export const createRpcRequestHandler = (
 						: undefined,
 				revision: revision.revision,
 			});
-		}
-		if (request.method === "session/respondToApproval") {
-			const activeHost = requireBound();
-			const params = paramsOf(request);
-			const wireApprovalId = stringValue(params.approvalId);
-			if (wireApprovalId === undefined) {
-				throw rpcInvalidParams("approvalId is required.");
-			}
-			const approvalId = resolveApprovalId(wireApprovalId);
-			if (approvalId === undefined) {
-				return success(request.id, { applied: false });
-			}
-			if (params.decision === "allowOnce") {
-				const result = activeHost.agentSession.respondToApproval(approvalId, {
-					decision: "allow",
-					remember: false,
-				});
-				return success(request.id, { applied: result.applied });
-			}
-			if (params.decision === "alwaysAllow") {
-				const result = activeHost.agentSession.respondToApproval(approvalId, {
-					decision: "allow",
-					remember: true,
-				});
-				if (!result.applied && result.reason === "persistence-forbidden") {
-					throw appError(
-						"approval_persistence_forbidden",
-						"This approval cannot be persisted."
-					);
-				}
-				return success(request.id, { applied: result.applied });
-			}
-			if (params.decision === "reject") {
-				if (
-					params.feedback !== undefined &&
-					typeof params.feedback !== "string"
-				) {
-					throw rpcInvalidParams("feedback must be a string.");
-				}
-				const result = activeHost.agentSession.respondToApproval(approvalId, {
-					decision: "reject",
-					...(params.feedback === undefined
-						? {}
-						: { feedback: params.feedback }),
-				});
-				return success(request.id, { applied: result.applied });
-			}
-			if (params.decision === "abort") {
-				const result = activeHost.agentSession.respondToApproval(approvalId, {
-					decision: "abort",
-				});
-				return success(request.id, { applied: result.applied });
-			}
-			throw rpcInvalidParams("Unknown approval decision.");
 		}
 		throw new RpcProtocolError(
 			RPC_ERROR_CODES.methodNotFound,

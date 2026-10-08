@@ -24,25 +24,6 @@ export type PluginJsonValue =
 export type PluginToolResult = ToolCallOutput;
 export type PluginInputSchema = z.ZodType | ToolJsonSchema;
 
-export type PluginPermissionDecision = "allow" | "ask" | "deny";
-export type PluginPermissionResolution = Readonly<{
-	decision: PluginPermissionDecision;
-	safety: boolean;
-}>;
-export type PluginPermissionResourceRules = Readonly<
-	Record<string, PluginPermissionDecision>
->;
-export type PluginPermissionRules = Readonly<
-	Record<
-		string,
-		PluginPermissionDecision | PluginPermissionResourceRules | undefined
-	>
->;
-export type PluginAgentPermissionPolicy = Readonly<{
-	rules: PluginPermissionRules;
-	safety: boolean;
-}>;
-
 export type PluginConfigOrigin = Readonly<{
 	path: string;
 	scope: string;
@@ -123,11 +104,6 @@ export type PluginBeforeAgentTurnContext = PluginSessionContext &
 	Readonly<{
 		agentId: AgentId;
 		capabilityCeiling?: SessionSdkCapabilityCeiling;
-		getAgentPermissionPolicy?: () => Promise<PluginAgentPermissionPolicy>;
-		resolvePluginPermission?: (
-			action: string,
-			resource: string
-		) => Promise<PluginPermissionResolution>;
 		registerTurnCleanup?: (cleanup: () => void) => void;
 		signal: AbortSignal;
 		turnId?: AgentTurnId;
@@ -156,10 +132,6 @@ export type PluginToolRegistration<Schema extends PluginInputSchema> =
 	Readonly<{
 		description: string;
 		exclusiveInBatch?: true;
-		permissionAction?: string;
-		permissionResource?: string;
-		permissionDecision?: "allow" | "ask" | "deny";
-		permissionSafety?: boolean;
 		handler: (
 			input: Schema extends z.ZodType ? z.output<Schema> : unknown,
 			context: PluginToolContext

@@ -21,7 +21,6 @@ export type SessionSubmissionStart = Readonly<{
 export type SessionSubmissionCommandPort = Readonly<{
 	beginSubmission: (input: SessionSendInput) => SessionSubmissionStart;
 	cancelCompaction: () => void;
-	closeApprovals: () => void;
 	deadlineMs: number;
 	drainQueuedSubmissions: () => Promise<void>;
 	finishSubmission: (
@@ -100,7 +99,6 @@ export const createSessionSubmissionCommand = (
 				}
 				const stop = (): void => {
 					port.cancelCompaction();
-					port.closeApprovals();
 				};
 				controller.signal.addEventListener("abort", stop, { once: true });
 				try {

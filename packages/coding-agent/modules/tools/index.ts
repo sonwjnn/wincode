@@ -11,8 +11,6 @@ export type {
 export {
 	DEFAULT_RESOURCE_LIMIT_PROFILE,
 	getToolResourceLimits,
-	isElevatedResourceProfile,
-	RESOURCE_LIMIT_PERMISSION_ACTION,
 	resourceLimitProfileSchema,
 } from "./resource-limits";
 export type { CodingToolRunnerOptions } from "./runners";

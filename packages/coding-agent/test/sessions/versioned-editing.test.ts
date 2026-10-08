@@ -2,27 +2,17 @@ import type { Database as SqliteDatabase } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import {
-	createPermissionService,
-	createToolPermission,
-} from "@/modules/permissions";
 import { resolveTurnTools } from "@/modules/sessions/hooks/runtime-turn";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
-	createToolGate,
-	type ToolGateApprovalPort,
-} from "@/modules/tool-gate/tool-gate";
-import {
 	computeFileVersion,
-	createWorkspaceSandbox,
 	type FileObservationStore,
 	type FileVersion,
 	getToolResourceLimits,
 	type VersionedEditingContext,
 } from "@/modules/tools";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import {
 	agentId,
 	agentTurnId,
@@ -41,15 +31,6 @@ const model = {
 	providerId: "openai",
 } as const;
 
-const createApprovalPort = (
-	requests: ToolApprovalRequest[]
-): ToolGateApprovalPort => ({
-	request: async (request) => {
-		requests.push(request);
-		return { decision: "allow", remember: false };
-	},
-});
-
 const openStore = (root: string, databasePath: string): OpenedSessionStore => {
 	const database = createDatabase(databasePath);
 	const store = createDrizzleSessionStore(database.db, {
@@ -67,22 +48,12 @@ const observationStoreFor = (store: SessionStore): FileObservationStore => {
 	return store.fileObservationStore;
 };
 const createTools = async (
-	root: string,
 	context: VersionedEditingContext,
-	requests: ToolApprovalRequest[],
 	resourceLimits = getToolResourceLimits()
 ) => {
-	const gate = createToolGate({
-		approvals: createApprovalPort(requests),
-		resolvePermission: async () => createToolPermission(),
-		resolveResourceLimits: async () => resourceLimits,
-		sandbox: createWorkspaceSandbox(root),
-		service: createPermissionService(),
-	});
 	const tools = await resolveTurnTools({
 		agentTools: ["read", "write", "edit", "recover"],
-		gate,
-		resolveResourceLimits: async () => resourceLimits,
+		resourceLimits,
 		versionedEditing: context,
 	});
 	return {
@@ -98,7 +69,7 @@ const createTools = async (
 	};
 };
 
-test("persists observations across restart and gates sloppy edits separately", async () => {
+test("persists observations and edit modes across restart", async () => {
 	const root = await mkdtemp(
 		join(process.cwd(), ".wincode-versioned-editing-")
 	);
@@ -125,8 +96,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 			sessionId,
 			store: observationStoreFor(store),
 		});
-		const requests: ToolApprovalRequest[] = [];
-		const tools = await createTools(root, context(), requests);
+		const tools = await createTools(context());
 		const readResult = await tools
 			.find("read")
 			.execute(
@@ -184,12 +154,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 				artifact.id
 			)
 		).toEqual(artifact);
-		const restartedRequests: ToolApprovalRequest[] = [];
-		const restartedTools = await createTools(
-			root,
-			restartedContext(),
-			restartedRequests
-		);
+		const restartedTools = await createTools(restartedContext());
 		const mismatchResult = await restartedTools.find("edit").execute(
 			{
 				input: {
@@ -232,8 +197,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 			sessionId,
 			store: observationStoreFor(store),
 		};
-		const sloppyRequests: ToolApprovalRequest[] = [];
-		const sloppyTools = await createTools(root, sloppyContext, sloppyRequests);
+		const sloppyTools = await createTools(sloppyContext);
 		const sloppyResult = await sloppyTools.find("edit").execute(
 			{
 				input: {
@@ -247,7 +211,6 @@ test("persists observations across restart and gates sloppy edits separately", a
 		if (sloppyResult.type !== "success") {
 			throw new Error(sloppyResult.errorText);
 		}
-		expect(sloppyRequests.length).toBeGreaterThan(0);
 		expect(await Bun.file(filePath).text()).toBe("DONE\ntwo\n");
 
 		const newFilePath = join(root, "nested", "created.txt");
@@ -272,7 +235,7 @@ test("persists observations across restart and gates sloppy edits separately", a
 	}
 });
 
-test("smoke: gates multi-file artifacts, restart recovery, and a later edit", async () => {
+test("smoke: multi-file artifacts, restart recovery, and a later edit", async () => {
 	const root = await mkdtemp(join(process.cwd(), ".wincode-versioned-smoke-"));
 	const databasePath = join(root, "sessions.sqlite");
 	const firstPath = join(root, "first.txt");
@@ -301,7 +264,6 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 			sessionId,
 			store: observationStoreFor(store),
 		});
-		const requests: ToolApprovalRequest[] = [];
 		const standardLimits = getToolResourceLimits();
 		const artifactLimits = {
 			...standardLimits,
@@ -312,12 +274,7 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 				maxFullDiffArtifactBytes: 10_000,
 			},
 		};
-		const tools = await createTools(
-			root,
-			context("apply_patch"),
-			requests,
-			artifactLimits
-		);
+		const tools = await createTools(context("apply_patch"), artifactLimits);
 		const firstRead = await tools.find("read").execute(
 			{
 				input: { path: firstPath },
@@ -409,7 +366,7 @@ test("smoke: gates multi-file artifacts, restart recovery, and a later edit", as
 			await observationStoreFor(store).recovery?.listUnresolvedRecoveries();
 		const recoveryId = unresolved?.[0]?.id;
 		expect(recoveryId).toBeString();
-		const restartedTools = await createTools(root, context(), requests);
+		const restartedTools = await createTools(context());
 		const inspection = await restartedTools.find("recover").execute(
 			{
 				input: { action: "inspect", recoveryId },

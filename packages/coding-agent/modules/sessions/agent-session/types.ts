@@ -31,8 +31,6 @@ import type {
 	SessionId,
 	SteeringMessageId,
 } from "@/shared/identifiers";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
-import type { SessionApprovalOutcome } from "../approval-contract";
 import type {
 	CompactSessionResult,
 	SessionCompactionModule,
@@ -121,7 +119,6 @@ export type SessionSubmissionEvent = Readonly<{
 	turnId?: AgentTurnId;
 }>;
 export type SessionInterruptResult = Readonly<{
-	approvalsSettled: number;
 	kind: "turn" | "compaction" | "none";
 	recalled: SessionWaitingMessage[];
 }>;
@@ -152,14 +149,6 @@ export type SessionExecution = ReadonlyDeep<{
 	reasoningMode?: ReasoningMode;
 	viewState?: SessionViewState;
 }>;
-
-/** One result from the Agent Session's approval settlement command. */
-export type SessionApprovalResult =
-	| { readonly applied: true }
-	| {
-			readonly applied: false;
-			readonly reason?: "persistence-forbidden";
-	  };
 
 /**
  * The input the Agent Session starts when the Submission Queue reaches a
@@ -212,23 +201,8 @@ export type SessionWaitingMessage = SessionQueuedSubmission;
 
 export type SessionWaitingMessageId = QueuedSubmissionId | SubmissionId;
 
-/**
- * One approval request the Agent Session owns until it settles. `target` is
- * `tool-call` when the request carries a Tool Call Identifier and `session`
- * when it has no timeline anchor of its own. A request with no `decision` is
- * pending; a settled request is never settled again.
- */
-export type SessionApproval = ReadonlyDeep<{
-	decision?: SessionApprovalOutcome;
-	id: string;
-	request: ToolApprovalRequest;
-	target: "session" | "tool-call";
-}>;
-
 /** The session facts an observer reads at one moment. */
 export type LiveSessionSnapshot = ReadonlyDeep<{
-	/** Approval requests the Agent Session owns, oldest first, settled ones included. */
-	approvals: SessionApproval[];
 	catalogDiagnostic: string | null;
 	compactions: SessionCompaction[];
 	compactionError: Error | null;
@@ -279,7 +253,6 @@ export type SessionExecutionInput = ReadonlyDeep<{
  */
 export type SessionResolvedAgent = Readonly<
 	ResolvedAgent & {
-		requiresManualApproval?: boolean;
 		visibleCodingTools: readonly CodingToolName[];
 	}
 >;
@@ -318,7 +291,7 @@ export type SessionHydrationRequest = ReadonlyDeep<{
 
 /** The Skill catalog one Agent Turn arms and runs with, created by the host. */
 export type SessionSkillCatalog = Readonly<{
-	/** The Agent whose permissions filtered and gate this execution's Skills. */
+	/** The Agent whose configuration and selection apply to this Skill catalog. */
 	agentId: AgentId;
 	/** The catalog diagnostic the Session Snapshot publishes, when there is one. */
 	diagnostic: string | null;
@@ -544,8 +517,6 @@ export type SessionCompactionCommand = ReadonlyDeep<{
  * writes are not part of the caller-facing Agent Session API.
  */
 export type AgentSessionInternalPort = Readonly<{
-	/** Ends the turn whose approval request was aborted. */
-	abortApprovalTurn: (toolCallId: ToolCallId) => void;
 	/** Registers a starting Agent Turn execution and its parent linkage. */
 	beginExecution: (execution: SessionExecutionInput) => SessionExecution;
 	/** Writes one durable Session Record while the Agent Session still owns it. */
@@ -554,10 +525,6 @@ export type AgentSessionInternalPort = Readonly<{
 	endExecution: (turnId: AgentTurnId) => void;
 	/** Reports work that can still write or settle after shutdown starts. */
 	hasPendingWork: () => boolean;
-	/** Creates one pending approval owned by the Agent Session. */
-	requestApproval: (
-		request: ToolApprovalRequest
-	) => Promise<SessionApprovalOutcome>;
 	/** Ends the session after active durable cleanup has completed. */
 	shutdown: () => Promise<void>;
 	/** Replaces one execution's Session View State, never another's. */
@@ -591,11 +558,6 @@ export type AgentSession = Readonly<{
 	) => Promise<SessionWaitingMessage[]>;
 	/** Interrupts compaction or the active turn and recalls waiting work atomically. */
 	interruptAll: () => Promise<SessionInterruptResult>;
-	/** Settles one pending approval; an already settled request is left alone. */
-	respondToApproval: (
-		id: string,
-		outcome: SessionApprovalOutcome
-	) => SessionApprovalResult;
 	/** Withdraws waiting user messages back to the composer. */
 	recallWaitingMessages: (
 		ids?: readonly SessionWaitingMessageId[]

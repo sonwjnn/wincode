@@ -17,7 +17,6 @@ import { createApplicationPluginComposition } from "@/modules/application/plugin
 import { loadPlugins } from "@/modules/plugins/loader";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { createConfigStore } from "@/shared/config/config-store";
-import type { SessionId } from "@/shared/identifiers";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
@@ -98,23 +97,11 @@ afterAll(async () => {
 });
 
 const CHILD_PROMPT = "Inspect the repository state.";
-const delegatePermissionDocument =
-	'{"permission":{"plugin:subagents:delegate":"allow"}}';
 const CHILD_OUTPUT = "Child investigation stays in its own Session.";
 const PARENT_OUTPUT = "Parent received a child Task ID.";
 const configDocument = `{
 	"agents": {
 		"scout": { "description": "Inspect and report findings", "role": "subagent" }
-	}
-}`;
-const approvalConfigDocument = `{
-	"agents": {
-		"build": { "permission": { "read": "ask" } },
-		"scout": {
-			"description": "Inspect and report findings",
-			"permission": { "read": "ask" },
-			"role": "subagent"
-		}
 	}
 }`;
 
@@ -154,7 +141,6 @@ test("projects delegated work as a separate durable Session, not parent transcri
 	try {
 		const rendered = await renderSession({
 			configDocument,
-			globalConfigDocument: delegatePermissionDocument,
 			pricing: createE2ePricing(200_000),
 			sessionId: parentSessionId,
 		});
@@ -237,123 +223,5 @@ test("projects delegated work as a separate durable Session, not parent transcri
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
-	}
-});
-test("shows a minimal parent notice for a background child's pending approval", async () => {
-	const store = createE2eStore();
-	const { sessionId: parentSessionId } = await seedCompactionHistory(
-		store,
-		1,
-		"background-approval"
-	);
-	const manager = sessionHostManager;
-	const priorStepScript = recorder.stepScript;
-	const callId = toolCallId("background-approval-delegation");
-	const childReadCallId = toolCallId("background-child-read");
-	const pendingApprovalNotice = Promise.withResolvers<{
-		pendingApprovalCount: number;
-		sessionId: SessionId;
-	}>();
-	const unsubscribeManager = manager.onEvent((event) => {
-		if (
-			event.type === "session-approval-notice" &&
-			event.sessionId !== parentSessionId &&
-			event.pendingApprovalCount > 0
-		) {
-			pendingApprovalNotice.resolve({
-				pendingApprovalCount: event.pendingApprovalCount,
-				sessionId: event.sessionId,
-			});
-		}
-	});
-	await Bun.write(join(testDirectory, "notes.txt"), "approval target");
-	recorder.stepScript = async function* (
-		request: ModelStepRequest
-	): AsyncGenerator<ModelStreamPart> {
-		const latestUserText =
-			request.messages
-				.filter(({ role }) => role === "user")
-				.at(-1)
-				?.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
-				.join("\n") ?? "";
-		if (latestUserText === CHILD_PROMPT) {
-			yield {
-				input: { path: join(testDirectory, "notes.txt") },
-				toolCallId: childReadCallId,
-				toolName: "read",
-				type: "tool-call",
-			};
-			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
-			return;
-		}
-		if (request.messages.some(({ role }) => role === "tool")) {
-			yield { delta: PARENT_OUTPUT, type: "text-delta" };
-			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
-			return;
-		}
-		yield {
-			input: { agent: "scout", prompt: CHILD_PROMPT },
-			toolCallId: callId,
-			toolName: "delegate",
-			type: "tool-call",
-		};
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
-	};
-	let setup: TestRendererSetup | undefined;
-	try {
-		const rendered = await renderSession({
-			configDocument: approvalConfigDocument,
-			globalConfigDocument: delegatePermissionDocument,
-			pricing: createE2ePricing(200_000),
-			sessionId: parentSessionId,
-		});
-		setup = rendered.setup;
-		await rendered.registryReady;
-		await waitForSessionFrame(setup, (frame) =>
-			frame.includes("context detail")
-		);
-		await act(async () => {
-			await setup?.flush();
-			await setup?.flush();
-		});
-		await act(async () => {
-			await setup?.mockInput.typeText("delegate the protected read");
-			await setup?.flush();
-			setup?.mockInput.pressEnter();
-		});
-		const notice = await pendingApprovalNotice.promise;
-		expect(notice.pendingApprovalCount).toBe(1);
-		const task = taskStore
-			.listTasks(parentSessionId)
-			.find((candidate) => candidate.parentToolCallId === callId);
-		if (task === undefined) {
-			throw new Error("The approval task was not durably recorded.");
-		}
-		expect(task.status).toBe("active");
-		expect(task.childSessionId).toBe(notice.sessionId);
-		const surfaceSetup = setup;
-		if (surfaceSetup === undefined) {
-			throw new Error("The parent Session surface did not mount.");
-		}
-		await act(async () => {
-			await surfaceSetup.flush();
-			await surfaceSetup.flush();
-		});
-		await waitForSessionFrame(surfaceSetup, (frame) =>
-			frame.includes(`Session ${task.childSessionId}`)
-		);
-		const frame = surfaceSetup.captureCharFrame();
-		expect(frame).toContain(`Session ${task.childSessionId}`);
-		expect(frame).toContain("pending approval");
-		expect(frame).not.toContain(childReadCallId);
-	} finally {
-		recorder.stepScript = priorStepScript;
-		if (setup) {
-			writeE2EFrame(setup);
-			setup.renderer.destroy();
-		}
-		cleanupSessionRender();
-		await manager.shutdownAll();
-		unsubscribeManager();
 	}
 });

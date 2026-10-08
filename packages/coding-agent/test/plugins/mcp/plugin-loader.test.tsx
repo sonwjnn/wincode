@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testRender } from "@opentui/react/test-utils";
-import type { PluginBeforeAgentTurnContext } from "@wincode/coding-agent";
 import {
 	DEFAULT_MCP_TIMEOUTS,
 	type McpClient,
@@ -34,7 +33,6 @@ import {
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
-import { agentId } from "../../support/identifiers";
 import { flushTestRenderer } from "../../support/opentui";
 
 const OpenStatusPanel = ({
@@ -194,85 +192,6 @@ test("the distributed MCP package renders its contribution in the generic status
 	} finally {
 		await runtime?.shutdown();
 		setInteractiveRuntimeContext({ args: [], cwd: workspace });
-		await rm(root, { force: true, recursive: true });
-	}
-});
-
-test("MCP tools resolve permissions under their owner-qualified actions", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-mcp-permission-"));
-	const configRoot = path.join(root, "config");
-	const workspace = path.join(root, "workspace");
-	await mkdir(configRoot, { recursive: true });
-	await mkdir(workspace, { recursive: true });
-
-	const config: McpConfigResult = {
-		diagnostics: [],
-		servers: {
-			external: {
-				disabled: false,
-				name: "external",
-				permission: "allow",
-				timeout: DEFAULT_MCP_TIMEOUTS,
-				type: "remote",
-				url: "https://mcp.example.test",
-			},
-		},
-	};
-	const dependencies: McpPluginDependencies = {
-		createClient: (): McpClient => ({
-			callTool: async () => ({ content: [] }),
-			close: async () => undefined,
-			connect: async () => undefined,
-			listTools: async () => [
-				{
-					description: "Enumerate external directories.",
-					inputSchema: { type: "object" },
-					name: "directory",
-				},
-			],
-			setToolsChangedListener: () => undefined,
-		}),
-		loadConfig: async () => config,
-	};
-	const resolvedActions: string[] = [];
-	let runtime: PluginRuntime | undefined;
-	try {
-		runtime = await loadPlugins({
-			bundledPlugins: [
-				{ factory: createMcpPluginFactory(dependencies), id: "mcp" },
-			],
-			cliPaths: [],
-			config: {
-				configStore: createConfigStore({ configRoot, homeRoot: root }),
-				cwd: workspace,
-				homeRoot: root,
-				workspace,
-			},
-			distributionPlugins: [],
-		});
-
-		const tools = await runtime.resolveToolsForTurn({
-			agentId: agentId("build"),
-			resolvePluginPermission: async (action) => {
-				resolvedActions.push(action);
-				return { decision: "allow", safety: false };
-			},
-			sessionId: "mcp-permission-session",
-			signal: new AbortController().signal,
-			workspace,
-		} satisfies PluginBeforeAgentTurnContext);
-
-		expect(resolvedActions).toEqual(["plugin:mcp:external_directory"]);
-		expect(runtime.diagnostics).toEqual([]);
-		expect(tools).toContainEqual(
-			expect.objectContaining({
-				permissionAction: "plugin:mcp:external_directory",
-				permissionDecision: "allow",
-				permissionSafety: false,
-			})
-		);
-	} finally {
-		await runtime?.shutdown();
 		await rm(root, { force: true, recursive: true });
 	}
 });
@@ -526,7 +445,6 @@ test("the generic MCP panel shows safe failures and routes reconnect and disable
 				disabled: false,
 				headers: { Authorization: "Bearer configured-secret" },
 				name: "broken",
-				permission: "ask",
 				timeout: DEFAULT_MCP_TIMEOUTS,
 				type: "remote",
 				url: "https://configured.example.test/mcp?token=configured-secret",

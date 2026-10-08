@@ -1,6 +1,6 @@
 # File-loaded Plugins
 
-File-loaded Plugins are trusted TypeScript modules that Wincode explicitly loads into its process. They can register gated Agent Tools and direct Interactive Mode commands through the public `@wincode/coding-agent` API.
+File-loaded Plugins are trusted TypeScript modules that Wincode explicitly loads into its process. They can register model-visible Agent Tools and Interactive Mode commands through the public `@wincode/coding-agent` API.
 
 ## Enable a Plugin
 
@@ -18,9 +18,9 @@ CLI-relative paths resolve from the workspace. To enable a Plugin on every run, 
 }
 ```
 
-Project configuration cannot authorize Plugin code. If a CLI path and a configured path declare the same Plugin Identifier, the CLI Plugin loads first. Wincode accepts TypeScript paths (`.ts`, `.tsx`, `.mts`, `.cts`) and reports invalid, missing, or failed Plugins without preventing other Plugins from loading.
+A project config may name explicit Plugin paths, but Wincode considers them only after the project has been trusted; a `.wincode/plugins/` directory is never discovered implicitly. Relative paths resolve against the config file that declares them. If a CLI/user path and a project path declare the same Plugin Identifier, the CLI/user Plugin wins. Wincode accepts TypeScript paths (`.ts`, `.tsx`, `.mts`, `.cts`) and reports invalid, missing, or failed Plugins without preventing other Plugins from loading.
 
-Enabling a path is a trust decision: Plugin code runs with Wincode's process permissions, including code executed while the module loads. Plugins are not sandboxed, and Wincode does not install their dependencies. Local imports and dependencies already available to the Plugin may be used. `--no-plugin <id>` and the personal `disabledPlugins` setting disable only known default/distribution Plugins before loading them; they do not disable explicitly selected file paths. Remove a file path from the CLI or personal configuration to stop that Plugin from loading.
+Enabling a path is a trust decision: Plugin code runs with Wincode's process privileges, including code executed while the module loads. Plugins are not sandboxed, and Wincode does not install their dependencies. Local imports and dependencies already available to the Plugin may be used. `--no-plugin <id>` and configured `disabledPlugins` entries disable known default/distribution Plugins before loading them; they do not disable explicitly selected file paths. Remove a file path from the CLI or the configuration source that declares it to stop that Plugin from loading.
 
 ## Author a Plugin
 
@@ -61,13 +61,13 @@ const jiraPlugin: PluginFactory = (api) => {
 export default jiraPlugin;
 ```
 
-Plugin Identifiers use lowercase ASCII letters, digits, and underscores; local Tool names also allow hyphens. Wincode exposes `plugin_jira_search_issues` to the Agent and uses `plugin:jira:search_issues` as the Tool Permission action. A custom permission action that collides with a host-native tool action is qualified under the Plugin Identifier (for example, `plugin:jira:edit`), so a native `edit: allow` rule cannot authorize a Plugin Tool; user rules can grant the Plugin-scoped action explicitly. A Plugin Tool's effective permission defaults to `ask` for each calling Agent. Only user-controlled rules may grant `allow`; project rules may tighten the decision to `ask` or `deny`. The normal Interactive approval flow applies, while Print and JSON Modes fail closed on an unresolved `ask`. RPC uses its existing approval protocol.
+Plugin Identifiers use lowercase ASCII letters, digits, and underscores; local Tool names also allow hyphens. Wincode exposes `plugin_jira_search_issues` to the Agent. The owner-qualified Plugin name prevents collisions but has no authorization meaning. Registered Plugin Tools execute without a Wincode per-call allow/deny decision; explicitly enabling Plugin code is the trust boundary. Project-selected Plugins are considered only after Project trust has been granted.
 
 Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas may be Zod or JSON Schema. Handlers return the common Tool outcome shape: `{ type: "success", output }` or `{ type: "failure", errorText }`. Successful output is bounded to 64 KiB of UTF-8 text or JSON; failures become safe failed Tool Calls.
 
 Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeAgentTurn(context, scope)`. The pre-Turn context contains the Session ID, Agent ID, workspace, and abort signal. Within one Plugin, Turn registrations override Session registrations, which override factory registrations. A same-scope registration replaces that Plugin's previous definition; `unregisterTool(name)` masks an outer definition only in that scope. Other Plugins cannot replace its tools. A failed pre-Turn hook contributes no tools for that Plugin on the affected Turn.
 
-Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened and do not pass through Tool Permission or open a second approval dialog.
+Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened; selecting one from the command menu is its explicit execution intent.
 
 A Plugin factory may also register named process resources with `registerResource(name, value)`. Host integrations retrieve them through the generic `PluginRuntime.getResource(pluginId, name)` API; resource types and ownership stay with the Plugin. Resource names are unique within a Plugin and values must be defined. The Plugin should release owned resources from `onShutdown`.
 

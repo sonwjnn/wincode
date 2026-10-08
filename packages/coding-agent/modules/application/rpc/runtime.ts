@@ -10,7 +10,6 @@ import { loadPlugins } from "@/modules/plugins/loader";
 import { createSessionSdkChildFactory } from "@/modules/sessions/sdk";
 import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
 import { createConfigStore } from "@/shared/config/config-store";
-import { createPermissionService } from "../../../modules/permissions/permission-service";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
 import {
 	createAgentTurnId,
@@ -53,9 +52,6 @@ export const loadRuntime = async (
 			getSessionSdk: () => sessionSdk,
 			pluginRuntime,
 			turnToolResolver: pluginComposition.turnToolResolver,
-			permissionService: createPermissionService({
-				autoApproval: sessionComposition.autoApproval,
-			}),
 			workspace: sessionComposition.workspace,
 		});
 		sessionSdk = createSessionSdkChildFactory(
@@ -63,9 +59,6 @@ export const loadRuntime = async (
 				configRuntime,
 				connections: assembly.capabilities.getConnections(),
 				cwd: sessionComposition.cwd,
-				permissionService: createPermissionService({
-					autoApproval: sessionComposition.autoApproval,
-				}),
 				registry: assembly.capabilities.getRegistry(),
 				store: assembly.store,
 				workspace: sessionComposition.workspace,

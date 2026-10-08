@@ -28,7 +28,6 @@ const jiraPlugin = (): LoadedPlugin => ({
 	sourcePath: pluginSource,
 	tools: [
 		{
-			action: "plugin:jira:search_issues",
 			description: "Search Jira issues.",
 			handler: async () => ({ output: { query: "fixed" }, type: "success" }),
 			inputSchema: z.object({ query: z.string() }),

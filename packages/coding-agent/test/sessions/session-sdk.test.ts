@@ -18,11 +18,7 @@ import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,
 } from "@wincode/subagents/plugin";
-import {
-	type AgentRegistry,
-	buildAgentRegistry,
-} from "@/modules/agents/registry";
-import { createSessionCapabilities } from "@/modules/sessions/host/session-capabilities";
+import { buildAgentRegistry } from "@/modules/agents/registry";
 import { createSessionSdkWithRuntime as createSessionSdk } from "@/modules/sessions/sdk";
 import type {
 	SessionSdk,
@@ -39,7 +35,7 @@ import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
 } from "../support/e2e-fake-runtime";
-import { agentId, sessionId } from "../support/identifiers";
+import { sessionId } from "../support/identifiers";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
@@ -103,48 +99,86 @@ afterAll(async () => {
 	await rm(root, { force: true, recursive: true });
 });
 
-test("a Session's Tool Permission follows its Agent registry after hydration", async () => {
-	let registry: AgentRegistry | null = null;
-	const assembly = await createSessionCapabilities({
-		cwd: workspace,
-		database: database.db,
-		getRegistry: () => registry,
-		registry,
-		store,
-		workspace,
-	});
-	try {
-		registry = buildAgentRegistry(
-			fromPartial<ConfigSnapshot>({
-				diagnostics: [],
-				document: {
-					agents: {
-						scout: {
-							description: "Inspect and report findings.",
-							role: "subagent",
-						},
+test("public Session SDK trust is explicit and is not inherited by child SDKs", async () => {
+	const trustWorkspace = path.join(root, "public-sdk-trust-workspace");
+	const xdgConfigHome = path.join(root, "public-sdk-trust-config");
+	const xdgDataHome = path.join(root, "public-sdk-trust-data");
+	const userConfigDirectory = path.join(xdgConfigHome, "wincode");
+	await Promise.all([
+		mkdir(trustWorkspace, { recursive: true }),
+		mkdir(userConfigDirectory, { recursive: true }),
+	]);
+	await Promise.all([
+		Bun.write(
+			path.join(userConfigDirectory, "wincode.json"),
+			JSON.stringify({})
+		),
+		Bun.write(
+			path.join(trustWorkspace, "wincode.json"),
+			JSON.stringify({
+				agents: {
+					"project-agent": {
+						description: "Configured only by this project.",
+						role: "subagent",
 					},
 				},
-				sourceFor: () => undefined,
-				sources: [
-					{
-						document: fromPartial<ConfigSnapshot["document"]>({
-							agents: { scout: { permission: { read: "deny" } } },
-						}),
-						path: path.join(workspace, "wincode.json"),
-						scope: "project",
-					},
-				],
-			}),
-			{ connectedProviderIds: new Set(["openai"]) }
-		);
-		const permission = await assembly.capabilities
-			.getToolPermission()
-			.resolvePermissionForAgent(agentId("scout"));
+			})
+		),
+	]);
+	const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+	const previousXdgDataHome = process.env.XDG_DATA_HOME;
+	process.env.XDG_CONFIG_HOME = xdgConfigHome;
+	process.env.XDG_DATA_HOME = xdgDataHome;
+	let deniedSdk: SessionSdk | undefined;
+	let trustedSdk: SessionSdk | undefined;
+	let childSdk: SessionSdk | undefined;
+	try {
+		deniedSdk = await createPublicSessionSdk({
+			cwd: trustWorkspace,
+			databasePath: path.join(storeRoot, "public-sdk-denied-trust.sqlite"),
+			pluginPaths: [],
+			projectTrust: "deny",
+			workspace: trustWorkspace,
+		});
+		expect(
+			(await deniedSdk.getAgentCatalog()).some(
+				({ id }) => id === "project-agent"
+			)
+		).toBe(false);
 
-		expect(permission.decide("read", `${workspace}/secret.txt`)).toBe("deny");
+		trustedSdk = await createPublicSessionSdk({
+			cwd: trustWorkspace,
+			databasePath: path.join(storeRoot, "public-sdk-explicit-trust.sqlite"),
+			pluginPaths: [],
+			projectTrust: "trust",
+			workspace: trustWorkspace,
+		});
+		expect(
+			(await trustedSdk.getAgentCatalog()).some(
+				({ id }) => id === "project-agent"
+			)
+		).toBe(true);
+
+		childSdk = await trustedSdk.createChildSdk({ pluginPaths: [] });
+		expect(
+			(await childSdk.getAgentCatalog()).some(
+				({ id }) => id === "project-agent"
+			)
+		).toBe(false);
 	} finally {
-		await assembly.shutdown();
+		await childSdk?.dispose();
+		await trustedSdk?.dispose();
+		await deniedSdk?.dispose();
+		if (previousXdgConfigHome === undefined) {
+			delete process.env.XDG_CONFIG_HOME;
+		} else {
+			process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+		}
+		if (previousXdgDataHome === undefined) {
+			delete process.env.XDG_DATA_HOME;
+		} else {
+			process.env.XDG_DATA_HOME = previousXdgDataHome;
+		}
 	}
 });
 

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	isArray,
 	isNonEmptyString,
@@ -17,6 +17,7 @@ const MARKDOWN_EXTENSION = ".md";
 export type CustomCommandDiscoveryInput = {
 	homeRoot: string;
 	snapshot: ConfigSnapshot;
+	trustedProjectRoots?: readonly string[];
 	workspace: string;
 };
 
@@ -65,6 +66,12 @@ export function discoverCustomCommandCandidates(
 		}
 	}
 	for (const root of getProjectRoots(input.workspace)) {
+		if (
+			input.trustedProjectRoots !== undefined &&
+			!input.trustedProjectRoots.includes(resolve(root))
+		) {
+			continue;
+		}
 		result.push(...collect(join(root, COMMANDS_DIR), "project"));
 	}
 	for (const root of configured) {

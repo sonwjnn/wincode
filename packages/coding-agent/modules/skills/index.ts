@@ -1,4 +1,3 @@
-import type { PermissionDecision } from "@/modules/permissions";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { buildSkillCatalog, type SkillCatalog } from "./activation";
 import { buildSkillRootDescriptors } from "./discovery";
@@ -38,19 +37,16 @@ export async function discoverSkills(
 		buildSkillRootDescriptors({
 			homeRoot: input.homeRoot,
 			snapshot,
+			trustedProjectRoots: input.trustedProjectRoots,
 			workspace: input.workspace,
 		})
 	);
 }
 
-/**
- * Builds one permission-filtered Skill catalog for the execution turn. The CLI
- * resolves Tool Permission; the public Skills module only receives its result.
- */
+/** Builds the selected Skill catalog for this execution turn. */
 export async function discoverSkillCatalog(
-	input: ConfigRuntime,
-	decideSkill: (name: string) => PermissionDecision
+	input: ConfigRuntime
 ): Promise<SkillCatalog> {
 	const skills = await discoverSkills(input);
-	return buildSkillCatalog(skills, decideSkill);
+	return buildSkillCatalog(skills);
 }

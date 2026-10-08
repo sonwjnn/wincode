@@ -26,13 +26,8 @@ export type PluginDiagnostic = Readonly<{
 }>;
 
 export type PluginToolDescriptor = Readonly<{
-	action: `plugin:${string}:${string}`;
 	description: string;
 	exclusiveInBatch?: true;
-	permissionAction?: string;
-	permissionResource?: string;
-	permissionDecision?: "allow" | "ask" | "deny";
-	permissionSafety?: boolean;
 	handler: PluginTool["handler"];
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
@@ -148,21 +143,8 @@ const descriptorForTool = (
 	tool: PluginTool
 ): PluginToolDescriptor =>
 	Object.freeze({
-		action: `plugin:${plugin.id}:${tool.name}`,
 		description: tool.description,
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
-		...(tool.permissionAction === undefined
-			? {}
-			: { permissionAction: tool.permissionAction }),
-		...(tool.permissionResource === undefined
-			? {}
-			: { permissionResource: tool.permissionResource }),
-		...(tool.permissionDecision === undefined
-			? {}
-			: { permissionDecision: tool.permissionDecision }),
-		...(tool.permissionSafety === undefined
-			? {}
-			: { permissionSafety: tool.permissionSafety }),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,
 		localName: tool.name,

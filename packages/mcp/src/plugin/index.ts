@@ -18,9 +18,6 @@ export type McpPluginDependencies = Readonly<
 		Partial<Pick<McpRegistryDeps, "loadConfig">>
 >;
 
-const mcpPermissionAction = (logicalName: string): string =>
-	`plugin:mcp:${logicalName}`;
-
 const statusFor = (state: McpServerStatus["state"]): PluginStatus => {
 	switch (state) {
 		case "connected":
@@ -132,19 +129,7 @@ export const createMcpPluginFactory =
 		});
 		await registry.initialize();
 		plugin.onBeforeAgentTurn(async (turn, registration) => {
-			const snapshot = await registry.createSnapshot(
-				turn.agentId,
-				async ({ logicalName }) =>
-					(turn.resolvePluginPermission === undefined
-						? undefined
-						: await turn.resolvePluginPermission(
-								mcpPermissionAction(logicalName),
-								"*"
-							)) ?? {
-						decision: "ask",
-						safety: true,
-					}
-			);
+			const snapshot = await registry.createSnapshot(turn.agentId);
 			turn.registerTurnCleanup?.(() => registry.releaseSnapshot?.(snapshot));
 			for (const entry of snapshot.manifest) {
 				const tool = snapshot.tools.get(entry.name);
@@ -156,10 +141,6 @@ export const createMcpPluginFactory =
 					inputSchema: { jsonSchema: entry.inputSchema },
 					modelName: entry.name,
 					name: entry.name,
-					permissionAction: mcpPermissionAction(tool.logicalName),
-					permissionDecision: tool.serverDecision,
-					permissionResource: "*",
-					permissionSafety: tool.safety,
 					handler: async (input, toolContext) => {
 						if (execute === undefined) {
 							return failure("MCP execution is unavailable.");

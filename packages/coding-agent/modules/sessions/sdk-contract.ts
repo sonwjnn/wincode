@@ -67,7 +67,6 @@ export type SessionSdkContinuationOutcome =
 	  };
 
 export type SessionSdkInterruptResult = Readonly<{
-	approvalsSettled: number;
 	kind: "turn" | "compaction" | "none";
 	recalled: readonly object[];
 }>;
@@ -98,6 +97,7 @@ export type SessionSdk = Readonly<{
 		options: Readonly<{
 			capabilityCeiling?: SessionSdkCapabilityCeiling;
 			pluginPaths?: readonly string[];
+			projectTrust?: "trust" | "deny";
 		}>
 	) => Promise<SessionSdk>;
 	createEmptySession: (options?: SessionSdkCreateOptions) => Promise<SessionId>;

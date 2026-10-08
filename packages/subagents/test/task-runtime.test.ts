@@ -206,7 +206,7 @@ test("active Subagents tasks do not pin the parent Session view and cancel on sh
 		},
 		interrupt: async () => {
 			childInterrupted = true;
-			return { approvalsSettled: 0, kind: "none", recalled: [] };
+			return { kind: "none", recalled: [] };
 		},
 		onEvent: () => () => undefined,
 		prompt: async () => ({

@@ -32,12 +32,16 @@ export type DispatchModeLoader = () => Promise<DispatchModeRunners>;
 export type DispatchRuntime = Pick<
 	ApplicationContext,
 	"configRuntime" | "pluginRuntime"
->;
+> &
+	Readonly<{ startupDiagnostics?: readonly string[] }>;
 export type DispatchDependencies = Readonly<{
 	initializeRuntime?: (input: {
 		cwd: string;
 		disabledPluginIds: readonly string[];
+		mode: ExecutionMode;
 		pluginPaths: readonly string[];
+		projectTrustOverride?: "trust" | "deny";
+		stdinIsTTY: boolean;
 	}) => Promise<DispatchRuntime>;
 }>;
 
@@ -59,7 +63,8 @@ const HELP_TEXT = [
 	"      --model <id>     Select a Model",
 	"      --effort <id>    Select an Effort",
 	"      --reasoning-mode <id>  Select a Reasoning Mode",
-	"      --auto           Auto-approve ordinary tool requests",
+	"      --trust-project  Trust project resources for this invocation",
+	"      --no-trust-project  Refuse project resources for this invocation",
 	"      --plugin <path>  Enable a Plugin (repeatable)",
 	"      --no-plugin <id> Disable a distributed Plugin by Identifier",
 	"  -h, --help           Show this help",
@@ -136,7 +141,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	let mode: ExecutionMode = "interactive";
 	let modeExplicit = false;
 	let agent: string | undefined;
-	let auto = false;
+	let projectTrustOverride: "trust" | "deny" | undefined;
 	let model: string | undefined;
 	let prompt: string | undefined;
 	let session: string | undefined;
@@ -169,8 +174,18 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			version = true;
 			continue;
 		}
-		if (argument === "--auto") {
-			auto = true;
+		if (argument === "--trust-project" || argument === "--no-trust-project") {
+			const nextDecision = argument === "--trust-project" ? "trust" : "deny";
+			if (
+				projectTrustOverride !== undefined &&
+				projectTrustOverride !== nextDecision
+			) {
+				throw new InvocationError(
+					"Use either --trust-project or --no-trust-project, not both.",
+					USAGE_EXIT_CODE
+				);
+			}
+			projectTrustOverride = nextDecision;
 			continue;
 		}
 		const equalsIndex = argument.indexOf("=");
@@ -267,9 +282,9 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			help,
 			version,
 			invocation: {
-				auto,
 				mode,
 				...(disabledPlugins.length === 0 ? {} : { disabledPlugins }),
+				...(projectTrustOverride === undefined ? {} : { projectTrustOverride }),
 			},
 		};
 	}
@@ -295,7 +310,6 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 		help,
 		version,
 		invocation: {
-			auto,
 			mode,
 			...(agent === undefined ? {} : { agent }),
 			...(model === undefined ? {} : { model }),
@@ -305,6 +319,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			...(reasoningMode === undefined ? {} : { reasoningMode }),
 			...(pluginPaths.length === 0 ? {} : { pluginPaths }),
 			...(disabledPlugins.length === 0 ? {} : { disabledPlugins }),
+			...(projectTrustOverride === undefined ? {} : { projectTrustOverride }),
 		},
 	};
 }
@@ -331,6 +346,83 @@ const isJsonModeRequested = (args: readonly string[]): boolean => {
 
 export const getCliHelpText = (): string => HELP_TEXT;
 
+const writeEarlyResponse = async (
+	parsed: ParsedInvocation,
+	input: DispatchInput
+): Promise<number | undefined> => {
+	if (parsed.help) {
+		writeLine(input.stdout, HELP_TEXT);
+		return 0;
+	}
+	if (parsed.version) {
+		writeLine(input.stdout, await getVersion());
+		return 0;
+	}
+};
+
+const initializeApplicationRuntime = (
+	input: DispatchInput,
+	invocation: InvocationOptions,
+	dependencies: DispatchDependencies
+): Promise<DispatchRuntime | undefined> | undefined =>
+	dependencies.initializeRuntime?.({
+		cwd: input.cwd,
+		disabledPluginIds: invocation.disabledPlugins ?? [],
+		mode: invocation.mode,
+		pluginPaths: invocation.pluginPaths ?? [],
+		...(invocation.projectTrustOverride === undefined
+			? {}
+			: { projectTrustOverride: invocation.projectTrustOverride }),
+		stdinIsTTY: input.stdinIsTTY,
+	});
+
+const createApplicationContext = (
+	input: DispatchInput,
+	invocation: InvocationOptions,
+	runtime: DispatchRuntime | undefined
+): ApplicationContext => ({
+	...(runtime ?? {}),
+	args: input.args,
+	cwd: input.cwd,
+	invocation,
+	...(input.rpcStdout === undefined ? {} : { rpcStdout: input.rpcStdout }),
+	...(input.signal === undefined ? {} : { signal: input.signal }),
+	...(input.signalExitCode === undefined
+		? {}
+		: { signalExitCode: input.signalExitCode }),
+	stderr: input.stderr,
+	...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+	stdinIsTTY: input.stdinIsTTY,
+	stdout: input.stdout,
+});
+
+const dispatchParsedInvocation = async (
+	input: DispatchInput,
+	runners: DispatchModeRunners | DispatchModeLoader,
+	dependencies: DispatchDependencies,
+	onRuntime: (runtime: DispatchRuntime | undefined) => void
+): Promise<number> => {
+	const parsed = parseInvocation(input.args);
+	const earlyResult = await writeEarlyResponse(parsed, input);
+	if (earlyResult !== undefined) {
+		return earlyResult;
+	}
+	const runtime = await initializeApplicationRuntime(
+		input,
+		parsed.invocation,
+		dependencies
+	);
+	onRuntime(runtime);
+	for (const diagnostic of runtime?.startupDiagnostics ?? []) {
+		writeLine(input.stderr, `Project trust: ${diagnostic}`);
+	}
+	writePluginDiagnostics(runtime, input.stderr);
+	const context = createApplicationContext(input, parsed.invocation, runtime);
+	const resolvedRunners =
+		typeof runners === "function" ? await runners() : runners;
+	return await resolvedRunners[parsed.invocation.mode](context);
+};
+
 export const dispatch = async (
 	input: DispatchInput,
 	runners: DispatchModeRunners | DispatchModeLoader,
@@ -338,40 +430,14 @@ export const dispatch = async (
 ): Promise<number> => {
 	let pluginRuntime: ApplicationContext["pluginRuntime"];
 	try {
-		const parsed = parseInvocation(input.args);
-		if (parsed.help) {
-			writeLine(input.stdout, HELP_TEXT);
-			return 0;
-		}
-		if (parsed.version) {
-			writeLine(input.stdout, await getVersion());
-			return 0;
-		}
-		const runtime = await dependencies.initializeRuntime?.({
-			cwd: input.cwd,
-			disabledPluginIds: parsed.invocation.disabledPlugins ?? [],
-			pluginPaths: parsed.invocation.pluginPaths ?? [],
-		});
-		pluginRuntime = runtime?.pluginRuntime;
-		writePluginDiagnostics(runtime, input.stderr);
-		const context: ApplicationContext = {
-			...(runtime ?? {}),
-			args: input.args,
-			cwd: input.cwd,
-			invocation: parsed.invocation,
-			...(input.rpcStdout === undefined ? {} : { rpcStdout: input.rpcStdout }),
-			...(input.signal === undefined ? {} : { signal: input.signal }),
-			...(input.signalExitCode === undefined
-				? {}
-				: { signalExitCode: input.signalExitCode }),
-			stderr: input.stderr,
-			...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-			stdinIsTTY: input.stdinIsTTY,
-			stdout: input.stdout,
-		};
-		const resolvedRunners =
-			typeof runners === "function" ? await runners() : runners;
-		return await resolvedRunners[parsed.invocation.mode](context);
+		return await dispatchParsedInvocation(
+			input,
+			runners,
+			dependencies,
+			(runtime) => {
+				pluginRuntime = runtime?.pluginRuntime;
+			}
+		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (isJsonModeRequested(input.args)) {

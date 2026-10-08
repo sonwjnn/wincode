@@ -18,7 +18,6 @@ import type {
 	TextWriter,
 } from "@/modules/application/modes/types";
 import { runRpc } from "@/modules/application/rpc/runner";
-import { createPermissionService } from "@/modules/permissions/permission-service";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createSessionCapabilities } from "@/modules/sessions/host/session-capabilities";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -35,11 +34,6 @@ const configRoot = path.join(root, "config");
 const installedRoot = path.join(root, "installed");
 const workspace = path.join(installedRoot, "workspace");
 const pluginPath = path.join(workspace, "plugins", "jira.ts");
-const permissionOverridePath = path.join(
-	workspace,
-	"plugins",
-	"permission-override.ts"
-);
 
 await Promise.all([
 	mkdir(path.dirname(pluginPath), { recursive: true }),
@@ -57,29 +51,22 @@ await symlink(
 	path.join(installedRoot, "node_modules", "zod"),
 	"dir"
 );
-const [jiraPluginSource, permissionOverridePluginSource] = await Promise.all([
-	Bun.file(path.join(import.meta.dir, "../fixtures/jira-plugin.ts")).text(),
-	Bun.file(
-		path.join(import.meta.dir, "../fixtures/permission-override-plugin.ts")
-	).text(),
-]);
-await Promise.all([
-	Bun.write(pluginPath, jiraPluginSource),
-	Bun.write(permissionOverridePath, permissionOverridePluginSource),
-]);
+const jiraPluginSource = await Bun.file(
+	path.join(import.meta.dir, "../fixtures/jira-plugin.ts")
+).text();
+await Bun.write(pluginPath, jiraPluginSource);
 await Bun.write(
 	path.join(workspace, "wincode.json"),
 	JSON.stringify({ plugins: ["./plugins/jira.ts"] })
 );
-await Bun.write(
-	path.join(configRoot, "wincode.json"),
-	JSON.stringify({
-		permission: { "plugin:jira:search_issues": "allow" },
-	})
-);
+await Bun.write(path.join(configRoot, "wincode.json"), "{}");
 
 const configRuntime = {
-	configStore: createConfigStore({ configRoot, homeRoot }),
+	configStore: createConfigStore({
+		configRoot,
+		homeRoot,
+		trustedProjectRoots: [],
+	}),
 	cwd: workspace,
 	homeRoot,
 	workspace,
@@ -89,7 +76,11 @@ const createConfigRuntime = (
 	workspaceRoot: string,
 	userConfigRoot: string
 ) => ({
-	configStore: createConfigStore({ configRoot: userConfigRoot, homeRoot }),
+	configStore: createConfigStore({
+		configRoot: userConfigRoot,
+		homeRoot,
+		trustedProjectRoots: [],
+	}),
 	cwd: workspaceRoot,
 	homeRoot,
 	workspace: workspaceRoot,
@@ -295,19 +286,27 @@ test("disabled default Plugins are skipped before loading without vetoing file p
 	await runtime.shutdown();
 });
 
-test("project configuration cannot enable an external Plugin", async () => {
-	const runtime = await loadPlugins({ cliPaths: [], config: configRuntime });
+test("trusted project configuration loads its explicitly selected Plugin", async () => {
+	const trustedConfigRuntime = {
+		configStore: createConfigStore({
+			configRoot,
+			homeRoot,
+			trustedProjectRoots: [workspace],
+		}),
+		cwd: workspace,
+		homeRoot,
+		workspace,
+	};
+	const runtime = await loadPlugins({
+		cliPaths: [],
+		config: trustedConfigRuntime,
+	});
 
-	expect(runtime.getToolDescriptors("session-a")).toEqual([]);
-	expect(runtime.getCommands()).toEqual([]);
-	expect(runtime.diagnostics).toEqual(
-		expect.arrayContaining([
-			expect.objectContaining({
-				message: expect.stringContaining("project configuration"),
-				sourcePath: path.join(workspace, "wincode.json"),
-			}),
-		])
-	);
+	expect(
+		runtime.getToolDescriptors("session-a").map(({ name }) => name)
+	).toEqual(["plugin_jira_search_issues"]);
+	expect(runtime.getCommands().map(({ name }) => name)).toEqual(["open-issue"]);
+	expect(runtime.diagnostics).toEqual([]);
 	await runtime.shutdown();
 });
 
@@ -323,10 +322,6 @@ test("loads an explicitly enabled Plugin and continues after a missing path", as
 	expect(runtime.getCommands().map(({ name }) => name)).toEqual(["open-issue"]);
 	expect(runtime.diagnostics).toEqual(
 		expect.arrayContaining([
-			expect.objectContaining({
-				message: expect.stringContaining("project configuration"),
-				sourcePath: path.join(workspace, "wincode.json"),
-			}),
 			expect.objectContaining({
 				message: expect.stringContaining("Could not load Plugin"),
 				sourcePath: path.join(workspace, "plugins/missing.ts"),
@@ -378,6 +373,113 @@ test("CLI Plugin paths win when a configured path declares the same stable ident
 			expect.objectContaining({
 				message: expect.stringContaining("Duplicate Plugin Identifier"),
 				sourcePath: configuredPath,
+			}),
+		])
+	);
+	await runtime.shutdown();
+});
+
+test("user-selected Plugins win Identifier collisions against trusted project Plugins", async () => {
+	const precedenceWorkspace = path.join(
+		installedRoot,
+		"user-project-precedence"
+	);
+	const projectPlugins = path.join(precedenceWorkspace, "plugins");
+	const userPlugins = path.join(root, "user-selected-plugins");
+	const userConfigRoot = path.join(root, "user-project-precedence-config");
+	const userPath = path.join(userPlugins, "user.ts");
+	const projectPath = path.join(projectPlugins, "project.ts");
+	await Promise.all([
+		mkdir(projectPlugins, { recursive: true }),
+		mkdir(userPlugins, { recursive: true }),
+		mkdir(userConfigRoot, { recursive: true }),
+	]);
+	await Promise.all([
+		Bun.write(
+			userPath,
+			commandPluginSource("same_id", "user_won", "User won.")
+		),
+		Bun.write(
+			projectPath,
+			commandPluginSource("same_id", "project_lost", "Project lost.")
+		),
+		Bun.write(
+			path.join(userConfigRoot, "wincode.json"),
+			JSON.stringify({ plugins: [userPath] })
+		),
+		Bun.write(
+			path.join(precedenceWorkspace, "wincode.json"),
+			JSON.stringify({ plugins: ["./plugins/project.ts"] })
+		),
+	]);
+	const configRuntime = {
+		configStore: createConfigStore({
+			configRoot: userConfigRoot,
+			homeRoot,
+			trustedProjectRoots: [precedenceWorkspace],
+		}),
+		cwd: precedenceWorkspace,
+		homeRoot,
+		workspace: precedenceWorkspace,
+	};
+	const runtime = await loadPlugins({ cliPaths: [], config: configRuntime });
+
+	expect(runtime.getCommands()).toMatchObject([
+		{ name: "user_won", pluginId: "same_id", sourcePath: userPath },
+	]);
+	expect(runtime.diagnostics).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				message: expect.stringContaining("Duplicate Plugin Identifier"),
+				sourcePath: projectPath,
+			}),
+		])
+	);
+	await runtime.shutdown();
+});
+
+test("trusted project settings can disable a distribution Plugin before its package loads", async () => {
+	const disabledWorkspace = path.join(
+		installedRoot,
+		"project-disabled-distribution"
+	);
+	const configRootPath = path.join(root, "project-disabled-config");
+	await Promise.all([
+		mkdir(disabledWorkspace, { recursive: true }),
+		mkdir(configRootPath, { recursive: true }),
+	]);
+	await Promise.all([
+		Bun.write(
+			path.join(disabledWorkspace, "wincode.json"),
+			JSON.stringify({ disabledPlugins: ["mcp"] })
+		),
+		Bun.write(path.join(configRootPath, "wincode.json"), JSON.stringify({})),
+	]);
+	const configRuntime = {
+		configStore: createConfigStore({
+			configRoot: configRootPath,
+			homeRoot,
+			trustedProjectRoots: [disabledWorkspace],
+		}),
+		cwd: disabledWorkspace,
+		homeRoot,
+		workspace: disabledWorkspace,
+	};
+	const runtime = await loadPlugins({
+		cliPaths: [],
+		config: configRuntime,
+		distributionPlugins: [
+			{
+				id: "mcp",
+				specifier: "@wincode/__must_not_load_project_disabled_mcp__",
+			},
+		],
+	});
+
+	expect(runtime.diagnostics).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				message: "Default Plugin 'mcp' was explicitly disabled before loading.",
 			}),
 		])
 	);
@@ -604,7 +706,6 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 		connections,
 		cwd: workspace,
 		databasePath: path.join(workspace, "plugin-rpc.sqlite"),
-		permissionService: createPermissionService({ autoApproval: false }),
 		pluginRuntime,
 		runtimeFactory: () => modelRuntime,
 		workspace,
@@ -757,18 +858,15 @@ const runPluginToolInOneShot = async (
 	};
 	const composeCapabilities: OneShotDependencies["composeCapabilities"] =
 		async ({
-			autoApproval,
 			configRuntime: modeConfigRuntime,
 			cwd,
 			pluginRuntime: modePluginRuntime,
 			workspace: modeWorkspace,
 		}: OneShotCompositionInput) => ({
 			assembly: await createSessionCapabilities({
-				approvalMode: "non-interactive",
 				configRuntime: modeConfigRuntime,
 				cwd,
 				databasePath: path.join(modeWorkspace, "sessions.sqlite"),
-				permissionService: createPermissionService({ autoApproval }),
 				runtimeFactory: () => runtime,
 				pluginRuntime: modePluginRuntime,
 				workspace: modeWorkspace,
@@ -782,7 +880,6 @@ const runPluginToolInOneShot = async (
 		configRuntime,
 		cwd: workspace,
 		invocation: {
-			auto: false,
 			mode: format,
 			prompt: "Search Jira for WCO-12.",
 		},
@@ -809,7 +906,7 @@ const runPluginToolInOneShot = async (
 	};
 };
 
-test("Print Mode calls an allowed Plugin Tool and maps its JSON result", async () => {
+test("Print Mode calls a selected Plugin Tool and maps its JSON result", async () => {
 	const pluginRuntime = await loadPlugins({
 		cliPaths: ["plugins/jira.ts"],
 		config: configRuntime,
@@ -855,29 +952,6 @@ test("JSON Mode streams Plugin Tool outcomes as machine-readable events", async 
 		);
 	} finally {
 		await pluginRuntime.shutdown();
-	}
-});
-
-test("Plugin permission metadata stays explicit for generic action/resource resolution", async () => {
-	const runtime = await loadPlugins({
-		cliPaths: [permissionOverridePath],
-		config: configRuntime,
-	});
-	try {
-		const [tool] = runtime.getToolDescriptors("permission-session");
-		expect(tool).toMatchObject({
-			name: "external_edit",
-			permissionAction: "edit",
-			permissionDecision: "allow",
-			permissionSafety: false,
-		});
-		expect(
-			runtime.diagnostics.some(({ message }) =>
-				message.includes("Plugin Tool registration failed")
-			)
-		).toBe(false);
-	} finally {
-		await runtime.shutdown();
 	}
 });
 

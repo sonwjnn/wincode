@@ -92,7 +92,7 @@ holds the transient FIFO of opaque Queued Submissions, selects idle input
 precedence, and schedules Steering Messages without interrupting active model
 or Tool Call work. Its queue is process-local and is never restored. The
 Coding-Agent Application owns the Session Transcript, composition, attachment
-retention/preparation, committed Steering Message status, approvals, compaction
+retention/preparation, committed Steering Message status, compaction
 and recovery attempts, and operation maps; it projects the core queue into the
 Live Session Snapshot rather than keeping a second queue authority. Subagents
 owns its task/report database and coordinates child Sessions through the public
@@ -101,8 +101,8 @@ one Session Host. The Host
 publishes immutable Snapshots and ordered events through the Agent Session
 interface; it does not expose state-write capabilities.
 `useAgentSession` binds an already-open Host, mirrors its Snapshot in React
-state, projects approvals into the panel registry, and never writes session
-state. The Host owns teardown. Pending approvals and compaction contribute to
+state, forwards public commands, and never writes session state. The Host owns
+teardown. Active turns, queued work, and compaction contribute to
 `isSessionBusy`.
 
 Each process-scoped `SessionHostManager` retains Hosts across view switches and
@@ -160,23 +160,6 @@ appending another user message. A later overflow from that continuation uses
 the same attempt and is reported as exhausted. Continuation waits for the failed
 execution and refuses rather than queueing behind or overlapping user-started
 work.
-
-### Approvals
-
-An `ask` Tool Permission reaches the user as an Approval Request the Agent
-Session owns. The Tool Gate registers requests through the Host/Runtime-only
-`AgentSessionInternalPort`; the binding projects pending requests into the
-shared panel registry, which is read-only for the session layer. The panel
-requests a settlement, and the resolution it renders is the Agent Session's
-own decision. Missing or unavailable settlement fails closed.
-
-`respondToApproval` settles one request. Interrupt, abort, and shutdown settle
-pending requests through the same internal workflow, so a dismissed panel or
-unmount cannot leave a Tool Gate evaluation waiting. Settlement and approval
-records remain owned by the Agent Session, not by the workflow or panel.
-Background approvals produce a minimal notice with Session ID and count; they
-never expose request details or auto-approve. Opening that Session restores its
-own approval controls.
 
 ### Input overlays
 
@@ -255,16 +238,14 @@ history and workspace/configuration data.
 - `agent-session/input-lane.ts` — application admission, attachment externalization/retention, durable queue-head Steer commit, Recall cleanup, and run preparation around the Stateful Agent's queue scheduler.
 - `agent-session/submission-command.ts` — one Submission's run/cancellation/deadline ordering; active execution state remains on the owner.
 - `agent-session/maintenance-workflow.ts` — compaction and overflow-recovery orchestration through Agent Session callbacks.
-- `agent-session/approval-workflow.ts` — approval settlement policy; snapshots and settlement maps remain owner-owned.
 - `agent-session/steering-workflow.ts` — committed Steering Message preparation, delivery, processing status, and retry through Agent Session callbacks; delivery bookkeeping and every state transition remain owner-owned.
 - `turn-records.ts` — durable Session Records produced by Agent Turns, shared by the Agent Session and runtime consumer.
 - `hooks/runtime-turn.ts` — adapts Agent Runtime events to the Stateful Agent's turn consumer and synthesizes missing terminal events.
 - `host/session-host.ts` — opens one Session, rebuilds its context, assembles capabilities and the Agent Session, and exposes its public command/snapshot/event API. React-free; exported through `@wincode/coding-agent/session-host`.
 - `host/session-host-manager.ts` — process-lifetime Host ownership across view switches, one-writer enforcement, and background Session events.
-- `host/session-ports.ts` — `createSessionPorts`: materializes Host capabilities required by the `SessionTurnRunner`, Tools, Tool Gate, Skills, prompt composition, attachments, and persistence.
+- `host/session-ports.ts` — `createSessionPorts`: materializes Host capabilities required by the `SessionTurnRunner`, Tools, Skills, prompt composition, attachments, and persistence.
 - `host/use-session-capabilities.ts` — composes Host capabilities from lazy application-provider getters.
-- `approval-projection.ts` — projects Agent Session approvals into read-only panel entries.
-- `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, forwards public commands, and projects approvals.
+- `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, and forwards public commands.
 - `SessionSurface` — opens or retains a manager-owned Host, renders the opening state until it resolves and the failure when it rejects, and releases its view reference on unmount. Background task lifecycle belongs to the Subagents Plugin.
 - `useChatInputController(options)` — command and file-mention input state.
 - `NewSessionView`, `SessionView`, `ChatShell`, `ChatTextArea`, `WaitingMessageStrip` — session UI.

@@ -177,8 +177,7 @@ export const runWriteTool = async (
 	const context = options.versionedEditing ?? defaultVersionedEditingContext;
 	const limits: ToolResourceLimits =
 		options.resourceLimits ?? getToolResourceLimits();
-	const allowExternalPath = options.allowExternalPath === true;
-	let resolvedPath = await resolveNewTextPath(input.path, allowExternalPath);
+	let resolvedPath = await resolveNewTextPath(input.path);
 	let existing: FileState | null = null;
 	try {
 		const candidateMetadata = await lstat(resolvedPath);
@@ -189,7 +188,7 @@ export const runWriteTool = async (
 				{ recovery: { action: "correct-input", path: input.path } }
 			);
 		}
-		resolvedPath = await resolveExistingTextPath(input.path, allowExternalPath);
+		resolvedPath = await resolveExistingTextPath(input.path);
 		const metadata = await lstat(resolvedPath);
 		if (!metadata.isFile()) {
 			throw new CodingToolError(

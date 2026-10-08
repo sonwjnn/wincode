@@ -2,34 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { fromAny } from "@total-typescript/shoehorn";
 import type {
 	LocalMcpServerConfig,
-	McpCatalogSnapshot,
 	McpClient,
 	McpClientTool,
 	McpConfigResult,
-	McpConfigSource,
-	McpExecutionPolicy,
+	McpRegistry,
 	McpTimeouts,
 	RemoteMcpServerConfig,
 	ResolvedMcpServerConfig,
 } from "@wincode/mcp";
-import {
-	createMcpRegistry,
-	type McpRegistryDeps,
-	mcpDeniedByPolicyText,
-	resolveMcpConfig,
-} from "@wincode/mcp";
+import { createMcpRegistry, type McpRegistryDeps } from "@wincode/mcp";
 import { isNull, isUndefined } from "@wincode/utils";
-import {
-	createToolPermission,
-	type PermissionRules,
-} from "@/modules/permissions";
-import { resolveToolPermissionPolicies } from "@/modules/permissions/tool-permission-runtime";
 import { agentId } from "../support/identifiers";
-import {
-	addAgentPolicyResolver,
-	type McpAgentPolicy,
-	type PolicyAwareMcpRegistry,
-} from "../support/mcp-registry";
 
 class FakeMcpClient implements McpClient {
 	readonly name: string;
@@ -94,12 +77,6 @@ class FakeMcpClient implements McpClient {
 	}
 }
 
-// Agent policies target MCP tools by open-glob keys (`*`, `demo_*`) that sit
-// outside the nominal PermissionAction union; the registry evaluates them as
-// globs, so tests cast the literals just as the policy module does.
-const openRules = (rules: Record<string, "allow" | "ask" | "deny">) =>
-	fromAny<PermissionRules, typeof rules>(rules);
-
 const hangingCall = (): FakeMcpClient["callImpl"] => (_name, _input, signal) =>
 	new Promise<unknown>((_resolve, reject) => {
 		if (signal?.aborted) {
@@ -125,7 +102,6 @@ const DEFAULT_TIMEOUTS = {
 
 type ServerConfigPatch = {
 	disabled?: boolean;
-	permission?: McpExecutionPolicy;
 	timeout?: McpTimeouts;
 	type?: "local" | "remote";
 } & Partial<Pick<LocalMcpServerConfig, "command" | "cwd" | "environment">> &
@@ -141,7 +117,6 @@ const serverConfig = (
 			type: "remote",
 			url: patch.url ?? "https://mcp.deepwiki.com/mcp",
 			disabled: patch.disabled ?? false,
-			permission: patch.permission ?? "ask",
 			timeout: patch.timeout ?? DEFAULT_TIMEOUTS,
 			...(isUndefined(patch.headers) ? {} : { headers: patch.headers }),
 		};
@@ -151,7 +126,6 @@ const serverConfig = (
 		type: "local",
 		command: patch.command ?? ["bun", "x", name],
 		disabled: patch.disabled ?? false,
-		permission: patch.permission ?? "ask",
 		timeout: patch.timeout ?? DEFAULT_TIMEOUTS,
 	};
 };
@@ -164,7 +138,7 @@ type HarnessOptions = {
 
 type Harness = {
 	clients: Map<string, FakeMcpClient>;
-	registry: PolicyAwareMcpRegistry;
+	registry: McpRegistry;
 };
 
 const harness = (options: HarnessOptions = {}): Harness => {
@@ -193,67 +167,21 @@ const harness = (options: HarnessOptions = {}): Harness => {
 		}),
 		...options.deps,
 	});
-	return { clients, registry: addAgentPolicyResolver(mcpRegistry) };
+	return { clients, registry: mcpRegistry };
 };
 
 describe("createMcpRegistry", () => {
-	test("a null Agent Registry applies fallback rules to Build MCP tools", async () => {
-		const fallbackPermission = createToolPermission({ edit: "deny" });
-		const resolution = resolveToolPermissionPolicies(
-			null,
-			agentId("build"),
-			() => fallbackPermission
-		);
+	test("Build snapshot connects and builds its available catalog", async () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
 		const { registry } = harness({
 			clients: { demo },
-			configs: [serverConfig("demo", { permission: "allow" })],
-		});
-
-		const snapshot = await registry.createSnapshot(
-			agentId("build"),
-			resolution.agentActionPolicy
-		);
-
-		expect(resolution.permission).toBe(fallbackPermission);
-		expect(snapshot.manifest).toEqual([]);
-		expect(snapshot.tools.size).toBe(1);
-		for (const entry of snapshot.tools.values()) {
-			expect(entry.policy).toBe("deny");
-		}
-	});
-	test("Build snapshot connects and builds a catalog under the default policy", async () => {
-		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		const { registry } = harness({
-			clients: { demo },
-			configs: [serverConfig("demo", { permission: "allow" })],
+			configs: [serverConfig("demo")],
 		});
 		const snapshot = await registry.createSnapshot(agentId("build"));
 		expect(snapshot.agent).toBe(agentId("build"));
 		expect(snapshot.manifest).toHaveLength(1);
 		expect(snapshot.tools.size).toBe(1);
 		expect(demo.connectCount).toBe(1);
-	});
-
-	test("an all-deny agent policy empties the manifest but keeps dispatch entries", async () => {
-		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		const { registry } = harness({
-			clients: { demo },
-			configs: [serverConfig("demo", { permission: "allow" })],
-		});
-		const snapshot = await registry.createSnapshot(agentId("build"), {
-			rules: openRules({ "*": "deny" }),
-			safety: false,
-		});
-		// A denied tool is absent from the manifest the model sees, yet retained in
-		// the dispatch map marked deny so a stray call resolves to a policy denial
-		// rather than an unknown-tool error.
-		expect(snapshot.manifest).toEqual([]);
-		expect(snapshot.tools.size).toBe(1);
-		for (const entry of snapshot.tools.values()) {
-			expect(entry.policy).toBe("deny");
-			expect(entry.logicalName).toBe("demo_echo");
-		}
 	});
 
 	test("connects enabled servers concurrently and isolates failures", async () => {
@@ -347,28 +275,11 @@ describe("createMcpRegistry", () => {
 		expect(clients.size).toBe(1);
 	});
 
-	test("omits denied tools from the manifest but still blocks execution", async () => {
-		const github = new FakeMcpClient("github", [tool("read"), tool("write")]);
-		const { registry } = harness({
-			clients: { github },
-			configs: [serverConfig("github", { permission: "deny" })],
-		});
-		const snapshot = await registry.createSnapshot(agentId("build"));
-		expect(snapshot.manifest).toEqual([]);
-		expect(snapshot.tools.size).toBe(2);
-		const readName = [...snapshot.tools.keys()].find(
-			(name) => snapshot.tools.get(name)?.originalToolName === "read"
-		);
-		const result = await registry.execute(snapshot, readName ?? "", {});
-		expect(result.isError).toBe(true);
-		expect(JSON.stringify(result.content)).toContain("denied");
-	});
-
-	test("bypasses approval when the policy allows", async () => {
+	test("executes a discovered tool", async () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
 		const { registry } = harness({
 			clients: { demo },
-			configs: [serverConfig("demo", { permission: "allow" })],
+			configs: [serverConfig("demo")],
 		});
 		const snapshot = await registry.createSnapshot(agentId("build"));
 		const name = snapshot.manifest[0]?.name ?? "";
@@ -442,25 +353,6 @@ describe("createMcpRegistry", () => {
 		);
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).toContain("Unknown");
-	});
-
-	test("returns a registry-owned policy denial for a denied dispatch entry", async () => {
-		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		const { registry } = harness({
-			clients: { demo },
-			configs: [serverConfig("demo", { permission: "allow" })],
-		});
-		const snapshot = await registry.createSnapshot(agentId("build"), {
-			rules: openRules({ "*": "deny" }),
-			safety: false,
-		});
-		const name = [...snapshot.tools.keys()][0] ?? "";
-		const result = await registry.execute(snapshot, name, {});
-		expect(result).toMatchObject({
-			content: [{ text: mcpDeniedByPolicyText(name), type: "text" }],
-			isError: true,
-			owner: "registry",
-		});
 	});
 
 	test("rejects snapshots that are no longer current", async () => {
@@ -1175,52 +1067,6 @@ describe("createMcpRegistry", () => {
 		);
 	});
 
-	test("reconnect and toggle cannot start a rejected disabled project-local command", async () => {
-		const document = {
-			mcp: {
-				untrusted: {
-					command: ["bun", "run", "attacker.ts"],
-					enabled: false,
-					type: "local",
-				},
-			},
-		};
-		const source: McpConfigSource = {
-			document,
-			path: "/workspace/wincode.json",
-			scope: "project",
-		};
-		const config = resolveMcpConfig({
-			env: {},
-			snapshot: {
-				diagnostics: [],
-				document,
-				sourceFor: () => source,
-				sources: [source],
-			},
-			workspace: "/workspace",
-		});
-		let clientCreations = 0;
-		const { registry } = harness({
-			deps: {
-				createClient: (serverConfig) => {
-					clientCreations += 1;
-					return new FakeMcpClient(serverConfig.name);
-				},
-				loadConfig: async () => config,
-			},
-		});
-
-		await registry.initialize();
-		expect(registry.getStatuses()).toContainEqual(
-			expect.objectContaining({ name: "untrusted", state: "failed" })
-		);
-		await registry.reconnect("untrusted");
-		await registry.toggle("untrusted");
-
-		expect(clientCreations).toBe(0);
-	});
-
 	test("orders the manifest deterministically and applies the tool limit", async () => {
 		const makeTools = (count: number): McpClientTool[] =>
 			Array.from({ length: count }, (_, index) =>
@@ -1287,96 +1133,4 @@ describe("createMcpRegistry", () => {
 		await registry.close();
 		expect(demo.closeCount).toBe(afterFirstClose);
 	});
-});
-
-describe("agent + server policy composition", () => {
-	const findByLogicalName = (
-		snapshot: McpCatalogSnapshot,
-		logicalName: string
-	) => {
-		for (const entry of snapshot.tools.values()) {
-			if (entry.logicalName === logicalName) {
-				return entry;
-			}
-		}
-		return;
-	};
-
-	const composedPolicy = async (
-		serverPolicy: McpExecutionPolicy,
-		agentPolicy: McpAgentPolicy
-	) => {
-		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		const { registry } = harness({
-			clients: { demo },
-			configs: [serverConfig("demo", { permission: serverPolicy })],
-		});
-		const snapshot = await registry.createSnapshot(
-			agentId("build"),
-			agentPolicy
-		);
-		const entry = findByLogicalName(snapshot, "demo_echo");
-		return { entry, snapshot };
-	};
-
-	const permissive: McpAgentPolicy = { rules: {}, safety: false };
-
-	const cases: {
-		agent: McpAgentPolicy;
-		expected: "allow" | "ask" | "deny";
-		name: string;
-		server: McpExecutionPolicy;
-	}[] = [
-		{
-			agent: permissive,
-			expected: "allow",
-			name: "allow + allow",
-			server: "allow",
-		},
-		{
-			agent: { rules: openRules({ "demo_*": "ask" }), safety: false },
-			expected: "ask",
-			name: "server allow + agent ask",
-			server: "allow",
-		},
-		{
-			agent: permissive,
-			expected: "ask",
-			name: "server ask + agent allow",
-			server: "ask",
-		},
-		{
-			agent: permissive,
-			expected: "deny",
-			name: "server deny + agent allow",
-			server: "deny",
-		},
-		{
-			agent: { rules: openRules({ "*": "deny" }), safety: false },
-			expected: "deny",
-			name: "server allow + agent deny",
-			server: "allow",
-		},
-		{
-			agent: { rules: {}, safety: true },
-			expected: "ask",
-			name: "safety ceiling turns allow into ask",
-			server: "allow",
-		},
-		{
-			agent: { rules: openRules({ "*": "deny" }), safety: true },
-			expected: "deny",
-			name: "safety ceiling never loosens a deny",
-			server: "allow",
-		},
-	];
-
-	for (const { agent, expected, name, server } of cases) {
-		test(`composes ${name} to ${expected}`, async () => {
-			const { entry, snapshot } = await composedPolicy(server, agent);
-			expect(entry?.policy).toBe(expected);
-			// Only non-deny tools reach the manifest the model sees.
-			expect(snapshot.manifest.length).toBe(expected === "deny" ? 0 : 1);
-		});
-	}
 });

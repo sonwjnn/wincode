@@ -29,7 +29,6 @@ import type { EditDiff, EditInput, EditOutput } from "./schema";
 import {
 	applyLineHunk,
 	createStableLineMap,
-	type EditOptions,
 	type ParsedSection,
 	type PositionedHunk,
 	parseVerifiedPatch,
@@ -417,19 +416,15 @@ const withLeases = async <T>(
 		: context.store.withPathLeases(paths, operation);
 const assertCanonicalPaths = async (
 	declaredPaths: readonly string[],
-	canonicalByDeclared: ReadonlyMap<string, string>,
-	allowExternalPath: boolean
+	canonicalByDeclared: ReadonlyMap<string, string>
 ): Promise<void> => {
 	for (const declaredPath of declaredPaths) {
 		const expectedPath = canonicalByDeclared.get(declaredPath);
-		const currentPath = await resolveExistingTextPath(
-			declaredPath,
-			allowExternalPath
-		);
+		const currentPath = await resolveExistingTextPath(declaredPath);
 		if (expectedPath !== currentPath) {
 			throw new CodingToolError(
-				"approved-path-changed",
-				"An approved path changed before execution.",
+				"path-changed",
+				"A path changed before execution.",
 				{ recovery: { action: "reread", path: declaredPath } }
 			);
 		}
@@ -886,7 +881,6 @@ const withMutationLocks = async <T>(
 
 export const runMultiEdit = async (
 	input: MultiEditInput,
-	options: EditOptions,
 	context: VersionedEditingContext,
 	limits: ToolResourceLimits
 ): Promise<EditOutput> => {
@@ -896,33 +890,15 @@ export const runMultiEdit = async (
 	);
 	const canonicalByDeclared = new Map<string, string>();
 	const canonicalPaths: string[] = [];
-	const approvedPaths = new Set([
-		...(options.approvedExternalPaths ?? []),
-		...(options.approvedWorkspacePaths ?? []),
-	]);
 	for (const declaredPath of declaredPaths) {
-		const canonicalPath = await resolveExistingTextPath(
-			declaredPath,
-			options.allowExternalPath === true
-		);
-		if (approvedPaths.has(declaredPath) && canonicalPath !== declaredPath) {
-			throw new CodingToolError(
-				"approved-path-changed",
-				"An approved path changed before execution.",
-				{ recovery: { action: "reread", path: declaredPath } }
-			);
-		}
+		const canonicalPath = await resolveExistingTextPath(declaredPath);
 		canonicalByDeclared.set(declaredPath, canonicalPath);
 		canonicalPaths.push(canonicalPath);
 	}
 	const leasePaths = [...new Set(canonicalPaths)].sort();
 	return withLeases(context, leasePaths, (assertLease) =>
 		withMutationLocks(leasePaths, async () => {
-			await assertCanonicalPaths(
-				declaredPaths,
-				canonicalByDeclared,
-				options.allowExternalPath === true
-			);
+			await assertCanonicalPaths(declaredPaths, canonicalByDeclared);
 			const plans = await planFiles(
 				input,
 				context,

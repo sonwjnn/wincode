@@ -15,7 +15,6 @@ type ManagedHostEntry = {
 	closing: Promise<void> | undefined;
 	executionMode: SessionHostOptions["executionMode"];
 	host: SessionHost | undefined;
-	pendingApprovalCount: number;
 	opening: Promise<SessionHost>;
 	openingComplete: boolean;
 	sessionId: SessionId;
@@ -47,26 +46,6 @@ export const createSessionHostManager = (
 			}
 		}
 	};
-	const updateApprovalNotice = (
-		entry: ManagedHostEntry,
-		host: SessionHost
-	): void => {
-		const pendingApprovalCount = host.agentSession
-			.getSnapshot()
-			.approvals.reduce(
-				(count, approval) => count + (approval.decision === undefined ? 1 : 0),
-				0
-			);
-		if (pendingApprovalCount === entry.pendingApprovalCount) {
-			return;
-		}
-		entry.pendingApprovalCount = pendingApprovalCount;
-		emit({
-			pendingApprovalCount,
-			sessionId: entry.sessionId,
-			type: "session-approval-notice",
-		});
-	};
 	const canUnload = (entry: ManagedHostEntry, host: SessionHost): boolean => {
 		if (entry.pluginRuntime?.hasBackgroundWork(entry.sessionId) === true) {
 			return false;
@@ -77,7 +56,6 @@ export const createSessionHostManager = (
 		}
 		return !(
 			snapshot.executions.length > 0 ||
-			snapshot.approvals.some(({ decision }) => decision === undefined) ||
 			snapshot.queuedSubmissions.length > 0 ||
 			snapshot.steeringMessages.length > 0 ||
 			snapshot.error !== null
@@ -144,7 +122,6 @@ export const createSessionHostManager = (
 			closing: undefined,
 			executionMode,
 			host: undefined,
-			pendingApprovalCount: 0,
 			opening: opened.promise,
 			openingComplete: false,
 			sessionId,
@@ -182,12 +159,10 @@ export const createSessionHostManager = (
 			.then(
 				(host) => {
 					entry.host = host;
-					updateApprovalNotice(entry, host);
 					entry.unsubscribeEvents = host.onEvent((event) =>
 						emit({ event, sessionId, type: "agent-turn-event" })
 					);
 					entry.unsubscribeSnapshot = host.subscribe(() => {
-						updateApprovalNotice(entry, host);
 						void maybeUnload(entry);
 					});
 					entry.openingComplete = true;
@@ -364,19 +339,6 @@ export const createSessionHostManager = (
 	return {
 		onEvent: (listener) => {
 			eventListeners.add(listener);
-			for (const entry of entries.values()) {
-				if (entry.pendingApprovalCount > 0) {
-					try {
-						listener({
-							pendingApprovalCount: entry.pendingApprovalCount,
-							sessionId: entry.sessionId,
-							type: "session-approval-notice",
-						});
-					} catch {
-						// A replayed notice cannot interrupt another session's runtime.
-					}
-				}
-			}
 			return () => eventListeners.delete(listener);
 		},
 		openHost,

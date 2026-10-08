@@ -1,17 +1,12 @@
 export type CliOptions = {
-	/** Whether auto approval starts enabled (`--auto`). Off unless requested. */
-	autoApproval: boolean;
 	disabledPlugins: readonly string[];
 };
-
-const AUTO_APPROVAL_FLAG = "--auto";
 const DISABLE_PLUGIN_OPTION = "--no-plugin";
 const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
 
 /**
- * Parses runtime options from raw process arguments. Auto approval is off unless
- * `--auto` is present, matching the safe default that approvals are manual until
- * the user opts in. Plugin disablement is keyed by generic Plugin Identifier.
+ * Parses runtime Plugin options from raw process arguments. Plugin disablement
+ * is keyed by generic Plugin Identifier.
  */
 export function parseCliOptions(argv: readonly string[]): CliOptions {
 	const disabledPlugins: string[] = [];
@@ -35,8 +30,5 @@ export function parseCliOptions(argv: readonly string[]): CliOptions {
 			}
 		}
 	}
-	return {
-		autoApproval: argv.includes(AUTO_APPROVAL_FLAG),
-		disabledPlugins: Object.freeze(disabledPlugins),
-	};
+	return { disabledPlugins: Object.freeze(disabledPlugins) };
 }

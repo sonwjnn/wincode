@@ -5,17 +5,11 @@ import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
 import { ModelPricingProvider } from "@/modules/model-pricing";
-import {
-	createPermissionService,
-	PermissionServiceProvider,
-} from "@/modules/permissions";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
-import { parseCliOptions } from "@/shared/cli-options";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
-import { ApprovalPanelsProvider } from "@/shared/providers/approval/approval-panels-provider";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
@@ -25,8 +19,7 @@ import { CommandControllerProvider } from "../commands/command-controller-provid
 import { SettingsProviders } from "./settings-providers";
 
 const interactiveRuntime = getInteractiveRuntimeContext();
-const { args, cwd, pluginRuntime } = interactiveRuntime;
-const cliOptions = parseCliOptions(args);
+const { cwd, pluginRuntime } = interactiveRuntime;
 const connections = createConnections();
 const workspace =
 	interactiveRuntime.configRuntime?.workspace ?? resolveWorkspaceRoot(cwd);
@@ -40,7 +33,6 @@ const configContext =
 		homeRoot: os.homedir(),
 		workspace,
 	});
-const permissionService = createPermissionService(cliOptions);
 setInteractiveCleanup(async () => {
 	try {
 		await getInteractiveSessionHostManager(pluginRuntime).shutdownAll();
@@ -66,26 +58,22 @@ export function RootLayout() {
 		<ConfigProvider value={configContext}>
 			<ToastProvider>
 				<ConnectionsProvider connections={connections}>
-					<PermissionServiceProvider service={permissionService}>
-						<AgentRegistryProvider>
-							<KeyboardLayerProvider>
-								<ApprovalPanelsProvider>
-									<SettingsProviders>
-										<ModelPricingProvider>
-											<DialogProvider>
-												<CopyOnSelectFromSettings />
-												<DialogProvider>
-													<CommandControllerProvider>
-														<Outlet key={currentPath} />
-													</CommandControllerProvider>
-												</DialogProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</SettingsProviders>
-								</ApprovalPanelsProvider>
-							</KeyboardLayerProvider>
-						</AgentRegistryProvider>
-					</PermissionServiceProvider>
+					<AgentRegistryProvider>
+						<KeyboardLayerProvider>
+							<SettingsProviders>
+								<ModelPricingProvider>
+									<DialogProvider>
+										<CopyOnSelectFromSettings />
+										<DialogProvider>
+											<CommandControllerProvider>
+												<Outlet key={currentPath} />
+											</CommandControllerProvider>
+										</DialogProvider>
+									</DialogProvider>
+								</ModelPricingProvider>
+							</SettingsProviders>
+						</KeyboardLayerProvider>
+					</AgentRegistryProvider>
 				</ConnectionsProvider>
 			</ToastProvider>
 		</ConfigProvider>

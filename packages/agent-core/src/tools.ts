@@ -113,11 +113,9 @@ export const isToolFailureDetails = (
 	);
 
 /**
- * One Tool Call finished without executing its effect: a policy deny or
- * approval rejection, an Agent that cannot use the tool, or an execution
- * failure. `errorText` is presentation-safe and owned by the caller that
- * produced it (Tool Gate wording, runner failure text, or the runtime's
- * safe fallback).
+ * One Tool Call finished without executing its effect: the selected Agent
+ * cannot use the tool, validation failed, or execution failed. `errorText` is
+ * presentation-safe and owned by the caller that produced it.
  */
 export type ToolCallFailure = Readonly<{
 	errorText: string;
@@ -152,14 +150,13 @@ export const isToolCallOutput = (value: unknown): value is ToolCallOutput => {
 };
 
 export type ToolExecutorOptions = {
-	/** Aborts the tool execution and any approval it is awaiting. */
+	/** Aborts the tool execution. */
 	readonly signal?: AbortSignal;
 };
 
 /**
- * Executes one resolved Tool Call. The executor owns the actual-resource
- * Tool Permission evaluation: the application composes it through the Tool
- * Gate before it ever reaches the Agent Runtime.
+ * Executes one resolved Tool Call. Applications compose the executable
+ * implementation for each selected Tool before it reaches the Agent Runtime.
  */
 export type ToolExecutor = (
 	request: ToolCallRequest,
@@ -167,10 +164,8 @@ export type ToolExecutor = (
 ) => Promise<ToolCallOutput>;
 
 /**
- * A Tool Definition whose executable path has been composed through the
- * application Tool Gate for one Agent Turn. Resolution makes a tool available
- * to the Agent Runtime; Tool Permission is still evaluated against each
- * actual Tool Call inside the executor.
+ * A Tool Definition and its executable path composed for one Agent Turn.
+ * Resolution determines which tools are available to the Agent Runtime.
  */
 export type ResolvedTool = Readonly<{
 	definition: ToolDefinition;

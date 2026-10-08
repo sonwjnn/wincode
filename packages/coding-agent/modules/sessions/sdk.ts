@@ -13,6 +13,7 @@ import type { AgentRegistry } from "@/modules/agents/registry";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
 import type {
 	SessionSdk,
 	SessionSdkCapabilityCeiling,
@@ -41,6 +42,7 @@ import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
+import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 
 export type SessionSdkRuntimeOptions = Omit<
 	SessionCapabilitiesOptions,
@@ -53,6 +55,7 @@ export type SessionSdkRuntimeOptions = Omit<
 		model?: ChatModelSelection;
 		reasoningMode?: ReasoningMode;
 		pluginPaths?: readonly string[];
+		projectTrust?: "trust" | "deny";
 		workspace?: string;
 	}>;
 
@@ -96,8 +99,11 @@ const optionsForChild = (
 	const {
 		agent: _agent,
 		capabilityCeiling: _parentCapabilityCeiling,
+		configRuntime: _configRuntime,
+		configStore: _configStore,
 		effort: _effort,
 		model: _model,
+		projectTrust: _projectTrust,
 		reasoningMode: _reasoningMode,
 		...sharedOptions
 	} = options;
@@ -162,9 +168,6 @@ const resolvedAgentFor = (
 				id: candidate.id,
 				instructions: candidate.instructions,
 				role: candidate.role,
-				...(candidate.requiresManualApproval
-					? { requiresManualApproval: true }
-					: {}),
 				visibleCodingTools: [...candidate.visibleCodingTools],
 			};
 };
@@ -410,16 +413,36 @@ const createSessionSdkInternal = async (
 	);
 	const workspace = options.workspace ?? process.cwd();
 	const cwd = options.cwd ?? workspace;
+	const trustResolution =
+		options.projectTrust === undefined &&
+		options.configRuntime?.trustedProjectRoots !== undefined
+			? {
+					trustedProjectRoots: options.configRuntime.trustedProjectRoots,
+				}
+			: await resolveProjectTrust({
+					mode: "sdk",
+					override: options.projectTrust,
+					userDataDir: resolveUserDataDir(),
+					workspace,
+				});
+	const trustedProjectRoots = trustResolution.trustedProjectRoots;
 	const configStore =
 		options.configStore ??
 		options.configRuntime?.configStore ??
-		createConfigStore();
-	const configRuntime: ConfigRuntime = options.configRuntime ?? {
-		configStore,
-		cwd,
-		homeRoot: os.homedir(),
-		workspace,
-	};
+		createConfigStore({ trustedProjectRoots });
+	const configRuntime: ConfigRuntime =
+		options.configRuntime === undefined
+			? {
+					configStore,
+					cwd,
+					homeRoot: os.homedir(),
+					trustedProjectRoots,
+					workspace,
+				}
+			: {
+					...options.configRuntime,
+					trustedProjectRoots,
+				};
 	const composition = createApplicationPluginComposition();
 	const pluginRuntime: PluginRuntime = await loadPlugins({
 		cliPaths: options.pluginPaths ?? [],
@@ -575,8 +598,10 @@ const createSessionSdkInternal = async (
 			{
 				...optionsForChild(options, childCapabilityCeiling),
 				cwd,
-				configRuntime,
 				pluginPaths: childOptions.pluginPaths ?? [],
+				...(childOptions.projectTrust === undefined
+					? {}
+					: { projectTrust: childOptions.projectTrust }),
 				store: assembly.store,
 				workspace,
 			},

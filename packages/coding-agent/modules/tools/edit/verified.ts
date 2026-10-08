@@ -39,36 +39,11 @@ import { decodeEscapedPatchPath } from "../versioned/patch";
 import { buildEditDiff, buildFullEditDiff } from "./diff";
 import type { EditInput, EditOutput } from "./schema";
 export type EditOptions = ResourceLimitOptions & {
-	allowSloppy?: boolean;
-	approvedExternalPaths?: readonly string[];
-	approvedWorkspacePaths?: readonly string[];
 	versionedEditing?: VersionedEditingContext;
 };
 export const resolveAuthorizedTextPath = async (
-	inputPath: string,
-	options: Pick<
-		EditOptions,
-		"approvedExternalPaths" | "approvedWorkspacePaths"
-	>,
-	allowExternalPath: boolean
-): Promise<string> => {
-	const resolvedPath = await resolveExistingTextPath(
-		inputPath,
-		allowExternalPath
-	);
-	const approvedPaths = new Set([
-		...(options.approvedExternalPaths ?? []),
-		...(options.approvedWorkspacePaths ?? []),
-	]);
-	if (approvedPaths.size > 0 && !approvedPaths.has(resolvedPath)) {
-		throw new CodingToolError(
-			"approved-path-changed",
-			"An approved path changed before execution.",
-			{ recovery: { action: "reread", path: inputPath } }
-		);
-	}
-	return resolvedPath;
-};
+	inputPath: string
+): Promise<string> => resolveExistingTextPath(inputPath);
 export type ParsedSection = Readonly<{
 	hunks: readonly ParsedHunk[];
 	path: string;
@@ -1437,7 +1412,6 @@ const mapSeenLinesAfterHunk = ({
 
 export const runHashlineEdit = async (
 	input: Extract<EditInput, { patch: string }>,
-	options: EditOptions,
 	context: VersionedEditingContext,
 	limits: ToolResourceLimits
 ): Promise<EditOutput> => {
@@ -1449,11 +1423,7 @@ export const runHashlineEdit = async (
 			{ recovery: { action: "correct-input" } }
 		);
 	}
-	const resolvedPath = await resolveAuthorizedTextPath(
-		section.path,
-		options,
-		options.allowExternalPath === true
-	);
+	const resolvedPath = await resolveAuthorizedTextPath(section.path);
 	const state = await readVersionedFile(resolvedPath);
 	const resolved = await resolveVerifiedHunk(
 		section,

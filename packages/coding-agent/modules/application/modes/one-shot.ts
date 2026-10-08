@@ -36,7 +36,6 @@ import {
 	createConfigStore,
 } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
-import { createPermissionService } from "../../../modules/permissions/permission-service";
 import type { SessionCapabilitiesAssembly } from "../../../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
 import type {
@@ -56,7 +55,6 @@ import { InvocationError } from "./types";
 type OneShotFormat = "json" | "print";
 
 type OneShotCompositionInput = Readonly<{
-	autoApproval: boolean;
 	configRuntime?: ConfigRuntime;
 	cwd: string;
 	pluginRuntime?: PluginRuntime;
@@ -82,7 +80,6 @@ const composeOneShotCapabilities = async (
 	compose: NonNullable<OneShotDependencies["composeCapabilities"]>
 ): Promise<OneShotComposition> =>
 	compose({
-		autoApproval: context.invocation.auto,
 		cwd: context.cwd,
 		...omitUndefined({
 			configRuntime: context.configRuntime,
@@ -220,9 +217,6 @@ const resolvedAgentFor = (
 				id: candidate.id,
 				instructions: candidate.instructions,
 				role: candidate.role,
-				...(candidate.requiresManualApproval
-					? { requiresManualApproval: true }
-					: {}),
 				visibleCodingTools: [...candidate.visibleCodingTools],
 			};
 
@@ -321,7 +315,6 @@ const resolveSelection = ({
 };
 
 const composeDefaultCapabilities = async ({
-	autoApproval,
 	configRuntime,
 	cwd,
 	pluginRuntime,
@@ -346,14 +339,12 @@ const composeDefaultCapabilities = async ({
 		}));
 	let sessionSdk: SessionSdkChildFactory | undefined;
 	const assembly = await createSessionCapabilities({
-		approvalMode: "non-interactive",
 		configStore,
 		cwd,
 		...(configRuntime === undefined ? {} : { configRuntime }),
 		pluginRuntime: resolvedPluginRuntime,
 		getSessionSdk: () => sessionSdk,
 		turnToolResolver: composition.turnToolResolver,
-		permissionService: createPermissionService({ autoApproval }),
 		workspace,
 	});
 	sessionSdk = createSessionSdkChildFactory(

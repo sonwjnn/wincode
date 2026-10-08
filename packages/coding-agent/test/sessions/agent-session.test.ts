@@ -52,7 +52,6 @@ import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/submission-types";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import {
 	readLoggerRecords,
 	withDebugProject,
@@ -686,7 +685,6 @@ test("publishes snapshots only when public commands change session facts", async
 	});
 
 	expect(await engine.interruptAll()).toMatchObject({
-		approvalsSettled: 0,
 		kind: "none",
 		recalled: [],
 	});
@@ -863,20 +861,13 @@ test("cancels the compaction command in flight without publishing its result", a
 	);
 });
 
-test("interruptAll settles idle approvals and reports no stopped work", async () => {
+test("interruptAll reports no stopped work when the session is idle", async () => {
 	const engine = createTestAgentSession([]);
-	const approval = engine.internalPort.requestApproval(
-		fromPartial<ToolApprovalRequest>({
-			toolCallId: toolCallId("idle-approval"),
-		})
-	);
 
 	expect(await engine.interruptAll()).toMatchObject({
-		approvalsSettled: 1,
 		kind: "none",
 		recalled: [],
 	});
-	await expect(approval).resolves.toEqual({ decision: "reject" });
 });
 
 test("interruptAll aborts compaction and recalls queued submissions", async () => {
@@ -900,7 +891,6 @@ test("interruptAll aborts compaction and recalls queued submissions", async () =
 	const result = await engine.interruptAll();
 
 	expect(result.kind).toBe("compaction");
-	expect(result.approvalsSettled).toBe(0);
 	expect(result.recalled.map(({ input }) => input.composition.text)).toEqual([
 		"waiting",
 	]);
@@ -977,163 +967,6 @@ test("debug compaction records manual lifecycle transitions", async () => {
 			}
 		});
 	});
-});
-
-const approvalRequest = (callId?: string): ToolApprovalRequest => ({
-	description: "Write denied by policy: src/index.ts",
-	identity: [{ label: "tool", value: "write" }],
-	input: { path: "src/index.ts" },
-	...(callId === undefined ? {} : { toolCallId: toolCallId(callId) }),
-});
-
-test("publishes a pending approval and settles it exactly once", async () => {
-	const engine = createTestAgentSession([]);
-	const settled = engine.internalPort.requestApproval(
-		approvalRequest("call-1")
-	);
-
-	const pending = engine.getSnapshot().approvals;
-	expect(pending.map(({ id, target }) => [id, target])).toEqual([
-		["call-1", "tool-call"],
-	]);
-	expect(pending[0]?.decision).toBeUndefined();
-
-	engine.respondToApproval("call-1", { decision: "allow", remember: false });
-
-	await expect(settled).resolves.toEqual({
-		decision: "allow",
-		remember: false,
-	});
-	expect(engine.getSnapshot().approvals[0]?.decision).toEqual({
-		decision: "allow",
-		remember: false,
-	});
-
-	// A second trigger cannot settle a request the Agent Session already settled.
-	engine.respondToApproval("call-1", { decision: "abort" });
-	await expect(settled).resolves.toEqual({
-		decision: "allow",
-		remember: false,
-	});
-	expect(engine.getSnapshot().approvals[0]?.decision).toEqual({
-		decision: "allow",
-		remember: false,
-	});
-});
-test("keeps a safety approval pending when persistence is requested", async () => {
-	const engine = createTestAgentSession([]);
-	const settled = engine.internalPort.requestApproval({
-		...approvalRequest("call-safety"),
-		safety: true,
-	});
-
-	expect(
-		engine.respondToApproval("call-safety", {
-			decision: "allow",
-			remember: true,
-		})
-	).toEqual({
-		applied: false,
-		reason: "persistence-forbidden",
-	});
-	expect(engine.getSnapshot().approvals[0]?.decision).toBeUndefined();
-
-	engine.respondToApproval("call-safety", {
-		decision: "allow",
-		remember: false,
-	});
-	await expect(settled).resolves.toEqual({
-		decision: "allow",
-		remember: false,
-	});
-});
-test("aborts the active turn through an approval response", async () => {
-	const streaming = createStreamingRuntime();
-	const engine = createTestAgentSession([], undefined, {
-		turnRunner: streaming.runtime,
-	});
-	const send = engine.send(sendInput());
-
-	await streaming.live;
-	const settled = engine.internalPort.requestApproval(
-		approvalRequest("call-abort")
-	);
-
-	expect(engine.respondToApproval("call-abort", { decision: "abort" })).toEqual(
-		{ applied: true }
-	);
-	await expect(settled).resolves.toEqual({ decision: "abort" });
-	expect(engine.getSnapshot().turnActive).toBe(false);
-
-	streaming.release();
-	await send;
-	expect(
-		engine.getSnapshot().context.findLast(({ role }) => role === "assistant")
-			?.metadata?.interrupted
-	).toBe(true);
-});
-
-test("gives a Tool-Call-less approval its own id and settles it with every sibling", async () => {
-	const engine = createTestAgentSession([]);
-	const first = engine.internalPort.requestApproval(approvalRequest());
-	const second = engine.internalPort.requestApproval(approvalRequest());
-	const [firstEntry, secondEntry] = engine.getSnapshot().approvals;
-
-	expect(firstEntry?.target).toBe("session");
-	expect(firstEntry?.id).toBeString();
-	expect(firstEntry?.id).not.toBe(secondEntry?.id);
-
-	await engine.interruptAll();
-	await expect(first).resolves.toEqual({ decision: "reject" });
-	await expect(second).resolves.toEqual({ decision: "reject" });
-});
-
-test("interruptAll settles every pending approval", async () => {
-	const engine = createTestAgentSession([]);
-	const first = engine.internalPort.requestApproval(approvalRequest("call-1"));
-	const second = engine.internalPort.requestApproval(approvalRequest("call-2"));
-
-	await engine.interruptAll();
-
-	await expect(first).resolves.toEqual({ decision: "reject" });
-	await expect(second).resolves.toEqual({ decision: "reject" });
-	expect(
-		engine.getSnapshot().approvals.map(({ decision }) => decision)
-	).toEqual([{ decision: "reject" }, { decision: "reject" }]);
-});
-
-test("refuses a second pending request that reuses a Tool Call Identifier", async () => {
-	const engine = createTestAgentSession([]);
-	const first = engine.internalPort.requestApproval(approvalRequest("call-1"));
-	const duplicate = engine.internalPort.requestApproval(
-		approvalRequest("call-1")
-	);
-
-	await expect(duplicate).resolves.toEqual({ decision: "reject" });
-	expect(engine.getSnapshot().approvals).toHaveLength(1);
-
-	// The identifier still addresses the request the panel shows.
-	engine.respondToApproval("call-1", { decision: "allow", remember: false });
-	await expect(first).resolves.toEqual({
-		decision: "allow",
-		remember: false,
-	});
-});
-
-test("keeps the first settlement when an abort and a close race", async () => {
-	const engine = createTestAgentSession([]);
-	const aborted = engine.internalPort.requestApproval(
-		approvalRequest("call-1")
-	);
-	const sibling = engine.internalPort.requestApproval(
-		approvalRequest("call-2")
-	);
-
-	engine.respondToApproval("call-1", { decision: "abort" });
-	await engine.interruptAll();
-
-	await expect(aborted).resolves.toEqual({ decision: "abort" });
-	await expect(sibling).resolves.toEqual({ decision: "reject" });
 });
 
 /** The provider's public context-window refusal. */
@@ -1766,7 +1599,6 @@ test("continue resumes retained denied Tool Calls without rerunning them", async
 		},
 		parts: [
 			{
-				approval: { approved: false },
 				input: { path: "secret.txt" },
 				state: "output-denied",
 				toolCallId: toolCallId("call-denied"),
@@ -4913,7 +4745,6 @@ test("cancels the submission it is running and returns to ready", async () => {
 	const snapshot = engine.getSnapshot();
 	expect(snapshot.turnActive).toBe(false);
 	expect(snapshot.executions).toEqual([]);
-	expect(snapshot.approvals).toEqual([]);
 });
 
 test("deadline expiration aborts a preparing Agent Session send", async () => {

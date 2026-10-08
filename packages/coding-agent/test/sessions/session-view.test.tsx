@@ -49,14 +49,8 @@ const { createConnections: createDefaultConnections } = await import(
 );
 const { ConnectionsProvider } = await import("@/modules/connections");
 const { ModelPricingProvider } = await import("@/modules/model-pricing");
-const { createPermissionService, PermissionServiceProvider } = await import(
-	"@/modules/permissions"
-);
 const { PromptConfigProvider } = await import(
 	"@/modules/prompt-settings/context/prompt-config-provider"
-);
-const { ApprovalPanelsProvider } = await import(
-	"@/shared/providers/approval/approval-panels-provider"
 );
 const { ConfigProvider } = await import("@/shared/config/config-provider");
 const { createConfigStore } = await import("@/shared/config/config-store");
@@ -375,7 +369,6 @@ const createFakeSessionHost = (
 		agentSession: {},
 		getSelection: () => null,
 		getSnapshot: () => ({
-			approvals: [],
 			catalogDiagnostic: null,
 			compactions: [],
 			compactionError: null,
@@ -447,40 +440,34 @@ describe("SessionView initial submission", () => {
 				<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
 					<ToastProvider>
 						<ConnectionsProvider connections={createConnections()}>
-							<PermissionServiceProvider service={createPermissionService()}>
-								<AgentRegistryProvider>
-									<KeyboardLayerProvider>
-										<ApprovalPanelsProvider>
-											<PromptConfigProvider>
-												<ModelPricingProvider>
-													<DialogProvider>
-														<RouterContextProvider router={router}>
-															<CommandControllerProvider>
-																<SessionView
-																	host={createFakeSessionHost(
-																		initialTranscript
-																	)}
-																	initialSubmission={{
-																		messageId: sessionMessageId("initial-user"),
-																	}}
-																	initialTranscript={initialTranscript}
-																	sessionId={sessionId("session-1")}
-																	sessionTitle="Create the session prompt"
-																/>
-																<AgentRegistryReadyProbe
-																	onReady={() => {
-																		registryIsReady = true;
-																	}}
-																/>
-															</CommandControllerProvider>
-														</RouterContextProvider>
-													</DialogProvider>
-												</ModelPricingProvider>
-											</PromptConfigProvider>
-										</ApprovalPanelsProvider>
-									</KeyboardLayerProvider>
-								</AgentRegistryProvider>
-							</PermissionServiceProvider>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<PromptConfigProvider>
+										<ModelPricingProvider>
+											<DialogProvider>
+												<RouterContextProvider router={router}>
+													<CommandControllerProvider>
+														<SessionView
+															host={createFakeSessionHost(initialTranscript)}
+															initialSubmission={{
+																messageId: sessionMessageId("initial-user"),
+															}}
+															initialTranscript={initialTranscript}
+															sessionId={sessionId("session-1")}
+															sessionTitle="Create the session prompt"
+														/>
+														<AgentRegistryReadyProbe
+															onReady={() => {
+																registryIsReady = true;
+															}}
+														/>
+													</CommandControllerProvider>
+												</RouterContextProvider>
+											</DialogProvider>
+										</ModelPricingProvider>
+									</PromptConfigProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
 						</ConnectionsProvider>
 					</ToastProvider>
 				</ConfigProvider>
@@ -548,35 +535,31 @@ describe("SessionView initial submission", () => {
 				<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
 					<ToastProvider>
 						<ConnectionsProvider connections={createConnections()}>
-							<PermissionServiceProvider service={createPermissionService()}>
-								<AgentRegistryProvider>
-									<KeyboardLayerProvider>
-										<ApprovalPanelsProvider>
-											<PromptConfigProvider>
-												<ModelPricingProvider>
-													<DialogProvider>
-														<RouterContextProvider router={router}>
-															<CommandControllerProvider>
-																<SessionView
-																	host={createFakeSessionHost([])}
-																	initialTranscript={[]}
-																	sessionId={sessionId("session-1")}
-																	sessionTitle="Send an entered prompt"
-																/>
-																<AgentRegistryReadyProbe
-																	onReady={() => {
-																		registryIsReady = true;
-																	}}
-																/>
-															</CommandControllerProvider>
-														</RouterContextProvider>
-													</DialogProvider>
-												</ModelPricingProvider>
-											</PromptConfigProvider>
-										</ApprovalPanelsProvider>
-									</KeyboardLayerProvider>
-								</AgentRegistryProvider>
-							</PermissionServiceProvider>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<PromptConfigProvider>
+										<ModelPricingProvider>
+											<DialogProvider>
+												<RouterContextProvider router={router}>
+													<CommandControllerProvider>
+														<SessionView
+															host={createFakeSessionHost([])}
+															initialTranscript={[]}
+															sessionId={sessionId("session-1")}
+															sessionTitle="Send an entered prompt"
+														/>
+														<AgentRegistryReadyProbe
+															onReady={() => {
+																registryIsReady = true;
+															}}
+														/>
+													</CommandControllerProvider>
+												</RouterContextProvider>
+											</DialogProvider>
+										</ModelPricingProvider>
+									</PromptConfigProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
 						</ConnectionsProvider>
 					</ToastProvider>
 				</ConfigProvider>
@@ -632,40 +615,36 @@ const renderSessionView = async ({
 			<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
 				<ToastProvider>
 					<ConnectionsProvider connections={createConnections()}>
-						<PermissionServiceProvider service={createPermissionService()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<ApprovalPanelsProvider>
-										<PromptConfigProvider>
-											<ModelPricingProvider>
-												<DialogProvider>
-													<RouterContextProvider router={router}>
-														<CommandControllerProvider>
-															<SessionView
-																host={createFakeSessionHost(liveTranscript)}
-																initialTranscript={initialTranscript}
-																sessionId={sessionId("session-1")}
-																sessionTitle="Queue a prompt"
-															/>
-															<AgentRegistryReadyProbe
-																onReady={() => {
-																	registryIsReady = true;
-																}}
-															/>
-															<KeyboardLayerProbe
-																onLayer={(isCommandLayer) => {
-																	commandLayer.isTop = isCommandLayer;
-																}}
-															/>
-														</CommandControllerProvider>
-													</RouterContextProvider>
-												</DialogProvider>
-											</ModelPricingProvider>
-										</PromptConfigProvider>
-									</ApprovalPanelsProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</PermissionServiceProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider>
+									<ModelPricingProvider>
+										<DialogProvider>
+											<RouterContextProvider router={router}>
+												<CommandControllerProvider>
+													<SessionView
+														host={createFakeSessionHost(liveTranscript)}
+														initialTranscript={initialTranscript}
+														sessionId={sessionId("session-1")}
+														sessionTitle="Queue a prompt"
+													/>
+													<AgentRegistryReadyProbe
+														onReady={() => {
+															registryIsReady = true;
+														}}
+													/>
+													<KeyboardLayerProbe
+														onLayer={(isCommandLayer) => {
+															commandLayer.isTop = isCommandLayer;
+														}}
+													/>
+												</CommandControllerProvider>
+											</RouterContextProvider>
+										</DialogProvider>
+									</ModelPricingProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ConnectionsProvider>
 				</ToastProvider>
 			</ConfigProvider>

@@ -13,7 +13,6 @@ import {
 	useSettingsOperations,
 } from "@/modules/settings";
 import { ConfigProvider } from "@/shared/config/config-provider";
-import { ApprovalPanelsProvider } from "@/shared/providers/approval/approval-panels-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import {
@@ -63,11 +62,9 @@ test("global Hide thinking replaces live and historical reasoning and reset rest
 		<ConfigProvider value={configValue}>
 			<ThemeProvider>
 				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<SettingsRegistryProvider>
-							<Harness />
-						</SettingsRegistryProvider>
-					</ApprovalPanelsProvider>
+					<SettingsRegistryProvider>
+						<Harness />
+					</SettingsRegistryProvider>
 				</KeyboardLayerProvider>
 			</ThemeProvider>
 		</ConfigProvider>,
@@ -146,13 +143,11 @@ test("keeps reasoning visible until a saved Hide thinking preference loads", asy
 		<ConfigProvider value={configValue}>
 			<ThemeProvider>
 				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<SettingsRegistryProvider>
-							<BotMessageContent
-								parts={[{ text: "stored thought", type: "reasoning" }]}
-							/>
-						</SettingsRegistryProvider>
-					</ApprovalPanelsProvider>
+					<SettingsRegistryProvider>
+						<BotMessageContent
+							parts={[{ text: "stored thought", type: "reasoning" }]}
+						/>
+					</SettingsRegistryProvider>
 				</KeyboardLayerProvider>
 			</ThemeProvider>
 		</ConfigProvider>,

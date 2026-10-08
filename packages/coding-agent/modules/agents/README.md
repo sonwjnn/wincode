@@ -12,7 +12,7 @@ Agents are named, trusted behavior descriptors. Configure them in `wincode.json`
       "role": "primary",
       "description": "Review changes without editing files.",
       "instructions": "Inspect the diff and report risks.",
-      "permission": { "edit": "deny" },
+      "tools": ["read", "grep", "glob"],
       "resource_limits": "deep"
     }
   }
@@ -24,15 +24,19 @@ fields merge recursively and higher sources win. Persisted session selection
 takes precedence when reopening a session; an unavailable selection falls back
 to Build while retaining its historical name.
 
+`tools` selects which native coding tools are exposed to an Agent; omitted values
+use that Agent's defaults. `capability_ceiling.tools` can further restrict tools in a
+new delegated Session. These are model-visible tool selections, not per-call
+approval policies.
+
 `resource_limits` accepts `standard`, `extended`, or `deep`. The global value applies
 to every Agent unless an Agent-specific value overrides it. Standard preserves the
 normal bounded tool budgets; the elevated profiles allow larger bounded reads,
-searches, listings, shell commands, and edit previews. The first elevated tool call
-opens a normal approval request, and `Always allow` remembers that profile for the
-CLI process. Workspace boundaries and explicit permission denies remain unchanged.
+searches, listings, shell commands, and edit previews. Resource limits remain active
+without asking for per-call approval. Tools run with Wincode's process privileges;
+use operating-system isolation when stronger containment is required.
 
-Agent instructions are trusted system input and can influence tool use. Permission
-rules and the MCP safety ceiling remain authoritative and are enforced by the CLI.
-Configuration changes require a restart. JSON Schema, live reload, sampling,
-provider options, hidden agents, and Markdown agents are deferred. Delegated
-Subagent turns use the correlated Agent Turn path.
+Agent instructions are trusted system input and can influence tool use. Configuration
+changes require a restart. JSON Schema, live reload, sampling, provider options,
+hidden agents, and Markdown agents are deferred. Delegated Subagent turns use the
+correlated Agent Turn path.

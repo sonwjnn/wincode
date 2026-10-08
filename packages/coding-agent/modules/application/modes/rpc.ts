@@ -25,7 +25,6 @@ export const runRpcExecutionMode = async (
 	process.once("SIGTERM", onSigterm);
 	try {
 		return await runRpc({
-			autoApproval: context.invocation.auto,
 			...(context.configRuntime === undefined
 				? {}
 				: { configRuntime: context.configRuntime }),

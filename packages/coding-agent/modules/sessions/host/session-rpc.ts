@@ -19,7 +19,6 @@ export type { SessionId } from "@/shared/identifiers";
 export { toSessionId } from "@/shared/identifiers";
 export type {
 	LiveSessionSnapshot,
-	SessionApprovalResult,
 	SessionInterruptResult,
 	SessionQueuedSubmission,
 	SessionSteeringAdmission,

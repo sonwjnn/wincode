@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
 	isArray,
 	isNonEmptyString,
@@ -30,6 +30,7 @@ const ROOT_SOURCE = {
 export type SkillDiscoveryInput = {
 	homeRoot: string;
 	snapshot: ConfigSnapshot;
+	trustedProjectRoots?: readonly string[];
 	workspace: string;
 };
 
@@ -97,6 +98,12 @@ export function buildSkillRootDescriptors(
 	}
 
 	for (const projectRoot of getProjectRoots(input.workspace)) {
+		if (
+			input.trustedProjectRoots !== undefined &&
+			!input.trustedProjectRoots.includes(resolve(projectRoot))
+		) {
+			continue;
+		}
 		for (const location of LEGACY_LOCATIONS) {
 			addRoot(join(projectRoot, location), "project", ROOT_SOURCE.legacy);
 		}

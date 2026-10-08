@@ -10,12 +10,10 @@ import type {
 	SessionHost,
 	SessionSubmissionEvent,
 } from "../../../modules/sessions/host/session-rpc";
-import type { SessionHostManagerEvent } from "../../../modules/sessions/host/types";
 import { type DeferredNotification, SerializedWriter } from "./output";
 import {
 	operationalStatus,
 	projectAgentEvent,
-	projectApproval,
 	projectExecution,
 	projectMessage,
 	projectQueued,
@@ -96,7 +94,6 @@ const logRpcFatalDiagnostic = (
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: This controller owns the JSONL lifecycle, output ordering, and teardown boundary.
 export async function runRpc({
-	autoApproval,
 	configRuntime,
 	disabledPluginIds,
 	pluginPaths,
@@ -121,47 +118,12 @@ export async function runRpc({
 	};
 	const processId = crypto.randomUUID();
 	const seenRequestIds = new Set<string>();
-	const approvalWireIds = new WeakMap<
-		LiveSessionSnapshot["approvals"][number],
-		string
-	>();
-	const approvalEngineIdsByWire = new Map<string, string>();
-	const activeApprovalWireIds = new Map<string, string>();
-	const wireApprovalId = (
-		approval: LiveSessionSnapshot["approvals"][number]
-	): string => {
-		const existing = approvalWireIds.get(approval);
-		if (existing !== undefined) {
-			return existing;
-		}
-		const previousWireId = activeApprovalWireIds.get(approval.id);
-		if (previousWireId !== undefined) {
-			approvalEngineIdsByWire.delete(previousWireId);
-		}
-		const wireId = `approval-${crypto.randomUUID()}`;
-		approvalWireIds.set(approval, wireId);
-		activeApprovalWireIds.set(approval.id, wireId);
-		approvalEngineIdsByWire.set(wireId, approval.id);
-		return wireId;
-	};
-	const retireSettledApprovalWireIds = (
-		pendingApprovalIds: ReadonlySet<string>
-	): void => {
-		for (const [engineApprovalId, wireId] of activeApprovalWireIds) {
-			if (!pendingApprovalIds.has(engineApprovalId)) {
-				activeApprovalWireIds.delete(engineApprovalId);
-				approvalEngineIdsByWire.delete(wireId);
-			}
-		}
-	};
 	const deferred: Array<DeferredNotification | undefined> = [];
 	let deferredHead = 0;
 	let deferredBytes = 0;
 	let deferredOverflow = false;
 	const unsubscribers: Array<() => void> = [];
 	const boundUnsubscribers: Array<() => void> = [];
-	const ownedSessionIds = new Set<SessionId>();
-	let managerEventUnsubscribe: (() => void) | undefined;
 	let runtime: RuntimeModules | undefined;
 	const state: RpcSessionState = {
 		lifecycle: "uninitialized",
@@ -396,16 +358,6 @@ export async function runRpc({
 		const snapshot: LiveSessionSnapshot = state.host.getSnapshot();
 		const executions = snapshot.executions.map(projectExecution);
 		const primary = snapshot.executions.at(-1);
-		const pendingApprovals = snapshot.approvals.filter(
-			(approval) => approval.decision === undefined
-		);
-		const pendingApprovalIds = new Set(
-			pendingApprovals.map((approval) => approval.id)
-		);
-		retireSettledApprovalWireIds(pendingApprovalIds);
-		const approvals = pendingApprovals.map((approval) =>
-			projectApproval(approval, wireApprovalId(approval))
-		);
 		const steering = snapshot.steeringMessages.map(projectSteering);
 		const pendingSteering = snapshot.steeringMessages.length > 0;
 		const queue = snapshot.queuedSubmissions.map(projectQueued);
@@ -424,12 +376,10 @@ export async function runRpc({
 						(execution) => execution.turnId === primary.turnId
 					) ?? null)
 				: null,
-			approvals,
 			executions,
 			sessionId: state.boundSessionId,
 			selection: selectionFromHost(state.host),
 			status: operationalStatus({
-				approvals: approvals.length,
 				compacting: snapshot.isCompacting,
 				turnActive: snapshot.turnActive,
 				waiting: pendingSteering || queue.length > 0,
@@ -461,42 +411,6 @@ export async function runRpc({
 		}
 	};
 
-	const projectApprovalNotice = (
-		event: Extract<SessionHostManagerEvent, { type: "session-approval-notice" }>
-	): void => {
-		if (
-			!ownedSessionIds.has(event.sessionId) ||
-			event.sessionId === state.boundSessionId
-		) {
-			return;
-		}
-		emit("session/event", {
-			event: {
-				kind: "session-approval-notice",
-				pendingApprovalCount: event.pendingApprovalCount,
-				sessionId: event.sessionId,
-			},
-		});
-	};
-	const subscribeManagerEvents = (): void => {
-		const manager = state.assembly?.capabilities.getSessionHostManager();
-		if (manager === undefined) {
-			return;
-		}
-		managerEventUnsubscribe?.();
-		const unsubscribe = manager.onEvent((event) => {
-			if (event.type !== "session-approval-notice") {
-				return;
-			}
-			try {
-				projectApprovalNotice(event);
-			} catch (error) {
-				void fatalShutdown(error);
-			}
-		});
-		managerEventUnsubscribe = unsubscribe;
-		unsubscribers.push(unsubscribe);
-	};
 	const releaseSessionView = (sessionId: SessionId): void => {
 		const manager = state.assembly?.capabilities.getSessionHostManager();
 		if (manager !== undefined) {
@@ -537,7 +451,6 @@ export async function runRpc({
 		state.host = nextHost;
 		state.boundSessionId = sessionId;
 		state.lifecycle = "bound";
-		ownedSessionIds.add(sessionId);
 		lastStateSignature = "";
 		lastTranscriptSignature = "";
 		try {
@@ -571,7 +484,6 @@ export async function runRpc({
 			),
 			nextHost.subscribe(notifyState)
 		);
-		subscribeManagerEvents();
 		if (previousSessionId !== undefined) {
 			releaseSessionView(previousSessionId);
 		}
@@ -632,7 +544,6 @@ export async function runRpc({
 		};
 	};
 	const handleRequest = createRpcRequestHandler({
-		autoApproval,
 		bind,
 		unbind,
 		currentState,
@@ -642,8 +553,6 @@ export async function runRpc({
 		providedComposer,
 		requireBound,
 		requireInitialized,
-		resolveApprovalId: (wireApprovalId) =>
-			approvalEngineIdsByWire.get(wireApprovalId),
 		prepareSubmission,
 		sendInput,
 		state,

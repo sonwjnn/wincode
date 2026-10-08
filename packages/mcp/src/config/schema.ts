@@ -1,6 +1,5 @@
 import type { SetRequired } from "type-fest";
 import { z } from "zod";
-import { mcpExecutionPolicySchema } from "../policy";
 
 export const phaseTimeoutSchema = z.number().int().positive();
 export const timeoutPatchSchema = z
@@ -22,7 +21,6 @@ export const rawServerPatchSchema = z
 			.union([z.literal(false), z.record(z.string(), z.unknown())])
 			.optional(),
 		enabled: z.boolean().optional(),
-		permission: mcpExecutionPolicySchema.optional(),
 		timeout: timeoutPatchSchema.optional(),
 	})
 	.strict();
@@ -33,7 +31,6 @@ export const localServerSchema = z.object({
 	cwd: z.string().optional(),
 	environment: z.record(z.string(), z.string()).optional(),
 	disabled: z.boolean(),
-	permission: mcpExecutionPolicySchema,
 	timeout: z.object({
 		startup: phaseTimeoutSchema,
 		catalog: phaseTimeoutSchema,
@@ -47,7 +44,6 @@ export const remoteServerSchema = z.object({
 	headers: z.record(z.string(), z.string()).optional(),
 	oauth: z.literal(false).optional(),
 	disabled: z.boolean(),
-	permission: mcpExecutionPolicySchema,
 	timeout: z.object({
 		startup: phaseTimeoutSchema,
 		catalog: phaseTimeoutSchema,

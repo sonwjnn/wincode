@@ -59,7 +59,6 @@ export const SESSION_RPC_METHODS = new Set([
 	"session/recall",
 	"session/getState",
 	"session/getTranscript",
-	"session/respondToApproval",
 ]);
 export const AGENT_EVENT_TYPES = new Set([
 	"agent-turn-started",
@@ -101,7 +100,6 @@ export type RpcAssembly = Omit<
 };
 
 export type RpcCompositionInput = Readonly<{
-	autoApproval?: boolean;
 	configRuntime?: ConfigRuntime;
 	cwd: string;
 	pluginRuntime?: PluginRuntime;
@@ -111,7 +109,6 @@ export type RpcCompositionInput = Readonly<{
 }>;
 
 export type RpcRunnerOptions = Readonly<{
-	autoApproval?: boolean;
 	configRuntime?: ConfigRuntime;
 	disabledPluginIds?: readonly string[];
 	pluginPaths?: readonly string[];

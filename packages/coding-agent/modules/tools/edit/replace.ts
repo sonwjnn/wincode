@@ -10,11 +10,7 @@ import {
 	lineRangeForLines,
 } from "../versioned/model";
 import type { EditInput, EditOutput } from "./schema";
-import {
-	commitMutation,
-	type EditOptions,
-	resolveAuthorizedTextPath,
-} from "./verified";
+import { commitMutation, resolveAuthorizedTextPath } from "./verified";
 
 const REPLACEMENT_LINE_PATTERN = /\r\n?|\n/u;
 
@@ -178,7 +174,6 @@ const contentSpansForText = (text: LosslessText): TextContentSpan[] => {
 
 export const runReplaceEdit = async (
 	input: Extract<EditInput, { mode: "replace" }>,
-	options: EditOptions,
 	context: VersionedEditingContext,
 	limits: ToolResourceLimits
 ): Promise<EditOutput> => {
@@ -196,11 +191,7 @@ export const runReplaceEdit = async (
 			{ recovery: { action: "correct-input", path: input.path } }
 		);
 	}
-	const resolvedPath = await resolveAuthorizedTextPath(
-		input.path,
-		options,
-		options.allowExternalPath === true
-	);
+	const resolvedPath = await resolveAuthorizedTextPath(input.path);
 	const state = await readVersionedFile(resolvedPath);
 	const oldObservation = await context.store.getObservation(
 		context.sessionId,

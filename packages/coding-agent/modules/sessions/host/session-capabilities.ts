@@ -2,19 +2,9 @@ import type { Database } from "bun:sqlite";
 import * as os from "node:os";
 import type { AgentRuntime } from "@wincode/agent-core";
 import { type Connections, createConnections } from "@wincode/ai/connections";
-import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { resolveAgentRegistry } from "@/modules/agents/registry";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
-import {
-	createPermissionService,
-	type PermissionService,
-} from "@/modules/permissions/permission-service";
-import {
-	createToolPermissionPolicyState,
-	createToolPermissionRuntime,
-	type ToolPermissionRuntime,
-} from "@/modules/permissions/tool-permission-runtime";
 import {
 	createPluginRuntime,
 	type PluginRuntime,
@@ -55,14 +45,12 @@ import { createSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities, SessionHostManager } from "./types";
 
 export type SessionCapabilitiesOptions = Readonly<{
-	approvalMode?: "interactive" | "non-interactive";
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
 	connections?: Connections;
 	configRuntime?: ConfigRuntime;
 	configStore?: ConfigStore;
 	database?: SessionDatabase;
 	databasePath?: string;
-	permissionService?: PermissionService;
 	pricing?: ModelPricingTable;
 	registry?: AgentRegistry | null;
 	getRegistry?: () => AgentRegistry | null;
@@ -133,7 +121,6 @@ const openSessionDatabase = async ({
  * the returned shutdown function; injected resources remain caller-owned.
  */
 export const createSessionCapabilities = async ({
-	approvalMode,
 	connections: providedConnections,
 	configRuntime: providedConfigRuntime,
 	configStore: providedConfigStore,
@@ -141,7 +128,6 @@ export const createSessionCapabilities = async ({
 	cwd,
 	database: providedDatabase,
 	databasePath,
-	permissionService: providedPermissionService,
 	pricing = {},
 	registry: providedRegistry,
 	getRegistry: providedGetRegistry,
@@ -170,8 +156,6 @@ export const createSessionCapabilities = async ({
 			ownedDatabase = await openSessionDatabase({ databasePath, workspace });
 		}
 		const connections = providedConnections ?? createConnections();
-		const permissionService =
-			providedPermissionService ?? createPermissionService();
 		const database = providedDatabase ?? ownedDatabase?.db;
 		const store =
 			providedStore ??
@@ -189,15 +173,6 @@ export const createSessionCapabilities = async ({
 					})
 				: providedRegistry;
 		const getRegistry = providedGetRegistry ?? (() => registry);
-		const policyState = createToolPermissionPolicyState();
-		const toolPermission: ToolPermissionRuntime = createToolPermissionRuntime({
-			agent: getRegistry()?.defaultAgentId ?? DEFAULT_AGENT_ID,
-			policyState,
-			getRegistry,
-			service: permissionService,
-			workspace,
-			configRuntime,
-		});
 		const compactionSettings = createCompactionSettingsOperations({
 			configStore,
 			pricing,
@@ -232,7 +207,6 @@ export const createSessionCapabilities = async ({
 			return closing;
 		};
 		const capabilities: SessionCapabilities = {
-			getApprovalMode: () => approvalMode ?? "interactive",
 			getCapabilityCeiling: () => capabilityCeiling,
 			getCompactionModule: () => compaction,
 			getCompactionSettings: compactionSettings.getCompactionSettings,
@@ -242,7 +216,6 @@ export const createSessionCapabilities = async ({
 			getStore: () => store,
 			getSessionHostManager: () => sessionHostManager,
 			...(getSessionSdk === undefined ? {} : { getSessionSdk }),
-			getToolPermission: () => toolPermission,
 			getPluginRuntime: () => pluginRuntime,
 			getTurnToolResolver: () => turnToolResolver ?? resolveTurnTools,
 			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),

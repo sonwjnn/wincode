@@ -24,7 +24,7 @@ import {
 	parse as parseJsonc,
 	parseTree,
 } from "jsonc-parser";
-import { getProjectRoots } from "@/shared/paths/project-roots";
+import { canonicalPath, getProjectRoots } from "@/shared/paths/project-roots";
 
 export type ConfigScope = "global" | "project";
 export type ConfigOrigin = {
@@ -65,6 +65,8 @@ export type ConfigRuntime = {
 	homeRoot: string;
 	/** Process launch directory used for per-turn environment context. */
 	readonly cwd?: string;
+	/** Project roots whose configuration and resources were trusted before loading. */
+	readonly trustedProjectRoots?: readonly string[];
 	workspace: string;
 };
 
@@ -77,6 +79,7 @@ export type ConfigStoreOptions = {
 	configRoot?: string;
 	fs?: ConfigFileSystem;
 	homeRoot?: string;
+	trustedProjectRoots?: readonly string[];
 	xdgConfigHome?: string;
 };
 
@@ -396,12 +399,33 @@ const readSource = async (
 
 const loadSnapshot = async (
 	workspace: string,
-	options: Required<Pick<ConfigStoreOptions, "configRoot" | "fs" | "homeRoot">>
+	options: Required<
+		Pick<ConfigStoreOptions, "configRoot" | "fs" | "homeRoot">
+	> &
+		Pick<ConfigStoreOptions, "trustedProjectRoots">
 ): Promise<ConfigSnapshot> => {
-	const projectLocations = getProjectRoots(workspace).flatMap((root) => [
-		{ root, scope: "project" as const },
-		{ root: path.join(root, ".wincode"), scope: "project" as const },
-	]);
+	const trustedRoots = options.trustedProjectRoots?.map((root) =>
+		path.resolve(root)
+	);
+	const projectRoots = await Promise.all(
+		getProjectRoots(workspace).map(async (root) => ({
+			canonical: await canonicalPath(root),
+			root,
+		}))
+	);
+	const projectLocations = projectRoots.flatMap(({ canonical, root }) => {
+		if (
+			trustedRoots !== undefined &&
+			!trustedRoots.includes(path.resolve(root)) &&
+			!trustedRoots.includes(canonical)
+		) {
+			return [];
+		}
+		return [
+			{ root, scope: "project" as const },
+			{ root: path.join(root, ".wincode"), scope: "project" as const },
+		];
+	});
 	const locations = [
 		{ root: options.configRoot, scope: "global" as const },
 		{ root: path.join(options.homeRoot, ".wincode"), scope: "global" as const },
@@ -575,13 +599,23 @@ export const createConfigStore = (
 		if (!isUndefined(existing)) {
 			return existing;
 		}
-		const loaded = loadSnapshot(key, { configRoot, fs, homeRoot });
+		const loaded = loadSnapshot(key, {
+			configRoot,
+			fs,
+			homeRoot,
+			trustedProjectRoots: options.trustedProjectRoots,
+		});
 		snapshots.set(key, loaded);
 		return loaded;
 	};
 	const refreshSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
 		const key = path.resolve(workspace);
-		const snapshot = loadSnapshot(key, { configRoot, fs, homeRoot });
+		const snapshot = loadSnapshot(key, {
+			configRoot,
+			fs,
+			homeRoot,
+			trustedProjectRoots: options.trustedProjectRoots,
+		});
 		snapshots.set(key, snapshot);
 		return snapshot;
 	};

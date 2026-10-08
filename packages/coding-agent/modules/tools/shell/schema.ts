@@ -54,14 +54,14 @@ export const shellPlatformFromNode = (platform: string): ShellPlatform =>
 // The permissive shell posture is recorded in ADR-0008; the model-facing copy
 // below deliberately stays free of internal document references.
 const SHELL_TOOL_BOUNDS_DESCRIPTION =
-	"Commands are non-interactive: no stdin is provided, output keeps the final 30 KiB by default (up to 128 KiB in the deep resource profile), and the default timeout is 30 s (up to 900 s in the deep resource profile). Resource profiles are selected in Wincode configuration; elevated profiles require approval. An unresolved workspace recovery never disables Shell, but its warning remains until explicit reconciliation or discard; recheck File Versions before coding-tool mutations.";
+	"Commands are non-interactive: no stdin is provided, output keeps the final 30 KiB by default (up to 128 KiB in the deep resource profile), and the default timeout is 30 s (up to 900 s in the deep resource profile). Resource profiles are selected in Wincode configuration; shell commands run with Wincode's process privileges. Recheck File Versions before coding-tool mutations.";
 
 /**
- * The generic catalog description used by the approval panel and the shared
- * tool registry. The model-facing description is composed per platform by
+ * The generic catalog description used by the shared tool registry. The
+ * model-facing description is composed per platform by
  * {@link composeShellToolDescription} so the Agent knows which syntax to write.
  */
-export const shellToolDescription = `Run a bounded shell command on the user's machine. Shell runs permissively by default: harmless commands like pwd, ls, and git status execute without approval. ${SHELL_TOOL_BOUNDS_DESCRIPTION}`;
+export const shellToolDescription = `Run a bounded shell command on the user's machine. ${SHELL_TOOL_BOUNDS_DESCRIPTION}`;
 
 export const composeShellToolDescription = (
 	platform: ShellPlatform,

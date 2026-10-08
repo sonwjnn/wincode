@@ -21,7 +21,7 @@ export type ToolFamilyAdapter<
 > = Readonly<{
 	/** Declares the family-specific policy adapter required by this provider. */
 	policyCategory: Category;
-	/** Resolves tools through this family's execution and permission boundary. */
+	/** Resolves tools through this family's execution behavior. */
 	resolve: (
 		context: ProviderContext
 	) => readonly ResolvedTool[] | Promise<readonly ResolvedTool[]>;
@@ -34,11 +34,11 @@ export type ToolProviderRegistration<
 > = Readonly<{
 	/** Stable identity used for diagnostics and duplicate checks. */
 	id: string;
-	/** The adapter category whose existing execution policy must be preserved. */
+	/** The family whose existing execution behavior must be preserved. */
 	policyCategory: Category;
 	/** Projects the turn context onto only this provider's capabilities. */
 	selectContext: (context: Context) => ProviderContext;
-	/** Required family adapter matching the declared policy category. */
+	/** Required family adapter matching the declared tool family. */
 	adapter: ToolFamilyAdapter<ProviderContext, Category>;
 }>;
 
@@ -141,8 +141,7 @@ const validateProvider = <
 /**
  * Creates the application-owned native tool host. Native providers such as
  * coding, shell, and Skill activation join one resolver. Bundled and
- * file-loaded Plugins use the public PluginRuntime separately. Tool Gate
- * decisions remain inside the family adapters and are evaluated per call.
+ * file-loaded Plugins use the public PluginRuntime separately.
  */
 export const createApplicationToolRegistry = <
 	Context,

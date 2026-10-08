@@ -88,7 +88,7 @@ metadata, then prompt-config refs. _Avoid_: chat config, latest config
 ## Session Execution
 
 **Stateful Agent**:
-The in-memory runtime of one loaded conversation, including a delegated conversation, across multiple Agent Turns. It can keep running without an open UI, while an idle conversation can be unloaded and later restored from durable history. It owns live conversation state, tool execution, lifecycle events, approval settlement, the transient FIFO of opaque Queued Submissions, and input scheduling. At an explicit idle continuation it selects committed Steering Messages, then Delegation Reports, then Queued Submissions; enqueueing alone never starts a turn. Durable history, composition, attachment preparation, and coding-specific policy remain outside it. _Avoid_: one Agent Turn, Session Store
+The in-memory runtime of one loaded conversation, including a delegated conversation, across multiple Agent Turns. It can keep running without an open UI, while an idle conversation can be unloaded and later restored from durable history. It owns live conversation state, tool execution, lifecycle events, the transient FIFO of opaque Queued Submissions, and input scheduling. At an explicit idle continuation it selects committed Steering Messages, then Delegation Reports, then Queued Submissions; enqueueing alone never starts a turn. Durable history, composition, attachment preparation, and coding-specific policy remain outside it. _Avoid_: one Agent Turn, Session Store
 
 **Delegated Conversation**:
 A separately identified, durable Session created for a Subagent's delegated work, linked to its parent Session and Tool Call. It can continue without a visible UI, be opened to observe its live execution, and accept the user's Submissions through its own Stateful Agent like a parent Session; a successful delegated task is reported only through an acknowledged `submit_result`. _Avoid_: branch of the parent's transcript, transient Subagent execution
@@ -118,7 +118,7 @@ The application-level composition that opens one Session and connects its Statef
 The single live authority to write one Session ID, even when both delegation and a user submit input to it. Multiple callers may send commands through that authority, but another writable runtime for the same Session ID cannot run concurrently. _Avoid_: one input source, Session Lease, workspace writer
 
 **Session Command**:
-A request to change a Session, including prompting, steering, interruption, approval settlement, compaction, or overflow recovery. The Stateful Agent orders live execution; the coding application coordinates maintenance and persistence with it. _Avoid_: event, background task
+A request to change a Session, including prompting, steering, interruption, compaction, or overflow recovery. The Stateful Agent orders live execution; the coding application coordinates maintenance and persistence with it. _Avoid_: event, background task
 
 **Compaction Intent**:
 What one compaction request asks for: its trigger and its focus, as distinct from the messages it runs over and the Model Target selection its summary is generated with. The Session Compaction module admits a request that carries the intent already in flight and refuses one that carries another, so no caller is answered with another caller's entry while two threshold passes, which share an intent, still meet in one operation. _Avoid_: compaction request, compaction options
@@ -126,11 +126,8 @@ What one compaction request asks for: its trigger and its focus, as distinct fro
 **Overflow Recovery**:
 The one recovery a context-overflow refusal buys for the Agent Turn it ended: the Agent Session compacts eligible history through that turn's original user message, sanitizes the interrupted turn, then continues the resulting Session Context without appending another user message. The attempt stays keyed to the original message, so its continuation cannot chain another recovery and no new send can reset it. _Avoid_: retry, resend
 
-**Approval Request**:
-One Tool Permission `ask` awaiting a decision. The Stateful Agent owns it through exactly one settlement; a request from a background child remains associated with that child Session and is signaled across sessions so a user can find and decide it. The coding application owns permission policy and presentation. _Avoid_: global approval without Session identity, approval prompt
-
 **Live Session Snapshot**:
-The immutable application-facing view of one Stateful Agent's current conversation and transient execution state, including the core-owned uncommitted Submission queue, committed Steering Message status, and approvals. Observers receive it from the live owner, never from persisted history alone. _Avoid_: Session Snapshot, Stored Session History, state dump
+The immutable application-facing view of one Stateful Agent's current conversation and transient execution state, including the core-owned uncommitted Submission queue and committed Steering Message status. Observers receive it from the live owner, never from persisted history alone. _Avoid_: Session Snapshot, Stored Session History, state dump
 
 **Stored Session History**:
 The committed Session Records and compactions read from storage without opening a Session Host, including the durable status needed to reconcile accepted-but-unread Steering Messages. It excludes in-flight output and transient state, and reading it grants no authority to run Session Commands. _Avoid_: Live Session Snapshot, live transcript, session owner
@@ -176,7 +173,7 @@ The resumption of an idle Agent Session without a caller-supplied Submission. Th
 ## Language
 
 **Project trust**:
-A user decision about whether Wincode may load protected resources supplied by a project. It is distinct from permission to invoke an Agent Tool. _Avoid_: Tool approval, project permission
+A user-owned decision that permits Wincode to load protected configuration and resources supplied by a project. It authorizes resource loading, not process isolation. _Avoid_: project permission, sandbox
 
 **Diagnostic Log**:
 A persistent, non-user-facing record of Wincode runtime diagnostics. It is distinct from Execution Mode output, CLI Command output, and the JSON Event Stream. _Avoid_: CLI output, protocol event, session transcript
@@ -188,7 +185,7 @@ The user-facing command-line entry point for the Coding-Agent Application. A bar
 The user-facing Wincode application that runs an Agent through Interactive, Print, JSON, or RPC Mode. It owns application lifetime and active conversation runtimes independently of the currently displayed view; Stateful Agents own their respective live state. _Avoid_: Wincode TUI, CLI package, agent core
 
 **Plugin**:
-A Coding-Agent module that contributes executable behavior through the public PluginAPI. A Plugin may be built into Wincode or explicitly loaded from a user-chosen file; registration alone does not expose a tool to an Agent or grant Tool Permission. _Avoid_: extension, Skill, MCP Server
+A Coding-Agent module that contributes executable behavior through the public PluginAPI. A Plugin may be built into Wincode or explicitly loaded from a user-chosen file; registration alone does not expose a tool to an Agent. _Avoid_: extension, Skill, MCP Server
 
 **PluginAPI**:
 The common registration contract through which built-in and file-loaded Plugins contribute tools, commands, and lifecycle behavior. A Plugin's Identifier owns its contributions across factory, Session, and Agent Turn scopes. _Avoid_: built-in-only registry, file-only extension API
@@ -197,7 +194,7 @@ The common registration contract through which built-in and file-loaded Plugins 
 A Plugin bundled with Wincode and registered by the application as part of its shipped behavior. _Avoid_: file-loaded Plugin
 
 **File-loaded Plugin**:
-A Plugin whose module Wincode loads only from an explicitly enabled file path; it runs with Wincode's process permissions. _Avoid_: extension
+A Plugin whose module Wincode loads only from an explicitly enabled file path; it runs with Wincode's process privileges. _Avoid_: extension
 
 **MCP Plugin**:
 The built-in Plugin that connects configured MCP Servers and adapts their tools to the Agent tool contract. An MCP Server is a managed resource, not a Plugin. _Avoid_: MCP server plugin
@@ -228,9 +225,6 @@ The Agent, Model, Effort, and Reasoning Mode resolved for one Print Mode or JSON
 
 **JSON Event Stream**:
 The ordered public Agent Turn events emitted by JSON Mode as JSONL, including identified child-Session events and terminal outcomes for delegated work. It uses the same event vocabulary as RPC Mode but has no JSON-RPC envelopes, commands, or state notifications. _Avoid_: raw Live Session Snapshot, JSON-RPC stream
-
-**Non-Interactive Approval**:
-A Tool Permission `ask` encountered by Print Mode or JSON Mode. Without explicit auto-approval it fails closed rather than waiting; `--auto` may allow ordinary asks, while safety asks and explicit denies remain blocked. _Avoid_: unattended approval, automatic permission
 
 **RPC Mode**:
 A long-lived JSON-RPC 2.0/JSONL Execution Mode with one active Session as the default command and realtime event target. Switching the active Session changes the client's view without stopping other running conversations; a child can be opened and used like a parent, while input/steering semantics remain the same as Interactive Mode. _Avoid_: JSON Mode, one-runtime-per-process RPC
@@ -322,23 +316,23 @@ A user-defined prompt template whose invocation expands once into Submission con
 A user-facing command supplied by a Plugin. It invokes executable behavior from an explicit Interactive Mode command selection rather than expanding into a Submission. _Avoid_: Custom Command, Agent tool
 
 **Skill**:
-A named set of instructions that augments an Agent for one Agent Turn. Skill context is untrusted and turn-scoped; explicit Skill instructions have higher authority than Agent-loaded Skill instructions, but neither can override Wincode safety, Tool Permission, direct user intent, or Project Instructions. A Skill is instruction content, not a Plugin. _Avoid_: Agent, session mode, Custom Command
+A named set of instructions that augments an Agent for one Agent Turn. Skill context is untrusted and turn-scoped; explicit Skill instructions have higher authority than Agent-loaded Skill instructions, but neither can override Wincode safety, direct user intent, or Project Instructions. A Skill is instruction content, not a Plugin. _Avoid_: Agent, session mode, Custom Command
 
 **Skill Activation**:
 The selection of a Skill for the current user turn. Activation does not persist to later turns. _Avoid_: Skill installation, session Skill
 
 **Project Instruction**:
-Repository-provided guidance associated with the active workspace and loaded for an Agent Turn with source provenance. Farther-ancestor sources precede nearer sources, and the nearer source takes precedence. Project Instructions rank below active Agent instructions and above Skill instructions; they cannot override Wincode safety, Tool Permission, or direct user intent. _Avoid_: treating repository text as unrestricted authority
+Repository-provided guidance associated with the active workspace and loaded for an Agent Turn with source provenance. Farther-ancestor sources precede nearer sources, and the nearer source takes precedence. Project Instructions rank below active Agent instructions and above Skill instructions; they cannot override Wincode safety or direct user intent. _Avoid_: treating repository text as unrestricted authority
 
 **Instruction Source Precedence**:
 The ordering used to combine multiple Project Instruction sources: a farther ancestor precedes a nearer source, and the nearer source takes precedence. It does not determine authority between Project Instructions and other instruction categories.
 
 **Instruction Authority**:
-The fixed precedence between instruction categories: Wincode safety and Tool Permission, direct user intent, active Agent instructions, Project Instructions, explicit Skill instructions, then Agent-loaded Skill instructions. Lower-authority context cannot override higher-authority context.
+The fixed precedence between instruction categories: Wincode safety, direct user intent, active Agent instructions, Project Instructions, explicit Skill instructions, then Agent-loaded Skill instructions. Lower-authority context cannot override higher-authority context.
 
 **Agent**:
 A named AI behavior that can lead a session, execute a delegated task, or
-both. Its role and tool permissions are separate concerns. _Avoid_: Coding Mode,
+both. Its role and tool selection are separate concerns. _Avoid_: Coding Mode,
 persona
 
 **Agent Turn**:
@@ -359,7 +353,7 @@ One request by an Agent to invoke a tool, together with its resulting completion
 rejection, or failure. _Avoid_: command, action
 
 **Agent Identifier**:
-The stable identity of one Agent, used to select and correlate that Agent across configuration, permissions, and Agent Turns. It is distinct from an Agent Turn and from a display label.
+The stable identity of one Agent, used to select and correlate that Agent across configuration, tool selection, and Agent Turns. It is distinct from an Agent Turn and from a display label.
 _Avoid_: display name
 
 **Agent Turn Identifier**:
@@ -367,7 +361,7 @@ The identity of one Agent Turn, used to correlate its live execution and emitted
 _Avoid_: Session Identifier
 
 **Tool Call Identifier**:
-The identity of one Tool Call within an Agent Turn, used to connect its request, outcome, approval, event, and durable result. It is distinct from the tool name.
+The identity of one Tool Call within an Agent Turn, used to connect its request, outcome, event, and durable result. It is distinct from the tool name.
 _Avoid_: tool name
 
 **Model Step Identifier**:
@@ -443,8 +437,8 @@ user agent
 
 **Agent Role**:
 An Agent's eligibility: `primary`, `subagent`, or `all`. The `all` role means the
-Agent is eligible for both primary and delegated work; it does not grant full
-tool permissions. _Avoid_: Agent mode, access level, full permission
+Agent is eligible for both primary and delegated work; it does not change which
+tools are selected. _Avoid_: Agent mode, access level
 
 **Primary Agent**:
 An Agent eligible to lead the active session and be selected by the user.
@@ -455,67 +449,47 @@ An Agent eligible to execute work delegated by another Agent. Agents with the
 `subagent` or `all` role are Subagents. _Avoid_: Child agent, secondary agent
 
 **Capability Ceiling**:
-An optional restriction on the tools and permissions a new Agent Session may use, supplied by Agent configuration or a parent Plugin and fixed when that Session is created. It intersects with the child's own configuration rather than replacing the Tool Gate's per-call decision. _Avoid_: inherited permission, parent policy
+An optional upper bound on the tools a new delegated Session may use, supplied by Agent configuration or a parent Plugin and fixed when that Session is created. It restricts the child's own tool selection. _Avoid_: delegated authorization, parent policy
 
-**Tool Permission**:
-The effective decision governing whether an Agent may invoke a tool for a
-resource: `allow`, `ask`, or `deny`. Tool Permission is independent of Agent
-Role. _Avoid_: Agent Role, tool availability
-
-**Permission Rule**:
-An ordered policy entry that matches a tool action and optionally a resource
-pattern to produce a Tool Permission. When multiple rules match, the later rule
-wins. _Avoid_: ACL entry, tool toggle
-
-**Tool Gate**:
-The runtime enforcement of Tool Permission for one tool call. The gate
-evaluates the effective decision against the call's actual resource, applies
-temporary grants and auto approval, and registers a surviving `ask` as an
-Approval Request the Agent Session settles through the panel the session
-projects. It owns the manual-approval safety ceiling at execution time: a
-remembered grant is never recorded for a safety ask. Coding tools, shell
-(per-node evaluation with a doom_loop repeat guard, ADR-0008), MCP tools,
-Plugin Tools, and
-Skill Activation all resolve through the one gate, and the gate owns the
-deny/reject wording each family emits. _Avoid_:
-approval service, permission middleware
+**Tool Selection**:
+The set of tools exposed to an Agent for a turn. Selection determines which tools the Agent can choose; it is distinct from their input validation, resource limits, and process privileges. _Avoid_: Plugin enablement, resource profile
 
 **Plugin Tool**:
-An Agent-callable operation supplied by a built-in or file-loaded Plugin. Registration makes it eligible for an Agent Turn; the Tool Gate evaluates its source-specific Tool Permission when called, with file-loaded Plugin Tools defaulting to `ask`. _Avoid_: Plugin Command, automatically approved tool
+An Agent-callable operation supplied by a built-in or file-loaded Plugin. Registration makes it eligible for selection in an Agent Turn; file-loaded Plugin code runs with Wincode's process privileges. _Avoid_: Plugin Command, Plugin Resource
 
 **Coding Tool Catalog**:
 The set of coding tools the application knows how to describe and execute.
-Catalog membership does not make a tool visible to an Agent or grant Tool
-Permission; those are separate decisions. _Avoid_: Runtime Tool Registry,
-permission allowlist
+Agent configuration selects which catalog tools are exposed for a turn. _Avoid_:
+Runtime Tool Registry, permission allowlist
 
 **Runtime Tool Registry**:
 The definition-only collection of Tool Definitions recognized by the Agent
-Runtime; it carries no executor or Tool Permission decision. The Coding-Agent
-Application composes selected catalog tools as Resolved Tools through the Tool
-Gate for each Agent Turn. _Avoid_: Coding Tool Catalog, executable registry
+Runtime; it carries no executor. The Coding-Agent Application composes selected
+catalog tools as Resolved Tools for each Agent Turn. _Avoid_: Coding Tool Catalog,
+executable registry
 
 **Application Tool Registry**:
 The application composition point that selects registered Plugin Tools and
 native capabilities, such as Skill Activation, for an Agent Turn. Membership
-alone exposes no tool to an Agent or grants Tool Permission; each tool retains
-its source-specific Tool Gate path. _Avoid_: Runtime Tool Registry, PluginAPI
+alone does not expose a tool to the Agent; turn composition applies the relevant
+selection and capability ceiling. _Avoid_: Runtime Tool Registry, PluginAPI
 
 **Resolved Tool**:
-A tool definition whose executable path has been composed through the Tool Gate
-for an Agent Turn. Resolution makes a tool available; Tool Permission is still
-evaluated against each actual Tool Call. _Avoid_: approved tool, raw executor
+A tool definition and executable path composed for an Agent Turn. A Resolved Tool
+is available to the Agent and executes when selected, subject to input validation,
+resource limits, and the process's operating-system privileges. _Avoid_: approved
+tool, raw executor
 
 ## Tool Resource Profile
 
 A named execution budget for local coding tools. The standard profile is the
 normal bounded posture; elevated profiles permit larger bounded inspection,
-search, execution, and preview results and require a Tool Gate approval.
+search, execution, and preview results without changing process privileges.
 
 ## Prompt Composition
 
 **Prompt Composition**:
-The domain process that composes provider-neutral System Prompt content for one Agent Turn from resolved Agent guidance, Project Instructions, environment, and effective Tool Permission. It is not the System Prompt artifact or the metadata describing its composition.
+The domain process that composes provider-neutral System Prompt content for one Agent Turn from resolved Agent guidance, Project Instructions, environment, and selected tool descriptions. It is not the System Prompt artifact or the metadata describing its composition.
 _Avoid_: Prompt Assembly, prompt text, system message
 
 **System Prompt**:

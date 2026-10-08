@@ -86,7 +86,6 @@ test("valid local and remote servers resolve defaults, env, and phase timeouts",
 		disabled: false,
 		environment: { TOKEN: "resolved-token" },
 		name: "local",
-		permission: "ask",
 		timeout: DEFAULT_MCP_TIMEOUTS,
 		type: "local",
 	});
@@ -94,14 +93,45 @@ test("valid local and remote servers resolve defaults, env, and phase timeouts",
 		disabled: false,
 		headers: { Authorization: "resolved-token" },
 		name: "remote",
-		permission: "ask",
 		timeout: { ...DEFAULT_MCP_TIMEOUTS, startup: 5000 },
 		type: "remote",
 		url: "https://mcp.example.test/tools?q=1",
 	});
 });
 
-test("project local MCP commands are rejected even when disabled", () => {
+test("trusted project config can define local commands and remote endpoints", () => {
+	const result = resolve(
+		{
+			mcp: {
+				local: {
+					command: ["bun", "run", "server.ts"],
+					environment: { TOKEN: "{env:PROJECT_TOKEN}" },
+					type: "local",
+				},
+				remote: {
+					headers: { Authorization: "{env:PROJECT_TOKEN}" },
+					type: "remote",
+					url: "https://project.example.test/mcp",
+				},
+			},
+		},
+		{ env: { PROJECT_TOKEN: "project-secret" } }
+	);
+
+	expect(result.diagnostics).toEqual([]);
+	expect(result.servers.local).toMatchObject({
+		command: ["bun", "run", "server.ts"],
+		environment: { TOKEN: "project-secret" },
+		type: "local",
+	});
+	expect(result.servers.remote).toMatchObject({
+		headers: { Authorization: "project-secret" },
+		type: "remote",
+		url: "https://project.example.test/mcp",
+	});
+});
+
+test("trusted project local commands resolve with their configured enabled state", () => {
 	const result = resolve({
 		mcp: {
 			active: {
@@ -116,30 +146,19 @@ test("project local MCP commands are rejected even when disabled", () => {
 		},
 	});
 
-	expect(result.servers).toEqual({});
-	expect(result.invalidServers).toMatchObject({
-		active: { name: "active", transport: "local" },
-		disabled: { name: "disabled", transport: "local" },
+	expect(result.diagnostics).toEqual([]);
+	expect(result.servers.active).toMatchObject({
+		command: ["bun", "run", "server.ts"],
+		disabled: false,
+		type: "local",
 	});
-	expect(result.diagnostics).toEqual(
-		expect.arrayContaining([
-			expect.objectContaining({
-				code: "project-local-server",
-				message: expect.stringContaining("Project configuration"),
-				path: `${projectOrigin.path}:mcp.active.type`,
-				scope: "project",
-				serverName: "active",
-			}),
-			expect.objectContaining({
-				code: "project-local-server",
-				path: `${projectOrigin.path}:mcp.disabled.type`,
-				serverName: "disabled",
-			}),
-		])
-	);
+	expect(result.servers.disabled).toMatchObject({
+		disabled: true,
+		type: "local",
+	});
 });
 
-test("project remote headers cannot resolve environment secrets", () => {
+test("partial project headers are not merged with personal remote server credentials", () => {
 	const result = resolve(
 		{
 			mcp: {
@@ -187,14 +206,10 @@ test("project remote headers cannot resolve environment secrets", () => {
 	);
 
 	expect(result.servers).toEqual({});
-	expect(result.invalidServers?.remote).toMatchObject({
-		name: "remote",
-		transport: "remote",
-	});
 	expect(result.diagnostics).toContainEqual(
 		expect.objectContaining({
-			code: "project-remote-server",
-			path: `${projectOrigin.path}:mcp.remote.headers.Authorization`,
+			code: "invalid-server",
+			path: `${projectOrigin.path}:mcp.remote.type`,
 			scope: "project",
 			serverName: "remote",
 		})
@@ -202,7 +217,7 @@ test("project remote headers cannot resolve environment secrets", () => {
 	expect(JSON.stringify(result)).not.toContain("private-token");
 });
 
-test("project config cannot add literal authentication headers to a user endpoint", () => {
+test("partial project authentication headers are rejected rather than borrowing a user endpoint", () => {
 	const projectToken = "project-controlled-token";
 	const result = resolve(
 		{
@@ -251,8 +266,8 @@ test("project config cannot add literal authentication headers to a user endpoin
 	expect(result.servers).toEqual({});
 	expect(result.diagnostics).toContainEqual(
 		expect.objectContaining({
-			code: "project-remote-server",
-			path: `${projectOrigin.path}:mcp.remote.headers.Authorization`,
+			code: "invalid-server",
+			path: `${projectOrigin.path}:mcp.remote.type`,
 			scope: "project",
 			serverName: "remote",
 		})
@@ -260,7 +275,7 @@ test("project config cannot add literal authentication headers to a user endpoin
 	expect(JSON.stringify(result)).not.toContain(projectToken);
 });
 
-test("project-sourced Cookie headers are rejected on user remote servers", () => {
+test("partial project Cookie headers are rejected rather than borrowing a user endpoint", () => {
 	const projectCookie = "session=project-controlled";
 	const result = resolve(
 		{
@@ -304,8 +319,8 @@ test("project-sourced Cookie headers are rejected on user remote servers", () =>
 	expect(result.servers).toEqual({});
 	expect(result.diagnostics).toContainEqual(
 		expect.objectContaining({
-			code: "project-remote-server",
-			path: `${projectOrigin.path}:mcp.remote.headers.Cookie`,
+			code: "invalid-server",
+			path: `${projectOrigin.path}:mcp.remote.type`,
 			scope: "project",
 			serverName: "remote",
 		})
@@ -313,7 +328,7 @@ test("project-sourced Cookie headers are rejected on user remote servers", () =>
 	expect(JSON.stringify(result)).not.toContain(projectCookie);
 });
 
-test("project remote URL cannot redirect user-configured headers", () => {
+test("a partial project URL cannot be combined with user-configured headers", () => {
 	const result = resolve(
 		{
 			mcp: {
@@ -364,15 +379,15 @@ test("project remote URL cannot redirect user-configured headers", () => {
 	expect(result.servers).toEqual({});
 	expect(result.diagnostics).toContainEqual(
 		expect.objectContaining({
-			code: "project-remote-server",
-			path: `${projectOrigin.path}:mcp.remote.url`,
+			code: "invalid-server",
+			path: `${projectOrigin.path}:mcp.remote.type`,
 			scope: "project",
 			serverName: "remote",
 		})
 	);
 });
 
-test("project config cannot define or re-enable remote MCP servers", () => {
+test("project remote definitions and enabled-only overlays are supported", () => {
 	const projectServer = resolve({
 		mcp: {
 			remote: {
@@ -419,23 +434,21 @@ test("project config cannot define or re-enable remote MCP servers", () => {
 		}
 	);
 
-	expect(projectServer.servers).toEqual({});
-	expect(projectServer.diagnostics).toContainEqual(
-		expect.objectContaining({
-			code: "project-remote-server",
-			path: `${projectOrigin.path}:mcp.remote.type`,
-		})
-	);
-	expect(reenabledServer.servers).toEqual({});
-	expect(reenabledServer.diagnostics).toContainEqual(
-		expect.objectContaining({
-			code: "project-remote-server",
-			path: `${projectOrigin.path}:mcp.remote.enabled`,
-		})
-	);
+	expect(projectServer.diagnostics).toEqual([]);
+	expect(projectServer.servers.remote).toMatchObject({
+		disabled: false,
+		type: "remote",
+		url: "https://attacker.example.test/mcp",
+	});
+	expect(reenabledServer.diagnostics).toEqual([]);
+	expect(reenabledServer.servers.remote).toMatchObject({
+		disabled: false,
+		type: "remote",
+		url: "https://trusted.example.test/mcp",
+	});
 });
 
-test("unrelated project overlays preserve user-configured local servers", () => {
+test("a partial project timeout does not merge with personal local server details", () => {
 	const userDocument = {
 		mcp: { local: { command: ["bun", "run", "server.ts"], type: "local" } },
 	};
@@ -468,16 +481,18 @@ test("unrelated project overlays preserve user-configured local servers", () => 
 		}
 	);
 
-	expect(result.diagnostics).toEqual([]);
-	expect(result.servers.local).toMatchObject({
-		command: ["bun", "run", "server.ts"],
-		name: "local",
-		timeout: { ...DEFAULT_MCP_TIMEOUTS, startup: 5000 },
-		type: "local",
-	});
+	expect(result.servers).toEqual({});
+	expect(result.diagnostics).toContainEqual(
+		expect.objectContaining({
+			code: "invalid-server",
+			path: `${projectOrigin.path}:mcp.local.type`,
+			scope: "project",
+			serverName: "local",
+		})
+	);
 });
 
-test("project configuration cannot re-enable a user-disabled local server", () => {
+test("an enabled-only project overlay can re-enable a personal local server", () => {
 	const result = resolve(
 		{
 			mcp: {
@@ -518,15 +533,12 @@ test("project configuration cannot re-enable a user-disabled local server", () =
 		}
 	);
 
-	expect(result.servers).toEqual({});
-	expect(result.diagnostics).toContainEqual(
-		expect.objectContaining({
-			code: "project-local-server",
-			path: `${projectOrigin.path}:mcp.local.enabled`,
-			scope: "project",
-			serverName: "local",
-		})
-	);
+	expect(result.diagnostics).toEqual([]);
+	expect(result.servers.local).toMatchObject({
+		command: ["bun", "run", "server.ts"],
+		disabled: false,
+		type: "local",
+	});
 });
 
 test("relative, POSIX absolute, and Windows absolute working directories stay distinct", () => {
@@ -570,7 +582,7 @@ test("unknown fields and empty local commands fail closed per server", () => {
 	const result = resolveAsUser({
 		mcp: {
 			badCommand: { command: [], type: "local" },
-			misspelled: { command: ["server"], permisison: "allow", type: "local" },
+			unknownField: { command: ["server"], extraOption: true, type: "local" },
 			valid: { command: ["server"], type: "local" },
 		},
 	});
@@ -584,7 +596,7 @@ test("unknown fields and empty local commands fail closed per server", () => {
 			}),
 			expect.objectContaining({
 				code: "invalid-field",
-				serverName: "misspelled",
+				serverName: "unknownField",
 			}),
 		])
 	);
@@ -692,4 +704,165 @@ test("missing and unsupported server types are diagnosed instead of reaching the
 				serverName === "missingType" || serverName === "unsupportedType"
 		)
 	).toBe(true);
+});
+
+test("a project MCP definition replaces personal connection details without inheriting secrets", () => {
+	const userToken = "private-user-token";
+	const result = resolve(
+		{
+			mcp: {
+				shared: { type: "remote", url: "https://project.example.test/mcp" },
+			},
+		},
+		{
+			env: { USER_TOKEN: userToken },
+			snapshot: {
+				sourceFor: (field) =>
+					field[0] === "mcp" &&
+					field[1] === "shared" &&
+					(field[2] === "type" || field[2] === "url")
+						? projectOrigin
+						: userOrigin,
+				sources: [
+					{
+						...userOrigin,
+						document: {
+							mcp: {
+								shared: {
+									headers: { Authorization: "{env:USER_TOKEN}" },
+									type: "remote",
+									url: "https://personal.example.test/mcp",
+								},
+							},
+						},
+					},
+					{
+						...projectOrigin,
+						document: {
+							mcp: {
+								shared: {
+									type: "remote",
+									url: "https://project.example.test/mcp",
+								},
+							},
+						},
+					},
+				],
+			},
+		}
+	);
+
+	expect(result.servers.shared).toMatchObject({
+		name: "shared",
+		type: "remote",
+		url: "https://project.example.test/mcp",
+	});
+	expect(result.servers.shared).not.toHaveProperty("headers");
+	expect(JSON.stringify(result)).not.toContain(userToken);
+});
+
+test("an enabled-only project MCP entry overlays personal connection details", () => {
+	const result = resolve(
+		{
+			mcp: {
+				shared: {
+					enabled: true,
+					type: "remote",
+					url: "https://personal.example.test/mcp",
+				},
+			},
+		},
+		{
+			env: { USER_TOKEN: "private-user-token" },
+			snapshot: {
+				sourceFor: (field) =>
+					field[0] === "mcp" && field[1] === "shared" && field[2] === "enabled"
+						? projectOrigin
+						: userOrigin,
+				sources: [
+					{
+						...userOrigin,
+						document: {
+							mcp: {
+								shared: {
+									enabled: false,
+									headers: { Authorization: "{env:USER_TOKEN}" },
+									type: "remote",
+									url: "https://personal.example.test/mcp",
+								},
+							},
+						},
+					},
+					{
+						...projectOrigin,
+						document: { mcp: { shared: { enabled: true } } },
+					},
+				],
+			},
+		}
+	);
+
+	expect(result.diagnostics).toEqual([]);
+	expect(result.servers.shared).toMatchObject({
+		disabled: false,
+		headers: { Authorization: "private-user-token" },
+		type: "remote",
+		url: "https://personal.example.test/mcp",
+	});
+});
+
+test("a partial project MCP definition cannot borrow personal server fields or credentials", () => {
+	const userToken = "private-user-token";
+	const result = resolve(
+		{
+			mcp: {
+				shared: {
+					headers: { Authorization: "{env:USER_TOKEN}" },
+					url: "https://project.example.test/mcp",
+				},
+			},
+		},
+		{
+			env: { USER_TOKEN: userToken },
+			snapshot: {
+				sourceFor: (field) =>
+					field[0] === "mcp" && field[1] === "shared" && field[2] === "url"
+						? projectOrigin
+						: userOrigin,
+				sources: [
+					{
+						...userOrigin,
+						document: {
+							mcp: {
+								shared: {
+									headers: { Authorization: "{env:USER_TOKEN}" },
+									type: "remote",
+									url: "https://personal.example.test/mcp",
+								},
+							},
+						},
+					},
+					{
+						...projectOrigin,
+						document: {
+							mcp: { shared: { url: "https://project.example.test/mcp" } },
+						},
+					},
+				],
+			},
+		}
+	);
+
+	expect(result.servers).toEqual({});
+	expect(result.diagnostics).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				code: "invalid-server",
+				path: `${projectOrigin.path}:mcp.shared.type`,
+				scope: "project",
+				serverName: "shared",
+			}),
+		])
+	);
+	expect(JSON.stringify(result)).not.toContain(userToken);
 });

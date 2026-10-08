@@ -1,0 +1,7 @@
+# Trust Protected Project Resources and Select Tools, Not Calls
+
+Status: accepted; supersedes prior per-call Tool Permission and project-resource trust decisions where they conflict, including ADR-0005, ADR-0008, ADR-0036, ADR-0040, and ADR-0041.
+
+Project configuration can select executable Plugins and local MCP processes, so Wincode resolves protected project resources against user-owned trust decisions before loading them. Trust is tied to canonical project roots and applies directionally: a trusted ancestor covers descendants, but a trusted descendant does not authorize its ancestors. Interactive TTY sessions may prompt and persist a decision outside the project; non-interactive modes and SDK callers never prompt or infer trust. `AGENTS.md` remains contextual guidance and does not trigger trust. Project trust authorizes resource loading, not process isolation: trusted code runs with Wincode's operating-system privileges, and stronger containment requires OS-level isolation.
+
+Remove Wincode's per-call `allow`/`ask`/`deny` Tool Permission layer. Tool selection determines which model-visible tools an Agent can choose; capability ceilings may further restrict delegated Sessions, while resource profiles continue to bound coding-tool operations. Startup trust is the boundary for protected project resources, not a promise that an in-process approval dialog can sandbox individual tool calls.

@@ -11,7 +11,6 @@ export type CliAgentDefinition = AgentDefinition & {
 };
 
 export type ResolvedCodingAgent = ResolvedAgent & {
-	readonly requiresManualApproval?: boolean;
 	readonly visibleCodingTools: readonly CodingToolName[];
 };
 

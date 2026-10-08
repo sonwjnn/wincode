@@ -1,5 +1,5 @@
 import type { Stats } from "node:fs";
-import { lstat, readlink, realpath, stat } from "node:fs/promises";
+import { lstat, readlink, stat } from "node:fs/promises";
 import path from "node:path";
 import {
 	isObjectLike,
@@ -19,7 +19,6 @@ import {
 	type VersionedEditingContext,
 } from "../versioned/contracts";
 import {
-	expandExternalPath,
 	type FileState,
 	parseUtf8Content,
 	persistFileObservation,
@@ -33,9 +32,7 @@ import {
 	lineRangeForLines,
 } from "../versioned/model";
 import {
-	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
-	type WorkspacePolicy,
 	type WorkspaceTraversalEntry,
 } from "../workspace";
 import type { ReadInput, ReadOutput } from "./schema";
@@ -74,7 +71,6 @@ type ResolvedReadTarget =
 			symlinkTarget: string;
 	  };
 type ReadToolOptions = ResourceLimitOptions & {
-	allowExternalPath?: boolean;
 	versionedEditing?: VersionedEditingContext;
 };
 const hasErrorCode = (
@@ -107,25 +103,17 @@ const readResolvedTarget = async (
 };
 
 const readTextTarget = async (
-	inputPath: string,
-	allowExternalPath: boolean
+	inputPath: string
 ): Promise<ResolvedReadTarget> => {
-	const resolvePath = async (candidatePath: string): Promise<string> => {
-		const externalPath = expandExternalPath(candidatePath);
-		return allowExternalPath && path.isAbsolute(externalPath)
-			? realpath(externalPath)
-			: defaultWorkspaceSandbox.resolveExistingPath(candidatePath);
-	};
+	const resolvePath = async (candidatePath: string): Promise<string> =>
+		defaultWorkspaceSandbox.resolveExistingPath(candidatePath);
 	const readCandidateTarget = async (
 		candidatePath: string,
 		displayPath: string,
 		ranges?: LineRange[]
 	): Promise<ResolvedReadTarget | undefined> => {
-		const externalPath = expandExternalPath(candidatePath);
 		const literalPath =
-			allowExternalPath && path.isAbsolute(externalPath)
-				? externalPath
-				: await defaultWorkspaceSandbox.resolveNewPath(candidatePath);
+			await defaultWorkspaceSandbox.resolveNewPath(candidatePath);
 		const literalStat = await lstat(literalPath).catch(
 			(error: unknown): Stats | undefined => {
 				if (hasErrorCode(error, "ENOENT")) {
@@ -168,11 +156,7 @@ const readTextTarget = async (
 		}
 		missingLiteralError = error;
 	}
-	const externalInputPath = expandExternalPath(inputPath);
-	const literalPath =
-		allowExternalPath && path.isAbsolute(externalInputPath)
-			? externalInputPath
-			: await defaultWorkspaceSandbox.resolveNewPath(inputPath);
+	const literalPath = await defaultWorkspaceSandbox.resolveNewPath(inputPath);
 	let literalEntryExists = true;
 	try {
 		await lstat(literalPath);
@@ -400,30 +384,18 @@ const selectDirectoryLines = (
 };
 
 const traverseDirectory = async (
-	absolutePath: string,
-	allowExternalPath: boolean
+	absolutePath: string
 ): Promise<DirectoryTraversal> => {
-	let sandbox: WorkspacePolicy = defaultWorkspaceSandbox;
-	let traversalPath = absolutePath;
-	let rootPath: string;
-	try {
-		rootPath = await defaultWorkspaceSandbox.resolveExistingPath(absolutePath);
-	} catch (error) {
-		if (!(allowExternalPath && path.isAbsolute(absolutePath))) {
-			throw error;
-		}
-		sandbox = createWorkspaceSandbox(absolutePath);
-		rootPath = sandbox.root;
-		traversalPath = ".";
-	}
-	const traversal = await sandbox.traverse({
+	const rootPath =
+		await defaultWorkspaceSandbox.resolveExistingPath(absolutePath);
+	const traversal = await defaultWorkspaceSandbox.traverse({
 		allowIgnoredRoot: true,
 		hideDotfiles: true,
 		includeDirectories: true,
 		includeFiles: true,
 		includeSymlinks: true,
 		maxDepth: DIRECTORY_MAX_DEPTH,
-		path: traversalPath,
+		path: absolutePath,
 		applyGitignore: true,
 	});
 	return { entries: traversal.entries, rootPath };
@@ -563,10 +535,9 @@ const formatDirectoryContent = async (
 	absolutePath: string,
 	filePath: string,
 	ranges: readonly LineRange[] | undefined,
-	allowExternalPath: boolean,
 	maxOutputBytes: number
 ): Promise<NumberedContent> => {
-	const traversal = await traverseDirectory(absolutePath, allowExternalPath);
+	const traversal = await traverseDirectory(absolutePath);
 	const tree = buildDirectoryTree(traversal.rootPath, traversal.entries);
 	const outOfBoundsRange = ranges?.find(
 		(range) => range.startLine > tree.entryCount
@@ -803,7 +774,6 @@ const formatNonFileRead = async (
 	target: Exclude<ResolvedReadTarget, { kind: "file" }>,
 	input: ReadInput,
 	limits: ToolResourceLimits["read"],
-	allowExternalPath: boolean,
 	previousObservation: Awaited<
 		ReturnType<VersionedEditingContext["store"]["getLatestObservation"]>
 	>
@@ -830,7 +800,6 @@ const formatNonFileRead = async (
 			target.absolutePath,
 			target.path,
 			target.ranges,
-			allowExternalPath,
 			limits.maxDirectoryOutputBytes
 		);
 		return {
@@ -913,22 +882,13 @@ export const runReadTool = async (
 	if (artifact !== undefined) {
 		return artifact;
 	}
-	const target = await readTextTarget(
-		input.path,
-		options.allowExternalPath === true
-	);
+	const target = await readTextTarget(input.path);
 	const previousObservation = await context.store.getLatestObservation(
 		context.sessionId,
 		target.absolutePath
 	);
 	if (target.kind !== "file") {
-		return formatNonFileRead(
-			target,
-			input,
-			limits.read,
-			options.allowExternalPath === true,
-			previousObservation
-		);
+		return formatNonFileRead(target, input, limits.read, previousObservation);
 	}
 	try {
 		const persisted = await withFileMutationLock(

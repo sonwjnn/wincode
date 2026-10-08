@@ -36,7 +36,8 @@ describe("wincode executable", () => {
 		expect(result.exitCode).toBe(0);
 		expect(output(result.stdout)).toContain("Usage: wincode");
 		expect(output(result.stdout)).toContain("-m, --mode");
-		expect(output(result.stdout)).toContain("--auto");
+		expect(output(result.stdout)).toContain("--trust-project");
+		expect(output(result.stdout)).toContain("--no-trust-project");
 		expect(output(result.stderr)).toBe("");
 	});
 
@@ -93,7 +94,6 @@ describe("wincode executable", () => {
 			jsonrpc: "2.0",
 			result: {
 				capabilities: {
-					approvalResponses: true,
 					explicitSteering: true,
 					failedSubmissionRetry: true,
 					stateNotifications: true,

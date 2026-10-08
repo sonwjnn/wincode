@@ -87,7 +87,6 @@ type SessionToolState =
 	| "output-denied";
 
 type ToolPartFields = {
-	readonly approval?: unknown;
 	readonly errorText?: string;
 	readonly failure?: ToolFailureDetails;
 	readonly input?: unknown;

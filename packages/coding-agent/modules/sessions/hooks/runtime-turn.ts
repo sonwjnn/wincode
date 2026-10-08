@@ -73,8 +73,6 @@ import {
 	type VersionedEditingContext,
 } from "@/modules/tools";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
-import { evaluateGateWithAbort } from "../../tool-gate/evaluate-with-abort";
-import type { ToolGate } from "../../tool-gate/tool-gate";
 import type { SessionMessage } from "../message";
 import { expandSessionMessagesForModel } from "../message";
 import {
@@ -97,9 +95,6 @@ const BASE_AGENT_INSTRUCTIONS =
 const HOST_SHELL_PLATFORM: ShellPlatform = shellPlatformFromNode(
 	process.platform
 );
-
-const isSloppyCodingInput = (value: unknown): boolean =>
-	isObjectLike(value) && "mode" in value && value.mode === "sloppy";
 
 const runtimeToolDefinition = (
 	name: CodingToolName,
@@ -124,13 +119,13 @@ const runtimeToolDefinition = (
 
 const runtimeSkillToolDefinition: ToolDefinition = {
 	description:
-		"Load a permitted Skill for the current user turn by exact name.",
+		"Load an available Skill for the current user turn by exact name.",
 	inputSchema: skillToolInputSchema,
 	name: "skill",
 };
 
 /** The application Tool Registry of runtime-eligible tools. */
-const runCodingToolThroughGate = async ({
+const runCodingTool = async ({
 	input,
 	name,
 	options,
@@ -138,10 +133,6 @@ const runCodingToolThroughGate = async ({
 	input: unknown;
 	name: CodingToolName;
 	options: {
-		allowExternalPath: boolean;
-		allowSloppy?: boolean;
-		approvedExternalPaths?: readonly string[];
-		approvedWorkspacePaths?: readonly string[];
 		resourceLimits?: ToolResourceLimits;
 		signal?: AbortSignal;
 		versionedEditing?: VersionedEditingContext;
@@ -179,40 +170,18 @@ export type TurnToolResolver = (
 	context: TurnToolPluginContext
 ) => Promise<readonly ResolvedTool[]>;
 
-/**
- * The application Tool Gate plus its resource-profile resolver, supplied
- * together so every runtime-armed Tool is executable only through the Gate.
- */
-export type RuntimeGatedTooling = {
-	gate: ToolGate;
-	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
-	versionedEditing?: VersionedEditingContext;
-};
-type GatedCodingToolOptions = Readonly<{
-	agentId?: AgentId;
-	gate: ToolGate;
-	resolveResourceLimits?: (agentId?: AgentId) => Promise<ToolResourceLimits>;
+type CodingToolOptions = Readonly<{
+	name: CodingToolName;
 	resourceLimits?: ToolResourceLimits;
 	versionedEditing?: VersionedEditingContext;
-}> &
-	(
-		| Readonly<{
-				family: "coding";
-				name: Exclude<CodingToolName, "shell">;
-		  }>
-		| Readonly<{ family: "shell"; name: "shell" }>
-	);
+}>;
 
-/** Keeps coding and shell calls on their distinct Tool Gate family paths. */
-const createGatedCodingTool = ({
-	agentId,
-	family,
-	gate,
+/** Executes selected coding tools directly; resource limits remain in force. */
+const createCodingTool = ({
 	name,
-	resolveResourceLimits,
 	resourceLimits,
 	versionedEditing,
-}: GatedCodingToolOptions): ResolvedTool => ({
+}: CodingToolOptions): ResolvedTool => ({
 	definition: runtimeToolDefinition(
 		name,
 		HOST_SHELL_PLATFORM,
@@ -220,61 +189,23 @@ const createGatedCodingTool = ({
 		resourceLimits
 	),
 	execute: async (
-		{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
+		{ input }: { input: unknown; toolCallId: ToolCallId },
 		{ signal }: ToolExecutorOptions = {}
-	): Promise<ToolCallOutput> => {
-		const toolCall = { input, toolCallId };
-		const gateCall =
-			family === "coding"
-				? {
-						agentId,
-						family,
-						toolCall: { ...toolCall, toolName: name },
-					}
-				: { agentId, family, toolCall };
-		const outcome = await evaluateGateWithAbort(
-			() => gate.gate(gateCall),
-			signal
-		);
-		if (outcome.kind !== "allow") {
-			return {
-				errorText: outcome.errorText ?? "Tool call was blocked",
-				type: "failure",
-			};
-		}
-		const approvedInput = outcome.input ?? input;
-		return runCodingToolThroughGate({
-			input: approvedInput,
+	): Promise<ToolCallOutput> =>
+		runCodingTool({
+			input,
 			name,
 			options: {
-				allowExternalPath: !isUndefined(outcome.input),
-				allowSloppy: isSloppyCodingInput(approvedInput),
-				...omitUndefined({
-					approvedWorkspacePaths: outcome.approvedWorkspacePaths,
-					approvedExternalPaths: outcome.approvedExternalPaths,
-					allowCrossSession:
-						outcome.approvedCrossSession === true ? true : undefined,
-					resourceLimits: isUndefined(resolveResourceLimits)
-						? undefined
-						: await resolveResourceLimits(agentId),
-				}),
+				...omitUndefined({ resourceLimits }),
 				signal,
 				versionedEditing,
 			},
-		});
-	},
+		}),
 });
 
-/**
- * Resolves visible coding tools with actual-call Tool Gate evaluation before
- * the runner executes. Aborts short-circuit pending approvals; the runtime
- * drops any outcome belonging to an aborted turn.
- */
+/** Resolves the selected coding tools with their captured resource limits. */
 const createCodingTools = ({
-	agentId,
 	agentTools,
-	gate,
-	resolveResourceLimits,
 	resourceLimits,
 	versionedEditing,
 }: CodingToolProviderContext): readonly ResolvedTool[] =>
@@ -283,15 +214,7 @@ const createCodingTools = ({
 			(name): name is Exclude<CodingToolName, "shell"> => name !== "shell"
 		)
 		.map((name) =>
-			createGatedCodingTool({
-				agentId,
-				family: "coding",
-				gate,
-				name,
-				resolveResourceLimits,
-				resourceLimits,
-				versionedEditing,
-			})
+			createCodingTool({ name, resourceLimits, versionedEditing })
 		);
 
 const createShellTools = (
@@ -299,12 +222,8 @@ const createShellTools = (
 ): readonly ResolvedTool[] =>
 	context.agentTools.includes("shell")
 		? [
-				createGatedCodingTool({
-					agentId: context.agentId,
-					family: "shell",
-					gate: context.gate,
+				createCodingTool({
 					name: "shell",
-					resolveResourceLimits: context.resolveResourceLimits,
 					resourceLimits: context.resourceLimits,
 					versionedEditing: context.versionedEditing,
 				}),
@@ -312,8 +231,6 @@ const createShellTools = (
 		: [];
 
 const createSkillTools = ({
-	agentId,
-	gate,
 	skillExecution,
 	skillTool,
 }: SkillToolProviderContext): readonly ResolvedTool[] => {
@@ -325,10 +242,12 @@ const createSkillTools = ({
 			...runtimeSkillToolDefinition,
 			description: skillTool.description,
 		},
-		execute: async (
-			{ input, toolCallId }: { input: unknown; toolCallId: ToolCallId },
-			{ signal }: ToolExecutorOptions = {}
-		): Promise<ToolCallOutput> => {
+		execute: async ({
+			input,
+		}: {
+			input: unknown;
+			toolCallId: ToolCallId;
+		}): Promise<ToolCallOutput> => {
 			const parsed = skillToolInputSchema.safeParse(input);
 			if (!parsed.success) {
 				return {
@@ -337,25 +256,6 @@ const createSkillTools = ({
 				};
 			}
 			const name = parsed.data.name;
-			const entry = skillExecution.catalog.entries.find(
-				({ name: entryName }) => entryName === name
-			);
-			const outcome = await evaluateGateWithAbort(
-				() =>
-					gate.gate({
-						agentId,
-						available: !isUndefined(entry),
-						description: entry?.description ?? `Activate Skill ${name}`,
-						family: "skill",
-						name,
-						toolCallId,
-					}),
-				signal
-			);
-			if (outcome.kind !== "allow") {
-				skillExecution.markRejected(name);
-				return { output: { name, status: "rejected" }, type: "success" };
-			}
 			const result = skillExecution.activate(name, "agent");
 			if (result.status === "loaded") {
 				const resourcePaths = await sampleSkillResources(
@@ -384,18 +284,13 @@ const createSkillTools = ({
 const selectCodingToolProviderContext = (
 	context: TurnToolPluginContext
 ): CodingToolProviderContext => ({
-	agentId: context.agentId,
 	agentTools: context.agentTools,
-	gate: context.gate,
-	resolveResourceLimits: context.resolveResourceLimits,
 	resourceLimits: context.resourceLimits,
 	versionedEditing: context.versionedEditing,
 });
 const selectSkillToolProviderContext = (
 	context: TurnToolPluginContext
 ): SkillToolProviderContext => ({
-	agentId: context.agentId,
-	gate: context.gate,
 	skillExecution: context.skillExecution,
 	skillTool: context.skillTool,
 });
@@ -441,14 +336,10 @@ const selectPluginToolProviderContext = (
 ): PluginToolProviderContext => ({
 	...(context.agentId === undefined ? {} : { agentId: context.agentId }),
 	existingToolNames: context.existingToolNames ?? [],
-	gate: context.gate,
 	...(context.pluginTools === undefined
 		? {}
 		: { pluginTools: context.pluginTools }),
 	...(context.signal === undefined ? {} : { signal: context.signal }),
-	...(context.resolvePluginPermission === undefined
-		? {}
-		: { resolvePermissionForAction: context.resolvePluginPermission }),
 	...(context.pluginRuntime === undefined
 		? {}
 		: { registerBackgroundWork: context.pluginRuntime.registerBackgroundWork }),

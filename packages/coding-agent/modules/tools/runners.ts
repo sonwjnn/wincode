@@ -12,9 +12,6 @@ export { runShellTool } from "./shell/runner";
 export { runWriteTool } from "./write/runner";
 
 export type CodingToolRunnerOptions = ResourceLimitOptions & {
-	allowCrossSession?: boolean;
-	allowExternalPath?: boolean;
-	allowSloppy?: boolean;
 	signal?: AbortSignal;
 	versionedEditing?: VersionedEditingContext;
 };

@@ -23,7 +23,6 @@ import type {
 	TextWriter,
 } from "../modules/application/modes/types";
 import { createApplicationPluginComposition } from "../modules/application/plugin-composition";
-import { createPermissionService } from "../modules/permissions/permission-service";
 import { loadPlugins } from "../modules/plugins/loader";
 
 import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
@@ -102,7 +101,6 @@ const connections = {
 const composeCapabilitiesDetailedFor =
 	(agentRegistry: AgentRegistry) =>
 	async ({
-		autoApproval,
 		configRuntime,
 		cwd,
 		pluginRuntime: providedPluginRuntime,
@@ -111,14 +109,6 @@ const composeCapabilitiesDetailedFor =
 		workspace: root,
 	}: OneShotCompositionInput) => {
 		const configStore = configRuntime?.configStore ?? createConfigStore();
-		if (configRuntime === undefined) {
-			await configStore.setValue(
-				root,
-				"global",
-				["permission", "plugin:subagents:delegate"],
-				"allow"
-			);
-		}
 		const composition = createApplicationPluginComposition();
 		const resolvedConfigRuntime = configRuntime ?? {
 			configStore,
@@ -136,10 +126,8 @@ const composeCapabilitiesDetailedFor =
 			}));
 		let sessionSdk: SessionSdkChildFactory | undefined;
 		const assembly = await createSessionCapabilities({
-			approvalMode: "non-interactive",
 			cwd,
 			databasePath: path.join(root, "sessions.sqlite"),
-			permissionService: createPermissionService({ autoApproval }),
 			pluginRuntime,
 			getSessionSdk: () => sessionSdk,
 			registry: agentRegistry,
@@ -211,7 +199,6 @@ const context = (
 	args: [],
 	cwd: workingDirectory,
 	invocation: {
-		auto: false,
 		mode,
 		...(prompt === undefined ? {} : { prompt }),
 		...(session === undefined ? {} : { session }),
@@ -385,10 +372,8 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	expect(stdout.text).toBe("E2E chat response");
 	expect(stderr.text).toBe("");
 	const verification = await createSessionCapabilities({
-		approvalMode: "non-interactive",
 		cwd: workspace,
 		databasePath: path.join(workspace, "sessions.sqlite"),
-		permissionService: createPermissionService(),
 		registry,
 		workspace,
 	});
@@ -439,7 +424,6 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	expect(overrideErrors.text).toBe("");
 	const finalVerification = (
 		await composeCapabilities({
-			autoApproval: false,
 			cwd: workspace,
 			workspace,
 		})
@@ -484,7 +468,6 @@ test("one-shot Effort selectors override configured and restored choices", async
 		expect(initialErrors.text).toBe("");
 		const firstVerification = (
 			await composeConfiguredReview({
-				autoApproval: false,
 				cwd: reasoningWorkspace,
 				workspace: reasoningWorkspace,
 			})
@@ -525,7 +508,6 @@ test("one-shot Effort selectors override configured and restored choices", async
 		expect(continuationErrors.text).toBe("");
 		const finalVerification = (
 			await composeConfiguredReview({
-				autoApproval: false,
 				cwd: reasoningWorkspace,
 				workspace: reasoningWorkspace,
 			})
@@ -585,7 +567,6 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 			fakeRecorder.requests.filter(({ kind }) => kind === "chat")
 		).toHaveLength(initialChatRequestCount);
 		const verification = await composeCapabilities({
-			autoApproval: false,
 			cwd: invalidWorkspace,
 			workspace: invalidWorkspace,
 		});
@@ -615,10 +596,8 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 	).toBe(0);
 
 	const lookup = await createSessionCapabilities({
-		approvalMode: "non-interactive",
 		cwd: workspace,
 		databasePath: path.join(workspace, "sessions.sqlite"),
-		permissionService: createPermissionService(),
 		registry,
 		workspace,
 	});
@@ -631,7 +610,6 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 
 	const holderAssembly = (
 		await composeCapabilities({
-			autoApproval: false,
 			cwd: workspace,
 			workspace,
 		})
@@ -750,7 +728,6 @@ test("one-shot input rejects empty submissions before creating a Session", async
 
 		expect(exitCode).toBe(1);
 		const verification = await composeCapabilities({
-			autoApproval: false,
 			cwd: emptyWorkspace,
 			workspace: emptyWorkspace,
 		});
@@ -789,7 +766,6 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 		expect(exitCode).toBe(1);
 		expect(stderr.text).toContain("Connect anthropic");
 		const verification = await composeCapabilities({
-			autoApproval: false,
 			cwd: disconnectedWorkspace,
 			workspace: disconnectedWorkspace,
 		});

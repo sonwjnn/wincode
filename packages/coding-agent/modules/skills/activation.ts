@@ -6,7 +6,6 @@ import { hashSkillBody } from "./hash";
 import type {
 	Skill,
 	SkillContext,
-	SkillPermissionDecision,
 	SkillToolDefinition,
 	SkillToolPart,
 } from "./types";
@@ -30,7 +29,7 @@ export type SkillCatalogDiagnostic = Readonly<{
 }>;
 
 /**
- * One permitted Skill in the permission-filtered catalog. The body is part of
+ * One available Skill in the turn catalog. The body is part of
  * the execution-turn snapshot: it is validated here and never re-read while
  * the execution is active.
  */
@@ -72,8 +71,7 @@ export type SkillActivationResult =
 			readonly status: "limit-reached";
 			readonly name: string;
 	  }
-	| { readonly snapshot: SkillActivationSnapshot; readonly status: "loaded" }
-	| { readonly name: string; readonly status: "rejected" };
+	| { readonly snapshot: SkillActivationSnapshot; readonly status: "loaded" };
 
 /**
  * The live `skill` tool result the model loop receives. Loaded results carry
@@ -95,7 +93,6 @@ export type SkillToolResult =
 			readonly name: string;
 			readonly status: "already-loaded";
 	  }
-	| { readonly name: string; readonly status: "rejected" }
 	| { readonly error: string; readonly name: string; readonly status: "failed" }
 	| {
 			readonly activeSkillNames: readonly string[];
@@ -122,33 +119,32 @@ export type SanitizedSkillToolResult = {
 export const sanitizeSkillToolResult = (
 	result: SkillToolResult
 ): SanitizedSkillToolResult => {
-	if (result.status === "loaded") {
-		return {
-			contentHash: result.contentHash,
-			name: result.name,
-			source: result.source,
-			status: "loaded",
-		};
+	switch (result.status) {
+		case "loaded":
+			return {
+				contentHash: result.contentHash,
+				name: result.name,
+				source: result.source,
+				status: "loaded",
+			};
+		case "already-loaded":
+			return {
+				contentHash: result.contentHash,
+				name: result.name,
+				status: "already-loaded",
+			};
+		case "failed":
+			return { error: result.error, name: result.name, status: "failed" };
+		case "limit-reached":
+			return {
+				activeSkillNames: result.activeSkillNames,
+				limit: result.limit,
+				name: result.name,
+				status: "limit-reached",
+			};
+		default:
+			throw new Error("Unexpected Skill activation result status.");
 	}
-	if (result.status === "already-loaded") {
-		return {
-			contentHash: result.contentHash,
-			name: result.name,
-			status: "already-loaded",
-		};
-	}
-	if (result.status === "failed") {
-		return { error: result.error, name: result.name, status: "failed" };
-	}
-	if (result.status === "limit-reached") {
-		return {
-			activeSkillNames: result.activeSkillNames,
-			limit: result.limit,
-			name: result.name,
-			status: "limit-reached",
-		};
-	}
-	return { name: result.name, status: "rejected" };
 };
 
 /**
@@ -206,15 +202,12 @@ export const sanitizeSkillToolPart = (part: SkillToolPart): SkillToolPart => {
 
 /**
  * Execution-scoped activation state for one user turn. It owns the
- * permission-filtered catalog snapshot, at most three distinct active Skills,
- * and the rejected set that prevents approval spam within the same execution.
+ * validated catalog snapshot and at most three distinct active Skills.
  */
 export type SkillExecution = {
 	readonly catalog: SkillCatalog;
-	/** Activates a Skill without a permission gate; callers must gate first. */
 	activate(name: string, source: SkillActivationSource): SkillActivationResult;
 	activeSnapshots(): readonly SkillActivationSnapshot[];
-	markRejected(name: string): void;
 	/** Caches the bundled resource sample on the active snapshot. */
 	setResourceSample(name: string, paths: readonly string[]): void;
 };
@@ -237,20 +230,13 @@ const entryFromSkill = (skill: Skill): SkillCatalogEntry => ({
 });
 
 /**
- * Builds the permission-filtered catalog. Denied Skills are hidden without a
- * diagnostic; invalid Skills are omitted with a diagnostic. An oversized
- * catalog disables the tool rather than truncating model-visible metadata.
+ * Builds a validated catalog. Invalid Skills are omitted with a diagnostic.
+ * An oversized catalog disables the tool rather than truncating metadata.
  */
-export const buildSkillCatalog = (
-	skills: readonly Skill[],
-	decideSkill: (name: string) => SkillPermissionDecision
-): SkillCatalog => {
+export const buildSkillCatalog = (skills: readonly Skill[]): SkillCatalog => {
 	const diagnostics: SkillCatalogDiagnostic[] = [];
 	const entries: SkillCatalogEntry[] = [];
 	for (const skill of skills) {
-		if (decideSkill(skill.name) === "deny") {
-			continue;
-		}
 		const nameValid =
 			skill.name.length <= MAX_SKILL_NAME_LENGTH && skill.name.length > 0;
 		const descriptionValid =
@@ -274,7 +260,7 @@ export const buildSkillCatalog = (
 	if (!toolEnabled) {
 		diagnostics.push({
 			code: "catalog-over-budget",
-			message: `The permission-filtered Skill catalog exceeds the ${MAX_SKILL_CATALOG_BYTES}-byte limit; the Skill tool is disabled for this turn`,
+			message: `The Skill catalog exceeds the ${MAX_SKILL_CATALOG_BYTES}-byte limit; the Skill tool is disabled for this turn`,
 		});
 	}
 	return { diagnostics, entries, toolEnabled };
@@ -313,14 +299,9 @@ export const createSkillSnapshot = (
 
 export function createSkillExecution(catalog: SkillCatalog): SkillExecution {
 	const active = new Map<string, SkillActivationSnapshot>();
-	const rejected = new Set<string>();
-
 	return {
 		catalog,
 		activate(name, source) {
-			if (rejected.has(name)) {
-				return { name, status: "rejected" };
-			}
 			const existing = active.get(name);
 			if (existing) {
 				return {
@@ -356,9 +337,6 @@ export function createSkillExecution(catalog: SkillCatalog): SkillExecution {
 		},
 		activeSnapshots() {
 			return [...active.values()];
-		},
-		markRejected(name) {
-			rejected.add(name);
 		},
 		setResourceSample(name, paths) {
 			const snapshot = active.get(name);

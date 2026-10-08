@@ -116,33 +116,9 @@ export function SessionSurface({
 	const [surface, setSurface] = useState<SessionSurfaceState>({
 		kind: "opening",
 	});
-	const [backgroundApprovalNotice, setBackgroundApprovalNotice] = useState<{
-		pendingApprovalCount: number;
-		sessionId: SessionId;
-	} | null>(null);
 	const refreshHistoryRef = useRef<(() => void) | null>(null);
 	const retryOpenRef = useRef<(() => void) | null>(null);
 	const viewHistoryRef = useRef<(() => void) | null>(null);
-	useEffect(() => {
-		const manager = capabilities.getSessionHostManager();
-		return manager.onEvent((event) => {
-			if (
-				event.type !== "session-approval-notice" ||
-				event.sessionId === sessionId
-			) {
-				return;
-			}
-			setBackgroundApprovalNotice(
-				event.pendingApprovalCount === 0
-					? (current) =>
-							current?.sessionId === event.sessionId ? null : current
-					: {
-							pendingApprovalCount: event.pendingApprovalCount,
-							sessionId: event.sessionId,
-						}
-			);
-		});
-	}, [capabilities, sessionId]);
 	const handleRefreshHistory = useCallback(() => {
 		refreshHistoryRef.current?.();
 	}, []);
@@ -371,14 +347,6 @@ export function SessionSurface({
 
 	return (
 		<box flexDirection="column" flexGrow={1} width="100%">
-			{backgroundApprovalNotice && (
-				<text fg={colors.warning}>
-					Session {backgroundApprovalNotice.sessionId} has{" "}
-					{backgroundApprovalNotice.pendingApprovalCount} pending approval
-					{backgroundApprovalNotice.pendingApprovalCount === 1 ? "" : "s"}. Open
-					that Session to review; its Agent is paused.
-				</text>
-			)}
 			<SessionView
 				host={surface.session.host}
 				initialSubmission={initialSubmission}

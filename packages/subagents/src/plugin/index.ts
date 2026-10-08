@@ -141,9 +141,6 @@ const registerSubagentsTools = (
 			inputSchema: tool.definition.inputSchema,
 			modelName: tool.definition.name,
 			name: tool.definition.name,
-			permissionAction:
-				tool.definition.name === "delegate" ? "delegate" : "submit_result",
-			permissionResource: "*",
 		});
 	}
 };

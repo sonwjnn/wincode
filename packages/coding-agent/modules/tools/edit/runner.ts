@@ -49,19 +49,19 @@ export const runEditTool = async (
 	};
 	if ("mode" in input && input.mode === "replace") {
 		ensureActiveMode("replace");
-		return runReplaceEdit(input, options, context, limits);
+		return runReplaceEdit(input, context, limits);
 	}
 	if ("mode" in input && input.mode === "sloppy") {
 		ensureActiveMode("sloppy");
-		return runSloppyEdit(input, options, context, limits);
+		return runSloppyEdit(input, context, limits);
 	}
 	if (
 		"mode" in input &&
 		(input.mode === "patch" || input.mode === "apply_patch")
 	) {
 		ensureActiveMode(input.mode);
-		return runMultiEdit(input, options, context, limits);
+		return runMultiEdit(input, context, limits);
 	}
 	ensureActiveMode("hashline");
-	return runHashlineEdit(input, options, context, limits);
+	return runHashlineEdit(input, context, limits);
 };

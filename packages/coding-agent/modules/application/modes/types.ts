@@ -10,7 +10,6 @@ export type TextWriter = {
 
 export type InvocationOptions = Readonly<{
 	agent?: string;
-	auto: boolean;
 	mode: ExecutionMode;
 	model?: string;
 	prompt?: string;
@@ -19,6 +18,7 @@ export type InvocationOptions = Readonly<{
 	effort?: string;
 	pluginPaths?: readonly string[];
 	disabledPlugins?: readonly string[];
+	projectTrustOverride?: "trust" | "deny";
 }>;
 
 export type ApplicationContext = Readonly<{

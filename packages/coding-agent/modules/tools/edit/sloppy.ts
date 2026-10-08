@@ -14,7 +14,6 @@ import type { EditInput, EditOutput } from "./schema";
 import {
 	applyLineHunk,
 	commitMutation,
-	type EditOptions,
 	resolveAuthorizedTextPath,
 	stateFromText,
 } from "./verified";
@@ -342,23 +341,11 @@ const resolveSloppyHunks = (
 
 export const runSloppyEdit = async (
 	input: Extract<EditInput, { mode: "sloppy" }>,
-	options: EditOptions,
 	context: VersionedEditingContext,
 	limits: ToolResourceLimits
 ): Promise<EditOutput> => {
-	if (options.allowSloppy !== true) {
-		throw new CodingToolError(
-			"sloppy-permission-required",
-			"Sloppy editing requires the separate edit:sloppy permission.",
-			{ recovery: { action: "grant-sloppy" } }
-		);
-	}
 	const patch = parseSloppyPatch(input.patch);
-	const resolvedPath = await resolveAuthorizedTextPath(
-		patch.path,
-		options,
-		options.allowExternalPath === true
-	);
+	const resolvedPath = await resolveAuthorizedTextPath(patch.path);
 	const state = await readVersionedFile(resolvedPath);
 	const oldObservation = await context.store.getObservation(
 		context.sessionId,

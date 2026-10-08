@@ -29,10 +29,6 @@ import {
 	ModelPricingProvider,
 	type ModelPricingTable,
 } from "@/modules/model-pricing";
-import {
-	createPermissionService,
-	PermissionServiceProvider,
-} from "@/modules/permissions";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
@@ -48,7 +44,6 @@ import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/sessi
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
-import { ApprovalPanelsProvider } from "@/shared/providers/approval/approval-panels-provider";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -138,10 +133,7 @@ const createTestConnections = (): Connections => {
 	return connections;
 };
 
-const createTestConfigStore = (
-	configDocument?: string,
-	globalConfigDocument?: string
-) => {
+const createTestConfigStore = (configDocument?: string) => {
 	const homeRoot = process.env.WINCODE_E2E_HOME ?? homedir();
 	const configRoot = join(homeRoot, ".config", "wincode");
 	const configPath = join(
@@ -149,16 +141,12 @@ const createTestConfigStore = (
 		".wincode",
 		"wincode.jsonc"
 	);
-	const globalConfigPath = join(configRoot, "wincode.jsonc");
 	return createConfigStore({
 		configRoot,
 		fs: {
 			readFile: async (path) => {
 				if (!isUndefined(configDocument) && path === configPath) {
 					return configDocument;
-				}
-				if (!isUndefined(globalConfigDocument) && path === globalConfigPath) {
-					return globalConfigDocument;
 				}
 				throw Object.assign(new Error("Test config is unavailable."), {
 					code: "ENOENT",
@@ -257,15 +245,12 @@ export const seedCompactionHistory = async (
 
 export const renderSession = async ({
 	configDocument,
-	globalConfigDocument,
 	initialSubmission,
 	pricing,
 	sessionId,
 }: {
 	/** JSONC served as the workspace config; the registry reads it on mount. */
 	readonly configDocument?: string;
-	/** Global user config for Tool Permission actions that may be allowed. */
-	readonly globalConfigDocument?: string;
 	/** Navigation state that starts the session's first turn. */
 	readonly initialSubmission?: SessionInitialSubmission;
 	readonly pricing: ModelPricingTable;
@@ -291,41 +276,32 @@ export const renderSession = async ({
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider
 				value={{
-					configStore: createTestConfigStore(
-						configDocument,
-						globalConfigDocument
-					),
+					configStore: createTestConfigStore(configDocument),
 					homeRoot,
 					workspace,
 				}}
 			>
 				<ToastProvider>
 					<ConnectionsProvider connections={createTestConnections()}>
-						<PermissionServiceProvider service={createPermissionService()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<ApprovalPanelsProvider>
-										<PromptConfigProvider initialModel={E2E_MODEL}>
-											<ModelPricingProvider pricing={pricing}>
-												<DialogProvider>
-													<RouterContextProvider router={router}>
-														<CommandControllerProvider>
-															<SessionSurface
-																initialSubmission={initialSubmission}
-																sessionId={sessionId}
-															/>
-															<RegistryReadyProbe
-																onReady={resolveRegistryReady}
-															/>
-														</CommandControllerProvider>
-													</RouterContextProvider>
-												</DialogProvider>
-											</ModelPricingProvider>
-										</PromptConfigProvider>
-									</ApprovalPanelsProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</PermissionServiceProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider initialModel={E2E_MODEL}>
+									<ModelPricingProvider pricing={pricing}>
+										<DialogProvider>
+											<RouterContextProvider router={router}>
+												<CommandControllerProvider>
+													<SessionSurface
+														initialSubmission={initialSubmission}
+														sessionId={sessionId}
+													/>
+													<RegistryReadyProbe onReady={resolveRegistryReady} />
+												</CommandControllerProvider>
+											</RouterContextProvider>
+										</DialogProvider>
+									</ModelPricingProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ConnectionsProvider>
 				</ToastProvider>
 			</ConfigProvider>
