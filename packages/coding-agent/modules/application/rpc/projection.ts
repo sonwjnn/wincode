@@ -632,21 +632,6 @@ export const projectExecution = (
 		: { reasoningMode: execution.reasoningMode }),
 });
 
-export const projectApproval = (
-	approval: LiveSessionSnapshot["approvals"][number],
-	wireApprovalId: string
-): Record<string, unknown> => ({
-	approvalId: wireApprovalId,
-	description: approval.request.description,
-	identity: safeJson(approval.request.identity),
-	input: safeJson(approval.request.input),
-	safety: approval.request.safety === true,
-	target: approval.target,
-	...(approval.request.toolCallId === undefined
-		? {}
-		: { toolCallId: approval.request.toolCallId }),
-});
-
 export const projectSteering = (
 	message: LiveSessionSnapshot["steeringMessages"][number]
 ): Record<string, unknown> => {
@@ -679,7 +664,6 @@ export const projectQueued = (
 ): Record<string, unknown> => projectQueuedSubmission(submission);
 
 export const operationalStatus = (input: {
-	approvals: number;
 	compacting: boolean;
 	turnActive: boolean;
 	waiting: boolean;
@@ -689,9 +673,6 @@ export const operationalStatus = (input: {
 	}
 	if (input.turnActive) {
 		return "running";
-	}
-	if (input.approvals > 0) {
-		return "waiting";
 	}
 	if (input.waiting) {
 		return "queued";

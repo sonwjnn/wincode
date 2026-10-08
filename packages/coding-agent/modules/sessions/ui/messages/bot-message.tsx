@@ -38,8 +38,6 @@ import {
 	sanitizeText,
 	stripControlCharacters,
 } from "@/shared/display-sanitize";
-import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
-import { ToolApprovalPanel } from "@/shared/providers/approval/ui/tool-approval-panel";
 import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
@@ -178,15 +176,11 @@ const getSkillFailedError = (part: ToolPart): string => {
 };
 
 /**
- * The failure reason for the fallback error line, or "" when none renders:
- * denied calls are owned by the audit line, and non-failed parts carry no
- * error. Live skill failures surface their reason through the sanitized
- * output result, every other failure through `errorText`.
+ * The failure reason for the fallback error line, or "" when none renders.
+ * Live skill failures surface their reason through the sanitized output result,
+ * every other failure through `errorText`.
  */
-const getFallbackError = (part: ToolPart, auditOwnsError: boolean): string => {
-	if (auditOwnsError) {
-		return "";
-	}
+const getFallbackError = (part: ToolPart): string => {
 	const skillError = getSkillFailedError(part);
 	if (part.state !== "output-error" && skillError === "") {
 		return "";
@@ -383,17 +377,7 @@ const ToolFailureMessage = ({
 
 function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	const { colors } = useTheme();
-	const { entries } = useApprovalPanels();
-	// The denied approval audit line (`✗`) already renders the failure reason
-	// for gated calls; every other failed call gets the fallback error line
-	// below. Either way the error text never renders on the tool row itself.
-	const auditOwnsError = entries.some(
-		(entry) =>
-			entry.id === part.toolCallId &&
-			(entry.resolution?.outcome === "aborted" ||
-				entry.resolution?.outcome === "rejected")
-	);
-	const fallbackError = getFallbackError(part, auditOwnsError);
+	const fallbackError = getFallbackError(part);
 	const isSkillCall =
 		part.type === "dynamic-tool" &&
 		part.toolName === "skill" &&
@@ -429,17 +413,6 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 				<EditDiffBlock agent={agent} part={part} />
 			) : null}
 			{isWritePreview ? <WriteBlock agent={agent} part={part} /> : null}
-			{isString(part.toolCallId) ? (
-				<ToolApprovalPanel
-					errorText={
-						part.state === "output-error"
-							? sanitizeText(formatUnknown(part.errorText))
-							: undefined
-					}
-					id={part.toolCallId}
-					mode="resolved-only"
-				/>
-			) : null}
 			{fallbackError === "" ? null : (
 				<ToolFailureMessage
 					colors={colors}
@@ -616,19 +589,15 @@ function ToolCallLine({
 
 type SkillActivityState =
 	| "already-loaded"
-	| "approval-requested"
 	| "failed"
 	| "limit-reached"
-	| "loaded"
-	| "rejected";
+	| "loaded";
 
 const SKILL_ACTIVITY_LABELS: Record<SkillActivityState, string> = {
 	"already-loaded": "already loaded",
-	"approval-requested": "requesting approval",
 	failed: "failed",
 	"limit-reached": "limit reached",
 	loaded: "loaded",
-	rejected: "rejected",
 };
 
 /**

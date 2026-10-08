@@ -4,7 +4,6 @@ import {
 	formatModelLabel,
 } from "@wincode/ai/models";
 import { agentLabelFromId, useAgentRegistry } from "@/modules/agents";
-import { AutoApprovalIndicator } from "@/modules/permissions";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { usePromptConfig } from "../context/prompt-config-provider";
@@ -41,7 +40,6 @@ export function StatusBar() {
 			<text attributes={TextAttributes.BOLD} fg={colors.secondary}>
 				{reasoningValue}
 			</text>
-			<AutoApprovalIndicator />
 		</box>
 	);
 }

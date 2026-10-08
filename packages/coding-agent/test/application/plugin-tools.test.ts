@@ -10,7 +10,6 @@ import {
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { createPluginTools } from "@/modules/plugins/tools";
-import type { ToolGate } from "@/modules/tool-gate/tool-gate";
 import { createConfigStore } from "@/shared/config/config-store";
 import { toolCallId } from "../support/identifiers";
 
@@ -34,7 +33,6 @@ const config = {
 const loadTool = async (
 	pathToPlugin = pluginPath
 ): Promise<{
-	gateCalls: () => number;
 	pluginRuntime: PluginRuntime;
 	tool: ResolvedTool;
 }> => {
@@ -42,13 +40,6 @@ const loadTool = async (
 		cliPaths: [pathToPlugin],
 		config,
 	});
-	let gateCalls = 0;
-	const gate: ToolGate = {
-		gate: async () => {
-			gateCalls += 1;
-			return { kind: "allow" };
-		},
-	};
 	const sessionId = "tool-test-session";
 	const agentId = agentIdSchema.parse("build");
 	const pluginTools = await pluginRuntime.resolveToolsForTurn({
@@ -60,8 +51,6 @@ const loadTool = async (
 	const tool = createPluginTools({
 		agentId,
 		existingToolNames: [],
-		gate,
-		permissionForAction: async () => ({ decision: "allow", safety: false }),
 		pluginTools,
 		registerBackgroundWork: (activeSessionId, work) =>
 			pluginRuntime.registerBackgroundWork(activeSessionId, work),
@@ -74,7 +63,6 @@ const loadTool = async (
 		);
 	}
 	return {
-		gateCalls: () => gateCalls,
 		pluginRuntime,
 		tool,
 	};
@@ -127,11 +115,6 @@ test("a colliding final Plugin tool name does not discard unrelated tools", asyn
 		const result = createPluginTools({
 			agentId: agentIdSchema.parse("build"),
 			existingToolNames: [collidingTool.name],
-			gate: { gate: async () => ({ kind: "allow" }) },
-			permissionForAction: async () => ({
-				decision: "allow",
-				safety: false,
-			}),
 			pluginTools: [collidingTool, unrelatedTool],
 			sessionId: "tool-test-session",
 			workspace,
@@ -145,8 +128,8 @@ test("a colliding final Plugin tool name does not discard unrelated tools", asyn
 	}
 });
 
-test("invalid Plugin Tool input fails before approval or handler execution", async () => {
-	const { gateCalls, pluginRuntime, tool } = await loadTool();
+test("invalid Plugin Tool input fails before handler execution", async () => {
+	const { pluginRuntime, tool } = await loadTool();
 	try {
 		const result = await executeTool(tool, { query: 12 });
 
@@ -154,14 +137,13 @@ test("invalid Plugin Tool input fails before approval or handler execution", asy
 			errorText: "Plugin Tool input did not match its declared schema.",
 			type: "failure",
 		});
-		expect(gateCalls()).toBe(0);
 	} finally {
 		await pluginRuntime.shutdown();
 	}
 });
 
 test("oversized Plugin Tool JSON is replaced with a bounded failure", async () => {
-	const { gateCalls, pluginRuntime, tool } = await loadTool();
+	const { pluginRuntime, tool } = await loadTool();
 	try {
 		const result = await executeTool(tool, { query: "x".repeat(64 * 1024) });
 
@@ -169,7 +151,6 @@ test("oversized Plugin Tool JSON is replaced with a bounded failure", async () =
 			errorText: "Plugin Tool output exceeded the 64 KiB limit.",
 			type: "failure",
 		});
-		expect(gateCalls()).toBe(1);
 	} finally {
 		await pluginRuntime.shutdown();
 	}
@@ -213,13 +194,12 @@ test("mutable Plugin Tool JSON is delivered as the bounded snapshot", async () =
 	}
 });
 
-test("JSON Schema Plugin inputs validate before the Tool Gate", async () => {
+test("JSON Schema Plugin inputs validate before handler execution", async () => {
 	const jsonSchemaPluginPath = path.resolve(
 		import.meta.dir,
 		"../fixtures/json-schema-plugin.ts"
 	);
-	const { gateCalls, pluginRuntime, tool } =
-		await loadTool(jsonSchemaPluginPath);
+	const { pluginRuntime, tool } = await loadTool(jsonSchemaPluginPath);
 	try {
 		const invalid = await executeTool(tool, { query: 12 });
 		const valid = await executeTool(tool, { query: "WCO-12" });
@@ -232,7 +212,6 @@ test("JSON Schema Plugin inputs validate before the Tool Gate", async () => {
 			output: { query: "WCO-12" },
 			type: "success",
 		});
-		expect(gateCalls()).toBe(1);
 	} finally {
 		await pluginRuntime.shutdown();
 	}

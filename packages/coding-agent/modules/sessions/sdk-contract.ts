@@ -1,6 +1,8 @@
 import type {
 	AgentId,
 	AgentTurnEvent,
+	AgentTurnId,
+	SessionMessageId,
 	SubmissionId,
 } from "@wincode/agent-core";
 import type {
@@ -8,13 +10,7 @@ import type {
 	Effort,
 	ReasoningMode,
 } from "@wincode/ai/models";
-import type { SessionId } from "@/shared/identifiers";
-import type {
-	LiveSessionSnapshot,
-	SessionContinuationOutcome,
-	SessionInterruptResult,
-	SessionSubmissionAdmission,
-} from "./agent-session/types";
+import type { SessionId } from "../../shared/identifiers";
 
 /** Model-visible tool names a child Session is permitted to invoke. */
 export type SessionSdkCapabilityCeiling = Readonly<{
@@ -50,24 +46,58 @@ export type SessionSdkAgent = Readonly<{
 	role: string;
 }>;
 
+export type SessionSdkSubmissionAdmission =
+	| { readonly rejected: true; readonly reason: string }
+	| {
+			readonly rejected: false;
+			readonly disposition: "started" | "queued";
+			readonly messageId: SessionMessageId;
+			readonly submissionId: SubmissionId;
+			readonly turnId?: AgentTurnId;
+	  };
+
+export type SessionSdkContinuationOutcome =
+	| { readonly kind: "rejected"; readonly reason: string }
+	| { readonly kind: "resumed"; readonly turnId: AgentTurnId }
+	| {
+			readonly kind: "started-submission";
+			readonly messageId: SessionMessageId;
+			readonly submissionId: SubmissionId;
+			readonly turnId?: AgentTurnId;
+	  };
+
+export type SessionSdkInterruptResult = Readonly<{
+	kind: "turn" | "compaction" | "none";
+	recalled: readonly object[];
+}>;
+
+/** Stable, public fields exposed when observing a live Session. */
+export type SessionSdkSnapshot = Readonly<{
+	context: readonly object[];
+	transcript: readonly object[];
+	turnActive: boolean;
+}>;
+
 export type SessionSdkHandle = Readonly<{
-	continue: () => SessionContinuationOutcome;
+	continue: () => SessionSdkContinuationOutcome;
 	dispose: () => Promise<void>;
-	interrupt: () => Promise<SessionInterruptResult>;
+	interrupt: () => Promise<SessionSdkInterruptResult>;
 	/** Queues FIFO input, starts an idle Session, and resolves after its Session Record commits. */
-	deliver: (input: SessionSdkDelivery) => Promise<SessionSubmissionAdmission>;
+	deliver: (
+		input: SessionSdkDelivery
+	) => Promise<SessionSdkSubmissionAdmission>;
 	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
-	prompt: (input: SessionSdkPrompt) => Promise<SessionSubmissionAdmission>;
+	prompt: (input: SessionSdkPrompt) => Promise<SessionSdkSubmissionAdmission>;
 	sessionId: SessionId;
-	subscribe: (listener: (snapshot: LiveSessionSnapshot) => void) => () => void;
+	subscribe: (listener: (snapshot: SessionSdkSnapshot) => void) => () => void;
 }>;
 
 export type SessionSdk = Readonly<{
 	createChildSdk: (
 		options: Readonly<{
 			capabilityCeiling?: SessionSdkCapabilityCeiling;
-			enabledPlugins: readonly ("mcp" | "subagents")[];
 			pluginPaths?: readonly string[];
+			projectTrust?: "trust" | "deny";
 		}>
 	) => Promise<SessionSdk>;
 	createEmptySession: (options?: SessionSdkCreateOptions) => Promise<SessionId>;
@@ -78,7 +108,7 @@ export type SessionSdk = Readonly<{
 	deliverToSession: (
 		sessionId: SessionId | string,
 		input: SessionSdkDelivery
-	) => Promise<SessionSubmissionAdmission>;
+	) => Promise<SessionSdkSubmissionAdmission>;
 	dispose: () => Promise<void>;
 	openSession: (
 		sessionId: SessionId | string,

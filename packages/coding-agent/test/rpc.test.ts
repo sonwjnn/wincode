@@ -93,7 +93,6 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 			jsonrpc: "2.0",
 			result: {
 				capabilities: {
-					approvalResponses: true,
 					explicitSteering: true,
 					failedSubmissionRetry: true,
 					stateNotifications: true,

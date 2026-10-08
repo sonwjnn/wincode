@@ -22,10 +22,10 @@ Wincode is an interactive terminal UI for working with AI coding agents. It comb
 - **Terminal-native workflow** — a responsive [OpenTUI](https://github.com/anomalyco/opentui) interface with streaming responses, Markdown rendering, syntax highlighting, diffs, themes, and keyboard-driven dialogs.
 - **Multiple model providers** — connect OpenAI, Anthropic, Google, or OpenCode Go with an API key; OpenAI also supports browser OAuth.
 - **Workspace-aware tools** — bounded read, glob, grep, edit, write, and shell tools operate inside the active workspace.
-- **Explicit safety controls** — per-agent and per-resource `allow`, `ask`, and `deny` policies, inline approvals, temporary grants, and optional auto approval.
+- **Protected project resources** — user-owned Project trust controls whether project configuration, Skills, Custom Commands, configured Plugins, and MCP Servers are loaded.
 - **Local session history** — sessions, completed tool calls, compactions, and attachments are stored locally in SQLite. Credentials use the platform secret store when available, with a secure local fallback.
 - **Extensible agent context** — use `@path` file mentions, reusable Skills, prompt-based custom commands, and local or remote MCP tool servers.
-- **Configurable agents** — choose built-in or project-defined agents with independent roles, instructions, model pins, permissions, and resource limits.
+- **Configurable agents** — choose built-in or project-defined agents with independent roles, instructions, model pins, tool selections, and resource limits.
 
 ## Getting started
 
@@ -58,10 +58,10 @@ bun run /path/to/wincode/packages/coding-agent/bin/wincode.ts
 ```
 
 > [!TIP]
-> Pass `--auto` to start with automatic approval enabled. Explicit `deny` rules still take precedence.
+> Interactive mode prompts before loading protected project resources and can remember the decision in user-owned data. Use `--trust-project` to trust them for one invocation or `--no-trust-project` to refuse them for one invocation. Non-interactive modes never prompt or silently trust.
 >
 > ```bash
-> bun run /path/to/wincode/packages/coding-agent/bin/wincode.ts --auto
+> bun run /path/to/wincode/packages/coding-agent/bin/wincode.ts --trust-project
 > ```
 
 ### Supported providers
@@ -101,30 +101,19 @@ To disable automatic clipboard writes, set this value in a global config file:
 ```jsonc
 {
   "default_agent": "build",
-  "permission": {
-    "read": "allow",
-    "edit": {
-      "*.env*": "deny",
-      "src/**": "ask"
-    }
-  },
   "agents": {
     "review": {
       "role": "primary",
       "description": "Review changes without editing files.",
       "instructions": "Inspect the implementation and report concrete risks.",
-      "permission": {
-        "edit": "deny",
-        "write": "deny"
-      }
+      "tools": ["read", "grep", "glob"]
     }
   },
   "mcp": {
     "context7": {
       "type": "local",
       "command": ["npx", "-y", "@upstash/context7-mcp"],
-      "enabled": true,
-      "permission": "ask"
+      "enabled": true
     }
   },
   "skills": {
@@ -137,17 +126,16 @@ To disable automatic clipboard writes, set this value in a global config file:
 ```
 
 > [!WARNING]
-> A local MCP server runs the configured command in your workspace. Only configure servers you trust; set `enabled` to `false` to prevent startup.
+> Trusted project configuration may select Plugins and local MCP processes. They run with Wincode's operating-system privileges; Project trust is not a sandbox. Use OS-level isolation when stronger containment is required.
 
-File-loaded Plugins are also trusted in-process TypeScript code. Enable them with `--plugin <path>` or absolute paths in a personal `plugins` configuration array; project configuration cannot authorize Plugin code. See [File-loaded Plugins](packages/coding-agent/modules/plugins/README.md) for setup and authoring.
+File-loaded Plugins are trusted in-process TypeScript code. Enable them with `--plugin <path>` or explicit `plugins` paths in user or project configuration; project paths are considered only after Project trust. A `.wincode/plugins/` directory is never discovered implicitly. See [File-loaded Plugins](packages/coding-agent/modules/plugins/README.md) for setup and authoring.
 
 Detailed configuration references:
 
 - [Agents](packages/coding-agent/modules/agents/README.md)
-- [Tool permissions](packages/coding-agent/modules/permissions/README.md)
 - [Skills](packages/coding-agent/modules/skills/README.md)
 - [Custom commands](packages/coding-agent/modules/commands/custom/README.md)
-- [MCP servers](packages/coding-agent/modules/mcp/README.md)
+- [MCP servers](packages/mcp/README.md)
 - [File-loaded Plugins](packages/coding-agent/modules/plugins/README.md)
 - [Configuration precedence](packages/coding-agent/shared/config/README.md)
 
@@ -161,7 +149,7 @@ Place prompt templates in `.wincode/commands/*.md`. The filename becomes the com
 
 ### MCP servers
 
-The `mcp` map supports local subprocess servers and remote Streamable HTTP servers. Each server can define environment variables or headers, startup/catalog/execution timeouts, and its own permission policy. Use `/mcps` to inspect, enable, disable, or reconnect configured servers.
+The `mcp` map supports local subprocess servers and remote Streamable HTTP servers. Each server can define environment variables or headers and startup/catalog/execution timeouts. There is no per-call MCP allow/ask/deny policy. Use `/mcps` to inspect, enable, disable, or reconnect configured servers.
 
 ## Commands
 
@@ -179,7 +167,6 @@ Type `/` in the chat input to browse Built-in Commands, Custom Commands, and Ski
 | `/themes` | Change the terminal color theme |
 | `/connect` | Connect a provider account or API key |
 | `/mcps` | Inspect and control MCP servers |
-| `/permissions` | Manage approvals, temporary grants, and auto approval |
 | `/exit` | Quit Wincode |
 
 ## Architecture
@@ -189,7 +176,7 @@ Wincode is a Bun workspace with one private Coding-Agent Application package:
 ```text
 .
 ├── packages/
-│   ├── coding-agent/              # Executable, modes, OpenTUI, sessions, config, MCP, approvals
+│   ├── coding-agent/              # Executable, modes, OpenTUI, sessions, project trust, config
 │   │   └── modules/
 │   │       ├── skills/            # Skill parsing, discovery, catalog, snapshots, activation
 │   │       └── tools/             # Workspace sandbox, filesystem, search, edit, and shell tools
@@ -230,10 +217,9 @@ Use `bun run test` and `bun run test:e2e` for full portfolios. Bare `bun test` u
 
 Tests belong to the owning package's `test/` tree. Keep small package test trees
 flat; add only shallow product-area directories when test volume or cohesive
-navigation makes them useful. The Coding-Agent groups sessions, MCP, commands, and
-permissions under `test/sessions`, `test/mcp`, `test/commands`, and
-`test/permissions`; do not mirror technical source roots such as `modules`,
-`shared`, or `app`. Default tests use ordinary `*.test.ts` or `*.test.tsx` names.
+navigation makes them useful. The Coding-Agent groups cohesive tests under
+`test/sessions`, `test/mcp`, `test/commands`, `test/application`, and `test/tools`;
+do not mirror technical source roots such as `modules`, `shared`, or `app`. Default tests use ordinary `*.test.ts` or `*.test.tsx` names.
 E2E tests use `*.e2e.test.ts` or `*.e2e.test.tsx`; External tests are reserved for
 a real provider contract and use `*.external.test.ts` or `*.external.test.tsx`.
 

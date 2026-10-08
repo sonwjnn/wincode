@@ -2,19 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { parseCliOptions } from "@/shared/cli-options";
 
 describe("parseCliOptions", () => {
-	test("auto approval is off by default", () => {
-		expect(parseCliOptions([]).autoApproval).toBe(false);
-		expect(parseCliOptions(["node", "cli"]).autoApproval).toBe(false);
-	});
-
-	test("enables auto approval with --auto", () => {
-		expect(parseCliOptions(["node", "cli", "--auto"]).autoApproval).toBe(true);
-	});
-
 	test("disables each bundled optional Plugin independently", () => {
 		expect(
-			parseCliOptions(["node", "cli", "--no-mcp", "--no-subagents"])
-				.disabledPlugins
+			parseCliOptions([
+				"node",
+				"cli",
+				"--no-plugin",
+				"mcp",
+				"--no-plugin",
+				"subagents",
+			]).disabledPlugins
 		).toEqual(["mcp", "subagents"]);
 	});
 });

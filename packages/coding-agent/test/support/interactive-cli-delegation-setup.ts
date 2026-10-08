@@ -9,6 +9,7 @@ import type {
 } from "@wincode/ai/connections";
 import { connectionProviderDisplayNames } from "@wincode/ai/connections";
 import type { ConnectionProviderId } from "@wincode/ai/models";
+import { createConfigStore } from "@/shared/config/config-store";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClientModule,
@@ -25,8 +26,9 @@ const previousEnvironment = {
 	WINCODE_SUBAGENTS_DB_PATH: process.env.WINCODE_SUBAGENTS_DB_PATH,
 };
 
-export const testDirectory = await fs.mkdtemp(
-	path.join(os.tmpdir(), "wincode-interactive-cli-e2e-")
+export const testDirectory = path.join(
+	os.tmpdir(),
+	`wincode-interactive-cli-e2e-${crypto.randomUUID()}`
 );
 process.env.HOME = testDirectory;
 process.env.WINCODE_E2E_HOME = testDirectory;
@@ -40,7 +42,21 @@ process.env.WINCODE_SUBAGENTS_DB_PATH = path.join(
 	testDirectory,
 	"subagents.sqlite"
 );
-setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
+export const interactiveConfigRuntime = {
+	configStore: createConfigStore({
+		configRoot: testDirectory,
+		homeRoot: testDirectory,
+	}),
+	cwd: testDirectory,
+	homeRoot: testDirectory,
+	workspace: testDirectory,
+};
+setInteractiveRuntimeContext({
+	args: [],
+	configRuntime: interactiveConfigRuntime,
+	cwd: testDirectory,
+});
+await fs.mkdir(testDirectory, { recursive: true });
 
 export const recorder = createFakeModelClientRecorder();
 const testConnections: Connections = {
@@ -66,6 +82,10 @@ await Bun.write(
 		"scout": { "description": "Inspect and report findings", "role": "subagent" }
 	}
 }`
+);
+await Bun.write(
+	path.join(testDirectory, "wincode.jsonc"),
+	'{"permission":{"plugin:subagents:delegate":"allow","submit_result":"allow"}}'
 );
 
 export const cleanupTestDirectory = (): Promise<void> =>

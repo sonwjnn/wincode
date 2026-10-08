@@ -2,7 +2,6 @@ export * from "./client";
 export * from "./config";
 export * from "./identifiers";
 export * from "./manifest";
-export * from "./policy";
 export * from "./registry";
 export * from "./result";
 export * from "./sanitize";

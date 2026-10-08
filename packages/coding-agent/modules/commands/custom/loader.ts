@@ -63,6 +63,7 @@ export async function getCustomCommands(
 		discoverCustomCommandCandidates({
 			homeRoot: input.homeRoot,
 			snapshot,
+			trustedProjectRoots: input.trustedProjectRoots,
 			workspace: input.workspace,
 		})
 	);

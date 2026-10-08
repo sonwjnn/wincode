@@ -87,20 +87,12 @@ test("provider registration snapshots resolver functions before the Plugin retur
 	expect(tools.map(({ definition: tool }) => tool.name)).toEqual(["read"]);
 });
 
-test("the composition root selects the Subagents Plugin without Session adapters", () => {
-	const base = createApplicationPluginComposition({
-		createMcpResource: false,
-		enabledPlugins: [],
-		workspace: "/workspace",
-	});
-	const selected = createApplicationPluginComposition({
-		createMcpResource: false,
-		enabledPlugins: ["subagents"],
-		workspace: "/workspace",
-	});
-	expect(base.bundledPlugins).toEqual([]);
-	expect(selected.bundledPlugins.map(({ id }) => id)).toEqual(["subagents"]);
-	expect(selected.enabledPlugins).toEqual(["subagents"]);
+test("the composition root names optional Plugins through public package specifiers", () => {
+	const composition = createApplicationPluginComposition();
+	expect(composition.distributionPlugins).toEqual([
+		{ id: "mcp", specifier: "@wincode/mcp/plugin" },
+		{ id: "subagents", specifier: "@wincode/subagents/plugin" },
+	]);
 });
 
 test("native Skill tools join the same registry without being a Plugin", async () => {

@@ -19,38 +19,30 @@ const skill = (name: string, overrides: Partial<Skill> = {}): Skill => ({
 	...overrides,
 });
 
-const allowAll = () => () => "allow" as const;
-
 describe("buildSkillCatalog", () => {
-	test("includes permitted skills sorted by name", () => {
-		const catalog = buildSkillCatalog(
-			[skill("zeta"), skill("alpha")],
-			allowAll()
-		);
+	test("includes available skills sorted by name", () => {
+		const catalog = buildSkillCatalog([skill("zeta"), skill("alpha")]);
 		expect(catalog.entries.map(({ name }) => name)).toEqual(["alpha", "zeta"]);
 		expect(catalog.toolEnabled).toBe(true);
 		expect(catalog.diagnostics).toEqual([]);
 	});
 
-	test("hides denied skills without diagnostics", () => {
-		const catalog = buildSkillCatalog(
-			[skill("public"), skill("internal")],
-			(name) => (name === "internal" ? "deny" : "allow")
-		);
-		expect(catalog.entries.map(({ name }) => name)).toEqual(["public"]);
+	test("keeps every validated Skill in the catalog", () => {
+		const catalog = buildSkillCatalog([skill("public"), skill("internal")]);
+		expect(catalog.entries.map(({ name }) => name)).toEqual([
+			"internal",
+			"public",
+		]);
 		expect(catalog.diagnostics).toEqual([]);
 	});
 
 	test("omits invalid skills with diagnostics instead of truncating", () => {
-		const catalog = buildSkillCatalog(
-			[
-				skill("fine"),
-				skill("long-name", { name: "a".repeat(65) }),
-				skill("long-description", { description: "d".repeat(1025) }),
-				skill("long-body", { body: "b".repeat(12_001) }),
-			],
-			allowAll()
-		);
+		const catalog = buildSkillCatalog([
+			skill("fine"),
+			skill("long-name", { name: "a".repeat(65) }),
+			skill("long-description", { description: "d".repeat(1025) }),
+			skill("long-body", { body: "b".repeat(12_001) }),
+		]);
 		expect(catalog.entries.map(({ name }) => name)).toEqual(["fine"]);
 		expect(
 			catalog.diagnostics.map(({ code, skillName }) => ({ code, skillName }))
@@ -67,7 +59,7 @@ describe("buildSkillCatalog", () => {
 				description: "d".repeat(1024),
 			})
 		);
-		const catalog = buildSkillCatalog(manySkills, allowAll());
+		const catalog = buildSkillCatalog(manySkills);
 		expect(catalog.toolEnabled).toBe(false);
 		expect(catalog.diagnostics.map(({ code }) => code)).toEqual([
 			"catalog-over-budget",
@@ -77,21 +69,18 @@ describe("buildSkillCatalog", () => {
 
 	test("builds a dynamic tool definition only when entries exist", () => {
 		const definition = buildSkillToolDefinition(
-			buildSkillCatalog([skill("review")], allowAll())
+			buildSkillCatalog([skill("review")])
 		);
 		expect(definition?.name).toBe("skill");
 		expect(definition?.description).toContain("<available_skills>");
 		expect(definition?.description).toContain("- review: description-review");
 		expect(definition?.inputSchema.required).toEqual(["name"]);
-		expect(
-			buildSkillToolDefinition(buildSkillCatalog([], allowAll()))
-		).toBeUndefined();
+		expect(buildSkillToolDefinition(buildSkillCatalog([]))).toBeUndefined();
 	});
 	test("derives catalog hashes from the body", () => {
-		const catalog = buildSkillCatalog(
-			[skill("review", { contentHash: "stale-hash" })],
-			allowAll()
-		);
+		const catalog = buildSkillCatalog([
+			skill("review", { contentHash: "stale-hash" }),
+		]);
 		expect(catalog.entries[0]?.contentHash).toBe(hashSkillBody("body-review"));
 	});
 });
@@ -115,10 +104,12 @@ describe("createSkillSnapshot", () => {
 });
 
 describe("createSkillExecution", () => {
-	const catalog = buildSkillCatalog(
-		[skill("review"), skill("lint"), skill("commit"), skill("extra")],
-		allowAll()
-	);
+	const catalog = buildSkillCatalog([
+		skill("review"),
+		skill("lint"),
+		skill("commit"),
+		skill("extra"),
+	]);
 
 	test("loads a Skill with a body snapshot and content hash", () => {
 		const execution = createSkillExecution(catalog);
@@ -168,16 +159,6 @@ describe("createSkillExecution", () => {
 		]);
 	});
 
-	test("rejected names short-circuit without consuming a slot", () => {
-		const execution = createSkillExecution(catalog);
-		execution.markRejected("review");
-		expect(execution.activate("review", "agent")).toEqual({
-			name: "review",
-			status: "rejected",
-		});
-		expect(execution.activeSnapshots()).toHaveLength(0);
-	});
-
 	test("fails unknown names without consuming a slot", () => {
 		const execution = createSkillExecution(catalog);
 		expect(execution.activate("missing", "agent")).toEqual({
@@ -218,11 +199,7 @@ describe("sanitizeSkillToolResult", () => {
 		expect(JSON.stringify(result)).not.toContain("skills/review");
 	});
 
-	test("passes through every non-loaded status unchanged", () => {
-		expect(sanitizeSkillToolResult({ name: "x", status: "rejected" })).toEqual({
-			name: "x",
-			status: "rejected",
-		});
+	test("passes through failed and limit-reached statuses unchanged", () => {
 		expect(
 			sanitizeSkillToolResult({ error: "boom", name: "x", status: "failed" })
 		).toEqual({ error: "boom", name: "x", status: "failed" });
@@ -244,7 +221,7 @@ describe("sanitizeSkillToolResult", () => {
 
 describe("catalog entry shape", () => {
 	test("carries base directory and body for activation", () => {
-		const catalog = buildSkillCatalog([skill("review")], allowAll());
+		const catalog = buildSkillCatalog([skill("review")]);
 		const entry = catalog.entries[0];
 		expect(entry).toMatchObject({
 			baseDirectory: "/skills/review",

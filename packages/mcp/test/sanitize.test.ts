@@ -10,7 +10,6 @@ const localConfig = (): ResolvedMcpServerConfig => ({
 	type: "local",
 	command: ["bun", "x", "demo"],
 	disabled: false,
-	permission: "ask",
 	timeout: { startup: 30_000, catalog: 30_000, execution: 43_200_000 },
 	environment: { API_KEY: "env-super-secret" },
 });
@@ -20,7 +19,6 @@ const remoteConfig = (): ResolvedMcpServerConfig => ({
 	type: "remote",
 	url: "https://mcp.deepwiki.com/mcp?case=redaction",
 	disabled: false,
-	permission: "ask",
 	timeout: { startup: 30_000, catalog: 30_000, execution: 43_200_000 },
 	headers: { Authorization: "Bearer super-secret-token" },
 });
@@ -61,6 +59,18 @@ describe("mcp sanitize", () => {
 		expect(message).not.toContain("super-secret-token");
 		expect(message).not.toContain("mcp.deepwiki.com");
 		expect(message).not.toContain("Bearer");
+	});
+
+	test("sanitizeMessage redacts arbitrary URLs from client errors", () => {
+		const message = sanitizeMessage(
+			localConfig(),
+			new Error("request failed at https://debug.example/path?token=secret"),
+			"fallback"
+		);
+
+		expect(message).not.toContain("debug.example");
+		expect(message).not.toContain("token=secret");
+		expect(message).toContain("[redacted]");
 	});
 
 	test("sanitizeMessage uses the fallback when config is undefined", () => {

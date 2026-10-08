@@ -14,6 +14,8 @@ flowchart LR
     App --> Print[Print Mode]
     App --> JSON[JSON Mode]
     App --> RPC[RPC Mode]
+    App --> Trust[Project trust resolver]
+    Trust --> Resources[Protected project resources]
     Interactive --> Session[Session Host / Agent Session]
     Print --> Session
     JSON --> Session
@@ -21,10 +23,11 @@ flowchart LR
     Session --> Core[Agent Runtime contract]
     Core --> Runtime[AI SDK adapter]
     Runtime --> Providers[Model providers]
-    Runtime --> Gate[Tool Gate]
-    Gate --> Tools[Coding tools]
-    Gate --> MCP[MCP servers]
-    Gate --> Skills[Skills]
+    Session --> Selection[Tool selection and capability ceilings]
+    Selection --> Tools[Resolved tools]
+    Tools --> Coding[Coding tools]
+    Tools --> MCP[MCP servers]
+    Tools --> Skills[Skills]
     Session --> Store[(SQLite sessions)]
     Session --> Secrets[Credential store]
 ```
@@ -46,7 +49,7 @@ Agent Session.
 │   │   └── modules/
 │   │       ├── application/       # Mode orchestration and shared execution contracts
 │   │       ├── skills/            # Skill parsing, discovery, catalog, snapshots, activation
-│   │       └── tools/             # Workspace sandbox plus read, search, edit, write, shell tools
+│   │       └── tools/             # Workspace-bound filesystem and bounded coding tools
 │   ├── ai/                        # Provider-neutral model catalog, targets, options, usage, failures
 │   ├── agent-core/                # Agents, Agent Turns, events, records, runtime and tool contracts
 │   └── agent-runtime-ai-sdk/      # Private AI SDK implementation and provider adapters
@@ -88,14 +91,16 @@ Dependency direction is inward toward contracts:
 
 ## Agent Turn flow
 
-1. The selected mode resolves the workspace, configuration, active Agent,
-   model, variant, and provider credential.
+1. The selected mode resolves Project trust before loading protected project
+   configuration and resources, then resolves the workspace, active Agent, model,
+   variant, and provider credential.
 2. It creates or opens a Session Host, which exposes one Agent Session that
    owns live state and coordinates durable writes through Host-provided ports.
 3. The Agent Runtime invokes the provider and emits Wincode events for text,
    reasoning, tool calls, usage, failures, and completion.
-4. Every tool call passes through the Tool Gate before coding tools, MCP
-   servers, or Skills execute.
+4. Agent configuration selects model-visible tools; capability ceilings may
+   further restrict delegated Sessions. A selected tool executes directly, with
+   input validation, workspace path constraints, and resource limits preserved.
 5. The mode projects the Host events and terminal outcome: Interactive Mode
    renders them, JSON Mode emits JSONL events, Print Mode emits assistant
    text, and RPC Mode emits its wire projection.
@@ -108,7 +113,8 @@ Turn from committed history.
 
 | Data | Storage |
 | --- | --- |
-| Configuration | Merged `wincode.jsonc` or `wincode.json` sources |
+| Configuration | User sources plus trusted project `wincode.jsonc` or `wincode.json` sources |
+| Project trust | User-owned trust decisions outside the project |
 | Provider credentials | Platform secret store, with a secure local fallback |
 | Sessions and compactions | Local SQLite database through Drizzle |
 | Attachments | Content-addressed local files referenced by Session Records |
@@ -116,13 +122,14 @@ Turn from committed history.
 
 Session schema changes update the current Drizzle schema directly; this project does not maintain migration history.
 
-## Safety boundaries
+## Trust and execution boundaries
 
-- The workspace sandbox limits filesystem operations to the active workspace unless `external_directory` permission allows access.
-- The Tool Gate is the single enforcement point for `allow`, `ask`, and `deny` decisions.
-- Explicit denies cannot be bypassed by auto approval or temporary grants.
-- Local MCP commands are trusted configuration and execute in the user's workspace.
-- Skill instructions are untrusted, turn-scoped context. Activating a Skill does not grant additional tool permissions.
+- Project trust is a user-owned decision about loading protected project configuration and resources. It is not a sandbox; trusted Plugin code and local MCP processes run with Wincode's operating-system privileges.
+- Interactive TTY sessions may prompt and remember a decision. Non-interactive modes and SDK callers never prompt or silently trust; CLI and SDK callers can supply explicit trust decisions.
+- `AGENTS.md` remains contextual project guidance and does not trigger Project trust.
+- Agent configuration selects native coding tools; registered Plugins and capabilities contribute their own tools, and capability ceilings can further restrict a delegated Session. Wincode no longer asks for per-call `allow`/`ask`/`deny` decisions.
+- Coding filesystem tools resolve paths within the active workspace. Resource profiles continue to bound coding-tool inputs and outputs; neither mechanism contains arbitrary processes.
+- Skill instructions are untrusted, turn-scoped context. Activating a Skill does not grant process privileges.
 
 ## Model metadata
 
@@ -151,5 +158,6 @@ Detailed rationale lives in [`docs/adr/`](docs/adr/):
 - [Agent-driven Skill activation](docs/adr/0004-agent-driven-skill-activation.md)
 - [Two-tier session selection](docs/adr/0006-session-selection-two-tier.md)
 - [Configured agents](docs/adr/0002-configured-agents.md)
-- [Shell execution and permissions](docs/adr/0005-shell-tool-with-permission-gated-execution.md)
+- [Project trust and tool selection](docs/adr/0043-project-trust-and-tool-selection.md)
+- [Historical shell execution and permission model](docs/adr/0005-shell-tool-with-permission-gated-execution.md)
 - [Typed normal-turn Prompt Composition Pipeline and Project Instructions](docs/adr/0017-typed-normal-turn-prompt-assembly.md)

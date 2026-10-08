@@ -14,21 +14,13 @@ import {
 } from "@wincode/ai/models";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
+import { resolveAgentToolResourceLimits } from "@/modules/agents/registry";
 import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
-import {
-	composePermissionDecisions,
-	decideToolPermissionAction,
-	type PermissionActionFamily,
-	type PermissionDecision,
-	type ToolPermission,
-} from "@/modules/permissions/policy";
-import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
 import type {
 	PluginRuntime,
 	PluginToolDescriptor,
 } from "@/modules/plugins/runtime";
-import type { PluginPermissionResolution } from "@/modules/plugins/tools";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
 import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
@@ -48,9 +40,7 @@ import {
 } from "@/modules/tools";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
-import { createToolGate, type ToolGate } from "../../tool-gate/tool-gate";
 import type {
-	AgentSessionInternalPort,
 	AgentSessionPorts,
 	SessionExecution,
 	SessionQueuedSubmission,
@@ -64,7 +54,6 @@ import { latestEntry } from "../agent-session/utils";
 import { SessionCompactionError } from "../compaction/error";
 import {
 	buildAgentTurn,
-	type RuntimeGatedTooling,
 	resolveTurnTools,
 	runAgentTurnToText,
 } from "../hooks/runtime-turn";
@@ -79,8 +68,6 @@ import type { SessionCapabilities } from "./types";
 
 export type SessionPortsOptions = Readonly<{
 	capabilities: SessionCapabilities;
-	/** The Agent Session whose ports these are, available once it is constructed. */
-	agentSession: () => AgentSessionInternalPort;
 	isShutDown: () => boolean;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
@@ -90,33 +77,8 @@ type PluginTurnResolution = Readonly<{
 	options: Readonly<{
 		pluginRuntime?: PluginRuntime;
 		pluginTools?: readonly PluginToolDescriptor[];
-		resolvePluginPermission: (
-			action: `plugin:${string}:${string}`,
-			agentId?: AgentId
-		) => Promise<PluginPermissionResolution>;
-		resolveToolPermission: (
-			action: string,
-			resource: string,
-			agentId: AgentId | undefined,
-			family: PermissionActionFamily
-		) => Promise<PluginPermissionResolution>;
 	}>;
-	policies: Map<string, PermissionDecision>;
 }>;
-
-const resolvePermissionForAction = async (
-	toolPermission: ToolPermissionRuntime,
-	action: string,
-	resource: string,
-	agentId: AgentId,
-	family: PermissionActionFamily
-): Promise<PluginPermissionResolution> => {
-	const permission = await toolPermission.resolvePermissionForAgent(agentId);
-	return {
-		decision: decideToolPermissionAction(permission, action, resource, family),
-		safety: permission.safety,
-	};
-};
 
 const resolvePluginTurnContext = async (
 	input: Readonly<{
@@ -125,7 +87,6 @@ const resolvePluginTurnContext = async (
 		pluginRuntime?: PluginRuntime;
 		sessionId: SessionId;
 		signal: AbortSignal;
-		toolPermission: ToolPermissionRuntime;
 		workspace: string;
 	}>
 ): Promise<PluginTurnResolution> => {
@@ -144,10 +105,6 @@ const resolvePluginTurnContext = async (
 						...(input.hostContext.turnId === undefined
 							? {}
 							: { turnId: input.hostContext.turnId }),
-						getAgentPermissionPolicy: () =>
-							input.toolPermission.resolveAgentActionPolicyForAgent(
-								input.agentId
-							),
 						registerTurnCleanup: (cleanup) =>
 							input.hostContext.registerTurnCleanup?.(cleanup),
 						sessionId: input.sessionId,
@@ -156,53 +113,13 @@ const resolvePluginTurnContext = async (
 					},
 					input.hostContext
 				);
-	const policies = await Promise.all(
-		pluginTools.map(async (tool) => {
-			const permission =
-				tool.permissionAction === undefined
-					? await input.toolPermission.resolvePluginPermissionForAgent(
-							tool.action,
-							input.agentId
-						)
-					: await resolvePermissionForAction(
-							input.toolPermission,
-							tool.permissionAction,
-							tool.permissionResource ?? "*",
-							input.agentId,
-							tool.permissionActionFamily ?? "plugin"
-						);
-			return [
-				tool.name,
-				tool.permissionDecision === undefined
-					? permission.decision
-					: composePermissionDecisions(
-							permission.decision,
-							tool.permissionDecision
-						),
-			] as const;
-		})
-	);
 	return {
 		options: {
 			...(input.pluginRuntime === undefined
 				? {}
 				: { pluginRuntime: input.pluginRuntime }),
 			pluginTools,
-			resolvePluginPermission: (action, agentId) =>
-				input.toolPermission.resolvePluginPermissionForAgent(
-					action,
-					agentId ?? input.agentId
-				),
-			resolveToolPermission: (action, resource, agentId, family) =>
-				resolvePermissionForAction(
-					input.toolPermission,
-					action,
-					resource,
-					agentId ?? input.agentId,
-					family
-				),
 		},
-		policies: new Map(policies),
 	};
 };
 
@@ -264,30 +181,12 @@ const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
 	return `Skill catalog: ${summary.join("; ")}`;
 };
 
-/**
- * Runs one explicit Skill activation through the Tool Gate, so an explicit
- * Skill is permitted exactly like an Agent-driven one.
- */
+/** Resolves an explicit Skill activation from the session's available catalog. */
 const activateExplicitSkill = async (
 	name: string,
-	{
-		agentId,
-		execution,
-		gate,
-	}: { agentId: AgentId; execution: SkillExecution; gate: ToolGate }
+	execution: SkillExecution
 ): Promise<SessionSkillResolution> => {
 	const entry = execution.catalog.entries.find((entry) => entry.name === name);
-	const policyOutcome = await gate.gate({
-		agentId,
-		available: !isUndefined(entry),
-		description: entry?.description ?? `Activate Skill ${name}`,
-		family: "skill",
-		name,
-	});
-	if (policyOutcome.kind !== "allow") {
-		execution.markRejected(name);
-		return { ok: false, reason: policyOutcome.errorText };
-	}
 	if (isUndefined(entry)) {
 		return {
 			ok: false,
@@ -314,14 +213,13 @@ const activateExplicitSkill = async (
 
 /**
  * Materializes the Agent Session's ports from one session's capabilities and
- * owns no lifetime: it holds the Agent Runtime, Plugin snapshots, Tools and the
- * Tool Gate, Skill catalogs, prompt composition, attachments, and durable
+ * owns no lifetime: it holds the Agent Runtime, Plugin snapshots, Tools,
+ * Skill catalogs, prompt composition, attachments, and durable
  * records, and keeps no session state — every fact it observes comes from the
  * Agent Session Snapshot.
  */
 export const createSessionPorts = ({
 	capabilities,
-	agentSession,
 	isShutDown,
 	sessionId,
 	statefulAgent,
@@ -383,66 +281,7 @@ export const createSessionPorts = ({
 		}
 		scopes.delete(scope.turnId);
 	};
-	const toolGate: ToolGate = createToolGate({
-		approvals: {
-			request: (request) =>
-				capabilities.getApprovalMode?.() === "non-interactive"
-					? Promise.resolve({
-							decision: "reject",
-							feedback:
-								"Interactive approval is unavailable in non-interactive mode.",
-						})
-					: agentSession().requestApproval(request),
-		},
-		onAbort: (request) => {
-			if (!isUndefined(request.toolCallId)) {
-				agentSession().abortApprovalTurn(request.toolCallId);
-			}
-		},
-		resolvePermission: (agentId) => {
-			const permission = capabilities.getToolPermission();
-			return isUndefined(agentId)
-				? permission.resolvePermission()
-				: permission.resolvePermissionForAgent(agentId);
-		},
-		recoveryWarning: async () => {
-			const recovery = capabilities.getStore().fileObservationStore?.recovery;
-			if (recovery === undefined) {
-				return;
-			}
-			const unresolved = await recovery.listUnresolvedRecoveries();
-			return unresolved.length === 0
-				? undefined
-				: `Unresolved recovery remains in this workspace (${unresolved
-						.map(({ id }) => id)
-						.join(", ")}). Reconcile it with recover; Shell remains available.`;
-		},
-		resolveRecovery: async (recoveryId) => {
-			const recovery = capabilities.getStore().fileObservationStore?.recovery;
-			if (recovery === undefined) {
-				return;
-			}
-			const inspection = await recovery.getRecoveryInspection(recoveryId);
-			return inspection === null
-				? undefined
-				: {
-						originSessionId: inspection.recovery.originSessionId,
-						paths: inspection.artifact.paths.map(
-							({ canonicalPath }) => canonicalPath
-						),
-					};
-		},
-		resolveResourceLimits: (agentId) => {
-			const permission = capabilities.getToolPermission();
-			return isUndefined(agentId)
-				? permission.resolveResourceLimits()
-				: permission.resolveResourceLimitsForAgent(agentId);
-		},
-		sandbox: capabilities.getToolPermission().sandbox,
-		service: capabilities.getToolPermission().service,
-		sessionId,
-		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
-	});
+
 	/**
 	 * The request overhead of the Agent Turn execution in flight: the bounded
 	 * project block plus the serialized tools, instructions, and Plugin manifest a
@@ -475,17 +314,12 @@ export const createSessionPorts = ({
 		);
 	};
 	/**
-	 * Arms one Skill catalog from the workspace and the permission that decides
-	 * which Skills it may offer for the current Agent Turn.
+	 * Arms the Skills selected by the current trusted project and user roots.
 	 */
 	const armSkillCatalog = async (
-		agentId: AgentId,
-		permission: ToolPermission
+		agentId: AgentId
 	): Promise<SessionSkillCatalog> => {
-		const catalog = await discoverSkillCatalog(
-			capabilities.getConfig(),
-			(name) => permission.decide("skill", name)
-		);
+		const catalog = await discoverSkillCatalog(capabilities.getConfig());
 		const tool = buildSkillToolDefinition(catalog);
 		return {
 			agentId,
@@ -497,11 +331,7 @@ export const createSessionPorts = ({
 	/** Arms the Skill catalog one Agent Turn runs with. */
 	const createTurnSkill = async (
 		agentId: AgentId
-	): Promise<SessionSkillCatalog> =>
-		await armSkillCatalog(
-			agentId,
-			await capabilities.getToolPermission().resolvePermissionForAgent(agentId)
-		);
+	): Promise<SessionSkillCatalog> => await armSkillCatalog(agentId);
 	/**
 	 * Resolves the Skill a submission asks for: the one it names, or the one
 	 * its source message recorded, against the armed catalog.
@@ -511,13 +341,9 @@ export const createSessionPorts = ({
 		anchoredMessage: SessionMessage | undefined,
 		armedSkill: SessionSkillCatalog
 	): Promise<SessionSkillResolution> => {
-		const { agentId, execution } = armedSkill;
+		const { execution } = armedSkill;
 		if (!isUndefined(explicitSkill)) {
-			return activateExplicitSkill(explicitSkill.name, {
-				agentId,
-				execution,
-				gate: toolGate,
-			});
+			return activateExplicitSkill(explicitSkill.name, execution);
 		}
 		if (isUndefined(anchoredMessage)) {
 			return { ok: true };
@@ -538,17 +364,9 @@ export const createSessionPorts = ({
 					reason: `Skill "${parsedSkill.data.name}" is unavailable`,
 				};
 			}
-			return activateExplicitSkill(parsedSkill.data.name, {
-				agentId,
-				execution,
-				gate: toolGate,
-			});
+			return activateExplicitSkill(parsedSkill.data.name, execution);
 		}
-		return activateExplicitSkill(parsedSkill.data.name, {
-			agentId,
-			execution,
-			gate: toolGate,
-		});
+		return activateExplicitSkill(parsedSkill.data.name, execution);
 	};
 
 	const prepareAgentTurn = async (
@@ -559,7 +377,6 @@ export const createSessionPorts = ({
 		const { execution, messages, resolvedAgent, signal } = request;
 		const config = capabilities.getConfig();
 		const connections = capabilities.getConnections();
-		const toolPermission = capabilities.getToolPermission();
 		const versionedEditing: VersionedEditingContext | undefined =
 			sessionStore.fileObservationStore === undefined
 				? undefined
@@ -579,15 +396,9 @@ export const createSessionPorts = ({
 			connections,
 			{ ...reasoningSelection, signal }
 		);
-		const tooling: RuntimeGatedTooling = {
-			gate: toolGate,
-			resolveResourceLimits: (agentId) =>
-				isUndefined(agentId)
-					? toolPermission.resolveResourceLimits()
-					: toolPermission.resolveResourceLimitsForAgent(agentId),
-			versionedEditing,
-		};
-		const resourceLimits = await tooling.resolveResourceLimits?.(
+		const registry = capabilities.getRegistry();
+		const resourceLimits = resolveAgentToolResourceLimits(
+			registry,
 			execution.agent
 		);
 		const pluginRuntime = capabilities.getPluginRuntime?.();
@@ -609,17 +420,7 @@ export const createSessionPorts = ({
 				reasoningMode: execution.reasoningMode,
 				turnId: execution.turnId,
 				registerTurnCleanup: (cleanup) => scope.pluginCleanups.push(cleanup),
-				gate: tooling.gate,
 				resourceLimits,
-				resolveResourceLimits: tooling.resolveResourceLimits,
-				resolveToolPermission: (action, resource, agentId, family) =>
-					resolvePermissionForAction(
-						toolPermission,
-						action,
-						resource,
-						agentId ?? execution.agent,
-						family
-					),
 				sessionId,
 				signal,
 				...(sessionSdk === undefined ? {} : { sessionSdk }),
@@ -627,7 +428,6 @@ export const createSessionPorts = ({
 			},
 			sessionId,
 			signal,
-			toolPermission,
 			workspace: config.workspace,
 		});
 		const existingToolNames = collectExistingToolNames(
@@ -643,9 +443,7 @@ export const createSessionPorts = ({
 			model: execution.model,
 			reasoningMode: execution.reasoningMode,
 			turnId: execution.turnId,
-			gate: tooling.gate,
 			resourceLimits,
-			resolveResourceLimits: tooling.resolveResourceLimits,
 			...pluginTurn.options,
 			sessionId,
 			workspace: config.workspace,
@@ -660,18 +458,13 @@ export const createSessionPorts = ({
 				: tools.filter(({ definition }) =>
 						allowedToolNames.has(definition.name)
 					);
-		const agentPermission = await toolPermission.resolvePermissionForAgent(
-			execution.agent
-		);
 		const prompt = await prepareAgentTurnPrompt({
 			agent: resolvedAgent,
 			cwd: config.cwd,
-			pluginPolicies: pluginTurn.policies,
 			model: {
 				modelId: modelTarget.modelId,
 				providerId: modelTarget.providerId,
 			},
-			permission: agentPermission,
 			tools: availableTools,
 			workspace: config.workspace,
 		});

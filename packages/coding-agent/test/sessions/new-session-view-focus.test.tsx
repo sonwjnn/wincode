@@ -10,22 +10,15 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
-import { createMcpRegistry } from "@wincode/mcp";
 import { act } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
-import {
-	createPermissionService,
-	PermissionServiceProvider,
-} from "@/modules/permissions";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
-import { ApprovalPanelsProvider } from "@/shared/providers/approval/approval-panels-provider";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -65,38 +58,21 @@ describe("NewSessionView composer focus", () => {
 				>
 					<ToastProvider>
 						<ConnectionsProvider connections={createConnections()}>
-							<PermissionServiceProvider service={createPermissionService()}>
-								<AgentRegistryProvider>
-									<KeyboardLayerProvider>
-										<ApprovalPanelsProvider>
-											<PromptConfigProvider>
-												<ModelPricingProvider pricing={{}}>
-													<DialogProvider>
-														<McpProvider
-															closeRegistryOnUnmount={false}
-															createRegistry={() =>
-																createMcpRegistry({
-																	loadConfig: async () => ({
-																		diagnostics: [],
-																		servers: {},
-																	}),
-																	workspace,
-																})
-															}
-														>
-															<RouterContextProvider router={router}>
-																<CommandControllerProvider>
-																	<NewSessionView />
-																</CommandControllerProvider>
-															</RouterContextProvider>
-														</McpProvider>
-													</DialogProvider>
-												</ModelPricingProvider>
-											</PromptConfigProvider>
-										</ApprovalPanelsProvider>
-									</KeyboardLayerProvider>
-								</AgentRegistryProvider>
-							</PermissionServiceProvider>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<PromptConfigProvider>
+										<ModelPricingProvider pricing={{}}>
+											<DialogProvider>
+												<RouterContextProvider router={router}>
+													<CommandControllerProvider>
+														<NewSessionView />
+													</CommandControllerProvider>
+												</RouterContextProvider>
+											</DialogProvider>
+										</ModelPricingProvider>
+									</PromptConfigProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
 						</ConnectionsProvider>
 					</ToastProvider>
 				</ConfigProvider>

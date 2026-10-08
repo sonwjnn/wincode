@@ -200,11 +200,12 @@ export function createCommandController(
 	const skills = createSkillCommandSpecs(options.skills);
 	const pluginCommands: PluginCommandSpec[] = (
 		options.pluginCommands ?? []
-	).map(({ description, name, pluginId, value }) => ({
+	).map(({ description, name, pluginId, statusPanelId, value }) => ({
 		description,
 		kind: "plugin",
 		name,
 		pluginId,
+		...(statusPanelId === undefined ? {} : { statusPanelId }),
 		value,
 	}));
 	const baseCommands: CommandItem[] = [

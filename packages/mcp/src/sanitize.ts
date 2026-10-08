@@ -26,6 +26,7 @@ export const sanitizeMessage = (
 	}
 	return sanitizeText(message, {
 		maxChars: MAX_SANITIZED_MESSAGE_LENGTH,
+		redactUrls: true,
 		secrets: collectSecrets(config),
 	});
 };

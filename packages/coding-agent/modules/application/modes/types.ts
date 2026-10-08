@@ -1,5 +1,4 @@
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import type { OptionalPluginId } from "@/shared/cli-options";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { JsonlInput } from "../rpc/protocol";
@@ -11,7 +10,6 @@ export type TextWriter = {
 
 export type InvocationOptions = Readonly<{
 	agent?: string;
-	auto: boolean;
 	mode: ExecutionMode;
 	model?: string;
 	prompt?: string;
@@ -19,7 +17,8 @@ export type InvocationOptions = Readonly<{
 	session?: string;
 	effort?: string;
 	pluginPaths?: readonly string[];
-	disabledPlugins?: readonly OptionalPluginId[];
+	disabledPlugins?: readonly string[];
+	projectTrustOverride?: "trust" | "deny";
 }>;
 
 export type ApplicationContext = Readonly<{

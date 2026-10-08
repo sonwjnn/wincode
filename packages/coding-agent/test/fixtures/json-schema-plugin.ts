@@ -1,4 +1,4 @@
-import type { PluginFactory } from "@wincode/coding-agent/plugin";
+import type { PluginFactory } from "@wincode/coding-agent";
 
 const jsonSchemaPlugin: PluginFactory = (api) => {
 	const plugin = api.definePlugin({ id: "json_schema" });

@@ -10,7 +10,6 @@ import { loadPlugins } from "@/modules/plugins/loader";
 import { createSessionSdkChildFactory } from "@/modules/sessions/sdk";
 import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
 import { createConfigStore } from "@/shared/config/config-store";
-import { createPermissionService } from "../../../modules/permissions/permission-service";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
 import {
 	createAgentTurnId,
@@ -18,23 +17,19 @@ import {
 	resolveWorkspaceRoot,
 	toSessionId,
 } from "../../../modules/sessions/host/session-rpc";
-import type { OptionalApplicationPluginId } from "../plugin-composition";
 import { createApplicationPluginComposition } from "../plugin-composition";
 import type { RpcCompositionInput, RuntimeModules } from "./types";
 
 export const loadRuntime = async (
-	input: Pick<RpcCompositionInput, "configRuntime" | "pluginRuntime"> &
-		Readonly<{ enabledPlugins?: readonly OptionalApplicationPluginId[] }> = {}
+	input: Pick<
+		RpcCompositionInput,
+		"configRuntime" | "pluginRuntime" | "disabledPluginIds" | "pluginPaths"
+	> = {}
 ): Promise<RuntimeModules> => ({
 	createAgentTurnId,
 	createSessionCapabilities: async (sessionComposition) => {
 		const configStore = input.configRuntime?.configStore ?? createConfigStore();
-		const pluginComposition = createApplicationPluginComposition({
-			configStore,
-			createMcpResource: input.pluginRuntime === undefined,
-			enabledPlugins: input.enabledPlugins ?? ["mcp", "subagents"],
-			workspace: sessionComposition.workspace,
-		});
+		const pluginComposition = createApplicationPluginComposition();
 		const configRuntime = input.configRuntime ?? {
 			configStore,
 			cwd: sessionComposition.cwd,
@@ -44,9 +39,10 @@ export const loadRuntime = async (
 		const pluginRuntime =
 			input.pluginRuntime ??
 			(await loadPlugins({
-				bundledPlugins: pluginComposition.bundledPlugins,
-				cliPaths: [],
+				cliPaths: input.pluginPaths ?? [],
 				config: configRuntime,
+				disabledPluginIds: input.disabledPluginIds ?? [],
+				distributionPlugins: pluginComposition.distributionPlugins,
 			}));
 		let sessionSdk: SessionSdkChildFactory | undefined;
 		const assembly = await createSessionCapabilities({
@@ -56,9 +52,6 @@ export const loadRuntime = async (
 			getSessionSdk: () => sessionSdk,
 			pluginRuntime,
 			turnToolResolver: pluginComposition.turnToolResolver,
-			permissionService: createPermissionService({
-				autoApproval: sessionComposition.autoApproval,
-			}),
 			workspace: sessionComposition.workspace,
 		});
 		sessionSdk = createSessionSdkChildFactory(
@@ -66,10 +59,6 @@ export const loadRuntime = async (
 				configRuntime,
 				connections: assembly.capabilities.getConnections(),
 				cwd: sessionComposition.cwd,
-				enabledPlugins: input.enabledPlugins ?? ["mcp", "subagents"],
-				permissionService: createPermissionService({
-					autoApproval: sessionComposition.autoApproval,
-				}),
 				registry: assembly.capabilities.getRegistry(),
 				store: assembly.store,
 				workspace: sessionComposition.workspace,

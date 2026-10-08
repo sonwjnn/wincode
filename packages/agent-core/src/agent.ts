@@ -31,8 +31,8 @@ export type AgentDefinition = Readonly<{
 /**
  * The resolved Agent an Agent Turn runs as: the identity, role eligibility,
  * and literal system instructions for one turn. Configured origins, model
- * pins, and permission policy stay with the composition root that resolves
- * the Agent.
+ * pins, tool selection, and resource limits stay with the composition root that
+ * resolves the Agent.
  */
 export type ResolvedAgent = Readonly<{
 	description?: string;

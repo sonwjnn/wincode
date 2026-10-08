@@ -12,7 +12,7 @@ const testDirectory = mkdtempSync(join(tmpdir(), "wincode-session-host-"));
 const previousSubagentsDatabasePath = process.env.WINCODE_SUBAGENTS_DB_PATH;
 process.env.WINCODE_SUBAGENTS_DB_PATH = join(testDirectory, "subagents.sqlite");
 
-import { fromAny, fromPartial } from "@total-typescript/shoehorn";
+import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	type AgentId,
 	type AgentTurnEvent,
@@ -24,22 +24,11 @@ import type {
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import {
-	createMcpRegistry,
-	type McpClient,
-	type McpConfigResult,
-	qualifyMcpToolName,
-	type ResolvedMcpServerConfig,
-} from "@wincode/mcp";
 import { logger } from "@wincode/utils";
 import { z } from "zod";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
-import {
-	createMcpSessionCapability,
-	type McpPluginResource,
-} from "@/modules/mcp/capability";
 import { loadPlugins } from "@/modules/plugins/loader";
 import {
 	createPluginRuntime,
@@ -77,7 +66,6 @@ import {
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
-import { createMcpPluginFactory } from "@/plugins/mcp";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
@@ -115,11 +103,6 @@ const { createDatabase } = await import("@/modules/sessions/storage/client");
 const { createDrizzleSessionStore } = await import(
 	"@/modules/sessions/storage/drizzle-session-store"
 );
-const { createPermissionService } = await import(
-	"@/modules/permissions/permission-service"
-);
-const { createToolPermissionPolicyState, createToolPermissionRuntime } =
-	await import("@/modules/permissions/tool-permission-runtime");
 const createSessionHostManager = () => createSessionHostManagerWithRuntime();
 const sessionHostManager = createSessionHostManager();
 
@@ -283,25 +266,20 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
 /**
  * The capabilities one Host runs against outside React: the workspace config,
  * a connection that authorizes the Model Target, an empty MCP catalog, the
- * built-in Agent registry, the Tool Permission runtime, and the Session
+ * built-in Agent registry and the Session
  * Compaction module the Agent Session contract tests fake the same way.
  */
 type SessionHostTestCapabilitiesOptions = Readonly<{
-	approvalMode?: "interactive" | "non-interactive";
 	configSources?: ConfigSnapshot["sources"];
 	homeRoot?: string;
 	workspace?: string;
 	pluginRuntime?: PluginRuntime;
 }>;
 
-const bundledComposition = createApplicationPluginComposition({
-	createMcpResource: false,
-	enabledPlugins: ["mcp", "subagents"],
-	workspace: testDirectory,
-});
+const bundledComposition = createApplicationPluginComposition();
 const bundledPluginRuntime = await loadPlugins({
-	bundledPlugins: bundledComposition.bundledPlugins,
 	cliPaths: [],
+	distributionPlugins: bundledComposition.distributionPlugins,
 	config: {
 		configStore: createConfigStore({
 			configRoot: join(testDirectory, "config"),
@@ -320,6 +298,23 @@ const createCapabilities = (
 	options: SessionHostTestCapabilitiesOptions = {}
 ): SessionCapabilities => {
 	const workspace = options.workspace ?? process.cwd();
+	const configSources =
+		options.configSources ??
+		(Object.keys(document).length === 0
+			? []
+			: [
+					{
+						document,
+						path: join(workspace, "wincode.json"),
+						scope: "project" as const,
+					},
+				]);
+	const configSnapshot: ConfigSnapshot = {
+		diagnostics: [],
+		document,
+		sourceFor: () => configSources[0],
+		sources: configSources,
+	};
 	const registry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
 			diagnostics: [],
@@ -328,37 +323,29 @@ const createCapabilities = (
 			sources: options.configSources ?? [],
 		})
 	);
-	const config = {
-		configStore: createConfigStore({
-			fs: {
-				readFile: async () => {
-					throw Object.assign(new Error("Test config is unavailable."), {
-						code: "ENOENT",
-					});
-				},
+	const configStore = createConfigStore({
+		fs: {
+			readFile: async () => {
+				throw Object.assign(new Error("Test config is unavailable."), {
+					code: "ENOENT",
+				});
 			},
-		}),
+		},
+	});
+	const config = {
+		configStore: {
+			...configStore,
+			getSnapshot: async () => configSnapshot,
+			refreshSnapshot: async () => configSnapshot,
+		},
 		cwd: workspace,
 		homeRoot: options.homeRoot ?? homedir(),
 		workspace,
 	};
-	const toolPermission = createToolPermissionRuntime({
-		agent: buildId,
-		policyState: createToolPermissionPolicyState(),
-		getRegistry: () => registry,
-		service: createPermissionService(),
-		workspace,
-	});
 	const pluginRuntime = options.pluginRuntime ?? bundledPluginRuntime;
-	const composition = createApplicationPluginComposition({
-		configStore: config.configStore,
-		createMcpResource: false,
-		enabledPlugins: ["mcp", "subagents"],
-		workspace,
-	});
+	const composition = createApplicationPluginComposition();
 	let sessionSdk: SessionSdkChildFactory | undefined;
 	const capabilities: SessionCapabilities = {
-		getApprovalMode: () => options.approvalMode ?? "interactive",
 		getCapabilityCeiling: () => undefined,
 		getCompactionModule: () =>
 			compactionModule(async () => ({ text: "summary" })),
@@ -389,7 +376,6 @@ const createCapabilities = (
 		getSessionHostManager: () => manager,
 		getSessionSdk: () => sessionSdk,
 		getPluginRuntime: () => pluginRuntime,
-		getToolPermission: () => toolPermission,
 		getTurnToolResolver: () => composition.turnToolResolver,
 	};
 	sessionSdk = createSessionSdkChildFactory(
@@ -397,7 +383,6 @@ const createCapabilities = (
 			configRuntime: config,
 			connections: capabilities.getConnections(),
 			cwd: workspace,
-			enabledPlugins: ["mcp", "subagents"],
 			registry,
 			store: sessionStore,
 			workspace,
@@ -408,46 +393,114 @@ const createCapabilities = (
 	return capabilities;
 };
 
-test("Tool Permission follows the active Agent instead of the registry default", async () => {
-	const scoutId = agentId("scout");
-	const registry = buildAgentRegistry(
-		fromPartial<ConfigSnapshot>({
-			diagnostics: [],
-			document: {
-				agents: {
-					scout: {
-						description: "Inspect with a restricted read policy.",
-						model: "openai/gpt-5.6-luna",
-						role: "primary",
-					},
-				},
-			},
-			sourceFor: () => undefined,
-			sources: [
-				{
-					document: fromPartial<ConfigSnapshot["document"]>({
-						agents: { scout: { permission: { read: "deny" } } },
-					}),
-					path: join(testDirectory, "wincode.json"),
-					scope: "project",
-				},
-			],
-		})
-	);
-	const toolPermission = createToolPermissionRuntime({
-		agent: buildId,
-		getActiveAgent: () => scoutId,
-		getRegistry: () => registry,
-		policyState: createToolPermissionPolicyState(),
-		service: createPermissionService(),
+const createDelayedTerminalStore = (base: SessionStore) => {
+	const terminalCommitStarted = Promise.withResolvers<void>();
+	const allowTerminalCommit = Promise.withResolvers<void>();
+	let blocksTerminalCommit = true;
+	const delayed: SessionStore = {
+		...base,
+		commitSessionRecord: async (input) => {
+			if (blocksTerminalCommit && input.record.outcome.kind === "assistant") {
+				blocksTerminalCommit = false;
+				terminalCommitStarted.resolve();
+				await allowTerminalCommit.promise;
+			}
+			await base.commitSessionRecord(input);
+		},
+	};
+	return { allowTerminalCommit, delayed, terminalCommitStarted };
+};
+
+const resolvedAgentOf = (
+	capabilities: SessionCapabilities,
+	selectedAgent: AgentId = buildId
+): ResolvedCodingAgent => {
+	const agent = capabilities
+		.getRegistry()
+		?.selectableAgents.find(({ id }) => id === selectedAgent);
+	if (agent === undefined) {
+		throw new Error(`Agent "${selectedAgent}" is missing from the registry.`);
+	}
+	return fromPartial<ResolvedCodingAgent>({ ...agent });
+};
+
+const sendInput = (
+	capabilities: SessionCapabilities,
+	userText = "third request",
+	agent: AgentId = buildId
+): SessionSendInput => ({
+	agent,
+	composition: { files: [], text: userText },
+	model,
+	resolvedAgent: resolvedAgentOf(capabilities, agent),
+	sessionModel: model,
+	userText,
+});
+
+const textOf = (parts: SessionMessage["parts"]): string =>
+	parts.map((part) => (part.type === "text" ? part.text : "")).join("");
+
+afterAll(async () => {
+	await sessionHostManager.shutdownAll();
+	await bundledPluginRuntime.shutdown();
+	if (previousSubagentsDatabasePath === undefined) {
+		delete process.env.WINCODE_SUBAGENTS_DB_PATH;
+	} else {
+		process.env.WINCODE_SUBAGENTS_DB_PATH = previousSubagentsDatabasePath;
+	}
+	rmSync(testDirectory, { force: true, recursive: true });
+});
+
+test("retains an idle Session Host until registered Plugin background work finishes", async () => {
+	const background = Promise.withResolvers<void>();
+	let shutdownCount = 0;
+	const plugin: LoadedPlugin = {
+		commands: [],
+		id: "background_work",
+		onSessionShutdown: async () => {
+			shutdownCount += 1;
+		},
+		sourcePath: "/plugins/background-work.ts",
+		tools: [],
+		workspace: testDirectory,
+	};
+	const pluginRuntime = createPluginRuntime([plugin], []);
+	const manager = createSessionHostManager();
+	const capabilities = createCapabilities(store, {}, manager, {
+		pluginRuntime,
 		workspace: testDirectory,
 	});
-	const permission = await toolPermission.resolvePermission();
+	const { id: parentSessionId } = await store.createSession({
+		agent: buildId,
+		message: message(
+			"background-work-parent-user",
+			"user",
+			"Keep this Session host alive while Plugin work remains."
+		),
+		model,
+		turnId: agentTurnId("background-work-parent-turn"),
+	});
+	pluginRuntime.registerBackgroundWork(parentSessionId, background.promise);
+	const host = await manager.openHost({
+		capabilities,
+		sessionId: parentSessionId,
+		view: true,
+	});
 
-	expect(registry.defaultAgentId).toBe(buildId);
-	expect(permission.decide("read", join(testDirectory, "protected.txt"))).toBe(
-		"deny"
-	);
+	await manager.releaseView(parentSessionId);
+	const reopenedHost = await manager.openHost({
+		capabilities,
+		sessionId: parentSessionId,
+	});
+	expect(reopenedHost).toBe(host);
+	expect(shutdownCount).toBe(0);
+
+	background.resolve();
+	await pluginRuntime.waitForBackgroundWork(parentSessionId);
+	await manager.releaseView(parentSessionId);
+	expect(shutdownCount).toBe(1);
+	await manager.shutdownAll();
+	await pluginRuntime.shutdown();
 });
 
 test("Session Host opening waits for asynchronous Session Plugin registrations", async () => {
@@ -572,403 +625,9 @@ test("Plugin lifecycle restarts for a reopened Session runtime", async () => {
 	]);
 });
 
-const createHostMcpRegistry = (
-	executedServers: string[],
-	includeExternalDirectoryTool = false
-) => {
-	const serverConfigs: ResolvedMcpServerConfig[] = [
-		"server-denied",
-		"agent-denied",
-		"allowed",
-		...(includeExternalDirectoryTool ? ["external"] : []),
-	].map(
-		(name): ResolvedMcpServerConfig => ({
-			name,
-			type: "local",
-			command: ["unused-host-test-command"],
-			disabled: false,
-			permission: name === "server-denied" ? "deny" : "allow",
-			timeout: { startup: 1000, catalog: 1000, execution: 1000 },
-		})
-	);
-	return createMcpRegistry({
-		createClient: (config): McpClient => ({
-			callTool: async (toolName) => {
-				executedServers.push(config.name);
-				return fromAny({
-					content: [{ text: `${config.name}:${toolName}`, type: "text" }],
-					isError: false,
-				});
-			},
-			close: async () => undefined,
-			connect: async () => undefined,
-			listTools: async () => [
-				{
-					description: "Echo text through the test MCP server.",
-					inputSchema: {
-						properties: { text: { type: "string" } },
-						required: ["text"],
-						type: "object",
-					},
-					name: config.name === "external" ? "directory" : "echo",
-				},
-			],
-			setToolsChangedListener: () => undefined,
-		}),
-		env: {},
-		loadConfig: async (): Promise<McpConfigResult> => ({
-			diagnostics: [],
-			servers: Object.fromEntries(
-				serverConfigs.map((config) => [config.name, config])
-			),
-		}),
-		workspace: process.cwd(),
-	});
-};
-
-const createDelayedTerminalStore = (base: SessionStore) => {
-	const terminalCommitStarted = Promise.withResolvers<void>();
-	const allowTerminalCommit = Promise.withResolvers<void>();
-	let blocksTerminalCommit = true;
-	const delayed: SessionStore = {
-		...base,
-		commitSessionRecord: async (input) => {
-			if (blocksTerminalCommit && input.record.outcome.kind === "assistant") {
-				blocksTerminalCommit = false;
-				terminalCommitStarted.resolve();
-				await allowTerminalCommit.promise;
-			}
-			await base.commitSessionRecord(input);
-		},
-	};
-	return { allowTerminalCommit, delayed, terminalCommitStarted };
-};
-
-const resolvedAgentOf = (
-	capabilities: SessionCapabilities,
-	agentId: AgentId = buildId
-): ResolvedCodingAgent => {
-	const agent = capabilities
-		.getRegistry()
-		?.selectableAgents.find(({ id }) => id === agentId);
-	if (!agent) {
-		throw new Error(`Agent "${agentId}" is missing from the registry.`);
-	}
-	return fromPartial<ResolvedCodingAgent>({ ...agent });
-};
-
-const sendInput = (
-	capabilities: SessionCapabilities,
-	userText = "third request",
-	agent: AgentId = buildId
-): SessionSendInput => ({
-	agent,
-	composition: { files: [], text: userText },
-	model,
-	resolvedAgent: resolvedAgentOf(capabilities, agent),
-	sessionModel: model,
-	userText,
-});
-
-const textOf = (parts: SessionMessage["parts"]): string =>
-	parts.map((part) => (part.type === "text" ? part.text : "")).join("");
-
-afterAll(async () => {
-	await sessionHostManager.shutdownAll();
-	await bundledPluginRuntime.shutdown();
-	if (previousSubagentsDatabasePath === undefined) {
-		delete process.env.WINCODE_SUBAGENTS_DB_PATH;
-	} else {
-		process.env.WINCODE_SUBAGENTS_DB_PATH = previousSubagentsDatabasePath;
-	}
-	rmSync(testDirectory, { force: true, recursive: true });
-});
-
-test("retains an idle Session Host until registered Plugin background work finishes", async () => {
-	const background = Promise.withResolvers<void>();
-	let shutdownCount = 0;
-	const plugin: LoadedPlugin = {
-		commands: [],
-		id: "background_work",
-		onSessionShutdown: async () => {
-			shutdownCount += 1;
-		},
-		sourcePath: "/plugins/background-work.ts",
-		tools: [],
-		workspace: testDirectory,
-	};
-	const pluginRuntime = createPluginRuntime([plugin], []);
-	const manager = createSessionHostManager();
-	const capabilities = createCapabilities(store, {}, manager, {
-		pluginRuntime,
-		workspace: testDirectory,
-	});
-	const { id: parentSessionId } = await store.createSession({
-		agent: buildId,
-		message: message(
-			"background-work-parent-user",
-			"user",
-			"Keep this Session host alive while Plugin work remains."
-		),
-		model,
-		turnId: agentTurnId("background-work-parent-turn"),
-	});
-	pluginRuntime.registerBackgroundWork(parentSessionId, background.promise);
-	const host = await manager.openHost({
-		capabilities,
-		sessionId: parentSessionId,
-		view: true,
-	});
-
-	await manager.releaseView(parentSessionId);
-	const reopenedHost = await manager.openHost({
-		capabilities,
-		sessionId: parentSessionId,
-	});
-	expect(reopenedHost).toBe(host);
-	expect(shutdownCount).toBe(0);
-
-	background.resolve();
-	await pluginRuntime.waitForBackgroundWork(parentSessionId);
-	await manager.releaseView(parentSessionId);
-	expect(shutdownCount).toBe(1);
-	await manager.shutdownAll();
-	await pluginRuntime.shutdown();
-});
-
-test("MCP tool execution honors an Agent action-glob permission at call time", async () => {
-	const executedServers: string[] = [];
-	const mcpRegistry = createHostMcpRegistry(executedServers);
-	const mcpResource: McpPluginResource = Object.freeze({
-		capability: Object.freeze(createMcpSessionCapability(mcpRegistry)),
-		close: () => mcpRegistry.close(),
-		initialize: () => mcpRegistry.initialize(),
-		registry: mcpRegistry,
-	});
-	const pluginRuntime = await loadPlugins({
-		bundledPlugins: [
-			...bundledComposition.bundledPlugins.filter(({ id }) => id !== "mcp"),
-			{ factory: createMcpPluginFactory(mcpResource), id: "mcp" },
-		],
-		cliPaths: [],
-		config: {
-			configStore: createConfigStore({
-				configRoot: join(testDirectory, "config"),
-				homeRoot: testDirectory,
-			}),
-			cwd: testDirectory,
-			homeRoot: testDirectory,
-			workspace: testDirectory,
-		},
-	});
-	const manager = createSessionHostManager();
-	const configDocument = {
-		agents: {
-			build: {
-				permission: {
-					"server-denied_echo": "allow",
-					"agent-denied_echo": "deny",
-					"allowed_*": "ask",
-				},
-			},
-		},
-	};
-	const capabilities = createCapabilities(store, configDocument, manager, {
-		configSources: [
-			{
-				document: configDocument,
-				path: join(testDirectory, "mcp-policy.json"),
-				scope: "project",
-			},
-		],
-		pluginRuntime,
-		approvalMode: "non-interactive",
-	});
-	const { id: sessionId } = await store.createSession({
-		agent: buildId,
-		message: message(
-			"mcp-policy-composition-user",
-			"user",
-			"Use the available MCP server and report its result."
-		),
-		model,
-		turnId: agentTurnId("mcp-policy-composition-turn"),
-	});
-	const host = await manager.openHost({ capabilities, sessionId });
-	const allowedToolName = await qualifyMcpToolName("allowed", "echo");
-	let visibleMcpTools: string[] = [];
-	let toolCallFailure: string | undefined;
-	const unsubscribe = host.onEvent((event) => {
-		if (
-			event.type === "tool-call-finished" &&
-			event.outcome.type === "failure"
-		) {
-			toolCallFailure = event.outcome.errorText;
-		}
-	});
-	const previousStepScript = recorder.stepScript;
-	recorder.stepScript = async function* (
-		request: ModelStepRequest
-	): AsyncGenerator<ModelStreamPart> {
-		visibleMcpTools = (request.tools ?? [])
-			.filter(({ name }) => name.startsWith("mcp_"))
-			.map(({ name }) => name);
-		const hasToolResult = request.messages
-			.flatMap(({ content }) => content)
-			.some(({ type }) => type === "tool-result");
-		if (hasToolResult) {
-			yield {
-				delta: "The allowed MCP result was received.",
-				type: "text-delta",
-			};
-		} else {
-			yield {
-				input: { text: "through host" },
-				toolCallId: toolCallId("mcp-policy-composition-call"),
-				toolName: allowedToolName,
-				type: "tool-call",
-			};
-		}
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
-	};
-
-	try {
-		const outcome = await host.agentSession.send(
-			sendInput(
-				capabilities,
-				"Use the available MCP server and report its result."
-			)
-		);
-
-		expect(outcome.rejected).toBe(false);
-		expect(visibleMcpTools).toEqual([allowedToolName]);
-		expect(executedServers).toEqual([]);
-		expect(toolCallFailure).toContain("not approved");
-	} finally {
-		unsubscribe();
-		recorder.stepScript = previousStepScript;
-		await manager.shutdownAll();
-		await pluginRuntime.shutdown();
-	}
-});
-
-test("MCP logical action names use their family when they collide with fixed actions", async () => {
-	const executedServers: string[] = [];
-	const mcpRegistry = createHostMcpRegistry(executedServers, true);
-	const mcpResource: McpPluginResource = Object.freeze({
-		capability: Object.freeze(createMcpSessionCapability(mcpRegistry)),
-		close: () => mcpRegistry.close(),
-		initialize: () => mcpRegistry.initialize(),
-		registry: mcpRegistry,
-	});
-	const pluginRuntime = await loadPlugins({
-		bundledPlugins: [
-			...bundledComposition.bundledPlugins.filter(({ id }) => id !== "mcp"),
-			{ factory: createMcpPluginFactory(mcpResource), id: "mcp" },
-		],
-		cliPaths: [],
-		config: {
-			configStore: createConfigStore({
-				configRoot: join(testDirectory, "config"),
-				homeRoot: testDirectory,
-			}),
-			cwd: testDirectory,
-			homeRoot: testDirectory,
-			workspace: testDirectory,
-		},
-	});
-	const manager = createSessionHostManager();
-	const configDocument = {
-		agents: {
-			build: {
-				permission: {
-					"server-denied_echo": "deny",
-					"agent-denied_echo": "deny",
-					allowed_echo: "deny",
-					"external_*": "allow",
-				},
-			},
-		},
-	};
-	const capabilities = createCapabilities(store, configDocument, manager, {
-		configSources: [
-			{
-				document: fromPartial<ConfigSnapshot["document"]>(configDocument),
-				path: join(testDirectory, "mcp-action-family-policy.json"),
-				scope: "project",
-			},
-		],
-		pluginRuntime,
-		approvalMode: "non-interactive",
-	});
-	const { id: sessionId } = await store.createSession({
-		agent: buildId,
-		message: message(
-			"mcp-action-family-user",
-			"user",
-			"Use the external directory MCP tool."
-		),
-		model,
-		turnId: agentTurnId("mcp-action-family-turn"),
-	});
-	const host = await manager.openHost({ capabilities, sessionId });
-	const externalToolName = await qualifyMcpToolName("external", "directory");
-	let visibleMcpTools: string[] = [];
-	let toolCallFailure: string | undefined;
-	const unsubscribe = host.onEvent((event) => {
-		if (
-			event.type === "tool-call-finished" &&
-			event.outcome.type === "failure"
-		) {
-			toolCallFailure = event.outcome.errorText;
-		}
-	});
-	const previousStepScript = recorder.stepScript;
-	recorder.stepScript = async function* (
-		request: ModelStepRequest
-	): AsyncGenerator<ModelStreamPart> {
-		visibleMcpTools = (request.tools ?? [])
-			.filter(({ name }) => name.startsWith("mcp_"))
-			.map(({ name }) => name);
-		const hasToolResult = request.messages
-			.flatMap(({ content }) => content)
-			.some(({ type }) => type === "tool-result");
-		if (hasToolResult) {
-			yield {
-				delta: "The external directory MCP tool was allowed.",
-				type: "text-delta",
-			};
-		} else {
-			yield {
-				input: { text: "through host" },
-				toolCallId: toolCallId("mcp-action-family-call"),
-				toolName: externalToolName,
-				type: "tool-call",
-			};
-		}
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
-	};
-
-	try {
-		const outcome = await host.agentSession.send(
-			sendInput(capabilities, "Use the external directory MCP tool.")
-		);
-
-		expect(outcome.rejected).toBe(false);
-		expect(visibleMcpTools).toEqual([externalToolName]);
-		expect(executedServers).toEqual(["external"]);
-		expect(toolCallFailure).toBeUndefined();
-	} finally {
-		unsubscribe();
-		recorder.stepScript = previousStepScript;
-		await manager.shutdownAll();
-		await pluginRuntime.shutdown();
-	}
-});
-
-test("Session Host arms the Skill catalog with the selected Agent's Permission", async () => {
+test("Session Host keeps Skill activation separate from coding-tool selection", async () => {
 	const workspace = join(testDirectory, "selected-agent-skill-workspace");
-	const skillBody = "Visible only to Agents allowed to use Skills.";
+	const skillBody = "Available after selecting Skill activation.";
 	const scoutId = agentId("scout");
 	await Bun.write(
 		join(workspace, ".wincode", "skills", "restricted", "SKILL.md"),
@@ -980,23 +639,15 @@ test("Session Host arms the Skill catalog with the selected Agent's Permission",
 		{
 			agents: {
 				scout: {
-					description: "Inspect without Skills.",
+					description: "Inspect with a limited coding-tool subset.",
 					model: "openai/gpt-5.6-luna",
 					role: "primary",
+					tools: ["read"],
 				},
 			},
 		},
 		manager,
 		{
-			configSources: [
-				{
-					document: fromPartial<ConfigSnapshot["document"]>({
-						agents: { scout: { permission: { skill: "deny" } } },
-					}),
-					path: join(workspace, "wincode.json"),
-					scope: "project",
-				},
-			],
 			homeRoot: workspace,
 			workspace,
 		}
@@ -1006,7 +657,7 @@ test("Session Host arms the Skill catalog with the selected Agent's Permission",
 		message: message(
 			"selected-agent-skill-user",
 			"user",
-			"Use the selected Agent's policy."
+			"Use the available Skill."
 		),
 		model,
 		turnId: agentTurnId("selected-agent-skill-turn"),
@@ -1024,7 +675,7 @@ test("Session Host arms the Skill catalog with the selected Agent's Permission",
 			({ name }) => name === "skill"
 		);
 		yield {
-			delta: "The selected Agent's policy was applied.",
+			delta: "The available Skill can be used.",
 			type: "text-delta",
 		};
 		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
@@ -1032,78 +683,13 @@ test("Session Host arms the Skill catalog with the selected Agent's Permission",
 
 	try {
 		const outcome = await host.agentSession.send(
-			sendInput(capabilities, "Use the selected Agent's policy.", scoutId)
+			sendInput(capabilities, "Use the available Skill.", scoutId)
 		);
 
 		expect(outcome.rejected).toBe(false);
-		expect(skillToolVisible).toBe(false);
+		expect(skillToolVisible).toBe(true);
 	} finally {
 		recorder.stepScript = previousStepScript;
-		await manager.shutdownAll();
-	}
-});
-
-test("Session Host gates an explicit Skill with the selected Agent's Permission", async () => {
-	const workspace = join(
-		testDirectory,
-		"selected-agent-explicit-skill-workspace"
-	);
-	const scoutId = agentId("scout");
-	await Bun.write(
-		join(workspace, ".wincode", "skills", "restricted", "SKILL.md"),
-		`---
-name: restricted
-description: Requires the selected Agent's approval.
----
-Restricted instructions.`
-	);
-	const manager = createSessionHostManager();
-	const configDocument = {
-		agents: {
-			build: { permission: { skill: "allow" } },
-			scout: {
-				description: "Review with approval-gated Skills.",
-				model: "openai/gpt-5.6-luna",
-				permission: { skill: "ask" },
-				role: "primary",
-			},
-		},
-	};
-	const capabilities = createCapabilities(store, configDocument, manager, {
-		approvalMode: "non-interactive",
-		configSources: [
-			{
-				document: fromPartial<ConfigSnapshot["document"]>(configDocument),
-				path: join(workspace, "wincode.json"),
-				scope: "project",
-			},
-		],
-		homeRoot: workspace,
-		workspace,
-	});
-	const { id: sessionId } = await store.createSession({
-		agent: buildId,
-		message: message(
-			"selected-agent-explicit-skill-user",
-			"user",
-			"Use the selected Agent's approval policy."
-		),
-		model,
-		turnId: agentTurnId("selected-agent-explicit-skill-turn"),
-	});
-	const host = await manager.openHost({ capabilities, sessionId });
-
-	try {
-		const outcome = await host.agentSession.send({
-			...sendInput(capabilities, "Use the explicit Skill.", scoutId),
-			skill: { instructions: "", name: "restricted" },
-		});
-
-		expect(outcome.rejected).toBe(true);
-		if (outcome.rejected) {
-			expect(outcome.reason.toLowerCase()).toContain("not approved");
-		}
-	} finally {
 		await manager.shutdownAll();
 	}
 });
@@ -1179,7 +765,6 @@ test("Session Host reports an unavailable Skill target without activating it", a
 		expect(JSON.stringify(skillResult)).toContain("Unknown Skill");
 		expect(JSON.stringify(skillResult)).toContain('"status":"failed"');
 		expect(availableSkillBodyLoaded).toBe(false);
-		expect(host.agentSession.getSnapshot().approvals).toEqual([]);
 	} finally {
 		recorder.stepScript = previousStepScript;
 		await manager.shutdownAll();

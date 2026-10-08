@@ -12,6 +12,7 @@ export type SkillSearchCommandSpec = BaseSpec & { kind: "skill-search" };
 export type PluginCommandSpec = BaseSpec & {
 	kind: "plugin";
 	pluginId: string;
+	statusPanelId?: string;
 };
 
 export type CommandItem =

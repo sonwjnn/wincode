@@ -1,12 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { TextAttributes } from "@opentui/core";
-import {
-	MockTreeSitterClient,
-	type TestRendererSetup,
-} from "@opentui/core/testing";
+import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
-import { act, useEffect, useMemo, useState } from "react";
+import { act, useEffect, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { buildAddedPreviewPatch } from "@/modules/sessions/ui/messages/edit-diff-block";
 import { setTreeSitterClientForTests } from "@/modules/sessions/ui/messages/syntax-style";
@@ -14,16 +11,8 @@ import {
 	buildWritePreview,
 	countWriteLines,
 } from "@/modules/sessions/ui/messages/write-block";
-import {
-	type ApprovalPanelEntry,
-	type ApprovalPanelsContextValue,
-	ApprovalPanelsProvider,
-	useApprovalPanels,
-} from "@/shared/providers/approval/approval-panels-provider";
-import type { ToolApprovalRequest } from "@/shared/providers/approval/types";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
-import { approvalPanelEntry } from "../support/approval-panel-entry";
 import { toolCallId } from "../support/identifiers";
 import { flushTestRenderer as flushUi } from "../support/opentui";
 
@@ -69,9 +58,7 @@ const renderFrame = async (
 	const setup = await testRender(
 		<ThemeProvider>
 			<KeyboardLayerProvider>
-				<ApprovalPanelsProvider>
-					<BotMessageContent parts={parts} />
-				</ApprovalPanelsProvider>
+				<BotMessageContent parts={parts} />
 			</KeyboardLayerProvider>
 		</ThemeProvider>,
 		{ height, width }
@@ -83,59 +70,6 @@ const renderFrame = async (
 	} finally {
 		setup.renderer.destroy();
 	}
-};
-
-type ApprovalFrame = {
-	project: ApprovalPanelsContextValue["project"];
-	setup: TestRendererSetup;
-};
-
-/** Answers a projected request the way the session's settlement would. */
-const settleProjectedApproval = async (
-	project: ApprovalPanelsContextValue["project"],
-	request: ToolApprovalRequest,
-	resolution: NonNullable<ApprovalPanelEntry["resolution"]>
-): Promise<void> => {
-	await act(async () => {
-		project([approvalPanelEntry(request, { resolution })]);
-	});
-};
-
-const renderFrameWithApproval = async (
-	parts: SessionMessage["parts"],
-	request: ToolApprovalRequest,
-	height = 8
-): Promise<ApprovalFrame> => {
-	let projected: ApprovalPanelsContextValue["project"] = () => undefined;
-	function Probe() {
-		const { project } = useApprovalPanels();
-		projected = project;
-		// biome-ignore lint/correctness/useExhaustiveDependencies: the request is fixed for the rendered frame.
-		const entry = useMemo(() => approvalPanelEntry(request), [request]);
-		useEffect(() => {
-			project([entry]);
-		}, [entry, project]);
-		return null;
-	}
-	const setup = await testRender(
-		<ThemeProvider>
-			<KeyboardLayerProvider>
-				<ApprovalPanelsProvider>
-					<Probe />
-					<BotMessageContent parts={parts} />
-				</ApprovalPanelsProvider>
-			</KeyboardLayerProvider>
-		</ThemeProvider>,
-		{ height, width: 160 }
-	);
-	await setup.renderOnce();
-	await flushUi(setup);
-	return {
-		project: (entries) => {
-			projected(entries);
-		},
-		setup,
-	};
 };
 
 describe("BotMessageContent", () => {
@@ -218,9 +152,7 @@ describe("BotMessageContent", () => {
 		const setup = await testRender(
 			<ThemeProvider>
 				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<Probe />
-					</ApprovalPanelsProvider>
+					<Probe />
 				</KeyboardLayerProvider>
 			</ThemeProvider>,
 			{ height: 20, width: 100 }
@@ -259,9 +191,7 @@ describe("BotMessageContent", () => {
 		const setup = await testRender(
 			<ThemeProvider>
 				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<BotMessageContent parts={[part]} />
-					</ApprovalPanelsProvider>
+					<BotMessageContent parts={[part]} />
 				</KeyboardLayerProvider>
 			</ThemeProvider>,
 			{ height: 60, width: 120 }
@@ -545,9 +475,7 @@ describe("BotMessageContent", () => {
 		const setup = await testRender(
 			<ThemeProvider>
 				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<BotMessageContent parts={[part]} />
-					</ApprovalPanelsProvider>
+					<BotMessageContent parts={[part]} />
 				</KeyboardLayerProvider>
 			</ThemeProvider>,
 			{ height: 50, width: 100 }
@@ -722,9 +650,9 @@ describe("BotMessageContent", () => {
 		expect(frame).toContain("↳ Next: correct the input, then retry.");
 	});
 
-	test("renders an aborted read without a status suffix", async () => {
+	test("renders a failed read without a status suffix", async () => {
 		const part = {
-			errorText: "Read was not approved: ~/.claude/settings.json",
+			errorText: "Read failed: missing file.",
 			input: { path: "~/.claude/settings.json" },
 			state: "output-error",
 			toolCallId: toolCallId("call-aborted-read"),
@@ -733,90 +661,13 @@ describe("BotMessageContent", () => {
 		const frame = await renderFrame([part]);
 
 		expect(frame).toContain("→ Read ~/.claude/settings.json");
-		expect(frame).toContain("Read was not approved");
-		expect(frame).not.toContain(
-			"Read was not approved: ~/.claude/settings.json"
-		);
+		expect(frame).toContain("Read failed: missing file.");
 		expect(frame).not.toContain("Aborted");
 	});
-	test("lets the denied audit line own the failure reason", async () => {
+
+	test("renders an MCP execution failure without a status suffix", async () => {
 		const part = {
-			errorText: "Read was not approved: ~/.claude/settings.json",
-			input: { path: "~/.claude/settings.json" },
-			state: "output-error",
-			toolCallId: toolCallId("call-owned-error"),
-			type: "tool-read",
-		} satisfies ReadToolPart;
-		const request: ToolApprovalRequest = {
-			description: "Read a UTF-8 text file inside the workspace.",
-			identity: [
-				{ label: "tool", value: "read" },
-				{ label: "resource", value: "~/.claude/settings.json" },
-			],
-			input: { path: "~/.claude/settings.json" },
-			toolCallId: toolCallId("call-owned-error"),
-		};
-		const { project, setup } = await renderFrameWithApproval(
-			[part],
-			request,
-			8
-		);
-
-		await settleProjectedApproval(project, request, {
-			outcome: "rejected",
-		});
-		await flushUi(setup);
-		const frame = setup.captureCharFrame();
-
-		// The path stays on the tool row; the audit line owns the reason and
-		// drops the repeated resource instead of duplicating it inline.
-		expect(frame).toContain("→ Read ~/.claude/settings.json");
-		expect(frame).toContain("✗ Read was not approved");
-		expect(frame).not.toContain(
-			"Read was not approved: ~/.claude/settings.json"
-		);
-		expect(frame).not.toContain("rejected");
-		setup.renderer.destroy();
-	});
-	test("shows the fallback error line when a tool fails after approval", async () => {
-		const part = {
-			errorText: "Chat request failed.",
-			input: { query: "verbose failed query" },
-			state: "output-error",
-			toolCallId: toolCallId("call-approved-failed"),
-			toolName: "mcp_context_7_query_docs_3f6b8a11",
-			type: "dynamic-tool",
-		} satisfies DynamicToolPart;
-		const request: ToolApprovalRequest = {
-			description: "Search the documentation.",
-			identity: [
-				{ label: "tool", value: "mcp_context_7_query_docs_3f6b8a11" },
-				{ label: "resource", value: "*" },
-			],
-			input: { query: "verbose failed query" },
-			toolCallId: toolCallId("call-approved-failed"),
-		};
-		const { project, setup } = await renderFrameWithApproval(
-			[part],
-			request,
-			8
-		);
-
-		await settleProjectedApproval(project, request, {
-			outcome: "allow-once",
-		});
-		await flushUi(setup);
-		const frame = setup.captureCharFrame();
-
-		// An approved tool can still fail at runtime; the `✓` audit line is not
-		// an error surface, so the fallback error line renders below it.
-		expect(frame).toContain("✓ allowed once");
-		expect(frame).toContain("Chat request failed.");
-		setup.renderer.destroy();
-	});
-	test("renders the original MCP rejection reason without a status suffix", async () => {
-		const part = {
-			errorText: "MCP tool 'mcp_demo_echo' was not approved",
+			errorText: "MCP tool 'mcp_demo_echo' failed.",
 			input: { query: "echo" },
 			state: "output-error",
 			toolCallId: toolCallId("call-mcp-rejected"),
@@ -826,7 +677,7 @@ describe("BotMessageContent", () => {
 		const frame = await renderFrame([part]);
 
 		expect(frame).toContain("⚙ demo_echo [query=echo]");
-		expect(frame).toContain("MCP tool 'mcp_demo_echo' was not approved");
+		expect(frame).toContain("MCP tool 'mcp_demo_echo' failed.");
 		expect(frame).not.toContain("Rejected");
 	});
 
@@ -871,7 +722,6 @@ describe("BotMessageContent", () => {
 
 	test("renders denied MCP calls as denied", async () => {
 		const part = {
-			approval: { approved: false, id: "approval-1" },
 			input: {},
 			state: "output-denied",
 			toolCallId: toolCallId("call-5"),
@@ -1008,16 +858,14 @@ describe("BotMessageContent", () => {
 		const setup = await testRender(
 			<ThemeProvider>
 				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<BotMessageContent
-							parts={[
-								{
-									text: "**Evaluating alias management**\n\nChecking the `asset` alias.",
-									type: "reasoning",
-								},
-							]}
-						/>
-					</ApprovalPanelsProvider>
+					<BotMessageContent
+						parts={[
+							{
+								text: "**Evaluating alias management**\n\nChecking the `asset` alias.",
+								type: "reasoning",
+							},
+						]}
+					/>
 				</KeyboardLayerProvider>
 			</ThemeProvider>,
 			{ height: 8, width: 120 }
@@ -1057,16 +905,14 @@ describe("BotMessageContent", () => {
 		const setup = await testRender(
 			<ThemeProvider>
 				<KeyboardLayerProvider>
-					<ApprovalPanelsProvider>
-						<BotMessageContent
-							parts={[
-								{
-									text: "    **indented code**\n\nVisible prose",
-									type: "reasoning",
-								},
-							]}
-						/>
-					</ApprovalPanelsProvider>
+					<BotMessageContent
+						parts={[
+							{
+								text: "    **indented code**\n\nVisible prose",
+								type: "reasoning",
+							},
+						]}
+					/>
 				</KeyboardLayerProvider>
 			</ThemeProvider>,
 			{ height: 8, width: 120 }
@@ -1128,69 +974,6 @@ describe("BotMessageContent", () => {
 		expect(frame).toContain('nested={"child":{"grandchild":"[…]"}}');
 		expect(frame).not.toContain("hidden");
 	});
-
-	test("keeps pending approval controls out of the timeline", async () => {
-		const part = {
-			input: { path: "README.md" },
-			state: "input-available",
-			toolCallId: toolCallId("call-approval"),
-			type: "tool-read",
-		} satisfies ReadToolPart;
-		const { setup } = await renderFrameWithApproval(
-			[part],
-			{
-				description: "Read a UTF-8 text file inside the workspace.",
-				identity: [
-					{ label: "tool", value: "read" },
-					{ label: "resource", value: "README.md" },
-				],
-				input: { path: "README.md" },
-				toolCallId: toolCallId("call-approval"),
-			},
-			8
-		);
-
-		const frame = setup.captureCharFrame();
-		expect(frame).toContain("Read README.md");
-		expect(frame).not.toContain("→ Read README.md");
-		expect(frame).not.toContain("Permission required");
-		expect(frame).not.toContain("Allow once");
-		expect(frame).not.toContain("Always allow");
-		expect(frame).not.toContain("Reject");
-		setup.renderer.destroy();
-	});
-
-	test("collapses a settled approval to a dim audit line", async () => {
-		const part = {
-			input: { path: "README.md" },
-			state: "input-available",
-			toolCallId: toolCallId("call-approval-settled"),
-			type: "tool-read",
-		} satisfies ReadToolPart;
-		const request: ToolApprovalRequest = {
-			description: "Read a UTF-8 text file inside the workspace.",
-			identity: [
-				{ label: "tool", value: "read" },
-				{ label: "resource", value: "README.md" },
-			],
-			input: { path: "README.md" },
-			toolCallId: toolCallId("call-approval-settled"),
-		};
-		const { project, setup } = await renderFrameWithApproval(
-			[part],
-			request,
-			8
-		);
-
-		await settleProjectedApproval(project, request, {
-			outcome: "always",
-		});
-		await flushUi(setup);
-		const frame = setup.captureCharFrame();
-		expect(frame).toContain("always allowed");
-		expect(frame).not.toContain("Allow once");
-		setup.renderer.destroy();
-	});
 });
 
 describe("BotMessageContent skill activity row", () => {
@@ -1217,15 +1000,7 @@ describe("BotMessageContent skill activity row", () => {
 		expect(frame).not.toContain("secret instructions");
 	});
 
-	test("renders rejected, failed, and limit-reached states", async () => {
-		const rejected = {
-			input: { name: "lint" },
-			output: { name: "lint", status: "rejected" },
-			state: "output-available",
-			toolCallId: toolCallId("skill-call-2"),
-			toolName: "skill",
-			type: "dynamic-tool",
-		} satisfies DynamicToolPart;
+	test("renders failed and limit-reached Skill states", async () => {
 		const failed = {
 			input: { name: "missing" },
 			output: { error: "Unknown Skill", name: "missing", status: "failed" },
@@ -1247,9 +1022,8 @@ describe("BotMessageContent skill activity row", () => {
 			toolName: "skill",
 			type: "dynamic-tool",
 		} satisfies DynamicToolPart;
-		const frame = await renderFrame([rejected, failed, limited], 6);
+		const frame = await renderFrame([failed, limited], 6);
 
-		expect(frame).toContain("Skill lint — rejected");
 		expect(frame).toContain("Skill missing — failed");
 		expect(frame).toContain("Unknown Skill");
 		expect(frame).toContain("Skill commit — limit reached");

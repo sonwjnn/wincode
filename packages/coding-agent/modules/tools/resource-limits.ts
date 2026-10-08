@@ -11,8 +11,6 @@ export type ResourceLimitProfile = (typeof RESOURCE_LIMIT_PROFILES)[number];
 
 export const resourceLimitProfileSchema = z.enum(RESOURCE_LIMIT_PROFILES);
 export const DEFAULT_RESOURCE_LIMIT_PROFILE = "standard" as const;
-export const RESOURCE_LIMIT_PERMISSION_ACTION = "resource_limits" as const;
-
 export type ToolResourceLimits = ReadonlyDeep<{
 	profile: ResourceLimitProfile;
 	read: {
@@ -54,7 +52,6 @@ export type ToolResourceLimits = ReadonlyDeep<{
 	};
 }>;
 export type ResourceLimitOptions = Readonly<{
-	allowExternalPath?: boolean;
 	resourceLimits?: ToolResourceLimits;
 }>;
 
@@ -184,7 +181,3 @@ export const TOOL_RESOURCE_LIMITS = {
 export const getToolResourceLimits = (
 	profile: ResourceLimitProfile = DEFAULT_RESOURCE_LIMIT_PROFILE
 ): ToolResourceLimits => TOOL_RESOURCE_LIMITS[profile];
-
-export const isElevatedResourceProfile = (
-	profile: ResourceLimitProfile
-): boolean => profile !== DEFAULT_RESOURCE_LIMIT_PROFILE;

@@ -150,7 +150,7 @@ export const editOutputSchema = z
 
 export const editToolSchema = {
 	description:
-		"Edit existing UTF-8 text files with verified File Versions. Hashline accepts one hunk, patch accepts multiple hunks for one file, and apply_patch accepts multiple sections across files. Replace requires one exact live-text match. Sloppy is weaker, one-file context matching and is separately permissioned.",
+		"Edit existing UTF-8 text files with verified File Versions. Hashline accepts one hunk, patch accepts multiple hunks for one file, and apply_patch accepts multiple sections across files. Replace requires one exact live-text match. Sloppy is weaker, one-file context matching and is available only in Sloppy Edit Mode.",
 	name: "edit",
 	schema: editInputSchema,
 } as const;

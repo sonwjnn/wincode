@@ -1,10 +1,10 @@
 import { getErrorMessage, isNonEmptyString, logger } from "@wincode/utils";
-import type { PermissionActionFamily } from "@/modules/permissions/policy";
 import { attachPluginHostContext } from "./host-context";
 import type {
 	PluginBeforeAgentTurnContext,
 	PluginBeforeAgentTurnHook,
 	PluginCommandContext,
+	PluginCommandHandler,
 	PluginCommandRegistration,
 	PluginInputSchema,
 	PluginProcessContext,
@@ -13,6 +13,7 @@ import type {
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginShutdownHook,
+	PluginStatusPanelRegistration,
 	PluginToolRegistration,
 	PluginToolRegistrationAPI,
 } from "./public";
@@ -25,14 +26,8 @@ export type PluginDiagnostic = Readonly<{
 }>;
 
 export type PluginToolDescriptor = Readonly<{
-	action: `plugin:${string}:${string}`;
 	description: string;
 	exclusiveInBatch?: true;
-	permissionAction?: string;
-	permissionActionFamily?: PermissionActionFamily;
-	permissionResource?: string;
-	permissionDecision?: "allow" | "ask" | "deny";
-	permissionSafety?: boolean;
 	handler: PluginTool["handler"];
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
@@ -48,18 +43,22 @@ export type PluginResourceDescriptor = Readonly<{
 
 export type PluginCommandDescriptor = Readonly<{
 	description: string;
-	handler: (context: PluginCommandContext) => string | Promise<string>;
+	handler?: PluginCommandHandler;
 	name: string;
+	statusPanelId?: string;
 	pluginId: string;
 	sourcePath: string;
 	value: string;
 }>;
 
+export type PluginStatusPanelDescriptor = PluginStatusPanelRegistration &
+	Readonly<{ pluginId: string; sourcePath: string }>;
+
 export type LoadedPlugin = Readonly<{
 	commands: readonly PluginCommandDescriptor[];
-	trustedBundled?: boolean;
 	id: string;
 	resources?: readonly PluginResourceDescriptor[];
+	statusPanels?: readonly PluginStatusPanelRegistration[];
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
@@ -83,6 +82,14 @@ export type PluginRuntime = Readonly<{
 		pluginId: string,
 		name: string
 	) => Resource | undefined;
+	getStatusPanels: () => readonly PluginStatusPanelDescriptor[];
+	refreshStatusPanel: (pluginId: string, panelId: string) => Promise<void>;
+	runStatusPanelAction: (
+		pluginId: string,
+		panelId: string,
+		itemId: string,
+		actionId: string
+	) => Promise<void>;
 	registerBackgroundWork: (sessionId: string, work: Promise<unknown>) => void;
 	hasBackgroundWork: (sessionId: string) => boolean;
 	onBackgroundWorkChange: (
@@ -136,27 +143,8 @@ const descriptorForTool = (
 	tool: PluginTool
 ): PluginToolDescriptor =>
 	Object.freeze({
-		action: `plugin:${plugin.id}:${tool.name}`,
 		description: tool.description,
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
-		...(tool.permissionAction === undefined
-			? {}
-			: {
-					permissionAction: tool.permissionAction,
-					permissionActionFamily:
-						plugin.trustedBundled === true && plugin.id === "mcp"
-							? "mcp"
-							: "plugin",
-				}),
-		...(tool.permissionResource === undefined
-			? {}
-			: { permissionResource: tool.permissionResource }),
-		...(tool.permissionDecision === undefined
-			? {}
-			: { permissionDecision: tool.permissionDecision }),
-		...(tool.permissionSafety === undefined
-			? {}
-			: { permissionSafety: tool.permissionSafety }),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,
 		localName: tool.name,
@@ -171,8 +159,11 @@ const descriptorForCommand = (
 ): PluginCommandDescriptor =>
 	Object.freeze({
 		description: command.description,
-		handler: command.handler,
+		...(command.handler === undefined ? {} : { handler: command.handler }),
 		name: command.name,
+		...(command.statusPanelId === undefined
+			? {}
+			: { statusPanelId: command.statusPanelId }),
 		pluginId: plugin.id,
 		sourcePath: plugin.sourcePath,
 		value: `/${command.name}`,
@@ -273,10 +264,7 @@ export const createPluginRuntime = (
 			candidate: PluginToolRegistration<Schema>
 		): void => {
 			try {
-				const tool = validatePluginTool(
-					candidate,
-					plugin.trustedBundled === true
-				);
+				const tool = validatePluginTool(candidate);
 				const modelName = tool.modelName ?? toolNameFor(plugin.id, tool.name);
 				const owner =
 					options.turnToolOwners?.get(modelName) ??
@@ -287,6 +275,18 @@ export const createPluginRuntime = (
 				) {
 					throw new Error(
 						`Plugin Tool name '${modelName}' is owned by another capability.`
+					);
+				}
+				const duplicate = [
+					...scope.tools.values(),
+					...pluginToolsForSession(plugin, options.sessionId ?? ""),
+				].find(
+					(existing) =>
+						existing.name === modelName && existing.localName !== tool.name
+				);
+				if (duplicate !== undefined) {
+					throw new Error(
+						`Plugin Tool name '${modelName}' is already registered by local Tool '${duplicate.localName}' in this Plugin.`
 					);
 				}
 				scope.tools.set(tool.name, descriptorForTool(plugin, tool));
@@ -559,6 +559,16 @@ export const createPluginRuntime = (
 		}
 		return Object.freeze(resolved);
 	};
+	const statusPanelFor = (
+		pluginId: string,
+		panelId: string
+	): PluginStatusPanelDescriptor | undefined => {
+		const plugin = plugins.find((candidate) => candidate.id === pluginId);
+		const panel = plugin?.statusPanels?.find(({ id }) => id === panelId);
+		return plugin === undefined || panel === undefined
+			? undefined
+			: Object.freeze({ ...panel, pluginId, sourcePath: plugin.sourcePath });
+	};
 
 	return Object.freeze({
 		get diagnostics() {
@@ -588,6 +598,9 @@ export const createPluginRuntime = (
 				throw commandFailure(name);
 			}
 			try {
+				if (command.handler === undefined) {
+					throw new Error("Plugin command is a Status Panel command.");
+				}
 				const result = await command.handler(context);
 				if (typeof result !== "string") {
 					throw new Error("Plugin Command returned invalid text.");
@@ -618,6 +631,44 @@ export const createPluginRuntime = (
 				.find((plugin) => plugin.id === pluginId)
 				?.resources?.find((candidate) => candidate.name === name)?.value;
 			return resource as Resource | undefined;
+		},
+		getStatusPanels() {
+			return Object.freeze(
+				plugins
+					.filter((plugin) => isEnabledForSession(plugin))
+					.flatMap((plugin) =>
+						(plugin.statusPanels ?? []).map((panel) =>
+							Object.freeze({
+								...panel,
+								pluginId: plugin.id,
+								sourcePath: plugin.sourcePath,
+							})
+						)
+					)
+			);
+		},
+		async refreshStatusPanel(pluginId, panelId) {
+			const plugin = plugins.find((candidate) => candidate.id === pluginId);
+			const panel = statusPanelFor(pluginId, panelId);
+			if (
+				plugin !== undefined &&
+				panel !== undefined &&
+				isEnabledForSession(plugin)
+			) {
+				await panel.refresh?.();
+			}
+		},
+		async runStatusPanelAction(pluginId, panelId, itemId, actionId) {
+			const plugin = plugins.find((candidate) => candidate.id === pluginId);
+			const panel = statusPanelFor(pluginId, panelId);
+			if (
+				plugin === undefined ||
+				panel === undefined ||
+				!isEnabledForSession(plugin)
+			) {
+				throw new Error(`Plugin Status Panel '${panelId}' is unavailable.`);
+			}
+			await panel.runAction(itemId, actionId);
 		},
 		registerBackgroundWork(sessionId, work) {
 			let sessionWork = backgroundWork.get(sessionId);

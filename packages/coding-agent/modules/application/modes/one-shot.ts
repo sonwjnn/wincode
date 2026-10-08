@@ -23,12 +23,11 @@ import {
 	type ReasoningSelection,
 } from "@wincode/ai/models";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
-import { selectOptionalApplicationPlugins } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
 	createSessionSdkChildFactory,
-	type SessionSdkOptions,
+	type SessionSdkRuntimeOptions,
 } from "@/modules/sessions/sdk";
 import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
 import { resolveWorkspaceRoot } from "@/modules/tools";
@@ -37,7 +36,6 @@ import {
 	createConfigStore,
 } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
-import { createPermissionService } from "../../../modules/permissions/permission-service";
 import type { SessionCapabilitiesAssembly } from "../../../modules/sessions/host/session-capabilities";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
 import type {
@@ -49,10 +47,7 @@ import { createSessionUserMessage } from "../../../modules/sessions/message";
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
-import {
-	createApplicationPluginComposition,
-	type OptionalApplicationPluginId,
-} from "../plugin-composition";
+import { createApplicationPluginComposition } from "../plugin-composition";
 import { projectAgentEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
 import { InvocationError } from "./types";
@@ -60,11 +55,11 @@ import { InvocationError } from "./types";
 type OneShotFormat = "json" | "print";
 
 type OneShotCompositionInput = Readonly<{
-	autoApproval: boolean;
 	configRuntime?: ConfigRuntime;
 	cwd: string;
 	pluginRuntime?: PluginRuntime;
-	enabledPlugins?: readonly OptionalApplicationPluginId[];
+	disabledPluginIds?: readonly string[];
+	pluginPaths?: readonly string[];
 	workspace: string;
 }>;
 
@@ -85,15 +80,13 @@ const composeOneShotCapabilities = async (
 	compose: NonNullable<OneShotDependencies["composeCapabilities"]>
 ): Promise<OneShotComposition> =>
 	compose({
-		autoApproval: context.invocation.auto,
 		cwd: context.cwd,
 		...omitUndefined({
 			configRuntime: context.configRuntime,
 			pluginRuntime: context.pluginRuntime,
 		}),
-		enabledPlugins: selectOptionalApplicationPlugins(
-			context.invocation.disabledPlugins
-		),
+		disabledPluginIds: context.invocation.disabledPlugins,
+		pluginPaths: context.invocation.pluginPaths ?? [],
 		workspace,
 	});
 
@@ -224,9 +217,6 @@ const resolvedAgentFor = (
 				id: candidate.id,
 				instructions: candidate.instructions,
 				role: candidate.role,
-				...(candidate.requiresManualApproval
-					? { requiresManualApproval: true }
-					: {}),
 				visibleCodingTools: [...candidate.visibleCodingTools],
 			};
 
@@ -325,42 +315,36 @@ const resolveSelection = ({
 };
 
 const composeDefaultCapabilities = async ({
-	autoApproval,
 	configRuntime,
 	cwd,
 	pluginRuntime,
-	enabledPlugins = ["mcp", "subagents"],
+	disabledPluginIds = [],
+	pluginPaths = [],
 	workspace,
 }: OneShotCompositionInput): Promise<OneShotComposition> => {
 	const configStore = configRuntime?.configStore ?? createConfigStore();
-	const composition = createApplicationPluginComposition({
-		configStore,
-		createMcpResource: pluginRuntime === undefined,
-		enabledPlugins,
-		workspace,
-	});
+	const composition = createApplicationPluginComposition();
 	const resolvedPluginRuntime =
 		pluginRuntime ??
 		(await loadPlugins({
-			bundledPlugins: composition.bundledPlugins,
-			cliPaths: [],
+			cliPaths: pluginPaths,
 			config: configRuntime ?? {
 				configStore,
 				cwd,
 				homeRoot: os.homedir(),
 				workspace,
 			},
+			disabledPluginIds,
+			distributionPlugins: composition.distributionPlugins,
 		}));
 	let sessionSdk: SessionSdkChildFactory | undefined;
 	const assembly = await createSessionCapabilities({
-		approvalMode: "non-interactive",
 		configStore,
 		cwd,
 		...(configRuntime === undefined ? {} : { configRuntime }),
 		pluginRuntime: resolvedPluginRuntime,
 		getSessionSdk: () => sessionSdk,
 		turnToolResolver: composition.turnToolResolver,
-		permissionService: createPermissionService({ autoApproval }),
 		workspace,
 	});
 	sessionSdk = createSessionSdkChildFactory(
@@ -373,7 +357,7 @@ const composeDefaultCapabilities = async ({
 			runtimeFactory: assembly.capabilities.getRuntime,
 			store: assembly.store,
 			workspace,
-		} satisfies SessionSdkOptions,
+		} satisfies SessionSdkRuntimeOptions,
 		assembly.capabilities.getSessionHostManager(),
 		assembly.store
 	);

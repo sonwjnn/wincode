@@ -7,14 +7,12 @@ import type {
 	AgentSession,
 	LiveSessionSnapshot,
 } from "@/modules/sessions/agent-session/types";
-import { projectSessionApprovals } from "@/modules/sessions/approval-projection";
 import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionSendInput,
 	SessionSendOutcome,
 } from "@/modules/sessions/submission-types";
-import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
 
 export type AgentSessionBinding = Readonly<{
 	/** Cancels the Agent Turn the session is running. */
@@ -48,8 +46,8 @@ export type AgentSessionBinding = Readonly<{
 
 /**
  * Binds an already-open Session Host to React: it mirrors the Agent Session's
- * Snapshot into React state so the view re-renders, projects its approvals into
- * the panel surface, and forwards session commands. It holds no session state
+ * Snapshot into React state so the view re-renders and forwards session
+ * commands. It holds no session state
  * and opens nothing: the Agent Session is the only writer, and every fact this
  * binding renders comes from a snapshot it read.
  *
@@ -63,7 +61,6 @@ export type AgentSessionBinding = Readonly<{
  */
 export function useAgentSession(host: SessionHost): AgentSessionBinding {
 	const { agentSession } = host;
-	const { project: projectApprovalPanels } = useApprovalPanels();
 	const [snapshot, setSnapshot] = useState(agentSession.getSnapshot);
 	useEffect(() => {
 		setSnapshot(agentSession.getSnapshot());
@@ -71,27 +68,6 @@ export function useAgentSession(host: SessionHost): AgentSessionBinding {
 			setSnapshot(agentSession.getSnapshot())
 		);
 	}, [agentSession]);
-	// The panel surface reads the Agent Session's approvals; the binding only
-	// projects them and never reads a settlement back out of it.
-	const approvalEntries = useMemo(
-		() =>
-			projectSessionApprovals(
-				snapshot.approvals,
-				agentSession.respondToApproval
-			),
-		[agentSession.respondToApproval, snapshot.approvals]
-	);
-	useEffect(() => {
-		projectApprovalPanels(approvalEntries);
-	}, [approvalEntries, projectApprovalPanels]);
-	useEffect(
-		() => () => {
-			// The projection clears with the view that showed it; the session
-			// itself is the owner's to shut down.
-			projectApprovalPanels([]);
-		},
-		[projectApprovalPanels]
-	);
 	const compact = useMemo(
 		() =>
 			(

@@ -21,20 +21,14 @@ import type {
 	ChatModelSelection,
 	ConnectionProviderId,
 } from "@wincode/ai/models";
-import { createMcpRegistry } from "@wincode/mcp";
 import { isUndefined } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { McpProvider } from "@/modules/mcp";
 import {
 	ModelPricingProvider,
 	type ModelPricingTable,
 } from "@/modules/model-pricing";
-import {
-	createPermissionService,
-	PermissionServiceProvider,
-} from "@/modules/permissions";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
@@ -50,7 +44,6 @@ import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/sessi
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
-import { ApprovalPanelsProvider } from "@/shared/providers/approval/approval-panels-provider";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -141,12 +134,15 @@ const createTestConnections = (): Connections => {
 };
 
 const createTestConfigStore = (configDocument?: string) => {
+	const homeRoot = process.env.WINCODE_E2E_HOME ?? homedir();
+	const configRoot = join(homeRoot, ".config", "wincode");
 	const configPath = join(
 		process.env.WINCODE_E2E_WORKSPACE ?? process.cwd(),
 		".wincode",
 		"wincode.jsonc"
 	);
 	return createConfigStore({
+		configRoot,
 		fs: {
 			readFile: async (path) => {
 				if (!isUndefined(configDocument) && path === configPath) {
@@ -157,6 +153,7 @@ const createTestConfigStore = (configDocument?: string) => {
 				});
 			},
 		},
+		homeRoot,
 	});
 };
 
@@ -286,44 +283,25 @@ export const renderSession = async ({
 			>
 				<ToastProvider>
 					<ConnectionsProvider connections={createTestConnections()}>
-						<PermissionServiceProvider service={createPermissionService()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<ApprovalPanelsProvider>
-										<PromptConfigProvider initialModel={E2E_MODEL}>
-											<ModelPricingProvider pricing={pricing}>
-												<DialogProvider>
-													<McpProvider
-														closeRegistryOnUnmount={false}
-														createRegistry={() =>
-															createMcpRegistry({
-																loadConfig: async () => ({
-																	diagnostics: [],
-																	servers: {},
-																}),
-																workspace,
-															})
-														}
-													>
-														<RouterContextProvider router={router}>
-															<CommandControllerProvider>
-																<SessionSurface
-																	initialSubmission={initialSubmission}
-																	sessionId={sessionId}
-																/>
-																<RegistryReadyProbe
-																	onReady={resolveRegistryReady}
-																/>
-															</CommandControllerProvider>
-														</RouterContextProvider>
-													</McpProvider>
-												</DialogProvider>
-											</ModelPricingProvider>
-										</PromptConfigProvider>
-									</ApprovalPanelsProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</PermissionServiceProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider initialModel={E2E_MODEL}>
+									<ModelPricingProvider pricing={pricing}>
+										<DialogProvider>
+											<RouterContextProvider router={router}>
+												<CommandControllerProvider>
+													<SessionSurface
+														initialSubmission={initialSubmission}
+														sessionId={sessionId}
+													/>
+													<RegistryReadyProbe onReady={resolveRegistryReady} />
+												</CommandControllerProvider>
+											</RouterContextProvider>
+										</DialogProvider>
+									</ModelPricingProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ConnectionsProvider>
 				</ToastProvider>
 			</ConfigProvider>

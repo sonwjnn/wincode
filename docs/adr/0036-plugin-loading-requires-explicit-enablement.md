@@ -2,6 +2,8 @@
 
 Status: accepted
 
+ADR-0041 distinguishes trusted MCP and Subagents Plugins installed and selected by the Wincode distribution from Plugin files supplied by a project. Default distribution selection does not authorize automatic project discovery or loosen the explicit-enablement rule for project files.
+
 ADR-0039 clarifies that a registered Plugin Tool becomes eligible for per-Turn selection; enablement alone does not guarantee that every Agent sees it.
 
 A Plugin loaded from a file may live in a project's `.wincode/plugins/` directory, but a project configuration file cannot authorize its execution. Wincode loads it only from an absolute path in user-controlled configuration or an explicit CLI argument for the current invocation; CLI relative paths resolve from the workspace. This allows project-local code without making a cloned repository's own configuration sufficient to execute it. Persisted workspace-relative paths were rejected because an unfamiliar repository could place code at an already configured relative path. The Plugin executes in Wincode's process without a separate sandbox, including code evaluated while its module loads; Tool Gate approval applies to Plugin Tool calls, not to arbitrary Plugin code. A Plugin Tool is eligible for Agent Turn selection when enabled but defaults to `ask` on invocation; explicit Tool Permission rules may allow or deny it. Plugin Tools work in all execution modes, while Plugin Commands run only from an explicit Interactive Mode command selection in the initial release. Plugins may import local modules and already available dependencies; Wincode does not install packages while loading them.

@@ -17,6 +17,7 @@
     },
     "packages/agent-core": {
       "name": "@wincode/agent-core",
+      "version": "0.1.0",
       "dependencies": {
         "@wincode/ai": "workspace:*",
         "@wincode/utils": "workspace:*",
@@ -31,6 +32,7 @@
     },
     "packages/ai": {
       "name": "@wincode/ai",
+      "version": "0.1.0",
       "dependencies": {
         "@wincode/utils": "workspace:*",
         "oauth4webapi": "^3.8.3",
@@ -93,6 +95,7 @@
     },
     "packages/mcp": {
       "name": "@wincode/mcp",
+      "version": "0.1.0",
       "dependencies": {
         "@modelcontextprotocol/client": "^2.0.0",
         "@wincode/agent-core": "workspace:*",
@@ -103,24 +106,34 @@
       "devDependencies": {
         "@modelcontextprotocol/server": "^2.0.0",
         "@types/bun": "catalog:",
+        "@wincode/coding-agent": "workspace:*",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "@wincode/coding-agent": "^0.1.0",
       },
     },
     "packages/subagents": {
       "name": "@wincode/subagents",
+      "version": "0.1.0",
       "dependencies": {
         "@wincode/agent-core": "workspace:*",
         "@wincode/utils": "workspace:*",
+        "type-fest": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
-        "@wincode/config": "workspace:*",
+        "@wincode/coding-agent": "workspace:*",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "@wincode/coding-agent": "^0.1.0",
       },
     },
     "packages/utils": {
       "name": "@wincode/utils",
+      "version": "0.1.0",
       "dependencies": {
         "type-fest": "catalog:",
       },

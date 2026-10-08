@@ -1,15 +1,15 @@
 # Skills
 
-The CLI composes configuration, conventional roots, Skill scope/source metadata, and Tool
-Permission. Platform-light Skill contracts, parsing, catalog construction, invocation, and
-activation live in this module, including Node/Bun discovery and content loading.
+The CLI composes configuration, conventional roots, Skill scope/source metadata, and Project
+trust. Platform-light Skill contracts, parsing, catalog construction, invocation, and activation
+live in this module, including Node/Bun discovery and content loading.
 
 ## CLI composition API
 
 - `discoverSkills({ configStore, homeRoot, workspace })` — load the shared config snapshot, build
   explicit root descriptors, then discover, validate, de-duplicate, and sort available Skills.
-- `discoverSkillCatalog({ configStore, homeRoot, workspace }, decideSkill)` — build the
-  permission-filtered catalog snapshot for one execution turn.
+- `discoverSkillCatalog(configRuntime)` — build the validated catalog snapshot for one execution
+  turn.
 - `buildSkillRootDescriptors({ homeRoot, snapshot, workspace })` — map conventional and configured
   roots to deterministic `{ path, scope, source, precedence }` descriptors.
 - `discoverSkillCandidates({ homeRoot, snapshot, workspace })` — return deterministic candidates through the merged module.
@@ -20,8 +20,8 @@ activation live in this module, including Node/Bun discovery and content loading
   input.
 - `SKILL_NAMESPACE_PREFIX` — the reserved namespace (`skill:`) a Skill row renders and its
   selection marker carries.
-- `buildSkillCatalog(skills, decideSkill)` — filter denied Skills, validate hard limits, and build
-  the catalog (including the 24 KiB tool-description budget and diagnostics).
+- `buildSkillCatalog(skills)` — validate hard limits and build the catalog (including the 24 KiB
+  tool-description budget and diagnostics).
 - `buildSkillToolDefinition(catalog)` — the native `skill` tool definition sent to the model loop,
   or `undefined` when the catalog is empty or disabled.
 - `createSkillExecution(catalog)` — the turn-scoped activation engine: at most three distinct
@@ -51,9 +51,9 @@ at each traversed root.
 Project skills override global skills. A nearer project ancestor overrides a farther one. Within a
 scope, Wincode folders override legacy folders, configured paths override conventional folders,
 the home Wincode folder overrides the XDG Wincode folder, and a later configured path overrides an
-earlier one. Invalid or unreadable candidates are skipped. Discovered files are local filesystem
-input and are trusted only as explicitly configured by the user; skill bodies are sent with the
-current request when selected.
+earlier one. Invalid or unreadable candidates are skipped. User Skills are loaded from their selected roots;
+project Skills are considered only when their project has been trusted. Skill bodies are untrusted
+context and are sent with the current request only when selected.
 
 ## Configured paths
 
@@ -99,20 +99,19 @@ matching row; when no command row matches, Enter submits the line normally.
 
 ## Skill Activation
 
-A native `skill` tool is exposed to Primary Agents and Subagents whenever at least one local Skill
-is not denied. Its description carries the permission-filtered `<available_skills>` catalog; the
-Agent selects by exact name and the CLI executes the load — for local and hosted models alike.
+A native `skill` tool is exposed to Primary Agents and Subagents when the validated catalog has
+entries and fits the tool-description budget. Its description carries the complete
+`<available_skills>` catalog; the Agent selects by exact name and the CLI executes the load — for
+local and hosted models alike.
 
-- An explicitly selected Skill is resolved and authorized before the first model call and
-  consumes one activation slot; rejection preserves the input and sends no prompt.
+- An explicitly selected Skill is resolved against the current catalog before the first model call;
+  a stale selection rejects the submission instead of sending a prompt.
 - An execution turn may activate at most three distinct Skills. Re-loading an active Skill is
-  idempotent; rejected or failed loads consume no slot; a fourth distinct load returns a
-  non-retryable `SKILL_LIMIT_REACHED` result.
+  idempotent; failed loads consume no slot; a fourth distinct load returns a non-retryable
+  `SKILL_LIMIT_REACHED` result.
 - Skill bodies are snapshotted at activation and treated as untrusted, turn-scoped context. They
   are preserved through tool loops and compaction until the turn ends, then discarded. Durable
   history stores only sanitized activation metadata (name, content hash, source).
 - Bundled references, templates, and scripts resolve from the Skill directory; the tool result
-  samples up to ten absolute resource paths. Resources outside the workspace require
-  `external_directory` permission in addition to the underlying operation permission.
-- Skill access is governed by the `skill` Permission action (default `allow`, with
-  allow/ask/deny and Skill-name globs); `external_directory` defaults to `ask`.
+  samples up to ten absolute resource paths. These paths do not expand coding-tool access beyond the
+  workspace.

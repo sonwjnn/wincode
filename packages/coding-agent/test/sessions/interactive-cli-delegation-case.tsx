@@ -10,13 +10,16 @@ import type {
 	ModelStepRequest,
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
+import {
+	getSharedSubagentsTaskStore,
+	resolveSubagentsDatabasePath,
+} from "@wincode/subagents/plugin";
 import type { DispatchModeRunners } from "@/modules/application/dispatch";
 import { dispatch } from "@/modules/application/dispatch";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
-import { getSharedSubagentsTaskStore } from "@/plugins/subagents/store";
-import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
+import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createE2eStore,
@@ -26,6 +29,7 @@ import { runInteractive } from "@/tui/runtime";
 import { toolCallId } from "../support/identifiers";
 import {
 	cleanupTestDirectory,
+	interactiveConfigRuntime,
 	recorder,
 	restoreEnvironment,
 	restoreScrollTo,
@@ -55,7 +59,9 @@ const REPORT_DETAILS =
 const PARENT_START_OUTPUT = "Interactive CLI started the delegated inspection.";
 const PARENT_OUTPUT = "Interactive CLI incorporated the durable child report.";
 const SUBMISSION = "Delegate an inspection from the interactive CLI.";
-const subagentsTaskStore = await getSharedSubagentsTaskStore();
+const subagentsTaskStore = await getSharedSubagentsTaskStore(
+	resolveSubagentsDatabasePath(testDirectory, resolveUserDataDir())
+);
 const DELEGATION_CALL_ID = toolCallId("interactive-cli-delegation");
 const SUBMIT_RESULT_CALL_ID = toolCallId("interactive-cli-submit-result");
 
@@ -145,24 +151,18 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 		},
 		runners,
 		{
-			initializeRuntime: async ({ cwd, enabledPlugins, pluginPaths }) => {
+			initializeRuntime: async ({ cwd, disabledPluginIds, pluginPaths }) => {
 				const configRuntime = {
-					configStore: createConfigStore({
-						configRoot: testDirectory,
-						homeRoot: testDirectory,
-					}),
+					...interactiveConfigRuntime,
 					cwd,
-					homeRoot: testDirectory,
 					workspace: cwd,
 				};
-				const composition = createApplicationPluginComposition({
-					enabledPlugins,
-					workspace: cwd,
-				});
+				const composition = createApplicationPluginComposition();
 				const pluginRuntime = await loadPlugins({
-					bundledPlugins: composition.bundledPlugins,
 					cliPaths: pluginPaths,
 					config: configRuntime,
+					disabledPluginIds,
+					distributionPlugins: composition.distributionPlugins,
 				});
 				return { configRuntime, pluginRuntime };
 			},
@@ -199,7 +199,14 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 			return false;
 		}).catch(async (error: unknown) => {
 			throw new Error(
-				`${error instanceof Error ? error.message : String(error)}\n${setup?.captureCharFrame()}\n${JSON.stringify(await store.listSessions())}`
+				`${error instanceof Error ? error.message : String(error)}\n${setup?.captureCharFrame()}\n${JSON.stringify(
+					{
+						sessions: await store.listSessions(),
+						tasks: (await store.listSessions()).flatMap(({ id }) =>
+							subagentsTaskStore.listTasks(id)
+						),
+					}
+				)}`
 			);
 		});
 		await waitForFrame(setup, (frame) => frame.includes(PARENT_OUTPUT));

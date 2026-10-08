@@ -17,13 +17,14 @@ import {
 	runEditTool,
 	runReadTool,
 	runWriteTool,
+	WORKSPACE,
 } from "@/modules/tools";
 
 const withTempFile = async <T>(
 	content: string,
 	callback: (filePath: string, context: VersionedEditingContext) => Promise<T>
 ): Promise<T> => {
-	const directory = await mkdtemp("/tmp/wincode-versioned-");
+	const directory = await mkdtemp(path.join(WORKSPACE, ".wincode-versioned-"));
 	const filePath = path.join(directory, "sample.txt");
 	const context: VersionedEditingContext = {
 		editMode: "hashline",
@@ -112,7 +113,7 @@ describe("versioned coding tools", () => {
 			await withTempFile("first read\n", async (filePath, context) => {
 				const first = await runReadTool(
 					{ expectedVersion, path: filePath },
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				);
 
 				expect(first.content).toContain("first read");
@@ -127,7 +128,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const first = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const version = first.fileVersion as string;
 			expect(version).toMatch(FILE_VERSION_PATTERN);
@@ -136,7 +137,7 @@ describe("versioned coding tools", () => {
 			await expect(
 				runReadTool(
 					{ expectedVersion: version, path: filePath },
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				)
 			).rejects.toMatchObject({ code: "file-version-mismatch" });
 		});
@@ -146,13 +147,10 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const first = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await expect(
-				runReadTool(
-					{ path: filePath },
-					{ allowExternalPath: true, versionedEditing: context }
-				)
+				runReadTool({ path: filePath }, { versionedEditing: context })
 			).rejects.toMatchObject({
 				code: "expected-file-version",
 				recovery: { action: "provide-file-version" },
@@ -164,7 +162,7 @@ describe("versioned coding tools", () => {
 						expectedVersion: first.fileVersion as string,
 						path: filePath,
 					},
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				)
 			).rejects.toMatchObject({ code: "file-version-mismatch" });
 		});
@@ -179,7 +177,6 @@ describe("versioned coding tools", () => {
 			const first = await runReadTool(
 				{ path: filePath },
 				{
-					allowExternalPath: true,
 					resourceLimits: limited,
 					versionedEditing: context,
 				}
@@ -194,7 +191,6 @@ describe("versioned coding tools", () => {
 						path: filePath,
 					},
 					{
-						allowExternalPath: true,
 						resourceLimits: {
 							...standard,
 							read: { ...standard.read, maxOutputBytes: 6 },
@@ -214,7 +210,6 @@ describe("versioned coding tools", () => {
 			const result = await runReadTool(
 				{ path: filePath },
 				{
-					allowExternalPath: true,
 					resourceLimits: {
 						...standard,
 						read: {
@@ -235,7 +230,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\n", async (filePath, context) => {
 			const first = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await rm(filePath);
 			await mkdir(filePath);
@@ -245,7 +240,7 @@ describe("versioned coding tools", () => {
 						expectedVersion: first.fileVersion as string,
 						path: filePath,
 					},
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				)
 			).rejects.toMatchObject({ code: "file-version-mismatch" });
 		});
@@ -263,7 +258,6 @@ describe("versioned coding tools", () => {
 				const truncated = await runReadTool(
 					{ path: filePath },
 					{
-						allowExternalPath: true,
 						resourceLimits: limited,
 						versionedEditing: context,
 					}
@@ -278,7 +272,6 @@ describe("versioned coding tools", () => {
 						path: filePath,
 					},
 					{
-						allowExternalPath: true,
 						resourceLimits: limited,
 						versionedEditing: context,
 					}
@@ -298,7 +291,6 @@ describe("versioned coding tools", () => {
 				runReadTool(
 					{ fullLines: true, path: filePath },
 					{
-						allowExternalPath: true,
 						resourceLimits: limited,
 						versionedEditing: context,
 					}
@@ -314,14 +306,14 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath, fullLines: true },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await Bun.write(filePath, "zero\none\ntwo\nthree\n");
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT 2.=2:\n+TWO`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("zero\none\nTWO\nthree\n");
 		});
@@ -331,14 +323,14 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\nfour\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ fullLines: true, path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await Bun.write(filePath, "one\ntwo\nthree\nchanged\n");
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT 2.=2:\n+TWO`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe(
 				"one\nTWO\nthree\nchanged\n"
@@ -350,14 +342,14 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ fullLines: true, path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await Bun.write(filePath, "zero\none\ntwo\n");
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT 1.=1:\n+ONE`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("zero\nONE\ntwo\n");
 		});
@@ -368,14 +360,14 @@ describe("versioned coding tools", () => {
 			async (filePath, context) => {
 				const read = await runReadTool(
 					{ fullLines: false, path: `${filePath}:1-1,8-8` },
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				);
 				await Bun.write(filePath, "A\nB\nC\nD\nE\nF\nG\nY\nZ\nQ\nR\nX\nS\n");
 				const result = await runEditTool(
 					{
 						patch: `[${filePath}#${read.fileVersion as string}]\nPUT 1.=1:\n+AA`,
 					},
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				);
 				expect(result.seenLines).toEqual([
 					{ endLine: 4, startLine: 1 },
@@ -387,7 +379,7 @@ describe("versioned coding tools", () => {
 						{
 							patch: `[${filePath}#${result.newFileVersion}]\nPUT 12.=12:\n+XX`,
 						},
-						{ allowExternalPath: true, versionedEditing: context }
+						{ versionedEditing: context }
 					)
 				).rejects.toMatchObject({ code: "unseen-lines" });
 			}
@@ -397,13 +389,13 @@ describe("versioned coding tools", () => {
 		await withTempFile("a", async (filePath, context) => {
 			const read = await runReadTool(
 				{ fullLines: true, path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT <1:\n+x`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("x\na");
 		});
@@ -415,7 +407,7 @@ describe("versioned coding tools", () => {
 			async (filePath, context) => {
 				const read = await runReadTool(
 					{ fullLines: true, path: filePath },
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				);
 				await Bun.write(filePath, "P\nA\nX\nQ\nP\nA\nB\nQ\n");
 				await expect(
@@ -423,7 +415,7 @@ describe("versioned coding tools", () => {
 						{
 							patch: `[${filePath}#${read.fileVersion as string}]\nPUT 2.=3:\n+AA`,
 						},
-						{ allowExternalPath: true, versionedEditing: context }
+						{ versionedEditing: context }
 					)
 				).rejects.toMatchObject({ code: "stale-edit" });
 				expect(await Bun.file(filePath).text()).toBe(
@@ -436,7 +428,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ fullLines: true, path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await Bun.write(filePath, "one\nexternal\ntwo\n");
 			await expect(
@@ -444,7 +436,7 @@ describe("versioned coding tools", () => {
 					{
 						patch: `[${filePath}#${read.fileVersion as string}]\nPUT >1:\n+new`,
 					},
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				)
 			).rejects.toMatchObject({ code: "stale-edit" });
 		});
@@ -456,14 +448,14 @@ describe("versioned coding tools", () => {
 			try {
 				const read = await runReadTool(
 					{ fullLines: true, path: filePath },
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				);
 				await expect(
 					runEditTool(
 						{
 							patch: `[${filePath}#${read.fileVersion as string}]\nPUT 1.=1:\n+ONE`,
 						},
-						{ allowExternalPath: true, versionedEditing: context }
+						{ versionedEditing: context }
 					)
 				).rejects.toMatchObject({ code: "file-not-writable" });
 				expect(await Bun.file(filePath).text()).toBe("one\n");
@@ -477,14 +469,14 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\r\ntwo\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const version = read.fileVersion as string;
 			const result = await runEditTool(
 				{
 					patch: `[${filePath}#${version}]\nPUT 1.=1:\n+ONE`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(result.newFileVersion).toMatch(FILE_VERSION_PATTERN);
 			expect(result.oldFileVersion).toBe(read.fileVersion);
@@ -498,7 +490,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\r\ntwo\r\nthree\n", async (filePath, context) => {
 			await runReadTool(
 				{ path: filePath, fullLines: true },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
@@ -508,7 +500,6 @@ describe("versioned coding tools", () => {
 					path: filePath,
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "replace" },
 				}
 			);
@@ -528,7 +519,6 @@ describe("versioned coding tools", () => {
 					path: filePath,
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "replace" },
 				}
 			);
@@ -541,7 +531,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\n", async (filePath, context) => {
 			await runReadTool(
 				{ fullLines: true, path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const result = await runEditTool(
 				{
@@ -551,7 +541,6 @@ describe("versioned coding tools", () => {
 					path: filePath,
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "replace" },
 				}
 			);
@@ -568,7 +557,6 @@ describe("versioned coding tools", () => {
 					path: filePath,
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "replace" },
 				}
 			);
@@ -579,7 +567,6 @@ describe("versioned coding tools", () => {
 						patch: `[${filePath}#${result.newFileVersion}]\nPUT 1.=1:\n+AB`,
 					},
 					{
-						allowExternalPath: true,
 						versionedEditing: { ...context, editMode: "hashline" },
 					}
 				)
@@ -590,7 +577,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("a\nb\nc\n", async (filePath, context) => {
 			await runReadTool(
 				{ fullLines: true, path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const result = await runEditTool(
 				{
@@ -600,7 +587,6 @@ describe("versioned coding tools", () => {
 					path: filePath,
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "replace" },
 				}
 			);
@@ -620,7 +606,6 @@ describe("versioned coding tools", () => {
 						path: filePath,
 					},
 					{
-						allowExternalPath: true,
 						versionedEditing: { ...context, editMode: "replace" },
 					}
 				)
@@ -633,7 +618,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath, fullLines: true },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
@@ -643,7 +628,6 @@ describe("versioned coding tools", () => {
 					path: filePath,
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "replace" },
 				}
 			);
@@ -656,13 +640,13 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\rtwo\r", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath, fullLines: true },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT 1.=1:\n+ONE`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("ONE\rtwo\r");
 		});
@@ -672,13 +656,13 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT >1:\n+two`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("one\ntwo\n");
 		});
@@ -688,13 +672,13 @@ describe("versioned coding tools", () => {
 		await withTempFile("one", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nPUT >1:\n+two`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("one\ntwo");
 		});
@@ -704,13 +688,13 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion}]\nCUT 2.=2`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("one\nthree\n");
 		});
@@ -732,8 +716,6 @@ describe("versioned coding tools", () => {
 				runEditTool(
 					{ mode: "sloppy", patch },
 					{
-						allowExternalPath: true,
-						allowSloppy: true,
 						versionedEditing: { ...context, editMode: "sloppy" },
 					}
 				)
@@ -757,8 +739,6 @@ describe("versioned coding tools", () => {
 						].join("\n"),
 					},
 					{
-						allowExternalPath: true,
-						allowSloppy: true,
 						versionedEditing: { ...context, editMode: "sloppy" },
 					}
 				)
@@ -770,7 +750,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const sloppy = await runEditTool(
 				{
@@ -785,8 +765,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
-					allowSloppy: true,
 					versionedEditing: { ...context, editMode: "sloppy" },
 				}
 			);
@@ -794,7 +772,7 @@ describe("versioned coding tools", () => {
 				{
 					patch: `[${filePath}#${sloppy.newFileVersion as string}]\nPUT 3.=3:\n+THREE`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("one\nTWO\nTHREE\n");
 			expect(read.seenLines).toEqual([{ endLine: 3, startLine: 1 }]);
@@ -805,13 +783,13 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
 					patch: `[${filePath}#${read.fileVersion as string}]\nCUT 2.=2`,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(await Bun.file(filePath).text()).toBe("one");
 		});
@@ -827,7 +805,7 @@ describe("versioned coding tools", () => {
 						oldString: "one",
 						path: filePath,
 					},
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				)
 			).rejects.toMatchObject({ code: "edit-mode-mismatch" });
 			expect(await Bun.file(filePath).text()).toBe("one\n");
@@ -855,7 +833,6 @@ describe("versioned coding tools", () => {
 						path: filePath,
 					},
 					{
-						allowExternalPath: true,
 						resourceLimits: constrained,
 						versionedEditing: { ...context, editMode: "replace" },
 					}
@@ -875,7 +852,6 @@ describe("versioned coding tools", () => {
 				runEditTool(
 					{ patch: "x".repeat(9) },
 					{
-						allowExternalPath: true,
 						resourceLimits: constrained,
 						versionedEditing: context,
 					}
@@ -900,8 +876,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
-					allowSloppy: true,
 					versionedEditing: { ...context, editMode: "sloppy" },
 				}
 			);
@@ -918,12 +892,12 @@ describe("versioned coding tools", () => {
 						expectedVersion: null,
 						path: filePath,
 					},
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				)
 			).rejects.toMatchObject({ code: "expected-file-version" });
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const result = await runWriteTool(
 				{
@@ -931,7 +905,7 @@ describe("versioned coding tools", () => {
 					expectedVersion: read.fileVersion as string,
 					path: filePath,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(result.oldFileVersion).toBe(read.fileVersion);
 			expect(await Bun.file(filePath).text()).toBe("new\n");
@@ -946,7 +920,7 @@ describe("versioned coding tools", () => {
 					expectedVersion: null,
 					path: newPath,
 				},
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			expect(result.oldFileVersion).toBeUndefined();
 			expect(await Bun.file(newPath).text()).toBe("created\n");
@@ -962,7 +936,7 @@ describe("versioned coding tools", () => {
 						expectedVersion: "0".repeat(32),
 						path: newPath,
 					},
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				)
 			).rejects.toMatchObject({
 				message: expect.stringContaining("Set expectedVersion to null"),
@@ -980,7 +954,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\nfour\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const result = await runEditTool(
 				{
@@ -994,7 +968,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "patch" },
 				}
 			);
@@ -1009,11 +982,11 @@ describe("versioned coding tools", () => {
 			await Bun.write(secondPath, "alpha\nbeta\n");
 			const firstRead = await runReadTool(
 				{ path: firstPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const secondRead = await runReadTool(
 				{ path: secondPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const result = await runEditTool(
 				{
@@ -1030,7 +1003,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "apply_patch" },
 				}
 			);
@@ -1045,7 +1017,7 @@ describe("versioned coding tools", () => {
 			await symlink(filePath, aliasPath);
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const result = await runEditTool(
 				{
@@ -1060,7 +1032,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "apply_patch" },
 				}
 			);
@@ -1069,7 +1040,7 @@ describe("versioned coding tools", () => {
 			expect(await Bun.file(filePath).text()).toBe("ONE\nTWO\n");
 		});
 	});
-	test("rejects an approved symlink retarget before editing", async () => {
+	test("rejects a symlink retarget before editing", async () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const aliasPath = path.join(path.dirname(filePath), "alias.txt");
 			const replacementPath = path.join(
@@ -1080,7 +1051,7 @@ describe("versioned coding tools", () => {
 			await symlink(filePath, aliasPath);
 			const read = await runReadTool(
 				{ fullLines: true, path: aliasPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await rm(aliasPath);
 			await symlink(replacementPath, aliasPath);
@@ -1089,13 +1060,9 @@ describe("versioned coding tools", () => {
 					{
 						patch: `[${aliasPath}#${read.fileVersion}]\nPUT 1.=1:\n+ONE`,
 					},
-					{
-						allowExternalPath: true,
-						approvedExternalPaths: [filePath],
-						versionedEditing: context,
-					}
+					{ versionedEditing: context }
 				)
-			).rejects.toMatchObject({ code: "approved-path-changed" });
+			).rejects.toMatchObject({ code: "stale-edit" });
 			expect(await Bun.file(replacementPath).text()).toBe("outside\n");
 		});
 	});
@@ -1103,7 +1070,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\nfour\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ fullLines: true, path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await Bun.write(filePath, "zero\none\ntwo\nthree\nfour\n");
 			const first = await runEditTool(
@@ -1112,7 +1079,6 @@ describe("versioned coding tools", () => {
 					patch: `[${filePath}#${read.fileVersion}]\nPUT 3.=3:\n+THREE`,
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "apply_patch" },
 				}
 			);
@@ -1124,7 +1090,6 @@ describe("versioned coding tools", () => {
 					patch: `[${filePath}#${newVersion}]\nPUT 2.=2:\n+ONE`,
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "apply_patch" },
 				}
 			);
@@ -1139,11 +1104,11 @@ describe("versioned coding tools", () => {
 			await Bun.write(secondPath, "two\n");
 			const firstRead = await runReadTool(
 				{ path: firstPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const secondRead = await runReadTool(
 				{ path: secondPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const baseStore = context.store;
 			let leasePaths: readonly string[] = [];
@@ -1170,7 +1135,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: {
 						...context,
 						editMode: "apply_patch",
@@ -1189,7 +1153,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\nthree\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await expect(
 				runEditTool(
@@ -1205,7 +1169,6 @@ describe("versioned coding tools", () => {
 						].join("\n"),
 					},
 					{
-						allowExternalPath: true,
 						versionedEditing: { ...context, editMode: "apply_patch" },
 					}
 				)
@@ -1218,7 +1181,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await expect(
 				runEditTool(
@@ -1235,7 +1198,6 @@ describe("versioned coding tools", () => {
 						].join("\n"),
 					},
 					{
-						allowExternalPath: true,
 						versionedEditing: { ...context, editMode: "patch" },
 					}
 				)
@@ -1248,7 +1210,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const baseStore = context.store;
 			let raced = false;
@@ -1273,7 +1235,6 @@ describe("versioned coding tools", () => {
 						].join("\n"),
 					},
 					{
-						allowExternalPath: true,
 						versionedEditing: {
 							...context,
 							editMode: "patch",
@@ -1291,11 +1252,11 @@ describe("versioned coding tools", () => {
 			await Bun.write(secondPath, "two\n");
 			const firstRead = await runReadTool(
 				{ path: firstPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const secondRead = await runReadTool(
 				{ path: secondPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await chmod(secondPath, 0o444);
 			await expect(
@@ -1312,7 +1273,6 @@ describe("versioned coding tools", () => {
 						].join("\n"),
 					},
 					{
-						allowExternalPath: true,
 						versionedEditing: { ...context, editMode: "apply_patch" },
 					}
 				)
@@ -1325,7 +1285,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
@@ -1339,7 +1299,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "patch" },
 				}
 			);
@@ -1350,7 +1309,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\nthree\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			await runEditTool(
 				{
@@ -1365,7 +1324,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
 					versionedEditing: { ...context, editMode: "patch" },
 				}
 			);
@@ -1376,7 +1334,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const standard = getToolResourceLimits();
 			await expect(
@@ -1390,7 +1348,6 @@ describe("versioned coding tools", () => {
 						].join("\n"),
 					},
 					{
-						allowExternalPath: true,
 						resourceLimits: {
 							...standard,
 							edit: {
@@ -1413,7 +1370,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const standard = getToolResourceLimits();
 			const result = await runEditTool(
@@ -1426,7 +1383,6 @@ describe("versioned coding tools", () => {
 					].join("\n"),
 				},
 				{
-					allowExternalPath: true,
 					resourceLimits: {
 						...standard,
 						edit: {
@@ -1458,7 +1414,7 @@ describe("versioned coding tools", () => {
 		await withTempFile("one\n", async (filePath, context) => {
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const standard = getToolResourceLimits();
 			const result = await runEditTool(
@@ -1469,7 +1425,6 @@ describe("versioned coding tools", () => {
 					path: filePath,
 				},
 				{
-					allowExternalPath: true,
 					resourceLimits: {
 						...standard,
 						edit: {
@@ -1505,7 +1460,7 @@ describe("versioned coding tools", () => {
 			};
 			const read = await runReadTool(
 				{ path: filePath },
-				{ allowExternalPath: true, versionedEditing: failingContext }
+				{ versionedEditing: failingContext }
 			);
 			let failure: unknown;
 			try {
@@ -1513,7 +1468,7 @@ describe("versioned coding tools", () => {
 					{
 						patch: `[${filePath}#${read.fileVersion}]\nPUT 1.=1:\n+ONE`,
 					},
-					{ allowExternalPath: true, versionedEditing: failingContext }
+					{ versionedEditing: failingContext }
 				);
 			} catch (error) {
 				failure = error;
@@ -1535,7 +1490,9 @@ describe("versioned coding tools", () => {
 		});
 	});
 	test("pins only the path whose rollback is unprovable", async () => {
-		const directory = await mkdtemp("/tmp/wincode-versioned-multi-");
+		const directory = await mkdtemp(
+			path.join(WORKSPACE, ".wincode-versioned-multi-")
+		);
 		const firstPath = path.join(directory, "first.txt");
 		const secondPath = path.join(directory, "second.txt");
 		try {
@@ -1575,11 +1532,11 @@ describe("versioned coding tools", () => {
 			};
 			const firstRead = await runReadTool(
 				{ path: firstPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			const secondRead = await runReadTool(
 				{ path: secondPath },
-				{ allowExternalPath: true, versionedEditing: context }
+				{ versionedEditing: context }
 			);
 			let failure: unknown;
 			try {
@@ -1595,7 +1552,7 @@ describe("versioned coding tools", () => {
 							"+TWO",
 						].join("\n"),
 					},
-					{ allowExternalPath: true, versionedEditing: context }
+					{ versionedEditing: context }
 				);
 			} catch (error) {
 				failure = error;

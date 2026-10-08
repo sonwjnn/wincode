@@ -91,6 +91,7 @@ type ResolutionContext = {
 	env: Record<string, string | undefined>;
 	fallbackSource: McpConfigOrigin;
 	name: string;
+	projectReplacement?: true;
 	snapshot: McpConfigSnapshot;
 	workspace: string;
 };
@@ -99,8 +100,131 @@ const owner = (
 	context: ResolutionContext,
 	field: readonly string[]
 ): McpConfigOrigin =>
-	context.snapshot.sourceFor(["mcp", context.name, ...field]) ??
-	context.fallbackSource;
+	context.projectReplacement === true
+		? context.fallbackSource
+		: (context.snapshot.sourceFor(["mcp", context.name, ...field]) ??
+			context.fallbackSource);
+
+type EffectiveMcpServer = Readonly<{
+	fallbackSource: McpConfigOrigin;
+	projectReplacement?: true;
+	raw: Readonly<Record<string, unknown>>;
+}>;
+
+const mergeServerPatch = (
+	base: Readonly<Record<string, unknown>>,
+	patch: Readonly<Record<string, unknown>>
+): Readonly<Record<string, unknown>> => {
+	const merged: Record<string, unknown> = Object.assign(
+		Object.create(null),
+		base
+	);
+	for (const [key, incoming] of Object.entries(patch)) {
+		const current = merged[key];
+		merged[key] =
+			isPlainObject(current) && isPlainObject(incoming)
+				? mergeServerPatch(current, incoming)
+				: incoming;
+	}
+	return merged;
+};
+
+const isEnabledOnlyOverlay = (
+	server: Readonly<Record<string, unknown>>
+): boolean =>
+	Object.keys(server).length === 1 &&
+	Object.hasOwn(server, "enabled") &&
+	typeof server.enabled === "boolean";
+
+const mergeUserServerSource = (
+	source: McpConfigSource,
+	servers: Map<string, EffectiveMcpServer>
+): void => {
+	if (!isPlainObject(source.document.mcp)) {
+		return;
+	}
+	for (const [name, candidate] of Object.entries(source.document.mcp)) {
+		if (!isPlainObject(candidate) || Object.keys(candidate).length === 0) {
+			continue;
+		}
+		const previous = servers.get(name);
+		servers.set(name, {
+			fallbackSource: source,
+			raw: mergeServerPatch(previous?.raw ?? {}, candidate),
+		});
+	}
+};
+
+const applyEnabledOnlyProjectOverlay = (
+	source: McpConfigSource,
+	name: string,
+	patch: Readonly<Record<string, unknown>>,
+	servers: Map<string, EffectiveMcpServer>,
+	diagnostics: McpConfigDiagnostic[]
+): void => {
+	const previous = servers.get(name);
+	if (previous === undefined) {
+		addDiagnostic(
+			diagnostics,
+			source,
+			"invalid-server",
+			"An enabled-only project MCP entry requires an existing server definition.",
+			serverPath(name, ["enabled"]),
+			name
+		);
+		servers.set(name, { fallbackSource: source, raw: patch });
+		return;
+	}
+	servers.set(name, {
+		fallbackSource: previous.fallbackSource,
+		...(previous.projectReplacement === true
+			? { projectReplacement: true as const }
+			: {}),
+		raw: mergeServerPatch(previous.raw, patch),
+	});
+};
+
+const applyProjectServerSource = (
+	source: McpConfigSource,
+	servers: Map<string, EffectiveMcpServer>,
+	diagnostics: McpConfigDiagnostic[]
+): void => {
+	if (!isPlainObject(source.document.mcp)) {
+		return;
+	}
+	for (const [name, patch] of Object.entries(source.document.mcp)) {
+		if (!isPlainObject(patch) || Object.keys(patch).length === 0) {
+			continue;
+		}
+		if (isEnabledOnlyOverlay(patch)) {
+			applyEnabledOnlyProjectOverlay(source, name, patch, servers, diagnostics);
+			continue;
+		}
+		servers.set(name, {
+			fallbackSource: source,
+			projectReplacement: true,
+			raw: patch,
+		});
+	}
+};
+
+const effectiveServers = (
+	snapshot: McpConfigSnapshot,
+	diagnostics: McpConfigDiagnostic[]
+): ReadonlyMap<string, EffectiveMcpServer> => {
+	const servers = new Map<string, EffectiveMcpServer>();
+	for (const source of snapshot.sources) {
+		if (source.scope !== "project") {
+			mergeUserServerSource(source, servers);
+		}
+	}
+	for (const source of snapshot.sources) {
+		if (source.scope === "project") {
+			applyProjectServerSource(source, servers, diagnostics);
+		}
+	}
+	return servers;
+};
 
 const diagnosticCode = (field: readonly string[]): McpDiagnosticCode => {
 	const rootField = field[0] ?? "";
@@ -270,7 +394,6 @@ const resolveServer = (
 	const base = {
 		disabled: value.enabled === false,
 		name: context.name,
-		permission: value.permission ?? "ask",
 		timeout: { ...DEFAULT_MCP_TIMEOUTS, ...value.timeout },
 	};
 	return value.type === "local"
@@ -327,23 +450,15 @@ export const resolveServers = ({
 		(diagnostic) => ({ ...diagnostic })
 	);
 	diagnoseMalformedEntries(snapshot.sources, diagnostics);
-	const section = isPlainObject(snapshot.document.mcp)
-		? snapshot.document.mcp
-		: {};
+	const effective = effectiveServers(snapshot, diagnostics);
 	const servers: Record<string, ResolvedMcpServerConfig> = {};
-	for (const [name, raw] of Object.entries(section)) {
-		if (!isPlainObject(raw)) {
-			continue;
-		}
-		const fallbackSource = snapshot.sourceFor(["mcp", name]);
-		if (isUndefined(fallbackSource)) {
-			continue;
-		}
+	for (const [name, { fallbackSource, projectReplacement, raw }] of effective) {
 		const context: ResolutionContext = {
 			diagnostics,
 			env,
 			fallbackSource,
 			name,
+			...(projectReplacement === true ? { projectReplacement: true } : {}),
 			snapshot,
 			workspace,
 		};
@@ -358,7 +473,7 @@ export const resolveServers = ({
 		}
 	}
 	const invalidServers: Record<string, InvalidMcpServerConfig> = {};
-	for (const [name, raw] of Object.entries(section)) {
+	for (const [name, { raw }] of effective) {
 		if (
 			!(isUndefined(servers[name]) && isPlainObject(raw)) ||
 			(raw.type !== "local" && raw.type !== "remote")

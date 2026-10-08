@@ -132,7 +132,6 @@ test("restarts expose prepared transactions and reconcile with expected versions
 					path: aliasPath,
 				},
 				{
-					allowExternalPath: true,
 					resourceLimits: getToolResourceLimits(),
 					versionedEditing: context,
 				}
@@ -146,7 +145,6 @@ test("restarts expose prepared transactions and reconcile with expected versions
 					path: filePath,
 				},
 				{
-					allowExternalPath: true,
 					resourceLimits: getToolResourceLimits(),
 					versionedEditing: context,
 				}
@@ -297,12 +295,11 @@ test("missing pinned bytes stay critical until an explicit discard", async () =>
 			sessionId: "other-session",
 			store: restartedStore,
 		};
-		await expect(
-			runRecoverTool(
-				{ action: "inspect", recoveryId },
-				{ versionedEditing: context }
-			)
-		).rejects.toMatchObject({ code: "recovery-cross-session-permission" });
+		const inspected = await runRecoverTool(
+			{ action: "inspect", recoveryId },
+			{ versionedEditing: context }
+		);
+		expect(inspected.status).toBe("inspected");
 		await expect(
 			runRecoverTool(
 				{
@@ -312,7 +309,7 @@ test("missing pinned bytes stay critical until an explicit discard", async () =>
 					},
 					recoveryId,
 				},
-				{ allowCrossSession: true, versionedEditing: context }
+				{ versionedEditing: context }
 			)
 		).rejects.toMatchObject({ code: "recovery-data-missing" });
 

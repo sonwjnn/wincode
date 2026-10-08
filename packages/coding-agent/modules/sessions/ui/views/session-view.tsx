@@ -392,8 +392,8 @@ export function SessionView({
 		];
 	}, [displayAnnotationsByMessage, optimisticMessages, snapshot.transcript]);
 	const error = snapshot.compactionError ?? snapshot.error;
-	// The session's own facts decide whether it is busy: a running turn, an
-	// approval that is waiting, or a compaction in flight.
+	// The session's own facts decide whether it is busy: a running turn or a
+	// compaction in flight.
 	const isBusy = isSessionBusy(snapshot) || isStartingInitialTurn;
 	const promptHistory = useMemo(
 		() => derivePromptHistory(initialTranscript),

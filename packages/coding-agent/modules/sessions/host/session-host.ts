@@ -282,12 +282,6 @@ export const createSessionHost = async ({
 			}
 		}
 	};
-	const getAgentSessionInternalPort = (): AgentSessionInternalPort => {
-		if (agentSessionInternalPort === undefined) {
-			throw new Error("Agent Session is not ready.");
-		}
-		return agentSessionInternalPort;
-	};
 	const shutdown = (): Promise<void> => {
 		if (shutdownPromise !== undefined) {
 			return shutdownPromise;
@@ -361,7 +355,6 @@ export const createSessionHost = async ({
 		const ports: AgentSessionPorts = withEventChannel(
 			createSessionPorts({
 				capabilities,
-				agentSession: getAgentSessionInternalPort,
 				isShutDown: () => isShutDown,
 				sessionId,
 				statefulAgent,

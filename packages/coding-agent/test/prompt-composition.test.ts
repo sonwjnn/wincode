@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fromAny } from "@total-typescript/shoehorn";
-import type { ResolvedTool } from "@wincode/agent-core";
 import { isString, isUndefined } from "@wincode/utils";
-import {
-	applyManualApprovalSafetyCeiling,
-	createResolvedToolPermission,
-	describeVisibleToolPermission,
-} from "@/modules/permissions";
 import {
 	composeSystemPrompt,
 	createPromptCompositionPipeline,
@@ -91,15 +85,6 @@ const agent = {
 	role: "primary" as const,
 };
 
-const resolvedTool = (name: string): ResolvedTool => ({
-	definition: {
-		description: `${name} tool`,
-		inputSchema: { jsonSchema: {} },
-		name,
-	},
-	execute: async () => ({ output: null, type: "success" }),
-});
-
 describe("Prompt Composition", () => {
 	test("renders ordered trusted, repository, environment, and tool blocks", () => {
 		const project = {
@@ -119,21 +104,23 @@ describe("Prompt Composition", () => {
 		const result = composeSystemPrompt({
 			agent,
 			effectiveVisibleTools: [
-				{ family: "coding", name: "read", permission: "allow" },
-				{ family: "coding", name: "edit", permission: "ask" },
-				{ family: "coding", name: "write", permission: "deny" },
-				{ family: "plugin", name: "mcp_search", permission: "allow" },
-				{ family: "plugin", name: "delegate", permission: "allow" },
-				{ family: "skill", name: "skill", permission: "ask" },
+				{ family: "coding", name: "read" },
+				{ family: "coding", name: "edit" },
+				{ family: "coding", name: "write" },
+				{ family: "plugin", name: "mcp_search" },
+				{ family: "plugin", name: "delegate" },
+				{ family: "skill", name: "skill" },
 			],
 			environment,
 			projectInstructions: project,
 		});
-		const baseIndex = result.instructions.indexOf("Wincode safety");
+		const baseIndex = result.instructions.indexOf(
+			"You are Wincode's Agent operating"
+		);
 		const agentIndex = result.instructions.indexOf(agent.instructions);
 		const projectIndex = result.instructions.indexOf("Use the package rules.");
 		const stableIndex = result.instructions.indexOf("Stable environment");
-		const toolIndex = result.instructions.indexOf("Effective tool policy");
+		const toolIndex = result.instructions.indexOf("Available tools");
 		const volatileIndex = result.instructions.indexOf("Volatile environment");
 		expect(baseIndex).toBeGreaterThanOrEqual(0);
 		expect(agentIndex).toBeGreaterThan(baseIndex);
@@ -142,20 +129,18 @@ describe("Prompt Composition", () => {
 		expect(toolIndex).toBeGreaterThan(stableIndex);
 		expect(volatileIndex).toBeGreaterThan(toolIndex);
 		expect(result.instructions).toContain("&lt;/project-instructions&gt;");
-		expect(result.instructions).toContain("approval-gated");
-		expect(result.instructions).not.toContain("write");
+		expect(result.instructions).toContain("write");
 		expect(result.instructions).not.toContain("inputSchema");
 		expect(result.metadata.renderedLength).toBe(result.instructions.length);
 	});
 
-	test("describes Plugin capabilities with their effective approval policy", () => {
+	test("describes selected Plugin capabilities without policy metadata", () => {
 		const result = composeSystemPrompt({
 			agent,
 			effectiveVisibleTools: [
 				{
 					family: "plugin",
 					name: "plugin_jira_search_issues",
-					permission: "ask",
 				},
 			],
 			environment,
@@ -168,7 +153,7 @@ describe("Prompt Composition", () => {
 		});
 
 		expect(result.instructions).toContain(
-			"- Plugin tools: plugin_jira_search_issues; approval-gated: plugin_jira_search_issues"
+			"- Plugin tools: plugin_jira_search_issues"
 		);
 	});
 
@@ -200,134 +185,11 @@ describe("Prompt Composition", () => {
 		expect(result.instructions).toContain("- workspace: /repo\\u000aINJECT");
 		expect(result.instructions).not.toContain("Active Agent: build\nINJECT");
 	});
-	test("describes effective allow, ask, and denied capabilities", () => {
-		const described = describeEffectiveVisibleTools({
-			codingPermissions: new Map([
-				["read", "allow"],
-				["edit", "ask"],
-				["write", "deny"],
-			]),
-			pluginPolicies: new Map([
-				["mcp_search", "ask"],
-				["mcp_secret", "deny"],
-			]),
-			skillPermission: "ask",
-			tools: [
-				resolvedTool("read"),
-				resolvedTool("edit"),
-				resolvedTool("write"),
-				resolvedTool("mcp_search"),
-				resolvedTool("mcp_secret"),
-				resolvedTool("skill"),
-			],
-		});
 
-		expect(described).toEqual([
-			{ family: "coding", name: "read", permission: "allow" },
-			{ family: "coding", name: "edit", permission: "ask" },
-			{ family: "plugin", name: "mcp_search", permission: "ask" },
-			{ family: "skill", name: "skill", permission: "ask" },
-		]);
-	});
-	test("retains resource-scoped visible tools with narrower allows", () => {
-		const permission = createResolvedToolPermission({
-			read: { "*": "deny", "src/**": "allow" },
-		});
-		const described = describeEffectiveVisibleTools({
-			codingPermissions: new Map([
-				["read", describeVisibleToolPermission(permission, "read")],
-			]),
-			tools: [resolvedTool("read")],
-		});
-
-		expect(described).toEqual([
-			{ family: "coding", name: "read", permission: "allow" },
-		]);
-	});
-	test("advertises approval for resource-scoped asks", () => {
-		const permission = createResolvedToolPermission({
-			read: { ".env": "ask" },
-		});
-		const described = describeEffectiveVisibleTools({
-			codingPermissions: new Map([
-				["read", describeVisibleToolPermission(permission, "read")],
-			]),
-			tools: [resolvedTool("read")],
-		});
-
-		expect(described).toEqual([
-			{ family: "coding", name: "read", permission: "ask" },
-		]);
-	});
-	test("does not advertise an ask fully overridden by later deny", () => {
-		const permission = createResolvedToolPermission({
-			read: { "src/*?*": "ask", "src/*": "deny" },
-		});
-
-		expect(describeVisibleToolPermission(permission, "read")).toBe("allow");
-	});
-	test("retains a wildcard ask beyond later literal denies", () => {
-		const permission = createResolvedToolPermission({
-			read: {
-				"src/*": "ask",
-				"src/file": "deny",
-				"src/entry": "deny",
-				"src/x": "deny",
-				"src/nested": "deny",
-			},
-		});
-
-		expect(describeVisibleToolPermission(permission, "read")).toBe("ask");
-	});
-	test("does not overstate asks overridden by later resource rules", () => {
-		const permission = createResolvedToolPermission({
-			read: { ".env": "ask", "*": "deny", "src/**": "allow" },
-		});
-		const described = describeEffectiveVisibleTools({
-			codingPermissions: new Map([
-				["read", describeVisibleToolPermission(permission, "read")],
-			]),
-			tools: [resolvedTool("read")],
-		});
-
-		expect(described).toEqual([
-			{ family: "coding", name: "read", permission: "allow" },
-		]);
-	});
-	test("omits resource maps whose final catch-all denies", () => {
-		const permission = applyManualApprovalSafetyCeiling(
-			createResolvedToolPermission({
-				read: { "src/**": "allow", "*": "deny" },
-			})
-		);
-		const described = describeEffectiveVisibleTools({
-			codingPermissions: new Map([
-				["read", describeVisibleToolPermission(permission, "read")],
-			]),
-			tools: [resolvedTool("read")],
-		});
-
-		expect(described).toEqual([]);
-	});
-	test("omits wildcard maps that deny every usable resource", () => {
-		const permission = createResolvedToolPermission({
-			read: { "?*": "deny" },
-		});
-		const described = describeEffectiveVisibleTools({
-			codingPermissions: new Map([
-				["read", describeVisibleToolPermission(permission, "read")],
-			]),
-			tools: [resolvedTool("read")],
-		});
-
-		expect(described).toEqual([]);
-	});
 	test("does not advertise unavailable coding inspection tools", () => {
 		const result = composeSystemPrompt({
 			agent,
-			effectiveVisibleTools: [
-				{ family: "coding", name: "shell", permission: "allow" },
-			],
+			effectiveVisibleTools: [{ family: "coding", name: "shell" }],
 			environment,
 			projectInstructions: {
 				diagnostics: [],
@@ -340,8 +202,9 @@ describe("Prompt Composition", () => {
 		expect(result.instructions).not.toContain(
 			"inspect with read, glob, or grep"
 		);
+		expect(result.instructions).toContain("- Coding tools: shell");
 		expect(result.instructions).toContain(
-			"Coding tools operate inside the workspace; use only the visible capabilities"
+			"Inspect with the available coding tools before modifying files."
 		);
 	});
 
@@ -595,9 +458,7 @@ describe("Prompt Composition", () => {
 		};
 		const main = composeSystemPrompt({
 			agent,
-			effectiveVisibleTools: describeEffectiveVisibleTools({
-				tools: [],
-			}),
+			effectiveVisibleTools: describeEffectiveVisibleTools([]),
 			environment,
 			projectInstructions: project,
 		});

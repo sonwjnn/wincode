@@ -1,17 +1,18 @@
 {
   "name": "@wincode/coding-agent",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
-  "module": "./index.ts",
   "bin": {
     "wincode": "./bin/wincode.ts"
   },
+  "module": "./index.ts",
   "exports": {
     ".": {
-      "types": "./index.ts",
+      "types": "./index.d.ts",
       "import": "./index.ts"
     },
+    "./cli": "./bin/wincode.ts",
     "./session-host": {
       "types": "./modules/sessions/host/session-host.ts",
       "import": "./modules/sessions/host/session-host.ts"
@@ -23,10 +24,6 @@
     "./session-rpc": {
       "types": "./modules/sessions/host/session-rpc.ts",
       "import": "./modules/sessions/host/session-rpc.ts"
-    },
-    "./plugin": {
-      "types": "./modules/plugins/public.ts",
-      "import": "./modules/plugins/public.ts"
     }
   },
   "scripts": {

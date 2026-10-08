@@ -2,7 +2,6 @@ import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { AgentRegistry } from "@/modules/agents/registry";
-import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
@@ -17,8 +16,6 @@ import type {
 } from "../sdk-contract";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
-export type SessionApprovalMode = "interactive" | "non-interactive";
-
 /**
  * What one Session Host needs from the surface that constructed it, as lazy
  * getters rather than values: a session outlives the render that supplied its
@@ -39,18 +36,12 @@ export type SessionCapabilities = Readonly<{
 	getRegistry: () => AgentRegistry | null;
 	/** The durable store this session's records, compactions, and attachments live in. */
 	getStore: () => SessionStore;
-	getToolPermission: () => ToolPermissionRuntime;
 	/** Optional runtime factory for non-default application adapters and tests. */
 	getRuntime?: () => AgentRuntime;
 	getSessionHostManager: () => SessionHostManager;
 	getSessionSdk?: () => SessionSdkChildFactory | undefined;
 	getPluginRuntime?: () => PluginRuntime;
 	getTurnToolResolver?: () => TurnToolResolver;
-	/**
-	 * Approval settlement policy for surfaces without an interactive approval
-	 * channel. Omitted means the historical interactive behavior.
-	 */
-	getApprovalMode?: () => SessionApprovalMode;
 	getCapabilityCeiling: () => SessionSdkCapabilityCeiling | undefined;
 }>;
 
@@ -80,17 +71,11 @@ export type SessionHost = Readonly<{
 	subscribe: (listener: () => void) => () => void;
 }>;
 
-export type SessionHostManagerEvent =
-	| Readonly<{
-			event: AgentTurnEvent;
-			sessionId: SessionId;
-			type: "agent-turn-event";
-	  }>
-	| Readonly<{
-			pendingApprovalCount: number;
-			sessionId: SessionId;
-			type: "session-approval-notice";
-	  }>;
+export type SessionHostManagerEvent = Readonly<{
+	event: AgentTurnEvent;
+	sessionId: SessionId;
+	type: "agent-turn-event";
+}>;
 
 export type SessionHostManager = Readonly<{
 	onEvent: (listener: (event: SessionHostManagerEvent) => void) => () => void;

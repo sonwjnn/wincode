@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { isObjectLike, isString } from "@wincode/utils";
 import type { ToolResourceLimits } from "../resource-limits";
@@ -63,24 +62,10 @@ export const readVersionedFile = async (
 	return { bytes, fileVersion: computeFileVersion(bytes), text };
 };
 
-export const expandExternalPath = (inputPath: string): string => {
-	if (inputPath === "~") {
-		return os.homedir();
-	}
-	if (inputPath.startsWith("~/")) {
-		return path.join(os.homedir(), inputPath.slice(2));
-	}
-	return inputPath;
-};
-
 export const resolveExistingTextPath = async (
 	inputPath: string,
-	allowExternalPath: boolean,
 	sandbox: WorkspacePolicy = defaultWorkspaceSandbox
-): Promise<string> =>
-	allowExternalPath
-		? fs.promises.realpath(path.resolve(expandExternalPath(inputPath)))
-		: sandbox.resolveExistingPath(inputPath);
+): Promise<string> => sandbox.resolveExistingPath(inputPath);
 
 const resolveMissingPath = async (resolvedPath: string): Promise<string> => {
 	const missingSegments = [path.basename(resolvedPath)];
@@ -105,12 +90,9 @@ const resolveMissingPath = async (resolvedPath: string): Promise<string> => {
 
 export const resolveNewTextPath = async (
 	inputPath: string,
-	allowExternalPath: boolean,
 	sandbox: WorkspacePolicy = defaultWorkspaceSandbox
 ): Promise<string> => {
-	const resolvedPath = allowExternalPath
-		? path.resolve(expandExternalPath(inputPath))
-		: await sandbox.resolveNewPath(inputPath);
+	const resolvedPath = await sandbox.resolveNewPath(inputPath);
 	try {
 		return await fs.promises.realpath(resolvedPath);
 	} catch (error) {
@@ -123,16 +105,15 @@ export const resolveNewTextPath = async (
 
 export const canonicalPath = async (
 	inputPath: string,
-	allowExternalPath: boolean,
 	sandbox: WorkspacePolicy = defaultWorkspaceSandbox
 ): Promise<string> => {
 	try {
-		return await resolveExistingTextPath(inputPath, allowExternalPath, sandbox);
+		return await resolveExistingTextPath(inputPath, sandbox);
 	} catch (error) {
 		if (!hasErrorCode(error, "ENOENT")) {
 			throw error;
 		}
-		return await resolveNewTextPath(inputPath, allowExternalPath, sandbox);
+		return await resolveNewTextPath(inputPath, sandbox);
 	}
 };
 

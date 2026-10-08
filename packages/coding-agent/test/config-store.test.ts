@@ -200,7 +200,7 @@ describe("createConfigStore", () => {
 					},
 				}),
 				[replacingPath]: '{"mcp":{"shared":null}}',
-				[highestPath]: '{"mcp":{"shared":{"permission":"allow"}}}',
+				[highestPath]: '{"mcp":{"shared":{"enabled":false}}}',
 			}),
 			homeRoot: HOME_ROOT,
 		});
@@ -208,9 +208,9 @@ describe("createConfigStore", () => {
 		const snapshot = await store.getSnapshot(WORKSPACE);
 
 		expect(snapshot.document).toEqual({
-			mcp: { shared: { permission: "allow" } },
+			mcp: { shared: { enabled: false } },
 		});
-		expect(snapshot.sourceFor(["mcp", "shared", "permission"])).toEqual({
+		expect(snapshot.sourceFor(["mcp", "shared", "enabled"])).toEqual({
 			path: highestPath,
 			scope: "project",
 		});

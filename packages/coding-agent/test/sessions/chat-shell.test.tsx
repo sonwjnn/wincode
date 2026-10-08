@@ -1,7 +1,6 @@
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
-import { createMcpRegistry } from "@wincode/mcp";
 import { isUndefined } from "@wincode/utils";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import {
@@ -18,7 +17,7 @@ import {
 // enabled, so tests opt out before any app module evaluates the environment.
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
-import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import {
@@ -35,17 +34,10 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
-import type { ApprovalPanelEntry } from "@/shared/providers/approval/approval-panels-provider";
-import type {
-	ToolApprovalActions,
-	ToolApprovalRequest,
-} from "@/shared/providers/approval/types";
 import {
 	KeyboardLayerProvider,
 	useKeyboardLayer,
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
-
-import { approvalPanelEntry } from "../support/approval-panel-entry";
 
 const { testRender } = await import("@opentui/react/test-utils");
 const {
@@ -57,16 +49,9 @@ const {
 const { AgentRegistryProvider } = await import("@/modules/agents");
 const { createConnections } = await import("@wincode/ai/connections");
 const { ConnectionsProvider } = await import("@/modules/connections");
-const { McpProvider } = await import("@/modules/mcp");
 const { ModelPricingProvider } = await import("@/modules/model-pricing");
-const { createPermissionService, PermissionServiceProvider } = await import(
-	"@/modules/permissions"
-);
 const { PromptConfigProvider, usePromptConfig } = await import(
 	"@/modules/prompt-settings/context/prompt-config-provider"
-);
-const { ApprovalPanelsProvider, useApprovalPanels } = await import(
-	"@/shared/providers/approval/approval-panels-provider"
 );
 const { ConfigProvider } = await import("@/shared/config/config-provider");
 const { createConfigStore } = await import("@/shared/config/config-store");
@@ -174,7 +159,6 @@ const lines = (prefix: string, count: number): string =>
 type ChatShellProbeHandle = {
 	pushKeyboardLayer: (id: string) => void;
 	popKeyboardLayer: (id: string) => void;
-	projectApprovals: (entries: readonly ApprovalPanelEntry[]) => void;
 	remountComposer: () => void;
 	setCompactions: (compactions: SessionCompaction[]) => void;
 	setCompacting: (isCompacting: boolean) => void;
@@ -224,14 +208,12 @@ function ChatShellProbe({
 	queuedSubmissions,
 }: ChatShellProbeProps) {
 	const { pop, push } = useKeyboardLayer();
-	const { project: projectApprovals } = useApprovalPanels();
 	const [compactions, setCompactions] = useState(initialCompactions);
 	const [composerRevision, setComposerRevision] = useState(0);
 	const [isCompacting, setCompacting] = useState(initialIsCompacting);
 	const [messages, setMessages] = useState(initialMessages);
 	useEffect(() => {
 		holder.current = {
-			projectApprovals,
 			popKeyboardLayer: pop,
 			pushKeyboardLayer: push,
 			remountComposer: () => setComposerRevision((revision) => revision + 1),
@@ -242,7 +224,7 @@ function ChatShellProbe({
 		return () => {
 			holder.current = null;
 		};
-	}, [holder, pop, projectApprovals, push]);
+	}, [holder, pop, push]);
 	return (
 		<>
 			<PromptConfigProbe holder={agentHolder} />
@@ -302,6 +284,7 @@ const renderChatShell = async (
 ): Promise<ChatShellSetup> => {
 	const workspace = process.cwd();
 	const agent = { current: "" };
+	// Isolate the rendered layout from the developer's home/project config.
 	const configStore = configuredAgent
 		? createConfigStore({
 				fs: {
@@ -322,7 +305,15 @@ const renderChatShell = async (
 					},
 				},
 			})
-		: createConfigStore();
+		: createConfigStore({
+				fs: {
+					readFile: async () => {
+						throw Object.assign(new Error("Test config is unavailable."), {
+							code: "ENOENT",
+						});
+					},
+				},
+			});
 	const holder: { current: ChatShellProbeHandle | null } = { current: null };
 	const router = buildTestRouter();
 	// Each rendered shell owns its composer draft key; drop drafts earlier cases left.
@@ -332,49 +323,32 @@ const renderChatShell = async (
 			<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
 				<ToastProvider>
 					<ConnectionsProvider connections={createConnections()}>
-						<PermissionServiceProvider service={createPermissionService()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<ApprovalPanelsProvider>
-										<PromptConfigProvider>
-											<ModelPricingProvider>
-												<DialogProvider>
-													<McpProvider
-														closeRegistryOnUnmount={false}
-														createRegistry={() =>
-															createMcpRegistry({
-																loadConfig: async () => ({
-																	diagnostics: [],
-																	servers: {},
-																}),
-																workspace,
-															})
-														}
-													>
-														<RouterContextProvider router={router}>
-															<CommandControllerProvider>
-																<ChatShellProbe
-																	activeMessages={activeMessages}
-																	agentHolder={agent}
-																	holder={holder}
-																	initialCompactions={initialCompactions}
-																	initialMessages={initialMessages}
-																	isBusy={isBusy}
-																	isCompacting={isCompacting}
-																	isInterruptArmed={isInterruptArmed}
-																	onRetry={onRetry}
-																	queuedSubmissions={queuedSubmissions}
-																/>
-															</CommandControllerProvider>
-														</RouterContextProvider>
-													</McpProvider>
-												</DialogProvider>
-											</ModelPricingProvider>
-										</PromptConfigProvider>
-									</ApprovalPanelsProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</PermissionServiceProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider>
+									<ModelPricingProvider>
+										<DialogProvider>
+											<RouterContextProvider router={router}>
+												<CommandControllerProvider>
+													<ChatShellProbe
+														activeMessages={activeMessages}
+														agentHolder={agent}
+														holder={holder}
+														initialCompactions={initialCompactions}
+														initialMessages={initialMessages}
+														isBusy={isBusy}
+														isCompacting={isCompacting}
+														isInterruptArmed={isInterruptArmed}
+														onRetry={onRetry}
+														queuedSubmissions={queuedSubmissions}
+													/>
+												</CommandControllerProvider>
+											</RouterContextProvider>
+										</DialogProvider>
+									</ModelPricingProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ConnectionsProvider>
 				</ToastProvider>
 			</ConfigProvider>
@@ -799,119 +773,6 @@ describe("ChatShell retry controls", () => {
 	});
 });
 
-describe("ChatShell approval dock", () => {
-	test("replaces the composer with pending controls and leaves one audit line", async () => {
-		const part = shellPart({
-			input: { command: "pwd" },
-			output: undefined,
-			state: "input-available",
-			toolCallId: makeToolCallId("call-approval-sticky"),
-		});
-		const { holder, setup } = await renderChatShell(
-			[assistantMessage([part])],
-			{ height: 18, width: 120 }
-		);
-
-		try {
-			await flushUi(setup);
-			const cancelFirstApproval = mock(() => undefined);
-			const firstActions = {
-				abort: () => undefined,
-				allow: () => undefined,
-				cancel: cancelFirstApproval,
-				reject: () => undefined,
-			};
-			const firstRequest: ToolApprovalRequest = {
-				description: "First queued approval.",
-				identity: [
-					{ label: "tool", value: "shell" },
-					{ label: "resource", value: "pwd" },
-				],
-				input: { command: "pwd" },
-				toolCallId: makeToolCallId("call-approval-sticky"),
-			};
-			const secondRequest: ToolApprovalRequest = {
-				description: "Second queued approval.",
-				identity: [
-					{ label: "tool", value: "shell" },
-					{ label: "resource", value: "whoami" },
-				],
-				input: { command: "whoami" },
-				toolCallId: makeToolCallId("call-approval-second"),
-			};
-			const secondActions: ToolApprovalActions = {
-				abort: () => undefined,
-				allow: () => undefined,
-				cancel: () => undefined,
-				reject: () => undefined,
-			};
-			await act(async () => {
-				holder.current?.projectApprovals([
-					approvalPanelEntry(firstRequest, { actions: firstActions }),
-					approvalPanelEntry(secondRequest, { actions: secondActions }),
-				]);
-			});
-			await flushUi(setup);
-
-			const frame = setup.captureCharFrame();
-			// The dock replaces the composer AND the session footer, showing only
-			// the queue head.
-			expect(frame).toContain("Permission required");
-			expect(frame).not.toContain("Ask anything");
-			expect(frame).not.toContain("tab agents");
-			expect(frame.match(/Permission required/gu)).toHaveLength(1);
-			expect(frame).toContain("1 of 2");
-			expect(frame).toContain("First queued approval.");
-			expect(frame).not.toContain("Second queued approval.");
-			expect(
-				setup.renderer.root.findDescendantById("chat-shell-test-transcript")
-			).toBeDefined();
-			expect(cancelFirstApproval).not.toHaveBeenCalled();
-			setup.mockInput.pressEnter();
-			await flushUi(setup);
-			// The panel asked the session to settle the head; the session answers
-			// with the projection, so the dock presents the next request.
-			await act(async () => {
-				holder.current?.projectApprovals([
-					approvalPanelEntry(firstRequest, {
-						actions: firstActions,
-						resolution: { outcome: "allow-once" },
-					}),
-					approvalPanelEntry(secondRequest, { actions: secondActions }),
-				]);
-			});
-			await flushUi(setup);
-			const nextFrame = setup.captureCharFrame();
-			expect(nextFrame).toContain("Second queued approval.");
-			expect(nextFrame).not.toContain("1 of 2");
-			expect(nextFrame).not.toContain("Ask anything");
-
-			setup.mockInput.pressEnter();
-			await flushUi(setup);
-			await act(async () => {
-				holder.current?.projectApprovals([
-					approvalPanelEntry(firstRequest, {
-						actions: firstActions,
-						resolution: { outcome: "allow-once" },
-					}),
-					approvalPanelEntry(secondRequest, {
-						actions: secondActions,
-						resolution: { outcome: "allow-once" },
-					}),
-				]);
-			});
-			await flushUi(setup);
-			const settledFrame = setup.captureCharFrame();
-			expect(settledFrame).toContain("allowed once");
-			expect(settledFrame).not.toContain("Permission required");
-			expect(settledFrame).toContain("Ask anything");
-			expect(settledFrame).not.toContain("tab agents");
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
-});
-
 describe("ChatShell waiting message strip", () => {
 	const imageFile = (filename: string): SessionFilePart =>
 		fromPartial<SessionFilePart>({
@@ -1137,49 +998,6 @@ describe("ChatShell waiting message strip", () => {
 			setup.renderer.destroy();
 		}
 	});
-
-	test("stays visible above the pending approval dock", async () => {
-		const { holder, setup } = await renderChatShell([], {
-			height: 20,
-			queuedSubmissions: [queuedSubmission("queued-1", "waiting prompt")],
-			width: 120,
-		});
-
-		try {
-			await flushUi(setup);
-			const request: ToolApprovalRequest = {
-				description: "Approval owed.",
-				identity: [{ label: "tool", value: "shell" }],
-				input: { command: "pwd" },
-				toolCallId: makeToolCallId("call-approval-queued"),
-			};
-			await act(async () => {
-				holder.current?.projectApprovals([
-					approvalPanelEntry(request, {
-						actions: {
-							abort: () => undefined,
-							allow: () => undefined,
-							cancel: () => undefined,
-							reject: () => undefined,
-						},
-					}),
-				]);
-			});
-			await flushUi(setup);
-
-			const frame = setup.captureCharFrame();
-			expect(frame).toContain("1 waiting");
-			expect(frame).toContain("waiting prompt");
-			expect(frame).toContain("Permission required");
-			// The strip sits between the Session Transcript and the dock, so an
-			// approval never hides waiting work.
-			expect(frame.indexOf("waiting prompt")).toBeLessThan(
-				frame.indexOf("Permission required")
-			);
-		} finally {
-			setup.renderer.destroy();
-		}
-	});
 });
 
 describe("ChatShell activity footer", () => {
@@ -1253,8 +1071,10 @@ describe("ChatShell activity footer", () => {
 			await setup.renderOnce();
 			expect(setup.captureCharFrame()).toMatch(ACTIVE_PROGRESS_REGEX);
 
-			holder.current?.setCompactions([completedCompaction()]);
-			holder.current?.setCompacting(false);
+			await act(async () => {
+				holder.current?.setCompactions([completedCompaction()]);
+				holder.current?.setCompacting(false);
+			});
 			await flushUi(setup);
 			const completedFrame = setup.captureCharFrame();
 			expect(completedFrame).toContain("Compacted (manual) · 7.3K→4.9K tokens");

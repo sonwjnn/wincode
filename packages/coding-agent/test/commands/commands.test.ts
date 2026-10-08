@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { COMMANDS, getVisibleCommands } from "@/modules/commands/commands";
 
-test("keeps built-in slash names routed to their action IDs", () => {
+test("keeps host built-in slash names routed to their action IDs", () => {
 	const expected = [
 		{ action: "session.new", value: "/new" },
 		{ action: "session.compact", value: "/compact" },
@@ -12,7 +12,6 @@ test("keeps built-in slash names routed to their action IDs", () => {
 		{ action: "dialog.sessions", value: "/sessions" },
 		{ action: "dialog.theme", value: "/themes" },
 		{ action: "connection.open", value: "/connect" },
-		{ action: "dialog.mcps", value: "/mcps" },
 		{ action: "app.exit", value: "/exit" },
 	];
 	const actual = COMMANDS.map(({ action, value }) => ({ action, value }));

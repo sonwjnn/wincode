@@ -11,7 +11,6 @@ import {
 } from "@wincode/agent-core";
 import { isUndefined, omitUndefined } from "@wincode/utils";
 import { toSteeringMessageId } from "@/shared/identifiers";
-import type { SessionApprovalOutcome } from "../approval-contract";
 import type { CompactSessionResult } from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
@@ -22,7 +21,6 @@ import {
 } from "../message";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionSendInput } from "../submission-types";
-import { createSessionApprovalWorkflow } from "./approval-workflow";
 import {
 	createSessionInputLaneWorkflow,
 	type SessionInputExternalization,
@@ -142,14 +140,6 @@ type AgentSessionRunState =
 			readonly phase: "interrupted" | "preparing" | "running" | "settling";
 	  };
 type AgentSessionOperationState = {
-	readonly approvals: {
-		nextId: number;
-		readonly settlements: Map<
-			string,
-			(outcome: SessionApprovalOutcome) => void
-		>;
-		abortTurn: (toolCallId?: ToolCallId) => void;
-	};
 	readonly backgroundTasks: Set<Promise<unknown>>;
 	readonly compaction: {
 		activeCommand: SessionMaintenanceCommandState | undefined;
@@ -557,7 +547,6 @@ export class AgentSessionImpl implements AgentSession {
 	readonly onSubmissionEvent: AgentSession["onSubmissionEvent"];
 	readonly prompt: AgentSession["prompt"];
 	readonly recallWaitingMessages: AgentSession["recallWaitingMessages"];
-	readonly respondToApproval: AgentSession["respondToApproval"];
 	readonly send: AgentSession["send"];
 	readonly steer: AgentSession["steer"];
 	readonly subscribe: AgentSession["subscribe"];
@@ -583,7 +572,6 @@ export class AgentSessionImpl implements AgentSession {
 			throw new Error("Session send deadline must be a non-negative integer.");
 		}
 		this.#state = {
-			approvals: [],
 			catalogDiagnostic: null,
 			compactions: [...initialCompactions],
 			compactionError: null,
@@ -599,11 +587,6 @@ export class AgentSessionImpl implements AgentSession {
 			viewState: undefined,
 		};
 		this.#operationState = {
-			approvals: {
-				abortTurn: () => undefined,
-				nextId: 0,
-				settlements: new Map(),
-			},
 			backgroundTasks: new Set(),
 			compaction: { activeCommand: undefined, requests: new Set() },
 			continuationInputs: new WeakSet(),
@@ -786,24 +769,6 @@ export class AgentSessionImpl implements AgentSession {
 			this.#runState = { phase };
 			publish({});
 		};
-		const approvals = createSessionApprovalWorkflow({
-			abortTurn: (toolCallId) => sessionState.approvals.abortTurn(toolCallId),
-			allocateSessionApprovalId: () =>
-				`session-${sessionState.approvals.nextId++}`,
-			applyApprovals: (approvals) => publish({ approvals }),
-			getSettlement: (id) => sessionState.approvals.settlements.get(id),
-			getSnapshot: () => this.#state,
-			isClosed: () => sessionState.shutdown.closed,
-			removeSettlement: (id) => {
-				sessionState.approvals.settlements.delete(id);
-			},
-			saveSettlement: (id, resolve) => {
-				sessionState.approvals.settlements.set(id, resolve);
-			},
-		});
-		const settleApproval = approvals.settle;
-		const requestApproval = approvals.request;
-		const closeApprovals = approvals.close;
 		const applyContext = (messages: readonly SessionMessage[]): void => {
 			publish({ context: [...messages] });
 		};
@@ -1218,7 +1183,6 @@ export class AgentSessionImpl implements AgentSession {
 		submissionCommand = createSessionSubmissionCommand({
 			beginSubmission,
 			cancelCompaction: cancelCompactionCommand,
-			closeApprovals,
 			deadlineMs,
 			drainQueuedSubmissions: () => inputLane.drainQueuedSubmissions(),
 			finishSubmission,
@@ -1436,10 +1400,6 @@ export class AgentSessionImpl implements AgentSession {
 			}
 			return Promise.resolve();
 		};
-		sessionState.approvals.abortTurn = () => {
-			void interruptActiveWork();
-		};
-
 		const createContextContinuationInput = (
 			anchor: SessionMessage,
 			lastMessage: SessionMessage
@@ -1595,9 +1555,6 @@ export class AgentSessionImpl implements AgentSession {
 			return { kind: "resumed", turnId: continuation.turnId };
 		};
 		const interruptAll = async (): Promise<SessionInterruptResult> => {
-			const approvalsSettled = this.#state.approvals.filter(
-				(approval) => approval.decision === undefined
-			).length;
 			const hasCompaction =
 				this.#state.isCompacting ||
 				sessionState.compaction.activeCommand !== undefined;
@@ -1612,7 +1569,6 @@ export class AgentSessionImpl implements AgentSession {
 			} else if (hasTurn) {
 				kind = "turn";
 			}
-			closeApprovals();
 			if (hasCompaction) {
 				cancelCompactionCommand();
 				if (!hasTurn) {
@@ -1624,14 +1580,13 @@ export class AgentSessionImpl implements AgentSession {
 			trackBackgroundTask(recall);
 			const recalled = await recall;
 			await pauseWrite;
-			return { approvalsSettled, kind, recalled };
+			return { kind, recalled };
 		};
 		const hasPendingWork = (): boolean =>
 			sessionState.lane.runs > 0 ||
 			sessionState.queue.drainPhase === "draining" ||
 			sessionState.compaction.activeCommand !== undefined ||
 			sessionState.compaction.requests.size > 0 ||
-			sessionState.approvals.settlements.size > 0 ||
 			sessionState.durableWrites.size > 0 ||
 			sessionState.backgroundTasks.size > 0 ||
 			sessionState.recovery.activeRuns.size > 0 ||
@@ -1656,7 +1611,6 @@ export class AgentSessionImpl implements AgentSession {
 			// holds end and nothing it held is ever run.
 			trackBackgroundTask(inputLane.recallWaitingMessages());
 			abortActiveSend("cancelled");
-			closeApprovals();
 			const compaction = sessionState.compaction.activeCommand?.promise;
 			const completion = (async () => {
 				const activeSendSettled = waitForActiveSend();
@@ -1683,15 +1637,10 @@ export class AgentSessionImpl implements AgentSession {
 		};
 
 		this.internalPort = {
-			abortApprovalTurn: (toolCallId) => {
-				closeApprovals();
-				void interruptActiveWork(toolCallId);
-			},
 			beginExecution,
 			commitRecord,
 			endExecution,
 			hasPendingWork,
-			requestApproval,
 			setExecutionViewState,
 			shutdown,
 		};
@@ -1716,7 +1665,6 @@ export class AgentSessionImpl implements AgentSession {
 		this.compact = compact;
 		this.getSnapshot = () => this.#state;
 		this.interrupt = async (preserveToolCallId) => {
-			closeApprovals();
 			const pauseWrite = interruptActiveWork(preserveToolCallId);
 			const recall = inputLane.recallWaitingMessages();
 			trackBackgroundTask(recall);
@@ -1726,7 +1674,6 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		this.interruptAll = interruptAll;
 		this.recallWaitingMessages = inputLane.recallWaitingMessages;
-		this.respondToApproval = settleApproval;
 		this.prompt = (input) => inputLane.prompt(input);
 		this.onSubmissionEvent = (listener) => {
 			sessionState.events.submissionEvents.add(listener);

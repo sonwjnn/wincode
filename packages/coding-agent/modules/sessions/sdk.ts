@@ -10,12 +10,10 @@ import {
 import { omitUndefined } from "@wincode/utils";
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import type { AgentRegistry } from "@/modules/agents/registry";
-import {
-	createApplicationPluginComposition,
-	type OptionalApplicationPluginId,
-} from "@/modules/application/plugin-composition";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
 import type {
 	SessionSdk,
 	SessionSdkCapabilityCeiling,
@@ -24,17 +22,10 @@ import type {
 	SessionSdkHandle,
 	SessionSdkPrompt,
 } from "./sdk-contract";
+import type { SessionSdkOptions as PublicSessionSdkOptions } from "./sdk-options";
 
-export type {
-	SessionSdk,
-	SessionSdkAgent,
-	SessionSdkCapabilityCeiling,
-	SessionSdkChildFactory,
-	SessionSdkCreateOptions,
-	SessionSdkDelivery,
-	SessionSdkHandle,
-	SessionSdkPrompt,
-} from "./sdk-contract";
+export type * from "./sdk-contract";
+export type { SessionSdkOptions } from "./sdk-options";
 
 import type { SessionSubmissionAdmission } from "@/modules/sessions/agent-session/types";
 import {
@@ -51,8 +42,9 @@ import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
+import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 
-export type SessionSdkOptions = Omit<
+export type SessionSdkRuntimeOptions = Omit<
 	SessionCapabilitiesOptions,
 	"cwd" | "pluginRuntime" | "sessionHostManager" | "getSessionSdk" | "workspace"
 > &
@@ -60,10 +52,10 @@ export type SessionSdkOptions = Omit<
 		agent?: AgentId | string;
 		cwd?: string;
 		effort?: Effort;
-		enabledPlugins?: readonly OptionalApplicationPluginId[];
 		model?: ChatModelSelection;
 		reasoningMode?: ReasoningMode;
 		pluginPaths?: readonly string[];
+		projectTrust?: "trust" | "deny";
 		workspace?: string;
 	}>;
 
@@ -101,14 +93,17 @@ const snapshotCapabilityCeiling = (
 };
 
 const optionsForChild = (
-	options: SessionSdkOptions,
+	options: SessionSdkRuntimeOptions,
 	capabilityCeiling: SessionSdkCapabilityCeiling | undefined
-): SessionSdkOptions => {
+): SessionSdkRuntimeOptions => {
 	const {
 		agent: _agent,
 		capabilityCeiling: _parentCapabilityCeiling,
+		configRuntime: _configRuntime,
+		configStore: _configStore,
 		effort: _effort,
 		model: _model,
+		projectTrust: _projectTrust,
 		reasoningMode: _reasoningMode,
 		...sharedOptions
 	} = options;
@@ -136,7 +131,7 @@ const parseAgent = (value: AgentId | string): AgentId => {
 const defaultsFor = (
 	registry: AgentRegistry | null,
 	options: Pick<
-		SessionSdkOptions,
+		SessionSdkRuntimeOptions,
 		"agent" | "effort" | "model" | "reasoningMode"
 	>
 ): SessionSelectionDefaults => {
@@ -173,9 +168,6 @@ const resolvedAgentFor = (
 				id: candidate.id,
 				instructions: candidate.instructions,
 				role: candidate.role,
-				...(candidate.requiresManualApproval
-					? { requiresManualApproval: true }
-					: {}),
 				visibleCodingTools: [...candidate.visibleCodingTools],
 			};
 };
@@ -413,7 +405,7 @@ type SharedSessionSdkResources = Readonly<{
 }>;
 
 const createSessionSdkInternal = async (
-	options: SessionSdkOptions,
+	options: SessionSdkRuntimeOptions,
 	shared?: SharedSessionSdkResources
 ): Promise<SessionSdk> => {
 	const capabilityCeiling = snapshotCapabilityCeiling(
@@ -421,35 +413,47 @@ const createSessionSdkInternal = async (
 	);
 	const workspace = options.workspace ?? process.cwd();
 	const cwd = options.cwd ?? workspace;
+	const trustResolution =
+		options.projectTrust === undefined &&
+		options.configRuntime?.trustedProjectRoots !== undefined
+			? {
+					trustedProjectRoots: options.configRuntime.trustedProjectRoots,
+				}
+			: await resolveProjectTrust({
+					mode: "sdk",
+					override: options.projectTrust,
+					userDataDir: resolveUserDataDir(),
+					workspace,
+				});
+	const trustedProjectRoots = trustResolution.trustedProjectRoots;
 	const configStore =
 		options.configStore ??
 		options.configRuntime?.configStore ??
-		createConfigStore();
-	const configRuntime: ConfigRuntime = options.configRuntime ?? {
-		configStore,
-		cwd,
-		homeRoot: os.homedir(),
-		workspace,
-	};
-	const composition = createApplicationPluginComposition({
-		configStore,
-		enabledPlugins: options.enabledPlugins ?? [],
-		workspace,
-	});
+		createConfigStore({ trustedProjectRoots });
+	const configRuntime: ConfigRuntime =
+		options.configRuntime === undefined
+			? {
+					configStore,
+					cwd,
+					homeRoot: os.homedir(),
+					trustedProjectRoots,
+					workspace,
+				}
+			: {
+					...options.configRuntime,
+					trustedProjectRoots,
+				};
+	const composition = createApplicationPluginComposition();
 	const pluginRuntime: PluginRuntime = await loadPlugins({
-		bundledPlugins: composition.bundledPlugins,
 		cliPaths: options.pluginPaths ?? [],
 		config: configRuntime,
-		...(shared?.ignoreConfiguredPlugins === true
-			? { ignoreConfiguredPlugins: true }
-			: {}),
+		ignoreConfiguredPlugins: shared?.ignoreConfiguredPlugins ?? false,
 	});
 	const {
 		agent,
 		capabilityCeiling: _capabilityCeiling,
 		cwd: _cwd,
 		effort,
-		enabledPlugins = [],
 		model,
 		pluginPaths: _pluginPaths,
 		reasoningMode,
@@ -594,9 +598,10 @@ const createSessionSdkInternal = async (
 			{
 				...optionsForChild(options, childCapabilityCeiling),
 				cwd,
-				configRuntime,
-				enabledPlugins: childOptions.enabledPlugins,
 				pluginPaths: childOptions.pluginPaths ?? [],
+				...(childOptions.projectTrust === undefined
+					? {}
+					: { projectTrust: childOptions.projectTrust }),
 				store: assembly.store,
 				workspace,
 			},
@@ -653,23 +658,29 @@ const createSessionSdkInternal = async (
 
 /** Creates a public, caller-owned Session SDK over the Coding-Agent Host. */
 export const createSessionSdk = (
-	options: SessionSdkOptions = {}
+	options: PublicSessionSdkOptions = {}
+): Promise<SessionSdk> => createSessionSdkInternal(options);
+
+/** Creates an SDK with internal host dependencies for in-process callers. */
+export const createSessionSdkWithRuntime = (
+	options: SessionSdkRuntimeOptions
 ): Promise<SessionSdk> => createSessionSdkInternal(options);
 
 /** Creates explicitly selected child SDKs that share the owning Session Host. */
 export const createSessionSdkChildFactory = (
-	options: SessionSdkOptions,
+	options: SessionSdkRuntimeOptions,
 	manager: SessionHostManager,
 	store: SessionStore
 ): SessionSdkChildFactory => {
+	const runtimeOptions = options;
 	const capabilityCeiling = snapshotCapabilityCeiling(
-		options.capabilityCeiling
+		runtimeOptions.capabilityCeiling
 	);
 	const withChildSdk = async <Result>(
 		operation: (sdk: SessionSdk) => Promise<Result>
 	): Promise<Result> => {
 		const sdk = await createSessionSdkInternal(
-			{ ...optionsForChild(options, capabilityCeiling), store },
+			{ ...optionsForChild(runtimeOptions, capabilityCeiling), store },
 			{ ignoreConfiguredPlugins: true, manager, store }
 		);
 		try {
@@ -686,8 +697,7 @@ export const createSessionSdkChildFactory = (
 			);
 			return createSessionSdkInternal(
 				{
-					...optionsForChild(options, childCapabilityCeiling),
-					enabledPlugins: childOptions.enabledPlugins,
+					...optionsForChild(runtimeOptions, childCapabilityCeiling),
 					pluginPaths: childOptions.pluginPaths ?? [],
 					store,
 				},
@@ -701,7 +711,7 @@ export const createSessionSdkChildFactory = (
 			withChildSdk((sdk) => sdk.deliverToSession(sessionId, input)),
 		openSession: async (sessionId, openOptions) => {
 			const sdk = await createSessionSdkInternal(
-				{ ...optionsForChild(options, capabilityCeiling), store },
+				{ ...optionsForChild(runtimeOptions, capabilityCeiling), store },
 				{ ignoreConfiguredPlugins: true, manager, store }
 			);
 			try {

@@ -3,7 +3,6 @@ import type {
 	ReasoningMode,
 	ReasoningSelection,
 } from "@wincode/ai/models";
-import type { OptionalApplicationPluginId } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SkillContext } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -60,7 +59,6 @@ export const SESSION_RPC_METHODS = new Set([
 	"session/recall",
 	"session/getState",
 	"session/getTranscript",
-	"session/respondToApproval",
 ]);
 export const AGENT_EVENT_TYPES = new Set([
 	"agent-turn-started",
@@ -102,17 +100,18 @@ export type RpcAssembly = Omit<
 };
 
 export type RpcCompositionInput = Readonly<{
-	autoApproval?: boolean;
 	configRuntime?: ConfigRuntime;
 	cwd: string;
 	pluginRuntime?: PluginRuntime;
+	disabledPluginIds?: readonly string[];
+	pluginPaths?: readonly string[];
 	workspace: string;
 }>;
 
 export type RpcRunnerOptions = Readonly<{
-	autoApproval?: boolean;
 	configRuntime?: ConfigRuntime;
-	enabledPlugins?: readonly OptionalApplicationPluginId[];
+	disabledPluginIds?: readonly string[];
+	pluginPaths?: readonly string[];
 	pluginRuntime?: PluginRuntime;
 	composeCapabilities?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	input: JsonlInput;

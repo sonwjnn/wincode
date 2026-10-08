@@ -151,7 +151,7 @@ describe("sanitizeArgumentTree", () => {
 		expect(Object.keys(sanitized)).toEqual(["token=abc"]);
 	});
 
-	test("approval options: deeper traversal and plain ellipsis marker", () => {
+	test("sanitization options allow deeper traversal and plain ellipsis markers", () => {
 		const sanitized = sanitizeArgumentTree(
 			{ a: { b: { c: { d: { value: "hidden" } } } } },
 			{ depthOverflow: "…", maxDepth: 4, maxEntries: 24 }

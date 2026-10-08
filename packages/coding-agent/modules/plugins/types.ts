@@ -1,5 +1,5 @@
 import type {
-	PluginCommandRegistration,
+	PluginCommandHandler,
 	PluginInputSchema,
 	PluginToolRegistration,
 } from "./public";
@@ -7,10 +7,6 @@ import type {
 export type PluginTool = Readonly<{
 	description: string;
 	exclusiveInBatch?: true;
-	permissionAction?: string;
-	permissionResource?: string;
-	permissionDecision?: "allow" | "ask" | "deny";
-	permissionSafety?: boolean;
 	handler: PluginToolRegistration<PluginInputSchema>["handler"];
 	inputSchema: PluginInputSchema;
 	modelName?: string;
@@ -19,6 +15,7 @@ export type PluginTool = Readonly<{
 
 export type PluginCommand = Readonly<{
 	description: string;
-	handler: PluginCommandRegistration["handler"];
+	handler?: PluginCommandHandler;
 	name: string;
+	statusPanelId?: string;
 }>;

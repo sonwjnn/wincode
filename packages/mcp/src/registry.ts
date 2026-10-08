@@ -20,50 +20,9 @@ import {
 	type McpToolManifest,
 	type McpToolManifestEntry,
 } from "./manifest";
-import type { McpExecutionPolicy } from "./policy";
 import { type McpNormalizedResult, normalizeMcpResult } from "./result";
 import { sanitizeMessage } from "./sanitize";
-import { logicalMcpToolName, qualifyMcpToolName } from "./tool-identity";
-
-/**
- * The single denial wording for MCP tools, owned here so the gate and the
- * registry guard can never drift. The registry emits it for a denied dispatch
- * entry and the Tool Gate emits it for a composed policy deny.
- */
-export const mcpDeniedByPolicyText = (toolName: string): string =>
-	`MCP tool '${toolName}' is denied by policy`;
-
-const composeMcpToolDecision = (
-	serverDecision: McpExecutionPolicy,
-	agentDecision: McpExecutionPolicy,
-	safety: boolean
-): McpExecutionPolicy => {
-	let composed: McpExecutionPolicy;
-	if (serverDecision === "deny" || agentDecision === "deny") {
-		composed = "deny";
-	} else if (serverDecision === "ask" || agentDecision === "ask") {
-		composed = "ask";
-	} else {
-		composed = "allow";
-	}
-	return safety && composed !== "deny" ? "ask" : composed;
-};
-
-/** Agent policy is supplied by the application without importing its policy model. */
-export type McpAgentToolRequest = Readonly<{
-	logicalName: string;
-	serverName: string;
-	toolName: string;
-}>;
-
-export type McpAgentToolDecision = Readonly<{
-	decision: McpExecutionPolicy;
-	safety: boolean;
-}>;
-
-export type McpAgentDecisionResolver = (
-	tool: McpAgentToolRequest
-) => McpAgentToolDecision;
+import { qualifyMcpToolName } from "./tool-identity";
 
 export type McpServerState =
 	| "disabled"
@@ -81,24 +40,9 @@ export type McpServerStatus = {
 };
 
 export type McpSnapshotTool = {
-	agentDecision: McpExecutionPolicy;
 	client: McpClient;
 	description: string;
-	/**
-	 * The stable logical Permission action name (`<sanitizedServer>_<sanitizedTool>`)
-	 * this tool's decision was evaluated against and that a remembered grant is
-	 * keyed by. Distinct from the hashed dispatch identity used as the map key.
-	 */
-	logicalName: string;
 	originalToolName: string;
-	/** The composed Agent + server decision after any safety ceiling. */
-	policy: McpExecutionPolicy;
-	/**
-	 * True when the governing Agent policy is a manual-only safety ceiling, so an
-	 * `ask` here must never be satisfied by a remembered grant or auto approval.
-	 */
-	safety: boolean;
-	serverDecision: McpExecutionPolicy;
 	serverName: string;
 };
 
@@ -114,7 +58,6 @@ export type McpRegistry = {
 	initialize(): Promise<void>;
 	createSnapshot(
 		agent: AgentId,
-		resolveAgentDecision: McpAgentDecisionResolver,
 		trackLatest?: boolean
 	): Promise<McpCatalogSnapshot>;
 	execute(
@@ -391,14 +334,10 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return initPromise;
 	};
 
-	const buildSnapshot = async (
-		agent: AgentId,
-		resolveAgentDecision: McpAgentDecisionResolver
-	): Promise<McpCatalogSnapshot> => {
+	const buildSnapshot = async (agent: AgentId): Promise<McpCatalogSnapshot> => {
 		type Candidate = {
 			client: McpClient;
 			config: ResolvedMcpServerConfig;
-			serverPolicy: McpExecutionPolicy;
 			tool: McpClientTool;
 		};
 		const candidates: Candidate[] = [];
@@ -406,12 +345,10 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			if (isUndefined(entry.client) || entry.state !== "connected") {
 				continue;
 			}
-			const serverPolicy = entry.config.permission;
 			for (const tool of entry.tools) {
 				candidates.push({
 					client: entry.client,
 					config: entry.config,
-					serverPolicy,
 					tool,
 				});
 			}
@@ -431,34 +368,14 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				candidate.config.name,
 				candidate.tool.name
 			);
-			const logicalName = logicalMcpToolName(
-				candidate.config.name,
-				candidate.tool.name
-			);
-			const agentPolicy = resolveAgentDecision({
-				logicalName,
-				serverName: candidate.config.name,
-				toolName: candidate.tool.name,
-			});
-			const agentDecision = agentPolicy.decision;
-			const policy = composeMcpToolDecision(
-				candidate.serverPolicy,
-				agentDecision,
-				agentPolicy.safety
-			);
 			const description = candidate.tool.description ?? "";
 			tools.set(name, {
-				agentDecision,
 				client: candidate.client,
 				description,
-				logicalName,
 				originalToolName: candidate.tool.name,
-				policy,
-				safety: agentPolicy.safety,
-				serverDecision: candidate.serverPolicy,
 				serverName: candidate.config.name,
 			});
-			if (policy !== "deny" && visibleCount < MAX_MCP_TOOL_COUNT) {
+			if (visibleCount < MAX_MCP_TOOL_COUNT) {
 				manifest.push({
 					name,
 					description,
@@ -500,7 +417,6 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 
 	const createSnapshot = async (
 		agent: AgentId,
-		resolveAgentDecision: McpAgentDecisionResolver,
 		trackLatest = true
 	): Promise<McpCatalogSnapshot> => {
 		if (closed) {
@@ -516,7 +432,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		await init();
 		while (!closed) {
 			const generation = catalogGeneration;
-			const snapshot = await buildSnapshot(agent, resolveAgentDecision);
+			const snapshot = await buildSnapshot(agent);
 			if (generation === catalogGeneration) {
 				retainSnapshot(snapshot, trackLatest);
 				return snapshot;
@@ -555,9 +471,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		input: unknown,
 		signal?: AbortSignal
 	): Promise<McpNormalizedResult> => {
-		// TOCTOU guard, not duplicate validation: between the provider's pre-gate
-		// staleness check and this execute, an approval may have been pending while
-		// the catalog refreshed (reconnect, toggle, policy change). The gate may
+		// Reject execution when a reconnect, toggle, or config refresh invalidated
+		// the exact catalog snapshot used to select this tool.
 		if (
 			!activeSnapshotIds.has(snapshot.id) ||
 			(snapshot.id !== latestSnapshotId &&
@@ -568,9 +483,6 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		const tool = snapshot.tools.get(toolName);
 		if (isUndefined(tool)) {
 			return outputError(`Unknown MCP tool '${toolName}'`);
-		}
-		if (tool.policy === "deny") {
-			return outputError(mcpDeniedByPolicyText(toolName));
 		}
 		const entry = serverEntries.get(tool.serverName);
 		if (
@@ -784,6 +696,45 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return refresh;
 	};
 
+	const reconnectInvalidEntry = async (serverName: string): Promise<void> => {
+		const config = (await loadCurrentConfig(true)).servers[serverName];
+		if (isUndefined(config)) {
+			emit();
+			return;
+		}
+		if (serverEntries.has(serverName)) {
+			return;
+		}
+		const entry: ServerEntry = {
+			client: undefined,
+			config,
+			error: undefined,
+			executionController: new AbortController(),
+			state: config.disabled ? "disabled" : "connecting",
+			tools: [],
+		};
+		invalidStatuses.delete(serverName);
+		serverEntries.set(serverName, entry);
+		if (!config.disabled) {
+			await connectEntry(entry);
+		}
+		emit();
+	};
+
+	const reconnectExistingEntry = async (
+		entry: ServerEntry,
+		serverName: string
+	): Promise<void> => {
+		if (!(await refreshEntryConfig(entry, serverName))) {
+			return;
+		}
+		if (entry.config.disabled) {
+			await deactivateEntry(entry, "disabled");
+			return;
+		}
+		await doReconnect(entry);
+	};
+
 	const reconnect = (serverName: string): Promise<void> => {
 		const inFlight = reconnects.get(serverName);
 		if (!isUndefined(inFlight)) {
@@ -791,41 +742,17 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 		const run = runEntryOperation(serverName, async () => {
 			await init();
-			let entry = serverEntries.get(serverName);
-			if (isUndefined(entry) && invalidStatuses.has(serverName)) {
-				const config = (await loadCurrentConfig(true)).servers[serverName];
-				if (isUndefined(config)) {
-					emit();
-					return;
+			const entry = serverEntries.get(serverName);
+			if (isUndefined(entry)) {
+				if (invalidStatuses.has(serverName)) {
+					await reconnectInvalidEntry(serverName);
 				}
-				if (serverEntries.has(serverName)) {
-					return;
-				}
-				entry = {
-					client: undefined,
-					config,
-					error: undefined,
-					executionController: new AbortController(),
-					state: "connecting",
-					tools: [],
-				};
-				invalidStatuses.delete(serverName);
-				serverEntries.set(serverName, entry);
-				await connectEntry(entry);
-				emit();
 				return;
 			}
-			if (
-				isUndefined(entry) ||
-				entry.state === "disabled" ||
-				entry.state === "connecting"
-			) {
+			if (entry.state === "disabled" || entry.state === "connecting") {
 				return;
 			}
-			if (!(await refreshEntryConfig(entry, serverName))) {
-				return;
-			}
-			await doReconnect(entry);
+			await reconnectExistingEntry(entry, serverName);
 		});
 		reconnects.set(serverName, run);
 		run.then(

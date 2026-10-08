@@ -9,38 +9,15 @@ import {
 	type ToolJsonSchema,
 } from "@wincode/agent-core";
 import { isJsonValue, logger } from "@wincode/utils";
-import {
-	composePermissionDecisions,
-	type PermissionActionFamily,
-	type PermissionDecision,
-} from "@/modules/permissions/policy";
-import { evaluateGateWithAbort } from "@/modules/tool-gate/evaluate-with-abort";
-import type { GateOutcome, ToolGate } from "@/modules/tool-gate/tool-gate";
 import { isPluginOutputWithinLimit } from "./output";
 import type { PluginToolDescriptor } from "./runtime";
 import type { PluginTool } from "./types";
-
-export type PluginPermissionResolution = Readonly<{
-	decision: PermissionDecision;
-	safety: boolean;
-}>;
 
 export type PluginToolsContext = Readonly<{
 	agentId?: AgentId;
 	pluginTools?: readonly PluginToolDescriptor[];
 	existingToolNames?: readonly string[];
-	gate: ToolGate;
-	permissionForAction?: (
-		action: `plugin:${string}:${string}`,
-		agentId?: AgentId
-	) => Promise<PluginPermissionResolution>;
 	registerBackgroundWork?: (sessionId: string, work: Promise<unknown>) => void;
-	resolvePermissionForAction?: (
-		action: string,
-		resource: string,
-		agentId: AgentId | undefined,
-		family: PermissionActionFamily
-	) => Promise<PluginPermissionResolution>;
 	sessionId?: string;
 	signal?: AbortSignal;
 	workspace?: string;
@@ -118,60 +95,6 @@ const validateInput = async (
 		: { success: false };
 };
 
-const resolvePluginToolPermission = async (
-	tool: PluginToolDescriptor,
-	context: PluginToolsContext,
-	agentId: AgentId
-): Promise<PluginPermissionResolution | undefined> => {
-	if (tool.permissionAction === undefined) {
-		return context.permissionForAction === undefined
-			? undefined
-			: await context.permissionForAction(tool.action, agentId);
-	}
-	return context.resolvePermissionForAction === undefined
-		? undefined
-		: await context.resolvePermissionForAction(
-				tool.permissionAction,
-				tool.permissionResource ?? "*",
-				agentId,
-				tool.permissionActionFamily ?? "plugin"
-			);
-};
-
-const gatePluginToolCall = (
-	tool: PluginToolDescriptor,
-	context: PluginToolsContext,
-	agentId: AgentId,
-	input: unknown,
-	toolCallId: ToolCallId,
-	permission: PluginPermissionResolution,
-	signal?: AbortSignal
-): Promise<GateOutcome> => {
-	const decision =
-		tool.permissionDecision === undefined
-			? permission.decision
-			: composePermissionDecisions(
-					permission.decision,
-					tool.permissionDecision
-				);
-	return evaluateGateWithAbort(
-		() =>
-			context.gate.gate({
-				action: tool.permissionAction ?? tool.action,
-				agentId,
-				decision,
-				description: `Use Plugin Tool '${tool.name}' (${tool.pluginId}).`,
-				family: "plugin",
-				input,
-				pluginId: tool.pluginId,
-				safety: permission.safety || tool.permissionSafety === true,
-				toolCallId,
-				toolName: tool.name,
-			}),
-		signal ?? context.signal
-	);
-};
-
 const executePluginToolHandler = async (
 	tool: PluginToolDescriptor,
 	context: PluginToolsContext,
@@ -222,26 +145,6 @@ const pluginTool = (
 		if (agentId === undefined) {
 			return failure("Plugin Tool Agent identity is unavailable.");
 		}
-		const permission = await resolvePluginToolPermission(
-			tool,
-			context,
-			agentId
-		);
-		if (permission === undefined) {
-			return failure("Plugin Tool Permission is unavailable.");
-		}
-		const outcome = await gatePluginToolCall(
-			tool,
-			context,
-			agentId,
-			input,
-			toolCallId,
-			permission,
-			signal
-		);
-		if (outcome.kind !== "allow") {
-			return failure(outcome.errorText);
-		}
 		return executePluginToolHandler(
 			tool,
 			context,
@@ -260,9 +163,7 @@ export const createPluginTools = (
 	if (
 		context.pluginTools === undefined ||
 		context.sessionId === undefined ||
-		context.workspace === undefined ||
-		(context.permissionForAction === undefined &&
-			context.resolvePermissionForAction === undefined)
+		context.workspace === undefined
 	) {
 		return [];
 	}

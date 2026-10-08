@@ -22,7 +22,6 @@ import type {
 	AttachmentReferenceResolver,
 } from "../modules/sessions/attachment-reference";
 import type {
-	SessionApprovalResult,
 	SessionHost,
 	SessionId,
 	SessionInterruptResult,
@@ -34,11 +33,6 @@ import type {
 } from "../modules/sessions/host/session-rpc";
 import type { SessionHostManager } from "../modules/sessions/host/types";
 import type { SessionSendOutcome } from "../modules/sessions/submission-types";
-
-type CapturedApproval = Readonly<{
-	id: string;
-	outcome: unknown;
-}>;
 
 const model = fromPartial<Selection["model"]>({
 	modelId: "gpt-5.6-luna",
@@ -64,9 +58,7 @@ const createHandler = ({
 		submissionId: "steered-submission-1",
 		turnId: "turn-1",
 	} as unknown as SessionSteeringAdmission,
-	approvalResult = { applied: true } as SessionApprovalResult,
 	interruptResult = fromPartial<SessionInterruptResult>({
-		approvalsSettled: 0,
 		kind: "none",
 		recalled: [],
 	}),
@@ -77,7 +69,6 @@ const createHandler = ({
 	send,
 }: Readonly<{
 	admission?: SessionSubmissionAdmission;
-	approvalResult?: SessionApprovalResult;
 	interruptResult?: SessionInterruptResult;
 	selected?: boolean;
 	active?: boolean;
@@ -90,14 +81,11 @@ const createHandler = ({
 	) => Promise<SessionSendOutcome>;
 }> = {}): {
 	handler: (requestValue: RpcRequest) => Promise<unknown>;
-	approvals: CapturedApproval[];
 	drafts: RpcSubmissionDraft[];
 	inputs: SessionSendInput[];
 	recalledIds: Array<readonly string[] | undefined>;
 	steerCalls: number;
-	setApprovalResult: (result: SessionApprovalResult) => void;
 } => {
-	const approvals: CapturedApproval[] = [];
 	const inputs: SessionSendInput[] = [];
 	const recalledIds: Array<readonly string[] | undefined> = [];
 	const drafts: RpcSubmissionDraft[] = [];
@@ -105,7 +93,6 @@ const createHandler = ({
 		(event: SessionSubmissionEvent) => void
 	>();
 	let steerCalls = 0;
-	let currentApprovalResult = approvalResult;
 	const emitSubmissionEvent = (event: SessionSubmissionEvent): void => {
 		for (const listener of submissionEventListeners) {
 			listener(event);
@@ -139,13 +126,6 @@ const createHandler = ({
 		recallWaitingMessages: (ids: readonly string[] | undefined) => {
 			recalledIds.push(ids);
 			return [];
-		},
-		respondToApproval: (
-			id: string,
-			outcome: unknown
-		): SessionApprovalResult => {
-			approvals.push({ id, outcome });
-			return currentApprovalResult;
 		},
 	};
 	const host = {
@@ -198,8 +178,6 @@ const createHandler = ({
 		processId: "process-1",
 		requireBound: () => host,
 		requireInitialized: () => undefined,
-		resolveApprovalId: (wireId) =>
-			wireId === "wire-approval-1" ? "engine-approval-1" : undefined,
 		sendInput: (selection, submission, ids): SessionSendInput => {
 			const input = {
 				agent: selection.agentId,
@@ -220,13 +198,9 @@ const createHandler = ({
 		get steerCalls() {
 			return steerCalls;
 		},
-		approvals,
 		drafts,
 		inputs,
 		recalledIds,
-		setApprovalResult: (result) => {
-			currentApprovalResult = result;
-		},
 	};
 };
 
@@ -510,80 +484,9 @@ test("session retry responds at the durable start event before the turn settles"
 	});
 });
 
-test("approval responses use wire identities and Engine authority", async () => {
-	const controls = createHandler();
-
-	expect(
-		await controls.handler(
-			request("unknown", "session/respondToApproval", {
-				approvalId: "unknown",
-				decision: "allowOnce",
-			})
-		)
-	).toMatchObject({ result: { applied: false } });
-	expect(controls.approvals).toHaveLength(0);
-
-	controls.setApprovalResult({
-		applied: false,
-		reason: "persistence-forbidden",
-	});
-	await expect(
-		controls.handler(
-			request("safety", "session/respondToApproval", {
-				approvalId: "wire-approval-1",
-				decision: "alwaysAllow",
-			})
-		)
-	).rejects.toMatchObject({ code: "approval_persistence_forbidden" });
-
-	controls.setApprovalResult({ applied: true });
-	const allowed = await controls.handler(
-		request("allow", "session/respondToApproval", {
-			approvalId: "wire-approval-1",
-			decision: "allowOnce",
-		})
-	);
-	const rejected = await controls.handler(
-		request("reject", "session/respondToApproval", {
-			approvalId: "wire-approval-1",
-			decision: "reject",
-			feedback: "not now",
-		})
-	);
-	const aborted = await controls.handler(
-		request("abort", "session/respondToApproval", {
-			approvalId: "wire-approval-1",
-			decision: "abort",
-		})
-	);
-
-	expect(allowed).toMatchObject({ result: { applied: true } });
-	expect(rejected).toMatchObject({ result: { applied: true } });
-	expect(aborted).toMatchObject({ result: { applied: true } });
-	expect(controls.approvals).toEqual([
-		{
-			id: "engine-approval-1",
-			outcome: { decision: "allow", remember: true },
-		},
-		{
-			id: "engine-approval-1",
-			outcome: { decision: "allow", remember: false },
-		},
-		{
-			id: "engine-approval-1",
-			outcome: { decision: "reject", feedback: "not now" },
-		},
-		{
-			id: "engine-approval-1",
-			outcome: { decision: "abort" },
-		},
-	]);
-});
-
 test("interrupt and recall return Engine control outcomes", async () => {
 	const controls = createHandler({
 		interruptResult: {
-			approvalsSettled: 2,
 			kind: "turn",
 			recalled: [],
 		},
@@ -594,7 +497,6 @@ test("interrupt and recall return Engine control outcomes", async () => {
 	).resolves.toMatchObject({
 		result: {
 			recalled: [],
-			settledApprovals: 2,
 			stopped: "turn",
 		},
 	});
@@ -706,7 +608,6 @@ test("failed Session creation stays durable and can be reopened", async () => {
 			return state.host;
 		},
 		requireInitialized: () => undefined,
-		resolveApprovalId: () => undefined,
 		sendInput: (_selected, submission, ids) =>
 			fromPartial({
 				composition: submission.composition,

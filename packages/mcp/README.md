@@ -1,28 +1,20 @@
 # `@wincode/mcp`
 
-Application-agnostic MCP domain runtime for connecting to configured MCP servers and exposing their tools as immutable catalog snapshots.
+MCP domain runtime and optional Wincode Plugin. The package root exports the application-agnostic registry, server configuration, identity, and result contracts. `@wincode/mcp/plugin` exports the Plugin factory selected by the Wincode distribution.
 
 ## Owns
 
 - MCP configuration schema, validation, and server configuration resolution.
 - MCP client adapters and server lifecycle, discovery, reconnection, and status.
-- Stable logical tool identities, collision-resistant dispatch identities, and manifest limits.
-- Server policy evaluation, injected Agent-policy composition, and safety ceilings.
-- Tool execution, result normalization, and output sanitization.
+- Collision-resistant tool dispatch identities, manifest limits, and result sanitization.
+- The MCP Plugin factory, per-Turn tool registration, status panel, and `/mcps` command.
 
-## Application boundary
+## Public Plugin boundary
 
-This package does not depend on `coding-agent`. It does not own Wincode's `ConfigStore`, Agent policy model, Tool Gate, Session Host capabilities, or UI.
+The MCP Plugin imports only public contracts from `@wincode/coding-agent`. It reads Wincode's merged, read-only configuration snapshot through `PluginLoadContext.config`, interprets the `mcp` section itself, and registers tools and status contributions through the generic Plugin API. Coding-Agent does not import MCP registry types or own MCP-specific UI.
 
-Applications inject their configuration source through `McpRegistryDeps.loadConfig` and their Agent policy through `McpAgentDecisionResolver`. The resolver is called for each logical tool while building a snapshot; the package combines that decision with the configured server decision and safety policy. Applications remain responsible for applying their own execution gate before invoking `McpRegistry.execute`.
+Application entry points select `@wincode/mcp/plugin` by default as a distribution package. SDK callers select its resolved file path explicitly with `pluginPaths`. A missing selected distribution package is reported as an installation error and can be disabled with `--no-plugin mcp`.
 
-```ts
-const registry = createMcpRegistry({
-  loadConfig,
-  workspace,
-  createClient,
-});
-const snapshot = await registry.createSnapshot(agentId, resolveAgentDecision);
-```
+Project MCP configuration is protected by Project trust. Without a saved or explicit trust decision, Wincode omits project configuration; in non-interactive modes it does not prompt or silently trust. Once trusted, project configuration may define local commands, remote endpoints, and headers. Project trust is not a sandbox: local MCP processes run with Wincode's operating-system privileges.
 
-The coding-agent adapter in `packages/coding-agent/plugins/mcp/` supplies Wincode configuration and policy, applies Tool Gate, and owns the process-lifetime resource. Its Session Host capability and React status UI remain in coding-agent.
+Discovered MCP tools are registered for Agent selection and execute without a Wincode per-call allow/ask/deny policy. Use OS-level isolation when stronger process containment is required.

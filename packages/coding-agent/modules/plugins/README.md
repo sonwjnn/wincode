@@ -1,6 +1,6 @@
 # File-loaded Plugins
 
-File-loaded Plugins are trusted TypeScript modules that Wincode explicitly loads into its process. They can register gated Agent Tools and direct Interactive Mode commands through the public `@wincode/coding-agent/plugin` API.
+File-loaded Plugins are trusted TypeScript modules that Wincode explicitly loads into its process. They can register model-visible Agent Tools and Interactive Mode commands through the public `@wincode/coding-agent` API.
 
 ## Enable a Plugin
 
@@ -18,16 +18,16 @@ CLI-relative paths resolve from the workspace. To enable a Plugin on every run, 
 }
 ```
 
-Project configuration cannot authorize Plugin code. If a CLI path and a configured path declare the same Plugin Identifier, the CLI Plugin loads first. Wincode accepts TypeScript paths (`.ts`, `.tsx`, `.mts`, `.cts`) and reports invalid, missing, or failed Plugins without preventing other Plugins from loading.
+A project config may name explicit Plugin paths, but Wincode considers them only after the project has been trusted; a `.wincode/plugins/` directory is never discovered implicitly. Relative paths resolve against the config file that declares them. If a CLI/user path and a project path declare the same Plugin Identifier, the CLI/user Plugin wins. Wincode accepts TypeScript paths (`.ts`, `.tsx`, `.mts`, `.cts`) and reports invalid, missing, or failed Plugins without preventing other Plugins from loading.
 
-Enabling a path is a trust decision: Plugin code runs with Wincode's process permissions, including code executed while the module loads. Plugins are not sandboxed, and Wincode does not install their dependencies. Local imports and dependencies already available to the Plugin may be used.
+Enabling a path is a trust decision: Plugin code runs with Wincode's process privileges, including code executed while the module loads. Plugins are not sandboxed, and Wincode does not install their dependencies. Local imports and dependencies already available to the Plugin may be used. `--no-plugin <id>` and configured `disabledPlugins` entries disable known default/distribution Plugins before loading them; they do not disable explicitly selected file paths. Remove a file path from the CLI or the configuration source that declares it to stop that Plugin from loading.
 
 ## Author a Plugin
 
 Export one default factory. The authoring types are available from the installed Wincode package; Plugin code does not need internal Coding-Agent imports.
 
 ```ts
-import type { PluginFactory } from "@wincode/coding-agent/plugin";
+import type { PluginFactory } from "@wincode/coding-agent";
 import { z } from "zod";
 
 const jiraPlugin: PluginFactory = (api) => {
@@ -61,26 +61,34 @@ const jiraPlugin: PluginFactory = (api) => {
 export default jiraPlugin;
 ```
 
-The stable Plugin Identifier and local tool names use lowercase ASCII letters, digits, and underscores. Wincode exposes `plugin_jira_search_issues` to the Agent and uses `plugin:jira:search_issues` as the Tool Permission action. A Plugin Tool's effective permission defaults to `ask` for each calling Agent. Only user-controlled rules may grant `allow`; project rules may tighten the decision to `ask` or `deny`. The normal Interactive approval flow applies, while Print and JSON Modes fail closed on an unresolved `ask`. RPC uses its existing approval protocol.
+Plugin Identifiers use lowercase ASCII letters, digits, and underscores; local Tool names also allow hyphens. Wincode exposes `plugin_jira_search_issues` to the Agent. The owner-qualified Plugin name prevents collisions but has no authorization meaning. Registered Plugin Tools execute without a Wincode per-call allow/deny decision; explicitly enabling Plugin code is the trust boundary. Project-selected Plugins are considered only after Project trust has been granted.
 
 Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas may be Zod or JSON Schema. Handlers return the common Tool outcome shape: `{ type: "success", output }` or `{ type: "failure", errorText }`. Successful output is bounded to 64 KiB of UTF-8 text or JSON; failures become safe failed Tool Calls.
 
 Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeAgentTurn(context, scope)`. The pre-Turn context contains the Session ID, Agent ID, workspace, and abort signal. Within one Plugin, Turn registrations override Session registrations, which override factory registrations. A same-scope registration replaces that Plugin's previous definition; `unregisterTool(name)` masks an outer definition only in that scope. Other Plugins cannot replace its tools. A failed pre-Turn hook contributes no tools for that Plugin on the affected Turn.
 
-Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened and do not pass through Tool Permission or open a second approval dialog.
+Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened; selecting one from the command menu is its explicit execution intent.
 
 A Plugin factory may also register named process resources with `registerResource(name, value)`. Host integrations retrieve them through the generic `PluginRuntime.getResource(pluginId, name)` API; resource types and ownership stay with the Plugin. Resource names are unique within a Plugin and values must be defined. The Plugin should release owned resources from `onShutdown`.
 
 Tool handlers can register background promises with `context.registerBackgroundWork(promise)`. One-Shot waits for all work registered to that Session before exiting. Interactive Mode and RPC keep the parent Session Host alive while registered work is pending, even after its last view is released; normal idle unloading resumes when the work settles.
 
+## Status Panels
+
+Plugins may register a status panel with `registerStatusPanel`. The host renders its snapshot in the session sidebar and indicator, routes refresh and item actions through the Plugin Runtime, and lets a command open the same panel with `statusPanelId`. When a panel supplies `refresh`, its dialog exposes `Ctrl+R`; `Space` runs the selected item action. A panel owns its status values and action behavior; the host does not need domain-specific UI or imports.
+
 ## Session SDK
 
-The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. `handle.deliver(text)` durably queues a message and wakes the Session at its next safe boundary; `handle.prompt(input)` also permits Agent/model selection. SDK callers opt into bundled optional Plugins explicitly. A Session SDK can create a child SDK with an explicit `enabledPlugins` list; the child does not inherit the parent's optional or file-loaded Plugin selection. For example, Subagents selects its child set deliberately:
+The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. `handle.deliver({ idempotencyKey, text })` durably queues an idempotent message and wakes the Session at its next safe boundary; `handle.prompt(input)` also permits Agent/model selection. SDK callers select Plugins with explicit `pluginPaths`; the child does not inherit the parent's selected or file-loaded Plugin paths. For example, Subagents selects its own source so a child can submit its result:
 
 ```ts
-const childSdk = await parentSdk.createChildSdk({ enabledPlugins: ["subagents"] });
+const childSdk = await parentSdk.createChildSdk({
+  pluginPaths: [subagentsPluginPath],
+});
 const child = await childSdk.openSession(childSessionId);
 ```
+
+The Wincode distribution selects MCP and Subagents packages by default for application entry points. Direct SDK callers choose the packages they need by resolving their `@wincode/mcp/plugin` or `@wincode/subagents/plugin` entry points to explicit paths.
 
 Dispose child handles and child SDKs when their work is complete. Coding and shell remain native Session tools; Skills remain native host capabilities.
 

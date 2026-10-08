@@ -46,13 +46,10 @@ describe("application dispatch", () => {
 	test("routes bare invocation to the injected interactive runner", async () => {
 		const stdout = capture();
 		const stderr = capture();
-		const exitCode = await dispatch(
-			input(stdout.writer, stderr.writer, ["--auto"]),
-			{
-				...noOpRunners,
-				interactive: async () => 3,
-			}
-		);
+		const exitCode = await dispatch(input(stdout.writer, stderr.writer, []), {
+			...noOpRunners,
+			interactive: async () => 3,
+		});
 		expect(exitCode).toBe(3);
 		expect(stdout.output).toBe("");
 		expect(stderr.output).toBe("");
@@ -63,7 +60,12 @@ describe("application dispatch", () => {
 		const stderr = capture();
 		let routedInvocation: InvocationOptions | undefined;
 		await dispatch(
-			input(stdout.writer, stderr.writer, ["--no-mcp", "--no-subagents"]),
+			input(stdout.writer, stderr.writer, [
+				"--no-plugin",
+				"mcp",
+				"--no-plugin",
+				"subagents",
+			]),
 			{
 				...noOpRunners,
 				interactive: async (context) => {
@@ -175,6 +177,9 @@ describe("application dispatch", () => {
 			getCommands: () => [],
 			getToolDescriptors: () => [],
 			getResource: () => undefined,
+			getStatusPanels: () => [],
+			refreshStatusPanel: async () => undefined,
+			runStatusPanelAction: async () => undefined,
 			registerBackgroundWork: () => undefined,
 			hasBackgroundWork: () => false,
 			onBackgroundWorkChange: () => () => undefined,
@@ -218,6 +223,9 @@ describe("application dispatch", () => {
 			getCommands: () => [],
 			getToolDescriptors: () => [],
 			getResource: () => undefined,
+			getStatusPanels: () => [],
+			refreshStatusPanel: async () => undefined,
+			runStatusPanelAction: async () => undefined,
 			registerBackgroundWork: () => undefined,
 			hasBackgroundWork: () => false,
 			onBackgroundWorkChange: () => () => undefined,

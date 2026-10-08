@@ -28,7 +28,6 @@ const jiraPlugin = (): LoadedPlugin => ({
 	sourcePath: pluginSource,
 	tools: [
 		{
-			action: "plugin:jira:search_issues",
 			description: "Search Jira issues.",
 			handler: async () => ({ output: { query: "fixed" }, type: "success" }),
 			inputSchema: z.object({ query: z.string() }),
@@ -103,6 +102,52 @@ test("a failed later Session registration keeps earlier tools available for that
 		expect(runtime.diagnostics).toHaveLength(1);
 		await runtime.stopSession(sessionContext);
 		expect(shutdownCalled).toBe(true);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("a scoped Plugin registration rejects duplicate model-visible names", async () => {
+	const sessionContext = { sessionId: "duplicate-tools-session", workspace };
+	const plugin: LoadedPlugin = {
+		commands: [],
+		id: "duplicate_tools",
+		onSessionStart: (_context, api) => {
+			api.registerTool({
+				description: "The first tool keeps the shared model name.",
+				handler: async () => ({ output: {}, type: "success" }),
+				inputSchema: z.object({}),
+				modelName: "shared_lookup",
+				name: "first_lookup",
+			});
+			api.registerTool({
+				description: "The duplicate tool must not be published.",
+				handler: async () => ({ output: {}, type: "success" }),
+				inputSchema: z.object({}),
+				modelName: "shared_lookup",
+				name: "second_lookup",
+			});
+		},
+		sourcePath: pluginSource,
+		tools: [],
+		workspace,
+	};
+	const runtime = createPluginRuntime([plugin], []);
+
+	try {
+		await runtime.startSession(sessionContext);
+
+		expect(
+			runtime
+				.getToolDescriptors(sessionContext.sessionId)
+				.map(({ localName, name }) => ({ localName, name }))
+		).toEqual([{ localName: "first_lookup", name: "shared_lookup" }]);
+		expect(runtime.diagnostics).toEqual([
+			expect.objectContaining({
+				message: expect.stringContaining("already registered"),
+				sourcePath: pluginSource,
+			}),
+		]);
 	} finally {
 		await runtime.shutdown();
 	}

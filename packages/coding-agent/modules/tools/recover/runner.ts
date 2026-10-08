@@ -23,7 +23,6 @@ import {
 } from "./schema";
 
 type RecoverOptions = ResourceLimitOptions & {
-	allowCrossSession?: boolean;
 	versionedEditing?: VersionedEditingContext;
 };
 
@@ -68,8 +67,7 @@ const readCurrentState = async (pathName: string) => {
 const runRecoveryAction = async (
 	input: RecoverInput,
 	context: VersionedEditingContext,
-	limits: ToolResourceLimits,
-	options: RecoverOptions
+	limits: ToolResourceLimits
 ): Promise<RecoverOutput> => {
 	const recovery = context.store.recovery;
 	if (recovery === undefined) {
@@ -86,20 +84,6 @@ const runRecoveryAction = async (
 			"recovery-not-found",
 			`Recovery '${input.recoveryId}' was not found or is already closed.`,
 			input.recoveryId
-		);
-	}
-	if (
-		inspection.recovery.originSessionId !== context.sessionId &&
-		options.allowCrossSession !== true
-	) {
-		throw recoveryError(
-			"recovery-cross-session-permission",
-			"Recovery by another session requires separate approval.",
-			input.recoveryId,
-			{
-				originSessionId: inspection.recovery.originSessionId,
-				reconcilerSessionId: context.sessionId,
-			}
 		);
 	}
 	const paths = inspection.artifact.paths;
@@ -310,7 +294,6 @@ export const runRecoverTool = async (
 	return runRecoveryAction(
 		parsed.data,
 		context,
-		options.resourceLimits ?? getToolResourceLimits(),
-		options
+		options.resourceLimits ?? getToolResourceLimits()
 	);
 };

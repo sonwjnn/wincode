@@ -1,4 +1,3 @@
-import type { OptionalPluginId } from "@/shared/cli-options";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type {
 	ApplicationContext,
@@ -6,7 +5,6 @@ import type {
 	TextWriter,
 } from "./modes/types";
 import { InvocationError } from "./modes/types";
-import { selectOptionalApplicationPlugins } from "./plugin-composition";
 import type { OutputWriter as RpcOutputWriter } from "./rpc/types";
 
 export type DispatchInput = Readonly<{
@@ -34,16 +32,21 @@ export type DispatchModeLoader = () => Promise<DispatchModeRunners>;
 export type DispatchRuntime = Pick<
 	ApplicationContext,
 	"configRuntime" | "pluginRuntime"
->;
+> &
+	Readonly<{ startupDiagnostics?: readonly string[] }>;
 export type DispatchDependencies = Readonly<{
 	initializeRuntime?: (input: {
 		cwd: string;
-		enabledPlugins: readonly OptionalPluginId[];
+		disabledPluginIds: readonly string[];
+		mode: ExecutionMode;
 		pluginPaths: readonly string[];
+		projectTrustOverride?: "trust" | "deny";
+		stdinIsTTY: boolean;
 	}) => Promise<DispatchRuntime>;
 }>;
 
 const USAGE_EXIT_CODE = 2;
+const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
 const HELP_TEXT = [
 	"Usage: wincode [options]",
 	"",
@@ -60,10 +63,10 @@ const HELP_TEXT = [
 	"      --model <id>     Select a Model",
 	"      --effort <id>    Select an Effort",
 	"      --reasoning-mode <id>  Select a Reasoning Mode",
-	"      --auto           Auto-approve ordinary tool requests",
+	"      --trust-project  Trust project resources for this invocation",
+	"      --no-trust-project  Refuse project resources for this invocation",
 	"      --plugin <path>  Enable a Plugin (repeatable)",
-	"      --no-mcp         Disable the bundled MCP Plugin",
-	"      --no-subagents   Disable the bundled Subagents Plugin",
+	"      --no-plugin <id> Disable a distributed Plugin by Identifier",
 	"  -h, --help           Show this help",
 	"  -v, --version        Show the version",
 ].join("\n");
@@ -79,6 +82,18 @@ const getVersion = async (): Promise<string> => {
 
 const writeLine = (writer: TextWriter, text: string): void => {
 	writer.write(`${text}\n`);
+};
+
+const writePluginDiagnostics = (
+	runtime: DispatchRuntime | undefined,
+	stderr: TextWriter
+): void => {
+	for (const diagnostic of runtime?.pluginRuntime?.diagnostics ?? []) {
+		writeLine(
+			stderr,
+			`Plugin: ${diagnostic.message} (${diagnostic.sourcePath})`
+		);
+	}
 };
 
 const nextValue = (
@@ -126,14 +141,14 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	let mode: ExecutionMode = "interactive";
 	let modeExplicit = false;
 	let agent: string | undefined;
-	let auto = false;
+	let projectTrustOverride: "trust" | "deny" | undefined;
 	let model: string | undefined;
 	let prompt: string | undefined;
 	let session: string | undefined;
 	let effort: string | undefined;
 	let reasoningMode: string | undefined;
 	const pluginPaths: string[] = [];
-	const disabledPlugins: OptionalPluginId[] = [];
+	const disabledPlugins: string[] = [];
 	let help = false;
 	let version = false;
 	let oneShotOption = false;
@@ -159,16 +174,18 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			version = true;
 			continue;
 		}
-		if (argument === "--auto") {
-			auto = true;
-			continue;
-		}
-		if (argument === "--no-mcp") {
-			disabledPlugins.push("mcp");
-			continue;
-		}
-		if (argument === "--no-subagents") {
-			disabledPlugins.push("subagents");
+		if (argument === "--trust-project" || argument === "--no-trust-project") {
+			const nextDecision = argument === "--trust-project" ? "trust" : "deny";
+			if (
+				projectTrustOverride !== undefined &&
+				projectTrustOverride !== nextDecision
+			) {
+				throw new InvocationError(
+					"Use either --trust-project or --no-trust-project, not both.",
+					USAGE_EXIT_CODE
+				);
+			}
+			projectTrustOverride = nextDecision;
 			continue;
 		}
 		const equalsIndex = argument.indexOf("=");
@@ -180,6 +197,18 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			const next = nextValue(args, index, option, inlineValue);
 			index = next.index;
 			pluginPaths.push(next.value);
+			continue;
+		}
+		if (option === "--no-plugin") {
+			const next = nextValue(args, index, option, inlineValue);
+			if (!pluginIdentifierPattern.test(next.value)) {
+				throw new InvocationError(
+					`Invalid Plugin Identifier '${next.value}'.`,
+					USAGE_EXIT_CODE
+				);
+			}
+			index = next.index;
+			disabledPlugins.push(next.value);
 			continue;
 		}
 		if (option === "--mode" || option === "-m") {
@@ -253,9 +282,9 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			help,
 			version,
 			invocation: {
-				auto,
 				mode,
 				...(disabledPlugins.length === 0 ? {} : { disabledPlugins }),
+				...(projectTrustOverride === undefined ? {} : { projectTrustOverride }),
 			},
 		};
 	}
@@ -281,7 +310,6 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 		help,
 		version,
 		invocation: {
-			auto,
 			mode,
 			...(agent === undefined ? {} : { agent }),
 			...(model === undefined ? {} : { model }),
@@ -291,6 +319,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			...(reasoningMode === undefined ? {} : { reasoningMode }),
 			...(pluginPaths.length === 0 ? {} : { pluginPaths }),
 			...(disabledPlugins.length === 0 ? {} : { disabledPlugins }),
+			...(projectTrustOverride === undefined ? {} : { projectTrustOverride }),
 		},
 	};
 }
@@ -317,6 +346,83 @@ const isJsonModeRequested = (args: readonly string[]): boolean => {
 
 export const getCliHelpText = (): string => HELP_TEXT;
 
+const writeEarlyResponse = async (
+	parsed: ParsedInvocation,
+	input: DispatchInput
+): Promise<number | undefined> => {
+	if (parsed.help) {
+		writeLine(input.stdout, HELP_TEXT);
+		return 0;
+	}
+	if (parsed.version) {
+		writeLine(input.stdout, await getVersion());
+		return 0;
+	}
+};
+
+const initializeApplicationRuntime = (
+	input: DispatchInput,
+	invocation: InvocationOptions,
+	dependencies: DispatchDependencies
+): Promise<DispatchRuntime | undefined> | undefined =>
+	dependencies.initializeRuntime?.({
+		cwd: input.cwd,
+		disabledPluginIds: invocation.disabledPlugins ?? [],
+		mode: invocation.mode,
+		pluginPaths: invocation.pluginPaths ?? [],
+		...(invocation.projectTrustOverride === undefined
+			? {}
+			: { projectTrustOverride: invocation.projectTrustOverride }),
+		stdinIsTTY: input.stdinIsTTY,
+	});
+
+const createApplicationContext = (
+	input: DispatchInput,
+	invocation: InvocationOptions,
+	runtime: DispatchRuntime | undefined
+): ApplicationContext => ({
+	...(runtime ?? {}),
+	args: input.args,
+	cwd: input.cwd,
+	invocation,
+	...(input.rpcStdout === undefined ? {} : { rpcStdout: input.rpcStdout }),
+	...(input.signal === undefined ? {} : { signal: input.signal }),
+	...(input.signalExitCode === undefined
+		? {}
+		: { signalExitCode: input.signalExitCode }),
+	stderr: input.stderr,
+	...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+	stdinIsTTY: input.stdinIsTTY,
+	stdout: input.stdout,
+});
+
+const dispatchParsedInvocation = async (
+	input: DispatchInput,
+	runners: DispatchModeRunners | DispatchModeLoader,
+	dependencies: DispatchDependencies,
+	onRuntime: (runtime: DispatchRuntime | undefined) => void
+): Promise<number> => {
+	const parsed = parseInvocation(input.args);
+	const earlyResult = await writeEarlyResponse(parsed, input);
+	if (earlyResult !== undefined) {
+		return earlyResult;
+	}
+	const runtime = await initializeApplicationRuntime(
+		input,
+		parsed.invocation,
+		dependencies
+	);
+	onRuntime(runtime);
+	for (const diagnostic of runtime?.startupDiagnostics ?? []) {
+		writeLine(input.stderr, `Project trust: ${diagnostic}`);
+	}
+	writePluginDiagnostics(runtime, input.stderr);
+	const context = createApplicationContext(input, parsed.invocation, runtime);
+	const resolvedRunners =
+		typeof runners === "function" ? await runners() : runners;
+	return await resolvedRunners[parsed.invocation.mode](context);
+};
+
 export const dispatch = async (
 	input: DispatchInput,
 	runners: DispatchModeRunners | DispatchModeLoader,
@@ -324,47 +430,14 @@ export const dispatch = async (
 ): Promise<number> => {
 	let pluginRuntime: ApplicationContext["pluginRuntime"];
 	try {
-		const parsed = parseInvocation(input.args);
-		if (parsed.help) {
-			writeLine(input.stdout, HELP_TEXT);
-			return 0;
-		}
-		if (parsed.version) {
-			writeLine(input.stdout, await getVersion());
-			return 0;
-		}
-		const runtime = await dependencies.initializeRuntime?.({
-			cwd: input.cwd,
-			enabledPlugins: selectOptionalApplicationPlugins(
-				parsed.invocation.disabledPlugins
-			),
-			pluginPaths: parsed.invocation.pluginPaths ?? [],
-		});
-		pluginRuntime = runtime?.pluginRuntime;
-		for (const diagnostic of pluginRuntime?.diagnostics ?? []) {
-			writeLine(
-				input.stderr,
-				`Plugin: ${diagnostic.message} (${diagnostic.sourcePath})`
-			);
-		}
-		const context: ApplicationContext = {
-			...(runtime ?? {}),
-			args: input.args,
-			cwd: input.cwd,
-			invocation: parsed.invocation,
-			...(input.rpcStdout === undefined ? {} : { rpcStdout: input.rpcStdout }),
-			...(input.signal === undefined ? {} : { signal: input.signal }),
-			...(input.signalExitCode === undefined
-				? {}
-				: { signalExitCode: input.signalExitCode }),
-			stderr: input.stderr,
-			...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-			stdinIsTTY: input.stdinIsTTY,
-			stdout: input.stdout,
-		};
-		const resolvedRunners =
-			typeof runners === "function" ? await runners() : runners;
-		return await resolvedRunners[parsed.invocation.mode](context);
+		return await dispatchParsedInvocation(
+			input,
+			runners,
+			dependencies,
+			(runtime) => {
+				pluginRuntime = runtime?.pluginRuntime;
+			}
+		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (isJsonModeRequested(input.args)) {

@@ -1,6 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import path from "node:path";
 import { isUndefined } from "@wincode/utils";
 import { $ } from "bun";
 import { keepTailUtf8 } from "../output-bounds";
@@ -89,18 +87,6 @@ const expandHomeInShellPath = (input: string): string => {
 	return input;
 };
 
-const findExistingPathAncestor = (targetPath: string): string => {
-	let parentPath = targetPath;
-	while (!existsSync(parentPath)) {
-		const nextParentPath = path.dirname(parentPath);
-		if (nextParentPath === parentPath) {
-			return parentPath;
-		}
-		parentPath = nextParentPath;
-	}
-	return parentPath;
-};
-
 const resolveShellCwd = async (cwd: string | undefined): Promise<string> => {
 	if (isUndefined(cwd)) {
 		return defaultWorkspaceSandbox.root;
@@ -109,19 +95,7 @@ const resolveShellCwd = async (cwd: string | undefined): Promise<string> => {
 	try {
 		return await defaultWorkspaceSandbox.resolveExistingPath(expanded);
 	} catch {
-		try {
-			return await defaultWorkspaceSandbox.resolveNewPath(expanded);
-		} catch {
-			// The cwd was approved through the external-directory boundary, so the
-			// runner resolves it against the workspace root, realpath-resolving
-			// the nearest existing ancestor like the gate did — a symlink
-			// retargeted after approval cannot redirect execution elsewhere.
-			const resolvedPath = path.resolve(defaultWorkspaceSandbox.root, expanded);
-			const existingAncestor = findExistingPathAncestor(resolvedPath);
-			const realAncestor = realpathSync(existingAncestor);
-			const suffix = resolvedPath.slice(existingAncestor.length);
-			return `${realAncestor}${suffix}`;
-		}
+		return defaultWorkspaceSandbox.resolveNewPath(expanded);
 	}
 };
 

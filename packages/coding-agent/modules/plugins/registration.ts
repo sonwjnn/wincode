@@ -5,7 +5,6 @@ import {
 	isPlainObject,
 } from "@wincode/utils";
 import { z } from "zod";
-import { bundledToolNameSymbol } from "./bundled-tools";
 import type {
 	PluginCommandRegistration,
 	PluginInputSchema,
@@ -13,24 +12,16 @@ import type {
 } from "./public";
 import type { PluginCommand, PluginTool } from "./types";
 
-const pluginToolNamePattern = /^[a-z0-9_]+$/u;
+const pluginToolNamePattern = /^[a-z0-9_-]+$/u;
 const pluginCommandNamePattern = /^[a-z0-9_-]+$/u;
+const pluginStatusPanelIdPattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const pluginModelNamePattern = /^[a-zA-Z0-9_-]+$/u;
 
-const getBundledModelName = (
+const getModelName = (
 	candidate: object,
 	toolName: string
 ): string | undefined => {
-	const record = candidate as {
-		modelName?: unknown;
-		[bundledToolNameSymbol]?: unknown;
-	};
-	if ("modelName" in record) {
-		throw new Error(
-			`Plugin Tool '${toolName}' cannot override its namespaced model-visible name.`
-		);
-	}
-	const modelName = record[bundledToolNameSymbol];
+	const modelName = (candidate as { modelName?: unknown }).modelName;
 	if (modelName === undefined) {
 		return;
 	}
@@ -38,7 +29,7 @@ const getBundledModelName = (
 		!(isNonEmptyString(modelName) && pluginModelNamePattern.test(modelName))
 	) {
 		throw new Error(
-			`Bundled Plugin Tool '${toolName}' has an invalid model-visible name.`
+			`Plugin Tool '${toolName}' has an invalid direct model-visible name.`
 		);
 	}
 	return modelName;
@@ -97,30 +88,8 @@ const validatePluginInputSchema = (
 	}
 };
 
-const validatePluginPermissionMetadata = (
-	tool: PluginToolRegistration<PluginInputSchema>
-): void => {
-	if (
-		(tool.permissionAction !== undefined &&
-			!isNonEmptyString(tool.permissionAction)) ||
-		(tool.permissionResource !== undefined &&
-			typeof tool.permissionResource !== "string") ||
-		(tool.permissionDecision !== undefined &&
-			!(["allow", "ask", "deny"] as const).includes(tool.permissionDecision)) ||
-		(tool.permissionSafety !== undefined &&
-			typeof tool.permissionSafety !== "boolean")
-	) {
-		throw new Error(
-			`Plugin Tool '${tool.name}' has an invalid Permission action or resource.`
-		);
-	}
-};
-
 /** Validates one Plugin Tool before it can replace an owner's registration. */
-export const validatePluginTool = (
-	candidate: unknown,
-	trustedBundled = false
-): PluginTool => {
+export const validatePluginTool = (candidate: unknown): PluginTool => {
 	if (!isPluginToolCandidate(candidate)) {
 		throw new Error(
 			"Plugin Tool registrations require a valid local name, description, input schema, and handler."
@@ -132,35 +101,10 @@ export const validatePluginTool = (
 		tool.name,
 		tool.inputSchema as PluginInputSchema & object
 	);
-	validatePluginPermissionMetadata(tool);
-	if (
-		!trustedBundled &&
-		(tool.permissionAction !== undefined ||
-			tool.permissionResource !== undefined ||
-			tool.permissionDecision !== undefined ||
-			tool.permissionSafety !== undefined ||
-			getBundledModelName(candidate, tool.name) !== undefined)
-	) {
-		throw new Error(
-			`File Plugin Tool '${tool.name}' cannot override its permission category or namespaced name.`
-		);
-	}
-	const modelName = getBundledModelName(candidate, tool.name);
+	const modelName = getModelName(candidate, tool.name);
 	return Object.freeze({
 		description: tool.description,
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
-		...(tool.permissionAction === undefined
-			? {}
-			: { permissionAction: tool.permissionAction }),
-		...(tool.permissionResource === undefined
-			? {}
-			: { permissionResource: tool.permissionResource }),
-		...(tool.permissionDecision === undefined
-			? {}
-			: { permissionDecision: tool.permissionDecision }),
-		...(tool.permissionSafety === undefined
-			? {}
-			: { permissionSafety: tool.permissionSafety }),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,
 		...(modelName === undefined ? {} : { modelName }),
@@ -174,17 +118,34 @@ export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 		!isPlainObject(candidate) ||
 		typeof candidate.name !== "string" ||
 		!pluginCommandNamePattern.test(candidate.name) ||
-		!isNonEmptyString(candidate.description) ||
-		typeof candidate.handler !== "function"
+		!isNonEmptyString(candidate.description)
 	) {
 		throw new Error(
-			"Plugin Command registrations require a short name, description, and handler."
+			"Plugin Command registrations require a short name and description."
 		);
 	}
 	const command = candidate as unknown as PluginCommandRegistration;
+	const hasHandler = command.handler !== undefined;
+	const validHandler = typeof command.handler === "function";
+	const hasStatusPanel = command.statusPanelId !== undefined;
+	const validStatusPanel =
+		typeof command.statusPanelId === "string" &&
+		pluginStatusPanelIdPattern.test(command.statusPanelId);
+	if (
+		(hasHandler && !validHandler) ||
+		(hasStatusPanel && !validStatusPanel) ||
+		validHandler === validStatusPanel
+	) {
+		throw new Error(
+			"Plugin Commands require exactly one handler or status panel identifier."
+		);
+	}
 	return Object.freeze({
 		description: command.description,
-		handler: command.handler,
+		...(command.handler === undefined ? {} : { handler: command.handler }),
 		name: command.name,
+		...(command.statusPanelId === undefined
+			? {}
+			: { statusPanelId: command.statusPanelId }),
 	});
 };

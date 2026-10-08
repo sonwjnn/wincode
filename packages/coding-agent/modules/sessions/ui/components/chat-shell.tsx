@@ -6,8 +6,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { useApprovalPanels } from "@/shared/providers/approval/approval-panels-provider";
-import { PendingApprovalDock } from "@/shared/providers/approval/ui/tool-approval-panel";
 import {
 	useKeyboardLayer,
 	useToggleShortcut,
@@ -140,13 +138,10 @@ export function ChatShell({
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
 	const { table } = useModelPricing();
-	const hasPendingApproval = useApprovalPanels().entries.some((entry) =>
-		isUndefined(entry.resolution)
-	);
 	const focusHandlers = useUiComponentFocus({
 		backgroundComponentIds,
 		componentId: composerId,
-		enabled: !hasPendingApproval,
+		enabled: true,
 		scopeId: focusScopeId,
 	});
 	const displayMessages = messages.filter(
@@ -281,59 +276,50 @@ export function ChatShell({
 				width="100%"
 			>
 				<WaitingMessageStrip queued={queuedSubmissions} />
-				{hasPendingApproval ? (
-					// The pending dock replaces the composer AND the session
-					// footer row while a decision is owed.
-					<box flexShrink={0} width="100%">
-						<PendingApprovalDock />
-					</box>
-				) : (
-					<>
-						<box flexShrink={0} width="100%">
-							<ChatTextArea
-								draftKey={draftKey}
-								id={composerId}
-								onCompact={onCompact}
-								onEmptySubmit={onEmptySubmit}
-								onOpenSettings={onOpenSettings}
-								onSubmit={handleSubmit}
-								recalledSubmissions={recalledSubmissions}
-								recallRevision={recallRevision}
-								sessionId={viewId}
-								sessionPromptHistory={promptHistory}
-							/>
-						</box>
-						<box
-							flexDirection="row"
-							flexShrink={0}
-							flexWrap="wrap"
-							gap={2}
-							justifyContent="space-between"
-							paddingLeft={1}
-							width="100%"
-						>
-							<box
-								alignItems="center"
-								flexDirection="row"
-								flexGrow={1}
-								flexShrink={1}
-								gap={2}
-							>
-								{isBusy ? (
-									<ActivityFooter
-										agent={agent}
-										isCompacting={isCompacting}
-										isInterruptArmed={isInterruptArmed}
-									/>
-								) : (
-									<WorkspacePath />
-								)}
-							</box>
 
-							{usage ? <SessionUsageBar summary={usage} /> : null}
-						</box>
-					</>
-				)}
+				<box flexShrink={0} width="100%">
+					<ChatTextArea
+						draftKey={draftKey}
+						id={composerId}
+						onCompact={onCompact}
+						onEmptySubmit={onEmptySubmit}
+						onOpenSettings={onOpenSettings}
+						onSubmit={handleSubmit}
+						recalledSubmissions={recalledSubmissions}
+						recallRevision={recallRevision}
+						sessionId={viewId}
+						sessionPromptHistory={promptHistory}
+					/>
+				</box>
+				<box
+					flexDirection="row"
+					flexShrink={0}
+					flexWrap="wrap"
+					gap={2}
+					justifyContent="space-between"
+					paddingLeft={1}
+					width="100%"
+				>
+					<box
+						alignItems="center"
+						flexDirection="row"
+						flexGrow={1}
+						flexShrink={1}
+						gap={2}
+					>
+						{isBusy ? (
+							<ActivityFooter
+								agent={agent}
+								isCompacting={isCompacting}
+								isInterruptArmed={isInterruptArmed}
+							/>
+						) : (
+							<WorkspacePath />
+						)}
+					</box>
+
+					{usage ? <SessionUsageBar summary={usage} /> : null}
+				</box>
 			</box>
 		</box>
 	);

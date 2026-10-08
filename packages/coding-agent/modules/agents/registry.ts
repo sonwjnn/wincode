@@ -27,21 +27,15 @@ import {
 } from "@wincode/utils";
 import type { Except } from "type-fest";
 import { z } from "zod";
-import {
-	type PermissionRules,
-	resolveVisibleCodingTools,
-} from "@/modules/permissions/policy";
-import {
-	type PermissionDiagnostic,
-	resolveAgentPermission,
-} from "@/modules/permissions/resolve";
-import { topLevelPermissionSchema } from "@/modules/permissions/schema";
 import type { SessionSdkCapabilityCeiling } from "@/modules/sessions/sdk-contract";
 import {
 	type CodingToolName,
+	codingToolNames,
 	DEFAULT_RESOURCE_LIMIT_PROFILE,
+	getToolResourceLimits,
 	type ResourceLimitProfile,
 	resourceLimitProfileSchema,
+	type ToolResourceLimits,
 } from "@/modules/tools";
 import type {
 	ConfigDiagnostic,
@@ -79,7 +73,7 @@ const agentPatchFields = {
 	effort: effortSchema,
 	instructions: z.string().max(MAX_CONFIGURED_AGENT_INSTRUCTIONS_LENGTH),
 	model: z.string().min(1),
-	permission: topLevelPermissionSchema,
+	tools: z.array(z.enum(codingToolNames)).max(codingToolNames.length),
 	reasoningMode: reasoningModeSchema,
 	resource_limits: resourceLimitProfileSchema,
 	role: agentRoleSchema,
@@ -108,7 +102,7 @@ const configuredAgentPatchFieldsSchema = z
 		effort: agentPatchFields.effort.optional(),
 		instructions: agentPatchFields.instructions.optional(),
 		model: agentPatchFields.model.optional(),
-		permission: agentPatchFields.permission.optional(),
+		tools: agentPatchFields.tools.optional(),
 		reasoningMode: agentPatchFields.reasoningMode.optional(),
 		resource_limits: agentPatchFields.resource_limits.optional(),
 		role: agentPatchFields.role.optional(),
@@ -131,7 +125,7 @@ const builtInAgentPatchSchema = z
 		effort: agentPatchFields.effort.optional(),
 		instructions: agentPatchFields.instructions.optional(),
 		model: agentPatchFields.model.optional(),
-		permission: agentPatchFields.permission.optional(),
+		tools: agentPatchFields.tools.optional(),
 		reasoningMode: agentPatchFields.reasoningMode.optional(),
 		resource_limits: agentPatchFields.resource_limits.optional(),
 	})
@@ -140,7 +134,6 @@ const builtInAgentPatchSchema = z
 
 export type AgentDiagnosticCode =
 	| ConfigDiagnostic["code"]
-	| PermissionDiagnostic["code"]
 	| "invalid-agent"
 	| "invalid-agent-id"
 	| "invalid-agents-record"
@@ -164,9 +157,7 @@ export type RegistryAgent = AgentDefinition & {
 	readonly isAvailable: boolean;
 	readonly isSelectable: boolean;
 	readonly model?: ChatModelSelection;
-	readonly permission?: PermissionRules;
 	readonly reasoningMode?: ReasoningMode;
-	readonly requiresManualApproval: boolean;
 	readonly resourceProfile: ResourceLimitProfile;
 	readonly unavailableReason?: string;
 };
@@ -362,11 +353,11 @@ const diagnoseSourcePatches = (
 ): ReadonlySet<string> => {
 	const invalidBuiltInAgentIds = new Set<string>();
 	for (const source of sources) {
+		const origin = { path: source.path, scope: source.scope };
 		const agents = source.document.agents;
 		if (isUndefined(agents)) {
 			continue;
 		}
-		const origin = { path: source.path, scope: source.scope };
 		if (!isPlainObject(agents)) {
 			diagnostics.push(
 				agentDiagnostic(
@@ -419,6 +410,74 @@ type ConfiguredAgentEntryResult = {
 	diagnostic?: AgentDiagnostic;
 };
 
+const resolveConfiguredAgentModel = (
+	definition: z.infer<typeof completeConfiguredAgentSchema>,
+	agentId: string,
+	snapshot: ConfigSnapshot
+): { diagnostic?: AgentDiagnostic; model: ChatModelSelection | undefined } => {
+	const parsedModel = isUndefined(definition.model)
+		? undefined
+		: parseCatalogModelSelection(definition.model);
+	if (!isUndefined(definition.model) && isNull(parsedModel)) {
+		return {
+			diagnostic: validationDiagnostic(
+				"invalid-agent",
+				agentId,
+				{
+					code: "custom",
+					message:
+						"Model must be a supported Model Catalog selection in <connectionProviderId>/<modelId> form",
+					path: ["model"],
+				},
+				snapshot
+			),
+			model: undefined,
+		};
+	}
+	const model = parsedModel ?? undefined;
+	const effort = definition.effort;
+	if (
+		!isUndefined(effort) &&
+		(isUndefined(model) || !isSupportedModelEffort(model, effort))
+	) {
+		return {
+			diagnostic: validationDiagnostic(
+				"invalid-agent",
+				agentId,
+				{
+					code: "custom",
+					message:
+						'"effort" requires a configured model and must be supported by its Model Catalog entry',
+					path: ["effort"],
+				},
+				snapshot
+			),
+			model,
+		};
+	}
+	const reasoningMode = definition.reasoningMode;
+	if (
+		!isUndefined(reasoningMode) &&
+		(isUndefined(model) || !isSupportedReasoningMode(model, reasoningMode))
+	) {
+		return {
+			diagnostic: validationDiagnostic(
+				"invalid-agent",
+				agentId,
+				{
+					code: "custom",
+					message:
+						'"reasoningMode" requires a configured model and must be supported by its Model Catalog entry',
+					path: ["reasoningMode"],
+				},
+				snapshot
+			),
+			model,
+		};
+	}
+	return { model };
+};
+
 const resolveConfiguredAgentEntry = (
 	agentId: string,
 	rawDefinition: unknown,
@@ -466,63 +525,17 @@ const resolveConfiguredAgentEntry = (
 			),
 		};
 	}
-	const parsedModel = isUndefined(definition.data.model)
-		? undefined
-		: parseCatalogModelSelection(definition.data.model);
-	if (!isUndefined(definition.data.model) && isNull(parsedModel)) {
-		return {
-			diagnostic: validationDiagnostic(
-				"invalid-agent",
-				agentId,
-				{
-					code: "custom",
-					message:
-						"Model must be a supported Model Catalog selection in <connectionProviderId>/<modelId> form",
-					path: ["model"],
-				},
-				snapshot
-			),
-		};
+	const resolvedModel = resolveConfiguredAgentModel(
+		definition.data,
+		agentId,
+		snapshot
+	);
+	if (resolvedModel.diagnostic !== undefined) {
+		return { diagnostic: resolvedModel.diagnostic };
 	}
-	const model = parsedModel ?? undefined;
+	const model = resolvedModel.model;
 	const effort = definition.data.effort;
 	const reasoningMode = definition.data.reasoningMode;
-	const hasInvalidEffort =
-		!isUndefined(effort) &&
-		(isUndefined(model) || !isSupportedModelEffort(model, effort));
-	if (hasInvalidEffort) {
-		return {
-			diagnostic: validationDiagnostic(
-				"invalid-agent",
-				agentId,
-				{
-					code: "custom",
-					message:
-						'"effort" requires a configured model and must be supported by its Model Catalog entry',
-					path: ["effort"],
-				},
-				snapshot
-			),
-		};
-	}
-	const hasInvalidReasoningMode =
-		!isUndefined(reasoningMode) &&
-		(isUndefined(model) || !isSupportedReasoningMode(model, reasoningMode));
-	if (hasInvalidReasoningMode) {
-		return {
-			diagnostic: validationDiagnostic(
-				"invalid-agent",
-				agentId,
-				{
-					code: "custom",
-					message:
-						'"reasoningMode" requires a configured model and must be supported by its Model Catalog entry',
-					path: ["reasoningMode"],
-				},
-				snapshot
-			),
-		};
-	}
 	const { modelRetired, ...availability } = modelAvailability(
 		model,
 		options.connectedProviderIds
@@ -542,11 +555,11 @@ const resolveConfiguredAgentEntry = (
 			...pickTruthy({ model }),
 			resourceProfile:
 				definition.data.resource_limits ?? defaultResourceProfile,
-			requiresManualApproval: false,
 			role: definition.data.role,
 			...(isUndefined(effort) ? {} : { effort }),
 			...(isUndefined(reasoningMode) ? {} : { reasoningMode }),
-			visibleCodingTools: configuredAgentVisibleCodingTools,
+			visibleCodingTools:
+				definition.data.tools ?? configuredAgentVisibleCodingTools,
 		},
 	};
 };
@@ -646,7 +659,6 @@ const resolveBuiltInAgent = (
 			isConfigured: false,
 			isSelectable: true,
 			resourceProfile: defaultResourceProfile,
-			requiresManualApproval: true,
 		};
 	}
 	if (isUndefined(rawPatch)) {
@@ -656,7 +668,6 @@ const resolveBuiltInAgent = (
 			isConfigured: false,
 			isSelectable: true,
 			resourceProfile: defaultResourceProfile,
-			requiresManualApproval: false,
 		};
 	}
 	const patch = builtInAgentPatchSchema.safeParse(rawPatch);
@@ -675,7 +686,6 @@ const resolveBuiltInAgent = (
 			isConfigured: false,
 			isSelectable: true,
 			resourceProfile: defaultResourceProfile,
-			requiresManualApproval: true,
 		};
 	}
 	const effort = patch.data.effort;
@@ -704,7 +714,6 @@ const resolveBuiltInAgent = (
 			isConfigured: false,
 			isSelectable: true,
 			resourceProfile: defaultResourceProfile,
-			requiresManualApproval: true,
 		};
 	}
 	const model = selection.model;
@@ -717,6 +726,7 @@ const resolveBuiltInAgent = (
 		effort: _configuredEffort,
 		model: _configuredModel,
 		reasoningMode: _configuredReasoningMode,
+		tools: visibleCodingTools,
 		...validatedPatch
 	} = patch.data;
 	return {
@@ -730,7 +740,7 @@ const resolveBuiltInAgent = (
 		isConfigured: false,
 		isSelectable: !modelRetired,
 		resourceProfile: patch.data.resource_limits ?? defaultResourceProfile,
-		requiresManualApproval: false,
+		visibleCodingTools: visibleCodingTools ?? shippedAgent.visibleCodingTools,
 	};
 };
 
@@ -817,25 +827,7 @@ export const buildAgentRegistry = (
 		)
 	);
 
-	// Resolve each Agent's layered Permission policy once, then derive its model
-	// tool visibility from the same rules so unconditionally denied tools are
-	// hidden while granular and ask-gated tools stay visible. A malformed
-	// top-level policy or an over-bound effective policy raises the same
-	// manual-only safety ceiling used for malformed Built-in Agent patches.
-	const agents: RegistryAgent[] = [];
-	for (const agent of [...builtInAgentsView, ...configuredAgents]) {
-		const resolution = resolveAgentPermission(snapshot, agent.id);
-		for (const diagnostic of resolution.diagnostics) {
-			diagnostics.push(diagnostic);
-		}
-		agents.push({
-			...agent,
-			permission: resolution.rules,
-			requiresManualApproval:
-				agent.requiresManualApproval || resolution.safetyCeiling,
-			visibleCodingTools: resolveVisibleCodingTools(resolution.rules),
-		});
-	}
+	const agents = [...builtInAgentsView, ...configuredAgents];
 	const configuredAgentsView = agents.filter(
 		({ isConfigured }) => isConfigured
 	);
@@ -889,6 +881,27 @@ export const resolveAgentRegistry = async (
 		await input.configStore.getSnapshot(input.workspace),
 		options
 	);
+
+export const resolveAgentToolResourceLimits = (
+	registry: AgentRegistry | null,
+	agentId?: AgentId
+): ToolResourceLimits => {
+	const selected =
+		registry?.agents.find(
+			({ id, isAvailable }) => id === agentId && isAvailable
+		) ??
+		(agentId === undefined
+			? registry?.agents.find(
+					({ id, isAvailable }) => id === registry.defaultAgentId && isAvailable
+				)
+			: undefined) ??
+		registry?.agents.find(({ id }) => id === buildAgent.id);
+	return getToolResourceLimits(
+		selected?.resourceProfile ??
+			registry?.resourceProfile ??
+			DEFAULT_RESOURCE_LIMIT_PROFILE
+	);
+};
 
 /** Resolve a restored selection first, or the configured default for new chats. */
 export const resolveActiveAgentId = (
