@@ -1,13 +1,11 @@
 import type { ResolvedTool, ToolCallOutput } from "@wincode/agent-core";
-import { createSubagentTools } from "@wincode/subagents";
-import { withBundledToolName } from "@/modules/plugins/bundled-tools";
 import type {
 	PluginBeforeAgentTurnContext,
 	PluginFactory,
 	PluginToolContext,
 	PluginToolRegistrationAPI,
-} from "@/modules/plugins/public";
-import { toSessionId } from "@/shared/identifiers";
+} from "@wincode/coding-agent";
+import { createSubagentTools } from "../tools";
 import {
 	createDelegationExecutor,
 	createSubmitResultExecutor,
@@ -21,6 +19,7 @@ import {
 } from "./store";
 import type { SubagentsTaskCoordinator } from "./task-runtime";
 import { getSubagentsTaskCoordinator } from "./task-runtime";
+import { toSessionId } from "./task-types";
 
 /** Creates the Subagents Plugin with its own durable task/report store. */
 export const createSubagentsPluginFactory =
@@ -35,7 +34,10 @@ export const createSubagentsPluginFactory =
 			options.taskStore === undefined
 				? await acquireSharedSubagentsTaskStore(
 						options.databasePath ??
-							resolveSubagentsDatabasePath(loadContext.workspace)
+							resolveSubagentsDatabasePath(
+								loadContext.workspace,
+								loadContext.userDataDir
+							)
 					)
 				: undefined;
 		let durableTaskStore: SubagentsTaskStore;
@@ -47,7 +49,10 @@ export const createSubagentsPluginFactory =
 			durableTaskStore = await options.taskStore;
 		}
 		const plugin = api.definePlugin({ id: "subagents" });
-		const coordinator = getSubagentsTaskCoordinator(durableTaskStore);
+		const coordinator = getSubagentsTaskCoordinator(
+			durableTaskStore,
+			loadContext.sourcePath
+		);
 		if (storeLease !== undefined) {
 			plugin.onShutdown(storeLease.release);
 		}
@@ -56,7 +61,7 @@ export const createSubagentsPluginFactory =
 			coordinator.onSessionShutdown(context)
 		);
 		plugin.onBeforeAgentTurn(async (context, registration) => {
-			const turn = getSubagentsTurn(context);
+			const turn = getSubagentsTurn(context, loadContext.sourcePath);
 			if (turn === undefined) {
 				return;
 			}
@@ -70,7 +75,8 @@ export const createSubagentsPluginFactory =
 	};
 
 const getSubagentsTurn = (
-	context: PluginBeforeAgentTurnContext
+	context: PluginBeforeAgentTurnContext,
+	pluginPath: string
 ): SubagentsTurnContext | undefined => {
 	if (context.sessionSdk === undefined || context.turnId === undefined) {
 		return;
@@ -80,6 +86,7 @@ const getSubagentsTurn = (
 		...(context.capabilityCeiling === undefined
 			? {}
 			: { capabilityCeiling: context.capabilityCeiling }),
+		pluginPath,
 		sessionId: toSessionId(context.sessionId),
 		sessionSdk: context.sessionSdk,
 		turnId: context.turnId,
@@ -125,23 +132,19 @@ const registerSubagentsTools = (
 	coordinator: SubagentsTaskCoordinator
 ): void => {
 	for (const tool of tools) {
-		registration.registerTool(
-			withBundledToolName(
-				{
-					description: tool.definition.description,
-					...(tool.definition.exclusiveInBatch === true
-						? { exclusiveInBatch: true }
-						: {}),
-					handler: createSubagentsToolHandler(tool, turn, coordinator),
-					inputSchema: tool.definition.inputSchema,
-					name: tool.definition.name,
-					permissionAction:
-						tool.definition.name === "delegate" ? "delegate" : "submit_result",
-					permissionResource: "*",
-				},
-				tool.definition.name
-			)
-		);
+		registration.registerTool({
+			description: tool.definition.description,
+			...(tool.definition.exclusiveInBatch === true
+				? { exclusiveInBatch: true }
+				: {}),
+			handler: createSubagentsToolHandler(tool, turn, coordinator),
+			inputSchema: tool.definition.inputSchema,
+			modelName: tool.definition.name,
+			name: tool.definition.name,
+			permissionAction:
+				tool.definition.name === "delegate" ? "delegate" : "submit_result",
+			permissionResource: "*",
+		});
 	}
 };
 
@@ -181,5 +184,9 @@ const createSubagentsToolHandler =
 	};
 
 export * from "./delegation";
+export * from "./store";
 export * from "./task-runtime";
 export * from "./task-types";
+
+export const subagentsPluginFactory = createSubagentsPluginFactory();
+export default subagentsPluginFactory;

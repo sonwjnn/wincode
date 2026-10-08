@@ -6,6 +6,7 @@ import type {
 	McpClient,
 	McpClientTool,
 	McpConfigResult,
+	McpConfigSource,
 	McpExecutionPolicy,
 	McpTimeouts,
 	RemoteMcpServerConfig,
@@ -15,9 +16,9 @@ import {
 	createMcpRegistry,
 	type McpRegistryDeps,
 	mcpDeniedByPolicyText,
+	resolveMcpConfig,
 } from "@wincode/mcp";
 import { isNull, isUndefined } from "@wincode/utils";
-import type { McpAgentPolicy } from "@/modules/mcp/capability";
 import {
 	createToolPermission,
 	type PermissionRules,
@@ -26,6 +27,7 @@ import { resolveToolPermissionPolicies } from "@/modules/permissions/tool-permis
 import { agentId } from "../support/identifiers";
 import {
 	addAgentPolicyResolver,
+	type McpAgentPolicy,
 	type PolicyAwareMcpRegistry,
 } from "../support/mcp-registry";
 
@@ -1090,6 +1092,133 @@ describe("createMcpRegistry", () => {
 	test("reconnect for an unknown server is a no-op", async () => {
 		const { registry } = harness({});
 		await expect(registry.reconnect("missing")).resolves.toBeUndefined();
+	});
+
+	test("reconnect leaves a failed server disabled when refreshed config disables it", async () => {
+		const created: FakeMcpClient[] = [];
+		const { registry } = harness({
+			deps: {
+				createClient: (config) => {
+					const client = new FakeMcpClient(config.name);
+					if (created.length === 0) {
+						client.connectFailure = new Error("offline");
+					}
+					created.push(client);
+					return client;
+				},
+				loadConfig: async ({ refresh }): Promise<McpConfigResult> => ({
+					diagnostics: [],
+					servers: {
+						demo: serverConfig("demo", {
+							disabled: refresh,
+							type: "remote",
+						}),
+					},
+				}),
+			},
+		});
+
+		await registry.initialize();
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "failed" })
+		);
+		await registry.reconnect("demo");
+
+		expect(created).toHaveLength(1);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "disabled" })
+		);
+	});
+
+	test("reconnect leaves a newly valid but disabled server disconnected", async () => {
+		let clientCreations = 0;
+		const { registry } = harness({
+			deps: {
+				createClient: () => {
+					clientCreations += 1;
+					return new FakeMcpClient("demo");
+				},
+				loadConfig: async ({ refresh }): Promise<McpConfigResult> =>
+					refresh
+						? {
+								diagnostics: [],
+								servers: {
+									demo: serverConfig("demo", {
+										disabled: true,
+										type: "remote",
+									}),
+								},
+							}
+						: {
+								diagnostics: [],
+								invalidServers: {
+									demo: {
+										error: "Invalid MCP server configuration",
+										name: "demo",
+										transport: "remote",
+									},
+								},
+								servers: {},
+							},
+			},
+		});
+
+		await registry.initialize();
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "failed" })
+		);
+		await registry.reconnect("demo");
+
+		expect(clientCreations).toBe(0);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "disabled" })
+		);
+	});
+
+	test("reconnect and toggle cannot start a rejected disabled project-local command", async () => {
+		const document = {
+			mcp: {
+				untrusted: {
+					command: ["bun", "run", "attacker.ts"],
+					enabled: false,
+					type: "local",
+				},
+			},
+		};
+		const source: McpConfigSource = {
+			document,
+			path: "/workspace/wincode.json",
+			scope: "project",
+		};
+		const config = resolveMcpConfig({
+			env: {},
+			snapshot: {
+				diagnostics: [],
+				document,
+				sourceFor: () => source,
+				sources: [source],
+			},
+			workspace: "/workspace",
+		});
+		let clientCreations = 0;
+		const { registry } = harness({
+			deps: {
+				createClient: (serverConfig) => {
+					clientCreations += 1;
+					return new FakeMcpClient(serverConfig.name);
+				},
+				loadConfig: async () => config,
+			},
+		});
+
+		await registry.initialize();
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "untrusted", state: "failed" })
+		);
+		await registry.reconnect("untrusted");
+		await registry.toggle("untrusted");
+
+		expect(clientCreations).toBe(0);
 	});
 
 	test("orders the manifest deterministically and applies the tool limit", async () => {

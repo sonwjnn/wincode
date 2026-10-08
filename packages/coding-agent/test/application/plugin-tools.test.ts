@@ -2,15 +2,23 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	agentIdSchema,
 	type ResolvedTool,
 	type ToolCallOutput,
 } from "@wincode/agent-core";
+import { createPermissionService } from "@/modules/permissions/permission-service";
+import { resolvePluginToolPermission } from "@/modules/permissions/resolve";
 import { loadPlugins } from "@/modules/plugins/loader";
+import { permissionActionForPluginTool } from "@/modules/plugins/permission-action";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { createPluginTools } from "@/modules/plugins/tools";
-import type { ToolGate } from "@/modules/tool-gate/tool-gate";
+import type { GateCall, ToolGate } from "@/modules/tool-gate/tool-gate";
+import type {
+	ConfigDocument,
+	ConfigSnapshot,
+} from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { toolCallId } from "../support/identifiers";
 
@@ -30,6 +38,21 @@ const config = {
 	homeRoot,
 	workspace,
 };
+
+const permissionSnapshot = (
+	document: Record<string, unknown>
+): ConfigSnapshot => ({
+	diagnostics: [],
+	document: fromPartial<ConfigDocument>({}),
+	sourceFor: () => undefined,
+	sources: [
+		{
+			document: fromPartial<ConfigDocument>(document),
+			path: "/home/user/.config/wincode/wincode.json",
+			scope: "global",
+		},
+	],
+});
 
 const loadTool = async (
 	pathToPlugin = pluginPath
@@ -61,7 +84,10 @@ const loadTool = async (
 		agentId,
 		existingToolNames: [],
 		gate,
-		permissionForAction: async () => ({ decision: "allow", safety: false }),
+		resolvePermissionForAction: async () => ({
+			decision: "allow",
+			safety: false,
+		}),
 		pluginTools,
 		registerBackgroundWork: (activeSessionId, work) =>
 			pluginRuntime.registerBackgroundWork(activeSessionId, work),
@@ -128,7 +154,7 @@ test("a colliding final Plugin tool name does not discard unrelated tools", asyn
 			agentId: agentIdSchema.parse("build"),
 			existingToolNames: [collidingTool.name],
 			gate: { gate: async () => ({ kind: "allow" }) },
-			permissionForAction: async () => ({
+			resolvePermissionForAction: async () => ({
 				decision: "allow",
 				safety: false,
 			}),
@@ -236,4 +262,212 @@ test("JSON Schema Plugin inputs validate before the Tool Gate", async () => {
 	} finally {
 		await pluginRuntime.shutdown();
 	}
+});
+
+test("Plugin metadata and direct names cannot bypass the default Tool Permission ask", async () => {
+	const directNamePluginPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/direct-name-permission-plugin.ts"
+	);
+	const pluginRuntime = await loadPlugins({
+		cliPaths: [directNamePluginPath],
+		config,
+	});
+	const agentId = agentIdSchema.parse("build");
+	const pluginTools = await pluginRuntime.resolveToolsForTurn({
+		agentId,
+		sessionId: "direct-name-permission-session",
+		signal: new AbortController().signal,
+		workspace,
+	});
+	const gateCalls: GateCall[] = [];
+	let handlerCalls = 0;
+	const tools = createPluginTools({
+		agentId,
+		existingToolNames: [],
+		gate: {
+			gate: async (call) => {
+				gateCalls.push(call);
+				return { errorText: "Approval required.", kind: "deny" };
+			},
+		},
+		pluginTools: pluginTools.map((tool) => ({
+			...tool,
+			handler: async (input, context) => {
+				handlerCalls += 1;
+				return tool.handler(input, context);
+			},
+		})),
+		resolvePermissionForAction: async (action, resource) => {
+			expect({ action, resource }).toEqual({
+				action: "plugin:direct_permission:read",
+				resource: "*",
+			});
+			return { decision: "ask", safety: false };
+		},
+		sessionId: "direct-name-permission-session",
+		workspace,
+	});
+	try {
+		expect(pluginTools.map(({ name }) => name)).toEqual(["external_search"]);
+		expect(tools).toHaveLength(1);
+		const tool = tools[0];
+		if (tool === undefined) {
+			throw new Error("Expected the direct-name Plugin Tool.");
+		}
+		const result = await executeTool(tool, {});
+
+		expect(result).toMatchObject({
+			errorText: "Approval required.",
+			type: "failure",
+		});
+		expect(gateCalls).toMatchObject([
+			{
+				action: "plugin:direct_permission:read",
+				decision: "ask",
+				family: "plugin",
+				toolName: "external_search",
+			},
+		]);
+		expect(handlerCalls).toBe(0);
+	} finally {
+		await pluginRuntime.shutdown();
+	}
+});
+
+test("a native edit grant cannot authorize a Plugin-chosen edit action", async () => {
+	const pluginPermissionAction = "plugin:permission_override:edit";
+	expect(
+		resolvePluginToolPermission(
+			permissionSnapshot({ permission: { edit: "allow" } }),
+			"build",
+			pluginPermissionAction,
+			"*"
+		).decision
+	).toBe("ask");
+	expect(
+		resolvePluginToolPermission(
+			permissionSnapshot({
+				permission: { [pluginPermissionAction]: "allow" },
+			}),
+			"build",
+			pluginPermissionAction,
+			"*"
+		).decision
+	).toBe("allow");
+
+	const permissionOverridePluginPath = path.resolve(
+		import.meta.dir,
+		"../fixtures/permission-override-plugin.ts"
+	);
+	const pluginRuntime = await loadPlugins({
+		cliPaths: [permissionOverridePluginPath],
+		config,
+	});
+	const agentId = agentIdSchema.parse("build");
+	const sessionId = "native-permission-alias-session";
+	const pluginTools = await pluginRuntime.resolveToolsForTurn({
+		agentId,
+		sessionId,
+		signal: new AbortController().signal,
+		workspace,
+	});
+	const gateCalls: GateCall[] = [];
+	const tools = createPluginTools({
+		agentId,
+		existingToolNames: [],
+		gate: {
+			gate: async (call) => {
+				gateCalls.push(call);
+				return { errorText: "Approval required.", kind: "deny" };
+			},
+		},
+		pluginTools,
+		resolvePermissionForAction: async (action, resource) =>
+			resolvePluginToolPermission(
+				permissionSnapshot({ permission: { edit: "allow" } }),
+				"build",
+				action,
+				resource
+			),
+		sessionId,
+		workspace,
+	});
+	try {
+		const tool = tools[0];
+		if (tool === undefined) {
+			throw new Error("Expected the permission-override Plugin Tool.");
+		}
+		const result = await executeTool(tool, {});
+
+		expect(result).toMatchObject({
+			errorText: "Approval required.",
+			type: "failure",
+		});
+		expect(gateCalls).toMatchObject([
+			{
+				action: "plugin:permission_override:edit",
+				decision: "ask",
+				family: "plugin",
+				toolName: "external_edit",
+			},
+		]);
+	} finally {
+		await pluginRuntime.shutdown();
+	}
+});
+
+test("a Plugin external-directory approval cannot grant the host path boundary", () => {
+	const action = permissionActionForPluginTool({
+		action: "plugin:mcp:directory",
+		permissionAction: "external_directory",
+		pluginId: "mcp",
+	});
+	const permissionService = createPermissionService();
+
+	expect(action).toBe("plugin:mcp:external_directory");
+	expect(
+		resolvePluginToolPermission(
+			permissionSnapshot({ permission: { external_directory: "allow" } }),
+			"build",
+			action
+		).decision
+	).toBe("ask");
+	expect(
+		resolvePluginToolPermission(
+			permissionSnapshot({ permission: { [action]: "allow" } }),
+			"build",
+			action
+		).decision
+	).toBe("allow");
+
+	permissionService.grant(action, "*");
+	expect(permissionService.isGranted(action, "*")).toBe(true);
+	expect(
+		permissionService.isGranted("external_directory", "/outside/secrets.txt")
+	).toBe(false);
+});
+
+test("a native delegate grant cannot authorize a Plugin-chosen delegate action", () => {
+	const action = permissionActionForPluginTool({
+		action: "plugin:permission_override:delegate_tool",
+		permissionAction: "delegate",
+		pluginId: "permission_override",
+	});
+
+	expect(action).toBe("plugin:permission_override:delegate");
+	expect(
+		resolvePluginToolPermission(
+			permissionSnapshot({ permission: { delegate: "allow" } }),
+			"build",
+			action
+		).decision
+	).toBe("ask");
+	expect(
+		resolvePluginToolPermission(
+			permissionSnapshot({ permission: { [action]: "allow" } }),
+			"build",
+			action
+		).decision
+	).toBe("allow");
 });

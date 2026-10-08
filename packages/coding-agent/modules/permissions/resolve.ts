@@ -7,13 +7,12 @@ import type {
 import {
 	composePermissionDecisions,
 	countFlattenedPermissionRules,
-	createResolvedToolPermission,
 	DEFAULT_PERMISSION_RULES,
+	decideOpenActionPermission,
 	findUnmatchedActionKeys,
 	foldPermissionRules,
 	MAX_FLATTENED_PERMISSION_RULES,
 	PERMISSION_TOOL_ACTIONS,
-	type PermissionAction,
 	type PermissionDecision,
 	type PermissionRules,
 } from "./policy";
@@ -159,7 +158,8 @@ export type ResolvedPluginToolPermission = Readonly<{
 export const resolvePluginToolPermission = (
 	snapshot: ConfigSnapshot,
 	agentId: string,
-	action: PermissionAction
+	action: string,
+	resource = "*"
 ): ResolvedPluginToolPermission => {
 	const globalLayers: PermissionRules[] = [
 		{ [action]: "ask" } as PermissionRules,
@@ -177,17 +177,16 @@ export const resolvePluginToolPermission = (
 		}
 	}
 
-	let decision = createResolvedToolPermission(
-		foldPermissionRules(globalLayers)
-	).decide(action, "*");
+	let decision = decideOpenActionPermission(
+		foldPermissionRules(globalLayers),
+		action,
+		resource
+	);
 	let safety =
 		decision === "ask" ||
 		resolveAgentPermission(snapshot, agentId).safetyCeiling;
 	for (const rules of projectLayers) {
-		const projectDecision = createResolvedToolPermission(rules).decide(
-			action,
-			"*"
-		);
+		const projectDecision = decideOpenActionPermission(rules, action, resource);
 		decision = composePermissionDecisions(decision, projectDecision);
 		if (projectDecision === "ask") {
 			safety = true;

@@ -6,11 +6,11 @@ import type {
 	ToolJsonSchema,
 } from "@wincode/agent-core";
 import type { z } from "zod";
+import type { ExecutionMode } from "../../shared/execution-mode";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkChildFactory,
-} from "@/modules/sessions/sdk-contract";
-import type { ExecutionMode } from "@/shared/execution-mode";
+} from "../sessions/sdk-contract";
 
 export type PluginJsonValue =
 	| null
@@ -25,6 +25,10 @@ export type PluginToolResult = ToolCallOutput;
 export type PluginInputSchema = z.ZodType | ToolJsonSchema;
 
 export type PluginPermissionDecision = "allow" | "ask" | "deny";
+export type PluginPermissionResolution = Readonly<{
+	decision: PluginPermissionDecision;
+	safety: boolean;
+}>;
 export type PluginPermissionResourceRules = Readonly<
 	Record<string, PluginPermissionDecision>
 >;
@@ -39,8 +43,72 @@ export type PluginAgentPermissionPolicy = Readonly<{
 	safety: boolean;
 }>;
 
+export type PluginConfigOrigin = Readonly<{
+	path: string;
+	scope: string;
+}>;
+
+export type PluginConfigDiagnostic = PluginConfigOrigin &
+	Readonly<{
+		code: "duplicate-config" | "parse-error" | "read-error" | "unsafe-key";
+		message: string;
+	}>;
+
+export type PluginConfigSource = PluginConfigOrigin &
+	Readonly<{ document: Readonly<Record<string, unknown>> }>;
+
+export type PluginConfigSnapshot = Readonly<{
+	diagnostics: readonly PluginConfigDiagnostic[];
+	document: Readonly<Record<string, unknown>>;
+	sourceFor: (path: readonly string[]) => PluginConfigOrigin | undefined;
+	sources: readonly PluginConfigSource[];
+}>;
+
+/** Read-only access to the host's merged config, including refresh and provenance. */
+export type PluginConfigReader = Readonly<{
+	getSnapshot: () => Promise<PluginConfigSnapshot>;
+	refreshSnapshot: () => Promise<PluginConfigSnapshot>;
+}>;
+
+export type PluginStatus = "idle" | "pending" | "success" | "warning" | "error";
+
+export type PluginStatusAction = Readonly<{
+	id: string;
+	label: string;
+	shortcut?: "space";
+}>;
+
+export type PluginStatusItem = Readonly<{
+	actions?: readonly PluginStatusAction[];
+	detail?: string;
+	id: string;
+	label: string;
+	status: PluginStatus;
+	summary?: string;
+}>;
+
+export type PluginStatusPanelSnapshot = Readonly<{
+	items: readonly PluginStatusItem[];
+	status?: PluginStatus;
+	summary?: string;
+}>;
+
+/** Declarative host-rendered status and controls contributed by a Plugin. */
+export type PluginStatusPanelRegistration = Readonly<{
+	emptyText?: string;
+	getSnapshot: () => PluginStatusPanelSnapshot;
+	indicatorLabel?: string;
+	id: string;
+	refresh?: () => Promise<void>;
+	runAction: (itemId: string, actionId: string) => Promise<void>;
+	subscribe: (listener: () => void) => () => void;
+	title: string;
+}>;
+
 export type PluginLoadContext = Readonly<{
+	config: PluginConfigReader;
 	sourcePath: string;
+	userDataDir: string;
 	workspace: string;
 }>;
 
@@ -56,12 +124,19 @@ export type PluginBeforeAgentTurnContext = PluginSessionContext &
 		agentId: AgentId;
 		capabilityCeiling?: SessionSdkCapabilityCeiling;
 		getAgentPermissionPolicy?: () => Promise<PluginAgentPermissionPolicy>;
+		resolvePluginPermission?: (
+			action: string,
+			resource: string
+		) => Promise<PluginPermissionResolution>;
 		registerTurnCleanup?: (cleanup: () => void) => void;
 		signal: AbortSignal;
 		turnId?: AgentTurnId;
 	}>;
 
-export type PluginProcessContext = PluginLoadContext;
+export type PluginProcessContext = Readonly<{
+	sourcePath: string;
+	workspace: string;
+}>;
 
 export type PluginToolContext = PluginSessionContext &
 	Readonly<{
@@ -90,14 +165,22 @@ export type PluginToolRegistration<Schema extends PluginInputSchema> =
 			context: PluginToolContext
 		) => PluginToolResult | Promise<PluginToolResult>;
 		inputSchema: Schema;
+		modelName?: string;
 		name: string;
 	}>;
 
+export type PluginCommandHandler = (
+	context: PluginCommandContext
+) => string | Promise<string>;
+
 export type PluginCommandRegistration = Readonly<{
 	description: string;
-	handler: (context: PluginCommandContext) => string | Promise<string>;
 	name: string;
-}>;
+}> &
+	(
+		| Readonly<{ handler: PluginCommandHandler; statusPanelId?: never }>
+		| Readonly<{ handler?: never; statusPanelId: string }>
+	);
 
 export type PluginToolRegistrationAPI = Readonly<{
 	registerTool: <Schema extends PluginInputSchema>(
@@ -132,6 +215,7 @@ export type PluginShutdownHook = (
 export type PluginDefinitionAPI = PluginRegistrationAPI &
 	Readonly<{
 		registerResource: (name: string, resource: unknown) => void;
+		registerStatusPanel: (panel: PluginStatusPanelRegistration) => void;
 		onSessionStart: (handler: PluginSessionStartHook) => void;
 		onSessionShutdown: (handler: PluginSessionShutdownHook) => void;
 		onBeforeAgentTurn: (handler: PluginBeforeAgentTurnHook) => void;

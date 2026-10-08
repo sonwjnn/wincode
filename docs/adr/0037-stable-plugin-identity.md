@@ -2,11 +2,11 @@
 
 Status: accepted
 
-ADR-0039 extends Plugin Identifier ownership to built-ins and revises command collision handling by registration phase. The file-loaded namespace, permission action, duplicate-ID precedence, and loading order below remain in force.
+ADR-0039 extends Plugin Identifier ownership to built-ins and revises command collision handling by registration phase. ADR-0041 permits an explicitly requested direct model-visible tool name through the public Plugin contract, subject to shared collision checks; otherwise the file-loaded namespace remains the default. Permission actions, duplicate-ID precedence, and deterministic loading order remain in force.
 
-Each Plugin loaded from a file declares a stable Plugin Identifier, and Wincode namespaces its Agent tool names under that identifier. The path of the source file is a loading location, not the Plugin's identity. This keeps Tool Permission rules and persisted tool-call names stable when a file moves or is renamed, and prevents a Plugin Tool from claiming a built-in tool name. Inferring identity from the filename or accepting unqualified tool names would make those contracts depend on filesystem layout or registration order.
+Each Plugin loaded from a file declares a stable Plugin Identifier, and Wincode namespaces its Agent tool names under that identifier by default. The path of the source file is a loading location, not the Plugin's identity. This keeps Tool Permission rules and persisted tool-call names stable when a file moves or is renamed. Inferring identity from the filename would make those contracts depend on filesystem layout; a direct tool name instead requires an explicit request under ADR-0041, with host names protected by collision checks.
 
-Plugin Identifiers and local tool names use lowercase ASCII letters, digits, and underscores. For Plugin `jira` and tool `search_issues`, the Agent-facing name is `plugin_jira_search_issues` and the Tool Permission action is `plugin:jira:search_issues`.
+Plugin Identifiers use lowercase ASCII letters, digits, and underscores; local tool names also allow hyphens. For Plugin `jira` and tool `search-issues`, the Agent-facing name is `plugin_jira_search-issues` and the Tool Permission action is `plugin:jira:search-issues`.
 
 Plugin Commands use short names such as `/hello`. A name collision with a Built-in Command, Custom Command, or another Plugin Command fails the attempted registration; the earlier command is never silently replaced. ADR-0039 defines how that failure affects factory, Session, and later registration scopes.
 

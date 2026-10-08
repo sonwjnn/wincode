@@ -2,25 +2,24 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import { createSubagentTaskWaiters } from "@wincode/subagents";
-import { getErrorMessage } from "@wincode/utils";
-import type { PluginSessionContext } from "@/modules/plugins/public";
 import type {
+	PluginSessionContext,
 	SessionSdk,
 	SessionSdkCapabilityCeiling,
 	SessionSdkChildFactory,
 	SessionSdkDelivery,
 	SessionSdkHandle,
-} from "@/modules/sessions/sdk-contract";
-import { SessionInUseError } from "@/modules/sessions/storage/session-writer-lock";
-import type { ExecutionMode } from "@/shared/execution-mode";
-import { type SessionId, toSessionId } from "@/shared/identifiers";
+} from "@wincode/coding-agent";
+import { getErrorMessage } from "@wincode/utils";
+import { createSubagentTaskWaiters } from "../task-waiters";
 import type { SubagentsTaskStore } from "./store";
 import type {
 	DelegationReportEnvelope,
 	DelegationTask,
 	DelegationTaskOutcome,
+	SessionId,
 } from "./task-types";
+import { toSessionId } from "./task-types";
 
 export type StartSubagentsTaskInput = Readonly<{
 	agentId: DelegationTask["agentId"];
@@ -28,6 +27,7 @@ export type StartSubagentsTaskInput = Readonly<{
 	parentSessionId: DelegationTask["parentSessionId"];
 	parentToolCallId: DelegationTask["parentToolCallId"];
 	parentTurnId: DelegationTask["parentTurnId"];
+	pluginPath: string;
 	prompt: string;
 	sessionSdk: SessionSdkChildFactory;
 }>;
@@ -66,7 +66,7 @@ type TaskStartResources = {
 };
 
 type ActiveSession = Readonly<{
-	executionMode?: ExecutionMode;
+	executionMode?: PluginSessionContext["executionMode"];
 	sessionSdk?: SessionSdkChildFactory;
 }>;
 
@@ -116,7 +116,8 @@ const isTerminalEvent = (
 	event.type === "agent-turn-interrupted";
 
 const createCoordinator = (
-	taskStore: SubagentsTaskStore
+	taskStore: SubagentsTaskStore,
+	pluginPath: string
 ): SubagentsTaskCoordinator => {
 	const activeTasks = new Map<DelegationTask["id"], ActiveTask>();
 	const activeSessions = new Map<SessionId, ActiveSession>();
@@ -262,17 +263,13 @@ const createCoordinator = (
 			let childHandle: SessionSdkHandle | undefined;
 			try {
 				childSdk = await sessionSdk.createChildSdk({
-					enabledPlugins: ["subagents"],
+					pluginPaths: [pluginPath],
 				});
 				childHandle = await childSdk.openSession(task.childSessionId, {
 					view: true,
 					autoContinue: false,
 				});
-			} catch (error) {
-				if (error instanceof SessionInUseError) {
-					await childSdk?.dispose();
-					continue;
-				}
+			} catch {
 				await childSdk?.dispose();
 				continue;
 			}
@@ -386,7 +383,7 @@ const createCoordinator = (
 				...(input.capabilityCeiling === undefined
 					? {}
 					: { capabilityCeiling: input.capabilityCeiling }),
-				enabledPlugins: ["subagents"],
+				pluginPaths: [input.pluginPath],
 			});
 			const childSessionId = await resources.childSdk.createEmptySession({
 				agent: input.agentId,
@@ -436,11 +433,12 @@ const createCoordinator = (
 };
 
 export const getSubagentsTaskCoordinator = (
-	taskStore: SubagentsTaskStore
+	taskStore: SubagentsTaskStore,
+	pluginPath: string
 ): SubagentsTaskCoordinator => {
 	let coordinator = coordinators.get(taskStore);
 	if (coordinator === undefined) {
-		coordinator = createCoordinator(taskStore);
+		coordinator = createCoordinator(taskStore, pluginPath);
 		coordinators.set(taskStore, coordinator);
 	}
 	return coordinator;

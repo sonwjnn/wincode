@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	getErrorMessage,
 	isNonEmptyString,
@@ -9,6 +10,7 @@ import { COMMANDS } from "@/modules/commands/commands";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { codingToolNames } from "@/modules/tools";
 import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
+import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import type {
 	PluginAPI,
 	PluginBeforeAgentTurnHook,
@@ -18,6 +20,7 @@ import type {
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginShutdownHook,
+	PluginStatusPanelRegistration,
 } from "./public";
 import { validatePluginCommand, validatePluginTool } from "./registration";
 import {
@@ -31,6 +34,11 @@ import {
 } from "./runtime";
 import type { PluginCommand, PluginTool } from "./types";
 
+export type PluginPackageReference = Readonly<{
+	id: string;
+	specifier: string;
+}>;
+
 export type BundledPluginFactory = Readonly<{
 	factory: PluginFactory;
 	id: string;
@@ -40,13 +48,15 @@ export type LoadPluginsInput = Readonly<{
 	bundledPlugins?: readonly BundledPluginFactory[];
 	cliPaths: readonly string[];
 	config: ConfigRuntime;
+	disabledPluginIds?: readonly string[];
+	distributionPlugins?: readonly PluginPackageReference[];
 	ignoreConfiguredPlugins?: boolean;
 }>;
 
 type MutablePluginDraft = {
-	trustedBundled: boolean;
 	commands: Map<string, PluginCommand>;
 	resources: Map<string, PluginResourceDescriptor>;
+	statusPanels: Map<string, PluginStatusPanelRegistration>;
 	id: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
@@ -58,9 +68,12 @@ type MutablePluginDraft = {
 };
 
 type PluginPath = Readonly<{
+	distributionId?: string;
 	factory?: PluginFactory;
-	trustedBundled?: boolean;
+	knownPluginId?: string;
+	moduleSpecifier?: string;
 	path: string;
+	required?: boolean;
 	source: string;
 }>;
 
@@ -156,7 +169,8 @@ const createRegistrationAPI = (
 	isOpen: () => boolean,
 	diagnostics: PluginDiagnostic[],
 	toolNames: ReadonlySet<string>,
-	commandNames: ReadonlySet<string>
+	commandNames: ReadonlySet<string>,
+	customCommandNames: ReadonlySet<string>
 ): PluginDefinitionAPI => {
 	const assertOpen = (): void => {
 		if (!isOpen()) {
@@ -193,6 +207,32 @@ const createRegistrationAPI = (
 		}
 		plugin.resources.set(name, Object.freeze({ name, value }));
 	};
+	const registerStatusPanel = (
+		candidate: PluginStatusPanelRegistration
+	): void => {
+		assertOpen();
+		if (
+			!isObjectLike(candidate) ||
+			Array.isArray(candidate) ||
+			!pluginResourceNamePattern.test(candidate.id) ||
+			!isNonEmptyString(candidate.title) ||
+			typeof candidate.getSnapshot !== "function" ||
+			typeof candidate.subscribe !== "function" ||
+			typeof candidate.runAction !== "function" ||
+			(candidate.refresh !== undefined &&
+				typeof candidate.refresh !== "function")
+		) {
+			throw new Error(
+				"Plugin Status Panels require an id, title, and status operations."
+			);
+		}
+		if (plugin.statusPanels.has(candidate.id)) {
+			throw new Error(
+				`Plugin Status Panel '${candidate.id}' is already registered.`
+			);
+		}
+		plugin.statusPanels.set(candidate.id, Object.freeze({ ...candidate }));
+	};
 	const registerProcessHook = (hook: PluginShutdownHook): void => {
 		assertOpen();
 		if (typeof hook !== "function" || plugin.onShutdown !== undefined) {
@@ -202,6 +242,7 @@ const createRegistrationAPI = (
 	};
 	return Object.freeze({
 		registerResource,
+		registerStatusPanel,
 		onSessionStart(handler) {
 			registerSessionStartHook(handler);
 		},
@@ -229,6 +270,14 @@ const createRegistrationAPI = (
 				const validated = validatePluginCommand(command);
 				const key = validated.name.toLowerCase();
 				if (commandNames.has(key)) {
+					if (customCommandNames.has(key)) {
+						addDiagnostic(
+							diagnostics,
+							`Plugin Command '/${validated.name}' was skipped because a custom command uses the same name.`,
+							plugin.sourcePath
+						);
+						return;
+					}
 					throw new Error(
 						`Plugin Command '/${validated.name}' collides with an active command.`
 					);
@@ -246,7 +295,7 @@ const createRegistrationAPI = (
 		registerTool(tool) {
 			assertOpen();
 			try {
-				const validated = validatePluginTool(tool, plugin.trustedBundled);
+				const validated = validatePluginTool(tool);
 				const modelName =
 					validated.modelName ?? `plugin_${plugin.id}_${validated.name}`;
 				if (toolNames.has(modelName)) {
@@ -273,12 +322,12 @@ const createRegistrationAPI = (
 
 const createPluginAPI = (
 	context: PluginLoadContext,
-	trustedBundled: boolean,
 	setDraft: (draft: MutablePluginDraft) => void,
 	isOpen: () => boolean,
 	diagnostics: PluginDiagnostic[],
 	toolNames: ReadonlySet<string>,
-	commandNames: ReadonlySet<string>
+	commandNames: ReadonlySet<string>,
+	customCommandNames: ReadonlySet<string>
 ): PluginAPI =>
 	Object.freeze({
 		definePlugin(identity) {
@@ -290,9 +339,9 @@ const createPluginAPI = (
 				throw new Error("A Plugin must declare one non-empty identifier.");
 			}
 			const draft: MutablePluginDraft = {
-				trustedBundled,
 				commands: new Map(),
 				resources: new Map(),
+				statusPanels: new Map(),
 				id: identity.id,
 				sourcePath: context.sourcePath,
 				tools: new Map(),
@@ -304,7 +353,8 @@ const createPluginAPI = (
 				isOpen,
 				diagnostics,
 				toolNames,
-				commandNames
+				commandNames,
+				customCommandNames
 			);
 		},
 	});
@@ -322,6 +372,7 @@ const loadedPluginFromDraft = (
 	const tools = [...draft.tools.values()];
 	const commands = [...draft.commands.values()];
 	const localToolNames = new Set<string>();
+	const localModelNames = new Set<string>();
 	for (const tool of tools) {
 		if (localToolNames.has(tool.name)) {
 			throw new Error(
@@ -330,6 +381,12 @@ const loadedPluginFromDraft = (
 		}
 		localToolNames.add(tool.name);
 		const modelName = tool.modelName ?? `plugin_${draft.id}_${tool.name}`;
+		if (localModelNames.has(modelName)) {
+			throw new Error(
+				`Plugin Tool model-visible name '${modelName}' is registered more than once.`
+			);
+		}
+		localModelNames.add(modelName);
 		if (toolNames.has(modelName)) {
 			throw new Error(
 				`Plugin Tool name '${modelName}' collides with an active tool.`
@@ -352,7 +409,7 @@ const loadedPluginFromDraft = (
 		localCommandNames.add(normalizedName);
 	}
 	for (const tool of tools) {
-		toolNames.add(`plugin_${draft.id}_${tool.name}`);
+		toolNames.add(tool.modelName ?? `plugin_${draft.id}_${tool.name}`);
 	}
 	for (const command of commands) {
 		commandNames.add(command.name.toLowerCase());
@@ -386,8 +443,11 @@ const loadedPluginFromDraft = (
 		(command) =>
 			Object.freeze({
 				description: command.description,
-				handler: command.handler,
+				...(command.handler === undefined ? {} : { handler: command.handler }),
 				name: command.name,
+				...(command.statusPanelId === undefined
+					? {}
+					: { statusPanelId: command.statusPanelId }),
 				pluginId: draft.id,
 				sourcePath: draft.sourcePath,
 				value: `/${command.name}`,
@@ -396,8 +456,8 @@ const loadedPluginFromDraft = (
 	return Object.freeze({
 		commands: Object.freeze(registeredCommands),
 		id: draft.id,
-		trustedBundled: draft.trustedBundled,
 		resources: Object.freeze([...draft.resources.values()]),
+		statusPanels: Object.freeze([...draft.statusPanels.values()]),
 		onBeforeAgentTurn: draft.onBeforeAgentTurn,
 		onSessionShutdown: draft.onSessionShutdown,
 		onSessionStart: draft.onSessionStart,
@@ -420,6 +480,36 @@ const loadFactory = (sourcePath: string): unknown => {
 	return isObjectLike(loaded) ? loaded.default : undefined;
 };
 
+const installationError = (candidate: PluginPath, reason: string): Error =>
+	new Error(
+		`Required distributed Plugin '${candidate.distributionId}' from '${candidate.moduleSpecifier}' could not be loaded: ${reason}. Install the Plugin package or disable it with --no-plugin ${candidate.distributionId}.`
+	);
+
+const resolvePluginCandidate = (
+	candidate: PluginPath,
+	diagnostics: PluginDiagnostic[]
+): PluginPath | undefined => {
+	if (candidate.moduleSpecifier === undefined) {
+		return candidate;
+	}
+	try {
+		return {
+			...candidate,
+			path: fileURLToPath(import.meta.resolve(candidate.moduleSpecifier)),
+		};
+	} catch (error) {
+		if (candidate.required === true) {
+			throw installationError(candidate, messageFor(error));
+		}
+		addDiagnostic(
+			diagnostics,
+			`Could not resolve Plugin package '${candidate.moduleSpecifier}': ${messageFor(error)}`,
+			candidate.path
+		);
+		return;
+	}
+};
+
 const factoryForCandidate = (
 	candidate: PluginPath,
 	diagnostics: PluginDiagnostic[]
@@ -428,6 +518,12 @@ const factoryForCandidate = (
 		return candidate.factory;
 	}
 	if (!isTypeScriptPluginPath(candidate.path)) {
+		if (candidate.required === true) {
+			throw installationError(
+				candidate,
+				"the package entry is not an executable TypeScript Plugin"
+			);
+		}
 		addDiagnostic(
 			diagnostics,
 			"Plugin path must point to an executable TypeScript file (.ts, .tsx, .mts, or .cts).",
@@ -439,6 +535,9 @@ const factoryForCandidate = (
 	try {
 		factory = loadFactory(candidate.path);
 	} catch (error) {
+		if (candidate.required === true) {
+			throw installationError(candidate, messageFor(error));
+		}
 		addDiagnostic(
 			diagnostics,
 			`Could not load Plugin from ${candidate.source}: ${messageFor(error)}`,
@@ -447,6 +546,12 @@ const factoryForCandidate = (
 		return;
 	}
 	if (!isFactory(factory)) {
+		if (candidate.required === true) {
+			throw installationError(
+				candidate,
+				"the entry does not export a default factory"
+			);
+		}
 		addDiagnostic(
 			diagnostics,
 			"Plugin file must export a default factory function.",
@@ -457,10 +562,60 @@ const factoryForCandidate = (
 	return factory;
 };
 
+const disabledPluginsFromSources = (
+	sources: readonly ConfigSource[],
+	diagnostics: PluginDiagnostic[]
+): readonly string[] => {
+	let disabledPlugins: string[] = [];
+	for (const source of sources) {
+		if (!own(source.document, "disabledPlugins")) {
+			continue;
+		}
+		if (source.scope === "project") {
+			addDiagnostic(
+				diagnostics,
+				"Ignored Plugin disablement in project configuration; only known default Plugins can be disabled by ID, and file-loaded Plugins must be unloaded by removing their path.",
+				source.path
+			);
+			continue;
+		}
+		const value = source.document.disabledPlugins;
+		if (!Array.isArray(value)) {
+			disabledPlugins = [];
+			addDiagnostic(
+				diagnostics,
+				"The disabledPlugins setting must be an array of Plugin Identifiers.",
+				source.path
+			);
+			continue;
+		}
+		disabledPlugins = value.filter((pluginId): pluginId is string => {
+			if (
+				typeof pluginId === "string" &&
+				pluginIdentifierPattern.test(pluginId)
+			) {
+				return true;
+			}
+			addDiagnostic(
+				diagnostics,
+				`Ignored an invalid disabled Plugin Identifier: ${String(pluginId)}.`,
+				source.path
+			);
+			return false;
+		});
+	}
+	return disabledPlugins;
+};
+
+type PluginSourceResolution = Readonly<{
+	disabledPluginIds: readonly string[];
+	paths: readonly PluginPath[];
+}>;
+
 const sourcePaths = async (
 	input: LoadPluginsInput,
 	diagnostics: PluginDiagnostic[]
-): Promise<readonly PluginPath[]> => {
+): Promise<PluginSourceResolution> => {
 	const snapshot = input.ignoreConfiguredPlugins
 		? undefined
 		: await input.config.configStore.getSnapshot(input.config.workspace);
@@ -472,7 +627,13 @@ const sourcePaths = async (
 		path: path.resolve(input.config.workspace, value),
 		source: "--plugin",
 	}));
-	return [...cli, ...configured];
+	return {
+		disabledPluginIds:
+			snapshot === undefined
+				? []
+				: disabledPluginsFromSources(snapshot.sources, diagnostics),
+		paths: [...cli, ...configured],
+	};
 };
 
 const reportDiagnostics = async (
@@ -487,134 +648,294 @@ const reportDiagnostics = async (
 	}
 };
 
+type PluginCandidatePlan = Readonly<{
+	candidates: readonly PluginPath[];
+	customCommandNames: readonly string[];
+	disabledPluginIds: Set<string>;
+	reservedCommandNames: readonly string[];
+}>;
+
+type PluginLoadState = Readonly<{
+	commandNames: Set<string>;
+	customCommandNames: Set<string>;
+	diagnostics: PluginDiagnostic[];
+	disabledPluginIds: Set<string>;
+	loadedPlugins: LoadedPlugin[];
+	pluginSources: Map<string, string>;
+	toolNames: Set<string>;
+}>;
+
+type PluginFactoryResult = Readonly<{
+	context: PluginLoadContext;
+	draft: MutablePluginDraft | undefined;
+	succeeded: boolean;
+}>;
+
+const createCandidatePlan = async (
+	input: LoadPluginsInput,
+	diagnostics: PluginDiagnostic[]
+): Promise<PluginCandidatePlan> => {
+	const sourceResolution = await sourcePaths(input, diagnostics);
+	const disabledPluginIds = new Set([
+		...sourceResolution.disabledPluginIds,
+		...(input.disabledPluginIds ?? []),
+	]);
+	const seenPaths = new Set<string>();
+	const distinctPaths = sourceResolution.paths.filter((candidate) => {
+		if (seenPaths.has(candidate.path)) {
+			return false;
+		}
+		seenPaths.add(candidate.path);
+		return true;
+	});
+	const candidates = [
+		...distinctPaths,
+		...(input.bundledPlugins ?? []).map(({ factory, id }) => ({
+			factory,
+			knownPluginId: id,
+			path: `factory:${id}`,
+			source: `Plugin factory '${id}'`,
+		})),
+		...(input.distributionPlugins ?? []).map(({ id, specifier }) => ({
+			distributionId: id,
+			knownPluginId: id,
+			moduleSpecifier: specifier,
+			path: specifier,
+			required: true,
+			source: `distributed Plugin '${id}' from '${specifier}'`,
+		})),
+	];
+	const customCommands =
+		candidates.length === 0 ? [] : await getCustomCommands(input.config);
+	const customCommandNames = customCommands.map(({ name }) =>
+		name.toLowerCase()
+	);
+	return {
+		candidates,
+		customCommandNames,
+		disabledPluginIds,
+		reservedCommandNames: [
+			...COMMANDS.map(({ name }) => name.toLowerCase()),
+			...customCommandNames,
+		],
+	};
+};
+
+const shouldSkipCandidate = (
+	candidate: PluginPath,
+	state: PluginLoadState
+): boolean => {
+	const pluginId = candidate.knownPluginId;
+	if (pluginId === undefined) {
+		return false;
+	}
+	if (state.disabledPluginIds.has(pluginId)) {
+		addDiagnostic(
+			state.diagnostics,
+			`Default Plugin '${pluginId}' was explicitly disabled before loading.`,
+			candidate.path
+		);
+		return true;
+	}
+	const selectedSource = state.pluginSources.get(pluginId);
+	if (selectedSource === undefined) {
+		return false;
+	}
+	addDiagnostic(
+		state.diagnostics,
+		`Default Plugin '${pluginId}' was replaced by explicitly enabled source '${selectedSource}'.`,
+		candidate.path
+	);
+	return true;
+};
+
+const runPluginFactory = async (
+	candidate: PluginPath,
+	factory: PluginFactory,
+	input: LoadPluginsInput,
+	state: PluginLoadState
+): Promise<PluginFactoryResult> => {
+	let draft: MutablePluginDraft | undefined;
+	let registrationOpen = true;
+	const setDraft = (next: MutablePluginDraft): void => {
+		if (draft !== undefined) {
+			throw new Error("A Plugin factory may define only one Plugin.");
+		}
+		draft = next;
+	};
+	const context: PluginLoadContext = {
+		config: Object.freeze({
+			getSnapshot: () =>
+				input.config.configStore.getSnapshot(input.config.workspace),
+			refreshSnapshot: () =>
+				input.config.configStore.refreshSnapshot(input.config.workspace),
+		}),
+		sourcePath: candidate.path,
+		userDataDir: resolveUserDataDir(),
+		workspace: input.config.workspace,
+	};
+	try {
+		await factory(
+			createPluginAPI(
+				context,
+				setDraft,
+				() => registrationOpen,
+				state.diagnostics,
+				state.toolNames,
+				state.commandNames,
+				state.customCommandNames
+			),
+			context
+		);
+		return { context, draft, succeeded: true };
+	} catch (error) {
+		addDiagnostic(
+			state.diagnostics,
+			`Plugin factory failed: ${messageFor(error)}`,
+			candidate.path
+		);
+		await shutdownFailedPluginDraft(
+			draft,
+			context,
+			state.diagnostics,
+			candidate.path
+		);
+		if (candidate.required === true) {
+			throw installationError(candidate, messageFor(error));
+		}
+		return { context, draft: undefined, succeeded: false };
+	} finally {
+		registrationOpen = false;
+	}
+};
+
+const publishPluginDraft = async (
+	candidate: PluginPath,
+	{ context, draft, succeeded }: PluginFactoryResult,
+	state: PluginLoadState
+): Promise<void> => {
+	if (!succeeded) {
+		return;
+	}
+	if (draft === undefined) {
+		if (candidate.required === true) {
+			throw installationError(
+				candidate,
+				"the factory did not declare a Plugin Identifier"
+			);
+		}
+		addDiagnostic(
+			state.diagnostics,
+			"Plugin factory did not declare a Plugin Identifier.",
+			candidate.path
+		);
+		return;
+	}
+	if (
+		candidate.distributionId !== undefined &&
+		draft.id !== candidate.distributionId
+	) {
+		await shutdownFailedPluginDraft(
+			draft,
+			context,
+			state.diagnostics,
+			candidate.path
+		);
+		throw installationError(
+			candidate,
+			`the entry declared Identifier '${draft.id}' instead of '${candidate.distributionId}'`
+		);
+	}
+	const earlierSource = state.pluginSources.get(draft.id);
+	if (earlierSource !== undefined) {
+		addDiagnostic(
+			state.diagnostics,
+			`Duplicate Plugin Identifier '${draft.id}' was disabled; '${earlierSource}' was loaded first.`,
+			candidate.path
+		);
+		await shutdownFailedPluginDraft(
+			draft,
+			context,
+			state.diagnostics,
+			candidate.path
+		);
+		return;
+	}
+	try {
+		const loaded = loadedPluginFromDraft(
+			draft,
+			state.toolNames,
+			state.commandNames
+		);
+		state.pluginSources.set(loaded.id, candidate.path);
+		state.loadedPlugins.push(loaded);
+	} catch (error) {
+		addDiagnostic(
+			state.diagnostics,
+			`Plugin registration was disabled: ${messageFor(error)}`,
+			candidate.path
+		);
+		await shutdownFailedPluginDraft(
+			draft,
+			context,
+			state.diagnostics,
+			candidate.path
+		);
+	}
+};
+
 /** Loads only user-authorized paths and atomically publishes each valid Plugin. */
 export const loadPlugins = async (
 	input: LoadPluginsInput
 ): Promise<PluginRuntime> => {
 	const diagnostics: PluginDiagnostic[] = [];
-	const paths = await sourcePaths(input, diagnostics);
-	const distinctPaths: PluginPath[] = [];
-	const seenPaths = new Set<string>();
-	for (const candidate of paths) {
-		if (seenPaths.has(candidate.path)) {
-			continue;
-		}
-		seenPaths.add(candidate.path);
-		distinctPaths.push(candidate);
-	}
-	const customCommands =
-		distinctPaths.length === 0 ? [] : await getCustomCommands(input.config);
-	const reservedCommandNames = [
-		...COMMANDS.map(({ name }) => name.toLowerCase()),
-		...customCommands.map(({ name }) => name.toLowerCase()),
-	];
-	const commandNames = new Set(reservedCommandNames);
-	const toolNames = new Set<string>(RESERVED_TOOL_NAMES);
-	const loadedPlugins: LoadedPlugin[] = [];
-	const pluginSources = new Map<string, string>();
+	const plan = await createCandidatePlan(input, diagnostics);
+	const state: PluginLoadState = {
+		commandNames: new Set(plan.reservedCommandNames),
+		customCommandNames: new Set(plan.customCommandNames),
+		diagnostics,
+		disabledPluginIds: plan.disabledPluginIds,
+		loadedPlugins: [],
+		pluginSources: new Map(),
+		toolNames: new Set<string>(RESERVED_TOOL_NAMES),
+	};
 
-	const candidates: readonly PluginPath[] = [
-		...(input.bundledPlugins ?? []).map(({ factory, id }) => ({
-			factory,
-			trustedBundled: true,
-			path: `bundled:${id}`,
-			source: `bundled Plugin '${id}'`,
-		})),
-		...distinctPaths,
-	];
-
-	for (const candidate of candidates) {
-		const factory = factoryForCandidate(candidate, diagnostics);
-		if (factory === undefined) {
-			continue;
-		}
-
-		let draft: MutablePluginDraft | undefined;
-		let registrationOpen = true;
-		const setDraft = (next: MutablePluginDraft): void => {
-			if (draft !== undefined) {
-				throw new Error("A Plugin factory may define only one Plugin.");
+	const createRuntime = () =>
+		createPluginRuntime(
+			state.loadedPlugins,
+			diagnostics,
+			plan.reservedCommandNames,
+			[...RESERVED_TOOL_NAMES]
+		);
+	try {
+		for (const unresolvedCandidate of plan.candidates) {
+			if (shouldSkipCandidate(unresolvedCandidate, state)) {
+				continue;
 			}
-			draft = next;
-		};
-		const factoryContext: PluginLoadContext = {
-			sourcePath: candidate.path,
-			workspace: input.config.workspace,
-		};
-		try {
-			await factory(
-				createPluginAPI(
-					factoryContext,
-					candidate.trustedBundled === true,
-					setDraft,
-					() => registrationOpen,
-					diagnostics,
-					toolNames,
-					commandNames
-				),
-				factoryContext
+			const candidate = resolvePluginCandidate(
+				unresolvedCandidate,
+				diagnostics
 			);
-		} catch (error) {
-			registrationOpen = false;
-			addDiagnostic(
-				diagnostics,
-				`Plugin factory failed: ${messageFor(error)}`,
-				candidate.path
+			if (candidate === undefined) {
+				continue;
+			}
+			const factory = factoryForCandidate(candidate, diagnostics);
+			if (factory === undefined) {
+				continue;
+			}
+			const factoryResult = await runPluginFactory(
+				candidate,
+				factory,
+				input,
+				state
 			);
-			await shutdownFailedPluginDraft(
-				draft,
-				factoryContext,
-				diagnostics,
-				candidate.path
-			);
-			continue;
-		} finally {
-			registrationOpen = false;
+			await publishPluginDraft(candidate, factoryResult, state);
 		}
-		if (draft === undefined) {
-			addDiagnostic(
-				diagnostics,
-				"Plugin factory did not declare a Plugin Identifier.",
-				candidate.path
-			);
-			continue;
-		}
-		const earlierSource = pluginSources.get(draft.id);
-		if (earlierSource !== undefined) {
-			addDiagnostic(
-				diagnostics,
-				`Duplicate Plugin Identifier '${draft.id}' was disabled; '${earlierSource}' was loaded first.`,
-				candidate.path
-			);
-			await shutdownFailedPluginDraft(
-				draft,
-				factoryContext,
-				diagnostics,
-				candidate.path
-			);
-			continue;
-		}
-		try {
-			const loaded = loadedPluginFromDraft(draft, toolNames, commandNames);
-			pluginSources.set(loaded.id, candidate.path);
-			loadedPlugins.push(loaded);
-		} catch (error) {
-			addDiagnostic(
-				diagnostics,
-				`Plugin registration was disabled: ${messageFor(error)}`,
-				candidate.path
-			);
-			await shutdownFailedPluginDraft(
-				draft,
-				factoryContext,
-				diagnostics,
-				candidate.path
-			);
-		}
+	} catch (error) {
+		await createRuntime().shutdown();
+		throw error;
 	}
 
 	await reportDiagnostics(diagnostics);
-	return createPluginRuntime(loadedPlugins, diagnostics, reservedCommandNames, [
-		...RESERVED_TOOL_NAMES,
-	]);
+	return createRuntime();
 };

@@ -183,6 +183,118 @@ test("failed Plugin initialization releases factory-owned resources", async () =
 	await runtime.shutdown();
 });
 
+test("required distribution failure shuts down already-loaded Plugins", async () => {
+	let shutdownCount = 0;
+	const loading = loadPlugins({
+		bundledPlugins: [
+			{
+				id: "loaded_before_missing_distribution",
+				factory: (api) => {
+					const plugin = api.definePlugin({
+						id: "loaded_before_missing_distribution",
+					});
+					plugin.onShutdown(() => {
+						shutdownCount += 1;
+					});
+				},
+			},
+		],
+		cliPaths: [],
+		config: configRuntime,
+		distributionPlugins: [
+			{
+				id: "missing_required",
+				specifier: "@wincode/__missing_required_plugin_fixture__",
+			},
+		],
+	});
+
+	await expect(loading).rejects.toThrow(
+		"Required distributed Plugin 'missing_required'"
+	);
+	expect(shutdownCount).toBe(1);
+});
+
+test("required distribution identity mismatch cleans up the unpublishable Plugin draft", async () => {
+	const cleanupMarker = path.join(workspace, "mismatched-plugin-cleanup");
+	await rm(cleanupMarker, { force: true });
+	const loading = loadPlugins({
+		cliPaths: [],
+		config: configRuntime,
+		distributionPlugins: [
+			{
+				id: "expected_distribution_id",
+				specifier: path.resolve(
+					import.meta.dir,
+					"../fixtures/mismatched-distribution-plugin.ts"
+				),
+			},
+		],
+	});
+
+	await expect(loading).rejects.toThrow("actual_distribution_id");
+	expect(await Bun.file(cleanupMarker).text()).toBe("closed");
+});
+
+test("disabled default Plugins are skipped before loading without vetoing file paths", async () => {
+	const disabledWorkspace = path.join(
+		installedRoot,
+		"disabled-plugin-workspace"
+	);
+	const disabledConfigRoot = path.join(root, "disabled-plugin-config");
+	const pluginDirectory = path.join(disabledWorkspace, "plugins");
+	const configuredPluginPath = path.join(pluginDirectory, "jira.ts");
+	await mkdir(pluginDirectory, { recursive: true });
+	await mkdir(disabledConfigRoot, { recursive: true });
+	await Bun.write(
+		configuredPluginPath,
+		commandPluginSource("jira", "explicit_file_plugin", "File Plugin loaded.")
+	);
+	await Bun.write(
+		path.join(disabledConfigRoot, "wincode.json"),
+		JSON.stringify({ disabledPlugins: ["jira", "disabled_factory"] })
+	);
+
+	let disabledFactoryCalled = false;
+	const runtime = await loadPlugins({
+		bundledPlugins: [
+			{
+				id: "disabled_factory",
+				factory: async (api) => {
+					disabledFactoryCalled = true;
+					api.definePlugin({ id: "disabled_factory" });
+				},
+			},
+		],
+		cliPaths: [configuredPluginPath],
+		config: createConfigRuntime(disabledWorkspace, disabledConfigRoot),
+		distributionPlugins: [
+			{
+				id: "jira",
+				specifier: "@wincode/__must_not_resolve_disabled_distribution__",
+			},
+		],
+	});
+
+	expect(disabledFactoryCalled).toBe(false);
+	expect(runtime.getCommands()).toMatchObject([
+		{ name: "explicit_file_plugin", pluginId: "jira" },
+	]);
+	expect(runtime.diagnostics).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				message:
+					"Default Plugin 'disabled_factory' was explicitly disabled before loading.",
+			}),
+			expect.objectContaining({
+				message:
+					"Default Plugin 'jira' was explicitly disabled before loading.",
+			}),
+		])
+	);
+	await runtime.shutdown();
+});
+
 test("project configuration cannot enable an external Plugin", async () => {
 	const runtime = await loadPlugins({ cliPaths: [], config: configRuntime });
 
@@ -432,7 +544,9 @@ test("built-in and Custom Command names win over colliding Plugin Commands", asy
 				sourcePath: builtinCollisionPath,
 			}),
 			expect.objectContaining({
-				message: expect.stringContaining("collides with an active command"),
+				message: expect.stringContaining(
+					"skipped because a custom command uses the same name"
+				),
 				sourcePath: customCollisionPath,
 			}),
 		])
@@ -744,27 +858,30 @@ test("JSON Mode streams Plugin Tool outcomes as machine-readable events", async 
 	}
 });
 
-test("file Plugins cannot replace the default ask permission with an Agent policy category", async () => {
+test("Plugin permission metadata stays explicit for generic action/resource resolution", async () => {
 	const runtime = await loadPlugins({
 		cliPaths: [permissionOverridePath],
 		config: configRuntime,
 	});
-
-	expect(runtime.getToolDescriptors("permission-session")).toEqual([]);
-	expect(runtime.diagnostics).toEqual(
-		expect.arrayContaining([
-			expect.objectContaining({
-				message: expect.stringContaining(
-					"cannot override its permission category"
-				),
-				sourcePath: permissionOverridePath,
-			}),
-		])
-	);
-	await runtime.shutdown();
+	try {
+		const [tool] = runtime.getToolDescriptors("permission-session");
+		expect(tool).toMatchObject({
+			name: "external_edit",
+			permissionAction: "edit",
+			permissionDecision: "allow",
+			permissionSafety: false,
+		});
+		expect(
+			runtime.diagnostics.some(({ message }) =>
+				message.includes("Plugin Tool registration failed")
+			)
+		).toBe(false);
+	} finally {
+		await runtime.shutdown();
+	}
 });
 
-test("file Plugins cannot escape their namespaced tool names", async () => {
+test("file Plugins can request direct names but cannot claim a native tool name", async () => {
 	const pluginPathWithCustomName = path.resolve(
 		import.meta.dir,
 		"../fixtures/namespaced-tool-plugin.ts"
@@ -778,14 +895,48 @@ test("file Plugins cannot escape their namespaced tool names", async () => {
 			sessionId: "namespace-escape-session",
 			workspace,
 		});
-		expect(runtime.getToolDescriptors("namespace-escape-session")).toEqual([]);
+		expect(
+			runtime
+				.getToolDescriptors("namespace-escape-session")
+				.map(({ name }) => name)
+		).toEqual(["jira_search_issues"]);
+		expect(runtime.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					message: expect.stringContaining("owned by another capability"),
+					sourcePath: pluginPathWithCustomName,
+				}),
+			])
+		);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("duplicate model-visible names within one Plugin fail before tools are published", async () => {
+	const duplicateNamePath = path.resolve(
+		import.meta.dir,
+		"../fixtures/duplicate-model-name-plugin.ts"
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [path.relative(workspace, duplicateNamePath)],
+		config: configRuntime,
+	});
+	try {
+		await runtime.startSession({
+			sessionId: "duplicate-model-name-session",
+			workspace,
+		});
+		expect(runtime.getToolDescriptors("duplicate-model-name-session")).toEqual(
+			[]
+		);
 		expect(runtime.diagnostics).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					message: expect.stringContaining(
-						"cannot override its namespaced model-visible name"
+						"model-visible name 'shared_model_name' is registered more than once"
 					),
-					sourcePath: pluginPathWithCustomName,
+					sourcePath: duplicateNamePath,
 				}),
 			])
 		);
@@ -913,6 +1064,84 @@ test("a failed pre-Agent-Turn hook omits only that Plugin's tools", async () => 
 				}),
 			])
 		);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("Plugins publish status panels and route panel actions through the runtime", async () => {
+	let refreshCount = 0;
+	const actions: string[] = [];
+	const runtime = await loadPlugins({
+		bundledPlugins: [
+			{
+				id: "status_fixture",
+				factory: async (api) => {
+					const plugin = api.definePlugin({ id: "status_fixture" });
+					plugin.registerStatusPanel({
+						getSnapshot: () => ({
+							items: [
+								{
+									actions: [
+										{ id: "restart", label: "Restart", shortcut: "space" },
+									],
+									id: "worker",
+									label: "Worker",
+									status: "warning",
+								},
+							],
+							status: "warning",
+							summary: "Needs attention",
+						}),
+						id: "services",
+						indicatorLabel: "Services",
+						refresh: async () => {
+							refreshCount += 1;
+						},
+						runAction: async (itemId, actionId) => {
+							actions.push(`${itemId}:${actionId}`);
+						},
+						subscribe: () => () => undefined,
+						title: "Services",
+					});
+					plugin.registerCommand({
+						description: "Open the service status panel.",
+						name: "services",
+						statusPanelId: "services",
+					});
+				},
+			},
+		],
+		cliPaths: [],
+		config: configRuntime,
+	});
+	try {
+		expect(runtime.getStatusPanels()).toMatchObject([
+			{
+				id: "services",
+				indicatorLabel: "Services",
+				pluginId: "status_fixture",
+				title: "Services",
+			},
+		]);
+		expect(runtime.getCommands()).toContainEqual(
+			expect.objectContaining({
+				name: "services",
+				pluginId: "status_fixture",
+				statusPanelId: "services",
+			})
+		);
+		await runtime.refreshStatusPanel("status_fixture", "services");
+		await runtime.runStatusPanelAction(
+			"status_fixture",
+			"services",
+			"worker",
+			"restart"
+		);
+		expect({ actions, refreshCount }).toEqual({
+			actions: ["worker:restart"],
+			refreshCount: 1,
+		});
 	} finally {
 		await runtime.shutdown();
 	}

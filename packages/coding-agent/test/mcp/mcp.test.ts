@@ -30,11 +30,11 @@ import {
 	type McpSnapshotTool,
 } from "@wincode/mcp";
 import { z } from "zod";
-import type { McpAgentPolicy } from "@/modules/mcp/capability";
 import type { PermissionRules } from "@/modules/permissions";
 import { agentId } from "../support/identifiers";
 import {
 	addAgentPolicyResolver,
+	type McpAgentPolicy,
 	type PolicyAwareMcpRegistry,
 } from "../support/mcp-registry";
 

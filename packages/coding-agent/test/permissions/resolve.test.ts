@@ -155,6 +155,20 @@ describe("resolvePluginToolPermission", () => {
 		expect(resolved).toEqual({ decision: "ask", safety: true });
 	});
 
+	test("an action matching a native tool name uses explicit Plugin action rules", () => {
+		const resolved = resolvePluginToolPermission(
+			snapshot([
+				source("/home/.config/wincode/wincode.json", {
+					permission: { edit: "allow" },
+				}),
+			]),
+			"build",
+			"edit"
+		);
+
+		expect(resolved).toEqual({ decision: "allow", safety: false });
+	});
+
 	test("a project allow cannot relax the default ask or a user deny", () => {
 		const defaulted = resolvePluginToolPermission(
 			snapshot([

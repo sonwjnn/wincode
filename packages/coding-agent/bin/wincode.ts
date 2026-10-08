@@ -79,21 +79,19 @@ process.exitCode = await dispatch(
 	},
 	loadModeRunners,
 	{
-		initializeRuntime: async ({ cwd, enabledPlugins, pluginPaths }) => {
+		initializeRuntime: async ({ cwd, disabledPluginIds, pluginPaths }) => {
 			const configRuntime = Object.freeze({
 				configStore: createConfigStore(),
 				cwd,
 				homeRoot: os.homedir(),
 				workspace: resolveWorkspaceRoot(cwd),
 			});
-			const composition = createApplicationPluginComposition({
-				enabledPlugins,
-				workspace: configRuntime.workspace,
-			});
+			const composition = createApplicationPluginComposition();
 			const pluginRuntime = await loadPlugins({
-				bundledPlugins: composition.bundledPlugins,
 				cliPaths: pluginPaths,
 				config: configRuntime,
+				disabledPluginIds,
+				distributionPlugins: composition.distributionPlugins,
 			});
 			return { configRuntime, pluginRuntime };
 		},

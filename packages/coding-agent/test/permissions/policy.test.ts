@@ -491,21 +491,14 @@ describe("decideOpenActionPermission", () => {
 		);
 	});
 
-	test("MCP action family resolves logical names that collide with fixed actions", () => {
+	test("Plugin actions matching native actions use their configured open-action rule", () => {
 		const permission = createToolPermission(
 			openRules({ "external_*": "allow" })
 		);
 
+		expect(permission.decide("external_directory", "*")).toBe("ask");
 		expect(
-			decideToolPermissionAction(
-				permission,
-				"external_directory",
-				"*",
-				"plugin"
-			)
-		).toBe("ask");
-		expect(
-			decideToolPermissionAction(permission, "external_directory", "*", "mcp")
+			decideToolPermissionAction(permission, "external_directory", "*")
 		).toBe("allow");
 	});
 });

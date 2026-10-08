@@ -11,7 +11,6 @@ test("dispatches manual compaction focus to its registered action", async () => 
 		"agent.select": () => undefined,
 		"app.exit": () => undefined,
 		"connection.open": () => undefined,
-		"dialog.mcps": () => undefined,
 		"dialog.sessions": () => undefined,
 		"dialog.theme": () => undefined,
 		"effort.select": () => undefined,

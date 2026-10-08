@@ -36,6 +36,8 @@ export type McpConfigDiagnosticCode =
 	| "invalid-timeout"
 	| "invalid-url"
 	| "missing-env"
+	| "project-local-server"
+	| "project-remote-server"
 	| "unsupported-auth";
 
 export type McpConfigDiagnostic = McpConfigOrigin &
@@ -101,6 +103,55 @@ const owner = (
 ): McpConfigOrigin =>
 	context.snapshot.sourceFor(["mcp", context.name, ...field]) ??
 	context.fallbackSource;
+
+const LOCAL_EXECUTION_FIELDS = [
+	"type",
+	"command",
+	"cwd",
+	"environment",
+] as const;
+
+const projectSourcedLocalField = (
+	snapshot: McpConfigSnapshot,
+	name: string,
+	server: ZodInfer<typeof rawServerPatchSchema>
+): string | undefined => {
+	const fields = [
+		...LOCAL_EXECUTION_FIELDS,
+		...(server.enabled === true ? ["enabled"] : []),
+	];
+	return fields.find(
+		(field) =>
+			Object.hasOwn(server, field) &&
+			snapshot.sourceFor(["mcp", name, field])?.scope === "project"
+	);
+};
+
+const diagnoseProjectLocalServer = (
+	diagnostics: McpConfigDiagnostic[],
+	snapshot: McpConfigSnapshot,
+	fallbackSource: McpConfigOrigin,
+	name: string,
+	server: ZodInfer<typeof rawServerPatchSchema>
+): boolean => {
+	if (server.type !== "local") {
+		return false;
+	}
+	const field = projectSourcedLocalField(snapshot, name, server);
+	if (field === undefined) {
+		return false;
+	}
+	const source = snapshot.sourceFor(["mcp", name, field]);
+	addDiagnostic(
+		diagnostics,
+		source ?? fallbackSource,
+		"project-local-server",
+		"Project configuration cannot provide executable settings for local MCP servers; configure the command, type, working directory, environment, and enablement in user configuration.",
+		serverPath(name, [field]),
+		name
+	);
+	return true;
+};
 
 const diagnosticCode = (field: readonly string[]): McpDiagnosticCode => {
 	const rootField = field[0] ?? "";
@@ -198,6 +249,73 @@ const resolveLocalServer = (
 		return;
 	}
 	return parsed.data;
+};
+
+const projectSourcedRemoteField = (
+	context: ResolutionContext,
+	server: ZodInfer<typeof rawServerPatchSchema>
+): readonly string[] | undefined => {
+	if (server.type !== "remote") {
+		return;
+	}
+	if (owner(context, ["type"]).scope === "project") {
+		return ["type"];
+	}
+	if (owner(context, ["url"]).scope === "project") {
+		return ["url"];
+	}
+	if (
+		server.enabled === true &&
+		owner(context, ["enabled"]).scope === "project"
+	) {
+		return ["enabled"];
+	}
+	for (const key of Object.keys(
+		isPlainObject(server.headers) ? server.headers : {}
+	)) {
+		const field = ["headers", key];
+		if (owner(context, field).scope === "project") {
+			return field;
+		}
+	}
+};
+
+const diagnoseProjectRemoteServer = (
+	context: ResolutionContext,
+	server: ZodInfer<typeof rawServerPatchSchema>
+): boolean => {
+	const field = projectSourcedRemoteField(context, server);
+	if (field === undefined) {
+		return false;
+	}
+	addDiagnostic(
+		context.diagnostics,
+		owner(context, field),
+		"project-remote-server",
+		"Project configuration cannot provide or enable remote MCP servers, or supply remote headers; configure remote endpoints and credentials in user configuration.",
+		serverPath(context.name, field),
+		context.name
+	);
+	return true;
+};
+
+const diagnoseUntrustedServer = (
+	context: ResolutionContext,
+	fallbackSource: McpConfigOrigin,
+	server: ZodInfer<typeof rawServerPatchSchema>
+): boolean => {
+	if (
+		diagnoseProjectLocalServer(
+			context.diagnostics,
+			context.snapshot,
+			fallbackSource,
+			context.name,
+			server
+		)
+	) {
+		return true;
+	}
+	return diagnoseProjectRemoteServer(context, server);
 };
 
 const resolveRemoteServer = (
@@ -350,6 +468,9 @@ export const resolveServers = ({
 		const validated = rawServerPatchSchema.safeParse(raw);
 		if (!validated.success) {
 			addSchemaDiagnostics(context, validated.error);
+			continue;
+		}
+		if (diagnoseUntrustedServer(context, fallbackSource, validated.data)) {
 			continue;
 		}
 		const resolved = resolveServer(context, validated.data);

@@ -44,12 +44,21 @@
         "typescript": "catalog:",
       },
     },
-    "packages/coding-agent": {
-      "name": "@wincode/coding-agent",
+    "packages/cli": {
+      "name": "@wincode/cli",
       "version": "0.1.0",
       "bin": {
         "wincode": "./bin/wincode.ts",
       },
+      "dependencies": {
+        "@wincode/coding-agent": "workspace:*",
+        "@wincode/mcp": "workspace:*",
+        "@wincode/subagents": "workspace:*",
+      },
+    },
+    "packages/coding-agent": {
+      "name": "@wincode/coding-agent",
+      "version": "0.1.0",
       "dependencies": {
         "@deepseek-ai/node-addon-system": "0.1.2",
         "@lickle/lock": "0.0.1",
@@ -58,8 +67,6 @@
         "@tanstack/react-router": "catalog:",
         "@wincode/agent-core": "workspace:*",
         "@wincode/ai": "workspace:*",
-        "@wincode/mcp": "workspace:*",
-        "@wincode/subagents": "workspace:*",
         "@wincode/utils": "workspace:*",
         "diff": "catalog:",
         "drizzle-orm": "^0.45.2",
@@ -81,6 +88,8 @@
         "@types/node": "^26.3.0",
         "@types/react": "^19.2.10",
         "@types/react-dom": "catalog:",
+        "@wincode/mcp": "workspace:*",
+        "@wincode/subagents": "workspace:*",
         "drizzle-kit": "^0.31.10",
       },
       "peerDependencies": {
@@ -93,6 +102,7 @@
     },
     "packages/mcp": {
       "name": "@wincode/mcp",
+      "version": "0.1.0",
       "dependencies": {
         "@modelcontextprotocol/client": "^2.0.0",
         "@wincode/agent-core": "workspace:*",
@@ -103,20 +113,29 @@
       "devDependencies": {
         "@modelcontextprotocol/server": "^2.0.0",
         "@types/bun": "catalog:",
+        "@wincode/coding-agent": "workspace:*",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "@wincode/coding-agent": "^0.1.0",
       },
     },
     "packages/subagents": {
       "name": "@wincode/subagents",
+      "version": "0.1.0",
       "dependencies": {
         "@wincode/agent-core": "workspace:*",
         "@wincode/utils": "workspace:*",
+        "type-fest": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
-        "@wincode/config": "workspace:*",
+        "@wincode/coding-agent": "workspace:*",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "@wincode/coding-agent": "^0.1.0",
       },
     },
     "packages/utils": {
@@ -421,6 +440,8 @@
     "@wincode/agent-core": ["@wincode/agent-core@workspace:packages/agent-core"],
 
     "@wincode/ai": ["@wincode/ai@workspace:packages/ai"],
+
+    "@wincode/cli": ["@wincode/cli@workspace:packages/cli"],
 
     "@wincode/coding-agent": ["@wincode/coding-agent@workspace:packages/coding-agent"],
 

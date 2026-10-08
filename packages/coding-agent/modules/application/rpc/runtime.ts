@@ -18,23 +18,19 @@ import {
 	resolveWorkspaceRoot,
 	toSessionId,
 } from "../../../modules/sessions/host/session-rpc";
-import type { OptionalApplicationPluginId } from "../plugin-composition";
 import { createApplicationPluginComposition } from "../plugin-composition";
 import type { RpcCompositionInput, RuntimeModules } from "./types";
 
 export const loadRuntime = async (
-	input: Pick<RpcCompositionInput, "configRuntime" | "pluginRuntime"> &
-		Readonly<{ enabledPlugins?: readonly OptionalApplicationPluginId[] }> = {}
+	input: Pick<
+		RpcCompositionInput,
+		"configRuntime" | "pluginRuntime" | "disabledPluginIds" | "pluginPaths"
+	> = {}
 ): Promise<RuntimeModules> => ({
 	createAgentTurnId,
 	createSessionCapabilities: async (sessionComposition) => {
 		const configStore = input.configRuntime?.configStore ?? createConfigStore();
-		const pluginComposition = createApplicationPluginComposition({
-			configStore,
-			createMcpResource: input.pluginRuntime === undefined,
-			enabledPlugins: input.enabledPlugins ?? ["mcp", "subagents"],
-			workspace: sessionComposition.workspace,
-		});
+		const pluginComposition = createApplicationPluginComposition();
 		const configRuntime = input.configRuntime ?? {
 			configStore,
 			cwd: sessionComposition.cwd,
@@ -44,9 +40,10 @@ export const loadRuntime = async (
 		const pluginRuntime =
 			input.pluginRuntime ??
 			(await loadPlugins({
-				bundledPlugins: pluginComposition.bundledPlugins,
-				cliPaths: [],
+				cliPaths: input.pluginPaths ?? [],
 				config: configRuntime,
+				disabledPluginIds: input.disabledPluginIds ?? [],
+				distributionPlugins: pluginComposition.distributionPlugins,
 			}));
 		let sessionSdk: SessionSdkChildFactory | undefined;
 		const assembly = await createSessionCapabilities({
@@ -66,7 +63,6 @@ export const loadRuntime = async (
 				configRuntime,
 				connections: assembly.capabilities.getConnections(),
 				cwd: sessionComposition.cwd,
-				enabledPlugins: input.enabledPlugins ?? ["mcp", "subagents"],
 				permissionService: createPermissionService({
 					autoApproval: sessionComposition.autoApproval,
 				}),

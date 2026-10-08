@@ -18,12 +18,11 @@ import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-c
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import {
 	composePermissionDecisions,
-	decideToolPermissionAction,
-	type PermissionActionFamily,
 	type PermissionDecision,
 	type ToolPermission,
 } from "@/modules/permissions/policy";
 import type { ToolPermissionRuntime } from "@/modules/permissions/tool-permission-runtime";
+import { permissionActionForPluginTool } from "@/modules/plugins/permission-action";
 import type {
 	PluginRuntime,
 	PluginToolDescriptor,
@@ -91,32 +90,13 @@ type PluginTurnResolution = Readonly<{
 		pluginRuntime?: PluginRuntime;
 		pluginTools?: readonly PluginToolDescriptor[];
 		resolvePluginPermission: (
-			action: `plugin:${string}:${string}`,
-			agentId?: AgentId
-		) => Promise<PluginPermissionResolution>;
-		resolveToolPermission: (
 			action: string,
 			resource: string,
-			agentId: AgentId | undefined,
-			family: PermissionActionFamily
+			agentId?: AgentId
 		) => Promise<PluginPermissionResolution>;
 	}>;
 	policies: Map<string, PermissionDecision>;
 }>;
-
-const resolvePermissionForAction = async (
-	toolPermission: ToolPermissionRuntime,
-	action: string,
-	resource: string,
-	agentId: AgentId,
-	family: PermissionActionFamily
-): Promise<PluginPermissionResolution> => {
-	const permission = await toolPermission.resolvePermissionForAgent(agentId);
-	return {
-		decision: decideToolPermissionAction(permission, action, resource, family),
-		safety: permission.safety,
-	};
-};
 
 const resolvePluginTurnContext = async (
 	input: Readonly<{
@@ -148,6 +128,12 @@ const resolvePluginTurnContext = async (
 							input.toolPermission.resolveAgentActionPolicyForAgent(
 								input.agentId
 							),
+						resolvePluginPermission: (action, resource) =>
+							input.toolPermission.resolvePluginPermissionForAgent(
+								action,
+								resource,
+								input.agentId
+							),
 						registerTurnCleanup: (cleanup) =>
 							input.hostContext.registerTurnCleanup?.(cleanup),
 						sessionId: input.sessionId,
@@ -159,18 +145,11 @@ const resolvePluginTurnContext = async (
 	const policies = await Promise.all(
 		pluginTools.map(async (tool) => {
 			const permission =
-				tool.permissionAction === undefined
-					? await input.toolPermission.resolvePluginPermissionForAgent(
-							tool.action,
-							input.agentId
-						)
-					: await resolvePermissionForAction(
-							input.toolPermission,
-							tool.permissionAction,
-							tool.permissionResource ?? "*",
-							input.agentId,
-							tool.permissionActionFamily ?? "plugin"
-						);
+				await input.toolPermission.resolvePluginPermissionForAgent(
+					permissionActionForPluginTool(tool),
+					tool.permissionResource ?? "*",
+					input.agentId
+				);
 			return [
 				tool.name,
 				tool.permissionDecision === undefined
@@ -188,18 +167,11 @@ const resolvePluginTurnContext = async (
 				? {}
 				: { pluginRuntime: input.pluginRuntime }),
 			pluginTools,
-			resolvePluginPermission: (action, agentId) =>
+			resolvePluginPermission: (action, resource, agentId) =>
 				input.toolPermission.resolvePluginPermissionForAgent(
 					action,
-					agentId ?? input.agentId
-				),
-			resolveToolPermission: (action, resource, agentId, family) =>
-				resolvePermissionForAction(
-					input.toolPermission,
-					action,
 					resource,
-					agentId ?? input.agentId,
-					family
+					agentId ?? input.agentId
 				),
 		},
 		policies: new Map(policies),
@@ -612,14 +584,6 @@ export const createSessionPorts = ({
 				gate: tooling.gate,
 				resourceLimits,
 				resolveResourceLimits: tooling.resolveResourceLimits,
-				resolveToolPermission: (action, resource, agentId, family) =>
-					resolvePermissionForAction(
-						toolPermission,
-						action,
-						resource,
-						agentId ?? execution.agent,
-						family
-					),
 				sessionId,
 				signal,
 				...(sessionSdk === undefined ? {} : { sessionSdk }),

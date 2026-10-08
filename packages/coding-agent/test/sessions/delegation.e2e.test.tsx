@@ -8,13 +8,17 @@ import type {
 	ModelStepRequest,
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
+import {
+	getSharedSubagentsTaskStore,
+	resolveSubagentsDatabasePath,
+} from "@wincode/subagents/plugin";
 import { act } from "react";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
-import { getSharedSubagentsTaskStore } from "@/plugins/subagents/store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
+import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClient,
@@ -61,16 +65,12 @@ const recorder = createFakeModelClientRecorder();
 const runtimeFactory = () =>
 	createAgentRuntime({ modelClient: createFakeModelClient(recorder) });
 const taskStore = await getSharedSubagentsTaskStore(
-	join(testDirectory, "subagents.sqlite")
+	resolveSubagentsDatabasePath(testDirectory, resolveUserDataDir())
 );
-const composition = createApplicationPluginComposition({
-	createMcpResource: false,
-	enabledPlugins: ["mcp", "subagents"],
-	workspace: testDirectory,
-});
+const composition = createApplicationPluginComposition();
 const pluginRuntime = await loadPlugins({
-	bundledPlugins: composition.bundledPlugins,
 	cliPaths: [],
+	distributionPlugins: composition.distributionPlugins,
 	config: {
 		configStore: createConfigStore({
 			configRoot: testDirectory,
@@ -98,6 +98,8 @@ afterAll(async () => {
 });
 
 const CHILD_PROMPT = "Inspect the repository state.";
+const delegatePermissionDocument =
+	'{"permission":{"plugin:subagents:delegate":"allow"}}';
 const CHILD_OUTPUT = "Child investigation stays in its own Session.";
 const PARENT_OUTPUT = "Parent received a child Task ID.";
 const configDocument = `{
@@ -152,6 +154,7 @@ test("projects delegated work as a separate durable Session, not parent transcri
 	try {
 		const rendered = await renderSession({
 			configDocument,
+			globalConfigDocument: delegatePermissionDocument,
 			pricing: createE2ePricing(200_000),
 			sessionId: parentSessionId,
 		});
@@ -300,6 +303,7 @@ test("shows a minimal parent notice for a background child's pending approval", 
 	try {
 		const rendered = await renderSession({
 			configDocument: approvalConfigDocument,
+			globalConfigDocument: delegatePermissionDocument,
 			pricing: createE2ePricing(200_000),
 			sessionId: parentSessionId,
 		});

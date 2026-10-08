@@ -63,6 +63,18 @@ describe("mcp sanitize", () => {
 		expect(message).not.toContain("Bearer");
 	});
 
+	test("sanitizeMessage redacts arbitrary URLs from client errors", () => {
+		const message = sanitizeMessage(
+			localConfig(),
+			new Error("request failed at https://debug.example/path?token=secret"),
+			"fallback"
+		);
+
+		expect(message).not.toContain("debug.example");
+		expect(message).not.toContain("token=secret");
+		expect(message).toContain("[redacted]");
+	});
+
 	test("sanitizeMessage uses the fallback when config is undefined", () => {
 		expect(sanitizeMessage(undefined, new Error("raw error"), "fallback")).toBe(
 			"fallback"

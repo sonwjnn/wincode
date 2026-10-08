@@ -10,11 +10,9 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
-import { createMcpRegistry } from "@wincode/mcp";
 import { act } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { McpProvider } from "@/modules/mcp";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	createPermissionService,
@@ -72,24 +70,11 @@ describe("NewSessionView composer focus", () => {
 											<PromptConfigProvider>
 												<ModelPricingProvider pricing={{}}>
 													<DialogProvider>
-														<McpProvider
-															closeRegistryOnUnmount={false}
-															createRegistry={() =>
-																createMcpRegistry({
-																	loadConfig: async () => ({
-																		diagnostics: [],
-																		servers: {},
-																	}),
-																	workspace,
-																})
-															}
-														>
-															<RouterContextProvider router={router}>
-																<CommandControllerProvider>
-																	<NewSessionView />
-																</CommandControllerProvider>
-															</RouterContextProvider>
-														</McpProvider>
+														<RouterContextProvider router={router}>
+															<CommandControllerProvider>
+																<NewSessionView />
+															</CommandControllerProvider>
+														</RouterContextProvider>
 													</DialogProvider>
 												</ModelPricingProvider>
 											</PromptConfigProvider>

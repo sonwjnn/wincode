@@ -1,4 +1,4 @@
-import type { PluginFactory } from "@wincode/coding-agent/plugin";
+import type { PluginFactory } from "@wincode/coding-agent";
 import { z } from "zod";
 
 const lateRegistrationPlugin: PluginFactory = (api) => {
@@ -15,7 +15,7 @@ const lateRegistrationPlugin: PluginFactory = (api) => {
 				"An invalid later registration must not clear earlier tools.",
 			handler: () => ({ output: "invalid", type: "success" }),
 			inputSchema: z.object({}),
-			name: "invalid-name",
+			name: "invalid.name",
 		});
 	} catch {
 		// The host reports the rejected registration independently.

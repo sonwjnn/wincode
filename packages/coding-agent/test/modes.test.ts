@@ -30,7 +30,7 @@ import { createSessionCapabilities } from "../modules/sessions/host/session-capa
 import { createSessionHost } from "../modules/sessions/host/session-host";
 import {
 	createSessionSdkChildFactory,
-	type SessionSdkOptions,
+	type SessionSdkRuntimeOptions,
 } from "../modules/sessions/sdk";
 import type { SessionSdkChildFactory } from "../modules/sessions/sdk-contract";
 import {
@@ -106,24 +106,20 @@ const composeCapabilitiesDetailedFor =
 		configRuntime,
 		cwd,
 		pluginRuntime: providedPluginRuntime,
+		disabledPluginIds,
+		pluginPaths,
 		workspace: root,
-		enabledPlugins = ["mcp", "subagents"],
 	}: OneShotCompositionInput) => {
 		const configStore = configRuntime?.configStore ?? createConfigStore();
 		if (configRuntime === undefined) {
 			await configStore.setValue(
 				root,
-				"project",
-				["permission", "delegate"],
+				"global",
+				["permission", "plugin:subagents:delegate"],
 				"allow"
 			);
 		}
-		const composition = createApplicationPluginComposition({
-			configStore,
-			createMcpResource: false,
-			enabledPlugins,
-			workspace: root,
-		});
+		const composition = createApplicationPluginComposition();
 		const resolvedConfigRuntime = configRuntime ?? {
 			configStore,
 			cwd,
@@ -133,9 +129,10 @@ const composeCapabilitiesDetailedFor =
 		const pluginRuntime =
 			providedPluginRuntime ??
 			(await loadPlugins({
-				bundledPlugins: composition.bundledPlugins,
-				cliPaths: [],
+				cliPaths: pluginPaths ?? [],
 				config: resolvedConfigRuntime,
+				disabledPluginIds,
+				distributionPlugins: composition.distributionPlugins,
 			}));
 		let sessionSdk: SessionSdkChildFactory | undefined;
 		const assembly = await createSessionCapabilities({
@@ -157,12 +154,11 @@ const composeCapabilitiesDetailedFor =
 				configStore,
 				connections,
 				cwd,
-				enabledPlugins,
 				registry: agentRegistry,
 				runtimeFactory: () => fakeRuntime,
 				store: assembly.store,
 				workspace: root,
-			} satisfies SessionSdkOptions,
+			} satisfies SessionSdkRuntimeOptions,
 			assembly.capabilities.getSessionHostManager(),
 			assembly.store
 		);

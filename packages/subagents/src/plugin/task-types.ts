@@ -1,8 +1,11 @@
 import type { AgentId, AgentTurnId, ToolCallId } from "@wincode/agent-core";
-import { delegationResultSchema } from "@wincode/subagents";
+import type { SessionSdkHandle } from "@wincode/coding-agent";
 import type { Tagged } from "type-fest";
 import { z } from "zod";
-import type { SessionId } from "@/shared/identifiers";
+import { delegationResultSchema } from "../tools";
+
+export type SessionId = SessionSdkHandle["sessionId"];
+export const toSessionId = (value: string): SessionId => value as SessionId;
 
 export type DelegationTaskId = Tagged<string, "DelegationTaskId">;
 export const toDelegationTaskId = (value: string): DelegationTaskId =>

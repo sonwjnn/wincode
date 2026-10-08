@@ -10,7 +10,7 @@ import {
 	useAgentRegistry,
 } from "@/modules/agents";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
-import { McpActiveIndicator } from "@/modules/mcp";
+import { PluginStatusIndicator } from "@/modules/plugins/ui/plugin-status-indicator";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { createSessionUserMessage } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
@@ -299,7 +299,7 @@ export function NewSessionView() {
 				paddingX={2}
 				width="100%"
 			>
-				<McpActiveIndicator />
+				<PluginStatusIndicator />
 				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 					{`v${APP_VERSION}`}
 				</text>

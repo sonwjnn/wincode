@@ -63,7 +63,7 @@ export type McpAgentToolDecision = Readonly<{
 
 export type McpAgentDecisionResolver = (
 	tool: McpAgentToolRequest
-) => McpAgentToolDecision;
+) => McpAgentToolDecision | Promise<McpAgentToolDecision>;
 
 export type McpServerState =
 	| "disabled"
@@ -435,7 +435,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				candidate.config.name,
 				candidate.tool.name
 			);
-			const agentPolicy = resolveAgentDecision({
+			const agentPolicy = await resolveAgentDecision({
 				logicalName,
 				serverName: candidate.config.name,
 				toolName: candidate.tool.name,
@@ -784,6 +784,45 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return refresh;
 	};
 
+	const reconnectInvalidEntry = async (serverName: string): Promise<void> => {
+		const config = (await loadCurrentConfig(true)).servers[serverName];
+		if (isUndefined(config)) {
+			emit();
+			return;
+		}
+		if (serverEntries.has(serverName)) {
+			return;
+		}
+		const entry: ServerEntry = {
+			client: undefined,
+			config,
+			error: undefined,
+			executionController: new AbortController(),
+			state: config.disabled ? "disabled" : "connecting",
+			tools: [],
+		};
+		invalidStatuses.delete(serverName);
+		serverEntries.set(serverName, entry);
+		if (!config.disabled) {
+			await connectEntry(entry);
+		}
+		emit();
+	};
+
+	const reconnectExistingEntry = async (
+		entry: ServerEntry,
+		serverName: string
+	): Promise<void> => {
+		if (!(await refreshEntryConfig(entry, serverName))) {
+			return;
+		}
+		if (entry.config.disabled) {
+			await deactivateEntry(entry, "disabled");
+			return;
+		}
+		await doReconnect(entry);
+	};
+
 	const reconnect = (serverName: string): Promise<void> => {
 		const inFlight = reconnects.get(serverName);
 		if (!isUndefined(inFlight)) {
@@ -791,41 +830,17 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 		const run = runEntryOperation(serverName, async () => {
 			await init();
-			let entry = serverEntries.get(serverName);
-			if (isUndefined(entry) && invalidStatuses.has(serverName)) {
-				const config = (await loadCurrentConfig(true)).servers[serverName];
-				if (isUndefined(config)) {
-					emit();
-					return;
+			const entry = serverEntries.get(serverName);
+			if (isUndefined(entry)) {
+				if (invalidStatuses.has(serverName)) {
+					await reconnectInvalidEntry(serverName);
 				}
-				if (serverEntries.has(serverName)) {
-					return;
-				}
-				entry = {
-					client: undefined,
-					config,
-					error: undefined,
-					executionController: new AbortController(),
-					state: "connecting",
-					tools: [],
-				};
-				invalidStatuses.delete(serverName);
-				serverEntries.set(serverName, entry);
-				await connectEntry(entry);
-				emit();
 				return;
 			}
-			if (
-				isUndefined(entry) ||
-				entry.state === "disabled" ||
-				entry.state === "connecting"
-			) {
+			if (entry.state === "disabled" || entry.state === "connecting") {
 				return;
 			}
-			if (!(await refreshEntryConfig(entry, serverName))) {
-				return;
-			}
-			await doReconnect(entry);
+			await reconnectExistingEntry(entry, serverName);
 		});
 		reconnects.set(serverName, run);
 		run.then(

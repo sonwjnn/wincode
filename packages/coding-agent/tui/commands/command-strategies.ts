@@ -14,7 +14,6 @@ import {
 } from "@/modules/commands/commands";
 import type { CommandHandlerMap } from "@/modules/commands/execute-command";
 import { ConnectDialogContent } from "@/modules/connections";
-import { McpStatusDialogContent } from "@/modules/mcp";
 import type { PromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
 import { EffortDialogContent } from "@/modules/prompt-settings/ui/effort-dialog";
@@ -195,11 +194,6 @@ const STRATEGIES = {
 				},
 			});
 		},
-	},
-	"dialog.mcps": {
-		kind: "dialog",
-		title: "MCPs",
-		content: () => createElement(McpStatusDialogContent),
 	},
 	"app.exit": {
 		kind: "action",

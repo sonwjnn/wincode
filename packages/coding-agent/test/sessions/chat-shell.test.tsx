@@ -1,7 +1,6 @@
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
-import { createMcpRegistry } from "@wincode/mcp";
 import { isUndefined } from "@wincode/utils";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import {
@@ -57,7 +56,6 @@ const {
 const { AgentRegistryProvider } = await import("@/modules/agents");
 const { createConnections } = await import("@wincode/ai/connections");
 const { ConnectionsProvider } = await import("@/modules/connections");
-const { McpProvider } = await import("@/modules/mcp");
 const { ModelPricingProvider } = await import("@/modules/model-pricing");
 const { createPermissionService, PermissionServiceProvider } = await import(
 	"@/modules/permissions"
@@ -339,35 +337,22 @@ const renderChatShell = async (
 										<PromptConfigProvider>
 											<ModelPricingProvider>
 												<DialogProvider>
-													<McpProvider
-														closeRegistryOnUnmount={false}
-														createRegistry={() =>
-															createMcpRegistry({
-																loadConfig: async () => ({
-																	diagnostics: [],
-																	servers: {},
-																}),
-																workspace,
-															})
-														}
-													>
-														<RouterContextProvider router={router}>
-															<CommandControllerProvider>
-																<ChatShellProbe
-																	activeMessages={activeMessages}
-																	agentHolder={agent}
-																	holder={holder}
-																	initialCompactions={initialCompactions}
-																	initialMessages={initialMessages}
-																	isBusy={isBusy}
-																	isCompacting={isCompacting}
-																	isInterruptArmed={isInterruptArmed}
-																	onRetry={onRetry}
-																	queuedSubmissions={queuedSubmissions}
-																/>
-															</CommandControllerProvider>
-														</RouterContextProvider>
-													</McpProvider>
+													<RouterContextProvider router={router}>
+														<CommandControllerProvider>
+															<ChatShellProbe
+																activeMessages={activeMessages}
+																agentHolder={agent}
+																holder={holder}
+																initialCompactions={initialCompactions}
+																initialMessages={initialMessages}
+																isBusy={isBusy}
+																isCompacting={isCompacting}
+																isInterruptArmed={isInterruptArmed}
+																onRetry={onRetry}
+																queuedSubmissions={queuedSubmissions}
+															/>
+														</CommandControllerProvider>
+													</RouterContextProvider>
 												</DialogProvider>
 											</ModelPricingProvider>
 										</PromptConfigProvider>

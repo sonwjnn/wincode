@@ -13,8 +13,14 @@ describe("parseCliOptions", () => {
 
 	test("disables each bundled optional Plugin independently", () => {
 		expect(
-			parseCliOptions(["node", "cli", "--no-mcp", "--no-subagents"])
-				.disabledPlugins
+			parseCliOptions([
+				"node",
+				"cli",
+				"--no-plugin",
+				"mcp",
+				"--no-plugin",
+				"subagents",
+			]).disabledPlugins
 		).toEqual(["mcp", "subagents"]);
 	});
 });

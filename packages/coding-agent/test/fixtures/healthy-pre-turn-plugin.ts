@@ -1,4 +1,4 @@
-import type { PluginFactory } from "@wincode/coding-agent/plugin";
+import type { PluginFactory } from "@wincode/coding-agent";
 import { z } from "zod";
 
 const healthyPreTurnPlugin: PluginFactory = (api) => {

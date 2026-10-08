@@ -25,21 +25,20 @@ import type {
 } from "@wincode/ai/model-client";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import {
-	createMcpRegistry,
 	type McpClient,
 	type McpConfigResult,
 	qualifyMcpToolName,
 	type ResolvedMcpServerConfig,
 } from "@wincode/mcp";
+import {
+	createMcpPluginFactory,
+	type McpPluginDependencies,
+} from "@wincode/mcp/plugin";
 import { logger } from "@wincode/utils";
 import { z } from "zod";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
-import {
-	createMcpSessionCapability,
-	type McpPluginResource,
-} from "@/modules/mcp/capability";
 import { loadPlugins } from "@/modules/plugins/loader";
 import {
 	createPluginRuntime,
@@ -77,7 +76,6 @@ import {
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
-import { createMcpPluginFactory } from "@/plugins/mcp";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
@@ -294,14 +292,10 @@ type SessionHostTestCapabilitiesOptions = Readonly<{
 	pluginRuntime?: PluginRuntime;
 }>;
 
-const bundledComposition = createApplicationPluginComposition({
-	createMcpResource: false,
-	enabledPlugins: ["mcp", "subagents"],
-	workspace: testDirectory,
-});
+const bundledComposition = createApplicationPluginComposition();
 const bundledPluginRuntime = await loadPlugins({
-	bundledPlugins: bundledComposition.bundledPlugins,
 	cliPaths: [],
+	distributionPlugins: bundledComposition.distributionPlugins,
 	config: {
 		configStore: createConfigStore({
 			configRoot: join(testDirectory, "config"),
@@ -320,6 +314,23 @@ const createCapabilities = (
 	options: SessionHostTestCapabilitiesOptions = {}
 ): SessionCapabilities => {
 	const workspace = options.workspace ?? process.cwd();
+	const configSources =
+		options.configSources ??
+		(Object.keys(document).length === 0
+			? []
+			: [
+					{
+						document,
+						path: join(workspace, "wincode.json"),
+						scope: "project" as const,
+					},
+				]);
+	const configSnapshot: ConfigSnapshot = {
+		diagnostics: [],
+		document,
+		sourceFor: () => configSources[0],
+		sources: configSources,
+	};
 	const registry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
 			diagnostics: [],
@@ -328,16 +339,21 @@ const createCapabilities = (
 			sources: options.configSources ?? [],
 		})
 	);
-	const config = {
-		configStore: createConfigStore({
-			fs: {
-				readFile: async () => {
-					throw Object.assign(new Error("Test config is unavailable."), {
-						code: "ENOENT",
-					});
-				},
+	const configStore = createConfigStore({
+		fs: {
+			readFile: async () => {
+				throw Object.assign(new Error("Test config is unavailable."), {
+					code: "ENOENT",
+				});
 			},
-		}),
+		},
+	});
+	const config = {
+		configStore: {
+			...configStore,
+			getSnapshot: async () => configSnapshot,
+			refreshSnapshot: async () => configSnapshot,
+		},
 		cwd: workspace,
 		homeRoot: options.homeRoot ?? homedir(),
 		workspace,
@@ -348,14 +364,10 @@ const createCapabilities = (
 		getRegistry: () => registry,
 		service: createPermissionService(),
 		workspace,
+		configRuntime: config,
 	});
 	const pluginRuntime = options.pluginRuntime ?? bundledPluginRuntime;
-	const composition = createApplicationPluginComposition({
-		configStore: config.configStore,
-		createMcpResource: false,
-		enabledPlugins: ["mcp", "subagents"],
-		workspace,
-	});
+	const composition = createApplicationPluginComposition();
 	let sessionSdk: SessionSdkChildFactory | undefined;
 	const capabilities: SessionCapabilities = {
 		getApprovalMode: () => options.approvalMode ?? "interactive",
@@ -397,7 +409,6 @@ const createCapabilities = (
 			configRuntime: config,
 			connections: capabilities.getConnections(),
 			cwd: workspace,
-			enabledPlugins: ["mcp", "subagents"],
 			registry,
 			store: sessionStore,
 			workspace,
@@ -572,10 +583,10 @@ test("Plugin lifecycle restarts for a reopened Session runtime", async () => {
 	]);
 });
 
-const createHostMcpRegistry = (
+const createHostMcpPluginDependencies = (
 	executedServers: string[],
 	includeExternalDirectoryTool = false
-) => {
+): McpPluginDependencies => {
 	const serverConfigs: ResolvedMcpServerConfig[] = [
 		"server-denied",
 		"agent-denied",
@@ -591,7 +602,7 @@ const createHostMcpRegistry = (
 			timeout: { startup: 1000, catalog: 1000, execution: 1000 },
 		})
 	);
-	return createMcpRegistry({
+	return {
 		createClient: (config): McpClient => ({
 			callTool: async (toolName) => {
 				executedServers.push(config.name);
@@ -622,8 +633,7 @@ const createHostMcpRegistry = (
 				serverConfigs.map((config) => [config.name, config])
 			),
 		}),
-		workspace: process.cwd(),
-	});
+	};
 };
 
 const createDelayedTerminalStore = (base: SessionStore) => {
@@ -738,19 +748,15 @@ test("retains an idle Session Host until registered Plugin background work finis
 
 test("MCP tool execution honors an Agent action-glob permission at call time", async () => {
 	const executedServers: string[] = [];
-	const mcpRegistry = createHostMcpRegistry(executedServers);
-	const mcpResource: McpPluginResource = Object.freeze({
-		capability: Object.freeze(createMcpSessionCapability(mcpRegistry)),
-		close: () => mcpRegistry.close(),
-		initialize: () => mcpRegistry.initialize(),
-		registry: mcpRegistry,
-	});
+	const mcpPluginFactory = createMcpPluginFactory(
+		createHostMcpPluginDependencies(executedServers)
+	);
 	const pluginRuntime = await loadPlugins({
-		bundledPlugins: [
-			...bundledComposition.bundledPlugins.filter(({ id }) => id !== "mcp"),
-			{ factory: createMcpPluginFactory(mcpResource), id: "mcp" },
-		],
+		bundledPlugins: [{ factory: mcpPluginFactory, id: "mcp" }],
 		cliPaths: [],
+		distributionPlugins: bundledComposition.distributionPlugins.filter(
+			({ id }) => id !== "mcp"
+		),
 		config: {
 			configStore: createConfigStore({
 				configRoot: join(testDirectory, "config"),
@@ -766,9 +772,9 @@ test("MCP tool execution honors an Agent action-glob permission at call time", a
 		agents: {
 			build: {
 				permission: {
-					"server-denied_echo": "allow",
-					"agent-denied_echo": "deny",
-					"allowed_*": "ask",
+					"plugin:mcp:server-denied_echo": "allow",
+					"plugin:mcp:agent-denied_echo": "deny",
+					"plugin:mcp:allowed_*": "ask",
 				},
 			},
 		},
@@ -854,19 +860,15 @@ test("MCP tool execution honors an Agent action-glob permission at call time", a
 
 test("MCP logical action names use their family when they collide with fixed actions", async () => {
 	const executedServers: string[] = [];
-	const mcpRegistry = createHostMcpRegistry(executedServers, true);
-	const mcpResource: McpPluginResource = Object.freeze({
-		capability: Object.freeze(createMcpSessionCapability(mcpRegistry)),
-		close: () => mcpRegistry.close(),
-		initialize: () => mcpRegistry.initialize(),
-		registry: mcpRegistry,
-	});
+	const mcpPluginFactory = createMcpPluginFactory(
+		createHostMcpPluginDependencies(executedServers, true)
+	);
 	const pluginRuntime = await loadPlugins({
-		bundledPlugins: [
-			...bundledComposition.bundledPlugins.filter(({ id }) => id !== "mcp"),
-			{ factory: createMcpPluginFactory(mcpResource), id: "mcp" },
-		],
+		bundledPlugins: [{ factory: mcpPluginFactory, id: "mcp" }],
 		cliPaths: [],
+		distributionPlugins: bundledComposition.distributionPlugins.filter(
+			({ id }) => id !== "mcp"
+		),
 		config: {
 			configStore: createConfigStore({
 				configRoot: join(testDirectory, "config"),
@@ -882,10 +884,10 @@ test("MCP logical action names use their family when they collide with fixed act
 		agents: {
 			build: {
 				permission: {
-					"server-denied_echo": "deny",
-					"agent-denied_echo": "deny",
-					allowed_echo: "deny",
-					"external_*": "allow",
+					"plugin:mcp:server-denied_echo": "deny",
+					"plugin:mcp:agent-denied_echo": "deny",
+					"plugin:mcp:allowed_echo": "deny",
+					"plugin:mcp:external_*": "allow",
 				},
 			},
 		},
@@ -895,7 +897,7 @@ test("MCP logical action names use their family when they collide with fixed act
 			{
 				document: fromPartial<ConfigSnapshot["document"]>(configDocument),
 				path: join(testDirectory, "mcp-action-family-policy.json"),
-				scope: "project",
+				scope: "global",
 			},
 		],
 		pluginRuntime,

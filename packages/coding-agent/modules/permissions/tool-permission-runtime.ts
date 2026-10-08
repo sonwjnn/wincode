@@ -15,7 +15,7 @@ import {
 	createResolvedToolPermission,
 	DEFAULT_PERMISSION_RULES,
 	type EffectiveAgentPolicy,
-	type PermissionAction,
+	isNativeToolPermissionAction,
 	type PermissionDecision,
 	type ToolPermission,
 } from "./policy";
@@ -29,7 +29,8 @@ export type ToolPermissionRuntime = {
 	resolvePermission: () => Promise<ToolPermission>;
 	resolvePermissionForAgent: (agent: AgentId) => Promise<ToolPermission>;
 	resolvePluginPermissionForAgent: (
-		action: PermissionAction,
+		action: string,
+		resource: string,
 		agent?: AgentId
 	) => Promise<Readonly<{ decision: PermissionDecision; safety: boolean }>>;
 	resolveResourceLimits: () => Promise<ToolResourceLimits>;
@@ -174,16 +175,22 @@ export const createToolPermissionRuntime = ({
 			Promise.resolve(resolvePoliciesForAgent(currentAgent()).permission),
 		resolvePermissionForAgent: (targetAgent) =>
 			Promise.resolve(resolvePoliciesForAgent(targetAgent).permission),
-		resolvePluginPermissionForAgent: async (action, targetAgent) => {
+		resolvePluginPermissionForAgent: async (action, resource, targetAgent) => {
 			if (configRuntime === undefined) {
 				return { decision: "ask", safety: true };
+			}
+			if (isNativeToolPermissionAction(action)) {
+				// A Plugin's logical action cannot borrow a native tool's decision.
+				// The registered tool is resolved later under its owner-qualified action.
+				return { decision: "allow", safety: false };
 			}
 			const snapshot = await configRuntime.configStore.getSnapshot(workspace);
 			const effectiveAgent = targetAgent ?? currentAgent();
 			const pluginPermission = resolvePluginToolPermission(
 				snapshot,
 				effectiveAgent,
-				action as `plugin:${string}:${string}`
+				action,
+				resource
 			);
 			const agentPermission =
 				resolvePoliciesForAgent(effectiveAgent).permission;

@@ -1,17 +1,15 @@
 {
   "name": "@wincode/coding-agent",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "module": "./index.ts",
-  "bin": {
-    "wincode": "./bin/wincode.ts"
-  },
   "exports": {
     ".": {
-      "types": "./index.ts",
+      "types": "./index.d.ts",
       "import": "./index.ts"
     },
+    "./cli": "./bin/wincode.ts",
     "./session-host": {
       "types": "./modules/sessions/host/session-host.ts",
       "import": "./modules/sessions/host/session-host.ts"
@@ -23,10 +21,6 @@
     "./session-rpc": {
       "types": "./modules/sessions/host/session-rpc.ts",
       "import": "./modules/sessions/host/session-rpc.ts"
-    },
-    "./plugin": {
-      "types": "./modules/plugins/public.ts",
-      "import": "./modules/plugins/public.ts"
     }
   },
   "scripts": {
@@ -48,8 +42,6 @@
     "@tanstack/react-router": "catalog:",
     "@wincode/agent-core": "workspace:*",
     "@wincode/ai": "workspace:*",
-    "@wincode/mcp": "workspace:*",
-    "@wincode/subagents": "workspace:*",
     "@wincode/utils": "workspace:*",
     "diff": "catalog:",
     "drizzle-orm": "^0.45.2",
@@ -71,6 +63,8 @@
     "@types/node": "^26.3.0",
     "@types/react": "^19.2.10",
     "@types/react-dom": "catalog:",
+    "@wincode/mcp": "workspace:*",
+    "@wincode/subagents": "workspace:*",
     "drizzle-kit": "^0.31.10"
   },
   "peerDependencies": {

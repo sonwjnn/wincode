@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { createAgentRuntime } from "@wincode/agent-core";
 import type {
@@ -9,22 +10,31 @@ import type {
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import { defaultChatModelSelection } from "@wincode/ai/models";
-import { createSessionSdk } from "@wincode/coding-agent";
+import {
+	createSessionSdk as createPublicSessionSdk,
+	type SessionSdkOptions,
+} from "@wincode/coding-agent";
+import {
+	getSharedSubagentsTaskStore,
+	resolveSubagentsDatabasePath,
+} from "@wincode/subagents/plugin";
 import {
 	type AgentRegistry,
 	buildAgentRegistry,
 } from "@/modules/agents/registry";
 import { createSessionCapabilities } from "@/modules/sessions/host/session-capabilities";
+import { createSessionSdkWithRuntime as createSessionSdk } from "@/modules/sessions/sdk";
+import type {
+	SessionSdk,
+	SessionSdkHandle,
+} from "@/modules/sessions/sdk-contract";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import {
-	getSharedSubagentsTaskStore,
-	resolveSubagentsDatabasePath,
-} from "@/plugins/subagents/store";
 import {
 	type ConfigSnapshot,
 	createConfigStore,
 } from "@/shared/config/config-store";
+import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
@@ -36,6 +46,13 @@ const workspace = path.join(root, "workspace");
 const storeRoot = path.join(root, "data");
 const configRoot = path.join(root, "config");
 const homeRoot = path.join(root, "home");
+const subagentsPluginPath = fileURLToPath(
+	import.meta.resolve("@wincode/subagents/plugin")
+);
+const configuredSessionSdkPluginPath = path.resolve(
+	import.meta.dir,
+	"../fixtures/configured-session-sdk-plugin.ts"
+);
 await Promise.all(
 	[workspace, storeRoot, configRoot, homeRoot].map((directory) =>
 		mkdir(directory, { recursive: true })
@@ -46,6 +63,40 @@ const store = createDrizzleSessionStore(database.db, {
 	workspaceRoot: workspace,
 });
 const configStore = createConfigStore({ configRoot, homeRoot });
+
+test("public Session SDK options do not expose host-internal dependencies", () => {
+	const validOptions: SessionSdkOptions = {
+		pluginPaths: [],
+		workspace,
+	};
+	expect(validOptions.workspace).toBe(workspace);
+
+	// @ts-expect-error ConfigStore injection is an internal host dependency.
+	const invalidOptions: SessionSdkOptions = { configStore };
+	void invalidOptions;
+});
+
+test("public Session SDK creates durable Sessions using public options", async () => {
+	const sdk = await createPublicSessionSdk({
+		cwd: workspace,
+		databasePath: path.join(storeRoot, "public-sdk.sqlite"),
+		pluginPaths: [],
+		workspace,
+	});
+	try {
+		const sessionId = await sdk.createEmptySession({
+			model: defaultChatModelSelection,
+		});
+		const handle = await sdk.openSession(sessionId);
+		try {
+			expect(handle.sessionId).toBe(sessionId);
+		} finally {
+			await handle.dispose();
+		}
+	} finally {
+		await sdk.dispose();
+	}
+});
 
 afterAll(async () => {
 	database.sqlite.close();
@@ -97,12 +148,11 @@ test("a Session's Tool Permission follows its Agent registry after hydration", a
 	}
 });
 
-test("the public Session SDK creates an empty durable Session and reopens it", async () => {
+test("an injected Session SDK creates an empty durable Session and reopens it", async () => {
 	const sdk = await createSessionSdk({
 		configStore,
 		cwd: workspace,
 		database: database.db,
-		enabledPlugins: [],
 		pluginPaths: [],
 		store,
 		workspace,
@@ -133,12 +183,57 @@ test("the public Session SDK creates an empty durable Session and reopens it", a
 	}
 });
 
-test("the public Session SDK reserves an empty Session before opening it", async () => {
+test("the public Session SDK loads user-configured Plugins but child SDKs do not inherit them", async () => {
+	const xdgConfigHome = path.join(root, "configured-plugin-xdg");
+	const userConfigDirectory = path.join(xdgConfigHome, "wincode");
+	const markerPath = path.join(workspace, ".configured-session-sdk-plugin");
+	await mkdir(userConfigDirectory, { recursive: true });
+	await Bun.write(
+		path.join(userConfigDirectory, "wincode.json"),
+		JSON.stringify({ plugins: [configuredSessionSdkPluginPath] })
+	);
+	const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+	process.env.XDG_CONFIG_HOME = xdgConfigHome;
+
+	let sdk: SessionSdk | undefined;
+	let childSdk: SessionSdk | undefined;
+	let parentHandle: SessionSdkHandle | undefined;
+	let childHandle: SessionSdkHandle | undefined;
+	try {
+		sdk = await createPublicSessionSdk({
+			cwd: workspace,
+			databasePath: path.join(storeRoot, "configured-plugin-sdk.sqlite"),
+			workspace,
+		});
+		parentHandle = await sdk.createSession({
+			model: defaultChatModelSelection,
+		});
+		expect(await Bun.file(markerPath).text()).toBe(parentHandle.sessionId);
+
+		childSdk = await sdk.createChildSdk({ pluginPaths: [] });
+		childHandle = await childSdk.createSession({
+			model: defaultChatModelSelection,
+		});
+		expect(await Bun.file(markerPath).text()).toBe(parentHandle.sessionId);
+	} finally {
+		await childHandle?.dispose();
+		await childSdk?.dispose();
+		await parentHandle?.dispose();
+		await sdk?.dispose();
+		if (previousXdgConfigHome === undefined) {
+			delete process.env.XDG_CONFIG_HOME;
+		} else {
+			process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+		}
+		await rm(markerPath, { force: true });
+	}
+});
+
+test("an injected Session SDK reserves an empty Session before opening it", async () => {
 	const sdk = await createSessionSdk({
 		configStore,
 		cwd: workspace,
 		database: database.db,
-		enabledPlugins: [],
 		pluginPaths: [],
 		store,
 		workspace,
@@ -162,17 +257,16 @@ test("the public Session SDK reserves an empty Session before opening it", async
 	}
 });
 
-test("the public Session SDK creates a child SDK with an explicit Plugin set", async () => {
+test("an injected Session SDK creates a child SDK with an explicit Plugin set", async () => {
 	const sdk = await createSessionSdk({
 		configStore,
 		cwd: workspace,
 		database: database.db,
-		enabledPlugins: ["subagents"],
-		pluginPaths: [],
+		pluginPaths: [subagentsPluginPath],
 		store,
 		workspace,
 	});
-	const childSdk = await sdk.createChildSdk({ enabledPlugins: [] });
+	const childSdk = await sdk.createChildSdk({ pluginPaths: [] });
 	try {
 		const child = await childSdk.createSession();
 		try {
@@ -224,7 +318,6 @@ test("a child SDK snapshots its tool ceiling so later changes cannot expose tool
 			],
 		},
 		cwd: workspace,
-		enabledPlugins: [],
 		pluginPaths: [],
 		registry,
 		runtimeFactory: () =>
@@ -235,7 +328,6 @@ test("a child SDK snapshots its tool ceiling so later changes cannot expose tool
 	const allowedTools = ["read"];
 	const childSdk = await sdk.createChildSdk({
 		capabilityCeiling: { tools: allowedTools },
-		enabledPlugins: [],
 	});
 	allowedTools.push("write");
 	const child = await childSdk.createSession({ agent: "scout" });
@@ -264,7 +356,7 @@ test("a child SDK snapshots its tool ceiling so later changes cannot expose tool
 test("Subagents use the public Session SDK for explicitly selected child Sessions", async () => {
 	const recorder = createFakeModelClientRecorder();
 	const subagentsStore = await getSharedSubagentsTaskStore(
-		resolveSubagentsDatabasePath(workspace)
+		resolveSubagentsDatabasePath(workspace, resolveUserDataDir())
 	);
 	const parentPrompt = "Delegate the inspection to scout.";
 	const childPrompt = "Inspect the SDK child boundary.";
@@ -336,6 +428,18 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 		}),
 		{ connectedProviderIds: new Set(["openai", "anthropic"]) }
 	);
+	await configStore.setValue(
+		workspace,
+		"global",
+		["permission", "plugin:subagents:delegate"],
+		"allow"
+	);
+	await configStore.setValue(
+		workspace,
+		"global",
+		["permission", "submit_result"],
+		"allow"
+	);
 	const sdk = await createSessionSdk({
 		configStore,
 		connections: {
@@ -352,8 +456,7 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 			],
 		},
 		cwd: workspace,
-		enabledPlugins: ["subagents"],
-		pluginPaths: [],
+		pluginPaths: [subagentsPluginPath],
 		registry,
 		runtimeFactory: () =>
 			createAgentRuntime({ modelClient: createFakeModelClient(recorder) }),
@@ -428,7 +531,6 @@ test("SDK deliveries preserve FIFO order behind earlier queued Submissions", asy
 			],
 		},
 		cwd: workspace,
-		enabledPlugins: [],
 		pluginPaths: [],
 		runtimeFactory: () => runtime,
 		store,
@@ -514,7 +616,6 @@ test("the public Session SDK durably delivers a message and streams its Agent Tu
 			],
 		},
 		cwd: workspace,
-		enabledPlugins: [],
 		pluginPaths: [],
 		runtimeFactory: () => runtime,
 		store,

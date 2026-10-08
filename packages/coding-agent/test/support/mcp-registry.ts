@@ -1,10 +1,16 @@
 import type { AgentId } from "@wincode/agent-core";
-import type { McpCatalogSnapshot, McpRegistry } from "@wincode/mcp";
+import type {
+	McpAgentDecisionResolver,
+	McpCatalogSnapshot,
+	McpRegistry,
+} from "@wincode/mcp";
 import {
-	createMcpAgentDecisionResolver,
-	type McpAgentPolicy,
-} from "@/modules/mcp/capability";
+	DEFAULT_EFFECTIVE_AGENT_POLICY,
+	decideOpenActionPermission,
+	type EffectiveAgentPolicy,
+} from "@/modules/permissions/policy";
 
+export type McpAgentPolicy = EffectiveAgentPolicy;
 export type PolicyAwareMcpRegistry = Omit<McpRegistry, "createSnapshot"> &
 	Readonly<{
 		createSnapshot(
@@ -14,6 +20,15 @@ export type PolicyAwareMcpRegistry = Omit<McpRegistry, "createSnapshot"> &
 		): Promise<McpCatalogSnapshot>;
 	}>;
 
+const createAgentPolicyResolver =
+	(
+		policy: McpAgentPolicy = DEFAULT_EFFECTIVE_AGENT_POLICY
+	): McpAgentDecisionResolver =>
+	({ logicalName }) => ({
+		decision: decideOpenActionPermission(policy.rules, logicalName, "*"),
+		safety: policy.safety,
+	});
+
 export const addAgentPolicyResolver = (
 	registry: McpRegistry
 ): PolicyAwareMcpRegistry => ({
@@ -21,7 +36,7 @@ export const addAgentPolicyResolver = (
 	createSnapshot: (agent, policy, trackLatest) =>
 		registry.createSnapshot(
 			agent,
-			createMcpAgentDecisionResolver(policy),
+			createAgentPolicyResolver(policy),
 			trackLatest
 		),
 });

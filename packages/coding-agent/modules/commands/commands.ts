@@ -82,14 +82,6 @@ export const COMMANDS = [
 		input: NO_INPUT,
 	},
 	{
-		description: "Enable, disable, and inspect MCP servers",
-		name: "mcps",
-		value: "/mcps",
-		kind: "builtin",
-		action: "dialog.mcps",
-		input: NO_INPUT,
-	},
-	{
 		description: "Quit the application",
 		name: "exit",
 		value: "/exit",

@@ -21,12 +21,10 @@ import type {
 	ChatModelSelection,
 	ConnectionProviderId,
 } from "@wincode/ai/models";
-import { createMcpRegistry } from "@wincode/mcp";
 import { isUndefined } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { McpProvider } from "@/modules/mcp";
 import {
 	ModelPricingProvider,
 	type ModelPricingTable,
@@ -140,23 +138,34 @@ const createTestConnections = (): Connections => {
 	return connections;
 };
 
-const createTestConfigStore = (configDocument?: string) => {
+const createTestConfigStore = (
+	configDocument?: string,
+	globalConfigDocument?: string
+) => {
+	const homeRoot = process.env.WINCODE_E2E_HOME ?? homedir();
+	const configRoot = join(homeRoot, ".config", "wincode");
 	const configPath = join(
 		process.env.WINCODE_E2E_WORKSPACE ?? process.cwd(),
 		".wincode",
 		"wincode.jsonc"
 	);
+	const globalConfigPath = join(configRoot, "wincode.jsonc");
 	return createConfigStore({
+		configRoot,
 		fs: {
 			readFile: async (path) => {
 				if (!isUndefined(configDocument) && path === configPath) {
 					return configDocument;
+				}
+				if (!isUndefined(globalConfigDocument) && path === globalConfigPath) {
+					return globalConfigDocument;
 				}
 				throw Object.assign(new Error("Test config is unavailable."), {
 					code: "ENOENT",
 				});
 			},
 		},
+		homeRoot,
 	});
 };
 
@@ -248,12 +257,15 @@ export const seedCompactionHistory = async (
 
 export const renderSession = async ({
 	configDocument,
+	globalConfigDocument,
 	initialSubmission,
 	pricing,
 	sessionId,
 }: {
 	/** JSONC served as the workspace config; the registry reads it on mount. */
 	readonly configDocument?: string;
+	/** Global user config for Tool Permission actions that may be allowed. */
+	readonly globalConfigDocument?: string;
 	/** Navigation state that starts the session's first turn. */
 	readonly initialSubmission?: SessionInitialSubmission;
 	readonly pricing: ModelPricingTable;
@@ -279,7 +291,10 @@ export const renderSession = async ({
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider
 				value={{
-					configStore: createTestConfigStore(configDocument),
+					configStore: createTestConfigStore(
+						configDocument,
+						globalConfigDocument
+					),
 					homeRoot,
 					workspace,
 				}}
@@ -293,30 +308,17 @@ export const renderSession = async ({
 										<PromptConfigProvider initialModel={E2E_MODEL}>
 											<ModelPricingProvider pricing={pricing}>
 												<DialogProvider>
-													<McpProvider
-														closeRegistryOnUnmount={false}
-														createRegistry={() =>
-															createMcpRegistry({
-																loadConfig: async () => ({
-																	diagnostics: [],
-																	servers: {},
-																}),
-																workspace,
-															})
-														}
-													>
-														<RouterContextProvider router={router}>
-															<CommandControllerProvider>
-																<SessionSurface
-																	initialSubmission={initialSubmission}
-																	sessionId={sessionId}
-																/>
-																<RegistryReadyProbe
-																	onReady={resolveRegistryReady}
-																/>
-															</CommandControllerProvider>
-														</RouterContextProvider>
-													</McpProvider>
+													<RouterContextProvider router={router}>
+														<CommandControllerProvider>
+															<SessionSurface
+																initialSubmission={initialSubmission}
+																sessionId={sessionId}
+															/>
+															<RegistryReadyProbe
+																onReady={resolveRegistryReady}
+															/>
+														</CommandControllerProvider>
+													</RouterContextProvider>
 												</DialogProvider>
 											</ModelPricingProvider>
 										</PromptConfigProvider>

@@ -1,4 +1,3 @@
-import type { OptionalPluginId } from "@/shared/cli-options";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type {
 	ApplicationContext,
@@ -6,7 +5,6 @@ import type {
 	TextWriter,
 } from "./modes/types";
 import { InvocationError } from "./modes/types";
-import { selectOptionalApplicationPlugins } from "./plugin-composition";
 import type { OutputWriter as RpcOutputWriter } from "./rpc/types";
 
 export type DispatchInput = Readonly<{
@@ -38,12 +36,13 @@ export type DispatchRuntime = Pick<
 export type DispatchDependencies = Readonly<{
 	initializeRuntime?: (input: {
 		cwd: string;
-		enabledPlugins: readonly OptionalPluginId[];
+		disabledPluginIds: readonly string[];
 		pluginPaths: readonly string[];
 	}) => Promise<DispatchRuntime>;
 }>;
 
 const USAGE_EXIT_CODE = 2;
+const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
 const HELP_TEXT = [
 	"Usage: wincode [options]",
 	"",
@@ -62,8 +61,7 @@ const HELP_TEXT = [
 	"      --reasoning-mode <id>  Select a Reasoning Mode",
 	"      --auto           Auto-approve ordinary tool requests",
 	"      --plugin <path>  Enable a Plugin (repeatable)",
-	"      --no-mcp         Disable the bundled MCP Plugin",
-	"      --no-subagents   Disable the bundled Subagents Plugin",
+	"      --no-plugin <id> Disable a distributed Plugin by Identifier",
 	"  -h, --help           Show this help",
 	"  -v, --version        Show the version",
 ].join("\n");
@@ -79,6 +77,18 @@ const getVersion = async (): Promise<string> => {
 
 const writeLine = (writer: TextWriter, text: string): void => {
 	writer.write(`${text}\n`);
+};
+
+const writePluginDiagnostics = (
+	runtime: DispatchRuntime | undefined,
+	stderr: TextWriter
+): void => {
+	for (const diagnostic of runtime?.pluginRuntime?.diagnostics ?? []) {
+		writeLine(
+			stderr,
+			`Plugin: ${diagnostic.message} (${diagnostic.sourcePath})`
+		);
+	}
 };
 
 const nextValue = (
@@ -133,7 +143,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	let effort: string | undefined;
 	let reasoningMode: string | undefined;
 	const pluginPaths: string[] = [];
-	const disabledPlugins: OptionalPluginId[] = [];
+	const disabledPlugins: string[] = [];
 	let help = false;
 	let version = false;
 	let oneShotOption = false;
@@ -163,14 +173,6 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			auto = true;
 			continue;
 		}
-		if (argument === "--no-mcp") {
-			disabledPlugins.push("mcp");
-			continue;
-		}
-		if (argument === "--no-subagents") {
-			disabledPlugins.push("subagents");
-			continue;
-		}
 		const equalsIndex = argument.indexOf("=");
 		const option =
 			equalsIndex === -1 ? argument : argument.slice(0, equalsIndex);
@@ -180,6 +182,18 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			const next = nextValue(args, index, option, inlineValue);
 			index = next.index;
 			pluginPaths.push(next.value);
+			continue;
+		}
+		if (option === "--no-plugin") {
+			const next = nextValue(args, index, option, inlineValue);
+			if (!pluginIdentifierPattern.test(next.value)) {
+				throw new InvocationError(
+					`Invalid Plugin Identifier '${next.value}'.`,
+					USAGE_EXIT_CODE
+				);
+			}
+			index = next.index;
+			disabledPlugins.push(next.value);
 			continue;
 		}
 		if (option === "--mode" || option === "-m") {
@@ -335,18 +349,11 @@ export const dispatch = async (
 		}
 		const runtime = await dependencies.initializeRuntime?.({
 			cwd: input.cwd,
-			enabledPlugins: selectOptionalApplicationPlugins(
-				parsed.invocation.disabledPlugins
-			),
+			disabledPluginIds: parsed.invocation.disabledPlugins ?? [],
 			pluginPaths: parsed.invocation.pluginPaths ?? [],
 		});
 		pluginRuntime = runtime?.pluginRuntime;
-		for (const diagnostic of pluginRuntime?.diagnostics ?? []) {
-			writeLine(
-				input.stderr,
-				`Plugin: ${diagnostic.message} (${diagnostic.sourcePath})`
-			);
-		}
+		writePluginDiagnostics(runtime, input.stderr);
 		const context: ApplicationContext = {
 			...(runtime ?? {}),
 			args: input.args,

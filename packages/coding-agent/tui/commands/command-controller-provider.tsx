@@ -2,6 +2,7 @@ import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import { getErrorMessage } from "@wincode/utils";
 import {
+	createElement,
 	type ReactNode,
 	useCallback,
 	useEffect,
@@ -19,6 +20,7 @@ import { getCustomCommands } from "@/modules/commands/custom/loader";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import { createCommandExecutor } from "@/modules/commands/execute-command";
 import { useConnections } from "@/modules/connections";
+import { PluginStatusPanelDialogContent } from "@/modules/plugins/ui/plugin-status-panel-dialog";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { discoverSkills, type Skill } from "@/modules/skills";
@@ -27,6 +29,7 @@ import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { createCommandHandlers } from "./command-strategies";
+import { openCommandDialog } from "./dialog-command";
 
 export function CommandControllerProvider({
 	children,
@@ -124,6 +127,26 @@ export function CommandControllerProvider({
 						return;
 					}
 					try {
+						if (command.statusPanelId !== undefined) {
+							const panel = pluginRuntime
+								.getStatusPanels()
+								.find(
+									(candidate) =>
+										candidate.pluginId === command.pluginId &&
+										candidate.id === command.statusPanelId
+								);
+							if (panel === undefined) {
+								throw new Error("Plugin Status Panel is unavailable.");
+							}
+							openCommandDialog(dialog, {
+								children: createElement(PluginStatusPanelDialogContent, {
+									panel,
+									pluginRuntime,
+								}),
+								title: panel.title,
+							});
+							return;
+						}
 						const message = await pluginRuntime.executeCommand(
 							command.pluginId,
 							command.name,

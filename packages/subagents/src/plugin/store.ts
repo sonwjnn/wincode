@@ -3,8 +3,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentId, AgentTurnId, ToolCallId } from "@wincode/agent-core";
 import { randomUUIDv7 } from "bun";
-import { type SessionId, toSessionId } from "@/shared/identifiers";
-import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import {
 	type DelegationReportEnvelope,
 	type DelegationTask,
@@ -13,14 +11,19 @@ import {
 	type DelegationTaskStatus,
 	delegationTaskOutcomeSchema,
 	delegationTaskStatusSchema,
+	type SessionId,
 	toDelegationTaskId,
+	toSessionId,
 } from "./task-types";
 
 const SUBAGENTS_DATABASE_FILE = "subagents.sqlite";
 const sharedStores = new Map<string, Promise<SubagentsTaskStore>>();
 const sharedStoreLeaseCounts = new Map<string, number>();
 
-export const resolveSubagentsDatabasePath = (workspace: string): string => {
+export const resolveSubagentsDatabasePath = (
+	workspace: string,
+	userDataDir: string
+): string => {
 	const configuredPath = process.env.WINCODE_SUBAGENTS_DB_PATH;
 	if (configuredPath !== undefined && configuredPath !== "") {
 		return path.resolve(configuredPath);
@@ -30,7 +33,7 @@ export const resolveSubagentsDatabasePath = (workspace: string): string => {
 		.digest("hex")
 		.slice(0, 24);
 	return path.join(
-		resolveUserDataDir(),
+		userDataDir,
 		"subagents",
 		workspaceKey,
 		SUBAGENTS_DATABASE_FILE
@@ -116,7 +119,7 @@ export type SubagentsTaskStore = Readonly<{
 
 /** Opens Subagents' independent durable task/report database. */
 export const createSubagentsTaskStore = async (
-	databasePath = path.join(resolveUserDataDir(), SUBAGENTS_DATABASE_FILE),
+	databasePath: string,
 	{ now = Date.now }: SubagentsTaskStoreOptions = {}
 ): Promise<SubagentsTaskStore> => {
 	if (databasePath !== ":memory:") {
@@ -323,7 +326,7 @@ const sharedStoreKey = (databasePath: string): string =>
 	databasePath === ":memory:" ? databasePath : path.resolve(databasePath);
 
 export const getSharedSubagentsTaskStore = (
-	databasePath = resolveSubagentsDatabasePath(process.cwd())
+	databasePath: string
 ): Promise<SubagentsTaskStore> => {
 	const key = sharedStoreKey(databasePath);
 	let store = sharedStores.get(key);
@@ -358,7 +361,7 @@ export type SubagentsTaskStoreLease = Readonly<{
 
 /** Acquires a shared database handle for one Plugin Runtime lifetime. */
 export const acquireSharedSubagentsTaskStore = async (
-	databasePath = resolveSubagentsDatabasePath(process.cwd())
+	databasePath: string
 ): Promise<SubagentsTaskStoreLease> => {
 	const key = sharedStoreKey(databasePath);
 	const store = await getSharedSubagentsTaskStore(key);

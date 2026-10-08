@@ -1,0 +1,17 @@
+{
+  "name": "@wincode/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "wincode": "./bin/wincode.ts"
+  },
+  "scripts": {
+    "dev": "bun run --watch bin/wincode.ts",
+    "test": "bun ../../scripts/test-portfolio.ts default --package cli"
+  },
+  "dependencies": {
+    "@wincode/coding-agent": "workspace:*",
+    "@wincode/mcp": "workspace:*",
+    "@wincode/subagents": "workspace:*"
+  }
+}

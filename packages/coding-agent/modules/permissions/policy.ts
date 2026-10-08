@@ -114,6 +114,16 @@ export const STATIC_TOOL_PERMISSION_ACTIONS = {
 	recover: "recover",
 } as const satisfies Record<CodingToolName, PermissionAction>;
 
+const NATIVE_TOOL_PERMISSION_ACTIONS = new Set<string>([
+	...codingToolNames,
+	...Object.values(STATIC_TOOL_PERMISSION_ACTIONS),
+	...PERMISSION_TOOL_ACTIONS.filter((action) => action !== "plugin:*:*"),
+]);
+
+/** Whether an unqualified action names a permission family owned by the host. */
+export const isNativeToolPermissionAction = (action: string): boolean =>
+	NATIVE_TOOL_PERMISSION_ACTIONS.has(action);
+
 /** Tightens every non-denied decision to an approval that must be handled manually. */
 export function applyManualApprovalSafetyCeiling(
 	permission: ToolPermission
@@ -1054,25 +1064,16 @@ export const decideOpenActionPermission = (
 	return decision;
 };
 
-const isFixedPermissionAction = (action: string): action is PermissionAction =>
-	action === "write" ||
-	(action !== "plugin:*:*" &&
-		PERMISSION_TOOL_ACTIONS.includes(
-			action as (typeof PERMISSION_TOOL_ACTIONS)[number]
-		));
-
-export type PermissionActionFamily = "mcp" | "plugin";
-
-/** Resolves an action by family and applies the Agent's manual-only ceiling. */
+/** Resolves a Plugin action by its configured open-action rules. */
 export const decideToolPermissionAction = (
 	permission: ToolPermission,
 	action: string,
-	resource: string,
-	family: PermissionActionFamily = "plugin"
+	resource: string
 ): PermissionDecision => {
-	const decision =
-		family === "mcp" || !isFixedPermissionAction(action)
-			? decideOpenActionPermission(permission.rules ?? {}, action, resource)
-			: permission.decide(action, resource);
+	const decision = decideOpenActionPermission(
+		permission.rules ?? {},
+		action,
+		resource
+	);
 	return permission.safety && decision !== "deny" ? "ask" : decision;
 };

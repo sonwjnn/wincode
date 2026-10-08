@@ -278,5 +278,5 @@ history and workspace/configuration data.
 | `modules/file-mentions` | `@path` detection and resolution |
 | `modules/connections` | app-owned context and provider dialogs |
 | `modules/prompt-settings` | current agent and model |
-| `modules/mcp` | local MCP snapshots and tool dispatch |
+| `modules/plugins` | generic Plugin lifecycle, tool dispatch, and status panels |
 | `shared/providers` | terminal theme, keyboard, dialogs, and toast state |

@@ -108,6 +108,52 @@ test("a failed later Session registration keeps earlier tools available for that
 	}
 });
 
+test("a scoped Plugin registration rejects duplicate model-visible names", async () => {
+	const sessionContext = { sessionId: "duplicate-tools-session", workspace };
+	const plugin: LoadedPlugin = {
+		commands: [],
+		id: "duplicate_tools",
+		onSessionStart: (_context, api) => {
+			api.registerTool({
+				description: "The first tool keeps the shared model name.",
+				handler: async () => ({ output: {}, type: "success" }),
+				inputSchema: z.object({}),
+				modelName: "shared_lookup",
+				name: "first_lookup",
+			});
+			api.registerTool({
+				description: "The duplicate tool must not be published.",
+				handler: async () => ({ output: {}, type: "success" }),
+				inputSchema: z.object({}),
+				modelName: "shared_lookup",
+				name: "second_lookup",
+			});
+		},
+		sourcePath: pluginSource,
+		tools: [],
+		workspace,
+	};
+	const runtime = createPluginRuntime([plugin], []);
+
+	try {
+		await runtime.startSession(sessionContext);
+
+		expect(
+			runtime
+				.getToolDescriptors(sessionContext.sessionId)
+				.map(({ localName, name }) => ({ localName, name }))
+		).toEqual([{ localName: "first_lookup", name: "shared_lookup" }]);
+		expect(runtime.diagnostics).toEqual([
+			expect.objectContaining({
+				message: expect.stringContaining("already registered"),
+				sourcePath: pluginSource,
+			}),
+		]);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
 test("a failed Session start disables Plugin commands and tools only for that Session", async () => {
 	const runtime = createPluginRuntime([jiraPlugin()], []);
 	const failedSession = { sessionId: "failed-session", workspace };

@@ -448,13 +448,10 @@ const selectPluginToolProviderContext = (
 	...(context.signal === undefined ? {} : { signal: context.signal }),
 	...(context.resolvePluginPermission === undefined
 		? {}
-		: { permissionForAction: context.resolvePluginPermission }),
+		: { resolvePermissionForAction: context.resolvePluginPermission }),
 	...(context.pluginRuntime === undefined
 		? {}
 		: { registerBackgroundWork: context.pluginRuntime.registerBackgroundWork }),
-	...(context.resolveToolPermission === undefined
-		? {}
-		: { resolvePermissionForAction: context.resolveToolPermission }),
 	...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
 	...(context.workspace === undefined ? {} : { workspace: context.workspace }),
 });

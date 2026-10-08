@@ -2,13 +2,8 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createSubagentsTaskStore } from "@/plugins/subagents/store";
-import {
-	agentId,
-	agentTurnId,
-	sessionId,
-	toolCallId,
-} from "../../support/identifiers";
+import { createSubagentsTaskStore } from "../src/plugin/store";
+import { agentId, agentTurnId, sessionId, toolCallId } from "./identifiers";
 
 const directory = await mkdtemp(
 	path.join(os.tmpdir(), "wincode-subagents-store-")

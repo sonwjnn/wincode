@@ -9,7 +9,10 @@ import {
 	createToolPermissionRuntime,
 	resolveToolPermissionPolicies,
 } from "@/modules/permissions/tool-permission-runtime";
-import type { ConfigSnapshot } from "@/shared/config/config-store";
+import type {
+	ConfigRuntime,
+	ConfigSnapshot,
+} from "@/shared/config/config-store";
 import { agentId } from "../support/identifiers";
 
 const makeSnapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
@@ -90,6 +93,29 @@ describe("ToolPermissionRuntime fallback", () => {
 				"file.ts"
 			)
 		).toBe("deny");
+	});
+});
+
+describe("Plugin action permission namespaces", () => {
+	test("a native action alias does not contribute to Plugin policy", async () => {
+		const runtime = createToolPermissionRuntime({
+			agent: agentId("build"),
+			configRuntime: fromPartial<ConfigRuntime>({
+				configStore: {
+					getSnapshot: async () => {
+						throw new Error("Native action rules must not be reused.");
+					},
+				},
+			}),
+			getRegistry: () => null,
+			policyState: createToolPermissionPolicyState(),
+			service: fromPartial<PermissionService>({}),
+			workspace: "/tmp",
+		});
+
+		await expect(
+			runtime.resolvePluginPermissionForAgent("edit", "*", agentId("build"))
+		).resolves.toEqual({ decision: "allow", safety: false });
 	});
 });
 

@@ -25,7 +25,7 @@
     "test": "bun scripts/test-portfolio.ts default",
     "test:e2e": "bun scripts/test-portfolio.ts e2e",
     "sync-model-metadata": "bun run packages/ai/scripts/sync-model-metadata.ts",
-    "dev:cli": "bun run --cwd packages/coding-agent dev",
+    "dev:cli": "bun run --cwd packages/cli dev",
     "check": "ultracite check",
     "fix": "ultracite fix"
   },

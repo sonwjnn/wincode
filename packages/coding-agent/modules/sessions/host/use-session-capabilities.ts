@@ -1,12 +1,8 @@
 import { useMemo } from "react";
 import { useAgentRegistry } from "@/modules/agents/agent-registry-provider";
-import {
-	createApplicationPluginComposition,
-	selectOptionalApplicationPlugins,
-} from "@/modules/application/plugin-composition";
+import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { useConnections } from "@/modules/connections";
 import { useToolPermission } from "@/modules/permissions/use-tool-permission";
-import { parseCliOptions } from "@/shared/cli-options";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
 import {
@@ -66,21 +62,7 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	const runtimeContext = getInteractiveRuntimeContext();
 	const pluginRuntime = getInteractivePluginRuntime();
 	const runtimeFactory = runtimeContext.runtimeFactory;
-	const runtimeArgs = runtimeContext.args;
-	const disabledPlugins = useMemo(
-		() => parseCliOptions(runtimeArgs).disabledPlugins,
-		[runtimeArgs]
-	);
-	const composition = useMemo(
-		() =>
-			createApplicationPluginComposition({
-				configStore: config.configStore,
-				createMcpResource: false,
-				enabledPlugins: selectOptionalApplicationPlugins(disabledPlugins),
-				workspace: config.workspace,
-			}),
-		[config.configStore, config.workspace, disabledPlugins]
-	);
+	const composition = useMemo(() => createApplicationPluginComposition(), []);
 	return useMemo(() => {
 		let sessionSdk: SessionSdkChildFactory | undefined;
 		const sessionStore = getSessionStore();
@@ -108,7 +90,6 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 				configStore: configRef.current.configStore,
 				connections: connectionsRef.current,
 				cwd: configRef.current.cwd ?? configRef.current.workspace,
-				enabledPlugins: composition.enabledPlugins,
 				registry: registryRef.current,
 				getRegistry: () => registryRef.current,
 				...(runtimeFactory === undefined ? {} : { runtimeFactory }),

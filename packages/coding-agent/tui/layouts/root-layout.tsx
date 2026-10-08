@@ -4,11 +4,6 @@ import { createConnections } from "@wincode/ai/connections";
 import { useEffect, useReducer } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
-import { McpProvider } from "@/modules/mcp";
-import {
-	createDisabledMcpPluginResource,
-	type McpPluginResource,
-} from "@/modules/mcp/capability";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import {
 	createPermissionService,
@@ -45,9 +40,6 @@ const configContext =
 		homeRoot: os.homedir(),
 		workspace,
 	});
-const mcpResource =
-	pluginRuntime?.getResource<McpPluginResource>("mcp", "runtime") ??
-	createDisabledMcpPluginResource();
 const permissionService = createPermissionService(cliOptions);
 setInteractiveCleanup(async () => {
 	try {
@@ -81,18 +73,12 @@ export function RootLayout() {
 									<SettingsProviders>
 										<ModelPricingProvider>
 											<DialogProvider>
-												<McpProvider
-													closeRegistryOnUnmount={false}
-													refreshKey={currentPath}
-													resource={mcpResource}
-												>
-													<CopyOnSelectFromSettings />
-													<DialogProvider>
-														<CommandControllerProvider>
-															<Outlet key={currentPath} />
-														</CommandControllerProvider>
-													</DialogProvider>
-												</McpProvider>
+												<CopyOnSelectFromSettings />
+												<DialogProvider>
+													<CommandControllerProvider>
+														<Outlet key={currentPath} />
+													</CommandControllerProvider>
+												</DialogProvider>
 											</DialogProvider>
 										</ModelPricingProvider>
 									</SettingsProviders>

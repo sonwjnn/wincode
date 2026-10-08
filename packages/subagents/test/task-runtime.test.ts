@@ -1,33 +1,29 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { toSubmissionId } from "@wincode/agent-core";
-import { loadPlugins } from "@/modules/plugins/loader";
-import type { PluginBeforeAgentTurnContext } from "@/modules/plugins/public";
 import type {
 	SessionSdk,
 	SessionSdkChildFactory,
 	SessionSdkDelivery,
 	SessionSdkHandle,
-} from "@/modules/sessions/sdk-contract";
-import { createSubagentsPluginFactory } from "@/plugins/subagents";
+} from "@wincode/coding-agent";
 import {
 	createSubagentsTaskStore,
+	getSubagentsTaskCoordinator,
 	type SubagentsTaskStore,
-} from "@/plugins/subagents/store";
-import { getSubagentsTaskCoordinator } from "@/plugins/subagents/task-runtime";
-import { toDelegationTaskId } from "@/plugins/subagents/task-types";
-import type { ConfigRuntime } from "@/shared/config/config-store";
-import { createConfigStore } from "@/shared/config/config-store";
+	toDelegationTaskId,
+} from "../src/plugin";
 import {
 	agentId,
 	agentTurnId,
 	sessionId,
 	sessionMessageId,
 	toolCallId,
-} from "../../support/identifiers";
+} from "./identifiers";
 
 const parentSessionId = sessionId("parent-session");
 const childSessionId = sessionId("child-session");
+const pluginPath = "/plugins/subagents.ts";
 
 const createTask = (taskStore: SubagentsTaskStore) =>
 	taskStore.createTask({
@@ -44,47 +40,6 @@ const pluginSessionContext = (sessionSdk: SessionSdkChildFactory) => ({
 	sessionId: parentSessionId,
 	sessionSdk,
 	workspace: "/workspace",
-});
-
-test("the Subagents Plugin registers delegate for an available child Agent via the Session SDK", async () => {
-	const taskStore = await createSubagentsTaskStore(":memory:");
-	const workspace = "/workspace";
-	const configStore = createConfigStore({
-		configRoot: workspace,
-		homeRoot: workspace,
-	});
-	const runtime = await loadPlugins({
-		bundledPlugins: [
-			{ factory: createSubagentsPluginFactory({ taskStore }), id: "subagents" },
-		],
-		cliPaths: [],
-		config: {
-			configStore,
-			cwd: workspace,
-			homeRoot: workspace,
-			workspace,
-		} satisfies ConfigRuntime,
-	});
-	const sessionSdk = fromPartial<SessionSdkChildFactory>({
-		getAgentCatalog: async () => [
-			{ id: agentId("scout"), isAvailable: true, role: "subagent" },
-		],
-	});
-	const context = fromPartial<PluginBeforeAgentTurnContext>({
-		agentId: agentId("build"),
-		sessionId: parentSessionId,
-		sessionSdk,
-		signal: new AbortController().signal,
-		turnId: agentTurnId("plugin-turn"),
-		workspace,
-	});
-	try {
-		const tools = await runtime.resolveToolsForTurn(context);
-		expect(tools.map(({ name }) => name)).toContain("delegate");
-	} finally {
-		await runtime.shutdown();
-		taskStore.close();
-	}
 });
 
 test("a durable Subagents report is idempotently delivered through the public Session SDK", async () => {
@@ -113,7 +68,7 @@ test("a durable Subagents report is idempotently delivered through the public Se
 				};
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore).onSessionStart(
+		getSubagentsTaskCoordinator(taskStore, pluginPath).onSessionStart(
 			pluginSessionContext(sessionSdk)
 		);
 		await deliveryAttempted.promise;
@@ -175,7 +130,7 @@ test("concurrent task completions deliver durable reports in FIFO order", async 
 				};
 			},
 		});
-		const coordinator = getSubagentsTaskCoordinator(taskStore);
+		const coordinator = getSubagentsTaskCoordinator(taskStore, pluginPath);
 		coordinator.onSessionStart(pluginSessionContext(sessionSdk));
 		await Bun.sleep(0);
 
@@ -227,7 +182,7 @@ test("a rejected SDK delivery leaves the durable report available for retry", as
 				return { reason: "Parent is unavailable.", rejected: true };
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore).onSessionStart(
+		getSubagentsTaskCoordinator(taskStore, pluginPath).onSessionStart(
 			pluginSessionContext(sessionSdk)
 		);
 		await deliveryAttempted.promise;
@@ -275,12 +230,13 @@ test("active Subagents tasks do not pin the parent Session view and cancel on sh
 			return fromPartial<SessionSdkHandle>({ dispose: async () => undefined });
 		},
 	});
-	const coordinator = getSubagentsTaskCoordinator(taskStore);
+	const coordinator = getSubagentsTaskCoordinator(taskStore, pluginPath);
 	coordinator.onSessionStart(pluginSessionContext(parentSdk));
 
 	try {
 		const started = await coordinator.startTask({
 			agentId: agentId("build"),
+			pluginPath,
 			parentSessionId,
 			parentToolCallId: toolCallId("delegate-call"),
 			parentTurnId: agentTurnId("parent-turn"),
@@ -319,7 +275,7 @@ test("awaiting-report children survive recovery and parent shutdown for explicit
 			},
 		});
 		const context = pluginSessionContext(sessionSdk);
-		const coordinator = getSubagentsTaskCoordinator(taskStore);
+		const coordinator = getSubagentsTaskCoordinator(taskStore, pluginPath);
 		coordinator.onSessionStart(context);
 
 		expect(childRecoveryStarted).toBe(false);
@@ -383,7 +339,7 @@ test("recovery marks an abandoned child interrupted without auto-continuing it",
 				};
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore).onSessionStart(
+		getSubagentsTaskCoordinator(taskStore, pluginPath).onSessionStart(
 			pluginSessionContext(parentSdk)
 		);
 		await deliveryAttempted.promise;

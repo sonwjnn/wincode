@@ -63,7 +63,12 @@ describe("application dispatch", () => {
 		const stderr = capture();
 		let routedInvocation: InvocationOptions | undefined;
 		await dispatch(
-			input(stdout.writer, stderr.writer, ["--no-mcp", "--no-subagents"]),
+			input(stdout.writer, stderr.writer, [
+				"--no-plugin",
+				"mcp",
+				"--no-plugin",
+				"subagents",
+			]),
 			{
 				...noOpRunners,
 				interactive: async (context) => {
@@ -175,6 +180,9 @@ describe("application dispatch", () => {
 			getCommands: () => [],
 			getToolDescriptors: () => [],
 			getResource: () => undefined,
+			getStatusPanels: () => [],
+			refreshStatusPanel: async () => undefined,
+			runStatusPanelAction: async () => undefined,
 			registerBackgroundWork: () => undefined,
 			hasBackgroundWork: () => false,
 			onBackgroundWorkChange: () => () => undefined,
@@ -218,6 +226,9 @@ describe("application dispatch", () => {
 			getCommands: () => [],
 			getToolDescriptors: () => [],
 			getResource: () => undefined,
+			getStatusPanels: () => [],
+			refreshStatusPanel: async () => undefined,
+			runStatusPanelAction: async () => undefined,
 			registerBackgroundWork: () => undefined,
 			hasBackgroundWork: () => false,
 			onBackgroundWorkChange: () => () => undefined,

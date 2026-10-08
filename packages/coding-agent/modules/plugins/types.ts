@@ -1,5 +1,5 @@
 import type {
-	PluginCommandRegistration,
+	PluginCommandHandler,
 	PluginInputSchema,
 	PluginToolRegistration,
 } from "./public";
@@ -19,6 +19,7 @@ export type PluginTool = Readonly<{
 
 export type PluginCommand = Readonly<{
 	description: string;
-	handler: PluginCommandRegistration["handler"];
+	handler?: PluginCommandHandler;
 	name: string;
+	statusPanelId?: string;
 }>;
