@@ -2,7 +2,7 @@
 
 Wincode's agent architecture is split into public `@wincode/ai`,
 `@wincode/agent-core`, `@wincode/coding-tools`, and `@wincode/skills` packages,
-plus the private `@wincode/agent-runtime-ai-sdk` adapter and the
+plus the historical private AI SDK adapter and the
 `@wincode/coding-agent` application composition root. MCP transport and OpenTUI
 presentation remain application-owned; no public MCP or TUI package is
 introduced.
@@ -21,7 +21,6 @@ Runtime-boundary note: [ADR-0029](0029-own-model-protocols-and-agent-runtime.md)
 - `@wincode/skills` owns Skill contracts, parsing, catalog, snapshots, and activation semantics; its `./filesystem` export owns Node/Bun discovery and content loading. The Coding-Agent Application supplies explicit root descriptors, permission enforcement, persistence, and presentation.
 - `@wincode/coding-agent` owns MCP transport, client lifecycle, discovery, invocation, configuration, approval, status presentation, and adaptation to core Tool contracts.
 - `@wincode/coding-agent` owns OpenTUI rendering, Session View State, approval presentation, input callbacks, and projections of Session Records and Agent Turn Events.
-- `@wincode/agent-runtime-ai-sdk` privately implements the core runtime interface with AI SDK.
 - `@wincode/coding-agent` owns Connections, session orchestration and persistence, Tool Gate, approval, configuration, routing, and composition.
 
 `@wincode/ai` and `@wincode/skills` are base packages; `@wincode/agent-core`

@@ -1,6 +1,6 @@
 # Isolate AI SDK behind Wincode Agent Runtime contracts
 
-Wincode owns the Agent Turn, Agent Turn Event, Session Record, Operational Failure, Model Target, and Agent Runtime contracts. AI SDK types and lifecycle semantics must not cross those interfaces; `@wincode/agent-runtime-ai-sdk` adapts AI SDK models, tools, streams, usage, and errors to Wincode contracts.
+Historical decision: Wincode owned the Agent Turn, Agent Turn Event, Session Record, Operational Failure, Model Target, and Agent Runtime contracts. AI SDK types and lifecycle semantics were kept behind an adapter. ADR-0029 supersedes this boundary: `@wincode/ai` owns model protocols and clients, while `@wincode/agent-core` owns the Agent Runtime implementation.
 
 Status: superseded by ADR-0029
 
@@ -11,4 +11,4 @@ Status: superseded by ADR-0029
 
 ## Consequences
 
-The adapter may continue to use AI SDK `ToolLoopAgent` internally. Expected failures become typed Wincode events, invariant violations remain thrown errors, and HTTP, RPC, UI, persistence, and telemetry representations are mapped only at their adapters. This introduces translation cost in exchange for stable Wincode semantics and replaceable infrastructure.
+This ADR's adapter consequences are historical and superseded by ADR-0029.

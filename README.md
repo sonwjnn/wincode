@@ -181,8 +181,7 @@ Wincode is a Bun workspace with one private Coding-Agent Application package:
 │   │       ├── skills/            # Skill parsing, discovery, catalog, snapshots, activation
 │   │       └── tools/             # Workspace sandbox, filesystem, search, edit, and shell tools
 │   ├── ai/                        # Provider-neutral model catalog, targets, options, usage, failures
-│   ├── agent-core/                # Agent Turns, records, events, runtime and tool contracts
-│   └── agent-runtime-ai-sdk/      # Private AI SDK runtime and provider adapters
+│   └── agent-core/                # Agent Turns, records, events, runtime and tool contracts
 └── docs/
     └── adr/                       # Accepted architecture decisions
 ```

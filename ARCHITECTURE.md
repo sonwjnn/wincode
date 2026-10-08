@@ -51,8 +51,7 @@ Agent Session.
 │   │       ├── skills/            # Skill parsing, discovery, catalog, snapshots, activation
 │   │       └── tools/             # Workspace-bound filesystem and bounded coding tools
 │   ├── ai/                        # Provider-neutral model catalog, targets, options, usage, failures
-│   ├── agent-core/                # Agents, Agent Turns, events, records, runtime and tool contracts
-│   └── agent-runtime-ai-sdk/      # Private AI SDK implementation and provider adapters
+│   └── agent-core/                # Agents, Agent Turns, events, records, runtime and tool contracts
 └── docs/
     └── adr/                       # Accepted architecture decisions
 ```
@@ -83,8 +82,8 @@ Dependency direction is inward toward contracts:
 
 - `agent-core` does not import the Coding-Agent Application, persistence,
   OpenTUI, MCP, concrete tools, CLI, or AI SDK.
-- AI SDK types stay inside `agent-runtime-ai-sdk` and are translated to
-  Wincode contracts.
+- Provider protocols, model clients, and model-facing contracts belong to
+  `@wincode/ai`; `agent-core` consumes provider-neutral model streams.
 - `coding-agent` composes the reusable packages and keeps its mode adapters,
   React renderer, persistence, RPC projection, and process lifecycle at the
   application boundary.

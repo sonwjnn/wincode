@@ -69,9 +69,9 @@ remaining package roles stay in force.
 - ADR-0004 (Skill contracts, parsing, catalog, and activation semantics),
   ADR-0024 (edit and mutation ownership), ADR-0019, and ADR-0025 keep their
   decisions; only the package names they mention are historical.
-- The package graph in ADR-0010 is reduced to `@wincode/ai` and
-  `@wincode/agent-core` as reusable packages, `@wincode/agent-runtime-ai-sdk` as
-  the private adapter, and `@wincode/coding-agent` as the composition root.
+- The package graph in ADR-0010 was later revised by ADR-0029, which assigns
+  model protocols and clients to `@wincode/ai` and the Agent Runtime to
+  `@wincode/agent-core`.
 - Runtime-boundary note: ADR-0029 replaces the private adapter with native Model
   Protocol clients and Connections in `@wincode/ai` and the Agent Runtime in
   `@wincode/agent-core`.

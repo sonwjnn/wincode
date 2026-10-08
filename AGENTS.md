@@ -211,4 +211,4 @@ Five canonical triage roles mapped to label strings: `needs-triage`, `needs-info
 
 ### Domain docs
 
-Multi-context layout: a root `CONTEXT-MAP.md` points to per-context `CONTEXT.md` + `docs/adr/` files, with system-wide decisions at the root `docs/adr/`. See `docs/agents/domain.md`.
+Multi-context layout: `GLOSSARY-MAP.md` and `CONTEXT-MAP.md` point to per-context domain docs; root `docs/adr/` holds system-wide decisions. See `docs/agents/domain.md`.
