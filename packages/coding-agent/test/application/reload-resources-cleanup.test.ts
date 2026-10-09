@@ -10,7 +10,11 @@ import {
 	createPluginRuntime,
 	type PluginRuntime,
 } from "@/modules/plugins/runtime";
-import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
+import {
+	getInteractiveSessionHostManager,
+	resetInteractiveSessionHostManager,
+} from "@/modules/sessions/host/session-host-manager";
+import type { SessionHostManager } from "@/modules/sessions/host/types";
 import {
 	type ConfigRuntime,
 	createConfigStore,
@@ -18,6 +22,7 @@ import {
 import {
 	getInteractiveRuntimeContext,
 	setInteractiveRuntimeContext,
+	subscribeInteractiveRuntimeContext,
 } from "@/shared/runtime-context";
 import { createInteractiveRuntimeLifecycle } from "@/shared/runtime-lifecycle";
 import { reloadInteractiveResources } from "@/tui/commands/reload-resources";
@@ -91,6 +96,72 @@ test("reload summary does not claim Plugins were reloaded when the active set wa
 		expect(toastMessage).not.toContain("Reloaded Plugins");
 	} finally {
 		await pluginRuntime.shutdown();
+	}
+});
+
+test("reload retains its Session Host manager when publishing a new Plugin runtime", async () => {
+	await resetInteractiveSessionHostManager();
+	const lifecycle = createInteractiveRuntimeLifecycle();
+	const runtimeObserved = Promise.withResolvers<void>();
+	let managerObservedDuringReplacement: SessionHostManager | undefined;
+	let toastMessage = "";
+	const configRuntime = configRuntimeFor(root);
+	const previousRuntime = observableRuntime({});
+	const replacementRuntime = observableRuntime({});
+	const resourceLoader: ApplicationResourceLoader = {
+		reload: async ({ current }) => ({
+			configRuntime: current.configRuntime,
+			diagnostics: [],
+			pluginRuntime: replacementRuntime,
+			pluginRuntimeChanged: true,
+			trustChanged: false,
+		}),
+	};
+	setInteractiveRuntimeContext({
+		args: [],
+		configRuntime,
+		cwd: root,
+		pluginRuntime: previousRuntime,
+		resourceLoader,
+	});
+	const managerBeforeReload = getInteractiveSessionHostManager(previousRuntime);
+	const unsubscribe = subscribeInteractiveRuntimeContext(() => {
+		if (getInteractiveRuntimeContext().pluginRuntime !== replacementRuntime) {
+			return;
+		}
+		queueMicrotask(() => {
+			managerObservedDuringReplacement =
+				getInteractiveSessionHostManager(replacementRuntime);
+			runtimeObserved.resolve();
+		});
+	});
+
+	try {
+		await reloadInteractiveResources({
+			dialog: { open: () => undefined },
+			refreshAgentRegistry: () => undefined,
+			reloadTheme: () => undefined,
+			toast: { show: ({ message }) => (toastMessage = message) },
+			lifecycle,
+		});
+		await runtimeObserved.promise;
+		expect(toastMessage).toContain("Reloaded Plugins");
+		const manager = managerObservedDuringReplacement;
+		expect(manager).toBe(managerBeforeReload);
+		if (manager === undefined) {
+			return;
+		}
+		const managerError = await manager
+			.withIdleForReload(async () => "session manager is usable")
+			.then(
+				() => undefined,
+				(error: unknown) =>
+					error instanceof Error ? error.message : String(error)
+			);
+		expect(managerError).toBeUndefined();
+	} finally {
+		unsubscribe();
+		await resetInteractiveSessionHostManager();
 	}
 });
 

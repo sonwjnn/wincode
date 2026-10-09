@@ -219,28 +219,26 @@ export const reloadInteractiveResources = async ({
 			await lifecycle.withRuntimeReplacement(async () => {
 				replacementStarted = true;
 				const diagnostics = [...result.diagnostics];
-				try {
-					await hostManager.shutdownAll();
-					const pluginRuntime = await replacePluginRuntime(
-						active.pluginRuntime,
-						result,
-						diagnostics
-					);
-					setInteractiveRuntimeContext({
-						...current,
-						configRuntime: result.configRuntime,
-						pluginRuntime,
-					});
-					reloadTheme();
-					refreshAgentRegistry();
-					showReloadSummary(
-						diagnostics,
-						pluginRuntime !== active.pluginRuntime,
-						toast
-					);
-				} finally {
-					await resetInteractiveSessionHostManager();
+				const pluginRuntime = await replacePluginRuntime(
+					active.pluginRuntime,
+					result,
+					diagnostics
+				);
+				if (result.pluginRuntimeChanged) {
+					await hostManager.replacePluginRuntime(pluginRuntime);
 				}
+				setInteractiveRuntimeContext({
+					...current,
+					configRuntime: result.configRuntime,
+					pluginRuntime,
+				});
+				reloadTheme();
+				refreshAgentRegistry();
+				showReloadSummary(
+					diagnostics,
+					pluginRuntime !== active.pluginRuntime,
+					toast
+				);
 			});
 		} catch (error) {
 			if (!replacementStarted && lifecycle.isCleanupRequested()) {

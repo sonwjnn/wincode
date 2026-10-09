@@ -15,7 +15,6 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import {
 	getInteractiveRuntimeContext,
-	getInteractiveRuntimeRevision,
 	subscribeInteractiveRuntimeContext,
 } from "@/shared/runtime-context";
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
@@ -54,11 +53,6 @@ export function RootLayout() {
 		getInteractiveRuntimeContext,
 		getInteractiveRuntimeContext
 	);
-	const runtimeRevision = useSyncExternalStore(
-		subscribeInteractiveRuntimeContext,
-		getInteractiveRuntimeRevision,
-		getInteractiveRuntimeRevision
-	);
 	const router = useRouter();
 	const [, forceUpdate] = useReducer((x) => x + 1, 0);
 	const currentPath = useRouterState({ select: (s) => s.location.pathname });
@@ -85,7 +79,7 @@ export function RootLayout() {
 										<CopyOnSelectFromSettings />
 										<DialogProvider>
 											<CommandControllerProvider>
-												<Outlet key={`${currentPath}:${runtimeRevision}`} />
+												<Outlet key={currentPath} />
 											</CommandControllerProvider>
 										</DialogProvider>
 									</DialogProvider>

@@ -13,14 +13,12 @@ export type StartInteractiveInput = {
 };
 
 let runtimeContext: StartInteractiveInput | undefined;
-let runtimeRevision = 0;
 const runtimeListeners = new Set<() => void>();
 
 export const setInteractiveRuntimeContext = (
 	context: StartInteractiveInput
 ): void => {
 	runtimeContext = Object.freeze({ ...context, args: [...context.args] });
-	runtimeRevision += 1;
 	for (const listener of [...runtimeListeners]) {
 		listener();
 	}
@@ -32,8 +30,6 @@ export const subscribeInteractiveRuntimeContext = (
 	runtimeListeners.add(listener);
 	return () => runtimeListeners.delete(listener);
 };
-
-export const getInteractiveRuntimeRevision = (): number => runtimeRevision;
 
 export const getInteractiveRuntimeContext = (): StartInteractiveInput => {
 	if (isUndefined(runtimeContext)) {

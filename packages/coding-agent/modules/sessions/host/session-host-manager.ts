@@ -33,6 +33,7 @@ export const createSessionHostManager = (
 	processPluginRuntime?: PluginRuntime
 ): SessionHostManager => {
 	const entries = new Map<SessionId, ManagedHostEntry>();
+	let currentPluginRuntime = processPluginRuntime;
 	const eventListeners = new Set<(event: SessionHostManagerEvent) => void>();
 	let shuttingDown = false;
 	let reloadInProgress = false;
@@ -65,7 +66,7 @@ export const createSessionHostManager = (
 		);
 	};
 	const maybeUnload = async (entry: ManagedHostEntry): Promise<void> => {
-		if (shuttingDown || !entry.openingComplete) {
+		if (shuttingDown || reloadInProgress || !entry.openingComplete) {
 			return;
 		}
 		if (entry.unloadCheck !== undefined) {
@@ -132,7 +133,7 @@ export const createSessionHostManager = (
 			unsubscribeSnapshot: undefined,
 			views: 0,
 			unsubscribeBackgroundWork: undefined,
-			pluginRuntime: capabilities.getPluginRuntime?.() ?? processPluginRuntime,
+			pluginRuntime: capabilities.getPluginRuntime?.() ?? currentPluginRuntime,
 			pluginSessionContext: {
 				...(executionMode === undefined ? {} : { executionMode }),
 				sessionId,
@@ -421,6 +422,41 @@ export const createSessionHostManager = (
 				}
 			}
 		};
+	const replacePluginRuntime: SessionHostManager["replacePluginRuntime"] =
+		async (runtime) => {
+			if (!reloadInProgress) {
+				throw new Error(
+					"Plugin runtime replacement requires a resource reload."
+				);
+			}
+			await assertIdleForReload();
+			const openEntries = [...entries.values()];
+			const started: ManagedHostEntry[] = [];
+			try {
+				for (const entry of openEntries) {
+					started.push(entry);
+					await runtime.startSession(entry.pluginSessionContext);
+				}
+			} catch (error) {
+				await Promise.allSettled(
+					started.map((entry) =>
+						runtime.stopSession(entry.pluginSessionContext)
+					)
+				);
+				throw error;
+			}
+			for (const entry of openEntries) {
+				entry.unsubscribeBackgroundWork?.();
+				entry.pluginRuntime = runtime;
+				entry.unsubscribeBackgroundWork = runtime.onBackgroundWorkChange(
+					entry.sessionId,
+					() => {
+						void maybeUnload(entry);
+					}
+				);
+			}
+			currentPluginRuntime = runtime;
+		};
 	const withIdleForReload: SessionHostManager["withIdleForReload"] = async (
 		action
 	) => {
@@ -436,6 +472,11 @@ export const createSessionHostManager = (
 			return await action();
 		} finally {
 			reloadInProgress = false;
+			for (const entry of entries.values()) {
+				if (entry.views === 0) {
+					void maybeUnload(entry);
+				}
+			}
 		}
 	};
 
@@ -443,6 +484,7 @@ export const createSessionHostManager = (
 		assertIdleForReload,
 		tryAcquireSessionWork,
 		withIdleForReload,
+		replacePluginRuntime,
 		onEvent: (listener) => {
 			eventListeners.add(listener);
 			return () => eventListeners.delete(listener);

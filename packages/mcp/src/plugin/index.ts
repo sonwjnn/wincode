@@ -52,11 +52,11 @@ const statusActions = (
 };
 
 const createStatusPanel = (
-	getRegistry: () => McpRegistry
+	getRegistry: () => McpRegistry | undefined
 ): PluginStatusPanelRegistration => ({
 	emptyText: "No MCP servers",
 	getSnapshot: () => {
-		const statuses = getRegistry().getStatuses();
+		const statuses = getRegistry()?.getStatuses() ?? [];
 		const connected = statuses.filter(
 			({ state }) => state === "connected"
 		).length;
@@ -84,19 +84,26 @@ const createStatusPanel = (
 	},
 	id: "servers",
 	indicatorLabel: "MCPs",
-	refresh: () => getRegistry().initialize(),
+	refresh: async () => {
+		await getRegistry()?.initialize();
+	},
 	runAction: async (serverName, actionId) => {
+		const registry = getRegistry();
+		if (registry === undefined) {
+			throw new Error("MCP registry is unavailable.");
+		}
 		if (actionId === "reconnect") {
-			await getRegistry().reconnect(serverName);
+			await registry.reconnect(serverName);
 			return;
 		}
 		if (actionId === "toggle") {
-			await getRegistry().toggle(serverName);
+			await registry.toggle(serverName);
 			return;
 		}
 		throw new Error(`Unknown MCP status action '${actionId}'.`);
 	},
-	subscribe: (listener) => getRegistry().subscribe(listener),
+	subscribe: (listener) =>
+		getRegistry()?.subscribe(listener) ?? (() => undefined),
 	title: "MCP Servers",
 });
 
@@ -135,7 +142,7 @@ export const createMcpPluginFactory =
 			registry = undefined;
 			await currentRegistry?.close();
 		});
-		plugin.registerStatusPanel(createStatusPanel(getRegistry));
+		plugin.registerStatusPanel(createStatusPanel(() => registry));
 		plugin.registerCommand({
 			description: "Enable, disable, and inspect MCP servers",
 			name: "mcps",
