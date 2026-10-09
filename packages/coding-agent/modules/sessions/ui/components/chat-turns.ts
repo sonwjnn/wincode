@@ -32,10 +32,9 @@ export const resolveTurnMetadataSignature = (
 		modelKey = `${metadata.model.providerId}/${metadata.model.modelId}`;
 	}
 	const interrupted = metadata.interrupted === true ? "1" : "0";
-	const effort = metadata.effort ?? "";
-	const reasoningMode = metadata.reasoningMode ?? "";
+	const thinkingLevel = metadata.thinkingLevel ?? "";
 
-	return `${agent}|${modelKey}|${effort}|${reasoningMode}|${interrupted}`;
+	return `${agent}|${modelKey}|${thinkingLevel}|${interrupted}`;
 };
 
 const resolveTurnMetadataMessage = (

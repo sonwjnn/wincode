@@ -5,37 +5,30 @@ import { isUndefined } from "@wincode/utils";
 
 import {
 	type ChatModelSelection,
-	effortSchema,
 	findSupportedChatModelSelection,
-	reasoningModeSchema,
 	type SupportedChatModel,
 	supportsSelectableReasoning,
 } from "./catalog";
 import { modelMetadataByKey } from "./generated/model-metadata.generated";
 import type {
-	Effort,
 	ModelMetadataEntry,
-	ReasoningMode,
-	ReasoningSelection,
+	ModelThinkingPolicy,
+	ThinkingLevel,
+	ThinkingLevelMap,
+	ThinkingSelection,
 } from "./model-metadata";
+import { thinkingLevelIds, thinkingLevelSchema } from "./model-metadata";
 
 export { modelMetadataSnapshotDate } from "./generated/model-metadata.generated";
 
-/** Builds one mutually exclusive Effort or Reasoning Mode selection. */
-export const createReasoningSelection = (
-	effort: Effort | undefined,
-	reasoningMode: ReasoningMode | undefined
-): ReasoningSelection => {
-	if (effort !== undefined && reasoningMode !== undefined) {
-		throw new Error("Select either an Effort or a Reasoning Mode, not both.");
-	}
-	if (effort !== undefined) {
-		return { effort };
-	}
-	if (reasoningMode !== undefined) {
-		return { reasoningMode };
-	}
-	return {};
+const DEFAULT_THINKING_LEVEL_VALUES: Readonly<
+	Partial<Record<ThinkingLevel, string>>
+> = {
+	off: "off",
+	minimal: "minimal",
+	low: "low",
+	medium: "medium",
+	high: "high",
 };
 
 export const getModelMetadata = (
@@ -43,121 +36,123 @@ export const getModelMetadata = (
 ): ModelMetadataEntry | undefined =>
 	model ? modelMetadataByKey[`${model.provider}/${model.id}`] : undefined;
 
+const createThinkingLadderMap = (
+	policy: ModelThinkingPolicy
+): ThinkingLevelMap => {
+	const map: Partial<Record<ThinkingLevel, string | null>> = {
+		off: policy.toggle ? "off" : null,
+	};
+	for (const level of thinkingLevelIds) {
+		if (level === "off") {
+			continue;
+		}
+		map[level] = policy.levels?.includes(level) ? level : null;
+	}
+	return map;
+};
+
+const createToggleThinkingMap = (): ThinkingLevelMap => {
+	const map: Partial<Record<ThinkingLevel, string | null>> = { off: "off" };
+	for (const level of thinkingLevelIds) {
+		if (level !== "off") {
+			map[level] = "thinking";
+		}
+	}
+	return map;
+};
+
+const getModelThinkingLevelMap = (
+	policy: ModelThinkingPolicy | undefined
+): ThinkingLevelMap | undefined => {
+	if (!policy || policy.unlevelled) {
+		return;
+	}
+	let map: ThinkingLevelMap | undefined;
+	if (policy.levels?.length) {
+		map = createThinkingLadderMap(policy);
+	} else if (policy.toggle) {
+		map = createToggleThinkingMap();
+	}
+	if (policy.levelMap !== undefined) {
+		return { ...map, ...policy.levelMap };
+	}
+	return map;
+};
+
 /**
- * The named Efforts a model publishes. Toggle states are deliberately absent;
- * a budget-only model keeps its derived automatic budget without a choice.
+ * Resolves a model's native value for one unified level. A missing standard
+ * level uses the provider default; xhigh and max require explicit opt-in.
  */
-const getSupportedEffortsForModel = (
-	model: SupportedChatModel | null
-): readonly Effort[] => {
-	if (!model) {
-		return [];
-	}
-	if (!supportsSelectableReasoning(model)) {
-		return [];
-	}
-	const policy = getModelMetadata(model)?.thinking;
-	return policy?.unlevelled ? [] : (policy?.levels ?? []);
-};
-
-/** Available off/on controls are determined by the model's declared toggle. */
-const getSupportedModesForModel = (
-	model: SupportedChatModel | null
-): readonly ReasoningMode[] => {
-	if (!model) {
-		return [];
-	}
-	if (!supportsSelectableReasoning(model)) {
-		return [];
-	}
-	const policy = getModelMetadata(model)?.thinking;
-	if (!policy?.toggle || policy.unlevelled) {
-		return [];
-	}
-	return policy.levels?.length ? ["none"] : ["none", "thinking"];
-};
-
-export const getSupportedModelEfforts = (
-	selection: ChatModelSelection
-): readonly Effort[] =>
-	getSupportedEffortsForModel(findSupportedChatModelSelection(selection));
-
-export const getSupportedReasoningModes = (
-	selection: ChatModelSelection
-): readonly ReasoningMode[] =>
-	getSupportedModesForModel(findSupportedChatModelSelection(selection));
-
-export const isSupportedModelEffort = (
-	selection: ChatModelSelection,
-	effort: Effort
-): boolean => getSupportedModelEfforts(selection).includes(effort);
-
-export const isSupportedReasoningMode = (
-	selection: ChatModelSelection,
-	reasoningMode: ReasoningMode
-): boolean => getSupportedReasoningModes(selection).includes(reasoningMode);
-
-export const normalizeModelEffort = (
-	selection: ChatModelSelection,
-	effort: string | undefined
-): Effort | undefined =>
-	normalizeModelEffortForModel(
-		findSupportedChatModelSelection(selection),
-		effort
-	);
-
-export const normalizeModelEffortForModel = (
+export const getModelThinkingLevelValue = (
 	model: SupportedChatModel | null,
-	effort: string | undefined
-): Effort | undefined => {
-	if (isUndefined(effort)) {
+	thinkingLevel: ThinkingLevel
+): string | undefined => {
+	if (!(model && supportsSelectableReasoning(model))) {
 		return;
 	}
-	const parsed = effortSchema.safeParse(effort);
+	const policy = getModelMetadata(model)?.thinking;
+	const levelMap = getModelThinkingLevelMap(policy);
+	if (!levelMap) {
+		return;
+	}
+	const mapped = levelMap[thinkingLevel];
+	if (mapped === null) {
+		return;
+	}
+	return mapped ?? DEFAULT_THINKING_LEVEL_VALUES[thinkingLevel];
+};
+
+/** The unified levels a model can express through its per-model map. */
+const getSupportedThinkingLevelsForModel = (
+	model: SupportedChatModel | null
+): readonly ThinkingLevel[] =>
+	thinkingLevelIds.filter(
+		(level) => !isUndefined(getModelThinkingLevelValue(model, level))
+	);
+
+export const getSupportedThinkingLevels = (
+	selection: ChatModelSelection
+): readonly ThinkingLevel[] =>
+	getSupportedThinkingLevelsForModel(
+		findSupportedChatModelSelection(selection)
+	);
+
+export const isSupportedThinkingLevel = (
+	selection: ChatModelSelection,
+	thinkingLevel: ThinkingLevel
+): boolean => getSupportedThinkingLevels(selection).includes(thinkingLevel);
+
+export const normalizeThinkingLevel = (
+	selection: ChatModelSelection,
+	thinkingLevel: string | undefined
+): ThinkingLevel | undefined =>
+	normalizeThinkingLevelForModel(
+		findSupportedChatModelSelection(selection),
+		thinkingLevel
+	);
+
+export const normalizeThinkingLevelForModel = (
+	model: SupportedChatModel | null,
+	thinkingLevel: string | undefined
+): ThinkingLevel | undefined => {
+	if (isUndefined(thinkingLevel)) {
+		return;
+	}
+	const parsed = thinkingLevelSchema.safeParse(thinkingLevel);
 	return parsed.success &&
-		getSupportedEffortsForModel(model).includes(parsed.data)
+		getSupportedThinkingLevelsForModel(model).includes(parsed.data)
 		? parsed.data
 		: undefined;
 };
 
-export const normalizeReasoningMode = (
+/** Normalizes one unified Thinking Level for the selected model. */
+export const normalizeThinkingSelection = (
 	selection: ChatModelSelection,
-	reasoningMode: string | undefined
-): ReasoningMode | undefined =>
-	normalizeReasoningModeForModel(
-		findSupportedChatModelSelection(selection),
-		reasoningMode
-	);
-
-export const normalizeReasoningModeForModel = (
-	model: SupportedChatModel | null,
-	reasoningMode: string | undefined
-): ReasoningMode | undefined => {
-	if (isUndefined(reasoningMode)) {
-		return;
+	choice: ThinkingSelection
+): ThinkingSelection => {
+	if (isUndefined(choice.thinkingLevel)) {
+		return {};
 	}
-	const parsed = reasoningModeSchema.safeParse(reasoningMode);
-	return parsed.success &&
-		getSupportedModesForModel(model).includes(parsed.data)
-		? parsed.data
-		: undefined;
-};
-
-/** Normalizes a mutually exclusive Effort or Reasoning Mode for one model. */
-export const normalizeReasoningSelection = (
-	selection: ChatModelSelection,
-	choice: ReasoningSelection
-): ReasoningSelection => {
-	if (choice.effort !== undefined) {
-		const effort = normalizeModelEffort(selection, choice.effort);
-		return effort === undefined ? {} : { effort };
-	}
-	if (choice.reasoningMode !== undefined) {
-		const reasoningMode = normalizeReasoningMode(
-			selection,
-			choice.reasoningMode
-		);
-		return reasoningMode === undefined ? {} : { reasoningMode };
-	}
-	return {};
+	const thinkingLevel = normalizeThinkingLevel(selection, choice.thinkingLevel);
+	return thinkingLevel === undefined ? {} : { thinkingLevel };
 };

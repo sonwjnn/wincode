@@ -1,5 +1,8 @@
 import type { AgentId, AgentTurnId, ToolCallId } from "@wincode/agent-core";
-import type { SessionSdkHandle } from "@wincode/coding-agent";
+import type {
+	SessionSdkCapabilityCeiling,
+	SessionSdkHandle,
+} from "@wincode/coding-agent";
 import type { Tagged } from "type-fest";
 import { z } from "zod";
 import { delegationResultSchema } from "../tools";
@@ -42,8 +45,13 @@ export const delegationTaskOutcomeSchema = z.discriminatedUnion("kind", [
 export type DelegationTaskStatus = z.infer<typeof delegationTaskStatusSchema>;
 export type DelegationTaskOutcome = z.infer<typeof delegationTaskOutcomeSchema>;
 
+export const delegationCapabilityCeilingSchema = z.object({
+	tools: z.array(z.string().min(1)),
+});
+
 export type DelegationTask = Readonly<{
 	agentId: AgentId;
+	capabilityCeiling?: SessionSdkCapabilityCeiling;
 	childSessionId: SessionId;
 	createdAt: Date;
 	id: DelegationTaskId;

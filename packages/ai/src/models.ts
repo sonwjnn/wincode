@@ -12,7 +12,9 @@ import {
 	findSupportedChatModel,
 	findSupportedChatModelSelection,
 	type SupportedChatModelId,
+	type ThinkingLevel,
 } from "./catalog";
+import { isSupportedThinkingLevel } from "./model-metadata-runtime";
 
 export * from "./catalog";
 export * from "./model-metadata-runtime";
@@ -58,6 +60,34 @@ export const parseCatalogModelSelection = (
 	return parsed.success && findSupportedChatModelSelection(parsed.data)
 		? parsed.data
 		: null;
+};
+
+export type AgentModelSelectionInput = Readonly<{
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}>;
+
+export type AgentModelSelectionValidation = Readonly<{
+	invalidModel: boolean;
+	invalidThinkingLevel: boolean;
+	model: ChatModelSelection | undefined;
+}>;
+
+/** Parses and validates an Agent's catalog-backed model and thinking level. */
+export const resolveAgentModelSelection = ({
+	model: modelName,
+	thinkingLevel,
+}: AgentModelSelectionInput): AgentModelSelectionValidation => {
+	const parsedModel =
+		modelName === undefined ? undefined : parseCatalogModelSelection(modelName);
+	const model = parsedModel ?? undefined;
+	return {
+		invalidModel: modelName !== undefined && model === undefined,
+		invalidThinkingLevel:
+			thinkingLevel !== undefined &&
+			(model === undefined || !isSupportedThinkingLevel(model, thinkingLevel)),
+		model,
+	};
 };
 
 export const getChatModelRoute = (

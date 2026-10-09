@@ -9,6 +9,7 @@ import {
 	type DelegationTaskId,
 	type DelegationTaskOutcome,
 	type DelegationTaskStatus,
+	delegationCapabilityCeilingSchema,
 	delegationTaskOutcomeSchema,
 	delegationTaskStatusSchema,
 	type SessionId,
@@ -59,6 +60,7 @@ const statusForOutcome = (
 type TaskRow = Readonly<{
 	id: string;
 	agent_id: string;
+	capability_ceiling_json: string | null;
 	child_session_id: string;
 	parent_session_id: string;
 	parent_tool_call_id: string;
@@ -72,6 +74,13 @@ type TaskRow = Readonly<{
 
 const taskFromRow = (row: TaskRow): DelegationTask => ({
 	agentId: row.agent_id as AgentId,
+	...(row.capability_ceiling_json === null
+		? {}
+		: {
+				capabilityCeiling: delegationCapabilityCeilingSchema.parse(
+					JSON.parse(row.capability_ceiling_json)
+				),
+			}),
 	childSessionId: toSessionId(row.child_session_id),
 	createdAt: new Date(row.created_at),
 	id: toDelegationTaskId(row.id),
@@ -89,6 +98,7 @@ const taskFromRow = (row: TaskRow): DelegationTask => ({
 export type CreateSubagentsTaskInput = Readonly<{
 	id?: DelegationTaskId;
 	agentId: AgentId;
+	capabilityCeiling?: DelegationTask["capabilityCeiling"];
 	childSessionId: SessionId;
 	parentSessionId: SessionId;
 	parentToolCallId: ToolCallId;
@@ -133,6 +143,7 @@ export const createSubagentsTaskStore = async (
 			CREATE TABLE IF NOT EXISTS subagents_task (
 				id TEXT PRIMARY KEY NOT NULL,
 				agent_id TEXT NOT NULL,
+				capability_ceiling_json TEXT,
 				child_session_id TEXT NOT NULL UNIQUE,
 				parent_session_id TEXT NOT NULL,
 				parent_tool_call_id TEXT NOT NULL,
@@ -156,6 +167,21 @@ export const createSubagentsTaskStore = async (
 				WHERE outcome_json IS NOT NULL AND report_consumed_at IS NULL
 				ORDER BY updated_at, id;
 		`);
+		database
+			.transaction(() => {
+				const columns = database
+					.query("PRAGMA table_info(subagents_task)")
+					.all() as {
+					name: string;
+				}[];
+				if (columns.some(({ name }) => name === "capability_ceiling_json")) {
+					return;
+				}
+				database.exec(
+					"ALTER TABLE subagents_task ADD COLUMN capability_ceiling_json TEXT"
+				);
+			})
+			.immediate();
 	} catch (error) {
 		database.close();
 		throw error;
@@ -194,14 +220,17 @@ export const createSubagentsTaskStore = async (
 		database
 			.query(
 				`INSERT INTO subagents_task (
-					id, agent_id, child_session_id, parent_session_id,
-					parent_tool_call_id, parent_turn_id, status, outcome_json,
-					created_at, updated_at, report_consumed_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)`
+					id, agent_id, capability_ceiling_json, child_session_id,
+					parent_session_id, parent_tool_call_id, parent_turn_id,
+					status, outcome_json, created_at, updated_at, report_consumed_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)`
 			)
 			.run(
 				task.id,
 				task.agentId,
+				task.capabilityCeiling === undefined
+					? null
+					: JSON.stringify(task.capabilityCeiling),
 				task.childSessionId,
 				task.parentSessionId,
 				task.parentToolCallId,

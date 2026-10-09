@@ -179,8 +179,7 @@ export const createSessionMaintenanceWorkflow = (
 		trigger: command.trigger,
 		...omitUndefined({
 			focus: command.focus,
-			effort: command.effort,
-			reasoningMode: command.reasoningMode,
+			thinkingLevel: command.thinkingLevel,
 		}),
 		signal,
 	});
@@ -402,8 +401,7 @@ export const createSessionMaintenanceWorkflow = (
 				trigger: "overflow",
 				turnId: command.turnId,
 				...omitUndefined({
-					effort: target.effort,
-					reasoningMode: target.reasoningMode,
+					thinkingLevel: target.thinkingLevel,
 				}),
 			});
 		} catch (error) {

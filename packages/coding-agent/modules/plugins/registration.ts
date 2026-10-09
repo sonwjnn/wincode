@@ -1,4 +1,10 @@
 import {
+	agentIdSchema,
+	agentRoleSchema,
+	MAX_AGENT_INSTRUCTIONS_LENGTH,
+} from "@wincode/agent-core";
+import { thinkingLevelSchema } from "@wincode/ai/models";
+import {
 	isJsonObject,
 	isNonEmptyString,
 	isObjectLike,
@@ -6,6 +12,7 @@ import {
 } from "@wincode/utils";
 import { z } from "zod";
 import type {
+	PluginAgentRegistration,
 	PluginCommandRegistration,
 	PluginInputSchema,
 	PluginToolRegistration,
@@ -16,6 +23,43 @@ const pluginToolNamePattern = /^[a-z0-9_-]+$/u;
 const pluginCommandNamePattern = /^[a-z0-9_-]+$/u;
 const pluginStatusPanelIdPattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const pluginModelNamePattern = /^[a-zA-Z0-9_-]+$/u;
+const pluginAgentRegistrationSchema = z
+	.object({
+		agent: z
+			.object({
+				description: z.string().trim().min(1).max(512),
+				displayName: z.string().trim().min(1).max(128),
+				id: agentIdSchema,
+				instructions: z.string().max(MAX_AGENT_INSTRUCTIONS_LENGTH),
+				role: agentRoleSchema,
+			})
+			.strict()
+			.refine(({ role }) => role === "subagent" || role === "all"),
+		model: z.string().trim().min(1).optional(),
+		thinkingLevel: thinkingLevelSchema.optional(),
+		requiredTools: z
+			.array(z.string().trim().min(1).max(128))
+			.max(128)
+			.optional(),
+		source: z
+			.object({
+				path: z.string().trim().min(1),
+				projectRoot: z.string().trim().min(1).optional(),
+				scope: z.enum(["builtin", "package", "user", "project"]),
+			})
+			.strict()
+			.superRefine((source, context) => {
+				if (source.scope === "project" && source.projectRoot === undefined) {
+					context.addIssue({
+						code: "custom",
+						message: "Project Agents must declare their trusted project root.",
+						path: ["projectRoot"],
+					});
+				}
+			}),
+		tools: z.array(z.string().trim().min(1).max(128)).max(128).optional(),
+	})
+	.strict();
 
 const getModelName = (
 	candidate: object,
@@ -86,6 +130,29 @@ const validatePluginInputSchema = (
 			`Plugin Tool '${name}' must use a Zod or JSON Schema input definition.`
 		);
 	}
+};
+
+/** Validates one Plugin Agent before it enters the shared Agent catalog. */
+export const validatePluginAgent = (
+	candidate: unknown
+): PluginAgentRegistration => {
+	const parsed = pluginAgentRegistrationSchema.safeParse(candidate);
+	if (!parsed.success) {
+		throw new Error(
+			`Invalid Plugin Agent registration: ${parsed.error.message}`
+		);
+	}
+	return Object.freeze({
+		...parsed.data,
+		agent: Object.freeze({ ...parsed.data.agent }),
+		...(parsed.data.requiredTools === undefined
+			? {}
+			: { requiredTools: Object.freeze([...parsed.data.requiredTools]) }),
+		source: Object.freeze({ ...parsed.data.source }),
+		...(parsed.data.tools === undefined
+			? {}
+			: { tools: Object.freeze([...parsed.data.tools]) }),
+	});
 };
 
 /** Validates one Plugin Tool before it can replace an owner's registration. */

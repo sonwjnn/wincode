@@ -136,8 +136,7 @@ const createHandler = ({
 						agent: "build",
 						model,
 						persistedAgent: "build",
-						effort: undefined,
-						reasoningMode: undefined,
+						thinkingLevel: undefined,
 					}
 				: null,
 		getSnapshot: () =>

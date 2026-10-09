@@ -4,7 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { AgentTurnId } from "@wincode/agent-core";
-import type { PluginBeforeAgentTurnContext } from "@wincode/coding-agent";
+import type {
+	PluginBeforeAgentTurnContext,
+	PluginSessionContext,
+} from "@wincode/coding-agent";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createConfigStore } from "@/shared/config/config-store";
 import { agentId, sessionId } from "../../support/identifiers";
@@ -24,13 +27,26 @@ test("the distributed Subagents package registers delegate through the public Pl
 		distributionPlugins: [
 			{ id: "subagents", specifier: "@wincode/subagents/plugin" },
 		],
+		userDataDir: path.join(root, "user-data"),
 	});
 	const context = fromPartial<PluginBeforeAgentTurnContext>({
 		agentId: agentId("build"),
 		sessionId: sessionId("parent-session"),
 		sessionSdk: {
 			getAgentCatalog: async () => [
-				{ id: agentId("scout"), isAvailable: true, role: "subagent" },
+				{
+					description: "Explore the codebase.",
+					id: agentId("scout"),
+					isAvailable: true,
+					role: "subagent",
+				},
+				{
+					description: "Research with web sources.",
+					id: agentId("researcher"),
+					isAvailable: false,
+					role: "subagent",
+					unavailableReason: "Missing required child tools: web_search",
+				},
 			],
 		},
 		signal: new AbortController().signal,
@@ -38,6 +54,36 @@ test("the distributed Subagents package registers delegate through the public Pl
 		workspace,
 	});
 	try {
+		const registeredAgentIds = runtime
+			.getAgentRegistrations()
+			.map(({ agent }) => String(agent.id))
+			.toSorted();
+		expect(registeredAgentIds).toEqual([
+			"delegate",
+			"evidence-auditor",
+			"oracle",
+			"researcher",
+			"reviewer",
+			"scout",
+			"worker",
+		]);
+
+		const sessionContext = fromPartial<PluginSessionContext>({
+			sessionId: context.sessionId,
+			sessionSdk: context.sessionSdk,
+			workspace,
+		});
+		await runtime.startSession(sessionContext);
+		const commandOutput = await runtime.executeCommand(
+			"subagents",
+			"subagents",
+			{ argument: "", sessionId: context.sessionId, workspace }
+		);
+		expect(commandOutput).toContain(
+			"- researcher — unavailable: Missing required child tools: web_search"
+		);
+		expect(commandOutput).toContain("- scout — available");
+
 		const tools = await runtime.resolveToolsForTurn(context);
 		expect(tools.map(({ name }) => name)).toContain("delegate");
 	} finally {

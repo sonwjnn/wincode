@@ -13,11 +13,7 @@ import type {
 	SubmissionId,
 	ToolCallId,
 } from "@wincode/agent-core";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import type { ReadonlyDeep } from "type-fest";
 import type {
 	SkillContext,
@@ -139,14 +135,12 @@ export type SessionExecution = ReadonlyDeep<{
 	model: ChatModelSelection;
 	/** The session-level selection recorded on this execution's Session Records. */
 	sessionModel: ChatModelSelection;
-	sessionEffort?: Effort;
-	sessionReasoningMode?: ReasoningMode;
+	sessionThinkingLevel?: ThinkingLevel;
 	/** The Session Context message this execution answers. */
 	sourceUserMessageId: SessionMessageId | null;
 	startedAt: number;
 	turnId: AgentTurnId;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 	viewState?: SessionViewState;
 }>;
 
@@ -234,16 +228,14 @@ export type SessionExecutionInput = ReadonlyDeep<{
 	agent: AgentId;
 	model: ChatModelSelection;
 	sessionModel: ChatModelSelection;
-	sessionEffort?: Effort;
-	sessionReasoningMode?: ReasoningMode;
+	sessionThinkingLevel?: ThinkingLevel;
 	submissionId?: SubmissionId;
 	/** The Session Context message this execution answers, when known. */
 	sourceUserMessageId?: SessionMessageId;
 	startedAt: number;
 	/** The Agent Turn Identifier; generated when the caller has none yet. */
 	turnId?: AgentTurnId;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 }>;
 
 /**
@@ -262,8 +254,7 @@ export type SessionCommitInput = {
 	record: SessionRecord;
 	sessionId: SessionId;
 	sessionModel?: ChatModelSelection;
-	sessionEffort?: Effort;
-	sessionReasoningMode?: ReasoningMode;
+	sessionThinkingLevel?: ThinkingLevel;
 };
 export type SessionSubmissionStatusUpdate = Readonly<{
 	failure?: string;
@@ -410,7 +401,7 @@ export type AgentSessionPorts = Readonly<{
 	updateSubmissionStatus: (
 		input: SessionSubmissionStatusUpdate
 	) => Promise<void>;
-	/** Resolves the Agent, Model, and reasoning selection when a Submission starts. */
+	/** Resolves the Agent, Model, and thinking level when a Submission starts. */
 	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
 	/** Resolves the @path file mentions of a prompt. */
 	resolveFileMentions: (text: string) => Promise<FileMentionPart[]>;
@@ -427,8 +418,7 @@ export type AgentSessionOptions = Readonly<{
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
 	initialSessionModel?: ChatModelSelection;
-	initialSessionEffort?: Effort;
-	initialSessionReasoningMode?: ReasoningMode;
+	initialSessionThinkingLevel?: ThinkingLevel;
 	initialSteeringMessages?: readonly SessionSteeringMessage[];
 	initialTranscript: readonly SessionMessage[];
 	ports: AgentSessionPorts;
@@ -452,8 +442,7 @@ export type SessionOverflowContinuationOutcome =
 /** The Model Target one overflow recovery compacts and continues with. */
 export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
 	model: ChatModelSelection;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 }>;
 
 /** One provider refusal proposed to the Agent Session for overflow recovery. */
@@ -508,8 +497,7 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 	trigger: CompactionTriggerReason;
 	/** The Agent Turn that initiated this compaction, for diagnostics. */
 	turnId?: AgentTurnId;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 }>;
 
 /**

@@ -23,7 +23,7 @@ describe("convertModelsDevPayload", () => {
 		});
 	});
 
-	test("maps source none to a Reasoning Mode, not an Effort", () => {
+	test("excludes source none from named ThinkingLevel options", () => {
 		const converted = convertModelsDevPayload({
 			openai: {
 				models: {
@@ -108,6 +108,23 @@ describe("convertModelsDevPayload", () => {
 		});
 		expect(converted.get("opencode_go/switch-only")).toEqual({
 			thinking: { toggle: true },
+		});
+	});
+
+	test("keeps budget-only thinking automatic instead of inventing a level", () => {
+		const converted = convertModelsDevPayload({
+			anthropic: {
+				models: {
+					"budget-only": {
+						reasoning_options: [
+							{ type: "budget_tokens", min: 1024, max: 8192 },
+						],
+					},
+				},
+			},
+		});
+		expect(converted.get("anthropic/budget-only")).toEqual({
+			thinking: { budgetMin: 1024, budgetMax: 8192, unlevelled: true },
 		});
 	});
 

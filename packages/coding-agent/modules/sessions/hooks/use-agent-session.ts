@@ -1,7 +1,4 @@
-import type {
-	ChatModelSelection,
-	ReasoningSelection,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingSelection } from "@wincode/ai/models";
 import { useEffect, useMemo, useState } from "react";
 import type {
 	AgentSession,
@@ -25,7 +22,7 @@ export type AgentSessionBinding = Readonly<{
 	compact: (
 		focus: string | undefined,
 		selection: ChatModelSelection,
-		reasoningSelection?: ReasoningSelection
+		thinkingSelection?: ThinkingSelection
 	) => Promise<CompactSessionResult>;
 	/** Interrupts the Agent Turn the session is running and recalls everything waiting. */
 	interrupt: AgentSession["interrupt"];
@@ -73,13 +70,13 @@ export function useAgentSession(host: SessionHost): AgentSessionBinding {
 			(
 				focus: string | undefined,
 				selection: ChatModelSelection,
-				reasoningSelection: ReasoningSelection = {}
+				thinkingSelection: ThinkingSelection = {}
 			) =>
 				agentSession.compact({
 					focus,
 					model: selection,
 					trigger: "manual",
-					...reasoningSelection,
+					...thinkingSelection,
 				}),
 		[agentSession]
 	);

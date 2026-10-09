@@ -16,10 +16,10 @@ import type { CommandHandlerMap } from "@/modules/commands/execute-command";
 import { ConnectDialogContent } from "@/modules/connections";
 import type { PromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
-import { EffortDialogContent } from "@/modules/prompt-settings/ui/effort-dialog";
 import { getModelsForPicker } from "@/modules/prompt-settings/ui/model-picker-options";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
+import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinking-level-dialog";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import type { ToastContextValue } from "@/shared/providers/toast/toast-provider";
@@ -140,21 +140,21 @@ const STRATEGIES = {
 				recentSelections: getRecentModelSelections(10),
 			}),
 	},
-	"effort.select": {
+	"thinking.select": {
 		kind: "dialog",
-		title: "Select Effort",
+		title: "Select Thinking Level",
 		content: ({ config }) => {
 			const supportedModel = findSupportedChatModelSelection(config.model);
 			if (!supportedModel) {
-				throw new Error("Effort selection is unavailable in this view.");
+				throw new Error(
+					"Thinking-level selection is unavailable in this view."
+				);
 			}
-			return createElement(EffortDialogContent, {
-				currentEffort: config.effort,
+			return createElement(ThinkingLevelDialogContent, {
+				currentThinkingLevel: config.thinkingLevel,
 				currentModel: supportedModel,
-				currentReasoningMode: config.reasoningMode,
-				onSelectDefault: () => config.setEffort(undefined),
-				onSelectEffort: config.setEffort,
-				onSelectReasoningMode: config.setReasoningMode,
+				onSelectDefault: () => config.setThinkingLevel(undefined),
+				onSelectThinkingLevel: config.setThinkingLevel,
 			});
 		},
 	},

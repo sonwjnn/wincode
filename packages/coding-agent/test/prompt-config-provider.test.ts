@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import {
-	resolveInitialPromptReasoningSelection,
+	resolveInitialPromptThinkingSelection,
 	updatePromptConfigModel,
 	updatePromptConfigSelection,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -16,119 +16,83 @@ const model = (
 });
 
 describe("initial Prompt Configuration", () => {
-	test("defaults to the supported low Effort", () => {
+	test("defaults to supported low ThinkingLevel", () => {
 		expect(
-			resolveInitialPromptReasoningSelection(
+			resolveInitialPromptThinkingSelection(
 				model("gpt-5.6-luna", "openai"),
-				undefined,
 				undefined
 			)
-		).toEqual({ effort: "low" });
+		).toEqual({ thinkingLevel: "low" });
 	});
 
-	test("leaves Effort unset when low is unavailable", () => {
+	test("defaults to low when a toggle-only model can express positive levels", () => {
 		expect(
-			resolveInitialPromptReasoningSelection(
+			resolveInitialPromptThinkingSelection(
 				model("qwen3.7-max", "opencode-go"),
-				undefined,
 				undefined
 			)
-		).toEqual({});
+		).toEqual({ thinkingLevel: "low" });
 	});
 
-	test("preserves a supported initial Reasoning Mode", () => {
+	test("preserves an explicitly selected supported ThinkingLevel", () => {
 		expect(
-			resolveInitialPromptReasoningSelection(
-				model("qwen3.7-max", "opencode-go"),
-				undefined,
-				"thinking"
+			resolveInitialPromptThinkingSelection(
+				model("gpt-5.6-luna", "openai"),
+				"high"
 			)
-		).toEqual({ reasoningMode: "thinking" });
+		).toEqual({ thinkingLevel: "high" });
 	});
 });
 
 describe("updatePromptConfigModel", () => {
-	test("keeps an Effort when the Model Target is unchanged", () => {
+	test("keeps ThinkingLevel when the Model Target is unchanged", () => {
 		const currentModel = model("gpt-5.6-luna", "openai");
 		expect(
 			updatePromptConfigModel(
 				{
 					agent: agentId("code-reviewer"),
 					model: currentModel,
-					effort: "high",
+					thinkingLevel: "high",
 				},
 				currentModel
 			)
 		).toEqual({
 			agent: agentId("code-reviewer"),
 			model: currentModel,
-			effort: "high",
+			thinkingLevel: "high",
 		});
 	});
 
-	test("preserves a supported Effort when the selected model changes", () => {
+	test("preserves a supported ThinkingLevel when the selected model changes", () => {
 		expect(
 			updatePromptConfigModel(
 				{
 					agent: agentId("code-reviewer"),
 					model: model("gpt-5.6-luna", "openai"),
-					effort: "low",
+					thinkingLevel: "high",
 				},
 				model("claude-sonnet-5", "anthropic")
 			)
 		).toEqual({
 			agent: agentId("code-reviewer"),
 			model: model("claude-sonnet-5", "anthropic"),
-			effort: "low",
+			thinkingLevel: "high",
 		});
 	});
 
-	test("clears an Effort unsupported by the newly selected model", () => {
+	test("clears a ThinkingLevel unsupported by the newly selected model", () => {
 		expect(
 			updatePromptConfigModel(
 				{
 					agent: agentId("code-reviewer"),
 					model: model("gpt-5.6-luna", "openai"),
-					effort: "high",
+					thinkingLevel: "high",
 				},
-				model("qwen3.7-max", "opencode-go")
+				model("grok-4.6", "opencode-go")
 			)
 		).toEqual({
 			agent: agentId("code-reviewer"),
-			model: model("qwen3.7-max", "opencode-go"),
-		});
-	});
-
-	test("preserves a supported Reasoning Mode when the model changes", () => {
-		expect(
-			updatePromptConfigModel(
-				{
-					agent: agentId("code-reviewer"),
-					model: model("qwen3.7-max", "opencode-go"),
-					reasoningMode: "thinking",
-				},
-				model("qwen3.7-plus", "opencode-go")
-			)
-		).toEqual({
-			agent: agentId("code-reviewer"),
-			model: model("qwen3.7-plus", "opencode-go"),
-			reasoningMode: "thinking",
-		});
-	});
-
-	test("clears a Reasoning Mode unsupported by the newly selected model", () => {
-		expect(
-			updatePromptConfigModel(
-				{
-					agent: agentId("code-reviewer"),
-					model: model("qwen3.7-max", "opencode-go"),
-					reasoningMode: "thinking",
-				},
-				model("gpt-5.6-luna", "openai")
-			)
-		).toEqual({
-			agent: agentId("code-reviewer"),
-			model: model("gpt-5.6-luna", "openai"),
+			model: model("grok-4.6", "opencode-go"),
 		});
 	});
 });
@@ -140,29 +104,20 @@ describe("updatePromptConfigSelection", () => {
 		model: modelTarget,
 	};
 
-	test("selecting an Effort clears the active Reasoning Mode", () => {
+	test("selecting a ThinkingLevel replaces the current value", () => {
 		expect(
 			updatePromptConfigSelection(
-				{ ...base, reasoningMode: "none" },
-				{ effort: "xhigh" }
+				{ ...base, thinkingLevel: "low" },
+				{ thinkingLevel: "xhigh" }
 			)
-		).toEqual({ ...base, effort: "xhigh" });
+		).toEqual({ ...base, thinkingLevel: "xhigh" });
 	});
 
-	test("selecting a Reasoning Mode clears the active Effort", () => {
+	test("normalizes an unsupported selected ThinkingLevel to provider default", () => {
 		expect(
 			updatePromptConfigSelection(
-				{ ...base, effort: "xhigh" },
-				{ reasoningMode: "none" }
-			)
-		).toEqual({ ...base, reasoningMode: "none" });
-	});
-
-	test("rejects a choice unavailable for the selected model", () => {
-		expect(
-			updatePromptConfigSelection(
-				{ ...base, effort: "xhigh" },
-				{ reasoningMode: "thinking" }
+				{ ...base, thinkingLevel: "xhigh" },
+				{ thinkingLevel: "max" }
 			)
 		).toEqual(base);
 	});

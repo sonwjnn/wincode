@@ -1,15 +1,18 @@
 import type {
+	AgentDefinition,
 	AgentId,
 	AgentTurnId,
 	ToolCallId,
 	ToolCallOutput,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type {
+	SessionSdkAgentSource,
 	SessionSdkCapabilityCeiling,
-	SessionSdkChildFactory,
+	SessionSdkOperations,
 } from "../sessions/sdk-contract";
 
 export type PluginJsonValue =
@@ -86,8 +89,24 @@ export type PluginStatusPanelRegistration = Readonly<{
 	title: string;
 }>;
 
+export type PluginAgentScope = Exclude<SessionSdkAgentSource, "global">;
+
+export type PluginAgentRegistration = Readonly<{
+	agent: AgentDefinition;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+	requiredTools?: readonly string[];
+	source: Readonly<{
+		path: string;
+		projectRoot?: string;
+		scope: PluginAgentScope;
+	}>;
+	tools?: readonly string[];
+}>;
+
 export type PluginLoadContext = Readonly<{
 	config: PluginConfigReader;
+	trustedProjectRoots?: readonly string[];
 	sourcePath: string;
 	userDataDir: string;
 	workspace: string;
@@ -96,7 +115,7 @@ export type PluginLoadContext = Readonly<{
 export type PluginSessionContext = Readonly<{
 	executionMode?: ExecutionMode;
 	sessionId: string;
-	sessionSdk?: SessionSdkChildFactory;
+	sessionSdk?: SessionSdkOperations;
 	workspace: string;
 }>;
 
@@ -186,6 +205,7 @@ export type PluginShutdownHook = (
 
 export type PluginDefinitionAPI = PluginRegistrationAPI &
 	Readonly<{
+		registerAgent: (agent: PluginAgentRegistration) => void;
 		registerResource: (name: string, resource: unknown) => void;
 		registerStatusPanel: (panel: PluginStatusPanelRegistration) => void;
 		onSessionStart: (handler: PluginSessionStartHook) => void;

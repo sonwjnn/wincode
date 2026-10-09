@@ -5,8 +5,9 @@
 
 import { z } from "zod";
 
-/** Stable Effort identifiers Wincode can persist and send. */
-export const effortIds = [
+/** Stable reasoning levels Wincode can persist and send. */
+export const thinkingLevelIds = [
+	"off",
 	"minimal",
 	"low",
 	"medium",
@@ -14,39 +15,34 @@ export const effortIds = [
 	"xhigh",
 	"max",
 ] as const;
-export type Effort = (typeof effortIds)[number];
-
-/** Non-effort reasoning controls; availability is declared per model. */
-export const reasoningModeIds = ["none", "thinking"] as const;
-export type ReasoningMode = (typeof reasoningModeIds)[number];
-
-export const effortSchema = z.enum(effortIds);
-export const reasoningModeSchema = z.enum(reasoningModeIds);
-
-export type ReasoningSelection = Readonly<
-	| { effort: Effort; reasoningMode?: never }
-	| { effort?: never; reasoningMode: ReasoningMode }
-	| { effort?: never; reasoningMode?: never }
+export type ThinkingLevel = (typeof thinkingLevelIds)[number];
+export type ThinkingLevelMap = Readonly<
+	Partial<Record<ThinkingLevel, string | null>>
 >;
+
+export const thinkingLevelSchema = z.enum(thinkingLevelIds);
+
+export type ThinkingSelection = Readonly<{
+	thinkingLevel?: ThinkingLevel;
+}>;
 
 /**
  * How a model expresses reasoning, normalized from models.dev
- * `reasoning_options[]`. The source may publish an Effort ladder, a toggle, and
- * budget bounds independently. A toggle supplies Modes; Efforts remain named
- * ladder entries, and budget-only models keep their derived automatic budget.
+ * `reasoning_options[]`. A per-model map carries selectable levels and their
+ * provider-native values; budget-only models keep their derived automatic
+ * budget without a selectable level.
  */
 export type ModelThinkingPolicy = Readonly<{
-	/** The model exposes an on/off switch that can provide Reasoning Modes. */
+	/** Per-model native level overrides; null means unsupported. */
+	levelMap?: ThinkingLevelMap;
+	/** Source-published thinking levels, used to derive the model's level map. */
+	levels?: readonly ThinkingLevel[];
+	/** The model exposes a binary thinking switch. */
 	toggle?: true;
-	/** The named Effort ladder published by the model's source. */
-	levels?: readonly Effort[];
 	/** Reasoning budget bounds (`budget_tokens.min` / `.max`). */
 	budgetMin?: number;
 	budgetMax?: number;
-	/**
-	 * The model has a budget but no Effort ladder or toggle. Its budget is
-	 * derived automatically and offers no selectable reasoning choice.
-	 */
+	/** The model's budget is derived automatically, with no selectable level. */
 	unlevelled?: true;
 }>;
 
@@ -98,11 +94,24 @@ const modelCostTierSchema = modelCostSchema
 	.extend({ inputTokensAbove: z.number().int().positive() })
 	.strict();
 
+const thinkingLevelMapSchema = z
+	.object({
+		off: z.string().nullable().optional(),
+		minimal: z.string().nullable().optional(),
+		low: z.string().nullable().optional(),
+		medium: z.string().nullable().optional(),
+		high: z.string().nullable().optional(),
+		xhigh: z.string().nullable().optional(),
+		max: z.string().nullable().optional(),
+	})
+	.strict() satisfies z.ZodType<ThinkingLevelMap>;
+
 const modelThinkingPolicySchema = z
 	.object({
 		budgetMax: z.number().int().nonnegative().optional(),
 		budgetMin: z.number().int().nonnegative().optional(),
-		levels: z.array(effortSchema).optional(),
+		levelMap: thinkingLevelMapSchema.optional(),
+		levels: z.array(thinkingLevelSchema).optional(),
 		toggle: z.literal(true).optional(),
 		unlevelled: z.literal(true).optional(),
 	})

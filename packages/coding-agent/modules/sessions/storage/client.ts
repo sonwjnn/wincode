@@ -34,25 +34,21 @@ const ensureTextColumn = (
 	}
 };
 
-const hasCurrentReasoningSelectionSchema = (sqlite: Database): boolean => {
+const hasCurrentThinkingSelectionSchema = (sqlite: Database): boolean => {
 	const sessionColumns = columnNames(sqlite, "session");
 	const compactionColumns = columnNames(sqlite, "session_compaction");
 	return (
-		sessionColumns.has("effort") &&
-		sessionColumns.has("reasoning_mode") &&
-		compactionColumns.has("summarization_effort") &&
-		compactionColumns.has("summarization_reasoning_mode")
+		sessionColumns.has("thinking_level") &&
+		compactionColumns.has("summarization_thinking_level")
 	);
 };
 
-const ensureReasoningSelectionColumns = (sqlite: Database): void => {
-	ensureTextColumn(sqlite, "session", "effort");
-	ensureTextColumn(sqlite, "session", "reasoning_mode");
-	ensureTextColumn(sqlite, "session_compaction", "summarization_effort");
+const ensureThinkingSelectionColumns = (sqlite: Database): void => {
+	ensureTextColumn(sqlite, "session", "thinking_level");
 	ensureTextColumn(
 		sqlite,
 		"session_compaction",
-		"summarization_reasoning_mode"
+		"summarization_thinking_level"
 	);
 };
 const applyPragmas = (sqlite: Database): void => {
@@ -109,8 +105,7 @@ const initializeSchema = (
 			updated_at INTEGER NOT NULL,
 			last_message_at INTEGER,
 			model_json TEXT,
-			effort TEXT,
-			reasoning_mode TEXT,
+			thinking_level TEXT,
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
@@ -266,8 +261,7 @@ const initializeSchema = (
 			trigger TEXT NOT NULL,
 			focus TEXT,
 			summarization_model_json TEXT NOT NULL,
-			summarization_effort TEXT,
-			summarization_reasoning_mode TEXT,
+			summarization_thinking_level TEXT,
 			summarization_usage_json TEXT,
 			created_at INTEGER NOT NULL,
 			completed_at INTEGER NOT NULL
@@ -309,13 +303,13 @@ const initializeSchema = (
 	if (
 		!(
 			allowIncompatibleSessionSchema ||
-			hasCurrentReasoningSelectionSchema(sqlite)
+			hasCurrentThinkingSelectionSchema(sqlite)
 		)
 	) {
 		throw new SessionDatabaseResetRequiredError();
 	}
 	ensureSessionEditModeColumn(sqlite);
-	ensureReasoningSelectionColumns(sqlite);
+	ensureThinkingSelectionColumns(sqlite);
 };
 
 const openDatabase = (

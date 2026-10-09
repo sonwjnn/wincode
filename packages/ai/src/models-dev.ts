@@ -19,13 +19,13 @@ import {
 } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import {
-	type Effort,
-	effortIds,
 	type ModelCost,
 	type ModelCostTier,
 	type ModelLimits,
 	type ModelMetadataEntry,
 	type ModelThinkingPolicy,
+	type ThinkingLevel,
+	thinkingLevelIds,
 } from "./model-metadata";
 import {
 	type ModelsDevModel,
@@ -33,12 +33,12 @@ import {
 } from "./models-dev-payload";
 
 export type {
-	Effort,
 	ModelCost,
 	ModelCostTier,
 	ModelLimits,
 	ModelMetadataEntry,
 	ModelThinkingPolicy,
+	ThinkingLevel,
 } from "./model-metadata";
 export { modelMetadataEntrySchema } from "./model-metadata";
 export type { ModelsDevModel } from "./models-dev-payload";
@@ -59,13 +59,15 @@ const nonNegativeInteger = (value: unknown): number | undefined =>
 const positiveInteger = (value: unknown): number | undefined =>
 	isPositiveInteger(value) ? value : undefined;
 
-const EFFORT_IDS: ReadonlySet<string> = new Set(effortIds);
+const THINKING_LEVEL_IDS: ReadonlySet<string> = new Set(
+	thinkingLevelIds.filter((level) => level !== "off")
+);
 
 type ModelSource = Readonly<{ modelId: string; providerId: string }>;
 
 // DeepSeek publishes these only as aliases for the named models below.
 // `minimal` remains distinct for other model catalogs.
-const DEEPSEEK_EFFORT_ALIASES: Readonly<Record<string, Effort>> = {
+const DEEPSEEK_EFFORT_ALIASES: Readonly<Record<string, ThinkingLevel>> = {
 	minimal: "low",
 	medium: "high",
 	xhigh: "high",
@@ -78,7 +80,7 @@ const DEEPSEEK_ALIAS_MODELS: Readonly<Record<string, true>> = {
 const asLevels = (
 	value: unknown,
 	source: ModelSource | undefined
-): readonly Effort[] | undefined => {
+): readonly ThinkingLevel[] | undefined => {
 	if (!isArray(value)) {
 		return;
 	}
@@ -87,14 +89,14 @@ const asLevels = (
 		DEEPSEEK_ALIAS_MODELS[source.modelId] === true
 			? DEEPSEEK_EFFORT_ALIASES
 			: undefined;
-	const levels = new Set<Effort>();
+	const levels = new Set<ThinkingLevel>();
 	for (const rawLevel of value) {
 		if (!isString(rawLevel)) {
 			continue;
 		}
 		const canonical = aliases?.[rawLevel] ?? rawLevel;
-		if (EFFORT_IDS.has(canonical)) {
-			levels.add(canonical as Effort);
+		if (THINKING_LEVEL_IDS.has(canonical)) {
+			levels.add(canonical as ThinkingLevel);
 		}
 	}
 	return levels.size === 0 ? undefined : [...levels];
@@ -115,11 +117,14 @@ const toThinkingPolicy = (
 	const effortValues = effort?.values;
 	const hasToggle =
 		!isUndefined(toggle) ||
-		(isArray(effortValues) && effortValues.includes("none"));
+		(isArray(effortValues) &&
+			(effortValues.includes("none") ||
+				effortValues.includes("off") ||
+				effortValues.includes("thinking")));
 	const budgetMin = nonNegativeInteger(budget?.min);
 	const budgetMax = nonNegativeInteger(budget?.max);
 	const budgetBounded = !(isUndefined(budgetMin) && isUndefined(budgetMax));
-	// A published `none` Effort value is a no-reasoning Mode, not a ladder
+	// A source-published `none` value is not a selectable ThinkingLevel
 	// level. Preserve it as a toggle when the source has no separate toggle.
 	// A published budget range is a reasoning control even with no ladder: it
 	// says how much thinking the model may do. With no switch and no ladder the

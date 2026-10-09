@@ -57,8 +57,8 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
-import { createSessionSdkChildFactory } from "@/modules/sessions/sdk";
-import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
+import { createSessionSdkOperations } from "@/modules/sessions/sdk";
+import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
 import {
 	buildUserSessionRecord,
 	projectSessionRecords,
@@ -344,7 +344,7 @@ const createCapabilities = (
 	};
 	const pluginRuntime = options.pluginRuntime ?? bundledPluginRuntime;
 	const composition = createApplicationPluginComposition();
-	let sessionSdk: SessionSdkChildFactory | undefined;
+	let sessionSdk: SessionSdkOperations | undefined;
 	const capabilities: SessionCapabilities = {
 		getCapabilityCeiling: () => undefined,
 		getCompactionModule: () =>
@@ -378,7 +378,7 @@ const createCapabilities = (
 		getPluginRuntime: () => pluginRuntime,
 		getTurnToolResolver: () => composition.turnToolResolver,
 	};
-	sessionSdk = createSessionSdkChildFactory(
+	sessionSdk = createSessionSdkOperations(
 		{
 			configRuntime: config,
 			connections: capabilities.getConnections(),
@@ -810,8 +810,7 @@ describe("Session Host opening", () => {
 			agent: buildId,
 			model,
 			persistedAgent: buildId,
-			effort: undefined,
-			reasoningMode: undefined,
+			thinkingLevel: undefined,
 		});
 
 		await host.shutdown();

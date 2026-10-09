@@ -9,21 +9,16 @@ import type { Tagged } from "type-fest";
 import { z } from "zod";
 
 export type {
-	Effort,
 	ModelCost,
 	ModelCostTier,
 	ModelLimits,
 	ModelMetadataEntry,
 	ModelThinkingPolicy,
-	ReasoningMode,
-	ReasoningSelection,
+	ThinkingLevel,
+	ThinkingLevelMap,
+	ThinkingSelection,
 } from "./model-metadata";
-export {
-	effortIds,
-	effortSchema,
-	reasoningModeIds,
-	reasoningModeSchema,
-} from "./model-metadata";
+export { thinkingLevelIds, thinkingLevelSchema } from "./model-metadata";
 
 export type ModelLifecycle = "active" | "retired";
 

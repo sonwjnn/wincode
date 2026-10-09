@@ -4,7 +4,11 @@ import type {
 	PluginFactory,
 	PluginToolContext,
 	PluginToolRegistrationAPI,
+	SessionSdkAgent,
+	SessionSdkOperations,
 } from "@wincode/coding-agent";
+import { logger } from "@wincode/utils";
+import { discoverSubagentAgents } from "../agents";
 import { createSubagentTools } from "../tools";
 import {
 	createDelegationExecutor,
@@ -49,6 +53,20 @@ export const createSubagentsPluginFactory =
 			durableTaskStore = await options.taskStore;
 		}
 		const plugin = api.definePlugin({ id: "subagents" });
+		const discovery = await discoverSubagentAgents({
+			trustedProjectRoots: loadContext.trustedProjectRoots,
+			userDataDir: loadContext.userDataDir,
+		});
+		for (const diagnostic of discovery.diagnostics) {
+			void logger.warn("Subagent discovery diagnostic", {
+				message: diagnostic,
+				operation: "subagents.discovery",
+				sourcePath: loadContext.sourcePath,
+			});
+		}
+		for (const agent of discovery.agents) {
+			plugin.registerAgent(agent);
+		}
 		const coordinator = getSubagentsTaskCoordinator(
 			durableTaskStore,
 			loadContext.sourcePath
@@ -56,10 +74,29 @@ export const createSubagentsPluginFactory =
 		if (storeLease !== undefined) {
 			plugin.onShutdown(storeLease.release);
 		}
-		plugin.onSessionStart((context) => coordinator.onSessionStart(context));
-		plugin.onSessionShutdown((context) =>
-			coordinator.onSessionShutdown(context)
-		);
+		const sessionSdks = new Map<string, SessionSdkOperations>();
+		plugin.registerCommand({
+			description: "List subagents and explain unavailable requirements.",
+			name: "subagents",
+			handler: async ({ sessionId }) => {
+				const sessionSdk =
+					sessionId === undefined ? undefined : sessionSdks.get(sessionId);
+				if (sessionSdk === undefined) {
+					return "Subagent catalog is unavailable for this Session.";
+				}
+				return formatSubagents(await sessionSdk.getAgentCatalog());
+			},
+		});
+		plugin.onSessionStart((context) => {
+			if (context.sessionSdk !== undefined) {
+				sessionSdks.set(context.sessionId, context.sessionSdk);
+			}
+			coordinator.onSessionStart(context);
+		});
+		plugin.onSessionShutdown((context) => {
+			sessionSdks.delete(context.sessionId);
+			return coordinator.onSessionShutdown(context);
+		});
 		plugin.onBeforeAgentTurn(async (context, registration) => {
 			const turn = getSubagentsTurn(context, loadContext.sourcePath);
 			if (turn === undefined) {
@@ -73,6 +110,25 @@ export const createSubagentsPluginFactory =
 			registerSubagentsTools(registration, tools, turn, coordinator);
 		});
 	};
+
+export const formatSubagents = (agents: readonly SessionSdkAgent[]): string => {
+	const subagents = agents
+		.filter(({ role }) => role === "subagent" || role === "all")
+		.toSorted((left, right) => left.id.localeCompare(right.id));
+	if (subagents.length === 0) {
+		return "No subagents are registered.";
+	}
+	return [
+		"Subagents:",
+		...subagents.map((agent) => {
+			const status = agent.isAvailable
+				? "available"
+				: `unavailable: ${agent.unavailableReason ?? "required capabilities are missing"}`;
+			const source = agent.source === undefined ? "" : ` [${agent.source}]`;
+			return `- ${agent.id}${source} — ${status}\n  ${agent.description ?? "No description available."}`;
+		}),
+	].join("\n");
+};
 
 const getSubagentsTurn = (
 	context: PluginBeforeAgentTurnContext,
@@ -104,7 +160,10 @@ const createSubagentsToolsForTurn = async (
 		(childTask.status === "active" || childTask.status === "awaiting_report")
 			? childTask
 			: null;
-	const canDelegate = await hasDelegationTargets(turn.sessionSdk);
+	const canDelegate = await hasDelegationTargets(
+		turn.sessionSdk,
+		turn.capabilityCeiling
+	);
 	return createSubagentTools({
 		...(canDelegate
 			? {

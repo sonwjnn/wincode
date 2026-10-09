@@ -10,6 +10,7 @@ import {
 	type AgentTurnEvent,
 	type AgentTurnId,
 	agentIdSchema,
+	agentLabelFromId,
 	isAgentTurnEvent,
 	isAgentTurnTerminalEvent,
 	isAgentTurnTerminalStatus,
@@ -312,6 +313,12 @@ describe("Agent Turn contract", () => {
 			type: "text",
 		});
 		expect(turn.agent.role).toBe("primary");
+	});
+});
+
+describe("Agent label contract", () => {
+	test("formats kebab-case Agent IDs as readable display names", () => {
+		expect(agentLabelFromId("evidence-auditor")).toBe("Evidence Auditor");
 	});
 });
 

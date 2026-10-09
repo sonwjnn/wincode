@@ -1,3 +1,4 @@
+import type { Connections } from "@wincode/ai/connections";
 import { isNull } from "@wincode/utils";
 import {
 	createContext,
@@ -9,8 +10,11 @@ import {
 	useState,
 } from "react";
 import { useConnections } from "@/modules/connections";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { useConfig } from "@/shared/config/config-provider";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import {
 	type AgentRegistry,
 	resolveAgentRegistry,
@@ -35,6 +39,20 @@ export const claimAgentDiagnosticsToast = (configStore: object): boolean => {
 	return true;
 };
 
+export const resolveInteractiveAgentRegistry = async (
+	config: ConfigRuntime,
+	connections: Connections,
+	pluginRuntime: Pick<PluginRuntime, "getAgentRegistrations"> | undefined
+): Promise<AgentRegistry> => {
+	const providers = await connections.listProviders();
+	return resolveAgentRegistry(config, {
+		connectedProviderIds: new Set(
+			providers.filter(({ connected }) => connected).map(({ id }) => id)
+		),
+		pluginAgentRegistrations: pluginRuntime?.getAgentRegistrations(),
+	});
+};
+
 /**
  * Loads the process-lifetime Agent Registry from the shared ConfigRuntime.
  * Config changes require a restart; resolution is memoized by the ConfigStore
@@ -44,6 +62,7 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 	const config = useConfig();
 	const connections = useConnections();
 	const toast = useToast();
+	const pluginRuntime = getInteractivePluginRuntime();
 	const [registry, setRegistry] = useState<AgentRegistry | null>(null);
 	const [revision, setRevision] = useState(0);
 	const refresh = useCallback(() => setRevision((current) => current + 1), []);
@@ -52,14 +71,8 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 		let ignore = false;
 		const resolveCurrentRegistry = async (
 			_refreshRevision: number
-		): Promise<AgentRegistry> => {
-			const providers = await connections.listProviders();
-			return resolveAgentRegistry(config, {
-				connectedProviderIds: new Set(
-					providers.filter(({ connected }) => connected).map(({ id }) => id)
-				),
-			});
-		};
+		): Promise<AgentRegistry> =>
+			resolveInteractiveAgentRegistry(config, connections, pluginRuntime);
 		resolveCurrentRegistry(revision)
 			.then((resolved) => {
 				if (!ignore) {
@@ -70,7 +83,7 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 		return () => {
 			ignore = true;
 		};
-	}, [config, connections, revision]);
+	}, [config, connections, pluginRuntime, revision]);
 
 	useEffect(() => {
 		if (

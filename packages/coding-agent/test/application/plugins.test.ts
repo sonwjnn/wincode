@@ -174,6 +174,45 @@ test("failed Plugin initialization releases factory-owned resources", async () =
 	await runtime.shutdown();
 });
 
+test("Plugin Agent registrations preserve a supported ThinkingLevel", async () => {
+	const runtime = await loadPlugins({
+		bundledPlugins: [
+			{
+				id: "thinking_level_agent",
+				factory: (api) => {
+					const plugin = api.definePlugin({
+						id: "thinking_level_agent",
+					});
+					plugin.registerAgent({
+						agent: {
+							description: "Agent with a selected thinking level.",
+							displayName: "Thinking Level Agent",
+							id: agentIdSchema.parse("thinking-level-agent"),
+							instructions: "Run a delegated task.",
+							role: "subagent",
+						},
+						thinkingLevel: "high",
+						model: "openai/gpt-5.6-luna",
+						source: {
+							path: "package/agents/thinking-level-agent.md",
+							scope: "package",
+						},
+					});
+				},
+			},
+		],
+		cliPaths: [],
+		config: configRuntime,
+	});
+	try {
+		expect(runtime.getAgentRegistrations()).toMatchObject([
+			{ thinkingLevel: "high" },
+		]);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
 test("required distribution failure shuts down already-loaded Plugins", async () => {
 	let shutdownCount = 0;
 	const loading = loadPlugins({

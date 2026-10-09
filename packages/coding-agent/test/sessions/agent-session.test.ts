@@ -11,11 +11,7 @@ import type {
 	SessionMessageId,
 	SessionRecord,
 } from "@wincode/agent-core";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { AgentSessionImpl } from "@/modules/sessions/agent-session/agent-session";
@@ -1123,8 +1119,7 @@ const createQueuedRuntime = ({
 	/** The Model Target selection each started turn ran with, in start order. */
 	readonly targets: Array<{
 		model: ChatModelSelection;
-		effort: Effort | undefined;
-		reasoningMode: ReasoningMode | undefined;
+		thinkingLevel: ThinkingLevel | undefined;
 	}>;
 } => {
 	const boundaries: Array<{
@@ -1136,8 +1131,7 @@ const createQueuedRuntime = ({
 	const prompts: string[] = [];
 	const targets: Array<{
 		model: ChatModelSelection;
-		effort: Effort | undefined;
-		reasoningMode: ReasoningMode | undefined;
+		thinkingLevel: ThinkingLevel | undefined;
 	}> = [];
 	const startWaiters: Array<{ count: number; resolve: () => void }> = [];
 	let startedCount = 0;
@@ -1172,8 +1166,7 @@ const createQueuedRuntime = ({
 				prompts.push(promptOfTurn(messages));
 				targets.push({
 					model: execution.model,
-					effort: execution.effort,
-					reasoningMode: execution.reasoningMode,
+					thinkingLevel: execution.thinkingLevel,
 				});
 				startedCount += 1;
 				settleReached(startWaiters, startedCount);
@@ -1502,8 +1495,7 @@ test("continue resumes the last user context without appending another prompt", 
 	expect(runtime.targets).toEqual([
 		{
 			model: refreshedModel,
-			effort: undefined,
-			reasoningMode: undefined,
+			thinkingLevel: undefined,
 		},
 	]);
 	expect(resolvedInputs).toHaveLength(1);
@@ -2947,9 +2939,7 @@ test("keeps the Model Target of the turn a Steering Message joined", async () =>
 
 	// The turn ran on its own Model Target, and the delivered message records
 	// that same one rather than the composer's newer selection.
-	expect(runtime.targets).toEqual([
-		{ model, effort: undefined, reasoningMode: undefined },
-	]);
+	expect(runtime.targets).toEqual([{ model, thinkingLevel: undefined }]);
 	expect(commits[1]?.messages[0]?.metadata?.model).toEqual(model);
 });
 
@@ -3006,8 +2996,8 @@ test("keeps the active Model Target when a committed Submission falls back to a 
 	// The new turn uses the Model Target that committed the Submission, not the
 	// composer's changed selection.
 	expect(runtime.targets).toEqual([
-		{ model, effort: undefined, reasoningMode: undefined },
-		{ model, effort: undefined, reasoningMode: undefined },
+		{ model, thinkingLevel: undefined },
+		{ model, thinkingLevel: undefined },
 	]);
 	runtime.release();
 	await first;
@@ -3209,7 +3199,7 @@ test("runs a queued submission with the Model Target selection it was accepted w
 	// The selection the submission was accepted with is the one that runs, even
 	// though the session's own selection could change while it waits.
 	expect(runtime.targets).toEqual([
-		{ model: queuedModel, effort: undefined, reasoningMode: undefined },
+		{ model: queuedModel, thinkingLevel: undefined },
 	]);
 
 	runtime.release();

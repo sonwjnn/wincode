@@ -8,28 +8,25 @@ import {
 import type { Connections } from "@wincode/ai/connections";
 import {
 	type ChatModelSelection,
-	createReasoningSelection,
 	defaultChatModelSelection,
-	type Effort,
 	findSupportedChatModel,
 	findSupportedChatModelSelection,
 	isActiveChatModel,
 	modelSelectionSchema,
-	normalizeModelEffort,
-	normalizeReasoningMode,
-	normalizeReasoningSelection,
+	normalizeThinkingLevel,
+	normalizeThinkingSelection,
 	parseCatalogModelSelection,
-	type ReasoningMode,
-	type ReasoningSelection,
+	type ThinkingLevel,
+	type ThinkingSelection,
 } from "@wincode/ai/models";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
-	createSessionSdkChildFactory,
+	createSessionSdkOperations,
 	type SessionSdkRuntimeOptions,
 } from "@/modules/sessions/sdk";
-import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
+import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import {
 	type ConfigRuntime,
@@ -95,14 +92,14 @@ type ResolvedSelection = Readonly<{
 	model: ChatModelSelection;
 	resolvedAgent?: SessionSendInput["resolvedAgent"];
 }> &
-	ReasoningSelection;
+	ThinkingSelection;
 
 type OneShotResult = Readonly<{
 	terminalFailureMessage?: string;
 	terminalSucceeded: boolean;
 }>;
 
-const DEFAULT_EFFORT = "low";
+const DEFAULT_THINKING_LEVEL: ThinkingLevel = "low";
 
 const decodeInput = async (
 	input: ApplicationContext["stdin"]
@@ -220,49 +217,30 @@ const resolvedAgentFor = (
 				visibleCodingTools: [...candidate.visibleCodingTools],
 			};
 
-const resolveExplicitEffort = (
+const resolveExplicitThinkingLevel = (
 	model: ChatModelSelection,
 	value: string
-): Effort => {
-	const effort = normalizeModelEffort(model, value);
-	if (effort === undefined) {
-		throw new InvocationError(`Invalid --effort value: ${value}`);
+): ThinkingLevel => {
+	const thinkingLevel = normalizeThinkingLevel(model, value);
+	if (thinkingLevel === undefined) {
+		throw new InvocationError(`Invalid --thinking-level value: ${value}`);
 	}
-	return effort;
-};
-
-const resolveExplicitReasoningMode = (
-	model: ChatModelSelection,
-	value: string
-): ReasoningMode => {
-	const reasoningMode = normalizeReasoningMode(model, value);
-	if (reasoningMode === undefined) {
-		throw new InvocationError(`Invalid --reasoning-mode value: ${value}`);
-	}
-	return reasoningMode;
+	return thinkingLevel;
 };
 
 const resolveSelection = ({
 	agentOption,
-	effortOption,
+	thinkingLevelOption,
 	modelOption,
 	restored,
 	registry,
-	reasoningModeOption,
 }: {
 	agentOption: string | undefined;
-	effortOption: string | undefined;
+	thinkingLevelOption: string | undefined;
 	modelOption: string | undefined;
 	registry: AgentRegistry | null;
 	restored: ResolvedSessionSelection | null;
-	reasoningModeOption: string | undefined;
 }): ResolvedSelection => {
-	if (effortOption !== undefined && reasoningModeOption !== undefined) {
-		throw new InvocationError(
-			"Use either --effort or --reasoning-mode, not both.",
-			2
-		);
-	}
 	const explicitAgent = parseAgent(agentOption);
 	const explicitModel = parseModel(modelOption);
 	const agent =
@@ -280,29 +258,25 @@ const resolveSelection = ({
 		restored?.model ??
 		candidate?.model ??
 		defaultChatModelSelection;
-	let explicitChoice: ReasoningSelection | undefined;
-	if (effortOption !== undefined) {
-		explicitChoice = createReasoningSelection(
-			resolveExplicitEffort(model, effortOption),
-			undefined
-		);
-	} else if (reasoningModeOption !== undefined) {
-		explicitChoice = createReasoningSelection(
-			undefined,
-			resolveExplicitReasoningMode(model, reasoningModeOption)
-		);
-	}
+	const explicitChoice =
+		thinkingLevelOption === undefined
+			? undefined
+			: {
+					thinkingLevel: resolveExplicitThinkingLevel(
+						model,
+						thinkingLevelOption
+					),
+				};
 	const restoredChoice =
-		restored?.effort === undefined && restored?.reasoningMode === undefined
+		restored?.thinkingLevel === undefined
 			? undefined
-			: createReasoningSelection(restored?.effort, restored?.reasoningMode);
+			: { thinkingLevel: restored.thinkingLevel };
 	const candidateChoice =
-		candidate?.effort === undefined && candidate?.reasoningMode === undefined
+		candidate?.thinkingLevel === undefined
 			? undefined
-			: createReasoningSelection(candidate?.effort, candidate?.reasoningMode);
-	const defaultEffort = normalizeModelEffort(model, DEFAULT_EFFORT);
-	const defaultChoice = createReasoningSelection(defaultEffort, undefined);
-	const selection = normalizeReasoningSelection(
+			: { thinkingLevel: candidate.thinkingLevel };
+	const defaultChoice = { thinkingLevel: DEFAULT_THINKING_LEVEL };
+	const selection = normalizeThinkingSelection(
 		model,
 		explicitChoice ?? restoredChoice ?? candidateChoice ?? defaultChoice
 	);
@@ -337,7 +311,7 @@ const composeDefaultCapabilities = async ({
 			disabledPluginIds,
 			distributionPlugins: composition.distributionPlugins,
 		}));
-	let sessionSdk: SessionSdkChildFactory | undefined;
+	let sessionSdk: SessionSdkOperations | undefined;
 	const assembly = await createSessionCapabilities({
 		configStore,
 		cwd,
@@ -347,7 +321,7 @@ const composeDefaultCapabilities = async ({
 		turnToolResolver: composition.turnToolResolver,
 		workspace,
 	});
-	sessionSdk = createSessionSdkChildFactory(
+	sessionSdk = createSessionSdkOperations(
 		{
 			configStore,
 			configRuntime: configRuntime ?? assembly.capabilities.getConfig(),
@@ -378,14 +352,11 @@ const sendInputFor = (
 	model: selection.model,
 	resolvedAgent: selection.resolvedAgent,
 	sessionModel: selection.model,
-	...(selection.effort === undefined
-		? {}
-		: { effort: selection.effort, sessionEffort: selection.effort }),
-	...(selection.reasoningMode === undefined
+	...(selection.thinkingLevel === undefined
 		? {}
 		: {
-				reasoningMode: selection.reasoningMode,
-				sessionReasoningMode: selection.reasoningMode,
+				thinkingLevel: selection.thinkingLevel,
+				sessionThinkingLevel: selection.thinkingLevel,
 			}),
 	...(message === undefined ? { userText: text } : { messageId: message.id }),
 });
@@ -421,11 +392,10 @@ const initializeOneShotSession = async (
 		const registry = assembly.capabilities.getRegistry();
 		const selection = resolveSelection({
 			agentOption: context.invocation.agent,
-			effortOption: context.invocation.effort,
+			thinkingLevelOption: context.invocation.thinkingLevel,
 			modelOption: context.invocation.model,
 			registry,
 			restored: null,
-			reasoningModeOption: context.invocation.reasoningMode,
 		});
 		await validateModelAvailability(
 			selection.model,
@@ -434,10 +404,9 @@ const initializeOneShotSession = async (
 		initialMessage = createSessionUserMessage(text, {
 			agent: selection.agent,
 			model: selection.model,
-			...(selection.effort === undefined ? {} : { effort: selection.effort }),
-			...(selection.reasoningMode === undefined
+			...(selection.thinkingLevel === undefined
 				? {}
-				: { reasoningMode: selection.reasoningMode }),
+				: { thinkingLevel: selection.thinkingLevel }),
 		});
 		const [durableMessage] = await assembly.store.externalizeAttachments(
 			[initialMessage],
@@ -449,10 +418,9 @@ const initializeOneShotSession = async (
 			message: durableMessage ?? initialMessage,
 			model: selection.model,
 			turnId: createAgentTurnId(),
-			...(selection.effort === undefined ? {} : { effort: selection.effort }),
-			...(selection.reasoningMode === undefined
+			...(selection.thinkingLevel === undefined
 				? {}
-				: { reasoningMode: selection.reasoningMode }),
+				: { thinkingLevel: selection.thinkingLevel }),
 		});
 		sessionId = created.id;
 	}
@@ -503,11 +471,10 @@ const runOneShot = async (
 		const restored = host.getSelection();
 		const selection = resolveSelection({
 			agentOption: context.invocation.agent,
-			effortOption: context.invocation.effort,
+			thinkingLevelOption: context.invocation.thinkingLevel,
 			modelOption: context.invocation.model,
 			registry,
 			restored,
-			reasoningModeOption: context.invocation.reasoningMode,
 		});
 		removeEventListener = sessionHostManager.onEvent((managedEvent) => {
 			if (managedEvent.type !== "agent-turn-event") {

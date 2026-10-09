@@ -1,8 +1,4 @@
-import type {
-	Effort,
-	ReasoningMode,
-	ReasoningSelection,
-} from "@wincode/ai/models";
+import type { ThinkingLevel, ThinkingSelection } from "@wincode/ai/models";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SkillContext } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -125,7 +121,7 @@ export type Selection = Readonly<{
 	agentId: string;
 	model: ChatModelSelection;
 }> &
-	ReasoningSelection;
+	ThinkingSelection;
 
 export type RuntimeModules = Readonly<{
 	createAgentTurnId: () => AgentTurnId;
@@ -146,25 +142,15 @@ export type RuntimeModules = Readonly<{
 			data?: ChatModelSelection;
 		};
 	};
-	effortSchema: {
+	thinkingLevelSchema: {
 		safeParse: (value: unknown) => {
 			success: boolean;
-			data?: Effort;
+			data?: ThinkingLevel;
 		};
 	};
-	reasoningModeSchema: {
-		safeParse: (value: unknown) => {
-			success: boolean;
-			data?: ReasoningMode;
-		};
-	};
-	isSupportedModelEffort: (
+	isSupportedThinkingLevel: (
 		selection: ChatModelSelection,
-		effort: Effort
-	) => boolean;
-	isSupportedReasoningMode: (
-		selection: ChatModelSelection,
-		reasoningMode: ReasoningMode
+		thinkingLevel: ThinkingLevel
 	) => boolean;
 	resolveWorkspaceRoot: (start: string) => string;
 	toSessionId: (value: string) => SessionId;

@@ -12,7 +12,7 @@ import type { ResolvedCompactionSettings } from "../compaction/config";
 import type { TurnToolResolver } from "../hooks/runtime-turn";
 import type {
 	SessionSdkCapabilityCeiling,
-	SessionSdkChildFactory,
+	SessionSdkOperations,
 } from "../sdk-contract";
 import type { ResolvedSessionSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
@@ -39,7 +39,7 @@ export type SessionCapabilities = Readonly<{
 	/** Optional runtime factory for non-default application adapters and tests. */
 	getRuntime?: () => AgentRuntime;
 	getSessionHostManager: () => SessionHostManager;
-	getSessionSdk?: () => SessionSdkChildFactory | undefined;
+	getSessionSdk?: () => SessionSdkOperations | undefined;
 	getPluginRuntime?: () => PluginRuntime;
 	getTurnToolResolver?: () => TurnToolResolver;
 	getCapabilityCeiling: () => SessionSdkCapabilityCeiling | undefined;

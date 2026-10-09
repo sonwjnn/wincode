@@ -26,9 +26,9 @@ while users reconnect providers into the new format.
 
 ## Model Catalog
 
-The Model Catalog is the static product definition of supported models and
-their Effort and Reasoning Mode capabilities. It references a Connection
-Provider by ID but does not own credentials or authentication behavior.
+The Model Catalog is the static product definition of supported models. Per-model
+ThinkingLevel policy is supplied by model metadata. The catalog references a
+Connection Provider by ID but does not own credentials or authentication behavior.
 An entry that remains in the catalog but is no
 longer selectable is retired rather than deleted, so existing Session Records
 keep their model identity. A deliberate clean-cutover prune MAY delete legacy
@@ -41,20 +41,12 @@ Whether a Model Catalog entry may be selected for a new turn: `active` or
 `retired`. Retirement is a product decision, independent of whether the
 provider still serves the model. _Avoid_: deprecation, availability
 
-**Effort**:
-A named reasoning level advertised by a Model Catalog entry. Each model supports
-its declared subset; an Effort describes a level, not whether reasoning is
-enabled. _Avoid_: thinking level, variant
-
-**Effort ID**:
-The stable identifier of an Effort that a Session may retain and restore. It
-identifies the chosen level, not a model's capability or the provider-specific
-request generated from that choice. _Avoid_: variant ID
-
-**Reasoning Mode**:
-A non-effort reasoning choice a model supports through its toggle: `none`
-requests reasoning off; `thinking` requests it on without a named Effort. _Avoid_:
-effort, thinking level, variant
+**ThinkingLevel**:
+Wincode's normalized reasoning selection: `off`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, or `max`. A model's metadata determines which levels are
+selectable and maps them to provider-native request values. An omitted level
+leaves reasoning at the provider default; explicit `off` is distinct from that
+default. _Avoid_: provider effort, reasoning mode, variant
 
 **Model Descriptor**:
 A Model Catalog entry together with where its metadata came from and whether
@@ -63,9 +55,9 @@ stays immutable. _Avoid_: model record, merged model
 
 ## Model Target
 
-A Model Target is the effective Connection Provider, model, Effort, Reasoning
-Mode, and minimal authorization selected for one Agent Turn. It is transient and
-must not become a Session Record. _Avoid_: provider SDK model handle, persisted model handle
+A Model Target is the effective Connection Provider, model, ThinkingLevel, and
+minimal authorization selected for one Agent Turn. It is transient and must not
+become a Session Record. _Avoid_: provider SDK model handle, persisted model handle
 
 ## Model Protocol
 
@@ -75,15 +67,13 @@ OpenCode Go is one such Connection Provider. _Avoid_: SDK, Connection Provider
 
 ## Session Selection
 
-The last-used Agent, Model, and reasoning choice—an Effort or Reasoning Mode—
-recorded in a session's message metadata, resolved when a session opens or a turn
-is sent. Two tiers are recorded on write and merged on read: the session row holds
-session-level choice (the user's prompt-config selection), and message
-metadata holds the effective selection (what a turn actually ran with,
-including Agent pins). Restore reads leniently (a selection survives partially
-broken metadata); the request body reads it strictly (only schema-valid pairs
-reach the send). Sources merge in a fixed order — session row, then message
-metadata, then prompt-config refs. _Avoid_: chat config, latest config
+The last-used Agent, Model, and ThinkingLevel recorded in a session's message
+metadata, resolved when a session opens or a turn is sent. Two tiers are recorded
+on write and merged on read: the session row holds the session-level choice (the
+user's prompt-config selection), and message metadata holds the effective choice
+(what a turn actually ran with, including Agent pins). Restore reads leniently;
+the request body reads strictly. Sources merge in a fixed order — session row,
+then message metadata, then prompt-config refs. _Avoid_: chat config, latest config
 
 ## Session Execution
 
@@ -221,7 +211,7 @@ A one-shot mode that opens or creates one One-Shot Session, accepts exactly one 
 The durable Session opened or created for one Print Mode or JSON Mode invocation. It accepts one caller Submission and persists afterward; active delegated tasks must settle before exit, while an idle task awaiting a result remains persisted and causes an explicit error rather than automatic replay. _Avoid_: ephemeral session, batch session
 
 **Invocation Selection**:
-The Agent, Model, Effort, and Reasoning Mode resolved for one Print Mode or JSON Mode invocation. Explicit CLI selectors override a Session Selection; omitted selectors restore it or use configuration, and creating a One-Shot Session requires complete resolution before its first record. _Avoid_: command-line config, request selection
+The Agent, Model, and ThinkingLevel resolved for one Print Mode or JSON Mode invocation. Explicit CLI selectors override a Session Selection; omitted selectors restore it or use configuration, and creating a One-Shot Session requires complete resolution before its first record. _Avoid_: command-line config, request selection
 
 **JSON Event Stream**:
 The ordered public Agent Turn events emitted by JSON Mode as JSONL, including identified child-Session events and terminal outcomes for delegated work. It uses the same event vocabulary as RPC Mode but has no JSON-RPC envelopes, commands, or state notifications. _Avoid_: raw Live Session Snapshot, JSON-RPC stream

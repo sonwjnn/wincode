@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { createAgentRuntime } from "@wincode/agent-core";
+import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
 import type {
 	ModelStepRequest,
 	ModelStreamPart,
@@ -19,6 +19,7 @@ import {
 	resolveSubagentsDatabasePath,
 } from "@wincode/subagents/plugin";
 import { buildAgentRegistry } from "@/modules/agents/registry";
+import type { PluginAgentRegistration } from "@/modules/plugins/public";
 import { createSessionSdkWithRuntime as createSessionSdk } from "@/modules/sessions/sdk";
 import type {
 	SessionSdk,
@@ -99,7 +100,7 @@ afterAll(async () => {
 	await rm(root, { force: true, recursive: true });
 });
 
-test("public Session SDK trust is explicit and is not inherited by child SDKs", async () => {
+test("public Session SDK trust is not inherited by a new Session runtime", async () => {
 	const trustWorkspace = path.join(root, "public-sdk-trust-workspace");
 	const xdgConfigHome = path.join(root, "public-sdk-trust-config");
 	const xdgDataHome = path.join(root, "public-sdk-trust-data");
@@ -159,7 +160,7 @@ test("public Session SDK trust is explicit and is not inherited by child SDKs", 
 			)
 		).toBe(true);
 
-		childSdk = await trustedSdk.createChildSdk({ pluginPaths: [] });
+		childSdk = await trustedSdk.createSessionRuntime({ pluginPaths: [] });
 		expect(
 			(await childSdk.getAgentCatalog()).some(
 				({ id }) => id === "project-agent"
@@ -217,7 +218,7 @@ test("an injected Session SDK creates an empty durable Session and reopens it", 
 	}
 });
 
-test("the public Session SDK loads user-configured Plugins but child SDKs do not inherit them", async () => {
+test("the public Session SDK loads user-configured Plugins but a new Session runtime does not inherit them", async () => {
 	const xdgConfigHome = path.join(root, "configured-plugin-xdg");
 	const userConfigDirectory = path.join(xdgConfigHome, "wincode");
 	const markerPath = path.join(workspace, ".configured-session-sdk-plugin");
@@ -244,7 +245,7 @@ test("the public Session SDK loads user-configured Plugins but child SDKs do not
 		});
 		expect(await Bun.file(markerPath).text()).toBe(parentHandle.sessionId);
 
-		childSdk = await sdk.createChildSdk({ pluginPaths: [] });
+		childSdk = await sdk.createSessionRuntime({ pluginPaths: [] });
 		childHandle = await childSdk.createSession({
 			model: defaultChatModelSelection,
 		});
@@ -291,7 +292,7 @@ test("an injected Session SDK reserves an empty Session before opening it", asyn
 	}
 });
 
-test("an injected Session SDK creates a child SDK with an explicit Plugin set", async () => {
+test("an injected Session SDK creates a Session runtime with an explicit Plugin set", async () => {
 	const sdk = await createSessionSdk({
 		configStore,
 		cwd: workspace,
@@ -300,7 +301,7 @@ test("an injected Session SDK creates a child SDK with an explicit Plugin set", 
 		store,
 		workspace,
 	});
-	const childSdk = await sdk.createChildSdk({ pluginPaths: [] });
+	const childSdk = await sdk.createSessionRuntime({ pluginPaths: [] });
 	try {
 		const child = await childSdk.createSession();
 		try {
@@ -314,7 +315,84 @@ test("an injected Session SDK creates a child SDK with an explicit Plugin set", 
 	}
 });
 
-test("a child SDK snapshots its tool ceiling so later changes cannot expose tools", async () => {
+test("a runtime catalog rejects Agents whose required tools exceed its effective ceiling", async () => {
+	const pluginAgent: PluginAgentRegistration = {
+		agent: {
+			description: "Runs shell-based inspection.",
+			displayName: "Shell Agent",
+			id: agentIdSchema.parse("shell-agent"),
+			instructions: "Use shell for the requested inspection.",
+			role: "subagent",
+		},
+		requiredTools: ["shell"],
+		source: { path: "/agents/package/shell-agent.md", scope: "package" },
+		tools: ["read", "shell"],
+	};
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		}),
+		{
+			connectedProviderIds: new Set(["openai"]),
+			pluginAgentRegistrations: [pluginAgent],
+		}
+	);
+	const sdk = await createSessionSdk({
+		configStore,
+		connections: {
+			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
+			connect: async () => undefined,
+			listProviders: async () => [
+				{
+					connected: true,
+					connectionMethod: "api-key",
+					displayName: "OpenAI",
+					id: "openai",
+					methods: ["api-key", "browser"],
+				},
+			],
+		},
+		cwd: workspace,
+		getRegistry: () => registry,
+		pluginPaths: [],
+		registry,
+		store,
+		workspace,
+	});
+	try {
+		expect(
+			(await sdk.getAgentCatalog()).find(({ id }) => id === "shell-agent")
+		).toMatchObject({ isAvailable: true });
+
+		const childSdk = await sdk.createSessionRuntime({ pluginPaths: [] });
+		try {
+			expect(
+				(await childSdk.getAgentCatalog()).find(
+					({ id }) => id === "shell-agent"
+				)
+			).toMatchObject({ isAvailable: true });
+			expect(
+				(
+					await childSdk.getAgentCatalog({
+						capabilityCeiling: { tools: ["read"] },
+					})
+				).find(({ id }) => id === "shell-agent")
+			).toMatchObject({
+				isAvailable: false,
+				unavailableReason: "Missing required child tools: shell",
+			});
+		} finally {
+			await childSdk.dispose();
+		}
+	} finally {
+		await sdk.dispose();
+	}
+});
+
+test("a Session runtime snapshots its tool ceiling so later changes cannot expose tools", async () => {
 	const recorder = createFakeModelClientRecorder();
 	const visibleTools: string[][] = [];
 	recorder.beforeStep = async (request) => {
@@ -360,7 +438,7 @@ test("a child SDK snapshots its tool ceiling so later changes cannot expose tool
 		workspace,
 	});
 	const allowedTools = ["read"];
-	const childSdk = await sdk.createChildSdk({
+	const childSdk = await sdk.createSessionRuntime({
 		capabilityCeiling: { tools: allowedTools },
 	});
 	allowedTools.push("write");
@@ -450,7 +528,7 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 					build: { capability_ceiling: { tools: ["submit_result"] } },
 					scout: {
 						description: "Inspect and report findings.",
-						effort: "high",
+						thinking_level: "high",
 						instructions: "Use the child Session tools.",
 						model: "anthropic/claude-sonnet-5",
 						role: "subagent",
@@ -524,7 +602,7 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 				tasks[0]?.childSessionId ?? sessionId("missing-child")
 			)
 		).toMatchObject({
-			effort: "high",
+			thinkingLevel: "high",
 			model: { modelId: "claude-sonnet-5", providerId: "anthropic" },
 		});
 	} finally {

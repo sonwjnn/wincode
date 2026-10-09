@@ -1,15 +1,16 @@
 import { TextAttributes } from "@opentui/core";
+import { agentLabelFromId } from "@wincode/agent-core";
 import {
 	findSupportedChatModelSelection,
 	formatModelLabel,
 } from "@wincode/ai/models";
-import { agentLabelFromId, useAgentRegistry } from "@/modules/agents";
+import { useAgentRegistry } from "@/modules/agents";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { usePromptConfig } from "../context/prompt-config-provider";
 
 export function StatusBar() {
-	const { agent, effort, model, reasoningMode } = usePromptConfig();
+	const { agent, model, thinkingLevel } = usePromptConfig();
 	const { colors } = useTheme();
 	const agentColor = getAgentColor(colors, agent);
 	const registry = useAgentRegistry();
@@ -20,13 +21,7 @@ export function StatusBar() {
 	const modelName = chatModel
 		? formatModelLabel(chatModel.displayName)
 		: model.modelId;
-	let reasoningValue = "default";
-	if (reasoningMode !== undefined) {
-		reasoningValue = reasoningMode;
-	}
-	if (effort !== undefined) {
-		reasoningValue = effort;
-	}
+	const thinkingValue = thinkingLevel ?? "default";
 	return (
 		<box flexDirection="row" gap={1}>
 			<text fg={agentColor}>{agentLabel}</text>
@@ -38,7 +33,7 @@ export function StatusBar() {
 				∙
 			</text>
 			<text attributes={TextAttributes.BOLD} fg={colors.secondary}>
-				{reasoningValue}
+				{thinkingValue}
 			</text>
 		</box>
 	);

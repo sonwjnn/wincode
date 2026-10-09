@@ -23,11 +23,10 @@ import {
 } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
-	effortSchema,
 	modelSelectionSchema,
-	normalizeReasoningSelection,
-	type ReasoningSelection,
-	reasoningModeSchema,
+	normalizeThinkingSelection,
+	type ThinkingSelection,
+	thinkingLevelSchema,
 } from "@wincode/ai/models";
 import {
 	isArray,
@@ -65,8 +64,7 @@ const isRecordModel = (value: unknown): boolean => {
 	const model = value as {
 		modelId?: unknown;
 		providerId?: unknown;
-		effort?: unknown;
-		reasoningMode?: unknown;
+		thinkingLevel?: unknown;
 	};
 	if (!isNonEmptyString(model.modelId)) {
 		return false;
@@ -77,24 +75,14 @@ const isRecordModel = (value: unknown): boolean => {
 	if (
 		Object.keys(model).some(
 			(key) =>
-				key !== "modelId" &&
-				key !== "providerId" &&
-				key !== "effort" &&
-				key !== "reasoningMode"
+				key !== "modelId" && key !== "providerId" && key !== "thinkingLevel"
 		)
 	) {
 		return false;
 	}
-	const hasEffort = !isUndefined(model.effort);
-	const hasReasoningMode = !isUndefined(model.reasoningMode);
-	if (hasEffort && hasReasoningMode) {
-		return false;
-	}
 	return (
-		(isUndefined(model.effort) ||
-			effortSchema.safeParse(model.effort).success) &&
-		(isUndefined(model.reasoningMode) ||
-			reasoningModeSchema.safeParse(model.reasoningMode).success)
+		isUndefined(model.thinkingLevel) ||
+		thinkingLevelSchema.safeParse(model.thinkingLevel).success
 	);
 };
 
@@ -278,23 +266,14 @@ const metadataForRecord = (
 		const parsedModel = modelSelectionSchema.safeParse(metadata.model);
 		model = parsedModel.success ? parsedModel.data : undefined;
 	}
-	const hasMessageChoice = !isUndefined(
-		metadata?.effort ?? metadata?.reasoningMode
-	);
-	const effortValue = hasMessageChoice ? metadata?.effort : record.model.effort;
-	const reasoningModeValue = hasMessageChoice
-		? metadata?.reasoningMode
-		: record.model.reasoningMode;
-	const parsedEffort = effortSchema.safeParse(effortValue);
-	const parsedReasoningMode = reasoningModeSchema.safeParse(reasoningModeValue);
-	let choice: ReasoningSelection = {};
-	if (isUndefined(effortValue) && parsedReasoningMode.success) {
-		choice = { reasoningMode: parsedReasoningMode.data };
-	} else if (isUndefined(reasoningModeValue) && parsedEffort.success) {
-		choice = { effort: parsedEffort.data };
-	}
+	const thinkingLevelValue =
+		metadata?.thinkingLevel ?? record.model.thinkingLevel;
+	const parsedThinkingLevel = thinkingLevelSchema.safeParse(thinkingLevelValue);
+	const choice: ThinkingSelection = parsedThinkingLevel.success
+		? { thinkingLevel: parsedThinkingLevel.data }
+		: {};
 	const normalizedChoice = model
-		? normalizeReasoningSelection(model, choice)
+		? normalizeThinkingSelection(model, choice)
 		: {};
 	const parsed = sessionMessageMetadataSchema.safeParse({
 		...pickTruthy({ agent: metadata?.agent ?? record.agentId }),
@@ -439,8 +418,7 @@ const toDurableMetadata = (
 				metadata.submissionId === undefined ? undefined : metadata.submissionId,
 			submissionStatus: metadata.submissionStatus,
 			usage: metadata.usage,
-			effort: metadata.effort,
-			reasoningMode: metadata.reasoningMode,
+			thinkingLevel: metadata.thinkingLevel,
 		}),
 	};
 };
@@ -513,15 +491,13 @@ export const buildUserSessionRecord = ({
 	message,
 	model,
 	turnId,
-	effort,
-	reasoningMode,
+	thinkingLevel,
 }: {
 	agentId: AgentId;
 	message: SessionMessage;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	turnId: AgentTurnId;
-	effort?: SessionRecord["model"]["effort"];
-	reasoningMode?: SessionRecord["model"]["reasoningMode"];
+	thinkingLevel?: SessionRecord["model"]["thinkingLevel"];
 }): SessionRecord => {
 	const durableMessage = toDurableSessionMessageRecord(message);
 	if (isUndefined(durableMessage) || durableMessage.role !== "user") {
@@ -529,7 +505,6 @@ export const buildUserSessionRecord = ({
 			"User Session Record has no durable message."
 		);
 	}
-	const hasChoice = !isUndefined(effort ?? reasoningMode);
 	return {
 		agentId,
 		id: toSessionRecordId(`record-${randomUUIDv7()}`),
@@ -538,10 +513,7 @@ export const buildUserSessionRecord = ({
 			modelId: model.modelId,
 			providerId: model.providerId,
 			...omitUndefined({
-				effort: hasChoice ? effort : message.metadata?.effort,
-				reasoningMode: hasChoice
-					? reasoningMode
-					: message.metadata?.reasoningMode,
+				thinkingLevel: thinkingLevel ?? message.metadata?.thinkingLevel,
 			}),
 		},
 		outcome: { kind: "user" },

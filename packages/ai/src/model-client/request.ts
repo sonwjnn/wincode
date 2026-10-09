@@ -1,4 +1,3 @@
-import { createReasoningSelection } from "../model-metadata-runtime";
 import { resolveModelProviderOptions } from "../model-provider-options";
 import type { SupportedChatModel } from "../models";
 import type { ModelProtocolStrategy } from "./protocols/types";
@@ -18,16 +17,9 @@ const providerRequestContext = (
 	model: SupportedChatModel
 ): ProviderRequestContext => {
 	const { target } = request;
-	if (target.effort !== undefined && target.reasoningMode !== undefined) {
-		throw new Error("Select either an Effort or a Reasoning Mode, not both.");
-	}
-	const reasoningSelection = createReasoningSelection(
-		target.effort,
-		target.reasoningMode
-	);
 	const resolved = resolveModelProviderOptions(model, {
 		maxOutputTokens: target.maxOutputTokens,
-		...reasoningSelection,
+		thinkingLevel: target.thinkingLevel,
 	});
 	return {
 		maxOutputTokens: resolved.maxOutputTokens ?? target.maxOutputTokens,

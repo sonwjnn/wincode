@@ -26,20 +26,12 @@ import {
 const projectSelection = (
 	agentId: Selection["agentId"],
 	model: Selection["model"],
-	effort: Selection["effort"],
-	reasoningMode: Selection["reasoningMode"]
-): Selection => {
-	if (effort !== undefined && reasoningMode !== undefined) {
-		throw new Error("Select either an Effort or a Reasoning Mode, not both.");
-	}
-	if (effort !== undefined) {
-		return { agentId, effort, model };
-	}
-	if (reasoningMode !== undefined) {
-		return { agentId, model, reasoningMode };
-	}
-	return { agentId, model };
-};
+	thinkingLevel: Selection["thinkingLevel"]
+): Selection => ({
+	agentId,
+	model,
+	...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+});
 const projectFilePart = (
 	part: Record<string, unknown>
 ): Record<string, unknown> => ({
@@ -242,8 +234,7 @@ export const projectMessage = (message: unknown): unknown => {
 						terminalOutcome: metadata.terminalOutcome,
 						turnId: metadata.joinedTurnId,
 						usage: metadata.usage,
-						effort: metadata.effort,
-						reasoningMode: metadata.reasoningMode,
+						thinkingLevel: metadata.thinkingLevel,
 					}),
 		parts,
 		role: record.role,
@@ -572,10 +563,9 @@ export const selectionFromHost = (host: SessionHost): unknown => {
 	return {
 		agentId: selection.agent,
 		model: selection.model,
-		...(selection.effort === undefined ? {} : { effort: selection.effort }),
-		...(selection.reasoningMode === undefined
+		...(selection.thinkingLevel === undefined
 			? {}
-			: { reasoningMode: selection.reasoningMode }),
+			: { thinkingLevel: selection.thinkingLevel }),
 	};
 };
 
@@ -597,12 +587,7 @@ const projectQueuedSubmission = (
 	return {
 		messageId: submission.messageId,
 		selection: selectionWire(
-			projectSelection(
-				input.agent,
-				input.model,
-				input.effort,
-				input.reasoningMode
-			)
+			projectSelection(input.agent, input.model, input.thinkingLevel)
 		),
 		submissionId: submission.submissionId,
 		...(disposition === undefined ? {} : { disposition }),
@@ -626,10 +611,9 @@ export const projectExecution = (
 	startedAt: execution.startedAt,
 	submissionId: execution.submissionId,
 	turnId: execution.turnId,
-	...(execution.effort === undefined ? {} : { effort: execution.effort }),
-	...(execution.reasoningMode === undefined
+	...(execution.thinkingLevel === undefined
 		? {}
-		: { reasoningMode: execution.reasoningMode }),
+		: { thinkingLevel: execution.thinkingLevel }),
 });
 
 export const projectSteering = (
@@ -642,12 +626,7 @@ export const projectSteering = (
 		messageId: input.messageId,
 		recordId: message.recordId,
 		selection: selectionWire(
-			projectSelection(
-				input.agent,
-				input.model,
-				input.effort,
-				input.reasoningMode
-			)
+			projectSelection(input.agent, input.model, input.thinkingLevel)
 		),
 		submissionId: input.submissionId,
 		status: message.status,

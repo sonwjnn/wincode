@@ -90,6 +90,11 @@ export const codingToolNames: readonly CodingToolName[] = Object.freeze(
 	Object.keys(codingToolCatalog) as CodingToolName[]
 );
 
+const codingToolNameSet = new Set<string>(codingToolNames);
+
+export const isCodingToolName = (name: string): name is CodingToolName =>
+	codingToolNameSet.has(name);
+
 /** Builds a model-facing definition while retaining the catalog's neutral description. */
 export const codingToolDefinitionFor = (
 	name: CodingToolName,

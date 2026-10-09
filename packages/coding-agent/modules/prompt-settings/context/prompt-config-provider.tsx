@@ -2,12 +2,10 @@ import type { AgentId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
-	type Effort,
-	getSupportedModelEfforts,
-	getSupportedReasoningModes,
-	normalizeReasoningSelection,
-	type ReasoningMode,
-	type ReasoningSelection,
+	getSupportedThinkingLevels,
+	normalizeThinkingSelection,
+	type ThinkingLevel,
+	type ThinkingSelection,
 } from "@wincode/ai/models";
 import { isNull } from "@wincode/utils";
 import {
@@ -28,28 +26,23 @@ import {
 type PromptConfigState = {
 	agent: AgentId;
 	model: ChatModelSelection;
-} & ReasoningSelection;
+} & ThinkingSelection;
 export type PromptConfig = PromptConfigState & {
-	cycleReasoningChoice: () => void;
+	cycleThinkingLevel: () => void;
 	setAgent: (agent: AgentId) => void;
-	setEffort: (effort: Effort | undefined) => void;
 	setModel: (model: ChatModelSelection) => void;
-	setReasoningMode: (reasoningMode: ReasoningMode | undefined) => void;
+	setThinkingLevel: (thinkingLevel: ThinkingLevel | undefined) => void;
 };
 
 const PromptConfigContext = createContext<PromptConfig | null>(null);
 
-export const resolveInitialPromptReasoningSelection = (
+export const resolveInitialPromptThinkingSelection = (
 	model: ChatModelSelection,
-	initialEffort: Effort | undefined,
-	initialReasoningMode: ReasoningMode | undefined
-): ReasoningSelection =>
-	normalizeReasoningSelection(
-		model,
-		initialReasoningMode === undefined
-			? { effort: initialEffort ?? "low" }
-			: { reasoningMode: initialReasoningMode }
-	);
+	initialThinkingLevel: ThinkingLevel | undefined
+): ThinkingSelection =>
+	normalizeThinkingSelection(model, {
+		thinkingLevel: initialThinkingLevel ?? "low",
+	});
 
 export const updatePromptConfigModel = (
 	current: PromptConfigState,
@@ -57,49 +50,41 @@ export const updatePromptConfigModel = (
 ): PromptConfigState => ({
 	agent: current.agent,
 	model: nextModel,
-	...normalizeReasoningSelection(nextModel, current),
+	...normalizeThinkingSelection(nextModel, current),
 });
 
 export const updatePromptConfigSelection = (
 	current: PromptConfigState,
-	selection: ReasoningSelection
+	selection: ThinkingSelection
 ): PromptConfigState => ({
 	agent: current.agent,
 	model: current.model,
-	...normalizeReasoningSelection(current.model, selection),
+	...normalizeThinkingSelection(current.model, selection),
 });
 
-type InitialReasoningSelection =
-	| {
-			initialEffort?: Effort;
-			initialReasoningMode?: never;
-	  }
-	| {
-			initialEffort?: never;
-			initialReasoningMode?: ReasoningMode;
-	  };
+type InitialThinkingSelection = Readonly<{
+	initialThinkingLevel?: ThinkingLevel;
+}>;
 
 type PromptConfigProviderProps = {
 	children: ReactNode;
 	initialAgent?: AgentId;
 	initialModel?: ChatModelSelection;
-} & InitialReasoningSelection;
+} & InitialThinkingSelection;
 export function PromptConfigProvider({
 	children,
 	initialAgent = buildAgent.id,
 	initialModel = defaultChatModelSelection,
-	initialEffort,
-	initialReasoningMode,
+	initialThinkingLevel,
 }: PromptConfigProviderProps) {
 	const registry = useAgentRegistry();
 	const hasExplicitAgent = useRef(initialAgent !== buildAgent.id);
 	const [config, setConfig] = useState<PromptConfigState>(() => ({
 		agent: initialAgent,
 		model: initialModel,
-		...resolveInitialPromptReasoningSelection(
+		...resolveInitialPromptThinkingSelection(
 			initialModel,
-			initialEffort,
-			initialReasoningMode
+			initialThinkingLevel
 		),
 	}));
 
@@ -113,24 +98,18 @@ export function PromptConfigProvider({
 		}));
 	}, [registry]);
 
-	const cycleReasoningChoice = useCallback(() => {
+	const cycleThinkingLevel = useCallback(() => {
 		setConfig((current) => {
-			const options: ReasoningSelection[] = [
-				{},
-				...getSupportedReasoningModes(current.model).map((reasoningMode) => ({
-					reasoningMode,
-				})),
-				...getSupportedModelEfforts(current.model).map((effort) => ({
-					effort,
-				})),
+			const options: (ThinkingLevel | undefined)[] = [
+				undefined,
+				...getSupportedThinkingLevels(current.model),
 			];
-			const currentIndex = options.findIndex(
-				(option) =>
-					option.effort === current.effort &&
-					option.reasoningMode === current.reasoningMode
+			const currentIndex = options.indexOf(current.thinkingLevel);
+			const next = options[(currentIndex + 1) % options.length];
+			return updatePromptConfigSelection(
+				current,
+				next === undefined ? {} : { thinkingLevel: next }
 			);
-			const next = options[(currentIndex + 1) % options.length] ?? {};
-			return updatePromptConfigSelection(current, next);
 		});
 	}, []);
 
@@ -139,40 +118,30 @@ export function PromptConfigProvider({
 		setConfig((current) => ({ ...current, agent }));
 	}, []);
 
-	const setEffort = useCallback((effort: Effort | undefined) => {
-		setConfig((current) =>
-			updatePromptConfigSelection(
-				current,
-				effort === undefined ? {} : { effort }
-			)
-		);
-	}, []);
-
-	const setModel = useCallback((model: ChatModelSelection) => {
-		setConfig((current) => updatePromptConfigModel(current, model));
-	}, []);
-
-	const setReasoningMode = useCallback(
-		(reasoningMode: ReasoningMode | undefined) => {
+	const setThinkingLevel = useCallback(
+		(thinkingLevel: ThinkingLevel | undefined) => {
 			setConfig((current) =>
 				updatePromptConfigSelection(
 					current,
-					reasoningMode === undefined ? {} : { reasoningMode }
+					thinkingLevel === undefined ? {} : { thinkingLevel }
 				)
 			);
 		},
 		[]
 	);
 
+	const setModel = useCallback((model: ChatModelSelection) => {
+		setConfig((current) => updatePromptConfigModel(current, model));
+	}, []);
+
 	return (
 		<PromptConfigContext.Provider
 			value={{
 				...config,
-				cycleReasoningChoice,
+				cycleThinkingLevel,
 				setAgent,
-				setEffort,
 				setModel,
-				setReasoningMode,
+				setThinkingLevel,
 			}}
 		>
 			{children}

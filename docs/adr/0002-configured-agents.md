@@ -22,22 +22,21 @@ Status: accepted
   loaded now so the config contract does not need to change when delegation is
   added, but v1 does not execute or manually invoke them.
 - **Patchable built-ins over shadowing or replacement** - `agents.build` may patch
-  description, instructions, model, effort, reasoning mode, and permission. Its
+  description, instructions, model, ThinkingLevel, and permission. Its
   reserved identity and `primary` role are immutable, and it cannot be disabled.
   Configured instructions replace the built-in-specific text while the Wincode
   base instructions remain immutable.
 - **Catalog-backed model overrides** - optional `model` uses
   `<connectionProviderId>/<modelId>` and is authoritative for that Agent. Optional
-  `effort` or `reasoningMode` (not both) is valid only with a configured model and
-  must be supported by that model's catalog entry. Without a model, the Agent
-  inherits the session model and its selected Effort or Reasoning Mode.
+  `thinking_level` is valid only with a configured model and must be supported by
+  that model's metadata. Without a model, the Agent inherits the session model
+  and its selected ThinkingLevel.
 
 ## Consequences
 
 - A Configured Agent name is lowercase kebab-case, 1-64 characters. Effective custom
   definitions require `role` and a non-empty `description`; `instructions`, `model`,
-  `effort`, `reasoningMode`, and `permission` are optional. `effort` and
-  `reasoningMode` are mutually exclusive. `disable: true` is a layerable tombstone
+  `thinking_level`, and `permission` are optional. `disable: true` is a layerable tombstone
   for Configured Agents only.
 - Agent patches are strict: unknown Agent fields are errors rather than provider
   option passthrough. Instructions are literal strings capped at 12,000 characters;

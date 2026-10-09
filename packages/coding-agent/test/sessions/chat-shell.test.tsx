@@ -136,7 +136,7 @@ const completedCompaction = (): SessionCompaction => ({
 		modelId: modelId("gpt-5.6-luna"),
 		providerId: "openai",
 	},
-	summarizationEffort: "high",
+	summarizationThinkingLevel: "high",
 	summary: {
 		coveredMessageIds: [
 			sessionMessageId("user-1"),

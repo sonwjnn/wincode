@@ -3,10 +3,9 @@ import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
-	createReasoningSelection,
 	normalizeChatModelSelection,
-	normalizeReasoningSelection,
-	type ReasoningSelection,
+	normalizeThinkingSelection,
+	type ThinkingSelection,
 } from "@wincode/ai/models";
 import {
 	getErrorMessage,
@@ -71,12 +70,10 @@ type SessionSendInput = Pick<
 	SessionSubmissionInput,
 	| "agent"
 	| "sessionModel"
-	| "sessionEffort"
-	| "sessionReasoningMode"
+	| "sessionThinkingLevel"
 	| "model"
 	| "resolvedAgent"
-	| "effort"
-	| "reasoningMode"
+	| "thinkingLevel"
 >;
 
 type SessionSelectionInput = {
@@ -85,7 +82,7 @@ type SessionSelectionInput = {
 	model: ChatModelSelection;
 	registry: AgentRegistry;
 	restoredConfig: ResolvedSessionSelection | null;
-	reasoningSelection: ReasoningSelection;
+	thinkingSelection: ThinkingSelection;
 };
 
 type RecallKeyEvent = {
@@ -102,45 +99,27 @@ const resolveInitialSessionSelection = ({
 	model,
 	registry,
 	restoredConfig,
-	reasoningSelection,
+	thinkingSelection,
 }: SessionSelectionInput): SessionSendInput => {
 	const resolvedModel =
 		normalizeChatModelSelection(initialMessage.metadata?.model ?? model) ??
 		model;
 	const sessionModel = restoredConfig?.model ?? model;
-	const sessionChoice =
-		restoredConfig?.effort !== undefined ||
-		restoredConfig?.reasoningMode !== undefined
-			? createReasoningSelection(
-					restoredConfig?.effort,
-					restoredConfig?.reasoningMode
-				)
-			: reasoningSelection;
-	const sessionReasoningSelection = normalizeReasoningSelection(
+	const sessionThinkingLevel =
+		restoredConfig?.thinkingLevel ?? thinkingSelection.thinkingLevel;
+	const sessionThinkingSelection = normalizeThinkingSelection(
 		sessionModel,
-		sessionChoice
+		sessionThinkingLevel === undefined
+			? {}
+			: { thinkingLevel: sessionThinkingLevel }
 	);
-	let persistedChoice: ReasoningSelection = {};
-	if (
-		restoredConfig?.effort !== undefined ||
-		restoredConfig?.reasoningMode !== undefined
-	) {
-		persistedChoice = createReasoningSelection(
-			restoredConfig?.effort,
-			restoredConfig?.reasoningMode
-		);
-	} else if (
-		initialMessage.metadata?.effort !== undefined ||
-		initialMessage.metadata?.reasoningMode !== undefined
-	) {
-		persistedChoice = createReasoningSelection(
-			initialMessage.metadata?.effort,
-			initialMessage.metadata?.reasoningMode
-		);
-	}
-	const persistedSelection = normalizeReasoningSelection(
+	const persistedThinkingLevel =
+		restoredConfig?.thinkingLevel ?? initialMessage.metadata?.thinkingLevel;
+	const persistedSelection = normalizeThinkingSelection(
 		resolvedModel,
-		persistedChoice
+		persistedThinkingLevel === undefined
+			? {}
+			: { thinkingLevel: persistedThinkingLevel }
 	);
 	const persistedAgentId =
 		initialMessage.metadata?.agent ?? restoredConfig?.agent ?? agent;
@@ -159,18 +138,18 @@ const resolveInitialSessionSelection = ({
 		registry,
 		persistedAgentId,
 		persistedAgentIsAvailable ? resolvedModel : sessionModel,
-		persistedAgentIsAvailable ? persistedSelection : sessionReasoningSelection,
+		persistedAgentIsAvailable ? persistedSelection : sessionThinkingSelection,
 		persistedSubagentIsAvailable
 	);
 	return {
 		agent: effective.agent,
 		sessionModel,
-		sessionEffort: sessionReasoningSelection.effort,
-		sessionReasoningMode: sessionReasoningSelection.reasoningMode,
+		sessionThinkingLevel: sessionThinkingSelection.thinkingLevel,
 		model: effective.model,
 		resolvedAgent: effective.resolvedAgent,
-		effort: effective.effort,
-		reasoningMode: effective.reasoningMode,
+		...(effective.thinkingLevel === undefined
+			? {}
+			: { thinkingLevel: effective.thinkingLevel }),
 	};
 };
 
@@ -182,19 +161,11 @@ export function SessionView({
 	sessionTitle,
 }: SessionViewProps) {
 	const router = useRouter();
-	const {
-		agent,
-		effort,
-		model,
-		reasoningMode,
-		setAgent,
-		setEffort,
-		setModel,
-		setReasoningMode,
-	} = usePromptConfig();
-	const currentReasoningSelection = useMemo(
-		() => createReasoningSelection(effort, reasoningMode),
-		[effort, reasoningMode]
+	const { agent, model, thinkingLevel, setAgent, setModel, setThinkingLevel } =
+		usePromptConfig();
+	const currentThinkingSelection = useMemo<ThinkingSelection>(
+		() => (thinkingLevel === undefined ? {} : { thinkingLevel }),
+		[thinkingLevel]
 	);
 	const registry = useAgentRegistry();
 	const dialog = useDialog();
@@ -420,11 +391,7 @@ export function SessionView({
 			setAgent(restoredConfig.agent);
 		}
 		setModel(restoredConfig.model);
-		if (restoredConfig.effort === undefined) {
-			setReasoningMode(restoredConfig.reasoningMode);
-		} else {
-			setEffort(restoredConfig.effort);
-		}
+		setThinkingLevel(restoredConfig.thinkingLevel);
 		setRestoredMessages(initialTranscript);
 		if (
 			!isUndefined(restoredConfig.persistedAgent) &&
@@ -441,8 +408,7 @@ export function SessionView({
 		restoredConfig,
 		setAgent,
 		setModel,
-		setEffort,
-		setReasoningMode,
+		setThinkingLevel,
 		show,
 	]);
 
@@ -569,10 +535,13 @@ export function SessionView({
 				registry,
 				agent,
 				model,
-				currentReasoningSelection
+				currentThinkingSelection
 			);
-			const reasoningSelection: ReasoningSelection = effective;
-			await compact(focus, effective.model, reasoningSelection);
+			const thinkingSelection: ThinkingSelection =
+				effective.thinkingLevel === undefined
+					? {}
+					: { thinkingLevel: effective.thinkingLevel };
+			await compact(focus, effective.model, thinkingSelection);
 			return true;
 		} catch (error) {
 			show({
@@ -600,7 +569,7 @@ export function SessionView({
 			registry,
 			agent,
 			model,
-			currentReasoningSelection
+			currentThinkingSelection
 		);
 		const optimisticMessage = isBusy
 			? undefined
@@ -610,8 +579,7 @@ export function SessionView({
 						agent: effective.agent,
 						model: effective.model,
 						...omitUndefined({
-							effort: effective.effort,
-							reasoningMode: effective.reasoningMode,
+							thinkingLevel: effective.thinkingLevel,
 						}),
 					},
 					[],
@@ -625,14 +593,16 @@ export function SessionView({
 		void prompt({
 			agent: effective.agent,
 			sessionModel: model,
-			sessionEffort: effort,
-			sessionReasoningMode: reasoningMode,
+			...(thinkingLevel === undefined
+				? {}
+				: { sessionThinkingLevel: thinkingLevel }),
 			composition,
 			files,
 			model: effective.model,
 			resolvedAgent: effective.resolvedAgent,
-			effort: effective.effort,
-			reasoningMode: effective.reasoningMode,
+			...(effective.thinkingLevel === undefined
+				? {}
+				: { thinkingLevel: effective.thinkingLevel }),
 			userText,
 			reservedMessageId: optimisticMessage?.id,
 			skill,
@@ -689,7 +659,7 @@ export function SessionView({
 				model,
 				registry,
 				restoredConfig,
-				reasoningSelection: currentReasoningSelection,
+				thinkingSelection: currentThinkingSelection,
 			}),
 			messageId,
 		});
@@ -769,7 +739,7 @@ export function SessionView({
 						model,
 						registry,
 						restoredConfig,
-						reasoningSelection: currentReasoningSelection,
+						thinkingSelection: currentThinkingSelection,
 					}),
 					messageId: initialMessage.id,
 				});
@@ -799,7 +769,7 @@ export function SessionView({
 		send,
 		sessionId,
 		show,
-		currentReasoningSelection,
+		currentThinkingSelection,
 	]);
 
 	return (

@@ -4,11 +4,7 @@ import type {
 	SessionMessageId,
 	SubmissionId,
 } from "@wincode/agent-core";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SkillContext } from "@/modules/skills";
 import type { SessionResolvedAgent } from "./agent-session/types";
@@ -37,11 +33,9 @@ export type SessionSendInput = Readonly<{
 	/** A reserved user-message identity for a new Submission. */
 	reservedMessageId?: SessionMessageId;
 	sessionModel: ChatModelSelection;
-	sessionEffort?: Effort;
-	sessionReasoningMode?: ReasoningMode;
+	sessionThinkingLevel?: ThinkingLevel;
 	model: ChatModelSelection;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 	resolvedAgent?: SessionResolvedAgent;
 	/** Prompt to append as a fresh user message. */
 	userText?: string;

@@ -1,10 +1,8 @@
 import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
 import {
-	type Effort,
-	effortSchema,
 	type ModelId,
-	type ReasoningMode,
-	reasoningModeSchema,
+	type ThinkingLevel,
+	thinkingLevelSchema,
 } from "@wincode/ai/models";
 import {
 	isArray,
@@ -126,8 +124,7 @@ export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	submissionId?: SubmissionId;
 	submissionStatus?: SessionSubmissionStatus;
 	usage?: ModelUsage;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 }>;
 
 export type SessionMessagePart =
@@ -206,8 +203,7 @@ export type SessionRecord = ReadonlyDeep<{
 	model: {
 		modelId: ModelId;
 		providerId: string;
-		effort?: Effort;
-		reasoningMode?: ReasoningMode;
+		thinkingLevel?: ThinkingLevel;
 	};
 	outcome: SessionRecordOutcome;
 	turnId: AgentTurnId;
@@ -258,8 +254,7 @@ const isSessionMessageMetadataRecord = (
 				key === "submissionId" ||
 				key === "submissionStatus" ||
 				key === "usage" ||
-				key === "effort" ||
-				key === "reasoningMode"
+				key === "thinkingLevel"
 		) &&
 		(isUndefined(value.agent) || isAgentId(value.agent)) &&
 		(isUndefined(value.joinedTurnId) || isNonEmptyString(value.joinedTurnId)) &&
@@ -281,11 +276,8 @@ const isSessionMessageMetadataRecord = (
 		(isUndefined(value.submissionStatus) || !isUndefined(value.submissionId)) &&
 		(isUndefined(value.usage) ||
 			modelUsageSchema.safeParse(value.usage).success) &&
-		(isUndefined(value.effort) ||
-			effortSchema.safeParse(value.effort).success) &&
-		(isUndefined(value.reasoningMode) ||
-			reasoningModeSchema.safeParse(value.reasoningMode).success) &&
-		(isUndefined(value.effort) || isUndefined(value.reasoningMode))
+		(isUndefined(value.thinkingLevel) ||
+			thinkingLevelSchema.safeParse(value.thinkingLevel).success)
 	);
 };
 export const isSessionAttachmentReferencePart = (

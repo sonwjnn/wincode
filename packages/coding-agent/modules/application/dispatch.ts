@@ -61,8 +61,7 @@ const HELP_TEXT = [
 	"      --session <id>   Continue a durable Session",
 	"      --agent <id>     Select an Agent",
 	"      --model <id>     Select a Model",
-	"      --effort <id>    Select an Effort",
-	"      --reasoning-mode <id>  Select a Reasoning Mode",
+	"      --thinking-level <id>  Select a Thinking Level",
 	"      --trust-project  Trust project resources for this invocation",
 	"      --no-trust-project  Refuse project resources for this invocation",
 	"      --plugin <path>  Enable a Plugin (repeatable)",
@@ -145,8 +144,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	let model: string | undefined;
 	let prompt: string | undefined;
 	let session: string | undefined;
-	let effort: string | undefined;
-	let reasoningMode: string | undefined;
+	let thinkingLevel: string | undefined;
 	const pluginPaths: string[] = [];
 	const disabledPlugins: string[] = [];
 	let help = false;
@@ -246,17 +244,10 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			oneShotOption = true;
 			continue;
 		}
-		if (option === "--effort") {
+		if (option === "--thinking-level") {
 			const next = nextValue(args, index, option, inlineValue);
 			index = next.index;
-			effort = next.value;
-			oneShotOption = true;
-			continue;
-		}
-		if (option === "--reasoning-mode") {
-			const next = nextValue(args, index, option, inlineValue);
-			index = next.index;
-			reasoningMode = next.value;
+			thinkingLevel = next.value;
 			oneShotOption = true;
 			continue;
 		}
@@ -288,12 +279,6 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			},
 		};
 	}
-	if (effort !== undefined && reasoningMode !== undefined) {
-		throw new InvocationError(
-			"Use either --effort or --reasoning-mode, not both.",
-			USAGE_EXIT_CODE
-		);
-	}
 	if (oneShotOption && !modeExplicit) {
 		throw new InvocationError(
 			"One-shot options require --mode print or --mode json.",
@@ -315,8 +300,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			...(model === undefined ? {} : { model }),
 			...(prompt === undefined ? {} : { prompt }),
 			...(session === undefined ? {} : { session }),
-			...(effort === undefined ? {} : { effort }),
-			...(reasoningMode === undefined ? {} : { reasoningMode }),
+			...(thinkingLevel === undefined ? {} : { thinkingLevel }),
 			...(pluginPaths.length === 0 ? {} : { pluginPaths }),
 			...(disabledPlugins.length === 0 ? {} : { disabledPlugins }),
 			...(projectTrustOverride === undefined ? {} : { projectTrustOverride }),

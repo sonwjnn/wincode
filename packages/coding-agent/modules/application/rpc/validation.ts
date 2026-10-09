@@ -386,10 +386,9 @@ export const selectionWire = (
 ): Record<string, unknown> => ({
 	agentId: selection.agentId,
 	model: selection.model,
-	...(selection.effort === undefined ? {} : { effort: selection.effort }),
-	...(selection.reasoningMode === undefined
+	...(selection.thinkingLevel === undefined
 		? {}
-		: { reasoningMode: selection.reasoningMode }),
+		: { thinkingLevel: selection.thinkingLevel }),
 });
 
 export const encodeCursor = (value: {

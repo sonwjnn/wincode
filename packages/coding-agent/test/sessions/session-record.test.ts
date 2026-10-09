@@ -320,14 +320,14 @@ test("round-trips a cancelled assistant record without an interrupted badge", as
 	});
 });
 
-test("reopening a record drops an unsupported Reasoning Mode but preserves valid metadata", () => {
+test("reopening a record drops an unsupported ThinkingLevel but preserves valid metadata", () => {
 	const record: SessionRecord = {
 		...assistantRecord("record-unsupported-mode", "done"),
 		messages: [
 			messageRecord("assistant-unsupported-mode", "assistant", "done", {
 				agent: agentId("build"),
 				model,
-				reasoningMode: "thinking",
+				thinkingLevel: "minimal",
 				usage: { inputTokens: 10, outputTokens: 5 },
 			}),
 		],

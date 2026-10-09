@@ -70,6 +70,7 @@ export const initializeApplicationRuntime = async (
 ): Promise<ApplicationRuntime> => {
 	const cwd = input.cwd;
 	const homeRoot = options.homeRoot ?? os.homedir();
+	const userDataDir = options.userDataDir ?? resolveUserDataDir();
 	const workspace = resolveWorkspaceRoot(cwd);
 	const projectTrust = await resolveProjectTrust({
 		mode: input.mode,
@@ -78,7 +79,7 @@ export const initializeApplicationRuntime = async (
 			: { override: input.projectTrustOverride }),
 		prompt: options.promptProjectTrust ?? promptProjectTrust,
 		stdinIsTTY: input.stdinIsTTY,
-		userDataDir: options.userDataDir ?? resolveUserDataDir(),
+		userDataDir,
 		workspace,
 	});
 	const configStore = createConfigStore({
@@ -102,6 +103,7 @@ export const initializeApplicationRuntime = async (
 		disabledPluginIds: input.disabledPluginIds,
 		distributionPlugins:
 			options.distributionPlugins ?? composition.distributionPlugins,
+		userDataDir,
 	});
 	return Object.freeze({
 		configRuntime,
