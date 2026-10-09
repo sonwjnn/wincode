@@ -33,6 +33,7 @@ export type CommandStrategyContext = {
 	getRecentModelSelections: (limit: number) => ChatModelSelection[];
 	navigateHome: () => void;
 	onCompact?: (focus?: string) => boolean | Promise<boolean>;
+	onReload: () => Promise<void>;
 	onOpenSettings?: (section?: string) => void | Promise<void>;
 	refreshAgentRegistry: () => void;
 	renderer: Pick<CliRenderer, "copyToClipboardOSC52" | "destroy">;
@@ -114,6 +115,10 @@ const STRATEGIES = {
 			}
 			return onOpenSettings();
 		},
+	},
+	"application.reload": {
+		kind: "action",
+		run: ({ onReload }) => onReload(),
 	},
 	"agent.select": {
 		kind: "prepared-dialog",

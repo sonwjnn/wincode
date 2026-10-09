@@ -391,13 +391,79 @@ export const createSessionHost = async ({
 		) {
 			openedAgentSession.continue();
 		}
+		const sessionWorkManager = capabilities.getSessionHostManager();
+		const withAsyncSessionWork = async <Result>(
+			action: () => Promise<Result>,
+			onRejected: (reason: string) => Result
+		): Promise<Result> => {
+			const admission = sessionWorkManager.tryAcquireSessionWork();
+			if (admission.kind === "rejected") {
+				return onRejected(admission.reason);
+			}
+			try {
+				return await action();
+			} finally {
+				admission.release();
+			}
+		};
+		const withSyncSessionWork = <Result>(
+			action: () => Result,
+			onRejected: (reason: string) => Result
+		): Result => {
+			const admission = sessionWorkManager.tryAcquireSessionWork();
+			if (admission.kind === "rejected") {
+				return onRejected(admission.reason);
+			}
+			try {
+				return action();
+			} finally {
+				admission.release();
+			}
+		};
+		const guardedAgentSession: AgentSession = Object.freeze({
+			cancel: openedAgentSession.cancel,
+			cancelCompaction: openedAgentSession.cancelCompaction,
+			compact: (command) =>
+				withAsyncSessionWork(
+					() => openedAgentSession.compact(command),
+					(reason) => {
+						throw new Error(reason);
+					}
+				),
+			continue: () =>
+				withSyncSessionWork(
+					() => openedAgentSession.continue(),
+					(reason) => ({ kind: "rejected" as const, reason })
+				),
+			getSnapshot: openedAgentSession.getSnapshot,
+			interrupt: openedAgentSession.interrupt,
+			interruptAll: openedAgentSession.interruptAll,
+			onSubmissionEvent: openedAgentSession.onSubmissionEvent,
+			prompt: (input) =>
+				withAsyncSessionWork(
+					() => openedAgentSession.prompt(input),
+					(reason) => ({ rejected: true, reason })
+				),
+			recallWaitingMessages: openedAgentSession.recallWaitingMessages,
+			send: (input) =>
+				withSyncSessionWork(
+					() => openedAgentSession.send(input),
+					(reason) => Promise.resolve({ rejected: true as const, reason })
+				),
+			steer: () =>
+				withAsyncSessionWork(
+					() => openedAgentSession.steer(),
+					(reason) => ({ kind: "rejected" as const, reason })
+				),
+			subscribe: openedAgentSession.subscribe,
+		});
 		void logger.debug("Session Host opened", {
 			operation: "session-host",
 			phase: "opened",
 		});
 
 		return {
-			agentSession: openedAgentSession,
+			agentSession: guardedAgentSession,
 			getSelection: () => resolveOpenedSelection(capabilities.getRegistry()),
 			getSnapshot: openedAgentSession.getSnapshot,
 			onEvent: (listener) => {

@@ -53,6 +53,9 @@ const loadModeRunners = async (): Promise<DispatchModeRunners> => {
 				...(context.pluginRuntime === undefined
 					? {}
 					: { pluginRuntime: context.pluginRuntime }),
+				...(context.resourceLoader === undefined
+					? {}
+					: { resourceLoader: context.resourceLoader }),
 			});
 			const { runInteractive } = await import("../tui/runtime");
 			return runInteractive();

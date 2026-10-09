@@ -31,7 +31,7 @@ export type DispatchModeLoader = () => Promise<DispatchModeRunners>;
 
 export type DispatchRuntime = Pick<
 	ApplicationContext,
-	"configRuntime" | "pluginRuntime"
+	"configRuntime" | "pluginRuntime" | "resourceLoader"
 > &
 	Readonly<{ startupDiagnostics?: readonly string[] }>;
 export type DispatchDependencies = Readonly<{

@@ -59,6 +59,7 @@ function persistTheme(theme: Theme) {
 type ThemeContextValue = {
 	colors: ThemeColors;
 	currentTheme: Theme;
+	reloadTheme: () => void;
 	setTheme: (theme: Theme) => void;
 };
 
@@ -102,10 +103,18 @@ export function ThemeProvider({ children, themeName }: ThemeProviderProps) {
 		setCurrentTheme(theme);
 		persistTheme(theme);
 	}, []);
+	const reloadTheme = useCallback(() => {
+		setCurrentTheme(resolveThemeValue(themeName));
+	}, [themeName]);
 
 	return (
 		<ThemeContext.Provider
-			value={{ colors: currentTheme.colors, currentTheme, setTheme }}
+			value={{
+				colors: currentTheme.colors,
+				currentTheme,
+				reloadTheme,
+				setTheme,
+			}}
 		>
 			{children}
 		</ThemeContext.Provider>

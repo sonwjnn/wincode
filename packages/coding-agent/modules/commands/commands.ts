@@ -36,6 +36,14 @@ export const COMMANDS = [
 		input: NO_INPUT,
 	},
 	{
+		description: "Reload Plugins, Skills, prompts, themes, and context",
+		name: "reload",
+		value: "/reload",
+		kind: "builtin",
+		action: "application.reload",
+		input: NO_INPUT,
+	},
+	{
 		description: "Switch agents",
 		name: "agents",
 		value: "/agents",

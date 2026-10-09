@@ -26,10 +26,12 @@ import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { discoverSkills, type Skill } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { createCommandHandlers } from "./command-strategies";
 import { openCommandDialog } from "./dialog-command";
+import { reloadInteractiveResources } from "./reload-resources";
 
 export function CommandControllerProvider({
 	children,
@@ -42,6 +44,7 @@ export function CommandControllerProvider({
 	const router = useRouter();
 	const dialog = useDialog();
 	const toast = useToast();
+	const { reloadTheme } = useTheme();
 	const connections = useConnections();
 	const refreshAgentRegistry = useRefreshAgentRegistry();
 	const promptConfig = usePromptConfig();
@@ -54,6 +57,16 @@ export function CommandControllerProvider({
 	const discoverAvailableSkills = useCallback(
 		() => discoverSkills(config),
 		[config]
+	);
+	const reloadResources = useCallback(
+		() =>
+			reloadInteractiveResources({
+				dialog,
+				refreshAgentRegistry,
+				reloadTheme,
+				toast,
+			}),
+		[dialog, refreshAgentRegistry, reloadTheme, toast]
 	);
 
 	useEffect(() => {
@@ -98,6 +111,7 @@ export function CommandControllerProvider({
 						router.navigate({ to: "/" }).catch(() => undefined);
 					},
 					onCompact: options.onCompact,
+					onReload: reloadResources,
 					onOpenSettings: options.onOpenSettings,
 					refreshAgentRegistry,
 					renderer,
@@ -178,6 +192,7 @@ export function CommandControllerProvider({
 			discoverAvailableSkills,
 			discoverCustomCommands,
 			promptConfig,
+			reloadResources,
 			refreshAgentRegistry,
 			renderer,
 			router,

@@ -6,6 +6,7 @@ test("keeps host built-in slash names routed to their action IDs", () => {
 		{ action: "session.new", value: "/new" },
 		{ action: "session.compact", value: "/compact" },
 		{ action: "settings.open", value: "/settings" },
+		{ action: "application.reload", value: "/reload" },
 		{ action: "agent.select", value: "/agents" },
 		{ action: "model.select", value: "/models" },
 		{ action: "thinking.select", value: "/thinking" },

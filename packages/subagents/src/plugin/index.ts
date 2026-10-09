@@ -34,25 +34,40 @@ export const createSubagentsPluginFactory =
 		}> = {}
 	): PluginFactory =>
 	async (api, loadContext) => {
-		const storeLease =
-			options.taskStore === undefined
-				? await acquireSharedSubagentsTaskStore(
-						options.databasePath ??
-							resolveSubagentsDatabasePath(
-								loadContext.workspace,
-								loadContext.userDataDir
-							)
-					)
-				: undefined;
-		let durableTaskStore: SubagentsTaskStore;
-		if (storeLease !== undefined) {
-			durableTaskStore = storeLease.store;
-		} else if (options.taskStore === undefined) {
-			throw new Error("Subagents task store acquisition failed.");
-		} else {
-			durableTaskStore = await options.taskStore;
-		}
+		let durableTaskStore =
+			options.taskStore === undefined ? undefined : await options.taskStore;
+		let releaseTaskStore: (() => void) | undefined;
+		let coordinator: SubagentsTaskCoordinator | undefined;
 		const plugin = api.definePlugin({ id: "subagents" });
+		plugin.onStart(async () => {
+			if (durableTaskStore === undefined) {
+				const storeLease = await acquireSharedSubagentsTaskStore(
+					options.databasePath ??
+						resolveSubagentsDatabasePath(
+							loadContext.workspace,
+							loadContext.userDataDir
+						)
+				);
+				durableTaskStore = storeLease.store;
+				releaseTaskStore = storeLease.release;
+			}
+			if (durableTaskStore === undefined) {
+				throw new Error("Subagents task store acquisition failed.");
+			}
+			coordinator = getSubagentsTaskCoordinator(
+				durableTaskStore,
+				loadContext.sourcePath
+			);
+		});
+		plugin.onShutdown(async () => {
+			coordinator = undefined;
+			if (releaseTaskStore !== undefined) {
+				const release = releaseTaskStore;
+				releaseTaskStore = undefined;
+				durableTaskStore = undefined;
+				await release();
+			}
+		});
 		const discovery = await discoverSubagentAgents({
 			trustedProjectRoots: loadContext.trustedProjectRoots,
 			userDataDir: loadContext.userDataDir,
@@ -67,13 +82,18 @@ export const createSubagentsPluginFactory =
 		for (const agent of discovery.agents) {
 			plugin.registerAgent(agent);
 		}
-		const coordinator = getSubagentsTaskCoordinator(
-			durableTaskStore,
-			loadContext.sourcePath
-		);
-		if (storeLease !== undefined) {
-			plugin.onShutdown(storeLease.release);
-		}
+		const getActiveCoordinator = (): SubagentsTaskCoordinator => {
+			if (coordinator === undefined) {
+				throw new Error("Subagents Plugin process has not started.");
+			}
+			return coordinator;
+		};
+		const getActiveTaskStore = (): SubagentsTaskStore => {
+			if (durableTaskStore === undefined) {
+				throw new Error("Subagents task store is unavailable.");
+			}
+			return durableTaskStore;
+		};
 		const sessionSdks = new Map<string, SessionSdkOperations>();
 		plugin.registerCommand({
 			description: "List subagents and explain unavailable requirements.",
@@ -91,11 +111,11 @@ export const createSubagentsPluginFactory =
 			if (context.sessionSdk !== undefined) {
 				sessionSdks.set(context.sessionId, context.sessionSdk);
 			}
-			coordinator.onSessionStart(context);
+			getActiveCoordinator().onSessionStart(context);
 		});
 		plugin.onSessionShutdown((context) => {
 			sessionSdks.delete(context.sessionId);
-			return coordinator.onSessionShutdown(context);
+			return getActiveCoordinator().onSessionShutdown(context);
 		});
 		plugin.onBeforeAgentTurn(async (context, registration) => {
 			const turn = getSubagentsTurn(context, loadContext.sourcePath);
@@ -104,10 +124,10 @@ export const createSubagentsPluginFactory =
 			}
 			const tools = await createSubagentsToolsForTurn(
 				turn,
-				coordinator,
-				durableTaskStore
+				getActiveCoordinator(),
+				getActiveTaskStore()
 			);
-			registerSubagentsTools(registration, tools, turn, coordinator);
+			registerSubagentsTools(registration, tools, turn, getActiveCoordinator());
 		});
 	};
 

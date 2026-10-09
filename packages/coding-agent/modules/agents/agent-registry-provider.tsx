@@ -54,9 +54,9 @@ export const resolveInteractiveAgentRegistry = async (
 };
 
 /**
- * Loads the process-lifetime Agent Registry from the shared ConfigRuntime.
- * Config changes require a restart; resolution is memoized by the ConfigStore
- * snapshot, so the provider stays immutable once loaded.
+ * Loads the Agent Registry from the active ConfigRuntime and PluginRuntime.
+ * `/reload` supplies fresh runtime objects and explicitly refreshes this
+ * provider, while ordinary renders reuse the current registry.
  */
 export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 	const config = useConfig();

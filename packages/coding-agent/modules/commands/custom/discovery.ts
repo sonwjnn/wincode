@@ -6,6 +6,7 @@ import {
 	isPlainObject,
 	isUndefined,
 } from "@wincode/utils";
+import { resourceSourcePriority } from "@/modules/application/resource-precedence";
 import {
 	isTrustedProjectRoot,
 	PROJECT_COMMAND_ROOT,
@@ -26,7 +27,8 @@ export type CustomCommandDiscoveryInput = {
 
 function collect(
 	base: string,
-	scope: CustomCommandCandidate["scope"]
+	scope: CustomCommandCandidate["scope"],
+	explicit: boolean
 ): CustomCommandCandidate[] {
 	if (!(fs.existsSync(base) && fs.statSync(base).isDirectory())) {
 		return [];
@@ -36,7 +38,14 @@ function collect(
 		.filter(
 			(entry) => entry.isFile() && entry.name.endsWith(MARKDOWN_EXTENSION)
 		)
-		.map((entry) => ({ filePath: path.join(base, entry.name), scope }));
+		.map((entry) => ({
+			filePath: path.join(base, entry.name),
+			precedence: resourceSourcePriority({
+				explicit,
+				scope,
+			}),
+			scope,
+		}));
 }
 
 const configuredRoots = (snapshot: ConfigSnapshot) => {
@@ -65,23 +74,30 @@ export function discoverCustomCommandCandidates(
 	const configured = configuredRoots(input.snapshot);
 	const result = collect(
 		path.join(input.homeRoot, PROJECT_COMMAND_ROOT),
-		"global"
+		"global",
+		false
 	);
 	for (const root of configured) {
 		if (root.scope === "global") {
-			result.push(...collect(root.path, root.scope));
+			result.push(...collect(root.path, root.scope, true));
 		}
 	}
 	for (const root of getProjectRoots(input.workspace)) {
 		if (!isTrustedProjectRoot(root, input.trustedProjectRoots)) {
 			continue;
 		}
-		result.push(...collect(path.join(root, PROJECT_COMMAND_ROOT), "project"));
+		result.push(
+			...collect(path.join(root, PROJECT_COMMAND_ROOT), "project", false)
+		);
 	}
 	for (const root of configured) {
 		if (root.scope === "project") {
-			result.push(...collect(root.path, root.scope));
+			result.push(...collect(root.path, root.scope, true));
 		}
 	}
-	return result;
+	return result.toSorted(
+		(first, second) =>
+			(first.precedence ?? 0) - (second.precedence ?? 0) ||
+			first.filePath.localeCompare(second.filePath)
+	);
 }

@@ -9,6 +9,7 @@ test("dispatches manual compaction focus to its registered action", async () => 
 	const compact = mock(async (_focus?: string) => undefined);
 	const handlers = {
 		"agent.select": () => undefined,
+		"application.reload": () => undefined,
 		"app.exit": () => undefined,
 		"connection.open": () => undefined,
 		"dialog.sessions": () => undefined,
@@ -21,7 +22,7 @@ test("dispatches manual compaction focus to its registered action", async () => 
 	} satisfies CommandHandlerMap;
 	const execute = createCommandExecutor(handlers);
 	const command = COMMANDS.find(({ action }) => action === "session.compact");
-	if (!command || command.action !== "session.compact") {
+	if (command?.action !== "session.compact") {
 		throw new Error("Compaction command missing from the registry.");
 	}
 

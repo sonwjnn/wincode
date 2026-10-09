@@ -203,6 +203,10 @@ export type PluginShutdownHook = (
 	context: PluginProcessContext
 ) => void | Promise<void>;
 
+export type PluginProcessStartHook = (
+	context: PluginProcessContext
+) => void | Promise<void>;
+
 export type PluginDefinitionAPI = PluginRegistrationAPI &
 	Readonly<{
 		registerAgent: (agent: PluginAgentRegistration) => void;
@@ -211,6 +215,7 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 		onSessionStart: (handler: PluginSessionStartHook) => void;
 		onSessionShutdown: (handler: PluginSessionShutdownHook) => void;
 		onBeforeAgentTurn: (handler: PluginBeforeAgentTurnHook) => void;
+		onStart: (handler: PluginProcessStartHook) => void;
 		onShutdown: (handler: PluginShutdownHook) => void;
 	}>;
 

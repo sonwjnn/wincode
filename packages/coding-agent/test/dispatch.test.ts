@@ -186,6 +186,7 @@ describe("application dispatch", () => {
 			onBackgroundWorkChange: () => () => undefined,
 			waitForBackgroundWork: async () => undefined,
 			resolveToolsForTurn: async () => [],
+			start: async () => [],
 			shutdown: async () => undefined,
 			startSession: async () => undefined,
 			stopSession: async () => undefined,
@@ -233,6 +234,7 @@ describe("application dispatch", () => {
 			onBackgroundWorkChange: () => () => undefined,
 			waitForBackgroundWork: async () => undefined,
 			resolveToolsForTurn: async () => [],
+			start: async () => [],
 			shutdown: async () => {
 				shutdownCount += 1;
 			},

@@ -18,6 +18,10 @@ import {
 import type { ExecutionMode } from "@/shared/execution-mode";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import { createApplicationPluginComposition } from "./plugin-composition";
+import {
+	type ApplicationResourceLoader,
+	createApplicationResourceLoader,
+} from "./resource-loader";
 
 export type ApplicationRuntimeInput = Readonly<{
 	cwd: string;
@@ -31,6 +35,7 @@ export type ApplicationRuntimeInput = Readonly<{
 export type ApplicationRuntime = Readonly<{
 	configRuntime: ConfigRuntime;
 	pluginRuntime: PluginRuntime;
+	resourceLoader: ApplicationResourceLoader;
 	startupDiagnostics: readonly string[];
 }>;
 
@@ -105,9 +110,14 @@ export const initializeApplicationRuntime = async (
 			options.distributionPlugins ?? composition.distributionPlugins,
 		userDataDir,
 	});
+	const resourceLoader = createApplicationResourceLoader(input, {
+		...options,
+		userDataDir,
+	});
 	return Object.freeze({
 		configRuntime,
 		pluginRuntime,
+		resourceLoader,
 		startupDiagnostics: projectTrust.diagnostics,
 	});
 };

@@ -1,5 +1,6 @@
 import type { AgentRuntime } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
+import type { ApplicationResourceLoader } from "@/modules/application/resource-loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 export type StartInteractiveInput = {
@@ -7,16 +8,32 @@ export type StartInteractiveInput = {
 	cwd: string;
 	configRuntime?: ConfigRuntime;
 	pluginRuntime?: PluginRuntime;
+	resourceLoader?: ApplicationResourceLoader;
 	runtimeFactory?: () => AgentRuntime;
 };
 
 let runtimeContext: StartInteractiveInput | undefined;
+let runtimeRevision = 0;
+const runtimeListeners = new Set<() => void>();
 
 export const setInteractiveRuntimeContext = (
 	context: StartInteractiveInput
 ): void => {
 	runtimeContext = Object.freeze({ ...context, args: [...context.args] });
+	runtimeRevision += 1;
+	for (const listener of [...runtimeListeners]) {
+		listener();
+	}
 };
+
+export const subscribeInteractiveRuntimeContext = (
+	listener: () => void
+): (() => void) => {
+	runtimeListeners.add(listener);
+	return () => runtimeListeners.delete(listener);
+};
+
+export const getInteractiveRuntimeRevision = (): number => runtimeRevision;
 
 export const getInteractiveRuntimeContext = (): StartInteractiveInput => {
 	if (isUndefined(runtimeContext)) {
