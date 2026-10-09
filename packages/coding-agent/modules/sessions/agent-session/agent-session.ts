@@ -561,8 +561,7 @@ export class AgentSessionImpl implements AgentSession {
 		initialAgent,
 		initialContext,
 		initialSessionModel,
-		initialSessionEffort,
-		initialSessionReasoningMode,
+		initialSessionThinkingLevel,
 		initialSteeringMessages = [],
 		initialTranscript,
 		ports,
@@ -874,11 +873,9 @@ export class AgentSessionImpl implements AgentSession {
 				assistantId: agentTurnAssistantMessageId(turnId),
 				model: input.model,
 				...omitUndefined({
-					sessionEffort: input.sessionEffort,
-					sessionReasoningMode: input.sessionReasoningMode,
+					sessionThinkingLevel: input.sessionThinkingLevel,
 					submissionId: input.submissionId,
-					effort: input.effort,
-					reasoningMode: input.reasoningMode,
+					thinkingLevel: input.thinkingLevel,
 				}),
 				sessionModel: input.sessionModel,
 				sourceUserMessageId: input.sourceUserMessageId ?? null,
@@ -1429,36 +1426,17 @@ export class AgentSessionImpl implements AgentSession {
 				};
 			}
 			const turnId = createAgentTurnId();
-			const sessionSelection =
-				isUndefined(initialSessionEffort) &&
-				isUndefined(initialSessionReasoningMode)
-					? {
-							effort: anchor.metadata?.effort,
-							reasoningMode: anchor.metadata?.reasoningMode,
-						}
-					: {
-							effort: initialSessionEffort,
-							reasoningMode: initialSessionReasoningMode,
-						};
-			const messageSelection = (() => {
-				if (
-					!(
-						isUndefined(lastMessage.metadata?.effort) &&
-						isUndefined(lastMessage.metadata?.reasoningMode)
-					)
-				) {
-					return lastMessage.metadata;
-				}
-				if (
-					!(
-						isUndefined(anchor.metadata?.effort) &&
-						isUndefined(anchor.metadata?.reasoningMode)
-					)
-				) {
-					return anchor.metadata;
-				}
-				return sessionSelection;
-			})();
+			const sessionSelection = {
+				thinkingLevel:
+					initialSessionThinkingLevel ?? anchor.metadata?.thinkingLevel,
+			};
+			let messageThinkingLevel = sessionSelection.thinkingLevel;
+			if (anchor.metadata?.thinkingLevel !== undefined) {
+				messageThinkingLevel = anchor.metadata.thinkingLevel;
+			}
+			if (lastMessage.metadata?.thinkingLevel !== undefined) {
+				messageThinkingLevel = lastMessage.metadata.thinkingLevel;
+			}
 			const input: SessionSendInput = {
 				agent,
 				messageId: anchor.id,
@@ -1466,10 +1444,8 @@ export class AgentSessionImpl implements AgentSession {
 				sessionModel: initialSessionModel ?? anchor.metadata?.model ?? model,
 				turnId,
 				...omitUndefined({
-					sessionEffort: sessionSelection.effort,
-					sessionReasoningMode: sessionSelection.reasoningMode,
-					effort: messageSelection.effort,
-					reasoningMode: messageSelection.reasoningMode,
+					sessionThinkingLevel: sessionSelection.thinkingLevel,
+					thinkingLevel: messageThinkingLevel,
 				}),
 			};
 			return { kind: "ready", input, turnId };

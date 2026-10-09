@@ -12,8 +12,8 @@ import { createSessionCompaction } from "../compaction/compaction";
 import { estimateCompactionTokens } from "../compaction/config";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { useCompactionSettings } from "../compaction/use-compaction-settings";
-import { createSessionSdkChildFactory } from "../sdk";
-import type { SessionSdkChildFactory } from "../sdk-contract";
+import { createSessionSdkOperations } from "../sdk";
+import type { SessionSdkOperations } from "../sdk-contract";
 import { getSessionStore } from "../storage/get-session-store";
 import { getInteractiveSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities } from "./types";
@@ -61,7 +61,7 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	const runtimeFactory = runtimeContext.runtimeFactory;
 	const composition = useMemo(() => createApplicationPluginComposition(), []);
 	return useMemo(() => {
-		let sessionSdk: SessionSdkChildFactory | undefined;
+		let sessionSdk: SessionSdkOperations | undefined;
 		const sessionStore = getSessionStore();
 		const sessionHostManager = getInteractiveSessionHostManager(pluginRuntime);
 		const capabilities: SessionCapabilities = {
@@ -80,7 +80,7 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 				? {}
 				: { getPluginRuntime: () => pluginRuntime }),
 		};
-		sessionSdk = createSessionSdkChildFactory(
+		sessionSdk = createSessionSdkOperations(
 			{
 				configRuntime: configRef.current,
 				configStore: configRef.current.configStore,

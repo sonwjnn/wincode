@@ -10,8 +10,7 @@ import {
 import { useKeyboard, usePaste } from "@opentui/react";
 import {
 	findSupportedChatModelSelection,
-	getSupportedModelEfforts,
-	getSupportedReasoningModes,
+	getSupportedThinkingLevels,
 	supportedChatModelIdSchema,
 } from "@wincode/ai/models";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
@@ -163,7 +162,7 @@ export function ChatTextArea({
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 }: ChatTextAreaProps) {
-	const { agent, cycleReasoningChoice, model } = usePromptConfig();
+	const { agent, cycleThinkingLevel, model } = usePromptConfig();
 	const supportedModel = findSupportedChatModelSelection(model);
 	const chatModelSelection = isNull(supportedModel)
 		? null
@@ -171,20 +170,19 @@ export function ChatTextArea({
 				modelId: supportedChatModelIdSchema.parse(supportedModel.id),
 				providerId: supportedModel.connectionProviderId,
 			};
-	const hideEffort =
+	const hideThinkingLevel =
 		chatModelSelection === null ||
-		(getSupportedModelEfforts(chatModelSelection).length === 0 &&
-			getSupportedReasoningModes(chatModelSelection).length === 0);
+		getSupportedThinkingLevels(chatModelSelection).length === 0;
 	const unavailableCommandCapabilities = useMemo(() => {
 		const unavailable = new Set<CommandCapability>(viewUnavailableCapabilities);
 		if (!onCompact) {
 			unavailable.add("compaction");
 		}
-		if (hideEffort) {
-			unavailable.add("effort-selection");
+		if (hideThinkingLevel) {
+			unavailable.add("thinking-level-selection");
 		}
 		return [...unavailable];
-	}, [hideEffort, onCompact, viewUnavailableCapabilities]);
+	}, [hideThinkingLevel, onCompact, viewUnavailableCapabilities]);
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecalledFilesRevisionRef = useRef(0);
@@ -286,7 +284,7 @@ export function ChatTextArea({
 		onSubmit,
 		onTab: (shift) => {
 			if (shift) {
-				cycleReasoningChoice();
+				cycleThinkingLevel();
 			}
 		},
 		sessionPromptHistory,

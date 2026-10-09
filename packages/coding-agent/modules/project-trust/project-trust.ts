@@ -87,6 +87,33 @@ const hasProjectCommand = async (projectRoot: string): Promise<boolean> => {
 	}
 };
 
+const hasProjectAgentDefinition = async (
+	projectRoot: string
+): Promise<boolean> => {
+	const agentRoot = path.join(projectRoot, ".wincode", "agents");
+	const visit = async (directory: string): Promise<boolean> => {
+		let entries: fs.Dirent[];
+		try {
+			entries = await readdir(directory, { withFileTypes: true });
+		} catch {
+			return false;
+		}
+		for (const entry of entries) {
+			if (entry.isFile() && path.extname(entry.name) === ".md") {
+				return true;
+			}
+			if (
+				entry.isDirectory() &&
+				(await visit(path.join(directory, entry.name)))
+			) {
+				return true;
+			}
+		}
+		return false;
+	};
+	return visit(agentRoot);
+};
+
 const hasProtectedProjectResources = async (
 	projectRoot: string
 ): Promise<boolean> => {
@@ -99,7 +126,8 @@ const hasProtectedProjectResources = async (
 	}
 	return (
 		(await hasProjectSkill(projectRoot)) ||
-		(await hasProjectCommand(projectRoot))
+		(await hasProjectCommand(projectRoot)) ||
+		(await hasProjectAgentDefinition(projectRoot))
 	);
 };
 

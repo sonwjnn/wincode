@@ -8,11 +8,7 @@ import type {
 	SessionSubmissionStatus,
 	SubmissionId,
 } from "@wincode/agent-core";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -49,8 +45,7 @@ export type Session = {
 	model?: ChatModelSelection;
 	pinned: boolean;
 	title: string;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 };
 
 export type CreateSessionInput = {
@@ -58,14 +53,12 @@ export type CreateSessionInput = {
 	message: SessionMessage;
 	model: ChatModelSelection;
 	turnId: AgentTurnId;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 };
 export type CreateEmptySessionInput = Readonly<{
 	id?: SessionId;
 	model?: ChatModelSelection;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 }>;
 export type UpdateSessionInput = {
 	pinned?: boolean;
@@ -80,8 +73,7 @@ export type UpdateSessionInput = {
  */
 export type CommitSessionRecordInput = {
 	sessionModel?: ChatModelSelection;
-	sessionEffort?: Effort;
-	sessionReasoningMode?: ReasoningMode;
+	sessionThinkingLevel?: ThinkingLevel;
 	record: SessionRecord;
 	sessionId: SessionId;
 };

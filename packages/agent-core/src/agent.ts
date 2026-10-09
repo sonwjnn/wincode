@@ -19,6 +19,13 @@ export const agentIdSchema = z
 	.regex(AGENT_ID_PATTERN)
 	.transform((value): AgentId => value as AgentId);
 
+/** Derives a readable display label from a canonical kebab-case Agent ID. */
+export const agentLabelFromId = (agentId: string): string =>
+	agentId
+		.split("-")
+		.map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`)
+		.join(" ");
+
 /** A named Agent definition supplied by Wincode or the application. */
 export type AgentDefinition = Readonly<{
 	description: string;

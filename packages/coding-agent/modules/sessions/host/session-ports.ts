@@ -6,11 +6,9 @@ import type {
 } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
-	effortSchema,
-	isSupportedModelEffort,
-	isSupportedReasoningMode,
-	type ReasoningSelection,
-	reasoningModeSchema,
+	isSupportedThinkingLevel,
+	type ThinkingSelection,
+	thinkingLevelSchema,
 } from "@wincode/ai/models";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
@@ -131,29 +129,18 @@ const collectExistingToolNames = (
 	...(skillToolName === undefined ? [] : [skillToolName]),
 ];
 
-const strictReasoningSelection = (
+const strictThinkingSelection = (
 	model: ChatModelSelection,
-	effort: unknown,
-	reasoningMode: unknown
-): ReasoningSelection => {
-	if (effort !== undefined && reasoningMode !== undefined) {
-		throw new Error("Select either Effort or Reasoning Mode, not both.");
+	value: unknown
+): ThinkingSelection => {
+	if (value === undefined) {
+		return {};
 	}
-	if (effort !== undefined) {
-		const parsed = effortSchema.safeParse(effort);
-		if (!(parsed.success && isSupportedModelEffort(model, parsed.data))) {
-			throw new Error("Effort is unavailable for the selected model.");
-		}
-		return { effort: parsed.data };
+	const parsed = thinkingLevelSchema.safeParse(value);
+	if (!(parsed.success && isSupportedThinkingLevel(model, parsed.data))) {
+		throw new Error("Thinking level is unavailable for the selected model.");
 	}
-	if (reasoningMode !== undefined) {
-		const parsed = reasoningModeSchema.safeParse(reasoningMode);
-		if (!(parsed.success && isSupportedReasoningMode(model, parsed.data))) {
-			throw new Error("Reasoning Mode is unavailable for the selected model.");
-		}
-		return { reasoningMode: parsed.data };
-	}
-	return {};
+	return { thinkingLevel: parsed.data };
 };
 
 const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
@@ -268,11 +255,9 @@ export const createSessionPorts = ({
 			startedAt: execution.startedAt,
 			turnId: execution.turnId,
 			...omitUndefined({
-				sessionEffort: execution.sessionEffort,
-				sessionReasoningMode: execution.sessionReasoningMode,
+				sessionThinkingLevel: execution.sessionThinkingLevel,
 				skillRequest: turn.skillRequest,
-				effort: execution.effort,
-				reasoningMode: execution.reasoningMode,
+				thinkingLevel: execution.thinkingLevel,
 			}),
 		});
 	const releaseScope = (scope: TurnExecution): void => {
@@ -386,15 +371,14 @@ export const createSessionPorts = ({
 						sessionId,
 						store: sessionStore.fileObservationStore,
 					};
-		const reasoningSelection = strictReasoningSelection(
+		const thinkingSelection = strictThinkingSelection(
 			execution.model,
-			execution.effort,
-			execution.reasoningMode
+			execution.thinkingLevel
 		);
 		const modelTarget = await resolveChatModelTarget(
 			execution.model,
 			connections,
-			{ ...reasoningSelection, signal }
+			{ ...thinkingSelection, signal }
 		);
 		const registry = capabilities.getRegistry();
 		const resourceLimits = resolveAgentToolResourceLimits(
@@ -415,9 +399,8 @@ export const createSessionPorts = ({
 				...(parentCapabilityCeiling === undefined
 					? {}
 					: { capabilityCeiling: parentCapabilityCeiling }),
-				effort: execution.effort,
 				model: execution.model,
-				reasoningMode: execution.reasoningMode,
+				thinkingLevel: execution.thinkingLevel,
 				turnId: execution.turnId,
 				registerTurnCleanup: (cleanup) => scope.pluginCleanups.push(cleanup),
 				resourceLimits,
@@ -439,9 +422,8 @@ export const createSessionPorts = ({
 		)({
 			agentId: execution.agent,
 			agentTools: resolvedAgent.visibleCodingTools,
-			effort: execution.effort,
 			model: execution.model,
-			reasoningMode: execution.reasoningMode,
+			thinkingLevel: execution.thinkingLevel,
 			turnId: execution.turnId,
 			resourceLimits,
 			...pluginTurn.options,
@@ -564,16 +546,11 @@ export const createSessionPorts = ({
 				capabilities.getCompactionModule().needsCompaction(messages, settings),
 		},
 		resolveSubmission: (input) => {
-			const selection = strictReasoningSelection(
+			const selection = strictThinkingSelection(
 				input.model,
-				input.effort,
-				input.reasoningMode
+				input.thinkingLevel
 			);
-			strictReasoningSelection(
-				input.sessionModel,
-				input.sessionEffort,
-				input.sessionReasoningMode
-			);
+			strictThinkingSelection(input.sessionModel, input.sessionThinkingLevel);
 			const registry = capabilities.getRegistry();
 			if (isNull(registry)) {
 				return input;
@@ -585,15 +562,10 @@ export const createSessionPorts = ({
 				selection,
 				true
 			);
-			strictReasoningSelection(
-				effective.model,
-				effective.effort,
-				effective.reasoningMode
-			);
+			strictThinkingSelection(effective.model, effective.thinkingLevel);
 			const {
 				resolvedAgent: _resolvedAgent,
-				effort: _effort,
-				reasoningMode: _reasoningMode,
+				thinkingLevel: _thinkingLevel,
 				...unresolvedInput
 			} = input;
 			return {
@@ -602,8 +574,7 @@ export const createSessionPorts = ({
 				model: effective.model,
 				...omitUndefined({
 					resolvedAgent: effective.resolvedAgent,
-					effort: effective.effort,
-					reasoningMode: effective.reasoningMode,
+					thinkingLevel: effective.thinkingLevel,
 				}),
 			};
 		},

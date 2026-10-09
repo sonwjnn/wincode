@@ -2,8 +2,11 @@ import type { Database } from "bun:sqlite";
 import * as os from "node:os";
 import type { AgentRuntime } from "@wincode/agent-core";
 import { type Connections, createConnections } from "@wincode/ai/connections";
-import type { AgentRegistry } from "@/modules/agents/registry";
-import { resolveAgentRegistry } from "@/modules/agents/registry";
+import {
+	type AgentRegistry,
+	applyCapabilityCeilingToAgentRegistry,
+	resolveAgentRegistry,
+} from "@/modules/agents/registry";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import {
 	createPluginRuntime,
@@ -22,7 +25,7 @@ import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { resolveTurnTools, type TurnToolResolver } from "../hooks/runtime-turn";
 import type {
 	SessionSdkCapabilityCeiling,
-	SessionSdkChildFactory,
+	SessionSdkOperations,
 } from "../sdk-contract";
 import {
 	createDatabase,
@@ -58,7 +61,7 @@ export type SessionCapabilitiesOptions = Readonly<{
 	store?: SessionStore;
 	pluginRuntime?: PluginRuntime;
 	sessionHostManager?: SessionHostManager;
-	getSessionSdk?: () => SessionSdkChildFactory | undefined;
+	getSessionSdk?: () => SessionSdkOperations | undefined;
 	turnToolResolver?: TurnToolResolver;
 	workspace: string;
 	cwd: string;
@@ -165,14 +168,26 @@ export const createSessionCapabilities = async ({
 		const registry =
 			providedRegistry === undefined
 				? await resolveAgentRegistry(configRuntime, {
+						capabilityCeiling,
+						pluginAgentRegistrations: pluginRuntime.getAgentRegistrations(),
 						connectedProviderIds: new Set(
 							(await connections.listProviders())
 								.filter((provider) => provider.connected)
 								.map((provider) => provider.id)
 						),
 					})
-				: providedRegistry;
-		const getRegistry = providedGetRegistry ?? (() => registry);
+				: applyCapabilityCeilingToAgentRegistry(
+						providedRegistry,
+						capabilityCeiling
+					);
+		const getRegistry =
+			providedGetRegistry === undefined
+				? () => registry
+				: () =>
+						applyCapabilityCeilingToAgentRegistry(
+							providedGetRegistry(),
+							capabilityCeiling
+						);
 		const compactionSettings = createCompactionSettingsOperations({
 			configStore,
 			pricing,

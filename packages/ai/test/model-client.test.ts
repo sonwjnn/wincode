@@ -10,7 +10,7 @@ import type {
 } from "../src/model-client/types";
 import type { ModelProviderResolutionOptions } from "../src/model-provider-options";
 import type { ModelAuthorization, ModelTarget } from "../src/model-target";
-import { createModelTarget } from "../src/model-target";
+import { createModelTarget, modelTargetSchema } from "../src/model-target";
 import type { ConnectionProviderId } from "../src/models";
 import { supportedChatModelIdSchema } from "../src/models";
 
@@ -121,7 +121,7 @@ describe("native model client routes", () => {
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget("openai", "gpt-5.6-luna", undefined, {
 			maxOutputTokens: 1200,
-			effort: "high",
+			thinkingLevel: "high",
 		});
 		const parts = await collect(
 			client,
@@ -196,7 +196,7 @@ describe("native model client routes", () => {
 		]);
 	});
 
-	test("keeps provider defaults without an Effort or Reasoning Mode", async () => {
+	test("keeps provider defaults without a selected Thinking level", async () => {
 		const mock = mockFetch(
 			sseResponse(
 				'event: response.completed\ndata: {"response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
@@ -531,7 +531,7 @@ describe("native model client routes", () => {
 			"openai",
 			"gpt-5.6-luna",
 			{ accessToken: "oauth-token", accountId: "acct-123", kind: "oauth" },
-			{ maxOutputTokens: 800, effort: "low" }
+			{ maxOutputTokens: 800, thinkingLevel: "low" }
 		);
 
 		const parts = await collect(client, target);
@@ -567,7 +567,7 @@ describe("native model client routes", () => {
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget("anthropic", "claude-opus-4-5", undefined, {
 			maxOutputTokens: 9000,
-			effort: "high",
+			thinkingLevel: "high",
 		});
 		const parts = await collect(
 			client,
@@ -702,7 +702,7 @@ describe("native model client routes", () => {
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget("google", "gemini-3.6-flash", undefined, {
 			maxOutputTokens: 1000,
-			effort: "high",
+			thinkingLevel: "high",
 		});
 		const parts = await collect(
 			client,
@@ -800,7 +800,7 @@ describe("native model client routes", () => {
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget("opencode-go", "gpt-5.6-luna", undefined, {
 			maxOutputTokens: 320,
-			effort: "high",
+			thinkingLevel: "high",
 		});
 
 		await collect(client, target);
@@ -847,7 +847,7 @@ describe("native model client routes", () => {
 		});
 	});
 
-	test("maps an explicit thinking Mode to Anthropic adaptive thinking", async () => {
+	test("maps a toggle-backed Thinking level to Anthropic adaptive thinking", async () => {
 		const mock = mockFetch(
 			sseResponse(
 				'event: message_start\ndata: {"message":{"usage":{"input_tokens":2}}}\n\n',
@@ -857,7 +857,7 @@ describe("native model client routes", () => {
 		);
 		const target = makeTarget("opencode-go", "minimax-m3", undefined, {
 			maxOutputTokens: 256,
-			reasoningMode: "thinking",
+			thinkingLevel: "high",
 		});
 
 		await collect(createModelClient({ fetch: mock.fetch }), target);
@@ -875,7 +875,7 @@ describe("native model client routes", () => {
 		);
 		const target = makeTarget("opencode-go", "qwen3.8-max", undefined, {
 			maxOutputTokens: 256,
-			reasoningMode: "none",
+			thinkingLevel: "off",
 		});
 
 		await collect(createModelClient({ fetch: mock.fetch }), target);
@@ -884,12 +884,12 @@ describe("native model client routes", () => {
 		expect(responseBody(mock).thinking).toBeUndefined();
 	});
 
-	test("target creation rejects a Reasoning Mode unsupported by the model", () => {
-		expect(() =>
-			makeTarget("openai", "gpt-5.6-luna", undefined, {
-				reasoningMode: "thinking",
-			})
-		).toThrow("Unsupported Reasoning Mode");
+	test("target schema rejects malformed Thinking level values", () => {
+		const target = makeTarget("openai", "gpt-5.6-luna");
+		expect(
+			modelTargetSchema.safeParse({ ...target, thinkingLevel: "thinking" })
+				.success
+		).toBe(false);
 	});
 
 	test("routes OpenCode Go compatible models through Chat Completions", async () => {

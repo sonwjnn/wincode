@@ -78,7 +78,7 @@ describe("application dispatch", () => {
 		expect(routedInvocation?.disabledPlugins).toEqual(["mcp", "subagents"]);
 	});
 
-	test("routes Effort selectors through the JSON CLI contract", async () => {
+	test("routes ThinkingLevel selectors through the JSON CLI contract", async () => {
 		const stdout = capture();
 		const stderr = capture();
 		let routedInvocation: InvocationOptions | undefined;
@@ -92,7 +92,7 @@ describe("application dispatch", () => {
 				"build",
 				"--model",
 				"openai/gpt-5.6-luna",
-				"--effort",
+				"--thinking-level",
 				"high",
 			]),
 			{
@@ -105,13 +105,13 @@ describe("application dispatch", () => {
 		);
 		expect(exitCode).toBe(4);
 		expect(routedInvocation).toMatchObject({
-			effort: "high",
+			thinkingLevel: "high",
 			mode: "json",
 			prompt: "hello",
 		});
 	});
 
-	test("routes Reasoning Mode selectors through the print CLI contract", async () => {
+	test("routes explicit off through the print CLI contract", async () => {
 		const stdout = capture();
 		const stderr = capture();
 		let routedInvocation: InvocationOptions | undefined;
@@ -119,8 +119,8 @@ describe("application dispatch", () => {
 			input(stdout.writer, stderr.writer, [
 				"--mode=print",
 				"--prompt=hello",
-				"--reasoning-mode",
-				"thinking",
+				"--thinking-level",
+				"off",
 			]),
 			{
 				...noOpRunners,
@@ -134,7 +134,7 @@ describe("application dispatch", () => {
 		expect(routedInvocation).toMatchObject({
 			mode: "print",
 			prompt: "hello",
-			reasoningMode: "thinking",
+			thinkingLevel: "off",
 		});
 	});
 
@@ -174,6 +174,7 @@ describe("application dispatch", () => {
 			],
 			disablePlugin: () => undefined,
 			executeCommand: async () => "",
+			getAgentRegistrations: () => [],
 			getCommands: () => [],
 			getToolDescriptors: () => [],
 			getResource: () => undefined,
@@ -220,6 +221,7 @@ describe("application dispatch", () => {
 			diagnostics: [],
 			disablePlugin: () => undefined,
 			executeCommand: async () => "",
+			getAgentRegistrations: () => [],
 			getCommands: () => [],
 			getToolDescriptors: () => [],
 			getResource: () => undefined,
@@ -299,7 +301,7 @@ describe("application dispatch", () => {
 		expect(stderr.output).toContain("require print or json mode");
 	});
 
-	test("rejects conflicting Effort and Reasoning Mode selectors", async () => {
+	test("rejects removed Effort and Reasoning Mode CLI options", async () => {
 		const stdout = capture();
 		const stderr = capture();
 		const exitCode = await dispatch(
@@ -310,15 +312,12 @@ describe("application dispatch", () => {
 				"hello",
 				"--effort",
 				"high",
-				"--reasoning-mode",
-				"thinking",
 			]),
 			noOpRunners
 		);
 		expect(exitCode).toBe(2);
 		expect(stdout.output).toBe("");
-		expect(stderr.output).toContain("--effort");
-		expect(stderr.output).toContain("--reasoning-mode");
+		expect(stderr.output).toContain("unknown option '--effort'");
 	});
 
 	test("rejects the removed --thinking selector", async () => {

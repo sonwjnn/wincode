@@ -285,12 +285,9 @@ export const createRpcRequestHandler = (
 				{
 					agent: selection.agentId as SessionSendInput["agent"],
 					model: selection.model,
-					...(selection.effort === undefined
+					...(selection.thinkingLevel === undefined
 						? {}
-						: { effort: selection.effort }),
-					...(selection.reasoningMode === undefined
-						? {}
-						: { reasoningMode: selection.reasoningMode }),
+						: { thinkingLevel: selection.thinkingLevel }),
 					...(submission.skill === undefined
 						? {}
 						: { skill: createSkillSnapshot(submission.skill, "explicit") }),
@@ -319,10 +316,9 @@ export const createRpcRequestHandler = (
 				message,
 				model: selection.model,
 				turnId,
-				...(selection.effort === undefined ? {} : { effort: selection.effort }),
-				...(selection.reasoningMode === undefined
+				...(selection.thinkingLevel === undefined
 					? {}
-					: { reasoningMode: selection.reasoningMode }),
+					: { thinkingLevel: selection.thinkingLevel }),
 			});
 			const createdId = activeRuntime.toSessionId(String(created.id));
 			const previousSessionId = state.boundSessionId;
@@ -488,12 +484,9 @@ export const createRpcRequestHandler = (
 							return parseSelection({
 								agentId: active.agent,
 								model: active.model,
-								...(active.effort === undefined
+								...(active.thinkingLevel === undefined
 									? {}
-									: { effort: active.effort }),
-								...(active.reasoningMode === undefined
-									? {}
-									: { reasoningMode: active.reasoningMode }),
+									: { thinkingLevel: active.thinkingLevel }),
 							});
 						})()
 					: await parseSelection(params.selection);

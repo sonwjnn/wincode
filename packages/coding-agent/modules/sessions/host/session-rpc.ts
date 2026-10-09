@@ -3,16 +3,13 @@ export { createAgentTurnId, toSubmissionId } from "@wincode/agent-core";
 export type { Connections } from "@wincode/ai/connections";
 export type {
 	ChatModelSelection,
-	Effort,
-	ReasoningMode,
+	ThinkingLevel,
 } from "@wincode/ai/models";
 export {
-	effortSchema,
-	isSupportedModelEffort,
-	isSupportedReasoningMode,
+	isSupportedThinkingLevel,
 	modelSelectionSchema,
-	normalizeModelEffort,
-	normalizeReasoningMode,
+	normalizeThinkingLevel,
+	thinkingLevelSchema,
 } from "@wincode/ai/models";
 export { resolveWorkspaceRoot } from "@/modules/tools";
 export type { SessionId } from "@/shared/identifiers";

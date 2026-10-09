@@ -13,9 +13,8 @@ export type InvocationOptions = Readonly<{
 	mode: ExecutionMode;
 	model?: string;
 	prompt?: string;
-	reasoningMode?: string;
 	session?: string;
-	effort?: string;
+	thinkingLevel?: string;
 	pluginPaths?: readonly string[];
 	disabledPlugins?: readonly string[];
 	projectTrustOverride?: "trust" | "deny";

@@ -4,7 +4,7 @@ import {
 	generateModelText,
 	type ModelTextGenerationOptions,
 } from "@wincode/ai/model-client";
-import type { Effort, ReasoningMode } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/utils";
 import { resolveChatModelTarget } from "../../model-target";
 import { escapeXml } from "../../prompt-composition/project-instructions";
@@ -107,8 +107,7 @@ export type SummaryModel = ModelTarget;
 export type SummaryModelResolver = (
 	selection: ChatModelSelection,
 	signal?: AbortSignal,
-	effort?: Effort,
-	reasoningMode?: ReasoningMode,
+	thinkingLevel?: ThinkingLevel,
 	maxOutputTokens?: number
 ) => Promise<SummaryModel>;
 const defaultTextGenerator: SummaryTextGenerator = async (options) =>
@@ -151,8 +150,7 @@ export const createLanguageModelSummaryGenerator =
 		const model = await resolveModel(
 			input.model,
 			input.signal,
-			input.effort,
-			input.reasoningMode,
+			input.thinkingLevel,
 			requestedOutputTokens
 		);
 		const maxOutputTokens = Math.min(
@@ -173,30 +171,15 @@ export const resolveDirectSummaryModel = async (
 	selection: ChatModelSelection,
 	connections: Connections,
 	signal?: AbortSignal,
-	effort?: Effort,
-	reasoningMode?: ReasoningMode,
+	thinkingLevel?: ThinkingLevel,
 	maxOutputTokens?: number
 ): Promise<SummaryModel> => {
 	const targetOptions = omitUndefined({
 		allowRetired: true,
 		maxOutputTokens,
 		signal,
+		thinkingLevel,
 	});
-	if (effort !== undefined && reasoningMode !== undefined) {
-		throw new Error("Select either an Effort or a Reasoning Mode, not both.");
-	}
-	if (effort !== undefined) {
-		return resolveChatModelTarget(selection, connections, {
-			...targetOptions,
-			effort,
-		});
-	}
-	if (reasoningMode !== undefined) {
-		return resolveChatModelTarget(selection, connections, {
-			...targetOptions,
-			reasoningMode,
-		});
-	}
 	return resolveChatModelTarget(selection, connections, targetOptions);
 };
 export const createDirectSummaryGenerator = (
@@ -205,13 +188,12 @@ export const createDirectSummaryGenerator = (
 ): SummaryGenerator =>
 	createLanguageModelSummaryGenerator({
 		generate,
-		resolveModel: (selection, signal, effort, reasoningMode, maxOutputTokens) =>
+		resolveModel: (selection, signal, thinkingLevel, maxOutputTokens) =>
 			resolveDirectSummaryModel(
 				selection,
 				connections,
 				signal,
-				effort,
-				reasoningMode,
+				thinkingLevel,
 				maxOutputTokens
 			),
 	});

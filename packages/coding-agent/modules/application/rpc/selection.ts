@@ -1,7 +1,4 @@
-import {
-	createReasoningSelection,
-	type ReasoningSelection,
-} from "@wincode/ai/models";
+import type { ThinkingSelection } from "@wincode/ai/models";
 import type {
 	ChatModelSelection,
 	SessionSendInput,
@@ -51,66 +48,40 @@ export const createSelectionHelpers = (
 		return { agentId, model, record };
 	};
 
-	const parseSelectionEffort = (
+	const parseSelectionThinkingLevel = (
 		value: unknown,
 		model: ChatModelSelection,
 		activeRuntime: RuntimeModules
-	): ReasoningSelection => {
-		const effort = activeRuntime.effortSchema.safeParse(value);
-		if (effort.success !== true || effort.data === undefined) {
-			throw appError("selection_unavailable", "Model effort is invalid.");
+	): ThinkingSelection => {
+		const thinkingLevel = activeRuntime.thinkingLevelSchema.safeParse(value);
+		if (thinkingLevel.success !== true || thinkingLevel.data === undefined) {
+			throw appError("selection_unavailable", "Thinking level is invalid.");
 		}
-		if (!activeRuntime.isSupportedModelEffort(model, effort.data)) {
-			throw appError("selection_unavailable", "Model effort is unavailable.");
+		if (!activeRuntime.isSupportedThinkingLevel(model, thinkingLevel.data)) {
+			throw appError("selection_unavailable", "Thinking level is unavailable.");
 		}
-		return { effort: effort.data };
+		return { thinkingLevel: thinkingLevel.data };
 	};
 
-	const parseSelectionReasoningMode = (
-		value: unknown,
-		model: ChatModelSelection,
-		activeRuntime: RuntimeModules
-	): ReasoningSelection => {
-		const reasoningMode = activeRuntime.reasoningModeSchema.safeParse(value);
-		if (reasoningMode.success !== true || reasoningMode.data === undefined) {
-			throw appError("selection_unavailable", "Reasoning mode is invalid.");
-		}
-		if (!activeRuntime.isSupportedReasoningMode(model, reasoningMode.data)) {
-			throw appError("selection_unavailable", "Reasoning mode is unavailable.");
-		}
-		return { reasoningMode: reasoningMode.data };
-	};
-
-	const parseSelectionReasoning = (
+	const parseSelectionThinking = (
 		record: Record<string, unknown>,
 		model: ChatModelSelection,
 		activeRuntime: RuntimeModules
-	): ReasoningSelection => {
-		if (Object.hasOwn(record, "variant")) {
+	): ThinkingSelection => {
+		if (
+			Object.hasOwn(record, "variant") ||
+			Object.hasOwn(record, "effort") ||
+			Object.hasOwn(record, "reasoningMode")
+		) {
 			throw appError(
 				"selection_unavailable",
-				"Model selection must use effort or reasoningMode."
+				"Model selection must use thinkingLevel."
 			);
 		}
-		const effortValue = record.effort;
-		const reasoningModeValue = record.reasoningMode;
-		if (effortValue !== undefined && reasoningModeValue !== undefined) {
-			throw appError(
-				"selection_unavailable",
-				"Choose either effort or reasoningMode, not both."
-			);
-		}
-		if (effortValue !== undefined) {
-			return parseSelectionEffort(effortValue, model, activeRuntime);
-		}
-		if (reasoningModeValue !== undefined) {
-			return parseSelectionReasoningMode(
-				reasoningModeValue,
-				model,
-				activeRuntime
-			);
-		}
-		return {};
+		const thinkingLevelValue = record.thinkingLevel;
+		return thinkingLevelValue === undefined
+			? {}
+			: parseSelectionThinkingLevel(thinkingLevelValue, model, activeRuntime);
 	};
 
 	const requireSelectableAgent = (
@@ -177,14 +148,14 @@ export const createSelectionHelpers = (
 			);
 		}
 		const model = modelResult.data;
-		const reasoningSelection = parseSelectionReasoning(
+		const thinkingSelection = parseSelectionThinking(
 			record,
 			model,
 			activeRuntime
 		);
 		requireSelectableAgent(activeAssembly, agentId);
 		await requireConnectedProvider(activeAssembly, model.providerId);
-		return { agentId, model, ...reasoningSelection };
+		return { agentId, model, ...thinkingSelection };
 	};
 
 	const sendInput = (
@@ -198,21 +169,10 @@ export const createSelectionHelpers = (
 		const resolvedAgent = registry?.agents.find(
 			(agent: { id: string }) => agent.id === selection.agentId
 		);
-		const reasoningSelection = createReasoningSelection(
-			selection.effort,
-			selection.reasoningMode
-		);
-		let sessionReasoning: Pick<
-			SessionSendInput,
-			"sessionEffort" | "sessionReasoningMode"
-		> = {};
-		if (selection.effort !== undefined) {
-			sessionReasoning = { sessionEffort: selection.effort };
-		} else if (selection.reasoningMode !== undefined) {
-			sessionReasoning = {
-				sessionReasoningMode: selection.reasoningMode,
-			};
-		}
+		const sessionThinking =
+			selection.thinkingLevel === undefined
+				? {}
+				: { sessionThinkingLevel: selection.thinkingLevel };
 		return {
 			agent: selection.agentId as SessionSendInput["agent"],
 			composition: submission.composition,
@@ -222,8 +182,10 @@ export const createSelectionHelpers = (
 			sessionModel: selection.model as SessionSendInput["sessionModel"],
 			userText: submission.userText,
 			...(submission.skill === undefined ? {} : { skill: submission.skill }),
-			...reasoningSelection,
-			...sessionReasoning,
+			...(selection.thinkingLevel === undefined
+				? {}
+				: { thinkingLevel: selection.thinkingLevel }),
+			...sessionThinking,
 			...(ids.messageId === undefined
 				? {}
 				: { messageId: ids.messageId as SessionSendInput["messageId"] }),

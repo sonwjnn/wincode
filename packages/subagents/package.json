@@ -18,8 +18,10 @@
   },
   "dependencies": {
     "@wincode/agent-core": "workspace:*",
+    "@wincode/ai": "workspace:*",
     "@wincode/utils": "workspace:*",
     "type-fest": "catalog:",
+    "yaml": "catalog:",
     "zod": "catalog:"
   },
   "peerDependencies": {

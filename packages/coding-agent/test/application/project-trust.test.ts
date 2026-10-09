@@ -3,8 +3,10 @@ import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveMcpConfig } from "@wincode/mcp";
+import { discoverSubagentAgents } from "@wincode/subagents";
 import { initializeApplicationRuntime } from "@/modules/application/runtime";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
+import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
 import { discoverSkills } from "@/modules/skills";
 
 const temporaryDirectories: string[] = [];
@@ -26,6 +28,60 @@ afterEach(async () => {
 });
 
 describe("Coding-Agent Application Project trust", () => {
+	test("project Agent files alone require trust and load when opted in", async () => {
+		const directory = await createDirectory();
+		const workspace = path.join(directory, "repo");
+		const userDataDir = path.join(directory, "user-data");
+		const builtinRoot = path.join(directory, "package-agents");
+		const agentPath = path.join(
+			workspace,
+			".wincode",
+			"agents",
+			"nested",
+			"project-only.md"
+		);
+		await Promise.all([
+			mkdir(builtinRoot, { recursive: true }),
+			mkdir(path.dirname(agentPath), { recursive: true }),
+		]);
+		await Bun.write(
+			agentPath,
+			"---\nname: project-only\ndescription: Project-only helper\nrole: subagent\n---\nInspect the project.\n"
+		);
+
+		const untrusted = await resolveProjectTrust({
+			mode: "print",
+			userDataDir,
+			workspace,
+		});
+		const untrustedAgents = await discoverSubagentAgents({
+			builtinRoot,
+			trustedProjectRoots: untrusted.trustedProjectRoots,
+			userDataDir,
+		});
+		expect(untrusted.trustedProjectRoots).toEqual([]);
+		expect(untrusted.diagnostics.join("\n")).toContain("untrusted");
+		expect(
+			untrustedAgents.agents.some(({ agent }) => agent.id === "project-only")
+		).toBe(false);
+
+		const trusted = await resolveProjectTrust({
+			mode: "print",
+			override: "trust",
+			userDataDir,
+			workspace,
+		});
+		const trustedAgents = await discoverSubagentAgents({
+			builtinRoot,
+			trustedProjectRoots: trusted.trustedProjectRoots,
+			userDataDir,
+		});
+		expect(trusted.trustedProjectRoots).toContain(await realpath(workspace));
+		expect(
+			trustedAgents.agents.some(({ agent }) => agent.id === "project-only")
+		).toBe(true);
+	});
+
 	test("print startup skips untrusted project config before evaluating its Plugin", async () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");

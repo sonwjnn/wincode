@@ -2,16 +2,21 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import type {
-	PluginSessionContext,
-	SessionSdk,
-	SessionSdkCapabilityCeiling,
-	SessionSdkChildFactory,
-	SessionSdkDelivery,
-	SessionSdkHandle,
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import {
+	type PluginSessionContext,
+	type SessionSdkCapabilityCeiling,
+	type SessionSdkDelivery,
+	type SessionSdkHandle,
+	type SessionSdkOperations,
+	snapshotSessionSdkCapabilityCeiling,
 } from "@wincode/coding-agent";
 import { getErrorMessage } from "@wincode/utils";
 import { createSubagentTaskWaiters } from "../task-waiters";
+import {
+	createSubagentChildSessionFactory,
+	type SubagentChildSession,
+} from "./child-session";
 import type { SubagentsTaskStore } from "./store";
 import type {
 	DelegationReportEnvelope,
@@ -27,9 +32,11 @@ export type StartSubagentsTaskInput = Readonly<{
 	parentSessionId: DelegationTask["parentSessionId"];
 	parentToolCallId: DelegationTask["parentToolCallId"];
 	parentTurnId: DelegationTask["parentTurnId"];
+	model?: ChatModelSelection;
 	pluginPath: string;
 	prompt: string;
-	sessionSdk: SessionSdkChildFactory;
+	thinkingLevel?: ThinkingLevel;
+	sessionSdk: SessionSdkOperations;
 }>;
 
 type StartedSubagentsTask = Readonly<{
@@ -56,18 +63,26 @@ export type SubagentsTaskCoordinator = Readonly<{
 
 type ActiveTask = {
 	childHandle?: SessionSdkHandle;
-	childSdk?: SessionSdk;
+	childSession?: SubagentChildSession;
 	unsubscribeChild?: () => void;
 };
 
 type TaskStartResources = {
-	childSdk?: SessionSdk;
+	childSession?: SubagentChildSession;
 	task?: DelegationTask;
 };
 
+const agentSelectionOptions = ({
+	model,
+	thinkingLevel,
+}: Pick<StartSubagentsTaskInput, "model" | "thinkingLevel">) => ({
+	...(model === undefined ? {} : { model }),
+	...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+});
+
 type ActiveSession = Readonly<{
 	executionMode?: PluginSessionContext["executionMode"];
-	sessionSdk?: SessionSdkChildFactory;
+	sessionSdk?: SessionSdkOperations;
 }>;
 
 const coordinators = new WeakMap<
@@ -135,13 +150,16 @@ const createCoordinator = (
 		active.unsubscribeChild?.();
 		active.unsubscribeChild = undefined;
 		const handle = active.childHandle;
-		const sdk = active.childSdk;
+		const childSession = active.childSession;
 		active.childHandle = undefined;
-		active.childSdk = undefined;
-		await Promise.allSettled([
-			...(handle === undefined ? [] : [handle.dispose()]),
-			...(sdk === undefined ? [] : [sdk.dispose()]),
-		]);
+		active.childSession = undefined;
+		const cleanup: Promise<void>[] = [];
+		if (childSession !== undefined) {
+			cleanup.push(childSession.dispose());
+		} else if (handle !== undefined) {
+			cleanup.push(handle.dispose());
+		}
+		await Promise.allSettled(cleanup);
 	};
 	const releaseTask = async (taskId: DelegationTask["id"]): Promise<void> => {
 		const active = activeTasks.get(taskId);
@@ -253,24 +271,32 @@ const createCoordinator = (
 		await releaseTask(taskId);
 	};
 	const recoverAbandonedTasks = async (
-		sessionSdk: SessionSdkChildFactory
+		sessionSdk: SessionSdkOperations
 	): Promise<void> => {
+		const childSessions = createSubagentChildSessionFactory(
+			sessionSdk,
+			pluginPath
+		);
 		for (const task of taskStore.listUnsettledTasks()) {
 			if (task.status === "awaiting_report" || activeTasks.has(task.id)) {
 				continue;
 			}
-			let childSdk: SessionSdk | undefined;
-			let childHandle: SessionSdkHandle | undefined;
+			let childSession: SubagentChildSession | undefined;
 			try {
-				childSdk = await sessionSdk.createChildSdk({
-					pluginPaths: [pluginPath],
-				});
-				childHandle = await childSdk.openSession(task.childSessionId, {
+				childSession = await childSessions.open(task.childSessionId, {
+					...(task.capabilityCeiling === undefined
+						? {}
+						: { capabilityCeiling: task.capabilityCeiling }),
 					view: true,
 					autoContinue: false,
 				});
 			} catch {
-				await childSdk?.dispose();
+				await childSession?.dispose();
+				await settleTask(task.id, {
+					kind: "interrupted",
+					reason:
+						"The process stopped before a result was committed; the task outcome is unknown because the child Session could not be reopened.",
+				});
 				continue;
 			}
 			try {
@@ -280,8 +306,7 @@ const createCoordinator = (
 						"The process stopped before a result was committed; the task outcome is unknown.",
 				});
 			} finally {
-				await childHandle.dispose();
-				await childSdk.dispose();
+				await childSession.dispose();
 			}
 		}
 	};
@@ -329,14 +354,12 @@ const createCoordinator = (
 	const openChildAndPrompt = async (
 		input: StartSubagentsTaskInput,
 		task: DelegationTask,
-		childSdk: SessionSdk
+		childSession: SubagentChildSession
 	): Promise<SessionSdkHandle> => {
-		const childHandle = await childSdk.openSession(task.childSessionId, {
-			view: true,
-		});
+		const childHandle = await childSession.open({ view: true });
 		const active = activeTasks.get(task.id);
 		if (active === undefined) {
-			await childHandle.dispose();
+			await childSession.dispose();
 			throw new Error(
 				"The Subagents task was cancelled while opening its child."
 			);
@@ -350,6 +373,7 @@ const createCoordinator = (
 		const admission = await childHandle.prompt({
 			text: input.prompt,
 			agent: input.agentId,
+			...agentSelectionOptions(input),
 		});
 		if (admission.rejected) {
 			throw new Error(admission.reason);
@@ -361,7 +385,7 @@ const createCoordinator = (
 		error: unknown
 	): Promise<void> => {
 		if (resources.task === undefined) {
-			await resources.childSdk?.dispose();
+			await resources.childSession?.dispose();
 			return;
 		}
 		await settleTask(resources.task.id, {
@@ -372,34 +396,38 @@ const createCoordinator = (
 			await releaseTask(resources.task.id);
 			return;
 		}
-		await resources.childSdk?.dispose();
+		await resources.childSession?.dispose();
 	};
 	const startChildTask = async (
 		input: StartSubagentsTaskInput
 	): Promise<StartedSubagentsTask> => {
 		const resources: TaskStartResources = {};
 		try {
-			resources.childSdk = await input.sessionSdk.createChildSdk({
-				...(input.capabilityCeiling === undefined
-					? {}
-					: { capabilityCeiling: input.capabilityCeiling }),
-				pluginPaths: [input.pluginPath],
+			const capabilityCeiling = snapshotSessionSdkCapabilityCeiling(
+				input.capabilityCeiling
+			);
+			resources.childSession = await createSubagentChildSessionFactory(
+				input.sessionSdk,
+				input.pluginPath
+			).create({
+				...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
+				agentId: input.agentId,
+				...agentSelectionOptions(input),
 			});
-			const childSessionId = await resources.childSdk.createEmptySession({
-				agent: input.agentId,
-			});
+			const childSessionId = resources.childSession.sessionId;
 			resources.task = taskStore.createTask({
 				agentId: input.agentId,
+				...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 				childSessionId,
 				parentSessionId: input.parentSessionId,
 				parentToolCallId: input.parentToolCallId,
 				parentTurnId: input.parentTurnId,
 			});
 			activeTasks.set(resources.task.id, {
-				childSdk: resources.childSdk,
+				childSession: resources.childSession,
 			});
 			waiters.registerTask(resources.task.id);
-			await openChildAndPrompt(input, resources.task, resources.childSdk);
+			await openChildAndPrompt(input, resources.task, resources.childSession);
 			return {
 				childSessionId,
 				status: "active",

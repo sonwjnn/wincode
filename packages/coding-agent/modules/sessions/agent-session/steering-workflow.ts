@@ -632,8 +632,7 @@ export const createSessionSteeringWorkflow = (
 				sessionId: port.sessionId,
 				sessionModel: input.sessionModel,
 				...omitUndefined({
-					sessionEffort: input.sessionEffort,
-					sessionReasoningMode: input.sessionReasoningMode,
+					sessionThinkingLevel: input.sessionThinkingLevel,
 				}),
 			});
 			return true;
@@ -674,11 +673,9 @@ export const createSessionSteeringWorkflow = (
 				activeInput?.sessionModel ??
 				queued.input.sessionModel,
 			...omitUndefined({
-				effort: execution?.effort ?? activeInput?.effort,
-				reasoningMode: execution?.reasoningMode ?? activeInput?.reasoningMode,
-				sessionEffort: execution?.sessionEffort ?? activeInput?.sessionEffort,
-				sessionReasoningMode:
-					execution?.sessionReasoningMode ?? activeInput?.sessionReasoningMode,
+				thinkingLevel: execution?.thinkingLevel ?? activeInput?.thinkingLevel,
+				sessionThinkingLevel:
+					execution?.sessionThinkingLevel ?? activeInput?.sessionThinkingLevel,
 			}),
 			files: queued.input.composition.files,
 			messageId: queued.messageId,
@@ -701,9 +698,8 @@ export const createSessionSteeringWorkflow = (
 			agent: input.agent,
 			model: input.model,
 			...omitUndefined({
-				effort: input.effort,
+				thinkingLevel: input.thinkingLevel,
 				joinedTurnId: execution?.turnId ?? activeInput?.turnId,
-				reasoningMode: input.reasoningMode,
 				skill: input.skill
 					? createSkillSnapshot(input.skill, "explicit")
 					: undefined,
@@ -724,8 +720,7 @@ export const createSessionSteeringWorkflow = (
 			model: input.model,
 			turnId: turnId ?? createAgentTurnId(),
 			...omitUndefined({
-				effort: input.effort,
-				reasoningMode: input.reasoningMode,
+				thinkingLevel: input.thinkingLevel,
 			}),
 		});
 		return {

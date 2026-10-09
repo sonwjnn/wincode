@@ -5,11 +5,7 @@ import type {
 	SessionMessageId,
 	SubmissionId,
 } from "@wincode/agent-core";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import type { SessionId } from "../../shared/identifiers";
 
 /** Model-visible tool names a child Session is permitted to invoke. */
@@ -17,11 +13,29 @@ export type SessionSdkCapabilityCeiling = Readonly<{
 	tools: readonly string[];
 }>;
 
+export const snapshotSessionSdkCapabilityCeiling = (
+	ceiling: SessionSdkCapabilityCeiling | undefined
+): SessionSdkCapabilityCeiling | undefined => {
+	if (ceiling === undefined) {
+		return;
+	}
+	if (
+		!Array.isArray(ceiling.tools) ||
+		ceiling.tools.some(
+			(tool) => typeof tool !== "string" || tool.trim().length === 0
+		)
+	) {
+		throw new Error(
+			"Session capability ceilings require non-empty tool names."
+		);
+	}
+	return Object.freeze({ tools: Object.freeze([...ceiling.tools]) });
+};
+
 export type SessionSdkPrompt = Readonly<{
 	agent?: AgentId | string;
-	effort?: Effort;
 	model?: ChatModelSelection;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 	submissionId?: SubmissionId;
 	text: string;
 }>;
@@ -34,16 +48,28 @@ export type SessionSdkDelivery = Readonly<{
 export type SessionSdkCreateOptions = Readonly<{
 	sessionId?: SessionId;
 	agent?: AgentId | string;
-	effort?: Effort;
 	initialPrompt?: string;
 	model?: ChatModelSelection;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 }>;
 
+export type SessionSdkAgentSource =
+	| "builtin"
+	| "global"
+	| "package"
+	| "project"
+	| "user";
+
 export type SessionSdkAgent = Readonly<{
+	description?: string;
 	id: AgentId;
 	isAvailable: boolean;
+	model?: ChatModelSelection;
+	thinkingLevel?: ThinkingLevel;
 	role: string;
+	source?: SessionSdkAgentSource;
+	requiredTools?: readonly string[];
+	unavailableReason?: string;
 }>;
 
 export type SessionSdkSubmissionAdmission =
@@ -92,16 +118,20 @@ export type SessionSdkHandle = Readonly<{
 	subscribe: (listener: (snapshot: SessionSdkSnapshot) => void) => () => void;
 }>;
 
+export type SessionRuntimeOptions = Readonly<{
+	capabilityCeiling?: SessionSdkCapabilityCeiling;
+	pluginPaths?: readonly string[];
+	projectTrust?: "trust" | "deny";
+}>;
+
 export type SessionSdk = Readonly<{
-	createChildSdk: (
-		options: Readonly<{
-			capabilityCeiling?: SessionSdkCapabilityCeiling;
-			pluginPaths?: readonly string[];
-			projectTrust?: "trust" | "deny";
-		}>
+	createSessionRuntime: (
+		options?: SessionRuntimeOptions
 	) => Promise<SessionSdk>;
 	createEmptySession: (options?: SessionSdkCreateOptions) => Promise<SessionId>;
-	getAgentCatalog: () => Promise<readonly SessionSdkAgent[]>;
+	getAgentCatalog: (
+		options?: Readonly<{ capabilityCeiling?: SessionSdkCapabilityCeiling }>
+	) => Promise<readonly SessionSdkAgent[]>;
 	createSession: (
 		options?: SessionSdkCreateOptions
 	) => Promise<SessionSdkHandle>;
@@ -116,9 +146,9 @@ export type SessionSdk = Readonly<{
 	) => Promise<SessionSdkHandle>;
 }>;
 
-export type SessionSdkChildFactory = Pick<
+export type SessionSdkOperations = Pick<
 	SessionSdk,
-	| "createChildSdk"
+	| "createSessionRuntime"
 	| "createEmptySession"
 	| "deliverToSession"
 	| "getAgentCatalog"

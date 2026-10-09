@@ -8,24 +8,22 @@ import {
 	calculateModelUsageCostUsd,
 	connectionProviderIds,
 	createModelTarget,
-	effortIds,
-	effortSchema,
 	findSupportedChatModelSelection,
 	formatModelTokenCount,
 	getModelContextTokens,
-	getSupportedModelEfforts,
-	getSupportedReasoningModes,
+	getSupportedThinkingLevels,
 	modelCatalog,
 	modelFailureSchema,
 	modelSelectionSchema,
 	modelTargetSchema,
-	normalizeModelEffort,
 	normalizeModelFailure,
 	normalizeModelUsage,
-	normalizeReasoningMode,
-	reasoningModeSchema,
+	normalizeThinkingLevel,
+	resolveAgentModelSelection,
 	resolveModelProviderOptions,
 	supportedChatModelIdSchema,
+	thinkingLevelIds,
+	thinkingLevelSchema,
 } from "../src/model";
 
 const findModel = (
@@ -117,6 +115,35 @@ describe("focused model contracts", () => {
 		).toBe(false);
 		expect(findSupportedChatModelSelection(selection)?.id).toBe("gpt-5.6-luna");
 	});
+
+	test("validates a single Agent thinking level against the selected model", () => {
+		const valid = resolveAgentModelSelection({
+			model: "openai/gpt-5.6-luna",
+			thinkingLevel: "high",
+		});
+		expect(valid).toEqual({
+			invalidModel: false,
+			invalidThinkingLevel: false,
+			model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+		});
+
+		const unsupported = resolveAgentModelSelection({
+			model: "openai/unknown-model",
+			thinkingLevel: "high",
+		});
+		expect(unsupported).toMatchObject({
+			invalidThinkingLevel: true,
+			invalidModel: true,
+			model: undefined,
+		});
+
+		const unavailableLevel = resolveAgentModelSelection({
+			model: "opencode-go/grok-4.6",
+			thinkingLevel: "high",
+		});
+		expect(unavailableLevel.invalidThinkingLevel).toBe(true);
+	});
+
 	test("resolves every requested direct model from the catalog", () => {
 		const requestedDirectModels = [
 			{ providerId: "openai", id: "gpt-6-sol", displayName: "GPT-6 Sol" },
@@ -155,7 +182,7 @@ describe("focused model contracts", () => {
 			{ apiKey: "secret", kind: "api-key" }
 		);
 		// The default OpenAI request still carries invariant storage and summary
-		// options even when no Effort or Reasoning Mode is selected.
+		// options even when no Thinking level is selected.
 		expect(Object.keys(target).sort()).toEqual([
 			"authorization",
 			"modelId",
@@ -182,35 +209,34 @@ describe("focused model contracts", () => {
 		).toThrow("OAuth authorization is only supported by OpenAI");
 	});
 
-	test("offers only each model's supported Efforts and Reasoning Modes", () => {
+	test("offers each model's mapped Thinking levels and preserves toggle aliases", () => {
 		const googleSelection = {
 			modelId: modelId("gemini-3.6-flash"),
 			providerId: "google",
 		} as const;
-		expect(getSupportedModelEfforts(googleSelection)).toEqual([
+		expect(getSupportedThinkingLevels(googleSelection)).toEqual([
 			"minimal",
 			"low",
 			"medium",
 			"high",
 		]);
-		expect(getSupportedReasoningModes(googleSelection)).toEqual([]);
 
 		const openAiSelection = {
 			modelId: modelId("gpt-5.6-luna"),
 			providerId: "openai",
 		} as const;
-		expect(getSupportedModelEfforts(openAiSelection)).toEqual([
+		expect(getSupportedThinkingLevels(openAiSelection)).toEqual([
+			"off",
 			"low",
 			"medium",
 			"high",
 			"xhigh",
 			"max",
 		]);
-		expect(getSupportedReasoningModes(openAiSelection)).toEqual(["none"]);
 
 		for (const id of ["hy3", "hy4-preview"] as const) {
 			expect(
-				getSupportedReasoningModes({
+				getSupportedThinkingLevels({
 					modelId: modelId(id),
 					providerId: "opencode-go",
 				})
@@ -221,38 +247,22 @@ describe("focused model contracts", () => {
 			modelId: modelId("qwen3.8-max"),
 			providerId: "opencode-go",
 		} as const;
-		expect(getSupportedModelEfforts(ladderAndToggleSelection)).toEqual([
+		expect(getSupportedThinkingLevels(ladderAndToggleSelection)).toEqual([
+			"off",
 			"low",
 			"medium",
 			"xhigh",
 		]);
-		expect(getSupportedReasoningModes(ladderAndToggleSelection)).toEqual([
-			"none",
-		]);
 		expect(
-			normalizeReasoningMode(ladderAndToggleSelection, "thinking")
+			normalizeThinkingLevel(ladderAndToggleSelection, "thinking")
 		).toBeUndefined();
 
 		const toggleOnlySelection = {
 			modelId: modelId("minimax-m3"),
 			providerId: "opencode-go",
 		} as const;
-		expect(getSupportedModelEfforts(toggleOnlySelection)).toEqual([]);
-		expect(getSupportedReasoningModes(toggleOnlySelection)).toEqual([
-			"none",
-			"thinking",
-		]);
-		expect(normalizeReasoningMode(toggleOnlySelection, "thinking")).toBe(
-			"thinking"
-		);
-
-		const unlevelledSelection = {
-			modelId: modelId("claude-haiku-4-5"),
-			providerId: "anthropic",
-		} as const;
-		expect(getSupportedModelEfforts(unlevelledSelection)).toEqual([]);
-		expect(getSupportedReasoningModes(unlevelledSelection)).toEqual([]);
-		expect(effortIds).toEqual([
+		expect(getSupportedThinkingLevels(toggleOnlySelection)).toEqual([
+			"off",
 			"minimal",
 			"low",
 			"medium",
@@ -260,17 +270,33 @@ describe("focused model contracts", () => {
 			"xhigh",
 			"max",
 		]);
-		expect(effortSchema.safeParse("min").success).toBe(false);
-		expect(reasoningModeSchema.safeParse("none").success).toBe(true);
-		expect(reasoningModeSchema.safeParse("minimal").success).toBe(false);
-		expect(normalizeModelEffort(googleSelection, "minimal")).toBe("minimal");
-		expect(normalizeModelEffort(googleSelection, "min")).toBeUndefined();
+		expect(normalizeThinkingLevel(toggleOnlySelection, "high")).toBe("high");
+
+		const unlevelledSelection = {
+			modelId: modelId("claude-haiku-4-5"),
+			providerId: "anthropic",
+		} as const;
+		expect(getSupportedThinkingLevels(unlevelledSelection)).toEqual([]);
+		expect(thinkingLevelIds).toEqual([
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
+		expect(thinkingLevelSchema.safeParse("min").success).toBe(false);
+		expect(thinkingLevelSchema.safeParse("off").success).toBe(true);
+		expect(thinkingLevelSchema.safeParse("thinking").success).toBe(false);
+		expect(normalizeThinkingLevel(googleSelection, "minimal")).toBe("minimal");
+		expect(normalizeThinkingLevel(googleSelection, "min")).toBeUndefined();
 	});
 
-	test("translates Efforts and Modes into provider-specific request options", () => {
+	test("translates Thinking levels into provider-specific request options", () => {
 		expect(
 			resolveModelProviderOptions(findModel("openai", "gpt-5.6-luna"), {
-				effort: "high",
+				thinkingLevel: "high",
 			})
 		).toEqual({
 			providerOptions: {
@@ -283,7 +309,7 @@ describe("focused model contracts", () => {
 		});
 		expect(
 			resolveModelProviderOptions(findModel("openai", "gpt-5.6-luna"), {
-				reasoningMode: "none",
+				thinkingLevel: "off",
 			})
 		).toEqual({
 			providerOptions: {
@@ -306,7 +332,7 @@ describe("focused model contracts", () => {
 		});
 		expect(
 			resolveModelProviderOptions(findModel("anthropic", "claude-opus-4-6"), {
-				effort: "high",
+				thinkingLevel: "high",
 			})
 		).toEqual({
 			providerOptions: {
@@ -318,7 +344,7 @@ describe("focused model contracts", () => {
 		});
 		expect(
 			resolveModelProviderOptions(findModel("anthropic", "claude-opus-4-5"), {
-				effort: "high",
+				thinkingLevel: "high",
 			})
 		).toEqual({
 			maxOutputTokens: 32_000,
@@ -331,7 +357,7 @@ describe("focused model contracts", () => {
 		});
 		expect(
 			resolveModelProviderOptions(findModel("google", "gemini-3.6-flash"), {
-				effort: "high",
+				thinkingLevel: "high",
 			})
 		).toEqual({
 			providerOptions: {
@@ -340,7 +366,7 @@ describe("focused model contracts", () => {
 		});
 		expect(
 			resolveModelProviderOptions(findModel("opencode-go", "qwen3.8-max"), {
-				reasoningMode: "none",
+				thinkingLevel: "off",
 			})
 		).toEqual({
 			providerOptions: {
@@ -349,7 +375,7 @@ describe("focused model contracts", () => {
 		});
 		expect(
 			resolveModelProviderOptions(findModel("opencode-go", "qwen3.7-max"), {
-				reasoningMode: "thinking",
+				thinkingLevel: "high",
 			})
 		).toEqual({
 			maxOutputTokens: 32_000,
@@ -361,7 +387,7 @@ describe("focused model contracts", () => {
 		});
 	});
 
-	test("rejects unsupported or overlapping choices before a Model Target is sent", () => {
+	test("rejects malformed and unsupported Thinking levels before sending a target", () => {
 		const openAiModel = {
 			modelId: modelId("gpt-5.6-luna"),
 			providerId: "openai",
@@ -372,26 +398,14 @@ describe("focused model contracts", () => {
 				apiKey: "secret",
 				kind: "api-key",
 			},
-			{ effort: "high" }
+			{ thinkingLevel: "high" }
 		);
-		expect(target).toHaveProperty("effort", "high");
+		expect(target).toHaveProperty("thinkingLevel", "high");
 		expect(target).not.toHaveProperty("variant");
 		expect(
 			modelTargetSchema.safeParse({
 				...target,
-				reasoningMode: "none",
-			}).success
-		).toBe(false);
-
-		const supportedModeTarget = createModelTarget(
-			{ modelId: modelId("qwen3.8-max"), providerId: "opencode-go" },
-			{ apiKey: "opencode-go-secret", kind: "api-key" },
-			{ effort: "low" }
-		);
-		expect(
-			modelTargetSchema.safeParse({
-				...supportedModeTarget,
-				reasoningMode: "none",
+				effort: "high",
 			}).success
 		).toBe(false);
 		expect(
@@ -401,42 +415,24 @@ describe("focused model contracts", () => {
 			}).success
 		).toBe(false);
 
-		const malformedEffort = modelTargetSchema.safeParse({
+		const malformedLevel = modelTargetSchema.safeParse({
 			...target,
-			effort: "min",
+			thinkingLevel: "on",
 		});
-		expect(malformedEffort.success).toBe(false);
-		if (!malformedEffort.success) {
-			expect(malformedEffort.error.issues[0]?.message).toContain("Effort");
-		}
-
-		const malformedReasoningMode = modelTargetSchema.safeParse({
-			...target,
-			effort: undefined,
-			reasoningMode: "on",
-		});
-		expect(malformedReasoningMode.success).toBe(false);
-		if (!malformedReasoningMode.success) {
-			expect(malformedReasoningMode.error.issues[0]?.message).toContain(
-				"Reasoning Mode"
+		expect(malformedLevel.success).toBe(false);
+		if (!malformedLevel.success) {
+			expect(malformedLevel.error.issues[0]?.message).toContain(
+				"Thinking level"
 			);
 		}
+
 		expect(() =>
 			createModelTarget(
 				{ modelId: modelId("grok-4.6"), providerId: "opencode-go" },
 				{ apiKey: "opencode-go-secret", kind: "api-key" },
-				{ effort: "high" }
+				{ thinkingLevel: "high" }
 			)
-		).toThrow("Unsupported model Effort");
-		expect(() =>
-			createModelTarget(
-				openAiModel,
-				{ apiKey: "secret", kind: "api-key" },
-				{
-					reasoningMode: "thinking",
-				}
-			)
-		).toThrow("Unsupported Reasoning Mode");
+		).toThrow("Unsupported Thinking level");
 	});
 
 	test("derives budgets for unlevelled models without selectable reasoning choices", () => {
@@ -444,8 +440,7 @@ describe("focused model contracts", () => {
 			modelId: modelId("claude-haiku-4-5"),
 			providerId: "anthropic",
 		} as const;
-		expect(getSupportedModelEfforts(selection)).toEqual([]);
-		expect(getSupportedReasoningModes(selection)).toEqual([]);
+		expect(getSupportedThinkingLevels(selection)).toEqual([]);
 		expect(
 			resolveModelProviderOptions(findModel("anthropic", "claude-haiku-4-5"))
 		).toEqual({
@@ -458,11 +453,11 @@ describe("focused model contracts", () => {
 		});
 	});
 
-	test("bounds Effort reasoning budgets to the requested output limit", () => {
+	test("bounds Thinking-level reasoning budgets to the requested output limit", () => {
 		expect(
 			resolveModelProviderOptions(findModel("anthropic", "claude-opus-4-5"), {
 				maxOutputTokens: 4096,
-				effort: "high",
+				thinkingLevel: "high",
 			})
 		).toEqual({
 			maxOutputTokens: 4096,
@@ -476,7 +471,7 @@ describe("focused model contracts", () => {
 		expect(
 			resolveModelProviderOptions(findModel("anthropic", "claude-opus-4-5"), {
 				maxOutputTokens: 256,
-				effort: "high",
+				thinkingLevel: "high",
 			})
 		).toEqual({
 			maxOutputTokens: 256,

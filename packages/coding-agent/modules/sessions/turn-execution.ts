@@ -5,11 +5,7 @@ import {
 	createAgentTurnId,
 	type SessionMessageId,
 } from "@wincode/agent-core";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/utils";
 import type {
 	SkillExecution,
@@ -44,14 +40,12 @@ export type TurnExecution = {
 	readonly resolvedAgent?: ResolvedCodingAgent;
 	/** The session-level selection recorded on this execution's Session Records. */
 	readonly sessionModel: ChatModelSelection;
-	readonly sessionEffort?: Effort;
-	readonly sessionReasoningMode?: ReasoningMode;
+	readonly sessionThinkingLevel?: ThinkingLevel;
 	/** The Session Context message this execution answers. */
 	readonly sourceUserMessageId: SessionMessageId | null;
 	readonly startedAt: number;
 	readonly turnId: AgentTurnId;
-	readonly effort?: Effort;
-	readonly reasoningMode?: ReasoningMode;
+	readonly thinkingLevel?: ThinkingLevel;
 	/** The Skill catalog armed for the execution's turn, when one was built. */
 	armedSkill?: TurnExecutionSkill;
 	/** Cleanup callbacks registered by Plugins for this Agent Turn. */
@@ -67,8 +61,7 @@ export type BeginTurnExecutionInput = {
 	readonly model: ChatModelSelection;
 	readonly resolvedAgent?: ResolvedCodingAgent;
 	readonly sessionModel: ChatModelSelection;
-	readonly sessionEffort?: Effort;
-	readonly sessionReasoningMode?: ReasoningMode;
+	readonly sessionThinkingLevel?: ThinkingLevel;
 	/** The Skill, if any, this execution's turn must load. */
 	readonly skillRequest?: SkillRequestContext;
 	/** The Session Context message this execution answers, when known. */
@@ -76,8 +69,7 @@ export type BeginTurnExecutionInput = {
 	readonly startedAt: number;
 	/** The Agent Turn Identifier; generated when the caller has none yet. */
 	readonly turnId?: AgentTurnId;
-	readonly effort?: Effort;
-	readonly reasoningMode?: ReasoningMode;
+	readonly thinkingLevel?: ThinkingLevel;
 };
 
 export const createTurnExecution = ({
@@ -86,14 +78,12 @@ export const createTurnExecution = ({
 	model,
 	resolvedAgent,
 	sessionModel,
-	sessionEffort,
-	sessionReasoningMode,
+	sessionThinkingLevel,
 	skillRequest,
 	sourceUserMessageId,
 	startedAt,
 	turnId: providedTurnId,
-	effort,
-	reasoningMode,
+	thinkingLevel,
 }: BeginTurnExecutionInput): TurnExecution => {
 	const turnId = providedTurnId ?? createAgentTurnId();
 	return {
@@ -101,11 +91,9 @@ export const createTurnExecution = ({
 		...omitUndefined({
 			armedSkill,
 			resolvedAgent,
-			sessionEffort,
-			sessionReasoningMode,
+			sessionThinkingLevel,
 			skillRequest,
-			effort,
-			reasoningMode,
+			thinkingLevel,
 		}),
 		assistantId: agentTurnAssistantMessageId(turnId),
 		pluginCleanups: [],

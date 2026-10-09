@@ -8,10 +8,13 @@ import {
 } from "@wincode/utils";
 import { COMMANDS } from "@/modules/commands/commands";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
+import { isTrustedProjectRoot } from "@/modules/project-trust/project-resource-roots";
 import { codingToolNames } from "@/modules/tools";
 import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
+import { getProjectRoots } from "@/shared/paths/project-roots";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import type {
+	PluginAgentRegistration,
 	PluginAPI,
 	PluginBeforeAgentTurnHook,
 	PluginDefinitionAPI,
@@ -22,7 +25,11 @@ import type {
 	PluginShutdownHook,
 	PluginStatusPanelRegistration,
 } from "./public";
-import { validatePluginCommand, validatePluginTool } from "./registration";
+import {
+	validatePluginAgent,
+	validatePluginCommand,
+	validatePluginTool,
+} from "./registration";
 import {
 	createPluginRuntime,
 	type LoadedPlugin,
@@ -51,9 +58,11 @@ export type LoadPluginsInput = Readonly<{
 	disabledPluginIds?: readonly string[];
 	distributionPlugins?: readonly PluginPackageReference[];
 	ignoreConfiguredPlugins?: boolean;
+	userDataDir?: string;
 }>;
 
 type MutablePluginDraft = {
+	agents: Map<string, PluginAgentRegistration>;
 	commands: Map<string, PluginCommand>;
 	resources: Map<string, PluginResourceDescriptor>;
 	statusPanels: Map<string, PluginStatusPanelRegistration>;
@@ -257,6 +266,25 @@ const createRegistrationAPI = (
 		plugin.onShutdown = hook;
 	};
 	return Object.freeze({
+		registerAgent(agent) {
+			assertOpen();
+			try {
+				const validated = validatePluginAgent(agent);
+				if (plugin.agents.has(validated.agent.id)) {
+					throw new Error(
+						`Plugin Agent '${validated.agent.id}' is already registered.`
+					);
+				}
+				plugin.agents.set(validated.agent.id, validated);
+			} catch (error) {
+				addDiagnostic(
+					diagnostics,
+					`Plugin Agent registration failed: ${messageFor(error)}`,
+					plugin.sourcePath
+				);
+				throw error;
+			}
+		},
 		registerResource,
 		registerStatusPanel,
 		onSessionStart(handler) {
@@ -355,6 +383,7 @@ const createPluginAPI = (
 				throw new Error("A Plugin must declare one non-empty identifier.");
 			}
 			const draft: MutablePluginDraft = {
+				agents: new Map(),
 				commands: new Map(),
 				resources: new Map(),
 				statusPanels: new Map(),
@@ -458,6 +487,7 @@ const loadedPluginFromDraft = (
 			})
 	);
 	return Object.freeze({
+		agents: Object.freeze([...draft.agents.values()]),
 		commands: Object.freeze(registeredCommands),
 		id: draft.id,
 		resources: Object.freeze([...draft.resources.values()]),
@@ -767,7 +797,11 @@ const runPluginFactory = async (
 				input.config.configStore.refreshSnapshot(input.config.workspace),
 		}),
 		sourcePath: candidate.path,
-		userDataDir: resolveUserDataDir(),
+		trustedProjectRoots: getProjectRoots(input.config.workspace).filter(
+			(projectRoot) =>
+				isTrustedProjectRoot(projectRoot, input.config.trustedProjectRoots)
+		),
+		userDataDir: input.userDataDir ?? resolveUserDataDir(),
 		workspace: input.config.workspace,
 	};
 	try {

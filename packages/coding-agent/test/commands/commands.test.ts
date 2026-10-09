@@ -8,7 +8,7 @@ test("keeps host built-in slash names routed to their action IDs", () => {
 		{ action: "settings.open", value: "/settings" },
 		{ action: "agent.select", value: "/agents" },
 		{ action: "model.select", value: "/models" },
-		{ action: "effort.select", value: "/effort" },
+		{ action: "thinking.select", value: "/thinking" },
 		{ action: "dialog.sessions", value: "/sessions" },
 		{ action: "dialog.theme", value: "/themes" },
 		{ action: "connection.open", value: "/connect" },
@@ -29,8 +29,8 @@ test("suppresses popover rows for commands the view cannot run", () => {
 		)
 	).not.toContain("session.compact");
 	expect(
-		getVisibleCommands({ unavailableCapabilities: ["effort-selection"] }).map(
-			(command) => command.action
-		)
-	).not.toContain("effort.select");
+		getVisibleCommands({
+			unavailableCapabilities: ["thinking-level-selection"],
+		}).map((command) => command.action)
+	).not.toContain("thinking.select");
 });

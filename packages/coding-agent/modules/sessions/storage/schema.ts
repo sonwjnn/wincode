@@ -1,9 +1,5 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import {
 	index,
 	integer,
@@ -53,8 +49,7 @@ export const session = sqliteTable(
 		modelJson: text("model_json", { mode: "json" }).$type<
 			SerializedJson<ChatModelSelection>
 		>(),
-		effort: text("effort").$type<Effort>(),
-		reasoningMode: text("reasoning_mode").$type<ReasoningMode>(),
+		thinkingLevel: text("thinking_level").$type<ThinkingLevel>(),
 		editMode: text("edit_mode").$type<EditMode>().notNull().default("hashline"),
 	},
 	(table) => [
@@ -322,10 +317,9 @@ export const sessionCompaction = sqliteTable(
 		summarizationModelJson: text("summarization_model_json", { mode: "json" })
 			.$type<SerializedJson<SessionCompaction["summarizationModel"]>>()
 			.notNull(),
-		summarizationEffort: text("summarization_effort").$type<Effort>(),
-		summarizationReasoningMode: text(
-			"summarization_reasoning_mode"
-		).$type<ReasoningMode>(),
+		summarizationThinkingLevel: text(
+			"summarization_thinking_level"
+		).$type<ThinkingLevel>(),
 		summarizationUsageJson: text("summarization_usage_json", {
 			mode: "json",
 		}).$type<SerializedJson<SessionCompaction["summarizationUsage"]>>(),

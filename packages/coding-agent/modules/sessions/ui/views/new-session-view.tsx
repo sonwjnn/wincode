@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createAgentTurnId } from "@wincode/agent-core";
-import { createReasoningSelection } from "@wincode/ai/models";
+import type { ThinkingSelection } from "@wincode/ai/models";
 import { isNull, isUndefined } from "@wincode/utils";
 import { useEffect, useState } from "react";
 import {
@@ -73,20 +73,10 @@ export function NewSessionView() {
 	const [initializedDefaultAgentId, setInitializedDefaultAgentId] = useState<
 		string | undefined
 	>();
-	const {
-		agent,
-		effort,
-		model,
-		reasoningMode,
-		setAgent,
-		setEffort,
-		setModel,
-		setReasoningMode,
-	} = usePromptConfig();
-	const currentReasoningSelection = createReasoningSelection(
-		effort,
-		reasoningMode
-	);
+	const { agent, model, thinkingLevel, setAgent, setModel, setThinkingLevel } =
+		usePromptConfig();
+	const currentThinkingSelection: ThinkingSelection =
+		thinkingLevel === undefined ? {} : { thinkingLevel };
 	const openSettings = useSettingsHubDialog();
 	const { colors } = useTheme();
 	const { show } = useToast();
@@ -122,8 +112,7 @@ export function NewSessionView() {
 					),
 					resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
 					sessionModel: session.model,
-					sessionEffort: session.effort,
-					sessionReasoningMode: session.reasoningMode,
+					sessionThinkingLevel: session.thinkingLevel,
 				});
 				if (ignore || !selection) {
 					return;
@@ -133,11 +122,7 @@ export function NewSessionView() {
 				}
 
 				setModel(selection.model);
-				if (selection.effort === undefined) {
-					setReasoningMode(selection.reasoningMode);
-				} else {
-					setEffort(selection.effort);
-				}
+				setThinkingLevel(selection.thinkingLevel);
 			} finally {
 				if (!ignore) {
 					setIsPromptConfigRestored(true);
@@ -150,7 +135,7 @@ export function NewSessionView() {
 		return () => {
 			ignore = true;
 		};
-	}, [registry, setAgent, setEffort, setModel, setReasoningMode]);
+	}, [registry, setAgent, setModel, setThinkingLevel]);
 
 	const handleSubmit = async (submission: ChatPromptSubmission) => {
 		const { files, skill, text } = submission;
@@ -195,15 +180,14 @@ export function NewSessionView() {
 			registry,
 			agent,
 			model,
-			currentReasoningSelection
+			currentThinkingSelection
 		);
 		const initialMessage = createSessionUserMessage(
 			input,
 			{
 				agent: effective.agent,
 				model: effective.model,
-				effort: effective.effort,
-				reasoningMode: effective.reasoningMode,
+				thinkingLevel: effective.thinkingLevel,
 				...(skill ? { skill: createSkillSnapshot(skill, "explicit") } : {}),
 			},
 			fileMentions,
@@ -221,8 +205,7 @@ export function NewSessionView() {
 			message: durableMessage,
 			model,
 			turnId: createAgentTurnId(),
-			effort,
-			reasoningMode,
+			thinkingLevel: effective.thinkingLevel,
 		});
 		await router.navigate({
 			params: { id },

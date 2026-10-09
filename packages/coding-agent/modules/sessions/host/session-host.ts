@@ -6,11 +6,7 @@ import {
 	type StatefulAgent,
 	toSubmissionId,
 } from "@wincode/agent-core";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import { isNull, logger, omitUndefined } from "@wincode/utils";
 import {
 	type AgentRegistry,
@@ -52,8 +48,7 @@ type OpenedSession = Readonly<{
 	model: ChatModelSelection | undefined;
 	steeringMessages: SessionSteeringMessage[];
 	transcript: SessionMessage[];
-	effort: Effort | undefined;
-	reasoningMode: ReasoningMode | undefined;
+	thinkingLevel: ThinkingLevel | undefined;
 }>;
 const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
 
@@ -72,9 +67,8 @@ const restoreSteeringMessages = (
 	records: readonly SessionRecord[],
 	transcript: readonly SessionMessage[],
 	session: {
-		effort?: Effort;
 		model?: ChatModelSelection;
-		reasoningMode?: ReasoningMode;
+		thinkingLevel?: ThinkingLevel;
 	}
 ): SessionSteeringMessage[] =>
 	records.flatMap((record) =>
@@ -115,15 +109,13 @@ const restoreSteeringMessages = (
 						files,
 						messageId: message.id,
 						model,
-						sessionEffort: session.effort ?? undefined,
 						sessionModel: session.model ?? model,
-						sessionReasoningMode: session.reasoningMode ?? undefined,
+						sessionThinkingLevel: session.thinkingLevel ?? undefined,
 						submissionId: toSubmissionId(metadata.submissionId),
 						turnId: record.turnId,
 						userText: text,
 						...omitUndefined({
-							effort: metadata.effort,
-							reasoningMode: metadata.reasoningMode,
+							thinkingLevel: metadata.thinkingLevel,
 						}),
 					},
 					message,
@@ -198,8 +190,7 @@ const openSession = async (
 		model: session.model,
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
-		effort: session.effort,
-		reasoningMode: session.reasoningMode,
+		thinkingLevel: session.thinkingLevel,
 	};
 };
 
@@ -366,8 +357,7 @@ export const createSessionHost = async ({
 			const selection = resolveSessionSelection({
 				messages: [...opened.transcript],
 				sessionModel: opened.model,
-				sessionEffort: opened.effort,
-				sessionReasoningMode: opened.reasoningMode,
+				sessionThinkingLevel: opened.thinkingLevel,
 				...(isNull(registry)
 					? {}
 					: {
@@ -383,9 +373,8 @@ export const createSessionHost = async ({
 			initialCompactions: opened.compactions,
 			...omitUndefined({
 				initialAgent,
-				initialSessionEffort: opened.effort ?? initialSelection?.effort,
-				initialSessionReasoningMode:
-					opened.reasoningMode ?? initialSelection?.reasoningMode,
+				initialSessionThinkingLevel:
+					opened.thinkingLevel ?? initialSelection?.thinkingLevel,
 			}),
 			initialContext: opened.context,
 			initialSteeringMessages: opened.steeringMessages,

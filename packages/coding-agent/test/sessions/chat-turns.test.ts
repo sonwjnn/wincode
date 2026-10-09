@@ -35,7 +35,7 @@ const assistant = (id: string, interrupted = false): SessionMessage => ({
 const sharedTurnMetadata: NonNullable<SessionMessage["metadata"]> = {
 	agent: agentId("build"),
 	model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
-	effort: "low",
+	thinkingLevel: "low",
 };
 
 const userWithSharedMetadata = (id: string): SessionMessage => ({
@@ -298,7 +298,7 @@ test("moves matching metadata to the newest turn before its assistant completes"
 	const execution: SessionExecution = {
 		agent: agentId("build"),
 		assistantId: sessionMessageId("assistant-2"),
-		effort: "low",
+		thinkingLevel: "low",
 		model,
 		sessionModel: model,
 		sourceUserMessageId: sessionMessageId("user-2"),

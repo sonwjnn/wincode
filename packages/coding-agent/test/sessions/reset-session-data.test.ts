@@ -134,10 +134,8 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 
 		const incompatibleSchema = new Database(databasePath);
 		incompatibleSchema.exec(`
-			ALTER TABLE session DROP COLUMN effort;
-			ALTER TABLE session DROP COLUMN reasoning_mode;
-			ALTER TABLE session_compaction DROP COLUMN summarization_effort;
-			ALTER TABLE session_compaction DROP COLUMN summarization_reasoning_mode;
+			ALTER TABLE session DROP COLUMN thinking_level;
+			ALTER TABLE session_compaction DROP COLUMN summarization_thinking_level;
 		`);
 		incompatibleSchema.close();
 

@@ -82,8 +82,7 @@ const recordModelForTurn = (turn: AgentTurn): SessionRecord["model"] => ({
 	modelId: turn.model.modelId,
 	providerId: turn.model.providerId,
 	...omitUndefined({
-		effort: turn.model.effort,
-		reasoningMode: turn.model.reasoningMode,
+		thinkingLevel: turn.model.thinkingLevel,
 	}),
 });
 const assistantRecordMetadata = (
@@ -93,8 +92,7 @@ const assistantRecordMetadata = (
 ): SessionMessageMetadataRecord => ({
 	...omitUndefined({
 		sourceUserMessageId,
-		effort: turn.model.effort,
-		reasoningMode: turn.model.reasoningMode,
+		thinkingLevel: turn.model.thinkingLevel,
 		usage,
 	}),
 	model: {
@@ -203,8 +201,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	text,
 	terminal,
 	turnId,
-	effort,
-	reasoningMode,
+	thinkingLevel,
 }: {
 	agentId: AgentId;
 	assistantMessageId?: SessionMessageId;
@@ -213,8 +210,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	text: string;
 	terminal: AgentTurnOutcomeRecord;
 	turnId: AgentTurnId;
-	effort?: SessionRecord["model"]["effort"];
-	reasoningMode?: SessionRecord["model"]["reasoningMode"];
+	thinkingLevel?: SessionRecord["model"]["thinkingLevel"];
 }): SessionRecord => ({
 	agentId,
 	id: toSessionRecordId(`record-${randomUUIDv7()}`),
@@ -227,7 +223,7 @@ const buildAssistantOutcomeSessionRecord = ({
 					modelId: model.modelId,
 					providerId: model.providerId,
 				},
-				...omitUndefined({ sourceUserMessageId, effort, reasoningMode }),
+				...omitUndefined({ sourceUserMessageId, thinkingLevel }),
 			},
 			parts: [{ text, type: "text" }],
 			role: "assistant",
@@ -236,7 +232,7 @@ const buildAssistantOutcomeSessionRecord = ({
 	model: {
 		modelId: model.modelId,
 		providerId: model.providerId,
-		...omitUndefined({ effort, reasoningMode }),
+		...omitUndefined({ thinkingLevel }),
 	},
 	outcome: { kind: "assistant", terminal },
 	turnId,
@@ -250,8 +246,7 @@ export const buildAssistantFailureSessionRecord = ({
 	model,
 	sourceUserMessageId,
 	turnId,
-	effort,
-	reasoningMode,
+	thinkingLevel,
 }: {
 	agentId: AgentId;
 	assistantMessageId?: SessionMessageId;
@@ -259,8 +254,7 @@ export const buildAssistantFailureSessionRecord = ({
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	sourceUserMessageId?: SessionMessageId;
 	turnId: AgentTurnId;
-	effort?: SessionRecord["model"]["effort"];
-	reasoningMode?: SessionRecord["model"]["reasoningMode"];
+	thinkingLevel?: SessionRecord["model"]["thinkingLevel"];
 }): SessionRecord => {
 	const failure = normalizeOperationalFailure(error, {
 		modelId: model.modelId,
@@ -280,8 +274,7 @@ export const buildAssistantFailureSessionRecord = ({
 		},
 		text: failureText,
 		turnId,
-		effort,
-		reasoningMode,
+		thinkingLevel,
 	});
 };
 
@@ -291,16 +284,14 @@ export const buildAssistantCancelledSessionRecord = ({
 	model,
 	sourceUserMessageId,
 	turnId,
-	effort,
-	reasoningMode,
+	thinkingLevel,
 }: {
 	agentId: AgentId;
 	assistantMessageId?: SessionMessageId;
 	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
 	sourceUserMessageId?: SessionMessageId;
 	turnId: AgentTurnId;
-	effort?: SessionRecord["model"]["effort"];
-	reasoningMode?: SessionRecord["model"]["reasoningMode"];
+	thinkingLevel?: SessionRecord["model"]["thinkingLevel"];
 }): SessionRecord => {
 	const failure = createOperationalFailure({
 		code: "cancelled",
@@ -323,8 +314,7 @@ export const buildAssistantCancelledSessionRecord = ({
 		},
 		text: failure.message,
 		turnId,
-		effort,
-		reasoningMode,
+		thinkingLevel,
 	});
 };
 

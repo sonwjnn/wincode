@@ -2,7 +2,10 @@ import type { BaseSpec } from "./types";
 
 const NO_INPUT = { kind: "none" } as const;
 
-export const COMMAND_CAPABILITIES = ["compaction", "effort-selection"] as const;
+export const COMMAND_CAPABILITIES = [
+	"compaction",
+	"thinking-level-selection",
+] as const;
 
 export type CommandCapability = (typeof COMMAND_CAPABILITIES)[number];
 
@@ -49,13 +52,13 @@ export const COMMANDS = [
 		input: NO_INPUT,
 	},
 	{
-		description: "Select Effort or Reasoning Mode",
-		name: "effort",
-		value: "/effort",
+		description: "Select Thinking Level",
+		name: "thinking",
+		value: "/thinking",
 		kind: "builtin",
-		action: "effort.select",
+		action: "thinking.select",
 		input: NO_INPUT,
-		requires: ["effort-selection"],
+		requires: ["thinking-level-selection"],
 	},
 	{
 		description: "Browse past sessions",

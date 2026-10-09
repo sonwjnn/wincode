@@ -3,12 +3,12 @@ import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { modelCatalog } from "@wincode/ai/models";
 import { act, useEffect, useRef } from "react";
-import { EffortDialogContent } from "@/modules/prompt-settings/ui/effort-dialog";
 import {
 	getActiveModels,
 	getModelsForPicker,
 } from "@/modules/prompt-settings/ui/model-picker-options";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
+import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinking-level-dialog";
 import { SessionUsageBar } from "@/modules/sessions/ui/components/session-usage-bar";
 import type { SessionUsageSummary } from "@/modules/sessions/usage/session-usage";
 import {
@@ -72,7 +72,7 @@ const renderDialogSurface = async (content: React.ReactNode) => {
 				return;
 			}
 			opened.current = true;
-			dialog.open({ children: content, title: "Select Effort" });
+			dialog.open({ children: content, title: "Select Thinking Level" });
 		}, [dialog]);
 		return null;
 	}
@@ -204,8 +204,8 @@ describe("model picker", () => {
 	});
 });
 
-describe("Effort and Reasoning Mode picker", () => {
-	test("renders distinct Modes and supported Efforts for a toggle-plus-ladder model", async () => {
+describe("Thinking level picker", () => {
+	test("renders only model-supported named levels", async () => {
 		const model = modelCatalog.find(
 			(entry) =>
 				entry.connectionProviderId === "opencode-go" &&
@@ -215,29 +215,24 @@ describe("Effort and Reasoning Mode picker", () => {
 			throw new Error("fixture model missing");
 		}
 		const setup = await renderSurfaces(() => (
-			<EffortDialogContent
-				currentEffort={undefined}
+			<ThinkingLevelDialogContent
 				currentModel={model}
-				currentReasoningMode={undefined}
+				currentThinkingLevel={undefined}
 				onSelectDefault={() => undefined}
-				onSelectEffort={() => undefined}
-				onSelectReasoningMode={() => undefined}
+				onSelectThinkingLevel={() => undefined}
 			/>
 		));
 
-		await setup.waitForFrame((frame) => frame.includes("xhigh"));
+		await setup.waitForFrame((frame) => frame.includes("Extra high"));
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("default");
-		expect(frame).toContain("none");
-		expect(frame).toContain("low");
-		expect(frame).toContain("medium");
-		expect(frame).toContain("xhigh");
-		expect(frame.split("\n").map((line) => line.trim())).not.toContain("high");
-		expect(frame).not.toContain("thinking");
-		expect(frame).not.toContain("Effort:");
-		expect(frame).not.toContain("Reasoning Mode:");
+		expect(frame).toContain("Provider default");
+		expect(frame).toContain("Low");
+		expect(frame).toContain("Medium");
+		expect(frame).toContain("Extra high");
+		expect(frame).not.toContain("Minimal");
+		expect(frame).not.toContain("High");
 	});
-	test("selecting default clears an active Effort", async () => {
+	test("selecting provider default clears an active ThinkingLevel", async () => {
 		const model = modelCatalog.find(
 			(entry) =>
 				entry.connectionProviderId === "opencode-go" &&
@@ -248,15 +243,13 @@ describe("Effort and Reasoning Mode picker", () => {
 		}
 		let cleared = false;
 		const setup = await renderDialogSurface(
-			<EffortDialogContent
-				currentEffort="low"
+			<ThinkingLevelDialogContent
 				currentModel={model}
-				currentReasoningMode={undefined}
+				currentThinkingLevel="low"
 				onSelectDefault={() => {
 					cleared = true;
 				}}
-				onSelectEffort={() => undefined}
-				onSelectReasoningMode={() => undefined}
+				onSelectThinkingLevel={() => undefined}
 			/>
 		);
 
@@ -268,7 +261,7 @@ describe("Effort and Reasoning Mode picker", () => {
 		expect(cleared).toBe(true);
 	});
 
-	test("renders both available Reasoning Modes without Efforts for a toggle-only model", async () => {
+	test("maps every positive level to enabled reasoning for a toggle-only model", async () => {
 		const model = modelCatalog.find(
 			(entry) =>
 				entry.connectionProviderId === "opencode-go" &&
@@ -278,30 +271,26 @@ describe("Effort and Reasoning Mode picker", () => {
 			throw new Error("fixture model missing");
 		}
 		const setup = await renderSurfaces(() => (
-			<EffortDialogContent
-				currentEffort={undefined}
+			<ThinkingLevelDialogContent
 				currentModel={model}
-				currentReasoningMode={undefined}
+				currentThinkingLevel={undefined}
 				onSelectDefault={() => undefined}
-				onSelectEffort={() => undefined}
-				onSelectReasoningMode={() => undefined}
+				onSelectThinkingLevel={() => undefined}
 			/>
 		));
-		await setup.waitForFrame((frame) => frame.includes("thinking"));
+		await setup.waitForFrame((frame) => frame.includes("Provider default"));
+
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("none");
-		expect(frame).toContain("thinking");
-		expect(frame).not.toContain("Effort:");
-		expect(frame).not.toContain("Reasoning Mode:");
-		const renderedRows = frame.split("\n").map((line) => line.trim());
-		expect(
-			renderedRows.filter((row) =>
-				["minimal", "low", "medium", "high", "xhigh", "max"].includes(row)
-			)
-		).toEqual([]);
+		expect(frame).toContain("Provider default");
+		expect(frame).toContain("Off");
+		expect(frame).toContain("Minimal");
+		expect(frame).toContain("Low");
+		expect(frame).toContain("Medium");
+		expect(frame).toContain("High");
+		expect(frame).not.toContain("Extra high");
 	});
 
-	test("renders no choices for a budget-only model", async () => {
+	test("keeps provider default as the only choice for a budget-only model", async () => {
 		const model = modelCatalog.find(
 			(entry) =>
 				entry.connectionProviderId === "anthropic" &&
@@ -311,19 +300,27 @@ describe("Effort and Reasoning Mode picker", () => {
 			throw new Error("fixture model missing");
 		}
 		const setup = await renderSurfaces(() => (
-			<EffortDialogContent
-				currentEffort={undefined}
+			<ThinkingLevelDialogContent
 				currentModel={model}
-				currentReasoningMode={undefined}
+				currentThinkingLevel={undefined}
 				onSelectDefault={() => undefined}
-				onSelectEffort={() => undefined}
-				onSelectReasoningMode={() => undefined}
+				onSelectThinkingLevel={() => undefined}
 			/>
 		));
 
-		expect(setup.captureCharFrame()).toContain(
-			"No Efforts or Reasoning Modes available"
-		);
+		await setup.waitForFrame((frame) => frame.includes("Provider default"));
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("Provider default");
+		for (const unsupportedLevel of [
+			"Off",
+			"Minimal",
+			"Low",
+			"Medium",
+			"High",
+			"Extra high",
+		]) {
+			expect(frame).not.toContain(unsupportedLevel);
+		}
 	});
 });
 

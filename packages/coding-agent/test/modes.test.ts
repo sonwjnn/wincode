@@ -28,10 +28,10 @@ import { loadPlugins } from "../modules/plugins/loader";
 import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
 import { createSessionHost } from "../modules/sessions/host/session-host";
 import {
-	createSessionSdkChildFactory,
+	createSessionSdkOperations,
 	type SessionSdkRuntimeOptions,
 } from "../modules/sessions/sdk";
-import type { SessionSdkChildFactory } from "../modules/sessions/sdk-contract";
+import type { SessionSdkOperations } from "../modules/sessions/sdk-contract";
 import {
 	type ConfigSnapshot,
 	createConfigStore,
@@ -78,7 +78,7 @@ const buildConfiguredAgentRegistry = (
 const configuredReviewRegistry = buildConfiguredAgentRegistry({
 	review: {
 		description: "Review changes without editing files.",
-		effort: "high",
+		thinking_level: "high",
 		model: "openai/gpt-5.6-luna",
 		role: "primary",
 	},
@@ -124,7 +124,7 @@ const composeCapabilitiesDetailedFor =
 				disabledPluginIds,
 				distributionPlugins: composition.distributionPlugins,
 			}));
-		let sessionSdk: SessionSdkChildFactory | undefined;
+		let sessionSdk: SessionSdkOperations | undefined;
 		const assembly = await createSessionCapabilities({
 			cwd,
 			databasePath: path.join(root, "sessions.sqlite"),
@@ -136,7 +136,7 @@ const composeCapabilitiesDetailedFor =
 			workspace: root,
 			connections,
 		});
-		sessionSdk = createSessionSdkChildFactory(
+		sessionSdk = createSessionSdkOperations(
 			{
 				configRuntime: resolvedConfigRuntime,
 				configStore,
@@ -179,9 +179,8 @@ const writer = (): { text: string; writer: TextWriter } => {
 
 type SelectorOptions = Readonly<{
 	agent?: string;
-	effort?: string;
 	model?: string;
-	reasoningMode?: string;
+	thinkingLevel?: string;
 }>;
 const context = (
 	mode: "json" | "print",
@@ -215,34 +214,22 @@ const configuredReviewDependencies: OneShotDependencies = {
 	composeCapabilities: composeConfiguredReview,
 };
 
-test("configured Agents retain model-supported Effort and Reasoning Mode choices", () => {
+test("configured Agents retain a model-supported ThinkingLevel", () => {
 	const configured = buildConfiguredAgentRegistry({
-		"effort-review": {
-			description: "Review with a selected Effort.",
-			effort: "high",
+		"level-review": {
+			description: "Review with a selected ThinkingLevel.",
+			thinking_level: "high",
 			model: "anthropic/claude-sonnet-5",
-			role: "primary",
-		},
-		"mode-review": {
-			description: "Review with a selected Reasoning Mode.",
-			model: "anthropic/claude-sonnet-5",
-			reasoningMode: "none",
 			role: "primary",
 		},
 	});
 
-	expect(configured.configuredAgents).toHaveLength(2);
+	expect(configured.configuredAgents).toHaveLength(1);
 	expect(
-		configured.configuredAgents.find(({ id }) => id === "effort-review")
+		configured.configuredAgents.find(({ id }) => id === "level-review")
 	).toMatchObject({
-		effort: "high",
+		thinkingLevel: "high",
 		model: { modelId: "claude-sonnet-5", providerId: "anthropic" },
-	});
-	expect(
-		configured.configuredAgents.find(({ id }) => id === "mode-review")
-	).toMatchObject({
-		model: { modelId: "claude-sonnet-5", providerId: "anthropic" },
-		reasoningMode: "none",
 	});
 	expect(
 		configured.diagnostics.filter(({ severity }) => severity === "error")
@@ -286,55 +273,47 @@ test("agent selection offers only Build and falls back from stale Plan choices",
 	);
 });
 
-test("configured Agents reject unsupported, conflicting, invalid, and legacy choices by field", () => {
+test("configured Agents reject unsupported, invalid, and legacy ThinkingLevel choices", () => {
 	const configured = buildConfiguredAgentRegistry({
-		both: {
-			description: "Two choices are not valid.",
+		"legacy-effort": {
+			description: "The removed effort key is not valid.",
 			effort: "high",
+			model: "anthropic/claude-sonnet-5",
+			role: "primary",
+		},
+		"legacy-mode": {
+			description: "The removed reasoning mode key is not valid.",
 			model: "anthropic/claude-sonnet-5",
 			reasoningMode: "none",
 			role: "primary",
 		},
-		legacy: {
-			description: "The old key is not valid.",
+		"legacy-variant": {
+			description: "The old variant key is not valid.",
 			model: "anthropic/claude-sonnet-5",
 			role: "primary",
 			variant: "high",
 		},
-		"unsupported-effort": {
-			description: "This model has no selectable Effort.",
-			effort: "low",
-			model: "opencode-go/qwen3.7-max",
+		"unsupported-level": {
+			description: "This model has no selectable ThinkingLevel.",
+			thinking_level: "low",
+			model: "opencode-go/grok-4.6",
 			role: "primary",
 		},
-		"unsupported-mode": {
-			description: "This model has no selectable Reasoning Mode.",
-			model: "openai/gpt-5.6-luna",
-			reasoningMode: "thinking",
-			role: "primary",
-		},
-		"invalid-effort": {
-			description: "Efforts must be valid identifiers.",
-			effort: "extreme",
+		"invalid-level": {
+			description: "ThinkingLevel values must be valid identifiers.",
+			thinking_level: "extreme",
 			model: "anthropic/claude-sonnet-5",
-			role: "primary",
-		},
-		"invalid-mode": {
-			description: "Reasoning Modes must be valid identifiers.",
-			model: "anthropic/claude-sonnet-5",
-			reasoningMode: "deliberate",
 			role: "primary",
 		},
 	});
 
 	expect(configured.configuredAgents).toHaveLength(0);
 	for (const [agentId, field] of [
-		["both", "reasoningMode"],
-		["legacy", "variant"],
-		["unsupported-effort", "effort"],
-		["unsupported-mode", "reasoningMode"],
-		["invalid-effort", "effort"],
-		["invalid-mode", "reasoningMode"],
+		["legacy-effort", "effort"],
+		["legacy-mode", "reasoningMode"],
+		["legacy-variant", "variant"],
+		["unsupported-level", "thinking_level"],
+		["invalid-level", "thinking_level"],
 	] as const) {
 		expect(configured.diagnostics).toContainEqual(
 			expect.objectContaining({
@@ -343,17 +322,24 @@ test("configured Agents reject unsupported, conflicting, invalid, and legacy cho
 			})
 		);
 	}
-	expect(
-		configured.diagnostics.find(
-			({ configPath }) =>
-				configPath[1] === "unsupported-effort" && configPath[2] === "effort"
-		)?.message
-	).toContain('"effort"');
-	expect(
-		configured.diagnostics.find(
-			({ configPath }) => configPath[1] === "unsupported-mode"
-		)?.message
-	).toContain('"reasoningMode"');
+});
+
+test("built-in Agent patches reject unsupported ThinkingLevels", () => {
+	const configured = buildConfiguredAgentRegistry({
+		build: {
+			model: "opencode-go/grok-4.6",
+			thinking_level: "low",
+		},
+	});
+	const build = configured.agents.find(({ id }) => id === "build");
+
+	expect(build).not.toHaveProperty("thinkingLevel");
+	expect(configured.diagnostics).toContainEqual(
+		expect.objectContaining({
+			configPath: ["agents", "build", "thinking_level"],
+			severity: "error",
+		})
+	);
 });
 
 afterAll(async () => {
@@ -442,9 +428,9 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	}
 });
 
-test("one-shot Effort selectors override configured and restored choices", async () => {
+test("one-shot ThinkingLevel selectors override configured and restored choices", async () => {
 	const reasoningWorkspace = await mkdtemp(
-		path.join("/tmp", "wincode-one-shot-effort-")
+		path.join("/tmp", "wincode-one-shot-thinking-level-")
 	);
 	try {
 		const initialOutput = writer();
@@ -452,13 +438,13 @@ test("one-shot Effort selectors override configured and restored choices", async
 		const initialExitCode = await runPrintMode(
 			context(
 				"print",
-				"choose a configured Agent Effort",
+				"choose a configured Agent ThinkingLevel",
 				initialOutput.writer,
 				initialErrors.writer,
 				undefined,
 				undefined,
 				true,
-				{ agent: "review", effort: "medium" },
+				{ agent: "review", thinkingLevel: "medium" },
 				reasoningWorkspace
 			),
 			configuredReviewDependencies
@@ -476,14 +462,14 @@ test("one-shot Effort selectors override configured and restored choices", async
 		try {
 			const sessions = await firstVerification.store.listSessions();
 			expect(sessions).toHaveLength(1);
-			expect(sessions[0]?.effort).toBe("medium");
+			expect(sessions[0]?.thinkingLevel).toBe("medium");
 			sessionId = sessions[0]?.id;
 		} finally {
 			await firstVerification.shutdown();
 		}
 		if (sessionId === undefined) {
 			throw new Error(
-				"Expected the selected Effort to persist in the Session."
+				"Expected the selected ThinkingLevel to persist in the Session."
 			);
 		}
 
@@ -492,13 +478,13 @@ test("one-shot Effort selectors override configured and restored choices", async
 		const continuationExitCode = await runPrintMode(
 			context(
 				"print",
-				"override the restored Effort",
+				"override the restored ThinkingLevel",
 				continuationOutput.writer,
 				continuationErrors.writer,
 				sessionId,
 				undefined,
 				true,
-				{ agent: "review", effort: "low" },
+				{ agent: "review", thinkingLevel: "low" },
 				reasoningWorkspace
 			),
 			configuredReviewDependencies
@@ -515,7 +501,7 @@ test("one-shot Effort selectors override configured and restored choices", async
 		try {
 			const sessions = await finalVerification.store.listSessions();
 			expect(sessions).toHaveLength(1);
-			expect(sessions[0]?.effort).toBe("low");
+			expect(sessions[0]?.thinkingLevel).toBe("low");
 		} finally {
 			await finalVerification.shutdown();
 		}
@@ -526,17 +512,16 @@ test("one-shot Effort selectors override configured and restored choices", async
 
 test("one-shot invalid explicit choices name their field and fail before send", async () => {
 	const invalidWorkspace = await mkdtemp(
-		path.join("/tmp", "wincode-invalid-reasoning-choice-")
+		path.join("/tmp", "wincode-invalid-thinking-level-")
 	);
 	try {
 		const invalidChoices: readonly {
 			readonly field: string;
 			readonly selectors: SelectorOptions;
 		}[] = [
-			{ field: "--effort", selectors: { effort: "extreme" } },
 			{
-				field: "--reasoning-mode",
-				selectors: { reasoningMode: "thinking" },
+				field: "--thinking-level",
+				selectors: { thinkingLevel: "extreme" },
 			},
 		];
 		const initialChatRequestCount = fakeRecorder.requests.filter(
@@ -548,7 +533,7 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 			const exitCode = await runPrintMode(
 				context(
 					"print",
-					"invalid reasoning selector",
+					"invalid ThinkingLevel selector",
 					stdout.writer,
 					stderr.writer,
 					undefined,

@@ -1,6 +1,7 @@
 import { getErrorMessage, isNonEmptyString, logger } from "@wincode/utils";
 import { attachPluginHostContext } from "./host-context";
 import type {
+	PluginAgentRegistration,
 	PluginBeforeAgentTurnContext,
 	PluginBeforeAgentTurnHook,
 	PluginCommandContext,
@@ -55,6 +56,7 @@ export type PluginStatusPanelDescriptor = PluginStatusPanelRegistration &
 	Readonly<{ pluginId: string; sourcePath: string }>;
 
 export type LoadedPlugin = Readonly<{
+	agents?: readonly PluginAgentRegistration[];
 	commands: readonly PluginCommandDescriptor[];
 	id: string;
 	resources?: readonly PluginResourceDescriptor[];
@@ -76,6 +78,7 @@ export type PluginRuntime = Readonly<{
 		name: string,
 		context: PluginCommandContext
 	) => Promise<string>;
+	getAgentRegistrations: () => readonly PluginAgentRegistration[];
 	getCommands: (sessionId?: string) => readonly PluginCommandDescriptor[];
 	getToolDescriptors: (sessionId: string) => readonly PluginToolDescriptor[];
 	getResource: <Resource = unknown>(
@@ -615,6 +618,13 @@ export const createPluginRuntime = (
 				);
 				throw commandFailure(name);
 			}
+		},
+		getAgentRegistrations() {
+			return Object.freeze(
+				plugins
+					.filter((plugin) => isEnabledForSession(plugin))
+					.flatMap((plugin) => plugin.agents ?? [])
+			);
 		},
 		getCommands(sessionId) {
 			return Object.freeze(allCommands(sessionId));

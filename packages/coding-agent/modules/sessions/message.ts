@@ -18,14 +18,11 @@ import {
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import {
 	type ChatModelSelection,
-	type Effort,
-	effortSchema,
 	findSupportedChatModelSelection,
-	getSupportedModelEfforts,
-	getSupportedReasoningModes,
+	getSupportedThinkingLevels,
 	modelSelectionSchema,
-	type ReasoningMode,
-	reasoningModeSchema,
+	type ThinkingLevel,
+	thinkingLevelSchema,
 } from "@wincode/ai/models";
 import {
 	isArray,
@@ -172,8 +169,7 @@ export type SessionMessageMetadata = {
 	readonly submissionStatus?: SessionSubmissionStatus;
 	readonly terminalOutcome?: SessionMessageTerminalOutcome;
 	readonly usage?: SessionMessageUsage;
-	readonly effort?: Effort;
-	readonly reasoningMode?: ReasoningMode;
+	readonly thinkingLevel?: ThinkingLevel;
 };
 
 export type SessionMessage = ReadonlyDeep<{
@@ -267,20 +263,10 @@ export const sessionMessageMetadataSchema = z
 			.optional(),
 		terminalOutcome: z.enum(["cancelled", "failed", "interrupted"]).optional(),
 		usage: sessionMessageUsageSchema.optional(),
-		effort: effortSchema.optional(),
-		reasoningMode: reasoningModeSchema.optional(),
+		thinkingLevel: thinkingLevelSchema.optional(),
 	})
 	.strict()
 	.superRefine((metadata, context) => {
-		if (
-			!(isUndefined(metadata.effort) || isUndefined(metadata.reasoningMode))
-		) {
-			context.addIssue({
-				code: "custom",
-				message: "Select either Effort or Reasoning Mode, not both",
-			});
-			return;
-		}
 		if (
 			metadata.submissionStatus !== undefined &&
 			metadata.submissionId === undefined
@@ -300,12 +286,10 @@ export const sessionMessageMetadataSchema = z
 			});
 		}
 		if (isUndefined(metadata.model)) {
-			if (
-				!(isUndefined(metadata.effort) && isUndefined(metadata.reasoningMode))
-			) {
+			if (!isUndefined(metadata.thinkingLevel)) {
 				context.addIssue({
 					code: "custom",
-					message: "Reasoning choice requires a model selection",
+					message: "Thinking level requires a model selection",
 				});
 			}
 			return;
@@ -319,25 +303,12 @@ export const sessionMessageMetadataSchema = z
 			return;
 		}
 		if (
-			!(
-				isUndefined(metadata.effort) ||
-				getSupportedModelEfforts(model).includes(metadata.effort)
-			)
+			metadata.thinkingLevel !== undefined &&
+			!getSupportedThinkingLevels(model).includes(metadata.thinkingLevel)
 		) {
 			context.addIssue({
 				code: "custom",
-				message: "Effort is not supported for selected model",
-			});
-		}
-		if (
-			!(
-				isUndefined(metadata.reasoningMode) ||
-				getSupportedReasoningModes(model).includes(metadata.reasoningMode)
-			)
-		) {
-			context.addIssue({
-				code: "custom",
-				message: "Reasoning Mode is not supported for selected model",
+				message: "Thinking level is not supported for selected model",
 			});
 		}
 	});

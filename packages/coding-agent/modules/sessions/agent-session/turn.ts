@@ -7,14 +7,10 @@ import type {
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import type {
-	ChatModelSelection,
-	Effort,
-	ReasoningMode,
-} from "@wincode/ai/models";
+import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import { defaultChatModelSelection } from "@wincode/ai/models";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
-import { type CodingToolName, codingToolNames } from "@/modules/tools";
+import { isCodingToolName } from "@/modules/tools";
 import {
 	isSessionToolPart,
 	isTerminalSessionToolPart,
@@ -38,8 +34,7 @@ const emptyAssistantMessageFor = (
 		model: execution.model,
 		...omitUndefined({
 			sourceUserMessageId: execution.sourceUserMessageId ?? undefined,
-			effort: execution.effort,
-			reasoningMode: execution.reasoningMode,
+			thinkingLevel: execution.thinkingLevel,
 		}),
 	},
 	parts: [],
@@ -57,9 +52,6 @@ const replaceMessage = (
 				messageIndex === index ? message : existing
 			);
 };
-
-const isCodingToolName = (name: string): name is CodingToolName =>
-	codingToolNames.some((candidate) => candidate === name);
 
 const runtimeToolPart = (
 	event: Extract<AgentTurnEvent, { type: "tool-call-started" }>
@@ -219,8 +211,7 @@ const buildTerminalMessageMetadata = ({
 	model,
 	startedAt,
 	usage,
-	effort,
-	reasoningMode,
+	thinkingLevel,
 }: {
 	agent: AgentId;
 	base: SessionMessage;
@@ -228,14 +219,10 @@ const buildTerminalMessageMetadata = ({
 	model?: ChatModelSelection;
 	startedAt: number | null;
 	usage: ModelUsage | null;
-	effort?: Effort;
-	reasoningMode?: ReasoningMode;
+	thinkingLevel?: ThinkingLevel;
 }): SessionMessageMetadata => {
 	const terminalOutcome = terminalOutcomeForEvent(event);
-	const baseHasChoice = !(
-		isUndefined(base.metadata?.effort) &&
-		isUndefined(base.metadata?.reasoningMode)
-	);
+	const baseHasChoice = !isUndefined(base.metadata?.thinkingLevel);
 	return {
 		...(base.metadata ?? {}),
 		agent: base.metadata?.agent ?? agent,
@@ -244,10 +231,9 @@ const buildTerminalMessageMetadata = ({
 			terminalOutcome,
 			usage: usage ?? undefined,
 			model: isUndefined(model) ? undefined : (base.metadata?.model ?? model),
-			effort: baseHasChoice ? base.metadata?.effort : effort,
-			reasoningMode: baseHasChoice
-				? base.metadata?.reasoningMode
-				: reasoningMode,
+			thinkingLevel: baseHasChoice
+				? base.metadata?.thinkingLevel
+				: thinkingLevel,
 			responseTimeMs: isNull(startedAt)
 				? undefined
 				: Math.max(0, Date.now() - startedAt),
@@ -319,8 +305,7 @@ export const projectAgentTurnTerminal = (
 		model: execution.model,
 		startedAt: execution.startedAt,
 		usage,
-		effort: execution.effort,
-		reasoningMode: execution.reasoningMode,
+		thinkingLevel: execution.thinkingLevel,
 	});
 	return sanitizeRuntimeMessagesForTerminal(
 		replaceMessage(messages, { ...base, metadata }),
@@ -401,29 +386,21 @@ const finalizeAssistantMessageMetadata = (
 	context: {
 		agent?: AgentId;
 		model?: ChatModelSelection;
-		effort?: Effort;
-		reasoningMode?: ReasoningMode;
+		thinkingLevel?: ThinkingLevel;
 		interrupted: boolean;
 		responseTimeMs?: number;
 	}
 ): SessionMessage => {
 	const agent = message.metadata?.agent ?? context.agent;
 	const model = message.metadata?.model ?? context.model;
-	const hasMessageChoice = !(
-		isUndefined(message.metadata?.effort) &&
-		isUndefined(message.metadata?.reasoningMode)
-	);
-	const effort = hasMessageChoice ? message.metadata?.effort : context.effort;
-	const reasoningMode = hasMessageChoice
-		? message.metadata?.reasoningMode
-		: context.reasoningMode;
+	const thinkingLevel =
+		message.metadata?.thinkingLevel ?? context.thinkingLevel;
 	const metadata: SessionMessageMetadata = {
 		...(message.metadata ?? {}),
 		...omitUndefined({
 			agent,
 			model,
-			effort,
-			reasoningMode,
+			thinkingLevel,
 			responseTimeMs: context.responseTimeMs,
 		}),
 		interrupted: context.interrupted,
@@ -458,8 +435,7 @@ export const interruptSessionContext = (
 					model: execution.model,
 					responseTimeMs: Math.max(0, Date.now() - execution.startedAt),
 					...omitUndefined({
-						effort: execution.effort,
-						reasoningMode: execution.reasoningMode,
+						thinkingLevel: execution.thinkingLevel,
 					}),
 				}),
 	});

@@ -112,31 +112,22 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		selection: {
 			agentId: "build",
 			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
-			effort: "high",
+			thinkingLevel: "high",
 		},
 	})}\n`;
 	const invalidCreate = `${request("invalid-create", "session/create", {
-		initialSubmission: { text: "reject unsupported effort" },
+		initialSubmission: { text: "reject unsupported ThinkingLevel" },
 		selection: {
 			agentId: "build",
 			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
-			effort: "minimal",
+			thinkingLevel: "minimal",
 		},
 	})}\n`;
 	const legacyCreate = `${request("legacy-create", "session/create", {
-		initialSubmission: { text: "reject legacy variant" },
+		initialSubmission: { text: "reject legacy reasoningMode" },
 		selection: {
 			agentId: "build",
 			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
-			variant: "high",
-		},
-	})}\n`;
-	const conflictingCreate = `${request("conflicting-create", "session/create", {
-		initialSubmission: { text: "reject conflicting choices" },
-		selection: {
-			agentId: "build",
-			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
-			effort: "high",
 			reasoningMode: "none",
 		},
 	})}\n`;
@@ -153,7 +144,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		yield new TextEncoder().encode(initialize);
 		await initialized.promise;
 		yield new TextEncoder().encode(
-			`${invalidCreate}${legacyCreate}${conflictingCreate}${create.slice(0, 11)}`
+			`${invalidCreate}${legacyCreate}${create.slice(0, 11)}`
 		);
 		await invalidSelectionRejected.promise;
 		yield new TextEncoder().encode(create.slice(11));
@@ -225,12 +216,6 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		(frame) => frame.id === "legacy-create"
 	);
 	expect(legacySelectionFrame?.error).toMatchObject({
-		data: { code: "selection_unavailable" },
-	});
-	const conflictingSelectionFrame = frames.find(
-		(frame) => frame.id === "conflicting-create"
-	);
-	expect(conflictingSelectionFrame?.error).toMatchObject({
 		data: { code: "selection_unavailable" },
 	});
 	expect(exitCode).toBe(0);
@@ -330,7 +315,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	expect(secondExitCode).toBe(0);
 	expect(secondStderrFrames).toEqual([]);
 	expect(openState).toBeDefined();
-	expect(openState).toMatchObject({ selection: { effort: "high" } });
+	expect(openState).toMatchObject({ selection: { thinkingLevel: "high" } });
 	expect(secondFrames.some((frame) => frame.id === "reopen-transcript")).toBe(
 		true
 	);
@@ -355,7 +340,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	expect(reopenMessages).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({
-				metadata: expect.objectContaining({ effort: "high" }),
+				metadata: expect.objectContaining({ thinkingLevel: "high" }),
 			}),
 		])
 	);
@@ -375,19 +360,19 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	expect(
 		records.some(
 			(record) =>
-				record.outcome.kind === "user" && record.model.effort === "high"
+				record.outcome.kind === "user" && record.model.thinkingLevel === "high"
 		)
 	).toBe(true);
 	const assistantRecord = records.find(
 		(record) => record.outcome.kind === "assistant"
 	);
-	expect(assistantRecord?.model.effort).toBe("high");
+	expect(assistantRecord?.model.thinkingLevel).toBe("high");
 	expect(
 		assistantRecord?.messages.some(
-			(message) => message.metadata?.effort === "high"
+			(message) => message.metadata?.thinkingLevel === "high"
 		)
 	).toBe(true);
-	expect(session.effort).toBe("high");
+	expect(session.thinkingLevel).toBe("high");
 });
 
 test("RPC session/open keeps a held Session Writer as a refusal", async () => {

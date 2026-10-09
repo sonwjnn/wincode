@@ -1,14 +1,12 @@
 import * as os from "node:os";
 import {
-	effortSchema,
-	isSupportedModelEffort,
-	isSupportedReasoningMode,
+	isSupportedThinkingLevel,
 	modelSelectionSchema,
-	reasoningModeSchema,
+	thinkingLevelSchema,
 } from "@wincode/ai/models";
 import { loadPlugins } from "@/modules/plugins/loader";
-import { createSessionSdkChildFactory } from "@/modules/sessions/sdk";
-import type { SessionSdkChildFactory } from "@/modules/sessions/sdk-contract";
+import { createSessionSdkOperations } from "@/modules/sessions/sdk";
+import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
 import { createConfigStore } from "@/shared/config/config-store";
 import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
 import {
@@ -44,7 +42,7 @@ export const loadRuntime = async (
 				disabledPluginIds: input.disabledPluginIds ?? [],
 				distributionPlugins: pluginComposition.distributionPlugins,
 			}));
-		let sessionSdk: SessionSdkChildFactory | undefined;
+		let sessionSdk: SessionSdkOperations | undefined;
 		const assembly = await createSessionCapabilities({
 			configStore,
 			cwd: sessionComposition.cwd,
@@ -54,7 +52,7 @@ export const loadRuntime = async (
 			turnToolResolver: pluginComposition.turnToolResolver,
 			workspace: sessionComposition.workspace,
 		});
-		sessionSdk = createSessionSdkChildFactory(
+		sessionSdk = createSessionSdkOperations(
 			{
 				configRuntime,
 				connections: assembly.capabilities.getConnections(),
@@ -76,11 +74,9 @@ export const loadRuntime = async (
 			view: true,
 		}),
 	createSessionUserMessage,
-	effortSchema,
-	isSupportedModelEffort,
-	isSupportedReasoningMode,
+	isSupportedThinkingLevel,
 	modelSelectionSchema,
-	reasoningModeSchema,
+	thinkingLevelSchema,
 	resolveWorkspaceRoot,
 	toSessionId,
 });

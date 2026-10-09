@@ -118,8 +118,10 @@
       "version": "0.1.0",
       "dependencies": {
         "@wincode/agent-core": "workspace:*",
+        "@wincode/ai": "workspace:*",
         "@wincode/utils": "workspace:*",
         "type-fest": "catalog:",
+        "yaml": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -158,6 +160,7 @@
     "react": "^19.2.5",
     "type-fest": "^5.9.0",
     "typescript": "^7.0.2",
+    "yaml": "^2.9.0",
     "zod": "^4.1.13",
   },
   "packages": {
