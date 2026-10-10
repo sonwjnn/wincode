@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { createTestRenderer } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
@@ -120,22 +122,12 @@ test("startup preflight returns cancellation and tears down its renderer", async
 	}
 });
 
-test("trust selector explains protected resources are not sandboxed", async () => {
-	const { setup } = await renderTrustDialog();
-	try {
-		const frame = setup.captureCharFrame();
-		expect(frame).toContain("process privileges.");
-		expect(frame).toContain("This is not a sandbox.");
-	} finally {
-		await act(() => setup.renderer.destroy());
-	}
-});
-
 test("trust selector lists each root and pending session state; Escape cancels", async () => {
 	const { selectionOutcome, setup } = await renderTrustDialog();
 	try {
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("/workspace/repo");
+		expect(frame).toContain("Protected root: /workspace/repo");
+		expect(frame).not.toContain("Protected root: /workspace/repo/nested");
 		expect(frame).toContain("/workspace/repo/nested");
 		expect(frame).toContain(
 			"Saved decision: trusted (inherited from /workspace)"
@@ -144,10 +136,72 @@ test("trust selector lists each root and pending session state; Escape cancels",
 		expect(frame).toContain("Current session: Decision pending");
 		expect(frame).toContain("Trust parent folder (/workspace)");
 		expect(frame).toContain("Do not trust");
+		expect(frame).toContain("↑↓ navigate");
 
 		await act(() => setup.mockInput.pressEscape());
 		await flushTestRenderer(setup, 2);
 		expect(await selectionOutcome()).toEqual({ kind: "cancelled" });
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
+test("trust selector abbreviates home paths in details and parent choices", async () => {
+	const parentDirectory = path.join(os.homedir(), "workspace");
+	const projectRoot = path.join(parentDirectory, "repo");
+	const workspace = path.join(projectRoot, "nested");
+	const { setup } = await renderTrustDialog({
+		parentDirectory,
+		protectedRoots: [
+			{
+				currentSessionStatus: "pending",
+				projectRoot,
+				savedDecision: {
+					decision: "trust",
+					directory: parentDirectory,
+					inherited: true,
+				},
+			},
+		],
+		workspace,
+	});
+	try {
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain(
+			`Workspace: ~${path.sep}workspace${path.sep}repo${path.sep}nested`
+		);
+		expect(frame).toContain(
+			`Protected root: ~${path.sep}workspace${path.sep}repo`
+		);
+		expect(frame).toContain(
+			`Saved decision: trusted (inherited from ~${path.sep}workspace)`
+		);
+		expect(frame).toContain(`Trust parent folder (~${path.sep}workspace)`);
+		expect(frame).not.toContain(parentDirectory);
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
+test("trust selector aligns its title, details, and selectable choices", async () => {
+	const { setup } = await renderTrustDialog();
+	try {
+		const lines = setup.captureCharFrame().split("\n");
+		const titleLine = lines.find((line) => line.includes("Project Trust"));
+		const workspaceLine = lines.find((line) => line.includes("Workspace:"));
+		const choiceLine = lines.find((line) =>
+			line.includes("Trust parent folder")
+		);
+
+		expect(titleLine).toBeDefined();
+		expect(workspaceLine).toBeDefined();
+		expect(choiceLine).toBeDefined();
+		expect(titleLine?.indexOf("Project Trust")).toBe(
+			workspaceLine?.indexOf("Workspace:")
+		);
+		expect(workspaceLine?.indexOf("Workspace:")).toBe(
+			choiceLine?.indexOf("Trust parent folder")
+		);
 	} finally {
 		await act(() => setup.renderer.destroy());
 	}

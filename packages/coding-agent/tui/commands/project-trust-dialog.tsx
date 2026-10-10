@@ -4,6 +4,7 @@ import type {
 	ProjectTrustPromptRequest,
 	ProjectTrustSelection,
 } from "@/modules/project-trust/project-trust";
+import { shortenHomePath } from "@/shared/paths/display-path";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import {
 	useDialog,
@@ -11,6 +12,7 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
@@ -34,7 +36,7 @@ const getTrustChoices = (
 				{
 					action: "trust-parent" as const,
 					description: "Trust the parent folder and its descendant projects.",
-					label: `Trust parent folder (${parentDirectory})`,
+					label: `Trust parent folder (${shortenHomePath(parentDirectory)})`,
 				},
 			]),
 	{
@@ -83,40 +85,45 @@ export function ProjectTrustDialogContent({
 
 	return (
 		<box flexDirection="column" gap={1}>
-			<text fg={colors.textMuted} wrapMode="word">
-				{`Workspace: ${workspace}`}
-			</text>
-			{protectedRoots.length === 0 ? (
-				<text fg={colors.textMuted}>
-					No protected project resources detected.
+			<box flexDirection="column" gap={1} marginX={4}>
+				<text fg={colors.textMuted} wrapMode="word">
+					{`Workspace: ${shortenHomePath(workspace)}`}
 				</text>
-			) : (
-				<scrollbox
-					height={Math.min(rootStatusHeight, Math.max(3, height - 18))}
-					verticalScrollbarOptions={{ visible: false }}
-				>
-					{protectedRoots.map(
-						({ currentSessionStatus, projectRoot, savedDecision }) => (
-							<box flexDirection="column" key={projectRoot}>
-								<text fg={colors.textMuted} wrapMode="word">
-									{`Protected root: ${projectRoot}`}
-								</text>
-								<text fg={colors.textMuted} wrapMode="word">
-									{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${savedDecision.directory})` : ""}`}`}
-								</text>
-								<text fg={colors.textMuted} wrapMode="word">
-									{`Current session: ${currentSessionStatus === "pending" ? "Decision pending" : currentSessionStatus}`}
-								</text>
-							</box>
-						)
-					)}
-				</scrollbox>
-			)}
-			<text fg={colors.text} wrapMode="word">
-				Project Plugins, MCP Servers, and other protected resources may run with
-				Wincode's process privileges. This is not a sandbox.
-			</text>
+				{protectedRoots.length === 0 ? (
+					<text fg={colors.textMuted}>
+						No protected project resources detected.
+					</text>
+				) : (
+					<scrollbox
+						height={Math.min(rootStatusHeight, Math.max(3, height - 18))}
+						verticalScrollbarOptions={{ visible: false }}
+					>
+						{protectedRoots.map(
+							({ currentSessionStatus, projectRoot, savedDecision }) => (
+								<box flexDirection="column" key={projectRoot}>
+									{projectRoot === workspace ? null : (
+										<text fg={colors.textMuted} wrapMode="word">
+											{`Protected root: ${shortenHomePath(projectRoot)}`}
+										</text>
+									)}
+									<text fg={colors.textMuted} wrapMode="word">
+										{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${shortenHomePath(savedDecision.directory)})` : ""}`}`}
+									</text>
+									<text fg={colors.textMuted} wrapMode="word">
+										{`Current session: ${currentSessionStatus === "pending" ? "Decision pending" : currentSessionStatus}`}
+									</text>
+								</box>
+							)
+						)}
+					</scrollbox>
+				)}
+			</box>
 			<SearchListDialogWrapper<ProjectTrustChoiceItem>
+				footer={
+					<box marginX={4}>
+						<DialogFooterHint label="navigate" shortcut="↑↓" />
+					</box>
+				}
 				getKey={(choice) => choice.action}
 				getSearchText={(choice) => `${choice.label} ${choice.description}`}
 				items={choices}
@@ -130,6 +137,7 @@ export function ProjectTrustDialogContent({
 					<SelectableDialogItem>
 						<text
 							fg={isSelected ? selectedTextColor : colors.text}
+							marginX={0}
 							selectable={false}
 						>
 							{choice.label}
@@ -167,7 +175,9 @@ export const requestProjectTrust = (
 				deferred.reject(new Error("Project trust prompt was cancelled.")),
 			onDecision: decide,
 		}),
+		padding: { bottom: 1, left: 0, right: 0, top: 1 },
 		title: "Project Trust",
+		titleMargin: { left: 4, right: 4 },
 	});
 	return deferred.promise;
 };

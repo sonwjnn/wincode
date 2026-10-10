@@ -1,14 +1,6 @@
-import { homedir } from "node:os";
 import { useGitBranch } from "@/shared/git/use-git-branch";
+import { shortenHomePath } from "@/shared/paths/display-path";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-
-/** `/Users/me/src/app` -> `~/src/app`, so long paths stay readable in a narrow panel. */
-const shortenPath = (path: string): string => {
-	const home = homedir();
-	return path === home || path.startsWith(`${home}/`)
-		? `~${path.slice(home.length)}`
-		: path;
-};
 
 /** Current workspace as `cwd:branch`, dropping the branch outside a git repo. */
 export function WorkspacePath() {
@@ -18,7 +10,7 @@ export function WorkspacePath() {
 
 	return (
 		<text bg={colors.filePathBackground} fg={colors.filePath}>
-			<span>{shortenPath(cwd)}</span>
+			<span>{shortenHomePath(cwd)}</span>
 			{branch ? (
 				<>
 					<span>:</span>
