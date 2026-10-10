@@ -25,7 +25,7 @@
 When authorized to create or edit a PR, follow the checklist below.
 
 - MUST use `.agents/skills/pr/SKILL.md` this skill first. Preserve the template sections and checklist, including when shortening an existing description.
-- MUST read back the published PR description after creating or editing it. Check only verified checklist items; explain skipped or inapplicable checks in `Testing`.
+- MUST read back the published PR description after creating or editing it.
 
 ---
 
