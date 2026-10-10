@@ -18,6 +18,8 @@ import { logUnhandledUiError } from "../shared/utils/ui-error-log";
 import { ThemedRoot } from "./layouts/themed-root";
 import { routeTree } from "./routeTree.gen";
 
+export { runProjectTrustPreflight } from "./project-trust-preflight";
+
 // The terminal router has memory history and no browser viewport to scroll.
 if (typeof Reflect.get(globalThis, "scrollTo") !== "function") {
 	Reflect.set(globalThis, "scrollTo", () => undefined);

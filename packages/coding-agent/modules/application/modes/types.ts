@@ -1,6 +1,7 @@
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
+import type { ApplicationResourceLoader } from "../resource-loader";
 import type { JsonlInput } from "../rpc/protocol";
 import type { OutputWriter as RpcOutputWriter } from "../rpc/types";
 
@@ -33,6 +34,7 @@ export type ApplicationContext = Readonly<{
 	stdout: TextWriter;
 	configRuntime?: ConfigRuntime;
 	pluginRuntime?: PluginRuntime;
+	resourceLoader?: ApplicationResourceLoader;
 }>;
 
 export class InvocationError extends Error {

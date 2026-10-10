@@ -77,7 +77,16 @@ export type SessionHostManagerEvent = Readonly<{
 	type: "agent-turn-event";
 }>;
 
+export type SessionWorkAdmission =
+	| Readonly<{ kind: "admitted"; release: () => void }>
+	| Readonly<{ kind: "rejected"; reason: string }>;
+
 export type SessionHostManager = Readonly<{
+	assertIdleForReload: () => Promise<void>;
+	tryAcquireSessionWork: () => SessionWorkAdmission;
+	withIdleForReload: <Result>(action: () => Promise<Result>) => Promise<Result>;
+	/** Rebind open Plugin Session scopes without closing their Session Hosts. */
+	replacePluginRuntime: (runtime: PluginRuntime) => Promise<void>;
 	onEvent: (listener: (event: SessionHostManagerEvent) => void) => () => void;
 	openHost: (input: {
 		autoContinue?: boolean;

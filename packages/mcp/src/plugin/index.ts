@@ -52,11 +52,11 @@ const statusActions = (
 };
 
 const createStatusPanel = (
-	registry: McpRegistry
+	getRegistry: () => McpRegistry | undefined
 ): PluginStatusPanelRegistration => ({
 	emptyText: "No MCP servers",
 	getSnapshot: () => {
-		const statuses = registry.getStatuses();
+		const statuses = getRegistry()?.getStatuses() ?? [];
 		const connected = statuses.filter(
 			({ state }) => state === "connected"
 		).length;
@@ -84,8 +84,14 @@ const createStatusPanel = (
 	},
 	id: "servers",
 	indicatorLabel: "MCPs",
-	refresh: () => registry.initialize(),
+	refresh: async () => {
+		await getRegistry()?.initialize();
+	},
 	runAction: async (serverName, actionId) => {
+		const registry = getRegistry();
+		if (registry === undefined) {
+			throw new Error("MCP registry is unavailable.");
+		}
 		if (actionId === "reconnect") {
 			await registry.reconnect(serverName);
 			return;
@@ -96,7 +102,8 @@ const createStatusPanel = (
 		}
 		throw new Error(`Unknown MCP status action '${actionId}'.`);
 	},
-	subscribe: (listener) => registry.subscribe(listener),
+	subscribe: (listener) =>
+		getRegistry()?.subscribe(listener) ?? (() => undefined),
 	title: "MCP Servers",
 });
 
@@ -109,28 +116,45 @@ const failure = (errorText: string): ToolCallOutput => ({
 export const createMcpPluginFactory =
 	(dependencies: McpPluginDependencies = {}): PluginFactory =>
 	async (api, context) => {
-		const registry = createMcpRegistry({
-			...(dependencies.createClient === undefined
-				? {}
-				: { createClient: dependencies.createClient }),
-			...(dependencies.env === undefined ? {} : { env: dependencies.env }),
-			loadConfig:
-				dependencies.loadConfig ?? createMcpConfigLoader(context.config),
-			workspace: context.workspace,
-		});
-		const execute = createMcpToolExecutor(registry.execute);
+		let registry: McpRegistry | undefined;
+		const getRegistry = (): McpRegistry => {
+			if (registry === undefined) {
+				throw new Error("MCP registry has not started.");
+			}
+			return registry;
+		};
 		const plugin = api.definePlugin({ id: "mcp" });
-		plugin.onShutdown(() => registry.close());
-		plugin.registerStatusPanel(createStatusPanel(registry));
+		plugin.onStart(async () => {
+			const nextRegistry = createMcpRegistry({
+				...(dependencies.createClient === undefined
+					? {}
+					: { createClient: dependencies.createClient }),
+				...(dependencies.env === undefined ? {} : { env: dependencies.env }),
+				loadConfig:
+					dependencies.loadConfig ?? createMcpConfigLoader(context.config),
+				workspace: context.workspace,
+			});
+			registry = nextRegistry;
+			await nextRegistry.initialize();
+		});
+		plugin.onShutdown(async () => {
+			const currentRegistry = registry;
+			registry = undefined;
+			await currentRegistry?.close();
+		});
+		plugin.registerStatusPanel(createStatusPanel(() => registry));
 		plugin.registerCommand({
 			description: "Enable, disable, and inspect MCP servers",
 			name: "mcps",
 			statusPanelId: "servers",
 		});
-		await registry.initialize();
 		plugin.onBeforeAgentTurn(async (turn, registration) => {
-			const snapshot = await registry.createSnapshot(turn.agentId);
-			turn.registerTurnCleanup?.(() => registry.releaseSnapshot?.(snapshot));
+			const currentRegistry = getRegistry();
+			const execute = createMcpToolExecutor(currentRegistry.execute);
+			const snapshot = await currentRegistry.createSnapshot(turn.agentId);
+			turn.registerTurnCleanup?.(() =>
+				currentRegistry.releaseSnapshot?.(snapshot)
+			);
 			for (const entry of snapshot.manifest) {
 				const tool = snapshot.tools.get(entry.name);
 				if (tool === undefined) {

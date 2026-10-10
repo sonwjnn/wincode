@@ -10,13 +10,55 @@ import {
 
 export type ProjectTrustDecision = "trust" | "deny";
 export type ProjectTrustOverride = ProjectTrustDecision;
+export type ProjectTrustChoice =
+	| ProjectTrustDecision
+	| "trust-parent"
+	| "cancel";
+export type ProjectTrustSelection = Exclude<ProjectTrustChoice, "cancel">;
+export type ProjectTrustSelectionResolution = Readonly<{
+	decision: ProjectTrustDecision;
+	scope: "parent" | "project";
+}>;
+export type ProjectTrustSessionStatus = "trusted" | "untrusted" | "pending";
+
+export const resolveProjectTrustSelection = (
+	selection: ProjectTrustSelection
+): ProjectTrustSelectionResolution => ({
+	decision: selection === "deny" ? "deny" : "trust",
+	scope: selection === "trust-parent" ? "parent" : "project",
+});
+
+export type ProjectTrustSavedDecision = Readonly<{
+	decision: ProjectTrustDecision;
+	directory: string;
+	inherited: boolean;
+}>;
+
+export type ProjectTrustRootStatus = Readonly<{
+	currentSessionStatus: ProjectTrustSessionStatus;
+	projectRoot: string;
+	savedDecision?: ProjectTrustSavedDecision;
+}>;
+
+export type ProjectTrustPromptRequest = Readonly<{
+	parentDirectory?: string;
+	protectedRoots: readonly ProjectTrustRootStatus[];
+	workspace: string;
+}>;
+
 export type ProjectTrustPrompt = (
-	projectRoot: string
-) => Promise<ProjectTrustDecision>;
+	request: ProjectTrustPromptRequest
+) => Promise<ProjectTrustChoice>;
 
 export type ProjectTrustResolution = Readonly<{
 	diagnostics: readonly string[];
 	trustedProjectRoots: readonly string[];
+}>;
+
+export type ProjectTrustStatus = Readonly<{
+	currentSessionTrusted: boolean;
+	parentDirectory?: string;
+	protectedRoots: readonly ProjectTrustRootStatus[];
 }>;
 
 export type ResolveProjectTrustInput = Readonly<{
@@ -24,7 +66,7 @@ export type ResolveProjectTrustInput = Readonly<{
 	override?: ProjectTrustOverride;
 	prompt?: ProjectTrustPrompt;
 	stdinIsTTY?: boolean;
-	userDataDir: string;
+	projectTrustDir: string;
 	workspace: string;
 }>;
 
@@ -131,6 +173,21 @@ const hasProtectedProjectResources = async (
 	);
 };
 
+const getProtectedProjectRoots = async (
+	workspace: string
+): Promise<string[]> => {
+	const projectRoots = await Promise.all(
+		getProjectRoots(workspace).map((root) => canonicalPath(root))
+	);
+	return (
+		await Promise.all(
+			projectRoots.map(async (root) =>
+				(await hasProtectedProjectResources(root)) ? root : undefined
+			)
+		)
+	).filter((root): root is string => root !== undefined);
+};
+
 const loadTrustFile = async (
 	filePath: string
 ): Promise<StoredTrustDecision[]> => {
@@ -160,6 +217,24 @@ const loadTrustFile = async (
 	}
 };
 
+const canonicalizeTrustDecisions = async (
+	storedDecisions: readonly StoredTrustDecision[]
+): Promise<StoredTrustDecision[]> => {
+	const decisionsByCanonicalDirectory = new Map<string, StoredTrustDecision>();
+	for (const entry of storedDecisions) {
+		const directory = await canonicalPath(entry.directory);
+		const prior = decisionsByCanonicalDirectory.get(directory);
+		decisionsByCanonicalDirectory.set(directory, {
+			directory,
+			decision:
+				prior?.decision === "deny" || entry.decision === "deny"
+					? "deny"
+					: "trust",
+		});
+	}
+	return [...decisionsByCanonicalDirectory.values()];
+};
+
 const saveTrustFile = async (
 	filePath: string,
 	decisions: readonly StoredTrustDecision[]
@@ -178,6 +253,45 @@ const saveTrustFile = async (
 	}
 };
 
+export const saveProjectTrustDecision = async ({
+	decision,
+	projectTrustDir,
+	scope = "project",
+	workspace,
+}: Readonly<{
+	decision: ProjectTrustDecision;
+	projectTrustDir: string;
+	scope?: "parent" | "project";
+	workspace: string;
+}>): Promise<void> => {
+	const canonicalWorkspace = await canonicalPath(workspace);
+	const protectedRoots = await getProtectedProjectRoots(workspace);
+	const targetRoots =
+		protectedRoots.length > 0 ? protectedRoots : [canonicalWorkspace];
+	const trustFilePath = path.join(projectTrustDir, TRUST_FILE_NAME);
+	const storedDecisions = await canonicalizeTrustDecisions(
+		await loadTrustFile(trustFilePath)
+	);
+	const decisionsByDirectory = new Map(
+		storedDecisions.map((entry) => [entry.directory, entry])
+	);
+	if (scope === "parent") {
+		for (const directory of targetRoots) {
+			decisionsByDirectory.delete(directory);
+		}
+		const parentDirectory = path.dirname(canonicalWorkspace);
+		decisionsByDirectory.set(parentDirectory, {
+			decision,
+			directory: parentDirectory,
+		});
+	} else {
+		for (const directory of targetRoots) {
+			decisionsByDirectory.set(directory, { decision, directory });
+		}
+	}
+	await saveTrustFile(trustFilePath, [...decisionsByDirectory.values()]);
+};
+
 const nearestDecision = (
 	projectRoot: string,
 	decisions: readonly StoredTrustDecision[]
@@ -191,58 +305,202 @@ const nearestDecision = (
 		)
 		.at(0);
 
+const getSavedDecisionForRoot = (
+	projectRoot: string,
+	decisions: readonly StoredTrustDecision[]
+): ProjectTrustSavedDecision | undefined => {
+	const decision = nearestDecision(projectRoot, decisions);
+	return decision === undefined
+		? undefined
+		: Object.freeze({
+				...decision,
+				inherited: decision.directory !== projectRoot,
+			});
+};
+
+const getRootStatuses = (
+	protectedRoots: readonly string[],
+	decisions: readonly StoredTrustDecision[],
+	currentSessionStatus: (projectRoot: string) => ProjectTrustSessionStatus
+): readonly ProjectTrustRootStatus[] =>
+	Object.freeze(
+		protectedRoots.map((projectRoot) => {
+			const savedDecision = getSavedDecisionForRoot(projectRoot, decisions);
+			return Object.freeze({
+				currentSessionStatus: currentSessionStatus(projectRoot),
+				projectRoot,
+				...(savedDecision === undefined ? {} : { savedDecision }),
+			});
+		})
+	);
+
+export const getProjectTrustStatus = async ({
+	projectTrustDir,
+	trustedProjectRoots,
+	workspace,
+}: Readonly<{
+	projectTrustDir: string;
+	trustedProjectRoots: readonly string[];
+	workspace: string;
+}>): Promise<ProjectTrustStatus> => {
+	const canonicalWorkspace = await canonicalPath(workspace);
+	const protectedRoots = await getProtectedProjectRoots(workspace);
+	const trustedRoots = new Set(
+		trustedProjectRoots.map((root) => path.resolve(root))
+	);
+	const trustFilePath = path.join(projectTrustDir, TRUST_FILE_NAME);
+	const decisions = await canonicalizeTrustDecisions(
+		await loadTrustFile(trustFilePath)
+	);
+	const rootStatuses = getRootStatuses(
+		protectedRoots,
+		decisions,
+		(projectRoot) =>
+			trustedRoots.has(path.resolve(projectRoot)) ? "trusted" : "untrusted"
+	);
+	const parentDirectory = path.dirname(canonicalWorkspace);
+
+	return Object.freeze({
+		currentSessionTrusted: rootStatuses.every(
+			({ currentSessionStatus }) => currentSessionStatus === "trusted"
+		),
+		...(parentDirectory === canonicalWorkspace ? {} : { parentDirectory }),
+		protectedRoots: rootStatuses,
+	});
+};
+
+const shouldPromptForProjectTrust = ({
+	mode,
+	override,
+	prompt,
+	stdinIsTTY,
+	protectedRoots,
+	decisions,
+}: Pick<
+	ResolveProjectTrustInput,
+	"mode" | "override" | "prompt" | "stdinIsTTY"
+> & {
+	protectedRoots: readonly string[];
+	decisions: readonly StoredTrustDecision[];
+}): boolean =>
+	override === undefined &&
+	mode === "interactive" &&
+	stdinIsTTY === true &&
+	prompt !== undefined &&
+	protectedRoots.some(
+		(projectRoot) => nearestDecision(projectRoot, decisions) === undefined
+	);
+
+const requestProjectTrustChoice = async ({
+	mode,
+	override,
+	prompt,
+	stdinIsTTY,
+	projectTrustDir,
+	parentDirectory,
+	workspace,
+	protectedRoots,
+	decisions,
+}: ResolveProjectTrustInput & {
+	parentDirectory: string;
+	protectedRoots: readonly string[];
+	decisions: readonly StoredTrustDecision[];
+}): Promise<ProjectTrustChoice | undefined> => {
+	if (
+		prompt === undefined ||
+		!shouldPromptForProjectTrust({
+			mode,
+			override,
+			prompt,
+			stdinIsTTY,
+			protectedRoots,
+			decisions,
+		})
+	) {
+		return;
+	}
+
+	const choice = await prompt({
+		...(parentDirectory === workspace ? {} : { parentDirectory }),
+		protectedRoots: getRootStatuses(protectedRoots, decisions, () => "pending"),
+		workspace,
+	});
+	if (choice !== "cancel") {
+		const { decision, scope } = resolveProjectTrustSelection(choice);
+		await saveProjectTrustDecision({
+			decision,
+			projectTrustDir,
+			scope,
+			workspace,
+		});
+	}
+	return choice;
+};
+
+const getDecisionForRoot = (
+	projectRoot: string,
+	override: ProjectTrustOverride | undefined,
+	promptedChoice: ProjectTrustChoice | undefined,
+	promptedParentDirectory: string,
+	decisions: readonly StoredTrustDecision[]
+): ProjectTrustDecision | undefined => {
+	if (override !== undefined) {
+		return override;
+	}
+	if (promptedChoice === "cancel") {
+		return;
+	}
+	if (promptedChoice !== undefined) {
+		const resolution = resolveProjectTrustSelection(promptedChoice);
+		if (
+			resolution.scope === "parent" &&
+			!pathContains(promptedParentDirectory, projectRoot)
+		) {
+			return nearestDecision(projectRoot, decisions)?.decision;
+		}
+		return resolution.decision;
+	}
+	return nearestDecision(projectRoot, decisions)?.decision;
+};
+
 /** Resolves user-owned trust before the application reads project config or resources. */
 export const resolveProjectTrust = async ({
 	mode,
 	override,
 	prompt,
 	stdinIsTTY = false,
-	userDataDir,
+	projectTrustDir,
 	workspace,
 }: ResolveProjectTrustInput): Promise<ProjectTrustResolution> => {
-	const projectRoots = await Promise.all(
-		getProjectRoots(workspace).map((root) => canonicalPath(root))
+	const protectedRoots = await getProtectedProjectRoots(workspace);
+	const trustFilePath = path.join(projectTrustDir, TRUST_FILE_NAME);
+	const decisions = await canonicalizeTrustDecisions(
+		await loadTrustFile(trustFilePath)
 	);
-	const protectedRoots = (
-		await Promise.all(
-			projectRoots.map(async (root) =>
-				(await hasProtectedProjectResources(root)) ? root : undefined
-			)
-		)
-	).filter((root): root is string => root !== undefined);
-	const trustFilePath = path.join(userDataDir, TRUST_FILE_NAME);
-	const storedDecisions = await loadTrustFile(trustFilePath);
-	const decisionsByCanonicalDirectory = new Map<string, StoredTrustDecision>();
-	for (const entry of storedDecisions) {
-		const directory = await canonicalPath(entry.directory);
-		const prior = decisionsByCanonicalDirectory.get(directory);
-		decisionsByCanonicalDirectory.set(directory, {
-			directory,
-			decision:
-				prior?.decision === "deny" || entry.decision === "deny"
-					? "deny"
-					: "trust",
-		});
-	}
-	const decisions = [...decisionsByCanonicalDirectory.values()];
-	const promptDecisions: StoredTrustDecision[] = [];
+	const canonicalWorkspace = await canonicalPath(workspace);
+	const promptedParentDirectory = path.dirname(canonicalWorkspace);
+	const promptedChoice = await requestProjectTrustChoice({
+		mode,
+		override,
+		prompt,
+		stdinIsTTY,
+		projectTrustDir,
+		parentDirectory: promptedParentDirectory,
+		workspace: canonicalWorkspace,
+		protectedRoots,
+		decisions,
+	});
 	const trustedCanonicalRoots = new Set<string>();
 	const diagnostics: string[] = [];
 
 	for (const projectRoot of protectedRoots) {
-		let decision = nearestDecision(projectRoot, decisions)?.decision;
-		if (override !== undefined) {
-			decision = override;
-		}
-		if (
-			decision === undefined &&
-			mode === "interactive" &&
-			stdinIsTTY &&
-			prompt !== undefined
-		) {
-			decision = await prompt(projectRoot);
-			promptDecisions.push({ decision, directory: projectRoot });
-		}
+		const decision = getDecisionForRoot(
+			projectRoot,
+			override,
+			promptedChoice,
+			promptedParentDirectory,
+			decisions
+		);
 		if (decision === "trust") {
 			trustedCanonicalRoots.add(projectRoot);
 			continue;
@@ -250,16 +508,6 @@ export const resolveProjectTrust = async ({
 		diagnostics.push(
 			`Skipped protected project resources from untrusted directory ${projectRoot}; use --trust-project for this invocation to load them.`
 		);
-	}
-
-	if (promptDecisions.length > 0) {
-		const decisionsByDirectory = new Map(
-			decisions.map((entry) => [entry.directory, entry])
-		);
-		for (const entry of promptDecisions) {
-			decisionsByDirectory.set(entry.directory, entry);
-		}
-		await saveTrustFile(trustFilePath, [...decisionsByDirectory.values()]);
 	}
 	if (diagnostics.length > 0) {
 		await logger.warn(

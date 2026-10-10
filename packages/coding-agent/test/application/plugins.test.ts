@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
@@ -17,6 +17,7 @@ import type {
 	ApplicationContext,
 	TextWriter,
 } from "@/modules/application/modes/types";
+import { createApplicationResourceLoader } from "@/modules/application/resource-loader";
 import { runRpc } from "@/modules/application/rpc/runner";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createSessionCapabilities } from "@/modules/sessions/host/session-capabilities";
@@ -127,6 +128,162 @@ test("rejects JavaScript paths before evaluating them as Plugins", async () => {
 	await runtime.shutdown();
 });
 
+test("reloading a file Plugin refreshes local imports and preserves package dependencies", async () => {
+	const nestedPluginDirectory = path.join(workspace, "plugins", "nested");
+	const nestedPluginPath = path.join(nestedPluginDirectory, "reload.ts");
+	const helperPath = path.join(workspace, "plugins", "shared-helper.ts");
+	const dependencyDirectory = path.join(
+		installedRoot,
+		"node_modules",
+		"reload-cache-probe"
+	);
+	await mkdir(nestedPluginDirectory, { recursive: true });
+	await mkdir(dependencyDirectory, { recursive: true });
+	await Bun.write(helperPath, 'export const version = "helper-v1";');
+	await Bun.write(
+		path.join(dependencyDirectory, "index.js"),
+		'module.exports = { version: "dependency-v1" };'
+	);
+	await Bun.write(
+		nestedPluginPath,
+		`import { version as helperVersion } from "../shared-helper.ts";
+		import dependency from "reload-cache-probe";
+		export default (api) => {
+			const plugin = api.definePlugin({ id: "reload_cache_probe" });
+			plugin.registerResource("versions", {
+				helperVersion,
+				dependencyVersion: dependency.version,
+			});
+		};`
+	);
+
+	let runtime = await loadPlugins({
+		cliPaths: [nestedPluginPath],
+		config: configRuntime,
+	});
+	try {
+		expect(
+			runtime.getResource<{
+				helperVersion: string;
+				dependencyVersion: string;
+			}>("reload_cache_probe", "versions")
+		).toEqual({
+			helperVersion: "helper-v1",
+			dependencyVersion: "dependency-v1",
+		});
+		await runtime.shutdown();
+		await Bun.write(helperPath, 'export const version = "helper-v2";');
+		await Bun.write(
+			path.join(dependencyDirectory, "index.js"),
+			'module.exports = { version: "dependency-v2" };'
+		);
+		runtime = await loadPlugins({
+			cliPaths: [nestedPluginPath],
+			config: configRuntime,
+			reloadFileModules: true,
+		});
+		expect(
+			runtime.getResource<{
+				helperVersion: string;
+				dependencyVersion: string;
+			}>("reload_cache_probe", "versions")
+		).toEqual({
+			helperVersion: "helper-v2",
+			dependencyVersion: "dependency-v1",
+		});
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("reloading one Plugin refreshes a local helper already cached by another Plugin", async () => {
+	const helperPath = path.join(installedRoot, "shared-preloaded-helper.ts");
+	const firstPluginPath = path.join(workspace, "plugins", "shared-first.ts");
+	const secondPluginPath = path.join(workspace, "plugins", "shared-second.ts");
+	await Bun.write(helperPath, 'export const version = "shared-v1";');
+	for (const [pluginPath, pluginId] of [
+		[firstPluginPath, "shared_first"],
+		[secondPluginPath, "shared_second"],
+	] as const) {
+		await Bun.write(
+			pluginPath,
+			`import { version } from "../../shared-preloaded-helper.ts";
+			export default (api) => {
+				const plugin = api.definePlugin({ id: ${JSON.stringify(pluginId)} });
+				plugin.registerResource("version", version);
+			};`
+		);
+	}
+
+	let runtime = await loadPlugins({
+		cliPaths: [firstPluginPath, secondPluginPath],
+		config: configRuntime,
+		distributionPlugins: [],
+	});
+	try {
+		expect(runtime.getResource<string>("shared_second", "version")).toBe(
+			"shared-v1"
+		);
+		await runtime.shutdown();
+		await Bun.write(helperPath, 'export const version = "shared-v2";');
+		runtime = await loadPlugins({
+			cliPaths: [secondPluginPath],
+			config: configRuntime,
+			distributionPlugins: [],
+			reloadFileModules: true,
+		});
+		expect(runtime.getResource<string>("shared_second", "version")).toBe(
+			"shared-v2"
+		);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("reload refreshes an enabled Plugin's helper cached by the previous Plugin set", async () => {
+	const helperPath = path.join(installedRoot, "newly-enabled-helper.ts");
+	const previousPluginPath = path.join(workspace, "plugins", "cache-owner.ts");
+	const enabledPluginPath = path.join(workspace, "plugins", "newly-enabled.ts");
+	await Bun.write(helperPath, 'export const version = "cached-v1";');
+	for (const [pluginPath, pluginId] of [
+		[previousPluginPath, "cache_owner"],
+		[enabledPluginPath, "newly_enabled"],
+	] as const) {
+		await Bun.write(
+			pluginPath,
+			`import { version } from "../../newly-enabled-helper.ts";
+			export default (api) => {
+				const plugin = api.definePlugin({ id: ${JSON.stringify(pluginId)} });
+				plugin.registerResource("version", version);
+			};`
+		);
+	}
+
+	let runtime = await loadPlugins({
+		cliPaths: [previousPluginPath],
+		config: configRuntime,
+		distributionPlugins: [],
+	});
+	try {
+		expect(runtime.getResource<string>("cache_owner", "version")).toBe(
+			"cached-v1"
+		);
+		await runtime.shutdown();
+		await Bun.write(helperPath, 'export const version = "cached-v2";');
+		runtime = await loadPlugins({
+			cliPaths: [enabledPluginPath],
+			config: configRuntime,
+			distributionPlugins: [],
+			reloadFileModules: true,
+		});
+		expect(runtime.getResource<string>("newly_enabled", "version")).toBe(
+			"cached-v2"
+		);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
 test("file Plugins expose generic resources to host UI integrations", async () => {
 	const resourcePath = path.join(workspace, "plugins", "resource.ts");
 	await Bun.write(
@@ -140,6 +297,7 @@ test("file Plugins expose generic resources to host UI integrations", async () =
 		cliPaths: [resourcePath],
 		config: configRuntime,
 	});
+	expect(runtime.diagnostics).toEqual([]);
 
 	expect(
 		runtime.getResource<{ state: string }>("resource_fixture", "service")
@@ -149,7 +307,120 @@ test("file Plugins expose generic resources to host UI integrations", async () =
 	await runtime.shutdown();
 });
 
-test("failed Plugin initialization releases factory-owned resources", async () => {
+test("discarding a deferred Plugin candidate does not run process cleanup hooks", async () => {
+	const candidatePath = path.join(workspace, "plugins", "deferred.ts");
+	const missingPath = path.join(workspace, "plugins", "missing.ts");
+	const shutdownMarker = path.join(workspace, "deferred-shutdown-marker");
+	await Bun.write(
+		candidatePath,
+		`export default (api) => {
+			const plugin = api.definePlugin({ id: "deferred_candidate" });
+			plugin.onShutdown(async () => {
+				await Bun.write(${JSON.stringify(shutdownMarker)}, "called");
+			});
+		};`
+	);
+	const reloadConfigRuntime = createConfigRuntime(workspace, configRoot);
+	const currentPluginRuntime = await loadPlugins({
+		cliPaths: [],
+		config: reloadConfigRuntime,
+		distributionPlugins: [],
+	});
+	const resourceLoader = createApplicationResourceLoader(
+		{
+			cwd: workspace,
+			disabledPluginIds: [],
+			mode: "interactive",
+			pluginPaths: [candidatePath, missingPath],
+			projectTrustOverride: "deny",
+			stdinIsTTY: false,
+		},
+		{
+			configRoot,
+			distributionPlugins: [],
+			homeRoot,
+			userDataDir: path.join(root, "trust-data"),
+		}
+	);
+
+	try {
+		const result = await resourceLoader.reload({
+			current: {
+				configRuntime: reloadConfigRuntime,
+				pluginRuntime: currentPluginRuntime,
+			},
+		});
+
+		expect(result.pluginRuntime).toBe(currentPluginRuntime);
+		expect(result.pluginRuntimeChanged).toBe(false);
+		expect(await Bun.file(shutdownMarker).exists()).toBe(false);
+	} finally {
+		await currentPluginRuntime.shutdown();
+	}
+});
+
+test("unchanged project trust keeps the active Plugins when a reload candidate fails", async () => {
+	const trustedWorkspace = path.join(root, "trusted-reload-workspace");
+	await mkdir(trustedWorkspace, { recursive: true });
+	await Bun.write(path.join(trustedWorkspace, "wincode.json"), "{}");
+	const trustedRoot = await realpath(trustedWorkspace);
+	const currentConfigRuntime = {
+		configStore: createConfigStore({
+			configRoot,
+			homeRoot,
+			trustedProjectRoots: [trustedRoot],
+		}),
+		cwd: trustedWorkspace,
+		homeRoot,
+		trustedProjectRoots: [trustedRoot],
+		workspace: trustedWorkspace,
+	};
+	const currentPluginRuntime = await loadPlugins({
+		cliPaths: [],
+		config: currentConfigRuntime,
+		distributionPlugins: [],
+	});
+	const resourceLoader = createApplicationResourceLoader(
+		{
+			cwd: trustedWorkspace,
+			disabledPluginIds: [],
+			mode: "interactive",
+			pluginPaths: [path.join(trustedWorkspace, "missing-plugin.ts")],
+			projectTrustOverride: "trust",
+			stdinIsTTY: false,
+		},
+		{
+			configRoot,
+			distributionPlugins: [],
+			homeRoot,
+			userDataDir: path.join(root, "trusted-reload-user-data"),
+		}
+	);
+
+	try {
+		const result = await resourceLoader.reload({
+			current: {
+				configRuntime: currentConfigRuntime,
+				pluginRuntime: currentPluginRuntime,
+			},
+		});
+
+		expect(result.trustChanged).toBe(false);
+		expect(result.pluginRuntime).toBe(currentPluginRuntime);
+		expect(result.pluginRuntimeChanged).toBe(false);
+		expect(result.diagnostics).toContainEqual(
+			expect.objectContaining({
+				message: expect.stringContaining("active Plugin set was kept"),
+				resource: "Plugin",
+			})
+		);
+	} finally {
+		await currentPluginRuntime.shutdown();
+	}
+});
+
+test("failed Plugin initialization does not shut down process resources before start", async () => {
+	let startCount = 0;
 	let shutdownCount = 0;
 	const runtime = await loadPlugins({
 		bundledPlugins: [
@@ -158,6 +429,9 @@ test("failed Plugin initialization releases factory-owned resources", async () =
 				factory: async (api) => {
 					const plugin = api.definePlugin({ id: "failed_resource" });
 					plugin.registerResource("service", { state: "initializing" });
+					plugin.onStart(() => {
+						startCount += 1;
+					});
 					plugin.onShutdown(() => {
 						shutdownCount += 1;
 					});
@@ -169,9 +443,11 @@ test("failed Plugin initialization releases factory-owned resources", async () =
 		config: configRuntime,
 	});
 
-	expect(shutdownCount).toBe(1);
+	expect(startCount).toBe(0);
+	expect(shutdownCount).toBe(0);
 	expect(runtime.getResource("failed_resource", "service")).toBeUndefined();
 	await runtime.shutdown();
+	expect(shutdownCount).toBe(0);
 });
 
 test("Plugin Agent registrations preserve a supported ThinkingLevel", async () => {
@@ -213,8 +489,9 @@ test("Plugin Agent registrations preserve a supported ThinkingLevel", async () =
 	}
 });
 
-test("required distribution failure shuts down already-loaded Plugins", async () => {
+test("required distribution failure skips process hooks for unstarted Plugins", async () => {
 	let shutdownCount = 0;
+	let startCount = 0;
 	const loading = loadPlugins({
 		bundledPlugins: [
 			{
@@ -222,6 +499,9 @@ test("required distribution failure shuts down already-loaded Plugins", async ()
 				factory: (api) => {
 					const plugin = api.definePlugin({
 						id: "loaded_before_missing_distribution",
+					});
+					plugin.onStart(() => {
+						startCount += 1;
 					});
 					plugin.onShutdown(() => {
 						shutdownCount += 1;
@@ -242,10 +522,11 @@ test("required distribution failure shuts down already-loaded Plugins", async ()
 	await expect(loading).rejects.toThrow(
 		"Required distributed Plugin 'missing_required'"
 	);
-	expect(shutdownCount).toBe(1);
+	expect(startCount).toBe(0);
+	expect(shutdownCount).toBe(0);
 });
 
-test("required distribution identity mismatch cleans up the unpublishable Plugin draft", async () => {
+test("required distribution identity mismatch skips cleanup for its unstarted draft", async () => {
 	const cleanupMarker = path.join(workspace, "mismatched-plugin-cleanup");
 	await rm(cleanupMarker, { force: true });
 	const loading = loadPlugins({
@@ -263,7 +544,7 @@ test("required distribution identity mismatch cleans up the unpublishable Plugin
 	});
 
 	await expect(loading).rejects.toThrow("actual_distribution_id");
-	expect(await Bun.file(cleanupMarker).text()).toBe("closed");
+	expect(await Bun.file(cleanupMarker).exists()).toBe(false);
 });
 
 test("disabled default Plugins are skipped before loading without vetoing file paths", async () => {
@@ -418,7 +699,7 @@ test("CLI Plugin paths win when a configured path declares the same stable ident
 	await runtime.shutdown();
 });
 
-test("user-selected Plugins win Identifier collisions against trusted project Plugins", async () => {
+test("trusted project Plugins win Identifier collisions by source-class precedence", async () => {
 	const precedenceWorkspace = path.join(
 		installedRoot,
 		"user-project-precedence"
@@ -436,11 +717,11 @@ test("user-selected Plugins win Identifier collisions against trusted project Pl
 	await Promise.all([
 		Bun.write(
 			userPath,
-			commandPluginSource("same_id", "user_won", "User won.")
+			commandPluginSource("same_id", "user_lost", "User lost.")
 		),
 		Bun.write(
 			projectPath,
-			commandPluginSource("same_id", "project_lost", "Project lost.")
+			commandPluginSource("same_id", "project_won", "Project won.")
 		),
 		Bun.write(
 			path.join(userConfigRoot, "wincode.json"),
@@ -464,13 +745,13 @@ test("user-selected Plugins win Identifier collisions against trusted project Pl
 	const runtime = await loadPlugins({ cliPaths: [], config: configRuntime });
 
 	expect(runtime.getCommands()).toMatchObject([
-		{ name: "user_won", pluginId: "same_id", sourcePath: userPath },
+		{ name: "project_won", pluginId: "same_id", sourcePath: projectPath },
 	]);
 	expect(runtime.diagnostics).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({
 				message: expect.stringContaining("Duplicate Plugin Identifier"),
-				sourcePath: projectPath,
+				sourcePath: userPath,
 			}),
 		])
 	);

@@ -42,7 +42,7 @@ import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
-import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
 
 export type SessionSdkRuntimeOptions = Omit<
 	SessionCapabilitiesOptions,
@@ -394,7 +394,7 @@ const createSessionSdkInternal = async (
 			: await resolveProjectTrust({
 					mode: "sdk",
 					override: options.projectTrust,
-					userDataDir: resolveUserDataDir(),
+					projectTrustDir: resolveUserWincodeDir(),
 					workspace,
 				});
 	const trustedProjectRoots = trustResolution.trustedProjectRoots;

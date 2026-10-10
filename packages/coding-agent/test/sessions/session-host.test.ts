@@ -47,7 +47,11 @@ import type {
 	AppendSessionCompactionInput,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
-import { createSessionHostManager as createSessionHostManagerWithRuntime } from "@/modules/sessions/host/session-host-manager";
+import {
+	createSessionHostManager as createSessionHostManagerWithRuntime,
+	getInteractiveSessionHostManager,
+	resetInteractiveSessionHostManager,
+} from "@/modules/sessions/host/session-host-manager";
 import type {
 	SessionCapabilities,
 	SessionHost,
@@ -69,6 +73,12 @@ import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
+import {
+	getInteractiveRuntimeContext,
+	setInteractiveRuntimeContext,
+} from "@/shared/runtime-context";
+import { createInteractiveRuntimeLifecycle } from "@/shared/runtime-lifecycle";
+import { reloadInteractiveResources } from "@/tui/commands/reload-resources";
 import {
 	readLoggerRecords,
 	withDebugProject,
@@ -503,10 +513,11 @@ test("retains an idle Session Host until registered Plugin background work finis
 	await pluginRuntime.shutdown();
 });
 
-test("Session Host opening waits for asynchronous Session Plugin registrations", async () => {
+test("reload rejects while Session Plugin registration is still opening", async () => {
 	const sessionStart = Promise.withResolvers<void>();
 	const finishRegistration = Promise.withResolvers<void>();
 	let openingResolved = false;
+	let reloadActionStarted = false;
 	const plugin: LoadedPlugin = {
 		commands: [],
 		id: "session-start-ready",
@@ -554,6 +565,21 @@ test("Session Host opening waits for asynchronous Session Plugin registrations",
 		await Bun.sleep(0);
 		expect(openingResolved).toBe(false);
 		expect(pluginRuntime.getToolDescriptors(openedSessionId)).toEqual([]);
+		const reloadCheck = manager
+			.withIdleForReload(async () => {
+				reloadActionStarted = true;
+			})
+			.then(
+				() => "allowed" as const,
+				() => "rejected" as const
+			);
+		expect(
+			await Promise.race([
+				reloadCheck,
+				Bun.sleep(0).then(() => "pending" as const),
+			])
+		).toBe("rejected");
+		expect(reloadActionStarted).toBe(false);
 
 		finishRegistration.resolve();
 		await opening;
@@ -563,10 +589,259 @@ test("Session Host opening waits for asynchronous Session Plugin registrations",
 				.map(({ localName }) => localName)
 		).toEqual(["session_ready"]);
 		await manager.releaseView(openedSessionId);
+		await manager.withIdleForReload(async () => {
+			reloadActionStarted = true;
+		});
+		expect(reloadActionStarted).toBe(true);
 	} finally {
 		finishRegistration.resolve();
 		await manager.shutdownAll();
 		await pluginRuntime.shutdown();
+	}
+});
+
+test("resource reload keeps an open Session Host and restarts only its Plugin Session scope", async () => {
+	const events: string[] = [];
+	const pluginFor = (version: string): LoadedPlugin => ({
+		commands: [],
+		id: `reload-${version}`,
+		onSessionStart: ({ sessionId }) => {
+			events.push(`start:${version}:${sessionId}`);
+		},
+		onSessionShutdown: ({ sessionId }) => {
+			events.push(`stop:${version}:${sessionId}`);
+		},
+		sourcePath: `/plugins/reload-${version}.ts`,
+		tools: [],
+		workspace: testDirectory,
+	});
+	const oldRuntime = createPluginRuntime([pluginFor("old")], []);
+	const newRuntime = createPluginRuntime([pluginFor("new")], []);
+	const manager = createSessionHostManagerWithRuntime(oldRuntime);
+	const { id: openedSessionId } = await store.createSession({
+		agent: buildId,
+		message: message("reload-keep-host-user", "user", "Keep me open."),
+		model,
+		turnId: agentTurnId("reload-keep-host-turn"),
+	});
+	let activeRuntime = oldRuntime;
+	const capabilities: SessionCapabilities = {
+		...createCapabilities(store, {}, manager, { pluginRuntime: oldRuntime }),
+		getPluginRuntime: () => activeRuntime,
+	};
+	try {
+		await oldRuntime.start();
+		const host = await manager.openHost({
+			autoContinue: false,
+			capabilities,
+			sessionId: openedSessionId,
+			view: true,
+		});
+		await manager.withIdleForReload(async () => {
+			await oldRuntime.shutdown();
+			await newRuntime.start();
+			await manager.replacePluginRuntime(newRuntime);
+			activeRuntime = newRuntime;
+		});
+		const reopened = await manager.openHost({
+			autoContinue: false,
+			capabilities,
+			sessionId: openedSessionId,
+		});
+		expect(reopened).toBe(host);
+		expect(events).toEqual([
+			`start:old:${openedSessionId}`,
+			`stop:old:${openedSessionId}`,
+			`start:new:${openedSessionId}`,
+		]);
+		// A failed candidate can restore the same Plugin runtime instance after
+		// its process hooks restart; its Session hooks must restart as well.
+		await manager.withIdleForReload(async () => {
+			await newRuntime.shutdown();
+			await newRuntime.start();
+			await manager.replacePluginRuntime(newRuntime);
+		});
+		expect(
+			await manager.openHost({ capabilities, sessionId: openedSessionId })
+		).toBe(host);
+		expect(events.slice(-2)).toEqual([
+			`stop:new:${openedSessionId}`,
+			`start:new:${openedSessionId}`,
+		]);
+		await manager.releaseView(openedSessionId);
+	} finally {
+		await manager.shutdownAll();
+		await oldRuntime.shutdown();
+		await newRuntime.shutdown();
+	}
+});
+
+test("interactive reload preserves the displayed Session Host while changing Plugins", async () => {
+	await resetInteractiveSessionHostManager();
+	const oldRuntime = createPluginRuntime([], []);
+	const replacement = createPluginRuntime([], []);
+	const manager = getInteractiveSessionHostManager(oldRuntime);
+	const capabilities: SessionCapabilities = {
+		...createCapabilities(store, {}, manager, { pluginRuntime: oldRuntime }),
+		getPluginRuntime: () =>
+			getInteractiveRuntimeContext().pluginRuntime ?? oldRuntime,
+	};
+	const { id: openedSessionId } = await store.createSession({
+		agent: buildId,
+		message: message(
+			"reload-interactive-user",
+			"user",
+			"Keep the displayed Session."
+		),
+		model,
+		turnId: agentTurnId("reload-interactive-turn"),
+	});
+	const configRuntime = {
+		configStore: createConfigStore({ homeRoot: testDirectory }),
+		cwd: testDirectory,
+		homeRoot: testDirectory,
+		workspace: testDirectory,
+	};
+	setInteractiveRuntimeContext({
+		args: [],
+		configRuntime,
+		cwd: testDirectory,
+		pluginRuntime: oldRuntime,
+		resourceLoader: {
+			reload: async () => ({
+				configRuntime,
+				diagnostics: [],
+				pluginRuntime: replacement,
+				pluginRuntimeChanged: true,
+				trustChanged: false,
+			}),
+		},
+	});
+	try {
+		const host = await manager.openHost({
+			autoContinue: false,
+			capabilities,
+			sessionId: openedSessionId,
+			view: true,
+		});
+		await reloadInteractiveResources({
+			refreshAgentRegistry: () => undefined,
+			reloadTheme: () => undefined,
+			toast: { show: () => undefined },
+			lifecycle: createInteractiveRuntimeLifecycle(),
+		});
+		expect(getInteractiveSessionHostManager(replacement)).toBe(manager);
+		expect(
+			await manager.openHost({
+				autoContinue: false,
+				capabilities,
+				sessionId: openedSessionId,
+			})
+		).toBe(host);
+		expect(capabilities.getPluginRuntime?.()).toBe(replacement);
+		await manager.releaseView(openedSessionId);
+	} finally {
+		await resetInteractiveSessionHostManager();
+		await oldRuntime.shutdown();
+		await replacement.shutdown();
+	}
+});
+
+test("reload gate blocks new Session Host opens until its action settles", async () => {
+	const manager = createSessionHostManager();
+	const reloadStarted = Promise.withResolvers<void>();
+	const finishReload = Promise.withResolvers<void>();
+	const { id: openedSessionId } = await store.createSession({
+		agent: buildId,
+		message: message("reload-admission-user", "user", "Open after reload."),
+		model,
+		turnId: agentTurnId("reload-admission-turn"),
+	});
+	const capabilities = createCapabilities(store, {}, manager);
+	const reload = manager.withIdleForReload(async () => {
+		reloadStarted.resolve();
+		await finishReload.promise;
+	});
+
+	try {
+		await reloadStarted.promise;
+		await expect(
+			manager.openHost({ capabilities, sessionId: openedSessionId })
+		).rejects.toThrow("resources are reloading");
+
+		finishReload.resolve();
+		await reload;
+		await expect(
+			manager.openHost({
+				capabilities,
+				sessionId: openedSessionId,
+				view: true,
+			})
+		).resolves.toBeDefined();
+		await manager.releaseView(openedSessionId);
+	} finally {
+		finishReload.resolve();
+		await manager.shutdownAll();
+	}
+});
+
+test("reload refuses to start while Session work admission is in flight", async () => {
+	const manager = createSessionHostManager();
+	const admission = manager.tryAcquireSessionWork();
+	if (admission.kind === "rejected") {
+		throw new Error(admission.reason);
+	}
+
+	try {
+		await expect(
+			manager.withIdleForReload(async () => undefined)
+		).rejects.toThrow("Session work is being admitted.");
+	} finally {
+		admission.release();
+		await manager.shutdownAll();
+	}
+});
+
+test("reload gate rejects work submitted through an existing Session Host", async () => {
+	const manager = createSessionHostManager();
+	const { id: openedSessionId } = await store.createSession({
+		agent: buildId,
+		message: message("reload-work-user", "user", "Open before reload."),
+		model,
+		turnId: agentTurnId("reload-work-turn"),
+	});
+	const capabilities = createCapabilities(store, {}, manager);
+	const host = await manager.openHost({
+		capabilities,
+		sessionId: openedSessionId,
+		view: true,
+	});
+
+	try {
+		await manager.withIdleForReload(async () => {
+			await expect(
+				host.agentSession.prompt(
+					sendInput(capabilities, "Submit during reload.")
+				)
+			).resolves.toMatchObject({
+				reason: expect.stringContaining("reloading"),
+				rejected: true,
+			});
+			expect(host.agentSession.continue()).toMatchObject({
+				kind: "rejected",
+				reason: expect.stringContaining("reloading"),
+			});
+			await expect(
+				host.agentSession.send(sendInput(capabilities, "Send during reload."))
+			).resolves.toMatchObject({
+				reason: expect.stringContaining("reloading"),
+				rejected: true,
+			});
+		});
+		expect(host.getSnapshot().queuedSubmissions).toEqual([]);
+	} finally {
+		await manager.releaseView(openedSessionId);
+		await manager.shutdownAll();
 	}
 });
 
@@ -575,6 +850,9 @@ test("Plugin lifecycle restarts for a reopened Session runtime", async () => {
 	const plugin: LoadedPlugin = {
 		commands: [],
 		id: "jira",
+		onStart: () => {
+			events.push("process-start");
+		},
 		onSessionShutdown: ({ sessionId }) => {
 			events.push(`stop:${sessionId}`);
 		},
@@ -601,6 +879,7 @@ test("Plugin lifecycle restarts for a reopened Session runtime", async () => {
 		turnId: agentTurnId("plugin-lifecycle-turn"),
 	});
 
+	await pluginRuntime.start();
 	await manager.openHost({
 		capabilities,
 		sessionId: openedSessionId,
@@ -617,6 +896,7 @@ test("Plugin lifecycle restarts for a reopened Session runtime", async () => {
 	await pluginRuntime.shutdown();
 
 	expect(events).toEqual([
+		"process-start",
 		`start:${openedSessionId}`,
 		`stop:${openedSessionId}`,
 		`start:${openedSessionId}`,

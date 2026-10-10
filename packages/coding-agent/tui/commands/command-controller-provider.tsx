@@ -21,15 +21,24 @@ import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import { createCommandExecutor } from "@/modules/commands/execute-command";
 import { useConnections } from "@/modules/connections";
 import { PluginStatusPanelDialogContent } from "@/modules/plugins/ui/plugin-status-panel-dialog";
+import {
+	getProjectTrustStatus,
+	resolveProjectTrustSelection,
+	saveProjectTrustDecision,
+} from "@/modules/project-trust/project-trust";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { discoverSkills, type Skill } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
+import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
+import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { createCommandHandlers } from "./command-strategies";
 import { openCommandDialog } from "./dialog-command";
+import { requestProjectTrust } from "./project-trust-dialog";
+import { reloadInteractiveResources } from "./reload-resources";
 
 export function CommandControllerProvider({
 	children,
@@ -42,6 +51,7 @@ export function CommandControllerProvider({
 	const router = useRouter();
 	const dialog = useDialog();
 	const toast = useToast();
+	const { reloadTheme } = useTheme();
 	const connections = useConnections();
 	const refreshAgentRegistry = useRefreshAgentRegistry();
 	const promptConfig = usePromptConfig();
@@ -55,6 +65,53 @@ export function CommandControllerProvider({
 		() => discoverSkills(config),
 		[config]
 	);
+	const reloadResources = useCallback(
+		() =>
+			reloadInteractiveResources({
+				refreshAgentRegistry,
+				reloadTheme,
+				toast,
+			}),
+		[refreshAgentRegistry, reloadTheme, toast]
+	);
+	const trustProject = useCallback(async () => {
+		const projectTrustDir = resolveUserWincodeDir(config.homeRoot);
+		const status = await getProjectTrustStatus({
+			projectTrustDir,
+			trustedProjectRoots: config.trustedProjectRoots ?? [],
+			workspace: config.workspace,
+		});
+		const choice = await requestProjectTrust(dialog, {
+			...status,
+			workspace: config.workspace,
+		});
+		const { decision, scope } = resolveProjectTrustSelection(choice);
+		let message: string;
+		if (scope === "parent") {
+			message =
+				"Parent folder trust saved. Run /reload to load project resources.";
+		} else if (decision === "trust") {
+			message = "Project trust saved. Run /reload to load project resources.";
+		} else {
+			message = "Project marked untrusted. Run /reload to apply the decision.";
+		}
+		await saveProjectTrustDecision({
+			decision,
+			projectTrustDir,
+			scope,
+			workspace: config.workspace,
+		});
+		toast.show({
+			message,
+			variant: decision === "trust" ? "success" : "info",
+		});
+	}, [
+		config.homeRoot,
+		config.trustedProjectRoots,
+		config.workspace,
+		dialog,
+		toast,
+	]);
 
 	useEffect(() => {
 		let active = true;
@@ -98,6 +155,8 @@ export function CommandControllerProvider({
 						router.navigate({ to: "/" }).catch(() => undefined);
 					},
 					onCompact: options.onCompact,
+					onReload: reloadResources,
+					onTrust: trustProject,
 					onOpenSettings: options.onOpenSettings,
 					refreshAgentRegistry,
 					renderer,
@@ -178,6 +237,8 @@ export function CommandControllerProvider({
 			discoverAvailableSkills,
 			discoverCustomCommands,
 			promptConfig,
+			reloadResources,
+			trustProject,
 			refreshAgentRegistry,
 			renderer,
 			router,

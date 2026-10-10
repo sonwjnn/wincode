@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -6,6 +7,10 @@ import {
 	isObjectLike,
 	logger,
 } from "@wincode/utils";
+import {
+	resourceSourcePrecedence,
+	resourceSourcePriority,
+} from "@/modules/application/resource-precedence";
 import { COMMANDS } from "@/modules/commands/commands";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { isTrustedProjectRoot } from "@/modules/project-trust/project-resource-roots";
@@ -20,6 +25,7 @@ import type {
 	PluginDefinitionAPI,
 	PluginFactory,
 	PluginLoadContext,
+	PluginProcessStartHook,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginShutdownHook,
@@ -57,7 +63,9 @@ export type LoadPluginsInput = Readonly<{
 	config: ConfigRuntime;
 	disabledPluginIds?: readonly string[];
 	distributionPlugins?: readonly PluginPackageReference[];
+	deferProcessStart?: boolean;
 	ignoreConfiguredPlugins?: boolean;
+	reloadFileModules?: boolean;
 	userDataDir?: string;
 }>;
 
@@ -68,6 +76,7 @@ type MutablePluginDraft = {
 	statusPanels: Map<string, PluginStatusPanelRegistration>;
 	id: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
+	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
 	onShutdown?: PluginShutdownHook;
@@ -82,6 +91,7 @@ type PluginPath = Readonly<{
 	knownPluginId?: string;
 	moduleSpecifier?: string;
 	path: string;
+	precedence?: number;
 	required?: boolean;
 	source: string;
 }>;
@@ -104,29 +114,14 @@ const messageFor = (error: unknown): string =>
 const addDiagnostic = (
 	diagnostics: PluginDiagnostic[],
 	message: string,
-	sourcePath: string
+	sourcePath: string,
+	severity: "error" | "warning" = "error"
 ): void => {
-	diagnostics.push({ message, sourcePath });
-};
-
-const shutdownFailedPluginDraft = async (
-	draft: MutablePluginDraft | undefined,
-	context: PluginLoadContext,
-	diagnostics: PluginDiagnostic[],
-	sourcePath: string
-): Promise<void> => {
-	if (draft?.onShutdown === undefined) {
-		return;
-	}
-	try {
-		await draft.onShutdown(context);
-	} catch (error) {
-		addDiagnostic(
-			diagnostics,
-			`Plugin cleanup after failed loading failed: ${messageFor(error)}`,
-			sourcePath
-		);
-	}
+	diagnostics.push({
+		message,
+		sourcePath,
+		...(severity === "error" ? { severity } : {}),
+	});
 };
 
 const highestPrecedenceSource = (
@@ -174,6 +169,10 @@ const pathsFromSource = (
 					source.scope === "project"
 						? path.resolve(path.dirname(source.path), value)
 						: value,
+				precedence: resourceSourcePriority({
+					explicit: true,
+					scope: source.scope,
+				}),
 				source: source.path,
 			},
 		];
@@ -258,12 +257,17 @@ const createRegistrationAPI = (
 		}
 		plugin.statusPanels.set(candidate.id, Object.freeze({ ...candidate }));
 	};
-	const registerProcessHook = (hook: PluginShutdownHook): void => {
+	const registerProcessLifecycleHook = (
+		hook: PluginProcessStartHook | PluginShutdownHook,
+		hookName: "onStart" | "onShutdown",
+		alreadyRegistered: boolean,
+		register: () => void
+	): void => {
 		assertOpen();
-		if (typeof hook !== "function" || plugin.onShutdown !== undefined) {
-			throw new Error("Plugin hook 'onShutdown' must be registered once.");
+		if (typeof hook !== "function" || alreadyRegistered) {
+			throw new Error(`Plugin hook '${hookName}' must be registered once.`);
 		}
-		plugin.onShutdown = hook;
+		register();
 	};
 	return Object.freeze({
 		registerAgent(agent) {
@@ -305,8 +309,25 @@ const createRegistrationAPI = (
 			}
 			plugin.onBeforeAgentTurn = handler;
 		},
+		onStart(handler) {
+			registerProcessLifecycleHook(
+				handler,
+				"onStart",
+				plugin.onStart !== undefined,
+				() => {
+					plugin.onStart = handler;
+				}
+			);
+		},
 		onShutdown(handler) {
-			registerProcessHook(handler);
+			registerProcessLifecycleHook(
+				handler,
+				"onShutdown",
+				plugin.onShutdown !== undefined,
+				() => {
+					plugin.onShutdown = handler;
+				}
+			);
 		},
 		registerCommand(command) {
 			assertOpen();
@@ -318,7 +339,8 @@ const createRegistrationAPI = (
 						addDiagnostic(
 							diagnostics,
 							`Plugin Command '/${validated.name}' was skipped because a custom command uses the same name.`,
-							plugin.sourcePath
+							plugin.sourcePath,
+							"warning"
 						);
 						return;
 					}
@@ -493,6 +515,7 @@ const loadedPluginFromDraft = (
 		resources: Object.freeze([...draft.resources.values()]),
 		statusPanels: Object.freeze([...draft.statusPanels.values()]),
 		onBeforeAgentTurn: draft.onBeforeAgentTurn,
+		onStart: draft.onStart,
 		onSessionShutdown: draft.onSessionShutdown,
 		onSessionStart: draft.onSessionStart,
 		onShutdown: draft.onShutdown,
@@ -512,6 +535,171 @@ const loadFactory = (sourcePath: string): unknown => {
 		return loaded;
 	}
 	return isObjectLike(loaded) ? loaded.default : undefined;
+};
+
+const isSharedDependencyModule = (sourcePath: string): boolean =>
+	path.resolve(sourcePath).split(path.sep).includes("node_modules");
+
+const canonicalPath = (sourcePath: string): string => {
+	try {
+		return fs.realpathSync(sourcePath);
+	} catch {
+		return path.resolve(sourcePath);
+	}
+};
+
+const isWithinDirectory = (directory: string, sourcePath: string): boolean => {
+	const relative = path.relative(
+		canonicalPath(directory),
+		canonicalPath(sourcePath)
+	);
+	return (
+		relative === "" ||
+		(relative !== ".." &&
+			!relative.startsWith(`..${path.sep}`) &&
+			!path.isAbsolute(relative))
+	);
+};
+
+const pluginModuleCacheIds = new Map<string, ReadonlySet<string>>();
+
+const invalidatePluginModuleCache = async (
+	resolvedPath: string
+): Promise<void> => {
+	const moduleIds = new Set(pluginModuleCacheIds.get(resolvedPath));
+	for (const moduleId of await localDependencyModuleIds(resolvedPath)) {
+		moduleIds.add(moduleId);
+	}
+	for (const moduleId of moduleIds) {
+		delete require.cache[moduleId];
+	}
+};
+
+const SOURCE_CODE_EXTENSIONS = new Set([
+	".cjs",
+	".cts",
+	".js",
+	".jsx",
+	".mjs",
+	".mts",
+	".ts",
+	".tsx",
+]);
+
+const importLoaderForPath = (
+	sourcePath: string
+): "js" | "jsx" | "ts" | "tsx" => {
+	const extension = path.extname(sourcePath);
+	if (extension === ".tsx") {
+		return "tsx";
+	}
+	if (extension === ".jsx") {
+		return "jsx";
+	}
+	if ([".js", ".mjs", ".cjs"].includes(extension)) {
+		return "js";
+	}
+	return "ts";
+};
+
+const resolveLocalImport = (
+	specifier: string,
+	importerPath: string
+): string | undefined => {
+	if (!(specifier.startsWith(".") || path.isAbsolute(specifier))) {
+		return;
+	}
+	const absolutePath = path.resolve(path.dirname(importerPath), specifier);
+	if (isSharedDependencyModule(absolutePath)) {
+		return;
+	}
+	try {
+		return require.resolve(absolutePath);
+	} catch {
+		return;
+	}
+};
+
+const localImportsForFile = async (sourcePath: string): Promise<string[]> => {
+	try {
+		const source = await Bun.file(sourcePath).text();
+		const imports = new Bun.Transpiler({
+			loader: importLoaderForPath(sourcePath),
+		}).scanImports(source);
+		return imports.flatMap(({ path: specifier }) => {
+			const resolvedPath = resolveLocalImport(specifier, sourcePath);
+			return resolvedPath === undefined ? [] : [resolvedPath];
+		});
+	} catch {
+		// Cache tracking is best-effort after the Plugin itself has loaded.
+		return [];
+	}
+};
+
+const cachedModuleIdsForPath = (sourcePath: string): Set<string> => {
+	const canonicalSourcePath = canonicalPath(sourcePath);
+	const moduleIds = new Set<string>();
+	for (const [moduleId, module] of Object.entries(require.cache)) {
+		if (
+			module !== undefined &&
+			canonicalPath(module.filename) === canonicalSourcePath
+		) {
+			moduleIds.add(moduleId);
+		}
+	}
+	return moduleIds;
+};
+
+// Resolve transitive relative imports directly: Bun does not populate
+// `require.cache` parent/child links for transpiled TypeScript modules.
+const localDependencyModuleIds = async (
+	resolvedPath: string
+): Promise<Set<string>> => {
+	const moduleIds = new Set<string>([resolvedPath]);
+	const visitedPaths = new Set<string>();
+	const pendingPaths = [resolvedPath];
+	while (pendingPaths.length > 0) {
+		const pendingPath = pendingPaths.pop();
+		if (pendingPath === undefined || isSharedDependencyModule(pendingPath)) {
+			continue;
+		}
+		const sourcePath = canonicalPath(pendingPath);
+		if (visitedPaths.has(sourcePath) || isSharedDependencyModule(sourcePath)) {
+			continue;
+		}
+		visitedPaths.add(sourcePath);
+		for (const moduleId of cachedModuleIdsForPath(sourcePath)) {
+			moduleIds.add(moduleId);
+		}
+		if (SOURCE_CODE_EXTENSIONS.has(path.extname(sourcePath))) {
+			pendingPaths.push(...(await localImportsForFile(sourcePath)));
+		}
+	}
+	return moduleIds;
+};
+
+const rememberPluginModuleCache = async (
+	resolvedPath: string,
+	previousModuleIds: ReadonlySet<string>,
+	workspace: string
+): Promise<void> => {
+	const moduleIds = new Set<string>([resolvedPath]);
+	const localRoots = [path.dirname(resolvedPath), path.resolve(workspace)];
+	for (const [moduleId, module] of Object.entries(require.cache)) {
+		if (
+			module === undefined ||
+			previousModuleIds.has(moduleId) ||
+			isSharedDependencyModule(module.filename) ||
+			!localRoots.some((root) => isWithinDirectory(root, module.filename))
+		) {
+			continue;
+		}
+		moduleIds.add(moduleId);
+	}
+	for (const moduleId of await localDependencyModuleIds(resolvedPath)) {
+		moduleIds.add(moduleId);
+	}
+	pluginModuleCacheIds.set(resolvedPath, moduleIds);
 };
 
 const installationError = (candidate: PluginPath, reason: string): Error =>
@@ -538,16 +726,19 @@ const resolvePluginCandidate = (
 		addDiagnostic(
 			diagnostics,
 			`Could not resolve Plugin package '${candidate.moduleSpecifier}': ${messageFor(error)}`,
-			candidate.path
+			candidate.path,
+			"error"
 		);
 		return;
 	}
 };
 
-const factoryForCandidate = (
+const factoryForCandidate = async (
 	candidate: PluginPath,
-	diagnostics: PluginDiagnostic[]
-): PluginFactory | undefined => {
+	diagnostics: PluginDiagnostic[],
+	reloadFileModules: boolean,
+	workspace: string
+): Promise<PluginFactory | undefined> => {
 	if (candidate.factory !== undefined) {
 		return candidate.factory;
 	}
@@ -561,13 +752,29 @@ const factoryForCandidate = (
 		addDiagnostic(
 			diagnostics,
 			"Plugin path must point to an executable TypeScript file (.ts, .tsx, .mts, or .cts).",
-			candidate.path
+			candidate.path,
+			"error"
 		);
 		return;
 	}
 	let factory: unknown;
 	try {
-		factory = loadFactory(candidate.path);
+		const resolvedPath = require.resolve(candidate.path);
+		const isReloadableFilePlugin =
+			candidate.moduleSpecifier === undefined &&
+			!isSharedDependencyModule(resolvedPath);
+		if (reloadFileModules && isReloadableFilePlugin) {
+			await invalidatePluginModuleCache(resolvedPath);
+		}
+		const previousModuleIds = new Set(Object.keys(require.cache));
+		factory = loadFactory(resolvedPath);
+		if (isReloadableFilePlugin) {
+			await rememberPluginModuleCache(
+				resolvedPath,
+				previousModuleIds,
+				workspace
+			);
+		}
 	} catch (error) {
 		if (candidate.required === true) {
 			throw installationError(candidate, messageFor(error));
@@ -575,7 +782,8 @@ const factoryForCandidate = (
 		addDiagnostic(
 			diagnostics,
 			`Could not load Plugin from ${candidate.source}: ${messageFor(error)}`,
-			candidate.path
+			candidate.path,
+			"error"
 		);
 		return;
 	}
@@ -589,7 +797,8 @@ const factoryForCandidate = (
 		addDiagnostic(
 			diagnostics,
 			"Plugin file must export a default factory function.",
-			candidate.path
+			candidate.path,
+			"error"
 		);
 		return;
 	}
@@ -651,14 +860,21 @@ const sourcePaths = async (
 			: pluginPathsFromSources(snapshot.sources, diagnostics);
 	const cli = input.cliPaths.map((value) => ({
 		path: path.resolve(input.config.workspace, value),
+		precedence: resourceSourcePrecedence("user-explicit"),
 		source: "--plugin",
 	}));
+	// Plugin IDs are first-wins; load higher-precedence classes first. Stable
+	// ordering preserves CLI-before-configured order within user-explicit paths.
 	return {
 		disabledPluginIds:
 			snapshot === undefined
 				? []
 				: disabledPluginsFromSources(snapshot.sources, diagnostics),
-		paths: [...cli, ...configured],
+		paths: [...cli, ...configured].toSorted(
+			(first, second) =>
+				(second.precedence ?? resourceSourcePrecedence("package")) -
+				(first.precedence ?? resourceSourcePrecedence("package"))
+		),
 	};
 };
 
@@ -692,7 +908,6 @@ type PluginLoadState = Readonly<{
 }>;
 
 type PluginFactoryResult = Readonly<{
-	context: PluginLoadContext;
 	draft: MutablePluginDraft | undefined;
 	succeeded: boolean;
 }>;
@@ -759,7 +974,8 @@ const shouldSkipCandidate = (
 		addDiagnostic(
 			state.diagnostics,
 			`Default Plugin '${pluginId}' was explicitly disabled before loading.`,
-			candidate.path
+			candidate.path,
+			"warning"
 		);
 		return true;
 	}
@@ -770,7 +986,8 @@ const shouldSkipCandidate = (
 	addDiagnostic(
 		state.diagnostics,
 		`Default Plugin '${pluginId}' was replaced by explicitly enabled source '${selectedSource}'.`,
-		candidate.path
+		candidate.path,
+		"warning"
 	);
 	return true;
 };
@@ -817,23 +1034,18 @@ const runPluginFactory = async (
 			),
 			context
 		);
-		return { context, draft, succeeded: true };
+		return { draft, succeeded: true };
 	} catch (error) {
 		addDiagnostic(
 			state.diagnostics,
 			`Plugin factory failed: ${messageFor(error)}`,
-			candidate.path
-		);
-		await shutdownFailedPluginDraft(
-			draft,
-			context,
-			state.diagnostics,
-			candidate.path
+			candidate.path,
+			"error"
 		);
 		if (candidate.required === true) {
 			throw installationError(candidate, messageFor(error));
 		}
-		return { context, draft: undefined, succeeded: false };
+		return { draft: undefined, succeeded: false };
 	} finally {
 		registrationOpen = false;
 	}
@@ -841,7 +1053,7 @@ const runPluginFactory = async (
 
 const publishPluginDraft = async (
 	candidate: PluginPath,
-	{ context, draft, succeeded }: PluginFactoryResult,
+	{ draft, succeeded }: PluginFactoryResult,
 	state: PluginLoadState
 ): Promise<void> => {
 	if (!succeeded) {
@@ -857,7 +1069,8 @@ const publishPluginDraft = async (
 		addDiagnostic(
 			state.diagnostics,
 			"Plugin factory did not declare a Plugin Identifier.",
-			candidate.path
+			candidate.path,
+			"error"
 		);
 		return;
 	}
@@ -865,12 +1078,6 @@ const publishPluginDraft = async (
 		candidate.distributionId !== undefined &&
 		draft.id !== candidate.distributionId
 	) {
-		await shutdownFailedPluginDraft(
-			draft,
-			context,
-			state.diagnostics,
-			candidate.path
-		);
 		throw installationError(
 			candidate,
 			`the entry declared Identifier '${draft.id}' instead of '${candidate.distributionId}'`
@@ -881,13 +1088,8 @@ const publishPluginDraft = async (
 		addDiagnostic(
 			state.diagnostics,
 			`Duplicate Plugin Identifier '${draft.id}' was disabled; '${earlierSource}' was loaded first.`,
-			candidate.path
-		);
-		await shutdownFailedPluginDraft(
-			draft,
-			context,
-			state.diagnostics,
-			candidate.path
+			candidate.path,
+			"warning"
 		);
 		return;
 	}
@@ -903,12 +1105,6 @@ const publishPluginDraft = async (
 		addDiagnostic(
 			state.diagnostics,
 			`Plugin registration was disabled: ${messageFor(error)}`,
-			candidate.path
-		);
-		await shutdownFailedPluginDraft(
-			draft,
-			context,
-			state.diagnostics,
 			candidate.path
 		);
 	}
@@ -949,7 +1145,12 @@ export const loadPlugins = async (
 			if (candidate === undefined) {
 				continue;
 			}
-			const factory = factoryForCandidate(candidate, diagnostics);
+			const factory = await factoryForCandidate(
+				candidate,
+				diagnostics,
+				input.reloadFileModules === true,
+				input.config.workspace
+			);
 			if (factory === undefined) {
 				continue;
 			}
@@ -966,6 +1167,10 @@ export const loadPlugins = async (
 		throw error;
 	}
 
-	await reportDiagnostics(diagnostics);
-	return createRuntime();
+	const runtime = createRuntime();
+	if (input.deferProcessStart !== true) {
+		await runtime.start();
+	}
+	await reportDiagnostics(runtime.diagnostics);
+	return runtime;
 };

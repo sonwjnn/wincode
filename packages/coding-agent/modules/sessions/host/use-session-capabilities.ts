@@ -57,13 +57,13 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 	// the capabilities object is composed once: a session is never reopened
 	// because a provider re-rendered.
 	const runtimeContext = getInteractiveRuntimeContext();
-	const pluginRuntime = getInteractivePluginRuntime();
 	const runtimeFactory = runtimeContext.runtimeFactory;
 	const composition = useMemo(() => createApplicationPluginComposition(), []);
 	return useMemo(() => {
 		let sessionSdk: SessionSdkOperations | undefined;
 		const sessionStore = getSessionStore();
-		const sessionHostManager = getInteractiveSessionHostManager(pluginRuntime);
+		const sessionHostManager = getInteractiveSessionHostManager();
+		const initialPluginRuntime = getInteractivePluginRuntime();
 		const capabilities: SessionCapabilities = {
 			getCapabilityCeiling: () => undefined,
 			getCompactionModule: () => compactionModuleRef.current,
@@ -76,9 +76,13 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			getSessionSdk: () => sessionSdk,
 			getTurnToolResolver: () => composition.turnToolResolver,
 			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),
-			...(pluginRuntime === undefined
+			...(initialPluginRuntime === undefined
 				? {}
-				: { getPluginRuntime: () => pluginRuntime }),
+				: {
+						getPluginRuntime: () =>
+							getInteractiveRuntimeContext().pluginRuntime ??
+							initialPluginRuntime,
+					}),
 		};
 		sessionSdk = createSessionSdkOperations(
 			{
@@ -96,5 +100,5 @@ export const useSessionCapabilities = (): SessionCapabilities => {
 			sessionStore
 		);
 		return capabilities;
-	}, [composition, pluginRuntime, runtimeFactory]);
+	}, [composition, runtimeFactory]);
 };

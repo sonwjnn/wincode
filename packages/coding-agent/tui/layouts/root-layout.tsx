@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
-import { useEffect, useReducer } from "react";
+import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
 import { ModelPricingProvider } from "@/modules/model-pricing";
@@ -13,38 +13,50 @@ import { createConfigStore } from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
-import { getInteractiveRuntimeContext } from "@/shared/runtime-context";
+import {
+	getInteractiveRuntimeContext,
+	subscribeInteractiveRuntimeContext,
+} from "@/shared/runtime-context";
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
 import { CommandControllerProvider } from "../commands/command-controller-provider";
 import { SettingsProviders } from "./settings-providers";
 
-const interactiveRuntime = getInteractiveRuntimeContext();
-const { cwd, pluginRuntime } = interactiveRuntime;
 const connections = createConnections();
-const workspace =
-	interactiveRuntime.configRuntime?.workspace ?? resolveWorkspaceRoot(cwd);
-const configStore =
-	interactiveRuntime.configRuntime?.configStore ?? createConfigStore();
-const configContext =
-	interactiveRuntime.configRuntime ??
-	Object.freeze({
-		configStore,
-		cwd,
-		homeRoot: os.homedir(),
-		workspace,
-	});
+
 setInteractiveCleanup(async () => {
+	const interactiveRuntime = getInteractiveRuntimeContext();
 	try {
-		await getInteractiveSessionHostManager(pluginRuntime).shutdownAll();
+		await getInteractiveSessionHostManager(
+			interactiveRuntime.pluginRuntime
+		).shutdownAll();
 	} finally {
-		await pluginRuntime?.shutdown();
+		await interactiveRuntime.pluginRuntime?.shutdown();
 	}
 });
 
 export function RootLayout() {
+	const interactiveRuntime = useSyncExternalStore(
+		subscribeInteractiveRuntimeContext,
+		getInteractiveRuntimeContext,
+		getInteractiveRuntimeContext
+	);
 	const router = useRouter();
 	const [, forceUpdate] = useReducer((x) => x + 1, 0);
 	const currentPath = useRouterState({ select: (s) => s.location.pathname });
+	// Dispatch sets context after this statically imported module loads.
+	const defaultConfigContext = useMemo(() => {
+		const cwd = interactiveRuntime.cwd;
+		const workspace = resolveWorkspaceRoot(cwd);
+		const configStore = createConfigStore();
+		return Object.freeze({
+			configStore,
+			cwd,
+			homeRoot: os.homedir(),
+			workspace,
+		});
+	}, [interactiveRuntime.cwd]);
+	const configContext =
+		interactiveRuntime.configRuntime ?? defaultConfigContext;
 	useEffect(() => {
 		const update = () => setTimeout(forceUpdate, 0);
 		const before = router.subscribe("onBeforeLoad", update);

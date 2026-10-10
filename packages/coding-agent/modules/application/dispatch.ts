@@ -1,4 +1,5 @@
 import type { ExecutionMode } from "@/shared/execution-mode";
+import type { ProjectTrustPrompt } from "../project-trust/project-trust";
 import type {
 	ApplicationContext,
 	InvocationOptions,
@@ -25,22 +26,32 @@ export type DispatchModeRunner = (
 
 export type DispatchModeRunners = Readonly<
 	Record<ExecutionMode, DispatchModeRunner>
->;
+> &
+	Readonly<{ promptProjectTrust?: ProjectTrustPrompt }>;
 
-export type DispatchModeLoader = () => Promise<DispatchModeRunners>;
+export type DispatchModeLoader = (
+	mode: ExecutionMode
+) => Promise<DispatchModeRunners>;
 
 export type DispatchRuntime = Pick<
 	ApplicationContext,
-	"configRuntime" | "pluginRuntime"
+	"configRuntime" | "pluginRuntime" | "resourceLoader"
 > &
 	Readonly<{ startupDiagnostics?: readonly string[] }>;
+export type DispatchProcessRequest = Pick<DispatchInput, "args" | "cwd"> &
+	Readonly<{ mode: ExecutionMode }>;
+export type DispatchProcessLauncher = (
+	input: DispatchProcessRequest
+) => Promise<number>;
 export type DispatchDependencies = Readonly<{
+	launchModeProcess?: DispatchProcessLauncher;
 	initializeRuntime?: (input: {
 		cwd: string;
 		disabledPluginIds: readonly string[];
 		mode: ExecutionMode;
 		pluginPaths: readonly string[];
 		projectTrustOverride?: "trust" | "deny";
+		promptProjectTrust?: ProjectTrustPrompt;
 		stdinIsTTY: boolean;
 	}) => Promise<DispatchRuntime>;
 }>;
@@ -347,7 +358,8 @@ const writeEarlyResponse = async (
 const initializeApplicationRuntime = (
 	input: DispatchInput,
 	invocation: InvocationOptions,
-	dependencies: DispatchDependencies
+	dependencies: DispatchDependencies,
+	promptProjectTrust?: ProjectTrustPrompt
 ): Promise<DispatchRuntime | undefined> | undefined =>
 	dependencies.initializeRuntime?.({
 		cwd: input.cwd,
@@ -357,6 +369,7 @@ const initializeApplicationRuntime = (
 		...(invocation.projectTrustOverride === undefined
 			? {}
 			: { projectTrustOverride: invocation.projectTrustOverride }),
+		...(promptProjectTrust === undefined ? {} : { promptProjectTrust }),
 		stdinIsTTY: input.stdinIsTTY,
 	});
 
@@ -382,7 +395,7 @@ const createApplicationContext = (
 
 const dispatchParsedInvocation = async (
 	input: DispatchInput,
-	runners: DispatchModeRunners | DispatchModeLoader,
+	runners: DispatchModeRunners | DispatchModeLoader | undefined,
 	dependencies: DispatchDependencies,
 	onRuntime: (runtime: DispatchRuntime | undefined) => void
 ): Promise<number> => {
@@ -391,10 +404,27 @@ const dispatchParsedInvocation = async (
 	if (earlyResult !== undefined) {
 		return earlyResult;
 	}
+	if (dependencies.launchModeProcess !== undefined) {
+		return await dependencies.launchModeProcess({
+			args: input.args,
+			cwd: input.cwd,
+			mode: parsed.invocation.mode,
+		});
+	}
+	if (runners === undefined) {
+		throw new Error(
+			"No execution-mode runner or process launcher was configured."
+		);
+	}
+	const resolvedRunners =
+		typeof runners === "function"
+			? await runners(parsed.invocation.mode)
+			: runners;
 	const runtime = await initializeApplicationRuntime(
 		input,
 		parsed.invocation,
-		dependencies
+		dependencies,
+		resolvedRunners.promptProjectTrust
 	);
 	onRuntime(runtime);
 	for (const diagnostic of runtime?.startupDiagnostics ?? []) {
@@ -402,14 +432,12 @@ const dispatchParsedInvocation = async (
 	}
 	writePluginDiagnostics(runtime, input.stderr);
 	const context = createApplicationContext(input, parsed.invocation, runtime);
-	const resolvedRunners =
-		typeof runners === "function" ? await runners() : runners;
 	return await resolvedRunners[parsed.invocation.mode](context);
 };
 
 export const dispatch = async (
 	input: DispatchInput,
-	runners: DispatchModeRunners | DispatchModeLoader,
+	runners: DispatchModeRunners | DispatchModeLoader | undefined,
 	dependencies: DispatchDependencies = {}
 ): Promise<number> => {
 	let pluginRuntime: ApplicationContext["pluginRuntime"];

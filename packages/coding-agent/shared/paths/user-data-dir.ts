@@ -4,6 +4,10 @@ import * as path from "node:path";
 
 const APP_DATA_DIR_NAME = "wincode";
 
+/** Resolve the user's global Wincode configuration and preference directory. */
+export const resolveUserWincodeDir = (homeRoot = os.homedir()): string =>
+	path.join(homeRoot, ".wincode");
+
 /** Resolve the OS account home without process-level HOME overrides. */
 const resolveOperatingSystemHome = (): string => {
 	if (process.platform === "darwin") {

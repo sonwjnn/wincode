@@ -23,11 +23,18 @@ bun run bin/wincode.ts --mode print --prompt "hello"
 
 Before loading protected project configuration and resources—including configured
 Plugins, MCP Servers, Skills, and Custom Commands—the CLI resolves Project trust.
-Interactive TTY sessions can prompt and store the decision in user-owned data;
-`AGENTS.md` remains contextual guidance and does not trigger trust. Print, JSON,
-RPC, and SDK entry points never prompt or silently trust. Use
-`--trust-project` or `--no-trust-project` for an explicit CLI invocation decision;
-SDK callers use the `projectTrust` option.
+Interactive TTY sessions show the Project Trust selector before loading protected
+resources when any protected root has no applicable saved decision. It lists each protected
+root and its saved decision; Escape or Ctrl+C
+continues without those resources for this run and saves no decision. `/trust`
+shows the same per-root status and offers the same choices: trust the project,
+trust its parent folder, or keep it untrusted. Decisions are stored outside the
+project in `~/.wincode/project-trust.json`. Run `/reload` afterward to apply a
+changed decision; `/reload` never prompts or grants trust. Print, JSON, RPC, and
+SDK entry points never prompt or silently trust. Use `--trust-project` or
+`--no-trust-project` for an explicit CLI invocation decision; SDK callers use the
+`projectTrust` option. `AGENTS.md` remains contextual guidance and does not
+trigger trust.
 
 Project trust authorizes Wincode to load project resources; it is not a sandbox.
 Trusted Plugin code and local MCP processes run with Wincode's operating-system

@@ -23,6 +23,10 @@ import {
 } from "@wincode/utils";
 import type { Except } from "type-fest";
 import { z } from "zod";
+import {
+	resourceSourcePrecedence,
+	resourceSourcePriority,
+} from "@/modules/application/resource-precedence";
 import type {
 	PluginAgentRegistration,
 	PluginAgentScope,
@@ -759,41 +763,26 @@ const resolvePluginAgent = (
 	};
 };
 
-/** Lowest to highest precedence; this order spans every Agent source kind. */
-const AGENT_SOURCE_PRECEDENCE = [
-	"core-agent",
-	"builtin-markdown",
-	"package-agent",
-	"global-config",
-	"user-agent",
-	"project-config",
-	"project-agent",
-] as const;
-
-type AgentSourcePrecedence = (typeof AGENT_SOURCE_PRECEDENCE)[number];
-
-const agentSourcePrecedenceFor = (
-	agent: RegistryAgent
-): AgentSourcePrecedence => {
+/** Converts Agent origin into the shared low-to-high resource source order. */
+const agentSourcePriority = (agent: RegistryAgent): number => {
 	const source = agent.source;
 	if (source === undefined || source.kind === "builtin") {
-		return "core-agent";
+		return resourceSourcePrecedence("package");
 	}
 	if (source.kind === "markdown") {
-		return (
-			{
-				builtin: "builtin-markdown",
-				package: "package-agent",
-				user: "user-agent",
-				project: "project-agent",
-			} as const
-		)[source.scope];
+		if (source.scope === "builtin" || source.scope === "package") {
+			return resourceSourcePrecedence("package");
+		}
+		return resourceSourcePriority({
+			explicit: false,
+			scope: source.scope,
+		});
 	}
-	return source.scope === "project" ? "project-config" : "global-config";
+	return resourceSourcePriority({
+		explicit: true,
+		scope: source.scope,
+	});
 };
-
-const agentSourcePriority = (agent: RegistryAgent): number =>
-	AGENT_SOURCE_PRECEDENCE.indexOf(agentSourcePrecedenceFor(agent));
 
 const mergeAgentCandidates = (
 	candidates: readonly RegistryAgent[],

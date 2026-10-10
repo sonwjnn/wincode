@@ -33,8 +33,12 @@ export const createSessionHostManager = (
 	processPluginRuntime?: PluginRuntime
 ): SessionHostManager => {
 	const entries = new Map<SessionId, ManagedHostEntry>();
+	let currentPluginRuntime = processPluginRuntime;
 	const eventListeners = new Set<(event: SessionHostManagerEvent) => void>();
 	let shuttingDown = false;
+	let reloadInProgress = false;
+	let openRequestsInProgress = 0;
+	let sessionWorkAdmissionsInProgress = 0;
 	let shutdownPromise: Promise<void> | undefined;
 
 	const emit = (event: SessionHostManagerEvent): void => {
@@ -62,7 +66,7 @@ export const createSessionHostManager = (
 		);
 	};
 	const maybeUnload = async (entry: ManagedHostEntry): Promise<void> => {
-		if (shuttingDown || !entry.openingComplete) {
+		if (shuttingDown || reloadInProgress || !entry.openingComplete) {
 			return;
 		}
 		if (entry.unloadCheck !== undefined) {
@@ -129,7 +133,7 @@ export const createSessionHostManager = (
 			unsubscribeSnapshot: undefined,
 			views: 0,
 			unsubscribeBackgroundWork: undefined,
-			pluginRuntime: capabilities.getPluginRuntime?.() ?? processPluginRuntime,
+			pluginRuntime: capabilities.getPluginRuntime?.() ?? currentPluginRuntime,
 			pluginSessionContext: {
 				...(executionMode === undefined ? {} : { executionMode }),
 				sessionId,
@@ -290,14 +294,22 @@ export const createSessionHostManager = (
 		if (shuttingDown) {
 			throw new Error("The Session Host manager is shutting down.");
 		}
-		const entry = await getOpenEntry(
-			capabilities,
-			sessionId,
-			executionMode,
-			view,
-			autoContinue
-		);
-		return entry.opening;
+		if (reloadInProgress) {
+			throw new Error("Cannot open a Session while resources are reloading.");
+		}
+		openRequestsInProgress += 1;
+		try {
+			const entry = await getOpenEntry(
+				capabilities,
+				sessionId,
+				executionMode,
+				view,
+				autoContinue
+			);
+			return entry.opening;
+		} finally {
+			openRequestsInProgress -= 1;
+		}
 	};
 	const releaseView: SessionHostManager["releaseView"] = async (sessionId) => {
 		const entry = entries.get(sessionId);
@@ -335,8 +347,144 @@ export const createSessionHostManager = (
 		shutdownPromise = closing;
 		return closing;
 	};
+	const tryAcquireSessionWork: SessionHostManager["tryAcquireSessionWork"] =
+		() => {
+			if (shuttingDown) {
+				return {
+					kind: "rejected",
+					reason: "The Session Host manager is shutting down.",
+				};
+			}
+			if (reloadInProgress) {
+				return {
+					kind: "rejected",
+					reason: "Cannot start Session work while resources are reloading.",
+				};
+			}
+			sessionWorkAdmissionsInProgress += 1;
+			let released = false;
+			return Object.freeze({
+				kind: "admitted" as const,
+				release: () => {
+					if (released) {
+						return;
+					}
+					released = true;
+					sessionWorkAdmissionsInProgress -= 1;
+				},
+			});
+		};
+	const assertNoPendingAdmissions = (): void => {
+		if (shuttingDown) {
+			throw new Error("The Session Host manager is shutting down.");
+		}
+		if (openRequestsInProgress > 0) {
+			throw new Error("Cannot reload resources while a Session is opening.");
+		}
+		if (sessionWorkAdmissionsInProgress > 0) {
+			throw new Error(
+				"Cannot reload resources while Session work is being admitted."
+			);
+		}
+	};
+	const assertIdleForReload: SessionHostManager["assertIdleForReload"] =
+		async () => {
+			assertNoPendingAdmissions();
+			for (const entry of entries.values()) {
+				const host = entry.host;
+				if (!entry.openingComplete || host === undefined) {
+					throw new Error(
+						"Cannot reload resources while a Session is opening."
+					);
+				}
+				if (entry.closing !== undefined || entry.unloadCheck !== undefined) {
+					throw new Error(
+						"Cannot reload resources while a Session is closing."
+					);
+				}
+				const snapshot = host.getSnapshot();
+				if (snapshot.error !== null) {
+					throw new Error(
+						"Cannot reload resources while a Session has an unresolved error."
+					);
+				}
+				if (
+					snapshot.turnActive ||
+					snapshot.isCompacting ||
+					snapshot.executions.length > 0 ||
+					snapshot.queuedSubmissions.length > 0 ||
+					snapshot.steeringMessages.length > 0 ||
+					entry.pluginRuntime?.hasBackgroundWork(entry.sessionId) === true
+				) {
+					throw new Error(
+						"Cannot reload resources while Session work is running. Wait for active turns and Plugin tasks to finish, then try again."
+					);
+				}
+			}
+		};
+	const replacePluginRuntime: SessionHostManager["replacePluginRuntime"] =
+		async (runtime) => {
+			if (!reloadInProgress) {
+				throw new Error(
+					"Plugin runtime replacement requires a resource reload."
+				);
+			}
+			await assertIdleForReload();
+			const openEntries = [...entries.values()];
+			const started: ManagedHostEntry[] = [];
+			try {
+				for (const entry of openEntries) {
+					started.push(entry);
+					await runtime.startSession(entry.pluginSessionContext);
+				}
+			} catch (error) {
+				await Promise.allSettled(
+					started.map((entry) =>
+						runtime.stopSession(entry.pluginSessionContext)
+					)
+				);
+				throw error;
+			}
+			for (const entry of openEntries) {
+				entry.unsubscribeBackgroundWork?.();
+				entry.pluginRuntime = runtime;
+				entry.unsubscribeBackgroundWork = runtime.onBackgroundWorkChange(
+					entry.sessionId,
+					() => {
+						void maybeUnload(entry);
+					}
+				);
+			}
+			currentPluginRuntime = runtime;
+		};
+	const withIdleForReload: SessionHostManager["withIdleForReload"] = async (
+		action
+	) => {
+		if (shuttingDown) {
+			throw new Error("The Session Host manager is shutting down.");
+		}
+		if (reloadInProgress) {
+			throw new Error("A resource reload is already in progress.");
+		}
+		reloadInProgress = true;
+		try {
+			await assertIdleForReload();
+			return await action();
+		} finally {
+			reloadInProgress = false;
+			for (const entry of entries.values()) {
+				if (entry.views === 0) {
+					void maybeUnload(entry);
+				}
+			}
+		}
+	};
 
 	return {
+		assertIdleForReload,
+		tryAcquireSessionWork,
+		withIdleForReload,
+		replacePluginRuntime,
 		onEvent: (listener) => {
 			eventListeners.add(listener);
 			return () => eventListeners.delete(listener);
@@ -352,4 +500,9 @@ export const getInteractiveSessionHostManager = (
 ): SessionHostManager => {
 	interactiveManager ??= createSessionHostManager(pluginRuntime);
 	return interactiveManager;
+};
+
+export const resetInteractiveSessionHostManager = async (): Promise<void> => {
+	await interactiveManager?.shutdownAll();
+	interactiveManager = undefined;
 };

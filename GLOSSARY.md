@@ -174,6 +174,9 @@ The user-facing command-line entry point for the Coding-Agent Application. A bar
 **Coding-Agent Application**:
 The user-facing Wincode application that runs an Agent through Interactive, Print, JSON, or RPC Mode. It owns application lifetime and active conversation runtimes independently of the currently displayed view; Stateful Agents own their respective live state. _Avoid_: Wincode TUI, CLI package, agent core
 
+**Resource Reload**:
+An Interactive Mode operation that re-resolves Project trust and refreshes configuration-backed resources and Plugin runtimes while Session Hosts are idle. Context files are read for the next Agent Turn; compiled-in keybindings remain fixed for the process. _Avoid_: process restart, hot patch
+
 **Plugin**:
 A Coding-Agent module that contributes executable behavior through the public PluginAPI. A Plugin may be built into Wincode or explicitly loaded from a user-chosen file; registration alone does not expose a tool to an Agent. _Avoid_: extension, Skill, MCP Server
 

@@ -40,6 +40,37 @@ const jiraPlugin = (): LoadedPlugin => ({
 	workspace,
 });
 
+test("a failed process start still runs cleanup for partially initialized resources", async () => {
+	const events: string[] = [];
+	const runtime = createPluginRuntime(
+		[
+			{
+				commands: [],
+				id: "partial-process-start",
+				onStart: () => {
+					events.push("start");
+					throw new Error("initialization failed");
+				},
+				onShutdown: () => {
+					events.push("shutdown");
+				},
+				sourcePath: pluginSource,
+				tools: [],
+				workspace,
+			},
+		],
+		[]
+	);
+
+	try {
+		await runtime.start();
+		await runtime.shutdown();
+		expect(events).toEqual(["start", "shutdown"]);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
 test("One-Shot can await background work registered by any Plugin for its Session", async () => {
 	const runtime = createPluginRuntime([], []);
 	const deferred = Promise.withResolvers<void>();

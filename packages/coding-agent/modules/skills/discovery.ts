@@ -5,6 +5,7 @@ import {
 	isPlainObject,
 	isUndefined,
 } from "@wincode/utils";
+import { resourceSourcePriority } from "@/modules/application/resource-precedence";
 import {
 	isTrustedProjectRoot,
 	LEGACY_PROJECT_SKILL_ROOTS,
@@ -58,17 +59,23 @@ const configuredRoots = (snapshot: ConfigSnapshot) => {
 export function buildSkillRootDescriptors(
 	input: SkillDiscoveryInput
 ): SkillRootDescriptor[] {
-	const roots: SkillRootDescriptor[] = [];
+	const roots: {
+		descriptor: Omit<SkillRootDescriptor, "precedence">;
+		domainOrder: number;
+		sourcePriority: number;
+	}[] = [];
 	const addRoot = (
 		rootPath: string,
 		scope: SkillRootDescriptor["scope"],
 		source: string
 	): void => {
 		roots.push({
-			path: rootPath,
-			scope,
-			source,
-			precedence: roots.length,
+			descriptor: { path: rootPath, scope, source },
+			domainOrder: roots.length,
+			sourcePriority: resourceSourcePriority({
+				explicit: source === ROOT_SOURCE.configured,
+				scope,
+			}),
 		});
 	};
 
@@ -114,7 +121,13 @@ export function buildSkillRootDescriptors(
 		}
 	}
 
-	return roots;
+	return roots
+		.toSorted(
+			(first, second) =>
+				first.sourcePriority - second.sourcePriority ||
+				first.domainOrder - second.domainOrder
+		)
+		.map(({ descriptor }, precedence) => ({ ...descriptor, precedence }));
 }
 
 export function discoverSkillCandidates(

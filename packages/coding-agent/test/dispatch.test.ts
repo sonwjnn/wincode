@@ -55,6 +55,86 @@ describe("application dispatch", () => {
 		expect(stderr.output).toBe("");
 	});
 
+	test.each([
+		"interactive",
+		"print",
+		"json",
+		"rpc",
+	] as const)("delegates %s mode before runtime initialization", async (mode) => {
+		const stdout = capture();
+		const stderr = capture();
+		let loaderInvoked = false;
+		let runtimeInvoked = false;
+		let processRequest:
+			| { args: readonly string[]; cwd: string; mode: string }
+			| undefined;
+		const args = ["--mode", mode, "--trust-project"];
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, args),
+			async () => {
+				loaderInvoked = true;
+				return noOpRunners;
+			},
+			{
+				launchModeProcess: async (request) => {
+					processRequest = request;
+					return 23;
+				},
+				initializeRuntime: async () => {
+					runtimeInvoked = true;
+					return {};
+				},
+			}
+		);
+
+		expect(exitCode).toBe(23);
+		expect(processRequest).toEqual({ args, cwd: "/workspace", mode });
+		expect(loaderInvoked).toBe(false);
+		expect(runtimeInvoked).toBe(false);
+	});
+
+	test("loads the interactive trust selector before runtime initialization", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const order: string[] = [];
+
+		await dispatch(
+			input(stdout.writer, stderr.writer, []),
+			async (mode) => {
+				order.push(`load:${mode}`);
+				return {
+					...noOpRunners,
+					interactive: async () => {
+						order.push("run");
+						return 0;
+					},
+					promptProjectTrust: async () => {
+						order.push("prompt");
+						return "trust";
+					},
+				};
+			},
+			{
+				initializeRuntime: async ({ promptProjectTrust }) => {
+					order.push("initialize");
+					const choice = await promptProjectTrust?.({
+						protectedRoots: [
+							{
+								currentSessionStatus: "pending",
+								projectRoot: "/workspace",
+							},
+						],
+						workspace: "/workspace",
+					});
+					expect(choice).toBe("trust");
+					return {};
+				},
+			}
+		);
+
+		expect(order).toEqual(["load:interactive", "initialize", "prompt", "run"]);
+	});
+
 	test("routes independent bundled Plugin disables to the application", async () => {
 		const stdout = capture();
 		const stderr = capture();
@@ -186,6 +266,7 @@ describe("application dispatch", () => {
 			onBackgroundWorkChange: () => () => undefined,
 			waitForBackgroundWork: async () => undefined,
 			resolveToolsForTurn: async () => [],
+			start: async () => [],
 			shutdown: async () => undefined,
 			startSession: async () => undefined,
 			stopSession: async () => undefined,
@@ -233,6 +314,7 @@ describe("application dispatch", () => {
 			onBackgroundWorkChange: () => () => undefined,
 			waitForBackgroundWork: async () => undefined,
 			resolveToolsForTurn: async () => [],
+			start: async () => [],
 			shutdown: async () => {
 				shutdownCount += 1;
 			},
@@ -385,6 +467,12 @@ describe("application dispatch", () => {
 			{
 				...noOpRunners,
 				interactive: async () => {
+					invoked = true;
+					return 0;
+				},
+			},
+			{
+				launchModeProcess: async () => {
 					invoked = true;
 					return 0;
 				},

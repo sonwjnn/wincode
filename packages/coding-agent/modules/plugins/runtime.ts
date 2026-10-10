@@ -9,6 +9,7 @@ import type {
 	PluginCommandRegistration,
 	PluginInputSchema,
 	PluginProcessContext,
+	PluginProcessStartHook,
 	PluginRegistrationAPI,
 	PluginSessionContext,
 	PluginSessionShutdownHook,
@@ -23,6 +24,7 @@ import type { PluginCommand, PluginTool } from "./types";
 
 export type PluginDiagnostic = Readonly<{
 	message: string;
+	severity?: "error";
 	sourcePath: string;
 }>;
 
@@ -62,6 +64,7 @@ export type LoadedPlugin = Readonly<{
 	resources?: readonly PluginResourceDescriptor[];
 	statusPanels?: readonly PluginStatusPanelRegistration[];
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
+	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
 	onShutdown?: PluginShutdownHook;
@@ -104,6 +107,7 @@ export type PluginRuntime = Readonly<{
 		context: PluginBeforeAgentTurnContext,
 		hostContext?: unknown
 	) => Promise<readonly PluginToolDescriptor[]>;
+	start: () => Promise<readonly PluginDiagnostic[]>;
 	shutdown: () => Promise<void>;
 	startSession: (context: PluginSessionContext) => Promise<void>;
 	stopSession: (context: PluginSessionContext) => Promise<void>;
@@ -213,6 +217,9 @@ export const createPluginRuntime = (
 	const reservedCommands = new Set(reservedCommandNames.map(commandKey));
 	const reservedTools = new Set(reservedToolNames);
 	let shutdownPromise: Promise<void> | undefined;
+	let startPromise: Promise<readonly PluginDiagnostic[]> | undefined;
+	const processStartAttemptedPlugins = new Set<string>();
+	let processStarted = false;
 
 	const addDiagnostic = (plugin: LoadedPlugin, message: string): void => {
 		diagnostics.push({ message, sourcePath: plugin.sourcePath });
@@ -222,6 +229,63 @@ export const createPluginRuntime = (
 			pluginId: plugin.id,
 			sourcePath: plugin.sourcePath,
 		});
+	};
+	const start = async (): Promise<readonly PluginDiagnostic[]> => {
+		if (shutdownPromise !== undefined) {
+			await shutdownPromise;
+		}
+		if (processStarted) {
+			return [];
+		}
+		if (startPromise !== undefined) {
+			return startPromise;
+		}
+		const starting = (async () => {
+			const startDiagnostics: PluginDiagnostic[] = [];
+			for (const plugin of plugins) {
+				if (plugin.onStart === undefined || disabledPlugins.has(plugin.id)) {
+					continue;
+				}
+				processStartAttemptedPlugins.add(plugin.id);
+				try {
+					await plugin.onStart({
+						sourcePath: plugin.sourcePath,
+						workspace: plugin.workspace,
+					});
+				} catch (error) {
+					const diagnostic = {
+						message: `Plugin process start hook failed: ${getErrorMessage(error, String(error))}`,
+						severity: "error" as const,
+						sourcePath: plugin.sourcePath,
+					};
+					diagnostics.push(diagnostic);
+					startDiagnostics.push(diagnostic);
+					disabledPlugins.add(plugin.id);
+					await logPluginFailure(
+						"Plugin process start hook failed; disabled for this runtime",
+						plugin,
+						"process-start",
+						error
+					);
+				}
+			}
+			processStarted = true;
+			return Object.freeze(startDiagnostics);
+		})();
+		startPromise = starting;
+		try {
+			return await starting;
+		} finally {
+			if (startPromise === starting) {
+				startPromise = undefined;
+			}
+		}
+	};
+	const waitForStartToSettle = async (): Promise<void> => {
+		const starting = startPromise;
+		if (starting !== undefined) {
+			await starting.catch(() => []);
+		}
 	};
 	const isEnabledForSession = (
 		plugin: LoadedPlugin,
@@ -736,11 +800,13 @@ export const createPluginRuntime = (
 			}
 		},
 		resolveToolsForTurn,
-		shutdown() {
+		start,
+		async shutdown() {
 			if (shutdownPromise !== undefined) {
 				return shutdownPromise;
 			}
 			const closing = (async () => {
+				await waitForStartToSettle();
 				for (const [sessionId, state] of [...sessionStates]) {
 					await stopSession(state.context);
 					if (sessionStates.has(sessionId)) {
@@ -748,7 +814,10 @@ export const createPluginRuntime = (
 					}
 				}
 				for (const plugin of [...plugins].reverse()) {
-					if (plugin.onShutdown === undefined) {
+					if (
+						!processStartAttemptedPlugins.has(plugin.id) ||
+						plugin.onShutdown === undefined
+					) {
 						continue;
 					}
 					const context: PluginProcessContext = {
@@ -766,9 +835,17 @@ export const createPluginRuntime = (
 						);
 					}
 				}
+				processStartAttemptedPlugins.clear();
+				processStarted = false;
 			})();
 			shutdownPromise = closing;
-			return closing;
+			try {
+				await closing;
+			} finally {
+				if (shutdownPromise === closing) {
+					shutdownPromise = undefined;
+				}
+			}
 		},
 		startSession,
 		stopSession,
