@@ -24,7 +24,8 @@ bun run bin/wincode.ts --mode print --prompt "hello"
 Before loading protected project configuration and resources—including configured
 Plugins, MCP Servers, Skills, and Custom Commands—the CLI resolves Project trust.
 Interactive TTY sessions show the Project Trust selector before loading protected
-resources. It lists each protected root and its saved decision; Escape or Ctrl+C
+resources when any protected root has no applicable saved decision. It lists each protected
+root and its saved decision; Escape or Ctrl+C
 continues without those resources for this run and saves no decision. `/trust`
 shows the same per-root status and offers the same choices: trust the project,
 trust its parent folder, or keep it untrusted. Decisions are stored outside the

@@ -38,7 +38,13 @@ export type DispatchRuntime = Pick<
 	"configRuntime" | "pluginRuntime" | "resourceLoader"
 > &
 	Readonly<{ startupDiagnostics?: readonly string[] }>;
+export type DispatchProcessRequest = Pick<DispatchInput, "args" | "cwd"> &
+	Readonly<{ mode: ExecutionMode }>;
+export type DispatchProcessLauncher = (
+	input: DispatchProcessRequest
+) => Promise<number>;
 export type DispatchDependencies = Readonly<{
+	launchModeProcess?: DispatchProcessLauncher;
 	initializeRuntime?: (input: {
 		cwd: string;
 		disabledPluginIds: readonly string[];
@@ -389,7 +395,7 @@ const createApplicationContext = (
 
 const dispatchParsedInvocation = async (
 	input: DispatchInput,
-	runners: DispatchModeRunners | DispatchModeLoader,
+	runners: DispatchModeRunners | DispatchModeLoader | undefined,
 	dependencies: DispatchDependencies,
 	onRuntime: (runtime: DispatchRuntime | undefined) => void
 ): Promise<number> => {
@@ -397,6 +403,18 @@ const dispatchParsedInvocation = async (
 	const earlyResult = await writeEarlyResponse(parsed, input);
 	if (earlyResult !== undefined) {
 		return earlyResult;
+	}
+	if (dependencies.launchModeProcess !== undefined) {
+		return await dependencies.launchModeProcess({
+			args: input.args,
+			cwd: input.cwd,
+			mode: parsed.invocation.mode,
+		});
+	}
+	if (runners === undefined) {
+		throw new Error(
+			"No execution-mode runner or process launcher was configured."
+		);
 	}
 	const resolvedRunners =
 		typeof runners === "function"
@@ -419,7 +437,7 @@ const dispatchParsedInvocation = async (
 
 export const dispatch = async (
 	input: DispatchInput,
-	runners: DispatchModeRunners | DispatchModeLoader,
+	runners: DispatchModeRunners | DispatchModeLoader | undefined,
 	dependencies: DispatchDependencies = {}
 ): Promise<number> => {
 	let pluginRuntime: ApplicationContext["pluginRuntime"];

@@ -397,10 +397,12 @@ const requestProjectTrustChoice = async ({
 	prompt,
 	stdinIsTTY,
 	projectTrustDir,
+	parentDirectory,
 	workspace,
 	protectedRoots,
 	decisions,
 }: ResolveProjectTrustInput & {
+	parentDirectory: string;
 	protectedRoots: readonly string[];
 	decisions: readonly StoredTrustDecision[];
 }): Promise<ProjectTrustChoice | undefined> => {
@@ -418,12 +420,10 @@ const requestProjectTrustChoice = async ({
 		return;
 	}
 
-	const canonicalWorkspace = await canonicalPath(workspace);
-	const parentDirectory = path.dirname(canonicalWorkspace);
 	const choice = await prompt({
-		...(parentDirectory === canonicalWorkspace ? {} : { parentDirectory }),
+		...(parentDirectory === workspace ? {} : { parentDirectory }),
 		protectedRoots: getRootStatuses(protectedRoots, decisions, () => "pending"),
-		workspace: canonicalWorkspace,
+		workspace,
 	});
 	if (choice !== "cancel") {
 		const { decision, scope } = resolveProjectTrustSelection(choice);
@@ -441,6 +441,7 @@ const getDecisionForRoot = (
 	projectRoot: string,
 	override: ProjectTrustOverride | undefined,
 	promptedChoice: ProjectTrustChoice | undefined,
+	promptedParentDirectory: string,
 	decisions: readonly StoredTrustDecision[]
 ): ProjectTrustDecision | undefined => {
 	if (override !== undefined) {
@@ -450,7 +451,14 @@ const getDecisionForRoot = (
 		return;
 	}
 	if (promptedChoice !== undefined) {
-		return resolveProjectTrustSelection(promptedChoice).decision;
+		const resolution = resolveProjectTrustSelection(promptedChoice);
+		if (
+			resolution.scope === "parent" &&
+			!pathContains(promptedParentDirectory, projectRoot)
+		) {
+			return nearestDecision(projectRoot, decisions)?.decision;
+		}
+		return resolution.decision;
 	}
 	return nearestDecision(projectRoot, decisions)?.decision;
 };
@@ -469,13 +477,16 @@ export const resolveProjectTrust = async ({
 	const decisions = await canonicalizeTrustDecisions(
 		await loadTrustFile(trustFilePath)
 	);
+	const canonicalWorkspace = await canonicalPath(workspace);
+	const promptedParentDirectory = path.dirname(canonicalWorkspace);
 	const promptedChoice = await requestProjectTrustChoice({
 		mode,
 		override,
 		prompt,
 		stdinIsTTY,
 		projectTrustDir,
-		workspace,
+		parentDirectory: promptedParentDirectory,
+		workspace: canonicalWorkspace,
 		protectedRoots,
 		decisions,
 	});
@@ -487,6 +498,7 @@ export const resolveProjectTrust = async ({
 			projectRoot,
 			override,
 			promptedChoice,
+			promptedParentDirectory,
 			decisions
 		);
 		if (decision === "trust") {

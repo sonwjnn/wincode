@@ -55,6 +55,44 @@ describe("application dispatch", () => {
 		expect(stderr.output).toBe("");
 	});
 
+	test.each([
+		"interactive",
+		"print",
+		"json",
+		"rpc",
+	] as const)("delegates %s mode before runtime initialization", async (mode) => {
+		const stdout = capture();
+		const stderr = capture();
+		let loaderInvoked = false;
+		let runtimeInvoked = false;
+		let processRequest:
+			| { args: readonly string[]; cwd: string; mode: string }
+			| undefined;
+		const args = ["--mode", mode, "--trust-project"];
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, args),
+			async () => {
+				loaderInvoked = true;
+				return noOpRunners;
+			},
+			{
+				launchModeProcess: async (request) => {
+					processRequest = request;
+					return 23;
+				},
+				initializeRuntime: async () => {
+					runtimeInvoked = true;
+					return {};
+				},
+			}
+		);
+
+		expect(exitCode).toBe(23);
+		expect(processRequest).toEqual({ args, cwd: "/workspace", mode });
+		expect(loaderInvoked).toBe(false);
+		expect(runtimeInvoked).toBe(false);
+	});
+
 	test("loads the interactive trust selector before runtime initialization", async () => {
 		const stdout = capture();
 		const stderr = capture();
@@ -429,6 +467,12 @@ describe("application dispatch", () => {
 			{
 				...noOpRunners,
 				interactive: async () => {
+					invoked = true;
+					return 0;
+				},
+			},
+			{
+				launchModeProcess: async () => {
 					invoked = true;
 					return 0;
 				},

@@ -938,6 +938,38 @@ describe("Coding-Agent Application Project trust", () => {
 		]);
 	});
 
+	test("trusting a parent does not authorize protected roots above that parent", async () => {
+		const directory = await createDirectory();
+		const repository = path.join(directory, "repo");
+		const parent = path.join(repository, "nested");
+		const workspace = path.join(parent, "workspace");
+		const projectTrustDir = path.join(directory, "user-wincode");
+		await Promise.all([
+			mkdir(path.join(repository, ".git"), { recursive: true }),
+			mkdir(workspace, { recursive: true }),
+		]);
+		await Promise.all(
+			[repository, parent, workspace].map((root) =>
+				Bun.write(path.join(root, "wincode.json"), "{}")
+			)
+		);
+
+		const resolution = await resolveProjectTrust({
+			mode: "interactive",
+			prompt: async (request) => {
+				expect(request.parentDirectory).toBe(await realpath(parent));
+				return "trust-parent";
+			},
+			projectTrustDir,
+			stdinIsTTY: true,
+			workspace,
+		});
+
+		expect(new Set(resolution.trustedProjectRoots)).toEqual(
+			new Set([await realpath(parent), await realpath(workspace)])
+		);
+	});
+
 	test("trust status preserves mixed saved and current-session states per root", async () => {
 		const directory = await createDirectory();
 		const repository = path.join(directory, "repo");

@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
-import { useEffect, useReducer, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
 import { ModelPricingProvider } from "@/modules/model-pricing";
@@ -21,20 +21,7 @@ import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
 import { CommandControllerProvider } from "../commands/command-controller-provider";
 import { SettingsProviders } from "./settings-providers";
 
-const initialRuntime = getInteractiveRuntimeContext();
 const connections = createConnections();
-
-const defaultConfigContext = (() => {
-	const cwd = initialRuntime.cwd;
-	const workspace = resolveWorkspaceRoot(cwd);
-	const configStore = createConfigStore();
-	return Object.freeze({
-		configStore,
-		cwd,
-		homeRoot: os.homedir(),
-		workspace,
-	});
-})();
 
 setInteractiveCleanup(async () => {
 	const interactiveRuntime = getInteractiveRuntimeContext();
@@ -56,6 +43,18 @@ export function RootLayout() {
 	const router = useRouter();
 	const [, forceUpdate] = useReducer((x) => x + 1, 0);
 	const currentPath = useRouterState({ select: (s) => s.location.pathname });
+	// Dispatch sets context after this statically imported module loads.
+	const defaultConfigContext = useMemo(() => {
+		const cwd = interactiveRuntime.cwd;
+		const workspace = resolveWorkspaceRoot(cwd);
+		const configStore = createConfigStore();
+		return Object.freeze({
+			configStore,
+			cwd,
+			homeRoot: os.homedir(),
+			workspace,
+		});
+	}, [interactiveRuntime.cwd]);
 	const configContext =
 		interactiveRuntime.configRuntime ?? defaultConfigContext;
 	useEffect(() => {
