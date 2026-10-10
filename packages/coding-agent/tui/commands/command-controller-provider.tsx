@@ -81,8 +81,8 @@ export function CommandControllerProvider({
 			workspace: config.workspace,
 		});
 		const choice = await requestProjectTrust(dialog, {
-			projectRoot: config.workspace,
 			...status,
+			workspace: config.workspace,
 		});
 		const decision = choice === "deny" ? "deny" : "trust";
 		let message: string;

@@ -1,4 +1,5 @@
 import type { ExecutionMode } from "@/shared/execution-mode";
+import type { ProjectTrustPrompt } from "../project-trust/project-trust";
 import type {
 	ApplicationContext,
 	InvocationOptions,
@@ -25,9 +26,12 @@ export type DispatchModeRunner = (
 
 export type DispatchModeRunners = Readonly<
 	Record<ExecutionMode, DispatchModeRunner>
->;
+> &
+	Readonly<{ promptProjectTrust?: ProjectTrustPrompt }>;
 
-export type DispatchModeLoader = () => Promise<DispatchModeRunners>;
+export type DispatchModeLoader = (
+	mode: ExecutionMode
+) => Promise<DispatchModeRunners>;
 
 export type DispatchRuntime = Pick<
 	ApplicationContext,
@@ -41,6 +45,7 @@ export type DispatchDependencies = Readonly<{
 		mode: ExecutionMode;
 		pluginPaths: readonly string[];
 		projectTrustOverride?: "trust" | "deny";
+		promptProjectTrust?: ProjectTrustPrompt;
 		stdinIsTTY: boolean;
 	}) => Promise<DispatchRuntime>;
 }>;
@@ -347,7 +352,8 @@ const writeEarlyResponse = async (
 const initializeApplicationRuntime = (
 	input: DispatchInput,
 	invocation: InvocationOptions,
-	dependencies: DispatchDependencies
+	dependencies: DispatchDependencies,
+	promptProjectTrust?: ProjectTrustPrompt
 ): Promise<DispatchRuntime | undefined> | undefined =>
 	dependencies.initializeRuntime?.({
 		cwd: input.cwd,
@@ -357,6 +363,7 @@ const initializeApplicationRuntime = (
 		...(invocation.projectTrustOverride === undefined
 			? {}
 			: { projectTrustOverride: invocation.projectTrustOverride }),
+		...(promptProjectTrust === undefined ? {} : { promptProjectTrust }),
 		stdinIsTTY: input.stdinIsTTY,
 	});
 
@@ -391,10 +398,15 @@ const dispatchParsedInvocation = async (
 	if (earlyResult !== undefined) {
 		return earlyResult;
 	}
+	const resolvedRunners =
+		typeof runners === "function"
+			? await runners(parsed.invocation.mode)
+			: runners;
 	const runtime = await initializeApplicationRuntime(
 		input,
 		parsed.invocation,
-		dependencies
+		dependencies,
+		resolvedRunners.promptProjectTrust
 	);
 	onRuntime(runtime);
 	for (const diagnostic of runtime?.startupDiagnostics ?? []) {
@@ -402,8 +414,6 @@ const dispatchParsedInvocation = async (
 	}
 	writePluginDiagnostics(runtime, input.stderr);
 	const context = createApplicationContext(input, parsed.invocation, runtime);
-	const resolvedRunners =
-		typeof runners === "function" ? await runners() : runners;
 	return await resolvedRunners[parsed.invocation.mode](context);
 };
 

@@ -7,6 +7,7 @@ import {
 import type { ApplicationContext } from "../modules/application/modes/types";
 import { initializeApplicationRuntime } from "../modules/application/runtime";
 import { installCrashGuard } from "../shared/crash-guard";
+import type { ExecutionMode } from "../shared/execution-mode";
 import { setInteractiveRuntimeContext } from "../shared/runtime-context";
 
 installCrashGuard();
@@ -35,14 +36,21 @@ const rpcStdout = {
 	},
 };
 
-const loadModeRunners = async (): Promise<DispatchModeRunners> => {
+const loadModeRunners = async (
+	mode: ExecutionMode
+): Promise<DispatchModeRunners> => {
 	// Keep help/version free of the Session/Engine and OpenTUI module graphs.
 	const [json, print, rpc] = await Promise.all([
 		import("../modules/application/modes/json"),
 		import("../modules/application/modes/print"),
 		import("../modules/application/modes/rpc"),
 	]);
+	const interactive =
+		mode === "interactive" ? await import("../tui/runtime") : undefined;
 	return {
+		...(interactive === undefined
+			? {}
+			: { promptProjectTrust: interactive.runProjectTrustPreflight }),
 		interactive: async (context: ApplicationContext) => {
 			setInteractiveRuntimeContext({
 				args: context.args,
@@ -57,8 +65,10 @@ const loadModeRunners = async (): Promise<DispatchModeRunners> => {
 					? {}
 					: { resourceLoader: context.resourceLoader }),
 			});
-			const { runInteractive } = await import("../tui/runtime");
-			return runInteractive();
+			if (interactive === undefined) {
+				throw new Error("Interactive TUI module was not loaded for this mode.");
+			}
+			return interactive.runInteractive();
 		},
 		json: json.runJsonExecutionMode,
 		print: print.runPrintExecutionMode,
@@ -78,6 +88,9 @@ process.exitCode = await dispatch(
 	},
 	loadModeRunners,
 	{
-		initializeRuntime: (input) => initializeApplicationRuntime(input),
+		initializeRuntime: ({ promptProjectTrust, ...input }) =>
+			initializeApplicationRuntime(input, {
+				...(promptProjectTrust === undefined ? {} : { promptProjectTrust }),
+			}),
 	}
 );

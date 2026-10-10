@@ -10,14 +10,11 @@ import {
 
 export type ProjectTrustDecision = "trust" | "deny";
 export type ProjectTrustOverride = ProjectTrustDecision;
-export type ProjectTrustPrompt = (
-	projectRoot: string
-) => Promise<ProjectTrustDecision>;
-
-export type ProjectTrustResolution = Readonly<{
-	diagnostics: readonly string[];
-	trustedProjectRoots: readonly string[];
-}>;
+export type ProjectTrustChoice =
+	| ProjectTrustDecision
+	| "trust-parent"
+	| "cancel";
+export type ProjectTrustSessionStatus = "trusted" | "untrusted" | "pending";
 
 export type ProjectTrustSavedDecision = Readonly<{
 	decision: ProjectTrustDecision;
@@ -25,10 +22,31 @@ export type ProjectTrustSavedDecision = Readonly<{
 	inherited: boolean;
 }>;
 
+export type ProjectTrustRootStatus = Readonly<{
+	currentSessionStatus: ProjectTrustSessionStatus;
+	projectRoot: string;
+	savedDecision?: ProjectTrustSavedDecision;
+}>;
+
+export type ProjectTrustPromptRequest = Readonly<{
+	parentDirectory?: string;
+	protectedRoots: readonly ProjectTrustRootStatus[];
+	workspace: string;
+}>;
+
+export type ProjectTrustPrompt = (
+	request: ProjectTrustPromptRequest
+) => Promise<ProjectTrustChoice>;
+
+export type ProjectTrustResolution = Readonly<{
+	diagnostics: readonly string[];
+	trustedProjectRoots: readonly string[];
+}>;
+
 export type ProjectTrustStatus = Readonly<{
 	currentSessionTrusted: boolean;
 	parentDirectory?: string;
-	savedDecision?: ProjectTrustSavedDecision;
+	protectedRoots: readonly ProjectTrustRootStatus[];
 }>;
 
 export type ResolveProjectTrustInput = Readonly<{
@@ -275,6 +293,35 @@ const nearestDecision = (
 		)
 		.at(0);
 
+const getSavedDecisionForRoot = (
+	projectRoot: string,
+	decisions: readonly StoredTrustDecision[]
+): ProjectTrustSavedDecision | undefined => {
+	const decision = nearestDecision(projectRoot, decisions);
+	return decision === undefined
+		? undefined
+		: Object.freeze({
+				...decision,
+				inherited: decision.directory !== projectRoot,
+			});
+};
+
+const getRootStatuses = (
+	protectedRoots: readonly string[],
+	decisions: readonly StoredTrustDecision[],
+	currentSessionStatus: (projectRoot: string) => ProjectTrustSessionStatus
+): readonly ProjectTrustRootStatus[] =>
+	Object.freeze(
+		protectedRoots.map((projectRoot) => {
+			const savedDecision = getSavedDecisionForRoot(projectRoot, decisions);
+			return Object.freeze({
+				currentSessionStatus: currentSessionStatus(projectRoot),
+				projectRoot,
+				...(savedDecision === undefined ? {} : { savedDecision }),
+			});
+		})
+	);
+
 export const getProjectTrustStatus = async ({
 	projectTrustDir,
 	trustedProjectRoots,
@@ -293,23 +340,109 @@ export const getProjectTrustStatus = async ({
 	const decisions = await canonicalizeTrustDecisions(
 		await loadTrustFile(trustFilePath)
 	);
-	const savedDecision = nearestDecision(canonicalWorkspace, decisions);
+	const rootStatuses = getRootStatuses(
+		protectedRoots,
+		decisions,
+		(projectRoot) =>
+			trustedRoots.has(path.resolve(projectRoot)) ? "trusted" : "untrusted"
+	);
 	const parentDirectory = path.dirname(canonicalWorkspace);
 
 	return Object.freeze({
-		currentSessionTrusted: protectedRoots.every((root) =>
-			trustedRoots.has(path.resolve(root))
+		currentSessionTrusted: rootStatuses.every(
+			({ currentSessionStatus }) => currentSessionStatus === "trusted"
 		),
 		...(parentDirectory === canonicalWorkspace ? {} : { parentDirectory }),
-		...(savedDecision === undefined
-			? {}
-			: {
-					savedDecision: Object.freeze({
-						...savedDecision,
-						inherited: savedDecision.directory !== canonicalWorkspace,
-					}),
-				}),
+		protectedRoots: rootStatuses,
 	});
+};
+
+const shouldPromptForProjectTrust = ({
+	mode,
+	override,
+	prompt,
+	stdinIsTTY,
+	protectedRoots,
+	decisions,
+}: Pick<
+	ResolveProjectTrustInput,
+	"mode" | "override" | "prompt" | "stdinIsTTY"
+> & {
+	protectedRoots: readonly string[];
+	decisions: readonly StoredTrustDecision[];
+}): boolean =>
+	override === undefined &&
+	mode === "interactive" &&
+	stdinIsTTY === true &&
+	prompt !== undefined &&
+	protectedRoots.some(
+		(projectRoot) => nearestDecision(projectRoot, decisions) === undefined
+	);
+
+const requestProjectTrustChoice = async ({
+	mode,
+	override,
+	prompt,
+	stdinIsTTY,
+	projectTrustDir,
+	workspace,
+	protectedRoots,
+	decisions,
+}: ResolveProjectTrustInput & {
+	protectedRoots: readonly string[];
+	decisions: readonly StoredTrustDecision[];
+}): Promise<ProjectTrustChoice | undefined> => {
+	if (
+		prompt === undefined ||
+		!shouldPromptForProjectTrust({
+			mode,
+			override,
+			prompt,
+			stdinIsTTY,
+			protectedRoots,
+			decisions,
+		})
+	) {
+		return;
+	}
+
+	const canonicalWorkspace = await canonicalPath(workspace);
+	const parentDirectory = path.dirname(canonicalWorkspace);
+	const choice = await prompt({
+		...(parentDirectory === canonicalWorkspace ? {} : { parentDirectory }),
+		protectedRoots: getRootStatuses(protectedRoots, decisions, () => "pending"),
+		workspace: canonicalWorkspace,
+	});
+	if (choice !== "cancel") {
+		await saveProjectTrustDecision({
+			decision: choice === "deny" ? "deny" : "trust",
+			projectTrustDir,
+			scope: choice === "trust-parent" ? "parent" : "project",
+			workspace,
+		});
+	}
+	return choice;
+};
+
+const getDecisionForRoot = (
+	projectRoot: string,
+	override: ProjectTrustOverride | undefined,
+	promptedChoice: ProjectTrustChoice | undefined,
+	decisions: readonly StoredTrustDecision[]
+): ProjectTrustDecision | undefined => {
+	if (override !== undefined) {
+		return override;
+	}
+	if (promptedChoice === "cancel") {
+		return;
+	}
+	if (promptedChoice === "deny") {
+		return "deny";
+	}
+	if (promptedChoice !== undefined) {
+		return "trust";
+	}
+	return nearestDecision(projectRoot, decisions)?.decision;
 };
 
 /** Resolves user-owned trust before the application reads project config or resources. */
@@ -326,24 +459,26 @@ export const resolveProjectTrust = async ({
 	const decisions = await canonicalizeTrustDecisions(
 		await loadTrustFile(trustFilePath)
 	);
-	const promptDecisions: StoredTrustDecision[] = [];
+	const promptedChoice = await requestProjectTrustChoice({
+		mode,
+		override,
+		prompt,
+		stdinIsTTY,
+		projectTrustDir,
+		workspace,
+		protectedRoots,
+		decisions,
+	});
 	const trustedCanonicalRoots = new Set<string>();
 	const diagnostics: string[] = [];
 
 	for (const projectRoot of protectedRoots) {
-		let decision = nearestDecision(projectRoot, decisions)?.decision;
-		if (override !== undefined) {
-			decision = override;
-		}
-		if (
-			decision === undefined &&
-			mode === "interactive" &&
-			stdinIsTTY &&
-			prompt !== undefined
-		) {
-			decision = await prompt(projectRoot);
-			promptDecisions.push({ decision, directory: projectRoot });
-		}
+		const decision = getDecisionForRoot(
+			projectRoot,
+			override,
+			promptedChoice,
+			decisions
+		);
 		if (decision === "trust") {
 			trustedCanonicalRoots.add(projectRoot);
 			continue;
@@ -351,16 +486,6 @@ export const resolveProjectTrust = async ({
 		diagnostics.push(
 			`Skipped protected project resources from untrusted directory ${projectRoot}; use --trust-project for this invocation to load them.`
 		);
-	}
-
-	if (promptDecisions.length > 0) {
-		const decisionsByDirectory = new Map(
-			decisions.map((entry) => [entry.directory, entry])
-		);
-		for (const entry of promptDecisions) {
-			decisionsByDirectory.set(entry.directory, entry);
-		}
-		await saveTrustFile(trustFilePath, [...decisionsByDirectory.values()]);
 	}
 	if (diagnostics.length > 0) {
 		await logger.warn(

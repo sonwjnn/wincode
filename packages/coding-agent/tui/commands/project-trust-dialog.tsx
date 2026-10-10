@@ -1,7 +1,8 @@
+import { useTerminalDimensions } from "@opentui/react";
 import { createElement, useEffect, useRef } from "react";
 import type {
-	ProjectTrustDecision,
-	ProjectTrustSavedDecision,
+	ProjectTrustChoice,
+	ProjectTrustPromptRequest,
 } from "@/modules/project-trust/project-trust";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import {
@@ -13,9 +14,9 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
-type ProjectTrustSelection = ProjectTrustDecision | "trust-parent";
+type ProjectTrustSelection = Exclude<ProjectTrustChoice, "cancel">;
 
-type ProjectTrustChoice = Readonly<{
+type ProjectTrustChoiceItem = Readonly<{
 	action: ProjectTrustSelection;
 	description: string;
 	label: string;
@@ -23,7 +24,7 @@ type ProjectTrustChoice = Readonly<{
 
 const getTrustChoices = (
 	parentDirectory?: string
-): readonly ProjectTrustChoice[] => [
+): readonly ProjectTrustChoiceItem[] => [
 	{
 		action: "trust",
 		description: "Allow this project's protected resources to load.",
@@ -45,26 +46,24 @@ const getTrustChoices = (
 	},
 ];
 
-type ProjectTrustDialogContentProps = Readonly<{
-	currentSessionTrusted: boolean;
-	onCancel: () => void;
-	onDecision: (choice: ProjectTrustSelection) => void;
-	parentDirectory?: string;
-	projectRoot: string;
-	savedDecision?: ProjectTrustSavedDecision;
-}>;
+type ProjectTrustDialogContentProps = ProjectTrustPromptRequest &
+	Readonly<{
+		onCancel: () => void;
+		onDecision: (choice: ProjectTrustSelection) => void;
+	}>;
 
 export function ProjectTrustDialogContent({
-	currentSessionTrusted,
+	protectedRoots,
+	workspace,
 	onCancel,
 	onDecision,
 	parentDirectory,
-	projectRoot,
-	savedDecision,
 }: ProjectTrustDialogContentProps) {
 	const dialog = useDialog();
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
+	const { height } = useTerminalDimensions();
+	const rootStatusHeight = Math.min(6, Math.max(3, protectedRoots.length * 3));
 	const choices = getTrustChoices(parentDirectory);
 	const settled = useRef(false);
 	const onCancelRef = useRef(onCancel);
@@ -87,19 +86,39 @@ export function ProjectTrustDialogContent({
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={colors.textMuted} wrapMode="word">
-				{projectRoot}
+				{`Workspace: ${workspace}`}
 			</text>
-			<text fg={colors.textMuted} wrapMode="word">
-				{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${savedDecision.directory})` : ""}`}`}
-			</text>
-			<text fg={colors.textMuted} wrapMode="word">
-				{`Current session: ${currentSessionTrusted ? "trusted" : "untrusted"}`}
-			</text>
+			{protectedRoots.length === 0 ? (
+				<text fg={colors.textMuted}>
+					No protected project resources detected.
+				</text>
+			) : (
+				<scrollbox
+					height={Math.min(rootStatusHeight, Math.max(3, height - 18))}
+					verticalScrollbarOptions={{ visible: false }}
+				>
+					{protectedRoots.map(
+						({ currentSessionStatus, projectRoot, savedDecision }) => (
+							<box flexDirection="column" key={projectRoot}>
+								<text fg={colors.textMuted} wrapMode="word">
+									{`Protected root: ${projectRoot}`}
+								</text>
+								<text fg={colors.textMuted} wrapMode="word">
+									{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${savedDecision.directory})` : ""}`}`}
+								</text>
+								<text fg={colors.textMuted} wrapMode="word">
+									{`Current session: ${currentSessionStatus === "pending" ? "Decision pending" : currentSessionStatus}`}
+								</text>
+							</box>
+						)
+					)}
+				</scrollbox>
+			)}
 			<text fg={colors.text} wrapMode="word">
 				Project Plugins, MCP Servers, and other protected resources may run with
 				Wincode's process privileges. This is not a sandbox.
 			</text>
-			<SearchListDialogWrapper<ProjectTrustChoice>
+			<SearchListDialogWrapper<ProjectTrustChoiceItem>
 				getKey={(choice) => choice.action}
 				getSearchText={(choice) => `${choice.label} ${choice.description}`}
 				items={choices}
@@ -111,20 +130,12 @@ export function ProjectTrustDialogContent({
 				placeholder="Choose trust decision"
 				renderItem={(choice, isSelected) => (
 					<SelectableDialogItem>
-						<box flexDirection="column" flexGrow={1}>
-							<text
-								fg={isSelected ? selectedTextColor : colors.text}
-								selectable={false}
-							>
-								{choice.label}
-							</text>
-							<text
-								fg={isSelected ? selectedTextColor : colors.textMuted}
-								selectable={false}
-							>
-								{choice.description}
-							</text>
-						</box>
+						<text
+							fg={isSelected ? selectedTextColor : colors.text}
+							selectable={false}
+						>
+							{choice.label}
+						</text>
 					</SelectableDialogItem>
 				)}
 				showSearch={false}

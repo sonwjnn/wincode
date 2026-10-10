@@ -55,6 +55,48 @@ describe("application dispatch", () => {
 		expect(stderr.output).toBe("");
 	});
 
+	test("loads the interactive trust selector before runtime initialization", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const order: string[] = [];
+
+		await dispatch(
+			input(stdout.writer, stderr.writer, []),
+			async (mode) => {
+				order.push(`load:${mode}`);
+				return {
+					...noOpRunners,
+					interactive: async () => {
+						order.push("run");
+						return 0;
+					},
+					promptProjectTrust: async () => {
+						order.push("prompt");
+						return "trust";
+					},
+				};
+			},
+			{
+				initializeRuntime: async ({ promptProjectTrust }) => {
+					order.push("initialize");
+					const choice = await promptProjectTrust?.({
+						protectedRoots: [
+							{
+								currentSessionStatus: "pending",
+								projectRoot: "/workspace",
+							},
+						],
+						workspace: "/workspace",
+					});
+					expect(choice).toBe("trust");
+					return {};
+				},
+			}
+		);
+
+		expect(order).toEqual(["load:interactive", "initialize", "prompt", "run"]);
+	});
+
 	test("routes independent bundled Plugin disables to the application", async () => {
 		const stdout = capture();
 		const stderr = capture();

@@ -312,9 +312,9 @@ describe("Coding-Agent Application Project trust", () => {
 				distributionPlugins: [],
 				homeRoot,
 				userDataDir,
-				promptProjectTrust: async (projectRoot) => {
+				promptProjectTrust: async (request) => {
 					prompts += 1;
-					expect(projectRoot).toBe(await realpath(workspace));
+					expect(request.workspace).toBe(await realpath(workspace));
 					await Bun.write(
 						configPath,
 						JSON.stringify({ settings: { afterPrompt: true } })
@@ -587,11 +587,17 @@ describe("Coding-Agent Application Project trust", () => {
 		expect(resolution.trustedProjectRoots).toContain(await realpath(workspace));
 		expect(status.currentSessionTrusted).toBe(true);
 		expect(status.parentDirectory).toBe(await realpath(parent));
-		expect(status.savedDecision).toEqual({
-			decision: "trust",
-			directory: await realpath(parent),
-			inherited: true,
-		});
+		expect(status.protectedRoots).toEqual([
+			{
+				currentSessionStatus: "trusted",
+				projectRoot: await realpath(workspace),
+				savedDecision: {
+					decision: "trust",
+					directory: await realpath(parent),
+					inherited: true,
+				},
+			},
+		]);
 	});
 
 	test("reload does not implicitly trust protected resources added after startup", async () => {
@@ -800,5 +806,211 @@ describe("Coding-Agent Application Project trust", () => {
 			await runtime.pluginRuntime.shutdown();
 		}
 		expect(prompts).toBe(0);
+	});
+
+	test("interactive startup prompts once for all protected roots in the workspace", async () => {
+		const directory = await createDirectory();
+		const repository = path.join(directory, "repo");
+		const workspace = path.join(repository, "nested");
+		const projectTrustDir = path.join(directory, "user-wincode");
+		await Promise.all([
+			mkdir(path.join(repository, ".git"), { recursive: true }),
+			mkdir(workspace, { recursive: true }),
+		]);
+		await Promise.all([
+			Bun.write(path.join(repository, "wincode.json"), "{}"),
+			Bun.write(path.join(workspace, "wincode.json"), "{}"),
+		]);
+
+		const promptedRoots: string[] = [];
+		const resolution = await resolveProjectTrust({
+			mode: "interactive",
+			prompt: async (request) => {
+				promptedRoots.push(request.workspace);
+				expect(
+					request.protectedRoots.map(({ projectRoot }) => projectRoot)
+				).toEqual([await realpath(repository), await realpath(workspace)]);
+				expect(
+					request.protectedRoots.every(
+						({ currentSessionStatus }) => currentSessionStatus === "pending"
+					)
+				).toBe(true);
+				return "trust";
+			},
+			projectTrustDir,
+			stdinIsTTY: true,
+			workspace,
+		});
+
+		expect(promptedRoots).toEqual([await realpath(workspace)]);
+		expect(new Set(resolution.trustedProjectRoots)).toEqual(
+			new Set([await realpath(repository), await realpath(workspace)])
+		);
+	});
+
+	test("canceling startup skips project resources for this run without saving a decision", async () => {
+		const directory = await createDirectory();
+		const workspace = path.join(directory, "repo");
+		const homeRoot = path.join(directory, "home");
+		const userDataDir = path.join(directory, "user-data");
+		await mkdir(workspace, { recursive: true });
+		await Bun.write(
+			path.join(workspace, "wincode.json"),
+			JSON.stringify({ settings: { projectOnly: true } })
+		);
+
+		const runtime = await initializeApplicationRuntime(
+			{
+				cwd: workspace,
+				disabledPluginIds: [],
+				mode: "interactive",
+				pluginPaths: [],
+				stdinIsTTY: true,
+			},
+			{
+				distributionPlugins: [],
+				homeRoot,
+				projectTrustDir: userDataDir,
+				userDataDir,
+				promptProjectTrust: async () => "cancel",
+			}
+		);
+		try {
+			const snapshot =
+				await runtime.configRuntime.configStore.getSnapshot(workspace);
+			expect(snapshot.document.settings).toBeUndefined();
+			expect(runtime.configRuntime.trustedProjectRoots).toEqual([]);
+			expect(runtime.startupDiagnostics.join("\n")).toContain("untrusted");
+			expect(
+				await Bun.file(path.join(userDataDir, "project-trust.json")).exists()
+			).toBe(false);
+		} finally {
+			await runtime.pluginRuntime.shutdown();
+		}
+	});
+
+	test("startup parent trust covers every protected root in the workspace", async () => {
+		const directory = await createDirectory();
+		const repository = path.join(directory, "repo");
+		const workspace = path.join(repository, "nested");
+		const projectTrustDir = path.join(directory, "user-wincode");
+		await Promise.all([
+			mkdir(path.join(repository, ".git"), { recursive: true }),
+			mkdir(workspace, { recursive: true }),
+		]);
+		await Promise.all([
+			Bun.write(path.join(repository, "wincode.json"), "{}"),
+			Bun.write(path.join(workspace, "wincode.json"), "{}"),
+		]);
+
+		const resolution = await resolveProjectTrust({
+			mode: "interactive",
+			prompt: async (request) => {
+				expect(request.parentDirectory).toBe(await realpath(repository));
+				return "trust-parent";
+			},
+			projectTrustDir,
+			stdinIsTTY: true,
+			workspace,
+		});
+		const status = await getProjectTrustStatus({
+			projectTrustDir,
+			trustedProjectRoots: resolution.trustedProjectRoots,
+			workspace,
+		});
+
+		expect(new Set(resolution.trustedProjectRoots)).toEqual(
+			new Set([await realpath(repository), await realpath(workspace)])
+		);
+		expect(
+			status.protectedRoots.map(({ savedDecision }) => savedDecision)
+		).toEqual([
+			{
+				decision: "trust",
+				directory: await realpath(repository),
+				inherited: false,
+			},
+			{
+				decision: "trust",
+				directory: await realpath(repository),
+				inherited: true,
+			},
+		]);
+	});
+
+	test("trust status preserves mixed saved and current-session states per root", async () => {
+		const directory = await createDirectory();
+		const repository = path.join(directory, "repo");
+		const workspace = path.join(repository, "nested");
+		const projectTrustDir = path.join(directory, "user-wincode");
+		await Promise.all([
+			mkdir(path.join(repository, ".git"), { recursive: true }),
+			mkdir(workspace, { recursive: true }),
+			mkdir(projectTrustDir, { recursive: true }),
+		]);
+		await Promise.all([
+			Bun.write(path.join(repository, "wincode.json"), "{}"),
+			Bun.write(path.join(workspace, "wincode.json"), "{}"),
+			Bun.write(
+				path.join(projectTrustDir, "project-trust.json"),
+				JSON.stringify({
+					version: 1,
+					decisions: [
+						{ directory: await realpath(repository), decision: "trust" },
+						{ directory: await realpath(workspace), decision: "deny" },
+					],
+				})
+			),
+		]);
+
+		const status = await getProjectTrustStatus({
+			projectTrustDir,
+			trustedProjectRoots: [await realpath(repository)],
+			workspace,
+		});
+
+		expect(status.currentSessionTrusted).toBe(false);
+		expect(status.protectedRoots).toEqual([
+			{
+				currentSessionStatus: "trusted",
+				projectRoot: await realpath(repository),
+				savedDecision: {
+					decision: "trust",
+					directory: await realpath(repository),
+					inherited: false,
+				},
+			},
+			{
+				currentSessionStatus: "untrusted",
+				projectRoot: await realpath(workspace),
+				savedDecision: {
+					decision: "deny",
+					directory: await realpath(workspace),
+					inherited: false,
+				},
+			},
+		]);
+	});
+
+	test("non-interactive modes never infer project trust or prompt even on a TTY", async () => {
+		const directory = await createDirectory();
+		let promptCount = 0;
+		for (const mode of ["print", "json", "rpc", "sdk"] as const) {
+			const workspace = path.join(directory, mode);
+			await mkdir(workspace, { recursive: true });
+			await Bun.write(path.join(workspace, "wincode.json"), "{}");
+			const resolution = await resolveProjectTrust({
+				mode,
+				prompt: async () => {
+					promptCount += 1;
+					return "trust";
+				},
+				projectTrustDir: path.join(directory, "user-wincode"),
+				stdinIsTTY: true,
+				workspace,
+			});
+			expect(resolution.trustedProjectRoots).toEqual([]);
+		}
+		expect(promptCount).toBe(0);
 	});
 });

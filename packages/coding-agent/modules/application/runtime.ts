@@ -1,13 +1,12 @@
 import * as os from "node:os";
-import { createInterface } from "node:readline/promises";
 import {
 	loadPlugins,
 	type PluginPackageReference,
 } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
-	type ProjectTrustDecision,
 	type ProjectTrustOverride,
+	type ProjectTrustPrompt,
 	resolveProjectTrust,
 } from "@/modules/project-trust/project-trust";
 import { resolveWorkspaceRoot } from "@/modules/tools";
@@ -47,30 +46,9 @@ export type ApplicationRuntimeOptions = Readonly<{
 	distributionPlugins?: readonly PluginPackageReference[];
 	homeRoot?: string;
 	projectTrustDir?: string;
-	promptProjectTrust?: (projectRoot: string) => Promise<ProjectTrustDecision>;
+	promptProjectTrust?: ProjectTrustPrompt;
 	userDataDir?: string;
 }>;
-
-const promptProjectTrust = async (
-	projectRoot: string
-): Promise<ProjectTrustDecision> => {
-	const terminal = createInterface({
-		input: process.stdin,
-		output: process.stderr,
-	});
-	try {
-		const answer = await terminal.question(
-			`Project resources in ${projectRoot} may load Plugins and MCP Servers with Wincode's process privileges. This is not a sandbox. Trust and remember this directory? [y/N] `
-		);
-		return answer.trim().toLowerCase() === "y" ||
-			answer.trim().toLowerCase() === "yes"
-			? "trust"
-			: "deny";
-	} finally {
-		terminal.close();
-		process.stdin.resume();
-	}
-};
 
 /** Composes the application runtime only after resolving Project trust. */
 export const initializeApplicationRuntime = async (
@@ -88,7 +66,9 @@ export const initializeApplicationRuntime = async (
 		...(input.projectTrustOverride === undefined
 			? {}
 			: { override: input.projectTrustOverride }),
-		prompt: options.promptProjectTrust ?? promptProjectTrust,
+		...(options.promptProjectTrust === undefined
+			? {}
+			: { prompt: options.promptProjectTrust }),
 		stdinIsTTY: input.stdinIsTTY,
 		projectTrustDir,
 		workspace,
