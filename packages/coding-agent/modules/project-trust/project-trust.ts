@@ -14,7 +14,19 @@ export type ProjectTrustChoice =
 	| ProjectTrustDecision
 	| "trust-parent"
 	| "cancel";
+export type ProjectTrustSelection = Exclude<ProjectTrustChoice, "cancel">;
+export type ProjectTrustSelectionResolution = Readonly<{
+	decision: ProjectTrustDecision;
+	scope: "parent" | "project";
+}>;
 export type ProjectTrustSessionStatus = "trusted" | "untrusted" | "pending";
+
+export const resolveProjectTrustSelection = (
+	selection: ProjectTrustSelection
+): ProjectTrustSelectionResolution => ({
+	decision: selection === "deny" ? "deny" : "trust",
+	scope: selection === "trust-parent" ? "parent" : "project",
+});
 
 export type ProjectTrustSavedDecision = Readonly<{
 	decision: ProjectTrustDecision;
@@ -414,10 +426,11 @@ const requestProjectTrustChoice = async ({
 		workspace: canonicalWorkspace,
 	});
 	if (choice !== "cancel") {
+		const { decision, scope } = resolveProjectTrustSelection(choice);
 		await saveProjectTrustDecision({
-			decision: choice === "deny" ? "deny" : "trust",
+			decision,
 			projectTrustDir,
-			scope: choice === "trust-parent" ? "parent" : "project",
+			scope,
 			workspace,
 		});
 	}

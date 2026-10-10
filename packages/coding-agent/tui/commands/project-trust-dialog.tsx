@@ -1,8 +1,8 @@
 import { useTerminalDimensions } from "@opentui/react";
 import { createElement, useEffect, useRef } from "react";
 import type {
-	ProjectTrustChoice,
 	ProjectTrustPromptRequest,
+	ProjectTrustSelection,
 } from "@/modules/project-trust/project-trust";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import {
@@ -13,8 +13,6 @@ import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
-
-type ProjectTrustSelection = Exclude<ProjectTrustChoice, "cancel">;
 
 type ProjectTrustChoiceItem = Readonly<{
 	action: ProjectTrustSelection;
@@ -114,10 +112,6 @@ export function ProjectTrustDialogContent({
 					)}
 				</scrollbox>
 			)}
-			<text fg={colors.text} wrapMode="word">
-				Project Plugins, MCP Servers, and other protected resources may run with
-				Wincode's process privileges. This is not a sandbox.
-			</text>
 			<SearchListDialogWrapper<ProjectTrustChoiceItem>
 				getKey={(choice) => choice.action}
 				getSearchText={(choice) => `${choice.label} ${choice.description}`}

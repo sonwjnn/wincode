@@ -9,6 +9,7 @@ import { initializeApplicationRuntime } from "../modules/application/runtime";
 import { installCrashGuard } from "../shared/crash-guard";
 import type { ExecutionMode } from "../shared/execution-mode";
 import { setInteractiveRuntimeContext } from "../shared/runtime-context";
+import { runInteractive, runProjectTrustPreflight } from "../tui/runtime";
 
 installCrashGuard();
 
@@ -39,18 +40,16 @@ const rpcStdout = {
 const loadModeRunners = async (
 	mode: ExecutionMode
 ): Promise<DispatchModeRunners> => {
-	// Keep help/version free of the Session/Engine and OpenTUI module graphs.
+	// Help/version return before dispatch invokes this mode-runner loader.
 	const [json, print, rpc] = await Promise.all([
 		import("../modules/application/modes/json"),
 		import("../modules/application/modes/print"),
 		import("../modules/application/modes/rpc"),
 	]);
-	const interactive =
-		mode === "interactive" ? await import("../tui/runtime") : undefined;
+	const promptProjectTrust =
+		mode === "interactive" ? runProjectTrustPreflight : undefined;
 	return {
-		...(interactive === undefined
-			? {}
-			: { promptProjectTrust: interactive.runProjectTrustPreflight }),
+		...(promptProjectTrust === undefined ? {} : { promptProjectTrust }),
 		interactive: async (context: ApplicationContext) => {
 			setInteractiveRuntimeContext({
 				args: context.args,
@@ -65,10 +64,7 @@ const loadModeRunners = async (
 					? {}
 					: { resourceLoader: context.resourceLoader }),
 			});
-			if (interactive === undefined) {
-				throw new Error("Interactive TUI module was not loaded for this mode.");
-			}
-			return interactive.runInteractive();
+			return runInteractive();
 		},
 		json: json.runJsonExecutionMode,
 		print: print.runPrintExecutionMode,

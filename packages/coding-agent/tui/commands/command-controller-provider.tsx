@@ -23,6 +23,7 @@ import { useConnections } from "@/modules/connections";
 import { PluginStatusPanelDialogContent } from "@/modules/plugins/ui/plugin-status-panel-dialog";
 import {
 	getProjectTrustStatus,
+	resolveProjectTrustSelection,
 	saveProjectTrustDecision,
 } from "@/modules/project-trust/project-trust";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -84,9 +85,9 @@ export function CommandControllerProvider({
 			...status,
 			workspace: config.workspace,
 		});
-		const decision = choice === "deny" ? "deny" : "trust";
+		const { decision, scope } = resolveProjectTrustSelection(choice);
 		let message: string;
-		if (choice === "trust-parent") {
+		if (scope === "parent") {
 			message =
 				"Parent folder trust saved. Run /reload to load project resources.";
 		} else if (decision === "trust") {
@@ -97,7 +98,7 @@ export function CommandControllerProvider({
 		await saveProjectTrustDecision({
 			decision,
 			projectTrustDir,
-			scope: choice === "trust-parent" ? "parent" : "project",
+			scope,
 			workspace: config.workspace,
 		});
 		toast.show({
