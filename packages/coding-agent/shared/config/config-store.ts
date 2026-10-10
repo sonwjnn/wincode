@@ -9,7 +9,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import {
 	isArray,
-	isNonEmptyString,
 	isNull,
 	isObjectLike,
 	isPlainObject,
@@ -53,9 +52,25 @@ export type ConfigSnapshot = {
 export type ConfigStore = {
 	getSnapshot(workspace: string): Promise<ConfigSnapshot>;
 	refreshSnapshot(workspace: string): Promise<ConfigSnapshot>;
+	getNamespaceSnapshot(
+		workspace: string,
+		namespace: string
+	): Promise<ConfigSnapshot>;
+	refreshNamespaceSnapshot(
+		workspace: string,
+		namespace: string
+	): Promise<ConfigSnapshot>;
 	setValue(
 		workspace: string,
 		scope: ConfigScope,
+		path: readonly string[],
+		value: unknown,
+		targetPath?: string
+	): Promise<ConfigSnapshot>;
+	setNamespaceValue(
+		workspace: string,
+		scope: ConfigScope,
+		namespace: string,
 		path: readonly string[],
 		value: unknown,
 		targetPath?: string
@@ -77,11 +92,9 @@ type ConfigFileSystem = {
 };
 
 export type ConfigStoreOptions = {
-	configRoot?: string;
 	fs?: ConfigFileSystem;
 	homeRoot?: string;
 	trustedProjectRoots?: readonly string[];
-	xdgConfigHome?: string;
 };
 
 type ProvenanceEntry = {
@@ -95,6 +108,7 @@ const isNotFound = (error: unknown): boolean =>
 	isObjectLike(error) && !isArray(error) && error.code === "ENOENT";
 
 const unsafeKeys = new Set(["__proto__", "constructor", "prototype"]);
+const namespacePattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 
 const findUnsafeKey = (node: Node | undefined): string | undefined => {
 	if (isUndefined(node)) {
@@ -300,11 +314,16 @@ const selectJsoncFile = async (
 
 const selectConfigFile = async (
 	root: string,
+	baseName: string,
 	scope: ConfigScope,
-	fs: ConfigFileSystem
+	fs: ConfigFileSystem,
+	allowJsonc = true
 ): Promise<SelectedConfigFile> => {
-	const jsonPath = path.join(root, "wincode.json");
-	const jsoncPath = path.join(root, "wincode.jsonc");
+	const jsonPath = path.join(root, `${baseName}.json`);
+	if (!allowJsonc) {
+		return selectJsonFile(jsonPath, scope, fs);
+	}
+	const jsoncPath = path.join(root, `${baseName}.jsonc`);
 	const jsonc = await readFile(fs, jsoncPath);
 	if (jsonc.kind === "found") {
 		return selectJsoncFile(jsonc.contents, jsonPath, jsoncPath, scope, fs);
@@ -378,13 +397,21 @@ const parseDocument = (
 
 const readSource = async (
 	root: string,
+	baseName: string,
 	scope: ConfigScope,
-	fs: ConfigFileSystem
+	fs: ConfigFileSystem,
+	allowJsonc = true
 ): Promise<{
 	diagnostics: ConfigDiagnostic[];
 	source: ConfigSource;
 }> => {
-	const selected = await selectConfigFile(root, scope, fs);
+	const selected = await selectConfigFile(
+		root,
+		baseName,
+		scope,
+		fs,
+		allowJsonc
+	);
 	const parsed = parseDocument(selected, scope);
 	return {
 		diagnostics: isUndefined(parsed.diagnostic)
@@ -400,10 +427,10 @@ const readSource = async (
 
 const loadSnapshot = async (
 	workspace: string,
-	options: Required<
-		Pick<ConfigStoreOptions, "configRoot" | "fs" | "homeRoot">
-	> &
-		Pick<ConfigStoreOptions, "trustedProjectRoots">
+	options: Required<Pick<ConfigStoreOptions, "fs" | "homeRoot">> &
+		Pick<ConfigStoreOptions, "trustedProjectRoots">,
+	baseName: string,
+	allowJsonc: boolean
 ): Promise<ConfigSnapshot> => {
 	const trustedRoots = options.trustedProjectRoots?.map((root) =>
 		path.resolve(root)
@@ -416,24 +443,24 @@ const loadSnapshot = async (
 	);
 	const projectLocations = projectRoots.flatMap(({ canonical, root }) => {
 		if (
-			trustedRoots !== undefined &&
-			!trustedRoots.includes(path.resolve(root)) &&
-			!trustedRoots.includes(canonical)
+			trustedRoots === undefined ||
+			!(
+				trustedRoots.includes(path.resolve(root)) ||
+				trustedRoots.includes(canonical)
+			)
 		) {
 			return [];
 		}
-		return [
-			{ root, scope: "project" as const },
-			{ root: path.join(root, ".wincode"), scope: "project" as const },
-		];
+		return [{ root: path.join(root, ".wincode"), scope: "project" as const }];
 	});
 	const locations = [
-		{ root: options.configRoot, scope: "global" as const },
 		{ root: resolveUserWincodeDir(options.homeRoot), scope: "global" as const },
 		...projectLocations,
 	];
 	const loaded = await Promise.all(
-		locations.map(({ root, scope }) => readSource(root, scope, options.fs))
+		locations.map(({ root, scope }) =>
+			readSource(root, baseName, scope, options.fs, allowJsonc)
+		)
 	);
 	const sources = loaded.map(({ source }) => source);
 	const document: MutableConfigDocument = Object.create(null);
@@ -492,12 +519,11 @@ const resolveConfigWritePath = (
 	targetPath?: string
 ): string => {
 	if (!isUndefined(targetPath)) {
-		const targetSource = snapshot.sources.find(
-			(source) => source.scope === scope && source.path === targetPath
+		return (
+			snapshot.sources.find(
+				(source) => source.scope === scope && source.path === targetPath
+			)?.path ?? ""
 		);
-		if (!isUndefined(targetSource)) {
-			return targetSource.path;
-		}
 	}
 	const existingSource = snapshot.sources.findLast(
 		(source) =>
@@ -577,22 +603,19 @@ export const createConfigStore = (
 	options: ConfigStoreOptions = {}
 ): ConfigStore => {
 	const homeRoot = options.homeRoot ?? homedir();
-	const xdgConfigHome = options.xdgConfigHome ?? process.env.XDG_CONFIG_HOME;
-	const configRoot =
-		options.configRoot ??
-		path.join(
-			isNonEmptyString(xdgConfigHome)
-				? xdgConfigHome
-				: path.join(homeRoot, ".config"),
-			"wincode"
-		);
 	const fs: ConfigFileSystem =
 		options.fs ??
 		({
 			readFile: (file: string) => readUtf8File(file),
 			writeFile: writeConfigFileAtomically,
 		} satisfies ConfigFileSystem);
+	const loadOptions = {
+		fs,
+		homeRoot,
+		trustedProjectRoots: options.trustedProjectRoots,
+	};
 	const snapshots = new Map<string, Promise<ConfigSnapshot>>();
+	const namespaceSnapshots = new Map<string, Promise<ConfigSnapshot>>();
 	const writeQueues = new Map<string, Promise<void>>();
 	const getSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
 		const key = path.resolve(workspace);
@@ -600,78 +623,148 @@ export const createConfigStore = (
 		if (!isUndefined(existing)) {
 			return existing;
 		}
-		const loaded = loadSnapshot(key, {
-			configRoot,
-			fs,
-			homeRoot,
-			trustedProjectRoots: options.trustedProjectRoots,
-		});
+		const loaded = loadSnapshot(key, loadOptions, "settings", true);
 		snapshots.set(key, loaded);
 		return loaded;
 	};
 	const refreshSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
 		const key = path.resolve(workspace);
-		const snapshot = loadSnapshot(key, {
-			configRoot,
-			fs,
-			homeRoot,
-			trustedProjectRoots: options.trustedProjectRoots,
-		});
+		const snapshot = loadSnapshot(key, loadOptions, "settings", true);
 		snapshots.set(key, snapshot);
 		return snapshot;
+	};
+	const assertNamespace = (namespace: string): void => {
+		if (!namespacePattern.test(namespace)) {
+			throw new Error("Config namespace must be a lowercase identifier.");
+		}
+	};
+	const namespaceKey = (workspace: string, namespace: string): string =>
+		JSON.stringify([path.resolve(workspace), namespace]);
+	const getNamespaceSnapshot = (
+		workspace: string,
+		namespace: string
+	): Promise<ConfigSnapshot> => {
+		assertNamespace(namespace);
+		const key = namespaceKey(workspace, namespace);
+		const existing = namespaceSnapshots.get(key);
+		if (!isUndefined(existing)) {
+			return existing;
+		}
+		const loaded = loadSnapshot(
+			path.resolve(workspace),
+			loadOptions,
+			namespace,
+			false
+		);
+		namespaceSnapshots.set(key, loaded);
+		return loaded;
+	};
+	const refreshNamespaceSnapshot = (
+		workspace: string,
+		namespace: string
+	): Promise<ConfigSnapshot> => {
+		assertNamespace(namespace);
+		const key = namespaceKey(workspace, namespace);
+		const snapshot = loadSnapshot(
+			path.resolve(workspace),
+			loadOptions,
+			namespace,
+			false
+		);
+		namespaceSnapshots.set(key, snapshot);
+		return snapshot;
+	};
+	const persistValue = async (
+		load: (workspace: string) => Promise<ConfigSnapshot>,
+		refresh: (workspace: string) => Promise<ConfigSnapshot>,
+		workspace: string,
+		scope: ConfigScope,
+		configPath: readonly string[],
+		value: unknown,
+		targetPath?: string
+	): Promise<ConfigSnapshot> => {
+		if (!configPathIsSafe(configPath)) {
+			throw new Error("Config path contains an unsafe segment.");
+		}
+		const snapshot = await load(workspace);
+		const target = resolveConfigWritePath(
+			snapshot,
+			scope,
+			configPath,
+			targetPath
+		);
+		if (target.length === 0) {
+			throw new Error(`Could not resolve ${scope} config file.`);
+		}
+		const previous = writeQueues.get(target) ?? Promise.resolve();
+		const current = previous
+			.catch(() => undefined)
+			.then(async () => {
+				const contents = await readConfigForWrite(fs, target);
+				const document = parseJsonc(contents, [], {
+					allowTrailingComma: true,
+				});
+				if (
+					isUndefined(value) &&
+					(!isPlainObject(document) ||
+						isUndefined(valueAtPath(document, configPath)))
+				) {
+					return;
+				}
+				const updated = applyEdits(
+					contents,
+					modify(contents, [...configPath], value, {
+						formattingOptions: { insertSpaces: true, tabSize: 2 },
+					})
+				);
+				if (isUndefined(fs.writeFile)) {
+					throw new Error("Config persistence is unavailable.");
+				}
+				await fs.writeFile(target, updated);
+			});
+		writeQueues.set(target, current);
+		try {
+			await current;
+		} finally {
+			if (writeQueues.get(target) === current) {
+				writeQueues.delete(target);
+			}
+		}
+		return refresh(workspace);
 	};
 	return {
 		getSnapshot,
 		refreshSnapshot,
-		setValue: async (workspace, scope, configPath, value, targetPath) => {
-			if (!configPathIsSafe(configPath)) {
-				throw new Error("Config path contains an unsafe segment.");
-			}
-			const snapshot = await getSnapshot(workspace);
-			const target = resolveConfigWritePath(
-				snapshot,
+		getNamespaceSnapshot,
+		refreshNamespaceSnapshot,
+		setValue: (workspace, scope, configPath, value, targetPath) =>
+			persistValue(
+				getSnapshot,
+				refreshSnapshot,
+				workspace,
 				scope,
 				configPath,
+				value,
+				targetPath
+			),
+		setNamespaceValue: (
+			workspace,
+			scope,
+			namespace,
+			configPath,
+			value,
+			targetPath
+		) => {
+			assertNamespace(namespace);
+			return persistValue(
+				(workspacePath) => getNamespaceSnapshot(workspacePath, namespace),
+				(workspacePath) => refreshNamespaceSnapshot(workspacePath, namespace),
+				workspace,
+				scope,
+				configPath,
+				value,
 				targetPath
 			);
-			if (target.length === 0) {
-				throw new Error(`Could not resolve ${scope} config file.`);
-			}
-			const previous = writeQueues.get(target) ?? Promise.resolve();
-			const current = previous
-				.catch(() => undefined)
-				.then(async () => {
-					const contents = await readConfigForWrite(fs, target);
-					const document = parseJsonc(contents, [], {
-						allowTrailingComma: true,
-					});
-					if (
-						isUndefined(value) &&
-						(!isPlainObject(document) ||
-							isUndefined(valueAtPath(document, configPath)))
-					) {
-						return;
-					}
-					const updated = applyEdits(
-						contents,
-						modify(contents, [...configPath], value, {
-							formattingOptions: { insertSpaces: true, tabSize: 2 },
-						})
-					);
-					if (isUndefined(fs.writeFile)) {
-						throw new Error("Config persistence is unavailable.");
-					}
-					await fs.writeFile(target, updated);
-				});
-			writeQueues.set(target, current);
-			try {
-				await current;
-			} finally {
-				if (writeQueues.get(target) === current) {
-					writeQueues.delete(target);
-				}
-			}
-			return refreshSnapshot(workspace);
 		},
 	};
 };

@@ -44,7 +44,6 @@ process.env.WINCODE_SUBAGENTS_DB_PATH = path.join(
 );
 export const interactiveConfigRuntime = {
 	configStore: createConfigStore({
-		configRoot: testDirectory,
 		homeRoot: testDirectory,
 	}),
 	cwd: testDirectory,

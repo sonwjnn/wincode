@@ -1,15 +1,17 @@
 import type { AgentId } from "@wincode/agent-core";
-import { isUndefined } from "@wincode/utils";
+import { isUndefined, omitUndefined } from "@wincode/utils";
 import type { JsonObject } from "type-fest";
 import {
 	createSdkMcpClient,
 	createSdkMcpClientDeps,
 	type McpClient,
 	type McpClientFactoryDeps,
+	type McpClientResourceContent,
 	type McpClientTool,
 } from "./client";
 import type {
 	McpConfigLoader,
+	McpConfigOrigin,
 	McpConfigResult,
 	ResolvedMcpServerConfig,
 } from "./config";
@@ -20,7 +22,10 @@ import {
 	type McpToolManifest,
 	type McpToolManifestEntry,
 } from "./manifest";
-import { type McpNormalizedResult, normalizeMcpResult } from "./result";
+import {
+	type McpNormalizedResult,
+	normalizeMcpResultWithArtifacts,
+} from "./result";
 import { sanitizeMessage } from "./sanitize";
 import { qualifyMcpToolName } from "./tool-identity";
 
@@ -32,8 +37,11 @@ export type McpServerState =
 	| "failed";
 
 export type McpServerStatus = {
+	auth: "none" | "required" | "authenticated";
 	error?: string;
+	exposure: "direct" | "hidden";
 	name: string;
+	source?: McpConfigOrigin;
 	state: McpServerState;
 	toolCount: number;
 	transport: "local" | "remote";
@@ -46,6 +54,41 @@ export type McpSnapshotTool = {
 	serverName: string;
 };
 
+export type McpResourceSummary = Readonly<{
+	description?: string;
+	mimeType?: string;
+	name: string;
+	server: string;
+	uri: string;
+}>;
+
+export type McpResourceTemplateSummary = Readonly<{
+	description?: string;
+	mimeType?: string;
+	name: string;
+	server: string;
+	uriTemplate: string;
+}>;
+
+export type McpResourcePage = Readonly<{
+	errors?: readonly Readonly<{ message: string; server: string }>[];
+	nextCursor?: string;
+	nextCursorByServer?: Readonly<Record<string, string>>;
+	resources: readonly McpResourceSummary[];
+}>;
+
+export type McpResourceTemplatePage = Readonly<{
+	errors?: readonly Readonly<{ message: string; server: string }>[];
+	nextCursor?: string;
+	nextCursorByServer?: Readonly<Record<string, string>>;
+	resourceTemplates: readonly McpResourceTemplateSummary[];
+}>;
+
+export type McpResourceRead = Readonly<{
+	contents: readonly McpClientResourceContent[];
+	server: string;
+}>;
+
 export type McpCatalogSnapshot = {
 	agent: AgentId;
 	id: McpSnapshotId;
@@ -53,9 +96,11 @@ export type McpCatalogSnapshot = {
 	tools: ReadonlyMap<string, McpSnapshotTool>;
 };
 
+export type McpOAuthRedirectReader = (callback: Promise<URL>) => Promise<URL>;
+
 export type McpRegistry = {
 	close(): Promise<void>;
-	initialize(): Promise<void>;
+	initialize(waitForConnections?: boolean): Promise<void>;
 	createSnapshot(
 		agent: AgentId,
 		trackLatest?: boolean
@@ -66,8 +111,28 @@ export type McpRegistry = {
 		input: unknown,
 		signal?: AbortSignal
 	): Promise<McpNormalizedResult>;
+	listResources(
+		serverName?: string,
+		cursor?: string,
+		signal?: AbortSignal
+	): Promise<McpResourcePage>;
+	listResourceTemplates(
+		serverName?: string,
+		cursor?: string,
+		signal?: AbortSignal
+	): Promise<McpResourceTemplatePage>;
+	readResource(
+		serverName: string,
+		uri: string,
+		signal?: AbortSignal
+	): Promise<McpResourceRead>;
 	releaseSnapshot?(snapshot: McpCatalogSnapshot): void;
 	getStatuses(): readonly McpServerStatus[];
+	login(
+		serverName: string,
+		readRedirectUrl?: McpOAuthRedirectReader
+	): Promise<void>;
+	logout(serverName: string): Promise<void>;
 	reconnect(serverName: string): Promise<void>;
 	subscribe(listener: () => void): () => void;
 	toggle(serverName: string): Promise<void>;
@@ -75,18 +140,78 @@ export type McpRegistry = {
 
 export type McpRegistryDeps = Readonly<{
 	createClient?: (config: ResolvedMcpServerConfig) => McpClient;
+	createOAuthProvider?: McpClientFactoryDeps["createOAuthProvider"];
 	env?: Readonly<Record<string, string | undefined>>;
 	loadConfig: McpConfigLoader;
+	loginOAuth?: (
+		config: Extract<ResolvedMcpServerConfig, { type: "remote" }>,
+		readRedirectUrl?: McpOAuthRedirectReader
+	) => Promise<void>;
+	logoutOAuth?: (
+		config: Extract<ResolvedMcpServerConfig, { type: "remote" }>
+	) => Promise<void>;
 	workspace: string;
 }>;
+
+type McpPageResult<Page> =
+	| Readonly<{ entry: ServerEntry; error: string }>
+	| Readonly<{ entry: ServerEntry; page: Page }>;
 
 type ServerEntry = {
 	client: McpClient | undefined;
 	config: ResolvedMcpServerConfig;
+	source: McpConfigOrigin | undefined;
 	error: string | undefined;
 	executionController: AbortController;
 	state: McpServerState;
 	tools: readonly McpClientTool[];
+};
+
+type McpPageCollection<Item> = Readonly<{
+	errors: readonly Readonly<{ message: string; server: string }>[] | undefined;
+	items: readonly Item[];
+	nextCursor: string | undefined;
+	nextCursorByServer: Readonly<Record<string, string>> | undefined;
+}>;
+
+const collectResourcePages = <Page, SourceItem, Item>(
+	pages: readonly McpPageResult<Page>[],
+	serverName: string | undefined,
+	pageData: (page: Page) => Readonly<{
+		items: readonly SourceItem[];
+		nextCursor: string | undefined;
+	}>,
+	summarize: (entry: ServerEntry, item: SourceItem) => Item
+): McpPageCollection<Item> => {
+	const items: Item[] = [];
+	const errors: { message: string; server: string }[] = [];
+	const nextCursorByServer: Record<string, string> = {};
+	let nextCursor: string | undefined;
+	for (const result of pages) {
+		if ("error" in result) {
+			errors.push({ server: result.entry.config.name, message: result.error });
+			continue;
+		}
+		const data = pageData(result.page);
+		for (const item of data.items) {
+			items.push(summarize(result.entry, item));
+		}
+		if (data.nextCursor !== undefined) {
+			nextCursorByServer[result.entry.config.name] = data.nextCursor;
+			if (serverName === result.entry.config.name) {
+				nextCursor = data.nextCursor;
+			}
+		}
+	}
+	return {
+		errors: errors.length === 0 ? undefined : errors,
+		items,
+		nextCursor,
+		nextCursorByServer:
+			Object.keys(nextCursorByServer).length === 0
+				? undefined
+				: nextCursorByServer,
+	};
 };
 
 const outputError = (message: string): McpNormalizedResult => ({
@@ -117,9 +242,53 @@ const requestedRemoteTools = (
 	return [...requested];
 };
 
+const matchesToolPattern = (pattern: string, toolName: string): boolean => {
+	const parts = pattern.split("*");
+	let cursor = 0;
+	for (const [index, part] of parts.entries()) {
+		if (part.length === 0) {
+			continue;
+		}
+		const position = toolName.indexOf(part, cursor);
+		if (
+			position < 0 ||
+			(index === 0 && position !== 0) ||
+			(index === parts.length - 1 && position + part.length !== toolName.length)
+		) {
+			return false;
+		}
+		cursor = position + part.length;
+	}
+	return true;
+};
+
+const exposureForTool = (
+	config: ResolvedMcpServerConfig,
+	toolName: string
+): "direct" | "hidden" => {
+	const rules = config.toolExposure;
+	if (rules === undefined) {
+		return config.exposure ?? "direct";
+	}
+	const exact = rules[toolName];
+	if (exact !== undefined) {
+		return exact;
+	}
+	for (const [pattern, exposure] of Object.entries(rules)) {
+		if (!pattern.includes("*")) {
+			continue;
+		}
+		if (matchesToolPattern(pattern, toolName)) {
+			return exposure;
+		}
+	}
+	return config.exposure ?? "direct";
+};
+
 const defaultSdkClientFactory = (
 	workspace: string,
-	env: Record<string, string | undefined>
+	env: Record<string, string | undefined>,
+	createOAuthProvider: McpClientFactoryDeps["createOAuthProvider"]
 ): ((config: ResolvedMcpServerConfig) => McpClient) => {
 	let deps: McpClientFactoryDeps | undefined;
 	return (config) => {
@@ -131,6 +300,7 @@ const defaultSdkClientFactory = (
 			);
 			deps = createSdkMcpClientDeps({
 				clientInfo: { name: "wincode-cli", version: "0.1.0" },
+				...(createOAuthProvider === undefined ? {} : { createOAuthProvider }),
 				environment,
 				workspace,
 			});
@@ -143,7 +313,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const workspace = input.workspace;
 	const env = input.env === undefined ? { ...process.env } : { ...input.env };
 	const createClient =
-		input.createClient ?? defaultSdkClientFactory(workspace, env);
+		input.createClient ??
+		defaultSdkClientFactory(workspace, env, input.createOAuthProvider);
 
 	const serverEntries = new Map<string, ServerEntry>();
 	const invalidStatuses = new Map<string, McpServerStatus>();
@@ -151,6 +322,9 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const closeController = new AbortController();
 	let closed = false;
 	let initPromise: Promise<void> | undefined;
+	let initialConnectionsPromise: Promise<void> = Promise.resolve();
+	let initialConnectionsSettled = true;
+	let initialCatalogReadyPromise: Promise<void> = Promise.resolve();
 	let initialized = false;
 	let refreshPromise: Promise<void> | undefined;
 	const entryOperations = new Map<string, Promise<void>>();
@@ -160,6 +334,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const activeSnapshotIds = new Set<McpSnapshotId>();
 	const untrackedSnapshotIds = new Set<McpSnapshotId>();
 	let catalogGeneration = 0;
+	let snapshotCreated = false;
 
 	const emit = (): void => {
 		for (const listener of [...listeners]) {
@@ -214,6 +389,18 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			closeController.signal,
 		]);
 
+	const publishTools = (
+		entry: ServerEntry,
+		client: McpClient,
+		tools: readonly McpClientTool[]
+	): void => {
+		if (entry.client !== client) {
+			return;
+		}
+		entry.tools = tools;
+		emit();
+	};
+
 	const listEntryTools = async (
 		entry: ServerEntry,
 		client: McpClient
@@ -232,6 +419,180 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const loadCurrentConfig = (refresh = false): Promise<McpConfigResult> =>
 		input.loadConfig({ env, refresh, workspace });
 
+	const resourceEntriesFor = (serverName?: string): ServerEntry[] => {
+		if (serverName === undefined) {
+			return [...serverEntries.values()].filter(
+				(entry) =>
+					entry.state === "connected" &&
+					(entry.config.exposure ?? "direct") === "direct"
+			);
+		}
+		const entry = serverEntries.get(serverName);
+		if (entry === undefined) {
+			throw new Error("MCP server is unavailable");
+		}
+		return [entry];
+	};
+
+	const requestResourcePages = async <Page>(
+		entries: readonly ServerEntry[],
+		cursor: string | undefined,
+		signal: AbortSignal | undefined,
+		unavailableMessage: string,
+		request: (
+			client: McpClient,
+			cursor: string | undefined,
+			signal: AbortSignal
+		) => Promise<Page> | undefined
+	): Promise<readonly McpPageResult<Page>[]> =>
+		Promise.all(
+			entries.map(async (entry) => {
+				const client = entry.client;
+				if (
+					entry.state !== "connected" ||
+					(entry.config.exposure ?? "direct") !== "direct" ||
+					client === undefined
+				) {
+					return { entry, error: unavailableMessage };
+				}
+				const signals = [catalogSignal(entry)];
+				if (signal !== undefined) {
+					signals.push(signal);
+				}
+				const pageRequest = request(client, cursor, AbortSignal.any(signals));
+				if (pageRequest === undefined) {
+					return { entry, error: unavailableMessage };
+				}
+				try {
+					return { entry, page: await pageRequest };
+				} catch (error) {
+					return {
+						entry,
+						error: sanitizeMessage(
+							entry.config,
+							error,
+							"MCP resource request failed"
+						),
+					};
+				}
+			})
+		);
+
+	const listResources = async (
+		serverName?: string,
+		cursor?: string,
+		signal?: AbortSignal
+	): Promise<McpResourcePage> => {
+		await init();
+		const entries = resourceEntriesFor(serverName);
+		const pages = await requestResourcePages(
+			entries,
+			serverName === undefined ? undefined : cursor,
+			signal,
+			"MCP resources are unavailable",
+			(client, requestCursor, requestSignal) =>
+				client.listResources?.(requestCursor, requestSignal)
+		);
+		const collected = collectResourcePages(
+			pages,
+			serverName,
+			(page) => ({ items: page.resources, nextCursor: page.nextCursor }),
+			(entry, resource) => ({
+				name: resource.name,
+				server: entry.config.name,
+				uri: resource.uri,
+				...omitUndefined({
+					description: resource.description,
+					mimeType: resource.mimeType,
+				}),
+			})
+		);
+		return {
+			resources: collected.items,
+			...omitUndefined({
+				nextCursor: collected.nextCursor,
+				nextCursorByServer: collected.nextCursorByServer,
+				errors: collected.errors,
+			}),
+		};
+	};
+
+	const listResourceTemplates = async (
+		serverName?: string,
+		cursor?: string,
+		signal?: AbortSignal
+	): Promise<McpResourceTemplatePage> => {
+		await init();
+		const entries = resourceEntriesFor(serverName);
+		const pages = await requestResourcePages(
+			entries,
+			serverName === undefined ? undefined : cursor,
+			signal,
+			"MCP resource templates are unavailable",
+			(client, requestCursor, requestSignal) =>
+				client.listResourceTemplates?.(requestCursor, requestSignal)
+		);
+		const collected = collectResourcePages(
+			pages,
+			serverName,
+			(page) => ({
+				items: page.resourceTemplates,
+				nextCursor: page.nextCursor,
+			}),
+			(entry, resource) => ({
+				name: resource.name,
+				server: entry.config.name,
+				uriTemplate: resource.uriTemplate,
+				...omitUndefined({
+					description: resource.description,
+					mimeType: resource.mimeType,
+				}),
+			})
+		);
+		return {
+			resourceTemplates: collected.items,
+			...omitUndefined({
+				nextCursor: collected.nextCursor,
+				nextCursorByServer: collected.nextCursorByServer,
+				errors: collected.errors,
+			}),
+		};
+	};
+
+	const readResource = async (
+		serverName: string,
+		uri: string,
+		signal?: AbortSignal
+	): Promise<McpResourceRead> => {
+		await init();
+		const entry = serverEntries.get(serverName);
+		if (
+			isUndefined(entry) ||
+			entry.state !== "connected" ||
+			(entry.config.exposure ?? "direct") !== "direct" ||
+			isUndefined(entry.client?.readResource)
+		) {
+			throw new Error("MCP resource is unavailable");
+		}
+		const signals = [catalogSignal(entry)];
+		if (signal !== undefined) {
+			signals.push(signal);
+		}
+		try {
+			return {
+				contents: await entry.client.readResource(
+					uri,
+					AbortSignal.any(signals)
+				),
+				server: entry.config.name,
+			};
+		} catch (error) {
+			throw new Error(
+				sanitizeMessage(entry.config, error, "MCP resource request failed")
+			);
+		}
+	};
+
 	const refreshEntryConfig = async (
 		entry: ServerEntry,
 		serverName: string
@@ -240,6 +601,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		const config = configResult.servers[serverName];
 		if (!isUndefined(config)) {
 			entry.config = config;
+			entry.source = configResult.serverSources?.[serverName];
 			return true;
 		}
 
@@ -266,15 +628,17 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	const connectEntry = async (entry: ServerEntry): Promise<void> => {
 		const client = entry.client ?? createClient(entry.config);
 		entry.client = client;
-		client.setToolsChangedListener((tools) => {
-			if (entry.client === client) {
-				entry.tools = tools;
-			}
-		});
+		client.setToolsChangedListener((tools) =>
+			publishTools(entry, client, tools)
+		);
 		entry.state = "connecting";
 		entry.error = undefined;
 		try {
 			await client.connect(startupSignal(entry));
+			if (closed) {
+				await closeClient(entry);
+				return;
+			}
 			entry.tools = await listEntryTools(entry, client);
 			entry.state = "connected";
 			entry.error = undefined;
@@ -287,6 +651,8 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				"unknown MCP registry error"
 			);
 			await closeClient(entry);
+		} finally {
+			emit();
 		}
 	};
 
@@ -296,6 +662,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			serverEntries.set(name, {
 				client: undefined,
 				config,
+				source: configResult.serverSources?.[name],
 				error: undefined,
 				executionController: new AbortController(),
 				state: config.disabled ? "disabled" : "connecting",
@@ -307,8 +674,11 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				continue;
 			}
 			invalidStatuses.set(invalid.name, {
+				auth: "none",
 				error: "Invalid MCP server configuration",
+				exposure: "direct",
 				name: invalid.name,
+				source: configResult.serverSources?.[invalid.name],
 				state: "failed",
 				toolCount: 0,
 				transport: invalid.transport,
@@ -321,8 +691,14 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				connects.push(connectEntry(entry));
 			}
 		}
-		await Promise.allSettled(connects);
-		emit();
+		initialConnectionsSettled = false;
+		initialConnectionsPromise = Promise.allSettled(connects).then(() => {
+			initialConnectionsSettled = true;
+		});
+		initialCatalogReadyPromise = Promise.race([
+			initialConnectionsPromise,
+			Bun.sleep(10_000),
+		]);
 	};
 
 	const init = (): Promise<void> => {
@@ -346,6 +722,9 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				continue;
 			}
 			for (const tool of entry.tools) {
+				if (exposureForTool(entry.config, tool.name) === "hidden") {
+					continue;
+				}
 				candidates.push({
 					client: entry.client,
 					config: entry.config,
@@ -430,6 +809,29 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			return snapshot;
 		}
 		await init();
+		await initialCatalogReadyPromise;
+		if (snapshotCreated) {
+			const retryableEntries = [...serverEntries.values()].filter(
+				(entry) =>
+					entry.state === "degraded" ||
+					(entry.state === "failed" &&
+						entry.error !== "Invalid MCP server configuration")
+			);
+			await Promise.allSettled(
+				retryableEntries.map((entry) =>
+					runEntryOperation(entry.config.name, async () => {
+						if (
+							entry.state === "degraded" ||
+							(entry.state === "failed" &&
+								entry.error !== "Invalid MCP server configuration")
+						) {
+							await doReconnect(entry);
+						}
+					})
+				)
+			);
+		}
+		snapshotCreated = true;
 		while (!closed) {
 			const generation = catalogGeneration;
 			const snapshot = await buildSnapshot(agent);
@@ -508,7 +910,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				input,
 				combined
 			);
-			return normalizeMcpResult(raw);
+			return await normalizeMcpResultWithArtifacts(raw);
 		} catch (error) {
 			const message = executionError(
 				toolName,
@@ -542,11 +944,9 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		await closeClient(entry);
 		const client = createClient(entry.config);
 		entry.client = client;
-		client.setToolsChangedListener((tools) => {
-			if (entry.client === client) {
-				entry.tools = tools;
-			}
-		});
+		client.setToolsChangedListener((tools) =>
+			publishTools(entry, client, tools)
+		);
 		entry.state = "connecting";
 		entry.error = undefined;
 		try {
@@ -601,6 +1001,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		}
 		const configChanged = !Bun.deepEquals(entry.config, config, true);
 		entry.config = config;
+		entry.source = configResult.serverSources?.[entry.config.name];
 		if (config.disabled) {
 			if (entry.state !== "disabled") {
 				await deactivateEntry(entry, "disabled");
@@ -625,6 +1026,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			const entry: ServerEntry = {
 				client: undefined,
 				config,
+				source: configResult.serverSources?.[name],
 				error: undefined,
 				executionController: new AbortController(),
 				state: config.disabled ? "disabled" : "connecting",
@@ -643,8 +1045,11 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				continue;
 			}
 			invalidStatuses.set(invalid.name, {
+				auth: "none",
 				error: "Invalid MCP server configuration",
+				exposure: "direct",
 				name: invalid.name,
+				source: configResult.serverSources?.[invalid.name],
 				state: "failed",
 				toolCount: 0,
 				transport: invalid.transport,
@@ -676,12 +1081,21 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		emit();
 	};
 
-	const initialize = (): Promise<void> => {
+	const initialize = async (waitForConnections = true): Promise<void> => {
 		if (!initialized) {
-			return init();
+			await init();
+			if (waitForConnections) {
+				await initialConnectionsPromise;
+			}
+			return;
+		}
+		if (waitForConnections && !initialConnectionsSettled) {
+			await initialConnectionsPromise;
+			return;
 		}
 		if (!isUndefined(refreshPromise)) {
-			return refreshPromise;
+			await refreshPromise;
+			return;
 		}
 		const refresh = doRefresh();
 		refreshPromise = refresh;
@@ -693,11 +1107,12 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				refreshPromise = undefined;
 			}
 		);
-		return refresh;
+		await refresh;
 	};
 
 	const reconnectInvalidEntry = async (serverName: string): Promise<void> => {
-		const config = (await loadCurrentConfig(true)).servers[serverName];
+		const configResult = await loadCurrentConfig(true);
+		const config = configResult.servers[serverName];
 		if (isUndefined(config)) {
 			emit();
 			return;
@@ -708,6 +1123,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		const entry: ServerEntry = {
 			client: undefined,
 			config,
+			source: configResult.serverSources?.[serverName],
 			error: undefined,
 			executionController: new AbortController(),
 			state: config.disabled ? "disabled" : "connecting",
@@ -766,6 +1182,43 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return run;
 	};
 
+	const oauthConfigFor = (
+		serverName: string
+	): Extract<ResolvedMcpServerConfig, { type: "remote" }> => {
+		const config = serverEntries.get(serverName)?.config;
+		if (
+			config === undefined ||
+			config.type !== "remote" ||
+			config.auth !== "oauth"
+		) {
+			throw new Error(`MCP Server '${serverName}' does not use OAuth.`);
+		}
+		return config;
+	};
+
+	const login = async (
+		serverName: string,
+		readRedirectUrl?: McpOAuthRedirectReader
+	): Promise<void> => {
+		await init();
+		const config = oauthConfigFor(serverName);
+		if (input.loginOAuth === undefined) {
+			throw new Error("MCP OAuth login is unavailable.");
+		}
+		await input.loginOAuth(config, readRedirectUrl);
+		await reconnect(serverName);
+	};
+
+	const logout = async (serverName: string): Promise<void> => {
+		await init();
+		const config = oauthConfigFor(serverName);
+		if (input.logoutOAuth === undefined) {
+			throw new Error("MCP OAuth logout is unavailable.");
+		}
+		await input.logoutOAuth(config);
+		await reconnect(serverName);
+	};
+
 	const toggle = (serverName: string): Promise<void> => {
 		const inFlight = toggles.get(serverName);
 		if (!isUndefined(inFlight)) {
@@ -802,14 +1255,29 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return run;
 	};
 
+	const authFor = (entry: ServerEntry): McpServerStatus["auth"] => {
+		if (entry.config.type !== "remote" || entry.config.auth !== "oauth") {
+			return "none";
+		}
+		if (entry.state === "connected") {
+			return "authenticated";
+		}
+		return "required";
+	};
+
 	const getStatuses = (): readonly McpServerStatus[] => [
-		...[...serverEntries.values()].map((entry) => ({
-			error: entry.error,
-			name: entry.config.name,
-			state: entry.state,
-			toolCount: entry.tools.length,
-			transport: entry.config.type,
-		})),
+		...[...serverEntries.values()].map(
+			(entry): McpServerStatus => ({
+				auth: authFor(entry),
+				error: entry.error,
+				exposure: entry.config.exposure ?? "direct",
+				name: entry.config.name,
+				source: entry.source,
+				state: entry.state,
+				toolCount: entry.tools.length,
+				transport: entry.config.type,
+			})
+		),
 		...invalidStatuses.values(),
 	];
 
@@ -841,9 +1309,14 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		close,
 		createSnapshot,
 		execute,
+		listResources,
+		listResourceTemplates,
+		readResource,
 		releaseSnapshot,
 		getStatuses,
 		initialize,
+		login,
+		logout,
 		reconnect,
 		subscribe,
 		toggle,

@@ -2,7 +2,13 @@ import * as path from "node:path";
 import {
 	type CallToolResult,
 	Client,
+	type ListResourcesRequest,
+	type ListResourceTemplatesRequest,
 	type ListToolsRequest,
+	type OAuthClientProvider,
+	type ReadResourceResult,
+	type Resource,
+	type ResourceTemplateType,
 	StreamableHTTPClientTransport,
 	type Tool,
 } from "@modelcontextprotocol/client";
@@ -17,6 +23,18 @@ export type McpClientTool = {
 	name: string;
 };
 
+export type McpClientResource = Resource;
+export type McpClientResourceTemplate = ResourceTemplateType;
+export type McpClientResourceContent = ReadResourceResult["contents"][number];
+export type McpClientResourcePage = Readonly<{
+	resources: readonly McpClientResource[];
+	nextCursor?: string;
+}>;
+export type McpClientResourceTemplatePage = Readonly<{
+	resourceTemplates: readonly McpClientResourceTemplate[];
+	nextCursor?: string;
+}>;
+
 export type McpClient = {
 	callTool(
 		name: string,
@@ -26,6 +44,18 @@ export type McpClient = {
 	close(): Promise<void>;
 	connect(signal?: AbortSignal): Promise<void>;
 	listTools(signal?: AbortSignal): Promise<readonly McpClientTool[]>;
+	listResources?(
+		cursor?: string,
+		signal?: AbortSignal
+	): Promise<McpClientResourcePage>;
+	listResourceTemplates?(
+		cursor?: string,
+		signal?: AbortSignal
+	): Promise<McpClientResourceTemplatePage>;
+	readResource?(
+		uri: string,
+		signal?: AbortSignal
+	): Promise<readonly McpClientResourceContent[]>;
 	setToolsChangedListener(
 		listener: (tools: readonly McpClientTool[]) => void
 	): void;
@@ -40,6 +70,7 @@ export type McpStdioTransportOptions = {
 };
 
 export type McpHttpTransportOptions = {
+	authProvider?: OAuthClientProvider;
 	requestInit: { headers: Record<string, string> };
 };
 
@@ -57,6 +88,21 @@ export type McpSdkClient = {
 		params: ListToolsRequest["params"] | undefined,
 		options?: { signal?: AbortSignal }
 	): Promise<{ tools: Tool[] }>;
+	listResources?(
+		params: ListResourcesRequest["params"] | undefined,
+		options?: { signal?: AbortSignal }
+	): Promise<{ resources: Resource[]; nextCursor?: string }>;
+	listResourceTemplates?(
+		params: ListResourceTemplatesRequest["params"] | undefined,
+		options?: { signal?: AbortSignal }
+	): Promise<{
+		resourceTemplates: ResourceTemplateType[];
+		nextCursor?: string;
+	}>;
+	readResource?(
+		params: { uri: string },
+		options?: { signal?: AbortSignal }
+	): Promise<ReadResourceResult>;
 };
 
 export type McpSdkTransport = {
@@ -78,6 +124,9 @@ export type McpClientFactoryDeps = {
 	): McpSdkTransport;
 	createStartupSignal(timeoutMs: number): AbortSignal;
 	createStdioTransport(options: McpStdioTransportOptions): McpSdkTransport;
+	createOAuthProvider?: (
+		config: Extract<ResolvedMcpServerConfig, { type: "remote" }>
+	) => OAuthClientProvider;
 	environment: Record<string, string>;
 	workspace: string;
 };
@@ -121,6 +170,35 @@ const localTransportOptions = (
 		env: { ...deps.environment, ...config.environment },
 		stderr: "ignore",
 	};
+};
+
+const transientHttpFailurePattern =
+	/(?:\b408\b|\b425\b|\b429\b|\b5\d{2}\b|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|network error)/iu;
+
+const isTransientHttpFailure = (error: unknown): boolean =>
+	transientHttpFailurePattern.test(
+		error instanceof Error ? error.message : String(error)
+	);
+
+const retryIdempotentRequest = async <Result>(
+	config: ResolvedMcpServerConfig,
+	operation: () => Promise<Result>
+): Promise<Result> => {
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		try {
+			return await operation();
+		} catch (error) {
+			if (
+				config.type !== "remote" ||
+				attempt === 2 ||
+				!isTransientHttpFailure(error)
+			) {
+				throw error;
+			}
+			await Bun.sleep(150 * (attempt + 1));
+		}
+	}
+	throw new Error("MCP request retry limit reached");
 };
 
 const sanitizeError = (
@@ -176,6 +254,10 @@ export function createSdkMcpClient(
 					? deps.createStdioTransport(localTransportOptions(config, deps))
 					: deps.createHttpTransport(new URL(config.url), {
 							requestInit: { headers: config.headers ?? {} },
+							...(config.auth === "oauth" &&
+							deps.createOAuthProvider !== undefined
+								? { authProvider: deps.createOAuthProvider(config) }
+								: {}),
 						});
 			try {
 				await sdkClient.connect(transport, { signal: combined });
@@ -191,10 +273,63 @@ export function createSdkMcpClient(
 		},
 		async listTools(signal?: AbortSignal) {
 			return guard(async () => {
-				const { tools } = await getClient().listTools(undefined, {
-					signal,
-				});
+				const { tools } = await retryIdempotentRequest(config, () =>
+					getClient().listTools(undefined, { signal })
+				);
 				return tools.map(toClientTool);
+			});
+		},
+		async listResources(cursor?: string, signal?: AbortSignal) {
+			return guard(async () => {
+				const sdkClient = getClient();
+				const listResources = sdkClient.listResources;
+				if (isUndefined(listResources)) {
+					throw new Error("MCP server does not support resources");
+				}
+				const result = await retryIdempotentRequest(config, () =>
+					listResources.call(
+						sdkClient,
+						cursor === undefined ? undefined : { cursor },
+						{ signal }
+					)
+				);
+				return {
+					resources: result.resources,
+					...omitUndefined({ nextCursor: result.nextCursor }),
+				};
+			});
+		},
+		async listResourceTemplates(cursor?: string, signal?: AbortSignal) {
+			return guard(async () => {
+				const sdkClient = getClient();
+				const listResourceTemplates = sdkClient.listResourceTemplates;
+				if (isUndefined(listResourceTemplates)) {
+					throw new Error("MCP server does not support resource templates");
+				}
+				const result = await retryIdempotentRequest(config, () =>
+					listResourceTemplates.call(
+						sdkClient,
+						cursor === undefined ? undefined : { cursor },
+						{ signal }
+					)
+				);
+				return {
+					resourceTemplates: result.resourceTemplates,
+					...omitUndefined({ nextCursor: result.nextCursor }),
+				};
+			});
+		},
+		async readResource(uri: string, signal?: AbortSignal) {
+			return guard(async () => {
+				const sdkClient = getClient();
+				const readResource = sdkClient.readResource;
+				if (isUndefined(readResource)) {
+					throw new Error("MCP server does not support resources");
+				}
+				const result = await retryIdempotentRequest(config, () =>
+					readResource.call(sdkClient, { uri }, { signal })
+				);
+				return result.contents;
 			});
 		},
 		async callTool(name: string, input: unknown, signal?: AbortSignal) {
@@ -212,6 +347,7 @@ export function createSdkMcpClient(
 
 export type McpClientDepsInput = {
 	clientInfo: { name: string; version: string };
+	createOAuthProvider?: McpClientFactoryDeps["createOAuthProvider"];
 	environment: Record<string, string>;
 	workspace: string;
 };
@@ -220,6 +356,9 @@ export function createSdkMcpClientDeps(
 	input: McpClientDepsInput
 ): McpClientFactoryDeps {
 	return {
+		...(input.createOAuthProvider === undefined
+			? {}
+			: { createOAuthProvider: input.createOAuthProvider }),
 		environment: input.environment,
 		workspace: input.workspace,
 		createClient: (options) => new Client(input.clientInfo, options),

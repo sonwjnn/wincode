@@ -2,8 +2,8 @@
 
 Wincode models an Agent as a named AI behavior with an Agent Role of `primary`,
 `subagent`, or `all`. Build is the only shipped Primary Agent; user-owned Configured
-Agents are declared inline under an `agents` record in `wincode.json` or
-`wincode.jsonc`. The canonical selection is an Agent, not a Coding Mode.
+Agents are declared inline under an `agents` record in `settings.json` or
+`settings.jsonc` under `.wincode`. The canonical selection is an Agent, not a Coding Mode.
 
 Status: accepted
 

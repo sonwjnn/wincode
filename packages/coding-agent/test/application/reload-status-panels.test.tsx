@@ -19,7 +19,7 @@ import { flushTestRenderer } from "../support/opentui";
 test("MCP status remains renderable while the first reload shuts down its previous runtime", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-reload-status-"));
 	const configRuntime = {
-		configStore: createConfigStore({ configRoot: root, homeRoot: root }),
+		configStore: createConfigStore({ homeRoot: root }),
 		cwd: root,
 		homeRoot: root,
 		workspace: root,

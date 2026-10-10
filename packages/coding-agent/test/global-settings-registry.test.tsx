@@ -116,7 +116,7 @@ test("one registry serves catalogued global preferences and settings writes", as
 });
 
 test("a late registry load cannot overwrite a preference written while loading", async () => {
-	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const configFile = `${TEST_CONFIG_ROOT}/settings.json`;
 	const baseConfigStore = createInMemoryConfigStore({
 		[configFile]: '{"display":{"hideThinking":false}}',
 	});
@@ -241,7 +241,7 @@ test("registry uses descriptor defaults when the initial config read fails", asy
 });
 
 test("registry publishes persisted writes before a failed snapshot refresh", async () => {
-	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const configFile = `${TEST_CONFIG_ROOT}/settings.json`;
 	const files: Record<string, string> = {};
 	const baseConfigStore = createInMemoryConfigStore(files);
 	const configStore = {

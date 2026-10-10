@@ -89,6 +89,11 @@ export function ProjectTrustDialogContent({
 				<text fg={colors.textMuted} wrapMode="word">
 					{`Workspace: ${shortenHomePath(workspace)}`}
 				</text>
+				<text fg={colors.warning} wrapMode="word">
+					Trust allows project settings and MCP servers to load. Trusted MCP
+					processes run with Wincode's OS privileges; project trust is not a
+					sandbox.
+				</text>
 				{protectedRoots.length === 0 ? (
 					<text fg={colors.textMuted}>
 						No protected project resources detected.

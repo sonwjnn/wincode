@@ -135,14 +135,12 @@ const createTestConnections = (): Connections => {
 
 const createTestConfigStore = (configDocument?: string) => {
 	const homeRoot = process.env.WINCODE_E2E_HOME ?? homedir();
-	const configRoot = join(homeRoot, ".config", "wincode");
 	const configPath = join(
 		process.env.WINCODE_E2E_WORKSPACE ?? process.cwd(),
 		".wincode",
-		"wincode.jsonc"
+		"settings.jsonc"
 	);
 	return createConfigStore({
-		configRoot,
 		fs: {
 			readFile: async (path) => {
 				if (!isUndefined(configDocument) && path === configPath) {

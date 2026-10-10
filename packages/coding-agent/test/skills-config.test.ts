@@ -14,13 +14,12 @@ describe("configured Skills", () => {
 		const root = await mkdtemp(join(tmpdir(), "wincode-global-skills-"));
 		const homeRoot = join(root, "home");
 		const workspace = join(root, "workspace");
-		const xdgConfigHome = join(root, "xdg");
 		const globalSkills = join(root, "shared-skills");
 
 		try {
 			await Promise.all([
 				writeFixture(
-					join(xdgConfigHome, "wincode", "wincode.json"),
+					join(homeRoot, ".wincode", "settings.json"),
 					JSON.stringify({ skills: { paths: [globalSkills] } })
 				),
 				writeFixture(
@@ -29,7 +28,7 @@ describe("configured Skills", () => {
 				),
 			]);
 
-			const configStore = createConfigStore({ homeRoot, xdgConfigHome });
+			const configStore = createConfigStore({ homeRoot });
 			const snapshot = await configStore.getSnapshot(workspace);
 			const descriptors = buildSkillRootDescriptors({
 				homeRoot,
@@ -66,7 +65,7 @@ describe("configured Skills", () => {
 		}
 	});
 
-	test("prefers the Wincode folder over legacy folders in the global scope", async () => {
+	test("prefers the home Wincode folder and ignores the obsolete XDG Wincode folder", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wincode-skill-precedence-"));
 		const homeRoot = join(root, "home");
 		const workspace = join(root, "workspace");
@@ -92,14 +91,14 @@ describe("configured Skills", () => {
 				),
 			]);
 
-			const configStore = createConfigStore({ homeRoot, xdgConfigHome });
+			const configStore = createConfigStore({ homeRoot });
 			const skills = await discoverSkills({
 				configStore,
 				homeRoot,
 				workspace,
 			});
 
-			expect(skills.map(({ name }) => name)).toEqual(["review", "xdg-only"]);
+			expect(skills.map(({ name }) => name)).toEqual(["review"]);
 			expect(skills.find(({ name }) => name === "review")?.description).toBe(
 				"Wincode global"
 			);
@@ -111,7 +110,6 @@ describe("configured Skills", () => {
 	test("loads legacy, Wincode, and configured folders through Wincode config", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wincode-skills-"));
 		const homeRoot = join(root, "home");
-		const xdgConfigHome = join(root, "xdg");
 		const repository = join(root, "repository");
 		const workspace = join(repository, "packages", "app");
 
@@ -143,14 +141,17 @@ describe("configured Skills", () => {
 					skillFile("review", "Second configured project")
 				),
 				writeFixture(
-					join(workspace, ".wincode", "wincode.json"),
+					join(workspace, ".wincode", "settings.json"),
 					JSON.stringify({
 						skills: { paths: ["first-skills", "second-skills"] },
 					})
 				),
 			]);
 
-			const configStore = createConfigStore({ homeRoot, xdgConfigHome });
+			const configStore = createConfigStore({
+				homeRoot,
+				trustedProjectRoots: [workspace],
+			});
 			const snapshot = await configStore.getSnapshot(workspace);
 			const configured = buildSkillRootDescriptors({
 				homeRoot,

@@ -1,5 +1,6 @@
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { ProjectTrustPrompt } from "../project-trust/project-trust";
+import { runMcpCli } from "./mcp-cli";
 import type {
 	ApplicationContext,
 	InvocationOptions,
@@ -399,6 +400,13 @@ const dispatchParsedInvocation = async (
 	dependencies: DispatchDependencies,
 	onRuntime: (runtime: DispatchRuntime | undefined) => void
 ): Promise<number> => {
+	if (input.args[0] === "mcp") {
+		return await runMcpCli(input.args.slice(1), input.cwd, {
+			stderr: input.stderr,
+			stdinIsTTY: input.stdinIsTTY,
+			stdout: input.stdout,
+		});
+	}
 	const parsed = parseInvocation(input.args);
 	const earlyResult = await writeEarlyResponse(parsed, input);
 	if (earlyResult !== undefined) {

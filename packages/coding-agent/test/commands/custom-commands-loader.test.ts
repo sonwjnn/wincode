@@ -202,7 +202,6 @@ describe("discoverCustomCommandCandidates", () => {
 		}
 		const snapshot = await createConfigStore({
 			homeRoot: home,
-			xdgConfigHome: path.join(root, "xdg"),
 		}).getSnapshot(cwd);
 		const candidates = discoverCustomCommandCandidates({
 			homeRoot: home,

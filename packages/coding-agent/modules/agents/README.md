@@ -1,7 +1,7 @@
 # Agents
 
-Agents are named, trusted behavior descriptors. Configure them in `wincode.json` or
-`wincode.jsonc`:
+Agents are named, trusted behavior descriptors. Configure them in `~/.wincode/settings.json`
+or a trusted project's `.wincode/settings.json` (JSONC is also accepted):
 
 ```jsonc
 {

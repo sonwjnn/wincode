@@ -43,6 +43,20 @@ const noOpRunners: DispatchModeRunners = {
 };
 
 describe("application dispatch", () => {
+	test("routes MCP management help before loading an execution mode", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, ["mcp", "--help"]),
+			undefined
+		);
+		expect(exitCode).toBe(0);
+		expect(stdout.output).toContain(
+			"wincode mcp <add|remove|list|login|logout>"
+		);
+		expect(stderr.output).toBe("");
+	});
+
 	test("routes bare invocation to the injected interactive runner", async () => {
 		const stdout = capture();
 		const stderr = capture();

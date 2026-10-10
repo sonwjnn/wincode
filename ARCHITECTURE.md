@@ -112,7 +112,7 @@ Turn from committed history.
 
 | Data | Storage |
 | --- | --- |
-| Configuration | User sources plus trusted project `wincode.jsonc` or `wincode.json` sources |
+| Configuration | User `~/.wincode/settings.json[c]` plus trusted project `.wincode/settings.json[c]`; MCP Servers use separate namespace-scoped `mcp.json` files |
 | Project trust | User-owned trust decisions outside the project |
 | Provider credentials | Platform secret store, with a secure local fallback |
 | Sessions and compactions | Local SQLite database through Drizzle |

@@ -57,14 +57,12 @@ const jiraPluginSource = await Bun.file(
 ).text();
 await Bun.write(pluginPath, jiraPluginSource);
 await Bun.write(
-	path.join(workspace, "wincode.json"),
-	JSON.stringify({ plugins: ["./plugins/jira.ts"] })
+	path.join(workspace, ".wincode", "settings.json"),
+	JSON.stringify({ plugins: ["../plugins/jira.ts"] })
 );
-await Bun.write(path.join(configRoot, "wincode.json"), "{}");
 
 const configRuntime = {
 	configStore: createConfigStore({
-		configRoot,
 		homeRoot,
 		trustedProjectRoots: [],
 	}),
@@ -73,17 +71,13 @@ const configRuntime = {
 	workspace,
 };
 
-const createConfigRuntime = (
-	workspaceRoot: string,
-	userConfigRoot: string
-) => ({
+const createConfigRuntime = (workspaceRoot: string, userHomeRoot: string) => ({
 	configStore: createConfigStore({
-		configRoot: userConfigRoot,
-		homeRoot,
+		homeRoot: userHomeRoot,
 		trustedProjectRoots: [],
 	}),
 	cwd: workspaceRoot,
-	homeRoot,
+	homeRoot: userHomeRoot,
 	workspace: workspaceRoot,
 });
 
@@ -336,7 +330,6 @@ test("discarding a deferred Plugin candidate does not run process cleanup hooks"
 			stdinIsTTY: false,
 		},
 		{
-			configRoot,
 			distributionPlugins: [],
 			homeRoot,
 			userDataDir: path.join(root, "trust-data"),
@@ -362,11 +355,13 @@ test("discarding a deferred Plugin candidate does not run process cleanup hooks"
 test("unchanged project trust keeps the active Plugins when a reload candidate fails", async () => {
 	const trustedWorkspace = path.join(root, "trusted-reload-workspace");
 	await mkdir(trustedWorkspace, { recursive: true });
-	await Bun.write(path.join(trustedWorkspace, "wincode.json"), "{}");
+	await Bun.write(
+		path.join(trustedWorkspace, ".wincode", "settings.json"),
+		"{}"
+	);
 	const trustedRoot = await realpath(trustedWorkspace);
 	const currentConfigRuntime = {
 		configStore: createConfigStore({
-			configRoot,
 			homeRoot,
 			trustedProjectRoots: [trustedRoot],
 		}),
@@ -390,7 +385,6 @@ test("unchanged project trust keeps the active Plugins when a reload candidate f
 			stdinIsTTY: false,
 		},
 		{
-			configRoot,
 			distributionPlugins: [],
 			homeRoot,
 			userDataDir: path.join(root, "trusted-reload-user-data"),
@@ -552,7 +546,7 @@ test("disabled default Plugins are skipped before loading without vetoing file p
 		installedRoot,
 		"disabled-plugin-workspace"
 	);
-	const disabledConfigRoot = path.join(root, "disabled-plugin-config");
+	const disabledConfigRoot = path.join(root, "disabled-plugin-home");
 	const pluginDirectory = path.join(disabledWorkspace, "plugins");
 	const configuredPluginPath = path.join(pluginDirectory, "jira.ts");
 	await mkdir(pluginDirectory, { recursive: true });
@@ -562,7 +556,7 @@ test("disabled default Plugins are skipped before loading without vetoing file p
 		commandPluginSource("jira", "explicit_file_plugin", "File Plugin loaded.")
 	);
 	await Bun.write(
-		path.join(disabledConfigRoot, "wincode.json"),
+		path.join(disabledConfigRoot, ".wincode", "settings.json"),
 		JSON.stringify({ disabledPlugins: ["jira", "disabled_factory"] })
 	);
 
@@ -609,7 +603,6 @@ test("disabled default Plugins are skipped before loading without vetoing file p
 test("trusted project configuration loads its explicitly selected Plugin", async () => {
 	const trustedConfigRuntime = {
 		configStore: createConfigStore({
-			configRoot,
 			homeRoot,
 			trustedProjectRoots: [workspace],
 		}),
@@ -672,7 +665,7 @@ test("CLI Plugin paths win when a configured path declares the same stable ident
 		)
 	);
 	await Bun.write(
-		path.join(precedenceConfigRoot, "wincode.json"),
+		path.join(precedenceConfigRoot, ".wincode", "settings.json"),
 		JSON.stringify({ plugins: [configuredPath] })
 	);
 
@@ -724,22 +717,21 @@ test("trusted project Plugins win Identifier collisions by source-class preceden
 			commandPluginSource("same_id", "project_won", "Project won.")
 		),
 		Bun.write(
-			path.join(userConfigRoot, "wincode.json"),
+			path.join(userConfigRoot, ".wincode", "settings.json"),
 			JSON.stringify({ plugins: [userPath] })
 		),
 		Bun.write(
-			path.join(precedenceWorkspace, "wincode.json"),
-			JSON.stringify({ plugins: ["./plugins/project.ts"] })
+			path.join(precedenceWorkspace, ".wincode", "settings.json"),
+			JSON.stringify({ plugins: ["../plugins/project.ts"] })
 		),
 	]);
 	const configRuntime = {
 		configStore: createConfigStore({
-			configRoot: userConfigRoot,
-			homeRoot,
+			homeRoot: userConfigRoot,
 			trustedProjectRoots: [precedenceWorkspace],
 		}),
 		cwd: precedenceWorkspace,
-		homeRoot,
+		homeRoot: userConfigRoot,
 		workspace: precedenceWorkspace,
 	};
 	const runtime = await loadPlugins({ cliPaths: [], config: configRuntime });
@@ -770,14 +762,16 @@ test("trusted project settings can disable a distribution Plugin before its pack
 	]);
 	await Promise.all([
 		Bun.write(
-			path.join(disabledWorkspace, "wincode.json"),
+			path.join(disabledWorkspace, ".wincode", "settings.json"),
 			JSON.stringify({ disabledPlugins: ["mcp"] })
 		),
-		Bun.write(path.join(configRootPath, "wincode.json"), JSON.stringify({})),
+		Bun.write(
+			path.join(configRootPath, ".wincode", "settings.json"),
+			JSON.stringify({})
+		),
 	]);
 	const configRuntime = {
 		configStore: createConfigStore({
-			configRoot: configRootPath,
 			homeRoot,
 			trustedProjectRoots: [disabledWorkspace],
 		}),

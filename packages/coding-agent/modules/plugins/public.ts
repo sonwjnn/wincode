@@ -54,6 +54,31 @@ export type PluginConfigReader = Readonly<{
 	refreshSnapshot: () => Promise<PluginConfigSnapshot>;
 }>;
 
+/** Generic namespace-scoped JSON file access owned by the host. */
+export type PluginSecretStore = Readonly<{
+	delete: (key: string) => Promise<void>;
+	get: (key: string) => Promise<string | undefined>;
+	set: (key: string, value: string) => Promise<void>;
+}>;
+
+export type PluginMcpServerRegistration = Readonly<{
+	config: PluginJsonValue;
+	name: string;
+	ownerPluginId: string;
+}>;
+
+export type PluginConfigFileStore = Readonly<{
+	getSnapshot: (namespace: string) => Promise<PluginConfigSnapshot>;
+	refreshSnapshot: (namespace: string) => Promise<PluginConfigSnapshot>;
+	setValue: (
+		namespace: string,
+		scope: "global" | "project",
+		path: readonly string[],
+		value: PluginJsonValue | undefined,
+		targetPath?: string
+	) => Promise<PluginConfigSnapshot>;
+}>;
+
 export type PluginStatus = "idle" | "pending" | "success" | "warning" | "error";
 
 export type PluginStatusAction = Readonly<{
@@ -78,13 +103,24 @@ export type PluginStatusPanelSnapshot = Readonly<{
 }>;
 
 /** Declarative host-rendered status and controls contributed by a Plugin. */
+export type PluginStatusPanelActionContext = Readonly<{
+	requestTextInput: (
+		prompt: string,
+		signal: AbortSignal
+	) => Promise<string | undefined>;
+}>;
+
 export type PluginStatusPanelRegistration = Readonly<{
 	emptyText?: string;
 	getSnapshot: () => PluginStatusPanelSnapshot;
 	indicatorLabel?: string;
 	id: string;
 	refresh?: () => Promise<void>;
-	runAction: (itemId: string, actionId: string) => Promise<void>;
+	runAction: (
+		itemId: string,
+		actionId: string,
+		context?: PluginStatusPanelActionContext
+	) => Promise<void>;
 	subscribe: (listener: () => void) => () => void;
 	title: string;
 }>;
@@ -106,6 +142,8 @@ export type PluginAgentRegistration = Readonly<{
 
 export type PluginLoadContext = Readonly<{
 	config: PluginConfigReader;
+	configFiles: PluginConfigFileStore;
+	getMcpServerRegistrations: () => readonly PluginMcpServerRegistration[];
 	trustedProjectRoots?: readonly string[];
 	sourcePath: string;
 	userDataDir: string;
@@ -209,6 +247,8 @@ export type PluginProcessStartHook = (
 
 export type PluginDefinitionAPI = PluginRegistrationAPI &
 	Readonly<{
+		secrets: PluginSecretStore;
+		registerMcpServer: (name: string, config: PluginJsonValue) => void;
 		registerAgent: (agent: PluginAgentRegistration) => void;
 		registerResource: (name: string, resource: unknown) => void;
 		registerStatusPanel: (panel: PluginStatusPanelRegistration) => void;

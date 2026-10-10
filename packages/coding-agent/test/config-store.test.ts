@@ -3,11 +3,19 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isUndefined } from "@wincode/utils";
-import { createConfigStore } from "@/shared/config/config-store";
+import { createConfigStore as createConfigStoreImplementation } from "@/shared/config/config-store";
 
 const CONFIG_ROOT = "/home/user/.config/wincode";
 const HOME_ROOT = "/home/user";
 const WORKSPACE = "/workspace";
+
+const createConfigStore = (
+	options: Parameters<typeof createConfigStoreImplementation>[0] = {}
+) =>
+	createConfigStoreImplementation({
+		...options,
+		trustedProjectRoots: options.trustedProjectRoots ?? [WORKSPACE],
+	});
 
 const fileSystem = (files: Record<string, string>, reads?: string[]) => ({
 	readFile: async (file: string): Promise<string> => {
@@ -23,31 +31,169 @@ const fileSystem = (files: Record<string, string>, reads?: string[]) => ({
 });
 
 describe("createConfigStore", () => {
-	test("loads and recursively merges the ordered Wincode config sources", async () => {
+	test("loads settings only from trusted .wincode scopes and prefers settings.jsonc", async () => {
+		const userJsonPath = `${HOME_ROOT}/.wincode/settings.json`;
+		const userJsoncPath = `${HOME_ROOT}/.wincode/settings.jsonc`;
+		const projectJsonPath = `${WORKSPACE}/.wincode/settings.json`;
+		const projectJsoncPath = `${WORKSPACE}/.wincode/settings.jsonc`;
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: fileSystem({
-				[`${CONFIG_ROOT}/wincode.json`]: JSON.stringify({
+				[`${CONFIG_ROOT}/wincode.json`]: '{"legacyXdg":true}',
+				[`${WORKSPACE}/wincode.json`]: '{"legacyProject":true}',
+				[`${WORKSPACE}/settings.json`]: '{"rootProject":true}',
+				[userJsonPath]: '{"userJson":true}',
+				[userJsoncPath]: '{// JSONC takes precedence\n"userJsonc":true,}',
+				[projectJsonPath]: '{"projectJson":true}',
+				[projectJsoncPath]: '{"projectJsonc":true,}',
+			}),
+			homeRoot: HOME_ROOT,
+			trustedProjectRoots: [WORKSPACE],
+		});
+
+		const snapshot = await store.getSnapshot(WORKSPACE);
+
+		expect(snapshot.document).toEqual({ userJsonc: true, projectJsonc: true });
+		expect(snapshot.sources.map(({ path }) => path)).toEqual([
+			userJsoncPath,
+			projectJsoncPath,
+		]);
+		expect(snapshot.diagnostics).toEqual(
+			expect.arrayContaining([
+				{
+					code: "duplicate-config",
+					message: `Ignored duplicate config ${userJsonPath}`,
+					path: userJsoncPath,
+					scope: "global",
+				},
+				{
+					code: "duplicate-config",
+					message: `Ignored duplicate config ${projectJsonPath}`,
+					path: projectJsoncPath,
+					scope: "project",
+				},
+			])
+		);
+	});
+
+	test("does not load project settings until that project is trusted", async () => {
+		const store = createConfigStore({
+			fs: fileSystem({
+				[`${HOME_ROOT}/.wincode/settings.json`]: '{"userSetting":true}',
+				[`${WORKSPACE}/.wincode/settings.json`]: '{"projectSetting":true}',
+			}),
+			homeRoot: HOME_ROOT,
+			trustedProjectRoots: [],
+		});
+
+		const snapshot = await store.getSnapshot(WORKSPACE);
+
+		expect(snapshot.document).toEqual({ userSetting: true });
+		expect(snapshot.sources.map(({ scope }) => scope)).toEqual(["global"]);
+	});
+
+	test("reads and persists a namespace without crossing its file boundary", async () => {
+		const userMcpPath = `${HOME_ROOT}/.wincode/mcp.json`;
+		const projectMcpPath = `${WORKSPACE}/.wincode/mcp.json`;
+		const projectSettingsPath = `${WORKSPACE}/.wincode/settings.json`;
+		const files: Record<string, string> = {
+			[userMcpPath]:
+				'{"mcpServers":{"shared":{"url":"https://user.test/mcp"}}}',
+			[projectMcpPath]: '{"mcpServers":{"shared":{"enabled":false}}}',
+			[projectSettingsPath]: '{"default_agent":"builder"}',
+		};
+		const store = createConfigStore({
+			fs: {
+				readFile: async (file) => {
+					const value = files[file];
+					if (value === undefined) {
+						throw Object.assign(new Error("missing"), { code: "ENOENT" });
+					}
+					return value;
+				},
+				writeFile: async (file, contents) => {
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+
+		const snapshot = await store.getNamespaceSnapshot(WORKSPACE, "mcp");
+		await store.setNamespaceValue(
+			WORKSPACE,
+			"project",
+			"mcp",
+			["mcpServers", "shared", "enabled"],
+			true,
+			projectMcpPath
+		);
+
+		expect(snapshot.sources.map(({ path }) => path)).toEqual([
+			userMcpPath,
+			projectMcpPath,
+		]);
+		expect(JSON.parse(files[projectMcpPath] ?? "{}")).toEqual({
+			mcpServers: { shared: { enabled: true } },
+		});
+		expect(files[projectSettingsPath]).toBe('{"default_agent":"builder"}');
+	});
+
+	test("rejects namespace writes outside the owning config sources", async () => {
+		const projectMcpPath = `${WORKSPACE}/.wincode/mcp.json`;
+		const files: Record<string, string> = {
+			[projectMcpPath]: '{"mcpServers":{"shared":{"enabled":false}}}',
+		};
+		const store = createConfigStore({
+			fs: {
+				readFile: async (file) => {
+					const value = files[file];
+					if (value === undefined) {
+						throw Object.assign(new Error("missing"), { code: "ENOENT" });
+					}
+					return value;
+				},
+				writeFile: async (file, contents) => {
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+
+		await expect(
+			store.setNamespaceValue(
+				WORKSPACE,
+				"project",
+				"mcp",
+				["mcpServers", "shared", "enabled"],
+				true,
+				"/tmp/unowned-mcp.json"
+			)
+		).rejects.toThrow("Could not resolve project config file.");
+		expect(files[projectMcpPath]).toBe(
+			'{"mcpServers":{"shared":{"enabled":false}}}'
+		);
+	});
+
+	test("recursively merges user and trusted project settings with provenance", async () => {
+		const userPath = `${HOME_ROOT}/.wincode/settings.json`;
+		const projectPath = `${WORKSPACE}/.wincode/settings.json`;
+		const store = createConfigStore({
+			fs: fileSystem({
+				[userPath]: JSON.stringify({
 					settings: {
 						profile: {
-							metadata: { global: true, shared: "global" },
-							tags: ["global"],
+							metadata: { global: true, shared: "user" },
+							tags: ["user"],
 						},
 					},
 				}),
-				[`${HOME_ROOT}/.wincode/wincode.json`]: JSON.stringify({
-					settings: { profile: { metadata: { home: true } } },
-				}),
-				[`${WORKSPACE}/wincode.json`]: JSON.stringify({
+				[projectPath]: JSON.stringify({
 					settings: {
 						profile: {
-							metadata: { shared: "workspace" },
-							tags: ["workspace"],
+							enabled: false,
+							metadata: { shared: "project" },
+							tags: ["project"],
 						},
 					},
-				}),
-				[`${WORKSPACE}/.wincode/wincode.json`]: JSON.stringify({
-					settings: { profile: { enabled: false } },
 				}),
 			}),
 			homeRoot: HOME_ROOT,
@@ -59,46 +205,33 @@ describe("createConfigStore", () => {
 			settings: {
 				profile: {
 					enabled: false,
-					metadata: {
-						global: true,
-						home: true,
-						shared: "workspace",
-					},
-					tags: ["workspace"],
+					metadata: { global: true, shared: "project" },
+					tags: ["project"],
 				},
 			},
 		});
 		expect(
 			snapshot.sourceFor(["settings", "profile", "metadata", "global"])
-		).toEqual({
-			path: `${CONFIG_ROOT}/wincode.json`,
-			scope: "global",
-		});
+		).toEqual({ path: userPath, scope: "global" });
 		expect(
 			snapshot.sourceFor(["settings", "profile", "metadata", "shared"])
-		).toEqual({
-			path: `${WORKSPACE}/wincode.json`,
-			scope: "project",
-		});
+		).toEqual({ path: projectPath, scope: "project" });
 		expect(snapshot.sourceFor(["settings", "profile", "enabled"])).toEqual({
-			path: `${WORKSPACE}/.wincode/wincode.json`,
+			path: projectPath,
 			scope: "project",
 		});
 		expect(
 			snapshot.sources.map(({ path, scope }) => ({ path, scope }))
 		).toEqual([
-			{ path: `${CONFIG_ROOT}/wincode.json`, scope: "global" },
-			{ path: `${HOME_ROOT}/.wincode/wincode.json`, scope: "global" },
-			{ path: `${WORKSPACE}/wincode.json`, scope: "project" },
-			{ path: `${WORKSPACE}/.wincode/wincode.json`, scope: "project" },
+			{ path: userPath, scope: "global" },
+			{ path: projectPath, scope: "project" },
 		]);
 	});
 
 	test("prefers JSONC and reports a duplicate JSON document", async () => {
-		const jsonPath = `${WORKSPACE}/wincode.json`;
-		const jsoncPath = `${WORKSPACE}/wincode.jsonc`;
+		const jsonPath = `${WORKSPACE}/.wincode/settings.json`;
+		const jsoncPath = `${WORKSPACE}/.wincode/settings.jsonc`;
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: fileSystem({
 				[jsonPath]: '{"settings":{"format":"json"}}',
 				[jsoncPath]: '{// JSONC wins\n"settings":{"format":"jsonc",},}',
@@ -120,21 +253,19 @@ describe("createConfigStore", () => {
 	});
 
 	test("isolates malformed documents and unsafe prototype keys", async () => {
-		const malformedPath = `${CONFIG_ROOT}/wincode.json`;
-		const unsafePath = `${HOME_ROOT}/.wincode/wincode.json`;
+		const malformedPath = `${HOME_ROOT}/.wincode/settings.json`;
+		const unsafePath = `${WORKSPACE}/.wincode/settings.json`;
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: fileSystem({
 				[malformedPath]: '{"settings":',
 				[unsafePath]: '{"constructor":{}}',
-				[`${WORKSPACE}/wincode.json`]: '{"settings":{"valid":true}}',
 			}),
 			homeRoot: HOME_ROOT,
 		});
 
 		const snapshot = await store.getSnapshot(WORKSPACE);
 
-		expect(snapshot.document).toEqual({ settings: { valid: true } });
+		expect(snapshot.document).toEqual({});
 		expect(snapshot.diagnostics).toEqual(
 			expect.arrayContaining([
 				{
@@ -147,20 +278,19 @@ describe("createConfigStore", () => {
 					code: "unsafe-key",
 					message: "Unsafe config key constructor",
 					path: unsafePath,
-					scope: "global",
+					scope: "project",
 				},
 			])
 		);
 	});
 
 	test("isolates unreadable config sources with a diagnostic", async () => {
-		const unreadablePath = `${CONFIG_ROOT}/wincode.jsonc`;
+		const unreadablePath = `${HOME_ROOT}/.wincode/settings.jsonc`;
 		const files = {
-			[`${WORKSPACE}/wincode.json`]: '{"settings":{"valid":true}}',
+			[`${WORKSPACE}/.wincode/settings.json`]: '{"settings":{"valid":true}}',
 		};
 		const fallback = fileSystem(files);
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: {
 				readFile: async (file): Promise<string> => {
 					if (file === unreadablePath) {
@@ -186,21 +316,12 @@ describe("createConfigStore", () => {
 	});
 
 	test("does not resurrect lower object fields after a scalar replacement", async () => {
-		const replacingPath = `${HOME_ROOT}/.wincode/wincode.json`;
-		const highestPath = `${WORKSPACE}/wincode.json`;
+		const replacingPath = `${HOME_ROOT}/.wincode/settings.json`;
+		const highestPath = `${WORKSPACE}/.wincode/settings.json`;
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: fileSystem({
-				[`${CONFIG_ROOT}/wincode.json`]: JSON.stringify({
-					mcp: {
-						shared: {
-							type: "remote",
-							url: "https://mcp.deepwiki.com/mcp?scope=global",
-						},
-					},
-				}),
-				[replacingPath]: '{"mcp":{"shared":null}}',
-				[highestPath]: '{"mcp":{"shared":{"enabled":false}}}',
+				[replacingPath]: '{"profile":{"shared":null}}',
+				[highestPath]: '{"profile":{"shared":{"enabled":false}}}',
 			}),
 			homeRoot: HOME_ROOT,
 		});
@@ -208,13 +329,13 @@ describe("createConfigStore", () => {
 		const snapshot = await store.getSnapshot(WORKSPACE);
 
 		expect(snapshot.document).toEqual({
-			mcp: { shared: { enabled: false } },
+			profile: { shared: { enabled: false } },
 		});
-		expect(snapshot.sourceFor(["mcp", "shared", "enabled"])).toEqual({
+		expect(snapshot.sourceFor(["profile", "shared", "enabled"])).toEqual({
 			path: highestPath,
 			scope: "project",
 		});
-		expect(snapshot.sourceFor(["mcp", "shared", "url"])).toEqual({
+		expect(snapshot.sourceFor(["profile", "shared", "removed"])).toEqual({
 			path: highestPath,
 			scope: "project",
 		});
@@ -223,10 +344,10 @@ describe("createConfigStore", () => {
 	test("memoizes one snapshot per resolved workspace", async () => {
 		const reads: string[] = [];
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: fileSystem(
 				{
-					[`${WORKSPACE}/wincode.json`]: '{"settings":{"cached":true}}',
+					[`${WORKSPACE}/.wincode/settings.json`]:
+						'{"settings":{"cached":true}}',
 				},
 				reads
 			),
@@ -245,12 +366,11 @@ describe("createConfigStore", () => {
 	});
 
 	test("refreshes a memoized workspace snapshot on demand", async () => {
-		const configPath = `${WORKSPACE}/wincode.json`;
+		const configPath = `${WORKSPACE}/.wincode/settings.json`;
 		const files = {
 			[configPath]: '{"settings":{"version":1}}',
 		};
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: fileSystem(files),
 			homeRoot: HOME_ROOT,
 		});
@@ -267,9 +387,8 @@ describe("createConfigStore", () => {
 
 	test("returns an immutable snapshot that can be shared across capabilities", async () => {
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: fileSystem({
-				[`${WORKSPACE}/wincode.json`]:
+				[`${WORKSPACE}/.wincode/settings.json`]:
 					'{"settings":{"nested":{"enabled":true}}}',
 			}),
 			homeRoot: HOME_ROOT,
@@ -292,8 +411,8 @@ describe("createConfigStore", () => {
 		const configRoot = join(xdgConfigHome, "wincode");
 		const workspace = join(root, "workspace");
 		const projectConfigRoot = join(workspace, ".wincode");
-		const projectJsonPath = join(projectConfigRoot, "wincode.json");
-		const projectJsoncPath = join(projectConfigRoot, "wincode.jsonc");
+		const projectJsonPath = join(projectConfigRoot, "settings.json");
+		const projectJsoncPath = join(projectConfigRoot, "settings.jsonc");
 
 		try {
 			await Promise.all([
@@ -309,7 +428,7 @@ describe("createConfigStore", () => {
 					})
 				),
 				Bun.write(
-					join(homeRoot, ".wincode", "wincode.json"),
+					join(homeRoot, ".wincode", "settings.json"),
 					JSON.stringify({ settings: { layers: { home: true } } })
 				),
 				Bun.write(
@@ -328,17 +447,15 @@ describe("createConfigStore", () => {
 				),
 			]);
 
-			const store = createConfigStore({ homeRoot, xdgConfigHome });
+			const store = createConfigStore({
+				homeRoot,
+				trustedProjectRoots: [workspace],
+			});
 			const snapshot = await store.getSnapshot(workspace);
 
 			expect(snapshot.document).toEqual({
 				settings: {
-					layers: {
-						home: true,
-						project: true,
-						workspace: true,
-						xdg: true,
-					},
+					layers: { home: true, project: true },
 					selected: "jsonc",
 				},
 			});
@@ -354,7 +471,7 @@ describe("createConfigStore", () => {
 	});
 
 	test("writes a project value into the existing JSONC source and refreshes it", async () => {
-		const projectPath = `${WORKSPACE}/.wincode/wincode.jsonc`;
+		const projectPath = `${WORKSPACE}/.wincode/settings.jsonc`;
 		const files: Record<string, string> = {
 			[projectPath]: `{
 	// Keep this comment.
@@ -364,7 +481,6 @@ describe("createConfigStore", () => {
 		};
 		const writes: Array<{ path: string; contents: string }> = [];
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
@@ -405,7 +521,6 @@ describe("createConfigStore", () => {
 		const files: Record<string, string> = {};
 		const writes: Array<{ path: string; contents: string }> = [];
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
@@ -429,18 +544,17 @@ describe("createConfigStore", () => {
 		expect(writes).toEqual([
 			{
 				contents: '{\n  "compaction": {\n    "auto": false\n  }\n}\n',
-				path: `${CONFIG_ROOT}/wincode.json`,
+				path: `${HOME_ROOT}/.wincode/settings.json`,
 			},
 		]);
 	});
 
 	test("removes a persisted value when set to undefined", async () => {
-		const projectPath = `${WORKSPACE}/wincode.json`;
+		const projectPath = `${WORKSPACE}/.wincode/settings.json`;
 		const files: Record<string, string> = {
 			[projectPath]: '{"compaction":{"auto":false,"reserveTokens":1000}}',
 		};
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
@@ -470,7 +584,7 @@ describe("createConfigStore", () => {
 		});
 	});
 	test("serializes concurrent writes to preserve the latest value", async () => {
-		const projectPath = `${WORKSPACE}/wincode.json`;
+		const projectPath = `${WORKSPACE}/.wincode/settings.json`;
 		const files: Record<string, string> = {
 			[projectPath]: '{"compaction":{"auto":false}}',
 		};
@@ -485,7 +599,6 @@ describe("createConfigStore", () => {
 			releaseFirstWrite = resolve;
 		});
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
@@ -531,7 +644,7 @@ describe("createConfigStore", () => {
 		});
 	});
 	test("queues a reset behind a pending write for a new setting", async () => {
-		const projectPath = `${WORKSPACE}/.wincode/wincode.json`;
+		const projectPath = `${WORKSPACE}/.wincode/settings.json`;
 		const files: Record<string, string> = {};
 		let resolveFirstWriteStarted: (() => void) | undefined;
 		let releaseFirstWrite: (() => void) | undefined;
@@ -543,7 +656,6 @@ describe("createConfigStore", () => {
 		});
 		let writeCount = 0;
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
@@ -588,13 +700,13 @@ describe("createConfigStore", () => {
 	});
 	test("uses canonical targets when a scoped parent exists elsewhere", async () => {
 		const files: Record<string, string> = {
-			[`${HOME_ROOT}/.wincode/wincode.json`]:
+			[`${HOME_ROOT}/.wincode/settings.json`]:
 				'{"compaction":{"keepRecentTokens":1000}}',
-			[`${WORKSPACE}/wincode.json`]: '{"compaction":{"keepRecentTokens":2000}}',
+			[`${WORKSPACE}/.wincode/settings.json`]:
+				'{"compaction":{"keepRecentTokens":2000}}',
 		};
 		const writes: string[] = [];
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
@@ -617,15 +729,14 @@ describe("createConfigStore", () => {
 		await store.setValue(WORKSPACE, "project", ["compaction", "auto"], true);
 
 		expect(writes).toEqual([
-			`${CONFIG_ROOT}/wincode.json`,
-			`${WORKSPACE}/.wincode/wincode.json`,
+			`${HOME_ROOT}/.wincode/settings.json`,
+			`${WORKSPACE}/.wincode/settings.json`,
 		]);
 	});
 	test("rejects writes for a read-only injected filesystem", async () => {
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
 			fs: fileSystem({
-				[`${WORKSPACE}/wincode.json`]: "{}",
+				[`${WORKSPACE}/.wincode/settings.json`]: "{}",
 			}),
 			homeRoot: HOME_ROOT,
 		});

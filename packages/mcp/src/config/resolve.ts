@@ -1,21 +1,20 @@
 import * as path from "node:path";
-import {
-	isNull,
-	isPlainObject,
-	isString,
-	isUndefined,
-	omitUndefined,
-} from "@wincode/utils";
-import type { ZodError, infer as ZodInfer } from "zod";
+import { isPlainObject, isUndefined, omitUndefined } from "@wincode/utils";
+import type { ZodError } from "zod";
 import {
 	DEFAULT_MCP_TIMEOUTS,
-	mergedServerSchema,
+	type McpExposure,
+	type McpTimeouts,
+	type RawMcpServerConfig,
 	type ResolvedMcpServerConfig,
-	rawServerPatchSchema,
+	rawServerSchema,
 	resolvedServerSchema,
 } from "./schema";
 
-const ENV_PATTERN = /^\{env:([^{}]+)\}$/;
+const VARIABLE_PATTERN =
+	/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$env:([A-Za-z_][A-Za-z0-9_]*)|\$([A-Za-z_][A-Za-z0-9_]*)|\$\$|\$!/gu;
+const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const PROJECT_OVERLAY_FIELDS = new Set(["enabled", "exposure", "toolExposure"]);
 
 export type McpConfigOrigin = Readonly<{
 	path: string;
@@ -36,7 +35,10 @@ export type McpConfigDiagnosticCode =
 	| "invalid-timeout"
 	| "invalid-url"
 	| "missing-env"
-	| "unsupported-auth";
+	| "unsupported-auth"
+	| "command-failed"
+	| "unsupported-transport"
+	| "unsupported-exposure";
 
 export type McpConfigDiagnostic = McpConfigOrigin &
 	Readonly<{
@@ -55,6 +57,7 @@ export type McpConfigSnapshot = Readonly<{
 export type McpConfigResult = Readonly<{
 	diagnostics: readonly McpConfigDiagnostic[];
 	invalidServers?: Readonly<Record<string, InvalidMcpServerConfig>>;
+	serverSources?: Readonly<Record<string, McpConfigOrigin>>;
 	servers: Readonly<Record<string, ResolvedMcpServerConfig>>;
 }>;
 
@@ -64,15 +67,29 @@ export type InvalidMcpServerConfig = Readonly<{
 	transport: "local" | "remote";
 }>;
 
-type McpDiagnosticCode = McpConfigDiagnosticCode;
+type EffectiveServer = Readonly<{
+	raw: Readonly<Record<string, unknown>>;
+	source: McpConfigSource;
+}>;
+
+type ResolutionContext = Readonly<{
+	diagnostics: McpConfigDiagnostic[];
+	env: Readonly<Record<string, string | undefined>>;
+	name: string;
+	commandOutputs: Map<string, string>;
+	source: McpConfigSource;
+	workspace: string;
+}>;
+
+const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 
 const serverPath = (name: string, field: readonly string[] = []): string =>
-	["mcp", name, ...field].join(".");
+	["mcpServers", name, ...field].join(".");
 
 const addDiagnostic = (
 	diagnostics: McpConfigDiagnostic[],
 	origin: McpConfigOrigin,
-	code: McpDiagnosticCode,
+	code: McpConfigDiagnosticCode,
 	message: string,
 	suffix: string,
 	serverName?: string
@@ -86,32 +103,7 @@ const addDiagnostic = (
 	});
 };
 
-type ResolutionContext = {
-	diagnostics: McpConfigDiagnostic[];
-	env: Record<string, string | undefined>;
-	fallbackSource: McpConfigOrigin;
-	name: string;
-	projectReplacement?: true;
-	snapshot: McpConfigSnapshot;
-	workspace: string;
-};
-
-const owner = (
-	context: ResolutionContext,
-	field: readonly string[]
-): McpConfigOrigin =>
-	context.projectReplacement === true
-		? context.fallbackSource
-		: (context.snapshot.sourceFor(["mcp", context.name, ...field]) ??
-			context.fallbackSource);
-
-type EffectiveMcpServer = Readonly<{
-	fallbackSource: McpConfigOrigin;
-	projectReplacement?: true;
-	raw: Readonly<Record<string, unknown>>;
-}>;
-
-const mergeServerPatch = (
+const mergePatch = (
 	base: Readonly<Record<string, unknown>>,
 	patch: Readonly<Record<string, unknown>>
 ): Readonly<Record<string, unknown>> => {
@@ -123,116 +115,200 @@ const mergeServerPatch = (
 		const current = merged[key];
 		merged[key] =
 			isPlainObject(current) && isPlainObject(incoming)
-				? mergeServerPatch(current, incoming)
+				? mergePatch(current, incoming)
 				: incoming;
 	}
 	return merged;
 };
 
-const isEnabledOnlyOverlay = (
+const isTransportDefinition = (
 	server: Readonly<Record<string, unknown>>
-): boolean =>
-	Object.keys(server).length === 1 &&
-	Object.hasOwn(server, "enabled") &&
-	typeof server.enabled === "boolean";
+): boolean => Object.hasOwn(server, "command") || Object.hasOwn(server, "url");
 
-const mergeUserServerSource = (
+const readServerEntries = (
 	source: McpConfigSource,
-	servers: Map<string, EffectiveMcpServer>
-): void => {
-	if (!isPlainObject(source.document.mcp)) {
+	diagnostics: McpConfigDiagnostic[]
+): Readonly<Record<string, unknown>> | undefined => {
+	const candidate = source.document.mcpServers;
+	if (isUndefined(candidate)) {
 		return;
 	}
-	for (const [name, candidate] of Object.entries(source.document.mcp)) {
-		if (!isPlainObject(candidate) || Object.keys(candidate).length === 0) {
-			continue;
-		}
-		const previous = servers.get(name);
-		servers.set(name, {
-			fallbackSource: source,
-			raw: mergeServerPatch(previous?.raw ?? {}, candidate),
-		});
+	if (!isPlainObject(candidate)) {
+		addDiagnostic(
+			diagnostics,
+			source,
+			"invalid-scope",
+			"mcpServers must be an object",
+			"mcpServers"
+		);
+		return;
 	}
+	return candidate;
 };
 
-const applyEnabledOnlyProjectOverlay = (
+const applyGlobalServer = (
+	servers: Map<string, EffectiveServer>,
 	source: McpConfigSource,
 	name: string,
-	patch: Readonly<Record<string, unknown>>,
-	servers: Map<string, EffectiveMcpServer>,
+	candidate: unknown,
 	diagnostics: McpConfigDiagnostic[]
 ): void => {
+	if (!SERVER_NAME_PATTERN.test(name)) {
+		addDiagnostic(
+			diagnostics,
+			source,
+			"invalid-server",
+			"Server names may contain only letters, digits, underscores, and hyphens.",
+			serverPath(name),
+			name
+		);
+		return;
+	}
+	if (!isPlainObject(candidate)) {
+		addDiagnostic(
+			diagnostics,
+			source,
+			"invalid-server",
+			"Server entry must be an object",
+			serverPath(name),
+			name
+		);
+		return;
+	}
+	const existing = servers.get(name);
+	if (source.scope === "plugin") {
+		if (existing !== undefined) {
+			addDiagnostic(
+				diagnostics,
+				source,
+				"invalid-server",
+				"MCP Server registration names must be unique across Plugins.",
+				serverPath(name),
+				name
+			);
+			return;
+		}
+		servers.set(name, { raw: candidate, source });
+		return;
+	}
+	if (existing?.source.scope === "plugin") {
+		servers.set(name, {
+			raw: isTransportDefinition(candidate)
+				? candidate
+				: mergePatch(existing.raw, candidate),
+			source,
+		});
+		return;
+	}
+	servers.set(name, {
+		raw: mergePatch(existing?.raw ?? {}, candidate),
+		source,
+	});
+};
+
+const applyProjectServer = (
+	servers: Map<string, EffectiveServer>,
+	source: McpConfigSource,
+	name: string,
+	candidate: unknown,
+	diagnostics: McpConfigDiagnostic[]
+): void => {
+	if (!(SERVER_NAME_PATTERN.test(name) && isPlainObject(candidate))) {
+		addDiagnostic(
+			diagnostics,
+			source,
+			"invalid-server",
+			"Project MCP server entries require a valid name and object value.",
+			serverPath(name),
+			name
+		);
+		return;
+	}
+	if (isTransportDefinition(candidate)) {
+		servers.set(name, { raw: candidate, source });
+		return;
+	}
+	const unsupportedFields = Object.keys(candidate).filter(
+		(field) => !PROJECT_OVERLAY_FIELDS.has(field)
+	);
+	if (unsupportedFields.length > 0) {
+		addDiagnostic(
+			diagnostics,
+			source,
+			"invalid-server",
+			"Project overlays may set only enabled, exposure, and toolExposure.",
+			serverPath(name),
+			name
+		);
+		return;
+	}
 	const previous = servers.get(name);
 	if (previous === undefined) {
 		addDiagnostic(
 			diagnostics,
 			source,
 			"invalid-server",
-			"An enabled-only project MCP entry requires an existing server definition.",
-			serverPath(name, ["enabled"]),
+			"A project override requires an existing user server definition.",
+			serverPath(name),
 			name
 		);
-		servers.set(name, { fallbackSource: source, raw: patch });
 		return;
 	}
 	servers.set(name, {
-		fallbackSource: previous.fallbackSource,
-		...(previous.projectReplacement === true
-			? { projectReplacement: true as const }
-			: {}),
-		raw: mergeServerPatch(previous.raw, patch),
+		raw: mergePatch(previous.raw, candidate),
+		source: previous.source,
 	});
 };
 
-const applyProjectServerSource = (
+const applyServerEntries = (
+	servers: Map<string, EffectiveServer>,
 	source: McpConfigSource,
-	servers: Map<string, EffectiveMcpServer>,
-	diagnostics: McpConfigDiagnostic[]
+	diagnostics: McpConfigDiagnostic[],
+	applyEntry: (
+		servers: Map<string, EffectiveServer>,
+		source: McpConfigSource,
+		name: string,
+		candidate: unknown,
+		diagnostics: McpConfigDiagnostic[]
+	) => void
 ): void => {
-	if (!isPlainObject(source.document.mcp)) {
+	const entries = readServerEntries(source, diagnostics);
+	if (entries === undefined) {
 		return;
 	}
-	for (const [name, patch] of Object.entries(source.document.mcp)) {
-		if (!isPlainObject(patch) || Object.keys(patch).length === 0) {
-			continue;
-		}
-		if (isEnabledOnlyOverlay(patch)) {
-			applyEnabledOnlyProjectOverlay(source, name, patch, servers, diagnostics);
-			continue;
-		}
-		servers.set(name, {
-			fallbackSource: source,
-			projectReplacement: true,
-			raw: patch,
-		});
+	for (const [name, candidate] of Object.entries(entries)) {
+		applyEntry(servers, source, name, candidate, diagnostics);
 	}
 };
 
 const effectiveServers = (
 	snapshot: McpConfigSnapshot,
 	diagnostics: McpConfigDiagnostic[]
-): ReadonlyMap<string, EffectiveMcpServer> => {
-	const servers = new Map<string, EffectiveMcpServer>();
+): ReadonlyMap<string, EffectiveServer> => {
+	const servers = new Map<string, EffectiveServer>();
 	for (const source of snapshot.sources) {
 		if (source.scope !== "project") {
-			mergeUserServerSource(source, servers);
+			applyServerEntries(servers, source, diagnostics, applyGlobalServer);
 		}
 	}
 	for (const source of snapshot.sources) {
 		if (source.scope === "project") {
-			applyProjectServerSource(source, servers, diagnostics);
+			applyServerEntries(servers, source, diagnostics, applyProjectServer);
 		}
 	}
 	return servers;
 };
 
-const diagnosticCode = (field: readonly string[]): McpDiagnosticCode => {
+const diagnosticCode = (field: readonly string[]): McpConfigDiagnosticCode => {
 	const rootField = field[0] ?? "";
 	if (rootField === "timeout") {
 		return "invalid-timeout";
 	}
-	if (rootField === "command" || rootField === "type") {
-		return "invalid-server";
+	if (rootField === "exposure" || rootField === "toolExposure") {
+		return "unsupported-exposure";
+	}
+	if (rootField === "type" || rootField === "command" || rootField === "url") {
+		return "unsupported-transport";
 	}
 	return "invalid-field";
 };
@@ -242,15 +318,14 @@ const addSchemaDiagnostics = (
 	error: ZodError
 ): void => {
 	for (const issue of error.issues) {
-		const parent = issue.path.map(String);
 		const fields =
 			issue.code === "unrecognized_keys"
-				? issue.keys.map((key) => [...parent, key])
-				: [parent];
+				? issue.keys.map((key) => [key])
+				: [issue.path.map(String)];
 		for (const field of fields) {
 			addDiagnostic(
 				context.diagnostics,
-				owner(context, field),
+				context.source,
 				diagnosticCode(field),
 				issue.message,
 				serverPath(context.name, field),
@@ -260,61 +335,228 @@ const addSchemaDiagnostics = (
 	}
 };
 
-const resolveString = (
-	value: unknown,
+const runConfigCommand = async (
+	command: string,
 	context: ResolutionContext,
 	field: readonly string[]
-): string | undefined => {
-	if (!isString(value)) {
+): Promise<string | undefined> => {
+	const cached = context.commandOutputs.get(command);
+	if (cached !== undefined) {
+		return cached;
+	}
+	try {
+		if (command.trim().length === 0) {
+			throw new Error("empty command");
+		}
+		const shellCommand =
+			process.platform === "win32"
+				? [process.env.COMSPEC ?? "cmd.exe", "/d", "/s", "/c", command]
+				: ["/bin/sh", "-c", command];
+		const commandEnvironment = Object.fromEntries(
+			Object.entries({ ...process.env, ...context.env }).filter(
+				(entry): entry is [string, string] => typeof entry[1] === "string"
+			)
+		);
+		const child = Bun.spawn(shellCommand, {
+			cwd: context.workspace,
+			env: commandEnvironment,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "ignore",
+			signal: AbortSignal.timeout(10_000),
+		});
+		try {
+			const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+			const decoder = new TextDecoder();
+			let output = "";
+			let outputBytes = 0;
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
+				outputBytes += value.byteLength;
+				if (outputBytes > MAX_COMMAND_OUTPUT_BYTES) {
+					throw new Error("command output limit exceeded");
+				}
+				output += decoder.decode(value, { stream: true });
+			}
+			output += decoder.decode();
+			const exitCode = await child.exited;
+			if (exitCode !== 0) {
+				throw new Error("command exited unsuccessfully");
+			}
+			const trimmed = output.trim();
+			if (trimmed.length === 0) {
+				throw new Error("command returned no value");
+			}
+			context.commandOutputs.set(command, trimmed);
+			return trimmed;
+		} catch (error) {
+			child.kill();
+			await child.exited;
+			throw error;
+		}
+	} catch {
+		addDiagnostic(
+			context.diagnostics,
+			context.source,
+			"command-failed",
+			`Could not resolve command value for server ${context.name}.`,
+			serverPath(context.name, field),
+			context.name
+		);
 		return;
 	}
-	const match = ENV_PATTERN.exec(value);
-	if (isNull(match)) {
-		return value;
-	}
-	const variable = match[1] ?? "";
-	const resolved = context.env[variable];
-	if (isString(resolved)) {
-		return resolved;
-	}
-	addDiagnostic(
-		context.diagnostics,
-		owner(context, field),
-		"missing-env",
-		`Missing environment variable ${variable} for server ${context.name}`,
-		serverPath(context.name, field),
-		context.name
-	);
 };
 
-const resolveLocalServer = (
+const resolveString = async (
+	value: string,
 	context: ResolutionContext,
-	base: object,
-	raw: Record<string, unknown>
-): ResolvedMcpServerConfig | undefined => {
-	const environment: Record<string, string> = {};
-	for (const [key, value] of Object.entries(
-		isPlainObject(raw.environment) ? raw.environment : {}
-	)) {
-		const resolved = resolveString(value, context, ["environment", key]);
-		if (isUndefined(resolved)) {
+	field: readonly string[]
+): Promise<string | undefined> => {
+	if ((field[0] === "env" || field[0] === "headers") && value.startsWith("!")) {
+		return runConfigCommand(value.slice(1), context, field);
+	}
+	let missingVariable: string | undefined;
+	const resolved = value.replace(
+		VARIABLE_PATTERN,
+		(
+			match,
+			braced: string | undefined,
+			envName: string | undefined,
+			bare: string | undefined
+		) => {
+			if (match === "$$") {
+				return "$";
+			}
+			if (match === "$!") {
+				return "!";
+			}
+			const variable = braced ?? envName ?? bare ?? "";
+			const replacement = context.env[variable];
+			if (replacement === undefined) {
+				missingVariable = variable;
+				return "";
+			}
+			return replacement;
+		}
+	);
+	if (missingVariable !== undefined) {
+		addDiagnostic(
+			context.diagnostics,
+			context.source,
+			"missing-env",
+			`Missing environment variable ${missingVariable} for server ${context.name}`,
+			serverPath(context.name, field),
+			context.name
+		);
+		return;
+	}
+	return resolved;
+};
+
+const resolveStringRecord = async (
+	value: unknown,
+	context: ResolutionContext,
+	field: string
+): Promise<Record<string, string> | undefined> => {
+	if (!isPlainObject(value)) {
+		return {};
+	}
+	const result: Record<string, string> = {};
+	for (const [key, candidate] of Object.entries(value)) {
+		if (typeof candidate !== "string") {
+			continue;
+		}
+		const commandValue = candidate.startsWith("!");
+		const resolved = await resolveString(candidate, context, [field, key]);
+		if (resolved === undefined) {
+			if (commandValue) {
+				continue;
+			}
 			return;
 		}
-		environment[key] = resolved;
+		result[key] = resolved;
 	}
-	const cwd = isString(raw.cwd) ? raw.cwd : undefined;
-	let resolvedCwd: string | undefined;
-	if (!isUndefined(cwd)) {
-		resolvedCwd =
-			path.isAbsolute(cwd) || path.win32.isAbsolute(cwd)
-				? cwd
-				: path.resolve(context.workspace, cwd);
+	return result;
+};
+
+const homeExpand = (value: string, homeRoot: string): string =>
+	value === "~" || value.startsWith(`~${path.sep}`)
+		? path.join(homeRoot, value.slice(2))
+		: value;
+
+type ResolvedServerBase = Readonly<{
+	description: string | undefined;
+	disabled: boolean;
+	exposure: McpExposure;
+	name: string;
+	timeout: McpTimeouts;
+	toolExposure: Record<string, McpExposure> | undefined;
+}>;
+
+const resolvedServerBase = (
+	context: ResolutionContext,
+	raw: RawMcpServerConfig
+): ResolvedServerBase => ({
+	description: raw.description,
+	disabled: raw.enabled === false,
+	exposure: raw.exposure ?? "direct",
+	name: context.name,
+	timeout: {
+		...DEFAULT_MCP_TIMEOUTS,
+		...(raw.timeout === undefined
+			? {}
+			: { execution: Math.round(raw.timeout * 1000) }),
+	},
+	toolExposure: raw.toolExposure,
+});
+
+const resolveLocalServer = async (
+	context: ResolutionContext,
+	raw: RawMcpServerConfig,
+	base: ResolvedServerBase
+): Promise<ResolvedMcpServerConfig | undefined> => {
+	if (typeof raw.command !== "string") {
+		return;
+	}
+	const environment = await resolveStringRecord(raw.env, context, "env");
+	if (environment === undefined) {
+		return;
+	}
+	const homeRoot = context.env.HOME ?? process.env.HOME ?? "";
+	const command = await resolveString(raw.command, context, ["command"]);
+	const args = await Promise.all(
+		(raw.args ?? []).map((arg, index) =>
+			resolveString(arg, context, ["args", String(index)])
+		)
+	);
+	let cwd: string | undefined;
+	if (raw.cwd !== undefined) {
+		const cwdValue = await resolveString(raw.cwd, context, ["cwd"]);
+		if (cwdValue === undefined) {
+			return;
+		}
+		const expandedCwd = homeExpand(cwdValue, homeRoot);
+		cwd = path.isAbsolute(expandedCwd)
+			? expandedCwd
+			: path.resolve(context.workspace, expandedCwd);
+	}
+	if (
+		command === undefined ||
+		args.some((argument) => argument === undefined)
+	) {
+		return;
 	}
 	const parsed = resolvedServerSchema.safeParse({
 		...base,
 		type: "local" as const,
-		command: raw.command,
-		...omitUndefined({ cwd: resolvedCwd }),
+		command: [
+			homeExpand(command, homeRoot),
+			...args.map((arg) => homeExpand(arg ?? "", homeRoot)),
+		],
+		...(cwd === undefined ? {} : { cwd }),
 		...(Object.keys(environment).length === 0 ? {} : { environment }),
 	});
 	if (!parsed.success) {
@@ -324,21 +566,57 @@ const resolveLocalServer = (
 	return parsed.data;
 };
 
-const resolveRemoteServer = (
-	context: ResolutionContext,
-	base: object,
-	raw: Record<string, unknown>
-): ResolvedMcpServerConfig | undefined => {
-	let url: URL;
+const parseHttpUrl = (value: string): URL | undefined => {
 	try {
-		url = new URL(String(raw.url));
-		if (!(url.hostname && ["http:", "https:"].includes(url.protocol))) {
-			throw new Error("Invalid URL");
+		const url = new URL(value);
+		if (url.hostname && ["http:", "https:"].includes(url.protocol)) {
+			return url;
 		}
 	} catch {
+		return;
+	}
+	return;
+};
+
+const hasProjectOAuthSecret = (
+	context: ResolutionContext,
+	oauth: unknown
+): boolean => {
+	if (
+		context.source.scope !== "project" ||
+		!isPlainObject(oauth) ||
+		!Object.hasOwn(oauth, "clientSecret")
+	) {
+		return false;
+	}
+	addDiagnostic(
+		context.diagnostics,
+		context.source,
+		"unsupported-auth",
+		"Project MCP configuration cannot provide OAuth client secrets.",
+		serverPath(context.name, ["oauth", "clientSecret"]),
+		context.name
+	);
+	return true;
+};
+
+const resolveRemoteServer = async (
+	context: ResolutionContext,
+	raw: RawMcpServerConfig,
+	base: ResolvedServerBase
+): Promise<ResolvedMcpServerConfig | undefined> => {
+	if (typeof raw.url !== "string") {
+		return;
+	}
+	const resolvedUrl = await resolveString(raw.url, context, ["url"]);
+	if (resolvedUrl === undefined) {
+		return;
+	}
+	const url = parseHttpUrl(resolvedUrl);
+	if (url === undefined) {
 		addDiagnostic(
 			context.diagnostics,
-			owner(context, ["url"]),
+			context.source,
 			"invalid-url",
 			"URL must be absolute http or https URL",
 			serverPath(context.name, ["url"]),
@@ -346,33 +624,30 @@ const resolveRemoteServer = (
 		);
 		return;
 	}
-	if (!isUndefined(raw.oauth) && raw.oauth !== false) {
-		addDiagnostic(
-			context.diagnostics,
-			owner(context, ["oauth"]),
-			"unsupported-auth",
-			"OAuth configuration is unsupported",
-			serverPath(context.name, ["oauth"]),
-			context.name
-		);
+	if (hasProjectOAuthSecret(context, raw.oauth)) {
 		return;
 	}
-	const headers: Record<string, string> = {};
-	for (const [key, value] of Object.entries(
-		isPlainObject(raw.headers) ? raw.headers : {}
-	)) {
-		const resolved = resolveString(value, context, ["headers", key]);
-		if (isUndefined(resolved)) {
+	const headers = await resolveStringRecord(raw.headers, context, "headers");
+	if (headers === undefined) {
+		return;
+	}
+	let oauth = raw.oauth;
+	if (isPlainObject(oauth) && typeof oauth.clientSecret === "string") {
+		const clientSecret = await resolveString(oauth.clientSecret, context, [
+			"oauth",
+			"clientSecret",
+		]);
+		if (clientSecret === undefined) {
 			return;
 		}
-		headers[key] = resolved;
+		oauth = { ...oauth, clientSecret };
 	}
 	const parsed = resolvedServerSchema.safeParse({
 		...base,
 		type: "remote" as const,
 		url: url.toString(),
 		...(Object.keys(headers).length === 0 ? {} : { headers }),
-		...(raw.oauth === false ? { oauth: false as const } : {}),
+		...omitUndefined({ auth: raw.auth, oauth }),
 	});
 	if (!parsed.success) {
 		addSchemaDiagnostics(context, parsed.error);
@@ -381,111 +656,99 @@ const resolveRemoteServer = (
 	return parsed.data;
 };
 
-const resolveServer = (
+const resolveServer = async (
 	context: ResolutionContext,
-	raw: ZodInfer<typeof rawServerPatchSchema>
-): ResolvedMcpServerConfig | undefined => {
-	const mergedServer = mergedServerSchema.safeParse(raw);
-	if (!mergedServer.success) {
-		addSchemaDiagnostics(context, mergedServer.error);
+	raw: RawMcpServerConfig
+): Promise<ResolvedMcpServerConfig | undefined> => {
+	const isLocal = typeof raw.command === "string";
+	const isRemote = typeof raw.url === "string";
+	if (isLocal === isRemote) {
+		addDiagnostic(
+			context.diagnostics,
+			context.source,
+			"invalid-server",
+			"A server must define exactly one of command or url.",
+			serverPath(context.name),
+			context.name
+		);
 		return;
 	}
-	const value = mergedServer.data;
-	const base = {
-		disabled: value.enabled === false,
-		name: context.name,
-		timeout: { ...DEFAULT_MCP_TIMEOUTS, ...value.timeout },
-	};
-	return value.type === "local"
-		? resolveLocalServer(context, base, value)
-		: resolveRemoteServer(context, base, value);
-};
-
-const diagnoseMalformedEntries = (
-	sources: readonly McpConfigSource[],
-	diagnostics: McpConfigDiagnostic[]
-): void => {
-	for (const source of sources) {
-		const mcp = source.document.mcp;
-		if (isUndefined(mcp)) {
-			continue;
-		}
-		if (!isPlainObject(mcp)) {
-			addDiagnostic(
-				diagnostics,
-				source,
-				"invalid-scope",
-				"mcp must be object",
-				"mcp"
-			);
-			continue;
-		}
-		for (const [name, value] of Object.entries(mcp)) {
-			if (!isPlainObject(value)) {
-				addDiagnostic(
-					diagnostics,
-					source,
-					"invalid-server",
-					"Server entry must be an object",
-					serverPath(name),
-					name
-				);
-			}
-		}
+	const typeMismatch =
+		(raw.type === "stdio" && !isLocal) ||
+		((raw.type === "http" || raw.type === "streamable-http") && !isRemote);
+	if (typeMismatch) {
+		addDiagnostic(
+			context.diagnostics,
+			context.source,
+			"unsupported-transport",
+			"Server type does not match its command or URL transport.",
+			serverPath(context.name, ["type"]),
+			context.name
+		);
+		return;
 	}
+	const base = resolvedServerBase(context, raw);
+	if (isLocal) {
+		return resolveLocalServer(context, raw, base);
+	}
+	return resolveRemoteServer(context, raw, base);
 };
 
-type ResolveInput = {
-	env: Readonly<Record<string, string | undefined>>;
-	snapshot: McpConfigSnapshot;
-	workspace: string;
-};
+const malformedServerTransport = (
+	value: Readonly<Record<string, unknown>>
+): "local" | "remote" =>
+	typeof value.command === "string" ? "local" : "remote";
 
-export const resolveServers = ({
+export const resolveServers = async ({
 	env,
 	snapshot,
 	workspace,
-}: ResolveInput): McpConfigResult => {
-	const diagnostics: McpConfigDiagnostic[] = snapshot.diagnostics.map(
-		(diagnostic) => ({ ...diagnostic })
-	);
-	diagnoseMalformedEntries(snapshot.sources, diagnostics);
+}: {
+	env: Readonly<Record<string, string | undefined>>;
+	snapshot: McpConfigSnapshot;
+	workspace: string;
+}): Promise<McpConfigResult> => {
+	const diagnostics = snapshot.diagnostics.map((diagnostic) => ({
+		...diagnostic,
+	}));
 	const effective = effectiveServers(snapshot, diagnostics);
 	const servers: Record<string, ResolvedMcpServerConfig> = {};
-	for (const [name, { fallbackSource, projectReplacement, raw }] of effective) {
+	const invalidServers: Record<string, InvalidMcpServerConfig> = {};
+	const serverSources: Record<string, McpConfigOrigin> = {};
+	for (const [name, { raw, source }] of effective) {
 		const context: ResolutionContext = {
+			commandOutputs: new Map(),
 			diagnostics,
 			env,
-			fallbackSource,
 			name,
-			...(projectReplacement === true ? { projectReplacement: true } : {}),
-			snapshot,
+			source,
 			workspace,
 		};
-		const validated = rawServerPatchSchema.safeParse(raw);
+		serverSources[name] = { path: source.path, scope: source.scope };
+		const validated = rawServerSchema.safeParse(raw);
 		if (!validated.success) {
 			addSchemaDiagnostics(context, validated.error);
+			invalidServers[name] = {
+				error:
+					diagnostics.find((diagnostic) => diagnostic.serverName === name)
+						?.message ?? "Invalid MCP server configuration",
+				name,
+				transport: malformedServerTransport(raw),
+			};
 			continue;
 		}
-		const resolved = resolveServer(context, validated.data);
-		if (!isUndefined(resolved)) {
+		const resolved = await resolveServer(context, validated.data);
+		if (resolved === undefined) {
+			invalidServers[name] = {
+				error:
+					diagnostics.find((diagnostic) => diagnostic.serverName === name)
+						?.message ?? "Invalid MCP server configuration",
+				name,
+				transport: malformedServerTransport(raw),
+			};
+		} else {
 			servers[name] = resolved;
 		}
 	}
-	const invalidServers: Record<string, InvalidMcpServerConfig> = {};
-	for (const [name, { raw }] of effective) {
-		if (
-			!(isUndefined(servers[name]) && isPlainObject(raw)) ||
-			(raw.type !== "local" && raw.type !== "remote")
-		) {
-			continue;
-		}
-		const diagnostic = diagnostics.find((item) => item.serverName === name);
-		invalidServers[name] = {
-			error: diagnostic?.message ?? "Invalid MCP server configuration",
-			name,
-			transport: raw.type,
-		};
-	}
-	return { diagnostics, invalidServers, servers };
+	return { diagnostics, invalidServers, serverSources, servers };
 };

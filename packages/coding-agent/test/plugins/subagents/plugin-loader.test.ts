@@ -19,7 +19,7 @@ test("the distributed Subagents package registers delegate through the public Pl
 	const databasePath = path.join(root, "subagents.sqlite");
 	const previousDatabasePath = process.env.WINCODE_SUBAGENTS_DB_PATH;
 	process.env.WINCODE_SUBAGENTS_DB_PATH = databasePath;
-	const configStore = createConfigStore({ configRoot: root, homeRoot: root });
+	const configStore = createConfigStore({ homeRoot: root });
 	const workspace = path.join(root, "workspace");
 	const runtime = await loadPlugins({
 		cliPaths: [],

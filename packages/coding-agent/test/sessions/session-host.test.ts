@@ -292,7 +292,6 @@ const bundledPluginRuntime = await loadPlugins({
 	distributionPlugins: bundledComposition.distributionPlugins,
 	config: {
 		configStore: createConfigStore({
-			configRoot: join(testDirectory, "config"),
 			homeRoot: testDirectory,
 		}),
 		cwd: testDirectory,
@@ -315,7 +314,7 @@ const createCapabilities = (
 			: [
 					{
 						document,
-						path: join(workspace, "wincode.json"),
+						path: join(workspace, ".wincode", "settings.json"),
 						scope: "project" as const,
 					},
 				]);

@@ -69,7 +69,6 @@ const pluginRuntime = await loadPlugins({
 	],
 	config: {
 		configStore: createConfigStore({
-			configRoot: testDirectory,
 			homeRoot: testDirectory,
 		}),
 		cwd: testDirectory,

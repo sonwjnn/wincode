@@ -10,13 +10,17 @@ import type {
 	PluginRuntime,
 	PluginStatusPanelDescriptor,
 } from "@/modules/plugins/runtime";
-import { useDialogEscape } from "@/shared/providers/dialog/dialog-provider";
+import {
+	useDialog,
+	useDialogEscape,
+} from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
+import { PluginTextInputDialog } from "./plugin-text-input-dialog";
 
 const statusLabel = (status: PluginStatus): string => {
 	switch (status) {
@@ -83,6 +87,7 @@ export const PluginStatusPanelDialogContent = ({
 	pluginRuntime,
 }: PluginStatusPanelDialogContentProps) => {
 	const toast = useToast();
+	const dialog = useDialog();
 	const { colors } = useTheme();
 	const [snapshot, setSnapshot] = useState<PluginStatusPanelSnapshot>(() =>
 		panel.getSnapshot()
@@ -90,6 +95,7 @@ export const PluginStatusPanelDialogContent = ({
 	const [selectedItemId, setSelectedItemId] = useState<string | undefined>(
 		() => snapshot.items[0]?.id
 	);
+	const [selectedActionIndex, setSelectedActionIndex] = useState(0);
 	const [busyItems, setBusyItems] = useState<ReadonlySet<string>>(
 		() => new Set()
 	);
@@ -97,6 +103,35 @@ export const PluginStatusPanelDialogContent = ({
 	const busyItemsRef = useRef(new Set<string>());
 	const refreshingRef = useRef(false);
 	const mountedRef = useRef(true);
+	const requestTextInput = useCallback(
+		(prompt: string, signal: AbortSignal): Promise<string | undefined> => {
+			const result = Promise.withResolvers<string | undefined>();
+			if (signal.aborted) {
+				result.resolve(undefined);
+				return result.promise;
+			}
+			let settled = false;
+			const settle = (value: string | undefined): void => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				signal.removeEventListener("abort", abort);
+				result.resolve(value);
+			};
+			const abort = (): void => {
+				dialog.close();
+				settle(undefined);
+			};
+			signal.addEventListener("abort", abort, { once: true });
+			dialog.open({
+				children: <PluginTextInputDialog onResolve={settle} prompt={prompt} />,
+				title: "Plugin Input",
+			});
+			return result.promise;
+		},
+		[dialog]
+	);
 
 	useDialogEscape();
 	useEffect(() => {
@@ -115,12 +150,14 @@ export const PluginStatusPanelDialogContent = ({
 
 	const highlightItem = useCallback((item: PluginStatusItem) => {
 		setSelectedItemId(item.id);
+		setSelectedActionIndex(0);
 	}, []);
 	const selectedItem =
 		snapshot.items.find(({ id }) => id === selectedItemId) ?? snapshot.items[0];
-	const selectedAction = selectedItem?.actions?.find(
-		({ shortcut }) => shortcut === "space"
-	);
+	const selectedActions =
+		selectedItem?.actions?.filter(({ shortcut }) => shortcut === "space") ?? [];
+	const selectedAction =
+		selectedActions[selectedActionIndex % Math.max(1, selectedActions.length)];
 
 	const refreshPanel = useCallback(() => {
 		if (panel.refresh === undefined || refreshingRef.current) {
@@ -152,17 +189,16 @@ export const PluginStatusPanelDialogContent = ({
 	}, [panel, pluginRuntime, toast.show]);
 
 	const runAction = useCallback(
-		(item: PluginStatusItem) => {
-			const action = item.actions?.find(
-				(candidate) => candidate.shortcut === "space"
-			);
-			if (action === undefined || busyItemsRef.current.has(item.id)) {
+		(item: PluginStatusItem, actionId: string | undefined) => {
+			if (actionId === undefined || busyItemsRef.current.has(item.id)) {
 				return;
 			}
 			busyItemsRef.current.add(item.id);
 			setBusyItems(new Set(busyItemsRef.current));
 			void pluginRuntime
-				.runStatusPanelAction(panel.pluginId, panel.id, item.id, action.id)
+				.runStatusPanelAction(panel.pluginId, panel.id, item.id, actionId, {
+					requestTextInput,
+				})
 				.catch(() => {
 					if (mountedRef.current) {
 						toast.show({
@@ -178,7 +214,7 @@ export const PluginStatusPanelDialogContent = ({
 					}
 				});
 		},
-		[panel, pluginRuntime, toast.show]
+		[panel, pluginRuntime, requestTextInput, toast.show]
 	);
 
 	return (
@@ -191,6 +227,9 @@ export const PluginStatusPanelDialogContent = ({
 							label={selectedAction?.label ?? "run action"}
 							shortcut="space"
 						/>
+						{selectedActions.length > 1 ? (
+							<DialogFooterHint label="next action" shortcut="tab" />
+						) : null}
 						{panel.refresh === undefined ? null : (
 							<DialogFooterHint
 								label={isRefreshing ? "refreshing…" : "refresh"}
@@ -208,20 +247,32 @@ export const PluginStatusPanelDialogContent = ({
 				items={snapshot.items}
 				onHighlight={highlightItem}
 				onKey={(key, highlightedItem) => {
+					if (
+						key.name === "tab" &&
+						(highlightedItem?.actions?.filter(
+							({ shortcut }) => shortcut === "space"
+						).length ?? 0) > 1
+					) {
+						setSelectedActionIndex((index) => index + 1);
+						return true;
+					}
 					if (key.ctrl && key.name === "r" && panel.refresh !== undefined) {
 						refreshPanel();
 						return true;
 					}
-					if (
-						key.name !== "space" ||
-						isUndefined(highlightedItem) ||
-						!highlightedItem.actions?.some(
-							({ shortcut }) => shortcut === "space"
-						)
-					) {
+					if (key.name !== "space" || isUndefined(highlightedItem)) {
 						return false;
 					}
-					runAction(highlightedItem);
+					const actions =
+						highlightedItem.actions?.filter(
+							({ shortcut }) => shortcut === "space"
+						) ?? [];
+					const actionId =
+						actions[selectedActionIndex % Math.max(1, actions.length)]?.id;
+					if (actionId === undefined) {
+						return false;
+					}
+					runAction(highlightedItem, actionId);
 					return true;
 				}}
 				onSelect={() => undefined}
