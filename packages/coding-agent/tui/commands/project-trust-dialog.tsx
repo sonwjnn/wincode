@@ -112,6 +112,10 @@ export function ProjectTrustDialogContent({
 					)}
 				</scrollbox>
 			)}
+			<text fg={colors.text} wrapMode="word">
+				Project Plugins, MCP Servers, and other protected resources may run with
+				Wincode's process privileges. This is not a sandbox.
+			</text>
 			<SearchListDialogWrapper<ProjectTrustChoiceItem>
 				getKey={(choice) => choice.action}
 				getSearchText={(choice) => `${choice.label} ${choice.description}`}

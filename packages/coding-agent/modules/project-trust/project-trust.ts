@@ -449,11 +449,8 @@ const getDecisionForRoot = (
 	if (promptedChoice === "cancel") {
 		return;
 	}
-	if (promptedChoice === "deny") {
-		return "deny";
-	}
 	if (promptedChoice !== undefined) {
-		return "trust";
+		return resolveProjectTrustSelection(promptedChoice).decision;
 	}
 	return nearestDecision(projectRoot, decisions)?.decision;
 };

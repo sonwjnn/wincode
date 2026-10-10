@@ -9,7 +9,7 @@ import { initializeApplicationRuntime } from "../modules/application/runtime";
 import { installCrashGuard } from "../shared/crash-guard";
 import type { ExecutionMode } from "../shared/execution-mode";
 import { setInteractiveRuntimeContext } from "../shared/runtime-context";
-import { runInteractive, runProjectTrustPreflight } from "../tui/runtime";
+import { runProjectTrustPreflight } from "../tui/project-trust-preflight";
 
 installCrashGuard();
 
@@ -64,6 +64,7 @@ const loadModeRunners = async (
 					? {}
 					: { resourceLoader: context.resourceLoader }),
 			});
+			const { runInteractive } = await import("../tui/runtime");
 			return runInteractive();
 		},
 		json: json.runJsonExecutionMode,

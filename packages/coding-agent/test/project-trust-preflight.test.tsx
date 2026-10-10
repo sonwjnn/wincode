@@ -120,6 +120,17 @@ test("startup preflight returns cancellation and tears down its renderer", async
 	}
 });
 
+test("trust selector explains protected resources are not sandboxed", async () => {
+	const { setup } = await renderTrustDialog();
+	try {
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("process privileges.");
+		expect(frame).toContain("This is not a sandbox.");
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
 test("trust selector lists each root and pending session state; Escape cancels", async () => {
 	const { selectionOutcome, setup } = await renderTrustDialog();
 	try {
