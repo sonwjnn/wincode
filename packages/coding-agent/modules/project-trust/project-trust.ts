@@ -19,12 +19,24 @@ export type ProjectTrustResolution = Readonly<{
 	trustedProjectRoots: readonly string[];
 }>;
 
+export type ProjectTrustSavedDecision = Readonly<{
+	decision: ProjectTrustDecision;
+	directory: string;
+	inherited: boolean;
+}>;
+
+export type ProjectTrustStatus = Readonly<{
+	currentSessionTrusted: boolean;
+	parentDirectory?: string;
+	savedDecision?: ProjectTrustSavedDecision;
+}>;
+
 export type ResolveProjectTrustInput = Readonly<{
 	mode: "interactive" | "print" | "json" | "rpc" | "sdk";
 	override?: ProjectTrustOverride;
 	prompt?: ProjectTrustPrompt;
 	stdinIsTTY?: boolean;
-	userDataDir: string;
+	projectTrustDir: string;
 	workspace: string;
 }>;
 
@@ -131,6 +143,21 @@ const hasProtectedProjectResources = async (
 	);
 };
 
+const getProtectedProjectRoots = async (
+	workspace: string
+): Promise<string[]> => {
+	const projectRoots = await Promise.all(
+		getProjectRoots(workspace).map((root) => canonicalPath(root))
+	);
+	return (
+		await Promise.all(
+			projectRoots.map(async (root) =>
+				(await hasProtectedProjectResources(root)) ? root : undefined
+			)
+		)
+	).filter((root): root is string => root !== undefined);
+};
+
 const loadTrustFile = async (
 	filePath: string
 ): Promise<StoredTrustDecision[]> => {
@@ -160,6 +187,24 @@ const loadTrustFile = async (
 	}
 };
 
+const canonicalizeTrustDecisions = async (
+	storedDecisions: readonly StoredTrustDecision[]
+): Promise<StoredTrustDecision[]> => {
+	const decisionsByCanonicalDirectory = new Map<string, StoredTrustDecision>();
+	for (const entry of storedDecisions) {
+		const directory = await canonicalPath(entry.directory);
+		const prior = decisionsByCanonicalDirectory.get(directory);
+		decisionsByCanonicalDirectory.set(directory, {
+			directory,
+			decision:
+				prior?.decision === "deny" || entry.decision === "deny"
+					? "deny"
+					: "trust",
+		});
+	}
+	return [...decisionsByCanonicalDirectory.values()];
+};
+
 const saveTrustFile = async (
 	filePath: string,
 	decisions: readonly StoredTrustDecision[]
@@ -178,6 +223,45 @@ const saveTrustFile = async (
 	}
 };
 
+export const saveProjectTrustDecision = async ({
+	decision,
+	projectTrustDir,
+	scope = "project",
+	workspace,
+}: Readonly<{
+	decision: ProjectTrustDecision;
+	projectTrustDir: string;
+	scope?: "parent" | "project";
+	workspace: string;
+}>): Promise<void> => {
+	const canonicalWorkspace = await canonicalPath(workspace);
+	const protectedRoots = await getProtectedProjectRoots(workspace);
+	const targetRoots =
+		protectedRoots.length > 0 ? protectedRoots : [canonicalWorkspace];
+	const trustFilePath = path.join(projectTrustDir, TRUST_FILE_NAME);
+	const storedDecisions = await canonicalizeTrustDecisions(
+		await loadTrustFile(trustFilePath)
+	);
+	const decisionsByDirectory = new Map(
+		storedDecisions.map((entry) => [entry.directory, entry])
+	);
+	if (scope === "parent") {
+		for (const directory of targetRoots) {
+			decisionsByDirectory.delete(directory);
+		}
+		const parentDirectory = path.dirname(canonicalWorkspace);
+		decisionsByDirectory.set(parentDirectory, {
+			decision,
+			directory: parentDirectory,
+		});
+	} else {
+		for (const directory of targetRoots) {
+			decisionsByDirectory.set(directory, { decision, directory });
+		}
+	}
+	await saveTrustFile(trustFilePath, [...decisionsByDirectory.values()]);
+};
+
 const nearestDecision = (
 	projectRoot: string,
 	decisions: readonly StoredTrustDecision[]
@@ -191,40 +275,57 @@ const nearestDecision = (
 		)
 		.at(0);
 
+export const getProjectTrustStatus = async ({
+	projectTrustDir,
+	trustedProjectRoots,
+	workspace,
+}: Readonly<{
+	projectTrustDir: string;
+	trustedProjectRoots: readonly string[];
+	workspace: string;
+}>): Promise<ProjectTrustStatus> => {
+	const canonicalWorkspace = await canonicalPath(workspace);
+	const protectedRoots = await getProtectedProjectRoots(workspace);
+	const trustedRoots = new Set(
+		trustedProjectRoots.map((root) => path.resolve(root))
+	);
+	const trustFilePath = path.join(projectTrustDir, TRUST_FILE_NAME);
+	const decisions = await canonicalizeTrustDecisions(
+		await loadTrustFile(trustFilePath)
+	);
+	const savedDecision = nearestDecision(canonicalWorkspace, decisions);
+	const parentDirectory = path.dirname(canonicalWorkspace);
+
+	return Object.freeze({
+		currentSessionTrusted: protectedRoots.every((root) =>
+			trustedRoots.has(path.resolve(root))
+		),
+		...(parentDirectory === canonicalWorkspace ? {} : { parentDirectory }),
+		...(savedDecision === undefined
+			? {}
+			: {
+					savedDecision: Object.freeze({
+						...savedDecision,
+						inherited: savedDecision.directory !== canonicalWorkspace,
+					}),
+				}),
+	});
+};
+
 /** Resolves user-owned trust before the application reads project config or resources. */
 export const resolveProjectTrust = async ({
 	mode,
 	override,
 	prompt,
 	stdinIsTTY = false,
-	userDataDir,
+	projectTrustDir,
 	workspace,
 }: ResolveProjectTrustInput): Promise<ProjectTrustResolution> => {
-	const projectRoots = await Promise.all(
-		getProjectRoots(workspace).map((root) => canonicalPath(root))
+	const protectedRoots = await getProtectedProjectRoots(workspace);
+	const trustFilePath = path.join(projectTrustDir, TRUST_FILE_NAME);
+	const decisions = await canonicalizeTrustDecisions(
+		await loadTrustFile(trustFilePath)
 	);
-	const protectedRoots = (
-		await Promise.all(
-			projectRoots.map(async (root) =>
-				(await hasProtectedProjectResources(root)) ? root : undefined
-			)
-		)
-	).filter((root): root is string => root !== undefined);
-	const trustFilePath = path.join(userDataDir, TRUST_FILE_NAME);
-	const storedDecisions = await loadTrustFile(trustFilePath);
-	const decisionsByCanonicalDirectory = new Map<string, StoredTrustDecision>();
-	for (const entry of storedDecisions) {
-		const directory = await canonicalPath(entry.directory);
-		const prior = decisionsByCanonicalDirectory.get(directory);
-		decisionsByCanonicalDirectory.set(directory, {
-			directory,
-			decision:
-				prior?.decision === "deny" || entry.decision === "deny"
-					? "deny"
-					: "trust",
-		});
-	}
-	const decisions = [...decisionsByCanonicalDirectory.values()];
 	const promptDecisions: StoredTrustDecision[] = [];
 	const trustedCanonicalRoots = new Set<string>();
 	const diagnostics: string[] = [];

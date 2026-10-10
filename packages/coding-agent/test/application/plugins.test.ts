@@ -349,7 +349,6 @@ test("discarding a deferred Plugin candidate does not run process cleanup hooks"
 				configRuntime: reloadConfigRuntime,
 				pluginRuntime: currentPluginRuntime,
 			},
-			promptProjectTrust: async () => "deny",
 		});
 
 		expect(result.pluginRuntime).toBe(currentPluginRuntime);
@@ -404,7 +403,6 @@ test("unchanged project trust keeps the active Plugins when a reload candidate f
 				configRuntime: currentConfigRuntime,
 				pluginRuntime: currentPluginRuntime,
 			},
-			promptProjectTrust: async () => "trust",
 		});
 
 		expect(result.trustChanged).toBe(false);

@@ -16,7 +16,10 @@ import {
 	createConfigStore,
 } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
-import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import {
+	resolveUserDataDir,
+	resolveUserWincodeDir,
+} from "@/shared/paths/user-data-dir";
 import { createApplicationPluginComposition } from "./plugin-composition";
 import {
 	type ApplicationResourceLoader,
@@ -43,6 +46,7 @@ export type ApplicationRuntimeOptions = Readonly<{
 	configRoot?: string;
 	distributionPlugins?: readonly PluginPackageReference[];
 	homeRoot?: string;
+	projectTrustDir?: string;
 	promptProjectTrust?: (projectRoot: string) => Promise<ProjectTrustDecision>;
 	userDataDir?: string;
 }>;
@@ -76,6 +80,8 @@ export const initializeApplicationRuntime = async (
 	const cwd = input.cwd;
 	const homeRoot = options.homeRoot ?? os.homedir();
 	const userDataDir = options.userDataDir ?? resolveUserDataDir();
+	const projectTrustDir =
+		options.projectTrustDir ?? resolveUserWincodeDir(homeRoot);
 	const workspace = resolveWorkspaceRoot(cwd);
 	const projectTrust = await resolveProjectTrust({
 		mode: input.mode,
@@ -84,7 +90,7 @@ export const initializeApplicationRuntime = async (
 			: { override: input.projectTrustOverride }),
 		prompt: options.promptProjectTrust ?? promptProjectTrust,
 		stdinIsTTY: input.stdinIsTTY,
-		userDataDir,
+		projectTrustDir,
 		workspace,
 	});
 	const configStore = createConfigStore({
@@ -112,6 +118,7 @@ export const initializeApplicationRuntime = async (
 	});
 	const resourceLoader = createApplicationResourceLoader(input, {
 		...options,
+		projectTrustDir,
 		userDataDir,
 	});
 	return Object.freeze({

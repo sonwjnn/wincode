@@ -1,5 +1,4 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
@@ -11,10 +10,11 @@ import {
 	useState,
 } from "react";
 import { z } from "zod";
+import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
 import type { Theme, ThemeColors } from "./themes";
 import { DEFAULT_THEME, findThemeByName, THEMES } from "./themes";
 
-const CONFIG_DIR = join(homedir(), ".wincode");
+const CONFIG_DIR = resolveUserWincodeDir();
 const THEME_PREFERENCES_PATH = join(CONFIG_DIR, "preferences.json");
 
 const themePreferenceSchema = z.object({ themeName: z.string().nonempty() });

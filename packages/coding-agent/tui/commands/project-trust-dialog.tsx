@@ -1,5 +1,8 @@
 import { createElement, useEffect, useRef } from "react";
-import type { ProjectTrustDecision } from "@/modules/project-trust/project-trust";
+import type {
+	ProjectTrustDecision,
+	ProjectTrustSavedDecision,
+} from "@/modules/project-trust/project-trust";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import {
 	useDialog,
@@ -10,40 +13,59 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
+type ProjectTrustSelection = ProjectTrustDecision | "trust-parent";
+
 type ProjectTrustChoice = Readonly<{
+	action: ProjectTrustSelection;
 	description: string;
-	decision: ProjectTrustDecision;
 	label: string;
 }>;
 
-const TRUST_CHOICES: readonly ProjectTrustChoice[] = [
+const getTrustChoices = (
+	parentDirectory?: string
+): readonly ProjectTrustChoice[] => [
 	{
-		description:
-			"Allow project Plugins and resources to run with Wincode privileges.",
-		decision: "trust",
-		label: "Trust this project",
+		action: "trust",
+		description: "Allow this project's protected resources to load.",
+		label: "Trust",
 	},
+	...(parentDirectory === undefined
+		? []
+		: [
+				{
+					action: "trust-parent" as const,
+					description: "Trust the parent folder and its descendant projects.",
+					label: `Trust parent folder (${parentDirectory})`,
+				},
+			]),
 	{
-		description: "Skip protected project resources during this reload.",
-		decision: "deny",
-		label: "Keep untrusted",
+		action: "deny",
+		description: "Keep protected project resources disabled.",
+		label: "Do not trust",
 	},
 ];
 
 type ProjectTrustDialogContentProps = Readonly<{
+	currentSessionTrusted: boolean;
 	onCancel: () => void;
-	onDecision: (decision: ProjectTrustDecision) => void;
+	onDecision: (choice: ProjectTrustSelection) => void;
+	parentDirectory?: string;
 	projectRoot: string;
+	savedDecision?: ProjectTrustSavedDecision;
 }>;
 
 export function ProjectTrustDialogContent({
+	currentSessionTrusted,
 	onCancel,
 	onDecision,
+	parentDirectory,
 	projectRoot,
+	savedDecision,
 }: ProjectTrustDialogContentProps) {
 	const dialog = useDialog();
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
+	const choices = getTrustChoices(parentDirectory);
 	const settled = useRef(false);
 	const onCancelRef = useRef(onCancel);
 	const onDecisionRef = useRef(onDecision);
@@ -64,16 +86,26 @@ export function ProjectTrustDialogContent({
 
 	return (
 		<box flexDirection="column" gap={1}>
+			<text fg={colors.textMuted} wrapMode="word">
+				{projectRoot}
+			</text>
+			<text fg={colors.textMuted} wrapMode="word">
+				{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${savedDecision.directory})` : ""}`}`}
+			</text>
+			<text fg={colors.textMuted} wrapMode="word">
+				{`Current session: ${currentSessionTrusted ? "trusted" : "untrusted"}`}
+			</text>
 			<text fg={colors.text} wrapMode="word">
-				{`Project resources in ${projectRoot} may load executable Plugins with Wincode's process privileges. This is not a sandbox.`}
+				Project Plugins, MCP Servers, and other protected resources may run with
+				Wincode's process privileges. This is not a sandbox.
 			</text>
 			<SearchListDialogWrapper<ProjectTrustChoice>
-				getKey={(choice) => choice.decision}
+				getKey={(choice) => choice.action}
 				getSearchText={(choice) => `${choice.label} ${choice.description}`}
-				items={TRUST_CHOICES}
+				items={choices}
 				onSelect={(choice) => {
 					settled.current = true;
-					onDecision(choice.decision);
+					onDecision(choice.action);
 					dialog.close();
 				}}
 				placeholder="Choose trust decision"
@@ -101,13 +133,18 @@ export function ProjectTrustDialogContent({
 	);
 }
 
+type ProjectTrustRequest = Omit<
+	ProjectTrustDialogContentProps,
+	"onCancel" | "onDecision"
+>;
+
 export const requestProjectTrust = (
 	dialog: Pick<DialogContextValue, "open">,
-	projectRoot: string
-): Promise<ProjectTrustDecision> => {
-	const deferred = Promise.withResolvers<ProjectTrustDecision>();
+	request: ProjectTrustRequest
+): Promise<ProjectTrustSelection> => {
+	const deferred = Promise.withResolvers<ProjectTrustSelection>();
 	let settled = false;
-	const decide = (decision: ProjectTrustDecision): void => {
+	const decide = (decision: ProjectTrustSelection): void => {
 		if (settled) {
 			return;
 		}
@@ -116,10 +153,10 @@ export const requestProjectTrust = (
 	};
 	dialog.open({
 		children: createElement(ProjectTrustDialogContent, {
+			...request,
 			onCancel: () =>
 				deferred.reject(new Error("Project trust prompt was cancelled.")),
 			onDecision: decide,
-			projectRoot,
 		}),
 		title: "Project Trust",
 	});

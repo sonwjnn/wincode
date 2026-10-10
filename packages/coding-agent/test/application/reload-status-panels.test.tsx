@@ -84,7 +84,6 @@ test("MCP status remains renderable while the first reload shuts down its previo
 		await flushTestRenderer(setup);
 		expect(setup.captureCharFrame()).toContain("MCPs");
 		reload = reloadInteractiveResources({
-			dialog: { open: () => undefined },
 			refreshAgentRegistry: () => undefined,
 			reloadTheme: () => undefined,
 			toast: { show: () => undefined },

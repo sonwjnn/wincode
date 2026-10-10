@@ -25,6 +25,7 @@ import {
 	parseTree,
 } from "jsonc-parser";
 import { canonicalPath, getProjectRoots } from "@/shared/paths/project-roots";
+import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
 
 export type ConfigScope = "global" | "project";
 export type ConfigOrigin = {
@@ -428,7 +429,7 @@ const loadSnapshot = async (
 	});
 	const locations = [
 		{ root: options.configRoot, scope: "global" as const },
-		{ root: path.join(options.homeRoot, ".wincode"), scope: "global" as const },
+		{ root: resolveUserWincodeDir(options.homeRoot), scope: "global" as const },
 		...projectLocations,
 	];
 	const loaded = await Promise.all(

@@ -9,7 +9,6 @@ import {
 } from "@/modules/plugins/runtime";
 import {
 	type ProjectTrustDecision,
-	type ProjectTrustPrompt,
 	resolveProjectTrust,
 } from "@/modules/project-trust/project-trust";
 import { resolveWorkspaceRoot } from "@/modules/tools";
@@ -18,7 +17,10 @@ import {
 	createConfigStore,
 } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
-import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import {
+	resolveUserDataDir,
+	resolveUserWincodeDir,
+} from "@/shared/paths/user-data-dir";
 import { createApplicationPluginComposition } from "./plugin-composition";
 
 export type ApplicationResourceDiagnostic = Readonly<{
@@ -40,9 +42,9 @@ export type ApplicationResourceReloadResult = ApplicationResourceRuntime &
 	}>;
 
 export type ApplicationResourceLoader = Readonly<{
+	/** Reloads from saved or invocation trust without prompting or persisting a decision. */
 	reload: (input: {
 		current: ApplicationResourceRuntime;
-		promptProjectTrust: ProjectTrustPrompt;
 	}) => Promise<ApplicationResourceReloadResult>;
 }>;
 
@@ -59,6 +61,7 @@ export type ApplicationResourceLoaderOptions = Readonly<{
 	configRoot?: string;
 	distributionPlugins?: readonly PluginPackageReference[];
 	homeRoot?: string;
+	projectTrustDir?: string;
 	userDataDir?: string;
 }>;
 
@@ -157,21 +160,22 @@ export const createApplicationResourceLoader = (
 ): ApplicationResourceLoader => {
 	const cwd = input.cwd;
 	const homeRoot = options.homeRoot ?? os.homedir();
+	const projectTrustDir =
+		options.projectTrustDir ?? resolveUserWincodeDir(homeRoot);
 	const userDataDir = options.userDataDir ?? resolveUserDataDir();
 	const workspace = resolveWorkspaceRoot(cwd);
 	const composition = createApplicationPluginComposition();
 	const distributionPlugins =
 		options.distributionPlugins ?? composition.distributionPlugins;
 	return Object.freeze({
-		reload: async ({ current, promptProjectTrust }) => {
+		reload: async ({ current }) => {
 			const trust = await resolveProjectTrust({
 				mode: input.mode,
 				...(input.projectTrustOverride === undefined
 					? {}
 					: { override: input.projectTrustOverride }),
-				prompt: promptProjectTrust,
 				stdinIsTTY: input.stdinIsTTY,
-				userDataDir,
+				projectTrustDir,
 				workspace,
 			});
 			const configStore = createConfigStore({

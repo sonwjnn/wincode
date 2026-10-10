@@ -86,7 +86,6 @@ test("reload summary does not claim Plugins were reloaded when the active set wa
 
 	try {
 		await reloadInteractiveResources({
-			dialog: { open: () => undefined },
 			refreshAgentRegistry: () => undefined,
 			reloadTheme: () => undefined,
 			toast: { show: ({ message }) => (toastMessage = message) },
@@ -95,6 +94,45 @@ test("reload summary does not claim Plugins were reloaded when the active set wa
 		expect(toastMessage).toContain("Kept the active Plugin set");
 		expect(toastMessage).not.toContain("Reloaded Plugins");
 	} finally {
+		await pluginRuntime.shutdown();
+	}
+});
+
+test("reload does not ask for Project trust; users decide with /trust", async () => {
+	const lifecycle = createInteractiveRuntimeLifecycle();
+	const configRuntime = configRuntimeFor(root);
+	const pluginRuntime = observableRuntime({});
+	let trustPromptPassed = false;
+	const resourceLoader: ApplicationResourceLoader = {
+		reload: async (request) => {
+			trustPromptPassed = Reflect.has(request, "promptProjectTrust");
+			return {
+				configRuntime: request.current.configRuntime,
+				diagnostics: [],
+				pluginRuntime: request.current.pluginRuntime,
+				pluginRuntimeChanged: false,
+				trustChanged: false,
+			};
+		},
+	};
+	setInteractiveRuntimeContext({
+		args: [],
+		configRuntime,
+		cwd: root,
+		pluginRuntime,
+		resourceLoader,
+	});
+
+	try {
+		await reloadInteractiveResources({
+			refreshAgentRegistry: () => undefined,
+			reloadTheme: () => undefined,
+			toast: { show: () => undefined },
+			lifecycle,
+		});
+		expect(trustPromptPassed).toBe(false);
+	} finally {
+		await resetInteractiveSessionHostManager();
 		await pluginRuntime.shutdown();
 	}
 });
@@ -138,7 +176,6 @@ test("reload retains its Session Host manager when publishing a new Plugin runti
 
 	try {
 		await reloadInteractiveResources({
-			dialog: { open: () => undefined },
 			refreshAgentRegistry: () => undefined,
 			reloadTheme: () => undefined,
 			toast: { show: ({ message }) => (toastMessage = message) },
@@ -214,7 +251,6 @@ test("shutdown during resource loading prevents the unstarted replacement from s
 	});
 
 	const reload = reloadInteractiveResources({
-		dialog: { open: () => undefined },
 		refreshAgentRegistry: () => undefined,
 		reloadTheme: () => undefined,
 		toast: { show: () => (toastCount += 1) },

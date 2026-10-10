@@ -16,6 +16,7 @@ test("dispatches manual compaction focus to its registered action", async () => 
 		"dialog.theme": () => undefined,
 		"thinking.select": () => undefined,
 		"model.select": () => undefined,
+		"project.trust": () => undefined,
 		"session.compact": compact,
 		"session.new": () => undefined,
 		"settings.open": () => undefined,

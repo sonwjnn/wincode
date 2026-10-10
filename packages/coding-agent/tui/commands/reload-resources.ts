@@ -9,7 +9,6 @@ import {
 	getInteractiveSessionHostManager,
 	resetInteractiveSessionHostManager,
 } from "@/modules/sessions/host/session-host-manager";
-import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import type { ToastContextValue } from "@/shared/providers/toast/toast-provider";
 import type { StartInteractiveInput } from "@/shared/runtime-context";
 import {
@@ -21,13 +20,11 @@ import {
 	isInteractiveCleanupRequested,
 	withInteractiveRuntimeReplacement,
 } from "@/shared/runtime-lifecycle";
-import { requestProjectTrust } from "./project-trust-dialog";
 
 type ReloadRuntime = ApplicationResourceRuntime &
 	Readonly<{ resourceLoader: ApplicationResourceLoader }>;
 
 type ReloadDependencies = Readonly<{
-	dialog: Pick<DialogContextValue, "open">;
 	refreshAgentRegistry: () => void;
 	reloadTheme: () => void;
 	toast: ToastContextValue;
@@ -181,7 +178,6 @@ const showReloadSummary = (
 };
 
 export const reloadInteractiveResources = async ({
-	dialog,
 	refreshAgentRegistry,
 	reloadTheme,
 	toast,
@@ -200,8 +196,6 @@ export const reloadInteractiveResources = async ({
 				configRuntime: active.configRuntime,
 				pluginRuntime: active.pluginRuntime,
 			},
-			promptProjectTrust: (projectRoot) =>
-				requestProjectTrust(dialog, projectRoot),
 		});
 		if (lifecycle.isCleanupRequested()) {
 			await discardUnstartedPluginRuntime(active.pluginRuntime, result);

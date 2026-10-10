@@ -6,7 +6,11 @@ import { resolveMcpConfig } from "@wincode/mcp";
 import { discoverSubagentAgents } from "@wincode/subagents";
 import { initializeApplicationRuntime } from "@/modules/application/runtime";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
-import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
+import {
+	getProjectTrustStatus,
+	resolveProjectTrust,
+	saveProjectTrustDecision,
+} from "@/modules/project-trust/project-trust";
 import { discoverSkills } from "@/modules/skills";
 
 const temporaryDirectories: string[] = [];
@@ -51,7 +55,7 @@ describe("Coding-Agent Application Project trust", () => {
 
 		const untrusted = await resolveProjectTrust({
 			mode: "print",
-			userDataDir,
+			projectTrustDir: userDataDir,
 			workspace,
 		});
 		const untrustedAgents = await discoverSubagentAgents({
@@ -68,7 +72,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const trusted = await resolveProjectTrust({
 			mode: "print",
 			override: "trust",
-			userDataDir,
+			projectTrustDir: userDataDir,
 			workspace,
 		});
 		const trustedAgents = await discoverSubagentAgents({
@@ -260,7 +264,11 @@ describe("Coding-Agent Application Project trust", () => {
 				projectTrustOverride: "trust",
 				stdinIsTTY: false,
 			},
-			{ distributionPlugins: [], userDataDir }
+			{
+				distributionPlugins: [],
+				projectTrustDir: userDataDir,
+				userDataDir,
+			}
 		);
 		try {
 			expect(await Bun.file(marker).exists()).toBe(true);
@@ -280,9 +288,10 @@ describe("Coding-Agent Application Project trust", () => {
 		).toBe(false);
 	});
 
-	test("interactive trust is saved outside the project and is reusable without a prompt", async () => {
+	test("interactive trust saves under user .wincode and is reusable without a prompt", async () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
+		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(directory, "user-data");
 		await mkdir(workspace, { recursive: true });
 		const configPath = path.join(workspace, "wincode.json");
@@ -301,6 +310,7 @@ describe("Coding-Agent Application Project trust", () => {
 			},
 			{
 				distributionPlugins: [],
+				homeRoot,
 				userDataDir,
 				promptProjectTrust: async (projectRoot) => {
 					prompts += 1;
@@ -323,8 +333,13 @@ describe("Coding-Agent Application Project trust", () => {
 		expect(prompts).toBe(1);
 		expect(await Bun.file(configPath).exists()).toBe(true);
 		expect(
-			await Bun.file(path.join(userDataDir, "project-trust.json")).exists()
+			await Bun.file(
+				path.join(homeRoot, ".wincode", "project-trust.json")
+			).exists()
 		).toBe(true);
+		expect(
+			await Bun.file(path.join(userDataDir, "project-trust.json")).exists()
+		).toBe(false);
 
 		const saved = await initializeApplicationRuntime(
 			{
@@ -334,7 +349,7 @@ describe("Coding-Agent Application Project trust", () => {
 				pluginPaths: [],
 				stdinIsTTY: false,
 			},
-			{ distributionPlugins: [], userDataDir }
+			{ distributionPlugins: [], homeRoot, userDataDir }
 		);
 		try {
 			const snapshot =
@@ -449,6 +464,7 @@ describe("Coding-Agent Application Project trust", () => {
 	test("a saved refusal omits project config without asking again", async () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
+		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(directory, "user-data");
 		await mkdir(workspace, { recursive: true });
 		await Bun.write(
@@ -466,6 +482,7 @@ describe("Coding-Agent Application Project trust", () => {
 			},
 			{
 				distributionPlugins: [],
+				homeRoot,
 				userDataDir,
 				promptProjectTrust: async () => {
 					prompts += 1;
@@ -486,6 +503,7 @@ describe("Coding-Agent Application Project trust", () => {
 			},
 			{
 				distributionPlugins: [],
+				homeRoot,
 				userDataDir,
 				promptProjectTrust: async () => {
 					prompts += 1;
@@ -502,6 +520,135 @@ describe("Coding-Agent Application Project trust", () => {
 			await savedRefusal.pluginRuntime.shutdown();
 		}
 		expect(prompts).toBe(1);
+	});
+
+	test("/trust replaces a saved refusal so the next reload trusts project resources", async () => {
+		const directory = await createDirectory();
+		const workspace = path.join(directory, "repo");
+		const userDataDir = path.join(directory, "user-data");
+		await mkdir(workspace, { recursive: true });
+		await Bun.write(path.join(workspace, "wincode.json"), "{}");
+
+		await saveProjectTrustDecision({
+			decision: "deny",
+			projectTrustDir: userDataDir,
+			workspace,
+		});
+		await saveProjectTrustDecision({
+			decision: "trust",
+			projectTrustDir: userDataDir,
+			workspace,
+		});
+
+		const resolution = await resolveProjectTrust({
+			mode: "json",
+			projectTrustDir: userDataDir,
+			workspace,
+		});
+
+		expect(resolution.trustedProjectRoots).toContain(await realpath(workspace));
+		expect(resolution.diagnostics).toEqual([]);
+	});
+
+	test("trusting a parent clears a child refusal and reports inherited status", async () => {
+		const directory = await createDirectory();
+		const parent = path.join(directory, "workspace");
+		const workspace = path.join(parent, "repo");
+		const projectTrustDir = path.join(directory, "user-wincode");
+		await Promise.all([
+			mkdir(path.join(parent, ".git"), { recursive: true }),
+			mkdir(workspace, { recursive: true }),
+		]);
+		await Bun.write(path.join(workspace, "wincode.json"), "{}");
+
+		await saveProjectTrustDecision({
+			decision: "deny",
+			projectTrustDir,
+			workspace,
+		});
+		await saveProjectTrustDecision({
+			decision: "trust",
+			projectTrustDir,
+			scope: "parent",
+			workspace,
+		});
+
+		const resolution = await resolveProjectTrust({
+			mode: "json",
+			projectTrustDir,
+			workspace,
+		});
+		const status = await getProjectTrustStatus({
+			projectTrustDir,
+			trustedProjectRoots: resolution.trustedProjectRoots,
+			workspace,
+		});
+
+		expect(resolution.trustedProjectRoots).toContain(await realpath(workspace));
+		expect(status.currentSessionTrusted).toBe(true);
+		expect(status.parentDirectory).toBe(await realpath(parent));
+		expect(status.savedDecision).toEqual({
+			decision: "trust",
+			directory: await realpath(parent),
+			inherited: true,
+		});
+	});
+
+	test("reload does not implicitly trust protected resources added after startup", async () => {
+		const directory = await createDirectory();
+		const workspace = path.join(directory, "repo");
+		const homeRoot = path.join(directory, "home");
+		const userDataDir = path.join(directory, "user-data");
+		await mkdir(workspace, { recursive: true });
+		const runtime = await initializeApplicationRuntime(
+			{
+				cwd: workspace,
+				disabledPluginIds: [],
+				mode: "interactive",
+				pluginPaths: [],
+				stdinIsTTY: true,
+			},
+			{
+				configRoot: path.join(directory, "config"),
+				distributionPlugins: [],
+				homeRoot,
+				userDataDir,
+			}
+		);
+		let reloadedPluginRuntime = runtime.pluginRuntime;
+		try {
+			expect(runtime.configRuntime.trustedProjectRoots).toEqual([]);
+			await Bun.write(
+				path.join(workspace, "wincode.json"),
+				JSON.stringify({ settings: { reloadShouldNotTrust: true } })
+			);
+
+			const result = await runtime.resourceLoader.reload({
+				current: {
+					configRuntime: runtime.configRuntime,
+					pluginRuntime: runtime.pluginRuntime,
+				},
+			});
+			reloadedPluginRuntime = result.pluginRuntime;
+			const snapshot =
+				await result.configRuntime.configStore.getSnapshot(workspace);
+
+			expect(result.configRuntime.trustedProjectRoots).toEqual([]);
+			expect(
+				result.diagnostics.map(({ message }) => message).join("\n")
+			).toContain("untrusted");
+			expect(snapshot.document.settings).toBeUndefined();
+			expect(
+				await Bun.file(
+					path.join(homeRoot, ".wincode", "project-trust.json")
+				).exists()
+			).toBe(false);
+		} finally {
+			if (reloadedPluginRuntime !== runtime.pluginRuntime) {
+				await reloadedPluginRuntime.shutdown();
+			}
+			await runtime.pluginRuntime.shutdown();
+		}
 	});
 
 	test("saved ancestor trust covers protected descendant project directories", async () => {
@@ -533,6 +680,7 @@ describe("Coding-Agent Application Project trust", () => {
 			},
 			{
 				distributionPlugins: [],
+				projectTrustDir: userDataDir,
 				userDataDir,
 				promptProjectTrust: async () => "trust",
 			}
@@ -547,7 +695,7 @@ describe("Coding-Agent Application Project trust", () => {
 				pluginPaths: [],
 				stdinIsTTY: false,
 			},
-			{ distributionPlugins: [], userDataDir }
+			{ distributionPlugins: [], projectTrustDir: userDataDir, userDataDir }
 		);
 		try {
 			const snapshot =
@@ -590,6 +738,7 @@ describe("Coding-Agent Application Project trust", () => {
 			},
 			{
 				distributionPlugins: [],
+				projectTrustDir: userDataDir,
 				userDataDir,
 				promptProjectTrust: async () => "trust",
 			}
@@ -604,7 +753,7 @@ describe("Coding-Agent Application Project trust", () => {
 				pluginPaths: [],
 				stdinIsTTY: false,
 			},
-			{ distributionPlugins: [], userDataDir }
+			{ distributionPlugins: [], projectTrustDir: userDataDir, userDataDir }
 		);
 		try {
 			const snapshot =
@@ -637,6 +786,7 @@ describe("Coding-Agent Application Project trust", () => {
 			},
 			{
 				distributionPlugins: [],
+				projectTrustDir: path.join(directory, "project-trust"),
 				userDataDir: path.join(directory, "user-data"),
 				promptProjectTrust: async () => {
 					prompts += 1;

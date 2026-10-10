@@ -725,7 +725,6 @@ test("interactive reload preserves the displayed Session Host while changing Plu
 			view: true,
 		});
 		await reloadInteractiveResources({
-			dialog: { open: () => undefined },
 			refreshAgentRegistry: () => undefined,
 			reloadTheme: () => undefined,
 			toast: { show: () => undefined },
