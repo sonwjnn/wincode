@@ -318,6 +318,7 @@ describe("application dispatch", () => {
 					sourcePath: "/workspace/plugins/broken.ts",
 				},
 			],
+			bindPromptSelectionTarget: () => () => undefined,
 			disablePlugin: () => undefined,
 			executeCommand: async () => "",
 			getAgentRegistrations: () => [],
@@ -366,6 +367,7 @@ describe("application dispatch", () => {
 		let shutdownCount = 0;
 		const runtime: PluginRuntime = {
 			diagnostics: [],
+			bindPromptSelectionTarget: () => () => undefined,
 			disablePlugin: () => undefined,
 			executeCommand: async () => "",
 			getAgentRegistrations: () => [],

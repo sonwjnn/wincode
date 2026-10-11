@@ -16,9 +16,11 @@ import {
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { spawn } from "bun";
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { createPluginPromptSelectionTarget } from "@/modules/application/plugin-prompt-selection";
 import type { CommandSuggestion } from "@/modules/commands/command-controller";
 import { useCommandControllerFactory } from "@/modules/commands/command-controller-context";
 import type { CommandCapability } from "@/modules/commands/commands";
+import { useConnections } from "@/modules/connections";
 import {
 	deleteFileMentionAfterTrailingCharacterDelete,
 	type FileMentionOption,
@@ -33,6 +35,7 @@ import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-lay
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getAgentColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { SelectableList } from "@/shared/ui/selectable-list";
 import {
@@ -162,7 +165,32 @@ export function ChatTextArea({
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 }: ChatTextAreaProps) {
-	const { agent, cycleThinkingLevel, model } = usePromptConfig();
+	const {
+		agent,
+		cycleThinkingLevel,
+		model,
+		setModelForFutureSubmissions,
+		setThinkingLevelForFutureSubmissions,
+	} = usePromptConfig();
+	const connections = useConnections();
+	const pluginRuntime = getInteractivePluginRuntime();
+	useEffect(() => {
+		if (disabled || pluginRuntime === undefined) {
+			return;
+		}
+		return pluginRuntime.bindPromptSelectionTarget(
+			createPluginPromptSelectionTarget(connections, {
+				setModel: setModelForFutureSubmissions,
+				setThinkingLevel: setThinkingLevelForFutureSubmissions,
+			})
+		);
+	}, [
+		connections,
+		disabled,
+		pluginRuntime,
+		setModelForFutureSubmissions,
+		setThinkingLevelForFutureSubmissions,
+	]);
 	const supportedModel = findSupportedChatModelSelection(model);
 	const chatModelSelection = isNull(supportedModel)
 		? null

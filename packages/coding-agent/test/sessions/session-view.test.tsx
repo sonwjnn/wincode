@@ -27,12 +27,22 @@ import {
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { toSubmissionId } from "@wincode/agent-core";
+import type {
+	ConnectionProviderSummary,
+	Connections,
+} from "@wincode/ai/connections";
 import { createConnections as createDefaultConnections } from "@wincode/ai/connections";
+import {
+	type ChatModelSelection,
+	defaultChatModelSelection,
+} from "@wincode/ai/models";
 import { act, useCallback, useEffect, useRef, useState } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
+import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
+import { createPluginRuntime } from "@/modules/plugins/runtime";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type {
 	SessionQueuedSubmission,
@@ -63,10 +73,12 @@ import {
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import {
 	agentId,
 	attachmentId,
+	modelId,
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
@@ -102,6 +114,8 @@ let fakeWaitingCompositions: SessionSubmissionComposition[] = [];
 let fakeQueuedSeed: SessionQueuedSubmission[] = [];
 /** A Recall payload the test supplies, in place of what the fake lanes hold. */
 let fakeRecalledPayload: SessionWaitingMessage[] | null = null;
+/** The effective submission inputs the view sent while the session was idle. */
+let fakeRunInputs: SessionSendInput[] = [];
 /** The compositions the view sent while the session was idle, in order. */
 let fakeRunCompositions: SessionSubmissionComposition[] = [];
 /** How many times the view asked the session to recall its waiting messages. */
@@ -192,6 +206,7 @@ const fakeUseAgentSessionModule: Pick<
 					files: input.files ?? [],
 					text: input.userText ?? "",
 				};
+				fakeRunInputs = [...fakeRunInputs, input];
 				fakeRunCompositions = [...fakeRunCompositions, composition];
 				run.sendStarted.resolve();
 				setTurnActive(true);
@@ -431,6 +446,7 @@ afterEach(() => {
 	activeFakeSessionRun = null;
 	fakeQueuedSeed = [];
 	fakeRunCompositions = [];
+	fakeRunInputs = [];
 	fakeWaitingCompositions = [];
 	fakeWaitingTexts = [];
 	fakeRecalledPayload = null;
@@ -542,6 +558,152 @@ describe("SessionView initial submission", () => {
 		}
 		throw new Error(`The composer never held "${text}".`);
 	};
+
+	test("Plugin selection overrides a pinned Agent on the next Submission", async () => {
+		const navigationRelease = deferred<void>();
+		const navigationStarted = deferred<void>();
+		const sendStarted = deferred<void>();
+		const release = deferred<void>();
+		const workspace = process.cwd();
+		const pinnedAgentId = agentId("plugin-pinned-agent");
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("gpt-6-luna"),
+			providerId: "openai",
+		};
+		const bridge = createPluginPromptSelectionBridge();
+		const pluginRuntime = createPluginRuntime(
+			[
+				{
+					agents: [
+						{
+							agent: {
+								description: "Agent with a pinned model.",
+								displayName: "Pinned Model Agent",
+								id: pinnedAgentId,
+								instructions: "Keep this Agent identity.",
+								role: "all",
+							},
+							model: "openai/gpt-5.6-luna",
+							thinkingLevel: "high",
+							source: {
+								path: "/plugins/pinned-agent.md",
+								scope: "user",
+							},
+						},
+					],
+					commands: [],
+					id: "pinned-agent-plugin",
+					sourcePath: "/plugins/pinned-agent.ts",
+					tools: [],
+					workspace,
+				},
+			],
+			[],
+			[],
+			[],
+			bridge
+		);
+		setInteractiveRuntimeContext({
+			args: [],
+			cwd: workspace,
+			pluginRuntime,
+		});
+		activeFakeSessionRun = {
+			navigationRelease,
+			navigationStarted,
+			release,
+			sendStarted,
+		};
+		const router = buildRouter();
+		await router.load();
+		const configStore = createTestConfigStore();
+		const connectedProvider: ConnectionProviderSummary = {
+			connected: true,
+			connectionMethod: "api-key",
+			displayName: "OpenAI",
+			id: "openai",
+			methods: ["api-key"],
+		};
+		const connections: Connections = {
+			...createConnections(),
+			listProviders: async () => [connectedProvider],
+		};
+		let registryIsReady = false;
+		const setup = await testRender(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
+					<ToastProvider>
+						<ConnectionsProvider connections={connections}>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<PromptConfigProvider
+										initialAgent={pinnedAgentId}
+										initialModel={defaultChatModelSelection}
+										initialThinkingLevel="high"
+									>
+										<ModelPricingProvider>
+											<DialogProvider>
+												<RouterContextProvider router={router}>
+													<CommandControllerProvider>
+														<SessionView
+															host={createFakeSessionHost([])}
+															initialTranscript={[]}
+															sessionId={sessionId("session-selection")}
+															sessionTitle="Use the Plugin selection"
+														/>
+														<AgentRegistryReadyProbe
+															onReady={() => {
+																registryIsReady = true;
+															}}
+														/>
+													</CommandControllerProvider>
+												</RouterContextProvider>
+											</DialogProvider>
+										</ModelPricingProvider>
+									</PromptConfigProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
+						</ConnectionsProvider>
+					</ToastProvider>
+				</ConfigProvider>
+			</ThemeProvider>,
+			{ height: 30, width: 100 }
+		);
+
+		try {
+			await setup.waitFor(() => registryIsReady);
+			await flushUi(setup);
+			let modelSelected = false;
+			await act(async () => {
+				modelSelected = await bridge.setModel(selectedModel);
+			});
+			expect(modelSelected).toBe(true);
+			await act(async () => {
+				bridge.setThinkingLevel("low");
+			});
+			await typePrompt(setup, "submit with the override");
+			setup.mockInput.pressEnter();
+			await sendStarted.promise;
+
+			expect(fakeRunInputs.at(-1)).toMatchObject({
+				agent: pinnedAgentId,
+				model: selectedModel,
+				selectionOverride: {
+					model: selectedModel,
+					thinking: { thinkingLevel: "low" },
+				},
+				thinkingLevel: "low",
+			});
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+			await pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: workspace });
+		}
+	});
 
 	test("clears the composer before the active turn completes", async () => {
 		const navigationRelease = deferred<void>();

@@ -1,5 +1,10 @@
 import { getErrorMessage, isNonEmptyString, logger } from "@wincode/utils";
 import { attachPluginHostContext } from "./host-context";
+import {
+	createPluginPromptSelectionBridge,
+	type PluginPromptSelectionBridge,
+	type PluginPromptSelectionTarget,
+} from "./prompt-selection";
 import type {
 	PluginAgentRegistration,
 	PluginBeforeAgentTurnContext,
@@ -87,6 +92,9 @@ export type PluginRuntime = Readonly<{
 	getAgentRegistrations: () => readonly PluginAgentRegistration[];
 	getCommands: (sessionId?: string) => readonly PluginCommandDescriptor[];
 	getToolDescriptors: (sessionId: string) => readonly PluginToolDescriptor[];
+	bindPromptSelectionTarget: (
+		target: PluginPromptSelectionTarget
+	) => () => void;
 	getResource: <Resource = unknown>(
 		pluginId: string,
 		name: string
@@ -199,7 +207,8 @@ export const createPluginRuntime = (
 	plugins: readonly LoadedPlugin[],
 	initialDiagnostics: readonly PluginDiagnostic[],
 	reservedCommandNames: readonly string[] = [],
-	reservedToolNames: readonly string[] = []
+	reservedToolNames: readonly string[] = [],
+	promptSelectionBridge: PluginPromptSelectionBridge = createPluginPromptSelectionBridge()
 ): PluginRuntime => {
 	const diagnostics = [...initialDiagnostics];
 	const disabledPlugins = new Set<string>();
@@ -645,6 +654,7 @@ export const createPluginRuntime = (
 		get diagnostics() {
 			return Object.freeze([...diagnostics]);
 		},
+		bindPromptSelectionTarget: promptSelectionBridge.bindPromptSelectionTarget,
 		disablePlugin(pluginId, message) {
 			const plugin = plugins.find(({ id }) => id === pluginId);
 			if (plugin === undefined || disabledPlugins.has(pluginId)) {

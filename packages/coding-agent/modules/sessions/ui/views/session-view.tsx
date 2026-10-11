@@ -16,6 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type AgentRegistry,
+	type AgentSelectionOverride,
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
@@ -73,6 +74,7 @@ type SessionSendInput = Pick<
 	| "sessionThinkingLevel"
 	| "model"
 	| "resolvedAgent"
+	| "selectionOverride"
 	| "thinkingLevel"
 >;
 
@@ -82,6 +84,7 @@ type SessionSelectionInput = {
 	model: ChatModelSelection;
 	registry: AgentRegistry;
 	restoredConfig: ResolvedSessionSelection | null;
+	selectionOverride: AgentSelectionOverride;
 	thinkingSelection: ThinkingSelection;
 };
 
@@ -99,6 +102,7 @@ const resolveInitialSessionSelection = ({
 	model,
 	registry,
 	restoredConfig,
+	selectionOverride,
 	thinkingSelection,
 }: SessionSelectionInput): SessionSendInput => {
 	const resolvedModel =
@@ -139,7 +143,8 @@ const resolveInitialSessionSelection = ({
 		persistedAgentId,
 		persistedAgentIsAvailable ? resolvedModel : sessionModel,
 		persistedAgentIsAvailable ? persistedSelection : sessionThinkingSelection,
-		persistedSubagentIsAvailable
+		persistedSubagentIsAvailable,
+		selectionOverride
 	);
 	return {
 		agent: effective.agent,
@@ -147,6 +152,7 @@ const resolveInitialSessionSelection = ({
 		sessionThinkingLevel: sessionThinkingSelection.thinkingLevel,
 		model: effective.model,
 		resolvedAgent: effective.resolvedAgent,
+		selectionOverride,
 		...(effective.thinkingLevel === undefined
 			? {}
 			: { thinkingLevel: effective.thinkingLevel }),
@@ -161,8 +167,15 @@ export function SessionView({
 	sessionTitle,
 }: SessionViewProps) {
 	const router = useRouter();
-	const { agent, model, thinkingLevel, setAgent, setModel, setThinkingLevel } =
-		usePromptConfig();
+	const {
+		agent,
+		model,
+		thinkingLevel,
+		setAgent,
+		setModel,
+		setThinkingLevel,
+		submissionSelectionOverride,
+	} = usePromptConfig();
 	const currentThinkingSelection = useMemo<ThinkingSelection>(
 		() => (thinkingLevel === undefined ? {} : { thinkingLevel }),
 		[thinkingLevel]
@@ -567,7 +580,9 @@ export function SessionView({
 			registry,
 			agent,
 			model,
-			currentThinkingSelection
+			currentThinkingSelection,
+			false,
+			submissionSelectionOverride
 		);
 		const optimisticMessage = isBusy
 			? undefined
@@ -594,6 +609,7 @@ export function SessionView({
 			...(thinkingLevel === undefined
 				? {}
 				: { sessionThinkingLevel: thinkingLevel }),
+			selectionOverride: submissionSelectionOverride,
 			composition,
 			files,
 			model: effective.model,
@@ -657,6 +673,7 @@ export function SessionView({
 				model,
 				registry,
 				restoredConfig,
+				selectionOverride: submissionSelectionOverride,
 				thinkingSelection: currentThinkingSelection,
 			}),
 			messageId,
@@ -737,6 +754,7 @@ export function SessionView({
 						model,
 						registry,
 						restoredConfig,
+						selectionOverride: submissionSelectionOverride,
 						thinkingSelection: currentThinkingSelection,
 					}),
 					messageId: initialMessage.id,
@@ -764,6 +782,7 @@ export function SessionView({
 		registry,
 		restoredConfig,
 		router,
+		submissionSelectionOverride,
 		send,
 		sessionId,
 		show,

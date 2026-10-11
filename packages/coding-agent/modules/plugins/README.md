@@ -69,6 +69,12 @@ Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeA
 
 Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened; selecting one from the command menu is its explicit execution intent.
 
+### Prompt selection
+
+The root `PluginAPI` exposes `setModel(model)` and `setThinkingLevel(level)` for the focused Interactive composer. They change the effective selection for future Submissions, taking precedence over model and ThinkingLevel defaults on the selected Agent while preserving the Agent's identity, instructions, and tools. They do not change an in-flight Agent Turn or configured defaults for new Wincode processes. `setModel` returns `false` when there is no Interactive composer, the model is unsupported or retired, or its Connection Provider is not connected. Thinking levels are normalized against the effective model; pass `undefined` to use the provider default, including when the Agent has a configured ThinkingLevel. Outside Interactive Mode, `setModel` returns `false` and `setThinkingLevel` has no effect.
+
+These controls are process-global and target the currently focused composer, not an arbitrary Session Host. A Plugin that needs to change a model for a future turn can call them from a user-invoked Plugin Command or another Plugin callback while the Interactive composer is active.
+
 A Plugin factory may also register named process resources with `registerResource(name, value)`. Host integrations retrieve them through the generic `PluginRuntime.getResource(pluginId, name)` API; resource types and ownership stay with the Plugin. Resource names are unique within a Plugin and values must be defined. Open process resources in `onStart` and release them from `onShutdown`; factories should register behavior without opening connections or acquiring process-wide resources. Runtime shutdown calls `onShutdown` only after that Plugin's `onStart` was attempted, including when startup fails so partially initialized resources can be released.
 
 Tool handlers can register background promises with `context.registerBackgroundWork(promise)`. One-Shot waits for all work registered to that Session before exiting. Interactive Mode and RPC keep the parent Session Host alive while registered work is pending, even after its last view is released; normal idle unloading resumes when the work settles.

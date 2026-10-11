@@ -8,6 +8,10 @@ import type {
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import {
+	type ChatModelSelection,
+	defaultChatModelSelection,
+} from "@wincode/ai/models";
+import {
 	type OneShotCompositionInput,
 	type OneShotDependencies,
 	runJsonMode,
@@ -478,6 +482,94 @@ test("Plugin Agent registrations preserve a supported ThinkingLevel", async () =
 		expect(runtime.getAgentRegistrations()).toMatchObject([
 			{ thinkingLevel: "high" },
 		]);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("Plugin commands can change the focused composer selection for later Submissions", async () => {
+	const selectedModels: ChatModelSelection[] = [];
+	const selectedThinkingLevels: string[] = [];
+	const runtime = await loadPlugins({
+		bundledPlugins: [
+			{
+				id: "prompt_selection",
+				factory: (api) => {
+					const plugin = api.definePlugin({ id: "prompt_selection" });
+					plugin.registerCommand({
+						description: "Set the focused composer selection.",
+						name: "select_fast_model",
+						handler: async () => {
+							const modelSelected = await api.setModel(
+								defaultChatModelSelection
+							);
+							api.setThinkingLevel("high");
+							return modelSelected
+								? "selection updated"
+								: "selection unavailable";
+						},
+					});
+				},
+			},
+		],
+		cliPaths: [],
+		config: configRuntime,
+	});
+	const unbind = runtime.bindPromptSelectionTarget({
+		setModel: async (model) => {
+			selectedModels.push(model);
+			return true;
+		},
+		setThinkingLevel: (level) => {
+			if (level !== undefined) {
+				selectedThinkingLevels.push(level);
+			}
+		},
+	});
+
+	try {
+		await expect(
+			runtime.executeCommand("prompt_selection", "select_fast_model", {
+				argument: "",
+				sessionId: "focused-session",
+				workspace,
+			})
+		).resolves.toBe("selection updated");
+		expect(selectedModels).toEqual([defaultChatModelSelection]);
+		expect(selectedThinkingLevels).toEqual(["high"]);
+	} finally {
+		unbind();
+		await runtime.shutdown();
+	}
+});
+
+test("Plugin model selection returns false when no interactive composer is bound", async () => {
+	const runtime = await loadPlugins({
+		bundledPlugins: [
+			{
+				id: "prompt_selection_unbound",
+				factory: (api) => {
+					const plugin = api.definePlugin({ id: "prompt_selection_unbound" });
+					plugin.registerCommand({
+						description: "Attempt to set the model without a composer.",
+						name: "select_model",
+						handler: async () =>
+							String(await api.setModel(defaultChatModelSelection)),
+					});
+				},
+			},
+		],
+		cliPaths: [],
+		config: configRuntime,
+	});
+
+	try {
+		await expect(
+			runtime.executeCommand("prompt_selection_unbound", "select_model", {
+				argument: "",
+				workspace,
+			})
+		).resolves.toBe("false");
 	} finally {
 		await runtime.shutdown();
 	}
