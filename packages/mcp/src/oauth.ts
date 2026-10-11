@@ -7,8 +7,13 @@ import {
 	type StoredOAuthClientInformation,
 	type StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
-import type { PluginSecretStore } from "@wincode/coding-agent";
 import { isPlainObject } from "@wincode/utils";
+
+export type McpSecretStore = Readonly<{
+	delete: (key: string) => Promise<void>;
+	get: (key: string) => Promise<string | undefined>;
+	set: (key: string, value: string) => Promise<void>;
+}>;
 
 const hashIdentifier = (value: string): string =>
 	new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -27,7 +32,7 @@ const flowKey = (serverName: string, name: string): string =>
 	`${secretPrefix(serverName)}.flow.${name}`;
 
 const deleteIssuerCredential = async (
-	secrets: PluginSecretStore,
+	secrets: McpSecretStore,
 	serverName: string,
 	credential: "client" | "tokens" | "discovery"
 ): Promise<void> => {
@@ -38,7 +43,7 @@ const deleteIssuerCredential = async (
 };
 
 const parseSecret = async <Value>(
-	secrets: PluginSecretStore,
+	secrets: McpSecretStore,
 	key: string,
 	isValue: (value: unknown) => value is Value
 ): Promise<Value | undefined> => {
@@ -74,7 +79,7 @@ export type McpOAuthProviderInput = Readonly<{
 	onAuthorizationUrl?: (url: URL) => void | Promise<void>;
 	oauth?: unknown;
 	redirectUrl?: string;
-	secrets: PluginSecretStore;
+	secrets: McpSecretStore;
 	serverName: string;
 }>;
 
@@ -234,7 +239,7 @@ export type McpOAuthLoginInput = Readonly<{
 	openAuthorizationUrl: (url: URL) => void | Promise<void>;
 	oauth?: unknown;
 	readRedirectUrl?: (callback: Promise<URL>) => Promise<URL>;
-	secrets: PluginSecretStore;
+	secrets: McpSecretStore;
 	serverName: string;
 	serverUrl: string;
 }>;
@@ -338,7 +343,7 @@ export const loginMcpServer = async ({
 };
 
 export const logoutMcpServer = async (
-	secrets: PluginSecretStore,
+	secrets: McpSecretStore,
 	serverName: string
 ): Promise<void> => {
 	const provider = createMcpOAuthProvider({ secrets, serverName });

@@ -1,4 +1,3 @@
-import type { PluginSecretStore } from "@wincode/coding-agent";
 import {
 	type McpConfigResult,
 	type McpConfigSnapshot,
@@ -13,6 +12,7 @@ import {
 	loginMcpServer,
 	logoutMcpServer,
 	type McpOAuthLoginInput,
+	type McpSecretStore,
 } from "./oauth";
 
 export type McpManagementScope = "global" | "project";
@@ -42,17 +42,17 @@ export type McpManagementLoginInput = Readonly<{
 	name: string;
 	openAuthorizationUrl: McpOAuthLoginInput["openAuthorizationUrl"];
 	readRedirectUrl?: McpOAuthLoginInput["readRedirectUrl"];
-	secrets: PluginSecretStore;
+	secrets: McpSecretStore;
 }>;
 
 export type McpManagementLogoutInput = Readonly<{
 	name: string;
-	secrets: PluginSecretStore;
+	secrets: McpSecretStore;
 }>;
 
 export type McpManagementOAuthOperations = Readonly<{
 	login: (input: McpOAuthLoginInput) => Promise<void>;
-	logout: (secrets: PluginSecretStore, serverName: string) => Promise<void>;
+	logout: (secrets: McpSecretStore, serverName: string) => Promise<void>;
 }>;
 
 export type McpManagementApi = Readonly<{
