@@ -34,31 +34,22 @@ import {
 	waitForSessionFrame,
 	writeE2EFrame,
 } from "@/test/support/e2e-fixture";
+import { createEnvironmentRestorer } from "@/test/support/environment";
 import { toolCallId } from "../support/identifiers";
 
-const previousEnvironment = {
-	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
-	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
-	WINCODE_LOCAL_DB_PATH: process.env.WINCODE_LOCAL_DB_PATH,
-	WINCODE_MODEL_PRICING_OFFLINE: process.env.WINCODE_MODEL_PRICING_OFFLINE,
-	WINCODE_SUBAGENTS_DB_PATH: process.env.WINCODE_SUBAGENTS_DB_PATH,
-};
+const restoreEnvironment = createEnvironmentRestorer([
+	"WINCODE_E2E_HOME",
+	"WINCODE_E2E_WORKSPACE",
+	"WINCODE_LOCAL_DB_PATH",
+	"WINCODE_MODEL_PRICING_OFFLINE",
+	"WINCODE_SUBAGENTS_DB_PATH",
+]);
 const testDirectory = await mkdtemp(join(tmpdir(), "wincode-delegation-e2e-"));
 process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
 process.env.WINCODE_SUBAGENTS_DB_PATH = join(testDirectory, "subagents.sqlite");
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
-
-const restoreEnvironment = (): void => {
-	for (const [key, value] of Object.entries(previousEnvironment)) {
-		if (value === undefined) {
-			delete process.env[key];
-		} else {
-			process.env[key] = value;
-		}
-	}
-};
 
 const recorder = createFakeModelClientRecorder();
 const runtimeFactory = () =>

@@ -1,21 +1,11 @@
-import { isUndefined } from "@wincode/utils";
+import { createEnvironmentRestorer } from "@/test/support/environment";
 
-const previousEnvironment = {
-	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
-	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
-	WINCODE_LOCAL_DB_PATH: process.env.WINCODE_LOCAL_DB_PATH,
-	WINCODE_MODEL_PRICING_OFFLINE: process.env.WINCODE_MODEL_PRICING_OFFLINE,
-};
-
-const restoreEnvironment = (): void => {
-	for (const [key, value] of Object.entries(previousEnvironment)) {
-		if (isUndefined(value)) {
-			delete process.env[key];
-		} else {
-			process.env[key] = value;
-		}
-	}
-};
+const restoreEnvironment = createEnvironmentRestorer([
+	"WINCODE_E2E_HOME",
+	"WINCODE_E2E_WORKSPACE",
+	"WINCODE_LOCAL_DB_PATH",
+	"WINCODE_MODEL_PRICING_OFFLINE",
+]);
 
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 

@@ -13,7 +13,10 @@ import {
 	test,
 } from "bun:test";
 import { homedir } from "node:os";
-import { MockTreeSitterClient } from "@opentui/core/testing";
+import {
+	MockTreeSitterClient,
+	type TestRendererSetup,
+} from "@opentui/core/testing";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -422,9 +425,7 @@ const createFakeSessionHost = (
 		}),
 	});
 
-const flushUi = async (
-	setup: Awaited<ReturnType<typeof testRender>>
-): Promise<void> => {
+const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await Bun.sleep(20);
 	await setup.renderOnce();
 };
@@ -437,6 +438,7 @@ beforeAll(() => {
 
 afterAll(() => {
 	mock.restore();
+	setMarkdownTreeSitterClientForTests(null);
 });
 
 afterEach(() => {
@@ -542,10 +544,7 @@ describe("SessionView initial submission", () => {
 	 * Types into the composer until the composition is really there. The test
 	 * renderer can deliver input before the submit-reset effect runs.
 	 */
-	const typePrompt = async (
-		setup: Awaited<ReturnType<typeof testRender>>,
-		text: string
-	) => {
+	const typePrompt = async (setup: TestRendererSetup, text: string) => {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
 			await setup.mockInput.typeText(text);
 			await flushUi(setup);
@@ -762,10 +761,7 @@ describe("SessionView waiting messages", () => {
 	 * passive effect, and this harness can deliver keystrokes before that
 	 * effect runs; a real user cannot type inside that window.
 	 */
-	const typePrompt = async (
-		setup: Awaited<ReturnType<typeof testRender>>,
-		text: string
-	) => {
+	const typePrompt = async (setup: TestRendererSetup, text: string) => {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
 			await setup.mockInput.typeText(text);
 			await flushUi(setup);
@@ -777,10 +773,7 @@ describe("SessionView waiting messages", () => {
 	};
 
 	/** Types one submission into the composer and sends it. */
-	const submit = async (
-		setup: Awaited<ReturnType<typeof testRender>>,
-		text: string
-	) => {
+	const submit = async (setup: TestRendererSetup, text: string) => {
 		await typePrompt(setup, text);
 		setup.mockInput.pressEnter();
 	};
@@ -790,7 +783,7 @@ describe("SessionView waiting messages", () => {
 	 * checked, so the wait is about the condition rather than about patience.
 	 */
 	const waitFor = async (
-		setup: Awaited<ReturnType<typeof testRender>>,
+		setup: TestRendererSetup,
 		condition: () => boolean
 	) => {
 		await flushUi(setup);

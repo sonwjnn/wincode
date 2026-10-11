@@ -15,16 +15,17 @@ import {
 	createFakeModelClientRecorder,
 	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
+import { createEnvironmentRestorer } from "@/test/support/environment";
 
 const previousScrollTo = Reflect.get(globalThis, "scrollTo");
-const previousEnvironment = {
-	HOME: process.env.HOME,
-	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
-	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
-	WINCODE_LOCAL_DB_PATH: process.env.WINCODE_LOCAL_DB_PATH,
-	WINCODE_MODEL_PRICING_OFFLINE: process.env.WINCODE_MODEL_PRICING_OFFLINE,
-	WINCODE_SUBAGENTS_DB_PATH: process.env.WINCODE_SUBAGENTS_DB_PATH,
-};
+export const restoreEnvironment = createEnvironmentRestorer([
+	"HOME",
+	"WINCODE_E2E_HOME",
+	"WINCODE_E2E_WORKSPACE",
+	"WINCODE_LOCAL_DB_PATH",
+	"WINCODE_MODEL_PRICING_OFFLINE",
+	"WINCODE_SUBAGENTS_DB_PATH",
+]);
 
 export const testDirectory = path.join(
 	os.tmpdir(),
@@ -92,15 +93,5 @@ export const restoreScrollTo = (): void => {
 		Reflect.deleteProperty(globalThis, "scrollTo");
 	} else {
 		Reflect.set(globalThis, "scrollTo", previousScrollTo);
-	}
-};
-
-export const restoreEnvironment = (): void => {
-	for (const [key, value] of Object.entries(previousEnvironment)) {
-		if (value === undefined) {
-			delete process.env[key];
-		} else {
-			process.env[key] = value;
-		}
 	}
 };
