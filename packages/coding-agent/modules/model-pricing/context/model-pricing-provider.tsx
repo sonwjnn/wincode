@@ -28,25 +28,31 @@ const modelIds = new Set<string>(supportedChatModelIds);
  */
 const NO_OVERRIDES: ModelPricingTable = {};
 
-let fetchPromise: Promise<ModelPricingTable | null> | null = null;
+let fetchRequest: {
+	promise: Promise<ModelPricingTable | null>;
+	url: string;
+} | null = null;
 
 const runFetch = (
 	url: string,
 	now: number
 ): Promise<ModelPricingTable | null> => {
-	if (!fetchPromise) {
-		fetchPromise = fetchModelPricingTable(url, modelIds).then((table) => {
-			if (table) {
-				try {
-					writeModelPricingCache(table, now);
-				} catch {
-					// best effort
+	if (fetchRequest?.url !== url) {
+		fetchRequest = {
+			promise: fetchModelPricingTable(url, modelIds).then((table) => {
+				if (table) {
+					try {
+						writeModelPricingCache(table, now);
+					} catch {
+						// best effort
+					}
 				}
-			}
-			return table;
-		});
+				return table;
+			}),
+			url,
+		};
 	}
-	return fetchPromise;
+	return fetchRequest.promise;
 };
 
 export type ModelPricingState = {
@@ -70,7 +76,9 @@ export function ModelPricingProvider({
 	children,
 	pricing,
 }: ModelPricingProviderProps) {
-	const env = getModelPricingEnv();
+	// Read once per mount: the provider bootstraps against these values, so a
+	// value that changes mid-mount must not desync the effect from the table.
+	const [env] = useState(getModelPricingEnv);
 	const offline = env.WINCODE_MODEL_PRICING_OFFLINE === true;
 	const ttlHours = env.WINCODE_MODEL_PRICING_TTL_HOURS ?? DEFAULT_TTL_HOURS;
 	const url = env.WINCODE_MODEL_PRICING_URL ?? DEFAULT_URL;

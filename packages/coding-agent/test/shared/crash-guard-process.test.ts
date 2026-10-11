@@ -1,9 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readUtf8File } from "@wincode/utils";
 import { spawnSync } from "bun";
+
+const temporaryHomes: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(
+		temporaryHomes
+			.splice(0)
+			.map((home) => fs.rm(home, { force: true, recursive: true }))
+	);
+});
 
 const crashGuardModule = path.join(
 	import.meta.dir,
@@ -12,6 +22,7 @@ const crashGuardModule = path.join(
 
 const runCrashingProcess = async (script: string) => {
 	const home = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-crash-guard-"));
+	temporaryHomes.push(home);
 	const environment: Record<string, string> = {};
 	for (const [key, value] of Object.entries(process.env)) {
 		if (value !== undefined && key !== "WINCODE_DEBUG") {

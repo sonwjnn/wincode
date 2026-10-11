@@ -20,8 +20,8 @@ const modelPricingEnvSchema = z.object({
 type ModelPricingEnv = z.infer<typeof modelPricingEnvSchema>;
 
 /**
- * Reads the pricing overrides at call time: a test (or a caller) that sets the
- * variables after this module loads must still be honored.
+ * Reads the pricing overrides when called, not when this module loads, so a
+ * test or caller that sets them after import still reaches the provider.
  */
 export const getModelPricingEnv = (): ModelPricingEnv =>
 	modelPricingEnvSchema.parse({
