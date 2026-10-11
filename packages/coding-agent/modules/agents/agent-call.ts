@@ -1,5 +1,9 @@
 import type { AgentId } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingSelection } from "@wincode/ai/models";
+import {
+	type ChatModelSelection,
+	normalizeThinkingSelection,
+	type ThinkingSelection,
+} from "@wincode/ai/models";
 import { buildAgent, type ResolvedCodingAgent } from "./built-ins";
 import type { AgentRegistry } from "./registry";
 
@@ -18,12 +22,19 @@ export type EffectiveAgentSelection = {
 	readonly resolvedAgent?: ResolvedCodingAgent;
 } & ThinkingSelection;
 
+/** Composer-level choices that intentionally take precedence over Agent defaults. */
+export type AgentSelectionOverride = Readonly<{
+	model?: ChatModelSelection;
+	thinking?: ThinkingSelection;
+}>;
+
 export const resolveEffectiveAgentSelection = (
 	registry: AgentRegistry | null,
 	agentId: AgentId,
 	fallbackModel: ChatModelSelection,
 	fallbackSelection: ThinkingSelection,
-	allowSubagent = false
+	allowSubagent = false,
+	selectionOverride?: AgentSelectionOverride
 ): EffectiveAgentSelection => {
 	const candidates = allowSubagent
 		? (registry?.agents ?? [])
@@ -37,13 +48,33 @@ export const resolveEffectiveAgentSelection = (
 	const effectiveAgent = selected ?? fallbackAgent;
 	const effectiveAgentId =
 		effectiveAgent?.id ?? (registry ? buildAgent.id : agentId);
-	const selectedThinking =
-		effectiveAgent?.thinkingLevel === undefined
-			? {}
-			: { thinkingLevel: effectiveAgent.thinkingLevel };
+	const model =
+		selectionOverride?.model ?? effectiveAgent?.model ?? fallbackModel;
+	const hasSelectionOverride =
+		selectionOverride?.model !== undefined ||
+		selectionOverride?.thinking !== undefined;
+	const selectionUsesAgentModel =
+		effectiveAgent?.model !== undefined &&
+		(selectionOverride?.model === undefined ||
+			(selectionOverride.model.modelId === effectiveAgent.model.modelId &&
+				selectionOverride.model.providerId ===
+					effectiveAgent.model.providerId));
+	let thinkingSelection: ThinkingSelection;
+	if (selectionOverride?.thinking !== undefined) {
+		thinkingSelection = selectionOverride.thinking;
+	} else if (!selectionUsesAgentModel) {
+		thinkingSelection = fallbackSelection;
+	} else if (effectiveAgent.thinkingLevel === undefined) {
+		thinkingSelection = {};
+	} else {
+		thinkingSelection = { thinkingLevel: effectiveAgent.thinkingLevel };
+	}
+	const resolvedThinkingSelection = hasSelectionOverride
+		? normalizeThinkingSelection(model, thinkingSelection)
+		: thinkingSelection;
 	return {
 		agent: effectiveAgentId,
-		model: effectiveAgent?.model ?? fallbackModel,
+		model,
 		...(effectiveAgent
 			? {
 					resolvedAgent: {
@@ -54,7 +85,7 @@ export const resolveEffectiveAgentSelection = (
 					},
 				}
 			: {}),
-		...(effectiveAgent?.model ? selectedThinking : fallbackSelection),
+		...resolvedThinkingSelection,
 	};
 };
 

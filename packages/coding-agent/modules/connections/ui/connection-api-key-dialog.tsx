@@ -10,6 +10,7 @@ import {
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 
 type ConnectionApiKeyDialogContentProps = {
 	provider: ConnectionProviderSummary;
@@ -86,32 +87,34 @@ export function ConnectionApiKeyDialogContent({
 	useDialogEscape();
 
 	return (
-		<box flexDirection="column" gap={1}>
-			<text
-				attributes={TextAttributes.DIM}
-				fg={colors.textMuted}
-				selectable={false}
-			>
-				{description}
-			</text>
-			<input
-				focused
-				focusedTextColor={colors.text}
-				onContentChange={() => {
-					setError(null);
-				}}
-				placeholder={placeholder}
-				placeholderColor={colors.textMuted}
-				ref={inputRef}
-				textColor={colors.text}
-			/>
-			{error ? <text fg={colors.error}>{error}</text> : null}
-			<box flexDirection="row" gap={2} height={1}>
-				<DialogFooterHint
-					label={isSubmitting ? "saving" : "save key"}
-					shortcut={isSubmitting ? "..." : "enter"}
+		<DialogInset>
+			<box flexDirection="column" gap={1}>
+				<text
+					attributes={TextAttributes.DIM}
+					fg={colors.textMuted}
+					selectable={false}
+				>
+					{description}
+				</text>
+				<input
+					focused
+					focusedTextColor={colors.text}
+					onContentChange={() => {
+						setError(null);
+					}}
+					placeholder={placeholder}
+					placeholderColor={colors.textMuted}
+					ref={inputRef}
+					textColor={colors.text}
 				/>
+				{error ? <text fg={colors.error}>{error}</text> : null}
+				<box flexDirection="row" gap={2} height={1}>
+					<DialogFooterHint
+						label={isSubmitting ? "saving" : "save key"}
+						shortcut={isSubmitting ? "..." : "enter"}
+					/>
+				</box>
 			</box>
-		</box>
+		</DialogInset>
 	);
 }

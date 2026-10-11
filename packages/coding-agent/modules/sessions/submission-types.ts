@@ -5,6 +5,7 @@ import type {
 	SubmissionId,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { AgentSelectionOverride } from "@/modules/agents/agent-call";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SkillContext } from "@/modules/skills";
 import type { SessionResolvedAgent } from "./agent-session/types";
@@ -36,6 +37,7 @@ export type SessionSendInput = Readonly<{
 	sessionThinkingLevel?: ThinkingLevel;
 	model: ChatModelSelection;
 	thinkingLevel?: ThinkingLevel;
+	selectionOverride?: AgentSelectionOverride;
 	resolvedAgent?: SessionResolvedAgent;
 	/** Prompt to append as a fresh user message. */
 	userText?: string;

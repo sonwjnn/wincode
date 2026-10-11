@@ -9,11 +9,18 @@ import {
 	createRouter,
 	RouterContextProvider,
 } from "@tanstack/react-router";
-import { createConnections } from "@wincode/ai/connections";
-import { act } from "react";
+import {
+	type ConnectionProviderSummary,
+	type Connections,
+	createConnections,
+} from "@wincode/ai/connections";
+import { defaultChatModelSelection } from "@wincode/ai/models";
+import { act, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
 import { ModelPricingProvider } from "@/modules/model-pricing";
+import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
+import { createPluginRuntime } from "@/modules/plugins/runtime";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
@@ -24,11 +31,120 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 
 process.env.WINCODE_LOCAL_DB_PATH = ":memory:";
 
+const connectedOpenAIProvider: ConnectionProviderSummary = {
+	connected: true,
+	connectionMethod: "api-key",
+	displayName: "OpenAI",
+	id: "openai",
+	methods: ["api-key"],
+};
+
+const createConnectedConnections = (): Connections => ({
+	...createConnections(),
+	listProviders: async () => [connectedOpenAIProvider],
+});
+
 describe("NewSessionView composer focus", () => {
+	test("Plugin selection is unavailable after a route unmounts its composer", async () => {
+		const workspace = process.cwd();
+		const router = createRouter({
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+			routeTree: createRootRoute({}),
+		});
+		await router.load();
+		writeComposerDraft("new-session", "");
+
+		const bridge = createPluginPromptSelectionBridge();
+		const pluginRuntime = createPluginRuntime([], [], [], [], bridge);
+		setInteractiveRuntimeContext({
+			args: [],
+			cwd: workspace,
+			pluginRuntime,
+		});
+		let leaveComposer: (() => void) | undefined;
+		function SessionRoute() {
+			const [composerVisible, setComposerVisible] = useState(true);
+			leaveComposer = () => setComposerVisible(false);
+			return composerVisible ? (
+				<NewSessionView />
+			) : (
+				<text>Loading session...</text>
+			);
+		}
+		const app = (
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ConfigProvider
+					value={{
+						configStore: createConfigStore({
+							fs: {
+								readFile: async () =>
+									Promise.reject(
+										Object.assign(new Error("Test config is unavailable."), {
+											code: "ENOENT",
+										})
+									),
+							},
+						}),
+						homeRoot: os.homedir(),
+						workspace,
+					}}
+				>
+					<ToastProvider>
+						<ConnectionsProvider connections={createConnectedConnections()}>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<PromptConfigProvider>
+										<ModelPricingProvider pricing={{}}>
+											<DialogProvider>
+												<RouterContextProvider router={router}>
+													<CommandControllerProvider>
+														<SessionRoute />
+													</CommandControllerProvider>
+												</RouterContextProvider>
+											</DialogProvider>
+										</ModelPricingProvider>
+									</PromptConfigProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
+						</ConnectionsProvider>
+					</ToastProvider>
+				</ConfigProvider>
+			</ThemeProvider>
+		);
+		const setup = await testRender(app, { height: 24, width: 100 });
+		try {
+			await act(async () => {
+				await Bun.sleep(20);
+				await setup.renderOnce();
+			});
+			let modelSelected = false;
+			await act(async () => {
+				modelSelected = await bridge.setModel(defaultChatModelSelection);
+			});
+			expect(modelSelected).toBe(true);
+			const leaveActiveComposer = leaveComposer;
+			if (leaveActiveComposer === undefined) {
+				throw new Error("The session route did not render.");
+			}
+			await act(async () => {
+				leaveActiveComposer();
+				await setup.renderOnce();
+			});
+			await expect(bridge.setModel(defaultChatModelSelection)).resolves.toBe(
+				false
+			);
+		} finally {
+			await act(async () => setup.renderer.destroy());
+			setInteractiveRuntimeContext({ args: [], cwd: workspace });
+			await pluginRuntime.shutdown();
+		}
+	});
+
 	test("returns focus after pointer movement and a background click without moving the caret", async () => {
 		const workspace = process.cwd();
 		const router = createRouter({

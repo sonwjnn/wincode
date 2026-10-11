@@ -13,6 +13,7 @@ import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import type {
@@ -333,13 +334,15 @@ export function SettingsDialogContent({
 
 	if (isNull(settings)) {
 		return (
-			<box flexDirection="column" gap={1} marginX={4}>
-				<text fg={loadError ? colors.error : colors.textMuted}>
-					{loadError
-						? `Could not load settings: ${loadError}`
-						: "Loading settings…"}
-				</text>
-			</box>
+			<DialogInset>
+				<box flexDirection="column" gap={1}>
+					<text fg={loadError ? colors.error : colors.textMuted}>
+						{loadError
+							? `Could not load settings: ${loadError}`
+							: "Loading settings…"}
+					</text>
+				</box>
+			</DialogInset>
 		);
 	}
 
@@ -354,31 +357,28 @@ export function SettingsDialogContent({
 					: "No matching settings."
 			}
 			footer={
-				<box flexDirection="column" gap={1} marginX={4}>
-					{selectedSetting ? (
-						<>
-							<text fg={colors.textMuted}>
-								{selectedSetting.descriptor.description}
-							</text>
-							{selectedSetting.unavailableReason ? (
-								<text fg={colors.error}>
-									{selectedSetting.unavailableReason}
-								</text>
-							) : null}
-							{pendingById[selectedSetting.descriptor.id] ? (
-								<text fg={colors.textMuted}>Saving…</text>
-							) : null}
-							{selectedError ? (
-								<text fg={colors.error}>{`Error: ${selectedError}`}</text>
-							) : null}
-						</>
-					) : null}
-					<box flexDirection="row" gap={2}>
-						<DialogFooterHint label="navigate" shortcut="↑↓" />
-						<DialogFooterHint label="change" shortcut="space/enter" />
-						<DialogFooterHint label="reset" shortcut="ctrl+r" />
+				selectedSetting ? (
+					<box flexDirection="column" gap={1}>
+						<text fg={colors.textMuted}>
+							{selectedSetting.descriptor.description}
+						</text>
+						{selectedSetting.unavailableReason ? (
+							<text fg={colors.error}>{selectedSetting.unavailableReason}</text>
+						) : null}
+						{pendingById[selectedSetting.descriptor.id] ? (
+							<text fg={colors.textMuted}>Saving…</text>
+						) : null}
+						{selectedError ? (
+							<text fg={colors.error}>{`Error: ${selectedError}`}</text>
+						) : null}
 					</box>
-				</box>
+				) : undefined
+			}
+			footerHints={
+				<>
+					<DialogFooterHint label="change" shortcut="space/enter" />
+					<DialogFooterHint label="reset" shortcut="ctrl+r" />
+				</>
 			}
 			getKey={(item) => item.id}
 			getSearchText={(item) => getSettingSearchText(item.setting)}

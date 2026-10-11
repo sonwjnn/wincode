@@ -18,6 +18,7 @@ import {
 	useState,
 } from "react";
 import {
+	type AgentSelectionOverride,
 	buildAgent,
 	resolveActiveAgentId,
 	useAgentRegistry,
@@ -31,7 +32,12 @@ export type PromptConfig = PromptConfigState & {
 	cycleThinkingLevel: () => void;
 	setAgent: (agent: AgentId) => void;
 	setModel: (model: ChatModelSelection) => void;
+	setModelForFutureSubmissions: (model: ChatModelSelection) => void;
 	setThinkingLevel: (thinkingLevel: ThinkingLevel | undefined) => void;
+	setThinkingLevelForFutureSubmissions: (
+		thinkingLevel: ThinkingLevel | undefined
+	) => void;
+	submissionSelectionOverride: AgentSelectionOverride;
 };
 
 const PromptConfigContext = createContext<PromptConfig | null>(null);
@@ -87,6 +93,8 @@ export function PromptConfigProvider({
 			initialThinkingLevel
 		),
 	}));
+	const [submissionSelectionOverride, setSubmissionSelectionOverride] =
+		useState<AgentSelectionOverride>({});
 
 	useEffect(() => {
 		if (isNull(registry) || hasExplicitAgent.current) {
@@ -99,19 +107,20 @@ export function PromptConfigProvider({
 	}, [registry]);
 
 	const cycleThinkingLevel = useCallback(() => {
-		setConfig((current) => {
-			const options: (ThinkingLevel | undefined)[] = [
-				undefined,
-				...getSupportedThinkingLevels(current.model),
-			];
-			const currentIndex = options.indexOf(current.thinkingLevel);
-			const next = options[(currentIndex + 1) % options.length];
-			return updatePromptConfigSelection(
-				current,
-				next === undefined ? {} : { thinkingLevel: next }
-			);
-		});
-	}, []);
+		const options: (ThinkingLevel | undefined)[] = [
+			undefined,
+			...getSupportedThinkingLevels(config.model),
+		];
+		const currentIndex = options.indexOf(config.thinkingLevel);
+		const next = options[(currentIndex + 1) % options.length];
+		const selection = next === undefined ? {} : { thinkingLevel: next };
+		setConfig((current) => updatePromptConfigSelection(current, selection));
+		setSubmissionSelectionOverride((current) =>
+			current.thinking === undefined
+				? current
+				: { ...current, thinking: selection }
+		);
+	}, [config.model, config.thinkingLevel]);
 
 	const setAgent = useCallback((agent: AgentId) => {
 		hasExplicitAgent.current = true;
@@ -134,6 +143,25 @@ export function PromptConfigProvider({
 		setConfig((current) => updatePromptConfigModel(current, model));
 	}, []);
 
+	const setModelForFutureSubmissions = useCallback(
+		(model: ChatModelSelection) => {
+			setModel(model);
+			setSubmissionSelectionOverride((current) => ({ ...current, model }));
+		},
+		[setModel]
+	);
+
+	const setThinkingLevelForFutureSubmissions = useCallback(
+		(thinkingLevel: ThinkingLevel | undefined) => {
+			setThinkingLevel(thinkingLevel);
+			setSubmissionSelectionOverride((current) => ({
+				...current,
+				thinking: thinkingLevel === undefined ? {} : { thinkingLevel },
+			}));
+		},
+		[setThinkingLevel]
+	);
+
 	return (
 		<PromptConfigContext.Provider
 			value={{
@@ -141,7 +169,10 @@ export function PromptConfigProvider({
 				cycleThinkingLevel,
 				setAgent,
 				setModel,
+				setModelForFutureSubmissions,
 				setThinkingLevel,
+				setThinkingLevelForFutureSubmissions,
+				submissionSelectionOverride,
 			}}
 		>
 			{children}

@@ -15,7 +15,11 @@ import {
 } from "react";
 import { useKeyboardLayer } from "../keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../theme/theme-provider";
-import type { DialogConfig } from "./types";
+import {
+	DEFAULT_DIALOG_CONTENT_MARGIN,
+	DEFAULT_DIALOG_PADDING,
+} from "./defaults";
+import type { DialogConfig, DialogPadding } from "./types";
 
 export type DialogContextValue = {
 	open: (config: DialogConfig) => void;
@@ -154,6 +158,18 @@ type DialogProps = {
 	zIndex: number;
 };
 
+function resolvePadding(
+	defaults: Required<DialogPadding>,
+	overrides: DialogPadding | undefined
+): Required<DialogPadding> {
+	return {
+		bottom: overrides?.bottom ?? defaults.bottom,
+		left: overrides?.left ?? defaults.left,
+		right: overrides?.right ?? defaults.right,
+		top: overrides?.top ?? defaults.top,
+	};
+}
+
 function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 	const dimensions = useTerminalDimensions();
 	const { colors } = useTheme();
@@ -163,15 +179,8 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 
 	const layerId = config.layerId ?? "";
 
-	const { title, children, padding, titleMargin } = config;
-	const padLeft = padding?.left ?? 4;
-	const padRight = padding?.right ?? 4;
-	const padTop = padding?.top ?? 1;
-	const padBottom = padding?.bottom ?? 1;
-	const titleMarLeft = titleMargin?.left ?? 0;
-	const titleMarRight = titleMargin?.right ?? 0;
-	const titleMarTop = titleMargin?.top ?? 0;
-	const titleMarBottom = titleMargin?.bottom ?? 0;
+	const { title, children, padding } = config;
+	const resolvedPadding = resolvePadding(DEFAULT_DIALOG_PADDING, padding);
 	const backdropColor = isTop ? RGBA.fromInts(0, 0, 0, 150) : undefined;
 
 	const defaultWidth =
@@ -241,10 +250,10 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 						Math.max(0, Math.floor((dimensions.height - dialogHeight) / 2))
 					);
 				}}
-				paddingBottom={padBottom}
-				paddingLeft={padLeft}
-				paddingRight={padRight}
-				paddingTop={padTop}
+				paddingBottom={resolvedPadding.bottom}
+				paddingLeft={resolvedPadding.left}
+				paddingRight={resolvedPadding.right}
+				paddingTop={resolvedPadding.top}
 				position={isNull(anchoredTop) ? "relative" : "absolute"}
 				ref={dialogRef}
 				top={anchoredTop ?? undefined}
@@ -254,10 +263,7 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 					alignItems="center"
 					flexDirection="row"
 					justifyContent="space-between"
-					marginBottom={titleMarBottom}
-					marginLeft={titleMarLeft}
-					marginRight={titleMarRight}
-					marginTop={titleMarTop}
+					marginX={DEFAULT_DIALOG_CONTENT_MARGIN.left}
 				>
 					<text attributes={TextAttributes.BOLD} fg={colors.text}>
 						{title}

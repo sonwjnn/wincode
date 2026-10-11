@@ -10,6 +10,7 @@ import {
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 
 type BrowserConnectCallbacks = {
 	setAuthorizationUrl: (authorizationUrl: string) => void;
@@ -148,26 +149,28 @@ export function ConnectionBrowserWaitingDialogContent({
 	useDialogEscape();
 
 	return (
-		<box flexDirection="column" gap={1}>
-			<text fg={colors.text} selectable={false}>
-				{status}
-			</text>
-			{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
-			<text
-				fg={colors.info}
-				onMouseDown={() => {
-					handleOpenUrl().catch(() => undefined);
-				}}
-				selectable
-				width="100%"
-				wrapMode="char"
-			>
-				{authorizationUrl || "Waiting for browser sign-in..."}
-			</text>
-			{error ? <text fg={colors.error}>{error}</text> : null}
-			<box flexDirection="row" gap={2} height={1}>
-				<DialogFooterHint label="copy" shortcut="c" />
+		<DialogInset>
+			<box flexDirection="column" gap={1}>
+				<text fg={colors.text} selectable={false}>
+					{status}
+				</text>
+				{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
+				<text
+					fg={colors.info}
+					onMouseDown={() => {
+						handleOpenUrl().catch(() => undefined);
+					}}
+					selectable
+					width="100%"
+					wrapMode="char"
+				>
+					{authorizationUrl || "Waiting for browser sign-in..."}
+				</text>
+				{error ? <text fg={colors.error}>{error}</text> : null}
+				<box flexDirection="row" gap={2} height={1}>
+					<DialogFooterHint label="copy" shortcut="c" />
+				</box>
 			</box>
-		</box>
+		</DialogInset>
 	);
 }

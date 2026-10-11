@@ -560,11 +560,13 @@ export const createSessionPorts = ({
 				input.agent,
 				input.model,
 				selection,
-				true
+				true,
+				input.selectionOverride
 			);
 			strictThinkingSelection(effective.model, effective.thinkingLevel);
 			const {
 				resolvedAgent: _resolvedAgent,
+				selectionOverride: _selectionOverride,
 				thinkingLevel: _thinkingLevel,
 				...unresolvedInput
 			} = input;

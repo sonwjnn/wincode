@@ -10,8 +10,6 @@ import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
 	findSupportedChatModel,
-	findSupportedChatModelSelection,
-	isActiveChatModel,
 	modelSelectionSchema,
 	normalizeThinkingLevel,
 	normalizeThinkingSelection,
@@ -44,6 +42,7 @@ import { createSessionUserMessage } from "../../../modules/sessions/message";
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
+import { resolveChatModelAvailability } from "../chat-model-availability";
 import { createApplicationPluginComposition } from "../plugin-composition";
 import { projectAgentEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
@@ -176,25 +175,23 @@ const validateModelAvailability = async (
 	model: ChatModelSelection,
 	connections: Connections
 ): Promise<void> => {
-	const catalogModel = findSupportedChatModelSelection(model);
-	if (catalogModel === null) {
-		throw new InvocationError(
-			`Invalid Model selector: ${model.providerId}/${model.modelId}`
-		);
+	const availability = await resolveChatModelAvailability(model, connections);
+	if (availability.status === "available") {
+		return;
 	}
-	if (!isActiveChatModel(catalogModel)) {
-		throw new InvocationError(
-			`Model ${model.providerId}/${model.modelId} is retired.`
-		);
-	}
-	const provider = (await connections.listProviders()).find(
-		(candidate) => candidate.id === model.providerId
-	);
-	if (provider?.connected !== true) {
+	if (availability.status === "disconnected") {
 		throw new InvocationError(
 			`Connect ${model.providerId} to use Model ${model.modelId}.`
 		);
 	}
+	if (availability.status === "retired") {
+		throw new InvocationError(
+			`Model ${model.providerId}/${model.modelId} is retired.`
+		);
+	}
+	throw new InvocationError(
+		`Invalid Model selector: ${model.providerId}/${model.modelId}`
+	);
 };
 
 const candidateAgent = (

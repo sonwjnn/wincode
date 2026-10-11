@@ -8,6 +8,7 @@ import {
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 
 type PluginTextInputDialogProps = Readonly<{
 	onResolve: (value: string | undefined) => void;
@@ -66,21 +67,23 @@ export const PluginTextInputDialog = ({
 	});
 
 	return (
-		<box flexDirection="column" gap={1}>
-			<text fg={colors.text} selectable={false} wrapMode="word">
-				{prompt}
-			</text>
-			<input
-				focused
-				focusedTextColor={colors.text}
-				onContentChange={() => undefined}
-				ref={inputRef}
-				textColor={colors.text}
-			/>
-			<box flexDirection="row" gap={2} height={1} marginTop={2}>
-				<DialogFooterHint label="submit" shortcut="enter" />
-				<DialogFooterHint label="cancel" shortcut="escape" />
+		<DialogInset>
+			<box flexDirection="column" gap={1}>
+				<text fg={colors.text} selectable={false} wrapMode="word">
+					{prompt}
+				</text>
+				<input
+					focused
+					focusedTextColor={colors.text}
+					onContentChange={() => undefined}
+					ref={inputRef}
+					textColor={colors.text}
+				/>
+				<box flexDirection="row" gap={2} height={1} marginTop={2}>
+					<DialogFooterHint label="submit" shortcut="enter" />
+					<DialogFooterHint label="cancel" shortcut="escape" />
+				</box>
 			</box>
-		</box>
+		</DialogInset>
 	);
 };
