@@ -504,10 +504,10 @@ describe("focused model contracts", () => {
 		expect(
 			usage &&
 				calculateModelUsageCostUsd(
-					{ cacheRead: 0.1, input: 1, output: 2 },
+					{ cacheRead: 0.1, cacheWrite: 0.2, input: 1, output: 2 },
 					usage
 				)
-		).toBeCloseTo(0.000_127);
+		).toBeCloseTo(0.000_128);
 		expect(formatModelTokenCount(34_300)).toBe("34.3K");
 		expect(
 			normalizeModelUsage({
@@ -522,6 +522,27 @@ describe("focused model contracts", () => {
 			outputTokens: 2,
 			reasoningTokens: 1,
 		});
+	});
+
+	test("keeps cached input cost unknown when a category rate is unpublished", () => {
+		const usage = normalizeModelUsage({
+			inputTokenDetails: { cacheReadTokens: 20, cacheWriteTokens: 5 },
+			inputTokens: 100,
+			outputTokens: 25,
+		});
+		if (!usage) {
+			throw new Error("Expected normalized model usage.");
+		}
+
+		expect(
+			calculateModelUsageCostUsd({ cacheRead: 0.1, input: 1, output: 2 }, usage)
+		).toBeNull();
+		expect(
+			calculateModelUsageCostUsd(
+				{ cacheWrite: 0.2, input: 1, output: 2 },
+				usage
+			)
+		).toBeNull();
 	});
 
 	test("normalizes failures without exposing provider diagnostics", () => {

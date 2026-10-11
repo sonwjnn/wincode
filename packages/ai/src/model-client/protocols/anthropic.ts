@@ -1,3 +1,4 @@
+import { isNonNegativeInteger } from "@wincode/utils";
 import { getModelMetadata } from "../../model-metadata-runtime";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "../../model-provider-options";
 import { normalizeModelUsage } from "../../model-usage";
@@ -104,10 +105,16 @@ const anthropicUsage = (usageValue: unknown): unknown => {
 	if (!usage) {
 		return;
 	}
+	const inputTokens = usage.input_tokens;
+	const cacheReadTokens = usage.cache_read_input_tokens;
+	const cacheWriteTokens = usage.cache_creation_input_tokens;
+	const totalInputTokens = isNonNegativeInteger(inputTokens)
+		? inputTokens +
+			(isNonNegativeInteger(cacheReadTokens) ? cacheReadTokens : 0) +
+			(isNonNegativeInteger(cacheWriteTokens) ? cacheWriteTokens : 0)
+		: inputTokens;
 	return {
-		...(usage.input_tokens === undefined
-			? {}
-			: { inputTokens: usage.input_tokens }),
+		...(inputTokens === undefined ? {} : { inputTokens: totalInputTokens }),
 		...(usage.output_tokens === undefined
 			? {}
 			: { outputTokens: usage.output_tokens }),

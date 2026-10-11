@@ -122,13 +122,24 @@ export const calculateModelUsageCostUsd = (
 		tiers
 			?.filter((candidate) => totalInput > candidate.inputTokensAbove)
 			.at(-1) ?? cost;
+	const cacheReadRate = rates.cacheRead ?? cost.cacheRead;
+	const cacheWriteRate = rates.cacheWrite ?? cost.cacheWrite;
+	let cacheReadCost = 0;
+	if (cacheRead > 0) {
+		if (cacheReadRate === undefined) {
+			return null;
+		}
+		cacheReadCost = (cacheRead / TOKENS_PER_MILLION) * cacheReadRate;
+	}
+	let cacheWriteCost = 0;
+	if (cacheWrite > 0) {
+		if (cacheWriteRate === undefined) {
+			return null;
+		}
+		cacheWriteCost = (cacheWrite / TOKENS_PER_MILLION) * cacheWriteRate;
+	}
 	const inputCost = (uncachedInput / TOKENS_PER_MILLION) * rates.input;
 	const outputCost = (usage.outputTokens / TOKENS_PER_MILLION) * rates.output;
-	const cacheReadCost =
-		(cacheRead / TOKENS_PER_MILLION) * (rates.cacheRead ?? cost.cacheRead ?? 0);
-	const cacheWriteCost =
-		(cacheWrite / TOKENS_PER_MILLION) *
-		(rates.cacheWrite ?? cost.cacheWrite ?? 0);
 	return inputCost + outputCost + cacheReadCost + cacheWriteCost;
 };
 

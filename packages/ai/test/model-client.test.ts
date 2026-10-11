@@ -551,7 +551,7 @@ describe("native model client routes", () => {
 	test("maps Anthropic messages, documents, tools, thinking, and usage", async () => {
 		const mock = mockFetch(
 			sseResponse(
-				'event: message_start\ndata: {"message":{"usage":{"input_tokens":18,"cache_read_input_tokens":3}}}\n\n',
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":18,"cache_read_input_tokens":3,"cache_creation_input_tokens":5}}}\n\n',
 				'event: content_block_start\ndata: {"index":0,"content_block":{"type":"thinking"}}\n\n',
 				'event: content_block_delta\ndata: {"index":0,"delta":{"type":"thinking_delta","thinking":"Plan"}}\n\n',
 				'event: content_block_delta\ndata: {"index":0,"delta":{"type":"signature_delta","signature":"signed-thought"}}\n\n',
@@ -655,7 +655,12 @@ describe("native model client routes", () => {
 		const finish = parts.at(-1);
 		expect(finish).toMatchObject({
 			type: "finish",
-			usage: { cacheReadTokens: 3, inputTokens: 18, outputTokens: 7 },
+			usage: {
+				cacheReadTokens: 3,
+				cacheWriteTokens: 5,
+				inputTokens: 26,
+				outputTokens: 7,
+			},
 		});
 		if (finish?.type !== "finish") {
 			throw new Error("Expected Anthropic stream to finish.");
@@ -696,7 +701,7 @@ describe("native model client routes", () => {
 		const mock = mockFetch(
 			sseResponse(
 				'data: {"candidates":[{"content":{"parts":[{"text":"Think","thought":true,"thoughtSignature":"signed-google"},{"text":"Answer"},{"functionCall":{"name":"lookup","args":{"query":"x"}}}]}}]}\n\n',
-				'data: {"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":6,"thoughtsTokenCount":2,"totalTokenCount":15}}\n\n'
+				'data: {"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":6,"thoughtsTokenCount":2,"totalTokenCount":15,"cachedContentTokenCount":2}}\n\n'
 			)
 		);
 		const client = createModelClient({ fetch: mock.fetch });
@@ -767,6 +772,7 @@ describe("native model client routes", () => {
 		expect(finish).toMatchObject({
 			type: "finish",
 			usage: {
+				cacheReadTokens: 2,
 				inputTokens: 9,
 				outputTokens: 6,
 				reasoningTokens: 2,
