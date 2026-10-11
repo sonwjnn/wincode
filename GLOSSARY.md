@@ -181,7 +181,7 @@ An Interactive Mode operation that re-resolves Project trust and refreshes confi
 A Coding-Agent module that contributes executable behavior through the public PluginAPI. A Plugin may be built into Wincode or explicitly loaded from a user-chosen file; registration alone does not expose a tool to an Agent. _Avoid_: extension, Skill, MCP Server
 
 **PluginAPI**:
-The common registration contract through which built-in and file-loaded Plugins contribute tools, commands, and lifecycle behavior. A Plugin's Identifier owns its contributions across factory, Session, and Agent Turn scopes. _Avoid_: built-in-only registry, file-only extension API
+The common contract through which built-in and file-loaded Plugins contribute tools, commands, and lifecycle behavior, and Interactive Plugins adjust the focused composer's Model and ThinkingLevel for future Submissions. A Plugin's Identifier owns its registered contributions across factory, Session, and Agent Turn scopes. _Avoid_: built-in-only registry, file-only extension API
 
 **Built-in Plugin**:
 A Plugin bundled with Wincode and registered by the application as part of its shipped behavior. _Avoid_: file-loaded Plugin

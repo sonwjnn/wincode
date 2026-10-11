@@ -21,6 +21,10 @@ import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import { createPluginSecretStore } from "./plugin-secret-store";
+import {
+	createPluginPromptSelectionBridge,
+	type PluginPromptSelectionBridge,
+} from "./prompt-selection";
 import type {
 	PluginAgentRegistration,
 	PluginAPI,
@@ -418,9 +422,12 @@ const createPluginAPI = (
 	diagnostics: PluginDiagnostic[],
 	toolNames: ReadonlySet<string>,
 	commandNames: ReadonlySet<string>,
-	customCommandNames: ReadonlySet<string>
+	customCommandNames: ReadonlySet<string>,
+	promptSelectionBridge: PluginPromptSelectionBridge
 ): PluginAPI =>
 	Object.freeze({
+		setModel: promptSelectionBridge.setModel,
+		setThinkingLevel: promptSelectionBridge.setThinkingLevel,
 		definePlugin(identity) {
 			if (
 				!(isOpen() && isObjectLike(identity)) ||
@@ -1028,7 +1035,8 @@ const runPluginFactory = async (
 	candidate: PluginPath,
 	factory: PluginFactory,
 	input: LoadPluginsInput,
-	state: PluginLoadState
+	state: PluginLoadState,
+	promptSelectionBridge: PluginPromptSelectionBridge
 ): Promise<PluginFactoryResult> => {
 	let draft: MutablePluginDraft | undefined;
 	let registrationOpen = true;
@@ -1089,7 +1097,8 @@ const runPluginFactory = async (
 				state.diagnostics,
 				state.toolNames,
 				state.commandNames,
-				state.customCommandNames
+				state.customCommandNames,
+				promptSelectionBridge
 			),
 			context
 		);
@@ -1173,6 +1182,7 @@ const publishPluginDraft = async (
 export const loadPlugins = async (
 	input: LoadPluginsInput
 ): Promise<PluginRuntime> => {
+	const promptSelectionBridge = createPluginPromptSelectionBridge();
 	const diagnostics: PluginDiagnostic[] = [];
 	const plan = await createCandidatePlan(input, diagnostics);
 	const state: PluginLoadState = {
@@ -1190,7 +1200,8 @@ export const loadPlugins = async (
 			state.loadedPlugins,
 			diagnostics,
 			plan.reservedCommandNames,
-			[...RESERVED_TOOL_NAMES]
+			[...RESERVED_TOOL_NAMES],
+			promptSelectionBridge
 		);
 	try {
 		for (const unresolvedCandidate of plan.candidates) {
@@ -1217,7 +1228,8 @@ export const loadPlugins = async (
 				candidate,
 				factory,
 				input,
-				state
+				state,
+				promptSelectionBridge
 			);
 			await publishPluginDraft(candidate, factoryResult, state);
 		}
