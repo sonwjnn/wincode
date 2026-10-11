@@ -2,7 +2,16 @@ import { isNull, isUndefined } from "@wincode/utils";
 
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
-import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
 import { homedir } from "node:os";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import {
@@ -22,6 +31,7 @@ import type {
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/agent-session/types";
+import * as useAgentSessionModule from "@/modules/sessions/hooks/use-agent-session";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionFilePart,
@@ -127,7 +137,16 @@ const emitFakeSubmissionEvent = (event: SessionSubmissionEvent): void => {
 	}
 };
 
-mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
+/**
+ * Drives the composer's queue and steering behavior without reaching the real
+ * Agent Session. Installed as a spy on the module's live binding so the
+ * already-imported Session View picks it up without a registry-wide module
+ * mock.
+ */
+const fakeUseAgentSessionModule: Pick<
+	typeof useAgentSessionModule,
+	"useAgentSession"
+> = {
 	useAgentSession: (host: SessionHost) => {
 		const [turnActive, setTurnActive] = useState(false);
 		const [queuedSubmissions, setQueuedSubmissions] =
@@ -150,6 +169,12 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 				text: input.userText ?? "",
 			};
 			const sequence = fakeWaitingTexts.length + 1;
+			const messageId =
+				input.messageId ??
+				input.reservedMessageId ??
+				sessionMessageId(`queued-message-${sequence}`);
+			const submissionId =
+				input.submissionId ?? toSubmissionId(`queued-submission-${sequence}`);
 			fakeWaitingTexts = [...fakeWaitingTexts, composition.text];
 			fakeWaitingCompositions = [...fakeWaitingCompositions, composition];
 			setQueuedSubmissions((submissions) => [
@@ -157,16 +182,16 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 				fromPartial<SessionQueuedSubmission>({
 					id: queuedSubmissionId(`queued-${sequence}`),
 					input: { ...input, composition },
-					messageId:
-						input.messageId ??
-						input.reservedMessageId ??
-						sessionMessageId(`queued-message-${sequence}`),
-					submissionId:
-						input.submissionId ??
-						toSubmissionId(`queued-submission-${sequence}`),
+					messageId,
+					submissionId,
 				}),
 			]);
-			return { rejected: false as const };
+			return {
+				disposition: "queued" as const,
+				messageId,
+				rejected: false as const,
+				submissionId,
+			};
 		}, []);
 		const send = useCallback(
 			async (input: SessionSendInput) => {
@@ -186,7 +211,17 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 				setTurnActive(true);
 				await run.release.promise;
 				setTurnActive(false);
-				return { rejected: false as const };
+				return {
+					disposition: "started" as const,
+					messageId:
+						input.messageId ??
+						input.reservedMessageId ??
+						sessionMessageId("started-message"),
+					rejected: false as const,
+					submissionId:
+						input.submissionId ?? toSubmissionId("started-submission"),
+					...(input.turnId === undefined ? {} : { turnId: input.turnId }),
+				};
 			},
 			[enqueue]
 		);
@@ -237,7 +272,7 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 			};
 		}, [queuedSubmissions]);
 		const recallWaitingMessages = useCallback(
-			(ids?: readonly SessionWaitingMessageId[]) => {
+			async (ids?: readonly SessionWaitingMessageId[]) => {
 				const lanes = fakeRecalledPayload ?? waiting.current;
 				// Committed steering input is durable and cannot be recalled; only
 				// queued submissions return to the composer.
@@ -271,11 +306,11 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 		);
 		return {
 			cancel: () => undefined,
-			cancelCompaction: () => [],
+			cancelCompaction: async () => [],
 			compact: async () => {
 				throw new Error("Compaction is not part of this test.");
 			},
-			interrupt: () => [],
+			interrupt: async () => [],
 			onSubmissionEvent: subscribeToFakeSubmissionEvents,
 			recallWaitingMessages,
 			prompt,
@@ -289,7 +324,10 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 			},
 		};
 	},
-}));
+};
+spyOn(useAgentSessionModule, "useAgentSession").mockImplementation(
+	fakeUseAgentSessionModule.useAgentSession
+);
 
 const createConnections = () =>
 	createDefaultConnections({
@@ -395,6 +433,10 @@ beforeAll(() => {
 	setMarkdownTreeSitterClientForTests(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
+});
+
+afterAll(() => {
+	mock.restore();
 });
 
 afterEach(() => {

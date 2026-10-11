@@ -128,7 +128,7 @@ describe("Session Writer process locks", () => {
 		expect(table).toBeNull();
 	});
 
-	test("an old SQLite lease row does not block Session Writer acquisition", async () => {
+	test("a stale SQLite lease row does not weaken Session Writer lock ownership", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
 		fixture.first.sqlite.exec(`
@@ -147,6 +147,10 @@ describe("Session Writer process locks", () => {
 			.run(session.id, "old-owner", 0, 0);
 
 		const writer = await fixture.firstStore.acquireSessionWriter(session.id);
+		// The stale row must not weaken the lock the writer just took.
+		await expect(
+			fixture.secondStore.acquireSessionWriter(session.id)
+		).rejects.toBeInstanceOf(SessionInUseError);
 		await writer.release();
 	});
 	test("rejects a second writer with unverified owner details until release", async () => {

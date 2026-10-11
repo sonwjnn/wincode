@@ -68,7 +68,10 @@ import {
 	projectSessionRecords,
 } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
-import type { SessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";
+import {
+	SessionInUseError,
+	type SessionWriterLock,
+} from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -85,8 +88,8 @@ import {
 	withLoggerHome,
 } from "../../../utils/test/logger-home";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "../support/e2e-fake-runtime";
 import {
 	agentId,
@@ -99,12 +102,11 @@ import {
 } from "../support/identifiers";
 
 const recorder = createFakeModelClientRecorder();
-// The module mock must be installed before the production Session Host graph
-// loads, so the Agent Runtime the Host composes is the fake one. The production
-// modules are imported dynamically for that reason alone.
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
-);
+// The fake model client must be installed before the production Session Host
+// graph loads, so the Agent Runtime the Host composes streams from the fake.
+// Consumers read the live module binding, so the spy reaches them wherever
+// they are imported from.
+installFakeModelClient(recorder);
 
 const { createSessionHost } = await import(
 	"@/modules/sessions/host/session-host"
@@ -450,6 +452,7 @@ const textOf = (parts: SessionMessage["parts"]): string =>
 	parts.map((part) => (part.type === "text" ? part.text : "")).join("");
 
 afterAll(async () => {
+	mock.restore();
 	await sessionHostManager.shutdownAll();
 	await bundledPluginRuntime.shutdown();
 	if (previousSubagentsDatabasePath === undefined) {
@@ -2138,6 +2141,10 @@ describe("Session Host lifetime", () => {
 			await host.agentSession.send(
 				sendInput(capabilities, "complete before release")
 			);
+			// The completed Host is idle, not finished: it still owns its writer.
+			await expect(
+				store.acquireSessionWriter(seeded.sessionId)
+			).rejects.toBeInstanceOf(SessionInUseError);
 			await manager.releaseView(seeded.sessionId);
 			const writer = await store.acquireSessionWriter(seeded.sessionId);
 			await writer.release();

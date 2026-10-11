@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import * as os from "node:os";
 import { TextareaRenderable } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
@@ -26,7 +26,18 @@ import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 
+const previousLocalDatabasePath = process.env.WINCODE_LOCAL_DB_PATH;
 process.env.WINCODE_LOCAL_DB_PATH = ":memory:";
+
+// The in-memory override is file-wide, so hand the previous value back before
+// another test file observes it.
+afterAll(() => {
+	if (previousLocalDatabasePath === undefined) {
+		delete process.env.WINCODE_LOCAL_DB_PATH;
+	} else {
+		process.env.WINCODE_LOCAL_DB_PATH = previousLocalDatabasePath;
+	}
+});
 
 describe("NewSessionView composer focus", () => {
 	test("returns focus after pointer movement and a background click without moving the caret", async () => {

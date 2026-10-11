@@ -1,4 +1,4 @@
-import { mock } from "bun:test";
+import { spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,13 +7,13 @@ import type {
 	AuthorizationByProvider,
 	Connections,
 } from "@wincode/ai/connections";
-import { connectionProviderDisplayNames } from "@wincode/ai/connections";
+import * as connectionsModule from "@wincode/ai/connections";
 import type { ConnectionProviderId } from "@wincode/ai/models";
 import { createConfigStore } from "@/shared/config/config-store";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 
 const previousScrollTo = Reflect.get(globalThis, "scrollTo");
@@ -67,13 +67,10 @@ const testConnections: Connections = {
 	listProviders: async () => [],
 };
 
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
-);
-await mock.module("@wincode/ai/connections", () => ({
-	connectionProviderDisplayNames,
-	createConnections: () => testConnections,
-}));
+installFakeModelClient(recorder);
+// The interactive layout builds its Connections value at module load, so its
+// live binding must be spied before that layout is imported.
+spyOn(connectionsModule, "createConnections").mockReturnValue(testConnections);
 await Bun.write(
 	path.join(testDirectory, ".wincode", "wincode.jsonc"),
 	`{

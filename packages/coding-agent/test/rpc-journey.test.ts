@@ -20,9 +20,7 @@ await Bun.write(
 const databasePath = join(workspace, "conversation.sqlite");
 const fakeSupport = await import("./support/e2e-fake-runtime");
 const recorder = fakeSupport.createFakeModelClientRecorder();
-await mock.module("@wincode/ai/model-client", () =>
-	fakeSupport.createFakeModelClientModule(recorder)
-);
+fakeSupport.installFakeModelClient(recorder);
 const { createSessionCapabilities } = await import(
 	"../modules/sessions/host/session-capabilities"
 );
@@ -32,6 +30,7 @@ const { createDrizzleSessionStore } = await import(
 );
 
 afterAll(async () => {
+	mock.restore();
 	await rm(workspace, { force: true, recursive: true });
 });
 

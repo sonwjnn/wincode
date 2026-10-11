@@ -36,7 +36,7 @@ import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
 } from "../support/e2e-fake-runtime";
-import { sessionId } from "../support/identifiers";
+import { agentId, sessionId } from "../support/identifiers";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
@@ -269,6 +269,15 @@ test("an injected Session SDK creates a Session runtime with an explicit Plugin 
 	});
 	const childSdk = await sdk.createSessionRuntime({ pluginPaths: [] });
 	try {
+		// The child's explicit empty Plugin set must not inherit the parent's
+		// Subagents plugin.
+		expect((await sdk.getAgentCatalog()).map(({ id }) => id)).toContain(
+			agentId("delegate")
+		);
+		expect(
+			(await childSdk.getAgentCatalog()).map(({ id }) => id)
+		).not.toContain(agentId("delegate"));
+
 		const child = await childSdk.createSession();
 		try {
 			expect(await store.getSession(child.sessionId)).not.toBeNull();

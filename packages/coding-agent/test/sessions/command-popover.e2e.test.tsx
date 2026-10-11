@@ -30,8 +30,8 @@ import { loadPlugins } from "@/modules/plugins/loader";
 import { createConfigStore } from "@/shared/config/config-store";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 
 const testDirectory = await mkdtemp(
@@ -85,11 +85,10 @@ afterAll(async () => {
 });
 
 const recorder = createFakeModelClientRecorder();
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
-);
+installFakeModelClient(recorder);
 
-// The module mock must be installed before the production SessionView graph loads.
+// The fake model client must be installed before the production SessionView
+// graph loads.
 const {
 	cleanupSessionRender,
 	createE2ePricing,

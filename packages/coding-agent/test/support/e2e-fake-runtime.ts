@@ -1,3 +1,4 @@
+import { spyOn } from "bun:test";
 import type {
 	ModelClient,
 	ModelPromptMessage,
@@ -7,6 +8,7 @@ import type {
 	ModelTextGenerationOptions,
 	ModelTextGenerationResult,
 } from "@wincode/ai/model-client";
+import * as modelClientModule from "@wincode/ai/model-client";
 
 export type FakeMessageRequest = {
 	readonly role: string;
@@ -74,7 +76,7 @@ export const createFakeModelClient = (
 	run: FakeModelStepScript = defaultModelStepScript
 ): ModelClient => ({ stream: (request) => run(request, recorder) });
 
-export const createFakeModelClientModule = (
+const createFakeModelClientModule = (
 	recorder: FakeModelClientRecorder,
 	run: FakeModelStepScript = defaultModelStepScript
 ) => ({
@@ -104,3 +106,21 @@ export const createFakeModelClientRecorder = (): FakeModelClientRecorder => ({
 	requests: [],
 	summaryText: "E2E compacted summary",
 });
+
+/**
+ * Replaces the real model client for every consumer that imports
+ * `@wincode/ai/model-client` without poisoning the module registry the way
+ * `mock.module` does. Callers restore it through `mock.restore()`.
+ */
+export const installFakeModelClient = (
+	recorder: FakeModelClientRecorder,
+	run: FakeModelStepScript = defaultModelStepScript
+): void => {
+	const fake = createFakeModelClientModule(recorder, run);
+	spyOn(modelClientModule, "createModelClient").mockImplementation(
+		fake.createModelClient
+	);
+	spyOn(modelClientModule, "generateModelText").mockImplementation(
+		fake.generateModelText
+	);
+};

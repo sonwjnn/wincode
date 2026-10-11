@@ -43,8 +43,8 @@ import {
 import type { SessionId } from "@/shared/identifiers";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 import {
 	agentId,
@@ -70,17 +70,17 @@ const aliasDatabasePath = join(
 await Bun.write(databasePath, "");
 await link(databasePath, aliasDatabasePath);
 afterAll(async () => {
+	mock.restore();
 	restoreEnvironment();
 	await rm(testDirectory, { force: true, recursive: true });
 });
 
 const recorder = createFakeModelClientRecorder();
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
-);
+installFakeModelClient(recorder);
 
-// The module mock must be installed before the production Session Surface graph
-// loads, so the Agent Runtime the Session Host composes is the fake one.
+// The fake model client must be installed before the production Session
+// Surface graph loads, so the Agent Runtime the Session Host composes streams
+// from the fake.
 const {
 	E2E_MODEL,
 	cleanupSessionRender,

@@ -28,9 +28,9 @@ import { act } from "react";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClient,
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
 	type FakeModelStepScript,
+	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 import { sessionMessageId } from "../support/identifiers";
 
@@ -67,11 +67,10 @@ const controlledStep: FakeModelStepScript = async function* (
 		}
 	}
 };
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder, controlledStep)
-);
+installFakeModelClient(recorder, controlledStep);
 
-// The module mock must be installed before the production SessionView graph loads.
+// The fake model client must be installed before the production SessionView
+// graph loads.
 const {
 	cleanupSessionRender,
 	createE2ePricing,

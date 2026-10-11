@@ -32,8 +32,8 @@ import { act } from "react";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import type { FakeModelStepScript } from "@/test/support/e2e-fake-runtime";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 
 const testDirectory = await mkdtemp(
@@ -87,11 +87,10 @@ const overflowThenAnswer: FakeModelStepScript = async function* (
 };
 
 const recorder = createFakeModelClientRecorder();
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder, overflowThenAnswer)
-);
+installFakeModelClient(recorder, overflowThenAnswer);
 
-// The module mock must be installed before the production SessionView graph loads.
+// The fake model client must be installed before the production SessionView
+// graph loads.
 const {
 	cleanupSessionRender,
 	createE2ePricing,
