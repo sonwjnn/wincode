@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
-import { lstat, mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createMcpOAuthProvider } from "@wincode/mcp";
 import { createPluginSecretStore } from "@/modules/plugins/plugin-secret-store";
 
 test("Plugin secrets are isolated and use a private local fallback", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-plugin-secrets-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-plugin-secrets-")
+	);
 	try {
 		const firstPlugin = createPluginSecretStore("first_plugin", root, null);
 		const secondPlugin = createPluginSecretStore("second_plugin", root, null);
@@ -17,20 +19,20 @@ test("Plugin secrets are isolated and use a private local fallback", async () =>
 
 		const directory = path.join(root, "plugin-secrets");
 		const filePath = path.join(directory, "first_plugin.json");
-		const directoryMode = (await lstat(directory)).mode % 0o100;
-		const fileMode = (await lstat(filePath)).mode % 0o100;
+		const directoryMode = (await fs.lstat(directory)).mode % 0o100;
+		const fileMode = (await fs.lstat(filePath)).mode % 0o100;
 		expect(directoryMode).toBe(0);
 		expect(fileMode).toBe(0);
 
 		await firstPlugin.delete("oauth.tokens");
 		expect(await firstPlugin.get("oauth.tokens")).toBeUndefined();
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("MCP OAuth credentials fit the secret-key limit for issuer and server names", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-mcp-oauth-secrets-")
 	);
 	try {
@@ -53,12 +55,12 @@ test("MCP OAuth credentials fit the secret-key limit for issuer and server names
 			expect(await provider.tokens({ issuer })).toEqual(tokens);
 		}
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("Plugin secrets use the platform backend with Plugin-qualified accounts", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-plugin-keychain-")
 	);
 	const values = new Map<string, string>();
@@ -87,6 +89,6 @@ test("Plugin secrets use the platform backend with Plugin-qualified accounts", a
 			"delete:wincode-plugin:oauth_plugin:oauth.tokens",
 		]);
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { agentIdSchema } from "@wincode/agent-core";
 import {
@@ -70,7 +70,7 @@ describe("MCP result normalization", () => {
 		try {
 			expect([...(await Bun.file(filePath).bytes())]).toEqual([1, 2, 3]);
 		} finally {
-			await rm(path.dirname(filePath), { force: true, recursive: true });
+			await fs.rm(path.dirname(filePath), { force: true, recursive: true });
 		}
 	});
 
@@ -113,7 +113,7 @@ describe("MCP result normalization", () => {
 				new TextEncoder().encode(JSON.stringify(result)).byteLength
 			).toBeLessThanOrEqual(MAX_MCP_RESULT_BYTES);
 		} finally {
-			await rm(path.dirname(filePath), { force: true, recursive: true });
+			await fs.rm(path.dirname(filePath), { force: true, recursive: true });
 		}
 	});
 
@@ -145,7 +145,7 @@ describe("MCP result normalization", () => {
 		try {
 			expect([...(await Bun.file(filePath).bytes())]).toEqual([1, 2, 3]);
 		} finally {
-			await rm(path.dirname(filePath), { force: true, recursive: true });
+			await fs.rm(path.dirname(filePath), { force: true, recursive: true });
 		}
 	});
 

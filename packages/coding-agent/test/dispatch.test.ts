@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -62,10 +62,12 @@ describe("application dispatch", () => {
 	});
 
 	test("MCP listing skips TUI startup and unrelated Plugin loading", async () => {
-		const root = await mkdtemp(path.join(os.tmpdir(), "wincode-mcp-dispatch-"));
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-mcp-dispatch-")
+		);
 		const homeRoot = path.join(root, "home");
 		const workspace = path.join(root, "workspace");
-		await mkdir(path.join(workspace, ".git"), { recursive: true });
+		await fs.mkdir(path.join(workspace, ".git"), { recursive: true });
 		const stdout = capture();
 		const stderr = capture();
 		let modeLoaded = false;
@@ -103,7 +105,7 @@ describe("application dispatch", () => {
 			expect(modeLoaded).toBe(false);
 			expect(runtimeInitialized).toBe(false);
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 

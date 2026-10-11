@@ -10,9 +10,9 @@ const restoreEnvironment = createEnvironmentRestorer([
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
 import { getFileMentionOptions } from "@/modules/file-mentions";
@@ -24,38 +24,44 @@ import {
 	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 
-const testDirectory = await mkdtemp(
-	join(tmpdir(), "wincode-command-popover-e2e-")
+const testDirectory = await fs.mkdtemp(
+	path.join(os.tmpdir(), "wincode-command-popover-e2e-")
 );
-process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
+process.env.WINCODE_LOCAL_DB_PATH = path.join(
+	testDirectory,
+	"conversation.sqlite"
+);
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
-const mentionFixtureDirectory = await mkdtemp(
-	join(process.cwd(), "packages/coding-agent/test/mention-e2e-")
+const mentionFixtureDirectory = await fs.mkdtemp(
+	path.join(process.cwd(), "packages/coding-agent/test/mention-e2e-")
 );
 const mentionFixturePath = mentionFixtureDirectory.slice(
 	process.cwd().length + 1
 );
-await mkdir(join(mentionFixtureDirectory, "utils", "empty"), {
+await fs.mkdir(path.join(mentionFixtureDirectory, "utils", "empty"), {
 	recursive: true,
 });
 await Bun.write(
-	join(mentionFixtureDirectory, "utils", "child.ts"),
+	path.join(mentionFixtureDirectory, "utils", "child.ts"),
 	"export const child = true;"
 );
 await Promise.all([
-	mkdir(join(testDirectory, ".git"), { recursive: true }),
-	mkdir(join(testDirectory, ".wincode", "skills", "model-4o"), {
+	fs.mkdir(path.join(testDirectory, ".git"), { recursive: true }),
+	fs.mkdir(path.join(testDirectory, ".wincode", "skills", "model-4o"), {
 		recursive: true,
 	}),
 ]);
 await Bun.write(
-	join(testDirectory, ".wincode", "skills", "model-4o", "SKILL.md"),
+	path.join(testDirectory, ".wincode", "skills", "model-4o", "SKILL.md"),
 	"---\nname: model-4o\ndescription: Model helper skill\n---\nUse the model helper skill."
 );
 const pluginRuntime = await loadPlugins({
 	cliPaths: [
-		join(process.cwd(), "packages/coding-agent/test/fixtures/jira-plugin.ts"),
+		path.join(
+			process.cwd(),
+			"packages/coding-agent/test/fixtures/jira-plugin.ts"
+		),
 	],
 	config: {
 		configStore: createConfigStore({
@@ -70,16 +76,14 @@ afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();
 	await pluginRuntime.shutdown();
-	await rm(testDirectory, { force: true, recursive: true });
-	await rm(mentionFixtureDirectory, { force: true, recursive: true });
+	await fs.rm(testDirectory, { force: true, recursive: true });
+	await fs.rm(mentionFixtureDirectory, { force: true, recursive: true });
 });
 
 const recorder = createFakeModelClientRecorder();
 installFakeModelClient(recorder);
 
-// The fake model client must be installed before the production SessionView
-// graph loads.
-const {
+import {
 	cleanupSessionRender,
 	createE2ePricing,
 	createE2eStore,
@@ -89,7 +93,7 @@ const {
 	waitForSessionCondition,
 	waitForSessionFrame,
 	writeE2EFrame,
-} = await import("@/test/support/e2e-fixture");
+} from "@/test/support/e2e-fixture";
 
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store, 2);
@@ -454,15 +458,15 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 });
 
 test("bare queries still find Skills whose names start with skills", async () => {
-	const skillDirectory = join(
+	const skillDirectory = path.join(
 		testDirectory,
 		".wincode",
 		"skills",
 		"skills-helper"
 	);
-	await mkdir(skillDirectory, { recursive: true });
+	await fs.mkdir(skillDirectory, { recursive: true });
 	await Bun.write(
-		join(skillDirectory, "SKILL.md"),
+		path.join(skillDirectory, "SKILL.md"),
 		"---\nname: skills-helper\ndescription: Skills helper\n---\nHelp with Skills."
 	);
 	let setup: TestRendererSetup | undefined;
@@ -780,7 +784,7 @@ test("a slash inside prose opens Skill search and Escape keeps the text", async 
 	}
 });
 test("hides the aggregate Skill suggestion when no Skills are discovered", async () => {
-	await rm(join(testDirectory, ".wincode", "skills"), {
+	await fs.rm(path.join(testDirectory, ".wincode", "skills"), {
 		force: true,
 		recursive: true,
 	});

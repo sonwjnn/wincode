@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { spawnSync } from "bun";
 
 const executable = path.join(import.meta.dir, "../bin/wincode.ts");
-const executableTestRoot = mkdtempSync(
-	path.join(tmpdir(), "wincode-executable-")
+const executableTestRoot = fs.mkdtempSync(
+	path.join(os.tmpdir(), "wincode-executable-")
 );
 const sessionDatabasePath = path.join(executableTestRoot, "sessions.db");
 const executableEnvironment = {

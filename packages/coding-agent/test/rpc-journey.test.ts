@@ -1,6 +1,6 @@
 import { afterAll, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { runRpc } from "../modules/application/rpc/runner";
 import { SessionWriterLockFailureError } from "../modules/sessions/storage/session-writer-lock";
 import {
@@ -10,28 +10,30 @@ import {
 	sessionMessageId,
 } from "./support/identifiers";
 
-const workspace = await mkdtemp(join("/tmp", "wincode-rpc-journey-"));
-const commandDirectory = join(workspace, ".wincode", "commands");
-await mkdir(commandDirectory, { recursive: true });
+const workspace = await fs.mkdtemp(path.join("/tmp", "wincode-rpc-journey-"));
+const commandDirectory = path.join(workspace, ".wincode", "commands");
+await fs.mkdir(commandDirectory, { recursive: true });
 await Bun.write(
-	join(commandDirectory, "review.md"),
+	path.join(commandDirectory, "review.md"),
 	"---\ndescription: Review API changes\n---\nInspect only $ARGUMENTS."
 );
-const databasePath = join(workspace, "conversation.sqlite");
-const fakeSupport = await import("./support/e2e-fake-runtime");
-const recorder = fakeSupport.createFakeModelClientRecorder();
-fakeSupport.installFakeModelClient(recorder);
-const { createSessionCapabilities } = await import(
-	"../modules/sessions/host/session-capabilities"
-);
-const { createDatabase } = await import("../modules/sessions/storage/client");
-const { createDrizzleSessionStore } = await import(
-	"../modules/sessions/storage/drizzle-session-store"
-);
+const databasePath = path.join(workspace, "conversation.sqlite");
+
+import {
+	createFakeModelClientRecorder,
+	installFakeModelClient,
+} from "./support/e2e-fake-runtime";
+
+const recorder = createFakeModelClientRecorder();
+installFakeModelClient(recorder);
+
+import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
+import { createDatabase } from "../modules/sessions/storage/client";
+import { createDrizzleSessionStore } from "../modules/sessions/storage/drizzle-session-store";
 
 afterAll(async () => {
 	mock.restore();
-	await rm(workspace, { force: true, recursive: true });
+	await fs.rm(workspace, { force: true, recursive: true });
 });
 
 test("raw JSONL drives a real Session Host through persistence", async () => {
@@ -388,11 +390,11 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 			},
 		],
 	};
-	const conflictDatabasePath = join(workspace, "writer-conflict.sqlite");
+	const conflictDatabasePath = path.join(workspace, "writer-conflict.sqlite");
 	const ownerDatabase = createDatabase(conflictDatabasePath);
 	const ownerStore = createDrizzleSessionStore(ownerDatabase.db, {
-		attachmentRoot: join(workspace, "writer-conflict-attachments"),
-		snapshotRoot: join(workspace, "writer-conflict-snapshots"),
+		attachmentRoot: path.join(workspace, "writer-conflict-attachments"),
+		snapshotRoot: path.join(workspace, "writer-conflict-snapshots"),
 		workspaceRoot: workspace,
 	});
 	const { id: sessionId } = await ownerStore.createSession({
@@ -482,7 +484,10 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 			},
 		],
 	};
-	const failureDatabasePath = join(workspace, "writer-lock-failure.sqlite");
+	const failureDatabasePath = path.join(
+		workspace,
+		"writer-lock-failure.sqlite"
+	);
 	const failureAssembly = await createSessionCapabilities({
 		connections,
 		cwd: workspace,
@@ -586,7 +591,7 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 			],
 		},
 		cwd: workspace,
-		databasePath: join(workspace, "session-switch.sqlite"),
+		databasePath: path.join(workspace, "session-switch.sqlite"),
 		workspace,
 	});
 	const model = {

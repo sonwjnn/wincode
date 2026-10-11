@@ -12,11 +12,10 @@ import { isUndefined } from "@wincode/utils";
 //   try/finally.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, watch } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import net from "node:net";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import * as fs from "node:fs";
+import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import type { McpConfigResult, ResolvedMcpServerConfig } from "@wincode/mcp";
 import { createMcpRegistry, type McpCatalogSnapshot } from "@wincode/mcp";
@@ -103,12 +102,12 @@ const hasChildProcess = (fixture: string): boolean => {
 };
 const waitForFile = (filePath: string): Promise<void> => {
 	const { promise, reject, resolve } = Promise.withResolvers<void>();
-	if (existsSync(filePath)) {
+	if (fs.existsSync(filePath)) {
 		resolve();
 		return promise;
 	}
 	let settled = false;
-	let watcher: ReturnType<typeof watch>;
+	let watcher: fs.FSWatcher;
 	const finish = (error?: unknown): void => {
 		if (settled) {
 			return;
@@ -121,13 +120,13 @@ const waitForFile = (filePath: string): Promise<void> => {
 			reject(error);
 		}
 	};
-	watcher = watch(path.dirname(filePath), (_eventType, fileName) => {
+	watcher = fs.watch(path.dirname(filePath), (_eventType, fileName) => {
 		if (fileName?.toString() === path.basename(filePath)) {
 			finish();
 		}
 	});
 	watcher.once("error", finish);
-	if (existsSync(filePath)) {
+	if (fs.existsSync(filePath)) {
 		finish();
 	}
 	return promise;
@@ -209,8 +208,8 @@ describe("MCP transport integration", () => {
 	}, 15_000);
 
 	test("stdio: child process exits after close", async () => {
-		const markerDirectory = await mkdtemp(
-			path.join(tmpdir(), "wincode-mcp-exit-")
+		const markerDirectory = await fs.promises.mkdtemp(
+			path.join(os.tmpdir(), "wincode-mcp-exit-")
 		);
 		const exitMarker = path.join(markerDirectory, "exited");
 		try {
@@ -229,7 +228,7 @@ describe("MCP transport integration", () => {
 			await waitForFile(exitMarker);
 			expect(await Bun.file(exitMarker).text()).toBe("exited");
 		} finally {
-			await rm(markerDirectory, { force: true, recursive: true });
+			await fs.promises.rm(markerDirectory, { force: true, recursive: true });
 		}
 	}, 15_000);
 

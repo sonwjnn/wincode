@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
@@ -47,7 +47,7 @@ const fakeRuntime = createAgentRuntime({
 	modelClient: createFakeModelClient(fakeRecorder),
 });
 
-const workspace = await mkdtemp(path.join("/tmp", "wincode-one-shot-"));
+const workspace = await fs.mkdtemp(path.join("/tmp", "wincode-one-shot-"));
 const registry = buildAgentRegistry(
 	fromPartial<ConfigSnapshot>({
 		diagnostics: [],
@@ -343,7 +343,7 @@ test("built-in Agent patches reject unsupported ThinkingLevels", () => {
 });
 
 afterAll(async () => {
-	await rm(workspace, { force: true, recursive: true });
+	await fs.rm(workspace, { force: true, recursive: true });
 });
 
 test("Print mode creates a durable One-Shot Session and writes assistant text only", async () => {
@@ -429,7 +429,7 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 });
 
 test("one-shot ThinkingLevel selectors override configured and restored choices", async () => {
-	const reasoningWorkspace = await mkdtemp(
+	const reasoningWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-one-shot-thinking-level-")
 	);
 	try {
@@ -506,12 +506,12 @@ test("one-shot ThinkingLevel selectors override configured and restored choices"
 			await finalVerification.shutdown();
 		}
 	} finally {
-		await rm(reasoningWorkspace, { force: true, recursive: true });
+		await fs.rm(reasoningWorkspace, { force: true, recursive: true });
 	}
 });
 
 test("one-shot invalid explicit choices name their field and fail before send", async () => {
-	const invalidWorkspace = await mkdtemp(
+	const invalidWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-invalid-thinking-level-")
 	);
 	try {
@@ -561,7 +561,7 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 			await verification.assembly.shutdown();
 		}
 	} finally {
-		await rm(invalidWorkspace, { force: true, recursive: true });
+		await fs.rm(invalidWorkspace, { force: true, recursive: true });
 	}
 });
 
@@ -690,7 +690,7 @@ test("Print mode reads one Submission from non-TTY stdin", async () => {
 });
 
 test("one-shot input rejects empty submissions before creating a Session", async () => {
-	const emptyWorkspace = await mkdtemp(
+	const emptyWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-empty-submission-")
 	);
 	try {
@@ -722,12 +722,12 @@ test("one-shot input rejects empty submissions before creating a Session", async
 			await verification.assembly.shutdown();
 		}
 	} finally {
-		await rm(emptyWorkspace, { force: true, recursive: true });
+		await fs.rm(emptyWorkspace, { force: true, recursive: true });
 	}
 });
 
 test("one-shot rejects a disconnected model before creating a Session", async () => {
-	const disconnectedWorkspace = await mkdtemp(
+	const disconnectedWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-disconnected-model-")
 	);
 	try {
@@ -760,7 +760,7 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 			await verification.assembly.shutdown();
 		}
 	} finally {
-		await rm(disconnectedWorkspace, { force: true, recursive: true });
+		await fs.rm(disconnectedWorkspace, { force: true, recursive: true });
 	}
 });
 
@@ -809,10 +809,10 @@ const noCapabilities: OneShotDependencies = {
 };
 
 test("one-shot keeps Print parent-only and tags JSON child Session events", async () => {
-	const printWorkspace = await mkdtemp(
+	const printWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-one-shot-delegation-print-")
 	);
-	const jsonWorkspace = await mkdtemp(
+	const jsonWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-one-shot-delegation-json-")
 	);
 	const delegatedRegistry = buildConfiguredAgentRegistry({
@@ -937,8 +937,8 @@ test("one-shot keeps Print parent-only and tags JSON child Session events", asyn
 	} finally {
 		fakeRecorder.stepScript = previousScript;
 		await Promise.all([
-			rm(printWorkspace, { force: true, recursive: true }),
-			rm(jsonWorkspace, { force: true, recursive: true }),
+			fs.rm(printWorkspace, { force: true, recursive: true }),
+			fs.rm(jsonWorkspace, { force: true, recursive: true }),
 		]);
 	}
 });

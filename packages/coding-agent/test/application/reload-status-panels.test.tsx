@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testRender } from "@opentui/react/test-utils";
@@ -17,7 +17,9 @@ import { reloadInteractiveResources } from "@/tui/commands/reload-resources";
 import { flushTestRenderer } from "../support/opentui";
 
 test("MCP status remains renderable while the first reload shuts down its previous runtime", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-reload-status-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-reload-status-")
+	);
 	const configRuntime = {
 		configStore: createConfigStore({ homeRoot: root }),
 		cwd: root,
@@ -109,6 +111,6 @@ test("MCP status remains renderable while the first reload shuts down its previo
 		await resetInteractiveSessionHostManager();
 		await oldRuntime.shutdown();
 		await replacement.shutdown();
-		await rm(root, { recursive: true, force: true });
+		await fs.rm(root, { recursive: true, force: true });
 	}
 });

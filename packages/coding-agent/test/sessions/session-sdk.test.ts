@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,7 +38,7 @@ import {
 } from "../support/e2e-fake-runtime";
 import { agentId, sessionId } from "../support/identifiers";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
+const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
 const storeRoot = path.join(root, "data");
 const homeRoot = path.join(root, "home");
@@ -51,7 +51,7 @@ const configuredSessionSdkPluginPath = path.resolve(
 );
 await Promise.all(
 	[workspace, storeRoot, homeRoot].map((directory) =>
-		mkdir(directory, { recursive: true })
+		fs.mkdir(directory, { recursive: true })
 	)
 );
 const database = createDatabase(path.join(storeRoot, "sessions.sqlite"));
@@ -96,12 +96,12 @@ test("public Session SDK creates durable Sessions using public options", async (
 
 afterAll(async () => {
 	database.sqlite.close();
-	await rm(root, { force: true, recursive: true });
+	await fs.rm(root, { force: true, recursive: true });
 });
 
 test("public Session SDK trust is not inherited by a new Session runtime", async () => {
 	const trustWorkspace = path.join(root, "public-sdk-trust-workspace");
-	await mkdir(trustWorkspace, { recursive: true });
+	await fs.mkdir(trustWorkspace, { recursive: true });
 	await Bun.write(
 		path.join(trustWorkspace, ".wincode", "settings.json"),
 		JSON.stringify({
@@ -194,7 +194,7 @@ test("an injected Session SDK creates an empty durable Session and reopens it", 
 test("the public Session SDK loads trusted project Plugins but a new Session runtime does not inherit trust", async () => {
 	const projectConfigDirectory = path.join(workspace, ".wincode");
 	const markerPath = path.join(workspace, ".configured-session-sdk-plugin");
-	await mkdir(projectConfigDirectory, { recursive: true });
+	await fs.mkdir(projectConfigDirectory, { recursive: true });
 	await Bun.write(
 		path.join(projectConfigDirectory, "settings.json"),
 		JSON.stringify({ plugins: [configuredSessionSdkPluginPath] })
@@ -226,7 +226,7 @@ test("the public Session SDK loads trusted project Plugins but a new Session run
 		await childSdk?.dispose();
 		await parentHandle?.dispose();
 		await sdk?.dispose();
-		await rm(markerPath, { force: true });
+		await fs.rm(markerPath, { force: true });
 	}
 });
 

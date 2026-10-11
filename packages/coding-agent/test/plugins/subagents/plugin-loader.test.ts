@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
@@ -13,7 +13,7 @@ import { createConfigStore } from "@/shared/config/config-store";
 import { agentId, sessionId } from "../../support/identifiers";
 
 test("the distributed Subagents package registers delegate through the public Plugin contract", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-subagents-plugin-")
 	);
 	const databasePath = path.join(root, "subagents.sqlite");
@@ -93,6 +93,6 @@ test("the distributed Subagents package registers delegate through the public Pl
 		} else {
 			process.env.WINCODE_SUBAGENTS_DB_PATH = previousDatabasePath;
 		}
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });

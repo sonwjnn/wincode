@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { fromAny } from "@total-typescript/shoehorn";
 import type {
 	AgentTurnOutcomeRecord,
@@ -141,11 +141,13 @@ type CreatedSession = {
 };
 
 const createTestStore = async (): Promise<TestStore> => {
-	const dir = await mkdtemp(join(tmpdir(), "wincode-conversation-record-"));
-	const databasePath = join(dir, "conversation.sqlite");
+	const dir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-conversation-record-")
+	);
+	const databasePath = path.join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
 	const store = createDrizzleSessionStore(db, {
-		attachmentRoot: join(dir, "attachments"),
+		attachmentRoot: path.join(dir, "attachments"),
 	});
 	return { databasePath, store };
 };
@@ -240,7 +242,7 @@ test("reopens durable records without reconstructing or running execution", asyn
 
 	const { db } = createDatabase(databasePath);
 	const reopened = createDrizzleSessionStore(db, {
-		attachmentRoot: join(tmpdir(), "wincode-reopened-attachments"),
+		attachmentRoot: path.join(os.tmpdir(), "wincode-reopened-attachments"),
 	});
 
 	expect(await reopened.listSessionRecords(id)).toEqual([
@@ -341,16 +343,18 @@ test("reopening a record drops an unsupported ThinkingLevel but preserves valid 
 });
 
 test("keeps records isolated per session and per workspace", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "wincode-conversation-record-"));
-	const databasePath = join(dir, "conversation.sqlite");
+	const dir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-conversation-record-")
+	);
+	const databasePath = path.join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
 	const firstWorkspace = createDrizzleSessionStore(db, {
-		attachmentRoot: join(dir, "attachments-a"),
-		workspaceRoot: join(dir, "workspace-a"),
+		attachmentRoot: path.join(dir, "attachments-a"),
+		workspaceRoot: path.join(dir, "workspace-a"),
 	});
 	const secondWorkspace = createDrizzleSessionStore(db, {
-		attachmentRoot: join(dir, "attachments-b"),
-		workspaceRoot: join(dir, "workspace-b"),
+		attachmentRoot: path.join(dir, "attachments-b"),
+		workspaceRoot: path.join(dir, "workspace-b"),
 	});
 	const sessionA = await createSession(firstWorkspace);
 	const sessionB = await createSession(firstWorkspace, "other");

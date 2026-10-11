@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 /**
  * ADR-0019's non-TUI reuse boundary and ADR-0023's Host boundary require both
@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
  * renderers. Lint catches direct imports; this walks transitively so a barrel
  * cannot smuggle a renderer into either entry point.
  */
-const TUI_ROOT = resolve(import.meta.dir, "../..");
+const TUI_ROOT = path.resolve(import.meta.dir, "../..");
 const FORBIDDEN_MODULE_ROOTS: Record<string, true> = {
 	"@opentui": true,
 	react: true,
@@ -25,19 +25,25 @@ const RESOLUTION_SUFFIXES = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"];
 const ENTRIES = [
 	{
 		name: "Agent Session",
-		path: resolve(TUI_ROOT, "modules/sessions/agent-session/agent-session.ts"),
+		path: path.resolve(
+			TUI_ROOT,
+			"modules/sessions/agent-session/agent-session.ts"
+		),
 	},
 	{
 		name: "Session Host",
-		path: resolve(TUI_ROOT, "modules/sessions/host/session-host.ts"),
+		path: path.resolve(TUI_ROOT, "modules/sessions/host/session-host.ts"),
 	},
 	{
 		name: "Session Capabilities",
-		path: resolve(TUI_ROOT, "modules/sessions/host/session-capabilities.ts"),
+		path: path.resolve(
+			TUI_ROOT,
+			"modules/sessions/host/session-capabilities.ts"
+		),
 	},
 	{
 		name: "Session RPC boundary",
-		path: resolve(TUI_ROOT, "modules/sessions/host/session-rpc.ts"),
+		path: path.resolve(TUI_ROOT, "modules/sessions/host/session-rpc.ts"),
 	},
 ];
 
@@ -54,7 +60,7 @@ const walkModuleGraph = (
 			continue;
 		}
 		visited.add(file);
-		const source = readFileSync(file, "utf8");
+		const source = fs.readFileSync(file, "utf8");
 		for (const match of source.matchAll(MODULE_EDGE_PATTERN)) {
 			const specifier = match[1];
 			if (specifier === undefined) {
@@ -72,9 +78,9 @@ const walkModuleGraph = (
 			// outside this package's graph.
 			let base: string | null = null;
 			if (specifier.startsWith("@/")) {
-				base = resolve(TUI_ROOT, specifier.slice(2));
+				base = path.resolve(TUI_ROOT, specifier.slice(2));
 			} else if (specifier.startsWith(".")) {
-				base = resolve(dirname(file), specifier);
+				base = path.resolve(path.dirname(file), specifier);
 			}
 			if (base === null) {
 				continue;
@@ -82,7 +88,8 @@ const walkModuleGraph = (
 			const target = RESOLUTION_SUFFIXES.map(
 				(suffix) => `${base}${suffix}`
 			).find(
-				(candidate) => existsSync(candidate) && statSync(candidate).isFile()
+				(candidate) =>
+					fs.existsSync(candidate) && fs.statSync(candidate).isFile()
 			);
 			if (target === undefined) {
 				unresolved.push(`${file} -> ${specifier}`);

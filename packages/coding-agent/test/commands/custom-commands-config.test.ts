@@ -1,35 +1,37 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { createConfigStore } from "@/shared/config/config-store";
 import { writeFixture } from "@/test/support/filesystem";
 
 describe("configured Custom Commands", () => {
 	test("loads an absolute global path without overriding project commands", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-global-commands-"));
-		const homeRoot = join(root, "home");
-		const workspace = join(root, "workspace");
-		const globalCommands = join(root, "shared-commands");
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-global-commands-")
+		);
+		const homeRoot = path.join(root, "home");
+		const workspace = path.join(root, "workspace");
+		const globalCommands = path.join(root, "shared-commands");
 
 		try {
-			await mkdir(join(workspace, ".git"), { recursive: true });
+			await fs.mkdir(path.join(workspace, ".git"), { recursive: true });
 			await Promise.all([
 				writeFixture(
-					join(homeRoot, ".wincode", "settings.json"),
+					path.join(homeRoot, ".wincode", "settings.json"),
 					JSON.stringify({ commands: { paths: [globalCommands] } })
 				),
 				writeFixture(
-					join(globalCommands, "global-only.md"),
+					path.join(globalCommands, "global-only.md"),
 					"---\ndescription: Global configured\n---\nGlobal configured template."
 				),
 				writeFixture(
-					join(globalCommands, "review.md"),
+					path.join(globalCommands, "review.md"),
 					"---\ndescription: Global review\n---\nGlobal review template."
 				),
 				writeFixture(
-					join(workspace, ".wincode", "commands", "review.md"),
+					path.join(workspace, ".wincode", "commands", "review.md"),
 					"---\ndescription: Project review\n---\nProject review template."
 				),
 			]);
@@ -49,37 +51,37 @@ describe("configured Custom Commands", () => {
 				"Project review"
 			);
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 
 	test("loads conventional and configured folders through Wincode config", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-commands-"));
-		const homeRoot = join(root, "home");
-		const repository = join(root, "repository");
-		const workspace = join(repository, "packages", "app");
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-commands-"));
+		const homeRoot = path.join(root, "home");
+		const repository = path.join(root, "repository");
+		const workspace = path.join(repository, "packages", "app");
 
 		try {
-			await mkdir(join(repository, ".git"), { recursive: true });
+			await fs.mkdir(path.join(repository, ".git"), { recursive: true });
 			await Promise.all([
 				writeFixture(
-					join(homeRoot, ".wincode", "commands", "global.md"),
+					path.join(homeRoot, ".wincode", "commands", "global.md"),
 					"---\ndescription: Global command\n---\nGlobal template."
 				),
 				writeFixture(
-					join(repository, ".wincode", "commands", "ancestor.md"),
+					path.join(repository, ".wincode", "commands", "ancestor.md"),
 					"---\ndescription: Ancestor command\n---\nAncestor template."
 				),
 				writeFixture(
-					join(workspace, ".wincode", "commands", "review.md"),
+					path.join(workspace, ".wincode", "commands", "review.md"),
 					"---\ndescription: Conventional command\n---\nConventional template."
 				),
 				writeFixture(
-					join(workspace, ".wincode", "configured-commands", "review.md"),
+					path.join(workspace, ".wincode", "configured-commands", "review.md"),
 					"---\ndescription: Configured command\n---\nConfigured template."
 				),
 				writeFixture(
-					join(workspace, ".wincode", "settings.jsonc"),
+					path.join(workspace, ".wincode", "settings.jsonc"),
 					'{\n  // Paths are relative to this config file.\n  "commands": { "paths": ["configured-commands"], },\n}'
 				),
 			]);
@@ -104,7 +106,7 @@ describe("configured Custom Commands", () => {
 				template: "Configured template.",
 			});
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 });

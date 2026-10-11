@@ -1,7 +1,7 @@
 import type { Database as SqliteDatabase } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
@@ -33,8 +33,8 @@ const model = {
 const openStore = (root: string, databasePath: string): OpenedStore => {
 	const database = createDatabase(databasePath);
 	const store = createDrizzleSessionStore(database.db, {
-		attachmentRoot: join(root, "attachments"),
-		snapshotRoot: join(root, "snapshots"),
+		attachmentRoot: path.join(root, "attachments"),
+		snapshotRoot: path.join(root, "snapshots"),
 		workspaceRoot: root,
 	});
 	return { database, store };
@@ -60,9 +60,9 @@ const createSession = async (store: SessionStore) =>
 	});
 
 test("restarts expose prepared transactions and reconcile with expected versions", async () => {
-	const root = await mkdtemp(join(process.cwd(), ".wincode-recovery-"));
-	const databasePath = join(root, "sessions.sqlite");
-	const filePath = join(root, "note.txt");
+	const root = await fs.mkdtemp(path.join(process.cwd(), ".wincode-recovery-"));
+	const databasePath = path.join(root, "sessions.sqlite");
+	const filePath = path.join(root, "note.txt");
 	let activeDatabase: OpenedStore["database"] | undefined;
 	try {
 		const originalBytes = new TextEncoder().encode("original\n");
@@ -122,8 +122,8 @@ test("restarts expose prepared transactions and reconcile with expected versions
 		);
 		expect(inspected.status).toBe("inspected");
 		expect(await Bun.file(filePath).text()).toBe("changed\n");
-		const aliasPath = join(root, "note-alias.txt");
-		await symlink(filePath, aliasPath);
+		const aliasPath = path.join(root, "note-alias.txt");
+		await fs.symlink(filePath, aliasPath);
 		await expect(
 			runWriteTool(
 				{
@@ -176,14 +176,16 @@ test("restarts expose prepared transactions and reconcile with expected versions
 		).toHaveLength(0);
 	} finally {
 		activeDatabase?.sqlite.close();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("restore-original removes files that did not exist before the transaction", async () => {
-	const root = await mkdtemp(join(process.cwd(), ".wincode-recovery-create-"));
-	const databasePath = join(root, "sessions.sqlite");
-	const filePath = join(root, "created.txt");
+	const root = await fs.mkdtemp(
+		path.join(process.cwd(), ".wincode-recovery-create-")
+	);
+	const databasePath = path.join(root, "sessions.sqlite");
+	const filePath = path.join(root, "created.txt");
 	let activeDatabase: OpenedStore["database"] | undefined;
 	try {
 		const changedBytes = new TextEncoder().encode("created\n");
@@ -240,16 +242,16 @@ test("restore-original removes files that did not exist before the transaction",
 		});
 	} finally {
 		activeDatabase?.sqlite.close();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("missing pinned bytes stay critical until an explicit discard", async () => {
-	const root = await mkdtemp(
-		join(process.cwd(), ".wincode-recovery-critical-")
+	const root = await fs.mkdtemp(
+		path.join(process.cwd(), ".wincode-recovery-critical-")
 	);
-	const databasePath = join(root, "sessions.sqlite");
-	const filePath = join(root, "note.txt");
+	const databasePath = path.join(root, "sessions.sqlite");
+	const filePath = path.join(root, "note.txt");
 	let activeDatabase: OpenedStore["database"] | undefined;
 	try {
 		const originalBytes = new TextEncoder().encode("original\n");
@@ -276,8 +278,15 @@ test("missing pinned bytes stay critical until an explicit discard", async () =>
 		});
 		activeDatabase.sqlite.close();
 		activeDatabase = undefined;
-		await rm(
-			join(root, "snapshots", "recovery", "v1", transaction.id, "0.original")
+		await fs.rm(
+			path.join(
+				root,
+				"snapshots",
+				"recovery",
+				"v1",
+				transaction.id,
+				"0.original"
+			)
 		);
 
 		const reopened = openStore(root, databasePath);
@@ -327,14 +336,16 @@ test("missing pinned bytes stay critical until an explicit discard", async () =>
 		).toHaveLength(0);
 	} finally {
 		activeDatabase?.sqlite.close();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("recovery inspects and discards current binary bytes by raw File Version", async () => {
-	const root = await mkdtemp(join(process.cwd(), ".wincode-recovery-binary-"));
-	const databasePath = join(root, "sessions.sqlite");
-	const filePath = join(root, "binary.dat");
+	const root = await fs.mkdtemp(
+		path.join(process.cwd(), ".wincode-recovery-binary-")
+	);
+	const databasePath = path.join(root, "sessions.sqlite");
+	const filePath = path.join(root, "binary.dat");
 	let activeDatabase: OpenedStore["database"] | undefined;
 	try {
 		const originalBytes = new TextEncoder().encode("original\n");
@@ -390,6 +401,6 @@ test("recovery inspects and discards current binary bytes by raw File Version", 
 		expect(await Bun.file(filePath).bytes()).toEqual(changedBytes);
 	} finally {
 		activeDatabase?.sqlite.close();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });

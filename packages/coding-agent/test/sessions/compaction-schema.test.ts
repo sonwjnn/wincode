@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
 	createDatabase,
 	SessionDatabaseResetRequiredError,
@@ -10,8 +10,10 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import { sessionId } from "../support/identifiers";
 
 test("initializes the current compaction schema in a fresh local database", async () => {
-	const directory = await mkdtemp(join("/tmp", "wincode-compaction-schema-"));
-	const databasePath = join(directory, "session.sqlite");
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-compaction-schema-")
+	);
+	const databasePath = path.join(directory, "session.sqlite");
 	const { db } = createDatabase(databasePath);
 
 	const columns = db.$client
@@ -26,8 +28,10 @@ test("initializes the current compaction schema in a fresh local database", asyn
 	expect(await store.getCompactions(sessionId("missing-session"))).toEqual([]);
 });
 test("requires resetting local data instead of converting an incompatible reasoning schema", async () => {
-	const directory = await mkdtemp(join("/tmp", "wincode-edit-mode-schema-"));
-	const databasePath = join(directory, "session.sqlite");
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-edit-mode-schema-")
+	);
+	const databasePath = path.join(directory, "session.sqlite");
 	try {
 		const legacy = new Database(databasePath);
 		legacy.exec(`
@@ -96,6 +100,6 @@ test("requires resetting local data instead of converting an incompatible reason
 			SessionDatabaseResetRequiredError
 		);
 	} finally {
-		await rm(directory, { force: true, recursive: true });
+		await fs.rm(directory, { force: true, recursive: true });
 	}
 });

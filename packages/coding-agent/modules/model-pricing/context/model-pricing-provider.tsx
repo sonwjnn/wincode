@@ -17,7 +17,7 @@ import {
 	readModelPricingCache,
 	writeModelPricingCache,
 } from "../model-pricing-cache";
-import { modelPricingEnv } from "../model-pricing-env";
+import { getModelPricingEnv } from "../model-pricing-env";
 
 const DEFAULT_TTL_HOURS = 24;
 const DEFAULT_URL = "https://models.dev/api.json";
@@ -70,10 +70,10 @@ export function ModelPricingProvider({
 	children,
 	pricing,
 }: ModelPricingProviderProps) {
-	const offline = modelPricingEnv.WINCODE_MODEL_PRICING_OFFLINE === true;
-	const ttlHours =
-		modelPricingEnv.WINCODE_MODEL_PRICING_TTL_HOURS ?? DEFAULT_TTL_HOURS;
-	const url = modelPricingEnv.WINCODE_MODEL_PRICING_URL ?? DEFAULT_URL;
+	const env = getModelPricingEnv();
+	const offline = env.WINCODE_MODEL_PRICING_OFFLINE === true;
+	const ttlHours = env.WINCODE_MODEL_PRICING_TTL_HOURS ?? DEFAULT_TTL_HOURS;
+	const url = env.WINCODE_MODEL_PRICING_URL ?? DEFAULT_URL;
 
 	const [loadedTable, setLoadedTable] =
 		useState<ModelPricingTable>(NO_OVERRIDES);

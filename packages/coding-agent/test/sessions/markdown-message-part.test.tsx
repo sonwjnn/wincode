@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { MockTreeSitterClient } from "@opentui/core/testing";
+import {
+	MockTreeSitterClient,
+	type TestRendererSetup,
+} from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { act, useEffect, useState } from "react";
 import {
@@ -52,9 +55,7 @@ class CountingTreeSitterClient extends MockTreeSitterClient {
 }
 
 /** Settles the async highlight/block pass before capturing output. */
-const settleRenders = async (
-	setup: Awaited<ReturnType<typeof testRender>>
-): Promise<void> => {
+const settleRenders = async (setup: TestRendererSetup): Promise<void> => {
 	for (let index = 0; index < 3; index++) {
 		await Bun.sleep(10);
 		await setup.renderOnce();

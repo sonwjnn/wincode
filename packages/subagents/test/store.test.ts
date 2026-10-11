@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SessionSdkCapabilityCeiling } from "@wincode/coding-agent";
@@ -8,13 +8,13 @@ import { createSubagentsTaskStore } from "../src/plugin/store";
 import { toDelegationTaskId } from "../src/plugin/task-types";
 import { agentId, agentTurnId, sessionId, toolCallId } from "./identifiers";
 
-const directory = await mkdtemp(
+const directory = await fs.mkdtemp(
 	path.join(os.tmpdir(), "wincode-subagents-store-")
 );
 const databasePath = path.join(directory, "nested", "subagents.sqlite");
 
 afterAll(async () => {
-	await rm(directory, { force: true, recursive: true });
+	await fs.rm(directory, { force: true, recursive: true });
 });
 
 test("Subagents persists capability ceilings with outcomes and acknowledgments", async () => {

@@ -110,7 +110,9 @@ export const createFakeModelClientRecorder = (): FakeModelClientRecorder => ({
 /**
  * Replaces the real model client for every consumer that imports
  * `@wincode/ai/model-client` without poisoning the module registry the way
- * `mock.module` does. Callers restore it through `mock.restore()`.
+ * `mock.module` does. Consumers read the live module binding, so installing
+ * the spy before the first turn runs is enough. Callers restore it through
+ * `mock.restore()`.
  */
 export const installFakeModelClient = (
 	recorder: FakeModelClientRecorder,

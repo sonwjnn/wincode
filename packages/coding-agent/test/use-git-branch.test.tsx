@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
@@ -32,11 +31,11 @@ describe("useGitBranch", () => {
 	let dir: string;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "wincode-git-branch-hook-"));
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), "wincode-git-branch-hook-"));
 	});
 
 	afterEach(() => {
-		rmSync(dir, { force: true, recursive: true });
+		fs.rmSync(dir, { force: true, recursive: true });
 	});
 
 	test("updates after checkout without changing the workspace path", async () => {
@@ -56,9 +55,9 @@ describe("useGitBranch", () => {
 	});
 
 	test("updates a linked worktree after checkout replaces its HEAD", async () => {
-		const repo = join(dir, "repo");
-		const worktree = join(dir, "worktree");
-		await mkdir(repo);
+		const repo = path.join(dir, "repo");
+		const worktree = path.join(dir, "worktree");
+		await fs.promises.mkdir(repo);
 		await runGit(repo, ["init", "--initial-branch=main"]);
 		await runGit(repo, [
 			"-c",

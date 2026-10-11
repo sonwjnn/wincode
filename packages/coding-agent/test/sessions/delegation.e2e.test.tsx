@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { createAgentRuntime } from "@wincode/agent-core";
 import type {
@@ -44,9 +44,17 @@ const restoreEnvironment = createEnvironmentRestorer([
 	"WINCODE_MODEL_PRICING_OFFLINE",
 	"WINCODE_SUBAGENTS_DB_PATH",
 ]);
-const testDirectory = await mkdtemp(join(tmpdir(), "wincode-delegation-e2e-"));
-process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
-process.env.WINCODE_SUBAGENTS_DB_PATH = join(testDirectory, "subagents.sqlite");
+const testDirectory = await fs.mkdtemp(
+	path.join(os.tmpdir(), "wincode-delegation-e2e-")
+);
+process.env.WINCODE_LOCAL_DB_PATH = path.join(
+	testDirectory,
+	"conversation.sqlite"
+);
+process.env.WINCODE_SUBAGENTS_DB_PATH = path.join(
+	testDirectory,
+	"subagents.sqlite"
+);
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
@@ -83,7 +91,7 @@ afterAll(async () => {
 	await pluginRuntime.shutdown();
 	taskStore.close();
 	restoreEnvironment();
-	await rm(testDirectory, { force: true, recursive: true });
+	await fs.rm(testDirectory, { force: true, recursive: true });
 });
 
 const CHILD_PROMPT = "Inspect the repository state.";

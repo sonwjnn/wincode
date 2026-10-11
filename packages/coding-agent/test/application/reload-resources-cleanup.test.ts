@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
@@ -27,10 +27,12 @@ import {
 import { createInteractiveRuntimeLifecycle } from "@/shared/runtime-lifecycle";
 import { reloadInteractiveResources } from "@/tui/commands/reload-resources";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "wincode-reload-cleanup-"));
+const root = await fs.mkdtemp(
+	path.join(os.tmpdir(), "wincode-reload-cleanup-")
+);
 
 afterAll(async () => {
-	await rm(root, { force: true, recursive: true });
+	await fs.rm(root, { force: true, recursive: true });
 });
 
 const configRuntimeFor = (workspace: string): ConfigRuntime => ({

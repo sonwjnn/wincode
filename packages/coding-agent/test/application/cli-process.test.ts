@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createCliProcessLauncher } from "../../bin/cli-process";
@@ -10,16 +10,16 @@ afterEach(async () => {
 	await Promise.all(
 		temporaryDirectories
 			.splice(0)
-			.map((directory) => rm(directory, { force: true, recursive: true }))
+			.map((directory) => fs.rm(directory, { force: true, recursive: true }))
 	);
 });
 
 test("mode launcher routes to the correct entrypoint and forwards CLI process state", async () => {
-	const directory = await mkdtemp(
+	const directory = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-cli-process-")
 	);
 	temporaryDirectories.push(directory);
-	const canonicalDirectory = await realpath(directory);
+	const canonicalDirectory = await fs.realpath(directory);
 	const resultPath = path.join(directory, "result.json");
 	const executionEntrypoint = path.join(directory, "execution.ts");
 	const interactiveEntrypoint = path.join(directory, "interactive.ts");

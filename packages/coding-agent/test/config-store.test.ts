@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { isUndefined } from "@wincode/utils";
 import { createConfigStore as createConfigStoreImplementation } from "@/shared/config/config-store";
 
@@ -405,34 +405,34 @@ describe("createConfigStore", () => {
 	});
 
 	test("loads JSON and JSONC documents from the real filesystem", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-config-"));
-		const homeRoot = join(root, "home");
-		const xdgConfigHome = join(root, "xdg");
-		const configRoot = join(xdgConfigHome, "wincode");
-		const workspace = join(root, "workspace");
-		const projectConfigRoot = join(workspace, ".wincode");
-		const projectJsonPath = join(projectConfigRoot, "settings.json");
-		const projectJsoncPath = join(projectConfigRoot, "settings.jsonc");
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-config-"));
+		const homeRoot = path.join(root, "home");
+		const xdgConfigHome = path.join(root, "xdg");
+		const configRoot = path.join(xdgConfigHome, "wincode");
+		const workspace = path.join(root, "workspace");
+		const projectConfigRoot = path.join(workspace, ".wincode");
+		const projectJsonPath = path.join(projectConfigRoot, "settings.json");
+		const projectJsoncPath = path.join(projectConfigRoot, "settings.jsonc");
 
 		try {
 			await Promise.all([
-				mkdir(configRoot, { recursive: true }),
-				mkdir(join(homeRoot, ".wincode"), { recursive: true }),
-				mkdir(projectConfigRoot, { recursive: true }),
+				fs.mkdir(configRoot, { recursive: true }),
+				fs.mkdir(path.join(homeRoot, ".wincode"), { recursive: true }),
+				fs.mkdir(projectConfigRoot, { recursive: true }),
 			]);
 			await Promise.all([
 				Bun.write(
-					join(configRoot, "wincode.json"),
+					path.join(configRoot, "wincode.json"),
 					JSON.stringify({
 						settings: { layers: { xdg: true }, selected: "xdg" },
 					})
 				),
 				Bun.write(
-					join(homeRoot, ".wincode", "settings.json"),
+					path.join(homeRoot, ".wincode", "settings.json"),
 					JSON.stringify({ settings: { layers: { home: true } } })
 				),
 				Bun.write(
-					join(workspace, "wincode.json"),
+					path.join(workspace, "wincode.json"),
 					JSON.stringify({ settings: { layers: { workspace: true } } })
 				),
 				Bun.write(
@@ -466,7 +466,7 @@ describe("createConfigStore", () => {
 				scope: "project",
 			});
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 

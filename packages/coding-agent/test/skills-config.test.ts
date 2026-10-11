@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { buildSkillRootDescriptors, discoverSkills } from "@/modules/skills";
 import { createConfigStore } from "@/shared/config/config-store";
 import { writeFixture } from "@/test/support/filesystem";
@@ -11,19 +11,21 @@ const skillFile = (name: string, description: string): string =>
 
 describe("configured Skills", () => {
 	test("loads an absolute path from global config with global scope", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-global-skills-"));
-		const homeRoot = join(root, "home");
-		const workspace = join(root, "workspace");
-		const globalSkills = join(root, "shared-skills");
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-global-skills-")
+		);
+		const homeRoot = path.join(root, "home");
+		const workspace = path.join(root, "workspace");
+		const globalSkills = path.join(root, "shared-skills");
 
 		try {
 			await Promise.all([
 				writeFixture(
-					join(homeRoot, ".wincode", "settings.json"),
+					path.join(homeRoot, ".wincode", "settings.json"),
 					JSON.stringify({ skills: { paths: [globalSkills] } })
 				),
 				writeFixture(
-					join(globalSkills, "global-configured", "SKILL.md"),
+					path.join(globalSkills, "global-configured", "SKILL.md"),
 					skillFile("global-configured", "Global configured")
 				),
 			]);
@@ -61,32 +63,41 @@ describe("configured Skills", () => {
 				},
 			]);
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 
 	test("prefers the home Wincode folder and ignores the obsolete XDG Wincode folder", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-skill-precedence-"));
-		const homeRoot = join(root, "home");
-		const workspace = join(root, "workspace");
-		const xdgConfigHome = join(root, "xdg");
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-skill-precedence-")
+		);
+		const homeRoot = path.join(root, "home");
+		const workspace = path.join(root, "workspace");
+		const xdgConfigHome = path.join(root, "xdg");
 
 		try {
 			await Promise.all([
 				writeFixture(
-					join(homeRoot, ".config", "opencode", "skills", "review", "SKILL.md"),
+					path.join(
+						homeRoot,
+						".config",
+						"opencode",
+						"skills",
+						"review",
+						"SKILL.md"
+					),
 					skillFile("review", "Legacy global")
 				),
 				writeFixture(
-					join(homeRoot, ".wincode", "skills", "review", "SKILL.md"),
+					path.join(homeRoot, ".wincode", "skills", "review", "SKILL.md"),
 					skillFile("review", "Wincode global")
 				),
 				writeFixture(
-					join(xdgConfigHome, "wincode", "skills", "review", "SKILL.md"),
+					path.join(xdgConfigHome, "wincode", "skills", "review", "SKILL.md"),
 					skillFile("review", "Wincode XDG")
 				),
 				writeFixture(
-					join(xdgConfigHome, "wincode", "skills", "xdg-only", "SKILL.md"),
+					path.join(xdgConfigHome, "wincode", "skills", "xdg-only", "SKILL.md"),
 					skillFile("xdg-only", "Wincode XDG only")
 				),
 			]);
@@ -103,45 +114,63 @@ describe("configured Skills", () => {
 				"Wincode global"
 			);
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 
 	test("loads legacy, Wincode, and configured folders through Wincode config", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-skills-"));
-		const homeRoot = join(root, "home");
-		const repository = join(root, "repository");
-		const workspace = join(repository, "packages", "app");
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-skills-"));
+		const homeRoot = path.join(root, "home");
+		const repository = path.join(root, "repository");
+		const workspace = path.join(repository, "packages", "app");
 
 		try {
-			await mkdir(join(repository, ".git"), { recursive: true });
+			await fs.mkdir(path.join(repository, ".git"), { recursive: true });
 			await Promise.all([
 				writeFixture(
-					join(homeRoot, ".agents", "skills", "legacy", "SKILL.md"),
+					path.join(homeRoot, ".agents", "skills", "legacy", "SKILL.md"),
 					skillFile("legacy", "Legacy global")
 				),
 				writeFixture(
-					join(homeRoot, ".wincode", "skills", "global-wincode", "SKILL.md"),
+					path.join(
+						homeRoot,
+						".wincode",
+						"skills",
+						"global-wincode",
+						"SKILL.md"
+					),
 					skillFile("global-wincode", "Wincode global")
 				),
 				writeFixture(
-					join(repository, ".wincode", "skills", "ancestor", "SKILL.md"),
+					path.join(repository, ".wincode", "skills", "ancestor", "SKILL.md"),
 					skillFile("ancestor", "Wincode ancestor")
 				),
 				writeFixture(
-					join(workspace, ".wincode", "skills", "review", "SKILL.md"),
+					path.join(workspace, ".wincode", "skills", "review", "SKILL.md"),
 					skillFile("review", "Conventional project")
 				),
 				writeFixture(
-					join(workspace, ".wincode", "first-skills", "review", "SKILL.md"),
+					path.join(
+						workspace,
+						".wincode",
+						"first-skills",
+						"review",
+						"SKILL.md"
+					),
 					skillFile("review", "First configured project")
 				),
 				writeFixture(
-					join(workspace, ".wincode", "second-skills", "review", "SKILL.md"),
+					path.join(
+						workspace,
+						".wincode",
+						"second-skills",
+						"review",
+						"SKILL.md"
+					),
 					skillFile("review", "Second configured project")
 				),
 				writeFixture(
-					join(workspace, ".wincode", "settings.json"),
+					path.join(workspace, ".wincode", "settings.json"),
 					JSON.stringify({
 						skills: { paths: ["first-skills", "second-skills"] },
 					})
@@ -160,12 +189,12 @@ describe("configured Skills", () => {
 			}).filter(({ source }) => source === "configured");
 			expect(configured.slice(-2)).toMatchObject([
 				{
-					path: join(workspace, ".wincode", "first-skills"),
+					path: path.join(workspace, ".wincode", "first-skills"),
 					scope: "project",
 					source: "configured",
 				},
 				{
-					path: join(workspace, ".wincode", "second-skills"),
+					path: path.join(workspace, ".wincode", "second-skills"),
 					scope: "project",
 					source: "configured",
 				},
@@ -188,7 +217,7 @@ describe("configured Skills", () => {
 				scope: "project",
 			});
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 });

@@ -12,11 +12,12 @@ import {
 	spyOn,
 	test,
 } from "bun:test";
-import { homedir } from "node:os";
+import * as os from "node:os";
 import {
 	MockTreeSitterClient,
 	type TestRendererSetup,
 } from "@opentui/core/testing";
+import { testRender } from "@opentui/react/test-utils";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -26,7 +27,12 @@ import {
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { toSubmissionId } from "@wincode/agent-core";
+import { createConnections as createDefaultConnections } from "@wincode/ai/connections";
 import { act, useCallback, useEffect, useRef, useState } from "react";
+import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
+import { ConnectionsProvider } from "@/modules/connections";
+import { ModelPricingProvider } from "@/modules/model-pricing";
+import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
@@ -44,6 +50,19 @@ import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/submission-types";
+import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { SessionView } from "@/modules/sessions/ui/views/session-view";
+import { ConfigProvider } from "@/shared/config/config-provider";
+import { createConfigStore } from "@/shared/config/config-store";
+import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
+import {
+	KeyboardLayerProvider,
+	useKeyboardLayer,
+} from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
+import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import {
 	agentId,
 	attachmentId,
@@ -52,43 +71,6 @@ import {
 	sessionMessageId,
 	steeringMessageId,
 } from "../support/identifiers";
-
-const { testRender } = await import("@opentui/react/test-utils");
-const { AgentRegistryProvider, useAgentRegistry } = await import(
-	"@/modules/agents"
-);
-const { createConnections: createDefaultConnections } = await import(
-	"@wincode/ai/connections"
-);
-const { ConnectionsProvider } = await import("@/modules/connections");
-const { ModelPricingProvider } = await import("@/modules/model-pricing");
-const { PromptConfigProvider } = await import(
-	"@/modules/prompt-settings/context/prompt-config-provider"
-);
-const { ConfigProvider } = await import("@/shared/config/config-provider");
-const { createConfigStore } = await import("@/shared/config/config-store");
-const { DialogProvider } = await import(
-	"@/shared/providers/dialog/dialog-provider"
-);
-const { KeyboardLayerProvider, useKeyboardLayer } = await import(
-	"@/shared/providers/keyboard-layer/keyboard-layer-provider"
-);
-const { ThemeProvider } = await import(
-	"@/shared/providers/theme/theme-provider"
-);
-const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
-const { ToastProvider } = await import(
-	"@/shared/providers/toast/toast-provider"
-);
-const { CommandControllerProvider } = await import(
-	"@/tui/commands/command-controller-provider"
-);
-const { setMarkdownTreeSitterClientForTests } = await import(
-	"@/modules/sessions/ui/messages/markdown-message-part"
-);
-const { SessionView } = await import(
-	"@/modules/sessions/ui/views/session-view"
-);
 
 type Deferred<T> = {
 	promise: Promise<T>;
@@ -481,7 +463,9 @@ describe("SessionView initial submission", () => {
 		const workspace = process.cwd();
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
-				<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
 					<ToastProvider>
 						<ConnectionsProvider connections={createConnections()}>
 							<AgentRegistryProvider>
@@ -573,7 +557,9 @@ describe("SessionView initial submission", () => {
 		const workspace = process.cwd();
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
-				<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
 					<ToastProvider>
 						<ConnectionsProvider connections={createConnections()}>
 							<AgentRegistryProvider>
@@ -653,7 +639,9 @@ const renderSessionView = async ({
 	const commandLayer = { isTop: false };
 	const setup = await testRender(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+			<ConfigProvider
+				value={{ configStore, homeRoot: os.homedir(), workspace }}
+			>
 				<ToastProvider>
 					<ConnectionsProvider connections={createConnections()}>
 						<AgentRegistryProvider>

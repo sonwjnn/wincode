@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { agentIdSchema } from "@wincode/agent-core";
@@ -9,7 +9,7 @@ const definition = (name: string, description: string, instructions: string) =>
 	`---\nname: ${name}\ndescription: ${description}\nrole: subagent\ntools: [read, grep]\n---\n${instructions}\n`;
 
 test("trusted project Markdown overrides user and package agents by name", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-agents-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-agents-"));
 	const builtinRoot = path.join(root, "package-agents");
 	const userDataDir = path.join(root, "user-data");
 	const workspace = path.join(root, "workspace");
@@ -67,12 +67,14 @@ test("trusted project Markdown overrides user and package agents by name", async
 			agentIdSchema.parse("project-only")
 		);
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("a trusted disabled definition suppresses the lower-scope agent", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-disabled-agent-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-disabled-agent-")
+	);
 	const builtinRoot = path.join(root, "package-agents");
 	const userDataDir = path.join(root, "user-data");
 	const workspace = path.join(root, "workspace");
@@ -94,12 +96,14 @@ test("a trusted disabled definition suppresses the lower-scope agent", async () 
 		});
 		expect(discovered.agents).toEqual([]);
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("an invalid higher-scope Markdown file does not hide the packaged agent", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-invalid-agent-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-invalid-agent-")
+	);
 	const builtinRoot = path.join(root, "package-agents");
 	const userDataDir = path.join(root, "user-data");
 
@@ -125,12 +129,12 @@ test("an invalid higher-scope Markdown file does not hide the packaged agent", a
 		expect(discovered.diagnostics).toHaveLength(1);
 		expect(discovered.diagnostics[0]).toContain("Ignored invalid Agent file");
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("an unsupported higher-scope model does not hide the packaged Agent", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-agent-model-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-agent-model-"));
 	const builtinRoot = path.join(root, "package-agents");
 	const userDataDir = path.join(root, "user-data");
 
@@ -156,12 +160,12 @@ test("an unsupported higher-scope model does not hide the packaged Agent", async
 		expect(discovered.diagnostics[0]).toContain("Ignored invalid Agent file");
 		expect(discovered.diagnostics[0]).toContain("Model must be a supported");
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("Markdown agents reject ThinkingLevels unsupported by the selected model", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-invalid-agent-thinking-level-")
 	);
 	const userDataDir = path.join(root, "user-data");
@@ -184,6 +188,6 @@ test("Markdown agents reject ThinkingLevels unsupported by the selected model", 
 			"Thinking level requires a configured model"
 		);
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });

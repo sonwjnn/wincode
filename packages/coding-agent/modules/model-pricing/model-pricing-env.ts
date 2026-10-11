@@ -17,14 +17,21 @@ const modelPricingEnvSchema = z.object({
 	WINCODE_MODEL_PRICING_URL: z.url().optional(),
 });
 
-export const modelPricingEnv = modelPricingEnvSchema.parse({
-	WINCODE_MODEL_PRICING_OFFLINE: emptyStringAsUndefined(
-		process.env.WINCODE_MODEL_PRICING_OFFLINE
-	),
-	WINCODE_MODEL_PRICING_TTL_HOURS: emptyStringAsUndefined(
-		process.env.WINCODE_MODEL_PRICING_TTL_HOURS
-	),
-	WINCODE_MODEL_PRICING_URL: emptyStringAsUndefined(
-		process.env.WINCODE_MODEL_PRICING_URL
-	),
-});
+type ModelPricingEnv = z.infer<typeof modelPricingEnvSchema>;
+
+/**
+ * Reads the pricing overrides at call time: a test (or a caller) that sets the
+ * variables after this module loads must still be honored.
+ */
+export const getModelPricingEnv = (): ModelPricingEnv =>
+	modelPricingEnvSchema.parse({
+		WINCODE_MODEL_PRICING_OFFLINE: emptyStringAsUndefined(
+			process.env.WINCODE_MODEL_PRICING_OFFLINE
+		),
+		WINCODE_MODEL_PRICING_TTL_HOURS: emptyStringAsUndefined(
+			process.env.WINCODE_MODEL_PRICING_TTL_HOURS
+		),
+		WINCODE_MODEL_PRICING_URL: emptyStringAsUndefined(
+			process.env.WINCODE_MODEL_PRICING_URL
+		),
+	});

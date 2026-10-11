@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveMcpConfig } from "@wincode/mcp";
@@ -16,7 +16,7 @@ import { discoverSkills } from "@/modules/skills";
 const temporaryDirectories: string[] = [];
 
 const createDirectory = async (): Promise<string> => {
-	const directory = await mkdtemp(
+	const directory = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-project-trust-")
 	);
 	temporaryDirectories.push(directory);
@@ -27,7 +27,7 @@ afterEach(async () => {
 	await Promise.all(
 		temporaryDirectories
 			.splice(0)
-			.map((directory) => rm(directory, { force: true, recursive: true }))
+			.map((directory) => fs.rm(directory, { force: true, recursive: true }))
 	);
 });
 
@@ -45,8 +45,8 @@ describe("Coding-Agent Application Project trust", () => {
 			"project-only.md"
 		);
 		await Promise.all([
-			mkdir(builtinRoot, { recursive: true }),
-			mkdir(path.dirname(agentPath), { recursive: true }),
+			fs.mkdir(builtinRoot, { recursive: true }),
+			fs.mkdir(path.dirname(agentPath), { recursive: true }),
 		]);
 		await Bun.write(
 			agentPath,
@@ -80,7 +80,7 @@ describe("Coding-Agent Application Project trust", () => {
 			trustedProjectRoots: trusted.trustedProjectRoots,
 			userDataDir,
 		});
-		expect(trusted.trustedProjectRoots).toContain(await realpath(workspace));
+		expect(trusted.trustedProjectRoots).toContain(await fs.realpath(workspace));
 		expect(
 			trustedAgents.agents.some(({ agent }) => agent.id === "project-only")
 		).toBe(true);
@@ -92,7 +92,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(homeRoot, ".local", "share", "wincode");
 		const marker = path.join(directory, "plugin-evaluated");
-		await Promise.all([mkdir(workspace, { recursive: true })]);
+		await Promise.all([fs.mkdir(workspace, { recursive: true })]);
 		await Promise.all([
 			Bun.write(
 				path.join(homeRoot, ".wincode", "settings.json"),
@@ -130,7 +130,7 @@ describe("Coding-Agent Application Project trust", () => {
 		]);
 		await Bun.write(
 			path.join(workspace, "project-plugin.ts"),
-			`import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "evaluated");\nexport default (api: { definePlugin(input: { id: string }): void }) => api.definePlugin({ id: "project_plugin" });\n`
+			`import * as fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(marker)}, "evaluated");\nexport default (api: { definePlugin(input: { id: string }): void }) => api.definePlugin({ id: "project_plugin" });\n`
 		);
 
 		const runtime = await initializeApplicationRuntime(
@@ -179,7 +179,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const homeRoot = path.join(directory, "home");
 		const pluginMarker = path.join(directory, "plugin-evaluated");
 		const serverMarker = path.join(directory, "mcp-started");
-		await Promise.all([mkdir(workspace, { recursive: true })]);
+		await Promise.all([fs.mkdir(workspace, { recursive: true })]);
 		await Promise.all([
 			Bun.write(
 				path.join(workspace, ".wincode", "settings.json"),
@@ -201,7 +201,7 @@ describe("Coding-Agent Application Project trust", () => {
 			),
 			Bun.write(
 				path.join(workspace, "project-plugin.ts"),
-				`import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(pluginMarker)}, "evaluated");\nexport default (api: { definePlugin(input: { id: string }): void }) => api.definePlugin({ id: "project_plugin" });\n`
+				`import * as fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(pluginMarker)}, "evaluated");\nexport default (api: { definePlugin(input: { id: string }): void }) => api.definePlugin({ id: "project_plugin" });\n`
 			),
 		]);
 		let promptCount = 0;
@@ -248,7 +248,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const configDirectory = path.join(workspace, ".wincode");
 		const marker = path.join(directory, "plugin-evaluated");
 		const userDataDir = path.join(directory, "user-data");
-		await mkdir(path.join(configDirectory, "plugins"), { recursive: true });
+		await fs.mkdir(path.join(configDirectory, "plugins"), { recursive: true });
 		await Promise.all([
 			Bun.write(
 				path.join(configDirectory, "settings.json"),
@@ -268,7 +268,7 @@ describe("Coding-Agent Application Project trust", () => {
 		]);
 		await Bun.write(
 			path.join(configDirectory, "plugins", "project-plugin.ts"),
-			`import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "evaluated");\nexport default (api) => { const plugin = api.definePlugin({ id: "project_plugin" }); plugin.registerResource("loaded", true); };\n`
+			`import * as fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(marker)}, "evaluated");\nexport default (api) => { const plugin = api.definePlugin({ id: "project_plugin" }); plugin.registerResource("loaded", true); };\n`
 		);
 
 		const runtime = await initializeApplicationRuntime(
@@ -312,7 +312,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(directory, "user-data");
-		await mkdir(workspace, { recursive: true });
+		await fs.mkdir(workspace, { recursive: true });
 		const configPath = path.join(workspace, ".wincode/settings.json");
 		await Bun.write(
 			configPath,
@@ -333,7 +333,7 @@ describe("Coding-Agent Application Project trust", () => {
 				userDataDir,
 				promptProjectTrust: async (request) => {
 					prompts += 1;
-					expect(request.workspace).toBe(await realpath(workspace));
+					expect(request.workspace).toBe(await fs.realpath(workspace));
 					await Bun.write(
 						configPath,
 						JSON.stringify({ settings: { afterPrompt: true } })
@@ -386,10 +386,10 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
 		await Promise.all([
-			mkdir(path.join(workspace, ".wincode", "skills", "project-skill"), {
+			fs.mkdir(path.join(workspace, ".wincode", "skills", "project-skill"), {
 				recursive: true,
 			}),
-			mkdir(path.join(homeRoot, ".wincode", "skills", "personal-skill"), {
+			fs.mkdir(path.join(homeRoot, ".wincode", "skills", "personal-skill"), {
 				recursive: true,
 			}),
 		]);
@@ -440,10 +440,10 @@ describe("Coding-Agent Application Project trust", () => {
 		);
 		const commandsRoot = path.join(realWorkspace, ".wincode", "commands");
 		await Promise.all([
-			mkdir(skillsRoot, { recursive: true }),
-			mkdir(commandsRoot, { recursive: true }),
+			fs.mkdir(skillsRoot, { recursive: true }),
+			fs.mkdir(commandsRoot, { recursive: true }),
 		]);
-		await symlink(realWorkspace, workspaceAlias, "dir");
+		await fs.symlink(realWorkspace, workspaceAlias, "dir");
 		await Promise.all([
 			Bun.write(
 				path.join(skillsRoot, "SKILL.md"),
@@ -485,7 +485,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(directory, "user-data");
-		await mkdir(workspace, { recursive: true });
+		await fs.mkdir(workspace, { recursive: true });
 		await Bun.write(
 			path.join(workspace, ".wincode/settings.json"),
 			JSON.stringify({ settings: { projectOnly: true } })
@@ -545,7 +545,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
 		const userDataDir = path.join(directory, "user-data");
-		await mkdir(workspace, { recursive: true });
+		await fs.mkdir(workspace, { recursive: true });
 		await Bun.write(path.join(workspace, ".wincode/settings.json"), "{}");
 
 		await saveProjectTrustDecision({
@@ -565,7 +565,9 @@ describe("Coding-Agent Application Project trust", () => {
 			workspace,
 		});
 
-		expect(resolution.trustedProjectRoots).toContain(await realpath(workspace));
+		expect(resolution.trustedProjectRoots).toContain(
+			await fs.realpath(workspace)
+		);
 		expect(resolution.diagnostics).toEqual([]);
 	});
 
@@ -575,8 +577,8 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(parent, "repo");
 		const projectTrustDir = path.join(directory, "user-wincode");
 		await Promise.all([
-			mkdir(path.join(parent, ".git"), { recursive: true }),
-			mkdir(workspace, { recursive: true }),
+			fs.mkdir(path.join(parent, ".git"), { recursive: true }),
+			fs.mkdir(workspace, { recursive: true }),
 		]);
 		await Bun.write(path.join(workspace, ".wincode/settings.json"), "{}");
 
@@ -603,16 +605,18 @@ describe("Coding-Agent Application Project trust", () => {
 			workspace,
 		});
 
-		expect(resolution.trustedProjectRoots).toContain(await realpath(workspace));
+		expect(resolution.trustedProjectRoots).toContain(
+			await fs.realpath(workspace)
+		);
 		expect(status.currentSessionTrusted).toBe(true);
-		expect(status.parentDirectory).toBe(await realpath(parent));
+		expect(status.parentDirectory).toBe(await fs.realpath(parent));
 		expect(status.protectedRoots).toEqual([
 			{
 				currentSessionStatus: "trusted",
-				projectRoot: await realpath(workspace),
+				projectRoot: await fs.realpath(workspace),
 				savedDecision: {
 					decision: "trust",
-					directory: await realpath(parent),
+					directory: await fs.realpath(parent),
 					inherited: true,
 				},
 			},
@@ -624,7 +628,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(directory, "user-data");
-		await mkdir(workspace, { recursive: true });
+		await fs.mkdir(workspace, { recursive: true });
 		const runtime = await initializeApplicationRuntime(
 			{
 				cwd: workspace,
@@ -681,8 +685,8 @@ describe("Coding-Agent Application Project trust", () => {
 		const descendant = path.join(projectRoot, "nested");
 		const userDataDir = path.join(directory, "user-data");
 		await Promise.all([
-			mkdir(projectRoot, { recursive: true }),
-			mkdir(path.join(descendant, ".git"), { recursive: true }),
+			fs.mkdir(projectRoot, { recursive: true }),
+			fs.mkdir(path.join(descendant, ".git"), { recursive: true }),
 		]);
 		await Promise.all([
 			Bun.write(
@@ -739,8 +743,8 @@ describe("Coding-Agent Application Project trust", () => {
 		const descendant = path.join(projectRoot, "nested");
 		const userDataDir = path.join(directory, "user-data");
 		await Promise.all([
-			mkdir(path.join(projectRoot, ".git"), { recursive: true }),
-			mkdir(path.join(descendant, ".git"), { recursive: true }),
+			fs.mkdir(path.join(projectRoot, ".git"), { recursive: true }),
+			fs.mkdir(path.join(descendant, ".git"), { recursive: true }),
 		]);
 		await Promise.all([
 			Bun.write(
@@ -792,12 +796,16 @@ describe("Coding-Agent Application Project trust", () => {
 	test("AGENTS.md alone does not prompt for Project trust", async () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
-		await mkdir(workspace, { recursive: true });
+		await fs.mkdir(workspace, { recursive: true });
 		await Bun.write(path.join(workspace, "AGENTS.md"), "untrusted context");
 		await Promise.all([
-			mkdir(path.join(workspace, ".wincode", "skills"), { recursive: true }),
-			mkdir(path.join(workspace, ".wincode", "commands"), { recursive: true }),
-			mkdir(path.join(workspace, ".wincode", "plugins"), { recursive: true }),
+			fs.mkdir(path.join(workspace, ".wincode", "skills"), { recursive: true }),
+			fs.mkdir(path.join(workspace, ".wincode", "commands"), {
+				recursive: true,
+			}),
+			fs.mkdir(path.join(workspace, ".wincode", "plugins"), {
+				recursive: true,
+			}),
 		]);
 		let prompts = 0;
 		const runtime = await initializeApplicationRuntime(
@@ -832,8 +840,8 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(repository, "nested");
 		const projectTrustDir = path.join(directory, "user-wincode");
 		await Promise.all([
-			mkdir(path.join(repository, ".git"), { recursive: true }),
-			mkdir(workspace, { recursive: true }),
+			fs.mkdir(path.join(repository, ".git"), { recursive: true }),
+			fs.mkdir(workspace, { recursive: true }),
 		]);
 		await Promise.all([
 			Bun.write(path.join(repository, ".wincode/settings.json"), "{}"),
@@ -847,7 +855,10 @@ describe("Coding-Agent Application Project trust", () => {
 				promptedRoots.push(request.workspace);
 				expect(
 					request.protectedRoots.map(({ projectRoot }) => projectRoot)
-				).toEqual([await realpath(repository), await realpath(workspace)]);
+				).toEqual([
+					await fs.realpath(repository),
+					await fs.realpath(workspace),
+				]);
 				expect(
 					request.protectedRoots.every(
 						({ currentSessionStatus }) => currentSessionStatus === "pending"
@@ -860,9 +871,9 @@ describe("Coding-Agent Application Project trust", () => {
 			workspace,
 		});
 
-		expect(promptedRoots).toEqual([await realpath(workspace)]);
+		expect(promptedRoots).toEqual([await fs.realpath(workspace)]);
 		expect(new Set(resolution.trustedProjectRoots)).toEqual(
-			new Set([await realpath(repository), await realpath(workspace)])
+			new Set([await fs.realpath(repository), await fs.realpath(workspace)])
 		);
 	});
 
@@ -871,7 +882,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(directory, "user-data");
-		await mkdir(workspace, { recursive: true });
+		await fs.mkdir(workspace, { recursive: true });
 		await Bun.write(
 			path.join(workspace, ".wincode/settings.json"),
 			JSON.stringify({ settings: { projectOnly: true } })
@@ -913,8 +924,8 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(repository, "nested");
 		const projectTrustDir = path.join(directory, "user-wincode");
 		await Promise.all([
-			mkdir(path.join(repository, ".git"), { recursive: true }),
-			mkdir(workspace, { recursive: true }),
+			fs.mkdir(path.join(repository, ".git"), { recursive: true }),
+			fs.mkdir(workspace, { recursive: true }),
 		]);
 		await Promise.all([
 			Bun.write(path.join(repository, ".wincode/settings.json"), "{}"),
@@ -924,7 +935,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const resolution = await resolveProjectTrust({
 			mode: "interactive",
 			prompt: async (request) => {
-				expect(request.parentDirectory).toBe(await realpath(repository));
+				expect(request.parentDirectory).toBe(await fs.realpath(repository));
 				return "trust-parent";
 			},
 			projectTrustDir,
@@ -938,19 +949,19 @@ describe("Coding-Agent Application Project trust", () => {
 		});
 
 		expect(new Set(resolution.trustedProjectRoots)).toEqual(
-			new Set([await realpath(repository), await realpath(workspace)])
+			new Set([await fs.realpath(repository), await fs.realpath(workspace)])
 		);
 		expect(
 			status.protectedRoots.map(({ savedDecision }) => savedDecision)
 		).toEqual([
 			{
 				decision: "trust",
-				directory: await realpath(repository),
+				directory: await fs.realpath(repository),
 				inherited: false,
 			},
 			{
 				decision: "trust",
-				directory: await realpath(repository),
+				directory: await fs.realpath(repository),
 				inherited: true,
 			},
 		]);
@@ -963,8 +974,8 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(parent, "workspace");
 		const projectTrustDir = path.join(directory, "user-wincode");
 		await Promise.all([
-			mkdir(path.join(repository, ".git"), { recursive: true }),
-			mkdir(workspace, { recursive: true }),
+			fs.mkdir(path.join(repository, ".git"), { recursive: true }),
+			fs.mkdir(workspace, { recursive: true }),
 		]);
 		await Promise.all(
 			[repository, parent, workspace].map((root) =>
@@ -975,7 +986,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const resolution = await resolveProjectTrust({
 			mode: "interactive",
 			prompt: async (request) => {
-				expect(request.parentDirectory).toBe(await realpath(parent));
+				expect(request.parentDirectory).toBe(await fs.realpath(parent));
 				return "trust-parent";
 			},
 			projectTrustDir,
@@ -984,7 +995,7 @@ describe("Coding-Agent Application Project trust", () => {
 		});
 
 		expect(new Set(resolution.trustedProjectRoots)).toEqual(
-			new Set([await realpath(parent), await realpath(workspace)])
+			new Set([await fs.realpath(parent), await fs.realpath(workspace)])
 		);
 	});
 
@@ -994,9 +1005,9 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(repository, "nested");
 		const projectTrustDir = path.join(directory, "user-wincode");
 		await Promise.all([
-			mkdir(path.join(repository, ".git"), { recursive: true }),
-			mkdir(workspace, { recursive: true }),
-			mkdir(projectTrustDir, { recursive: true }),
+			fs.mkdir(path.join(repository, ".git"), { recursive: true }),
+			fs.mkdir(workspace, { recursive: true }),
+			fs.mkdir(projectTrustDir, { recursive: true }),
 		]);
 		await Promise.all([
 			Bun.write(path.join(repository, ".wincode/settings.json"), "{}"),
@@ -1006,8 +1017,8 @@ describe("Coding-Agent Application Project trust", () => {
 				JSON.stringify({
 					version: 1,
 					decisions: [
-						{ directory: await realpath(repository), decision: "trust" },
-						{ directory: await realpath(workspace), decision: "deny" },
+						{ directory: await fs.realpath(repository), decision: "trust" },
+						{ directory: await fs.realpath(workspace), decision: "deny" },
 					],
 				})
 			),
@@ -1015,7 +1026,7 @@ describe("Coding-Agent Application Project trust", () => {
 
 		const status = await getProjectTrustStatus({
 			projectTrustDir,
-			trustedProjectRoots: [await realpath(repository)],
+			trustedProjectRoots: [await fs.realpath(repository)],
 			workspace,
 		});
 
@@ -1023,19 +1034,19 @@ describe("Coding-Agent Application Project trust", () => {
 		expect(status.protectedRoots).toEqual([
 			{
 				currentSessionStatus: "trusted",
-				projectRoot: await realpath(repository),
+				projectRoot: await fs.realpath(repository),
 				savedDecision: {
 					decision: "trust",
-					directory: await realpath(repository),
+					directory: await fs.realpath(repository),
 					inherited: false,
 				},
 			},
 			{
 				currentSessionStatus: "untrusted",
-				projectRoot: await realpath(workspace),
+				projectRoot: await fs.realpath(workspace),
 				savedDecision: {
 					decision: "deny",
-					directory: await realpath(workspace),
+					directory: await fs.realpath(workspace),
 					inherited: false,
 				},
 			},
@@ -1047,7 +1058,7 @@ describe("Coding-Agent Application Project trust", () => {
 		let promptCount = 0;
 		for (const mode of ["print", "json", "rpc", "sdk"] as const) {
 			const workspace = path.join(directory, mode);
-			await mkdir(workspace, { recursive: true });
+			await fs.mkdir(workspace, { recursive: true });
 			await Bun.write(path.join(workspace, ".wincode/settings.json"), "{}");
 			const resolution = await resolveProjectTrust({
 				mode,

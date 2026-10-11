@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
@@ -144,7 +144,7 @@ test("a restricted registry falls back from a default Agent whose required tools
 });
 
 test("untrusted project registrations stay out of the shared catalog", async () => {
-	const projectRoot = await mkdtemp(
+	const projectRoot = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-agent-trust-")
 	);
 	const workspace = path.join(projectRoot, "nested-workspace");
@@ -170,6 +170,6 @@ test("untrusted project registrations stay out of the shared catalog", async () 
 		expect(denied.agents.some(({ id }) => id === "project-helper")).toBe(false);
 		expect(trusted.agents.some(({ id }) => id === "project-helper")).toBe(true);
 	} finally {
-		await rm(projectRoot, { force: true, recursive: true });
+		await fs.rm(projectRoot, { force: true, recursive: true });
 	}
 });
