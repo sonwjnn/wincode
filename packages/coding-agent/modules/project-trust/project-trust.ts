@@ -81,7 +81,7 @@ type TrustFile = Readonly<{
 }>;
 
 const TRUST_FILE_NAME = "project-trust.json";
-const CONFIG_NAMES = ["wincode.json", "wincode.jsonc"] as const;
+const CONFIG_NAMES = ["settings.json", "settings.jsonc", "mcp.json"] as const;
 
 const pathContains = (parent: string, target: string): boolean => {
 	const relative = path.relative(parent, target);
@@ -159,11 +159,10 @@ const hasProjectAgentDefinition = async (
 const hasProtectedProjectResources = async (
 	projectRoot: string
 ): Promise<boolean> => {
-	for (const configRoot of [projectRoot, path.join(projectRoot, ".wincode")]) {
-		for (const name of CONFIG_NAMES) {
-			if (await exists(path.join(configRoot, name))) {
-				return true;
-			}
+	const configRoot = path.join(projectRoot, ".wincode");
+	for (const name of CONFIG_NAMES) {
+		if (await exists(path.join(configRoot, name))) {
+			return true;
 		}
 	}
 	return (

@@ -20,6 +20,7 @@
     "@modelcontextprotocol/client": "^2.0.0",
     "@wincode/agent-core": "workspace:*",
     "@wincode/utils": "workspace:*",
+    "open": "^10.2.0",
     "type-fest": "catalog:",
     "zod": "catalog:"
   },

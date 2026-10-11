@@ -3,6 +3,9 @@ import { fromAny } from "@total-typescript/shoehorn";
 import type {
 	LocalMcpServerConfig,
 	McpClient,
+	McpClientResource,
+	McpClientResourceContent,
+	McpClientResourceTemplate,
 	McpClientTool,
 	McpConfigResult,
 	McpRegistry,
@@ -10,7 +13,11 @@ import type {
 	RemoteMcpServerConfig,
 	ResolvedMcpServerConfig,
 } from "@wincode/mcp";
-import { createMcpRegistry, type McpRegistryDeps } from "@wincode/mcp";
+import {
+	createMcpRegistry,
+	type McpRegistryDeps,
+	qualifyMcpToolName,
+} from "@wincode/mcp";
 import { isNull, isUndefined } from "@wincode/utils";
 import { agentId } from "../support/identifiers";
 
@@ -21,6 +28,12 @@ class FakeMcpClient implements McpClient {
 	connectFailure: Error | null = null;
 	listFailure: Error | null = null;
 	tools: readonly McpClientTool[];
+	resources: readonly McpClientResource[] = [];
+	resourceTemplates: readonly McpClientResourceTemplate[] = [];
+	resourceContents: readonly McpClientResourceContent[] = [];
+	resourceCursor: string | undefined;
+	resourceTemplateCursor: string | undefined;
+	resourceReadUri: string | undefined;
 	callImpl: (
 		name: string,
 		input: unknown,
@@ -60,6 +73,36 @@ class FakeMcpClient implements McpClient {
 			throw this.listFailure;
 		}
 		return this.tools;
+	}
+
+	async listResources(cursor?: string, signal?: AbortSignal) {
+		if (signal?.aborted) {
+			throw new DOMException("Aborted", "AbortError");
+		}
+		this.resourceCursor = cursor;
+		return {
+			resources: this.resources,
+			...(cursor === undefined ? { nextCursor: "next" } : {}),
+		};
+	}
+
+	async listResourceTemplates(cursor?: string, signal?: AbortSignal) {
+		if (signal?.aborted) {
+			throw new DOMException("Aborted", "AbortError");
+		}
+		this.resourceTemplateCursor = cursor;
+		return {
+			resourceTemplates: this.resourceTemplates,
+			...(cursor === undefined ? { nextCursor: "next-template" } : {}),
+		};
+	}
+
+	async readResource(uri: string, signal?: AbortSignal) {
+		if (signal?.aborted) {
+			throw new DOMException("Aborted", "AbortError");
+		}
+		this.resourceReadUri = uri;
+		return this.resourceContents;
 	}
 
 	callTool: McpClient["callTool"] = async (name, input, signal) =>
@@ -182,6 +225,117 @@ describe("createMcpRegistry", () => {
 		expect(snapshot.manifest).toHaveLength(1);
 		expect(snapshot.tools.size).toBe(1);
 		expect(demo.connectCount).toBe(1);
+	});
+
+	test("startup schedules server connection without waiting for it", async () => {
+		const connected = Promise.withResolvers<void>();
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		demo.connectImpl = () => connected.promise;
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo")],
+		});
+
+		await registry.initialize(false);
+		expect(demo.connectCount).toBe(1);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "connecting" })
+		);
+		connected.resolve();
+		await registry.initialize();
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "connected" })
+		);
+		await registry.close();
+	});
+
+	test("hidden tools stay unreachable while exact direct overrides remain model-visible", async () => {
+		const mixed = new FakeMcpClient("mixed", [
+			tool("public"),
+			tool("private"),
+			tool("internal"),
+		]);
+		const config = {
+			...serverConfig("mixed"),
+			exposure: "hidden" as const,
+			toolExposure: { public: "direct", private: "hidden" } as const,
+		};
+		const { registry } = harness({
+			clients: { mixed },
+			configs: [config],
+		});
+		const snapshot = await registry.createSnapshot(agentId("build"));
+
+		expect(snapshot.manifest.map(({ name }) => name)).toEqual([
+			await qualifyMcpToolName("mixed", "public"),
+		]);
+		expect(
+			snapshot.tools.has(await qualifyMcpToolName("mixed", "private"))
+		).toBe(false);
+		const hiddenResult = await registry.execute(
+			snapshot,
+			await qualifyMcpToolName("mixed", "private"),
+			{}
+		);
+		expect(hiddenResult.isError).toBe(true);
+		expect(JSON.stringify(hiddenResult.content)).toContain("Unknown MCP tool");
+		await registry.close();
+	});
+
+	test("lists paginated resources and reads content only from direct servers", async () => {
+		const visible = new FakeMcpClient("visible");
+		visible.resources = [
+			{ name: "notes", uri: "file:///notes", mimeType: "text/plain" },
+		];
+		visible.resourceTemplates = [
+			{ name: "project-file", uriTemplate: "file:///projects/{name}" },
+		];
+		visible.resourceContents = [
+			{ uri: "file:///notes", mimeType: "text/plain", text: "hello" },
+		];
+		const hidden = new FakeMcpClient("hidden");
+		const { registry } = harness({
+			clients: { visible, hidden },
+			configs: [
+				serverConfig("visible"),
+				{ ...serverConfig("hidden"), exposure: "hidden" },
+			],
+		});
+		await registry.initialize();
+
+		const page = await registry.listResources("visible");
+		expect(page.resources).toEqual([
+			{
+				name: "notes",
+				server: "visible",
+				uri: "file:///notes",
+				mimeType: "text/plain",
+			},
+		]);
+		expect(page.nextCursor).toBe("next");
+		expect(visible.resourceCursor).toBeUndefined();
+
+		const nextPage = await registry.listResources("visible", "page-2");
+		expect(nextPage.nextCursor).toBeUndefined();
+		expect(visible.resourceCursor).toBe("page-2");
+
+		const templates = await registry.listResourceTemplates("visible");
+		expect(templates.resourceTemplates).toEqual([
+			{
+				name: "project-file",
+				server: "visible",
+				uriTemplate: "file:///projects/{name}",
+			},
+		]);
+		expect(templates.nextCursor).toBe("next-template");
+
+		const contents = await registry.readResource("visible", "file:///notes");
+		expect(visible.resourceReadUri).toBe("file:///notes");
+		expect(contents.contents).toEqual(visible.resourceContents);
+		await expect(
+			registry.readResource("hidden", "file:///secret")
+		).rejects.toThrow("MCP resource is unavailable");
+		await registry.close();
 	});
 
 	test("connects enabled servers concurrently and isolates failures", async () => {
@@ -409,6 +563,134 @@ describe("createMcpRegistry", () => {
 		release?.();
 		const result = await pending;
 		expect(result.isError).toBe(false);
+	});
+
+	test("a degraded server reconnects on the next tool call without replaying the failed operation", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		const callInputs: unknown[] = [];
+		demo.callImpl = async (_name, input) => {
+			callInputs.push(input);
+			if (callInputs.length === 1) {
+				throw new Error("fetch failed");
+			}
+			return { content: [{ type: "text", text: "recovered" }] };
+		};
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { type: "remote" })],
+		});
+		const snapshot = await registry.createSnapshot(agentId("same-turn"));
+		const toolName = snapshot.manifest[0]?.name ?? "missing";
+		const firstResult = await registry.execute(snapshot, toolName, {
+			request: "first",
+		});
+		expect(firstResult.isError).toBe(true);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "degraded" })
+		);
+
+		const nextResult = await registry.execute(snapshot, toolName, {
+			request: "next",
+		});
+		expect(nextResult).toMatchObject({
+			content: [{ type: "text", text: "recovered" }],
+			isError: false,
+		});
+		const followingResult = await registry.execute(snapshot, toolName, {
+			request: "following",
+		});
+		expect(followingResult.isError).toBe(false);
+		expect(callInputs).toEqual([
+			{ request: "first" },
+			{ request: "next" },
+			{ request: "following" },
+		]);
+		expect(demo.connectCount).toBe(2);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "connected" })
+		);
+		await registry.close();
+	});
+
+	test("does not execute a new call when reconnection changes the MCP tool contract", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		let callCount = 0;
+		demo.callImpl = async () => {
+			callCount += 1;
+			if (callCount === 1) {
+				demo.tools = [
+					{
+						...tool("echo"),
+						inputSchema: {
+							properties: { text: { type: "string" } },
+							type: "object",
+						},
+					},
+				];
+				throw new Error("fetch failed");
+			}
+			return { content: [] };
+		};
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { type: "remote" })],
+		});
+		const snapshot = await registry.createSnapshot(agentId("same-turn"));
+		const toolName = snapshot.manifest[0]?.name ?? "missing";
+
+		const firstResult = await registry.execute(snapshot, toolName, {
+			request: "first",
+		});
+		const nextResult = await registry.execute(snapshot, toolName, {
+			text: "next",
+		});
+
+		expect(firstResult.isError).toBe(true);
+		expect(nextResult).toMatchObject({ isError: true });
+		expect(JSON.stringify(nextResult.content) ?? "").toContain(
+			"changed after reconnect"
+		);
+		expect(callCount).toBe(1);
+		expect(demo.connectCount).toBe(2);
+		await registry.close();
+	});
+
+	test("reports reconnect failure instead of mislabeling it as a contract change", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		let callCount = 0;
+		demo.connectImpl = async () => {
+			if (demo.connectCount > 1) {
+				throw new Error("reconnect refused");
+			}
+		};
+		demo.callImpl = async () => {
+			callCount += 1;
+			if (callCount === 1) {
+				throw new Error("fetch failed");
+			}
+			return { content: [] };
+		};
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { type: "remote" })],
+		});
+		const snapshot = await registry.createSnapshot(agentId("same-turn"));
+		const toolName = snapshot.manifest[0]?.name ?? "missing";
+
+		const failedCall = await registry.execute(snapshot, toolName, {});
+		const nextCall = await registry.execute(snapshot, toolName, {});
+
+		expect(failedCall.isError).toBe(true);
+		expect(nextCall.isError).toBe(true);
+		expect(JSON.stringify(nextCall.content)).toContain("reconnect refused");
+		expect(JSON.stringify(nextCall.content)).not.toContain(
+			"changed after reconnect"
+		);
+		expect(callCount).toBe(1);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "failed" })
+		);
+		await registry.close();
 	});
 
 	test("reconnects a failed server with a fresh client and recovers its tools", async () => {
@@ -649,7 +931,7 @@ describe("createMcpRegistry", () => {
 			{
 				code: "invalid-url",
 				message: "URL must be absolute http or https URL",
-				path: "/workspace/wincode.json:mcp.websearch.url",
+				path: "/workspace/.wincode/mcp.json:mcpServers.websearch.url",
 				scope: "project",
 				serverName: "websearch",
 			},
@@ -721,7 +1003,9 @@ describe("createMcpRegistry", () => {
 		});
 		await registry.initialize();
 		expect(registry.getStatuses()).toContainEqual({
+			auth: "none",
 			error: "Invalid MCP server configuration",
+			exposure: "direct",
 			name: "websearch",
 			state: "failed",
 			toolCount: 0,

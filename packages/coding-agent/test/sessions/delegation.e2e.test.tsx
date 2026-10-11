@@ -72,7 +72,6 @@ const pluginRuntime = await loadPlugins({
 	distributionPlugins: composition.distributionPlugins,
 	config: {
 		configStore: createConfigStore({
-			configRoot: testDirectory,
 			homeRoot: testDirectory,
 		}),
 		cwd: testDirectory,

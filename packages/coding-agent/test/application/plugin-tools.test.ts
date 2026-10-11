@@ -15,16 +15,12 @@ import { toolCallId } from "../support/identifiers";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "wincode-plugin-tools-"));
 const workspace = path.join(root, "workspace");
-const configRoot = path.join(root, "config");
 const homeRoot = path.join(root, "home");
 const pluginPath = path.resolve(import.meta.dir, "../fixtures/jira-plugin.ts");
-await Promise.all([
-	mkdir(workspace, { recursive: true }),
-	mkdir(configRoot, { recursive: true }),
-]);
+await Promise.all([mkdir(workspace, { recursive: true })]);
 
 const config = {
-	configStore: createConfigStore({ configRoot, homeRoot }),
+	configStore: createConfigStore({ homeRoot }),
 	cwd: workspace,
 	homeRoot,
 	workspace,

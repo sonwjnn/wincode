@@ -77,29 +77,17 @@ Provider credentials are configured interactively with `/connect`, not stored in
 
 ## Configuration
 
-Wincode reads `wincode.jsonc` or `wincode.json`, with JSONC taking precedence at the same location. Configuration is merged from lower to higher precedence:
+General settings live in `~/.wincode/settings.json` (or `settings.jsonc`) and trusted projects may add `<project>/.wincode/settings.json` (or `settings.jsonc`). JSONC wins when both settings files exist at one scope, with a duplicate-config diagnostic. User and trusted-project settings merge in order; objects merge recursively, while arrays and scalar values replace earlier values. Old XDG config roots and root-level `wincode.json` / `wincode.jsonc` files are no longer read.
 
-1. `${XDG_CONFIG_HOME:-~/.config}/wincode/`
-2. `~/.wincode/`
-3. The workspace root
-4. `<workspace>/.wincode/`
-
-Objects merge recursively; arrays and scalar values replace lower-precedence values. Restart Wincode after editing configuration files.
+MCP Servers are configured separately in `~/.wincode/mcp.json` and, after Project trust, `<project>/.wincode/mcp.json`. Both files use the Pi-compatible top-level `mcpServers` map. A project entry replaces a user entry with the same name; a project entry containing only `enabled`, `exposure`, and `toolExposure` overrides those fields without borrowing a different endpoint's credentials.
 
 The Settings dialog exposes the global-only `clipboard.copyOnSelect` setting (default `true`). Project-scope values are ignored; changes in Settings apply immediately, and Reset removes the key to restore the default.
 
-To disable automatic clipboard writes, set this value in a global config file:
+To disable automatic clipboard writes, set this value in `~/.wincode/settings.json`:
 
 ```jsonc
 {
-  "clipboard": {
-    "copyOnSelect": false
-  }
-}
-```
-
-```jsonc
-{
+  "clipboard": { "copyOnSelect": false },
   "default_agent": "build",
   "agents": {
     "review": {
@@ -109,24 +97,35 @@ To disable automatic clipboard writes, set this value in a global config file:
       "tools": ["read", "grep", "glob"]
     }
   },
-  "mcp": {
-    "context7": {
-      "type": "local",
-      "command": ["npx", "-y", "@upstash/context7-mcp"],
-      "enabled": true
+  "skills": { "paths": ["./skills"] },
+  "commands": { "paths": ["./commands"] }
+}
+```
+
+MCP servers belong in a separate `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "docs": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" },
+      "exposure": "direct"
     }
-  },
-  "skills": {
-    "paths": ["./skills"]
-  },
-  "commands": {
-    "paths": ["./commands"]
   }
 }
 ```
 
+### Migrating old configuration
+
+Move non-MCP keys from any old `wincode.json` / `wincode.jsonc` file into `settings.json` or `settings.jsonc` under the matching `.wincode` scope. Move the old `mcp` map to the top-level `mcpServers` key in `mcp.json`. Convert `type: "local"` entries by splitting their `command` array into `command` and `args`, rename `environment` to `env`, and convert `type: "remote"` entries to `url` plus `headers`. Replace `{env:NAME}` with `${NAME}`. Migration is manual; retired files and the old `mcp` section are not runtime fallbacks.
+
 > [!WARNING]
-> Trusted project configuration may select Plugins and local MCP processes. They run with Wincode's operating-system privileges; Project trust is not a sandbox. Use OS-level isolation when stronger containment is required.
+> Trust permits project settings and MCP configuration to load. Trusted project MCP processes run with Wincode's operating-system privileges; Project trust is not a sandbox. Use OS-level isolation when stronger containment is required.
 
 File-loaded Plugins are trusted in-process TypeScript code. Enable them with `--plugin <path>` or explicit `plugins` paths in user or project configuration; project paths are considered only after Project trust. A `.wincode/plugins/` directory is never discovered implicitly. See [File-loaded Plugins](packages/coding-agent/modules/plugins/README.md) for setup and authoring.
 
@@ -149,7 +148,7 @@ Place prompt templates in `.wincode/commands/*.md`. The filename becomes the com
 
 ### MCP servers
 
-The `mcp` map supports local subprocess servers and remote Streamable HTTP servers. Each server can define environment variables or headers and startup/catalog/execution timeouts. There is no per-call MCP allow/ask/deny policy. Use `/mcps` to inspect, enable, disable, or reconnect configured servers.
+MCP Server configuration follows the `mcpServers` format documented in [MCP servers](packages/mcp/README.md), with stdio `command` / `args` / `env` entries or Streamable HTTP `url` / `headers` entries. The MCP Plugin also supports resources, OAuth-backed remote servers, direct/hidden exposure, and management through `/mcps`. Tool exposure controls visibility; existing Tool Gate authorization remains a separate policy boundary. Non-TUI administration is available through `wincode mcp add|remove|list|login|logout`; project writes require explicit trust with `--trust-project`.
 
 ## Commands
 

@@ -10,7 +10,7 @@ const snapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
 	document,
 	sourceFor: (path) =>
 		path[0] === "compaction"
-			? { path: "/workspace/wincode.json", scope: "project" }
+			? { path: "/workspace/.wincode/settings.json", scope: "project" }
 			: undefined,
 	sources: [],
 });
@@ -38,7 +38,7 @@ describe("resolveCompactionSettings", () => {
 		expect(settings.thresholdTokens).toBe(16_000);
 		expect(settings.sources.keepRecentTokens).toEqual({
 			kind: "config",
-			path: "/workspace/wincode.json",
+			path: "/workspace/.wincode/settings.json",
 			scope: "project",
 		});
 	});
@@ -77,10 +77,16 @@ describe("resolveCompactionSettings", () => {
 				},
 				sourceFor: (path) => {
 					if (path[0] === "auto") {
-						return { path: "/workspace/wincode.json", scope: "project" };
+						return {
+							path: "/workspace/.wincode/settings.json",
+							scope: "project",
+						};
 					}
 					if (path[0] === "compaction") {
-						return { path: "/home/user/wincode.json", scope: "global" };
+						return {
+							path: "/home/user/.wincode/settings.json",
+							scope: "global",
+						};
 					}
 					return;
 				},
@@ -91,7 +97,7 @@ describe("resolveCompactionSettings", () => {
 		expect(settings.desired.auto).toBe(false);
 		expect(settings.sources.auto).toEqual({
 			kind: "config",
-			path: "/workspace/wincode.json",
+			path: "/workspace/.wincode/settings.json",
 			scope: "project",
 		});
 		expect(settings.settingPaths.auto).toEqual(["auto"]);

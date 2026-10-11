@@ -58,7 +58,6 @@ export type ApplicationResourceLoaderInput = Readonly<{
 }>;
 
 export type ApplicationResourceLoaderOptions = Readonly<{
-	configRoot?: string;
 	distributionPlugins?: readonly PluginPackageReference[];
 	homeRoot?: string;
 	projectTrustDir?: string;
@@ -181,9 +180,6 @@ export const createApplicationResourceLoader = (
 			const configStore = createConfigStore({
 				homeRoot,
 				trustedProjectRoots: trust.trustedProjectRoots,
-				...(options.configRoot === undefined
-					? {}
-					: { configRoot: options.configRoot }),
 			});
 			const configRuntime: ConfigRuntime = Object.freeze({
 				configStore,

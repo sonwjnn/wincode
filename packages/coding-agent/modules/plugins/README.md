@@ -10,7 +10,7 @@ A Plugin file in `.wincode/plugins/` is **not** loaded just because Wincode open
 wincode --plugin .wincode/plugins/jira.ts
 ```
 
-CLI-relative paths resolve from the workspace. To enable a Plugin on every run, add an absolute path to a personal configuration file such as `~/.config/wincode/wincode.json`:
+CLI-relative paths resolve from the workspace. To enable a Plugin on every run, add an absolute path to `~/.wincode/settings.json`:
 
 ```json
 {

@@ -1,54 +1,92 @@
 import { expect, test } from "bun:test";
 import type {
 	PluginConfigDiagnostic,
-	PluginConfigReader,
+	PluginConfigFileStore,
 	PluginConfigSnapshot,
+	PluginMcpServerRegistration,
 } from "@wincode/coding-agent";
 import { createMcpConfigLoader } from "../src/plugin/config";
 
 const diagnostic: PluginConfigDiagnostic = {
 	code: "parse-error",
 	message: "Ignored a malformed lower-priority config file.",
-	path: "/config/wincode.json",
+	path: "/home/user/.wincode/mcp.json",
 	scope: "global",
 };
 
 const snapshot: PluginConfigSnapshot = {
 	diagnostics: [diagnostic],
 	document: {
-		mcp: {
+		mcpServers: {
 			wiki: {
-				type: "remote",
 				url: "https://mcp.example.test/",
 			},
 		},
 	},
-	sourceFor: () => ({ path: "/home/user/wincode.json", scope: "user" }),
+	sourceFor: () => ({ path: "/home/user/.wincode/mcp.json", scope: "global" }),
 	sources: [
 		{
 			document: {
-				mcp: { wiki: { type: "remote", url: "https://mcp.example.test/" } },
+				mcpServers: { wiki: { url: "https://mcp.example.test/" } },
 			},
-			path: "/home/user/wincode.json",
-			scope: "user",
+			path: "/home/user/.wincode/mcp.json",
+			scope: "global",
 		},
 	],
 };
 
-test("MCP reads merged host config snapshots and requests refresh only when asked", async () => {
+test("Extension-owned MCP Servers enter the managed catalog without overriding file config", async () => {
+	const configFiles: PluginConfigFileStore = {
+		getSnapshot: async () => snapshot,
+		refreshSnapshot: async () => snapshot,
+		setValue: async () => snapshot,
+	};
+	const registrations: readonly PluginMcpServerRegistration[] = [
+		{
+			config: { command: "bun", args: ["run", "extension-mcp.ts"] },
+			name: "extension_docs",
+			ownerPluginId: "docs_plugin",
+		},
+		{
+			config: { command: "bun", args: ["run", "replacement.ts"] },
+			name: "wiki",
+			ownerPluginId: "other_plugin",
+		},
+	];
+	const load = createMcpConfigLoader(configFiles, () => registrations);
+	const result = await load({
+		env: {},
+		refresh: false,
+		workspace: "/workspace",
+	});
+
+	expect(result.servers.extension_docs).toMatchObject({
+		type: "local",
+		command: ["bun", "run", "extension-mcp.ts"],
+	});
+	expect(result.servers.wiki).toMatchObject({
+		type: "remote",
+		url: "https://mcp.example.test/",
+	});
+});
+
+test("MCP reads the host-owned mcp namespace and refreshes only when asked", async () => {
 	let reads = 0;
 	let refreshes = 0;
-	const config: PluginConfigReader = {
-		getSnapshot: async () => {
+	const configFiles: PluginConfigFileStore = {
+		getSnapshot: async (namespace) => {
+			expect(namespace).toBe("mcp");
 			reads += 1;
 			return snapshot;
 		},
-		refreshSnapshot: async () => {
+		refreshSnapshot: async (namespace) => {
+			expect(namespace).toBe("mcp");
 			refreshes += 1;
 			return snapshot;
 		},
+		setValue: async () => snapshot,
 	};
-	const load = createMcpConfigLoader(config);
+	const load = createMcpConfigLoader(configFiles);
 
 	const initial = await load({
 		env: {},

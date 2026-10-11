@@ -121,7 +121,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 });
 test("does not copy until a saved disabled preference loads", async () => {
 	const delayedStore = createConfigStoreWithDelayedInitialRead({
-		[`${CONFIG_ROOT}/wincode.json`]: '{"clipboard":{"copyOnSelect":false}}',
+		[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copyOnSelect":false}}',
 	});
 	const configValue = {
 		configStore: delayedStore.configStore,

@@ -42,7 +42,6 @@ export type ApplicationRuntime = Readonly<{
 }>;
 
 export type ApplicationRuntimeOptions = Readonly<{
-	configRoot?: string;
 	distributionPlugins?: readonly PluginPackageReference[];
 	homeRoot?: string;
 	projectTrustDir?: string;
@@ -76,9 +75,6 @@ export const initializeApplicationRuntime = async (
 	const configStore = createConfigStore({
 		homeRoot,
 		trustedProjectRoots: projectTrust.trustedProjectRoots,
-		...(options.configRoot === undefined
-			? {}
-			: { configRoot: options.configRoot }),
 	});
 	const configRuntime: ConfigRuntime = Object.freeze({
 		configStore,

@@ -289,7 +289,7 @@ const renderChatShell = async (
 		? createConfigStore({
 				fs: {
 					readFile: async (file) => {
-						if (file === path.join(workspace, ".wincode", "wincode.jsonc")) {
+						if (file === path.join(workspace, ".wincode", "settings.jsonc")) {
 							return JSON.stringify({
 								agents: {
 									review: {

@@ -3,8 +3,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	getErrorMessage,
+	isJsonValue,
 	isNonEmptyString,
 	isObjectLike,
+	isPlainObject,
 	logger,
 } from "@wincode/utils";
 import {
@@ -18,12 +20,14 @@ import { codingToolNames } from "@/modules/tools";
 import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import { createPluginSecretStore } from "./plugin-secret-store";
 import type {
 	PluginAgentRegistration,
 	PluginAPI,
 	PluginBeforeAgentTurnHook,
 	PluginDefinitionAPI,
 	PluginFactory,
+	PluginJsonValue,
 	PluginLoadContext,
 	PluginProcessStartHook,
 	PluginSessionShutdownHook,
@@ -72,6 +76,7 @@ export type LoadPluginsInput = Readonly<{
 type MutablePluginDraft = {
 	agents: Map<string, PluginAgentRegistration>;
 	commands: Map<string, PluginCommand>;
+	mcpServers: Map<string, PluginJsonValue>;
 	resources: Map<string, PluginResourceDescriptor>;
 	statusPanels: Map<string, PluginStatusPanelRegistration>;
 	id: string;
@@ -103,6 +108,7 @@ const isTypeScriptPluginPath = (candidatePath: string): boolean =>
 	typescriptPluginExtensions.has(path.extname(candidatePath)) &&
 	!declarationFilePattern.test(candidatePath);
 const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
+const pluginMcpServerNamePattern = /^[A-Za-z0-9_-]{1,64}$/u;
 const pluginResourceNamePattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const RESERVED_TOOL_NAMES = new Set([...codingToolNames, "skill"]);
 
@@ -194,7 +200,8 @@ const createRegistrationAPI = (
 	diagnostics: PluginDiagnostic[],
 	toolNames: ReadonlySet<string>,
 	commandNames: ReadonlySet<string>,
-	customCommandNames: ReadonlySet<string>
+	customCommandNames: ReadonlySet<string>,
+	userDataDir: string
 ): PluginDefinitionAPI => {
 	const assertOpen = (): void => {
 		if (!isOpen()) {
@@ -230,6 +237,22 @@ const createRegistrationAPI = (
 			throw new Error(`Plugin Resource '${name}' is already registered.`);
 		}
 		plugin.resources.set(name, Object.freeze({ name, value }));
+	};
+	const registerMcpServer = (name: string, config: PluginJsonValue): void => {
+		assertOpen();
+		if (
+			!(
+				pluginMcpServerNamePattern.test(name) &&
+				isPlainObject(config) &&
+				isJsonValue(config, { maxDepth: 32, rejectToJSON: true })
+			)
+		) {
+			throw new Error("Plugin MCP Servers require a name and JSON object.");
+		}
+		if (plugin.mcpServers.has(name)) {
+			throw new Error(`Plugin MCP Server '${name}' is already registered.`);
+		}
+		plugin.mcpServers.set(name, structuredClone(config));
 	};
 	const registerStatusPanel = (
 		candidate: PluginStatusPanelRegistration
@@ -270,6 +293,8 @@ const createRegistrationAPI = (
 		register();
 	};
 	return Object.freeze({
+		secrets: createPluginSecretStore(plugin.id, userDataDir),
+		registerMcpServer,
 		registerAgent(agent) {
 			assertOpen();
 			try {
@@ -407,6 +432,7 @@ const createPluginAPI = (
 			const draft: MutablePluginDraft = {
 				agents: new Map(),
 				commands: new Map(),
+				mcpServers: new Map(),
 				resources: new Map(),
 				statusPanels: new Map(),
 				id: identity.id,
@@ -421,7 +447,8 @@ const createPluginAPI = (
 				diagnostics,
 				toolNames,
 				commandNames,
-				customCommandNames
+				customCommandNames,
+				context.userDataDir
 			);
 		},
 	});
@@ -511,6 +538,11 @@ const loadedPluginFromDraft = (
 	return Object.freeze({
 		agents: Object.freeze([...draft.agents.values()]),
 		commands: Object.freeze(registeredCommands),
+		mcpServers: Object.freeze(
+			[...draft.mcpServers].map(([name, config]) =>
+				Object.freeze({ config, name, ownerPluginId: draft.id })
+			)
+		),
 		id: draft.id,
 		resources: Object.freeze([...draft.resources.values()]),
 		statusPanels: Object.freeze([...draft.statusPanels.values()]),
@@ -1013,6 +1045,33 @@ const runPluginFactory = async (
 			refreshSnapshot: () =>
 				input.config.configStore.refreshSnapshot(input.config.workspace),
 		}),
+		configFiles: Object.freeze({
+			getSnapshot: (namespace) =>
+				input.config.configStore.getNamespaceSnapshot(
+					input.config.workspace,
+					namespace
+				),
+			refreshSnapshot: (namespace) =>
+				input.config.configStore.refreshNamespaceSnapshot(
+					input.config.workspace,
+					namespace
+				),
+			setValue: (namespace, scope, configPath, value, targetPath) =>
+				input.config.configStore.setNamespaceValue(
+					input.config.workspace,
+					scope,
+					namespace,
+					configPath,
+					value,
+					targetPath
+				),
+		}),
+		getMcpServerRegistrations: () =>
+			Object.freeze(
+				state.loadedPlugins.flatMap(
+					(loadedPlugin) => loadedPlugin.mcpServers ?? []
+				)
+			),
 		sourcePath: candidate.path,
 		trustedProjectRoots: getProjectRoots(input.config.workspace).filter(
 			(projectRoot) =>

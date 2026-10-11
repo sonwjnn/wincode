@@ -40,8 +40,8 @@ describe("createSettingsOperations", () => {
 		const projectConfig =
 			'{"clipboard":{"copyOnSelect":true},"agents":{"build":{"description":"Keep"}}}';
 		const files: Record<string, string> = {
-			[`${CONFIG_ROOT}/wincode.json`]: '{"clipboard":{"copyOnSelect":false}}',
-			[`${WORKSPACE}/wincode.json`]: projectConfig,
+			[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copyOnSelect":false}}',
+			[`${WORKSPACE}/.wincode/settings.json`]: projectConfig,
 		};
 		const operations = createSettingsOperations({
 			configStore: createTestStore(files),
@@ -56,13 +56,13 @@ describe("createSettingsOperations", () => {
 			source: { kind: "config", scope: "global" },
 			value: false,
 		});
-		expect(files[`${WORKSPACE}/wincode.json`]).toBe(projectConfig);
+		expect(files[`${WORKSPACE}/.wincode/settings.json`]).toBe(projectConfig);
 	});
 	test("writes and resets Copy on select in global config only", async () => {
 		const projectConfig =
 			'{"clipboard":{"copyOnSelect":false},"agents":{"build":{"description":"Keep"}}}';
 		const files: Record<string, string> = {
-			[`${WORKSPACE}/wincode.json`]: projectConfig,
+			[`${WORKSPACE}/.wincode/settings.json`]: projectConfig,
 		};
 		const operations = createSettingsOperations({
 			configStore: createTestStore(files),
@@ -74,26 +74,28 @@ describe("createSettingsOperations", () => {
 			source: { kind: "config", scope: "global" },
 			value: false,
 		});
-		expect(JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")).toEqual({
+		expect(JSON.parse(files[`${CONFIG_ROOT}/settings.json`] ?? "{}")).toEqual({
 			clipboard: { copyOnSelect: false },
 		});
-		expect(files[`${WORKSPACE}/wincode.json`]).toBe(projectConfig);
+		expect(files[`${WORKSPACE}/.wincode/settings.json`]).toBe(projectConfig);
 
 		const reset = await operations.resetValue("clipboard.copyOnSelect");
 		expect(reset).toMatchObject({
 			source: { kind: "default" },
 			value: true,
 		});
-		expect(JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")).toEqual({
+		expect(JSON.parse(files[`${CONFIG_ROOT}/settings.json`] ?? "{}")).toEqual({
 			clipboard: {},
 		});
-		expect(files[`${WORKSPACE}/wincode.json`]).toBe(projectConfig);
+		expect(files[`${WORKSPACE}/.wincode/settings.json`]).toBe(projectConfig);
 	});
-	test("reset removes duplicate copy preferences from all global config sources", async () => {
-		const secondaryGlobalConfig = `${HOME_ROOT}/.wincode/wincode.json`;
+	test("reset clears the selected JSONC preference and leaves shadowed JSON intact", async () => {
+		const primaryGlobalConfig = `${CONFIG_ROOT}/settings.json`;
+		const selectedGlobalConfig = `${CONFIG_ROOT}/settings.jsonc`;
+		const primaryContents = '{"clipboard":{"copyOnSelect":false}}';
 		const files: Record<string, string> = {
-			[`${CONFIG_ROOT}/wincode.json`]: '{"clipboard":{"copyOnSelect":false}}',
-			[secondaryGlobalConfig]: '{"clipboard":{"copyOnSelect":false}}',
+			[primaryGlobalConfig]: primaryContents,
+			[selectedGlobalConfig]: primaryContents,
 		};
 		const operations = createSettingsOperations({
 			configStore: createTestStore(files),
@@ -106,10 +108,8 @@ describe("createSettingsOperations", () => {
 			source: { kind: "default" },
 			value: true,
 		});
-		expect(JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")).toEqual({
-			clipboard: {},
-		});
-		expect(JSON.parse(files[secondaryGlobalConfig] ?? "{}")).toEqual({
+		expect(files[primaryGlobalConfig]).toBe(primaryContents);
+		expect(JSON.parse(files[selectedGlobalConfig] ?? "{}")).toEqual({
 			clipboard: {},
 		});
 	});
@@ -166,11 +166,11 @@ describe("createSettingsOperations", () => {
 
 	test("resolves Auto-compact without a model and migrates project overrides to global", async () => {
 		const files: Record<string, string> = {
-			[`${WORKSPACE}/wincode.json`]:
+			[`${WORKSPACE}/.wincode/settings.json`]:
 				'{"compaction":{"auto":false},"agents":{"build":{"description":"Keep"}}}',
 		};
 		const operations = createSettingsOperations({
-			configStore: createTestStore(files),
+			configStore: createTestStore(files, [WORKSPACE]),
 			workspace: WORKSPACE,
 		});
 
@@ -188,22 +188,24 @@ describe("createSettingsOperations", () => {
 			kind: "config",
 			scope: "global",
 		});
-		expect(JSON.parse(files[`${WORKSPACE}/wincode.json`] ?? "{}")).toEqual({
+		expect(
+			JSON.parse(files[`${WORKSPACE}/.wincode/settings.json`] ?? "{}")
+		).toEqual({
 			compaction: {},
 			agents: { build: { description: "Keep" } },
 		});
-		expect(JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")).toEqual({
+		expect(JSON.parse(files[`${CONFIG_ROOT}/settings.json`] ?? "{}")).toEqual({
 			compaction: { auto: true },
 		});
 	});
 
 	test("reset removes explicit global and legacy project values and restores the default", async () => {
 		const files: Record<string, string> = {
-			[`${CONFIG_ROOT}/wincode.json`]: '{"compaction":{"auto":false}}',
-			[`${WORKSPACE}/wincode.json`]: '{"auto":false}',
+			[`${CONFIG_ROOT}/settings.json`]: '{"compaction":{"auto":false}}',
+			[`${WORKSPACE}/.wincode/settings.json`]: '{"auto":false}',
 		};
 		const operations = createSettingsOperations({
-			configStore: createTestStore(files),
+			configStore: createTestStore(files, [WORKSPACE]),
 			workspace: WORKSPACE,
 		});
 
@@ -211,18 +213,20 @@ describe("createSettingsOperations", () => {
 
 		expect(result.value).toBe(true);
 		expect(result.source).toEqual({ kind: "default" });
-		expect(JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")).toEqual({
+		expect(JSON.parse(files[`${CONFIG_ROOT}/settings.json`] ?? "{}")).toEqual({
 			compaction: {},
 		});
-		expect(JSON.parse(files[`${WORKSPACE}/wincode.json`] ?? "{}")).toEqual({});
+		expect(
+			JSON.parse(files[`${WORKSPACE}/.wincode/settings.json`] ?? "{}")
+		).toEqual({});
 	});
 	test("global writes clear a legacy project override that would mask them", async () => {
 		const files: Record<string, string> = {
-			[`${CONFIG_ROOT}/wincode.json`]: '{"compaction":{"reserveTokens":1000}}',
-			[`${WORKSPACE}/wincode.json`]: '{"auto":false}',
+			[`${CONFIG_ROOT}/settings.json`]: '{"compaction":{"reserveTokens":1000}}',
+			[`${WORKSPACE}/.wincode/settings.json`]: '{"auto":false}',
 		};
 		const operations = createSettingsOperations({
-			configStore: createTestStore(files),
+			configStore: createTestStore(files, [WORKSPACE]),
 			workspace: WORKSPACE,
 		});
 
@@ -233,9 +237,11 @@ describe("createSettingsOperations", () => {
 			kind: "config",
 			scope: "global",
 		});
-		expect(JSON.parse(files[`${WORKSPACE}/wincode.json`] ?? "{}")).toEqual({});
 		expect(
-			JSON.parse(files[`${CONFIG_ROOT}/wincode.json`] ?? "{}")
+			JSON.parse(files[`${WORKSPACE}/.wincode/settings.json`] ?? "{}")
+		).toEqual({});
+		expect(
+			JSON.parse(files[`${CONFIG_ROOT}/settings.json`] ?? "{}")
 		).toMatchObject({
 			compaction: { auto: true, reserveTokens: 1000 },
 		});
@@ -296,11 +302,11 @@ describe("createSettingsOperations", () => {
 
 	test("rolls back a partially failed global migration", async () => {
 		const files: Record<string, string> = {
-			[`${WORKSPACE}/wincode.json`]: '{"compaction":{"auto":false}}',
+			[`${WORKSPACE}/.wincode/settings.json`]: '{"compaction":{"auto":false}}',
 		};
 		let writeCount = 0;
 		const store = createConfigStore({
-			configRoot: CONFIG_ROOT,
+			trustedProjectRoots: [WORKSPACE],
 			fs: {
 				readFile: async (file) => {
 					const value = files[file];
@@ -331,9 +337,13 @@ describe("createSettingsOperations", () => {
 		);
 		const [after] = await operations.getSettings();
 		expect(after?.value).toBe(false);
-		expect(JSON.parse(files[`${WORKSPACE}/wincode.json`] ?? "{}")).toEqual({
+		expect(
+			JSON.parse(files[`${WORKSPACE}/.wincode/settings.json`] ?? "{}")
+		).toEqual({
 			compaction: { auto: false },
 		});
-		expect(files[`${WORKSPACE}/.wincode/wincode.json`]).toBeUndefined();
+		expect(JSON.parse(files[`${CONFIG_ROOT}/settings.json`] ?? "{}")).toEqual({
+			compaction: {},
+		});
 	});
 });

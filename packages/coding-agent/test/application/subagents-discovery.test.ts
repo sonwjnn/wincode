@@ -18,11 +18,9 @@ test("application runtime discovers user agents from its configured data directo
 	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-subagent-data-"));
 	temporaryDirectories.push(root);
 	const workspace = path.join(root, "workspace");
-	const configRoot = path.join(root, "config");
 	const userDataDir = path.join(root, "custom-user-data");
 	await Promise.all([
 		mkdir(workspace, { recursive: true }),
-		mkdir(configRoot, { recursive: true }),
 		mkdir(path.join(userDataDir, "agents"), { recursive: true }),
 	]);
 	await Bun.write(
@@ -39,7 +37,6 @@ test("application runtime discovers user agents from its configured data directo
 			stdinIsTTY: false,
 		},
 		{
-			configRoot,
 			distributionPlugins: [
 				{ id: "subagents", specifier: "@wincode/subagents/plugin" },
 			],

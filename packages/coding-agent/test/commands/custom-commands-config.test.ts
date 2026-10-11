@@ -10,7 +10,6 @@ describe("configured Custom Commands", () => {
 	test("loads an absolute global path without overriding project commands", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wincode-global-commands-"));
 		const homeRoot = join(root, "home");
-		const xdgConfigHome = join(root, "xdg");
 		const workspace = join(root, "workspace");
 		const globalCommands = join(root, "shared-commands");
 
@@ -18,7 +17,7 @@ describe("configured Custom Commands", () => {
 			await mkdir(join(workspace, ".git"), { recursive: true });
 			await Promise.all([
 				writeFixture(
-					join(xdgConfigHome, "wincode", "wincode.json"),
+					join(homeRoot, ".wincode", "settings.json"),
 					JSON.stringify({ commands: { paths: [globalCommands] } })
 				),
 				writeFixture(
@@ -35,7 +34,7 @@ describe("configured Custom Commands", () => {
 				),
 			]);
 
-			const configStore = createConfigStore({ homeRoot, xdgConfigHome });
+			const configStore = createConfigStore({ homeRoot });
 			const commands = await getCustomCommands({
 				configStore,
 				homeRoot,
@@ -57,7 +56,6 @@ describe("configured Custom Commands", () => {
 	test("loads conventional and configured folders through Wincode config", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wincode-commands-"));
 		const homeRoot = join(root, "home");
-		const xdgConfigHome = join(root, "xdg");
 		const repository = join(root, "repository");
 		const workspace = join(repository, "packages", "app");
 
@@ -81,12 +79,15 @@ describe("configured Custom Commands", () => {
 					"---\ndescription: Configured command\n---\nConfigured template."
 				),
 				writeFixture(
-					join(workspace, ".wincode", "wincode.jsonc"),
+					join(workspace, ".wincode", "settings.jsonc"),
 					'{\n  // Paths are relative to this config file.\n  "commands": { "paths": ["configured-commands"], },\n}'
 				),
 			]);
 
-			const configStore = createConfigStore({ homeRoot, xdgConfigHome });
+			const configStore = createConfigStore({
+				homeRoot,
+				trustedProjectRoots: [workspace],
+			});
 			const commands = await getCustomCommands({
 				configStore,
 				homeRoot,

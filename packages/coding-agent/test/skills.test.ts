@@ -66,7 +66,6 @@ describe("skills", () => {
 		}
 		const snapshot = await createConfigStore({
 			homeRoot: home,
-			xdgConfigHome: join(root, "xdg"),
 		}).getSnapshot(cwd);
 		const candidates = discoverSkillCandidates({
 			homeRoot: home,

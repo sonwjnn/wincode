@@ -186,7 +186,7 @@ test("space persists the selected setting and escape closes the hub", async () =
 				source: {
 					configPath: ["compaction", "auto"],
 					kind: "config",
-					path: "/home/user/.config/wincode/wincode.json",
+					path: "/home/user/.wincode/settings.json",
 					scope: "global",
 				},
 			};
@@ -296,7 +296,7 @@ test("reset uses the descriptor reset operation", async () => {
 	await act(() => setup.renderer.destroy());
 });
 test("Ctrl+R removes the persisted copy preference and restores the default", async () => {
-	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const configFile = `${TEST_CONFIG_ROOT}/settings.json`;
 	const files: Record<string, string> = {
 		[configFile]: '{"clipboard":{"copyOnSelect":false}}',
 	};
@@ -322,7 +322,7 @@ test("Ctrl+R removes the persisted copy preference and restores the default", as
 });
 
 test("global Hide thinking defaults visible and resets its persisted preference", async () => {
-	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const configFile = `${TEST_CONFIG_ROOT}/settings.json`;
 	const files: Record<string, string> = {};
 	const configStore = createInMemoryConfigStore(files);
 	const operations = createSettingsOperations({

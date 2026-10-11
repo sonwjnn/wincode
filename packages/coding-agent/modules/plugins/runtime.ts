@@ -8,6 +8,7 @@ import type {
 	PluginCommandHandler,
 	PluginCommandRegistration,
 	PluginInputSchema,
+	PluginMcpServerRegistration,
 	PluginProcessContext,
 	PluginProcessStartHook,
 	PluginRegistrationAPI,
@@ -15,6 +16,7 @@ import type {
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginShutdownHook,
+	PluginStatusPanelActionContext,
 	PluginStatusPanelRegistration,
 	PluginToolRegistration,
 	PluginToolRegistrationAPI,
@@ -62,6 +64,7 @@ export type LoadedPlugin = Readonly<{
 	commands: readonly PluginCommandDescriptor[];
 	id: string;
 	resources?: readonly PluginResourceDescriptor[];
+	mcpServers?: readonly PluginMcpServerRegistration[];
 	statusPanels?: readonly PluginStatusPanelRegistration[];
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onStart?: PluginProcessStartHook;
@@ -94,7 +97,8 @@ export type PluginRuntime = Readonly<{
 		pluginId: string,
 		panelId: string,
 		itemId: string,
-		actionId: string
+		actionId: string,
+		context?: PluginStatusPanelActionContext
 	) => Promise<void>;
 	registerBackgroundWork: (sessionId: string, work: Promise<unknown>) => void;
 	hasBackgroundWork: (sessionId: string) => boolean;
@@ -732,7 +736,7 @@ export const createPluginRuntime = (
 				await panel.refresh?.();
 			}
 		},
-		async runStatusPanelAction(pluginId, panelId, itemId, actionId) {
+		async runStatusPanelAction(pluginId, panelId, itemId, actionId, context) {
 			const plugin = plugins.find((candidate) => candidate.id === pluginId);
 			const panel = statusPanelFor(pluginId, panelId);
 			if (
@@ -742,7 +746,7 @@ export const createPluginRuntime = (
 			) {
 				throw new Error(`Plugin Status Panel '${panelId}' is unavailable.`);
 			}
-			await panel.runAction(itemId, actionId);
+			await panel.runAction(itemId, actionId, context);
 		},
 		registerBackgroundWork(sessionId, work) {
 			let sessionWork = backgroundWork.get(sessionId);

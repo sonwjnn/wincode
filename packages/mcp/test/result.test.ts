@@ -1,18 +1,26 @@
 import { describe, expect, test } from "bun:test";
+import { rm } from "node:fs/promises";
+import * as path from "node:path";
 import { agentIdSchema } from "@wincode/agent-core";
 import {
 	createMcpToolExecutor,
 	MAX_MCP_RESULT_BYTES,
 	type McpCatalogSnapshot,
+	normalizeMcpResourceContents,
 	normalizeMcpResult,
+	normalizeMcpResultWithArtifacts,
 	toMcpSnapshotId,
 } from "@wincode/mcp";
 import { isObjectLike, isString, isUndefined } from "@wincode/utils";
 
+const savedArtifactPattern = /saved to (.+)\]/u;
+const beginningExcerptPattern = /^BEGIN /u;
+const endingExcerptPattern = / END$/u;
+
 const agentId = (value: string) => agentIdSchema.parse(value);
 
 describe("MCP result normalization", () => {
-	test("keeps safe text/structured values and metadata only", () => {
+	test("preserves small images alongside safe text and structured values", () => {
 		const result = normalizeMcpResult({
 			isError: true,
 			content: [
@@ -23,9 +31,124 @@ describe("MCP result normalization", () => {
 			structuredContent: { n: 1 },
 		});
 		expect(result.isError).toBe(true);
-		expect(JSON.stringify(result)).not.toContain("base64-secret");
+		expect(result.content[1]).toMatchObject({
+			type: "image",
+			data: "base64-secret",
+			mimeType: "image/png",
+		});
 		expect(result.structuredContent).toEqual({ n: 1 });
 	});
+	test("saves binary tool output privately while preserving small images", async () => {
+		const result = await normalizeMcpResultWithArtifacts({
+			content: [
+				{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+				{ type: "audio", data: "AQID", mimeType: "audio/wav" },
+			],
+		});
+		expect(result.content[0]).toMatchObject({
+			type: "image",
+			data: "aGVsbG8=",
+			mimeType: "image/png",
+		});
+		const binaryText = result.content.find(
+			(item) => isObjectLike(item) && "text" in item && isString(item.text)
+		);
+		if (
+			!(
+				isObjectLike(binaryText) &&
+				"text" in binaryText &&
+				isString(binaryText.text)
+			)
+		) {
+			throw new Error("Expected a private binary artifact reference.");
+		}
+		const match = savedArtifactPattern.exec(binaryText.text);
+		if (match?.[1] === undefined) {
+			throw new Error("Expected the artifact path in the result.");
+		}
+		const filePath = match[1];
+		try {
+			expect([...(await Bun.file(filePath).bytes())]).toEqual([1, 2, 3]);
+		} finally {
+			await rm(path.dirname(filePath), { force: true, recursive: true });
+		}
+	});
+
+	test("stores oversized tool output and keeps a bounded preview", async () => {
+		const fullText = `MCP-BEGIN ${"x".repeat(MAX_MCP_RESULT_BYTES * 2)} MCP-END`;
+		const result = await normalizeMcpResultWithArtifacts({
+			content: [{ type: "text", text: fullText }],
+		});
+		expect(result.truncated).toBe(true);
+		const artifactReference = result.content.find(
+			(item) =>
+				isObjectLike(item) &&
+				"text" in item &&
+				isString(item.text) &&
+				item.text.includes("Complete MCP output saved to")
+		);
+		if (
+			!(
+				isObjectLike(artifactReference) &&
+				"text" in artifactReference &&
+				isString(artifactReference.text)
+			)
+		) {
+			throw new Error("Expected the complete output artifact reference.");
+		}
+		const match = savedArtifactPattern.exec(artifactReference.text);
+		if (match?.[1] === undefined) {
+			throw new Error("Expected the artifact path in the result.");
+		}
+		const filePath = match[1];
+		try {
+			const saved = JSON.parse(await Bun.file(filePath).text()) as {
+				content: { text: string }[];
+			};
+			expect(saved.content[0]?.text).toBe(fullText);
+			expect(JSON.stringify(result)).toContain("MCP-BEGIN");
+			expect(JSON.stringify(result)).toContain("MCP-END");
+			expect(JSON.stringify(result)).toContain("middle omitted");
+			expect(
+				new TextEncoder().encode(JSON.stringify(result)).byteLength
+			).toBeLessThanOrEqual(MAX_MCP_RESULT_BYTES);
+		} finally {
+			await rm(path.dirname(filePath), { force: true, recursive: true });
+		}
+	});
+
+	test("preserves resource images and saves other binary resources", async () => {
+		const contents = await normalizeMcpResourceContents([
+			{ uri: "file:///image", mimeType: "image/png", blob: "aGVsbG8=" },
+			{
+				uri: "file:///binary",
+				mimeType: "application/octet-stream",
+				blob: "AQID",
+			},
+		]);
+		expect(contents[0]).toMatchObject({
+			type: "image",
+			uri: "file:///image",
+			data: "aGVsbG8=",
+		});
+		const artifact = contents[1];
+		if (
+			!(isObjectLike(artifact) && "text" in artifact && isString(artifact.text))
+		) {
+			throw new Error("Expected a binary resource artifact reference.");
+		}
+		const match = savedArtifactPattern.exec(artifact.text);
+		if (match?.[1] === undefined) {
+			throw new Error("Expected the binary artifact path.");
+		}
+		const filePath = match[1];
+		try {
+			expect([...(await Bun.file(filePath).bytes())]).toEqual([1, 2, 3]);
+		} finally {
+			await rm(path.dirname(filePath), { force: true, recursive: true });
+		}
+	});
+
 	test("adapts normalized failures while forwarding cancellation", async () => {
 		const signal = new AbortController().signal;
 		let receivedSignal: AbortSignal | undefined;
@@ -146,7 +269,10 @@ describe("MCP result normalization", () => {
 			content: [
 				{
 					type: "resource",
-					resource: { uri: "file://x", text: "😀".repeat(100_000) },
+					resource: {
+						uri: "file://x",
+						text: `BEGIN ${"😀".repeat(100_000)} END`,
+					},
 				},
 			],
 		});
@@ -157,9 +283,9 @@ describe("MCP result normalization", () => {
 		).toBeLessThanOrEqual(MAX_MCP_RESULT_BYTES);
 		const resource = result.content[0];
 		if (isObjectLike(resource) && "text" in resource) {
-			expect(
-				new TextEncoder().encode(resource.text as string).byteLength % 4
-			).toBe(0);
+			expect(resource.text).toMatch(beginningExcerptPattern);
+			expect(resource.text).toMatch(endingExcerptPattern);
+			expect(resource.text).toContain("middle omitted");
 		}
 	});
 });

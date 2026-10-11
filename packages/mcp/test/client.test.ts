@@ -103,6 +103,40 @@ const baseDeps = (
 });
 
 describe("createSdkMcpClient", () => {
+	test("retries transient remote catalog failures without replaying tool calls", async () => {
+		let catalogAttempts = 0;
+		let toolCallAttempts = 0;
+		const adapter = createSdkMcpClient(
+			remoteConfig(),
+			baseDeps({
+				createClient: () => ({
+					...fakeClient(),
+					listTools: async () => {
+						catalogAttempts += 1;
+						if (catalogAttempts < 3) {
+							throw new Error("HTTP 503 Service Unavailable");
+						}
+						return { tools: [tool("echo")] };
+					},
+					callTool: async () => {
+						toolCallAttempts += 1;
+						throw new Error("HTTP 503 Service Unavailable");
+					},
+				}),
+			})
+		);
+		await adapter.connect();
+
+		await expect(adapter.listTools()).resolves.toEqual([
+			{ name: "echo", inputSchema: { type: "object" } },
+		]);
+		await expect(adapter.callTool("echo", {})).rejects.toBeInstanceOf(
+			McpClientError
+		);
+		expect(catalogAttempts).toBe(3);
+		expect(toolCallAttempts).toBe(1);
+	});
+
 	test("constructs local stdio transport from argv without shell", async () => {
 		const transports: unknown[] = [];
 		const adapter = createSdkMcpClient(

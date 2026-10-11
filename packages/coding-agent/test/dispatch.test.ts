@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	type DispatchModeRunners,
 	dispatch,
@@ -8,6 +11,7 @@ import type {
 	TextWriter,
 } from "../modules/application/modes/types";
 import type { PluginRuntime } from "../modules/plugins/runtime";
+import { createConfigStore } from "../shared/config/config-store";
 
 const capture = (): { output: string; writer: TextWriter } => {
 	const state = { output: "" };
@@ -43,6 +47,66 @@ const noOpRunners: DispatchModeRunners = {
 };
 
 describe("application dispatch", () => {
+	test("routes MCP management help before loading an execution mode", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, ["mcp", "--help"]),
+			undefined
+		);
+		expect(exitCode).toBe(0);
+		expect(stdout.output).toContain(
+			"wincode mcp <add|remove|list|login|logout>"
+		);
+		expect(stderr.output).toBe("");
+	});
+
+	test("MCP listing skips TUI startup and unrelated Plugin loading", async () => {
+		const root = await mkdtemp(path.join(os.tmpdir(), "wincode-mcp-dispatch-"));
+		const homeRoot = path.join(root, "home");
+		const workspace = path.join(root, "workspace");
+		await mkdir(path.join(workspace, ".git"), { recursive: true });
+		const stdout = capture();
+		const stderr = capture();
+		let modeLoaded = false;
+		let runtimeInitialized = false;
+		try {
+			const exitCode = await dispatch(
+				{
+					...input(stdout.writer, stderr.writer, ["mcp", "list"]),
+					cwd: workspace,
+				},
+				async () => {
+					modeLoaded = true;
+					return noOpRunners;
+				},
+				{
+					initializeRuntime: async () => {
+						runtimeInitialized = true;
+						throw new Error("MCP listing must not initialize the runtime.");
+					},
+					mcpCliOptions: {
+						configStore: createConfigStore({
+							homeRoot,
+							trustedProjectRoots: [],
+						}),
+						homeRoot,
+						projectTrustDir: path.join(homeRoot, ".wincode"),
+						userDataDir: path.join(homeRoot, "data"),
+					},
+				}
+			);
+
+			expect(exitCode).toBe(0);
+			expect(stdout.output).toContain("No MCP servers configured.");
+			expect(stderr.output).toBe("");
+			expect(modeLoaded).toBe(false);
+			expect(runtimeInitialized).toBe(false);
+		} finally {
+			await rm(root, { force: true, recursive: true });
+		}
+	});
+
 	test("routes bare invocation to the injected interactive runner", async () => {
 		const stdout = capture();
 		const stderr = capture();

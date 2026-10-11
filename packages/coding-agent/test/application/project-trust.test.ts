@@ -90,38 +90,44 @@ describe("Coding-Agent Application Project trust", () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
-		const configRoot = path.join(homeRoot, ".config", "wincode");
 		const userDataDir = path.join(homeRoot, ".local", "share", "wincode");
 		const marker = path.join(directory, "plugin-evaluated");
+		await Promise.all([mkdir(workspace, { recursive: true })]);
 		await Promise.all([
-			mkdir(workspace, { recursive: true }),
-			mkdir(configRoot, { recursive: true }),
+			Bun.write(
+				path.join(homeRoot, ".wincode", "settings.json"),
+				JSON.stringify({ settings: { userOnly: true } })
+			),
+			Bun.write(
+				path.join(homeRoot, ".wincode", "mcp.json"),
+				JSON.stringify({
+					mcpServers: {
+						user_server: {
+							command: "bun",
+							args: ["run", "user-server.ts"],
+						},
+					},
+				})
+			),
+			Bun.write(
+				path.join(workspace, ".wincode", "settings.json"),
+				JSON.stringify({
+					plugins: ["./project-plugin.ts"],
+					settings: { projectOnly: true },
+				})
+			),
+			Bun.write(
+				path.join(workspace, ".wincode", "mcp.json"),
+				JSON.stringify({
+					mcpServers: {
+						project_server: {
+							command: "bun",
+							args: ["run", "project-server.ts"],
+						},
+					},
+				})
+			),
 		]);
-		await Bun.write(
-			path.join(configRoot, "wincode.json"),
-			JSON.stringify({
-				mcp: {
-					user_server: {
-						command: ["bun", "run", "user-server.ts"],
-						type: "local",
-					},
-				},
-				settings: { userOnly: true },
-			})
-		);
-		await Bun.write(
-			path.join(workspace, "wincode.json"),
-			JSON.stringify({
-				mcp: {
-					project_server: {
-						command: ["bun", "run", "project-server.ts"],
-						type: "local",
-					},
-				},
-				plugins: ["./project-plugin.ts"],
-				settings: { projectOnly: true },
-			})
-		);
 		await Bun.write(
 			path.join(workspace, "project-plugin.ts"),
 			`import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "evaluated");\nexport default (api: { definePlugin(input: { id: string }): void }) => api.definePlugin({ id: "project_plugin" });\n`
@@ -136,18 +142,26 @@ describe("Coding-Agent Application Project trust", () => {
 				stdinIsTTY: false,
 			},
 			{
-				configRoot,
 				distributionPlugins: [],
 				homeRoot,
 				userDataDir,
 			}
 		);
 		try {
-			const snapshot =
-				await runtime.configRuntime.configStore.getSnapshot(workspace);
-			const mcp = resolveMcpConfig({ env: {}, snapshot, workspace });
+			const [settingsSnapshot, mcpSnapshot] = await Promise.all([
+				runtime.configRuntime.configStore.getSnapshot(workspace),
+				runtime.configRuntime.configStore.getNamespaceSnapshot(
+					workspace,
+					"mcp"
+				),
+			]);
+			const mcp = await resolveMcpConfig({
+				env: {},
+				snapshot: mcpSnapshot,
+				workspace,
+			});
 			expect(Object.keys(mcp.servers)).toEqual(["user_server"]);
-			expect(snapshot.document.settings).toEqual({ userOnly: true });
+			expect(settingsSnapshot.document.settings).toEqual({ userOnly: true });
 			expect(
 				runtime.pluginRuntime.getToolDescriptors("project-trust-test")
 			).toEqual([]);
@@ -163,28 +177,26 @@ describe("Coding-Agent Application Project trust", () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
-		const configRoot = path.join(homeRoot, ".config", "wincode");
 		const pluginMarker = path.join(directory, "plugin-evaluated");
 		const serverMarker = path.join(directory, "mcp-started");
-		await Promise.all([
-			mkdir(workspace, { recursive: true }),
-			mkdir(configRoot, { recursive: true }),
-		]);
+		await Promise.all([mkdir(workspace, { recursive: true })]);
 		await Promise.all([
 			Bun.write(
-				path.join(workspace, "wincode.json"),
+				path.join(workspace, ".wincode", "settings.json"),
+				JSON.stringify({ plugins: ["./project-plugin.ts"] })
+			),
+			Bun.write(
+				path.join(workspace, ".wincode", "mcp.json"),
 				JSON.stringify({
-					mcp: {
+					mcpServers: {
 						project_server: {
-							command: [
-								process.execPath,
+							command: process.execPath,
+							args: [
 								"-e",
 								`await Bun.write(${JSON.stringify(serverMarker)}, "started");`,
 							],
-							type: "local",
 						},
 					},
-					plugins: ["./project-plugin.ts"],
 				})
 			),
 			Bun.write(
@@ -202,7 +214,6 @@ describe("Coding-Agent Application Project trust", () => {
 				stdinIsTTY: true,
 			},
 			{
-				configRoot,
 				distributionPlugins: [{ id: "mcp", specifier: "@wincode/mcp/plugin" }],
 				homeRoot,
 				userDataDir: path.join(directory, "user-data"),
@@ -238,18 +249,23 @@ describe("Coding-Agent Application Project trust", () => {
 		const marker = path.join(directory, "plugin-evaluated");
 		const userDataDir = path.join(directory, "user-data");
 		await mkdir(path.join(configDirectory, "plugins"), { recursive: true });
-		await Bun.write(
-			path.join(configDirectory, "wincode.json"),
-			JSON.stringify({
-				mcp: {
-					project_server: {
-						command: ["bun", "run", "project-server.ts"],
-						type: "local",
+		await Promise.all([
+			Bun.write(
+				path.join(configDirectory, "settings.json"),
+				JSON.stringify({ plugins: ["./plugins/project-plugin.ts"] })
+			),
+			Bun.write(
+				path.join(configDirectory, "mcp.json"),
+				JSON.stringify({
+					mcpServers: {
+						project_server: {
+							command: "bun",
+							args: ["run", "project-server.ts"],
+						},
 					},
-				},
-				plugins: ["./plugins/project-plugin.ts"],
-			})
-		);
+				})
+			),
+		]);
 		await Bun.write(
 			path.join(configDirectory, "plugins", "project-plugin.ts"),
 			`import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "evaluated");\nexport default (api) => { const plugin = api.definePlugin({ id: "project_plugin" }); plugin.registerResource("loaded", true); };\n`
@@ -276,8 +292,11 @@ describe("Coding-Agent Application Project trust", () => {
 				runtime.pluginRuntime.getResource<boolean>("project_plugin", "loaded")
 			).toBe(true);
 			const snapshot =
-				await runtime.configRuntime.configStore.getSnapshot(workspace);
-			const mcp = resolveMcpConfig({ env: {}, snapshot, workspace });
+				await runtime.configRuntime.configStore.getNamespaceSnapshot(
+					workspace,
+					"mcp"
+				);
+			const mcp = await resolveMcpConfig({ env: {}, snapshot, workspace });
 			expect(Object.keys(mcp.servers)).toEqual(["project_server"]);
 			expect(runtime.startupDiagnostics).toEqual([]);
 		} finally {
@@ -294,7 +313,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(directory, "user-data");
 		await mkdir(workspace, { recursive: true });
-		const configPath = path.join(workspace, "wincode.json");
+		const configPath = path.join(workspace, ".wincode/settings.json");
 		await Bun.write(
 			configPath,
 			JSON.stringify({ settings: { beforePrompt: true } })
@@ -468,7 +487,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const userDataDir = path.join(directory, "user-data");
 		await mkdir(workspace, { recursive: true });
 		await Bun.write(
-			path.join(workspace, "wincode.json"),
+			path.join(workspace, ".wincode/settings.json"),
 			JSON.stringify({ settings: { projectOnly: true } })
 		);
 		let prompts = 0;
@@ -527,7 +546,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const workspace = path.join(directory, "repo");
 		const userDataDir = path.join(directory, "user-data");
 		await mkdir(workspace, { recursive: true });
-		await Bun.write(path.join(workspace, "wincode.json"), "{}");
+		await Bun.write(path.join(workspace, ".wincode/settings.json"), "{}");
 
 		await saveProjectTrustDecision({
 			decision: "deny",
@@ -559,7 +578,7 @@ describe("Coding-Agent Application Project trust", () => {
 			mkdir(path.join(parent, ".git"), { recursive: true }),
 			mkdir(workspace, { recursive: true }),
 		]);
-		await Bun.write(path.join(workspace, "wincode.json"), "{}");
+		await Bun.write(path.join(workspace, ".wincode/settings.json"), "{}");
 
 		await saveProjectTrustDecision({
 			decision: "deny",
@@ -615,7 +634,6 @@ describe("Coding-Agent Application Project trust", () => {
 				stdinIsTTY: true,
 			},
 			{
-				configRoot: path.join(directory, "config"),
 				distributionPlugins: [],
 				homeRoot,
 				userDataDir,
@@ -625,7 +643,7 @@ describe("Coding-Agent Application Project trust", () => {
 		try {
 			expect(runtime.configRuntime.trustedProjectRoots).toEqual([]);
 			await Bun.write(
-				path.join(workspace, "wincode.json"),
+				path.join(workspace, ".wincode/settings.json"),
 				JSON.stringify({ settings: { reloadShouldNotTrust: true } })
 			);
 
@@ -668,11 +686,11 @@ describe("Coding-Agent Application Project trust", () => {
 		]);
 		await Promise.all([
 			Bun.write(
-				path.join(projectRoot, "wincode.json"),
+				path.join(projectRoot, ".wincode/settings.json"),
 				JSON.stringify({ settings: { ancestor: true } })
 			),
 			Bun.write(
-				path.join(descendant, "wincode.json"),
+				path.join(descendant, ".wincode/settings.json"),
 				JSON.stringify({ settings: { descendant: true } })
 			),
 		]);
@@ -726,11 +744,11 @@ describe("Coding-Agent Application Project trust", () => {
 		]);
 		await Promise.all([
 			Bun.write(
-				path.join(projectRoot, "wincode.json"),
+				path.join(projectRoot, ".wincode/settings.json"),
 				JSON.stringify({ settings: { ancestor: true } })
 			),
 			Bun.write(
-				path.join(descendant, "wincode.json"),
+				path.join(descendant, ".wincode/settings.json"),
 				JSON.stringify({ settings: { descendant: true } })
 			),
 		]);
@@ -818,8 +836,8 @@ describe("Coding-Agent Application Project trust", () => {
 			mkdir(workspace, { recursive: true }),
 		]);
 		await Promise.all([
-			Bun.write(path.join(repository, "wincode.json"), "{}"),
-			Bun.write(path.join(workspace, "wincode.json"), "{}"),
+			Bun.write(path.join(repository, ".wincode/settings.json"), "{}"),
+			Bun.write(path.join(workspace, ".wincode/settings.json"), "{}"),
 		]);
 
 		const promptedRoots: string[] = [];
@@ -855,7 +873,7 @@ describe("Coding-Agent Application Project trust", () => {
 		const userDataDir = path.join(directory, "user-data");
 		await mkdir(workspace, { recursive: true });
 		await Bun.write(
-			path.join(workspace, "wincode.json"),
+			path.join(workspace, ".wincode/settings.json"),
 			JSON.stringify({ settings: { projectOnly: true } })
 		);
 
@@ -899,8 +917,8 @@ describe("Coding-Agent Application Project trust", () => {
 			mkdir(workspace, { recursive: true }),
 		]);
 		await Promise.all([
-			Bun.write(path.join(repository, "wincode.json"), "{}"),
-			Bun.write(path.join(workspace, "wincode.json"), "{}"),
+			Bun.write(path.join(repository, ".wincode/settings.json"), "{}"),
+			Bun.write(path.join(workspace, ".wincode/settings.json"), "{}"),
 		]);
 
 		const resolution = await resolveProjectTrust({
@@ -950,7 +968,7 @@ describe("Coding-Agent Application Project trust", () => {
 		]);
 		await Promise.all(
 			[repository, parent, workspace].map((root) =>
-				Bun.write(path.join(root, "wincode.json"), "{}")
+				Bun.write(path.join(root, ".wincode/settings.json"), "{}")
 			)
 		);
 
@@ -981,8 +999,8 @@ describe("Coding-Agent Application Project trust", () => {
 			mkdir(projectTrustDir, { recursive: true }),
 		]);
 		await Promise.all([
-			Bun.write(path.join(repository, "wincode.json"), "{}"),
-			Bun.write(path.join(workspace, "wincode.json"), "{}"),
+			Bun.write(path.join(repository, ".wincode/settings.json"), "{}"),
+			Bun.write(path.join(workspace, ".wincode/settings.json"), "{}"),
 			Bun.write(
 				path.join(projectTrustDir, "project-trust.json"),
 				JSON.stringify({
@@ -1030,7 +1048,7 @@ describe("Coding-Agent Application Project trust", () => {
 		for (const mode of ["print", "json", "rpc", "sdk"] as const) {
 			const workspace = path.join(directory, mode);
 			await mkdir(workspace, { recursive: true });
-			await Bun.write(path.join(workspace, "wincode.json"), "{}");
+			await Bun.write(path.join(workspace, ".wincode/settings.json"), "{}");
 			const resolution = await resolveProjectTrust({
 				mode,
 				prompt: async () => {

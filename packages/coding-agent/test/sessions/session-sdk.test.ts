@@ -41,7 +41,6 @@ import { sessionId } from "../support/identifiers";
 const root = await mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
 const storeRoot = path.join(root, "data");
-const configRoot = path.join(root, "config");
 const homeRoot = path.join(root, "home");
 const subagentsPluginPath = fileURLToPath(
 	import.meta.resolve("@wincode/subagents/plugin")
@@ -51,7 +50,7 @@ const configuredSessionSdkPluginPath = path.resolve(
 	"../fixtures/configured-session-sdk-plugin.ts"
 );
 await Promise.all(
-	[workspace, storeRoot, configRoot, homeRoot].map((directory) =>
+	[workspace, storeRoot, homeRoot].map((directory) =>
 		mkdir(directory, { recursive: true })
 	)
 );
@@ -59,7 +58,7 @@ const database = createDatabase(path.join(storeRoot, "sessions.sqlite"));
 const store = createDrizzleSessionStore(database.db, {
 	workspaceRoot: workspace,
 });
-const configStore = createConfigStore({ configRoot, homeRoot });
+const configStore = createConfigStore({ homeRoot });
 
 test("public Session SDK options do not expose host-internal dependencies", () => {
 	const validOptions: SessionSdkOptions = {
@@ -102,34 +101,18 @@ afterAll(async () => {
 
 test("public Session SDK trust is not inherited by a new Session runtime", async () => {
 	const trustWorkspace = path.join(root, "public-sdk-trust-workspace");
-	const xdgConfigHome = path.join(root, "public-sdk-trust-config");
-	const xdgDataHome = path.join(root, "public-sdk-trust-data");
-	const userConfigDirectory = path.join(xdgConfigHome, "wincode");
-	await Promise.all([
-		mkdir(trustWorkspace, { recursive: true }),
-		mkdir(userConfigDirectory, { recursive: true }),
-	]);
-	await Promise.all([
-		Bun.write(
-			path.join(userConfigDirectory, "wincode.json"),
-			JSON.stringify({})
-		),
-		Bun.write(
-			path.join(trustWorkspace, "wincode.json"),
-			JSON.stringify({
-				agents: {
-					"project-agent": {
-						description: "Configured only by this project.",
-						role: "subagent",
-					},
+	await mkdir(trustWorkspace, { recursive: true });
+	await Bun.write(
+		path.join(trustWorkspace, ".wincode", "settings.json"),
+		JSON.stringify({
+			agents: {
+				"project-agent": {
+					description: "Configured only by this project.",
+					role: "subagent",
 				},
-			})
-		),
-	]);
-	const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
-	const previousXdgDataHome = process.env.XDG_DATA_HOME;
-	process.env.XDG_CONFIG_HOME = xdgConfigHome;
-	process.env.XDG_DATA_HOME = xdgDataHome;
+			},
+		})
+	);
 	let deniedSdk: SessionSdk | undefined;
 	let trustedSdk: SessionSdk | undefined;
 	let childSdk: SessionSdk | undefined;
@@ -170,16 +153,6 @@ test("public Session SDK trust is not inherited by a new Session runtime", async
 		await childSdk?.dispose();
 		await trustedSdk?.dispose();
 		await deniedSdk?.dispose();
-		if (previousXdgConfigHome === undefined) {
-			delete process.env.XDG_CONFIG_HOME;
-		} else {
-			process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
-		}
-		if (previousXdgDataHome === undefined) {
-			delete process.env.XDG_DATA_HOME;
-		} else {
-			process.env.XDG_DATA_HOME = previousXdgDataHome;
-		}
 	}
 });
 
@@ -218,17 +191,14 @@ test("an injected Session SDK creates an empty durable Session and reopens it", 
 	}
 });
 
-test("the public Session SDK loads user-configured Plugins but a new Session runtime does not inherit them", async () => {
-	const xdgConfigHome = path.join(root, "configured-plugin-xdg");
-	const userConfigDirectory = path.join(xdgConfigHome, "wincode");
+test("the public Session SDK loads trusted project Plugins but a new Session runtime does not inherit trust", async () => {
+	const projectConfigDirectory = path.join(workspace, ".wincode");
 	const markerPath = path.join(workspace, ".configured-session-sdk-plugin");
-	await mkdir(userConfigDirectory, { recursive: true });
+	await mkdir(projectConfigDirectory, { recursive: true });
 	await Bun.write(
-		path.join(userConfigDirectory, "wincode.json"),
+		path.join(projectConfigDirectory, "settings.json"),
 		JSON.stringify({ plugins: [configuredSessionSdkPluginPath] })
 	);
-	const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
-	process.env.XDG_CONFIG_HOME = xdgConfigHome;
 
 	let sdk: SessionSdk | undefined;
 	let childSdk: SessionSdk | undefined;
@@ -238,6 +208,7 @@ test("the public Session SDK loads user-configured Plugins but a new Session run
 		sdk = await createPublicSessionSdk({
 			cwd: workspace,
 			databasePath: path.join(storeRoot, "configured-plugin-sdk.sqlite"),
+			projectTrust: "trust",
 			workspace,
 		});
 		parentHandle = await sdk.createSession({
@@ -255,11 +226,6 @@ test("the public Session SDK loads user-configured Plugins but a new Session run
 		await childSdk?.dispose();
 		await parentHandle?.dispose();
 		await sdk?.dispose();
-		if (previousXdgConfigHome === undefined) {
-			delete process.env.XDG_CONFIG_HOME;
-		} else {
-			process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
-		}
 		await rm(markerPath, { force: true });
 	}
 });

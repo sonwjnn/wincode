@@ -30,7 +30,7 @@ const flushRenders = async (setup: TestRendererSetup): Promise<void> => {
 };
 
 test("global Hide thinking replaces live and historical reasoning and reset restores it", async () => {
-	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const configFile = `${TEST_CONFIG_ROOT}/settings.json`;
 	const files: Record<string, string> = {};
 	const configStore = createInMemoryConfigStore(files);
 	const configValue = {
@@ -116,7 +116,7 @@ test("global Hide thinking replaces live and historical reasoning and reset rest
 });
 
 test("keeps reasoning visible until a saved Hide thinking preference loads", async () => {
-	const configFile = `${TEST_CONFIG_ROOT}/wincode.json`;
+	const configFile = `${TEST_CONFIG_ROOT}/settings.json`;
 	const files: Record<string, string> = {
 		[configFile]: '{"display":{"hideThinking":true}}',
 	};

@@ -13,7 +13,7 @@ export const MAX_MCP_TOOL_NAME_LENGTH = 64;
 export const MAX_MCP_TOOL_DESCRIPTION_BYTES = 8 * 1024;
 export const MAX_MCP_TOOL_SCHEMA_BYTES = 64 * 1024;
 export const MAX_MCP_MANIFEST_BYTES = 256 * 1024;
-export const MAX_MCP_RESULT_BYTES = 256 * 1024;
+export const MAX_MCP_RESULT_BYTES = 48 * 1024;
 export const MCP_TOOL_NAME_REGEX = /^[A-Za-z0-9_-]+$/u;
 
 const MAX_JSON_NESTING_DEPTH = 64;

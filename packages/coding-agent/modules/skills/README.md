@@ -41,19 +41,19 @@ live in this module, including Node/Bun discovery and content loading.
 
 ## Discovery and precedence
 
-Wincode sources are global `${XDG_CONFIG_HOME:-~/.config}/wincode/skills` and
-`~/.wincode/skills`, project `.wincode/skills` directories while walking from the Git worktree root
-to the workspace, and optional `skills.paths` entries from Wincode JSON. Legacy compatibility
-sources remain global `~/.agents/skills`, `~/.claude/skills`, `~/.opencode/skills`, and
-`~/.config/opencode/skills`, plus project `.agents/skills`, `.claude/skills`, and `.opencode/skills`
-at each traversed root.
+Wincode sources are global `~/.wincode/skills` and project `.wincode/skills` directories while
+walking from the Git worktree root to the workspace, plus optional `skills.paths` entries from
+`settings.json` or `settings.jsonc`. Legacy compatibility sources remain global `~/.agents/skills`,
+`~/.claude/skills`, `~/.opencode/skills`, and `~/.config/opencode/skills`, plus project
+`.agents/skills`, `.claude/skills`, and `.opencode/skills` at each traversed root. The obsolete
+XDG Wincode config root is not read.
 
 Project skills override global skills. A nearer project ancestor overrides a farther one. Within a
 scope, Wincode folders override legacy folders, configured paths override conventional folders,
-the home Wincode folder overrides the XDG Wincode folder, and a later configured path overrides an
-earlier one. Invalid or unreadable candidates are skipped. User Skills are loaded from their selected roots;
-project Skills are considered only when their project has been trusted. Skill bodies are untrusted
-context and are sent with the current request only when selected.
+and a later configured path overrides an earlier one. Invalid or unreadable candidates are skipped.
+User Skills are loaded from their selected roots; project Skills are considered only when their
+project has been trusted. Skill bodies are untrusted context and are sent with the current request
+only when selected.
 
 ## Configured paths
 
@@ -66,7 +66,7 @@ context and are sent with the current request only when selected.
 ```
 
 Each path names a directory whose direct child directories may contain `SKILL.md`. Relative paths
-resolve from the directory containing the `wincode.json` or `wincode.jsonc` source that supplied the
+resolve from the directory containing the `settings.json` or `settings.jsonc` source that supplied the
 array; absolute paths remain absolute. Shared config merge rules apply, so a higher-precedence
 `paths` array replaces a lower one. Conventional Wincode and retained legacy folders always
 participate alongside the configured list.

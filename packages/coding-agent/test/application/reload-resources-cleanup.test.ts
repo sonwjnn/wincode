@@ -35,7 +35,6 @@ afterAll(async () => {
 
 const configRuntimeFor = (workspace: string): ConfigRuntime => ({
 	configStore: createConfigStore({
-		configRoot: path.join(workspace, "config"),
 		homeRoot: workspace,
 		trustedProjectRoots: [],
 	}),

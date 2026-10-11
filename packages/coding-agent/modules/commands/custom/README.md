@@ -56,7 +56,7 @@ Built-in Commands in the `/` overlay.
 ```
 
 Each path names a directory whose direct `.md` children are Custom Commands. Relative paths resolve
-from the directory containing the `wincode.json` or `wincode.jsonc` source that supplied the array;
+from the directory containing the `settings.json` or `settings.jsonc` source that supplied the array;
 absolute paths remain absolute. Shared config merge rules apply, so a higher-precedence `paths`
 array replaces a lower one. Within a scope, configured paths override conventional folders and a
 later configured path overrides an earlier one. Project candidates always override global ones.
