@@ -12,7 +12,6 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
@@ -127,7 +126,6 @@ export function ProjectTrustDialogContent({
 				</box>
 			</DialogInset>
 			<SearchListDialogWrapper<ProjectTrustChoiceItem>
-				footer={<DialogFooterHint label="navigate" shortcut="↑↓" />}
 				getKey={(choice) => choice.action}
 				getSearchText={(choice) => `${choice.label} ${choice.description}`}
 				items={choices}

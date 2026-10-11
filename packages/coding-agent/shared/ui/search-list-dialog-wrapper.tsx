@@ -11,6 +11,7 @@ import {
 import { useDialogLayer } from "../providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "../providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../providers/theme/theme-provider";
+import { DialogFooterHint } from "./dialog-footer-hint";
 import { DialogInset } from "./dialog-inset";
 
 const MAX_VISIBLE_ITEMS = 6;
@@ -52,6 +53,7 @@ type SearchListDialogWrapperProps<T> = {
 	maxVisibleItems?: number;
 	minVisibleItems?: number;
 	footer?: ReactNode;
+	navigationHint?: ReactNode;
 	contentMarginX?: number;
 	footerMarginX?: number;
 	itemMarginX?: number;
@@ -86,6 +88,7 @@ export function SearchListDialogWrapper<T>({
 	maxVisibleItems = MAX_VISIBLE_ITEMS,
 	minVisibleItems = 0,
 	footer,
+	navigationHint = <DialogFooterHint label="navigate" shortcut="↑↓" />,
 	contentMarginX = DEFAULT_DIALOG_CONTENT_MARGIN_X,
 	footerMarginX = contentMarginX,
 	itemMarginX = DEFAULT_DIALOG_LIST_ITEM_MARGIN_X,
@@ -254,6 +257,9 @@ export function SearchListDialogWrapper<T>({
 			)}
 			{footer ? (
 				<DialogInset marginX={footerMarginX}>{footer}</DialogInset>
+			) : null}
+			{navigationHint ? (
+				<DialogInset marginX={contentMarginX}>{navigationHint}</DialogInset>
 			) : null}
 		</box>
 	);

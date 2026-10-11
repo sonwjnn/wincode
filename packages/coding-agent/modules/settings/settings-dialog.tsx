@@ -377,7 +377,6 @@ export function SettingsDialogContent({
 						</>
 					) : null}
 					<box flexDirection="row" gap={2}>
-						<DialogFooterHint label="navigate" shortcut="↑↓" />
 						<DialogFooterHint label="change" shortcut="space/enter" />
 						<DialogFooterHint label="reset" shortcut="ctrl+r" />
 					</box>
