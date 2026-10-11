@@ -17,13 +17,14 @@ const TABLE = {
 	},
 };
 
-const restorePricingUrl = createEnvironmentRestorer([
+const restorePricingEnv = createEnvironmentRestorer([
+	"WINCODE_MODEL_PRICING_OFFLINE",
 	"WINCODE_MODEL_PRICING_URL",
 ]);
 
 afterEach(() => {
 	mock.restore();
-	restorePricingUrl();
+	restorePricingEnv();
 });
 
 const Probe = () => {
@@ -52,6 +53,7 @@ const isolatePricingCache = (): void => {
 };
 
 test("retries a failed pricing fetch on the next mount", async () => {
+	process.env.WINCODE_MODEL_PRICING_OFFLINE = "0";
 	process.env.WINCODE_MODEL_PRICING_URL = "https://pricing.test/retry";
 	isolatePricingCache();
 	const fetchSpy = spyOn(
@@ -73,6 +75,7 @@ test("retries a failed pricing fetch on the next mount", async () => {
 });
 
 test("labels a table fetched in this session live", async () => {
+	process.env.WINCODE_MODEL_PRICING_OFFLINE = "0";
 	process.env.WINCODE_MODEL_PRICING_URL = "https://pricing.test/live";
 	isolatePricingCache();
 	spyOn(fetchModule, "fetchModelPricingTable").mockResolvedValue(TABLE);
