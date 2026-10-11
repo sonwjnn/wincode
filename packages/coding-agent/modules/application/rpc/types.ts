@@ -1,4 +1,5 @@
 import type { ThinkingLevel, ThinkingSelection } from "@wincode/ai/models";
+import type { ApplicationSessionEnvironmentInput } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SkillContext } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -6,7 +7,7 @@ import type {
 	AgentTurnId,
 	ChatModelSelection,
 	SessionCapabilities,
-	SessionCapabilitiesAssembly,
+	SessionEnvironment,
 	SessionHost,
 	SessionId,
 	SessionMessage,
@@ -87,29 +88,30 @@ export type OutputWriter = {
 	drain?: () => Promise<void>;
 };
 
-export type RpcAssembly = Omit<
-	SessionCapabilitiesAssembly,
-	"store" | "workspaceId"
-> & {
-	store?: SessionStore;
-	workspaceId: string;
-};
+/**
+ * What RPC Mode needs from a Session Environment: its capabilities, its
+ * teardown, its workspace, and the store it may still attach through. A
+ * Session Environment satisfies it as-is.
+ */
+export type RpcAssembly = Pick<
+	SessionEnvironment,
+	"capabilities" | "shutdown"
+> &
+	Readonly<{
+		store?: SessionStore;
+		workspace: string;
+		workspaceId: string;
+	}>;
 
-export type RpcCompositionInput = Readonly<{
-	configRuntime?: ConfigRuntime;
-	cwd: string;
-	pluginRuntime?: PluginRuntime;
-	disabledPluginIds?: readonly string[];
-	pluginPaths?: readonly string[];
-	workspace: string;
-}>;
+/** RPC Mode composes the application's Session Environment from this input. */
+export type RpcCompositionInput = ApplicationSessionEnvironmentInput;
 
 export type RpcRunnerOptions = Readonly<{
 	configRuntime?: ConfigRuntime;
 	disabledPluginIds?: readonly string[];
 	pluginPaths?: readonly string[];
 	pluginRuntime?: PluginRuntime;
-	composeCapabilities?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
+	composeEnvironment?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	input: JsonlInput;
 	signal?: AbortSignal;
 	signalExitCode?: number | (() => number);
@@ -129,9 +131,7 @@ export type RuntimeModules = Readonly<{
 		capabilities: SessionCapabilities;
 		sessionId: SessionId;
 	}) => Promise<SessionHost>;
-	createSessionCapabilities: (
-		input: RpcCompositionInput
-	) => Promise<RpcAssembly>;
+	openSessionEnvironment: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	createSessionUserMessage: (
 		text: string,
 		metadata?: SessionMessageMetadata

@@ -34,7 +34,9 @@ export { createSessionUserMessage } from "../message";
 export type { SessionStore } from "../storage/session-store";
 export type { SessionSendInput } from "../submission-types";
 export type {
-	SessionCapabilitiesAssembly,
-	SessionCapabilitiesOptions,
-} from "./session-capabilities";
+	SessionEnvironment,
+	SessionEnvironmentPolicy,
+	SessionEnvironmentSources,
+	SessionPluginPolicy,
+} from "./session-environment";
 export type { SessionCapabilities, SessionHost } from "./types";

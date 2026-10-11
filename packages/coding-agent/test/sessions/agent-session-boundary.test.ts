@@ -42,6 +42,13 @@ const ENTRIES = [
 		),
 	},
 	{
+		name: "Session Environment",
+		path: path.resolve(
+			TUI_ROOT,
+			"modules/sessions/host/session-environment.ts"
+		),
+	},
+	{
 		name: "Session RPC boundary",
 		path: path.resolve(TUI_ROOT, "modules/sessions/host/session-rpc.ts"),
 	},

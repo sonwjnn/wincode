@@ -5,9 +5,9 @@ import * as path from "node:path";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/utils";
 import {
-	createSessionCapabilities,
-	type SessionCapabilitiesAssembly,
-} from "@/modules/sessions/host/session-capabilities";
+	openSessionEnvironment,
+	type SessionEnvironment,
+} from "@/modules/sessions/host/session-environment";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
@@ -89,7 +89,7 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 	const attachmentRoot = path.join(directory, "attachments");
 	const snapshotRoot = path.join(directory, "file-snapshots");
 	let sqlite: Database | undefined;
-	let assembly: SessionCapabilitiesAssembly | undefined;
+	let assembly: SessionEnvironment | undefined;
 	try {
 		const initial = createDatabase(databasePath);
 		sqlite = initial.sqlite;
@@ -141,15 +141,15 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 		`);
 		incompatibleSchema.close();
 
-		assembly = await createSessionCapabilities({
-			connections: {
-				authorize: async () => ({ kind: "api-key", apiKey: "test-key" }),
-				connect: async () => undefined,
-				listProviders: async () => [],
+		assembly = await openSessionEnvironment({
+			policy: { cwd: directory, databasePath, workspace: directory },
+			sources: {
+				connections: () => ({
+					authorize: async () => ({ kind: "api-key", apiKey: "test-key" }),
+					connect: async () => undefined,
+					listProviders: async () => [],
+				}),
 			},
-			cwd: directory,
-			databasePath,
-			workspace: directory,
 		});
 		expect(await assembly.store.listSessions()).toEqual([]);
 		expect(await assembly.store.getPromptHistory()).toEqual([

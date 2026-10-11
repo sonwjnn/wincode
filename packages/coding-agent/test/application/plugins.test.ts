@@ -24,7 +24,7 @@ import type {
 import { createApplicationResourceLoader } from "@/modules/application/resource-loader";
 import { runRpc } from "@/modules/application/rpc/runner";
 import { loadPlugins } from "@/modules/plugins/loader";
-import { createSessionCapabilities } from "@/modules/sessions/host/session-capabilities";
+import { openSessionEnvironment } from "@/modules/sessions/host/session-environment";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
 	createFakeModelClient,
@@ -1107,14 +1107,18 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 			},
 		],
 	};
-	const assembly = await createSessionCapabilities({
-		configRuntime,
-		connections,
-		cwd: workspace,
-		databasePath: path.join(workspace, "plugin-rpc.sqlite"),
-		pluginRuntime,
-		runtimeFactory: () => modelRuntime,
-		workspace,
+	const assembly = await openSessionEnvironment({
+		policy: {
+			cwd: workspace,
+			databasePath: path.join(workspace, "plugin-rpc.sqlite"),
+			workspace,
+		},
+		sources: {
+			configRuntime: () => configRuntime,
+			connections: () => connections,
+			pluginRuntime: () => pluginRuntime,
+			runtimeFactory: () => modelRuntime,
+		},
 	});
 	const initialized = Promise.withResolvers<void>();
 	const completed = Promise.withResolvers<void>();
@@ -1181,7 +1185,7 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 
 	try {
 		const exitCode = await runRpc({
-			composeCapabilities: async () => assembly,
+			composeEnvironment: async () => assembly,
 			configRuntime,
 			input,
 			pluginRuntime,
@@ -1262,23 +1266,30 @@ const runPluginToolInOneShot = async (
 			},
 		],
 	};
-	const composeCapabilities: OneShotDependencies["composeCapabilities"] =
-		async ({
-			configRuntime: modeConfigRuntime,
-			cwd,
-			pluginRuntime: modePluginRuntime,
-			workspace: modeWorkspace,
-		}: OneShotCompositionInput) => ({
-			assembly: await createSessionCapabilities({
-				configRuntime: modeConfigRuntime,
+	const composeEnvironment: OneShotDependencies["composeEnvironment"] = async ({
+		configRuntime: modeConfigRuntime,
+		cwd,
+		pluginRuntime: modePluginRuntime,
+		workspace: modeWorkspace,
+	}: OneShotCompositionInput) => ({
+		environment: await openSessionEnvironment({
+			policy: {
 				cwd,
 				databasePath: path.join(modeWorkspace, "sessions.sqlite"),
-				runtimeFactory: () => runtime,
-				pluginRuntime: modePluginRuntime,
 				workspace: modeWorkspace,
-				connections,
-			}),
-		});
+			},
+			sources: {
+				connections: () => connections,
+				runtimeFactory: () => runtime,
+				...(modeConfigRuntime === undefined
+					? {}
+					: { configRuntime: () => modeConfigRuntime }),
+				...(modePluginRuntime === undefined
+					? {}
+					: { pluginRuntime: () => modePluginRuntime }),
+			},
+		}),
+	});
 	const stdout = captureText();
 	const stderr = captureText();
 	const context: ApplicationContext = {
@@ -1300,8 +1311,8 @@ const runPluginToolInOneShot = async (
 
 	const exitCode =
 		format === "json"
-			? await runJsonMode(context, { composeCapabilities })
-			: await runPrintMode(context, { composeCapabilities });
+			? await runJsonMode(context, { composeEnvironment })
+			: await runPrintMode(context, { composeEnvironment });
 	return {
 		exitCode,
 		mappedToolResults,

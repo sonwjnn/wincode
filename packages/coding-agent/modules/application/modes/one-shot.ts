@@ -1,4 +1,3 @@
-import * as os from "node:os";
 import {
 	type AgentId,
 	type AgentTurnEvent,
@@ -18,21 +17,11 @@ import {
 	type ThinkingSelection,
 } from "@wincode/ai/models";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
-import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import {
-	createSessionSdkOperations,
-	type SessionSdkRuntimeOptions,
-} from "@/modules/sessions/sdk";
-import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
 import { resolveWorkspaceRoot } from "@/modules/tools";
-import {
-	type ConfigRuntime,
-	createConfigStore,
-} from "@/shared/config/config-store";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
-import type { SessionCapabilitiesAssembly } from "../../../modules/sessions/host/session-capabilities";
-import { createSessionCapabilities } from "../../../modules/sessions/host/session-capabilities";
+import type { SessionEnvironment } from "../../../modules/sessions/host/session-environment";
 import type {
 	SessionHost,
 	SessionHostManager,
@@ -43,7 +32,7 @@ import type { ResolvedSessionSelection } from "../../../modules/sessions/selecti
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
 import { resolveChatModelAvailability } from "../chat-model-availability";
-import { createApplicationPluginComposition } from "../plugin-composition";
+import { openApplicationSessionEnvironment } from "../plugin-composition";
 import { projectAgentEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
 import { InvocationError } from "./types";
@@ -60,20 +49,19 @@ type OneShotCompositionInput = Readonly<{
 }>;
 
 type OneShotComposition = Readonly<{
-	assembly: SessionCapabilitiesAssembly;
-	waitForPluginWork?: (sessionId: string) => Promise<void>;
+	environment: SessionEnvironment;
 }>;
 
 type OneShotDependencies = Readonly<{
-	composeCapabilities?: (
+	composeEnvironment?: (
 		input: OneShotCompositionInput
 	) => Promise<OneShotComposition>;
 }>;
 
-const composeOneShotCapabilities = async (
+const composeOneShotEnvironment = async (
 	context: ApplicationContext,
 	workspace: string,
-	compose: NonNullable<OneShotDependencies["composeCapabilities"]>
+	compose: NonNullable<OneShotDependencies["composeEnvironment"]>
 ): Promise<OneShotComposition> =>
 	compose({
 		cwd: context.cwd,
@@ -285,59 +273,23 @@ const resolveSelection = ({
 	};
 };
 
-const composeDefaultCapabilities = async ({
+const composeDefaultEnvironment = async ({
 	configRuntime,
 	cwd,
 	pluginRuntime,
 	disabledPluginIds = [],
 	pluginPaths = [],
 	workspace,
-}: OneShotCompositionInput): Promise<OneShotComposition> => {
-	const configStore = configRuntime?.configStore ?? createConfigStore();
-	const composition = createApplicationPluginComposition();
-	const resolvedPluginRuntime =
-		pluginRuntime ??
-		(await loadPlugins({
-			cliPaths: pluginPaths,
-			config: configRuntime ?? {
-				configStore,
-				cwd,
-				homeRoot: os.homedir(),
-				workspace,
-			},
-			disabledPluginIds,
-			distributionPlugins: composition.distributionPlugins,
-		}));
-	let sessionSdk: SessionSdkOperations | undefined;
-	const assembly = await createSessionCapabilities({
-		configStore,
+}: OneShotCompositionInput): Promise<OneShotComposition> => ({
+	environment: await openApplicationSessionEnvironment({
 		cwd,
-		...(configRuntime === undefined ? {} : { configRuntime }),
-		pluginRuntime: resolvedPluginRuntime,
-		getSessionSdk: () => sessionSdk,
-		turnToolResolver: composition.turnToolResolver,
+		disabledPluginIds,
+		pluginPaths,
 		workspace,
-	});
-	sessionSdk = createSessionSdkOperations(
-		{
-			configStore,
-			configRuntime: configRuntime ?? assembly.capabilities.getConfig(),
-			connections: assembly.capabilities.getConnections(),
-			cwd,
-			registry: assembly.capabilities.getRegistry(),
-			runtimeFactory: assembly.capabilities.getRuntime,
-			store: assembly.store,
-			workspace,
-		} satisfies SessionSdkRuntimeOptions,
-		assembly.capabilities.getSessionHostManager(),
-		assembly.store
-	);
-	return {
-		assembly,
-		waitForPluginWork: (sessionId) =>
-			resolvedPluginRuntime.waitForBackgroundWork(sessionId),
-	};
-};
+		...(configRuntime === undefined ? {} : { configRuntime }),
+		...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+	}),
+});
 
 const sendInputFor = (
 	selection: ResolvedSelection,
@@ -374,7 +326,7 @@ const emitJsonEvent = (
 };
 const initializeOneShotSession = async (
 	context: ApplicationContext,
-	assembly: SessionCapabilitiesAssembly,
+	environment: SessionEnvironment,
 	text: string
 ): Promise<{
 	initialMessage: SessionMessage | undefined;
@@ -386,7 +338,7 @@ const initializeOneShotSession = async (
 			? undefined
 			: toSessionId(context.invocation.session);
 	if (sessionId === undefined) {
-		const registry = assembly.capabilities.getRegistry();
+		const registry = environment.capabilities.getRegistry();
 		const selection = resolveSelection({
 			agentOption: context.invocation.agent,
 			thinkingLevelOption: context.invocation.thinkingLevel,
@@ -396,7 +348,7 @@ const initializeOneShotSession = async (
 		});
 		await validateModelAvailability(
 			selection.model,
-			assembly.capabilities.getConnections()
+			environment.capabilities.getConnections()
 		);
 		initialMessage = createSessionUserMessage(text, {
 			agent: selection.agent,
@@ -405,12 +357,12 @@ const initializeOneShotSession = async (
 				? {}
 				: { thinkingLevel: selection.thinkingLevel }),
 		});
-		const [durableMessage] = await assembly.store.externalizeAttachments(
+		const [durableMessage] = await environment.store.externalizeAttachments(
 			[initialMessage],
 			undefined,
 			{ rejectInvalid: true }
 		);
-		const created = await assembly.store.createSession({
+		const created = await environment.store.createSession({
 			agent: selection.agent,
 			message: durableMessage ?? initialMessage,
 			model: selection.model,
@@ -434,14 +386,13 @@ const runOneShot = async (
 ): Promise<OneShotResult> => {
 	const text = await readSubmission(context);
 	const workspace = resolveWorkspaceRoot(context.cwd);
-	const compose =
-		dependencies.composeCapabilities ?? composeDefaultCapabilities;
-	const oneShotComposition = await composeOneShotCapabilities(
+	const compose = dependencies.composeEnvironment ?? composeDefaultEnvironment;
+	const oneShotComposition = await composeOneShotEnvironment(
 		context,
 		workspace,
 		compose
 	);
-	const { assembly } = oneShotComposition;
+	const { environment } = oneShotComposition;
 	let host: SessionHost | undefined;
 	let manager: SessionHostManager | undefined;
 	let sessionId: SessionId | undefined;
@@ -451,20 +402,20 @@ const runOneShot = async (
 	try {
 		const initializedSession = await initializeOneShotSession(
 			context,
-			assembly,
+			environment,
 			text
 		);
 		sessionId = initializedSession.sessionId;
-		const sessionHostManager = assembly.capabilities.getSessionHostManager();
+		const sessionHostManager = environment.capabilities.getSessionHostManager();
 		manager = sessionHostManager;
 		host = await sessionHostManager.openHost({
-			capabilities: assembly.capabilities,
+			capabilities: environment.capabilities,
 			executionMode: format,
 			sessionId,
 			view: true,
 		});
 		const { initialMessage } = initializedSession;
-		const registry = assembly.capabilities.getRegistry();
+		const registry = environment.capabilities.getRegistry();
 		const restored = host.getSelection();
 		const selection = resolveSelection({
 			agentOption: context.invocation.agent,
@@ -512,7 +463,7 @@ const runOneShot = async (
 			if (outcome.rejected) {
 				throw new Error(outcome.reason);
 			}
-			await oneShotComposition.waitForPluginWork?.(sessionId);
+			await environment.waitForBackgroundWork(sessionId);
 			if (!terminalSucceeded) {
 				if (format === "json" && terminalFailureMessage !== undefined) {
 					return { terminalFailureMessage, terminalSucceeded: false };
@@ -532,7 +483,7 @@ const runOneShot = async (
 				await manager.releaseView(sessionId);
 			}
 		} finally {
-			await assembly.shutdown();
+			await environment.shutdown();
 		}
 	}
 };

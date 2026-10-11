@@ -1,8 +1,12 @@
 import type { PluginPackageReference } from "@/modules/plugins/loader";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
 	createTurnToolRegistry,
 	type TurnToolResolver,
 } from "@/modules/sessions/hooks/runtime-turn";
+import type { SessionEnvironment } from "@/modules/sessions/host/session-environment";
+import { openSessionEnvironment } from "@/modules/sessions/host/session-environment";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 
 const DISTRIBUTED_PLUGINS: readonly PluginPackageReference[] = Object.freeze([
 	{ id: "mcp", specifier: "@wincode/mcp/plugin" },
@@ -20,3 +24,50 @@ export const createApplicationPluginComposition =
 		distributionPlugins: DISTRIBUTED_PLUGINS,
 		turnToolResolver: createTurnToolRegistry().resolve,
 	});
+
+export type ApplicationSessionEnvironmentInput = Readonly<{
+	configRuntime?: ConfigRuntime;
+	cwd: string;
+	disabledPluginIds?: readonly string[];
+	pluginPaths?: readonly string[];
+	pluginRuntime?: PluginRuntime;
+	workspace: string;
+}>;
+
+/**
+ * Opens the Session Environment a non-Interactive Execution Mode runs on: the
+ * distribution's Plugin packages, the invocation's Plugin selection, and the
+ * application's turn tool registry, composed through the one Session
+ * Environment factory. Interactive Mode composes its own environment from the
+ * providers it already holds instead.
+ */
+export const openApplicationSessionEnvironment = async ({
+	configRuntime,
+	cwd,
+	disabledPluginIds = [],
+	pluginPaths = [],
+	pluginRuntime,
+	workspace,
+}: ApplicationSessionEnvironmentInput): Promise<SessionEnvironment> => {
+	const composition = createApplicationPluginComposition();
+	return await openSessionEnvironment({
+		policy: {
+			cwd,
+			plugins: {
+				disabledIdentifiers: disabledPluginIds,
+				distributionPackages: composition.distributionPlugins,
+				paths: pluginPaths,
+			},
+			workspace,
+		},
+		sources: {
+			...(configRuntime === undefined
+				? {}
+				: { configRuntime: () => configRuntime }),
+			...(pluginRuntime === undefined
+				? {}
+				: { pluginRuntime: () => pluginRuntime }),
+			turnToolResolver: () => composition.turnToolResolver,
+		},
+	});
+};

@@ -15,6 +15,8 @@ accepted SDK deliveries as ordinary user messages.
 
 `SessionSurface` opens the session and renders it: it constructs the Session Host, which loads the transcript and ordered local compaction entries, validates the messages, rebuilds the Session Context around the latest compaction, and constructs the Agent Session with all three. The Host exposes it as `agentSession`, shows the opening state until loading resolves, and hands the open Host to `SessionView`.
 
+The Host runs on a Session Environment: the surface composes one from its providers, and the environment resolves the Plugin runtime, Session Store, Session Host Manager, and Session SDK before assembling the Session Capabilities the Host reads lazily.
+
 ### Submit, steer, and continue
 
 The `AgentSession` API is the application-level command and projection boundary;
@@ -241,10 +243,11 @@ history and workspace/configuration data.
 - `agent-session/steering-workflow.ts` — committed Steering Message preparation, delivery, processing status, and retry through Agent Session callbacks; delivery bookkeeping and every state transition remain owner-owned.
 - `turn-records.ts` — durable Session Records produced by Agent Turns, shared by the Agent Session and runtime consumer.
 - `hooks/runtime-turn.ts` — adapts Agent Runtime events to the Stateful Agent's turn consumer and synthesizes missing terminal events.
-- `host/session-host.ts` — opens one Session, rebuilds its context, assembles capabilities and the Agent Session, and exposes its public command/snapshot/event API. React-free; exported through `@wincode/coding-agent/session-host`.
+- `host/session-host.ts` — opens one Session, rebuilds its context, assembles the Agent Session on the Session Capabilities it is handed, and exposes its public command/snapshot/event API. React-free; exported through `@wincode/coding-agent/session-host`.
 - `host/session-host-manager.ts` — process-lifetime Host ownership across view switches, one-writer enforcement, and background Session events.
 - `host/session-ports.ts` — `createSessionPorts`: materializes Host capabilities required by the `SessionTurnRunner`, Tools, Skills, prompt composition, attachments, and persistence.
-- `host/use-session-capabilities.ts` — composes Host capabilities from lazy application-provider getters.
+- `host/session-environment.ts` — `openSessionEnvironment`: the mode-, process-, or view-scoped Session Environment. Resolves the Plugin runtime (loaded from policy or borrowed as a source), Session Store, Session Host Manager, and Session SDK, then assembles the Session Capabilities a Host reads lazily. Closes only the resources it created; exported through `@wincode/coding-agent/session-environment`.
+- `host/use-session-environment.ts` — Interactive Mode's adapter over `openSessionEnvironment`: it reads its provider values and passes them as sources.
 - `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, and forwards public commands.
 - `SessionSurface` — opens or retains a manager-owned Host, renders the opening state until it resolves and the failure when it rejects, and releases its view reference on unmount. Background task lifecycle belongs to the Subagents Plugin.
 - `useChatInputController(options)` — command and file-mention input state.

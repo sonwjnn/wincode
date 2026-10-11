@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+- **One Session Environment composes what a Session runs on.** Print, JSON, RPC,
+  and Interactive Mode compose the same factory — the Plugin runtime, durable
+  Session storage, the Session Host Manager, Session Capabilities, and the bound
+  Session SDK — instead of assembling the graph per mode. The package exposes it
+  as `@wincode/coding-agent/session-environment`, replacing the unimported
+  `session-capabilities` subpath. A Session-scoped teardown never closes a
+  Plugin runtime it borrowed, Interactive Mode's Resource Reload reaches the
+  next Agent Turn, and compaction settings follow the current configuration and
+  pricing.
 
 - **Delegated work runs in durable child Sessions.** A process-owned Session Host
   Manager retains one Stateful Agent per live Session, while each delegated task

@@ -74,7 +74,7 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 		),
 	];
 	const exitCode = await runRpc({
-		composeCapabilities: async () => ({
+		composeEnvironment: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
 			workspace: process.cwd(),
@@ -120,7 +120,7 @@ test("RPC initialize preserves Session Writer lock infrastructure failures", asy
 	const stdout = writer();
 	const stderr = writer();
 	const exitCode = await runRpc({
-		composeCapabilities: async () => {
+		composeEnvironment: async () => {
 			throw failure;
 		},
 		input: [
@@ -162,7 +162,7 @@ describe("RPC framing errors", () => {
 		const stdout = writer();
 		const stderr = writer();
 		const exitCode = await runRpc({
-			composeCapabilities: async () => ({
+			composeEnvironment: async () => ({
 				capabilities: emptyCapabilities(),
 				shutdown: async () => undefined,
 				workspace: process.cwd(),
@@ -259,7 +259,7 @@ test("lifecycle guards use stable application and JSON-RPC errors", async () => 
 		new TextEncoder().encode(request("shutdown-1", "server/shutdown", {})),
 	];
 	const exitCode = await runRpc({
-		composeCapabilities: async () => ({
+		composeEnvironment: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
 			workspace: process.cwd(),
@@ -584,7 +584,7 @@ test("a stdout failure during shutdown response remains fatal", async () => {
 		);
 
 	const exitCode = await runRpc({
-		composeCapabilities: async () => ({
+		composeEnvironment: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
 			workspace: process.cwd(),
@@ -678,7 +678,7 @@ test("a response beyond the exact output bound emits output_overflow", async () 
 	const stdout = writer();
 	const stderr = writer();
 	const exitCode = await runRpc({
-		composeCapabilities: async () => ({
+		composeEnvironment: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
 			workspace: process.cwd(),
@@ -751,7 +751,7 @@ test("ignored aborts finish cleanup at one bounded deadline", async () => {
 	};
 	const stderr = writer();
 	const exitCode = await runRpc({
-		composeCapabilities: async () => ({
+		composeEnvironment: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => {
 				shutdownCalls += 1;
@@ -816,7 +816,7 @@ test("records shutdown failures without writing diagnostics to RPC stderr", asyn
 		{ id: "shutdown-1", jsonrpc: "2.0", method: "server/shutdown", params: {} },
 	];
 	await runRpc({
-		composeCapabilities: async () => ({
+		composeEnvironment: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => {
 				throw shutdownFailure;
