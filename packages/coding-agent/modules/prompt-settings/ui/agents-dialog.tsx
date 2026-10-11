@@ -102,7 +102,7 @@ export const AgentsDialogContent = ({
 					<AgentDiagnosticsFooter diagnostics={registry.diagnostics} />
 				) : undefined
 			}
-			footerMarginX={0}
+			footerMargin={{ left: 0, right: 0 }}
 			getKey={(item) => item.id}
 			getSearchText={(item) => `${item.displayName} ${item.description}`}
 			isItemActive={(item) => item.id === currentAgent}
