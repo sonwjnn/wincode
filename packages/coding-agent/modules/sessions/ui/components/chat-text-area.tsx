@@ -165,8 +165,13 @@ export function ChatTextArea({
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 }: ChatTextAreaProps) {
-	const { agent, cycleThinkingLevel, model, setModel, setThinkingLevel } =
-		usePromptConfig();
+	const {
+		agent,
+		cycleThinkingLevel,
+		model,
+		setModelForFutureSubmissions,
+		setThinkingLevelForFutureSubmissions,
+	} = usePromptConfig();
 	const connections = useConnections();
 	const pluginRuntime = getInteractivePluginRuntime();
 	useEffect(() => {
@@ -175,11 +180,17 @@ export function ChatTextArea({
 		}
 		return pluginRuntime.bindPromptSelectionTarget(
 			createPluginPromptSelectionTarget(connections, {
-				setModel,
-				setThinkingLevel,
+				setModel: setModelForFutureSubmissions,
+				setThinkingLevel: setThinkingLevelForFutureSubmissions,
 			})
 		);
-	}, [connections, disabled, pluginRuntime, setModel, setThinkingLevel]);
+	}, [
+		connections,
+		disabled,
+		pluginRuntime,
+		setModelForFutureSubmissions,
+		setThinkingLevelForFutureSubmissions,
+	]);
 	const supportedModel = findSupportedChatModelSelection(model);
 	const chatModelSelection = isNull(supportedModel)
 		? null

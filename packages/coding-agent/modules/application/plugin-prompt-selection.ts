@@ -1,12 +1,11 @@
 import type { Connections } from "@wincode/ai/connections";
 import {
 	type ChatModelSelection,
-	findSupportedChatModelSelection,
-	isActiveChatModel,
 	modelSelectionSchema,
 	type ThinkingLevel,
 } from "@wincode/ai/models";
 import type { PluginPromptSelectionTarget } from "@/modules/plugins/prompt-selection";
+import { resolveChatModelAvailability } from "./chat-model-availability";
 
 type PromptSelectionMutations = Readonly<{
 	setModel: (model: ChatModelSelection) => void;
@@ -24,16 +23,11 @@ export const createPluginPromptSelectionTarget = (
 			if (!parsed.success) {
 				return false;
 			}
-			const supportedModel = findSupportedChatModelSelection(parsed.data);
-			if (supportedModel === null || !isActiveChatModel(supportedModel)) {
-				return false;
-			}
-			const providers = await connections.listProviders();
-			if (
-				!providers.some(
-					({ connected, id }) => connected && id === parsed.data.providerId
-				)
-			) {
+			const availability = await resolveChatModelAvailability(
+				parsed.data,
+				connections
+			);
+			if (availability.status !== "available") {
 				return false;
 			}
 			promptSelection.setModel(parsed.data);

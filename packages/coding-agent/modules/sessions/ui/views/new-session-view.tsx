@@ -73,8 +73,15 @@ export function NewSessionView() {
 	const [initializedDefaultAgentId, setInitializedDefaultAgentId] = useState<
 		string | undefined
 	>();
-	const { agent, model, thinkingLevel, setAgent, setModel, setThinkingLevel } =
-		usePromptConfig();
+	const {
+		agent,
+		model,
+		thinkingLevel,
+		setAgent,
+		setModel,
+		setThinkingLevel,
+		submissionSelectionOverride,
+	} = usePromptConfig();
 	const currentThinkingSelection: ThinkingSelection =
 		thinkingLevel === undefined ? {} : { thinkingLevel };
 	const openSettings = useSettingsHubDialog();
@@ -180,7 +187,9 @@ export function NewSessionView() {
 			registry,
 			agent,
 			model,
-			currentThinkingSelection
+			currentThinkingSelection,
+			false,
+			submissionSelectionOverride
 		);
 		const initialMessage = createSessionUserMessage(
 			input,

@@ -146,7 +146,7 @@ const STRATEGIES = {
 			createElement(ModelsDialogContent, {
 				currentModel: config.model,
 				models: getModelsForPicker(modelCatalog, config.model),
-				onSelectModel: config.setModel,
+				onSelectModel: config.setModelForFutureSubmissions,
 				recentSelections: getRecentModelSelections(10),
 			}),
 	},
@@ -163,8 +163,9 @@ const STRATEGIES = {
 			return createElement(ThinkingLevelDialogContent, {
 				currentThinkingLevel: config.thinkingLevel,
 				currentModel: supportedModel,
-				onSelectDefault: () => config.setThinkingLevel(undefined),
-				onSelectThinkingLevel: config.setThinkingLevel,
+				onSelectDefault: () =>
+					config.setThinkingLevelForFutureSubmissions(undefined),
+				onSelectThinkingLevel: config.setThinkingLevelForFutureSubmissions,
 			});
 		},
 	},
