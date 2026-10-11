@@ -1,5 +1,5 @@
-import { mkdir, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
 	agentIdSchema,
 	isSessionAttachmentReferencePart,
@@ -142,10 +142,10 @@ const parseCompactionSummary = (value: unknown): SessionCompaction["summary"] =>
 	compactionSummarySchema.parse(value);
 
 const clearAttachmentRoot = async (root: string): Promise<void> => {
-	await mkdir(root, { recursive: true });
-	const entries = await readdir(root, { withFileTypes: true });
+	await fs.mkdir(root, { recursive: true });
+	const entries = await fs.readdir(root, { withFileTypes: true });
 	for (const entry of entries) {
-		await rm(join(root, entry.name), { force: true, recursive: true });
+		await fs.rm(path.join(root, entry.name), { force: true, recursive: true });
 	}
 };
 

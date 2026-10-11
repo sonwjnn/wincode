@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, readdir, unlink } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { JsonValue } from "type-fest";
@@ -212,9 +212,9 @@ const removeExpiredLogs = async (
 		return;
 	}
 
-	const entries = await readdir(directory, { withFileTypes: true }).catch(
-		() => undefined
-	);
+	const entries = await fs
+		.readdir(directory, { withFileTypes: true })
+		.catch(() => undefined);
 	if (entries === undefined) {
 		return;
 	}
@@ -241,7 +241,7 @@ const removeExpiredLogs = async (
 			continue;
 		}
 		try {
-			await unlink(path.join(directory, entry.name));
+			await fs.unlink(path.join(directory, entry.name));
 		} catch {
 			sweepSucceeded = false;
 		}
@@ -284,18 +284,18 @@ const writeRecord = (
 	}
 	logQueue = logQueue.then(async () => {
 		try {
-			await mkdir(directory, { mode: 0o700, recursive: true });
+			await fs.mkdir(directory, { mode: 0o700, recursive: true });
 			await removeExpiredLogs(directory, currentDate);
-			await chmod(directory, 0o700);
+			await fs.chmod(directory, 0o700);
 			const logFile = path.join(directory, fileName);
 			try {
-				await chmod(logFile, 0o600);
+				await fs.chmod(logFile, 0o600);
 			} catch (error) {
 				if (!isMissingPathError(error)) {
 					throw error;
 				}
 			}
-			await appendFile(logFile, line, {
+			await fs.appendFile(logFile, line, {
 				encoding: "utf8",
 				mode: 0o600,
 			});

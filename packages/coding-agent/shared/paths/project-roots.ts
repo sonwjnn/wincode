@@ -1,11 +1,10 @@
 import * as fs from "node:fs";
-import { realpath } from "node:fs/promises";
 import * as path from "node:path";
 
 export const canonicalPath = async (pathValue: string): Promise<string> => {
 	const resolvedPath = path.resolve(pathValue);
 	try {
-		return await realpath(resolvedPath);
+		return await fs.promises.realpath(resolvedPath);
 	} catch {
 		return resolvedPath;
 	}

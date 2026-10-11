@@ -1,6 +1,6 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
@@ -134,8 +134,8 @@ const createTestConnections = (): Connections => {
 };
 
 const createTestConfigStore = (configDocument?: string) => {
-	const homeRoot = process.env.WINCODE_E2E_HOME ?? homedir();
-	const configPath = join(
+	const homeRoot = process.env.WINCODE_E2E_HOME ?? os.homedir();
+	const configPath = path.join(
 		process.env.WINCODE_E2E_WORKSPACE ?? process.cwd(),
 		".wincode",
 		"settings.jsonc"
@@ -258,7 +258,7 @@ export const renderSession = async ({
 	setup: TestRendererSetup;
 }> => {
 	const workspace = process.env.WINCODE_E2E_WORKSPACE ?? process.cwd();
-	const homeRoot = process.env.WINCODE_E2E_HOME ?? homedir();
+	const homeRoot = process.env.WINCODE_E2E_HOME ?? os.homedir();
 	const router = buildRouter(sessionId);
 	await router.load();
 	// Each rendered app owns a fresh process lifetime, so its composer starts empty.
@@ -321,8 +321,8 @@ export const writeE2EFrame = (setup: TestRendererSetup): void => {
 	if (!framePath) {
 		return;
 	}
-	mkdirSync(dirname(framePath), { recursive: true });
-	writeFileSync(framePath, setup.captureCharFrame(), "utf8");
+	fs.mkdirSync(path.dirname(framePath), { recursive: true });
+	fs.writeFileSync(framePath, setup.captureCharFrame(), "utf8");
 };
 
 export const settleSessionUi = async (

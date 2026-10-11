@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { isObjectLike } from "@wincode/utils";
 import {
 	getToolResourceLimits,
@@ -208,7 +208,7 @@ const runRecoveryAction = async (
 				latestVersion === entry.newFileVersion
 			) {
 				if (entry.originalBytes === null) {
-					await rm(entry.canonicalPath, { force: true });
+					await fs.rm(entry.canonicalPath, { force: true });
 				} else {
 					await atomicReplaceFile(
 						entry.canonicalPath,

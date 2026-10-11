@@ -1,5 +1,5 @@
-import { mkdir, open, opendir, rename, stat, unlink } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AttachmentId, SessionMessageId } from "@wincode/agent-core";
 import {
 	isError,
@@ -613,7 +613,7 @@ const attachmentBlobKey = (attachmentId: string): string => {
 	if (!ATTACHMENT_ID_PATTERN.test(attachmentId)) {
 		throw new Error("Attachment digest is invalid.");
 	}
-	return join(
+	return path.join(
 		BLOB_KEY_PREFIX,
 		attachmentId.slice(3, 5),
 		attachmentId.slice(5, 7),
@@ -622,9 +622,9 @@ const attachmentBlobKey = (attachmentId: string): string => {
 };
 
 const resolveBlobPath = (root: string, blobKey: string): string => {
-	const resolvedRoot = resolve(root);
-	const resolvedPath = resolve(resolvedRoot, blobKey);
-	const rootPrefix = `${resolvedRoot}${sep}`;
+	const resolvedRoot = path.resolve(root);
+	const resolvedPath = path.resolve(resolvedRoot, blobKey);
+	const rootPrefix = `${resolvedRoot}${path.sep}`;
 	if (!(resolvedPath === resolvedRoot || resolvedPath.startsWith(rootPrefix))) {
 		throw new Error("Attachment blob key escapes the storage root.");
 	}
@@ -640,11 +640,11 @@ const writeBlobAtomically = async (
 ): Promise<void> => {
 	assertNotAborted(signal);
 	const targetPath = resolveBlobPath(root, blobKey);
-	await mkdir(dirname(targetPath), { recursive: true });
+	await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
 	const temporaryPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
-	let handle: Awaited<ReturnType<typeof open>> | null = null;
+	let handle: fs.promises.FileHandle | null = null;
 	try {
-		handle = await open(temporaryPath, "wx");
+		handle = await fs.promises.open(temporaryPath, "wx");
 		assertNotAborted(signal);
 		let offset = 0;
 		while (offset < bytes.byteLength) {
@@ -656,7 +656,7 @@ const writeBlobAtomically = async (
 		}
 		await handle.sync();
 		await handle.close();
-		const temporaryInfo = await stat(temporaryPath);
+		const temporaryInfo = await fs.promises.stat(temporaryPath);
 		if (temporaryInfo.size !== bytes.byteLength) {
 			throw new Error("Attachment blob length validation failed.");
 		}
@@ -666,7 +666,7 @@ const writeBlobAtomically = async (
 		}
 		assertNotAborted(signal);
 		try {
-			await rename(temporaryPath, targetPath);
+			await fs.promises.rename(temporaryPath, targetPath);
 		} catch (error) {
 			if (!isNodeError(error, "EEXIST")) {
 				throw error;
@@ -680,7 +680,7 @@ const writeBlobAtomically = async (
 				// The write failed; the temporary file is still safe to remove.
 			}
 		}
-		await unlink(temporaryPath).catch(() => undefined);
+		await fs.promises.unlink(temporaryPath).catch(() => undefined);
 	}
 };
 
@@ -763,9 +763,9 @@ const readVerifiedBlob = async (
 	} catch {
 		return "corrupt";
 	}
-	let info: Awaited<ReturnType<typeof stat>>;
+	let info: fs.Stats;
 	try {
-		info = await stat(blobPath);
+		info = await fs.promises.stat(blobPath);
 	} catch (error) {
 		return isNodeError(error, "ENOENT") ? "missing" : "corrupt";
 	}
@@ -773,9 +773,9 @@ const readVerifiedBlob = async (
 		return "corrupt";
 	}
 	assertNotAborted(signal);
-	let handle: Awaited<ReturnType<typeof open>> | null = null;
+	let handle: fs.promises.FileHandle | null = null;
 	try {
-		handle = await open(blobPath, "r");
+		handle = await fs.promises.open(blobPath, "r");
 		const bytes = new Uint8Array(reference.byteLength + 1);
 		let offset = 0;
 		while (offset < bytes.byteLength) {
@@ -834,7 +834,7 @@ const isStoredBlobPresent = async (
 		return false;
 	}
 	try {
-		const info = await stat(resolveBlobPath(root, record.blobKey));
+		const info = await fs.promises.stat(resolveBlobPath(root, record.blobKey));
 		return info.isFile() && info.size === reference.byteLength;
 	} catch {
 		return false;
@@ -1380,7 +1380,7 @@ export const createSessionAttachmentStore = ({
 	};
 	const unlinkBlobIfPresent = async (blobPath: string): Promise<boolean> => {
 		try {
-			await unlink(blobPath);
+			await fs.promises.unlink(blobPath);
 			return true;
 		} catch (error) {
 			return isNodeError(error, "ENOENT");
@@ -1456,14 +1456,14 @@ export const createSessionAttachmentStore = ({
 			return { orphanBytes: 0, orphanCount: 0 };
 		}
 		try {
-			const info = await stat(path);
+			const info = await fs.promises.stat(path);
 			if (
 				currentTime - info.mtimeMs < safetyWindowMs ||
 				info.size > remainingBytes
 			) {
 				return { orphanBytes: 0, orphanCount: 0 };
 			}
-			await unlink(path);
+			await fs.promises.unlink(path);
 			return { orphanBytes: info.size, orphanCount: 1 };
 		} catch {
 			return { orphanBytes: 0, orphanCount: 0 };
@@ -1489,7 +1489,7 @@ export const createSessionAttachmentStore = ({
 			return { orphanBytes: 0, orphanCount: 0 };
 		}
 		try {
-			const info = await stat(path);
+			const info = await fs.promises.stat(path);
 			if (
 				currentTime - info.mtimeMs < safetyWindowMs ||
 				info.size > remainingBytes
@@ -1503,7 +1503,7 @@ export const createSessionAttachmentStore = ({
 			) {
 				return { orphanBytes: 0, orphanCount: 0 };
 			}
-			await unlink(path);
+			await fs.promises.unlink(path);
 			return { orphanBytes: info.size, orphanCount: 1 };
 		} catch {
 			return { orphanBytes: 0, orphanCount: 0 };
@@ -1523,16 +1523,16 @@ export const createSessionAttachmentStore = ({
 		orphanBytes: number;
 		orphanCount: number;
 	}> => {
-		const path = join(directory, entry.name);
+		const entryPath = path.join(directory, entry.name);
 		if (entry.isDirectory()) {
-			return { directory: path, orphanBytes: 0, orphanCount: 0 };
+			return { directory: entryPath, orphanBytes: 0, orphanCount: 0 };
 		}
 		if (!entry.isFile()) {
 			return { orphanBytes: 0, orphanCount: 0 };
 		}
 		if (TEMPORARY_BLOB_PATTERN.test(entry.name)) {
 			return inspectTemporaryBlob(
-				path,
+				entryPath,
 				currentTime,
 				safetyWindowMs,
 				remainingEntries,
@@ -1543,8 +1543,8 @@ export const createSessionAttachmentStore = ({
 			return { orphanBytes: 0, orphanCount: 0 };
 		}
 		return inspectValidatedOrphan(
-			path,
-			relative(resolve(root), path),
+			entryPath,
+			path.relative(path.resolve(root), entryPath),
 			entry.name.slice(0, -".blob".length),
 			metadataKeys,
 			currentTime,
@@ -1564,9 +1564,9 @@ export const createSessionAttachmentStore = ({
 		const directories: string[] = [];
 		let orphanBytes = 0;
 		let orphanCount = 0;
-		let handle: Awaited<ReturnType<typeof opendir>> | null = null;
+		let handle: fs.Dir | null = null;
 		try {
-			handle = await opendir(directory);
+			handle = await fs.promises.opendir(directory);
 			for await (const entry of handle) {
 				if (orphanCount >= maxEntries || orphanBytes >= maxBytes) {
 					break;
@@ -1609,7 +1609,7 @@ export const createSessionAttachmentStore = ({
 		const metadataKeys = new Set(
 			repository.list().map((record) => record.blobKey)
 		);
-		const stack = [resolve(root)];
+		const stack = [path.resolve(root)];
 		let orphanBytes = 0;
 		let orphanCount = 0;
 		while (

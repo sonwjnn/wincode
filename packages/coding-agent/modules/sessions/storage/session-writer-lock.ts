@@ -1,4 +1,4 @@
-import { mkdir, realpath, stat } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
 import { EXECUTION_MODES, type ExecutionMode } from "@/shared/execution-mode";
@@ -130,8 +130,8 @@ export const acquireSessionWriterLock = async (
 	);
 	let lockPath: string;
 	try {
-		const canonicalDatabasePath = await realpath(databasePath);
-		const databaseIdentity = await stat(canonicalDatabasePath, {
+		const canonicalDatabasePath = await fs.realpath(databasePath);
+		const databaseIdentity = await fs.stat(canonicalDatabasePath, {
 			bigint: true,
 		});
 		if (databaseIdentity.dev === 0n || databaseIdentity.ino === 0n) {
@@ -141,8 +141,8 @@ export const acquireSessionWriterLock = async (
 			path.dirname(canonicalDatabasePath),
 			".wincode-session-writer-locks"
 		);
-		await mkdir(lockDirectory, { mode: 0o700, recursive: true });
-		const canonicalLockDirectory = await realpath(lockDirectory);
+		await fs.mkdir(lockDirectory, { mode: 0o700, recursive: true });
+		const canonicalLockDirectory = await fs.realpath(lockDirectory);
 		const lockName = new Bun.CryptoHasher("sha256")
 			.update(`${databaseIdentity.dev}:${databaseIdentity.ino}\0${sessionId}`)
 			.digest("hex");

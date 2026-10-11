@@ -1,6 +1,6 @@
-import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ConnectionProviderId } from "@wincode/ai/models";
 import { isError, isNull, isUndefined, readUtf8File } from "@wincode/utils";
 import type { CredentialByProvider } from "./contract";
@@ -40,7 +40,7 @@ export class InvalidStoredConnectionError extends Error {
 const connectionFilePath = (
 	providerId: ConnectionProviderId,
 	fileRoot: string
-) => join(fileRoot, ".wincode", "connections-v2", `${providerId}.json`);
+) => path.join(fileRoot, ".wincode", "connections-v2", `${providerId}.json`);
 
 export class CredentialVaultV2 {
 	private secretStore: SecretStore | null;
@@ -52,7 +52,7 @@ export class CredentialVaultV2 {
 			(isUndefined(options.fileRoot)
 				? getBunSecretStore(options.bunSecrets)
 				: null);
-		this.fileRoot = options.fileRoot ?? homedir();
+		this.fileRoot = options.fileRoot ?? os.homedir();
 	}
 
 	async load<P extends ConnectionProviderId>(
@@ -109,11 +109,11 @@ export class CredentialVaultV2 {
 	private async readFile(
 		providerId: ConnectionProviderId
 	): Promise<string | null> {
-		const path = connectionFilePath(providerId, this.fileRoot);
+		const credentialPath = connectionFilePath(providerId, this.fileRoot);
 		try {
-			await assertSecureVaultDirectories(path);
-			await assertSecurePath(path);
-			return await readUtf8File(path);
+			await assertSecureVaultDirectories(credentialPath);
+			await assertSecurePath(credentialPath);
+			return await readUtf8File(credentialPath);
 		} catch (error) {
 			if (isMissingFileError(error)) {
 				return null;
@@ -127,24 +127,24 @@ export class CredentialVaultV2 {
 		providerId: P,
 		credential: CredentialByProvider[P]
 	): Promise<void> {
-		const path = connectionFilePath(providerId, this.fileRoot);
-		const wincodeDirectory = dirname(dirname(path));
-		const connectionsDirectory = dirname(path);
+		const credentialPath = connectionFilePath(providerId, this.fileRoot);
+		const wincodeDirectory = path.dirname(path.dirname(credentialPath));
+		const connectionsDirectory = path.dirname(credentialPath);
 
 		await ensureSecureOwnedDirectory(wincodeDirectory);
 		await ensureSecureOwnedDirectory(connectionsDirectory);
-		await rejectNonRegularFile(path);
-		const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
+		await rejectNonRegularFile(credentialPath);
+		const temporaryPath = `${credentialPath}.${crypto.randomUUID()}.tmp`;
 		try {
-			await writeFile(temporaryPath, JSON.stringify(credential, null, 2), {
+			await fs.writeFile(temporaryPath, JSON.stringify(credential, null, 2), {
 				encoding: "utf8",
 				flag: "wx",
 				mode: FILE_MODE,
 			});
-			await chmod(temporaryPath, FILE_MODE);
-			await rename(temporaryPath, path);
+			await fs.chmod(temporaryPath, FILE_MODE);
+			await fs.rename(temporaryPath, credentialPath);
 		} catch (error) {
-			await rm(temporaryPath, { force: true });
+			await fs.rm(temporaryPath, { force: true });
 			throw error;
 		}
 	}
@@ -181,7 +181,7 @@ const getBunSecretStore = (
 
 const rejectNonRegularFile = async (path: string): Promise<void> => {
 	try {
-		const stats = await lstat(path);
+		const stats = await fs.lstat(path);
 		if (!stats.isFile()) {
 			throw new Error(
 				`Refusing to replace non-regular connections file: ${path}`
@@ -199,26 +199,28 @@ const rejectNonRegularFile = async (path: string): Promise<void> => {
 	}
 };
 
-const assertSecurePath = async (path: string): Promise<void> => {
-	await assertSecureDirectoryChain(dirname(path));
-	await rejectNonRegularFile(path);
+const assertSecurePath = async (targetPath: string): Promise<void> => {
+	await assertSecureDirectoryChain(path.dirname(targetPath));
+	await rejectNonRegularFile(targetPath);
 };
 
-const assertSecureVaultDirectories = async (path: string): Promise<void> => {
-	const wincodeDirectory = dirname(dirname(path));
-	const connectionsDirectory = dirname(path);
+const assertSecureVaultDirectories = async (
+	targetPath: string
+): Promise<void> => {
+	const wincodeDirectory = path.dirname(path.dirname(targetPath));
+	const connectionsDirectory = path.dirname(targetPath);
 	await assertSecureDirectoryChain(wincodeDirectory);
 	await assertSecureDirectoryChain(connectionsDirectory);
 };
 
 const ensureSecureOwnedDirectory = async (directory: string): Promise<void> => {
-	await mkdir(directory, { mode: DIRECTORY_MODE, recursive: true });
+	await fs.mkdir(directory, { mode: DIRECTORY_MODE, recursive: true });
 	await assertSecureDirectoryChain(directory);
 };
 
 const assertSecureDirectoryChain = async (directory: string): Promise<void> => {
 	try {
-		const stats = await lstat(directory);
+		const stats = await fs.lstat(directory);
 		if (!stats.isDirectory()) {
 			throw new Error(`Refusing insecure connections directory: ${directory}`);
 		}

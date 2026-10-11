@@ -1,11 +1,5 @@
-import {
-	mkdir,
-	rename,
-	rm,
-	stat,
-	writeFile as writeFileToDisk,
-} from "node:fs/promises";
-import { homedir } from "node:os";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import path from "node:path";
 import {
 	isArray,
@@ -579,7 +573,7 @@ const writeConfigFileAtomically = async (
 	const temporaryFile = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	const mode = await (async () => {
 		try {
-			return (await stat(file)).mode % 0o1000;
+			return (await fs.stat(file)).mode % 0o1000;
 		} catch (error) {
 			if (isNotFound(error)) {
 				return 0o600;
@@ -587,22 +581,22 @@ const writeConfigFileAtomically = async (
 			throw error;
 		}
 	})();
-	await mkdir(path.dirname(file), { recursive: true });
+	await fs.mkdir(path.dirname(file), { recursive: true });
 	try {
-		await writeFileToDisk(temporaryFile, contents, {
+		await fs.writeFile(temporaryFile, contents, {
 			encoding: "utf8",
 			mode,
 		});
-		await rename(temporaryFile, file);
+		await fs.rename(temporaryFile, file);
 	} finally {
-		await rm(temporaryFile, { force: true });
+		await fs.rm(temporaryFile, { force: true });
 	}
 };
 
 export const createConfigStore = (
 	options: ConfigStoreOptions = {}
 ): ConfigStore => {
-	const homeRoot = options.homeRoot ?? homedir();
+	const homeRoot = options.homeRoot ?? os.homedir();
 	const fs: ConfigFileSystem =
 		options.fs ??
 		({

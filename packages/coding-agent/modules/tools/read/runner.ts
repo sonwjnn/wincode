@@ -1,6 +1,5 @@
-import type { Stats } from "node:fs";
-import { lstat, readlink, stat } from "node:fs/promises";
-import path from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
 	isObjectLike,
 	isUndefined,
@@ -15,6 +14,7 @@ import {
 import {
 	CodingToolError,
 	defaultVersionedEditingContext,
+	type FileObservation,
 	isCodingToolError,
 	type VersionedEditingContext,
 } from "../versioned/contracts";
@@ -84,7 +84,7 @@ const readResolvedTarget = async (
 	displayPath: string,
 	ranges?: LineRange[]
 ): Promise<ResolvedReadTarget> => {
-	const targetStat = await stat(resolvedPath);
+	const targetStat = await fs.promises.stat(resolvedPath);
 	if (targetStat.isDirectory()) {
 		return {
 			absolutePath: resolvedPath,
@@ -114,14 +114,14 @@ const readTextTarget = async (
 	): Promise<ResolvedReadTarget | undefined> => {
 		const literalPath =
 			await defaultWorkspaceSandbox.resolveNewPath(candidatePath);
-		const literalStat = await lstat(literalPath).catch(
-			(error: unknown): Stats | undefined => {
+		const literalStat = await fs.promises
+			.lstat(literalPath)
+			.catch((error: unknown): fs.Stats | undefined => {
 				if (hasErrorCode(error, "ENOENT")) {
 					return;
 				}
 				throw error;
-			}
-		);
+			});
 		if (isUndefined(literalStat)) {
 			return;
 		}
@@ -137,7 +137,7 @@ const readTextTarget = async (
 				kind: "symlink",
 				path: displayPath,
 				...omitUndefined({ ranges }),
-				symlinkTarget: await readlink(literalPath),
+				symlinkTarget: await fs.promises.readlink(literalPath),
 			};
 		}
 		return resolvedTarget;
@@ -159,7 +159,7 @@ const readTextTarget = async (
 	const literalPath = await defaultWorkspaceSandbox.resolveNewPath(inputPath);
 	let literalEntryExists = true;
 	try {
-		await lstat(literalPath);
+		await fs.promises.lstat(literalPath);
 	} catch (error) {
 		if (!hasErrorCode(error, "ENOENT")) {
 			throw error;
@@ -774,9 +774,7 @@ const formatNonFileRead = async (
 	target: Exclude<ResolvedReadTarget, { kind: "file" }>,
 	input: ReadInput,
 	limits: ToolResourceLimits["read"],
-	previousObservation: Awaited<
-		ReturnType<VersionedEditingContext["store"]["getLatestObservation"]>
-	>
+	previousObservation: FileObservation | null
 ): Promise<ReadOutput> => {
 	if (input.expectedVersion !== undefined || previousObservation !== null) {
 		throw new CodingToolError(

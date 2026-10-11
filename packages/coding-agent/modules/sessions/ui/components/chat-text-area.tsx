@@ -1,6 +1,6 @@
-import { rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	decodePasteBytes,
 	type PasteEvent,
@@ -114,8 +114,8 @@ const readPastedImage = () =>
 	readClipboardImage({
 		environment: process.env,
 		readFile: (path) => Bun.file(path).bytes(),
-		stat: async (path) => stat(path),
-		removeFile: (path) => rm(path, { force: true }),
+		stat: async (path) => fs.stat(path),
+		removeFile: (path) => fs.rm(path, { force: true }),
 		run: async (command, args) => {
 			const childProcess = spawn([command, ...args], {
 				stderr: "ignore",
@@ -129,14 +129,14 @@ const readPastedImage = () =>
 			};
 		},
 		temporaryPath: () =>
-			join(tmpdir(), `wincode-clipboard-${crypto.randomUUID()}.png`),
+			path.join(os.tmpdir(), `wincode-clipboard-${crypto.randomUUID()}.png`),
 	});
 
 const readPastedImageOrPath = async (pastedText: string) => {
 	const pathImage = pastedText
 		? await readImagePath(pastedText, {
 				readFile: (path) => Bun.file(path).bytes(),
-				stat: async (path) => stat(path),
+				stat: async (path) => fs.stat(path),
 			})
 		: { unavailable: true as const };
 	return {
@@ -902,7 +902,7 @@ export function ChatTextArea({
 			stageImage(
 				image.bytes,
 				image.mediaType,
-				"unavailable" in pathImage ? "clipboard" : basename(pastedText)
+				"unavailable" in pathImage ? "clipboard" : path.basename(pastedText)
 			);
 		},
 		[applyTextPaste, disabled, isTopLayer, stageImage, stagePastedText]

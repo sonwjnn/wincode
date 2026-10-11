@@ -1,4 +1,4 @@
-import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 import { isObjectLike, isString } from "@wincode/utils";
 import { and, desc, eq, lt } from "drizzle-orm";
@@ -96,14 +96,14 @@ const ensurePrivateSnapshotDirectories = async (
 	root: string,
 	targetPath: string
 ): Promise<void> => {
-	await mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+	await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
 	for (const directory of [
 		root,
 		path.join(root, SNAPSHOT_BLOB_PREFIX),
 		path.dirname(targetPath),
 		path.dirname(path.dirname(targetPath)),
 	]) {
-		await chmod(directory, 0o700);
+		await fs.chmod(directory, 0o700);
 	}
 };
 
@@ -120,7 +120,7 @@ const writeSnapshotBlob = async (
 	try {
 		const existing = await Bun.file(targetPath).bytes();
 		if (computeFileVersion(existing) === snapshot.fileVersion) {
-			await chmod(targetPath, 0o600);
+			await fs.chmod(targetPath, 0o600);
 			return blobKey;
 		}
 	} catch (error) {
@@ -130,13 +130,13 @@ const writeSnapshotBlob = async (
 	}
 	const temporaryPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
 	try {
-		await writeFile(temporaryPath, snapshot.bytes, {
+		await fs.writeFile(temporaryPath, snapshot.bytes, {
 			flag: "wx",
 			mode: 0o600,
 		});
-		await rename(temporaryPath, targetPath);
+		await fs.rename(temporaryPath, targetPath);
 	} finally {
-		await rm(temporaryPath, { force: true }).catch(() => undefined);
+		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
 	}
 	return blobKey;
 };
@@ -265,9 +265,11 @@ const removeSnapshotBlobIfUnreferenced = async (
 		.limit(1)
 		.get();
 	if (remainingReference === undefined) {
-		await rm(resolveSnapshotBlobPath(snapshotRoot, blobKey), {
-			force: true,
-		}).catch(() => undefined);
+		await fs
+			.rm(resolveSnapshotBlobPath(snapshotRoot, blobKey), {
+				force: true,
+			})
+			.catch(() => undefined);
 	}
 };
 const discardSnapshot = async (

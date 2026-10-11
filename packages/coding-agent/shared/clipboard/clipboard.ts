@@ -1,9 +1,6 @@
-import type { useRenderer } from "@opentui/react";
+import type { CliRenderer } from "@opentui/core";
 
-export type ClipboardRenderer = Pick<
-	ReturnType<typeof useRenderer>,
-	"copyToClipboardOSC52"
->;
+export type ClipboardRenderer = Pick<CliRenderer, "copyToClipboardOSC52">;
 export type ClipboardSpawn = (
 	command: string[],
 	text: string

@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isObjectLike, readUtf8File } from "@wincode/utils";
 
@@ -41,7 +41,7 @@ const readDocument = async (
 	filePath: string
 ): Promise<Record<string, string>> => {
 	try {
-		const stats = await lstat(filePath);
+		const stats = await fs.lstat(filePath);
 		if (!stats.isFile()) {
 			throw new Error(`Refusing non-regular Plugin secrets file: ${filePath}`);
 		}
@@ -72,23 +72,23 @@ const writeDocument = async (
 	document: Readonly<Record<string, string>>
 ): Promise<void> => {
 	const directory = path.dirname(filePath);
-	await mkdir(directory, { recursive: true, mode: DIRECTORY_MODE });
-	const directoryStats = await lstat(directory);
+	await fs.mkdir(directory, { recursive: true, mode: DIRECTORY_MODE });
+	const directoryStats = await fs.lstat(directory);
 	if (!directoryStats.isDirectory()) {
 		throw new Error(`Refusing insecure Plugin secrets directory: ${directory}`);
 	}
 	assertSecureMode(directoryStats.mode, directory);
 	const temporaryPath = `${filePath}.${crypto.randomUUID()}.tmp`;
 	try {
-		await writeFile(temporaryPath, JSON.stringify(document, null, 2), {
+		await fs.writeFile(temporaryPath, JSON.stringify(document, null, 2), {
 			encoding: "utf8",
 			flag: "wx",
 			mode: FILE_MODE,
 		});
-		await chmod(temporaryPath, FILE_MODE);
-		await rename(temporaryPath, filePath);
+		await fs.chmod(temporaryPath, FILE_MODE);
+		await fs.rename(temporaryPath, filePath);
 	} finally {
-		await rm(temporaryPath, { force: true });
+		await fs.rm(temporaryPath, { force: true });
 	}
 };
 
@@ -120,7 +120,7 @@ export const createPluginSecretStore = (
 				const document = await readDocument(filePath);
 				update(document);
 				if (Object.keys(document).length === 0) {
-					await rm(filePath, { force: true });
+					await fs.rm(filePath, { force: true });
 				} else {
 					await writeDocument(filePath, document);
 				}

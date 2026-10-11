@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import * as path from "node:path";
 import { logger, readUtf8File } from "@wincode/utils";
 import { COMMANDS } from "@/modules/commands/commands";
 import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
@@ -22,7 +22,7 @@ export async function loadCustomCommands(
 		if (!candidate.filePath.endsWith(".md")) {
 			continue;
 		}
-		const name = basename(candidate.filePath, ".md");
+		const name = path.basename(candidate.filePath, ".md");
 		if (BUILTIN_NAMES.has(name.toLowerCase())) {
 			await logger.warn(
 				"Ignoring custom command because it collides with a built-in command.",

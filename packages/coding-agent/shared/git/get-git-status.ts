@@ -164,7 +164,7 @@ export const runBoundedGitCommand = async (
 	}
 	let child: BunSpawnProcess | undefined;
 	let cancelOutput: CancelReader | undefined;
-	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let timeout: NodeJS.Timeout | undefined;
 	try {
 		const spawned = spawn(command, { cwd, stderr: "ignore", stdout: "pipe" });
 		child = spawned;

@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import * as path from "node:path";
 import { type BoxRenderable, pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import {
@@ -48,7 +48,9 @@ const sanitizeDiffPatch = (patch: string): string =>
 
 const formatEditPath = (filePath: string): string => {
 	const sanitized = stripControlCharacters(filePath, 512);
-	return isAbsolute(sanitized) ? sanitized : sanitized.replaceAll("\\", "/");
+	return path.isAbsolute(sanitized)
+		? sanitized
+		: sanitized.replaceAll("\\", "/");
 };
 type EditPartFields = {
 	readonly editDiff?: unknown;

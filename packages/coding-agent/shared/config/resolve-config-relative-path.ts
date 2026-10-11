@@ -1,4 +1,4 @@
-import { dirname, resolve } from "node:path";
+import * as path from "node:path";
 import { isUndefined } from "@wincode/utils";
 import type { ConfigScope, ConfigSnapshot } from "./config-store";
 
@@ -17,7 +17,7 @@ export const resolveConfigRelativePath = (
 		return;
 	}
 	return {
-		path: resolve(dirname(origin.path), configuredPath),
+		path: path.resolve(path.dirname(origin.path), configuredPath),
 		scope: origin.scope,
 	};
 };

@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import * as path from "node:path";
 import { pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import { isNull, isPlainObject, isString } from "@wincode/utils";
@@ -59,7 +59,9 @@ const getWriteInput = (part: WriteToolPart): WriteInput | null => {
 
 const formatWritePath = (filePath: string): string => {
 	const sanitized = stripControlCharacters(filePath, MAX_ERROR_LENGTH);
-	return isAbsolute(sanitized) ? sanitized : sanitized.replaceAll("\\", "/");
+	return path.isAbsolute(sanitized)
+		? sanitized
+		: sanitized.replaceAll("\\", "/");
 };
 
 type WriteDisplayData = {

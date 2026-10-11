@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 import { decodeUtf8, getErrorMessage, isError } from "@wincode/utils";
 import type { FileMentionPart } from "@/modules/sessions/message";
@@ -293,7 +293,7 @@ export const resolveFileMentionParts = async (
 			}
 			resolvedPaths.add(canonicalMentionPath);
 
-			const fileStats = await stat(resolvedMention.realPath);
+			const fileStats = await fs.stat(resolvedMention.realPath);
 			const part = fileStats.isDirectory()
 				? await readDirectoryMention(
 						policy,

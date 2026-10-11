@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
 import {
@@ -15,7 +15,7 @@ import type { Theme, ThemeColors } from "./themes";
 import { DEFAULT_THEME, findThemeByName, THEMES } from "./themes";
 
 const CONFIG_DIR = resolveUserWincodeDir();
-const THEME_PREFERENCES_PATH = join(CONFIG_DIR, "preferences.json");
+const THEME_PREFERENCES_PATH = path.join(CONFIG_DIR, "preferences.json");
 
 const themePreferenceSchema = z.object({ themeName: z.string().nonempty() });
 
@@ -37,7 +37,9 @@ export function serializeThemePreference(theme: Pick<Theme, "name">): string {
 
 function getInitialTheme(): Theme {
 	try {
-		return parseThemePreference(readFileSync(THEME_PREFERENCES_PATH, "utf8"));
+		return parseThemePreference(
+			fs.readFileSync(THEME_PREFERENCES_PATH, "utf8")
+		);
 	} catch {
 		return DEFAULT_THEME;
 	}
@@ -45,8 +47,8 @@ function getInitialTheme(): Theme {
 
 function persistTheme(theme: Theme) {
 	try {
-		mkdirSync(CONFIG_DIR, { recursive: true });
-		writeFileSync(
+		fs.mkdirSync(CONFIG_DIR, { recursive: true });
+		fs.writeFileSync(
 			THEME_PREFERENCES_PATH,
 			serializeThemePreference(theme),
 			"utf8"

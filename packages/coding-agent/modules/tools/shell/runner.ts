@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import * as os from "node:os";
 import { isUndefined } from "@wincode/utils";
 import { $ } from "bun";
 import { keepTailUtf8 } from "../output-bounds";
@@ -74,7 +74,7 @@ export const decodeShellOutput = (
 };
 
 const expandHomeInShellPath = (input: string): string => {
-	const home = homedir();
+	const home = os.homedir();
 	if (input === "~") {
 		return home;
 	}

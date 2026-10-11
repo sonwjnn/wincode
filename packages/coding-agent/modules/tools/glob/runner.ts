@@ -1,5 +1,4 @@
-import type { Stats } from "node:fs";
-import { stat } from "node:fs/promises";
+import * as fs from "node:fs";
 import { fitsSerializedBytes } from "../output-bounds";
 import {
 	getToolResourceLimits,
@@ -45,7 +44,7 @@ const GIT_DIRECTORY_PATH = /(?:^|\/)\.git(?:\/|$)/u;
 const compareCandidates = (left: GlobCandidate, right: GlobCandidate): number =>
 	right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path);
 
-type GlobStat = (filePath: string) => Promise<Stats>;
+type GlobStat = (filePath: string) => Promise<fs.Stats>;
 
 export type GlobRunnerDeps = {
 	search?: GlobSearch;
@@ -76,7 +75,10 @@ const collectStatCandidates = async (
 };
 
 export const createGlobRunner =
-	({ search = runRipgrepGlob, statFile = stat }: GlobRunnerDeps = {}) =>
+	({
+		search = runRipgrepGlob,
+		statFile = (filePath) => fs.promises.stat(filePath),
+	}: GlobRunnerDeps = {}) =>
 	async (
 		input: GlobInput,
 		options: GlobToolOptions = {}

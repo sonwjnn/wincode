@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readUtf8File } from "../src/file-io";
@@ -29,7 +29,7 @@ export const readLoggerRecords = async (
 export const createLoggerHome = async (
 	prefix = "wincode-logger-"
 ): Promise<LoggerHome> => {
-	const home = await mkdtemp(path.join(os.tmpdir(), prefix));
+	const home = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
 	const originalHome = process.env.HOME;
 	const originalDebug = process.env.WINCODE_DEBUG;
 	process.env.HOME = home;
@@ -47,7 +47,7 @@ export const createLoggerHome = async (
 			} else {
 				process.env.WINCODE_DEBUG = originalDebug;
 			}
-			await rm(home, { force: true, recursive: true });
+			await fs.rm(home, { force: true, recursive: true });
 		},
 		home,
 	};
