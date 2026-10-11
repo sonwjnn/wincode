@@ -18,6 +18,7 @@ import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import { PluginTextInputDialog } from "./plugin-text-input-dialog";
@@ -222,7 +223,7 @@ export const PluginStatusPanelDialogContent = ({
 			<SearchListDialogWrapper<PluginStatusItem>
 				emptyText={panel.emptyText ?? "No status items"}
 				footer={
-					<box flexDirection="row" gap={2} height={1} marginX={4}>
+					<box flexDirection="row" gap={2} height={1}>
 						<DialogFooterHint
 							label={selectedAction?.label ?? "run action"}
 							shortcut="space"
@@ -287,18 +288,20 @@ export const PluginStatusPanelDialogContent = ({
 			/>
 			{selectedItem?.summary === undefined &&
 			selectedItem?.detail === undefined ? null : (
-				<box flexDirection="column" gap={1} marginX={4}>
-					{selectedItem.summary === undefined ? null : (
-						<text fg={colors.textMuted} selectable={false} wrapMode="word">
-							{selectedItem.summary}
-						</text>
-					)}
-					{selectedItem.detail === undefined ? null : (
-						<text fg={colors.textMuted} selectable={false} wrapMode="word">
-							{selectedItem.detail}
-						</text>
-					)}
-				</box>
+				<DialogInset>
+					<box flexDirection="column" gap={1}>
+						{selectedItem.summary === undefined ? null : (
+							<text fg={colors.textMuted} selectable={false} wrapMode="word">
+								{selectedItem.summary}
+							</text>
+						)}
+						{selectedItem.detail === undefined ? null : (
+							<text fg={colors.textMuted} selectable={false} wrapMode="word">
+								{selectedItem.detail}
+							</text>
+						)}
+					</box>
+				</DialogInset>
 			)}
 		</box>
 	);

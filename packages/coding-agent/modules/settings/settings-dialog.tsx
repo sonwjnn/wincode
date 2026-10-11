@@ -13,6 +13,7 @@ import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import type {
@@ -333,13 +334,15 @@ export function SettingsDialogContent({
 
 	if (isNull(settings)) {
 		return (
-			<box flexDirection="column" gap={1} marginX={4}>
-				<text fg={loadError ? colors.error : colors.textMuted}>
-					{loadError
-						? `Could not load settings: ${loadError}`
-						: "Loading settings…"}
-				</text>
-			</box>
+			<DialogInset>
+				<box flexDirection="column" gap={1}>
+					<text fg={loadError ? colors.error : colors.textMuted}>
+						{loadError
+							? `Could not load settings: ${loadError}`
+							: "Loading settings…"}
+					</text>
+				</box>
+			</DialogInset>
 		);
 	}
 
@@ -354,7 +357,7 @@ export function SettingsDialogContent({
 					: "No matching settings."
 			}
 			footer={
-				<box flexDirection="column" gap={1} marginX={4}>
+				<box flexDirection="column" gap={1}>
 					{selectedSetting ? (
 						<>
 							<text fg={colors.textMuted}>

@@ -12,6 +12,7 @@ import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-lay
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 import { getSessionStore } from "../../storage/get-session-store";
 
 type RenameSessionDialogProps = {
@@ -72,17 +73,19 @@ export function RenameSessionDialog({
 	useDialogEscape();
 
 	return (
-		<box flexDirection="column" gap={1}>
-			<input
-				focused
-				focusedTextColor={colors.text}
-				onContentChange={() => undefined}
-				ref={inputRef}
-				textColor={colors.text}
-			/>
-			<box flexDirection="row" gap={2} height={1} marginTop={2}>
-				<DialogFooterHint label="submit" shortcut="enter" />
+		<DialogInset>
+			<box flexDirection="column" gap={1}>
+				<input
+					focused
+					focusedTextColor={colors.text}
+					onContentChange={() => undefined}
+					ref={inputRef}
+					textColor={colors.text}
+				/>
+				<box flexDirection="row" gap={2} height={1} marginTop={2}>
+					<DialogFooterHint label="submit" shortcut="enter" />
+				</box>
 			</box>
-		</box>
+		</DialogInset>
 	);
 }

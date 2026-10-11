@@ -302,7 +302,7 @@ export const SessionsDialogContent = () => {
 			emptyText={loading ? "Loading sessions..." : "No matching sessions"}
 			footer={
 				loading ? null : (
-					<box flexDirection="row" gap={2} height={1} marginX={4}>
+					<box flexDirection="row" gap={2} height={1}>
 						{isConfirmDelete ? (
 							<>
 								<DialogFooterHint

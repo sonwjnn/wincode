@@ -4,9 +4,14 @@ import { useKeyboard } from "@opentui/react";
 import { Fragment, type ReactNode, useCallback, useEffect } from "react";
 import { fuzzyMatch } from "../fuzzy";
 import { useSearchableList } from "../hooks/use-searchable-list";
+import {
+	DEFAULT_DIALOG_CONTENT_MARGIN_X,
+	DEFAULT_DIALOG_LIST_ITEM_MARGIN_X,
+} from "../providers/dialog/defaults";
 import { useDialogLayer } from "../providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "../providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../providers/theme/theme-provider";
+import { DialogInset } from "./dialog-inset";
 
 const MAX_VISIBLE_ITEMS = 6;
 const DIALOG_SECTION_SPACING = 1;
@@ -47,6 +52,9 @@ type SearchListDialogWrapperProps<T> = {
 	maxVisibleItems?: number;
 	minVisibleItems?: number;
 	footer?: ReactNode;
+	contentMarginX?: number;
+	footerMarginX?: number;
+	itemMarginX?: number;
 	getItemBackgroundColor?: (
 		item: T,
 		isSelected: boolean
@@ -78,6 +86,9 @@ export function SearchListDialogWrapper<T>({
 	maxVisibleItems = MAX_VISIBLE_ITEMS,
 	minVisibleItems = 0,
 	footer,
+	contentMarginX = DEFAULT_DIALOG_CONTENT_MARGIN_X,
+	footerMarginX = contentMarginX,
+	itemMarginX = DEFAULT_DIALOG_LIST_ITEM_MARGIN_X,
 	getItemBackgroundColor,
 	getItemSectionKey,
 	onKey,
@@ -176,7 +187,7 @@ export function SearchListDialogWrapper<T>({
 				<input
 					focused
 					focusedTextColor={colors.text}
-					marginX={4}
+					marginX={contentMarginX}
 					onContentChange={handleContentChange}
 					placeholder={placeholder}
 					placeholderColor={colors.textMuted}
@@ -190,7 +201,7 @@ export function SearchListDialogWrapper<T>({
 					fg={colors.textMuted}
 					height={visibleHeight}
 					marginBottom={1}
-					marginX={4}
+					marginX={contentMarginX}
 				>
 					{emptyText}
 				</text>
@@ -208,7 +219,7 @@ export function SearchListDialogWrapper<T>({
 						return (
 							<Fragment key={getKey(item)}>
 								{sectionSpacing > 0 ? (
-									<box height={sectionSpacing} marginX={1} />
+									<box height={sectionSpacing} marginX={itemMarginX} />
 								) : null}
 								{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events. */}
 								<box
@@ -218,7 +229,7 @@ export function SearchListDialogWrapper<T>({
 									}
 									flexDirection="row"
 									height={1}
-									marginX={1}
+									marginX={itemMarginX}
 									onMouseDown={() => selectable && onSelect(item)}
 									onMouseMove={() => {
 										if (!selectable) {
@@ -241,7 +252,9 @@ export function SearchListDialogWrapper<T>({
 					})}
 				</scrollbox>
 			)}
-			{footer}
+			{footer ? (
+				<DialogInset marginX={footerMarginX}>{footer}</DialogInset>
+			) : null}
 		</box>
 	);
 }

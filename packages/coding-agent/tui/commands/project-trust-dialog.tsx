@@ -13,6 +13,7 @@ import {
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
@@ -85,50 +86,48 @@ export function ProjectTrustDialogContent({
 
 	return (
 		<box flexDirection="column" gap={1}>
-			<box flexDirection="column" gap={1} marginX={4}>
-				<text fg={colors.textMuted} wrapMode="word">
-					{`Workspace: ${shortenHomePath(workspace)}`}
-				</text>
-				<text fg={colors.warning} wrapMode="word">
-					Trust allows project settings and MCP servers to load. Trusted MCP
-					processes run with Wincode's OS privileges; project trust is not a
-					sandbox.
-				</text>
-				{protectedRoots.length === 0 ? (
-					<text fg={colors.textMuted}>
-						No protected project resources detected.
+			<DialogInset>
+				<box flexDirection="column" gap={1}>
+					<text fg={colors.textMuted} wrapMode="word">
+						{`Workspace: ${shortenHomePath(workspace)}`}
 					</text>
-				) : (
-					<scrollbox
-						height={Math.min(rootStatusHeight, Math.max(3, height - 18))}
-						verticalScrollbarOptions={{ visible: false }}
-					>
-						{protectedRoots.map(
-							({ currentSessionStatus, projectRoot, savedDecision }) => (
-								<box flexDirection="column" key={projectRoot}>
-									{projectRoot === workspace ? null : (
+					<text fg={colors.warning} wrapMode="word">
+						Trust allows project settings and MCP servers to load. Trusted MCP
+						processes run with Wincode's OS privileges; project trust is not a
+						sandbox.
+					</text>
+					{protectedRoots.length === 0 ? (
+						<text fg={colors.textMuted}>
+							No protected project resources detected.
+						</text>
+					) : (
+						<scrollbox
+							height={Math.min(rootStatusHeight, Math.max(3, height - 18))}
+							verticalScrollbarOptions={{ visible: false }}
+						>
+							{protectedRoots.map(
+								({ currentSessionStatus, projectRoot, savedDecision }) => (
+									<box flexDirection="column" key={projectRoot}>
+										{projectRoot === workspace ? null : (
+											<text fg={colors.textMuted} wrapMode="word">
+												{`Protected root: ${shortenHomePath(projectRoot)}`}
+											</text>
+										)}
 										<text fg={colors.textMuted} wrapMode="word">
-											{`Protected root: ${shortenHomePath(projectRoot)}`}
+											{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${shortenHomePath(savedDecision.directory)})` : ""}`}`}
 										</text>
-									)}
-									<text fg={colors.textMuted} wrapMode="word">
-										{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${shortenHomePath(savedDecision.directory)})` : ""}`}`}
-									</text>
-									<text fg={colors.textMuted} wrapMode="word">
-										{`Current session: ${currentSessionStatus === "pending" ? "Decision pending" : currentSessionStatus}`}
-									</text>
-								</box>
-							)
-						)}
-					</scrollbox>
-				)}
-			</box>
+										<text fg={colors.textMuted} wrapMode="word">
+											{`Current session: ${currentSessionStatus === "pending" ? "Decision pending" : currentSessionStatus}`}
+										</text>
+									</box>
+								)
+							)}
+						</scrollbox>
+					)}
+				</box>
+			</DialogInset>
 			<SearchListDialogWrapper<ProjectTrustChoiceItem>
-				footer={
-					<box marginX={4}>
-						<DialogFooterHint label="navigate" shortcut="↑↓" />
-					</box>
-				}
+				footer={<DialogFooterHint label="navigate" shortcut="↑↓" />}
 				getKey={(choice) => choice.action}
 				getSearchText={(choice) => `${choice.label} ${choice.description}`}
 				items={choices}
@@ -180,9 +179,7 @@ export const requestProjectTrust = (
 				deferred.reject(new Error("Project trust prompt was cancelled.")),
 			onDecision: decide,
 		}),
-		padding: { bottom: 1, left: 0, right: 0, top: 1 },
 		title: "Project Trust",
-		titleMargin: { left: 4, right: 4 },
 	});
 	return deferred.promise;
 };

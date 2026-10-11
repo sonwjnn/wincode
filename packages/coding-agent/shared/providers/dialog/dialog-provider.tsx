@@ -15,6 +15,7 @@ import {
 } from "react";
 import { useKeyboardLayer } from "../keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../theme/theme-provider";
+import { DEFAULT_DIALOG_CONFIG } from "./defaults";
 import type { DialogConfig } from "./types";
 
 export type DialogContextValue = {
@@ -164,14 +165,17 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 	const layerId = config.layerId ?? "";
 
 	const { title, children, padding, titleMargin } = config;
-	const padLeft = padding?.left ?? 4;
-	const padRight = padding?.right ?? 4;
-	const padTop = padding?.top ?? 1;
-	const padBottom = padding?.bottom ?? 1;
-	const titleMarLeft = titleMargin?.left ?? 0;
-	const titleMarRight = titleMargin?.right ?? 0;
-	const titleMarTop = titleMargin?.top ?? 0;
-	const titleMarBottom = titleMargin?.bottom ?? 0;
+	const padLeft = padding?.left ?? DEFAULT_DIALOG_CONFIG.padding.left;
+	const padRight = padding?.right ?? DEFAULT_DIALOG_CONFIG.padding.right;
+	const padTop = padding?.top ?? DEFAULT_DIALOG_CONFIG.padding.top;
+	const padBottom = padding?.bottom ?? DEFAULT_DIALOG_CONFIG.padding.bottom;
+	const titleMarLeft =
+		titleMargin?.left ?? DEFAULT_DIALOG_CONFIG.titleMargin.left;
+	const titleMarRight =
+		titleMargin?.right ?? DEFAULT_DIALOG_CONFIG.titleMargin.right;
+	const titleMarTop = titleMargin?.top ?? DEFAULT_DIALOG_CONFIG.titleMargin.top;
+	const titleMarBottom =
+		titleMargin?.bottom ?? DEFAULT_DIALOG_CONFIG.titleMargin.bottom;
 	const backdropColor = isTop ? RGBA.fromInts(0, 0, 0, 150) : undefined;
 
 	const defaultWidth =

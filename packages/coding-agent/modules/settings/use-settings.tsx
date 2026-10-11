@@ -46,9 +46,7 @@ export function useSettingsHubDialog(
 						operations={operations}
 					/>
 				),
-				padding: { bottom: 1, left: 0, right: 0, top: 1 },
 				title: "Settings",
-				titleMargin: { left: 4, right: 4 },
 				width: SETTINGS_DIALOG_WIDTH,
 			});
 		},
