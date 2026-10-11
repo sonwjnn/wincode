@@ -1,7 +1,9 @@
 import { isNonNegativeInteger } from "@wincode/utils";
+import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
 import { getModelMetadata } from "../../model-metadata-runtime";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "../../model-provider-options";
 import { normalizeModelUsage } from "../../model-usage";
+import { isSupportedPromptCacheRetention } from "../../prompt-cache";
 import { readSseEvents } from "../sse";
 import type {
 	ModelPromptMessage,
@@ -88,14 +90,49 @@ const anthropicMessage = (
 	return blocks.length > 0 ? { role, content: blocks } : undefined;
 };
 
+const withAnthropicCacheControl = (
+	blocks: readonly unknown[],
+	cacheControl: JsonRecord
+): unknown[] => {
+	const blockIndex = blocks.findLastIndex((value) => {
+		const block = record(value);
+		return (
+			block !== undefined &&
+			block.type !== "thinking" &&
+			!(block.type === "text" && block.text === "")
+		);
+	});
+	return blockIndex < 0
+		? [...blocks]
+		: blocks.map((value, index) =>
+				index === blockIndex
+					? { ...record(value), cache_control: cacheControl }
+					: value
+			);
+};
+
 const anthropicMessages = (
-	messages: readonly ModelPromptMessage[]
+	messages: readonly ModelPromptMessage[],
+	cacheControl: JsonRecord | undefined
 ): JsonRecord[] => {
 	const result: JsonRecord[] = [];
-	for (const message of messages) {
+	const lastMessageIndex = messages.length - 1;
+	const stablePrefixIndex =
+		messages[lastMessageIndex]?.role === "user"
+			? lastMessageIndex - 1
+			: lastMessageIndex;
+	for (const [index, message] of messages.entries()) {
 		const converted = anthropicMessage(message);
 		if (converted) {
-			result.push(converted);
+			const content = converted.content;
+			result.push(
+				cacheControl && index === stablePrefixIndex && Array.isArray(content)
+					? {
+							...converted,
+							content: withAnthropicCacheControl(content, cacheControl),
+						}
+					: converted
+			);
 		}
 	}
 	return result;
@@ -321,10 +358,27 @@ const anthropicStream = async function* (
 		...(continuation.length > 0 ? { continuation } : {}),
 	};
 };
+const anthropicCacheControl = (
+	model: ProtocolRequestContextByProtocol["anthropic"]["model"],
+	retention: SupportedPromptCacheRetentionTier | undefined
+): JsonRecord | undefined => {
+	if (!isSupportedPromptCacheRetention(model, retention)) {
+		return;
+	}
+	return {
+		type: "ephemeral",
+		...(retention === "long" ? { ttl: "1h" } : {}),
+	};
+};
+
 const serializeAnthropic = (
 	context: ProtocolRequestContextByProtocol["anthropic"]
 ): JsonRecord => {
 	const { request, model, maxOutputTokens, providerOptions } = context;
+	const cacheControl = anthropicCacheControl(
+		model,
+		request.target.promptCacheRetention
+	);
 	const thinking = providerOptions?.thinking;
 	const body: JsonRecord = {
 		model: request.target.modelId,
@@ -332,11 +386,16 @@ const serializeAnthropic = (
 			maxOutputTokens ??
 			getModelMetadata(model)?.limits?.output ??
 			MODEL_OUTPUT_TOKEN_LIMIT,
-		messages: anthropicMessages(request.messages),
+		messages: anthropicMessages(request.messages, cacheControl),
 		stream: true,
 	};
 	if (request.system !== undefined) {
-		body.system = request.system;
+		body.system = cacheControl
+			? withAnthropicCacheControl(
+					[{ type: "text", text: request.system }],
+					cacheControl
+				)
+			: request.system;
 	}
 	if (providerOptions?.effort !== undefined) {
 		body.output_config = { effort: providerOptions.effort };
@@ -349,12 +408,19 @@ const serializeAnthropic = (
 				: {}),
 		};
 	}
-	const tools = request.tools?.map((tool) => ({
-		name: tool.name,
-		description: tool.description,
-		input_schema: tool.inputSchema,
-	}));
-	if (tools && tools.length > 0) {
+	const tools: JsonRecord[] =
+		request.tools?.map((tool) => ({
+			name: tool.name,
+			description: tool.description,
+			input_schema: tool.inputSchema,
+		})) ?? [];
+	if (tools.length > 0) {
+		if (cacheControl) {
+			tools[tools.length - 1] = {
+				...tools.at(-1),
+				cache_control: cacheControl,
+			};
+		}
 		body.tools = tools;
 	}
 	return body;

@@ -16,10 +16,12 @@ import {
 	getSupportedThinkingLevels,
 	type SupportedChatModel,
 	type SupportedChatModelId,
+	type SupportedPromptCacheRetentionTier,
 	type ThinkingLevel,
 	type ThinkingSelection,
 	thinkingLevelSchema,
 } from "./models";
+import { isSupportedPromptCacheRetention } from "./prompt-cache";
 
 export type ApiKeyModelAuthorization = Readonly<{
 	apiKey: string;
@@ -50,6 +52,7 @@ export type ModelIdForProvider<P extends ConnectionProviderId> =
 export type ModelTargetFor<P extends ConnectionProviderId> = Readonly<{
 	authorization: ModelAuthorizationByProvider[P];
 	maxOutputTokens?: number;
+	promptCacheRetention?: SupportedPromptCacheRetentionTier;
 	modelId: ModelIdForProvider<P>;
 	providerId: P;
 	providerOptions?: ProviderOptionsFor<P>;
@@ -68,6 +71,7 @@ export type ModelTarget = ReadonlyDeep<
 type ModelTargetSchemaOutput = Readonly<{
 	authorization: ModelAuthorization;
 	maxOutputTokens?: number;
+	promptCacheRetention?: SupportedPromptCacheRetentionTier;
 	modelId: SupportedChatModelId;
 	providerId: ConnectionProviderId;
 	providerOptions?: ModelProviderOptions;
@@ -113,6 +117,7 @@ const modelTargetShapeSchema = z
 		authorization: modelAuthorizationSchema,
 		thinkingLevel: thinkingLevelChoiceSchema(thinkingLevelSchema),
 		maxOutputTokens: z.number().int().positive().optional(),
+		promptCacheRetention: z.enum(["short", "long"]).optional(),
 		modelId: z
 			.string()
 			.min(1)
@@ -230,6 +235,12 @@ export const createModelTarget = (
 		...omitUndefined({
 			maxOutputTokens: resolvedOptions.maxOutputTokens,
 			providerOptions: resolvedOptions.providerOptions,
+			promptCacheRetention: isSupportedPromptCacheRetention(
+				model,
+				options.promptCacheRetention
+			)
+				? options.promptCacheRetention
+				: undefined,
 			thinkingLevel: options.thinkingLevel,
 		}),
 	};

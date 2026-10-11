@@ -18,6 +18,7 @@ import { isSupportedThinkingLevel } from "./model-metadata-runtime";
 
 export * from "./catalog";
 export * from "./model-metadata-runtime";
+export * from "./prompt-cache";
 
 const modelSelectionBaseSchema = z.object({
 	modelId: z

@@ -6,6 +6,7 @@ import type {
 } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
+	findSupportedChatModelSelection,
 	isSupportedThinkingLevel,
 	type ThinkingSelection,
 	thinkingLevelSchema,
@@ -19,6 +20,7 @@ import type {
 	PluginRuntime,
 	PluginToolDescriptor,
 } from "@/modules/plugins/runtime";
+import { resolveConfiguredPromptCacheRetention } from "@/modules/prompt-cache/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
 import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
@@ -375,10 +377,25 @@ export const createSessionPorts = ({
 			execution.model,
 			execution.thinkingLevel
 		);
+		const promptCacheSnapshot = await config.configStore
+			.getSnapshot(config.workspace)
+			.catch(() => undefined);
+		const selectedModel = findSupportedChatModelSelection(execution.model);
+		const promptCacheRetention =
+			promptCacheSnapshot && selectedModel
+				? resolveConfiguredPromptCacheRetention(
+						selectedModel,
+						promptCacheSnapshot.document.promptCache
+					)
+				: undefined;
 		const modelTarget = await resolveChatModelTarget(
 			execution.model,
 			connections,
-			{ ...thinkingSelection, signal }
+			{
+				...thinkingSelection,
+				...omitUndefined({ promptCacheRetention }),
+				signal,
+			}
 		);
 		const registry = capabilities.getRegistry();
 		const resourceLimits = resolveAgentToolResourceLimits(

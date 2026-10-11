@@ -157,6 +157,25 @@ describe("buildModelMetadataFile", () => {
 		});
 	});
 
+	test("preserves explicit cache retention capabilities through metadata overlays", () => {
+		const promptCache = {
+			explicit: { retentionTiers: ["short", "long"] },
+		} as const;
+		const result = build({ "openai/from-overlay": { promptCache } });
+
+		expect(result.entries["openai/from-overlay"]?.promptCache).toEqual(
+			promptCache
+		);
+		expect(modelMetadataEntrySchema.safeParse({ promptCache }).success).toBe(
+			true
+		);
+		expect(
+			modelMetadataEntrySchema.safeParse({
+				promptCache: { explicit: { retentionTiers: ["unsupported"] } },
+			}).success
+		).toBe(false);
+	});
+
 	test("returns entries accepted by the runtime metadata schema", () => {
 		for (const entry of Object.values(build().entries)) {
 			expect(modelMetadataEntrySchema.safeParse(entry).success).toBe(true);

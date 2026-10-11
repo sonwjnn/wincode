@@ -13,11 +13,49 @@ type CatalogEntry = {
 	readonly provider: string;
 };
 
+// Anthropic documents explicit prompt caching for all active Claude models
+// on the Claude API, with 5-minute and 1-hour retention. The OpenCode Go models
+// are intentionally absent because their provider-specific cache capabilities
+// are not published by Anthropic. Source:
+// https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+const ANTHROPIC_EXPLICIT_PROMPT_CACHE = {
+	explicit: { retentionTiers: ["short", "long"] },
+} as const;
+
 /**
  * Facts models.dev does not publish. Every key here is a gap that must stay
  * visible rather than being silently defaulted.
  */
 export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
+	"anthropic/claude-opus-5.5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-4-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-4-5-20251101": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-opus-4-7": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-sonnet-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-4-8": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-fable-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-fable-5-1": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-opus-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-4-6": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-sonnet-4-6": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-haiku-4-5": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-haiku-4-5-20251001": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-sonnet-4-5": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-sonnet-4-5-20250929": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
 	"google/gemini-3-pro-preview": {
 		thinking: { levels: ["low", "high"] },
 	},

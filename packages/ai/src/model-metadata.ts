@@ -68,6 +68,19 @@ export type ModelLimits = Readonly<{
 	output?: number;
 }>;
 
+export type PromptCacheRetentionTier = "short" | "long" | "off";
+export type SupportedPromptCacheRetentionTier = Exclude<
+	PromptCacheRetentionTier,
+	"off"
+>;
+
+/** The explicit cache controls and retention tiers verified for one Model. */
+export type ModelPromptCacheCapabilities = Readonly<{
+	explicit: Readonly<{
+		retentionTiers: readonly SupportedPromptCacheRetentionTier[];
+	}>;
+}>;
+
 /**
  * Metadata a Model Catalog entry does not carry inline. Every field is
  * optional because the sources are: a fact the upstream does not publish is
@@ -76,6 +89,7 @@ export type ModelLimits = Readonly<{
 export type ModelMetadataEntry = Readonly<{
 	cost?: ModelCost;
 	limits?: ModelLimits;
+	promptCache?: ModelPromptCacheCapabilities;
 	reasoningSummary?: true;
 	thinking?: ModelThinkingPolicy;
 	tiers?: readonly ModelCostTier[];
@@ -106,6 +120,16 @@ const thinkingLevelMapSchema = z
 	})
 	.strict() satisfies z.ZodType<ThinkingLevelMap>;
 
+const modelPromptCacheCapabilitiesSchema = z
+	.object({
+		explicit: z
+			.object({
+				retentionTiers: z.array(z.enum(["short", "long"])).min(1),
+			})
+			.strict(),
+	})
+	.strict() satisfies z.ZodType<ModelPromptCacheCapabilities>;
+
 const modelThinkingPolicySchema = z
 	.object({
 		budgetMax: z.number().int().nonnegative().optional(),
@@ -132,6 +156,7 @@ export const modelMetadataEntrySchema = z
 			})
 			.strict()
 			.optional(),
+		promptCache: modelPromptCacheCapabilitiesSchema.optional(),
 		reasoningSummary: z.literal(true).optional(),
 		thinking: modelThinkingPolicySchema.optional(),
 		tiers: z.array(modelCostTierSchema).optional(),

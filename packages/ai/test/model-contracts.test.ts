@@ -11,6 +11,7 @@ import {
 	findSupportedChatModelSelection,
 	formatModelTokenCount,
 	getModelContextTokens,
+	getModelMetadata,
 	getSupportedThinkingLevels,
 	modelCatalog,
 	modelFailureSchema,
@@ -19,8 +20,10 @@ import {
 	normalizeModelFailure,
 	normalizeModelUsage,
 	normalizeThinkingLevel,
+	promptCachePolicySchema,
 	resolveAgentModelSelection,
 	resolveModelProviderOptions,
+	resolvePromptCacheRetention,
 	supportedChatModelIdSchema,
 	thinkingLevelIds,
 	thinkingLevelSchema,
@@ -482,6 +485,60 @@ describe("focused model contracts", () => {
 				},
 			},
 		});
+	});
+
+	test("preserves only capability-supported prompt-cache retention on Model Targets", () => {
+		const authorization = { apiKey: "cache-key", kind: "api-key" } as const;
+		const opus = createModelTarget(
+			{ modelId: modelId("claude-opus-4-5"), providerId: "anthropic" },
+			authorization,
+			{ promptCacheRetention: "long" }
+		);
+		const unsupported = createModelTarget(
+			{ modelId: modelId("minimax-m3"), providerId: "opencode-go" },
+			authorization,
+			{ promptCacheRetention: "long" }
+		);
+
+		expect(opus.promptCacheRetention).toBe("long");
+		expect(modelTargetSchema.safeParse(opus).success).toBe(true);
+		expect(unsupported.promptCacheRetention).toBeUndefined();
+	});
+
+	test("resolves model prompt-cache policy only for declared retention tiers", () => {
+		const opus = findModel("anthropic", "claude-opus-4-5");
+		const opencodeAnthropic = findModel("opencode-go", "minimax-m3");
+
+		expect(getModelMetadata(opus)?.promptCache).toEqual({
+			explicit: { retentionTiers: ["short", "long"] },
+		});
+		expect(resolvePromptCacheRetention(opus)).toBe("short");
+		expect(
+			resolvePromptCacheRetention(opus, {
+				modelOverrides: { "anthropic/claude-opus-4-5": "long" },
+			})
+		).toBe("long");
+		expect(
+			resolvePromptCacheRetention(opus, {
+				modelOverrides: { "anthropic/claude-opus-4-5": "off" },
+			})
+		).toBeUndefined();
+		expect(getModelMetadata(opencodeAnthropic)?.promptCache).toBeUndefined();
+		expect(
+			resolvePromptCacheRetention(opencodeAnthropic, {
+				modelOverrides: { "opencode-go/minimax-m3": "long" },
+			})
+		).toBeUndefined();
+		expect(
+			promptCachePolicySchema.safeParse({
+				modelOverrides: { "anthropic/claude-opus-4-5": "long" },
+			}).success
+		).toBe(true);
+		expect(
+			promptCachePolicySchema.safeParse({
+				modelOverrides: { "anthropic/claude-opus-4-5": "unknown" },
+			}).success
+		).toBe(false);
 	});
 
 	test("normalizes usage and keeps model accounting provider-neutral", () => {

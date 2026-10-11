@@ -7,7 +7,10 @@ import {
 } from "@wincode/utils";
 import type { ReadonlyDeep } from "type-fest";
 import { z } from "zod";
-import type { ModelMetadataEntry } from "./model-metadata";
+import type {
+	ModelMetadataEntry,
+	SupportedPromptCacheRetentionTier,
+} from "./model-metadata";
 import {
 	getModelMetadata,
 	getModelThinkingLevelValue,
@@ -80,6 +83,7 @@ export type ProviderOptionsFor<P extends ConnectionProviderId> =
 
 export type ModelProviderResolutionOptions = Readonly<{
 	maxOutputTokens?: number;
+	promptCacheRetention?: SupportedPromptCacheRetentionTier;
 }> &
 	ThinkingSelection;
 

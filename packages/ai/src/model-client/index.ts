@@ -1,6 +1,7 @@
 import type { ModelTarget } from "../model-target";
 import { findSupportedChatModelSelection } from "../models";
-import { httpErrorFromResponse } from "./errors";
+import { httpErrorFromResponse, isCacheControlRejection } from "./errors";
+import type { SerializedProviderRequest } from "./request";
 import { buildProviderRequest } from "./request";
 import { streamProviderResponse } from "./stream";
 import type {
@@ -36,6 +37,33 @@ const throwIfAborted = (signal: AbortSignal | undefined): void => {
 	}
 };
 
+const streamProviderRequest = async function* (
+	request: ModelStepRequest,
+	providerRequest: SerializedProviderRequest,
+	fetchImpl: typeof fetch
+): AsyncIterable<ModelStreamPart> {
+	const response = await fetchImpl(providerRequest.url, {
+		...providerRequest.init,
+		signal: request.signal,
+	});
+	if (!response.ok) {
+		throw await httpErrorFromResponse(response);
+	}
+	for await (const part of streamProviderResponse(
+		providerRequest.strategy,
+		response,
+		request.signal
+	)) {
+		yield part;
+	}
+};
+
+const uncachedRetryRequest = (request: ModelStepRequest): ModelStepRequest => {
+	const { promptCacheRetention: _promptCacheRetention, ...target } =
+		request.target;
+	return { ...request, target };
+};
+
 const streamModel = async function* (
 	request: ModelStepRequest,
 	fetchImpl: typeof fetch
@@ -51,19 +79,35 @@ const streamModel = async function* (
 		);
 	}
 	const providerRequest = buildProviderRequest(request, model);
-	const response = await fetchImpl(providerRequest.url, {
-		...providerRequest.init,
-		signal: request.signal,
-	});
-	if (!response.ok) {
-		throw await httpErrorFromResponse(response);
-	}
-	for await (const part of streamProviderResponse(
-		providerRequest.strategy,
-		response,
-		request.signal
-	)) {
-		yield part;
+	let outputStarted = false;
+	try {
+		for await (const part of streamProviderRequest(
+			request,
+			providerRequest,
+			fetchImpl
+		)) {
+			outputStarted = true;
+			yield part;
+		}
+	} catch (error) {
+		if (
+			outputStarted ||
+			request.signal?.aborted ||
+			providerRequest.strategy.protocol !== "anthropic" ||
+			!providerRequest.usesPromptCacheControls ||
+			!isCacheControlRejection(error)
+		) {
+			throw error;
+		}
+		const retryRequest = uncachedRetryRequest(request);
+		const uncachedProviderRequest = buildProviderRequest(retryRequest, model);
+		for await (const part of streamProviderRequest(
+			retryRequest,
+			uncachedProviderRequest,
+			fetchImpl
+		)) {
+			yield part;
+		}
 	}
 };
 

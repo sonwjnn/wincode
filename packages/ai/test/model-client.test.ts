@@ -74,6 +74,14 @@ const mockFetch = (response: Response): FetchMock => {
 const responseBody = (mock: FetchMock) =>
 	JSON.parse(String(mock.init?.body)) as Record<string, unknown>;
 
+const promptCacheTarget = (
+	target: ModelTarget,
+	retention: "short" | "long"
+): ModelTarget & { promptCacheRetention: "short" | "long" } => ({
+	...target,
+	promptCacheRetention: retention,
+});
+
 const collect = async (
 	client: ModelClient,
 	target: ModelTarget,
@@ -678,6 +686,234 @@ describe("native model client routes", () => {
 		expect(resumedMessages[0]?.content).toContainEqual(
 			expect.objectContaining({ signature: "signed-thought" })
 		);
+	});
+
+	test("marks only reusable Anthropic prompt prefixes with the selected TTL", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":2}}}\n\n',
+				"event: message_stop\ndata: {}\n\n"
+			)
+		);
+		const target = promptCacheTarget(
+			makeTarget("anthropic", "claude-opus-4-5"),
+			"long"
+		);
+
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			target,
+			[
+				{ content: [{ text: "old request", type: "text" }], role: "user" },
+				{
+					content: [{ text: "prior answer", type: "text" }],
+					role: "assistant",
+				},
+				{ content: [{ text: "current request", type: "text" }], role: "user" },
+			],
+			{
+				system: "Stable system instructions",
+				tools: [lookupTool],
+			}
+		);
+
+		const body = responseBody(mock);
+		expect(body.system).toEqual([
+			{
+				cache_control: { ttl: "1h", type: "ephemeral" },
+				text: "Stable system instructions",
+				type: "text",
+			},
+		]);
+		expect(body.tools).toEqual([
+			{
+				cache_control: { ttl: "1h", type: "ephemeral" },
+				description: lookupTool.description,
+				input_schema: lookupTool.inputSchema,
+				name: lookupTool.name,
+			},
+		]);
+		expect(body.messages).toEqual([
+			{
+				content: [{ text: "old request", type: "text" }],
+				role: "user",
+			},
+			{
+				content: [
+					{
+						cache_control: { ttl: "1h", type: "ephemeral" },
+						text: "prior answer",
+						type: "text",
+					},
+				],
+				role: "assistant",
+			},
+			{
+				content: [{ text: "current request", type: "text" }],
+				role: "user",
+			},
+		]);
+	});
+
+	test("does not mark empty Anthropic blocks as cacheable breakpoints", async () => {
+		const mock = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			promptCacheTarget(makeTarget("anthropic", "claude-opus-4-5"), "short"),
+			[{ content: [{ text: "", type: "text" }], role: "user" }],
+			{ system: "" }
+		);
+		expect(JSON.stringify(responseBody(mock))).not.toContain("cache_control");
+	});
+
+	test("uses Anthropic's default five-minute lifetime for short retention", async () => {
+		const mock = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			promptCacheTarget(makeTarget("anthropic", "claude-opus-4-5"), "short"),
+			[{ content: [{ text: "request", type: "text" }], role: "user" }],
+			{ system: "Stable instructions" }
+		);
+
+		expect(responseBody(mock).system).toEqual([
+			{
+				cache_control: { type: "ephemeral" },
+				text: "Stable instructions",
+				type: "text",
+			},
+		]);
+	});
+
+	test("does not send cache controls when Anthropic caching is off or unsupported", async () => {
+		const direct = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
+		await collect(
+			createModelClient({ fetch: direct.fetch }),
+			makeTarget("anthropic", "claude-opus-4-5")
+		);
+		expect(JSON.stringify(responseBody(direct))).not.toContain("cache_control");
+
+		const opencode = mockFetch(
+			sseResponse("event: message_stop\ndata: {}\n\n")
+		);
+		await collect(
+			createModelClient({ fetch: opencode.fetch }),
+			promptCacheTarget(makeTarget("opencode-go", "minimax-m3"), "short"),
+			[{ content: [{ text: "request", type: "text" }], role: "user" }],
+			{ system: "Stable instructions" }
+		);
+		expect(opencode.url).toBe("https://opencode.ai/zen/go/v1/messages");
+		expect(JSON.stringify(responseBody(opencode))).not.toContain(
+			"cache_control"
+		);
+	});
+
+	test("retries a cache-specific rejection once without controls before output", async () => {
+		const responses = [
+			new Response(
+				JSON.stringify({
+					type: "error",
+					error: {
+						type: "invalid_request_error",
+						message: "cache_control is unsupported for this request",
+					},
+				}),
+				{ status: 400 }
+			),
+			sseResponse("event: message_stop\ndata: {}\n\n"),
+		];
+		const requests: RequestInit[] = [];
+		const fetch = (async (
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			if (init) {
+				requests.push(init);
+			}
+			const response = responses.shift();
+			if (!response) {
+				throw new Error("unexpected provider retry");
+			}
+			return response;
+		}) as typeof globalThis.fetch;
+		const target = promptCacheTarget(
+			makeTarget("anthropic", "claude-opus-4-5"),
+			"short"
+		);
+
+		await collect(
+			createModelClient({ fetch }),
+			target,
+			[{ content: [{ text: "request", type: "text" }], role: "user" }],
+			{ system: "Stable instructions" }
+		);
+
+		expect(requests).toHaveLength(2);
+		expect(String(requests[0]?.body)).toContain("cache_control");
+		expect(String(requests[1]?.body)).not.toContain("cache_control");
+	});
+
+	test("does not retry unrelated or post-output Anthropic failures", async () => {
+		const requests: RequestInit[] = [];
+		const fetch = (async (
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			if (init) {
+				requests.push(init);
+			}
+			return new Response(
+				JSON.stringify({
+					type: "error",
+					error: { type: "authentication_error", message: "invalid key" },
+				}),
+				{ status: 401 }
+			);
+		}) as typeof globalThis.fetch;
+		await expect(
+			collect(
+				createModelClient({ fetch }),
+				promptCacheTarget(makeTarget("anthropic", "claude-opus-4-5"), "short"),
+				[{ content: [{ text: "request", type: "text" }], role: "user" }],
+				{ system: "Stable instructions" }
+			)
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(requests).toHaveLength(1);
+
+		let postOutputRequests = 0;
+		const postOutputFetch = (async (
+			_input: Request | string | URL,
+			_init?: RequestInit
+		) => {
+			postOutputRequests += 1;
+			return sseResponse(
+				'event: content_block_delta\ndata: {"index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n',
+				'event: error\ndata: {"type":"error","error":{"type":"invalid_request_error","message":"cache_control rejected"}}\n\n'
+			);
+		}) as typeof globalThis.fetch;
+		await expect(
+			collect(
+				createModelClient({ fetch: postOutputFetch }),
+				promptCacheTarget(makeTarget("anthropic", "claude-opus-4-5"), "short"),
+				[{ content: [{ text: "request", type: "text" }], role: "user" }],
+				{ system: "Stable instructions" }
+			)
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(postOutputRequests).toBe(1);
+	});
+
+	test("keeps one-off text-generation requests uncached for compaction summaries", async () => {
+		const mock = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
+		await generateModelText(
+			{
+				model: makeTarget("anthropic", "claude-opus-4-5"),
+				maxOutputTokens: 128,
+				prompt: "Summarize the transcript.",
+				system: "Summarize only.",
+			},
+			createModelClient({ fetch: mock.fetch })
+		);
+		const body = responseBody(mock);
+		expect(JSON.stringify(body)).not.toContain("cache_control");
 	});
 
 	test("keeps budget-only Anthropic reasoning automatic without a selection", async () => {

@@ -155,7 +155,8 @@ const completedOutcome = (): SessionRecord["outcome"] => ({
  */
 const seedSession = async (
 	prefix: string,
-	secondTurnState: "completed" | "interrupted" = "interrupted"
+	secondTurnState: "completed" | "interrupted" = "interrupted",
+	selectedModel: ChatModelSelection = model
 ): Promise<{
 	compaction: CompactionId;
 	sessionId: SessionId;
@@ -164,7 +165,7 @@ const seedSession = async (
 	const { id: sessionId } = await store.createSession({
 		agent: buildId,
 		message: firstUser,
-		model,
+		model: selectedModel,
 		turnId: agentTurnId(`${prefix}-turn-1`),
 	});
 	await store.commitSessionRecord({
@@ -178,7 +179,7 @@ const seedSession = async (
 					role: "assistant",
 				},
 			],
-			model,
+			model: selectedModel,
 			outcome: completedOutcome(),
 			turnId: agentTurnId(`${prefix}-turn-1`),
 			version: 1,
@@ -190,7 +191,7 @@ const seedSession = async (
 		record: buildUserSessionRecord({
 			agentId: buildId,
 			message: secondUser,
-			model,
+			model: selectedModel,
 			turnId: agentTurnId(`${prefix}-turn-2`),
 		}),
 		sessionId,
@@ -214,7 +215,7 @@ const seedSession = async (
 					role: "assistant",
 				},
 			],
-			model,
+			model: selectedModel,
 			outcome:
 				secondTurnState === "completed"
 					? completedOutcome()
@@ -240,7 +241,7 @@ const seedSession = async (
 		estimatedTokensAfter: 100,
 		firstKeptUiMessageId: sessionMessageId(`${prefix}-user-2`),
 		sessionId,
-		summarizationModel: model,
+		summarizationModel: selectedModel,
 		summary: {
 			coveredMessageIds: [sessionMessageId(`${prefix}-user-1`)],
 			formatVersion: 1,
@@ -1125,6 +1126,44 @@ describe("Session Host opening", () => {
 });
 
 describe("Session Host lifetime", () => {
+	test("applies the configured cache retention to the selected model's Agent Turn", async () => {
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("claude-opus-4-5"),
+			providerId: "anthropic",
+		};
+		const seeded = await seedSession(
+			"prompt-cache-setting",
+			"interrupted",
+			selectedModel
+		);
+		const capabilities = createCapabilities(store, {
+			promptCache: {
+				modelOverrides: { "anthropic/claude-opus-4-5": "long" },
+			},
+		});
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const previousBeforeStep = recorder.beforeStep;
+		let retention: string | undefined;
+		recorder.beforeStep = async (request) => {
+			retention = request.target.promptCacheRetention;
+		};
+		try {
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: selectedModel,
+				sessionModel: selectedModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(retention).toBe("long");
+		} finally {
+			recorder.beforeStep = previousBeforeStep;
+			await host.shutdown();
+		}
+	});
+
 	test("runs a send command, reports its events in order, and refuses commands after shutdown", async () => {
 		const seeded = await seedSession("send");
 		const capabilities = createCapabilities();
