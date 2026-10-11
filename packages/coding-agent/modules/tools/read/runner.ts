@@ -1,4 +1,5 @@
-import * as fs from "node:fs";
+import type * as nodeFs from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
 	isObjectLike,
@@ -84,7 +85,7 @@ const readResolvedTarget = async (
 	displayPath: string,
 	ranges?: LineRange[]
 ): Promise<ResolvedReadTarget> => {
-	const targetStat = await fs.promises.stat(resolvedPath);
+	const targetStat = await fs.stat(resolvedPath);
 	if (targetStat.isDirectory()) {
 		return {
 			absolutePath: resolvedPath,
@@ -114,9 +115,9 @@ const readTextTarget = async (
 	): Promise<ResolvedReadTarget | undefined> => {
 		const literalPath =
 			await defaultWorkspaceSandbox.resolveNewPath(candidatePath);
-		const literalStat = await fs.promises
+		const literalStat = await fs
 			.lstat(literalPath)
-			.catch((error: unknown): fs.Stats | undefined => {
+			.catch((error: unknown): nodeFs.Stats | undefined => {
 				if (hasErrorCode(error, "ENOENT")) {
 					return;
 				}
@@ -137,7 +138,7 @@ const readTextTarget = async (
 				kind: "symlink",
 				path: displayPath,
 				...omitUndefined({ ranges }),
-				symlinkTarget: await fs.promises.readlink(literalPath),
+				symlinkTarget: await fs.readlink(literalPath),
 			};
 		}
 		return resolvedTarget;
@@ -159,7 +160,7 @@ const readTextTarget = async (
 	const literalPath = await defaultWorkspaceSandbox.resolveNewPath(inputPath);
 	let literalEntryExists = true;
 	try {
-		await fs.promises.lstat(literalPath);
+		await fs.lstat(literalPath);
 	} catch (error) {
 		if (!hasErrorCode(error, "ENOENT")) {
 			throw error;

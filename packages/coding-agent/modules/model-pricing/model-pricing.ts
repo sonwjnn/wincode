@@ -18,12 +18,13 @@ export type ModelPricingTable = Readonly<Record<string, ModelPricingEntry>>;
 
 /**
  * How current the rates behind a resolved price are. `"bundled"` is the
- * snapshot compiled into the build; `"cache"` is a previously fetched table
- * still inside its TTL; `"stale"` is one past it. The distinction is worth
- * showing because published rates move — measured over one 35-day window,
- * 8 of 66 catalog models changed price, the largest by 507%.
+ * snapshot compiled into the build; `"live"` is a table fetched during this
+ * session; `"cache"` is a previously fetched table still inside its TTL;
+ * `"stale"` is one past it. The distinction is worth showing because
+ * published rates move — measured over one 35-day window, 8 of 66 catalog
+ * models changed price, the largest by 507%.
  */
-export type ModelPricingSource = "bundled" | "cache" | "stale";
+export type ModelPricingSource = "bundled" | "cache" | "live" | "stale";
 
 export const modelPricingKey = (
 	provider: ModelRuntimeProviderId,

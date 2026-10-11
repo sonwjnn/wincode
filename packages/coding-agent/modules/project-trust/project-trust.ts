@@ -1,4 +1,5 @@
-import * as fs from "node:fs";
+import type * as nodeFs from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger, readUtf8File } from "@wincode/utils";
 import { canonicalPath, getProjectRoots } from "@/shared/paths/project-roots";
@@ -98,9 +99,9 @@ const exists = async (filePath: string): Promise<boolean> =>
 const hasProjectSkill = async (projectRoot: string): Promise<boolean> => {
 	for (const relativeRoot of PROJECT_SKILL_ROOTS) {
 		const skillRoot = path.join(projectRoot, relativeRoot);
-		let entries: fs.Dirent[];
+		let entries: nodeFs.Dirent[];
 		try {
-			entries = await fs.promises.readdir(skillRoot, { withFileTypes: true });
+			entries = await fs.readdir(skillRoot, { withFileTypes: true });
 		} catch {
 			continue;
 		}
@@ -119,7 +120,7 @@ const hasProjectSkill = async (projectRoot: string): Promise<boolean> => {
 const hasProjectCommand = async (projectRoot: string): Promise<boolean> => {
 	const commandRoot = path.join(projectRoot, PROJECT_COMMAND_ROOT);
 	try {
-		const entries = await fs.promises.readdir(commandRoot, {
+		const entries = await fs.readdir(commandRoot, {
 			withFileTypes: true,
 		});
 		return entries.some(
@@ -135,9 +136,9 @@ const hasProjectAgentDefinition = async (
 ): Promise<boolean> => {
 	const agentRoot = path.join(projectRoot, ".wincode", "agents");
 	const visit = async (directory: string): Promise<boolean> => {
-		let entries: fs.Dirent[];
+		let entries: nodeFs.Dirent[];
 		try {
-			entries = await fs.promises.readdir(directory, { withFileTypes: true });
+			entries = await fs.readdir(directory, { withFileTypes: true });
 		} catch {
 			return false;
 		}
@@ -239,17 +240,17 @@ const saveTrustFile = async (
 	filePath: string,
 	decisions: readonly StoredTrustDecision[]
 ): Promise<void> => {
-	await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+	await fs.mkdir(path.dirname(filePath), { recursive: true });
 	const temporaryPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
-		await fs.promises.writeFile(
+		await fs.writeFile(
 			temporaryPath,
 			JSON.stringify({ decisions, version: 1 } satisfies TrustFile, null, 2),
 			{ encoding: "utf8", mode: 0o600 }
 		);
-		await fs.promises.rename(temporaryPath, filePath);
+		await fs.rename(temporaryPath, filePath);
 	} finally {
-		await fs.promises.rm(temporaryPath, { force: true });
+		await fs.rm(temporaryPath, { force: true });
 	}
 };
 

@@ -16,3 +16,21 @@ test("reads the offline override at call time, not import time", () => {
 		restoreEnvironment();
 	}
 });
+
+test("ignores an invalid override instead of failing the render", () => {
+	const restoreEnvironment = createEnvironmentRestorer([
+		"WINCODE_MODEL_PRICING_TTL_HOURS",
+		"WINCODE_MODEL_PRICING_URL",
+	]);
+	process.env.WINCODE_MODEL_PRICING_TTL_HOURS = "0";
+	process.env.WINCODE_MODEL_PRICING_URL = "not-a-url";
+	try {
+		// A typo in an override must not throw while the provider mounts; the
+		// fetch path already treats pricing failures as non-fatal.
+		const env = getModelPricingEnv();
+		expect(env.WINCODE_MODEL_PRICING_TTL_HOURS).toBeUndefined();
+		expect(env.WINCODE_MODEL_PRICING_URL).toBeUndefined();
+	} finally {
+		restoreEnvironment();
+	}
+});

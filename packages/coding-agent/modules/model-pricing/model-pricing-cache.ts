@@ -46,9 +46,6 @@ const parseCacheFile = (raw: string): CacheFile | null => {
 };
 
 const readCacheFileFromPath = (cachePath: string): CacheFile | null => {
-	if (!fs.existsSync(cachePath)) {
-		return null;
-	}
 	let raw: string;
 	try {
 		raw = fs.readFileSync(cachePath, "utf8");
@@ -103,9 +100,6 @@ export const writeModelPricingCache = (
 export const clearModelPricingCache = (
 	cachePath: string = resolveModelPricingCachePath()
 ): void => {
-	if (!fs.existsSync(cachePath)) {
-		return;
-	}
 	try {
 		fs.unlinkSync(cachePath);
 	} catch {

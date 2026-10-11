@@ -184,7 +184,8 @@ export function publish(
 	return { filename, path: dest };
 }
 
-export const basename = path.basename;
+// Public surface for the visual-tools authoring loops; consumers import these
+// names directly, so keep the namespace-backed re-exports.
 export const dirname = path.dirname;
 export const existsSync = fs.existsSync;
 export const join = path.join;

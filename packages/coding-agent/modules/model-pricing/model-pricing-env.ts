@@ -1,3 +1,4 @@
+import { logger } from "@wincode/utils";
 import { z } from "zod";
 
 const emptyStringAsUndefined = (
@@ -23,8 +24,8 @@ type ModelPricingEnv = z.infer<typeof modelPricingEnvSchema>;
  * Reads the pricing overrides when called, not when this module loads, so a
  * test or caller that sets them after import still reaches the provider.
  */
-export const getModelPricingEnv = (): ModelPricingEnv =>
-	modelPricingEnvSchema.parse({
+export const getModelPricingEnv = (): ModelPricingEnv => {
+	const parsed = modelPricingEnvSchema.safeParse({
 		WINCODE_MODEL_PRICING_OFFLINE: emptyStringAsUndefined(
 			process.env.WINCODE_MODEL_PRICING_OFFLINE
 		),
@@ -35,3 +36,13 @@ export const getModelPricingEnv = (): ModelPricingEnv =>
 			process.env.WINCODE_MODEL_PRICING_URL
 		),
 	});
+	if (!parsed.success) {
+		// A typo in an override must not take down the renderer; the fetch path
+		// already treats pricing failures as non-fatal.
+		logger.warn("Ignoring invalid model pricing environment overrides", {
+			variables: parsed.error.issues.map((issue) => issue.path.join(".")),
+		});
+		return { WINCODE_MODEL_PRICING_OFFLINE: false };
+	}
+	return parsed.data;
+};

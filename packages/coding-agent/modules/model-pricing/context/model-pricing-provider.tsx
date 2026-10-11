@@ -37,22 +37,27 @@ const runFetch = (
 	url: string,
 	now: number
 ): Promise<ModelPricingTable | null> => {
-	if (fetchRequest?.url !== url) {
-		fetchRequest = {
-			promise: fetchModelPricingTable(url, modelIds).then((table) => {
-				if (table) {
-					try {
-						writeModelPricingCache(table, now);
-					} catch {
-						// best effort
-					}
-				}
-				return table;
-			}),
-			url,
-		};
+	if (fetchRequest?.url === url) {
+		return fetchRequest.promise;
 	}
-	return fetchRequest.promise;
+	const promise = fetchModelPricingTable(url, modelIds).then((table) => {
+		if (!table) {
+			// A transient failure must not pin this url to a null result for the
+			// life of the process, so drop the cache entry that produced it.
+			if (fetchRequest?.promise === promise) {
+				fetchRequest = null;
+			}
+			return null;
+		}
+		try {
+			writeModelPricingCache(table, now);
+		} catch {
+			// best effort
+		}
+		return table;
+	});
+	fetchRequest = { promise, url };
+	return promise;
 };
 
 export type ModelPricingState = {
@@ -119,7 +124,7 @@ export function ModelPricingProvider({
 			.then((next) => {
 				if (next) {
 					setLoadedTable(next);
-					setSource("cache");
+					setSource("live");
 				}
 			})
 			.catch(() => undefined);
