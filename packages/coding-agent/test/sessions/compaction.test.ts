@@ -382,6 +382,42 @@ test("uses provider-reported usage for threshold decisions", () => {
 		})
 	).toBe(true);
 });
+test("counts cached input within the provider total for compaction thresholds", () => {
+	const compaction = createSessionCompaction({
+		store: makeStore(),
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: () => 0,
+	});
+	const messages: SessionMessage[] = [
+		message("u1", "user", "request"),
+		{
+			...message("a1", "assistant", "answer"),
+			metadata: {
+				model,
+				usage: {
+					cacheReadTokens: 60,
+					cacheWriteTokens: 10,
+					inputTokens: 90,
+					outputTokens: 20,
+				},
+			},
+		},
+	];
+
+	expect(
+		compaction.needsCompaction(messages, {
+			enabled: true,
+			thresholdTokens: 100,
+		})
+	).toBe(true);
+	expect(
+		compaction.needsCompaction(messages, {
+			enabled: true,
+			thresholdTokens: 111,
+		})
+	).toBe(false);
+});
+
 test("adds estimated trailing context after the latest provider usage", () => {
 	const compaction = createSessionCompaction({
 		store: makeStore(),

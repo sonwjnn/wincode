@@ -165,6 +165,33 @@ describe("summarizeSessionUsage", () => {
 		expect(afterNextUsage?.contextTokens).toBe(45);
 	});
 
+	test("shows session cache totals without reducing the latest context measure", () => {
+		const messages = [
+			assistant("assistant-1", {
+				inputTokens: 100,
+				outputTokens: 5,
+				cacheReadTokens: 30,
+				cacheWriteTokens: 10,
+			}),
+			assistant("assistant-2", {
+				inputTokens: 90,
+				outputTokens: 10,
+				cacheReadTokens: 60,
+				cacheWriteTokens: 20,
+			}),
+		];
+		const transcript = structuredClone(messages);
+
+		const summary = summarizeSessionUsage(messages, model, {});
+
+		expect(summary).toMatchObject({
+			cacheReadTokens: 90,
+			cacheWriteTokens: 30,
+			contextTokens: 100,
+		});
+		expect(messages).toEqual(transcript);
+	});
+
 	test("hides the usage bar before any provider usage exists", () => {
 		expect(
 			summarizeSessionUsage(
@@ -175,10 +202,12 @@ describe("summarizeSessionUsage", () => {
 		).toBeNull();
 	});
 
-	test("accumulates a session total across measured turns", () => {
+	test("accumulates a cache-aware session total across measured turns", () => {
 		const summary = summarizeSessionUsage(
 			[
 				assistant("assistant-1", {
+					cacheReadTokens: 500_000,
+					cacheWriteTokens: 100_000,
 					inputTokens: 1_000_000,
 					outputTokens: 1_000_000,
 				}),
@@ -187,14 +216,14 @@ describe("summarizeSessionUsage", () => {
 			model,
 			{
 				"anthropic/claude-haiku-4-5": {
-					cost: { input: 1, output: 5 },
+					cost: { cacheRead: 0.25, cacheWrite: 2, input: 1, output: 5 },
 					limits: { context: 1000 },
 				},
 			}
 		);
 
-		// Turn 1: 1M in * $1 + 1M out * $5. Turn 2: 1M in * $1.
-		expect(summary?.costUsd).toBeCloseTo(7, 9);
+		// Turn 1: 400k uncached * $1 + 500k read * $0.25 + 100k write * $2 + 1M output * $5. Turn 2: 1M input * $1.
+		expect(summary?.costUsd).toBeCloseTo(6.725, 9);
 		expect(summary?.costedTurns).toBe(2);
 	});
 

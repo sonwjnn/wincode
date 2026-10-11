@@ -35,6 +35,11 @@ export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 				) : (
 					<span>{tokensText}</span>
 				)}
+				{summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0 ? (
+					<span>{`  cache read ${formatModelTokenCount(
+						summary.cacheReadTokens
+					)} / write ${formatModelTokenCount(summary.cacheWriteTokens)}`}</span>
+				) : null}
 				{isNull(summary.costUsd) ? null : (
 					// "~" marks a figure derived from published rates instead of an
 					// invoice. See ADR-0015.

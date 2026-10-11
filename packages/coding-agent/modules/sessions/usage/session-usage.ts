@@ -19,6 +19,10 @@ export type SessionUsageSummary = {
 	costUsd: number | null;
 	/** How many turns contributed a cost estimate. */
 	costedTurns: number;
+	/** Session-total cache reads, kept separate from context usage. */
+	cacheReadTokens: number;
+	/** Session-total cache writes, kept separate from context usage. */
+	cacheWriteTokens: number;
 	/** `null` when the catalog has no limit for the current model. */
 	contextLimit: number | null;
 	/** `null` when `contextLimit` is unknown. */
@@ -58,18 +62,25 @@ export const turnCostUsd = (
 	usage: SessionMessageUsage
 ): number | null => calculateModelUsageCostUsd(entry, usage);
 
-const collectCost = (
+const collectSessionUsage = (
 	messages: readonly SessionMessage[],
 	fallbackModel: ChatModelSelection,
 	table: ModelPricingTable
-): { costUsd: number | null; costedTurns: number } => {
+): Pick<
+	SessionUsageSummary,
+	"cacheReadTokens" | "cacheWriteTokens" | "costUsd" | "costedTurns"
+> => {
 	let total = 0;
 	let costedTurns = 0;
+	let cacheReadTokens = 0;
+	let cacheWriteTokens = 0;
 	for (const message of messages) {
 		const usage = message.metadata?.usage;
 		if (message.role !== "assistant" || !usage) {
 			continue;
 		}
+		cacheReadTokens += usage.cacheReadTokens ?? 0;
+		cacheWriteTokens += usage.cacheWriteTokens ?? 0;
 		const selection = message.metadata?.model ?? fallbackModel;
 		const entry = resolveModelMetadata(table, selection);
 		const cost = turnCostUsd(entry ?? undefined, usage);
@@ -78,7 +89,12 @@ const collectCost = (
 			costedTurns += 1;
 		}
 	}
-	return { costUsd: costedTurns === 0 ? null : total, costedTurns };
+	return {
+		cacheReadTokens,
+		cacheWriteTokens,
+		costUsd: costedTurns === 0 ? null : total,
+		costedTurns,
+	};
 };
 
 /**
@@ -106,7 +122,7 @@ export const summarizeSessionUsage = (
 			? clampPercent((contextTokens / contextLimit) * 100)
 			: null;
 	return {
-		...collectCost(messages, fallbackModel, table),
+		...collectSessionUsage(messages, fallbackModel, table),
 		contextLimit,
 		contextPercent,
 		contextTokens,
