@@ -4,11 +4,14 @@ import type {
 	OAuthClientProvider,
 	StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
-import type { PluginSecretStore } from "@wincode/coding-agent";
-import { createMcpOAuthProvider, logoutMcpServer } from "../src/oauth";
+import {
+	createMcpOAuthProvider,
+	logoutMcpServer,
+	type McpSecretStore,
+} from "@wincode/mcp";
 
 const createSecretStore = (): Readonly<{
-	secrets: PluginSecretStore;
+	secrets: McpSecretStore;
 	values: Map<string, string>;
 }> => {
 	const values = new Map<string, string>();
@@ -70,7 +73,7 @@ test("MCP OAuth credentials are isolated by server and persisted through Plugin 
 test("MCP OAuth providers supply redirect metadata and keep client IDs user scoped", async () => {
 	const { secrets } = createSecretStore();
 	const provider: OAuthClientProvider = createMcpOAuthProvider({
-		oauth: { clientId: "saved-client-id", clientSecret: "saved-client-secret" },
+		oauth: { clientId: "saved-client-id" },
 		redirectUrl: "http://127.0.0.1:45832/oauth/callback",
 		secrets,
 		serverName: "calendar",
@@ -79,10 +82,25 @@ test("MCP OAuth providers supply redirect metadata and keep client IDs user scop
 	expect(provider.clientMetadata).toMatchObject({
 		client_name: "Wincode",
 		redirect_uris: ["http://127.0.0.1:45832/oauth/callback"],
-		token_endpoint_auth_method: "client_secret_post",
+		token_endpoint_auth_method: "none",
 	});
 	await expect(provider.clientInformation(context)).resolves.toMatchObject({
 		client_id: "saved-client-id",
-		client_secret: "saved-client-secret",
 	});
+	await expect(provider.clientInformation(context)).resolves.not.toHaveProperty(
+		"client_secret"
+	);
+});
+
+test("MCP OAuth providers reject client secrets from configuration", () => {
+	const { secrets } = createSecretStore();
+	expect(() =>
+		createMcpOAuthProvider({
+			oauth: { clientId: "configured-client", clientSecret: "raw-secret" },
+			secrets,
+			serverName: "calendar",
+		})
+	).toThrow(
+		"MCP OAuth client secrets must be stored through the host secret store."
+	);
 });

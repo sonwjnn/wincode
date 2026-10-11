@@ -63,6 +63,7 @@ export const createMcpToolExecutor = (
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 24 * 1024;
 const MAX_INLINE_RESOURCE_TEXT_BYTES = 32 * 1024;
+const MAX_RESOURCE_TEXT_PREVIEW_CHARS = 4096;
 
 const size = (value: unknown): number => utf8ByteLength(JSON.stringify(value));
 
@@ -80,11 +81,12 @@ const artifactText = async (
 	content: string,
 	mimeType: string
 ): Promise<string> => {
+	const preview = middleExcerpt(content, MAX_RESOURCE_TEXT_PREVIEW_CHARS);
 	if (utf8ByteLength(content) > MAX_ARTIFACT_BYTES) {
-		return `[MCP content ${mimeType} exceeds the 16 MiB artifact limit]`;
+		return `[MCP content ${mimeType} exceeds the 16 MiB artifact limit]\n\n${preview}`;
 	}
 	const filePath = await writeArtifact(content, "txt");
-	return `[MCP ${mimeType} content saved to ${filePath}]`;
+	return `[MCP ${mimeType} content saved to ${filePath}]\n\n${preview}`;
 };
 
 const artifactBinary = async (

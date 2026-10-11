@@ -245,7 +245,7 @@ const applyProjectServer = (
 		return;
 	}
 	const previous = servers.get(name);
-	if (previous === undefined) {
+	if (previous?.source.scope !== "global") {
 		addDiagnostic(
 			diagnostics,
 			source,
@@ -580,22 +580,18 @@ const parseHttpUrl = (value: string): URL | undefined => {
 	return;
 };
 
-const hasProjectOAuthSecret = (
+const hasOAuthClientSecret = (
 	context: ResolutionContext,
 	oauth: unknown
 ): boolean => {
-	if (
-		context.source.scope !== "project" ||
-		!isPlainObject(oauth) ||
-		!Object.hasOwn(oauth, "clientSecret")
-	) {
+	if (!(isPlainObject(oauth) && Object.hasOwn(oauth, "clientSecret"))) {
 		return false;
 	}
 	addDiagnostic(
 		context.diagnostics,
 		context.source,
 		"unsupported-auth",
-		"Project MCP configuration cannot provide OAuth client secrets.",
+		"MCP configuration cannot provide OAuth client secrets; use the host secret store.",
 		serverPath(context.name, ["oauth", "clientSecret"]),
 		context.name
 	);
@@ -626,24 +622,14 @@ const resolveRemoteServer = async (
 		);
 		return;
 	}
-	if (hasProjectOAuthSecret(context, raw.oauth)) {
+	if (hasOAuthClientSecret(context, raw.oauth)) {
 		return;
 	}
 	const headers = await resolveStringRecord(raw.headers, context, "headers");
 	if (headers === undefined) {
 		return;
 	}
-	let oauth = raw.oauth;
-	if (isPlainObject(oauth) && typeof oauth.clientSecret === "string") {
-		const clientSecret = await resolveString(oauth.clientSecret, context, [
-			"oauth",
-			"clientSecret",
-		]);
-		if (clientSecret === undefined) {
-			return;
-		}
-		oauth = { ...oauth, clientSecret };
-	}
+	const oauth = raw.oauth;
 	const parsed = resolvedServerSchema.safeParse({
 		...base,
 		type: "remote" as const,

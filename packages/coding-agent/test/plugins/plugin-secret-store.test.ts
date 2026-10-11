@@ -66,7 +66,7 @@ test("Plugin secrets use the platform backend with Plugin-qualified accounts", a
 	const store = createPluginSecretStore("oauth_plugin", root, {
 		delete: async ({ name, service }) => {
 			operations.push(`delete:${service}:${name}`);
-			values.delete(`${service}:${name}`);
+			return values.delete(`${service}:${name}`);
 		},
 		get: async ({ name, service }) => {
 			operations.push(`get:${service}:${name}`);

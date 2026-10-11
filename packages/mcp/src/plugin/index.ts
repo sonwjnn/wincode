@@ -44,8 +44,19 @@ const statusFor = (state: McpServerStatus["state"]): PluginStatus => {
 	}
 };
 
+const STATUS_ACTION_IDS = {
+	exposure: "exposure",
+	login: "login",
+	logout: "logout",
+	reconnect: "reconnect",
+	toggle: "toggle",
+} as const;
+
+type StatusActionId =
+	(typeof STATUS_ACTION_IDS)[keyof typeof STATUS_ACTION_IDS];
+
 type StatusAction = Readonly<{
-	id: string;
+	id: StatusActionId;
 	label: string;
 	shortcut: "space";
 }>;
@@ -57,11 +68,17 @@ const connectionActions = (
 		return [];
 	}
 	if (server.state === "degraded" || server.state === "failed") {
-		return [{ id: "reconnect", label: "Reconnect", shortcut: "space" }];
+		return [
+			{
+				id: STATUS_ACTION_IDS.reconnect,
+				label: "Reconnect",
+				shortcut: "space",
+			},
+		];
 	}
 	return [
 		{
-			id: "toggle",
+			id: STATUS_ACTION_IDS.toggle,
 			label: server.state === "disabled" ? "Enable" : "Disable",
 			shortcut: "space",
 		},
@@ -72,10 +89,14 @@ const authenticationActions = (
 	server: McpServerStatus
 ): readonly StatusAction[] => {
 	if (server.auth === "required") {
-		return [{ id: "login", label: "Sign in", shortcut: "space" }];
+		return [
+			{ id: STATUS_ACTION_IDS.login, label: "Sign in", shortcut: "space" },
+		];
 	}
 	if (server.auth === "authenticated") {
-		return [{ id: "logout", label: "Sign out", shortcut: "space" }];
+		return [
+			{ id: STATUS_ACTION_IDS.logout, label: "Sign out", shortcut: "space" },
+		];
 	}
 	return [];
 };
@@ -84,7 +105,7 @@ const statusActions = (server: McpServerStatus): readonly StatusAction[] => [
 	...connectionActions(server),
 	...authenticationActions(server),
 	{
-		id: "exposure",
+		id: STATUS_ACTION_IDS.exposure,
 		label: server.exposure === "direct" ? "Hide tools" : "Expose tools",
 		shortcut: "space",
 	},
@@ -180,6 +201,56 @@ const persistServerField = async (
 	);
 };
 
+type StatusActionExecution = Readonly<{
+	actionContext?: PluginStatusPanelActionContext;
+	context: PluginLoadContext;
+	registry: McpRegistry;
+	server: McpServerStatus;
+	serverName: string;
+}>;
+
+type StatusActionHandler = (execution: StatusActionExecution) => Promise<void>;
+
+const statusActionHandlers = {
+	[STATUS_ACTION_IDS.reconnect]: ({ registry, serverName }) =>
+		registry.reconnect(serverName),
+	[STATUS_ACTION_IDS.login]: ({ actionContext, registry, serverName }) =>
+		registry.login(
+			serverName,
+			actionContext === undefined
+				? undefined
+				: redirectReaderFor(actionContext.requestTextInput)
+		),
+	[STATUS_ACTION_IDS.logout]: ({ registry, serverName }) =>
+		registry.logout(serverName),
+	[STATUS_ACTION_IDS.toggle]: async ({
+		context,
+		registry,
+		server,
+		serverName,
+	}) => {
+		await persistServerField(
+			context,
+			server,
+			"enabled",
+			server.state === "disabled"
+		);
+		await registry.toggle(serverName);
+	},
+	[STATUS_ACTION_IDS.exposure]: async ({ context, registry, server }) => {
+		await persistServerField(
+			context,
+			server,
+			"exposure",
+			server.exposure === "direct" ? "hidden" : "direct"
+		);
+		await registry.initialize();
+	},
+} satisfies Record<StatusActionId, StatusActionHandler>;
+
+const isStatusActionId = (actionId: string): actionId is StatusActionId =>
+	Object.hasOwn(statusActionHandlers, actionId);
+
 const createStatusPanel = (
 	getRegistry: () => McpRegistry | undefined,
 	context: PluginLoadContext
@@ -234,44 +305,16 @@ const createStatusPanel = (
 		if (server === undefined) {
 			throw new Error(`MCP Server '${serverName}' is unavailable.`);
 		}
-		if (actionId === "reconnect") {
-			await registry.reconnect(serverName);
-			return;
+		if (!isStatusActionId(actionId)) {
+			throw new Error(`Unknown MCP status action '${actionId}'.`);
 		}
-		if (actionId === "login") {
-			await registry.login(
-				serverName,
-				actionContext === undefined
-					? undefined
-					: redirectReaderFor(actionContext.requestTextInput)
-			);
-			return;
-		}
-		if (actionId === "logout") {
-			await registry.logout(serverName);
-			return;
-		}
-		if (actionId === "toggle") {
-			await persistServerField(
-				context,
-				server,
-				"enabled",
-				server.state === "disabled"
-			);
-			await registry.toggle(serverName);
-			return;
-		}
-		if (actionId === "exposure") {
-			await persistServerField(
-				context,
-				server,
-				"exposure",
-				server.exposure === "direct" ? "hidden" : "direct"
-			);
-			await registry.initialize();
-			return;
-		}
-		throw new Error(`Unknown MCP status action '${actionId}'.`);
+		await statusActionHandlers[actionId]({
+			...(actionContext === undefined ? {} : { actionContext }),
+			context,
+			registry,
+			server,
+			serverName,
+		});
 	},
 	subscribe: (listener) =>
 		getRegistry()?.subscribe(listener) ?? (() => undefined),
@@ -402,7 +445,7 @@ export const createMcpPluginFactory =
 			registration.registerTool({
 				name: "mcp_read_resource",
 				description:
-					"Read a resource from a connected, direct-exposure MCP server. Images are preserved; other binary or oversized content is saved to a private temporary artifact.",
+					"Read a resource from a connected, direct-exposure MCP server. Oversized text includes a bounded excerpt and is saved to a private temporary artifact; images are preserved and other binary content is saved there.",
 				modelName: "mcp_read_resource",
 				inputSchema: z.object({ server: z.string(), uri: z.string() }).strict(),
 				handler: async (input, toolContext) => {

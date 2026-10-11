@@ -37,9 +37,9 @@ General settings and MCP server definitions are separate namespaces:
 }
 ```
 
-Pi-style `$NAME`, `${NAME}`, and `$env:NAME` references are expanded from the process environment. `$$` and `$!` escape a literal dollar sign and exclamation mark. A leading `!` in an `env` or `headers` value runs a shell command and uses its trimmed standard output; command execution is time-limited and output-bounded. Keep secret values in environment variables or Wincode's user-scoped secret storage, never in project files.
+Pi-style `$NAME`, `${NAME}`, and `$env:NAME` references are expanded from the process environment. `$$` and `$!` escape a literal dollar sign and exclamation mark. A leading `!` in an `env` or `headers` value runs a shell command and uses its trimmed standard output; command execution is time-limited and output-bounded. Keep secret values in environment variables or Wincode's user-scoped secret storage, never in project files. MCP configuration rejects `oauth.clientSecret` at every scope; OAuth client secrets and tokens belong in the host-owned secret store.
 
-Trusted project definitions can configure local commands, remote endpoints, and headers. A project definition replaces the user definition for that server rather than inheriting its credentials. A project may overlay only `enabled`, `exposure`, and `toolExposure` on a user-defined server. Project MCP configuration is omitted unless the project root has been trusted. Trust is not a sandbox: trusted local MCP processes run with Wincode's operating-system privileges.
+Trusted project definitions can configure local commands, remote endpoints, and headers. A project definition replaces the user definition for that server rather than inheriting its credentials. A project may overlay only `enabled`, `exposure`, and `toolExposure` on a user-defined server; it cannot apply partial overlays to Plugin-registered servers. Project MCP configuration is omitted unless the project root has been trusted. Trust is not a sandbox: trusted local MCP processes run with Wincode's operating-system privileges.
 
 Plugin-owned MCP registrations enter the same managed catalog with Plugin provenance. File-configured servers take precedence on name conflicts, which are diagnosed.
 

@@ -29,8 +29,11 @@ import {
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
-import { agentId, sessionId } from "../../support/identifiers";
+import { agentId, sessionId, toolCallId } from "../../support/identifiers";
 import { flushTestRenderer } from "../../support/opentui";
+
+const savedMcpTextArtifactPattern =
+	/\[MCP text\/plain content saved to ([^\]]+)\]/;
 
 const OpenStatusPanel = ({
 	panel,
@@ -94,17 +97,6 @@ test("the distributed MCP package renders its contribution in the generic status
 		expect(runtime.getCommands()).toContainEqual(
 			expect.objectContaining({ name: "mcps", statusPanelId: "servers" })
 		);
-		const turnTools = await runtime.resolveToolsForTurn({
-			agentId: agentId("mcp-resources"),
-			sessionId: sessionId("mcp-resources-session"),
-			workspace,
-			signal: new AbortController().signal,
-		});
-		expect(turnTools.map(({ name }) => name)).toContain("mcp_list_resources");
-		expect(turnTools.map(({ name }) => name)).toContain(
-			"mcp_list_resource_templates"
-		);
-		expect(turnTools.map(({ name }) => name)).toContain("mcp_read_resource");
 		expect(panel.getSnapshot()).toMatchObject({
 			items: [
 				{
@@ -200,6 +192,235 @@ test("the distributed MCP package renders its contribution in the generic status
 	} finally {
 		await runtime?.shutdown();
 		setInteractiveRuntimeContext({ args: [], cwd: workspace });
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("MCP resource reads return bounded previews and preserve the full text artifact", async () => {
+	const root = await mkdtemp(
+		path.join(os.tmpdir(), "wincode-mcp-resource-read-")
+	);
+	const workspace = path.join(root, "workspace");
+	const configDirectory = path.join(root, ".wincode");
+	const resourceText = `RESOURCE-BEGIN:${"large-resource-".repeat(3000)}:RESOURCE-END`;
+	await mkdir(configDirectory, { recursive: true });
+	await mkdir(workspace, { recursive: true });
+	await Bun.write(
+		path.join(configDirectory, "mcp.json"),
+		JSON.stringify({
+			mcpServers: { resources: { url: "https://resources.example.test/mcp" } },
+		})
+	);
+
+	const client: McpClient = {
+		callTool: async () => ({ content: [] }),
+		close: async () => undefined,
+		connect: async () => undefined,
+		listTools: async () => [],
+		readResource: async (uri) => [
+			{ mimeType: "text/plain", text: resourceText, uri },
+		],
+		setToolsChangedListener: () => undefined,
+	};
+	let runtime: PluginRuntime | undefined;
+	let artifactDirectory: string | undefined;
+	try {
+		runtime = await loadPlugins({
+			bundledPlugins: [
+				{
+					factory: createMcpPluginFactory({ createClient: () => client }),
+					id: "mcp",
+				},
+			],
+			cliPaths: [],
+			config: {
+				configStore: createConfigStore({ homeRoot: root }),
+				cwd: workspace,
+				homeRoot: root,
+				workspace,
+			},
+			distributionPlugins: [],
+		});
+		await runtime.refreshStatusPanel("mcp", "servers");
+		const turnTools = await runtime.resolveToolsForTurn({
+			agentId: agentId("mcp-resource-reader"),
+			sessionId: sessionId("mcp-resource-read-session"),
+			workspace,
+			signal: new AbortController().signal,
+		});
+		const turnToolNames = turnTools.map(({ name }) => name);
+		expect(turnToolNames).toContain("mcp_list_resources");
+		expect(turnToolNames).toContain("mcp_list_resource_templates");
+		expect(turnToolNames).toContain("mcp_read_resource");
+		const resourceTool = turnTools.find(
+			({ name }) => name === "mcp_read_resource"
+		);
+		if (resourceTool === undefined) {
+			throw new Error("The MCP resource-read tool was not registered.");
+		}
+		const result = await resourceTool.handler(
+			{ server: "resources", uri: "test://large-resource" },
+			{
+				agentId: agentId("mcp-resource-reader"),
+				sessionId: sessionId("mcp-resource-read-session"),
+				toolCallId: toolCallId("mcp-resource-read-call"),
+				workspace,
+				signal: new AbortController().signal,
+				registerBackgroundWork: () => undefined,
+			}
+		);
+		if (result.type !== "success") {
+			throw new Error(result.errorText);
+		}
+		const output = JSON.stringify(result.output);
+		expect(output).toContain("RESOURCE-BEGIN");
+		expect(output).toContain("middle omitted");
+		expect(output).toContain("RESOURCE-END");
+		const artifactPath = savedMcpTextArtifactPattern.exec(output)?.[1];
+		expect(artifactPath).toBeDefined();
+		if (artifactPath === undefined) {
+			throw new Error("The MCP resource text artifact was not created.");
+		}
+		artifactDirectory = path.dirname(artifactPath);
+		expect(await Bun.file(artifactPath).text()).toBe(resourceText);
+	} finally {
+		await runtime?.shutdown();
+		if (artifactDirectory !== undefined) {
+			await rm(artifactDirectory, { force: true, recursive: true });
+		}
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("project overlays cannot disable Plugin-registered MCP servers", async () => {
+	const root = await mkdtemp(
+		path.join(os.tmpdir(), "wincode-mcp-plugin-overlay-")
+	);
+	const workspace = path.join(root, "workspace");
+	const projectConfigDirectory = path.join(workspace, ".wincode");
+	await mkdir(projectConfigDirectory, { recursive: true });
+	const trustedProjectRoots = [await realpath(workspace)];
+	await Bun.write(
+		path.join(projectConfigDirectory, "mcp.json"),
+		JSON.stringify({ mcpServers: { extension_server: { enabled: false } } })
+	);
+	const configStore = createConfigStore({
+		homeRoot: root,
+		trustedProjectRoots,
+	});
+	let connectionAttempts = 0;
+	const client: McpClient = {
+		callTool: async () => ({ content: [] }),
+		close: async () => undefined,
+		connect: async () => {
+			connectionAttempts += 1;
+		},
+		listTools: async () => [],
+		setToolsChangedListener: () => undefined,
+	};
+	let runtime: PluginRuntime | undefined;
+	try {
+		runtime = await loadPlugins({
+			bundledPlugins: [
+				{
+					factory: (api) => {
+						const plugin = api.definePlugin({ id: "extension" });
+						plugin.registerMcpServer("extension_server", {
+							enabled: true,
+							url: "https://plugin.example.test/mcp",
+						});
+					},
+					id: "extension",
+				},
+				{
+					factory: createMcpPluginFactory({ createClient: () => client }),
+					id: "mcp",
+				},
+			],
+			cliPaths: [],
+			config: {
+				configStore,
+				cwd: workspace,
+				homeRoot: root,
+				trustedProjectRoots,
+				workspace,
+			},
+			distributionPlugins: [],
+		});
+		await runtime.refreshStatusPanel("mcp", "servers");
+		const panel = runtime
+			.getStatusPanels()
+			.find(({ id, pluginId }) => id === "servers" && pluginId === "mcp");
+		expect(connectionAttempts).toBe(1);
+		expect(panel?.getSnapshot().items).toContainEqual(
+			expect.objectContaining({ id: "extension_server", status: "success" })
+		);
+	} finally {
+		await runtime?.shutdown();
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("MCP Plugin does not pass configured OAuth client secrets to runtime servers", async () => {
+	const root = await mkdtemp(
+		path.join(os.tmpdir(), "wincode-mcp-oauth-config-")
+	);
+	const workspace = path.join(root, "workspace");
+	const configDirectory = path.join(root, ".wincode");
+	await mkdir(configDirectory, { recursive: true });
+	await mkdir(workspace, { recursive: true });
+	await Bun.write(
+		path.join(configDirectory, "mcp.json"),
+		JSON.stringify({
+			mcpServers: {
+				remote: {
+					url: "https://oauth.example.test/mcp",
+					oauth: {
+						clientId: "configured-client",
+						clientSecret: "configured-secret-must-not-reach-runtime",
+					},
+				},
+			},
+		})
+	);
+	const receivedConfigs: unknown[] = [];
+	const client: McpClient = {
+		callTool: async () => ({ content: [] }),
+		close: async () => undefined,
+		connect: async () => undefined,
+		listTools: async () => [],
+		setToolsChangedListener: () => undefined,
+	};
+	let runtime: PluginRuntime | undefined;
+	try {
+		runtime = await loadPlugins({
+			bundledPlugins: [
+				{
+					factory: createMcpPluginFactory({
+						createClient: (config) => {
+							receivedConfigs.push(config);
+							return client;
+						},
+					}),
+					id: "mcp",
+				},
+			],
+			cliPaths: [],
+			config: {
+				configStore: createConfigStore({ homeRoot: root }),
+				cwd: workspace,
+				homeRoot: root,
+				workspace,
+			},
+			distributionPlugins: [],
+		});
+		await runtime.refreshStatusPanel("mcp", "servers");
+		expect(receivedConfigs).toEqual([]);
+		expect(JSON.stringify(receivedConfigs)).not.toContain(
+			"configured-secret-must-not-reach-runtime"
+		);
+	} finally {
+		await runtime?.shutdown();
 		await rm(root, { force: true, recursive: true });
 	}
 });

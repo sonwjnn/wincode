@@ -8,15 +8,7 @@ const SERVICE_NAME = "wincode-plugin";
 const pluginIdPattern = /^[a-z0-9_]+$/u;
 const secretKeyPattern = /^[a-zA-Z0-9_.:-]{1,128}$/u;
 
-type BunSecretStore = {
-	delete?: (input: { name: string; service: string }) => Promise<void>;
-	get?: (input: { name: string; service: string }) => Promise<string | null>;
-	set?: (input: {
-		name: string;
-		service: string;
-		value: string;
-	}) => Promise<void>;
-};
+type BunSecretStore = Partial<typeof Bun.secrets>;
 
 export type PluginSecretStore = Readonly<{
 	delete: (key: string) => Promise<void>;

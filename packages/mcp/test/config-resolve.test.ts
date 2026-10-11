@@ -274,9 +274,37 @@ test("project OAuth client secrets are rejected instead of entering project conf
 	expect(result.diagnostics).toContainEqual(
 		expect.objectContaining({
 			code: "unsupported-auth",
-			message: "Project MCP configuration cannot provide OAuth client secrets.",
+			message:
+				"MCP configuration cannot provide OAuth client secrets; use the host secret store.",
 			serverName: "remote",
 		})
+	);
+});
+
+test("user OAuth client secrets are rejected before reaching MCP transport configuration", async () => {
+	const result = await resolveAsUser({
+		mcpServers: {
+			remote: {
+				url: "https://user.example.test/mcp",
+				oauth: {
+					clientId: "client",
+					clientSecret: "must-not-appear-in-resolved-config",
+				},
+			},
+		},
+	});
+
+	expect(result.servers.remote).toBeUndefined();
+	expect(result.diagnostics).toContainEqual(
+		expect.objectContaining({
+			code: "unsupported-auth",
+			message:
+				"MCP configuration cannot provide OAuth client secrets; use the host secret store.",
+			serverName: "remote",
+		})
+	);
+	expect(JSON.stringify(result.diagnostics)).not.toContain(
+		"must-not-appear-in-resolved-config"
 	);
 });
 

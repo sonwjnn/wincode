@@ -479,24 +479,45 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			})
 		);
 
+	const listResourcePage = async <Page, SourceItem, Item>(
+		serverName: string | undefined,
+		cursor: string | undefined,
+		signal: AbortSignal | undefined,
+		unavailableMessage: string,
+		request: (
+			client: McpClient,
+			cursor: string | undefined,
+			signal: AbortSignal
+		) => Promise<Page> | undefined,
+		pageData: (page: Page) => Readonly<{
+			items: readonly SourceItem[];
+			nextCursor: string | undefined;
+		}>,
+		summarize: (entry: ServerEntry, item: SourceItem) => Item
+	): Promise<McpPageCollection<Item>> => {
+		await init();
+		const pages = await requestResourcePages(
+			resourceEntriesFor(serverName),
+			serverName === undefined ? undefined : cursor,
+			signal,
+			unavailableMessage,
+			request
+		);
+		return collectResourcePages(pages, serverName, pageData, summarize);
+	};
+
 	const listResources = async (
 		serverName?: string,
 		cursor?: string,
 		signal?: AbortSignal
 	): Promise<McpResourcePage> => {
-		await init();
-		const entries = resourceEntriesFor(serverName);
-		const pages = await requestResourcePages(
-			entries,
-			serverName === undefined ? undefined : cursor,
+		const collected = await listResourcePage(
+			serverName,
+			cursor,
 			signal,
 			"MCP resources are unavailable",
 			(client, requestCursor, requestSignal) =>
-				client.listResources?.(requestCursor, requestSignal)
-		);
-		const collected = collectResourcePages(
-			pages,
-			serverName,
+				client.listResources?.(requestCursor, requestSignal),
 			(page) => ({ items: page.resources, nextCursor: page.nextCursor }),
 			(entry, resource) => ({
 				name: resource.name,
@@ -523,19 +544,13 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		cursor?: string,
 		signal?: AbortSignal
 	): Promise<McpResourceTemplatePage> => {
-		await init();
-		const entries = resourceEntriesFor(serverName);
-		const pages = await requestResourcePages(
-			entries,
-			serverName === undefined ? undefined : cursor,
+		const collected = await listResourcePage(
+			serverName,
+			cursor,
 			signal,
 			"MCP resource templates are unavailable",
 			(client, requestCursor, requestSignal) =>
-				client.listResourceTemplates?.(requestCursor, requestSignal)
-		);
-		const collected = collectResourcePages(
-			pages,
-			serverName,
+				client.listResourceTemplates?.(requestCursor, requestSignal),
 			(page) => ({
 				items: page.resourceTemplates,
 				nextCursor: page.nextCursor,

@@ -94,17 +94,18 @@ export const createMcpOAuthProvider = ({
 	serverName,
 }: McpOAuthProviderInput): McpOAuthClientProvider => {
 	const oauth = oauthConfig(oauthValue);
+	if (Object.hasOwn(oauth, "clientSecret")) {
+		throw new Error(
+			"MCP OAuth client secrets must be stored through the host secret store."
+		);
+	}
 	const configuredClientId =
 		typeof oauth.clientId === "string" ? oauth.clientId : undefined;
-	const configuredClientSecret =
-		typeof oauth.clientSecret === "string" ? oauth.clientSecret : undefined;
 	const metadata: OAuthClientMetadata = {
 		client_name:
 			typeof oauth.clientName === "string" ? oauth.clientName : "Wincode",
 		redirect_uris: redirectUrl === undefined ? [] : [redirectUrl],
-		...(configuredClientSecret === undefined
-			? { token_endpoint_auth_method: "none" }
-			: { token_endpoint_auth_method: "client_secret_post" }),
+		token_endpoint_auth_method: "none",
 	};
 	let currentState: string | undefined;
 	return {
@@ -130,12 +131,7 @@ export const createMcpOAuthProvider = ({
 			if (configuredClientId === undefined) {
 				return;
 			}
-			return {
-				client_id: configuredClientId,
-				...(configuredClientSecret === undefined
-					? {}
-					: { client_secret: configuredClientSecret }),
-			} as StoredOAuthClientInformation;
+			return { client_id: configuredClientId } as StoredOAuthClientInformation;
 		},
 		async saveClientInformation(information, context) {
 			const issuer = context?.issuer ?? information.issuer;
