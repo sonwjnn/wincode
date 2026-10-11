@@ -4,7 +4,7 @@
 // Upstream-missing entries (including overlay-covered): openai/gpt-6-terra, anthropic/claude-opus-5.5, opencode-go/glm-5.1.
 //
 // Manual overlays supply facts the source does not publish:
-// openai/gpt-5.6, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-6-sol, openai/gpt-6.1-sol, openai/gpt-6-luna, openai/gpt-6-terra, anthropic/claude-opus-5.5, openai/gpt-6-astra, anthropic/claude-opus-4-5, anthropic/claude-opus-4-5-20251101, anthropic/claude-opus-4-7, anthropic/claude-sonnet-5, anthropic/claude-opus-4-8, anthropic/claude-fable-5, anthropic/claude-fable-5-1, anthropic/claude-opus-5, anthropic/claude-opus-4-6, anthropic/claude-sonnet-4-6, anthropic/claude-haiku-4-5, anthropic/claude-haiku-4-5-20251001, anthropic/claude-sonnet-4-5, anthropic/claude-sonnet-4-5-20250929, opencode-go/gpt-5.6-luna.
+// openai/gpt-5.6, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-6-sol, openai/gpt-6.1-sol, openai/gpt-6-luna, openai/gpt-6-terra, anthropic/claude-opus-5.5, openai/gpt-6-astra, anthropic/claude-opus-4-5, anthropic/claude-opus-4-5-20251101, anthropic/claude-opus-4-7, anthropic/claude-sonnet-5, anthropic/claude-opus-4-8, anthropic/claude-fable-5, anthropic/claude-fable-5-1, anthropic/claude-opus-5, anthropic/claude-opus-4-6, anthropic/claude-sonnet-4-6, anthropic/claude-haiku-4-5, anthropic/claude-haiku-4-5-20251001, anthropic/claude-sonnet-4-5, anthropic/claude-sonnet-4-5-20250929, google/gemini-3.8-flash, opencode-go/gpt-5.6-luna.
 // Absent upstream, with no overlay either (reported, never fabricated):
 // opencode-go/glm-5.1.
 // Absent upstream but overlayed: 2.
@@ -970,6 +970,20 @@ export const modelMetadataByKey: Readonly<
 				"medium",
 				"high"
 			]
+		},
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short",
+					"long"
+				]
+			},
+			"googleCachedContent": {
+				"ttl": {
+					"short": "300s",
+					"long": "3600s"
+				}
+			}
 		}
 	},
 	"opencode-go/grok-4.6": {

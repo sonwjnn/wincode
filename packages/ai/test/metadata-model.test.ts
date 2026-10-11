@@ -176,6 +176,29 @@ describe("buildModelMetadataFile", () => {
 		).toBe(false);
 	});
 
+	test("preserves Google CachedContent TTL capabilities through metadata generation", () => {
+		const promptCache = {
+			explicit: { retentionTiers: ["short", "long"] },
+			googleCachedContent: {
+				ttl: { short: "300s", long: "3600s" },
+			},
+		} as const;
+		const { entries } = build({ "google/absent": { promptCache } });
+
+		expect(entries["google/absent"]?.promptCache).toEqual(promptCache);
+		expect(modelMetadataEntrySchema.safeParse({ promptCache }).success).toBe(
+			true
+		);
+		expect(
+			modelMetadataEntrySchema.safeParse({
+				promptCache: {
+					explicit: { retentionTiers: ["short"] },
+					googleCachedContent: { ttl: {} },
+				},
+			}).success
+		).toBe(false);
+	});
+
 	test("preserves protocol-specific prompt-cache eligibility through metadata generation", () => {
 		const promptCache = {
 			explicit: { retentionTiers: ["short"] },

@@ -39,6 +39,7 @@
     "test": "bun ../../scripts/test-portfolio.ts default --package ai"
   },
   "dependencies": {
+    "@google/genai": "^2.27.0",
     "@wincode/utils": "workspace:*",
     "oauth4webapi": "^3.8.3",
     "open": "^10.2.0",

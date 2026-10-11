@@ -71,6 +71,9 @@ export const supportsPromptCacheControls = (
 	) {
 		return capabilities.explicit.retentionTiers.length > 0;
 	}
+	if (model.provider === "google") {
+		return Object.keys(capabilities.googleCachedContent?.ttl ?? {}).length > 0;
+	}
 	const protocol = openAIPromptCacheProtocolForModel(model);
 	if (!protocol) {
 		return false;
@@ -101,6 +104,12 @@ export const isSupportedPromptCacheRetention = (
 	) {
 		return capabilities.explicit.retentionTiers.includes(retention);
 	}
+	if (model.provider === "google") {
+		return (
+			capabilities.explicit.retentionTiers.includes(retention) &&
+			capabilities.googleCachedContent?.ttl[retention] !== undefined
+		);
+	}
 	const protocol = openAIPromptCacheProtocolForModel(model);
 	return (
 		protocol !== undefined &&
@@ -125,6 +134,20 @@ export const resolvePromptCacheControls = (
 			? { retention: requested }
 			: {}),
 	};
+};
+
+/** Returns the exact Google CachedContent TTL documented for this model and tier. */
+export const googleCachedContentTtlForModel = (
+	model: SupportedChatModel,
+	retention: SupportedPromptCacheRetentionTier | undefined
+): string | undefined => {
+	if (model.provider !== "google" || retention === undefined) {
+		return;
+	}
+	const capabilities = getModelMetadata(model)?.promptCache;
+	return capabilities?.explicit.retentionTiers.includes(retention)
+		? capabilities.googleCachedContent?.ttl[retention]
+		: undefined;
 };
 
 /** Resolves a configured retention override, constrained by declared capability. */

@@ -20,7 +20,7 @@ export class ModelProviderError extends Error {
 }
 
 const CACHE_CONTROL_TERMS =
-	/\b(cache[_ -]control|prompt[_ -]cache(?:[_ -](?:key|options|breakpoint|retention))?|prompt caching|cache breakpoints?|cache ttl|cache retention|cache duration)\b/iu;
+	/\b(cache[_ -]control|cached[_ -]?content|cache resource|prompt[_ -]cache(?:[_ -](?:key|options|breakpoint|retention))?|prompt caching|cache breakpoints?|cache ttl|cache retention|cache duration)\b/iu;
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
 	typeof value === "object" && value !== null
@@ -121,6 +121,22 @@ const messageFromPayload = (payload: unknown): string | undefined => {
 	);
 };
 
+export const isCacheControlRejectionDetails = (
+	message: string,
+	statusCode: number | undefined,
+	classification = ""
+): boolean => {
+	const namesCacheControl = CACHE_CONTROL_TERMS.test(
+		`${classification} ${message}`
+	);
+	const isCacheRejection =
+		statusCode === 400 ||
+		statusCode === 404 ||
+		statusCode === 422 ||
+		classification.includes("invalid_request");
+	return namesCacheControl && isCacheRejection;
+};
+
 const isCacheControlRejectionPayload = (
 	payload: unknown,
 	statusCode: number | undefined
@@ -133,14 +149,7 @@ const isCacheControlRejectionPayload = (
 		.join(" ")
 		.toLowerCase();
 	const message = messageFromPayload(payload) ?? "";
-	const namesCacheControl = CACHE_CONTROL_TERMS.test(
-		`${classification} ${message}`
-	);
-	const isInvalidRequest =
-		statusCode === 400 ||
-		statusCode === 422 ||
-		classification.includes("invalid_request");
-	return namesCacheControl && isInvalidRequest;
+	return isCacheControlRejectionDetails(message, statusCode, classification);
 };
 
 export const isCacheControlRejection = (

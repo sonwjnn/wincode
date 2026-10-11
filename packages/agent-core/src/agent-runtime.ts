@@ -142,7 +142,7 @@ const modelPromptMessage = (message: AgentTurnMessage): ModelPromptMessage => ({
 	role: message.role,
 });
 
-const toModelTool = (tool: ResolvedTool): ModelTool => {
+export const toModelTool = (tool: ResolvedTool): ModelTool => {
 	const inputSchema = tool.definition.inputSchema;
 	const jsonSchema =
 		"jsonSchema" in inputSchema
@@ -574,6 +574,7 @@ type ExecuteModelStepsOptions = Readonly<{
 	lifecycle: AgentTurnLifecycle;
 	modelClient: ModelClient;
 	modelMessages: ModelPromptMessage[];
+	googleCachedContent?: ModelStepRequest["googleCachedContent"];
 	promptCacheKey?: string;
 	runtimeSignal?: AbortSignal;
 	takeSteeringMessages?: AgentRuntimeRunOptions["takeSteeringMessages"];
@@ -624,6 +625,7 @@ const runLoop = async function* ({
 	lifecycle,
 	modelClient,
 	modelMessages,
+	googleCachedContent,
 	promptCacheKey,
 	runtimeSignal,
 	takeSteeringMessages,
@@ -652,7 +654,7 @@ const runLoop = async function* ({
 		});
 		const request: ModelStepRequest = {
 			messages: modelMessages,
-			...omitUndefined({ promptCacheKey }),
+			...omitUndefined({ googleCachedContent, promptCacheKey }),
 			...omitUndefined({ signal: runtimeSignal }),
 			system: turn.agent.instructions,
 			target: turn.model,
@@ -740,6 +742,7 @@ const runAgentTurn = async function* (
 	turn: AgentTurn,
 	{
 		deadlineMs,
+		googleCachedContent,
 		promptCacheKey,
 		signal,
 		takeSteeringMessages,
@@ -778,6 +781,7 @@ const runAgentTurn = async function* (
 			modelClient,
 			modelMessages,
 			...omitUndefined({
+				googleCachedContent,
 				promptCacheKey,
 				runtimeSignal,
 				takeSteeringMessages,

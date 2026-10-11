@@ -28,6 +28,7 @@ import {
 	type ToolFailureDetails,
 	toSessionMessageId,
 } from "@wincode/agent-core";
+import type { GoogleCachedContentSelection } from "@wincode/ai/model-client";
 import { createModelClient } from "@wincode/ai/model-client";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import {
@@ -641,6 +642,7 @@ export type SessionViewState = ReadonlyDeep<{
 }>;
 
 type AgentTurnEventConsumerOptions = {
+	googleCachedContent?: GoogleCachedContentSelection;
 	lifecycle?: AgentTurnLifecycle;
 	onViewState?: (state: SessionViewState) => void;
 	promptCacheKey?: string;
@@ -672,6 +674,7 @@ const consumeAgentTurnEvents = async ({
 	onTerminal,
 	onViewState,
 	runtime,
+	googleCachedContent,
 	promptCacheKey,
 	signal,
 	takeSteeringMessages,
@@ -717,7 +720,11 @@ const consumeAgentTurnEvents = async ({
 		}
 	};
 	for await (const event of runtime.run(turn, {
-		...omitUndefined({ promptCacheKey, takeSteeringMessages }),
+		...omitUndefined({
+			googleCachedContent,
+			promptCacheKey,
+			takeSteeringMessages,
+		}),
 		signal,
 	})) {
 		if (
@@ -804,6 +811,7 @@ export const runAgentTurnToText = async ({
 	onToolCheckpoint,
 	onViewState,
 	runtime,
+	googleCachedContent,
 	promptCacheKey,
 	signal,
 	sourceUserMessageId,
@@ -817,6 +825,7 @@ export const runAgentTurnToText = async ({
 	onToolCheckpoint?: CheckpointCommitter;
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
+	googleCachedContent?: GoogleCachedContentSelection;
 	promptCacheKey?: string;
 	signal?: AbortSignal;
 	sourceUserMessageId?: SessionMessageId;
@@ -885,6 +894,7 @@ export const runAgentTurnToText = async ({
 		},
 		onViewState,
 		runtime,
+		googleCachedContent,
 		promptCacheKey,
 		signal,
 		...omitUndefined({

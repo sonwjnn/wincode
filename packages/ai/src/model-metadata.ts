@@ -93,6 +93,9 @@ export type ModelPromptCacheCapabilities = Readonly<{
 	explicit: Readonly<{
 		retentionTiers: readonly SupportedPromptCacheRetentionTier[];
 	}>;
+	googleCachedContent?: Readonly<{
+		ttl: Readonly<Partial<Record<SupportedPromptCacheRetentionTier, string>>>;
+	}>;
 	protocols?: Readonly<
 		Partial<
 			Record<OpenAIPromptCacheProtocol, ModelPromptCacheProtocolCapabilities>
@@ -169,6 +172,18 @@ const modelPromptCacheCapabilitiesSchema = z
 				retentionTiers: z.array(z.enum(["short", "long"])).min(1),
 			})
 			.strict(),
+		googleCachedContent: z
+			.object({
+				ttl: z
+					.object({
+						short: z.string().min(1).optional(),
+						long: z.string().min(1).optional(),
+					})
+					.strict()
+					.refine((values) => Object.keys(values).length > 0),
+			})
+			.strict()
+			.optional(),
 		protocols: z
 			.object({
 				"openai-chat": modelPromptCacheProtocolCapabilitiesSchema.optional(),

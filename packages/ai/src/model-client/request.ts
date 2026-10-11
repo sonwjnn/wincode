@@ -23,6 +23,7 @@ const hasPromptCacheControl = (value: unknown): boolean => {
 	const record = value as Record<string, unknown>;
 	return (
 		Object.hasOwn(record, "cache_control") ||
+		Object.hasOwn(record, "cachedContent") ||
 		Object.hasOwn(record, "prompt_cache_key") ||
 		Object.hasOwn(record, "prompt_cache_options") ||
 		Object.hasOwn(record, "prompt_cache_breakpoint") ||

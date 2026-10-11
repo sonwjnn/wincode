@@ -6,6 +6,7 @@ import {
 	type StatefulAgent,
 	toSubmissionId,
 } from "@wincode/agent-core";
+import { createGoogleCachedContentResourceManager } from "@wincode/ai/model-client";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import { isNull, logger, omitUndefined } from "@wincode/utils";
 import {
@@ -247,6 +248,8 @@ export const createSessionHost = async ({
 			sessionId,
 			executionMode === undefined ? {} : { executionMode }
 		);
+	const googleCachedContentResourceManager =
+		createGoogleCachedContentResourceManager({ sessionId });
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
 	let agentSession: AgentSession | undefined;
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
@@ -306,6 +309,7 @@ export const createSessionHost = async ({
 					agentSessionShutdown,
 					statefulAgent?.shutdown() ?? Promise.resolve(),
 				]);
+				await googleCachedContentResourceManager.close();
 				const failure = results.find(
 					(result): result is PromiseRejectedResult =>
 						result.status === "rejected"
@@ -346,6 +350,7 @@ export const createSessionHost = async ({
 		const ports: AgentSessionPorts = withEventChannel(
 			createSessionPorts({
 				capabilities,
+				googleCachedContentResourceManager,
 				isShutDown: () => isShutDown,
 				sessionId,
 				statefulAgent,

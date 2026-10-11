@@ -22,6 +22,15 @@ const ANTHROPIC_EXPLICIT_PROMPT_CACHE = {
 	explicit: { retentionTiers: ["short", "long"] },
 } as const;
 
+// Gemini's Generate Content caching guide demonstrates CachedContent with
+// Gemini 3.8 Flash and a 300-second TTL, and documents the one-hour default.
+// Keep 3.6/3.7 and other TTLs absent until Google's Gemini API docs support them.
+// https://ai.google.dev/gemini-api/docs/generate-content/caching
+const GOOGLE_CACHED_CONTENT_PROMPT_CACHE = {
+	explicit: { retentionTiers: ["short", "long"] },
+	googleCachedContent: { ttl: { short: "300s", long: "3600s" } },
+} as const;
+
 // OpenAI's Responses API documents explicit breakpoints, 30-minute TTL, a
 // 1,024 visible-token minimum, and optional accounting keys for GPT-5.6 and
 // later. Do not apply this overlay to OpenCode Go: its proxy route's support
@@ -77,6 +86,9 @@ export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	},
 	"google/gemini-3-pro-preview": {
 		thinking: { levels: ["low", "high"] },
+	},
+	"google/gemini-3.8-flash": {
+		promptCache: GOOGLE_CACHED_CONTENT_PROMPT_CACHE,
 	},
 	"openai/gpt-5.6": {
 		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,

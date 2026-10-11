@@ -90,6 +90,10 @@ const collect = async (
 	target: ModelTarget,
 	messages: readonly ModelPromptMessage[] = [],
 	options: {
+		googleCachedContent?: {
+			name: string;
+			onRejected?: (name: string) => void | Promise<void>;
+		};
 		promptCacheKey?: string;
 		signal?: AbortSignal;
 		system?: string;
@@ -1072,6 +1076,93 @@ describe("native model client routes", () => {
 		expect(postOutputRequests).toBe(1);
 	});
 
+	test("retries an expired Google CachedContent rejection once without the resource", async () => {
+		const responses = [
+			new Response(
+				JSON.stringify({
+					error: { message: "cachedContent resource has expired" },
+				}),
+				{ status: 404 }
+			),
+			sseResponse('data: {"candidates":[{"finishReason":"STOP"}]}\n\n'),
+		];
+		const requests: RequestInit[] = [];
+		const fetch = (async (
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			if (init) {
+				requests.push(init);
+			}
+			const response = responses.shift();
+			if (!response) {
+				throw new Error("unexpected Google retry");
+			}
+			return response;
+		}) as typeof globalThis.fetch;
+		const invalidated: string[] = [];
+
+		await collect(
+			createModelClient({ fetch }),
+			makeTarget("google", "gemini-3.8-flash"),
+			[{ content: [{ text: "Current message", type: "text" }], role: "user" }],
+			{
+				googleCachedContent: {
+					name: "cachedContents/expired",
+					onRejected: (name) => {
+						invalidated.push(name);
+					},
+				},
+				system: "Stable instructions",
+				tools: [lookupTool],
+			}
+		);
+
+		expect(requests).toHaveLength(2);
+		expect(JSON.parse(String(requests[0]?.body))).toMatchObject({
+			cachedContent: "cachedContents/expired",
+		});
+		expect(JSON.parse(String(requests[1]?.body))).toMatchObject({
+			contents: [{ parts: [{ text: "Current message" }], role: "user" }],
+			systemInstruction: { parts: [{ text: "Stable instructions" }] },
+			tools: [
+				{
+					functionDeclarations: [
+						{ name: "lookup", parameters: lookupTool.inputSchema },
+					],
+				},
+			],
+		});
+		expect(JSON.stringify(JSON.parse(String(requests[1]?.body)))).not.toContain(
+			"cachedContent"
+		);
+		expect(invalidated).toEqual(["cachedContents/expired"]);
+	});
+
+	test("does not retry a Google CachedContent request for unrelated provider failures", async () => {
+		let requests = 0;
+		const fetch = (async (
+			_input: Request | string | URL,
+			_init?: RequestInit
+		) => {
+			requests += 1;
+			return new Response(
+				JSON.stringify({ error: { message: "Permission denied for API key" } }),
+				{ status: 403 }
+			);
+		}) as typeof globalThis.fetch;
+
+		await expect(
+			collect(
+				createModelClient({ fetch }),
+				makeTarget("google", "gemini-3.8-flash"),
+				[],
+				{ googleCachedContent: { name: "cachedContents/resource" } }
+			)
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(requests).toBe(1);
+	});
+
 	test("keeps one-off text-generation requests uncached for compaction summaries", async () => {
 		const mock = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
 		await generateModelText(
@@ -1104,7 +1195,39 @@ describe("native model client routes", () => {
 		expect(body.output_config).toBeUndefined();
 	});
 
-	test("uses Google GenerateContent with thinking, files, functions, and thought deltas", async () => {
+	test("references selected CachedContent without freezing Session history", async () => {
+		const mock = mockFetch(
+			sseResponse('data: {"candidates":[{"finishReason":"STOP"}]}\n\n')
+		);
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			makeTarget("google", "gemini-3.8-flash"),
+			[
+				{
+					content: [{ text: "Current Session message", type: "text" }],
+					role: "user",
+				},
+			],
+			{
+				googleCachedContent: { name: "cachedContents/session-prefix" },
+				system: "Stable system instructions",
+				tools: [lookupTool],
+			}
+		);
+
+		const body = responseBody(mock);
+		expect(body.cachedContent).toBe("cachedContents/session-prefix");
+		expect(body.contents).toEqual([
+			{
+				parts: [{ text: "Current Session message" }],
+				role: "user",
+			},
+		]);
+		expect(body.systemInstruction).toBeUndefined();
+		expect(body.tools).toBeUndefined();
+	});
+
+	test("reports Google cached-token usage even without explicit CachedContent", async () => {
 		const mock = mockFetch(
 			sseResponse(
 				'data: {"candidates":[{"content":{"parts":[{"text":"Think","thought":true,"thoughtSignature":"signed-google"},{"text":"Answer"},{"functionCall":{"name":"lookup","args":{"query":"x"}}}]}}]}\n\n',

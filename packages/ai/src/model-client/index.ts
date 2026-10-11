@@ -14,7 +14,10 @@ import type {
 	ModelTextGenerationResult,
 } from "./types";
 
+export * from "./google-cached-content";
+
 export type {
+	GoogleCachedContentSelection,
 	ModelClient,
 	ModelClientOptions,
 	ModelPromptMessage,
@@ -59,7 +62,11 @@ const streamProviderRequest = async function* (
 };
 
 const uncachedRetryRequest = (request: ModelStepRequest): ModelStepRequest => {
-	const { promptCacheKey: _promptCacheKey, ...uncachedRequest } = request;
+	const {
+		googleCachedContent: _googleCachedContent,
+		promptCacheKey: _promptCacheKey,
+		...uncachedRequest
+	} = request;
 	const {
 		promptCacheEnabled: _promptCacheEnabled,
 		promptCacheRetention: _promptCacheRetention,
@@ -102,6 +109,14 @@ const streamModel = async function* (
 		) {
 			throw error;
 		}
+		try {
+			await request.googleCachedContent?.onRejected?.(
+				request.googleCachedContent.name
+			);
+		} catch {
+			// Resource cleanup is best-effort; the uncached request remains usable.
+		}
+		throwIfAborted(request.signal);
 		const retryRequest = uncachedRetryRequest(request);
 		const uncachedProviderRequest = buildProviderRequest(retryRequest, model);
 		for await (const part of streamProviderRequest(

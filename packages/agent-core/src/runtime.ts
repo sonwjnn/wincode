@@ -1,3 +1,4 @@
+import type { ModelStepRequest } from "@wincode/ai/model-client";
 import { isObjectLike, isString } from "@wincode/utils";
 import { AgentInvariantError } from "./errors";
 import type { AgentTurnEvent, AgentTurnTerminalEvent } from "./events";
@@ -151,6 +152,8 @@ export const createAgentTurnAbortEvent = (
 
 /** Options for one Agent Runtime invocation. */
 export type AgentRuntimeRunOptions = Readonly<{
+	/** A Session-selected Google resource for its stable prompt prefix. */
+	googleCachedContent?: ModelStepRequest["googleCachedContent"];
 	/** Stable Session-scoped routing hint; Model Protocols emit it only when supported. */
 	promptCacheKey?: string;
 	/** Aborts the running turn. Consumers own the signal. */

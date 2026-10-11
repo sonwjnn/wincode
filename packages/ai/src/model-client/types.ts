@@ -38,7 +38,13 @@ export type ModelTool = Readonly<{
 	name: string;
 }>;
 
+export type GoogleCachedContentSelection = Readonly<{
+	name: string;
+	onRejected?: (name: string) => void | Promise<void>;
+}>;
+
 export type ModelStepRequest = Readonly<{
+	googleCachedContent?: GoogleCachedContentSelection;
 	messages: readonly ModelPromptMessage[];
 	promptCacheKey?: string;
 	signal?: AbortSignal;

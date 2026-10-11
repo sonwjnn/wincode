@@ -542,6 +542,37 @@ describe("focused model contracts", () => {
 		).toBe(false);
 	});
 
+	test("declares explicit CachedContent only for the documented Gemini 3.8 Flash model", () => {
+		const gemini38 = findModel("google", "gemini-3.8-flash");
+		const gemini36 = findModel("google", "gemini-3.6-flash");
+		const gemini37 = findModel("google", "gemini-3.7-flash");
+
+		expect(getModelMetadata(gemini38)?.promptCache).toEqual({
+			explicit: { retentionTiers: ["short", "long"] },
+			googleCachedContent: {
+				ttl: { short: "300s", long: "3600s" },
+			},
+		});
+		expect(resolvePromptCacheControls(gemini38)).toEqual({
+			enabled: true,
+			retention: "short",
+		});
+		expect(
+			resolvePromptCacheControls(gemini38, {
+				modelOverrides: { "google/gemini-3.8-flash": "long" },
+			})
+		).toEqual({ enabled: true, retention: "long" });
+		expect(
+			resolvePromptCacheControls(gemini38, {
+				modelOverrides: { "google/gemini-3.8-flash": "off" },
+			})
+		).toEqual({ enabled: false });
+		expect(getModelMetadata(gemini36)?.promptCache).toBeUndefined();
+		expect(getModelMetadata(gemini37)?.promptCache).toBeUndefined();
+		expect(resolvePromptCacheControls(gemini36)).toEqual({ enabled: false });
+		expect(resolvePromptCacheControls(gemini37)).toEqual({ enabled: false });
+	});
+
 	test("declares OpenAI cache controls and eligibility by actual Model Protocol", () => {
 		const responsesModel = findModel("openai", "gpt-5.6-luna");
 		const opencodeResponsesModel = findModel("opencode-go", "gpt-5.6-luna");

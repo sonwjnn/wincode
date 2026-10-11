@@ -4,6 +4,8 @@ import type {
 	AgentTurnEvent,
 	StatefulAgent,
 } from "@wincode/agent-core";
+import { toModelTool } from "@wincode/agent-core";
+import type { GoogleCachedContentResourceManager } from "@wincode/ai/model-client";
 import {
 	type ChatModelSelection,
 	findSupportedChatModelSelection,
@@ -68,6 +70,7 @@ import type { SessionCapabilities } from "./types";
 
 export type SessionPortsOptions = Readonly<{
 	capabilities: SessionCapabilities;
+	googleCachedContentResourceManager: GoogleCachedContentResourceManager;
 	isShutDown: () => boolean;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
@@ -209,6 +212,7 @@ const activateExplicitSkill = async (
  */
 export const createSessionPorts = ({
 	capabilities,
+	googleCachedContentResourceManager,
 	isShutDown,
 	sessionId,
 	statefulAgent,
@@ -501,6 +505,12 @@ export const createSessionPorts = ({
 		try {
 			const sessionStore = capabilities.getStore();
 			turn = await prepareAgentTurn(request, scope, sessionStore);
+			const googleCachedContent =
+				await googleCachedContentResourceManager.select({
+					system: turn.agent.instructions,
+					target: turn.model,
+					tools: (turn.tools ?? []).map(toModelTool),
+				});
 			await runAgentTurnToText({
 				onCheckpoint: callbacks.commitTerminal,
 				onToolCheckpoint: callbacks.commitToolCall,
@@ -512,6 +522,7 @@ export const createSessionPorts = ({
 					? `wincode-session:${sessionId}`
 					: undefined,
 				runtime: statefulAgent,
+				googleCachedContent,
 				signal,
 				...omitUndefined({
 					sourceUserMessageId: execution.sourceUserMessageId ?? undefined,

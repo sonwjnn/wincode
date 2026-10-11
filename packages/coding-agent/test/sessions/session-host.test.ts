@@ -1216,6 +1216,89 @@ describe("Session Host lifetime", () => {
 		}
 	});
 
+	test("Session Host selects and deletes Google CachedContent without freezing Session messages", async () => {
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("gemini-3.8-flash"),
+			providerId: "google",
+		};
+		const seeded = await seedSession(
+			"google-cached-content-lifecycle",
+			"interrupted",
+			selectedModel
+		);
+		const capabilities = createCapabilities();
+		const originalFetch = globalThis.fetch;
+		const previousBeforeStep = recorder.beforeStep;
+		const resourceRequests: {
+			body: Record<string, unknown>;
+			method: string;
+			url: string;
+		}[] = [];
+		const fetch = (async (
+			input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			const method = init?.method ?? "GET";
+			const url = String(input);
+			resourceRequests.push({
+				body:
+					typeof init?.body === "string"
+						? (JSON.parse(init.body) as Record<string, unknown>)
+						: {},
+				method,
+				url,
+			});
+			return new Response(
+				JSON.stringify(
+					method === "POST" ? { name: "cachedContents/session-prefix" } : {}
+				),
+				{ headers: { "content-type": "application/json" }, status: 200 }
+			);
+		}) as typeof globalThis.fetch;
+		globalThis.fetch = fetch;
+		let host: SessionHost | undefined;
+		let observedResource: string | undefined;
+		let observedMessages = 0;
+		recorder.beforeStep = async (request) => {
+			observedResource = request.googleCachedContent?.name;
+			observedMessages = request.messages.length;
+		};
+		try {
+			host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: selectedModel,
+				sessionModel: selectedModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(observedResource).toBe("cachedContents/session-prefix");
+			expect(observedMessages).toBeGreaterThan(0);
+			expect(resourceRequests).toHaveLength(1);
+			expect(resourceRequests[0]?.method).toBe("POST");
+			expect(resourceRequests[0]?.url).toContain("/cachedContents");
+			expect(resourceRequests[0]?.body).toMatchObject({
+				model: "models/gemini-3.8-flash",
+				systemInstruction: { parts: [{ text: expect.any(String) }] },
+				ttl: "300s",
+			});
+			expect(resourceRequests[0]?.body).not.toHaveProperty("contents");
+
+			await host.shutdown();
+			expect(resourceRequests).toHaveLength(2);
+			expect(resourceRequests[1]?.method).toBe("DELETE");
+			expect(resourceRequests[1]?.url).toContain(
+				"/cachedContents/session-prefix"
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+			recorder.beforeStep = previousBeforeStep;
+			await host?.shutdown();
+		}
+	});
+
 	test("runs a send command, reports its events in order, and refuses commands after shutdown", async () => {
 		const seeded = await seedSession("send");
 		const capabilities = createCapabilities();
