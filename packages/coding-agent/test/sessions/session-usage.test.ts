@@ -50,11 +50,7 @@ describe("turnCostUsd", () => {
 		).toBeCloseTo(1.6 + 20 + 0.5 + 0.2, 9);
 	});
 
-	test("does not charge cache reads at the uncached input rate", () => {
-		// Without a published cache rate the safe answer is to charge nothing
-		// for cached tokens rather than to reuse the input rate and overstate
-		// the bill. The catalog never publishes a cache rate for OpenAI, so
-		// this is the common path, not an edge case.
+	test("reports unknown cache-read cost when its rate is unpublished", () => {
 		expect(
 			turnCostUsd(
 				{ cost: { input: 4, output: 20 } },
@@ -64,7 +60,7 @@ describe("turnCostUsd", () => {
 					outputTokens: 0,
 				}
 			)
-		).toBe(0);
+		).toBeNull();
 	});
 
 	test("applies the highest tier the turn's total input crossed", () => {
