@@ -5,6 +5,7 @@ MCP domain runtime and optional Wincode Plugin. The package root exports the app
 ## Owns
 
 - MCP configuration schema, validation, and server configuration resolution.
+- The public CLI-management API for listing, adding, removing, and authenticating MCP servers.
 - MCP client adapters and server lifecycle, discovery, reconnection, and status.
 - Collision-resistant tool dispatch identities, manifest limits, and result sanitization.
 - The MCP Plugin factory, per-Turn tool registration, status panel, and `/mcps` command.
@@ -41,6 +42,12 @@ Pi-style `$NAME`, `${NAME}`, and `$env:NAME` references are expanded from the pr
 Trusted project definitions can configure local commands, remote endpoints, and headers. A project definition replaces the user definition for that server rather than inheriting its credentials. A project may overlay only `enabled`, `exposure`, and `toolExposure` on a user-defined server. Project MCP configuration is omitted unless the project root has been trusted. Trust is not a sandbox: trusted local MCP processes run with Wincode's operating-system privileges.
 
 Plugin-owned MCP registrations enter the same managed catalog with Plugin provenance. File-configured servers take precedence on name conflicts, which are diagnosed.
+
+## Public management API
+
+The package root exports `createMcpManagement`. Its `list`, `add`, `remove`, `login`, and `logout` operations own MCP configuration semantics, including the Pi-compatible `mcpServers` shape, validation, scope precedence, resolution, and diagnostics. The Coding-Agent CLI adapter supplies a namespace-scoped config reader/writer, the process environment and workspace, a host-owned write-authorization callback, and a user-scoped `PluginSecretStore` for OAuth operations.
+
+The API does not read or write files, resolve paths, decide whether a project is trusted, or create a secret store. Hosts provide those capabilities; the MCP package interprets only the MCP namespace. The CLI calls this API before starting the TUI or loading any Plugin runtime.
 
 ## Public Plugin boundary
 

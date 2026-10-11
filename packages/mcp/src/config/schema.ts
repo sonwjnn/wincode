@@ -1,6 +1,8 @@
 import type { SetRequired } from "type-fest";
 import { z } from "zod";
 
+export const mcpServerNameSchema = z.string().regex(/^[A-Za-z0-9_-]+$/u);
+
 export const phaseTimeoutSchema = z.number().int().positive();
 export const timeoutPatchSchema = z
 	.object({

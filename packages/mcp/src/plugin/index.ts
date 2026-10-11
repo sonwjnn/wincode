@@ -149,7 +149,25 @@ const persistServerField = async (
 	if (scope === "project" && !trustedWorkspace) {
 		throw new Error("Project MCP configuration requires a trusted project.");
 	}
-	const target = snapshot.sources.find((source) => source.scope === scope);
+	const owner =
+		server.source?.scope === scope
+			? snapshot.sources.find(
+					(source) =>
+						source.scope === scope && source.path === server.source?.path
+				)
+			: undefined;
+	const originSource =
+		origin?.scope === scope
+			? snapshot.sources.find(
+					(source) => source.scope === scope && source.path === origin.path
+				)
+			: undefined;
+	const target =
+		owner ??
+		originSource ??
+		(scope === "project"
+			? snapshot.sources.findLast((source) => source.scope === scope)
+			: snapshot.sources.find((source) => source.scope === scope));
 	if (target === undefined) {
 		throw new Error(`Could not find the ${scope} MCP configuration file.`);
 	}

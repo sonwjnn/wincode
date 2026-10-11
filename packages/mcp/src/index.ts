@@ -1,6 +1,7 @@
 export * from "./client";
 export * from "./config";
 export * from "./identifiers";
+export * from "./management";
 export * from "./manifest";
 export * from "./oauth";
 export * from "./registry";

@@ -333,6 +333,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	let latestSnapshotId: McpSnapshotId | undefined;
 	const activeSnapshotIds = new Set<McpSnapshotId>();
 	const untrackedSnapshotIds = new Set<McpSnapshotId>();
+	const snapshotReplacements = new Map<McpSnapshotId, McpCatalogSnapshot>();
 	let catalogGeneration = 0;
 	let snapshotCreated = false;
 
@@ -787,6 +788,11 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 	};
 
 	const releaseSnapshot = (snapshot: McpCatalogSnapshot): void => {
+		const replacement = snapshotReplacements.get(snapshot.id);
+		if (!isUndefined(replacement)) {
+			snapshotReplacements.delete(snapshot.id);
+			releaseSnapshot(replacement);
+		}
 		if (snapshot.id === latestSnapshotId) {
 			return;
 		}
@@ -867,33 +873,94 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		return sanitizeMessage(config, error, "unknown MCP registry error");
 	};
 
-	const execute = async (
+	const resolveExecutableSnapshot = (
+		snapshot: McpCatalogSnapshot
+	): McpCatalogSnapshot | undefined => {
+		let current = snapshot;
+		let replacement = snapshotReplacements.get(current.id);
+		while (!isUndefined(replacement)) {
+			current = replacement;
+			replacement = snapshotReplacements.get(current.id);
+		}
+		if (
+			!activeSnapshotIds.has(current.id) ||
+			(current.id !== latestSnapshotId && !untrackedSnapshotIds.has(current.id))
+		) {
+			return;
+		}
+		return current;
+	};
+
+	const matchesCurrentToolContract = (
+		previousSnapshot: McpCatalogSnapshot,
+		refreshedSnapshot: McpCatalogSnapshot,
+		toolName: string,
+		previousTool: McpSnapshotTool
+	): boolean => {
+		const refreshedTool = refreshedSnapshot.tools.get(toolName);
+		const previousContract = previousSnapshot.manifest.find(
+			(item) => item.name === toolName
+		);
+		const refreshedContract = refreshedSnapshot.manifest.find(
+			(item) => item.name === toolName
+		);
+		if (
+			isUndefined(refreshedTool) ||
+			refreshedTool.serverName !== previousTool.serverName ||
+			refreshedTool.originalToolName !== previousTool.originalToolName ||
+			isUndefined(previousContract) ||
+			isUndefined(refreshedContract)
+		) {
+			return false;
+		}
+		return (
+			previousContract.description === refreshedContract.description &&
+			Bun.deepEquals(
+				previousContract.inputSchema,
+				refreshedContract.inputSchema,
+				true
+			)
+		);
+	};
+
+	const recoverDegradedServer = async (
 		snapshot: McpCatalogSnapshot,
 		toolName: string,
+		tool: McpSnapshotTool,
+		entry: ServerEntry
+	): Promise<McpCatalogSnapshot | string> => {
+		// The failed call already returned an error. Recover before executing
+		// this new request, but never replay the operation that just failed.
+		let refreshedSnapshot: McpCatalogSnapshot;
+		try {
+			refreshedSnapshot = await createSnapshot(snapshot.agent, false);
+		} catch (error) {
+			return sanitizeMessage(entry.config, error, "MCP server recovery failed");
+		}
+		if (entry.state !== "connected" || isUndefined(entry.client)) {
+			releaseSnapshot(refreshedSnapshot);
+			return (
+				entry.error ??
+				`MCP server '${entry.config.name}' is not connected after reconnect`
+			);
+		}
+		if (
+			!matchesCurrentToolContract(snapshot, refreshedSnapshot, toolName, tool)
+		) {
+			releaseSnapshot(refreshedSnapshot);
+			return `MCP tool '${toolName}' changed after reconnect; retry with a fresh Agent Turn`;
+		}
+		snapshotReplacements.set(snapshot.id, refreshedSnapshot);
+		return refreshedSnapshot;
+	};
+
+	const executeConnectedTool = async (
+		toolName: string,
+		tool: McpSnapshotTool,
+		entry: ServerEntry,
 		input: unknown,
 		signal?: AbortSignal
 	): Promise<McpNormalizedResult> => {
-		// Reject execution when a reconnect, toggle, or config refresh invalidated
-		// the exact catalog snapshot used to select this tool.
-		if (
-			!activeSnapshotIds.has(snapshot.id) ||
-			(snapshot.id !== latestSnapshotId &&
-				!untrackedSnapshotIds.has(snapshot.id))
-		) {
-			return outputError("MCP tool snapshot is stale or not executable");
-		}
-		const tool = snapshot.tools.get(toolName);
-		if (isUndefined(tool)) {
-			return outputError(`Unknown MCP tool '${toolName}'`);
-		}
-		const entry = serverEntries.get(tool.serverName);
-		if (
-			isUndefined(entry) ||
-			entry.state !== "connected" ||
-			entry.client !== tool.client
-		) {
-			return outputError(`MCP server '${tool.serverName}' is not enabled`);
-		}
 		const timeout = AbortSignal.timeout(entry.config.timeout.execution);
 		const signals: AbortSignal[] = [
 			timeout,
@@ -916,7 +983,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 				toolName,
 				timeout,
 				signal,
-				entry?.config,
+				entry.config,
 				error
 			);
 			if (
@@ -933,6 +1000,45 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			}
 			return outputError(message);
 		}
+	};
+
+	const execute = async (
+		snapshot: McpCatalogSnapshot,
+		toolName: string,
+		input: unknown,
+		signal?: AbortSignal
+	): Promise<McpNormalizedResult> => {
+		const executableSnapshot = resolveExecutableSnapshot(snapshot);
+		if (isUndefined(executableSnapshot)) {
+			return outputError("MCP tool snapshot is stale or not executable");
+		}
+		if (executableSnapshot !== snapshot) {
+			return execute(executableSnapshot, toolName, input, signal);
+		}
+		const tool = snapshot.tools.get(toolName);
+		if (isUndefined(tool)) {
+			return outputError(`Unknown MCP tool '${toolName}'`);
+		}
+		const entry = serverEntries.get(tool.serverName);
+		if (isUndefined(entry)) {
+			return outputError(`MCP server '${tool.serverName}' is not enabled`);
+		}
+		if (entry.state === "degraded") {
+			const recovered = await recoverDegradedServer(
+				snapshot,
+				toolName,
+				tool,
+				entry
+			);
+			if (typeof recovered === "string") {
+				return outputError(recovered);
+			}
+			return execute(recovered, toolName, input, signal);
+		}
+		if (entry.state !== "connected" || entry.client !== tool.client) {
+			return outputError(`MCP server '${tool.serverName}' is not enabled`);
+		}
+		return executeConnectedTool(toolName, tool, entry, input, signal);
 	};
 
 	const doReconnect = async (entry: ServerEntry): Promise<void> => {
@@ -1302,6 +1408,7 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 			}
 		}
 		await Promise.allSettled([...serverEntries.values()].map(closeClient));
+		snapshotReplacements.clear();
 		listeners.clear();
 	};
 

@@ -5,6 +5,7 @@ import {
 	DEFAULT_MCP_TIMEOUTS,
 	type McpExposure,
 	type McpTimeouts,
+	mcpServerNameSchema,
 	type RawMcpServerConfig,
 	type ResolvedMcpServerConfig,
 	rawServerSchema,
@@ -13,7 +14,6 @@ import {
 
 const VARIABLE_PATTERN =
 	/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$env:([A-Za-z_][A-Za-z0-9_]*)|\$([A-Za-z_][A-Za-z0-9_]*)|\$\$|\$!/gu;
-const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const PROJECT_OVERLAY_FIELDS = new Set(["enabled", "exposure", "toolExposure"]);
 
 export type McpConfigOrigin = Readonly<{
@@ -153,7 +153,7 @@ const applyGlobalServer = (
 	candidate: unknown,
 	diagnostics: McpConfigDiagnostic[]
 ): void => {
-	if (!SERVER_NAME_PATTERN.test(name)) {
+	if (!mcpServerNameSchema.safeParse(name).success) {
 		addDiagnostic(
 			diagnostics,
 			source,
@@ -213,7 +213,9 @@ const applyProjectServer = (
 	candidate: unknown,
 	diagnostics: McpConfigDiagnostic[]
 ): void => {
-	if (!(SERVER_NAME_PATTERN.test(name) && isPlainObject(candidate))) {
+	if (
+		!(mcpServerNameSchema.safeParse(name).success && isPlainObject(candidate))
+	) {
 		addDiagnostic(
 			diagnostics,
 			source,

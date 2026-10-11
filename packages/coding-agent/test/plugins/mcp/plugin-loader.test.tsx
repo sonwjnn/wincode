@@ -662,3 +662,92 @@ test("the generic MCP panel shows safe failures and routes reconnect and disable
 		await rm(root, { force: true, recursive: true });
 	}
 });
+
+test("MCP settings persist beside the nested project definition that owns the server", async () => {
+	const root = await mkdtemp(
+		path.join(os.tmpdir(), "wincode-mcp-project-owner-")
+	);
+	const projectRoot = path.join(root, "project");
+	const workspace = path.join(projectRoot, "workspace");
+	const parentConfigPath = path.join(projectRoot, ".wincode", "mcp.json");
+	const workspaceConfigPath = path.join(workspace, ".wincode", "mcp.json");
+	await mkdir(path.join(projectRoot, ".git"), { recursive: true });
+	await mkdir(path.dirname(parentConfigPath), { recursive: true });
+	await mkdir(path.dirname(workspaceConfigPath), { recursive: true });
+	await Bun.write(parentConfigPath, "{}\n");
+	await Bun.write(
+		workspaceConfigPath,
+		JSON.stringify({
+			mcpServers: { shared: { url: "https://mcp.example.test" } },
+		})
+	);
+
+	const trustedProjectRoots = await Promise.all([
+		realpath(projectRoot),
+		realpath(workspace),
+	]);
+	const configStore = createConfigStore({
+		homeRoot: root,
+		trustedProjectRoots,
+	});
+	const projectSources = (
+		await configStore.getNamespaceSnapshot(workspace, "mcp")
+	).sources.filter(({ scope }) => scope === "project");
+	expect(projectSources.map(({ path: sourcePath }) => sourcePath)).toEqual([
+		parentConfigPath,
+		workspaceConfigPath,
+	]);
+
+	let runtime: PluginRuntime | undefined;
+	try {
+		runtime = await loadPlugins({
+			bundledPlugins: [
+				{
+					factory: createMcpPluginFactory({
+						createClient: (): McpClient => ({
+							callTool: async () => ({ content: [] }),
+							close: async () => undefined,
+							connect: async () => undefined,
+							listTools: async () => [],
+							setToolsChangedListener: () => undefined,
+						}),
+					}),
+					id: "mcp",
+				},
+			],
+			cliPaths: [],
+			config: {
+				configStore,
+				cwd: workspace,
+				homeRoot: root,
+				trustedProjectRoots,
+				workspace,
+			},
+			distributionPlugins: [],
+		});
+		const panel = runtime
+			.getStatusPanels()
+			.find(({ id, pluginId }) => id === "servers" && pluginId === "mcp");
+		if (panel === undefined) {
+			throw new Error("The MCP Plugin did not register its status panel.");
+		}
+		for (let attempt = 0; attempt < 20; attempt += 1) {
+			if (panel.getSnapshot().items[0]?.status === "success") {
+				break;
+			}
+			await Bun.sleep(5);
+		}
+
+		await runtime.runStatusPanelAction("mcp", "servers", "shared", "toggle");
+
+		expect(await Bun.file(parentConfigPath).json()).toEqual({});
+		expect(await Bun.file(workspaceConfigPath).json()).toMatchObject({
+			mcpServers: {
+				shared: { enabled: false, url: "https://mcp.example.test" },
+			},
+		});
+	} finally {
+		await runtime?.shutdown();
+		await rm(root, { force: true, recursive: true });
+	}
+});

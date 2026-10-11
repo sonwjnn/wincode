@@ -2,15 +2,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
-	loginMcpServer,
-	logoutMcpServer,
-	resolveMcpConfig,
+	createMcpManagement,
+	type McpManagementApi,
+	type McpManagementOAuthOperations,
 } from "@wincode/mcp";
 import open from "open";
 import { createPluginSecretStore } from "@/modules/plugins/plugin-secret-store";
 import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
 import { resolveWorkspaceRoot } from "@/modules/tools";
-import type { ConfigSnapshot, ConfigStore } from "@/shared/config/config-store";
+import type { ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
 	resolveUserDataDir,
@@ -34,7 +34,6 @@ const HELP_TEXT = [
 	"  --trust-project       Explicitly trust project config for this command",
 ].join("\n");
 
-const namePattern = /^[A-Za-z0-9_-]+$/u;
 const outputLine = (writer: TextWriter, text: string): void =>
 	writer.write(`${text}\n`);
 
@@ -42,6 +41,7 @@ export type McpCliOptions = Readonly<{
 	configStore?: ConfigStore;
 	homeRoot?: string;
 	openAuthorizationUrl?: (url: URL) => Promise<void>;
+	oauthOperations?: McpManagementOAuthOperations;
 	projectTrustDir?: string;
 	readRedirectUrl?: (callback: Promise<URL>) => Promise<URL>;
 	trustedProjectRoots?: readonly string[];
@@ -109,7 +109,13 @@ const nextValue = (
 const parseScopeAndTrust = (
 	args: readonly string[],
 	initialScope: Scope = "global"
-): Readonly<{ index: number; scope: Scope; trustProject: boolean }> => {
+): Readonly<{
+	explicitScope: boolean;
+	index: number;
+	scope: Scope;
+	trustProject: boolean;
+}> => {
+	let explicitScope = false;
 	let scope = initialScope;
 	let trustProject = false;
 	for (let index = 0; index < args.length; index += 1) {
@@ -125,13 +131,15 @@ const parseScopeAndTrust = (
 			const next = nextValue(args, index, argument);
 			index = next.index;
 			scope = readScope(next.value);
+			explicitScope = true;
 			continue;
 		}
 		if (argument.startsWith("--scope=")) {
 			scope = readScope(argument.slice("--scope=".length));
+			explicitScope = true;
 		}
 	}
-	return { index: args.length, scope, trustProject };
+	return { explicitScope, index: args.length, scope, trustProject };
 };
 
 const parseScopeOption = (
@@ -224,26 +232,6 @@ const parseAuthOption = (
 	return next.index;
 };
 
-const validateAddOptions = (result: AddOptions): void => {
-	if ((result.command === undefined) === (result.url === undefined)) {
-		throw new Error("Provide exactly one of --command or --url.");
-	}
-	if (result.command !== undefined && Object.keys(result.headers).length > 0) {
-		throw new Error("--header can be used only with --url.");
-	}
-	if (
-		result.url !== undefined &&
-		(result.args.length > 0 ||
-			result.cwd !== undefined ||
-			Object.keys(result.env).length > 0)
-	) {
-		throw new Error("--arg, --cwd, and --env can be used only with --command.");
-	}
-	if (result.command !== undefined && result.auth !== undefined) {
-		throw new Error("OAuth authentication can be used only with --url.");
-	}
-};
-
 const parseAddOptions = (
 	args: readonly string[],
 	initialScope: Scope
@@ -269,25 +257,8 @@ const parseAddOptions = (
 		}
 		index = nextIndex;
 	}
-	validateAddOptions(result);
 	return result;
 };
-
-const configValue = (options: AddOptions): Record<string, unknown> =>
-	options.command === undefined
-		? {
-				url: options.url,
-				...(Object.keys(options.headers).length === 0
-					? {}
-					: { headers: options.headers }),
-				...(options.auth === undefined ? {} : { auth: options.auth }),
-			}
-		: {
-				command: options.command,
-				...(options.args.length === 0 ? {} : { args: options.args }),
-				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-				...(Object.keys(options.env).length === 0 ? {} : { env: options.env }),
-			};
 
 const optionsForConfig = async (
 	cwd: string,
@@ -316,66 +287,12 @@ const optionsForConfig = async (
 	};
 };
 
-const targetPathForScope = (
-	snapshot: ConfigSnapshot,
-	scope: Scope
-): string | undefined =>
-	snapshot.sources.find((source) => source.scope === scope)?.path;
-
-const hasServerInScope = (
-	snapshot: ConfigSnapshot,
-	scope: Scope,
-	name: string
-): boolean => {
-	const document = snapshot.sources.find(
-		(source) => source.scope === scope
-	)?.document;
-	const servers = document?.mcpServers;
-	return (
-		typeof servers === "object" &&
-		servers !== null &&
-		!Array.isArray(servers) &&
-		Object.hasOwn(servers, name)
-	);
-};
-
-const resolveServers = async (configStore: ConfigStore, workspace: string) => {
-	const snapshot = await configStore.getNamespaceSnapshot(workspace, "mcp");
-	return {
-		result: await resolveMcpConfig({
-			env: { ...process.env },
-			snapshot,
-			workspace,
-		}),
-		snapshot,
-	};
-};
-
-const writeServerConfig = async (
-	configStore: ConfigStore,
-	workspace: string,
-	scope: Scope,
-	name: string,
-	value: unknown,
-	targetPath: string | undefined
-): Promise<void> => {
-	await configStore.setNamespaceValue(
-		workspace,
-		scope,
-		"mcp",
-		["mcpServers", name],
-		value,
-		targetPath
-	);
-};
-
 const runList = async (
 	args: readonly string[],
-	configStore: ConfigStore,
-	workspace: string,
+	management: McpManagementApi,
 	io: McpCliIo
 ): Promise<void> => {
-	const { result } = await resolveServers(configStore, workspace);
+	const result = await management.list();
 	const json = args.includes("--json");
 	if (json) {
 		io.stdout.write(`${JSON.stringify(result.servers, null, 2)}\n`);
@@ -401,31 +318,21 @@ const runList = async (
 
 const runLogin = async (
 	name: string,
-	configStore: ConfigStore,
-	workspace: string,
+	management: McpManagementApi,
 	userDataDir: string,
 	stdinIsTTY: boolean,
 	io: McpCliIo,
 	options: McpCliOptions
 ): Promise<void> => {
-	const { result } = await resolveServers(configStore, workspace);
-	const server = result.servers[name];
-	if (
-		server === undefined ||
-		server.type !== "remote" ||
-		server.auth !== "oauth"
-	) {
-		throw new Error(`MCP Server '${name}' is not a configured OAuth server.`);
-	}
 	const secrets = createPluginSecretStore("mcp", userDataDir);
-	await loginMcpServer({
+	await management.login({
+		name,
 		openAuthorizationUrl:
 			options.openAuthorizationUrl ??
 			(async (url) => {
 				outputLine(io.stdout, `Opening OAuth authorization: ${url.toString()}`);
 				await open(url.toString());
 			}),
-		oauth: server.oauth,
 		readRedirectUrl:
 			options.readRedirectUrl ??
 			(async (callback) => {
@@ -448,29 +355,20 @@ const runLogin = async (
 				}
 			}),
 		secrets,
-		serverName: name,
-		serverUrl: server.url,
 	});
 	outputLine(io.stdout, `MCP Server '${name}' is signed in.`);
 };
 
 const runLogout = async (
 	name: string,
-	configStore: ConfigStore,
-	workspace: string,
+	management: McpManagementApi,
 	userDataDir: string,
 	io: McpCliIo
 ): Promise<void> => {
-	const { result } = await resolveServers(configStore, workspace);
-	const server = result.servers[name];
-	if (
-		server === undefined ||
-		server.type !== "remote" ||
-		server.auth !== "oauth"
-	) {
-		throw new Error(`MCP Server '${name}' is not a configured OAuth server.`);
-	}
-	await logoutMcpServer(createPluginSecretStore("mcp", userDataDir), name);
+	await management.logout({
+		name,
+		secrets: createPluginSecretStore("mcp", userDataDir),
+	});
 	outputLine(io.stdout, `MCP Server '${name}' is signed out.`);
 };
 
@@ -488,10 +386,41 @@ const requireTrustedProjectWrite = (
 	}
 };
 
+const managementForRuntime = (
+	runtime: McpCliRuntime,
+	options: McpCliOptions
+): McpManagementApi =>
+	createMcpManagement({
+		authorizeWrite: (scope) => {
+			if (scope === "project") {
+				requireTrustedProjectWrite(
+					runtime,
+					"Project MCP configuration requires a trusted project; use --trust-project explicitly."
+				);
+			}
+		},
+		config: {
+			getSnapshot: () =>
+				runtime.configStore.getNamespaceSnapshot(runtime.workspace, "mcp"),
+			setValue: async (scope, configPath, value) => {
+				await runtime.configStore.setNamespaceValue(
+					runtime.workspace,
+					scope,
+					"mcp",
+					configPath,
+					value
+				);
+			},
+		},
+		env: { ...process.env },
+		oauth: options.oauthOperations,
+		workspace: runtime.workspace,
+	});
+
 const runAdd = async (
 	args: readonly string[],
 	initialScope: Scope,
-	runtime: McpCliRuntime,
+	management: McpManagementApi,
 	io: McpCliIo
 ): Promise<void> => {
 	const serverArgs = args.filter(
@@ -499,43 +428,14 @@ const runAdd = async (
 			argument !== "--trust-project" && !argument.startsWith("--scope")
 	);
 	const name = serverArgs[0];
-	if (name === undefined || !namePattern.test(name)) {
-		throw new Error("MCP add requires a valid server name.");
+	if (name === undefined) {
+		throw new Error("MCP add requires a server name.");
 	}
 	const parsed = parseAddOptions(
 		args.slice(args.indexOf(name) + 1),
 		initialScope
 	);
-	if (
-		serverArgs.length === 1 &&
-		parsed.command === undefined &&
-		parsed.url === undefined
-	) {
-		throw new Error("MCP add requires --command or --url.");
-	}
-	const { snapshot } = await resolveServers(
-		runtime.configStore,
-		runtime.workspace
-	);
-	if (hasServerInScope(snapshot, parsed.scope, name)) {
-		throw new Error(
-			`MCP Server '${name}' already exists in ${parsed.scope} config.`
-		);
-	}
-	if (parsed.scope === "project") {
-		requireTrustedProjectWrite(
-			runtime,
-			"Project MCP configuration requires a trusted project; use --trust-project explicitly."
-		);
-	}
-	await writeServerConfig(
-		runtime.configStore,
-		runtime.workspace,
-		parsed.scope,
-		name,
-		configValue(parsed),
-		targetPathForScope(snapshot, parsed.scope)
-	);
+	await management.add({ ...parsed, name });
 	outputLine(
 		io.stdout,
 		`Added MCP Server '${name}' to ${parsed.scope} config.`
@@ -545,99 +445,72 @@ const runAdd = async (
 const runRemove = async (
 	args: readonly string[],
 	requestedScope: Scope,
-	runtime: McpCliRuntime,
+	explicitScope: boolean,
+	management: McpManagementApi,
 	io: McpCliIo
 ): Promise<void> => {
 	const name = args.find((argument) => !argument.startsWith("--"));
-	if (name === undefined || !namePattern.test(name)) {
-		throw new Error("MCP remove requires a valid server name.");
+	if (name === undefined) {
+		throw new Error("MCP remove requires a server name.");
 	}
-	const { result, snapshot } = await resolveServers(
-		runtime.configStore,
-		runtime.workspace
-	);
-	if (result.servers[name] === undefined) {
-		throw new Error(`MCP Server '${name}' does not exist.`);
-	}
-	let scope: Scope = "global";
-	if (
-		requestedScope === "project" ||
-		result.serverSources?.[name]?.scope === "project"
-	) {
-		scope = "project";
-	}
-	if (scope === "project") {
-		requireTrustedProjectWrite(
-			runtime,
-			"Project MCP configuration requires a trusted project."
-		);
-	}
-	await writeServerConfig(
-		runtime.configStore,
-		runtime.workspace,
-		scope,
+	const scope = await management.remove({
 		name,
-		undefined,
-		targetPathForScope(snapshot, scope)
-	);
+		...(explicitScope ? { scope: requestedScope } : {}),
+	});
 	outputLine(io.stdout, `Removed MCP Server '${name}' from ${scope} config.`);
 };
 
 const runAuthentication = async (
 	action: "login" | "logout",
 	args: readonly string[],
-	runtime: McpCliRuntime,
+	management: McpManagementApi,
 	io: McpCliIo,
 	options: McpCliOptions
 ): Promise<void> => {
 	const name = args.find((argument) => !argument.startsWith("--"));
-	if (name === undefined || !namePattern.test(name)) {
-		throw new Error(`MCP ${action} requires a valid server name.`);
+	if (name === undefined) {
+		throw new Error(`MCP ${action} requires a server name.`);
 	}
 	const userDataDir = options.userDataDir ?? resolveUserDataDir();
 	if (action === "login") {
-		await runLogin(
-			name,
-			runtime.configStore,
-			runtime.workspace,
-			userDataDir,
-			io.stdinIsTTY,
-			io,
-			options
-		);
+		await runLogin(name, management, userDataDir, io.stdinIsTTY, io, options);
 		return;
 	}
-	await runLogout(
-		name,
-		runtime.configStore,
-		runtime.workspace,
-		userDataDir,
-		io
-	);
+	await runLogout(name, management, userDataDir, io);
 };
 
 const runMcpAction = async (
 	action: string,
 	args: readonly string[],
-	trustOptions: Readonly<{ scope: Scope; trustProject: boolean }>,
-	runtime: McpCliRuntime,
+	trustOptions: Readonly<{
+		explicitScope: boolean;
+		scope: Scope;
+		trustProject: boolean;
+	}>,
+	management: McpManagementApi,
 	io: McpCliIo,
 	options: McpCliOptions
 ): Promise<void> => {
 	if (action === "list") {
-		await runList(args, runtime.configStore, runtime.workspace, io);
+		await runList(args, management, io);
 		return;
 	}
 	if (action === "add") {
-		await runAdd(args, trustOptions.scope, runtime, io);
+		await runAdd(args, trustOptions.scope, management, io);
 		return;
 	}
 	if (action === "remove") {
-		await runRemove(args, trustOptions.scope, runtime, io);
+		await runRemove(
+			args,
+			trustOptions.scope,
+			trustOptions.explicitScope,
+			management,
+			io
+		);
 		return;
 	}
 	if (action === "login" || action === "logout") {
-		await runAuthentication(action, args, runtime, io, options);
+		await runAuthentication(action, args, management, io, options);
 		return;
 	}
 	throw new Error(`Unknown MCP command '${action}'. Use 'wincode mcp --help'.`);
@@ -662,7 +535,14 @@ export const runMcpCli = async (
 			trustOptions.trustProject,
 			options
 		);
-		await runMcpAction(action, rest, trustOptions, runtime, io, options);
+		await runMcpAction(
+			action,
+			rest,
+			trustOptions,
+			managementForRuntime(runtime, options),
+			io,
+			options
+		);
 		return 0;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

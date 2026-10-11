@@ -10,11 +10,19 @@ import {
 import type { PluginSecretStore } from "@wincode/coding-agent";
 import { isPlainObject } from "@wincode/utils";
 
-const secretPrefix = (serverName: string): string => `mcp.oauth.${serverName}`;
+const hashIdentifier = (value: string): string =>
+	new Bun.CryptoHasher("sha256").update(value).digest("hex");
+const secretPrefix = (serverName: string): string => {
+	const prefix = `mcp.oauth.${serverName}`;
+	if (prefix.length <= 52) {
+		return prefix;
+	}
+	return `mcp.oauth.${hashIdentifier(serverName).slice(0, 32)}`;
+};
 const activeIssuerKey = (serverName: string): string =>
 	`${secretPrefix(serverName)}.active-issuer`;
 const issuerKey = (serverName: string, issuer: string): string =>
-	`${secretPrefix(serverName)}.${encodeURIComponent(issuer)}`;
+	`${secretPrefix(serverName)}.${hashIdentifier(issuer)}`;
 const flowKey = (serverName: string, name: string): string =>
 	`${secretPrefix(serverName)}.flow.${name}`;
 

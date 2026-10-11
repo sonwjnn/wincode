@@ -565,32 +565,130 @@ describe("createMcpRegistry", () => {
 		expect(result.isError).toBe(false);
 	});
 
-	test("a degraded server reconnects when the next Agent Turn builds its catalog", async () => {
+	test("a degraded server reconnects on the next tool call without replaying the failed operation", async () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		demo.callImpl = async () => {
-			throw new Error("fetch failed");
+		const callInputs: unknown[] = [];
+		demo.callImpl = async (_name, input) => {
+			callInputs.push(input);
+			if (callInputs.length === 1) {
+				throw new Error("fetch failed");
+			}
+			return { content: [{ type: "text", text: "recovered" }] };
 		};
 		const { registry } = harness({
 			clients: { demo },
-			configs: [serverConfig("demo")],
+			configs: [serverConfig("demo", { type: "remote" })],
 		});
-		const first = await registry.createSnapshot(agentId("first"));
-		const callResult = await registry.execute(
-			first,
-			first.manifest[0]?.name ?? "missing",
-			{}
-		);
-		expect(callResult.isError).toBe(true);
+		const snapshot = await registry.createSnapshot(agentId("same-turn"));
+		const toolName = snapshot.manifest[0]?.name ?? "missing";
+		const firstResult = await registry.execute(snapshot, toolName, {
+			request: "first",
+		});
+		expect(firstResult.isError).toBe(true);
 		expect(registry.getStatuses()).toContainEqual(
 			expect.objectContaining({ name: "demo", state: "degraded" })
 		);
 
-		demo.callImpl = async () => ({ content: [{ type: "text", text: "ok" }] });
-		const next = await registry.createSnapshot(agentId("next"));
-		expect(next.manifest).toHaveLength(1);
+		const nextResult = await registry.execute(snapshot, toolName, {
+			request: "next",
+		});
+		expect(nextResult).toMatchObject({
+			content: [{ type: "text", text: "recovered" }],
+			isError: false,
+		});
+		const followingResult = await registry.execute(snapshot, toolName, {
+			request: "following",
+		});
+		expect(followingResult.isError).toBe(false);
+		expect(callInputs).toEqual([
+			{ request: "first" },
+			{ request: "next" },
+			{ request: "following" },
+		]);
 		expect(demo.connectCount).toBe(2);
 		expect(registry.getStatuses()).toContainEqual(
 			expect.objectContaining({ name: "demo", state: "connected" })
+		);
+		await registry.close();
+	});
+
+	test("does not execute a new call when reconnection changes the MCP tool contract", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		let callCount = 0;
+		demo.callImpl = async () => {
+			callCount += 1;
+			if (callCount === 1) {
+				demo.tools = [
+					{
+						...tool("echo"),
+						inputSchema: {
+							properties: { text: { type: "string" } },
+							type: "object",
+						},
+					},
+				];
+				throw new Error("fetch failed");
+			}
+			return { content: [] };
+		};
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { type: "remote" })],
+		});
+		const snapshot = await registry.createSnapshot(agentId("same-turn"));
+		const toolName = snapshot.manifest[0]?.name ?? "missing";
+
+		const firstResult = await registry.execute(snapshot, toolName, {
+			request: "first",
+		});
+		const nextResult = await registry.execute(snapshot, toolName, {
+			text: "next",
+		});
+
+		expect(firstResult.isError).toBe(true);
+		expect(nextResult).toMatchObject({ isError: true });
+		expect(JSON.stringify(nextResult.content) ?? "").toContain(
+			"changed after reconnect"
+		);
+		expect(callCount).toBe(1);
+		expect(demo.connectCount).toBe(2);
+		await registry.close();
+	});
+
+	test("reports reconnect failure instead of mislabeling it as a contract change", async () => {
+		const demo = new FakeMcpClient("demo", [tool("echo")]);
+		let callCount = 0;
+		demo.connectImpl = async () => {
+			if (demo.connectCount > 1) {
+				throw new Error("reconnect refused");
+			}
+		};
+		demo.callImpl = async () => {
+			callCount += 1;
+			if (callCount === 1) {
+				throw new Error("fetch failed");
+			}
+			return { content: [] };
+		};
+		const { registry } = harness({
+			clients: { demo },
+			configs: [serverConfig("demo", { type: "remote" })],
+		});
+		const snapshot = await registry.createSnapshot(agentId("same-turn"));
+		const toolName = snapshot.manifest[0]?.name ?? "missing";
+
+		const failedCall = await registry.execute(snapshot, toolName, {});
+		const nextCall = await registry.execute(snapshot, toolName, {});
+
+		expect(failedCall.isError).toBe(true);
+		expect(nextCall.isError).toBe(true);
+		expect(JSON.stringify(nextCall.content)).toContain("reconnect refused");
+		expect(JSON.stringify(nextCall.content)).not.toContain(
+			"changed after reconnect"
+		);
+		expect(callCount).toBe(1);
+		expect(registry.getStatuses()).toContainEqual(
+			expect.objectContaining({ name: "demo", state: "failed" })
 		);
 		await registry.close();
 	});

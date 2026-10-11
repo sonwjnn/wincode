@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { runMcpCli } from "@/modules/application/mcp-cli";
+import { type McpCliOptions, runMcpCli } from "@/modules/application/mcp-cli";
 
 const makeIo = () => {
 	const stderr: string[] = [];
@@ -124,6 +124,164 @@ test("MCP remove preserves unrelated servers in the owning document", async () =
 		expect(await Bun.file(userConfig).json()).toEqual({
 			mcpServers: { keep: { url: "https://keep.example.test" } },
 		});
+	} finally {
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("MCP remove honors an explicitly selected scope without deleting another scope", async () => {
+	const { homeRoot, root, workspace } = await setup();
+	const userConfig = path.join(homeRoot, ".wincode", "mcp.json");
+	const projectConfig = path.join(workspace, ".wincode", "mcp.json");
+	await mkdir(path.dirname(userConfig), { recursive: true });
+	await mkdir(path.dirname(projectConfig), { recursive: true });
+	await Bun.write(
+		userConfig,
+		JSON.stringify({
+			mcpServers: { userOnly: { url: "https://user.example.test" } },
+		})
+	);
+	await Bun.write(
+		projectConfig,
+		JSON.stringify({
+			mcpServers: { projectOnly: { url: "https://project.example.test" } },
+		})
+	);
+	try {
+		const userRemoval = makeIo();
+		const userCode = await runMcpCli(
+			["remove", "projectOnly", "--scope", "user", "--trust-project"],
+			workspace,
+			userRemoval.io,
+			{ homeRoot, userDataDir: path.join(homeRoot, "data") }
+		);
+		expect(userCode).toBe(1);
+		expect(userRemoval.stderr.join("")).toContain(
+			"does not exist in user config"
+		);
+		expect(await Bun.file(projectConfig).json()).toEqual({
+			mcpServers: { projectOnly: { url: "https://project.example.test" } },
+		});
+
+		const projectRemoval = makeIo();
+		const projectCode = await runMcpCli(
+			["remove", "userOnly", "--scope", "project", "--trust-project"],
+			workspace,
+			projectRemoval.io,
+			{ homeRoot, userDataDir: path.join(homeRoot, "data") }
+		);
+		expect(projectCode).toBe(1);
+		expect(projectRemoval.stderr.join("")).toContain(
+			"does not exist in project config"
+		);
+		expect(await Bun.file(userConfig).json()).toEqual({
+			mcpServers: { userOnly: { url: "https://user.example.test" } },
+		});
+	} finally {
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("MCP remove without a scope removes the effective project server only", async () => {
+	const { homeRoot, root, workspace } = await setup();
+	const userConfig = path.join(homeRoot, ".wincode", "mcp.json");
+	const projectConfig = path.join(workspace, ".wincode", "mcp.json");
+	await mkdir(path.dirname(userConfig), { recursive: true });
+	await mkdir(path.dirname(projectConfig), { recursive: true });
+	await Bun.write(
+		userConfig,
+		JSON.stringify({
+			mcpServers: { keepUser: { url: "https://user.example.test" } },
+		})
+	);
+	await Bun.write(
+		projectConfig,
+		JSON.stringify({
+			mcpServers: { projectOnly: { url: "https://project.example.test" } },
+		})
+	);
+	try {
+		const { io, stdout } = makeIo();
+		const code = await runMcpCli(
+			["remove", "projectOnly", "--trust-project"],
+			workspace,
+			io,
+			{ homeRoot, userDataDir: path.join(homeRoot, "data") }
+		);
+
+		expect(code).toBe(0);
+		expect(stdout.join("")).toContain("from project config");
+		expect(await Bun.file(userConfig).json()).toEqual({
+			mcpServers: { keepUser: { url: "https://user.example.test" } },
+		});
+		const projectDocument = await Bun.file(projectConfig).json();
+		expect(projectDocument.mcpServers.projectOnly).toBeUndefined();
+	} finally {
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("MCP login and logout delegate OAuth with the user-scoped secret capability", async () => {
+	const { homeRoot, root, workspace } = await setup();
+	const userConfig = path.join(homeRoot, ".wincode", "mcp.json");
+	await mkdir(path.dirname(userConfig), { recursive: true });
+	await Bun.write(
+		userConfig,
+		JSON.stringify({
+			mcpServers: {
+				docs: {
+					auth: "oauth",
+					oauth: { clientId: "configured-client" },
+					url: "https://mcp.example.test",
+				},
+			},
+		})
+	);
+	const calls: string[] = [];
+	const openAuthorizationUrl = async () => undefined;
+	const readRedirectUrl = async (callback: Promise<URL>) => await callback;
+	const options: McpCliOptions = {
+		homeRoot,
+		openAuthorizationUrl,
+		oauthOperations: {
+			login: async (input) => {
+				expect(input.serverName).toBe("docs");
+				expect(input.serverUrl).toBe("https://mcp.example.test/");
+				expect(input.openAuthorizationUrl).toBe(openAuthorizationUrl);
+				expect(input.readRedirectUrl).toBe(readRedirectUrl);
+				expect(typeof input.secrets.set).toBe("function");
+				calls.push("login");
+			},
+			logout: async (secrets, name) => {
+				expect(name).toBe("docs");
+				expect(typeof secrets.delete).toBe("function");
+				calls.push("logout");
+			},
+		},
+		readRedirectUrl,
+		userDataDir: path.join(homeRoot, "data"),
+	};
+	try {
+		const login = makeIo();
+		const loginCode = await runMcpCli(
+			["login", "docs"],
+			workspace,
+			login.io,
+			options
+		);
+		const logout = makeIo();
+		const logoutCode = await runMcpCli(
+			["logout", "docs"],
+			workspace,
+			logout.io,
+			options
+		);
+
+		expect(loginCode).toBe(0);
+		expect(login.stdout.join("")).toContain("is signed in");
+		expect(logoutCode).toBe(0);
+		expect(logout.stdout.join("")).toContain("is signed out");
+		expect(calls).toEqual(["login", "logout"]);
 	} finally {
 		await rm(root, { force: true, recursive: true });
 	}
