@@ -10,6 +10,7 @@ import {
 	toSessionMessageId,
 	toSessionRecordId,
 } from "@wincode/agent-core";
+import { modelUsageSchema } from "@wincode/ai/model-usage";
 import {
 	type ChatModelSelection,
 	modelSelectionSchema,
@@ -30,6 +31,7 @@ import {
 	type SessionId,
 	toCompactionId,
 	toSessionId,
+	toSessionUsageEntryId,
 	toWorkspaceId,
 	type WorkspaceId,
 } from "@/shared/identifiers";
@@ -63,6 +65,7 @@ import {
 	sessionAttachment,
 	sessionCompaction,
 	sessionRecord,
+	sessionUsageEntry,
 	sessionWorkspace,
 } from "./schema";
 import {
@@ -73,9 +76,11 @@ import {
 import {
 	type CommitSessionRecordInput,
 	type CreateSessionInput,
+	type CreateSessionUsageEntryInput,
 	type PromptHistoryEntry,
 	type Session,
 	type SessionStore,
+	type SessionUsageEntry,
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
 	type UpdateSessionSubmissionInput,
@@ -318,6 +323,7 @@ export const createPromptHistory = (
 type SessionRow = typeof session.$inferSelect;
 type CompactionRow = typeof sessionCompaction.$inferSelect;
 type SessionRecordRow = typeof sessionRecord.$inferSelect;
+type SessionUsageEntryRow = typeof sessionUsageEntry.$inferSelect;
 
 const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
 	const summarizationModel = modelSelectionSchema.parse(
@@ -417,6 +423,20 @@ const toSessionRecordModel = (
 	providerId: model.providerId,
 	...omitUndefined({ thinkingLevel }),
 });
+const toSessionUsageEntry = (row: SessionUsageEntryRow): SessionUsageEntry => {
+	if (row.kind !== "cache-warm") {
+		throw new Error(`Unsupported Session Usage Entry kind: ${row.kind}`);
+	}
+	return {
+		createdAt: row.createdAt,
+		id: toSessionUsageEntryId(row.id),
+		kind: row.kind,
+		model: modelSelectionSchema.parse(row.modelJson),
+		sessionId: toSessionId(row.sessionId),
+		usage: modelUsageSchema.parse(row.usageJson),
+	};
+};
+
 const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	const record = {
 		agentId: agentIdSchema.parse(row.agentId),
@@ -590,6 +610,78 @@ const writeSessionRecordCheckpoint = (
 			.run();
 	});
 };
+const writeSessionUsageEntry = (
+	db: SessionDatabase,
+	workspaceId: WorkspaceId,
+	input: CreateSessionUsageEntryInput
+): SessionUsageEntry => {
+	const createdAt = input.createdAt ?? new Date();
+	const usage = modelUsageSchema.parse(input.usage);
+	return db.transaction((tx) => {
+		const sessionRow = tx
+			.select({ id: session.id })
+			.from(session)
+			.where(
+				and(
+					eq(session.id, input.sessionId),
+					eq(session.workspaceId, workspaceId)
+				)
+			)
+			.get();
+		if (!sessionRow) {
+			throw new Error("Session not found");
+		}
+		tx.insert(sessionUsageEntry)
+			.values({
+				createdAt,
+				id: input.id,
+				kind: input.kind,
+				modelJson: serializeJson(input.model),
+				sessionId: input.sessionId,
+				usageJson: serializeJson(usage),
+			})
+			.onConflictDoNothing()
+			.run();
+		const row = tx
+			.select()
+			.from(sessionUsageEntry)
+			.where(eq(sessionUsageEntry.id, input.id))
+			.get();
+		if (row === undefined) {
+			throw new Error("Session Usage Entry could not be persisted.");
+		}
+		const persisted = toSessionUsageEntry(row);
+		if (
+			persisted.sessionId !== input.sessionId ||
+			persisted.kind !== input.kind ||
+			!Bun.deepEquals(persisted.model, input.model, true) ||
+			!Bun.deepEquals(persisted.usage, usage, true)
+		) {
+			throw new Error("Session Usage Entry identity was reused with new data.");
+		}
+		return persisted;
+	});
+};
+
+const readSessionUsageEntries = (
+	db: SessionDatabase,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId
+): SessionUsageEntry[] =>
+	db
+		.select({ entry: sessionUsageEntry })
+		.from(sessionUsageEntry)
+		.innerJoin(session, eq(sessionUsageEntry.sessionId, session.id))
+		.where(
+			and(
+				eq(sessionUsageEntry.sessionId, sessionId),
+				eq(session.workspaceId, workspaceId)
+			)
+		)
+		.orderBy(asc(sessionUsageEntry.createdAt), asc(sessionUsageEntry.id))
+		.all()
+		.map(({ entry }) => toSessionUsageEntry(entry));
+
 const updateSessionSubmissionCheckpoint = (
 	db: SessionDatabase,
 	workspaceId: WorkspaceId,
@@ -835,6 +927,10 @@ export const createDrizzleSessionStore = (
 
 			return { id };
 		},
+		createSessionUsageEntry: async (input) =>
+			writeSessionUsageEntry(db, workspace.id, input),
+		listSessionUsageEntries: async (sessionId) =>
+			readSessionUsageEntries(db, workspace.id, sessionId),
 		createEmptySession: async ({
 			id = createSessionId(),
 			model,
@@ -889,6 +985,7 @@ export const createDrizzleSessionStore = (
 			db.transaction((tx) => {
 				tx.delete(sessionCompaction).run();
 				tx.delete(sessionRecord).run();
+				tx.delete(sessionUsageEntry).run();
 				tx.delete(session).run();
 				tx.delete(sessionAttachment).run();
 			});

@@ -306,6 +306,7 @@ const fakeUseAgentSessionModule: Pick<
 			[]
 		);
 		return {
+			cacheWarmingStatus: "idle",
 			cancel: () => undefined,
 			cancelCompaction: async () => [],
 			compact: async () => {
@@ -317,6 +318,7 @@ const fakeUseAgentSessionModule: Pick<
 			prompt,
 			steer,
 			send,
+			sessionUsageEntries: [],
 			snapshot: {
 				...opened,
 				queuedSubmissions,

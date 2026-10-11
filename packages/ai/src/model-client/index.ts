@@ -1,4 +1,5 @@
 import type { ModelTarget } from "../model-target";
+import type { ModelUsage } from "../model-usage";
 import { findSupportedChatModelSelection } from "../models";
 import { httpErrorFromResponse, isCacheControlRejection } from "./errors";
 import type { SerializedProviderRequest } from "./request";
@@ -102,6 +103,7 @@ const streamModel = async function* (
 		}
 	} catch (error) {
 		if (
+			request.cacheWarming ||
 			outputStarted ||
 			request.signal?.aborted ||
 			!providerRequest.usesPromptCacheControls ||
@@ -134,6 +136,39 @@ export const createModelClient = (
 ): ModelClient => {
 	const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
 	return { stream: (request) => streamModel(request, fetchImpl) };
+};
+
+/** Replays a streaming Model request with one output token and discarded output. */
+export const warmModelRequest = async (
+	request: ModelStepRequest,
+	modelClient: ModelClient = createModelClient(),
+	signal?: AbortSignal
+): Promise<ModelUsage | undefined> => {
+	if (request.target.providerId === "google" || request.googleCachedContent) {
+		return;
+	}
+	const {
+		googleCachedContent: _googleCachedContent,
+		signal: _requestSignal,
+		...promptRequest
+	} = request;
+	const { providerOptions: _providerOptions, ...target } = request.target;
+	let usage: ModelUsage | undefined;
+	for await (const part of modelClient.stream({
+		...promptRequest,
+		cacheWarming: true,
+		signal,
+		target: {
+			...target,
+			maxOutputTokens: 1,
+			thinkingLevel: undefined,
+		},
+	})) {
+		if (part.type === "finish") {
+			usage = part.usage;
+		}
+	}
+	return usage;
 };
 
 export const generateModelText = async (

@@ -572,6 +572,8 @@ const createToolsByName = (
 type ExecuteModelStepsOptions = Readonly<{
 	emit: EventEmitter;
 	lifecycle: AgentTurnLifecycle;
+	onModelStepFinished?: AgentRuntimeRunOptions["onModelStepFinished"];
+	onModelStepStarted?: AgentRuntimeRunOptions["onModelStepStarted"];
 	modelClient: ModelClient;
 	modelMessages: ModelPromptMessage[];
 	googleCachedContent?: ModelStepRequest["googleCachedContent"];
@@ -620,12 +622,37 @@ const appendLateSteeringMessages = async (
 	return true;
 };
 
+const notifyModelStepStarted = (
+	observer: AgentRuntimeRunOptions["onModelStepStarted"],
+	request: ModelStepRequest
+): void => {
+	try {
+		observer?.(request);
+	} catch {
+		// A best-effort request observer cannot fail an active Agent Turn.
+	}
+};
+
+const notifyModelStepFinished = (
+	observer: AgentRuntimeRunOptions["onModelStepFinished"],
+	request: ModelStepRequest,
+	usage: ModelUsage | undefined
+): void => {
+	try {
+		observer?.(request, usage);
+	} catch {
+		// A best-effort usage observer cannot fail an active Agent Turn.
+	}
+};
+
 const runLoop = async function* ({
 	emit,
 	lifecycle,
 	modelClient,
 	modelMessages,
 	googleCachedContent,
+	onModelStepFinished,
+	onModelStepStarted,
 	promptCacheKey,
 	runtimeSignal,
 	takeSteeringMessages,
@@ -660,6 +687,7 @@ const runLoop = async function* ({
 			target: turn.model,
 			tools: toolDefinitions,
 		};
+		notifyModelStepStarted(onModelStepStarted, request);
 		const output = yield* drainModelStep({
 			emit,
 			modelClient,
@@ -673,6 +701,7 @@ const runLoop = async function* ({
 			yield lifecycle.interrupt(emit.nextSequence(), "lost-execution");
 			return;
 		}
+		notifyModelStepFinished(onModelStepFinished, request, output.usage);
 		let stopTurn = false;
 		if (output.toolCalls.length > 0) {
 			modelMessages.push({
@@ -743,6 +772,8 @@ const runAgentTurn = async function* (
 	{
 		deadlineMs,
 		googleCachedContent,
+		onModelStepFinished,
+		onModelStepStarted,
 		promptCacheKey,
 		signal,
 		takeSteeringMessages,
@@ -782,6 +813,8 @@ const runAgentTurn = async function* (
 			modelMessages,
 			...omitUndefined({
 				googleCachedContent,
+				onModelStepFinished,
+				onModelStepStarted,
 				promptCacheKey,
 				runtimeSignal,
 				takeSteeringMessages,

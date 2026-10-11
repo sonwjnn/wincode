@@ -4,8 +4,10 @@ import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
+import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
 	useKeyboardLayer,
 	useToggleShortcut,
@@ -64,6 +66,8 @@ type ChatShellProps = {
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
 	viewId: string;
+	sessionUsageEntries?: readonly SessionUsageEntry[];
+	cacheWarmingStatus?: CacheWarmingStatus;
 };
 function ActivityFooter({
 	agent,
@@ -127,6 +131,8 @@ export function ChatShell({
 	recalledSubmissions,
 	recallRevision,
 	viewId,
+	sessionUsageEntries = [],
+	cacheWarmingStatus = "idle",
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const focusScopeId = `chat-shell-${viewId}`;
@@ -170,8 +176,15 @@ export function ChatShell({
 		canRetryMessage(latestRetryMessageId) &&
 		!isUndefined(onRetry);
 	const usage = useMemo(
-		() => summarizeSessionUsage(displayMessages, model, table),
-		[displayMessages, model, table]
+		() =>
+			summarizeSessionUsage(
+				displayMessages,
+				model,
+				table,
+				sessionUsageEntries,
+				cacheWarmingStatus
+			),
+		[displayMessages, model, table, sessionUsageEntries, cacheWarmingStatus]
 	);
 	useEffect(() => {
 		if (scrollRequest === 0) {

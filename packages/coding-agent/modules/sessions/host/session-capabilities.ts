@@ -223,6 +223,7 @@ export const createSessionCapabilities = async ({
 		};
 		const capabilities: SessionCapabilities = {
 			getCapabilityCeiling: () => capabilityCeiling,
+			getModelPricingTable: () => pricing,
 			getCompactionModule: () => compaction,
 			getCompactionSettings: compactionSettings.getCompactionSettings,
 			getConfig: () => configRuntime,

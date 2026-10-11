@@ -1,11 +1,13 @@
 import type { ChatModelSelection, ThinkingSelection } from "@wincode/ai/models";
 import { useEffect, useMemo, useState } from "react";
+import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import type {
 	AgentSession,
 	LiveSessionSnapshot,
 } from "@/modules/sessions/agent-session/types";
 import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import type { SessionHost } from "@/modules/sessions/host/types";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import type {
 	SessionSendInput,
 	SessionSendOutcome,
@@ -39,6 +41,9 @@ export type AgentSessionBinding = Readonly<{
 	steer: AgentSession["steer"];
 	/** The session facts the view renders at one moment. */
 	snapshot: LiveSessionSnapshot;
+	/** Session Host cache-warmer status and cost-only usage projection. */
+	cacheWarmingStatus: CacheWarmingStatus;
+	sessionUsageEntries: readonly SessionUsageEntry[];
 }>;
 
 /**
@@ -59,12 +64,21 @@ export type AgentSessionBinding = Readonly<{
 export function useAgentSession(host: SessionHost): AgentSessionBinding {
 	const { agentSession } = host;
 	const [snapshot, setSnapshot] = useState(agentSession.getSnapshot);
+	const [cacheWarmingStatus, setCacheWarmingStatus] = useState(
+		host.getCacheWarmingStatus
+	);
+	const [sessionUsageEntries, setSessionUsageEntries] = useState(
+		host.getSessionUsageEntries
+	);
 	useEffect(() => {
-		setSnapshot(agentSession.getSnapshot());
-		return agentSession.subscribe(() =>
-			setSnapshot(agentSession.getSnapshot())
-		);
-	}, [agentSession]);
+		const syncHost = (): void => {
+			setSnapshot(agentSession.getSnapshot());
+			setCacheWarmingStatus(host.getCacheWarmingStatus());
+			setSessionUsageEntries(host.getSessionUsageEntries());
+		};
+		syncHost();
+		return host.subscribe(syncHost);
+	}, [agentSession, host]);
 	const compact = useMemo(
 		() =>
 			(
@@ -92,5 +106,7 @@ export function useAgentSession(host: SessionHost): AgentSessionBinding {
 		send: agentSession.send,
 		steer: agentSession.steer,
 		snapshot,
+		cacheWarmingStatus,
+		sessionUsageEntries,
 	};
 }

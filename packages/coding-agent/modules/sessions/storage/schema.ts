@@ -1,4 +1,5 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
+import type { ModelUsage } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import {
 	index,
@@ -14,6 +15,7 @@ import type { SessionCompaction } from "../compaction/types";
 import type {
 	PromptHistoryEntry,
 	SessionRecordStorageOutcome,
+	SessionUsageEntry,
 } from "./session-store";
 export type SerializedJson<T> = Jsonify<T>;
 
@@ -338,6 +340,33 @@ export const sessionCompaction = sqliteTable(
 	]
 );
 
+export const sessionUsageEntry = sqliteTable(
+	"session_usage_entry",
+	{
+		id: text("id").primaryKey(),
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		kind: text("kind").$type<SessionUsageEntry["kind"]>().notNull(),
+		modelJson: text("model_json", { mode: "json" })
+			.$type<SerializedJson<ChatModelSelection>>()
+			.notNull(),
+		usageJson: text("usage_json", { mode: "json" })
+			.$type<SerializedJson<ModelUsage>>()
+			.notNull(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	},
+	(table) => [
+		index("idx_session_usage_entry_session_created").on(
+			table.sessionId,
+			table.createdAt
+		),
+	]
+);
+
 export const promptHistory = sqliteTable("prompt_history", {
 	id: integer("id").primaryKey({ autoIncrement: true }),
 	prompt: text("prompt").notNull(),
@@ -409,6 +438,7 @@ export const sessionSchema = {
 	sessionAttachment,
 	sessionCompaction,
 	sessionRecord,
+	sessionUsageEntry,
 	session,
 	sessionWorkspace,
 	promptHistory,

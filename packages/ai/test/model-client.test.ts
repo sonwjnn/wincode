@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { createModelClient, generateModelText } from "../src/model-client";
+import {
+	createModelClient,
+	generateModelText,
+	warmModelRequest,
+} from "../src/model-client";
 import { ModelProviderError } from "../src/model-client/errors";
 import type {
 	ModelClient,
@@ -122,6 +126,113 @@ const lookupTool: ModelTool = {
 };
 
 describe("native model client routes", () => {
+	test("warms the exact streaming request with a one-token cap and no retained output", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: response.output_text.delta\ndata: {"delta":"discard this"}\n\n',
+				'event: response.completed\ndata: {"response":{"usage":{"input_tokens":1200,"output_tokens":1}}}\n\n'
+			)
+		);
+		const target = makeTarget("openai", "gpt-5.6", undefined, {
+			maxOutputTokens: 600,
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+			thinkingLevel: "high",
+		});
+		const request = {
+			messages: [
+				{
+					content: [{ text: "current prompt", type: "text" as const }],
+					role: "user" as const,
+				},
+			],
+			promptCacheKey: "session-key",
+			system: "stable instructions",
+			target,
+			tools: [lookupTool],
+		};
+
+		const usage = await warmModelRequest(
+			request,
+			createModelClient({ fetch: mock.fetch })
+		);
+
+		expect(usage).toEqual({ inputTokens: 1200, outputTokens: 1 });
+		expect(responseBody(mock)).toMatchObject({
+			max_output_tokens: 1,
+			prompt_cache_key: "session-key",
+			prompt_cache_options: { mode: "explicit", ttl: "30m" },
+			reasoning: { summary: "detailed" },
+			tools: [{ name: "lookup", type: "function" }],
+		});
+		expect(JSON.stringify(responseBody(mock))).toContain("stable instructions");
+		expect(JSON.stringify(responseBody(mock))).toContain("current prompt");
+		expect(JSON.stringify(responseBody(mock))).not.toContain("discard this");
+	});
+
+	test("bounds a thinking-enabled Anthropic warm request without an invalid reasoning budget", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":1200}}}\n\n',
+				'event: message_delta\ndata: {"usage":{"output_tokens":1}}\n\n',
+				"event: message_stop\ndata: {}\n\n"
+			)
+		);
+		const target = makeTarget("anthropic", "claude-sonnet-4-6", undefined, {
+			maxOutputTokens: 600,
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+			thinkingLevel: "high",
+		});
+
+		await warmModelRequest(
+			{
+				messages: [
+					{ content: [{ text: "current prompt", type: "text" }], role: "user" },
+				],
+				system: "stable instructions",
+				target,
+			},
+			createModelClient({ fetch: mock.fetch })
+		);
+
+		expect(responseBody(mock)).toMatchObject({ max_tokens: 1 });
+		expect(responseBody(mock).thinking).toBeUndefined();
+		expect(responseBody(mock).output_config).toBeUndefined();
+		expect(JSON.stringify(responseBody(mock))).toContain("cache_control");
+	});
+
+	test("does not retry a cache-control rejection for a warm request", async () => {
+		let calls = 0;
+		const client = createModelClient({
+			fetch: (async () => {
+				calls += 1;
+				return new Response(
+					JSON.stringify({
+						error: { message: "Unsupported prompt cache option" },
+					}),
+					{ status: 400 }
+				);
+			}) as unknown as typeof fetch,
+		});
+		const target = makeTarget("openai", "gpt-5.6", undefined, {
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+		});
+
+		await expect(
+			warmModelRequest(
+				{
+					messages: [],
+					promptCacheKey: "session-key",
+					target,
+				},
+				client
+			)
+		).rejects.toThrow("Unsupported prompt cache option");
+		expect(calls).toBe(1);
+	});
+
 	test("streams Responses text, reasoning, tool calls, and normalized usage", async () => {
 		const wire = [
 			": keep-alive\r\n\r\n",

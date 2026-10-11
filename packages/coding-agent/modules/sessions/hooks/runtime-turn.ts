@@ -2,6 +2,7 @@ import {
 	type AgentId,
 	type AgentRole,
 	type AgentRuntime,
+	type AgentRuntimeRunOptions,
 	type AgentTurn,
 	type AgentTurnEvent,
 	type AgentTurnFilePart,
@@ -643,6 +644,8 @@ export type SessionViewState = ReadonlyDeep<{
 
 type AgentTurnEventConsumerOptions = {
 	googleCachedContent?: GoogleCachedContentSelection;
+	onModelStepFinished?: AgentRuntimeRunOptions["onModelStepFinished"];
+	onModelStepStarted?: AgentRuntimeRunOptions["onModelStepStarted"];
 	lifecycle?: AgentTurnLifecycle;
 	onViewState?: (state: SessionViewState) => void;
 	promptCacheKey?: string;
@@ -675,6 +678,8 @@ const consumeAgentTurnEvents = async ({
 	onViewState,
 	runtime,
 	googleCachedContent,
+	onModelStepFinished,
+	onModelStepStarted,
 	promptCacheKey,
 	signal,
 	takeSteeringMessages,
@@ -722,6 +727,8 @@ const consumeAgentTurnEvents = async ({
 	for await (const event of runtime.run(turn, {
 		...omitUndefined({
 			googleCachedContent,
+			onModelStepFinished,
+			onModelStepStarted,
 			promptCacheKey,
 			takeSteeringMessages,
 		}),
@@ -812,6 +819,8 @@ export const runAgentTurnToText = async ({
 	onViewState,
 	runtime,
 	googleCachedContent,
+	onModelStepFinished,
+	onModelStepStarted,
 	promptCacheKey,
 	signal,
 	sourceUserMessageId,
@@ -826,6 +835,8 @@ export const runAgentTurnToText = async ({
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
 	googleCachedContent?: GoogleCachedContentSelection;
+	onModelStepFinished?: AgentRuntimeRunOptions["onModelStepFinished"];
+	onModelStepStarted?: AgentRuntimeRunOptions["onModelStepStarted"];
 	promptCacheKey?: string;
 	signal?: AbortSignal;
 	sourceUserMessageId?: SessionMessageId;
@@ -895,6 +906,8 @@ export const runAgentTurnToText = async ({
 		onViewState,
 		runtime,
 		googleCachedContent,
+		onModelStepFinished,
+		onModelStepStarted,
 		promptCacheKey,
 		signal,
 		...omitUndefined({

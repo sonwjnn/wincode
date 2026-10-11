@@ -12,8 +12,8 @@ export {
 	thinkingLevelSchema,
 } from "@wincode/ai/models";
 export { resolveWorkspaceRoot } from "@/modules/tools";
-export type { SessionId } from "@/shared/identifiers";
-export { toSessionId } from "@/shared/identifiers";
+export type { SessionId, SessionUsageEntryId } from "@/shared/identifiers";
+export { toSessionId, toSessionUsageEntryId } from "@/shared/identifiers";
 export type {
 	LiveSessionSnapshot,
 	SessionInterruptResult,
@@ -31,7 +31,11 @@ export type {
 	SessionMessageMetadata,
 } from "../message";
 export { createSessionUserMessage } from "../message";
-export type { SessionStore } from "../storage/session-store";
+export type {
+	CreateSessionUsageEntryInput,
+	SessionStore,
+	SessionUsageEntry,
+} from "../storage/session-store";
 export type { SessionSendInput } from "../submission-types";
 export type {
 	SessionCapabilitiesAssembly,

@@ -57,6 +57,53 @@ export const getOpenAIPromptCacheProtocolCapabilities = (
 	protocol: OpenAIPromptCacheProtocol
 ) => getModelMetadata(model)?.promptCache?.protocols?.[protocol];
 
+const RETENTION_DURATION_PATTERN = /^(\d+)(s|m|h)$/u;
+
+const parseRetentionDurationMs = (value: string): number | undefined => {
+	const parsed = RETENTION_DURATION_PATTERN.exec(value);
+	if (parsed === null) {
+		return;
+	}
+	const amount = Number(parsed[1]);
+	let unitMs: number;
+	if (parsed[2] === "s") {
+		unitMs = 1000;
+	} else if (parsed[2] === "m") {
+		unitMs = 60_000;
+	} else {
+		unitMs = 60 * 60_000;
+	}
+	return Number.isSafeInteger(amount) && amount > 0
+		? amount * unitMs
+		: undefined;
+};
+
+/** Returns a request-refreshable protocol's verified lifetime, never a guess. */
+export const promptCacheRetentionTtlMsForModel = (
+	model: SupportedChatModel,
+	retention: SupportedPromptCacheRetentionTier | undefined
+): number | undefined => {
+	if (!isSupportedPromptCacheRetention(model, retention)) {
+		return;
+	}
+	if (
+		model.provider === "anthropic" ||
+		(model.provider === "opencode-go" && model.protocol === "anthropic")
+	) {
+		return retention === "short" ? 5 * 60_000 : 60 * 60_000;
+	}
+	if (model.provider === "google") {
+		return;
+	}
+	const protocol = openAIPromptCacheProtocolForModel(model);
+	if (protocol === undefined) {
+		return;
+	}
+	const value = getOpenAIPromptCacheProtocolCapabilities(model, protocol)
+		?.retention?.values[retention];
+	return value === undefined ? undefined : parseRetentionDurationMs(value);
+};
+
 /** Whether metadata declares any Wincode-controlled cache option for this route. */
 export const supportsPromptCacheControls = (
 	model: SupportedChatModel

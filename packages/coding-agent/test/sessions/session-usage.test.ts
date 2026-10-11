@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
 	summarizeSessionUsage,
 	turnCostUsd,
 } from "@/modules/sessions/usage/session-usage";
-import { modelId, sessionMessageId } from "../support/identifiers";
+import {
+	modelId,
+	sessionId,
+	sessionMessageId,
+	sessionUsageEntryId,
+} from "../support/identifiers";
 
 const model: ChatModelSelection = {
 	modelId: modelId("claude-haiku-4-5"),
@@ -186,6 +192,50 @@ describe("summarizeSessionUsage", () => {
 			contextTokens: 100,
 		});
 		expect(messages).toEqual(transcript);
+	});
+
+	test("adds durable warm usage to cost once without changing provider context", () => {
+		const messages = [
+			assistant("assistant-measured", {
+				inputTokens: 100,
+				outputTokens: 5,
+				cacheReadTokens: 20,
+			}),
+		];
+		const entry: SessionUsageEntry = {
+			createdAt: new Date(100),
+			id: sessionUsageEntryId("warm-entry-1"),
+			kind: "cache-warm",
+			model,
+			sessionId: sessionId("warm-session"),
+			usage: {
+				cacheReadTokens: 700_000,
+				inputTokens: 1_000_000,
+				outputTokens: 1,
+			},
+		};
+		const summary = summarizeSessionUsage(
+			messages,
+			model,
+			{
+				"anthropic/claude-haiku-4-5": {
+					cost: { cacheRead: 0.25, input: 1, output: 5 },
+					limits: { context: 1000 },
+				},
+			},
+			[entry],
+			"scheduled"
+		);
+
+		expect(summary).toMatchObject({
+			cacheReadTokens: 700_020,
+			cacheWarmingStatus: "scheduled",
+			contextTokens: 105,
+			costedTurns: 1,
+			costedUsageEntries: 1,
+		});
+		expect(summary?.costUsd).toBeCloseTo(0.475_115, 9);
+		expect(messages).toHaveLength(1);
 	});
 
 	test("hides the usage bar before any provider usage exists", () => {

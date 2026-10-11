@@ -44,6 +44,8 @@ export type GoogleCachedContentSelection = Readonly<{
 }>;
 
 export type ModelStepRequest = Readonly<{
+	/** Warm requests are best-effort and must never use the normal cache fallback retry. */
+	cacheWarming?: true;
 	googleCachedContent?: GoogleCachedContentSelection;
 	messages: readonly ModelPromptMessage[];
 	promptCacheKey?: string;

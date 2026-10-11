@@ -22,6 +22,7 @@ import type {
 	PluginRuntime,
 	PluginToolDescriptor,
 } from "@/modules/plugins/runtime";
+import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import { resolveConfiguredPromptCacheControls } from "@/modules/prompt-cache/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
@@ -69,6 +70,7 @@ import {
 import type { SessionCapabilities } from "./types";
 
 export type SessionPortsOptions = Readonly<{
+	cacheWarming: SessionCacheWarming;
 	capabilities: SessionCapabilities;
 	googleCachedContentResourceManager: GoogleCachedContentResourceManager;
 	isShutDown: () => boolean;
@@ -211,6 +213,7 @@ const activateExplicitSkill = async (
  * Agent Session Snapshot.
  */
 export const createSessionPorts = ({
+	cacheWarming,
 	capabilities,
 	googleCachedContentResourceManager,
 	isShutDown,
@@ -521,6 +524,8 @@ export const createSessionPorts = ({
 				promptCacheKey: turn.model.promptCacheEnabled
 					? `wincode-session:${sessionId}`
 					: undefined,
+				onModelStepFinished: cacheWarming.onModelStepFinished,
+				onModelStepStarted: cacheWarming.onModelStepStarted,
 				runtime: statefulAgent,
 				googleCachedContent,
 				signal,

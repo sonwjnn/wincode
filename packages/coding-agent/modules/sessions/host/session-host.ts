@@ -13,6 +13,8 @@ import {
 	type AgentRegistry,
 	resolveActiveAgentId,
 } from "@/modules/agents/registry";
+import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
+import { createSessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import { AgentSessionImpl } from "../agent-session/agent-session";
 import type {
@@ -31,6 +33,7 @@ import {
 } from "../message";
 import { resolveSessionSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
+import type { SessionUsageEntry } from "../storage/session-store";
 import { createSessionPorts } from "./session-ports";
 import type {
 	SessionCapabilities,
@@ -50,6 +53,7 @@ type OpenedSession = Readonly<{
 	steeringMessages: SessionSteeringMessage[];
 	transcript: SessionMessage[];
 	thinkingLevel: ThinkingLevel | undefined;
+	usageEntries: SessionUsageEntry[];
 }>;
 const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
 
@@ -61,6 +65,23 @@ const waitForClosingHost = async (
 		await closing.catch(() => undefined);
 	}
 };
+const sessionContextExtends = (
+	previous: readonly SessionMessage[],
+	next: readonly SessionMessage[]
+): boolean =>
+	previous.length <= next.length &&
+	previous.every((message, index) => {
+		const candidate = next[index];
+		return (
+			candidate !== undefined &&
+			Bun.deepEquals(
+				{ id: message.id, parts: message.parts, role: message.role },
+				{ id: candidate.id, parts: candidate.parts, role: candidate.role },
+				true
+			)
+		);
+	});
+
 const interruptedSteeringFailure =
 	"Session closed before provider processing could be confirmed; deliberate retry required.";
 
@@ -140,11 +161,14 @@ const openSession = async (
 	sessionId: SessionHostOptions["sessionId"]
 ): Promise<OpenedSession> => {
 	const store = capabilities.getStore();
-	const [session, compactions, loadedRecords] = await Promise.all([
-		store.getSession(sessionId),
-		store.getCompactions(sessionId),
-		store.listSessionRecords(sessionId),
-	]);
+	const [session, compactions, loadedRecords, usageEntries] = await Promise.all(
+		[
+			store.getSession(sessionId),
+			store.getCompactions(sessionId),
+			store.listSessionRecords(sessionId),
+			store.listSessionUsageEntries(sessionId),
+		]
+	);
 	const interrupted = loadedRecords.flatMap((record) =>
 		record.messages.flatMap((message) => {
 			const submissionId = message.metadata?.submissionId;
@@ -192,6 +216,7 @@ const openSession = async (
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
 		thinkingLevel: session.thinkingLevel,
+		usageEntries,
 	};
 };
 
@@ -256,6 +281,8 @@ export const createSessionHost = async ({
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 	let statefulAgent: StatefulAgent<SessionQueuedSubmission> | undefined;
+	let cacheWarming: SessionCacheWarming | undefined;
+	let unsubscribeContext: (() => void) | undefined;
 
 	/**
 	 * Reports one event to the Host's observers. Everything the Agent Session
@@ -287,6 +314,8 @@ export const createSessionHost = async ({
 		});
 		const activeAgentSession = agentSession;
 		const activeInternalPort = agentSessionInternalPort;
+		unsubscribeContext?.();
+		const cacheWarmingShutdown = cacheWarming?.dispose() ?? Promise.resolve();
 		let agentSessionShutdown: Promise<void> = Promise.resolve();
 		if (activeAgentSession !== undefined) {
 			const snapshot = activeAgentSession.getSnapshot();
@@ -308,6 +337,7 @@ export const createSessionHost = async ({
 				const results = await Promise.allSettled([
 					agentSessionShutdown,
 					statefulAgent?.shutdown() ?? Promise.resolve(),
+					cacheWarmingShutdown,
 				]);
 				await googleCachedContentResourceManager.close();
 				const failure = results.find(
@@ -343,12 +373,19 @@ export const createSessionHost = async ({
 	};
 	try {
 		const opened = await openSession(capabilities, sessionId);
+		cacheWarming = createSessionCacheWarming({
+			getPricingTable: () => capabilities.getModelPricingTable?.() ?? {},
+			initialUsageEntries: opened.usageEntries,
+			sessionId,
+			store: capabilities.getStore(),
+		});
 		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
 			getQueuedSubmissionId: ({ id }) => id,
 			runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
 		});
 		const ports: AgentSessionPorts = withEventChannel(
 			createSessionPorts({
+				cacheWarming,
 				capabilities,
 				googleCachedContentResourceManager,
 				isShutDown: () => isShutDown,
@@ -389,6 +426,14 @@ export const createSessionHost = async ({
 		});
 		agentSessionInternalPort = openedAgentSession.internalPort;
 		agentSession = openedAgentSession;
+		let observedContext = openedAgentSession.getSnapshot().context;
+		unsubscribeContext = openedAgentSession.subscribe(() => {
+			const nextContext = openedAgentSession.getSnapshot().context;
+			if (!sessionContextExtends(observedContext, nextContext)) {
+				cacheWarming?.cancel();
+			}
+			observedContext = nextContext;
+		});
 		const initialSnapshot = openedAgentSession.getSnapshot();
 		if (
 			autoContinue &&
@@ -471,17 +516,26 @@ export const createSessionHost = async ({
 			agentSession: guardedAgentSession,
 			getSelection: () => resolveOpenedSelection(capabilities.getRegistry()),
 			getSnapshot: openedAgentSession.getSnapshot,
+			getCacheWarmingStatus: () => cacheWarming?.getStatus() ?? "idle",
+			getSessionUsageEntries: () => cacheWarming?.getUsageEntries() ?? [],
 			onEvent: (listener) => {
 				eventListeners.add(listener);
 				return () => eventListeners.delete(listener);
 			},
 			shutdown,
-			subscribe: (listener) =>
-				openedAgentSession.subscribe(() => {
+			subscribe: (listener) => {
+				const notify = (): void => {
 					if (!isShutDown) {
 						listener();
 					}
-				}),
+				};
+				const unsubscribeAgent = openedAgentSession.subscribe(notify);
+				const unsubscribeWarming = cacheWarming?.subscribe(notify);
+				return () => {
+					unsubscribeAgent();
+					unsubscribeWarming?.();
+				};
+			},
 		};
 	} catch (error) {
 		await shutdown();
