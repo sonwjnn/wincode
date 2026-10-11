@@ -17,7 +17,7 @@ import {
 // enabled, so tests opt out before any app module evaluates the environment.
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -42,6 +42,7 @@ import { act, useEffect, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
 import { ModelPricingProvider } from "@/modules/model-pricing";
+import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
 import {
 	PromptConfigProvider,
 	usePromptConfig,
@@ -74,7 +75,15 @@ beforeAll(() => {
 	);
 });
 
+// These tests render the provider without a pricing prop, so keep it off the
+// developer's real pricing cache: only the bundled snapshot should show.
+const readModelPricingCacheSpy = spyOn(
+	modelPricingCacheModule,
+	"readModelPricingCache"
+).mockReturnValue(null);
+
 afterAll(() => {
+	readModelPricingCacheSpy.mockRestore();
 	setMarkdownTreeSitterClientForTests(null);
 });
 

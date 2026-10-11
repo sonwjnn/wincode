@@ -32,6 +32,7 @@ import { act, useCallback, useEffect, useRef, useState } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
 import { ModelPricingProvider } from "@/modules/model-pricing";
+import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type {
 	SessionQueuedSubmission,
@@ -313,6 +314,9 @@ const fakeUseAgentSessionModule: Pick<
 spyOn(useAgentSessionModule, "useAgentSession").mockImplementation(
 	fakeUseAgentSessionModule.useAgentSession
 );
+// These tests render the provider without a pricing prop, so keep it off the
+// developer's real pricing cache: only the bundled snapshot should show.
+spyOn(modelPricingCacheModule, "readModelPricingCache").mockReturnValue(null);
 
 const createConnections = () =>
 	createDefaultConnections({
