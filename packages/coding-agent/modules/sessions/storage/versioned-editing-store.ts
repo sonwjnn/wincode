@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import path from "node:path";
+import * as path from "node:path";
 import { isObjectLike, isString } from "@wincode/utils";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type {

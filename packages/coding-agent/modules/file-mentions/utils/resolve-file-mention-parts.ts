@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import path from "node:path";
+import * as path from "node:path";
 import { decodeUtf8, getErrorMessage, isError } from "@wincode/utils";
 import type { FileMentionPart } from "@/modules/sessions/message";
 import { createWorkspaceSandbox, type WorkspacePolicy } from "@/modules/tools";
