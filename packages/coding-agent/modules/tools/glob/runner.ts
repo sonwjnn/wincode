@@ -74,9 +74,7 @@ export const runGlobTool = async (
 	const searchInput = await resolveSearchInput(input, limits);
 	const result = await runRipgrepGlob(searchInput);
 	const candidatePaths = result.paths.slice(0, limits.glob.maxCandidates);
-	const candidateTruncated =
-		result.truncated === true ||
-		result.paths.length > limits.glob.maxCandidates;
+	const candidateTruncated = result.truncated === true;
 	const candidates = await collectStatCandidates(candidatePaths);
 	const limit = Math.min(input.limit ?? GLOB_DEFAULT_LIMIT, GLOB_MAX_LIMIT);
 	const truncated = candidateTruncated || candidates.length > limit;

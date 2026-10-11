@@ -74,9 +74,9 @@ which is the precondition for automatic compaction.
 ## Staleness is measured but not displayed
 
 The data needed to judge how current a price is exists and is resolved: the
-pricing state carries a `source` of `"bundled"`, `"cache"`, or `"stale"`, and
-the generated metadata module exports `modelMetadataSnapshotDate`, the date the
-build-time data came from.
+pricing state carries a `source` of `"bundled"`, `"live"`, `"cache"`, or
+`"stale"`, and the generated metadata module exports
+`modelMetadataSnapshotDate`, the date the build-time data came from.
 
 No surface displays it. A decision was made to show the estimated cost with its
 `~` marker and nothing else, so a reader cannot tell whether a figure came from
