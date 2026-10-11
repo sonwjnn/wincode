@@ -92,7 +92,7 @@ test("shows the final setting without scrolling", async () => {
 	await act(() => setup.renderer.destroy());
 });
 
-test("keeps the settings dialog height independent of item count", async () => {
+test("keeps settings footer hints on one row without changing list height", async () => {
 	const first = settingInSection("first", "First option", "General");
 	const multiple = [
 		first,
@@ -106,10 +106,13 @@ test("keeps the settings dialog height independent of item count", async () => {
 		setValue: async () => first,
 	};
 	const oneItemSetup = await renderSettingsDialog(operations, [first]);
-	const singleFooterIndex = oneItemSetup
-		.captureCharFrame()
-		.split("\n")
-		.findIndex((line) => line.includes("navigate"));
+	const singleFrame = oneItemSetup.captureCharFrame().split("\n");
+	const singleFooterIndex = singleFrame.findIndex((line) =>
+		line.includes("navigate")
+	);
+	const singleFooter = singleFrame[singleFooterIndex] ?? "";
+	expect(singleFooter).toContain("space/enter change");
+	expect(singleFooter).toContain("ctrl+r reset");
 	await act(() => oneItemSetup.renderer.destroy());
 
 	const multipleItemsSetup = await renderSettingsDialog(operations, multiple);

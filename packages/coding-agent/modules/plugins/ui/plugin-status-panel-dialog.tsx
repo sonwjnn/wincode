@@ -222,8 +222,8 @@ export const PluginStatusPanelDialogContent = ({
 		<box flexDirection="column" gap={1}>
 			<SearchListDialogWrapper<PluginStatusItem>
 				emptyText={panel.emptyText ?? "No status items"}
-				footer={
-					<box flexDirection="row" gap={2} height={1}>
+				footerHints={
+					<>
 						<DialogFooterHint
 							label={selectedAction?.label ?? "run action"}
 							shortcut="space"
@@ -237,7 +237,7 @@ export const PluginStatusPanelDialogContent = ({
 								shortcut="ctrl+r"
 							/>
 						)}
-					</box>
+					</>
 				}
 				getKey={(item) => item.id}
 				getSearchText={(item) =>

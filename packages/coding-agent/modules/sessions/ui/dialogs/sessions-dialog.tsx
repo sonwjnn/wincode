@@ -300,27 +300,26 @@ export const SessionsDialogContent = () => {
 	return (
 		<SearchListDialogWrapper<ListItem>
 			emptyText={loading ? "Loading sessions..." : "No matching sessions"}
-			footer={
-				loading ? null : (
-					<box flexDirection="row" gap={2} height={1}>
-						{isConfirmDelete ? (
-							<>
-								<DialogFooterHint
-									label="confirm delete"
-									shortcut="ctrl+d again"
-									shortcutColor={colors.error}
-								/>
-								<DialogFooterHint label="cancel" shortcut="esc" />
-							</>
-						) : (
-							<>
-								<DialogFooterHint label="pin/unpin" shortcut="ctrl+f" />
-								<DialogFooterHint label="delete" shortcut="ctrl+d" />
-								<DialogFooterHint label="rename" shortcut="ctrl+r" />
-							</>
-						)}
-					</box>
-				)
+			footerHints={
+				<>
+					{!loading && isConfirmDelete ? (
+						<>
+							<DialogFooterHint
+								label="confirm delete"
+								shortcut="ctrl+d again"
+								shortcutColor={colors.error}
+							/>
+							<DialogFooterHint label="cancel" shortcut="esc" />
+						</>
+					) : null}
+					{loading || isConfirmDelete ? null : (
+						<>
+							<DialogFooterHint label="pin/unpin" shortcut="ctrl+f" />
+							<DialogFooterHint label="delete" shortcut="ctrl+d" />
+							<DialogFooterHint label="rename" shortcut="ctrl+r" />
+						</>
+					)}
+				</>
 			}
 			getItemBackgroundColor={(item) => {
 				if (item.kind === "session" && pendingDeleteId === item.session.id) {

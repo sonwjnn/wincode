@@ -357,30 +357,28 @@ export function SettingsDialogContent({
 					: "No matching settings."
 			}
 			footer={
-				<box flexDirection="column" gap={1}>
-					{selectedSetting ? (
-						<>
-							<text fg={colors.textMuted}>
-								{selectedSetting.descriptor.description}
-							</text>
-							{selectedSetting.unavailableReason ? (
-								<text fg={colors.error}>
-									{selectedSetting.unavailableReason}
-								</text>
-							) : null}
-							{pendingById[selectedSetting.descriptor.id] ? (
-								<text fg={colors.textMuted}>Saving…</text>
-							) : null}
-							{selectedError ? (
-								<text fg={colors.error}>{`Error: ${selectedError}`}</text>
-							) : null}
-						</>
-					) : null}
-					<box flexDirection="row" gap={2}>
-						<DialogFooterHint label="change" shortcut="space/enter" />
-						<DialogFooterHint label="reset" shortcut="ctrl+r" />
+				selectedSetting ? (
+					<box flexDirection="column" gap={1}>
+						<text fg={colors.textMuted}>
+							{selectedSetting.descriptor.description}
+						</text>
+						{selectedSetting.unavailableReason ? (
+							<text fg={colors.error}>{selectedSetting.unavailableReason}</text>
+						) : null}
+						{pendingById[selectedSetting.descriptor.id] ? (
+							<text fg={colors.textMuted}>Saving…</text>
+						) : null}
+						{selectedError ? (
+							<text fg={colors.error}>{`Error: ${selectedError}`}</text>
+						) : null}
 					</box>
-				</box>
+				) : undefined
+			}
+			footerHints={
+				<>
+					<DialogFooterHint label="change" shortcut="space/enter" />
+					<DialogFooterHint label="reset" shortcut="ctrl+r" />
+				</>
 			}
 			getKey={(item) => item.id}
 			getSearchText={(item) => getSettingSearchText(item.setting)}

@@ -54,6 +54,7 @@ type SearchListDialogWrapperProps<T> = {
 	maxVisibleItems?: number;
 	minVisibleItems?: number;
 	footer?: ReactNode;
+	footerHints?: ReactNode;
 	navigationHint?: ReactNode;
 	contentMargin?: DialogMargin;
 	footerMargin?: DialogMargin;
@@ -89,6 +90,7 @@ export function SearchListDialogWrapper<T>({
 	maxVisibleItems = MAX_VISIBLE_ITEMS,
 	minVisibleItems = 0,
 	footer,
+	footerHints,
 	navigationHint = <DialogFooterHint label="navigate" shortcut="↑↓" />,
 	contentMargin = DEFAULT_DIALOG_CONTENT_MARGIN,
 	footerMargin = contentMargin,
@@ -271,8 +273,13 @@ export function SearchListDialogWrapper<T>({
 			{footer ? (
 				<DialogInset margin={footerMargin}>{footer}</DialogInset>
 			) : null}
-			{navigationHint ? (
-				<DialogInset margin={contentMargin}>{navigationHint}</DialogInset>
+			{navigationHint || footerHints ? (
+				<DialogInset margin={contentMargin}>
+					<box flexDirection="row" gap={2} height={1}>
+						{navigationHint}
+						{footerHints}
+					</box>
+				</DialogInset>
 			) : null}
 		</box>
 	);
