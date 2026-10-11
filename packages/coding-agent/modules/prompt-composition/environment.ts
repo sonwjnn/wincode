@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ModelId } from "@wincode/ai/models";
 import { isNull, isString, isUndefined } from "@wincode/utils";
 import { getGitBranch } from "@/shared/git/get-git-branch";
@@ -50,7 +50,7 @@ export type PromptEnvironmentSnapshotInput = {
 	readonly workspace: string;
 };
 const hasGitRootMarker = (workspace: string): boolean =>
-	existsSync(join(resolve(workspace), ".git"));
+	fs.existsSync(path.join(path.resolve(workspace), ".git"));
 
 const defaultGit: PromptEnvironmentGit = {
 	getBranch: getGitBranch,
@@ -60,8 +60,8 @@ const defaultGit: PromptEnvironmentGit = {
 		formatGitStatusSummary(await getGitStatusSummary(cwd)),
 };
 
-const relativePath = (workspace: string, path: string): string => {
-	const value = relative(workspace, path).replaceAll("\\", "/");
+const relativePath = (workspace: string, targetPath: string): string => {
+	const value = path.relative(workspace, targetPath).replaceAll("\\", "/");
 	return value.length > 0 ? value : ".";
 };
 
@@ -74,7 +74,7 @@ const stableRepository = (
 	}
 	return {
 		repository: "git",
-		worktree: relativePath(resolve(projectRoot), workspace),
+		worktree: relativePath(path.resolve(projectRoot), workspace),
 	};
 };
 

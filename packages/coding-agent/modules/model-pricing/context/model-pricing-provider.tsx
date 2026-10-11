@@ -17,7 +17,7 @@ import {
 	readModelPricingCache,
 	writeModelPricingCache,
 } from "../model-pricing-cache";
-import { modelPricingEnv } from "../model-pricing-env";
+import { getModelPricingEnv } from "../model-pricing-env";
 
 const DEFAULT_TTL_HOURS = 24;
 const DEFAULT_URL = "https://models.dev/api.json";
@@ -28,25 +28,36 @@ const modelIds = new Set<string>(supportedChatModelIds);
  */
 const NO_OVERRIDES: ModelPricingTable = {};
 
-let fetchPromise: Promise<ModelPricingTable | null> | null = null;
+let fetchRequest: {
+	promise: Promise<ModelPricingTable | null>;
+	url: string;
+} | null = null;
 
 const runFetch = (
 	url: string,
 	now: number
 ): Promise<ModelPricingTable | null> => {
-	if (!fetchPromise) {
-		fetchPromise = fetchModelPricingTable(url, modelIds).then((table) => {
-			if (table) {
-				try {
-					writeModelPricingCache(table, now);
-				} catch {
-					// best effort
-				}
-			}
-			return table;
-		});
+	if (fetchRequest?.url === url) {
+		return fetchRequest.promise;
 	}
-	return fetchPromise;
+	const promise = fetchModelPricingTable(url, modelIds).then((table) => {
+		if (!table) {
+			// A transient failure must not pin this url to a null result for the
+			// life of the process, so drop the cache entry that produced it.
+			if (fetchRequest?.promise === promise) {
+				fetchRequest = null;
+			}
+			return null;
+		}
+		try {
+			writeModelPricingCache(table, now);
+		} catch {
+			// best effort
+		}
+		return table;
+	});
+	fetchRequest = { promise, url };
+	return promise;
 };
 
 export type ModelPricingState = {
@@ -70,10 +81,12 @@ export function ModelPricingProvider({
 	children,
 	pricing,
 }: ModelPricingProviderProps) {
-	const offline = modelPricingEnv.WINCODE_MODEL_PRICING_OFFLINE === true;
-	const ttlHours =
-		modelPricingEnv.WINCODE_MODEL_PRICING_TTL_HOURS ?? DEFAULT_TTL_HOURS;
-	const url = modelPricingEnv.WINCODE_MODEL_PRICING_URL ?? DEFAULT_URL;
+	// Read once per mount: the provider bootstraps against these values, so a
+	// value that changes mid-mount must not desync the effect from the table.
+	const [env] = useState(getModelPricingEnv);
+	const offline = env.WINCODE_MODEL_PRICING_OFFLINE === true;
+	const ttlHours = env.WINCODE_MODEL_PRICING_TTL_HOURS ?? DEFAULT_TTL_HOURS;
+	const url = env.WINCODE_MODEL_PRICING_URL ?? DEFAULT_URL;
 
 	const [loadedTable, setLoadedTable] =
 		useState<ModelPricingTable>(NO_OVERRIDES);
@@ -111,7 +124,7 @@ export function ModelPricingProvider({
 			.then((next) => {
 				if (next) {
 					setLoadedTable(next);
-					setSource("cache");
+					setSource("live");
 				}
 			})
 			.catch(() => undefined);

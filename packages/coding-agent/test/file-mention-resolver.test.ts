@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 
 const workspaces: string[] = [];
 
 const createWorkspace = async () => {
-	const workspace = await mkdtemp(path.join(tmpdir(), "wincode-mentions-"));
+	const workspace = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-mentions-")
+	);
 	workspaces.push(workspace);
 	return workspace;
 };
@@ -16,7 +18,7 @@ afterEach(async () => {
 	while (workspaces.length > 0) {
 		const workspace = workspaces.pop();
 		if (workspace) {
-			await rm(workspace, { force: true, recursive: true });
+			await fs.rm(workspace, { force: true, recursive: true });
 		}
 	}
 });
@@ -24,7 +26,7 @@ afterEach(async () => {
 describe("file mention resolver", () => {
 	test("resolves file mentions to bounded data parts", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "packages/coding-agent/modules"), {
+		await fs.mkdir(path.join(workspace, "packages/coding-agent/modules"), {
 			recursive: true,
 		});
 		await Bun.write(
@@ -55,7 +57,7 @@ describe("file mention resolver", () => {
 
 	test("resolves directory mentions as bounded trees", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "packages/coding-agent/modules/src"), {
+		await fs.mkdir(path.join(workspace, "packages/coding-agent/modules/src"), {
 			recursive: true,
 		});
 		await Bun.write(
@@ -88,7 +90,7 @@ describe("file mention resolver", () => {
 		const workspace = await createWorkspace();
 		const outside = await createWorkspace();
 		await Bun.write(path.join(outside, "secret.txt"), "secret");
-		await symlink(
+		await fs.symlink(
 			path.join(outside, "secret.txt"),
 			path.join(workspace, "link")
 		);
@@ -111,7 +113,7 @@ describe("file mention resolver", () => {
 
 	test("resolves a unique basename fallback to its canonical path", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "packages/coding-agent/modules/src"), {
+		await fs.mkdir(path.join(workspace, "packages/coding-agent/modules/src"), {
 			recursive: true,
 		});
 		await Bun.write(
@@ -132,7 +134,7 @@ describe("file mention resolver", () => {
 
 	test("resolves an extensionless stem fallback", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "src"), { recursive: true });
+		await fs.mkdir(path.join(workspace, "src"), { recursive: true });
 		await Bun.write(path.join(workspace, "src/config.json"), '{"ok":true}');
 
 		const [part] = await resolveFileMentionParts("inspect @config", {
@@ -145,7 +147,7 @@ describe("file mention resolver", () => {
 
 	test("keeps literal paths ahead of basename fallback", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "nested"), { recursive: true });
+		await fs.mkdir(path.join(workspace, "nested"), { recursive: true });
 		await Bun.write(path.join(workspace, "target"), "literal");
 		await Bun.write(path.join(workspace, "nested/target.ts"), "fallback");
 
@@ -161,10 +163,10 @@ describe("file mention resolver", () => {
 
 	test("reports bounded ambiguity instead of choosing a basename match", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "packages/coding-agent/modules"), {
+		await fs.mkdir(path.join(workspace, "packages/coding-agent/modules"), {
 			recursive: true,
 		});
-		await mkdir(path.join(workspace, "packages/coding-agent/tui"), {
+		await fs.mkdir(path.join(workspace, "packages/coding-agent/tui"), {
 			recursive: true,
 		});
 		await Bun.write(
@@ -190,7 +192,7 @@ describe("file mention resolver", () => {
 
 	test("does not use fuzzy suggestions for resolver fallback", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "src"), { recursive: true });
+		await fs.mkdir(path.join(workspace, "src"), { recursive: true });
 		await Bun.write(path.join(workspace, "src/bot-message.tsx"), "content");
 
 		const [part] = await resolveFileMentionParts("inspect @botmsg", {
@@ -202,7 +204,7 @@ describe("file mention resolver", () => {
 
 	test("deduplicates literal and fallback references by canonical path", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "src"), { recursive: true });
+		await fs.mkdir(path.join(workspace, "src"), { recursive: true });
 		await Bun.write(path.join(workspace, "src/target.ts"), "content");
 
 		const parts = await resolveFileMentionParts(
@@ -216,7 +218,7 @@ describe("file mention resolver", () => {
 
 	test("does not resolve files from ignored directories by basename", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "node_modules"), { recursive: true });
+		await fs.mkdir(path.join(workspace, "node_modules"), { recursive: true });
 		await Bun.write(path.join(workspace, "node_modules/ignored.ts"), "ignored");
 
 		const [part] = await resolveFileMentionParts("inspect @ignored", {
@@ -229,10 +231,10 @@ describe("file mention resolver", () => {
 	test("does not use basename fallback for an escaping symlink", async () => {
 		const workspace = await createWorkspace();
 		const outside = await createWorkspace();
-		await mkdir(path.join(workspace, "nested"), { recursive: true });
+		await fs.mkdir(path.join(workspace, "nested"), { recursive: true });
 		await Bun.write(path.join(outside, "secret.txt"), "secret");
 		await Bun.write(path.join(workspace, "nested/link.ts"), "inside");
-		await symlink(
+		await fs.symlink(
 			path.join(outside, "secret.txt"),
 			path.join(workspace, "link")
 		);
@@ -245,7 +247,7 @@ describe("file mention resolver", () => {
 	});
 	test("allows exact ignored paths but excludes them from basename fallback", async () => {
 		const workspace = await createWorkspace();
-		await mkdir(path.join(workspace, "private"));
+		await fs.mkdir(path.join(workspace, "private"));
 		await Bun.write(path.join(workspace, ".gitignore"), "private/\n");
 		await Bun.write(path.join(workspace, "private/secret.ts"), "secret");
 

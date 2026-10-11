@@ -1,4 +1,4 @@
-import { lstat, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { isObjectLike } from "@wincode/utils";
 import {
 	getToolResourceLimits,
@@ -8,6 +8,7 @@ import {
 import {
 	CodingToolError,
 	defaultVersionedEditingContext,
+	type FileObservation,
 	isCodingToolError,
 	type VersionedEditingContext,
 } from "../versioned/contracts";
@@ -100,7 +101,7 @@ const restoreWriteAfterFailure = async ({
 			return false;
 		}
 		if (existing === null) {
-			await rm(resolvedPath, { force: true });
+			await fs.rm(resolvedPath, { force: true });
 		} else {
 			await atomicReplaceFile(
 				resolvedPath,
@@ -130,7 +131,7 @@ const persistWriteObservation = async ({
 	newState: FileState;
 	resolvedPath: string;
 	snapshotPersisted: boolean;
-}): Promise<Awaited<ReturnType<typeof persistFileObservation>>> => {
+}): Promise<FileObservation> => {
 	try {
 		return await persistFileObservation({
 			context,
@@ -180,7 +181,7 @@ export const runWriteTool = async (
 	let resolvedPath = await resolveNewTextPath(input.path);
 	let existing: FileState | null = null;
 	try {
-		const candidateMetadata = await lstat(resolvedPath);
+		const candidateMetadata = await fs.lstat(resolvedPath);
 		if (!candidateMetadata.isFile()) {
 			throw new CodingToolError(
 				"not-a-file",
@@ -189,7 +190,7 @@ export const runWriteTool = async (
 			);
 		}
 		resolvedPath = await resolveExistingTextPath(input.path);
-		const metadata = await lstat(resolvedPath);
+		const metadata = await fs.lstat(resolvedPath);
 		if (!metadata.isFile()) {
 			throw new CodingToolError(
 				"not-a-file",

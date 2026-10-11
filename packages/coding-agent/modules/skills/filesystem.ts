@@ -1,7 +1,5 @@
-import type { Dirent } from "node:fs";
-import { readdirSync, statSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { readUtf8File } from "@wincode/utils";
 import type { SetReadonly, SetRequired } from "type-fest";
 import { parseSkillFile } from "./frontmatter";
@@ -69,7 +67,7 @@ const compareCandidates = (
 
 const hasSkillFile = (filePath: string): boolean => {
 	try {
-		return statSync(filePath).isFile();
+		return fs.statSync(filePath).isFile();
 	} catch {
 		return false;
 	}
@@ -79,9 +77,9 @@ const collectRootCandidates = (root: SkillRootDescriptor): SkillCandidate[] => {
 	if (!root.path) {
 		return [];
 	}
-	let entries: Dirent[];
+	let entries: fs.Dirent[];
 	try {
-		entries = readdirSync(root.path, { withFileTypes: true });
+		entries = fs.readdirSync(root.path, { withFileTypes: true });
 	} catch {
 		return [];
 	}
@@ -93,7 +91,7 @@ const collectRootCandidates = (root: SkillRootDescriptor): SkillCandidate[] => {
 		if (!entry.isDirectory()) {
 			continue;
 		}
-		const filePath = join(root.path, entry.name, "SKILL.md");
+		const filePath = path.join(root.path, entry.name, "SKILL.md");
 		if (hasSkillFile(filePath)) {
 			candidates.push({
 				filePath,
@@ -131,13 +129,15 @@ export async function loadSkill(
 	candidate: SkillCandidate
 ): Promise<LoadedSkill> {
 	const parsed = parseSkillFile(await readUtf8File(candidate.filePath));
-	if (parsed.frontmatter.name !== basename(dirname(candidate.filePath))) {
+	if (
+		parsed.frontmatter.name !== path.basename(path.dirname(candidate.filePath))
+	) {
 		throw new Error("Skill name must match containing directory");
 	}
 	const body = parsed.body.trim();
 	return {
 		...parsed.frontmatter,
-		baseDirectory: dirname(candidate.filePath),
+		baseDirectory: path.dirname(candidate.filePath),
 		body,
 		contentHash: hashSkillBody(body),
 		filePath: candidate.filePath,
@@ -186,7 +186,7 @@ const skillFileCache = new Map<string, CachedSkillFile>();
 const loadSkillCached = async (
 	candidate: SkillCandidate
 ): Promise<LoadedSkill> => {
-	const fileStat = await stat(candidate.filePath);
+	const fileStat = await fs.promises.stat(candidate.filePath);
 	const cached = skillFileCache.get(candidate.filePath);
 	const source = candidate.source;
 	const precedence = candidate.precedence;
@@ -239,16 +239,16 @@ export async function discoverSkills(
 export async function sampleSkillResources(
 	baseDirectory: string
 ): Promise<string[]> {
-	let entries: Dirent[];
+	let entries: fs.Dirent[];
 	try {
-		entries = await readdir(baseDirectory, { withFileTypes: true });
+		entries = await fs.promises.readdir(baseDirectory, { withFileTypes: true });
 	} catch {
 		return [];
 	}
 	return entries
 		.toSorted((first, second) => compareText(first.name, second.name))
 		.filter((entry) => entry.name !== "SKILL.md")
-		.map((entry) => join(baseDirectory, entry.name))
+		.map((entry) => path.join(baseDirectory, entry.name))
 		.filter((path) => path.length <= 1024)
 		.slice(0, 10);
 }

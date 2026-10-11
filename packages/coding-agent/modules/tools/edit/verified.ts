@@ -5,6 +5,7 @@ import type {
 } from "../resource-limits";
 import {
 	CodingToolError,
+	type FileObservation,
 	type FileSnapshot,
 	isCodingToolError,
 	type VersionedEditingContext,
@@ -676,7 +677,7 @@ const persistEditObservation = async ({
 	resolvedPath: string;
 	seenLines: readonly LineRange[];
 	snapshotPersisted: boolean;
-}): Promise<Awaited<ReturnType<typeof persistFileObservation>>> => {
+}): Promise<FileObservation> => {
 	try {
 		return await persistFileObservation({
 			context,

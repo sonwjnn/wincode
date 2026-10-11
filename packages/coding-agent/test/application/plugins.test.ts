@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
@@ -33,7 +33,7 @@ import {
 } from "../support/e2e-fake-runtime";
 import { toolCallId } from "../support/identifiers";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "wincode-plugins-"));
+const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-plugins-"));
 const homeRoot = path.join(root, "home");
 const configRoot = path.join(root, "config");
 const installedRoot = path.join(root, "installed");
@@ -41,17 +41,17 @@ const workspace = path.join(installedRoot, "workspace");
 const pluginPath = path.join(workspace, "plugins", "jira.ts");
 
 await Promise.all([
-	mkdir(path.dirname(pluginPath), { recursive: true }),
-	mkdir(path.join(installedRoot, "node_modules", "@wincode"), {
+	fs.mkdir(path.dirname(pluginPath), { recursive: true }),
+	fs.mkdir(path.join(installedRoot, "node_modules", "@wincode"), {
 		recursive: true,
 	}),
 ]);
-await symlink(
+await fs.symlink(
 	path.resolve(import.meta.dir, "../../..", "..", "packages/coding-agent"),
 	path.join(installedRoot, "node_modules", "@wincode", "coding-agent"),
 	"dir"
 );
-await symlink(
+await fs.symlink(
 	path.dirname(Bun.resolveSync("zod", import.meta.dir)),
 	path.join(installedRoot, "node_modules", "zod"),
 	"dir"
@@ -101,7 +101,7 @@ export default async (api) => {
 `;
 
 afterAll(async () => {
-	await rm(root, { force: true, recursive: true });
+	await fs.rm(root, { force: true, recursive: true });
 });
 
 test("rejects JavaScript paths before evaluating them as Plugins", async () => {
@@ -135,8 +135,8 @@ test("reloading a file Plugin refreshes local imports and preserves package depe
 		"node_modules",
 		"reload-cache-probe"
 	);
-	await mkdir(nestedPluginDirectory, { recursive: true });
-	await mkdir(dependencyDirectory, { recursive: true });
+	await fs.mkdir(nestedPluginDirectory, { recursive: true });
+	await fs.mkdir(dependencyDirectory, { recursive: true });
 	await Bun.write(helperPath, 'export const version = "helper-v1";');
 	await Bun.write(
 		path.join(dependencyDirectory, "index.js"),
@@ -358,12 +358,12 @@ test("discarding a deferred Plugin candidate does not run process cleanup hooks"
 
 test("unchanged project trust keeps the active Plugins when a reload candidate fails", async () => {
 	const trustedWorkspace = path.join(root, "trusted-reload-workspace");
-	await mkdir(trustedWorkspace, { recursive: true });
+	await fs.mkdir(trustedWorkspace, { recursive: true });
 	await Bun.write(
 		path.join(trustedWorkspace, ".wincode", "settings.json"),
 		"{}"
 	);
-	const trustedRoot = await realpath(trustedWorkspace);
+	const trustedRoot = await fs.realpath(trustedWorkspace);
 	const currentConfigRuntime = {
 		configStore: createConfigStore({
 			homeRoot,
@@ -614,7 +614,7 @@ test("required distribution failure skips process hooks for unstarted Plugins", 
 
 test("required distribution identity mismatch skips cleanup for its unstarted draft", async () => {
 	const cleanupMarker = path.join(workspace, "mismatched-plugin-cleanup");
-	await rm(cleanupMarker, { force: true });
+	await fs.rm(cleanupMarker, { force: true });
 	const loading = loadPlugins({
 		cliPaths: [],
 		config: configRuntime,
@@ -641,8 +641,8 @@ test("disabled default Plugins are skipped before loading without vetoing file p
 	const disabledConfigRoot = path.join(root, "disabled-plugin-home");
 	const pluginDirectory = path.join(disabledWorkspace, "plugins");
 	const configuredPluginPath = path.join(pluginDirectory, "jira.ts");
-	await mkdir(pluginDirectory, { recursive: true });
-	await mkdir(disabledConfigRoot, { recursive: true });
+	await fs.mkdir(pluginDirectory, { recursive: true });
+	await fs.mkdir(disabledConfigRoot, { recursive: true });
 	await Bun.write(
 		configuredPluginPath,
 		commandPluginSource("jira", "explicit_file_plugin", "File Plugin loaded.")
@@ -742,8 +742,8 @@ test("CLI Plugin paths win when a configured path declares the same stable ident
 	const cliPath = path.join(pluginsDirectory, "explicit.ts");
 	const configuredPath = path.join(pluginsDirectory, "configured.ts");
 	const precedenceConfigRoot = path.join(root, "precedence-config");
-	await mkdir(pluginsDirectory, { recursive: true });
-	await mkdir(precedenceConfigRoot, { recursive: true });
+	await fs.mkdir(pluginsDirectory, { recursive: true });
+	await fs.mkdir(precedenceConfigRoot, { recursive: true });
 	await Bun.write(
 		cliPath,
 		commandPluginSource("stable_jira", "cli_action", "CLI Plugin won.")
@@ -795,9 +795,9 @@ test("trusted project Plugins win Identifier collisions by source-class preceden
 	const userPath = path.join(userPlugins, "user.ts");
 	const projectPath = path.join(projectPlugins, "project.ts");
 	await Promise.all([
-		mkdir(projectPlugins, { recursive: true }),
-		mkdir(userPlugins, { recursive: true }),
-		mkdir(userConfigRoot, { recursive: true }),
+		fs.mkdir(projectPlugins, { recursive: true }),
+		fs.mkdir(userPlugins, { recursive: true }),
+		fs.mkdir(userConfigRoot, { recursive: true }),
 	]);
 	await Promise.all([
 		Bun.write(
@@ -849,8 +849,8 @@ test("trusted project settings can disable a distribution Plugin before its pack
 	);
 	const configRootPath = path.join(root, "project-disabled-config");
 	await Promise.all([
-		mkdir(disabledWorkspace, { recursive: true }),
-		mkdir(configRootPath, { recursive: true }),
+		fs.mkdir(disabledWorkspace, { recursive: true }),
+		fs.mkdir(configRootPath, { recursive: true }),
 	]);
 	await Promise.all([
 		Bun.write(
@@ -896,7 +896,7 @@ test("a caught registration collision preserves earlier tools and later Plugins 
 	const atomicWorkspace = path.join(installedRoot, "atomic-workspace");
 	const pluginsDirectory = path.join(atomicWorkspace, "plugins");
 	const configRootPath = path.join(root, "atomic-config");
-	await mkdir(pluginsDirectory, { recursive: true });
+	await fs.mkdir(pluginsDirectory, { recursive: true });
 	const healthyPath = path.join(pluginsDirectory, "healthy.ts");
 	const collidingPath = path.join(pluginsDirectory, "collision.ts");
 	const failedPath = path.join(pluginsDirectory, "failure.ts");
@@ -993,9 +993,9 @@ test("built-in and Custom Command names win over colliding Plugin Commands", asy
 	);
 	const configRootPath = path.join(root, "command-collision-config");
 	await Promise.all([
-		mkdir(pluginsDirectory, { recursive: true }),
-		mkdir(customCommandsDirectory, { recursive: true }),
-		mkdir(configRootPath, { recursive: true }),
+		fs.mkdir(pluginsDirectory, { recursive: true }),
+		fs.mkdir(customCommandsDirectory, { recursive: true }),
+		fs.mkdir(configRootPath, { recursive: true }),
 	]);
 	const builtinCollisionPath = path.join(
 		pluginsDirectory,

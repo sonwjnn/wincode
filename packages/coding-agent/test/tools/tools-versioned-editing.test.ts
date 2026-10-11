@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
-import path from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type {
 	FileObservationStore,
 	VersionedEditingContext,
@@ -24,7 +24,9 @@ const withTempFile = async <T>(
 	content: string,
 	callback: (filePath: string, context: VersionedEditingContext) => Promise<T>
 ): Promise<T> => {
-	const directory = await mkdtemp(path.join(WORKSPACE, ".wincode-versioned-"));
+	const directory = await fs.mkdtemp(
+		path.join(WORKSPACE, ".wincode-versioned-")
+	);
 	const filePath = path.join(directory, "sample.txt");
 	const context: VersionedEditingContext = {
 		editMode: "hashline",
@@ -35,7 +37,7 @@ const withTempFile = async <T>(
 		await Bun.write(filePath, content);
 		return await callback(filePath, context);
 	} finally {
-		await rm(directory, { force: true, recursive: true });
+		await fs.rm(directory, { force: true, recursive: true });
 	}
 };
 const FILE_VERSION_PATTERN = /^[0-9a-f]{32}$/u;
@@ -232,8 +234,8 @@ describe("versioned coding tools", () => {
 				{ path: filePath },
 				{ versionedEditing: context }
 			);
-			await rm(filePath);
-			await mkdir(filePath);
+			await fs.rm(filePath);
+			await fs.mkdir(filePath);
 			await expect(
 				runReadTool(
 					{
@@ -444,7 +446,7 @@ describe("versioned coding tools", () => {
 
 	test("rejects edits to read-only files before replacement", async () => {
 		await withTempFile("one\n", async (filePath, context) => {
-			await chmod(filePath, 0o444);
+			await fs.chmod(filePath, 0o444);
 			try {
 				const read = await runReadTool(
 					{ fullLines: true, path: filePath },
@@ -460,7 +462,7 @@ describe("versioned coding tools", () => {
 				).rejects.toMatchObject({ code: "file-not-writable" });
 				expect(await Bun.file(filePath).text()).toBe("one\n");
 			} finally {
-				await chmod(filePath, 0o644);
+				await fs.chmod(filePath, 0o644);
 			}
 		});
 	});
@@ -1014,7 +1016,7 @@ describe("versioned coding tools", () => {
 	test("merges canonical and symlink aliases into one committed file", async () => {
 		await withTempFile("one\ntwo\n", async (filePath, context) => {
 			const aliasPath = path.join(path.dirname(filePath), "alias.txt");
-			await symlink(filePath, aliasPath);
+			await fs.symlink(filePath, aliasPath);
 			const read = await runReadTool(
 				{ path: filePath },
 				{ versionedEditing: context }
@@ -1048,13 +1050,13 @@ describe("versioned coding tools", () => {
 				"replacement.txt"
 			);
 			await Bun.write(replacementPath, "outside\n");
-			await symlink(filePath, aliasPath);
+			await fs.symlink(filePath, aliasPath);
 			const read = await runReadTool(
 				{ fullLines: true, path: aliasPath },
 				{ versionedEditing: context }
 			);
-			await rm(aliasPath);
-			await symlink(replacementPath, aliasPath);
+			await fs.rm(aliasPath);
+			await fs.symlink(replacementPath, aliasPath);
 			await expect(
 				runEditTool(
 					{
@@ -1143,7 +1145,7 @@ describe("versioned coding tools", () => {
 				}
 			);
 			const expectedLeasePaths = await Promise.all(
-				[firstPath, secondPath].map((candidate) => realpath(candidate))
+				[firstPath, secondPath].map((candidate) => fs.realpath(candidate))
 			);
 			expect(leasePaths).toEqual(expectedLeasePaths.sort());
 		});
@@ -1258,7 +1260,7 @@ describe("versioned coding tools", () => {
 				{ path: secondPath },
 				{ versionedEditing: context }
 			);
-			await chmod(secondPath, 0o444);
+			await fs.chmod(secondPath, 0o444);
 			await expect(
 				runEditTool(
 					{
@@ -1483,14 +1485,14 @@ describe("versioned coding tools", () => {
 			};
 			expect(structuredFailure.code).toBe("partial_failure");
 			expect(structuredFailure.details?.unresolvedPaths).toEqual([
-				await realpath(filePath),
+				await fs.realpath(filePath),
 			]);
 			expect(await Bun.file(filePath).text()).toBe("one\ntwo\n");
 			expect(await recovery.listUnresolvedRecoveries()).toHaveLength(1);
 		});
 	});
 	test("pins only the path whose rollback is unprovable", async () => {
-		const directory = await mkdtemp(
+		const directory = await fs.mkdtemp(
 			path.join(WORKSPACE, ".wincode-versioned-multi-")
 		);
 		const firstPath = path.join(directory, "first.txt");
@@ -1567,13 +1569,13 @@ describe("versioned coding tools", () => {
 			};
 			expect(structuredFailure.code).toBe("partial_failure");
 			expect(structuredFailure.details?.unresolvedPaths).toEqual([
-				await realpath(firstPath),
+				await fs.realpath(firstPath),
 			]);
 			expect(await Bun.file(firstPath).text()).toBe("external\n");
 			expect(await Bun.file(secondPath).text()).toBe("two\n");
 			expect(await recovery.listUnresolvedRecoveries()).toHaveLength(1);
 		} finally {
-			await rm(directory, { force: true, recursive: true });
+			await fs.rm(directory, { force: true, recursive: true });
 		}
 	});
 });

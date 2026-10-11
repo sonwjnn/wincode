@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	clearModelPricingCache,
 	readModelPricingCache,
@@ -13,13 +13,13 @@ let cachePath: string;
 let now: number;
 
 beforeEach(() => {
-	tempDir = mkdtempSync(join(tmpdir(), "model-pricing-"));
-	cachePath = join(tempDir, "model-pricing.json");
+	tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "model-pricing-"));
+	cachePath = path.join(tempDir, "model-pricing.json");
 	now = 1_700_000_000_000;
 });
 
 afterEach(() => {
-	rmSync(tempDir, { recursive: true, force: true });
+	fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 const TABLE = {
@@ -52,7 +52,6 @@ describe("model pricing cache", () => {
 	});
 
 	test("rejects a cache entry whose cost values are not numbers", () => {
-		const fs = require("node:fs") as typeof import("node:fs");
 		fs.writeFileSync(
 			cachePath,
 			JSON.stringify({
@@ -75,14 +74,12 @@ describe("model pricing cache", () => {
 	});
 
 	test("returns null and deletes the file for malformed JSON", () => {
-		const fs = require("node:fs") as typeof import("node:fs");
 		fs.writeFileSync(cachePath, "{ not json");
 		expect(readModelPricingCache(now, 24, cachePath)).toBeNull();
 		expect(fs.existsSync(cachePath)).toBe(false);
 	});
 
 	test("returns null for a wrong cache version", () => {
-		const fs = require("node:fs") as typeof import("node:fs");
 		fs.writeFileSync(
 			cachePath,
 			JSON.stringify({ fetchedAt: now, table: {}, version: 999 })
@@ -93,11 +90,16 @@ describe("model pricing cache", () => {
 	test("clearModelPricingCache removes the file", () => {
 		writeModelPricingCache(TABLE, now, cachePath);
 		clearModelPricingCache(cachePath);
-		const fs = require("node:fs") as typeof import("node:fs");
 		expect(fs.existsSync(cachePath)).toBe(false);
 	});
 
-	test("clearModelPricingCache is a no-op when the file does not exist", () => {
-		expect(() => clearModelPricingCache(cachePath)).not.toThrow();
+	test("clearModelPricingCache leaves an unrelated file untouched when the cache is missing", () => {
+		const unrelatedPath = path.join(tempDir, "unrelated.json");
+		fs.writeFileSync(unrelatedPath, "keep");
+
+		clearModelPricingCache(cachePath);
+
+		expect(fs.existsSync(cachePath)).toBe(false);
+		expect(fs.readFileSync(unrelatedPath, "utf8")).toBe("keep");
 	});
 });

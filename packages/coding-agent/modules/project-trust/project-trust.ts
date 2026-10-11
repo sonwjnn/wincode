@@ -1,5 +1,5 @@
-import type * as fs from "node:fs";
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import type * as nodeFs from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger, readUtf8File } from "@wincode/utils";
 import { canonicalPath, getProjectRoots } from "@/shared/paths/project-roots";
@@ -99,9 +99,9 @@ const exists = async (filePath: string): Promise<boolean> =>
 const hasProjectSkill = async (projectRoot: string): Promise<boolean> => {
 	for (const relativeRoot of PROJECT_SKILL_ROOTS) {
 		const skillRoot = path.join(projectRoot, relativeRoot);
-		let entries: fs.Dirent[];
+		let entries: nodeFs.Dirent[];
 		try {
-			entries = await readdir(skillRoot, { withFileTypes: true });
+			entries = await fs.readdir(skillRoot, { withFileTypes: true });
 		} catch {
 			continue;
 		}
@@ -120,7 +120,9 @@ const hasProjectSkill = async (projectRoot: string): Promise<boolean> => {
 const hasProjectCommand = async (projectRoot: string): Promise<boolean> => {
 	const commandRoot = path.join(projectRoot, PROJECT_COMMAND_ROOT);
 	try {
-		const entries = await readdir(commandRoot, { withFileTypes: true });
+		const entries = await fs.readdir(commandRoot, {
+			withFileTypes: true,
+		});
 		return entries.some(
 			(entry) => entry.isFile() && entry.name.endsWith(".md")
 		);
@@ -134,9 +136,9 @@ const hasProjectAgentDefinition = async (
 ): Promise<boolean> => {
 	const agentRoot = path.join(projectRoot, ".wincode", "agents");
 	const visit = async (directory: string): Promise<boolean> => {
-		let entries: fs.Dirent[];
+		let entries: nodeFs.Dirent[];
 		try {
-			entries = await readdir(directory, { withFileTypes: true });
+			entries = await fs.readdir(directory, { withFileTypes: true });
 		} catch {
 			return false;
 		}
@@ -238,17 +240,17 @@ const saveTrustFile = async (
 	filePath: string,
 	decisions: readonly StoredTrustDecision[]
 ): Promise<void> => {
-	await mkdir(path.dirname(filePath), { recursive: true });
+	await fs.mkdir(path.dirname(filePath), { recursive: true });
 	const temporaryPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
-		await writeFile(
+		await fs.writeFile(
 			temporaryPath,
 			JSON.stringify({ decisions, version: 1 } satisfies TrustFile, null, 2),
 			{ encoding: "utf8", mode: 0o600 }
 		);
-		await rename(temporaryPath, filePath);
+		await fs.rename(temporaryPath, filePath);
 	} finally {
-		await rm(temporaryPath, { force: true });
+		await fs.rm(temporaryPath, { force: true });
 	}
 };
 

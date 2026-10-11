@@ -3,7 +3,7 @@
 // stdout carries MCP protocol frames only; all diagnostics go to stderr.
 // This file is an entrypoint and intentionally imports nothing from the rest
 // of the MCP module so the transport wiring stays self-contained.
-import { writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { isUndefined } from "@wincode/utils";
@@ -17,7 +17,7 @@ if (!isUndefined(exitMarker)) {
 			return;
 		}
 		markerWritten = true;
-		writeFileSync(exitMarker, "exited");
+		fs.writeFileSync(exitMarker, "exited");
 	};
 	process.once("exit", markExited);
 	process.once("SIGTERM", () => {

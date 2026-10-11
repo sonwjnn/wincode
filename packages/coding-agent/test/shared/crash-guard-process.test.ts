@@ -1,9 +1,19 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp, readdir } from "node:fs/promises";
+import { afterEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readUtf8File } from "@wincode/utils";
 import { spawnSync } from "bun";
+
+const temporaryHomes: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(
+		temporaryHomes
+			.splice(0)
+			.map((home) => fs.rm(home, { force: true, recursive: true }))
+	);
+});
 
 const crashGuardModule = path.join(
 	import.meta.dir,
@@ -11,7 +21,8 @@ const crashGuardModule = path.join(
 );
 
 const runCrashingProcess = async (script: string) => {
-	const home = await mkdtemp(path.join(os.tmpdir(), "wincode-crash-guard-"));
+	const home = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-crash-guard-"));
+	temporaryHomes.push(home);
 	const environment: Record<string, string> = {};
 	for (const [key, value] of Object.entries(process.env)) {
 		if (value !== undefined && key !== "WINCODE_DEBUG") {
@@ -26,7 +37,7 @@ const runCrashingProcess = async (script: string) => {
 		stdout: "pipe",
 	});
 	const logDirectory = path.join(home, ".wincode", "logs");
-	const logFile = (await readdir(logDirectory)).find((name) =>
+	const logFile = (await fs.readdir(logDirectory)).find((name) =>
 		name.startsWith("wincode.")
 	);
 	const logPath = logFile === undefined ? "" : path.join(logDirectory, logFile);
@@ -49,9 +60,9 @@ describe("crash guard process wiring", () => {
 	test("an uncaught exception exits 1 with stderr and file diagnostics", async () => {
 		const script = [
 			`import { installCrashGuard, registerCrashTeardown } from ${JSON.stringify(crashGuardModule)};`,
-			'import { writeFileSync } from "node:fs";',
+			'import * as fs from "node:fs";',
 			"installCrashGuard();",
-			'registerCrashTeardown(() => { writeFileSync("teardown.marker", "torn down"); });',
+			'registerCrashTeardown(() => { fs.writeFileSync("teardown.marker", "torn down"); });',
 			'queueMicrotask(() => { throw new Error("boom from child"); });',
 		].join("\n");
 		const result = await runCrashingProcess(script);

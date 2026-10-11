@@ -197,6 +197,7 @@ describe("openai browser oauth primitives", () => {
 				{ status: 200 }
 			);
 		}) as never;
+		const controller = new AbortController();
 		try {
 			await refreshOpenAIOAuthCredential(
 				{
@@ -207,9 +208,11 @@ describe("openai browser oauth primitives", () => {
 					refreshToken: "refresh",
 					updatedAt: new Date().toISOString(),
 				},
-				new AbortController().signal
+				controller.signal
 			);
-			expect(fetchSignals[0]).toBeDefined();
+			// The refresh exchange must carry the caller's signal, not a fresh one.
+			expect(fetchSignals).toHaveLength(1);
+			expect(fetchSignals[0]).toBe(controller.signal);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

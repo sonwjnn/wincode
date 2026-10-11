@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { discoverCustomCommandCandidates } from "@/modules/commands/custom/discovery";
@@ -19,7 +19,7 @@ const makeCandidates = async (
 	for (const { dir, files } of dirs) {
 		for (const [name, source] of Object.entries(files)) {
 			const directory = path.join(root, dir);
-			await mkdir(directory, { recursive: true });
+			await fs.mkdir(directory, { recursive: true });
 			const filePath = path.join(directory, name);
 			await Bun.write(filePath, source);
 			candidates.push({
@@ -187,7 +187,7 @@ describe("discoverCustomCommandCandidates", () => {
 		const home = path.join(root, "home");
 		const repo = path.join(root, "repo");
 		const cwd = path.join(repo, "packages", "app");
-		await mkdir(path.join(repo, ".git"), { recursive: true });
+		await fs.mkdir(path.join(repo, ".git"), { recursive: true });
 		const files = {
 			"home/.wincode/commands/test.md": "---\n---\nG",
 			"repo/.wincode/commands/repo.md": "---\n---\nR",
@@ -197,7 +197,7 @@ describe("discoverCustomCommandCandidates", () => {
 		};
 		for (const [relativePath, source] of Object.entries(files)) {
 			const filePath = path.join(root, relativePath);
-			await mkdir(path.dirname(filePath), { recursive: true });
+			await fs.mkdir(path.dirname(filePath), { recursive: true });
 			await Bun.write(filePath, source);
 		}
 		const snapshot = await createConfigStore({

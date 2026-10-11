@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -13,11 +13,11 @@ import { createPluginTools } from "@/modules/plugins/tools";
 import { createConfigStore } from "@/shared/config/config-store";
 import { toolCallId } from "../support/identifiers";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "wincode-plugin-tools-"));
+const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-plugin-tools-"));
 const workspace = path.join(root, "workspace");
 const homeRoot = path.join(root, "home");
 const pluginPath = path.resolve(import.meta.dir, "../fixtures/jira-plugin.ts");
-await Promise.all([mkdir(workspace, { recursive: true })]);
+await Promise.all([fs.mkdir(workspace, { recursive: true })]);
 
 const config = {
 	configStore: createConfigStore({ homeRoot }),
@@ -71,7 +71,7 @@ const executeTool = (
 	tool.execute({ input, toolCallId: toolCallId("plugin-tools-test-call") });
 
 afterAll(async () => {
-	await rm(root, { force: true, recursive: true });
+	await fs.rm(root, { force: true, recursive: true });
 });
 
 test("a file Plugin can register work that One-Shot waits for generically", async () => {

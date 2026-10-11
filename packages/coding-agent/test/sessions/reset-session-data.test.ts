@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/utils";
 import {
@@ -27,9 +27,11 @@ const PNG_BYTES = new Uint8Array([
 ]);
 
 test("resets session data while preserving prompt history", async () => {
-	const directory = await mkdtemp(join("/tmp", "wincode-session-reset-"));
-	const databasePath = join(directory, "session.sqlite");
-	const attachmentRoot = join(directory, "attachments");
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-session-reset-")
+	);
+	const databasePath = path.join(directory, "session.sqlite");
+	const attachmentRoot = path.join(directory, "attachments");
 	const { db } = createDatabase(databasePath);
 	const store = createDrizzleSessionStore(db, { attachmentRoot });
 
@@ -77,15 +79,15 @@ test("resets session data while preserving prompt history", async () => {
 	expect(await store.attachmentStore?.resolve(reference)).toMatchObject({
 		availability: "missing",
 	});
-	expect(await readdir(attachmentRoot)).toEqual([]);
+	expect(await fs.readdir(attachmentRoot)).toEqual([]);
 });
 test("clears incompatible Sessions and attachments before Session Host startup", async () => {
-	const directory = await mkdtemp(
-		join("/tmp", "wincode-session-incompatible-schema-")
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-session-incompatible-schema-")
 	);
-	const databasePath = join(directory, "session.sqlite");
-	const attachmentRoot = join(directory, "attachments");
-	const snapshotRoot = join(directory, "file-snapshots");
+	const databasePath = path.join(directory, "session.sqlite");
+	const attachmentRoot = path.join(directory, "attachments");
+	const snapshotRoot = path.join(directory, "file-snapshots");
 	let sqlite: Database | undefined;
 	let assembly: SessionCapabilitiesAssembly | undefined;
 	try {
@@ -153,7 +155,7 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 		expect(await assembly.store.getPromptHistory()).toEqual([
 			{ files: [], text: "keep prompt history" },
 		]);
-		expect(await readdir(attachmentRoot)).toEqual([]);
+		expect(await fs.readdir(attachmentRoot)).toEqual([]);
 		await assembly.shutdown();
 		assembly = undefined;
 
@@ -166,6 +168,6 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 	} finally {
 		await assembly?.shutdown();
 		sqlite?.close();
-		await rm(directory, { force: true, recursive: true });
+		await fs.rm(directory, { force: true, recursive: true });
 	}
 });

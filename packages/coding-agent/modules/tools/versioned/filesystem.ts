@@ -19,6 +19,7 @@ import {
 	type LosslessText,
 	lineRangeForLines,
 } from "./model";
+import type { RecoveryStore } from "./recovery";
 
 export type FileState = Readonly<{
 	bytes: Uint8Array;
@@ -276,7 +277,7 @@ export const throwPartialRecoveryFailure = async ({
 	cause: unknown;
 	message: string;
 	operation: "edit" | "write";
-	recovery: import("./recovery").RecoveryStore;
+	recovery: RecoveryStore;
 	transactionId: string;
 	unresolvedPaths: readonly string[];
 }): Promise<never> => {

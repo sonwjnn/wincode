@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { CredentialVaultV2 } from "../src/connections/v2-credential-vault";
 
 /** The shape a headless Linux host reports: a secret backend that cannot serve. */
@@ -15,7 +15,9 @@ const unusableSecretStore = {
 };
 
 test("an unusable OS secret backend falls back to the vault's file store", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-credential-vault-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-credential-vault-")
+	);
 	try {
 		const vault = new CredentialVaultV2({
 			fileRoot: root,
@@ -32,6 +34,6 @@ test("an unusable OS secret backend falls back to the vault's file store", async
 			kind: "api-key",
 		});
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });

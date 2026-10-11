@@ -234,9 +234,7 @@ export function SessionView({
 	const openSettings = useSettingsHubDialog(settingsRuntime);
 	const { isTopLayer } = useKeyboardLayer();
 	const submittedInitialMessageRef = useRef<SessionMessageId | null>(null);
-	const interruptResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-		null
-	);
+	const interruptResetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 	const interruptArmedRef = useRef(false);
 	const [isInterruptArmed, setIsInterruptArmed] = useState(false);
 	const [isStartingInitialTurn, setIsStartingInitialTurn] = useState(

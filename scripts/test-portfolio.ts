@@ -1,5 +1,5 @@
-import { mkdir, readdir, rm } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { isError, isUndefined, readUtf8File } from "@wincode/utils";
 import { spawn } from "bun";
 import {
@@ -64,7 +64,7 @@ const parseArguments = (argv: readonly string[]): RunnerArguments => {
 	}
 
 	let packageFilter: string | undefined;
-	let root = resolve(import.meta.dir, "..");
+	let root = path.resolve(import.meta.dir, "..");
 	for (let index = 1; index < argv.length; index += 1) {
 		const argument = argv[index];
 		if (!argument) {
@@ -78,7 +78,7 @@ const parseArguments = (argv: readonly string[]): RunnerArguments => {
 			if (argument === "--package") {
 				packageFilter = value;
 			} else {
-				root = resolve(process.cwd(), value);
+				root = path.resolve(process.cwd(), value);
 			}
 			index += 1;
 			continue;
@@ -88,7 +88,7 @@ const parseArguments = (argv: readonly string[]): RunnerArguments => {
 			continue;
 		}
 		if (argument.startsWith("--root=")) {
-			root = resolve(process.cwd(), argument.slice("--root=".length));
+			root = path.resolve(process.cwd(), argument.slice("--root=".length));
 			continue;
 		}
 		throw new Error(`Unknown argument: ${argument}\n${usage()}`);
@@ -148,8 +148,8 @@ const runDefaultPackage = async (
 	}
 };
 const scenarioName = (root: string, file: DiscoveredTestFile): string => {
-	const packageRoot = join(root, "packages", file.packageName, "test");
-	const fileName = relative(packageRoot, join(root, file.path));
+	const packageRoot = path.join(root, "packages", file.packageName, "test");
+	const fileName = path.relative(packageRoot, path.join(root, file.path));
 	const sanitizedName = fileName
 		.replace(E2E_SCENARIO_SUFFIX_PATTERN, "")
 		.replace(SCENARIO_PATH_SEPARATOR_PATTERN, "-")
@@ -189,8 +189,8 @@ const writeCombinedOutput = async (
 
 const removeIfEmpty = async (path: string): Promise<void> => {
 	try {
-		if ((await readdir(path)).length === 0) {
-			await rm(path, { force: true, recursive: true });
+		if ((await fs.readdir(path)).length === 0) {
+			await fs.rm(path, { force: true, recursive: true });
 		}
 	} catch (error) {
 		if (!isMissingPathError(error)) {
@@ -203,38 +203,38 @@ const retainE2EFailure = async (
 	artifactDirectory: string,
 	log: readonly string[]
 ): Promise<void> => {
-	await mkdir(artifactDirectory, { recursive: true });
+	await fs.mkdir(artifactDirectory, { recursive: true });
 	let terminalFrame: string | undefined;
-	for (const entry of await readdir(artifactDirectory, {
+	for (const entry of await fs.readdir(artifactDirectory, {
 		withFileTypes: true,
 	})) {
-		const entryPath = join(artifactDirectory, entry.name);
+		const entryPath = path.join(artifactDirectory, entry.name);
 		if (entry.name === TERMINAL_FRAME_NAME && entry.isFile()) {
 			terminalFrame = await readUtf8File(entryPath);
 		}
-		await rm(entryPath, { force: true, recursive: true });
+		await fs.rm(entryPath, { force: true, recursive: true });
 	}
 	await Bun.write(
-		join(artifactDirectory, TERMINAL_FRAME_NAME),
+		path.join(artifactDirectory, TERMINAL_FRAME_NAME),
 		terminalFrame ?? ""
 	);
-	await Bun.write(join(artifactDirectory, RUNNER_LOG_NAME), log.join(""));
+	await Bun.write(path.join(artifactDirectory, RUNNER_LOG_NAME), log.join(""));
 };
 
 const runE2EFile = async (
 	root: string,
 	file: DiscoveredTestFile
 ): Promise<number> => {
-	const artifactDirectory = join(
+	const artifactDirectory = path.join(
 		root,
 		ARTIFACT_ROOT_NAME,
 		file.packageName,
 		scenarioName(root, file)
 	);
-	await rm(artifactDirectory, { force: true, recursive: true });
-	await mkdir(artifactDirectory, { recursive: true });
+	await fs.rm(artifactDirectory, { force: true, recursive: true });
+	await fs.mkdir(artifactDirectory, { recursive: true });
 	const log: string[] = [];
-	const framePath = join(artifactDirectory, TERMINAL_FRAME_NAME);
+	const framePath = path.join(artifactDirectory, TERMINAL_FRAME_NAME);
 
 	try {
 		const result = spawn(
@@ -264,9 +264,9 @@ const runE2EFile = async (
 		const exitCode = await result.exited;
 		await Promise.all(outputTasks);
 		if (exitCode === 0) {
-			await rm(artifactDirectory, { force: true, recursive: true });
-			await removeIfEmpty(dirname(artifactDirectory));
-			await removeIfEmpty(dirname(dirname(artifactDirectory)));
+			await fs.rm(artifactDirectory, { force: true, recursive: true });
+			await removeIfEmpty(path.dirname(artifactDirectory));
+			await removeIfEmpty(path.dirname(path.dirname(artifactDirectory)));
 			return 0;
 		}
 		await retainE2EFailure(artifactDirectory, log);

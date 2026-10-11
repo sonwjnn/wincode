@@ -1,11 +1,5 @@
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	unlinkSync,
-	writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { modelMetadataEntrySchema } from "@wincode/ai/models-dev";
 import { z } from "zod";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
@@ -25,7 +19,7 @@ const cacheFileSchema = z.object({
 const HOUR_MS = 60 * 60 * 1000;
 
 export const resolveModelPricingCachePath = (): string =>
-	join(resolveUserDataDir(), CACHE_FILE_NAME);
+	path.join(resolveUserDataDir(), CACHE_FILE_NAME);
 
 type CacheFile = { fetchedAt: number; table: ModelPricingTable };
 
@@ -51,20 +45,17 @@ const parseCacheFile = (raw: string): CacheFile | null => {
 	return { fetchedAt: result.data.fetchedAt, table: result.data.table };
 };
 
-const readCacheFileFromPath = (path: string): CacheFile | null => {
-	if (!existsSync(path)) {
-		return null;
-	}
+const readCacheFileFromPath = (cachePath: string): CacheFile | null => {
 	let raw: string;
 	try {
-		raw = readFileSync(path, "utf8");
+		raw = fs.readFileSync(cachePath, "utf8");
 	} catch {
 		return null;
 	}
 	const parsed = parseCacheFile(raw);
 	if (!parsed) {
 		try {
-			unlinkSync(path);
+			fs.unlinkSync(cachePath);
 		} catch {
 			// best effort
 		}
@@ -74,17 +65,17 @@ const readCacheFileFromPath = (path: string): CacheFile | null => {
 };
 
 const writeCacheToPath = (
-	path: string,
+	cachePath: string,
 	table: ModelPricingTable,
 	now: number
 ): void => {
-	mkdirSync(dirname(path), { recursive: true });
+	fs.mkdirSync(path.dirname(cachePath), { recursive: true });
 	const payload = JSON.stringify({
 		fetchedAt: now,
 		table,
 		version: CACHE_VERSION,
 	});
-	writeFileSync(path, payload);
+	fs.writeFileSync(cachePath, payload);
 };
 
 export const readModelPricingCache = (
@@ -109,11 +100,8 @@ export const writeModelPricingCache = (
 export const clearModelPricingCache = (
 	cachePath: string = resolveModelPricingCachePath()
 ): void => {
-	if (!existsSync(cachePath)) {
-		return;
-	}
 	try {
-		unlinkSync(cachePath);
+		fs.unlinkSync(cachePath);
 	} catch {
 		// best effort
 	}

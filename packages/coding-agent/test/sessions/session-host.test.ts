@@ -1,16 +1,21 @@
 import { afterAll, describe, expect, mock, test, vi } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 /**
  * The Host opens the store its capabilities hand it, so this test runs against
  * a real local store of its own: a temporary directory nothing else in the
  * process shares.
  */
-const testDirectory = mkdtempSync(join(tmpdir(), "wincode-session-host-"));
+const testDirectory = fs.mkdtempSync(
+	path.join(os.tmpdir(), "wincode-session-host-")
+);
 const previousSubagentsDatabasePath = process.env.WINCODE_SUBAGENTS_DB_PATH;
-process.env.WINCODE_SUBAGENTS_DB_PATH = join(testDirectory, "subagents.sqlite");
+process.env.WINCODE_SUBAGENTS_DB_PATH = path.join(
+	testDirectory,
+	"subagents.sqlite"
+);
 
 import { fromPartial } from "@total-typescript/shoehorn";
 import {
@@ -68,7 +73,10 @@ import {
 	projectSessionRecords,
 } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
-import type { SessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";
+import {
+	SessionInUseError,
+	type SessionWriterLock,
+} from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -85,8 +93,8 @@ import {
 	withLoggerHome,
 } from "../../../utils/test/logger-home";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "../support/e2e-fake-runtime";
 import {
 	agentId,
@@ -99,20 +107,12 @@ import {
 } from "../support/identifiers";
 
 const recorder = createFakeModelClientRecorder();
-// The module mock must be installed before the production Session Host graph
-// loads, so the Agent Runtime the Host composes is the fake one. The production
-// modules are imported dynamically for that reason alone.
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
-);
+installFakeModelClient(recorder);
 
-const { createSessionHost } = await import(
-	"@/modules/sessions/host/session-host"
-);
-const { createDatabase } = await import("@/modules/sessions/storage/client");
-const { createDrizzleSessionStore } = await import(
-	"@/modules/sessions/storage/drizzle-session-store"
-);
+import { createSessionHost } from "@/modules/sessions/host/session-host";
+import { createDatabase } from "@/modules/sessions/storage/client";
+import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+
 const createSessionHostManager = () => createSessionHostManagerWithRuntime();
 const sessionHostManager = createSessionHostManager();
 
@@ -123,9 +123,9 @@ const model: ChatModelSelection = {
 const buildId = agentId("build");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
 const store = createDrizzleSessionStore(
-	createDatabase(join(testDirectory, "sessions.db")).db,
+	createDatabase(path.join(testDirectory, "sessions.db")).db,
 	{
-		attachmentRoot: join(testDirectory, "attachments"),
+		attachmentRoot: path.join(testDirectory, "attachments"),
 		workspaceRoot: process.cwd(),
 	}
 );
@@ -314,7 +314,7 @@ const createCapabilities = (
 			: [
 					{
 						document,
-						path: join(workspace, ".wincode", "settings.json"),
+						path: path.join(workspace, ".wincode", "settings.json"),
 						scope: "project" as const,
 					},
 				]);
@@ -348,7 +348,7 @@ const createCapabilities = (
 			refreshSnapshot: async () => configSnapshot,
 		},
 		cwd: workspace,
-		homeRoot: options.homeRoot ?? homedir(),
+		homeRoot: options.homeRoot ?? os.homedir(),
 		workspace,
 	};
 	const pluginRuntime = options.pluginRuntime ?? bundledPluginRuntime;
@@ -450,6 +450,7 @@ const textOf = (parts: SessionMessage["parts"]): string =>
 	parts.map((part) => (part.type === "text" ? part.text : "")).join("");
 
 afterAll(async () => {
+	mock.restore();
 	await sessionHostManager.shutdownAll();
 	await bundledPluginRuntime.shutdown();
 	if (previousSubagentsDatabasePath === undefined) {
@@ -457,7 +458,7 @@ afterAll(async () => {
 	} else {
 		process.env.WINCODE_SUBAGENTS_DB_PATH = previousSubagentsDatabasePath;
 	}
-	rmSync(testDirectory, { force: true, recursive: true });
+	fs.rmSync(testDirectory, { force: true, recursive: true });
 });
 
 test("retains an idle Session Host until registered Plugin background work finishes", async () => {
@@ -905,11 +906,11 @@ test("Plugin lifecycle restarts for a reopened Session runtime", async () => {
 });
 
 test("Session Host keeps Skill activation separate from coding-tool selection", async () => {
-	const workspace = join(testDirectory, "selected-agent-skill-workspace");
+	const workspace = path.join(testDirectory, "selected-agent-skill-workspace");
 	const skillBody = "Available after selecting Skill activation.";
 	const scoutId = agentId("scout");
 	await Bun.write(
-		join(workspace, ".wincode", "skills", "restricted", "SKILL.md"),
+		path.join(workspace, ".wincode", "skills", "restricted", "SKILL.md"),
 		`---\nname: restricted\ndescription: A Skill governed by the selected Agent.\n---\n${skillBody}`
 	);
 	const manager = createSessionHostManager();
@@ -974,10 +975,10 @@ test("Session Host keeps Skill activation separate from coding-tool selection", 
 });
 
 test("Session Host reports an unavailable Skill target without activating it", async () => {
-	const workspace = join(testDirectory, "unavailable-skill-workspace");
+	const workspace = path.join(testDirectory, "unavailable-skill-workspace");
 	const availableSkillBody = "Do not load this unrelated available Skill.";
 	await Bun.write(
-		join(workspace, ".wincode", "skills", "available", "SKILL.md"),
+		path.join(workspace, ".wincode", "skills", "available", "SKILL.md"),
 		`---\nname: available\ndescription: An unrelated available Skill.\n---\n${availableSkillBody}`
 	);
 	const manager = createSessionHostManager();
@@ -1096,10 +1097,12 @@ describe("Session Host opening", () => {
 	});
 	test("refuses a second Host while the first Host owns the Session", async () => {
 		const seeded = await seedSession("contention");
-		const secondDatabase = createDatabase(join(testDirectory, "sessions.db"));
+		const secondDatabase = createDatabase(
+			path.join(testDirectory, "sessions.db")
+		);
 		const secondStore = createDrizzleSessionStore(secondDatabase.db, {
-			attachmentRoot: join(testDirectory, "second-attachments"),
-			snapshotRoot: join(testDirectory, "second-snapshots"),
+			attachmentRoot: path.join(testDirectory, "second-attachments"),
+			snapshotRoot: path.join(testDirectory, "second-snapshots"),
 			workspaceRoot: process.cwd(),
 		});
 		const firstHost = await createSessionHost({
@@ -1875,10 +1878,10 @@ describe("Session Host lifetime", () => {
 		const delayed = createDelayedTerminalStore(store);
 		const capabilities = createCapabilities(delayed.delayed);
 		const competingDatabase = createDatabase(
-			join(testDirectory, "sessions.db")
+			path.join(testDirectory, "sessions.db")
 		);
 		const competingStore = createDrizzleSessionStore(competingDatabase.db, {
-			attachmentRoot: join(testDirectory, "competing-attachments"),
+			attachmentRoot: path.join(testDirectory, "competing-attachments"),
 			workspaceRoot: process.cwd(),
 		});
 		const host = await createSessionHost({
@@ -2138,6 +2141,10 @@ describe("Session Host lifetime", () => {
 			await host.agentSession.send(
 				sendInput(capabilities, "complete before release")
 			);
+			// The completed Host is idle, not finished: it still owns its writer.
+			await expect(
+				store.acquireSessionWriter(seeded.sessionId)
+			).rejects.toBeInstanceOf(SessionInUseError);
 			await manager.releaseView(seeded.sessionId);
 			const writer = await store.acquireSessionWriter(seeded.sessionId);
 			await writer.release();

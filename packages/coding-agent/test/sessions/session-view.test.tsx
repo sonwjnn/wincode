@@ -2,9 +2,22 @@ import { isNull, isUndefined } from "@wincode/utils";
 
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
-import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { homedir } from "node:os";
-import { MockTreeSitterClient } from "@opentui/core/testing";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
+import * as os from "node:os";
+import {
+	MockTreeSitterClient,
+	type TestRendererSetup,
+} from "@opentui/core/testing";
+import { testRender } from "@opentui/react/test-utils";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -18,13 +31,19 @@ import type {
 	ConnectionProviderSummary,
 	Connections,
 } from "@wincode/ai/connections";
+import { createConnections as createDefaultConnections } from "@wincode/ai/connections";
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
 } from "@wincode/ai/models";
 import { act, useCallback, useEffect, useRef, useState } from "react";
+import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
+import { ConnectionsProvider } from "@/modules/connections";
+import { ModelPricingProvider } from "@/modules/model-pricing";
+import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
 import { createPluginRuntime } from "@/modules/plugins/runtime";
+import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
@@ -32,6 +51,7 @@ import type {
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/agent-session/types";
+import * as useAgentSessionModule from "@/modules/sessions/hooks/use-agent-session";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionFilePart,
@@ -41,7 +61,20 @@ import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/submission-types";
+import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { SessionView } from "@/modules/sessions/ui/views/session-view";
+import { ConfigProvider } from "@/shared/config/config-provider";
+import { createConfigStore } from "@/shared/config/config-store";
+import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
+import {
+	KeyboardLayerProvider,
+	useKeyboardLayer,
+} from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
+import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
+import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import {
 	agentId,
 	attachmentId,
@@ -51,43 +84,6 @@ import {
 	sessionMessageId,
 	steeringMessageId,
 } from "../support/identifiers";
-
-const { testRender } = await import("@opentui/react/test-utils");
-const { AgentRegistryProvider, useAgentRegistry } = await import(
-	"@/modules/agents"
-);
-const { createConnections: createDefaultConnections } = await import(
-	"@wincode/ai/connections"
-);
-const { ConnectionsProvider } = await import("@/modules/connections");
-const { ModelPricingProvider } = await import("@/modules/model-pricing");
-const { PromptConfigProvider } = await import(
-	"@/modules/prompt-settings/context/prompt-config-provider"
-);
-const { ConfigProvider } = await import("@/shared/config/config-provider");
-const { createConfigStore } = await import("@/shared/config/config-store");
-const { DialogProvider } = await import(
-	"@/shared/providers/dialog/dialog-provider"
-);
-const { KeyboardLayerProvider, useKeyboardLayer } = await import(
-	"@/shared/providers/keyboard-layer/keyboard-layer-provider"
-);
-const { ThemeProvider } = await import(
-	"@/shared/providers/theme/theme-provider"
-);
-const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
-const { ToastProvider } = await import(
-	"@/shared/providers/toast/toast-provider"
-);
-const { CommandControllerProvider } = await import(
-	"@/tui/commands/command-controller-provider"
-);
-const { setMarkdownTreeSitterClientForTests } = await import(
-	"@/modules/sessions/ui/messages/markdown-message-part"
-);
-const { SessionView } = await import(
-	"@/modules/sessions/ui/views/session-view"
-);
 
 type Deferred<T> = {
 	promise: Promise<T>;
@@ -141,7 +137,16 @@ const emitFakeSubmissionEvent = (event: SessionSubmissionEvent): void => {
 	}
 };
 
-mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
+/**
+ * Drives the composer's queue and steering behavior without reaching the real
+ * Agent Session. Installed as a spy on the module's live binding so the
+ * already-imported Session View picks it up without a registry-wide module
+ * mock.
+ */
+const fakeUseAgentSessionModule: Pick<
+	typeof useAgentSessionModule,
+	"useAgentSession"
+> = {
 	useAgentSession: (host: SessionHost) => {
 		const [turnActive, setTurnActive] = useState(false);
 		const [queuedSubmissions, setQueuedSubmissions] =
@@ -164,6 +169,12 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 				text: input.userText ?? "",
 			};
 			const sequence = fakeWaitingTexts.length + 1;
+			const messageId =
+				input.messageId ??
+				input.reservedMessageId ??
+				sessionMessageId(`queued-message-${sequence}`);
+			const submissionId =
+				input.submissionId ?? toSubmissionId(`queued-submission-${sequence}`);
 			fakeWaitingTexts = [...fakeWaitingTexts, composition.text];
 			fakeWaitingCompositions = [...fakeWaitingCompositions, composition];
 			setQueuedSubmissions((submissions) => [
@@ -171,16 +182,16 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 				fromPartial<SessionQueuedSubmission>({
 					id: queuedSubmissionId(`queued-${sequence}`),
 					input: { ...input, composition },
-					messageId:
-						input.messageId ??
-						input.reservedMessageId ??
-						sessionMessageId(`queued-message-${sequence}`),
-					submissionId:
-						input.submissionId ??
-						toSubmissionId(`queued-submission-${sequence}`),
+					messageId,
+					submissionId,
 				}),
 			]);
-			return { rejected: false as const };
+			return {
+				disposition: "queued" as const,
+				messageId,
+				rejected: false as const,
+				submissionId,
+			};
 		}, []);
 		const send = useCallback(
 			async (input: SessionSendInput) => {
@@ -201,7 +212,17 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 				setTurnActive(true);
 				await run.release.promise;
 				setTurnActive(false);
-				return { rejected: false as const };
+				return {
+					disposition: "started" as const,
+					messageId:
+						input.messageId ??
+						input.reservedMessageId ??
+						sessionMessageId("started-message"),
+					rejected: false as const,
+					submissionId:
+						input.submissionId ?? toSubmissionId("started-submission"),
+					...(input.turnId === undefined ? {} : { turnId: input.turnId }),
+				};
 			},
 			[enqueue]
 		);
@@ -252,7 +273,7 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 			};
 		}, [queuedSubmissions]);
 		const recallWaitingMessages = useCallback(
-			(ids?: readonly SessionWaitingMessageId[]) => {
+			async (ids?: readonly SessionWaitingMessageId[]) => {
 				const lanes = fakeRecalledPayload ?? waiting.current;
 				// Committed steering input is durable and cannot be recalled; only
 				// queued submissions return to the composer.
@@ -286,11 +307,11 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 		);
 		return {
 			cancel: () => undefined,
-			cancelCompaction: () => [],
+			cancelCompaction: async () => [],
 			compact: async () => {
 				throw new Error("Compaction is not part of this test.");
 			},
-			interrupt: () => [],
+			interrupt: async () => [],
 			onSubmissionEvent: subscribeToFakeSubmissionEvents,
 			recallWaitingMessages,
 			prompt,
@@ -304,7 +325,13 @@ mock.module("@/modules/sessions/hooks/use-agent-session", () => ({
 			},
 		};
 	},
-}));
+};
+spyOn(useAgentSessionModule, "useAgentSession").mockImplementation(
+	fakeUseAgentSessionModule.useAgentSession
+);
+// These tests render the provider without a pricing prop, so keep it off the
+// developer's real pricing cache: only the bundled snapshot should show.
+spyOn(modelPricingCacheModule, "readModelPricingCache").mockReturnValue(null);
 
 const createConnections = () =>
 	createDefaultConnections({
@@ -399,9 +426,7 @@ const createFakeSessionHost = (
 		}),
 	});
 
-const flushUi = async (
-	setup: Awaited<ReturnType<typeof testRender>>
-): Promise<void> => {
+const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await Bun.sleep(20);
 	await setup.renderOnce();
 };
@@ -410,6 +435,11 @@ beforeAll(() => {
 	setMarkdownTreeSitterClientForTests(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
+});
+
+afterAll(() => {
+	mock.restore();
+	setMarkdownTreeSitterClientForTests(null);
 });
 
 afterEach(() => {
@@ -453,7 +483,9 @@ describe("SessionView initial submission", () => {
 		const workspace = process.cwd();
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
-				<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
 					<ToastProvider>
 						<ConnectionsProvider connections={createConnections()}>
 							<AgentRegistryProvider>
@@ -516,10 +548,7 @@ describe("SessionView initial submission", () => {
 	 * Types into the composer until the composition is really there. The test
 	 * renderer can deliver input before the submit-reset effect runs.
 	 */
-	const typePrompt = async (
-		setup: Awaited<ReturnType<typeof testRender>>,
-		text: string
-	) => {
+	const typePrompt = async (setup: TestRendererSetup, text: string) => {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
 			await setup.mockInput.typeText(text);
 			await flushUi(setup);
@@ -602,7 +631,9 @@ describe("SessionView initial submission", () => {
 		let registryIsReady = false;
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
-				<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
 					<ToastProvider>
 						<ConnectionsProvider connections={connections}>
 							<AgentRegistryProvider>
@@ -692,7 +723,9 @@ describe("SessionView initial submission", () => {
 		const workspace = process.cwd();
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
-				<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
 					<ToastProvider>
 						<ConnectionsProvider connections={createConnections()}>
 							<AgentRegistryProvider>
@@ -772,7 +805,9 @@ const renderSessionView = async ({
 	const commandLayer = { isTop: false };
 	const setup = await testRender(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+			<ConfigProvider
+				value={{ configStore, homeRoot: os.homedir(), workspace }}
+			>
 				<ToastProvider>
 					<ConnectionsProvider connections={createConnections()}>
 						<AgentRegistryProvider>
@@ -880,10 +915,7 @@ describe("SessionView waiting messages", () => {
 	 * passive effect, and this harness can deliver keystrokes before that
 	 * effect runs; a real user cannot type inside that window.
 	 */
-	const typePrompt = async (
-		setup: Awaited<ReturnType<typeof testRender>>,
-		text: string
-	) => {
+	const typePrompt = async (setup: TestRendererSetup, text: string) => {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
 			await setup.mockInput.typeText(text);
 			await flushUi(setup);
@@ -895,10 +927,7 @@ describe("SessionView waiting messages", () => {
 	};
 
 	/** Types one submission into the composer and sends it. */
-	const submit = async (
-		setup: Awaited<ReturnType<typeof testRender>>,
-		text: string
-	) => {
+	const submit = async (setup: TestRendererSetup, text: string) => {
 		await typePrompt(setup, text);
 		setup.mockInput.pressEnter();
 	};
@@ -908,7 +937,7 @@ describe("SessionView waiting messages", () => {
 	 * checked, so the wait is about the condition rather than about patience.
 	 */
 	const waitFor = async (
-		setup: Awaited<ReturnType<typeof testRender>>,
+		setup: TestRendererSetup,
 		condition: () => boolean
 	) => {
 		await flushUi(setup);

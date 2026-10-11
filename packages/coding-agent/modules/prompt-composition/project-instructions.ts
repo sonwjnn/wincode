@@ -1,6 +1,5 @@
-import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
 	isNull,
 	isObjectLike,
@@ -64,9 +63,9 @@ const MAX_PROJECT_INSTRUCTION_READ_BYTES =
 	MAX_PROJECT_INSTRUCTION_SOURCE_BYTES + 1;
 const PROJECT_INSTRUCTION_OPEN_FLAGS =
 	// biome-ignore lint/suspicious/noBitwiseOperators: POSIX open flags are bit masks.
-	constants.O_RDONLY |
-	(constants.O_NOFOLLOW ?? 0) |
-	(constants.O_NONBLOCK ?? 0);
+	fs.constants.O_RDONLY |
+	(fs.constants.O_NOFOLLOW ?? 0) |
+	(fs.constants.O_NONBLOCK ?? 0);
 
 export type ProjectInstructionFileStats = {
 	readonly ctimeMs?: number;
@@ -165,9 +164,9 @@ type Candidate = {
 	readonly absolutePath: string;
 	readonly sourcePath: string;
 };
-const pathResolvesToItself = async (path: string): Promise<boolean> => {
-	const resolvedPath = await realpath(path);
-	const expectedPath = resolve(path);
+const pathResolvesToItself = async (targetPath: string): Promise<boolean> => {
+	const resolvedPath = await fs.promises.realpath(targetPath);
+	const expectedPath = path.resolve(targetPath);
 	return process.platform === "win32"
 		? resolvedPath.toLowerCase() === expectedPath.toLowerCase()
 		: resolvedPath === expectedPath;
@@ -178,7 +177,7 @@ const defaultFileSystem: ProjectInstructionFileSystem = {
 		if (!(await pathResolvesToItself(path))) {
 			throw new Error("Instruction path must not resolve through a link.");
 		}
-		const file = await open(path, PROJECT_INSTRUCTION_OPEN_FLAGS);
+		const file = await fs.promises.open(path, PROJECT_INSTRUCTION_OPEN_FLAGS);
 		try {
 			const openedStats = await file.stat();
 			if (!openedStats.isFile()) {
@@ -206,7 +205,7 @@ const defaultFileSystem: ProjectInstructionFileSystem = {
 			await file.close();
 		}
 	},
-	stat: async (path) => lstat(path),
+	stat: async (path) => fs.promises.lstat(path),
 };
 const fileSystemCacheIds = new WeakMap<object, number>();
 let nextFileSystemCacheId = 0;
@@ -277,8 +276,8 @@ const LEADING_DOT_SLASH = /^\.\//u;
 const escapePath = (path: string): string =>
 	path.replaceAll("\\", "/").replace(LEADING_DOT_SLASH, "");
 
-const relativeSourcePath = (workspace: string, path: string): string => {
-	const candidate = escapePath(relative(workspace, path));
+const relativeSourcePath = (workspace: string, targetPath: string): string => {
+	const candidate = escapePath(path.relative(workspace, targetPath));
 	return candidate.length > 0 ? candidate : PROJECT_INSTRUCTION_FILE_NAME;
 };
 
@@ -287,7 +286,7 @@ const sourceCandidates = (
 	projectRoots: readonly string[]
 ): readonly Candidate[] =>
 	projectRoots.map((root) => {
-		const absolutePath = resolve(root, PROJECT_INSTRUCTION_FILE_NAME);
+		const absolutePath = path.resolve(root, PROJECT_INSTRUCTION_FILE_NAME);
 		return {
 			absolutePath,
 			sourcePath: relativeSourcePath(workspace, absolutePath),
@@ -447,14 +446,15 @@ type LoadedProjectInstructionSource = {
 	readonly renderedByteLength: number;
 };
 
+type ReadSourceResult =
+	| LoadedProjectInstructionSource
+	| { readonly diagnostic: ProjectInstructionDiagnostic }
+	| { readonly missing: true };
+
 const readSource = async (
 	fileSystem: ProjectInstructionFileSystem,
 	candidate: Candidate
-): Promise<
-	| LoadedProjectInstructionSource
-	| { readonly diagnostic: ProjectInstructionDiagnostic }
-	| { readonly missing: true }
-> => {
+): Promise<ReadSourceResult> => {
 	let value: Uint8Array | string;
 	try {
 		value = await fileSystem.readFile(
@@ -544,7 +544,7 @@ const loadSourceCandidate = async (
 	fileSystem: ProjectInstructionFileSystem,
 	candidate: Candidate,
 	fileMetadata: FileMetadata
-): Promise<Awaited<ReturnType<typeof readSource>>> => {
+): Promise<ReadSourceResult> => {
 	if (fileMetadata.kind === "missing") {
 		return { missing: true };
 	}
@@ -729,7 +729,7 @@ export const createProjectInstructionSnapshot = async (
 	const normalizeWorkspacePath =
 		fileSystem === defaultFileSystem
 			? canonicalPath
-			: async (path: string): Promise<string> => resolve(path);
+			: async (pathValue: string): Promise<string> => path.resolve(pathValue);
 	const workspace = await normalizeWorkspacePath(input.workspace);
 	const provenanceWorkspace = await normalizeWorkspacePath(
 		input.provenanceWorkspace ?? workspace

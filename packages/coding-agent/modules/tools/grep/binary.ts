@@ -1,17 +1,6 @@
-import { constants as fsConstants } from "node:fs";
-import {
-	access,
-	chmod,
-	copyFile,
-	mkdir,
-	mkdtemp,
-	open,
-	rename,
-	rm,
-	stat,
-} from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	getErrorMessage,
 	isNull,
@@ -210,12 +199,12 @@ const isExecutableFile = async (
 	platform: string
 ): Promise<boolean> => {
 	try {
-		const fileStat = await stat(filePath);
+		const fileStat = await fs.promises.stat(filePath);
 		if (!fileStat.isFile()) {
 			return false;
 		}
 		if (platform !== "win32") {
-			await access(filePath, fsConstants.X_OK);
+			await fs.promises.access(filePath, fs.constants.X_OK);
 		}
 		return true;
 	} catch {
@@ -420,7 +409,7 @@ const downloadArchive = async (
 			throw new RipgrepDownloadError("ripgrep download returned no body.");
 		}
 
-		const file = await open(archivePath, "wx", 0o600);
+		const file = await fs.promises.open(archivePath, "wx", 0o600);
 		const hash = new Bun.CryptoHasher("sha256");
 		let totalBytes = 0;
 		const reader = response.body.getReader();
@@ -480,7 +469,7 @@ const installStagedBinary = async (
 	platform: string
 ): Promise<void> => {
 	try {
-		await rename(stagedPath, targetPath);
+		await fs.promises.rename(stagedPath, targetPath);
 	} catch (error) {
 		if (
 			(getErrorCode(error) === "EEXIST" || getErrorCode(error) === "EPERM") &&
@@ -499,7 +488,10 @@ export const downloadRipgrepBinary = async (
 ): Promise<string> => {
 	const platform = options.platform ?? process.platform;
 	const paths = getBinaryPaths(options);
-	await mkdir(paths.cacheDirectory, { recursive: true, mode: 0o700 });
+	await fs.promises.mkdir(paths.cacheDirectory, {
+		recursive: true,
+		mode: 0o700,
+	});
 
 	if (await isExecutableFile(paths.targetPath, platform)) {
 		return paths.targetPath;
@@ -509,7 +501,7 @@ export const downloadRipgrepBinary = async (
 		paths.cacheDirectory,
 		`${paths.archiveFilename}.${crypto.randomUUID()}.partial`
 	);
-	const extractionDirectory = await mkdtemp(
+	const extractionDirectory = await fs.promises.mkdtemp(
 		path.join(paths.cacheDirectory, ".extract-")
 	);
 	const stagedPath = path.join(
@@ -547,9 +539,9 @@ export const downloadRipgrepBinary = async (
 			);
 		}
 
-		await copyFile(extractedPath, stagedPath);
+		await fs.promises.copyFile(extractedPath, stagedPath);
 		if (platform !== "win32") {
-			await chmod(stagedPath, 0o755);
+			await fs.promises.chmod(stagedPath, 0o755);
 		}
 		await installStagedBinary(stagedPath, paths.targetPath, platform);
 
@@ -561,9 +553,9 @@ export const downloadRipgrepBinary = async (
 		return paths.targetPath;
 	} finally {
 		await Promise.all([
-			rm(archivePath, { force: true }),
-			rm(stagedPath, { force: true }),
-			rm(extractionDirectory, { force: true, recursive: true }),
+			fs.promises.rm(archivePath, { force: true }),
+			fs.promises.rm(stagedPath, { force: true }),
+			fs.promises.rm(extractionDirectory, { force: true, recursive: true }),
 		]);
 	}
 };

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testRender } from "@opentui/react/test-utils";
@@ -57,12 +57,12 @@ const OpenStatusPanel = ({
 };
 
 test("the distributed MCP package renders its contribution in the generic status panel", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-mcp-plugin-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-mcp-plugin-"));
 	const configDirectory = path.join(root, ".wincode");
 	const workspace = path.join(root, "workspace");
 	const configPath = path.join(configDirectory, "mcp.json");
-	await mkdir(configDirectory, { recursive: true });
-	await mkdir(workspace, { recursive: true });
+	await fs.mkdir(configDirectory, { recursive: true });
+	await fs.mkdir(workspace, { recursive: true });
 	await Bun.write(
 		configPath,
 		JSON.stringify({
@@ -192,19 +192,19 @@ test("the distributed MCP package renders its contribution in the generic status
 	} finally {
 		await runtime?.shutdown();
 		setInteractiveRuntimeContext({ args: [], cwd: workspace });
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("MCP resource reads return bounded previews and preserve the full text artifact", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-mcp-resource-read-")
 	);
 	const workspace = path.join(root, "workspace");
 	const configDirectory = path.join(root, ".wincode");
 	const resourceText = `RESOURCE-BEGIN:${"large-resource-".repeat(3000)}:RESOURCE-END`;
-	await mkdir(configDirectory, { recursive: true });
-	await mkdir(workspace, { recursive: true });
+	await fs.mkdir(configDirectory, { recursive: true });
+	await fs.mkdir(workspace, { recursive: true });
 	await Bun.write(
 		path.join(configDirectory, "mcp.json"),
 		JSON.stringify({
@@ -286,20 +286,20 @@ test("MCP resource reads return bounded previews and preserve the full text arti
 	} finally {
 		await runtime?.shutdown();
 		if (artifactDirectory !== undefined) {
-			await rm(artifactDirectory, { force: true, recursive: true });
+			await fs.rm(artifactDirectory, { force: true, recursive: true });
 		}
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("project overlays cannot disable Plugin-registered MCP servers", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-mcp-plugin-overlay-")
 	);
 	const workspace = path.join(root, "workspace");
 	const projectConfigDirectory = path.join(workspace, ".wincode");
-	await mkdir(projectConfigDirectory, { recursive: true });
-	const trustedProjectRoots = [await realpath(workspace)];
+	await fs.mkdir(projectConfigDirectory, { recursive: true });
+	const trustedProjectRoots = [await fs.realpath(workspace)];
 	await Bun.write(
 		path.join(projectConfigDirectory, "mcp.json"),
 		JSON.stringify({ mcpServers: { extension_server: { enabled: false } } })
@@ -357,18 +357,18 @@ test("project overlays cannot disable Plugin-registered MCP servers", async () =
 		);
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("MCP Plugin does not pass configured OAuth client secrets to runtime servers", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-mcp-oauth-config-")
 	);
 	const workspace = path.join(root, "workspace");
 	const configDirectory = path.join(root, ".wincode");
-	await mkdir(configDirectory, { recursive: true });
-	await mkdir(workspace, { recursive: true });
+	await fs.mkdir(configDirectory, { recursive: true });
+	await fs.mkdir(workspace, { recursive: true });
 	await Bun.write(
 		path.join(configDirectory, "mcp.json"),
 		JSON.stringify({
@@ -421,16 +421,16 @@ test("MCP Plugin does not pass configured OAuth client secrets to runtime server
 		);
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("Plugin-owned MCP Server registrations enter the managed server catalog", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-plugin-mcp-server-")
 	);
 	const workspace = path.join(root, "workspace");
-	await mkdir(workspace, { recursive: true });
+	await fs.mkdir(workspace, { recursive: true });
 
 	let runtime: PluginRuntime | undefined;
 	try {
@@ -469,15 +469,17 @@ test("Plugin-owned MCP Server registrations enter the managed server catalog", a
 		);
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("a custom command takes precedence over a distributed Plugin command", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-plugin-command-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-plugin-command-")
+	);
 	const workspace = path.join(root, "workspace");
 	const customCommands = path.join(workspace, ".wincode", "commands");
-	await mkdir(customCommands, { recursive: true });
+	await fs.mkdir(customCommands, { recursive: true });
 	await Bun.write(
 		path.join(customCommands, "mcps.md"),
 		`---
@@ -517,14 +519,16 @@ List local resources.
 		);
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("generic Plugin status panels refresh from Ctrl+R", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-plugin-refresh-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-plugin-refresh-")
+	);
 	const workspace = path.join(root, "workspace");
-	await mkdir(workspace, { recursive: true });
+	await fs.mkdir(workspace, { recursive: true });
 
 	let refreshCount = 0;
 	const listeners = new Set<() => void>();
@@ -618,14 +622,16 @@ test("generic Plugin status panels refresh from Ctrl+R", async () => {
 		}
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("status-panel search retains spaces when the highlighted item has no space action", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-plugin-spaces-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-plugin-spaces-")
+	);
 	const workspace = path.join(root, "workspace");
-	await mkdir(workspace, { recursive: true });
+	await fs.mkdir(workspace, { recursive: true });
 
 	let runtime: PluginRuntime | undefined;
 	try {
@@ -695,14 +701,14 @@ test("status-panel search retains spaces when the highlighted item has no space 
 		}
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("the generic MCP panel shows safe failures and routes reconnect and disable actions", async () => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "wincode-mcp-actions-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-mcp-actions-"));
 	const workspace = path.join(root, "workspace");
-	await mkdir(workspace, { recursive: true });
+	await fs.mkdir(workspace, { recursive: true });
 
 	let connectionAttempts = 0;
 	const failureUrl =
@@ -719,7 +725,7 @@ test("the generic MCP panel shows safe failures and routes reconnect and disable
 			},
 		})
 	);
-	const trustedWorkspace = await realpath(workspace);
+	const trustedWorkspace = await fs.realpath(workspace);
 	const trustedProjectRoots = [trustedWorkspace];
 	const configStore = createConfigStore({
 		homeRoot: root,
@@ -880,21 +886,21 @@ test("the generic MCP panel shows safe failures and routes reconnect and disable
 		}
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("MCP settings persist beside the nested project definition that owns the server", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-mcp-project-owner-")
 	);
 	const projectRoot = path.join(root, "project");
 	const workspace = path.join(projectRoot, "workspace");
 	const parentConfigPath = path.join(projectRoot, ".wincode", "mcp.json");
 	const workspaceConfigPath = path.join(workspace, ".wincode", "mcp.json");
-	await mkdir(path.join(projectRoot, ".git"), { recursive: true });
-	await mkdir(path.dirname(parentConfigPath), { recursive: true });
-	await mkdir(path.dirname(workspaceConfigPath), { recursive: true });
+	await fs.mkdir(path.join(projectRoot, ".git"), { recursive: true });
+	await fs.mkdir(path.dirname(parentConfigPath), { recursive: true });
+	await fs.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
 	await Bun.write(parentConfigPath, "{}\n");
 	await Bun.write(
 		workspaceConfigPath,
@@ -904,8 +910,8 @@ test("MCP settings persist beside the nested project definition that owns the se
 	);
 
 	const trustedProjectRoots = await Promise.all([
-		realpath(projectRoot),
-		realpath(workspace),
+		fs.realpath(projectRoot),
+		fs.realpath(workspace),
 	]);
 	const configStore = createConfigStore({
 		homeRoot: root,
@@ -969,6 +975,6 @@ test("MCP settings persist beside the nested project definition that owns the se
 		});
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });

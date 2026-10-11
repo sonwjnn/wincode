@@ -1,6 +1,5 @@
-import { type Dirent, existsSync, realpathSync } from "node:fs";
-import { readdir, readlink, realpath } from "node:fs/promises";
-import path from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
 	isObjectLike,
 	isUndefined,
@@ -43,7 +42,7 @@ export const resolveWorkspaceRoot = (
 	start: string,
 	options: ResolveWorkspaceRootOptions = {}
 ): string => {
-	const exists = options.exists ?? existsSync;
+	const exists = options.exists ?? fs.existsSync;
 	const maxDepth = options.maxDepth ?? MAX_WORKSPACE_WALK_DEPTH;
 	const resolvedStart = path.resolve(start);
 	let current = resolvedStart;
@@ -111,7 +110,7 @@ const assertInsidePath = (root: string, target: string, input: string) => {
 const findExistingParent = (targetPath: string) => {
 	let parentPath = path.dirname(targetPath);
 
-	while (!existsSync(parentPath)) {
+	while (!fs.existsSync(parentPath)) {
 		const nextParentPath = path.dirname(parentPath);
 
 		if (nextParentPath === parentPath) {
@@ -143,7 +142,7 @@ type TraversalContext = Required<
 export const isIgnoredWorkspaceDirectory = (name: string) =>
 	WORKSPACE_IGNORED_DIRECTORY_NAMES.has(name);
 
-const compareDirectoryEntries = (left: Dirent, right: Dirent) =>
+const compareDirectoryEntries = (left: fs.Dirent, right: fs.Dirent) =>
 	left.name.localeCompare(right.name);
 
 const isMissingIgnoreFile = (error: unknown): error is NodeJS.ErrnoException =>
@@ -284,7 +283,7 @@ const collectWorkspaceSymlink = async (
 		return true;
 	}
 
-	const symlinkTarget = await readlink(childPath);
+	const symlinkTarget = await fs.promises.readlink(childPath);
 	return pushTraversalEntry(
 		childPath,
 		childDepth,
@@ -296,7 +295,7 @@ const collectWorkspaceSymlink = async (
 
 const collectWorkspaceDirent = async (
 	directoryPath: string,
-	dirent: Dirent,
+	dirent: fs.Dirent,
 	depth: number,
 	context: TraversalContext
 ) => {
@@ -359,7 +358,9 @@ const collectWorkspaceEntries = async (
 	}
 
 	try {
-		const dirents = await readdir(directoryPath, { withFileTypes: true });
+		const dirents = await fs.promises.readdir(directoryPath, {
+			withFileTypes: true,
+		});
 
 		for (const dirent of dirents.toSorted(compareDirectoryEntries)) {
 			if (
@@ -378,7 +379,7 @@ const collectWorkspaceEntries = async (
 export const createWorkspaceSandbox = (
 	root = resolveWorkspaceRoot(process.cwd())
 ): WorkspacePolicy => {
-	const workspaceRoot = realpathSync(root);
+	const workspaceRoot = fs.realpathSync(root);
 	const ignoreRuleCache = new Map<string, Promise<IgnoreRuleSet | null>>();
 	const workspaceRootHasGitMetadata = path
 		.resolve(workspaceRoot)
@@ -439,7 +440,7 @@ export const createWorkspaceSandbox = (
 
 			assertInsidePath(workspaceRoot, resolvedPath, input);
 
-			const realPath = await realpath(resolvedPath);
+			const realPath = await fs.promises.realpath(resolvedPath);
 			assertInsidePath(workspaceRoot, realPath, input);
 
 			return realPath;
@@ -450,7 +451,7 @@ export const createWorkspaceSandbox = (
 			assertInsidePath(workspaceRoot, resolvedPath, input);
 
 			const existingParentPath = findExistingParent(resolvedPath);
-			const realParentPath = await realpath(existingParentPath);
+			const realParentPath = await fs.promises.realpath(existingParentPath);
 
 			assertInsidePath(workspaceRoot, realParentPath, input);
 

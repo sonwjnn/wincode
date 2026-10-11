@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { SkillRootDescriptor } from "@/modules/skills";
 import {
 	discoverFilesystemSkillCandidates,
@@ -26,18 +26,23 @@ const root = (
 
 describe("Skill filesystem export", () => {
 	test("discovers explicit roots and applies numeric precedence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "wincode-skills-fs-"));
-		const low = join(directory, "low");
-		const high = join(directory, "high");
+		const directory = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-skills-fs-")
+		);
+		const low = path.join(directory, "low");
+		const high = path.join(directory, "high");
 		try {
 			await Promise.all([
-				mkdir(join(low, "review"), { recursive: true }),
-				mkdir(join(high, "review"), { recursive: true }),
+				fs.mkdir(path.join(low, "review"), { recursive: true }),
+				fs.mkdir(path.join(high, "review"), { recursive: true }),
 			]);
 			await Promise.all([
-				Bun.write(join(low, "review", "SKILL.md"), skillFile("review", "low")),
 				Bun.write(
-					join(high, "review", "SKILL.md"),
+					path.join(low, "review", "SKILL.md"),
+					skillFile("review", "low")
+				),
+				Bun.write(
+					path.join(high, "review", "SKILL.md"),
 					skillFile("review", "high")
 				),
 			]);
@@ -61,15 +66,17 @@ describe("Skill filesystem export", () => {
 				},
 			]);
 		} finally {
-			await rm(directory, { force: true, recursive: true });
+			await fs.rm(directory, { force: true, recursive: true });
 		}
 	});
 	test("reuses unchanged files and refreshes changed metadata", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "wincode-skills-cache-"));
-		const skillDirectory = join(directory, "review");
-		const skillPath = join(skillDirectory, "SKILL.md");
+		const directory = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-skills-cache-")
+		);
+		const skillDirectory = path.join(directory, "review");
+		const skillPath = path.join(skillDirectory, "SKILL.md");
 		try {
-			await mkdir(skillDirectory, { recursive: true });
+			await fs.mkdir(skillDirectory, { recursive: true });
 			await Bun.write(skillPath, skillFile("review", "first"));
 			const roots = [root(directory, 1)];
 			const [first] = await discoverFilesystemSkills(roots);
@@ -81,71 +88,75 @@ describe("Skill filesystem export", () => {
 			expect(updated).not.toBe(cached);
 			expect(updated?.description).toBe("updated");
 		} finally {
-			await rm(directory, { force: true, recursive: true });
+			await fs.rm(directory, { force: true, recursive: true });
 		}
 	});
 
 	test("skips malformed and directory-mismatched files", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "wincode-skills-invalid-"));
+		const directory = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-skills-invalid-")
+		);
 		try {
 			await Promise.all([
-				mkdir(join(directory, "good"), { recursive: true }),
-				mkdir(join(directory, "bad"), { recursive: true }),
-				mkdir(join(directory, "mismatch"), { recursive: true }),
-				mkdir(join(directory, "fallback-low", "fallback"), {
+				fs.mkdir(path.join(directory, "good"), { recursive: true }),
+				fs.mkdir(path.join(directory, "bad"), { recursive: true }),
+				fs.mkdir(path.join(directory, "mismatch"), { recursive: true }),
+				fs.mkdir(path.join(directory, "fallback-low", "fallback"), {
 					recursive: true,
 				}),
-				mkdir(join(directory, "fallback-high", "fallback"), {
+				fs.mkdir(path.join(directory, "fallback-high", "fallback"), {
 					recursive: true,
 				}),
 			]);
 			await Promise.all([
 				Bun.write(
-					join(directory, "good", "SKILL.md"),
+					path.join(directory, "good", "SKILL.md"),
 					skillFile("good", "Good")
 				),
-				Bun.write(join(directory, "bad", "SKILL.md"), "not frontmatter"),
+				Bun.write(path.join(directory, "bad", "SKILL.md"), "not frontmatter"),
 				Bun.write(
-					join(directory, "mismatch", "SKILL.md"),
+					path.join(directory, "mismatch", "SKILL.md"),
 					skillFile("other", "Bad")
 				),
 				Bun.write(
-					join(directory, "fallback-low", "fallback", "SKILL.md"),
+					path.join(directory, "fallback-low", "fallback", "SKILL.md"),
 					skillFile("fallback", "Fallback")
 				),
 				Bun.write(
-					join(directory, "fallback-high", "fallback", "SKILL.md"),
+					path.join(directory, "fallback-high", "fallback", "SKILL.md"),
 					"not frontmatter"
 				),
 			]);
 			const skills = await discoverFilesystemSkills([
-				root(join(directory, "fallback-high"), 20),
-				root(join(directory, "fallback-low"), 10),
+				root(path.join(directory, "fallback-high"), 20),
+				root(path.join(directory, "fallback-low"), 10),
 				root(directory, 1),
 			]);
 			expect(skills.map(({ name }) => name)).toEqual(["fallback", "good"]);
 			expect(skills[0]?.description).toBe("Fallback");
 		} finally {
-			await rm(directory, { force: true, recursive: true });
+			await fs.rm(directory, { force: true, recursive: true });
 		}
 	});
 
 	test("samples bounded direct resources deterministically", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "wincode-skills-resource-"));
+		const directory = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-skills-resource-")
+		);
 		try {
 			await Promise.all([
-				Bun.write(join(directory, "SKILL.md"), "body"),
-				Bun.write(join(directory, "z.txt"), "z"),
-				Bun.write(join(directory, "a.txt"), "a"),
-				mkdir(join(directory, "nested")),
+				Bun.write(path.join(directory, "SKILL.md"), "body"),
+				Bun.write(path.join(directory, "z.txt"), "z"),
+				Bun.write(path.join(directory, "a.txt"), "a"),
+				fs.mkdir(path.join(directory, "nested")),
 			]);
 			expect(await sampleSkillResources(directory)).toEqual([
-				join(directory, "a.txt"),
-				join(directory, "nested"),
-				join(directory, "z.txt"),
+				path.join(directory, "a.txt"),
+				path.join(directory, "nested"),
+				path.join(directory, "z.txt"),
 			]);
 		} finally {
-			await rm(directory, { force: true, recursive: true });
+			await fs.rm(directory, { force: true, recursive: true });
 		}
 	});
 

@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { fromAny, fromPartial } from "@total-typescript/shoehorn";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
@@ -869,7 +869,9 @@ test("serializes old attachments as bounded metadata", () => {
 });
 
 test("serializes current-window attachments without hydrating payloads and persists metadata", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-compaction-attachments-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-compaction-attachments-")
+	);
 	const attachmentStore = createSessionAttachmentStore({
 		repository: createAttachmentRepository(),
 		root,
@@ -1399,7 +1401,9 @@ test("does not split a paired tool result beyond the recent budget", async () =>
 });
 
 test("projects the newest attachment against the media budget for estimatedTokensAfter", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-compaction-projection-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-compaction-projection-")
+	);
 	const attachmentStore = createSessionAttachmentStore({
 		repository: createAttachmentRepository(),
 		root,

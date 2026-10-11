@@ -1,7 +1,7 @@
 import type { Database as SqliteDatabase } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { resolveTurnTools } from "@/modules/sessions/hooks/runtime-turn";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -34,8 +34,8 @@ const model = {
 const openStore = (root: string, databasePath: string): OpenedSessionStore => {
 	const database = createDatabase(databasePath);
 	const store = createDrizzleSessionStore(database.db, {
-		attachmentRoot: join(root, "attachments"),
-		snapshotRoot: join(root, "snapshots"),
+		attachmentRoot: path.join(root, "attachments"),
+		snapshotRoot: path.join(root, "snapshots"),
 		workspaceRoot: root,
 	});
 	return { database, store };
@@ -70,11 +70,11 @@ const createTools = async (
 };
 
 test("persists observations and edit modes across restart", async () => {
-	const root = await mkdtemp(
-		join(process.cwd(), ".wincode-versioned-editing-")
+	const root = await fs.mkdtemp(
+		path.join(process.cwd(), ".wincode-versioned-editing-")
 	);
-	const databasePath = join(root, "sessions.sqlite");
-	const filePath = join(root, "note.txt");
+	const databasePath = path.join(root, "sessions.sqlite");
+	const filePath = path.join(root, "note.txt");
 	let activeDatabase: OpenedSessionStore["database"] | undefined;
 	try {
 		await Bun.write(filePath, "one\ntwo\n");
@@ -213,7 +213,7 @@ test("persists observations and edit modes across restart", async () => {
 		}
 		expect(await Bun.file(filePath).text()).toBe("DONE\ntwo\n");
 
-		const newFilePath = join(root, "nested", "created.txt");
+		const newFilePath = path.join(root, "nested", "created.txt");
 		const writeResult = await sloppyTools.find("write").execute(
 			{
 				input: {
@@ -231,15 +231,17 @@ test("persists observations and edit modes across restart", async () => {
 		expect(await Bun.file(newFilePath).text()).toBe("created\n");
 	} finally {
 		activeDatabase?.sqlite.close();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
 test("smoke: multi-file artifacts, restart recovery, and a later edit", async () => {
-	const root = await mkdtemp(join(process.cwd(), ".wincode-versioned-smoke-"));
-	const databasePath = join(root, "sessions.sqlite");
-	const firstPath = join(root, "first.txt");
-	const secondPath = join(root, "second.txt");
+	const root = await fs.mkdtemp(
+		path.join(process.cwd(), ".wincode-versioned-smoke-")
+	);
+	const databasePath = path.join(root, "sessions.sqlite");
+	const firstPath = path.join(root, "first.txt");
+	const secondPath = path.join(root, "second.txt");
 	let activeDatabase: OpenedSessionStore["database"] | undefined;
 	try {
 		await Bun.write(firstPath, "one\n");
@@ -423,6 +425,6 @@ test("smoke: multi-file artifacts, restart recovery, and a later edit", async ()
 		expect(await Bun.file(firstPath).text()).toBe("FINAL\n");
 	} finally {
 		activeDatabase?.sqlite.close();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });

@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { readUtf8File } from "@wincode/utils";
 import { truncateUtf8 } from "../output-bounds";
 import { getToolResourceLimits } from "../resource-limits";
@@ -37,7 +37,7 @@ export const runJavascriptGrep: GrepSearch = async (
 		if (Date.now() >= deadline) {
 			return { matches, truncated: true };
 		}
-		const fileStat = await stat(entry.absolutePath);
+		const fileStat = await fs.stat(entry.absolutePath);
 
 		if (fileStat.size > input.maxFileBytes) {
 			continue;

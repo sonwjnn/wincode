@@ -1,19 +1,19 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { decodeUtf8, readUtf8File } from "../src/file-io";
 
 test("preserves UTF-8 BOM and replacement decoding in file contents", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "utils-file-io-"));
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "utils-file-io-"));
 	try {
-		const path = join(directory, "input.txt");
+		const inputPath = path.join(directory, "input.txt");
 		const bytes = Uint8Array.of(0xef, 0xbb, 0xbf, 0x61, 0xff);
-		await Bun.write(path, bytes);
+		await Bun.write(inputPath, bytes);
 
 		expect(decodeUtf8(bytes)).toBe("\uFEFFa\uFFFD");
-		expect(await readUtf8File(path)).toBe("\uFEFFa\uFFFD");
+		expect(await readUtf8File(inputPath)).toBe("\uFEFFa\uFFFD");
 	} finally {
-		await rm(directory, { force: true, recursive: true });
+		await fs.rm(directory, { force: true, recursive: true });
 	}
 });

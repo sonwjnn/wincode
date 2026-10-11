@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testRender } from "@opentui/react/test-utils";
@@ -47,13 +47,13 @@ const OpenStatusPanel = ({
 };
 
 test("/mcps sign-in accepts a pasted OAuth redirect when the loopback callback is unavailable", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-mcp-oauth-paste-")
 	);
 	const workspace = path.join(root, "workspace");
 	const redirectUrl =
 		"http://127.0.0.1:45831/oauth/callback?code=oauth-code&state=oauth-state";
-	await mkdir(workspace, { recursive: true });
+	await fs.mkdir(workspace, { recursive: true });
 	await Bun.write(
 		path.join(root, ".wincode", "mcp.json"),
 		JSON.stringify({
@@ -166,6 +166,6 @@ test("/mcps sign-in accepts a pasted OAuth redirect when the loopback callback i
 		}
 	} finally {
 		await runtime?.shutdown();
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });

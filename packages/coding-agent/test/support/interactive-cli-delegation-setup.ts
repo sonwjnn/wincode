@@ -1,4 +1,4 @@
-import { mock } from "bun:test";
+import { spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,24 +7,25 @@ import type {
 	AuthorizationByProvider,
 	Connections,
 } from "@wincode/ai/connections";
-import { connectionProviderDisplayNames } from "@wincode/ai/connections";
+import * as connectionsModule from "@wincode/ai/connections";
 import type { ConnectionProviderId } from "@wincode/ai/models";
 import { createConfigStore } from "@/shared/config/config-store";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
+import { createEnvironmentRestorer } from "@/test/support/environment";
 
 const previousScrollTo = Reflect.get(globalThis, "scrollTo");
-const previousEnvironment = {
-	HOME: process.env.HOME,
-	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
-	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
-	WINCODE_LOCAL_DB_PATH: process.env.WINCODE_LOCAL_DB_PATH,
-	WINCODE_MODEL_PRICING_OFFLINE: process.env.WINCODE_MODEL_PRICING_OFFLINE,
-	WINCODE_SUBAGENTS_DB_PATH: process.env.WINCODE_SUBAGENTS_DB_PATH,
-};
+export const restoreEnvironment = createEnvironmentRestorer([
+	"HOME",
+	"WINCODE_E2E_HOME",
+	"WINCODE_E2E_WORKSPACE",
+	"WINCODE_LOCAL_DB_PATH",
+	"WINCODE_MODEL_PRICING_OFFLINE",
+	"WINCODE_SUBAGENTS_DB_PATH",
+]);
 
 export const testDirectory = path.join(
 	os.tmpdir(),
@@ -67,13 +68,10 @@ const testConnections: Connections = {
 	listProviders: async () => [],
 };
 
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
-);
-await mock.module("@wincode/ai/connections", () => ({
-	connectionProviderDisplayNames,
-	createConnections: () => testConnections,
-}));
+installFakeModelClient(recorder);
+// The interactive layout builds its Connections value at module load, so its
+// live binding must be spied before that layout is imported.
+spyOn(connectionsModule, "createConnections").mockReturnValue(testConnections);
 await Bun.write(
 	path.join(testDirectory, ".wincode", "wincode.jsonc"),
 	`{
@@ -95,15 +93,5 @@ export const restoreScrollTo = (): void => {
 		Reflect.deleteProperty(globalThis, "scrollTo");
 	} else {
 		Reflect.set(globalThis, "scrollTo", previousScrollTo);
-	}
-};
-
-export const restoreEnvironment = (): void => {
-	for (const [key, value] of Object.entries(previousEnvironment)) {
-		if (value === undefined) {
-			delete process.env[key];
-		} else {
-			process.env[key] = value;
-		}
 	}
 };

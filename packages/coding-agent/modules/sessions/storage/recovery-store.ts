@@ -1,5 +1,5 @@
-import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { isObjectLike } from "@wincode/utils";
 import { and, desc, eq } from "drizzle-orm";
 import type {
@@ -56,15 +56,15 @@ const ensurePrivateBlobPath = async (
 	root: string,
 	targetPath: string
 ): Promise<void> => {
-	await mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+	await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
 	for (const directory of [
 		root,
 		path.join(root, "recovery"),
 		path.join(root, "recovery", "v1"),
 		path.dirname(targetPath),
 	]) {
-		await mkdir(directory, { recursive: true, mode: 0o700 });
-		await chmod(directory, 0o700);
+		await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+		await fs.chmod(directory, 0o700);
 	}
 };
 
@@ -87,7 +87,7 @@ const writePinnedBlob = async (
 	try {
 		const existing = await Bun.file(targetPath).bytes();
 		if (computeFileVersion(existing) === expectedVersion) {
-			await chmod(targetPath, 0o600);
+			await fs.chmod(targetPath, 0o600);
 			return;
 		}
 	} catch (error) {
@@ -97,13 +97,13 @@ const writePinnedBlob = async (
 	}
 	const temporaryPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
 	try {
-		await writeFile(temporaryPath, bytes, {
+		await fs.writeFile(temporaryPath, bytes, {
 			flag: "wx",
 			mode: 0o600,
 		});
-		await rename(temporaryPath, targetPath);
+		await fs.rename(temporaryPath, targetPath);
 	} finally {
-		await rm(temporaryPath, { force: true }).catch(() => undefined);
+		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
 	}
 };
 
@@ -461,11 +461,11 @@ export const createDrizzleRecoveryStore = (
 		blobKeys = transactionBlobKeys(transactionId)
 	): Promise<void> => {
 		for (const blobKey of blobKeys) {
-			await rm(resolveBlobPath(snapshotRoot, blobKey), {
+			await fs.rm(resolveBlobPath(snapshotRoot, blobKey), {
 				force: true,
 			});
 		}
-		await rm(
+		await fs.rm(
 			resolveBlobPath(
 				snapshotRoot,
 				path.join(RECOVERY_BLOB_PREFIX, transactionId)
@@ -743,10 +743,12 @@ export const createDrizzleRecoveryStore = (
 					}
 				});
 			} catch (error) {
-				await rm(
-					resolveBlobPath(snapshotRoot, path.join(RECOVERY_BLOB_PREFIX, id)),
-					{ force: true, recursive: true }
-				).catch(() => undefined);
+				await fs
+					.rm(
+						resolveBlobPath(snapshotRoot, path.join(RECOVERY_BLOB_PREFIX, id)),
+						{ force: true, recursive: true }
+					)
+					.catch(() => undefined);
 				throw error;
 			}
 			return {

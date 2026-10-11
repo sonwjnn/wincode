@@ -28,8 +28,9 @@ catalog already supports.
 ## Decision
 
 - Context limits, output limits, and cost rates live on the catalog entry.
-- The runtime pricing fetch becomes a *refresh* of those values plus a source
-  of `stale`/`refreshedAt` provenance, not the sole origin.
+- The runtime pricing fetch becomes a *refresh* of those values plus a `source`
+  of freshness (`bundled`/`live`/`cache`/`stale`) and the `snapshotDate`
+  provenance of the build-time data, not the sole origin.
 - Cost modeling covers context tiers (`tiers[]`, with `context_over_200k`
   folded in as a tier at parse time) and cache read/write rates. A rate the
   upstream does not provide is absent, never defaulted to another rate.
@@ -74,9 +75,9 @@ which is the precondition for automatic compaction.
 ## Staleness is measured but not displayed
 
 The data needed to judge how current a price is exists and is resolved: the
-pricing state carries a `source` of `"bundled"`, `"cache"`, or `"stale"`, and
-the generated metadata module exports `modelMetadataSnapshotDate`, the date the
-build-time data came from.
+pricing state carries a `source` of `"bundled"`, `"live"`, `"cache"`, or
+`"stale"`, and the generated metadata module exports
+`modelMetadataSnapshotDate`, the date the build-time data came from.
 
 No surface displays it. A decision was made to show the estimated cost with its
 `~` marker and nothing else, so a reader cannot tell whether a figure came from

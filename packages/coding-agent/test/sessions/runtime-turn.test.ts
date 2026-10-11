@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type {
 	AgentRuntime,
@@ -287,7 +287,7 @@ test("Agent Turn shell schemas enforce the active resource profile command limit
 });
 
 test("selected coding tools execute directly and remain Agent-selective", async () => {
-	const root = await mkdtemp(
+	const root = await fs.mkdtemp(
 		path.join(process.cwd(), ".wincode-selected-tools-")
 	);
 	const filePath = path.join(root, "selected.txt");
@@ -314,7 +314,7 @@ test("selected coding tools execute directly and remain Agent-selective", async 
 			readOnlyTools.some(({ definition }) => definition.name === "write")
 		).toBe(false);
 	} finally {
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 

@@ -9,15 +9,9 @@
  */
 
 import { spawn } from "node:child_process";
-import {
-	copyFileSync,
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 // rsvg-convert lives under MacPorts (/opt/local/bin); magick/gs under
 // /usr/local/bin; Homebrew under /opt/homebrew/bin. Augment PATH so the child
@@ -30,7 +24,7 @@ export const EXTRA_PATH = [
 
 // Transient session/preview files live under the OS temp dir (NOT the vault),
 // so only the PUBLISHED PNG ever lands inside the Obsidian vault (viz/).
-export const STAGING_ROOT = join(tmpdir(), "pi-visual-tools");
+export const STAGING_ROOT = path.join(os.tmpdir(), "pi-visual-tools");
 export const FILES_DIRNAME = "viz";
 
 export const CHROME_CANDIDATES = [
@@ -40,7 +34,7 @@ export const CHROME_CANDIDATES = [
 
 export function findChrome(): string | undefined {
 	for (const c of CHROME_CANDIDATES) {
-		if (existsSync(c)) {
+		if (fs.existsSync(c)) {
 			return c;
 		}
 	}
@@ -98,7 +92,7 @@ export interface Session {
 
 /** Per-session work dir under the OS temp dir, keyed by pid + a group name. */
 export function sessionDir(group: string): string {
-	return join(STAGING_ROOT, `${group}-${process.pid}`);
+	return path.join(STAGING_ROOT, `${group}-${process.pid}`);
 }
 
 /** Write the full source to the managed file, creating the session work dir. */
@@ -108,9 +102,9 @@ export function writeBody(
 	source: string
 ): Session {
 	const workDir = sessionDir(group);
-	mkdirSync(workDir, { recursive: true });
-	const bodyPath = join(workDir, bodyFileName);
-	writeFileSync(bodyPath, source, "utf8");
+	fs.mkdirSync(workDir, { recursive: true });
+	const bodyPath = path.join(workDir, bodyFileName);
+	fs.writeFileSync(bodyPath, source, "utf8");
 	return { workDir, bodyPath };
 }
 
@@ -177,25 +171,24 @@ export function publish(
 	pngPath: string,
 	slug: string
 ): { filename: string; path: string } {
-	const filesDir = join(process.cwd(), FILES_DIRNAME);
-	mkdirSync(filesDir, { recursive: true });
+	const filesDir = path.join(process.cwd(), FILES_DIRNAME);
+	fs.mkdirSync(filesDir, { recursive: true });
 	const clean =
 		slug
 			.toLowerCase()
 			.replace(/[^a-z0-9]+/g, "-")
 			.replace(/^-+|-+$/g, "") || "viz";
 	const filename = `viz-${clean}-${Date.now()}.png`;
-	const dest = join(filesDir, filename);
-	copyFileSync(pngPath, dest);
+	const dest = path.join(filesDir, filename);
+	fs.copyFileSync(pngPath, dest);
 	return { filename, path: dest };
 }
 
-export {
-	basename,
-	dirname,
-	existsSync,
-	join,
-	mkdirSync,
-	readFileSync,
-	writeFileSync,
-};
+// Public surface for the visual-tools authoring loops; consumers import these
+// names directly, so keep the namespace-backed re-exports.
+export const dirname = path.dirname;
+export const existsSync = fs.existsSync;
+export const join = path.join;
+export const mkdirSync = fs.mkdirSync;
+export const readFileSync = fs.readFileSync;
+export const writeFileSync = fs.writeFileSync;

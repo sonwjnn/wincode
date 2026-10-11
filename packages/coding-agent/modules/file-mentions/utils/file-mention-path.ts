@@ -1,4 +1,4 @@
-import path from "node:path";
+import * as path from "node:path";
 
 export const UNLIMITED_FILE_MENTION_DISCOVERY_DEPTH = Number.POSITIVE_INFINITY;
 

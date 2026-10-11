@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type {
 	AgentTurnEvent,
@@ -2309,7 +2309,9 @@ test("shutdown defers queued attachment cleanup until steering commit settles", 
 });
 
 test("applies the resolved attachment budget across a steering boundary", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-steering-budget-"));
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-steering-budget-")
+	);
 	const store = createSessionAttachmentStore({
 		repository: createMemoryAttachmentMetadataRepository(),
 		root,
@@ -2395,7 +2397,7 @@ test("applies the resolved attachment budget across a steering boundary", async 
 		runtime.release();
 		await engine.internalPort.shutdown();
 		await active.catch(() => undefined);
-		await rm(root, { force: true, recursive: true });
+		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 

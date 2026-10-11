@@ -17,8 +17,8 @@ import {
 // enabled, so tests opt out before any app module evaluates the environment.
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
 	CliRenderEvents,
@@ -26,54 +26,46 @@ import {
 	type ScrollBoxRenderable,
 	TextareaRenderable,
 } from "@opentui/core";
-import { MockTreeSitterClient } from "@opentui/core/testing";
+import {
+	MockTreeSitterClient,
+	type TestRendererSetup,
+} from "@opentui/core/testing";
+import { testRender } from "@opentui/react/test-utils";
+import {
+	createMemoryHistory,
+	createRootRoute,
+	createRouter,
+	RouterContextProvider,
+} from "@tanstack/react-router";
+import { createConnections } from "@wincode/ai/connections";
 import { act, useEffect, useState } from "react";
+import { AgentRegistryProvider } from "@/modules/agents";
+import { ConnectionsProvider } from "@/modules/connections";
+import { ModelPricingProvider } from "@/modules/model-pricing";
+import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
+import {
+	PromptConfigProvider,
+	usePromptConfig,
+} from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
 import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
+import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { ConfigProvider } from "@/shared/config/config-provider";
+import { createConfigStore } from "@/shared/config/config-store";
+import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import {
 	KeyboardLayerProvider,
 	useKeyboardLayer,
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
-
-const { testRender } = await import("@opentui/react/test-utils");
-const {
-	createMemoryHistory,
-	createRootRoute,
-	createRouter,
-	RouterContextProvider,
-} = await import("@tanstack/react-router");
-const { AgentRegistryProvider } = await import("@/modules/agents");
-const { createConnections } = await import("@wincode/ai/connections");
-const { ConnectionsProvider } = await import("@/modules/connections");
-const { ModelPricingProvider } = await import("@/modules/model-pricing");
-const { PromptConfigProvider, usePromptConfig } = await import(
-	"@/modules/prompt-settings/context/prompt-config-provider"
-);
-const { ConfigProvider } = await import("@/shared/config/config-provider");
-const { createConfigStore } = await import("@/shared/config/config-store");
-const { DialogProvider } = await import(
-	"@/shared/providers/dialog/dialog-provider"
-);
-const { ThemeProvider } = await import(
-	"@/shared/providers/theme/theme-provider"
-);
-const { DEFAULT_THEME } = await import("@/shared/providers/theme/themes");
-const { ToastProvider } = await import(
-	"@/shared/providers/toast/toast-provider"
-);
-const { CommandControllerProvider } = await import(
-	"@/tui/commands/command-controller-provider"
-);
-const { ChatShell } = await import(
-	"@/modules/sessions/ui/components/chat-shell"
-);
-const { setMarkdownTreeSitterClientForTests } = await import(
-	"@/modules/sessions/ui/messages/markdown-message-part"
-);
+import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
+import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 
 beforeAll(() => {
 	// Text parts map through MarkdownMessagePart; the mock client keeps block
@@ -83,7 +75,15 @@ beforeAll(() => {
 	);
 });
 
+// These tests render the provider without a pricing prop, so keep it off the
+// developer's real pricing cache: only the bundled snapshot should show.
+const readModelPricingCacheSpy = spyOn(
+	modelPricingCacheModule,
+	"readModelPricingCache"
+).mockReturnValue(null);
+
 afterAll(() => {
+	readModelPricingCacheSpy.mockRestore();
 	setMarkdownTreeSitterClientForTests(null);
 });
 
@@ -252,7 +252,7 @@ type ChatShellSetup = {
 	/** The Agent the prompt configuration holds, read after each keypress. */
 	agent: { current: string };
 	holder: { current: ChatShellProbeHandle | null };
-	setup: Awaited<ReturnType<typeof testRender>>;
+	setup: TestRendererSetup;
 };
 type ChatShellRenderOptions = {
 	activeMessages?: readonly SessionMessage[];
@@ -320,7 +320,9 @@ const renderChatShell = async (
 	writeComposerDraft("draft-test-key", "");
 	const setup = await testRender(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ConfigProvider value={{ configStore, homeRoot: homedir(), workspace }}>
+			<ConfigProvider
+				value={{ configStore, homeRoot: os.homedir(), workspace }}
+			>
 				<ToastProvider>
 					<ConnectionsProvider connections={createConnections()}>
 						<AgentRegistryProvider>
@@ -358,9 +360,7 @@ const renderChatShell = async (
 	return { agent, holder, setup };
 };
 
-const flushUi = async (
-	setup: Awaited<ReturnType<typeof testRender>>
-): Promise<void> => {
+const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await Bun.sleep(20);
 	await setup.renderOnce();
 };

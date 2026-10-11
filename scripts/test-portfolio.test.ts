@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { access, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { isError } from "@wincode/utils";
 import { spawnSync } from "bun";
 
-const repositoryRoot = resolve(import.meta.dir, "..");
-const runnerPath = join(repositoryRoot, "scripts/test-portfolio.ts");
+const repositoryRoot = path.resolve(import.meta.dir, "..");
+const runnerPath = path.join(repositoryRoot, "scripts/test-portfolio.ts");
 
 const output = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
@@ -39,14 +39,14 @@ const writeFixture = async (
 	relativePath: string,
 	contents: string
 ): Promise<void> => {
-	const path = join(root, relativePath);
-	await mkdir(join(path, ".."), { recursive: true });
-	await Bun.write(path, contents);
+	const filePath = path.join(root, relativePath);
+	await fs.mkdir(path.join(filePath, ".."), { recursive: true });
+	await Bun.write(filePath, contents);
 };
 
-const exists = async (path: string): Promise<boolean> => {
+const exists = async (filePath: string): Promise<boolean> => {
 	try {
-		await access(path);
+		await fs.access(filePath);
 		return true;
 	} catch (error) {
 		if (!isMissingPathError(error)) {
@@ -58,28 +58,30 @@ const exists = async (path: string): Promise<boolean> => {
 
 describe("test portfolio runner", () => {
 	test("audits placement and classification before executing Default tests", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-test-discovery-"));
-		const marker = join(root, "execution.log");
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-test-discovery-")
+		);
+		const marker = path.join(root, "execution.log");
 		try {
 			await writeFixture(
 				root,
 				"packages/alpha/test/default.test.ts",
-				`import { appendFileSync } from "node:fs";
+				`import * as fs from "node:fs";
 import { expect, test } from "bun:test";
 test("valid package test", () => {
 	expect(process.env.GOOGLE_GENERATIVE_AI_API_KEY).toBe("");
 	expect(process.env.OPENAI_API_KEY).toBe("");
-	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "default\\n");
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "default\\n");
 });
 `
 			);
 			await writeFixture(
 				root,
 				"packages/dist/test/named-package.test.ts",
-				`import { appendFileSync } from "node:fs";
+				`import * as fs from "node:fs";
 import { test } from "bun:test";
 test("valid package named after an ignored directory", () => {
-	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "named\\n");
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "named\\n");
 });
 `
 			);
@@ -116,21 +118,23 @@ test("valid package named after an ignored directory", () => {
 			);
 			expect(invalid.output).toContain("unsupported test extension .js");
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 
 	test("runs Default packages sequentially and reports every package failure", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-default-runner-"));
-		const marker = join(root, "execution.log");
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-default-runner-")
+		);
+		const marker = path.join(root, "execution.log");
 		try {
 			await writeFixture(
 				root,
 				"packages/a-fails/test/failure.test.ts",
-				`import { appendFileSync } from "node:fs";
+				`import * as fs from "node:fs";
 import { test, expect } from "bun:test";
 test("records a package failure", () => {
-	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "a-fails\\n");
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "a-fails\\n");
 	expect(true).toBe(false);
 });
 `
@@ -138,10 +142,10 @@ test("records a package failure", () => {
 			await writeFixture(
 				root,
 				"packages/b-runs/test/after.test.ts",
-				`import { appendFileSync } from "node:fs";
+				`import * as fs from "node:fs";
 import { test } from "bun:test";
 test("records the later package", () => {
-	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "b-runs\\n");
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "b-runs\\n");
 });
 `
 			);
@@ -155,30 +159,32 @@ test("records the later package", () => {
 			expect(result.output).toContain("Default package failed: a-fails");
 			expect(await Bun.file(marker).text()).toBe("a-fails\nb-runs\n");
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 
 	test("fails fast while retaining only the E2E log and final frame", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-e2e-runner-"));
-		const marker = join(root, "journeys.log");
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-e2e-runner-")
+		);
+		const marker = path.join(root, "journeys.log");
 		try {
 			await writeFixture(
 				root,
 				"packages/coding-agent/test/a-fails.e2e.test.ts",
-				`import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+				`import * as fs from "node:fs";
+import * as path from "node:path";
 import { test } from "bun:test";
 const artifactDirectory = process.env.WINCODE_E2E_ARTIFACT_DIR!;
 const framePath = process.env.WINCODE_E2E_FRAME_PATH!;
 test("fails with an actionable frame", () => {
-	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "a-fails\\n");
-	mkdirSync(join(artifactDirectory, "attachments"), { recursive: true });
-	writeFileSync(join(artifactDirectory, "database.sqlite"), "database");
-	writeFileSync(join(artifactDirectory, "environment.json"), "environment");
-	writeFileSync(join(artifactDirectory, "authorization.txt"), "secret");
-	writeFileSync(join(artifactDirectory, "constructor"), "sensitive");
-	writeFileSync(framePath, "final character frame");
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "a-fails\\n");
+	fs.mkdirSync(path.join(artifactDirectory, "attachments"), { recursive: true });
+	fs.writeFileSync(path.join(artifactDirectory, "database.sqlite"), "database");
+	fs.writeFileSync(path.join(artifactDirectory, "environment.json"), "environment");
+	fs.writeFileSync(path.join(artifactDirectory, "authorization.txt"), "secret");
+	fs.writeFileSync(path.join(artifactDirectory, "constructor"), "sensitive");
+	fs.writeFileSync(framePath, "final character frame");
 	throw new Error("intentional E2E failure");
 });
 `
@@ -186,10 +192,10 @@ test("fails with an actionable frame", () => {
 			await writeFixture(
 				root,
 				"packages/coding-agent/test/b-runs.e2e.test.ts",
-				`import { appendFileSync } from "node:fs";
+				`import * as fs from "node:fs";
 import { test } from "bun:test";
 test("must not run after a failure", () => {
-	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "b-runs\\n");
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "b-runs\\n");
 });
 `
 			);
@@ -197,7 +203,7 @@ test("must not run after a failure", () => {
 			const result = runPortfolio(root, "e2e", [], {
 				WINCODE_PORTFOLIO_MARKER: marker,
 			});
-			const artifactDirectory = join(
+			const artifactDirectory = path.join(
 				root,
 				"test-artifacts",
 				"e2e",
@@ -209,38 +215,42 @@ test("must not run after a failure", () => {
 			expect(result.output).toContain("Executed E2E test files: 1");
 			expect(await Bun.file(marker).text()).toBe("a-fails\n");
 			expect(
-				await Bun.file(join(artifactDirectory, "runner.log")).text()
+				await Bun.file(path.join(artifactDirectory, "runner.log")).text()
 			).toContain("intentional E2E failure");
 			expect(
-				await Bun.file(join(artifactDirectory, "terminal-frame.txt")).text()
+				await Bun.file(
+					path.join(artifactDirectory, "terminal-frame.txt")
+				).text()
 			).toBe("final character frame");
-			expect((await readdir(artifactDirectory)).sort()).toEqual([
+			expect((await fs.readdir(artifactDirectory)).sort()).toEqual([
 				"runner.log",
 				"terminal-frame.txt",
 			]);
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 
 	test("keeps dotted E2E filenames in isolated artifact directories", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-e2e-scenario-"));
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-e2e-scenario-")
+		);
 		try {
 			await writeFixture(
 				root,
 				"packages/coding-agent/test/...e2e.test.ts",
-				`import { writeFileSync } from "node:fs";
+				`import * as fs from "node:fs";
 import { test } from "bun:test";
 const framePath = process.env.WINCODE_E2E_FRAME_PATH!;
 test("fails after writing the final frame", () => {
-	writeFileSync(framePath, "safe frame");
+	fs.writeFileSync(framePath, "safe frame");
 	throw new Error("dotted scenario failure");
 });
 `
 			);
 
 			const result = runPortfolio(root, "e2e");
-			const artifactDirectory = join(
+			const artifactDirectory = path.join(
 				root,
 				"test-artifacts",
 				"e2e",
@@ -249,28 +259,36 @@ test("fails after writing the final frame", () => {
 			);
 			expect(result.exitCode).not.toBe(0);
 			expect(result.output).toContain("Executed E2E test files: 1");
-			expect(await exists(join(artifactDirectory, "runner.log"))).toBe(true);
+			expect(await exists(path.join(artifactDirectory, "runner.log"))).toBe(
+				true
+			);
 			expect(
-				await Bun.file(join(artifactDirectory, "terminal-frame.txt")).text()
+				await Bun.file(
+					path.join(artifactDirectory, "terminal-frame.txt")
+				).text()
 			).toBe("safe frame");
 			expect(
-				await exists(join(root, "test-artifacts", "e2e", "terminal-frame.txt"))
+				await exists(
+					path.join(root, "test-artifacts", "e2e", "terminal-frame.txt")
+				)
 			).toBe(false);
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 	test("removes successful artifacts and audits beyond a package filter", async () => {
-		const root = await mkdtemp(join(tmpdir(), "wincode-filtered-runner-"));
-		const marker = join(root, "execution.log");
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-filtered-runner-")
+		);
+		const marker = path.join(root, "execution.log");
 		try {
 			await writeFixture(
 				root,
 				"packages/selected/test/success.e2e.test.ts",
-				`import { appendFileSync } from "node:fs";
+				`import * as fs from "node:fs";
 import { test } from "bun:test";
 test("completes successfully", () => {
-	appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "success\\n");
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "success\\n");
 });
 `
 			);
@@ -280,14 +298,16 @@ test("completes successfully", () => {
 			expect(success.exitCode).toBe(0);
 			expect(success.output).toContain("Executed E2E test files: 1");
 			expect(await Bun.file(marker).text()).toBe("success\n");
-			expect(await exists(join(root, "test-artifacts", "e2e"))).toBe(false);
+			expect(await exists(path.join(root, "test-artifacts", "e2e"))).toBe(
+				false
+			);
 
 			await writeFixture(root, "packages/other/src/forgotten.test.ts", "");
 			const filtered = runPortfolio(root, "default", ["--package", "selected"]);
 			expect(filtered.exitCode).not.toBe(0);
 			expect(filtered.output).toContain("forgotten.test.ts");
 		} finally {
-			await rm(root, { force: true, recursive: true });
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 });

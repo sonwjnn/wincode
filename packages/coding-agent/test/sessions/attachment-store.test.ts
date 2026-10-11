@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, stat, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { isObjectLike, isString } from "@wincode/utils";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
@@ -40,7 +40,7 @@ const createRepository = (): AttachmentMetadataRepository => {
 };
 
 test("ingests exact bytes once and preserves per-reference filenames", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({ repository, root });
 
@@ -74,12 +74,12 @@ test("ingests exact bytes once and preserves per-reference filenames", async () 
 	expect(resolved.reference).not.toHaveProperty("height");
 	expect(resolved.reference).not.toHaveProperty("width");
 
-	const blobPath = join(root, repository.list()[0]?.blobKey ?? "");
+	const blobPath = path.join(root, repository.list()[0]?.blobKey ?? "");
 	expect(await Bun.file(blobPath).bytes()).toEqual(PNG_BYTES);
 });
 
 test("verified attachment dimensions override forged token-budget metadata", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const attachments = createSessionAttachmentStore({
 		repository: createRepository(),
 		root,
@@ -133,7 +133,7 @@ test("verified attachment dimensions override forged token-budget metadata", asy
 });
 
 test("externalizes inline image parts and hydrates them only on request", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const attachments = createSessionAttachmentStore({
 		repository: createRepository(),
 		root,
@@ -182,7 +182,7 @@ test("externalizes inline image parts and hydrates them only on request", async 
 });
 
 test("returns bounded unavailable markers for missing or corrupted blobs", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({ repository, root });
 	const reference = await attachments.ingest({
@@ -196,7 +196,7 @@ test("returns bounded unavailable markers for missing or corrupted blobs", async
 	}
 	const corruptedBytes = new Uint8Array(PNG_BYTES);
 	corruptedBytes[corruptedBytes.length - 1] = 0x02;
-	await Bun.write(join(root, record.blobKey), corruptedBytes);
+	await Bun.write(path.join(root, record.blobKey), corruptedBytes);
 
 	const resolved = await attachments.resolve(reference);
 	expect(resolved.availability).toBe("corrupt");
@@ -218,7 +218,7 @@ test("returns bounded unavailable markers for missing or corrupted blobs", async
 });
 
 test("rejects required hydration when a committed attachment is corrupt", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({ repository, root });
 	const reference = await attachments.ingest({
@@ -232,7 +232,7 @@ test("rejects required hydration when a committed attachment is corrupt", async 
 	}
 	const corruptedBytes = new Uint8Array(PNG_BYTES);
 	corruptedBytes[corruptedBytes.length - 1] = 0x02;
-	await Bun.write(join(root, record.blobKey), corruptedBytes);
+	await Bun.write(path.join(root, record.blobKey), corruptedBytes);
 
 	await expect(
 		attachments.hydrateMessages(
@@ -249,7 +249,7 @@ test("rejects required hydration when a committed attachment is corrupt", async 
 });
 
 test("keeps only newest attachments within an explicit media budget", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const attachments = createSessionAttachmentStore({
 		repository: createRepository(),
 		root,
@@ -305,7 +305,7 @@ test("keeps only newest attachments within an explicit media budget", async () =
 });
 
 test("prioritizes the latest user turn over retained media limits", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const attachments = createSessionAttachmentStore({
 		repository: createRepository(),
 		root,
@@ -347,7 +347,7 @@ test("prioritizes the latest user turn over retained media limits", async () => 
 });
 
 test("collects only unreferenced blobs and reports bytes without content", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({
 		now: () => new Date(Date.now() + 1000),
@@ -376,9 +376,9 @@ test("collects only unreferenced blobs and reports bytes without content", async
 	if (!orphanRecord) {
 		throw new Error("orphan attachment metadata missing");
 	}
-	const temporaryPath = `${join(root, orphanRecord.blobKey)}.crashed.tmp`;
+	const temporaryPath = `${path.join(root, orphanRecord.blobKey)}.crashed.tmp`;
 	await Bun.write(temporaryPath, PNG_BYTES);
-	expect((await stat(temporaryPath)).size).toBe(PNG_BYTES.byteLength);
+	expect((await fs.stat(temporaryPath)).size).toBe(PNG_BYTES.byteLength);
 	repository.delete(orphan.attachmentId);
 	const report = await attachments.collect({
 		liveAttachmentIds: [live.attachmentId],
@@ -391,11 +391,11 @@ test("collects only unreferenced blobs and reports bytes without content", async
 	if (!liveRecord) {
 		throw new Error("live attachment metadata missing");
 	}
-	expect(await stat(join(root, liveRecord.blobKey))).toBeTruthy();
+	expect(await fs.stat(path.join(root, liveRecord.blobKey))).toBeTruthy();
 });
 
 test("keeps a retained blob through collection until it is released", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({
 		now: () => new Date(Date.now() + 1000),
@@ -421,7 +421,7 @@ test("keeps a retained blob through collection until it is released", async () =
 	});
 	expect(retainedReport.reclaimedCount).toBe(0);
 	expect(repository.get(held.attachmentId)).toBeDefined();
-	expect(await stat(join(root, record.blobKey))).toBeTruthy();
+	expect(await fs.stat(path.join(root, record.blobKey))).toBeTruthy();
 
 	// Once the composition is gone, the same pass reclaims it.
 	attachments.release([held.attachmentId]);
@@ -434,7 +434,7 @@ test("keeps a retained blob through collection until it is released", async () =
 });
 
 test("holds a blob retained twice until both holds are released", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({
 		now: () => new Date(Date.now() + 1000),
@@ -467,7 +467,7 @@ test("holds a blob retained twice until both holds are released", async () => {
 });
 
 test("validates magic bytes, size, cancellation, and bounded filenames", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const attachments = createSessionAttachmentStore({
 		maxBytes: PNG_BYTES.byteLength,
 		repository: createRepository(),
@@ -512,7 +512,7 @@ test("validates magic bytes, size, cancellation, and bounded filenames", async (
 });
 
 test("annotates missing blobs without reading payload bytes", async () => {
-	const root = await mkdtemp(join(tmpdir(), "wincode-attachments-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({ repository, root });
 	const reference = await attachments.ingest({
@@ -524,7 +524,7 @@ test("annotates missing blobs without reading payload bytes", async () => {
 	if (!record) {
 		throw new Error("metadata was not written");
 	}
-	await unlink(join(root, record.blobKey));
+	await fs.unlink(path.join(root, record.blobKey));
 
 	const annotated = await attachments.annotateMessagesForDisplay([
 		fromPartial<SessionMessage>({

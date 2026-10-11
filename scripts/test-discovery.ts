@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ReadonlyDeep } from "type-fest";
 
 export type TestClassification = "default" | "e2e" | "external";
@@ -62,7 +62,7 @@ export const compareStableStrings = (left: string, right: string): number => {
 };
 
 const normalizePath = (pathName: string): string =>
-	pathName.split(sep).join("/");
+	pathName.split(path.sep).join("/");
 
 const isTestLikeFile = (fileName: string): boolean =>
 	TEST_LIKE_FILE_PATTERN.test(fileName);
@@ -135,11 +135,13 @@ const walk = (
 	currentPath: string,
 	visitFile: (path: string) => void
 ): void => {
-	const directory = join(root, currentPath);
-	for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
-		(left, right) => compareStableStrings(left.name, right.name)
-	)) {
-		const entryPath = currentPath ? join(currentPath, entry.name) : entry.name;
+	const directory = path.join(root, currentPath);
+	for (const entry of fs
+		.readdirSync(directory, { withFileTypes: true })
+		.sort((left, right) => compareStableStrings(left.name, right.name))) {
+		const entryPath = currentPath
+			? path.join(currentPath, entry.name)
+			: entry.name;
 		if (entry.isDirectory()) {
 			if (
 				currentPath !== "packages" &&
@@ -157,7 +159,7 @@ const walk = (
 };
 
 export const discoverTests = (root: string): TestDiscovery => {
-	const absoluteRoot = resolve(root);
+	const absoluteRoot = path.resolve(root);
 	const files: DiscoveredTestFile[] = [];
 	const issues: TestDiscoveryIssue[] = [];
 

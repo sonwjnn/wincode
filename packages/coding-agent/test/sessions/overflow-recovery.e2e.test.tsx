@@ -1,28 +1,18 @@
-import { isUndefined } from "@wincode/utils";
+import { createEnvironmentRestorer } from "@/test/support/environment";
 
-const previousEnvironment = {
-	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
-	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
-	WINCODE_LOCAL_DB_PATH: process.env.WINCODE_LOCAL_DB_PATH,
-	WINCODE_MODEL_PRICING_OFFLINE: process.env.WINCODE_MODEL_PRICING_OFFLINE,
-};
-
-const restoreEnvironment = (): void => {
-	for (const [key, value] of Object.entries(previousEnvironment)) {
-		if (isUndefined(value)) {
-			delete process.env[key];
-		} else {
-			process.env[key] = value;
-		}
-	}
-};
+const restoreEnvironment = createEnvironmentRestorer([
+	"WINCODE_E2E_HOME",
+	"WINCODE_E2E_WORKSPACE",
+	"WINCODE_LOCAL_DB_PATH",
+	"WINCODE_MODEL_PRICING_OFFLINE",
+]);
 
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, expect, mock, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import type {
 	ModelStepRequest,
@@ -30,23 +20,26 @@ import type {
 } from "@wincode/ai/model-client";
 import { act } from "react";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
-import type { FakeModelStepScript } from "@/test/support/e2e-fake-runtime";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	type FakeModelStepScript,
+	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 
-const testDirectory = await mkdtemp(
-	join(tmpdir(), "wincode-overflow-recovery-e2e-")
+const testDirectory = await fs.mkdtemp(
+	path.join(os.tmpdir(), "wincode-overflow-recovery-e2e-")
 );
-process.env.WINCODE_LOCAL_DB_PATH = join(testDirectory, "conversation.sqlite");
+process.env.WINCODE_LOCAL_DB_PATH = path.join(
+	testDirectory,
+	"conversation.sqlite"
+);
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
 afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();
-	await rm(testDirectory, { force: true, recursive: true });
+	await fs.rm(testDirectory, { force: true, recursive: true });
 });
 
 const PROMPT = "continue after the overflow";
@@ -87,12 +80,9 @@ const overflowThenAnswer: FakeModelStepScript = async function* (
 };
 
 const recorder = createFakeModelClientRecorder();
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder, overflowThenAnswer)
-);
+installFakeModelClient(recorder, overflowThenAnswer);
 
-// The module mock must be installed before the production SessionView graph loads.
-const {
+import {
 	cleanupSessionRender,
 	createE2ePricing,
 	createE2eStore,
@@ -102,7 +92,7 @@ const {
 	waitForSessionCondition,
 	waitForSessionFrame,
 	writeE2EFrame,
-} = await import("@/test/support/e2e-fixture");
+} from "@/test/support/e2e-fixture";
 
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store);

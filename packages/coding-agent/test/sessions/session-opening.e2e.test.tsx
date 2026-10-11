@@ -1,28 +1,18 @@
-import { isUndefined } from "@wincode/utils";
+import { createEnvironmentRestorer } from "@/test/support/environment";
 
-const previousEnvironment = {
-	WINCODE_E2E_HOME: process.env.WINCODE_E2E_HOME,
-	WINCODE_E2E_WORKSPACE: process.env.WINCODE_E2E_WORKSPACE,
-	WINCODE_LOCAL_DB_PATH: process.env.WINCODE_LOCAL_DB_PATH,
-	WINCODE_MODEL_PRICING_OFFLINE: process.env.WINCODE_MODEL_PRICING_OFFLINE,
-};
-
-const restoreEnvironment = (): void => {
-	for (const [key, value] of Object.entries(previousEnvironment)) {
-		if (isUndefined(value)) {
-			delete process.env[key];
-		} else {
-			process.env[key] = value;
-		}
-	}
-};
+const restoreEnvironment = createEnvironmentRestorer([
+	"WINCODE_E2E_HOME",
+	"WINCODE_E2E_WORKSPACE",
+	"WINCODE_LOCAL_DB_PATH",
+	"WINCODE_MODEL_PRICING_OFFLINE",
+]);
 
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, expect, mock, test } from "bun:test";
-import { link, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import {
 	createOperationalFailure,
@@ -43,59 +33,54 @@ import {
 import type { SessionId } from "@/shared/identifiers";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientModule,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 import {
 	agentId,
 	agentTurnId,
+	sessionId,
 	sessionMessageId,
 	sessionRecordId,
 } from "../support/identifiers";
 import { startSessionWriterContender } from "../support/session-writer-process";
 
-const testDirectory = await mkdtemp(
-	join(tmpdir(), "wincode-session-opening-e2e-")
+const testDirectory = await fs.mkdtemp(
+	path.join(os.tmpdir(), "wincode-session-opening-e2e-")
 );
-const databasePath = join(testDirectory, "conversation.sqlite");
+const databasePath = path.join(testDirectory, "conversation.sqlite");
 process.env.WINCODE_LOCAL_DB_PATH = databasePath;
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
-const aliasDatabasePath = join(
+const aliasDatabasePath = path.join(
 	testDirectory,
 	"conversation-owner-alias.sqlite"
 );
 // Create the hard link before SQLite opens the database.
 await Bun.write(databasePath, "");
-await link(databasePath, aliasDatabasePath);
+await fs.link(databasePath, aliasDatabasePath);
 afterAll(async () => {
+	mock.restore();
 	restoreEnvironment();
-	await rm(testDirectory, { force: true, recursive: true });
+	await fs.rm(testDirectory, { force: true, recursive: true });
 });
 
 const recorder = createFakeModelClientRecorder();
-await mock.module("@wincode/ai/model-client", () =>
-	createFakeModelClientModule(recorder)
-);
+installFakeModelClient(recorder);
 
-// The module mock must be installed before the production Session Surface graph
-// loads, so the Agent Runtime the Session Host composes is the fake one.
-const {
-	E2E_MODEL,
+import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
+import {
 	cleanupSessionRender,
 	createE2ePricing,
 	createE2eStore,
+	E2E_MODEL,
 	renderSession,
 	seedCompactionHistory,
 	settleSessionUi,
 	waitForSessionFrame,
 	writeE2EFrame,
-} = await import("@/test/support/e2e-fixture");
-const { buildUserSessionRecord } = await import(
-	"@/modules/sessions/storage/session-record"
-);
-const { sessionId } = await import("../support/identifiers");
+} from "@/test/support/e2e-fixture";
 
 const store = createE2eStore();
 const seeded = await seedCompactionHistory(store, 1);

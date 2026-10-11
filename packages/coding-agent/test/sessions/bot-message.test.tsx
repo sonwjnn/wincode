@@ -5,7 +5,9 @@ import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
 import { act, useEffect, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
 import { buildAddedPreviewPatch } from "@/modules/sessions/ui/messages/edit-diff-block";
+import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
 import { setTreeSitterClientForTests } from "@/modules/sessions/ui/messages/syntax-style";
 import {
 	buildWritePreview,
@@ -15,13 +17,6 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { toolCallId } from "../support/identifiers";
 import { flushTestRenderer as flushUi } from "../support/opentui";
-
-const { BotMessageContent } = await import(
-	"@/modules/sessions/ui/messages/bot-message"
-);
-const { setMarkdownTreeSitterClientForTests } = await import(
-	"@/modules/sessions/ui/messages/markdown-message-part"
-);
 
 beforeAll(() => {
 	// Text parts map through MarkdownMessagePart; the mock client keeps the

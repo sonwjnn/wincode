@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { readUtf8File } from "../src/file-io";
 import { logger } from "../src/index";
@@ -139,15 +139,17 @@ describe("runtime logger", () => {
 		await withLoggerHome(async (home) => {
 			const originalCwd = process.cwd();
 			const projectRoot = path.join(home, "project");
-			await mkdir(projectRoot);
+			await fs.mkdir(projectRoot);
 			try {
 				process.chdir(projectRoot);
 				await logger.debug("hidden unless enabled");
-				expect(await readdir(logDirectory(home)).catch(() => [])).toEqual([]);
+				expect(await fs.readdir(logDirectory(home)).catch(() => [])).toEqual(
+					[]
+				);
 				expect(
-					await readdir(path.join(projectRoot, ".wincode", "logs")).catch(
-						() => []
-					)
+					await fs
+						.readdir(path.join(projectRoot, ".wincode", "logs"))
+						.catch(() => [])
 				).toEqual([]);
 
 				await withDebugProject(projectRoot, async () => {
@@ -161,7 +163,9 @@ describe("runtime logger", () => {
 					expect(await readUtf8File(projectLogFile)).toContain(
 						'"level":"debug","message":"debug enabled"'
 					);
-					expect(await readdir(logDirectory(home)).catch(() => [])).toEqual([]);
+					expect(await fs.readdir(logDirectory(home)).catch(() => [])).toEqual(
+						[]
+					);
 				});
 			} finally {
 				process.chdir(originalCwd);
@@ -171,7 +175,7 @@ describe("runtime logger", () => {
 	test("routes all log levels to the project when debug is enabled", async () => {
 		await withLoggerHome(async (home) => {
 			const projectRoot = path.join(home, "project");
-			await mkdir(projectRoot);
+			await fs.mkdir(projectRoot);
 			await withDebugProject(projectRoot, async () => {
 				await logger.warn("project warning");
 				await logger.error("project error");
@@ -189,7 +193,9 @@ describe("runtime logger", () => {
 				);
 				expect(contents).toContain('"level":"error","message":"project error"');
 				expect(contents).toContain('"level":"debug","message":"project debug"');
-				expect(await readdir(logDirectory(home)).catch(() => [])).toEqual([]);
+				expect(await fs.readdir(logDirectory(home)).catch(() => [])).toEqual(
+					[]
+				);
 			});
 		});
 	});
@@ -207,15 +213,15 @@ describe("runtime logger", () => {
 		await withLoggerHome(async (home) => {
 			const directory = logDirectory(home);
 			const file = logFile(home);
-			await mkdir(directory, { mode: 0o755, recursive: true });
-			await chmod(directory, 0o755);
-			await writeFile(file, "existing diagnostic\n", { mode: 0o644 });
-			await chmod(file, 0o644);
+			await fs.mkdir(directory, { mode: 0o755, recursive: true });
+			await fs.chmod(directory, 0o755);
+			await fs.writeFile(file, "existing diagnostic\n", { mode: 0o644 });
+			await fs.chmod(file, 0o644);
 
 			await logger.warn("private log permissions");
 
-			const fileMode = (await stat(file)).mode;
-			const directoryMode = (await stat(directory)).mode;
+			const fileMode = (await fs.stat(file)).mode;
+			const directoryMode = (await fs.stat(directory)).mode;
 			// biome-ignore lint/suspicious/noBitwiseOperators: stat.mode stores permissions in its low nine bits.
 			expect(fileMode & 0o777).toBe(0o600);
 			// biome-ignore lint/suspicious/noBitwiseOperators: stat.mode stores permissions in its low nine bits.
@@ -225,7 +231,7 @@ describe("runtime logger", () => {
 	test("retains only recent Wincode log files and continues when logging is unavailable", async () => {
 		await withLoggerHome(async (home) => {
 			const directory = logDirectory(home);
-			await mkdir(directory, { recursive: true });
+			await fs.mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
 			const retained = `wincode.${daysAgo(13)}.log`;
 			await Bun.write(path.join(directory, expired), "expired");
@@ -233,7 +239,7 @@ describe("runtime logger", () => {
 			await Bun.write(path.join(directory, "notes.log"), "not a Wincode log");
 
 			await logger.warn("retention sweep");
-			const names = await readdir(directory);
+			const names = await fs.readdir(directory);
 			expect(names).not.toContain(expired);
 			expect(names).toContain(retained);
 			expect(names).toContain("notes.log");
@@ -268,36 +274,36 @@ describe("runtime logger", () => {
 	test("retries retention after the log directory becomes readable", async () => {
 		await withLoggerHome(async (home) => {
 			const directory = logDirectory(home);
-			await mkdir(directory, { recursive: true });
+			await fs.mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
 			await Bun.write(path.join(directory, expired), "expired");
-			await chmod(directory, 0);
+			await fs.chmod(directory, 0);
 			try {
 				await logger.warn("retention directory is inaccessible");
 			} finally {
-				await chmod(directory, 0o700);
+				await fs.chmod(directory, 0o700);
 			}
 
 			await logger.warn("retention retry");
-			expect(await readdir(directory)).not.toContain(expired);
+			expect(await fs.readdir(directory)).not.toContain(expired);
 		});
 	});
 	test("retries retention when deleting an expired log fails", async () => {
 		await withLoggerHome(async (home) => {
 			const directory = logDirectory(home);
-			await mkdir(directory, { recursive: true });
+			await fs.mkdir(directory, { recursive: true });
 			const expired = `wincode.${daysAgo(15)}.log`;
 			await Bun.write(path.join(directory, expired), "expired");
-			await chmod(directory, 0o500);
+			await fs.chmod(directory, 0o500);
 			try {
 				await logger.warn("retention deletion unavailable");
-				expect(await readdir(directory)).toContain(expired);
+				expect(await fs.readdir(directory)).toContain(expired);
 			} finally {
-				await chmod(directory, 0o700);
+				await fs.chmod(directory, 0o700);
 			}
 
 			await logger.warn("retention deletion retry");
-			expect(await readdir(directory)).not.toContain(expired);
+			expect(await fs.readdir(directory)).not.toContain(expired);
 		});
 	});
 });
