@@ -86,3 +86,22 @@ test("labels a table fetched in this session live", async () => {
 	expect(setup.captureCharFrame()).toContain("live");
 	act(() => setup.renderer.destroy());
 });
+
+test("does not fetch while the offline override is set", async () => {
+	process.env.WINCODE_MODEL_PRICING_OFFLINE = "1";
+	process.env.WINCODE_MODEL_PRICING_URL = "https://pricing.test/offline";
+	isolatePricingCache();
+	const fetchSpy = spyOn(
+		fetchModule,
+		"fetchModelPricingTable"
+	).mockResolvedValue(TABLE);
+
+	const setup = await renderProvider();
+	await settle(setup);
+
+	// The offline knob must prevent the network call outright, not just hide
+	// its result: the bundled snapshot stays the visible table.
+	expect(fetchSpy).not.toHaveBeenCalled();
+	expect(setup.captureCharFrame()).toContain("bundled");
+	act(() => setup.renderer.destroy());
+});

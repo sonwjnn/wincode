@@ -28,8 +28,9 @@ catalog already supports.
 ## Decision
 
 - Context limits, output limits, and cost rates live on the catalog entry.
-- The runtime pricing fetch becomes a *refresh* of those values plus a source
-  of `stale`/`refreshedAt` provenance, not the sole origin.
+- The runtime pricing fetch becomes a *refresh* of those values plus a `source`
+  of freshness (`bundled`/`live`/`cache`/`stale`) and the `snapshotDate`
+  provenance of the build-time data, not the sole origin.
 - Cost modeling covers context tiers (`tiers[]`, with `context_over_200k`
   folded in as a tier at parse time) and cache read/write rates. A rate the
   upstream does not provide is absent, never defaulted to another rate.
