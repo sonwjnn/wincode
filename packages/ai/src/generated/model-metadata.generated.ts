@@ -4,10 +4,10 @@
 // Upstream-missing entries (including overlay-covered): openai/gpt-6-terra, anthropic/claude-opus-5.5, opencode-go/glm-5.1.
 //
 // Manual overlays supply facts the source does not publish:
-// openai/gpt-5.6, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, anthropic/claude-opus-5.5, anthropic/claude-opus-4-5, anthropic/claude-opus-4-5-20251101, anthropic/claude-opus-4-7, anthropic/claude-sonnet-5, anthropic/claude-opus-4-8, anthropic/claude-fable-5, anthropic/claude-fable-5-1, anthropic/claude-opus-5, anthropic/claude-opus-4-6, anthropic/claude-sonnet-4-6, anthropic/claude-haiku-4-5, anthropic/claude-haiku-4-5-20251001, anthropic/claude-sonnet-4-5, anthropic/claude-sonnet-4-5-20250929, opencode-go/gpt-5.6-luna.
+// openai/gpt-5.6, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-6-sol, openai/gpt-6.1-sol, openai/gpt-6-luna, openai/gpt-6-terra, anthropic/claude-opus-5.5, openai/gpt-6-astra, anthropic/claude-opus-4-5, anthropic/claude-opus-4-5-20251101, anthropic/claude-opus-4-7, anthropic/claude-sonnet-5, anthropic/claude-opus-4-8, anthropic/claude-fable-5, anthropic/claude-fable-5-1, anthropic/claude-opus-5, anthropic/claude-opus-4-6, anthropic/claude-sonnet-4-6, anthropic/claude-haiku-4-5, anthropic/claude-haiku-4-5-20251001, anthropic/claude-sonnet-4-5, anthropic/claude-sonnet-4-5-20250929, opencode-go/gpt-5.6-luna.
 // Absent upstream, with no overlay either (reported, never fabricated):
-// openai/gpt-6-terra, opencode-go/glm-5.1.
-// Absent upstream but overlayed: 1.
+// opencode-go/glm-5.1.
+// Absent upstream but overlayed: 2.
 // The build-time age of this data, so a reader can tell how current it is.
 export const modelMetadataSnapshotDate = "2026-10-11";
 
@@ -53,6 +53,28 @@ export const modelMetadataByKey: Readonly<
 				"cacheWrite": 10
 			}
 		],
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		},
 		"reasoningSummary": true
 	},
 	"openai/gpt-5.6-sol": {
@@ -92,6 +114,28 @@ export const modelMetadataByKey: Readonly<
 				"cacheWrite": 10
 			}
 		],
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		},
 		"reasoningSummary": true
 	},
 	"openai/gpt-5.6-terra": {
@@ -131,6 +175,28 @@ export const modelMetadataByKey: Readonly<
 				"cacheWrite": 5
 			}
 		],
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		},
 		"reasoningSummary": true
 	},
 	"openai/gpt-5.6-luna": {
@@ -170,6 +236,28 @@ export const modelMetadataByKey: Readonly<
 				"cacheWrite": 0.5
 			}
 		],
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		},
 		"reasoningSummary": true
 	},
 	"openai/gpt-6-sol": {
@@ -208,7 +296,29 @@ export const modelMetadataByKey: Readonly<
 				"cacheRead": 0.4,
 				"cacheWrite": 5
 			}
-		]
+		],
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		}
 	},
 	"openai/gpt-6.1-sol": {
 		"cost": {
@@ -245,7 +355,29 @@ export const modelMetadataByKey: Readonly<
 				"cacheRead": 0.2,
 				"cacheWrite": 5
 			}
-		]
+		],
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		}
 	},
 	"openai/gpt-6-luna": {
 		"cost": {
@@ -283,9 +415,54 @@ export const modelMetadataByKey: Readonly<
 				"cacheRead": 0.02,
 				"cacheWrite": 0.25
 			}
-		]
+		],
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		}
 	},
-	"openai/gpt-6-terra": {},
+	"openai/gpt-6-terra": {
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		}
+	},
 	"anthropic/claude-opus-5.5": {
 		"promptCache": {
 			"explicit": {
@@ -331,7 +508,29 @@ export const modelMetadataByKey: Readonly<
 				"cacheRead": 2,
 				"cacheWrite": 25
 			}
-		]
+		],
+		"promptCache": {
+			"explicit": {
+				"retentionTiers": [
+					"short"
+				]
+			},
+			"protocols": {
+				"openai-responses": {
+					"breakpoints": true,
+					"eligibility": {
+						"minimumInputTokens": 1024
+					},
+					"promptCacheKey": true,
+					"retention": {
+						"field": "prompt_cache_options.ttl",
+						"values": {
+							"short": "30m"
+						}
+					}
+				}
+			}
+		}
 	},
 	"anthropic/claude-opus-4-5": {
 		"cost": {

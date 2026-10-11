@@ -14,6 +14,9 @@ import { createModelTarget, modelTargetSchema } from "../src/model-target";
 import type { ConnectionProviderId } from "../src/models";
 import { supportedChatModelIdSchema } from "../src/models";
 
+const openAIPromptCacheControlPattern =
+	/prompt_cache_key|prompt_cache_options|prompt_cache_breakpoint/u;
+
 type FetchMock = Readonly<{
 	fetch: typeof globalThis.fetch;
 	init: RequestInit | undefined;
@@ -87,6 +90,7 @@ const collect = async (
 	target: ModelTarget,
 	messages: readonly ModelPromptMessage[] = [],
 	options: {
+		promptCacheKey?: string;
 		signal?: AbortSignal;
 		system?: string;
 		tools?: readonly ModelTool[];
@@ -121,7 +125,7 @@ describe("native model client routes", () => {
 			'event: response.output_text.delta\r\ndata: {"delta":"Hello"}\r\n\r\n',
 			'event: response.reasoning_summary_text.delta\r\ndata: {"delta":"Checking"}\r\n\r\n',
 			'event: response.output_item.done\r\ndata: {"item":{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\\"query\\":\\"x\\"}"}}\r\n\r\n',
-			'event: response.completed\r\ndata: {"response":{"usage":{"input_tokens":11,"output_tokens":5,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}}}\r\n\r\n',
+			'event: response.completed\r\ndata: {"response":{"usage":{"input_tokens":11,"output_tokens":5,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":3},"output_tokens_details":{"reasoning_tokens":1}}}}\r\n\r\n',
 		].join("");
 		const mock = mockFetch(
 			sseResponse(wire.slice(0, 29), wire.slice(29, 211), wire.slice(211))
@@ -196,12 +200,76 @@ describe("native model client routes", () => {
 				type: "finish",
 				usage: {
 					cacheReadTokens: 2,
+					cacheWriteTokens: 3,
 					inputTokens: 11,
 					outputTokens: 5,
 					reasoningTokens: 1,
 				},
 			},
 		]);
+	});
+
+	test("serializes OpenAI cache controls only for declared Responses capabilities", async () => {
+		const mock = mockFetch(sseResponse("data: [DONE]\n\n"));
+		const target = {
+			...makeTarget("openai", "gpt-5.6-luna"),
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+		} as ModelTarget;
+
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			target,
+			[{ content: [{ text: "Question", type: "text" }], role: "user" }],
+			{
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			}
+		);
+
+		const body = responseBody(mock);
+		expect(body.prompt_cache_key).toBe("wincode-session:session-123");
+		expect(body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" });
+		expect(body.instructions).toBeUndefined();
+		expect(body.input).toEqual([
+			{
+				content: [
+					{
+						prompt_cache_breakpoint: { mode: "explicit" },
+						text: "Stable instructions",
+						type: "input_text",
+					},
+				],
+				role: "developer",
+				type: "message",
+			},
+			{
+				content: [{ text: "Question", type: "input_text" }],
+				role: "user",
+				type: "message",
+			},
+		]);
+	});
+
+	test("off omits Wincode OpenAI controls while leaving implicit caching to OpenAI", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
+			)
+		);
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			makeTarget("openai", "gpt-5.6-luna"),
+			[{ content: [{ text: "Question", type: "text" }], role: "user" }],
+			{
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			}
+		);
+
+		expect(JSON.stringify(responseBody(mock))).not.toMatch(
+			openAIPromptCacheControlPattern
+		);
 	});
 
 	test("keeps provider defaults without a selected Thinking level", async () => {
@@ -766,6 +834,109 @@ describe("native model client routes", () => {
 		expect(JSON.stringify(responseBody(mock))).not.toContain("cache_control");
 	});
 
+	test("retries an OpenAI cache-specific rejection once without cache controls", async () => {
+		const responses = [
+			new Response(
+				JSON.stringify({
+					type: "error",
+					error: {
+						type: "invalid_request_error",
+						message: "prompt_cache_key is not supported for this request",
+					},
+				}),
+				{ status: 400 }
+			),
+			sseResponse(
+				'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
+			),
+		];
+		const requests: RequestInit[] = [];
+		const fetch = (async (
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			if (init) {
+				requests.push(init);
+			}
+			const response = responses.shift();
+			if (!response) {
+				throw new Error("unexpected provider retry");
+			}
+			return response;
+		}) as typeof globalThis.fetch;
+		const target = {
+			...makeTarget("openai", "gpt-5.6-luna"),
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+		} as ModelTarget;
+
+		await collect(
+			createModelClient({ fetch }),
+			target,
+			[{ content: [{ text: "Question", type: "text" }], role: "user" }],
+			{
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			}
+		);
+
+		expect(requests).toHaveLength(2);
+		expect(String(requests[0]?.body)).toContain("prompt_cache_key");
+		expect(String(requests[1]?.body)).not.toMatch(
+			openAIPromptCacheControlPattern
+		);
+	});
+
+	test("does not retry unrelated or post-output OpenAI failures", async () => {
+		const target = {
+			...makeTarget("openai", "gpt-5.6-luna"),
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+		} as ModelTarget;
+		let unrelatedRequests = 0;
+		const unrelatedFetch = (async (
+			_input: Request | string | URL,
+			_options?: RequestInit
+		) => {
+			unrelatedRequests += 1;
+			return new Response(
+				JSON.stringify({
+					error: {
+						type: "invalid_request_error",
+						message: "invalid model argument",
+					},
+				}),
+				{ status: 400 }
+			);
+		}) as typeof globalThis.fetch;
+		await expect(
+			collect(createModelClient({ fetch: unrelatedFetch }), target, [], {
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			})
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(unrelatedRequests).toBe(1);
+
+		let postOutputRequests = 0;
+		const postOutputFetch = (async (
+			_input: Request | string | URL,
+			_options?: RequestInit
+		) => {
+			postOutputRequests += 1;
+			return sseResponse(
+				'event: response.output_text.delta\ndata: {"delta":"partial"}\n\n',
+				'event: response.failed\ndata: {"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"prompt_cache_key rejected"}}}\n\n'
+			);
+		}) as typeof globalThis.fetch;
+		await expect(
+			collect(createModelClient({ fetch: postOutputFetch }), target, [], {
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			})
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(postOutputRequests).toBe(1);
+	});
+
 	test("uses Anthropic's default five-minute lifetime for short retention", async () => {
 		const mock = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
 		await collect(
@@ -1045,7 +1216,18 @@ describe("native model client routes", () => {
 			thinkingLevel: "high",
 		});
 
-		await collect(client, target);
+		await collect(
+			client,
+			{
+				...target,
+				promptCacheEnabled: true,
+				promptCacheRetention: "short",
+			} as ModelTarget,
+			[],
+			{
+				promptCacheKey: "wincode-session:session-123",
+			}
+		);
 
 		expect(mock.url).toBe("https://opencode.ai/zen/go/v1/responses");
 		expect(new Headers(mock.init?.headers).get("authorization")).toBe(
@@ -1056,6 +1238,9 @@ describe("native model client routes", () => {
 			max_output_tokens: 320,
 			reasoning: { effort: "high", summary: "detailed" },
 		});
+		expect(JSON.stringify(responseBody(mock))).not.toMatch(
+			openAIPromptCacheControlPattern
+		);
 	});
 
 	test("routes OpenCode Go Anthropic models through Messages", async () => {
@@ -1141,7 +1326,7 @@ describe("native model client routes", () => {
 				'data: {"choices":[{"delta":{"reasoning_content":"Reason"}}]}\n\n',
 				'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\\"query\\":"}}]}}]}\n\n',
 				'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"x\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
-				'data: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2},"completion_tokens_details":{"reasoning_tokens":1}}}\n\n',
+				'data: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2,"cache_write_tokens":1},"completion_tokens_details":{"reasoning_tokens":1}}}\n\n',
 				"data: [DONE]\n\n"
 			)
 		);
@@ -1217,6 +1402,7 @@ describe("native model client routes", () => {
 				type: "finish",
 				usage: {
 					cacheReadTokens: 2,
+					cacheWriteTokens: 1,
 					inputTokens: 8,
 					outputTokens: 4,
 					reasoningTokens: 1,

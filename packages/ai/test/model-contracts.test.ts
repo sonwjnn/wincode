@@ -23,6 +23,7 @@ import {
 	promptCachePolicySchema,
 	resolveAgentModelSelection,
 	resolveModelProviderOptions,
+	resolvePromptCacheControls,
 	resolvePromptCacheRetention,
 	supportedChatModelIdSchema,
 	thinkingLevelIds,
@@ -539,6 +540,49 @@ describe("focused model contracts", () => {
 				modelOverrides: { "anthropic/claude-opus-4-5": "unknown" },
 			}).success
 		).toBe(false);
+	});
+
+	test("declares OpenAI cache controls and eligibility by actual Model Protocol", () => {
+		const responsesModel = findModel("openai", "gpt-5.6-luna");
+		const opencodeResponsesModel = findModel("opencode-go", "gpt-5.6-luna");
+		const capabilities = getModelMetadata(responsesModel)?.promptCache;
+
+		expect(capabilities?.protocols?.["openai-responses"]).toEqual({
+			breakpoints: true,
+			eligibility: { minimumInputTokens: 1024 },
+			promptCacheKey: true,
+			retention: {
+				field: "prompt_cache_options.ttl",
+				values: { short: "30m" },
+			},
+		});
+		expect(resolvePromptCacheControls(responsesModel)).toEqual({
+			enabled: true,
+			retention: "short",
+		});
+		expect(
+			resolvePromptCacheControls(responsesModel, {
+				modelOverrides: { "openai/gpt-5.6-luna": "off" },
+			})
+		).toEqual({ enabled: false });
+		expect(
+			getModelMetadata(opencodeResponsesModel)?.promptCache
+		).toBeUndefined();
+
+		const enabled = createModelTarget(
+			{ modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+			{ apiKey: "cache-key", kind: "api-key" },
+			{ promptCacheEnabled: true, promptCacheRetention: "short" }
+		);
+		const unsupported = createModelTarget(
+			{ modelId: modelId("gpt-5.6-luna"), providerId: "opencode-go" },
+			{ apiKey: "cache-key", kind: "api-key" },
+			{ promptCacheEnabled: true, promptCacheRetention: "short" }
+		);
+		expect(enabled.promptCacheEnabled).toBe(true);
+		expect(enabled.promptCacheRetention).toBe("short");
+		expect(unsupported.promptCacheEnabled).toBeUndefined();
+		expect(unsupported.promptCacheRetention).toBeUndefined();
 	});
 
 	test("normalizes usage and keeps model accounting provider-neutral", () => {

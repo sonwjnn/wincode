@@ -59,9 +59,13 @@ const streamProviderRequest = async function* (
 };
 
 const uncachedRetryRequest = (request: ModelStepRequest): ModelStepRequest => {
-	const { promptCacheRetention: _promptCacheRetention, ...target } =
-		request.target;
-	return { ...request, target };
+	const { promptCacheKey: _promptCacheKey, ...uncachedRequest } = request;
+	const {
+		promptCacheEnabled: _promptCacheEnabled,
+		promptCacheRetention: _promptCacheRetention,
+		...target
+	} = request.target;
+	return { ...uncachedRequest, target };
 };
 
 const streamModel = async function* (
@@ -93,7 +97,6 @@ const streamModel = async function* (
 		if (
 			outputStarted ||
 			request.signal?.aborted ||
-			providerRequest.strategy.protocol !== "anthropic" ||
 			!providerRequest.usesPromptCacheControls ||
 			!isCacheControlRejection(error)
 		) {

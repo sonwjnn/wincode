@@ -20,7 +20,7 @@ export class ModelProviderError extends Error {
 }
 
 const CACHE_CONTROL_TERMS =
-	/\b(cache[_ -]control|prompt caching|prompt cache|cache breakpoints?|cache ttl|cache retention|cache duration)\b/iu;
+	/\b(cache[_ -]control|prompt[_ -]cache(?:[_ -](?:key|options|breakpoint|retention))?|prompt caching|cache breakpoints?|cache ttl|cache retention|cache duration)\b/iu;
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
 	typeof value === "object" && value !== null

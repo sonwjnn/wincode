@@ -75,10 +75,29 @@ export type SupportedPromptCacheRetentionTier = Exclude<
 >;
 
 /** The explicit cache controls and retention tiers verified for one Model. */
+export type OpenAIPromptCacheProtocol = "openai-chat" | "openai-responses";
+
+export type ModelPromptCacheProtocolCapabilities = Readonly<{
+	breakpoints?: true;
+	eligibility: Readonly<{ minimumInputTokens: number }>;
+	promptCacheKey?: true;
+	retention?: Readonly<{
+		field: "prompt_cache_options.ttl" | "prompt_cache_retention";
+		values: Readonly<
+			Partial<Record<SupportedPromptCacheRetentionTier, string>>
+		>;
+	}>;
+}>;
+
 export type ModelPromptCacheCapabilities = Readonly<{
 	explicit: Readonly<{
 		retentionTiers: readonly SupportedPromptCacheRetentionTier[];
 	}>;
+	protocols?: Readonly<
+		Partial<
+			Record<OpenAIPromptCacheProtocol, ModelPromptCacheProtocolCapabilities>
+		>
+	>;
 }>;
 
 /**
@@ -120,6 +139,29 @@ const thinkingLevelMapSchema = z
 	})
 	.strict() satisfies z.ZodType<ThinkingLevelMap>;
 
+const modelPromptCacheProtocolCapabilitiesSchema = z
+	.object({
+		breakpoints: z.literal(true).optional(),
+		eligibility: z
+			.object({ minimumInputTokens: z.number().int().positive() })
+			.strict(),
+		promptCacheKey: z.literal(true).optional(),
+		retention: z
+			.object({
+				field: z.enum(["prompt_cache_options.ttl", "prompt_cache_retention"]),
+				values: z
+					.object({
+						short: z.string().min(1).optional(),
+						long: z.string().min(1).optional(),
+					})
+					.strict()
+					.refine((values) => Object.keys(values).length > 0),
+			})
+			.strict()
+			.optional(),
+	})
+	.strict() satisfies z.ZodType<ModelPromptCacheProtocolCapabilities>;
+
 const modelPromptCacheCapabilitiesSchema = z
 	.object({
 		explicit: z
@@ -127,6 +169,14 @@ const modelPromptCacheCapabilitiesSchema = z
 				retentionTiers: z.array(z.enum(["short", "long"])).min(1),
 			})
 			.strict(),
+		protocols: z
+			.object({
+				"openai-chat": modelPromptCacheProtocolCapabilitiesSchema.optional(),
+				"openai-responses":
+					modelPromptCacheProtocolCapabilitiesSchema.optional(),
+			})
+			.strict()
+			.optional(),
 	})
 	.strict() satisfies z.ZodType<ModelPromptCacheCapabilities>;
 

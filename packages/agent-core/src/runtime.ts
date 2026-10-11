@@ -151,6 +151,8 @@ export const createAgentTurnAbortEvent = (
 
 /** Options for one Agent Runtime invocation. */
 export type AgentRuntimeRunOptions = Readonly<{
+	/** Stable Session-scoped routing hint; Model Protocols emit it only when supported. */
+	promptCacheKey?: string;
 	/** Aborts the running turn. Consumers own the signal. */
 	signal?: AbortSignal;
 	/** Optional runtime-owned deadline in milliseconds from invocation. */

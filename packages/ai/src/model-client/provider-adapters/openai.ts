@@ -11,6 +11,7 @@ const createOpenAIRequest = (context: ProviderRequestContext) => {
 	const authorization = context.request.target.authorization;
 	const bodyContext = {
 		maxOutputTokens: context.maxOutputTokens,
+		model: context.model,
 		omitOutputTokenLimit: authorization.kind === "oauth",
 		providerOptions: openAIOptionsFor(context.providerOptions),
 		request: context.request,

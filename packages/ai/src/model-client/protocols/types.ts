@@ -9,6 +9,7 @@ import type { ModelStepRequest, ModelStreamPart } from "../types";
 export type ProtocolRequestContextByProtocol = {
 	"openai-responses": Readonly<{
 		maxOutputTokens: number | undefined;
+		model: SupportedChatModel;
 		omitOutputTokenLimit: boolean;
 		providerOptions: OpenAIProviderOptions["openai"] | undefined;
 		request: ModelStepRequest;
@@ -26,6 +27,7 @@ export type ProtocolRequestContextByProtocol = {
 	}>;
 	"openai-chat": Readonly<{
 		maxOutputTokens: number | undefined;
+		model: SupportedChatModel;
 		request: ModelStepRequest;
 	}>;
 };

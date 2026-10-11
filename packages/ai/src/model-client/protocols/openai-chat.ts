@@ -5,6 +5,7 @@ import type {
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
+import { openAIPromptCacheControlsForRequest } from "./openai-prompt-cache";
 import {
 	fileDataUri,
 	incompleteStreamError,
@@ -171,7 +172,10 @@ const chatUsage = (usageValue: unknown): unknown => {
 		inputTokens: usage.prompt_tokens,
 		outputTokens: usage.completion_tokens,
 		totalTokens: usage.total_tokens,
-		inputTokenDetails: { cacheReadTokens: promptDetails?.cached_tokens },
+		inputTokenDetails: {
+			cacheReadTokens: promptDetails?.cached_tokens,
+			cacheWriteTokens: promptDetails?.cache_write_tokens,
+		},
 		outputTokenDetails: {
 			reasoningTokens: completionDetails?.reasoning_tokens,
 		},
@@ -328,7 +332,13 @@ const openAiChatStream = async function* (
 const serializeOpenAIChat = (
 	context: ProtocolRequestContextByProtocol["openai-chat"]
 ): JsonRecord => {
-	const { request, maxOutputTokens } = context;
+	const { request, maxOutputTokens, model } = context;
+	const cacheControls = openAIPromptCacheControlsForRequest(
+		model,
+		"openai-chat",
+		request.target,
+		request.promptCacheKey
+	);
 	const body: JsonRecord = {
 		model: request.target.modelId,
 		messages: chatCompletionsMessages(request.messages, request.system),
@@ -337,6 +347,14 @@ const serializeOpenAIChat = (
 	};
 	if (maxOutputTokens !== undefined) {
 		body.max_tokens = maxOutputTokens;
+	}
+	if (cacheControls.promptCacheKey !== undefined) {
+		body.prompt_cache_key = cacheControls.promptCacheKey;
+	}
+	if (cacheControls.retentionField === "prompt_cache_retention") {
+		body.prompt_cache_retention = cacheControls.retentionValue;
+	} else if (cacheControls.retentionField === "prompt_cache_options.ttl") {
+		body.prompt_cache_options = { ttl: cacheControls.retentionValue };
 	}
 	const tools = request.tools?.map((tool) => ({
 		type: "function",

@@ -22,6 +22,25 @@ const ANTHROPIC_EXPLICIT_PROMPT_CACHE = {
 	explicit: { retentionTiers: ["short", "long"] },
 } as const;
 
+// OpenAI's Responses API documents explicit breakpoints, 30-minute TTL, a
+// 1,024 visible-token minimum, and optional accounting keys for GPT-5.6 and
+// later. Do not apply this overlay to OpenCode Go: its proxy route's support
+// for these controls is not documented by OpenAI.
+const OPENAI_RESPONSES_PROMPT_CACHE = {
+	explicit: { retentionTiers: ["short"] },
+	protocols: {
+		"openai-responses": {
+			breakpoints: true,
+			eligibility: { minimumInputTokens: 1024 },
+			promptCacheKey: true,
+			retention: {
+				field: "prompt_cache_options.ttl",
+				values: { short: "30m" },
+			},
+		},
+	},
+} as const;
+
 /**
  * Facts models.dev does not publish. Every key here is a gap that must stay
  * visible rather than being silently defaulted.
@@ -59,10 +78,27 @@ export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	"google/gemini-3-pro-preview": {
 		thinking: { levels: ["low", "high"] },
 	},
-	"openai/gpt-5.6": { reasoningSummary: true },
-	"openai/gpt-5.6-luna": { reasoningSummary: true },
-	"openai/gpt-5.6-sol": { reasoningSummary: true },
-	"openai/gpt-5.6-terra": { reasoningSummary: true },
+	"openai/gpt-5.6": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		reasoningSummary: true,
+	},
+	"openai/gpt-5.6-luna": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		reasoningSummary: true,
+	},
+	"openai/gpt-5.6-sol": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		reasoningSummary: true,
+	},
+	"openai/gpt-5.6-terra": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		reasoningSummary: true,
+	},
+	"openai/gpt-6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6.1-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6-astra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"opencode-go/gpt-5.6-luna": { reasoningSummary: true },
 };
 

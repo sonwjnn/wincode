@@ -40,6 +40,7 @@ export type ModelTool = Readonly<{
 
 export type ModelStepRequest = Readonly<{
 	messages: readonly ModelPromptMessage[];
+	promptCacheKey?: string;
 	signal?: AbortSignal;
 	system?: string;
 	target: ModelTarget;

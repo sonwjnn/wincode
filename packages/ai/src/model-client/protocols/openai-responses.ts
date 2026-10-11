@@ -6,6 +6,7 @@ import type {
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
+import { openAIPromptCacheControlsForRequest } from "./openai-prompt-cache";
 import type { JsonRecord, SsePayload } from "./shared";
 import {
 	fileDataUri,
@@ -211,6 +212,21 @@ const openAiResponsesInput = (
 	}
 	return input;
 };
+
+const openAiDeveloperInstructions = (
+	text: string,
+	breakpoint: boolean
+): JsonRecord => ({
+	content: [
+		{
+			...(breakpoint ? { prompt_cache_breakpoint: { mode: "explicit" } } : {}),
+			text,
+			type: "input_text",
+		},
+	],
+	role: "developer",
+	type: "message",
+});
 const openAiUsage = (usageValue: unknown): unknown => {
 	const usage = record(usageValue);
 	if (!usage) {
@@ -223,7 +239,10 @@ const openAiUsage = (usageValue: unknown): unknown => {
 		outputTokens: usage.output_tokens,
 		totalTokens: usage.total_tokens,
 		inputTokenDetails: inputDetails
-			? { cacheReadTokens: inputDetails.cached_tokens }
+			? {
+					cacheReadTokens: inputDetails.cached_tokens,
+					cacheWriteTokens: inputDetails.cache_write_tokens,
+				}
 			: undefined,
 		outputTokenDetails: outputDetails
 			? { reasoningTokens: outputDetails.reasoning_tokens }
@@ -356,16 +375,66 @@ const openAiResponseStream = async function* (
 			: { continuation: state.continuation }),
 	};
 };
+const openAIResponsesCacheContext = (
+	context: ProtocolRequestContextByProtocol["openai-responses"]
+): {
+	body: JsonRecord;
+	input: unknown[];
+	systemBreakpoint: boolean;
+} => {
+	const { request, model } = context;
+	const cacheControls = openAIPromptCacheControlsForRequest(
+		model,
+		"openai-responses",
+		request.target,
+		request.promptCacheKey
+	);
+	const systemInstructions = request.system;
+	const systemBreakpoint =
+		cacheControls.breakpoints &&
+		systemInstructions !== undefined &&
+		systemInstructions.length > 0;
+	const input = openAiResponsesInput(request.messages);
+	if (systemBreakpoint && systemInstructions !== undefined) {
+		input.unshift(openAiDeveloperInstructions(systemInstructions, true));
+	}
+	const body: JsonRecord = {};
+	if (cacheControls.promptCacheKey !== undefined) {
+		body.prompt_cache_key = cacheControls.promptCacheKey;
+	}
+	if (cacheControls.retentionField === "prompt_cache_retention") {
+		body.prompt_cache_retention = cacheControls.retentionValue;
+	}
+	if (
+		cacheControls.retentionField === "prompt_cache_options.ttl" ||
+		systemBreakpoint
+	) {
+		body.prompt_cache_options = {
+			...(systemBreakpoint ? { mode: "explicit" } : {}),
+			...(cacheControls.retentionField === "prompt_cache_options.ttl"
+				? { ttl: cacheControls.retentionValue }
+				: {}),
+		};
+	}
+	return { body, input, systemBreakpoint };
+};
+
 const serializeOpenAIResponses = (
 	context: ProtocolRequestContextByProtocol["openai-responses"]
 ): JsonRecord => {
 	const { request, maxOutputTokens, providerOptions } = context;
+	const {
+		body: cacheBody,
+		input,
+		systemBreakpoint,
+	} = openAIResponsesCacheContext(context);
 	const body: JsonRecord = {
+		...cacheBody,
 		model: request.target.modelId,
-		input: openAiResponsesInput(request.messages),
+		input,
 		stream: true,
 	};
-	if (request.system !== undefined) {
+	if (request.system !== undefined && !systemBreakpoint) {
 		body.instructions = request.system;
 	}
 	if (!context.omitOutputTokenLimit && maxOutputTokens !== undefined) {

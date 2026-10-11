@@ -123,6 +123,23 @@ test("Agent Runtime streams model output and reports normalized step usage", asy
 	});
 });
 
+test("Agent Runtime forwards the Session-stable prompt-cache key to each Model Step", async () => {
+	const { client, requests } = scriptedClient(() =>
+		scriptedParts({
+			type: "finish",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		})
+	);
+	await consume(
+		createAgentRuntime({ modelClient: client }).run(buildTurn(), {
+			promptCacheKey: "wincode-session:session-123",
+		})
+	);
+
+	expect(requests).toHaveLength(1);
+	expect(requests[0]?.promptCacheKey).toBe("wincode-session:session-123");
+});
+
 test("Agent Runtime delivers steering after tool results and continues the same turn", async () => {
 	const executionRequests: {
 		input: unknown;

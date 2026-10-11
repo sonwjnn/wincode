@@ -20,7 +20,7 @@ import type {
 	PluginRuntime,
 	PluginToolDescriptor,
 } from "@/modules/plugins/runtime";
-import { resolveConfiguredPromptCacheRetention } from "@/modules/prompt-cache/policy";
+import { resolveConfiguredPromptCacheControls } from "@/modules/prompt-cache/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
 import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
@@ -381,19 +381,22 @@ export const createSessionPorts = ({
 			.getSnapshot(config.workspace)
 			.catch(() => undefined);
 		const selectedModel = findSupportedChatModelSelection(execution.model);
-		const promptCacheRetention =
+		const promptCacheControls =
 			promptCacheSnapshot && selectedModel
-				? resolveConfiguredPromptCacheRetention(
+				? resolveConfiguredPromptCacheControls(
 						selectedModel,
 						promptCacheSnapshot.document.promptCache
 					)
-				: undefined;
+				: { enabled: false as const };
 		const modelTarget = await resolveChatModelTarget(
 			execution.model,
 			connections,
 			{
 				...thinkingSelection,
-				...omitUndefined({ promptCacheRetention }),
+				...omitUndefined({
+					promptCacheEnabled: promptCacheControls.enabled ? true : undefined,
+					promptCacheRetention: promptCacheControls.retention,
+				}),
 				signal,
 			}
 		);
@@ -505,6 +508,9 @@ export const createSessionPorts = ({
 				onTerminal: callbacks.onTerminal,
 				onViewState: (viewState) => callbacks.onViewState(viewState),
 				getAssistantMessageId: request.getAssistantMessageId,
+				promptCacheKey: turn.model.promptCacheEnabled
+					? `wincode-session:${sessionId}`
+					: undefined,
 				runtime: statefulAgent,
 				signal,
 				...omitUndefined({

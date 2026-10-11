@@ -25,6 +25,7 @@ const createResponsesRequest = (context: ProviderRequestContext) => {
 		{ ...jsonHeaders, authorization: `Bearer ${apiKey}` },
 		{
 			maxOutputTokens: context.maxOutputTokens,
+			model: context.model,
 			omitOutputTokenLimit: false,
 			providerOptions: openAIOptionsFor(context.providerOptions),
 			request: context.request,
@@ -65,6 +66,7 @@ const createChatRequest = (context: ProviderRequestContext) => {
 		{ ...jsonHeaders, authorization: `Bearer ${apiKey}` },
 		{
 			maxOutputTokens: context.maxOutputTokens,
+			model: context.model,
 			request: context.request,
 		}
 	);

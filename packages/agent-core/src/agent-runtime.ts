@@ -574,6 +574,7 @@ type ExecuteModelStepsOptions = Readonly<{
 	lifecycle: AgentTurnLifecycle;
 	modelClient: ModelClient;
 	modelMessages: ModelPromptMessage[];
+	promptCacheKey?: string;
 	runtimeSignal?: AbortSignal;
 	takeSteeringMessages?: AgentRuntimeRunOptions["takeSteeringMessages"];
 	tools: readonly ResolvedTool[];
@@ -623,6 +624,7 @@ const runLoop = async function* ({
 	lifecycle,
 	modelClient,
 	modelMessages,
+	promptCacheKey,
 	runtimeSignal,
 	takeSteeringMessages,
 	tools,
@@ -650,6 +652,7 @@ const runLoop = async function* ({
 		});
 		const request: ModelStepRequest = {
 			messages: modelMessages,
+			...omitUndefined({ promptCacheKey }),
 			...omitUndefined({ signal: runtimeSignal }),
 			system: turn.agent.instructions,
 			target: turn.model,
@@ -735,7 +738,12 @@ const runLoop = async function* ({
 
 const runAgentTurn = async function* (
 	turn: AgentTurn,
-	{ deadlineMs, signal, takeSteeringMessages }: AgentRuntimeRunOptions,
+	{
+		deadlineMs,
+		promptCacheKey,
+		signal,
+		takeSteeringMessages,
+	}: AgentRuntimeRunOptions,
 	modelClient: ModelClient
 ): AsyncGenerator<AgentTurnEvent, void, undefined> {
 	const lifecycle = createAgentTurnLifecycle(turn.id);
@@ -770,6 +778,7 @@ const runAgentTurn = async function* (
 			modelClient,
 			modelMessages,
 			...omitUndefined({
+				promptCacheKey,
 				runtimeSignal,
 				takeSteeringMessages,
 			}),

@@ -83,6 +83,7 @@ export type ProviderOptionsFor<P extends ConnectionProviderId> =
 
 export type ModelProviderResolutionOptions = Readonly<{
 	maxOutputTokens?: number;
+	promptCacheEnabled?: true;
 	promptCacheRetention?: SupportedPromptCacheRetentionTier;
 }> &
 	ThinkingSelection;

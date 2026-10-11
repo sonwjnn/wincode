@@ -643,6 +643,7 @@ export type SessionViewState = ReadonlyDeep<{
 type AgentTurnEventConsumerOptions = {
 	lifecycle?: AgentTurnLifecycle;
 	onViewState?: (state: SessionViewState) => void;
+	promptCacheKey?: string;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
 	takeSteeringMessages?: () =>
@@ -671,6 +672,7 @@ const consumeAgentTurnEvents = async ({
 	onTerminal,
 	onViewState,
 	runtime,
+	promptCacheKey,
 	signal,
 	takeSteeringMessages,
 	turn,
@@ -715,7 +717,7 @@ const consumeAgentTurnEvents = async ({
 		}
 	};
 	for await (const event of runtime.run(turn, {
-		...omitUndefined({ takeSteeringMessages }),
+		...omitUndefined({ promptCacheKey, takeSteeringMessages }),
 		signal,
 	})) {
 		if (
@@ -802,6 +804,7 @@ export const runAgentTurnToText = async ({
 	onToolCheckpoint,
 	onViewState,
 	runtime,
+	promptCacheKey,
 	signal,
 	sourceUserMessageId,
 	takeSteeringMessages,
@@ -814,6 +817,7 @@ export const runAgentTurnToText = async ({
 	onToolCheckpoint?: CheckpointCommitter;
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
+	promptCacheKey?: string;
 	signal?: AbortSignal;
 	sourceUserMessageId?: SessionMessageId;
 	takeSteeringMessages?: () =>
@@ -881,6 +885,7 @@ export const runAgentTurnToText = async ({
 		},
 		onViewState,
 		runtime,
+		promptCacheKey,
 		signal,
 		...omitUndefined({
 			takeSteeringMessages: isUndefined(takeSteeringMessages)

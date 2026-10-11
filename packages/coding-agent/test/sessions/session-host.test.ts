@@ -1164,6 +1164,58 @@ describe("Session Host lifetime", () => {
 		}
 	});
 
+	test("keeps the OpenAI prompt-cache key stable across turns in one Session", async () => {
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("gpt-5.6-luna"),
+			providerId: "openai",
+		};
+		const seeded = await seedSession(
+			"prompt-cache-key",
+			"interrupted",
+			selectedModel
+		);
+		const capabilities = createCapabilities();
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const previousBeforeStep = recorder.beforeStep;
+		const observed: { enabled?: boolean; key?: string; retention?: string }[] =
+			[];
+		recorder.beforeStep = async (request) => {
+			observed.push({
+				enabled: request.target.promptCacheEnabled,
+				key: request.promptCacheKey,
+				retention: request.target.promptCacheRetention,
+			});
+		};
+		try {
+			for (let index = 0; index < 2; index += 1) {
+				const outcome = await host.agentSession.send({
+					...sendInput(capabilities),
+					model: selectedModel,
+					sessionModel: selectedModel,
+				});
+				expect(outcome).toEqual({ rejected: false });
+			}
+			expect(observed).toEqual([
+				{
+					enabled: true,
+					key: `wincode-session:${seeded.sessionId}`,
+					retention: "short",
+				},
+				{
+					enabled: true,
+					key: `wincode-session:${seeded.sessionId}`,
+					retention: "short",
+				},
+			]);
+		} finally {
+			recorder.beforeStep = previousBeforeStep;
+			await host.shutdown();
+		}
+	});
+
 	test("runs a send command, reports its events in order, and refuses commands after shutdown", async () => {
 		const seeded = await seedSession("send");
 		const capabilities = createCapabilities();
