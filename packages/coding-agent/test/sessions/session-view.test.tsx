@@ -426,28 +426,23 @@ const createFakeSessionHost = (
 		}),
 	});
 
-const flushUi = async (setup: TestRendererSetup): Promise<void> => {
-	await Bun.sleep(20);
-	await setup.renderOnce();
-};
-
 /**
- * Waits for the view to render a frame that differs from one already captured,
- * so a command whose commit is asynchronous lands before it is asserted. The
- * assertions stay meaningful: a changed frame is necessary, not sufficient.
+ * Renders until the frame stops changing, so work whose commit is asynchronous
+ * lands before an assertion reads it. The Session Surface opens its Session
+ * Services before it opens a Session Host, and this harness can otherwise read
+ * the frame in the middle of that window.
  */
-const waitForFrameChange = async (
-	setup: TestRendererSetup,
-	previous: string
-): Promise<string> => {
+const flushUi = async (setup: TestRendererSetup): Promise<void> => {
+	let previous = setup.captureCharFrame();
 	for (let attempt = 0; attempt < 50; attempt += 1) {
+		await Bun.sleep(20);
+		await setup.renderOnce();
 		const frame = setup.captureCharFrame();
-		if (frame !== previous) {
-			return frame;
+		if (frame === previous) {
+			return;
 		}
-		await flushUi(setup);
+		previous = frame;
 	}
-	return setup.captureCharFrame();
 };
 
 beforeAll(() => {
@@ -1274,10 +1269,10 @@ describe("SessionView waiting messages", () => {
 		];
 		const { release, setup } = await renderBusySessionView();
 		try {
-			const beforeSteer = setup.captureCharFrame();
 			setup.mockInput.pressEnter();
+			await flushUi(setup);
 
-			let frame = await waitForFrameChange(setup, beforeSteer);
+			let frame = setup.captureCharFrame();
 			expect(frame).toContain("3 waiting");
 			expect(frame).not.toContain("first queued");
 			expect(frame).not.toContain("steering");
@@ -1287,10 +1282,10 @@ describe("SessionView waiting messages", () => {
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 3"));
 
 			await typePrompt(setup, "ordinary input");
-			const beforeQueue = setup.captureCharFrame();
 			setup.mockInput.pressEnter();
+			await flushUi(setup);
 
-			frame = await waitForFrameChange(setup, beforeQueue);
+			frame = setup.captureCharFrame();
 			expect(frame).toContain("4 waiting");
 			expect(frame).not.toContain("first queued");
 			expect(frame).toMatch(LANE_ROW("queued", "ordinary input"));
