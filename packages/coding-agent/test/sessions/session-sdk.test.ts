@@ -1,10 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
+import * as connectionsModule from "@wincode/ai/connections";
 import type {
 	ModelStepRequest,
 	ModelStreamPart,
@@ -35,6 +36,7 @@ import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "../support/e2e-fake-runtime";
 import { agentId, modelId, sessionId } from "../support/identifiers";
 
@@ -191,7 +193,22 @@ test("an injected Session SDK creates an empty durable Session and reopens it", 
 	}
 });
 
-test("the public Session SDK restores provider, model, and ThinkingLevel for the next prompt", async () => {
+test("the public Session SDK restores non-default Agent, provider, model, and ThinkingLevel", async () => {
+	const sdkWorkspace = path.join(root, "public-sdk-selection-workspace");
+	const databasePath = path.join(storeRoot, "public-sdk-selection.sqlite");
+	await fs.mkdir(sdkWorkspace, { recursive: true });
+	await Bun.write(
+		path.join(sdkWorkspace, ".wincode", "settings.json"),
+		JSON.stringify({
+			agents: {
+				scout: {
+					description: "Inspect and report findings.",
+					instructions: "Inspect the requested selection restoration.",
+					role: "primary",
+				},
+			},
+		})
+	);
 	const recorder = createFakeModelClientRecorder();
 	const sentSelections: Pick<
 		ModelStepRequest["target"],
@@ -208,74 +225,137 @@ test("the public Session SDK restores provider, model, and ThinkingLevel for the
 		modelId: modelId("claude-sonnet-5"),
 		providerId: "anthropic" as const,
 	};
-	const sdk = await createSessionSdk({
-		configStore,
-		getConnections: () => ({
-			authorize: async () => ({
-				apiKey: "sdk-test-key",
-				kind: "api-key",
-			}),
-			connect: async () => undefined,
-			listProviders: async () => [],
+	const fakeConnections = {
+		authorize: async () => ({
+			apiKey: "sdk-test-key",
+			kind: "api-key" as const,
 		}),
-		cwd: workspace,
+		connect: async () => undefined,
+		listProviders: async () => [
+			{
+				connected: true as const,
+				connectionMethod: "api-key" as const,
+				displayName: "Anthropic",
+				id: "anthropic" as const,
+				methods: ["api-key"] as const,
+			},
+		],
+	};
+	const connectionsSpy = spyOn(
+		connectionsModule,
+		"createConnections"
+	).mockReturnValue(fakeConnections);
+	installFakeModelClient(recorder);
+	const sdkOptions: SessionSdkOptions = {
+		cwd: sdkWorkspace,
+		databasePath,
 		pluginPaths: [],
-		runtimeFactory: () =>
-			createAgentRuntime({ modelClient: createFakeModelClient(recorder) }),
-		store,
-		workspace,
-	});
+		projectTrust: "trust",
+		workspace: sdkWorkspace,
+	};
+	let sdk: SessionSdk | undefined;
+	let restoredSdk: SessionSdk | undefined;
 	let created: SessionSdkHandle | undefined;
 	let restored: SessionSdkHandle | undefined;
 	let unsubscribe: (() => void) | undefined;
 	try {
+		sdk = await createPublicSessionSdk(sdkOptions);
+		expect(connectionsSpy).toHaveBeenCalled();
+		expect(await sdk.getAgentCatalog()).toContainEqual(
+			expect.objectContaining({
+				id: agentId("scout"),
+				isAvailable: true,
+				role: "primary",
+			})
+		);
 		created = await sdk.createSession({
+			agent: "scout",
 			model: selectedModel,
 			thinkingLevel: "high",
 		});
 		const createdSessionId = created.sessionId;
-		expect(await store.getSession(createdSessionId)).toMatchObject({
-			model: selectedModel,
-			thinkingLevel: "high",
-		});
-		await created.dispose();
-		created = undefined;
-
-		restored = await sdk.openSession(createdSessionId);
-		const completed = Promise.withResolvers<void>();
-		unsubscribe = restored.onEvent((event) => {
+		const firstCompleted = Promise.withResolvers<void>();
+		unsubscribe = created.onEvent((event) => {
 			if (event.type === "agent-turn-completed") {
-				completed.resolve();
+				firstCompleted.resolve();
 			}
 		});
-		const admission = await restored.prompt({
-			text: "Use the restored selection.",
+		const firstAdmission = await created.prompt({
+			agent: "scout",
+			text: "Start with the non-default Agent.",
 		});
-		await completed.promise;
+		await firstCompleted.promise;
+		expect(firstAdmission.rejected).toBe(false);
+		await created.dispose();
+		created = undefined;
+		unsubscribe?.();
+		unsubscribe = undefined;
+		await sdk.dispose();
+		sdk = undefined;
 
-		expect(admission.rejected).toBe(false);
-		expect(sentSelections).toHaveLength(1);
-		expect(sentSelections[0]).toMatchObject({
-			modelId: "claude-sonnet-5",
-			providerId: "anthropic",
-			thinkingLevel: "high",
+		// A fresh SDK must restore selection from durable records, not live host state.
+		restoredSdk = await createPublicSessionSdk(sdkOptions);
+		restored = await restoredSdk.openSession(createdSessionId);
+		const restoredCompleted = Promise.withResolvers<void>();
+		unsubscribe = restored.onEvent((event) => {
+			if (event.type === "agent-turn-completed") {
+				restoredCompleted.resolve();
+			}
 		});
-		expect(await store.listSessionRecords(createdSessionId)).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					model: expect.objectContaining({
-						modelId: "claude-sonnet-5",
-						providerId: "anthropic",
-						thinkingLevel: "high",
-					}),
-				}),
-			])
-		);
+		const restoredAdmission = await restored.prompt({
+			text: "Restore the previous non-default Agent and model selection.",
+		});
+		await restoredCompleted.promise;
+
+		expect(restoredAdmission.rejected).toBe(false);
+		expect(sentSelections).toEqual([
+			{
+				modelId: "claude-sonnet-5",
+				providerId: "anthropic",
+				thinkingLevel: "high",
+			},
+			{
+				modelId: "claude-sonnet-5",
+				providerId: "anthropic",
+				thinkingLevel: "high",
+			},
+		]);
+		await restored.dispose();
+		restored = undefined;
+		unsubscribe?.();
+		unsubscribe = undefined;
+		await restoredSdk.dispose();
+		restoredSdk = undefined;
+
+		const recordDatabase = createDatabase(databasePath);
+		try {
+			const recordStore = createDrizzleSessionStore(recordDatabase.db, {
+				workspaceRoot: sdkWorkspace,
+			});
+			const records = await recordStore.listSessionRecords(createdSessionId);
+			const userRecords = records.filter(({ outcome }) => outcome.kind === "user");
+			expect(userRecords).toHaveLength(2);
+			expect(records.every(({ agentId: id }) => id === agentId("scout"))).toBe(
+				true
+			);
+			expect(
+				records.every(
+					({ model }) =>
+						model.modelId === selectedModel.modelId &&
+						model.providerId === selectedModel.providerId &&
+						model.thinkingLevel === "high"
+				)
+			).toBe(true);
+		} finally {
+			recordDatabase.sqlite.close();
+		}
 	} finally {
 		unsubscribe?.();
 		await restored?.dispose();
 		await created?.dispose();
-		await sdk.dispose();
+		await restoredSdk?.dispose();
+		await sdk?.dispose();
+		mock.restore();
 	}
 });
 
