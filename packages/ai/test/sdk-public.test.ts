@@ -72,6 +72,68 @@ describe("public SDK provider collection", () => {
 		]);
 	});
 
+	test("tool failures in history remain provider-neutral message parts", async () => {
+		const sdk = createProviderCollection();
+		const failedToolMessage: ChatMessage = {
+			content: [
+				{
+					errorText: "Weather lookup failed.",
+					failure: { kind: "timeout" },
+					toolCallId: "call-1",
+					toolName: "weather",
+					type: "tool-failure",
+				},
+			],
+			role: "tool",
+		};
+		const receivedMessages: (readonly ChatMessage[])[] = [];
+		sdk.register({
+			...demoProvider(),
+			id: "tool-failure-provider",
+			models: [
+				{
+					modelId: "tool-failure-model",
+					protocolId: "tool-failure-wire",
+					providerId: "tool-failure-provider",
+				},
+			],
+			async *streamChat(request) {
+				receivedMessages.push(request.messages);
+				expect(request.cacheRetention).toBe("long");
+				expect(request.cacheWarming).toBe(true);
+				expect(request.maxOutputTokens).toBe(384);
+				expect(request.promptCacheKey).toBe("stable-session-cache-key");
+				expect(request.reasoningEffort).toBe("high");
+				yield { type: "usage", usage: { inputTokens: 5, outputTokens: 2 } };
+				yield { type: "finish", continuation: { cursor: "next" } };
+			},
+		});
+		await sdk.setCredential("tool-failure-provider", "configured");
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			cacheRetention: "long",
+			cacheWarming: true,
+			maxOutputTokens: 384,
+			messages: [failedToolMessage],
+			modelId: "tool-failure-model",
+			promptCacheKey: "stable-session-cache-key",
+			providerId: "tool-failure-provider",
+			reasoningEffort: "high",
+		})) {
+			events.push(event);
+		}
+
+		expect(receivedMessages).toEqual([[failedToolMessage]]);
+		expect(events).toEqual([
+			{ type: "usage", usage: { inputTokens: 5, outputTokens: 2 } },
+			{
+				outcome: { continuation: { cursor: "next" }, status: "success" },
+				type: "terminal",
+			},
+		]);
+	});
+
 	test("missing provider and model selections terminate without substituting another model", async () => {
 		const sdk = createProviderCollection();
 		sdk.register(demoProvider());

@@ -5,7 +5,7 @@ import * as path from "node:path";
 
 const bunConsumer = `
 import assert from "node:assert/strict";
-import { createProviderCollection } from "@wincode/ai/sdk";
+import { createProviderCollection, ProviderError } from "@wincode/ai/sdk";
 import { createGoogleProvider } from "@wincode/ai/sdk/providers/google";
 import { createOpenCodeGoProvider } from "@wincode/ai/sdk/providers/opencode-go";
 
@@ -33,12 +33,61 @@ for (const [providerId, modelId, expected] of [["google", "gemini-3.8-flash", "B
   for await (const event of sdk.chat({ messages: [{ role: "user", content: [{ type: "text", text: "Hello" }] }], providerId, modelId })) events.push(event);
   assert(events.some((event) => event.type === "text-delta" && event.delta === expected));
 }
+const controlRequests = [];
+sdk.register({
+  id: "bun-control-provider",
+  models: [{ modelId: "control-model", protocolId: "fake-wire", providerId: "bun-control-provider" }],
+  resolveAuthorization: async () => ({ authorization: "fake" }),
+  async *streamChat(request) {
+    controlRequests.push(request);
+    yield { type: "usage", usage: { inputTokens: 5, outputTokens: 2, cacheReadTokens: 3 } };
+    yield { type: "finish", continuation: { cursor: "next" } };
+  },
+});
+const controlEvents = [];
+for await (const event of sdk.chat({
+  messages: [
+    { role: "assistant", continuation: { cursor: "previous" }, content: [{ type: "tool-call", toolCallId: "bun-call", toolName: "weather", input: { city: "Paris" } }] },
+    { role: "tool", content: [{ type: "tool-failure", toolCallId: "bun-call", toolName: "weather", errorText: "Weather lookup failed.", failure: { kind: "timeout" } }] },
+  ],
+  modelId: "control-model",
+  providerId: "bun-control-provider",
+  cacheRetention: "long",
+  reasoningEffort: "high",
+  maxOutputTokens: 384,
+  promptCacheKey: "stable-bun-cache-key",
+  cacheWarming: true,
+})) controlEvents.push(event);
+assert.equal(controlRequests[0].reasoningEffort, "high");
+assert.equal(controlRequests[0].maxOutputTokens, 384);
+assert.equal(controlRequests[0].promptCacheKey, "stable-bun-cache-key");
+assert.equal(controlRequests[0].cacheWarming, true);
+assert.equal(controlRequests[0].cacheRetention, "long");
+assert.equal(controlRequests[0].messages[0].continuation.cursor, "previous");
+assert.deepEqual(controlRequests[0].messages[1].content[0], { type: "tool-failure", toolCallId: "bun-call", toolName: "weather", errorText: "Weather lookup failed.", failure: { kind: "timeout" } });
+assert(controlEvents.some((event) => event.type === "usage" && event.usage.cacheReadTokens === 3));
+assert.equal(controlEvents.at(-1).outcome.status, "success");
+assert.equal(controlEvents.at(-1).outcome.continuation.cursor, "next");
+sdk.register({
+  id: "bun-failure-provider",
+  models: [{ modelId: "failure-model", protocolId: "fake-wire", providerId: "bun-failure-provider" }],
+  resolveAuthorization: async () => ({ authorization: "fake" }),
+  async *streamChat() { throw new ProviderError("authentication", "fake credentials rejected"); },
+});
+const failureEvents = [];
+for await (const event of sdk.chat({ messages: [], modelId: "failure-model", providerId: "bun-failure-provider" })) failureEvents.push(event);
+assert.deepEqual(failureEvents.at(-1), { type: "terminal", outcome: { status: "failure", failure: { code: "authentication", message: "fake credentials rejected", providerId: "bun-failure-provider" } } });
+const abortController = new AbortController();
+abortController.abort(new DOMException("Bun request cancelled", "AbortError"));
+const abortEvents = [];
+for await (const event of sdk.chat({ messages: [], modelId: "control-model", providerId: "bun-control-provider", signal: abortController.signal })) abortEvents.push(event);
+assert.deepEqual(abortEvents, [{ type: "terminal", outcome: { status: "aborted", reason: "Bun request cancelled" } }]);
 await google.close();
 process.stdout.write("Bun public SDK consumer passed");
 `;
 
 describe("Bun external @wincode/ai consumer", () => {
-	test("registers Google and OpenCode Go through public subpaths", async () => {
+	test("Bun consumers preserve chat controls and terminal outcomes through the public SDK", async () => {
 		const consumerDir = await fs.mkdtemp(
 			path.join(os.tmpdir(), "wincode-ai-bun-consumer-")
 		);

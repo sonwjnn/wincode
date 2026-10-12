@@ -84,6 +84,7 @@ const promptPart = (part: ChatContentPart): ModelPromptPart => {
 		case "tool-call":
 			return part;
 		case "tool-result":
+		case "tool-failure":
 			return part;
 		default:
 			return unreachableValue(part);
