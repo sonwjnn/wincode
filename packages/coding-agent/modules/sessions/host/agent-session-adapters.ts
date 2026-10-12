@@ -112,9 +112,10 @@ export const createAgentSessionAdapters = (
 		}
 	};
 	/**
-	 * Arms the Skills selected by the current trusted project and user roots.
+	 * Arms the Skill catalog one Agent Turn runs with, from the Skills the
+	 * current trusted project and user roots select.
 	 */
-	const armSkillCatalog = async (
+	const createTurnSkill = async (
 		agentId: AgentId
 	): Promise<SessionSkillCatalog> => {
 		const catalog = await discoverSkillCatalog(capabilities.getConfig());
@@ -126,10 +127,6 @@ export const createAgentSessionAdapters = (
 			...omitUndefined({ tool }),
 		};
 	};
-	/** Arms the Skill catalog one Agent Turn runs with. */
-	const createTurnSkill = async (
-		agentId: AgentId
-	): Promise<SessionSkillCatalog> => await armSkillCatalog(agentId);
 	/**
 	 * Resolves the Skill a submission asks for: the one it names, or the one
 	 * its source message recorded, against the armed catalog.

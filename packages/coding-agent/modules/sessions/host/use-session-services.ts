@@ -46,7 +46,7 @@ export type SessionServicesHandle = Readonly<{
  * an arriving Model Catalog pricing table is what the Session's next work sees.
  * These services borrow everything they run on — the store, the Session Host
  * Manager, and the Plugin runtime, which is the process runtime or, before that
- * exists, a process-scoped stand-in — so closing it never stops Plugins a
+ * exists, a process-scoped stand-in — so closing them never stops Plugins a
  * Session Host still uses.
  */
 export const useSessionServicesHandle = (): SessionServicesHandle => {
