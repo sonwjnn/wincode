@@ -40,6 +40,13 @@ export type ChatContentPart =
 			toolCallId: string;
 			toolName: string;
 			type: "tool-result";
+	  }>
+	| Readonly<{
+			errorText: string;
+			failure?: unknown;
+			toolCallId: string;
+			toolName: string;
+			type: "tool-failure";
 	  }>;
 
 type ChatMessageContent = Readonly<{
@@ -65,11 +72,23 @@ export type ChatTool = Readonly<{
 	name: string;
 }>;
 
+export type ChatReasoningEffort =
+	| "minimal"
+	| "low"
+	| "medium"
+	| "high"
+	| "xhigh"
+	| "max";
+
 export type ChatRequest = Readonly<{
 	cacheRetention?: "long" | "short";
+	cacheWarming?: true;
+	maxOutputTokens?: number;
 	messages: readonly ChatMessage[];
 	modelId: string;
+	promptCacheKey?: string;
 	providerId: string;
+	reasoningEffort?: ChatReasoningEffort;
 	signal?: AbortSignal;
 	system?: string;
 	tools?: readonly ChatTool[];
@@ -77,7 +96,11 @@ export type ChatRequest = Readonly<{
 
 export type ProviderChatRequest = Readonly<{
 	cacheRetention?: ChatRequest["cacheRetention"];
+	cacheWarming?: ChatRequest["cacheWarming"];
+	maxOutputTokens?: ChatRequest["maxOutputTokens"];
 	messages: ChatRequest["messages"];
+	promptCacheKey?: ChatRequest["promptCacheKey"];
+	reasoningEffort?: ChatRequest["reasoningEffort"];
 	system?: ChatRequest["system"];
 	tools?: ChatRequest["tools"];
 }>;
@@ -617,7 +640,11 @@ export const createProviderCollection = (
 			throwIfAborted(request.signal);
 			const providerRequest: ProviderChatRequest = {
 				cacheRetention: request.cacheRetention,
+				cacheWarming: request.cacheWarming,
+				maxOutputTokens: request.maxOutputTokens,
 				messages: request.messages,
+				promptCacheKey: request.promptCacheKey,
+				reasoningEffort: request.reasoningEffort,
 				system: request.system,
 				tools: request.tools,
 			};
