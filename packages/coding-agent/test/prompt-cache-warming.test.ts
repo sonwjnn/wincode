@@ -4,6 +4,7 @@ import type {
 	ModelStepRequest,
 } from "@wincode/ai/model-client";
 import { createModelTarget } from "@wincode/ai/model-target";
+import type { ChatRequest } from "@wincode/ai/sdk";
 import {
 	computeCacheWarmDelayMs,
 	createSessionCacheWarming,
@@ -234,6 +235,43 @@ describe("Session Cache Warming", () => {
 		await warming.dispose();
 	});
 
+	test("an SDK Model Step cancels legacy warm work without a ModelClient replay", async () => {
+		vi.useFakeTimers();
+		let calls = 0;
+		globalThis.fetch = (async () => {
+			calls += 1;
+			throw new Error("SDK turns must not replay through ModelClient.");
+		}) as unknown as typeof fetch;
+		const { entries, store } = createEntryWriter();
+		const warming = createWarming(store);
+		const legacyRequest = createWarmRequest().request;
+		warming.modelStepObserver.onModelStepStarted(legacyRequest);
+		warming.modelStepObserver.onModelStepFinished(legacyRequest, measuredUsage);
+		expect(warming.getStatus()).toBe("scheduled");
+
+		const sdkRequest: ChatRequest = {
+			messages: [
+				{
+					content: [{ text: "SDK prompt", type: "text" }],
+					role: "user",
+				},
+			],
+			modelId: "gpt-5.6",
+			promptCacheKey: "wincode-session:test",
+			providerId: "openai",
+		};
+		warming.modelStepObserver.onModelStepStarted(sdkRequest);
+		expect(warming.getStatus()).toBe("idle");
+		warming.modelStepObserver.onModelStepFinished(sdkRequest, measuredUsage);
+		expect(warming.getStatus()).toBe("idle");
+
+		vi.advanceTimersByTime(60 * 60_000);
+		await flushPromises();
+		expect(calls).toBe(0);
+		expect(entries).toEqual([]);
+		await warming.dispose();
+	});
+
 	test("a newer real request replaces the scheduled warmer and cancellation prevents refresh", async () => {
 		vi.useFakeTimers();
 		let calls = 0;
@@ -260,7 +298,7 @@ describe("Session Cache Warming", () => {
 		await warming.dispose();
 	});
 
-	test("aborts an in-flight warmer when Session context changes", async () => {
+	test("an SDK Model Step aborts an in-flight legacy warmer", async () => {
 		vi.useFakeTimers();
 		let fetchSignal: AbortSignal | undefined;
 		const response = Promise.withResolvers<Response>();
@@ -289,7 +327,13 @@ describe("Session Cache Warming", () => {
 		expect(warming.getStatus()).toBe("warming");
 		expect(fetchSignal?.aborted).toBe(false);
 
-		warming.cancel();
+		const sdkRequest: ChatRequest = {
+			messages: [],
+			modelId: "gpt-5.6",
+			providerId: "openai",
+		};
+		warming.modelStepObserver.onModelStepStarted(sdkRequest);
+		warming.modelStepObserver.onModelStepFinished(sdkRequest, measuredUsage);
 		await flushPromises();
 		expect(fetchSignal?.aborted).toBe(true);
 		expect(warming.getStatus()).toBe("idle");

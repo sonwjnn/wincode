@@ -72,6 +72,73 @@ describe("public SDK provider collection", () => {
 		]);
 	});
 
+	test("ProviderCollection close awaits every Provider once even when cleanup fails", async () => {
+		const cleanupStarted: string[] = [];
+		const bothCleanupsStarted = Promise.withResolvers<void>();
+		const finishSecondCleanup = Promise.withResolvers<void>();
+		const recordCleanup = (providerId: string): void => {
+			cleanupStarted.push(providerId);
+			if (cleanupStarted.length === 2) {
+				bothCleanupsStarted.resolve();
+			}
+		};
+		const sdk = createProviderCollection();
+		sdk.register({
+			...demoProvider(),
+			close: () => {
+				recordCleanup("failed-provider");
+				throw new Error("private cleanup detail");
+			},
+			id: "failed-provider",
+			models: [
+				{
+					modelId: "failed-model",
+					protocolId: "demo-protocol",
+					providerId: "failed-provider",
+				},
+			],
+		});
+		sdk.register({
+			...demoProvider(),
+			close: async () => {
+				recordCleanup("deferred-provider");
+				await finishSecondCleanup.promise;
+			},
+			id: "deferred-provider",
+			models: [
+				{
+					modelId: "deferred-model",
+					protocolId: "demo-protocol",
+					providerId: "deferred-provider",
+				},
+			],
+		});
+
+		const closing = sdk.close();
+		let settled = false;
+		void closing.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			}
+		);
+		expect(sdk.close()).toBe(closing);
+		await bothCleanupsStarted.promise;
+		expect(cleanupStarted).toEqual(["failed-provider", "deferred-provider"]);
+		expect(settled).toBe(false);
+		finishSecondCleanup.resolve();
+		await expect(closing).rejects.toThrow(
+			"One or more Providers failed to close."
+		);
+		expect(sdk.close()).toBe(closing);
+		expect(cleanupStarted).toEqual(["failed-provider", "deferred-provider"]);
+		expect(() => sdk.register(demoProvider())).toThrow(
+			"ProviderCollection is closed."
+		);
+	});
+
 	test("tool failures in history remain provider-neutral message parts", async () => {
 		const sdk = createProviderCollection();
 		const failedToolMessage: ChatMessage = {

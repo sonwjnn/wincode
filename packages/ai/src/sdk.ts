@@ -171,6 +171,8 @@ export type Provider = Readonly<{
 		request: ProviderChatRequest,
 		context: ProviderChatContext
 	) => AsyncIterable<ProviderChatEvent>;
+	/** Release resources owned by this Provider when its collection is disposed. */
+	close?: () => void | Promise<void>;
 }>;
 
 /** Application-owned persistence for one credential per provider ID in this collection. */
@@ -263,6 +265,8 @@ export class ProviderError extends Error {
 
 export type ProviderCollection = Readonly<{
 	chat: (request: ChatRequest) => AsyncIterable<ChatEvent>;
+	/** Closes every registered Provider once and waits for all cleanup attempts. */
+	close: () => Promise<void>;
 	deleteCredential: (providerId: string) => Promise<void>;
 	/** Known models whose provider has a stored credential; this does not contact the provider. */
 	getAvailable: () => Promise<readonly ProviderModel[]>;
@@ -685,8 +689,31 @@ export const createProviderCollection = (
 		yield* streamSelectedChat(request, selection);
 	};
 
+	let closePromise: Promise<void> | undefined;
+	const close = (): Promise<void> => {
+		if (closePromise !== undefined) {
+			return closePromise;
+		}
+		const closings = [...providers.values()].map(({ provider }) =>
+			Promise.resolve().then(() => provider.close?.())
+		);
+		closePromise = Promise.allSettled(closings).then((results) => {
+			const failures = results.flatMap((result) =>
+				result.status === "rejected" ? [result.reason] : []
+			);
+			if (failures.length > 0) {
+				throw new AggregateError(
+					failures,
+					"One or more Providers failed to close."
+				);
+			}
+		});
+		return closePromise;
+	};
+
 	return {
 		chat: streamChat,
+		close,
 		deleteCredential: async (providerId) => {
 			getRegisteredProvider(providerId);
 			await withProviderCredentialLock(providerId, async () => {
@@ -774,6 +801,9 @@ export const createProviderCollection = (
 			return getProviderModels(providerId);
 		},
 		register: (provider) => {
+			if (closePromise !== undefined) {
+				throw new Error("ProviderCollection is closed.");
+			}
 			if (providers.has(provider.id)) {
 				throw new Error(`Provider already registered: ${provider.id}`);
 			}

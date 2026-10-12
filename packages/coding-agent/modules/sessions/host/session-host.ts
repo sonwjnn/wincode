@@ -9,6 +9,7 @@ import {
 } from "@wincode/agent-core";
 import { createGoogleCachedContentResourceManager } from "@wincode/ai/model-client";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ProviderCollection } from "@wincode/ai/sdk";
 import { isNull, logger, omitUndefined } from "@wincode/utils";
 import {
 	type AgentRegistry,
@@ -290,6 +291,7 @@ export const createSessionHost = async ({
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 	let statefulAgent: StatefulAgent<SessionQueuedSubmission> | undefined;
+	let providerCollection: ProviderCollection | undefined;
 	// The warmer belongs to the loaded Host, not a single Agent Turn; retain it across idle turns.
 	let cacheWarming: SessionCacheWarming | undefined;
 	let unsubscribeContext: (() => void) | undefined;
@@ -349,8 +351,11 @@ export const createSessionHost = async ({
 					statefulAgent?.shutdown() ?? Promise.resolve(),
 					cacheWarmingShutdown,
 				]);
-				await googleCachedContentResourceManager.close();
-				const failure = results.find(
+				const cleanupResults = await Promise.allSettled([
+					googleCachedContentResourceManager.close(),
+					providerCollection?.close() ?? Promise.resolve(),
+				]);
+				const failure = [...results, ...cleanupResults].find(
 					(result): result is PromiseRejectedResult =>
 						result.status === "rejected"
 				);
@@ -390,7 +395,7 @@ export const createSessionHost = async ({
 			store: capabilities.getStore(),
 		});
 		const runtime = capabilities.getRuntime?.();
-		const providerCollection =
+		providerCollection =
 			runtime === undefined
 				? capabilities.createProviderCollection?.()
 				: undefined;

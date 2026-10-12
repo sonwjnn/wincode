@@ -415,9 +415,7 @@ export const createAgentSessionTurnRunner = ({
 				promptCacheKey: turn.model.promptCacheEnabled
 					? `wincode-session:${sessionId}`
 					: undefined,
-				...("authorization" in turn.model
-					? { modelStepObserver: cacheWarming.modelStepObserver }
-					: {}),
+				modelStepObserver: cacheWarming.modelStepObserver,
 				runtime: statefulAgent,
 				googleCachedContent,
 				signal,

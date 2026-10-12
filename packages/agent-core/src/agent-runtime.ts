@@ -772,6 +772,7 @@ const createToolsByName = (
 };
 
 type ExecuteModelStepsOptions = Readonly<{
+	cacheWarming?: true;
 	emit: EventEmitter;
 	lifecycle: AgentTurnLifecycle;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
@@ -797,6 +798,7 @@ const modelTargetForLegacyRuntime = (turn: AgentTurn): ModelTarget => {
 };
 
 type BuildModelStepRequestOptions = Readonly<{
+	cacheWarming?: true;
 	googleCachedContent?: ModelStepRequest["googleCachedContent"];
 	invocation: AgentModelInvocation;
 	modelMessages: ModelPromptMessage[];
@@ -807,6 +809,7 @@ type BuildModelStepRequestOptions = Readonly<{
 }>;
 
 const buildModelStepRequest = ({
+	cacheWarming,
 	googleCachedContent,
 	invocation,
 	modelMessages,
@@ -818,7 +821,7 @@ const buildModelStepRequest = ({
 	if (invocation.kind === "model-client") {
 		return {
 			messages: modelMessages,
-			...omitUndefined({ googleCachedContent, promptCacheKey }),
+			...omitUndefined({ cacheWarming, googleCachedContent, promptCacheKey }),
 			...omitUndefined({ signal: runtimeSignal }),
 			system: turn.agent.instructions,
 			target: modelTargetForLegacyRuntime(turn),
@@ -834,6 +837,7 @@ const buildModelStepRequest = ({
 				turn.model.promptCacheEnabled === true
 					? turn.model.promptCacheRetention
 					: undefined,
+			cacheWarming,
 			maxOutputTokens: turn.model.maxOutputTokens,
 			promptCacheKey,
 			reasoningEffort:
@@ -845,25 +849,6 @@ const buildModelStepRequest = ({
 			tools: toolDefinitions,
 		}),
 	};
-};
-
-const notifyLegacyModelStepStarted = (
-	observer: AgentRuntimeRunOptions["modelStepObserver"],
-	request: ModelStepRequestInput
-): void => {
-	if ("target" in request) {
-		notifyModelStepStarted(observer, request);
-	}
-};
-
-const notifyLegacyModelStepFinished = (
-	observer: AgentRuntimeRunOptions["modelStepObserver"],
-	request: ModelStepRequestInput,
-	usage: ModelUsage | undefined
-): void => {
-	if ("target" in request) {
-		notifyModelStepFinished(observer, request, usage);
-	}
 };
 
 const appendAssistantOutput = (
@@ -906,7 +891,7 @@ const appendLateSteeringMessages = async (
 
 const notifyModelStepStarted = (
 	observer: AgentRuntimeRunOptions["modelStepObserver"],
-	request: ModelStepRequest
+	request: ModelStepRequestInput
 ): void => {
 	try {
 		observer?.onModelStepStarted(request);
@@ -917,7 +902,7 @@ const notifyModelStepStarted = (
 
 const notifyModelStepFinished = (
 	observer: AgentRuntimeRunOptions["modelStepObserver"],
-	request: ModelStepRequest,
+	request: ModelStepRequestInput,
 	usage: ModelUsage | undefined
 ): void => {
 	try {
@@ -928,6 +913,7 @@ const notifyModelStepFinished = (
 };
 
 const runLoop = async function* ({
+	cacheWarming,
 	emit,
 	lifecycle,
 	invocation,
@@ -961,6 +947,7 @@ const runLoop = async function* ({
 			type: "model-step-started",
 		});
 		const request = buildModelStepRequest({
+			cacheWarming,
 			googleCachedContent,
 			invocation,
 			modelMessages,
@@ -969,7 +956,7 @@ const runLoop = async function* ({
 			toolDefinitions,
 			turn,
 		});
-		notifyLegacyModelStepStarted(modelStepObserver, request);
+		notifyModelStepStarted(modelStepObserver, request);
 		const output = yield* drainModelStep({
 			emit,
 			invocation,
@@ -983,7 +970,7 @@ const runLoop = async function* ({
 			yield lifecycle.interrupt(emit.nextSequence(), "lost-execution");
 			return;
 		}
-		notifyLegacyModelStepFinished(modelStepObserver, request, output.usage);
+		notifyModelStepFinished(modelStepObserver, request, output.usage);
 		let stopTurn = false;
 		if (output.toolCalls.length > 0) {
 			modelMessages.push({
@@ -1052,6 +1039,7 @@ const runLoop = async function* ({
 const runAgentTurn = async function* (
 	turn: AgentTurn,
 	{
+		cacheWarming,
 		deadlineMs,
 		googleCachedContent,
 		modelStepObserver,
@@ -1093,6 +1081,7 @@ const runAgentTurn = async function* (
 			invocation,
 			modelMessages,
 			...omitUndefined({
+				cacheWarming,
 				googleCachedContent,
 				modelStepObserver,
 				promptCacheKey,

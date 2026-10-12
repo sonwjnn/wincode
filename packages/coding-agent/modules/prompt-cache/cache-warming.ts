@@ -9,6 +9,7 @@ import {
 	promptCacheRetentionTtlMsForModel,
 	supportsPromptCacheWarmingForModel,
 } from "@wincode/ai/models";
+import type { ChatRequest } from "@wincode/ai/sdk";
 import { logger } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import type {
@@ -316,18 +317,25 @@ export const createSessionCacheWarming = ({
 		setStatus("scheduled");
 	};
 
-	const onModelStepStarted = (request: ModelStepRequest): void => {
+	const onModelStepStarted = (
+		request: ModelStepRequest | ChatRequest
+	): void => {
 		cancel();
+		if (!("target" in request)) {
+			// SDK turns invalidate legacy replay state but never replay through ModelClient.
+			return;
+		}
 		latestRequest = request;
 		requestStartedAt = Date.now();
 		replayRequest = replayRequestSnapshot(request);
 	};
 
 	const onModelStepFinished = (
-		request: ModelStepRequest,
+		request: ModelStepRequest | ChatRequest,
 		usage: ModelUsage | undefined
 	): void => {
 		if (
+			!("target" in request) ||
 			request !== latestRequest ||
 			usage === undefined ||
 			replayRequest === undefined

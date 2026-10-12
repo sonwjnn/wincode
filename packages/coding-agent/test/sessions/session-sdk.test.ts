@@ -14,7 +14,10 @@ import type {
 	ModelStepRequest,
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
-import { defaultChatModelSelection } from "@wincode/ai/models";
+import {
+	defaultChatModelSelection,
+	type ThinkingLevel,
+} from "@wincode/ai/models";
 import {
 	createProviderCollection,
 	type Provider,
@@ -135,10 +138,26 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 		},
 	};
 	const providerCollections: ProviderCollection[] = [];
+	const providerCloseCalls: number[] = [];
 	const requests: ProviderChatRequest[] = [];
 	const stepsByPrompt = new Map<string, number>();
 	const abortStarted = Promise.withResolvers<void>();
-	const providerForHost = (): Provider => ({
+	const providerStreamStarted = Promise.withResolvers<void>();
+	const providerCloseStarted = Promise.withResolvers<void>();
+	const finishProviderClose = Promise.withResolvers<void>();
+	const providerLifecycle: string[] = [];
+	let providerStreamActive = false;
+	let providerWasActiveAtClose = false;
+	const providerForHost = (hostIndex: number): Provider => ({
+		close: async () => {
+			providerCloseCalls.push(hostIndex);
+			if (hostIndex === 4) {
+				providerWasActiveAtClose = providerStreamActive;
+				providerLifecycle.push("provider-close");
+				providerCloseStarted.resolve();
+				await finishProviderClose.promise;
+			}
+		},
 		id: providerModel.providerId,
 		models: [providerModel],
 		resolveAuthorization: ({ credential }) =>
@@ -155,6 +174,27 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 				.at(-1);
 			const step = stepsByPrompt.get(userText ?? "") ?? 0;
 			stepsByPrompt.set(userText ?? "", step + 1);
+			if (userText === "Wait for Host-owned Provider cleanup.") {
+				providerStreamActive = true;
+				providerStreamStarted.resolve();
+				const aborted = Promise.withResolvers<void>();
+				try {
+					if (signal === undefined) {
+						throw new Error("The active Provider stream needs a signal.");
+					}
+					signal.addEventListener("abort", () => aborted.resolve(), {
+						once: true,
+					});
+					if (signal.aborted) {
+						throw signal.reason ?? new DOMException("Aborted", "AbortError");
+					}
+					await aborted.promise;
+					throw signal.reason ?? new DOMException("Aborted", "AbortError");
+				} finally {
+					providerStreamActive = false;
+					providerLifecycle.push("provider-stream-unwound");
+				}
+			}
 			if (userText === "Surface the fake authentication failure.") {
 				throw new ProviderError("authentication", "fake credential rejected");
 			}
@@ -215,8 +255,9 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 		},
 	});
 	const providerCollectionForHost = (): ProviderCollection => {
+		const hostIndex = providerCollections.length;
 		const providers = createProviderCollection({ credentialStore });
-		providers.register(providerForHost());
+		providers.register(providerForHost(hostIndex));
 		providerCollections.push(providers);
 		return providers;
 	};
@@ -249,9 +290,10 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 			projectTrust: "deny",
 			workspace: sdkWorkspace,
 		});
-		const runPrompt = async (text: string) => {
+		const runPrompt = async (text: string, thinkingLevel?: ThinkingLevel) => {
 			const handle = await sdk?.createSession({
 				model: defaultChatModelSelection,
+				...(thinkingLevel === undefined ? {} : { thinkingLevel }),
 			});
 			if (handle === undefined) {
 				throw new Error("The public Session SDK was not created.");
@@ -274,7 +316,10 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 					terminal.resolve(event);
 				}
 			});
-			const admission = await handle.prompt({ text });
+			const admission = await handle.prompt({
+				text,
+				...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+			});
 			expect(admission.rejected).toBe(false);
 			return {
 				events,
@@ -284,7 +329,10 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 				unsubscribe,
 			};
 		};
-		const success = await runPrompt("Review the temporary instructions.");
+		const success = await runPrompt(
+			"Review the temporary instructions.",
+			"high"
+		);
 		const successTerminal = await success.terminal;
 		expect(successTerminal).toMatchObject({
 			type: "agent-turn-completed",
@@ -316,6 +364,16 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 			"session-sdk-read-success": "success",
 		});
 		expect(requests).toHaveLength(2);
+		expect(requests[0]).toMatchObject({
+			cacheRetention: "short",
+			promptCacheKey: `wincode-session:${success.handle.sessionId}`,
+			reasoningEffort: "high",
+		});
+		expect(requests[1]).toMatchObject({
+			cacheRetention: "short",
+			promptCacheKey: `wincode-session:${success.handle.sessionId}`,
+			reasoningEffort: "high",
+		});
 		expect(requests[0]).not.toHaveProperty("target");
 		expect(requests[0]).not.toHaveProperty("authorization");
 		expect(requests[0]?.tools?.map(({ name }) => name)).toContain("read");
@@ -376,7 +434,36 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 		for (const run of [success, failure, sdkAborted, interrupted]) {
 			run.unsubscribe();
 		}
+
+		const activeDuringShutdown = await runPrompt(
+			"Wait for Host-owned Provider cleanup."
+		);
+		await providerStreamStarted.promise;
+		let disposalSettled = false;
+		const disposal = sdk?.dispose().then(() => {
+			disposalSettled = true;
+		});
+		if (disposal === undefined) {
+			throw new Error("The public Session SDK was not created.");
+		}
+		await providerCloseStarted.promise;
+		expect(providerWasActiveAtClose).toBe(false);
+		expect(providerLifecycle).toEqual([
+			"provider-stream-unwound",
+			"provider-close",
+		]);
+		expect(disposalSettled).toBe(false);
+		finishProviderClose.resolve();
+		await disposal;
+		expect(disposalSettled).toBe(true);
+		expect(activeDuringShutdown.handle.sessionId).toBeTruthy();
+		expect(providerCollections).toHaveLength(5);
+		expect(new Set(providerCollections).size).toBe(5);
+		expect(providerCloseCalls.sort((left, right) => left - right)).toEqual([
+			0, 1, 2, 3, 4,
+		]);
 	} finally {
+		finishProviderClose.resolve();
 		await Promise.all(handles.map((handle) => handle.dispose()));
 		await sdk?.dispose();
 		await fs.rm(toolFixtureRoot, { force: true, recursive: true });
