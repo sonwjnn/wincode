@@ -73,6 +73,7 @@ export type ChatTool = Readonly<{
 }>;
 
 export type ChatReasoningEffort =
+	| "none"
 	| "minimal"
 	| "low"
 	| "medium"

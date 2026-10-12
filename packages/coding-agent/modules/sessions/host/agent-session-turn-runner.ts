@@ -90,9 +90,14 @@ const resolveSessionTurnModel = async ({
 			signal,
 		});
 	}
+	const maxOutputTokens = providerCollection.getModel(
+		model.providerId,
+		model.modelId
+	)?.limits?.maxOutputTokens;
 	return {
 		...model,
 		...thinkingSelection,
+		...omitUndefined({ maxOutputTokens }),
 		...(promptCacheControls.enabled
 			? {
 					promptCacheEnabled: true as const,

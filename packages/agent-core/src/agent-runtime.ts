@@ -193,11 +193,19 @@ const awaitWithAbort = async <Value>(
 	}
 };
 
-const closeModelStream = (iterator: AsyncIterator<unknown>): void => {
+const closeModelStream = async (
+	iterator: AsyncIterator<unknown>,
+	waitForCleanup: boolean
+): Promise<void> => {
 	const closing = iterator.return?.();
-	if (!isUndefined(closing)) {
-		void closing.catch(() => undefined);
+	if (isUndefined(closing)) {
+		return;
 	}
+	if (waitForCleanup) {
+		await closing.catch(() => undefined);
+		return;
+	}
+	void closing.catch(() => undefined);
 };
 
 const modelPromptMessage = (message: AgentTurnMessage): ModelPromptMessage => ({
@@ -656,7 +664,8 @@ const drainModelStep = async function* ({
 			}
 		}
 	} finally {
-		closeModelStream(iterator);
+		// Host shutdown owns ProviderCollection disposal; legacy ModelClient remains best-effort.
+		await closeModelStream(iterator, invocation.kind === "provider-collection");
 	}
 	if (!finished) {
 		return null;
@@ -842,7 +851,7 @@ const buildModelStepRequest = ({
 			promptCacheKey,
 			reasoningEffort:
 				turn.model.thinkingLevel === "off"
-					? undefined
+					? ("none" as const)
 					: turn.model.thinkingLevel,
 			signal: runtimeSignal,
 			system: turn.agent.instructions,

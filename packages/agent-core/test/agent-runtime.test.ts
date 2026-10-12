@@ -240,6 +240,44 @@ test("SDK-backed Agent Runtime forwards request controls to the fake Provider", 
 	});
 });
 
+test("SDK Agent Runtime maps explicit reasoning off to none but leaves unset effort absent", async () => {
+	const requests: Parameters<Provider["streamChat"]>[0][] = [];
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["reasoning", "text"],
+				modelId: "sdk-reasoning-model",
+				protocolId: "test-protocol",
+				providerId: "test-provider",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat(request) {
+			requests.push(request);
+			yield { type: "finish" };
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const runtime = createAgentRuntime({ providerCollection: providers });
+	const turnFor = (thinkingLevel?: "off"): AgentTurn => ({
+		...buildTurn(),
+		model: {
+			modelId: toModelId("sdk-reasoning-model"),
+			providerId: "test-provider",
+			...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+		},
+	});
+
+	await consume(runtime.run(turnFor("off")));
+	await consume(runtime.run(turnFor()));
+
+	expect(requests).toHaveLength(2);
+	expect(requests[0]?.reasoningEffort).toBe("none");
+	expect(requests[1]?.reasoningEffort).toBeUndefined();
+});
+
 test("SDK provider failures map safely and never complete an Agent Turn", async () => {
 	const providerId = "test-provider";
 	const sdkModelId = "sdk-failure-model";

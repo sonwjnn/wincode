@@ -121,6 +121,7 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 	);
 	const providerModel: ProviderModel = {
 		capabilities: ["reasoning", "text", "tools"],
+		limits: { maxOutputTokens: 777 },
 		modelId: defaultChatModelSelection.modelId,
 		protocolId: "session-sdk-test",
 		providerId: defaultChatModelSelection.providerId,
@@ -143,6 +144,8 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 	const stepsByPrompt = new Map<string, number>();
 	const abortStarted = Promise.withResolvers<void>();
 	const providerStreamStarted = Promise.withResolvers<void>();
+	const providerStreamCleanupStarted = Promise.withResolvers<void>();
+	const finishProviderStreamCleanup = Promise.withResolvers<void>();
 	const providerCloseStarted = Promise.withResolvers<void>();
 	const finishProviderClose = Promise.withResolvers<void>();
 	const providerLifecycle: string[] = [];
@@ -191,6 +194,9 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 					await aborted.promise;
 					throw signal.reason ?? new DOMException("Aborted", "AbortError");
 				} finally {
+					providerLifecycle.push("provider-stream-cleanup-started");
+					providerStreamCleanupStarted.resolve();
+					await finishProviderStreamCleanup.promise;
 					providerStreamActive = false;
 					providerLifecycle.push("provider-stream-unwound");
 				}
@@ -366,11 +372,13 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 		expect(requests).toHaveLength(2);
 		expect(requests[0]).toMatchObject({
 			cacheRetention: "short",
+			maxOutputTokens: 777,
 			promptCacheKey: `wincode-session:${success.handle.sessionId}`,
 			reasoningEffort: "high",
 		});
 		expect(requests[1]).toMatchObject({
 			cacheRetention: "short",
+			maxOutputTokens: 777,
 			promptCacheKey: `wincode-session:${success.handle.sessionId}`,
 			reasoningEffort: "high",
 		});
@@ -446,9 +454,17 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 		if (disposal === undefined) {
 			throw new Error("The public Session SDK was not created.");
 		}
+		await providerStreamCleanupStarted.promise;
+		const providerClosedBeforeStreamCleanup = await Promise.race([
+			providerCloseStarted.promise.then(() => true),
+			Bun.sleep(20).then(() => false),
+		]);
+		expect(providerClosedBeforeStreamCleanup).toBe(false);
+		finishProviderStreamCleanup.resolve();
 		await providerCloseStarted.promise;
 		expect(providerWasActiveAtClose).toBe(false);
 		expect(providerLifecycle).toEqual([
+			"provider-stream-cleanup-started",
 			"provider-stream-unwound",
 			"provider-close",
 		]);
@@ -463,6 +479,7 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 			0, 1, 2, 3, 4,
 		]);
 	} finally {
+		finishProviderStreamCleanup.resolve();
 		finishProviderClose.resolve();
 		await Promise.all(handles.map((handle) => handle.dispose()));
 		await sdk?.dispose();
