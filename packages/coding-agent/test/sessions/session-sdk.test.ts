@@ -36,7 +36,7 @@ import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
 } from "../support/e2e-fake-runtime";
-import { agentId, sessionId } from "../support/identifiers";
+import { agentId, modelId, sessionId } from "../support/identifiers";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
@@ -187,6 +187,94 @@ test("an injected Session SDK creates an empty durable Session and reopens it", 
 		await created.dispose();
 		await reopened.dispose();
 	} finally {
+		await sdk.dispose();
+	}
+});
+
+test("the public Session SDK restores provider, model, and ThinkingLevel for the next prompt", async () => {
+	const recorder = createFakeModelClientRecorder();
+	const sentSelections: Pick<
+		ModelStepRequest["target"],
+		"modelId" | "providerId" | "thinkingLevel"
+	>[] = [];
+	recorder.beforeStep = async ({ target }) => {
+		sentSelections.push({
+			modelId: target.modelId,
+			providerId: target.providerId,
+			thinkingLevel: target.thinkingLevel,
+		});
+	};
+	const selectedModel = {
+		modelId: modelId("claude-sonnet-5"),
+		providerId: "anthropic" as const,
+	};
+	const sdk = await createSessionSdk({
+		configStore,
+		getConnections: () => ({
+			authorize: async () => ({
+				apiKey: "sdk-test-key",
+				kind: "api-key",
+			}),
+			connect: async () => undefined,
+			listProviders: async () => [],
+		}),
+		cwd: workspace,
+		pluginPaths: [],
+		runtimeFactory: () =>
+			createAgentRuntime({ modelClient: createFakeModelClient(recorder) }),
+		store,
+		workspace,
+	});
+	let created: SessionSdkHandle | undefined;
+	let restored: SessionSdkHandle | undefined;
+	let unsubscribe: (() => void) | undefined;
+	try {
+		created = await sdk.createSession({
+			model: selectedModel,
+			thinkingLevel: "high",
+		});
+		const createdSessionId = created.sessionId;
+		expect(await store.getSession(createdSessionId)).toMatchObject({
+			model: selectedModel,
+			thinkingLevel: "high",
+		});
+		await created.dispose();
+		created = undefined;
+
+		restored = await sdk.openSession(createdSessionId);
+		const completed = Promise.withResolvers<void>();
+		unsubscribe = restored.onEvent((event) => {
+			if (event.type === "agent-turn-completed") {
+				completed.resolve();
+			}
+		});
+		const admission = await restored.prompt({
+			text: "Use the restored selection.",
+		});
+		await completed.promise;
+
+		expect(admission.rejected).toBe(false);
+		expect(sentSelections).toHaveLength(1);
+		expect(sentSelections[0]).toMatchObject({
+			modelId: "claude-sonnet-5",
+			providerId: "anthropic",
+			thinkingLevel: "high",
+		});
+		expect(await store.listSessionRecords(createdSessionId)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					model: expect.objectContaining({
+						modelId: "claude-sonnet-5",
+						providerId: "anthropic",
+						thinkingLevel: "high",
+					}),
+				}),
+			])
+		);
+	} finally {
+		unsubscribe?.();
+		await restored?.dispose();
+		await created?.dispose();
 		await sdk.dispose();
 	}
 });
