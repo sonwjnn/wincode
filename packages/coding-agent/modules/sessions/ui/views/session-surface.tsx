@@ -2,8 +2,11 @@ import { getErrorMessage } from "@wincode/utils";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
-import type { SessionHost } from "@/modules/sessions/host/types";
-import { useSessionCapabilities } from "@/modules/sessions/host/use-session-capabilities";
+import type {
+	SessionHost,
+	SessionHostManager,
+} from "@/modules/sessions/host/types";
+import { useSessionServicesHandle } from "@/modules/sessions/host/use-session-services";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
@@ -112,7 +115,7 @@ export function SessionSurface({
 	readonly sessionId: SessionId;
 }) {
 	const { colors } = useTheme();
-	const capabilities = useSessionCapabilities();
+	const sessionServicesHandle = useSessionServicesHandle();
 	const [surface, setSurface] = useState<SessionSurfaceState>({
 		kind: "opening",
 	});
@@ -136,20 +139,26 @@ export function SessionSurface({
 		let contentionOwner: SessionWriterLockOwner | undefined;
 		let viewAcquired = false;
 		let releaseRequested = false;
-		const manager = capabilities.getSessionHostManager();
+		let manager: SessionHostManager | undefined;
 		setSurface({ kind: "opening" });
 
 		const releaseView = (): void => {
 			releaseRequested = true;
-			if (!viewAcquired) {
+			if (!(viewAcquired && manager !== undefined)) {
 				return;
 			}
 			viewAcquired = false;
 			void manager.releaseView(sessionId).catch(() => undefined);
 		};
 		const open = async (): Promise<OpenedSession | null> => {
-			const host = await manager.openHost({
-				capabilities,
+			const services = await sessionServicesHandle.open();
+			if (ignore || releaseRequested) {
+				return null;
+			}
+			const sessionHostManager = services.capabilities.getSessionHostManager();
+			manager = sessionHostManager;
+			const host = await sessionHostManager.openHost({
+				capabilities: services.capabilities,
 				executionMode: "interactive",
 				sessionId,
 				view: true,
@@ -294,8 +303,11 @@ export function SessionSurface({
 			retryOpenRef.current = null;
 			viewHistoryRef.current = null;
 			releaseView();
+			// These services borrowed this view's providers; closing them releases
+			// only a Plugin runtime they had to create for themselves.
+			void sessionServicesHandle.close();
 		};
-	}, [capabilities, sessionId]);
+	}, [sessionServicesHandle, sessionId]);
 
 	if (surface.kind === "failure") {
 		return <text fg={colors.error}>{surface.message}</text>;

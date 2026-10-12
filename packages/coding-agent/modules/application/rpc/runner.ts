@@ -98,7 +98,7 @@ export async function runRpc({
 	disabledPluginIds,
 	pluginPaths,
 	pluginRuntime,
-	composeCapabilities: providedComposer,
+	composeServices: providedComposer,
 	input,
 	signal,
 	signalExitCode,

@@ -185,7 +185,7 @@ export const createRpcRequestHandler = (
 			if (providedComposer === undefined) {
 				const activeRuntime = await getRuntime();
 				resolveWorkspaceRoot = activeRuntime.resolveWorkspaceRoot;
-				composer = activeRuntime.createSessionCapabilities;
+				composer = activeRuntime.openSessionServices;
 			} else {
 				resolveWorkspaceRoot = resolveSessionWorkspaceRoot;
 				composer = providedComposer;

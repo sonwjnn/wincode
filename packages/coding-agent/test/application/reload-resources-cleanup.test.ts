@@ -6,10 +6,7 @@ import type {
 	ApplicationResourceLoader,
 	ApplicationResourceReloadResult,
 } from "@/modules/application/resource-loader";
-import {
-	createPluginRuntime,
-	type PluginRuntime,
-} from "@/modules/plugins/runtime";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
 	getInteractiveSessionHostManager,
 	resetInteractiveSessionHostManager,
@@ -26,6 +23,7 @@ import {
 } from "@/shared/runtime-context";
 import { createInteractiveRuntimeLifecycle } from "@/shared/runtime-lifecycle";
 import { reloadInteractiveResources } from "@/tui/commands/reload-resources";
+import { createEmptyPluginRuntime } from "../support/plugin-runtime";
 
 const root = await fs.mkdtemp(
 	path.join(os.tmpdir(), "wincode-reload-cleanup-")
@@ -49,7 +47,7 @@ const observableRuntime = (hooks: {
 	onStart?: () => void;
 	onShutdown?: () => void;
 }): PluginRuntime => {
-	const runtime = createPluginRuntime([], []);
+	const runtime = createEmptyPluginRuntime();
 	return Object.freeze({
 		...runtime,
 		start: async () => {

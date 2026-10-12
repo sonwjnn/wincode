@@ -72,8 +72,8 @@ import { dispatch } from "@wincode/coding-agent";
 The package root export points both `types` and `import` at that source file.
 `modules/application/`, `bin/`, and `tui/` are implementation paths, not
 alternate application entrypoints; the package does not export
-`@wincode/coding-agent/application`. Session Host, capability, and RPC contracts
-retain their explicit UI-neutral subpath exports.
+`@wincode/coding-agent/application`. Session Host, Session Services, and RPC
+contracts retain their explicit UI-neutral subpath exports.
 
 This keeps one public application seam while allowing the implementation to
 move underneath `modules/application/` without changing package consumers.

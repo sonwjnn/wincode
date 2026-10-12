@@ -448,9 +448,26 @@ const createFakeSessionHost = (
 		}),
 	});
 
+/**
+ * Renders until the frame stops changing, so work whose commit is asynchronous
+ * lands before an assertion reads it. The Session Surface opens its Session
+ * Services before it opens a Session Host, and this harness can otherwise read
+ * the frame in the middle of that window.
+ */
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
-	await Bun.sleep(20);
-	await setup.renderOnce();
+	let previous = setup.captureCharFrame();
+	// Two passes minimum: the first gives an asynchronous commit a window to
+	// land, the second sees whether it did. A command slower than that needs a
+	// wait of its own, which is what the assertions here rely on.
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		await Bun.sleep(20);
+		await setup.renderOnce();
+		const frame = setup.captureCharFrame();
+		if (attempt >= 1 && frame === previous) {
+			return;
+		}
+		previous = frame;
+	}
 };
 
 beforeAll(() => {

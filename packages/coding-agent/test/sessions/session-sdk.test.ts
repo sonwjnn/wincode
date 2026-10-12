@@ -317,7 +317,7 @@ test("a runtime catalog rejects Agents whose required tools exceed its effective
 	);
 	const sdk = await createSessionSdk({
 		configStore,
-		connections: {
+		getConnections: () => ({
 			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
 			connect: async () => undefined,
 			listProviders: async () => [
@@ -329,11 +329,10 @@ test("a runtime catalog rejects Agents whose required tools exceed its effective
 					methods: ["api-key", "browser"],
 				},
 			],
-		},
+		}),
 		cwd: workspace,
 		getRegistry: () => registry,
 		pluginPaths: [],
-		registry,
 		store,
 		workspace,
 	});
@@ -391,7 +390,7 @@ test("a Session runtime snapshots its tool ceiling so later changes cannot expos
 	);
 	const sdk = await createSessionSdk({
 		configStore,
-		connections: {
+		getConnections: () => ({
 			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
 			connect: async () => undefined,
 			listProviders: async () => [
@@ -403,10 +402,10 @@ test("a Session runtime snapshots its tool ceiling so later changes cannot expos
 					methods: ["api-key", "browser"],
 				},
 			],
-		},
+		}),
 		cwd: workspace,
 		pluginPaths: [],
-		registry,
+		getRegistry: () => registry,
 		runtimeFactory: () =>
 			createAgentRuntime({ modelClient: createFakeModelClient(recorder) }),
 		store,
@@ -529,7 +528,7 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 	);
 	const sdk = await createSessionSdk({
 		configStore,
-		connections: {
+		getConnections: () => ({
 			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
 			connect: async () => undefined,
 			listProviders: async () => [
@@ -541,10 +540,10 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 					methods: ["api-key", "browser"],
 				},
 			],
-		},
+		}),
 		cwd: workspace,
 		pluginPaths: [subagentsPluginPath],
-		registry,
+		getRegistry: () => registry,
 		runtimeFactory: () =>
 			createAgentRuntime({ modelClient: createFakeModelClient(recorder) }),
 		store,
@@ -604,7 +603,7 @@ test("SDK deliveries preserve FIFO order behind earlier queued Submissions", asy
 	});
 	const sdk = await createSessionSdk({
 		configStore,
-		connections: {
+		getConnections: () => ({
 			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
 			connect: async () => undefined,
 			listProviders: async () => [
@@ -616,7 +615,7 @@ test("SDK deliveries preserve FIFO order behind earlier queued Submissions", asy
 					methods: ["api-key", "browser"],
 				},
 			],
-		},
+		}),
 		cwd: workspace,
 		pluginPaths: [],
 		runtimeFactory: () => runtime,
@@ -689,7 +688,7 @@ test("the public Session SDK durably delivers a message and streams its Agent Tu
 	});
 	const sdk = await createSessionSdk({
 		configStore,
-		connections: {
+		getConnections: () => ({
 			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
 			connect: async () => undefined,
 			listProviders: async () => [
@@ -701,7 +700,7 @@ test("the public Session SDK durably delivers a message and streams its Agent Tu
 					methods: ["api-key", "browser"],
 				},
 			],
-		},
+		}),
 		cwd: workspace,
 		pluginPaths: [],
 		runtimeFactory: () => runtime,

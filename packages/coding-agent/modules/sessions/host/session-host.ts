@@ -34,7 +34,7 @@ import {
 import { resolveSessionSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionUsageEntry } from "../storage/session-store";
-import { createSessionPorts } from "./session-ports";
+import { createAgentSessionAdapters } from "./agent-session-adapters";
 import type {
 	SessionCapabilities,
 	SessionHost,
@@ -393,7 +393,7 @@ export const createSessionHost = async ({
 			runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
 		});
 		const ports: AgentSessionPorts = withEventChannel(
-			createSessionPorts({
+			createAgentSessionAdapters({
 				cacheWarming,
 				capabilities,
 				googleCachedContentResourceManager,

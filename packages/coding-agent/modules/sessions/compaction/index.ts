@@ -59,4 +59,3 @@ export {
 	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 } from "./types";
-export { useCompactionSettings } from "./use-compaction-settings";
