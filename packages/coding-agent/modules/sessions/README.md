@@ -245,7 +245,8 @@ history and workspace/configuration data.
 - `hooks/runtime-turn.ts` — adapts Agent Runtime events to the Stateful Agent's turn consumer and synthesizes missing terminal events.
 - `host/session-host.ts` — opens one Session, rebuilds its context, assembles the Agent Session on the Session Capabilities it is handed, and exposes its public command/snapshot/event API. React-free; exported through `@wincode/coding-agent/session-host`.
 - `host/session-host-manager.ts` — process-lifetime Host ownership across view switches, one-writer enforcement, and background Session events.
-- `host/session-ports.ts` — `createSessionPorts`: materializes Host capabilities required by the `SessionTurnRunner`, Tools, Skills, prompt composition, attachments, and persistence.
+- `host/agent-session-adapters.ts` — `createAgentSessionAdapters`: materializes the Agent Session's ports from one Session's Session Services — attachments, compaction, durable records, Selection resolution, File Mentions, Skills, and the turn runner it hands off.
+- `host/agent-session-turn-runner.ts` — `createAgentSessionTurnRunner`: runs one Agent Turn execution, resolving the Model Target, snapshotting the Plugin Tools, composing the prompt, consuming the Agent Runtime, and owning the per-turn execution scopes the Host must hold.
 - `host/session-services.ts` — `openSessionServices`: the mode-, process-, or view-scoped Session Services. Resolves the Plugin runtime (loaded from policy or borrowed as a source), Session Store, Session Host Manager, and Session SDK, then assembles the Session Capabilities a Host reads lazily. Closes only the resources it created; exported through `@wincode/coding-agent/session-services`.
 - `host/use-session-services.ts` — Interactive Mode's adapter over `openSessionServices`: it reads its provider values and passes them as sources.
 - `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, and forwards public commands.
