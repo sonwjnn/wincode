@@ -6,7 +6,10 @@ import type {
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
-import { openAIPromptCacheControlsForRequest } from "./openai-prompt-cache";
+import {
+	openAIPromptCacheControlsForRequest,
+	openAIPromptCacheStrategyFor,
+} from "./openai-prompt-cache";
 import type { JsonRecord, SsePayload } from "./shared";
 import {
 	fileDataUri,
@@ -465,6 +468,7 @@ const serializeOpenAIResponses = (
 
 export const openAIResponsesStrategy = {
 	protocol: "openai-responses",
+	promptCache: openAIPromptCacheStrategyFor("openai-responses"),
 	serialize: serializeOpenAIResponses,
 	stream: openAiResponseStream,
 } satisfies ModelProtocolStrategy<"openai-responses">;

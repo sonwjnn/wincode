@@ -1,11 +1,13 @@
 import { z } from "zod";
 import type { SupportedChatModel } from "./catalog";
+import { modelProtocolStrategyFor } from "./model-client/provider-adapters";
 import type {
 	OpenAIPromptCacheProtocol,
 	PromptCacheRetentionTier,
 	SupportedPromptCacheRetentionTier,
 } from "./model-metadata";
-import { getModelMetadata } from "./model-metadata-runtime";
+
+export { getOpenAIPromptCacheProtocolCapabilities } from "./prompt-cache-metadata";
 
 export type PromptCachePolicy = Readonly<{
 	/** Per-model override; omitted models use the short default. */
@@ -29,131 +31,18 @@ export const promptCachePolicySchema = z
 	})
 	.strict() satisfies z.ZodType<PromptCachePolicy>;
 
-/** Resolves the OpenAI Model Protocol declared by the selected Model Catalog entry. */
+/** Resolves the OpenAI Model Protocol selected by the provider adapter. */
 export const openAIPromptCacheProtocolForModel = (
 	model: SupportedChatModel
 ): OpenAIPromptCacheProtocol | undefined => {
-	if (model.provider === "openai") {
-		return "openai-responses";
-	}
-	if (model.provider !== "opencode-go") {
-		return;
-	}
-	switch (model.protocol) {
-		case "openai":
-			return "openai-responses";
-		case "openai-compatible":
-			return "openai-chat";
-		case "anthropic":
-			return;
-		default:
-			return;
-	}
-};
-
-/** Returns only cache controls declared for the selected model's OpenAI protocol. */
-export const getOpenAIPromptCacheProtocolCapabilities = (
-	model: SupportedChatModel,
-	protocol: OpenAIPromptCacheProtocol
-) => getModelMetadata(model)?.promptCache?.protocols?.[protocol];
-
-type PromptCacheRoute = Readonly<{
-	cachedContentTtlFor?: (
-		retention: SupportedPromptCacheRetentionTier
-	) => string | undefined;
-	hasControls: boolean;
-	isRetentionSupported: (
-		retention: SupportedPromptCacheRetentionTier
-	) => boolean;
-	retentionTtlMsFor: (
-		retention: SupportedPromptCacheRetentionTier
-	) => number | undefined;
-}>;
-
-/** Resolves provider-specific cache behavior once from the selected model route. */
-const promptCacheRouteForModel = (
-	model: SupportedChatModel
-): PromptCacheRoute | undefined => {
-	const capabilities = getModelMetadata(model)?.promptCache;
-	if (!capabilities) {
-		return;
-	}
-	if (
-		model.provider === "anthropic" ||
-		(model.provider === "opencode-go" && model.protocol === "anthropic")
-	) {
-		const retentionTiers = capabilities.explicit.retentionTiers;
-		const isRetentionSupported = (
-			retention: SupportedPromptCacheRetentionTier
-		): boolean => retentionTiers.includes(retention);
-		return {
-			hasControls: retentionTiers.length > 0,
-			isRetentionSupported,
-			retentionTtlMsFor: (retention) => {
-				if (!isRetentionSupported(retention)) {
-					return;
-				}
-				return retention === "short" ? 5 * 60_000 : 60 * 60_000;
-			},
-		};
-	}
-	if (model.provider === "google") {
-		const cachedContent = capabilities.googleCachedContent;
-		const isRetentionSupported = (
-			retention: SupportedPromptCacheRetentionTier
-		): boolean =>
-			capabilities.explicit.retentionTiers.includes(retention) &&
-			cachedContent?.ttl[retention] !== undefined;
-		return {
-			cachedContentTtlFor: (retention) =>
-				isRetentionSupported(retention)
-					? cachedContent?.ttl[retention]
-					: undefined,
-			hasControls: Object.keys(cachedContent?.ttl ?? {}).length > 0,
-			isRetentionSupported,
-			retentionTtlMsFor: () => undefined,
-		};
-	}
-	const protocol = openAIPromptCacheProtocolForModel(model);
-	const protocolCapabilities =
-		protocol === undefined ? undefined : capabilities.protocols?.[protocol];
-	if (protocolCapabilities === undefined) {
-		return;
-	}
-	return {
-		hasControls:
-			protocolCapabilities.promptCacheKey === true ||
-			protocolCapabilities.breakpoints === true ||
-			protocolCapabilities.retention !== undefined,
-		isRetentionSupported: (retention) =>
-			protocolCapabilities.retention?.values[retention] !== undefined,
-		retentionTtlMsFor: (retention) => {
-			const value = protocolCapabilities.retention?.values[retention];
-			return value === undefined ? undefined : parseRetentionDurationMs(value);
-		},
-	};
-};
-
-const RETENTION_DURATION_PATTERN = /^(\d+)(s|m|h)$/u;
-
-const parseRetentionDurationMs = (value: string): number | undefined => {
-	const parsed = RETENTION_DURATION_PATTERN.exec(value);
-	if (parsed === null) {
-		return;
-	}
-	const amount = Number(parsed[1]);
-	let unitMs: number;
-	if (parsed[2] === "s") {
-		unitMs = 1000;
-	} else if (parsed[2] === "m") {
-		unitMs = 60_000;
-	} else {
-		unitMs = 60 * 60_000;
-	}
-	return Number.isSafeInteger(amount) && amount > 0
-		? amount * unitMs
+	const protocol = modelProtocolStrategyFor(model).protocol;
+	return protocol === "openai-chat" || protocol === "openai-responses"
+		? protocol
 		: undefined;
 };
+
+const promptCacheRouteForModel = (model: SupportedChatModel) =>
+	modelProtocolStrategyFor(model).promptCache.routeForModel(model);
 
 /** Returns a request-refreshable protocol's verified lifetime, never a guess. */
 export const promptCacheRetentionTtlMsForModel = (
@@ -173,6 +62,17 @@ export const promptCacheRetentionTtlMsForModel = (
 export const supportsPromptCacheControls = (
 	model: SupportedChatModel
 ): boolean => promptCacheRouteForModel(model)?.hasControls ?? false;
+
+/** Whether this protocol supports a standalone request to establish a cache. */
+export const supportsPromptCacheWarmingForModel = (
+	model: SupportedChatModel
+): boolean => {
+	const strategy = modelProtocolStrategyFor(model).promptCache;
+	return (
+		strategy.canWarmRequest &&
+		(strategy.routeForModel(model)?.hasControls ?? false)
+	);
+};
 
 /** Whether the selected model's protocol declares this retention tier and wire value. */
 export const isSupportedPromptCacheRetention = (

@@ -5,6 +5,7 @@ import type {
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
+import { googlePromptCacheStrategy } from "./google-prompt-cache";
 import {
 	base64,
 	incompleteStreamError,
@@ -243,6 +244,7 @@ const serializeGoogle = (
 
 export const googleStrategy = {
 	protocol: "google",
+	promptCache: googlePromptCacheStrategy,
 	serialize: serializeGoogle,
 	stream: googleStream,
 } satisfies ModelProtocolStrategy<"google">;

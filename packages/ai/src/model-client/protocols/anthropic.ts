@@ -3,13 +3,13 @@ import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
 import { getModelMetadata } from "../../model-metadata-runtime";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "../../model-provider-options";
 import { normalizeModelUsage } from "../../model-usage";
-import { isSupportedPromptCacheRetention } from "../../prompt-cache";
 import { readSseEvents } from "../sse";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
+import { anthropicPromptCacheStrategy } from "./anthropic-prompt-cache";
 import {
 	base64,
 	incompleteStreamError,
@@ -362,7 +362,12 @@ const anthropicCacheControl = (
 	model: ProtocolRequestContextByProtocol["anthropic"]["model"],
 	retention: SupportedPromptCacheRetentionTier | undefined
 ): JsonRecord | undefined => {
-	if (!isSupportedPromptCacheRetention(model, retention)) {
+	if (
+		retention === undefined ||
+		!anthropicPromptCacheStrategy
+			.routeForModel(model)
+			?.isRetentionSupported(retention)
+	) {
 		return;
 	}
 	return {
@@ -428,6 +433,7 @@ const serializeAnthropic = (
 
 export const anthropicStrategy = {
 	protocol: "anthropic",
+	promptCache: anthropicPromptCacheStrategy,
 	serialize: serializeAnthropic,
 	stream: anthropicStream,
 } satisfies ModelProtocolStrategy<"anthropic">;

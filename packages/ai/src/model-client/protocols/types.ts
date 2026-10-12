@@ -1,3 +1,4 @@
+import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
 import type {
 	AnthropicProviderOptions,
 	GoogleProviderOptions,
@@ -34,8 +35,29 @@ export type ProtocolRequestContextByProtocol = {
 
 export type ModelProtocol = keyof ProtocolRequestContextByProtocol;
 
+export type ModelProtocolPromptCacheRoute = Readonly<{
+	cachedContentTtlFor?: (
+		retention: SupportedPromptCacheRetentionTier
+	) => string | undefined;
+	hasControls: boolean;
+	isRetentionSupported: (
+		retention: SupportedPromptCacheRetentionTier
+	) => boolean;
+	retentionTtlMsFor: (
+		retention: SupportedPromptCacheRetentionTier
+	) => number | undefined;
+}>;
+
+export type ModelProtocolPromptCacheStrategy = Readonly<{
+	canWarmRequest: boolean;
+	routeForModel: (
+		model: SupportedChatModel
+	) => ModelProtocolPromptCacheRoute | undefined;
+}>;
+
 export type ModelProtocolStrategyFor<P extends ModelProtocol> = Readonly<{
 	protocol: P;
+	promptCache: ModelProtocolPromptCacheStrategy;
 	serialize: (
 		context: ProtocolRequestContextByProtocol[P]
 	) => Record<string, unknown>;

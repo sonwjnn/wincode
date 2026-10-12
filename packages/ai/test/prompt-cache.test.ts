@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
 	type ConnectionProviderId,
 	findSupportedChatModelSelection,
+	openAIPromptCacheProtocolForModel,
 	promptCacheRetentionTtlMsForModel,
 	supportedChatModelIdSchema,
+	supportsPromptCacheWarmingForModel,
 } from "../src/models";
 
 const model = (providerId: ConnectionProviderId, modelId: string) => {
@@ -46,5 +48,23 @@ describe("promptCacheRetentionTtlMsForModel", () => {
 				"short"
 			)
 		).toBeUndefined();
+	});
+
+	test("routes OpenCode Go cache policy through its selected Model Protocol", () => {
+		expect(
+			openAIPromptCacheProtocolForModel(model("opencode-go", "gpt-5.6-luna"))
+		).toBe("openai-responses");
+		expect(
+			openAIPromptCacheProtocolForModel(model("opencode-go", "grok-4.6"))
+		).toBe("openai-chat");
+	});
+
+	test("resolves warm-request support from protocol capability declarations", () => {
+		expect(supportsPromptCacheWarmingForModel(model("openai", "gpt-5.6"))).toBe(
+			true
+		);
+		expect(
+			supportsPromptCacheWarmingForModel(model("google", "gemini-3.8-flash"))
+		).toBe(false);
 	});
 });

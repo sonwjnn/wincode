@@ -126,6 +126,44 @@ const lookupTool: ModelTool = {
 };
 
 describe("native model client routes", () => {
+	test("does not replay a request carrying an explicit cache resource", async () => {
+		let calls = 0;
+		const modelClient: ModelClient = {
+			async *stream() {
+				calls += 1;
+				yield { type: "finish" };
+			},
+		};
+
+		await warmModelRequest(
+			{
+				googleCachedContent: { name: "cachedContents/session-prefix" },
+				messages: [],
+				target: makeTarget("openai", "gpt-5.6"),
+			},
+			modelClient
+		);
+
+		expect(calls).toBe(0);
+	});
+
+	test("does not issue a synthetic warm request for the Google cache-resource protocol", async () => {
+		let calls = 0;
+		const modelClient: ModelClient = {
+			async *stream() {
+				calls += 1;
+				yield { type: "finish" };
+			},
+		};
+
+		await warmModelRequest(
+			{ messages: [], target: makeTarget("google", "gemini-3.8-flash") },
+			modelClient
+		);
+
+		expect(calls).toBe(0);
+	});
+
 	test("warms the exact streaming request with a one-token cap and no retained output", async () => {
 		const mock = mockFetch(
 			sseResponse(

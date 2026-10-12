@@ -5,7 +5,10 @@ import type {
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
-import { openAIPromptCacheControlsForRequest } from "./openai-prompt-cache";
+import {
+	openAIPromptCacheControlsForRequest,
+	openAIPromptCacheStrategyFor,
+} from "./openai-prompt-cache";
 import {
 	fileDataUri,
 	incompleteStreamError,
@@ -372,6 +375,7 @@ const serializeOpenAIChat = (
 
 export const openAIChatStrategy = {
 	protocol: "openai-chat",
+	promptCache: openAIPromptCacheStrategyFor("openai-chat"),
 	serialize: serializeOpenAIChat,
 	stream: openAiChatStream,
 } satisfies ModelProtocolStrategy<"openai-chat">;

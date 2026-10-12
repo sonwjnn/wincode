@@ -2,6 +2,7 @@ import type { ModelTarget } from "../model-target";
 import type { ModelUsage } from "../model-usage";
 import { findSupportedChatModelSelection } from "../models";
 import { httpErrorFromResponse, isCacheControlRejection } from "./errors";
+import { modelProtocolStrategyFor } from "./provider-adapters";
 import type { SerializedProviderRequest } from "./request";
 import { buildProviderRequest } from "./request";
 import { streamProviderResponse } from "./stream";
@@ -144,14 +145,18 @@ export const warmModelRequest = async (
 	modelClient: ModelClient = createModelClient(),
 	signal?: AbortSignal
 ): Promise<ModelUsage | undefined> => {
-	if (request.target.providerId === "google" || request.googleCachedContent) {
+	const model = findSupportedChatModelSelection({
+		modelId: request.target.modelId,
+		providerId: request.target.providerId,
+	});
+	if (
+		request.googleCachedContent !== undefined ||
+		(model !== null &&
+			!modelProtocolStrategyFor(model).promptCache.canWarmRequest)
+	) {
 		return;
 	}
-	const {
-		googleCachedContent: _googleCachedContent,
-		signal: _requestSignal,
-		...promptRequest
-	} = request;
+	const { signal: _requestSignal, ...promptRequest } = request;
 	const { providerOptions: _providerOptions, ...target } = request.target;
 	let usage: ModelUsage | undefined;
 	for await (const part of modelClient.stream({

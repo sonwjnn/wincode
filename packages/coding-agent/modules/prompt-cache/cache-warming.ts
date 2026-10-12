@@ -7,6 +7,7 @@ import {
 	type ChatModelSelection,
 	findSupportedChatModelSelection,
 	promptCacheRetentionTtlMsForModel,
+	supportsPromptCacheWarmingForModel,
 } from "@wincode/ai/models";
 import { logger } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
@@ -106,9 +107,14 @@ type CacheWarmSchedule = Readonly<{
 const replayRequestSnapshot = (
 	request: ModelStepRequest
 ): ModelStepRequest | undefined => {
+	const model = findSupportedChatModelSelection({
+		modelId: request.target.modelId,
+		providerId: request.target.providerId,
+	});
 	if (
-		request.target.providerId === "google" ||
+		model === null ||
 		request.googleCachedContent !== undefined ||
+		!supportsPromptCacheWarmingForModel(model) ||
 		request.target.promptCacheEnabled !== true ||
 		request.target.promptCacheRetention === undefined
 	) {
