@@ -115,7 +115,7 @@ export function SessionSurface({
 	readonly sessionId: SessionId;
 }) {
 	const { colors } = useTheme();
-	const sessionServices = useSessionServicesHandle();
+	const sessionServicesHandle = useSessionServicesHandle();
 	const [surface, setSurface] = useState<SessionSurfaceState>({
 		kind: "opening",
 	});
@@ -151,7 +151,7 @@ export function SessionSurface({
 			void manager.releaseView(sessionId).catch(() => undefined);
 		};
 		const open = async (): Promise<OpenedSession | null> => {
-			const services = await sessionServices.open();
+			const services = await sessionServicesHandle.open();
 			if (ignore || releaseRequested) {
 				return null;
 			}
@@ -305,9 +305,9 @@ export function SessionSurface({
 			releaseView();
 			// These services borrowed this view's providers; closing them releases
 			// only a Plugin runtime they had to create for themselves.
-			void sessionServices.close();
+			void sessionServicesHandle.close();
 		};
-	}, [sessionServices, sessionId]);
+	}, [sessionServicesHandle, sessionId]);
 
 	if (surface.kind === "failure") {
 		return <text fg={colors.error}>{surface.message}</text>;

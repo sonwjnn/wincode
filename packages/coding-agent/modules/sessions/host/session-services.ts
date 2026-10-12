@@ -43,7 +43,7 @@ export type SessionPluginPolicy = Readonly<{
 	distributionPackages?: readonly PluginPackageReference[];
 }>;
 
-/** What opening the Session Services creates for the caller. */
+/** What the caller asks opening the Session Services to create. */
 export type SessionServicesPolicy = Readonly<{
 	cwd: string;
 	/** The local database path, when these Session Services own their storage. */

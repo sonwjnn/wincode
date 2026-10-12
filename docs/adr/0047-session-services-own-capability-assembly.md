@@ -21,7 +21,7 @@ the raw one.
   or a view. The Session Host remains the composition root for one Session
   (ADR-0023): it opens a Session on Session Services it is handed and does not
   build one.
-- Split the input. `policy` is what opening Session Services creates for the caller —
+- Split the input. `policy` is what the caller asks opening Session Services to create —
   cwd, workspace, database path, and Plugin policy.
   `sources` is what the caller already owns: configuration, Connections, Agent
   registry, Model Catalog pricing, Session Store, Session Host Manager, Plugin

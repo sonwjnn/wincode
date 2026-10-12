@@ -40,7 +40,7 @@ export type SessionServicesHandle = Readonly<{
  * providers and passes them as sources, and the factory composes the graph
  * once for the mount.
  *
- * The returned opener is lazy because opening is asynchronous, and every source
+ * The returned handle opens lazily because opening is asynchronous, and every source
  * is a getter because a Session outlives the render that supplied it: a
  * reconnected provider, a reloaded configuration, a replaced Plugin runtime, or
  * an arriving Model Catalog pricing table is what the Session's next work sees.
