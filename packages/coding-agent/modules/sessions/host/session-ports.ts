@@ -524,8 +524,7 @@ export const createSessionPorts = ({
 				promptCacheKey: turn.model.promptCacheEnabled
 					? `wincode-session:${sessionId}`
 					: undefined,
-				onModelStepFinished: cacheWarming.onModelStepFinished,
-				onModelStepStarted: cacheWarming.onModelStepStarted,
+				modelStepObserver: cacheWarming.modelStepObserver,
 				runtime: statefulAgent,
 				googleCachedContent,
 				signal,

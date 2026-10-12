@@ -151,15 +151,21 @@ export const createAgentTurnAbortEvent = (
 	}
 };
 
-/** Options for one Agent Runtime invocation. */
-export type AgentRuntimeRunOptions = Readonly<{
-	/** Best-effort observer called immediately before each streaming Model request. */
-	onModelStepStarted?: (request: ModelStepRequest) => void;
-	/** Best-effort observer called after a real streaming Model request completes. */
-	onModelStepFinished?: (
+/** Best-effort notifications around each streaming Model request. */
+export type ModelStepObserver = Readonly<{
+	/** Called immediately before each streaming Model request. */
+	onModelStepStarted: (request: ModelStepRequest) => void;
+	/** Called after a real streaming Model request completes. */
+	onModelStepFinished: (
 		request: ModelStepRequest,
 		usage: ModelUsage | undefined
 	) => void;
+}>;
+
+/** Options for one Agent Runtime invocation. */
+export type AgentRuntimeRunOptions = Readonly<{
+	/** Session-owned notifications for streaming Model request lifecycle. */
+	modelStepObserver?: ModelStepObserver;
 	/** A Session-selected Google resource for its stable prompt prefix. */
 	googleCachedContent?: ModelStepRequest["googleCachedContent"];
 	/** Stable Session-scoped routing hint; Model Protocols emit it only when supported. */

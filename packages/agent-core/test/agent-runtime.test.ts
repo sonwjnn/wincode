@@ -137,13 +137,15 @@ test("Agent Runtime isolates Session request observers from active Turns", async
 	}[] = [];
 	const events = await consume(
 		createAgentRuntime({ modelClient: client }).run(buildTurn(), {
-			onModelStepFinished: (request, usage) => {
-				finished.push({ request, usage });
-				throw new Error("usage observer failed");
-			},
-			onModelStepStarted: (request) => {
-				started.push(request);
-				throw new Error("request observer failed");
+			modelStepObserver: {
+				onModelStepFinished: (request, usage) => {
+					finished.push({ request, usage });
+					throw new Error("usage observer failed");
+				},
+				onModelStepStarted: (request) => {
+					started.push(request);
+					throw new Error("request observer failed");
+				},
 			},
 		})
 	);

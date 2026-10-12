@@ -57,6 +57,83 @@ export const getOpenAIPromptCacheProtocolCapabilities = (
 	protocol: OpenAIPromptCacheProtocol
 ) => getModelMetadata(model)?.promptCache?.protocols?.[protocol];
 
+type PromptCacheRoute = Readonly<{
+	cachedContentTtlFor?: (
+		retention: SupportedPromptCacheRetentionTier
+	) => string | undefined;
+	hasControls: boolean;
+	isRetentionSupported: (
+		retention: SupportedPromptCacheRetentionTier
+	) => boolean;
+	retentionTtlMsFor: (
+		retention: SupportedPromptCacheRetentionTier
+	) => number | undefined;
+}>;
+
+/** Resolves provider-specific cache behavior once from the selected model route. */
+const promptCacheRouteForModel = (
+	model: SupportedChatModel
+): PromptCacheRoute | undefined => {
+	const capabilities = getModelMetadata(model)?.promptCache;
+	if (!capabilities) {
+		return;
+	}
+	if (
+		model.provider === "anthropic" ||
+		(model.provider === "opencode-go" && model.protocol === "anthropic")
+	) {
+		const retentionTiers = capabilities.explicit.retentionTiers;
+		const isRetentionSupported = (
+			retention: SupportedPromptCacheRetentionTier
+		): boolean => retentionTiers.includes(retention);
+		return {
+			hasControls: retentionTiers.length > 0,
+			isRetentionSupported,
+			retentionTtlMsFor: (retention) => {
+				if (!isRetentionSupported(retention)) {
+					return;
+				}
+				return retention === "short" ? 5 * 60_000 : 60 * 60_000;
+			},
+		};
+	}
+	if (model.provider === "google") {
+		const cachedContent = capabilities.googleCachedContent;
+		const isRetentionSupported = (
+			retention: SupportedPromptCacheRetentionTier
+		): boolean =>
+			capabilities.explicit.retentionTiers.includes(retention) &&
+			cachedContent?.ttl[retention] !== undefined;
+		return {
+			cachedContentTtlFor: (retention) =>
+				isRetentionSupported(retention)
+					? cachedContent?.ttl[retention]
+					: undefined,
+			hasControls: Object.keys(cachedContent?.ttl ?? {}).length > 0,
+			isRetentionSupported,
+			retentionTtlMsFor: () => undefined,
+		};
+	}
+	const protocol = openAIPromptCacheProtocolForModel(model);
+	const protocolCapabilities =
+		protocol === undefined ? undefined : capabilities.protocols?.[protocol];
+	if (protocolCapabilities === undefined) {
+		return;
+	}
+	return {
+		hasControls:
+			protocolCapabilities.promptCacheKey === true ||
+			protocolCapabilities.breakpoints === true ||
+			protocolCapabilities.retention !== undefined,
+		isRetentionSupported: (retention) =>
+			protocolCapabilities.retention?.values[retention] !== undefined,
+		retentionTtlMsFor: (retention) => {
+			const value = protocolCapabilities.retention?.values[retention];
+			return value === undefined ? undefined : parseRetentionDurationMs(value);
+		},
+	};
+};
+
 const RETENTION_DURATION_PATTERN = /^(\d+)(s|m|h)$/u;
 
 const parseRetentionDurationMs = (value: string): number | undefined => {
@@ -83,55 +160,19 @@ export const promptCacheRetentionTtlMsForModel = (
 	model: SupportedChatModel,
 	retention: SupportedPromptCacheRetentionTier | undefined
 ): number | undefined => {
-	if (!isSupportedPromptCacheRetention(model, retention)) {
+	if (retention === undefined) {
 		return;
 	}
-	if (
-		model.provider === "anthropic" ||
-		(model.provider === "opencode-go" && model.protocol === "anthropic")
-	) {
-		return retention === "short" ? 5 * 60_000 : 60 * 60_000;
-	}
-	if (model.provider === "google") {
-		return;
-	}
-	const protocol = openAIPromptCacheProtocolForModel(model);
-	if (protocol === undefined) {
-		return;
-	}
-	const value = getOpenAIPromptCacheProtocolCapabilities(model, protocol)
-		?.retention?.values[retention];
-	return value === undefined ? undefined : parseRetentionDurationMs(value);
+	const route = promptCacheRouteForModel(model);
+	return route?.isRetentionSupported(retention)
+		? route.retentionTtlMsFor(retention)
+		: undefined;
 };
 
 /** Whether metadata declares any Wincode-controlled cache option for this route. */
 export const supportsPromptCacheControls = (
 	model: SupportedChatModel
-): boolean => {
-	const capabilities = getModelMetadata(model)?.promptCache;
-	if (!capabilities) {
-		return false;
-	}
-	if (
-		model.provider === "anthropic" ||
-		(model.provider === "opencode-go" && model.protocol === "anthropic")
-	) {
-		return capabilities.explicit.retentionTiers.length > 0;
-	}
-	if (model.provider === "google") {
-		return Object.keys(capabilities.googleCachedContent?.ttl ?? {}).length > 0;
-	}
-	const protocol = openAIPromptCacheProtocolForModel(model);
-	if (!protocol) {
-		return false;
-	}
-	const protocolCapabilities = capabilities.protocols?.[protocol];
-	return (
-		protocolCapabilities?.promptCacheKey === true ||
-		protocolCapabilities?.breakpoints === true ||
-		protocolCapabilities?.retention !== undefined
-	);
-};
+): boolean => promptCacheRouteForModel(model)?.hasControls ?? false;
 
 /** Whether the selected model's protocol declares this retention tier and wire value. */
 export const isSupportedPromptCacheRetention = (
@@ -141,27 +182,8 @@ export const isSupportedPromptCacheRetention = (
 	if (retention === undefined) {
 		return false;
 	}
-	const capabilities = getModelMetadata(model)?.promptCache;
-	if (!capabilities) {
-		return false;
-	}
-	if (
-		model.provider === "anthropic" ||
-		(model.provider === "opencode-go" && model.protocol === "anthropic")
-	) {
-		return capabilities.explicit.retentionTiers.includes(retention);
-	}
-	if (model.provider === "google") {
-		return (
-			capabilities.explicit.retentionTiers.includes(retention) &&
-			capabilities.googleCachedContent?.ttl[retention] !== undefined
-		);
-	}
-	const protocol = openAIPromptCacheProtocolForModel(model);
 	return (
-		protocol !== undefined &&
-		capabilities.protocols?.[protocol]?.retention?.values[retention] !==
-			undefined
+		promptCacheRouteForModel(model)?.isRetentionSupported(retention) ?? false
 	);
 };
 
@@ -187,15 +209,10 @@ export const resolvePromptCacheControls = (
 export const googleCachedContentTtlForModel = (
 	model: SupportedChatModel,
 	retention: SupportedPromptCacheRetentionTier | undefined
-): string | undefined => {
-	if (model.provider !== "google" || retention === undefined) {
-		return;
-	}
-	const capabilities = getModelMetadata(model)?.promptCache;
-	return capabilities?.explicit.retentionTiers.includes(retention)
-		? capabilities.googleCachedContent?.ttl[retention]
-		: undefined;
-};
+): string | undefined =>
+	retention === undefined
+		? undefined
+		: promptCacheRouteForModel(model)?.cachedContentTtlFor?.(retention);
 
 /** Resolves a configured retention override, constrained by declared capability. */
 export const resolvePromptCacheRetention = (

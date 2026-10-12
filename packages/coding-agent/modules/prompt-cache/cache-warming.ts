@@ -1,3 +1,4 @@
+import type { ModelStepObserver } from "@wincode/agent-core";
 import type { ModelStepRequest } from "@wincode/ai/model-client";
 import { createModelClient, warmModelRequest } from "@wincode/ai/model-client";
 import type { ModelUsage } from "@wincode/ai/model-usage";
@@ -81,11 +82,7 @@ export type SessionCacheWarming = Readonly<{
 	dispose: () => Promise<void>;
 	getStatus: () => CacheWarmingStatus;
 	getUsageEntries: () => readonly SessionUsageEntry[];
-	onModelStepFinished: (
-		request: ModelStepRequest,
-		usage: ModelUsage | undefined
-	) => void;
-	onModelStepStarted: (request: ModelStepRequest) => void;
+	modelStepObserver: ModelStepObserver;
 	subscribe: (listener: () => void) => () => void;
 }>;
 
@@ -94,6 +91,16 @@ export type SessionCacheWarmingOptions = Readonly<{
 	initialUsageEntries: readonly SessionUsageEntry[];
 	sessionId: SessionId;
 	store: Pick<SessionStore, "createSessionUsageEntry">;
+}>;
+
+type CacheWarmSchedule = Readonly<{
+	delayMs: number;
+	lastRefreshStartedAt: number;
+	model: ChatModelSelection;
+	request: ModelStepRequest;
+	requestGeneration: number;
+	requestStartedAt: number;
+	ttlMs: number;
 }>;
 
 const replayRequestSnapshot = (
@@ -177,6 +184,15 @@ export const createSessionCacheWarming = ({
 		setStatus("idle");
 	};
 
+	const hasExpectedCacheWarmSavings = (
+		model: ChatModelSelection,
+		usage: ModelUsage
+	): boolean => {
+		const pricing = resolveModelMetadata(getPricingTable(), model);
+		const savings = expectedCacheWarmSavingsUsd(pricing ?? undefined, usage);
+		return savings !== null && savings >= MINIMUM_EXPECTED_SAVINGS_USD;
+	};
+
 	const persistWarmUsage = async (
 		model: ChatModelSelection,
 		usage: ModelUsage
@@ -199,21 +215,23 @@ export const createSessionCacheWarming = ({
 		startedAt: number,
 		requestGeneration: number,
 		controller: AbortController
-	): Promise<void> => {
+	): Promise<boolean> => {
 		try {
 			const horizonRemainingMs =
 				startedAt + MAX_WARMING_HORIZON_MS - Date.now();
 			if (horizonRemainingMs <= 0) {
-				return;
+				return false;
 			}
 			const signal = AbortSignal.any([
 				controller.signal,
 				AbortSignal.timeout(horizonRemainingMs),
 			]);
 			const usage = await warmModelRequest(request, modelClient, signal);
-			if (usage !== undefined) {
-				await persistWarmUsage(model, usage);
+			if (usage === undefined) {
+				return false;
 			}
+			await persistWarmUsage(model, usage);
+			return hasExpectedCacheWarmSavings(model, usage);
 		} catch {
 			if (!controller.signal.aborted) {
 				void logger.debug("Prompt cache warm request failed", {
@@ -221,12 +239,75 @@ export const createSessionCacheWarming = ({
 					providerId: model.providerId,
 				});
 			}
+			return false;
 		} finally {
 			if (generation === requestGeneration) {
 				warmController = undefined;
-				setStatus("idle");
 			}
 		}
+	};
+
+	const scheduleWarm = (schedule: CacheWarmSchedule): void => {
+		const {
+			delayMs,
+			lastRefreshStartedAt,
+			model,
+			request,
+			requestGeneration,
+			requestStartedAt,
+			ttlMs,
+		} = schedule;
+		const horizonEndsAt = requestStartedAt + MAX_WARMING_HORIZON_MS;
+		const scheduledAt = lastRefreshStartedAt + delayMs;
+		const latestSafeStartAt = lastRefreshStartedAt + ttlMs - WARMING_MARGIN_MS;
+		const now = Date.now();
+		if (
+			scheduledAt >= horizonEndsAt ||
+			now >= horizonEndsAt ||
+			now > latestSafeStartAt
+		) {
+			return;
+		}
+		const remainingDelayMs = Math.max(0, scheduledAt - now);
+		scheduleTimer = setTimeout(() => {
+			scheduleTimer = undefined;
+			if (generation !== requestGeneration) {
+				return;
+			}
+			const warmStartedAt = Date.now();
+			if (warmStartedAt >= horizonEndsAt || warmStartedAt > latestSafeStartAt) {
+				setStatus("idle");
+				return;
+			}
+			const controller = new AbortController();
+			warmController = controller;
+			setStatus("warming");
+			const warming = runWarm(
+				request,
+				model,
+				requestStartedAt,
+				requestGeneration,
+				controller
+			)
+				.then((refreshed) => {
+					if (refreshed && generation === requestGeneration) {
+						scheduleWarm({
+							...schedule,
+							lastRefreshStartedAt: warmStartedAt,
+						});
+					}
+				})
+				.finally(() => {
+					if (activeWarm === warming) {
+						activeWarm = undefined;
+					}
+					if (generation === requestGeneration && status === "warming") {
+						setStatus("idle");
+					}
+				});
+			activeWarm = warming;
+		}, remainingDelayMs);
+		setStatus("scheduled");
 	};
 
 	const onModelStepStarted = (request: ModelStepRequest): void => {
@@ -259,48 +340,27 @@ export const createSessionCacheWarming = ({
 			model,
 			request.target.promptCacheRetention
 		);
-		const delayMs = ttlMs === undefined ? null : computeCacheWarmDelayMs(ttlMs);
+		if (ttlMs === undefined) {
+			return;
+		}
+		const delayMs = computeCacheWarmDelayMs(ttlMs);
 		if (delayMs === null) {
 			return;
 		}
-		const pricing = resolveModelMetadata(getPricingTable(), modelSelection);
-		const savings = expectedCacheWarmSavingsUsd(pricing ?? undefined, usage);
-		if (savings === null || savings < MINIMUM_EXPECTED_SAVINGS_USD) {
+		if (!hasExpectedCacheWarmSavings(modelSelection, usage)) {
 			return;
 		}
 		const requestGeneration = generation;
 		const startedAt = requestStartedAt;
-		const remainingDelayMs = delayMs - (Date.now() - startedAt);
-		if (
-			remainingDelayMs <= 0 ||
-			startedAt + MAX_WARMING_HORIZON_MS <= Date.now()
-		) {
-			return;
-		}
-		const replay = replayRequest;
-		scheduleTimer = setTimeout(() => {
-			scheduleTimer = undefined;
-			if (generation !== requestGeneration) {
-				return;
-			}
-			const controller = new AbortController();
-			warmController = controller;
-			setStatus("warming");
-			const warming = runWarm(
-				replay,
-				modelSelection,
-				startedAt,
-				requestGeneration,
-				controller
-			);
-			activeWarm = warming;
-			void warming.finally(() => {
-				if (activeWarm === warming) {
-					activeWarm = undefined;
-				}
-			});
-		}, remainingDelayMs);
-		setStatus("scheduled");
+		scheduleWarm({
+			delayMs,
+			lastRefreshStartedAt: startedAt,
+			model: modelSelection,
+			request: replayRequest,
+			requestGeneration,
+			requestStartedAt: startedAt,
+			ttlMs,
+		});
 	};
 
 	return {
@@ -312,8 +372,7 @@ export const createSessionCacheWarming = ({
 		},
 		getStatus: () => status,
 		getUsageEntries: () => [...usageEntries.values()],
-		onModelStepFinished,
-		onModelStepStarted,
+		modelStepObserver: { onModelStepFinished, onModelStepStarted },
 		subscribe: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);

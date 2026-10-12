@@ -123,8 +123,8 @@ describe("Session Cache Warming", () => {
 		const { entries, store } = createEntryWriter();
 		const warming = createWarming(store);
 		const { messages, request } = createWarmRequest();
-		warming.onModelStepStarted(request);
-		warming.onModelStepFinished(request, measuredUsage);
+		warming.modelStepObserver.onModelStepStarted(request);
+		warming.modelStepObserver.onModelStepFinished(request, measuredUsage);
 
 		expect(warming.getStatus()).toBe("scheduled");
 		vi.advanceTimersByTime(27 * 60_000 - 1);
@@ -158,7 +158,79 @@ describe("Session Cache Warming", () => {
 			usage: { cacheReadTokens: 90_000, inputTokens: 100_000, outputTokens: 1 },
 		});
 		expect(warming.getUsageEntries()).toEqual(entries);
+		expect(warming.getStatus()).toBe("scheduled");
+		await warming.dispose();
+	});
+
+	test("repeats successful refreshes until the one-hour horizon and counts each warm once", async () => {
+		vi.useFakeTimers();
+		let calls = 0;
+		globalThis.fetch = (async () => {
+			calls += 1;
+			return new Response(
+				[
+					'event: response.completed\ndata: {"response":{"usage":{"input_tokens":100000,"output_tokens":1,"input_tokens_details":{"cached_tokens":90000}}}}\n\n',
+				].join(""),
+				{ headers: { "content-type": "text/event-stream" } }
+			);
+		}) as unknown as typeof fetch;
+		const { entries, store } = createEntryWriter();
+		const warming = createWarming(store);
+		const request = createWarmRequest().request;
+		warming.modelStepObserver.onModelStepStarted(request);
+		warming.modelStepObserver.onModelStepFinished(request, measuredUsage);
+
+		vi.advanceTimersByTime(27 * 60_000);
+		await flushPromises();
+		expect(calls).toBe(1);
+		expect(entries).toHaveLength(1);
+		expect(warming.getStatus()).toBe("scheduled");
+
+		vi.advanceTimersByTime(27 * 60_000);
+		await flushPromises();
+		expect(calls).toBe(2);
+		expect(entries).toHaveLength(2);
+		expect(new Set(entries.map(({ id }) => id)).size).toBe(2);
+		expect(
+			entries.every(
+				({ kind, usage }) => kind === "cache-warm" && usage.outputTokens === 1
+			)
+		).toBe(true);
 		expect(warming.getStatus()).toBe("idle");
+
+		vi.advanceTimersByTime(6 * 60_000);
+		await flushPromises();
+		expect(calls).toBe(2);
+		expect(entries).toHaveLength(2);
+		await warming.dispose();
+	});
+
+	test("stops refreshing when warm usage no longer clears the savings threshold", async () => {
+		vi.useFakeTimers();
+		let calls = 0;
+		globalThis.fetch = (async () => {
+			calls += 1;
+			return new Response(
+				'event: response.completed\ndata: {"response":{"usage":{"input_tokens":100000,"output_tokens":1,"input_tokens_details":{"cached_tokens":62000}}}}\n\n',
+				{ headers: { "content-type": "text/event-stream" } }
+			);
+		}) as unknown as typeof fetch;
+		const { entries, store } = createEntryWriter();
+		const warming = createWarming(store);
+		const request = createWarmRequest().request;
+		warming.modelStepObserver.onModelStepStarted(request);
+		warming.modelStepObserver.onModelStepFinished(request, measuredUsage);
+
+		vi.advanceTimersByTime(27 * 60_000);
+		await flushPromises();
+		expect(calls).toBe(1);
+		expect(entries).toHaveLength(1);
+		expect(warming.getStatus()).toBe("idle");
+
+		vi.advanceTimersByTime(27 * 60_000);
+		await flushPromises();
+		expect(calls).toBe(1);
+		expect(entries).toHaveLength(1);
 		await warming.dispose();
 	});
 
@@ -172,14 +244,14 @@ describe("Session Cache Warming", () => {
 		const { store } = createEntryWriter();
 		const warming = createWarming(store);
 		const first = createWarmRequest("first prompt").request;
-		warming.onModelStepStarted(first);
-		warming.onModelStepFinished(first, measuredUsage);
+		warming.modelStepObserver.onModelStepStarted(first);
+		warming.modelStepObserver.onModelStepFinished(first, measuredUsage);
 		expect(warming.getStatus()).toBe("scheduled");
 
 		const second = createWarmRequest("replacement prompt").request;
-		warming.onModelStepStarted(second);
+		warming.modelStepObserver.onModelStepStarted(second);
 		expect(warming.getStatus()).toBe("idle");
-		warming.onModelStepFinished(second, measuredUsage);
+		warming.modelStepObserver.onModelStepFinished(second, measuredUsage);
 		expect(warming.getStatus()).toBe("scheduled");
 		warming.cancel();
 		expect(warming.getStatus()).toBe("idle");
@@ -210,8 +282,8 @@ describe("Session Cache Warming", () => {
 		const { entries, store } = createEntryWriter();
 		const warming = createWarming(store);
 		const request = createWarmRequest().request;
-		warming.onModelStepStarted(request);
-		warming.onModelStepFinished(request, measuredUsage);
+		warming.modelStepObserver.onModelStepStarted(request);
+		warming.modelStepObserver.onModelStepFinished(request, measuredUsage);
 		vi.advanceTimersByTime(27 * 60_000);
 		await flushPromises();
 		expect(warming.getStatus()).toBe("warming");
@@ -251,8 +323,8 @@ describe("Session Cache Warming", () => {
 				},
 			],
 		};
-		warming.onModelStepStarted(unsafe);
-		warming.onModelStepFinished(unsafe, measuredUsage);
+		warming.modelStepObserver.onModelStepStarted(unsafe);
+		warming.modelStepObserver.onModelStepFinished(unsafe, measuredUsage);
 		expect(warming.getStatus()).toBe("idle");
 
 		const google = createModelTarget(
@@ -265,13 +337,13 @@ describe("Session Cache Warming", () => {
 			messages: [],
 			target: google,
 		};
-		warming.onModelStepStarted(googleRequest);
-		warming.onModelStepFinished(googleRequest, measuredUsage);
+		warming.modelStepObserver.onModelStepStarted(googleRequest);
+		warming.modelStepObserver.onModelStepFinished(googleRequest, measuredUsage);
 		expect(warming.getStatus()).toBe("idle");
 
 		const belowSavingsThreshold = createWarmRequest().request;
-		warming.onModelStepStarted(belowSavingsThreshold);
-		warming.onModelStepFinished(belowSavingsThreshold, {
+		warming.modelStepObserver.onModelStepStarted(belowSavingsThreshold);
+		warming.modelStepObserver.onModelStepFinished(belowSavingsThreshold, {
 			cacheReadTokens: 62_000,
 			inputTokens: 100_000,
 			outputTokens: 100,
@@ -279,8 +351,8 @@ describe("Session Cache Warming", () => {
 		expect(warming.getStatus()).toBe("idle");
 
 		const normal = createWarmRequest().request;
-		warming.onModelStepStarted(normal);
-		warming.onModelStepFinished(normal, measuredUsage);
+		warming.modelStepObserver.onModelStepStarted(normal);
+		warming.modelStepObserver.onModelStepFinished(normal, measuredUsage);
 		expect(warming.getStatus()).toBe("scheduled");
 		vi.advanceTimersByTime(27 * 60_000);
 		await flushPromises();
