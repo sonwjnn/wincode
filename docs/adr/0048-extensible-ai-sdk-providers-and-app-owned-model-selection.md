@@ -1,8 +1,8 @@
 # Make @wincode/ai an independently usable, extensible provider SDK
 
-Status: accepted target; implementation pending
+Status: accepted; SDK milestone implemented in PR #198, Coding-Agent migration pending (ADR-0049)
 
-`@wincode/ai` will be an independently usable Node and Bun SDK, not a Coding-Agent-specific catalog and request wrapper. Applications must be able to register a provider without editing the SDK: a provider owns authentication, its model list, and chat streaming; a model identifies the provider-facing protocol used to call it. Wincode will continue to own the wire implementations rather than depend on Pi AI (ADR-0029). This decision deliberately reopens ADR-0012's static curated allowlist and changes the current Connection Provider definition in the glossary **when Coding-Agent migrates**. Until then, those documents describe the running application, not the SDK target.
+`@wincode/ai` is an independently usable Node and Bun SDK, not a Coding-Agent-specific catalog and request wrapper. Applications must be able to register a provider without editing the SDK: a provider owns authentication, its model list, and chat streaming; a model identifies the provider-facing protocol used to call it. Wincode will continue to own the wire implementations rather than depend on Pi AI (ADR-0029). This decision deliberately reopens ADR-0012's static curated allowlist and changes the current Connection Provider definition in the glossary **when Coding-Agent migrates**. Until then, those documents describe the running application, not the SDK target.
 
 ## SDK interface and ownership
 
@@ -16,9 +16,9 @@ Status: accepted target; implementation pending
 
 ## Application separation and migration
 
-The SDK does not enforce a Wincode product allowlist: a provider's models can be discovered and called by an independent SDK consumer. Coding-Agent's existing static curated Model Catalog (ADR-0012) is not silently reinterpreted as provider discovery. When Coding-Agent migrates, it will select from provider-published models rather than that allowlist, while preserving the identity and display information of models already referenced by Session history. A model absent from the current provider list remains legible in old Sessions but cannot be invoked for a new turn; never silently substitute another model. Model metadata provenance and model availability must remain distinct from historical Session identity. The migration must explicitly update the glossary and supersede ADR-0012's allowlist rule; until then, ADR-0012 remains the current application contract.
+The SDK does not enforce a Wincode product allowlist: a provider's models can be discovered and called by an independent SDK consumer. Coding-Agent's existing static curated Model Catalog (ADR-0012) is not silently reinterpreted as provider discovery. When Coding-Agent migrates, it will select from provider-published models rather than that allowlist, while preserving the provider/model identity recorded by Session history, displaying its stored IDs when no trustworthy display name is available. A model absent from the current provider list remains legible in old Sessions but cannot be invoked for a new turn; never silently substitute another model. Model metadata provenance and model availability must remain distinct from historical Session identity. The migration must explicitly update the glossary and supersede ADR-0012's allowlist rule; until then, ADR-0012 remains the current application contract.
 
-Deliver in two milestones: first prove the new SDK through a consumer outside Coding-Agent (including a custom provider, auth, streaming, offline discovery, and failure cases); then migrate Coding-Agent and remove the old application-specific interfaces rather than maintain a permanent compatibility adapter. Do not change Session record interpretation as a side effect of the first SDK milestone. The existing Coding-Agent migration is deferred while its worktree has unresolved conflicts.
+Deliver in two milestones: first prove the new SDK through a consumer outside Coding-Agent (including a custom provider, auth, streaming, offline discovery, and failure cases); then migrate Coding-Agent and remove the old application-specific interfaces rather than maintain a permanent compatibility adapter. Do not change Session record interpretation as a side effect of the first SDK milestone. The SDK milestone was merged in PR #198. The Coding-Agent migration is specified in ADR-0049 but is not yet implemented.
 
 ## Considered alternatives
 

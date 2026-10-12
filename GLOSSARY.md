@@ -1,8 +1,8 @@
 # Domain Context
 
-## Planned AI SDK language
+## AI SDK language and planned application migration
 
-These terms describe the accepted SDK target in [ADR-0048](docs/adr/0048-extensible-ai-sdk-providers-and-app-owned-model-selection.md), not the currently running Coding-Agent application. The existing Connection Provider and Model Catalog definitions below remain current until Coding-Agent migrates; replace rather than conflate them at that cutover.
+These terms describe the shipped SDK and the accepted Coding-Agent migration target in [ADR-0048](docs/adr/0048-extensible-ai-sdk-providers-and-app-owned-model-selection.md) and [ADR-0049](docs/adr/0049-migrate-coding-agent-to-provider-sdk.md). Coding-Agent still runs on the Connection Provider, Model Catalog, and Model Target definitions below; replace rather than conflate those terms when the migration is implemented.
 
 **SDK Provider**:
 A runtime identity that owns authentication, its known models, and the behavior for invoking them. Several SDK Providers may use the same Model Protocol without sharing an identity. _Avoid_: Connection Provider, Model Protocol
@@ -12,6 +12,15 @@ A model identified within an SDK Provider and associated with a Model Protocol. 
 
 **Known Model**:
 A Provider Model in the provider's last-known list, including one restored from an offline snapshot. It is distinct from an invocable model and from the identity retained by an old Session. _Avoid_: available model, product allowlist
+
+**Invocable Model**:
+A Known Model belonging to a registered Provider with configured authorization and a permitted registration owner. It may still fail at the remote endpoint; invocable does not mean reachable. _Avoid_: online model, historical model
+
+**Provider Registration Owner**:
+The trusted Plugin identity and source responsible for a custom SDK Provider in Coding-Agent. A Provider ID alone does not establish this ownership. _Avoid_: Provider ID, Plugin path alone
+
+**Legacy Connection Credential**:
+A credential stored for the pre-migration Connection Provider. It is distinct from an SDK credential and is never carried into the new store during the accepted cutover. _Avoid_: reusable SDK credential
 
 ## Connection Provider
 
@@ -33,9 +42,10 @@ Consumers receive only the minimal authorization material needed for a provider.
 Stored credential details such as refresh tokens remain inside the Connections
 module.
 
-New credential storage formats do not migrate existing Connections. A new
-storage namespace is used so existing records remain untouched for rollback,
-while users reconnect providers into the new format.
+The current Connections storage format does not migrate older Connection
+records. ADR-0049 instead specifies that the future SDK cutover deletes these
+legacy credentials and requires a fresh connection; that destructive decision
+is not yet implemented.
 
 ## Model Catalog
 

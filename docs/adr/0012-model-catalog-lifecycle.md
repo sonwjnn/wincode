@@ -1,13 +1,14 @@
 # Model Catalog entries carry a lifecycle state
 
-The Model Catalog is a curated product allowlist, not a mirror of what a
+Until the Coding-Agent migration specified in ADR-0049 is implemented,
+the Model Catalog is a curated product allowlist, not a mirror of what a
 provider serves. Entries therefore carry `lifecycle: "active" | "retired"`.
 The model picker and Agent pinning accept only `active` entries; retired
 entries remain resolvable so existing Session Records keep their model label
 and variant, and a turn attempting to send with a retired model is refused
 with a visible prompt to pick another one.
 
-Status: accepted
+Status: accepted for the current Coding-Agent application; planned supersession by ADR-0049 at SDK migration cutover
 
 ## Context
 
