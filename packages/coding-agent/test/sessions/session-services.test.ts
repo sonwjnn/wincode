@@ -4,12 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 /**
- * The Session Environment opens resources of its own, so this test runs against
+ * Session Services open resources of their own, so this test runs against
  * a private temporary directory and observes Plugin shutdown through the
- * fixture's own lifecycle log rather than through the environment's internals.
+ * fixture's own lifecycle log rather than through the services' internals.
  */
 const testDirectory = await fs.mkdtemp(
-	path.join(os.tmpdir(), "wincode-session-environment-")
+	path.join(os.tmpdir(), "wincode-session-services-")
 );
 const lifecycleLogPath = path.join(testDirectory, "plugin-lifecycle.log");
 const restoreEnvironment = createEnvironmentRestorer([
@@ -25,8 +25,8 @@ import { buildAgentRegistry } from "@/modules/agents/registry";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import { openSessionEnvironment } from "@/modules/sessions/host/session-environment";
 import { createSessionHostManager } from "@/modules/sessions/host/session-host-manager";
+import { openSessionServices } from "@/modules/sessions/host/session-services";
 import type { SessionHostManager } from "@/modules/sessions/host/types";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -60,13 +60,13 @@ const configRuntime: ConfigRuntime = {
 };
 const connections: Connections = {
 	authorize: async () => ({
-		apiKey: "session-environment-key",
+		apiKey: "session-services-key",
 		kind: "api-key",
 	}),
 	connect: async () => undefined,
 	listProviders: async () => [],
 };
-/** The empty Plugin runtime the environments in this file borrow. */
+/** The empty Plugin runtime the Session Services in this file borrow. */
 const emptyRuntime = createEmptyPluginRuntime();
 
 const registry: AgentRegistry = buildAgentRegistry(
@@ -110,7 +110,7 @@ afterAll(async () => {
 
 test("closes the Plugin runtime it loaded itself", async () => {
 	await resetLifecycleLog();
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: {
 			cwd: workspace,
 			plugins: { paths: [pluginPath] },
@@ -120,7 +120,7 @@ test("closes the Plugin runtime it loaded itself", async () => {
 	});
 
 	expect(await lifecycleLog()).toEqual(["start"]);
-	await environment.shutdown();
+	await services.shutdown();
 	expect(await lifecycleLog()).toEqual(["start", "shutdown"]);
 });
 
@@ -130,29 +130,29 @@ test("leaves an injected Plugin runtime for its owner to close", async () => {
 		cliPaths: [pluginPath],
 		config: configRuntime,
 	});
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: { ...sources, pluginRuntime: () => pluginRuntime },
 	});
 
-	await environment.shutdown();
+	await services.shutdown();
 	expect(await lifecycleLog()).toEqual(["start"]);
 	await pluginRuntime.shutdown();
 	expect(await lifecycleLog()).toEqual(["start", "shutdown"]);
 });
 
-test("binds a Session SDK that writes through the environment's Session Store", async () => {
-	const environment = await openSessionEnvironment({
+test("binds a Session SDK that writes through the services' Session Store", async () => {
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: { ...sources, pluginRuntime: () => emptyRuntime },
 	});
 
-	const sessionId = await environment.sessionSdk.createEmptySession();
-	expect(await environment.store.getSession(sessionId)).toBeDefined();
-	await environment.shutdown();
+	const sessionId = await services.sessionSdk.createEmptySession();
+	expect(await services.store.getSession(sessionId)).toBeDefined();
+	await services.shutdown();
 });
 
-test("opens the Sessions its Session SDK creates through the environment's Host Manager", async () => {
+test("opens the Sessions its Session SDK creates through the services' Host Manager", async () => {
 	const manager = createSessionHostManager(createEmptyPluginRuntime());
 	const openedHosts: string[] = [];
 	const spy: SessionHostManager = {
@@ -162,7 +162,7 @@ test("opens the Sessions its Session SDK creates through the environment's Host 
 			return manager.openHost(input);
 		},
 	};
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: {
 			...sources,
@@ -170,20 +170,20 @@ test("opens the Sessions its Session SDK creates through the environment's Host 
 			sessionHostManager: () => spy,
 		},
 	});
-	const sessionId = await environment.sessionSdk.createEmptySession();
-	const handle = await environment.sessionSdk.openSession(sessionId);
+	const sessionId = await services.sessionSdk.createEmptySession();
+	const handle = await services.sessionSdk.openSession(sessionId);
 
 	expect(openedHosts).toEqual([sessionId]);
 	await handle.dispose();
 	await manager.shutdownAll();
-	await environment.shutdown();
+	await services.shutdown();
 });
 
 test("reads its sources when the work needs them, not when it opens", async () => {
 	let currentConnections = connections;
 	let currentConfig = configRuntime;
 	let currentRegistry: AgentRegistry | null = null;
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: {
 			...sources,
@@ -203,12 +203,10 @@ test("reads its sources when the work needs them, not when it opens", async () =
 	currentConfig = replacementConfig;
 	currentRegistry = registry;
 
-	expect(environment.capabilities.getConnections()).toBe(
-		replacementConnections
-	);
-	expect(environment.capabilities.getConfig()).toBe(replacementConfig);
-	expect(environment.capabilities.getRegistry()).toBe(registry);
-	await environment.shutdown();
+	expect(services.capabilities.getConnections()).toBe(replacementConnections);
+	expect(services.capabilities.getConfig()).toBe(replacementConfig);
+	expect(services.capabilities.getRegistry()).toBe(registry);
+	await services.shutdown();
 });
 
 test("resolves compaction settings through the current pricing and configuration", async () => {
@@ -234,7 +232,7 @@ test("resolves compaction settings through the current pricing and configuration
 	});
 	let currentPricing = priced(100_000);
 	let currentConfig = configRuntime;
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: {
 			...sources,
@@ -244,26 +242,26 @@ test("resolves compaction settings through the current pricing and configuration
 		},
 	});
 
-	const first = await environment.capabilities.getCompactionSettings(model);
+	const first = await services.capabilities.getCompactionSettings(model);
 	expect(first.modelContextLimit).toBe(100_000);
 	expect(first.enabled).toBe(true);
 
 	currentPricing = priced(200_000);
 	currentConfig = configured(false);
-	const second = await environment.capabilities.getCompactionSettings(model);
+	const second = await services.capabilities.getCompactionSettings(model);
 	expect(second.modelContextLimit).toBe(200_000);
 	expect(second.enabled).toBe(false);
-	await environment.shutdown();
+	await services.shutdown();
 });
 
 test("closes once, however many callers ask", async () => {
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, plugins: { paths: [pluginPath] }, workspace },
 		sources,
 	});
 
-	expect(environment.shutdown()).toBe(environment.shutdown());
-	await environment.shutdown();
+	expect(services.shutdown()).toBe(services.shutdown());
+	await services.shutdown();
 });
 
 test("waits for the Plugin work of the runtime it resolved", async () => {
@@ -271,14 +269,14 @@ test("waits for the Plugin work of the runtime it resolved", async () => {
 		cliPaths: [pluginPath],
 		config: configRuntime,
 	});
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: { ...sources, pluginRuntime: () => pluginRuntime },
 	});
 	const work = Promise.withResolvers<void>();
 	pluginRuntime.registerBackgroundWork("background-session", work.promise);
 	let settled = false;
-	const waiting = environment
+	const waiting = services
 		.waitForBackgroundWork("background-session")
 		.then(() => {
 			settled = true;
@@ -289,7 +287,7 @@ test("waits for the Plugin work of the runtime it resolved", async () => {
 	work.resolve();
 	await waiting;
 	expect(settled).toBe(true);
-	await environment.shutdown();
+	await services.shutdown();
 	await pluginRuntime.shutdown();
 });
 
@@ -303,22 +301,22 @@ test("reads the current Plugin runtime, not the one it opened with", async () =>
 		config: configRuntime,
 	});
 	let current = first;
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: { ...sources, pluginRuntime: () => current },
 	});
 
-	expect(environment.capabilities.getPluginRuntime?.()).toBe(first);
+	expect(services.capabilities.getPluginRuntime?.()).toBe(first);
 	current = second;
-	expect(environment.capabilities.getPluginRuntime?.()).toBe(second);
-	await environment.shutdown();
+	expect(services.capabilities.getPluginRuntime?.()).toBe(second);
+	await services.shutdown();
 	await first.shutdown();
 	await second.shutdown();
 });
 
 test("adopts a Plugin runtime that appears after it opened without one", async () => {
 	let current: PluginRuntime | undefined;
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: { ...sources, pluginRuntime: () => current },
 	});
@@ -328,13 +326,13 @@ test("adopts a Plugin runtime that appears after it opened without one", async (
 	});
 	current = appeared;
 
-	expect(environment.capabilities.getPluginRuntime?.()).toBe(appeared);
-	await environment.shutdown();
+	expect(services.capabilities.getPluginRuntime?.()).toBe(appeared);
+	await services.shutdown();
 	await appeared.shutdown();
 });
 
 test("runs without Plugins when the caller supplies neither a runtime nor a policy", async () => {
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
 		sources: {
 			configRuntime: () => configRuntime,
@@ -344,17 +342,15 @@ test("runs without Plugins when the caller supplies neither a runtime nor a poli
 	});
 
 	expect(
-		environment.capabilities
-			.getPluginRuntime?.()
-			?.getToolDescriptors("no-plugins")
+		services.capabilities.getPluginRuntime?.()?.getToolDescriptors("no-plugins")
 	).toEqual([]);
-	await environment.shutdown();
+	await services.shutdown();
 });
 
 test("uses the Plugin runtime it was handed instead of loading its policy", async () => {
 	await resetLifecycleLog();
 	const borrowed = await loadPlugins({ cliPaths: [], config: configRuntime });
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: {
 			cwd: workspace,
 			plugins: {
@@ -367,15 +363,15 @@ test("uses the Plugin runtime it was handed instead of loading its policy", asyn
 		sources: { ...sources, pluginRuntime: () => borrowed },
 	});
 
-	expect(environment.capabilities.getPluginRuntime?.()).toBe(borrowed);
+	expect(services.capabilities.getPluginRuntime?.()).toBe(borrowed);
 	expect(await lifecycleLog()).toEqual([]);
-	await environment.shutdown();
+	await services.shutdown();
 	await borrowed.shutdown();
 });
 
 test("skips the distribution Plugin package its policy disables", async () => {
 	await resetLifecycleLog();
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: {
 			cwd: workspace,
 			plugins: {
@@ -390,13 +386,13 @@ test("skips the distribution Plugin package its policy disables", async () => {
 	});
 
 	expect(await lifecycleLog()).toEqual([]);
-	await environment.shutdown();
+	await services.shutdown();
 	expect(await lifecycleLog()).toEqual([]);
 });
 
 test("loads the distribution Plugin packages its policy names", async () => {
 	await resetLifecycleLog();
-	const environment = await openSessionEnvironment({
+	const services = await openSessionServices({
 		policy: {
 			cwd: workspace,
 			plugins: {
@@ -410,6 +406,6 @@ test("loads the distribution Plugin packages its policy names", async () => {
 	});
 
 	expect(await lifecycleLog()).toEqual(["start"]);
-	await environment.shutdown();
+	await services.shutdown();
 	expect(await lifecycleLog()).toEqual(["start", "shutdown"]);
 });

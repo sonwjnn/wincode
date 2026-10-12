@@ -22,7 +22,7 @@ type CompactionSettingsDependencies = {
  * Composes the compaction settings operations a compaction module and the
  * Agent Session port both read: the workspace's ConfigStore snapshot, the
  * Model Catalog pricing table, and the compaction settings resolution. It is
- * React-free; the Session Environment composes it from the configuration and
+ * React-free; Session Services compose it from the configuration and
  * pricing a Session currently reads.
  */
 export const createCompactionSettingsOperations = ({

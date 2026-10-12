@@ -24,7 +24,7 @@ import type {
 import { createApplicationResourceLoader } from "@/modules/application/resource-loader";
 import { runRpc } from "@/modules/application/rpc/runner";
 import { loadPlugins } from "@/modules/plugins/loader";
-import { openSessionEnvironment } from "@/modules/sessions/host/session-environment";
+import { openSessionServices } from "@/modules/sessions/host/session-services";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
 	createFakeModelClient,
@@ -1107,7 +1107,7 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 			},
 		],
 	};
-	const assembly = await openSessionEnvironment({
+	const assembly = await openSessionServices({
 		policy: {
 			cwd: workspace,
 			databasePath: path.join(workspace, "plugin-rpc.sqlite"),
@@ -1272,7 +1272,7 @@ const runPluginToolInOneShot = async (
 		pluginRuntime: modePluginRuntime,
 		workspace: modeWorkspace,
 	}: OneShotCompositionInput) => ({
-		environment: await openSessionEnvironment({
+		services: await openSessionServices({
 			policy: {
 				cwd,
 				databasePath: path.join(modeWorkspace, "sessions.sqlite"),

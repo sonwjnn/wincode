@@ -119,13 +119,13 @@ The application-level conversation boundary that connects the Stateful Agent to 
 The public Coding-Agent interface for creating, reopening, driving, observing, and disposing Agent Sessions. A caller may choose Session capabilities and storage without taking ownership of the Stateful Agent's internal state. _Avoid_: Subagents runtime, raw Session object
 
 **Session Host**:
-The application-level composition that opens one Session and connects its Stateful Agent to the Session Capabilities a Session Environment assembled. Its lifetime is independent of which conversation the UI displays; it may release an idle runtime without deleting durable history. _Avoid_: UI view, Session Store, Stateful Agent
+The application-level composition that opens one Session and connects its Stateful Agent to the Session Capabilities assembled for it. Its lifetime is independent of which conversation the UI displays; it may release an idle runtime without deleting durable history. _Avoid_: UI view, Session Store, Stateful Agent
 
 **Session Capabilities**:
-The lazy accessors a Session Host reads for one Session: its configuration, Connections, Agent registry, Session Store, Session Host Manager, Plugin runtime, Session Compaction module and settings, Skill catalog, turn tools, and Session SDK operations. An assembly resolves them; a Host reads one when the work that needs it runs. _Avoid_: capability bag, Session Environment
+The lazy accessors a Session Host reads for one Session: its configuration, Connections, Agent registry, Session Store, Session Host Manager, Plugin runtime, Session Compaction module and settings, Skill catalog, turn tools, and Session SDK operations. An assembly resolves them; a Host reads one when the work that needs it runs. _Avoid_: capability bag, Session Services
 
-**Session Environment**:
-The mode-, process-, or view-scoped assembly a Session Host runs on: the Plugin runtime it may close or only borrow, the durable Session Store, the Session Capabilities a Host reads lazily, and the Session SDK bound to them. It is not owned by any one Session, closes only the resources it created, and never becomes a second Session writer. _Avoid_: Session Host, application runtime, capability bag
+**Session Services**:
+The mode-, process-, or view-scoped assembly of what a Session Host runs on: the Plugin runtime they may close or only borrow, the durable Session Store, the Session Capabilities a Host reads lazily, and the Session SDK bound to them. They are not owned by any one Session, close only the resources they created, and never become a second Session writer. _Avoid_: Session Host, Session Environment, application runtime, capability bag
 
 **Session Writer**:
 The single live authority to write one Session ID, even when both delegation and a user submit input to it. Multiple callers may send commands through that authority, but another writable runtime for the same Session ID cannot run concurrently. _Avoid_: one input source, Session Lease, workspace writer

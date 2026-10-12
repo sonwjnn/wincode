@@ -5,9 +5,9 @@ import * as path from "node:path";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/utils";
 import {
-	openSessionEnvironment,
-	type SessionEnvironment,
-} from "@/modules/sessions/host/session-environment";
+	openSessionServices,
+	type SessionServices,
+} from "@/modules/sessions/host/session-services";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
@@ -89,7 +89,7 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 	const attachmentRoot = path.join(directory, "attachments");
 	const snapshotRoot = path.join(directory, "file-snapshots");
 	let sqlite: Database | undefined;
-	let assembly: SessionEnvironment | undefined;
+	let assembly: SessionServices | undefined;
 	try {
 		const initial = createDatabase(databasePath);
 		sqlite = initial.sqlite;
@@ -141,7 +141,7 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 		`);
 		incompatibleSchema.close();
 
-		assembly = await openSessionEnvironment({
+		assembly = await openSessionServices({
 			policy: { cwd: directory, databasePath, workspace: directory },
 			sources: {
 				connections: () => ({

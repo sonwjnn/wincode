@@ -17,9 +17,9 @@
       "types": "./modules/sessions/host/session-host.ts",
       "import": "./modules/sessions/host/session-host.ts"
     },
-    "./session-environment": {
-      "types": "./modules/sessions/host/session-environment.ts",
-      "import": "./modules/sessions/host/session-environment.ts"
+    "./session-services": {
+      "types": "./modules/sessions/host/session-services.ts",
+      "import": "./modules/sessions/host/session-services.ts"
     },
     "./session-rpc": {
       "types": "./modules/sessions/host/session-rpc.ts",

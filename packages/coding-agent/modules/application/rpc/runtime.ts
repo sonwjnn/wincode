@@ -9,7 +9,7 @@ import {
 	resolveWorkspaceRoot,
 	toSessionId,
 } from "../../../modules/sessions/host/session-rpc";
-import { openApplicationSessionEnvironment } from "../plugin-composition";
+import { openApplicationSessionServices } from "../plugin-composition";
 import type { RpcCompositionInput, RuntimeModules } from "./types";
 
 export const loadRuntime = async (
@@ -19,8 +19,8 @@ export const loadRuntime = async (
 	> = {}
 ): Promise<RuntimeModules> => ({
 	createAgentTurnId,
-	openSessionEnvironment: (sessionComposition) =>
-		openApplicationSessionEnvironment({
+	openSessionServices: (sessionComposition) =>
+		openApplicationSessionServices({
 			...input,
 			cwd: sessionComposition.cwd,
 			workspace: sessionComposition.workspace,

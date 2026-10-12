@@ -6,7 +6,7 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "@/modules/sessions/host/types";
-import { useSessionEnvironmentOpener } from "@/modules/sessions/host/use-session-environment";
+import { useSessionServices } from "@/modules/sessions/host/use-session-services";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
@@ -115,7 +115,7 @@ export function SessionSurface({
 	readonly sessionId: SessionId;
 }) {
 	const { colors } = useTheme();
-	const openEnvironment = useSessionEnvironmentOpener();
+	const sessionServices = useSessionServices();
 	const [surface, setSurface] = useState<SessionSurfaceState>({
 		kind: "opening",
 	});
@@ -151,15 +151,14 @@ export function SessionSurface({
 			void manager.releaseView(sessionId).catch(() => undefined);
 		};
 		const open = async (): Promise<OpenedSession | null> => {
-			const environment = await openEnvironment.open();
+			const services = await sessionServices.open();
 			if (ignore || releaseRequested) {
 				return null;
 			}
-			const sessionHostManager =
-				environment.capabilities.getSessionHostManager();
+			const sessionHostManager = services.capabilities.getSessionHostManager();
 			manager = sessionHostManager;
 			const host = await sessionHostManager.openHost({
-				capabilities: environment.capabilities,
+				capabilities: services.capabilities,
 				executionMode: "interactive",
 				sessionId,
 				view: true,
@@ -304,11 +303,11 @@ export function SessionSurface({
 			retryOpenRef.current = null;
 			viewHistoryRef.current = null;
 			releaseView();
-			// The environment borrowed this view's providers; closing it releases
-			// only a Plugin runtime it had to create for itself.
-			void openEnvironment.close();
+			// These services borrowed this view's providers; closing them releases
+			// only a Plugin runtime they had to create for themselves.
+			void sessionServices.close();
 		};
-	}, [openEnvironment, sessionId]);
+	}, [sessionServices, sessionId]);
 
 	if (surface.kind === "failure") {
 		return <text fg={colors.error}>{surface.message}</text>;

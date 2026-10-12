@@ -27,7 +27,7 @@ import {
 const recorder = createFakeModelClientRecorder();
 installFakeModelClient(recorder);
 
-import { openSessionEnvironment } from "../modules/sessions/host/session-environment";
+import { openSessionServices } from "../modules/sessions/host/session-services";
 import { createDatabase } from "../modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "../modules/sessions/storage/drizzle-session-store";
 
@@ -85,7 +85,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 			},
 		],
 	};
-	const assembly = await openSessionEnvironment({
+	const assembly = await openSessionServices({
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
 			connections: () => connections,
@@ -260,7 +260,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	if (sessionId === undefined) {
 		throw new Error("The RPC journey did not return a Session ID.");
 	}
-	const secondAssembly = await openSessionEnvironment({
+	const secondAssembly = await openSessionServices({
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
 			connections: () => connections,
@@ -407,7 +407,7 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 		model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 		turnId: agentTurnId("writer-conflict-turn"),
 	});
-	const rpcAssembly = await openSessionEnvironment({
+	const rpcAssembly = await openSessionServices({
 		policy: { cwd: workspace, databasePath: conflictDatabasePath, workspace },
 		sources: {
 			connections: () => connections,
@@ -488,7 +488,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 		workspace,
 		"writer-lock-failure.sqlite"
 	);
-	const failureAssembly = await openSessionEnvironment({
+	const failureAssembly = await openSessionServices({
 		policy: { cwd: workspace, databasePath: failureDatabasePath, workspace },
 		sources: {
 			connections: () => connections,
@@ -573,7 +573,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 });
 
 test("raw JSONL target switches retain background Sessions but stream only the active target", async () => {
-	const switchAssembly = await openSessionEnvironment({
+	const switchAssembly = await openSessionServices({
 		policy: {
 			cwd: workspace,
 			databasePath: path.join(workspace, "session-switch.sqlite"),

@@ -111,7 +111,7 @@ export type SessionCapabilitiesAssembly = Readonly<{
 	 * once. It is exposed because it is total: the capability's accessor is
 	 * optional — a Session Host Manager falls back to its own process runtime
 	 * for a hand-built capabilities object — while an assembly always has a
-	 * runtime for a Session Environment to wait on.
+	 * runtime for Session Services to wait on.
 	 */
 	getPluginRuntime: () => PluginRuntime;
 	shutdown: () => Promise<void>;

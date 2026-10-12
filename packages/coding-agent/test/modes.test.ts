@@ -23,8 +23,8 @@ import type {
 	TextWriter,
 } from "../modules/application/modes/types";
 import { createApplicationPluginComposition } from "../modules/application/plugin-composition";
-import { openSessionEnvironment } from "../modules/sessions/host/session-environment";
 import { createSessionHost } from "../modules/sessions/host/session-host";
+import { openSessionServices } from "../modules/sessions/host/session-services";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
 	createFakeModelClient,
@@ -99,7 +99,7 @@ const composeEnvironmentDetailedFor =
 		workspace: root,
 	}: OneShotCompositionInput) => {
 		const composition = createApplicationPluginComposition();
-		const environment = await openSessionEnvironment({
+		const services = await openSessionServices({
 			policy: {
 				cwd,
 				databasePath: path.join(root, "sessions.sqlite"),
@@ -123,7 +123,7 @@ const composeEnvironmentDetailedFor =
 					: { pluginRuntime: () => providedPluginRuntime }),
 			},
 		});
-		return { environment };
+		return { services };
 	};
 const composeEnvironmentFor = (agentRegistry: AgentRegistry) =>
 	composeEnvironmentDetailedFor(agentRegistry);
@@ -324,7 +324,7 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	expect(exitCode).toBe(0);
 	expect(stdout.text).toBe("E2E chat response");
 	expect(stderr.text).toBe("");
-	const verification = await openSessionEnvironment({
+	const verification = await openSessionServices({
 		policy: {
 			cwd: workspace,
 			databasePath: path.join(workspace, "sessions.sqlite"),
@@ -384,7 +384,7 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 			cwd: workspace,
 			workspace,
 		})
-	).environment;
+	).services;
 	try {
 		const [session] = await finalVerification.store.listSessions();
 		if (session === undefined) {
@@ -428,7 +428,7 @@ test("one-shot ThinkingLevel selectors override configured and restored choices"
 				cwd: reasoningWorkspace,
 				workspace: reasoningWorkspace,
 			})
-		).environment;
+		).services;
 		let sessionId: string | undefined;
 		try {
 			const sessions = await firstVerification.store.listSessions();
@@ -468,7 +468,7 @@ test("one-shot ThinkingLevel selectors override configured and restored choices"
 				cwd: reasoningWorkspace,
 				workspace: reasoningWorkspace,
 			})
-		).environment;
+		).services;
 		try {
 			const sessions = await finalVerification.store.listSessions();
 			expect(sessions).toHaveLength(1);
@@ -527,11 +527,9 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 			workspace: invalidWorkspace,
 		});
 		try {
-			expect(await verification.environment.store.listSessions()).toHaveLength(
-				0
-			);
+			expect(await verification.services.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.environment.shutdown();
+			await verification.services.shutdown();
 		}
 	} finally {
 		await fs.rm(invalidWorkspace, { force: true, recursive: true });
@@ -553,7 +551,7 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 		)
 	).toBe(0);
 
-	const lookup = await openSessionEnvironment({
+	const lookup = await openSessionServices({
 		policy: {
 			cwd: workspace,
 			databasePath: path.join(workspace, "sessions.sqlite"),
@@ -575,7 +573,7 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 			cwd: workspace,
 			workspace,
 		})
-	).environment;
+	).services;
 	const holder = await createSessionHost({
 		capabilities: holderAssembly.capabilities,
 		sessionId,
@@ -694,11 +692,9 @@ test("one-shot input rejects empty submissions before creating a Session", async
 			workspace: emptyWorkspace,
 		});
 		try {
-			expect(await verification.environment.store.listSessions()).toHaveLength(
-				0
-			);
+			expect(await verification.services.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.environment.shutdown();
+			await verification.services.shutdown();
 		}
 	} finally {
 		await fs.rm(emptyWorkspace, { force: true, recursive: true });
@@ -734,11 +730,9 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 			workspace: disconnectedWorkspace,
 		});
 		try {
-			expect(await verification.environment.store.listSessions()).toHaveLength(
-				0
-			);
+			expect(await verification.services.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.environment.shutdown();
+			await verification.services.shutdown();
 		}
 	} finally {
 		await fs.rm(disconnectedWorkspace, { force: true, recursive: true });

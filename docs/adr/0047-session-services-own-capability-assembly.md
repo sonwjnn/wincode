@@ -1,4 +1,4 @@
-# Session Environment owns the capability assembly
+# Session Services own the capability assembly
 
 Status: accepted
 
@@ -14,14 +14,14 @@ the raw one.
 
 ## Decision
 
-- One factory, `openSessionEnvironment({ policy, sources })` in
-  `modules/sessions/host/session-environment.ts`, returns
+- One factory, `openSessionServices({ policy, sources })` in
+  `modules/sessions/host/session-services.ts`, returns
   `{ capabilities, store, sessionSdk, waitForBackgroundWork, workspace, workspaceId, shutdown }`.
   It is the only place the capability graph is assembled for a mode, a process,
   or a view. The Session Host remains the composition root for one Session
-  (ADR-0023): it opens a Session on an environment it is handed and does not
+  (ADR-0023): it opens a Session on Session Services it is handed and does not
   build one.
-- Split the input. `policy` is what the environment creates for the caller —
+- Split the input. `policy` is what opening Session Services creates for the caller —
   cwd, workspace, database path, and Plugin policy.
   `sources` is what the caller already owns: configuration, Connections, Agent
   registry, Model Catalog pricing, Session Store, Session Host Manager, Plugin
@@ -33,15 +33,15 @@ the raw one.
   factory, which is forwarded and read when a turn needs a runtime. The Agent
   registry is resolved once at open when the caller supplies no source, and read
   per use when it does.
-- Bind the Session SDK inside the environment, and resolve its mutual reference
+- Bind the Session SDK inside the factory, and resolve its mutual reference
   with the capabilities exactly once. The Plugin-facing `SessionSdkOperations`
   need the Session Store and Session Host Manager the capabilities own, while
   the capability that hands Plugin Tools those operations needs the operations,
-  so one deferred reference resolves it — in the environment, not in every
+  so one deferred reference resolves it — in the factory, not in every
   caller. `createSessionSdkInternal` keeps a second, structural one, where the
   SDK object and its own capabilities are mutually recursive inside a single
   function and the reference cannot be hoisted.
-- Own only what was created. The environment closes the Plugin runtime it
+- Own only what was created. Session Services close the Plugin runtime they
   loaded from `policy.plugins`, the SQLite database it opened, and the Session
   Host Manager it created. An injected Plugin runtime, Session Store, or
   Manager stays the caller's, and `shutdown()` is idempotent, returning the
@@ -51,7 +51,7 @@ the raw one.
   Host that outlives the view keeps a live runtime.
 - Keep Plugin loading policy as input, not opinion. Callers that already hold a
   Plugin runtime pass it as a source. A caller that supplies neither a Plugin
-  runtime source nor Plugin policy runs without Plugins, and the environment
+  runtime source nor Plugin policy runs without Plugins, and the factory
   owns the empty runtime it creates — Interactive Mode has no process runtime
   before its startup finishes, and a plain-Node host may want none.
   `initializeApplicationRuntime` and the per-child-runtime loading inside
@@ -60,12 +60,12 @@ the raw one.
 - Compose the headless modes once. Print, JSON, and RPC Mode share the
   application's Plugin policy — the distribution's packages, the invocation's
   Plugin selection, and the application turn tool registry — through one
-  application-level composition of the environment. Interactive Mode composes
+  application-level composition of Session Services. Interactive Mode composes
   its own from the providers it holds instead.
-- Publish the environment as the package subpath `./session-environment` and
+- Publish the factory as the package subpath `./session-services` and
   remove `./session-capabilities`, which nothing imported. `./session-host` and
   `./session-rpc` keep their entries; `./session-rpc` now re-exports the Session
-  Environment types instead of the capability assembly's own inputs, which are
+  Session Services types instead of the capability assembly's own inputs, which are
   internal to the Session layer.
 
 ## Consequences
@@ -75,7 +75,7 @@ the raw one.
   the Host Manager it opens Sessions through, sources read lazily, compaction
   settings resolved through the current configuration and pricing, and
   `waitForBackgroundWork` delegation.
-- A new Execution Mode or a plain-Node host composes a Session Environment
+- A new Execution Mode or a plain-Node host composes Session Services
   instead of copying wiring.
 - The Capability Ceiling is applied once and the same Agent registry reaches
   both the capabilities and the Session SDK, removing the Interactive-versus-

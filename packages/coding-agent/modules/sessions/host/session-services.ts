@@ -31,7 +31,7 @@ import {
 import type { SessionCapabilities, SessionHostManager } from "./types";
 
 /**
- * What the environment loads itself when the caller supplies no Plugin runtime.
+ * What opening the Session Services loads when the caller supplies no Plugin runtime.
  * Omitting it runs without Plugins rather than loading configured ones.
  */
 export type SessionPluginPolicy = Readonly<{
@@ -43,10 +43,10 @@ export type SessionPluginPolicy = Readonly<{
 	distributionPackages?: readonly PluginPackageReference[];
 }>;
 
-/** What the environment creates for the caller. */
-export type SessionEnvironmentPolicy = Readonly<{
+/** What opening the Session Services creates for the caller. */
+export type SessionServicesPolicy = Readonly<{
 	cwd: string;
-	/** The local database path, when this environment owns its Session storage. */
+	/** The local database path, when these Session Services own their storage. */
 	databasePath?: string;
 	plugins?: SessionPluginPolicy;
 	workspace: string;
@@ -63,7 +63,7 @@ export type SessionEnvironmentPolicy = Readonly<{
  * registry is resolved once at open when the caller supplies no source, read
  * per use when it does.
  */
-export type SessionEnvironmentSources = Readonly<{
+export type SessionServicesSources = Readonly<{
 	configRuntime?: () => ConfigRuntime;
 	connections?: () => Connections;
 	registry?: () => AgentRegistry | null;
@@ -78,12 +78,12 @@ export type SessionEnvironmentSources = Readonly<{
 }>;
 
 /**
- * One mode's, process's, or view's Session Environment: what its Session Hosts
+ * One mode's, process's, or view's Session Services: what its Session Hosts
  * run on. It closes only the resources it created — the Plugin runtime it loaded,
  * the database it opened, and the Session Host Manager it created — so a
  * borrowed Plugin runtime survives a Session-scoped shutdown.
  */
-export type SessionEnvironment = Readonly<{
+export type SessionServices = Readonly<{
 	capabilities: SessionCapabilities;
 	sessionSdk: SessionSdkOperations;
 	store: SessionStore;
@@ -94,19 +94,19 @@ export type SessionEnvironment = Readonly<{
 	shutdown: () => Promise<void>;
 }>;
 
-export type SessionEnvironmentInput = Readonly<{
-	policy: SessionEnvironmentPolicy;
-	sources?: SessionEnvironmentSources;
+export type SessionServicesInput = Readonly<{
+	policy: SessionServicesPolicy;
+	sources?: SessionServicesSources;
 }>;
 
 /**
- * Resolves the Plugin runtime this environment runs on: the one the caller
+ * Resolves the Plugin runtime these Session Services run on: the one the caller
  * already holds, one loaded from the invocation's Plugin policy, or none at
- * all. Only a runtime this environment loaded or created is its to close.
+ * all. Only a runtime the factory loaded or created is these services' to close.
  */
 const resolvePluginRuntime = async (
-	policy: SessionEnvironmentPolicy,
-	sources: SessionEnvironmentSources,
+	policy: SessionServicesPolicy,
+	sources: SessionServicesSources,
 	configRuntime: ConfigRuntime
 ): Promise<SessionPluginRuntime> => {
 	const borrowed = sources.pluginRuntime?.();
@@ -115,7 +115,7 @@ const resolvePluginRuntime = async (
 	}
 	const pluginPolicy = policy.plugins;
 	if (pluginPolicy === undefined) {
-		// A Session Environment with no Plugin runtime and no Plugin policy runs
+		// Session Services with no Plugin runtime and no Plugin policy run
 		// without Plugins: a plain-Node host may want none, and the Interactive
 		// adapter lends a process-scoped stand-in rather than reaching this.
 		return { ownedByCaller: true, runtime: createPluginRuntime([], []) };
@@ -130,7 +130,7 @@ const resolvePluginRuntime = async (
 };
 
 /**
- * Opens the Session Environment every Execution Mode and the Session SDK run
+ * Opens the Session Services every Execution Mode and the Session SDK run
  * their Session Hosts on: the Plugin runtime, durable Session storage, the
  * Session Host Manager, the Session Capabilities a Host reads lazily, and the
  * Session SDK bound to them.
@@ -140,10 +140,10 @@ const resolvePluginRuntime = async (
  * resolved. The Session SDK keeps a second, structural one where its own object
  * and its capabilities are mutually recursive within a single function.
  */
-export const openSessionEnvironment = async ({
+export const openSessionServices = async ({
 	policy,
 	sources = {},
-}: SessionEnvironmentInput): Promise<SessionEnvironment> => {
+}: SessionServicesInput): Promise<SessionServices> => {
 	const { cwd, workspace } = policy;
 	const providedConfigRuntime = sources.configRuntime?.();
 	const configStore = providedConfigRuntime?.configStore ?? createConfigStore();
@@ -155,7 +155,7 @@ export const openSessionEnvironment = async ({
 	};
 	/**
 	 * The configuration the capabilities read: the caller's source when it has
-	 * one, otherwise the value this environment resolved.
+	 * one, otherwise the value the factory resolved.
 	 */
 	const getConfig = (): ConfigRuntime =>
 		sources.configRuntime?.() ?? configRuntime;
@@ -174,7 +174,7 @@ export const openSessionEnvironment = async ({
 	 */
 	let sessionSdk: SessionSdkOperations | undefined;
 	/**
-	 * A runtime this environment loaded is its to close even when opening
+	 * A runtime the factory loaded is these services' to close even when opening
 	 * fails, so a composing host that supplied none cannot leak one.
 	 */
 	const closeOwnedRuntime = async (): Promise<void> => {
@@ -229,9 +229,9 @@ export const openSessionEnvironment = async ({
 			shutdown: () => assembly.shutdown(),
 		});
 	} catch (error) {
-		// An assembly that exists owns everything this environment created, so it
-		// releases them; before that, only the runtime this environment loaded is
-		// its to close.
+		// An assembly that exists owns everything these services created, so it
+		// releases them; before that, only the runtime the factory loaded is these
+		// services' to close.
 		await created?.shutdown().catch(() => undefined);
 		if (created === undefined) {
 			await closeOwnedRuntime();

@@ -4,8 +4,8 @@ import {
 	createTurnToolRegistry,
 	type TurnToolResolver,
 } from "@/modules/sessions/hooks/runtime-turn";
-import type { SessionEnvironment } from "@/modules/sessions/host/session-environment";
-import { openSessionEnvironment } from "@/modules/sessions/host/session-environment";
+import type { SessionServices } from "@/modules/sessions/host/session-services";
+import { openSessionServices } from "@/modules/sessions/host/session-services";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 
 const DISTRIBUTED_PLUGINS: readonly PluginPackageReference[] = Object.freeze([
@@ -25,7 +25,7 @@ export const createApplicationPluginComposition =
 		turnToolResolver: createTurnToolRegistry().resolve,
 	});
 
-export type ApplicationSessionEnvironmentInput = Readonly<{
+export type ApplicationSessionServicesInput = Readonly<{
 	configRuntime?: ConfigRuntime;
 	cwd: string;
 	disabledPluginIds?: readonly string[];
@@ -35,22 +35,22 @@ export type ApplicationSessionEnvironmentInput = Readonly<{
 }>;
 
 /**
- * Opens the Session Environment a non-Interactive Execution Mode runs on: the
+ * Opens the Session Services a non-Interactive Execution Mode runs on: the
  * distribution's Plugin packages, the invocation's Plugin selection, and the
  * application's turn tool registry, composed through the one Session
- * Environment factory. Interactive Mode composes its own environment from the
+ * Services factory. Interactive Mode composes its own Session Services from the
  * providers it already holds instead.
  */
-export const openApplicationSessionEnvironment = async ({
+export const openApplicationSessionServices = async ({
 	configRuntime,
 	cwd,
 	disabledPluginIds = [],
 	pluginPaths = [],
 	pluginRuntime,
 	workspace,
-}: ApplicationSessionEnvironmentInput): Promise<SessionEnvironment> => {
+}: ApplicationSessionServicesInput): Promise<SessionServices> => {
 	const composition = createApplicationPluginComposition();
-	return await openSessionEnvironment({
+	return await openSessionServices({
 		policy: {
 			cwd,
 			plugins: {

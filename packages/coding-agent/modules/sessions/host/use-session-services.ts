@@ -14,45 +14,42 @@ import {
 	getInteractiveRuntimeContext,
 } from "@/shared/runtime-context";
 import { getSessionStore } from "../storage/get-session-store";
-import {
-	openSessionEnvironment,
-	type SessionEnvironment,
-} from "./session-environment";
 import { getInteractiveSessionHostManager } from "./session-host-manager";
+import { openSessionServices, type SessionServices } from "./session-services";
 
 /**
  * The Plugin runtime Interactive Mode's Sessions borrow until the process
  * supplies one. It holds no Plugins and is never closed, exactly like the
  * process runtime it stands in for: a Session Host outlives the view that
- * opened its environment, so the environment must not own a runtime a Host
+ * opened its Session Services, so they must not own a runtime a Host
  * still references.
  */
 let standInPluginRuntime: PluginRuntime | undefined;
 const interactiveStandInRuntime = (): PluginRuntime =>
 	(standInPluginRuntime ??= createPluginRuntime([], []));
 
-/** Opens one Session Environment for a mount, and closes the one it opened. */
-export type SessionEnvironmentOpener = Readonly<{
-	/** Closes the opened environment, so a later `open` composes a fresh one. */
+/** Opens Session Services for a mount, and closes what it opened. */
+export type SessionServicesHandle = Readonly<{
+	/** Closes the opened Session Services, so a later `open` composes fresh ones. */
 	close: () => Promise<void>;
-	open: () => Promise<SessionEnvironment>;
+	open: () => Promise<SessionServices>;
 }>;
 
 /**
- * Interactive Mode's adapter over the Session Environment: it reads the TUI's
- * providers and passes them as sources, and the environment composes the graph
+ * Interactive Mode's adapter over the Session Services: it reads the TUI's
+ * providers and passes them as sources, and the factory composes the graph
  * once for the mount.
  *
  * The returned opener is lazy because opening is asynchronous, and every source
  * is a getter because a Session outlives the render that supplied it: a
  * reconnected provider, a reloaded configuration, a replaced Plugin runtime, or
  * an arriving Model Catalog pricing table is what the Session's next work sees.
- * The environment borrows everything it runs on — the store, the Session Host
+ * These services borrow everything they run on — the store, the Session Host
  * Manager, and the Plugin runtime, which is the process runtime or, before that
  * exists, a process-scoped stand-in — so closing it never stops Plugins a
  * Session Host still uses.
  */
-export const useSessionEnvironmentOpener = (): SessionEnvironmentOpener => {
+export const useSessionServices = (): SessionServicesHandle => {
 	const connections = useConnections();
 	const config = useConfig();
 	const registry = useAgentRegistry();
@@ -68,18 +65,18 @@ export const useSessionEnvironmentOpener = (): SessionEnvironmentOpener => {
 	return useMemo(() => {
 		const sessionHostManager = getInteractiveSessionHostManager();
 		const initialPluginRuntime = getInteractivePluginRuntime();
-		let opened: Promise<SessionEnvironment> | undefined;
+		let opened: Promise<SessionServices> | undefined;
 		return {
 			close: async () => {
 				const pending = opened;
 				opened = undefined;
-				const environment = await pending?.catch(() => undefined);
-				await environment?.shutdown().catch(() => undefined);
+				const services = await pending?.catch(() => undefined);
+				await services?.shutdown().catch(() => undefined);
 			},
 			open: () => {
 				// A failed open is not remembered, so the surface's retry can try
 				// again instead of awaiting the same rejection forever.
-				opened ??= openSessionEnvironment({
+				opened ??= openSessionServices({
 					policy: {
 						cwd: configRef.current.cwd ?? configRef.current.workspace,
 						workspace: configRef.current.workspace,

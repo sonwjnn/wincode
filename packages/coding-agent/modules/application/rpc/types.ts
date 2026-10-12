@@ -1,5 +1,5 @@
 import type { ThinkingLevel, ThinkingSelection } from "@wincode/ai/models";
-import type { ApplicationSessionEnvironmentInput } from "@/modules/application/plugin-composition";
+import type { ApplicationSessionServicesInput } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SkillContext } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -7,11 +7,11 @@ import type {
 	AgentTurnId,
 	ChatModelSelection,
 	SessionCapabilities,
-	SessionEnvironment,
 	SessionHost,
 	SessionId,
 	SessionMessage,
 	SessionMessageMetadata,
+	SessionServices,
 	SessionStore,
 } from "../../../modules/sessions/host/session-rpc";
 import type { SessionFilePart } from "../../../modules/sessions/message";
@@ -89,22 +89,19 @@ export type OutputWriter = {
 };
 
 /**
- * What RPC Mode needs from a Session Environment: its capabilities, its
+ * What RPC Mode needs from Session Services: their capabilities, their
  * teardown, its workspace, and the store it may still attach through. A
- * Session Environment satisfies it as-is.
+ * Session Services satisfy it as-is.
  */
-export type RpcAssembly = Pick<
-	SessionEnvironment,
-	"capabilities" | "shutdown"
-> &
+export type RpcAssembly = Pick<SessionServices, "capabilities" | "shutdown"> &
 	Readonly<{
 		store?: SessionStore;
 		workspace: string;
 		workspaceId: string;
 	}>;
 
-/** RPC Mode composes the application's Session Environment from this input. */
-export type RpcCompositionInput = ApplicationSessionEnvironmentInput;
+/** RPC Mode composes the application's Session Services from this input. */
+export type RpcCompositionInput = ApplicationSessionServicesInput;
 
 export type RpcRunnerOptions = Readonly<{
 	configRuntime?: ConfigRuntime;
@@ -131,7 +128,7 @@ export type RuntimeModules = Readonly<{
 		capabilities: SessionCapabilities;
 		sessionId: SessionId;
 	}) => Promise<SessionHost>;
-	openSessionEnvironment: (input: RpcCompositionInput) => Promise<RpcAssembly>;
+	openSessionServices: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	createSessionUserMessage: (
 		text: string,
 		metadata?: SessionMessageMetadata

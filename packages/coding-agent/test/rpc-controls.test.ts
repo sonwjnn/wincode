@@ -550,7 +550,7 @@ test("failed Session creation stays durable and can be reopened", async () => {
 	let hostAttempts = 0;
 	const runtime = fromPartial<RuntimeModules>({
 		createAgentTurnId: () => "turn-1",
-		openSessionEnvironment: async () =>
+		openSessionServices: async () =>
 			fromPartial({
 				capabilities: {
 					getSessionHostManager: () =>
