@@ -18,6 +18,13 @@ sdk.register({
 		assert.equal(context.authorization, "node-owned-secret");
 		assert.equal(request.messages[0].content[1].type, "image");
 		yield { delta: "hello", type: "text-delta" };
+		yield { delta: "considering the image", type: "reasoning-delta" };
+		yield {
+			input: { location: "Paris" },
+			toolCallId: "weather-call",
+			toolName: "weather",
+			type: "tool-call",
+		};
 		yield { type: "usage", usage: { inputTokens: 3, outputTokens: 1 } };
 	},
 });
@@ -42,6 +49,13 @@ for await (const event of sdk.chat({
 
 assert.deepEqual(events, [
 	{ delta: "hello", type: "text-delta" },
+	{ delta: "considering the image", type: "reasoning-delta" },
+	{
+		input: { location: "Paris" },
+		toolCallId: "weather-call",
+		toolName: "weather",
+		type: "tool-call",
+	},
 	{ type: "usage", usage: { inputTokens: 3, outputTokens: 1 } },
 	{ type: "terminal", outcome: { status: "success" } },
 ]);
