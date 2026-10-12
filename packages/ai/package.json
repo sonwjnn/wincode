@@ -24,6 +24,9 @@
     "./model-client": {
       "default": "./src/model-client/index.ts"
     },
+    "./sdk": {
+      "default": "./src/sdk.ts"
+    },
     "./connections": {
       "default": "./src/connections/index.ts"
     },
@@ -36,7 +39,7 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "bun ../../scripts/test-portfolio.ts default --package ai"
+    "test": "bun ../../scripts/test-portfolio.ts default --package ai && node ./test/sdk-node-consumer.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.27.0",
