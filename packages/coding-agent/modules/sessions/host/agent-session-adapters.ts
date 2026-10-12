@@ -18,10 +18,10 @@ import type {
 } from "../agent-session/types";
 import { SessionCompactionError } from "../compaction/error";
 import type { SessionMessage } from "../message";
+import { strictThinkingSelection } from "../selection";
 import {
 	type AgentSessionTurnRunnerOptions,
 	createAgentSessionTurnRunner,
-	strictThinkingSelection,
 } from "./agent-session-turn-runner";
 
 /** The Host inputs the adapters need on top of one Agent Turn's. */
@@ -94,6 +94,15 @@ export const createAgentSessionAdapters = (
 	options: AgentSessionAdaptersOptions
 ): AgentSessionPorts => {
 	const { capabilities, isShutDown, sessionId, statefulAgent } = options;
+	/**
+	 * Exactly the runner's declared inputs: a new one fails to compile here
+	 * instead of arriving unannounced or being dropped.
+	 */
+	const turnRunnerInputs: AgentSessionTurnRunnerOptions = {
+		capabilities,
+		sessionId,
+		statefulAgent,
+	};
 	const assertHostOpen = (): void => {
 		if (isShutDown()) {
 			throw new SessionCompactionError(
@@ -235,7 +244,7 @@ export const createAgentSessionAdapters = (
 		resolveCompactionSettings: (model) =>
 			capabilities.getCompactionSettings(model),
 		resolveFileMentions: (text) => resolveFileMentionParts(text),
-		turnRunner: createAgentSessionTurnRunner(options),
+		turnRunner: createAgentSessionTurnRunner(turnRunnerInputs),
 		skills: { createTurnSkill, resolveSkill },
 	};
 };

@@ -78,10 +78,10 @@ export type SessionServicesSources = Readonly<{
 }>;
 
 /**
- * One mode's, process's, or view's Session Services: what its Session Hosts
- * run on. It closes only the resources it created — the Plugin runtime it loaded,
- * the database it opened, and the Session Host Manager it created — so a
- * borrowed Plugin runtime survives a Session-scoped shutdown.
+ * One mode's, process's, or view's Session Services: what its Session Hosts run
+ * on. They close only the resources they created — the Plugin runtime they
+ * loaded, the database they opened, and the Session Host Manager they created —
+ * so a borrowed Plugin runtime survives a Session-scoped shutdown.
  */
 export type SessionServices = Readonly<{
 	capabilities: SessionCapabilities;

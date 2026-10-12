@@ -434,11 +434,14 @@ const createFakeSessionHost = (
  */
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	let previous = setup.captureCharFrame();
+	// Two passes minimum: the first gives an asynchronous commit a window to
+	// land, the second sees whether it did. A command slower than that needs a
+	// wait of its own, which is what the assertions here rely on.
 	for (let attempt = 0; attempt < 50; attempt += 1) {
 		await Bun.sleep(20);
 		await setup.renderOnce();
 		const frame = setup.captureCharFrame();
-		if (frame === previous) {
+		if (attempt >= 1 && frame === previous) {
 			return;
 		}
 		previous = frame;

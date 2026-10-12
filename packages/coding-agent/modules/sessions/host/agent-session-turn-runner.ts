@@ -4,12 +4,6 @@ import type {
 	AgentTurnEvent,
 	StatefulAgent,
 } from "@wincode/agent-core";
-import {
-	type ChatModelSelection,
-	isSupportedThinkingLevel,
-	type ThinkingSelection,
-	thinkingLevelSchema,
-} from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/utils";
 import { resolveAgentToolResourceLimits } from "@/modules/agents/registry";
 import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";
@@ -41,6 +35,7 @@ import {
 	resolveTurnTools,
 	runAgentTurnToText,
 } from "../hooks/runtime-turn";
+import { strictThinkingSelection } from "../selection";
 import type { SessionStore } from "../storage/session-store";
 import {
 	createTurnExecution,
@@ -106,21 +101,6 @@ const collectExistingToolNames = (
 	...codingTools,
 	...(skillToolName === undefined ? [] : [skillToolName]),
 ];
-
-/** Parses one Thinking Level against the model that will run it, or throws. */
-export const strictThinkingSelection = (
-	model: ChatModelSelection,
-	value: unknown
-): ThinkingSelection => {
-	if (value === undefined) {
-		return {};
-	}
-	const parsed = thinkingLevelSchema.safeParse(value);
-	if (!(parsed.success && isSupportedThinkingLevel(model, parsed.data))) {
-		throw new Error("Thinking level is unavailable for the selected model.");
-	}
-	return { thinkingLevel: parsed.data };
-};
 
 /** The Host inputs one Agent Turn execution needs. */
 export type AgentSessionTurnRunnerOptions = Readonly<{
