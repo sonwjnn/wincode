@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { createModelClient, generateModelText } from "../src/model-client";
+import {
+	createModelClient,
+	generateModelText,
+	warmModelRequest,
+} from "../src/model-client";
 import { ModelProviderError } from "../src/model-client/errors";
 import type {
 	ModelClient,
@@ -13,6 +17,9 @@ import type { ModelAuthorization, ModelTarget } from "../src/model-target";
 import { createModelTarget, modelTargetSchema } from "../src/model-target";
 import type { ConnectionProviderId } from "../src/models";
 import { supportedChatModelIdSchema } from "../src/models";
+
+const openAIPromptCacheControlPattern =
+	/prompt_cache_key|prompt_cache_options|prompt_cache_breakpoint/u;
 
 type FetchMock = Readonly<{
 	fetch: typeof globalThis.fetch;
@@ -74,11 +81,24 @@ const mockFetch = (response: Response): FetchMock => {
 const responseBody = (mock: FetchMock) =>
 	JSON.parse(String(mock.init?.body)) as Record<string, unknown>;
 
+const promptCacheTarget = (
+	target: ModelTarget,
+	retention: "short" | "long"
+): ModelTarget & { promptCacheRetention: "short" | "long" } => ({
+	...target,
+	promptCacheRetention: retention,
+});
+
 const collect = async (
 	client: ModelClient,
 	target: ModelTarget,
 	messages: readonly ModelPromptMessage[] = [],
 	options: {
+		googleCachedContent?: {
+			name: string;
+			onRejected?: (name: string) => void | Promise<void>;
+		};
+		promptCacheKey?: string;
 		signal?: AbortSignal;
 		system?: string;
 		tools?: readonly ModelTool[];
@@ -106,6 +126,151 @@ const lookupTool: ModelTool = {
 };
 
 describe("native model client routes", () => {
+	test("does not replay a request carrying an explicit cache resource", async () => {
+		let calls = 0;
+		const modelClient: ModelClient = {
+			async *stream() {
+				calls += 1;
+				yield { type: "finish" };
+			},
+		};
+
+		await warmModelRequest(
+			{
+				googleCachedContent: { name: "cachedContents/session-prefix" },
+				messages: [],
+				target: makeTarget("openai", "gpt-5.6"),
+			},
+			modelClient
+		);
+
+		expect(calls).toBe(0);
+	});
+
+	test("does not issue a synthetic warm request for the Google cache-resource protocol", async () => {
+		let calls = 0;
+		const modelClient: ModelClient = {
+			async *stream() {
+				calls += 1;
+				yield { type: "finish" };
+			},
+		};
+
+		await warmModelRequest(
+			{ messages: [], target: makeTarget("google", "gemini-3.8-flash") },
+			modelClient
+		);
+
+		expect(calls).toBe(0);
+	});
+
+	test("warms the exact streaming request with a one-token cap and no retained output", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: response.output_text.delta\ndata: {"delta":"discard this"}\n\n',
+				'event: response.completed\ndata: {"response":{"usage":{"input_tokens":1200,"output_tokens":1}}}\n\n'
+			)
+		);
+		const target = makeTarget("openai", "gpt-5.6", undefined, {
+			maxOutputTokens: 600,
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+			thinkingLevel: "high",
+		});
+		const request = {
+			messages: [
+				{
+					content: [{ text: "current prompt", type: "text" as const }],
+					role: "user" as const,
+				},
+			],
+			promptCacheKey: "session-key",
+			system: "stable instructions",
+			target,
+			tools: [lookupTool],
+		};
+
+		const usage = await warmModelRequest(
+			request,
+			createModelClient({ fetch: mock.fetch })
+		);
+
+		expect(usage).toEqual({ inputTokens: 1200, outputTokens: 1 });
+		expect(responseBody(mock)).toMatchObject({
+			max_output_tokens: 1,
+			prompt_cache_key: "session-key",
+			prompt_cache_options: { mode: "explicit", ttl: "30m" },
+			reasoning: { summary: "detailed" },
+			tools: [{ name: "lookup", type: "function" }],
+		});
+		expect(JSON.stringify(responseBody(mock))).toContain("stable instructions");
+		expect(JSON.stringify(responseBody(mock))).toContain("current prompt");
+		expect(JSON.stringify(responseBody(mock))).not.toContain("discard this");
+	});
+
+	test("bounds a thinking-enabled Anthropic warm request without an invalid reasoning budget", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":1200}}}\n\n',
+				'event: message_delta\ndata: {"usage":{"output_tokens":1}}\n\n',
+				"event: message_stop\ndata: {}\n\n"
+			)
+		);
+		const target = makeTarget("anthropic", "claude-sonnet-4-6", undefined, {
+			maxOutputTokens: 600,
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+			thinkingLevel: "high",
+		});
+
+		await warmModelRequest(
+			{
+				messages: [
+					{ content: [{ text: "current prompt", type: "text" }], role: "user" },
+				],
+				system: "stable instructions",
+				target,
+			},
+			createModelClient({ fetch: mock.fetch })
+		);
+
+		expect(responseBody(mock)).toMatchObject({ max_tokens: 1 });
+		expect(responseBody(mock).thinking).toBeUndefined();
+		expect(responseBody(mock).output_config).toBeUndefined();
+		expect(JSON.stringify(responseBody(mock))).toContain("cache_control");
+	});
+
+	test("does not retry a cache-control rejection for a warm request", async () => {
+		let calls = 0;
+		const client = createModelClient({
+			fetch: (async () => {
+				calls += 1;
+				return new Response(
+					JSON.stringify({
+						error: { message: "Unsupported prompt cache option" },
+					}),
+					{ status: 400 }
+				);
+			}) as unknown as typeof fetch,
+		});
+		const target = makeTarget("openai", "gpt-5.6", undefined, {
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+		});
+
+		await expect(
+			warmModelRequest(
+				{
+					messages: [],
+					promptCacheKey: "session-key",
+					target,
+				},
+				client
+			)
+		).rejects.toThrow("Unsupported prompt cache option");
+		expect(calls).toBe(1);
+	});
+
 	test("streams Responses text, reasoning, tool calls, and normalized usage", async () => {
 		const wire = [
 			": keep-alive\r\n\r\n",
@@ -113,7 +278,7 @@ describe("native model client routes", () => {
 			'event: response.output_text.delta\r\ndata: {"delta":"Hello"}\r\n\r\n',
 			'event: response.reasoning_summary_text.delta\r\ndata: {"delta":"Checking"}\r\n\r\n',
 			'event: response.output_item.done\r\ndata: {"item":{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\\"query\\":\\"x\\"}"}}\r\n\r\n',
-			'event: response.completed\r\ndata: {"response":{"usage":{"input_tokens":11,"output_tokens":5,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}}}\r\n\r\n',
+			'event: response.completed\r\ndata: {"response":{"usage":{"input_tokens":11,"output_tokens":5,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":3},"output_tokens_details":{"reasoning_tokens":1}}}}\r\n\r\n',
 		].join("");
 		const mock = mockFetch(
 			sseResponse(wire.slice(0, 29), wire.slice(29, 211), wire.slice(211))
@@ -188,12 +353,76 @@ describe("native model client routes", () => {
 				type: "finish",
 				usage: {
 					cacheReadTokens: 2,
+					cacheWriteTokens: 3,
 					inputTokens: 11,
 					outputTokens: 5,
 					reasoningTokens: 1,
 				},
 			},
 		]);
+	});
+
+	test("serializes OpenAI cache controls only for declared Responses capabilities", async () => {
+		const mock = mockFetch(sseResponse("data: [DONE]\n\n"));
+		const target = {
+			...makeTarget("openai", "gpt-5.6-luna"),
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+		} as ModelTarget;
+
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			target,
+			[{ content: [{ text: "Question", type: "text" }], role: "user" }],
+			{
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			}
+		);
+
+		const body = responseBody(mock);
+		expect(body.prompt_cache_key).toBe("wincode-session:session-123");
+		expect(body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" });
+		expect(body.instructions).toBeUndefined();
+		expect(body.input).toEqual([
+			{
+				content: [
+					{
+						prompt_cache_breakpoint: { mode: "explicit" },
+						text: "Stable instructions",
+						type: "input_text",
+					},
+				],
+				role: "developer",
+				type: "message",
+			},
+			{
+				content: [{ text: "Question", type: "input_text" }],
+				role: "user",
+				type: "message",
+			},
+		]);
+	});
+
+	test("off omits Wincode OpenAI controls while leaving implicit caching to OpenAI", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
+			)
+		);
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			makeTarget("openai", "gpt-5.6-luna"),
+			[{ content: [{ text: "Question", type: "text" }], role: "user" }],
+			{
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			}
+		);
+
+		expect(JSON.stringify(responseBody(mock))).not.toMatch(
+			openAIPromptCacheControlPattern
+		);
 	});
 
 	test("keeps provider defaults without a selected Thinking level", async () => {
@@ -551,7 +780,7 @@ describe("native model client routes", () => {
 	test("maps Anthropic messages, documents, tools, thinking, and usage", async () => {
 		const mock = mockFetch(
 			sseResponse(
-				'event: message_start\ndata: {"message":{"usage":{"input_tokens":18,"cache_read_input_tokens":3}}}\n\n',
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":18,"cache_read_input_tokens":3,"cache_creation_input_tokens":5}}}\n\n',
 				'event: content_block_start\ndata: {"index":0,"content_block":{"type":"thinking"}}\n\n',
 				'event: content_block_delta\ndata: {"index":0,"delta":{"type":"thinking_delta","thinking":"Plan"}}\n\n',
 				'event: content_block_delta\ndata: {"index":0,"delta":{"type":"signature_delta","signature":"signed-thought"}}\n\n',
@@ -655,7 +884,12 @@ describe("native model client routes", () => {
 		const finish = parts.at(-1);
 		expect(finish).toMatchObject({
 			type: "finish",
-			usage: { cacheReadTokens: 3, inputTokens: 18, outputTokens: 7 },
+			usage: {
+				cacheReadTokens: 3,
+				cacheWriteTokens: 5,
+				inputTokens: 26,
+				outputTokens: 7,
+			},
 		});
 		if (finish?.type !== "finish") {
 			throw new Error("Expected Anthropic stream to finish.");
@@ -675,6 +909,424 @@ describe("native model client routes", () => {
 		);
 	});
 
+	test("marks only reusable Anthropic prompt prefixes with the selected TTL", async () => {
+		const mock = mockFetch(
+			sseResponse(
+				'event: message_start\ndata: {"message":{"usage":{"input_tokens":2}}}\n\n',
+				"event: message_stop\ndata: {}\n\n"
+			)
+		);
+		const target = promptCacheTarget(
+			makeTarget("anthropic", "claude-opus-4-5"),
+			"long"
+		);
+
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			target,
+			[
+				{ content: [{ text: "old request", type: "text" }], role: "user" },
+				{
+					content: [{ text: "prior answer", type: "text" }],
+					role: "assistant",
+				},
+				{ content: [{ text: "current request", type: "text" }], role: "user" },
+			],
+			{
+				system: "Stable system instructions",
+				tools: [lookupTool],
+			}
+		);
+
+		const body = responseBody(mock);
+		expect(body.system).toEqual([
+			{
+				cache_control: { ttl: "1h", type: "ephemeral" },
+				text: "Stable system instructions",
+				type: "text",
+			},
+		]);
+		expect(body.tools).toEqual([
+			{
+				cache_control: { ttl: "1h", type: "ephemeral" },
+				description: lookupTool.description,
+				input_schema: lookupTool.inputSchema,
+				name: lookupTool.name,
+			},
+		]);
+		expect(body.messages).toEqual([
+			{
+				content: [{ text: "old request", type: "text" }],
+				role: "user",
+			},
+			{
+				content: [
+					{
+						cache_control: { ttl: "1h", type: "ephemeral" },
+						text: "prior answer",
+						type: "text",
+					},
+				],
+				role: "assistant",
+			},
+			{
+				content: [{ text: "current request", type: "text" }],
+				role: "user",
+			},
+		]);
+	});
+
+	test("does not mark empty Anthropic blocks as cacheable breakpoints", async () => {
+		const mock = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			promptCacheTarget(makeTarget("anthropic", "claude-opus-4-5"), "short"),
+			[{ content: [{ text: "", type: "text" }], role: "user" }],
+			{ system: "" }
+		);
+		expect(JSON.stringify(responseBody(mock))).not.toContain("cache_control");
+	});
+
+	test("retries an OpenAI cache-specific rejection once without cache controls", async () => {
+		const responses = [
+			new Response(
+				JSON.stringify({
+					type: "error",
+					error: {
+						type: "invalid_request_error",
+						message: "prompt_cache_key is not supported for this request",
+					},
+				}),
+				{ status: 400 }
+			),
+			sseResponse(
+				'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
+			),
+		];
+		const requests: RequestInit[] = [];
+		const fetch = (async (
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			if (init) {
+				requests.push(init);
+			}
+			const response = responses.shift();
+			if (!response) {
+				throw new Error("unexpected provider retry");
+			}
+			return response;
+		}) as typeof globalThis.fetch;
+		const target = {
+			...makeTarget("openai", "gpt-5.6-luna"),
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+		} as ModelTarget;
+
+		await collect(
+			createModelClient({ fetch }),
+			target,
+			[{ content: [{ text: "Question", type: "text" }], role: "user" }],
+			{
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			}
+		);
+
+		expect(requests).toHaveLength(2);
+		expect(String(requests[0]?.body)).toContain("prompt_cache_key");
+		expect(String(requests[1]?.body)).not.toMatch(
+			openAIPromptCacheControlPattern
+		);
+	});
+
+	test("does not retry unrelated or post-output OpenAI failures", async () => {
+		const target = {
+			...makeTarget("openai", "gpt-5.6-luna"),
+			promptCacheEnabled: true,
+			promptCacheRetention: "short",
+		} as ModelTarget;
+		let unrelatedRequests = 0;
+		const unrelatedFetch = (async (
+			_input: Request | string | URL,
+			_options?: RequestInit
+		) => {
+			unrelatedRequests += 1;
+			return new Response(
+				JSON.stringify({
+					error: {
+						type: "invalid_request_error",
+						message: "invalid model argument",
+					},
+				}),
+				{ status: 400 }
+			);
+		}) as typeof globalThis.fetch;
+		await expect(
+			collect(createModelClient({ fetch: unrelatedFetch }), target, [], {
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			})
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(unrelatedRequests).toBe(1);
+
+		let postOutputRequests = 0;
+		const postOutputFetch = (async (
+			_input: Request | string | URL,
+			_options?: RequestInit
+		) => {
+			postOutputRequests += 1;
+			return sseResponse(
+				'event: response.output_text.delta\ndata: {"delta":"partial"}\n\n',
+				'event: response.failed\ndata: {"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"prompt_cache_key rejected"}}}\n\n'
+			);
+		}) as typeof globalThis.fetch;
+		await expect(
+			collect(createModelClient({ fetch: postOutputFetch }), target, [], {
+				promptCacheKey: "wincode-session:session-123",
+				system: "Stable instructions",
+			})
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(postOutputRequests).toBe(1);
+	});
+
+	test("uses Anthropic's default five-minute lifetime for short retention", async () => {
+		const mock = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			promptCacheTarget(makeTarget("anthropic", "claude-opus-4-5"), "short"),
+			[{ content: [{ text: "request", type: "text" }], role: "user" }],
+			{ system: "Stable instructions" }
+		);
+
+		expect(responseBody(mock).system).toEqual([
+			{
+				cache_control: { type: "ephemeral" },
+				text: "Stable instructions",
+				type: "text",
+			},
+		]);
+	});
+
+	test("does not send cache controls when Anthropic caching is off or unsupported", async () => {
+		const direct = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
+		await collect(
+			createModelClient({ fetch: direct.fetch }),
+			makeTarget("anthropic", "claude-opus-4-5")
+		);
+		expect(JSON.stringify(responseBody(direct))).not.toContain("cache_control");
+
+		const opencode = mockFetch(
+			sseResponse("event: message_stop\ndata: {}\n\n")
+		);
+		await collect(
+			createModelClient({ fetch: opencode.fetch }),
+			promptCacheTarget(makeTarget("opencode-go", "minimax-m3"), "short"),
+			[{ content: [{ text: "request", type: "text" }], role: "user" }],
+			{ system: "Stable instructions" }
+		);
+		expect(opencode.url).toBe("https://opencode.ai/zen/go/v1/messages");
+		expect(JSON.stringify(responseBody(opencode))).not.toContain(
+			"cache_control"
+		);
+	});
+
+	test("retries a cache-specific rejection once without controls before output", async () => {
+		const responses = [
+			new Response(
+				JSON.stringify({
+					type: "error",
+					error: {
+						type: "invalid_request_error",
+						message: "cache_control is unsupported for this request",
+					},
+				}),
+				{ status: 400 }
+			),
+			sseResponse("event: message_stop\ndata: {}\n\n"),
+		];
+		const requests: RequestInit[] = [];
+		const fetch = (async (
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			if (init) {
+				requests.push(init);
+			}
+			const response = responses.shift();
+			if (!response) {
+				throw new Error("unexpected provider retry");
+			}
+			return response;
+		}) as typeof globalThis.fetch;
+		const target = promptCacheTarget(
+			makeTarget("anthropic", "claude-opus-4-5"),
+			"short"
+		);
+
+		await collect(
+			createModelClient({ fetch }),
+			target,
+			[{ content: [{ text: "request", type: "text" }], role: "user" }],
+			{ system: "Stable instructions" }
+		);
+
+		expect(requests).toHaveLength(2);
+		expect(String(requests[0]?.body)).toContain("cache_control");
+		expect(String(requests[1]?.body)).not.toContain("cache_control");
+	});
+
+	test("does not retry unrelated or post-output Anthropic failures", async () => {
+		const requests: RequestInit[] = [];
+		const fetch = (async (
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			if (init) {
+				requests.push(init);
+			}
+			return new Response(
+				JSON.stringify({
+					type: "error",
+					error: { type: "authentication_error", message: "invalid key" },
+				}),
+				{ status: 401 }
+			);
+		}) as typeof globalThis.fetch;
+		await expect(
+			collect(
+				createModelClient({ fetch }),
+				promptCacheTarget(makeTarget("anthropic", "claude-opus-4-5"), "short"),
+				[{ content: [{ text: "request", type: "text" }], role: "user" }],
+				{ system: "Stable instructions" }
+			)
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(requests).toHaveLength(1);
+
+		let postOutputRequests = 0;
+		const postOutputFetch = (async (
+			_input: Request | string | URL,
+			_init?: RequestInit
+		) => {
+			postOutputRequests += 1;
+			return sseResponse(
+				'event: content_block_delta\ndata: {"index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n',
+				'event: error\ndata: {"type":"error","error":{"type":"invalid_request_error","message":"cache_control rejected"}}\n\n'
+			);
+		}) as typeof globalThis.fetch;
+		await expect(
+			collect(
+				createModelClient({ fetch: postOutputFetch }),
+				promptCacheTarget(makeTarget("anthropic", "claude-opus-4-5"), "short"),
+				[{ content: [{ text: "request", type: "text" }], role: "user" }],
+				{ system: "Stable instructions" }
+			)
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(postOutputRequests).toBe(1);
+	});
+
+	test("retries an expired Google CachedContent rejection once without the resource", async () => {
+		const responses = [
+			new Response(
+				JSON.stringify({
+					error: { message: "cachedContent resource has expired" },
+				}),
+				{ status: 404 }
+			),
+			sseResponse('data: {"candidates":[{"finishReason":"STOP"}]}\n\n'),
+		];
+		const requests: RequestInit[] = [];
+		const fetch = (async (
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			if (init) {
+				requests.push(init);
+			}
+			const response = responses.shift();
+			if (!response) {
+				throw new Error("unexpected Google retry");
+			}
+			return response;
+		}) as typeof globalThis.fetch;
+		const invalidated: string[] = [];
+
+		await collect(
+			createModelClient({ fetch }),
+			makeTarget("google", "gemini-3.8-flash"),
+			[{ content: [{ text: "Current message", type: "text" }], role: "user" }],
+			{
+				googleCachedContent: {
+					name: "cachedContents/expired",
+					onRejected: (name) => {
+						invalidated.push(name);
+					},
+				},
+				system: "Stable instructions",
+				tools: [lookupTool],
+			}
+		);
+
+		expect(requests).toHaveLength(2);
+		expect(JSON.parse(String(requests[0]?.body))).toMatchObject({
+			cachedContent: "cachedContents/expired",
+		});
+		expect(JSON.parse(String(requests[1]?.body))).toMatchObject({
+			contents: [{ parts: [{ text: "Current message" }], role: "user" }],
+			systemInstruction: { parts: [{ text: "Stable instructions" }] },
+			tools: [
+				{
+					functionDeclarations: [
+						{ name: "lookup", parameters: lookupTool.inputSchema },
+					],
+				},
+			],
+		});
+		expect(JSON.stringify(JSON.parse(String(requests[1]?.body)))).not.toContain(
+			"cachedContent"
+		);
+		expect(invalidated).toEqual(["cachedContents/expired"]);
+	});
+
+	test("does not retry a Google CachedContent request for unrelated provider failures", async () => {
+		let requests = 0;
+		const fetch = (async (
+			_input: Request | string | URL,
+			_init?: RequestInit
+		) => {
+			requests += 1;
+			return new Response(
+				JSON.stringify({ error: { message: "Permission denied for API key" } }),
+				{ status: 403 }
+			);
+		}) as typeof globalThis.fetch;
+
+		await expect(
+			collect(
+				createModelClient({ fetch }),
+				makeTarget("google", "gemini-3.8-flash"),
+				[],
+				{ googleCachedContent: { name: "cachedContents/resource" } }
+			)
+		).rejects.toBeInstanceOf(ModelProviderError);
+		expect(requests).toBe(1);
+	});
+
+	test("keeps one-off text-generation requests uncached for compaction summaries", async () => {
+		const mock = mockFetch(sseResponse("event: message_stop\ndata: {}\n\n"));
+		await generateModelText(
+			{
+				model: makeTarget("anthropic", "claude-opus-4-5"),
+				maxOutputTokens: 128,
+				prompt: "Summarize the transcript.",
+				system: "Summarize only.",
+			},
+			createModelClient({ fetch: mock.fetch })
+		);
+		const body = responseBody(mock);
+		expect(JSON.stringify(body)).not.toContain("cache_control");
+	});
+
 	test("keeps budget-only Anthropic reasoning automatic without a selection", async () => {
 		const mock = mockFetch(
 			sseResponse(
@@ -692,11 +1344,43 @@ describe("native model client routes", () => {
 		expect(body.output_config).toBeUndefined();
 	});
 
-	test("uses Google GenerateContent with thinking, files, functions, and thought deltas", async () => {
+	test("references selected CachedContent without freezing Session history", async () => {
+		const mock = mockFetch(
+			sseResponse('data: {"candidates":[{"finishReason":"STOP"}]}\n\n')
+		);
+		await collect(
+			createModelClient({ fetch: mock.fetch }),
+			makeTarget("google", "gemini-3.8-flash"),
+			[
+				{
+					content: [{ text: "Current Session message", type: "text" }],
+					role: "user",
+				},
+			],
+			{
+				googleCachedContent: { name: "cachedContents/session-prefix" },
+				system: "Stable system instructions",
+				tools: [lookupTool],
+			}
+		);
+
+		const body = responseBody(mock);
+		expect(body.cachedContent).toBe("cachedContents/session-prefix");
+		expect(body.contents).toEqual([
+			{
+				parts: [{ text: "Current Session message" }],
+				role: "user",
+			},
+		]);
+		expect(body.systemInstruction).toBeUndefined();
+		expect(body.tools).toBeUndefined();
+	});
+
+	test("reports Google cached-token usage even without explicit CachedContent", async () => {
 		const mock = mockFetch(
 			sseResponse(
 				'data: {"candidates":[{"content":{"parts":[{"text":"Think","thought":true,"thoughtSignature":"signed-google"},{"text":"Answer"},{"functionCall":{"name":"lookup","args":{"query":"x"}}}]}}]}\n\n',
-				'data: {"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":6,"thoughtsTokenCount":2,"totalTokenCount":15}}\n\n'
+				'data: {"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":6,"thoughtsTokenCount":2,"totalTokenCount":15,"cachedContentTokenCount":2}}\n\n'
 			)
 		);
 		const client = createModelClient({ fetch: mock.fetch });
@@ -767,6 +1451,7 @@ describe("native model client routes", () => {
 		expect(finish).toMatchObject({
 			type: "finish",
 			usage: {
+				cacheReadTokens: 2,
 				inputTokens: 9,
 				outputTokens: 6,
 				reasoningTokens: 2,
@@ -803,7 +1488,18 @@ describe("native model client routes", () => {
 			thinkingLevel: "high",
 		});
 
-		await collect(client, target);
+		await collect(
+			client,
+			{
+				...target,
+				promptCacheEnabled: true,
+				promptCacheRetention: "short",
+			} as ModelTarget,
+			[],
+			{
+				promptCacheKey: "wincode-session:session-123",
+			}
+		);
 
 		expect(mock.url).toBe("https://opencode.ai/zen/go/v1/responses");
 		expect(new Headers(mock.init?.headers).get("authorization")).toBe(
@@ -814,6 +1510,9 @@ describe("native model client routes", () => {
 			max_output_tokens: 320,
 			reasoning: { effort: "high", summary: "detailed" },
 		});
+		expect(JSON.stringify(responseBody(mock))).not.toMatch(
+			openAIPromptCacheControlPattern
+		);
 	});
 
 	test("routes OpenCode Go Anthropic models through Messages", async () => {
@@ -899,7 +1598,7 @@ describe("native model client routes", () => {
 				'data: {"choices":[{"delta":{"reasoning_content":"Reason"}}]}\n\n',
 				'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\\"query\\":"}}]}}]}\n\n',
 				'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"x\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
-				'data: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2},"completion_tokens_details":{"reasoning_tokens":1}}}\n\n',
+				'data: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2,"cache_write_tokens":1},"completion_tokens_details":{"reasoning_tokens":1}}}\n\n',
 				"data: [DONE]\n\n"
 			)
 		);
@@ -975,6 +1674,7 @@ describe("native model client routes", () => {
 				type: "finish",
 				usage: {
 					cacheReadTokens: 2,
+					cacheWriteTokens: 1,
 					inputTokens: 8,
 					outputTokens: 4,
 					reasoningTokens: 1,

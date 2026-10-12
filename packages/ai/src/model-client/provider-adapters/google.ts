@@ -25,5 +25,6 @@ const createGoogleRequest = (context: ProviderRequestContext) => {
 
 export const googleAdapter = {
 	defaultStrategy: DEFAULT_STRATEGY,
+	strategyForModel: () => DEFAULT_STRATEGY,
 	createRequest: createGoogleRequest,
 } satisfies ConnectionProviderAdapter<"google">;

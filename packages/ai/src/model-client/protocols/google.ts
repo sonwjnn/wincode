@@ -5,6 +5,7 @@ import type {
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
+import { googlePromptCacheStrategy } from "./google-prompt-cache";
 import {
 	base64,
 	incompleteStreamError,
@@ -220,25 +221,30 @@ const serializeGoogle = (
 	const body: JsonRecord = {
 		contents: googleContents(request.messages),
 	};
-	if (request.system !== undefined) {
-		body.systemInstruction = { parts: [{ text: request.system }] };
+	if (request.googleCachedContent === undefined) {
+		if (request.system !== undefined) {
+			body.systemInstruction = { parts: [{ text: request.system }] };
+		}
+		const tools = request.tools?.map((tool) => ({
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.inputSchema,
+		}));
+		if (tools && tools.length > 0) {
+			body.tools = [{ functionDeclarations: tools }];
+		}
+	} else {
+		body.cachedContent = request.googleCachedContent.name;
 	}
 	if (Object.keys(generationConfig).length > 0) {
 		body.generationConfig = generationConfig;
-	}
-	const tools = request.tools?.map((tool) => ({
-		name: tool.name,
-		description: tool.description,
-		parameters: tool.inputSchema,
-	}));
-	if (tools && tools.length > 0) {
-		body.tools = [{ functionDeclarations: tools }];
 	}
 	return body;
 };
 
 export const googleStrategy = {
 	protocol: "google",
+	promptCache: googlePromptCacheStrategy,
 	serialize: serializeGoogle,
 	stream: googleStream,
 } satisfies ModelProtocolStrategy<"google">;

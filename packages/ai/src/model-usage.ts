@@ -65,7 +65,7 @@ const nestedToken = (
 	key: string
 ): number | undefined => nonNegativeInteger(value?.[key]);
 
-/** Normalize provider usage without exposing provider-specific types. */
+/** Normalize provider usage while preserving canonical fields on repeated passes. */
 export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 	const usage = objectValue(value);
 	const inputTokens = nonNegativeInteger(usage?.inputTokens);
@@ -77,8 +77,11 @@ export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 	const outputDetails = objectValue(usage?.outputTokenDetails);
 	const cacheReadTokens =
 		nestedToken(inputDetails, "cacheReadTokens") ??
+		nonNegativeInteger(usage?.cacheReadTokens) ??
 		nonNegativeInteger(usage?.cachedInputTokens);
-	const cacheWriteTokens = nestedToken(inputDetails, "cacheWriteTokens");
+	const cacheWriteTokens =
+		nestedToken(inputDetails, "cacheWriteTokens") ??
+		nonNegativeInteger(usage?.cacheWriteTokens);
 	const reasoningTokens =
 		nestedToken(outputDetails, "reasoningTokens") ??
 		nonNegativeInteger(usage?.reasoningTokens);
@@ -122,13 +125,24 @@ export const calculateModelUsageCostUsd = (
 		tiers
 			?.filter((candidate) => totalInput > candidate.inputTokensAbove)
 			.at(-1) ?? cost;
+	const cacheReadRate = rates.cacheRead ?? cost.cacheRead;
+	const cacheWriteRate = rates.cacheWrite ?? cost.cacheWrite;
+	let cacheReadCost = 0;
+	if (cacheRead > 0) {
+		if (cacheReadRate === undefined) {
+			return null;
+		}
+		cacheReadCost = (cacheRead / TOKENS_PER_MILLION) * cacheReadRate;
+	}
+	let cacheWriteCost = 0;
+	if (cacheWrite > 0) {
+		if (cacheWriteRate === undefined) {
+			return null;
+		}
+		cacheWriteCost = (cacheWrite / TOKENS_PER_MILLION) * cacheWriteRate;
+	}
 	const inputCost = (uncachedInput / TOKENS_PER_MILLION) * rates.input;
 	const outputCost = (usage.outputTokens / TOKENS_PER_MILLION) * rates.output;
-	const cacheReadCost =
-		(cacheRead / TOKENS_PER_MILLION) * (rates.cacheRead ?? cost.cacheRead ?? 0);
-	const cacheWriteCost =
-		(cacheWrite / TOKENS_PER_MILLION) *
-		(rates.cacheWrite ?? cost.cacheWrite ?? 0);
 	return inputCost + outputCost + cacheReadCost + cacheWriteCost;
 };
 

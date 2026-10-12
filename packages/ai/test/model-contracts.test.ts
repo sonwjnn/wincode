@@ -11,6 +11,7 @@ import {
 	findSupportedChatModelSelection,
 	formatModelTokenCount,
 	getModelContextTokens,
+	getModelMetadata,
 	getSupportedThinkingLevels,
 	modelCatalog,
 	modelFailureSchema,
@@ -19,8 +20,11 @@ import {
 	normalizeModelFailure,
 	normalizeModelUsage,
 	normalizeThinkingLevel,
+	promptCachePolicySchema,
 	resolveAgentModelSelection,
 	resolveModelProviderOptions,
+	resolvePromptCacheControls,
+	resolvePromptCacheRetention,
 	supportedChatModelIdSchema,
 	thinkingLevelIds,
 	thinkingLevelSchema,
@@ -484,6 +488,134 @@ describe("focused model contracts", () => {
 		});
 	});
 
+	test("preserves only capability-supported prompt-cache retention on Model Targets", () => {
+		const authorization = { apiKey: "cache-key", kind: "api-key" } as const;
+		const opus = createModelTarget(
+			{ modelId: modelId("claude-opus-4-5"), providerId: "anthropic" },
+			authorization,
+			{ promptCacheRetention: "long" }
+		);
+		const unsupported = createModelTarget(
+			{ modelId: modelId("minimax-m3"), providerId: "opencode-go" },
+			authorization,
+			{ promptCacheRetention: "long" }
+		);
+
+		expect(opus.promptCacheRetention).toBe("long");
+		expect(modelTargetSchema.safeParse(opus).success).toBe(true);
+		expect(unsupported.promptCacheRetention).toBeUndefined();
+	});
+
+	test("resolves model prompt-cache policy only for declared retention tiers", () => {
+		const opus = findModel("anthropic", "claude-opus-4-5");
+		const opencodeAnthropic = findModel("opencode-go", "minimax-m3");
+
+		expect(getModelMetadata(opus)?.promptCache).toEqual({
+			explicit: { retentionTiers: ["short", "long"] },
+		});
+		expect(resolvePromptCacheRetention(opus)).toBe("short");
+		expect(
+			resolvePromptCacheRetention(opus, {
+				modelOverrides: { "anthropic/claude-opus-4-5": "long" },
+			})
+		).toBe("long");
+		expect(
+			resolvePromptCacheRetention(opus, {
+				modelOverrides: { "anthropic/claude-opus-4-5": "off" },
+			})
+		).toBeUndefined();
+		expect(getModelMetadata(opencodeAnthropic)?.promptCache).toBeUndefined();
+		expect(
+			resolvePromptCacheRetention(opencodeAnthropic, {
+				modelOverrides: { "opencode-go/minimax-m3": "long" },
+			})
+		).toBeUndefined();
+		expect(
+			promptCachePolicySchema.safeParse({
+				modelOverrides: { "anthropic/claude-opus-4-5": "long" },
+			}).success
+		).toBe(true);
+		expect(
+			promptCachePolicySchema.safeParse({
+				modelOverrides: { "anthropic/claude-opus-4-5": "unknown" },
+			}).success
+		).toBe(false);
+	});
+
+	test("declares explicit CachedContent only for the documented Gemini 3.8 Flash model", () => {
+		const gemini38 = findModel("google", "gemini-3.8-flash");
+		const gemini36 = findModel("google", "gemini-3.6-flash");
+		const gemini37 = findModel("google", "gemini-3.7-flash");
+
+		expect(getModelMetadata(gemini38)?.promptCache).toEqual({
+			explicit: { retentionTiers: ["short", "long"] },
+			googleCachedContent: {
+				ttl: { short: "300s", long: "3600s" },
+			},
+		});
+		expect(resolvePromptCacheControls(gemini38)).toEqual({
+			enabled: true,
+			retention: "short",
+		});
+		expect(
+			resolvePromptCacheControls(gemini38, {
+				modelOverrides: { "google/gemini-3.8-flash": "long" },
+			})
+		).toEqual({ enabled: true, retention: "long" });
+		expect(
+			resolvePromptCacheControls(gemini38, {
+				modelOverrides: { "google/gemini-3.8-flash": "off" },
+			})
+		).toEqual({ enabled: false });
+		expect(getModelMetadata(gemini36)?.promptCache).toBeUndefined();
+		expect(getModelMetadata(gemini37)?.promptCache).toBeUndefined();
+		expect(resolvePromptCacheControls(gemini36)).toEqual({ enabled: false });
+		expect(resolvePromptCacheControls(gemini37)).toEqual({ enabled: false });
+	});
+
+	test("declares OpenAI cache controls and eligibility by actual Model Protocol", () => {
+		const responsesModel = findModel("openai", "gpt-5.6-luna");
+		const opencodeResponsesModel = findModel("opencode-go", "gpt-5.6-luna");
+		const capabilities = getModelMetadata(responsesModel)?.promptCache;
+
+		expect(capabilities?.protocols?.["openai-responses"]).toEqual({
+			breakpoints: true,
+			eligibility: { minimumInputTokens: 1024 },
+			promptCacheKey: true,
+			retention: {
+				field: "prompt_cache_options.ttl",
+				values: { short: "30m" },
+			},
+		});
+		expect(resolvePromptCacheControls(responsesModel)).toEqual({
+			enabled: true,
+			retention: "short",
+		});
+		expect(
+			resolvePromptCacheControls(responsesModel, {
+				modelOverrides: { "openai/gpt-5.6-luna": "off" },
+			})
+		).toEqual({ enabled: false });
+		expect(
+			getModelMetadata(opencodeResponsesModel)?.promptCache
+		).toBeUndefined();
+
+		const enabled = createModelTarget(
+			{ modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+			{ apiKey: "cache-key", kind: "api-key" },
+			{ promptCacheEnabled: true, promptCacheRetention: "short" }
+		);
+		const unsupported = createModelTarget(
+			{ modelId: modelId("gpt-5.6-luna"), providerId: "opencode-go" },
+			{ apiKey: "cache-key", kind: "api-key" },
+			{ promptCacheEnabled: true, promptCacheRetention: "short" }
+		);
+		expect(enabled.promptCacheEnabled).toBe(true);
+		expect(enabled.promptCacheRetention).toBe("short");
+		expect(unsupported.promptCacheEnabled).toBeUndefined();
+		expect(unsupported.promptCacheRetention).toBeUndefined();
+	});
+
 	test("normalizes usage and keeps model accounting provider-neutral", () => {
 		const usage = normalizeModelUsage({
 			inputTokenDetails: { cacheReadTokens: 20, cacheWriteTokens: 5 },
@@ -504,10 +636,10 @@ describe("focused model contracts", () => {
 		expect(
 			usage &&
 				calculateModelUsageCostUsd(
-					{ cacheRead: 0.1, input: 1, output: 2 },
+					{ cacheRead: 0.1, cacheWrite: 0.2, input: 1, output: 2 },
 					usage
 				)
-		).toBeCloseTo(0.000_127);
+		).toBeCloseTo(0.000_128);
 		expect(formatModelTokenCount(34_300)).toBe("34.3K");
 		expect(
 			normalizeModelUsage({
@@ -522,6 +654,40 @@ describe("focused model contracts", () => {
 			outputTokens: 2,
 			reasoningTokens: 1,
 		});
+	});
+
+	test("preserves normalized cache counts when re-normalizing a ModelClient result", () => {
+		const usage = {
+			cacheReadTokens: 20,
+			cacheWriteTokens: 5,
+			inputTokens: 100,
+			outputTokens: 25,
+			reasoningTokens: 10,
+			totalTokens: 125,
+		};
+
+		expect(normalizeModelUsage(usage)).toEqual(usage);
+	});
+
+	test("keeps cached input cost unknown when a category rate is unpublished", () => {
+		const usage = normalizeModelUsage({
+			inputTokenDetails: { cacheReadTokens: 20, cacheWriteTokens: 5 },
+			inputTokens: 100,
+			outputTokens: 25,
+		});
+		if (!usage) {
+			throw new Error("Expected normalized model usage.");
+		}
+
+		expect(
+			calculateModelUsageCostUsd({ cacheRead: 0.1, input: 1, output: 2 }, usage)
+		).toBeNull();
+		expect(
+			calculateModelUsageCostUsd(
+				{ cacheWrite: 0.2, input: 1, output: 2 },
+				usage
+			)
+		).toBeNull();
 	});
 
 	test("normalizes failures without exposing provider diagnostics", () => {

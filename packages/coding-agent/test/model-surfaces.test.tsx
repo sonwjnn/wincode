@@ -331,8 +331,12 @@ describe("session usage bar", () => {
 		contextLimit: 200_000,
 		contextPercent: 42,
 		contextTokens: 84_000,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		cacheWarmingStatus: "idle",
 		costUsd: null,
 		costedTurns: 0,
+		costedUsageEntries: 0,
 		...overrides,
 	});
 
@@ -349,6 +353,41 @@ describe("session usage bar", () => {
 		expect(frame).toContain("~$1.23");
 	});
 
+	test("shows cached reads and writes with estimated session cost", async () => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({
+					cacheReadTokens: 1200,
+					cacheWriteTokens: 100,
+					costUsd: 1.2345,
+				})}
+			/>
+		));
+
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("cache read 1.2K");
+		expect(frame).toContain("write 100");
+		expect(frame).toContain("~$1.23");
+	});
+
+	test("shows cache warming status and cost without changing context", async () => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({
+					cacheWarmingStatus: "scheduled",
+					contextPercent: 42,
+					contextTokens: 84_000,
+					costUsd: 1.25,
+				})}
+			/>
+		));
+
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("42%(84K/200K)");
+		expect(frame).toContain("cache warming scheduled");
+		expect(frame).toContain("~$1.25");
+	});
+
 	test("shows the requested used/limit context and omits unknown cost", async () => {
 		const setup = await renderSurfaces(() => (
 			<SessionUsageBar
@@ -362,6 +401,7 @@ describe("session usage bar", () => {
 
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("29%(79K/272K)");
+		expect(frame).not.toContain("cache read");
 		expect(frame).not.toContain("$");
 	});
 

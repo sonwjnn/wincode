@@ -1,17 +1,26 @@
 export class ModelProviderError extends Error {
+	readonly cacheControlRejected: boolean;
 	readonly retryAfterMs: number | undefined;
 	readonly statusCode: number | undefined;
 
 	constructor(
 		message: string,
-		metadata: { retryAfterMs?: number; statusCode?: number } = {}
+		metadata: {
+			cacheControlRejected?: boolean;
+			retryAfterMs?: number;
+			statusCode?: number;
+		} = {}
 	) {
 		super(message);
 		this.name = "ModelProviderError";
+		this.cacheControlRejected = metadata.cacheControlRejected ?? false;
 		this.retryAfterMs = metadata.retryAfterMs;
 		this.statusCode = metadata.statusCode;
 	}
 }
+
+const CACHE_CONTROL_TERMS =
+	/\b(cache[_ -]control|cached[_ -]?content|cache resource|prompt[_ -]cache(?:[_ -](?:key|options|breakpoint|retention))?|prompt caching|cache breakpoints?|cache ttl|cache retention|cache duration)\b/iu;
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
 	typeof value === "object" && value !== null
@@ -112,6 +121,42 @@ const messageFromPayload = (payload: unknown): string | undefined => {
 	);
 };
 
+export const isCacheControlRejectionDetails = (
+	message: string,
+	statusCode: number | undefined,
+	classification = ""
+): boolean => {
+	const namesCacheControl = CACHE_CONTROL_TERMS.test(
+		`${classification} ${message}`
+	);
+	const isCacheRejection =
+		statusCode === 400 ||
+		statusCode === 404 ||
+		statusCode === 422 ||
+		classification.includes("invalid_request");
+	return namesCacheControl && isCacheRejection;
+};
+
+const isCacheControlRejectionPayload = (
+	payload: unknown,
+	statusCode: number | undefined
+): boolean => {
+	const root = record(payload);
+	const response = record(root?.response);
+	const error = record(root?.error) ?? record(response?.error);
+	const classification = [root?.type, error?.type, error?.code]
+		.filter((value): value is string => typeof value === "string")
+		.join(" ")
+		.toLowerCase();
+	const message = messageFromPayload(payload) ?? "";
+	return isCacheControlRejectionDetails(message, statusCode, classification);
+};
+
+export const isCacheControlRejection = (
+	error: unknown
+): error is ModelProviderError =>
+	error instanceof ModelProviderError && error.cacheControlRejected;
+
 export const httpErrorFromResponse = async (
 	response: Response
 ): Promise<ModelProviderError> => {
@@ -128,6 +173,10 @@ export const httpErrorFromResponse = async (
 			? `Model provider request failed (${response.status}): ${message}`
 			: `Model provider request failed (${response.status}).`,
 		{
+			cacheControlRejected: isCacheControlRejectionPayload(
+				payload,
+				response.status
+			),
 			retryAfterMs: retryAfterMsFromHeader(response.headers.get("retry-after")),
 			statusCode: response.status,
 		}
@@ -195,6 +244,10 @@ export const providerEventError = (
 		statusCode
 			? `Model provider stream failed (${statusCode}): ${message}`
 			: message,
-		{ retryAfterMs, statusCode }
+		{
+			cacheControlRejected: isCacheControlRejectionPayload(payload, statusCode),
+			retryAfterMs,
+			statusCode,
+		}
 	);
 };

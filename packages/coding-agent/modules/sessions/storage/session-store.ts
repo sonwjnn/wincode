@@ -8,13 +8,14 @@ import type {
 	SessionSubmissionStatus,
 	SubmissionId,
 } from "@wincode/agent-core";
+import type { ModelUsage } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
 import type { EditMode, FileObservationStore } from "@/modules/tools";
-import type { SessionId } from "@/shared/identifiers";
+import type { SessionId, SessionUsageEntryId } from "@/shared/identifiers";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
@@ -65,6 +66,23 @@ export type UpdateSessionInput = {
 	title?: string;
 };
 
+/** Durable usage-only accounting that never projects into a Session Record. */
+export type SessionUsageEntry = Readonly<{
+	createdAt: Date;
+	id: SessionUsageEntryId;
+	kind: "cache-warm";
+	model: ChatModelSelection;
+	sessionId: SessionId;
+	usage: ModelUsage;
+}>;
+
+export type CreateSessionUsageEntryInput = Omit<
+	SessionUsageEntry,
+	"createdAt"
+> & {
+	createdAt?: Date;
+};
+
 /**
  * One semantic checkpoint: a Wincode Session Record for one accepted user
  * message, completed Tool Call, or terminal assistant outcome. The commit is
@@ -92,6 +110,12 @@ export type SessionStore = {
 		input: AppendSessionCompactionInput
 	) => Promise<SessionCompaction>;
 	createSession: (input: CreateSessionInput) => Promise<{ id: SessionId }>;
+	createSessionUsageEntry: (
+		input: CreateSessionUsageEntryInput
+	) => Promise<SessionUsageEntry>;
+	listSessionUsageEntries: (
+		sessionId: SessionId
+	) => Promise<SessionUsageEntry[]>;
 	createEmptySession: (
 		input: CreateEmptySessionInput
 	) => Promise<{ id: SessionId }>;

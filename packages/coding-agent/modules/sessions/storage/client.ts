@@ -299,6 +299,18 @@ const initializeSchema = (
 			ON session_record (session_id, turn_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_record_session_position
 			ON session_record (session_id, position);
+
+		CREATE TABLE IF NOT EXISTS session_usage_entry (
+			id TEXT PRIMARY KEY NOT NULL,
+			session_id TEXT NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			kind TEXT NOT NULL,
+			model_json TEXT NOT NULL,
+			usage_json TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_session_usage_entry_session_created
+			ON session_usage_entry (session_id, created_at);
 	`);
 	if (
 		!(

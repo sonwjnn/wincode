@@ -1,11 +1,14 @@
 import type { Tagged } from "type-fest";
 
 export type SessionId = Tagged<string, "SessionId">;
+export type SessionUsageEntryId = Tagged<string, "SessionUsageEntryId">;
 export type WorkspaceId = Tagged<string, "WorkspaceId">;
 export type CompactionId = Tagged<string, "CompactionId">;
 export type QueuedSubmissionId = Tagged<string, "QueuedSubmissionId">;
 export type SteeringMessageId = Tagged<string, "SteeringMessageId">;
 export const toSessionId = (value: string): SessionId => value as SessionId;
+export const toSessionUsageEntryId = (value: string): SessionUsageEntryId =>
+	value as SessionUsageEntryId;
 export const toWorkspaceId = (value: string): WorkspaceId =>
 	value as WorkspaceId;
 export const toCompactionId = (value: string): CompactionId =>

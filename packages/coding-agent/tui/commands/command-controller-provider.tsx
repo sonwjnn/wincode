@@ -155,6 +155,7 @@ export function CommandControllerProvider({
 						router.navigate({ to: "/" }).catch(() => undefined);
 					},
 					onCompact: options.onCompact,
+					onSelectModel: options.onSelectModel,
 					onReload: reloadResources,
 					onTrust: trustProject,
 					onOpenSettings: options.onOpenSettings,

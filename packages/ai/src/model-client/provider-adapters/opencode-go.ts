@@ -1,7 +1,8 @@
-import type { OpenCodeGoProtocol } from "../../models";
+import type { OpenCodeGoProtocol, SupportedChatModel } from "../../models";
 import { anthropicStrategy } from "../protocols/anthropic";
 import { openAIChatStrategy } from "../protocols/openai-chat";
 import { openAIResponsesStrategy } from "../protocols/openai-responses";
+import type { ModelProtocolStrategy } from "../protocols/types";
 import { anthropicOptionsFor, openAIOptionsFor, requireApiKey } from "./shared";
 import type {
 	ConnectionProviderAdapter,
@@ -25,6 +26,7 @@ const createResponsesRequest = (context: ProviderRequestContext) => {
 		{ ...jsonHeaders, authorization: `Bearer ${apiKey}` },
 		{
 			maxOutputTokens: context.maxOutputTokens,
+			model: context.model,
 			omitOutputTokenLimit: false,
 			providerOptions: openAIOptionsFor(context.providerOptions),
 			request: context.request,
@@ -65,53 +67,67 @@ const createChatRequest = (context: ProviderRequestContext) => {
 		{ ...jsonHeaders, authorization: `Bearer ${apiKey}` },
 		{
 			maxOutputTokens: context.maxOutputTokens,
+			model: context.model,
 			request: context.request,
 		}
 	);
 };
 
-const requestByCatalogProtocol = {
-	openai: createResponsesRequest,
-	anthropic: createAnthropicRequest,
-	"openai-compatible": createChatRequest,
-} satisfies Record<
-	OpenCodeGoProtocol,
-	(
+type OpenCodeGoProtocolRoute = Readonly<{
+	createRequest: (
 		context: ProviderRequestContext
-	) => ProviderRoute<ProviderProtocolById["opencode-go"]>
->;
+	) => ProviderRoute<ProviderProtocolById["opencode-go"]>;
+	strategy: ModelProtocolStrategy<ProviderProtocolById["opencode-go"]>;
+}>;
 
-const unsupportedProtocolRequest = (
-	context: ProviderRequestContext,
-	protocol: string
-): never => {
-	throw new Error(
-		`Unsupported model route: ${context.request.target.providerId}/${protocol}`
-	);
+const defaultRoute: OpenCodeGoProtocolRoute = {
+	createRequest: createChatRequest,
+	strategy: DEFAULT_STRATEGY,
 };
 
-const createOpenCodeGoRequest = (context: ProviderRequestContext) => {
-	if (context.model.provider !== "opencode-go") {
+const routeByCatalogProtocol = {
+	openai: {
+		createRequest: createResponsesRequest,
+		strategy: openAIResponsesStrategy,
+	},
+	anthropic: {
+		createRequest: createAnthropicRequest,
+		strategy: anthropicStrategy,
+	},
+	"openai-compatible": defaultRoute,
+} satisfies Record<OpenCodeGoProtocol, OpenCodeGoProtocolRoute>;
+
+const routeForOpenCodeGoModel = (
+	model: SupportedChatModel
+): OpenCodeGoProtocolRoute => {
+	if (model.provider !== "opencode-go") {
 		throw new Error(
-			`Unsupported model route: ${context.request.target.providerId}/${context.request.target.modelId}`
+			`Unsupported model route: ${model.connectionProviderId}/${model.id}`
 		);
 	}
-	const catalogProtocol =
-		"protocol" in context.model ? context.model.protocol : undefined;
-	const createRequest =
-		catalogProtocol === undefined
-			? createChatRequest
-			: requestByCatalogProtocol[catalogProtocol];
-	if (!createRequest) {
-		return unsupportedProtocolRequest(
-			context,
-			catalogProtocol ?? DEFAULT_STRATEGY.protocol
+	const catalogProtocol = "protocol" in model ? model.protocol : undefined;
+	if (catalogProtocol === undefined) {
+		return defaultRoute;
+	}
+	const route = routeByCatalogProtocol[catalogProtocol];
+	if (!route) {
+		throw new Error(
+			`Unsupported model route: ${model.connectionProviderId}/${catalogProtocol}`
 		);
 	}
-	return createRequest(context);
+	return route;
 };
+
+const strategyForOpenCodeGoModel = (
+	model: SupportedChatModel
+): ModelProtocolStrategy<ProviderProtocolById["opencode-go"]> =>
+	routeForOpenCodeGoModel(model).strategy;
+
+const createOpenCodeGoRequest = (context: ProviderRequestContext) =>
+	routeForOpenCodeGoModel(context.model).createRequest(context);
 
 export const openCodeGoAdapter = {
 	defaultStrategy: DEFAULT_STRATEGY,
+	strategyForModel: strategyForOpenCodeGoModel,
 	createRequest: createOpenCodeGoRequest,
 } satisfies ConnectionProviderAdapter<"opencode-go">;

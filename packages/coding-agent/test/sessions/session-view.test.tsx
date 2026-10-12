@@ -26,7 +26,7 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { toSubmissionId } from "@wincode/agent-core";
+import { type AgentId, toSubmissionId } from "@wincode/agent-core";
 import type {
 	ConnectionProviderSummary,
 	Connections,
@@ -43,7 +43,10 @@ import { ModelPricingProvider } from "@/modules/model-pricing";
 import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
 import { createPluginRuntime } from "@/modules/plugins/runtime";
-import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
+import {
+	PromptConfigProvider,
+	usePromptConfig,
+} from "@/modules/prompt-settings/context/prompt-config-provider";
 import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
@@ -106,6 +109,7 @@ type FakeSessionRun = {
 };
 
 let activeFakeSessionRun: FakeSessionRun | null = null;
+let fakeCacheWarmCancellations = 0;
 /** The compositions the view accepted while the turn ran, in order. */
 let fakeWaitingTexts: string[] = [];
 /** The same messages' full compositions, so a round trip can be asserted. */
@@ -306,6 +310,7 @@ const fakeUseAgentSessionModule: Pick<
 			[]
 		);
 		return {
+			cacheWarmingStatus: "idle",
 			cancel: () => undefined,
 			cancelCompaction: async () => [],
 			compact: async () => {
@@ -317,6 +322,7 @@ const fakeUseAgentSessionModule: Pick<
 			prompt,
 			steer,
 			send,
+			sessionUsageEntries: [],
 			snapshot: {
 				...opened,
 				queuedSubmissions,
@@ -373,6 +379,19 @@ function AgentRegistryReadyProbe({ onReady }: { onReady: () => void }) {
 	return null;
 }
 
+function PromptModelProbe({
+	onAgent,
+	onModel,
+}: {
+	onAgent?: (agent: AgentId) => void;
+	onModel: (model: ChatModelSelection) => void;
+}) {
+	const { agent, model } = usePromptConfig();
+	useEffect(() => onModel(model), [model, onModel]);
+	useEffect(() => onAgent?.(agent), [agent, onAgent]);
+	return null;
+}
+
 /** The strip's count line, e.g. `2 waiting`; the workspace path never has one. */
 const WAITING_COUNT_PATTERN = /\d+ waiting/u;
 /** A strip row of one lane, so a lane tag is read off the row it belongs to. */
@@ -409,6 +428,9 @@ const createFakeSessionHost = (
 ): SessionHost =>
 	fromPartial<SessionHost>({
 		agentSession: {},
+		cancelCacheWarming: () => {
+			fakeCacheWarmCancellations += 1;
+		},
 		getSelection: () => null,
 		getSnapshot: () => ({
 			catalogDiagnostic: null,
@@ -461,6 +483,7 @@ afterAll(() => {
 
 afterEach(() => {
 	activeFakeSessionRun = null;
+	fakeCacheWarmCancellations = 0;
 	fakeQueuedSeed = [];
 	fakeRunCompositions = [];
 	fakeRunInputs = [];
@@ -697,6 +720,7 @@ describe("SessionView initial submission", () => {
 				modelSelected = await bridge.setModel(selectedModel);
 			});
 			expect(modelSelected).toBe(true);
+			expect(fakeCacheWarmCancellations).toBe(1);
 			await act(async () => {
 				bridge.setThinkingLevel("low");
 			});
@@ -716,6 +740,224 @@ describe("SessionView initial submission", () => {
 		} finally {
 			release.resolve();
 			await flushUi(setup);
+			setup.renderer.destroy();
+			await pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: workspace });
+		}
+	});
+
+	test("built-in Model picker cancels cache warming when the Model Target changes", async () => {
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("gpt-6-luna"),
+			providerId: "openai",
+		};
+		let observedModel: ChatModelSelection = defaultChatModelSelection;
+		const recordModel = (model: ChatModelSelection): void => {
+			observedModel = model;
+		};
+		const workspace = process.cwd();
+		setInteractiveRuntimeContext({ args: [], cwd: workspace });
+		let registryIsReady = false;
+		const router = buildRouter();
+		await router.load();
+		const configStore = createTestConfigStore();
+		const setup = await testRender(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
+					<ToastProvider>
+						<ConnectionsProvider connections={createConnections()}>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<PromptConfigProvider
+										initialModel={defaultChatModelSelection}
+									>
+										<ModelPricingProvider>
+											<DialogProvider>
+												<RouterContextProvider router={router}>
+													<CommandControllerProvider>
+														<SessionView
+															host={createFakeSessionHost([])}
+															initialTranscript={[]}
+															sessionId={sessionId(
+																"model-picker-cancels-warming"
+															)}
+															sessionTitle="Change the selected Model Target"
+														/>
+														<PromptModelProbe onModel={recordModel} />
+														<AgentRegistryReadyProbe
+															onReady={() => {
+																registryIsReady = true;
+															}}
+														/>
+													</CommandControllerProvider>
+												</RouterContextProvider>
+											</DialogProvider>
+										</ModelPricingProvider>
+									</PromptConfigProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
+						</ConnectionsProvider>
+					</ToastProvider>
+				</ConfigProvider>
+			</ThemeProvider>,
+			{ height: 30, width: 100 }
+		);
+
+		try {
+			await setup.waitFor(() => registryIsReady);
+			await flushUi(setup);
+			await typePrompt(setup, "/models");
+			await setup.waitFor(() =>
+				setup.captureCharFrame().includes("Select AI model for generation")
+			);
+			await act(() => setup.mockInput.pressTab());
+			await setup.waitFor(() =>
+				setup.captureCharFrame().includes("Search models")
+			);
+			await act(async () => setup.mockInput.typeText("gpt-6-luna"));
+			await setup.waitFor(() =>
+				setup.captureCharFrame().includes("GPT-6 Luna")
+			);
+			await act(() => setup.mockInput.pressArrow("down"));
+			await act(() => setup.mockInput.pressEnter());
+			await setup.waitFor(
+				() => !setup.captureCharFrame().includes("Search models")
+			);
+			await flushUi(setup);
+			expect(observedModel).toMatchObject(selectedModel);
+			expect(fakeCacheWarmCancellations).toBe(1);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("built-in Agent picker cancels cache warming when the Agent changes", async () => {
+		const workspace = process.cwd();
+		const selectedAgent = agentId("cache-warming-agent");
+		let observedAgent: AgentId = agentId("build");
+		const recordAgent = (agent: AgentId): void => {
+			observedAgent = agent;
+		};
+		const recordModel = (_model: ChatModelSelection): void => undefined;
+		const pluginRuntime = createPluginRuntime(
+			[
+				{
+					agents: [
+						{
+							agent: {
+								description: "Agent that changes the prompt prefix.",
+								displayName: "Cache Warming Agent",
+								id: selectedAgent,
+								instructions: "Use the cache-warming test persona.",
+								role: "all",
+							},
+							model: "openai/gpt-5.6-luna",
+							source: {
+								path: "/plugins/cache-warming-agent.md",
+								scope: "user",
+							},
+						},
+					],
+					commands: [],
+					id: "cache-warming-agent-plugin",
+					sourcePath: "/plugins/cache-warming-agent.ts",
+					tools: [],
+					workspace,
+				},
+			],
+			[],
+			[],
+			[],
+			createPluginPromptSelectionBridge()
+		);
+		setInteractiveRuntimeContext({ args: [], cwd: workspace, pluginRuntime });
+		let registryIsReady = false;
+		const router = buildRouter();
+		await router.load();
+		const configStore = createTestConfigStore();
+		const connectedProvider: ConnectionProviderSummary = {
+			connected: true,
+			connectionMethod: "api-key",
+			displayName: "OpenAI",
+			id: "openai",
+			methods: ["api-key"],
+		};
+		const connections: Connections = {
+			...createConnections(),
+			listProviders: async () => [connectedProvider],
+		};
+		const setup = await testRender(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
+					<ToastProvider>
+						<ConnectionsProvider connections={connections}>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<PromptConfigProvider
+										initialAgent={agentId("build")}
+										initialModel={defaultChatModelSelection}
+									>
+										<ModelPricingProvider>
+											<DialogProvider>
+												<RouterContextProvider router={router}>
+													<CommandControllerProvider>
+														<SessionView
+															host={createFakeSessionHost([])}
+															initialTranscript={[]}
+															sessionId={sessionId(
+																"agent-picker-cancels-warming"
+															)}
+															sessionTitle="Change the selected Agent"
+														/>
+														<AgentRegistryReadyProbe
+															onReady={() => {
+																registryIsReady = true;
+															}}
+														/>
+														<PromptModelProbe
+															onAgent={recordAgent}
+															onModel={recordModel}
+														/>
+													</CommandControllerProvider>
+												</RouterContextProvider>
+											</DialogProvider>
+										</ModelPricingProvider>
+									</PromptConfigProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
+						</ConnectionsProvider>
+					</ToastProvider>
+				</ConfigProvider>
+			</ThemeProvider>,
+			{ height: 30, width: 100 }
+		);
+
+		try {
+			await setup.waitFor(() => registryIsReady);
+			await flushUi(setup);
+			await typePrompt(setup, "/agents");
+			await setup.waitFor(() =>
+				setup.captureCharFrame().includes("Switch agents")
+			);
+			await act(() => setup.mockInput.pressTab());
+			await setup.waitFor(() =>
+				setup.captureCharFrame().includes("Search agents")
+			);
+			await act(async () => setup.mockInput.typeText("Cache Warming Agent"));
+			await setup.waitFor(() =>
+				setup.captureCharFrame().includes("Cache Warming Agent")
+			);
+			await act(() => setup.mockInput.pressEnter());
+			await setup.waitFor(
+				() => !setup.captureCharFrame().includes("Search agents")
+			);
+			await setup.waitFor(() => observedAgent === selectedAgent);
+			expect(fakeCacheWarmCancellations).toBe(1);
+		} finally {
 			setup.renderer.destroy();
 			await pluginRuntime.shutdown();
 			setInteractiveRuntimeContext({ args: [], cwd: workspace });

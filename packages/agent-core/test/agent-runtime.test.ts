@@ -123,6 +123,58 @@ test("Agent Runtime streams model output and reports normalized step usage", asy
 	});
 });
 
+test("Agent Runtime isolates Session request observers from active Turns", async () => {
+	const { client, requests } = scriptedClient(() =>
+		scriptedParts({
+			type: "finish",
+			usage: { inputTokens: 2, outputTokens: 1 },
+		})
+	);
+	const started: ModelStepRequest[] = [];
+	const finished: {
+		request: ModelStepRequest;
+		usage: { inputTokens: number; outputTokens: number } | undefined;
+	}[] = [];
+	const events = await consume(
+		createAgentRuntime({ modelClient: client }).run(buildTurn(), {
+			modelStepObserver: {
+				onModelStepFinished: (request, usage) => {
+					finished.push({ request, usage });
+					throw new Error("usage observer failed");
+				},
+				onModelStepStarted: (request) => {
+					started.push(request);
+					throw new Error("request observer failed");
+				},
+			},
+		})
+	);
+
+	expect(events.at(-1)).toMatchObject({ type: "agent-turn-completed" });
+	expect(requests).toHaveLength(1);
+	expect(started).toEqual(requests);
+	expect(finished).toHaveLength(1);
+	expect(finished[0]?.request).toBe(requests[0]);
+	expect(finished[0]?.usage).toEqual({ inputTokens: 2, outputTokens: 1 });
+});
+
+test("Agent Runtime forwards the Session-stable prompt-cache key to each Model Step", async () => {
+	const { client, requests } = scriptedClient(() =>
+		scriptedParts({
+			type: "finish",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		})
+	);
+	await consume(
+		createAgentRuntime({ modelClient: client }).run(buildTurn(), {
+			promptCacheKey: "wincode-session:session-123",
+		})
+	);
+
+	expect(requests).toHaveLength(1);
+	expect(requests[0]?.promptCacheKey).toBe("wincode-session:session-123");
+});
+
 test("Agent Runtime delivers steering after tool results and continues the same turn", async () => {
 	const executionRequests: {
 		input: unknown;

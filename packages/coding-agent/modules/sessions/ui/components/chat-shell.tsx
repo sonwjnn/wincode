@@ -4,8 +4,10 @@ import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
+import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
 	useKeyboardLayer,
 	useToggleShortcut,
@@ -50,6 +52,7 @@ type ChatShellProps = {
 	isInterruptArmed: boolean;
 	messages: readonly SessionMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
+	onModelTargetChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 	promptHistory: PromptHistoryEntry[];
@@ -64,6 +67,8 @@ type ChatShellProps = {
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
 	viewId: string;
+	sessionUsageEntries?: readonly SessionUsageEntry[];
+	cacheWarmingStatus?: CacheWarmingStatus;
 };
 function ActivityFooter({
 	agent,
@@ -118,6 +123,7 @@ export function ChatShell({
 	isInterruptArmed,
 	messages,
 	onCompact,
+	onModelTargetChanged,
 	onOpenSettings,
 	onRetry,
 	promptHistory,
@@ -127,6 +133,8 @@ export function ChatShell({
 	recalledSubmissions,
 	recallRevision,
 	viewId,
+	sessionUsageEntries = [],
+	cacheWarmingStatus = "idle",
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const focusScopeId = `chat-shell-${viewId}`;
@@ -170,8 +178,15 @@ export function ChatShell({
 		canRetryMessage(latestRetryMessageId) &&
 		!isUndefined(onRetry);
 	const usage = useMemo(
-		() => summarizeSessionUsage(displayMessages, model, table),
-		[displayMessages, model, table]
+		() =>
+			summarizeSessionUsage(
+				displayMessages,
+				model,
+				table,
+				sessionUsageEntries,
+				cacheWarmingStatus
+			),
+		[displayMessages, model, table, sessionUsageEntries, cacheWarmingStatus]
 	);
 	useEffect(() => {
 		if (scrollRequest === 0) {
@@ -283,6 +298,7 @@ export function ChatShell({
 						id={composerId}
 						onCompact={onCompact}
 						onEmptySubmit={onEmptySubmit}
+						onModelTargetChanged={onModelTargetChanged}
 						onOpenSettings={onOpenSettings}
 						onSubmit={handleSubmit}
 						recalledSubmissions={recalledSubmissions}

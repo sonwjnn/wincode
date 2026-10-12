@@ -1,6 +1,9 @@
 import type { ModelTarget } from "../model-target";
+import type { ModelUsage } from "../model-usage";
 import { findSupportedChatModelSelection } from "../models";
-import { httpErrorFromResponse } from "./errors";
+import { httpErrorFromResponse, isCacheControlRejection } from "./errors";
+import { modelProtocolStrategyFor } from "./provider-adapters";
+import type { SerializedProviderRequest } from "./request";
 import { buildProviderRequest } from "./request";
 import { streamProviderResponse } from "./stream";
 import type {
@@ -13,7 +16,10 @@ import type {
 	ModelTextGenerationResult,
 } from "./types";
 
+export * from "./google-cached-content";
+
 export type {
+	GoogleCachedContentSelection,
 	ModelClient,
 	ModelClientOptions,
 	ModelPromptMessage,
@@ -36,21 +42,11 @@ const throwIfAborted = (signal: AbortSignal | undefined): void => {
 	}
 };
 
-const streamModel = async function* (
+const streamProviderRequest = async function* (
 	request: ModelStepRequest,
+	providerRequest: SerializedProviderRequest,
 	fetchImpl: typeof fetch
 ): AsyncIterable<ModelStreamPart> {
-	throwIfAborted(request.signal);
-	const model = findSupportedChatModelSelection({
-		modelId: request.target.modelId,
-		providerId: request.target.providerId,
-	});
-	if (!model) {
-		throw new Error(
-			`Unsupported model target: ${request.target.providerId}/${request.target.modelId}`
-		);
-	}
-	const providerRequest = buildProviderRequest(request, model);
 	const response = await fetchImpl(providerRequest.url, {
 		...providerRequest.init,
 		signal: request.signal,
@@ -67,11 +63,117 @@ const streamModel = async function* (
 	}
 };
 
+const uncachedRetryRequest = (request: ModelStepRequest): ModelStepRequest => {
+	const {
+		googleCachedContent: _googleCachedContent,
+		promptCacheKey: _promptCacheKey,
+		...uncachedRequest
+	} = request;
+	const {
+		promptCacheEnabled: _promptCacheEnabled,
+		promptCacheRetention: _promptCacheRetention,
+		...target
+	} = request.target;
+	return { ...uncachedRequest, target };
+};
+
+const streamModel = async function* (
+	request: ModelStepRequest,
+	fetchImpl: typeof fetch
+): AsyncIterable<ModelStreamPart> {
+	throwIfAborted(request.signal);
+	const model = findSupportedChatModelSelection({
+		modelId: request.target.modelId,
+		providerId: request.target.providerId,
+	});
+	if (!model) {
+		throw new Error(
+			`Unsupported model target: ${request.target.providerId}/${request.target.modelId}`
+		);
+	}
+	const providerRequest = buildProviderRequest(request, model);
+	let outputStarted = false;
+	try {
+		for await (const part of streamProviderRequest(
+			request,
+			providerRequest,
+			fetchImpl
+		)) {
+			outputStarted = true;
+			yield part;
+		}
+	} catch (error) {
+		if (
+			request.cacheWarming ||
+			outputStarted ||
+			request.signal?.aborted ||
+			!providerRequest.usesPromptCacheControls ||
+			!isCacheControlRejection(error)
+		) {
+			throw error;
+		}
+		try {
+			await request.googleCachedContent?.onRejected?.(
+				request.googleCachedContent.name
+			);
+		} catch {
+			// Resource cleanup is best-effort; the uncached request remains usable.
+		}
+		throwIfAborted(request.signal);
+		const retryRequest = uncachedRetryRequest(request);
+		const uncachedProviderRequest = buildProviderRequest(retryRequest, model);
+		for await (const part of streamProviderRequest(
+			retryRequest,
+			uncachedProviderRequest,
+			fetchImpl
+		)) {
+			yield part;
+		}
+	}
+};
+
 export const createModelClient = (
 	options: ModelClientOptions = {}
 ): ModelClient => {
 	const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
 	return { stream: (request) => streamModel(request, fetchImpl) };
+};
+
+/** Replays a streaming Model request with one output token and discarded output. */
+export const warmModelRequest = async (
+	request: ModelStepRequest,
+	modelClient: ModelClient = createModelClient(),
+	signal?: AbortSignal
+): Promise<ModelUsage | undefined> => {
+	const model = findSupportedChatModelSelection({
+		modelId: request.target.modelId,
+		providerId: request.target.providerId,
+	});
+	if (
+		request.googleCachedContent !== undefined ||
+		(model !== null &&
+			!modelProtocolStrategyFor(model).promptCache.canWarmRequest)
+	) {
+		return;
+	}
+	const { signal: _requestSignal, ...promptRequest } = request;
+	const { providerOptions: _providerOptions, ...target } = request.target;
+	let usage: ModelUsage | undefined;
+	for await (const part of modelClient.stream({
+		...promptRequest,
+		cacheWarming: true,
+		signal,
+		target: {
+			...target,
+			maxOutputTokens: 1,
+			thinkingLevel: undefined,
+		},
+	})) {
+		if (part.type === "finish") {
+			usage = part.usage;
+		}
+	}
+	return usage;
 };
 
 export const generateModelText = async (

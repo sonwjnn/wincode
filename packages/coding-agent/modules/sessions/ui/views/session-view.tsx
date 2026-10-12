@@ -260,6 +260,8 @@ export function SessionView({
 		send,
 		steer,
 		snapshot,
+		cacheWarmingStatus,
+		sessionUsageEntries,
 	} = useAgentSession(host);
 	/**
 	 * Hands recalled messages to the composer in Agent Session order. A Recall
@@ -794,6 +796,7 @@ export function SessionView({
 			<box flexGrow={1} height="100%" paddingX={1}>
 				<ChatShell
 					activeMessages={activeMessages}
+					cacheWarmingStatus={cacheWarmingStatus}
 					compactions={snapshot.compactions}
 					draftKey={sessionId}
 					error={error}
@@ -804,6 +807,7 @@ export function SessionView({
 					messages={messages}
 					onCompact={executeCompactionCommand}
 					onEmptySubmit={steerQueuedHead}
+					onModelTargetChanged={host.cancelCacheWarming}
 					onOpenSettings={openSettings}
 					onRetry={retryMessage}
 					onSubmit={submitMessage}
@@ -811,6 +815,7 @@ export function SessionView({
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
+					sessionUsageEntries={sessionUsageEntries}
 					viewId={sessionId}
 				/>
 			</box>

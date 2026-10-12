@@ -13,18 +13,104 @@ type CatalogEntry = {
 	readonly provider: string;
 };
 
+// Anthropic documents explicit prompt caching for all active Claude models
+// on the Claude API, with 5-minute and 1-hour retention. The OpenCode Go models
+// are intentionally absent because their provider-specific cache capabilities
+// are not published by Anthropic. Source:
+// https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+const ANTHROPIC_EXPLICIT_PROMPT_CACHE = {
+	explicit: { retentionTiers: ["short", "long"] },
+} as const;
+
+// Gemini's Generate Content caching guide demonstrates CachedContent with
+// Gemini 3.8 Flash and a 300-second TTL, and documents the one-hour default.
+// Keep 3.6/3.7 and other TTLs absent until Google's Gemini API docs support them.
+// https://ai.google.dev/gemini-api/docs/generate-content/caching
+const GOOGLE_CACHED_CONTENT_PROMPT_CACHE = {
+	explicit: { retentionTiers: ["short", "long"] },
+	googleCachedContent: { ttl: { short: "300s", long: "3600s" } },
+} as const;
+
+// OpenAI's Responses API documents explicit breakpoints, 30-minute TTL, a
+// 1,024 visible-token minimum, and optional accounting keys for GPT-5.6 and
+// later. Do not apply this overlay to OpenCode Go: its proxy route's support
+// for these controls is not documented by OpenAI.
+const OPENAI_RESPONSES_PROMPT_CACHE = {
+	explicit: { retentionTiers: ["short"] },
+	protocols: {
+		"openai-responses": {
+			breakpoints: true,
+			eligibility: { minimumInputTokens: 1024 },
+			promptCacheKey: true,
+			retention: {
+				field: "prompt_cache_options.ttl",
+				values: { short: "30m" },
+			},
+		},
+	},
+} as const;
+
 /**
  * Facts models.dev does not publish. Every key here is a gap that must stay
  * visible rather than being silently defaulted.
  */
 export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
+	"anthropic/claude-opus-5.5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-4-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-4-5-20251101": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-opus-4-7": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-sonnet-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-4-8": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-fable-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-fable-5-1": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-opus-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-4-6": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-sonnet-4-6": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-haiku-4-5": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-haiku-4-5-20251001": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-sonnet-4-5": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
+	"anthropic/claude-sonnet-4-5-20250929": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+	},
 	"google/gemini-3-pro-preview": {
 		thinking: { levels: ["low", "high"] },
 	},
-	"openai/gpt-5.6": { reasoningSummary: true },
-	"openai/gpt-5.6-luna": { reasoningSummary: true },
-	"openai/gpt-5.6-sol": { reasoningSummary: true },
-	"openai/gpt-5.6-terra": { reasoningSummary: true },
+	"google/gemini-3.8-flash": {
+		promptCache: GOOGLE_CACHED_CONTENT_PROMPT_CACHE,
+	},
+	"openai/gpt-5.6": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		reasoningSummary: true,
+	},
+	"openai/gpt-5.6-luna": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		reasoningSummary: true,
+	},
+	"openai/gpt-5.6-sol": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		reasoningSummary: true,
+	},
+	"openai/gpt-5.6-terra": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		reasoningSummary: true,
+	},
+	"openai/gpt-6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6.1-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6-astra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"opencode-go/gpt-5.6-luna": { reasoningSummary: true },
 };
 

@@ -2,6 +2,7 @@ import {
 	type AgentId,
 	type AgentRole,
 	type AgentRuntime,
+	type AgentRuntimeRunOptions,
 	type AgentTurn,
 	type AgentTurnEvent,
 	type AgentTurnFilePart,
@@ -28,6 +29,7 @@ import {
 	type ToolFailureDetails,
 	toSessionMessageId,
 } from "@wincode/agent-core";
+import type { GoogleCachedContentSelection } from "@wincode/ai/model-client";
 import { createModelClient } from "@wincode/ai/model-client";
 import type { ModelTarget } from "@wincode/ai/model-target";
 import {
@@ -641,8 +643,11 @@ export type SessionViewState = ReadonlyDeep<{
 }>;
 
 type AgentTurnEventConsumerOptions = {
+	googleCachedContent?: GoogleCachedContentSelection;
+	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	lifecycle?: AgentTurnLifecycle;
 	onViewState?: (state: SessionViewState) => void;
+	promptCacheKey?: string;
 	runtime: AgentRuntime;
 	signal?: AbortSignal;
 	takeSteeringMessages?: () =>
@@ -671,6 +676,9 @@ const consumeAgentTurnEvents = async ({
 	onTerminal,
 	onViewState,
 	runtime,
+	googleCachedContent,
+	modelStepObserver,
+	promptCacheKey,
 	signal,
 	takeSteeringMessages,
 	turn,
@@ -715,7 +723,12 @@ const consumeAgentTurnEvents = async ({
 		}
 	};
 	for await (const event of runtime.run(turn, {
-		...omitUndefined({ takeSteeringMessages }),
+		...omitUndefined({
+			googleCachedContent,
+			modelStepObserver,
+			promptCacheKey,
+			takeSteeringMessages,
+		}),
 		signal,
 	})) {
 		if (
@@ -802,6 +815,9 @@ export const runAgentTurnToText = async ({
 	onToolCheckpoint,
 	onViewState,
 	runtime,
+	googleCachedContent,
+	modelStepObserver,
+	promptCacheKey,
 	signal,
 	sourceUserMessageId,
 	takeSteeringMessages,
@@ -814,6 +830,9 @@ export const runAgentTurnToText = async ({
 	onToolCheckpoint?: CheckpointCommitter;
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
+	googleCachedContent?: GoogleCachedContentSelection;
+	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
+	promptCacheKey?: string;
 	signal?: AbortSignal;
 	sourceUserMessageId?: SessionMessageId;
 	takeSteeringMessages?: () =>
@@ -881,6 +900,9 @@ export const runAgentTurnToText = async ({
 		},
 		onViewState,
 		runtime,
+		googleCachedContent,
+		modelStepObserver,
+		promptCacheKey,
 		signal,
 		...omitUndefined({
 			takeSteeringMessages: isUndefined(takeSteeringMessages)

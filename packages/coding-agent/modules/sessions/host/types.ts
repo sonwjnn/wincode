@@ -2,7 +2,9 @@ import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
 import type { ChatModelSelection } from "@wincode/ai/models";
 import type { AgentRegistry } from "@/modules/agents/registry";
+import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
@@ -15,7 +17,7 @@ import type {
 	SessionSdkOperations,
 } from "../sdk-contract";
 import type { ResolvedSessionSelection } from "../selection";
-import type { SessionStore } from "../storage/session-store";
+import type { SessionStore, SessionUsageEntry } from "../storage/session-store";
 /**
  * What one Session Host needs from the surface that constructed it, as lazy
  * getters rather than values: a session outlives the render that supplied its
@@ -32,6 +34,8 @@ export type SessionCapabilities = Readonly<{
 	) => Promise<ResolvedCompactionSettings>;
 	getConfig: () => ConfigRuntime;
 	getConnections: () => Connections;
+	/** Current pricing snapshot used only for best-effort cache-warming economics. */
+	getModelPricingTable?: () => ModelPricingTable;
 	/** The Agent registry, which resolves only after the session opened. */
 	getRegistry: () => AgentRegistry | null;
 	/** The durable store this session's records, compactions, and attachments live in. */
@@ -60,6 +64,10 @@ export type SessionHost = Readonly<{
 	 */
 	getSelection: () => ResolvedSessionSelection | null;
 	getSnapshot: () => LiveSessionSnapshot;
+	getCacheWarmingStatus: () => CacheWarmingStatus;
+	/** Cancels scheduled/in-flight warming after its Model Target changes. */
+	cancelCacheWarming: () => void;
+	getSessionUsageEntries: () => readonly SessionUsageEntry[];
 	/**
 	 * Observes Agent Turn Events the Agent Session emits, in order: the stream a
 	 * consumer renders without reading full Snapshots per token.

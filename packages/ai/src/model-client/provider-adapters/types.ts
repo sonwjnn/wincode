@@ -37,6 +37,9 @@ export type ConnectionProviderAdapter<
 	P extends ConnectionProviderId = ConnectionProviderId,
 > = Readonly<{
 	defaultStrategy: ModelProtocolStrategy<ProviderProtocolById[P]>;
+	strategyForModel: (
+		model: SupportedChatModel
+	) => ModelProtocolStrategy<ProviderProtocolById[P]>;
 	createRequest: (
 		context: ProviderRequestContext
 	) => ProviderRoute<ProviderProtocolById[P]>;

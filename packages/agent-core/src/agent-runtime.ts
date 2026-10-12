@@ -142,7 +142,7 @@ const modelPromptMessage = (message: AgentTurnMessage): ModelPromptMessage => ({
 	role: message.role,
 });
 
-const toModelTool = (tool: ResolvedTool): ModelTool => {
+export const toModelTool = (tool: ResolvedTool): ModelTool => {
 	const inputSchema = tool.definition.inputSchema;
 	const jsonSchema =
 		"jsonSchema" in inputSchema
@@ -572,8 +572,11 @@ const createToolsByName = (
 type ExecuteModelStepsOptions = Readonly<{
 	emit: EventEmitter;
 	lifecycle: AgentTurnLifecycle;
+	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	modelClient: ModelClient;
 	modelMessages: ModelPromptMessage[];
+	googleCachedContent?: ModelStepRequest["googleCachedContent"];
+	promptCacheKey?: string;
 	runtimeSignal?: AbortSignal;
 	takeSteeringMessages?: AgentRuntimeRunOptions["takeSteeringMessages"];
 	tools: readonly ResolvedTool[];
@@ -618,11 +621,37 @@ const appendLateSteeringMessages = async (
 	return true;
 };
 
+const notifyModelStepStarted = (
+	observer: AgentRuntimeRunOptions["modelStepObserver"],
+	request: ModelStepRequest
+): void => {
+	try {
+		observer?.onModelStepStarted(request);
+	} catch {
+		// A best-effort request observer cannot fail an active Agent Turn.
+	}
+};
+
+const notifyModelStepFinished = (
+	observer: AgentRuntimeRunOptions["modelStepObserver"],
+	request: ModelStepRequest,
+	usage: ModelUsage | undefined
+): void => {
+	try {
+		observer?.onModelStepFinished(request, usage);
+	} catch {
+		// A best-effort usage observer cannot fail an active Agent Turn.
+	}
+};
+
 const runLoop = async function* ({
 	emit,
 	lifecycle,
 	modelClient,
 	modelMessages,
+	googleCachedContent,
+	modelStepObserver,
+	promptCacheKey,
 	runtimeSignal,
 	takeSteeringMessages,
 	tools,
@@ -650,11 +679,13 @@ const runLoop = async function* ({
 		});
 		const request: ModelStepRequest = {
 			messages: modelMessages,
+			...omitUndefined({ googleCachedContent, promptCacheKey }),
 			...omitUndefined({ signal: runtimeSignal }),
 			system: turn.agent.instructions,
 			target: turn.model,
 			tools: toolDefinitions,
 		};
+		notifyModelStepStarted(modelStepObserver, request);
 		const output = yield* drainModelStep({
 			emit,
 			modelClient,
@@ -668,6 +699,7 @@ const runLoop = async function* ({
 			yield lifecycle.interrupt(emit.nextSequence(), "lost-execution");
 			return;
 		}
+		notifyModelStepFinished(modelStepObserver, request, output.usage);
 		let stopTurn = false;
 		if (output.toolCalls.length > 0) {
 			modelMessages.push({
@@ -735,7 +767,14 @@ const runLoop = async function* ({
 
 const runAgentTurn = async function* (
 	turn: AgentTurn,
-	{ deadlineMs, signal, takeSteeringMessages }: AgentRuntimeRunOptions,
+	{
+		deadlineMs,
+		googleCachedContent,
+		modelStepObserver,
+		promptCacheKey,
+		signal,
+		takeSteeringMessages,
+	}: AgentRuntimeRunOptions,
 	modelClient: ModelClient
 ): AsyncGenerator<AgentTurnEvent, void, undefined> {
 	const lifecycle = createAgentTurnLifecycle(turn.id);
@@ -770,6 +809,9 @@ const runAgentTurn = async function* (
 			modelClient,
 			modelMessages,
 			...omitUndefined({
+				googleCachedContent,
+				modelStepObserver,
+				promptCacheKey,
 				runtimeSignal,
 				takeSteeringMessages,
 			}),

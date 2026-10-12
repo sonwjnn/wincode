@@ -29,5 +29,6 @@ const createAnthropicRequest = (context: ProviderRequestContext) => {
 
 export const anthropicAdapter = {
 	defaultStrategy: DEFAULT_STRATEGY,
+	strategyForModel: () => DEFAULT_STRATEGY,
 	createRequest: createAnthropicRequest,
 } satisfies ConnectionProviderAdapter<"anthropic">;

@@ -9,16 +9,26 @@ import type {
 	ModelPricingTable,
 } from "@/modules/model-pricing";
 import { resolveModelMetadata } from "@/modules/model-pricing";
+import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import type {
 	SessionMessage,
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 
 export type SessionUsageSummary = {
 	/** Estimated USD for every measured turn in the session, or `null` when no turn has a usable rate. */
 	costUsd: number | null;
-	/** How many turns contributed a cost estimate. */
+	/** How many real Agent Turns contributed a cost estimate. */
 	costedTurns: number;
+	/** How many separate usage entries contributed a cost estimate. */
+	costedUsageEntries: number;
+	/** Current Session Host cache warmer state; never affects context usage. */
+	cacheWarmingStatus: CacheWarmingStatus;
+	/** Session-total cache reads, kept separate from context usage. */
+	cacheReadTokens: number;
+	/** Session-total cache writes, kept separate from context usage. */
+	cacheWriteTokens: number;
 	/** `null` when the catalog has no limit for the current model. */
 	contextLimit: number | null;
 	/** `null` when `contextLimit` is unknown. */
@@ -58,18 +68,31 @@ export const turnCostUsd = (
 	usage: SessionMessageUsage
 ): number | null => calculateModelUsageCostUsd(entry, usage);
 
-const collectCost = (
+const collectSessionUsage = (
 	messages: readonly SessionMessage[],
+	usageEntries: readonly SessionUsageEntry[],
 	fallbackModel: ChatModelSelection,
 	table: ModelPricingTable
-): { costUsd: number | null; costedTurns: number } => {
+): Pick<
+	SessionUsageSummary,
+	| "cacheReadTokens"
+	| "cacheWriteTokens"
+	| "costUsd"
+	| "costedTurns"
+	| "costedUsageEntries"
+> => {
 	let total = 0;
 	let costedTurns = 0;
+	let costedUsageEntries = 0;
+	let cacheReadTokens = 0;
+	let cacheWriteTokens = 0;
 	for (const message of messages) {
 		const usage = message.metadata?.usage;
 		if (message.role !== "assistant" || !usage) {
 			continue;
 		}
+		cacheReadTokens += usage.cacheReadTokens ?? 0;
+		cacheWriteTokens += usage.cacheWriteTokens ?? 0;
 		const selection = message.metadata?.model ?? fallbackModel;
 		const entry = resolveModelMetadata(table, selection);
 		const cost = turnCostUsd(entry ?? undefined, usage);
@@ -78,7 +101,23 @@ const collectCost = (
 			costedTurns += 1;
 		}
 	}
-	return { costUsd: costedTurns === 0 ? null : total, costedTurns };
+	for (const entry of usageEntries) {
+		cacheReadTokens += entry.usage.cacheReadTokens ?? 0;
+		cacheWriteTokens += entry.usage.cacheWriteTokens ?? 0;
+		const pricing = resolveModelMetadata(table, entry.model);
+		const cost = turnCostUsd(pricing ?? undefined, entry.usage);
+		if (!isNull(cost)) {
+			total += cost;
+			costedUsageEntries += 1;
+		}
+	}
+	return {
+		cacheReadTokens,
+		cacheWriteTokens,
+		costUsd: costedTurns + costedUsageEntries === 0 ? null : total,
+		costedTurns,
+		costedUsageEntries,
+	};
 };
 
 /**
@@ -91,7 +130,9 @@ const collectCost = (
 export const summarizeSessionUsage = (
 	messages: readonly SessionMessage[],
 	fallbackModel: ChatModelSelection,
-	table: ModelPricingTable
+	table: ModelPricingTable,
+	usageEntries: readonly SessionUsageEntry[] = [],
+	cacheWarmingStatus: CacheWarmingStatus = "idle"
 ): SessionUsageSummary | null => {
 	const { lastSelection, lastUsage } = collectMessageUsage(messages);
 	if (isNull(lastUsage)) {
@@ -106,7 +147,8 @@ export const summarizeSessionUsage = (
 			? clampPercent((contextTokens / contextLimit) * 100)
 			: null;
 	return {
-		...collectCost(messages, fallbackModel, table),
+		...collectSessionUsage(messages, usageEntries, fallbackModel, table),
+		cacheWarmingStatus,
 		contextLimit,
 		contextPercent,
 		contextTokens,

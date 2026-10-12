@@ -28,6 +28,7 @@ import {
 	modelId,
 	sessionMessageId,
 	sessionRecordId,
+	sessionUsageEntryId,
 	toolCallId,
 } from "../support/identifiers";
 
@@ -180,6 +181,30 @@ test("creates an SDK-ready empty Session without inventing a user Submission", a
 		model,
 		title: "Untitled Session",
 	});
+});
+
+test("persists warm usage exactly once outside Session Records", async () => {
+	const { store } = await createTestStore();
+	const { id, initialRecord } = await createSession(store, "warm-session");
+	const input = {
+		id: sessionUsageEntryId("warm-usage-1"),
+		kind: "cache-warm" as const,
+		model,
+		sessionId: id,
+		usage: {
+			cacheReadTokens: 20,
+			inputTokens: 20,
+			outputTokens: 1,
+			totalTokens: 21,
+		},
+	};
+
+	const saved = await store.createSessionUsageEntry(input);
+	const retried = await store.createSessionUsageEntry(input);
+
+	expect(retried).toEqual(saved);
+	expect(await store.listSessionUsageEntries(id)).toEqual([saved]);
+	expect(await store.listSessionRecords(id)).toEqual([initialRecord]);
 });
 
 test("persists the accepted user message as an ordinary record", async () => {

@@ -15,6 +15,7 @@ import type {
 	CompactionId,
 	QueuedSubmissionId,
 	SessionId,
+	SessionUsageEntryId,
 	SteeringMessageId,
 } from "@/shared/identifiers";
 
@@ -61,6 +62,10 @@ export const sessionMessageId = <const Value extends string>(
 	value: Value
 ): Value & SessionMessageId =>
 	toSessionMessageId(value) as Value & SessionMessageId;
+
+export const sessionUsageEntryId = <const Value extends string>(
+	value: Value
+): Value & SessionUsageEntryId => value as Value & SessionUsageEntryId;
 
 export const sessionRecordId = <const Value extends string>(
 	value: Value

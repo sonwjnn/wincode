@@ -11,6 +11,7 @@ const createOpenAIRequest = (context: ProviderRequestContext) => {
 	const authorization = context.request.target.authorization;
 	const bodyContext = {
 		maxOutputTokens: context.maxOutputTokens,
+		model: context.model,
 		omitOutputTokenLimit: authorization.kind === "oauth",
 		providerOptions: openAIOptionsFor(context.providerOptions),
 		request: context.request,
@@ -43,5 +44,6 @@ const createOpenAIRequest = (context: ProviderRequestContext) => {
 
 export const openAIAdapter = {
 	defaultStrategy: DEFAULT_STRATEGY,
+	strategyForModel: () => DEFAULT_STRATEGY,
 	createRequest: createOpenAIRequest,
 } satisfies ConnectionProviderAdapter<"openai">;

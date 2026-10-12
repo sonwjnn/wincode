@@ -34,6 +34,7 @@ import { z } from "zod";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
+import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import { loadPlugins } from "@/modules/plugins/loader";
 import {
 	createPluginRuntime,
@@ -121,6 +122,32 @@ const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
+const cacheWarmingModel: ChatModelSelection = {
+	modelId: modelId("gpt-5.6"),
+	providerId: "openai",
+};
+const cacheWarmingPricingTable: ModelPricingTable = {
+	"openai/gpt-5.6": { cost: { cacheRead: 0.4, input: 4, output: 20 } },
+};
+const installCacheWarmingStepScript = (): (() => void) => {
+	const previousStepScript = recorder.stepScript;
+	recorder.stepScript = async function* (request) {
+		expect(request.target.promptCacheEnabled).toBe(true);
+		expect(request.target.promptCacheRetention).toBe("short");
+		yield { delta: "cache warming lifecycle response", type: "text-delta" };
+		yield {
+			type: "finish",
+			usage: {
+				cacheReadTokens: 90_000,
+				inputTokens: 100_000,
+				outputTokens: 1,
+			},
+		};
+	};
+	return () => {
+		recorder.stepScript = previousStepScript;
+	};
+};
 const buildId = agentId("build");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
 const store = createDrizzleSessionStore(
@@ -156,7 +183,8 @@ const completedOutcome = (): SessionRecord["outcome"] => ({
  */
 const seedSession = async (
 	prefix: string,
-	secondTurnState: "completed" | "interrupted" = "interrupted"
+	secondTurnState: "completed" | "interrupted" = "interrupted",
+	selectedModel: ChatModelSelection = model
 ): Promise<{
 	compaction: CompactionId;
 	sessionId: SessionId;
@@ -165,7 +193,7 @@ const seedSession = async (
 	const { id: sessionId } = await store.createSession({
 		agent: buildId,
 		message: firstUser,
-		model,
+		model: selectedModel,
 		turnId: agentTurnId(`${prefix}-turn-1`),
 	});
 	await store.commitSessionRecord({
@@ -179,7 +207,7 @@ const seedSession = async (
 					role: "assistant",
 				},
 			],
-			model,
+			model: selectedModel,
 			outcome: completedOutcome(),
 			turnId: agentTurnId(`${prefix}-turn-1`),
 			version: 1,
@@ -191,7 +219,7 @@ const seedSession = async (
 		record: buildUserSessionRecord({
 			agentId: buildId,
 			message: secondUser,
-			model,
+			model: selectedModel,
 			turnId: agentTurnId(`${prefix}-turn-2`),
 		}),
 		sessionId,
@@ -215,7 +243,7 @@ const seedSession = async (
 					role: "assistant",
 				},
 			],
-			model,
+			model: selectedModel,
 			outcome:
 				secondTurnState === "completed"
 					? completedOutcome()
@@ -241,7 +269,7 @@ const seedSession = async (
 		estimatedTokensAfter: 100,
 		firstKeptUiMessageId: sessionMessageId(`${prefix}-user-2`),
 		sessionId,
-		summarizationModel: model,
+		summarizationModel: selectedModel,
 		summary: {
 			coveredMessageIds: [sessionMessageId(`${prefix}-user-1`)],
 			formatVersion: 1,
@@ -283,6 +311,7 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
 type SessionHostTestCapabilitiesOptions = Readonly<{
 	configSources?: ConfigSnapshot["sources"];
 	homeRoot?: string;
+	modelPricingTable?: ModelPricingTable;
 	workspace?: string;
 	pluginRuntime?: PluginRuntime;
 }>;
@@ -381,6 +410,7 @@ const createCapabilities = (
 			connect: async () => undefined,
 			listProviders: async () => [],
 		}),
+		getModelPricingTable: () => options.modelPricingTable ?? {},
 		getRegistry: () => registry,
 		getStore: () => sessionStore,
 		getSessionHostManager: () => manager,
@@ -1126,6 +1156,260 @@ describe("Session Host opening", () => {
 });
 
 describe("Session Host lifetime", () => {
+	test("applies the configured cache retention to the selected model's Agent Turn", async () => {
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("claude-opus-4-5"),
+			providerId: "anthropic",
+		};
+		const seeded = await seedSession(
+			"prompt-cache-setting",
+			"interrupted",
+			selectedModel
+		);
+		const capabilities = createCapabilities(store, {
+			promptCache: {
+				modelOverrides: { "anthropic/claude-opus-4-5": "long" },
+			},
+		});
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const previousBeforeStep = recorder.beforeStep;
+		let retention: string | undefined;
+		recorder.beforeStep = async (request) => {
+			retention = request.target.promptCacheRetention;
+		};
+		try {
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: selectedModel,
+				sessionModel: selectedModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(retention).toBe("long");
+		} finally {
+			recorder.beforeStep = previousBeforeStep;
+			await host.shutdown();
+		}
+	});
+
+	test("keeps warming after Agent Turn settlement but cancels when compaction replaces context", async () => {
+		const selectedModel = cacheWarmingModel;
+		const seeded = await seedSession(
+			"cache-warming-context-lifecycle",
+			"interrupted",
+			selectedModel
+		);
+		const capabilities = createCapabilities(store, {}, sessionHostManager, {
+			modelPricingTable: cacheWarmingPricingTable,
+		});
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const restoreModelScript = installCacheWarmingStepScript();
+		try {
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: selectedModel,
+				sessionModel: selectedModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(
+				host
+					.getSnapshot()
+					.context.some(
+						({ parts, role }) =>
+							role === "assistant" &&
+							textOf(parts) === "cache warming lifecycle response"
+					)
+			).toBe(true);
+			expect(host.getCacheWarmingStatus()).toBe("scheduled");
+
+			const contextBeforeCompaction = host
+				.getSnapshot()
+				.context.map(({ id }) => id);
+			await host.agentSession.compact({
+				model: selectedModel,
+				trigger: "manual",
+			});
+			expect(host.getSnapshot().context.map(({ id }) => id)).not.toEqual(
+				contextBeforeCompaction
+			);
+			expect(host.getCacheWarmingStatus()).toBe("idle");
+		} finally {
+			restoreModelScript();
+			await host.shutdown();
+		}
+	});
+
+	test("Host shutdown cancels a scheduled cache warm before its TTL refresh", async () => {
+		const seeded = await seedSession(
+			"cache-warming-host-shutdown",
+			"interrupted",
+			cacheWarmingModel
+		);
+		const capabilities = createCapabilities(store, {}, sessionHostManager, {
+			modelPricingTable: cacheWarmingPricingTable,
+		});
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const restoreModelScript = installCacheWarmingStepScript();
+		try {
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: cacheWarmingModel,
+				sessionModel: cacheWarmingModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(host.getCacheWarmingStatus()).toBe("scheduled");
+
+			await host.shutdown();
+			expect(host.getCacheWarmingStatus()).toBe("idle");
+		} finally {
+			restoreModelScript();
+			await host.shutdown();
+		}
+	});
+
+	test("keeps the OpenAI prompt-cache key stable across turns in one Session", async () => {
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("gpt-5.6-luna"),
+			providerId: "openai",
+		};
+		const seeded = await seedSession(
+			"prompt-cache-key",
+			"interrupted",
+			selectedModel
+		);
+		const capabilities = createCapabilities();
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const previousBeforeStep = recorder.beforeStep;
+		const observed: { enabled?: boolean; key?: string; retention?: string }[] =
+			[];
+		recorder.beforeStep = async (request) => {
+			observed.push({
+				enabled: request.target.promptCacheEnabled,
+				key: request.promptCacheKey,
+				retention: request.target.promptCacheRetention,
+			});
+		};
+		try {
+			for (let index = 0; index < 2; index += 1) {
+				const outcome = await host.agentSession.send({
+					...sendInput(capabilities),
+					model: selectedModel,
+					sessionModel: selectedModel,
+				});
+				expect(outcome).toEqual({ rejected: false });
+			}
+			expect(observed).toEqual([
+				{
+					enabled: true,
+					key: `wincode-session:${seeded.sessionId}`,
+					retention: "short",
+				},
+				{
+					enabled: true,
+					key: `wincode-session:${seeded.sessionId}`,
+					retention: "short",
+				},
+			]);
+		} finally {
+			recorder.beforeStep = previousBeforeStep;
+			await host.shutdown();
+		}
+	});
+
+	test("Session Host selects and deletes Google CachedContent without freezing Session messages", async () => {
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("gemini-3.8-flash"),
+			providerId: "google",
+		};
+		const seeded = await seedSession(
+			"google-cached-content-lifecycle",
+			"interrupted",
+			selectedModel
+		);
+		const capabilities = createCapabilities();
+		const originalFetch = globalThis.fetch;
+		const previousBeforeStep = recorder.beforeStep;
+		const resourceRequests: {
+			body: Record<string, unknown>;
+			method: string;
+			url: string;
+		}[] = [];
+		const fetch = (async (
+			input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			const method = init?.method ?? "GET";
+			const url = String(input);
+			resourceRequests.push({
+				body:
+					typeof init?.body === "string"
+						? (JSON.parse(init.body) as Record<string, unknown>)
+						: {},
+				method,
+				url,
+			});
+			return new Response(
+				JSON.stringify(
+					method === "POST" ? { name: "cachedContents/session-prefix" } : {}
+				),
+				{ headers: { "content-type": "application/json" }, status: 200 }
+			);
+		}) as typeof globalThis.fetch;
+		globalThis.fetch = fetch;
+		let host: SessionHost | undefined;
+		let observedResource: string | undefined;
+		let observedMessages = 0;
+		recorder.beforeStep = async (request) => {
+			observedResource = request.googleCachedContent?.name;
+			observedMessages = request.messages.length;
+		};
+		try {
+			host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: selectedModel,
+				sessionModel: selectedModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(observedResource).toBe("cachedContents/session-prefix");
+			expect(observedMessages).toBeGreaterThan(0);
+			expect(resourceRequests).toHaveLength(1);
+			expect(resourceRequests[0]?.method).toBe("POST");
+			expect(resourceRequests[0]?.url).toContain("/cachedContents");
+			expect(resourceRequests[0]?.body).toMatchObject({
+				model: "models/gemini-3.8-flash",
+				systemInstruction: { parts: [{ text: expect.any(String) }] },
+				ttl: "300s",
+			});
+			expect(resourceRequests[0]?.body).not.toHaveProperty("contents");
+
+			await host.shutdown();
+			expect(resourceRequests).toHaveLength(2);
+			expect(resourceRequests[1]?.method).toBe("DELETE");
+			expect(resourceRequests[1]?.url).toContain(
+				"/cachedContents/session-prefix"
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+			recorder.beforeStep = previousBeforeStep;
+			await host?.shutdown();
+		}
+	});
+
 	test("runs a send command, reports its events in order, and refuses commands after shutdown", async () => {
 		const seeded = await seedSession("send");
 		const capabilities = createCapabilities();

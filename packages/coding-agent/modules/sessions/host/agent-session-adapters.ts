@@ -93,13 +93,22 @@ const activateExplicitSkill = async (
 export const createAgentSessionAdapters = (
 	options: AgentSessionAdaptersOptions
 ): AgentSessionPorts => {
-	const { capabilities, isShutDown, sessionId, statefulAgent } = options;
+	const {
+		cacheWarming,
+		capabilities,
+		googleCachedContentResourceManager,
+		isShutDown,
+		sessionId,
+		statefulAgent,
+	} = options;
 	/**
 	 * Exactly the runner's declared inputs: a new one fails to compile here
 	 * instead of arriving unannounced or being dropped.
 	 */
 	const turnRunnerInputs: AgentSessionTurnRunnerOptions = {
+		cacheWarming,
 		capabilities,
+		googleCachedContentResourceManager,
 		sessionId,
 		statefulAgent,
 	};

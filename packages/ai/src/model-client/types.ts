@@ -38,8 +38,17 @@ export type ModelTool = Readonly<{
 	name: string;
 }>;
 
+export type GoogleCachedContentSelection = Readonly<{
+	name: string;
+	onRejected?: (name: string) => void | Promise<void>;
+}>;
+
 export type ModelStepRequest = Readonly<{
+	/** Warm requests are best-effort and must never use the normal cache fallback retry. */
+	cacheWarming?: true;
+	googleCachedContent?: GoogleCachedContentSelection;
 	messages: readonly ModelPromptMessage[];
+	promptCacheKey?: string;
 	signal?: AbortSignal;
 	system?: string;
 	target: ModelTarget;

@@ -1,3 +1,4 @@
+import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
 import type {
 	AnthropicProviderOptions,
 	GoogleProviderOptions,
@@ -9,6 +10,7 @@ import type { ModelStepRequest, ModelStreamPart } from "../types";
 export type ProtocolRequestContextByProtocol = {
 	"openai-responses": Readonly<{
 		maxOutputTokens: number | undefined;
+		model: SupportedChatModel;
 		omitOutputTokenLimit: boolean;
 		providerOptions: OpenAIProviderOptions["openai"] | undefined;
 		request: ModelStepRequest;
@@ -26,14 +28,36 @@ export type ProtocolRequestContextByProtocol = {
 	}>;
 	"openai-chat": Readonly<{
 		maxOutputTokens: number | undefined;
+		model: SupportedChatModel;
 		request: ModelStepRequest;
 	}>;
 };
 
 export type ModelProtocol = keyof ProtocolRequestContextByProtocol;
 
+export type ModelProtocolPromptCacheRoute = Readonly<{
+	cachedContentTtlFor?: (
+		retention: SupportedPromptCacheRetentionTier
+	) => string | undefined;
+	hasControls: boolean;
+	isRetentionSupported: (
+		retention: SupportedPromptCacheRetentionTier
+	) => boolean;
+	retentionTtlMsFor: (
+		retention: SupportedPromptCacheRetentionTier
+	) => number | undefined;
+}>;
+
+export type ModelProtocolPromptCacheStrategy = Readonly<{
+	canWarmRequest: boolean;
+	routeForModel: (
+		model: SupportedChatModel
+	) => ModelProtocolPromptCacheRoute | undefined;
+}>;
+
 export type ModelProtocolStrategyFor<P extends ModelProtocol> = Readonly<{
 	protocol: P;
+	promptCache: ModelProtocolPromptCacheStrategy;
 	serialize: (
 		context: ProtocolRequestContextByProtocol[P]
 	) => Record<string, unknown>;

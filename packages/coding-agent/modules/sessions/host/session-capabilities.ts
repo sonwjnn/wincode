@@ -264,6 +264,7 @@ export const createSessionCapabilities = async ({
 			providedGetPluginRuntime?.() ?? pluginRuntime;
 		const capabilities: SessionCapabilities = {
 			getCapabilityCeiling: () => capabilityCeiling,
+			getModelPricingTable: pricing,
 			getCompactionModule: () => compaction,
 			getCompactionSettings: (model) =>
 				createCompactionSettingsOperations({

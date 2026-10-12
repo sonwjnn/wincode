@@ -6,12 +6,15 @@ import {
 	type StatefulAgent,
 	toSubmissionId,
 } from "@wincode/agent-core";
+import { createGoogleCachedContentResourceManager } from "@wincode/ai/model-client";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import { isNull, logger, omitUndefined } from "@wincode/utils";
 import {
 	type AgentRegistry,
 	resolveActiveAgentId,
 } from "@/modules/agents/registry";
+import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
+import { createSessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import { AgentSessionImpl } from "../agent-session/agent-session";
 import type {
@@ -30,6 +33,7 @@ import {
 } from "../message";
 import { resolveSessionSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
+import type { SessionUsageEntry } from "../storage/session-store";
 import { createAgentSessionAdapters } from "./agent-session-adapters";
 import type {
 	SessionCapabilities,
@@ -49,6 +53,7 @@ type OpenedSession = Readonly<{
 	steeringMessages: SessionSteeringMessage[];
 	transcript: SessionMessage[];
 	thinkingLevel: ThinkingLevel | undefined;
+	usageEntries: SessionUsageEntry[];
 }>;
 const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
 
@@ -60,6 +65,31 @@ const waitForClosingHost = async (
 		await closing.catch(() => undefined);
 	}
 };
+/**
+ * Prefix growth preserves a warmed request. The active turn's assistant message
+ * is outside that captured prompt and streams in place; earlier rewrites or
+ * truncation invalidate the stable prefix.
+ */
+const sessionContextExtends = (
+	previous: readonly SessionMessage[],
+	next: readonly SessionMessage[]
+): boolean =>
+	previous.length <= next.length &&
+	previous.every((message, index) => {
+		const candidate = next[index];
+		if (
+			candidate === undefined ||
+			message.id !== candidate.id ||
+			message.role !== candidate.role
+		) {
+			return false;
+		}
+		if (index === previous.length - 1 && message.role === "assistant") {
+			return true;
+		}
+		return Bun.deepEquals(message.parts, candidate.parts, true);
+	});
+
 const interruptedSteeringFailure =
 	"Session closed before provider processing could be confirmed; deliberate retry required.";
 
@@ -139,11 +169,14 @@ const openSession = async (
 	sessionId: SessionHostOptions["sessionId"]
 ): Promise<OpenedSession> => {
 	const store = capabilities.getStore();
-	const [session, compactions, loadedRecords] = await Promise.all([
-		store.getSession(sessionId),
-		store.getCompactions(sessionId),
-		store.listSessionRecords(sessionId),
-	]);
+	const [session, compactions, loadedRecords, usageEntries] = await Promise.all(
+		[
+			store.getSession(sessionId),
+			store.getCompactions(sessionId),
+			store.listSessionRecords(sessionId),
+			store.listSessionUsageEntries(sessionId),
+		]
+	);
 	const interrupted = loadedRecords.flatMap((record) =>
 		record.messages.flatMap((message) => {
 			const submissionId = message.metadata?.submissionId;
@@ -191,6 +224,7 @@ const openSession = async (
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
 		thinkingLevel: session.thinkingLevel,
+		usageEntries,
 	};
 };
 
@@ -247,12 +281,17 @@ export const createSessionHost = async ({
 			sessionId,
 			executionMode === undefined ? {} : { executionMode }
 		);
+	const googleCachedContentResourceManager =
+		createGoogleCachedContentResourceManager({ sessionId });
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
 	let agentSession: AgentSession | undefined;
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 	let statefulAgent: StatefulAgent<SessionQueuedSubmission> | undefined;
+	// The warmer belongs to the loaded Host, not a single Agent Turn; retain it across idle turns.
+	let cacheWarming: SessionCacheWarming | undefined;
+	let unsubscribeContext: (() => void) | undefined;
 
 	/**
 	 * Reports one event to the Host's observers. Everything the Agent Session
@@ -284,6 +323,8 @@ export const createSessionHost = async ({
 		});
 		const activeAgentSession = agentSession;
 		const activeInternalPort = agentSessionInternalPort;
+		unsubscribeContext?.();
+		const cacheWarmingShutdown = cacheWarming?.dispose() ?? Promise.resolve();
 		let agentSessionShutdown: Promise<void> = Promise.resolve();
 		if (activeAgentSession !== undefined) {
 			const snapshot = activeAgentSession.getSnapshot();
@@ -305,7 +346,9 @@ export const createSessionHost = async ({
 				const results = await Promise.allSettled([
 					agentSessionShutdown,
 					statefulAgent?.shutdown() ?? Promise.resolve(),
+					cacheWarmingShutdown,
 				]);
+				await googleCachedContentResourceManager.close();
 				const failure = results.find(
 					(result): result is PromiseRejectedResult =>
 						result.status === "rejected"
@@ -339,13 +382,21 @@ export const createSessionHost = async ({
 	};
 	try {
 		const opened = await openSession(capabilities, sessionId);
+		cacheWarming = createSessionCacheWarming({
+			getPricingTable: () => capabilities.getModelPricingTable?.() ?? {},
+			initialUsageEntries: opened.usageEntries,
+			sessionId,
+			store: capabilities.getStore(),
+		});
 		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
 			getQueuedSubmissionId: ({ id }) => id,
 			runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
 		});
 		const ports: AgentSessionPorts = withEventChannel(
 			createAgentSessionAdapters({
+				cacheWarming,
 				capabilities,
+				googleCachedContentResourceManager,
 				isShutDown: () => isShutDown,
 				sessionId,
 				statefulAgent,
@@ -384,6 +435,14 @@ export const createSessionHost = async ({
 		});
 		agentSessionInternalPort = openedAgentSession.internalPort;
 		agentSession = openedAgentSession;
+		let observedContext = openedAgentSession.getSnapshot().context;
+		unsubscribeContext = openedAgentSession.subscribe(() => {
+			const nextContext = openedAgentSession.getSnapshot().context;
+			if (!sessionContextExtends(observedContext, nextContext)) {
+				cacheWarming?.cancel();
+			}
+			observedContext = nextContext;
+		});
 		const initialSnapshot = openedAgentSession.getSnapshot();
 		if (
 			autoContinue &&
@@ -466,17 +525,27 @@ export const createSessionHost = async ({
 			agentSession: guardedAgentSession,
 			getSelection: () => resolveOpenedSelection(capabilities.getRegistry()),
 			getSnapshot: openedAgentSession.getSnapshot,
+			getCacheWarmingStatus: () => cacheWarming?.getStatus() ?? "idle",
+			cancelCacheWarming: () => cacheWarming?.cancel(),
+			getSessionUsageEntries: () => cacheWarming?.getUsageEntries() ?? [],
 			onEvent: (listener) => {
 				eventListeners.add(listener);
 				return () => eventListeners.delete(listener);
 			},
 			shutdown,
-			subscribe: (listener) =>
-				openedAgentSession.subscribe(() => {
+			subscribe: (listener) => {
+				const notify = (): void => {
 					if (!isShutDown) {
 						listener();
 					}
-				}),
+				};
+				const unsubscribeAgent = openedAgentSession.subscribe(notify);
+				const unsubscribeWarming = cacheWarming?.subscribe(notify);
+				return () => {
+					unsubscribeAgent();
+					unsubscribeWarming?.();
+				};
+			},
 		};
 	} catch (error) {
 		await shutdown();

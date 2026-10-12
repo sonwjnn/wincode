@@ -157,6 +157,89 @@ describe("buildModelMetadataFile", () => {
 		});
 	});
 
+	test("preserves explicit cache retention capabilities through metadata overlays", () => {
+		const promptCache = {
+			explicit: { retentionTiers: ["short", "long"] },
+		} as const;
+		const result = build({ "openai/from-overlay": { promptCache } });
+
+		expect(result.entries["openai/from-overlay"]?.promptCache).toEqual(
+			promptCache
+		);
+		expect(modelMetadataEntrySchema.safeParse({ promptCache }).success).toBe(
+			true
+		);
+		expect(
+			modelMetadataEntrySchema.safeParse({
+				promptCache: { explicit: { retentionTiers: ["unsupported"] } },
+			}).success
+		).toBe(false);
+	});
+
+	test("preserves Google CachedContent TTL capabilities through metadata generation", () => {
+		const promptCache = {
+			explicit: { retentionTiers: ["short", "long"] },
+			googleCachedContent: {
+				ttl: { short: "300s", long: "3600s" },
+			},
+		} as const;
+		const { entries } = build({ "google/absent": { promptCache } });
+
+		expect(entries["google/absent"]?.promptCache).toEqual(promptCache);
+		expect(modelMetadataEntrySchema.safeParse({ promptCache }).success).toBe(
+			true
+		);
+		expect(
+			modelMetadataEntrySchema.safeParse({
+				promptCache: {
+					explicit: { retentionTiers: ["short"] },
+					googleCachedContent: { ttl: {} },
+				},
+			}).success
+		).toBe(false);
+	});
+
+	test("preserves protocol-specific prompt-cache eligibility through metadata generation", () => {
+		const promptCache = {
+			explicit: { retentionTiers: ["short"] },
+			protocols: {
+				"openai-responses": {
+					breakpoints: true,
+					eligibility: { minimumInputTokens: 1024 },
+					promptCacheKey: true,
+					retention: {
+						field: "prompt_cache_options.ttl",
+						values: { short: "30m" },
+					},
+				},
+			},
+		} as const;
+		const { entries } = build({ "openai/from-overlay": { promptCache } });
+		expect(entries["openai/from-overlay"]?.promptCache).toEqual(promptCache);
+		expect(modelMetadataEntrySchema.safeParse({ promptCache }).success).toBe(
+			true
+		);
+		expect(
+			modelMetadataEntrySchema.safeParse({
+				promptCache: {
+					...promptCache,
+					protocols: {
+						"openai-responses": {
+							breakpoints: true,
+							promptCacheKey: true,
+							retention: {
+								field: "prompt_cache_options.ttl",
+								values: { short: "30m" },
+							},
+							eligibility: {},
+							// Missing eligibility is deliberately invalid.
+						},
+					},
+				},
+			}).success
+		).toBe(false);
+	});
+
 	test("returns entries accepted by the runtime metadata schema", () => {
 		for (const entry of Object.values(build().entries)) {
 			expect(modelMetadataEntrySchema.safeParse(entry).success).toBe(true);

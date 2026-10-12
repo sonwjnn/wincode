@@ -9,6 +9,7 @@ import {
 } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import {
+	type ChatModelSelection,
 	findSupportedChatModelSelection,
 	getSupportedThinkingLevels,
 	supportedChatModelIdSchema,
@@ -101,6 +102,7 @@ type ChatTextAreaProps = {
 	draftKey?: string;
 	unavailableCommandCapabilities?: readonly CommandCapability[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
+	onModelTargetChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	onEmptySubmit?: () => void | Promise<void>;
 	/** Compositions a Recall returned, oldest first, waiting to enter the composer. */
@@ -158,6 +160,7 @@ export function ChatTextArea({
 	unavailableCommandCapabilities:
 		viewUnavailableCapabilities = EMPTY_COMMAND_CAPABILITIES,
 	onCompact,
+	onModelTargetChanged,
 	onOpenSettings,
 	onSubmit,
 	onEmptySubmit,
@@ -173,6 +176,41 @@ export function ChatTextArea({
 		setThinkingLevelForFutureSubmissions,
 	} = usePromptConfig();
 	const connections = useConnections();
+	const previousConnections = useRef(connections);
+	useEffect(() => {
+		if (previousConnections.current !== connections) {
+			// Connection changes may resolve the selection to a different Model Target.
+			onModelTargetChanged?.();
+			previousConnections.current = connections;
+		}
+	}, [connections, onModelTargetChanged]);
+	const previousAgent = useRef(agent);
+	useEffect(() => {
+		if (previousAgent.current === agent) {
+			return;
+		}
+
+		// Agent changes can replace system instructions and tools in the cached prefix.
+		onModelTargetChanged?.();
+		previousAgent.current = agent;
+	}, [agent, onModelTargetChanged]);
+	const setFutureModelSelection = useCallback(
+		(nextModel: ChatModelSelection) => {
+			if (
+				model.modelId !== nextModel.modelId ||
+				model.providerId !== nextModel.providerId
+			) {
+				onModelTargetChanged?.();
+			}
+			setModelForFutureSubmissions(nextModel);
+		},
+		[
+			model.modelId,
+			model.providerId,
+			onModelTargetChanged,
+			setModelForFutureSubmissions,
+		]
+	);
 	const pluginRuntime = getInteractivePluginRuntime();
 	useEffect(() => {
 		if (disabled || pluginRuntime === undefined) {
@@ -180,7 +218,7 @@ export function ChatTextArea({
 		}
 		return pluginRuntime.bindPromptSelectionTarget(
 			createPluginPromptSelectionTarget(connections, {
-				setModel: setModelForFutureSubmissions,
+				setModel: setFutureModelSelection,
 				setThinkingLevel: setThinkingLevelForFutureSubmissions,
 			})
 		);
@@ -188,7 +226,7 @@ export function ChatTextArea({
 		connections,
 		disabled,
 		pluginRuntime,
-		setModelForFutureSubmissions,
+		setFutureModelSelection,
 		setThinkingLevelForFutureSubmissions,
 	]);
 	const supportedModel = findSupportedChatModelSelection(model);
@@ -294,6 +332,7 @@ export function ChatTextArea({
 				onCompact,
 				onError: handleSubmitError,
 				onOpenSettings,
+				onSelectModel: setFutureModelSelection,
 			}),
 		[
 			commandControllerFactory,
@@ -301,6 +340,7 @@ export function ChatTextArea({
 			onCompact,
 			onOpenSettings,
 			sessionId,
+			setFutureModelSelection,
 			unavailableCommandCapabilities,
 		]
 	);

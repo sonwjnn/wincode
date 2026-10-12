@@ -68,6 +68,41 @@ export type ModelLimits = Readonly<{
 	output?: number;
 }>;
 
+export type PromptCacheRetentionTier = "short" | "long" | "off";
+export type SupportedPromptCacheRetentionTier = Exclude<
+	PromptCacheRetentionTier,
+	"off"
+>;
+
+/** The explicit cache controls and retention tiers verified for one Model. */
+export type OpenAIPromptCacheProtocol = "openai-chat" | "openai-responses";
+
+export type ModelPromptCacheProtocolCapabilities = Readonly<{
+	breakpoints?: true;
+	eligibility: Readonly<{ minimumInputTokens: number }>;
+	promptCacheKey?: true;
+	retention?: Readonly<{
+		field: "prompt_cache_options.ttl" | "prompt_cache_retention";
+		values: Readonly<
+			Partial<Record<SupportedPromptCacheRetentionTier, string>>
+		>;
+	}>;
+}>;
+
+export type ModelPromptCacheCapabilities = Readonly<{
+	explicit: Readonly<{
+		retentionTiers: readonly SupportedPromptCacheRetentionTier[];
+	}>;
+	googleCachedContent?: Readonly<{
+		ttl: Readonly<Partial<Record<SupportedPromptCacheRetentionTier, string>>>;
+	}>;
+	protocols?: Readonly<
+		Partial<
+			Record<OpenAIPromptCacheProtocol, ModelPromptCacheProtocolCapabilities>
+		>
+	>;
+}>;
+
 /**
  * Metadata a Model Catalog entry does not carry inline. Every field is
  * optional because the sources are: a fact the upstream does not publish is
@@ -76,6 +111,7 @@ export type ModelLimits = Readonly<{
 export type ModelMetadataEntry = Readonly<{
 	cost?: ModelCost;
 	limits?: ModelLimits;
+	promptCache?: ModelPromptCacheCapabilities;
 	reasoningSummary?: true;
 	thinking?: ModelThinkingPolicy;
 	tiers?: readonly ModelCostTier[];
@@ -106,6 +142,59 @@ const thinkingLevelMapSchema = z
 	})
 	.strict() satisfies z.ZodType<ThinkingLevelMap>;
 
+const modelPromptCacheProtocolCapabilitiesSchema = z
+	.object({
+		breakpoints: z.literal(true).optional(),
+		eligibility: z
+			.object({ minimumInputTokens: z.number().int().positive() })
+			.strict(),
+		promptCacheKey: z.literal(true).optional(),
+		retention: z
+			.object({
+				field: z.enum(["prompt_cache_options.ttl", "prompt_cache_retention"]),
+				values: z
+					.object({
+						short: z.string().min(1).optional(),
+						long: z.string().min(1).optional(),
+					})
+					.strict()
+					.refine((values) => Object.keys(values).length > 0),
+			})
+			.strict()
+			.optional(),
+	})
+	.strict() satisfies z.ZodType<ModelPromptCacheProtocolCapabilities>;
+
+const modelPromptCacheCapabilitiesSchema = z
+	.object({
+		explicit: z
+			.object({
+				retentionTiers: z.array(z.enum(["short", "long"])).min(1),
+			})
+			.strict(),
+		googleCachedContent: z
+			.object({
+				ttl: z
+					.object({
+						short: z.string().min(1).optional(),
+						long: z.string().min(1).optional(),
+					})
+					.strict()
+					.refine((values) => Object.keys(values).length > 0),
+			})
+			.strict()
+			.optional(),
+		protocols: z
+			.object({
+				"openai-chat": modelPromptCacheProtocolCapabilitiesSchema.optional(),
+				"openai-responses":
+					modelPromptCacheProtocolCapabilitiesSchema.optional(),
+			})
+			.strict()
+			.optional(),
+	})
+	.strict() satisfies z.ZodType<ModelPromptCacheCapabilities>;
+
 const modelThinkingPolicySchema = z
 	.object({
 		budgetMax: z.number().int().nonnegative().optional(),
@@ -132,6 +221,7 @@ export const modelMetadataEntrySchema = z
 			})
 			.strict()
 			.optional(),
+		promptCache: modelPromptCacheCapabilitiesSchema.optional(),
 		reasoningSummary: z.literal(true).optional(),
 		thinking: modelThinkingPolicySchema.optional(),
 		tiers: z.array(modelCostTierSchema).optional(),

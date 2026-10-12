@@ -32,6 +32,7 @@ export type CommandStrategyContext = {
 	dialog: Pick<DialogContextValue, "open">;
 	getRecentModelSelections: (limit: number) => ChatModelSelection[];
 	navigateHome: () => void;
+	onSelectModel?: (model: ChatModelSelection) => void;
 	onCompact?: (focus?: string) => boolean | Promise<boolean>;
 	onReload: () => Promise<void>;
 	onTrust: () => Promise<void>;
@@ -142,11 +143,11 @@ const STRATEGIES = {
 	"model.select": {
 		kind: "dialog",
 		title: "Select Model",
-		content: ({ config, getRecentModelSelections }) =>
+		content: ({ config, getRecentModelSelections, onSelectModel }) =>
 			createElement(ModelsDialogContent, {
 				currentModel: config.model,
 				models: getModelsForPicker(modelCatalog, config.model),
-				onSelectModel: config.setModelForFutureSubmissions,
+				onSelectModel: onSelectModel ?? config.setModelForFutureSubmissions,
 				recentSelections: getRecentModelSelections(10),
 			}),
 	},

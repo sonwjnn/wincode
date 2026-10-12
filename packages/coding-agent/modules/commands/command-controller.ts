@@ -1,3 +1,4 @@
+import type { ChatModelSelection } from "@wincode/ai/models";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { PluginCommandDescriptor } from "@/modules/plugins/runtime";
 import type { Skill, SkillContext } from "@/modules/skills";
@@ -97,6 +98,7 @@ export type CommandController = {
 export type CommandControllerOptions = {
 	unavailableCapabilities?: readonly CommandCapability[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
+	onSelectModel?: (model: ChatModelSelection) => void;
 	onError: (message: string) => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	sessionId?: string;
