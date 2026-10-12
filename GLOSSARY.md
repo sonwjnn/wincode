@@ -1,5 +1,18 @@
 # Domain Context
 
+## Planned AI SDK language
+
+These terms describe the accepted SDK target in [ADR-0048](docs/adr/0048-extensible-ai-sdk-providers-and-app-owned-model-selection.md), not the currently running Coding-Agent application. The existing Connection Provider and Model Catalog definitions below remain current until Coding-Agent migrates; replace rather than conflate them at that cutover.
+
+**SDK Provider**:
+A runtime identity that owns authentication, its known models, and the behavior for invoking them. Several SDK Providers may use the same Model Protocol without sharing an identity. _Avoid_: Connection Provider, Model Protocol
+
+**Provider Model**:
+A model identified within an SDK Provider and associated with a Model Protocol. Being known by the SDK does not mean the provider is authenticated or online. _Avoid_: Model Catalog entry, available model
+
+**Known Model**:
+A Provider Model in the provider's last-known list, including one restored from an offline snapshot. It is distinct from an invocable model and from the identity retained by an old Session. _Avoid_: available model, product allowlist
+
 ## Connection Provider
 
 A Connection Provider defines how the CLI authenticates with an AI provider.

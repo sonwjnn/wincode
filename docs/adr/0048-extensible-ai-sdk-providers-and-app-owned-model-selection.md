@@ -1,0 +1,32 @@
+# Make @wincode/ai an independently usable, extensible provider SDK
+
+Status: accepted target; implementation pending
+
+`@wincode/ai` will be an independently usable Node and Bun SDK, not a Coding-Agent-specific catalog and request wrapper. Applications must be able to register a provider without editing the SDK: a provider owns authentication, its model list, and chat streaming; a model identifies the provider-facing protocol used to call it. Wincode will continue to own the wire implementations rather than depend on Pi AI (ADR-0029). This decision deliberately reopens ADR-0012's static curated allowlist and changes the current Connection Provider definition in the glossary **when Coding-Agent migrates**. Until then, those documents describe the running application, not the SDK target.
+
+## SDK interface and ownership
+
+- The side-effect-free core exposes a provider collection and registration interface, credential and model-store contracts, model lookup, auth-aware availability, and a provider-neutral chat event stream. Built-in provider factories live at individual subpaths; importing the core does not load their catalogs, browser login, or network implementations. Registering an already-used provider ID fails; replacement, if offered, must be explicit.
+- A registered provider owns its auth resolution and refresh, model listing and optional discovery, and chat stream behavior. Custom providers may supply their own wire protocol; existing protocol implementations may be reused by multiple providers without conflating provider identity with protocol identity. Applications register providers by code in the first milestone; file/config/plugin registration is a later application decision.
+- The first built-ins are OpenAI, Anthropic, Google, OpenCode Go, DeepSeek, and OpenRouter. Retain OpenAI browser OAuth and existing model routes. DeepSeek has a small bundled model baseline; OpenRouter supports model discovery. Applications can also supply models; the SDK does not bundle every OpenRouter model. Image generation and classification are outside the first milestone; chat, tool calls, reasoning, usage, and multimodal input are inside it.
+- A custom model requires provider ID, model ID, and protocol ID. Capabilities, context/output limits, pricing, and cache metadata are optional; consumers must not invent missing values. Existing built-in metadata and per-model behaviors remain available. Core Node/Bun support cannot rely on application filesystem, TUI, or Bun-only interfaces.
+- Callers identify a request by provider and model ID; the SDK resolves the current model and authorization. It does not require callers to construct Wincode's transient, secret-bearing `ModelTarget`. The chat stream has its own text/reasoning/tool/usage lifecycle and a structured terminal failure or abort outcome; it is not an Agent Turn event stream. Provider auth, missing-model, network, and stream failures must remain distinguishable. The Agent Runtime stays provider-neutral.
+- The SDK accepts an application-owned credential store, with an in-memory default and one credential per provider ID per SDK instance. Credential refresh is serialized with store updates so concurrent calls cannot overwrite a rotated credential. Multi-account apps use separate instances in this milestone. The SDK also accepts an application-owned model store: a successful discovery can be restored offline without claiming the provider is reachable. `getModels()` means last-known models; `getAvailable()` filters on configured auth, not a network health check. A failed or cancelled refresh keeps the last-known list.
+- Cache retention is an optional preference, mapped by supporting protocols and ignored by others, as in Pi AI. Wincode's existing model-aware cache policy, resource management, usage accounting, and cache-specific fallback (ADR-0046) remain application/protocol concerns. A future Coding-Agent migration must explicitly account for its current strict cache-option validation changing to this SDK behavior.
+
+## Application separation and migration
+
+The SDK does not enforce a Wincode product allowlist: a provider's models can be discovered and called by an independent SDK consumer. Coding-Agent's existing static curated Model Catalog (ADR-0012) is not silently reinterpreted as provider discovery. When Coding-Agent migrates, it will select from provider-published models rather than that allowlist, while preserving the identity and display information of models already referenced by Session history. A model absent from the current provider list remains legible in old Sessions but cannot be invoked for a new turn; never silently substitute another model. Model metadata provenance and model availability must remain distinct from historical Session identity. The migration must explicitly update the glossary and supersede ADR-0012's allowlist rule; until then, ADR-0012 remains the current application contract.
+
+Deliver in two milestones: first prove the new SDK through a consumer outside Coding-Agent (including a custom provider, auth, streaming, offline discovery, and failure cases); then migrate Coding-Agent and remove the old application-specific interfaces rather than maintain a permanent compatibility adapter. Do not change Session record interpretation as a side effect of the first SDK milestone. The existing Coding-Agent migration is deferred while its worktree has unresolved conflicts.
+
+## Considered alternatives
+
+Depending on Pi AI or mirroring every Pi provider would buy breadth quickly but surrender ownership of protocol behavior and obscure the smaller extensibility seam that Wincode actually needs. Keeping `ModelTarget` and the fixed catalog as the public SDK interface would make external consumers inherit Coding-Agent policy and secret handling. Publishing all built-ins through the core would force consumers of a single provider to load unrelated implementations. Persisting credentials or model catalogs inside the SDK would impose application storage policy on external users.
+
+## Sources
+
+- [Pi AI provider collection](https://github.com/earendil-works/pi/blob/main/packages/ai/src/models.ts)
+- [Pi AI credential store](https://github.com/earendil-works/pi/blob/main/packages/ai/src/auth/credential-store.ts)
+- [Pi Coding Agent model runtime](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/model-runtime.ts)
+- [Pi AI package exports](https://github.com/earendil-works/pi/blob/main/packages/ai/package.json)
