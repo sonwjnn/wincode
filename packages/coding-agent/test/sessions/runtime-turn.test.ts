@@ -110,7 +110,7 @@ test("keeps inline file parts in the Agent Turn model input", () => {
 				role: "user",
 			},
 		],
-		modelTarget: createTurn().model,
+		model: createTurn().model,
 		resolvedAgent: buildAgent,
 		turnId: agentTurnId("turn-file-input"),
 	});
@@ -141,7 +141,7 @@ test("places the Skill context before the user message it was selected for", () 
 				role: "user",
 			},
 		],
-		modelTarget: createTurn().model,
+		model: createTurn().model,
 		resolvedAgent: buildAgent,
 		skill: {
 			contentHash: "hash-1",
@@ -179,7 +179,7 @@ test("appends the Skill context when the current user message is absent", () => 
 				role: "assistant",
 			},
 		],
-		modelTarget: createTurn().model,
+		model: createTurn().model,
 		resolvedAgent: buildAgent,
 		skill: {
 			contentHash: "hash-1",
@@ -223,7 +223,7 @@ test("appends the Skill context when the current user message is empty", () => {
 				role: "user",
 			},
 		],
-		modelTarget: createTurn().model,
+		model: createTurn().model,
 		resolvedAgent: buildAgent,
 		skill: {
 			contentHash: "hash-1",

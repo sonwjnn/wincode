@@ -1,6 +1,7 @@
 import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ProviderCollection } from "@wincode/ai/sdk";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
@@ -34,6 +35,8 @@ export type SessionCapabilities = Readonly<{
 	) => Promise<ResolvedCompactionSettings>;
 	getConfig: () => ConfigRuntime;
 	getConnections: () => Connections;
+	/** Creates a Host-owned ProviderCollection when this Host uses the SDK path. */
+	createProviderCollection?: () => ProviderCollection | undefined;
 	/** Current pricing snapshot used only for best-effort cache-warming economics. */
 	getModelPricingTable?: () => ModelPricingTable;
 	/** The Agent registry, which resolves only after the session opened. */

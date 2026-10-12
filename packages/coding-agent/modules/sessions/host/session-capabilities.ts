@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { AgentRuntime } from "@wincode/agent-core";
 import { type Connections, createConnections } from "@wincode/ai/connections";
+import type { ProviderCollection } from "@wincode/ai/sdk";
 import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,
@@ -18,6 +19,7 @@ import { estimateCompactionTokens } from "../compaction/config";
 import { createCompactionSettingsOperations } from "../compaction/settings-operations";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { resolveTurnTools, type TurnToolResolver } from "../hooks/runtime-turn";
+import { createDefaultSessionProviderCollection } from "../provider-collection";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
@@ -72,6 +74,7 @@ export type SessionPluginRuntime = Readonly<{
 
 export type SessionCapabilitiesOptions = Readonly<{
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
+	createProviderCollection?: () => ProviderCollection | undefined;
 	database?: SessionDatabase;
 	databasePath?: string;
 	/** Reads the current configuration, resolved per read so a reload lands. */
@@ -171,6 +174,8 @@ const openSessionDatabase = async ({
 export const createSessionCapabilities = async ({
 	getConnections: providedGetConnections,
 	getConfig: providedGetConfig,
+	createProviderCollection:
+		providerCollectionFactory = createDefaultSessionProviderCollection,
 	capabilityCeiling,
 	database: providedDatabase,
 	databasePath,
@@ -263,6 +268,7 @@ export const createSessionCapabilities = async ({
 		const getPluginRuntime = (): PluginRuntime =>
 			providedGetPluginRuntime?.() ?? pluginRuntime;
 		const capabilities: SessionCapabilities = {
+			createProviderCollection: providerCollectionFactory,
 			getCapabilityCeiling: () => capabilityCeiling,
 			getModelPricingTable: pricing,
 			getCompactionModule: () => compaction,

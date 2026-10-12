@@ -206,7 +206,7 @@ describe("public Google SDK provider", () => {
 				},
 			},
 		]);
-		await provider.close();
+		await sdk.close();
 		expect(cacheDeletes).toEqual([{ name: "cachedContents/session" }]);
 		expect(JSON.stringify(events)).not.toContain("app-owned-google-key");
 	});

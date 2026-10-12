@@ -97,6 +97,7 @@ export const createAgentSessionAdapters = (
 		cacheWarming,
 		capabilities,
 		googleCachedContentResourceManager,
+		providerCollection,
 		isShutDown,
 		sessionId,
 		statefulAgent,
@@ -109,6 +110,7 @@ export const createAgentSessionAdapters = (
 		cacheWarming,
 		capabilities,
 		googleCachedContentResourceManager,
+		...(providerCollection === undefined ? {} : { providerCollection }),
 		sessionId,
 		statefulAgent,
 	};

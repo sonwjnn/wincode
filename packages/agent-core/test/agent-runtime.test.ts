@@ -6,10 +6,12 @@ import {
 	createAgentRuntime,
 	createAgentTurnMessage,
 	createStatefulAgent,
+	type ModelStepObserver,
 	type ResolvedTool,
 	type ToolCallId,
 	type ToolDefinition,
 	toAgentTurnId,
+	toModelId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
 import type {
@@ -19,6 +21,12 @@ import type {
 } from "@wincode/ai/model-client";
 import { createModelTarget } from "@wincode/ai/model-target";
 import { supportedChatModelIdSchema } from "@wincode/ai/models";
+import {
+	type CredentialStore,
+	createProviderCollection,
+	type Provider,
+	ProviderError,
+} from "@wincode/ai/sdk";
 import { z } from "zod";
 
 const buildTurn = (tools: readonly ResolvedTool[] = []): AgentTurn => ({
@@ -139,10 +147,16 @@ test("Agent Runtime isolates Session request observers from active Turns", async
 		createAgentRuntime({ modelClient: client }).run(buildTurn(), {
 			modelStepObserver: {
 				onModelStepFinished: (request, usage) => {
+					if (!("target" in request)) {
+						return;
+					}
 					finished.push({ request, usage });
 					throw new Error("usage observer failed");
 				},
 				onModelStepStarted: (request) => {
+					if (!("target" in request)) {
+						return;
+					}
 					started.push(request);
 					throw new Error("request observer failed");
 				},
@@ -173,6 +187,420 @@ test("Agent Runtime forwards the Session-stable prompt-cache key to each Model S
 
 	expect(requests).toHaveLength(1);
 	expect(requests[0]?.promptCacheKey).toBe("wincode-session:session-123");
+});
+
+test("SDK-backed Agent Runtime forwards request controls to the fake Provider", async () => {
+	const requests: Parameters<Provider["streamChat"]>[0][] = [];
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["reasoning", "text"],
+				modelId: "sdk-controls-model",
+				protocolId: "test-protocol",
+				providerId: "test-provider",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat(request) {
+			requests.push(request);
+			yield { delta: "Controls arrived.", type: "text-delta" };
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const events = await consume(
+		createAgentRuntime({ providerCollection: providers }).run(
+			{
+				...buildTurn(),
+				model: {
+					maxOutputTokens: 321,
+					modelId: toModelId("sdk-controls-model"),
+					promptCacheEnabled: true,
+					promptCacheRetention: "long",
+					providerId: "test-provider",
+					thinkingLevel: "high",
+				},
+			},
+			{
+				cacheWarming: true,
+				promptCacheKey: "wincode-session:controls-session",
+			}
+		)
+	);
+
+	expect(events.at(-1)).toMatchObject({ type: "agent-turn-completed" });
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).toMatchObject({
+		cacheRetention: "long",
+		cacheWarming: true,
+		maxOutputTokens: 321,
+		promptCacheKey: "wincode-session:controls-session",
+		reasoningEffort: "high",
+	});
+});
+
+test("SDK Agent Runtime maps explicit reasoning off to none but leaves unset effort absent", async () => {
+	const requests: Parameters<Provider["streamChat"]>[0][] = [];
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["reasoning", "text"],
+				modelId: "sdk-reasoning-model",
+				protocolId: "test-protocol",
+				providerId: "test-provider",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat(request) {
+			requests.push(request);
+			yield { type: "finish" };
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const runtime = createAgentRuntime({ providerCollection: providers });
+	const turnFor = (thinkingLevel?: "off"): AgentTurn => ({
+		...buildTurn(),
+		model: {
+			modelId: toModelId("sdk-reasoning-model"),
+			providerId: "test-provider",
+			...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+		},
+	});
+
+	await consume(runtime.run(turnFor("off")));
+	await consume(runtime.run(turnFor()));
+
+	expect(requests).toHaveLength(2);
+	expect(requests[0]?.reasoningEffort).toBe("none");
+	expect(requests[1]?.reasoningEffort).toBeUndefined();
+});
+
+test("SDK provider failures map safely and never complete an Agent Turn", async () => {
+	const providerId = "test-provider";
+	const sdkModelId = "sdk-failure-model";
+	type FailureScenario = Readonly<{
+		credentialStoreFailure?: boolean;
+		expectedCode: string;
+		expectedRetry: string;
+		name: string;
+		providerFailure?: ProviderError;
+		registerProvider?: boolean;
+		requestModelId: string;
+		requestProviderId: string;
+		tool?: boolean;
+	}>;
+	const scenarios: readonly FailureScenario[] = [
+		{
+			expectedCode: "invalid-request",
+			expectedRetry: "never",
+			name: "unregistered provider",
+			registerProvider: false,
+			requestModelId: sdkModelId,
+			requestProviderId: "missing-provider",
+		},
+		{
+			expectedCode: "invalid-request",
+			expectedRetry: "never",
+			name: "unavailable model",
+			requestModelId: "missing-model",
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "invalid-request",
+			expectedRetry: "never",
+			name: "unsupported tool capability",
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+			tool: true,
+		},
+		{
+			expectedCode: "authentication",
+			expectedRetry: "never",
+			name: "provider authentication failure",
+			providerFailure: new ProviderError(
+				"authentication",
+				"private provider detail"
+			),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "unknown",
+			expectedRetry: "never",
+			name: "credential store failure",
+			credentialStoreFailure: true,
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "unknown",
+			expectedRetry: "never",
+			name: "provider failure",
+			providerFailure: new ProviderError("provider", "private provider detail"),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "network",
+			expectedRetry: "after-delay",
+			name: "transport failure",
+			providerFailure: new ProviderError(
+				"transport",
+				"private transport detail"
+			),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+	];
+
+	for (const scenario of scenarios) {
+		const credentialStore: CredentialStore | undefined =
+			scenario.credentialStoreFailure
+				? {
+						delete: () => undefined,
+						get: () => {
+							throw new Error("private credential store detail");
+						},
+						set: () => undefined,
+					}
+				: undefined;
+		const providers = createProviderCollection(
+			credentialStore === undefined ? {} : { credentialStore }
+		);
+		if (scenario.registerProvider !== false) {
+			providers.register({
+				id: providerId,
+				models: [
+					{
+						capabilities: scenario.tool ? ["text"] : ["text", "tools"],
+						modelId: sdkModelId,
+						protocolId: "test-protocol",
+						providerId,
+					},
+				],
+				resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+				async *streamChat() {
+					if (scenario.providerFailure !== undefined) {
+						throw scenario.providerFailure;
+					}
+					yield { delta: "unexpected success", type: "text-delta" };
+				},
+			});
+		}
+		const turn: AgentTurn = {
+			...buildTurn(
+				scenario.tool
+					? [
+							{
+								definition: readDefinition,
+								execute: async () => ({
+									output: { content: "source text" },
+									type: "success",
+								}),
+							},
+						]
+					: []
+			),
+			model: {
+				modelId: toModelId(scenario.requestModelId),
+				providerId: scenario.requestProviderId,
+			},
+		};
+		const events = await consume(
+			createAgentRuntime({ providerCollection: providers }).run(turn)
+		);
+		const terminal = events.at(-1);
+
+		expect(terminal, scenario.name).toMatchObject({
+			failure: {
+				code: scenario.expectedCode,
+				details: {
+					modelId: scenario.requestModelId,
+					providerId: scenario.requestProviderId,
+				},
+				retry: scenario.expectedRetry,
+				source: "model",
+			},
+			type: "agent-turn-failed",
+		});
+		expect(
+			events.filter(({ type }) => type === "agent-turn-completed")
+		).toEqual([]);
+		expect(JSON.stringify(terminal)).not.toContain("private");
+	}
+});
+
+test("SDK-backed Agent Runtime delivers late steering after tool results without a Model Target", async () => {
+	const providerModel = {
+		capabilities: ["text", "tools"] as const,
+		modelId: "sdk-model",
+		protocolId: "test-protocol",
+		providerId: "test-provider",
+	};
+	const requests: Parameters<Provider["streamChat"]>[0][] = [];
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat(request) {
+			requests.push(request);
+			if (requests.length === 1) {
+				yield {
+					input: { path: "src/main.ts" },
+					toolCallId: "sdk-read-call",
+					toolName: "read",
+					type: "tool-call",
+				};
+				yield {
+					type: "usage",
+					usage: { inputTokens: 10, outputTokens: 4 },
+				};
+				yield { continuation: { responseId: "sdk-step-one" }, type: "finish" };
+				return;
+			}
+			yield { delta: "Continued after steering.", type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 14, outputTokens: 3 },
+			};
+			yield { type: "finish" };
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const tool: ResolvedTool = {
+		definition: readDefinition,
+		execute: async () => ({
+			output: { content: "source text" },
+			type: "success",
+		}),
+	};
+	const turn: AgentTurn = {
+		...buildTurn([tool]),
+		model: { modelId: toModelId("sdk-model"), providerId: "test-provider" },
+	};
+	const steering = createAgentTurnMessage(
+		"user",
+		"Focus on the error path.",
+		toSessionMessageId("sdk-steering-message")
+	);
+	const pendingSteering = [steering];
+	type ObservedModelStepRequest = Parameters<
+		ModelStepObserver["onModelStepStarted"]
+	>[0];
+	const observedStarts: ObservedModelStepRequest[] = [];
+	const observedFinishes: {
+		request: ObservedModelStepRequest;
+		inputTokens?: number;
+		outputTokens?: number;
+	}[] = [];
+	const events = await consume(
+		createAgentRuntime({ providerCollection: providers }).run(turn, {
+			modelStepObserver: {
+				onModelStepFinished: (request, usage) => {
+					observedFinishes.push({
+						request,
+						inputTokens: usage?.inputTokens,
+						outputTokens: usage?.outputTokens,
+					});
+				},
+				onModelStepStarted: (request) => observedStarts.push(request),
+			},
+			takeSteeringMessages: () => pendingSteering.splice(0),
+		})
+	);
+
+	expect(events.map(({ type }) => type)).toEqual([
+		"agent-turn-started",
+		"model-step-started",
+		"tool-call-started",
+		"tool-call-finished",
+		"model-step-finished",
+		"model-step-started",
+		"text-delta",
+		"model-step-finished",
+		"agent-turn-completed",
+	]);
+	expect(requests).toHaveLength(2);
+	expect(observedStarts).toHaveLength(2);
+	expect(observedFinishes).toMatchObject([
+		{ inputTokens: 10, outputTokens: 4 },
+		{ inputTokens: 14, outputTokens: 3 },
+	]);
+	for (const request of observedStarts) {
+		expect(request).toMatchObject({
+			modelId: "sdk-model",
+			providerId: "test-provider",
+		});
+		expect("target" in request).toBe(false);
+	}
+	expect(requests[1]?.messages.map(({ role }) => role)).toEqual([
+		"user",
+		"assistant",
+		"tool",
+		"user",
+	]);
+	expect(requests[1]?.messages[1]).toMatchObject({
+		continuation: { responseId: "sdk-step-one" },
+		role: "assistant",
+	});
+	expect(requests[1]?.messages[2]).toMatchObject({
+		content: [
+			{
+				output: { content: "source text" },
+				toolCallId: "sdk-read-call",
+				type: "tool-result",
+			},
+		],
+		role: "tool",
+	});
+	expect(requests[1]?.messages[3]?.content).toEqual([
+		{ text: "Focus on the error path.", type: "text" },
+	]);
+	expect(events.at(-1)).toMatchObject({
+		type: "agent-turn-completed",
+		usage: { inputTokens: 24, outputTokens: 7, totalTokens: 31 },
+	});
+});
+
+test("ProviderCollection abort without caller cancellation cancels the Agent Turn", async () => {
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["text"],
+				modelId: "sdk-abort-model",
+				protocolId: "test-protocol",
+				providerId: "test-provider",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat() {
+			yield { delta: "Partial output.", type: "text-delta" };
+			throw new DOMException("provider abort", "AbortError");
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const events = await consume(
+		createAgentRuntime({ providerCollection: providers }).run({
+			...buildTurn(),
+			model: {
+				modelId: toModelId("sdk-abort-model"),
+				providerId: "test-provider",
+			},
+		})
+	);
+
+	expect(events.map(({ type }) => type)).toEqual([
+		"agent-turn-started",
+		"model-step-started",
+		"text-delta",
+		"agent-turn-cancelled",
+	]);
 });
 
 test("Agent Runtime delivers steering after tool results and continues the same turn", async () => {

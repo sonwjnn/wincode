@@ -4,13 +4,28 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
+import {
+	type AgentTurnEvent,
+	agentIdSchema,
+	createAgentRuntime,
+} from "@wincode/agent-core";
 import * as connectionsModule from "@wincode/ai/connections";
 import type {
 	ModelStepRequest,
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
-import { defaultChatModelSelection } from "@wincode/ai/models";
+import {
+	defaultChatModelSelection,
+	type ThinkingLevel,
+} from "@wincode/ai/models";
+import {
+	createProviderCollection,
+	type Provider,
+	type ProviderChatRequest,
+	type ProviderCollection,
+	ProviderError,
+	type ProviderModel,
+} from "@wincode/ai/sdk";
 import {
 	createSessionSdk as createPublicSessionSdk,
 	type SessionSdkOptions,
@@ -21,6 +36,7 @@ import {
 } from "@wincode/subagents/plugin";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import type { PluginAgentRegistration } from "@/modules/plugins/public";
+import * as sessionProviderCollectionModule from "@/modules/sessions/provider-collection";
 import { createSessionSdkWithRuntime as createSessionSdk } from "@/modules/sessions/sdk";
 import type {
 	SessionSdk,
@@ -75,6 +91,411 @@ test("public Session SDK options do not expose host-internal dependencies", () =
 	// @ts-expect-error ConfigStore injection is an internal host dependency.
 	const invalidOptions: SessionSdkOptions = { configStore };
 	void invalidOptions;
+
+	const invalidProviderOptions: SessionSdkOptions = {
+		// @ts-expect-error ProviderCollection construction is an internal host dependency.
+		createProviderCollection: () => undefined,
+		workspace,
+	};
+	void invalidProviderOptions;
+});
+
+test("public Session SDK drives multiple Agent Model Steps through ProviderCollection without a Model Target", async () => {
+	const sdkWorkspace = path.join(root, "public-sdk-provider-workspace");
+	const sdkHomeRoot = path.join(root, "public-sdk-provider-home");
+	const databasePath = path.join(storeRoot, "public-sdk-provider.sqlite");
+	const toolFixtureRoot = await fs.mkdtemp(
+		path.join(process.cwd(), "session-sdk-provider-fixture-")
+	);
+	const toolFixturePath = path.join(toolFixtureRoot, "instructions.txt");
+	const toolInputPath = path.relative(process.cwd(), toolFixturePath);
+	const missingToolInputPath = path.relative(
+		process.cwd(),
+		path.join(toolFixtureRoot, "missing.txt")
+	);
+	await Bun.write(toolFixturePath, "Temporary provider SDK tool fixture.\n");
+	await Promise.all(
+		[sdkWorkspace, sdkHomeRoot].map((directory) =>
+			fs.mkdir(directory, { recursive: true })
+		)
+	);
+	const providerModel: ProviderModel = {
+		capabilities: ["reasoning", "text", "tools"],
+		limits: { maxOutputTokens: 777 },
+		modelId: defaultChatModelSelection.modelId,
+		protocolId: "session-sdk-test",
+		providerId: defaultChatModelSelection.providerId,
+	};
+	const credentials = new Map<string, unknown>([
+		[defaultChatModelSelection.providerId, "fake-session-sdk-credential"],
+	]);
+	const credentialStore = {
+		delete: (providerId: string) => {
+			credentials.delete(providerId);
+		},
+		get: (providerId: string) => credentials.get(providerId),
+		set: (providerId: string, credential: unknown) => {
+			credentials.set(providerId, credential);
+		},
+	};
+	const providerCollections: ProviderCollection[] = [];
+	const providerCloseCalls: number[] = [];
+	const requests: ProviderChatRequest[] = [];
+	const stepsByPrompt = new Map<string, number>();
+	const abortStarted = Promise.withResolvers<void>();
+	const providerStreamStarted = Promise.withResolvers<void>();
+	const providerStreamCleanupStarted = Promise.withResolvers<void>();
+	const finishProviderStreamCleanup = Promise.withResolvers<void>();
+	const providerCloseStarted = Promise.withResolvers<void>();
+	const finishProviderClose = Promise.withResolvers<void>();
+	const providerLifecycle: string[] = [];
+	let providerStreamActive = false;
+	let providerWasActiveAtClose = false;
+	const providerForHost = (hostIndex: number): Provider => ({
+		close: async () => {
+			providerCloseCalls.push(hostIndex);
+			if (hostIndex === 4) {
+				providerWasActiveAtClose = providerStreamActive;
+				providerLifecycle.push("provider-close");
+				providerCloseStarted.resolve();
+				await finishProviderClose.promise;
+			}
+		},
+		id: providerModel.providerId,
+		models: [providerModel],
+		resolveAuthorization: ({ credential }) =>
+			credential === undefined ? null : { authorization: credential },
+		async *streamChat(request, { signal }) {
+			requests.push(request);
+			const userText = request.messages
+				.filter((message) => message.role === "user")
+				.flatMap((message) =>
+					message.content.flatMap((part) =>
+						part.type === "text" ? [part.text] : []
+					)
+				)
+				.at(-1);
+			const step = stepsByPrompt.get(userText ?? "") ?? 0;
+			stepsByPrompt.set(userText ?? "", step + 1);
+			if (userText === "Wait for Host-owned Provider cleanup.") {
+				providerStreamActive = true;
+				providerStreamStarted.resolve();
+				const aborted = Promise.withResolvers<void>();
+				try {
+					if (signal === undefined) {
+						throw new Error("The active Provider stream needs a signal.");
+					}
+					signal.addEventListener("abort", () => aborted.resolve(), {
+						once: true,
+					});
+					if (signal.aborted) {
+						throw signal.reason ?? new DOMException("Aborted", "AbortError");
+					}
+					await aborted.promise;
+					throw signal.reason ?? new DOMException("Aborted", "AbortError");
+				} finally {
+					providerLifecycle.push("provider-stream-cleanup-started");
+					providerStreamCleanupStarted.resolve();
+					await finishProviderStreamCleanup.promise;
+					providerStreamActive = false;
+					providerLifecycle.push("provider-stream-unwound");
+				}
+			}
+			if (userText === "Surface the fake authentication failure.") {
+				throw new ProviderError("authentication", "fake credential rejected");
+			}
+			if (
+				userText ===
+				"Abort the fake provider stream without interrupting the Session."
+			) {
+				yield { delta: "Partial provider output", type: "text-delta" };
+				throw new DOMException("fake provider abort", "AbortError");
+			}
+			if (userText === "Interrupt the fake provider stream.") {
+				yield { delta: "Partial output", type: "text-delta" };
+				abortStarted.resolve();
+				const aborted = Promise.withResolvers<void>();
+				if (signal?.aborted) {
+					throw signal.reason ?? new DOMException("Aborted", "AbortError");
+				}
+				signal?.addEventListener("abort", () => aborted.resolve(), {
+					once: true,
+				});
+				await aborted.promise;
+				throw signal?.reason ?? new DOMException("Aborted", "AbortError");
+			}
+			if (step === 0) {
+				yield { delta: "Reviewing ", type: "text-delta" };
+				yield {
+					delta: "I should inspect the instructions.",
+					type: "reasoning-delta",
+				};
+				yield {
+					input: { path: toolInputPath },
+					toolCallId: "session-sdk-read-success",
+					toolName: "read",
+					type: "tool-call",
+				};
+				yield {
+					input: { path: missingToolInputPath },
+					toolCallId: "session-sdk-read-failure",
+					toolName: "read",
+					type: "tool-call",
+				};
+				yield {
+					type: "usage",
+					usage: { inputTokens: 3, outputTokens: 2, reasoningTokens: 1 },
+				};
+				yield {
+					continuation: { responseId: "sdk-continuation-1" },
+					type: "finish",
+				};
+				return;
+			}
+			yield { delta: "The instructions were reviewed.", type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 5, outputTokens: 3 },
+			};
+			yield { type: "finish" };
+		},
+	});
+	const providerCollectionForHost = (): ProviderCollection => {
+		const hostIndex = providerCollections.length;
+		const providers = createProviderCollection({ credentialStore });
+		providers.register(providerForHost(hostIndex));
+		providerCollections.push(providers);
+		return providers;
+	};
+	const previousHome = process.env.HOME;
+	const previousUserProfile = process.env.USERPROFILE;
+	let sdk: SessionSdk | undefined;
+	const handles: SessionSdkHandle[] = [];
+	try {
+		process.env.HOME = sdkHomeRoot;
+		process.env.USERPROFILE = sdkHomeRoot;
+		spyOn(os, "homedir").mockReturnValue(sdkHomeRoot);
+		const fakeConnections = {
+			authorize: async () => {
+				throw new Error("SDK-backed turns must not authorize legacy targets.");
+			},
+			connect: async () => undefined,
+			listProviders: async () => [],
+		};
+		spyOn(connectionsModule, "createConnections").mockReturnValue(
+			fakeConnections
+		);
+		spyOn(
+			sessionProviderCollectionModule,
+			"createDefaultSessionProviderCollection"
+		).mockImplementation(providerCollectionForHost);
+		sdk = await createPublicSessionSdk({
+			cwd: sdkWorkspace,
+			databasePath,
+			pluginPaths: [],
+			projectTrust: "deny",
+			workspace: sdkWorkspace,
+		});
+		const runPrompt = async (text: string, thinkingLevel?: ThinkingLevel) => {
+			const handle = await sdk?.createSession({
+				model: defaultChatModelSelection,
+				...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+			});
+			if (handle === undefined) {
+				throw new Error("The public Session SDK was not created.");
+			}
+			handles.push(handle);
+			const events: AgentTurnEvent[] = [];
+			const terminal = Promise.withResolvers<AgentTurnEvent>();
+			const partialOutput = Promise.withResolvers<void>();
+			const unsubscribe = handle.onEvent((event) => {
+				events.push(event);
+				if (event.type === "text-delta" && text.startsWith("Interrupt")) {
+					partialOutput.resolve();
+				}
+				if (
+					event.type === "agent-turn-completed" ||
+					event.type === "agent-turn-failed" ||
+					event.type === "agent-turn-cancelled" ||
+					event.type === "agent-turn-interrupted"
+				) {
+					terminal.resolve(event);
+				}
+			});
+			const admission = await handle.prompt({
+				text,
+				...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+			});
+			expect(admission.rejected).toBe(false);
+			return {
+				events,
+				handle,
+				partialOutput: partialOutput.promise,
+				terminal: terminal.promise,
+				unsubscribe,
+			};
+		};
+		const success = await runPrompt(
+			"Review the temporary instructions.",
+			"high"
+		);
+		const successTerminal = await success.terminal;
+		expect(successTerminal).toMatchObject({
+			type: "agent-turn-completed",
+			usage: { inputTokens: 8, outputTokens: 5, totalTokens: 13 },
+		});
+		expect(success.events.map(({ type }) => type)).toContain("reasoning-delta");
+		expect(
+			success.events.filter(({ type }) => type === "model-step-started")
+		).toHaveLength(2);
+		expect(
+			success.events.filter(({ type }) => type === "model-step-finished")
+		).toMatchObject([
+			{ usage: { inputTokens: 3, outputTokens: 2 } },
+			{ usage: { inputTokens: 5, outputTokens: 3 } },
+		]);
+		const toolOutcomes = success.events.filter(
+			(event) => event.type === "tool-call-finished"
+		);
+		expect(toolOutcomes).toHaveLength(2);
+		expect(
+			Object.fromEntries(
+				toolOutcomes.map(({ toolCallId, outcome }) => [
+					toolCallId,
+					outcome.type,
+				])
+			)
+		).toEqual({
+			"session-sdk-read-failure": "failure",
+			"session-sdk-read-success": "success",
+		});
+		expect(requests).toHaveLength(2);
+		expect(requests[0]).toMatchObject({
+			cacheRetention: "short",
+			maxOutputTokens: 777,
+			promptCacheKey: `wincode-session:${success.handle.sessionId}`,
+			reasoningEffort: "high",
+		});
+		expect(requests[1]).toMatchObject({
+			cacheRetention: "short",
+			maxOutputTokens: 777,
+			promptCacheKey: `wincode-session:${success.handle.sessionId}`,
+			reasoningEffort: "high",
+		});
+		expect(requests[0]).not.toHaveProperty("target");
+		expect(requests[0]).not.toHaveProperty("authorization");
+		expect(requests[0]?.tools?.map(({ name }) => name)).toContain("read");
+		expect(requests[1]?.messages.map(({ role }) => role)).toEqual([
+			"user",
+			"assistant",
+			"tool",
+			"tool",
+		]);
+		expect(requests[1]?.messages[1]).toMatchObject({
+			continuation: { responseId: "sdk-continuation-1" },
+			role: "assistant",
+		});
+		expect(requests[1]?.messages[2]?.content[0]).toMatchObject({
+			type: "tool-result",
+		});
+		expect(requests[1]?.messages[3]?.content[0]).toMatchObject({
+			type: "tool-failure",
+		});
+
+		const failure = await runPrompt("Surface the fake authentication failure.");
+		const failureTerminal = await failure.terminal;
+		expect(failureTerminal).toMatchObject({
+			failure: {
+				code: "authentication",
+				message: "Model authentication failed.",
+			},
+			type: "agent-turn-failed",
+		});
+		expect(
+			failure.events.some(({ type }) => type === "agent-turn-completed")
+		).toBe(false);
+
+		const sdkAborted = await runPrompt(
+			"Abort the fake provider stream without interrupting the Session."
+		);
+		const sdkAbortTerminal = await sdkAborted.terminal;
+		expect(sdkAbortTerminal).toMatchObject({
+			type: "agent-turn-cancelled",
+		});
+		expect(
+			sdkAborted.events.some(({ type }) => type === "agent-turn-completed")
+		).toBe(false);
+
+		const interrupted = await runPrompt("Interrupt the fake provider stream.");
+		await interrupted.partialOutput;
+		await abortStarted.promise;
+		await interrupted.handle.interrupt();
+		const interruptedTerminal = await interrupted.terminal;
+		expect(interruptedTerminal).toMatchObject({
+			type: "agent-turn-interrupted",
+		});
+		expect(
+			interrupted.events.some(({ type }) => type === "agent-turn-completed")
+		).toBe(false);
+		expect(providerCollections).toHaveLength(4);
+		expect(new Set(providerCollections).size).toBe(4);
+		for (const run of [success, failure, sdkAborted, interrupted]) {
+			run.unsubscribe();
+		}
+
+		const activeDuringShutdown = await runPrompt(
+			"Wait for Host-owned Provider cleanup."
+		);
+		await providerStreamStarted.promise;
+		let disposalSettled = false;
+		const disposal = sdk?.dispose().then(() => {
+			disposalSettled = true;
+		});
+		if (disposal === undefined) {
+			throw new Error("The public Session SDK was not created.");
+		}
+		await providerStreamCleanupStarted.promise;
+		const providerClosedBeforeStreamCleanup = await Promise.race([
+			providerCloseStarted.promise.then(() => true),
+			Bun.sleep(20).then(() => false),
+		]);
+		expect(providerClosedBeforeStreamCleanup).toBe(false);
+		finishProviderStreamCleanup.resolve();
+		await providerCloseStarted.promise;
+		expect(providerWasActiveAtClose).toBe(false);
+		expect(providerLifecycle).toEqual([
+			"provider-stream-cleanup-started",
+			"provider-stream-unwound",
+			"provider-close",
+		]);
+		expect(disposalSettled).toBe(false);
+		finishProviderClose.resolve();
+		await disposal;
+		expect(disposalSettled).toBe(true);
+		expect(activeDuringShutdown.handle.sessionId).toBeTruthy();
+		expect(providerCollections).toHaveLength(5);
+		expect(new Set(providerCollections).size).toBe(5);
+		expect(providerCloseCalls.sort((left, right) => left - right)).toEqual([
+			0, 1, 2, 3, 4,
+		]);
+	} finally {
+		finishProviderStreamCleanup.resolve();
+		finishProviderClose.resolve();
+		await Promise.all(handles.map((handle) => handle.dispose()));
+		await sdk?.dispose();
+		await fs.rm(toolFixtureRoot, { force: true, recursive: true });
+		if (previousHome === undefined) {
+			delete process.env.HOME;
+		} else {
+			process.env.HOME = previousHome;
+		}
+		if (previousUserProfile === undefined) {
+			delete process.env.USERPROFILE;
+		} else {
+			process.env.USERPROFILE = previousUserProfile;
+		}
+		mock.restore();
+	}
 });
 
 test("public Session SDK creates durable Sessions using public options", async () => {

@@ -1,4 +1,7 @@
+import type { ModelId } from "@wincode/ai/models";
 import type { Tagged } from "type-fest";
+
+export type { ModelId } from "@wincode/ai/models";
 
 export type AgentId = Tagged<string, "AgentId">;
 export type AgentTurnId = Tagged<string, "AgentTurnId">;
@@ -8,6 +11,7 @@ export type SessionMessageId = Tagged<string, "SessionMessageId">;
 export type SessionRecordId = Tagged<string, "SessionRecordId">;
 export type AttachmentId = Tagged<string, "AttachmentId">;
 export type SubmissionId = Tagged<string, "SubmissionId">;
+export const toModelId = (value: string): ModelId => value as ModelId;
 export const toSubmissionId = (value: string): SubmissionId =>
 	value as SubmissionId;
 export const toAgentTurnId = (value: string): AgentTurnId =>
