@@ -140,6 +140,11 @@ export type CredentialStore = Readonly<{
 	set: (providerId: string, credential: unknown) => void | Promise<void>;
 }>;
 
+/** Cancellation options for an atomic model snapshot write. */
+export type ModelStoreWriteOptions = Readonly<{
+	signal?: AbortSignal;
+}>;
+
 /** Application-owned persistence for last-successful dynamic discovery results. */
 export type ModelStore = Readonly<{
 	get: (
@@ -148,9 +153,14 @@ export type ModelStore = Readonly<{
 		| readonly ProviderModel[]
 		| undefined
 		| Promise<readonly ProviderModel[] | undefined>;
+	/**
+	 * Atomically writes the snapshot. If signal aborts before commit, a conforming
+	 * store rejects without changing its snapshot. Success means commit completed; later cancellation is too late.
+	 */
 	set: (
 		providerId: string,
-		models: readonly ProviderModel[]
+		models: readonly ProviderModel[],
+		options: ModelStoreWriteOptions
 	) => void | Promise<void>;
 }>;
 
@@ -661,6 +671,9 @@ export const createProviderCollection = (
 					continue;
 				}
 				const stored = await modelStore?.get(providerId);
+				if (restoredProviders.has(providerId)) {
+					continue;
+				}
 				const restored =
 					stored === undefined
 						? []
@@ -697,7 +710,9 @@ export const createProviderCollection = (
 			);
 			throwIfAborted(refreshOptions.signal);
 			if (modelStore) {
-				await modelStore.set(providerId, discovered);
+				await modelStore.set(providerId, discovered, {
+					signal: refreshOptions.signal,
+				});
 			}
 			dynamicModels.set(providerId, discovered);
 			restoredProviders.add(providerId);

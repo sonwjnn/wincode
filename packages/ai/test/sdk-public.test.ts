@@ -515,6 +515,161 @@ describe("public SDK provider collection", () => {
 		});
 	});
 
+	test("late offline restore does not replace a concurrent successful refresh", async () => {
+		const staticModel = {
+			modelId: "static-model",
+			protocolId: "racing-wire",
+			providerId: "racing-provider",
+		};
+		const staleModel = {
+			modelId: "stale-model",
+			protocolId: "racing-wire",
+			providerId: "racing-provider",
+		};
+		const refreshedModel = {
+			modelId: "refreshed-model",
+			protocolId: "racing-wire",
+			providerId: "racing-provider",
+		};
+		const readStarted = Promise.withResolvers<void>();
+		const storedSnapshot = Promise.withResolvers<
+			readonly ProviderModel[] | undefined
+		>();
+		let persistedModels: readonly ProviderModel[] = [staleModel];
+		const modelStore = {
+			get: (providerId: string) => {
+				expect(providerId).toBe("racing-provider");
+				readStarted.resolve();
+				return storedSnapshot.promise;
+			},
+			set: async (providerId: string, models: readonly ProviderModel[]) => {
+				expect(providerId).toBe("racing-provider");
+				persistedModels = models;
+			},
+		};
+		const credentials = new Map<string, unknown>([
+			["racing-provider", "configured"],
+		]);
+		const credentialStore = {
+			delete: async (providerId: string) => {
+				credentials.delete(providerId);
+			},
+			get: async (providerId: string) => credentials.get(providerId),
+			set: async (providerId: string, credential: unknown) => {
+				credentials.set(providerId, credential);
+			},
+		};
+		const provider: Provider = {
+			id: "racing-provider",
+			models: [staticModel],
+			discoverModels: async () => [refreshedModel],
+			resolveAuthorization: async () => ({ authorization: "token" }),
+			async *streamChat() {
+				yield { delta: "unused", type: "text-delta" };
+			},
+		};
+		const sdk = createProviderCollection({ credentialStore, modelStore });
+		sdk.register(provider);
+		const restoring = sdk.restoreModels();
+		await readStarted.promise;
+
+		await sdk.refreshModels("racing-provider");
+		expect(sdk.getModels()).toEqual([staticModel, refreshedModel]);
+		storedSnapshot.resolve([staleModel]);
+		await restoring;
+
+		expect(sdk.getModels()).toEqual([staticModel, refreshedModel]);
+		expect(sdk.getModel("racing-provider", "stale-model")).toBeUndefined();
+		expect(persistedModels).toEqual([refreshedModel]);
+	});
+
+	test("aborting a pending model-store write preserves the last-known snapshot", async () => {
+		const staticModel = {
+			modelId: "static-model",
+			protocolId: "atomic-write-wire",
+			providerId: "atomic-write-provider",
+		};
+		const lastKnownModel = {
+			modelId: "last-known-model",
+			protocolId: "atomic-write-wire",
+			providerId: "atomic-write-provider",
+		};
+		const discoveredModel = {
+			modelId: "discovered-model",
+			protocolId: "atomic-write-wire",
+			providerId: "atomic-write-provider",
+		};
+		const persistedModels = new Map<string, readonly ProviderModel[]>([
+			["atomic-write-provider", [lastKnownModel]],
+		]);
+		const writeStarted = Promise.withResolvers<void>();
+		const modelStore = {
+			get: async (providerId: string) => persistedModels.get(providerId),
+			set: async (
+				providerId: string,
+				models: readonly ProviderModel[],
+				options: Readonly<{ signal?: AbortSignal }>
+			) => {
+				writeStarted.resolve();
+				const signal = options.signal;
+				if (!signal) {
+					throw new Error("ModelStore.set did not receive the refresh signal.");
+				}
+				const write = Promise.withResolvers<void>();
+				const rejectBeforeCommit = () => {
+					write.reject(
+						signal.reason ?? new DOMException("Write aborted", "AbortError")
+					);
+				};
+				if (signal.aborted) {
+					rejectBeforeCommit();
+				} else {
+					signal.addEventListener("abort", rejectBeforeCommit, { once: true });
+				}
+				await write.promise;
+				persistedModels.set(providerId, models);
+			},
+		};
+		const credentials = new Map<string, unknown>();
+		const credentialStore = {
+			delete: async (providerId: string) => {
+				credentials.delete(providerId);
+			},
+			get: async (providerId: string) => credentials.get(providerId),
+			set: async (providerId: string, credential: unknown) => {
+				credentials.set(providerId, credential);
+			},
+		};
+		const provider: Provider = {
+			id: "atomic-write-provider",
+			models: [staticModel],
+			discoverModels: async () => [discoveredModel],
+			resolveAuthorization: async ({ credential }) =>
+				credential === undefined ? null : { authorization: credential },
+			async *streamChat() {
+				yield { delta: "unused", type: "text-delta" };
+			},
+		};
+		const sdk = createProviderCollection({ credentialStore, modelStore });
+		sdk.register(provider);
+		await sdk.restoreModels();
+		await sdk.setCredential("atomic-write-provider", "configured");
+		const controller = new AbortController();
+		const refreshing = sdk.refreshModels("atomic-write-provider", {
+			signal: controller.signal,
+		});
+		await writeStarted.promise;
+
+		controller.abort(
+			new DOMException("model-store write cancelled", "AbortError")
+		);
+		await expect(refreshing).rejects.toThrow("model-store write cancelled");
+		expect(sdk.getModels()).toEqual([staticModel, lastKnownModel]);
+		expect(persistedModels.get("atomic-write-provider")).toEqual([
+			lastKnownModel,
+		]);
+	});
+
 	test("consumers can discover, call, and restore provider models without network access", async () => {
 		const staticModel = {
 			modelId: "static-model",
