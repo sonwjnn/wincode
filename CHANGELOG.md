@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-- **Session Services compose what a Session runs on.** Print, JSON, RPC,
+- **One Session Services bundle is what a Session runs on.** Print, JSON, RPC,
   and Interactive Mode compose the same factory — the Plugin runtime, durable
   Session storage, the Session Host Manager, Session Capabilities, and the bound
   Session SDK — instead of assembling the graph per mode. The package exposes it
@@ -256,9 +256,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   navigation owns — which session to mount and the transient submission that
   starts its first turn — the session surface owns opening, the opening state,
   the failure that ends it, and the session title, and the binding reads an
-  already-open Host and holds no session state. The engine-host factory is
-  renamed `createSessionPorts` (it materializes the Engine's ports and owns no
-  lifetime), the React-free boundary check walks from the Host entry as well as
+  already-open Host and holds no session state. The engine-host factory that
+  materializes the Agent Session's ports and owns no lifetime is
+  `createAgentSessionAdapters` (with the Agent Turn pipeline in
+  `createAgentSessionTurnRunner`), the React-free boundary check walks from the
+  Host entry as well as
   the Engine's, and the display
   annotation of attachments no longer reaches the Session Context. See
   ADR-0023.

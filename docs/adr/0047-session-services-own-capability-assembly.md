@@ -42,8 +42,8 @@ the raw one.
   SDK object and its own capabilities are mutually recursive inside a single
   function and the reference cannot be hoisted.
 - Own only what was created. Session Services close the Plugin runtime they
-  loaded from `policy.plugins`, the SQLite database it opened, and the Session
-  Host Manager it created. An injected Plugin runtime, Session Store, or
+  loaded from `policy.plugins`, the SQLite database they opened, and the Session
+  Host Manager they created. An injected Plugin runtime, Session Store, or
   Manager stays the caller's, and `shutdown()` is idempotent, returning the
   same promise. Interactive Mode's Plugin runtime is process-scoped and
   replaced on Resource Reload, so a session-scoped shutdown must not close it;
@@ -65,7 +65,7 @@ the raw one.
 - Publish the factory as the package subpath `./session-services` and
   remove `./session-capabilities`, which nothing imported. `./session-host` and
   `./session-rpc` keep their entries; `./session-rpc` now re-exports the Session
-  Session Services types instead of the capability assembly's own inputs, which are
+  Services types instead of the capability assembly's own inputs, which are
   internal to the Session layer.
 
 ## Consequences

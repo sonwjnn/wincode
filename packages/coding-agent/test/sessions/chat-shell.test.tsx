@@ -1308,7 +1308,7 @@ describe("ChatShell shell output blocks", () => {
 				await flushUi(setup);
 			});
 			await setup.flush({ maxPasses: 20 });
-			frame = setup.captureCharFrame();
+			frame = await waitForFrameText(setup, "safe 8");
 
 			expect(frame).toContain("[redacted]");
 			expect(frame).toContain("safe 8");

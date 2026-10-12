@@ -1,4 +1,4 @@
-import type { AgentId, StatefulAgent } from "@wincode/agent-core";
+import type { AgentId } from "@wincode/agent-core";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
@@ -11,27 +11,22 @@ import {
 	type SkillContext,
 	type SkillExecution,
 } from "@/modules/skills";
-import type { SessionId } from "@/shared/identifiers";
 import type {
 	AgentSessionPorts,
-	SessionQueuedSubmission,
 	SessionSkillCatalog,
 	SessionSkillResolution,
 } from "../agent-session/types";
 import { SessionCompactionError } from "../compaction/error";
 import type { SessionMessage } from "../message";
 import {
+	type AgentSessionTurnRunnerOptions,
 	createAgentSessionTurnRunner,
 	strictThinkingSelection,
 } from "./agent-session-turn-runner";
-import type { SessionCapabilities } from "./types";
 
-export type AgentSessionAdaptersOptions = Readonly<{
-	capabilities: SessionCapabilities;
-	isShutDown: () => boolean;
-	sessionId: SessionId;
-	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
-}>;
+/** The Host inputs the adapters need on top of one Agent Turn's. */
+export type AgentSessionAdaptersOptions = AgentSessionTurnRunnerOptions &
+	Readonly<{ isShutDown: () => boolean }>;
 
 const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
 	if (catalog.diagnostics.length === 0) {
@@ -89,11 +84,11 @@ const activateExplicitSkill = async (
 };
 
 /**
- * Materializes the Agent Session's ports from one session's Session Services and
- * owns no lifetime: it holds the Plugin snapshots, Skill catalogs, and durable
- * records the Agent Session asks for, and keeps no session state — every fact it
- * observes comes from the Agent Session Snapshot. The Agent Turn pipeline behind
- * the `turnRunner` port lives in its own module.
+ * Materializes the Agent Session's ports from the Session Services the Host was
+ * handed and owns no lifetime: it holds the Skill catalogs and durable records
+ * the Agent Session asks for, and keeps no session state — every fact it observes
+ * comes from the Agent Session Snapshot. The Agent Turn pipeline behind the
+ * `turnRunner` port lives in its own module.
  */
 export const createAgentSessionAdapters = ({
 	capabilities,

@@ -1,4 +1,9 @@
-import type { AgentId, AgentTurn, AgentTurnEvent } from "@wincode/agent-core";
+import type {
+	AgentId,
+	AgentTurn,
+	AgentTurnEvent,
+	StatefulAgent,
+} from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
 	isSupportedThinkingLevel,
@@ -24,6 +29,7 @@ import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import type {
 	SessionExecution,
+	SessionQueuedSubmission,
 	SessionResolvedAgent,
 	SessionTurnOutcome,
 	SessionTurnRequest,
@@ -41,7 +47,7 @@ import {
 	type TurnExecution,
 	type TurnExecutionSkill,
 } from "../turn-execution";
-import type { AgentSessionAdaptersOptions } from "./agent-session-adapters";
+import type { SessionCapabilities } from "./types";
 
 type PluginTurnResolution = Readonly<{
 	options: Readonly<{
@@ -117,10 +123,11 @@ export const strictThinkingSelection = (
 };
 
 /** The Host inputs one Agent Turn execution needs. */
-export type AgentSessionTurnRunnerOptions = Pick<
-	AgentSessionAdaptersOptions,
-	"capabilities" | "sessionId" | "statefulAgent"
->;
+export type AgentSessionTurnRunnerOptions = Readonly<{
+	capabilities: SessionCapabilities;
+	sessionId: SessionId;
+	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
+}>;
 
 /**
  * Runs one Agent Turn execution for an Agent Session: it resolves the Model
@@ -141,9 +148,9 @@ export const createAgentSessionTurnRunner = ({
 			? undefined
 			: new Set(capabilityCeiling.tools);
 	/**
-	 * The execution scopes the ports run, keyed by Agent Turn Identifier. A
-	 * scope holds what only the Host can own — per-turn Plugin cleanup — while the Agent
-	 * Session owns the state every observer reads.
+	 * The execution scopes one Agent Turn runs, keyed by Agent Turn Identifier. A
+	 * scope holds what only the Host can own — per-turn Plugin cleanup — while the
+	 * Agent Session owns the state every observer reads.
 	 */
 	const scopes = new Map<string, TurnExecution>();
 	/** The most recently active execution scope. */
@@ -323,11 +330,7 @@ export const createAgentSessionTurnRunner = ({
 			turnId: execution.turnId,
 		});
 	};
-	/**
-	 * Runs one Agent Turn execution: it resolves the Model Target, snapshots
-	 * resolves Plugin Tools, composes the prompt, and consumes the Agent Runtime,
-	 * reporting every event and checkpoint to the Agent Session.
-	 */
+	/** Runs one Agent Turn execution and reports its outcome. */
 	const runTurn = async (
 		request: SessionTurnRequest
 	): Promise<SessionTurnOutcome> => {

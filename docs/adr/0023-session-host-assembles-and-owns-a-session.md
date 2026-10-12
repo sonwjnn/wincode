@@ -57,8 +57,8 @@ Package placement note: ADR-0027 moved the temporary `@wincode/tui` location int
 ## Consequences
 
 - ADR-0019's clause that the port surface is "the Interactive Mode's rather than a second host's" is superseded. The rest of that ADR — one owner, one command lane, per-execution scope — stands.
-- The engine-host factory is renamed: it materializes Session Engine Ports from
-  capabilities and owns no lifetime.
+- The engine-host factory is renamed: it materializes the Agent Session's ports
+  from the Session Services and owns no lifetime.
 - Modules that mix React and React-free exports in one barrel must be split,
   because a React-free module importing such a barrel reaches React
   transitively. `modules/agents/registry.ts` is the known instance.
