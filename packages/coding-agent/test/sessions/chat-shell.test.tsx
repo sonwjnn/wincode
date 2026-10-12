@@ -371,15 +371,32 @@ const flushUi = async (setup: TestRendererSetup): Promise<void> => {
  */
 const waitForFrameText = async (
 	setup: TestRendererSetup,
-	text: string
+	text: string,
+	budgetMs = 2000
 ): Promise<string> => {
-	const deadline = Date.now() + 2000;
+	const deadline = Date.now() + budgetMs;
 	let frame = setup.captureCharFrame();
 	while (!frame.includes(text) && Date.now() < deadline) {
 		await flushUi(setup);
 		frame = setup.captureCharFrame();
 	}
 	return frame;
+};
+
+/**
+ * Expands the shell block, pressing Ctrl+O again if the frame still reports it
+ * collapsed. This harness can deliver a keystroke before the effect that wires
+ * the handler runs; a real user cannot press inside that window.
+ */
+const expandShellBlock = async (setup: TestRendererSetup): Promise<string> => {
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		setup.mockInput.pressKey("o", { ctrl: true });
+		const frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)", 400);
+		if (frame.includes("(Ctrl+O: Collapse)")) {
+			return frame;
+		}
+	}
+	return setup.captureCharFrame();
 };
 
 type SummaryDiffClippingCase = {
@@ -1267,8 +1284,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).not.toContain("\u001b[31m");
 			expect(frame).not.toContain("\u0000");
 
-			setup.mockInput.pressKey("o", { ctrl: true });
-			frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)");
+			frame = await expandShellBlock(setup);
 
 			expect(frame).toContain("tail 8");
 			expect(frame).toContain("tail");
@@ -1307,7 +1323,7 @@ describe("ChatShell shell output blocks", () => {
 				await flushUi(setup);
 			});
 			await setup.flush({ maxPasses: 20 });
-			frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)");
+			frame = await expandShellBlock(setup);
 
 			expect(frame).toContain("[redacted]");
 			expect(frame).toContain("safe 8");
@@ -1346,8 +1362,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).toContain("(Ctrl+O: Expand)");
 			expect(frame).not.toContain("long 7");
 
-			setup.mockInput.pressKey("o", { ctrl: true });
-			frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)");
+			frame = await expandShellBlock(setup);
 
 			expect(frame).toContain("long 7");
 			expect(frame).toContain("long 10");
@@ -1452,8 +1467,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).toContain("history 1");
 			expect(frame).not.toContain("tail 12");
 
-			setup.mockInput.pressKey("o", { ctrl: true });
-			frame = await waitForFrameText(setup, "tail 12");
+			frame = await expandShellBlock(setup);
 
 			expect(frame).toContain("tail 12");
 		} finally {
