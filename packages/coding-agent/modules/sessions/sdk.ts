@@ -1,10 +1,8 @@
 import * as os from "node:os";
 import type { AgentId, SubmissionId } from "@wincode/agent-core";
-import { agentIdSchema, toSubmissionId } from "@wincode/agent-core";
+import { toSubmissionId } from "@wincode/agent-core";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
-import { defaultChatModelSelection } from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/utils";
-import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,
@@ -36,6 +34,12 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "@/modules/sessions/host/types";
+import {
+	resolveRestoredSessionSdkSelection,
+	resolveSessionSdkPromptSelection,
+	resolveSessionSdkSelectionDefaults,
+	type SessionSdkSelectionDefaults,
+} from "@/modules/sessions/selection";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
@@ -109,40 +113,6 @@ const optionsForSessionRuntime = (
 	};
 };
 
-type SessionSelectionDefaults = Readonly<{
-	agent: AgentId;
-	model: ChatModelSelection;
-	thinkingLevel?: ThinkingLevel;
-}>;
-
-const parseAgent = (value: AgentId | string): AgentId => {
-	const parsed = agentIdSchema.safeParse(value);
-	if (!parsed.success) {
-		throw new Error(`Invalid Agent Identifier: ${value}`);
-	}
-	return parsed.data;
-};
-
-const defaultsFor = (
-	registry: AgentRegistry | null,
-	options: Pick<SessionSdkRuntimeOptions, "agent" | "model" | "thinkingLevel">
-): SessionSelectionDefaults => {
-	const agent =
-		options.agent === undefined
-			? (registry?.defaultAgentId ?? DEFAULT_AGENT_ID)
-			: parseAgent(options.agent);
-	const selectedAgent = registry?.agents.find(
-		(candidate) => candidate.id === agent && candidate.isAvailable
-	);
-	return {
-		agent,
-		model: options.model ?? selectedAgent?.model ?? defaultChatModelSelection,
-		...omitUndefined({
-			thinkingLevel: options.thinkingLevel ?? selectedAgent?.thinkingLevel,
-		}),
-	};
-};
-
 const resolvedAgentFor = (
 	registry: AgentRegistry | null,
 	agent: AgentId
@@ -165,21 +135,18 @@ const resolvedAgentFor = (
 
 const promptInputFor = (
 	input: SessionSdkPrompt,
-	defaults: SessionSelectionDefaults,
+	defaults: SessionSdkSelectionDefaults,
 	registry: AgentRegistry | null
 ): SessionSendInput => {
-	const thinkingLevel = input.thinkingLevel ?? defaults.thinkingLevel;
-	const agent =
-		input.agent === undefined ? defaults.agent : parseAgent(input.agent);
-	const model = input.model ?? defaults.model;
+	const selection = resolveSessionSdkPromptSelection(input, defaults);
 	return {
-		agent,
+		agent: selection.agent,
 		composition: { files: [], text: input.text },
-		model,
-		resolvedAgent: resolvedAgentFor(registry, agent),
+		model: selection.model,
+		resolvedAgent: resolvedAgentFor(registry, selection.agent),
 		sessionModel: defaults.model,
-		...omitUndefined({ thinkingLevel }),
-		...omitUndefined({ sessionThinkingLevel: thinkingLevel }),
+		...omitUndefined({ thinkingLevel: selection.thinkingLevel }),
+		...omitUndefined({ sessionThinkingLevel: selection.thinkingLevel }),
 		...(input.submissionId === undefined
 			? {}
 			: { submissionId: input.submissionId }),
@@ -196,7 +163,7 @@ const handleFor = (
 	assembly: SessionCapabilitiesAssembly,
 	host: SessionHost,
 	sessionId: SessionId,
-	defaults: SessionSelectionDefaults
+	defaults: SessionSdkSelectionDefaults
 ): SessionSdkHandle => {
 	const { capabilities } = assembly;
 	let disposed = false;
@@ -459,11 +426,14 @@ const createSessionSdkInternal = async (
 	const sessionRuntimes = new Set<SessionSdk>();
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
-	const defaultSelection = defaultsFor(assembly.capabilities.getRegistry(), {
-		...(agent === undefined ? {} : { agent }),
-		...(model === undefined ? {} : { model }),
-		...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-	});
+	const defaultSelection = resolveSessionSdkSelectionDefaults(
+		assembly.capabilities.getRegistry(),
+		{
+			...(agent === undefined ? {} : { agent }),
+			...(model === undefined ? {} : { model }),
+			...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+		}
+	);
 	const openSession = async (
 		id: SessionId | string,
 		openOptions: Readonly<{ autoContinue?: boolean; view?: boolean }> = {},
@@ -481,16 +451,11 @@ const createSessionSdkInternal = async (
 		});
 		const stored = await assembly.store.getSession(sessionId);
 		const prior = host.getSelection();
-		const defaults: SessionSelectionDefaults = {
-			agent: prior?.agent ?? selection.agent,
-			model: prior?.model ?? stored.model ?? selection.model,
-			...omitUndefined({
-				thinkingLevel:
-					prior?.thinkingLevel ??
-					stored.thinkingLevel ??
-					selection.thinkingLevel,
-			}),
-		};
+		const defaults = resolveRestoredSessionSdkSelection(
+			selection,
+			stored,
+			prior
+		);
 		const handle = handleFor(assembly, host, sessionId, defaults);
 		handles.add(handle);
 		return handle;
@@ -501,7 +466,7 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
-		const selection = defaultsFor(
+		const selection = resolveSessionSdkSelectionDefaults(
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,
@@ -524,7 +489,7 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
-		const selection = defaultsFor(
+		const selection = resolveSessionSdkSelectionDefaults(
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,

@@ -1,6 +1,7 @@
-import type { AgentId } from "@wincode/agent-core";
+import { type AgentId, agentIdSchema } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
+	defaultChatModelSelection,
 	isSupportedThinkingLevel,
 	modelSelectionSchema,
 	normalizeChatModelSelection,
@@ -9,7 +10,14 @@ import {
 	type ThinkingSelection,
 	thinkingLevelSchema,
 } from "@wincode/ai/models";
-import { isPlainObject, isString, isUndefined } from "@wincode/utils";
+import {
+	isPlainObject,
+	isString,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/utils";
+import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
+import type { AgentRegistry } from "@/modules/agents/registry";
 import type { SkillRequestContext } from "@/modules/skills";
 import type { SessionMessage } from "./message";
 import {
@@ -18,9 +26,9 @@ import {
 } from "./message";
 
 /**
- * The session-selection module owns every read of message metadata:
- * the last-used selection, the originating Skill, and the precedence chain
- * that resolves what a new turn or an opened session actually uses.
+ * The session-selection module owns model, Agent, and ThinkingLevel precedence
+ * for SDK defaults, restored Sessions, message metadata, and outgoing turns.
+ * It also owns the Skill context a new turn inherits from message metadata.
  *
  * Two policies intentionally coexist here:
  * - restore reads leniently — a selection survives partially broken metadata;
@@ -32,6 +40,82 @@ export type LastUsedSelection = {
 	model: ChatModelSelection;
 	thinkingLevel?: ThinkingLevel;
 };
+
+export type SessionSdkSelectionDefaults = Readonly<{
+	agent: AgentId;
+	model: ChatModelSelection;
+	thinkingLevel?: ThinkingLevel;
+}>;
+
+export type SessionSdkSelectionOptions = Readonly<{
+	agent?: AgentId | string;
+	model?: ChatModelSelection;
+	thinkingLevel?: ThinkingLevel;
+}>;
+
+const parseSelectionAgent = (value: AgentId | string): AgentId => {
+	const parsed = agentIdSchema.safeParse(value);
+	if (!parsed.success) {
+		throw new Error(`Invalid Agent Identifier: ${value}`);
+	}
+	return parsed.data;
+};
+
+/** Resolves the current SDK defaults from explicit, Agent, then product defaults. */
+export const resolveSessionSdkSelectionDefaults = (
+	registry: AgentRegistry | null,
+	options: SessionSdkSelectionOptions
+): SessionSdkSelectionDefaults => {
+	const agent =
+		options.agent === undefined
+			? (registry?.defaultAgentId ?? DEFAULT_AGENT_ID)
+			: parseSelectionAgent(options.agent);
+	const selectedAgent = registry?.agents.find(
+		(candidate) => candidate.id === agent && candidate.isAvailable
+	);
+	return {
+		agent,
+		model: options.model ?? selectedAgent?.model ?? defaultChatModelSelection,
+		...omitUndefined({
+			thinkingLevel: options.thinkingLevel ?? selectedAgent?.thinkingLevel,
+		}),
+	};
+};
+
+/** Restores an SDK handle's next-turn defaults without replacing stored identity. */
+export const resolveRestoredSessionSdkSelection = (
+	fallback: SessionSdkSelectionDefaults,
+	stored: Readonly<{
+		model?: ChatModelSelection;
+		thinkingLevel?: ThinkingLevel;
+	}>,
+	prior: Pick<
+		ResolvedSessionSelection,
+		"agent" | "model" | "thinkingLevel"
+	> | null
+): SessionSdkSelectionDefaults => ({
+	agent: prior?.agent ?? fallback.agent,
+	model: prior?.model ?? stored.model ?? fallback.model,
+	...omitUndefined({
+		thinkingLevel:
+			prior?.thinkingLevel ?? stored.thinkingLevel ?? fallback.thinkingLevel,
+	}),
+});
+
+/** Resolves one SDK prompt against the defaults restored for its open handle. */
+export const resolveSessionSdkPromptSelection = (
+	input: SessionSdkSelectionOptions,
+	defaults: SessionSdkSelectionDefaults
+): SessionSdkSelectionDefaults => ({
+	agent:
+		input.agent === undefined
+			? defaults.agent
+			: parseSelectionAgent(input.agent),
+	model: input.model ?? defaults.model,
+	...omitUndefined({
+		thinkingLevel: input.thinkingLevel ?? defaults.thinkingLevel,
+	}),
+});
 
 /**
  * The last selection actually used in a session: agent and model come

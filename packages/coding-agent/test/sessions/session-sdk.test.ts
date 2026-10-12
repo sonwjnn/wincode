@@ -1,10 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
+import * as connectionsModule from "@wincode/ai/connections";
 import type {
 	ModelStepRequest,
 	ModelStreamPart,
@@ -31,12 +32,16 @@ import {
 	type ConfigSnapshot,
 	createConfigStore,
 } from "@/shared/config/config-store";
-import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import {
+	resolveUserDataDir,
+	resolveUserWincodeDir,
+} from "@/shared/paths/user-data-dir";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
+	installFakeModelClient,
 } from "../support/e2e-fake-runtime";
-import { agentId, sessionId } from "../support/identifiers";
+import { agentId, modelId, sessionId } from "../support/identifiers";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
@@ -189,6 +194,221 @@ test("an injected Session SDK creates an empty durable Session and reopens it", 
 	} finally {
 		await sdk.dispose();
 	}
+});
+
+test("the public Session SDK restores non-default Agent, provider, model, and ThinkingLevel", async () => {
+	const sdkWorkspace = path.join(root, "public-sdk-selection-workspace");
+	const sdkHomeRoot = path.join(root, "public-sdk-selection-home");
+	const globalConfigDirectory = path.join(sdkHomeRoot, ".wincode");
+	const databasePath = path.join(storeRoot, "public-sdk-selection.sqlite");
+	await fs.mkdir(sdkWorkspace, { recursive: true });
+	await fs.mkdir(globalConfigDirectory, { recursive: true });
+	await Bun.write(
+		path.join(globalConfigDirectory, "settings.json"),
+		JSON.stringify({ default_agent: "build", plugins: [] })
+	);
+	await Bun.write(
+		path.join(sdkWorkspace, ".wincode", "settings.json"),
+		JSON.stringify({
+			agents: {
+				scout: {
+					description: "Inspect and report findings.",
+					instructions: "Inspect the requested selection restoration.",
+					role: "primary",
+				},
+			},
+		})
+	);
+	const recorder = createFakeModelClientRecorder();
+	const sentSelections: Pick<
+		ModelStepRequest["target"],
+		"modelId" | "providerId" | "thinkingLevel"
+	>[] = [];
+	recorder.beforeStep = async ({ target }) => {
+		sentSelections.push({
+			modelId: target.modelId,
+			providerId: target.providerId,
+			thinkingLevel: target.thinkingLevel,
+		});
+	};
+	const selectedModel = {
+		modelId: modelId("claude-sonnet-5"),
+		providerId: "anthropic" as const,
+	};
+	const fakeConnections = {
+		authorize: async () => ({
+			apiKey: "sdk-test-key",
+			kind: "api-key" as const,
+		}),
+		connect: async () => undefined,
+		listProviders: async () => [
+			{
+				connected: true as const,
+				connectionMethod: "api-key" as const,
+				displayName: "Anthropic",
+				id: "anthropic" as const,
+				methods: ["api-key"] as const,
+			},
+		],
+	};
+	const sdkOptions: SessionSdkOptions = {
+		cwd: sdkWorkspace,
+		databasePath,
+		pluginPaths: [],
+		projectTrust: "trust",
+		workspace: sdkWorkspace,
+	};
+	let sdk: SessionSdk | undefined;
+	let restoredSdk: SessionSdk | undefined;
+	let created: SessionSdkHandle | undefined;
+	let restored: SessionSdkHandle | undefined;
+	let unsubscribe: (() => void) | undefined;
+	const previousHome = process.env.HOME;
+	const previousUserProfile = process.env.USERPROFILE;
+	try {
+		process.env.HOME = sdkHomeRoot;
+		process.env.USERPROFILE = sdkHomeRoot;
+		// Bun's os.homedir may ignore HOME, so isolate the SDK lookup too.
+		const homeDirSpy = spyOn(os, "homedir").mockReturnValue(sdkHomeRoot);
+		if (
+			os.homedir() !== sdkHomeRoot ||
+			resolveUserWincodeDir() !== globalConfigDirectory
+		) {
+			throw new Error("The public Session SDK test home was not applied.");
+		}
+		const connectionsSpy = spyOn(
+			connectionsModule,
+			"createConnections"
+		).mockReturnValue(fakeConnections);
+		installFakeModelClient(recorder);
+		const homeLookupsBeforeInitialSdk = homeDirSpy.mock.calls.length;
+		const connectionsBeforeInitialSdk = connectionsSpy.mock.calls.length;
+		sdk = await createPublicSessionSdk(sdkOptions);
+		expect(homeDirSpy.mock.calls.length).toBeGreaterThan(
+			homeLookupsBeforeInitialSdk
+		);
+		expect(connectionsSpy.mock.calls.length).toBeGreaterThan(
+			connectionsBeforeInitialSdk
+		);
+		expect(await sdk.getAgentCatalog()).toContainEqual(
+			expect.objectContaining({
+				id: agentId("scout"),
+				isAvailable: true,
+				role: "primary",
+			})
+		);
+		created = await sdk.createSession({
+			agent: "scout",
+			model: selectedModel,
+			thinkingLevel: "high",
+		});
+		const createdSessionId = created.sessionId;
+		const firstCompleted = Promise.withResolvers<void>();
+		unsubscribe = created.onEvent((event) => {
+			if (event.type === "agent-turn-completed") {
+				firstCompleted.resolve();
+			}
+		});
+		const firstAdmission = await created.prompt({
+			agent: "scout",
+			text: "Start with the non-default Agent.",
+		});
+		await firstCompleted.promise;
+		expect(firstAdmission.rejected).toBe(false);
+		await created.dispose();
+		created = undefined;
+		unsubscribe?.();
+		unsubscribe = undefined;
+		await sdk.dispose();
+		sdk = undefined;
+
+		// A fresh SDK must restore selection from durable records, not live host state.
+		const homeLookupsBeforeRestoredSdk = homeDirSpy.mock.calls.length;
+		const connectionsBeforeRestoredSdk = connectionsSpy.mock.calls.length;
+		restoredSdk = await createPublicSessionSdk(sdkOptions);
+		expect(homeDirSpy.mock.calls.length).toBeGreaterThan(
+			homeLookupsBeforeRestoredSdk
+		);
+		expect(connectionsSpy.mock.calls.length).toBeGreaterThan(
+			connectionsBeforeRestoredSdk
+		);
+		restored = await restoredSdk.openSession(createdSessionId);
+		const restoredCompleted = Promise.withResolvers<void>();
+		unsubscribe = restored.onEvent((event) => {
+			if (event.type === "agent-turn-completed") {
+				restoredCompleted.resolve();
+			}
+		});
+		const restoredAdmission = await restored.prompt({
+			text: "Restore the previous non-default Agent and model selection.",
+		});
+		await restoredCompleted.promise;
+
+		expect(restoredAdmission.rejected).toBe(false);
+		expect(sentSelections).toEqual([
+			{
+				modelId: "claude-sonnet-5",
+				providerId: "anthropic",
+				thinkingLevel: "high",
+			},
+			{
+				modelId: "claude-sonnet-5",
+				providerId: "anthropic",
+				thinkingLevel: "high",
+			},
+		]);
+		await restored.dispose();
+		restored = undefined;
+		unsubscribe?.();
+		unsubscribe = undefined;
+		await restoredSdk.dispose();
+		restoredSdk = undefined;
+
+		const recordDatabase = createDatabase(databasePath);
+		try {
+			const recordStore = createDrizzleSessionStore(recordDatabase.db, {
+				workspaceRoot: sdkWorkspace,
+			});
+			const records = await recordStore.listSessionRecords(createdSessionId);
+			const userRecords = records.filter(({ outcome }) => outcome.kind === "user");
+			expect(userRecords).toHaveLength(2);
+			expect(records.every(({ agentId: id }) => id === agentId("scout"))).toBe(
+				true
+			);
+			expect(
+				records.every(
+					({ model }) =>
+						model.modelId === selectedModel.modelId &&
+						model.providerId === selectedModel.providerId &&
+						model.thinkingLevel === "high"
+				)
+			).toBe(true);
+		} finally {
+			recordDatabase.sqlite.close();
+		}
+	} finally {
+		unsubscribe?.();
+		try {
+			await restored?.dispose();
+			await created?.dispose();
+			await restoredSdk?.dispose();
+			await sdk?.dispose();
+		} finally {
+			if (previousHome === undefined) {
+				delete process.env.HOME;
+			} else {
+				process.env.HOME = previousHome;
+			}
+			if (previousUserProfile === undefined) {
+				delete process.env.USERPROFILE;
+			} else {
+				process.env.USERPROFILE = previousUserProfile;
+			}
+			mock.restore();
+		}
+	}
+	expect(process.env.HOME).toBe(previousHome);
+	expect(process.env.USERPROFILE).toBe(previousUserProfile);
 });
 
 test("the public Session SDK loads trusted project Plugins but a new Session runtime does not inherit trust", async () => {
