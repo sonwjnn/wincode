@@ -1,11 +1,11 @@
+import { anthropicModelMetadataFor } from "../../anthropic-model-metadata.ts";
 import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
-import { modelPromptCacheCapabilitiesFor } from "../../prompt-cache-metadata";
 import type { ModelProtocolPromptCacheStrategy } from "./types";
 
 export const anthropicPromptCacheStrategy: ModelProtocolPromptCacheStrategy = {
 	canWarmRequest: true,
 	routeForModel: (model) => {
-		const capabilities = modelPromptCacheCapabilitiesFor(model);
+		const capabilities = anthropicModelMetadataFor(model)?.promptCache;
 		if (!capabilities) {
 			return;
 		}

@@ -8,6 +8,9 @@ const coreConsumerPath = fileURLToPath(
 const openAIConsumerPath = fileURLToPath(
 	new URL("./sdk-openai-node-consumer.mjs", import.meta.url)
 );
+const anthropicConsumerPath = fileURLToPath(
+	new URL("./sdk-anthropic-node-consumer.mjs", import.meta.url)
+);
 
 const runConsumer = async (
 	runtime: string,
@@ -46,4 +49,16 @@ test("OpenAI-factory external consumer imports and chats under Node", async () =
 
 test("OpenAI-factory external consumer imports and chats under Bun", async () => {
 	await runConsumer(process.execPath, openAIConsumerPath, "OpenAI consumer");
+});
+
+test("Anthropic-factory external consumer imports and chats under Node", async () => {
+	await runConsumer("node", anthropicConsumerPath, "Anthropic consumer");
+});
+
+test("Anthropic-factory external consumer imports and chats under Bun", async () => {
+	await runConsumer(
+		process.execPath,
+		anthropicConsumerPath,
+		"Anthropic consumer"
+	);
 });

@@ -1,15 +1,15 @@
-import { isNonNegativeInteger } from "@wincode/utils";
+import { isNonNegativeInteger } from "@wincode/utils/guards";
+import { anthropicModelMetadataFor } from "../../anthropic-model-metadata.ts";
 import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
-import { getModelMetadata } from "../../model-metadata-runtime";
-import { MODEL_OUTPUT_TOKEN_LIMIT } from "../../model-provider-options";
-import { normalizeModelUsage } from "../../model-usage";
-import { readSseEvents } from "../sse";
+import { MODEL_OUTPUT_TOKEN_LIMIT } from "../../model-output-limit.ts";
+import { normalizeModelUsage } from "../../model-usage.ts";
+import { readSseEvents } from "../sse.ts";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
-import { anthropicPromptCacheStrategy } from "./anthropic-prompt-cache";
+import { anthropicPromptCacheStrategy } from "./anthropic-prompt-cache.ts";
 import {
 	base64,
 	incompleteStreamError,
@@ -21,7 +21,7 @@ import {
 	stringValue,
 	unreachableValue,
 	valueAsText,
-} from "./shared";
+} from "./shared.ts";
 import type {
 	ModelProtocolStrategy,
 	ProtocolRequestContextByProtocol,
@@ -389,7 +389,7 @@ const serializeAnthropic = (
 		model: request.target.modelId,
 		max_tokens:
 			maxOutputTokens ??
-			getModelMetadata(model)?.limits?.output ??
+			anthropicModelMetadataFor(model)?.limits?.output ??
 			MODEL_OUTPUT_TOKEN_LIMIT,
 		messages: anthropicMessages(request.messages, cacheControl),
 		stream: true,

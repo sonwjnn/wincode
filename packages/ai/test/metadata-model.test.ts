@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildModelMetadataFile } from "../scripts/metadata-model";
+import { anthropicModelMetadataById } from "../src/generated/anthropic-model-metadata.generated";
+import { modelMetadataByKey } from "../src/generated/model-metadata.generated";
 import { modelMetadataEntrySchema } from "../src/model-metadata";
 
 /**
@@ -272,6 +274,44 @@ describe("buildModelMetadataFile", () => {
 		expect(result.openAIPromptCacheContents).not.toContain(
 			"googleCachedContent"
 		);
+	});
+
+	test("generates Anthropic-only model metadata for the isolated provider runtime", () => {
+		const promptCache = {
+			explicit: { retentionTiers: ["short", "long"] },
+		} as const;
+		const result = buildModelMetadataFile({
+			catalog: [
+				{
+					connectionProviderId: "anthropic",
+					id: "claude-custom",
+					lifecycle: "active",
+					provider: "anthropic",
+				},
+			],
+			generatedAt: "2026-01-01",
+			overlays: { "anthropic/claude-custom": { promptCache } },
+			payload: {},
+			source: "https://example.test/api.json",
+		});
+
+		expect(result.anthropicModelMetadataEntries).toEqual({
+			"claude-custom": { promptCache },
+		});
+		expect(result.anthropicModelMetadataContents).toContain(
+			'"claude-custom": {\n\t\t"promptCache"'
+		);
+		expect(result.anthropicModelMetadataContents).not.toContain("openai/");
+		expect(result.anthropicModelMetadataContents).not.toContain("google/");
+	});
+
+	test("committed Anthropic-only metadata matches the provider entries in the shared snapshot", () => {
+		const sharedAnthropicMetadata = Object.fromEntries(
+			Object.entries(modelMetadataByKey)
+				.filter(([key]) => key.startsWith("anthropic/"))
+				.map(([key, value]) => [key.slice("anthropic/".length), value])
+		);
+		expect(anthropicModelMetadataById).toEqual(sharedAnthropicMetadata);
 	});
 
 	test("returns entries accepted by the runtime metadata schema", () => {

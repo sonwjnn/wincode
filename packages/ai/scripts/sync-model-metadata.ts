@@ -1,4 +1,4 @@
-// Regenerates the shared model metadata and OpenAI-only prompt-cache metadata.
+// Regenerates shared, Anthropic-only, and OpenAI-only model metadata.
 //
 // Usage: bun run packages/ai/scripts/sync-model-metadata.ts [--check]
 //
@@ -20,6 +20,10 @@ const OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/model-metadata.generated.ts"
 );
+const ANTHROPIC_MODEL_METADATA_OUTPUT_PATH = path.join(
+	import.meta.dir,
+	"../src/generated/anthropic-model-metadata.generated.ts"
+);
 const OPENAI_PROMPT_CACHE_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/openai-prompt-cache.generated.ts"
@@ -40,6 +44,9 @@ const sourceUrlForOutput = (value: string): string => {
 
 const isCheck = process.argv.includes("--check");
 const current = isCheck ? await readUtf8File(OUTPUT_PATH) : undefined;
+const currentAnthropicModelMetadata = isCheck
+	? await readUtf8File(ANTHROPIC_MODEL_METADATA_OUTPUT_PATH)
+	: undefined;
 const currentOpenAIPromptCache = isCheck
 	? await readUtf8File(OPENAI_PROMPT_CACHE_OUTPUT_PATH)
 	: undefined;
@@ -81,6 +88,7 @@ process.stdout.write(
 if (isCheck) {
 	if (
 		current !== rendered.contents ||
+		currentAnthropicModelMetadata !== rendered.anthropicModelMetadataContents ||
 		currentOpenAIPromptCache !== rendered.openAIPromptCacheContents
 	) {
 		throw new Error(
@@ -92,10 +100,15 @@ if (isCheck) {
 	await Promise.all([
 		Bun.write(OUTPUT_PATH, rendered.contents),
 		Bun.write(
+			ANTHROPIC_MODEL_METADATA_OUTPUT_PATH,
+			rendered.anthropicModelMetadataContents
+		),
+		Bun.write(
 			OPENAI_PROMPT_CACHE_OUTPUT_PATH,
 			rendered.openAIPromptCacheContents
 		),
 	]);
 	process.stdout.write(`Wrote ${OUTPUT_PATH}\n`);
+	process.stdout.write(`Wrote ${ANTHROPIC_MODEL_METADATA_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${OPENAI_PROMPT_CACHE_OUTPUT_PATH}\n`);
 }
