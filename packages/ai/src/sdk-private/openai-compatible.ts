@@ -103,19 +103,23 @@ const providerErrorFor = (
 	if (error instanceof ProviderError) {
 		return error;
 	}
-	if (
-		error instanceof ModelProviderError &&
-		(error.statusCode === 401 || error.statusCode === 403)
-	) {
+	if (error instanceof ModelProviderError) {
+		if (error.statusCode === 401 || error.statusCode === 403) {
+			return new ProviderError(
+				"authentication",
+				`${providerName} rejected the configured credential.`,
+				{ cause: error }
+			);
+		}
 		return new ProviderError(
-			"authentication",
-			`${providerName} rejected the configured credential.`,
+			"provider",
+			`${providerName} returned an invalid or incomplete stream.`,
 			{ cause: error }
 		);
 	}
 	return new ProviderError(
-		"provider",
-		`${providerName} returned an invalid or incomplete stream.`,
+		"transport",
+		`${providerName} response stream failed.`,
 		{ cause: error }
 	);
 };

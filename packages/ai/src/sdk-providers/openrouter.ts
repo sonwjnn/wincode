@@ -158,12 +158,21 @@ const fetchOpenRouterModels =
 			context,
 			apiKey
 		);
+		if (context.signal?.aborted) {
+			throw context.signal.reason ?? new DOMException("Aborted", "AbortError");
+		}
 		if (!response.ok) {
-			throw await openAICompatibleResponseError(
+			const error = await openAICompatibleResponseError(
 				response,
 				"OpenRouter",
 				"model discovery"
 			);
+			if (context.signal?.aborted) {
+				throw (
+					context.signal.reason ?? new DOMException("Aborted", "AbortError")
+				);
+			}
+			throw error;
 		}
 		return modelsFromPayload(
 			await payloadFromResponse(response, context.signal)

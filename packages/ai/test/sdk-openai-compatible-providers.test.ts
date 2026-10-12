@@ -471,6 +471,146 @@ describe("public OpenAI-compatible SDK providers", () => {
 		}
 	});
 
+	test("OpenRouter cancellation wins when a non-OK discovery response races with abort", async () => {
+		const controller = new AbortController();
+		let returnFailure = false;
+		const sdk = createProviderCollection();
+		sdk.register(
+			createOpenRouterProvider({
+				fetch: async (_input, init) => {
+					if (returnFailure) {
+						if (!init?.signal) {
+							throw new Error("discovery did not receive cancellation");
+						}
+						return new Response(
+							new ReadableStream<Uint8Array>({
+								cancel() {
+									controller.abort(
+										new DOMException(
+											"OpenRouter refresh cancelled",
+											"AbortError"
+										)
+									);
+								},
+							}),
+							{ status: 503 }
+						);
+					}
+					return Response.json({ data: [{ id: "stable/model" }] });
+				},
+			})
+		);
+		await sdk.setCredential("openrouter", {
+			apiKey: "discovery-race-key",
+			kind: "api-key",
+		});
+		const knownModels = await sdk.refreshModels("openrouter");
+		returnFailure = true;
+
+		await expect(
+			sdk.refreshModels("openrouter", { signal: controller.signal })
+		).rejects.toThrow("OpenRouter refresh cancelled");
+		expect(sdk.getModels()).toEqual(knownModels);
+	});
+
+	test("mid-stream body read failures terminate as transport without exposing diagnostics", async () => {
+		const sdk = createProviderCollection();
+		let firstChunkSent = false;
+		sdk.register(
+			createDeepSeekProvider({
+				fetch: async () =>
+					new Response(
+						new ReadableStream<Uint8Array>({
+							pull(controller) {
+								if (firstChunkSent) {
+									controller.error(
+										new Error("private socket reset diagnostics")
+									);
+									return;
+								}
+								firstChunkSent = true;
+								controller.enqueue(
+									new TextEncoder().encode(
+										'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+									)
+								);
+							},
+						}),
+						{ headers: { "content-type": "text/event-stream" } }
+					),
+			})
+		);
+		await sdk.setCredential("deepseek", {
+			apiKey: "stream-transport-test-key",
+			kind: "api-key",
+		});
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [{ content: [{ text: "hello", type: "text" }], role: "user" }],
+			modelId: "deepseek-chat",
+			providerId: "deepseek",
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toEqual([
+			{ delta: "partial", type: "text-delta" },
+			{
+				outcome: {
+					failure: {
+						code: "transport",
+						message: "DeepSeek response stream failed.",
+						providerId: "deepseek",
+					},
+					status: "failure",
+				},
+				type: "terminal",
+			},
+		]);
+		expect(JSON.stringify(events)).not.toContain(
+			"private socket reset diagnostics"
+		);
+		expect(JSON.stringify(events)).not.toContain("stream-transport-test-key");
+	});
+
+	test("compatible SSE errors retain provider and authentication failure categories", async () => {
+		const terminalForStatus = async (status: number) => {
+			const sdk = createProviderCollection();
+			sdk.register(
+				createDeepSeekProvider({
+					fetch: async () =>
+						sseResponse([
+							{ error: { message: "private provider diagnostic", status } },
+						]),
+				})
+			);
+			await sdk.setCredential("deepseek", {
+				apiKey: "protocol-error-test-key",
+				kind: "api-key",
+			});
+			const events: ChatEvent[] = [];
+			for await (const event of sdk.chat({
+				messages: [
+					{ content: [{ text: "hello", type: "text" }], role: "user" },
+				],
+				modelId: "deepseek-chat",
+				providerId: "deepseek",
+			})) {
+				events.push(event);
+			}
+			return events.at(-1);
+		};
+
+		expect(await terminalForStatus(503)).toMatchObject({
+			outcome: { failure: { code: "provider" }, status: "failure" },
+			type: "terminal",
+		});
+		expect(await terminalForStatus(401)).toMatchObject({
+			outcome: { failure: { code: "authentication" }, status: "failure" },
+			type: "terminal",
+		});
+	});
+
 	test("compatible provider HTTP failures and mid-stream aborts are terminal without credential leakage", async () => {
 		const collect = async (provider: Provider, signal?: AbortSignal) => {
 			const sdk = createProviderCollection();
