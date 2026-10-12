@@ -1,12 +1,19 @@
 import { test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
-const consumerPath = fileURLToPath(
+const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+const coreConsumerPath = fileURLToPath(
 	new URL("./sdk-node-consumer.mjs", import.meta.url)
 );
-const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+const openAIConsumerPath = fileURLToPath(
+	new URL("./sdk-openai-node-consumer.mjs", import.meta.url)
+);
 
-const runConsumer = async (runtime: string): Promise<void> => {
+const runConsumer = async (
+	runtime: string,
+	consumerPath: string,
+	label: string
+): Promise<void> => {
 	const consumer = Bun.spawn([runtime, consumerPath], {
 		cwd: packageRoot,
 		stderr: "pipe",
@@ -20,15 +27,23 @@ const runConsumer = async (runtime: string): Promise<void> => {
 
 	if (exitCode !== 0) {
 		throw new Error(
-			`${runtime} external SDK consumer failed (exit ${exitCode}).\n${stdout}${stderr}`
+			`${runtime} ${label} failed (exit ${exitCode}).\n${stdout}${stderr}`
 		);
 	}
 };
 
-test("external SDK consumer imports and streams under Node", async () => {
-	await runConsumer("node");
+test("core-only external SDK consumer imports and streams under Node", async () => {
+	await runConsumer("node", coreConsumerPath, "core-only consumer");
 });
 
-test("external SDK consumer imports and streams under Bun", async () => {
-	await runConsumer(process.execPath);
+test("core-only external SDK consumer imports and streams under Bun", async () => {
+	await runConsumer(process.execPath, coreConsumerPath, "core-only consumer");
+});
+
+test("OpenAI-factory external consumer imports and chats under Node", async () => {
+	await runConsumer("node", openAIConsumerPath, "OpenAI consumer");
+});
+
+test("OpenAI-factory external consumer imports and chats under Bun", async () => {
+	await runConsumer(process.execPath, openAIConsumerPath, "OpenAI consumer");
 });

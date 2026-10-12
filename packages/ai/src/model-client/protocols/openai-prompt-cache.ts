@@ -1,10 +1,10 @@
+import { modelMetadataByKey } from "../../generated/model-metadata.generated.ts";
 import type {
 	OpenAIPromptCacheProtocol,
 	SupportedPromptCacheRetentionTier,
 } from "../../model-metadata";
 import type { ModelTarget } from "../../model-target";
 import type { SupportedChatModel } from "../../models";
-import { getOpenAIPromptCacheProtocolCapabilities } from "../../prompt-cache-metadata";
 import type { ModelProtocolPromptCacheStrategy } from "./types";
 
 export type OpenAIPromptCacheControls = Readonly<{
@@ -35,15 +35,20 @@ const parseRetentionDurationMs = (value: string): number | undefined => {
 		: undefined;
 };
 
+const openAIPromptCacheCapabilitiesFor = (
+	model: SupportedChatModel,
+	protocol: OpenAIPromptCacheProtocol
+) =>
+	modelMetadataByKey[`${model.provider}/${model.id}`]?.promptCache?.protocols?.[
+		protocol
+	];
+
 export const openAIPromptCacheStrategyFor = (
 	protocol: OpenAIPromptCacheProtocol
 ): ModelProtocolPromptCacheStrategy => ({
 	canWarmRequest: true,
 	routeForModel: (model) => {
-		const capabilities = getOpenAIPromptCacheProtocolCapabilities(
-			model,
-			protocol
-		);
+		const capabilities = openAIPromptCacheCapabilitiesFor(model, protocol);
 		if (!capabilities) {
 			return;
 		}
@@ -74,10 +79,7 @@ export const openAIPromptCacheControlsForRequest = (
 	if (target.promptCacheEnabled !== true) {
 		return { breakpoints: false };
 	}
-	const capabilities = getOpenAIPromptCacheProtocolCapabilities(
-		model,
-		protocol
-	);
+	const capabilities = openAIPromptCacheCapabilitiesFor(model, protocol);
 	if (!capabilities || capabilities.eligibility.minimumInputTokens <= 0) {
 		return { breakpoints: false };
 	}

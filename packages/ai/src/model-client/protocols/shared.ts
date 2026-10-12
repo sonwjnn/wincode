@@ -1,4 +1,4 @@
-import { ModelProviderError, providerEventError } from "../errors";
+import { ModelProviderError, providerEventError } from "../errors.ts";
 import type { ModelProtocol } from "./types";
 
 export type JsonRecord = Record<string, unknown>;

@@ -42,10 +42,22 @@ export type ChatContentPart =
 			type: "tool-result";
 	  }>;
 
-export type ChatMessage = Readonly<{
+type ChatMessageContent = Readonly<{
 	content: readonly ChatContentPart[];
-	role: "assistant" | "tool" | "user";
 }>;
+
+export type ChatMessage =
+	| (ChatMessageContent &
+			Readonly<{
+				/** Opaque provider continuation returned on success. */
+				continuation?: unknown;
+				role: "assistant";
+			}>)
+	| (ChatMessageContent &
+			Readonly<{
+				continuation?: never;
+				role: "tool" | "user";
+			}>);
 
 export type ChatTool = Readonly<{
 	description?: string;
@@ -76,7 +88,13 @@ export type ProviderAuthorization = Readonly<{
 	credential?: unknown;
 }>;
 
-/** Provider output events; the SDK appends the single terminal outcome. */
+/** Provider finishes are folded into the SDK's one successful terminal outcome. */
+export type ProviderChatFinish = Readonly<{
+	continuation?: unknown;
+	type: "finish";
+}>;
+
+/** Provider stream events; the SDK appends the single terminal outcome. */
 export type ProviderChatEvent =
 	| Readonly<{ delta: string; type: "text-delta" | "reasoning-delta" }>
 	| Readonly<{
@@ -95,7 +113,8 @@ export type ProviderChatEvent =
 				reasoningTokens?: number;
 				totalTokens?: number;
 			}>;
-	  }>;
+	  }>
+	| ProviderChatFinish;
 
 export type ProviderChatContext = Readonly<{
 	authorization: unknown;
@@ -184,12 +203,13 @@ export type ChatFailure =
 	  }>;
 
 export type ChatOutcome =
-	| Readonly<{ status: "success" }>
+	| Readonly<{ continuation?: unknown; status: "success" }>
 	| Readonly<{ failure: ChatFailure; status: "failure" }>
 	| Readonly<{ reason?: string; status: "aborted" }>;
 
+/** Consumer events exclude ProviderChatFinish; the terminal outcome carries it. */
 export type ChatEvent =
-	| ProviderChatEvent
+	| Exclude<ProviderChatEvent, ProviderChatFinish>
 	| Readonly<{ outcome: ChatOutcome; type: "terminal" }>;
 
 export type ProviderErrorCode =
@@ -601,6 +621,7 @@ export const createProviderCollection = (
 				system: request.system,
 				tools: request.tools,
 			};
+			let continuation: unknown | undefined;
 			for await (const event of selection.registered.provider.streamChat(
 				providerRequest,
 				{
@@ -610,10 +631,17 @@ export const createProviderCollection = (
 				}
 			)) {
 				throwIfAborted(request.signal);
+				if (event.type === "finish") {
+					continuation = event.continuation;
+					continue;
+				}
 				yield event;
 			}
 			throwIfAborted(request.signal);
-			yield terminal({ status: "success" });
+			yield terminal({
+				...(continuation === undefined ? {} : { continuation }),
+				status: "success",
+			});
 		} catch (error) {
 			yield terminalForStreamError(error, request);
 		}

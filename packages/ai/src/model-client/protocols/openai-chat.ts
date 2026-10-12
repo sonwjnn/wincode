@@ -1,5 +1,5 @@
-import { normalizeModelUsage } from "../../model-usage";
-import { readSseEvents } from "../sse";
+import { normalizeModelUsage } from "../../model-usage.ts";
+import { readSseEvents } from "../sse.ts";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
@@ -8,7 +8,7 @@ import type {
 import {
 	openAIPromptCacheControlsForRequest,
 	openAIPromptCacheStrategyFor,
-} from "./openai-prompt-cache";
+} from "./openai-prompt-cache.ts";
 import {
 	fileDataUri,
 	incompleteStreamError,
@@ -21,7 +21,7 @@ import {
 	stringValue,
 	unreachableValue,
 	valueAsText,
-} from "./shared";
+} from "./shared.ts";
 import type {
 	ModelProtocolStrategy,
 	ProtocolRequestContextByProtocol,

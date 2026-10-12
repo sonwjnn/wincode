@@ -27,6 +27,9 @@
     "./sdk": {
       "default": "./src/sdk.ts"
     },
+    "./sdk/providers/*": {
+      "default": "./src/sdk-providers/*.ts"
+    },
     "./connections": {
       "default": "./src/connections/index.ts"
     },

@@ -964,6 +964,158 @@ describe("public SDK provider collection", () => {
 		expect(modelStoreWrites).toHaveLength(2);
 	});
 
+	test("provider continuation travels through the success terminal into the next assistant message", async () => {
+		const continuation = [{ id: "rs_private", type: "reasoning" }];
+		const receivedContinuations: unknown[] = [];
+		const sdk = createProviderCollection();
+		sdk.register({
+			id: "continuation-provider",
+			models: [
+				{
+					modelId: "continuation-model",
+					protocolId: "continuation-wire",
+					providerId: "continuation-provider",
+				},
+			],
+			resolveAuthorization: async () => ({ authorization: "configured" }),
+			async *streamChat(request) {
+				receivedContinuations.push(request.messages[0]?.continuation);
+				if (receivedContinuations.length === 1) {
+					yield { continuation, type: "finish" };
+					return;
+				}
+				yield { delta: "continued", type: "text-delta" };
+			},
+		});
+
+		const firstEvents: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [
+				{ content: [{ text: "question", type: "text" }], role: "user" },
+			],
+			modelId: "continuation-model",
+			providerId: "continuation-provider",
+		})) {
+			firstEvents.push(event);
+		}
+		const terminalEvent = firstEvents.at(-1);
+		if (terminalEvent?.type !== "terminal") {
+			throw new Error("Expected the first chat to terminate.");
+		}
+
+		const secondEvents: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [
+				{
+					content: [{ text: "answer", type: "text" }],
+					continuation:
+						terminalEvent.outcome.status === "success"
+							? terminalEvent.outcome.continuation
+							: undefined,
+					role: "assistant",
+				},
+			],
+			modelId: "continuation-model",
+			providerId: "continuation-provider",
+		})) {
+			secondEvents.push(event);
+		}
+
+		expect(firstEvents).toEqual([
+			{
+				outcome: { continuation, status: "success" },
+				type: "terminal",
+			},
+		]);
+		expect(receivedContinuations).toEqual([undefined, continuation]);
+		expect(secondEvents.at(-1)).toEqual({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
+	});
+
+	test("a provider failure after its finish result does not become a successful terminal", async () => {
+		const sdk = createProviderCollection();
+		sdk.register({
+			...demoProvider(),
+			id: "late-failure-provider",
+			models: [
+				{
+					modelId: "late-failure-model",
+					protocolId: "late-failure-wire",
+					providerId: "late-failure-provider",
+				},
+			],
+			async *streamChat() {
+				yield { continuation: "must-not-escape", type: "finish" };
+				throw new ProviderError("transport", "stream failed after finish");
+			},
+		});
+		await sdk.setCredential("late-failure-provider", "configured");
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [],
+			modelId: "late-failure-model",
+			providerId: "late-failure-provider",
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toEqual([
+			{
+				outcome: {
+					failure: {
+						code: "transport",
+						message: "stream failed after finish",
+						providerId: "late-failure-provider",
+					},
+					status: "failure",
+				},
+				type: "terminal",
+			},
+		]);
+	});
+
+	test("an abort after the provider finish result does not leak a successful continuation", async () => {
+		const sdk = createProviderCollection();
+		sdk.register({
+			...demoProvider(),
+			id: "late-abort-provider",
+			models: [
+				{
+					modelId: "late-abort-model",
+					protocolId: "late-abort-wire",
+					providerId: "late-abort-provider",
+				},
+			],
+			async *streamChat() {
+				yield { continuation: "must-not-escape", type: "finish" };
+				throw new DOMException("cancelled after finish", "AbortError");
+			},
+		});
+		await sdk.setCredential("late-abort-provider", "configured");
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [],
+			modelId: "late-abort-model",
+			providerId: "late-abort-provider",
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toEqual([
+			{
+				outcome: {
+					reason: "cancelled after finish",
+					status: "aborted",
+				},
+				type: "terminal",
+			},
+		]);
+	});
+
 	test("pre-aborted requests produce one abort terminal event", async () => {
 		const sdk = createProviderCollection();
 		sdk.register(demoProvider());
