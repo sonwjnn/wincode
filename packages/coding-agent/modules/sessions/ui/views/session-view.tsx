@@ -807,6 +807,7 @@ export function SessionView({
 					messages={messages}
 					onCompact={executeCompactionCommand}
 					onEmptySubmit={steerQueuedHead}
+					onModelTargetChanged={host.cancelCacheWarming}
 					onOpenSettings={openSettings}
 					onRetry={retryMessage}
 					onSubmit={submitMessage}

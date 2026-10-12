@@ -65,6 +65,11 @@ const waitForClosingHost = async (
 		await closing.catch(() => undefined);
 	}
 };
+/**
+ * Prefix growth preserves a warmed request. The active turn's assistant message
+ * is outside that captured prompt and streams in place; earlier rewrites or
+ * truncation invalidate the stable prefix.
+ */
 const sessionContextExtends = (
 	previous: readonly SessionMessage[],
 	next: readonly SessionMessage[]
@@ -72,14 +77,17 @@ const sessionContextExtends = (
 	previous.length <= next.length &&
 	previous.every((message, index) => {
 		const candidate = next[index];
-		return (
-			candidate !== undefined &&
-			Bun.deepEquals(
-				{ id: message.id, parts: message.parts, role: message.role },
-				{ id: candidate.id, parts: candidate.parts, role: candidate.role },
-				true
-			)
-		);
+		if (
+			candidate === undefined ||
+			message.id !== candidate.id ||
+			message.role !== candidate.role
+		) {
+			return false;
+		}
+		if (index === previous.length - 1 && message.role === "assistant") {
+			return true;
+		}
+		return Bun.deepEquals(message.parts, candidate.parts, true);
 	});
 
 const interruptedSteeringFailure =
@@ -281,6 +289,7 @@ export const createSessionHost = async ({
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 	let statefulAgent: StatefulAgent<SessionQueuedSubmission> | undefined;
+	// The warmer belongs to the loaded Host, not a single Agent Turn; retain it across idle turns.
 	let cacheWarming: SessionCacheWarming | undefined;
 	let unsubscribeContext: (() => void) | undefined;
 
@@ -517,6 +526,7 @@ export const createSessionHost = async ({
 			getSelection: () => resolveOpenedSelection(capabilities.getRegistry()),
 			getSnapshot: openedAgentSession.getSnapshot,
 			getCacheWarmingStatus: () => cacheWarming?.getStatus() ?? "idle",
+			cancelCacheWarming: () => cacheWarming?.cancel(),
 			getSessionUsageEntries: () => cacheWarming?.getUsageEntries() ?? [],
 			onEvent: (listener) => {
 				eventListeners.add(listener);

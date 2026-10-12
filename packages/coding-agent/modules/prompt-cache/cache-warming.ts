@@ -126,6 +126,15 @@ export const createSessionCacheWarming = ({
 }: SessionCacheWarmingOptions): SessionCacheWarming => {
 	const modelClient = createModelClient();
 	const listeners = new Set<() => void>();
+	const notifyListeners = (): void => {
+		for (const listener of [...listeners]) {
+			try {
+				listener();
+			} catch {
+				// Observers cannot affect cache warming or Session execution.
+			}
+		}
+	};
 	const usageEntries = new Map(
 		initialUsageEntries.map((entry) => [entry.id, entry])
 	);
@@ -143,13 +152,7 @@ export const createSessionCacheWarming = ({
 			return;
 		}
 		status = next;
-		for (const listener of [...listeners]) {
-			try {
-				listener();
-			} catch {
-				// Observers cannot affect cache warming or Session execution.
-			}
-		}
+		notifyListeners();
 	};
 
 	const abortWarm = (): void => {
@@ -187,13 +190,7 @@ export const createSessionCacheWarming = ({
 		};
 		const entry = await store.createSessionUsageEntry(input);
 		usageEntries.set(entry.id, entry);
-		for (const listener of [...listeners]) {
-			try {
-				listener();
-			} catch {
-				// Observers cannot affect cache warming or Session execution.
-			}
-		}
+		notifyListeners();
 	};
 
 	const runWarm = async (

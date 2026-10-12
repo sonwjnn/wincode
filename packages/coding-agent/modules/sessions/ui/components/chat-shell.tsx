@@ -52,6 +52,7 @@ type ChatShellProps = {
 	isInterruptArmed: boolean;
 	messages: readonly SessionMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
+	onModelTargetChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 	promptHistory: PromptHistoryEntry[];
@@ -122,6 +123,7 @@ export function ChatShell({
 	isInterruptArmed,
 	messages,
 	onCompact,
+	onModelTargetChanged,
 	onOpenSettings,
 	onRetry,
 	promptHistory,
@@ -296,6 +298,7 @@ export function ChatShell({
 						id={composerId}
 						onCompact={onCompact}
 						onEmptySubmit={onEmptySubmit}
+						onModelTargetChanged={onModelTargetChanged}
 						onOpenSettings={onOpenSettings}
 						onSubmit={handleSubmit}
 						recalledSubmissions={recalledSubmissions}

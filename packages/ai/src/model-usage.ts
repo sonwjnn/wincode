@@ -65,7 +65,7 @@ const nestedToken = (
 	key: string
 ): number | undefined => nonNegativeInteger(value?.[key]);
 
-/** Normalize provider usage without exposing provider-specific types. */
+/** Normalize provider usage while preserving canonical fields on repeated passes. */
 export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 	const usage = objectValue(value);
 	const inputTokens = nonNegativeInteger(usage?.inputTokens);
@@ -77,8 +77,11 @@ export const normalizeModelUsage = (value: unknown): ModelUsage | null => {
 	const outputDetails = objectValue(usage?.outputTokenDetails);
 	const cacheReadTokens =
 		nestedToken(inputDetails, "cacheReadTokens") ??
+		nonNegativeInteger(usage?.cacheReadTokens) ??
 		nonNegativeInteger(usage?.cachedInputTokens);
-	const cacheWriteTokens = nestedToken(inputDetails, "cacheWriteTokens");
+	const cacheWriteTokens =
+		nestedToken(inputDetails, "cacheWriteTokens") ??
+		nonNegativeInteger(usage?.cacheWriteTokens);
 	const reasoningTokens =
 		nestedToken(outputDetails, "reasoningTokens") ??
 		nonNegativeInteger(usage?.reasoningTokens);

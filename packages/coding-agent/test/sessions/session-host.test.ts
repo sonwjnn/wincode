@@ -34,6 +34,7 @@ import { z } from "zod";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
+import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import { loadPlugins } from "@/modules/plugins/loader";
 import {
 	createPluginRuntime,
@@ -119,6 +120,32 @@ const sessionHostManager = createSessionHostManager();
 const model: ChatModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
+};
+const cacheWarmingModel: ChatModelSelection = {
+	modelId: modelId("gpt-5.6"),
+	providerId: "openai",
+};
+const cacheWarmingPricingTable: ModelPricingTable = {
+	"openai/gpt-5.6": { cost: { cacheRead: 0.4, input: 4, output: 20 } },
+};
+const installCacheWarmingStepScript = (): (() => void) => {
+	const previousStepScript = recorder.stepScript;
+	recorder.stepScript = async function* (request) {
+		expect(request.target.promptCacheEnabled).toBe(true);
+		expect(request.target.promptCacheRetention).toBe("short");
+		yield { delta: "cache warming lifecycle response", type: "text-delta" };
+		yield {
+			type: "finish",
+			usage: {
+				cacheReadTokens: 90_000,
+				inputTokens: 100_000,
+				outputTokens: 1,
+			},
+		};
+	};
+	return () => {
+		recorder.stepScript = previousStepScript;
+	};
 };
 const buildId = agentId("build");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
@@ -283,6 +310,7 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
 type SessionHostTestCapabilitiesOptions = Readonly<{
 	configSources?: ConfigSnapshot["sources"];
 	homeRoot?: string;
+	modelPricingTable?: ModelPricingTable;
 	workspace?: string;
 	pluginRuntime?: PluginRuntime;
 }>;
@@ -381,6 +409,7 @@ const createCapabilities = (
 			connect: async () => undefined,
 			listProviders: async () => [],
 		}),
+		getModelPricingTable: () => options.modelPricingTable ?? {},
 		getRegistry: () => registry,
 		getStore: () => sessionStore,
 		getSessionHostManager: () => manager,
@@ -1160,6 +1189,87 @@ describe("Session Host lifetime", () => {
 			expect(retention).toBe("long");
 		} finally {
 			recorder.beforeStep = previousBeforeStep;
+			await host.shutdown();
+		}
+	});
+
+	test("keeps warming after Agent Turn settlement but cancels when compaction replaces context", async () => {
+		const selectedModel = cacheWarmingModel;
+		const seeded = await seedSession(
+			"cache-warming-context-lifecycle",
+			"interrupted",
+			selectedModel
+		);
+		const capabilities = createCapabilities(store, {}, sessionHostManager, {
+			modelPricingTable: cacheWarmingPricingTable,
+		});
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const restoreModelScript = installCacheWarmingStepScript();
+		try {
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: selectedModel,
+				sessionModel: selectedModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(
+				host
+					.getSnapshot()
+					.context.some(
+						({ parts, role }) =>
+							role === "assistant" &&
+							textOf(parts) === "cache warming lifecycle response"
+					)
+			).toBe(true);
+			expect(host.getCacheWarmingStatus()).toBe("scheduled");
+
+			const contextBeforeCompaction = host
+				.getSnapshot()
+				.context.map(({ id }) => id);
+			await host.agentSession.compact({
+				model: selectedModel,
+				trigger: "manual",
+			});
+			expect(host.getSnapshot().context.map(({ id }) => id)).not.toEqual(
+				contextBeforeCompaction
+			);
+			expect(host.getCacheWarmingStatus()).toBe("idle");
+		} finally {
+			restoreModelScript();
+			await host.shutdown();
+		}
+	});
+
+	test("Host shutdown cancels a scheduled cache warm before its TTL refresh", async () => {
+		const seeded = await seedSession(
+			"cache-warming-host-shutdown",
+			"interrupted",
+			cacheWarmingModel
+		);
+		const capabilities = createCapabilities(store, {}, sessionHostManager, {
+			modelPricingTable: cacheWarmingPricingTable,
+		});
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const restoreModelScript = installCacheWarmingStepScript();
+		try {
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: cacheWarmingModel,
+				sessionModel: cacheWarmingModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(host.getCacheWarmingStatus()).toBe("scheduled");
+
+			await host.shutdown();
+			expect(host.getCacheWarmingStatus()).toBe("idle");
+		} finally {
+			restoreModelScript();
 			await host.shutdown();
 		}
 	});

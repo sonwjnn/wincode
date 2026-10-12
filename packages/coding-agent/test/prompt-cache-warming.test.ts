@@ -191,18 +191,22 @@ describe("Session Cache Warming", () => {
 	test("aborts an in-flight warmer when Session context changes", async () => {
 		vi.useFakeTimers();
 		let fetchSignal: AbortSignal | undefined;
-		globalThis.fetch = ((_input: Request | string | URL, init?: RequestInit) =>
-			new Promise<Response>((_resolve, reject) => {
-				const signal = init?.signal;
-				if (signal === null || signal === undefined) {
-					reject(new Error("the warm request must be abortable"));
-					return;
-				}
-				fetchSignal = signal;
-				signal.addEventListener("abort", () => reject(signal.reason), {
-					once: true,
-				});
-			})) as unknown as typeof fetch;
+		const response = Promise.withResolvers<Response>();
+		globalThis.fetch = ((
+			_input: Request | string | URL,
+			init?: RequestInit
+		) => {
+			const signal = init?.signal;
+			if (signal === null || signal === undefined) {
+				response.reject(new Error("the warm request must be abortable"));
+				return response.promise;
+			}
+			fetchSignal = signal;
+			signal.addEventListener("abort", () => response.reject(signal.reason), {
+				once: true,
+			});
+			return response.promise;
+		}) as unknown as typeof fetch;
 		const { entries, store } = createEntryWriter();
 		const warming = createWarming(store);
 		const request = createWarmRequest().request;

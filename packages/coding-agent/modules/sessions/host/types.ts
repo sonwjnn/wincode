@@ -65,6 +65,8 @@ export type SessionHost = Readonly<{
 	getSelection: () => ResolvedSessionSelection | null;
 	getSnapshot: () => LiveSessionSnapshot;
 	getCacheWarmingStatus: () => CacheWarmingStatus;
+	/** Cancels scheduled/in-flight warming after its Model Target changes. */
+	cancelCacheWarming: () => void;
 	getSessionUsageEntries: () => readonly SessionUsageEntry[];
 	/**
 	 * Observes Agent Turn Events the Agent Session emits, in order: the stream a

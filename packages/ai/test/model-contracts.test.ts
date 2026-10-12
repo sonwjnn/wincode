@@ -656,6 +656,19 @@ describe("focused model contracts", () => {
 		});
 	});
 
+	test("preserves normalized cache counts when re-normalizing a ModelClient result", () => {
+		const usage = {
+			cacheReadTokens: 20,
+			cacheWriteTokens: 5,
+			inputTokens: 100,
+			outputTokens: 25,
+			reasoningTokens: 10,
+			totalTokens: 125,
+		};
+
+		expect(normalizeModelUsage(usage)).toEqual(usage);
+	});
+
 	test("keeps cached input cost unknown when a category rate is unpublished", () => {
 		const usage = normalizeModelUsage({
 			inputTokenDetails: { cacheReadTokens: 20, cacheWriteTokens: 5 },
