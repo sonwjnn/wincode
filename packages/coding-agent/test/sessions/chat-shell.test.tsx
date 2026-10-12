@@ -365,6 +365,23 @@ const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await setup.renderOnce();
 };
 
+/**
+ * Waits for a frame the transcript produces, so a scroll or expansion settles
+ * before it is asserted instead of being read from the frame it started in.
+ */
+const waitForFrameText = async (
+	setup: TestRendererSetup,
+	text: string
+): Promise<string> => {
+	const deadline = Date.now() + 2000;
+	let frame = setup.captureCharFrame();
+	while (!frame.includes(text) && Date.now() < deadline) {
+		await flushUi(setup);
+		frame = setup.captureCharFrame();
+	}
+	return frame;
+};
+
 type SummaryDiffClippingCase = {
 	summaryMarker: string;
 	summaryText: string;
@@ -1438,8 +1455,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).not.toContain("tail 12");
 
 			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
+			frame = await waitForFrameText(setup, "tail 12");
 
 			expect(frame).toContain("tail 12");
 		} finally {
