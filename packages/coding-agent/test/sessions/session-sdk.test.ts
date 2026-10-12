@@ -32,7 +32,10 @@ import {
 	type ConfigSnapshot,
 	createConfigStore,
 } from "@/shared/config/config-store";
-import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import {
+	resolveUserDataDir,
+	resolveUserWincodeDir,
+} from "@/shared/paths/user-data-dir";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
@@ -195,8 +198,15 @@ test("an injected Session SDK creates an empty durable Session and reopens it", 
 
 test("the public Session SDK restores non-default Agent, provider, model, and ThinkingLevel", async () => {
 	const sdkWorkspace = path.join(root, "public-sdk-selection-workspace");
+	const sdkHomeRoot = path.join(root, "public-sdk-selection-home");
+	const globalConfigDirectory = path.join(sdkHomeRoot, ".wincode");
 	const databasePath = path.join(storeRoot, "public-sdk-selection.sqlite");
 	await fs.mkdir(sdkWorkspace, { recursive: true });
+	await fs.mkdir(globalConfigDirectory, { recursive: true });
+	await Bun.write(
+		path.join(globalConfigDirectory, "settings.json"),
+		JSON.stringify({ default_agent: "build", plugins: [] })
+	);
 	await Bun.write(
 		path.join(sdkWorkspace, ".wincode", "settings.json"),
 		JSON.stringify({
@@ -241,11 +251,6 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 			},
 		],
 	};
-	const connectionsSpy = spyOn(
-		connectionsModule,
-		"createConnections"
-	).mockReturnValue(fakeConnections);
-	installFakeModelClient(recorder);
 	const sdkOptions: SessionSdkOptions = {
 		cwd: sdkWorkspace,
 		databasePath,
@@ -258,9 +263,33 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 	let created: SessionSdkHandle | undefined;
 	let restored: SessionSdkHandle | undefined;
 	let unsubscribe: (() => void) | undefined;
+	const previousHome = process.env.HOME;
+	const previousUserProfile = process.env.USERPROFILE;
 	try {
+		process.env.HOME = sdkHomeRoot;
+		process.env.USERPROFILE = sdkHomeRoot;
+		// Bun's os.homedir may ignore HOME, so isolate the SDK lookup too.
+		const homeDirSpy = spyOn(os, "homedir").mockReturnValue(sdkHomeRoot);
+		if (
+			os.homedir() !== sdkHomeRoot ||
+			resolveUserWincodeDir() !== globalConfigDirectory
+		) {
+			throw new Error("The public Session SDK test home was not applied.");
+		}
+		const connectionsSpy = spyOn(
+			connectionsModule,
+			"createConnections"
+		).mockReturnValue(fakeConnections);
+		installFakeModelClient(recorder);
+		const homeLookupsBeforeInitialSdk = homeDirSpy.mock.calls.length;
+		const connectionsBeforeInitialSdk = connectionsSpy.mock.calls.length;
 		sdk = await createPublicSessionSdk(sdkOptions);
-		expect(connectionsSpy).toHaveBeenCalled();
+		expect(homeDirSpy.mock.calls.length).toBeGreaterThan(
+			homeLookupsBeforeInitialSdk
+		);
+		expect(connectionsSpy.mock.calls.length).toBeGreaterThan(
+			connectionsBeforeInitialSdk
+		);
 		expect(await sdk.getAgentCatalog()).toContainEqual(
 			expect.objectContaining({
 				id: agentId("scout"),
@@ -294,7 +323,15 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 		sdk = undefined;
 
 		// A fresh SDK must restore selection from durable records, not live host state.
+		const homeLookupsBeforeRestoredSdk = homeDirSpy.mock.calls.length;
+		const connectionsBeforeRestoredSdk = connectionsSpy.mock.calls.length;
 		restoredSdk = await createPublicSessionSdk(sdkOptions);
+		expect(homeDirSpy.mock.calls.length).toBeGreaterThan(
+			homeLookupsBeforeRestoredSdk
+		);
+		expect(connectionsSpy.mock.calls.length).toBeGreaterThan(
+			connectionsBeforeRestoredSdk
+		);
 		restored = await restoredSdk.openSession(createdSessionId);
 		const restoredCompleted = Promise.withResolvers<void>();
 		unsubscribe = restored.onEvent((event) => {
@@ -351,12 +388,27 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 		}
 	} finally {
 		unsubscribe?.();
-		await restored?.dispose();
-		await created?.dispose();
-		await restoredSdk?.dispose();
-		await sdk?.dispose();
-		mock.restore();
+		try {
+			await restored?.dispose();
+			await created?.dispose();
+			await restoredSdk?.dispose();
+			await sdk?.dispose();
+		} finally {
+			if (previousHome === undefined) {
+				delete process.env.HOME;
+			} else {
+				process.env.HOME = previousHome;
+			}
+			if (previousUserProfile === undefined) {
+				delete process.env.USERPROFILE;
+			} else {
+				process.env.USERPROFILE = previousUserProfile;
+			}
+			mock.restore();
+		}
 	}
+	expect(process.env.HOME).toBe(previousHome);
+	expect(process.env.USERPROFILE).toBe(previousUserProfile);
 });
 
 test("the public Session SDK loads trusted project Plugins but a new Session runtime does not inherit trust", async () => {
