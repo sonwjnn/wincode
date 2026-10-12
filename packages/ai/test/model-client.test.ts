@@ -1515,7 +1515,7 @@ describe("native model client routes", () => {
 		);
 	});
 
-	test("routes OpenCode Go Anthropic models through Messages", async () => {
+	test("routes OpenCode Go Anthropic models through Messages with catalog limits", async () => {
 		const mock = mockFetch(
 			sseResponse(
 				'event: message_start\ndata: {"message":{"usage":{"input_tokens":2}}}\n\n',
@@ -1524,9 +1524,7 @@ describe("native model client routes", () => {
 			)
 		);
 		const client = createModelClient({ fetch: mock.fetch });
-		const target = makeTarget("opencode-go", "minimax-m3", undefined, {
-			maxOutputTokens: 256,
-		});
+		const target = makeTarget("opencode-go", "minimax-m3");
 
 		const parts = await collect(client, target);
 
@@ -1534,7 +1532,7 @@ describe("native model client routes", () => {
 		expect(new Headers(mock.init?.headers).get("x-api-key")).toBe("test-key");
 		expect(responseBody(mock)).toMatchObject({
 			model: "minimax-m3",
-			max_tokens: 256,
+			max_tokens: 131_072,
 			stream: true,
 		});
 

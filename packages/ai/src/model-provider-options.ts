@@ -16,6 +16,7 @@ import {
 	getModelThinkingLevelValue,
 	normalizeThinkingLevelForModel,
 } from "./model-metadata-runtime";
+import { MODEL_OUTPUT_TOKEN_LIMIT } from "./model-output-limit.ts";
 import {
 	type ConnectionProviderId,
 	type ModelThinkingPolicy,
@@ -24,6 +25,8 @@ import {
 	type ThinkingLevel,
 	type ThinkingSelection,
 } from "./models";
+
+export { MODEL_OUTPUT_TOKEN_LIMIT } from "./model-output-limit.ts";
 
 export type OpenAIReasoningEffort = Exclude<ThinkingLevel, "off"> | "none";
 export type AnthropicEffort = Exclude<ThinkingLevel, "minimal" | "off">;
@@ -152,8 +155,6 @@ export const modelProviderOptionsSchema = z.union([
 	anthropicProviderOptionsSchema,
 	googleProviderOptionsSchema,
 ]);
-
-export const MODEL_OUTPUT_TOKEN_LIMIT = 32_000;
 
 /**
  * Reasoning budget for a model whose source publishes budget bounds but no

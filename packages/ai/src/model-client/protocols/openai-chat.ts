@@ -1,5 +1,5 @@
-import { normalizeModelUsage } from "../../model-usage";
-import { readSseEvents } from "../sse";
+import { normalizeModelUsage } from "../../model-usage.ts";
+import { readSseEvents } from "../sse.ts";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
@@ -8,7 +8,7 @@ import type {
 import {
 	openAIPromptCacheControlsForRequest,
 	openAIPromptCacheStrategyFor,
-} from "./openai-prompt-cache";
+} from "./openai-prompt-cache.ts";
 import {
 	fileDataUri,
 	incompleteStreamError,
@@ -21,7 +21,7 @@ import {
 	stringValue,
 	unreachableValue,
 	valueAsText,
-} from "./shared";
+} from "./shared.ts";
 import type {
 	ModelProtocolStrategy,
 	ProtocolRequestContextByProtocol,
@@ -332,32 +332,29 @@ const openAiChatStream = async function* (
 	const normalized = normalizeModelUsage(state.usage);
 	yield normalized ? { type: "finish", usage: normalized } : { type: "finish" };
 };
-const serializeOpenAIChat = (
-	context: ProtocolRequestContextByProtocol["openai-chat"]
+export type OpenAICompatibleChatRequest = Readonly<{
+	maxOutputTokens?: number;
+	messages: readonly ModelPromptMessage[];
+	modelId: string;
+	system?: string;
+	tools?: readonly Readonly<{
+		description?: string;
+		inputSchema: Readonly<Record<string, unknown>>;
+		name: string;
+	}>[];
+}>;
+
+const serializeOpenAICompatibleChat = (
+	request: OpenAICompatibleChatRequest
 ): JsonRecord => {
-	const { request, maxOutputTokens, model } = context;
-	const cacheControls = openAIPromptCacheControlsForRequest(
-		model,
-		"openai-chat",
-		request.target,
-		request.promptCacheKey
-	);
 	const body: JsonRecord = {
-		model: request.target.modelId,
+		model: request.modelId,
 		messages: chatCompletionsMessages(request.messages, request.system),
 		stream: true,
 		stream_options: { include_usage: true },
 	};
-	if (maxOutputTokens !== undefined) {
-		body.max_tokens = maxOutputTokens;
-	}
-	if (cacheControls.promptCacheKey !== undefined) {
-		body.prompt_cache_key = cacheControls.promptCacheKey;
-	}
-	if (cacheControls.retentionField === "prompt_cache_retention") {
-		body.prompt_cache_retention = cacheControls.retentionValue;
-	} else if (cacheControls.retentionField === "prompt_cache_options.ttl") {
-		body.prompt_cache_options = { ttl: cacheControls.retentionValue };
+	if (request.maxOutputTokens !== undefined) {
+		body.max_tokens = request.maxOutputTokens;
 	}
 	const tools = request.tools?.map((tool) => ({
 		type: "function",
@@ -371,6 +368,40 @@ const serializeOpenAIChat = (
 		body.tools = tools;
 	}
 	return body;
+};
+
+const serializeOpenAIChat = (
+	context: ProtocolRequestContextByProtocol["openai-chat"]
+): JsonRecord => {
+	const { request, maxOutputTokens, model } = context;
+	const cacheControls = openAIPromptCacheControlsForRequest(
+		model,
+		"openai-chat",
+		request.target,
+		request.promptCacheKey
+	);
+	const body = serializeOpenAICompatibleChat({
+		maxOutputTokens,
+		messages: request.messages,
+		modelId: request.target.modelId,
+		system: request.system,
+		tools: request.tools,
+	});
+	if (cacheControls.promptCacheKey !== undefined) {
+		body.prompt_cache_key = cacheControls.promptCacheKey;
+	}
+	if (cacheControls.retentionField === "prompt_cache_retention") {
+		body.prompt_cache_retention = cacheControls.retentionValue;
+	} else if (cacheControls.retentionField === "prompt_cache_options.ttl") {
+		body.prompt_cache_options = { ttl: cacheControls.retentionValue };
+	}
+	return body;
+};
+
+export const openAICompatibleChatProtocol = {
+	protocol: "openai-compatible",
+	serialize: serializeOpenAICompatibleChat,
+	stream: openAiChatStream,
 };
 
 export const openAIChatStrategy = {

@@ -1,5 +1,7 @@
+import { withAnthropicModelMetadata } from "../../anthropic-model-metadata";
+import { getModelMetadata } from "../../model-metadata-runtime";
 import type { OpenCodeGoProtocol, SupportedChatModel } from "../../models";
-import { anthropicStrategy } from "../protocols/anthropic";
+import { anthropicStrategy } from "../protocols/anthropic-default";
 import { openAIChatStrategy } from "../protocols/openai-chat";
 import { openAIResponsesStrategy } from "../protocols/openai-responses";
 import type { ModelProtocolStrategy } from "../protocols/types";
@@ -49,7 +51,10 @@ const createAnthropicRequest = (context: ProviderRequestContext) => {
 		},
 		{
 			maxOutputTokens: context.maxOutputTokens,
-			model: context.model,
+			model: withAnthropicModelMetadata(
+				context.model,
+				getModelMetadata(context.model)
+			),
 			providerOptions: anthropicOptionsFor(context.providerOptions),
 			request: context.request,
 		}

@@ -1,4 +1,4 @@
-import { anthropicStrategy } from "../protocols/anthropic";
+import { anthropicStrategy } from "../protocols/anthropic-default";
 import { anthropicOptionsFor, requireApiKey } from "./shared";
 import type { ConnectionProviderAdapter } from "./types";
 import { type ProviderRequestContext, providerRouteFor } from "./types";

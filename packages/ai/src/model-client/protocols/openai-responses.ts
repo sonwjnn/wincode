@@ -1,6 +1,6 @@
-import { isObjectLike } from "@wincode/utils";
-import { normalizeModelUsage } from "../../model-usage";
-import { readSseEvents } from "../sse";
+import { isObjectLike } from "@wincode/utils/guards";
+import { normalizeModelUsage } from "../../model-usage.ts";
+import { readSseEvents } from "../sse.ts";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
@@ -9,7 +9,7 @@ import type {
 import {
 	openAIPromptCacheControlsForRequest,
 	openAIPromptCacheStrategyFor,
-} from "./openai-prompt-cache";
+} from "./openai-prompt-cache.ts";
 import type { JsonRecord, SsePayload } from "./shared";
 import {
 	fileDataUri,
@@ -22,7 +22,7 @@ import {
 	unknownArray,
 	unreachableValue,
 	valueAsText,
-} from "./shared";
+} from "./shared.ts";
 import type {
 	ModelProtocolStrategy,
 	ProtocolRequestContextByProtocol,
