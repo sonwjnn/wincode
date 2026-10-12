@@ -1,11 +1,11 @@
-import { normalizeModelUsage } from "../../model-usage";
-import { readSseEvents } from "../sse";
+import { normalizeModelUsage } from "../../model-usage.ts";
+import { readSseEvents } from "../sse.ts";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
 	ModelStreamPart,
-} from "../types";
-import { googlePromptCacheStrategy } from "./google-prompt-cache";
+} from "../types.ts";
+import { googlePromptCacheStrategy } from "./google-prompt-cache.ts";
 import {
 	base64,
 	incompleteStreamError,
@@ -16,11 +16,11 @@ import {
 	type SsePayload,
 	stringValue,
 	unreachableValue,
-} from "./shared";
+} from "./shared.ts";
 import type {
 	ModelProtocolStrategy,
 	ProtocolRequestContextByProtocol,
-} from "./types";
+} from "./types.ts";
 
 const googleParts = (content: readonly ModelPromptPart[]): JsonRecord[] => {
 	const parts: JsonRecord[] = [];

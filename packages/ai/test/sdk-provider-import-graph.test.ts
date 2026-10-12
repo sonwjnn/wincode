@@ -67,4 +67,55 @@ describe("SDK provider import graphs", () => {
 			).toBe(false);
 		}
 	});
+
+	test("Google and OpenCode Go provider imports bundle only their own model and metadata artifacts", async () => {
+		for (const providerId of ["google", "opencode-go"]) {
+			const inputs = await bundledInputsFor(
+				path.join(AI_ROOT, `src/sdk-providers/${providerId}.ts`)
+			);
+			expect(
+				inputs.some(
+					(inputPath) =>
+						SDK_PROVIDER_MODULE.test(inputPath) &&
+						!inputPath.endsWith(`/sdk-providers/${providerId}.ts`)
+				)
+			).toBe(false);
+			expect(
+				inputs.some((inputPath) => FULL_MODEL_CATALOG.test(inputPath))
+			).toBe(false);
+			expect(
+				inputs.some((inputPath) =>
+					inputPath.endsWith("generated/model-metadata.generated.ts")
+				)
+			).toBe(false);
+		}
+
+		const googleInputs = await bundledInputsFor(
+			path.join(AI_ROOT, "src/sdk-providers/google.ts")
+		);
+		expect(
+			googleInputs.some((inputPath) =>
+				inputPath.endsWith("generated/google-model-metadata.generated.ts")
+			)
+		).toBe(true);
+		expect(
+			googleInputs.some((inputPath) =>
+				inputPath.endsWith("generated/google-sdk-models.generated.ts")
+			)
+		).toBe(true);
+
+		const openCodeGoInputs = await bundledInputsFor(
+			path.join(AI_ROOT, "src/sdk-providers/opencode-go.ts")
+		);
+		expect(
+			openCodeGoInputs.some((inputPath) =>
+				inputPath.endsWith("generated/opencode-go-sdk-models.generated.ts")
+			)
+		).toBe(true);
+		expect(
+			openCodeGoInputs.some((inputPath) =>
+				inputPath.endsWith("generated/opencode-go-model-metadata.generated.ts")
+			)
+		).toBe(true);
+	});
 });

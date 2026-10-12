@@ -1,4 +1,4 @@
-// Regenerates shared, Anthropic-only, and OpenAI-only model metadata.
+// Regenerates shared and provider-only model metadata.
 //
 // Usage: bun run packages/ai/scripts/sync-model-metadata.ts [--check]
 //
@@ -28,6 +28,22 @@ const OPENAI_PROMPT_CACHE_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/openai-prompt-cache.generated.ts"
 );
+const GOOGLE_MODEL_METADATA_OUTPUT_PATH = path.join(
+	import.meta.dir,
+	"../src/generated/google-model-metadata.generated.ts"
+);
+const GOOGLE_SDK_MODELS_OUTPUT_PATH = path.join(
+	import.meta.dir,
+	"../src/generated/google-sdk-models.generated.ts"
+);
+const OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH = path.join(
+	import.meta.dir,
+	"../src/generated/opencode-go-model-metadata.generated.ts"
+);
+const OPENCODE_GO_SDK_MODELS_OUTPUT_PATH = path.join(
+	import.meta.dir,
+	"../src/generated/opencode-go-sdk-models.generated.ts"
+);
 
 const sourceUrlForOutput = (value: string): string => {
 	try {
@@ -49,6 +65,18 @@ const currentAnthropicModelMetadata = isCheck
 	: undefined;
 const currentOpenAIPromptCache = isCheck
 	? await readUtf8File(OPENAI_PROMPT_CACHE_OUTPUT_PATH)
+	: undefined;
+const currentGoogleModelMetadata = isCheck
+	? await readUtf8File(GOOGLE_MODEL_METADATA_OUTPUT_PATH)
+	: undefined;
+const currentGoogleSdkModels = isCheck
+	? await readUtf8File(GOOGLE_SDK_MODELS_OUTPUT_PATH)
+	: undefined;
+const currentOpenCodeGoModelMetadata = isCheck
+	? await readUtf8File(OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH)
+	: undefined;
+const currentOpenCodeGoSdkModels = isCheck
+	? await readUtf8File(OPENCODE_GO_SDK_MODELS_OUTPUT_PATH)
 	: undefined;
 const committedSnapshotDate = current?.match(
 	/^\/\/ Snapshot date: (\d{4}-\d{2}-\d{2})\./m
@@ -89,7 +117,12 @@ if (isCheck) {
 	if (
 		current !== rendered.contents ||
 		currentAnthropicModelMetadata !== rendered.anthropicModelMetadataContents ||
-		currentOpenAIPromptCache !== rendered.openAIPromptCacheContents
+		currentOpenAIPromptCache !== rendered.openAIPromptCacheContents ||
+		currentGoogleModelMetadata !== rendered.googleModelMetadataContents ||
+		currentGoogleSdkModels !== rendered.googleSdkModelsContents ||
+		currentOpenCodeGoModelMetadata !==
+			rendered.openCodeGoModelMetadataContents ||
+		currentOpenCodeGoSdkModels !== rendered.openCodeGoSdkModelsContents
 	) {
 		throw new Error(
 			"Generated model metadata is stale. Run `bun run packages/ai/scripts/sync-model-metadata.ts`."
@@ -107,8 +140,25 @@ if (isCheck) {
 			OPENAI_PROMPT_CACHE_OUTPUT_PATH,
 			rendered.openAIPromptCacheContents
 		),
+		Bun.write(
+			GOOGLE_MODEL_METADATA_OUTPUT_PATH,
+			rendered.googleModelMetadataContents
+		),
+		Bun.write(GOOGLE_SDK_MODELS_OUTPUT_PATH, rendered.googleSdkModelsContents),
+		Bun.write(
+			OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH,
+			rendered.openCodeGoModelMetadataContents
+		),
+		Bun.write(
+			OPENCODE_GO_SDK_MODELS_OUTPUT_PATH,
+			rendered.openCodeGoSdkModelsContents
+		),
 	]);
 	process.stdout.write(`Wrote ${OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${ANTHROPIC_MODEL_METADATA_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${OPENAI_PROMPT_CACHE_OUTPUT_PATH}\n`);
+	process.stdout.write(`Wrote ${GOOGLE_MODEL_METADATA_OUTPUT_PATH}\n`);
+	process.stdout.write(`Wrote ${GOOGLE_SDK_MODELS_OUTPUT_PATH}\n`);
+	process.stdout.write(`Wrote ${OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH}\n`);
+	process.stdout.write(`Wrote ${OPENCODE_GO_SDK_MODELS_OUTPUT_PATH}\n`);
 }

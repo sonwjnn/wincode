@@ -177,7 +177,7 @@ describe("Google CachedContent resource lifecycle", () => {
 		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/1" }]);
 	});
 
-	test("falls back uncached on a recognized cache-creation rejection only", async () => {
+	test("falls back uncached only on a recognized cache-creation rejection", async () => {
 		const cacheError = new ApiError({
 			message: "Cached content is unsupported for this model.",
 			status: 400,

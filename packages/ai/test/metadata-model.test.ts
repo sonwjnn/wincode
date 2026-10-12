@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { buildModelMetadataFile } from "../scripts/metadata-model";
 import { anthropicModelMetadataById } from "../src/generated/anthropic-model-metadata.generated";
+import { googleModelMetadataById } from "../src/generated/google-model-metadata.generated";
+import { googleSdkModels } from "../src/generated/google-sdk-models.generated";
 import { modelMetadataByKey } from "../src/generated/model-metadata.generated";
+import { openCodeGoSdkModels } from "../src/generated/opencode-go-sdk-models.generated";
 import { modelMetadataEntrySchema } from "../src/model-metadata";
 
 /**
@@ -303,6 +306,118 @@ describe("buildModelMetadataFile", () => {
 		);
 		expect(result.anthropicModelMetadataContents).not.toContain("openai/");
 		expect(result.anthropicModelMetadataContents).not.toContain("google/");
+	});
+
+	test("emits provider-only active models and Google metadata from the canonical catalog", () => {
+		const result = buildModelMetadataFile({
+			catalog: [
+				{
+					connectionProviderId: "google",
+					displayName: "Gemini current",
+					id: "gemini-current",
+					lifecycle: "active",
+					provider: "google",
+				},
+				{
+					connectionProviderId: "google",
+					displayName: "Gemini retired",
+					id: "gemini-retired",
+					lifecycle: "retired",
+					provider: "google",
+				},
+				{
+					connectionProviderId: "opencode-go",
+					displayName: "OpenAI route",
+					id: "zen-openai",
+					lifecycle: "active",
+					protocol: "openai",
+					provider: "opencode-go",
+				},
+				{
+					connectionProviderId: "opencode-go",
+					displayName: "Messages route",
+					id: "zen-messages",
+					lifecycle: "active",
+					protocol: "anthropic",
+					provider: "opencode-go",
+				},
+				{
+					connectionProviderId: "opencode-go",
+					displayName: "Compatible route",
+					id: "zen-compatible",
+					lifecycle: "active",
+					protocol: "openai-compatible",
+					provider: "opencode-go",
+				},
+			],
+			generatedAt: "2026-01-01",
+			overlays: {
+				"google/gemini-current": {
+					promptCache: {
+						explicit: { retentionTiers: ["short"] },
+						googleCachedContent: { ttl: { short: "300s" } },
+					},
+				},
+			},
+			payload: {},
+			source: "https://example.test/api.json",
+		});
+
+		expect(result.googleSdkModels).toEqual([
+			{
+				modelId: "gemini-current",
+				protocolId: "google",
+				providerId: "google",
+			},
+		]);
+		expect(result.openCodeGoSdkModels).toEqual([
+			{
+				modelId: "zen-openai",
+				protocolId: "openai-responses",
+				providerId: "opencode-go",
+			},
+			{
+				modelId: "zen-messages",
+				protocolId: "anthropic",
+				providerId: "opencode-go",
+			},
+			{
+				modelId: "zen-compatible",
+				protocolId: "openai-compatible",
+				providerId: "opencode-go",
+			},
+		]);
+		expect(
+			result.googleModelMetadataEntries["gemini-current"]?.promptCache
+		).toEqual({
+			explicit: { retentionTiers: ["short"] },
+			googleCachedContent: { ttl: { short: "300s" } },
+		});
+		expect(result.googleModelMetadataContents).not.toContain("openai/");
+	});
+
+	test("generated Google SDK models and metadata remain provider-only", () => {
+		expect(
+			googleSdkModels.every((model) => model.providerId === "google")
+		).toBe(true);
+		expect(googleSdkModels).toHaveLength(3);
+		expect(googleModelMetadataById["gemini-3.8-flash"]?.promptCache).toEqual(
+			modelMetadataByKey["google/gemini-3.8-flash"]?.promptCache
+		);
+		expect(
+			Object.fromEntries(
+				Object.entries(modelMetadataByKey)
+					.filter(([key]) => key.startsWith("google/"))
+					.map(([key, metadata]) => [key.slice("google/".length), metadata])
+			)
+		).toEqual(googleModelMetadataById);
+		expect(
+			openCodeGoSdkModels.every((model) => model.providerId === "opencode-go")
+		).toBe(true);
+		expect(openCodeGoSdkModels).toHaveLength(27);
+		expect(
+			googleSdkModels.some((model) => model.modelId === "gemini-3.6-flash")
+		).toBe(true);
 	});
 
 	test("committed Anthropic-only metadata matches the provider entries in the shared snapshot", () => {
