@@ -1,4 +1,5 @@
 import type { ThinkingLevel, ThinkingSelection } from "@wincode/ai/models";
+import type { ApplicationSessionServicesInput } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SkillContext } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -6,11 +7,11 @@ import type {
 	AgentTurnId,
 	ChatModelSelection,
 	SessionCapabilities,
-	SessionCapabilitiesAssembly,
 	SessionHost,
 	SessionId,
 	SessionMessage,
 	SessionMessageMetadata,
+	SessionServices,
 	SessionStore,
 } from "../../../modules/sessions/host/session-rpc";
 import type { SessionFilePart } from "../../../modules/sessions/message";
@@ -87,29 +88,27 @@ export type OutputWriter = {
 	drain?: () => Promise<void>;
 };
 
-export type RpcAssembly = Omit<
-	SessionCapabilitiesAssembly,
-	"store" | "workspaceId"
-> & {
-	store?: SessionStore;
-	workspaceId: string;
-};
+/**
+ * What RPC Mode needs from Session Services: their capabilities, their
+ * teardown, their workspace, and the store they may still attach through.
+ * Session Services satisfy it as-is.
+ */
+export type RpcAssembly = Pick<SessionServices, "capabilities" | "shutdown"> &
+	Readonly<{
+		store?: SessionStore;
+		workspace: string;
+		workspaceId: string;
+	}>;
 
-export type RpcCompositionInput = Readonly<{
-	configRuntime?: ConfigRuntime;
-	cwd: string;
-	pluginRuntime?: PluginRuntime;
-	disabledPluginIds?: readonly string[];
-	pluginPaths?: readonly string[];
-	workspace: string;
-}>;
+/** RPC Mode composes the application's Session Services from this input. */
+export type RpcCompositionInput = ApplicationSessionServicesInput;
 
 export type RpcRunnerOptions = Readonly<{
 	configRuntime?: ConfigRuntime;
 	disabledPluginIds?: readonly string[];
 	pluginPaths?: readonly string[];
 	pluginRuntime?: PluginRuntime;
-	composeCapabilities?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
+	composeServices?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	input: JsonlInput;
 	signal?: AbortSignal;
 	signalExitCode?: number | (() => number);
@@ -129,9 +128,7 @@ export type RuntimeModules = Readonly<{
 		capabilities: SessionCapabilities;
 		sessionId: SessionId;
 	}) => Promise<SessionHost>;
-	createSessionCapabilities: (
-		input: RpcCompositionInput
-	) => Promise<RpcAssembly>;
+	openSessionServices: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	createSessionUserMessage: (
 		text: string,
 		metadata?: SessionMessageMetadata

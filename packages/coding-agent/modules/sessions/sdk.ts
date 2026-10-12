@@ -9,7 +9,6 @@ import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,
 } from "@/modules/agents/registry";
-import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
@@ -39,17 +38,26 @@ import type {
 } from "@/modules/sessions/host/types";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
-import type { ConfigRuntime } from "@/shared/config/config-store";
+import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
 import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
 
 export type SessionSdkRuntimeOptions = Omit<
 	SessionCapabilitiesOptions,
-	"cwd" | "pluginRuntime" | "sessionHostManager" | "getSessionSdk" | "workspace"
+	| "getConfig"
+	| "getPluginRuntime"
+	| "plugin"
+	| "sessionHostManager"
+	| "getSessionSdk"
+	| "workspace"
 > &
 	Readonly<{
 		agent?: AgentId | string;
+		/** The configuration this SDK loads Plugins and resolves trust with. */
+		configRuntime?: ConfigRuntime;
+		/** The configuration store this SDK builds its configuration runtime from. */
+		configStore?: ConfigStore;
 		cwd?: string;
 		model?: ChatModelSelection;
 		thinkingLevel?: ThinkingLevel;
@@ -415,7 +423,6 @@ const createSessionSdkInternal = async (
 					...options.configRuntime,
 					trustedProjectRoots,
 				};
-	const composition = createApplicationPluginComposition();
 	const pluginRuntime: PluginRuntime = await loadPlugins({
 		cliPaths: options.pluginPaths ?? [],
 		config: configRuntime,
@@ -424,6 +431,8 @@ const createSessionSdkInternal = async (
 	const {
 		agent,
 		capabilityCeiling: _capabilityCeiling,
+		configRuntime: _configRuntime,
+		configStore: _configStore,
 		cwd: _cwd,
 		model,
 		pluginPaths: _pluginPaths,
@@ -435,9 +444,8 @@ const createSessionSdkInternal = async (
 	const assembly = await createSessionCapabilities({
 		...capabilityOptions,
 		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
-		configRuntime,
-		cwd,
-		pluginRuntime,
+		getConfig: () => configRuntime,
+		plugin: { ownedByCaller: true, runtime: pluginRuntime },
 		getSessionSdk: () => sdk,
 		...(shared === undefined
 			? {}
@@ -445,7 +453,6 @@ const createSessionSdkInternal = async (
 					store: shared.store,
 					sessionHostManager: shared.manager,
 				}),
-		turnToolResolver: composition.turnToolResolver,
 		workspace,
 	});
 	const handles = new Set<SessionSdkHandle>();

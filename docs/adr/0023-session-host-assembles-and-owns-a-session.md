@@ -36,7 +36,7 @@ Package placement note: ADR-0027 moved the temporary `@wincode/tui` location int
 - **The Host's module graph is checked, not asserted.** The React-free boundary
   test walks from the Host entry, not only from `session-engine.ts`, so a
   React-free module reaching React through a barrel fails the check.
-- **The Host lives in `@wincode/coding-agent`**, the private Coding-Agent Application package, in its own module reached through a declared subpath export. The split between the two factories is named so that "host" means exactly one thing: `createSessionHost` owns opening, the Engine, subscription, and shutdown, while `createSessionPorts` materializes Session Engine Ports from capabilities and owns no lifetime.
+- **The Host lives in `@wincode/coding-agent`**, the private Coding-Agent Application package, in its own module reached through a declared subpath export. The split between the two factories is named so that "host" means exactly one thing: `createSessionHost` owns opening, the Engine, subscription, and shutdown, while `createAgentSessionAdapters` materializes the Agent Session's ports from the Session Capabilities and owns no lifetime, with the Agent Turn pipeline behind its `turnRunner` port in `createAgentSessionTurnRunner`.
 - **No separate session workspace package is created.** ADR-0027 places the Host in the application package; an independent package remains unnecessary until a genuinely reusable seam requires one.
 
 ## Considered options
@@ -57,8 +57,9 @@ Package placement note: ADR-0027 moved the temporary `@wincode/tui` location int
 ## Consequences
 
 - ADR-0019's clause that the port surface is "the Interactive Mode's rather than a second host's" is superseded. The rest of that ADR — one owner, one command lane, per-execution scope — stands.
-- The engine-host factory is renamed: it materializes Session Engine Ports from
-  capabilities and owns no lifetime.
+- The engine-host factory is renamed: it materializes the Agent Session's ports
+  from the Session Capabilities and owns no lifetime, and the Agent Turn pipeline
+  it hands to `turnRunner` lives in `createAgentSessionTurnRunner`.
 - Modules that mix React and React-free exports in one barrel must be split,
   because a React-free module importing such a barrel reaches React
   transitively. `modules/agents/registry.ts` is the known instance.

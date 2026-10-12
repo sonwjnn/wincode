@@ -105,6 +105,7 @@ import {
 	sessionRecordId,
 	toolCallId,
 } from "../support/identifiers";
+import { createEmptyPluginRuntime } from "../support/plugin-runtime";
 
 const recorder = createFakeModelClientRecorder();
 installFakeModelClient(recorder);
@@ -390,9 +391,9 @@ const createCapabilities = (
 	sessionSdk = createSessionSdkOperations(
 		{
 			configRuntime: config,
-			connections: capabilities.getConnections(),
 			cwd: workspace,
-			registry,
+			getConnections: capabilities.getConnections,
+			getRegistry: () => registry,
 			store: sessionStore,
 			workspace,
 		},
@@ -678,8 +679,8 @@ test("resource reload keeps an open Session Host and restarts only its Plugin Se
 
 test("interactive reload preserves the displayed Session Host while changing Plugins", async () => {
 	await resetInteractiveSessionHostManager();
-	const oldRuntime = createPluginRuntime([], []);
-	const replacement = createPluginRuntime([], []);
+	const oldRuntime = createEmptyPluginRuntime();
+	const replacement = createEmptyPluginRuntime();
 	const manager = getInteractiveSessionHostManager(oldRuntime);
 	const capabilities: SessionCapabilities = {
 		...createCapabilities(store, {}, manager, { pluginRuntime: oldRuntime }),

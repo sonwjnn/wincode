@@ -23,19 +23,9 @@ import type {
 	TextWriter,
 } from "../modules/application/modes/types";
 import { createApplicationPluginComposition } from "../modules/application/plugin-composition";
-import { loadPlugins } from "../modules/plugins/loader";
-
-import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
 import { createSessionHost } from "../modules/sessions/host/session-host";
-import {
-	createSessionSdkOperations,
-	type SessionSdkRuntimeOptions,
-} from "../modules/sessions/sdk";
-import type { SessionSdkOperations } from "../modules/sessions/sdk-contract";
-import {
-	type ConfigSnapshot,
-	createConfigStore,
-} from "../shared/config/config-store";
+import { openSessionServices } from "../modules/sessions/host/session-services";
+import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
@@ -98,7 +88,7 @@ const connections = {
 	],
 };
 
-const composeCapabilitiesDetailedFor =
+const composeServicesDetailedFor =
 	(agentRegistry: AgentRegistry) =>
 	async ({
 		configRuntime,
@@ -108,60 +98,37 @@ const composeCapabilitiesDetailedFor =
 		pluginPaths,
 		workspace: root,
 	}: OneShotCompositionInput) => {
-		const configStore = configRuntime?.configStore ?? createConfigStore();
 		const composition = createApplicationPluginComposition();
-		const resolvedConfigRuntime = configRuntime ?? {
-			configStore,
-			cwd,
-			homeRoot: root,
-			workspace: root,
-		};
-		const pluginRuntime =
-			providedPluginRuntime ??
-			(await loadPlugins({
-				cliPaths: pluginPaths ?? [],
-				config: resolvedConfigRuntime,
-				disabledPluginIds,
-				distributionPlugins: composition.distributionPlugins,
-			}));
-		let sessionSdk: SessionSdkOperations | undefined;
-		const assembly = await createSessionCapabilities({
-			cwd,
-			databasePath: path.join(root, "sessions.sqlite"),
-			pluginRuntime,
-			getSessionSdk: () => sessionSdk,
-			registry: agentRegistry,
-			runtimeFactory: () => fakeRuntime,
-			turnToolResolver: composition.turnToolResolver,
-			workspace: root,
-			connections,
-		});
-		sessionSdk = createSessionSdkOperations(
-			{
-				configRuntime: resolvedConfigRuntime,
-				configStore,
-				connections,
+		const services = await openSessionServices({
+			policy: {
 				cwd,
-				registry: agentRegistry,
-				runtimeFactory: () => fakeRuntime,
-				store: assembly.store,
+				databasePath: path.join(root, "sessions.sqlite"),
+				plugins: {
+					disabledIdentifiers: disabledPluginIds ?? [],
+					distributionPackages: composition.distributionPlugins,
+					paths: pluginPaths ?? [],
+				},
 				workspace: root,
-			} satisfies SessionSdkRuntimeOptions,
-			assembly.capabilities.getSessionHostManager(),
-			assembly.store
-		);
-		return {
-			assembly,
-			waitForPluginWork: (sessionId: string) =>
-				pluginRuntime.waitForBackgroundWork(sessionId),
-		};
+			},
+			sources: {
+				connections: () => connections,
+				registry: () => agentRegistry,
+				runtimeFactory: () => fakeRuntime,
+				turnToolResolver: () => composition.turnToolResolver,
+				...(configRuntime === undefined
+					? {}
+					: { configRuntime: () => configRuntime }),
+				...(providedPluginRuntime === undefined
+					? {}
+					: { pluginRuntime: () => providedPluginRuntime }),
+			},
+		});
+		return { services };
 	};
-const composeCapabilitiesFor = (agentRegistry: AgentRegistry) =>
-	composeCapabilitiesDetailedFor(agentRegistry);
-const composeCapabilities = composeCapabilitiesFor(registry);
-const composeConfiguredReview = composeCapabilitiesFor(
-	configuredReviewRegistry
-);
+const composeServicesFor = (agentRegistry: AgentRegistry) =>
+	composeServicesDetailedFor(agentRegistry);
+const composeServices = composeServicesFor(registry);
+const composeConfiguredReview = composeServicesFor(configuredReviewRegistry);
 
 const writer = (): { text: string; writer: TextWriter } => {
 	const state = { text: "" };
@@ -209,9 +176,9 @@ const context = (
 	stdout,
 });
 
-const dependencies: OneShotDependencies = { composeCapabilities };
+const dependencies: OneShotDependencies = { composeServices };
 const configuredReviewDependencies: OneShotDependencies = {
-	composeCapabilities: composeConfiguredReview,
+	composeServices: composeConfiguredReview,
 };
 
 test("configured Agents retain a model-supported ThinkingLevel", () => {
@@ -357,11 +324,15 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	expect(exitCode).toBe(0);
 	expect(stdout.text).toBe("E2E chat response");
 	expect(stderr.text).toBe("");
-	const verification = await createSessionCapabilities({
-		cwd: workspace,
-		databasePath: path.join(workspace, "sessions.sqlite"),
-		registry,
-		workspace,
+	const verification = await openSessionServices({
+		policy: {
+			cwd: workspace,
+			databasePath: path.join(workspace, "sessions.sqlite"),
+			workspace,
+		},
+		sources: {
+			registry: () => registry,
+		},
 	});
 	let sessionId: string | undefined;
 	try {
@@ -409,11 +380,11 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	expect(overridden.text).toBe("E2E chat response");
 	expect(overrideErrors.text).toBe("");
 	const finalVerification = (
-		await composeCapabilities({
+		await composeServices({
 			cwd: workspace,
 			workspace,
 		})
-	).assembly;
+	).services;
 	try {
 		const [session] = await finalVerification.store.listSessions();
 		if (session === undefined) {
@@ -457,7 +428,7 @@ test("one-shot ThinkingLevel selectors override configured and restored choices"
 				cwd: reasoningWorkspace,
 				workspace: reasoningWorkspace,
 			})
-		).assembly;
+		).services;
 		let sessionId: string | undefined;
 		try {
 			const sessions = await firstVerification.store.listSessions();
@@ -497,7 +468,7 @@ test("one-shot ThinkingLevel selectors override configured and restored choices"
 				cwd: reasoningWorkspace,
 				workspace: reasoningWorkspace,
 			})
-		).assembly;
+		).services;
 		try {
 			const sessions = await finalVerification.store.listSessions();
 			expect(sessions).toHaveLength(1);
@@ -551,14 +522,14 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 		expect(
 			fakeRecorder.requests.filter(({ kind }) => kind === "chat")
 		).toHaveLength(initialChatRequestCount);
-		const verification = await composeCapabilities({
+		const verification = await composeServices({
 			cwd: invalidWorkspace,
 			workspace: invalidWorkspace,
 		});
 		try {
-			expect(await verification.assembly.store.listSessions()).toHaveLength(0);
+			expect(await verification.services.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.assembly.shutdown();
+			await verification.services.shutdown();
 		}
 	} finally {
 		await fs.rm(invalidWorkspace, { force: true, recursive: true });
@@ -580,11 +551,15 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 		)
 	).toBe(0);
 
-	const lookup = await createSessionCapabilities({
-		cwd: workspace,
-		databasePath: path.join(workspace, "sessions.sqlite"),
-		registry,
-		workspace,
+	const lookup = await openSessionServices({
+		policy: {
+			cwd: workspace,
+			databasePath: path.join(workspace, "sessions.sqlite"),
+			workspace,
+		},
+		sources: {
+			registry: () => registry,
+		},
 	});
 	const sessions = await lookup.store.listSessions();
 	const sessionId = sessions.at(-1)?.id;
@@ -594,11 +569,11 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 	}
 
 	const holderAssembly = (
-		await composeCapabilities({
+		await composeServices({
 			cwd: workspace,
 			workspace,
 		})
-	).assembly;
+	).services;
 	const holder = await createSessionHost({
 		capabilities: holderAssembly.capabilities,
 		sessionId,
@@ -712,14 +687,14 @@ test("one-shot input rejects empty submissions before creating a Session", async
 		);
 
 		expect(exitCode).toBe(1);
-		const verification = await composeCapabilities({
+		const verification = await composeServices({
 			cwd: emptyWorkspace,
 			workspace: emptyWorkspace,
 		});
 		try {
-			expect(await verification.assembly.store.listSessions()).toHaveLength(0);
+			expect(await verification.services.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.assembly.shutdown();
+			await verification.services.shutdown();
 		}
 	} finally {
 		await fs.rm(emptyWorkspace, { force: true, recursive: true });
@@ -750,14 +725,14 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 
 		expect(exitCode).toBe(1);
 		expect(stderr.text).toContain("Connect anthropic");
-		const verification = await composeCapabilities({
+		const verification = await composeServices({
 			cwd: disconnectedWorkspace,
 			workspace: disconnectedWorkspace,
 		});
 		try {
-			expect(await verification.assembly.store.listSessions()).toHaveLength(0);
+			expect(await verification.services.store.listSessions()).toHaveLength(0);
 		} finally {
-			await verification.assembly.shutdown();
+			await verification.services.shutdown();
 		}
 	} finally {
 		await fs.rm(disconnectedWorkspace, { force: true, recursive: true });
@@ -803,7 +778,7 @@ test("JSON mode reports runtime failures as JSONL", async () => {
 });
 
 const noCapabilities: OneShotDependencies = {
-	composeCapabilities: async () => {
+	composeServices: async () => {
 		throw new Error("capabilities should not be composed");
 	},
 };
@@ -821,9 +796,9 @@ test("one-shot keeps Print parent-only and tags JSON child Session events", asyn
 			role: "subagent",
 		},
 	});
-	const composeDelegated = composeCapabilitiesDetailedFor(delegatedRegistry);
+	const composeDelegated = composeServicesDetailedFor(delegatedRegistry);
 	const dependencies: OneShotDependencies = {
-		composeCapabilities: async (input) => composeDelegated(input),
+		composeServices: async (input) => composeDelegated(input),
 	};
 	const previousScript = fakeRecorder.stepScript;
 	let callSequence = 0;

@@ -1,11 +1,13 @@
 import type { AgentId } from "@wincode/agent-core";
 import {
 	type ChatModelSelection,
+	isSupportedThinkingLevel,
 	modelSelectionSchema,
 	normalizeChatModelSelection,
 	normalizeThinkingSelection,
 	type ThinkingLevel,
 	type ThinkingSelection,
+	thinkingLevelSchema,
 } from "@wincode/ai/models";
 import { isPlainObject, isString, isUndefined } from "@wincode/utils";
 import type { SkillRequestContext } from "@/modules/skills";
@@ -148,6 +150,24 @@ export const getOriginatingUserSkill = (
 		name: skill.name,
 		source: skill.source ?? "explicit",
 	};
+};
+
+/**
+ * Parses one Thinking Level against the model that will run it, or throws when
+ * the level is not one the model supports.
+ */
+export const strictThinkingSelection = (
+	model: ChatModelSelection,
+	value: unknown
+): ThinkingSelection => {
+	if (value === undefined) {
+		return {};
+	}
+	const parsed = thinkingLevelSchema.safeParse(value);
+	if (!(parsed.success && isSupportedThinkingLevel(model, parsed.data))) {
+		throw new Error("Thinking level is unavailable for the selected model.");
+	}
+	return { thinkingLevel: parsed.data };
 };
 
 export type ResolvedSessionSelection = {

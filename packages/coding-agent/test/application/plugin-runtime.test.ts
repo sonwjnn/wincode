@@ -4,6 +4,7 @@ import {
 	createPluginRuntime,
 	type LoadedPlugin,
 } from "@/modules/plugins/runtime";
+import { createEmptyPluginRuntime } from "../support/plugin-runtime";
 
 const pluginSource = "/plugins/jira.ts";
 const workspace = "/workspace";
@@ -72,7 +73,7 @@ test("a failed process start still runs cleanup for partially initialized resour
 });
 
 test("One-Shot can await background work registered by any Plugin for its Session", async () => {
-	const runtime = createPluginRuntime([], []);
+	const runtime = createEmptyPluginRuntime();
 	const deferred = Promise.withResolvers<void>();
 	let complete = false;
 	runtime.registerBackgroundWork("background-session", deferred.promise);

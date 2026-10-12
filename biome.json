@@ -118,13 +118,12 @@
                       "../compaction",
                       "../compaction/index",
                       "../compaction/index.ts",
-                      "../compaction/use-compaction-settings",
                       "./compaction",
                       "./compaction/index",
                       "@/modules/sessions/compaction",
                       "@/modules/sessions/compaction/index"
                     ],
-                    "message": "Import the React-free leaf instead of this barrel: a barrel re-exports React-using modules, so the Agent Session is no longer host-agnostic (ADR-0019)."
+                    "message": "Import the React-free leaf instead of this barrel: the Agent Session stays host-agnostic and does not depend on the compaction module's whole graph (ADR-0019)."
                   }
                 ]
               }

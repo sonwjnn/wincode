@@ -27,7 +27,7 @@ import {
 const recorder = createFakeModelClientRecorder();
 installFakeModelClient(recorder);
 
-import { createSessionCapabilities } from "../modules/sessions/host/session-capabilities";
+import { openSessionServices } from "../modules/sessions/host/session-services";
 import { createDatabase } from "../modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "../modules/sessions/storage/drizzle-session-store";
 
@@ -85,11 +85,11 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 			},
 		],
 	};
-	const assembly = await createSessionCapabilities({
-		connections,
-		cwd: workspace,
-		databasePath,
-		workspace,
+	const assembly = await openSessionServices({
+		policy: { cwd: workspace, databasePath, workspace },
+		sources: {
+			connections: () => connections,
+		},
 	});
 	const request = (
 		id: string,
@@ -195,7 +195,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		}
 	};
 	const exitCode = await runRpc({
-		composeCapabilities: async () => assembly,
+		composeServices: async () => assembly,
 		input,
 		stderr,
 		stdout,
@@ -260,16 +260,16 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	if (sessionId === undefined) {
 		throw new Error("The RPC journey did not return a Session ID.");
 	}
-	const secondAssembly = await createSessionCapabilities({
-		connections,
-		cwd: workspace,
-		databasePath,
-		workspace,
+	const secondAssembly = await openSessionServices({
+		policy: { cwd: workspace, databasePath, workspace },
+		sources: {
+			connections: () => connections,
+		},
 	});
 	const secondStdoutFrames: string[] = [];
 	const secondStderrFrames: string[] = [];
 	const secondExitCode = await runRpc({
-		composeCapabilities: async () => secondAssembly,
+		composeServices: async () => secondAssembly,
 		input: [
 			new TextEncoder().encode(
 				`${request("reinitialize", "initialize", {
@@ -407,11 +407,11 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 		model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 		turnId: agentTurnId("writer-conflict-turn"),
 	});
-	const rpcAssembly = await createSessionCapabilities({
-		connections,
-		cwd: workspace,
-		databasePath: conflictDatabasePath,
-		workspace,
+	const rpcAssembly = await openSessionServices({
+		policy: { cwd: workspace, databasePath: conflictDatabasePath, workspace },
+		sources: {
+			connections: () => connections,
+		},
 	});
 	const ownerWriter = await ownerStore.acquireSessionWriter(sessionId, {
 		executionMode: "interactive",
@@ -440,7 +440,7 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 
 	try {
 		const exitCode = await runRpc({
-			composeCapabilities: async () => rpcAssembly,
+			composeServices: async () => rpcAssembly,
 			input,
 			stderr: {
 				write: (text: string): undefined => {
@@ -488,11 +488,11 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 		workspace,
 		"writer-lock-failure.sqlite"
 	);
-	const failureAssembly = await createSessionCapabilities({
-		connections,
-		cwd: workspace,
-		databasePath: failureDatabasePath,
-		workspace,
+	const failureAssembly = await openSessionServices({
+		policy: { cwd: workspace, databasePath: failureDatabasePath, workspace },
+		sources: {
+			connections: () => connections,
+		},
 	});
 	const { id: sessionId } = await failureAssembly.store.createSession({
 		agent: agentId("build"),
@@ -541,7 +541,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 
 	try {
 		const exitCode = await runRpc({
-			composeCapabilities: async () => failureAssembly,
+			composeServices: async () => failureAssembly,
 			input,
 			stderr: {
 				write: (text: string): undefined => {
@@ -573,26 +573,30 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 });
 
 test("raw JSONL target switches retain background Sessions but stream only the active target", async () => {
-	const switchAssembly = await createSessionCapabilities({
-		connections: {
-			authorize: async () => ({
-				kind: "api-key" as const,
-				apiKey: "switch-test-key",
-			}),
-			connect: async () => undefined,
-			listProviders: async () => [
-				{
-					connected: true as const,
-					connectionMethod: "api-key" as const,
-					displayName: "OpenAI",
-					id: "openai" as const,
-					methods: ["api-key", "browser"] as const,
-				},
-			],
+	const switchAssembly = await openSessionServices({
+		policy: {
+			cwd: workspace,
+			databasePath: path.join(workspace, "session-switch.sqlite"),
+			workspace,
 		},
-		cwd: workspace,
-		databasePath: path.join(workspace, "session-switch.sqlite"),
-		workspace,
+		sources: {
+			connections: () => ({
+				authorize: async () => ({
+					kind: "api-key" as const,
+					apiKey: "switch-test-key",
+				}),
+				connect: async () => undefined,
+				listProviders: async () => [
+					{
+						connected: true as const,
+						connectionMethod: "api-key" as const,
+						displayName: "OpenAI",
+						id: "openai" as const,
+						methods: ["api-key", "browser"] as const,
+					},
+				],
+			}),
+		},
 	});
 	const model = {
 		modelId: modelId("gpt-5.6-luna"),
@@ -710,7 +714,7 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 	const stderrFrames: string[] = [];
 	let exitCode: number | undefined;
 	const run = runRpc({
-		composeCapabilities: async () => switchAssembly,
+		composeServices: async () => switchAssembly,
 		input,
 		stderr: {
 			write: (text: string): undefined => {
