@@ -53,15 +53,15 @@ type OneShotComposition = Readonly<{
 }>;
 
 type OneShotDependencies = Readonly<{
-	composeEnvironment?: (
+	composeServices?: (
 		input: OneShotCompositionInput
 	) => Promise<OneShotComposition>;
 }>;
 
-const composeOneShotEnvironment = async (
+const composeOneShotServices = async (
 	context: ApplicationContext,
 	workspace: string,
-	compose: NonNullable<OneShotDependencies["composeEnvironment"]>
+	compose: NonNullable<OneShotDependencies["composeServices"]>
 ): Promise<OneShotComposition> =>
 	compose({
 		cwd: context.cwd,
@@ -273,7 +273,7 @@ const resolveSelection = ({
 	};
 };
 
-const composeDefaultEnvironment = async ({
+const composeDefaultServices = async ({
 	configRuntime,
 	cwd,
 	pluginRuntime,
@@ -386,8 +386,8 @@ const runOneShot = async (
 ): Promise<OneShotResult> => {
 	const text = await readSubmission(context);
 	const workspace = resolveWorkspaceRoot(context.cwd);
-	const compose = dependencies.composeEnvironment ?? composeDefaultEnvironment;
-	const oneShotComposition = await composeOneShotEnvironment(
+	const compose = dependencies.composeServices ?? composeDefaultServices;
+	const oneShotComposition = await composeOneShotServices(
 		context,
 		workspace,
 		compose

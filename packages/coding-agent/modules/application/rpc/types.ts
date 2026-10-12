@@ -90,7 +90,7 @@ export type OutputWriter = {
 
 /**
  * What RPC Mode needs from Session Services: their capabilities, their
- * teardown, its workspace, and the store it may still attach through. A
+ * teardown, their workspace, and the store they may still attach through.
  * Session Services satisfy it as-is.
  */
 export type RpcAssembly = Pick<SessionServices, "capabilities" | "shutdown"> &
@@ -108,7 +108,7 @@ export type RpcRunnerOptions = Readonly<{
 	disabledPluginIds?: readonly string[];
 	pluginPaths?: readonly string[];
 	pluginRuntime?: PluginRuntime;
-	composeEnvironment?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
+	composeServices?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	input: JsonlInput;
 	signal?: AbortSignal;
 	signalExitCode?: number | (() => number);

@@ -431,6 +431,25 @@ const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await setup.renderOnce();
 };
 
+/**
+ * Waits for the view to render a frame that differs from one already captured,
+ * so a command whose commit is asynchronous lands before it is asserted. The
+ * assertions stay meaningful: a changed frame is necessary, not sufficient.
+ */
+const waitForFrameChange = async (
+	setup: TestRendererSetup,
+	previous: string
+): Promise<string> => {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		const frame = setup.captureCharFrame();
+		if (frame !== previous) {
+			return frame;
+		}
+		await flushUi(setup);
+	}
+	return setup.captureCharFrame();
+};
+
 beforeAll(() => {
 	setMarkdownTreeSitterClientForTests(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
@@ -1255,10 +1274,10 @@ describe("SessionView waiting messages", () => {
 		];
 		const { release, setup } = await renderBusySessionView();
 		try {
+			const beforeSteer = setup.captureCharFrame();
 			setup.mockInput.pressEnter();
-			await flushUi(setup);
 
-			let frame = setup.captureCharFrame();
+			let frame = await waitForFrameChange(setup, beforeSteer);
 			expect(frame).toContain("3 waiting");
 			expect(frame).not.toContain("first queued");
 			expect(frame).not.toContain("steering");
@@ -1268,10 +1287,10 @@ describe("SessionView waiting messages", () => {
 			expect(frame).toMatch(LANE_ROW("queued", "later queued 3"));
 
 			await typePrompt(setup, "ordinary input");
+			const beforeQueue = setup.captureCharFrame();
 			setup.mockInput.pressEnter();
-			await flushUi(setup);
 
-			frame = setup.captureCharFrame();
+			frame = await waitForFrameChange(setup, beforeQueue);
 			expect(frame).toContain("4 waiting");
 			expect(frame).not.toContain("first queued");
 			expect(frame).toMatch(LANE_ROW("queued", "ordinary input"));

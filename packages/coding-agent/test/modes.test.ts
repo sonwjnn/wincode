@@ -88,7 +88,7 @@ const connections = {
 	],
 };
 
-const composeEnvironmentDetailedFor =
+const composeServicesDetailedFor =
 	(agentRegistry: AgentRegistry) =>
 	async ({
 		configRuntime,
@@ -125,10 +125,10 @@ const composeEnvironmentDetailedFor =
 		});
 		return { services };
 	};
-const composeEnvironmentFor = (agentRegistry: AgentRegistry) =>
-	composeEnvironmentDetailedFor(agentRegistry);
-const composeEnvironment = composeEnvironmentFor(registry);
-const composeConfiguredReview = composeEnvironmentFor(configuredReviewRegistry);
+const composeServicesFor = (agentRegistry: AgentRegistry) =>
+	composeServicesDetailedFor(agentRegistry);
+const composeServices = composeServicesFor(registry);
+const composeConfiguredReview = composeServicesFor(configuredReviewRegistry);
 
 const writer = (): { text: string; writer: TextWriter } => {
 	const state = { text: "" };
@@ -176,9 +176,9 @@ const context = (
 	stdout,
 });
 
-const dependencies: OneShotDependencies = { composeEnvironment };
+const dependencies: OneShotDependencies = { composeServices };
 const configuredReviewDependencies: OneShotDependencies = {
-	composeEnvironment: composeConfiguredReview,
+	composeServices: composeConfiguredReview,
 };
 
 test("configured Agents retain a model-supported ThinkingLevel", () => {
@@ -380,7 +380,7 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	expect(overridden.text).toBe("E2E chat response");
 	expect(overrideErrors.text).toBe("");
 	const finalVerification = (
-		await composeEnvironment({
+		await composeServices({
 			cwd: workspace,
 			workspace,
 		})
@@ -522,7 +522,7 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 		expect(
 			fakeRecorder.requests.filter(({ kind }) => kind === "chat")
 		).toHaveLength(initialChatRequestCount);
-		const verification = await composeEnvironment({
+		const verification = await composeServices({
 			cwd: invalidWorkspace,
 			workspace: invalidWorkspace,
 		});
@@ -569,7 +569,7 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 	}
 
 	const holderAssembly = (
-		await composeEnvironment({
+		await composeServices({
 			cwd: workspace,
 			workspace,
 		})
@@ -687,7 +687,7 @@ test("one-shot input rejects empty submissions before creating a Session", async
 		);
 
 		expect(exitCode).toBe(1);
-		const verification = await composeEnvironment({
+		const verification = await composeServices({
 			cwd: emptyWorkspace,
 			workspace: emptyWorkspace,
 		});
@@ -725,7 +725,7 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 
 		expect(exitCode).toBe(1);
 		expect(stderr.text).toContain("Connect anthropic");
-		const verification = await composeEnvironment({
+		const verification = await composeServices({
 			cwd: disconnectedWorkspace,
 			workspace: disconnectedWorkspace,
 		});
@@ -778,7 +778,7 @@ test("JSON mode reports runtime failures as JSONL", async () => {
 });
 
 const noCapabilities: OneShotDependencies = {
-	composeEnvironment: async () => {
+	composeServices: async () => {
 		throw new Error("capabilities should not be composed");
 	},
 };
@@ -796,9 +796,9 @@ test("one-shot keeps Print parent-only and tags JSON child Session events", asyn
 			role: "subagent",
 		},
 	});
-	const composeDelegated = composeEnvironmentDetailedFor(delegatedRegistry);
+	const composeDelegated = composeServicesDetailedFor(delegatedRegistry);
 	const dependencies: OneShotDependencies = {
-		composeEnvironment: async (input) => composeDelegated(input),
+		composeServices: async (input) => composeDelegated(input),
 	};
 	const previousScript = fakeRecorder.stepScript;
 	let callSequence = 0;

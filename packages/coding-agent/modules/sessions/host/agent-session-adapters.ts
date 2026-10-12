@@ -84,18 +84,16 @@ const activateExplicitSkill = async (
 };
 
 /**
- * Materializes the Agent Session's ports from the Session Services the Host was
- * handed and owns no lifetime: it holds the Skill catalogs and durable records
+ * Materializes the Agent Session's ports from the Session Capabilities the Host
+ * was handed and owns no lifetime: it holds the Skill catalogs and durable records
  * the Agent Session asks for, and keeps no session state — every fact it observes
  * comes from the Agent Session Snapshot. The Agent Turn pipeline behind the
  * `turnRunner` port lives in its own module.
  */
-export const createAgentSessionAdapters = ({
-	capabilities,
-	isShutDown,
-	sessionId,
-	statefulAgent,
-}: AgentSessionAdaptersOptions): AgentSessionPorts => {
+export const createAgentSessionAdapters = (
+	options: AgentSessionAdaptersOptions
+): AgentSessionPorts => {
+	const { capabilities, isShutDown, sessionId, statefulAgent } = options;
 	const assertHostOpen = (): void => {
 		if (isShutDown()) {
 			throw new SessionCompactionError(
@@ -237,11 +235,7 @@ export const createAgentSessionAdapters = ({
 		resolveCompactionSettings: (model) =>
 			capabilities.getCompactionSettings(model),
 		resolveFileMentions: (text) => resolveFileMentionParts(text),
-		turnRunner: createAgentSessionTurnRunner({
-			capabilities,
-			sessionId,
-			statefulAgent,
-		}),
+		turnRunner: createAgentSessionTurnRunner(options),
 		skills: { createTurnSkill, resolveSkill },
 	};
 };

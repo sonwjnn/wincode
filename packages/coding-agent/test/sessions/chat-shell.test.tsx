@@ -1268,8 +1268,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).not.toContain("\u0000");
 
 			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
+			frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)");
 
 			expect(frame).toContain("tail 8");
 			expect(frame).toContain("tail");
@@ -1308,7 +1307,7 @@ describe("ChatShell shell output blocks", () => {
 				await flushUi(setup);
 			});
 			await setup.flush({ maxPasses: 20 });
-			frame = await waitForFrameText(setup, "safe 8");
+			frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)");
 
 			expect(frame).toContain("[redacted]");
 			expect(frame).toContain("safe 8");
@@ -1348,8 +1347,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).not.toContain("long 7");
 
 			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
+			frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)");
 
 			expect(frame).toContain("long 7");
 			expect(frame).toContain("long 10");

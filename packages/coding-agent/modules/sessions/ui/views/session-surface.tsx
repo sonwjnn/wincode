@@ -6,7 +6,7 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "@/modules/sessions/host/types";
-import { useSessionServices } from "@/modules/sessions/host/use-session-services";
+import { useSessionServicesHandle } from "@/modules/sessions/host/use-session-services";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
@@ -115,7 +115,7 @@ export function SessionSurface({
 	readonly sessionId: SessionId;
 }) {
 	const { colors } = useTheme();
-	const sessionServices = useSessionServices();
+	const sessionServices = useSessionServicesHandle();
 	const [surface, setSurface] = useState<SessionSurfaceState>({
 		kind: "opening",
 	});

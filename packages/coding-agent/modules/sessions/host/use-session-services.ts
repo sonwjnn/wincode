@@ -28,7 +28,7 @@ let standInPluginRuntime: PluginRuntime | undefined;
 const interactiveStandInRuntime = (): PluginRuntime =>
 	(standInPluginRuntime ??= createPluginRuntime([], []));
 
-/** Opens Session Services for a mount, and closes what it opened. */
+/** The handle that opens Session Services for a mount, and closes what it opened. */
 export type SessionServicesHandle = Readonly<{
 	/** Closes the opened Session Services, so a later `open` composes fresh ones. */
 	close: () => Promise<void>;
@@ -49,7 +49,7 @@ export type SessionServicesHandle = Readonly<{
  * exists, a process-scoped stand-in — so closing it never stops Plugins a
  * Session Host still uses.
  */
-export const useSessionServices = (): SessionServicesHandle => {
+export const useSessionServicesHandle = (): SessionServicesHandle => {
 	const connections = useConnections();
 	const config = useConfig();
 	const registry = useAgentRegistry();

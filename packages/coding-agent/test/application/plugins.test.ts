@@ -1185,7 +1185,7 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 
 	try {
 		const exitCode = await runRpc({
-			composeEnvironment: async () => assembly,
+			composeServices: async () => assembly,
 			configRuntime,
 			input,
 			pluginRuntime,
@@ -1266,7 +1266,7 @@ const runPluginToolInOneShot = async (
 			},
 		],
 	};
-	const composeEnvironment: OneShotDependencies["composeEnvironment"] = async ({
+	const composeServices: OneShotDependencies["composeServices"] = async ({
 		configRuntime: modeConfigRuntime,
 		cwd,
 		pluginRuntime: modePluginRuntime,
@@ -1311,8 +1311,8 @@ const runPluginToolInOneShot = async (
 
 	const exitCode =
 		format === "json"
-			? await runJsonMode(context, { composeEnvironment })
-			: await runPrintMode(context, { composeEnvironment });
+			? await runJsonMode(context, { composeServices })
+			: await runPrintMode(context, { composeServices });
 	return {
 		exitCode,
 		mappedToolResults,

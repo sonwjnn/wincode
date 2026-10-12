@@ -195,7 +195,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		}
 	};
 	const exitCode = await runRpc({
-		composeEnvironment: async () => assembly,
+		composeServices: async () => assembly,
 		input,
 		stderr,
 		stdout,
@@ -269,7 +269,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	const secondStdoutFrames: string[] = [];
 	const secondStderrFrames: string[] = [];
 	const secondExitCode = await runRpc({
-		composeEnvironment: async () => secondAssembly,
+		composeServices: async () => secondAssembly,
 		input: [
 			new TextEncoder().encode(
 				`${request("reinitialize", "initialize", {
@@ -440,7 +440,7 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 
 	try {
 		const exitCode = await runRpc({
-			composeEnvironment: async () => rpcAssembly,
+			composeServices: async () => rpcAssembly,
 			input,
 			stderr: {
 				write: (text: string): undefined => {
@@ -541,7 +541,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 
 	try {
 		const exitCode = await runRpc({
-			composeEnvironment: async () => failureAssembly,
+			composeServices: async () => failureAssembly,
 			input,
 			stderr: {
 				write: (text: string): undefined => {
@@ -714,7 +714,7 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 	const stderrFrames: string[] = [];
 	let exitCode: number | undefined;
 	const run = runRpc({
-		composeEnvironment: async () => switchAssembly,
+		composeServices: async () => switchAssembly,
 		input,
 		stderr: {
 			write: (text: string): undefined => {
