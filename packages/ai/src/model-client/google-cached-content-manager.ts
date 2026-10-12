@@ -188,6 +188,16 @@ export const createGoogleCachedContentResourceManager = ({
 }: GoogleCachedContentResourceManagerOptions): GoogleCachedContentResourceManager => {
 	let active: CachedResource | undefined;
 	let closed = false;
+	let operationTail = Promise.resolve();
+
+	const runExclusively = <T>(operation: () => Promise<T>): Promise<T> => {
+		const result = operationTail.then(operation);
+		operationTail = result.then(
+			() => undefined,
+			() => undefined
+		);
+		return result;
+	};
 
 	const deleteActive = async (name?: string): Promise<void> => {
 		const resource = active;
@@ -203,61 +213,83 @@ export const createGoogleCachedContentResourceManager = ({
 
 	const selectionFor = (name: string): GoogleCachedContentSelection => ({
 		name,
-		onRejected: (rejectedName) => deleteActive(rejectedName),
+		onRejected: (rejectedName) =>
+			runExclusively(async () => deleteActive(rejectedName)),
 	});
 
+	const createAndOwnResource = async (
+		identity: string,
+		target: ModelTarget,
+		candidate: CacheCandidate
+	): Promise<GoogleCachedContentSelection | undefined> => {
+		if (closed || target.authorization.kind !== "api-key") {
+			return;
+		}
+
+		let client: GoogleCachedContentClient;
+		try {
+			client = createClient(target.authorization.apiKey);
+		} catch (error) {
+			if (bestEffortCacheCreation) {
+				return;
+			}
+			throw error;
+		}
+		const resource = await createResource(
+			client,
+			target,
+			candidate.config,
+			bestEffortCacheCreation
+		);
+		if (typeof resource?.name !== "string" || resource.name.length === 0) {
+			return;
+		}
+		if (closed) {
+			await deleteResource(client, resource.name);
+			return;
+		}
+
+		active = { client, identity, name: resource.name };
+		return selectionFor(resource.name);
+	};
+
+	const selectResource = async ({
+		system,
+		target,
+		tools,
+	}: Readonly<{
+		system: string;
+		target: ModelTarget;
+		tools: readonly ModelTool[];
+	}>): Promise<GoogleCachedContentSelection | undefined> => {
+		const candidate = cacheCandidate(system, target, tools, cacheTtlForModel);
+		if (closed || candidate === undefined) {
+			await deleteActive();
+			return;
+		}
+
+		const identity = await cacheIdentity(
+			sessionId,
+			target,
+			candidate.config,
+			candidate.ttl
+		);
+		if (closed) {
+			return;
+		}
+		if (active?.identity === identity) {
+			return selectionFor(active.name);
+		}
+		await deleteActive();
+		return createAndOwnResource(identity, target, candidate);
+	};
+
 	return {
-		close: async () => {
+		close: () => {
 			closed = true;
-			await deleteActive();
+			return runExclusively(async () => deleteActive());
 		},
-		invalidate: deleteActive,
-		select: async ({ system, target, tools }) => {
-			const candidate = cacheCandidate(system, target, tools, cacheTtlForModel);
-			if (closed || candidate === undefined) {
-				await deleteActive();
-				return;
-			}
-
-			const identity = await cacheIdentity(
-				sessionId,
-				target,
-				candidate.config,
-				candidate.ttl
-			);
-			if (active?.identity === identity) {
-				return selectionFor(active.name);
-			}
-			await deleteActive();
-			if (target.authorization.kind !== "api-key") {
-				return;
-			}
-
-			let client: GoogleCachedContentClient;
-			try {
-				client = createClient(target.authorization.apiKey);
-			} catch (error) {
-				if (bestEffortCacheCreation) {
-					return;
-				}
-				throw error;
-			}
-			const resource = await createResource(
-				client,
-				target,
-				candidate.config,
-				bestEffortCacheCreation
-			);
-			if (typeof resource?.name !== "string" || resource.name.length === 0) {
-				return;
-			}
-			if (closed) {
-				await deleteResource(client, resource.name);
-				return;
-			}
-
-			active = { client, identity, name: resource.name };
-			return selectionFor(resource.name);
-		},
+		invalidate: (name) => runExclusively(async () => deleteActive(name)),
+		select: (input) => runExclusively(() => selectResource(input)),
 	};
 };

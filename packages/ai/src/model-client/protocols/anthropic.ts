@@ -1,15 +1,18 @@
 import { isNonNegativeInteger } from "@wincode/utils/guards";
-import { anthropicModelMetadataFor } from "../../anthropic-model-metadata.ts";
 import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "../../model-output-limit.ts";
 import { normalizeModelUsage } from "../../model-usage.ts";
+import type { SupportedChatModel } from "../../models";
 import { readSseEvents } from "../sse.ts";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
 	ModelStreamPart,
 } from "../types";
-import { anthropicPromptCacheStrategy } from "./anthropic-prompt-cache.ts";
+import {
+	type AnthropicModelMetadataLookup,
+	createAnthropicPromptCacheStrategy,
+} from "./anthropic-prompt-cache.ts";
 import {
 	base64,
 	incompleteStreamError,
@@ -359,14 +362,13 @@ const anthropicStream = async function* (
 	};
 };
 const anthropicCacheControl = (
-	model: ProtocolRequestContextByProtocol["anthropic"]["model"],
-	retention: SupportedPromptCacheRetentionTier | undefined
+	model: SupportedChatModel,
+	retention: SupportedPromptCacheRetentionTier | undefined,
+	promptCache: ModelProtocolStrategy<"anthropic">["promptCache"]
 ): JsonRecord | undefined => {
 	if (
 		retention === undefined ||
-		!anthropicPromptCacheStrategy
-			.routeForModel(model)
-			?.isRetentionSupported(retention)
+		!promptCache.routeForModel(model)?.isRetentionSupported(retention)
 	) {
 		return;
 	}
@@ -377,19 +379,22 @@ const anthropicCacheControl = (
 };
 
 const serializeAnthropic = (
-	context: ProtocolRequestContextByProtocol["anthropic"]
+	context: ProtocolRequestContextByProtocol["anthropic"],
+	modelMetadataFor: AnthropicModelMetadataLookup,
+	promptCache: ModelProtocolStrategy<"anthropic">["promptCache"]
 ): JsonRecord => {
 	const { request, model, maxOutputTokens, providerOptions } = context;
 	const cacheControl = anthropicCacheControl(
 		model,
-		request.target.promptCacheRetention
+		request.target.promptCacheRetention,
+		promptCache
 	);
 	const thinking = providerOptions?.thinking;
 	const body: JsonRecord = {
 		model: request.target.modelId,
 		max_tokens:
 			maxOutputTokens ??
-			anthropicModelMetadataFor(model)?.limits?.output ??
+			modelMetadataFor(model)?.limits?.output ??
 			MODEL_OUTPUT_TOKEN_LIMIT,
 		messages: anthropicMessages(request.messages, cacheControl),
 		stream: true,
@@ -431,9 +436,15 @@ const serializeAnthropic = (
 	return body;
 };
 
-export const anthropicStrategy = {
-	protocol: "anthropic",
-	promptCache: anthropicPromptCacheStrategy,
-	serialize: serializeAnthropic,
-	stream: anthropicStream,
-} satisfies ModelProtocolStrategy<"anthropic">;
+export const createAnthropicStrategy = (
+	modelMetadataFor: AnthropicModelMetadataLookup
+): ModelProtocolStrategy<"anthropic"> => {
+	const promptCache = createAnthropicPromptCacheStrategy(modelMetadataFor);
+	return {
+		protocol: "anthropic",
+		promptCache,
+		serialize: (context) =>
+			serializeAnthropic(context, modelMetadataFor, promptCache),
+		stream: anthropicStream,
+	};
+};

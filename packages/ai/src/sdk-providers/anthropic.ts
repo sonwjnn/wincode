@@ -5,7 +5,7 @@ import {
 	isCacheControlRejection,
 	ModelProviderError,
 } from "../model-client/errors.ts";
-import { anthropicStrategy } from "../model-client/protocols/anthropic.ts";
+import { anthropicStrategy } from "../model-client/protocols/anthropic-default.ts";
 import { unreachableValue } from "../model-client/protocols/shared.ts";
 import type {
 	ModelPromptMessage,

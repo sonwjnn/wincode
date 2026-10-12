@@ -97,6 +97,93 @@ describe("Google CachedContent resource lifecycle", () => {
 		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/1" }]);
 	});
 
+	test("coalesces concurrent selections so close deletes the one owned resource", async () => {
+		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
+		const pendingCreations: PromiseWithResolvers<{ name: string }>[] = [];
+		const createStarted = Promise.withResolvers<void>();
+		const manager = createGoogleCachedContentResourceManager({
+			createClient: () => ({
+				create: async (params) => {
+					calls.createCalls.push(params);
+					const creation = Promise.withResolvers<{ name: string }>();
+					pendingCreations.push(creation);
+					createStarted.resolve();
+					return creation.promise;
+				},
+				delete: async (params) => {
+					calls.deleteCalls.push(params);
+					return {};
+				},
+			}),
+			sessionId: "session-one",
+		});
+
+		const selections = [select(manager), select(manager)];
+		await createStarted.promise;
+		await Bun.sleep(0);
+		for (const [index, creation] of pendingCreations.entries()) {
+			creation.resolve({ name: `cachedContents/${index + 1}` });
+		}
+		const [first, second] = await Promise.all(selections);
+
+		expect(calls.createCalls).toHaveLength(1);
+		expect(first?.name).toBe("cachedContents/1");
+		expect(second?.name).toBe("cachedContents/1");
+		await manager.close();
+		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/1" }]);
+	});
+
+	test("close waits for an in-flight creation and deletes its resource", async () => {
+		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
+		const creation = Promise.withResolvers<{ name: string }>();
+		const createStarted = Promise.withResolvers<void>();
+		const manager = createGoogleCachedContentResourceManager({
+			createClient: () => ({
+				create: async (params) => {
+					calls.createCalls.push(params);
+					createStarted.resolve();
+					return creation.promise;
+				},
+				delete: async (params) => {
+					calls.deleteCalls.push(params);
+					return {};
+				},
+			}),
+			sessionId: "session-one",
+		});
+
+		const selection = select(manager);
+		await createStarted.promise;
+		const closed = manager.close();
+		creation.resolve({ name: "cachedContents/in-flight" });
+
+		expect(await selection).toBeUndefined();
+		await closed;
+		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/in-flight" }]);
+	});
+
+	test("serializes different identities and ignores invalidation for a replaced resource", async () => {
+		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
+		const manager = createGoogleCachedContentResourceManager({
+			createClient: () => createCacheClient(calls),
+			sessionId: "session-one",
+		});
+
+		const [first, second] = await Promise.all([
+			select(manager, makeTarget(), "First system instructions"),
+			select(manager, makeTarget(), "Second system instructions"),
+		]);
+
+		expect(first?.name).toBe("cachedContents/1");
+		expect(second?.name).toBe("cachedContents/2");
+		await first?.onRejected?.(first.name);
+		await manager.close();
+		expect(calls.deleteCalls).toEqual([
+			{ name: "cachedContents/1" },
+			{ name: "cachedContents/2" },
+		]);
+	});
+
 	test("deletes and replaces a resource when the exact prefix or Model Target changes", async () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
 		const manager = createGoogleCachedContentResourceManager({

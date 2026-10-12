@@ -1,5 +1,4 @@
 import type { JsonObject } from "type-fest";
-import { withAnthropicModelMetadata } from "../anthropic-model-metadata.ts";
 import { apiKeyCredentialSchema } from "../connections/credential-schemas.ts";
 import { openCodeGoModelMetadataById } from "../generated/opencode-go-model-metadata.generated.ts";
 import { openCodeGoSdkModels } from "../generated/opencode-go-sdk-models.generated.ts";
@@ -7,7 +6,7 @@ import {
 	httpErrorFromResponse,
 	ModelProviderError,
 } from "../model-client/errors.ts";
-import { anthropicStrategy } from "../model-client/protocols/anthropic.ts";
+import { createAnthropicStrategy } from "../model-client/protocols/anthropic.ts";
 import { openAIChatStrategy } from "../model-client/protocols/openai-chat.ts";
 import { openAIResponsesStrategy } from "../model-client/protocols/openai-responses.ts";
 import { unreachableValue } from "../model-client/protocols/shared.ts";
@@ -31,6 +30,9 @@ import {
 } from "../sdk.ts";
 
 const OPENCODE_GO_PROVIDER_ID = "opencode-go";
+const openCodeGoAnthropicStrategy = createAnthropicStrategy(
+	(model) => openCodeGoModelMetadataById[model.id]
+);
 const RESPONSES_PROTOCOL_ID = "openai-responses";
 const ANTHROPIC_PROTOCOL_ID = "anthropic";
 const OPENAI_COMPATIBLE_PROTOCOL_ID = "openai-compatible";
@@ -174,14 +176,10 @@ const wireRequestFor = (
 		};
 	}
 	if (protocolId === ANTHROPIC_PROTOCOL_ID) {
-		const anthropicModel = withAnthropicModelMetadata(
-			model,
-			openCodeGoModelMetadataById[context.model.modelId]
-		);
 		return {
-			body: anthropicStrategy.serialize({
+			body: openCodeGoAnthropicStrategy.serialize({
 				maxOutputTokens: undefined,
-				model: anthropicModel,
+				model,
 				providerOptions: undefined,
 				request: modelRequest,
 			}),
@@ -190,7 +188,7 @@ const wireRequestFor = (
 				"anthropic-version": "2023-06-01",
 				"x-api-key": apiKey,
 			},
-			strategy: anthropicStrategy,
+			strategy: openCodeGoAnthropicStrategy,
 			url: MESSAGES_URL,
 		};
 	}

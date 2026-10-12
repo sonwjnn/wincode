@@ -8,6 +8,8 @@ const AI_ROOT = path.join(import.meta.dir, "..");
 const FULL_MODEL_CATALOG = /\/(?:catalog|model-metadata(?:\.generated)?)\.ts$/u;
 const SDK_PROVIDER_MODULE = /\/sdk-providers\//u;
 const OPENROUTER_MODEL_CATALOG = /\/openrouter-(?:models|catalog)(?:\.ts)?$/u;
+const ANTHROPIC_MODEL_ARTIFACT =
+	/(?:^|\/)anthropic-model-metadata(?:\.generated)?\.ts$/u;
 
 type BundleMetadata = Readonly<{ inputs: Readonly<Record<string, unknown>> }>;
 
@@ -107,6 +109,16 @@ describe("SDK provider import graphs", () => {
 		const openCodeGoInputs = await bundledInputsFor(
 			path.join(AI_ROOT, "src/sdk-providers/opencode-go.ts")
 		);
+		expect(
+			openCodeGoInputs.some((inputPath) =>
+				inputPath.endsWith("generated/anthropic-model-metadata.generated.ts")
+			)
+		).toBe(false);
+		expect(
+			openCodeGoInputs.some((inputPath) =>
+				ANTHROPIC_MODEL_ARTIFACT.test(inputPath)
+			)
+		).toBe(false);
 		expect(
 			openCodeGoInputs.some((inputPath) =>
 				inputPath.endsWith("generated/opencode-go-sdk-models.generated.ts")

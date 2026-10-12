@@ -1,11 +1,20 @@
-import { anthropicModelMetadataFor } from "../../anthropic-model-metadata.ts";
-import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
+import type {
+	ModelMetadataEntry,
+	SupportedPromptCacheRetentionTier,
+} from "../../model-metadata";
+import type { SupportedChatModel } from "../../models";
 import type { ModelProtocolPromptCacheStrategy } from "./types";
 
-export const anthropicPromptCacheStrategy: ModelProtocolPromptCacheStrategy = {
+export type AnthropicModelMetadataLookup = (
+	model: SupportedChatModel
+) => ModelMetadataEntry | undefined;
+
+export const createAnthropicPromptCacheStrategy = (
+	modelMetadataFor: AnthropicModelMetadataLookup
+): ModelProtocolPromptCacheStrategy => ({
 	canWarmRequest: true,
 	routeForModel: (model) => {
-		const capabilities = anthropicModelMetadataFor(model)?.promptCache;
+		const capabilities = modelMetadataFor(model)?.promptCache;
 		if (!capabilities) {
 			return;
 		}
@@ -24,4 +33,4 @@ export const anthropicPromptCacheStrategy: ModelProtocolPromptCacheStrategy = {
 			},
 		};
 	},
-};
+});
