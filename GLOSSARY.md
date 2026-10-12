@@ -65,6 +65,23 @@ The provider-facing request and stream dialect used to invoke a Model Target.
 One Connection Provider can serve models through multiple Model Protocols;
 OpenCode Go is one such Connection Provider. _Avoid_: SDK, Connection Provider
 
+## Prompt Caching
+
+**Provider Prompt Cache**:
+A provider-managed reuse of a prompt prefix when a later request presents a matching prefix. Reuse may reduce processing cost or latency, but cached tokens remain part of the model's context window. _Avoid_: context compaction, local transcript cache
+
+**Cached Content Resource**:
+A provider-owned, expiring object holding a reusable prompt prefix that later requests can reference. Its tokens still count toward the model's context window. _Avoid_: cache key, Session Context
+
+**Prompt Cache Retention Tier**:
+The supported lifetime class selected for a Provider Prompt Cache; availability and duration are specific to a model and its Model Protocol. _Avoid_: context lifetime
+
+**Cache Warming**:
+An auxiliary request that replays a Session's cacheable prefix to preserve reuse for later Agent Turns. Its usage contributes to Session cost but does not enter the Session Context or Session Transcript. _Avoid_: retry, compaction
+
+**Session Usage Entry**:
+A durable, usage-only item associated with a Session. It contributes to cost reporting without becoming a Session Record, Session Message, or part of the Session Context. _Avoid_: usage message, Session Record
+
 ## Session Selection
 
 The last-used Agent, Model, and ThinkingLevel recorded in a session's message
