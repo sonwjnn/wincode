@@ -69,15 +69,10 @@ describe("public OpenAI SDK provider", () => {
 			kind: "api-key",
 			apiKey: "openai-test-key",
 		});
-		expect(sdk.getModel("openai", "gpt-5.6")).toMatchObject({
-			limits: {
-				contextWindowTokens: 1_050_000,
-				maxOutputTokens: 128_000,
-			},
-			pricing: {
-				inputPerMillionTokensUsd: 4,
-				outputPerMillionTokensUsd: 20,
-			},
+		expect(sdk.getModel("openai", "gpt-5.6")).toEqual({
+			modelId: "gpt-5.6",
+			protocolId: "openai-responses",
+			providerId: "openai",
 		});
 
 		const events: ChatEvent[] = [];

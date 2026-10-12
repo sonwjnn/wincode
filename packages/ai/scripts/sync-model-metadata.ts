@@ -1,4 +1,4 @@
-// Regenerates `packages/ai/src/generated/model-metadata.generated.ts`.
+// Regenerates the shared model metadata and OpenAI-only prompt-cache metadata.
 //
 // Usage: bun run packages/ai/scripts/sync-model-metadata.ts [--check]
 //
@@ -20,6 +20,10 @@ const OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/model-metadata.generated.ts"
 );
+const OPENAI_PROMPT_CACHE_OUTPUT_PATH = path.join(
+	import.meta.dir,
+	"../src/generated/openai-prompt-cache.generated.ts"
+);
 
 const sourceUrlForOutput = (value: string): string => {
 	try {
@@ -36,6 +40,9 @@ const sourceUrlForOutput = (value: string): string => {
 
 const isCheck = process.argv.includes("--check");
 const current = isCheck ? await readUtf8File(OUTPUT_PATH) : undefined;
+const currentOpenAIPromptCache = isCheck
+	? await readUtf8File(OPENAI_PROMPT_CACHE_OUTPUT_PATH)
+	: undefined;
 const committedSnapshotDate = current?.match(
 	/^\/\/ Snapshot date: (\d{4}-\d{2}-\d{2})\./m
 )?.[1];
@@ -72,13 +79,23 @@ process.stdout.write(
 );
 
 if (isCheck) {
-	if (current !== rendered.contents) {
+	if (
+		current !== rendered.contents ||
+		currentOpenAIPromptCache !== rendered.openAIPromptCacheContents
+	) {
 		throw new Error(
 			"Generated model metadata is stale. Run `bun run packages/ai/scripts/sync-model-metadata.ts`."
 		);
 	}
 	process.stdout.write("Generated model metadata is current.\n");
 } else {
-	await Bun.write(OUTPUT_PATH, rendered.contents);
+	await Promise.all([
+		Bun.write(OUTPUT_PATH, rendered.contents),
+		Bun.write(
+			OPENAI_PROMPT_CACHE_OUTPUT_PATH,
+			rendered.openAIPromptCacheContents
+		),
+	]);
 	process.stdout.write(`Wrote ${OUTPUT_PATH}\n`);
+	process.stdout.write(`Wrote ${OPENAI_PROMPT_CACHE_OUTPUT_PATH}\n`);
 }

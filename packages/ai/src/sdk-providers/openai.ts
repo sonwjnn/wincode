@@ -1,6 +1,5 @@
 import type { JsonObject } from "type-fest";
 import { openAICredentialSchema } from "../connections/credential-schemas.ts";
-import { modelMetadataByKey } from "../generated/model-metadata.generated.ts";
 import {
 	httpErrorFromResponse,
 	isCacheControlRejection,
@@ -52,36 +51,13 @@ const DEFAULT_MODELS = [
 	"gpt-6-luna",
 	"gpt-6-terra",
 	"gpt-6-astra",
-].map((modelId): ProviderModel => {
-	const metadata = modelMetadataByKey[`openai/${modelId}`];
-	const limits = metadata?.limits;
-	const pricing = metadata?.cost;
-	return {
-		...(limits
-			? {
-					limits: {
-						...(limits.context === undefined
-							? {}
-							: { contextWindowTokens: limits.context }),
-						...(limits.output === undefined
-							? {}
-							: { maxOutputTokens: limits.output }),
-					},
-				}
-			: {}),
-		...(pricing
-			? {
-					pricing: {
-						inputPerMillionTokensUsd: pricing.input,
-						outputPerMillionTokensUsd: pricing.output,
-					},
-				}
-			: {}),
+].map(
+	(modelId): ProviderModel => ({
 		modelId,
 		protocolId: OPENAI_RESPONSES_PROTOCOL,
 		providerId: OPENAI_PROVIDER_ID,
-	};
-});
+	})
+);
 
 export type OpenAIAuthorization =
 	| Readonly<{ apiKey: string; kind: "api-key" }>

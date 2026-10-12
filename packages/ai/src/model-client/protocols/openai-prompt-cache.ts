@@ -1,4 +1,4 @@
-import { modelMetadataByKey } from "../../generated/model-metadata.generated.ts";
+import { openAIPromptCacheByModelId } from "../../generated/openai-prompt-cache.generated.ts";
 import type {
 	OpenAIPromptCacheProtocol,
 	SupportedPromptCacheRetentionTier,
@@ -39,9 +39,9 @@ const openAIPromptCacheCapabilitiesFor = (
 	model: SupportedChatModel,
 	protocol: OpenAIPromptCacheProtocol
 ) =>
-	modelMetadataByKey[`${model.provider}/${model.id}`]?.promptCache?.protocols?.[
-		protocol
-	];
+	model.provider === "openai"
+		? openAIPromptCacheByModelId[model.id]?.[protocol]
+		: undefined;
 
 export const openAIPromptCacheStrategyFor = (
 	protocol: OpenAIPromptCacheProtocol

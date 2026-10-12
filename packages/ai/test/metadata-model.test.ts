@@ -240,6 +240,40 @@ describe("buildModelMetadataFile", () => {
 		).toBe(false);
 	});
 
+	test("generates OpenAI-only cache metadata for the isolated provider runtime", () => {
+		const openAIResponseCache = {
+			breakpoints: true,
+			eligibility: { minimumInputTokens: 1024 },
+			promptCacheKey: true,
+			retention: {
+				field: "prompt_cache_options.ttl",
+				values: { short: "30m" },
+			},
+		} as const;
+		const result = build({
+			"openai/from-overlay": {
+				promptCache: {
+					explicit: { retentionTiers: ["short"] },
+					protocols: { "openai-responses": openAIResponseCache },
+				},
+			},
+			"google/absent": {
+				promptCache: {
+					explicit: { retentionTiers: ["short"] },
+					googleCachedContent: { ttl: { short: "300s" } },
+				},
+			},
+		});
+
+		expect(result.openAIPromptCacheEntries).toEqual({
+			"from-overlay": { "openai-responses": openAIResponseCache },
+		});
+		expect(result.openAIPromptCacheContents).not.toContain("google");
+		expect(result.openAIPromptCacheContents).not.toContain(
+			"googleCachedContent"
+		);
+	});
+
 	test("returns entries accepted by the runtime metadata schema", () => {
 		for (const entry of Object.values(build().entries)) {
 			expect(modelMetadataEntrySchema.safeParse(entry).success).toBe(true);
