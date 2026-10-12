@@ -103,10 +103,21 @@ export type ProviderChatContext = Readonly<{
 	signal?: AbortSignal;
 }>;
 
+/** Authorization and cancellation passed to provider-owned model discovery. */
+export type ProviderModelDiscoveryContext = Readonly<{
+	authorization: unknown;
+	signal?: AbortSignal;
+}>;
+
 /** A registered provider owns its authorization lifecycle, model list, and wire behavior. */
 export type Provider = Readonly<{
 	id: string;
+	/** Static baseline models remain available alongside discovered models. */
 	models: readonly ProviderModel[];
+	/** Return current dynamic models; rejection or cancellation preserves the last-known list. */
+	discoverModels?: (
+		context: ProviderModelDiscoveryContext
+	) => readonly ProviderModel[] | Promise<readonly ProviderModel[]>;
 	/** Return null when not configured; include credential only when rotating it. */
 	resolveAuthorization: (
 		input: Readonly<{
@@ -127,6 +138,24 @@ export type CredentialStore = Readonly<{
 		providerId: string
 	) => unknown | undefined | Promise<unknown | undefined>;
 	set: (providerId: string, credential: unknown) => void | Promise<void>;
+}>;
+
+/** Application-owned persistence for last-successful dynamic discovery results. */
+export type ModelStore = Readonly<{
+	get: (
+		providerId: string
+	) =>
+		| readonly ProviderModel[]
+		| undefined
+		| Promise<readonly ProviderModel[] | undefined>;
+	set: (
+		providerId: string,
+		models: readonly ProviderModel[]
+	) => void | Promise<void>;
+}>;
+
+export type RefreshModelsOptions = Readonly<{
+	signal?: AbortSignal;
 }>;
 
 export type ChatFailure =
@@ -182,14 +211,25 @@ export class ProviderError extends Error {
 export type ProviderCollection = Readonly<{
 	chat: (request: ChatRequest) => AsyncIterable<ChatEvent>;
 	deleteCredential: (providerId: string) => Promise<void>;
+	/** Known models whose provider has a stored credential; this does not contact the provider. */
+	getAvailable: () => Promise<readonly ProviderModel[]>;
 	getModel: (providerId: string, modelId: string) => ProviderModel | undefined;
+	/** Returns in-memory last-known models. Restore the store before listing a fresh instance. */
 	getModels: () => readonly ProviderModel[];
+	/** Loads persisted dynamic models for providers registered so far, without network access. */
+	restoreModels: () => Promise<void>;
+	/** Discovers and persists models; failures leave the last-known list unchanged. */
+	refreshModels: (
+		providerId: string,
+		options?: RefreshModelsOptions
+	) => Promise<readonly ProviderModel[]>;
 	register: (provider: Provider) => void;
 	setCredential: (providerId: string, credential: unknown) => Promise<void>;
 }>;
 
 export type ProviderCollectionOptions = Readonly<{
 	credentialStore?: CredentialStore;
+	modelStore?: ModelStore;
 }>;
 
 type RegisteredProvider = Readonly<{
@@ -247,6 +287,98 @@ const throwIfAborted = (signal: AbortSignal | undefined): void => {
 	if (signal?.aborted) {
 		throw signal.reason ?? new DOMException("Aborted", "AbortError");
 	}
+};
+
+const isNonNegativeFiniteNumber = (value: unknown): value is number =>
+	typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+const isProviderModel = (value: unknown): value is ProviderModel => {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const model = value as Record<string, unknown>;
+	if (
+		typeof model.providerId !== "string" ||
+		model.providerId.trim().length === 0 ||
+		typeof model.modelId !== "string" ||
+		model.modelId.trim().length === 0 ||
+		typeof model.protocolId !== "string" ||
+		model.protocolId.trim().length === 0
+	) {
+		return false;
+	}
+	if (
+		model.capabilities !== undefined &&
+		!(
+			Array.isArray(model.capabilities) &&
+			model.capabilities.every((capability: unknown) =>
+				["file", "image", "reasoning", "text", "tools"].includes(
+					String(capability)
+				)
+			)
+		)
+	) {
+		return false;
+	}
+	for (const field of ["limits", "pricing"] as const) {
+		const metadata = model[field];
+		if (metadata === undefined) {
+			continue;
+		}
+		if (typeof metadata !== "object" || metadata === null) {
+			return false;
+		}
+		for (const value of Object.values(metadata)) {
+			if (!isNonNegativeFiniteNumber(value)) {
+				return false;
+			}
+		}
+	}
+	return true;
+};
+
+const validateProviderModels = (
+	value: unknown,
+	providerId: string,
+	source: string
+): readonly ProviderModel[] => {
+	if (!Array.isArray(value)) {
+		throw new Error(`${source} for provider ${providerId} must be an array.`);
+	}
+	const models: ProviderModel[] = [];
+	const modelIds = new Set<string>();
+	for (const candidate of value as readonly unknown[]) {
+		if (!isProviderModel(candidate) || candidate.providerId !== providerId) {
+			throw new Error(
+				`${source} contains an invalid model for provider ${providerId}.`
+			);
+		}
+		if (modelIds.has(candidate.modelId)) {
+			throw new Error(
+				`${source} contains duplicate model ID for provider ${providerId}: ${candidate.modelId}`
+			);
+		}
+		modelIds.add(candidate.modelId);
+		models.push(candidate);
+	}
+	return models;
+};
+
+const modelsForProvider = (
+	registered: RegisteredProvider,
+	discovered: readonly ProviderModel[]
+): readonly ProviderModel[] => {
+	const models = new Map<string, ProviderModel>();
+	for (const model of registered.models) {
+		models.set(model.modelId, model);
+	}
+	for (const model of discovered) {
+		// Static metadata remains authoritative for an identity it already declares.
+		if (!models.has(model.modelId)) {
+			models.set(model.modelId, model);
+		}
+	}
+	return [...models.values()];
 };
 
 const failureForError = (
@@ -320,6 +452,7 @@ const terminalForStreamError = (
 
 const selectChatTarget = (
 	providers: ReadonlyMap<string, RegisteredProvider>,
+	dynamicModels: ReadonlyMap<string, readonly ProviderModel[]>,
 	request: ChatRequest
 ): ChatSelection => {
 	const registered = providers.get(request.providerId);
@@ -329,9 +462,10 @@ const selectChatTarget = (
 			kind: "failed",
 		};
 	}
-	const model = registered.models.find(
-		(candidate) => candidate.modelId === request.modelId
-	);
+	const model = modelsForProvider(
+		registered,
+		dynamicModels.get(request.providerId) ?? []
+	).find((candidate) => candidate.modelId === request.modelId);
 	if (!model) {
 		return {
 			failure: {
@@ -367,7 +501,10 @@ export const createProviderCollection = (
 ): ProviderCollection => {
 	const credentialStore =
 		options.credentialStore ?? createDefaultCredentialStore();
+	const modelStore = options.modelStore;
 	const providers = new Map<string, RegisteredProvider>();
+	const dynamicModels = new Map<string, readonly ProviderModel[]>();
+	const restoredProviders = new Set<string>();
 	const authQueues = new Map<string, Promise<void>>();
 
 	const withProviderCredentialLock = async <T>(
@@ -394,6 +531,13 @@ export const createProviderCollection = (
 			throw new Error(`Unknown provider: ${providerId}`);
 		}
 		return registered;
+	};
+
+	const getProviderModels = (providerId: string): readonly ProviderModel[] => {
+		const registered = providers.get(providerId);
+		return registered
+			? modelsForProvider(registered, dynamicModels.get(providerId) ?? [])
+			: [];
 	};
 
 	const resolveAuthorization = async (
@@ -468,7 +612,7 @@ export const createProviderCollection = (
 	const streamChat = async function* (
 		request: ChatRequest
 	): AsyncIterable<ChatEvent> {
-		const selection = selectChatTarget(providers, request);
+		const selection = selectChatTarget(providers, dynamicModels, request);
 		if (selection.kind === "failed") {
 			yield terminal({ failure: selection.failure, status: "failure" });
 			return;
@@ -494,12 +638,71 @@ export const createProviderCollection = (
 				}
 			});
 		},
+		getAvailable: async () => {
+			const configuredProviders = new Set<string>();
+			for (const providerId of providers.keys()) {
+				if ((await credentialStore.get(providerId)) !== undefined) {
+					configuredProviders.add(providerId);
+				}
+			}
+			return [...configuredProviders].flatMap((providerId) =>
+				getProviderModels(providerId)
+			);
+		},
 		getModel: (providerId, modelId) =>
-			providers
-				.get(providerId)
-				?.models.find((model) => model.modelId === modelId),
+			getProviderModels(providerId).find((model) => model.modelId === modelId),
 		getModels: () =>
-			[...providers.values()].flatMap(({ models }) => [...models]),
+			[...providers.keys()].flatMap((providerId) =>
+				getProviderModels(providerId)
+			),
+		restoreModels: async () => {
+			for (const providerId of providers.keys()) {
+				if (restoredProviders.has(providerId)) {
+					continue;
+				}
+				const stored = await modelStore?.get(providerId);
+				const restored =
+					stored === undefined
+						? []
+						: validateProviderModels(
+								stored,
+								providerId,
+								"Model store snapshot"
+							);
+				dynamicModels.set(providerId, restored);
+				restoredProviders.add(providerId);
+			}
+		},
+		refreshModels: async (providerId, refreshOptions = {}) => {
+			const registered = getRegisteredProvider(providerId);
+			const discoverModels = registered.provider.discoverModels;
+			if (!discoverModels) {
+				throw new Error(
+					`Provider ${providerId} does not support model discovery.`
+				);
+			}
+			throwIfAborted(refreshOptions.signal);
+			const authorization = await resolveAuthorization(
+				registered.provider,
+				refreshOptions.signal
+			);
+			throwIfAborted(refreshOptions.signal);
+			const discovered = validateProviderModels(
+				await discoverModels({
+					authorization,
+					signal: refreshOptions.signal,
+				}),
+				providerId,
+				"Provider discovery"
+			);
+			throwIfAborted(refreshOptions.signal);
+			if (modelStore) {
+				await modelStore.set(providerId, discovered);
+			}
+			dynamicModels.set(providerId, discovered);
+			restoredProviders.add(providerId);
+			return getProviderModels(providerId);
+		},
 		register: (provider) => {
 			if (providers.has(provider.id)) {
 				throw new Error(`Provider already registered: ${provider.id}`);

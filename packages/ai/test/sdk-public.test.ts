@@ -6,6 +6,7 @@ import {
 	type Provider,
 	type ProviderChatEvent,
 	ProviderError,
+	type ProviderModel,
 } from "@wincode/ai/sdk";
 
 const demoProvider = (): Provider => ({
@@ -512,6 +513,300 @@ describe("public SDK provider collection", () => {
 			outcome: { status: "success" },
 			type: "terminal",
 		});
+	});
+
+	test("consumers can discover, call, and restore provider models without network access", async () => {
+		const staticModel = {
+			modelId: "static-model",
+			protocolId: "dynamic-wire",
+			providerId: "dynamic-provider",
+		};
+		const discoveredModel = {
+			modelId: "published-model",
+			protocolId: "dynamic-wire",
+			providerId: "dynamic-provider",
+		};
+		const storedModels = new Map<string, readonly (typeof discoveredModel)[]>();
+		const storedCredentials = new Map<string, unknown>();
+		const modelStore = {
+			get: async (providerId: string) => storedModels.get(providerId),
+			set: async (
+				providerId: string,
+				models: readonly (typeof discoveredModel)[]
+			) => {
+				storedModels.set(providerId, models);
+			},
+		};
+		const credentialStore = {
+			delete: async (providerId: string) => {
+				storedCredentials.delete(providerId);
+			},
+			get: async (providerId: string) => storedCredentials.get(providerId),
+			set: async (providerId: string, credential: unknown) => {
+				storedCredentials.set(providerId, credential);
+			},
+		};
+		let discoveries = 0;
+		const provider = (): Provider => ({
+			id: "dynamic-provider",
+			models: [staticModel],
+			discoverModels: async ({ authorization }) => {
+				discoveries += 1;
+				expect(authorization).toBe("configured-secret");
+				return [discoveredModel];
+			},
+			resolveAuthorization: async ({ credential }) =>
+				credential === undefined ? null : { authorization: credential },
+			async *streamChat(_request, { model }) {
+				yield { delta: model.modelId, type: "text-delta" };
+			},
+		});
+		const sdk = createProviderCollection({ credentialStore, modelStore });
+		sdk.register(provider());
+		await sdk.restoreModels();
+		await sdk.setCredential("dynamic-provider", "configured-secret");
+
+		await sdk.refreshModels("dynamic-provider");
+		expect(sdk.getModels()).toEqual([staticModel, discoveredModel]);
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [],
+			modelId: "published-model",
+			providerId: "dynamic-provider",
+		})) {
+			events.push(event);
+		}
+		expect(events).toEqual([
+			{ delta: "published-model", type: "text-delta" },
+			{ outcome: { status: "success" }, type: "terminal" },
+		]);
+
+		const restored = createProviderCollection({ credentialStore, modelStore });
+		restored.register(provider());
+		await restored.restoreModels();
+		expect(restored.getModels()).toEqual([staticModel, discoveredModel]);
+		const restoredEvents: ChatEvent[] = [];
+		for await (const event of restored.chat({
+			messages: [],
+			modelId: "published-model",
+			providerId: "dynamic-provider",
+		})) {
+			restoredEvents.push(event);
+		}
+		expect(restoredEvents.at(-1)).toEqual({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
+		expect(discoveries).toBe(1);
+	});
+
+	test("known models and credential-filtered availability do not perform health checks", async () => {
+		const staticModel = {
+			modelId: "shared-model",
+			protocolId: "static-wire",
+			providerId: "configured-provider",
+		};
+		const duplicateDiscoveredModel = {
+			modelId: "shared-model",
+			protocolId: "discovered-wire",
+			providerId: "configured-provider",
+		};
+		const discoveredModel = {
+			modelId: "cached-model",
+			protocolId: "discovered-wire",
+			providerId: "configured-provider",
+		};
+		const otherProviderModel = {
+			modelId: "cached-model",
+			protocolId: "other-wire",
+			providerId: "unconfigured-provider",
+		};
+		const otherDiscoveredModel = {
+			modelId: "other-discovered-model",
+			protocolId: "other-wire",
+			providerId: "unconfigured-provider",
+		};
+		const storedModels = new Map<string, readonly ProviderModel[]>([
+			["configured-provider", [duplicateDiscoveredModel, discoveredModel]],
+			["unconfigured-provider", [otherDiscoveredModel]],
+		]);
+		const modelStore = {
+			get: async (providerId: string) => storedModels.get(providerId),
+			set: async (providerId: string, models: readonly ProviderModel[]) => {
+				storedModels.set(providerId, models);
+			},
+		};
+		const credentials = new Map<string, unknown>([
+			["configured-provider", "configured"],
+		]);
+		const credentialStore = {
+			delete: async (providerId: string) => {
+				credentials.delete(providerId);
+			},
+			get: async (providerId: string) => credentials.get(providerId),
+			set: async (providerId: string, credential: unknown) => {
+				credentials.set(providerId, credential);
+			},
+		};
+		let authorizationChecks = 0;
+		let discoveryCalls = 0;
+		const makeProvider = (
+			id: string,
+			models: readonly (typeof staticModel)[]
+		): Provider => ({
+			id,
+			models,
+			discoverModels: async () => {
+				discoveryCalls += 1;
+				return [];
+			},
+			resolveAuthorization: async () => {
+				authorizationChecks += 1;
+				return { authorization: "unused" };
+			},
+			async *streamChat() {
+				yield { delta: "unused", type: "text-delta" };
+			},
+		});
+		const sdk = createProviderCollection({ credentialStore, modelStore });
+		sdk.register(makeProvider("configured-provider", [staticModel]));
+		sdk.register(makeProvider("unconfigured-provider", [otherProviderModel]));
+		await sdk.restoreModels();
+
+		expect(sdk.getModels()).toEqual([
+			staticModel,
+			discoveredModel,
+			otherProviderModel,
+			otherDiscoveredModel,
+		]);
+		expect(await sdk.getAvailable()).toEqual([staticModel, discoveredModel]);
+		expect(authorizationChecks).toBe(0);
+		expect(discoveryCalls).toBe(0);
+
+		await sdk.refreshModels("configured-provider");
+		expect(
+			sdk.getModel("unconfigured-provider", "other-discovered-model")
+		).toEqual(otherDiscoveredModel);
+		expect(sdk.getModels()).toEqual([
+			staticModel,
+			otherProviderModel,
+			otherDiscoveredModel,
+		]);
+	});
+
+	test("failed, malformed, and cancelled discovery retains the prior list and can retry", async () => {
+		const staticModel = {
+			modelId: "static-model",
+			protocolId: "retry-wire",
+			providerId: "retry-provider",
+		};
+		const lastKnownModel = {
+			modelId: "last-known-model",
+			protocolId: "retry-wire",
+			providerId: "retry-provider",
+		};
+		const nextModel = {
+			modelId: "newly-published-model",
+			protocolId: "retry-wire",
+			providerId: "retry-provider",
+		};
+		const storedModels = new Map<string, readonly (typeof lastKnownModel)[]>();
+		const modelStoreWrites: (readonly (typeof lastKnownModel)[])[] = [];
+		const modelStore = {
+			get: async (providerId: string) => storedModels.get(providerId),
+			set: async (
+				providerId: string,
+				models: readonly (typeof lastKnownModel)[]
+			) => {
+				modelStoreWrites.push(models);
+				storedModels.set(providerId, models);
+			},
+		};
+		const credentials = new Map<string, unknown>();
+		const credentialStore = {
+			delete: async (providerId: string) => {
+				credentials.delete(providerId);
+			},
+			get: async (providerId: string) => credentials.get(providerId),
+			set: async (providerId: string, credential: unknown) => {
+				credentials.set(providerId, credential);
+			},
+		};
+		let discoveryMode: "malformed" | "network-failure" | "success" = "success";
+		let activeController: AbortController | undefined;
+		const provider: Provider = {
+			id: "retry-provider",
+			models: [staticModel],
+			discoverModels: async ({ signal }) => {
+				if (discoveryMode === "network-failure") {
+					throw new Error("discovery endpoint unavailable");
+				}
+				if (discoveryMode === "malformed") {
+					return [{ ...nextModel, providerId: "wrong-provider" }];
+				}
+				if (activeController) {
+					activeController.abort(
+						new DOMException("discovery cancelled", "AbortError")
+					);
+					expect(signal?.aborted).toBe(true);
+				}
+				return [
+					discoveryMode === "success" && storedModels.size === 0
+						? lastKnownModel
+						: nextModel,
+				];
+			},
+			resolveAuthorization: async ({ credential }) =>
+				credential === "configured" ? { authorization: "token" } : null,
+			async *streamChat() {
+				yield { delta: "unused", type: "text-delta" };
+			},
+		};
+		const sdk = createProviderCollection({ credentialStore, modelStore });
+		sdk.register(provider);
+		await sdk.restoreModels();
+		await sdk.setCredential("retry-provider", "configured");
+		await sdk.refreshModels("retry-provider");
+		const previousList = [staticModel, lastKnownModel];
+		expect(sdk.getModels()).toEqual(previousList);
+
+		await sdk.deleteCredential("retry-provider");
+		await expect(sdk.refreshModels("retry-provider")).rejects.toThrow(
+			"has no usable credentials"
+		);
+		expect(sdk.getModels()).toEqual(previousList);
+		expect(storedModels.get("retry-provider")).toEqual([lastKnownModel]);
+		await sdk.setCredential("retry-provider", "configured");
+
+		discoveryMode = "network-failure";
+		await expect(sdk.refreshModels("retry-provider")).rejects.toThrow(
+			"discovery endpoint unavailable"
+		);
+		expect(sdk.getModels()).toEqual(previousList);
+		expect(storedModels.get("retry-provider")).toEqual([lastKnownModel]);
+
+		discoveryMode = "malformed";
+		await expect(sdk.refreshModels("retry-provider")).rejects.toThrow(
+			"invalid model for provider retry-provider"
+		);
+		expect(sdk.getModels()).toEqual(previousList);
+		expect(storedModels.get("retry-provider")).toEqual([lastKnownModel]);
+
+		discoveryMode = "success";
+		const controller = new AbortController();
+		activeController = controller;
+		await expect(
+			sdk.refreshModels("retry-provider", { signal: controller.signal })
+		).rejects.toThrow("discovery cancelled");
+		activeController = undefined;
+		expect(sdk.getModels()).toEqual(previousList);
+		expect(storedModels.get("retry-provider")).toEqual([lastKnownModel]);
+		expect(modelStoreWrites).toHaveLength(1);
+
+		await sdk.refreshModels("retry-provider");
+		expect(sdk.getModels()).toEqual([staticModel, nextModel]);
+		expect(storedModels.get("retry-provider")).toEqual([nextModel]);
+		expect(modelStoreWrites).toHaveLength(2);
 	});
 
 	test("pre-aborted requests produce one abort terminal event", async () => {
