@@ -10,6 +10,7 @@ import {
 	type ToolCallId,
 	type ToolDefinition,
 	toAgentTurnId,
+	toModelId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
 import type {
@@ -19,6 +20,7 @@ import type {
 } from "@wincode/ai/model-client";
 import { createModelTarget } from "@wincode/ai/model-target";
 import { supportedChatModelIdSchema } from "@wincode/ai/models";
+import { createProviderCollection, type Provider } from "@wincode/ai/sdk";
 import { z } from "zod";
 
 const buildTurn = (tools: readonly ResolvedTool[] = []): AgentTurn => ({
@@ -173,6 +175,145 @@ test("Agent Runtime forwards the Session-stable prompt-cache key to each Model S
 
 	expect(requests).toHaveLength(1);
 	expect(requests[0]?.promptCacheKey).toBe("wincode-session:session-123");
+});
+
+test("SDK-backed Agent Runtime delivers late steering after tool results without a Model Target", async () => {
+	const providerModel = {
+		capabilities: ["text", "tools"] as const,
+		modelId: "sdk-model",
+		protocolId: "test-protocol",
+		providerId: "test-provider",
+	};
+	const requests: Parameters<Provider["streamChat"]>[0][] = [];
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat(request) {
+			requests.push(request);
+			if (requests.length === 1) {
+				yield {
+					input: { path: "src/main.ts" },
+					toolCallId: "sdk-read-call",
+					toolName: "read",
+					type: "tool-call",
+				};
+				yield {
+					type: "usage",
+					usage: { inputTokens: 10, outputTokens: 4 },
+				};
+				yield { continuation: { responseId: "sdk-step-one" }, type: "finish" };
+				return;
+			}
+			yield { delta: "Continued after steering.", type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 14, outputTokens: 3 },
+			};
+			yield { type: "finish" };
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const tool: ResolvedTool = {
+		definition: readDefinition,
+		execute: async () => ({
+			output: { content: "source text" },
+			type: "success",
+		}),
+	};
+	const turn: AgentTurn = {
+		...buildTurn([tool]),
+		model: { modelId: toModelId("sdk-model"), providerId: "test-provider" },
+	};
+	const steering = createAgentTurnMessage(
+		"user",
+		"Focus on the error path.",
+		toSessionMessageId("sdk-steering-message")
+	);
+	const pendingSteering = [steering];
+	const events = await consume(
+		createAgentRuntime({ providerCollection: providers }).run(turn, {
+			takeSteeringMessages: () => pendingSteering.splice(0),
+		})
+	);
+
+	expect(events.map(({ type }) => type)).toEqual([
+		"agent-turn-started",
+		"model-step-started",
+		"tool-call-started",
+		"tool-call-finished",
+		"model-step-finished",
+		"model-step-started",
+		"text-delta",
+		"model-step-finished",
+		"agent-turn-completed",
+	]);
+	expect(requests).toHaveLength(2);
+	expect(requests[1]?.messages.map(({ role }) => role)).toEqual([
+		"user",
+		"assistant",
+		"tool",
+		"user",
+	]);
+	expect(requests[1]?.messages[1]).toMatchObject({
+		continuation: { responseId: "sdk-step-one" },
+		role: "assistant",
+	});
+	expect(requests[1]?.messages[2]).toMatchObject({
+		content: [
+			{
+				output: { content: "source text" },
+				toolCallId: "sdk-read-call",
+				type: "tool-result",
+			},
+		],
+		role: "tool",
+	});
+	expect(requests[1]?.messages[3]?.content).toEqual([
+		{ text: "Focus on the error path.", type: "text" },
+	]);
+	expect(events.at(-1)).toMatchObject({
+		type: "agent-turn-completed",
+		usage: { inputTokens: 24, outputTokens: 7, totalTokens: 31 },
+	});
+});
+
+test("ProviderCollection abort without caller cancellation cancels the Agent Turn", async () => {
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["text"],
+				modelId: "sdk-abort-model",
+				protocolId: "test-protocol",
+				providerId: "test-provider",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat() {
+			yield { delta: "Partial output.", type: "text-delta" };
+			throw new DOMException("provider abort", "AbortError");
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const events = await consume(
+		createAgentRuntime({ providerCollection: providers }).run({
+			...buildTurn(),
+			model: {
+				modelId: toModelId("sdk-abort-model"),
+				providerId: "test-provider",
+			},
+		})
+	);
+
+	expect(events.map(({ type }) => type)).toEqual([
+		"agent-turn-started",
+		"model-step-started",
+		"text-delta",
+		"agent-turn-cancelled",
+	]);
 });
 
 test("Agent Runtime delivers steering after tool results and continues the same turn", async () => {

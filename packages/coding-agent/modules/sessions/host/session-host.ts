@@ -1,6 +1,7 @@
 import {
 	type AgentId,
 	type AgentTurnEvent,
+	createAgentRuntime,
 	createStatefulAgent,
 	type SessionRecord,
 	type StatefulAgent,
@@ -388,15 +389,25 @@ export const createSessionHost = async ({
 			sessionId,
 			store: capabilities.getStore(),
 		});
+		const runtime = capabilities.getRuntime?.();
+		const providerCollection =
+			runtime === undefined
+				? capabilities.createProviderCollection?.()
+				: undefined;
 		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
 			getQueuedSubmissionId: ({ id }) => id,
-			runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
+			runtime:
+				runtime ??
+				(providerCollection === undefined
+					? defaultRuntimeFactory()
+					: createAgentRuntime({ providerCollection })),
 		});
 		const ports: AgentSessionPorts = withEventChannel(
 			createAgentSessionAdapters({
 				cacheWarming,
 				capabilities,
 				googleCachedContentResourceManager,
+				...(providerCollection === undefined ? {} : { providerCollection }),
 				isShutDown: () => isShutDown,
 				sessionId,
 				statefulAgent,

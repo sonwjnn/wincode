@@ -10,6 +10,7 @@ import {
 	type AgentTurnInterruptedEvent,
 	type AgentTurnLifecycle,
 	type AgentTurnMessage,
+	type AgentTurnModel,
 	type AgentTurnPart,
 	type AgentTurnTerminalEvent,
 	createAgentRuntime,
@@ -31,7 +32,6 @@ import {
 } from "@wincode/agent-core";
 import type { GoogleCachedContentSelection } from "@wincode/ai/model-client";
 import { createModelClient } from "@wincode/ai/model-client";
-import type { ModelTarget } from "@wincode/ai/model-target";
 import {
 	getErrorMessage,
 	isNonEmptyString,
@@ -563,15 +563,15 @@ const toAgentTurnMessages = (message: SessionMessage): AgentTurnMessage[] => {
 };
 
 /**
- * Builds one Agent Turn from the resolved session send. The Model Target
- * is resolved by the caller (it needs authorization); the Agent instructions
- * are composed for the resolved Agent; `tools` carries the gated Resolved
- * Tools the runtime may invoke for this Agent.
+ * Builds one Agent Turn from the resolved session send. A legacy Model Target
+ * or credential-free Provider Model identity is resolved by the caller; Agent
+ * instructions are composed for the resolved Agent and `tools` carries the
+ * gated Resolved Tools the runtime may invoke.
  */
 export const buildAgentTurn = ({
 	agent,
 	modelMessages,
-	modelTarget,
+	model,
 	resolvedAgent,
 	role,
 	skill,
@@ -581,7 +581,7 @@ export const buildAgentTurn = ({
 }: {
 	agent: AgentId;
 	modelMessages: readonly SessionMessage[];
-	modelTarget: ModelTarget;
+	model: AgentTurnModel;
 	resolvedAgent: ResolvedCodingAgent;
 	role?: AgentRole;
 	skill?: SkillRequestContext;
@@ -624,7 +624,7 @@ export const buildAgentTurn = ({
 		},
 		id: turnId,
 		input: { messages },
-		model: modelTarget,
+		model,
 		tools,
 	};
 };

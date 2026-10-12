@@ -2,11 +2,18 @@ import type {
 	AgentId,
 	AgentTurn,
 	AgentTurnEvent,
+	AgentTurnModel,
 	StatefulAgent,
 } from "@wincode/agent-core";
 import { toModelTool } from "@wincode/agent-core";
+import type { Connections } from "@wincode/ai/connections";
 import type { GoogleCachedContentResourceManager } from "@wincode/ai/model-client";
-import { findSupportedChatModelSelection } from "@wincode/ai/models";
+import {
+	findSupportedChatModelSelection,
+	type ResolvedPromptCacheControls,
+	type ThinkingSelection,
+} from "@wincode/ai/models";
+import type { ProviderCollection } from "@wincode/ai/sdk";
 import { omitUndefined } from "@wincode/utils";
 import { resolveAgentToolResourceLimits } from "@/modules/agents/registry";
 import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";
@@ -55,6 +62,47 @@ type PluginTurnResolution = Readonly<{
 		pluginTools?: readonly PluginToolDescriptor[];
 	}>;
 }>;
+
+type ResolveSessionTurnModelOptions = Readonly<{
+	getConnections: () => Connections;
+	model: SessionExecution["model"];
+	promptCacheControls: ResolvedPromptCacheControls;
+	providerCollection?: ProviderCollection;
+	signal: AbortSignal;
+	thinkingSelection: ThinkingSelection;
+}>;
+
+const resolveSessionTurnModel = async ({
+	getConnections,
+	model,
+	promptCacheControls,
+	providerCollection,
+	signal,
+	thinkingSelection,
+}: ResolveSessionTurnModelOptions): Promise<AgentTurnModel> => {
+	if (providerCollection === undefined) {
+		return resolveChatModelTarget(model, getConnections(), {
+			...thinkingSelection,
+			...omitUndefined({
+				promptCacheEnabled: promptCacheControls.enabled ? true : undefined,
+				promptCacheRetention: promptCacheControls.retention,
+			}),
+			signal,
+		});
+	}
+	return {
+		...model,
+		...thinkingSelection,
+		...(promptCacheControls.enabled
+			? {
+					promptCacheEnabled: true as const,
+					...omitUndefined({
+						promptCacheRetention: promptCacheControls.retention,
+					}),
+				}
+			: {}),
+	};
+};
 
 const resolvePluginTurnContext = async (
 	input: Readonly<{
@@ -112,6 +160,7 @@ export type AgentSessionTurnRunnerOptions = Readonly<{
 	cacheWarming: SessionCacheWarming;
 	capabilities: SessionCapabilities;
 	googleCachedContentResourceManager: GoogleCachedContentResourceManager;
+	providerCollection?: ProviderCollection;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
 }>;
@@ -127,6 +176,7 @@ export const createAgentSessionTurnRunner = ({
 	cacheWarming,
 	capabilities,
 	googleCachedContentResourceManager,
+	providerCollection,
 	sessionId,
 	statefulAgent,
 }: AgentSessionTurnRunnerOptions): SessionTurnRunner => {
@@ -218,7 +268,6 @@ export const createAgentSessionTurnRunner = ({
 	): Promise<AgentTurn> => {
 		const { execution, messages, resolvedAgent, signal } = request;
 		const config = capabilities.getConfig();
-		const connections = capabilities.getConnections();
 		const versionedEditing: VersionedEditingContext | undefined =
 			sessionStore.fileObservationStore === undefined
 				? undefined
@@ -243,18 +292,14 @@ export const createAgentSessionTurnRunner = ({
 						promptCacheSnapshot.document.promptCache
 					)
 				: { enabled: false as const };
-		const modelTarget = await resolveChatModelTarget(
-			execution.model,
-			connections,
-			{
-				...thinkingSelection,
-				...omitUndefined({
-					promptCacheEnabled: promptCacheControls.enabled ? true : undefined,
-					promptCacheRetention: promptCacheControls.retention,
-				}),
-				signal,
-			}
-		);
+		const model = await resolveSessionTurnModel({
+			getConnections: capabilities.getConnections,
+			model: execution.model,
+			promptCacheControls,
+			...(providerCollection === undefined ? {} : { providerCollection }),
+			signal,
+			thinkingSelection,
+		});
 		const registry = capabilities.getRegistry();
 		const resourceLimits = resolveAgentToolResourceLimits(
 			registry,
@@ -319,8 +364,8 @@ export const createAgentSessionTurnRunner = ({
 			agent: resolvedAgent,
 			cwd: config.cwd,
 			model: {
-				modelId: modelTarget.modelId,
-				providerId: modelTarget.providerId,
+				modelId: model.modelId,
+				providerId: model.providerId,
 			},
 			tools: availableTools,
 			workspace: config.workspace,
@@ -328,7 +373,7 @@ export const createAgentSessionTurnRunner = ({
 		return buildAgentTurn({
 			agent: execution.agent,
 			modelMessages: messages,
-			modelTarget,
+			model,
 			resolvedAgent,
 			role: resolvedAgent.role,
 			skill: request.skillRequest,
@@ -353,11 +398,13 @@ export const createAgentSessionTurnRunner = ({
 			const sessionStore = capabilities.getStore();
 			turn = await prepareAgentTurn(request, scope, sessionStore);
 			const googleCachedContent =
-				await googleCachedContentResourceManager.select({
-					system: turn.agent.instructions,
-					target: turn.model,
-					tools: (turn.tools ?? []).map(toModelTool),
-				});
+				"authorization" in turn.model
+					? await googleCachedContentResourceManager.select({
+							system: turn.agent.instructions,
+							target: turn.model,
+							tools: (turn.tools ?? []).map(toModelTool),
+						})
+					: undefined;
 			await runAgentTurnToText({
 				onCheckpoint: callbacks.commitTerminal,
 				onToolCheckpoint: callbacks.commitToolCall,
@@ -368,7 +415,9 @@ export const createAgentSessionTurnRunner = ({
 				promptCacheKey: turn.model.promptCacheEnabled
 					? `wincode-session:${sessionId}`
 					: undefined,
-				modelStepObserver: cacheWarming.modelStepObserver,
+				...("authorization" in turn.model
+					? { modelStepObserver: cacheWarming.modelStepObserver }
+					: {}),
 				runtime: statefulAgent,
 				googleCachedContent,
 				signal,
