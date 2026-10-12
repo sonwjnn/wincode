@@ -347,13 +347,13 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 		expect(restoredAdmission.rejected).toBe(false);
 		expect(sentSelections).toEqual([
 			{
-				modelId: "claude-sonnet-5",
-				providerId: "anthropic",
+				modelId: selectedModel.modelId,
+				providerId: selectedModel.providerId,
 				thinkingLevel: "high",
 			},
 			{
-				modelId: "claude-sonnet-5",
-				providerId: "anthropic",
+				modelId: selectedModel.modelId,
+				providerId: selectedModel.providerId,
 				thinkingLevel: "high",
 			},
 		]);
@@ -370,7 +370,9 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 				workspaceRoot: sdkWorkspace,
 			});
 			const records = await recordStore.listSessionRecords(createdSessionId);
-			const userRecords = records.filter(({ outcome }) => outcome.kind === "user");
+			const userRecords = records.filter(
+				({ outcome }) => outcome.kind === "user"
+			);
 			expect(userRecords).toHaveLength(2);
 			expect(records.every(({ agentId: id }) => id === agentId("scout"))).toBe(
 				true
