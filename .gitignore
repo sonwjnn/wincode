@@ -52,6 +52,7 @@ test-artifacts/
 *.tgz
 .cache
 tmp
+.tmp
 temp
 .devtools
 
