@@ -284,6 +284,9 @@ const requestedCapabilities = (
 			if (part.type === "file" || part.type === "image") {
 				capabilities.add(part.type);
 			}
+			if (part.type === "tool-call" || part.type === "tool-result") {
+				capabilities.add("tools");
+			}
 		}
 	}
 	if (request.tools && request.tools.length > 0) {

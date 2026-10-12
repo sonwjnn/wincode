@@ -270,6 +270,82 @@ describe("public SDK provider collection", () => {
 		]);
 	});
 
+	test("tool history fails capability checks without tools before provider dispatch", async () => {
+		let providerDispatches = 0;
+		const sdk = createProviderCollection();
+		sdk.register({
+			...demoProvider(),
+			id: "text-only-provider",
+			models: [
+				{
+					capabilities: ["text"],
+					modelId: "text-only-model",
+					protocolId: "text-only-wire",
+					providerId: "text-only-provider",
+				},
+			],
+			async *streamChat() {
+				providerDispatches += 1;
+				yield { delta: "unexpected dispatch", type: "text-delta" };
+			},
+		});
+
+		await sdk.setCredential("text-only-provider", "configured");
+
+		const toolHistory: readonly ChatMessage[] = [
+			{
+				content: [
+					{
+						input: { city: "Paris" },
+						toolCallId: "call-1",
+						toolName: "weather",
+						type: "tool-call",
+					},
+				],
+				role: "assistant",
+			},
+			{
+				content: [
+					{
+						output: { temperature: 20 },
+						toolCallId: "call-1",
+						toolName: "weather",
+						type: "tool-result",
+					},
+				],
+				role: "tool",
+			},
+		];
+
+		for (const message of toolHistory) {
+			const events: ChatEvent[] = [];
+			for await (const event of sdk.chat({
+				messages: [message],
+				modelId: "text-only-model",
+				providerId: "text-only-provider",
+			})) {
+				events.push(event);
+			}
+
+			expect(events).toEqual([
+				{
+					outcome: {
+						failure: {
+							capability: "tools",
+							code: "unsupported-capability",
+							modelId: "text-only-model",
+							providerId: "text-only-provider",
+						},
+						status: "failure",
+					},
+					type: "terminal",
+				},
+			]);
+		}
+
+		expect(providerDispatches).toBe(0);
+	});
+
 	test("app-owned credentials are refreshed serially and default credentials stay instance-local", async () => {
 		let storedCredential: unknown = "initial";
 		const observedCredentials: unknown[] = [];

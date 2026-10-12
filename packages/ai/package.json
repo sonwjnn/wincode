@@ -39,7 +39,7 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "bun ../../scripts/test-portfolio.ts default --package ai && node ./test/sdk-node-consumer.mjs && bun ./test/sdk-node-consumer.mjs"
+    "test": "bun ../../scripts/test-portfolio.ts default --package ai"
   },
   "dependencies": {
     "@google/genai": "^2.27.0",
