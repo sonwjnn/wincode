@@ -1,4 +1,5 @@
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { ProjectTrustDecision } from "@/modules/project-trust/project-trust";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { ApplicationResourceLoader } from "../resource-loader";
@@ -35,6 +36,7 @@ export type ApplicationContext = Readonly<{
 	configRuntime?: ConfigRuntime;
 	pluginRuntime?: PluginRuntime;
 	resourceLoader?: ApplicationResourceLoader;
+	sessionTrustDecision?: ProjectTrustDecision;
 }>;
 
 export class InvocationError extends Error {

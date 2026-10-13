@@ -196,6 +196,9 @@ export const reloadInteractiveResources = async ({
 				configRuntime: active.configRuntime,
 				pluginRuntime: active.pluginRuntime,
 			},
+			...(current.sessionTrustDecision === undefined
+				? {}
+				: { sessionTrustDecision: current.sessionTrustDecision }),
 		});
 		if (lifecycle.isCleanupRequested()) {
 			await discardUnstartedPluginRuntime(active.pluginRuntime, result);

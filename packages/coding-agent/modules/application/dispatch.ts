@@ -36,7 +36,7 @@ export type DispatchModeLoader = (
 
 export type DispatchRuntime = Pick<
 	ApplicationContext,
-	"configRuntime" | "pluginRuntime" | "resourceLoader"
+	"configRuntime" | "pluginRuntime" | "resourceLoader" | "sessionTrustDecision"
 > &
 	Readonly<{ startupDiagnostics?: readonly string[] }>;
 export type DispatchProcessRequest = Pick<DispatchInput, "args" | "cwd"> &

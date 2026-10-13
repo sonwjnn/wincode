@@ -201,6 +201,9 @@ The resumption of an idle Agent Session without a caller-supplied Submission. Th
 **Project trust**:
 A user-owned decision that permits Wincode to load protected configuration and resources supplied by a project. It authorizes resource loading, not process isolation. _Avoid_: project permission, sandbox
 
+**Session trust decision**:
+A Project trust decision that applies only to the running Wincode process — every Agent Session inside it — and is never written to the trust file. It outranks saved decisions when Wincode reloads resources, and saving a persisted decision replaces it. _Avoid_: temporary permission, per-session trust
+
 **Diagnostic Log**:
 A persistent, non-user-facing record of Wincode runtime diagnostics. It is distinct from Execution Mode output, CLI Command output, and the JSON Event Stream. _Avoid_: CLI output, protocol event, session transcript
 

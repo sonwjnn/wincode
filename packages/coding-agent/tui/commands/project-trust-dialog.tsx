@@ -1,5 +1,5 @@
 import { useTerminalDimensions } from "@opentui/react";
-import { createElement, useEffect, useRef } from "react";
+import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	ProjectTrustPromptRequest,
 	ProjectTrustSelection,
@@ -40,9 +40,21 @@ const getTrustChoices = (
 				},
 			]),
 	{
+		action: "trust-session",
+		description:
+			"Load protected resources until Wincode exits; save no decision.",
+		label: "Trust (this session only)",
+	},
+	{
 		action: "deny",
-		description: "Keep protected project resources disabled.",
+		description: "Keep this project's protected resources disabled.",
 		label: "Do not trust",
+	},
+	{
+		action: "deny-session",
+		description:
+			"Disable protected resources until Wincode exits; save no decision.",
+		label: "Do not trust (this session only)",
 	},
 ];
 
@@ -64,7 +76,13 @@ export function ProjectTrustDialogContent({
 	const selectedTextColor = getContrastingTextColor(colors.selection);
 	const { height } = useTerminalDimensions();
 	const rootStatusHeight = Math.min(6, Math.max(3, protectedRoots.length * 3));
-	const choices = getTrustChoices(parentDirectory);
+	const choices = useMemo(
+		() => getTrustChoices(parentDirectory),
+		[parentDirectory]
+	);
+	const [highlightedChoice, setHighlightedChoice] = useState<
+		ProjectTrustChoiceItem | undefined
+	>(choices.at(0));
 	const settled = useRef(false);
 	const onCancelRef = useRef(onCancel);
 	const onDecisionRef = useRef(onDecision);
@@ -91,7 +109,8 @@ export function ProjectTrustDialogContent({
 						{`Workspace: ${shortenHomePath(workspace)}`}
 					</text>
 					<text fg={colors.warning} wrapMode="word">
-						Trust allows project settings and MCP servers to load. Trusted MCP
+						This allows Wincode to load .wincode settings and resources, start
+						project MCP servers, and execute project Plugins. Trusted MCP
 						processes run with Wincode's OS privileges; project trust is not a
 						sandbox.
 					</text>
@@ -126,9 +145,17 @@ export function ProjectTrustDialogContent({
 				</box>
 			</DialogInset>
 			<SearchListDialogWrapper<ProjectTrustChoiceItem>
+				footer={
+					highlightedChoice === undefined ? null : (
+						<text fg={colors.textMuted} wrapMode="word">
+							{highlightedChoice.description}
+						</text>
+					)
+				}
 				getKey={(choice) => choice.action}
 				getSearchText={(choice) => `${choice.label} ${choice.description}`}
 				items={choices}
+				onHighlight={setHighlightedChoice}
 				onSelect={(choice) => {
 					settled.current = true;
 					onDecision(choice.action);

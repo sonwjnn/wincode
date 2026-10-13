@@ -42,9 +42,10 @@ export type ApplicationResourceReloadResult = ApplicationResourceRuntime &
 	}>;
 
 export type ApplicationResourceLoader = Readonly<{
-	/** Reloads from saved or invocation trust without prompting or persisting a decision. */
+	/** Reloads from saved, invocation, or session trust without prompting or persisting a decision. */
 	reload: (input: {
 		current: ApplicationResourceRuntime;
+		sessionTrustDecision?: ProjectTrustDecision;
 	}) => Promise<ApplicationResourceReloadResult>;
 }>;
 
@@ -167,12 +168,11 @@ export const createApplicationResourceLoader = (
 	const distributionPlugins =
 		options.distributionPlugins ?? composition.distributionPlugins;
 	return Object.freeze({
-		reload: async ({ current }) => {
+		reload: async ({ current, sessionTrustDecision }) => {
+			const trustOverride = sessionTrustDecision ?? input.projectTrustOverride;
 			const trust = await resolveProjectTrust({
 				mode: input.mode,
-				...(input.projectTrustOverride === undefined
-					? {}
-					: { override: input.projectTrustOverride }),
+				...(trustOverride === undefined ? {} : { override: trustOverride }),
 				stdinIsTTY: input.stdinIsTTY,
 				projectTrustDir,
 				workspace,
@@ -186,6 +186,7 @@ export const createApplicationResourceLoader = (
 				cwd,
 				homeRoot,
 				trustedProjectRoots: trust.trustedProjectRoots,
+				untrustedProjectRoots: trust.untrustedProjectRoots,
 				workspace,
 			});
 			const snapshot = await configStore.refreshSnapshot(workspace);

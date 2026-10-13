@@ -135,7 +135,11 @@ test("trust selector lists each root and pending session state; Escape cancels",
 		expect(frame).toContain("Saved decision: untrusted");
 		expect(frame).toContain("Current session: Decision pending");
 		expect(frame).toContain("Trust parent folder (/workspace)");
-		expect(frame).toContain("Do not trust");
+		expect(frame).toContain("Trust (this session only)");
+		expect(frame).toContain("Do not trust (this session only)");
+		expect(frame).toContain(
+			"Allow this project's protected resources to load."
+		);
 		expect(frame).toContain("↑↓ navigate");
 
 		await act(() => setup.mockInput.pressEscape());
@@ -251,6 +255,27 @@ test("trust selector returns the parent-trust choice selected with the keyboard"
 		expect(await selectionOutcome()).toEqual({
 			kind: "selected",
 			choice: "trust-parent",
+		});
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
+test("trust selector returns the session-only choice selected with the keyboard", async () => {
+	const { selectionOutcome, setup } = await renderTrustDialog();
+	try {
+		await act(() => setup.mockInput.pressArrow("down"));
+		await flushTestRenderer(setup, 2);
+		await act(() => setup.mockInput.pressArrow("down"));
+		await flushTestRenderer(setup, 2);
+		expect(setup.captureCharFrame()).toContain(
+			"Load protected resources until Wincode exits; save no decision."
+		);
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 2);
+		expect(await selectionOutcome()).toEqual({
+			kind: "selected",
+			choice: "trust-session",
 		});
 	} finally {
 		await act(() => setup.renderer.destroy());

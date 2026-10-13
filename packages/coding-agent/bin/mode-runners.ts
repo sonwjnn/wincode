@@ -39,6 +39,9 @@ export const createModeRunnerLoader =
 				...(context.resourceLoader === undefined
 					? {}
 					: { resourceLoader: context.resourceLoader }),
+				...(context.sessionTrustDecision === undefined
+					? {}
+					: { sessionTrustDecision: context.sessionTrustDecision }),
 			});
 			return interactiveModeRunner.runInteractive();
 		},
