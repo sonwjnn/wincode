@@ -371,6 +371,21 @@ const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await setup.renderOnce();
 };
 
+/** First column a span containing `text` occupies in the rendered frame. */
+const spanColumn = (setup: TestRendererSetup, text: string): number => {
+	for (const line of setup.captureSpans().lines) {
+		let column = 0;
+		for (const span of line.spans) {
+			const index = span.text.indexOf(text);
+			if (index >= 0) {
+				return column + Bun.stringWidth(span.text.slice(0, index));
+			}
+			column += span.width;
+		}
+	}
+	throw new Error(`No rendered span contains ${JSON.stringify(text)}`);
+};
+
 /**
  * Waits for a frame the transcript produces, so a scroll or expansion settles
  * before it is asserted instead of being read from the frame it started in.
@@ -1730,6 +1745,60 @@ describe("ChatShell transcript notice", () => {
 			);
 			expect(messageLine).toBeGreaterThan(-1);
 			expect(noticeLine).toBeGreaterThan(messageLine);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("keeps the transcript notice above messages that arrive later", async () => {
+		const marker = "Frozen notice marker";
+		const { holder, setup } = await renderChatShell(
+			[userMessage("first entry")],
+			{
+				height: 24,
+				transcriptNotice: <text>{marker}</text>,
+				width: 100,
+			}
+		);
+		try {
+			await flushUi(setup);
+			await act(async () => {
+				holder.current?.setMessages([
+					userMessage("first entry"),
+					userMessage("second entry"),
+				]);
+				await setup.renderOnce();
+			});
+			const frame = await setup.waitForFrame(
+				(text) => text.includes(marker) && text.includes("second entry")
+			);
+			const lines = frame.split("\n");
+			const noticeLine = lines.findIndex((line) => line.includes(marker));
+			const secondLine = lines.findIndex((line) =>
+				line.includes("second entry")
+			);
+			expect(noticeLine).toBeGreaterThan(-1);
+			expect(secondLine).toBeGreaterThan(-1);
+			expect(noticeLine).toBeLessThan(secondLine);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("aligns the transcript notice with transcript text", async () => {
+		const messageText = "AlignedTranscriptEntry";
+		const marker = "AlignedNoticeMarker";
+		const { setup } = await renderChatShell(
+			[assistantMessage([{ text: messageText, type: "text" }])],
+			{
+				height: 24,
+				transcriptNotice: <text>{marker}</text>,
+				width: 100,
+			}
+		);
+		try {
+			await flushUi(setup);
+			expect(spanColumn(setup, marker)).toBe(spanColumn(setup, messageText));
 		} finally {
 			setup.renderer.destroy();
 		}

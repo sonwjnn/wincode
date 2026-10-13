@@ -270,7 +270,6 @@ export function NewSessionView() {
 							HOME_UNAVAILABLE_COMMAND_CAPABILITIES
 						}
 					/>
-					<ProjectTrustNotice />
 					<box
 						flexDirection="row"
 						flexShrink={0}
@@ -280,6 +279,7 @@ export function NewSessionView() {
 					>
 						<WorkspacePath />
 					</box>
+					<ProjectTrustNotice />
 				</box>
 			</box>
 
