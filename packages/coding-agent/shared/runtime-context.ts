@@ -12,6 +12,7 @@ export type StartInteractiveInput = {
 	resourceLoader?: ApplicationResourceLoader;
 	runtimeFactory?: () => AgentRuntime;
 	sessionTrustDecision?: ProjectTrustDecision;
+	startupDiagnostics?: readonly string[];
 };
 
 let runtimeContext: StartInteractiveInput | undefined;

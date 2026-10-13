@@ -1,11 +1,8 @@
-import { createCliRenderer } from "@opentui/core";
-import { createRoot } from "@opentui/react";
 import { useEffect } from "react";
 import type {
 	ProjectTrustChoice,
 	ProjectTrustPromptRequest,
 } from "../modules/project-trust/project-trust";
-import { registerCrashTeardown } from "../shared/crash-guard";
 import {
 	DialogProvider,
 	useDialog,
@@ -13,6 +10,7 @@ import {
 import { KeyboardLayerProvider } from "../shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "../shared/providers/theme/theme-provider";
 import { requestProjectTrust } from "./commands/project-trust-dialog";
+import type { InteractiveRendererSession } from "./interactive-renderer-session";
 
 const StartupProjectTrustPrompt = ({
 	request,
@@ -35,17 +33,10 @@ const StartupProjectTrustPrompt = ({
 
 export const runProjectTrustPreflight = async (
 	request: ProjectTrustPromptRequest,
-	rendererFactory: typeof createCliRenderer = createCliRenderer
+	session: InteractiveRendererSession
 ): Promise<ProjectTrustChoice> => {
-	const renderer = await rendererFactory({
-		enableMouseMovement: true,
-		exitOnCtrlC: false,
-		useMouse: true,
-	});
 	const result = Promise.withResolvers<ProjectTrustChoice>();
-	const root = createRoot(renderer);
 	let settled = false;
-	let destroyed = false;
 	const settle = (choice: ProjectTrustChoice): void => {
 		if (settled) {
 			return;
@@ -53,36 +44,19 @@ export const runProjectTrustPreflight = async (
 		settled = true;
 		result.resolve(choice);
 	};
-	const destroy = renderer.destroy.bind(renderer);
-	renderer.destroy = () => {
-		if (destroyed) {
-			return;
-		}
-		destroyed = true;
-		try {
-			root.unmount();
-		} finally {
-			destroy();
-			settle("cancel");
-		}
-	};
-	const unregisterCrashTeardown = registerCrashTeardown(() =>
-		renderer.destroy()
-	);
 
+	session.render(
+		<ThemeProvider>
+			<KeyboardLayerProvider>
+				<DialogProvider>
+					<StartupProjectTrustPrompt request={request} settle={settle} />
+				</DialogProvider>
+			</KeyboardLayerProvider>
+		</ThemeProvider>
+	);
 	try {
-		root.render(
-			<ThemeProvider>
-				<KeyboardLayerProvider>
-					<DialogProvider>
-						<StartupProjectTrustPrompt request={request} settle={settle} />
-					</DialogProvider>
-				</KeyboardLayerProvider>
-			</ThemeProvider>
-		);
 		return await result.promise;
 	} finally {
-		unregisterCrashTeardown();
-		renderer.destroy();
+		session.renderStartupBackground();
 	}
 };

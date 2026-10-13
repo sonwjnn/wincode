@@ -36,7 +36,7 @@ export const COMMANDS = [
 		input: NO_INPUT,
 	},
 	{
-		description: "Reload resources under the current Project trust decision",
+		description: "Reload plugins, skills, commands, and context",
 		name: "reload",
 		value: "/reload",
 		kind: "builtin",

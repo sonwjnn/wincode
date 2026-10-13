@@ -37,6 +37,7 @@ export type ApplicationContext = Readonly<{
 	pluginRuntime?: PluginRuntime;
 	resourceLoader?: ApplicationResourceLoader;
 	sessionTrustDecision?: ProjectTrustDecision;
+	startupDiagnostics?: readonly string[];
 }>;
 
 export class InvocationError extends Error {

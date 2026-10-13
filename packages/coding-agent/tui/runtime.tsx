@@ -1,11 +1,8 @@
-import { createCliRenderer } from "@opentui/core";
-import { createRoot } from "@opentui/react";
 import {
 	createMemoryHistory,
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { registerCrashTeardown } from "../shared/crash-guard";
 import { ErrorRecoveryProvider } from "../shared/providers/error-recovery/error-recovery-provider";
 import {
 	ThemeProvider,
@@ -15,6 +12,7 @@ import { runInteractiveCleanup } from "../shared/runtime-lifecycle";
 import { ErrorBoundary } from "../shared/ui/error-boundary";
 import { ErrorFallbackView } from "../shared/ui/error-fallback";
 import { logUnhandledUiError } from "../shared/utils/ui-error-log";
+import type { InteractiveRendererSession } from "./interactive-renderer-session";
 import { ThemedRoot } from "./layouts/themed-root";
 import { routeTree } from "./routeTree.gen";
 
@@ -83,49 +81,32 @@ const finishRenderer = async (
 };
 
 export const runInteractive = async (
-	rendererFactory: typeof createCliRenderer = createCliRenderer
+	session: InteractiveRendererSession
 ): Promise<number> => {
-	await router.load();
-	// OpenTUI has no DOM Transitioner to acknowledge this render.
-	router._rendered ??= [];
-
-	const renderer = await rendererFactory({
-		enableMouseMovement: true,
-		exitOnCtrlC: false,
-		targetFps: 60,
-		useMouse: true,
-	});
-	const exited = Promise.withResolvers<number>();
-	const destroy = renderer.destroy.bind(renderer);
-	let nativeDestroyed = false;
-	// The crash net must be able to restore the terminal even while the
-	// graceful cleanup above is still pending.
-	const destroyOnce = () => {
-		if (nativeDestroyed) {
-			return;
-		}
-		nativeDestroyed = true;
-		destroy();
-	};
-	let requestedExitCode = 0;
-	let destroyed = false;
-	renderer.destroy = () => {
-		if (destroyed) {
-			return;
-		}
-		destroyed = true;
-		void finishRenderer(destroyOnce, exited, requestedExitCode);
-	};
-	const requestQuit = (exitCode: number) => {
-		requestedExitCode = exitCode;
-		renderer.destroy();
-	};
-	const unregisterCrashTeardown = registerCrashTeardown(destroyOnce);
-	createRoot(renderer).render(<App onQuit={requestQuit} />);
 	try {
+		await router.load();
+		// OpenTUI has no DOM Transitioner to acknowledge this render.
+		router._rendered ??= [];
+
+		const renderer = session.renderer;
+		const exited = Promise.withResolvers<number>();
+		let requestedExitCode = 0;
+		let destroyed = false;
+		renderer.destroy = () => {
+			if (destroyed) {
+				return;
+			}
+			destroyed = true;
+			void finishRenderer(session.destroy, exited, requestedExitCode);
+		};
+		const requestQuit = (exitCode: number) => {
+			requestedExitCode = exitCode;
+			renderer.destroy();
+		};
+		session.render(<App onQuit={requestQuit} />);
 		return await exited.promise;
 	} finally {
-		unregisterCrashTeardown();
+		session.destroy();
 	}
 };
 

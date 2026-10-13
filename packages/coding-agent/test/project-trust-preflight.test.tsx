@@ -13,6 +13,10 @@ import {
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { requestProjectTrust } from "@/tui/commands/project-trust-dialog";
+import {
+	createInteractiveRendererSession,
+	type InteractiveRendererSession,
+} from "@/tui/interactive-renderer-session";
 import { runProjectTrustPreflight } from "@/tui/project-trust-preflight";
 import { flushTestRenderer } from "./support/opentui";
 
@@ -106,22 +110,26 @@ const renderTrustDialog = async (
 	};
 };
 
-test("startup preflight removes empty status space while retaining session-only choices", async () => {
+test("startup trust cancellation keeps the shared renderer alive", async () => {
 	const priorActEnvironment = Reflect.get(
 		globalThis,
 		"IS_REACT_ACT_ENVIRONMENT"
 	);
 	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 	let setup: TestRendererSetup | undefined;
+	let rendererSession: InteractiveRendererSession | undefined;
+	let nativeRendererDestroyed = false;
 	try {
 		const testSetup = await createTestRenderer({ height: 40, width: 120 });
 		setup = testSetup;
-		let nativeRendererDestroyed = false;
 		const destroy = testSetup.renderer.destroy.bind(testSetup.renderer);
 		testSetup.renderer.destroy = () => {
 			nativeRendererDestroyed = true;
 			destroy();
 		};
+		rendererSession = await createInteractiveRendererSession(
+			async () => testSetup.renderer
+		);
 		const workspaceOnlyRequest: ProjectTrustPromptRequest = {
 			...request,
 			protectedRoots: request.protectedRoots.filter(
@@ -130,7 +138,7 @@ test("startup preflight removes empty status space while retaining session-only 
 		};
 		const preflight = runProjectTrustPreflight(
 			workspaceOnlyRequest,
-			async () => testSetup.renderer
+			rendererSession
 		);
 		await flushTestRenderer(testSetup, 3);
 		const startupFrame = testSetup.captureCharFrame();
@@ -152,11 +160,20 @@ test("startup preflight removes empty status space while retaining session-only 
 			choice = await preflight;
 		});
 		expect(choice).toBe("cancel");
-		expect(nativeRendererDestroyed).toBe(true);
+		expect(nativeRendererDestroyed).toBe(false);
+		await flushTestRenderer(testSetup, 2);
+		const frame = testSetup.captureCharFrame();
+		expect(frame).not.toContain("Starting Wincode…");
+		expect(frame.trim()).toBe("");
 	} finally {
-		const testSetup = setup;
-		if (testSetup !== undefined) {
-			await act(() => testSetup.renderer.destroy());
+		const session = rendererSession;
+		if (session === undefined) {
+			const testSetup = setup;
+			if (testSetup !== undefined) {
+				await act(() => testSetup.renderer.destroy());
+			}
+		} else {
+			await act(() => session.destroy());
 		}
 		if (priorActEnvironment === undefined) {
 			Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
@@ -164,6 +181,7 @@ test("startup preflight removes empty status space while retaining session-only 
 			Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", priorActEnvironment);
 		}
 	}
+	expect(nativeRendererDestroyed).toBe(true);
 });
 
 test("trust selector lists each root and its saved decision", async () => {
