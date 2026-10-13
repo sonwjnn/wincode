@@ -71,3 +71,155 @@ test("Provider SDK credentials and Known Models are user-scoped, reloadable, and
 		await fs.rm(root, { force: true, recursive: true });
 	}
 });
+
+test("Provider credentials fall back to the secure file after platform-store recovery reports no account", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-provider-credential-recovery-")
+	);
+	const userDataDir = path.join(root, "user");
+	const credential = { apiKey: "fake-outage-key", kind: "api-key" } as const;
+	const unavailablePlatformStore = {
+		delete: async () => {
+			throw new Error("fake platform store unavailable");
+		},
+		get: async () => {
+			throw new Error("fake platform store unavailable");
+		},
+		set: async () => {
+			throw new Error("fake platform store unavailable");
+		},
+	};
+	try {
+		const duringOutage = createProviderSdkCredentialStore({
+			platformStore: unavailablePlatformStore,
+			userDataDir,
+		});
+		await duringOutage.set("openrouter", credential);
+
+		const afterRestart = createProviderSdkCredentialStore({
+			platformStore: {
+				delete: async () => false,
+				get: async () => null,
+				set: async () => undefined,
+			},
+			userDataDir,
+		});
+		expect(await afterRestart.get("openrouter")).toEqual(credential);
+	} finally {
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("successful platform credential writes and deletes clear stale secure-file entries", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-provider-credential-reconcile-")
+	);
+	const userDataDir = path.join(root, "user");
+	const fallback = createProviderSdkCredentialStore({
+		platformStore: null,
+		userDataDir,
+	});
+	const staleCredential = {
+		apiKey: "fake-stale-key",
+		kind: "api-key",
+	} as const;
+	const replacementCredential = {
+		apiKey: "fake-replacement-key",
+		kind: "api-key",
+	} as const;
+	const platformValues = new Map<string, string>();
+	const platformKey = (service: string, name: string): string =>
+		`${service}:${name}`;
+	try {
+		await fallback.set("openrouter", staleCredential);
+		await fallback.set("anthropic", staleCredential);
+
+		const recovered = createProviderSdkCredentialStore({
+			platformStore: {
+				delete: async ({ name, service }) =>
+					platformValues.delete(platformKey(service, name)),
+				get: async ({ name, service }) =>
+					platformValues.get(platformKey(service, name)) ?? null,
+				set: async ({ name, service, value }) => {
+					platformValues.set(platformKey(service, name), value);
+				},
+			},
+			userDataDir,
+		});
+		await recovered.set("openrouter", replacementCredential);
+		await recovered.delete("anthropic");
+
+		const laterOutage = createProviderSdkCredentialStore({
+			platformStore: {
+				delete: async () => {
+					throw new Error("fake platform store unavailable");
+				},
+				get: async () => {
+					throw new Error("fake platform store unavailable");
+				},
+				set: async () => {
+					throw new Error("fake platform store unavailable");
+				},
+			},
+			userDataDir,
+		});
+		expect(await laterOutage.get("openrouter")).toBeUndefined();
+		expect(await laterOutage.get("anthropic")).toBeUndefined();
+	} finally {
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("Provider credential deletion can retry on the same store after platform failure", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-provider-credential-delete-failure-")
+	);
+	const userDataDir = path.join(root, "user");
+	const credential = { apiKey: "fake-delete-key", kind: "api-key" } as const;
+	const fallback = createProviderSdkCredentialStore({
+		platformStore: null,
+		userDataDir,
+	});
+	let deleteAttempts = 0;
+	try {
+		await fallback.set("openrouter", credential);
+		const recoveringPlatform = createProviderSdkCredentialStore({
+			platformStore: {
+				delete: async () => {
+					deleteAttempts++;
+					if (deleteAttempts === 1) {
+						throw new Error("simulated platform delete failure");
+					}
+					return true;
+				},
+				get: async () => null,
+				set: async () => undefined,
+			},
+			userDataDir,
+		});
+		await expect(recoveringPlatform.delete("openrouter")).rejects.toThrow(
+			"Could not delete Provider SDK credential from the platform secret store."
+		);
+		expect(await fallback.get("openrouter")).toEqual(credential);
+
+		await recoveringPlatform.delete("openrouter");
+		expect(deleteAttempts).toBe(2);
+		const laterOutage = createProviderSdkCredentialStore({
+			platformStore: {
+				delete: async () => {
+					throw new Error("fake platform store unavailable");
+				},
+				get: async () => {
+					throw new Error("fake platform store unavailable");
+				},
+				set: async () => {
+					throw new Error("fake platform store unavailable");
+				},
+			},
+			userDataDir,
+		});
+		expect(await laterOutage.get("openrouter")).toBeUndefined();
+	} finally {
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});

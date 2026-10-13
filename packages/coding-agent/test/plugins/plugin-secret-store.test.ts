@@ -14,7 +14,14 @@ test("Plugin secrets are isolated and use a private local fallback", async () =>
 		const secondPlugin = createPluginSecretStore("second_plugin", root, null);
 
 		await firstPlugin.set("oauth.tokens", "private-token");
-		expect(await firstPlugin.get("oauth.tokens")).toBe("private-token");
+		const restartedFirstPlugin = createPluginSecretStore(
+			"first_plugin",
+			root,
+			null
+		);
+		expect(await restartedFirstPlugin.get("oauth.tokens")).toBe(
+			"private-token"
+		);
 		expect(await secondPlugin.get("oauth.tokens")).toBeUndefined();
 
 		const directory = path.join(root, "plugin-secrets");

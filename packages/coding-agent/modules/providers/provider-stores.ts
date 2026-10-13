@@ -1,16 +1,16 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type {
 	CredentialStore,
 	ModelStore,
 	ProviderModel,
 } from "@wincode/ai/sdk";
-import { isObjectLike, readUtf8File } from "@wincode/utils";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import {
+	readSecureJsonFile,
+	writeSecureJsonFile,
+} from "@/shared/storage/secure-json-file";
 import { createUserSecretStore } from "@/shared/storage/user-secret-store";
 
-const DIRECTORY_MODE = 0o700;
-const FILE_MODE = 0o600;
 const providerIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const modelWriteQueues = new Map<string, Promise<void>>();
 
@@ -26,23 +26,6 @@ const providerIdForStorage = (providerId: string): string => {
 		throw new Error("Invalid Provider ID for user-scoped storage.");
 	}
 	return providerId;
-};
-
-const isMissingFileError = (error: unknown): boolean =>
-	isObjectLike(error) && "code" in error && error.code === "ENOENT";
-
-const assertSecureMode = (mode: number, filePath: string): void => {
-	if (mode % 0o100 !== 0) {
-		throw new Error(
-			`Refusing insecure Provider Model snapshot permissions: ${filePath}`
-		);
-	}
-};
-
-const throwIfAborted = (signal: AbortSignal | undefined): void => {
-	if (signal?.aborted) {
-		throw signal.reason ?? new DOMException("Aborted", "AbortError");
-	}
 };
 
 const queueModelWrite = async (
@@ -110,53 +93,25 @@ export const createProviderSdkModelStore = (
 	return Object.freeze({
 		async get(providerId): Promise<readonly ProviderModel[] | undefined> {
 			const filePath = modelSnapshotPathFor(userDataDir, providerId);
-			try {
-				const stats = await fs.lstat(filePath);
-				if (!stats.isFile()) {
-					throw new Error(
-						`Refusing non-regular Provider Model snapshot: ${filePath}`
-					);
-				}
-				assertSecureMode(stats.mode, filePath);
-				const snapshot: unknown = JSON.parse(await readUtf8File(filePath));
-				if (!Array.isArray(snapshot)) {
-					throw new Error(`Invalid Provider Model snapshot: ${filePath}`);
-				}
-				return snapshot as readonly ProviderModel[];
-			} catch (error) {
-				if (isMissingFileError(error)) {
-					return;
-				}
-				throw error;
+			const snapshot = await readSecureJsonFile(
+				filePath,
+				"Provider Model snapshot"
+			);
+			if (snapshot === undefined) {
+				return;
 			}
+			if (!Array.isArray(snapshot)) {
+				throw new Error(`Invalid Provider Model snapshot: ${filePath}`);
+			}
+			return snapshot as readonly ProviderModel[];
 		},
 		set(providerId, models, { signal }): Promise<void> {
 			const filePath = modelSnapshotPathFor(userDataDir, providerId);
-			return queueModelWrite(filePath, async () => {
-				throwIfAborted(signal);
-				const directory = path.dirname(filePath);
-				await fs.mkdir(directory, { recursive: true, mode: DIRECTORY_MODE });
-				const directoryStats = await fs.lstat(directory);
-				if (!directoryStats.isDirectory()) {
-					throw new Error(
-						`Refusing insecure Provider Model snapshot directory: ${directory}`
-					);
-				}
-				assertSecureMode(directoryStats.mode, directory);
-				const temporaryPath = `${filePath}.${crypto.randomUUID()}.tmp`;
-				try {
-					await fs.writeFile(temporaryPath, JSON.stringify(models, null, 2), {
-						encoding: "utf8",
-						flag: "wx",
-						mode: FILE_MODE,
-					});
-					await fs.chmod(temporaryPath, FILE_MODE);
-					throwIfAborted(signal);
-					await fs.rename(temporaryPath, filePath);
-				} finally {
-					await fs.rm(temporaryPath, { force: true });
-				}
-			});
+			return queueModelWrite(filePath, () =>
+				writeSecureJsonFile(filePath, models, "Provider Model snapshot", {
+					signal,
+				})
+			);
 		},
 	});
 };
