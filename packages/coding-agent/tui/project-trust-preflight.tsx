@@ -24,9 +24,10 @@ const StartupProjectTrustPrompt = ({
 	const { open } = useDialog();
 
 	useEffect(() => {
-		void requestProjectTrust({ open }, request).then(settle, () =>
-			settle("cancel")
-		);
+		void requestProjectTrust(
+			{ open },
+			{ ...request, includeSessionOnly: true }
+		).then(settle, () => settle("cancel"));
 	}, [open, request, settle]);
 
 	return null;

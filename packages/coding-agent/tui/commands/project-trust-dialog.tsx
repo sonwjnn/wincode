@@ -71,6 +71,8 @@ type ProjectTrustDialogContentProps = ProjectTrustPromptRequest &
 	Readonly<{
 		onCancel: () => void;
 		onDecision: (choice: ProjectTrustSelection) => void;
+		/** The startup prompt offers throwaway decisions; /trust does not. */
+		includeSessionOnly?: boolean;
 	}>;
 
 export function ProjectTrustDialogContent({
@@ -79,15 +81,13 @@ export function ProjectTrustDialogContent({
 	onCancel,
 	onDecision,
 	parentDirectory,
+	includeSessionOnly = false,
 }: ProjectTrustDialogContentProps) {
 	const dialog = useDialog();
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
 	const { height } = useTerminalDimensions();
 	const rootStatusHeight = Math.min(6, Math.max(3, protectedRoots.length * 3));
-	const includeSessionOnly =
-		protectedRoots.length > 0 &&
-		protectedRoots.every(({ savedDecision }) => savedDecision === undefined);
 	const choices = useMemo(
 		() => getTrustChoices(parentDirectory, includeSessionOnly),
 		[parentDirectory, includeSessionOnly]
@@ -119,10 +119,6 @@ export function ProjectTrustDialogContent({
 				<box flexDirection="column" gap={1}>
 					<text fg={colors.textMuted} wrapMode="word">
 						{`Workspace: ${shortenHomePath(workspace)}`}
-					</text>
-					<text fg={colors.textMuted} wrapMode="word">
-						This allows Wincode to load .wincode settings and resources, start
-						project MCP servers, and execute project Plugins.
 					</text>
 					{protectedRoots.length === 0 ? (
 						<text fg={colors.textMuted}>

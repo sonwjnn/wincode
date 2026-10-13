@@ -57,7 +57,8 @@ const undecidedRequest: ProjectTrustPromptRequest = {
 };
 
 const renderTrustDialog = async (
-	trustRequest: ProjectTrustPromptRequest = request
+	trustRequest: ProjectTrustPromptRequest = request,
+	includeSessionOnly = false
 ) => {
 	let selectionOutcome: Promise<
 		| Readonly<{ kind: "selected"; choice: string }>
@@ -67,7 +68,10 @@ const renderTrustDialog = async (
 	function Harness() {
 		const { open } = useDialog();
 		useEffect(() => {
-			selectionOutcome = requestProjectTrust({ open }, trustRequest).then(
+			selectionOutcome = requestProjectTrust(
+				{ open },
+				{ ...trustRequest, includeSessionOnly }
+			).then(
 				(choice) => ({ kind: "selected", choice }),
 				() => ({ kind: "cancelled" })
 			);
@@ -113,9 +117,9 @@ test("startup preflight returns cancellation and tears down its renderer", async
 			async () => testSetup.renderer
 		);
 		await flushTestRenderer(testSetup, 3);
-		expect(testSetup.captureCharFrame()).toContain(
-			"Current session: Decision pending"
-		);
+		const startupFrame = testSetup.captureCharFrame();
+		expect(startupFrame).toContain("Current session: Decision pending");
+		expect(startupFrame).toContain("Trust (this session only)");
 		await act(() => testSetup.mockInput.pressEscape());
 		await flushTestRenderer(testSetup, 2);
 		let choice: Awaited<typeof preflight> | undefined;
@@ -164,23 +168,25 @@ test("trust selector lists each root and pending session state; Escape cancels",
 	}
 });
 
-test("trust selector offers session-only choices only while no saved decision exists", async () => {
-	const decided = await renderTrustDialog();
+test("trust selector offers session-only choices only to the startup prompt", async () => {
+	const management = await renderTrustDialog(undecidedRequest);
 	try {
-		const frame = decided.setup.captureCharFrame();
+		const frame = management.setup.captureCharFrame();
 		expect(frame).not.toContain("Trust (this session only)");
 		expect(frame).not.toContain("Do not trust (this session only)");
+		expect(frame).toContain("Current session: Decision pending");
 	} finally {
-		await act(() => decided.setup.renderer.destroy());
+		await act(() => management.setup.renderer.destroy());
 	}
 
-	const undecided = await renderTrustDialog(undecidedRequest);
+	const startup = await renderTrustDialog(request, true);
 	try {
-		const frame = undecided.setup.captureCharFrame();
+		const frame = startup.setup.captureCharFrame();
 		expect(frame).toContain("Trust (this session only)");
 		expect(frame).toContain("Do not trust (this session only)");
+		expect(frame).toContain("Current session: Decision pending");
 	} finally {
-		await act(() => undecided.setup.renderer.destroy());
+		await act(() => startup.setup.renderer.destroy());
 	}
 });
 
@@ -296,7 +302,7 @@ test("trust selector returns the parent-trust choice selected with the keyboard"
 });
 
 test("trust selector returns the session-only choice selected with the keyboard", async () => {
-	const { selectionOutcome, setup } = await renderTrustDialog(undecidedRequest);
+	const { selectionOutcome, setup } = await renderTrustDialog(request, true);
 	try {
 		await act(() => setup.mockInput.pressArrow("down"));
 		await flushTestRenderer(setup, 2);
