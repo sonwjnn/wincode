@@ -537,9 +537,9 @@ export const resolveProjectTrust = async ({
 			continue;
 		}
 		untrustedProjectRoots.push(projectRoot);
-		// diagnostics.push(
-		// 	`Skipped protected project resources from untrusted directory ${projectRoot}; use --trust-project for this invocation to load them.`
-		// );
+		diagnostics.push(
+			`Skipped protected project resources from untrusted directory ${projectRoot}; use --trust-project for this invocation to load them.`
+		);
 	}
 	if (diagnostics.length > 0) {
 		await logger.warn(
