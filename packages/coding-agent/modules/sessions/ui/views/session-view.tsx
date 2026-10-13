@@ -20,6 +20,7 @@ import {
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
+import { ProjectTrustNotice } from "@/modules/project-trust/ui/project-trust-notice";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import {
@@ -816,6 +817,7 @@ export function SessionView({
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
 					sessionUsageEntries={sessionUsageEntries}
+					transcriptNotice={<ProjectTrustNotice />}
 					viewId={sessionId}
 				/>
 			</box>

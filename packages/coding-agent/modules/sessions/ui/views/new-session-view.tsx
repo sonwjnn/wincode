@@ -11,6 +11,7 @@ import {
 } from "@/modules/agents";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import { PluginStatusIndicator } from "@/modules/plugins/ui/plugin-status-indicator";
+import { ProjectTrustNotice } from "@/modules/project-trust/ui/project-trust-notice";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { createSessionUserMessage } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
@@ -269,6 +270,7 @@ export function NewSessionView() {
 							HOME_UNAVAILABLE_COMMAND_CAPABILITIES
 						}
 					/>
+					<ProjectTrustNotice />
 					<box
 						flexDirection="row"
 						flexShrink={0}

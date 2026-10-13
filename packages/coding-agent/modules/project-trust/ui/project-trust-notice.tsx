@@ -1,20 +1,18 @@
 import { useConfig } from "@/shared/config/config-provider";
-import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { InlineNotice } from "@/shared/ui/inline-notice";
 
-export const PROJECT_TRUST_WARNING =
+export const PROJECT_TRUST_NOTICE_MESSAGE =
 	"This project is not trusted. Project .wincode resources and packages are ignored. Use /trust to save a trust decision, then restart wincode.";
 
-export function ProjectTrustWarning() {
+/** Warns while protected project resources are skipped because the project is untrusted. */
+export function ProjectTrustNotice() {
 	const config = useConfig();
-	const { colors } = useTheme();
 	if ((config.untrustedProjectRoots ?? []).length === 0) {
 		return null;
 	}
 	return (
-		<box flexShrink={0} paddingX={2} width="100%">
-			<text fg={colors.warning} wrapMode="word">
-				{PROJECT_TRUST_WARNING}
-			</text>
-		</box>
+		<InlineNotice variant="warning">
+			{PROJECT_TRUST_NOTICE_MESSAGE}
+		</InlineNotice>
 	);
 }

@@ -41,6 +41,21 @@ const request: ProjectTrustPromptRequest = {
 	workspace: "/workspace/repo/nested",
 };
 
+const undecidedRequest: ProjectTrustPromptRequest = {
+	parentDirectory: "/workspace",
+	protectedRoots: [
+		{
+			currentSessionStatus: "pending",
+			projectRoot: "/workspace/repo",
+		},
+		{
+			currentSessionStatus: "pending",
+			projectRoot: "/workspace/repo/nested",
+		},
+	],
+	workspace: "/workspace/repo/nested",
+};
+
 const renderTrustDialog = async (
 	trustRequest: ProjectTrustPromptRequest = request
 ) => {
@@ -135,8 +150,7 @@ test("trust selector lists each root and pending session state; Escape cancels",
 		expect(frame).toContain("Saved decision: untrusted");
 		expect(frame).toContain("Current session: Decision pending");
 		expect(frame).toContain("Trust parent folder (/workspace)");
-		expect(frame).toContain("Trust (this session only)");
-		expect(frame).toContain("Do not trust (this session only)");
+		expect(frame).toContain("Do not trust");
 		expect(frame).toContain(
 			"Allow this project's protected resources to load."
 		);
@@ -147,6 +161,26 @@ test("trust selector lists each root and pending session state; Escape cancels",
 		expect(await selectionOutcome()).toEqual({ kind: "cancelled" });
 	} finally {
 		await act(() => setup.renderer.destroy());
+	}
+});
+
+test("trust selector offers session-only choices only while no saved decision exists", async () => {
+	const decided = await renderTrustDialog();
+	try {
+		const frame = decided.setup.captureCharFrame();
+		expect(frame).not.toContain("Trust (this session only)");
+		expect(frame).not.toContain("Do not trust (this session only)");
+	} finally {
+		await act(() => decided.setup.renderer.destroy());
+	}
+
+	const undecided = await renderTrustDialog(undecidedRequest);
+	try {
+		const frame = undecided.setup.captureCharFrame();
+		expect(frame).toContain("Trust (this session only)");
+		expect(frame).toContain("Do not trust (this session only)");
+	} finally {
+		await act(() => undecided.setup.renderer.destroy());
 	}
 });
 
@@ -262,7 +296,7 @@ test("trust selector returns the parent-trust choice selected with the keyboard"
 });
 
 test("trust selector returns the session-only choice selected with the keyboard", async () => {
-	const { selectionOutcome, setup } = await renderTrustDialog();
+	const { selectionOutcome, setup } = await renderTrustDialog(undecidedRequest);
 	try {
 		await act(() => setup.mockInput.pressArrow("down"));
 		await flushTestRenderer(setup, 2);

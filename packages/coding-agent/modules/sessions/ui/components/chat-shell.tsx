@@ -2,7 +2,7 @@ import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -69,6 +69,8 @@ type ChatShellProps = {
 	viewId: string;
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	cacheWarmingStatus?: CacheWarmingStatus;
+	/** Rendered at the bottom of the transcript; the shell never persists it. */
+	transcriptNotice?: ReactNode;
 };
 function ActivityFooter({
 	agent,
@@ -135,6 +137,7 @@ export function ChatShell({
 	viewId,
 	sessionUsageEntries = [],
 	cacheWarmingStatus = "idle",
+	transcriptNotice,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const focusScopeId = `chat-shell-${viewId}`;
@@ -280,6 +283,7 @@ export function ChatShell({
 					{liveCompaction ? <CompactionDivider entry={liveCompaction} /> : null}
 					{isCompacting ? <CompactionStatus agent={agent} /> : null}
 					{error ? <ErrorMessage error={error} /> : null}
+					{transcriptNotice}
 				</box>
 			</scrollbox>
 			<box

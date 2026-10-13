@@ -19,7 +19,6 @@ import {
 } from "@/shared/runtime-context";
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
 import { CommandControllerProvider } from "../commands/command-controller-provider";
-import { ProjectTrustWarning } from "../project-trust-warning";
 import { SettingsProviders } from "./settings-providers";
 
 const connections = createConnections();
@@ -79,12 +78,7 @@ export function RootLayout() {
 										<CopyOnSelectFromSettings />
 										<DialogProvider>
 											<CommandControllerProvider>
-												<box flexDirection="column" height="100%" width="100%">
-													<ProjectTrustWarning />
-													<box flexGrow={1} width="100%">
-														<Outlet key={currentPath} />
-													</box>
-												</box>
+												<Outlet key={currentPath} />
 											</CommandControllerProvider>
 										</DialogProvider>
 									</DialogProvider>

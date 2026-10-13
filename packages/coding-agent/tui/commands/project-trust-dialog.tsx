@@ -23,7 +23,8 @@ type ProjectTrustChoiceItem = Readonly<{
 }>;
 
 const getTrustChoices = (
-	parentDirectory?: string
+	parentDirectory: string | undefined,
+	includeSessionOnly: boolean
 ): readonly ProjectTrustChoiceItem[] => [
 	{
 		action: "trust",
@@ -39,23 +40,31 @@ const getTrustChoices = (
 					label: `Trust parent folder (${shortenHomePath(parentDirectory)})`,
 				},
 			]),
-	{
-		action: "trust-session",
-		description:
-			"Load protected resources until Wincode exits; save no decision.",
-		label: "Trust (this session only)",
-	},
+	...(includeSessionOnly
+		? [
+				{
+					action: "trust-session" as const,
+					description:
+						"Load protected resources until Wincode exits; save no decision.",
+					label: "Trust (this session only)",
+				},
+			]
+		: []),
 	{
 		action: "deny",
 		description: "Keep this project's protected resources disabled.",
 		label: "Do not trust",
 	},
-	{
-		action: "deny-session",
-		description:
-			"Disable protected resources until Wincode exits; save no decision.",
-		label: "Do not trust (this session only)",
-	},
+	...(includeSessionOnly
+		? [
+				{
+					action: "deny-session" as const,
+					description:
+						"Disable protected resources until Wincode exits; save no decision.",
+					label: "Do not trust (this session only)",
+				},
+			]
+		: []),
 ];
 
 type ProjectTrustDialogContentProps = ProjectTrustPromptRequest &
@@ -76,9 +85,12 @@ export function ProjectTrustDialogContent({
 	const selectedTextColor = getContrastingTextColor(colors.selection);
 	const { height } = useTerminalDimensions();
 	const rootStatusHeight = Math.min(6, Math.max(3, protectedRoots.length * 3));
+	const includeSessionOnly =
+		protectedRoots.length > 0 &&
+		protectedRoots.every(({ savedDecision }) => savedDecision === undefined);
 	const choices = useMemo(
-		() => getTrustChoices(parentDirectory),
-		[parentDirectory]
+		() => getTrustChoices(parentDirectory, includeSessionOnly),
+		[parentDirectory, includeSessionOnly]
 	);
 	const [highlightedChoice, setHighlightedChoice] = useState<
 		ProjectTrustChoiceItem | undefined
