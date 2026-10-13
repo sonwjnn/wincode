@@ -64,7 +64,9 @@ describe("Coding-Agent Application Project trust", () => {
 			userDataDir,
 		});
 		expect(untrusted.trustedProjectRoots).toEqual([]);
-		expect(untrusted.diagnostics.join("\n")).toContain("untrusted");
+		expect(untrusted.untrustedProjectRoots).toContain(
+			await fs.realpath(workspace)
+		);
 		expect(
 			untrustedAgents.agents.some(({ agent }) => agent.id === "project-only")
 		).toBe(false);
@@ -166,8 +168,9 @@ describe("Coding-Agent Application Project trust", () => {
 				runtime.pluginRuntime.getToolDescriptors("project-trust-test")
 			).toEqual([]);
 			expect(await Bun.file(marker).exists()).toBe(false);
-			expect(runtime.startupDiagnostics?.join("\n")).toContain(workspace);
-			expect(runtime.startupDiagnostics?.join("\n")).toContain("untrusted");
+			expect(runtime.configRuntime.untrustedProjectRoots).toContain(
+				await fs.realpath(workspace)
+			);
 		} finally {
 			await runtime.pluginRuntime?.shutdown();
 		}
@@ -564,7 +567,9 @@ describe("Coding-Agent Application Project trust", () => {
 		try {
 			const skills = await discoverSkills(runtime.configRuntime);
 			expect(skills.map(({ name }) => name)).toEqual(["personal-skill"]);
-			expect(runtime.startupDiagnostics).toHaveLength(1);
+			expect(runtime.configRuntime.untrustedProjectRoots).toContain(
+				await fs.realpath(workspace)
+			);
 		} finally {
 			await runtime.pluginRuntime.shutdown();
 		}
@@ -652,7 +657,9 @@ describe("Coding-Agent Application Project trust", () => {
 			}
 		);
 		await refused.pluginRuntime.shutdown();
-		expect(refused.startupDiagnostics).toHaveLength(1);
+		expect(refused.configRuntime.untrustedProjectRoots).toContain(
+			await fs.realpath(workspace)
+		);
 
 		const savedRefusal = await initializeApplicationRuntime(
 			{
@@ -676,7 +683,9 @@ describe("Coding-Agent Application Project trust", () => {
 			const snapshot =
 				await savedRefusal.configRuntime.configStore.getSnapshot(workspace);
 			expect(snapshot.document.settings).toBeUndefined();
-			expect(savedRefusal.startupDiagnostics.join("\n")).toContain("untrusted");
+			expect(savedRefusal.configRuntime.untrustedProjectRoots).toContain(
+				await fs.realpath(workspace)
+			);
 		} finally {
 			await savedRefusal.pluginRuntime.shutdown();
 		}
@@ -804,9 +813,9 @@ describe("Coding-Agent Application Project trust", () => {
 				await result.configRuntime.configStore.getSnapshot(workspace);
 
 			expect(result.configRuntime.trustedProjectRoots).toEqual([]);
-			expect(
-				result.diagnostics.map(({ message }) => message).join("\n")
-			).toContain("untrusted");
+			expect(result.configRuntime.untrustedProjectRoots).toContain(
+				await fs.realpath(workspace)
+			);
 			expect(snapshot.document.settings).toBeUndefined();
 			expect(
 				await Bun.file(
@@ -929,7 +938,9 @@ describe("Coding-Agent Application Project trust", () => {
 			const snapshot =
 				await ancestor.configRuntime.configStore.getSnapshot(projectRoot);
 			expect(snapshot.document.settings).toBeUndefined();
-			expect(ancestor.startupDiagnostics.join("\n")).toContain(projectRoot);
+			expect(ancestor.configRuntime.untrustedProjectRoots).toContain(
+				await fs.realpath(projectRoot)
+			);
 		} finally {
 			await ancestor.pluginRuntime.shutdown();
 		}
@@ -1051,7 +1062,9 @@ describe("Coding-Agent Application Project trust", () => {
 				await runtime.configRuntime.configStore.getSnapshot(workspace);
 			expect(snapshot.document.settings).toBeUndefined();
 			expect(runtime.configRuntime.trustedProjectRoots).toEqual([]);
-			expect(runtime.startupDiagnostics.join("\n")).toContain("untrusted");
+			expect(runtime.configRuntime.untrustedProjectRoots).toContain(
+				await fs.realpath(workspace)
+			);
 			expect(
 				await Bun.file(path.join(userDataDir, "project-trust.json")).exists()
 			).toBe(false);

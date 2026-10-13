@@ -161,8 +161,8 @@ const showReloadSummary = (
 	toast: ToastContextValue
 ): void => {
 	const summary = pluginRuntimeChanged
-		? "Reloaded Plugins, Skills, custom commands, and theme preference. Context files refresh on the next turn; built-in keybindings are unchanged."
-		: "Kept the active Plugin set; reloaded Skills, custom commands, and theme preference. Context files refresh on the next turn; built-in keybindings are unchanged.";
+		? "Reloaded keybindings, plugins, skills, commands, and context files."
+		: "Reloaded keybindings, skills, commands, and context files";
 	const details = diagnostics
 		.slice(0, 2)
 		.map(({ resource, message }) => `${resource}: ${message}`)

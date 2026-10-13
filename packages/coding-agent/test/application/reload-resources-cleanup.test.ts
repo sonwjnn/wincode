@@ -90,8 +90,10 @@ test("reload summary does not claim Plugins were reloaded when the active set wa
 			toast: { show: ({ message }) => (toastMessage = message) },
 			lifecycle,
 		});
-		expect(toastMessage).toContain("Kept the active Plugin set");
-		expect(toastMessage).not.toContain("Reloaded Plugins");
+		expect(toastMessage).toContain(
+			"Reloaded keybindings, skills, commands, and context files"
+		);
+		expect(toastMessage).not.toContain("plugins");
 	} finally {
 		await pluginRuntime.shutdown();
 	}
@@ -181,7 +183,9 @@ test("reload retains its Session Host manager when publishing a new Plugin runti
 			lifecycle,
 		});
 		await runtimeObserved.promise;
-		expect(toastMessage).toContain("Reloaded Plugins");
+		expect(toastMessage).toContain(
+			"Reloaded keybindings, plugins, skills, commands, and context files"
+		);
 		const manager = managerObservedDuringReplacement;
 		expect(manager).toBe(managerBeforeReload);
 		if (manager === undefined) {
