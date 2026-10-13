@@ -21,11 +21,6 @@ export type ThemeColors = {
 	error: string;
 	warning: string;
 	info: string;
-	/** InlineNotice foregrounds; each defaults to its semantic color. */
-	noticeSuccess: string;
-	noticeError: string;
-	noticeWarning: string;
-	noticeInfo: string;
 	text: string;
 	textMuted: string;
 	textDisabled: string;
@@ -1036,19 +1031,6 @@ const resolveDiffTokens = (
 	};
 };
 
-/** Notice foregrounds fall back to the theme's semantic colors. */
-const resolveNoticeTokens = (
-	colors: ThemeDefinition["colors"]
-): Pick<
-	ThemeColors,
-	"noticeError" | "noticeInfo" | "noticeSuccess" | "noticeWarning"
-> => ({
-	noticeError: colors.noticeError ?? colors.error,
-	noticeInfo: colors.noticeInfo ?? colors.info,
-	noticeSuccess: colors.noticeSuccess ?? colors.success,
-	noticeWarning: colors.noticeWarning ?? colors.warning,
-});
-
 export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => {
 	const backgroundElement = colors.backgroundElement ?? colors.backgroundPanel;
 	const textMuted =
@@ -1062,7 +1044,6 @@ export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => {
 			...colors,
 			...resolveDiffTokens(colors, name, backgroundElement, textMuted),
 			...resolveMarkdownAndSyntaxTokens(colors, name),
-			...resolveNoticeTokens(colors),
 			agent: { build: colors.primary },
 			backgroundElement,
 			borderActive: colors.borderActive ?? colors.primary,

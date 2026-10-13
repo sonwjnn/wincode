@@ -21,13 +21,6 @@ const renderNotice = async (variant: InlineNoticeVariant, text: string) => {
 	return setup;
 };
 
-const NOTICE_COLOR_KEYS = {
-	error: "noticeError",
-	info: "noticeInfo",
-	success: "noticeSuccess",
-	warning: "noticeWarning",
-} as const;
-
 test("inline notices color each variant from the theme", async () => {
 	for (const variant of ["warning", "error", "info", "success"] as const) {
 		const text = `${variant} notice`;
@@ -39,7 +32,7 @@ test("inline notices color each variant from the theme", async () => {
 				.find((candidate) => candidate.text.includes(text));
 			expect(span).toBeDefined();
 			expect(span?.fg.toInts()).toEqual(
-				RGBA.fromHex(DEFAULT_THEME.colors[NOTICE_COLOR_KEYS[variant]]).toInts()
+				RGBA.fromHex(DEFAULT_THEME.colors[variant]).toInts()
 			);
 		} finally {
 			await act(() => setup.renderer.destroy());
