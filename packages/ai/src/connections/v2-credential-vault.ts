@@ -11,6 +11,7 @@ const FILE_MODE = 0o600;
 const SERVICE_NAME = "wincode";
 
 type BunSecretStore = {
+	delete?: (input: { service: string; name: string }) => Promise<boolean>;
 	get?: (input: { service: string; name: string }) => Promise<string | null>;
 	set?: (input: {
 		service: string;
@@ -20,9 +21,22 @@ type BunSecretStore = {
 };
 
 export type SecretStore = {
+	delete?: (service: string, account: string) => Promise<boolean>;
 	get(service: string, account: string): Promise<string | null>;
 	set(service: string, account: string, secret: string): Promise<void>;
 };
+
+export type LegacyCredentialBackendStatus =
+	| "not-configured"
+	| "absent"
+	| "deleted"
+	| "unverified";
+
+export type LegacyCredentialCleanupEntry = Readonly<{
+	providerId: ConnectionProviderId;
+	platform: LegacyCredentialBackendStatus;
+	file: LegacyCredentialBackendStatus;
+}>;
 
 export type V2CredentialVaultOptions = {
 	bunSecrets?: BunSecretStore | null;
@@ -82,6 +96,18 @@ export class CredentialVaultV2 {
 		await this.writeFile(providerId, validated);
 	}
 
+	/** Removes and verifies both legacy backends without returning secret data. */
+	async removeAndVerify(
+		providerId: ConnectionProviderId
+	): Promise<LegacyCredentialCleanupEntry> {
+		const platform = await removeLegacyPlatformCredential(
+			this.secretStore,
+			providerId
+		);
+		const file = await removeLegacyFileCredential(providerId, this.fileRoot);
+		return Object.freeze({ providerId, platform, file });
+	}
+
 	/**
 	 * Reads the raw stored credential. An OS secret backend that is present but
 	 * unusable — a headless Linux host without libsecret, for instance — is
@@ -111,7 +137,6 @@ export class CredentialVaultV2 {
 	): Promise<string | null> {
 		const credentialPath = connectionFilePath(providerId, this.fileRoot);
 		try {
-			await assertSecureVaultDirectories(credentialPath);
 			await assertSecurePath(credentialPath);
 			return await readUtf8File(credentialPath);
 		} catch (error) {
@@ -169,6 +194,7 @@ const getBunSecretStore = (
 		return null;
 	}
 
+	const deleteSecret = secrets.delete;
 	return {
 		get(service: string, account: string): Promise<string | null> {
 			return Promise.resolve(secrets.get?.({ service, name: account }) ?? null);
@@ -176,7 +202,70 @@ const getBunSecretStore = (
 		async set(service: string, account: string, secret: string): Promise<void> {
 			await secrets.set?.({ service, name: account, value: secret });
 		},
+		...(deleteSecret === undefined
+			? {}
+			: {
+					delete: (service: string, account: string): Promise<boolean> =>
+						deleteSecret({ service, name: account }),
+				}),
 	};
+};
+
+const removeLegacyPlatformCredential = async (
+	secretStore: SecretStore | null,
+	providerId: ConnectionProviderId
+): Promise<LegacyCredentialBackendStatus> => {
+	if (isNull(secretStore)) {
+		return "not-configured";
+	}
+	const account = `connections-v2:${providerId}`;
+	try {
+		if (isNull(await secretStore.get(SERVICE_NAME, account))) {
+			return "absent";
+		}
+		if (isUndefined(secretStore.delete)) {
+			return "unverified";
+		}
+		const deleted = await secretStore.delete(SERVICE_NAME, account);
+		if (isNull(await secretStore.get(SERVICE_NAME, account))) {
+			return deleted ? "deleted" : "absent";
+		}
+	} catch {
+		return "unverified";
+	}
+	return "unverified";
+};
+
+const removeLegacyFileCredential = async (
+	providerId: ConnectionProviderId,
+	fileRoot: string
+): Promise<LegacyCredentialBackendStatus> => {
+	const filePath = connectionFilePath(providerId, fileRoot);
+	try {
+		await assertSecurePath(filePath);
+		const existed = !(await isMissingPath(filePath));
+		if (existed) {
+			await fs.rm(filePath);
+		}
+		if (!(await isMissingPath(filePath))) {
+			return "unverified";
+		}
+		return existed ? "deleted" : "absent";
+	} catch {
+		return "unverified";
+	}
+};
+
+const isMissingPath = async (filePath: string): Promise<boolean> => {
+	try {
+		await fs.lstat(filePath);
+		return false;
+	} catch (error) {
+		if (isMissingFileError(error)) {
+			return true;
+		}
+		throw error;
+	}
 };
 
 const rejectNonRegularFile = async (path: string): Promise<void> => {
@@ -200,7 +289,7 @@ const rejectNonRegularFile = async (path: string): Promise<void> => {
 };
 
 const assertSecurePath = async (targetPath: string): Promise<void> => {
-	await assertSecureDirectoryChain(path.dirname(targetPath));
+	await assertSecureVaultDirectories(targetPath);
 	await rejectNonRegularFile(targetPath);
 };
 

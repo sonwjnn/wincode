@@ -33,6 +33,9 @@
     "./connections": {
       "default": "./src/connections/index.ts"
     },
+    "./connections/legacy-cleanup": {
+      "default": "./src/connections/legacy-credential-cleanup.ts"
+    },
     "./models-dev": {
       "default": "./src/models-dev.ts"
     },
