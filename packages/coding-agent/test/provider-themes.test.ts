@@ -63,6 +63,20 @@ const COLOR_RE = /^(?:transparent|#[\da-f]{3,4}|#[\da-f]{6}(?:[\da-f]{2})?)$/iu;
 const HEX_COLOR_RE = /^#([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/i;
 
 describe("theme token resolution", () => {
+	test("notice colors default to their semantic colors and honor overrides", () => {
+		const theme = resolveTheme({ colors: MINIMAL_COLORS, name: "test" });
+		expect(theme.colors.noticeSuccess).toBe(MINIMAL_COLORS.success);
+		expect(theme.colors.noticeError).toBe(MINIMAL_COLORS.error);
+		expect(theme.colors.noticeWarning).toBe(MINIMAL_COLORS.warning);
+		expect(theme.colors.noticeInfo).toBe(MINIMAL_COLORS.info);
+
+		const overridden = resolveTheme({
+			colors: { ...MINIMAL_COLORS, noticeWarning: "#123456" },
+			name: "test",
+		});
+		expect(overridden.colors.noticeWarning).toBe("#123456");
+	});
+
 	test("fills canonical markdown tokens for themes that do not define them", () => {
 		const theme = resolveTheme({
 			name: "test",

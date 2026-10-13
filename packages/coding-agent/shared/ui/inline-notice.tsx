@@ -3,6 +3,19 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 export type InlineNoticeVariant = "warning" | "error" | "info" | "success";
 
+type InlineNoticeColorKey =
+	| "noticeError"
+	| "noticeInfo"
+	| "noticeSuccess"
+	| "noticeWarning";
+
+const NOTICE_COLOR_KEYS: Record<InlineNoticeVariant, InlineNoticeColorKey> = {
+	error: "noticeError",
+	info: "noticeInfo",
+	success: "noticeSuccess",
+	warning: "noticeWarning",
+};
+
 export type InlineNoticeProps = Readonly<{
 	children: ReactNode;
 	variant?: InlineNoticeVariant;
@@ -19,7 +32,7 @@ export function InlineNotice({
 	const { colors } = useTheme();
 	return (
 		<box flexShrink={0} width="100%">
-			<text fg={colors[variant]} wrapMode="word">
+			<text fg={colors[NOTICE_COLOR_KEYS[variant]]} wrapMode="word">
 				{children}
 			</text>
 		</box>
