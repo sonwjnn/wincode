@@ -23,7 +23,7 @@ type Row =
 	| Readonly<{ kind: "refresh" }>
 	| Readonly<{ kind: "model"; model: ProviderModel }>;
 
-/** Selects authenticated OpenRouter models from the current Host's SDK collection. */
+/** Selects authenticated Provider Models from the current Host's SDK collection. */
 export const ProviderModelsDialogContent = ({
 	controller,
 	currentModel,
@@ -89,21 +89,23 @@ export const ProviderModelsDialogContent = ({
 		<box flexDirection="column" gap={1}>
 			<text fg={colors.textMuted}>
 				Available models are filtered by the current user's credentials.
-				OpenRouter is contacted only when you refresh.
+				Providers are contacted only when you refresh.
 			</text>
 			{error ? <text fg={colors.error}>{error}</text> : null}
 			{isLoading ? (
 				<text fg={colors.textMuted}>Restoring Known Models…</text>
 			) : null}
 			<SearchListDialogWrapper
-				emptyText="No authenticated OpenRouter models. Connect OpenRouter or refresh Known Models."
+				emptyText="No authenticated Provider Models. Connect a Provider or refresh Known Models."
 				getKey={(row) =>
 					row.kind === "refresh"
 						? "refresh"
 						: `model:${row.model.providerId}:${row.model.modelId}`
 				}
 				getSearchText={(row) =>
-					row.kind === "model" ? `${row.model.modelId} OpenRouter` : "refresh"
+					row.kind === "model"
+						? `${row.model.modelId} ${row.model.providerId}`
+						: "refresh"
 				}
 				isItemActive={(row) =>
 					row.kind === "model" &&
@@ -123,7 +125,7 @@ export const ProviderModelsDialogContent = ({
 					});
 					dialog.close();
 				}}
-				placeholder="Search OpenRouter models"
+				placeholder="Search Provider Models"
 				renderItem={(row, isSelected, isActive) => {
 					let foreground = colors.text;
 					let label: string;

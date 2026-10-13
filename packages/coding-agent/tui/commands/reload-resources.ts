@@ -145,6 +145,33 @@ const replacePluginRuntime = async (
 	return startReplacementPluginRuntime(previous, result, diagnostics);
 };
 
+const retainPreviousRuntimeAfterCompositionFailure = async (
+	previous: PluginRuntime,
+	replacement: PluginRuntime,
+	diagnostics: ApplicationResourceDiagnostic[]
+): Promise<PluginRuntime> => {
+	await shutdownPluginRuntime(replacement, diagnostics);
+	try {
+		diagnostics.push(
+			...(await startDiagnosticsFor(
+				previous,
+				"Previous Plugin runtime recovery failed: "
+			))
+		);
+	} catch {
+		diagnostics.push({
+			message: "Previous Plugin runtime recovery failed.",
+			resource: "Plugin",
+		});
+	}
+	diagnostics.push({
+		message:
+			"The previous trusted Plugin set and Provider composition were retained because the replacement Provider composition could not be prepared.",
+		resource: "Plugin",
+	});
+	return previous;
+};
+
 const discardUnstartedPluginRuntime = async (
 	current: PluginRuntime,
 	result: ApplicationResourceReloadResult
@@ -213,13 +240,38 @@ export const reloadInteractiveResources = async ({
 			await lifecycle.withRuntimeReplacement(async () => {
 				replacementStarted = true;
 				const diagnostics = [...result.diagnostics];
-				const pluginRuntime = await replacePluginRuntime(
+				let pluginRuntime = await replacePluginRuntime(
 					active.pluginRuntime,
 					result,
 					diagnostics
 				);
 				if (result.pluginRuntimeChanged) {
-					await hostManager.replacePluginRuntime(pluginRuntime);
+					try {
+						await hostManager.replacePluginRuntime(pluginRuntime, {
+							trustChanged: result.trustChanged,
+						});
+					} catch {
+						if (result.trustChanged) {
+							throw new Error(
+								"Could not establish a safe Provider composition after Project trust changed."
+							);
+						}
+						if (pluginRuntime === active.pluginRuntime) {
+							diagnostics.push({
+								message:
+									"The previous trusted Plugin set and Provider composition were retained because the replacement could not be prepared.",
+								resource: "Plugin",
+							});
+						} else {
+							pluginRuntime =
+								await retainPreviousRuntimeAfterCompositionFailure(
+									active.pluginRuntime,
+									pluginRuntime,
+									diagnostics
+								);
+							await hostManager.replacePluginRuntime(pluginRuntime);
+						}
+					}
 				}
 				setInteractiveRuntimeContext({
 					...current,

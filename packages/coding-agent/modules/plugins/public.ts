@@ -7,6 +7,7 @@ import type {
 	ToolJsonSchema,
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { Provider } from "@wincode/ai/sdk";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type {
@@ -77,6 +78,24 @@ export type PluginConfigFileStore = Readonly<{
 		value: PluginJsonValue | undefined,
 		targetPath?: string
 	) => Promise<PluginConfigSnapshot>;
+}>;
+
+export type PluginProviderConnectContext = Readonly<{
+	requestTextInput: (
+		prompt: string,
+		signal: AbortSignal
+	) => Promise<string | undefined>;
+	signal: AbortSignal;
+}>;
+
+/** A trusted Plugin's factory and host-mediated connection interaction. */
+export type PluginProviderRegistration = Readonly<{
+	connect: (
+		context: PluginProviderConnectContext
+	) => Promise<PluginJsonValue | undefined>;
+	createProvider: () => Provider;
+	displayName: string;
+	providerId: string;
 }>;
 
 export type PluginStatus = "idle" | "pending" | "success" | "warning" | "error";
@@ -248,6 +267,7 @@ export type PluginProcessStartHook = (
 export type PluginDefinitionAPI = PluginRegistrationAPI &
 	Readonly<{
 		secrets: PluginSecretStore;
+		registerProvider: (provider: PluginProviderRegistration) => void;
 		registerMcpServer: (name: string, config: PluginJsonValue) => void;
 		registerAgent: (agent: PluginAgentRegistration) => void;
 		registerResource: (name: string, resource: unknown) => void;

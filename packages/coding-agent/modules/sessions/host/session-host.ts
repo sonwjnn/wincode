@@ -39,6 +39,10 @@ import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
 } from "../message";
+import {
+	type InteractiveSessionProviderCollection,
+	pluginProvidersFromRuntime,
+} from "../provider-collection";
 import { resolveSessionSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionUsageEntry } from "../storage/session-store";
@@ -64,6 +68,12 @@ type OpenedSession = Readonly<{
 	usageEntries: SessionUsageEntry[];
 }>;
 const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
+
+const isInteractiveSessionProviderCollection = (
+	providers: ProviderCollection
+): providers is InteractiveSessionProviderCollection =>
+	"preparePluginProviderRegistrations" in providers &&
+	typeof providers.preparePluginProviderRegistrations === "function";
 
 const createHostAgentRuntime = (
 	providerCollection: ProviderCollection
@@ -415,14 +425,48 @@ export const createSessionHost = async ({
 			sessionId,
 			store: capabilities.getStore(),
 		});
+		const sessionWorkManager = capabilities.getSessionHostManager();
+		const withAsyncSessionWork = async <Result>(
+			action: () => Promise<Result>,
+			onRejected: (reason: string) => Result
+		): Promise<Result> => {
+			const admission = sessionWorkManager.tryAcquireSessionWork();
+			if (admission.kind === "rejected") {
+				return onRejected(admission.reason);
+			}
+			try {
+				return await action();
+			} finally {
+				admission.release();
+			}
+		};
 		const runtime = capabilities.getRuntime?.();
 		providerCollection =
 			runtime === undefined
-				? capabilities.createProviderCollection?.()
+				? await capabilities.createProviderCollection?.(
+						capabilities.getPluginRuntime?.(),
+						sessionId
+					)
 				: undefined;
 		if (providerCollection !== undefined) {
-			providerController =
-				createInteractiveProviderController(providerCollection);
+			providerController = createInteractiveProviderController(
+				providerCollection,
+				isInteractiveSessionProviderCollection(providerCollection)
+					? {
+							getPluginProviderComposition:
+								providerCollection.getPluginProviderComposition,
+							getPluginProviderRegistrations:
+								providerCollection.getPluginProviderRegistrations,
+							getDiscoverableProviderIds:
+								providerCollection.getDiscoverableProviderIds,
+							supportsModelDiscovery: providerCollection.supportsModelDiscovery,
+							withSessionWork: (action) =>
+								withAsyncSessionWork(action, (reason) => {
+									throw new Error(reason);
+								}),
+						}
+					: undefined
+			);
 			await providerController.restoreModels();
 		}
 		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
@@ -493,21 +537,6 @@ export const createSessionHost = async ({
 		) {
 			openedAgentSession.continue();
 		}
-		const sessionWorkManager = capabilities.getSessionHostManager();
-		const withAsyncSessionWork = async <Result>(
-			action: () => Promise<Result>,
-			onRejected: (reason: string) => Result
-		): Promise<Result> => {
-			const admission = sessionWorkManager.tryAcquireSessionWork();
-			if (admission.kind === "rejected") {
-				return onRejected(admission.reason);
-			}
-			try {
-				return await action();
-			} finally {
-				admission.release();
-			}
-		};
 		const withSyncSessionWork = <Result>(
 			action: () => Result,
 			onRejected: (reason: string) => Result
@@ -563,10 +592,30 @@ export const createSessionHost = async ({
 			operation: "session-host",
 			phase: "opened",
 		});
+		const interactiveProviderCollection =
+			providerCollection !== undefined &&
+			isInteractiveSessionProviderCollection(providerCollection)
+				? providerCollection
+				: undefined;
 
 		return {
 			agentSession: guardedAgentSession,
 			...(providerController === undefined ? {} : { providerController }),
+			...(interactiveProviderCollection === undefined
+				? {}
+				: {
+						prepareProviderComposition: async (
+							nextPluginRuntime,
+							{ includePluginProviders = true } = {}
+						) =>
+							interactiveProviderCollection.preparePluginProviderRegistrations(
+								includePluginProviders
+									? pluginProvidersFromRuntime(nextPluginRuntime, sessionId)
+									: []
+							),
+						failProviderCompositionClosed: () =>
+							interactiveProviderCollection.failClosed(),
+					}),
 			getSelection: () => resolveOpenedSelection(capabilities.getRegistry()),
 			getSnapshot: openedAgentSession.getSnapshot,
 			getCacheWarmingStatus: () => cacheWarming?.getStatus() ?? "idle",

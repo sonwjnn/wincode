@@ -63,6 +63,24 @@ export default jiraPlugin;
 
 Plugin Identifiers use lowercase ASCII letters, digits, and underscores; local Tool names also allow hyphens. Wincode exposes `plugin_jira_search_issues` to the Agent. The owner-qualified Plugin name prevents collisions but has no authorization meaning. Registered Plugin Tools execute without a Wincode per-call allow/deny decision; explicitly enabling Plugin code is the trust boundary. Project-selected Plugins are considered only after Project trust has been granted.
 
+### Provider SDK Providers
+
+A trusted Plugin may register a custom SDK Provider with `registerProvider`. The host calls `createProvider()` for each Session Host, so return a fresh Provider instance. The `connect` interaction receives only the host's `requestTextInput` operation and an abort signal, then returns a JSON credential value or `undefined` to cancel:
+
+```ts
+plugin.registerProvider({
+  providerId: "acme",
+  displayName: "Acme Model Service",
+  createProvider: () => createAcmeProvider(),
+  connect: async ({ requestTextInput, signal }) => {
+    const apiKey = await requestTextInput("Acme API key", signal);
+    return apiKey === undefined ? undefined : { apiKey };
+  },
+});
+```
+
+The Plugin supplies Provider behavior and its connect interaction; Wincode owns persistence. Plugin code receives no CredentialStore API and cannot look up stored credentials by Provider ID. At invocation, the SDK supplies only the credential stored for that registration's Plugin ID and canonical trusted source identity. The same owner identity scopes Known Model snapshots; a different source must connect again, and records for an absent Plugin remain quarantined. Provider IDs colliding with built-ins or another Plugin are rejected.
+
 Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas may be Zod or JSON Schema. Handlers return the common Tool outcome shape: `{ type: "success", output }` or `{ type: "failure", errorText }`. Successful output is bounded to 64 KiB of UTF-8 text or JSON; failures become safe failed Tool Calls.
 
 Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeAgentTurn(context, scope)`. The pre-Turn context contains the Session ID, Agent ID, workspace, and abort signal. Within one Plugin, Turn registrations override Session registrations, which override factory registrations. A same-scope registration replaces that Plugin's previous definition; `unregisterTool(name)` masks an outer definition only in that scope. Other Plugins cannot replace its tools. A failed pre-Turn hook contributes no tools for that Plugin on the affected Turn.

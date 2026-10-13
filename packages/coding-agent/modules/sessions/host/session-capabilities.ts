@@ -74,7 +74,10 @@ export type SessionPluginRuntime = Readonly<{
 
 export type SessionCapabilitiesOptions = Readonly<{
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
-	createProviderCollection?: () => ProviderCollection | undefined;
+	createProviderCollection?: (
+		pluginRuntime?: PluginRuntime,
+		sessionId?: string
+	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	database?: SessionDatabase;
 	databasePath?: string;
 	/** Reads the current configuration, resolved per read so a reload lands. */

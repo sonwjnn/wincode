@@ -165,7 +165,7 @@ const STRATEGIES = {
 	},
 	"provider.model.select": {
 		kind: "dialog",
-		title: "OpenRouter Provider Models",
+		title: "Provider SDK Models",
 		content: ({ config, onSelectProviderModel, providerController }) => {
 			if (!(providerController && onSelectProviderModel)) {
 				throw new Error(
@@ -181,7 +181,7 @@ const STRATEGIES = {
 	},
 	"provider.connect": {
 		kind: "dialog",
-		title: "Connect OpenRouter Provider SDK",
+		title: "Connect Provider SDK",
 		content: ({ providerController }) => {
 			if (!providerController) {
 				throw new Error("Provider SDK connection is unavailable in this view.");

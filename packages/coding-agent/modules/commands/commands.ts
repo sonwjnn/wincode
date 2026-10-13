@@ -69,7 +69,7 @@ export const COMMANDS = [
 		input: NO_INPUT,
 	},
 	{
-		description: "Select an authenticated OpenRouter Provider SDK model",
+		description: "Select an authenticated Provider SDK model",
 		name: "provider-models",
 		value: "/provider-models",
 		kind: "builtin",
@@ -78,7 +78,7 @@ export const COMMANDS = [
 		requires: ["provider-sdk"],
 	},
 	{
-		description: "Connect OpenRouter to the Provider SDK",
+		description: "Connect a Provider to the Provider SDK",
 		name: "provider-connect",
 		value: "/provider-connect",
 		kind: "builtin",

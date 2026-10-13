@@ -16,6 +16,7 @@ import type {
 	PluginMcpServerRegistration,
 	PluginProcessContext,
 	PluginProcessStartHook,
+	PluginProviderRegistration,
 	PluginRegistrationAPI,
 	PluginSessionContext,
 	PluginSessionShutdownHook,
@@ -64,6 +65,13 @@ export type PluginCommandDescriptor = Readonly<{
 export type PluginStatusPanelDescriptor = PluginStatusPanelRegistration &
 	Readonly<{ pluginId: string; sourcePath: string }>;
 
+export type PluginProviderDescriptor = PluginProviderRegistration &
+	Readonly<{
+		pluginId: string;
+		sourceIdentity: string;
+		sourcePath: string;
+	}>;
+
 export type LoadedPlugin = Readonly<{
 	agents?: readonly PluginAgentRegistration[];
 	commands: readonly PluginCommandDescriptor[];
@@ -71,6 +79,8 @@ export type LoadedPlugin = Readonly<{
 	resources?: readonly PluginResourceDescriptor[];
 	mcpServers?: readonly PluginMcpServerRegistration[];
 	statusPanels?: readonly PluginStatusPanelRegistration[];
+	providers?: readonly PluginProviderDescriptor[];
+	sourceIdentity?: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
@@ -90,6 +100,9 @@ export type PluginRuntime = Readonly<{
 		context: PluginCommandContext
 	) => Promise<string>;
 	getAgentRegistrations: () => readonly PluginAgentRegistration[];
+	getProviderRegistrations: (
+		sessionId?: string
+	) => readonly PluginProviderDescriptor[];
 	getCommands: (sessionId?: string) => readonly PluginCommandDescriptor[];
 	getToolDescriptors: (sessionId: string) => readonly PluginToolDescriptor[];
 	bindPromptSelectionTarget: (
@@ -702,6 +715,13 @@ export const createPluginRuntime = (
 				plugins
 					.filter((plugin) => isEnabledForSession(plugin))
 					.flatMap((plugin) => plugin.agents ?? [])
+			);
+		},
+		getProviderRegistrations(sessionId) {
+			return Object.freeze(
+				plugins
+					.filter((plugin) => isEnabledForSession(plugin, sessionId))
+					.flatMap((plugin) => plugin.providers ?? [])
 			);
 		},
 		getCommands(sessionId) {

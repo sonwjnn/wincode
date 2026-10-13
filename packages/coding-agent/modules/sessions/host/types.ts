@@ -37,7 +37,10 @@ export type SessionCapabilities = Readonly<{
 	getConfig: () => ConfigRuntime;
 	getConnections: () => Connections;
 	/** Creates a Host-owned ProviderCollection when this Host uses the SDK path. */
-	createProviderCollection?: () => ProviderCollection | undefined;
+	createProviderCollection?: (
+		pluginRuntime?: PluginRuntime,
+		sessionId?: string
+	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	/** Current pricing snapshot used only for best-effort cache-warming economics. */
 	getModelPricingTable?: () => ModelPricingTable;
 	/** The Agent registry, which resolves only after the session opened. */
@@ -61,6 +64,12 @@ export type SessionCapabilities = Readonly<{
 export type SessionHost = Readonly<{
 	agentSession: AgentSession;
 	providerController?: InteractiveProviderController;
+	/** Prepares a fresh Plugin Provider composition while the Host is idle. */
+	prepareProviderComposition?: (
+		pluginRuntime: PluginRuntime,
+		options?: Readonly<{ includePluginProviders?: boolean }>
+	) => Promise<PreparedSessionProviderComposition>;
+	failProviderCompositionClosed?: () => Promise<void>;
 	/**
 	 * The Session Selection the session opened with — the last-used Agent,
 	 * model, and reasoning choice, resolved against the live Agent registry — so a
@@ -84,6 +93,11 @@ export type SessionHost = Readonly<{
 	subscribe: (listener: () => void) => () => void;
 }>;
 
+export type PreparedSessionProviderComposition = Readonly<{
+	commit: () => Promise<void>;
+	discard: () => Promise<void>;
+}>;
+
 export type SessionHostManagerEvent = Readonly<{
 	event: AgentTurnEvent;
 	sessionId: SessionId;
@@ -98,8 +112,11 @@ export type SessionHostManager = Readonly<{
 	assertIdleForReload: () => Promise<void>;
 	tryAcquireSessionWork: () => SessionWorkAdmission;
 	withIdleForReload: <Result>(action: () => Promise<Result>) => Promise<Result>;
-	/** Rebind open Plugin Session scopes without closing their Session Hosts. */
-	replacePluginRuntime: (runtime: PluginRuntime) => Promise<void>;
+	/** Rebind open Plugin Session scopes and idle Provider compositions. */
+	replacePluginRuntime: (
+		runtime: PluginRuntime,
+		options?: Readonly<{ trustChanged?: boolean }>
+	) => Promise<void>;
 	onEvent: (listener: (event: SessionHostManagerEvent) => void) => () => void;
 	openHost: (input: {
 		autoContinue?: boolean;

@@ -73,7 +73,10 @@ export type SessionServicesSources = Readonly<{
 	/** Reads the current Plugin runtime; undefined while the caller has none yet. */
 	pluginRuntime?: () => PluginRuntime | undefined;
 	/** Creates a fresh per-Host ProviderCollection in the owning execution mode. */
-	createProviderCollection?: () => ProviderCollection | undefined;
+	createProviderCollection?: (
+		pluginRuntime?: PluginRuntime,
+		sessionId?: string
+	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	/** Reads the current Model Catalog pricing; the compaction settings read it. */
 	pricing?: () => ModelPricingTable;
 	runtimeFactory?: () => AgentRuntime;

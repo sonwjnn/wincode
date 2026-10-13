@@ -28,6 +28,25 @@ const providerIdForStorage = (providerId: string): string => {
 	return providerId;
 };
 
+/** Stable storage identity for one Plugin Provider registration owner. */
+export const pluginProviderStorageId = (input: {
+	pluginId: string;
+	providerId: string;
+	sourceIdentity: string;
+}): string => {
+	providerIdForStorage(input.providerId);
+	if (input.pluginId.trim().length === 0 || input.sourceIdentity.length === 0) {
+		throw new Error("Invalid Plugin Provider registration owner.");
+	}
+	const identity = JSON.stringify([
+		input.pluginId,
+		input.sourceIdentity,
+		input.providerId,
+	]);
+	const digest = new Bun.CryptoHasher("sha256").update(identity).digest("hex");
+	return `plugin-${digest}`;
+};
+
 const queueModelWrite = async (
 	filePath: string,
 	write: () => Promise<void>
