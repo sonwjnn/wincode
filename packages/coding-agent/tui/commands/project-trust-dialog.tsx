@@ -129,23 +129,18 @@ export function ProjectTrustDialogContent({
 							height={Math.min(rootStatusHeight, Math.max(3, height - 18))}
 							verticalScrollbarOptions={{ visible: false }}
 						>
-							{protectedRoots.map(
-								({ currentSessionStatus, projectRoot, savedDecision }) => (
-									<box flexDirection="column" key={projectRoot}>
-										{projectRoot === workspace ? null : (
-											<text fg={colors.textMuted} wrapMode="word">
-												{`Protected root: ${shortenHomePath(projectRoot)}`}
-											</text>
-										)}
+							{protectedRoots.map(({ projectRoot, savedDecision }) => (
+								<box flexDirection="column" key={projectRoot}>
+									{projectRoot === workspace ? null : (
 										<text fg={colors.textMuted} wrapMode="word">
-											{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${shortenHomePath(savedDecision.directory)})` : ""}`}`}
+											{`Protected root: ${shortenHomePath(projectRoot)}`}
 										</text>
-										<text fg={colors.textMuted} wrapMode="word">
-											{`Current session: ${currentSessionStatus === "pending" ? "Decision pending" : currentSessionStatus}`}
-										</text>
-									</box>
-								)
-							)}
+									)}
+									<text fg={colors.textMuted} wrapMode="word">
+										{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${shortenHomePath(savedDecision.directory)})` : ""}`}`}
+									</text>
+								</box>
+							))}
 						</scrollbox>
 					)}
 				</box>

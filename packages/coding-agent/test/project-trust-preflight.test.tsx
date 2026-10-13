@@ -118,7 +118,9 @@ test("startup preflight returns cancellation and tears down its renderer", async
 		);
 		await flushTestRenderer(testSetup, 3);
 		const startupFrame = testSetup.captureCharFrame();
-		expect(startupFrame).toContain("Current session: Decision pending");
+		expect(startupFrame).toContain(
+			"Saved decision: trusted (inherited from /workspace)"
+		);
 		expect(startupFrame).toContain("Trust (this session only)");
 		await act(() => testSetup.mockInput.pressEscape());
 		await flushTestRenderer(testSetup, 2);
@@ -141,7 +143,7 @@ test("startup preflight returns cancellation and tears down its renderer", async
 	}
 });
 
-test("trust selector lists each root and pending session state; Escape cancels", async () => {
+test("trust selector lists each root and its saved decision; Escape cancels", async () => {
 	const { selectionOutcome, setup } = await renderTrustDialog();
 	try {
 		const frame = setup.captureCharFrame();
@@ -152,7 +154,6 @@ test("trust selector lists each root and pending session state; Escape cancels",
 			"Saved decision: trusted (inherited from /workspace)"
 		);
 		expect(frame).toContain("Saved decision: untrusted");
-		expect(frame).toContain("Current session: Decision pending");
 		expect(frame).toContain("Trust parent folder (/workspace)");
 		expect(frame).toContain("Do not trust");
 		expect(frame).toContain(
@@ -174,7 +175,7 @@ test("trust selector offers session-only choices only to the startup prompt", as
 		const frame = management.setup.captureCharFrame();
 		expect(frame).not.toContain("Trust (this session only)");
 		expect(frame).not.toContain("Do not trust (this session only)");
-		expect(frame).toContain("Current session: Decision pending");
+		expect(frame).toContain("Saved decision: none");
 	} finally {
 		await act(() => management.setup.renderer.destroy());
 	}
@@ -184,7 +185,9 @@ test("trust selector offers session-only choices only to the startup prompt", as
 		const frame = startup.setup.captureCharFrame();
 		expect(frame).toContain("Trust (this session only)");
 		expect(frame).toContain("Do not trust (this session only)");
-		expect(frame).toContain("Current session: Decision pending");
+		expect(frame).toContain(
+			"Saved decision: trusted (inherited from /workspace)"
+		);
 	} finally {
 		await act(() => startup.setup.renderer.destroy());
 	}
@@ -257,29 +260,6 @@ test("trust selector treats Ctrl+C as cancellation", async () => {
 		await act(() => setup.mockInput.pressCtrlC());
 		await flushTestRenderer(setup, 2);
 		expect(await selectionOutcome()).toEqual({ kind: "cancelled" });
-	} finally {
-		await act(() => setup.renderer.destroy());
-	}
-});
-
-test("trust selector reports loaded status separately for each protected root", async () => {
-	const { setup } = await renderTrustDialog({
-		...request,
-		protectedRoots: [
-			{
-				currentSessionStatus: "trusted",
-				projectRoot: "/workspace/repo",
-			},
-			{
-				currentSessionStatus: "untrusted",
-				projectRoot: "/workspace/repo/nested",
-			},
-		],
-	});
-	try {
-		const frame = setup.captureCharFrame();
-		expect(frame).toContain("Current session: trusted");
-		expect(frame).toContain("Current session: untrusted");
 	} finally {
 		await act(() => setup.renderer.destroy());
 	}
