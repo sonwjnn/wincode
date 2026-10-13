@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
@@ -54,6 +55,7 @@ type ChatShellProps = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onModelTargetChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	providerController?: InteractiveProviderController;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 	promptHistory: PromptHistoryEntry[];
 	onSubmit: (
@@ -125,6 +127,7 @@ export function ChatShell({
 	onCompact,
 	onModelTargetChanged,
 	onOpenSettings,
+	providerController,
 	onRetry,
 	promptHistory,
 	onSubmit,
@@ -301,6 +304,7 @@ export function ChatShell({
 						onModelTargetChanged={onModelTargetChanged}
 						onOpenSettings={onOpenSettings}
 						onSubmit={handleSubmit}
+						providerController={providerController}
 						recalledSubmissions={recalledSubmissions}
 						recallRevision={recallRevision}
 						sessionId={viewId}

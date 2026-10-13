@@ -1,12 +1,7 @@
 import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
-import {
-	type ChatModelSelection,
-	normalizeChatModelSelection,
-	normalizeThinkingSelection,
-	type ThinkingSelection,
-} from "@wincode/ai/models";
+import type { ThinkingSelection } from "@wincode/ai/models";
 import {
 	getErrorMessage,
 	isNull,
@@ -21,6 +16,12 @@ import {
 	useAgentRegistry,
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import {
+	catalogSelectionForProviderModel,
+	normalizeProviderModelSelection,
+	normalizeProviderThinkingSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import {
 	createSessionUserMessage,
@@ -81,7 +82,7 @@ type SessionSendInput = Pick<
 type SessionSelectionInput = {
 	agent: AgentId;
 	initialMessage: SessionMessage;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	registry: AgentRegistry;
 	restoredConfig: ResolvedSessionSelection | null;
 	selectionOverride: AgentSelectionOverride;
@@ -106,12 +107,12 @@ const resolveInitialSessionSelection = ({
 	thinkingSelection,
 }: SessionSelectionInput): SessionSendInput => {
 	const resolvedModel =
-		normalizeChatModelSelection(initialMessage.metadata?.model ?? model) ??
+		normalizeProviderModelSelection(initialMessage.metadata?.model ?? model) ??
 		model;
 	const sessionModel = restoredConfig?.model ?? model;
 	const sessionThinkingLevel =
 		restoredConfig?.thinkingLevel ?? thinkingSelection.thinkingLevel;
-	const sessionThinkingSelection = normalizeThinkingSelection(
+	const sessionThinkingSelection = normalizeProviderThinkingSelection(
 		sessionModel,
 		sessionThinkingLevel === undefined
 			? {}
@@ -119,7 +120,7 @@ const resolveInitialSessionSelection = ({
 	);
 	const persistedThinkingLevel =
 		restoredConfig?.thinkingLevel ?? initialMessage.metadata?.thinkingLevel;
-	const persistedSelection = normalizeThinkingSelection(
+	const persistedSelection = normalizeProviderThinkingSelection(
 		resolvedModel,
 		persistedThinkingLevel === undefined
 			? {}
@@ -223,7 +224,9 @@ export function SessionView({
 	const settingsRuntime = useMemo(
 		() => ({
 			editMode,
-			model,
+			...omitUndefined({
+				model: catalogSelectionForProviderModel(model) ?? undefined,
+			}),
 			onEditModeChanged: setSessionEditMode,
 			sessionId,
 			setEditMode: persistSessionEditMode,
@@ -550,11 +553,20 @@ export function SessionView({
 				model,
 				currentThinkingSelection
 			);
+			const catalogModel = catalogSelectionForProviderModel(effective.model);
+			if (catalogModel === null) {
+				show({
+					message:
+						"Compaction is unavailable for Provider SDK models in this migration slice.",
+					variant: "error",
+				});
+				return false;
+			}
 			const thinkingSelection: ThinkingSelection =
 				effective.thinkingLevel === undefined
 					? {}
 					: { thinkingLevel: effective.thinkingLevel };
-			await compact(focus, effective.model, thinkingSelection);
+			await compact(focus, catalogModel, thinkingSelection);
 			return true;
 		} catch (error) {
 			show({
@@ -812,6 +824,7 @@ export function SessionView({
 					onRetry={retryMessage}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
+					providerController={host.providerController}
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}

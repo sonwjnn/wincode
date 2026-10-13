@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import type { AgentRuntime } from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
+import type { ProviderCollection } from "@wincode/ai/sdk";
 import { omitUndefined } from "@wincode/utils";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
@@ -71,6 +72,8 @@ export type SessionServicesSources = Readonly<{
 	sessionHostManager?: () => SessionHostManager;
 	/** Reads the current Plugin runtime; undefined while the caller has none yet. */
 	pluginRuntime?: () => PluginRuntime | undefined;
+	/** Creates a fresh per-Host ProviderCollection in the owning execution mode. */
+	createProviderCollection?: () => ProviderCollection | undefined;
 	/** Reads the current Model Catalog pricing; the compaction settings read it. */
 	pricing?: () => ModelPricingTable;
 	runtimeFactory?: () => AgentRuntime;
@@ -192,6 +195,7 @@ export const openSessionServices = async ({
 				getConfig,
 				getConnections,
 				getPluginRuntime: sources.pluginRuntime,
+				createProviderCollection: sources.createProviderCollection,
 				getPricing: sources.pricing,
 				getRegistry: sources.registry,
 				runtimeFactory: sources.runtimeFactory,
@@ -210,6 +214,7 @@ export const openSessionServices = async ({
 				getRegistry: () => capabilities.getRegistry(),
 				store: assembly.store,
 				...omitUndefined({
+					createProviderCollection: sources.createProviderCollection,
 					runtimeFactory: capabilities.getRuntime,
 					turnToolResolver: capabilities.getTurnToolResolver?.(),
 				}),

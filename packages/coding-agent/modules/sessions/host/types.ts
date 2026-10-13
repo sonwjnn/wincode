@@ -1,11 +1,12 @@
 import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
-import type { ChatModelSelection } from "@wincode/ai/models";
 import type { ProviderCollection } from "@wincode/ai/sdk";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
@@ -31,7 +32,7 @@ export type SessionCapabilities = Readonly<{
 	getCompactionModule: () => SessionCompactionModule;
 	/** Resolves the compaction settings one Model Target runs with. */
 	getCompactionSettings: (
-		model: ChatModelSelection
+		model: ProviderModelSelection
 	) => Promise<ResolvedCompactionSettings>;
 	getConfig: () => ConfigRuntime;
 	getConnections: () => Connections;
@@ -59,6 +60,7 @@ export type SessionCapabilities = Readonly<{
  */
 export type SessionHost = Readonly<{
 	agentSession: AgentSession;
+	providerController?: InteractiveProviderController;
 	/**
 	 * The Session Selection the session opened with — the last-used Agent,
 	 * model, and reasoning choice, resolved against the live Agent registry — so a

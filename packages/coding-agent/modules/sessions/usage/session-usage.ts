@@ -2,7 +2,6 @@ import {
 	calculateModelUsageCostUsd,
 	getModelContextTokens,
 } from "@wincode/ai/model-usage";
-import type { ChatModelSelection } from "@wincode/ai/models";
 import { isNull } from "@wincode/utils";
 import type {
 	ModelPricingEntry,
@@ -10,6 +9,10 @@ import type {
 } from "@/modules/model-pricing";
 import { resolveModelMetadata } from "@/modules/model-pricing";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
+import {
+	catalogSelectionForProviderModel,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type {
 	SessionMessage,
 	SessionMessageUsage,
@@ -40,7 +43,7 @@ const clampPercent = (percent: number): number =>
 	Math.max(0, Math.min(100, Math.round(percent)));
 
 type MessageUsageState = {
-	lastSelection: ChatModelSelection | null;
+	lastSelection: ProviderModelSelection | null;
 	lastUsage: SessionMessageUsage | null;
 };
 
@@ -48,7 +51,7 @@ const collectMessageUsage = (
 	messages: readonly SessionMessage[]
 ): MessageUsageState => {
 	let lastUsage: SessionMessageUsage | null = null;
-	let lastSelection: ChatModelSelection | null = null;
+	let lastSelection: ProviderModelSelection | null = null;
 	for (const message of messages) {
 		if (message.role !== "assistant" || !message.metadata?.usage) {
 			continue;
@@ -68,10 +71,20 @@ export const turnCostUsd = (
 	usage: SessionMessageUsage
 ): number | null => calculateModelUsageCostUsd(entry, usage);
 
+const resolveProviderModelPricing = (
+	table: ModelPricingTable,
+	selection: ProviderModelSelection
+): ModelPricingEntry | undefined => {
+	const catalogModel = catalogSelectionForProviderModel(selection);
+	return catalogModel === null
+		? undefined
+		: (resolveModelMetadata(table, catalogModel) ?? undefined);
+};
+
 const collectSessionUsage = (
 	messages: readonly SessionMessage[],
 	usageEntries: readonly SessionUsageEntry[],
-	fallbackModel: ChatModelSelection,
+	fallbackModel: ProviderModelSelection,
 	table: ModelPricingTable
 ): Pick<
 	SessionUsageSummary,
@@ -94,7 +107,7 @@ const collectSessionUsage = (
 		cacheReadTokens += usage.cacheReadTokens ?? 0;
 		cacheWriteTokens += usage.cacheWriteTokens ?? 0;
 		const selection = message.metadata?.model ?? fallbackModel;
-		const entry = resolveModelMetadata(table, selection);
+		const entry = resolveProviderModelPricing(table, selection);
 		const cost = turnCostUsd(entry ?? undefined, usage);
 		if (!isNull(cost)) {
 			total += cost;
@@ -104,7 +117,7 @@ const collectSessionUsage = (
 	for (const entry of usageEntries) {
 		cacheReadTokens += entry.usage.cacheReadTokens ?? 0;
 		cacheWriteTokens += entry.usage.cacheWriteTokens ?? 0;
-		const pricing = resolveModelMetadata(table, entry.model);
+		const pricing = resolveProviderModelPricing(table, entry.model);
 		const cost = turnCostUsd(pricing ?? undefined, entry.usage);
 		if (!isNull(cost)) {
 			total += cost;
@@ -129,7 +142,7 @@ const collectSessionUsage = (
  */
 export const summarizeSessionUsage = (
 	messages: readonly SessionMessage[],
-	fallbackModel: ChatModelSelection,
+	fallbackModel: ProviderModelSelection,
 	table: ModelPricingTable,
 	usageEntries: readonly SessionUsageEntry[] = [],
 	cacheWarmingStatus: CacheWarmingStatus = "idle"
@@ -140,7 +153,7 @@ export const summarizeSessionUsage = (
 	}
 	const selection = lastSelection ?? fallbackModel;
 	const contextLimit =
-		resolveModelMetadata(table, selection)?.limits?.context ?? null;
+		resolveProviderModelPricing(table, selection)?.limits?.context ?? null;
 	const contextTokens = getModelContextTokens(lastUsage);
 	const contextPercent =
 		!isNull(contextLimit) && contextLimit > 0

@@ -10,6 +10,7 @@ import type {
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -43,7 +44,7 @@ export type Session = {
 	createdAt: Date;
 	id: SessionId;
 	lastMessageAt: Date | null;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	pinned: boolean;
 	title: string;
 	thinkingLevel?: ThinkingLevel;
@@ -52,13 +53,13 @@ export type Session = {
 export type CreateSessionInput = {
 	agent: AgentId;
 	message: SessionMessage;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	turnId: AgentTurnId;
 	thinkingLevel?: ThinkingLevel;
 };
 export type CreateEmptySessionInput = Readonly<{
 	id?: SessionId;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 }>;
 export type UpdateSessionInput = {
@@ -90,7 +91,7 @@ export type CreateSessionUsageEntryInput = Omit<
  * partial durable state.
  */
 export type CommitSessionRecordInput = {
-	sessionModel?: ChatModelSelection;
+	sessionModel?: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 	record: SessionRecord;
 	sessionId: SessionId;

@@ -22,8 +22,6 @@ import {
 	toSessionRecordId,
 } from "@wincode/agent-core";
 import {
-	type ChatModelSelection,
-	modelSelectionSchema,
 	normalizeThinkingSelection,
 	type ThinkingSelection,
 	thinkingLevelSchema,
@@ -41,6 +39,11 @@ import {
 } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
+import {
+	catalogSelectionForProviderModel,
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import { codingToolNames } from "@/modules/tools";
 import { attachmentReferenceToFilePart } from "../attachment-reference";
 import type {
@@ -249,13 +252,11 @@ const isStaticToolName = (name: string): name is StaticToolName =>
 
 const modelSelectionForRecord = (
 	model: SessionRecord["model"]
-): ChatModelSelection | undefined => {
-	const parsed = modelSelectionSchema.safeParse({
+): ProviderModelSelection | undefined =>
+	normalizeProviderModelSelection({
 		modelId: model.modelId,
 		providerId: model.providerId,
-	});
-	return parsed.success ? parsed.data : undefined;
-};
+	}) ?? undefined;
 
 const metadataForRecord = (
 	record: Pick<SessionRecord, "agentId" | "model">,
@@ -263,8 +264,7 @@ const metadataForRecord = (
 ): SessionMessageMetadata | undefined => {
 	let model = modelSelectionForRecord(record.model);
 	if (!isUndefined(metadata?.model)) {
-		const parsedModel = modelSelectionSchema.safeParse(metadata.model);
-		model = parsedModel.success ? parsedModel.data : undefined;
+		model = normalizeProviderModelSelection(metadata.model) ?? undefined;
 	}
 	const thinkingLevelValue =
 		metadata?.thinkingLevel ?? record.model.thinkingLevel;
@@ -272,8 +272,10 @@ const metadataForRecord = (
 	const choice: ThinkingSelection = parsedThinkingLevel.success
 		? { thinkingLevel: parsedThinkingLevel.data }
 		: {};
-	const normalizedChoice = model
-		? normalizeThinkingSelection(model, choice)
+	const catalogModel =
+		model === undefined ? null : catalogSelectionForProviderModel(model);
+	const normalizedChoice = catalogModel
+		? normalizeThinkingSelection(catalogModel, choice)
 		: {};
 	const parsed = sessionMessageMetadataSchema.safeParse({
 		...pickTruthy({ agent: metadata?.agent ?? record.agentId }),

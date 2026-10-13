@@ -17,10 +17,7 @@ import {
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import {
-	type ChatModelSelection,
-	findSupportedChatModelSelection,
 	getSupportedThinkingLevels,
-	modelSelectionSchema,
 	type ThinkingLevel,
 	thinkingLevelSchema,
 } from "@wincode/ai/models";
@@ -35,6 +32,11 @@ import {
 import { randomUUIDv7 } from "bun";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import { z } from "zod";
+import {
+	catalogSelectionForProviderModel,
+	type ProviderModelSelection,
+	providerModelSelectionSchema,
+} from "@/modules/providers/provider-model-selection";
 import type {
 	SkillActivation,
 	SkillContext,
@@ -160,7 +162,7 @@ export type SessionMessageMetadata = {
 	 * Overflow Recovery keep walking the turn this message joined.
 	 */
 	readonly joinedTurnId?: AgentTurnId;
-	readonly model?: ChatModelSelection;
+	readonly model?: ProviderModelSelection;
 	readonly responseTimeMs?: number;
 	readonly skill?: SessionMessageSkill;
 	readonly sourceUserMessageId?: SessionMessageId;
@@ -222,7 +224,7 @@ export const sessionMessageSkillSchema = z.union([
 	}),
 ]);
 
-const sessionMessageModelSchema = modelSelectionSchema;
+const sessionMessageModelSchema = providerModelSelectionSchema;
 
 export const sessionMessageUsageSchema = z
 	.object({
@@ -295,16 +297,19 @@ export const sessionMessageMetadataSchema = z
 			return;
 		}
 		const model = metadata.model;
-		if (!findSupportedChatModelSelection(model)) {
+		const catalogModel = catalogSelectionForProviderModel(model);
+		if (catalogModel === null && metadata.thinkingLevel !== undefined) {
 			context.addIssue({
 				code: "custom",
-				message: "Unsupported model selection",
+				message:
+					"Thinking level is unavailable for the selected Provider Model",
 			});
 			return;
 		}
 		if (
+			catalogModel !== null &&
 			metadata.thinkingLevel !== undefined &&
-			!getSupportedThinkingLevels(model).includes(metadata.thinkingLevel)
+			!getSupportedThinkingLevels(catalogModel).includes(metadata.thinkingLevel)
 		) {
 			context.addIssue({
 				code: "custom",

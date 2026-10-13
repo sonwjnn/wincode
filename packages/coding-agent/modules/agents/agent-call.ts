@@ -1,15 +1,15 @@
 import type { AgentId } from "@wincode/agent-core";
+import type { ThinkingSelection } from "@wincode/ai/models";
 import {
-	type ChatModelSelection,
-	normalizeThinkingSelection,
-	type ThinkingSelection,
-} from "@wincode/ai/models";
+	normalizeProviderThinkingSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import { buildAgent, type ResolvedCodingAgent } from "./built-ins";
 import type { AgentRegistry } from "./registry";
 
 export type AgentCallSelection = {
 	readonly agent: AgentId;
-	readonly model: ChatModelSelection;
+	readonly model: ProviderModelSelection;
 } & ThinkingSelection;
 
 export type PreparedAgentCall = AgentCallSelection & {
@@ -18,20 +18,20 @@ export type PreparedAgentCall = AgentCallSelection & {
 
 export type EffectiveAgentSelection = {
 	readonly agent: AgentId;
-	readonly model: ChatModelSelection;
+	readonly model: ProviderModelSelection;
 	readonly resolvedAgent?: ResolvedCodingAgent;
 } & ThinkingSelection;
 
 /** Composer-level choices that intentionally take precedence over Agent defaults. */
 export type AgentSelectionOverride = Readonly<{
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinking?: ThinkingSelection;
 }>;
 
 export const resolveEffectiveAgentSelection = (
 	registry: AgentRegistry | null,
 	agentId: AgentId,
-	fallbackModel: ChatModelSelection,
+	fallbackModel: ProviderModelSelection,
 	fallbackSelection: ThinkingSelection,
 	allowSubagent = false,
 	selectionOverride?: AgentSelectionOverride
@@ -70,7 +70,7 @@ export const resolveEffectiveAgentSelection = (
 		thinkingSelection = { thinkingLevel: effectiveAgent.thinkingLevel };
 	}
 	const resolvedThinkingSelection = hasSelectionOverride
-		? normalizeThinkingSelection(model, thinkingSelection)
+		? normalizeProviderThinkingSelection(model, thinkingSelection)
 		: thinkingSelection;
 	return {
 		agent: effectiveAgentId,

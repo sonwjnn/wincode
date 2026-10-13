@@ -13,7 +13,7 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
 
 type ConnectionApiKeyDialogContentProps = {
-	provider: ConnectionProviderSummary;
+	provider: Pick<ConnectionProviderSummary, "displayName" | "methods">;
 	onSubmit: (apiKey: string, signal: AbortSignal) => void | Promise<void>;
 	placeholder?: string;
 };

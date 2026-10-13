@@ -1,10 +1,14 @@
 import {
-	type ChatModelSelection,
 	findSupportedChatModelSelection,
 	formatModelLabel,
 	normalizeChatModelSelection,
 } from "@wincode/ai/models";
 import { isNull, isString, isUndefined } from "@wincode/utils";
+import {
+	catalogSelectionForProviderModel,
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 
 const CAMEL_CASE_BOUNDARY_PATTERN = /([a-z0-9])([A-Z])/g;
 const FIRST_CHARACTER_PATTERN = /^./;
@@ -61,23 +65,25 @@ export const formatAgent = (agent: string) =>
 	`${agent.charAt(0).toUpperCase()}${agent.slice(1)}`;
 
 /** Normalizes a model selection to a display label and provider id. */
-export const formatModel = (model: string | ChatModelSelection) => {
-	const selection = normalizeChatModelSelection(model);
+export const formatModel = (model: string | ProviderModelSelection) => {
+	const selection = isString(model)
+		? normalizeChatModelSelection(model)
+		: normalizeProviderModelSelection(model);
 	if (selection) {
+		const catalogModel = catalogSelectionForProviderModel(selection);
+		const modelDetails =
+			catalogModel === null
+				? null
+				: findSupportedChatModelSelection(catalogModel);
 		return {
-			label: formatModelLabel(
-				findSupportedChatModelSelection(selection)?.displayName ??
-					selection.modelId
-			),
+			label: formatModelLabel(modelDetails?.displayName ?? selection.modelId),
 			providerId: selection.providerId,
 		};
 	}
 
-	if (isString(model)) {
-		return { label: model, providerId: undefined };
-	}
-
-	return { label: model.modelId, providerId: model.providerId };
+	return isString(model)
+		? { label: model, providerId: undefined }
+		: { label: model.modelId, providerId: model.providerId };
 };
 
 /** Shortens a skill content hash to 12 characters plus an ellipsis. */

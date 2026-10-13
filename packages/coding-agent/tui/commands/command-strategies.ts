@@ -20,6 +20,13 @@ import { getModelsForPicker } from "@/modules/prompt-settings/ui/model-picker-op
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
 import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinking-level-dialog";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import {
+	catalogSelectionForProviderModel,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
+import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
+import { ProviderSdkConnectDialogContent } from "@/modules/providers/ui/provider-sdk-connect-dialog";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import type { ToastContextValue } from "@/shared/providers/toast/toast-provider";
@@ -33,6 +40,8 @@ export type CommandStrategyContext = {
 	getRecentModelSelections: (limit: number) => ChatModelSelection[];
 	navigateHome: () => void;
 	onSelectModel?: (model: ChatModelSelection) => void;
+	onSelectProviderModel?: (model: ProviderModelSelection) => void;
+	providerController?: InteractiveProviderController;
 	onCompact?: (focus?: string) => boolean | Promise<boolean>;
 	onReload: () => Promise<void>;
 	onTrust: () => Promise<void>;
@@ -143,19 +152,55 @@ const STRATEGIES = {
 	"model.select": {
 		kind: "dialog",
 		title: "Select Model",
-		content: ({ config, getRecentModelSelections, onSelectModel }) =>
-			createElement(ModelsDialogContent, {
-				currentModel: config.model,
-				models: getModelsForPicker(modelCatalog, config.model),
+		content: ({ config, getRecentModelSelections, onSelectModel }) => {
+			const currentModel =
+				catalogSelectionForProviderModel(config.model) ?? undefined;
+			return createElement(ModelsDialogContent, {
+				currentModel,
+				models: getModelsForPicker(modelCatalog, currentModel),
 				onSelectModel: onSelectModel ?? config.setModelForFutureSubmissions,
 				recentSelections: getRecentModelSelections(10),
-			}),
+			});
+		},
 	},
+	"provider.model.select": {
+		kind: "dialog",
+		title: "OpenRouter Provider Models",
+		content: ({ config, onSelectProviderModel, providerController }) => {
+			if (!(providerController && onSelectProviderModel)) {
+				throw new Error(
+					"Provider Model selection is unavailable in this view."
+				);
+			}
+			return createElement(ProviderModelsDialogContent, {
+				controller: providerController,
+				currentModel: config.model,
+				onSelectModel: onSelectProviderModel,
+			});
+		},
+	},
+	"provider.connect": {
+		kind: "dialog",
+		title: "Connect OpenRouter Provider SDK",
+		content: ({ providerController }) => {
+			if (!providerController) {
+				throw new Error("Provider SDK connection is unavailable in this view.");
+			}
+			return createElement(ProviderSdkConnectDialogContent, {
+				controller: providerController,
+			});
+		},
+	},
+
 	"thinking.select": {
 		kind: "dialog",
 		title: "Select Thinking Level",
 		content: ({ config }) => {
-			const supportedModel = findSupportedChatModelSelection(config.model);
+			const catalogModel = catalogSelectionForProviderModel(config.model);
+			const supportedModel =
+				catalogModel === null
+					? null
+					: findSupportedChatModelSelection(catalogModel);
 			if (!supportedModel) {
 				throw new Error(
 					"Thinking-level selection is unavailable in this view."

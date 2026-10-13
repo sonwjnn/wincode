@@ -1,5 +1,8 @@
-import type { ChatModelSelection } from "@wincode/ai/models";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
+import {
+	catalogSelectionForProviderModel,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type { ConfigStore } from "@/shared/config/config-store";
 import {
 	type ResolvedCompactionSettings,
@@ -8,7 +11,7 @@ import {
 
 export type CompactionSettingsOperations = {
 	getCompactionSettings: (
-		model: ChatModelSelection
+		model: ProviderModelSelection
 	) => Promise<ResolvedCompactionSettings>;
 };
 
@@ -31,12 +34,24 @@ export const createCompactionSettingsOperations = ({
 	workspace,
 }: CompactionSettingsDependencies): CompactionSettingsOperations => {
 	const getCompactionSettings = async (
-		model: ChatModelSelection
+		model: ProviderModelSelection
 	): Promise<ResolvedCompactionSettings> => {
 		const snapshot = await configStore
 			.getSnapshot(workspace)
 			.catch(() => undefined);
-		return resolveCompactionSettings({ model, pricing, snapshot });
+		const catalogModel = catalogSelectionForProviderModel(model);
+		return catalogModel === null
+			? resolveCompactionSettings({
+					contextLimit: null,
+					pricing,
+					sessionOverrides: {
+						auto: false,
+						enabled: false,
+						overflowRecovery: false,
+					},
+					snapshot,
+				})
+			: resolveCompactionSettings({ model: catalogModel, pricing, snapshot });
 	};
 
 	return { getCompactionSettings };

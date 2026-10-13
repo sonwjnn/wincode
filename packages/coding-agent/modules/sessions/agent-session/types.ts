@@ -15,6 +15,7 @@ import type {
 } from "@wincode/agent-core";
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import type { ReadonlyDeep } from "type-fest";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SkillContext,
 	SkillExecution,
@@ -131,10 +132,10 @@ export type SessionExecution = ReadonlyDeep<{
 	agent: AgentId;
 	/** The first assistant Session Message for this execution. */
 	assistantId: SessionMessageId;
-	/** The Model Target selection the execution runs against. */
-	model: ChatModelSelection;
+	/** The Provider Model identity this execution runs against. */
+	model: ProviderModelSelection;
 	/** The session-level selection recorded on this execution's Session Records. */
-	sessionModel: ChatModelSelection;
+	sessionModel: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 	/** The Session Context message this execution answers. */
 	sourceUserMessageId: SessionMessageId | null;
@@ -226,8 +227,8 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 /** What starts one Agent Turn execution. */
 export type SessionExecutionInput = ReadonlyDeep<{
 	agent: AgentId;
-	model: ChatModelSelection;
-	sessionModel: ChatModelSelection;
+	model: ProviderModelSelection;
+	sessionModel: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 	submissionId?: SubmissionId;
 	/** The Session Context message this execution answers, when known. */
@@ -253,7 +254,7 @@ export type SessionResolvedAgent = Readonly<
 export type SessionCommitInput = {
 	record: SessionRecord;
 	sessionId: SessionId;
-	sessionModel?: ChatModelSelection;
+	sessionModel?: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 };
 export type SessionSubmissionStatusUpdate = Readonly<{
@@ -407,7 +408,7 @@ export type AgentSessionPorts = Readonly<{
 	resolveFileMentions: (text: string) => Promise<FileMentionPart[]>;
 	/** Resolves the compaction settings one Model Target runs with. */
 	resolveCompactionSettings: (
-		selection: ChatModelSelection
+		selection: ProviderModelSelection
 	) => Promise<ResolvedCompactionSettings>;
 	turnRunner: SessionTurnRunner;
 	skills: SessionSkillPort;
@@ -417,7 +418,7 @@ export type AgentSessionOptions = Readonly<{
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
-	initialSessionModel?: ChatModelSelection;
+	initialSessionModel?: ProviderModelSelection;
 	initialSessionThinkingLevel?: ThinkingLevel;
 	initialSteeringMessages?: readonly SessionSteeringMessage[];
 	initialTranscript: readonly SessionMessage[];

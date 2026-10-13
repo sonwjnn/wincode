@@ -25,6 +25,7 @@ import {
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { normalizeProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { EditMode } from "@/modules/tools";
 import {
 	type CompactionId,
@@ -400,9 +401,7 @@ const deriveSessionTitle = (messages: SessionMessage[]): string => {
 };
 
 const toSession = (row: SessionRow): Session => {
-	const parsedModel = row.modelJson
-		? modelSelectionSchema.safeParse(row.modelJson)
-		: undefined;
+	const model = normalizeProviderModelSelection(row.modelJson) ?? undefined;
 	return {
 		createdAt: row.createdAt,
 		id: toSessionId(row.id),
@@ -410,7 +409,7 @@ const toSession = (row: SessionRow): Session => {
 		pinned: row.pinned,
 		title: row.title ?? UNTITLED_SESSION_TITLE,
 		...omitUndefined({
-			model: parsedModel?.data,
+			model,
 			thinkingLevel: row.thinkingLevel ?? undefined,
 		}),
 	};

@@ -1,6 +1,7 @@
 import type { SessionMessageId } from "@wincode/agent-core";
 import { normalizeChatModelSelection } from "@wincode/ai/models";
 import { isNull, isString, isUndefined } from "@wincode/utils";
+import { normalizeProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
 	getSessionAttemptMessages,
@@ -21,7 +22,9 @@ export const resolveTurnMetadataSignature = (
 	}
 
 	const agent = metadata.agent ?? "";
-	const normalizedModel = normalizeChatModelSelection(metadata.model ?? "");
+	const normalizedModel = isString(metadata.model)
+		? normalizeChatModelSelection(metadata.model)
+		: normalizeProviderModelSelection(metadata.model);
 	let modelKey = "";
 
 	if (normalizedModel) {

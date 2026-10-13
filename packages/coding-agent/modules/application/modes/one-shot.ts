@@ -18,6 +18,7 @@ import {
 } from "@wincode/ai/models";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
@@ -238,9 +239,23 @@ const resolveSelection = ({
 		throw new InvocationError(`Agent is unavailable: ${agent}`);
 	}
 
+	const restoredModel = restored?.model;
+	const catalogRestoredModel =
+		restoredModel === undefined
+			? null
+			: catalogSelectionForProviderModel(restoredModel);
+	if (
+		explicitModel === undefined &&
+		restoredModel !== undefined &&
+		catalogRestoredModel === null
+	) {
+		throw new InvocationError(
+			"This execution mode cannot run Provider SDK models; choose an explicit Catalog model."
+		);
+	}
 	const model =
 		explicitModel ??
-		restored?.model ??
+		catalogRestoredModel ??
 		candidate?.model ??
 		defaultChatModelSelection;
 	const explicitChoice =

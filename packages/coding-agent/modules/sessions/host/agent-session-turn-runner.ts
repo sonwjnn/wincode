@@ -25,12 +25,14 @@ import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import { resolveConfiguredPromptCacheControls } from "@/modules/prompt-cache/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
+import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
 import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
 import type { SkillRequestContext } from "@/modules/skills";
 import {
 	codingToolCatalog,
 	type VersionedEditingContext,
 } from "@/modules/tools";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveChatModelTarget } from "../../model-target";
 import type {
@@ -72,6 +74,29 @@ type ResolveSessionTurnModelOptions = Readonly<{
 	thinkingSelection: ThinkingSelection;
 }>;
 
+const resolveSessionPromptCacheControls = async (
+	configRuntime: ConfigRuntime,
+	model: SessionExecution["model"]
+): Promise<ResolvedPromptCacheControls> => {
+	const snapshot = await configRuntime.configStore
+		.getSnapshot(configRuntime.workspace)
+		.catch(() => undefined);
+	const catalogSelection = catalogSelectionForProviderModel(model);
+	const selectedModel =
+		catalogSelection === null
+			? null
+			: findSupportedChatModelSelection(catalogSelection);
+	if (snapshot === undefined || selectedModel === null) {
+		return { enabled: false };
+	}
+	return resolveConfiguredPromptCacheControls(
+		selectedModel,
+		snapshot.document.promptCache
+	);
+};
+
+const OPENROUTER_PROVIDER_ID = "openrouter";
+
 const resolveSessionTurnModel = async ({
 	getConnections,
 	model,
@@ -80,8 +105,20 @@ const resolveSessionTurnModel = async ({
 	signal,
 	thinkingSelection,
 }: ResolveSessionTurnModelOptions): Promise<AgentTurnModel> => {
-	if (providerCollection === undefined) {
-		return resolveChatModelTarget(model, getConnections(), {
+	const providerModel =
+		providerCollection === undefined
+			? undefined
+			: providerCollection.getModel(model.providerId, model.modelId);
+	if (providerModel === undefined) {
+		const catalogModel = catalogSelectionForProviderModel(model);
+		if (catalogModel === null || model.providerId === OPENROUTER_PROVIDER_ID) {
+			throw new Error(
+				providerCollection === undefined
+					? `Provider Model ${model.providerId}/${model.modelId} requires the Provider SDK runtime.`
+					: `Provider Model ${model.providerId}/${model.modelId} is not available in this Session Host.`
+			);
+		}
+		return resolveChatModelTarget(catalogModel, getConnections(), {
 			...thinkingSelection,
 			...omitUndefined({
 				promptCacheEnabled: promptCacheControls.enabled ? true : undefined,
@@ -90,10 +127,7 @@ const resolveSessionTurnModel = async ({
 			signal,
 		});
 	}
-	const maxOutputTokens = providerCollection.getModel(
-		model.providerId,
-		model.modelId
-	)?.limits?.maxOutputTokens;
+	const maxOutputTokens = providerModel.limits?.maxOutputTokens;
 	return {
 		...model,
 		...thinkingSelection,
@@ -286,17 +320,10 @@ export const createAgentSessionTurnRunner = ({
 			execution.model,
 			execution.thinkingLevel
 		);
-		const promptCacheSnapshot = await config.configStore
-			.getSnapshot(config.workspace)
-			.catch(() => undefined);
-		const selectedModel = findSupportedChatModelSelection(execution.model);
-		const promptCacheControls =
-			promptCacheSnapshot && selectedModel
-				? resolveConfiguredPromptCacheControls(
-						selectedModel,
-						promptCacheSnapshot.document.promptCache
-					)
-				: { enabled: false as const };
+		const promptCacheControls = await resolveSessionPromptCacheControls(
+			config,
+			execution.model
+		);
 		const model = await resolveSessionTurnModel({
 			getConnections: capabilities.getConnections,
 			model: execution.model,
@@ -324,8 +351,10 @@ export const createAgentSessionTurnRunner = ({
 				...(parentCapabilityCeiling === undefined
 					? {}
 					: { capabilityCeiling: parentCapabilityCeiling }),
-				model: execution.model,
-				thinkingLevel: execution.thinkingLevel,
+				...omitUndefined({
+					model: catalogSelectionForProviderModel(execution.model) ?? undefined,
+					thinkingLevel: execution.thinkingLevel,
+				}),
 				turnId: execution.turnId,
 				registerTurnCleanup: (cleanup) => scope.pluginCleanups.push(cleanup),
 				resourceLimits,
@@ -347,8 +376,10 @@ export const createAgentSessionTurnRunner = ({
 		)({
 			agentId: execution.agent,
 			agentTools: resolvedAgent.visibleCodingTools,
-			model: execution.model,
-			thinkingLevel: execution.thinkingLevel,
+			...omitUndefined({
+				model: catalogSelectionForProviderModel(execution.model) ?? undefined,
+				thinkingLevel: execution.thinkingLevel,
+			}),
 			turnId: execution.turnId,
 			resourceLimits,
 			...pluginTurn.options,

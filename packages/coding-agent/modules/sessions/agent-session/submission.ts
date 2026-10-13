@@ -20,6 +20,7 @@ import {
 	logger,
 	omitUndefined,
 } from "@wincode/utils";
+import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
 import {
 	createSkillSnapshot,
 	type SkillRequestContext,
@@ -506,18 +507,22 @@ const prepareSessionSubmission = async ({
 		if (!isNull(compactionReason)) {
 			return { kind: "rejected", reason: compactionReason };
 		}
-		const compactionResult = await prepareCompactionBeforeSubmit({
-			compaction: ports.compaction,
-			getActiveMessages: deps.getContext,
-			model: input.model,
-			runCompaction: deps.compact,
-			settings,
-			settleCompaction: deps.settleCompaction,
-			...omitUndefined({
-				turnId: input.turnId,
-				thinkingLevel: input.thinkingLevel,
-			}),
-		});
+		const catalogModel = catalogSelectionForProviderModel(input.model);
+		const compactionResult =
+			catalogModel === null
+				? { ok: true as const }
+				: await prepareCompactionBeforeSubmit({
+						compaction: ports.compaction,
+						getActiveMessages: deps.getContext,
+						model: catalogModel,
+						runCompaction: deps.compact,
+						settings,
+						settleCompaction: deps.settleCompaction,
+						...omitUndefined({
+							turnId: input.turnId,
+							thinkingLevel: input.thinkingLevel,
+						}),
+					});
 		if (!compactionResult.ok) {
 			return { kind: "rejected", reason: compactionResult.reason };
 		}
@@ -654,9 +659,9 @@ const commitPromptRecord = async ({
 	commitRecord: AgentSessionPorts["commitRecord"];
 	diagnosticTurnId?: AgentTurnId;
 	message: SessionMessage;
-	model: ChatModelSelection;
+	model: SessionSendInput["model"];
 	sessionId: SessionId;
-	sessionModel: ChatModelSelection;
+	sessionModel: SessionSendInput["sessionModel"];
 	sessionThinkingLevel?: ThinkingLevel;
 	thinkingLevel?: ThinkingLevel;
 }): Promise<Error | null> => {
@@ -886,6 +891,12 @@ const proposeOverflowRecovery = ({
 							originalMessageId: contextMessageId,
 						}),
 					resolveTarget: async () => {
+						const catalogModel = catalogSelectionForProviderModel(
+							execution.model
+						);
+						if (catalogModel === null) {
+							return null;
+						}
 						const settings = await deps.ports.resolveCompactionSettings(
 							execution.model
 						);
@@ -893,7 +904,7 @@ const proposeOverflowRecovery = ({
 							return null;
 						}
 						return {
-							model: execution.model,
+							model: catalogModel,
 							thinkingLevel: execution.thinkingLevel,
 						};
 					},
@@ -1136,10 +1147,14 @@ const logThresholdSettingsFailure = (
 const maintainAfterTurn = (
 	deps: SubmissionDeps,
 	messages: readonly SessionMessage[],
-	selection: ChatModelSelection,
+	selection: SessionExecution["model"],
 	turnId: AgentTurnId,
 	thinkingLevel?: ThinkingLevel
 ): void => {
+	const catalogModel = catalogSelectionForProviderModel(selection);
+	if (catalogModel === null) {
+		return;
+	}
 	const compactIfNeeded = async (): Promise<void> => {
 		let settings: ResolvedCompactionSettings;
 		try {
@@ -1155,7 +1170,7 @@ const maintainAfterTurn = (
 		}
 		try {
 			await deps.compact({
-				model: selection,
+				model: catalogModel,
 				nextMessages: messages,
 				trigger: "threshold",
 				turnId,

@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import type { AgentId, SubmissionId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import { omitUndefined } from "@wincode/utils";
 import {
 	type AgentRegistry,
@@ -10,6 +10,7 @@ import {
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	type SessionSdk,
 	type SessionSdkCapabilityCeiling,
@@ -63,7 +64,7 @@ export type SessionSdkRuntimeOptions = Omit<
 		/** The configuration store this SDK builds its configuration runtime from. */
 		configStore?: ConfigStore;
 		cwd?: string;
-		model?: ChatModelSelection;
+		model?: ProviderModelSelection;
 		thinkingLevel?: ThinkingLevel;
 		pluginPaths?: readonly string[];
 		projectTrust?: "trust" | "deny";

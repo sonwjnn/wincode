@@ -9,7 +9,6 @@ import {
 } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import {
-	type ChatModelSelection,
 	findSupportedChatModelSelection,
 	getSupportedThinkingLevels,
 	supportedChatModelIdSchema,
@@ -30,6 +29,9 @@ import {
 } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -105,6 +107,7 @@ type ChatTextAreaProps = {
 	onModelTargetChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	onEmptySubmit?: () => void | Promise<void>;
+	providerController?: InteractiveProviderController;
 	/** Compositions a Recall returned, oldest first, waiting to enter the composer. */
 	recalledSubmissions?: readonly SessionSubmissionComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
@@ -164,6 +167,7 @@ export function ChatTextArea({
 	onOpenSettings,
 	onSubmit,
 	onEmptySubmit,
+	providerController,
 	recalledSubmissions = EMPTY_RECALLED_SUBMISSIONS,
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
@@ -195,7 +199,7 @@ export function ChatTextArea({
 		previousAgent.current = agent;
 	}, [agent, onModelTargetChanged]);
 	const setFutureModelSelection = useCallback(
-		(nextModel: ChatModelSelection) => {
+		(nextModel: ProviderModelSelection) => {
 			if (
 				model.modelId !== nextModel.modelId ||
 				model.providerId !== nextModel.providerId
@@ -229,7 +233,12 @@ export function ChatTextArea({
 		setFutureModelSelection,
 		setThinkingLevelForFutureSubmissions,
 	]);
-	const supportedModel = findSupportedChatModelSelection(model);
+	const catalogModel = catalogSelectionForProviderModel(model);
+	const isProviderSdkModel = catalogModel === null;
+	const supportedModel =
+		catalogModel === null
+			? null
+			: findSupportedChatModelSelection(catalogModel);
 	const chatModelSelection = isNull(supportedModel)
 		? null
 		: {
@@ -241,14 +250,23 @@ export function ChatTextArea({
 		getSupportedThinkingLevels(chatModelSelection).length === 0;
 	const unavailableCommandCapabilities = useMemo(() => {
 		const unavailable = new Set<CommandCapability>(viewUnavailableCapabilities);
-		if (!onCompact) {
+		if (!onCompact || isProviderSdkModel) {
 			unavailable.add("compaction");
 		}
 		if (hideThinkingLevel) {
 			unavailable.add("thinking-level-selection");
 		}
+		if (providerController === undefined) {
+			unavailable.add("provider-sdk");
+		}
 		return [...unavailable];
-	}, [hideThinkingLevel, onCompact, viewUnavailableCapabilities]);
+	}, [
+		hideThinkingLevel,
+		isProviderSdkModel,
+		onCompact,
+		providerController,
+		viewUnavailableCapabilities,
+	]);
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecalledFilesRevisionRef = useRef(0);
@@ -333,6 +351,8 @@ export function ChatTextArea({
 				onError: handleSubmitError,
 				onOpenSettings,
 				onSelectModel: setFutureModelSelection,
+				onSelectProviderModel: setFutureModelSelection,
+				providerController,
 			}),
 		[
 			commandControllerFactory,
@@ -341,6 +361,7 @@ export function ChatTextArea({
 			onOpenSettings,
 			sessionId,
 			setFutureModelSelection,
+			providerController,
 			unavailableCommandCapabilities,
 		]
 	);

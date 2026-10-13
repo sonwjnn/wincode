@@ -1,5 +1,6 @@
 import {
 	type AgentId,
+	type AgentRuntime,
 	type AgentTurnEvent,
 	createAgentRuntime,
 	createStatefulAgent,
@@ -8,7 +9,7 @@ import {
 	toSubmissionId,
 } from "@wincode/agent-core";
 import { createGoogleCachedContentResourceManager } from "@wincode/ai/model-client";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import type { ProviderCollection } from "@wincode/ai/sdk";
 import { isNull, logger, omitUndefined } from "@wincode/utils";
 import {
@@ -17,6 +18,11 @@ import {
 } from "@/modules/agents/registry";
 import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import { createSessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
+import {
+	createInteractiveProviderController,
+	type InteractiveProviderController,
+} from "@/modules/providers/interactive-provider-controller";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import { AgentSessionImpl } from "../agent-session/agent-session";
 import type {
@@ -51,13 +57,27 @@ import type {
 type OpenedSession = Readonly<{
 	compactions: SessionCompaction[];
 	context: SessionMessage[];
-	model: ChatModelSelection | undefined;
+	model: ProviderModelSelection | undefined;
 	steeringMessages: SessionSteeringMessage[];
 	transcript: SessionMessage[];
 	thinkingLevel: ThinkingLevel | undefined;
 	usageEntries: SessionUsageEntry[];
 }>;
 const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
+
+const createHostAgentRuntime = (
+	providerCollection: ProviderCollection
+): AgentRuntime => {
+	const providerRuntime = createAgentRuntime({ providerCollection });
+	const catalogRuntime = defaultRuntimeFactory();
+	return {
+		run(turn, options) {
+			return "authorization" in turn.model
+				? catalogRuntime.run(turn, options)
+				: providerRuntime.run(turn, options);
+		},
+	};
+};
 
 const waitForClosingHost = async (
 	sessionId: SessionHostOptions["sessionId"]
@@ -99,7 +119,7 @@ const restoreSteeringMessages = (
 	records: readonly SessionRecord[],
 	transcript: readonly SessionMessage[],
 	session: {
-		model?: ChatModelSelection;
+		model?: ProviderModelSelection;
 		thinkingLevel?: ThinkingLevel;
 	}
 ): SessionSteeringMessage[] =>
@@ -292,6 +312,7 @@ export const createSessionHost = async ({
 	let shutdownPromise: Promise<void> | undefined;
 	let statefulAgent: StatefulAgent<SessionQueuedSubmission> | undefined;
 	let providerCollection: ProviderCollection | undefined;
+	let providerController: InteractiveProviderController | undefined;
 	// The warmer belongs to the loaded Host, not a single Agent Turn; retain it across idle turns.
 	let cacheWarming: SessionCacheWarming | undefined;
 	let unsubscribeContext: (() => void) | undefined;
@@ -399,13 +420,18 @@ export const createSessionHost = async ({
 			runtime === undefined
 				? capabilities.createProviderCollection?.()
 				: undefined;
+		if (providerCollection !== undefined) {
+			providerController =
+				createInteractiveProviderController(providerCollection);
+			await providerController.restoreModels();
+		}
 		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
 			getQueuedSubmissionId: ({ id }) => id,
 			runtime:
 				runtime ??
 				(providerCollection === undefined
 					? defaultRuntimeFactory()
-					: createAgentRuntime({ providerCollection })),
+					: createHostAgentRuntime(providerCollection)),
 		});
 		const ports: AgentSessionPorts = withEventChannel(
 			createAgentSessionAdapters({
@@ -440,6 +466,7 @@ export const createSessionHost = async ({
 			initialCompactions: opened.compactions,
 			...omitUndefined({
 				initialAgent,
+				initialSessionModel: opened.model ?? initialSelection?.model,
 				initialSessionThinkingLevel:
 					opened.thinkingLevel ?? initialSelection?.thinkingLevel,
 			}),
@@ -539,6 +566,7 @@ export const createSessionHost = async ({
 
 		return {
 			agentSession: guardedAgentSession,
+			...(providerController === undefined ? {} : { providerController }),
 			getSelection: () => resolveOpenedSelection(capabilities.getRegistry()),
 			getSnapshot: openedAgentSession.getSnapshot,
 			getCacheWarmingStatus: () => cacheWarming?.getStatus() ?? "idle",

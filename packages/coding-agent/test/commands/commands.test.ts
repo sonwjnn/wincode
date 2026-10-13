@@ -10,6 +10,8 @@ test("keeps host built-in slash names routed to their action IDs", () => {
 		{ action: "project.trust", value: "/trust" },
 		{ action: "agent.select", value: "/agents" },
 		{ action: "model.select", value: "/models" },
+		{ action: "provider.model.select", value: "/provider-models" },
+		{ action: "provider.connect", value: "/provider-connect" },
 		{ action: "thinking.select", value: "/thinking" },
 		{ action: "dialog.sessions", value: "/sessions" },
 		{ action: "dialog.theme", value: "/themes" },

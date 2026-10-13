@@ -47,6 +47,7 @@ import {
 	PromptConfigProvider,
 	usePromptConfig,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
@@ -384,7 +385,7 @@ function PromptModelProbe({
 	onModel,
 }: {
 	onAgent?: (agent: AgentId) => void;
-	onModel: (model: ChatModelSelection) => void;
+	onModel: (model: ProviderModelSelection) => void;
 }) {
 	const { agent, model } = usePromptConfig();
 	useEffect(() => onModel(model), [model, onModel]);
@@ -751,8 +752,8 @@ describe("SessionView initial submission", () => {
 			modelId: modelId("gpt-6-luna"),
 			providerId: "openai",
 		};
-		let observedModel: ChatModelSelection = defaultChatModelSelection;
-		const recordModel = (model: ChatModelSelection): void => {
+		let observedModel: ProviderModelSelection = defaultChatModelSelection;
+		const recordModel = (model: ProviderModelSelection): void => {
 			observedModel = model;
 		};
 		const workspace = process.cwd();
@@ -840,7 +841,7 @@ describe("SessionView initial submission", () => {
 		const recordAgent = (agent: AgentId): void => {
 			observedAgent = agent;
 		};
-		const recordModel = (_model: ChatModelSelection): void => undefined;
+		const recordModel = (_model: ProviderModelSelection): void => undefined;
 		const pluginRuntime = createPluginRuntime(
 			[
 				{

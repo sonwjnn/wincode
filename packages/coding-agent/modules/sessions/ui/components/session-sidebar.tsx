@@ -10,6 +10,7 @@ import { builtInAgents } from "@/modules/agents";
 import { useModelPricing } from "@/modules/model-pricing";
 import { PluginStatusSidebar } from "@/modules/plugins/ui/plugin-status-sidebar";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -44,7 +45,11 @@ export function SessionSidebar({
 		() => summarizeSessionUsage(messages, model, table),
 		[messages, model, table]
 	);
-	const chatModel = findSupportedChatModelSelection(model);
+	const catalogModel = catalogSelectionForProviderModel(model);
+	const chatModel =
+		catalogModel === null
+			? null
+			: findSupportedChatModelSelection(catalogModel);
 	const modelLabel = chatModel
 		? formatModelLabel(chatModel.displayName)
 		: model.modelId;

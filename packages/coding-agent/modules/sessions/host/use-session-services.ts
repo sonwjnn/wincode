@@ -7,6 +7,7 @@ import {
 	createPluginRuntime,
 	type PluginRuntime,
 } from "@/modules/plugins/runtime";
+import { createInteractiveSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
 import {
@@ -88,6 +89,8 @@ export const useSessionServicesHandle = (): SessionServicesHandle => {
 						registry: () => registryRef.current,
 						sessionHostManager: () => sessionHostManager,
 						store: () => getSessionStore(),
+						createProviderCollection: () =>
+							createInteractiveSessionProviderCollection(),
 						turnToolResolver: () => composition.turnToolResolver,
 						pluginRuntime: () =>
 							getInteractiveRuntimeContext().pluginRuntime ??

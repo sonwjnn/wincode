@@ -14,6 +14,7 @@ import type {
 import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
 import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { AgentSessionImpl } from "@/modules/sessions/agent-session/agent-session";
 import type {
 	AgentSessionPorts,
@@ -1118,7 +1119,7 @@ const createQueuedRuntime = ({
 	readonly started: (count: number) => Promise<void>;
 	/** The Model Target selection each started turn ran with, in start order. */
 	readonly targets: Array<{
-		model: ChatModelSelection;
+		model: ProviderModelSelection;
 		thinkingLevel: ThinkingLevel | undefined;
 	}>;
 } => {
@@ -1130,7 +1131,7 @@ const createQueuedRuntime = ({
 	const gates: Array<() => void> = [];
 	const prompts: string[] = [];
 	const targets: Array<{
-		model: ChatModelSelection;
+		model: ProviderModelSelection;
 		thinkingLevel: ThinkingLevel | undefined;
 	}> = [];
 	const startWaiters: Array<{ count: number; resolve: () => void }> = [];
