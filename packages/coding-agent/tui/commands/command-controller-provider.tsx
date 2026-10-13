@@ -88,7 +88,11 @@ export function CommandControllerProvider({
 		const choice = await requestProjectTrust(dialog, {
 			...status,
 			workspace: config.workspace,
+			showTrustStatus: true,
 		});
+		if (choice === "cancel") {
+			return;
+		}
 		const { decision, persist, scope } = resolveProjectTrustSelection(choice);
 		const runtimeContext = getInteractiveRuntimeContext();
 		let message: string;
@@ -105,12 +109,13 @@ export function CommandControllerProvider({
 			});
 			if (scope === "parent") {
 				message =
-					"Parent folder trust saved. Run /reload to load project resources.";
+					"Parent folder trust saved. Restart Wincode for this to take effect.";
 			} else if (decision === "trust") {
-				message = "Project trust saved. Run /reload to load project resources.";
+				message =
+					"Project trust saved. Restart Wincode for this to take effect.";
 			} else {
 				message =
-					"Project marked untrusted. Run /reload to apply the decision.";
+					"Project marked untrusted. Restart Wincode for this to take effect.";
 			}
 		} else {
 			setInteractiveRuntimeContext({

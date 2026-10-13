@@ -63,9 +63,19 @@ export type ProjectTrustPrompt = (
 	request: ProjectTrustPromptRequest
 ) => Promise<ProjectTrustChoice>;
 
+export type ProjectTrustSnapshot = Readonly<{
+	decisions: readonly Readonly<{
+		decision: ProjectTrustDecision;
+		directory: string;
+	}>[];
+	override?: ProjectTrustOverride;
+	sessionDecision?: ProjectTrustDecision;
+}>;
+
 export type ProjectTrustResolution = Readonly<{
 	diagnostics: readonly string[];
 	sessionDecision?: ProjectTrustDecision;
+	trustSnapshot: ProjectTrustSnapshot;
 	trustedProjectRoots: readonly string[];
 	untrustedProjectRoots: readonly string[];
 }>;
@@ -82,6 +92,7 @@ export type ResolveProjectTrustInput = Readonly<{
 	prompt?: ProjectTrustPrompt;
 	stdinIsTTY?: boolean;
 	projectTrustDir: string;
+	trustSnapshot?: ProjectTrustSnapshot;
 	workspace: string;
 }>;
 
@@ -500,26 +511,34 @@ export const resolveProjectTrust = async ({
 	prompt,
 	stdinIsTTY = false,
 	projectTrustDir,
+	trustSnapshot,
 	workspace,
 }: ResolveProjectTrustInput): Promise<ProjectTrustResolution> => {
 	const protectedRoots = await getProtectedProjectRoots(workspace);
 	const trustFilePath = path.join(projectTrustDir, TRUST_FILE_NAME);
 	const decisions = await canonicalizeTrustDecisions(
-		await loadTrustFile(trustFilePath)
+		trustSnapshot?.decisions ?? (await loadTrustFile(trustFilePath))
 	);
 	const canonicalWorkspace = await canonicalPath(workspace);
 	const promptedParentDirectory = path.dirname(canonicalWorkspace);
-	const prompted = await requestProjectTrustChoice({
-		mode,
-		override,
-		prompt,
-		stdinIsTTY,
-		projectTrustDir,
-		parentDirectory: promptedParentDirectory,
-		workspace: canonicalWorkspace,
-		protectedRoots,
-		decisions,
-	});
+	const resolutionOverride =
+		trustSnapshot === undefined
+			? override
+			: (trustSnapshot.sessionDecision ?? trustSnapshot.override);
+	const prompted =
+		trustSnapshot === undefined
+			? await requestProjectTrustChoice({
+					mode,
+					override: resolutionOverride,
+					prompt,
+					stdinIsTTY,
+					projectTrustDir,
+					parentDirectory: promptedParentDirectory,
+					workspace: canonicalWorkspace,
+					protectedRoots,
+					decisions,
+				})
+			: undefined;
 	const trustedCanonicalRoots = new Set<string>();
 	const untrustedProjectRoots: string[] = [];
 	const diagnostics: string[] = [];
@@ -527,7 +546,7 @@ export const resolveProjectTrust = async ({
 	for (const projectRoot of protectedRoots) {
 		const decision = getDecisionForRoot(
 			projectRoot,
-			override,
+			resolutionOverride,
 			prompted,
 			promptedParentDirectory,
 			decisions
@@ -552,13 +571,28 @@ export const resolveProjectTrust = async ({
 	}
 
 	const sessionDecision =
-		prompted?.selection !== undefined && !prompted.selection.persist
+		trustSnapshot?.sessionDecision ??
+		(prompted?.selection !== undefined && !prompted.selection.persist
 			? prompted.selection.decision
-			: undefined;
+			: undefined);
+	let snapshotDecisions = decisions;
+	if (trustSnapshot === undefined && prompted?.selection?.persist === true) {
+		snapshotDecisions = await canonicalizeTrustDecisions(
+			await loadTrustFile(trustFilePath)
+		);
+	}
+	const nextTrustSnapshot =
+		trustSnapshot ??
+		Object.freeze({
+			decisions: Object.freeze(snapshotDecisions),
+			...(override === undefined ? {} : { override }),
+			...(sessionDecision === undefined ? {} : { sessionDecision }),
+		});
 
 	return Object.freeze({
 		diagnostics: Object.freeze(diagnostics),
 		...(sessionDecision === undefined ? {} : { sessionDecision }),
+		trustSnapshot: nextTrustSnapshot,
 		trustedProjectRoots: expandProjectRoots([...trustedCanonicalRoots]),
 		untrustedProjectRoots: expandProjectRoots(untrustedProjectRoots),
 	});

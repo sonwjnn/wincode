@@ -1,7 +1,9 @@
 import { useTerminalDimensions } from "@opentui/react";
 import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import type {
+	ProjectTrustChoice,
 	ProjectTrustPromptRequest,
+	ProjectTrustRootStatus,
 	ProjectTrustSelection,
 } from "@/modules/project-trust/project-trust";
 import { shortenHomePath } from "@/shared/paths/display-path";
@@ -67,12 +69,61 @@ const getTrustChoices = (
 		: []),
 ];
 
+const getSavedDecisionStatus = (
+	savedDecision: ProjectTrustRootStatus["savedDecision"]
+): string => {
+	if (savedDecision === undefined) {
+		return "none";
+	}
+	const decision = savedDecision.decision === "trust" ? "trusted" : "untrusted";
+	const inherited = savedDecision.inherited
+		? ` (inherited from ${shortenHomePath(savedDecision.directory)})`
+		: "";
+	return `${decision}${inherited}`;
+};
+
+type ProjectTrustRootDetailsProps = ProjectTrustRootStatus &
+	Readonly<{
+		showTrustStatus: boolean;
+		workspace: string;
+	}>;
+
+const ProjectTrustRootDetails = ({
+	currentSessionStatus,
+	projectRoot,
+	savedDecision,
+	showTrustStatus,
+	workspace,
+}: ProjectTrustRootDetailsProps) => {
+	const { colors } = useTheme();
+	return (
+		<box flexDirection="column">
+			{projectRoot === workspace ? null : (
+				<text fg={colors.textMuted} wrapMode="word">
+					{`Protected root: ${shortenHomePath(projectRoot)}`}
+				</text>
+			)}
+			{showTrustStatus ? (
+				<text fg={colors.textMuted} wrapMode="word">
+					{`Saved decision: ${getSavedDecisionStatus(savedDecision)}`}
+				</text>
+			) : null}
+			{showTrustStatus ? (
+				<text fg={colors.textMuted} wrapMode="word">
+					{`Current session: ${currentSessionStatus}`}
+				</text>
+			) : null}
+		</box>
+	);
+};
+
 type ProjectTrustDialogContentProps = ProjectTrustPromptRequest &
 	Readonly<{
 		onCancel: () => void;
 		onDecision: (choice: ProjectTrustSelection) => void;
 		/** The startup prompt offers throwaway decisions; /trust does not. */
 		includeSessionOnly?: boolean;
+		showTrustStatus: boolean;
 	}>;
 
 export function ProjectTrustDialogContent({
@@ -82,12 +133,22 @@ export function ProjectTrustDialogContent({
 	onDecision,
 	parentDirectory,
 	includeSessionOnly = false,
+	showTrustStatus,
 }: ProjectTrustDialogContentProps) {
 	const dialog = useDialog();
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
 	const { height } = useTerminalDimensions();
-	const rootStatusHeight = Math.min(6, Math.max(3, protectedRoots.length * 3));
+	const visibleProtectedRoots = showTrustStatus
+		? protectedRoots
+		: protectedRoots.filter(({ projectRoot }) => projectRoot !== workspace);
+	const rootStatusHeight = Math.min(
+		6,
+		Math.max(
+			showTrustStatus ? 3 : 1,
+			visibleProtectedRoots.length * (showTrustStatus ? 3 : 1)
+		)
+	);
 	const choices = useMemo(
 		() => getTrustChoices(parentDirectory, includeSessionOnly),
 		[parentDirectory, includeSessionOnly]
@@ -124,25 +185,22 @@ export function ProjectTrustDialogContent({
 						<text fg={colors.textMuted}>
 							No protected project resources detected.
 						</text>
-					) : (
+					) : null}
+					{visibleProtectedRoots.length > 0 ? (
 						<scrollbox
-							height={Math.min(rootStatusHeight, Math.max(3, height - 18))}
+							height={Math.min(rootStatusHeight, Math.max(1, height - 18))}
 							verticalScrollbarOptions={{ visible: false }}
 						>
-							{protectedRoots.map(({ projectRoot, savedDecision }) => (
-								<box flexDirection="column" key={projectRoot}>
-									{projectRoot === workspace ? null : (
-										<text fg={colors.textMuted} wrapMode="word">
-											{`Protected root: ${shortenHomePath(projectRoot)}`}
-										</text>
-									)}
-									<text fg={colors.textMuted} wrapMode="word">
-										{`Saved decision: ${savedDecision === undefined ? "none" : `${savedDecision.decision === "trust" ? "trusted" : "untrusted"}${savedDecision.inherited ? ` (inherited from ${shortenHomePath(savedDecision.directory)})` : ""}`}`}
-									</text>
-								</box>
+							{visibleProtectedRoots.map((root) => (
+								<ProjectTrustRootDetails
+									key={root.projectRoot}
+									{...root}
+									showTrustStatus={showTrustStatus}
+									workspace={workspace}
+								/>
 							))}
 						</scrollbox>
-					)}
+					) : null}
 				</box>
 			</DialogInset>
 			<SearchListDialogWrapper<ProjectTrustChoiceItem>
@@ -188,22 +246,21 @@ type ProjectTrustRequest = Omit<
 export const requestProjectTrust = (
 	dialog: Pick<DialogContextValue, "open">,
 	request: ProjectTrustRequest
-): Promise<ProjectTrustSelection> => {
-	const deferred = Promise.withResolvers<ProjectTrustSelection>();
+): Promise<ProjectTrustChoice> => {
+	const deferred = Promise.withResolvers<ProjectTrustChoice>();
 	let settled = false;
-	const decide = (decision: ProjectTrustSelection): void => {
+	const settle = (choice: ProjectTrustChoice): void => {
 		if (settled) {
 			return;
 		}
 		settled = true;
-		deferred.resolve(decision);
+		deferred.resolve(choice);
 	};
 	dialog.open({
 		children: createElement(ProjectTrustDialogContent, {
 			...request,
-			onCancel: () =>
-				deferred.reject(new Error("Project trust prompt was cancelled.")),
-			onDecision: decide,
+			onCancel: () => settle("cancel"),
+			onDecision: (decision) => settle(decision),
 		}),
 		title: "Project Trust",
 	});

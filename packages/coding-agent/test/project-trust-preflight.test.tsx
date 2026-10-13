@@ -58,11 +58,18 @@ const undecidedRequest: ProjectTrustPromptRequest = {
 
 const renderTrustDialog = async (
 	trustRequest: ProjectTrustPromptRequest = request,
-	includeSessionOnly = false
+	{
+		includeSessionOnly = false,
+		showTrustStatus = true,
+	}: Readonly<{
+		includeSessionOnly?: boolean;
+		showTrustStatus?: boolean;
+	}> = {}
 ) => {
 	let selectionOutcome: Promise<
 		| Readonly<{ kind: "selected"; choice: string }>
 		| Readonly<{ kind: "cancelled" }>
+		| Readonly<{ kind: "rejected"; error: unknown }>
 	> = Promise.resolve({ kind: "cancelled" });
 
 	function Harness() {
@@ -70,10 +77,13 @@ const renderTrustDialog = async (
 		useEffect(() => {
 			selectionOutcome = requestProjectTrust(
 				{ open },
-				{ ...trustRequest, includeSessionOnly }
+				{ ...trustRequest, includeSessionOnly, showTrustStatus }
 			).then(
-				(choice) => ({ kind: "selected", choice }),
-				() => ({ kind: "cancelled" })
+				(choice) =>
+					choice === "cancel"
+						? ({ kind: "cancelled" } as const)
+						: ({ kind: "selected", choice } as const),
+				(error: unknown) => ({ kind: "rejected", error }) as const
 			);
 		}, [open]);
 		return null;
@@ -96,7 +106,7 @@ const renderTrustDialog = async (
 	};
 };
 
-test("startup preflight returns cancellation and tears down its renderer", async () => {
+test("startup preflight removes empty status space while retaining session-only choices", async () => {
 	const priorActEnvironment = Reflect.get(
 		globalThis,
 		"IS_REACT_ACT_ENVIRONMENT"
@@ -112,16 +122,29 @@ test("startup preflight returns cancellation and tears down its renderer", async
 			nativeRendererDestroyed = true;
 			destroy();
 		};
+		const workspaceOnlyRequest: ProjectTrustPromptRequest = {
+			...request,
+			protectedRoots: request.protectedRoots.filter(
+				({ projectRoot }) => projectRoot === request.workspace
+			),
+		};
 		const preflight = runProjectTrustPreflight(
-			request,
+			workspaceOnlyRequest,
 			async () => testSetup.renderer
 		);
 		await flushTestRenderer(testSetup, 3);
 		const startupFrame = testSetup.captureCharFrame();
-		expect(startupFrame).toContain(
-			"Saved decision: trusted (inherited from /workspace)"
-		);
+		expect(startupFrame).not.toContain("Saved decision:");
+		expect(startupFrame).not.toContain("Current session:");
 		expect(startupFrame).toContain("Trust (this session only)");
+		const startupLines = startupFrame.split("\n");
+		const workspaceLine = startupLines.findIndex((line) =>
+			line.includes("Workspace:")
+		);
+		const choiceLine = startupLines.findIndex((line) =>
+			line.includes("Trust (this session only)")
+		);
+		expect(choiceLine - workspaceLine).toBeLessThanOrEqual(4);
 		await act(() => testSetup.mockInput.pressEscape());
 		await flushTestRenderer(testSetup, 2);
 		let choice: Awaited<typeof preflight> | undefined;
@@ -143,8 +166,8 @@ test("startup preflight returns cancellation and tears down its renderer", async
 	}
 });
 
-test("trust selector lists each root and its saved decision; Escape cancels", async () => {
-	const { selectionOutcome, setup } = await renderTrustDialog();
+test("trust selector lists each root and its saved decision", async () => {
+	const { setup } = await renderTrustDialog();
 	try {
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("Protected root: /workspace/repo");
@@ -154,13 +177,21 @@ test("trust selector lists each root and its saved decision; Escape cancels", as
 			"Saved decision: trusted (inherited from /workspace)"
 		);
 		expect(frame).toContain("Saved decision: untrusted");
+		expect(frame).toContain("Current session: pending");
 		expect(frame).toContain("Trust parent folder (/workspace)");
 		expect(frame).toContain("Do not trust");
 		expect(frame).toContain(
 			"Allow this project's protected resources to load."
 		);
 		expect(frame).toContain("↑↓ navigate");
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
 
+test("trust selector resolves Escape as cancellation instead of rejecting", async () => {
+	const { selectionOutcome, setup } = await renderTrustDialog();
+	try {
 		await act(() => setup.mockInput.pressEscape());
 		await flushTestRenderer(setup, 2);
 		expect(await selectionOutcome()).toEqual({ kind: "cancelled" });
@@ -180,14 +211,16 @@ test("trust selector offers session-only choices only to the startup prompt", as
 		await act(() => management.setup.renderer.destroy());
 	}
 
-	const startup = await renderTrustDialog(request, true);
+	const startup = await renderTrustDialog(request, {
+		includeSessionOnly: true,
+		showTrustStatus: false,
+	});
 	try {
 		const frame = startup.setup.captureCharFrame();
 		expect(frame).toContain("Trust (this session only)");
 		expect(frame).toContain("Do not trust (this session only)");
-		expect(frame).toContain(
-			"Saved decision: trusted (inherited from /workspace)"
-		);
+		expect(frame).not.toContain("Saved decision:");
+		expect(frame).not.toContain("Current session:");
 	} finally {
 		await act(() => startup.setup.renderer.destroy());
 	}
@@ -282,7 +315,10 @@ test("trust selector returns the parent-trust choice selected with the keyboard"
 });
 
 test("trust selector returns the session-only choice selected with the keyboard", async () => {
-	const { selectionOutcome, setup } = await renderTrustDialog(request, true);
+	const { selectionOutcome, setup } = await renderTrustDialog(request, {
+		includeSessionOnly: true,
+		showTrustStatus: false,
+	});
 	try {
 		await act(() => setup.mockInput.pressArrow("down"));
 		await flushTestRenderer(setup, 2);

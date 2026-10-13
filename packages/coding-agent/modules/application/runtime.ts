@@ -95,11 +95,23 @@ export const initializeApplicationRuntime = async (
 			options.distributionPlugins ?? composition.distributionPlugins,
 		userDataDir,
 	});
-	const resourceLoader = createApplicationResourceLoader(input, {
-		...options,
-		projectTrustDir,
-		userDataDir,
-	});
+	const resourceLoader = createApplicationResourceLoader(
+		{
+			cwd,
+			disabledPluginIds: input.disabledPluginIds,
+			mode: input.mode,
+			pluginPaths: input.pluginPaths,
+			trustSnapshot: projectTrust.trustSnapshot,
+		},
+		{
+			...(options.distributionPlugins === undefined
+				? {}
+				: { distributionPlugins: options.distributionPlugins }),
+			homeRoot,
+			projectTrustDir,
+			userDataDir,
+		}
+	);
 	return Object.freeze({
 		configRuntime,
 		pluginRuntime,

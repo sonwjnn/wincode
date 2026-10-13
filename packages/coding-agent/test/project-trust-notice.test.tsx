@@ -42,6 +42,7 @@ test("untrusted project roots render the inline trust notice with the /trust hin
 	try {
 		const frameText = setup.captureCharFrame().replaceAll(/\s+/gu, " ");
 		expect(frameText).toContain(PROJECT_TRUST_NOTICE_MESSAGE);
+		expect(PROJECT_TRUST_NOTICE_MESSAGE).toContain("restart Wincode");
 	} finally {
 		await act(() => setup.renderer.destroy());
 	}

@@ -458,67 +458,162 @@ describe("Coding-Agent Application Project trust", () => {
 		expect(await Bun.file(trustFilePath).exists()).toBe(false);
 	});
 
-	test("Resource Reload applies an in-memory session trust decision over the saved one", async () => {
+	test("persisted Project trust changes take effect only after a new runtime starts", async () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
 		const userDataDir = path.join(directory, "user-data");
+		const projectTrustDir = path.join(homeRoot, ".wincode");
 		await fs.mkdir(workspace, { recursive: true });
 		await Bun.write(
 			path.join(workspace, ".wincode", "settings.json"),
 			JSON.stringify({ settings: { fromProject: true } })
 		);
+		const canonicalWorkspace = await fs.realpath(workspace);
+		const initializeRuntime = () =>
+			initializeApplicationRuntime(
+				{
+					cwd: workspace,
+					disabledPluginIds: [],
+					mode: "print",
+					pluginPaths: [],
+					stdinIsTTY: false,
+				},
+				{ distributionPlugins: [], homeRoot, userDataDir }
+			);
+
 		await saveProjectTrustDecision({
 			decision: "deny",
-			projectTrustDir: path.join(homeRoot, ".wincode"),
+			projectTrustDir,
 			workspace,
 		});
+		const initiallyDenied = await initializeRuntime();
+		const pluginRuntimes = new Set([initiallyDenied.pluginRuntime]);
+		try {
+			expect(initiallyDenied.configRuntime.untrustedProjectRoots).toContain(
+				canonicalWorkspace
+			);
+
+			await saveProjectTrustDecision({
+				decision: "trust",
+				projectTrustDir,
+				workspace,
+			});
+			const stillDenied = await initiallyDenied.resourceLoader.reload({
+				current: {
+					configRuntime: initiallyDenied.configRuntime,
+					pluginRuntime: initiallyDenied.pluginRuntime,
+				},
+			});
+			pluginRuntimes.add(stillDenied.pluginRuntime);
+			expect(stillDenied.configRuntime.trustedProjectRoots).toEqual([]);
+			expect(stillDenied.configRuntime.untrustedProjectRoots).toContain(
+				canonicalWorkspace
+			);
+			expect(
+				(await stillDenied.configRuntime.configStore.getSnapshot(workspace))
+					.document.settings
+			).toBeUndefined();
+
+			const trusted = await initializeRuntime();
+			pluginRuntimes.add(trusted.pluginRuntime);
+			expect(trusted.configRuntime.trustedProjectRoots).toContain(
+				canonicalWorkspace
+			);
+			expect(
+				(await trusted.configRuntime.configStore.getSnapshot(workspace))
+					.document.settings
+			).toEqual({ fromProject: true });
+
+			await saveProjectTrustDecision({
+				decision: "deny",
+				projectTrustDir,
+				workspace,
+			});
+			const stillTrusted = await trusted.resourceLoader.reload({
+				current: {
+					configRuntime: trusted.configRuntime,
+					pluginRuntime: trusted.pluginRuntime,
+				},
+			});
+			pluginRuntimes.add(stillTrusted.pluginRuntime);
+			expect(stillTrusted.configRuntime.trustedProjectRoots).toContain(
+				canonicalWorkspace
+			);
+			expect(
+				(await stillTrusted.configRuntime.configStore.getSnapshot(workspace))
+					.document.settings
+			).toEqual({ fromProject: true });
+
+			const deniedAfterRestart = await initializeRuntime();
+			pluginRuntimes.add(deniedAfterRestart.pluginRuntime);
+			expect(deniedAfterRestart.configRuntime.untrustedProjectRoots).toContain(
+				canonicalWorkspace
+			);
+			expect(
+				(
+					await deniedAfterRestart.configRuntime.configStore.getSnapshot(
+						workspace
+					)
+				).document.settings
+			).toBeUndefined();
+		} finally {
+			for (const pluginRuntime of pluginRuntimes) {
+				await pluginRuntime.shutdown();
+			}
+		}
+	});
+
+	test("Resource Reload preserves the startup session-only trust choice", async () => {
+		const directory = await createDirectory();
+		const workspace = path.join(directory, "repo");
+		const homeRoot = path.join(directory, "home");
+		const userDataDir = path.join(directory, "user-data");
+		const projectTrustDir = path.join(homeRoot, ".wincode");
+		await fs.mkdir(workspace, { recursive: true });
+		await Bun.write(
+			path.join(workspace, ".wincode", "settings.json"),
+			JSON.stringify({ settings: { sessionOnly: true } })
+		);
 		const canonicalWorkspace = await fs.realpath(workspace);
 		const runtime = await initializeApplicationRuntime(
 			{
 				cwd: workspace,
 				disabledPluginIds: [],
-				mode: "print",
+				mode: "interactive",
 				pluginPaths: [],
-				stdinIsTTY: false,
+				stdinIsTTY: true,
 			},
-			{ distributionPlugins: [], homeRoot, userDataDir }
+			{
+				distributionPlugins: [],
+				homeRoot,
+				userDataDir,
+				promptProjectTrust: async () => "trust-session",
+			}
 		);
 		const pluginRuntimes = new Set([runtime.pluginRuntime]);
 		try {
-			expect(runtime.configRuntime.untrustedProjectRoots).toContain(
-				canonicalWorkspace
-			);
+			expect(runtime.sessionTrustDecision).toBe("trust");
+			await saveProjectTrustDecision({
+				decision: "deny",
+				projectTrustDir,
+				workspace,
+			});
 
-			const trusted = await runtime.resourceLoader.reload({
+			const reloaded = await runtime.resourceLoader.reload({
 				current: {
 					configRuntime: runtime.configRuntime,
 					pluginRuntime: runtime.pluginRuntime,
 				},
-				sessionTrustDecision: "trust",
 			});
-			pluginRuntimes.add(trusted.pluginRuntime);
-			expect(trusted.configRuntime.trustedProjectRoots).toContain(
+			pluginRuntimes.add(reloaded.pluginRuntime);
+			expect(reloaded.configRuntime.trustedProjectRoots).toContain(
 				canonicalWorkspace
 			);
-			expect(trusted.configRuntime.untrustedProjectRoots).toEqual([]);
-			const trustedSnapshot =
-				await trusted.configRuntime.configStore.getSnapshot(workspace);
-			expect(trustedSnapshot.document.settings).toEqual({
-				fromProject: true,
-			});
-
-			const denied = await runtime.resourceLoader.reload({
-				current: {
-					configRuntime: trusted.configRuntime,
-					pluginRuntime: trusted.pluginRuntime,
-				},
-				sessionTrustDecision: "deny",
-			});
-			pluginRuntimes.add(denied.pluginRuntime);
-			expect(denied.configRuntime.untrustedProjectRoots).toContain(
-				canonicalWorkspace
-			);
+			expect(
+				(await reloaded.configRuntime.configStore.getSnapshot(workspace))
+					.document.settings
+			).toEqual({ sessionOnly: true });
 		} finally {
 			for (const pluginRuntime of pluginRuntimes) {
 				await pluginRuntime.shutdown();
@@ -692,7 +787,7 @@ describe("Coding-Agent Application Project trust", () => {
 		expect(prompts).toBe(1);
 	});
 
-	test("/trust replaces a saved refusal so the next reload trusts project resources", async () => {
+	test("/trust replaces a saved refusal so the next runtime trusts project resources", async () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
 		const userDataDir = path.join(directory, "user-data");

@@ -58,7 +58,6 @@ test("MCP status remains renderable while the first reload shuts down its previo
 			diagnostics: [],
 			pluginRuntime: replacement,
 			pluginRuntimeChanged: true,
-			trustChanged: false,
 		}),
 	};
 	await resetInteractiveSessionHostManager();

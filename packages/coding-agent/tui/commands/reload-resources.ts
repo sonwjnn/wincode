@@ -110,7 +110,7 @@ const startReplacementPluginRuntime = async (
 	try {
 		const startDiagnostics = await startDiagnosticsFor(result.pluginRuntime);
 		diagnostics.push(...startDiagnostics);
-		if (startDiagnostics.length > 0 && !result.trustChanged) {
+		if (startDiagnostics.length > 0) {
 			return restorePreviousPluginRuntime(
 				previous,
 				result.pluginRuntime,
@@ -122,13 +122,11 @@ const startReplacementPluginRuntime = async (
 			message: error instanceof Error ? error.message : String(error),
 			resource: "Plugin",
 		});
-		if (!result.trustChanged) {
-			return restorePreviousPluginRuntime(
-				previous,
-				result.pluginRuntime,
-				diagnostics
-			);
-		}
+		return restorePreviousPluginRuntime(
+			previous,
+			result.pluginRuntime,
+			diagnostics
+		);
 	}
 	return result.pluginRuntime;
 };
@@ -196,9 +194,6 @@ export const reloadInteractiveResources = async ({
 				configRuntime: active.configRuntime,
 				pluginRuntime: active.pluginRuntime,
 			},
-			...(current.sessionTrustDecision === undefined
-				? {}
-				: { sessionTrustDecision: current.sessionTrustDecision }),
 		});
 		if (lifecycle.isCleanupRequested()) {
 			await discardUnstartedPluginRuntime(active.pluginRuntime, result);

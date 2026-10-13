@@ -23,6 +23,18 @@ test("keeps host built-in slash names routed to their action IDs", () => {
 	expect(COMMANDS.every((command) => command.kind === "builtin")).toBe(true);
 });
 
+test("explains that /trust is saved for the next runtime while /reload keeps current trust", () => {
+	const reload = COMMANDS.find(({ name }) => name === "reload");
+	const trust = COMMANDS.find(({ name }) => name === "trust");
+
+	expect(reload?.description).toBe(
+		"Reload resources under the current Project trust decision"
+	);
+	expect(trust?.description).toBe(
+		"Save Project trust decision for the next Wincode session"
+	);
+});
+
 test("suppresses popover rows for commands the view cannot run", () => {
 	expect(getVisibleCommands()).toHaveLength(COMMANDS.length);
 	expect(
