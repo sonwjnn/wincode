@@ -20,6 +20,7 @@ import {
 	createInteractiveSessionProviderCollection,
 	type InteractiveSessionProviderCollection,
 } from "@/modules/sessions/provider-collection";
+import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const registrationFor = (
 	pluginId: string,
@@ -63,16 +64,10 @@ const createMemoryStores = (
 	const snapshots = new Map<string, readonly ProviderModel[]>();
 	return {
 		credentials,
-		credentialStore: {
-			delete: (providerId) => {
-				credentials.delete(providerId);
-			},
-			get: (providerId) => credentials.get(providerId),
-			set: async (providerId, credential) => {
-				await beforeCredentialWrite?.(providerId, credential);
-				credentials.set(providerId, credential);
-			},
-		},
+		credentialStore: createInMemoryCredentialStore(
+			credentials,
+			beforeCredentialWrite
+		),
 		modelStore: {
 			get: (providerId) => snapshots.get(providerId),
 			set: (providerId, models) => {

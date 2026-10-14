@@ -97,6 +97,54 @@ describe("Google CachedContent resource lifecycle", () => {
 		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/1" }]);
 	});
 
+	test("isolates in-flight CachedContent cleanup across Host-owned managers", async () => {
+		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
+		const creation = Promise.withResolvers<{ name: string }>();
+		const createStarted = Promise.withResolvers<void>();
+		let createCount = 0;
+		const client = {
+			create: async (params: CreateCachedContentParameters) => {
+				calls.createCalls.push(params);
+				createCount += 1;
+				if (createCount === 1) {
+					createStarted.resolve();
+					return creation.promise;
+				}
+				return { name: `cachedContents/${createCount}` };
+			},
+			delete: async (params: DeleteCachedContentParameters) => {
+				calls.deleteCalls.push(params);
+				return {};
+			},
+		};
+		const firstHostManager = createGoogleCachedContentResourceManager({
+			createClient: () => client,
+			sessionId: "first-host-session",
+		});
+		const secondHostManager = createGoogleCachedContentResourceManager({
+			createClient: () => client,
+			sessionId: "second-host-session",
+		});
+
+		const firstSelection = select(firstHostManager);
+		await createStarted.promise;
+		expect((await select(secondHostManager))?.name).toBe("cachedContents/2");
+		const closingFirstHost = firstHostManager.close();
+		creation.resolve({ name: "cachedContents/1" });
+
+		expect(await firstSelection).toBeUndefined();
+		await closingFirstHost;
+		expect((await select(secondHostManager))?.name).toBe("cachedContents/2");
+		expect(calls.createCalls).toHaveLength(2);
+		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/1" }]);
+
+		await secondHostManager.close();
+		expect(calls.deleteCalls).toEqual([
+			{ name: "cachedContents/1" },
+			{ name: "cachedContents/2" },
+		]);
+	});
+
 	test("coalesces concurrent selections so close deletes the one owned resource", async () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
 		const pendingCreations: PromiseWithResolvers<{ name: string }>[] = [];

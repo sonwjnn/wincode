@@ -29,6 +29,8 @@ import type {
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ModelStore, ProviderModel } from "@wincode/ai/sdk";
+import type { GoogleProviderOptions } from "@wincode/ai/sdk/providers/google";
 import { logger } from "@wincode/utils";
 import { z } from "zod";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
@@ -67,6 +69,7 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import { createSessionSdkOperations } from "@/modules/sessions/sdk";
 import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
 import {
@@ -79,6 +82,7 @@ import {
 	type SessionWriterLock,
 } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
+import { summarizeSessionUsage } from "@/modules/sessions/usage/session-usage";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
@@ -107,6 +111,7 @@ import {
 	toolCallId,
 } from "../support/identifiers";
 import { createEmptyPluginRuntime } from "../support/plugin-runtime";
+import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const recorder = createFakeModelClientRecorder();
 installFakeModelClient(recorder);
@@ -1299,6 +1304,89 @@ describe("Session Host lifetime", () => {
 		}
 	});
 
+	test("cache-warm replay adds cost usage without changing Session Context or Transcript", async () => {
+		const seeded = await seedSession(
+			"cache-warm-transcript-boundary",
+			"interrupted",
+			cacheWarmingModel
+		);
+		const capabilities = createCapabilities(store, {}, sessionHostManager, {
+			modelPricingTable: cacheWarmingPricingTable,
+		});
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const restoreModelScript = installCacheWarmingStepScript();
+		const warmUsagePublished = Promise.withResolvers<void>();
+		const unsubscribeWarmUsage = host.subscribe(() => {
+			if (
+				host.getSessionUsageEntries().some(({ kind }) => kind === "cache-warm")
+			) {
+				warmUsagePublished.resolve();
+			}
+		});
+		vi.useFakeTimers();
+		try {
+			const outcome = await host.agentSession.send({
+				...sendInput(capabilities),
+				model: cacheWarmingModel,
+				sessionModel: cacheWarmingModel,
+			});
+			expect(outcome).toEqual({ rejected: false });
+			expect(host.getCacheWarmingStatus()).toBe("scheduled");
+			const beforeWarm = host.getSnapshot();
+			const usageBeforeWarm = host.getSessionUsageEntries();
+			const summaryBeforeWarm = summarizeSessionUsage(
+				beforeWarm.transcript,
+				cacheWarmingModel,
+				cacheWarmingPricingTable,
+				usageBeforeWarm,
+				host.getCacheWarmingStatus()
+			);
+
+			vi.advanceTimersByTime(27 * 60_000);
+			await warmUsagePublished.promise;
+
+			const afterWarm = host.getSnapshot();
+			const usageAfterWarm = host.getSessionUsageEntries();
+			const summaryAfterWarm = summarizeSessionUsage(
+				afterWarm.transcript,
+				cacheWarmingModel,
+				cacheWarmingPricingTable,
+				usageAfterWarm,
+				host.getCacheWarmingStatus()
+			);
+			expect(afterWarm.transcript).toEqual(beforeWarm.transcript);
+			expect(afterWarm.context).toEqual(beforeWarm.context);
+			expect(usageAfterWarm).toHaveLength(1);
+			expect(usageAfterWarm[0]).toMatchObject({
+				kind: "cache-warm",
+				model: { modelId: "gpt-5.6", providerId: "openai" },
+				usage: {
+					cacheReadTokens: 90_000,
+					inputTokens: 100_000,
+					outputTokens: 1,
+				},
+			});
+			expect(summaryAfterWarm?.costedUsageEntries).toBe(1);
+			expect(summaryAfterWarm?.costUsd ?? 0).toBeGreaterThan(
+				summaryBeforeWarm?.costUsd ?? 0
+			);
+			expect(summaryAfterWarm?.contextTokens).toBe(
+				summaryBeforeWarm?.contextTokens
+			);
+		} finally {
+			restoreModelScript();
+			unsubscribeWarmUsage();
+			try {
+				await host.shutdown();
+			} finally {
+				vi.useRealTimers();
+			}
+		}
+	});
+
 	test("keeps the OpenAI prompt-cache key stable across turns in one Session", async () => {
 		const selectedModel: ChatModelSelection = {
 			modelId: modelId("gpt-5.6-luna"),
@@ -1431,6 +1519,171 @@ describe("Session Host lifetime", () => {
 			globalThis.fetch = originalFetch;
 			recorder.beforeStep = previousBeforeStep;
 			await host?.shutdown();
+		}
+	});
+
+	test("SDK Host shutdown cleans its in-flight Google cache without affecting another Host", async () => {
+		const selectedModel: ChatModelSelection = {
+			modelId: modelId("gemini-3.8-flash"),
+			providerId: "google",
+		};
+		const firstSession = await seedSession(
+			"sdk-google-cache-shutdown-first",
+			"interrupted",
+			selectedModel
+		);
+		const secondSession = await seedSession(
+			"sdk-google-cache-shutdown-second",
+			"interrupted",
+			selectedModel
+		);
+		const fakeCredentials = new Map<string, unknown>([
+			["google", { apiKey: "fake-google-key", kind: "api-key" }],
+		]);
+		const modelSnapshots = new Map<string, readonly ProviderModel[]>();
+		const credentialStore = createInMemoryCredentialStore(fakeCredentials);
+		const modelStore: ModelStore = {
+			get: (providerId) => modelSnapshots.get(providerId),
+			set: (providerId, models) => {
+				modelSnapshots.set(providerId, models);
+			},
+		};
+		const firstCacheName = "cachedContents/first-host";
+		const secondCacheName = "cachedContents/second-host";
+		const firstCacheCreation = Promise.withResolvers<{ name: string }>();
+		const firstCacheCreateStarted = Promise.withResolvers<void>();
+		const cacheCalls = new Map<
+			string,
+			{ created: string[]; deleted: string[] }
+		>([
+			[firstSession.sessionId, { created: [], deleted: [] }],
+			[secondSession.sessionId, { created: [], deleted: [] }],
+		]);
+		const requestBodies = new Map<string, Record<string, unknown>[]>([
+			[firstSession.sessionId, []],
+			[secondSession.sessionId, []],
+		]);
+		const manager = createSessionHostManager();
+		const legacyCapabilities = createCapabilities(
+			store,
+			{
+				promptCache: {
+					modelOverrides: { "google/gemini-3.8-flash": "short" },
+				},
+			},
+			manager
+		);
+		const { getRuntime: _legacyRuntime, ...sdkCapabilities } =
+			legacyCapabilities;
+		const capabilities: SessionCapabilities = {
+			...sdkCapabilities,
+			createProviderCollection: async (pluginRuntime, ownerSessionId) => {
+				if (ownerSessionId === undefined) {
+					throw new Error("SDK Session Host did not provide its Session ID.");
+				}
+				const calls = cacheCalls.get(ownerSessionId);
+				if (calls === undefined) {
+					throw new Error("SDK Session Host cache owner was not initialized.");
+				}
+				const googleProviderOptions: GoogleProviderOptions = {
+					createCacheClient: () => ({
+						create: async () => {
+							const name =
+								ownerSessionId === firstSession.sessionId
+									? firstCacheName
+									: secondCacheName;
+							calls.created.push(name);
+							if (ownerSessionId === firstSession.sessionId) {
+								firstCacheCreateStarted.resolve();
+								return firstCacheCreation.promise;
+							}
+							return { name };
+						},
+						delete: async ({ name }) => {
+							calls.deleted.push(name);
+							return {};
+						},
+					}),
+					fetch: async (_input, init) => {
+						requestBodies
+							.get(ownerSessionId)
+							?.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+						return new Response(
+							[
+								`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "Host-scoped response" }] } }] })}\n\n`,
+								`data: ${JSON.stringify({ candidates: [{ finishReason: "STOP" }], usageMetadata: { candidatesTokenCount: 1, promptTokenCount: 2, totalTokenCount: 3 } })}\n\n`,
+							].join(""),
+							{ headers: { "content-type": "text/event-stream" } }
+						);
+					},
+				};
+				return createDefaultSessionProviderCollection(
+					pluginRuntime,
+					ownerSessionId,
+					{ credentialStore, googleProviderOptions, modelStore }
+				);
+			},
+		};
+		const firstHost = await createSessionHost({
+			capabilities,
+			sessionId: firstSession.sessionId,
+		});
+		const secondHost = await createSessionHost({
+			capabilities,
+			sessionId: secondSession.sessionId,
+		});
+		const sendToHost = (host: SessionHost, userText: string) =>
+			host.agentSession.send({
+				...sendInput(capabilities, userText),
+				model: selectedModel,
+				sessionModel: selectedModel,
+			});
+		try {
+			const firstTurn = sendToHost(firstHost, "first Host request");
+			await firstCacheCreateStarted.promise;
+
+			expect(await sendToHost(secondHost, "second Host request")).toEqual({
+				rejected: false,
+			});
+			expect(cacheCalls.get(secondSession.sessionId)?.created).toEqual([
+				secondCacheName,
+			]);
+			expect(
+				requestBodies
+					.get(secondSession.sessionId)
+					?.map(({ cachedContent }) => cachedContent)
+			).toEqual([secondCacheName]);
+
+			const firstShutdown = firstHost.shutdown();
+			firstCacheCreation.resolve({ name: firstCacheName });
+			await Promise.all([firstTurn, firstShutdown]);
+			expect(cacheCalls.get(firstSession.sessionId)?.deleted).toEqual([
+				firstCacheName,
+			]);
+			expect(cacheCalls.get(secondSession.sessionId)?.deleted).toEqual([]);
+
+			expect(
+				await sendToHost(secondHost, "second Host still owns its cache")
+			).toEqual({
+				rejected: false,
+			});
+			expect(cacheCalls.get(secondSession.sessionId)?.created).toEqual([
+				secondCacheName,
+			]);
+			expect(
+				requestBodies
+					.get(secondSession.sessionId)
+					?.map(({ cachedContent }) => cachedContent)
+			).toEqual([secondCacheName, secondCacheName]);
+
+			await secondHost.shutdown();
+			expect(cacheCalls.get(secondSession.sessionId)?.deleted).toEqual([
+				secondCacheName,
+			]);
+		} finally {
+			firstCacheCreation.resolve({ name: firstCacheName });
+			await Promise.all([firstHost.shutdown(), secondHost.shutdown()]);
+			await manager.shutdownAll();
 		}
 	});
 

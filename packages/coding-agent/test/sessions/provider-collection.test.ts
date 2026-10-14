@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type {
-	CredentialStore,
+	ChatEvent,
+	ChatRequest,
 	ModelStore,
 	Provider,
+	ProviderCollection,
 	ProviderModel,
 } from "@wincode/ai/sdk";
+import type { GoogleProviderOptions } from "@wincode/ai/sdk/providers/google";
 import type {
 	PluginProviderDescriptor,
 	PluginRuntime,
@@ -15,19 +18,146 @@ import {
 	type InteractiveProviderController,
 } from "@/modules/providers/interactive-provider-controller";
 import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
+import { createInMemoryCredentialStore } from "../support/provider-stores";
+
+test("Host Google caches stay isolated over shared user-scoped Provider stores", async () => {
+	const credentials = new Map<string, unknown>();
+	const modelSnapshots = new Map<string, readonly ProviderModel[]>();
+	const modelStoreReads: string[] = [];
+	const credentialStore = createInMemoryCredentialStore(credentials);
+	const modelStore: ModelStore = {
+		get: (providerId) => {
+			modelStoreReads.push(providerId);
+			return modelSnapshots.get(providerId);
+		},
+		set: (providerId, models) => {
+			modelSnapshots.set(providerId, models);
+		},
+	};
+	const cacheCalls = {
+		"first-host": { created: [] as string[], deleted: [] as string[] },
+		"second-host": { created: [] as string[], deleted: [] as string[] },
+	};
+	const requestBodies: Record<
+		keyof typeof cacheCalls,
+		Record<string, unknown>[]
+	> = {
+		"first-host": [],
+		"second-host": [],
+	};
+	const googleOptionsForHost = (
+		host: keyof typeof cacheCalls
+	): GoogleProviderOptions => ({
+		createCacheClient: () => ({
+			create: async () => {
+				const name = `cachedContents/${host}`;
+				cacheCalls[host].created.push(name);
+				return { name };
+			},
+			delete: async ({ name }) => {
+				cacheCalls[host].deleted.push(name);
+				return {};
+			},
+		}),
+		fetch: async (_input, init) => {
+			requestBodies[host].push(
+				JSON.parse(String(init?.body)) as Record<string, unknown>
+			);
+			return new Response(
+				`data: {"candidates":[{"finishReason":"STOP"}]}${String.fromCharCode(10, 10)}`,
+				{ headers: { "content-type": "text/event-stream" } }
+			);
+		},
+	});
+	const [first, second] = await Promise.all([
+		createDefaultSessionProviderCollection(undefined, "first-host", {
+			credentialStore,
+			googleProviderOptions: googleOptionsForHost("first-host"),
+			modelStore,
+		}),
+		createDefaultSessionProviderCollection(undefined, "second-host", {
+			credentialStore,
+			googleProviderOptions: googleOptionsForHost("second-host"),
+			modelStore,
+		}),
+	]);
+	const request: ChatRequest = {
+		cacheRetention: "short",
+		messages: [
+			{ content: [{ text: "current prompt", type: "text" }], role: "user" },
+		],
+		modelId: "gemini-3.8-flash",
+		providerId: "google",
+		system: "Stable Host prefix",
+	};
+	const send = async (collection: ProviderCollection): Promise<void> => {
+		const events: ChatEvent[] = [];
+		for await (const event of collection.chat(request)) {
+			events.push(event);
+		}
+		expect(
+			events.some(
+				(event) =>
+					event.type === "terminal" && event.outcome.status === "success"
+			)
+		).toBe(true);
+	};
+
+	try {
+		await Promise.all([first.restoreModels(), second.restoreModels()]);
+		await first.setCredential("google", {
+			apiKey: "shared-fake-google-key",
+			kind: "api-key",
+		});
+		await Promise.all([send(first), send(second)]);
+		await Promise.all([send(first), send(second)]);
+
+		expect(credentials.get("google")).toEqual({
+			apiKey: "shared-fake-google-key",
+			kind: "api-key",
+		});
+		expect(
+			modelStoreReads.filter((providerId) => providerId === "google")
+		).toHaveLength(2);
+		expect(cacheCalls["first-host"].created).toEqual([
+			"cachedContents/first-host",
+		]);
+		expect(cacheCalls["second-host"].created).toEqual([
+			"cachedContents/second-host",
+		]);
+		expect(
+			requestBodies["first-host"].map(({ cachedContent }) => cachedContent)
+		).toEqual(["cachedContents/first-host", "cachedContents/first-host"]);
+		expect(
+			requestBodies["second-host"].map(({ cachedContent }) => cachedContent)
+		).toEqual(["cachedContents/second-host", "cachedContents/second-host"]);
+
+		await first.close();
+		expect(cacheCalls["first-host"].deleted).toEqual([
+			"cachedContents/first-host",
+		]);
+		expect(cacheCalls["second-host"].deleted).toEqual([]);
+		await send(second);
+		expect(cacheCalls["second-host"].created).toEqual([
+			"cachedContents/second-host",
+		]);
+		expect(cacheCalls["second-host"].deleted).toEqual([]);
+	} finally {
+		await Promise.all([first.close(), second.close()]);
+	}
+
+	expect(cacheCalls["first-host"].deleted).toEqual([
+		"cachedContents/first-host",
+	]);
+	expect(cacheCalls["second-host"].deleted).toEqual([
+		"cachedContents/second-host",
+	]);
+});
 
 test("each Host gets fresh built-in and trusted Plugin Providers over shared app stores", async () => {
 	const credentials = new Map<string, unknown>();
 	const snapshots = new Map<string, readonly ProviderModel[]>();
-	const credentialStore: CredentialStore = {
-		delete: (providerId) => {
-			credentials.delete(providerId);
-		},
-		get: (providerId) => credentials.get(providerId),
-		set: (providerId, credential) => {
-			credentials.set(providerId, credential);
-		},
-	};
+	const credentialStore = createInMemoryCredentialStore(credentials);
 	const modelStore: ModelStore = {
 		get: (providerId) => snapshots.get(providerId),
 		set: (providerId, models) => {

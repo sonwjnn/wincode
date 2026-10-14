@@ -47,11 +47,12 @@ export const createDefaultSessionProviderCollection = (
 	sessionId?: string,
 	options: Omit<
 		InteractiveSessionProviderCollectionOptions,
-		"pluginProviders"
+		"pluginProviders" | "sessionId"
 	> = {}
 ): Promise<InteractiveSessionProviderCollection> =>
 	createInteractiveSessionProviderCollection({
 		...options,
+		...(sessionId === undefined ? {} : { sessionId }),
 		pluginProviders: pluginProvidersFromRuntime(pluginRuntime, sessionId),
 	});
 
@@ -65,6 +66,7 @@ export type InteractiveSessionProviderCollectionOptions = Readonly<{
 	openCodeGoProviderOptions?: OpenCodeGoProviderOptions;
 	openRouterProviderOptions?: OpenRouterProviderOptions;
 	pluginProviders?: readonly PluginProviderDescriptor[];
+	sessionId?: string;
 	userDataDir?: string;
 }>;
 
@@ -161,7 +163,15 @@ const createProviderBackend = async (
 			createAnthropicProvider(options.anthropicProviderOptions),
 			"anthropic"
 		);
-		addProvider(createGoogleProvider(options.googleProviderOptions), "google");
+		addProvider(
+			createGoogleProvider({
+				...options.googleProviderOptions,
+				...(options.sessionId === undefined
+					? {}
+					: { sessionId: options.sessionId }),
+			}),
+			"google"
+		);
 		addProvider(
 			createOpenCodeGoProvider(options.openCodeGoProviderOptions),
 			"opencode-go"

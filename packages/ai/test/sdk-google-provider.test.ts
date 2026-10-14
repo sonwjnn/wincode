@@ -297,16 +297,21 @@ describe("public Google SDK provider", () => {
 		});
 		sdk.register(provider);
 		await sdk.setCredential("google", { apiKey: "key", kind: "api-key" });
-		for await (const _event of sdk.chat({
+		const unsupportedCacheEvents: ChatEvent[] = [];
+		for await (const event of sdk.chat({
 			cacheRetention: "short",
 			messages: [{ content: [{ text: "Hello", type: "text" }], role: "user" }],
 			modelId: "custom-gemini",
 			providerId: "google",
 			system: "System prefix",
 		})) {
-			// Consume the terminal outcome.
+			unsupportedCacheEvents.push(event);
 		}
 
+		expect(unsupportedCacheEvents.at(-1)).toEqual({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
 		expect(creates).toBe(0);
 		expect(bodies[0]).toMatchObject({
 			systemInstruction: { parts: [{ text: "System prefix" }] },
@@ -337,15 +342,20 @@ describe("public Google SDK provider", () => {
 			apiKey: "key",
 			kind: "api-key",
 		});
-		for await (const _event of supportedSdk.chat({
+		const fallbackEvents: ChatEvent[] = [];
+		for await (const event of supportedSdk.chat({
 			cacheRetention: "short",
 			messages: [{ content: [{ text: "Hello", type: "text" }], role: "user" }],
 			modelId: "gemini-3.8-flash",
 			providerId: "google",
 			system: "System prefix",
 		})) {
-			// Consume the public stream after the cache manager falls back.
+			fallbackEvents.push(event);
 		}
+		expect(fallbackEvents.at(-1)).toEqual({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
 		expect(cacheCreationAttempts).toBe(1);
 		expect(uncachedBody).toMatchObject({
 			systemInstruction: { parts: [{ text: "System prefix" }] },
