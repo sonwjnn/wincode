@@ -5,6 +5,7 @@ import {
 } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
+	type ProjectTrustDecision,
 	type ProjectTrustOverride,
 	type ProjectTrustPrompt,
 	resolveProjectTrust,
@@ -38,6 +39,7 @@ export type ApplicationRuntime = Readonly<{
 	configRuntime: ConfigRuntime;
 	pluginRuntime: PluginRuntime;
 	resourceLoader: ApplicationResourceLoader;
+	sessionTrustDecision?: ProjectTrustDecision;
 	startupDiagnostics: readonly string[];
 }>;
 
@@ -81,6 +83,7 @@ export const initializeApplicationRuntime = async (
 		cwd,
 		homeRoot,
 		trustedProjectRoots: projectTrust.trustedProjectRoots,
+		untrustedProjectRoots: projectTrust.untrustedProjectRoots,
 		workspace,
 	});
 	const composition = createApplicationPluginComposition();
@@ -92,15 +95,30 @@ export const initializeApplicationRuntime = async (
 			options.distributionPlugins ?? composition.distributionPlugins,
 		userDataDir,
 	});
-	const resourceLoader = createApplicationResourceLoader(input, {
-		...options,
-		projectTrustDir,
-		userDataDir,
-	});
+	const resourceLoader = createApplicationResourceLoader(
+		{
+			cwd,
+			disabledPluginIds: input.disabledPluginIds,
+			mode: input.mode,
+			pluginPaths: input.pluginPaths,
+			trustSnapshot: projectTrust.trustSnapshot,
+		},
+		{
+			...(options.distributionPlugins === undefined
+				? {}
+				: { distributionPlugins: options.distributionPlugins }),
+			homeRoot,
+			projectTrustDir,
+			userDataDir,
+		}
+	);
 	return Object.freeze({
 		configRuntime,
 		pluginRuntime,
 		resourceLoader,
+		...(projectTrust.sessionDecision === undefined
+			? {}
+			: { sessionTrustDecision: projectTrust.sessionDecision }),
 		startupDiagnostics: projectTrust.diagnostics,
 	});
 };

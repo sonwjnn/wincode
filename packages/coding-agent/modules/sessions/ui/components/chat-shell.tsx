@@ -2,7 +2,7 @@ import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useModelPricing } from "@/modules/model-pricing";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
@@ -28,7 +28,10 @@ import type { ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
-import { buildSessionTimeline } from "./chat-timeline";
+import {
+	buildSessionTimeline,
+	type SessionTimelineItem,
+} from "./chat-timeline";
 import {
 	groupMessagesBySessionTurn,
 	resolveRetryMessageId,
@@ -69,6 +72,8 @@ type ChatShellProps = {
 	viewId: string;
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	cacheWarmingStatus?: CacheWarmingStatus;
+	/** Rendered at the bottom of the transcript; the shell never persists it. */
+	transcriptNotice?: ReactNode;
 };
 function ActivityFooter({
 	agent,
@@ -113,6 +118,35 @@ const findNewestCompaction = (
 	return newest;
 };
 
+const TRANSCRIPT_NOTICE = Symbol("transcript-notice");
+
+type TranscriptEntry = SessionTimelineItem | typeof TRANSCRIPT_NOTICE;
+
+/**
+ * Slots the transient notice after every message that existed when it first
+ * appeared, so messages arriving later read below it instead of pushing it
+ * down. The notice is never persisted: a fresh mount captures the anchor again
+ * and renders it at the end of the loaded transcript.
+ */
+const resolveNoticeSlot = (
+	timeline: readonly SessionTimelineItem[],
+	anchorMessageCount: number | undefined
+): number => {
+	if (anchorMessageCount === undefined) {
+		return timeline.length;
+	}
+	let seen = 0;
+	for (const [index, item] of timeline.entries()) {
+		if (seen >= anchorMessageCount) {
+			return index;
+		}
+		if (item.kind === "turn") {
+			seen += item.turn.messages.length;
+		}
+	}
+	return timeline.length;
+};
+
 export function ChatShell({
 	activeMessages,
 	compactions = [],
@@ -135,6 +169,7 @@ export function ChatShell({
 	viewId,
 	sessionUsageEntries = [],
 	cacheWarmingStatus = "idle",
+	transcriptNotice,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 	const focusScopeId = `chat-shell-${viewId}`;
@@ -161,6 +196,28 @@ export function ChatShell({
 	);
 	const turns = groupMessagesBySessionTurn(displayMessages);
 	const timeline = buildSessionTimeline(displayMessages, historicalCompactions);
+	const hasTranscriptNotice =
+		transcriptNotice !== undefined && transcriptNotice !== null;
+	const [hadTranscriptNotice, setHadTranscriptNotice] = useState(false);
+	const [noticeAnchorMessageCount, setNoticeAnchorMessageCount] = useState<
+		number | undefined
+	>(undefined);
+	if (hasTranscriptNotice !== hadTranscriptNotice) {
+		// Capture the anchor in the same commit that first shows the notice, so
+		// messages arriving later cannot slip behind it.
+		setHadTranscriptNotice(hasTranscriptNotice);
+		setNoticeAnchorMessageCount(
+			hasTranscriptNotice ? displayMessages.length : undefined
+		);
+	}
+	const noticeSlot = resolveNoticeSlot(timeline, noticeAnchorMessageCount);
+	const transcriptEntries: readonly TranscriptEntry[] = hasTranscriptNotice
+		? [
+				...timeline.slice(0, noticeSlot),
+				TRANSCRIPT_NOTICE,
+				...timeline.slice(noticeSlot),
+			]
+		: timeline;
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
 	const retryableMessages = activeMessages ?? displayMessages;
 	const canRetryMessage = (messageId: SessionMessageId): boolean =>
@@ -251,32 +308,43 @@ export function ChatShell({
 						<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
 							No messages yet.
 						</text>
-					) : (
-						timeline.map((item, index) => {
-							if (item.kind === "compaction") {
-								return (
-									<CompactionDivider
-										entry={item.compaction}
-										key={item.compaction.id}
-									/>
-								);
-							}
-							const turn = item.turn;
-							const turnRetryMessageId = resolveRetryMessageId(turn.messages);
-							const canRetryTurn =
-								!(isBusy || isUndefined(turnRetryMessageId)) &&
-								canRetryMessage(turnRetryMessageId);
+					) : null}
+					{transcriptEntries.map((entry) => {
+						if (entry === TRANSCRIPT_NOTICE) {
 							return (
-								<box key={turn.id} marginTop={index === 0 ? 1 : 0} width="100%">
-									<ChatMessage
-										footerMessage={footerMessages.get(turn.id)}
-										messages={turn.messages}
-										onRetry={canRetryTurn ? onRetry : undefined}
-									/>
+								<box key="transcript-notice" paddingX={3} width="100%">
+									{transcriptNotice}
 								</box>
 							);
-						})
-					)}
+						}
+						const item = entry;
+						if (item.kind === "compaction") {
+							return (
+								<CompactionDivider
+									entry={item.compaction}
+									key={item.compaction.id}
+								/>
+							);
+						}
+						const turn = item.turn;
+						const turnRetryMessageId = resolveRetryMessageId(turn.messages);
+						const canRetryTurn =
+							!(isBusy || isUndefined(turnRetryMessageId)) &&
+							canRetryMessage(turnRetryMessageId);
+						return (
+							<box
+								key={turn.id}
+								marginTop={item === timeline[0] ? 1 : 0}
+								width="100%"
+							>
+								<ChatMessage
+									footerMessage={footerMessages.get(turn.id)}
+									messages={turn.messages}
+									onRetry={canRetryTurn ? onRetry : undefined}
+								/>
+							</box>
+						);
+					})}
 					{liveCompaction ? <CompactionDivider entry={liveCompaction} /> : null}
 					{isCompacting ? <CompactionStatus agent={agent} /> : null}
 					{error ? <ErrorMessage error={error} /> : null}

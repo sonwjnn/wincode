@@ -3,6 +3,7 @@ import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
+import { formatStartupDiagnostics } from "@/modules/application/startup-diagnostics";
 import { ConnectionsProvider } from "@/modules/connections";
 import { ModelPricingProvider } from "@/modules/model-pricing";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
@@ -20,6 +21,7 @@ import {
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
 import { CommandControllerProvider } from "../commands/command-controller-provider";
 import { SettingsProviders } from "./settings-providers";
+import { StartupDiagnosticsToast } from "./startup-diagnostics-toast";
 
 const connections = createConnections();
 
@@ -57,6 +59,14 @@ export function RootLayout() {
 	}, [interactiveRuntime.cwd]);
 	const configContext =
 		interactiveRuntime.configRuntime ?? defaultConfigContext;
+	const startupDiagnostics = useMemo(
+		() =>
+			formatStartupDiagnostics({
+				pluginDiagnostics: interactiveRuntime.pluginRuntime?.diagnostics ?? [],
+				projectTrustDiagnostics: interactiveRuntime.startupDiagnostics ?? [],
+			}),
+		[interactiveRuntime.pluginRuntime, interactiveRuntime.startupDiagnostics]
+	);
 	useEffect(() => {
 		const update = () => setTimeout(forceUpdate, 0);
 		const before = router.subscribe("onBeforeLoad", update);
@@ -69,6 +79,7 @@ export function RootLayout() {
 	return (
 		<ConfigProvider value={configContext}>
 			<ToastProvider>
+				<StartupDiagnosticsToast messages={startupDiagnostics} />
 				<ConnectionsProvider connections={connections}>
 					<AgentRegistryProvider>
 						<KeyboardLayerProvider>

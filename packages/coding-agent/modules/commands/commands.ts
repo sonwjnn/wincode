@@ -36,7 +36,7 @@ export const COMMANDS = [
 		input: NO_INPUT,
 	},
 	{
-		description: "Reload Plugins, Skills, prompts, themes, and context",
+		description: "Reload plugins, skills, commands, and context",
 		name: "reload",
 		value: "/reload",
 		kind: "builtin",
@@ -44,7 +44,7 @@ export const COMMANDS = [
 		input: NO_INPUT,
 	},
 	{
-		description: "Choose whether this project's resources are trusted",
+		description: "Save Project trust decision for the next Wincode session",
 		name: "trust",
 		value: "/trust",
 		kind: "builtin",

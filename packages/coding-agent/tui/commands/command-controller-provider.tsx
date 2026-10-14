@@ -34,7 +34,11 @@ import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
-import { getInteractivePluginRuntime } from "@/shared/runtime-context";
+import {
+	getInteractivePluginRuntime,
+	getInteractiveRuntimeContext,
+	setInteractiveRuntimeContext,
+} from "@/shared/runtime-context";
 import { createCommandHandlers } from "./command-strategies";
 import { openCommandDialog } from "./dialog-command";
 import { requestProjectTrust } from "./project-trust-dialog";
@@ -84,23 +88,45 @@ export function CommandControllerProvider({
 		const choice = await requestProjectTrust(dialog, {
 			...status,
 			workspace: config.workspace,
+			showTrustStatus: true,
 		});
-		const { decision, scope } = resolveProjectTrustSelection(choice);
-		let message: string;
-		if (scope === "parent") {
-			message =
-				"Parent folder trust saved. Run /reload to load project resources.";
-		} else if (decision === "trust") {
-			message = "Project trust saved. Run /reload to load project resources.";
-		} else {
-			message = "Project marked untrusted. Run /reload to apply the decision.";
+		if (choice === "cancel") {
+			return;
 		}
-		await saveProjectTrustDecision({
-			decision,
-			projectTrustDir,
-			scope,
-			workspace: config.workspace,
-		});
+		const { decision, persist, scope } = resolveProjectTrustSelection(choice);
+		const runtimeContext = getInteractiveRuntimeContext();
+		let message: string;
+		if (persist) {
+			await saveProjectTrustDecision({
+				decision,
+				projectTrustDir,
+				scope,
+				workspace: config.workspace,
+			});
+			setInteractiveRuntimeContext({
+				...runtimeContext,
+				sessionTrustDecision: undefined,
+			});
+			if (scope === "parent") {
+				message =
+					"Parent folder trust saved. Restart Wincode for this to take effect.";
+			} else if (decision === "trust") {
+				message =
+					"Project trust saved. Restart Wincode for this to take effect.";
+			} else {
+				message =
+					"Project marked untrusted. Restart Wincode for this to take effect.";
+			}
+		} else {
+			setInteractiveRuntimeContext({
+				...runtimeContext,
+				sessionTrustDecision: decision,
+			});
+			message =
+				decision === "trust"
+					? "Session trust set. Run /reload to load project resources."
+					: "Project marked untrusted for this session. Run /reload to apply the decision.";
+		}
 		toast.show({
 			message,
 			variant: decision === "trust" ? "success" : "info",
