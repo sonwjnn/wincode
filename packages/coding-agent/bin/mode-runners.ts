@@ -1,3 +1,4 @@
+import { omitUndefined } from "@wincode/utils";
 import type {
 	DispatchModeLoader,
 	DispatchModeRunners,
@@ -13,18 +14,18 @@ import type {
 import type { ExecutionMode } from "../shared/execution-mode";
 import { setInteractiveRuntimeContext } from "../shared/runtime-context";
 import {
-	createInteractiveRendererSession,
-	type InteractiveRendererFactory,
-	type InteractiveRendererSession,
-} from "../tui/interactive-renderer-session";
+	createRendererSession,
+	type RendererFactory,
+	type RendererSession,
+} from "../tui/renderer-session";
 
 type InteractiveModeRunner = Readonly<{
 	promptProjectTrust: (
 		request: ProjectTrustPromptRequest,
-		session: InteractiveRendererSession
+		session: RendererSession
 	) => Promise<ProjectTrustChoice>;
-	rendererFactory?: InteractiveRendererFactory;
-	runInteractive: (session: InteractiveRendererSession) => Promise<number>;
+	rendererFactory?: RendererFactory;
+	runInteractive: (session: RendererSession) => Promise<number>;
 }>;
 
 export const createModeRunnerLoader =
@@ -44,7 +45,7 @@ export const createModeRunnerLoader =
 			return baseRunners;
 		}
 
-		const session = await createInteractiveRendererSession(
+		const session = await createRendererSession(
 			interactiveModeRunner.rendererFactory
 		);
 		return {
@@ -56,21 +57,13 @@ export const createModeRunnerLoader =
 				setInteractiveRuntimeContext({
 					args: context.args,
 					cwd: context.cwd,
-					...(context.configRuntime === undefined
-						? {}
-						: { configRuntime: context.configRuntime }),
-					...(context.pluginRuntime === undefined
-						? {}
-						: { pluginRuntime: context.pluginRuntime }),
-					...(context.resourceLoader === undefined
-						? {}
-						: { resourceLoader: context.resourceLoader }),
-					...(context.sessionTrustDecision === undefined
-						? {}
-						: { sessionTrustDecision: context.sessionTrustDecision }),
-					...(context.startupDiagnostics === undefined
-						? {}
-						: { startupDiagnostics: context.startupDiagnostics }),
+					...omitUndefined({
+						configRuntime: context.configRuntime,
+						pluginRuntime: context.pluginRuntime,
+						resourceLoader: context.resourceLoader,
+						sessionTrustDecision: context.sessionTrustDecision,
+						startupDiagnostics: context.startupDiagnostics,
+					}),
 				});
 				return interactiveModeRunner.runInteractive(session);
 			},

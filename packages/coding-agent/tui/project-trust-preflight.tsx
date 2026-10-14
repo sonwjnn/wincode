@@ -8,9 +8,8 @@ import {
 	useDialog,
 } from "../shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "../shared/providers/keyboard-layer/keyboard-layer-provider";
-import { ThemeProvider } from "../shared/providers/theme/theme-provider";
 import { requestProjectTrust } from "./commands/project-trust-dialog";
-import type { InteractiveRendererSession } from "./interactive-renderer-session";
+import type { RendererSession } from "./renderer-session";
 
 const StartupProjectTrustPrompt = ({
 	request,
@@ -33,7 +32,7 @@ const StartupProjectTrustPrompt = ({
 
 export const runProjectTrustPreflight = async (
 	request: ProjectTrustPromptRequest,
-	session: InteractiveRendererSession
+	session: RendererSession
 ): Promise<ProjectTrustChoice> => {
 	const result = Promise.withResolvers<ProjectTrustChoice>();
 	let settled = false;
@@ -46,13 +45,11 @@ export const runProjectTrustPreflight = async (
 	};
 
 	session.render(
-		<ThemeProvider>
-			<KeyboardLayerProvider>
-				<DialogProvider>
-					<StartupProjectTrustPrompt request={request} settle={settle} />
-				</DialogProvider>
-			</KeyboardLayerProvider>
-		</ThemeProvider>
+		<KeyboardLayerProvider>
+			<DialogProvider>
+				<StartupProjectTrustPrompt request={request} settle={settle} />
+			</DialogProvider>
+		</KeyboardLayerProvider>
 	);
 	try {
 		return await result.promise;

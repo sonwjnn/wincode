@@ -1,29 +1,28 @@
 import { expect, test } from "bun:test";
-import { RGBA } from "@opentui/core";
-import { testRender } from "@opentui/react/test-utils";
-import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
-import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
-import { StartupBackground } from "@/tui/layouts/startup-background";
+import { createTestRenderer } from "@opentui/core/testing";
+import { act } from "react";
+import { createRendererSession } from "@/tui/renderer-session";
 import { flushTestRenderer } from "./support/opentui";
 
-test("startup canvas stays text-free and fills the screen with the active theme background", async () => {
-	const setup = await testRender(
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<StartupBackground />
-		</ThemeProvider>,
-		{ height: 24, width: 80 }
-	);
+test("startup canvas remains opaque and text-free while content changes", async () => {
+	const setup = await createTestRenderer({ height: 24, width: 80 });
+	const session = await createRendererSession(async () => setup.renderer);
 	try {
 		await flushTestRenderer(setup, 2);
 		expect(setup.captureCharFrame().trim()).toBe("");
-		const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
-		expect(spans.length).toBeGreaterThan(0);
-		expect(
-			spans.every((span) =>
-				span.bg.equals(RGBA.fromHex(DEFAULT_THEME.colors.background))
-			)
-		).toBe(true);
+		const background = setup.captureSpans().lines[0]?.spans[0]?.bg;
+		expect(background?.a).toBe(1);
+
+		await act(() => session.render(<text>Ready</text>));
+		await flushTestRenderer(setup, 2);
+		expect(setup.captureCharFrame()).toContain("Ready");
+		expect(setup.captureSpans().lines[0]?.spans[0]?.bg).toEqual(background);
+
+		await act(() => session.renderStartupBackground());
+		await flushTestRenderer(setup, 2);
+		expect(setup.captureCharFrame().trim()).toBe("");
+		expect(setup.captureSpans().lines[0]?.spans[0]?.bg).toEqual(background);
 	} finally {
-		await setup.renderer.destroy();
+		await act(() => session.destroy());
 	}
 });

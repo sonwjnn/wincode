@@ -13,11 +13,11 @@ import {
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { requestProjectTrust } from "@/tui/commands/project-trust-dialog";
-import {
-	createInteractiveRendererSession,
-	type InteractiveRendererSession,
-} from "@/tui/interactive-renderer-session";
 import { runProjectTrustPreflight } from "@/tui/project-trust-preflight";
+import {
+	createRendererSession,
+	type RendererSession,
+} from "@/tui/renderer-session";
 import { flushTestRenderer } from "./support/opentui";
 
 const request: ProjectTrustPromptRequest = {
@@ -117,7 +117,7 @@ test("startup trust cancellation keeps the shared renderer alive", async () => {
 	);
 	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 	let setup: TestRendererSetup | undefined;
-	let rendererSession: InteractiveRendererSession | undefined;
+	let rendererSession: RendererSession | undefined;
 	let nativeRendererDestroyed = false;
 	try {
 		const testSetup = await createTestRenderer({ height: 40, width: 120 });
@@ -127,7 +127,7 @@ test("startup trust cancellation keeps the shared renderer alive", async () => {
 			nativeRendererDestroyed = true;
 			destroy();
 		};
-		rendererSession = await createInteractiveRendererSession(
+		rendererSession = await createRendererSession(
 			async () => testSetup.renderer
 		);
 		const workspaceOnlyRequest: ProjectTrustPromptRequest = {

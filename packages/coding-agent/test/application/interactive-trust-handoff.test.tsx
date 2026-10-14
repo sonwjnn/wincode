@@ -57,6 +57,8 @@ test("startup trust prompt and app reuse one renderer and destroy it once", asyn
 		const initialFrame = setup.captureCharFrame();
 		expect(initialFrame).not.toContain("Starting Wincode…");
 		expect(initialFrame.trim()).toBe("");
+		const initialBackground = setup.captureSpans().lines[0]?.spans[0]?.bg;
+		expect(initialBackground).toBeDefined();
 
 		const choice = promptProjectTrust(trustRequest);
 		await flushTestRenderer(setup, 3);
@@ -64,6 +66,11 @@ test("startup trust prompt and app reuse one renderer and destroy it once", asyn
 		await act(() => setup.mockInput.pressEnter());
 		expect(await choice).toBe("trust");
 		expect(nativeDestroyCalls).toBe(0);
+		await flushTestRenderer(setup, 2);
+		expect(setup.captureCharFrame().trim()).toBe("");
+		expect(setup.captureSpans().lines[0]?.spans[0]?.bg).toEqual(
+			initialBackground
+		);
 
 		await runners.interactive({
 			args: [],
@@ -76,6 +83,9 @@ test("startup trust prompt and app reuse one renderer and destroy it once", asyn
 		await flushTestRenderer(setup, 3);
 		expect(setup.captureCharFrame()).toContain("Wincode App");
 		expect(setup.captureCharFrame()).not.toContain("Project Trust");
+		expect(setup.captureSpans().lines[0]?.spans[0]?.bg).toEqual(
+			initialBackground
+		);
 		expect(rendererFactoryCalls).toBe(1);
 		expect(nativeDestroyCalls).toBe(0);
 	} finally {

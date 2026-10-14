@@ -3,24 +3,24 @@ import { createRoot, type Root } from "@opentui/react";
 import type { ReactNode } from "react";
 import { registerCrashTeardown } from "../shared/crash-guard";
 import { ThemeProvider } from "../shared/providers/theme/theme-provider";
-import { StartupBackground } from "./layouts/startup-background";
+import { ThemedRoot } from "./layouts/themed-root";
 
-export type InteractiveRendererFactory = typeof createCliRenderer;
+export type RendererFactory = typeof createCliRenderer;
 
-export type InteractiveRendererSession = Readonly<{
+export type RendererSession = Readonly<{
 	renderer: CliRenderer;
 	render: (node: ReactNode) => void;
 	renderStartupBackground: () => void;
 	destroy: () => void;
 }>;
 
-export const createInteractiveRendererSession = async (
+export const createRendererSession = async (
 	rendererFactory: typeof createCliRenderer = createCliRenderer
-): Promise<InteractiveRendererSession> => {
+): Promise<RendererSession> => {
 	const renderer = await rendererFactory({
 		enableMouseMovement: true,
 		exitOnCtrlC: false,
-		targetFps: 60,
+		targetFps: 120,
 		useMouse: true,
 	});
 	const root: Root = createRoot(renderer);
@@ -42,16 +42,14 @@ export const createInteractiveRendererSession = async (
 	unregisterCrashTeardown = registerCrashTeardown(destroy);
 	const render = (node: ReactNode): void => {
 		if (!destroyed) {
-			root.render(node);
+			root.render(
+				<ThemeProvider>
+					<ThemedRoot>{node}</ThemedRoot>
+				</ThemeProvider>
+			);
 		}
 	};
-	const renderStartupBackground = (): void => {
-		render(
-			<ThemeProvider>
-				<StartupBackground />
-			</ThemeProvider>
-		);
-	};
+	const renderStartupBackground = (): void => render(null);
 	try {
 		renderStartupBackground();
 	} catch (error) {

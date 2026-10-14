@@ -4,16 +4,12 @@ import {
 	RouterProvider,
 } from "@tanstack/react-router";
 import { ErrorRecoveryProvider } from "../shared/providers/error-recovery/error-recovery-provider";
-import {
-	ThemeProvider,
-	useTheme,
-} from "../shared/providers/theme/theme-provider";
+import { useTheme } from "../shared/providers/theme/theme-provider";
 import { runInteractiveCleanup } from "../shared/runtime-lifecycle";
 import { ErrorBoundary } from "../shared/ui/error-boundary";
 import { ErrorFallbackView } from "../shared/ui/error-fallback";
 import { logUnhandledUiError } from "../shared/utils/ui-error-log";
-import type { InteractiveRendererSession } from "./interactive-renderer-session";
-import { ThemedRoot } from "./layouts/themed-root";
+import type { RendererSession } from "./renderer-session";
 import { routeTree } from "./routeTree.gen";
 
 export { runProjectTrustPreflight } from "./project-trust-preflight";
@@ -51,17 +47,13 @@ const router = createRouter({
 
 const App = ({ onQuit }: { onQuit: (exitCode: number) => void }) => (
 	<ErrorRecoveryProvider quit={onQuit}>
-		<ThemeProvider>
-			<ThemedRoot>
-				<ErrorBoundary
-					renderFallback={({ error, reset }) => (
-						<ErrorFallbackView error={error} reset={reset} scope="root" />
-					)}
-				>
-					<RouterProvider router={router} />
-				</ErrorBoundary>
-			</ThemedRoot>
-		</ThemeProvider>
+		<ErrorBoundary
+			renderFallback={({ error, reset }) => (
+				<ErrorFallbackView error={error} reset={reset} scope="root" />
+			)}
+		>
+			<RouterProvider router={router} />
+		</ErrorBoundary>
 	</ErrorRecoveryProvider>
 );
 
@@ -81,7 +73,7 @@ const finishRenderer = async (
 };
 
 export const runInteractive = async (
-	session: InteractiveRendererSession
+	session: RendererSession
 ): Promise<number> => {
 	try {
 		await router.load();

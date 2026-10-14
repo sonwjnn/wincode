@@ -1128,7 +1128,66 @@ describe("Coding-Agent Application Project trust", () => {
 		);
 	});
 
-	test("canceling startup skips project resources for this run without saving a decision", async () => {
+	test("canceling startup behaves like session-only deny across reload without saving", async () => {
+		const directory = await createDirectory();
+		const repository = path.join(directory, "repo");
+		const workspace = path.join(repository, "nested");
+		const projectTrustDir = path.join(directory, "user-data");
+		const trustFilePath = path.join(projectTrustDir, "project-trust.json");
+		await Promise.all([
+			fs.mkdir(path.join(repository, ".git"), { recursive: true }),
+			fs.mkdir(path.join(workspace, ".wincode"), { recursive: true }),
+			fs.mkdir(path.join(repository, ".wincode"), { recursive: true }),
+		]);
+		await Promise.all([
+			Bun.write(
+				path.join(repository, ".wincode/settings.json"),
+				JSON.stringify({ settings: { repository: true } })
+			),
+			Bun.write(
+				path.join(workspace, ".wincode/settings.json"),
+				JSON.stringify({ settings: { projectOnly: true } })
+			),
+		]);
+		const savedTrust = {
+			decisions: [
+				{ decision: "trust", directory: await fs.realpath(workspace) },
+			],
+			version: 1,
+		};
+		await Bun.write(trustFilePath, JSON.stringify(savedTrust));
+
+		const cancelled = await resolveProjectTrust({
+			mode: "interactive",
+			projectTrustDir,
+			prompt: async () => "cancel",
+			stdinIsTTY: true,
+			workspace,
+		});
+		expect(cancelled.sessionDecision).toBe("deny");
+		expect(cancelled.trustedProjectRoots).toEqual([]);
+		expect(cancelled.untrustedProjectRoots).toContain(
+			await fs.realpath(repository)
+		);
+		expect(cancelled.untrustedProjectRoots).toContain(
+			await fs.realpath(workspace)
+		);
+
+		const reloaded = await resolveProjectTrust({
+			mode: "interactive",
+			projectTrustDir,
+			trustSnapshot: cancelled.trustSnapshot,
+			workspace,
+		});
+		expect(reloaded.sessionDecision).toBe("deny");
+		expect(reloaded.trustedProjectRoots).toEqual([]);
+		expect(reloaded.untrustedProjectRoots).toContain(
+			await fs.realpath(workspace)
+		);
+		expect(await Bun.file(trustFilePath).json()).toEqual(savedTrust);
+	});
+
+	test("canceling startup is a session-only deny without saving a decision", async () => {
 		const directory = await createDirectory();
 		const workspace = path.join(directory, "repo");
 		const homeRoot = path.join(directory, "home");
@@ -1159,6 +1218,7 @@ describe("Coding-Agent Application Project trust", () => {
 			const snapshot =
 				await runtime.configRuntime.configStore.getSnapshot(workspace);
 			expect(snapshot.document.settings).toBeUndefined();
+			expect(runtime.sessionTrustDecision).toBe("deny");
 			expect(runtime.configRuntime.trustedProjectRoots).toEqual([]);
 			expect(runtime.configRuntime.untrustedProjectRoots).toContain(
 				await fs.realpath(workspace)

@@ -424,8 +424,7 @@ const shouldPromptForProjectTrust = ({
 
 type ProjectTrustPromptOutcome = Readonly<{
 	choice: ProjectTrustChoice;
-	/** Present only when the prompt produced a selection; cancel has none. */
-	selection?: ProjectTrustSelectionResolution;
+	selection: ProjectTrustSelectionResolution;
 }>;
 
 const requestProjectTrustChoice = async ({
@@ -463,7 +462,11 @@ const requestProjectTrustChoice = async ({
 		workspace,
 	});
 	if (choice === "cancel") {
-		return { choice };
+		return {
+			choice,
+			// Keep cancellation as a non-persistent denial in this runtime's snapshot.
+			selection: PROJECT_TRUST_SELECTION_RESOLUTIONS["deny-session"],
+		};
 	}
 	const selection = resolveProjectTrustSelection(choice);
 	if (selection.persist) {
@@ -491,10 +494,6 @@ const getDecisionForRoot = (
 		return nearestDecision(projectRoot, decisions)?.decision;
 	}
 	const { selection } = prompted;
-	if (selection === undefined) {
-		// Cancelling refuses every protected root for this run.
-		return;
-	}
 	if (
 		selection.scope === "parent" &&
 		!pathContains(promptedParentDirectory, projectRoot)
