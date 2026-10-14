@@ -12,10 +12,19 @@ import {
 	findSupportedChatModelSelection,
 	getSupportedThinkingLevels,
 	supportedChatModelIdSchema,
+	type ThinkingLevel,
 } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { spawn } from "bun";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { createPluginPromptSelectionTarget } from "@/modules/application/plugin-prompt-selection";
 import type { CommandSuggestion } from "@/modules/commands/command-controller";
 import { useCommandControllerFactory } from "@/modules/commands/command-controller-context";
@@ -31,7 +40,11 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
-import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
+import {
+	catalogSelectionForProviderModel,
+	normalizeProviderModelSelection,
+	supportedProviderThinkingLevels,
+} from "@/modules/providers/provider-model-selection";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -180,6 +193,78 @@ export function ChatTextArea({
 		setThinkingLevelForFutureSubmissions,
 	} = usePromptConfig();
 	const connections = useConnections();
+	const subscribeProviderComposition = useCallback(
+		(listener: () => void) =>
+			providerController?.subscribeComposition?.(listener) ?? (() => undefined),
+		[providerController]
+	);
+	const getProviderCompositionRevision = useCallback(
+		() => providerController?.getCompositionRevision?.() ?? 0,
+		[providerController]
+	);
+	const providerCompositionRevision = useSyncExternalStore(
+		subscribeProviderComposition,
+		getProviderCompositionRevision,
+		getProviderCompositionRevision
+	);
+	const subscribeProviderAvailability = useCallback(
+		(listener: () => void) =>
+			providerController?.subscribeAvailability?.(listener) ??
+			(() => undefined),
+		[providerController]
+	);
+	const getProviderAvailabilityRevision = useCallback(
+		() => providerController?.getAvailabilityRevision?.() ?? 0,
+		[providerController]
+	);
+	const providerAvailabilityRevision = useSyncExternalStore(
+		subscribeProviderAvailability,
+		getProviderAvailabilityRevision,
+		getProviderAvailabilityRevision
+	);
+	const [knownProviderModels, setKnownProviderModels] = useState<
+		readonly ProviderModel[]
+	>([]);
+	useEffect(() => {
+		let active = true;
+		if (providerController === undefined) {
+			setKnownProviderModels([]);
+			return () => {
+				active = false;
+			};
+		}
+		const requestedCompositionRevision = providerCompositionRevision;
+		const requestedAvailabilityRevision = providerAvailabilityRevision;
+		const isCurrentRevision = () =>
+			getProviderCompositionRevision() === requestedCompositionRevision &&
+			getProviderAvailabilityRevision() === requestedAvailabilityRevision;
+		void providerController
+			.getKnownModels()
+			.then((models) => {
+				if (active && isCurrentRevision()) {
+					setKnownProviderModels(models);
+				}
+			})
+			.catch(() => {
+				if (active && isCurrentRevision()) {
+					setKnownProviderModels([]);
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, [
+		getProviderAvailabilityRevision,
+		getProviderCompositionRevision,
+		providerAvailabilityRevision,
+		providerCompositionRevision,
+		providerController,
+	]);
+	const selectedProviderModel = knownProviderModels.find(
+		(providerModel) =>
+			providerModel.providerId === model.providerId &&
+			providerModel.modelId === model.modelId
+	);
 	const previousConnections = useRef(connections);
 	useEffect(() => {
 		if (previousConnections.current !== connections) {
@@ -215,26 +300,52 @@ export function ChatTextArea({
 			setModelForFutureSubmissions,
 		]
 	);
+	const setFutureProviderModelSelection = useCallback(
+		(nextModel: ProviderModel) => {
+			const selection = normalizeProviderModelSelection({
+				modelId: nextModel.modelId,
+				providerId: nextModel.providerId,
+			});
+			if (selection !== null) {
+				setKnownProviderModels((models) =>
+					models.some(
+						(model) =>
+							model.providerId === selection.providerId &&
+							model.modelId === selection.modelId
+					)
+						? models
+						: [...models, nextModel]
+				);
+				setFutureModelSelection(selection);
+			}
+		},
+		[setFutureModelSelection]
+	);
 	const pluginRuntime = getInteractivePluginRuntime();
 	useEffect(() => {
 		if (disabled || pluginRuntime === undefined) {
 			return;
 		}
 		return pluginRuntime.bindPromptSelectionTarget(
-			createPluginPromptSelectionTarget(connections, {
-				setModel: setFutureModelSelection,
-				setThinkingLevel: setThinkingLevelForFutureSubmissions,
-			})
+			createPluginPromptSelectionTarget(
+				providerController,
+				{
+					setModel: setFutureModelSelection,
+					setThinkingLevel: setThinkingLevelForFutureSubmissions,
+				},
+				connections
+			)
 		);
 	}, [
-		connections,
 		disabled,
 		pluginRuntime,
+		providerController,
+		connections,
 		setFutureModelSelection,
 		setThinkingLevelForFutureSubmissions,
 	]);
 	const catalogModel = catalogSelectionForProviderModel(model);
-	const isProviderSdkModel = catalogModel === null;
+	const isProviderSdkModel = selectedProviderModel !== undefined;
 	const supportedModel =
 		catalogModel === null
 			? null
@@ -245,12 +356,20 @@ export function ChatTextArea({
 				modelId: supportedChatModelIdSchema.parse(supportedModel.id),
 				providerId: supportedModel.connectionProviderId,
 			};
-	const hideThinkingLevel =
-		chatModelSelection === null ||
-		getSupportedThinkingLevels(chatModelSelection).length === 0;
+	let thinkingLevels: readonly ThinkingLevel[];
+	if (providerController !== undefined) {
+		thinkingLevels = isProviderSdkModel
+			? supportedProviderThinkingLevels(selectedProviderModel)
+			: [];
+	} else if (chatModelSelection === null) {
+		thinkingLevels = [];
+	} else {
+		thinkingLevels = getSupportedThinkingLevels(chatModelSelection);
+	}
+	const hideThinkingLevel = thinkingLevels.length === 0;
 	const unavailableCommandCapabilities = useMemo(() => {
 		const unavailable = new Set<CommandCapability>(viewUnavailableCapabilities);
-		if (!onCompact || isProviderSdkModel) {
+		if (!onCompact) {
 			unavailable.add("compaction");
 		}
 		if (hideThinkingLevel) {
@@ -262,7 +381,6 @@ export function ChatTextArea({
 		return [...unavailable];
 	}, [
 		hideThinkingLevel,
-		isProviderSdkModel,
 		onCompact,
 		providerController,
 		viewUnavailableCapabilities,
@@ -351,8 +469,9 @@ export function ChatTextArea({
 				onError: handleSubmitError,
 				onOpenSettings,
 				onSelectModel: setFutureModelSelection,
-				onSelectProviderModel: setFutureModelSelection,
+				onSelectProviderModel: setFutureProviderModelSelection,
 				providerController,
+				providerModel: selectedProviderModel,
 			}),
 		[
 			commandControllerFactory,
@@ -361,7 +480,9 @@ export function ChatTextArea({
 			onOpenSettings,
 			sessionId,
 			setFutureModelSelection,
+			setFutureProviderModelSelection,
 			providerController,
+			selectedProviderModel,
 			unavailableCommandCapabilities,
 		]
 	);
@@ -373,7 +494,7 @@ export function ChatTextArea({
 		onSubmit,
 		onTab: (shift) => {
 			if (shift) {
-				cycleThinkingLevel();
+				cycleThinkingLevel(selectedProviderModel);
 			}
 		},
 		sessionPromptHistory,

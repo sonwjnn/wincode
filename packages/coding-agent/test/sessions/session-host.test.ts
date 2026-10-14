@@ -111,6 +111,7 @@ import { createEmptyPluginRuntime } from "../support/plugin-runtime";
 const recorder = createFakeModelClientRecorder();
 installFakeModelClient(recorder);
 
+import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
 import { createSessionHost } from "@/modules/sessions/host/session-host";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -402,6 +403,7 @@ const createCapabilities = (
 				thresholdTokens: null,
 			}),
 		getConfig: () => config,
+		getRuntime: defaultRuntimeFactory,
 		getConnections: () => ({
 			authorize: async () => ({
 				apiKey: "session-host-key",
@@ -490,6 +492,28 @@ afterAll(async () => {
 		process.env.WINCODE_SUBAGENTS_DB_PATH = previousSubagentsDatabasePath;
 	}
 	fs.rmSync(testDirectory, { force: true, recursive: true });
+});
+
+test("SDK Session Host refuses a missing ProviderCollection without Catalog fallback", async () => {
+	const seeded = await seedSession("missing-sdk-provider-collection");
+	const legacyCapabilities = createCapabilities();
+	const { getRuntime: _legacyRuntime, ...sdkCapabilities } = legacyCapabilities;
+	let legacyConnectionsRequested = false;
+	const capabilities: SessionCapabilities = {
+		...sdkCapabilities,
+		createProviderCollection: async () => undefined,
+		getConnections: () => {
+			legacyConnectionsRequested = true;
+			throw new Error("Legacy Connections must not be used.");
+		},
+	};
+
+	await expect(
+		createSessionHost({ capabilities, sessionId: seeded.sessionId })
+	).rejects.toThrow(
+		"Provider SDK Session Host could not be initialized because its ProviderCollection is unavailable; Catalog dispatch is disabled."
+	);
+	expect(legacyConnectionsRequested).toBe(false);
 });
 
 test("retains an idle Session Host until registered Plugin background work finishes", async () => {

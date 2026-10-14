@@ -347,6 +347,32 @@ test("round-trips a cancelled assistant record without an interrupted badge", as
 	});
 });
 
+test("reopening records preserves unknown Provider Model identities and their measured usage", () => {
+	const unknownModel = {
+		modelId: modelId("plugin-owned-model"),
+		providerId: "plugin-owned-provider",
+	};
+	const record: SessionRecord = {
+		...assistantRecord("record-provider-model", "done"),
+		model: { ...unknownModel, thinkingLevel: "high" },
+		messages: [
+			messageRecord("assistant-provider-model", "assistant", "done", {
+				agent: agentId("build"),
+				model: unknownModel,
+				thinkingLevel: "high",
+				usage: { inputTokens: 17, outputTokens: 6 },
+			}),
+		],
+	};
+
+	expect(projectSessionRecords([record])[0]?.metadata).toEqual({
+		agent: agentId("build"),
+		model: unknownModel,
+		thinkingLevel: "high",
+		usage: { inputTokens: 17, outputTokens: 6 },
+	});
+});
+
 test("reopening a record drops an unsupported ThinkingLevel but preserves valid metadata", () => {
 	const record: SessionRecord = {
 		...assistantRecord("record-unsupported-mode", "done"),

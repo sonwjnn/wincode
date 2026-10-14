@@ -2,22 +2,35 @@ import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createAgentTurnId } from "@wincode/agent-core";
 import type { ThinkingSelection } from "@wincode/ai/models";
-import { isNull, isUndefined } from "@wincode/utils";
-import { useEffect, useState } from "react";
+import type { ProviderModel } from "@wincode/ai/sdk";
+import { getErrorMessage, isNull, isUndefined, logger } from "@wincode/utils";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import {
 	resolveActiveAgentId,
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
+	withAvailableAgentModelOverride,
 } from "@/modules/agents";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { PluginStatusIndicator } from "@/modules/plugins/ui/plugin-status-indicator";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import {
+	createInteractiveProviderController,
+	type InteractiveProviderController,
+} from "@/modules/providers/interactive-provider-controller";
+import { isAvailableProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { createSessionUserMessage } from "@/modules/sessions/message";
+import {
+	createDefaultSessionProviderCollection,
+	type InteractiveSessionProviderCollection,
+} from "@/modules/sessions/provider-collection";
 import { useSettingsHubDialog } from "@/modules/settings";
 import { createSkillSnapshot } from "@/modules/skills";
 import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import { resolveLastUsedSessionSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
@@ -60,10 +73,39 @@ const NEW_SESSION_DRAFT_KEY = "new-session";
 const NEW_SESSION_VIEW_ID = "new-session-view";
 const NEW_SESSION_COMPOSER_ID = `${NEW_SESSION_VIEW_ID}-composer`;
 
-export function NewSessionView() {
+const closeHomeProviderCollection = async (
+	providerCollection: InteractiveSessionProviderCollection
+): Promise<void> => {
+	try {
+		await providerCollection.close();
+	} catch {
+		logger.warn("Home ProviderCollection cleanup failed.");
+	}
+};
+
+type HomeProviderCollectionFactory = (
+	pluginRuntime?: PluginRuntime
+) => Promise<InteractiveSessionProviderCollection>;
+
+type NewSessionViewProps = Readonly<{
+	createProviderCollection?: HomeProviderCollectionFactory;
+}>;
+
+export function NewSessionView({
+	createProviderCollection = createDefaultSessionProviderCollection,
+}: NewSessionViewProps) {
 	const router = useRouter();
-	const [_error, setError] = useState<string | null>(null);
+	const [error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
+	const [providerController, setProviderController] =
+		useState<InteractiveProviderController>();
+	const [availableProviderModels, setAvailableProviderModels] = useState<
+		readonly ProviderModel[]
+	>([]);
+	const [isLoadingProviderModels, setIsLoadingProviderModels] = useState(true);
+	const [isLoadingProviderCollection, setIsLoadingProviderCollection] =
+		useState(true);
+	const pluginRuntime = getInteractivePluginRuntime();
 	const focusHandlers = useUiComponentFocus({
 		componentId: NEW_SESSION_COMPOSER_ID,
 		enabled: !isCreatingSession,
@@ -89,6 +131,151 @@ export function NewSessionView() {
 	const { show } = useToast();
 	const registry = useAgentRegistry();
 	const defaultAgentId = registry?.defaultAgentId;
+
+	useEffect(() => {
+		let active = true;
+		let providerCollection: InteractiveSessionProviderCollection | undefined;
+		let closePromise: Promise<void> | undefined;
+		const closeOwnedProviderCollection = (): Promise<void> => {
+			if (providerCollection === undefined) {
+				return Promise.resolve();
+			}
+			closePromise ??= closeHomeProviderCollection(providerCollection);
+			return closePromise;
+		};
+		setIsLoadingProviderCollection(true);
+		const openProviderSelection = async (): Promise<void> => {
+			try {
+				providerCollection = await createProviderCollection(pluginRuntime);
+				const controller = createInteractiveProviderController(
+					providerCollection,
+					{
+						getPluginProviderComposition:
+							providerCollection.getPluginProviderComposition,
+						getPluginProviderRegistrations:
+							providerCollection.getPluginProviderRegistrations,
+						loginOpenAIOAuth: providerCollection.loginOpenAIOAuth,
+						getDiscoverableProviderIds:
+							providerCollection.getDiscoverableProviderIds,
+						getCompositionRevision: providerCollection.getCompositionRevision,
+						subscribeComposition: providerCollection.subscribeComposition,
+						supportsModelDiscovery: providerCollection.supportsModelDiscovery,
+					}
+				);
+				await controller.restoreModels();
+				if (!active) {
+					await closeOwnedProviderCollection();
+					return;
+				}
+				setProviderController(controller);
+				setIsLoadingProviderCollection(false);
+			} catch (providerError) {
+				await closeOwnedProviderCollection();
+				if (active) {
+					setIsLoadingProviderCollection(false);
+					setError(
+						getErrorMessage(
+							providerError,
+							"Provider SDK model selection is unavailable."
+						)
+					);
+				}
+			}
+		};
+		void openProviderSelection();
+		return () => {
+			active = false;
+			void closeOwnedProviderCollection();
+		};
+	}, [createProviderCollection, pluginRuntime]);
+
+	const subscribeProviderAvailability = useCallback(
+		(listener: () => void) => {
+			const unsubscribeComposition =
+				providerController?.subscribeComposition?.(listener) ??
+				(() => undefined);
+			const unsubscribeAvailability =
+				providerController?.subscribeAvailability?.(listener) ??
+				(() => undefined);
+			return () => {
+				unsubscribeComposition();
+				unsubscribeAvailability();
+			};
+		},
+		[providerController]
+	);
+	const getProviderAvailabilityRevision = useCallback(
+		() =>
+			`${providerController?.getCompositionRevision?.() ?? 0}:${providerController?.getAvailabilityRevision?.() ?? 0}`,
+		[providerController]
+	);
+	const providerAvailabilityRevision = useSyncExternalStore(
+		subscribeProviderAvailability,
+		getProviderAvailabilityRevision,
+		getProviderAvailabilityRevision
+	);
+	useEffect(() => {
+		if (providerController === undefined) {
+			setAvailableProviderModels([]);
+			setIsLoadingProviderModels(true);
+			return;
+		}
+		let active = true;
+		const requestedRevision = providerAvailabilityRevision;
+		setIsLoadingProviderModels(true);
+		void providerController
+			.getAvailableModels()
+			.then((models) => {
+				if (active && getProviderAvailabilityRevision() === requestedRevision) {
+					setAvailableProviderModels(models);
+				}
+			})
+			.catch(() => {
+				if (active && getProviderAvailabilityRevision() === requestedRevision) {
+					setAvailableProviderModels([]);
+				}
+			})
+			.finally(() => {
+				if (active && getProviderAvailabilityRevision() === requestedRevision) {
+					setIsLoadingProviderModels(false);
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, [
+		getProviderAvailabilityRevision,
+		providerAvailabilityRevision,
+		providerController,
+	]);
+	const currentProviderModelAvailable = isAvailableProviderModelSelection(
+		model,
+		availableProviderModels
+	);
+	const providerModelStatus = (() => {
+		if (isLoadingProviderCollection || isLoadingProviderModels) {
+			return <text fg={colors.textMuted}>Loading Provider SDK Models…</text>;
+		}
+		if (providerController === undefined) {
+			return (
+				<text fg={colors.error}>
+					Provider SDK Model selection is unavailable.
+				</text>
+			);
+		}
+		if (currentProviderModelAvailable) {
+			return (
+				<text fg={colors.textMuted}>
+					{`Provider Model: ${model.providerId}/${model.modelId}`}
+				</text>
+			);
+		}
+		return (
+			<text fg={colors.error}>
+				{`Stored default unavailable: ${model.providerId}/${model.modelId}. Connect a Provider and choose an available Model with /provider-models.`}
+			</text>
+		);
+	})();
 
 	useEffect(() => {
 		if (!isUndefined(defaultAgentId)) {
@@ -167,8 +354,7 @@ export function NewSessionView() {
 		setIsCreatingSession(true);
 
 		try {
-			await createSession(prompt, files, skill);
-			return true;
+			return await createSession(prompt, files, skill);
 		} catch {
 			setError("Could not create chat session.");
 			return false;
@@ -181,16 +367,48 @@ export function NewSessionView() {
 		input: string,
 		files: ChatPromptSubmission["files"],
 		skill: ChatPromptSubmission["skill"]
-	) => {
-		const fileMentions = await resolveFileMentionParts(input);
+	): Promise<boolean> => {
+		if (providerController === undefined) {
+			setError("Provider SDK model selection is unavailable.");
+			return false;
+		}
+		let currentlyAvailableModels: readonly ProviderModel[];
+		try {
+			currentlyAvailableModels = await providerController.getAvailableModels();
+		} catch {
+			setError("Could not verify the selected Provider SDK Model.");
+			return false;
+		}
+		const selectionOverride = withAvailableAgentModelOverride(
+			registry,
+			agent,
+			submissionSelectionOverride,
+			currentlyAvailableModels
+		);
 		const effective = resolveEffectiveAgentSelection(
 			registry,
 			agent,
 			model,
 			currentThinkingSelection,
 			false,
-			submissionSelectionOverride
+			selectionOverride
 		);
+		if (effective.unavailableReason !== undefined) {
+			setError(effective.unavailableReason);
+			return false;
+		}
+		if (
+			!isAvailableProviderModelSelection(
+				effective.model,
+				currentlyAvailableModels
+			)
+		) {
+			setError(
+				`Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable. Connect a Provider and explicitly select an available Provider SDK Model.`
+			);
+			return false;
+		}
+		const fileMentions = await resolveFileMentionParts(input);
 		const initialMessage = createSessionUserMessage(
 			input,
 			{
@@ -212,7 +430,7 @@ export function NewSessionView() {
 		const { id } = await store.createSession({
 			agent: effective.agent,
 			message: durableMessage,
-			model,
+			model: effective.model,
 			turnId: createAgentTurnId(),
 			thinkingLevel: effective.thinkingLevel,
 		});
@@ -224,6 +442,7 @@ export function NewSessionView() {
 			}),
 			to: "/sessions/$id",
 		});
+		return true;
 	};
 
 	return (
@@ -252,6 +471,8 @@ export function NewSessionView() {
 					paddingX={2}
 					width="100%"
 				>
+					{providerModelStatus}
+					{error === null ? null : <text fg={colors.error}>{error}</text>}
 					<ChatTextArea
 						disabled={isCreatingSession}
 						draftKey={NEW_SESSION_DRAFT_KEY}
@@ -265,6 +486,7 @@ export function NewSessionView() {
 						}}
 						onOpenSettings={openSettings}
 						onSubmit={handleSubmit}
+						providerController={providerController}
 						unavailableCommandCapabilities={
 							HOME_UNAVAILABLE_COMMAND_CAPABILITIES
 						}

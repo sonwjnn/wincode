@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type ChatEvent,
+	type ChatReasoningEffort,
 	createProviderCollection,
 	type ProviderCollection,
 } from "@wincode/ai/sdk";
@@ -24,7 +25,8 @@ const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 
 const collect = async (
 	sdk: ProviderCollection,
-	modelId: string
+	modelId: string,
+	reasoningEffort?: ChatReasoningEffort
 ): Promise<ChatEvent[]> => {
 	const events: ChatEvent[] = [];
 	for await (const event of sdk.chat({
@@ -33,6 +35,7 @@ const collect = async (
 		],
 		modelId,
 		providerId: "opencode-go",
+		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
 	})) {
 		events.push(event);
 	}
@@ -73,7 +76,7 @@ describe("public OpenCode Go SDK provider", () => {
 					},
 				]);
 			}
-			if (responses === 2) {
+			if (responses === 2 || responses === 4) {
 				return sseResponse([
 					{ type: "message_start", message: { usage: { input_tokens: 4 } } },
 					{
@@ -128,9 +131,10 @@ describe("public OpenCode Go SDK provider", () => {
 		const modelIds = sdk
 			.getModels()
 			.map((model) => `${model.providerId}/${model.modelId}`);
-		const responsesEvents = await collect(sdk, "gpt-5.6-luna");
-		const messagesEvents = await collect(sdk, "minimax-m3");
-		const compatibleEvents = await collect(sdk, "grok-4.6");
+		const responsesEvents = await collect(sdk, "gpt-5.6-luna", "high");
+		const messagesEvents = await collect(sdk, "qwen3.8-max", "xhigh");
+		const compatibleEvents = await collect(sdk, "grok-4.6", "high");
+		await collect(sdk, "qwen3.8-max", "minimal");
 
 		expect(modelIds).toContain("openai/gpt-5.6");
 		expect(modelIds).toContain("anthropic/claude-sonnet-4-6");
@@ -139,18 +143,26 @@ describe("public OpenCode Go SDK provider", () => {
 			"https://opencode.ai/zen/go/v1/responses",
 			"https://opencode.ai/zen/go/v1/messages",
 			"https://opencode.ai/zen/go/v1/chat/completions",
+			"https://opencode.ai/zen/go/v1/messages",
 		]);
+		expect(
+			provider.models.find(({ modelId }) => modelId === "qwen3.8-max")
+				?.reasoningEfforts
+		).not.toContain("minimal");
+		expect(requests[3]?.body).not.toHaveProperty("output_config");
 		expect(requests[0]?.headers.get("authorization")).toBe(
 			"Bearer opencode-go-secret"
 		);
 		expect(requests[0]?.body).toMatchObject({
 			model: "gpt-5.6-luna",
+			reasoning: { effort: "high" },
 			stream: true,
 		});
 		expect(requests[1]?.headers.get("x-api-key")).toBe("opencode-go-secret");
 		expect(requests[1]?.headers.get("anthropic-version")).toBe("2023-06-01");
 		expect(requests[1]?.body).toMatchObject({
-			model: "minimax-m3",
+			model: "qwen3.8-max",
+			output_config: { effort: "xhigh" },
 			stream: true,
 		});
 		expect(requests[2]?.headers.get("authorization")).toBe(
@@ -158,6 +170,7 @@ describe("public OpenCode Go SDK provider", () => {
 		);
 		expect(requests[2]?.body).toMatchObject({
 			model: "grok-4.6",
+			reasoning_effort: "high",
 			stream: true,
 			stream_options: { include_usage: true },
 		});

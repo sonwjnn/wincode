@@ -13,17 +13,21 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
 
 type ConnectionApiKeyDialogContentProps = {
+	maskInput?: boolean;
 	provider: Pick<ConnectionProviderSummary, "displayName" | "methods">;
 	onSubmit: (apiKey: string, signal: AbortSignal) => void | Promise<void>;
 	placeholder?: string;
 };
 
 export function ConnectionApiKeyDialogContent({
+	maskInput = false,
 	provider,
 	onSubmit,
 	placeholder = "Paste API key",
 }: ConnectionApiKeyDialogContentProps) {
 	const inputRef = useRef<InputRenderable>(null);
+	const apiKeyRef = useRef("");
+	const isMaskingInputRef = useRef(false);
 	const isSubmittingRef = useRef(false);
 	const submissionControllerRef = useRef<AbortController | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -41,7 +45,9 @@ export function ConnectionApiKeyDialogContent({
 			return;
 		}
 
-		const apiKey = (inputRef.current?.value ?? "").trim();
+		const apiKey = (
+			maskInput ? apiKeyRef.current : (inputRef.current?.value ?? "")
+		).trim();
 		if (!apiKey) {
 			return;
 		}
@@ -56,6 +62,7 @@ export function ConnectionApiKeyDialogContent({
 		try {
 			await onSubmit(apiKey, controller.signal);
 			if (!controller.signal.aborted && inputRef.current) {
+				apiKeyRef.current = "";
 				inputRef.current.value = "";
 			}
 		} catch (submitError) {
@@ -69,9 +76,58 @@ export function ConnectionApiKeyDialogContent({
 			isSubmittingRef.current = false;
 			setIsSubmitting(false);
 		}
-	}, [onSubmit]);
+	}, [maskInput, onSubmit]);
+
+	const handleContentChange = useCallback(() => {
+		setError(null);
+		if (!maskInput || isMaskingInputRef.current) {
+			return;
+		}
+		const input = inputRef.current;
+		if (input === null) {
+			return;
+		}
+
+		const previousMask = "•".repeat(apiKeyRef.current.length);
+		const currentValue = input.value;
+		let commonPrefix = 0;
+		while (
+			commonPrefix < previousMask.length &&
+			commonPrefix < currentValue.length &&
+			previousMask[commonPrefix] === currentValue[commonPrefix]
+		) {
+			commonPrefix += 1;
+		}
+		let commonSuffix = 0;
+		while (
+			commonSuffix < previousMask.length - commonPrefix &&
+			commonSuffix < currentValue.length - commonPrefix &&
+			previousMask.at(-commonSuffix - 1) === currentValue.at(-commonSuffix - 1)
+		) {
+			commonSuffix += 1;
+		}
+
+		const removedLength = previousMask.length - commonPrefix - commonSuffix;
+		const insertedText = currentValue.slice(
+			commonPrefix,
+			currentValue.length - commonSuffix
+		);
+		apiKeyRef.current =
+			apiKeyRef.current.slice(0, commonPrefix) +
+			insertedText +
+			apiKeyRef.current.slice(commonPrefix + removedLength);
+		const cursorOffset = commonPrefix + insertedText.length;
+
+		isMaskingInputRef.current = true;
+		input.value = "•".repeat(apiKeyRef.current.length);
+		input.cursorOffset = cursorOffset;
+		isMaskingInputRef.current = false;
+	}, [maskInput]);
 
 	useEffect(() => () => submissionControllerRef.current?.abort(), []);
+	useEffect(() => {
+		inputRef.current?.focus();
+	}, []);
 
 	useKeyboard((key) => {
 		if (!isTopLayer(layerId)) {
@@ -98,10 +154,8 @@ export function ConnectionApiKeyDialogContent({
 				</text>
 				<input
 					focused
-					focusedTextColor={colors.text}
-					onContentChange={() => {
-						setError(null);
-					}}
+					id="connection-api-key-input"
+					onContentChange={handleContentChange}
 					placeholder={placeholder}
 					placeholderColor={colors.textMuted}
 					ref={inputRef}

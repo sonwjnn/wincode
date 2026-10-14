@@ -163,8 +163,15 @@ const modelFor = (modelId: string): ProviderModelSelection => ({
 	providerId: "shared_provider",
 });
 
-const textOfModels = (models: readonly ProviderModel[]): readonly string[] =>
-	models.map(({ modelId }) => modelId);
+const textOfModels = (
+	models: readonly ProviderModel[],
+	providerId?: string
+): readonly string[] =>
+	models
+		.filter(
+			(model) => providerId === undefined || model.providerId === providerId
+		)
+		.map(({ modelId }) => modelId);
 
 const assistantText = (messages: readonly SessionMessage[]): string => {
 	let text = "";
@@ -256,6 +263,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 	const pluginRuntimes: PluginRuntime[] = [];
 	let services: SessionServices | undefined;
 	let handle: SessionSdkHandle | undefined;
+	let unsubscribeComposition: (() => void) | undefined;
 	let reloadCandidate: PluginRuntime | undefined;
 	let reloadTrustChanged = false;
 	let toastMessage = "";
@@ -406,6 +414,18 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 				"The Session Host did not create its ProviderController."
 			);
 		}
+		const compositionRevisionBeforeReload =
+			controller.getCompositionRevision?.();
+		if (
+			compositionRevisionBeforeReload === undefined ||
+			controller.subscribeComposition === undefined
+		) {
+			throw new Error("The ProviderController has no composition revision.");
+		}
+		let compositionNotifications = 0;
+		unsubscribeComposition = controller.subscribeComposition(() => {
+			compositionNotifications += 1;
+		});
 
 		// Cancellation is an observable no-write: the Provider stays unavailable.
 		expect(
@@ -431,7 +451,6 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		expect(assistantText(host.agentSession.getSnapshot().transcript)).toContain(
 			"authorized:owner-a"
 		);
-
 		// A live Provider send keeps the Host busy, so reload cannot swap its composition.
 		const busyTurn = send(handle, "hold provider for reload", selectedA);
 		const waitStartedAt = Date.now();
@@ -468,9 +487,9 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			lifecycle: createInteractiveRuntimeLifecycle(),
 		});
 		expect(getInteractiveRuntimeContext().pluginRuntime).toBe(runtimeA);
-		expect(textOfModels(await controller.getKnownModels())).toEqual([
-			"owner-a-model",
-		]);
+		expect(
+			textOfModels(await controller.getKnownModels(), "shared_provider")
+		).toEqual(["owner-a-model"]);
 		expect(
 			(await send(handle, "old owner still runs", selectedA)).terminal.type
 		).toBe("agent-turn-completed");
@@ -486,9 +505,19 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			toast: { show: ({ message }) => (toastMessage = message) },
 			lifecycle: createInteractiveRuntimeLifecycle(),
 		});
+		expect(controller.getCompositionRevision?.()).toBe(
+			compositionRevisionBeforeReload + 1
+		);
+		expect(compositionNotifications).toBe(1);
 		expect(getInteractiveRuntimeContext().pluginRuntime).toBe(runtimeB);
-		expect(await controller.getKnownModels()).toEqual([]);
-		expect(await controller.getAvailableModels()).toEqual([]);
+		expect(
+			textOfModels(await controller.getKnownModels(), "shared_provider")
+		).toEqual([]);
+		expect(
+			(await controller.getAvailableModels()).filter(
+				({ providerId }) => providerId === "shared_provider"
+			)
+		).toEqual([]);
 		const selectedB = modelFor("owner-b-model");
 		const ownerBConnection = await controller.connectPluginProvider(
 			"shared_provider",
@@ -526,13 +555,18 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		expect(failedSafeCompositionReads).toBeGreaterThan(0);
 		expect(getInteractiveRuntimeContext().pluginRuntime).toBe(revokedRuntime);
 		expect(
-			controller.getConnectableProviders().map(({ providerId }) => providerId)
+			controller
+				.getConnectableProviders()
+				.map(({ providerId }) => providerId)
+				.filter((providerId) => providerId === "shared_provider")
 		).toEqual([]);
 		expect(hostCollection.getPluginProviderRegistrations()).toEqual([]);
 		expect(
 			hostCollection.getPluginProviderComposition("shared_provider")
 		).toBeUndefined();
-		expect(await controller.getKnownModels()).toEqual([]);
+		expect(
+			textOfModels(await controller.getKnownModels(), "shared_provider")
+		).toEqual([]);
 		await expect(
 			controller.connectPluginProvider(
 				"shared_provider",
@@ -583,14 +617,15 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 				pluginProviders: pluginProvidersFromRuntime(reenabledB),
 			});
 		await reenabledCollection.restoreModels();
-		expect(textOfModels(reenabledCollection.getModels())).toEqual([
-			"owner-b-model",
-		]);
-		expect(textOfModels(await reenabledCollection.getAvailable())).toEqual([
-			"owner-b-model",
-		]);
+		expect(
+			textOfModels(reenabledCollection.getModels(), "shared_provider")
+		).toEqual(["owner-b-model"]);
+		expect(
+			textOfModels(await reenabledCollection.getAvailable(), "shared_provider")
+		).toEqual(["owner-b-model"]);
 		await reenabledCollection.close();
 	} finally {
+		unsubscribeComposition?.();
 		await services?.shutdown();
 		await resetInteractiveSessionHostManager();
 		await Promise.allSettled(
@@ -719,8 +754,11 @@ test("a Plugin disabled by Session start failure has no Provider in that Session
 
 		expect(runtime.getProviderRegistrations(sessionId)).toEqual([]);
 		expect(
-			controller.getConnectableProviders().map(({ providerId: id }) => id)
-		).toEqual(["openrouter"]);
+			controller
+				.getConnectableProviders()
+				.map(({ providerId: id }) => id)
+				.filter((id) => id === providerId)
+		).toEqual([]);
 		await expect(
 			controller.connectPluginProvider(
 				providerId,
@@ -734,8 +772,11 @@ test("a Plugin disabled by Session start failure has no Provider in that Session
 			await manager.replacePluginRuntime(runtime, { trustChanged: true });
 		});
 		expect(
-			controller.getConnectableProviders().map(({ providerId: id }) => id)
-		).toEqual(["openrouter"]);
+			controller
+				.getConnectableProviders()
+				.map(({ providerId: id }) => id)
+				.filter((id) => id === providerId)
+		).toEqual([]);
 		expect(providerFactoryCalls).toBe(0);
 	} finally {
 		await services?.shutdown();

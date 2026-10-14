@@ -1,3 +1,4 @@
+import type { ProviderModel } from "@wincode/ai/sdk";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import {
 	catalogSelectionForProviderModel,
@@ -11,7 +12,8 @@ import {
 
 export type CompactionSettingsOperations = {
 	getCompactionSettings: (
-		model: ProviderModelSelection
+		model: ProviderModelSelection,
+		providerModel?: ProviderModel | null
 	) => Promise<ResolvedCompactionSettings>;
 };
 
@@ -34,24 +36,24 @@ export const createCompactionSettingsOperations = ({
 	workspace,
 }: CompactionSettingsDependencies): CompactionSettingsOperations => {
 	const getCompactionSettings = async (
-		model: ProviderModelSelection
+		model: ProviderModelSelection,
+		providerModel?: ProviderModel | null
 	): Promise<ResolvedCompactionSettings> => {
 		const snapshot = await configStore
 			.getSnapshot(workspace)
 			.catch(() => undefined);
+		if (providerModel !== undefined) {
+			return resolveCompactionSettings({
+				contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
+				snapshot,
+			});
+		}
 		const catalogModel = catalogSelectionForProviderModel(model);
-		return catalogModel === null
-			? resolveCompactionSettings({
-					contextLimit: null,
-					pricing,
-					sessionOverrides: {
-						auto: false,
-						enabled: false,
-						overflowRecovery: false,
-					},
-					snapshot,
-				})
-			: resolveCompactionSettings({ model: catalogModel, pricing, snapshot });
+		return resolveCompactionSettings(
+			catalogModel === null
+				? { contextLimit: null, pricing, snapshot }
+				: { model: catalogModel, pricing, snapshot }
+		);
 	};
 
 	return { getCompactionSettings };

@@ -1,16 +1,29 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
+import { fromPartial } from "@total-typescript/shoehorn";
+import { type AgentId, agentIdSchema } from "@wincode/agent-core";
+import type { Connections } from "@wincode/ai/connections";
 import { modelCatalog } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { act, useEffect, useRef } from "react";
+import { AgentRegistryProvider } from "@/modules/agents";
+import { ConnectionsProvider } from "@/modules/connections";
+import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
 import {
 	getActiveModels,
 	getModelsForPicker,
 } from "@/modules/prompt-settings/ui/model-picker-options";
 import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinking-level-dialog";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { SessionUsageBar } from "@/modules/sessions/ui/components/session-usage-bar";
 import type { SessionUsageSummary } from "@/modules/sessions/usage/session-usage";
+import { ConfigProvider } from "@/shared/config/config-provider";
+import type {
+	ConfigRuntime,
+	ConfigSnapshot,
+} from "@/shared/config/config-store";
 import {
 	type DialogContextValue,
 	DialogProvider,
@@ -18,6 +31,7 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { modelId } from "./support/identifiers";
 
 /**
@@ -91,6 +105,211 @@ const renderDialogSurface = async (content: React.ReactNode) => {
 	await flushUi(setup);
 	return setup;
 };
+
+test("unavailable Agent pins can be replaced only by an exact available Provider Model", async () => {
+	const agentId = agentIdSchema.parse("reviewer");
+	const availableModel: ProviderModel = {
+		modelId: "replacement-model-v2",
+		protocolId: "fixture",
+		providerId: "plugin-provider",
+	};
+	const snapshot = fromPartial<ConfigSnapshot>({
+		diagnostics: [],
+		document: {
+			agents: {
+				reviewer: {
+					description: "Reviews changes with a Provider Model.",
+					model: "plugin-provider/stale-model-v1",
+					role: "primary",
+				},
+			},
+		},
+		sourceFor: () => undefined,
+		sources: [],
+	});
+	const config = fromPartial<ConfigRuntime>({
+		configStore: { getSnapshot: async () => snapshot },
+		homeRoot: "/tmp",
+		workspace: "/tmp",
+	});
+	const connections = fromPartial<Connections>({
+		listProviders: async () => [],
+	});
+	const selected = Promise.withResolvers<{
+		agent: AgentId;
+		model?: ProviderModelSelection;
+	}>();
+	function AgentDialogHarness() {
+		const dialog = useDialog();
+		const opened = useRef(false);
+		useEffect(() => {
+			if (opened.current) {
+				return;
+			}
+			opened.current = true;
+			dialog.open({
+				children: (
+					<AgentsDialogContent
+						availableProviderModels={[availableModel]}
+						connectedProviderIds={new Set()}
+						currentAgent={agentId}
+						onSelectAgent={(agent, model) =>
+							selected.resolve({
+								agent,
+								...(model === undefined ? {} : { model }),
+							})
+						}
+					/>
+				),
+				title: "Select Agent",
+			});
+		}, [dialog]);
+		return null;
+	}
+	const setup = await testRender(
+		<ThemeProvider>
+			<ConfigProvider value={config}>
+				<ToastProvider>
+					<ConnectionsProvider connections={connections}>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<DialogProvider>
+									<AgentDialogHarness />
+								</DialogProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
+					</ConnectionsProvider>
+				</ToastProvider>
+			</ConfigProvider>
+		</ThemeProvider>,
+		{ height: 40, width: 120 }
+	);
+	activeSetups.push(setup);
+	await flushUi(setup);
+	await flushUi(setup);
+	await setup.waitForFrame((frame) =>
+		frame.includes("choose a replacement model")
+	);
+	await act(() => setup.mockInput.pressEnter());
+	await setup.waitForFrame((frame) => frame.includes("replacement-model-v2"));
+	expect(setup.captureCharFrame()).toContain("replacement-model-v2");
+	await act(() => setup.mockInput.pressEnter());
+	expect(await selected.promise).toEqual({
+		agent: agentId,
+		model: {
+			modelId: modelId("replacement-model-v2"),
+			providerId: "plugin-provider",
+		},
+	});
+});
+
+test("a connected Catalog-pinned Agent with no active Host model offers an explicit replacement", async () => {
+	const agentId = agentIdSchema.parse("stale-catalog-reviewer");
+	const availableModel: ProviderModel = {
+		modelId: "gpt-5.6",
+		protocolId: "openai-responses",
+		providerId: "openai",
+	};
+	const snapshot = fromPartial<ConfigSnapshot>({
+		diagnostics: [],
+		document: {
+			agents: {
+				"stale-catalog-reviewer": {
+					description: "Reviews changes with a stale Catalog pin.",
+					model: "openai/gpt-5.6-luna",
+					role: "primary",
+				},
+			},
+		},
+		sourceFor: () => undefined,
+		sources: [],
+	});
+	const config = fromPartial<ConfigRuntime>({
+		configStore: { getSnapshot: async () => snapshot },
+		homeRoot: "/tmp",
+		workspace: "/tmp",
+	});
+	const connections = fromPartial<Connections>({
+		listProviders: async () => [
+			{
+				connected: true,
+				connectionMethod: "api-key",
+				displayName: "OpenAI",
+				id: "openai",
+				methods: ["api-key"],
+			},
+		],
+	});
+	const selected = Promise.withResolvers<{
+		agent: AgentId;
+		model?: ProviderModelSelection;
+	}>();
+	function AgentDialogHarness() {
+		const dialog = useDialog();
+		const opened = useRef(false);
+		useEffect(() => {
+			if (opened.current) {
+				return;
+			}
+			opened.current = true;
+			dialog.open({
+				children: (
+					<AgentsDialogContent
+						availableProviderModels={[availableModel]}
+						connectedProviderIds={new Set(["openai"])}
+						currentAgent={agentId}
+						onSelectAgent={(agent, model) =>
+							selected.resolve({
+								agent,
+								...(model === undefined ? {} : { model }),
+							})
+						}
+					/>
+				),
+				title: "Select Agent",
+			});
+		}, [dialog]);
+		return null;
+	}
+	const setup = await testRender(
+		<ThemeProvider>
+			<ConfigProvider value={config}>
+				<ToastProvider>
+					<ConnectionsProvider connections={connections}>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<DialogProvider>
+									<AgentDialogHarness />
+								</DialogProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
+					</ConnectionsProvider>
+				</ToastProvider>
+			</ConfigProvider>
+		</ThemeProvider>,
+		{ height: 40, width: 120 }
+	);
+	activeSetups.push(setup);
+	await flushUi(setup);
+	await flushUi(setup);
+	await setup.waitForFrame((frame) =>
+		frame.includes("choose a replacement model")
+	);
+	await act(() => setup.mockInput.pressEnter());
+	await setup.waitForFrame((frame) => frame.includes("openai/gpt-5.6"));
+	expect(setup.captureCharFrame()).toContain("openai/gpt-5.6");
+	await act(() => setup.mockInput.pressEnter());
+	expect(await selected.promise).toEqual({
+		agent: agentId,
+		model: {
+			modelId: modelId("gpt-5.6"),
+			providerId: "openai",
+		},
+	});
+	expect(snapshot.document.agents).toMatchObject({
+		"stale-catalog-reviewer": { model: "openai/gpt-5.6-luna" },
+	});
+});
 
 describe("model picker", () => {
 	test("filters retired catalog entries before rendering", async () => {
@@ -335,6 +554,7 @@ describe("session usage bar", () => {
 		cacheWriteTokens: 0,
 		cacheWarmingStatus: "idle",
 		costUsd: null,
+		costCoverage: overrides.costUsd == null ? "unknown" : "complete",
 		costedTurns: 0,
 		costedUsageEntries: 0,
 		...overrides,
@@ -388,7 +608,7 @@ describe("session usage bar", () => {
 		expect(frame).toContain("~$1.25");
 	});
 
-	test("shows the requested used/limit context and omits unknown cost", async () => {
+	test("shows an explicit unknown-cost state for measured usage", async () => {
 		const setup = await renderSurfaces(() => (
 			<SessionUsageBar
 				summary={summary({
@@ -402,7 +622,17 @@ describe("session usage bar", () => {
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("29%(79K/272K)");
 		expect(frame).not.toContain("cache read");
-		expect(frame).not.toContain("$");
+		expect(frame).toContain("cost unknown");
+	});
+
+	test("qualifies totals that exclude usage with unknown rates", async () => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({ costCoverage: "partial", costUsd: 1.25 })}
+			/>
+		));
+
+		expect(setup.captureCharFrame()).toContain("~$1.25 (partial)");
 	});
 
 	test("shows used tokens when max context is unavailable", async () => {

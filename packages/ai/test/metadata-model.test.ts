@@ -4,6 +4,7 @@ import { anthropicModelMetadataById } from "../src/generated/anthropic-model-met
 import { googleModelMetadataById } from "../src/generated/google-model-metadata.generated";
 import { googleSdkModels } from "../src/generated/google-sdk-models.generated";
 import { modelMetadataByKey } from "../src/generated/model-metadata.generated";
+import { openAIProviderModelMetadataById } from "../src/generated/openai-provider-model-metadata.generated";
 import { openCodeGoSdkModels } from "../src/generated/opencode-go-sdk-models.generated";
 import { modelMetadataEntrySchema } from "../src/model-metadata";
 
@@ -279,6 +280,62 @@ describe("buildModelMetadataFile", () => {
 		);
 	});
 
+	test("generates exact OpenAI Provider Model limits, prices, reasoning, and cache choices", () => {
+		const result = build({
+			"openai/from-overlay": {
+				cost: { input: 2, output: 4 },
+				limits: { context: 1000 },
+				promptCache: {
+					explicit: { retentionTiers: ["short"] },
+					protocols: {
+						"openai-responses": {
+							breakpoints: true,
+							eligibility: { minimumInputTokens: 1024 },
+							promptCacheKey: true,
+							retention: {
+								field: "prompt_cache_options.ttl",
+								values: { short: "30m" },
+							},
+						},
+					},
+				},
+				thinking: {
+					levelMap: { max: null, off: "disabled", xhigh: "very_high" },
+					levels: ["low", "high"],
+					toggle: true,
+				},
+			},
+		});
+
+		expect(result.openAIProviderModelMetadataEntries).toEqual({
+			"from-source": {
+				limits: { contextWindowTokens: 1000 },
+				pricing: {
+					inputPerMillionTokensUsd: 1,
+					outputPerMillionTokensUsd: 2,
+				},
+			},
+			"from-overlay": {
+				limits: { contextWindowTokens: 1000 },
+				pricing: {
+					inputPerMillionTokensUsd: 2,
+					outputPerMillionTokensUsd: 4,
+				},
+				promptCacheRetentionTiers: ["short"],
+				promptCacheRetentionTtlMs: { short: 1_800_000 },
+				reasoningEfforts: ["none", "low", "high", "xhigh"],
+			},
+			"retired-source": { reasoningEfforts: ["low"] },
+		});
+		expect(result.openAIProviderModelMetadataContents).toContain(
+			"inputPerMillionTokensUsd"
+		);
+		expect(result.openAIProviderModelMetadataContents).not.toContain("google/");
+		expect(result.openAIProviderModelMetadataContents).not.toContain(
+			"anthropic/"
+		);
+	});
+
 	test("generates Anthropic-only model metadata for the isolated provider runtime", () => {
 		const promptCache = {
 			explicit: { retentionTiers: ["short", "long"] },
@@ -394,6 +451,53 @@ describe("buildModelMetadataFile", () => {
 			googleCachedContent: { ttl: { short: "300s" } },
 		});
 		expect(result.googleModelMetadataContents).not.toContain("openai/");
+	});
+
+	test("generated OpenAI Provider Model metadata maps only exact published choices", () => {
+		expect(openAIProviderModelMetadataById["gpt-5.6"]).toEqual({
+			limits: { contextWindowTokens: 1_050_000, maxOutputTokens: 128_000 },
+			pricing: {
+				cacheReadPerMillionTokensUsd: 0.4,
+				cacheWritePerMillionTokensUsd: 5,
+				inputPerMillionTokensUsd: 4,
+				outputPerMillionTokensUsd: 20,
+				tiers: [
+					{
+						inputTokensAbove: 200_000,
+						cacheReadPerMillionTokensUsd: 0.8,
+						cacheWritePerMillionTokensUsd: 10,
+						inputPerMillionTokensUsd: 8,
+						outputPerMillionTokensUsd: 30,
+					},
+					{
+						inputTokensAbove: 272_000,
+						cacheReadPerMillionTokensUsd: 0.8,
+						cacheWritePerMillionTokensUsd: 10,
+						inputPerMillionTokensUsd: 8,
+						outputPerMillionTokensUsd: 30,
+					},
+				],
+			},
+			promptCacheRetentionTiers: ["short"],
+			promptCacheRetentionTtlMs: { short: 1_800_000 },
+			reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+		});
+		expect(openAIProviderModelMetadataById["gpt-6-terra"]).toEqual({
+			promptCacheRetentionTiers: ["short"],
+			promptCacheRetentionTtlMs: { short: 1_800_000 },
+		});
+		expect(openAIProviderModelMetadataById["gpt-6-terra"]).not.toHaveProperty(
+			"reasoningEfforts"
+		);
+		expect(Object.keys(openAIProviderModelMetadataById)).toEqual(
+			Object.keys(modelMetadataByKey)
+				.filter((key) => key.startsWith("openai/"))
+				.map((key) => key.slice("openai/".length))
+				.filter((modelId) =>
+					Object.hasOwn(openAIProviderModelMetadataById, modelId)
+				)
+				.toSorted()
+		);
 	});
 
 	test("generated Google SDK models and metadata remain provider-only", () => {

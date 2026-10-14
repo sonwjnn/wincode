@@ -2,23 +2,34 @@ import {
 	type AgentId,
 	type AgentTurnEvent,
 	agentIdSchema,
-	createAgentTurnId,
 } from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
 import {
-	type ChatModelSelection,
 	defaultChatModelSelection,
 	findSupportedChatModel,
-	modelSelectionSchema,
 	normalizeThinkingLevel,
 	normalizeThinkingSelection,
 	parseCatalogModelSelection,
 	type ThinkingLevel,
 	type ThinkingSelection,
+	thinkingLevelSchema,
 } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
+import {
+	type AgentSelectionOverride,
+	resolveEffectiveAgentSelection,
+	withAvailableAgentModelOverride,
+} from "@/modules/agents/agent-call";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
+import {
+	catalogSelectionForProviderModel,
+	isAvailableProviderModelSelection,
+	normalizeProviderModelSelection,
+	normalizeProviderModelThinkingSelection,
+	type ProviderModelSelection,
+	parseProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
@@ -27,8 +38,6 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "../../../modules/sessions/host/types";
-import type { SessionMessage } from "../../../modules/sessions/message";
-import { createSessionUserMessage } from "../../../modules/sessions/message";
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
@@ -77,7 +86,8 @@ const composeOneShotServices = async (
 
 type ResolvedSelection = Readonly<{
 	agent: AgentId;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
+	selectionOverride?: AgentSelectionOverride;
 	resolvedAgent?: SessionSendInput["resolvedAgent"];
 }> &
 	ThinkingSelection;
@@ -135,11 +145,11 @@ const parseAgent = (value: string | undefined): AgentId | undefined => {
 
 const parseModel = (
 	value: string | undefined
-): ChatModelSelection | undefined => {
+): ProviderModelSelection | undefined => {
 	if (value === undefined) {
 		return;
 	}
-	const candidate = value.includes("/")
+	const catalogCandidate = value.includes("/")
 		? parseCatalogModelSelection(value)
 		: (() => {
 				const entry = findSupportedChatModel(value);
@@ -150,21 +160,28 @@ const parseModel = (
 							providerId: entry.connectionProviderId,
 						};
 			})();
-	if (candidate === null) {
+	const candidate = catalogCandidate ?? parseProviderModelSelection(value);
+	const parsed = normalizeProviderModelSelection(candidate);
+	if (parsed === null) {
 		throw new InvocationError(`Invalid Model selector: ${value}`);
 	}
-	const parsed = modelSelectionSchema.safeParse(candidate);
-	if (!parsed.success) {
-		throw new InvocationError(`Invalid Model selector: ${value}`);
-	}
-	return parsed.data;
+	return parsed;
 };
 
 const validateModelAvailability = async (
-	model: ChatModelSelection,
+	model: ProviderModelSelection,
 	connections: Connections
 ): Promise<void> => {
-	const availability = await resolveChatModelAvailability(model, connections);
+	const catalogModel = catalogSelectionForProviderModel(model);
+	if (catalogModel === null) {
+		throw new InvocationError(
+			`Provider Model ${model.providerId}/${model.modelId} requires the Provider SDK runtime.`
+		);
+	}
+	const availability = await resolveChatModelAvailability(
+		catalogModel,
+		connections
+	);
 	if (availability.status === "available") {
 		return;
 	}
@@ -187,9 +204,7 @@ const candidateAgent = (
 	registry: AgentRegistry | null,
 	agent: AgentId
 ): AgentRegistry["agents"][number] | undefined =>
-	registry?.selectableAgents.find(
-		(candidate) => candidate.id === agent && candidate.isAvailable
-	);
+	registry?.agents.find((candidate) => candidate.id === agent);
 
 const resolvedAgentFor = (
 	candidate: AgentRegistry["agents"][number] | undefined
@@ -204,24 +219,148 @@ const resolvedAgentFor = (
 			};
 
 const resolveExplicitThinkingLevel = (
-	model: ChatModelSelection,
-	value: string
+	model: ProviderModelSelection,
+	value: string,
+	providerModel: ProviderModel | undefined
 ): ThinkingLevel => {
-	const thinkingLevel = normalizeThinkingLevel(model, value);
+	const parsed = thinkingLevelSchema.safeParse(value);
+	if (!parsed.success) {
+		throw new InvocationError(`Invalid --thinking-level value: ${value}`);
+	}
+	if (providerModel !== undefined) {
+		const normalized = normalizeProviderModelThinkingSelection(providerModel, {
+			thinkingLevel: parsed.data,
+		});
+		if (normalized.thinkingLevel !== parsed.data) {
+			throw new InvocationError(`Invalid --thinking-level value: ${value}`);
+		}
+		return parsed.data;
+	}
+	const catalogModel = catalogSelectionForProviderModel(model);
+	const thinkingLevel =
+		catalogModel === null
+			? undefined
+			: normalizeThinkingLevel(catalogModel, value);
 	if (thinkingLevel === undefined) {
 		throw new InvocationError(`Invalid --thinking-level value: ${value}`);
 	}
 	return thinkingLevel;
 };
 
+type ResolvedOneShotModel = Readonly<{
+	agent: AgentId;
+	model: ProviderModelSelection;
+	providerModel?: ProviderModel;
+	selectionOverride?: AgentSelectionOverride;
+	resolvedAgent?: SessionSendInput["resolvedAgent"];
+}>;
+
+const isSameModelIdentity = (
+	left: Readonly<{ modelId: string; providerId: string }>,
+	right: Readonly<{ modelId: string; providerId: string }>
+): boolean =>
+	left.providerId === right.providerId && left.modelId === right.modelId;
+
+const resolveOneShotModel = ({
+	agent,
+	availableProviderModels,
+	candidate,
+	explicitModel,
+	registry,
+	restored,
+}: {
+	agent: AgentId;
+	availableProviderModels?: readonly ProviderModel[];
+	candidate: AgentRegistry["agents"][number] | undefined;
+	explicitModel: ProviderModelSelection | undefined;
+	registry: AgentRegistry | null;
+	restored: ResolvedSessionSelection | null;
+}): ResolvedOneShotModel => {
+	const restoredModel = restored?.model;
+	const model =
+		explicitModel ??
+		restoredModel ??
+		candidate?.model ??
+		defaultChatModelSelection;
+	if (availableProviderModels === undefined) {
+		if (catalogSelectionForProviderModel(model) === null) {
+			throw new InvocationError(
+				`Provider Model ${model.providerId}/${model.modelId} requires the Provider SDK runtime.`
+			);
+		}
+		return { agent, model, resolvedAgent: resolvedAgentFor(candidate) };
+	}
+	const providerModel = availableProviderModels.find((available) =>
+		isSameModelIdentity(available, model)
+	);
+	if (providerModel === undefined) {
+		throw new InvocationError(
+			`Provider Model ${model.providerId}/${model.modelId} is unavailable in this One-Shot Host.`
+		);
+	}
+	const explicitModelOverride =
+		explicitModel !== undefined ||
+		(restoredModel !== undefined &&
+			(candidate?.model === undefined ||
+				!isSameModelIdentity(candidate.model, restoredModel)))
+			? { model }
+			: undefined;
+	const selectionOverride = withAvailableAgentModelOverride(
+		registry,
+		agent,
+		explicitModelOverride,
+		availableProviderModels
+	);
+	const effective = resolveEffectiveAgentSelection(
+		registry,
+		agent,
+		model,
+		restored?.thinkingLevel === undefined
+			? {}
+			: { thinkingLevel: restored.thinkingLevel },
+		false,
+		selectionOverride
+	);
+	if (
+		effective.agent !== agent ||
+		effective.unavailableReason !== undefined ||
+		(candidate !== undefined && effective.resolvedAgent === undefined)
+	) {
+		throw new InvocationError(
+			effective.unavailableReason ?? `Agent is unavailable: ${agent}`
+		);
+	}
+	if (
+		!isAvailableProviderModelSelection(effective.model, availableProviderModels)
+	) {
+		throw new InvocationError(
+			`Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable in this One-Shot Host.`
+		);
+	}
+	const effectiveProviderModel = availableProviderModels.find((available) =>
+		isSameModelIdentity(available, effective.model)
+	);
+	return {
+		agent: effective.agent,
+		model: effective.model,
+		resolvedAgent: effective.resolvedAgent,
+		...(selectionOverride === undefined ? {} : { selectionOverride }),
+		...(effectiveProviderModel === undefined
+			? {}
+			: { providerModel: effectiveProviderModel }),
+	};
+};
+
 const resolveSelection = ({
 	agentOption,
+	availableProviderModels,
 	thinkingLevelOption,
 	modelOption,
 	restored,
 	registry,
 }: {
 	agentOption: string | undefined;
+	availableProviderModels?: readonly ProviderModel[];
 	thinkingLevelOption: string | undefined;
 	modelOption: string | undefined;
 	registry: AgentRegistry | null;
@@ -238,52 +377,49 @@ const resolveSelection = ({
 	if (registry !== null && candidate === undefined) {
 		throw new InvocationError(`Agent is unavailable: ${agent}`);
 	}
-
-	const restoredModel = restored?.model;
-	const catalogRestoredModel =
-		restoredModel === undefined
-			? null
-			: catalogSelectionForProviderModel(restoredModel);
 	if (
-		explicitModel === undefined &&
-		restoredModel !== undefined &&
-		catalogRestoredModel === null
+		candidate?.role === "subagent" ||
+		(availableProviderModels === undefined &&
+			candidate !== undefined &&
+			!(candidate.isAvailable && candidate.isSelectable))
 	) {
-		throw new InvocationError(
-			"This execution mode cannot run Provider SDK models; choose an explicit Catalog model."
-		);
+		throw new InvocationError(`Agent is unavailable: ${agent}`);
 	}
-	const model =
-		explicitModel ??
-		catalogRestoredModel ??
-		candidate?.model ??
-		defaultChatModelSelection;
-	const explicitChoice =
-		thinkingLevelOption === undefined
-			? undefined
-			: {
-					thinkingLevel: resolveExplicitThinkingLevel(
-						model,
-						thinkingLevelOption
-					),
-				};
-	const restoredChoice =
-		restored?.thinkingLevel === undefined
-			? undefined
-			: { thinkingLevel: restored.thinkingLevel };
-	const candidateChoice =
-		candidate?.thinkingLevel === undefined
-			? undefined
-			: { thinkingLevel: candidate.thinkingLevel };
-	const defaultChoice = { thinkingLevel: DEFAULT_THINKING_LEVEL };
-	const selection = normalizeThinkingSelection(
-		model,
-		explicitChoice ?? restoredChoice ?? candidateChoice ?? defaultChoice
-	);
-	return {
+	const effective = resolveOneShotModel({
 		agent,
-		model,
-		resolvedAgent: resolvedAgentFor(candidate),
+		availableProviderModels,
+		candidate,
+		explicitModel,
+		registry,
+		restored,
+	});
+	const thinkingChoice =
+		thinkingLevelOption === undefined
+			? (restored?.thinkingLevel ??
+				candidate?.thinkingLevel ??
+				DEFAULT_THINKING_LEVEL)
+			: resolveExplicitThinkingLevel(
+					effective.model,
+					thinkingLevelOption,
+					effective.providerModel
+				);
+	const selection =
+		effective.providerModel === undefined
+			? normalizeThinkingSelection(
+					catalogSelectionForProviderModel(effective.model) ??
+						defaultChatModelSelection,
+					{ thinkingLevel: thinkingChoice }
+				)
+			: normalizeProviderModelThinkingSelection(effective.providerModel, {
+					thinkingLevel: thinkingChoice,
+				});
+	return {
+		agent: effective.agent,
+		model: effective.model,
+		resolvedAgent: effective.resolvedAgent,
+		...(effective.selectionOverride === undefined
+			? {}
+			: { selectionOverride: effective.selectionOverride }),
 		...selection,
 	};
 };
@@ -308,8 +444,7 @@ const composeDefaultServices = async ({
 
 const sendInputFor = (
 	selection: ResolvedSelection,
-	text: string,
-	message: SessionMessage | undefined
+	text: string
 ): SessionSendInput => ({
 	agent: selection.agent,
 	composition: { files: [], text },
@@ -322,7 +457,10 @@ const sendInputFor = (
 				thinkingLevel: selection.thinkingLevel,
 				sessionThinkingLevel: selection.thinkingLevel,
 			}),
-	...(message === undefined ? { userText: text } : { messageId: message.id }),
+	...(selection.selectionOverride === undefined
+		? {}
+		: { selectionOverride: selection.selectionOverride }),
+	userText: text,
 });
 
 const emitJsonEvent = (
@@ -341,57 +479,17 @@ const emitJsonEvent = (
 };
 const initializeOneShotSession = async (
 	context: ApplicationContext,
-	services: SessionServices,
-	text: string
-): Promise<{
-	initialMessage: SessionMessage | undefined;
-	sessionId: SessionId;
-}> => {
-	let initialMessage: SessionMessage | undefined;
-	let sessionId =
+	services: SessionServices
+): Promise<{ isNewSession: boolean; sessionId: SessionId }> => {
+	const existingSessionId =
 		context.invocation.session === undefined
 			? undefined
 			: toSessionId(context.invocation.session);
-	if (sessionId === undefined) {
-		const registry = services.capabilities.getRegistry();
-		const selection = resolveSelection({
-			agentOption: context.invocation.agent,
-			thinkingLevelOption: context.invocation.thinkingLevel,
-			modelOption: context.invocation.model,
-			registry,
-			restored: null,
-		});
-		await validateModelAvailability(
-			selection.model,
-			services.capabilities.getConnections()
-		);
-		initialMessage = createSessionUserMessage(text, {
-			agent: selection.agent,
-			model: selection.model,
-			...(selection.thinkingLevel === undefined
-				? {}
-				: { thinkingLevel: selection.thinkingLevel }),
-		});
-		const [durableMessage] = await services.store.externalizeAttachments(
-			[initialMessage],
-			undefined,
-			{ rejectInvalid: true }
-		);
-		const created = await services.store.createSession({
-			agent: selection.agent,
-			message: durableMessage ?? initialMessage,
-			model: selection.model,
-			turnId: createAgentTurnId(),
-			...(selection.thinkingLevel === undefined
-				? {}
-				: { thinkingLevel: selection.thinkingLevel }),
-		});
-		sessionId = created.id;
+	if (existingSessionId !== undefined) {
+		return { isNewSession: false, sessionId: existingSessionId };
 	}
-	if (sessionId === undefined) {
-		throw new Error("One-Shot Session creation did not return an ID.");
-	}
-	return { initialMessage, sessionId };
+	const created = await services.store.createEmptySession({});
+	return { isNewSession: true, sessionId: created.id };
 };
 
 const runOneShot = async (
@@ -411,16 +509,18 @@ const runOneShot = async (
 	let host: SessionHost | undefined;
 	let manager: SessionHostManager | undefined;
 	let sessionId: SessionId | undefined;
+	let isNewSession = false;
+	let submissionAttempted = false;
 	let removeEventListener: (() => void) | undefined;
 	let terminalFailureMessage: string | undefined;
 	let terminalSucceeded = false;
 	try {
 		const initializedSession = await initializeOneShotSession(
 			context,
-			services,
-			text
+			services
 		);
 		sessionId = initializedSession.sessionId;
+		isNewSession = initializedSession.isNewSession;
 		const sessionHostManager = services.capabilities.getSessionHostManager();
 		manager = sessionHostManager;
 		host = await sessionHostManager.openHost({
@@ -429,16 +529,24 @@ const runOneShot = async (
 			sessionId,
 			view: true,
 		});
-		const { initialMessage } = initializedSession;
 		const registry = services.capabilities.getRegistry();
 		const restored = host.getSelection();
+		const availableProviderModels =
+			await host.providerController?.getAvailableModels();
 		const selection = resolveSelection({
 			agentOption: context.invocation.agent,
+			availableProviderModels,
 			thinkingLevelOption: context.invocation.thinkingLevel,
 			modelOption: context.invocation.model,
 			registry,
 			restored,
 		});
+		if (availableProviderModels === undefined) {
+			await validateModelAvailability(
+				selection.model,
+				services.capabilities.getConnections()
+			);
+		}
 		removeEventListener = sessionHostManager.onEvent((managedEvent) => {
 			if (managedEvent.type !== "agent-turn-event") {
 				return;
@@ -472,8 +580,9 @@ const runOneShot = async (
 		const abort = () => host?.agentSession.cancel();
 		context.signal?.addEventListener("abort", abort, { once: true });
 		try {
+			submissionAttempted = true;
 			const outcome = await host.agentSession.send(
-				sendInputFor(selection, text, initialMessage)
+				sendInputFor(selection, text)
 			);
 			if (outcome.rejected) {
 				throw new Error(outcome.reason);
@@ -498,7 +607,13 @@ const runOneShot = async (
 				await manager.releaseView(sessionId);
 			}
 		} finally {
-			await services.shutdown();
+			try {
+				if (isNewSession && !submissionAttempted && sessionId !== undefined) {
+					await services.store.deleteSession(sessionId);
+				}
+			} finally {
+				await services.shutdown();
+			}
 		}
 	}
 };

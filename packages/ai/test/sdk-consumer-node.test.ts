@@ -91,6 +91,14 @@ assert.deepEqual(controlRequests[0].messages[1].content[0], { type: "tool-failur
 assert(controlEvents.some((event) => event.type === "usage" && event.usage.cacheReadTokens === 3));
 assert.equal(controlEvents.at(-1).outcome.status, "success");
 assert.equal(controlEvents.at(-1).outcome.continuation.cursor, "next");
+const defaultControlEvents = [];
+for await (const event of sdk.chat({
+  messages: [],
+  modelId: "control-model",
+  providerId: "node-control-provider",
+})) defaultControlEvents.push(event);
+assert.equal(defaultControlEvents.at(-1).outcome.status, "success");
+assert.deepEqual(Object.keys(controlRequests[1]), ["messages"]);
 sdk.register({
   id: "node-failure-provider",
   models: [{ modelId: "failure-model", protocolId: "fake-wire", providerId: "node-failure-provider" }],
@@ -112,7 +120,7 @@ process.stdout.write("Node public SDK consumer passed");
 `;
 
 describe("Node external @wincode/ai consumer", () => {
-	test("Node consumers preserve chat controls and terminal outcomes through the public SDK", async () => {
+	test("Node consumers import the public SDK and omit undefined provider controls", async () => {
 		const consumerDir = await fs.mkdtemp(
 			path.join(os.tmpdir(), "wincode-ai-node-consumer-")
 		);

@@ -4,7 +4,30 @@ import {
 	type ModelStore,
 	type Provider,
 	type ProviderCollection,
+	type ProviderModel,
 } from "@wincode/ai/sdk";
+import {
+	type AnthropicProviderOptions,
+	createAnthropicProvider,
+} from "@wincode/ai/sdk/providers/anthropic";
+import {
+	createDeepSeekProvider,
+	type DeepSeekProviderOptions,
+} from "@wincode/ai/sdk/providers/deepseek";
+import {
+	createGoogleProvider,
+	type GoogleProviderOptions,
+} from "@wincode/ai/sdk/providers/google";
+import {
+	createOpenAIProvider,
+	type OpenAIBrowserLoginOptions,
+	type OpenAIProvider,
+	type OpenAIProviderOptions,
+} from "@wincode/ai/sdk/providers/openai";
+import {
+	createOpenCodeGoProvider,
+	type OpenCodeGoProviderOptions,
+} from "@wincode/ai/sdk/providers/opencode-go";
 import {
 	createOpenRouterProvider,
 	type OpenRouterProviderOptions,
@@ -15,19 +38,31 @@ import type {
 } from "@/modules/plugins/runtime";
 import type { PluginProviderComposition } from "@/modules/providers/interactive-provider-controller";
 import {
-	createProviderSdkCredentialStore,
-	createProviderSdkModelStore,
+	getProviderSdkStores,
 	pluginProviderStorageId,
 } from "@/modules/providers/provider-stores";
 
-/** Non-Interactive execution modes stay on their existing runtime in this slice. */
-export const createDefaultSessionProviderCollection = ():
-	| ProviderCollection
-	| undefined => undefined;
+export const createDefaultSessionProviderCollection = (
+	pluginRuntime?: PluginRuntime,
+	sessionId?: string,
+	options: Omit<
+		InteractiveSessionProviderCollectionOptions,
+		"pluginProviders"
+	> = {}
+): Promise<InteractiveSessionProviderCollection> =>
+	createInteractiveSessionProviderCollection({
+		...options,
+		pluginProviders: pluginProvidersFromRuntime(pluginRuntime, sessionId),
+	});
 
 export type InteractiveSessionProviderCollectionOptions = Readonly<{
+	anthropicProviderOptions?: AnthropicProviderOptions;
 	credentialStore?: CredentialStore;
+	deepSeekProviderOptions?: DeepSeekProviderOptions;
+	googleProviderOptions?: GoogleProviderOptions;
 	modelStore?: ModelStore;
+	openAIProviderOptions?: OpenAIProviderOptions;
+	openCodeGoProviderOptions?: OpenCodeGoProviderOptions;
 	openRouterProviderOptions?: OpenRouterProviderOptions;
 	pluginProviders?: readonly PluginProviderDescriptor[];
 	userDataDir?: string;
@@ -46,15 +81,21 @@ export type InteractiveSessionProviderCollection = ProviderCollection &
 		) => PluginProviderComposition | undefined;
 		getPluginProviderRegistrations: () => readonly PluginProviderDescriptor[];
 		getDiscoverableProviderIds: () => readonly string[];
+		getCompositionRevision: () => number;
+		subscribeComposition: (listener: () => void) => () => void;
 		supportsModelDiscovery: (providerId: string) => boolean;
 		preparePluginProviderRegistrations: (
 			registrations: readonly PluginProviderDescriptor[]
 		) => Promise<PreparedProviderComposition>;
 		failClosed: () => Promise<void>;
+		loginOpenAIOAuth: (
+			options?: OpenAIBrowserLoginOptions
+		) => Promise<readonly ProviderModel[]>;
 	}>;
 
 type ProviderCollectionBackend = Readonly<{
 	collection: ProviderCollection;
+	openAIProvider: OpenAIProvider | undefined;
 	pluginProviders: readonly PluginProviderDescriptor[];
 	discoverableProviderIds: Set<string>;
 	storageIds: Map<string, string>;
@@ -74,6 +115,7 @@ const createFailClosedBackend = (): ProviderCollectionBackend =>
 			},
 		}),
 		discoverableProviderIds: new Set<string>(),
+		openAIProvider: undefined,
 		pluginProviders: Object.freeze([]),
 		storageIds: new Map<string, string>(),
 	});
@@ -111,7 +153,23 @@ const createProviderBackend = async (
 		}
 		storageIds.set(provider.id, storageId);
 	};
+	let openAIProvider: OpenAIProvider;
 	try {
+		openAIProvider = createOpenAIProvider(options.openAIProviderOptions);
+		addProvider(openAIProvider, "openai");
+		addProvider(
+			createAnthropicProvider(options.anthropicProviderOptions),
+			"anthropic"
+		);
+		addProvider(createGoogleProvider(options.googleProviderOptions), "google");
+		addProvider(
+			createOpenCodeGoProvider(options.openCodeGoProviderOptions),
+			"opencode-go"
+		);
+		addProvider(
+			createDeepSeekProvider(options.deepSeekProviderOptions),
+			"deepseek"
+		);
 		addProvider(
 			createOpenRouterProvider(options.openRouterProviderOptions),
 			OPENROUTER_PROVIDER_ID
@@ -156,12 +214,16 @@ const createProviderBackend = async (
 	let backingCredentials: CredentialStore;
 	let backingModels: ModelStore;
 	try {
+		const defaultStores =
+			options.credentialStore === undefined || options.modelStore === undefined
+				? getProviderSdkStores({ userDataDir: options.userDataDir })
+				: {
+						credentialStore: options.credentialStore,
+						modelStore: options.modelStore,
+					};
 		backingCredentials =
-			options.credentialStore ??
-			createProviderSdkCredentialStore({ userDataDir: options.userDataDir });
-		backingModels =
-			options.modelStore ??
-			createProviderSdkModelStore({ userDataDir: options.userDataDir });
+			options.credentialStore ?? defaultStores.credentialStore;
+		backingModels = options.modelStore ?? defaultStores.modelStore;
 	} catch (error) {
 		await closeProviderInstances(providers);
 		throw error;
@@ -201,6 +263,7 @@ const createProviderBackend = async (
 				provider.discoverModels === undefined ? [] : [provider.id]
 			)
 		),
+		openAIProvider,
 		pluginProviders: Object.freeze([...pluginProviders]),
 		storageIds,
 	});
@@ -215,6 +278,18 @@ export const createInteractiveSessionProviderCollection = async (
 		options.pluginProviders ?? []
 	);
 	let closePromise: Promise<void> | undefined;
+	let compositionRevision = 0;
+	const compositionListeners = new Set<() => void>();
+	const notifyCompositionChanged = (): void => {
+		compositionRevision += 1;
+		for (const listener of [...compositionListeners]) {
+			try {
+				listener();
+			} catch {
+				// One subscriber cannot interrupt a Provider composition change.
+			}
+		}
+	};
 	const activeCollection = (): ProviderCollection => backend.collection;
 	const close = (): Promise<void> => {
 		if (closePromise !== undefined) {
@@ -222,10 +297,13 @@ export const createInteractiveSessionProviderCollection = async (
 		}
 		const previousCollection = activeCollection();
 		backend = createFailClosedBackend();
+		notifyCompositionChanged();
 		closePromise = previousCollection.close();
 		return closePromise;
 	};
 	const interactiveCollection: InteractiveSessionProviderCollection = {
+		canEnforceMaxOutputTokens: (providerId, modelId) =>
+			activeCollection().canEnforceMaxOutputTokens(providerId, modelId),
 		chat: (request) => activeCollection().chat(request),
 		close,
 		deleteCredential: (providerId) =>
@@ -250,6 +328,7 @@ export const createInteractiveSessionProviderCollection = async (
 			if (provider.discoverModels !== undefined) {
 				current.discoverableProviderIds.add(provider.id);
 			}
+			notifyCompositionChanged();
 		},
 		setCredential: (providerId, credential) =>
 			activeCollection().setCredential(providerId, credential),
@@ -270,9 +349,39 @@ export const createInteractiveSessionProviderCollection = async (
 		getPluginProviderRegistrations: () => backend.pluginProviders,
 		getDiscoverableProviderIds: () =>
 			Object.freeze([...backend.discoverableProviderIds]),
+		getCompositionRevision: () => compositionRevision,
+		subscribeComposition(listener) {
+			compositionListeners.add(listener);
+			return () => compositionListeners.delete(listener);
+		},
 		supportsModelDiscovery: (providerId) =>
 			backend.discoverableProviderIds.has(providerId),
 		failClosed: close,
+		async loginOpenAIOAuth(loginOptions = {}) {
+			if (closePromise !== undefined) {
+				throw new Error("ProviderCollection is closed.");
+			}
+			const openAIProvider = backend.openAIProvider;
+			if (openAIProvider === undefined) {
+				throw new Error("OpenAI browser sign-in is unavailable.");
+			}
+			const credential = await openAIProvider.login(loginOptions);
+			if (loginOptions.signal?.aborted) {
+				throw (
+					loginOptions.signal.reason ??
+					new DOMException("Aborted", "AbortError")
+				);
+			}
+			if (closePromise !== undefined) {
+				throw new Error("ProviderCollection is closed.");
+			}
+			await activeCollection().setCredential("openai", credential);
+			return activeCollection()
+				.getAvailable()
+				.then((models) =>
+					models.filter((model) => model.providerId === "openai")
+				);
+		},
 		async preparePluginProviderRegistrations(registrations) {
 			if (closePromise !== undefined) {
 				throw new Error("ProviderCollection is closed.");
@@ -298,6 +407,7 @@ export const createInteractiveSessionProviderCollection = async (
 					const previous = backend;
 					backend = next;
 					state = "committed";
+					notifyCompositionChanged();
 					await previous.collection.close().catch(() => undefined);
 				},
 				async discard() {

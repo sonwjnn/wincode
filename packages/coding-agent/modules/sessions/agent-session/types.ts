@@ -13,7 +13,7 @@ import type {
 	SubmissionId,
 	ToolCallId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import type { ReadonlyDeep } from "type-fest";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
@@ -442,7 +442,7 @@ export type SessionOverflowContinuationOutcome =
 
 /** The Model Target one overflow recovery compacts and continues with. */
 export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 }>;
 
@@ -490,7 +490,7 @@ export type SessionCompactionPort = Pick<
 /** One compaction request as a Session Command the Agent Session runs. */
 export type SessionCompactionCommand = ReadonlyDeep<{
 	focus?: string;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	/** Merged into the Session Transcript before compacting, when supplied. */
 	nextMessages?: readonly SessionMessage[];
 	/** Compacted in place of the Session Transcript, when supplied. */

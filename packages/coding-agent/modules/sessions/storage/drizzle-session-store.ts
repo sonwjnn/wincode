@@ -25,7 +25,10 @@ import {
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { normalizeProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import {
+	normalizeProviderModelSelection,
+	providerModelSelectionSchema,
+} from "@/modules/providers/provider-model-selection";
 import type { EditMode } from "@/modules/tools";
 import {
 	type CompactionId,
@@ -327,7 +330,7 @@ type SessionRecordRow = typeof sessionRecord.$inferSelect;
 type SessionUsageEntryRow = typeof sessionUsageEntry.$inferSelect;
 
 const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
-	const summarizationModel = modelSelectionSchema.parse(
+	const summarizationModel = providerModelSelectionSchema.parse(
 		row.summarizationModelJson
 	);
 	const summary = parseCompactionSummary(row.summaryJson);
@@ -430,7 +433,7 @@ const toSessionUsageEntry = (row: SessionUsageEntryRow): SessionUsageEntry => {
 		createdAt: row.createdAt,
 		id: toSessionUsageEntryId(row.id),
 		kind: row.kind,
-		model: modelSelectionSchema.parse(row.modelJson),
+		model: providerModelSelectionSchema.parse(row.modelJson),
 		sessionId: toSessionId(row.sessionId),
 		usage: modelUsageSchema.parse(row.usageJson),
 	};

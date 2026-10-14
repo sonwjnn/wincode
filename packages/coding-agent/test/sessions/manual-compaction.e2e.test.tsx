@@ -15,6 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
+import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClientRecorder,
@@ -31,7 +32,11 @@ process.env.WINCODE_LOCAL_DB_PATH = path.join(
 );
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
-setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
+setInteractiveRuntimeContext({
+	args: [],
+	cwd: testDirectory,
+	runtimeFactory: defaultRuntimeFactory,
+});
 afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();

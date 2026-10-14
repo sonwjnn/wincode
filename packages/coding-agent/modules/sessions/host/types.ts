@@ -1,6 +1,6 @@
 import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
 import type { Connections } from "@wincode/ai/connections";
-import type { ProviderCollection } from "@wincode/ai/sdk";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai/sdk";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
@@ -32,7 +32,8 @@ export type SessionCapabilities = Readonly<{
 	getCompactionModule: () => SessionCompactionModule;
 	/** Resolves the compaction settings one Model Target runs with. */
 	getCompactionSettings: (
-		model: ProviderModelSelection
+		model: ProviderModelSelection,
+		providerModel?: ProviderModel | null
 	) => Promise<ResolvedCompactionSettings>;
 	getConfig: () => ConfigRuntime;
 	getConnections: () => Connections;
@@ -47,7 +48,7 @@ export type SessionCapabilities = Readonly<{
 	getRegistry: () => AgentRegistry | null;
 	/** The durable store this session's records, compactions, and attachments live in. */
 	getStore: () => SessionStore;
-	/** Optional runtime factory for non-default application adapters and tests. */
+	/** Explicit legacy Catalog runtime for not-yet-migrated modes and tests; #208/#209 retire this route. */
 	getRuntime?: () => AgentRuntime;
 	getSessionHostManager: () => SessionHostManager;
 	getSessionSdk?: () => SessionSdkOperations | undefined;
@@ -63,6 +64,7 @@ export type SessionCapabilities = Readonly<{
  */
 export type SessionHost = Readonly<{
 	agentSession: AgentSession;
+	providerCollection?: ProviderCollection;
 	providerController?: InteractiveProviderController;
 	/** Prepares a fresh Plugin Provider composition while the Host is idle. */
 	prepareProviderComposition?: (

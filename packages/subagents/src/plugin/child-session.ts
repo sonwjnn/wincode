@@ -1,5 +1,6 @@
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import type {
+	ProviderModelSelection,
 	SessionSdk,
 	SessionSdkCapabilityCeiling,
 	SessionSdkHandle,
@@ -10,7 +11,7 @@ import type { DelegationTask, SessionId } from "./task-types";
 export type SubagentChildSessionOptions = Readonly<{
 	agentId: DelegationTask["agentId"];
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 }>;
 

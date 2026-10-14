@@ -119,9 +119,16 @@ export const calculateModelUsageCostUsd = (
 	const uncachedInput = Math.max(0, usage.inputTokens - cacheRead - cacheWrite);
 	const totalInput = uncachedInput + cacheRead + cacheWrite;
 	const rates =
-		tiers
-			?.filter((candidate) => totalInput > candidate.inputTokensAbove)
-			.at(-1) ?? cost;
+		tiers?.reduce<ModelCostTier | undefined>((highest, candidate) => {
+			if (
+				totalInput <= candidate.inputTokensAbove ||
+				(highest !== undefined &&
+					candidate.inputTokensAbove <= highest.inputTokensAbove)
+			) {
+				return highest;
+			}
+			return candidate;
+		}, undefined) ?? cost;
 	const cacheReadRate = rates.cacheRead ?? cost.cacheRead;
 	const cacheWriteRate = rates.cacheWrite ?? cost.cacheWrite;
 	let cacheReadCost = 0;

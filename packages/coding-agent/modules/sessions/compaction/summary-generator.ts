@@ -1,11 +1,22 @@
 import type { Connections } from "@wincode/ai/connections";
-import type { ChatModelSelection, ModelTarget } from "@wincode/ai/model";
+import type { ModelTarget } from "@wincode/ai/model";
 import {
 	generateModelText,
 	type ModelTextGenerationOptions,
 } from "@wincode/ai/model-client";
+import { normalizeModelUsage } from "@wincode/ai/model-usage";
 import type { ThinkingLevel } from "@wincode/ai/models";
+import type {
+	ChatEvent,
+	ProviderCollection,
+	ProviderModel,
+} from "@wincode/ai/sdk";
 import { omitUndefined } from "@wincode/utils";
+import {
+	catalogSelectionForProviderModel,
+	type ProviderModelSelection,
+	providerModelReasoningEffort,
+} from "@/modules/providers/provider-model-selection";
 import { resolveChatModelTarget } from "../../model-target";
 import { escapeXml } from "../../prompt-composition/project-instructions";
 import {
@@ -105,7 +116,7 @@ export type SummaryTextGenerator = (
 export type SummaryModel = ModelTarget;
 
 export type SummaryModelResolver = (
-	selection: ChatModelSelection,
+	selection: ProviderModelSelection,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 	maxOutputTokens?: number
@@ -168,19 +179,25 @@ export const createLanguageModelSummaryGenerator =
 	};
 
 export const resolveDirectSummaryModel = async (
-	selection: ChatModelSelection,
+	selection: ProviderModelSelection,
 	connections: Connections,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 	maxOutputTokens?: number
 ): Promise<SummaryModel> => {
+	const catalogModel = catalogSelectionForProviderModel(selection);
+	if (catalogModel === null) {
+		throw new Error(
+			`Provider Model ${selection.providerId}/${selection.modelId} is unavailable. Choose another model to compact this session.`
+		);
+	}
 	const targetOptions = omitUndefined({
 		allowRetired: true,
 		maxOutputTokens,
 		signal,
 		thinkingLevel,
 	});
-	return resolveChatModelTarget(selection, connections, targetOptions);
+	return resolveChatModelTarget(catalogModel, connections, targetOptions);
 };
 export const createDirectSummaryGenerator = (
 	connections: Connections,
@@ -197,3 +214,135 @@ export const createDirectSummaryGenerator = (
 				maxOutputTokens
 			),
 	});
+
+const providerModelFor = (
+	collection: ProviderCollection,
+	selection: ProviderModelSelection
+): ProviderModel | undefined =>
+	collection.getModel(selection.providerId, selection.modelId);
+
+const isAvailableProviderModel = async (
+	collection: ProviderCollection,
+	selection: ProviderModelSelection
+): Promise<boolean> =>
+	(await collection.getAvailable()).some(
+		(model) =>
+			model.providerId === selection.providerId &&
+			model.modelId === selection.modelId
+	);
+
+const requireInvocableProviderModel = async (
+	collection: ProviderCollection,
+	selection: ProviderModelSelection
+): Promise<ProviderModel> => {
+	const model = providerModelFor(collection, selection);
+	if (model === undefined) {
+		throw new Error(
+			`Provider Model ${selection.providerId}/${selection.modelId} is unavailable. Choose another model to compact this session.`
+		);
+	}
+	if (!(await isAvailableProviderModel(collection, selection))) {
+		throw new Error(
+			`Provider Model ${selection.providerId}/${selection.modelId} is not invocable. Connect its Provider or choose another model.`
+		);
+	}
+	return model;
+};
+
+const throwForProviderSummaryTerminal = (
+	status: string,
+	failureCode: string | undefined,
+	selection: ProviderModelSelection,
+	signal: AbortSignal | undefined
+): void => {
+	if (status === "failure") {
+		throw new Error(
+			`Provider Model ${selection.providerId}/${selection.modelId} failed: ${failureCode ?? "provider"}.`
+		);
+	}
+	if (status === "aborted") {
+		throw signal?.reason ?? new DOMException("Aborted", "AbortError");
+	}
+};
+
+const collectProviderSummary = async (
+	events: AsyncIterable<ChatEvent>,
+	selection: ProviderModelSelection,
+	signal: AbortSignal | undefined
+): Promise<SummaryGeneratorResult> => {
+	let text = "";
+	let usage: SummaryGeneratorResult["usage"];
+	for await (const event of events) {
+		switch (event.type) {
+			case "text-delta":
+				text += event.delta;
+				break;
+			case "usage":
+				usage = normalizeModelUsage(event.usage) ?? undefined;
+				break;
+			case "terminal":
+				throwForProviderSummaryTerminal(
+					event.outcome.status,
+					event.outcome.status === "failure"
+						? event.outcome.failure.code
+						: undefined,
+					selection,
+					signal
+				);
+				break;
+			default:
+				break;
+		}
+	}
+	return { text, ...omitUndefined({ usage }) };
+};
+
+const providerSummaryGenerator =
+	(collection: ProviderCollection): SummaryGenerator =>
+	async (input) => {
+		const model = await requireInvocableProviderModel(collection, input.model);
+		if (
+			!(await collection.canEnforceMaxOutputTokens(
+				model.providerId,
+				model.modelId
+			))
+		) {
+			const guidance =
+				model.providerId === "openai"
+					? "OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or choose another Provider Model."
+					: "This Provider credential cannot enforce the required output-token limit. Choose another Provider Model.";
+			throw new Error(
+				`Compaction is unavailable for Provider Model ${model.providerId}/${model.modelId}. ${guidance}`
+			);
+		}
+		const maxOutputTokens = Math.min(
+			Math.max(
+				1,
+				Math.floor(
+					input.maxOutputTokens ?? DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
+				)
+			),
+			model.limits?.maxOutputTokens ?? Number.MAX_SAFE_INTEGER
+		);
+		const prompt = buildSummaryPrompt(input);
+		const events = collection.chat({
+			maxOutputTokens,
+			messages: [{ content: [{ text: prompt, type: "text" }], role: "user" }],
+			modelId: model.modelId,
+			providerId: model.providerId,
+			...omitUndefined({
+				reasoningEffort: providerModelReasoningEffort(
+					model,
+					input.thinkingLevel
+				),
+				signal: input.signal,
+			}),
+			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
+		});
+		return collectProviderSummary(events, input.model, input.signal);
+	};
+
+/** Uses only an explicitly invocable SDK Provider Model without changing its stored identity. */
+export const createProviderSummaryGenerator = (
+	collection: ProviderCollection
+): SummaryGenerator => providerSummaryGenerator(collection);

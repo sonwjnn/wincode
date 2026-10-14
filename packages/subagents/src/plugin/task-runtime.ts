@@ -2,9 +2,10 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import {
 	type PluginSessionContext,
+	type ProviderModelSelection,
 	type SessionSdkCapabilityCeiling,
 	type SessionSdkDelivery,
 	type SessionSdkHandle,
@@ -32,7 +33,7 @@ export type StartSubagentsTaskInput = Readonly<{
 	parentSessionId: DelegationTask["parentSessionId"];
 	parentToolCallId: DelegationTask["parentToolCallId"];
 	parentTurnId: DelegationTask["parentTurnId"];
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	pluginPath: string;
 	prompt: string;
 	thinkingLevel?: ThinkingLevel;

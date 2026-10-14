@@ -2,6 +2,7 @@ import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
 import type { ThinkingSelection } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import {
 	getErrorMessage,
 	isNull,
@@ -14,14 +15,17 @@ import {
 	type AgentSelectionOverride,
 	resolveEffectiveAgentSelection,
 	useAgentRegistry,
+	withAvailableAgentModelOverride,
 } from "@/modules/agents";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import {
 	catalogSelectionForProviderModel,
 	normalizeProviderModelSelection,
+	normalizeProviderModelThinkingSelection,
 	normalizeProviderThinkingSelection,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
+import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import {
 	createSessionUserMessage,
@@ -546,27 +550,85 @@ export function SessionView({
 			});
 			return false;
 		}
+		const effective = resolveEffectiveAgentSelection(
+			registry,
+			agent,
+			model,
+			currentThinkingSelection
+		);
+		if (
+			effective.unavailableReason !== undefined &&
+			host.providerController === undefined
+		) {
+			show({ message: effective.unavailableReason, variant: "error" });
+			return false;
+		}
+		const thinkingSelection: ThinkingSelection =
+			effective.thinkingLevel === undefined
+				? {}
+				: { thinkingLevel: effective.thinkingLevel };
+		const compactWithProviderModel = async (
+			selection: ProviderModelSelection,
+			providerModel?: ProviderModel
+		): Promise<void> => {
+			const normalizedThinking =
+				providerModel === undefined
+					? normalizeProviderThinkingSelection(selection, thinkingSelection)
+					: normalizeProviderModelThinkingSelection(
+							providerModel,
+							thinkingSelection
+						);
+			await compact(focus, selection, normalizedThinking);
+		};
 		try {
-			const effective = resolveEffectiveAgentSelection(
-				registry,
-				agent,
-				model,
-				currentThinkingSelection
+			const availableModels =
+				(await host.providerController?.getAvailableModels()) ?? [];
+			const currentProviderModel = availableModels.find(
+				(providerModel) =>
+					providerModel.providerId === effective.model.providerId &&
+					providerModel.modelId === effective.model.modelId
 			);
-			const catalogModel = catalogSelectionForProviderModel(effective.model);
-			if (catalogModel === null) {
+			if (currentProviderModel !== undefined) {
+				await compactWithProviderModel(effective.model, currentProviderModel);
+				return true;
+			}
+			const providerController = host.providerController;
+			if (providerController === undefined) {
+				if (catalogSelectionForProviderModel(effective.model) !== null) {
+					await compactWithProviderModel(effective.model);
+					return true;
+				}
 				show({
-					message:
-						"Compaction is unavailable for Provider SDK models in this migration slice.",
+					message: `Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable. Choose a current model to compact this session.`,
 					variant: "error",
 				});
 				return false;
 			}
-			const thinkingSelection: ThinkingSelection =
-				effective.thinkingLevel === undefined
-					? {}
-					: { thinkingLevel: effective.thinkingLevel };
-			await compact(focus, catalogModel, thinkingSelection);
+			dialog.open({
+				children: (
+					<ProviderModelsDialogContent
+						controller={providerController}
+						currentModel={effective.model}
+						onSelectModel={(providerModel) => {
+							const selection = normalizeProviderModelSelection({
+								modelId: providerModel.modelId,
+								providerId: providerModel.providerId,
+							});
+							if (selection === null) {
+								return;
+							}
+							void compactWithProviderModel(selection, providerModel).catch(
+								(error: unknown) =>
+									show({
+										message: getErrorMessage(error, "Compaction failed."),
+										variant: "error",
+									})
+							);
+						}}
+					/>
+				),
+				title: "Choose Model for Compaction",
+			});
 			return true;
 		} catch (error) {
 			show({
@@ -590,14 +652,37 @@ export function SessionView({
 			return false;
 		}
 
+		let availableProviderModels: readonly ProviderModel[] | undefined;
+		try {
+			availableProviderModels =
+				host.providerController === undefined
+					? undefined
+					: await host.providerController.getAvailableModels();
+		} catch (error) {
+			show({
+				message: getErrorMessage(error, "Could not inspect Provider Models."),
+				variant: "error",
+			});
+			return false;
+		}
+		const selectionOverride = withAvailableAgentModelOverride(
+			registry,
+			agent,
+			submissionSelectionOverride,
+			availableProviderModels
+		);
 		const effective = resolveEffectiveAgentSelection(
 			registry,
 			agent,
 			model,
 			currentThinkingSelection,
 			false,
-			submissionSelectionOverride
+			selectionOverride
 		);
+		if (effective.unavailableReason !== undefined) {
+			show({ message: effective.unavailableReason, variant: "error" });
+			return false;
+		}
 		const optimisticMessage = isBusy
 			? undefined
 			: createSessionUserMessage(
@@ -623,7 +708,7 @@ export function SessionView({
 			...(thinkingLevel === undefined
 				? {}
 				: { sessionThinkingLevel: thinkingLevel }),
-			selectionOverride: submissionSelectionOverride,
+			selectionOverride,
 			composition,
 			files,
 			model: effective.model,

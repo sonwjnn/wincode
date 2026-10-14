@@ -5,6 +5,7 @@ import {
 	findSupportedChatModelSelection,
 	modelCatalog,
 } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import open from "open";
 import { createElement, type ReactNode } from "react";
 import {
@@ -23,7 +24,7 @@ import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinkin
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
 	catalogSelectionForProviderModel,
-	type ProviderModelSelection,
+	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
 import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
 import { ProviderSdkConnectDialogContent } from "@/modules/providers/ui/provider-sdk-connect-dialog";
@@ -40,8 +41,9 @@ export type CommandStrategyContext = {
 	getRecentModelSelections: (limit: number) => ChatModelSelection[];
 	navigateHome: () => void;
 	onSelectModel?: (model: ChatModelSelection) => void;
-	onSelectProviderModel?: (model: ProviderModelSelection) => void;
+	onSelectProviderModel?: (model: ProviderModel) => void;
 	providerController?: InteractiveProviderController;
+	providerModel?: ProviderModel;
 	onCompact?: (focus?: string) => boolean | Promise<boolean>;
 	onReload: () => Promise<void>;
 	onTrust: () => Promise<void>;
@@ -138,21 +140,51 @@ const STRATEGIES = {
 	"agent.select": {
 		kind: "prepared-dialog",
 		title: "Select Agent",
-		content: async ({ config, connections }) => {
+		content: async ({ config, connections, providerController }) => {
 			const providers = await connections.listProviders();
+			const availableProviderModels =
+				providerController === undefined
+					? undefined
+					: await providerController.getAvailableModels();
 			return createElement(AgentsDialogContent, {
+				...(availableProviderModels === undefined
+					? {}
+					: { availableProviderModels }),
 				connectedProviderIds: new Set(
 					providers.filter(({ connected }) => connected).map(({ id }) => id)
 				),
 				currentAgent: config.agent,
-				onSelectAgent: config.setAgent,
+				onSelectAgent: (agent, model) => {
+					config.setAgent(agent);
+					if (model !== undefined) {
+						config.setModelForFutureSubmissions(model);
+					}
+				},
 			});
 		},
 	},
 	"model.select": {
 		kind: "dialog",
 		title: "Select Model",
-		content: ({ config, getRecentModelSelections, onSelectModel }) => {
+		content: ({
+			config,
+			getRecentModelSelections,
+			onSelectModel,
+			onSelectProviderModel,
+			providerController,
+		}) => {
+			if (providerController !== undefined) {
+				if (onSelectProviderModel === undefined) {
+					throw new Error(
+						"Provider Model selection is unavailable in this view."
+					);
+				}
+				return createElement(ProviderModelsDialogContent, {
+					controller: providerController,
+					currentModel: config.model,
+					onSelectModel: onSelectProviderModel,
+				});
+			}
 			const currentModel =
 				catalogSelectionForProviderModel(config.model) ?? undefined;
 			return createElement(ModelsDialogContent, {
@@ -195,7 +227,22 @@ const STRATEGIES = {
 	"thinking.select": {
 		kind: "dialog",
 		title: "Select Thinking Level",
-		content: ({ config }) => {
+		content: ({ config, providerModel }) => {
+			if (providerModel !== undefined) {
+				const levels = supportedProviderThinkingLevels(providerModel);
+				if (levels.length === 0) {
+					throw new Error(
+						"Thinking-level selection is unavailable in this view."
+					);
+				}
+				return createElement(ThinkingLevelDialogContent, {
+					currentThinkingLevel: config.thinkingLevel,
+					thinkingLevels: levels,
+					onSelectDefault: () =>
+						config.setThinkingLevelForFutureSubmissions(undefined),
+					onSelectThinkingLevel: config.setThinkingLevelForFutureSubmissions,
+				});
+			}
 			const catalogModel = catalogSelectionForProviderModel(config.model);
 			const supportedModel =
 				catalogModel === null

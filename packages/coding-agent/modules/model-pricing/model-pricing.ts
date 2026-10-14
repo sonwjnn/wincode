@@ -5,6 +5,7 @@ import {
 	type ModelRuntimeProviderId,
 } from "@wincode/ai/models";
 import type { ModelMetadataEntry } from "@wincode/ai/models-dev";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { omitUndefined, pickTruthy } from "@wincode/utils";
 
 /**
@@ -15,6 +16,41 @@ import { omitUndefined, pickTruthy } from "@wincode/utils";
 export type ModelPricingEntry = ModelMetadataEntry;
 
 export type ModelPricingTable = Readonly<Record<string, ModelPricingEntry>>;
+
+/** Maps exact Provider Model prices into the shared cost calculator shape. */
+export const pricingEntryForProviderModel = (
+	model: ProviderModel
+): ModelPricingEntry | undefined => {
+	const pricing = model.pricing;
+	const input = pricing?.inputPerMillionTokensUsd;
+	const output = pricing?.outputPerMillionTokensUsd;
+	if (pricing === undefined || input === undefined || output === undefined) {
+		return;
+	}
+	return {
+		cost: {
+			input,
+			output,
+			...omitUndefined({
+				cacheRead: pricing.cacheReadPerMillionTokensUsd,
+				cacheWrite: pricing.cacheWritePerMillionTokensUsd,
+			}),
+		},
+		...(pricing.tiers === undefined
+			? {}
+			: {
+					tiers: pricing.tiers.map((tier) => ({
+						inputTokensAbove: tier.inputTokensAbove,
+						input: tier.inputPerMillionTokensUsd,
+						output: tier.outputPerMillionTokensUsd,
+						...omitUndefined({
+							cacheRead: tier.cacheReadPerMillionTokensUsd,
+							cacheWrite: tier.cacheWritePerMillionTokensUsd,
+						}),
+					})),
+				}),
+	};
+};
 
 /**
  * How current the rates behind a resolved price are. `"bundled"` is the

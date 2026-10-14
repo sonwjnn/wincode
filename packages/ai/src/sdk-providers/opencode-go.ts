@@ -17,10 +17,16 @@ import type {
 	ModelStepRequest,
 	ModelTool,
 } from "../model-client/types.ts";
+import type {
+	AnthropicProviderOptions,
+	OpenAIProviderOptions,
+} from "../model-provider-options.ts";
 import type { ModelTarget } from "../model-target.ts";
 import type { SupportedChatModel } from "../models.ts";
+import { withProviderModelMetadata } from "../provider-model-metadata.ts";
 import {
 	type ChatContentPart,
+	maxOutputTokensForRequest,
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
@@ -136,13 +142,26 @@ const modelRequestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
 	apiKey: string
-): ModelStepRequest => ({
-	messages: promptMessages(request.messages),
-	signal: context.signal,
-	system: request.system,
-	target: modelTargetFor(context.model.modelId, apiKey, request.cacheRetention),
-	tools: modelTools(request.tools),
-});
+): ModelStepRequest => {
+	const reasoningEffort =
+		!request.cacheWarming &&
+		request.reasoningEffort !== undefined &&
+		context.model.reasoningEfforts?.includes(request.reasoningEffort)
+			? request.reasoningEffort
+			: undefined;
+	return {
+		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+		messages: promptMessages(request.messages),
+		signal: context.signal,
+		system: request.system,
+		target: modelTargetFor(
+			context.model.modelId,
+			apiKey,
+			request.cacheRetention
+		),
+		tools: modelTools(request.tools),
+	};
+};
 
 type OpenCodeGoWireRequest = Readonly<{
 	body: Record<string, unknown>;
@@ -151,6 +170,26 @@ type OpenCodeGoWireRequest = Readonly<{
 	url: string;
 }>;
 
+const anthropicProviderOptionsFor = (
+	reasoningEffort: ModelStepRequest["reasoningEffort"]
+): AnthropicProviderOptions["anthropic"] | undefined => {
+	if (reasoningEffort === undefined) {
+		return;
+	}
+	if (reasoningEffort === "none") {
+		return { thinking: { type: "disabled" } };
+	}
+	if (reasoningEffort === "minimal") {
+		return;
+	}
+	return { effort: reasoningEffort };
+};
+
+const openAIProviderOptionsFor = (
+	reasoningEffort: ModelStepRequest["reasoningEffort"]
+): OpenAIProviderOptions["openai"] | undefined =>
+	reasoningEffort === undefined ? undefined : { reasoningEffort };
+
 const wireRequestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
@@ -158,14 +197,19 @@ const wireRequestFor = (
 ): OpenCodeGoWireRequest => {
 	const model = openCodeGoProtocolForModel(context.model);
 	const modelRequest = modelRequestFor(request, context, apiKey);
+	const requestedMaxOutputTokens = maxOutputTokensForRequest(
+		request.maxOutputTokens,
+		context.model
+	);
+	const maxOutputTokens = request.cacheWarming ? 1 : requestedMaxOutputTokens;
 	const protocolId = context.model.protocolId as OpenCodeGoProtocolId;
 	if (protocolId === RESPONSES_PROTOCOL_ID) {
 		return {
 			body: openAIResponsesStrategy.serialize({
-				maxOutputTokens: undefined,
+				maxOutputTokens,
 				model,
 				omitOutputTokenLimit: false,
-				providerOptions: undefined,
+				providerOptions: openAIProviderOptionsFor(modelRequest.reasoningEffort),
 				request: modelRequest,
 			}),
 			headers: {
@@ -179,9 +223,11 @@ const wireRequestFor = (
 	if (protocolId === ANTHROPIC_PROTOCOL_ID) {
 		return {
 			body: openCodeGoAnthropicStrategy.serialize({
-				maxOutputTokens: undefined,
+				maxOutputTokens,
 				model,
-				providerOptions: undefined,
+				providerOptions: anthropicProviderOptionsFor(
+					modelRequest.reasoningEffort
+				),
 				request: modelRequest,
 			}),
 			headers: {
@@ -195,7 +241,7 @@ const wireRequestFor = (
 	}
 	return {
 		body: openAIChatStrategy.serialize({
-			maxOutputTokens: undefined,
+			maxOutputTokens,
 			model,
 			request: modelRequest,
 		}),
@@ -333,7 +379,23 @@ export const createOpenCodeGoProvider = (
 ): Provider => {
 	const fetchImpl: OpenCodeGoFetch =
 		options.fetch ?? globalThis.fetch.bind(globalThis);
-	const models = options.models ?? openCodeGoSdkModels;
+	const models =
+		options.models ??
+		openCodeGoSdkModels.map((model) => {
+			const enriched = withProviderModelMetadata(
+				model,
+				openCodeGoModelMetadataById[model.modelId]
+			);
+			return enriched.protocolId !== ANTHROPIC_PROTOCOL_ID ||
+				enriched.reasoningEfforts === undefined
+				? enriched
+				: {
+						...enriched,
+						reasoningEfforts: enriched.reasoningEfforts.filter(
+							(effort) => effort !== "minimal"
+						),
+					};
+		});
 	if (
 		models.some(
 			(model) =>

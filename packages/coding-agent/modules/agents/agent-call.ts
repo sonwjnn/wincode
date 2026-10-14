@@ -1,11 +1,18 @@
 import type { AgentId } from "@wincode/agent-core";
 import type { ThinkingSelection } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
+import { omitUndefined } from "@wincode/utils";
 import {
+	catalogSelectionForProviderModel,
 	normalizeProviderThinkingSelection,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
-import { buildAgent, type ResolvedCodingAgent } from "./built-ins";
-import type { AgentRegistry } from "./registry";
+import type { ResolvedCodingAgent } from "./built-ins";
+import {
+	type AgentRegistry,
+	agentUnavailableReasonWithoutModelPin,
+	canDeferAgentModelAvailability,
+} from "./registry";
 
 export type AgentCallSelection = {
 	readonly agent: AgentId;
@@ -20,6 +27,7 @@ export type EffectiveAgentSelection = {
 	readonly agent: AgentId;
 	readonly model: ProviderModelSelection;
 	readonly resolvedAgent?: ResolvedCodingAgent;
+	readonly unavailableReason?: string;
 } & ThinkingSelection;
 
 /** Composer-level choices that intentionally take precedence over Agent defaults. */
@@ -28,63 +36,179 @@ export type AgentSelectionOverride = Readonly<{
 	thinking?: ThinkingSelection;
 }>;
 
+/** Allows the Agent's exact pin only after the Provider SDK confirms it is available. */
+export const withAvailableAgentModelOverride = (
+	registry: AgentRegistry | null,
+	agentId: AgentId,
+	selectionOverride: AgentSelectionOverride | undefined,
+	availableProviderModels: readonly ProviderModel[] | undefined
+): AgentSelectionOverride | undefined => {
+	if (
+		selectionOverride?.model !== undefined ||
+		availableProviderModels === undefined
+	) {
+		return selectionOverride;
+	}
+	const pinnedModel = registry?.agents.find(({ id }) => id === agentId)?.model;
+	if (
+		pinnedModel === undefined ||
+		!availableProviderModels.some(
+			(model) =>
+				model.providerId === pinnedModel.providerId &&
+				model.modelId === pinnedModel.modelId
+		)
+	) {
+		return selectionOverride;
+	}
+	return { ...selectionOverride, model: pinnedModel };
+};
+
+const hasUnavailableAgentModel = (
+	agent: AgentRegistry["agents"][number] | undefined,
+	allowSubagent: boolean
+): boolean => {
+	if (agent === undefined || agent.model === undefined) {
+		return false;
+	}
+	return !(agent.isAvailable && (allowSubagent || agent.isSelectable));
+};
+
+const unavailableAgentReason = (
+	agent: AgentRegistry["agents"][number] | undefined,
+	allowSubagent: boolean,
+	allowUnavailablePinReplacement: boolean,
+	allowModelAvailabilityDeferral: boolean
+): string | undefined => {
+	if (
+		agent === undefined ||
+		!hasUnavailableAgentModel(agent, allowSubagent) ||
+		(allowUnavailablePinReplacement &&
+			agent.modelUnavailableReason !== undefined &&
+			agentUnavailableReasonWithoutModelPin(agent) === undefined) ||
+		(allowModelAvailabilityDeferral && canDeferAgentModelAvailability(agent))
+	) {
+		return;
+	}
+	return (
+		agent.unavailableReason ?? `Agent ${agent.displayName} is unavailable.`
+	);
+};
+
+const thinkingSelectionForAgent = (
+	agent: AgentRegistry["agents"][number] | undefined,
+	fallback: ThinkingSelection,
+	override: AgentSelectionOverride | undefined
+): ThinkingSelection => {
+	if (override?.thinking !== undefined) {
+		return override.thinking;
+	}
+	if (agent?.model === undefined) {
+		return fallback;
+	}
+	if (
+		override?.model !== undefined &&
+		(override.model.modelId !== agent.model.modelId ||
+			override.model.providerId !== agent.model.providerId)
+	) {
+		return fallback;
+	}
+	return agent.thinkingLevel === undefined
+		? {}
+		: { thinkingLevel: agent.thinkingLevel };
+};
+
+const resolvedAgentFor = (
+	agent: AgentRegistry["agents"][number] | undefined,
+	allowSubagent: boolean,
+	allowUnavailablePinReplacement: boolean,
+	allowModelAvailabilityDeferral: boolean
+): ResolvedCodingAgent | undefined => {
+	if (agent === undefined) {
+		return;
+	}
+	const isAvailable =
+		agent.isAvailable && (allowSubagent || agent.isSelectable);
+	const isUnavailablePinReplacement =
+		allowUnavailablePinReplacement &&
+		agent.modelUnavailableReason !== undefined &&
+		agentUnavailableReasonWithoutModelPin(agent) === undefined;
+	const isDeferredModelAvailability =
+		allowModelAvailabilityDeferral && canDeferAgentModelAvailability(agent);
+	if (
+		!(isAvailable || isUnavailablePinReplacement || isDeferredModelAvailability)
+	) {
+		return;
+	}
+	return {
+		id: agent.id,
+		instructions: agent.instructions,
+		role: agent.role,
+		visibleCodingTools: [...agent.visibleCodingTools],
+	};
+};
+
 export const resolveEffectiveAgentSelection = (
 	registry: AgentRegistry | null,
 	agentId: AgentId,
 	fallbackModel: ProviderModelSelection,
 	fallbackSelection: ThinkingSelection,
 	allowSubagent = false,
-	selectionOverride?: AgentSelectionOverride
+	selectionOverride?: AgentSelectionOverride,
+	options?: Readonly<{ allowModelAvailabilityDeferral?: boolean }>
 ): EffectiveAgentSelection => {
-	const candidates = allowSubagent
-		? (registry?.agents ?? [])
-		: (registry?.selectableAgents ?? []);
-	const selected = candidates.find(
-		(agent) => agent.id === agentId && agent.isAvailable
+	const requested = registry?.agents.find(
+		(agent) =>
+			agent.id === agentId && (allowSubagent || agent.role !== "subagent")
 	);
-	const fallbackAgent = candidates.find(
-		(agent) => agent.id === "build" && agent.isAvailable
+	const fallbackAgent = registry?.agents.find(
+		(agent) => agent.id === "build" && agent.isAvailable && agent.isSelectable
 	);
-	const effectiveAgent = selected ?? fallbackAgent;
-	const effectiveAgentId =
-		effectiveAgent?.id ?? (registry ? buildAgent.id : agentId);
-	const model =
-		selectionOverride?.model ?? effectiveAgent?.model ?? fallbackModel;
+	let selected = fallbackAgent;
+	if (hasUnavailableAgentModel(requested, allowSubagent)) {
+		selected = requested;
+	} else if (
+		requested?.isAvailable &&
+		(requested.isSelectable || allowSubagent)
+	) {
+		selected = requested;
+	}
+	const model = selectionOverride?.model ?? selected?.model ?? fallbackModel;
+	const allowUnavailablePinReplacement =
+		selectionOverride?.model !== undefined &&
+		hasUnavailableAgentModel(requested, allowSubagent) &&
+		requested?.modelUnavailableReason !== undefined &&
+		agentUnavailableReasonWithoutModelPin(requested) === undefined;
 	const hasSelectionOverride =
 		selectionOverride?.model !== undefined ||
 		selectionOverride?.thinking !== undefined;
-	const selectionUsesAgentModel =
-		effectiveAgent?.model !== undefined &&
-		(selectionOverride?.model === undefined ||
-			(selectionOverride.model.modelId === effectiveAgent.model.modelId &&
-				selectionOverride.model.providerId ===
-					effectiveAgent.model.providerId));
-	let thinkingSelection: ThinkingSelection;
-	if (selectionOverride?.thinking !== undefined) {
-		thinkingSelection = selectionOverride.thinking;
-	} else if (!selectionUsesAgentModel) {
-		thinkingSelection = fallbackSelection;
-	} else if (effectiveAgent.thinkingLevel === undefined) {
-		thinkingSelection = {};
-	} else {
-		thinkingSelection = { thinkingLevel: effectiveAgent.thinkingLevel };
-	}
-	const resolvedThinkingSelection = hasSelectionOverride
-		? normalizeProviderThinkingSelection(model, thinkingSelection)
-		: thinkingSelection;
+	const allowModelAvailabilityDeferral =
+		options?.allowModelAvailabilityDeferral === true;
+	const thinkingSelection = thinkingSelectionForAgent(
+		selected,
+		fallbackSelection,
+		selectionOverride
+	);
+	const resolvedThinkingSelection =
+		hasSelectionOverride && catalogSelectionForProviderModel(model) !== null
+			? normalizeProviderThinkingSelection(model, thinkingSelection)
+			: thinkingSelection;
 	return {
-		agent: effectiveAgentId,
+		agent: selected?.id ?? agentId,
 		model,
-		...(effectiveAgent
-			? {
-					resolvedAgent: {
-						id: effectiveAgent.id,
-						instructions: effectiveAgent.instructions,
-						role: effectiveAgent.role,
-						visibleCodingTools: [...effectiveAgent.visibleCodingTools],
-					},
-				}
-			: {}),
+		...omitUndefined({
+			resolvedAgent: resolvedAgentFor(
+				selected,
+				allowSubagent,
+				allowUnavailablePinReplacement,
+				allowModelAvailabilityDeferral
+			),
+			unavailableReason: unavailableAgentReason(
+				requested,
+				allowSubagent,
+				allowUnavailablePinReplacement,
+				allowModelAvailabilityDeferral
+			),
+		}),
 		...resolvedThinkingSelection,
 	};
 };

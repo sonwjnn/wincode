@@ -753,14 +753,14 @@ describe("native model client routes", () => {
 		});
 	}
 
-	test("uses the Codex OAuth Responses route and omits its rejected output cap", async () => {
+	test("uses the uncapped Codex OAuth Responses route without sending an output budget", async () => {
 		const mock = mockFetch(sseResponse("data: [DONE]\n\n"));
 		const client = createModelClient({ fetch: mock.fetch });
 		const target = makeTarget(
 			"openai",
 			"gpt-5.6-luna",
 			{ accessToken: "oauth-token", accountId: "acct-123", kind: "oauth" },
-			{ maxOutputTokens: 800, thinkingLevel: "low" }
+			{ thinkingLevel: "low" }
 		);
 
 		const parts = await collect(client, target);
@@ -775,6 +775,22 @@ describe("native model client routes", () => {
 		expect(body.model).toBe("gpt-5.6-luna");
 		expect(body.max_output_tokens).toBeUndefined();
 		expect(parts).toEqual([{ type: "finish" }]);
+	});
+
+	test("rejects a bounded Codex OAuth request before network I/O", async () => {
+		const mock = mockFetch(sseResponse("data: [DONE]\n\n"));
+		const client = createModelClient({ fetch: mock.fetch });
+		const target = makeTarget(
+			"openai",
+			"gpt-5.6-luna",
+			{ accessToken: "oauth-token", accountId: "acct-123", kind: "oauth" },
+			{ maxOutputTokens: 800 }
+		);
+
+		await expect(collect(client, target)).rejects.toBeInstanceOf(
+			ModelProviderError
+		);
+		expect(mock.url).toBe("");
 	});
 
 	test("maps Anthropic messages, documents, tools, thinking, and usage", async () => {

@@ -28,6 +28,10 @@ const OPENAI_PROMPT_CACHE_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/openai-prompt-cache.generated.ts"
 );
+const OPENAI_PROVIDER_MODEL_METADATA_OUTPUT_PATH = path.join(
+	import.meta.dir,
+	"../src/generated/openai-provider-model-metadata.generated.ts"
+);
 const GOOGLE_MODEL_METADATA_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/google-model-metadata.generated.ts"
@@ -65,6 +69,9 @@ const currentAnthropicModelMetadata = isCheck
 	: undefined;
 const currentOpenAIPromptCache = isCheck
 	? await readUtf8File(OPENAI_PROMPT_CACHE_OUTPUT_PATH)
+	: undefined;
+const currentOpenAIProviderModelMetadata = isCheck
+	? await readUtf8File(OPENAI_PROVIDER_MODEL_METADATA_OUTPUT_PATH)
 	: undefined;
 const currentGoogleModelMetadata = isCheck
 	? await readUtf8File(GOOGLE_MODEL_METADATA_OUTPUT_PATH)
@@ -118,6 +125,8 @@ if (isCheck) {
 		current !== rendered.contents ||
 		currentAnthropicModelMetadata !== rendered.anthropicModelMetadataContents ||
 		currentOpenAIPromptCache !== rendered.openAIPromptCacheContents ||
+		currentOpenAIProviderModelMetadata !==
+			rendered.openAIProviderModelMetadataContents ||
 		currentGoogleModelMetadata !== rendered.googleModelMetadataContents ||
 		currentGoogleSdkModels !== rendered.googleSdkModelsContents ||
 		currentOpenCodeGoModelMetadata !==
@@ -141,6 +150,10 @@ if (isCheck) {
 			rendered.openAIPromptCacheContents
 		),
 		Bun.write(
+			OPENAI_PROVIDER_MODEL_METADATA_OUTPUT_PATH,
+			rendered.openAIProviderModelMetadataContents
+		),
+		Bun.write(
 			GOOGLE_MODEL_METADATA_OUTPUT_PATH,
 			rendered.googleModelMetadataContents
 		),
@@ -157,6 +170,7 @@ if (isCheck) {
 	process.stdout.write(`Wrote ${OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${ANTHROPIC_MODEL_METADATA_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${OPENAI_PROMPT_CACHE_OUTPUT_PATH}\n`);
+	process.stdout.write(`Wrote ${OPENAI_PROVIDER_MODEL_METADATA_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${GOOGLE_MODEL_METADATA_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${GOOGLE_SDK_MODELS_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH}\n`);

@@ -276,7 +276,7 @@ const metadataForRecord = (
 		model === undefined ? null : catalogSelectionForProviderModel(model);
 	const normalizedChoice = catalogModel
 		? normalizeThinkingSelection(catalogModel, choice)
-		: {};
+		: choice;
 	const parsed = sessionMessageMetadataSchema.safeParse({
 		...pickTruthy({ agent: metadata?.agent ?? record.agentId }),
 		...omitUndefined({

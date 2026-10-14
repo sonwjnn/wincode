@@ -74,6 +74,8 @@ export type SupportedPromptCacheRetentionTier = Exclude<
 	"off"
 >;
 
+export { parsePromptCacheTtlMs } from "./prompt-cache-ttl.ts";
+
 /** The explicit cache controls and retention tiers verified for one Model. */
 export type OpenAIPromptCacheProtocol = "openai-chat" | "openai-responses";
 

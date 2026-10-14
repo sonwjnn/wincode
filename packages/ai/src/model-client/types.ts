@@ -1,6 +1,7 @@
 import type { JsonObject, RequireOneOrNone } from "type-fest";
 import type { ModelTarget } from "../model-target";
 import type { ModelUsage } from "../model-usage";
+import type { ChatReasoningEffort } from "../sdk";
 
 export type ModelPromptPart =
 	| Readonly<{ text: string; type: "text" }>
@@ -49,6 +50,7 @@ export type ModelStepRequest = Readonly<{
 	googleCachedContent?: GoogleCachedContentSelection;
 	messages: readonly ModelPromptMessage[];
 	promptCacheKey?: string;
+	reasoningEffort?: ChatReasoningEffort;
 	signal?: AbortSignal;
 	system?: string;
 	target: ModelTarget;

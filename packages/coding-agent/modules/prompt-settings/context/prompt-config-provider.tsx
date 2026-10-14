@@ -5,6 +5,7 @@ import {
 	type ThinkingLevel,
 	type ThinkingSelection,
 } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { isNull } from "@wincode/utils";
 import {
 	createContext,
@@ -25,6 +26,7 @@ import {
 	catalogSelectionForProviderModel,
 	normalizeProviderThinkingSelection,
 	type ProviderModelSelection,
+	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
 
 type PromptConfigState = {
@@ -32,7 +34,7 @@ type PromptConfigState = {
 	model: ProviderModelSelection;
 } & ThinkingSelection;
 export type PromptConfig = PromptConfigState & {
-	cycleThinkingLevel: () => void;
+	cycleThinkingLevel: (providerModel?: ProviderModel) => void;
 	setAgent: (agent: AgentId) => void;
 	setModel: (model: ProviderModelSelection) => void;
 	setModelForFutureSubmissions: (model: ProviderModelSelection) => void;
@@ -109,24 +111,30 @@ export function PromptConfigProvider({
 		}));
 	}, [registry]);
 
-	const cycleThinkingLevel = useCallback(() => {
-		const catalogModel = catalogSelectionForProviderModel(config.model);
-		const options: (ThinkingLevel | undefined)[] = [
-			undefined,
-			...(catalogModel === null
-				? []
-				: getSupportedThinkingLevels(catalogModel)),
-		];
-		const currentIndex = options.indexOf(config.thinkingLevel);
-		const next = options[(currentIndex + 1) % options.length];
-		const selection = next === undefined ? {} : { thinkingLevel: next };
-		setConfig((current) => updatePromptConfigSelection(current, selection));
-		setSubmissionSelectionOverride((current) =>
-			current.thinking === undefined
-				? current
-				: { ...current, thinking: selection }
-		);
-	}, [config.model, config.thinkingLevel]);
+	const cycleThinkingLevel = useCallback(
+		(providerModel?: ProviderModel) => {
+			const catalogModel = catalogSelectionForProviderModel(config.model);
+			let levels: readonly ThinkingLevel[];
+			if (providerModel !== undefined) {
+				levels = supportedProviderThinkingLevels(providerModel);
+			} else if (catalogModel === null) {
+				levels = [];
+			} else {
+				levels = getSupportedThinkingLevels(catalogModel);
+			}
+			const options: (ThinkingLevel | undefined)[] = [undefined, ...levels];
+			const currentIndex = options.indexOf(config.thinkingLevel);
+			const next = options[(currentIndex + 1) % options.length];
+			const selection = next === undefined ? {} : { thinkingLevel: next };
+			setConfig((current) => updatePromptConfigSelection(current, selection));
+			setSubmissionSelectionOverride((current) =>
+				current.thinking === undefined
+					? current
+					: { ...current, thinking: selection }
+			);
+		},
+		[config.model, config.thinkingLevel]
+	);
 
 	const setAgent = useCallback((agent: AgentId) => {
 		hasExplicitAgent.current = true;

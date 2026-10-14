@@ -19,6 +19,7 @@ import {
 	type SessionRecord,
 } from "@wincode/agent-core";
 import { act } from "react";
+import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
@@ -52,7 +53,11 @@ const databasePath = path.join(testDirectory, "conversation.sqlite");
 process.env.WINCODE_LOCAL_DB_PATH = databasePath;
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
-setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
+setInteractiveRuntimeContext({
+	args: [],
+	cwd: testDirectory,
+	runtimeFactory: defaultRuntimeFactory,
+});
 const aliasDatabasePath = path.join(
 	testDirectory,
 	"conversation-owner-alias.sqlite"
@@ -371,11 +376,11 @@ test("stored history labels durable interrupted turns", async () => {
 		);
 		await activateSessionWriterAction(setup, "session-contention-view-history");
 		await waitForSessionFrame(setup, (frame) =>
-			frame.includes("Build · GPT-5.6 Luna · interrupted")
+			frame.includes("Build · openai/gpt-5.6-luna · interrupted")
 		);
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("The request ended safely.");
-		expect(frame).toContain("Build · GPT-5.6 Luna · interrupted");
+		expect(frame).toContain("Build · openai/gpt-5.6-luna · interrupted");
 		expect(frame).not.toContain("Ask anything...");
 	} finally {
 		await contender.release();

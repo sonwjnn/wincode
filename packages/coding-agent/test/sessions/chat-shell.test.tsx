@@ -38,6 +38,7 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { createConnections } from "@wincode/ai/connections";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { act, useEffect, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
@@ -47,6 +48,7 @@ import {
 	PromptConfigProvider,
 	usePromptConfig,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
 import type {
@@ -173,6 +175,7 @@ const buildTestRouter = () =>
 
 type ChatShellProbeProps = {
 	activeMessages?: readonly SessionMessage[];
+	providerController?: InteractiveProviderController;
 	agentHolder: { current: string };
 	holder: { current: ChatShellProbeHandle | null };
 	initialCompactions?: SessionCompaction[];
@@ -202,6 +205,7 @@ function ChatShellProbe({
 	initialCompactions = [],
 	initialMessages,
 	isBusy = false,
+	providerController,
 	isCompacting: initialIsCompacting = false,
 	isInterruptArmed = false,
 	onRetry,
@@ -241,6 +245,7 @@ function ChatShellProbe({
 				onRetry={onRetry}
 				onSubmit={() => true}
 				promptHistory={[]}
+				providerController={providerController}
 				queuedSubmissions={queuedSubmissions}
 				viewId="test"
 			/>
@@ -256,6 +261,7 @@ type ChatShellSetup = {
 };
 type ChatShellRenderOptions = {
 	activeMessages?: readonly SessionMessage[];
+	providerController?: InteractiveProviderController;
 	height: number;
 	width: number;
 	initialCompactions?: SessionCompaction[];
@@ -271,6 +277,7 @@ const renderChatShell = async (
 	initialMessages: SessionMessage[],
 	{
 		activeMessages,
+		providerController,
 		height,
 		width,
 		initialCompactions = [],
@@ -342,6 +349,7 @@ const renderChatShell = async (
 														isCompacting={isCompacting}
 														isInterruptArmed={isInterruptArmed}
 														onRetry={onRetry}
+														providerController={providerController}
 														queuedSubmissions={queuedSubmissions}
 													/>
 												</CommandControllerProvider>
@@ -393,6 +401,19 @@ const expandShellBlock = async (setup: TestRendererSetup): Promise<string> => {
 		setup.mockInput.pressKey("o", { ctrl: true });
 		const frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)", 400);
 		if (frame.includes("(Ctrl+O: Collapse)")) {
+			return frame;
+		}
+	}
+	return setup.captureCharFrame();
+};
+
+const collapseShellBlock = async (
+	setup: TestRendererSetup
+): Promise<string> => {
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		setup.mockInput.pressKey("o", { ctrl: true });
+		const frame = await waitForFrameText(setup, "(Ctrl+O: Expand)", 400);
+		if (frame.includes("(Ctrl+O: Expand)")) {
 			return frame;
 		}
 	}
@@ -1069,6 +1090,77 @@ describe("ChatShell activity footer", () => {
 			setup.renderer.destroy();
 		}
 	});
+	test("refreshes Provider Model usage metadata after model discovery changes", async () => {
+		const selection = {
+			modelId: modelId("provider-context-model"),
+			providerId: "plugin-provider",
+		};
+		let availabilityRevision = 0;
+		let knownModels: readonly ProviderModel[] = [
+			{
+				limits: { contextWindowTokens: 200_000 },
+				modelId: selection.modelId,
+				pricing: {
+					inputPerMillionTokensUsd: 1,
+					outputPerMillionTokensUsd: 1,
+				},
+				protocolId: "fake-provider",
+				providerId: selection.providerId,
+			},
+		];
+		const availabilityListeners = new Set<() => void>();
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailabilityRevision: () => availabilityRevision,
+			getCompositionRevision: () => 0,
+			getKnownModels: async () => knownModels,
+			subscribeAvailability: (listener: () => void) => {
+				availabilityListeners.add(listener);
+				return () => availabilityListeners.delete(listener);
+			},
+		});
+		const usageMessage: SessionMessage = {
+			...assistantMessage([], "provider-usage"),
+			metadata: {
+				model: selection,
+				usage: { inputTokens: 99_999, outputTokens: 1 },
+			},
+		};
+		const { setup } = await renderChatShell([usageMessage], {
+			height: 12,
+			providerController,
+			width: 100,
+		});
+
+		try {
+			const initialFrame = await waitForFrameText(setup, "200K");
+			expect(initialFrame).toContain("~$0.10");
+			await act(() => {
+				knownModels = [
+					{
+						limits: { contextWindowTokens: 300_000 },
+						modelId: selection.modelId,
+						pricing: {
+							inputPerMillionTokensUsd: 10,
+							outputPerMillionTokensUsd: 10,
+						},
+						protocolId: "fake-provider",
+						providerId: selection.providerId,
+					},
+				];
+				availabilityRevision += 1;
+				for (const listener of [...availabilityListeners]) {
+					listener();
+				}
+			});
+			const updatedFrame = await waitForFrameText(setup, "300K");
+			expect(updatedFrame).toContain("~$1.00");
+			expect(updatedFrame).not.toContain("200K");
+			expect(updatedFrame).not.toContain("~$0.10");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("shows compacting activity while retaining provider usage", async () => {
 		const messages: SessionMessage[] = [
 			userMessage("user-1"),
@@ -1417,9 +1509,7 @@ describe("ChatShell shell output blocks", () => {
 			let frame = setup.captureCharFrame();
 			expect(frame).toContain("… 4 more lines");
 
-			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
+			frame = await expandShellBlock(setup);
 			expect(frame).toContain("row 10");
 
 			// Resizing reflows the preview but keeps the block expanded.
@@ -1430,9 +1520,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).not.toContain("more lines");
 
 			// Collapsing after the resize restores a preview for the new width.
-			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
+			frame = await collapseShellBlock(setup);
 			expect(frame).toContain("row 1");
 			expect(frame).not.toContain("row 7");
 			expect(frame).toContain("… 4 more lines");

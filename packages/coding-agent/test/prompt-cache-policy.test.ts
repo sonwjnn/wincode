@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { modelCatalog } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import {
 	resolveConfiguredPromptCacheControls,
 	resolveConfiguredPromptCacheRetention,
+	resolveProviderPromptCacheControls,
 } from "@/modules/prompt-cache/policy";
 
 test("uses short by default and honors only capability-supported model overrides", () => {
@@ -40,6 +42,33 @@ test("uses short by default and honors only capability-supported model overrides
 			modelOverrides: { "anthropic/claude-opus-4-5": "invalid" },
 		})
 	).toBeUndefined();
+});
+
+test("Provider cache options require explicit Provider Model retention metadata", () => {
+	const declared: ProviderModel = {
+		modelId: "declared",
+		promptCacheRetentionTiers: ["short"],
+		protocolId: "fixture",
+		providerId: "fixture",
+	};
+	const undeclared: ProviderModel = {
+		modelId: "undeclared",
+		protocolId: "fixture",
+		providerId: "fixture",
+	};
+
+	expect(resolveProviderPromptCacheControls(declared, undefined)).toEqual({
+		enabled: true,
+		retention: "short",
+	});
+	expect(resolveProviderPromptCacheControls(undeclared, undefined)).toEqual({
+		enabled: false,
+	});
+	expect(
+		resolveProviderPromptCacheControls(declared, {
+			modelOverrides: { "fixture/declared": "long" },
+		})
+	).toEqual({ enabled: false });
 });
 
 test("enables only declared controls and lets off omit the Session key", () => {

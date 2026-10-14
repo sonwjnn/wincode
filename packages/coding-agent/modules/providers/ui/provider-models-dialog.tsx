@@ -1,4 +1,3 @@
-import { toModelId } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai/sdk";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useState } from "react";
@@ -16,7 +15,7 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 type Props = Readonly<{
 	controller: InteractiveProviderController;
 	currentModel: ProviderModelSelection;
-	onSelectModel: (model: ProviderModelSelection) => void;
+	onSelectModel: (model: ProviderModel) => void;
 }>;
 
 type Row =
@@ -119,10 +118,7 @@ export const ProviderModelsDialogContent = ({
 						void refreshModels();
 						return;
 					}
-					onSelectModel({
-						modelId: toModelId(row.model.modelId),
-						providerId: row.model.providerId,
-					});
+					onSelectModel(row.model);
 					dialog.close();
 				}}
 				placeholder="Search Provider Models"

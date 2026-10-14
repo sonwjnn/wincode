@@ -11,7 +11,7 @@ import {
 	type SessionRecord,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import {
 	getErrorMessage,
 	isError,
@@ -20,7 +20,7 @@ import {
 	logger,
 	omitUndefined,
 } from "@wincode/utils";
-import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	createSkillSnapshot,
 	type SkillRequestContext,
@@ -240,7 +240,7 @@ export const prepareCompactionBeforeSubmit = async ({
 }: {
 	compaction: AgentSessionPorts["compaction"];
 	getActiveMessages: () => readonly SessionMessage[];
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	runCompaction: (
 		command: SessionCompactionCommand
 	) => Promise<CompactSessionResult>;
@@ -507,22 +507,18 @@ const prepareSessionSubmission = async ({
 		if (!isNull(compactionReason)) {
 			return { kind: "rejected", reason: compactionReason };
 		}
-		const catalogModel = catalogSelectionForProviderModel(input.model);
-		const compactionResult =
-			catalogModel === null
-				? { ok: true as const }
-				: await prepareCompactionBeforeSubmit({
-						compaction: ports.compaction,
-						getActiveMessages: deps.getContext,
-						model: catalogModel,
-						runCompaction: deps.compact,
-						settings,
-						settleCompaction: deps.settleCompaction,
-						...omitUndefined({
-							turnId: input.turnId,
-							thinkingLevel: input.thinkingLevel,
-						}),
-					});
+		const compactionResult = await prepareCompactionBeforeSubmit({
+			compaction: ports.compaction,
+			getActiveMessages: deps.getContext,
+			model: input.model,
+			runCompaction: deps.compact,
+			settings,
+			settleCompaction: deps.settleCompaction,
+			...omitUndefined({
+				turnId: input.turnId,
+				thinkingLevel: input.thinkingLevel,
+			}),
+		});
 		if (!compactionResult.ok) {
 			return { kind: "rejected", reason: compactionResult.reason };
 		}
@@ -891,12 +887,6 @@ const proposeOverflowRecovery = ({
 							originalMessageId: contextMessageId,
 						}),
 					resolveTarget: async () => {
-						const catalogModel = catalogSelectionForProviderModel(
-							execution.model
-						);
-						if (catalogModel === null) {
-							return null;
-						}
 						const settings = await deps.ports.resolveCompactionSettings(
 							execution.model
 						);
@@ -904,7 +894,7 @@ const proposeOverflowRecovery = ({
 							return null;
 						}
 						return {
-							model: catalogModel,
+							model: execution.model,
 							thinkingLevel: execution.thinkingLevel,
 						};
 					},
@@ -1151,10 +1141,6 @@ const maintainAfterTurn = (
 	turnId: AgentTurnId,
 	thinkingLevel?: ThinkingLevel
 ): void => {
-	const catalogModel = catalogSelectionForProviderModel(selection);
-	if (catalogModel === null) {
-		return;
-	}
 	const compactIfNeeded = async (): Promise<void> => {
 		let settings: ResolvedCompactionSettings;
 		try {
@@ -1170,7 +1156,7 @@ const maintainAfterTurn = (
 		}
 		try {
 			await deps.compact({
-				model: catalogModel,
+				model: selection,
 				nextMessages: messages,
 				trigger: "threshold",
 				turnId,

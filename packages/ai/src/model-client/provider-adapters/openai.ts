@@ -1,3 +1,4 @@
+import { ModelProviderError } from "../errors";
 import { openAIResponsesStrategy } from "../protocols/openai-responses";
 import { openAIOptionsFor, requireApiKey } from "./shared";
 import type { ConnectionProviderAdapter } from "./types";
@@ -9,6 +10,11 @@ const jsonHeaders = { "content-type": "application/json" } as const;
 
 const createOpenAIRequest = (context: ProviderRequestContext) => {
 	const authorization = context.request.target.authorization;
+	if (authorization.kind === "oauth" && context.maxOutputTokens !== undefined) {
+		throw new ModelProviderError(
+			"OpenAI OAuth cannot enforce a requested maximum output token limit."
+		);
+	}
 	const bodyContext = {
 		maxOutputTokens: context.maxOutputTokens,
 		model: context.model,

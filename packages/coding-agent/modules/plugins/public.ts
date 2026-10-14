@@ -6,8 +6,8 @@ import type {
 	ToolCallOutput,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
-import type { Provider } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai/models";
+import type { Provider, ProviderModelSelection } from "@wincode/ai/sdk";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type {
@@ -282,7 +282,7 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 export type PluginAPI = Readonly<{
 	definePlugin: (identity: Readonly<{ id: string }>) => PluginDefinitionAPI;
 	/** Set the focused Interactive composer model for future Submissions. */
-	setModel: (model: ChatModelSelection) => Promise<boolean>;
+	setModel: (model: ProviderModelSelection) => Promise<boolean>;
 	/** Set or clear the focused composer ThinkingLevel for future Submissions. */
 	setThinkingLevel: (level: ThinkingLevel | undefined) => void;
 }>;

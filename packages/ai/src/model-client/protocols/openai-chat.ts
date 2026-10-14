@@ -3,6 +3,7 @@ import { readSseEvents } from "../sse.ts";
 import type {
 	ModelPromptMessage,
 	ModelPromptPart,
+	ModelStepRequest,
 	ModelStreamPart,
 } from "../types";
 import {
@@ -336,6 +337,7 @@ export type OpenAICompatibleChatRequest = Readonly<{
 	maxOutputTokens?: number;
 	messages: readonly ModelPromptMessage[];
 	modelId: string;
+	reasoningEffort?: ModelStepRequest["reasoningEffort"];
 	system?: string;
 	tools?: readonly Readonly<{
 		description?: string;
@@ -355,6 +357,9 @@ const serializeOpenAICompatibleChat = (
 	};
 	if (request.maxOutputTokens !== undefined) {
 		body.max_tokens = request.maxOutputTokens;
+	}
+	if (request.reasoningEffort !== undefined) {
+		body.reasoning_effort = request.reasoningEffort;
 	}
 	const tools = request.tools?.map((tool) => ({
 		type: "function",
@@ -384,6 +389,7 @@ const serializeOpenAIChat = (
 		maxOutputTokens,
 		messages: request.messages,
 		modelId: request.target.modelId,
+		reasoningEffort: request.reasoningEffort,
 		system: request.system,
 		tools: request.tools,
 	});

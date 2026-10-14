@@ -9,10 +9,13 @@ import type {
 } from "@wincode/ai/connections";
 import * as connectionsModule from "@wincode/ai/connections";
 import type { ConnectionProviderId } from "@wincode/ai/models";
+import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
+import * as sessionProviderCollectionModule from "@/modules/sessions/provider-collection";
 import { createConfigStore } from "@/shared/config/config-store";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClientRecorder,
+	createFakeProviderCollection,
 	installFakeModelClient,
 } from "@/test/support/e2e-fake-runtime";
 import { createEnvironmentRestorer } from "@/test/support/environment";
@@ -55,10 +58,19 @@ setInteractiveRuntimeContext({
 	args: [],
 	configRuntime: interactiveConfigRuntime,
 	cwd: testDirectory,
+	runtimeFactory: defaultRuntimeFactory,
 });
 await fs.mkdir(testDirectory, { recursive: true });
 
 export const recorder = createFakeModelClientRecorder();
+const createInteractiveCliE2eProviderCollection = () =>
+	createFakeProviderCollection(recorder);
+
+spyOn(
+	sessionProviderCollectionModule,
+	"createDefaultSessionProviderCollection"
+).mockImplementation(createInteractiveCliE2eProviderCollection);
+
 const testConnections: Connections = {
 	authorize: async <Provider extends ConnectionProviderId>(
 		providerId: Provider

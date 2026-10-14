@@ -21,6 +21,7 @@ const databasePath = path.join(workspace, "conversation.sqlite");
 
 import {
 	createFakeModelClientRecorder,
+	createFakeProviderCollection,
 	installFakeModelClient,
 } from "./support/e2e-fake-runtime";
 
@@ -89,6 +90,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
 			connections: () => connections,
+			createProviderCollection: () => createFakeProviderCollection(recorder),
 		},
 	});
 	const request = (
@@ -264,6 +266,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
 			connections: () => connections,
+			createProviderCollection: () => createFakeProviderCollection(recorder),
 		},
 	});
 	const secondStdoutFrames: string[] = [];
@@ -596,6 +599,7 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 					},
 				],
 			}),
+			createProviderCollection: () => createFakeProviderCollection(recorder),
 		},
 	});
 	const model = {

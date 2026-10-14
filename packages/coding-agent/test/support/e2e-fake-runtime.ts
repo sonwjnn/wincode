@@ -1,4 +1,5 @@
 import { spyOn } from "bun:test";
+import { fromAny } from "@total-typescript/shoehorn";
 import type {
 	ModelClient,
 	ModelPromptMessage,
@@ -9,6 +10,15 @@ import type {
 	ModelTextGenerationResult,
 } from "@wincode/ai/model-client";
 import * as modelClientModule from "@wincode/ai/model-client";
+import { defaultChatModelSelection } from "@wincode/ai/models";
+import {
+	createProviderCollection,
+	type Provider,
+	type ProviderChatEvent,
+	type ProviderChatRequest,
+	type ProviderModel,
+} from "@wincode/ai/sdk";
+import type { InteractiveSessionProviderCollection } from "@/modules/sessions/provider-collection";
 
 export type FakeMessageRequest = {
 	readonly role: string;
@@ -124,5 +134,89 @@ export const installFakeModelClient = (
 	);
 	spyOn(modelClientModule, "generateModelText").mockImplementation(
 		fake.generateModelText
+	);
+};
+
+const fakeProviderModel: ProviderModel = {
+	capabilities: ["reasoning", "text", "tools"],
+	modelId: defaultChatModelSelection.modelId,
+	promptCacheRetentionTiers: ["short"],
+	providerId: defaultChatModelSelection.providerId,
+	protocolId: "fake-e2e-model-client",
+	reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+};
+
+const providerRequestForModelClient = (
+	request: ProviderChatRequest,
+	model: ProviderModel
+): ModelStepRequest => {
+	const requestShape = {
+		cacheWarming: request.cacheWarming,
+		messages: request.messages,
+		promptCacheKey: request.promptCacheKey,
+		reasoningEffort: request.reasoningEffort,
+		system: request.system,
+		target: {
+			authorization: { apiKey: "fake-e2e-provider-key", kind: "api-key" },
+			maxOutputTokens: request.maxOutputTokens,
+			modelId: model.modelId,
+			promptCacheEnabled:
+				request.cacheRetention === undefined ? undefined : true,
+			promptCacheRetention: request.cacheRetention,
+			providerId: model.providerId,
+			thinkingLevel:
+				request.reasoningEffort === "none"
+					? undefined
+					: request.reasoningEffort,
+		},
+		tools: request.tools,
+	};
+	return fromAny<ModelStepRequest, typeof requestShape>(requestShape);
+};
+
+export const createFakeProviderCollection = (
+	recorder: FakeModelClientRecorder,
+	model: ProviderModel = fakeProviderModel
+): Promise<InteractiveSessionProviderCollection> => {
+	const providers = createProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: (providerId) =>
+				providerId === model.providerId ? "fake-e2e-provider-key" : undefined,
+			set: () => undefined,
+		},
+	});
+	const provider: Provider = {
+		id: model.providerId,
+		models: [model],
+		resolveAuthorization: ({ credential }) =>
+			credential === undefined ? null : { authorization: credential },
+		async *streamChat(
+			request,
+			{ model: selectedModel }
+		): AsyncGenerator<ProviderChatEvent> {
+			const stepRequest = providerRequestForModelClient(request, selectedModel);
+			for await (const part of createFakeModelClient(recorder).stream(
+				stepRequest
+			)) {
+				if (part.type === "finish") {
+					if (part.usage !== undefined) {
+						yield { type: "usage", usage: part.usage };
+					}
+					yield {
+						type: "finish",
+						...(part.continuation === undefined
+							? {}
+							: { continuation: part.continuation }),
+					};
+					continue;
+				}
+				yield part;
+			}
+		},
+	};
+	providers.register(provider);
+	return Promise.resolve(
+		providers as unknown as InteractiveSessionProviderCollection
 	);
 };

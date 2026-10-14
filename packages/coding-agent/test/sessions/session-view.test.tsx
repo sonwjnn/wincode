@@ -13,6 +13,7 @@ import {
 	test,
 } from "bun:test";
 import * as os from "node:os";
+import * as path from "node:path";
 import {
 	MockTreeSitterClient,
 	type TestRendererSetup,
@@ -35,7 +36,9 @@ import { createConnections as createDefaultConnections } from "@wincode/ai/conne
 import {
 	type ChatModelSelection,
 	defaultChatModelSelection,
+	type ThinkingLevel,
 } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { act, useCallback, useEffect, useRef, useState } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { ConnectionsProvider } from "@/modules/connections";
@@ -47,6 +50,7 @@ import {
 	PromptConfigProvider,
 	usePromptConfig,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SessionQueuedSubmission,
@@ -55,6 +59,7 @@ import type {
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/agent-session/types";
+import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import * as useAgentSessionModule from "@/modules/sessions/hooks/use-agent-session";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
@@ -83,6 +88,7 @@ import {
 	agentId,
 	attachmentId,
 	modelId,
+	modelIdentity,
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
@@ -111,6 +117,7 @@ type FakeSessionRun = {
 
 let activeFakeSessionRun: FakeSessionRun | null = null;
 let fakeCacheWarmCancellations = 0;
+let fakeCompactionModels: ProviderModelSelection[] = [];
 /** The compositions the view accepted while the turn ran, in order. */
 let fakeWaitingTexts: string[] = [];
 /** The same messages' full compositions, so a round trip can be asserted. */
@@ -314,8 +321,12 @@ const fakeUseAgentSessionModule: Pick<
 			cacheWarmingStatus: "idle",
 			cancel: () => undefined,
 			cancelCompaction: async () => [],
-			compact: async () => {
-				throw new Error("Compaction is not part of this test.");
+			compact: async (_focus, selection) => {
+				fakeCompactionModels = [...fakeCompactionModels, selection];
+				return fromPartial<CompactSessionResult>({
+					activeMessages: [],
+					entry: {},
+				});
 			},
 			interrupt: async () => [],
 			onSubmissionEvent: subscribeToFakeSubmissionEvents,
@@ -347,10 +358,16 @@ const createConnections = () =>
 			replaceValidated: async () => undefined,
 		},
 	});
-const createTestConfigStore = () =>
+const createTestConfigStore = (settings?: Readonly<Record<string, unknown>>) =>
 	createConfigStore({
 		fs: {
-			readFile: async () => {
+			readFile: async (file) => {
+				if (
+					settings !== undefined &&
+					file === path.join(os.homedir(), ".wincode", "settings.json")
+				) {
+					return JSON.stringify(settings);
+				}
 				throw Object.assign(new Error("Test config is unavailable."), {
 					code: "ENOENT",
 				});
@@ -393,6 +410,19 @@ function PromptModelProbe({
 	return null;
 }
 
+function ThinkingLevelProbe({
+	onThinkingLevel,
+}: {
+	onThinkingLevel: (level: ThinkingLevel | undefined) => void;
+}) {
+	const { thinkingLevel } = usePromptConfig();
+	useEffect(
+		() => onThinkingLevel(thinkingLevel),
+		[onThinkingLevel, thinkingLevel]
+	);
+	return null;
+}
+
 /** The strip's count line, e.g. `2 waiting`; the workspace path never has one. */
 const WAITING_COUNT_PATTERN = /\d+ waiting/u;
 /** A strip row of one lane, so a lane tag is read off the row it belongs to. */
@@ -425,9 +455,11 @@ const buildRouter = () => {
  * Agent Session is never reached from this test.
  */
 const createFakeSessionHost = (
-	transcript: readonly SessionMessage[]
+	transcript: readonly SessionMessage[],
+	providerController?: InteractiveProviderController
 ): SessionHost =>
 	fromPartial<SessionHost>({
+		...(providerController === undefined ? {} : { providerController }),
 		agentSession: {},
 		cancelCacheWarming: () => {
 			fakeCacheWarmCancellations += 1;
@@ -485,6 +517,7 @@ afterAll(() => {
 afterEach(() => {
 	activeFakeSessionRun = null;
 	fakeCacheWarmCancellations = 0;
+	fakeCompactionModels = [];
 	fakeQueuedSeed = [];
 	fakeRunCompositions = [];
 	fakeRunInputs = [];
@@ -493,6 +526,99 @@ afterEach(() => {
 	fakeRecalledPayload = null;
 	fakeSessionRecalls = 0;
 	fakeSubmissionEventListeners.clear();
+});
+
+test("manual compaction asks for a current Provider Model when the stored model is unavailable", async () => {
+	let providerModelListReads = 0;
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => {
+			providerModelListReads += 1;
+			return [];
+		},
+		getKnownModels: async () => [],
+	});
+	const { setup } = await renderSessionView({
+		height: 30,
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () => setup.mockInput.typeText("preserve the history"));
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Choose Model for Compaction")
+		);
+		await setup.waitFor(() => providerModelListReads >= 2);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test("manual compaction replaces an unavailable Agent pin only with an available Provider Model", async () => {
+	const pinnedAgent = agentId("offline-model-agent");
+	const replacementModel: ProviderModel = {
+		modelId: "replacement-model",
+		protocolId: "fake-provider",
+		providerId: "plugin-provider",
+	};
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => [replacementModel],
+		getKnownModels: async () => [],
+	});
+	const { setup } = await renderSessionView({
+		configSettings: {
+			agents: {
+				[pinnedAgent]: {
+					description: "Keeps its unavailable OpenAI pin.",
+					model: "openai/gpt-5.6-luna",
+					role: "primary",
+				},
+			},
+			default_agent: pinnedAgent,
+		},
+		height: 30,
+		initialAgent: pinnedAgent,
+		initialModel: defaultChatModelSelection,
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () => setup.mockInput.typeText("preserve the history"));
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Choose Model for Compaction")
+		);
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("replacement-model")
+		);
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() => fakeCompactionModels.length === 1);
+
+		expect(fakeCompactionModels).toEqual([
+			{ modelId: modelId("replacement-model"), providerId: "plugin-provider" },
+		]);
+	} finally {
+		setup.renderer.destroy();
+	}
 });
 
 describe("SessionView initial submission", () => {
@@ -599,6 +725,71 @@ describe("SessionView initial submission", () => {
 		}
 		throw new Error(`The composer never held "${text}".`);
 	};
+
+	test("uses an Agent pin only when its exact current Provider Model is available", async () => {
+		const pinnedAgent = agentId("current-provider-model-agent");
+		const pinnedModel: ProviderModel = {
+			modelId: "gpt-5.6-luna",
+			protocolId: "fake-provider",
+			providerId: "openai",
+		};
+		const sendStarted = deferred<void>();
+		const release = deferred<void>();
+		activeFakeSessionRun = {
+			navigationRelease: deferred<void>(),
+			navigationStarted: deferred<void>(),
+			release,
+			sendStarted,
+		};
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailableModels: async () => [pinnedModel],
+			getKnownModels: async () => [pinnedModel],
+		});
+		const { setup } = await renderSessionView({
+			configSettings: {
+				agents: {
+					[pinnedAgent]: {
+						description: "Uses an exact current Provider Model.",
+						model: "openai/gpt-5.6-luna",
+						role: "primary",
+					},
+				},
+				default_agent: pinnedAgent,
+			},
+			height: 30,
+			initialAgent: pinnedAgent,
+			initialModel: defaultChatModelSelection,
+			initialTranscript: [],
+			providerController,
+			width: 100,
+		});
+
+		try {
+			await typePrompt(setup, "run the pinned model");
+			await act(() => setup.mockInput.pressEnter());
+			await sendStarted.promise;
+			expect(fakeRunInputs[0]).toMatchObject({
+				agent: pinnedAgent,
+				model: {
+					modelId: modelId("gpt-5.6-luna"),
+					providerId: "openai",
+				},
+				resolvedAgent: {
+					id: pinnedAgent,
+					instructions: "",
+				},
+				selectionOverride: {
+					model: {
+						modelId: modelId("gpt-5.6-luna"),
+						providerId: "openai",
+					},
+				},
+			});
+		} finally {
+			release.resolve();
+			setup.renderer.destroy();
+		}
+	});
 
 	test("Plugin selection overrides a pinned Agent on the next Submission", async () => {
 		const navigationRelease = deferred<void>();
@@ -1049,17 +1240,27 @@ describe("SessionView initial submission", () => {
 const renderSessionView = async ({
 	height,
 	initialTranscript,
+	initialAgent,
+	initialModel,
+	configSettings,
 	liveTranscript = initialTranscript,
+	onThinkingLevel,
+	providerController,
 	width,
 }: {
 	height: number;
 	initialTranscript: SessionMessage[];
+	initialAgent?: AgentId;
+	initialModel?: ProviderModelSelection;
+	configSettings?: Readonly<Record<string, unknown>>;
 	liveTranscript?: SessionMessage[];
+	onThinkingLevel?: (level: ThinkingLevel | undefined) => void;
+	providerController?: InteractiveProviderController;
 	width: number;
 }) => {
 	const router = buildRouter();
 	await router.load();
-	const configStore = createTestConfigStore();
+	const configStore = createTestConfigStore(configSettings);
 	const workspace = process.cwd();
 	let registryIsReady = false;
 	const commandLayer = { isTop: false };
@@ -1072,17 +1273,28 @@ const renderSessionView = async ({
 					<ConnectionsProvider connections={createConnections()}>
 						<AgentRegistryProvider>
 							<KeyboardLayerProvider>
-								<PromptConfigProvider>
+								<PromptConfigProvider
+									{...(initialAgent === undefined ? {} : { initialAgent })}
+									{...(initialModel === undefined ? {} : { initialModel })}
+								>
 									<ModelPricingProvider>
 										<DialogProvider>
 											<RouterContextProvider router={router}>
 												<CommandControllerProvider>
 													<SessionView
-														host={createFakeSessionHost(liveTranscript)}
+														host={createFakeSessionHost(
+															liveTranscript,
+															providerController
+														)}
 														initialTranscript={initialTranscript}
 														sessionId={sessionId("session-1")}
 														sessionTitle="Queue a prompt"
 													/>
+													{onThinkingLevel === undefined ? null : (
+														<ThinkingLevelProbe
+															onThinkingLevel={onThinkingLevel}
+														/>
+													)}
 													<AgentRegistryReadyProbe
 														onReady={() => {
 															registryIsReady = true;
@@ -1110,6 +1322,69 @@ const renderSessionView = async ({
 	await flushUi(setup);
 	return { commandLayer, setup };
 };
+
+test("refreshes reasoning metadata after model discovery changes on a stable controller", async () => {
+	const model: ProviderModelSelection = {
+		modelId: modelIdentity("reasoning-model"),
+		providerId: "plugin-provider",
+	};
+	let availabilityRevision = 0;
+	let knownModelReads = 0;
+	let knownModels: readonly ProviderModel[] = [];
+	const availabilityListeners = new Set<() => void>();
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => knownModels,
+		getAvailabilityRevision: () => availabilityRevision,
+		getCompositionRevision: () => 0,
+		getKnownModels: async () => {
+			knownModelReads += 1;
+			return knownModels;
+		},
+		subscribeAvailability: (listener: () => void) => {
+			availabilityListeners.add(listener);
+			return () => availabilityListeners.delete(listener);
+		},
+	});
+	let observedThinkingLevel: ThinkingLevel | undefined;
+	const { setup } = await renderSessionView({
+		height: 30,
+		initialModel: model,
+		initialTranscript: [],
+		onThinkingLevel: (level) => {
+			observedThinkingLevel = level;
+		},
+		providerController,
+		width: 100,
+	});
+
+	try {
+		expect(observedThinkingLevel).toBe("low");
+		await act(() => {
+			knownModels = [
+				{
+					modelId: model.modelId,
+					protocolId: "fixture",
+					providerId: model.providerId,
+					reasoningEfforts: ["high"],
+				},
+			];
+			availabilityRevision += 1;
+			for (const listener of [...availabilityListeners]) {
+				listener();
+			}
+		});
+		await setup.waitFor(() => knownModelReads >= 2);
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressTab({ shift: true }));
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressTab({ shift: true }));
+		await flushUi(setup);
+
+		expect(observedThinkingLevel).toBe("high");
+	} finally {
+		setup.renderer.destroy();
+	}
+});
 
 test("renders unavailable attachment annotations over the unannotated Host transcript", async () => {
 	const id = attachmentId("missing");

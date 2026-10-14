@@ -1,5 +1,6 @@
 import type { JsonObject } from "type-fest";
 import { openAICredentialSchema } from "../connections/credential-schemas.ts";
+import { openAIProviderModelMetadataById } from "../generated/openai-provider-model-metadata.generated.ts";
 import {
 	httpErrorFromResponse,
 	isCacheControlRejection,
@@ -19,6 +20,7 @@ import type { ModelTarget } from "../model-target";
 import type { SupportedChatModel } from "../models";
 import {
 	type ChatContentPart,
+	maxOutputTokensForRequest,
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
@@ -41,7 +43,7 @@ const OPENAI_CHAT_PROTOCOL = "openai-chat";
 const OPENAI_OAUTH_RESPONSES_URL =
 	"https://chatgpt.com/backend-api/codex/responses";
 const TRAILING_SLASHES = /\/+$/u;
-const DEFAULT_MODELS = [
+const DEFAULT_MODELS: readonly ProviderModel[] = [
 	"gpt-5.6",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
@@ -51,13 +53,25 @@ const DEFAULT_MODELS = [
 	"gpt-6-luna",
 	"gpt-6-terra",
 	"gpt-6-astra",
-].map(
-	(modelId): ProviderModel => ({
+].map((modelId) => {
+	const metadata = openAIProviderModelMetadataById[modelId];
+	return {
 		modelId,
 		protocolId: OPENAI_RESPONSES_PROTOCOL,
 		providerId: OPENAI_PROVIDER_ID,
-	})
-);
+		...(metadata?.limits === undefined ? {} : { limits: metadata.limits }),
+		...(metadata?.pricing === undefined ? {} : { pricing: metadata.pricing }),
+		...(metadata?.promptCacheRetentionTiers === undefined
+			? {}
+			: { promptCacheRetentionTiers: metadata.promptCacheRetentionTiers }),
+		...(metadata?.promptCacheRetentionTtlMs === undefined
+			? {}
+			: { promptCacheRetentionTtlMs: metadata.promptCacheRetentionTtlMs }),
+		...(metadata?.reasoningEfforts === undefined
+			? {}
+			: { reasoningEfforts: metadata.reasoningEfforts }),
+	};
+});
 
 export type OpenAIAuthorization =
 	| Readonly<{ apiKey: string; kind: "api-key" }>
@@ -185,8 +199,16 @@ const modelRequestFor = (
 					promptCacheRetention: cacheRetention,
 				}),
 	};
+	const reasoningEffort =
+		!request.cacheWarming &&
+		request.reasoningEffort !== undefined &&
+		context.model.reasoningEfforts?.includes(request.reasoningEffort)
+			? request.reasoningEffort
+			: undefined;
 	return {
+		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
 		messages: request.messages.map(promptMessage),
+		promptCacheKey: request.promptCacheKey,
 		signal: context.signal,
 		system: request.system,
 		target,
@@ -225,6 +247,11 @@ const wireRequestFor = (
 		authorization,
 		cacheRetention
 	);
+	const requestedMaxOutputTokens = maxOutputTokensForRequest(
+		request.maxOutputTokens,
+		context.model
+	);
+	const maxOutputTokens = request.cacheWarming ? 1 : requestedMaxOutputTokens;
 	const jsonHeaders = { "content-type": "application/json" };
 	const protocolId = context.model.protocolId;
 	let strategy: ModelProtocolStrategy;
@@ -232,12 +259,21 @@ const wireRequestFor = (
 	let url: string;
 	let headers: Readonly<Record<string, string>>;
 	if (protocolId === OPENAI_RESPONSES_PROTOCOL) {
+		if (authorization.kind === "oauth" && maxOutputTokens !== undefined) {
+			throw new ProviderError(
+				"unsupported-capability",
+				"OpenAI OAuth cannot enforce a requested maximum output token limit."
+			);
+		}
 		strategy = openAIResponsesStrategy;
 		body = strategy.serialize({
-			maxOutputTokens: undefined,
+			maxOutputTokens,
 			model,
 			omitOutputTokenLimit: authorization.kind === "oauth",
-			providerOptions: undefined,
+			providerOptions:
+				modelRequest.reasoningEffort === undefined
+					? undefined
+					: { reasoningEffort: modelRequest.reasoningEffort },
 			request: modelRequest,
 		});
 		if (authorization.kind === "oauth") {
@@ -265,7 +301,7 @@ const wireRequestFor = (
 		}
 		strategy = openAIChatStrategy;
 		body = strategy.serialize({
-			maxOutputTokens: undefined,
+			maxOutputTokens,
 			model,
 			request: modelRequest,
 		});
@@ -386,6 +422,7 @@ const streamWithCacheFallback = async function* (
 		}
 	} catch (error) {
 		if (
+			request.cacheWarming ||
 			outputStarted ||
 			!cachedRequest.hasCacheControls ||
 			!isCacheControlRejection(error) ||
@@ -445,6 +482,12 @@ export const createOpenAIProvider = (
 		throw new Error("OpenAI provider models must use provider ID openai.");
 	}
 	return {
+		canEnforceMaxOutputTokens: ({ credential }) => {
+			const parsedCredential = openAICredentialSchema.safeParse(credential);
+			return (
+				parsedCredential.success && parsedCredential.data.kind === "api-key"
+			);
+		},
 		id: OPENAI_PROVIDER_ID,
 		models,
 		login: (loginOptions = {}) =>
@@ -499,3 +542,4 @@ export const createOpenAIProvider = (
 };
 
 export type { OpenAICredential } from "../connections/credential-schemas.ts";
+export type { OpenAIBrowserLoginOptions } from "../sdk-private/openai-oauth.ts";

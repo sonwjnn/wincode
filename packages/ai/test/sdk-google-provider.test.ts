@@ -104,6 +104,7 @@ describe("public Google SDK provider", () => {
 			messages: input,
 			modelId: "gemini-3.8-flash",
 			providerId: "google",
+			reasoningEffort: "high",
 			system: "Stable system instructions.",
 			tools: [
 				{
@@ -133,6 +134,7 @@ describe("public Google SDK provider", () => {
 		);
 		expect(requests[0]?.body).toMatchObject({
 			cachedContent: "cachedContents/session",
+			generationConfig: { thinkingConfig: { thinkingLevel: "high" } },
 			contents: [
 				{
 					role: "user",
@@ -209,6 +211,18 @@ describe("public Google SDK provider", () => {
 		await sdk.close();
 		expect(cacheDeletes).toEqual([{ name: "cachedContents/session" }]);
 		expect(JSON.stringify(events)).not.toContain("app-owned-google-key");
+		expect(
+			sdk.getModel("google", "gemini-3.8-flash")?.reasoningEfforts
+		).not.toContain("xhigh");
+		for await (const _event of sdk.chat({
+			messages: input,
+			modelId: "gemini-3.8-flash",
+			providerId: "google",
+			reasoningEffort: "xhigh",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+		expect(requests[1]?.body).not.toHaveProperty("generationConfig");
 	});
 
 	test("reuses session CachedContent and retries an invalid resource uncached", async () => {

@@ -57,6 +57,8 @@ const modelFromOpenRouter = (value: unknown): ProviderModel => {
 	const pricing = record(data.pricing);
 	const inputPrice = finiteNumber(pricing?.prompt);
 	const outputPrice = finiteNumber(pricing?.completion);
+	const cacheReadPrice = finiteNumber(pricing?.input_cache_read);
+	const cacheWritePrice = finiteNumber(pricing?.input_cache_write);
 	return {
 		...(contextWindowTokens === undefined && maxOutputTokens === undefined
 			? {}
@@ -69,10 +71,19 @@ const modelFromOpenRouter = (value: unknown): ProviderModel => {
 					},
 				}),
 		modelId: data.id,
-		...(inputPrice === undefined && outputPrice === undefined
+		...(inputPrice === undefined &&
+		cacheReadPrice === undefined &&
+		cacheWritePrice === undefined &&
+		outputPrice === undefined
 			? {}
 			: {
 					pricing: {
+						...(cacheReadPrice === undefined
+							? {}
+							: { cacheReadPerMillionTokensUsd: cacheReadPrice * 1_000_000 }),
+						...(cacheWritePrice === undefined
+							? {}
+							: { cacheWritePerMillionTokensUsd: cacheWritePrice * 1_000_000 }),
 						...(inputPrice === undefined
 							? {}
 							: { inputPerMillionTokensUsd: inputPrice * 1_000_000 }),

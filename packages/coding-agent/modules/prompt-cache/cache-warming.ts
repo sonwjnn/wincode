@@ -1,22 +1,31 @@
-import type { ModelStepObserver } from "@wincode/agent-core";
+import { type ModelStepObserver, toModelId } from "@wincode/agent-core";
 import type { ModelStepRequest } from "@wincode/ai/model-client";
 import { createModelClient, warmModelRequest } from "@wincode/ai/model-client";
-import type { ModelUsage } from "@wincode/ai/model-usage";
-import { calculateModelUsageCostUsd } from "@wincode/ai/model-usage";
+import {
+	calculateModelUsageCostUsd,
+	type ModelUsage,
+	normalizeModelUsage,
+} from "@wincode/ai/model-usage";
 import {
 	type ChatModelSelection,
 	findSupportedChatModelSelection,
 	promptCacheRetentionTtlMsForModel,
 	supportsPromptCacheWarmingForModel,
 } from "@wincode/ai/models";
-import type { ChatRequest } from "@wincode/ai/sdk";
+import type {
+	ChatRequest,
+	ProviderCollection,
+	ProviderModel,
+} from "@wincode/ai/sdk";
 import { logger } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
-import type {
-	ModelPricingEntry,
-	ModelPricingTable,
+import {
+	type ModelPricingEntry,
+	type ModelPricingTable,
+	pricingEntryForProviderModel,
+	resolveModelMetadata,
 } from "@/modules/model-pricing/model-pricing";
-import { resolveModelMetadata } from "@/modules/model-pricing/model-pricing";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	CreateSessionUsageEntryInput,
 	SessionStore,
@@ -27,6 +36,7 @@ import { type SessionId, toSessionUsageEntryId } from "@/shared/identifiers";
 const WARMING_MARGIN_MS = 10_000;
 const MAX_WARMING_HORIZON_MS = 60 * 60_000;
 const MINIMUM_EXPECTED_SAVINGS_USD = 0.05;
+const CACHE_WARM_OUTPUT_TOKEN_CAP = 1;
 
 export type CacheWarmingStatus = "idle" | "scheduled" | "warming";
 
@@ -48,11 +58,17 @@ export const computeCacheWarmDelayMs = (ttlMs: number): number | null => {
  */
 export const expectedCacheWarmSavingsUsd = (
 	pricing: ModelPricingEntry | undefined,
-	usage: ModelUsage
+	usage: ModelUsage,
+	warmReplayOutputTokens: number
 ): number | null => {
 	const cachedPrefixTokens =
 		(usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
-	if (cachedPrefixTokens <= 0 || cachedPrefixTokens > usage.inputTokens) {
+	if (
+		!Number.isSafeInteger(warmReplayOutputTokens) ||
+		warmReplayOutputTokens < 0 ||
+		cachedPrefixTokens <= 0 ||
+		cachedPrefixTokens > usage.inputTokens
+	) {
 		return null;
 	}
 	const missedHitCost = calculateModelUsageCostUsd(pricing, {
@@ -67,7 +83,7 @@ export const expectedCacheWarmSavingsUsd = (
 	const warmReplayCost = calculateModelUsageCostUsd(pricing, {
 		cacheReadTokens: cachedPrefixTokens,
 		inputTokens: usage.inputTokens,
-		outputTokens: 1,
+		outputTokens: warmReplayOutputTokens,
 	});
 	if (
 		missedHitCost === null ||
@@ -91,29 +107,47 @@ export type SessionCacheWarming = Readonly<{
 export type SessionCacheWarmingOptions = Readonly<{
 	getPricingTable: () => ModelPricingTable;
 	initialUsageEntries: readonly SessionUsageEntry[];
+	providerCollection?: ProviderCollection;
 	sessionId: SessionId;
 	store: Pick<SessionStore, "createSessionUsageEntry">;
 }>;
 
+type CacheWarmReplayRequest =
+	| Readonly<{
+			kind: "legacy";
+			model: ChatModelSelection;
+			request: ModelStepRequest;
+			ttlMs: number;
+	  }>
+	| Readonly<{
+			kind: "provider-sdk";
+			model: ProviderModelSelection;
+			providerCollection: ProviderCollection;
+			providerModel: ProviderModel;
+			request: ChatRequest;
+			ttlMs: number;
+	  }>;
+
 type CacheWarmSchedule = Readonly<{
 	delayMs: number;
 	lastRefreshStartedAt: number;
-	model: ChatModelSelection;
-	request: ModelStepRequest;
+	replay: CacheWarmReplayRequest;
 	requestGeneration: number;
 	requestStartedAt: number;
-	ttlMs: number;
 }>;
 
-const replayRequestSnapshot = (
+const legacyReplayRequestSnapshot = (
 	request: ModelStepRequest
-): ModelStepRequest | undefined => {
-	const model = findSupportedChatModelSelection({
+): CacheWarmReplayRequest | undefined => {
+	const modelSelection: ChatModelSelection = {
 		modelId: request.target.modelId,
 		providerId: request.target.providerId,
-	});
+	};
+	const model = findSupportedChatModelSelection(modelSelection);
 	if (
 		model === null ||
+		(request.target.providerId === "openai" &&
+			request.target.authorization.kind === "oauth") ||
 		request.googleCachedContent !== undefined ||
 		!supportsPromptCacheWarmingForModel(model) ||
 		request.target.promptCacheEnabled !== true ||
@@ -121,9 +155,63 @@ const replayRequestSnapshot = (
 	) {
 		return;
 	}
+	const ttlMs = promptCacheRetentionTtlMsForModel(
+		model,
+		request.target.promptCacheRetention
+	);
+	if (ttlMs === undefined) {
+		return;
+	}
 	const { signal: _signal, ...requestWithoutSignal } = request;
 	try {
-		return structuredClone(requestWithoutSignal);
+		return {
+			kind: "legacy",
+			model: modelSelection,
+			request: structuredClone(requestWithoutSignal),
+			ttlMs,
+		};
+	} catch {
+		// Requests with opaque values that cannot be faithfully snapshotted are
+		// not eligible for replay.
+		return;
+	}
+};
+
+const providerSdkReplayRequestSnapshot = (
+	request: ChatRequest,
+	providerCollection: ProviderCollection
+): CacheWarmReplayRequest | undefined => {
+	const retention = request.cacheRetention;
+	const providerModel = providerCollection.getModel(
+		request.providerId,
+		request.modelId
+	);
+	const modelSelection: ProviderModelSelection = {
+		modelId: toModelId(request.modelId),
+		providerId: request.providerId,
+	};
+	const ttlMs =
+		retention === undefined
+			? undefined
+			: providerModel?.promptCacheRetentionTtlMs?.[retention];
+	if (
+		providerModel === undefined ||
+		retention === undefined ||
+		!providerModel.promptCacheRetentionTiers?.includes(retention) ||
+		ttlMs === undefined
+	) {
+		return;
+	}
+	const { signal: _signal, ...requestWithoutSignal } = request;
+	try {
+		return {
+			kind: "provider-sdk",
+			model: modelSelection,
+			providerCollection,
+			providerModel,
+			request: structuredClone(requestWithoutSignal),
+			ttlMs,
+		};
 	} catch {
 		// Requests with opaque values that cannot be faithfully snapshotted are
 		// not eligible for replay.
@@ -135,6 +223,7 @@ const replayRequestSnapshot = (
 export const createSessionCacheWarming = ({
 	getPricingTable,
 	initialUsageEntries,
+	providerCollection,
 	sessionId,
 	store,
 }: SessionCacheWarmingOptions): SessionCacheWarming => {
@@ -154,8 +243,8 @@ export const createSessionCacheWarming = ({
 	);
 	let status: CacheWarmingStatus = "idle";
 	let generation = 0;
-	let latestRequest: ModelStepRequest | undefined;
-	let replayRequest: ModelStepRequest | undefined;
+	let latestRequest: ModelStepRequest | ChatRequest | undefined;
+	let replayRequest: CacheWarmReplayRequest | undefined;
 	let requestStartedAt = 0;
 	let scheduleTimer: NodeJS.Timeout | undefined;
 	let warmController: AbortController | undefined;
@@ -192,16 +281,24 @@ export const createSessionCacheWarming = ({
 	};
 
 	const hasExpectedCacheWarmSavings = (
-		model: ChatModelSelection,
-		usage: ModelUsage
+		replay: CacheWarmReplayRequest,
+		usage: ModelUsage,
+		warmReplayOutputTokens: number
 	): boolean => {
-		const pricing = resolveModelMetadata(getPricingTable(), model);
-		const savings = expectedCacheWarmSavingsUsd(pricing ?? undefined, usage);
+		const pricing =
+			replay.kind === "legacy"
+				? (resolveModelMetadata(getPricingTable(), replay.model) ?? undefined)
+				: pricingEntryForProviderModel(replay.providerModel);
+		const savings = expectedCacheWarmSavingsUsd(
+			pricing,
+			usage,
+			warmReplayOutputTokens
+		);
 		return savings !== null && savings >= MINIMUM_EXPECTED_SAVINGS_USD;
 	};
 
 	const persistWarmUsage = async (
-		model: ChatModelSelection,
+		model: ProviderModelSelection,
 		usage: ModelUsage
 	): Promise<void> => {
 		const input: CreateSessionUsageEntryInput = {
@@ -216,9 +313,43 @@ export const createSessionCacheWarming = ({
 		notifyListeners();
 	};
 
+	const warmProviderSdkRequest = async (
+		replay: Extract<CacheWarmReplayRequest, { kind: "provider-sdk" }>,
+		signal: AbortSignal
+	): Promise<ModelUsage | undefined> => {
+		const {
+			cacheWarming: _cacheWarming,
+			reasoningEffort: _reasoningEffort,
+			signal: _requestSignal,
+			...request
+		} = replay.request;
+		if (
+			!(await replay.providerCollection.canEnforceMaxOutputTokens(
+				replay.providerModel.providerId,
+				replay.providerModel.modelId
+			))
+		) {
+			return;
+		}
+		let usage: ModelUsage | undefined;
+		let succeeded = false;
+		for await (const event of replay.providerCollection.chat({
+			...request,
+			cacheWarming: true,
+			maxOutputTokens: CACHE_WARM_OUTPUT_TOKEN_CAP,
+			signal,
+		})) {
+			if (event.type === "usage") {
+				usage = normalizeModelUsage(event.usage) ?? undefined;
+			} else if (event.type === "terminal") {
+				succeeded = event.outcome.status === "success";
+			}
+		}
+		return succeeded ? usage : undefined;
+	};
+
 	const runWarm = async (
-		request: ModelStepRequest,
-		model: ChatModelSelection,
+		replay: CacheWarmReplayRequest,
 		startedAt: number,
 		requestGeneration: number,
 		controller: AbortController
@@ -233,17 +364,20 @@ export const createSessionCacheWarming = ({
 				controller.signal,
 				AbortSignal.timeout(horizonRemainingMs),
 			]);
-			const usage = await warmModelRequest(request, modelClient, signal);
+			const usage =
+				replay.kind === "legacy"
+					? await warmModelRequest(replay.request, modelClient, signal)
+					: await warmProviderSdkRequest(replay, signal);
 			if (usage === undefined) {
 				return false;
 			}
-			await persistWarmUsage(model, usage);
-			return hasExpectedCacheWarmSavings(model, usage);
+			await persistWarmUsage(replay.model, usage);
+			return hasExpectedCacheWarmSavings(replay, usage, usage.outputTokens);
 		} catch {
 			if (!controller.signal.aborted) {
 				void logger.debug("Prompt cache warm request failed", {
-					modelId: model.modelId,
-					providerId: model.providerId,
+					modelId: replay.model.modelId,
+					providerId: replay.model.providerId,
 				});
 			}
 			return false;
@@ -258,12 +392,11 @@ export const createSessionCacheWarming = ({
 		const {
 			delayMs,
 			lastRefreshStartedAt,
-			model,
-			request,
+			replay,
 			requestGeneration,
 			requestStartedAt,
-			ttlMs,
 		} = schedule;
+		const ttlMs = replay.ttlMs;
 		const horizonEndsAt = requestStartedAt + MAX_WARMING_HORIZON_MS;
 		const scheduledAt = lastRefreshStartedAt + delayMs;
 		const latestSafeStartAt = lastRefreshStartedAt + ttlMs - WARMING_MARGIN_MS;
@@ -290,8 +423,7 @@ export const createSessionCacheWarming = ({
 			warmController = controller;
 			setStatus("warming");
 			const warming = runWarm(
-				request,
-				model,
+				replay,
 				requestStartedAt,
 				requestGeneration,
 				controller
@@ -321,13 +453,16 @@ export const createSessionCacheWarming = ({
 		request: ModelStepRequest | ChatRequest
 	): void => {
 		cancel();
-		if (!("target" in request)) {
-			// SDK turns invalidate legacy replay state but never replay through ModelClient.
-			return;
-		}
 		latestRequest = request;
 		requestStartedAt = Date.now();
-		replayRequest = replayRequestSnapshot(request);
+		if ("target" in request) {
+			replayRequest = legacyReplayRequestSnapshot(request);
+		} else if (providerCollection !== undefined) {
+			replayRequest = providerSdkReplayRequestSnapshot(
+				request,
+				providerCollection
+			);
+		}
 	};
 
 	const onModelStepFinished = (
@@ -335,33 +470,21 @@ export const createSessionCacheWarming = ({
 		usage: ModelUsage | undefined
 	): void => {
 		if (
-			!("target" in request) ||
 			request !== latestRequest ||
 			usage === undefined ||
 			replayRequest === undefined
 		) {
 			return;
 		}
-		const modelSelection: ChatModelSelection = {
-			modelId: request.target.modelId,
-			providerId: request.target.providerId,
-		};
-		const model = findSupportedChatModelSelection(modelSelection);
-		if (model === null) {
-			return;
-		}
-		const ttlMs = promptCacheRetentionTtlMsForModel(
-			model,
-			request.target.promptCacheRetention
-		);
-		if (ttlMs === undefined) {
-			return;
-		}
-		const delayMs = computeCacheWarmDelayMs(ttlMs);
-		if (delayMs === null) {
-			return;
-		}
-		if (!hasExpectedCacheWarmSavings(modelSelection, usage)) {
+		const delayMs = computeCacheWarmDelayMs(replayRequest.ttlMs);
+		if (
+			delayMs === null ||
+			!hasExpectedCacheWarmSavings(
+				replayRequest,
+				usage,
+				CACHE_WARM_OUTPUT_TOKEN_CAP
+			)
+		) {
 			return;
 		}
 		const requestGeneration = generation;
@@ -369,11 +492,9 @@ export const createSessionCacheWarming = ({
 		scheduleWarm({
 			delayMs,
 			lastRefreshStartedAt: startedAt,
-			model: modelSelection,
-			request: replayRequest,
+			replay: replayRequest,
 			requestGeneration,
 			requestStartedAt: startedAt,
-			ttlMs,
 		});
 	};
 

@@ -3,6 +3,7 @@ import type {
 	ProviderModel,
 	RefreshModelsOptions,
 } from "@wincode/ai/sdk";
+import type { OpenAIBrowserLoginOptions } from "@wincode/ai/sdk/providers/openai";
 import { isJsonValue } from "@wincode/utils";
 import type {
 	PluginJsonValue,
@@ -11,10 +12,20 @@ import type {
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
 
 const OPENROUTER_PROVIDER_ID = "openrouter";
+const API_KEY_PROVIDER_OPTIONS = [
+	{ displayName: "OpenAI Provider SDK", providerId: "openai" },
+	{ displayName: "Anthropic Provider SDK", providerId: "anthropic" },
+	{ displayName: "Google Provider SDK", providerId: "google" },
+	{ displayName: "OpenCode Go Provider SDK", providerId: "opencode-go" },
+	{ displayName: "DeepSeek Provider SDK", providerId: "deepseek" },
+] as const;
+const API_KEY_PROVIDER_IDS = new Set<string>(
+	API_KEY_PROVIDER_OPTIONS.map(({ providerId }) => providerId)
+);
 
 export type InteractiveProviderOption = Readonly<{
 	displayName: string;
-	kind: "openrouter" | "plugin";
+	kind: "api-key" | "openai-oauth" | "openrouter" | "plugin";
 	providerId: string;
 }>;
 
@@ -33,16 +44,29 @@ export type PluginProviderConnectionOutcome =
 
 export type InteractiveProviderControllerOptions = Readonly<{
 	getDiscoverableProviderIds?: () => readonly string[];
+	loginOpenAIOAuth?: (
+		options?: OpenAIBrowserLoginOptions
+	) => Promise<readonly ProviderModel[]>;
 	getPluginProviderComposition?: (
 		providerId: string
 	) => PluginProviderComposition | undefined;
 	getPluginProviderRegistrations?: () => readonly PluginProviderDescriptor[];
 	supportsModelDiscovery?: (providerId: string) => boolean;
 	withSessionWork?: <Result>(action: () => Promise<Result>) => Promise<Result>;
+	getCompositionRevision?: () => number;
+	subscribeComposition?: (listener: () => void) => () => void;
 }>;
 
 export type InteractiveProviderController = Readonly<{
+	connectOpenAIOAuth: (
+		options?: OpenAIBrowserLoginOptions
+	) => Promise<readonly ProviderModel[]>;
 	connectOpenRouterApiKey: (
+		apiKey: string,
+		options?: RefreshModelsOptions
+	) => Promise<readonly ProviderModel[]>;
+	connectProviderApiKey: (
+		providerId: string,
 		apiKey: string,
 		options?: RefreshModelsOptions
 	) => Promise<readonly ProviderModel[]>;
@@ -52,6 +76,8 @@ export type InteractiveProviderController = Readonly<{
 		options?: RefreshModelsOptions
 	) => Promise<PluginProviderConnectionOutcome | undefined>;
 	getAvailableModels: () => Promise<readonly ProviderModel[]>;
+	getCompositionRevision?: () => number;
+	getAvailabilityRevision?: () => number;
 	getConnectableProviders: () => readonly InteractiveProviderOption[];
 	getKnownModels: () => Promise<readonly ProviderModel[]>;
 	restoreModels: () => Promise<void>;
@@ -62,6 +88,8 @@ export type InteractiveProviderController = Readonly<{
 		providerId: string,
 		options?: RefreshModelsOptions
 	) => Promise<readonly ProviderModel[]>;
+	subscribeComposition?: (listener: () => void) => () => void;
+	subscribeAvailability?: (listener: () => void) => () => void;
 }>;
 
 const isAborted = (signal: AbortSignal | undefined): boolean =>
@@ -71,6 +99,12 @@ const abortReason = (signal: AbortSignal): Error =>
 	signal.reason instanceof Error
 		? signal.reason
 		: new DOMException("Aborted", "AbortError");
+
+const throwIfAborted = (signal: AbortSignal | undefined): void => {
+	if (signal?.aborted === true) {
+		throw abortReason(signal);
+	}
+};
 
 const pluginCompositionFor = (
 	providers: ProviderCollection,
@@ -210,40 +244,98 @@ export const createInteractiveProviderController = (
 	const withSessionWork =
 		options.withSessionWork ??
 		(<Result>(action: () => Promise<Result>) => action());
+	const availabilityListeners = new Set<() => void>();
+	let availabilityRevision = 0;
+	const notifyAvailabilityChanged = (): void => {
+		availabilityRevision += 1;
+		for (const listener of [...availabilityListeners]) {
+			try {
+				listener();
+			} catch {
+				// One subscriber cannot interrupt credential or availability updates.
+			}
+		}
+	};
 	const restoreModels = (): Promise<void> => providers.restoreModels();
+	const refreshWithAvailabilityNotification = async <Result>(
+		action: () => Promise<Result>
+	): Promise<Result> => {
+		const modelsBefore = providers.getModels();
+		try {
+			return await action();
+		} finally {
+			if (!Bun.deepEquals(modelsBefore, providers.getModels(), true)) {
+				notifyAvailabilityChanged();
+			}
+		}
+	};
 	const refreshProviderModels = (
 		providerId: string,
 		refreshOptions?: RefreshModelsOptions
 	): Promise<readonly ProviderModel[]> =>
-		withSessionWork(async () => {
-			await restoreModels();
-			return providers.refreshModels(providerId, refreshOptions);
-		});
+		withSessionWork(() =>
+			refreshWithAvailabilityNotification(async () => {
+				await restoreModels();
+				return providers.refreshModels(providerId, refreshOptions);
+			})
+		);
 	const refreshModels = (
 		refreshOptions?: RefreshModelsOptions
 	): Promise<readonly ProviderModel[]> =>
-		withSessionWork(async () => {
-			await restoreModels();
-			const providerIds = getDiscoverableProviderIds();
-			const results = await Promise.allSettled(
-				providerIds.map((providerId) =>
-					providers.refreshModels(providerId, refreshOptions)
-				)
-			);
-			if (refreshOptions?.signal?.aborted === true) {
-				throw abortReason(refreshOptions.signal);
-			}
-			const successfulRefreshes = results.filter(
-				(result) => result.status === "fulfilled"
-			).length;
-			if (providerIds.length > 0 && successfulRefreshes === 0) {
-				throw new Error(
-					"Known Model refresh failed; the last-known model snapshots were retained."
+		withSessionWork(() =>
+			refreshWithAvailabilityNotification(async () => {
+				await restoreModels();
+				const providerIds = getDiscoverableProviderIds();
+				const results = await Promise.allSettled(
+					providerIds.map((providerId) =>
+						providers.refreshModels(providerId, refreshOptions)
+					)
 				);
-			}
-			return providers.getAvailable();
-		});
+				if (refreshOptions?.signal?.aborted === true) {
+					throw abortReason(refreshOptions.signal);
+				}
+				const successfulRefreshes = results.filter(
+					(result) => result.status === "fulfilled"
+				).length;
+				if (providerIds.length > 0 && successfulRefreshes === 0) {
+					throw new Error(
+						"Known Model refresh failed; the last-known model snapshots were retained."
+					);
+				}
+				return providers.getAvailable();
+			})
+		);
 	return Object.freeze({
+		connectOpenAIOAuth(loginOptions = {}) {
+			return withSessionWork(async () => {
+				const login = options.loginOpenAIOAuth;
+				if (login === undefined) {
+					throw new Error("OpenAI browser sign-in is unavailable.");
+				}
+				throwIfAborted(loginOptions.signal);
+				await restoreModels();
+				try {
+					const models = await login(loginOptions);
+					throwIfAborted(loginOptions.signal);
+					return models;
+				} catch {
+					if (loginOptions.signal?.aborted) {
+						throw abortReason(loginOptions.signal);
+					}
+					throw new Error("OpenAI browser sign-in failed.");
+				} finally {
+					notifyAvailabilityChanged();
+				}
+			});
+		},
+		getCompositionRevision: () => options.getCompositionRevision?.() ?? 0,
+		subscribeComposition: (listener) =>
+			options.subscribeComposition?.(listener) ?? (() => undefined),
+		getAvailabilityRevision: () => availabilityRevision,
+		subscribeAvailability(listener) {
+			availabilityListeners.add(listener);
+			return () => availabilityListeners.delete(listener);
+		},
 		connectOpenRouterApiKey(apiKey, refreshOptions) {
 			return withSessionWork(async () => {
 				const trimmedApiKey = apiKey.trim();
@@ -268,19 +360,53 @@ export const createInteractiveProviderController = (
 						"OpenRouter credentials were saved, but Known Model refresh failed; the last-known models were retained.",
 						{ cause: error }
 					);
+				} finally {
+					notifyAvailabilityChanged();
 				}
 			});
 		},
+		connectProviderApiKey(providerId, apiKey, refreshOptions) {
+			return withSessionWork(async () => {
+				const signal = refreshOptions?.signal;
+				if (!API_KEY_PROVIDER_IDS.has(providerId)) {
+					throw new Error("Provider SDK API-key connection is unavailable.");
+				}
+				const trimmedApiKey = apiKey.trim();
+				if (trimmedApiKey.length === 0) {
+					throw new Error("Provider SDK API key must not be empty.");
+				}
+				throwIfAborted(signal);
+				await restoreModels();
+				throwIfAborted(signal);
+				try {
+					await providers.setCredential(providerId, {
+						apiKey: trimmedApiKey,
+						kind: "api-key",
+					});
+				} catch {
+					throw new Error("Could not save Provider SDK credentials.");
+				} finally {
+					notifyAvailabilityChanged();
+				}
+				return providers
+					.getModels()
+					.filter((model) => model.providerId === providerId);
+			});
+		},
 		connectPluginProvider(providerId, requestTextInput, refreshOptions) {
-			return withSessionWork(() =>
-				runPluginProviderConnection(
-					providers,
-					options,
-					providerId,
-					requestTextInput,
-					refreshOptions
-				)
-			);
+			return withSessionWork(async () => {
+				try {
+					return await runPluginProviderConnection(
+						providers,
+						options,
+						providerId,
+						requestTextInput,
+						refreshOptions
+					);
+				} finally {
+					notifyAvailabilityChanged();
+				}
+			});
 		},
 		async getAvailableModels() {
 			await restoreModels();
@@ -289,6 +415,15 @@ export const createInteractiveProviderController = (
 		getConnectableProviders() {
 			const discoverableProviderIds = new Set(getDiscoverableProviderIds());
 			return Object.freeze([
+				...(options.loginOpenAIOAuth === undefined
+					? []
+					: [
+							{
+								displayName: "OpenAI browser sign-in",
+								kind: "openai-oauth" as const,
+								providerId: "openai",
+							},
+						]),
 				...(discoverableProviderIds.has(OPENROUTER_PROVIDER_ID)
 					? [
 							{
@@ -298,6 +433,11 @@ export const createInteractiveProviderController = (
 							},
 						]
 					: []),
+				...API_KEY_PROVIDER_OPTIONS.filter(({ providerId }) =>
+					providers.getModels().some((model) => model.providerId === providerId)
+				).map(({ displayName, providerId }) =>
+					Object.freeze({ displayName, kind: "api-key" as const, providerId })
+				),
 				...getPluginProviderRegistrations().map((registration) =>
 					Object.freeze({
 						displayName: registration.displayName,

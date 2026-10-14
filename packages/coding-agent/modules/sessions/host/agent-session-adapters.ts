@@ -17,6 +17,7 @@ import type {
 	SessionSkillResolution,
 } from "../agent-session/types";
 import { SessionCompactionError } from "../compaction/error";
+import { createProviderSummaryGenerator } from "../compaction/summary-generator";
 import type { SessionMessage } from "../message";
 import { strictThinkingSelection } from "../selection";
 import {
@@ -97,6 +98,7 @@ export const createAgentSessionAdapters = (
 		cacheWarming,
 		capabilities,
 		googleCachedContentResourceManager,
+		modelExecutionMode,
 		providerCollection,
 		isShutDown,
 		sessionId,
@@ -110,10 +112,15 @@ export const createAgentSessionAdapters = (
 		cacheWarming,
 		capabilities,
 		googleCachedContentResourceManager,
+		modelExecutionMode,
 		...(providerCollection === undefined ? {} : { providerCollection }),
 		sessionId,
 		statefulAgent,
 	};
+	const summaryGenerator =
+		providerCollection === undefined
+			? undefined
+			: createProviderSummaryGenerator(providerCollection);
 	const assertHostOpen = (): void => {
 		if (isShutDown()) {
 			throw new SessionCompactionError(
@@ -208,6 +215,7 @@ export const createAgentSessionAdapters = (
 			compact: (input) =>
 				capabilities.getCompactionModule().compact({
 					...input,
+					...omitUndefined({ summaryGenerator }),
 					assertAuthority: assertHostOpen,
 				}),
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
@@ -232,6 +240,9 @@ export const createAgentSessionAdapters = (
 				true,
 				input.selectionOverride
 			);
+			if (effective.unavailableReason !== undefined) {
+				throw new Error(effective.unavailableReason);
+			}
 			strictThinkingSelection(effective.model, effective.thinkingLevel);
 			const {
 				resolvedAgent: _resolvedAgent,
@@ -250,7 +261,13 @@ export const createAgentSessionAdapters = (
 			};
 		},
 		resolveCompactionSettings: (model) =>
-			capabilities.getCompactionSettings(model),
+			capabilities.getCompactionSettings(
+				model,
+				providerCollection === undefined
+					? undefined
+					: (providerCollection.getModel(model.providerId, model.modelId) ??
+							null)
+			),
 		resolveFileMentions: (text) => resolveFileMentionParts(text),
 		turnRunner: createAgentSessionTurnRunner(turnRunnerInputs),
 		skills: { createTurnSkill, resolveSkill },

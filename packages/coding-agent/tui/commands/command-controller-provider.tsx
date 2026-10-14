@@ -158,6 +158,7 @@ export function CommandControllerProvider({
 					onSelectModel: options.onSelectModel,
 					onSelectProviderModel: options.onSelectProviderModel,
 					providerController: options.providerController,
+					providerModel: options.providerModel,
 					onReload: reloadResources,
 					onTrust: trustProject,
 					onOpenSettings: options.onOpenSettings,

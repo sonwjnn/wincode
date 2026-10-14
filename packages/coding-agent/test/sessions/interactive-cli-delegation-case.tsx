@@ -18,6 +18,7 @@ import type { DispatchModeRunners } from "@/modules/application/dispatch";
 import { dispatch } from "@/modules/application/dispatch";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
+import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
@@ -134,6 +135,7 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 				configRuntime: context.configRuntime,
 				cwd: context.cwd,
 				pluginRuntime: context.pluginRuntime,
+				runtimeFactory: defaultRuntimeFactory,
 			});
 			return runInteractive(rendererFactory);
 		},

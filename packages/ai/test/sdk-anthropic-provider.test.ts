@@ -141,6 +141,7 @@ describe("public Anthropic SDK provider", () => {
 			],
 			modelId: "claude-sonnet-4-6",
 			providerId: "anthropic",
+			reasoningEffort: "high",
 			system: "Be concise.",
 			tools: [
 				{
@@ -169,6 +170,7 @@ describe("public Anthropic SDK provider", () => {
 			model: "claude-sonnet-4-6",
 			stream: true,
 			max_tokens: 128_000,
+			output_config: { effort: "high" },
 			system: "Be concise.",
 			messages: [
 				{
@@ -209,6 +211,23 @@ describe("public Anthropic SDK provider", () => {
 			{ outcome: { continuation, status: "success" }, type: "terminal" },
 		]);
 		expect(JSON.stringify(events)).not.toContain("anthropic-app-secret");
+		expect(
+			sdk.getModel("anthropic", "claude-sonnet-4-6")?.reasoningEfforts
+		).not.toContain("minimal");
+		for await (const _event of sdk.chat({
+			messages: [
+				{
+					content: [{ text: "Unsupported effort?", type: "text" }],
+					role: "user",
+				},
+			],
+			modelId: "claude-sonnet-4-6",
+			providerId: "anthropic",
+			reasoningEffort: "minimal",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+		expect(requests[1]?.body).not.toHaveProperty("output_config");
 	});
 
 	test("tool follow-ups preserve opaque Anthropic continuation and multimodal user inputs", async () => {

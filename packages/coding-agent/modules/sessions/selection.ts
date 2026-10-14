@@ -74,7 +74,7 @@ export const resolveSessionSdkSelectionDefaults = (
 			? (registry?.defaultAgentId ?? DEFAULT_AGENT_ID)
 			: parseSelectionAgent(options.agent);
 	const selectedAgent = registry?.agents.find(
-		(candidate) => candidate.id === agent && candidate.isAvailable
+		(candidate) => candidate.id === agent
 	);
 	const model =
 		options.model ?? selectedAgent?.model ?? defaultChatModelSelection;
@@ -268,8 +268,9 @@ export const strictThinkingSelection = (
 	const catalogModel = catalogSelectionForProviderModel(model);
 	const parsed = thinkingLevelSchema.safeParse(value);
 	if (
-		catalogModel === null ||
-		!(parsed.success && isSupportedThinkingLevel(catalogModel, parsed.data))
+		!parsed.success ||
+		(catalogModel !== null &&
+			!isSupportedThinkingLevel(catalogModel, parsed.data))
 	) {
 		throw new Error("Thinking level is unavailable for the selected model.");
 	}
@@ -352,7 +353,7 @@ const normalizeSelectionChoice = (
 	}
 	const catalogModel = catalogSelectionForProviderModel(model);
 	return catalogModel === null
-		? {}
+		? { thinkingLevel }
 		: normalizeThinkingSelection(catalogModel, { thinkingLevel });
 };
 

@@ -7,10 +7,7 @@ import type {
 	ModelStepRequest,
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
-import {
-	type ChatModelSelection,
-	defaultChatModelSelection,
-} from "@wincode/ai/models";
+import { defaultChatModelSelection } from "@wincode/ai/models";
 import {
 	type OneShotCompositionInput,
 	type OneShotDependencies,
@@ -24,6 +21,10 @@ import type {
 import { createApplicationResourceLoader } from "@/modules/application/resource-loader";
 import { runRpc } from "@/modules/application/rpc/runner";
 import { loadPlugins } from "@/modules/plugins/loader";
+import {
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
@@ -488,7 +489,7 @@ test("Plugin Agent registrations preserve a supported ThinkingLevel", async () =
 });
 
 test("Plugin commands can change the focused composer selection for later Submissions", async () => {
-	const selectedModels: ChatModelSelection[] = [];
+	const selectedModels: ProviderModelSelection[] = [];
 	const selectedThinkingLevels: string[] = [];
 	const runtime = await loadPlugins({
 		bundledPlugins: [
@@ -517,7 +518,10 @@ test("Plugin commands can change the focused composer selection for later Submis
 	});
 	const unbind = runtime.bindPromptSelectionTarget({
 		setModel: async (model) => {
-			selectedModels.push(model);
+			const normalized = normalizeProviderModelSelection(model);
+			if (normalized !== null) {
+				selectedModels.push(normalized);
+			}
 			return true;
 		},
 		setThinkingLevel: (level) => {

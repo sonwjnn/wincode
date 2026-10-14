@@ -656,6 +656,26 @@ describe("focused model contracts", () => {
 		});
 	});
 
+	test("uses the highest crossed pricing tier when thresholds are unsorted", () => {
+		const usage = normalizeModelUsage({ inputTokens: 600, outputTokens: 100 });
+		if (!usage) {
+			throw new Error("Expected normalized model usage.");
+		}
+
+		expect(
+			calculateModelUsageCostUsd(
+				{
+					cost: { input: 1, output: 2 },
+					tiers: [
+						{ input: 20, inputTokensAbove: 500, output: 40 },
+						{ input: 2, inputTokensAbove: 200, output: 4 },
+					],
+				},
+				usage
+			)
+		).toBeCloseTo(0.016);
+	});
+
 	test("preserves normalized cache counts when re-normalizing a ModelClient result", () => {
 		const usage = {
 			cacheReadTokens: 20,

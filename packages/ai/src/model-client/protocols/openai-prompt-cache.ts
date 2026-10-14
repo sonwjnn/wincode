@@ -2,9 +2,10 @@ import { openAIPromptCacheByModelId } from "../../generated/openai-prompt-cache.
 import type {
 	OpenAIPromptCacheProtocol,
 	SupportedPromptCacheRetentionTier,
-} from "../../model-metadata";
+} from "../../model-metadata.ts";
 import type { ModelTarget } from "../../model-target";
 import type { SupportedChatModel } from "../../models";
+import { parsePromptCacheTtlMs } from "../../prompt-cache-ttl.ts";
 import type { ModelProtocolPromptCacheStrategy } from "./types";
 
 export type OpenAIPromptCacheControls = Readonly<{
@@ -13,27 +14,6 @@ export type OpenAIPromptCacheControls = Readonly<{
 	retentionField?: "prompt_cache_options.ttl" | "prompt_cache_retention";
 	retentionValue?: string;
 }>;
-
-const RETENTION_DURATION_PATTERN = /^(\d+)(s|m|h)$/u;
-
-const parseRetentionDurationMs = (value: string): number | undefined => {
-	const parsed = RETENTION_DURATION_PATTERN.exec(value);
-	if (parsed === null) {
-		return;
-	}
-	const amount = Number(parsed[1]);
-	let unitMs: number;
-	if (parsed[2] === "s") {
-		unitMs = 1000;
-	} else if (parsed[2] === "m") {
-		unitMs = 60_000;
-	} else {
-		unitMs = 60 * 60_000;
-	}
-	return Number.isSafeInteger(amount) && amount > 0
-		? amount * unitMs
-		: undefined;
-};
 
 const openAIPromptCacheCapabilitiesFor = (
 	model: SupportedChatModel,
@@ -61,9 +41,7 @@ export const openAIPromptCacheStrategyFor = (
 				capabilities.retention?.values[retention] !== undefined,
 			retentionTtlMsFor: (retention) => {
 				const value = capabilities.retention?.values[retention];
-				return value === undefined
-					? undefined
-					: parseRetentionDurationMs(value);
+				return value === undefined ? undefined : parsePromptCacheTtlMs(value);
 			},
 		};
 	},

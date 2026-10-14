@@ -1,5 +1,5 @@
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import {
 	isNull,
 	isNumber,
@@ -10,6 +10,10 @@ import {
 	pickTruthy,
 } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
+import {
+	catalogSelectionForProviderModel,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import {
 	type CompactionId,
 	type SessionId,
@@ -146,8 +150,9 @@ type CompactionStore = Pick<
 
 export type CompactSessionInput = {
 	session: CompactionSession;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
+	summaryGenerator?: SummaryGenerator;
 	settings: Pick<
 		ResolvedCompactionSettings,
 		"enabled" | "keepRecentTokens" | "thresholdTokens"
@@ -894,7 +899,7 @@ const appendInputFor = ({
 	cutPoint: CutPoint;
 	focus?: string;
 	thinkingLevel?: ThinkingLevel;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	previous: SessionCompaction | null;
 	settings: CompactSessionInput["settings"];
 	summarySpan: readonly SessionMessage[];
@@ -1065,10 +1070,11 @@ const generateCompactionSummary = async (
 				{ cause: error }
 			);
 		}
-		const failureMessage = getModelFailureMessage(error, {
-			modelId: input.model.modelId,
-			providerId: input.model.providerId,
-		});
+		const catalogModel = catalogSelectionForProviderModel(input.model);
+		const failureMessage =
+			catalogModel === null
+				? getModelFailureMessage(error)
+				: getModelFailureMessage(error, catalogModel);
 		throw new SessionCompactionError(
 			"summary-failed",
 			`Compaction summary generation failed: ${failureMessage}`,
@@ -1123,7 +1129,7 @@ export const createSessionCompaction = ({
 		entryId: CompactionId;
 		estimateTokens: (messages: readonly SessionMessage[]) => number;
 		focus?: string;
-		model: ChatModelSelection;
+		model: ProviderModelSelection;
 		now: () => Date;
 		previous: SessionCompaction | null;
 		settings: CompactSessionInput["settings"];
@@ -1244,7 +1250,7 @@ export const createSessionCompaction = ({
 			signal: input.signal,
 		};
 		const generated = await generateCompactionSummary(
-			summaryGenerator,
+			input.summaryGenerator ?? summaryGenerator,
 			generatorInput
 		);
 		assertNotAborted(input.signal);

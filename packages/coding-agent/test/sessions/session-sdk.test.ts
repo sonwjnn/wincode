@@ -37,6 +37,10 @@ import {
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import type { PluginAgentRegistration } from "@/modules/plugins/public";
 import * as sessionProviderCollectionModule from "@/modules/sessions/provider-collection";
+import {
+	createInteractiveSessionProviderCollection,
+	type InteractiveSessionProviderCollection,
+} from "@/modules/sessions/provider-collection";
 import { createSessionSdkWithRuntime as createSessionSdk } from "@/modules/sessions/sdk";
 import type {
 	SessionSdk,
@@ -81,6 +85,136 @@ const store = createDrizzleSessionStore(database.db, {
 });
 const configStore = createConfigStore({ homeRoot });
 
+const createSdkPinnedAgentRuntime = async (
+	withExactModel: boolean,
+	dispatchedModels: Array<{ modelId: string; providerId: string }>,
+	options: Readonly<{
+		connectedProviderIds?: readonly string[];
+		modelId?: string;
+		oauth?: boolean;
+		requestBodies?: Array<{ body: Record<string, unknown>; url: string }>;
+	}> = {}
+): Promise<{
+	providerCollection: ProviderCollection;
+	providerCollectionFactoryCalls: number[];
+	sdk: SessionSdk;
+}> => {
+	const pinnedModelId = options.modelId ?? "session-sdk-private-model";
+	const pinnedModel: ProviderModel = {
+		capabilities: ["reasoning", "text", "tools"],
+		limits: { maxOutputTokens: 128 },
+		modelId: pinnedModelId,
+		protocolId: "openai-responses",
+		providerId: "openai",
+	};
+	const providerCollection = await createInteractiveSessionProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: (providerId) => {
+				if (providerId !== "openai") {
+					return;
+				}
+				if (options.oauth) {
+					return {
+						accessToken: "fake-openai-oauth-access-token",
+						accountId: "fake-openai-account",
+						expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+						kind: "oauth-session" as const,
+						refreshToken: "fake-openai-oauth-refresh-token",
+						updatedAt: new Date().toISOString(),
+					};
+				}
+				return { apiKey: "sdk-test-key", kind: "api-key" };
+			},
+			set: () => undefined,
+		},
+		modelStore: {
+			get: (providerId) =>
+				withExactModel && providerId === "openai" ? [pinnedModel] : undefined,
+			set: () => undefined,
+		},
+		openAIProviderOptions: {
+			fetch: async (input, init) => {
+				const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				options.requestBodies?.push({ body, url: String(input) });
+				dispatchedModels.push({
+					modelId: String(body.model),
+					providerId: "openai",
+				});
+				return new Response(
+					[
+						'event: response.output_text.delta\ndata: {"delta":"exact Provider Model dispatched"}\n\n',
+						'event: response.completed\ndata: {"response":{"usage":{"input_tokens":25,"output_tokens":1}}}\n\n',
+					].join(""),
+					{ headers: { "content-type": "text/event-stream" } }
+				);
+			},
+		},
+		pluginProviders: [],
+	});
+	if (withExactModel) {
+		await providerCollection.restoreModels();
+		expect(await providerCollection.getAvailable()).toContainEqual(
+			expect.objectContaining({ modelId: pinnedModelId, providerId: "openai" })
+		);
+	}
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {
+				agents: {
+					"sdk-pinned": {
+						description: "Uses an exact Provider SDK model.",
+						instructions:
+							"Use the exact Provider Model provided by this Session Host.",
+						model: `openai/${pinnedModelId}`,
+						role: "primary",
+					},
+					"sdk-subagent": {
+						description: "Uses an exact Provider SDK model as a subagent.",
+						instructions:
+							"Use the exact Provider Model provided by this Session Host.",
+						model: `openai/${pinnedModelId}`,
+						role: "subagent",
+					},
+				},
+			},
+			sourceFor: () => undefined,
+			sources: [],
+		}),
+		{
+			connectedProviderIds: new Set(options.connectedProviderIds ?? ["openai"]),
+		}
+	);
+	const providerCollectionFactoryCalls: number[] = [];
+	const sdk = await createSessionSdk({
+		configStore,
+		createProviderCollection: async () => {
+			providerCollectionFactoryCalls.push(1);
+			return providerCollection;
+		},
+		cwd: workspace,
+		getConnections: () => ({
+			authorize: async () => ({ kind: "api-key", apiKey: "sdk-test-key" }),
+			connect: async () => undefined,
+			listProviders: async () => [
+				{
+					connected: true,
+					connectionMethod: "api-key",
+					displayName: "OpenAI",
+					id: "openai",
+					methods: ["api-key"],
+				},
+			],
+		}),
+		getRegistry: () => registry,
+		pluginPaths: [],
+		store,
+		workspace,
+	});
+	return { providerCollection, providerCollectionFactoryCalls, sdk };
+};
+
 test("public Session SDK options do not expose host-internal dependencies", () => {
 	const validOptions: SessionSdkOptions = {
 		pluginPaths: [],
@@ -122,6 +256,8 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 	const providerModel: ProviderModel = {
 		capabilities: ["reasoning", "text", "tools"],
 		limits: { maxOutputTokens: 777 },
+		promptCacheRetentionTiers: ["short"],
+		reasoningEfforts: ["high"],
 		modelId: defaultChatModelSelection.modelId,
 		protocolId: "session-sdk-test",
 		providerId: defaultChatModelSelection.providerId,
@@ -260,13 +396,14 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 			yield { type: "finish" };
 		},
 	});
-	const providerCollectionForHost = (): ProviderCollection => {
-		const hostIndex = providerCollections.length;
-		const providers = createProviderCollection({ credentialStore });
-		providers.register(providerForHost(hostIndex));
-		providerCollections.push(providers);
-		return providers;
-	};
+	const providerCollectionForHost =
+		async (): Promise<InteractiveSessionProviderCollection> => {
+			const hostIndex = providerCollections.length;
+			const providers = createProviderCollection({ credentialStore });
+			providers.register(providerForHost(hostIndex));
+			providerCollections.push(providers);
+			return providers as unknown as InteractiveSessionProviderCollection;
+		};
 	const previousHome = process.env.HOME;
 	const previousUserProfile = process.env.USERPROFILE;
 	let sdk: SessionSdk | undefined;
@@ -370,18 +507,19 @@ test("public Session SDK drives multiple Agent Model Steps through ProviderColle
 			"session-sdk-read-success": "success",
 		});
 		expect(requests).toHaveLength(2);
+		expect(providerModel.limits?.maxOutputTokens).toBe(777);
 		expect(requests[0]).toMatchObject({
 			cacheRetention: "short",
-			maxOutputTokens: 777,
 			promptCacheKey: `wincode-session:${success.handle.sessionId}`,
 			reasoningEffort: "high",
 		});
+		expect(requests[0]).not.toHaveProperty("maxOutputTokens");
 		expect(requests[1]).toMatchObject({
 			cacheRetention: "short",
-			maxOutputTokens: 777,
 			promptCacheKey: `wincode-session:${success.handle.sessionId}`,
 			reasoningEffort: "high",
 		});
+		expect(requests[1]).not.toHaveProperty("maxOutputTokens");
 		expect(requests[0]).not.toHaveProperty("target");
 		expect(requests[0]).not.toHaveProperty("authorization");
 		expect(requests[0]?.tools?.map(({ name }) => name)).toContain("read");
@@ -640,21 +778,21 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 			},
 		})
 	);
-	const recorder = createFakeModelClientRecorder();
-	const sentSelections: Pick<
-		ModelStepRequest["target"],
-		"modelId" | "providerId" | "thinkingLevel"
-	>[] = [];
-	recorder.beforeStep = async ({ target }) => {
-		sentSelections.push({
-			modelId: target.modelId,
-			providerId: target.providerId,
-			thinkingLevel: target.thinkingLevel,
-		});
-	};
+	const sentSelections: Array<{
+		modelId: string;
+		providerId: string;
+		thinkingLevel: string | undefined;
+	}> = [];
 	const selectedModel = {
 		modelId: modelId("claude-sonnet-5"),
 		providerId: "anthropic" as const,
+	};
+	const selectedProviderModel: ProviderModel = {
+		capabilities: ["reasoning", "text", "tools"],
+		modelId: selectedModel.modelId,
+		protocolId: "session-sdk-selection-test",
+		providerId: selectedModel.providerId,
+		reasoningEfforts: ["high"],
 	};
 	const fakeConnections = {
 		authorize: async () => ({
@@ -672,6 +810,35 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 			},
 		],
 	};
+	const providerCollectionForHost =
+		async (): Promise<InteractiveSessionProviderCollection> => {
+			const providers = createProviderCollection({
+				credentialStore: {
+					delete: () => undefined,
+					get: (providerId) =>
+						providerId === selectedProviderModel.providerId
+							? "sdk-test-key"
+							: undefined,
+					set: () => undefined,
+				},
+			});
+			providers.register({
+				id: selectedProviderModel.providerId,
+				models: [selectedProviderModel],
+				resolveAuthorization: ({ credential }) =>
+					credential === undefined ? null : { authorization: credential },
+				async *streamChat(request, { model }) {
+					sentSelections.push({
+						modelId: model.modelId,
+						providerId: model.providerId,
+						thinkingLevel: request.reasoningEffort,
+					});
+					yield { delta: "The selection was restored.", type: "text-delta" };
+					yield { type: "finish" };
+				},
+			});
+			return providers as unknown as InteractiveSessionProviderCollection;
+		};
 	const sdkOptions: SessionSdkOptions = {
 		cwd: sdkWorkspace,
 		databasePath,
@@ -701,7 +868,11 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 			connectionsModule,
 			"createConnections"
 		).mockReturnValue(fakeConnections);
-		installFakeModelClient(recorder);
+		spyOn(
+			sessionProviderCollectionModule,
+			"createDefaultSessionProviderCollection"
+		).mockImplementation(providerCollectionForHost);
+		installFakeModelClient(createFakeModelClientRecorder());
 		const homeLookupsBeforeInitialSdk = homeDirSpy.mock.calls.length;
 		const connectionsBeforeInitialSdk = connectionsSpy.mock.calls.length;
 		sdk = await createPublicSessionSdk(sdkOptions);
@@ -1006,6 +1177,155 @@ test("a runtime catalog rejects Agents whose required tools exceed its effective
 		}
 	} finally {
 		await sdk.dispose();
+	}
+});
+
+test("uncapped OAuth Agent turns preserve the model ceiling without sending it as a request budget", async () => {
+	const dispatchedModels: Array<{ modelId: string; providerId: string }> = [];
+	const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
+	const { providerCollection, sdk } = await createSdkPinnedAgentRuntime(
+		true,
+		dispatchedModels,
+		{ oauth: true, requestBodies: requests }
+	);
+	let handle: SessionSdkHandle | undefined;
+	try {
+		expect(
+			providerCollection.getModel("openai", "session-sdk-private-model")?.limits
+		).toEqual({ maxOutputTokens: 128 });
+		handle = await sdk.createSession({ agent: "sdk-pinned" });
+		const admission = await handle.prompt({
+			text: "Proceed without an explicit output token budget.",
+		});
+		expect(admission.rejected).toBe(false);
+		for (
+			let attempt = 0;
+			attempt < 50 && dispatchedModels.length === 0;
+			attempt++
+		) {
+			await Bun.sleep(10);
+		}
+		expect(dispatchedModels).toEqual([
+			{ modelId: "session-sdk-private-model", providerId: "openai" },
+		]);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe(
+			"https://chatgpt.com/backend-api/codex/responses"
+		);
+		expect(requests[0]?.body).not.toHaveProperty("max_output_tokens");
+	} finally {
+		await handle?.dispose();
+		await sdk.dispose();
+		await providerCollection.close();
+	}
+});
+
+test("SDK-pinned Agents are discoverable and dispatch only their exact active Host Provider Model", async () => {
+	const dispatchedModels: Array<{ modelId: string; providerId: string }> = [];
+	const { providerCollection, providerCollectionFactoryCalls, sdk } =
+		await createSdkPinnedAgentRuntime(true, dispatchedModels);
+	let handle: SessionSdkHandle | undefined;
+	try {
+		const catalog = await sdk.getAgentCatalog();
+		expect(catalog).toContainEqual(
+			expect.objectContaining({
+				id: agentId("sdk-pinned"),
+				isAvailable: true,
+				model: {
+					modelId: "session-sdk-private-model",
+					providerId: "openai",
+				},
+				role: "primary",
+			})
+		);
+		expect(catalog).toContainEqual(
+			expect.objectContaining({
+				id: agentId("sdk-subagent"),
+				isAvailable: true,
+				role: "subagent",
+			})
+		);
+
+		handle = await sdk.createSession({ agent: "sdk-pinned" });
+		expect(providerCollectionFactoryCalls).toHaveLength(1);
+		const admission = await handle.prompt({
+			text: "Use the exact pinned Provider Model.",
+		});
+		expect(admission.rejected).toBe(false);
+		for (
+			let attempt = 0;
+			attempt < 50 && dispatchedModels.length === 0;
+			attempt++
+		) {
+			await Bun.sleep(10);
+		}
+		expect(dispatchedModels).toEqual([
+			{ modelId: "session-sdk-private-model", providerId: "openai" },
+		]);
+	} finally {
+		await handle?.dispose();
+		await sdk.dispose();
+		await providerCollection.close();
+	}
+});
+
+test("an SDK credential defers a legacy Connect-only Agent pin until exact child-Host validation", async () => {
+	const dispatchedModels: Array<{ modelId: string; providerId: string }> = [];
+	const { providerCollection, sdk } = await createSdkPinnedAgentRuntime(
+		true,
+		dispatchedModels,
+		{ connectedProviderIds: [], modelId: "gpt-5.6" }
+	);
+	let handle: SessionSdkHandle | undefined;
+	try {
+		expect(await sdk.getAgentCatalog()).toContainEqual(
+			expect.objectContaining({
+				id: agentId("sdk-pinned"),
+				isAvailable: true,
+				model: { modelId: "gpt-5.6", providerId: "openai" },
+			})
+		);
+		handle = await sdk.createSession({ agent: "sdk-pinned" });
+		const admission = await handle.prompt({
+			text: "Dispatch the exact catalog-pinned model through the SDK Host.",
+		});
+		expect(admission.rejected).toBe(false);
+		for (
+			let attempt = 0;
+			attempt < 50 && dispatchedModels.length === 0;
+			attempt++
+		) {
+			await Bun.sleep(10);
+		}
+		expect(dispatchedModels).toEqual([
+			{ modelId: "gpt-5.6", providerId: "openai" },
+		]);
+	} finally {
+		await handle?.dispose();
+		await sdk.dispose();
+		await providerCollection.close();
+	}
+});
+
+test("SDK-pinned Agent dispatch fails closed when the child Host lacks the exact Provider Model", async () => {
+	const dispatchedModels: Array<{ modelId: string; providerId: string }> = [];
+	const { providerCollection, sdk } = await createSdkPinnedAgentRuntime(
+		false,
+		dispatchedModels
+	);
+	let handle: SessionSdkHandle | undefined;
+	try {
+		handle = await sdk.createSession({ agent: "sdk-pinned" });
+		await expect(
+			handle.prompt({ text: "Do not substitute another model." })
+		).rejects.toThrow(
+			"Provider Model openai/session-sdk-private-model is unavailable in this Session Host."
+		);
+		expect(dispatchedModels).toEqual([]);
+	} finally {
+		await handle?.dispose();
+		await sdk.dispose();
+		await providerCollection.close();
 	}
 });
 

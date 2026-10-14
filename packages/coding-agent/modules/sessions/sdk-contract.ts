@@ -5,7 +5,7 @@ import type {
 	SessionMessageId,
 	SubmissionId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import type { SessionId } from "../../shared/identifiers";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
 
@@ -65,7 +65,7 @@ export type SessionSdkAgent = Readonly<{
 	description?: string;
 	id: AgentId;
 	isAvailable: boolean;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	role: string;
 	source?: SessionSdkAgentSource;

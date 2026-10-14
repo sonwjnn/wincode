@@ -11,9 +11,10 @@ import type { GoogleCachedContentResourceManager } from "@wincode/ai/model-clien
 import {
 	findSupportedChatModelSelection,
 	type ResolvedPromptCacheControls,
+	type ThinkingLevel,
 	type ThinkingSelection,
 } from "@wincode/ai/models";
-import type { ProviderCollection } from "@wincode/ai/sdk";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai/sdk";
 import { omitUndefined } from "@wincode/utils";
 import { resolveAgentToolResourceLimits } from "@/modules/agents/registry";
 import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";
@@ -22,10 +23,16 @@ import type {
 	PluginToolDescriptor,
 } from "@/modules/plugins/runtime";
 import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
-import { resolveConfiguredPromptCacheControls } from "@/modules/prompt-cache/policy";
+import {
+	resolveConfiguredPromptCacheControls,
+	resolveProviderPromptCacheControls,
+} from "@/modules/prompt-cache/policy";
 import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
-import { catalogSelectionForProviderModel } from "@/modules/providers/provider-model-selection";
+import {
+	catalogSelectionForProviderModel,
+	normalizeProviderModelThinkingSelection,
+} from "@/modules/providers/provider-model-selection";
 import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
 import type { SkillRequestContext } from "@/modules/skills";
 import {
@@ -65,22 +72,47 @@ type PluginTurnResolution = Readonly<{
 	}>;
 }>;
 
+/** The explicit legacy Catalog route is temporary until #208/#209 finish migration. */
+export type SessionModelExecutionMode = "legacy-catalog" | "provider-sdk";
+
 type ResolveSessionTurnModelOptions = Readonly<{
 	getConnections: () => Connections;
 	model: SessionExecution["model"];
+	modelExecutionMode: SessionModelExecutionMode;
 	promptCacheControls: ResolvedPromptCacheControls;
 	providerCollection?: ProviderCollection;
 	signal: AbortSignal;
 	thinkingSelection: ThinkingSelection;
 }>;
 
+const resolveSessionTurnThinkingSelection = (
+	model: SessionExecution["model"],
+	thinkingLevel: ThinkingLevel | undefined,
+	providerModel: ProviderModel | undefined
+): ThinkingSelection => {
+	if (providerModel === undefined) {
+		return strictThinkingSelection(model, thinkingLevel);
+	}
+	return normalizeProviderModelThinkingSelection(
+		providerModel,
+		thinkingLevel === undefined ? {} : { thinkingLevel }
+	);
+};
+
 const resolveSessionPromptCacheControls = async (
 	configRuntime: ConfigRuntime,
-	model: SessionExecution["model"]
+	model: SessionExecution["model"],
+	providerModel?: ProviderModel
 ): Promise<ResolvedPromptCacheControls> => {
 	const snapshot = await configRuntime.configStore
 		.getSnapshot(configRuntime.workspace)
 		.catch(() => undefined);
+	if (providerModel !== undefined) {
+		return resolveProviderPromptCacheControls(
+			providerModel,
+			snapshot?.document.promptCache
+		);
+	}
 	const catalogSelection = catalogSelectionForProviderModel(model);
 	const selectedModel =
 		catalogSelection === null
@@ -95,27 +127,20 @@ const resolveSessionPromptCacheControls = async (
 	);
 };
 
-const OPENROUTER_PROVIDER_ID = "openrouter";
-
-const resolveSessionTurnModel = async ({
+export const resolveSessionTurnModel = async ({
 	getConnections,
 	model,
+	modelExecutionMode,
 	promptCacheControls,
 	providerCollection,
 	signal,
 	thinkingSelection,
 }: ResolveSessionTurnModelOptions): Promise<AgentTurnModel> => {
-	const providerModel =
-		providerCollection === undefined
-			? undefined
-			: providerCollection.getModel(model.providerId, model.modelId);
-	if (providerModel === undefined) {
+	if (modelExecutionMode === "legacy-catalog") {
 		const catalogModel = catalogSelectionForProviderModel(model);
-		if (catalogModel === null || model.providerId === OPENROUTER_PROVIDER_ID) {
+		if (catalogModel === null) {
 			throw new Error(
-				providerCollection === undefined
-					? `Provider Model ${model.providerId}/${model.modelId} requires the Provider SDK runtime.`
-					: `Provider Model ${model.providerId}/${model.modelId} is not available in this Session Host.`
+				`Provider Model ${model.providerId}/${model.modelId} requires the Provider SDK runtime.`
 			);
 		}
 		return resolveChatModelTarget(catalogModel, getConnections(), {
@@ -127,11 +152,33 @@ const resolveSessionTurnModel = async ({
 			signal,
 		});
 	}
-	const maxOutputTokens = providerModel.limits?.maxOutputTokens;
+	if (providerCollection === undefined) {
+		throw new Error(
+			"Provider SDK Session Host is missing its ProviderCollection; Catalog dispatch is disabled."
+		);
+	}
+	const providerModel = providerCollection.getModel(
+		model.providerId,
+		model.modelId
+	);
+	if (providerModel === undefined) {
+		throw new Error(
+			`Provider Model ${model.providerId}/${model.modelId} is not available in this Session Host.`
+		);
+	}
+	const isInvocable = (await providerCollection.getAvailable()).some(
+		(availableModel) =>
+			availableModel.providerId === model.providerId &&
+			availableModel.modelId === model.modelId
+	);
+	if (!isInvocable) {
+		throw new Error(
+			`Provider Model ${model.providerId}/${model.modelId} is not invocable. Connect its Provider or choose another model.`
+		);
+	}
 	return {
 		...model,
 		...thinkingSelection,
-		...omitUndefined({ maxOutputTokens }),
 		...(promptCacheControls.enabled
 			? {
 					promptCacheEnabled: true as const,
@@ -199,6 +246,7 @@ export type AgentSessionTurnRunnerOptions = Readonly<{
 	cacheWarming: SessionCacheWarming;
 	capabilities: SessionCapabilities;
 	googleCachedContentResourceManager: GoogleCachedContentResourceManager;
+	modelExecutionMode: SessionModelExecutionMode;
 	providerCollection?: ProviderCollection;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
@@ -215,6 +263,7 @@ export const createAgentSessionTurnRunner = ({
 	cacheWarming,
 	capabilities,
 	googleCachedContentResourceManager,
+	modelExecutionMode,
 	providerCollection,
 	sessionId,
 	statefulAgent,
@@ -316,17 +365,25 @@ export const createAgentSessionTurnRunner = ({
 						sessionId,
 						store: sessionStore.fileObservationStore,
 					};
-		const thinkingSelection = strictThinkingSelection(
+		const providerModel =
+			providerCollection?.getModel(
+				execution.model.providerId,
+				execution.model.modelId
+			) ?? undefined;
+		const thinkingSelection = resolveSessionTurnThinkingSelection(
 			execution.model,
-			execution.thinkingLevel
+			execution.thinkingLevel,
+			providerModel
 		);
 		const promptCacheControls = await resolveSessionPromptCacheControls(
 			config,
-			execution.model
+			execution.model,
+			providerModel
 		);
 		const model = await resolveSessionTurnModel({
 			getConnections: capabilities.getConnections,
 			model: execution.model,
+			modelExecutionMode,
 			promptCacheControls,
 			...(providerCollection === undefined ? {} : { providerCollection }),
 			signal,

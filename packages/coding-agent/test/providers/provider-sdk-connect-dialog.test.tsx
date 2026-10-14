@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
+import { InputRenderable } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { RefreshModelsOptions } from "@wincode/ai/sdk";
+import type { OpenAIBrowserLoginOptions } from "@wincode/ai/sdk/providers/openai";
 import { act, useEffect, useRef } from "react";
 import type { PluginProviderConnectContext } from "@/modules/plugins/public";
 import type {
@@ -29,6 +31,16 @@ const providerOptions = [
 		displayName: "Example Plugin Provider",
 		kind: "plugin" as const,
 		providerId: "example_provider",
+	},
+	{
+		displayName: "OpenAI browser sign-in",
+		kind: "openai-oauth" as const,
+		providerId: "openai",
+	},
+	{
+		displayName: "OpenAI Provider SDK",
+		kind: "api-key" as const,
+		providerId: "openai",
 	},
 ];
 
@@ -90,6 +102,129 @@ const selectPluginProvider = async (
 	await act(() => setup.mockInput.pressEnter());
 	await flushTestRenderer(setup, 3);
 };
+
+test("built-in Provider API keys are masked and saved only through the host controller", async () => {
+	const selected = Promise.withResolvers<{
+		apiKey: string;
+		providerId: string;
+	}>();
+	const controller = fromPartial<InteractiveProviderController>({
+		connectProviderApiKey: async (providerId: string, apiKey: string) => {
+			selected.resolve({ apiKey, providerId });
+			return [];
+		},
+		getConnectableProviders: () => [
+			{
+				displayName: "Google Provider SDK",
+				kind: "api-key",
+				providerId: "google",
+			},
+		],
+	});
+	const { setup } = await renderConnectDialog(controller);
+	const fakeSecret = "never-render-this-google-key";
+
+	try {
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
+		const apiKeyInput = setup.renderer.root.findDescendantById(
+			"connection-api-key-input"
+		);
+		if (!(apiKeyInput instanceof InputRenderable)) {
+			throw new Error("The built-in Provider API-key input did not render.");
+		}
+		await act(() => {
+			for (const character of fakeSecret) {
+				apiKeyInput.value += character;
+				apiKeyInput.onContentChange?.({});
+			}
+		});
+		await flushTestRenderer(setup, 3);
+		expect(apiKeyInput.value).toBe("•".repeat(fakeSecret.length));
+		const maskedFrame = setup.captureCharFrame();
+		expect(maskedFrame).toContain("•".repeat(fakeSecret.length));
+		expect(maskedFrame).not.toContain(fakeSecret);
+
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
+		expect(await selected.promise).toEqual({
+			apiKey: fakeSecret,
+			providerId: "google",
+		});
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
+test("OpenAI API-key selection remains distinct from OAuth despite a shared Provider ID", async () => {
+	const selected = Promise.withResolvers<{
+		apiKey: string;
+		providerId: string;
+	}>();
+	const controller = fromPartial<InteractiveProviderController>({
+		connectProviderApiKey: async (providerId: string, apiKey: string) => {
+			selected.resolve({ apiKey, providerId });
+			return [];
+		},
+		getConnectableProviders: () => providerOptions,
+	});
+	const { setup } = await renderConnectDialog(controller);
+	const fakeSecret = "selected-openai-api-key";
+
+	try {
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
+		expect(setup.captureCharFrame()).toContain(
+			"Paste OpenAI Provider SDK API key"
+		);
+		const apiKeyInput = setup.renderer.root.findDescendantById(
+			"connection-api-key-input"
+		);
+		if (!(apiKeyInput instanceof InputRenderable)) {
+			throw new Error("The OpenAI Provider API-key input did not render.");
+		}
+		await act(() => {
+			for (const character of fakeSecret) {
+				apiKeyInput.value += character;
+				apiKeyInput.onContentChange?.({});
+			}
+		});
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
+		expect(await selected.promise).toEqual({
+			apiKey: fakeSecret,
+			providerId: "openai",
+		});
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
+test("OpenAI browser sign-in uses the explicit host OAuth interaction", async () => {
+	const started = Promise.withResolvers<AbortSignal | undefined>();
+	const controller = fromPartial<InteractiveProviderController>({
+		connectOpenAIOAuth: async (options?: OpenAIBrowserLoginOptions) => {
+			started.resolve(options?.signal);
+			return [];
+		},
+		getConnectableProviders: () => providerOptions,
+	});
+	const { setup } = await renderConnectDialog(controller);
+
+	try {
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 4);
+		expect(await started.promise).toBeDefined();
+		expect(setup.captureCharFrame()).not.toContain("Paste OpenAI API key");
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
 
 test("Escape closes only the top Provider connect dialog and leaves the underlying dialog open", async () => {
 	const controller = fromPartial<InteractiveProviderController>({

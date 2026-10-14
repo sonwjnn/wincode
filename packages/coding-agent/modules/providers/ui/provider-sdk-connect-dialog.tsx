@@ -1,3 +1,4 @@
+import type { OpenAIBrowserLoginOptions } from "@wincode/ai/sdk/providers/openai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionApiKeyDialogContent } from "@/modules/connections/ui/connection-api-key-dialog";
 import { createPluginTextInputRequester } from "@/modules/plugins/ui/request-plugin-text-input";
@@ -30,6 +31,41 @@ type ProviderPickerProps = Readonly<{
 	providers: readonly InteractiveProviderOption[];
 }>;
 
+type OpenAIOAuthStatus = Parameters<
+	NonNullable<OpenAIBrowserLoginOptions["onStatus"]>
+>[0];
+
+const OpenAIOAuthProgress = ({
+	error,
+	status,
+}: {
+	error: string | undefined;
+	status: OpenAIOAuthStatus | undefined;
+}) => {
+	const { colors } = useTheme();
+	useDialogEscape();
+	let statusMessage: string;
+	switch (status) {
+		case "opening-browser":
+			statusMessage = "Opening browser for OpenAI sign-in…";
+			break;
+		case "waiting-for-callback":
+			statusMessage = "Waiting for the OpenAI sign-in callback…";
+			break;
+		case "exchanging-token":
+			statusMessage = "Completing OpenAI sign-in…";
+			break;
+		default:
+			statusMessage = "Preparing OpenAI browser sign-in…";
+	}
+	return (
+		<box flexDirection="column" gap={1}>
+			<text fg={colors.textMuted}>{statusMessage}</text>
+			{error === undefined ? null : <text fg={colors.error}>{error}</text>}
+		</box>
+	);
+};
+
 const ProviderSdkProviderPicker = ({
 	connectingProviderId,
 	error,
@@ -42,13 +78,13 @@ const ProviderSdkProviderPicker = ({
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={colors.textMuted}>
-				Choose a Provider. Plugin connection inputs are requested by the host
-				and credentials remain in the host-owned Provider SDK store.
+				Choose a Provider. API keys are saved by the host; Plugin inputs are
+				requested by the host and credentials stay in the Provider SDK store.
 			</text>
 			{error === undefined ? null : <text fg={colors.error}>{error}</text>}
 			<SearchListDialogWrapper
 				emptyText="No Provider SDK connection interactions are registered."
-				getKey={({ providerId }) => providerId}
+				getKey={({ kind, providerId }) => `${kind}:${providerId}`}
 				getSearchText={({ displayName, providerId }) =>
 					`${displayName} ${providerId}`
 				}
@@ -70,7 +106,7 @@ const ProviderSdkProviderPicker = ({
 	);
 };
 
-/** Runs a Plugin connect interaction while the Host retains credential ownership. */
+/** Connects built-in Providers and trusted Plugins without exposing host keys to Plugins. */
 export const ProviderSdkConnectDialogContent = ({ controller }: Props) => {
 	const dialog = useDialog();
 	const { show } = useToast();
@@ -80,6 +116,9 @@ export const ProviderSdkConnectDialogContent = ({ controller }: Props) => {
 		string | undefined
 	>();
 	const [error, setError] = useState<string | undefined>();
+	const [oauthStatus, setOauthStatus] = useState<
+		OpenAIOAuthStatus | undefined
+	>();
 	const connectAbortController = useRef<AbortController | undefined>(undefined);
 	useEffect(
 		() => () => {
@@ -94,6 +133,41 @@ export const ProviderSdkConnectDialogContent = ({ controller }: Props) => {
 		[dialog]
 	);
 	const providers = controller.getConnectableProviders();
+	const connectOpenAIOAuth = useCallback(
+		async (provider: InteractiveProviderOption) => {
+			const abortController = new AbortController();
+			connectAbortController.current = abortController;
+			setError(undefined);
+			setOauthStatus(undefined);
+			setConnectingProviderId(provider.providerId);
+			try {
+				await controller.connectOpenAIOAuth({
+					onStatus: setOauthStatus,
+					signal: abortController.signal,
+				});
+				if (abortController.signal.aborted) {
+					return;
+				}
+				dialog.close();
+				show({
+					message: "OpenAI connected with browser sign-in.",
+					variant: "success",
+				});
+			} catch {
+				if (!abortController.signal.aborted) {
+					setError("OpenAI browser sign-in failed.");
+				}
+			} finally {
+				if (connectAbortController.current === abortController) {
+					connectAbortController.current = undefined;
+					if (!abortController.signal.aborted) {
+						setConnectingProviderId(undefined);
+					}
+				}
+			}
+		},
+		[controller, dialog, show]
+	);
 	const connectPluginProvider = useCallback(
 		async (provider: InteractiveProviderOption) => {
 			const abortController = new AbortController();
@@ -161,9 +235,46 @@ export const ProviderSdkConnectDialogContent = ({ controller }: Props) => {
 		};
 		return (
 			<ConnectionApiKeyDialogContent
+				maskInput
 				onSubmit={submit}
 				placeholder="Paste OpenRouter API key"
 				provider={openRouterSdkProvider}
+			/>
+		);
+	}
+
+	if (selectedProvider?.kind === "openai-oauth") {
+		return <OpenAIOAuthProgress error={error} status={oauthStatus} />;
+	}
+
+	if (selectedProvider?.kind === "api-key") {
+		const submit = async (
+			apiKey: string,
+			signal: AbortSignal
+		): Promise<void> => {
+			await controller.connectProviderApiKey(
+				selectedProvider.providerId,
+				apiKey,
+				{ signal }
+			);
+			if (signal.aborted) {
+				return;
+			}
+			dialog.close();
+			show({
+				message: `${selectedProvider.displayName} API key saved to the Provider SDK.`,
+				variant: "success",
+			});
+		};
+		return (
+			<ConnectionApiKeyDialogContent
+				maskInput
+				onSubmit={submit}
+				placeholder={`Paste ${selectedProvider.displayName} API key`}
+				provider={{
+					displayName: selectedProvider.displayName,
+					methods: ["api-key"],
+				}}
 			/>
 		);
 	}
@@ -176,6 +287,9 @@ export const ProviderSdkConnectDialogContent = ({ controller }: Props) => {
 				setSelectedProvider(provider);
 				if (provider.kind === "plugin") {
 					void connectPluginProvider(provider);
+				}
+				if (provider.kind === "openai-oauth") {
+					void connectOpenAIOAuth(provider);
 				}
 			}}
 			providers={providers}

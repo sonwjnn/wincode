@@ -17,6 +17,7 @@ import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
 import { getFileMentionOptions } from "@/modules/file-mentions";
 import { loadPlugins } from "@/modules/plugins/loader";
+import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
 import { createConfigStore } from "@/shared/config/config-store";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
@@ -72,6 +73,11 @@ const pluginRuntime = await loadPlugins({
 		workspace: testDirectory,
 	},
 });
+setInteractiveRuntimeContext({
+	args: [],
+	cwd: testDirectory,
+	runtimeFactory: defaultRuntimeFactory,
+});
 afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();
@@ -110,6 +116,7 @@ test("selecting a Plugin Command forwards arguments and displays its result", as
 		args: [],
 		cwd: testDirectory,
 		pluginRuntime,
+		runtimeFactory: defaultRuntimeFactory,
 	});
 	let setup: TestRendererSetup | undefined;
 	try {
@@ -141,7 +148,11 @@ test("selecting a Plugin Command forwards arguments and displays its result", as
 		);
 		expect(activeSetup.captureCharFrame()).toContain("Opened WCO-12");
 	} finally {
-		setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
+		setInteractiveRuntimeContext({
+			args: [],
+			cwd: testDirectory,
+			runtimeFactory: defaultRuntimeFactory,
+		});
 		if (setup) {
 			writeE2EFrame(setup);
 			setup.renderer.destroy();

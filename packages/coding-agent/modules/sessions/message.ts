@@ -298,14 +298,6 @@ export const sessionMessageMetadataSchema = z
 		}
 		const model = metadata.model;
 		const catalogModel = catalogSelectionForProviderModel(model);
-		if (catalogModel === null && metadata.thinkingLevel !== undefined) {
-			context.addIssue({
-				code: "custom",
-				message:
-					"Thinking level is unavailable for the selected Provider Model",
-			});
-			return;
-		}
 		if (
 			catalogModel !== null &&
 			metadata.thinkingLevel !== undefined &&

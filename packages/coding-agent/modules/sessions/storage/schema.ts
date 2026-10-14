@@ -1,6 +1,6 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/models";
 import {
 	index,
 	integer,
@@ -353,7 +353,7 @@ export const sessionUsageEntry = sqliteTable(
 			}),
 		kind: text("kind").$type<SessionUsageEntry["kind"]>().notNull(),
 		modelJson: text("model_json", { mode: "json" })
-			.$type<SerializedJson<ChatModelSelection>>()
+			.$type<SerializedJson<SessionUsageEntry["model"]>>()
 			.notNull(),
 		usageJson: text("usage_json", { mode: "json" })
 			.$type<SerializedJson<ModelUsage>>()

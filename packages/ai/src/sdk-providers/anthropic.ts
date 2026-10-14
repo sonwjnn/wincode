@@ -1,5 +1,6 @@
 import type { JsonObject } from "type-fest";
 import { apiKeyCredentialSchema } from "../connections/credential-schemas.ts";
+import { anthropicModelMetadataById } from "../generated/anthropic-model-metadata.generated.ts";
 import {
 	httpErrorFromResponse,
 	isCacheControlRejection,
@@ -13,10 +14,13 @@ import type {
 	ModelStepRequest,
 	ModelTool,
 } from "../model-client/types.ts";
+import type { AnthropicProviderOptions as AnthropicModelProtocolOptions } from "../model-provider-options.ts";
 import type { ModelTarget } from "../model-target.ts";
 import type { SupportedChatModel } from "../models.ts";
+import { withProviderModelMetadata } from "../provider-model-metadata.ts";
 import {
 	type ChatContentPart,
+	maxOutputTokensForRequest,
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
@@ -44,13 +48,24 @@ const DEFAULT_MODELS = [
 	"claude-haiku-4-5-20251001",
 	"claude-sonnet-4-5",
 	"claude-sonnet-4-5-20250929",
-].map(
-	(modelId): ProviderModel => ({
-		modelId,
-		protocolId: ANTHROPIC_PROTOCOL_ID,
-		providerId: ANTHROPIC_PROVIDER_ID,
-	})
-);
+].map((modelId): ProviderModel => {
+	const model = withProviderModelMetadata(
+		{
+			modelId,
+			protocolId: ANTHROPIC_PROTOCOL_ID,
+			providerId: ANTHROPIC_PROVIDER_ID,
+		},
+		anthropicModelMetadataById[modelId]
+	);
+	return model.reasoningEfforts === undefined
+		? model
+		: {
+				...model,
+				reasoningEfforts: model.reasoningEfforts.filter(
+					(effort) => effort !== "minimal"
+				),
+			};
+});
 
 type AnthropicAuthorization = Readonly<{ apiKey: string }>;
 
@@ -106,6 +121,12 @@ const modelRequestFor = (
 	context: ProviderChatContext,
 	authorization: AnthropicAuthorization
 ): ModelStepRequest => {
+	const reasoningEffort =
+		!request.cacheWarming &&
+		request.reasoningEffort !== undefined &&
+		context.model.reasoningEfforts?.includes(request.reasoningEffort)
+			? request.reasoningEffort
+			: undefined;
 	const target: ModelTarget = {
 		authorization: { apiKey: authorization.apiKey, kind: "api-key" },
 		...(request.cacheRetention === undefined
@@ -121,6 +142,7 @@ const modelRequestFor = (
 		providerId: ANTHROPIC_PROVIDER_ID,
 	};
 	return {
+		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
 		messages: request.messages.map(promptMessage),
 		signal: context.signal,
 		system: request.system,
@@ -189,6 +211,21 @@ type AnthropicWireRequest = Readonly<{
 	hasCacheControls: boolean;
 }>;
 
+const anthropicProviderOptionsFor = (
+	reasoningEffort: ModelStepRequest["reasoningEffort"]
+): AnthropicModelProtocolOptions["anthropic"] | undefined => {
+	if (reasoningEffort === undefined) {
+		return;
+	}
+	if (reasoningEffort === "none") {
+		return { thinking: { type: "disabled" } };
+	}
+	if (reasoningEffort === "minimal") {
+		return;
+	}
+	return { effort: reasoningEffort };
+};
+
 const wireRequestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
@@ -197,11 +234,27 @@ const wireRequestFor = (
 	cacheRetention: ProviderChatRequest["cacheRetention"]
 ): AnthropicWireRequest => {
 	const requestWithCache = { ...request, cacheRetention };
+	const modelRequest = modelRequestFor(
+		requestWithCache,
+		context,
+		authorization
+	);
+	const requestedMaxOutputTokens = maxOutputTokensForRequest(
+		request.maxOutputTokens,
+		context.model
+	);
+	const maxOutputTokens = request.cacheWarming
+		? 1
+		: (requestedMaxOutputTokens ??
+			maxOutputTokensForRequest(
+				context.model.limits?.maxOutputTokens,
+				context.model
+			));
 	const body = anthropicStrategy.serialize({
-		maxOutputTokens: context.model.limits?.maxOutputTokens,
+		maxOutputTokens,
 		model,
-		providerOptions: undefined,
-		request: modelRequestFor(requestWithCache, context, authorization),
+		providerOptions: anthropicProviderOptionsFor(modelRequest.reasoningEffort),
+		request: modelRequest,
 	});
 	return {
 		body: JSON.stringify(body),
@@ -282,6 +335,7 @@ const streamWithCacheFallback = async function* (
 		}
 	} catch (error) {
 		if (
+			request.cacheWarming ||
 			outputStarted ||
 			!cachedRequest.hasCacheControls ||
 			!isCacheControlRejection(error) ||

@@ -34,7 +34,6 @@ import type {
 } from "../agent-session/types";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
-import { defaultRuntimeFactory } from "../hooks/runtime-turn";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
@@ -75,18 +74,20 @@ const isInteractiveSessionProviderCollection = (
 	"preparePluginProviderRegistrations" in providers &&
 	typeof providers.preparePluginProviderRegistrations === "function";
 
+/** Provider SDK Hosts have no Catalog or Connections dispatch fallback. */
 const createHostAgentRuntime = (
 	providerCollection: ProviderCollection
-): AgentRuntime => {
-	const providerRuntime = createAgentRuntime({ providerCollection });
-	const catalogRuntime = defaultRuntimeFactory();
-	return {
-		run(turn, options) {
-			return "authorization" in turn.model
-				? catalogRuntime.run(turn, options)
-				: providerRuntime.run(turn, options);
-		},
-	};
+): AgentRuntime => createAgentRuntime({ providerCollection });
+
+const requireProviderSdkCollection = (
+	providerCollection: ProviderCollection | undefined
+): ProviderCollection => {
+	if (providerCollection === undefined) {
+		throw new Error(
+			"Provider SDK Session Host could not be initialized because its ProviderCollection is unavailable; Catalog dispatch is disabled."
+		);
+	}
+	return providerCollection;
 };
 
 const waitForClosingHost = async (
@@ -419,12 +420,6 @@ export const createSessionHost = async ({
 	};
 	try {
 		const opened = await openSession(capabilities, sessionId);
-		cacheWarming = createSessionCacheWarming({
-			getPricingTable: () => capabilities.getModelPricingTable?.() ?? {},
-			initialUsageEntries: opened.usageEntries,
-			sessionId,
-			store: capabilities.getStore(),
-		});
 		const sessionWorkManager = capabilities.getSessionHostManager();
 		const withAsyncSessionWork = async <Result>(
 			action: () => Promise<Result>,
@@ -441,13 +436,18 @@ export const createSessionHost = async ({
 			}
 		};
 		const runtime = capabilities.getRuntime?.();
+		const modelExecutionMode =
+			runtime === undefined ? "provider-sdk" : "legacy-catalog";
 		providerCollection =
-			runtime === undefined
+			modelExecutionMode === "provider-sdk"
 				? await capabilities.createProviderCollection?.(
 						capabilities.getPluginRuntime?.(),
 						sessionId
 					)
 				: undefined;
+		const sessionRuntime =
+			runtime ??
+			createHostAgentRuntime(requireProviderSdkCollection(providerCollection));
 		if (providerCollection !== undefined) {
 			providerController = createInteractiveProviderController(
 				providerCollection,
@@ -457,8 +457,11 @@ export const createSessionHost = async ({
 								providerCollection.getPluginProviderComposition,
 							getPluginProviderRegistrations:
 								providerCollection.getPluginProviderRegistrations,
+							loginOpenAIOAuth: providerCollection.loginOpenAIOAuth,
 							getDiscoverableProviderIds:
 								providerCollection.getDiscoverableProviderIds,
+							getCompositionRevision: providerCollection.getCompositionRevision,
+							subscribeComposition: providerCollection.subscribeComposition,
 							supportsModelDiscovery: providerCollection.supportsModelDiscovery,
 							withSessionWork: (action) =>
 								withAsyncSessionWork(action, (reason) => {
@@ -469,19 +472,23 @@ export const createSessionHost = async ({
 			);
 			await providerController.restoreModels();
 		}
+		cacheWarming = createSessionCacheWarming({
+			getPricingTable: () => capabilities.getModelPricingTable?.() ?? {},
+			initialUsageEntries: opened.usageEntries,
+			...(providerCollection === undefined ? {} : { providerCollection }),
+			sessionId,
+			store: capabilities.getStore(),
+		});
 		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
 			getQueuedSubmissionId: ({ id }) => id,
-			runtime:
-				runtime ??
-				(providerCollection === undefined
-					? defaultRuntimeFactory()
-					: createHostAgentRuntime(providerCollection)),
+			runtime: sessionRuntime,
 		});
 		const ports: AgentSessionPorts = withEventChannel(
 			createAgentSessionAdapters({
 				cacheWarming,
 				capabilities,
 				googleCachedContentResourceManager,
+				modelExecutionMode,
 				...(providerCollection === undefined ? {} : { providerCollection }),
 				isShutDown: () => isShutDown,
 				sessionId,
@@ -600,6 +607,7 @@ export const createSessionHost = async ({
 
 		return {
 			agentSession: guardedAgentSession,
+			...(providerCollection === undefined ? {} : { providerCollection }),
 			...(providerController === undefined ? {} : { providerController }),
 			...(interactiveProviderCollection === undefined
 				? {}

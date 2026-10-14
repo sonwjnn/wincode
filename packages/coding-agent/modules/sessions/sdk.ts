@@ -2,15 +2,25 @@ import * as os from "node:os";
 import type { AgentId, SubmissionId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { omitUndefined } from "@wincode/utils";
+import {
+	resolveEffectiveAgentSelection,
+	withAvailableAgentModelOverride,
+} from "@/modules/agents/agent-call";
 import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,
+	canDeferAgentModelAvailability,
 } from "@/modules/agents/registry";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import {
+	catalogSelectionForProviderModel,
+	isAvailableProviderModelSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import {
 	type SessionSdk,
 	type SessionSdkCapabilityCeiling,
@@ -114,39 +124,83 @@ const optionsForSessionRuntime = (
 	};
 };
 
-const resolvedAgentFor = (
-	registry: AgentRegistry | null,
-	agent: AgentId
-): SessionSendInput["resolvedAgent"] => {
-	const candidate = registry?.agents.find(
-		(item) => item.id === agent && item.isAvailable
-	);
-	if (registry !== null && candidate === undefined) {
-		throw new Error(`Agent is unavailable: ${agent}`);
-	}
-	return candidate === undefined
-		? undefined
-		: {
-				id: candidate.id,
-				instructions: candidate.instructions,
-				role: candidate.role,
-				visibleCodingTools: [...candidate.visibleCodingTools],
-			};
-};
+const isAgentModelAvailabilityDeferred = (
+	agent: AgentRegistry["agents"][number]
+): boolean => canDeferAgentModelAvailability(agent);
 
-const promptInputFor = (
+const promptInputFor = async (
 	input: SessionSdkPrompt,
 	defaults: SessionSdkSelectionDefaults,
-	registry: AgentRegistry | null
-): SessionSendInput => {
+	registry: AgentRegistry | null,
+	host: SessionHost
+): Promise<SessionSendInput> => {
 	const selection = resolveSessionSdkPromptSelection(input, defaults);
+	const availableProviderModels: readonly ProviderModel[] | undefined =
+		host.providerCollection === undefined
+			? undefined
+			: await host.providerCollection.getAvailable();
+	const pinnedAgentModel = registry?.agents.find(
+		(candidate) => candidate.id === selection.agent
+	)?.model;
+	const hasExplicitModelReplacement =
+		input.model !== undefined ||
+		(pinnedAgentModel !== undefined &&
+			(pinnedAgentModel.providerId !== selection.model.providerId ||
+				pinnedAgentModel.modelId !== selection.model.modelId));
+	const usesPinnedAgentModel =
+		pinnedAgentModel !== undefined &&
+		pinnedAgentModel.providerId === selection.model.providerId &&
+		pinnedAgentModel.modelId === selection.model.modelId;
+	if (
+		usesPinnedAgentModel &&
+		catalogSelectionForProviderModel(pinnedAgentModel) === null &&
+		availableProviderModels !== undefined &&
+		!isAvailableProviderModelSelection(
+			pinnedAgentModel,
+			availableProviderModels
+		)
+	) {
+		throw new Error(
+			`Provider Model ${pinnedAgentModel.providerId}/${pinnedAgentModel.modelId} is unavailable in this Session Host.`
+		);
+	}
+	const explicitSelectionOverride = hasExplicitModelReplacement
+		? { model: selection.model }
+		: undefined;
+	const selectionOverride = withAvailableAgentModelOverride(
+		registry,
+		selection.agent,
+		explicitSelectionOverride,
+		availableProviderModels
+	);
+	const effective = resolveEffectiveAgentSelection(
+		registry,
+		selection.agent,
+		selection.model,
+		selection,
+		false,
+		selectionOverride,
+		{ allowModelAvailabilityDeferral: availableProviderModels !== undefined }
+	);
+	if (effective.unavailableReason !== undefined) {
+		throw new Error(effective.unavailableReason);
+	}
+	if (
+		availableProviderModels !== undefined &&
+		!isAvailableProviderModelSelection(effective.model, availableProviderModels)
+	) {
+		throw new Error(
+			`Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable in this Session Host.`
+		);
+	}
 	return {
-		agent: selection.agent,
+		agent: effective.agent,
 		composition: { files: [], text: input.text },
-		model: selection.model,
-		resolvedAgent: resolvedAgentFor(registry, selection.agent),
+		model: effective.model,
+		resolvedAgent: effective.resolvedAgent,
+		...omitUndefined({ selectionOverride }),
 		sessionModel: defaults.model,
-		...omitUndefined({ thinkingLevel: selection.thinkingLevel }),
+		...omitUndefined({ thinkingLevel: effective.thinkingLevel }),
 		...omitUndefined({ sessionThinkingLevel: selection.thinkingLevel }),
 		...(input.submissionId === undefined
 			? {}
@@ -174,7 +228,7 @@ const handleFor = (
 			return { reason: "Session handle is disposed.", rejected: true };
 		}
 		return host.agentSession.prompt(
-			promptInputFor(input, defaults, capabilities.getRegistry())
+			await promptInputFor(input, defaults, capabilities.getRegistry(), host)
 		);
 	};
 	let deliveries = deliveryTransactions.get(host);
@@ -297,14 +351,15 @@ const handleFor = (
 					rejected: true as const,
 				};
 			}
-			return promptAndWaitForDurableDelivery(submissionId, () =>
-				host.agentSession.prompt({
-					...promptInputFor(
+			return promptAndWaitForDurableDelivery(submissionId, async () =>
+				host.agentSession.prompt(
+					await promptInputFor(
 						{ text: input.text, submissionId },
 						defaults,
-						capabilities.getRegistry()
-					),
-				})
+						capabilities.getRegistry(),
+						host
+					)
+				)
 			);
 		})();
 		deliveries.set(input.idempotencyKey, pending);
@@ -562,29 +617,28 @@ const createSessionSdkInternal = async (
 			)
 		);
 		return Object.freeze(
-			(catalogRegistry?.agents ?? []).map(
-				({
-					description,
-					id,
-					isAvailable,
-					model,
-					thinkingLevel,
-					role,
-					source,
-					requiredTools,
-					unavailableReason,
-				}) => ({
-					description,
-					id,
-					isAvailable,
-					...(model === undefined ? {} : { model }),
-					...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-					role,
-					...(source === undefined ? {} : { source: source.scope }),
-					...(requiredTools === undefined ? {} : { requiredTools }),
-					...(unavailableReason === undefined ? {} : { unavailableReason }),
-				})
-			)
+			(catalogRegistry?.agents ?? []).map((agent) => {
+				const sdkModelAvailabilityDeferred =
+					isAgentModelAvailabilityDeferred(agent);
+				return {
+					description: agent.description,
+					id: agent.id,
+					isAvailable: agent.isAvailable || sdkModelAvailabilityDeferred,
+					...(agent.model === undefined ? {} : { model: agent.model }),
+					...(agent.thinkingLevel === undefined
+						? {}
+						: { thinkingLevel: agent.thinkingLevel }),
+					role: agent.role,
+					...(agent.source === undefined ? {} : { source: agent.source.scope }),
+					...(agent.requiredTools === undefined
+						? {}
+						: { requiredTools: agent.requiredTools }),
+					...(agent.unavailableReason === undefined ||
+					sdkModelAvailabilityDeferred
+						? {}
+						: { unavailableReason: agent.unavailableReason }),
+				};
+			})
 		);
 	};
 	const sdkApi: SessionSdk = Object.freeze({

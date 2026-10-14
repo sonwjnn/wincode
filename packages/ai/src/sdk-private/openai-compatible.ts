@@ -8,6 +8,7 @@ import type {
 	ModelStreamPart,
 } from "../model-client/types";
 import {
+	maxOutputTokensForRequest,
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
@@ -143,13 +144,23 @@ const streamEvents = function* (
 const requestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext
-) =>
-	openAICompatibleChatProtocol.serialize({
+) => {
+	const requestedMaxOutputTokens = maxOutputTokensForRequest(
+		request.maxOutputTokens,
+		context.model
+	);
+	return openAICompatibleChatProtocol.serialize({
+		maxOutputTokens: request.cacheWarming ? 1 : requestedMaxOutputTokens,
 		messages: promptMessages(request.messages),
 		modelId: context.model.modelId,
+		...(request.reasoningEffort !== undefined &&
+		context.model.reasoningEfforts?.includes(request.reasoningEffort)
+			? { reasoningEffort: request.reasoningEffort }
+			: {}),
 		system: request.system,
 		tools: request.tools,
 	});
+};
 
 const cancelResponseBody = async (
 	response: OpenAICompatibleFetchResponse

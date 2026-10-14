@@ -47,6 +47,28 @@ const createSubmission = ({
 		settleCompaction,
 	});
 
+test("skips threshold compaction when the model context limit is unknown", async () => {
+	const runCompaction = mock(async () =>
+		fromPartial<CompactSessionResult>({ activeMessages: [], entry: {} })
+	);
+	const result = await prepareCompactionBeforeSubmit({
+		compaction: fromPartial<SessionCompactionModule>({
+			needsCompaction: mock(() => true),
+		}),
+		getActiveMessages: () => [message("u1")],
+		model,
+		runCompaction,
+		settings: fromPartial<ResolvedCompactionSettings>({
+			autoAvailable: false,
+			thresholdTokens: null,
+		}),
+		settleCompaction: async () => null,
+	});
+
+	expect(result).toEqual({ ok: true });
+	expect(runCompaction).not.toHaveBeenCalled();
+});
+
 test("keeps a submission's threshold when another compaction owns the swap", async () => {
 	const compactionCalls: string[] = [];
 	const settled = mock(async () => null);

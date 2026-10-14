@@ -134,3 +134,26 @@ export const createProviderSdkModelStore = (
 		},
 	});
 };
+
+export type ProviderSdkStores = Readonly<{
+	credentialStore: CredentialStore;
+	modelStore: ModelStore;
+}>;
+
+const providerSdkStoresByUserDataDir = new Map<string, ProviderSdkStores>();
+
+/** Shares the app-owned Provider SDK stores across separate Host compositions. */
+export const getProviderSdkStores = (
+	options: Pick<ProviderSdkStoreOptions, "userDataDir"> = {}
+): ProviderSdkStores => {
+	const userDataDir = options.userDataDir ?? resolveUserDataDir();
+	let stores = providerSdkStoresByUserDataDir.get(userDataDir);
+	if (stores === undefined) {
+		stores = Object.freeze({
+			credentialStore: createProviderSdkCredentialStore({ userDataDir }),
+			modelStore: createProviderSdkModelStore({ userDataDir }),
+		});
+		providerSdkStoresByUserDataDir.set(userDataDir, stores);
+	}
+	return stores;
+};

@@ -7,6 +7,7 @@ import type {
 	ModelStepRequest,
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import {
 	type AgentRegistry,
 	buildAgentRegistry,
@@ -24,11 +25,15 @@ import type {
 } from "../modules/application/modes/types";
 import { createApplicationPluginComposition } from "../modules/application/plugin-composition";
 import { createSessionHost } from "../modules/sessions/host/session-host";
-import { openSessionServices } from "../modules/sessions/host/session-services";
+import {
+	openSessionServices,
+	type SessionServicesSources,
+} from "../modules/sessions/host/session-services";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
+	createFakeProviderCollection,
 	type FakeModelStepScript,
 } from "./support/e2e-fake-runtime";
 
@@ -73,6 +78,20 @@ const configuredReviewRegistry = buildConfiguredAgentRegistry({
 		role: "primary",
 	},
 });
+const sdkOneShotProviderModel: ProviderModel = {
+	capabilities: ["reasoning", "text", "tools"],
+	modelId: "one-shot-model-v2",
+	providerId: "fake-one-shot",
+	protocolId: "fake-e2e-model-client",
+	reasoningEfforts: ["high"],
+};
+const sdkPinnedOneShotRegistry = buildConfiguredAgentRegistry({
+	review: {
+		description: "Review with an unavailable SDK Model pin.",
+		model: "fake-one-shot/old-model-v1",
+		role: "primary",
+	},
+});
 
 const connections = {
 	authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
@@ -89,7 +108,10 @@ const connections = {
 };
 
 const composeServicesDetailedFor =
-	(agentRegistry: AgentRegistry) =>
+	(
+		agentRegistry: AgentRegistry,
+		createProviderCollection?: SessionServicesSources["createProviderCollection"]
+	) =>
 	async ({
 		configRuntime,
 		cwd,
@@ -113,7 +135,9 @@ const composeServicesDetailedFor =
 			sources: {
 				connections: () => connections,
 				registry: () => agentRegistry,
-				runtimeFactory: () => fakeRuntime,
+				...(createProviderCollection === undefined
+					? { runtimeFactory: () => fakeRuntime }
+					: { createProviderCollection }),
 				turnToolResolver: () => composition.turnToolResolver,
 				...(configRuntime === undefined
 					? {}
@@ -736,6 +760,111 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 		}
 	} finally {
 		await fs.rm(disconnectedWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("one-shot replaces unavailable SDK Agent pins only with exact Host models", async () => {
+	const oneShotWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-one-shot-sdk-model-")
+	);
+	const sdkRecorder = createFakeModelClientRecorder();
+	let providerCollectionCreations = 0;
+	const composeSdkOneShot = composeServicesDetailedFor(
+		sdkPinnedOneShotRegistry,
+		() => {
+			providerCollectionCreations += 1;
+			return createFakeProviderCollection(sdkRecorder, sdkOneShotProviderModel);
+		}
+	);
+	try {
+		const stdout = writer();
+		const stderr = writer();
+		const oneShotContext = context(
+			"print",
+			"use the active SDK Model",
+			stdout.writer,
+			stderr.writer,
+			undefined,
+			undefined,
+			true,
+			{
+				agent: "review",
+				model: "fake-one-shot/one-shot-model-v2",
+				thinkingLevel: "high",
+			},
+			oneShotWorkspace
+		);
+		const exitCode = await runPrintMode(oneShotContext, {
+			composeServices: composeSdkOneShot,
+		});
+		expect(providerCollectionCreations).toBe(1);
+		expect(stderr.text).toBe("");
+		expect(exitCode).toBe(0);
+		expect(stdout.text).toBe("E2E chat response");
+		expect(stderr.text).toBe("");
+		expect(
+			sdkRecorder.requests.filter(({ kind }) => kind === "chat")
+		).toHaveLength(1);
+		const verification = await composeSdkOneShot({
+			cwd: oneShotWorkspace,
+			workspace: oneShotWorkspace,
+		});
+		try {
+			const sessions = await verification.services.store.listSessions();
+			expect(sessions).toHaveLength(1);
+			expect(String(sessions[0]?.model?.modelId)).toBe("one-shot-model-v2");
+			expect(sessions[0]?.model?.providerId).toBe("fake-one-shot");
+			expect(sessions[0]?.thinkingLevel).toBe("high");
+		} finally {
+			await verification.services.shutdown();
+		}
+	} finally {
+		await fs.rm(oneShotWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("one-shot fails closed for an SDK Model the Host does not provide", async () => {
+	const unavailableWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-one-shot-sdk-unavailable-")
+	);
+	const sdkRecorder = createFakeModelClientRecorder();
+	const composeSdkOneShot = composeServicesDetailedFor(registry, () =>
+		createFakeProviderCollection(sdkRecorder, sdkOneShotProviderModel)
+	);
+	try {
+		const stdout = writer();
+		const stderr = writer();
+		const exitCode = await runPrintMode(
+			context(
+				"print",
+				"request an unavailable SDK Model",
+				stdout.writer,
+				stderr.writer,
+				undefined,
+				undefined,
+				true,
+				{ model: "fake-one-shot/missing-model-v1" },
+				unavailableWorkspace
+			),
+			{ composeServices: composeSdkOneShot }
+		);
+		expect(exitCode).toBe(1);
+		expect(stdout.text).toBe("");
+		expect(stderr.text).toContain("unavailable in this One-Shot Host");
+		expect(
+			sdkRecorder.requests.filter(({ kind }) => kind === "chat")
+		).toHaveLength(0);
+		const verification = await composeSdkOneShot({
+			cwd: unavailableWorkspace,
+			workspace: unavailableWorkspace,
+		});
+		try {
+			expect(await verification.services.store.listSessions()).toHaveLength(0);
+		} finally {
+			await verification.services.shutdown();
+		}
+	} finally {
+		await fs.rm(unavailableWorkspace, { force: true, recursive: true });
 	}
 });
 

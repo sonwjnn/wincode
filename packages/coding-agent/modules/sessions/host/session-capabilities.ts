@@ -102,6 +102,7 @@ export type SessionCapabilitiesOptions = Readonly<{
 	 * another Session still uses.
 	 */
 	plugin: SessionPluginRuntime;
+	/** Explicit temporary legacy Catalog runtime for modes not migrated through #208/#209. */
 	runtimeFactory?: () => AgentRuntime;
 	sessionHostManager?: SessionHostManager;
 	store?: SessionStore;
@@ -275,14 +276,14 @@ export const createSessionCapabilities = async ({
 			getCapabilityCeiling: () => capabilityCeiling,
 			getModelPricingTable: pricing,
 			getCompactionModule: () => compaction,
-			getCompactionSettings: (model) =>
+			getCompactionSettings: (model, providerModel) =>
 				createCompactionSettingsOperations({
 					// The store follows the configuration a capability reads, so a
 					// Resource Reload that swaps it lands here too.
 					configStore: providedGetConfig().configStore,
 					pricing: pricing(),
 					workspace,
-				}).getCompactionSettings(model),
+				}).getCompactionSettings(model, providerModel),
 			getConfig: readConfigRuntime,
 			getConnections: readConnections,
 			getRegistry,

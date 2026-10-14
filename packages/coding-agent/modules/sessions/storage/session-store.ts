@@ -72,7 +72,7 @@ export type SessionUsageEntry = Readonly<{
 	createdAt: Date;
 	id: SessionUsageEntryId;
 	kind: "cache-warm";
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	sessionId: SessionId;
 	usage: ModelUsage;
 }>;

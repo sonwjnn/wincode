@@ -7,8 +7,6 @@ import {
 	MAX_AGENT_ID_LENGTH,
 } from "@wincode/agent-core";
 import {
-	type ChatModelSelection,
-	type ConnectionProviderId,
 	findSupportedChatModelSelection,
 	isActiveChatModel,
 	resolveAgentModelSelection,
@@ -19,6 +17,7 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
+	omitUndefined,
 	pickTruthy,
 } from "@wincode/utils";
 import type { Except } from "type-fest";
@@ -32,6 +31,11 @@ import type {
 	PluginAgentScope,
 } from "@/modules/plugins/public";
 import { isTrustedProjectRoot } from "@/modules/project-trust/project-resource-roots";
+import {
+	catalogSelectionForProviderModel,
+	type ProviderModelSelection,
+	parseProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type { SessionSdkCapabilityCeiling } from "@/modules/sessions/sdk-contract";
 import {
 	type CodingToolName,
@@ -141,7 +145,8 @@ export type RegistryAgent = AgentDefinition & {
 	readonly isConfigured: boolean;
 	readonly isAvailable: boolean;
 	readonly isSelectable: boolean;
-	readonly model?: ChatModelSelection;
+	readonly model?: ProviderModelSelection;
+	readonly modelUnavailableReason?: string;
 	readonly thinkingLevel?: ThinkingLevel;
 	readonly resourceProfile: ResourceLimitProfile;
 	readonly unavailableReason?: string;
@@ -165,22 +170,75 @@ export type AgentRegistry = {
 type ModelAvailability = {
 	readonly isAvailable: boolean;
 	readonly modelRetired: boolean;
+	readonly modelUnavailableReason?: string;
 	readonly unavailableReason?: string;
 };
 
+/** Keeps non-model restrictions distinguishable from an unavailable Agent pin. */
+export const agentUnavailableReasonWithoutModelPin = (
+	agent: Pick<RegistryAgent, "modelUnavailableReason" | "unavailableReason">
+): string | undefined => {
+	if (
+		agent.modelUnavailableReason === undefined ||
+		agent.unavailableReason === undefined
+	) {
+		return agent.unavailableReason;
+	}
+	const remainingReasons = agent.unavailableReason
+		.split("; ")
+		.filter((reason) => reason !== agent.modelUnavailableReason);
+	return remainingReasons.length === 0
+		? undefined
+		: remainingReasons.join("; ");
+};
+
+/** Model-only connectivity gaps may be checked against an SDK child Host. */
+export const canDeferAgentModelAvailability = (
+	agent: Pick<
+		RegistryAgent,
+		"model" | "modelUnavailableReason" | "unavailableReason"
+	>
+): boolean => {
+	if (
+		agent.model === undefined ||
+		agent.modelUnavailableReason === undefined ||
+		agentUnavailableReasonWithoutModelPin(agent) !== undefined
+	) {
+		return false;
+	}
+	return (
+		agent.modelUnavailableReason ===
+			`Provider Model ${agent.model.providerId}/${agent.model.modelId} requires the Provider SDK runtime` ||
+		agent.modelUnavailableReason ===
+			`Connect ${agent.model.providerId} to use this Agent`
+	);
+};
+
 const modelAvailability = (
-	model: ChatModelSelection | undefined,
-	connectedProviderIds: ReadonlySet<ConnectionProviderId> | undefined
+	model: ProviderModelSelection | undefined,
+	connectedProviderIds: ReadonlySet<string> | undefined
 ): ModelAvailability => {
 	if (isUndefined(model)) {
 		return { isAvailable: true, modelRetired: false };
 	}
-	const catalogModel = findSupportedChatModelSelection(model);
-	if (catalogModel && !isActiveChatModel(catalogModel)) {
+	const catalogModel = catalogSelectionForProviderModel(model);
+	if (catalogModel === null) {
+		const modelUnavailableReason = `Provider Model ${model.providerId}/${model.modelId} requires the Provider SDK runtime`;
+		return {
+			isAvailable: false,
+			modelRetired: false,
+			modelUnavailableReason,
+			unavailableReason: modelUnavailableReason,
+		};
+	}
+	const supportedModel = findSupportedChatModelSelection(catalogModel);
+	if (supportedModel && !isActiveChatModel(supportedModel)) {
+		const modelUnavailableReason = `Model ${model.providerId}/${model.modelId} is retired`;
 		return {
 			isAvailable: false,
 			modelRetired: true,
-			unavailableReason: `Model ${model.providerId}/${model.modelId} is retired`,
+			modelUnavailableReason,
+			unavailableReason: modelUnavailableReason,
 		};
 	}
 	if (
@@ -189,16 +247,61 @@ const modelAvailability = (
 	) {
 		return { isAvailable: true, modelRetired: false };
 	}
+	const modelUnavailableReason = `Connect ${model.providerId} to use this Agent`;
 	return {
 		isAvailable: false,
 		modelRetired: false,
-		unavailableReason: `Connect ${model.providerId} to use this Agent`,
+		modelUnavailableReason,
+		unavailableReason: modelUnavailableReason,
+	};
+};
+
+const resolveAgentModelPin = (
+	model: string | undefined,
+	thinkingLevel: ThinkingLevel | undefined
+): {
+	invalidModel: boolean;
+	invalidThinkingLevel: boolean;
+	model: ProviderModelSelection | undefined;
+} => {
+	if (isUndefined(model)) {
+		const result = resolveAgentModelSelection({ thinkingLevel });
+		return {
+			invalidModel: false,
+			invalidThinkingLevel: result.invalidThinkingLevel,
+			model: undefined,
+		};
+	}
+	const providerModel = parseProviderModelSelection(model);
+	if (providerModel === null) {
+		return {
+			invalidModel: true,
+			invalidThinkingLevel: false,
+			model: undefined,
+		};
+	}
+	const catalogModel = catalogSelectionForProviderModel(providerModel);
+	if (catalogModel === null) {
+		return {
+			invalidModel: false,
+			invalidThinkingLevel: false,
+			model: providerModel,
+		};
+	}
+	const result = resolveAgentModelSelection({
+		model: `${providerModel.providerId}/${providerModel.modelId}`,
+		thinkingLevel,
+	});
+	return {
+		invalidModel: result.invalidModel,
+		invalidThinkingLevel: result.invalidThinkingLevel,
+		model: result.model === undefined ? undefined : providerModel,
 	};
 };
 
 type AgentRegistryOptions = {
 	readonly capabilityCeiling?: SessionSdkCapabilityCeiling;
-	readonly connectedProviderIds?: ReadonlySet<ConnectionProviderId>;
+	readonly connectedProviderIds?: ReadonlySet<string>;
 	readonly pluginAgentRegistrations?: readonly PluginAgentRegistration[];
 };
 
@@ -408,11 +511,14 @@ const resolveConfiguredAgentModel = (
 	definition: z.infer<typeof completeConfiguredAgentSchema>,
 	agentId: string,
 	snapshot: ConfigSnapshot
-): { diagnostic?: AgentDiagnostic; model: ChatModelSelection | undefined } => {
-	const selection = resolveAgentModelSelection({
-		model: definition.model,
-		thinkingLevel: definition.thinking_level,
-	});
+): {
+	diagnostic?: AgentDiagnostic;
+	model: ProviderModelSelection | undefined;
+} => {
+	const selection = resolveAgentModelPin(
+		definition.model,
+		definition.thinking_level
+	);
 	if (selection.invalidModel) {
 		return {
 			diagnostic: validationDiagnostic(
@@ -420,8 +526,7 @@ const resolveConfiguredAgentModel = (
 				agentId,
 				{
 					code: "custom",
-					message:
-						"Model must be a supported Model Catalog selection in <connectionProviderId>/<modelId> form",
+					message: "Model must be a valid <providerId>/<modelId> selection",
 					path: ["model"],
 				},
 				snapshot
@@ -438,7 +543,7 @@ const resolveConfiguredAgentModel = (
 				{
 					code: "custom",
 					message:
-						'"thinking_level" requires a configured model and must be supported by its Model Catalog entry',
+						'"thinking_level" requires a configured model and must be supported by its model metadata',
 					path: ["thinking_level"],
 				},
 				snapshot
@@ -585,17 +690,20 @@ const collectConfiguredAgents = (
 };
 
 type PluginAgentSelection = Readonly<{
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	issues: readonly string[];
 }>;
 
 const resolvePluginAgentSelection = (
 	registration: PluginAgentRegistration
 ): PluginAgentSelection => {
-	const selection = resolveAgentModelSelection(registration);
+	const selection = resolveAgentModelPin(
+		registration.model,
+		registration.thinkingLevel
+	);
 	const issues = [
 		...(selection.invalidModel
-			? [`Model selection '${registration.model}' is unsupported`]
+			? [`Model selection '${registration.model}' is invalid`]
 			: []),
 		...(selection.invalidThinkingLevel
 			? ["Configured thinking level is unsupported by this model"]
@@ -746,6 +854,9 @@ const resolvePluginAgent = (
 	return {
 		...registration.agent,
 		...(selection.model === undefined ? {} : { model: selection.model }),
+		...omitUndefined({
+			modelUnavailableReason: availability.modelUnavailableReason,
+		}),
 		...(registration.thinkingLevel === undefined
 			? {}
 			: { thinkingLevel: registration.thinkingLevel }),
@@ -829,12 +940,9 @@ const resolveConfiguredSelection = (
 	patch: z.infer<typeof builtInAgentPatchSchema>
 ): {
 	invalidChoice?: InvalidBuiltInChoice;
-	model: ChatModelSelection | undefined;
+	model: ProviderModelSelection | undefined;
 } => {
-	const selection = resolveAgentModelSelection({
-		model: patch.model,
-		thinkingLevel: patch.thinking_level,
-	});
+	const selection = resolveAgentModelPin(patch.model, patch.thinking_level);
 	if (selection.invalidThinkingLevel) {
 		return { invalidChoice: "thinking_level", model: undefined };
 	}
@@ -1121,6 +1229,15 @@ export const resolveActiveAgentId = (
 ): AgentId => {
 	if (isUndefined(restoredAgentId)) {
 		return registry.defaultAgentId;
+	}
+	const restoredAgent = registry.agents.find(
+		({ id }) => id === restoredAgentId
+	);
+	if (
+		restoredAgent?.role === "subagent" ||
+		restoredAgent?.model !== undefined
+	) {
+		return restoredAgentId;
 	}
 	return registry.selectableAgents.some(
 		({ id, isAvailable }) => id === restoredAgentId && isAvailable

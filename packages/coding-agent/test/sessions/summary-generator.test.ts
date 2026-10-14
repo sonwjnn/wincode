@@ -2,9 +2,18 @@ import { expect, mock, test } from "bun:test";
 import { fromAny } from "@total-typescript/shoehorn";
 import { createModelTarget } from "@wincode/ai/model-target";
 import type { ChatModelSelection } from "@wincode/ai/models";
+import type {
+	Provider,
+	ProviderChatContext,
+	ProviderChatRequest,
+	ProviderModel,
+} from "@wincode/ai/sdk";
+import { createProviderCollection } from "@wincode/ai/sdk";
+import { createOpenAIProvider } from "@wincode/ai/sdk/providers/openai";
 import { serializeMessagesForCompaction } from "@/modules/sessions/compaction/compaction";
 import {
 	createLanguageModelSummaryGenerator,
+	createProviderSummaryGenerator,
 	type SummaryTextGenerationOptions,
 } from "@/modules/sessions/compaction/summary-generator";
 import type { SessionMessage } from "@/modules/sessions/message";
@@ -18,6 +27,154 @@ const selection: ChatModelSelection = {
 const model = createModelTarget(selection, {
 	apiKey: "test-key",
 	kind: "api-key",
+});
+
+test("summarizes with the exact invocable Provider Model and declared reasoning effort", async () => {
+	const providerModelId = "custom-reasoning-model";
+	const selection = {
+		modelId: modelId(providerModelId),
+		providerId: "fixture",
+	};
+	const providerModel: ProviderModel = {
+		modelId: providerModelId,
+		protocolId: "fixture",
+		providerId: "fixture",
+		reasoningEfforts: ["high"],
+		limits: { maxOutputTokens: 128 },
+	};
+	let receivedRequest: ProviderChatRequest | undefined;
+	let receivedProviderModel: ProviderModel | undefined;
+	const provider: Provider = {
+		id: "fixture",
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "test" }),
+		async *streamChat(
+			request: ProviderChatRequest,
+			context: ProviderChatContext
+		) {
+			receivedRequest = request;
+			receivedProviderModel = context.model;
+			yield { delta: "provider summary", type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 12, outputTokens: 4 },
+			};
+			yield { type: "finish" };
+		},
+	};
+	const collection = createProviderCollection();
+	collection.register(provider);
+	await collection.setCredential("fixture", { token: "fixture-only" });
+	const generator = createProviderSummaryGenerator(collection);
+
+	const result = await generator({
+		model: selection,
+		thinkingLevel: "high",
+		maxOutputTokens: 256,
+		serializedMessages: "history",
+	});
+
+	expect(result.text).toBe("provider summary");
+	expect(result.usage).toMatchObject({ inputTokens: 12, outputTokens: 4 });
+	expect(receivedRequest).toMatchObject({
+		maxOutputTokens: 128,
+		reasoningEffort: "high",
+	});
+	expect(receivedProviderModel).toMatchObject({
+		modelId: providerModelId,
+		providerId: "fixture",
+	});
+});
+
+test("does not infer Provider SDK reasoning support from the Catalog", async () => {
+	let receivedRequest: ProviderChatRequest | undefined;
+	const providerModel: ProviderModel = {
+		limits: { maxOutputTokens: 128 },
+		modelId: selection.modelId,
+		protocolId: "openai",
+		providerId: selection.providerId,
+	};
+	const provider: Provider = {
+		id: selection.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "test" }),
+		async *streamChat(request: ProviderChatRequest) {
+			receivedRequest = request;
+			yield { delta: "provider summary", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	};
+	const collection = createProviderCollection();
+	collection.register(provider);
+	await collection.setCredential(selection.providerId, {
+		token: "fixture-only",
+	});
+	const generator = createProviderSummaryGenerator(collection);
+
+	await generator({
+		model: selection,
+		thinkingLevel: "high",
+		serializedMessages: "history",
+	});
+
+	expect(receivedRequest).not.toHaveProperty("reasoningEffort");
+});
+
+test("an explicit OAuth summary cap fails closed before provider network I/O", async () => {
+	let requests = 0;
+	const providerModel: ProviderModel = {
+		limits: { maxOutputTokens: 128 },
+		modelId: "gpt-5.6",
+		protocolId: "openai-responses",
+		providerId: "openai",
+	};
+	const collection = createProviderCollection();
+	collection.register(
+		createOpenAIProvider({
+			fetch: async () => {
+				requests += 1;
+				return new Response();
+			},
+			models: [providerModel],
+		})
+	);
+	await collection.setCredential("openai", {
+		accessToken: "fake-openai-oauth-access-token",
+		accountId: "fake-openai-account",
+		expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+		kind: "oauth-session",
+		refreshToken: "fake-openai-oauth-refresh-token",
+		updatedAt: new Date().toISOString(),
+	});
+	const generator = createProviderSummaryGenerator(collection);
+
+	await expect(
+		generator({
+			model: { modelId: modelId("gpt-5.6"), providerId: "openai" },
+			maxOutputTokens: 80,
+			serializedMessages: "history",
+		})
+	).rejects.toThrow(
+		"Compaction is unavailable for Provider Model openai/gpt-5.6. OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or choose another Provider Model."
+	);
+	expect(requests).toBe(0);
+	await collection.close();
+});
+
+test("does not replace an unavailable Provider Model with a legacy summary default", async () => {
+	const collection = createProviderCollection();
+	const generator = createProviderSummaryGenerator(collection);
+	const missingModelSelection = {
+		modelId: modelId("gpt-5.6"),
+		providerId: "openai",
+	};
+
+	await expect(
+		generator({
+			model: missingModelSelection,
+			serializedMessages: "history",
+		})
+	).rejects.toThrow("is unavailable");
 });
 
 test("sends historical records and the shared handoff schema in one user prompt", async () => {

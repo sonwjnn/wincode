@@ -6,7 +6,20 @@ import type { ProviderModel } from "@wincode/ai/sdk";
 import {
 	createProviderSdkCredentialStore,
 	createProviderSdkModelStore,
+	getProviderSdkStores,
 } from "@/modules/providers/provider-stores";
+
+test("separate Home and Host Provider compositions share app-owned user stores", () => {
+	const userDataDir = path.join(
+		os.tmpdir(),
+		`wincode-provider-store-sharing-${crypto.randomUUID()}`
+	);
+	const homeStores = getProviderSdkStores({ userDataDir });
+	const sessionStores = getProviderSdkStores({ userDataDir });
+
+	expect(sessionStores.credentialStore).toBe(homeStores.credentialStore);
+	expect(sessionStores.modelStore).toBe(homeStores.modelStore);
+});
 
 const savedModels: readonly ProviderModel[] = [
 	{
