@@ -17,6 +17,7 @@ import {
 	createInteractiveProviderController,
 	type InteractiveProviderController,
 } from "@/modules/providers/interactive-provider-controller";
+import { pluginProviderStorageId } from "@/modules/providers/provider-stores";
 import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
@@ -152,6 +153,107 @@ test("Host Google caches stay isolated over shared user-scoped Provider stores",
 	expect(cacheCalls["second-host"].deleted).toEqual([
 		"cachedContents/second-host",
 	]);
+});
+
+test("delegated Plugin Provider access requires the selected Plugin source identity", async () => {
+	const providerId = "same-plugin-provider-id";
+	const pluginModel: ProviderModel = {
+		capabilities: ["text"],
+		modelId: "selected-provider-model",
+		providerId,
+		protocolId: "fake-plugin-source",
+	};
+	const otherPluginModel: ProviderModel = {
+		...pluginModel,
+		modelId: "unselected-provider-model",
+	};
+	const selectedSource = {
+		pluginId: "selected-provider-owner",
+		providerId,
+		sourceIdentity: "/trusted/selected-provider.ts",
+		sourcePath: "/trusted/selected-provider.ts",
+	};
+	const otherSource = {
+		pluginId: "unselected-provider-owner",
+		providerId,
+		sourceIdentity: "/trusted/unselected-provider.ts",
+		sourcePath: "/trusted/unselected-provider.ts",
+	};
+	const registrations: PluginProviderDescriptor[] = [
+		{
+			...selectedSource,
+			connect: async () => undefined,
+			createProvider: () => ({
+				id: providerId,
+				models: [pluginModel],
+				resolveAuthorization: ({ credential }) =>
+					credential === undefined ? null : { authorization: credential },
+				async *streamChat() {
+					yield { type: "finish" };
+				},
+			}),
+			displayName: "Selected Provider",
+		},
+		{
+			...otherSource,
+			connect: async () => undefined,
+			createProvider: () => ({
+				id: providerId,
+				models: [otherPluginModel],
+				resolveAuthorization: ({ credential }) =>
+					credential === undefined ? null : { authorization: credential },
+				async *streamChat() {
+					yield { type: "finish" };
+				},
+			}),
+			displayName: "Unselected Provider",
+		},
+	];
+	const pluginRuntime = fromPartial<PluginRuntime>({
+		getProviderRegistrations: () => registrations,
+	});
+	const selectedCredentialId = pluginProviderStorageId(selectedSource);
+	const unselectedCredentialId = pluginProviderStorageId(otherSource);
+	const credentialReads: string[] = [];
+	const providerCollection = await createDefaultSessionProviderCollection(
+		pluginRuntime,
+		"delegated-child-session",
+		{
+			allowedPluginProviderIds: [providerId],
+			allowedPluginProviderSources: [selectedSource],
+			credentialStore: {
+				delete: () => undefined,
+				get: (storedProviderId) => {
+					credentialReads.push(storedProviderId);
+					if (storedProviderId === selectedCredentialId) {
+						return "fake-selected-plugin-credential";
+					}
+					if (storedProviderId === unselectedCredentialId) {
+						return "fake-unselected-plugin-credential";
+					}
+					return;
+				},
+				set: () => undefined,
+			},
+			modelStore: {
+				get: () => undefined,
+				set: () => undefined,
+			},
+		}
+	);
+	try {
+		expect(
+			providerCollection.getModel(providerId, pluginModel.modelId)
+		).toEqual(pluginModel);
+		expect(
+			providerCollection.getModel(providerId, otherPluginModel.modelId)
+		).toBeUndefined();
+		await providerCollection.getAvailable();
+		expect(credentialReads).toContain(selectedCredentialId);
+		expect(credentialReads).not.toContain(unselectedCredentialId);
+	} finally {
+		await providerCollection.close();
+	}
 });
 
 test("each Host gets fresh built-in and trusted Plugin Providers over shared app stores", async () => {

@@ -14,6 +14,7 @@ import type { AgentSession, LiveSessionSnapshot } from "../agent-session/types";
 import type { SessionCompactionModule } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
 import type { TurnToolResolver } from "../hooks/runtime-turn";
+import type { SessionSdkPluginProviderSource } from "../plugin-provider-source";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
@@ -40,7 +41,9 @@ export type SessionCapabilities = Readonly<{
 	/** Creates a Host-owned ProviderCollection when this Host uses the SDK path. */
 	createProviderCollection?: (
 		pluginRuntime?: PluginRuntime,
-		sessionId?: string
+		sessionId?: string,
+		allowedPluginProviderIds?: readonly string[],
+		allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[]
 	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	/** Current pricing snapshot used only for best-effort cache-warming economics. */
 	getModelPricingTable?: () => ModelPricingTable;
@@ -124,6 +127,7 @@ export type SessionHostManager = Readonly<{
 		autoContinue?: boolean;
 		capabilities: SessionCapabilities;
 		executionMode?: ExecutionMode;
+		providerModel?: ProviderModelSelection;
 		sessionId: SessionId;
 		view?: boolean;
 	}) => Promise<SessionHost>;
@@ -135,5 +139,6 @@ export type SessionHostOptions = Readonly<{
 	autoContinue?: boolean;
 	capabilities: SessionCapabilities;
 	executionMode?: ExecutionMode;
+	providerModel?: ProviderModelSelection;
 	sessionId: SessionId;
 }>;

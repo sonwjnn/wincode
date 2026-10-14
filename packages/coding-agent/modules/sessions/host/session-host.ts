@@ -46,6 +46,7 @@ import { resolveSessionSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionUsageEntry } from "../storage/session-store";
 import { createAgentSessionAdapters } from "./agent-session-adapters";
+import { HeadlessProviderSdkRequiredError } from "./session-errors";
 import type {
 	SessionCapabilities,
 	SessionHost,
@@ -88,6 +89,34 @@ const requireProviderSdkCollection = (
 		);
 	}
 	return providerCollection;
+};
+
+const resolveSessionRuntime = (
+	capabilities: SessionCapabilities,
+	executionMode: SessionHostOptions["executionMode"]
+): AgentRuntime | undefined => {
+	const runtime = capabilities.getRuntime?.();
+	if (
+		runtime !== undefined &&
+		executionMode !== undefined &&
+		executionMode !== "interactive"
+	) {
+		throw new HeadlessProviderSdkRequiredError(executionMode);
+	}
+	return runtime;
+};
+
+const pluginProviderIdsForExecutionMode = (
+	executionMode: SessionHostOptions["executionMode"],
+	providerModel: ProviderModelSelection | undefined
+): readonly string[] | undefined => {
+	if (executionMode === "interactive") {
+		return;
+	}
+	if (providerModel === undefined) {
+		return [];
+	}
+	return [providerModel.providerId];
 };
 
 const waitForClosingHost = async (
@@ -305,8 +334,10 @@ export const createSessionHost = async ({
 	autoContinue = true,
 	capabilities,
 	executionMode,
+	providerModel,
 	sessionId,
 }: SessionHostOptions): Promise<SessionHost> => {
+	const runtime = resolveSessionRuntime(capabilities, executionMode);
 	await waitForClosingHost(sessionId);
 	const sessionWriter = await capabilities
 		.getStore()
@@ -435,14 +466,19 @@ export const createSessionHost = async ({
 				admission.release();
 			}
 		};
-		const runtime = capabilities.getRuntime?.();
 		const modelExecutionMode =
 			runtime === undefined ? "provider-sdk" : "legacy-catalog";
+		const selectedProviderModel = providerModel ?? opened.model;
+		const allowedPluginProviderIds = pluginProviderIdsForExecutionMode(
+			executionMode,
+			selectedProviderModel
+		);
 		providerCollection =
 			modelExecutionMode === "provider-sdk"
 				? await capabilities.createProviderCollection?.(
 						capabilities.getPluginRuntime?.(),
-						sessionId
+						sessionId,
+						allowedPluginProviderIds
 					)
 				: undefined;
 		const sessionRuntime =

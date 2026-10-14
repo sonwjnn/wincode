@@ -17,6 +17,7 @@ import type { ConfigRuntime } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { WorkspaceId } from "@/shared/identifiers";
 import type { TurnToolResolver } from "../hooks/runtime-turn";
+import type { SessionSdkPluginProviderSource } from "../plugin-provider-source";
 import {
 	createSessionSdkOperations,
 	type SessionSdkRuntimeOptions,
@@ -75,7 +76,9 @@ export type SessionServicesSources = Readonly<{
 	/** Creates a fresh per-Host ProviderCollection in the owning execution mode. */
 	createProviderCollection?: (
 		pluginRuntime?: PluginRuntime,
-		sessionId?: string
+		sessionId?: string,
+		allowedPluginProviderIds?: readonly string[],
+		allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[]
 	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	/** Reads the current Model Catalog pricing; the compaction settings read it. */
 	pricing?: () => ModelPricingTable;
@@ -214,6 +217,28 @@ export const openSessionServices = async ({
 			{
 				cwd,
 				getConnections,
+				getPluginProviderSources: (providerIds) => {
+					const selectedProviderIds = new Set(providerIds);
+					return assembly
+						.getPluginRuntime()
+						.getProviderRegistrations()
+						.filter((provider) => selectedProviderIds.has(provider.providerId))
+						.map(
+							({
+								pluginId,
+								providerId,
+								sourceIdentity,
+								sourcePath,
+								sourceScope,
+							}) => ({
+								pluginId,
+								providerId,
+								sourceIdentity,
+								sourcePath,
+								...(sourceScope === undefined ? {} : { sourceScope }),
+							})
+						);
+				},
 				getRegistry: () => capabilities.getRegistry(),
 				store: assembly.store,
 				...omitUndefined({

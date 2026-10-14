@@ -19,6 +19,7 @@ import { estimateCompactionTokens } from "../compaction/config";
 import { createCompactionSettingsOperations } from "../compaction/settings-operations";
 import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { resolveTurnTools, type TurnToolResolver } from "../hooks/runtime-turn";
+import type { SessionSdkPluginProviderSource } from "../plugin-provider-source";
 import { createDefaultSessionProviderCollection } from "../provider-collection";
 import type {
 	SessionSdkCapabilityCeiling,
@@ -76,7 +77,9 @@ export type SessionCapabilitiesOptions = Readonly<{
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
 	createProviderCollection?: (
 		pluginRuntime?: PluginRuntime,
-		sessionId?: string
+		sessionId?: string,
+		allowedPluginProviderIds?: readonly string[],
+		allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[]
 	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	database?: SessionDatabase;
 	databasePath?: string;
@@ -178,8 +181,20 @@ const openSessionDatabase = async ({
 export const createSessionCapabilities = async ({
 	getConnections: providedGetConnections,
 	getConfig: providedGetConfig,
-	createProviderCollection:
-		providerCollectionFactory = createDefaultSessionProviderCollection,
+	createProviderCollection: providerCollectionFactory = (
+		pluginRuntime,
+		sessionId,
+		allowedPluginProviderIds,
+		allowedPluginProviderSources
+	) =>
+		createDefaultSessionProviderCollection(pluginRuntime, sessionId, {
+			...(allowedPluginProviderIds === undefined
+				? {}
+				: { allowedPluginProviderIds }),
+			...(allowedPluginProviderSources === undefined
+				? {}
+				: { allowedPluginProviderSources }),
+		}),
 	capabilityCeiling,
 	database: providedDatabase,
 	databasePath,

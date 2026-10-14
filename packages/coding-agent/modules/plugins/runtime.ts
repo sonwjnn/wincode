@@ -36,6 +36,8 @@ export type PluginDiagnostic = Readonly<{
 	sourcePath: string;
 }>;
 
+export type PluginProviderSourceScope = "explicit" | "global" | "project";
+
 export type PluginToolDescriptor = Readonly<{
 	description: string;
 	exclusiveInBatch?: true;
@@ -70,6 +72,7 @@ export type PluginProviderDescriptor = PluginProviderRegistration &
 		pluginId: string;
 		sourceIdentity: string;
 		sourcePath: string;
+		sourceScope?: PluginProviderSourceScope;
 	}>;
 
 export type LoadedPlugin = Readonly<{

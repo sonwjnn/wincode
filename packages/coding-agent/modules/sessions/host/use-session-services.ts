@@ -92,11 +92,18 @@ export const useSessionServicesHandle = (): SessionServicesHandle => {
 						registry: () => registryRef.current,
 						sessionHostManager: () => sessionHostManager,
 						store: () => getSessionStore(),
-						createProviderCollection: (pluginRuntime, sessionId) =>
+						createProviderCollection: (
+							pluginRuntime,
+							sessionId,
+							allowedPluginProviderIds,
+							allowedPluginProviderSources
+						) =>
 							createInteractiveSessionProviderCollection({
 								pluginProviders: pluginProvidersFromRuntime(
 									pluginRuntime,
-									sessionId
+									sessionId,
+									allowedPluginProviderIds,
+									allowedPluginProviderSources
 								),
 							}),
 						turnToolResolver: () => composition.turnToolResolver,

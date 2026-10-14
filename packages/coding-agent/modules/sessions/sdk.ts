@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import * as path from "node:path";
 import type { AgentId, SubmissionId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai/models";
@@ -13,14 +14,18 @@ import {
 	applyCapabilityCeilingToAgentRegistry,
 	canDeferAgentModelAvailability,
 } from "@/modules/agents/registry";
-import { loadPlugins } from "@/modules/plugins/loader";
+import { loadPlugins, pluginSourceIdentity } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
+import {
+	isTrustedProjectPluginSource,
+	resolveProjectTrust,
+} from "@/modules/project-trust/project-trust";
 import {
 	catalogSelectionForProviderModel,
 	isAvailableProviderModelSelection,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
+import type { SessionSdkPluginProviderSource } from "./plugin-provider-source";
 import {
 	type SessionSdk,
 	type SessionSdkCapabilityCeiling,
@@ -45,6 +50,7 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "@/modules/sessions/host/types";
+import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import {
 	resolveRestoredSessionSdkSelection,
 	resolveSessionSdkPromptSelection,
@@ -76,7 +82,11 @@ export type SessionSdkRuntimeOptions = Omit<
 		cwd?: string;
 		model?: ProviderModelSelection;
 		thinkingLevel?: ThinkingLevel;
+		getPluginProviderSources?: (
+			providerIds: readonly string[]
+		) => readonly SessionSdkPluginProviderSource[];
 		pluginPaths?: readonly string[];
+		pluginProviderSources?: readonly SessionSdkPluginProviderSource[];
 		projectTrust?: "trust" | "deny";
 		workspace?: string;
 	}>;
@@ -113,7 +123,10 @@ const optionsForSessionRuntime = (
 		capabilityCeiling: _parentCapabilityCeiling,
 		configRuntime: _configRuntime,
 		configStore: _configStore,
+		getPluginProviderSources: _getPluginProviderSources,
 		model: _model,
+		pluginProviderSources: _pluginProviderSources,
+		runtimeFactory: _runtimeFactory,
 		projectTrust: _projectTrust,
 		thinkingLevel: _thinkingLevel,
 		...sharedOptions
@@ -122,6 +135,142 @@ const optionsForSessionRuntime = (
 		...sharedOptions,
 		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 	};
+};
+
+const pluginProviderIdsForSources = (
+	allowedProviderIds: readonly string[] | undefined,
+	selectedSources: readonly SessionSdkPluginProviderSource[]
+): readonly string[] => {
+	const selectedIds = new Set(
+		selectedSources.map(({ providerId }) => providerId)
+	);
+	return allowedProviderIds === undefined || allowedProviderIds.length === 0
+		? [...selectedIds]
+		: allowedProviderIds.filter((providerId) => selectedIds.has(providerId));
+};
+
+const loadSessionSdkPluginRuntime = async ({
+	configRuntime,
+	ignoreConfiguredPlugins,
+	pluginPaths,
+	selectedSources,
+	projectTrust,
+}: Readonly<{
+	configRuntime: ConfigRuntime;
+	ignoreConfiguredPlugins: boolean;
+	pluginPaths: readonly string[];
+	projectTrust: "trust" | "deny" | undefined;
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined;
+}>): Promise<PluginRuntime> => {
+	const sources = selectedSources ?? [];
+	const explicitSources = pluginPaths.map((sourcePath) => {
+		const resolvedSourcePath = path.resolve(
+			configRuntime.workspace,
+			sourcePath
+		);
+		return {
+			sourceIdentity: pluginSourceIdentity(resolvedSourcePath),
+			sourcePath: resolvedSourcePath,
+		};
+	});
+	for (const source of explicitSources) {
+		if (
+			!(await isTrustedProjectPluginSource({
+				allowUnscopedExternal: true,
+				override: projectTrust,
+				projectTrustDir: resolveUserWincodeDir(),
+				sourceIdentity: source.sourceIdentity,
+				sourcePath: source.sourcePath,
+				workspace: configRuntime.workspace,
+			}))
+		) {
+			throw new Error(
+				`Explicit Plugin source '${source.sourcePath}' is not trusted in the child Session.`
+			);
+		}
+	}
+	for (const source of sources) {
+		if (
+			source.sourcePath.startsWith("factory:") ||
+			pluginSourceIdentity(source.sourcePath) !== source.sourceIdentity
+		) {
+			throw new Error(
+				`Selected Plugin Provider '${source.providerId}' from Plugin '${source.pluginId}' has changed source identity. Re-select it in Interactive Mode.`
+			);
+		}
+		if (
+			!(await isTrustedProjectPluginSource({
+				allowUnscopedExternal: source.sourceScope !== "project",
+				override: projectTrust,
+				projectTrustDir: resolveUserWincodeDir(),
+				sourceIdentity: source.sourceIdentity,
+				sourcePath: source.sourcePath,
+				workspace: configRuntime.workspace,
+			}))
+		) {
+			throw new Error(
+				`Selected Plugin Provider '${source.providerId}' from Plugin '${source.pluginId}' is not trusted in the child Session.`
+			);
+		}
+	}
+	const runtime = await loadPlugins({
+		cliPaths: [
+			...new Set([
+				...explicitSources.map(({ sourceIdentity }) => sourceIdentity),
+				...sources.map(({ sourceIdentity }) => sourceIdentity),
+			]),
+		],
+		config: configRuntime,
+		ignoreConfiguredPlugins,
+	});
+	for (const source of sources) {
+		const sourceIsRegistered = runtime
+			.getProviderRegistrations()
+			.some(
+				(provider) =>
+					provider.providerId === source.providerId &&
+					provider.pluginId === source.pluginId &&
+					provider.sourceIdentity === source.sourceIdentity
+			);
+		if (!sourceIsRegistered) {
+			await runtime.shutdown();
+			throw new Error(
+				`Selected Plugin Provider '${source.providerId}' from Plugin '${source.pluginId}' could not be verified in the child Session. Re-select it in Interactive Mode.`
+			);
+		}
+	}
+	return runtime;
+};
+
+const createProviderCollectionFactoryForPluginSources = (
+	inheritedFactory: SessionCapabilitiesOptions["createProviderCollection"],
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined
+): SessionCapabilitiesOptions["createProviderCollection"] => {
+	if (selectedSources === undefined) {
+		return inheritedFactory;
+	}
+	if (inheritedFactory === undefined) {
+		return (
+			pluginProviderRuntime,
+			sessionId,
+			allowedPluginProviderIds,
+			allowedPluginProviderSources
+		) =>
+			createDefaultSessionProviderCollection(pluginProviderRuntime, sessionId, {
+				allowedPluginProviderSources: allowedPluginProviderSources ?? [],
+				allowedPluginProviderIds: pluginProviderIdsForSources(
+					allowedPluginProviderIds,
+					allowedPluginProviderSources ?? []
+				),
+			});
+	}
+	return (pluginProviderRuntime, sessionId, allowedPluginProviderIds) =>
+		inheritedFactory(
+			pluginProviderRuntime,
+			sessionId,
+			pluginProviderIdsForSources(allowedPluginProviderIds, selectedSources),
+			selectedSources
+		);
 };
 
 const isAgentModelAvailabilityDeferred = (
@@ -446,26 +595,40 @@ const createSessionSdkInternal = async (
 					...options.configRuntime,
 					trustedProjectRoots,
 				};
-	const pluginRuntime: PluginRuntime = await loadPlugins({
-		cliPaths: options.pluginPaths ?? [],
-		config: configRuntime,
+	const inheritedPluginProviderSources = options.pluginProviderSources;
+	const pluginRuntime = await loadSessionSdkPluginRuntime({
+		configRuntime,
 		ignoreConfiguredPlugins: shared?.ignoreConfiguredPlugins ?? false,
+		pluginPaths: options.pluginPaths ?? [],
+		projectTrust: options.projectTrust,
+		selectedSources: inheritedPluginProviderSources,
 	});
 	const {
 		agent,
 		capabilityCeiling: _capabilityCeiling,
 		configRuntime: _configRuntime,
 		configStore: _configStore,
+		createProviderCollection: inheritedProviderCollectionFactory,
 		cwd: _cwd,
+		getPluginProviderSources: _getPluginProviderSources,
 		model,
 		pluginPaths: _pluginPaths,
+		pluginProviderSources: _pluginProviderSources,
 		thinkingLevel,
 		workspace: _workspace,
 		...capabilityOptions
 	} = options;
+	const createProviderCollection =
+		createProviderCollectionFactoryForPluginSources(
+			inheritedProviderCollectionFactory,
+			inheritedPluginProviderSources
+		);
 	let sdk: SessionSdk | undefined;
 	const assembly = await createSessionCapabilities({
 		...capabilityOptions,
+		...(createProviderCollection === undefined
+			? {}
+			: { createProviderCollection }),
 		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 		getConfig: () => configRuntime,
 		plugin: { ownedByCaller: true, runtime: pluginRuntime },
@@ -586,11 +749,59 @@ const createSessionSdkInternal = async (
 			capabilityCeiling,
 			runtimeOptions.capabilityCeiling
 		);
+		const selectedProviderIds = new Set(runtimeOptions.pluginProviderIds ?? []);
+		if (runtimeOptions.sessionId !== undefined) {
+			const storedSession = await assembly.store.getSession(
+				toSessionId(runtimeOptions.sessionId)
+			);
+			if (storedSession.model !== undefined) {
+				selectedProviderIds.add(storedSession.model.providerId);
+			}
+		}
+		const requestedProviderIds = [...selectedProviderIds];
+		const availableProviderSources =
+			_getPluginProviderSources?.(requestedProviderIds) ??
+			pluginRuntime
+				.getProviderRegistrations()
+				.filter((provider) =>
+					requestedProviderIds.includes(provider.providerId)
+				)
+				.map((provider) => {
+					const inheritedSource = inheritedPluginProviderSources?.find(
+						(source) =>
+							source.pluginId === provider.pluginId &&
+							source.providerId === provider.providerId &&
+							source.sourceIdentity === provider.sourceIdentity
+					);
+					const sourceScope =
+						inheritedSource?.sourceScope ?? provider.sourceScope;
+					return {
+						pluginId: provider.pluginId,
+						providerId: provider.providerId,
+						sourceIdentity: provider.sourceIdentity,
+						sourcePath: inheritedSource?.sourcePath ?? provider.sourcePath,
+						...(sourceScope === undefined ? {} : { sourceScope }),
+					};
+				});
+		const selectedPluginProviderSources = requestedProviderIds.flatMap(
+			(providerId) => {
+				const matchingSources = availableProviderSources.filter(
+					(source) => source.providerId === providerId
+				);
+				if (matchingSources.length > 1) {
+					throw new Error(
+						`Provider ID '${providerId}' is registered by multiple Plugins; the child Session cannot select it safely.`
+					);
+				}
+				return matchingSources;
+			}
+		);
 		const runtimeSdk = await createSessionSdkInternal(
 			{
 				...optionsForSessionRuntime(options, runtimeCapabilityCeiling),
 				cwd,
 				pluginPaths: runtimeOptions.pluginPaths ?? [],
+				pluginProviderSources: selectedPluginProviderSources,
 				...(runtimeOptions.projectTrust === undefined
 					? {}
 					: { projectTrust: runtimeOptions.projectTrust }),

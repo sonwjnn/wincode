@@ -1,6 +1,15 @@
 import { afterAll, expect, mock, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fromPartial } from "@total-typescript/shoehorn";
+import { createAgentRuntime } from "@wincode/agent-core";
+import {
+	createProviderCollection,
+	type Provider,
+	ProviderError,
+	type ProviderModel,
+} from "@wincode/ai/sdk";
+import { buildAgentRegistry } from "../modules/agents/registry";
 import { runRpc } from "../modules/application/rpc/runner";
 import { SessionWriterLockFailureError } from "../modules/sessions/storage/session-writer-lock";
 import {
@@ -20,6 +29,7 @@ await Bun.write(
 const databasePath = path.join(workspace, "conversation.sqlite");
 
 import {
+	createFakeModelClient,
 	createFakeModelClientRecorder,
 	createFakeProviderCollection,
 	installFakeModelClient,
@@ -31,6 +41,7 @@ installFakeModelClient(recorder);
 import { openSessionServices } from "../modules/sessions/host/session-services";
 import { createDatabase } from "../modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "../modules/sessions/storage/drizzle-session-store";
+import type { ConfigSnapshot } from "../shared/config/config-store";
 
 afterAll(async () => {
 	mock.restore();
@@ -377,6 +388,290 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		)
 	).toBe(true);
 	expect(session.thinkingLevel).toBe("high");
+});
+
+test("RPC runs an explicitly selected Plugin Provider and emits a secret-free authentication failure", async () => {
+	const authWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-rpc-plugin-auth-")
+	);
+	const fakeSecret = "rpc-fake-plugin-credential-do-not-project";
+	const credentialReads = new Set<string>();
+	const providerModel: ProviderModel = {
+		capabilities: ["text", "tools"],
+		limits: { maxOutputTokens: 128 },
+		modelId: "auth-model-v1",
+		protocolId: "fake-plugin-auth",
+		providerId: "fake-plugin-auth",
+	};
+	const providerCollection = createProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: (providerId) => {
+				credentialReads.add(providerId);
+				return providerId === providerModel.providerId ? fakeSecret : undefined;
+			},
+			set: () => undefined,
+		},
+	});
+	const provider: Provider = {
+		id: providerModel.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => {
+			throw new ProviderError("authentication", fakeSecret);
+		},
+		async *streamChat() {
+			yield { type: "finish" };
+		},
+	};
+	providerCollection.register(provider);
+	const agentRegistry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	let legacyProviderChecks = 0;
+	const connections = {
+		authorize: async () => {
+			throw new Error("RPC must not authorize through legacy Connections.");
+		},
+		connect: async () => {
+			throw new Error("RPC must not connect through legacy Connections.");
+		},
+		listProviders: async () => {
+			legacyProviderChecks += 1;
+			return [];
+		},
+	};
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: authWorkspace,
+			databasePath: path.join(authWorkspace, "sessions.sqlite"),
+			workspace: authWorkspace,
+		},
+		sources: {
+			connections: () => connections,
+			createProviderCollection: () => providerCollection,
+			registry: () => agentRegistry,
+		},
+	});
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const initialized = Promise.withResolvers<void>();
+	const created = Promise.withResolvers<Record<string, unknown>>();
+	const failed = Promise.withResolvers<Record<string, unknown>>();
+	let failureEvent: Record<string, unknown> | undefined;
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdout = {
+		write: (text: string): undefined => {
+			stdoutFrames.push(text);
+			const frame = JSON.parse(text) as Record<string, unknown>;
+			if (frame.id === "initialize") {
+				initialized.resolve();
+			}
+			if (frame.id === "create") {
+				created.resolve(frame);
+			}
+			if (frame.method !== "session/event") {
+				return;
+			}
+			const params = frame.params as Record<string, unknown> | undefined;
+			const wrapper = params?.event as Record<string, unknown> | undefined;
+			const event = wrapper?.event as Record<string, unknown> | undefined;
+			if (event?.type === "agent-turn-failed") {
+				failureEvent = event;
+				failed.resolve(event);
+			}
+		},
+	};
+	const input = (async function* (): AsyncGenerator<Uint8Array> {
+		yield new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "plugin-auth-test" },
+				cwd: authWorkspace,
+				protocolVersion: 4,
+			})}\n`
+		);
+		await initialized.promise;
+		yield new TextEncoder().encode(
+			`${request("create", "session/create", {
+				initialSubmission: {
+					text: "Send with a fake selected Plugin Provider.",
+				},
+				selection: {
+					agentId: "build",
+					model: {
+						modelId: providerModel.modelId,
+						providerId: providerModel.providerId,
+					},
+				},
+			})}\n`
+		);
+		const createFrame = await created.promise;
+		if (createFrame.error === undefined) {
+			await Promise.race([failed.promise, Bun.sleep(2000)]);
+		}
+		yield new TextEncoder().encode(
+			`${request("shutdown", "server/shutdown", {})}\n`
+		);
+	})();
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout,
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const createFrame = frames.find((frame) => frame.id === "create");
+		expect(exitCode).toBe(0);
+		expect(createFrame?.error).toBeUndefined();
+		expect(legacyProviderChecks).toBe(0);
+		expect(failureEvent).toMatchObject({
+			type: "agent-turn-failed",
+			failure: {
+				code: "authentication",
+				details: {
+					modelId: providerModel.modelId,
+					providerId: providerModel.providerId,
+				},
+				message: "Model authentication failed.",
+			},
+		});
+		expect([...credentialReads]).toEqual([providerModel.providerId]);
+		expect(stdoutFrames.join("") + stderrFrames.join("")).not.toContain(
+			fakeSecret
+		);
+		expect(stderrFrames).toEqual([]);
+	} finally {
+		await assembly.shutdown();
+		await fs.rm(authWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("RPC maps a legacy Host to an actionable structured Provider SDK requirement", async () => {
+	const legacyWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-rpc-legacy-runtime-")
+	);
+	const legacyRecorder = createFakeModelClientRecorder();
+	let legacyRuntimeCalls = 0;
+	let legacyConnectionChecks = 0;
+	const legacyRuntime = () => {
+		legacyRuntimeCalls += 1;
+		return createAgentRuntime({
+			modelClient: createFakeModelClient(legacyRecorder),
+		});
+	};
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: legacyWorkspace,
+			databasePath: path.join(legacyWorkspace, "sessions.sqlite"),
+			workspace: legacyWorkspace,
+		},
+		sources: {
+			connections: () => ({
+				authorize: async () => {
+					throw new Error("RPC must not authorize legacy Connections.");
+				},
+				connect: async () => {
+					throw new Error("RPC must not open a legacy connection prompt.");
+				},
+				listProviders: async () => {
+					legacyConnectionChecks += 1;
+					return [];
+				},
+			}),
+			registry: () => registry,
+			runtimeFactory: legacyRuntime,
+		},
+	});
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input: [
+				new TextEncoder().encode(
+					`${request("initialize", "initialize", {
+						capabilities: {},
+						clientInfo: { name: "legacy-host-test" },
+						cwd: legacyWorkspace,
+						protocolVersion: 4,
+					})}\n`
+				),
+				new TextEncoder().encode(
+					`${request("create", "session/create", {
+						initialSubmission: { text: "Do not use legacy dispatch." },
+						selection: {
+							agentId: "build",
+							model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+						},
+					})}\n`
+				),
+				new TextEncoder().encode(
+					`${request("shutdown", "server/shutdown", {})}\n`
+				),
+			],
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const createFrame = frames.find((frame) => frame.id === "create");
+		expect(exitCode).toBe(0);
+		expect(createFrame?.error).toMatchObject({
+			data: {
+				code: "provider_sdk_required",
+				executionMode: "rpc",
+				stage: "host",
+			},
+			message: expect.stringContaining(
+				"Connect the Provider in Interactive Mode"
+			),
+		});
+		expect(legacyRuntimeCalls).toBe(1);
+		expect(legacyConnectionChecks).toBe(0);
+		expect(legacyRecorder.requests).toEqual([]);
+		expect(stderrFrames).toEqual([]);
+	} finally {
+		await assembly.shutdown();
+		await fs.rm(legacyWorkspace, { force: true, recursive: true });
+	}
 });
 
 test("RPC session/open keeps a held Session Writer as a refusal", async () => {

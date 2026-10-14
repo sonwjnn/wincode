@@ -3,7 +3,6 @@ import {
 	type AgentTurnEvent,
 	agentIdSchema,
 } from "@wincode/agent-core";
-import type { Connections } from "@wincode/ai/connections";
 import {
 	defaultChatModelSelection,
 	findSupportedChatModel,
@@ -41,7 +40,6 @@ import type {
 import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
-import { resolveChatModelAvailability } from "../chat-model-availability";
 import { openApplicationSessionServices } from "../plugin-composition";
 import { projectAgentEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
@@ -168,55 +166,11 @@ const parseModel = (
 	return parsed;
 };
 
-const validateModelAvailability = async (
-	model: ProviderModelSelection,
-	connections: Connections
-): Promise<void> => {
-	const catalogModel = catalogSelectionForProviderModel(model);
-	if (catalogModel === null) {
-		throw new InvocationError(
-			`Provider Model ${model.providerId}/${model.modelId} requires the Provider SDK runtime.`
-		);
-	}
-	const availability = await resolveChatModelAvailability(
-		catalogModel,
-		connections
-	);
-	if (availability.status === "available") {
-		return;
-	}
-	if (availability.status === "disconnected") {
-		throw new InvocationError(
-			`Connect ${model.providerId} to use Model ${model.modelId}.`
-		);
-	}
-	if (availability.status === "retired") {
-		throw new InvocationError(
-			`Model ${model.providerId}/${model.modelId} is retired.`
-		);
-	}
-	throw new InvocationError(
-		`Invalid Model selector: ${model.providerId}/${model.modelId}`
-	);
-};
-
 const candidateAgent = (
 	registry: AgentRegistry | null,
 	agent: AgentId
 ): AgentRegistry["agents"][number] | undefined =>
 	registry?.agents.find((candidate) => candidate.id === agent);
-
-const resolvedAgentFor = (
-	candidate: AgentRegistry["agents"][number] | undefined
-): SessionSendInput["resolvedAgent"] =>
-	candidate === undefined
-		? undefined
-		: {
-				id: candidate.id,
-				instructions: candidate.instructions,
-				role: candidate.role,
-				visibleCodingTools: [...candidate.visibleCodingTools],
-			};
 
 const resolveExplicitThinkingLevel = (
 	model: ProviderModelSelection,
@@ -264,6 +218,7 @@ const isSameModelIdentity = (
 const resolveOneShotModel = ({
 	agent,
 	availableProviderModels,
+	knownProviderModels,
 	candidate,
 	explicitModel,
 	registry,
@@ -271,6 +226,7 @@ const resolveOneShotModel = ({
 }: {
 	agent: AgentId;
 	availableProviderModels?: readonly ProviderModel[];
+	knownProviderModels?: readonly ProviderModel[];
 	candidate: AgentRegistry["agents"][number] | undefined;
 	explicitModel: ProviderModelSelection | undefined;
 	registry: AgentRegistry | null;
@@ -283,17 +239,22 @@ const resolveOneShotModel = ({
 		candidate?.model ??
 		defaultChatModelSelection;
 	if (availableProviderModels === undefined) {
-		if (catalogSelectionForProviderModel(model) === null) {
-			throw new InvocationError(
-				`Provider Model ${model.providerId}/${model.modelId} requires the Provider SDK runtime.`
-			);
-		}
-		return { agent, model, resolvedAgent: resolvedAgentFor(candidate) };
+		throw new InvocationError(
+			"Provider SDK runtime is unavailable; legacy Catalog execution is disabled in headless modes."
+		);
 	}
 	const providerModel = availableProviderModels.find((available) =>
 		isSameModelIdentity(available, model)
 	);
 	if (providerModel === undefined) {
+		const knownProviderModel = knownProviderModels?.find((available) =>
+			isSameModelIdentity(available, model)
+		);
+		if (knownProviderModel !== undefined) {
+			throw new InvocationError(
+				`Connect ${model.providerId} in Interactive Mode to use Model ${model.modelId}, then retry.`
+			);
+		}
 		throw new InvocationError(
 			`Provider Model ${model.providerId}/${model.modelId} is unavailable in this One-Shot Host.`
 		);
@@ -354,6 +315,7 @@ const resolveOneShotModel = ({
 const resolveSelection = ({
 	agentOption,
 	availableProviderModels,
+	knownProviderModels,
 	thinkingLevelOption,
 	modelOption,
 	restored,
@@ -361,6 +323,7 @@ const resolveSelection = ({
 }: {
 	agentOption: string | undefined;
 	availableProviderModels?: readonly ProviderModel[];
+	knownProviderModels?: readonly ProviderModel[];
 	thinkingLevelOption: string | undefined;
 	modelOption: string | undefined;
 	registry: AgentRegistry | null;
@@ -388,6 +351,7 @@ const resolveSelection = ({
 	const effective = resolveOneShotModel({
 		agent,
 		availableProviderModels,
+		knownProviderModels,
 		candidate,
 		explicitModel,
 		registry,
@@ -523,30 +487,36 @@ const runOneShot = async (
 		isNewSession = initializedSession.isNewSession;
 		const sessionHostManager = services.capabilities.getSessionHostManager();
 		manager = sessionHostManager;
+		const registry = services.capabilities.getRegistry();
+		const storedSession = await services.store.getSession(sessionId);
+		const explicitAgent = parseAgent(context.invocation.agent);
+		const selectedAgent =
+			explicitAgent ?? registry?.defaultAgentId ?? agentIdSchema.parse("build");
+		const providerModel =
+			parseModel(context.invocation.model) ??
+			storedSession.model ??
+			candidateAgent(registry, selectedAgent)?.model ??
+			defaultChatModelSelection;
 		host = await sessionHostManager.openHost({
 			capabilities: services.capabilities,
 			executionMode: format,
+			providerModel,
 			sessionId,
 			view: true,
 		});
-		const registry = services.capabilities.getRegistry();
 		const restored = host.getSelection();
 		const availableProviderModels =
 			await host.providerController?.getAvailableModels();
+		const knownProviderModels = host.providerCollection?.getModels();
 		const selection = resolveSelection({
 			agentOption: context.invocation.agent,
 			availableProviderModels,
+			knownProviderModels,
 			thinkingLevelOption: context.invocation.thinkingLevel,
 			modelOption: context.invocation.model,
 			registry,
 			restored,
 		});
-		if (availableProviderModels === undefined) {
-			await validateModelAvailability(
-				selection.model,
-				services.capabilities.getConnections()
-			);
-		}
 		removeEventListener = sessionHostManager.onEvent((managedEvent) => {
 			if (managedEvent.type !== "agent-turn-event") {
 				return;

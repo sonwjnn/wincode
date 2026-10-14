@@ -52,6 +52,7 @@ import {
 	type PluginCommandDescriptor,
 	type PluginDiagnostic,
 	type PluginProviderDescriptor,
+	type PluginProviderSourceScope,
 	type PluginResourceDescriptor,
 	type PluginRuntime,
 	type PluginToolDescriptor,
@@ -107,6 +108,7 @@ type PluginPath = Readonly<{
 	precedence?: number;
 	required?: boolean;
 	source: string;
+	sourceScope?: PluginProviderSourceScope;
 }>;
 
 const PLUGIN_KEY = "plugins";
@@ -188,6 +190,7 @@ const pathsFromSource = (
 					scope: source.scope,
 				}),
 				source: source.path,
+				sourceScope: source.scope,
 			},
 		];
 	});
@@ -487,7 +490,8 @@ const createPluginAPI = (
 const loadedPluginFromDraft = (
 	draft: MutablePluginDraft,
 	toolNames: Set<string>,
-	commandNames: Set<string>
+	commandNames: Set<string>,
+	sourceScope?: PluginProviderSourceScope
 ): LoadedPlugin => {
 	if (!pluginIdentifierPattern.test(draft.id)) {
 		throw new Error(
@@ -575,6 +579,7 @@ const loadedPluginFromDraft = (
 			pluginId: draft.id,
 			sourceIdentity,
 			sourcePath: draft.sourcePath,
+			sourceScope: sourceScope ?? "explicit",
 		})
 	);
 	return Object.freeze({
@@ -624,8 +629,16 @@ const canonicalPath = (sourcePath: string): string => {
 	}
 };
 
-const pluginSourceIdentity = (sourcePath: string): string =>
-	sourcePath.startsWith("factory:") ? sourcePath : canonicalPath(sourcePath);
+export const pluginSourceIdentity = (sourcePath: string): string => {
+	if (sourcePath.startsWith("factory:")) {
+		return sourcePath;
+	}
+	try {
+		return fs.realpathSync(sourcePath);
+	} catch {
+		throw new Error("Plugin source path could not be resolved.");
+	}
+};
 
 const isWithinDirectory = (directory: string, sourcePath: string): boolean => {
 	const relative = path.relative(
@@ -941,6 +954,7 @@ const sourcePaths = async (
 		path: path.resolve(input.config.workspace, value),
 		precedence: resourceSourcePrecedence("user-explicit"),
 		source: "--plugin",
+		sourceScope: "explicit" as const,
 	}));
 	// Plugin IDs are first-wins; load higher-precedence classes first. Stable
 	// ordering preserves CLI-before-configured order within user-explicit paths.
@@ -1205,7 +1219,8 @@ const publishPluginDraft = async (
 		const loaded = loadedPluginFromDraft(
 			draft,
 			state.toolNames,
-			state.commandNames
+			state.commandNames,
+			candidate.sourceScope
 		);
 		state.pluginSources.set(loaded.id, candidate.path);
 		state.loadedPlugins.push(loaded);

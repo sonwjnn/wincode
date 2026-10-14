@@ -29,7 +29,7 @@ import type {
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
 import type { ChatModelSelection } from "@wincode/ai/models";
-import type { ModelStore, ProviderModel } from "@wincode/ai/sdk";
+import type { ModelStore, Provider, ProviderModel } from "@wincode/ai/sdk";
 import type { GoogleProviderOptions } from "@wincode/ai/sdk/providers/google";
 import { logger } from "@wincode/utils";
 import { z } from "zod";
@@ -41,8 +41,10 @@ import { loadPlugins } from "@/modules/plugins/loader";
 import {
 	createPluginRuntime,
 	type LoadedPlugin,
+	type PluginProviderDescriptor,
 	type PluginRuntime,
 } from "@/modules/plugins/runtime";
+import { pluginProviderStorageId } from "@/modules/providers/provider-stores";
 import type {
 	SessionSteeringAdmission,
 	SessionSubmissionAdmission,
@@ -190,7 +192,7 @@ const completedOutcome = (): SessionRecord["outcome"] => ({
 const seedSession = async (
 	prefix: string,
 	secondTurnState: "completed" | "interrupted" = "interrupted",
-	selectedModel: ChatModelSelection = model
+	selectedModel: Pick<SessionRecord["model"], "modelId" | "providerId"> = model
 ): Promise<{
 	compaction: CompactionId;
 	sessionId: SessionId;
@@ -519,6 +521,128 @@ test("SDK Session Host refuses a missing ProviderCollection without Catalog fall
 		"Provider SDK Session Host could not be initialized because its ProviderCollection is unavailable; Catalog dispatch is disabled."
 	);
 	expect(legacyConnectionsRequested).toBe(false);
+});
+
+test("delegated Session Hosts load only the Plugin Provider selected in the child Session", async () => {
+	const selectedProviderId = "selected-plugin-provider";
+	const unselectedProviderId = "unselected-plugin-provider";
+	const selectedModel: ProviderModel = {
+		capabilities: ["text"],
+		modelId: "selected-child-model",
+		providerId: selectedProviderId,
+		protocolId: "fake-child-provider",
+	};
+	const unselectedModel: ProviderModel = {
+		capabilities: ["text"],
+		modelId: "unselected-child-model",
+		providerId: unselectedProviderId,
+		protocolId: "fake-child-provider",
+	};
+	const createRegistration = (
+		model: ProviderModel
+	): PluginProviderDescriptor => ({
+		connect: async () => undefined,
+		createProvider: (): Provider => ({
+			id: model.providerId,
+			models: [model],
+			resolveAuthorization: ({ credential }) =>
+				credential === undefined ? null : { authorization: credential },
+			async *streamChat() {
+				yield { type: "finish" };
+			},
+		}),
+		displayName: model.providerId,
+		pluginId: "child-provider-fixture",
+		providerId: model.providerId,
+		sourceIdentity: "child-provider-fixture-source",
+		sourcePath: "child-provider-fixture-source",
+	});
+	const selectedStorageId = pluginProviderStorageId({
+		pluginId: "child-provider-fixture",
+		providerId: selectedProviderId,
+		sourceIdentity: "child-provider-fixture-source",
+	});
+	const unselectedStorageId = pluginProviderStorageId({
+		pluginId: "child-provider-fixture",
+		providerId: unselectedProviderId,
+		sourceIdentity: "child-provider-fixture-source",
+	});
+	const pluginRuntime = fromPartial<PluginRuntime>({
+		getProviderRegistrations: () => [
+			createRegistration(selectedModel),
+			createRegistration(unselectedModel),
+		],
+	});
+	const credentialReads: string[] = [];
+	let allowedPluginProviderIds: readonly string[] | undefined;
+	const baseCapabilities = createCapabilities();
+	const { getRuntime: _legacyRuntime, ...sdkCapabilities } = baseCapabilities;
+	const capabilities: SessionCapabilities = {
+		...sdkCapabilities,
+		getPluginRuntime: () => pluginRuntime,
+		createProviderCollection: async (
+			actualPluginRuntime,
+			sessionId,
+			allowedProviderIds
+		) => {
+			allowedPluginProviderIds = allowedProviderIds;
+			return createDefaultSessionProviderCollection(
+				actualPluginRuntime,
+				sessionId,
+				{
+					...(allowedProviderIds === undefined
+						? {}
+						: { allowedPluginProviderIds: allowedProviderIds }),
+					credentialStore: {
+						delete: () => undefined,
+						get: (providerId) => {
+							credentialReads.push(providerId);
+							if (providerId === selectedStorageId) {
+								return "fake-selected-child-provider-credential";
+							}
+							if (providerId === unselectedStorageId) {
+								return "fake-unselected-child-provider-credential";
+							}
+							return;
+						},
+						set: () => undefined,
+					},
+				}
+			);
+		},
+	};
+	const seeded = await seedSession(
+		"delegated-provider-allowlist",
+		"completed",
+		{
+			modelId: modelId(selectedModel.modelId),
+			providerId: selectedProviderId,
+		}
+	);
+	const host = await createSessionHost({
+		capabilities,
+		sessionId: seeded.sessionId,
+	});
+	try {
+		expect(allowedPluginProviderIds).toEqual([selectedProviderId]);
+		expect(
+			host.providerCollection?.getModel(
+				selectedProviderId,
+				selectedModel.modelId
+			)
+		).toEqual(selectedModel);
+		expect(
+			host.providerCollection?.getModel(
+				unselectedProviderId,
+				unselectedModel.modelId
+			)
+		).toBeUndefined();
+		await host.providerCollection?.getAvailable();
+		expect(credentialReads).toContain(selectedStorageId);
+		expect(credentialReads).not.toContain(unselectedStorageId);
+	} finally {
+		await host.shutdown();
+	}
 });
 
 test("retains an idle Session Host until registered Plugin background work finishes", async () => {

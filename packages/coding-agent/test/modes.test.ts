@@ -29,6 +29,10 @@ import {
 	openSessionServices,
 	type SessionServicesSources,
 } from "../modules/sessions/host/session-services";
+import {
+	createInteractiveSessionProviderCollection,
+	type InteractiveSessionProviderCollectionOptions,
+} from "../modules/sessions/provider-collection";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
 	createFakeModelClient,
@@ -38,9 +42,6 @@ import {
 } from "./support/e2e-fake-runtime";
 
 const fakeRecorder = createFakeModelClientRecorder();
-const fakeRuntime = createAgentRuntime({
-	modelClient: createFakeModelClient(fakeRecorder),
-});
 
 const workspace = await fs.mkdtemp(path.join("/tmp", "wincode-one-shot-"));
 const registry = buildAgentRegistry(
@@ -110,7 +111,8 @@ const connections = {
 const composeServicesDetailedFor =
 	(
 		agentRegistry: AgentRegistry,
-		createProviderCollection?: SessionServicesSources["createProviderCollection"]
+		createProviderCollection?: SessionServicesSources["createProviderCollection"],
+		runtimeFactory?: SessionServicesSources["runtimeFactory"]
 	) =>
 	async ({
 		configRuntime,
@@ -135,9 +137,13 @@ const composeServicesDetailedFor =
 			sources: {
 				connections: () => connections,
 				registry: () => agentRegistry,
-				...(createProviderCollection === undefined
-					? { runtimeFactory: () => fakeRuntime }
-					: { createProviderCollection }),
+				...(runtimeFactory === undefined
+					? {
+							createProviderCollection:
+								createProviderCollection ??
+								(() => createFakeProviderCollection(fakeRecorder)),
+						}
+					: { runtimeFactory }),
 				turnToolResolver: () => composition.turnToolResolver,
 				...(configRuntime === undefined
 					? {}
@@ -725,9 +731,137 @@ test("one-shot input rejects empty submissions before creating a Session", async
 	}
 });
 
+test("headless Print and JSON report actionable SDK authentication failures without secrets", async () => {
+	const disconnectedWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-headless-sdk-auth-")
+	);
+	const credentialStore = new Map<string, unknown>();
+	const modelStore = new Map<string, readonly ProviderModel[]>();
+	const composeWithoutCredentials = composeServicesDetailedFor(
+		registry,
+		async () =>
+			createInteractiveSessionProviderCollection({
+				credentialStore: {
+					delete: (providerId) => {
+						credentialStore.delete(providerId);
+					},
+					get: (providerId) => credentialStore.get(providerId),
+					set: (providerId, credential) => {
+						credentialStore.set(providerId, credential);
+					},
+				},
+				modelStore: {
+					get: (providerId) => modelStore.get(providerId),
+					set: (providerId, models) => {
+						modelStore.set(providerId, models);
+					},
+				},
+			} satisfies InteractiveSessionProviderCollectionOptions)
+	);
+	try {
+		const printStdout = writer();
+		const printStderr = writer();
+		const printExitCode = await runPrintMode(
+			context(
+				"print",
+				"send without a connection",
+				printStdout.writer,
+				printStderr.writer,
+				undefined,
+				undefined,
+				true,
+				{},
+				disconnectedWorkspace
+			),
+			{ composeServices: composeWithoutCredentials }
+		);
+		expect(printExitCode).toBe(1);
+		expect(printStdout.text).toBe("");
+		expect(printStderr.text).toContain("Connect openai in Interactive Mode");
+		expect(printStderr.text).not.toContain("fake-e2e-provider-key");
+
+		const jsonStdout = writer();
+		const jsonStderr = writer();
+		const jsonExitCode = await runJsonMode(
+			context(
+				"json",
+				"send without a connection",
+				jsonStdout.writer,
+				jsonStderr.writer,
+				undefined,
+				undefined,
+				true,
+				{},
+				disconnectedWorkspace
+			),
+			{ composeServices: composeWithoutCredentials }
+		);
+		expect(jsonExitCode).toBe(1);
+		expect(JSON.parse(jsonStdout.text) as Record<string, unknown>).toEqual({
+			error: expect.stringContaining("Connect openai in Interactive Mode"),
+		});
+		expect(jsonStderr.text).toContain("Connect openai in Interactive Mode");
+		expect(jsonStdout.text + jsonStderr.text).not.toContain(
+			"fake-e2e-provider-key"
+		);
+	} finally {
+		await fs.rm(disconnectedWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("headless Print refuses legacy Catalog runtime execution before sending", async () => {
+	const legacyRecorder = createFakeModelClientRecorder();
+	const legacyServices = composeServicesDetailedFor(registry, undefined, () =>
+		createAgentRuntime({
+			modelClient: createFakeModelClient(legacyRecorder),
+		})
+	);
+	const legacyWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-headless-legacy-runtime-")
+	);
+	try {
+		const stdout = writer();
+		const stderr = writer();
+		const exitCode = await runPrintMode(
+			context(
+				"print",
+				"do not dispatch through Catalog",
+				stdout.writer,
+				stderr.writer,
+				undefined,
+				undefined,
+				true,
+				{},
+				legacyWorkspace
+			),
+			{ composeServices: legacyServices }
+		);
+		expect(exitCode).toBe(1);
+		expect(stderr.text).toContain("legacy Catalog execution is disabled");
+		expect(legacyRecorder.requests).toEqual([]);
+	} finally {
+		await fs.rm(legacyWorkspace, { force: true, recursive: true });
+	}
+});
+
 test("one-shot rejects a disconnected model before creating a Session", async () => {
 	const disconnectedWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-disconnected-model-")
+	);
+	const composeWithoutCredentials = composeServicesDetailedFor(
+		registry,
+		async () =>
+			createInteractiveSessionProviderCollection({
+				credentialStore: {
+					delete: () => undefined,
+					get: () => undefined,
+					set: () => undefined,
+				},
+				modelStore: {
+					get: () => undefined,
+					set: () => undefined,
+				},
+			} satisfies InteractiveSessionProviderCollectionOptions)
 	);
 	try {
 		const stdout = writer();
@@ -744,7 +878,7 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 				{ model: "anthropic/claude-sonnet-4-5" },
 				disconnectedWorkspace
 			),
-			dependencies
+			{ composeServices: composeWithoutCredentials }
 		);
 
 		expect(exitCode).toBe(1);

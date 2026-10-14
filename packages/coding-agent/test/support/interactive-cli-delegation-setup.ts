@@ -68,7 +68,7 @@ const createInteractiveCliE2eProviderCollection = () =>
 
 spyOn(
 	sessionProviderCollectionModule,
-	"createDefaultSessionProviderCollection"
+	"createInteractiveSessionProviderCollection"
 ).mockImplementation(createInteractiveCliE2eProviderCollection);
 
 const testConnections: Connections = {

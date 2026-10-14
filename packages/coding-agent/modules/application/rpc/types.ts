@@ -1,11 +1,15 @@
-import type { ThinkingLevel, ThinkingSelection } from "@wincode/ai/models";
+import type {
+	ChatModelSelection,
+	ThinkingLevel,
+	ThinkingSelection,
+} from "@wincode/ai/models";
 import type { ApplicationSessionServicesInput } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SkillContext } from "@/modules/skills";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type {
 	AgentTurnId,
-	ChatModelSelection,
 	SessionCapabilities,
 	SessionHost,
 	SessionId,
@@ -118,7 +122,7 @@ export type RpcRunnerOptions = Readonly<{
 
 export type Selection = Readonly<{
 	agentId: string;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 }> &
 	ThinkingSelection;
 
@@ -126,6 +130,7 @@ export type RuntimeModules = Readonly<{
 	createAgentTurnId: () => AgentTurnId;
 	createSessionHost: (input: {
 		capabilities: SessionCapabilities;
+		providerModel?: ProviderModelSelection;
 		sessionId: SessionId;
 	}) => Promise<SessionHost>;
 	openSessionServices: (input: RpcCompositionInput) => Promise<RpcAssembly>;
@@ -133,12 +138,6 @@ export type RuntimeModules = Readonly<{
 		text: string,
 		metadata?: SessionMessageMetadata
 	) => SessionMessage;
-	modelSelectionSchema: {
-		safeParse: (value: unknown) => {
-			success: boolean;
-			data?: ChatModelSelection;
-		};
-	};
 	thinkingLevelSchema: {
 		safeParse: (value: unknown) => {
 			success: boolean;

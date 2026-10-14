@@ -166,16 +166,6 @@ export const resolveSessionTurnModel = async ({
 			`Provider Model ${model.providerId}/${model.modelId} is not available in this Session Host.`
 		);
 	}
-	const isInvocable = (await providerCollection.getAvailable()).some(
-		(availableModel) =>
-			availableModel.providerId === model.providerId &&
-			availableModel.modelId === model.modelId
-	);
-	if (!isInvocable) {
-		throw new Error(
-			`Provider Model ${model.providerId}/${model.modelId} is not invocable. Connect its Provider or choose another model.`
-		);
-	}
 	return {
 		...model,
 		...thinkingSelection,

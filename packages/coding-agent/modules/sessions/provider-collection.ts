@@ -41,6 +41,7 @@ import {
 	getProviderSdkStores,
 	pluginProviderStorageId,
 } from "@/modules/providers/provider-stores";
+import type { SessionSdkPluginProviderSource } from "./plugin-provider-source";
 
 export const createDefaultSessionProviderCollection = (
 	pluginRuntime?: PluginRuntime,
@@ -48,13 +49,28 @@ export const createDefaultSessionProviderCollection = (
 	options: Omit<
 		InteractiveSessionProviderCollectionOptions,
 		"pluginProviders" | "sessionId"
-	> = {}
-): Promise<InteractiveSessionProviderCollection> =>
-	createInteractiveSessionProviderCollection({
-		...options,
+	> &
+		Readonly<{
+			allowedPluginProviderIds?: readonly string[];
+			allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[];
+		}> = {}
+): Promise<InteractiveSessionProviderCollection> => {
+	const {
+		allowedPluginProviderIds,
+		allowedPluginProviderSources,
+		...collectionOptions
+	} = options;
+	return createInteractiveSessionProviderCollection({
+		...collectionOptions,
 		...(sessionId === undefined ? {} : { sessionId }),
-		pluginProviders: pluginProvidersFromRuntime(pluginRuntime, sessionId),
+		pluginProviders: pluginProvidersFromRuntime(
+			pluginRuntime,
+			sessionId,
+			allowedPluginProviderIds,
+			allowedPluginProviderSources
+		),
 	});
+};
 
 export type InteractiveSessionProviderCollectionOptions = Readonly<{
 	anthropicProviderOptions?: AnthropicProviderOptions;
@@ -435,6 +451,22 @@ export const createInteractiveSessionProviderCollection = async (
 
 export const pluginProvidersFromRuntime = (
 	pluginRuntime: PluginRuntime | undefined,
-	sessionId?: string
-): readonly PluginProviderDescriptor[] =>
-	pluginRuntime?.getProviderRegistrations(sessionId) ?? [];
+	sessionId?: string,
+	allowedProviderIds?: readonly string[],
+	allowedProviderSources?: readonly SessionSdkPluginProviderSource[]
+): readonly PluginProviderDescriptor[] => {
+	const providers = pluginRuntime?.getProviderRegistrations(sessionId) ?? [];
+	const allowedIds =
+		allowedProviderIds === undefined ? undefined : new Set(allowedProviderIds);
+	return providers.filter(
+		(provider) =>
+			(allowedIds === undefined || allowedIds.has(provider.providerId)) &&
+			(allowedProviderSources === undefined ||
+				allowedProviderSources.some(
+					(source) =>
+						source.pluginId === provider.pluginId &&
+						source.providerId === provider.providerId &&
+						source.sourceIdentity === provider.sourceIdentity
+				))
+	);
+};

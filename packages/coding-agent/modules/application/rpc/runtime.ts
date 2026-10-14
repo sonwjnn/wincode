@@ -1,6 +1,5 @@
 import {
 	isSupportedThinkingLevel,
-	modelSelectionSchema,
 	thinkingLevelSchema,
 } from "@wincode/ai/models";
 import {
@@ -34,7 +33,6 @@ export const loadRuntime = async (
 		}),
 	createSessionUserMessage,
 	isSupportedThinkingLevel,
-	modelSelectionSchema,
 	thinkingLevelSchema,
 	resolveWorkspaceRoot,
 	toSessionId,

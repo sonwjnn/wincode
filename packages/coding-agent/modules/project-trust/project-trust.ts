@@ -527,3 +527,110 @@ export const resolveProjectTrust = async ({
 		),
 	});
 };
+
+const gitRootFor = async (directory: string): Promise<string | undefined> => {
+	for (const projectRoot of getProjectRoots(directory)) {
+		try {
+			await fs.access(path.join(projectRoot, ".git"));
+			return await canonicalPath(projectRoot);
+		} catch {
+			// Continue until the nearest containing Git repository is found.
+		}
+	}
+};
+
+const isTrustedPluginSourcePath = async ({
+	allowUnscopedExternal,
+	override,
+	projectTrustDir,
+	sourcePath,
+	workspace,
+}: Readonly<{
+	allowUnscopedExternal: boolean;
+	override?: ProjectTrustOverride;
+	projectTrustDir: string;
+	sourcePath: string;
+	workspace: string;
+}>): Promise<boolean> => {
+	const resolvedSourcePath = path.resolve(sourcePath);
+	const sourceWorkspace = path.dirname(resolvedSourcePath);
+	const resolvedWorkspace = path.resolve(workspace);
+	const canonicalWorkspace = await canonicalPath(workspace);
+	const [sourceGitRoot, workspaceGitRoot] = await Promise.all([
+		gitRootFor(sourceWorkspace),
+		gitRootFor(canonicalWorkspace),
+	]);
+	const sharesChildTrustScope =
+		pathContains(resolvedWorkspace, resolvedSourcePath) ||
+		pathContains(canonicalWorkspace, resolvedSourcePath) ||
+		(sourceGitRoot !== undefined && sourceGitRoot === workspaceGitRoot);
+
+	if (sharesChildTrustScope && override === "deny") {
+		return false;
+	}
+
+	const protectedRoots = (
+		await getProtectedProjectRoots(sourceWorkspace)
+	).filter((projectRoot) => pathContains(projectRoot, resolvedSourcePath));
+	if (protectedRoots.length === 0) {
+		if (sharesChildTrustScope) {
+			return override === "trust";
+		}
+		return allowUnscopedExternal && sourceGitRoot === undefined;
+	}
+
+	const trustResolution = await resolveProjectTrust({
+		mode: "sdk",
+		...(sharesChildTrustScope && override !== undefined ? { override } : {}),
+		projectTrustDir,
+		workspace: sourceWorkspace,
+	});
+	const governingRoot = protectedRoots.toSorted(
+		(first, second) => second.length - first.length
+	)[0];
+	return (
+		governingRoot !== undefined &&
+		trustResolution.trustedProjectRoots.some(
+			(trustedRoot) => path.resolve(trustedRoot) === path.resolve(governingRoot)
+		)
+	);
+};
+
+/**
+ * Authorizes both the configured source path and its canonical target. Project
+ * config cannot use a symlink to smuggle code from an untrusted external path;
+ * global or caller-explicit sources remain eligible outside project roots.
+ */
+export const isTrustedProjectPluginSource = async ({
+	allowUnscopedExternal,
+	override,
+	projectTrustDir,
+	sourceIdentity,
+	sourcePath,
+	workspace,
+}: Readonly<{
+	allowUnscopedExternal: boolean;
+	override?: ProjectTrustOverride;
+	projectTrustDir: string;
+	sourceIdentity: string;
+	sourcePath: string;
+	workspace: string;
+}>): Promise<boolean> => {
+	const [sourcePathTrusted, targetTrusted] = await Promise.all([
+		isTrustedPluginSourcePath({
+			allowUnscopedExternal,
+			override,
+			projectTrustDir,
+			sourcePath,
+			workspace,
+		}),
+		isTrustedPluginSourcePath({
+			allowUnscopedExternal,
+			override,
+			projectTrustDir,
+			sourcePath: sourceIdentity,
+			workspace,
+		}),
+	]);
+	return sourcePathTrusted && targetTrusted;
+};

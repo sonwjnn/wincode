@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
+import { agentIdSchema } from "@wincode/agent-core";
 import type {
 	ModelStepRequest,
 	ModelStreamPart,
@@ -28,8 +28,8 @@ import {
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
-	createFakeModelClient,
 	createFakeModelClientRecorder,
+	createFakeProviderCollection,
 	type FakeModelStepScript,
 } from "../support/e2e-fake-runtime";
 import { toolCallId } from "../support/identifiers";
@@ -1095,9 +1095,7 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 			usage: { inputTokens: 1, outputTokens: 1 },
 		};
 	};
-	const modelRuntime = createAgentRuntime({
-		modelClient: createFakeModelClient(recorder, script),
-	});
+	recorder.stepScript = script;
 	const connections = {
 		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
 		connect: async () => undefined,
@@ -1120,8 +1118,8 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 		sources: {
 			configRuntime: () => configRuntime,
 			connections: () => connections,
+			createProviderCollection: () => createFakeProviderCollection(recorder),
 			pluginRuntime: () => pluginRuntime,
-			runtimeFactory: () => modelRuntime,
 		},
 	});
 	const initialized = Promise.withResolvers<void>();
@@ -1254,9 +1252,7 @@ const runPluginToolInOneShot = async (
 			usage: { inputTokens: 1, outputTokens: 1 },
 		};
 	};
-	const runtime = createAgentRuntime({
-		modelClient: createFakeModelClient(recorder, script),
-	});
+	recorder.stepScript = script;
 	const connections = {
 		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
 		connect: async () => undefined,
@@ -1284,7 +1280,7 @@ const runPluginToolInOneShot = async (
 			},
 			sources: {
 				connections: () => connections,
-				runtimeFactory: () => runtime,
+				createProviderCollection: () => createFakeProviderCollection(recorder),
 				...(modeConfigRuntime === undefined
 					? {}
 					: { configRuntime: () => modeConfigRuntime }),

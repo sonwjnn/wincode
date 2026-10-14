@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,6 +8,7 @@ import type {
 	ModelStepRequest,
 	ModelStreamPart,
 } from "@wincode/ai/model-client";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,
@@ -16,17 +17,20 @@ import { act } from "react";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
+import * as sessionProviderCollectionModule from "@/modules/sessions/provider-collection";
 import { createConfigStore } from "@/shared/config/config-store";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
+	createFakeProviderCollection,
 } from "@/test/support/e2e-fake-runtime";
 import {
 	cleanupSessionRender,
 	createE2ePricing,
 	createE2eStore,
+	E2E_MODEL,
 	renderSession,
 	seedCompactionHistory,
 	settleSessionUi,
@@ -60,6 +64,20 @@ process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 const recorder = createFakeModelClientRecorder();
+const sessionProviderModel: ProviderModel = {
+	capabilities: ["reasoning", "text", "tools"],
+	modelId: E2E_MODEL.modelId,
+	promptCacheRetentionTiers: ["short"],
+	providerId: E2E_MODEL.providerId,
+	protocolId: "fake-e2e-model-client",
+	reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+};
+spyOn(
+	sessionProviderCollectionModule,
+	"createInteractiveSessionProviderCollection"
+).mockImplementation(() =>
+	createFakeProviderCollection(recorder, sessionProviderModel)
+);
 const runtimeFactory = () =>
 	createAgentRuntime({ modelClient: createFakeModelClient(recorder) });
 const taskStore = await getSharedSubagentsTaskStore(
@@ -87,6 +105,7 @@ setInteractiveRuntimeContext({
 const sessionHostManager = getInteractiveSessionHostManager(pluginRuntime);
 
 afterAll(async () => {
+	mock.restore();
 	await sessionHostManager.shutdownAll();
 	await pluginRuntime.shutdown();
 	taskStore.close();

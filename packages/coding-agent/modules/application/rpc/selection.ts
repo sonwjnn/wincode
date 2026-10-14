@@ -1,8 +1,10 @@
 import type { ThinkingSelection } from "@wincode/ai/models";
-import type {
-	ChatModelSelection,
-	SessionSendInput,
-} from "../../../modules/sessions/host/session-rpc";
+import {
+	catalogSelectionForProviderModel,
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
+import type { SessionSendInput } from "../../../modules/sessions/host/session-rpc";
 import type {
 	RpcAssembly,
 	RpcPreparedSubmission,
@@ -50,14 +52,18 @@ export const createSelectionHelpers = (
 
 	const parseSelectionThinkingLevel = (
 		value: unknown,
-		model: ChatModelSelection,
+		model: ProviderModelSelection,
 		activeRuntime: RuntimeModules
 	): ThinkingSelection => {
 		const thinkingLevel = activeRuntime.thinkingLevelSchema.safeParse(value);
 		if (thinkingLevel.success !== true || thinkingLevel.data === undefined) {
 			throw appError("selection_unavailable", "Thinking level is invalid.");
 		}
-		if (!activeRuntime.isSupportedThinkingLevel(model, thinkingLevel.data)) {
+		const catalogModel = catalogSelectionForProviderModel(model);
+		if (
+			catalogModel !== null &&
+			!activeRuntime.isSupportedThinkingLevel(catalogModel, thinkingLevel.data)
+		) {
 			throw appError("selection_unavailable", "Thinking level is unavailable.");
 		}
 		return { thinkingLevel: thinkingLevel.data };
@@ -65,7 +71,7 @@ export const createSelectionHelpers = (
 
 	const parseSelectionThinking = (
 		record: Record<string, unknown>,
-		model: ChatModelSelection,
+		model: ProviderModelSelection,
 		activeRuntime: RuntimeModules
 	): ThinkingSelection => {
 		if (
@@ -109,26 +115,6 @@ export const createSelectionHelpers = (
 		}
 	};
 
-	const requireConnectedProvider = async (
-		activeAssembly: RpcAssembly,
-		providerId: string
-	): Promise<void> => {
-		const providers = (await activeAssembly.capabilities
-			.getConnections()
-			.listProviders()) as readonly {
-			id: string;
-			connected: boolean;
-		}[];
-		if (
-			!providers.some(
-				(provider: { id: string; connected: boolean }) =>
-					provider.id === providerId && provider.connected
-			)
-		) {
-			throw appError("selection_unavailable", "Model provider is unavailable.");
-		}
-	};
-
 	const parseSelection = async (value: unknown): Promise<Selection> => {
 		const { agentId, model: modelRecord, record } = readSelectionFields(value);
 		const activeAssembly = getAssembly();
@@ -139,22 +125,19 @@ export const createSelectionHelpers = (
 			);
 		}
 		const activeRuntime = await getRuntime();
-		const modelResult =
-			activeRuntime.modelSelectionSchema.safeParse(modelRecord);
-		if (modelResult.success !== true || modelResult.data === undefined) {
+		const model = normalizeProviderModelSelection(modelRecord);
+		if (model === null) {
 			throw appError(
 				"selection_unavailable",
 				"Model selection is unavailable."
 			);
 		}
-		const model = modelResult.data;
 		const thinkingSelection = parseSelectionThinking(
 			record,
 			model,
 			activeRuntime
 		);
 		requireSelectableAgent(activeAssembly, agentId);
-		await requireConnectedProvider(activeAssembly, model.providerId);
 		return { agentId, model, ...thinkingSelection };
 	};
 

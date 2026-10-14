@@ -122,7 +122,9 @@ export type SessionSdkHandle = Readonly<{
 export type SessionRuntimeOptions = Readonly<{
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
 	pluginPaths?: readonly string[];
+	pluginProviderIds?: readonly string[];
 	projectTrust?: "trust" | "deny";
+	sessionId?: SessionId | string;
 }>;
 
 export type SessionSdk = Readonly<{

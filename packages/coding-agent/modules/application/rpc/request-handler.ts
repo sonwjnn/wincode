@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AttachmentReferenceResolver } from "@/modules/sessions/attachment-reference";
+import { HeadlessProviderSdkRequiredError } from "@/modules/sessions/host/session-errors";
 import { createSkillSnapshot } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
@@ -337,6 +338,7 @@ export const createRpcRequestHandler = (
 			try {
 				createdHost = await activeRuntime.createSessionHost({
 					capabilities: activeAssembly.capabilities,
+					providerModel: selection.model,
 					sessionId: createdId,
 				});
 				if (
@@ -385,6 +387,13 @@ export const createRpcRequestHandler = (
 				}
 				if (error instanceof RpcApplicationError) {
 					throw error;
+				}
+				if (error instanceof HeadlessProviderSdkRequiredError) {
+					throw appError("provider_sdk_required", error.message, {
+						executionMode: error.executionMode,
+						sessionId: createdId,
+						stage: "host",
+					});
 				}
 				const writerError = mapSessionWriterError(error, createdId);
 				if (writerError !== undefined) {
@@ -447,6 +456,13 @@ export const createRpcRequestHandler = (
 				bind(openedHost, sessionId);
 				return success(request.id, { sessionId, state: currentState() });
 			} catch (error) {
+				if (error instanceof HeadlessProviderSdkRequiredError) {
+					throw appError("provider_sdk_required", error.message, {
+						executionMode: error.executionMode,
+						sessionId,
+						stage: "host",
+					});
+				}
 				const writerError = mapSessionWriterError(error, sessionId);
 				if (writerError !== undefined) {
 					throw writerError;

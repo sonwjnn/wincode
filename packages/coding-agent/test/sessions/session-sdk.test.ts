@@ -1,4 +1,5 @@
 import { afterAll, expect, mock, spyOn, test } from "bun:test";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -35,9 +36,11 @@ import {
 	resolveSubagentsDatabasePath,
 } from "@wincode/subagents/plugin";
 import { buildAgentRegistry } from "@/modules/agents/registry";
+import * as pluginLoaderModule from "@/modules/plugins/loader";
 import type { PluginAgentRegistration } from "@/modules/plugins/public";
 import * as sessionProviderCollectionModule from "@/modules/sessions/provider-collection";
 import {
+	createDefaultSessionProviderCollection,
 	createInteractiveSessionProviderCollection,
 	type InteractiveSessionProviderCollection,
 } from "@/modules/sessions/provider-collection";
@@ -59,6 +62,7 @@ import {
 import {
 	createFakeModelClient,
 	createFakeModelClientRecorder,
+	createFakeProviderCollection,
 	installFakeModelClient,
 } from "../support/e2e-fake-runtime";
 import { agentId, modelId, sessionId } from "../support/identifiers";
@@ -83,7 +87,10 @@ const database = createDatabase(path.join(storeRoot, "sessions.sqlite"));
 const store = createDrizzleSessionStore(database.db, {
 	workspaceRoot: workspace,
 });
-const configStore = createConfigStore({ homeRoot });
+const configStore = createConfigStore({
+	homeRoot,
+	trustedProjectRoots: [path.join(root, "child-plugin-symlink-trust")],
+});
 
 const createSdkPinnedAgentRuntime = async (
 	withExactModel: boolean,
@@ -1104,6 +1111,549 @@ test("an injected Session SDK creates a Session runtime with an explicit Plugin 
 	}
 });
 
+test("child Session SDK reloads a selected project Plugin only when child trust allows it", async () => {
+	const trustWorkspace = path.join(root, "child-plugin-trust-denied");
+	const pluginRoot = path.join(trustWorkspace, ".wincode", "plugins");
+	const pluginPath = path.join(pluginRoot, "selected-provider.ts");
+	const providerId = "trust_denied_child_provider";
+	const pluginLoadCalls: string[] = [];
+	const pluginLoadGlobal = globalThis as typeof globalThis & {
+		__wincodeIssue208PluginLoadCalls?: string[] | undefined;
+	};
+	pluginLoadGlobal.__wincodeIssue208PluginLoadCalls = pluginLoadCalls;
+	await fs.mkdir(pluginRoot, { recursive: true });
+	await Bun.write(path.join(trustWorkspace, ".wincode", "settings.json"), "{}");
+	await Bun.write(
+		pluginPath,
+		`export default (api) => {
+	(globalThis as typeof globalThis & { __wincodeIssue208PluginLoadCalls: string[] }).__wincodeIssue208PluginLoadCalls.push("loaded");
+	const plugin = api.definePlugin({ id: "trust_denied_child_plugin" });
+	plugin.registerProvider({
+		connect: async () => undefined,
+		createProvider: () => ({
+			id: "${providerId}",
+			models: [],
+			resolveAuthorization: () => null,
+			async *streamChat() { yield { type: "finish" }; },
+		}),
+		displayName: "Trust denied child Plugin",
+		providerId: "${providerId}",
+	});
+};
+`
+	);
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	let sdk: SessionSdk | undefined;
+	let trustedChildSdk: SessionSdk | undefined;
+	try {
+		sdk = await createSessionSdk({
+			configStore,
+			cwd: trustWorkspace,
+			database: database.db,
+			getConnections: () => ({
+				authorize: async () => {
+					throw new Error(
+						"Project Plugin trust tests use fake credentials only."
+					);
+				},
+				connect: async () => {
+					throw new Error(
+						"Project Plugin trust tests use fake credentials only."
+					);
+				},
+				listProviders: async () => [],
+			}),
+			getRegistry: () => registry,
+			pluginPaths: [pluginPath],
+			projectTrust: "trust",
+			store,
+			workspace: trustWorkspace,
+		});
+		expect(pluginLoadCalls).toEqual(["loaded"]);
+
+		await expect(
+			sdk.createSessionRuntime({
+				pluginProviderIds: [providerId],
+				projectTrust: "deny",
+			})
+		).rejects.toThrow("not trusted");
+		expect(pluginLoadCalls).toEqual(["loaded"]);
+
+		trustedChildSdk = await sdk.createSessionRuntime({
+			pluginProviderIds: [providerId],
+			projectTrust: "trust",
+		});
+		expect(pluginLoadCalls).toEqual(["loaded", "loaded"]);
+	} finally {
+		await trustedChildSdk?.dispose();
+		await sdk?.dispose();
+		pluginLoadGlobal.__wincodeIssue208PluginLoadCalls = undefined;
+		await fs.rm(trustWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("child Session SDK rejects a project Plugin symlink that escapes its trusted root", async () => {
+	const trustWorkspace = path.join(root, "child-plugin-symlink-trust");
+	const projectPluginRoot = path.join(trustWorkspace, ".wincode", "plugins");
+	const projectPluginPath = path.join(
+		projectPluginRoot,
+		"selected-provider.ts"
+	);
+	const externalPluginPath = path.join(root, "external-selected-provider.ts");
+	const providerId = "symlinked_child_provider";
+	const pluginLoadCalls: string[] = [];
+	const pluginLoadGlobal = globalThis as typeof globalThis & {
+		__wincodeIssue208SymlinkPluginLoadCalls?: string[] | undefined;
+	};
+	pluginLoadGlobal.__wincodeIssue208SymlinkPluginLoadCalls = pluginLoadCalls;
+	await fs.mkdir(projectPluginRoot, { recursive: true });
+	await Bun.write(
+		path.join(trustWorkspace, ".wincode", "settings.json"),
+		JSON.stringify({ plugins: [projectPluginPath] })
+	);
+	await Bun.write(
+		externalPluginPath,
+		`export default (api) => {
+	(globalThis as typeof globalThis & { __wincodeIssue208SymlinkPluginLoadCalls: string[] }).__wincodeIssue208SymlinkPluginLoadCalls.push("loaded");
+	const plugin = api.definePlugin({ id: "symlinked_child_plugin" });
+	plugin.registerProvider({
+		connect: async () => undefined,
+		createProvider: () => ({
+			id: "${providerId}",
+			models: [],
+			resolveAuthorization: () => null,
+			async *streamChat() { yield { type: "finish" }; },
+		}),
+		displayName: "Symlinked child Plugin",
+		providerId: "${providerId}",
+	});
+};
+`
+	);
+	await fs.symlink(externalPluginPath, projectPluginPath);
+	const trustConfigStore = createConfigStore({
+		homeRoot,
+		trustedProjectRoots: [trustWorkspace],
+	});
+	expect(
+		(await trustConfigStore.getSnapshot(trustWorkspace)).document.plugins
+	).toEqual([projectPluginPath]);
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	let sdk: SessionSdk | undefined;
+	try {
+		sdk = await createSessionSdk({
+			configStore,
+			cwd: trustWorkspace,
+			database: database.db,
+			getConnections: () => ({
+				authorize: async () => {
+					throw new Error(
+						"Project Plugin trust tests use fake credentials only."
+					);
+				},
+				connect: async () => {
+					throw new Error(
+						"Project Plugin trust tests use fake credentials only."
+					);
+				},
+				listProviders: async () => [],
+			}),
+			getRegistry: () => registry,
+			projectTrust: "trust",
+			store,
+			workspace: trustWorkspace,
+		});
+		expect(pluginLoadCalls).toEqual(["loaded"]);
+
+		await expect(
+			sdk.createSessionRuntime({
+				pluginProviderIds: [providerId],
+				projectTrust: "trust",
+			})
+		).rejects.toThrow("not trusted");
+		expect(pluginLoadCalls).toEqual(["loaded"]);
+	} finally {
+		await sdk?.dispose();
+		pluginLoadGlobal.__wincodeIssue208SymlinkPluginLoadCalls = undefined;
+		await fs.rm(projectPluginRoot, { force: true, recursive: true });
+		await fs.rm(path.join(trustWorkspace, ".wincode"), {
+			force: true,
+			recursive: true,
+		});
+		await fs.rm(externalPluginPath, { force: true });
+	}
+});
+
+test("child Session SDK pins an authorized Plugin target before loading it", async () => {
+	const raceWorkspace = path.join(root, "child-plugin-symlink-race");
+	const pluginRoot = path.join(raceWorkspace, ".wincode", "plugins");
+	const selectedPluginPath = path.join(pluginRoot, "selected-provider.ts");
+	const trustedPluginTarget = path.join(pluginRoot, "trusted-provider.ts");
+	const attackerPluginPath = path.join(root, "external-raced-provider.ts");
+	const providerId = "raced_child_provider";
+	const pluginLoadCalls: string[] = [];
+	const pluginLoadGlobal = globalThis as typeof globalThis & {
+		__wincodeIssue208SymlinkRaceCalls?: string[] | undefined;
+	};
+	pluginLoadGlobal.__wincodeIssue208SymlinkRaceCalls = pluginLoadCalls;
+	await fs.mkdir(pluginRoot, { recursive: true });
+	await Bun.write(
+		path.join(raceWorkspace, ".wincode", "settings.json"),
+		JSON.stringify({ plugins: [selectedPluginPath] })
+	);
+	const writeProviderPlugin = async (
+		pluginPath: string,
+		marker: string
+	): Promise<void> => {
+		await Bun.write(
+			pluginPath,
+			`export default (api) => {
+	(globalThis as typeof globalThis & { __wincodeIssue208SymlinkRaceCalls: string[] }).__wincodeIssue208SymlinkRaceCalls.push("${marker}");
+	const plugin = api.definePlugin({ id: "raced_child_plugin" });
+	plugin.registerProvider({
+		connect: async () => undefined,
+		createProvider: () => ({
+			id: "${providerId}",
+			models: [],
+			resolveAuthorization: () => null,
+			async *streamChat() { yield { type: "finish" }; },
+		}),
+		displayName: "Raced child Plugin",
+		providerId: "${providerId}",
+	});
+};
+`
+		);
+	};
+	await writeProviderPlugin(trustedPluginTarget, "trusted");
+	await writeProviderPlugin(attackerPluginPath, "attacker");
+	await fs.symlink(trustedPluginTarget, selectedPluginPath);
+	const trustedConfigStore = createConfigStore({
+		homeRoot,
+		trustedProjectRoots: [raceWorkspace],
+	});
+	let retargetAfterIdentityCheck = false;
+	const originalPluginSourceIdentity = pluginLoaderModule.pluginSourceIdentity;
+	const sourceIdentitySpy = spyOn(
+		pluginLoaderModule,
+		"pluginSourceIdentity"
+	).mockImplementation((sourcePath) => {
+		const identity = originalPluginSourceIdentity(sourcePath);
+		if (retargetAfterIdentityCheck && sourcePath === selectedPluginPath) {
+			retargetAfterIdentityCheck = false;
+			queueMicrotask(() => {
+				fsSync.rmSync(selectedPluginPath, { force: true });
+				fsSync.symlinkSync(attackerPluginPath, selectedPluginPath);
+			});
+		}
+		return identity;
+	});
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	let sdk: SessionSdk | undefined;
+	let childSdk: SessionSdk | undefined;
+	try {
+		sdk = await createSessionSdk({
+			configStore: trustedConfigStore,
+			cwd: raceWorkspace,
+			database: database.db,
+			getConnections: () => ({
+				authorize: async () => {
+					throw new Error(
+						"Plugin source race tests use fake credentials only."
+					);
+				},
+				connect: async () => {
+					throw new Error(
+						"Plugin source race tests use fake credentials only."
+					);
+				},
+				listProviders: async () => [],
+			}),
+			getRegistry: () => registry,
+			projectTrust: "trust",
+			store,
+			workspace: raceWorkspace,
+		});
+		expect(pluginLoadCalls).toEqual(["trusted"]);
+		// Retarget after path-identity validation but before async trust resolution finishes.
+		retargetAfterIdentityCheck = true;
+		childSdk = await sdk.createSessionRuntime({
+			pluginProviderIds: [providerId],
+			projectTrust: "trust",
+		});
+		expect(await fs.realpath(selectedPluginPath)).toBe(
+			await fs.realpath(attackerPluginPath)
+		);
+		expect(pluginLoadCalls).toEqual(["trusted", "trusted"]);
+	} finally {
+		await childSdk?.dispose();
+		await sdk?.dispose();
+		sourceIdentitySpy.mockRestore();
+		pluginLoadGlobal.__wincodeIssue208SymlinkRaceCalls = undefined;
+		await fs.rm(pluginRoot, { force: true, recursive: true });
+		await fs.rm(path.join(raceWorkspace, ".wincode"), {
+			force: true,
+			recursive: true,
+		});
+		await fs.rm(attackerPluginPath, { force: true });
+	}
+});
+
+test("child Session SDK rejects dangling explicit Plugin symlinks before loading them", async () => {
+	const childWorkspace = path.join(root, "child-explicit-dangling-plugin");
+	const pluginRoot = path.join(childWorkspace, ".wincode", "plugins");
+	const selectedPluginPath = path.join(pluginRoot, "selected-provider.ts");
+	const missingTargetPath = path.join(pluginRoot, "not-yet-created.ts");
+	const untrustedRepository = path.join(root, "untrusted-dangling-plugin-repo");
+	const attackerPluginPath = path.join(untrustedRepository, "attacker.ts");
+	const pluginLoadCalls: string[] = [];
+	const pluginLoadGlobal = globalThis as typeof globalThis & {
+		__wincodeIssue208DanglingPluginLoadCalls?: string[] | undefined;
+	};
+	pluginLoadGlobal.__wincodeIssue208DanglingPluginLoadCalls = pluginLoadCalls;
+	await fs.mkdir(pluginRoot, { recursive: true });
+	await fs.mkdir(path.join(untrustedRepository, ".git"), { recursive: true });
+	await Bun.write(
+		path.join(childWorkspace, ".wincode", "settings.json"),
+		JSON.stringify({ plugins: [] })
+	);
+	await Bun.write(
+		attackerPluginPath,
+		`export default (api) => {
+	(globalThis as typeof globalThis & { __wincodeIssue208DanglingPluginLoadCalls: string[] }).__wincodeIssue208DanglingPluginLoadCalls.push("attacker");
+	api.definePlugin({ id: "dangling_plugin_attacker" });
+};
+`
+	);
+	await fs.symlink(missingTargetPath, selectedPluginPath);
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	let sdk: SessionSdk | undefined;
+	let retargetAfterIdentityCapture = true;
+	let restoreSourceIdentitySpy: (() => void) | undefined;
+	try {
+		sdk = await createSessionSdk({
+			configStore,
+			cwd: childWorkspace,
+			database: database.db,
+			getConnections: () => ({
+				authorize: async () => {
+					throw new Error("Dangling Plugin tests use fake credentials only.");
+				},
+				connect: async () => {
+					throw new Error("Dangling Plugin tests use fake credentials only.");
+				},
+				listProviders: async () => [],
+			}),
+			getRegistry: () => registry,
+			projectTrust: "trust",
+			store,
+			workspace: childWorkspace,
+		});
+		const originalPluginSourceIdentity =
+			pluginLoaderModule.pluginSourceIdentity;
+		const sourceIdentitySpy = spyOn(
+			pluginLoaderModule,
+			"pluginSourceIdentity"
+		).mockImplementation((sourcePath) => {
+			const identity = originalPluginSourceIdentity(sourcePath);
+			if (retargetAfterIdentityCapture && sourcePath === selectedPluginPath) {
+				retargetAfterIdentityCapture = false;
+				queueMicrotask(() => {
+					fsSync.rmSync(selectedPluginPath, { force: true });
+					fsSync.symlinkSync(attackerPluginPath, selectedPluginPath);
+				});
+			}
+			return identity;
+		});
+		restoreSourceIdentitySpy = () => sourceIdentitySpy.mockRestore();
+
+		await expect(
+			sdk.createSessionRuntime({
+				pluginPaths: [selectedPluginPath],
+				projectTrust: "trust",
+			})
+		).rejects.toThrow("Plugin source path could not be resolved.");
+		expect(pluginLoadCalls).toEqual([]);
+		await expect(fs.realpath(selectedPluginPath)).rejects.toThrow();
+	} finally {
+		await sdk?.dispose();
+		restoreSourceIdentitySpy?.();
+		pluginLoadGlobal.__wincodeIssue208DanglingPluginLoadCalls = undefined;
+		await fs.rm(selectedPluginPath, { force: true });
+		await fs.rm(path.join(childWorkspace, ".wincode"), {
+			force: true,
+			recursive: true,
+		});
+		await fs.rm(untrustedRepository, { force: true, recursive: true });
+	}
+});
+
+test("child Session SDK reloads only the explicitly selected Plugin Provider path", async () => {
+	const pluginRoot = await fs.mkdtemp(
+		path.join(root, "selected-provider-plugin-child-")
+	);
+	const selectedPluginPath = path.join(pluginRoot, "selected-provider.ts");
+	const unselectedPluginPath = path.join(pluginRoot, "unselected-provider.ts");
+	const selectedProviderId = "selected_child_provider";
+	const unselectedProviderId = "unselected_child_provider";
+	const selectedModelId = modelId("selected-child-model");
+	const providerFactoryCalls: string[] = [];
+	const providerFactoryGlobal = globalThis as typeof globalThis & {
+		__wincodeIssue208ProviderFactoryCalls?: string[] | undefined;
+	};
+	providerFactoryGlobal.__wincodeIssue208ProviderFactoryCalls =
+		providerFactoryCalls;
+	const pluginSource = (
+		pluginId: string,
+		providerId: string,
+		providerModelId: string
+	): string => `
+export default (api) => {
+  const plugin = api.definePlugin({ id: "${pluginId}" });
+  plugin.registerProvider({
+    connect: async () => undefined,
+    createProvider: () => {
+      (globalThis as typeof globalThis & { __wincodeIssue208ProviderFactoryCalls: string[] }).__wincodeIssue208ProviderFactoryCalls.push("${providerId}");
+      return {
+        id: "${providerId}",
+        models: [{ modelId: "${providerModelId}", providerId: "${providerId}", protocolId: "fake-child-provider" }],
+        resolveAuthorization: () => null,
+        async *streamChat() { yield { type: "finish" }; },
+      };
+    },
+    displayName: "${pluginId}",
+    providerId: "${providerId}",
+  });
+};
+`;
+	await Promise.all([
+		Bun.write(
+			selectedPluginPath,
+			pluginSource("selected_child_plugin", selectedProviderId, selectedModelId)
+		),
+		Bun.write(
+			unselectedPluginPath,
+			pluginSource(
+				"unselected_child_plugin",
+				unselectedProviderId,
+				"unselected-child-model"
+			)
+		),
+	]);
+	const selectedModel: ProviderModel = {
+		capabilities: ["text"],
+		modelId: selectedModelId,
+		providerId: selectedProviderId,
+		protocolId: "fake-child-provider",
+	};
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	let selectedProviderIds: readonly string[] | undefined;
+	let selectedPluginIds: readonly string[] | undefined;
+	const sdk = await createSessionSdk({
+		configStore,
+		createProviderCollection: async (
+			pluginRuntime,
+			sessionId,
+			allowedProviderIds,
+			allowedProviderSources
+		) => {
+			selectedProviderIds = allowedProviderIds;
+			selectedPluginIds = allowedProviderSources?.map(
+				({ pluginId }) => pluginId
+			);
+			return createDefaultSessionProviderCollection(pluginRuntime, sessionId, {
+				...(allowedProviderIds === undefined
+					? {}
+					: { allowedPluginProviderIds: allowedProviderIds }),
+				...(allowedProviderSources === undefined
+					? {}
+					: { allowedPluginProviderSources: allowedProviderSources }),
+				credentialStore: {
+					delete: () => undefined,
+					get: () => undefined,
+					set: () => undefined,
+				},
+				modelStore: {
+					get: () => undefined,
+					set: () => undefined,
+				},
+			});
+		},
+		cwd: workspace,
+		getConnections: () => ({
+			authorize: async () => {
+				throw new Error(
+					"Child Plugin Provider tests must not authorize legacy Connections."
+				);
+			},
+			connect: async () => {
+				throw new Error(
+					"Child Plugin Provider tests must not connect legacy Connections."
+				);
+			},
+			listProviders: async () => [],
+		}),
+		getRegistry: () => registry,
+		pluginPaths: [selectedPluginPath, unselectedPluginPath],
+		store,
+		workspace,
+	});
+	let childSdk: SessionSdk | undefined;
+	let child: SessionSdkHandle | undefined;
+	try {
+		childSdk = await sdk.createSessionRuntime({
+			pluginProviderIds: [selectedProviderId],
+		});
+		child = await childSdk.createSession({
+			model: { ...selectedModel, modelId: modelId(selectedModel.modelId) },
+		});
+		expect(selectedProviderIds).toEqual([selectedProviderId]);
+		expect(selectedPluginIds).toEqual(["selected_child_plugin"]);
+		expect(providerFactoryCalls).toEqual([selectedProviderId]);
+	} finally {
+		await child?.dispose();
+		await childSdk?.dispose();
+		await sdk.dispose();
+		providerFactoryGlobal.__wincodeIssue208ProviderFactoryCalls = undefined;
+		await fs.rm(pluginRoot, { force: true, recursive: true });
+	}
+});
+
 test("a runtime catalog rejects Agents whose required tools exceed its effective ceiling", async () => {
 	const pluginAgent: PluginAgentRegistration = {
 		agent: {
@@ -1367,6 +1917,7 @@ test("a Session runtime snapshots its tool ceiling so later changes cannot expos
 			],
 		}),
 		cwd: workspace,
+		createProviderCollection: () => createFakeProviderCollection(recorder),
 		pluginPaths: [],
 		getRegistry: () => registry,
 		runtimeFactory: () =>
@@ -1489,6 +2040,13 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 		["permission", "submit_result"],
 		"allow"
 	);
+	const childProviderModel: ProviderModel = {
+		capabilities: ["reasoning", "text", "tools"],
+		modelId: "claude-sonnet-5",
+		providerId: "anthropic",
+		protocolId: "fake-e2e-model-client",
+		reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+	};
 	const sdk = await createSessionSdk({
 		configStore,
 		getConnections: () => ({
@@ -1505,6 +2063,8 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 			],
 		}),
 		cwd: workspace,
+		createProviderCollection: () =>
+			createFakeProviderCollection(recorder, childProviderModel),
 		pluginPaths: [subagentsPluginPath],
 		getRegistry: () => registry,
 		runtimeFactory: () =>
