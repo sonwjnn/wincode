@@ -16,3 +16,13 @@ export const SplitBorderChars = {
 	...EmptyBorder,
 	vertical: "┃",
 };
+
+export const RoundedBorderChars = {
+	...EmptyBorder,
+	bottomLeft: "╰",
+	bottomRight: "╯",
+	horizontal: "─",
+	topLeft: "╭",
+	topRight: "╮",
+	vertical: "│",
+};
