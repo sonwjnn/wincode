@@ -1,14 +1,17 @@
 # Domain Context
 
-## AI SDK language and planned application migration
+## AI Provider and Model selection
 
-These terms describe the shipped SDK and the accepted Coding-Agent migration target in [ADR-0048](docs/adr/0048-extensible-ai-sdk-providers-and-app-owned-model-selection.md) and [ADR-0049](docs/adr/0049-migrate-coding-agent-to-provider-sdk.md). Coding-Agent still runs on the Connection Provider, Model Catalog, and Model Target definitions below; replace rather than conflate those terms when the migration is implemented.
+These terms describe the shipped SDK and Coding-Agent's Provider SDK-only selection and execution introduced by issue #209 under [ADR-0048](docs/adr/0048-extensible-ai-sdk-providers-and-app-owned-model-selection.md) and [ADR-0049](docs/adr/0049-migrate-coding-agent-to-provider-sdk.md). The #204 credential-cleanup gate remains dormant: this local integration must not use real credentials or live provider endpoints until the separately reviewed gate is approved. Connection Provider and Connection below describe retained pre-cutover concepts; neither is a fallback source for current Agent Turns.
 
 **SDK Provider**:
 A runtime identity that owns authentication, its known models, and the behavior for invoking them. Several SDK Providers may use the same Model Protocol without sharing an identity. _Avoid_: Connection Provider, Model Protocol
 
 **Provider Model**:
-A model identified within an SDK Provider and associated with a Model Protocol. Being known by the SDK does not mean the provider is authenticated or online. _Avoid_: Model Catalog entry, available model
+A model identified within an SDK Provider and associated with a Model Protocol. Being known by the SDK does not mean the provider is authenticated or online. _Avoid_: available model
+
+**Provider Model Metadata**:
+Supplemental reasoning, cost, context-limit, and prompt-cache facts associated with an exact Provider Model. Metadata may enrich that identity but cannot authorize, discover, or substitute for it. _Avoid_: model policy, availability
 
 **Known Model**:
 A Provider Model in the provider's last-known list, including one restored from an offline snapshot. It is distinct from an invocable model and from the identity retained by an old Session. _Avoid_: available model, product allowlist
@@ -24,69 +27,22 @@ A credential stored for the pre-migration Connection Provider. It is distinct fr
 
 ## Connection Provider
 
-A Connection Provider defines how the CLI authenticates with an AI provider.
-It owns supported connection methods, credential validation, credential lifecycle,
-and the minimal authorization material required to invoke that provider.
-
-Connection Providers are statically integrated into the codebase. They are not
-runtime plugins and do not own model catalog entries, model capabilities, or
-model variants.
+A legacy Connection Provider defined how the CLI authenticated with an AI provider through the pre-SDK Connections path. Current Coding-Agent Agent Turns use SDK Providers and their CredentialStore authorization instead; Connection Providers do not serve as an execution fallback. _Avoid_: SDK Provider
 
 ## Connection
 
-A Connection is a validated, securely persisted credential for one Connection
-Provider. Replacing a Connection must not remove the previous credential until
-the replacement has passed validation and can be committed atomically.
-
-Consumers receive only the minimal authorization material needed for a provider.
-Stored credential details such as refresh tokens remain inside the Connections
-module.
-
-The current Connections storage format does not migrate older Connection
-records. ADR-0049 instead specifies that the future SDK cutover deletes these
-legacy credentials and requires a fresh connection; that destructive decision
-is not yet implemented.
-
-## Model Catalog
-
-The Model Catalog is the static product definition of supported models. Per-model
-ThinkingLevel policy is supplied by model metadata. The catalog references a
-Connection Provider by ID but does not own credentials or authentication behavior.
-An entry that remains in the catalog but is no
-longer selectable is retired rather than deleted, so existing Session Records
-keep their model identity. A deliberate clean-cutover prune MAY delete legacy
-IDs after the corresponding persisted data is reset; the 2026-09 prune used
-that exception.
-_Avoid_: pricing table, provider model list, discovery
-
-**Model Lifecycle**:
-Whether a Model Catalog entry may be selected for a new turn: `active` or
-`retired`. Retirement is a product decision, independent of whether the
-provider still serves the model. _Avoid_: deprecation, availability
+A Connection is a credential record for one legacy Connection Provider. It belongs to the pre-SDK Connections subsystem, not the SDK CredentialStore used by ProviderCollection. The issue #209 local cutover neither reads Connection credentials as SDK credentials nor falls back to them. The destructive legacy-credential cleanup remains gated separately by ADR-0049 and #204; do not access or delete real credentials before that gate is approved. _Avoid_: SDK Credential
 
 **ThinkingLevel**:
 Wincode's normalized reasoning selection: `off`, `minimal`, `low`, `medium`,
-`high`, `xhigh`, or `max`. A model's metadata determines which levels are
-selectable and maps them to provider-native request values. An omitted level
-leaves reasoning at the provider default; explicit `off` is distinct from that
-default. _Avoid_: provider effort, reasoning mode, variant
-
-**Model Descriptor**:
-A Model Catalog entry together with where its metadata came from and whether
-that metadata is current. This is the shape a reader resolves; the entry itself
-stays immutable. _Avoid_: model record, merged model
-
-## Model Target
-
-A Model Target is the effective Connection Provider, model, ThinkingLevel, and
-minimal authorization selected for one Agent Turn. It is transient and must not
-become a Session Record. _Avoid_: provider SDK model handle, persisted model handle
+`high`, `xhigh`, or `max`. A Provider Model's declared reasoning metadata
+specifies which levels are selectable and maps them to provider-native request
+values. An omitted level leaves reasoning at the provider default; explicit `off`
+is distinct from that default. _Avoid_: provider effort, reasoning mode, variant
 
 ## Model Protocol
 
-The provider-facing request and stream dialect used to invoke a Model Target.
-One Connection Provider can serve models through multiple Model Protocols;
-OpenCode Go is one such Connection Provider. _Avoid_: SDK, Connection Provider
+The request and stream dialect identified by a Provider Model's `protocolId` and implemented by its SDK Provider. Different SDK Providers may share a protocol without sharing identity. _Avoid_: SDK Provider, Connection Provider
 
 ## Prompt Caching
 
@@ -145,7 +101,7 @@ The public Coding-Agent interface for creating, reopening, driving, observing, a
 The application-level composition that opens one Session and connects its Stateful Agent to the Session Capabilities assembled for it. Its lifetime is independent of which conversation the UI displays; it may release an idle runtime without deleting durable history. _Avoid_: UI view, Session Store, Stateful Agent
 
 **Session Capabilities**:
-The lazy accessors a Session Host reads for one Session: its configuration, Connections, Agent registry, Session Store, Session Host Manager, Plugin runtime, Session Compaction module and settings, Skill catalog, turn tools, and Session SDK operations. An assembly resolves them; a Host reads one when the work that needs it runs. _Avoid_: capability bag, Session Services
+The lazy accessors a Session Host reads for one Session: its configuration, ProviderCollection factory, Agent registry, Session Store, Session Host Manager, Plugin runtime, Session Compaction module and settings, Skill catalog, turn tools, and Session SDK operations. An assembly resolves them; a Host reads one when the work that needs it runs. _Avoid_: capability bag, Session Services
 
 **Session Services**:
 The mode-, process-, or view-scoped assembly of what a Session Host runs on: the Plugin runtime they may close or only borrow, the durable Session Store, the Session Capabilities a Host reads lazily, and the Session SDK bound to them. They are not owned by any one Session, close only the resources they created, and never become a second Session writer. _Avoid_: Session Host, Session Environment, application runtime, capability bag
@@ -157,7 +113,7 @@ The single live authority to write one Session ID, even when both delegation and
 A request to change a Session, including prompting, steering, interruption, compaction, or overflow recovery. The Stateful Agent orders live execution; the coding application coordinates maintenance and persistence with it. _Avoid_: event, background task
 
 **Compaction Intent**:
-What one compaction request asks for: its trigger and its focus, as distinct from the messages it runs over and the Model Target selection its summary is generated with. The Session Compaction module admits a request that carries the intent already in flight and refuses one that carries another, so no caller is answered with another caller's entry while two threshold passes, which share an intent, still meet in one operation. _Avoid_: compaction request, compaction options
+What one compaction request asks for: its trigger and its focus, as distinct from the messages it runs over and the Provider Model selection used to generate its summary. The Session Compaction module admits a request that carries the intent already in flight and refuses one that carries another, so no caller is answered with another caller's entry while two threshold passes, which share an intent, still meet in one operation. _Avoid_: compaction request, compaction options
 
 **Overflow Recovery**:
 The one recovery a context-overflow refusal buys for the Agent Turn it ended: the Agent Session compacts eligible history through that turn's original user message, sanitizes the interrupted turn, then continues the resulting Session Context without appending another user message. The attempt stays keyed to the original message, so its continuation cannot chain another recovery and no new send can reset it. _Avoid_: retry, resend
@@ -408,8 +364,8 @@ The identity of one Model Step within an Agent Turn. It distinguishes separate m
 _Avoid_: Agent Turn Identifier
 
 **Model Identifier**:
-The identity of a Model Catalog entry. A model selection pairs it with a Connection Provider identity.
-_Avoid_: model capability
+The `modelId` within a Provider Model. A selection pairs it with its exact `providerId`; that pair remains authoritative for invocations and historical Session records.
+_Avoid_: provider-wide model alias, model capability
 
 **Session Identifier**:
 The identity of one durable conversation Session, whether primary, delegated, interactive, or one-shot. It identifies that Session's history and single-writer authority, not a particular live runtime instance. _Avoid_: Agent Turn Identifier, Delegated Task ID

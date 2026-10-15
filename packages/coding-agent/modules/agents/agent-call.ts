@@ -1,18 +1,16 @@
 import type { AgentId } from "@wincode/agent-core";
-import type { ThinkingSelection } from "@wincode/ai/models";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel, ThinkingSelection } from "@wincode/ai/sdk";
 import { omitUndefined } from "@wincode/utils";
 import {
-	catalogSelectionForProviderModel,
-	normalizeProviderThinkingSelection,
+	isAvailableProviderModelSelection,
+	isPluginProviderSelectionBoundToTrustedOwner,
+	isSameProviderModelIdentity,
+	type PluginProviderOwnerRegistration,
 	type ProviderModelSelection,
+	resolveProviderModelSelectionForHost,
 } from "@/modules/providers/provider-model-selection";
 import type { ResolvedCodingAgent } from "./built-ins";
-import {
-	type AgentRegistry,
-	agentUnavailableReasonWithoutModelPin,
-	canDeferAgentModelAvailability,
-} from "./registry";
+import type { AgentRegistry } from "./registry";
 
 export type AgentCallSelection = {
 	readonly agent: AgentId;
@@ -52,11 +50,7 @@ export const withAvailableAgentModelOverride = (
 	const pinnedModel = registry?.agents.find(({ id }) => id === agentId)?.model;
 	if (
 		pinnedModel === undefined ||
-		!availableProviderModels.some(
-			(model) =>
-				model.providerId === pinnedModel.providerId &&
-				model.modelId === pinnedModel.modelId
-		)
+		!isAvailableProviderModelSelection(pinnedModel, availableProviderModels)
 	) {
 		return selectionOverride;
 	}
@@ -75,18 +69,9 @@ const hasUnavailableAgentModel = (
 
 const unavailableAgentReason = (
 	agent: AgentRegistry["agents"][number] | undefined,
-	allowSubagent: boolean,
-	allowUnavailablePinReplacement: boolean,
-	allowModelAvailabilityDeferral: boolean
+	allowSubagent: boolean
 ): string | undefined => {
-	if (
-		agent === undefined ||
-		!hasUnavailableAgentModel(agent, allowSubagent) ||
-		(allowUnavailablePinReplacement &&
-			agent.modelUnavailableReason !== undefined &&
-			agentUnavailableReasonWithoutModelPin(agent) === undefined) ||
-		(allowModelAvailabilityDeferral && canDeferAgentModelAvailability(agent))
-	) {
+	if (agent === undefined || !hasUnavailableAgentModel(agent, allowSubagent)) {
 		return;
 	}
 	return (
@@ -107,8 +92,7 @@ const thinkingSelectionForAgent = (
 	}
 	if (
 		override?.model !== undefined &&
-		(override.model.modelId !== agent.model.modelId ||
-			override.model.providerId !== agent.model.providerId)
+		!isSameProviderModelIdentity(override.model, agent.model)
 	) {
 		return fallback;
 	}
@@ -119,24 +103,14 @@ const thinkingSelectionForAgent = (
 
 const resolvedAgentFor = (
 	agent: AgentRegistry["agents"][number] | undefined,
-	allowSubagent: boolean,
-	allowUnavailablePinReplacement: boolean,
-	allowModelAvailabilityDeferral: boolean
+	allowSubagent: boolean
 ): ResolvedCodingAgent | undefined => {
 	if (agent === undefined) {
 		return;
 	}
 	const isAvailable =
 		agent.isAvailable && (allowSubagent || agent.isSelectable);
-	const isUnavailablePinReplacement =
-		allowUnavailablePinReplacement &&
-		agent.modelUnavailableReason !== undefined &&
-		agentUnavailableReasonWithoutModelPin(agent) === undefined;
-	const isDeferredModelAvailability =
-		allowModelAvailabilityDeferral && canDeferAgentModelAvailability(agent);
-	if (
-		!(isAvailable || isUnavailablePinReplacement || isDeferredModelAvailability)
-	) {
+	if (!isAvailable) {
 		return;
 	}
 	return {
@@ -153,8 +127,7 @@ export const resolveEffectiveAgentSelection = (
 	fallbackModel: ProviderModelSelection,
 	fallbackSelection: ThinkingSelection,
 	allowSubagent = false,
-	selectionOverride?: AgentSelectionOverride,
-	options?: Readonly<{ allowModelAvailabilityDeferral?: boolean }>
+	selectionOverride?: AgentSelectionOverride
 ): EffectiveAgentSelection => {
 	const requested = registry?.agents.find(
 		(agent) =>
@@ -173,44 +146,86 @@ export const resolveEffectiveAgentSelection = (
 		selected = requested;
 	}
 	const model = selectionOverride?.model ?? selected?.model ?? fallbackModel;
-	const allowUnavailablePinReplacement =
-		selectionOverride?.model !== undefined &&
-		hasUnavailableAgentModel(requested, allowSubagent) &&
-		requested?.modelUnavailableReason !== undefined &&
-		agentUnavailableReasonWithoutModelPin(requested) === undefined;
-	const hasSelectionOverride =
-		selectionOverride?.model !== undefined ||
-		selectionOverride?.thinking !== undefined;
-	const allowModelAvailabilityDeferral =
-		options?.allowModelAvailabilityDeferral === true;
 	const thinkingSelection = thinkingSelectionForAgent(
 		selected,
 		fallbackSelection,
 		selectionOverride
 	);
-	const resolvedThinkingSelection =
-		hasSelectionOverride && catalogSelectionForProviderModel(model) !== null
-			? normalizeProviderThinkingSelection(model, thinkingSelection)
-			: thinkingSelection;
 	return {
 		agent: selected?.id ?? agentId,
 		model,
 		...omitUndefined({
-			resolvedAgent: resolvedAgentFor(
-				selected,
-				allowSubagent,
-				allowUnavailablePinReplacement,
-				allowModelAvailabilityDeferral
-			),
-			unavailableReason: unavailableAgentReason(
-				requested,
-				allowSubagent,
-				allowUnavailablePinReplacement,
-				allowModelAvailabilityDeferral
-			),
+			resolvedAgent: resolvedAgentFor(selected, allowSubagent),
+			unavailableReason: unavailableAgentReason(requested, allowSubagent),
 		}),
-		...resolvedThinkingSelection,
+		...thinkingSelection,
 	};
+};
+
+/**
+ * Resolves a fresh Interactive Agent pin before Provider availability is read.
+ * Restored Session models remain strict so their Plugin owner is never inferred.
+ */
+export const resolveInteractiveAgentSelection = (
+	registry: AgentRegistry | null,
+	agentId: AgentId,
+	fallbackModel: ProviderModelSelection,
+	fallbackSelection: ThinkingSelection,
+	selectionOverride: AgentSelectionOverride | undefined,
+	trustedProviderRegistrations: readonly PluginProviderOwnerRegistration[],
+	restoredModel?: ProviderModelSelection,
+	allowSubagent = false,
+	hostProviderRegistrations?: (
+		providerId: string
+	) => readonly PluginProviderOwnerRegistration[] | undefined
+): EffectiveAgentSelection => {
+	const effective = resolveEffectiveAgentSelection(
+		registry,
+		agentId,
+		fallbackModel,
+		fallbackSelection,
+		allowSubagent,
+		selectionOverride
+	);
+	const selectedAgent = registry?.agents.find(
+		(candidate) => candidate.id === effective.agent
+	);
+	const selectedAgentPin =
+		selectionOverride?.model === undefined &&
+		selectedAgent?.model !== undefined &&
+		isSameProviderModelIdentity(selectedAgent.model, effective.model);
+	const isRestoredModel =
+		selectionOverride?.model === undefined &&
+		restoredModel !== undefined &&
+		isSameProviderModelIdentity(restoredModel, effective.model);
+	const model =
+		isRestoredModel && restoredModel !== undefined
+			? restoredModel
+			: effective.model;
+	const resolvedModel = resolveProviderModelSelectionForHost(
+		model,
+		trustedProviderRegistrations,
+		selectedAgentPin && !isRestoredModel
+	);
+	if (resolvedModel === undefined) {
+		throw new Error("Could not verify the selected Provider SDK Model.");
+	}
+	const collectionRegistrations = hostProviderRegistrations?.(
+		resolvedModel.providerId
+	);
+	if (
+		hostProviderRegistrations !== undefined &&
+		!isPluginProviderSelectionBoundToTrustedOwner(
+			resolvedModel,
+			trustedProviderRegistrations,
+			collectionRegistrations
+		)
+	) {
+		throw new Error(
+			`Plugin Provider model selection ${resolvedModel.providerId}/${resolvedModel.modelId} is not bound to its trusted source in this Session Host.`
+		);
+	}
+	return { ...effective, model: resolvedModel };
 };
 
 export const prepareAgentCall = (

@@ -106,6 +106,35 @@ const controllerFor = (
 		withSessionWork: (action) => withSessionWork(manager, action),
 	});
 
+test("Provider controller exposes the current Plugin owner for explicit selection binding", async () => {
+	const stores = createMemoryStores();
+	const registration = registrationFor(
+		"selection-owner-plugin",
+		"/trusted/selection-owner.ts",
+		async () => undefined,
+		() => undefined
+	);
+	const collection = await createInteractiveSessionProviderCollection({
+		credentialStore: stores.credentialStore,
+		modelStore: stores.modelStore,
+		pluginProviders: [registration],
+	});
+	const manager = createSessionHostManager();
+	const controller = controllerFor(collection, manager);
+	try {
+		expect(
+			controller.getPluginProviderComposition?.("shared_provider")?.registration
+		).toMatchObject({
+			pluginId: registration.pluginId,
+			providerId: registration.providerId,
+			sourceIdentity: registration.sourceIdentity,
+		});
+	} finally {
+		await collection.close();
+		await manager.shutdownAll();
+	}
+});
+
 test("OpenRouter connect holds reload admission until asynchronous model discovery settles", async () => {
 	const discoveryStarted = Promise.withResolvers<void>();
 	const releaseDiscovery = Promise.withResolvers<void>();

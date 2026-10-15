@@ -6,10 +6,7 @@ import {
 	createTestRenderer,
 	type TestRendererSetup,
 } from "@opentui/core/testing";
-import type {
-	ModelStepRequest,
-	ModelStreamPart,
-} from "@wincode/ai/model-client";
+import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai/sdk";
 import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,
@@ -18,10 +15,12 @@ import type { DispatchModeRunners } from "@/modules/application/dispatch";
 import { dispatch } from "@/modules/application/dispatch";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
-import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
 import type { SessionId } from "@/shared/identifiers";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
-import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
+import {
+	getInteractiveRuntimeContext,
+	setInteractiveRuntimeContext,
+} from "@/shared/runtime-context";
 import {
 	createE2eStore,
 	waitForSessionCondition,
@@ -33,6 +32,7 @@ import {
 	interactiveConfigRuntime,
 	recorder,
 	restoreEnvironment,
+	restoreHomeDirectory,
 	restoreScrollTo,
 	testDirectory,
 } from "../support/interactive-cli-delegation-setup";
@@ -67,8 +67,8 @@ const DELEGATION_CALL_ID = toolCallId("interactive-cli-delegation");
 const SUBMIT_RESULT_CALL_ID = toolCallId("interactive-cli-submit-result");
 
 recorder.stepScript = async function* (
-	request: ModelStepRequest
-): AsyncGenerator<ModelStreamPart> {
+	request: ProviderChatRequest
+): AsyncGenerator<ProviderChatEvent> {
 	const latestUserText =
 		request.messages
 			.filter(({ role }) => role === "user")
@@ -77,7 +77,8 @@ recorder.stepScript = async function* (
 			.join("\n") ?? "";
 	if (latestUserText.includes("Durable report for delegated Task")) {
 		yield { delta: PARENT_OUTPUT, type: "text-delta" };
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
 		return;
 	}
 	if (latestUserText === CHILD_PROMPT) {
@@ -88,12 +89,14 @@ recorder.stepScript = async function* (
 			toolName: "submit_result",
 			type: "tool-call",
 		};
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
 		return;
 	}
 	if (request.messages.some(({ role }) => role === "tool")) {
 		yield { delta: PARENT_START_OUTPUT, type: "text-delta" };
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
 		return;
 	}
 	yield {
@@ -102,12 +105,14 @@ recorder.stepScript = async function* (
 		toolName: "delegate",
 		type: "tool-call",
 	};
-	yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+	yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+	yield { type: "finish" };
 };
 
 afterAll(async () => {
 	subagentsTaskStore.close();
 	mock.restore();
+	restoreHomeDirectory();
 	restoreScrollTo();
 	restoreEnvironment();
 	await cleanupTestDirectory();
@@ -131,11 +136,11 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 	const runners: DispatchModeRunners = {
 		interactive: async (context) => {
 			setInteractiveRuntimeContext({
+				...getInteractiveRuntimeContext(),
 				args: context.args,
 				configRuntime: context.configRuntime,
 				cwd: context.cwd,
 				pluginRuntime: context.pluginRuntime,
-				runtimeFactory: defaultRuntimeFactory,
 			});
 			return runInteractive(rendererFactory);
 		},

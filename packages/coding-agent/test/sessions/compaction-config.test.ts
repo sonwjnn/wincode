@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { defaultChatModelSelection } from "@wincode/ai/models";
-import { modelPricingKey } from "@/modules/model-pricing/model-pricing";
-import { parseProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import {
+	DEFAULT_PROVIDER_MODEL_SELECTION,
+	parseProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	resolveCompactionSettings,
@@ -63,22 +64,16 @@ describe("resolveCompactionSettings", () => {
 		);
 	});
 
-	test("keeps missing Provider context unknown instead of borrowing a Catalog limit", async () => {
+	test("keeps context unknown when a Provider Model is not supplied", async () => {
 		const operations = createCompactionSettingsOperations({
 			configStore: fromPartial<ConfigStore>({
 				getSnapshot: async () => snapshot({}),
 			}),
-			pricing: {
-				[modelPricingKey(
-					defaultChatModelSelection.providerId,
-					defaultChatModelSelection.modelId
-				)]: { limits: { context: 64_000 } },
-			},
 			workspace: "/workspace",
 		});
 
 		const settings = await operations.getCompactionSettings(
-			defaultChatModelSelection,
+			DEFAULT_PROVIDER_MODEL_SELECTION,
 			null
 		);
 
@@ -86,12 +81,11 @@ describe("resolveCompactionSettings", () => {
 		expect(settings.autoAvailable).toBe(false);
 	});
 
-	test("does not guess catalog context limits for an absent Provider Model", async () => {
+	test("does not guess context limits for an absent Provider Model", async () => {
 		const operations = createCompactionSettingsOperations({
 			configStore: fromPartial<ConfigStore>({
 				getSnapshot: async () => snapshot({}),
 			}),
-			pricing: {},
 			workspace: "/workspace",
 		});
 

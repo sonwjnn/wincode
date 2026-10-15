@@ -6,13 +6,11 @@ import type { ProviderModel } from "@wincode/ai/sdk";
 import { isNull } from "@wincode/utils";
 import {
 	type ModelPricingEntry,
-	type ModelPricingTable,
 	pricingEntryForProviderModel,
-	resolveModelMetadata,
 } from "@/modules/model-pricing";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import {
-	catalogSelectionForProviderModel,
+	isSameProviderModelIdentity,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
 import type {
@@ -36,7 +34,7 @@ export type SessionUsageSummary = {
 	cacheReadTokens: number;
 	/** Session-total cache writes, kept separate from context usage. */
 	cacheWriteTokens: number;
-	/** `null` when the catalog has no limit for the current model. */
+	/** `null` when the current Provider Model publishes no context limit. */
 	contextLimit: number | null;
 	/** `null` when `contextLimit` is unknown. */
 	contextPercent: number | null;
@@ -79,34 +77,22 @@ const providerModelForSelection = (
 	models: readonly ProviderModel[] | undefined,
 	selection: ProviderModelSelection
 ): ProviderModel | undefined =>
-	models?.find(
-		(model) =>
-			model.providerId === selection.providerId &&
-			model.modelId === selection.modelId
-	);
+	models?.find((model) => isSameProviderModelIdentity(model, selection));
 
 const resolveProviderModelPricing = (
-	table: ModelPricingTable,
 	selection: ProviderModelSelection,
 	providerModels: readonly ProviderModel[] | undefined
 ): ModelPricingEntry | undefined => {
-	if (providerModels !== undefined) {
-		const providerModel = providerModelForSelection(providerModels, selection);
-		return providerModel === undefined
-			? undefined
-			: pricingEntryForProviderModel(providerModel);
-	}
-	const catalogModel = catalogSelectionForProviderModel(selection);
-	return catalogModel === null
+	const providerModel = providerModelForSelection(providerModels, selection);
+	return providerModel === undefined
 		? undefined
-		: (resolveModelMetadata(table, catalogModel) ?? undefined);
+		: pricingEntryForProviderModel(providerModel);
 };
 
 const collectSessionUsage = (
 	messages: readonly SessionMessage[],
 	usageEntries: readonly SessionUsageEntry[],
 	fallbackModel: ProviderModelSelection,
-	table: ModelPricingTable,
 	providerModels: readonly ProviderModel[] | undefined
 ): Pick<
 	SessionUsageSummary,
@@ -132,7 +118,7 @@ const collectSessionUsage = (
 		cacheReadTokens += usage.cacheReadTokens ?? 0;
 		cacheWriteTokens += usage.cacheWriteTokens ?? 0;
 		const selection = message.metadata?.model ?? fallbackModel;
-		const entry = resolveProviderModelPricing(table, selection, providerModels);
+		const entry = resolveProviderModelPricing(selection, providerModels);
 		const cost = turnCostUsd(entry ?? undefined, usage);
 		if (!isNull(cost)) {
 			total += cost;
@@ -142,11 +128,7 @@ const collectSessionUsage = (
 	for (const entry of usageEntries) {
 		cacheReadTokens += entry.usage.cacheReadTokens ?? 0;
 		cacheWriteTokens += entry.usage.cacheWriteTokens ?? 0;
-		const pricing = resolveProviderModelPricing(
-			table,
-			entry.model,
-			providerModels
-		);
+		const pricing = resolveProviderModelPricing(entry.model, providerModels);
 		const cost = turnCostUsd(pricing ?? undefined, entry.usage);
 		if (!isNull(cost)) {
 			total += cost;
@@ -183,7 +165,6 @@ const collectSessionUsage = (
 export const summarizeSessionUsage = (
 	messages: readonly SessionMessage[],
 	fallbackModel: ProviderModelSelection,
-	table: ModelPricingTable,
 	usageEntries: readonly SessionUsageEntry[] = [],
 	cacheWarmingStatus: CacheWarmingStatus = "idle",
 	providerModels?: readonly ProviderModel[]
@@ -194,11 +175,7 @@ export const summarizeSessionUsage = (
 	}
 	const selection = lastSelection ?? fallbackModel;
 	const providerModel = providerModelForSelection(providerModels, selection);
-	const contextLimit =
-		providerModels === undefined
-			? (resolveProviderModelPricing(table, selection, providerModels)?.limits
-					?.context ?? null)
-			: (providerModel?.limits?.contextWindowTokens ?? null);
+	const contextLimit = providerModel?.limits?.contextWindowTokens ?? null;
 	const contextTokens = getModelContextTokens(lastUsage);
 	const contextPercent =
 		!isNull(contextLimit) && contextLimit > 0
@@ -209,7 +186,6 @@ export const summarizeSessionUsage = (
 			messages,
 			usageEntries,
 			fallbackModel,
-			table,
 			providerModels
 		),
 		cacheWarmingStatus,

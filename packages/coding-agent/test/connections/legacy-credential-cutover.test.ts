@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-	LegacyCredentialCleanupEntry,
-	LegacyCredentialCleanupStore,
+import {
+	type LegacyCredentialCleanupEntry,
+	type LegacyCredentialCleanupStore,
+	legacyCredentialProviderIds,
 } from "@wincode/ai/connections/legacy-cleanup";
-import { connectionProviderIds } from "@wincode/ai/models";
 import {
 	createLegacyCredentialCutoverGate,
 	LegacyCredentialCutoverBlockedError,
@@ -20,7 +20,7 @@ const markerPathFor = (userDataDir: string): string =>
 	);
 
 const verifiedEntry = (
-	providerId: (typeof connectionProviderIds)[number]
+	providerId: (typeof legacyCredentialProviderIds)[number]
 ): LegacyCredentialCleanupEntry => ({
 	providerId,
 	platform: "not-configured",
@@ -28,7 +28,7 @@ const verifiedEntry = (
 });
 
 const verifiedReport = (): readonly LegacyCredentialCleanupEntry[] =>
-	connectionProviderIds.map(verifiedEntry);
+	legacyCredentialProviderIds.map(verifiedEntry);
 
 const gateFor = (
 	userDataDir: string,
@@ -46,7 +46,7 @@ test("an incomplete cleanup blocks model execution and does not write the comple
 		path.join(os.tmpdir(), "wincode-credential-cutover-blocked-")
 	);
 	let requestStarted = false;
-	const report = connectionProviderIds.map((providerId) =>
+	const report = legacyCredentialProviderIds.map((providerId) =>
 		providerId === "google"
 			? ({ providerId, platform: "unverified", file: "deleted" } as const)
 			: verifiedEntry(providerId)
@@ -147,7 +147,7 @@ test("a partial cleanup can be retried after restart without claiming rollback",
 	const firstCleanup: LegacyCredentialCleanupStore = {
 		removeAllAndVerify: async () => {
 			remaining.delete("openai");
-			return connectionProviderIds.map((providerId) =>
+			return legacyCredentialProviderIds.map((providerId) =>
 				providerId === "google"
 					? ({ providerId, platform: "unverified", file: "deleted" } as const)
 					: verifiedEntry(providerId)

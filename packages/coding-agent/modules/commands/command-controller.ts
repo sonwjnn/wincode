@@ -1,8 +1,8 @@
-import type { ChatModelSelection } from "@wincode/ai/models";
 import type { ProviderModel } from "@wincode/ai/sdk";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { PluginCommandDescriptor } from "@/modules/plugins/runtime";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { Skill, SkillContext } from "@/modules/skills";
 import { SKILL_NAMESPACE_PREFIX } from "@/modules/skills";
 import {
@@ -100,8 +100,10 @@ export type CommandController = {
 export type CommandControllerOptions = {
 	unavailableCapabilities?: readonly CommandCapability[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
-	onSelectModel?: (model: ChatModelSelection) => void;
-	onSelectProviderModel?: (model: ProviderModel) => void;
+	onSelectProviderModel?: (
+		model: ProviderModel,
+		selection: ProviderModelSelection
+	) => void | Promise<void>;
 	providerController?: InteractiveProviderController;
 	providerModel?: ProviderModel;
 	onError: (message: string) => void;

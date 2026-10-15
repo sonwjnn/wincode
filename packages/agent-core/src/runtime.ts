@@ -1,4 +1,3 @@
-import type { ModelStepRequest } from "@wincode/ai/model-client";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import type { ChatRequest } from "@wincode/ai/sdk";
 import { isObjectLike, isString } from "@wincode/utils";
@@ -152,13 +151,13 @@ export const createAgentTurnAbortEvent = (
 	}
 };
 
-/** Best-effort notifications around each streaming Model request. */
+/** Best-effort notifications around each Provider SDK chat request. */
 export type ModelStepObserver = Readonly<{
-	/** Called immediately before each legacy or SDK Model request. */
-	onModelStepStarted: (request: ModelStepRequest | ChatRequest) => void;
-	/** Called after a real legacy or SDK Model request completes. */
+	/** Called immediately before each Provider SDK chat request. */
+	onModelStepStarted: (request: ChatRequest) => void;
+	/** Called after a Provider SDK chat request completes. */
 	onModelStepFinished: (
-		request: ModelStepRequest | ChatRequest,
+		request: ChatRequest,
 		usage: ModelUsage | undefined
 	) => void;
 }>;
@@ -169,8 +168,6 @@ export type AgentRuntimeRunOptions = Readonly<{
 	modelStepObserver?: ModelStepObserver;
 	/** Marks this individual request as a best-effort cache-warm replay. */
 	cacheWarming?: true;
-	/** A Session-selected Google resource for its stable prompt prefix. */
-	googleCachedContent?: ModelStepRequest["googleCachedContent"];
 	/** Stable Session-scoped routing hint; Model Protocols emit it only when supported. */
 	promptCacheKey?: string;
 	/** Aborts the running turn. Consumers own the signal. */

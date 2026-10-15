@@ -18,13 +18,12 @@ const restoreEnvironment = createEnvironmentRestorer([
 process.env.WINCODE_TEST_PLUGIN_LIFECYCLE_LOG = lifecycleLogPath;
 
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { Connections } from "@wincode/ai/connections";
-import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { buildAgentRegistry } from "@/modules/agents/registry";
-import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { createSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import type { SessionHostManager } from "@/modules/sessions/host/types";
@@ -58,14 +57,6 @@ const configRuntime: ConfigRuntime = {
 	trustedProjectRoots: [],
 	workspace,
 };
-const connections: Connections = {
-	authorize: async () => ({
-		apiKey: "session-services-key",
-		kind: "api-key",
-	}),
-	connect: async () => undefined,
-	listProviders: async () => [],
-};
 /** The empty Plugin runtime the Session Services in this file borrow. */
 const emptyRuntime = createEmptyPluginRuntime();
 
@@ -97,7 +88,6 @@ const resetLifecycleLog = async (): Promise<void> => {
 
 const sources = {
 	configRuntime: () => configRuntime,
-	connections: () => connections,
 	registry: () => null,
 	store: () => store,
 };
@@ -180,7 +170,6 @@ test("opens the Sessions its Session SDK creates through the services' Host Mana
 });
 
 test("reads its sources when the work needs them, not when it opens", async () => {
-	let currentConnections = connections;
 	let currentConfig = configRuntime;
 	let currentRegistry: AgentRegistry | null = null;
 	const services = await openSessionServices({
@@ -188,34 +177,30 @@ test("reads its sources when the work needs them, not when it opens", async () =
 		sources: {
 			...sources,
 			configRuntime: () => currentConfig,
-			connections: () => currentConnections,
 			pluginRuntime: () => emptyRuntime,
 			registry: () => currentRegistry,
 		},
 	});
 
-	const replacementConnections: Connections = {
-		...connections,
-		listProviders: async () => [],
-	};
 	const replacementConfig: ConfigRuntime = { ...configRuntime, cwd: homeRoot };
-	currentConnections = replacementConnections;
 	currentConfig = replacementConfig;
 	currentRegistry = registry;
 
-	expect(services.capabilities.getConnections()).toBe(replacementConnections);
 	expect(services.capabilities.getConfig()).toBe(replacementConfig);
 	expect(services.capabilities.getRegistry()).toBe(registry);
 	await services.shutdown();
 });
 
-test("resolves compaction settings through the current pricing and configuration", async () => {
-	const model: ChatModelSelection = {
+test("resolves compaction settings from the exact Provider Model metadata", async () => {
+	const model: ProviderModelSelection = {
 		modelId: modelId("gpt-5.6-luna"),
 		providerId: "openai",
 	};
-	const priced = (context: number): ModelPricingTable => ({
-		"openai/gpt-5.6-luna": { limits: { context } },
+	const providerModel = (contextWindowTokens: number): ProviderModel => ({
+		limits: { contextWindowTokens },
+		modelId: model.modelId,
+		protocolId: "fixture",
+		providerId: model.providerId,
 	});
 	const configured = (enabled: boolean): ConfigRuntime => ({
 		...configRuntime,
@@ -230,7 +215,7 @@ test("resolves compaction settings through the current pricing and configuration
 				}),
 		},
 	});
-	let currentPricing = priced(100_000);
+	let currentContextLimit = 100_000;
 	let currentConfig = configRuntime;
 	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
@@ -238,17 +223,22 @@ test("resolves compaction settings through the current pricing and configuration
 			...sources,
 			configRuntime: () => currentConfig,
 			pluginRuntime: () => emptyRuntime,
-			pricing: () => currentPricing,
 		},
 	});
 
-	const first = await services.capabilities.getCompactionSettings(model);
+	const first = await services.capabilities.getCompactionSettings(
+		model,
+		providerModel(currentContextLimit)
+	);
 	expect(first.modelContextLimit).toBe(100_000);
 	expect(first.enabled).toBe(true);
 
-	currentPricing = priced(200_000);
+	currentContextLimit = 200_000;
 	currentConfig = configured(false);
-	const second = await services.capabilities.getCompactionSettings(model);
+	const second = await services.capabilities.getCompactionSettings(
+		model,
+		providerModel(currentContextLimit)
+	);
 	expect(second.modelContextLimit).toBe(200_000);
 	expect(second.enabled).toBe(false);
 	await services.shutdown();
@@ -336,7 +326,6 @@ test("runs without Plugins when the caller supplies neither a runtime nor a poli
 		policy: { cwd: workspace, workspace },
 		sources: {
 			configRuntime: () => configRuntime,
-			connections: () => connections,
 			store: () => store,
 		},
 	});

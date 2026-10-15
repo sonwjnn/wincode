@@ -16,11 +16,7 @@ import {
 	toSubmissionId,
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
-import {
-	getSupportedThinkingLevels,
-	type ThinkingLevel,
-	thinkingLevelSchema,
-} from "@wincode/ai/models";
+import { type ThinkingLevel, thinkingLevelSchema } from "@wincode/ai/sdk";
 import {
 	isArray,
 	isObjectLike,
@@ -33,7 +29,6 @@ import { randomUUIDv7 } from "bun";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import { z } from "zod";
 import {
-	catalogSelectionForProviderModel,
 	type ProviderModelSelection,
 	providerModelSelectionSchema,
 } from "@/modules/providers/provider-model-selection";
@@ -295,18 +290,6 @@ export const sessionMessageMetadataSchema = z
 				});
 			}
 			return;
-		}
-		const model = metadata.model;
-		const catalogModel = catalogSelectionForProviderModel(model);
-		if (
-			catalogModel !== null &&
-			metadata.thinkingLevel !== undefined &&
-			!getSupportedThinkingLevels(catalogModel).includes(metadata.thinkingLevel)
-		) {
-			context.addIssue({
-				code: "custom",
-				message: "Thinking level is not supported for selected model",
-			});
 		}
 	});
 

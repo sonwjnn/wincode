@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { AgentDefinition } from "@wincode/agent-core";
-import { defaultChatModelSelection } from "@wincode/ai/models";
 import type { ProviderModel } from "@wincode/ai/sdk";
 import {
 	canReplaceUnavailableAgentModel,
@@ -12,20 +11,22 @@ import {
 	parseProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
 
-const agentFor = (model: ProviderModelSelection, isAvailable = true) =>
+const agentFor = (
+	model: ProviderModelSelection,
+	isAvailable = true,
+	unavailableReason?: string
+) =>
 	fromPartial<
 		AgentDefinition & {
 			readonly isAvailable: boolean;
 			readonly model: ProviderModelSelection;
-			readonly modelUnavailableReason?: string;
 			readonly unavailableReason?: string;
 		}
 	>({
 		displayName: "Pinned Agent",
 		isAvailable,
 		model,
-		modelUnavailableReason: "Legacy connection is unavailable",
-		unavailableReason: "Legacy connection is unavailable",
+		...(unavailableReason === undefined ? {} : { unavailableReason }),
 	});
 
 const sdkSelection = parseProviderModelSelection("plugin-provider/exact-model");
@@ -39,58 +40,42 @@ const currentSdkModel: ProviderModel = {
 	providerId: sdkSelection.providerId,
 };
 
-test("SDK Agent pins use exact current ProviderCollection models, not Connections IDs", () => {
+test("pinned Agent availability requires an exact current Provider Model", () => {
 	const agent = agentFor(sdkSelection);
 
-	expect(
-		getAgentUnavailableReason(agent, new Set([sdkSelection.providerId]), [])
-	).toContain("Provider Model plugin-provider/exact-model is unavailable");
-	expect(
-		getAgentUnavailableReason(agentFor(sdkSelection, false), new Set(), [
-			currentSdkModel,
-		])
-	).toBeUndefined();
+	expect(getAgentUnavailableReason(agent, [])).toContain(
+		"Provider Model plugin-provider/exact-model is unavailable"
+	);
+	expect(getAgentUnavailableReason(agent, [currentSdkModel])).toBeUndefined();
 });
 
-test("a current Provider Model overrides a stale legacy Agent pin connection", () => {
-	const catalogSelection = defaultChatModelSelection;
-	const currentModel: ProviderModel = {
-		modelId: catalogSelection.modelId,
+test("a pinned Agent fails closed when Provider Models cannot be checked", () => {
+	expect(getAgentUnavailableReason(agentFor(sdkSelection))).toContain(
+		"availability cannot be checked"
+	);
+});
+
+test("an unrelated Agent restriction prevents replacement of a missing pinned model", () => {
+	const agent = agentFor(
+		sdkSelection,
+		false,
+		"Missing required child tools: shell"
+	);
+
+	expect(canReplaceUnavailableAgentModel(agent, [])).toBe(false);
+	expect(getAgentUnavailableReason(agent, [currentSdkModel])).toBe(
+		"Missing required child tools: shell"
+	);
+});
+
+test("a missing pinned model can only be replaced by an explicit available choice", () => {
+	const replacement: ProviderModel = {
+		modelId: "replacement-model",
 		protocolId: "fixture",
-		providerId: catalogSelection.providerId,
+		providerId: "plugin-provider",
 	};
-	const pinnedAgent = agentFor(catalogSelection, false);
+	const agent = agentFor(sdkSelection);
 
-	expect(
-		getAgentUnavailableReason(pinnedAgent, new Set(), [currentModel])
-	).toBeUndefined();
-});
-
-test("an unavailable pin with an unrelated Agent restriction cannot be replaced", () => {
-	const agent = {
-		...agentFor(defaultChatModelSelection, false),
-		modelUnavailableReason: "Provider Model openai/gpt-5.6-luna is unavailable",
-		unavailableReason:
-			"Provider Model openai/gpt-5.6-luna is unavailable; Missing required child tools: shell",
-	};
-
+	expect(canReplaceUnavailableAgentModel(agent, [replacement])).toBe(true);
 	expect(canReplaceUnavailableAgentModel(agent, [currentSdkModel])).toBe(false);
-});
-
-test("legacy connectivity checks apply only to Catalog selections", () => {
-	const sdkAgent = agentFor(sdkSelection);
-	const catalogAgent = agentFor(defaultChatModelSelection);
-
-	expect(
-		getAgentUnavailableReason(sdkAgent, new Set([sdkSelection.providerId]))
-	).toContain("requires the Provider SDK runtime");
-	expect(
-		getAgentUnavailableReason(
-			catalogAgent,
-			new Set([defaultChatModelSelection.providerId])
-		)
-	).toBeUndefined();
-	expect(
-		getAgentUnavailableReason(catalogAgent, new Set(), [currentSdkModel])
-	).toContain(`Provider Model ${defaultChatModelSelection.providerId}/`);
 });

@@ -38,6 +38,10 @@ import type {
 } from "@/modules/plugins/runtime";
 import type { PluginProviderComposition } from "@/modules/providers/interactive-provider-controller";
 import {
+	isBuiltInProviderId,
+	pluginProviderIdentityMatches,
+} from "@/modules/providers/provider-model-selection";
+import {
 	getProviderSdkStores,
 	pluginProviderStorageId,
 } from "@/modules/providers/provider-stores";
@@ -91,7 +95,23 @@ export type PreparedProviderComposition = Readonly<{
 	discard: () => Promise<void>;
 }>;
 
-/** A per-Host collection that can replace its idle Provider composition. */
+export type SessionProviderCollectionFactory = (
+	pluginRuntime?: PluginRuntime,
+	sessionId?: string,
+	allowedPluginProviderIds?: readonly string[],
+	allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[]
+) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
+
+/** Thrown when a Session Host cannot obtain a ProviderCollection. */
+export class ProviderCollectionUnavailableError extends Error {
+	constructor() {
+		super(
+			"Session Host could not be initialized because its ProviderCollection is unavailable."
+		);
+		this.name = "ProviderCollectionUnavailableError";
+	}
+}
+
 export type InteractiveSessionProviderCollection = ProviderCollection &
 	Readonly<{
 		getPluginProviderComposition: (
@@ -110,6 +130,32 @@ export type InteractiveSessionProviderCollection = ProviderCollection &
 			options?: OpenAIBrowserLoginOptions
 		) => Promise<readonly ProviderModel[]>;
 	}>;
+
+type PluginProviderRegistrationsSource = Readonly<{
+	getPluginProviderRegistrations?: () => readonly PluginProviderDescriptor[];
+}>;
+
+const hasPluginProviderRegistrations = (
+	providerCollection: ProviderCollection | PluginProviderRegistrationsSource
+): providerCollection is Required<PluginProviderRegistrationsSource> =>
+	"getPluginProviderRegistrations" in providerCollection &&
+	typeof providerCollection.getPluginProviderRegistrations === "function";
+
+/** Reads authoritative Plugin ownership metadata when the Host collection exposes it. */
+export const getPluginProviderRegistrationsFromCollection = (
+	providerCollection:
+		| ProviderCollection
+		| PluginProviderRegistrationsSource
+		| undefined
+): readonly PluginProviderDescriptor[] | undefined => {
+	if (
+		providerCollection === undefined ||
+		!hasPluginProviderRegistrations(providerCollection)
+	) {
+		return;
+	}
+	return providerCollection.getPluginProviderRegistrations();
+};
 
 type ProviderCollectionBackend = Readonly<{
 	collection: ProviderCollection;
@@ -139,14 +185,6 @@ const createFailClosedBackend = (): ProviderCollectionBackend =>
 	});
 
 const OPENROUTER_PROVIDER_ID = "openrouter";
-const BUILT_IN_PROVIDER_IDS = new Set([
-	"openai",
-	"anthropic",
-	"google",
-	"opencode-go",
-	"deepseek",
-	OPENROUTER_PROVIDER_ID,
-]);
 
 const closeProviderInstances = async (
 	providers: readonly Provider[]
@@ -201,7 +239,7 @@ const createProviderBackend = async (
 			OPENROUTER_PROVIDER_ID
 		);
 		for (const registration of pluginProviders) {
-			if (BUILT_IN_PROVIDER_IDS.has(registration.providerId)) {
+			if (isBuiltInProviderId(registration.providerId)) {
 				throw new Error(`Duplicate Provider ID '${registration.providerId}'.`);
 			}
 			let provider: Provider;
@@ -334,7 +372,7 @@ export const createInteractiveSessionProviderCollection = async (
 		close,
 		deleteCredential: (providerId) =>
 			activeCollection().deleteCredential(providerId),
-		getAvailable: () => activeCollection().getAvailable(),
+		getAvailable: (providerId) => activeCollection().getAvailable(providerId),
 		getModel: (providerId, modelId) =>
 			activeCollection().getModel(providerId, modelId),
 		getModels: () => activeCollection().getModels(),
@@ -403,7 +441,7 @@ export const createInteractiveSessionProviderCollection = async (
 			}
 			await activeCollection().setCredential("openai", credential);
 			return activeCollection()
-				.getAvailable()
+				.getAvailable("openai")
 				.then((models) =>
 					models.filter((model) => model.providerId === "openai")
 				);
@@ -462,11 +500,8 @@ export const pluginProvidersFromRuntime = (
 		(provider) =>
 			(allowedIds === undefined || allowedIds.has(provider.providerId)) &&
 			(allowedProviderSources === undefined ||
-				allowedProviderSources.some(
-					(source) =>
-						source.pluginId === provider.pluginId &&
-						source.providerId === provider.providerId &&
-						source.sourceIdentity === provider.sourceIdentity
+				allowedProviderSources.some((source) =>
+					pluginProviderIdentityMatches(source, provider)
 				))
 	);
 };

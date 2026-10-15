@@ -1,11 +1,4 @@
-import type { Connections } from "@wincode/ai/connections";
-import type { ModelTarget } from "@wincode/ai/model";
-import {
-	generateModelText,
-	type ModelTextGenerationOptions,
-} from "@wincode/ai/model-client";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import type { ThinkingLevel } from "@wincode/ai/models";
 import type {
 	ChatEvent,
 	ProviderCollection,
@@ -13,11 +6,10 @@ import type {
 } from "@wincode/ai/sdk";
 import { omitUndefined } from "@wincode/utils";
 import {
-	catalogSelectionForProviderModel,
+	isAvailableProviderModelSelection,
 	type ProviderModelSelection,
 	providerModelReasoningEffort,
 } from "@/modules/providers/provider-model-selection";
-import { resolveChatModelTarget } from "../../model-target";
 import { escapeXml } from "../../prompt-composition/project-instructions";
 import {
 	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
@@ -107,23 +99,6 @@ Use this EXACT format:
 ## Relevant Files
 - [Exact path] — why it matters to the next step`;
 
-export type SummaryTextGenerationOptions = ModelTextGenerationOptions;
-
-export type SummaryTextGenerator = (
-	options: SummaryTextGenerationOptions
-) => Promise<SummaryGeneratorResult>;
-
-export type SummaryModel = ModelTarget;
-
-export type SummaryModelResolver = (
-	selection: ProviderModelSelection,
-	signal?: AbortSignal,
-	thinkingLevel?: ThinkingLevel,
-	maxOutputTokens?: number
-) => Promise<SummaryModel>;
-const defaultTextGenerator: SummaryTextGenerator = async (options) =>
-	generateModelText(options);
-
 const buildSummaryPrompt = (input: SummaryGeneratorInput): string => {
 	const focus = input.focus?.trim();
 	const promptParts = [
@@ -143,78 +118,6 @@ const buildSummaryPrompt = (input: SummaryGeneratorInput): string => {
 	return promptParts.join("\n\n");
 };
 
-export const createLanguageModelSummaryGenerator =
-	({
-		generate = defaultTextGenerator,
-		resolveModel,
-	}: {
-		generate?: SummaryTextGenerator;
-		resolveModel: SummaryModelResolver;
-	}): SummaryGenerator =>
-	async (input) => {
-		const requestedOutputTokens = Math.max(
-			1,
-			Math.floor(
-				input.maxOutputTokens ?? DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
-			)
-		);
-		const model = await resolveModel(
-			input.model,
-			input.signal,
-			input.thinkingLevel,
-			requestedOutputTokens
-		);
-		const maxOutputTokens = Math.min(
-			requestedOutputTokens,
-			model.maxOutputTokens ?? requestedOutputTokens
-		);
-		const prompt = buildSummaryPrompt(input);
-		return generate({
-			signal: input.signal,
-			maxOutputTokens,
-			model,
-			prompt,
-			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
-		});
-	};
-
-export const resolveDirectSummaryModel = async (
-	selection: ProviderModelSelection,
-	connections: Connections,
-	signal?: AbortSignal,
-	thinkingLevel?: ThinkingLevel,
-	maxOutputTokens?: number
-): Promise<SummaryModel> => {
-	const catalogModel = catalogSelectionForProviderModel(selection);
-	if (catalogModel === null) {
-		throw new Error(
-			`Provider Model ${selection.providerId}/${selection.modelId} is unavailable. Choose another model to compact this session.`
-		);
-	}
-	const targetOptions = omitUndefined({
-		allowRetired: true,
-		maxOutputTokens,
-		signal,
-		thinkingLevel,
-	});
-	return resolveChatModelTarget(catalogModel, connections, targetOptions);
-};
-export const createDirectSummaryGenerator = (
-	connections: Connections,
-	generate?: SummaryTextGenerator
-): SummaryGenerator =>
-	createLanguageModelSummaryGenerator({
-		generate,
-		resolveModel: (selection, signal, thinkingLevel, maxOutputTokens) =>
-			resolveDirectSummaryModel(
-				selection,
-				connections,
-				signal,
-				thinkingLevel,
-				maxOutputTokens
-			),
-	});
-
 const providerModelFor = (
 	collection: ProviderCollection,
 	selection: ProviderModelSelection
@@ -225,10 +128,9 @@ const isAvailableProviderModel = async (
 	collection: ProviderCollection,
 	selection: ProviderModelSelection
 ): Promise<boolean> =>
-	(await collection.getAvailable()).some(
-		(model) =>
-			model.providerId === selection.providerId &&
-			model.modelId === selection.modelId
+	isAvailableProviderModelSelection(
+		selection,
+		await collection.getAvailable(selection.providerId)
 	);
 
 const requireInvocableProviderModel = async (
@@ -344,5 +246,12 @@ const providerSummaryGenerator =
 
 /** Uses only an explicitly invocable SDK Provider Model without changing its stored identity. */
 export const createProviderSummaryGenerator = (
-	collection: ProviderCollection
-): SummaryGenerator => providerSummaryGenerator(collection);
+	collection: ProviderCollection,
+	assertTrustedSelection?: (model: ProviderModelSelection) => void
+): SummaryGenerator => {
+	const generateSummary = providerSummaryGenerator(collection);
+	return (input) => {
+		assertTrustedSelection?.(input.model);
+		return generateSummary(input);
+	};
+};

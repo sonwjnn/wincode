@@ -128,7 +128,7 @@ test("built-in Provider API keys are masked and saved only through the host cont
 		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 3);
 		const apiKeyInput = setup.renderer.root.findDescendantById(
-			"connection-api-key-input"
+			"provider-api-key-input"
 		);
 		if (!(apiKeyInput instanceof InputRenderable)) {
 			throw new Error("The built-in Provider API-key input did not render.");
@@ -181,7 +181,7 @@ test("OpenAI API-key selection remains distinct from OAuth despite a shared Prov
 			"Paste OpenAI Provider SDK API key"
 		);
 		const apiKeyInput = setup.renderer.root.findDescendantById(
-			"connection-api-key-input"
+			"provider-api-key-input"
 		);
 		if (!(apiKeyInput instanceof InputRenderable)) {
 			throw new Error("The OpenAI Provider API-key input did not render.");

@@ -1,8 +1,8 @@
 # Migrate Coding-Agent to the Provider SDK with a credential cutover
 
-Status: accepted target; implementation pending
+Status: accepted target; local implementation candidate under independent final review (non-releaseable); #204 cleanup gate remains dormant pending separate reviewed activation
 
-ADR-0048's independent `@wincode/ai` SDK shipped in PR #198. Coding-Agent still uses Connections, a curated Model Catalog, a secret-bearing Model Target, and a separate Model Client. Migrate all execution modes and the Agent Runtime together to the SDK Provider/Provider Model identity, rather than keep two request paths or a permanent compatibility adapter. The Session Record remains historical evidence, not a live Provider Model lookup result.
+ADR-0048's independent `@wincode/ai` SDK shipped in PR #198. Before this cutover, Coding-Agent used Connections, a curated Model Catalog, a secret-bearing Model Target, and a separate Model Client; the local candidate replaces that execution path with SDK Provider/Provider Model identity. This ADR records the migration target and rejects a permanent compatibility adapter. The Session Record remains historical evidence, not a live Provider Model lookup result.
 
 ## Boundaries and ownership
 
@@ -27,4 +27,4 @@ Deletion is destructive and not transactional across OS and file backends. If it
 
 The one-way part is automatic deletion of legacy credentials: rollback of binaries cannot restore deleted secrets, and users must reconnect. The code cutover can be reverted, but not the credential deletion. This rejects a seemingly easier, permanent adapter and a silent fallback to a different model. Build and validate the SDK extensions and secure storage gate before the final cutover; earlier migration slices may wire the SDK path in a local, non-releaseable integration branch while the #204 gate remains dormant. The final cutover stays atomic across modes: no release or real-credential model request is allowed until the gate is reviewed, active, and succeeds. Remove the old application-specific interfaces only after their consumers have migrated. Historical Session identity remains intact.
 
-At implementation cutover, supersede ADR-0012's static allowlist rule and update the current Connection Provider/Model Catalog/Model Target definitions in `GLOSSARY.md`. Until then they describe the running application, while this ADR describes the accepted target. ADR-0048 remains the SDK foundation; this ADR records the application-specific migration choices.
+The local candidate supersedes ADR-0012's static allowlist rule and updates the current Provider/Model definitions, onboarding docs, and package exports. It remains non-releaseable until independent final review completes and the dormant #204 cleanup gate is activated and verified in a separate reviewed change. ADR-0048 remains the SDK foundation; this ADR records the application-specific migration choices.

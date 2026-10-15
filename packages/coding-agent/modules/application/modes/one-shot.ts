@@ -3,18 +3,14 @@ import {
 	type AgentTurnEvent,
 	agentIdSchema,
 } from "@wincode/agent-core";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai/sdk";
 import {
-	defaultChatModelSelection,
-	findSupportedChatModel,
-	normalizeThinkingLevel,
-	normalizeThinkingSelection,
-	parseCatalogModelSelection,
 	type ThinkingLevel,
 	type ThinkingSelection,
 	thinkingLevelSchema,
-} from "@wincode/ai/models";
-import type { ProviderModel } from "@wincode/ai/sdk";
+} from "@wincode/ai/sdk";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
+import { randomUUIDv7 } from "bun";
 import {
 	type AgentSelectionOverride,
 	resolveEffectiveAgentSelection,
@@ -22,22 +18,35 @@ import {
 } from "@/modules/agents/agent-call";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
-	catalogSelectionForProviderModel,
+	bindProviderModelSelectionToPluginOwner,
+	DEFAULT_PROVIDER_MODEL_SELECTION,
 	isAvailableProviderModelSelection,
+	isSameProviderModelIdentity,
 	normalizeProviderModelSelection,
 	normalizeProviderModelThinkingSelection,
+	type PluginProviderOwnerRegistration,
 	type ProviderModelSelection,
 	parseProviderModelSelection,
+	pluginProviderOwnerMatches,
+	resolveProviderModelSelectionForHost,
 } from "@/modules/providers/provider-model-selection";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
+import {
+	assertPluginProviderSelectionOwner,
+	createValidatedPluginProviderCollectionForSelection,
+} from "../../../modules/sessions/host/agent-session-turn-runner";
 import type { SessionServices } from "../../../modules/sessions/host/session-services";
 import type {
 	SessionHost,
 	SessionHostManager,
 } from "../../../modules/sessions/host/types";
-import type { ResolvedSessionSelection } from "../../../modules/sessions/selection";
+import {
+	getLastUsedSelection,
+	type ResolvedSessionSelection,
+} from "../../../modules/sessions/selection";
+import { projectSessionMessageRecords } from "../../../modules/sessions/storage/session-record";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
 import { openApplicationSessionServices } from "../plugin-composition";
@@ -147,19 +156,9 @@ const parseModel = (
 	if (value === undefined) {
 		return;
 	}
-	const catalogCandidate = value.includes("/")
-		? parseCatalogModelSelection(value)
-		: (() => {
-				const entry = findSupportedChatModel(value);
-				return entry === null
-					? null
-					: {
-							modelId: entry.id,
-							providerId: entry.connectionProviderId,
-						};
-			})();
-	const candidate = catalogCandidate ?? parseProviderModelSelection(value);
-	const parsed = normalizeProviderModelSelection(candidate);
+	const parsed = normalizeProviderModelSelection(
+		parseProviderModelSelection(value)
+	);
 	if (parsed === null) {
 		throw new InvocationError(`Invalid Model selector: ${value}`);
 	}
@@ -173,54 +172,102 @@ const candidateAgent = (
 	registry?.agents.find((candidate) => candidate.id === agent);
 
 const resolveExplicitThinkingLevel = (
-	model: ProviderModelSelection,
 	value: string,
-	providerModel: ProviderModel | undefined
+	providerModel: ProviderModel
 ): ThinkingLevel => {
 	const parsed = thinkingLevelSchema.safeParse(value);
 	if (!parsed.success) {
 		throw new InvocationError(`Invalid --thinking-level value: ${value}`);
 	}
-	if (providerModel !== undefined) {
-		const normalized = normalizeProviderModelThinkingSelection(providerModel, {
-			thinkingLevel: parsed.data,
-		});
-		if (normalized.thinkingLevel !== parsed.data) {
-			throw new InvocationError(`Invalid --thinking-level value: ${value}`);
-		}
-		return parsed.data;
-	}
-	const catalogModel = catalogSelectionForProviderModel(model);
-	const thinkingLevel =
-		catalogModel === null
-			? undefined
-			: normalizeThinkingLevel(catalogModel, value);
-	if (thinkingLevel === undefined) {
+	const normalized = normalizeProviderModelThinkingSelection(providerModel, {
+		thinkingLevel: parsed.data,
+	});
+	if (normalized.thinkingLevel !== parsed.data) {
 		throw new InvocationError(`Invalid --thinking-level value: ${value}`);
 	}
-	return thinkingLevel;
+	return parsed.data;
 };
 
 type ResolvedOneShotModel = Readonly<{
 	agent: AgentId;
 	model: ProviderModelSelection;
-	providerModel?: ProviderModel;
+	providerModel: ProviderModel;
 	selectionOverride?: AgentSelectionOverride;
 	resolvedAgent?: SessionSendInput["resolvedAgent"];
 }>;
 
-const isSameModelIdentity = (
-	left: Readonly<{ modelId: string; providerId: string }>,
-	right: Readonly<{ modelId: string; providerId: string }>
-): boolean =>
-	left.providerId === right.providerId && left.modelId === right.modelId;
+/** Current registry Agents are fresh; Plugin Agents also need a matching registration. */
+const isCurrentAgentModelPin = (
+	candidate: AgentRegistry["agents"][number] | undefined,
+	pluginRuntime: PluginRuntime | undefined
+): boolean => {
+	const source = candidate?.source;
+	const model = candidate?.model;
+	if (candidate === undefined || source === undefined || model === undefined) {
+		return false;
+	}
+	if (source.kind !== "markdown") {
+		return source.kind === "builtin" || source.kind === "config";
+	}
+	if (pluginRuntime === undefined) {
+		return false;
+	}
+	return pluginRuntime.getAgentRegistrations().some((registration) => {
+		if (
+			registration.agent.id !== candidate.id ||
+			registration.source.path !== source.path ||
+			registration.source.scope !== source.scope ||
+			registration.model === undefined
+		) {
+			return false;
+		}
+		const registeredModel = parseProviderModelSelection(registration.model);
+		return (
+			registeredModel !== null &&
+			isSameProviderModelIdentity(registeredModel, model)
+		);
+	});
+};
+
+const currentPluginProviderOwner = (
+	providerId: string,
+	pluginRuntime: PluginRuntime | undefined
+): PluginProviderOwnerRegistration | undefined => {
+	const registrations =
+		pluginRuntime
+			?.getProviderRegistrations()
+			.filter((registration) => registration.providerId === providerId) ?? [];
+	return registrations.length === 1 ? registrations[0] : undefined;
+};
+
+const currentAgentPluginProviderOwner = ({
+	candidate,
+	pluginRuntime,
+	restoredModel,
+}: {
+	candidate: AgentRegistry["agents"][number] | undefined;
+	pluginRuntime: PluginRuntime | undefined;
+	restoredModel: ProviderModelSelection | undefined;
+}): PluginProviderOwnerRegistration | undefined => {
+	const model = candidate?.model;
+	if (
+		restoredModel !== undefined ||
+		model === undefined ||
+		!isCurrentAgentModelPin(candidate, pluginRuntime)
+	) {
+		return;
+	}
+	return currentPluginProviderOwner(model.providerId, pluginRuntime);
+};
 
 const resolveOneShotModel = ({
 	agent,
 	availableProviderModels,
 	knownProviderModels,
 	candidate,
+	candidatePluginProviderOwner,
 	explicitModel,
+	explicitPluginProviderOwner,
 	registry,
 	restored,
 }: {
@@ -228,29 +275,40 @@ const resolveOneShotModel = ({
 	availableProviderModels?: readonly ProviderModel[];
 	knownProviderModels?: readonly ProviderModel[];
 	candidate: AgentRegistry["agents"][number] | undefined;
+	candidatePluginProviderOwner?: PluginProviderOwnerRegistration;
 	explicitModel: ProviderModelSelection | undefined;
+	explicitPluginProviderOwner?: PluginProviderOwnerRegistration;
 	registry: AgentRegistry | null;
 	restored: ResolvedSessionSelection | null;
 }): ResolvedOneShotModel => {
 	const restoredModel = restored?.model;
+	const candidateModel =
+		candidate?.model === undefined
+			? undefined
+			: bindProviderModelSelectionToPluginOwner(
+					candidate.model,
+					candidatePluginProviderOwner
+				);
 	const model =
-		explicitModel ??
+		(explicitModel === undefined
+			? undefined
+			: bindProviderModelSelectionToPluginOwner(
+					explicitModel,
+					explicitPluginProviderOwner
+				)) ??
 		restoredModel ??
-		candidate?.model ??
-		defaultChatModelSelection;
+		candidateModel ??
+		DEFAULT_PROVIDER_MODEL_SELECTION;
 	if (availableProviderModels === undefined) {
 		throw new InvocationError(
-			"Provider SDK runtime is unavailable; legacy Catalog execution is disabled in headless modes."
+			"Provider SDK runtime is unavailable in headless modes."
 		);
 	}
-	const providerModel = availableProviderModels.find((available) =>
-		isSameModelIdentity(available, model)
-	);
-	if (providerModel === undefined) {
-		const knownProviderModel = knownProviderModels?.find((available) =>
-			isSameModelIdentity(available, model)
-		);
-		if (knownProviderModel !== undefined) {
+	if (!isAvailableProviderModelSelection(model, availableProviderModels)) {
+		if (
+			knownProviderModels !== undefined &&
+			isAvailableProviderModelSelection(model, knownProviderModels)
+		) {
 			throw new InvocationError(
 				`Connect ${model.providerId} in Interactive Mode to use Model ${model.modelId}, then retry.`
 			);
@@ -259,11 +317,17 @@ const resolveOneShotModel = ({
 			`Provider Model ${model.providerId}/${model.modelId} is unavailable in this One-Shot Host.`
 		);
 	}
+	const candidateMatchesSelectedModel =
+		candidate?.model !== undefined &&
+		isSameProviderModelIdentity(candidate.model, model) &&
+		pluginProviderOwnerMatches(
+			candidate.model.pluginProviderSource,
+			model.pluginProviderSource
+		);
 	const explicitModelOverride =
 		explicitModel !== undefined ||
-		(restoredModel !== undefined &&
-			(candidate?.model === undefined ||
-				!isSameModelIdentity(candidate.model, restoredModel)))
+		candidatePluginProviderOwner !== undefined ||
+		(restoredModel !== undefined && !candidateMatchesSelectedModel)
 			? { model }
 			: undefined;
 	const selectionOverride = withAvailableAgentModelOverride(
@@ -299,16 +363,19 @@ const resolveOneShotModel = ({
 		);
 	}
 	const effectiveProviderModel = availableProviderModels.find((available) =>
-		isSameModelIdentity(available, effective.model)
+		isSameProviderModelIdentity(available, effective.model)
 	);
+	if (effectiveProviderModel === undefined) {
+		throw new InvocationError(
+			`Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable in this One-Shot Host.`
+		);
+	}
 	return {
 		agent: effective.agent,
 		model: effective.model,
 		resolvedAgent: effective.resolvedAgent,
 		...(selectionOverride === undefined ? {} : { selectionOverride }),
-		...(effectiveProviderModel === undefined
-			? {}
-			: { providerModel: effectiveProviderModel }),
+		providerModel: effectiveProviderModel,
 	};
 };
 
@@ -318,6 +385,8 @@ const resolveSelection = ({
 	knownProviderModels,
 	thinkingLevelOption,
 	modelOption,
+	candidatePluginProviderOwner,
+	explicitPluginProviderOwner,
 	restored,
 	registry,
 }: {
@@ -326,6 +395,8 @@ const resolveSelection = ({
 	knownProviderModels?: readonly ProviderModel[];
 	thinkingLevelOption: string | undefined;
 	modelOption: string | undefined;
+	candidatePluginProviderOwner?: PluginProviderOwnerRegistration;
+	explicitPluginProviderOwner?: PluginProviderOwnerRegistration;
 	registry: AgentRegistry | null;
 	restored: ResolvedSessionSelection | null;
 }): ResolvedSelection => {
@@ -353,7 +424,9 @@ const resolveSelection = ({
 		availableProviderModels,
 		knownProviderModels,
 		candidate,
+		candidatePluginProviderOwner,
 		explicitModel,
+		explicitPluginProviderOwner,
 		registry,
 		restored,
 	});
@@ -363,20 +436,13 @@ const resolveSelection = ({
 				candidate?.thinkingLevel ??
 				DEFAULT_THINKING_LEVEL)
 			: resolveExplicitThinkingLevel(
-					effective.model,
 					thinkingLevelOption,
 					effective.providerModel
 				);
-	const selection =
-		effective.providerModel === undefined
-			? normalizeThinkingSelection(
-					catalogSelectionForProviderModel(effective.model) ??
-						defaultChatModelSelection,
-					{ thinkingLevel: thinkingChoice }
-				)
-			: normalizeProviderModelThinkingSelection(effective.providerModel, {
-					thinkingLevel: thinkingChoice,
-				});
+	const selection = normalizeProviderModelThinkingSelection(
+		effective.providerModel,
+		{ thinkingLevel: thinkingChoice }
+	);
 	return {
 		agent: effective.agent,
 		model: effective.model,
@@ -441,9 +507,14 @@ const emitJsonEvent = (
 		)}\n`
 	);
 };
+const plannedSessionIdForOneShot = (
+	existingSessionId: SessionId | undefined
+): SessionId => existingSessionId ?? toSessionId(randomUUIDv7());
+
 const initializeOneShotSession = async (
 	context: ApplicationContext,
-	services: SessionServices
+	services: SessionServices,
+	plannedSessionId: SessionId
 ): Promise<{ isNewSession: boolean; sessionId: SessionId }> => {
 	const existingSessionId =
 		context.invocation.session === undefined
@@ -452,9 +523,216 @@ const initializeOneShotSession = async (
 	if (existingSessionId !== undefined) {
 		return { isNewSession: false, sessionId: existingSessionId };
 	}
-	const created = await services.store.createEmptySession({});
+	const created = await services.store.createEmptySession({
+		id: plannedSessionId,
+	});
 	return { isNewSession: true, sessionId: created.id };
 };
+
+type OneShotHostPreflight = Readonly<{
+	explicitAgent?: AgentId;
+	explicitModel?: ProviderModelSelection;
+	pluginRuntime?: PluginRuntime;
+	providerCollection?: ProviderCollection;
+	providerModel: ProviderModelSelection;
+	registry: AgentRegistry | null;
+}>;
+
+const preflightOneShotHost = async (
+	context: ApplicationContext,
+	services: SessionServices,
+	sessionId: SessionId | undefined,
+	plannedSessionId: SessionId
+): Promise<OneShotHostPreflight> => {
+	const registry = services.capabilities.getRegistry();
+	const [storedSession, storedRecords] =
+		sessionId === undefined
+			? [undefined, []]
+			: await Promise.all([
+					services.store.getSession(sessionId),
+					services.store.listSessionRecords(sessionId),
+				]);
+	const lastUsedSelection = getLastUsedSelection(
+		storedRecords.flatMap((record) =>
+			projectSessionMessageRecords(record.messages, record)
+		)
+	);
+	const explicitAgent = parseAgent(context.invocation.agent);
+	const explicitModel = parseModel(context.invocation.model);
+	const restoredModel =
+		explicitAgent === undefined
+			? (storedSession?.model ?? lastUsedSelection?.model)
+			: undefined;
+	const selectedAgent =
+		explicitAgent ??
+		lastUsedSelection?.agent ??
+		registry?.defaultAgentId ??
+		agentIdSchema.parse("build");
+	const candidate = candidateAgent(registry, selectedAgent);
+	const pluginRuntime = services.capabilities.getPluginRuntime?.();
+	const candidatePluginProviderOwner = currentAgentPluginProviderOwner({
+		candidate,
+		pluginRuntime,
+		restoredModel,
+	});
+	const candidateModel =
+		candidate?.model === undefined
+			? undefined
+			: bindProviderModelSelectionToPluginOwner(
+					candidate.model,
+					candidatePluginProviderOwner
+				);
+	const selectedProviderModel =
+		explicitModel ??
+		restoredModel ??
+		candidateModel ??
+		DEFAULT_PROVIDER_MODEL_SELECTION;
+	const providerModel = resolveProviderModelSelectionForHost(
+		selectedProviderModel,
+		pluginRuntime?.getProviderRegistrations() ?? [],
+		explicitModel !== undefined || candidatePluginProviderOwner !== undefined
+	);
+	if (providerModel === undefined) {
+		throw new Error("One-Shot Provider Model selection is unavailable.");
+	}
+	const providerCollection =
+		sessionId === undefined
+			? await createValidatedPluginProviderCollectionForSelection(
+					providerModel,
+					services.capabilities,
+					plannedSessionId,
+					[providerModel.providerId]
+				)
+			: undefined;
+	return {
+		...(explicitAgent === undefined ? {} : { explicitAgent }),
+		...(providerCollection === undefined ? {} : { providerCollection }),
+		...(explicitModel === undefined ? {} : { explicitModel }),
+		...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+		providerModel,
+		registry,
+	};
+};
+
+const resolveFreshOneShotSelection = async (
+	context: ApplicationContext,
+	preflight: OneShotHostPreflight
+): Promise<ResolvedSelection> => {
+	const {
+		explicitAgent,
+		explicitModel,
+		pluginRuntime,
+		providerCollection,
+		providerModel,
+		registry,
+	} = preflight;
+	await providerCollection?.restoreModels();
+	const availableProviderModels = await providerCollection?.getAvailable(
+		providerModel.providerId
+	);
+	const knownProviderModels = providerCollection?.getModels();
+	const selectionAgent =
+		explicitAgent ?? registry?.defaultAgentId ?? agentIdSchema.parse("build");
+	const selectionCandidate = candidateAgent(registry, selectionAgent);
+	const selectionCandidatePluginProviderOwner = currentAgentPluginProviderOwner(
+		{
+			candidate: selectionCandidate,
+			pluginRuntime,
+			restoredModel: undefined,
+		}
+	);
+	const explicitPluginProviderOwner =
+		explicitModel === undefined ||
+		providerModel.pluginProviderSource === undefined
+			? undefined
+			: {
+					providerId: providerModel.providerId,
+					...providerModel.pluginProviderSource,
+				};
+	return resolveSelection({
+		agentOption: context.invocation.agent,
+		availableProviderModels,
+		knownProviderModels,
+		thinkingLevelOption: context.invocation.thinkingLevel,
+		modelOption: context.invocation.model,
+		candidatePluginProviderOwner: selectionCandidatePluginProviderOwner,
+		explicitPluginProviderOwner,
+		registry,
+		restored: null,
+	});
+};
+
+const resolveOpenedOneShotSelection = async (
+	context: ApplicationContext,
+	host: SessionHost,
+	preflight: OneShotHostPreflight
+): Promise<ResolvedSelection> => {
+	const {
+		explicitAgent,
+		explicitModel,
+		pluginRuntime,
+		providerModel,
+		registry,
+	} = preflight;
+	const restored = host.getSelection();
+	const explicitPluginProviderOwner =
+		explicitModel === undefined
+			? undefined
+			: host.providerController?.getPluginProviderComposition?.(
+					explicitModel.providerId
+				)?.registration;
+	const selectionAgent =
+		explicitAgent ??
+		restored?.agent ??
+		registry?.defaultAgentId ??
+		agentIdSchema.parse("build");
+	const selectionCandidate = candidateAgent(registry, selectionAgent);
+	const selectionCandidatePluginProviderOwner = currentAgentPluginProviderOwner(
+		{
+			candidate: selectionCandidate,
+			pluginRuntime,
+			restoredModel: explicitAgent === undefined ? restored?.model : undefined,
+		}
+	);
+	const availableProviderModels =
+		await host.providerController?.getAvailableModels(providerModel.providerId);
+	const knownProviderModels = host.providerCollection?.getModels();
+	return resolveSelection({
+		agentOption: context.invocation.agent,
+		availableProviderModels,
+		knownProviderModels,
+		thinkingLevelOption: context.invocation.thinkingLevel,
+		modelOption: context.invocation.model,
+		candidatePluginProviderOwner: selectionCandidatePluginProviderOwner,
+		explicitPluginProviderOwner,
+		registry,
+		restored: explicitAgent === undefined ? restored : null,
+	});
+};
+
+const openOneShotSessionHost = async ({
+	capabilities,
+	executionMode,
+	manager,
+	providerCollection,
+	providerModel,
+	sessionId,
+}: Readonly<{
+	capabilities: SessionServices["capabilities"];
+	executionMode: OneShotFormat;
+	manager: SessionHostManager;
+	providerCollection?: ProviderCollection;
+	providerModel: ProviderModelSelection;
+	sessionId: SessionId;
+}>): Promise<SessionHost> =>
+	manager.openHost({
+		capabilities,
+		executionMode,
+		...(providerCollection === undefined ? {} : { providerCollection }),
+		providerModel,
+		sessionId,
+		view: true,
+	});
 
 const runOneShot = async (
 	context: ApplicationContext,
@@ -472,6 +750,7 @@ const runOneShot = async (
 	const { services } = oneShotComposition;
 	let host: SessionHost | undefined;
 	let manager: SessionHostManager | undefined;
+	let pendingProviderCollection: ProviderCollection | undefined;
 	let sessionId: SessionId | undefined;
 	let isNewSession = false;
 	let submissionAttempted = false;
@@ -479,44 +758,48 @@ const runOneShot = async (
 	let terminalFailureMessage: string | undefined;
 	let terminalSucceeded = false;
 	try {
+		const preflightSessionId =
+			context.invocation.session === undefined
+				? undefined
+				: toSessionId(context.invocation.session);
+		const plannedSessionId = plannedSessionIdForOneShot(preflightSessionId);
+		const preflight = await preflightOneShotHost(
+			context,
+			services,
+			preflightSessionId,
+			plannedSessionId
+		);
+		pendingProviderCollection = preflight.providerCollection;
+		const { providerCollection, providerModel } = preflight;
+		let selection: ResolvedSelection | undefined =
+			preflightSessionId === undefined
+				? await resolveFreshOneShotSelection(context, preflight)
+				: undefined;
 		const initializedSession = await initializeOneShotSession(
 			context,
-			services
+			services,
+			plannedSessionId
 		);
 		sessionId = initializedSession.sessionId;
 		isNewSession = initializedSession.isNewSession;
 		const sessionHostManager = services.capabilities.getSessionHostManager();
 		manager = sessionHostManager;
-		const registry = services.capabilities.getRegistry();
-		const storedSession = await services.store.getSession(sessionId);
-		const explicitAgent = parseAgent(context.invocation.agent);
-		const selectedAgent =
-			explicitAgent ?? registry?.defaultAgentId ?? agentIdSchema.parse("build");
-		const providerModel =
-			parseModel(context.invocation.model) ??
-			storedSession.model ??
-			candidateAgent(registry, selectedAgent)?.model ??
-			defaultChatModelSelection;
-		host = await sessionHostManager.openHost({
+		pendingProviderCollection = undefined;
+		host = await openOneShotSessionHost({
 			capabilities: services.capabilities,
 			executionMode: format,
+			manager: sessionHostManager,
+			providerCollection,
 			providerModel,
 			sessionId,
-			view: true,
 		});
-		const restored = host.getSelection();
-		const availableProviderModels =
-			await host.providerController?.getAvailableModels();
-		const knownProviderModels = host.providerCollection?.getModels();
-		const selection = resolveSelection({
-			agentOption: context.invocation.agent,
-			availableProviderModels,
-			knownProviderModels,
-			thinkingLevelOption: context.invocation.thinkingLevel,
-			modelOption: context.invocation.model,
-			registry,
-			restored,
-		});
+		assertPluginProviderSelectionOwner(
+			providerModel,
+			services.capabilities,
+			host.providerCollection,
+			sessionId
+		);
+		selection ??= await resolveOpenedOneShotSelection(context, host, preflight);
 		removeEventListener = sessionHostManager.onEvent((managedEvent) => {
 			if (managedEvent.type !== "agent-turn-event") {
 				return;
@@ -571,6 +854,7 @@ const runOneShot = async (
 		}
 		return { terminalSucceeded };
 	} finally {
+		await pendingProviderCollection?.close().catch(() => undefined);
 		removeEventListener?.();
 		try {
 			if (manager !== undefined && sessionId !== undefined) {

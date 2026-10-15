@@ -1,6 +1,5 @@
 import type { OpenAIBrowserLoginOptions } from "@wincode/ai/sdk/providers/openai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ConnectionApiKeyDialogContent } from "@/modules/connections/ui/connection-api-key-dialog";
 import { createPluginTextInputRequester } from "@/modules/plugins/ui/request-plugin-text-input";
 import type {
 	InteractiveProviderController,
@@ -14,6 +13,7 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
+import { ProviderApiKeyDialogContent } from "./provider-api-key-dialog";
 
 const openRouterSdkProvider = {
 	displayName: "OpenRouter Provider SDK",
@@ -234,7 +234,7 @@ export const ProviderSdkConnectDialogContent = ({ controller }: Props) => {
 			});
 		};
 		return (
-			<ConnectionApiKeyDialogContent
+			<ProviderApiKeyDialogContent
 				maskInput
 				onSubmit={submit}
 				placeholder="Paste OpenRouter API key"
@@ -267,7 +267,7 @@ export const ProviderSdkConnectDialogContent = ({ controller }: Props) => {
 			});
 		};
 		return (
-			<ConnectionApiKeyDialogContent
+			<ProviderApiKeyDialogContent
 				maskInput
 				onSubmit={submit}
 				placeholder={`Paste ${selectedProvider.displayName} API key`}

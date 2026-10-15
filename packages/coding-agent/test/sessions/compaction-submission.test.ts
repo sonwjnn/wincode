@@ -1,6 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { prepareCompactionBeforeSubmit } from "@/modules/sessions/agent-session/submission";
 import type {
 	CompactSessionResult,
@@ -11,7 +11,7 @@ import { SessionCompactionError } from "@/modules/sessions/compaction/error";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { modelId, sessionMessageId } from "../support/identifiers";
 
-const model: ChatModelSelection = {
+const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };

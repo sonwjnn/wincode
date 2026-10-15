@@ -53,7 +53,7 @@ After the current model request and its Tool Call batch finish, the Agent
 Runtime prepares pending Steering Messages in FIFO order for the next safe
 Model Step. Attachments use a refreshed step budget and remain available until
 prepared; explicit Skill context is prepared without changing the current
-Agent or Model Target. Several steered messages remain separate user messages
+Agent or Provider Model selection. Several steered messages remain separate user messages
 even when one model request reads them together. A turn that ends before
 consumption leaves the committed messages pending ahead of unsteered queued
 work, to be reconciled by the next execution without duplicate records.
@@ -146,7 +146,7 @@ compaction entry while keeping the full transcript visible. Compaction is a
 Session Command the Agent Session runs: the local Session Compaction module's
 per-session in-flight map is the single-flight, so a request joins the
 compaction in flight when it carries the same intent — the same trigger and
-focus, since a Model Target selection only decides how the summary is
+focus, since the Provider Model selection only decides how the summary is
 generated — and is refused with a reason when it carries another, and a caller
 is never answered with another caller's entry. The Agent Session publishes the
 Session Context swap and Compaction entry as part of the command, so an Agent
@@ -246,7 +246,7 @@ history and workspace/configuration data.
 - `host/session-host.ts` — opens one Session, rebuilds its context, assembles the Agent Session on the Session Capabilities it is handed, and exposes its public command/snapshot/event API. React-free; exported through `@wincode/coding-agent/session-host`.
 - `host/session-host-manager.ts` — process-lifetime Host ownership across view switches, one-writer enforcement, and background Session events.
 - `host/agent-session-adapters.ts` — `createAgentSessionAdapters`: materializes the Agent Session's ports from the Session Capabilities the Host was handed — attachments, compaction, durable records, Selection resolution, File Mentions, Skills, and the turn runner it hands off.
-- `host/agent-session-turn-runner.ts` — `createAgentSessionTurnRunner`: runs one Agent Turn execution, resolving the Model Target, snapshotting the Plugin Tools, composing the prompt, consuming the Agent Runtime, and owning the per-turn execution scopes the Host must hold.
+- `host/agent-session-turn-runner.ts` — `createAgentSessionTurnRunner`: runs one Agent Turn execution, resolving the Provider Model selection, snapshotting the Plugin Tools, composing the prompt, consuming the Agent Runtime, and owning the per-turn execution scopes the Host must hold.
 - `host/session-services.ts` — `openSessionServices`: the mode-, process-, or view-scoped Session Services. Resolves the Plugin runtime (loaded from policy or borrowed as a source), Session Store, Session Host Manager, and Session SDK, then assembles the Session Capabilities a Host reads lazily. They close only the resources they created; exported through `@wincode/coding-agent/session-services`.
 - `host/use-session-services.ts` — Interactive Mode's adapter over `openSessionServices`: it reads its provider values and passes them as sources.
 - `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, and forwards public commands.

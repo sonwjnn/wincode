@@ -1,12 +1,10 @@
 ---
-Status: superseded by ADR-0044
+Status: superseded by ADR-0044 and ADR-0049
 ---
 
 # Separate Effort and Reasoning Mode
 
-Wincode's current `variant` selection mixes named, model-supported reasoning levels with the `none` and `thinking` toggle states. Wincode will expose named levels as **Effort** and keep the two toggle states as a separate **Reasoning Mode**; model-specific catalog policy continues to determine which choices are available, and provider requests remain derived at the provider boundary. This amends ADR-0013's persisted naming decision while retaining its catalog-policy and request-time translation decisions.
-
-Status: accepted
+Wincode's former `variant` selection mixed named, model-supported reasoning levels with the `none` and `thinking` toggle states. Wincode exposed named levels as **Effort** and kept the two toggle states as a separate **Reasoning Mode**; ADR-0044 later adopted the unified ThinkingLevel contract, and ADR-0049 superseded the Catalog policy with Provider Model metadata. This historical decision amended ADR-0013's persisted naming decision while retaining its request-time translation rationale.
 
 ## Consequences
 

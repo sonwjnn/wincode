@@ -1,11 +1,11 @@
 import * as path from "node:path";
-import type {
-	LegacyCredentialBackendStatus,
-	LegacyCredentialCleanupEntry,
-	LegacyCredentialCleanupStore,
+import {
+	createLegacyCredentialCleanupStore,
+	type LegacyCredentialBackendStatus,
+	type LegacyCredentialCleanupEntry,
+	type LegacyCredentialCleanupStore,
+	legacyCredentialProviderIds,
 } from "@wincode/ai/connections/legacy-cleanup";
-import { createLegacyCredentialCleanupStore } from "@wincode/ai/connections/legacy-cleanup";
-import { connectionProviderIds } from "@wincode/ai/models";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import {
 	readSecureJsonFile,
@@ -69,8 +69,8 @@ const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isConnectionProviderId = (
 	value: unknown
-): value is (typeof connectionProviderIds)[number] =>
-	connectionProviderIds.some((providerId) => providerId === value);
+): value is (typeof legacyCredentialProviderIds)[number] =>
+	legacyCredentialProviderIds.some((providerId) => providerId === value);
 
 const isBackendStatus = (
 	value: unknown
@@ -79,7 +79,7 @@ const isBackendStatus = (
 	allowedBackendStatuses.some((status) => status === value);
 
 const unverifiedReport = (): readonly LegacyCredentialCleanupEntry[] =>
-	connectionProviderIds.map((providerId) => ({
+	legacyCredentialProviderIds.map((providerId) => ({
 		providerId,
 		platform: "unverified",
 		file: "unverified",
@@ -90,11 +90,14 @@ const normalizeReport = (
 ):
 	| { valid: true; entries: readonly LegacyCredentialCleanupEntry[] }
 	| { valid: false; entries: readonly LegacyCredentialCleanupEntry[] } => {
-	if (!Array.isArray(value) || value.length !== connectionProviderIds.length) {
+	if (
+		!Array.isArray(value) ||
+		value.length !== legacyCredentialProviderIds.length
+	) {
 		return { valid: false, entries: unverifiedReport() };
 	}
 	const entries = new Map<
-		(typeof connectionProviderIds)[number],
+		(typeof legacyCredentialProviderIds)[number],
 		LegacyCredentialCleanupEntry
 	>();
 	for (const item of value) {
@@ -115,7 +118,7 @@ const normalizeReport = (
 			file: item.file,
 		});
 	}
-	const orderedEntries = connectionProviderIds.map((providerId) =>
+	const orderedEntries = legacyCredentialProviderIds.map((providerId) =>
 		entries.get(providerId)
 	);
 	if (orderedEntries.some((entry) => entry === undefined)) {

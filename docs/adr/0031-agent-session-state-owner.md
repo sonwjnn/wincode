@@ -52,7 +52,7 @@ reconciliation resumes it without reconstructing the old Agent Turn or
 appending a duplicate. Accepted messages are processed FIFO ahead of
 still-unsteered queued work. At the next safe Model Step boundary, preparation
 supports attachments and explicit Skill intent without changing the active
-Agent or Model Target. Several messages remain separate ordered user messages
+Agent or exact Provider Model selection. Several messages remain separate ordered user messages
 even when one model request reads them together.
 
 Custom Command expansion uses the same shared Submission preparation as

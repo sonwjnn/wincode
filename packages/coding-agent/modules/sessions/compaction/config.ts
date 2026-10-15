@@ -1,5 +1,4 @@
 import { getModelContextTokens } from "@wincode/ai/model-usage";
-import type { ChatModelSelection } from "@wincode/ai/models";
 import {
 	isBoolean,
 	isNull,
@@ -10,10 +9,6 @@ import {
 } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
-import {
-	type ModelPricingTable,
-	resolveModelContextLimit,
-} from "@/modules/model-pricing/model-pricing";
 import type {
 	ConfigDiagnostic,
 	ConfigOrigin,
@@ -92,8 +87,6 @@ export type ResolvedCompactionSettings = {
 
 export type CompactionConfigurationInput = {
 	contextLimit?: number | null;
-	model?: ChatModelSelection;
-	pricing?: ModelPricingTable;
 	sessionOverrides?: Partial<CompactionSettings>;
 	snapshot?: ConfigSnapshot;
 };
@@ -310,21 +303,7 @@ const resolveDesiredSettings = (
 export const resolveCompactionSettings = (
 	input: CompactionConfigurationInput = {}
 ): ResolvedCompactionSettings => {
-	const {
-		contextLimit: configuredContextLimit,
-		model,
-		pricing,
-		sessionOverrides,
-		snapshot,
-	} = input;
-	let contextLimit = configuredContextLimit;
-	if (isUndefined(contextLimit)) {
-		if (model && pricing) {
-			contextLimit = resolveModelContextLimit(pricing, model);
-		} else {
-			contextLimit = null;
-		}
-	}
+	const { contextLimit = null, sessionOverrides, snapshot } = input;
 	const { configPath, desired, diagnostics, settingPaths, sources } =
 		resolveDesiredSettings(snapshot, sessionOverrides);
 	const resolved = { ...desired };

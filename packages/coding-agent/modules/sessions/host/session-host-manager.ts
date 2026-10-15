@@ -1,6 +1,9 @@
 import type { PluginSessionContext } from "@/modules/plugins/public";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import { resolveProviderModelSelectionForHost } from "@/modules/providers/provider-model-selection";
 import type { SessionId } from "@/shared/identifiers";
+import { getLastUsedSelection } from "../selection";
+import { projectSessionMessageRecords } from "../storage/session-record";
 import { createSessionHost } from "./session-host";
 import type {
 	PreparedSessionProviderComposition,
@@ -118,6 +121,8 @@ export const createSessionHostManager = (
 		capabilities: SessionCapabilities,
 		sessionId: SessionId,
 		executionMode: SessionHostOptions["executionMode"],
+		providerModel: SessionHostOptions["providerModel"],
+		providerCollection: SessionHostOptions["providerCollection"],
 		autoContinue: boolean
 	): ManagedHostEntry => {
 		const opened = Promise.withResolvers<SessionHost>();
@@ -158,6 +163,8 @@ export const createSessionHostManager = (
 					autoContinue,
 					capabilities,
 					...(executionMode === undefined ? {} : { executionMode }),
+					...(providerModel === undefined ? {} : { providerModel }),
+					...(providerCollection === undefined ? {} : { providerCollection }),
 					sessionId,
 				} satisfies SessionHostOptions)
 			)
@@ -218,6 +225,8 @@ export const createSessionHostManager = (
 		capabilities: SessionCapabilities,
 		sessionId: SessionId,
 		executionMode: SessionHostOptions["executionMode"],
+		providerModel: SessionHostOptions["providerModel"],
+		providerCollection: SessionHostOptions["providerCollection"],
 		view: boolean,
 		autoContinue: boolean
 	): Promise<ManagedHostEntry> => {
@@ -225,6 +234,8 @@ export const createSessionHostManager = (
 			capabilities,
 			sessionId,
 			executionMode,
+			providerModel,
+			providerCollection,
 			autoContinue
 		);
 		if (view) {
@@ -261,10 +272,46 @@ export const createSessionHostManager = (
 		}
 		return entry;
 	};
+	const assertProviderModelSelectionBeforeHost = async (
+		capabilities: SessionCapabilities,
+		sessionId: SessionId,
+		providerModel: SessionHostOptions["providerModel"],
+		agentPinSelection: SessionHostOptions["providerModel"]
+	): Promise<void> => {
+		const store = capabilities.getStore();
+		const [session, records] = await Promise.all([
+			store.getSession(sessionId),
+			store.listSessionRecords(sessionId),
+		]);
+		const persisted = getLastUsedSelection(
+			records.flatMap((record) =>
+				projectSessionMessageRecords(record.messages, record)
+			)
+		);
+		const pluginRuntime =
+			capabilities.getPluginRuntime?.() ?? currentPluginRuntime;
+		const trustedRegistrations =
+			pluginRuntime?.getProviderRegistrations() ?? [];
+		if (agentPinSelection !== undefined) {
+			for (const storedSelection of [session.model, persisted?.model]) {
+				if (storedSelection !== undefined) {
+					resolveProviderModelSelectionForHost(
+						storedSelection,
+						trustedRegistrations
+					);
+				}
+			}
+		}
+		const selection =
+			providerModel ?? agentPinSelection ?? session.model ?? persisted?.model;
+		resolveProviderModelSelectionForHost(selection, trustedRegistrations);
+	};
 	const getOpenEntry = async (
 		capabilities: SessionCapabilities,
 		sessionId: SessionId,
 		executionMode: SessionHostOptions["executionMode"],
+		providerModel: SessionHostOptions["providerModel"],
+		providerCollection: SessionHostOptions["providerCollection"],
 		view: boolean,
 		autoContinue: boolean
 	): Promise<ManagedHostEntry> => {
@@ -275,6 +322,8 @@ export const createSessionHostManager = (
 					capabilities,
 					sessionId,
 					executionMode,
+					providerModel,
+					providerCollection,
 					view,
 					autoContinue
 				);
@@ -289,27 +338,58 @@ export const createSessionHostManager = (
 		autoContinue = true,
 		capabilities,
 		executionMode,
+		providerModel,
+		providerCollection,
+		agentPinSelection,
 		sessionId,
 		view = false,
 	}) => {
-		if (shuttingDown) {
-			throw new Error("The Session Host manager is shutting down.");
-		}
-		if (reloadInProgress) {
-			throw new Error("Cannot open a Session while resources are reloading.");
-		}
-		openRequestsInProgress += 1;
+		let providerCollectionTransferred = false;
+		let openRequestStarted = false;
 		try {
+			if (shuttingDown) {
+				throw new Error("The Session Host manager is shutting down.");
+			}
+			if (reloadInProgress) {
+				throw new Error("Cannot open a Session while resources are reloading.");
+			}
+			openRequestsInProgress += 1;
+			openRequestStarted = true;
+			if (
+				entries.get(sessionId) === undefined ||
+				providerModel !== undefined ||
+				agentPinSelection !== undefined
+			) {
+				await assertProviderModelSelectionBeforeHost(
+					capabilities,
+					sessionId,
+					providerModel,
+					agentPinSelection
+				);
+			}
+			if (providerCollection !== undefined && entries.has(sessionId)) {
+				throw new Error(
+					"A prevalidated ProviderCollection cannot be attached to an existing Session Host."
+				);
+			}
+			providerCollectionTransferred = providerCollection !== undefined;
 			const entry = await getOpenEntry(
 				capabilities,
 				sessionId,
 				executionMode,
+				providerModel ?? agentPinSelection,
+				providerCollection,
 				view,
 				autoContinue
 			);
 			return entry.opening;
 		} finally {
-			openRequestsInProgress -= 1;
+			if (openRequestStarted) {
+				openRequestsInProgress -= 1;
+			}
+			if (!providerCollectionTransferred) {
+				await providerCollection?.close().catch(() => undefined);
+			}
 		}
 	};
 	const releaseView: SessionHostManager["releaseView"] = async (sessionId) => {
@@ -583,6 +663,21 @@ export const createSessionHostManager = (
 		releaseView,
 		shutdownAll,
 	};
+};
+
+export const withSessionManagerWork = async <Result>(
+	manager: Pick<SessionHostManager, "tryAcquireSessionWork">,
+	action: () => Promise<Result>
+): Promise<Result> => {
+	const admission = manager.tryAcquireSessionWork();
+	if (admission.kind === "rejected") {
+		throw new Error(admission.reason);
+	}
+	try {
+		return await action();
+	} finally {
+		admission.release();
+	}
 };
 
 export const getInteractiveSessionHostManager = (

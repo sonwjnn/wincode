@@ -11,7 +11,6 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
-import { useModelPricing } from "@/modules/model-pricing";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
@@ -61,7 +60,7 @@ type ChatShellProps = {
 	isInterruptArmed: boolean;
 	messages: readonly SessionMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
-	onModelTargetChanged?: () => void;
+	onProviderModelChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	providerController?: InteractiveProviderController;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
@@ -133,7 +132,7 @@ export function ChatShell({
 	isInterruptArmed,
 	messages,
 	onCompact,
-	onModelTargetChanged,
+	onProviderModelChanged,
 	onOpenSettings,
 	providerController,
 	onRetry,
@@ -156,7 +155,6 @@ export function ChatShell({
 	const [scrollRequest, setScrollRequest] = useState(0);
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
-	const { table } = useModelPricing();
 	const subscribeProviderComposition = useCallback(
 		(listener: () => void) =>
 			providerController?.subscribeComposition?.(listener) ?? (() => undefined),
@@ -258,7 +256,6 @@ export function ChatShell({
 			summarizeSessionUsage(
 				displayMessages,
 				model,
-				table,
 				sessionUsageEntries,
 				cacheWarmingStatus,
 				providerModels
@@ -266,7 +263,6 @@ export function ChatShell({
 		[
 			displayMessages,
 			model,
-			table,
 			sessionUsageEntries,
 			cacheWarmingStatus,
 			providerModels,
@@ -382,8 +378,8 @@ export function ChatShell({
 						id={composerId}
 						onCompact={onCompact}
 						onEmptySubmit={onEmptySubmit}
-						onModelTargetChanged={onModelTargetChanged}
 						onOpenSettings={onOpenSettings}
+						onProviderModelChanged={onProviderModelChanged}
 						onSubmit={handleSubmit}
 						providerController={providerController}
 						recalledSubmissions={recalledSubmissions}

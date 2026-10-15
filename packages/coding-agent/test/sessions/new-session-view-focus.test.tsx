@@ -9,35 +9,41 @@ import {
 	createRouter,
 	RouterContextProvider,
 } from "@tanstack/react-router";
-import {
-	type ConnectionProviderSummary,
-	type Connections,
-	createConnections,
-} from "@wincode/ai/connections";
-import { defaultChatModelSelection } from "@wincode/ai/models";
+import { fromPartial } from "@total-typescript/shoehorn";
+import { type AgentId, agentIdSchema } from "@wincode/agent-core";
 import type {
 	CredentialStore,
 	ModelStore,
+	Provider,
 	ProviderCollection,
+	ProviderModel,
 } from "@wincode/ai/sdk";
 import { act, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
-import { ConnectionsProvider } from "@/modules/connections";
-import { ModelPricingProvider } from "@/modules/model-pricing";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
+import type { PluginAgentRegistration } from "@/modules/plugins/public";
 import {
 	createPluginRuntime,
+	type PluginProviderDescriptor,
 	type PluginRuntime,
 } from "@/modules/plugins/runtime";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
+import { pluginProviderStorageId } from "@/modules/providers/provider-stores";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import {
 	createDefaultSessionProviderCollection,
 	type InteractiveSessionProviderCollection,
 } from "@/modules/sessions/provider-collection";
+import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
-import { createConfigStore } from "@/shared/config/config-store";
+import {
+	type ConfigRuntime,
+	type ConfigSnapshot,
+	createConfigStore,
+} from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -45,6 +51,7 @@ import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import { modelId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 
 const previousLocalDatabasePath = process.env.WINCODE_LOCAL_DB_PATH;
@@ -58,19 +65,6 @@ afterAll(() => {
 	} else {
 		process.env.WINCODE_LOCAL_DB_PATH = previousLocalDatabasePath;
 	}
-});
-
-const connectedOpenAIProvider: ConnectionProviderSummary = {
-	connected: true,
-	connectionMethod: "api-key",
-	displayName: "OpenAI",
-	id: "openai",
-	methods: ["api-key"],
-};
-
-const createConnectedConnections = (): Connections => ({
-	...createConnections(),
-	listProviders: async () => [connectedOpenAIProvider],
 });
 
 const createHomeProviderCollection = (
@@ -95,6 +89,172 @@ const createHomeProviderCollection = (
 const createTestHomeProviderCollection = (pluginRuntime?: PluginRuntime) =>
 	createHomeProviderCollection(pluginRuntime);
 
+type AgentProviderFixture = Readonly<{
+	agentId: AgentId;
+	credentialStorageId: string;
+	model: ProviderModelSelection;
+	pluginRuntime: PluginRuntime;
+	providerConstructions: () => number;
+}>;
+
+const createAgentProviderFixture = (
+	options: Readonly<{
+		availableModelId?: string;
+		operations?: string[];
+		ownerCount?: number;
+	}> = {}
+): AgentProviderFixture => {
+	const providerId = "interactive-agent-provider";
+	const pinnedModelId = modelId("interactive-agent-model");
+	const agentId = agentIdSchema.parse("interactive-pinned-agent");
+	const model: ProviderModelSelection = {
+		modelId: pinnedModelId,
+		providerId,
+	};
+	const availableModel: ProviderModel = fromPartial<ProviderModel>({
+		capabilities: ["text", "tools"],
+		modelId:
+			options.availableModelId === undefined
+				? pinnedModelId
+				: modelId(options.availableModelId),
+		providerId,
+		protocolId: "fake-interactive-agent-provider",
+	});
+	let providerConstructionCount = 0;
+	const registrations = Array.from(
+		{ length: options.ownerCount ?? 1 },
+		(_, index): PluginProviderDescriptor => ({
+			connect: async () => undefined,
+			createProvider: () => {
+				providerConstructionCount += 1;
+				options.operations?.push("provider");
+				return fromPartial<Provider>({
+					id: providerId,
+					models: [availableModel],
+					resolveAuthorization: () => ({ authorization: { fake: true } }),
+					async *streamChat() {
+						yield { type: "finish" };
+					},
+				});
+			},
+			displayName: `Fake Interactive Provider ${index}`,
+			pluginId: `interactive-provider-plugin-${index}`,
+			providerId,
+			sourceIdentity: `fake-interactive-provider-source-${index}`,
+			sourcePath: `/trusted/plugins/interactive-provider-${index}.ts`,
+		})
+	);
+	const agentRegistration: PluginAgentRegistration = {
+		agent: {
+			description: "Uses one exact Provider Model pin.",
+			displayName: "Interactive Pinned Agent",
+			id: agentId,
+			instructions: "Use the selected Provider Model.",
+			role: "primary",
+		},
+		model: `${providerId}/${pinnedModelId}`,
+		source: {
+			path: "/trusted/plugins/interactive-agent.md",
+			scope: "user",
+		},
+	};
+	const plugins = [
+		{
+			agents: [agentRegistration],
+			commands: [],
+			id: "interactive-agent-plugin",
+			providers: registrations.slice(0, 1),
+			sourcePath: "/trusted/plugins/interactive-agent.ts",
+			tools: [],
+			workspace: process.cwd(),
+		},
+		...registrations.slice(1).map((registration, index) => ({
+			commands: [],
+			id: `interactive-duplicate-plugin-${index}`,
+			providers: [registration],
+			sourcePath: registration.sourcePath,
+			tools: [],
+			workspace: process.cwd(),
+		})),
+	];
+	return {
+		agentId,
+		credentialStorageId: pluginProviderStorageId({
+			pluginId: "interactive-provider-plugin-0",
+			providerId,
+			sourceIdentity: "fake-interactive-provider-source-0",
+		}),
+		model,
+		pluginRuntime: createPluginRuntime(plugins, []),
+		providerConstructions: () => providerConstructionCount,
+	};
+};
+
+const createTrackedHomeProviderCollectionFactory =
+	(
+		operations: string[],
+		credentialStorageId: string,
+		counters: { collectionConstructions: number; storeConstructions: number },
+		registrationMetadata:
+			| "authoritative"
+			| "missing"
+			| "mismatched" = "authoritative"
+	): HomeProviderCollectionFactory =>
+	async (pluginRuntime) => {
+		counters.collectionConstructions += 1;
+		operations.push("provider-collection");
+		counters.storeConstructions += 1;
+		const collection = await createDefaultSessionProviderCollection(
+			pluginRuntime,
+			undefined,
+			{
+				credentialStore: {
+					delete: () => undefined,
+					get: (candidateProviderId) => {
+						operations.push(`credential:${candidateProviderId}`);
+						return candidateProviderId === credentialStorageId
+							? { token: "fake-provider-credential" }
+							: undefined;
+					},
+					set: () => undefined,
+				},
+				modelStore: {
+					get: () => {
+						operations.push("model-store");
+						return;
+					},
+					set: () => undefined,
+				},
+			}
+		);
+		const {
+			getPluginProviderRegistrations,
+			...collectionWithoutRegistrationReader
+		} = collection;
+		const restoreModels = collection.restoreModels.bind(collection);
+		const getAvailable = collection.getAvailable.bind(collection);
+		return {
+			...collectionWithoutRegistrationReader,
+			...(registrationMetadata === "missing"
+				? {}
+				: {
+						getPluginProviderRegistrations:
+							registrationMetadata === "mismatched"
+								? () => []
+								: getPluginProviderRegistrations,
+					}),
+			restoreModels: async () => {
+				operations.push("restore-models");
+				await restoreModels();
+			},
+			getAvailable: async (providerId) => {
+				operations.push("availability");
+				operations.push(`availability-provider:${providerId ?? "<all>"}`);
+				return await getAvailable(providerId);
+			},
+		};
+	};
+
 const createConnectedHomeProviderCollection = (pluginRuntime?: PluginRuntime) =>
 	createHomeProviderCollection(pluginRuntime, "fake-home-api-key");
 
@@ -115,10 +275,24 @@ const waitForHomeModelStatus = async (
 
 type HomeProviderCollectionFactory = (
 	pluginRuntime?: PluginRuntime
-) => Promise<InteractiveSessionProviderCollection>;
+) => Promise<
+	ProviderCollection &
+		Partial<
+			Pick<
+				InteractiveSessionProviderCollection,
+				"getPluginProviderRegistrations"
+			>
+		>
+>;
+
+type HomeViewOptions = Readonly<{
+	defaultAgentId?: AgentId;
+	pluginRuntime?: PluginRuntime;
+}>;
 
 const renderHomeView = async (
-	createProviderCollection: HomeProviderCollectionFactory
+	createProviderCollection: HomeProviderCollectionFactory,
+	options: HomeViewOptions = {}
 ): Promise<TestRendererSetup> => {
 	const workspace = process.cwd();
 	const router = createRouter({
@@ -127,11 +301,16 @@ const renderHomeView = async (
 	});
 	await router.load();
 	writeComposerDraft("new-session", "");
-	setInteractiveRuntimeContext({ args: [], cwd: workspace });
-	const app = (
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ConfigProvider
-				value={{
+	setInteractiveRuntimeContext({
+		args: [],
+		cwd: workspace,
+		...(options.pluginRuntime === undefined
+			? {}
+			: { pluginRuntime: options.pluginRuntime }),
+	});
+	const configValue =
+		options.defaultAgentId === undefined
+			? {
 					configStore: createConfigStore({
 						fs: {
 							readFile: async () =>
@@ -144,28 +323,39 @@ const renderHomeView = async (
 					}),
 					homeRoot: os.homedir(),
 					workspace,
-				}}
-			>
+				}
+			: fromPartial<ConfigRuntime>({
+					configStore: {
+						getSnapshot: async () =>
+							fromPartial<ConfigSnapshot>({
+								diagnostics: [],
+								document: { default_agent: options.defaultAgentId },
+								sourceFor: () => undefined,
+								sources: [],
+							}),
+					},
+					homeRoot: os.homedir(),
+					workspace,
+				});
+	const app = (
+		<ThemeProvider themeName={DEFAULT_THEME.name}>
+			<ConfigProvider value={configValue}>
 				<ToastProvider>
-					<ConnectionsProvider connections={createConnections()}>
-						<AgentRegistryProvider>
-							<KeyboardLayerProvider>
-								<PromptConfigProvider>
-									<ModelPricingProvider pricing={{}}>
-										<DialogProvider>
-											<RouterContextProvider router={router}>
-												<CommandControllerProvider>
-													<NewSessionView
-														createProviderCollection={createProviderCollection}
-													/>
-												</CommandControllerProvider>
-											</RouterContextProvider>
-										</DialogProvider>
-									</ModelPricingProvider>
-								</PromptConfigProvider>
-							</KeyboardLayerProvider>
-						</AgentRegistryProvider>
-					</ConnectionsProvider>
+					<AgentRegistryProvider>
+						<KeyboardLayerProvider>
+							<PromptConfigProvider>
+								<DialogProvider>
+									<RouterContextProvider router={router}>
+										<CommandControllerProvider>
+											<NewSessionView
+												createProviderCollection={createProviderCollection}
+											/>
+										</CommandControllerProvider>
+									</RouterContextProvider>
+								</DialogProvider>
+							</PromptConfigProvider>
+						</KeyboardLayerProvider>
+					</AgentRegistryProvider>
 				</ToastProvider>
 			</ConfigProvider>
 		</ThemeProvider>
@@ -176,6 +366,35 @@ const renderHomeView = async (
 		await setup.renderOnce();
 	});
 	return setup;
+};
+
+const waitForHomeFrame = async (
+	setup: TestRendererSetup,
+	text: string
+): Promise<void> => {
+	await act(async () => {
+		for (let attempt = 0; attempt < 50; attempt += 1) {
+			await Bun.sleep(10);
+			await setup.renderOnce();
+			if (setup.captureCharFrame().includes(text)) {
+				return;
+			}
+		}
+	});
+};
+
+const submitHomePrompt = async (setup: TestRendererSetup): Promise<void> => {
+	const composer = setup.renderer.root.findDescendantById(
+		"new-session-view-composer"
+	);
+	if (!(composer instanceof TextareaRenderable)) {
+		throw new Error("The Home composer did not render.");
+	}
+	await act(async () => {
+		await setup.mockInput.typeText("Use the trusted Agent pin.");
+		await setup.mockInput.pressEnter();
+	});
+	await flushTestRenderer(setup, 20);
 };
 
 describe("NewSessionView composer focus", () => {
@@ -197,9 +416,10 @@ describe("NewSessionView composer focus", () => {
 					operations.push("restore");
 					await restoreModels();
 				},
-				getAvailable: async () => {
+				getAvailable: async (providerId) => {
 					operations.push("available");
-					return getAvailable();
+					operations.push(`availability-provider:${providerId ?? "<all>"}`);
+					return getAvailable(providerId);
 				},
 				refreshModels,
 				close: async () => {
@@ -220,6 +440,13 @@ describe("NewSessionView composer focus", () => {
 					.slice(0, firstAvailabilityRead)
 					.every((operation) => operation === "restore")
 			).toBe(true);
+			expect(
+				operations.filter((operation) =>
+					operation.startsWith("availability-provider:")
+				)
+			).toEqual([
+				`availability-provider:${DEFAULT_PROVIDER_MODEL_SELECTION.providerId}`,
+			]);
 			expect(operations).not.toContain("refresh");
 			await act(() => setup.renderer.destroy());
 			destroyed = true;
@@ -338,23 +565,19 @@ describe("NewSessionView composer focus", () => {
 					}}
 				>
 					<ToastProvider>
-						<ConnectionsProvider connections={createConnectedConnections()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<PromptConfigProvider>
-										<ModelPricingProvider pricing={{}}>
-											<DialogProvider>
-												<RouterContextProvider router={router}>
-													<CommandControllerProvider>
-														<SessionRoute />
-													</CommandControllerProvider>
-												</RouterContextProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</PromptConfigProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</ConnectionsProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<SessionRoute />
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ToastProvider>
 				</ConfigProvider>
 			</ThemeProvider>
@@ -369,7 +592,7 @@ describe("NewSessionView composer focus", () => {
 			await flushTestRenderer(setup, 3);
 			let modelSelected = false;
 			await act(async () => {
-				modelSelected = await bridge.setModel(defaultChatModelSelection);
+				modelSelected = await bridge.setModel(DEFAULT_PROVIDER_MODEL_SELECTION);
 			});
 			expect(modelSelected).toBe(true);
 			const leaveActiveComposer = leaveComposer;
@@ -380,9 +603,9 @@ describe("NewSessionView composer focus", () => {
 				leaveActiveComposer();
 				await setup.renderOnce();
 			});
-			await expect(bridge.setModel(defaultChatModelSelection)).resolves.toBe(
-				false
-			);
+			await expect(
+				bridge.setModel(DEFAULT_PROVIDER_MODEL_SELECTION)
+			).resolves.toBe(false);
 		} finally {
 			await act(async () => setup.renderer.destroy());
 			setInteractiveRuntimeContext({ args: [], cwd: workspace });
@@ -417,27 +640,23 @@ describe("NewSessionView composer focus", () => {
 					}}
 				>
 					<ToastProvider>
-						<ConnectionsProvider connections={createConnections()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<PromptConfigProvider>
-										<ModelPricingProvider pricing={{}}>
-											<DialogProvider>
-												<RouterContextProvider router={router}>
-													<CommandControllerProvider>
-														<NewSessionView
-															createProviderCollection={
-																createTestHomeProviderCollection
-															}
-														/>
-													</CommandControllerProvider>
-												</RouterContextProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</PromptConfigProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</ConnectionsProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<NewSessionView
+													createProviderCollection={
+														createTestHomeProviderCollection
+													}
+												/>
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ToastProvider>
 				</ConfigProvider>
 			</ThemeProvider>
@@ -446,7 +665,7 @@ describe("NewSessionView composer focus", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
-			const storedDefault = `${defaultChatModelSelection.providerId}/${defaultChatModelSelection.modelId}`;
+			const storedDefault = `${DEFAULT_PROVIDER_MODEL_SELECTION.providerId}/${DEFAULT_PROVIDER_MODEL_SELECTION.modelId}`;
 			expect(setup.captureCharFrame()).toContain(
 				`Stored default unavailable: ${storedDefault}`
 			);
@@ -500,27 +719,23 @@ describe("NewSessionView composer focus", () => {
 					}}
 				>
 					<ToastProvider>
-						<ConnectionsProvider connections={createConnections()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<PromptConfigProvider>
-										<ModelPricingProvider pricing={{}}>
-											<DialogProvider>
-												<RouterContextProvider router={router}>
-													<CommandControllerProvider>
-														<NewSessionView
-															createProviderCollection={
-																createTestHomeProviderCollection
-															}
-														/>
-													</CommandControllerProvider>
-												</RouterContextProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</PromptConfigProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</ConnectionsProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<NewSessionView
+													createProviderCollection={
+														createTestHomeProviderCollection
+													}
+												/>
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ToastProvider>
 				</ConfigProvider>
 			</ThemeProvider>
@@ -582,6 +797,246 @@ describe("NewSessionView composer focus", () => {
 			expect(composer.cursorOffset).toBe(12);
 		} finally {
 			setup.renderer.destroy();
+		}
+	});
+});
+
+describe("NewSessionView pinned Plugin Agent model preflight", () => {
+	test("binds a unique trusted Agent pin before availability and persists its owner", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({ operations });
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const createCollection = createTrackedHomeProviderCollectionFactory(
+			operations,
+			fixture.credentialStorageId,
+			counters
+		);
+		const store = getSessionStore();
+		await store.resetSessionData();
+		const setup = await renderHomeView(createCollection, {
+			defaultAgentId: fixture.agentId,
+			pluginRuntime: fixture.pluginRuntime,
+		});
+		try {
+			await waitForHomeModelStatus(setup);
+			await flushTestRenderer(setup, 3);
+			const firstAvailability = operations.indexOf("availability");
+			expect(firstAvailability).toBeGreaterThan(0);
+			expect(operations.indexOf("provider-collection")).toBeLessThan(
+				firstAvailability
+			);
+			expect(operations.indexOf("provider")).toBeLessThan(firstAvailability);
+			expect(operations.indexOf("model-store")).toBeLessThan(firstAvailability);
+			expect(operations).toContain(
+				`availability-provider:${fixture.model.providerId}`
+			);
+			expect(operations).not.toContain("availability-provider:<all>");
+			expect(fixture.providerConstructions()).toBe(1);
+
+			await submitHomePrompt(setup);
+			const sessions = await store.listSessions();
+			const [session] = sessions;
+			if (session === undefined) {
+				throw new Error("The trusted Agent pin did not create a Session.");
+			}
+			expect(session.model).toEqual({
+				...fixture.model,
+				pluginProviderSource: {
+					pluginId: "interactive-provider-plugin-0",
+					sourceIdentity: "fake-interactive-provider-source-0",
+				},
+			});
+		} finally {
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
+		}
+	});
+
+	for (const registrationMetadata of ["missing", "mismatched"] as const) {
+		test(`rejects a trusted Agent pin before model access when Host registration metadata is ${registrationMetadata}`, async () => {
+			const operations: string[] = [];
+			const fixture = createAgentProviderFixture({ operations });
+			const counters = {
+				collectionConstructions: 0,
+				storeConstructions: 0,
+			};
+			const setup = await renderHomeView(
+				createTrackedHomeProviderCollectionFactory(
+					operations,
+					fixture.credentialStorageId,
+					counters,
+					registrationMetadata
+				),
+				{
+					defaultAgentId: fixture.agentId,
+					pluginRuntime: fixture.pluginRuntime,
+				}
+			);
+			try {
+				await waitForHomeFrame(setup, "do not match the current trusted");
+				expect(setup.captureCharFrame()).toContain(
+					"do not match the current trusted"
+				);
+				expect(operations).toContain("provider-collection");
+				expect(operations).not.toContain("restore-models");
+				expect(operations).not.toContain("model-store");
+				expect(
+					operations.some((operation) => operation.startsWith("credential:"))
+				).toBe(false);
+				expect(operations).not.toContain("availability");
+				expect(fixture.providerConstructions()).toBe(1);
+			} finally {
+				await act(() => setup.renderer.destroy());
+				await fixture.pluginRuntime.shutdown();
+				setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			}
+		});
+	}
+
+	test("rejects an untrusted Agent pin before credential, store, or Provider construction", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({ operations, ownerCount: 0 });
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const setup = await renderHomeView(
+			createTrackedHomeProviderCollectionFactory(
+				operations,
+				fixture.credentialStorageId,
+				counters
+			),
+			{
+				defaultAgentId: fixture.agentId,
+				pluginRuntime: fixture.pluginRuntime,
+			}
+		);
+		try {
+			await waitForHomeFrame(setup, "has no matching trusted source");
+			expect(setup.captureCharFrame()).toContain(
+				"has no matching trusted source"
+			);
+			expect(operations).toEqual([]);
+			expect(counters).toEqual({
+				collectionConstructions: 0,
+				storeConstructions: 0,
+			});
+			expect(fixture.providerConstructions()).toBe(0);
+		} finally {
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+		}
+	});
+
+	test("rejects an ambiguous Agent pin before credential, store, or Provider construction", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({ operations, ownerCount: 2 });
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const setup = await renderHomeView(
+			createTrackedHomeProviderCollectionFactory(
+				operations,
+				fixture.credentialStorageId,
+				counters
+			),
+			{
+				defaultAgentId: fixture.agentId,
+				pluginRuntime: fixture.pluginRuntime,
+			}
+		);
+		try {
+			await waitForHomeFrame(setup, "has no matching trusted source");
+			expect(setup.captureCharFrame()).toContain(
+				"has no matching trusted source"
+			);
+			expect(operations).toEqual([]);
+			expect(counters).toEqual({
+				collectionConstructions: 0,
+				storeConstructions: 0,
+			});
+			expect(fixture.providerConstructions()).toBe(0);
+		} finally {
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+		}
+	});
+
+	test("does not infer a missing owner for a restored historical Agent pin", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({ operations });
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const store = getSessionStore();
+		await store.resetSessionData();
+		await store.createEmptySession({ model: fixture.model });
+		const setup = await renderHomeView(
+			createTrackedHomeProviderCollectionFactory(
+				operations,
+				fixture.credentialStorageId,
+				counters
+			),
+			{
+				defaultAgentId: fixture.agentId,
+				pluginRuntime: fixture.pluginRuntime,
+			}
+		);
+		try {
+			await waitForHomeFrame(setup, "has no matching trusted source");
+			expect(setup.captureCharFrame()).toContain(
+				"has no matching trusted source"
+			);
+			expect(operations).toEqual([]);
+			expect(counters).toEqual({
+				collectionConstructions: 0,
+				storeConstructions: 0,
+			});
+			expect(fixture.providerConstructions()).toBe(0);
+		} finally {
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
+		}
+	});
+
+	test("rejects a trusted pin when only a different exact model is invocable", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({
+			availableModelId: "different-exact-model",
+			operations,
+		});
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const store = getSessionStore();
+		await store.resetSessionData();
+		const setup = await renderHomeView(
+			createTrackedHomeProviderCollectionFactory(
+				operations,
+				fixture.credentialStorageId,
+				counters
+			),
+			{
+				defaultAgentId: fixture.agentId,
+				pluginRuntime: fixture.pluginRuntime,
+			}
+		);
+		try {
+			await waitForHomeModelStatus(setup);
+			await submitHomePrompt(setup);
+			await waitForHomeFrame(setup, "is unavailable");
+			expect(setup.captureCharFrame().replaceAll(/\s+/gu, " ")).toContain(
+				`Provider Model ${fixture.model.providerId}/${fixture.model.modelId} is unavailable.`
+			);
+			expect(operations).toContain("availability");
+			expect(operations).toContain(
+				`availability-provider:${fixture.model.providerId}`
+			);
+			expect(operations).not.toContain("availability-provider:<all>");
+			expect(fixture.providerConstructions()).toBe(1);
+			expect(await store.listSessions()).toEqual([]);
+		} finally {
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
 		}
 	});
 });

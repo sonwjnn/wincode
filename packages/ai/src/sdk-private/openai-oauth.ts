@@ -9,7 +9,7 @@ import { z } from "zod";
 import {
 	type OpenAICredential,
 	openaiOauthCredentialSchema,
-} from "../connections/credential-schemas.ts";
+} from "../credential-schemas.ts";
 
 const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_ISSUER = "https://auth.openai.com";

@@ -2,9 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fromPartial } from "@total-typescript/shoehorn";
 import { type AgentTurnEvent, toModelId } from "@wincode/agent-core";
-import type { Connections } from "@wincode/ai/connections";
 import type {
 	ChatEvent,
 	CredentialStore,
@@ -39,10 +37,7 @@ import {
 	type InteractiveSessionProviderCollection,
 	pluginProvidersFromRuntime,
 } from "@/modules/sessions/provider-collection";
-import type {
-	SessionSdkHandle,
-	SessionSdkPrompt,
-} from "@/modules/sessions/sdk-contract";
+import type { SessionSdkHandle } from "@/modules/sessions/sdk-contract";
 import {
 	type ConfigRuntime,
 	createConfigStore,
@@ -54,13 +49,15 @@ import {
 } from "@/shared/runtime-context";
 import { createInteractiveRuntimeLifecycle } from "@/shared/runtime-lifecycle";
 import { reloadInteractiveResources } from "@/tui/commands/reload-resources";
-import { agentId } from "../support/identifiers";
+
+const pluginProviderOwnerRestoreError = /Plugin Provider.*trusted source/i;
 
 const pluginSource = (
 	owner: string,
 	expectedApiKey: string,
 	streamStartedFile?: string,
-	activityFile?: string
+	activityFile?: string,
+	publishedModelId = `${owner}-model`
 ): string => `
 export default (api) => {
   let activity = { authorization: 0, connect: 0, discovery: 0, stream: 0 };
@@ -89,7 +86,7 @@ export default (api) => {
         await recordActivity();
         return [{
           capabilities: ["text", "tools"],
-          modelId: ${JSON.stringify(`${owner}-model`)},
+          modelId: ${JSON.stringify(publishedModelId)},
           protocolId: "fake-plugin-provider",
           providerId: "shared_provider",
         }];
@@ -132,7 +129,7 @@ const createPluginRuntime = async (
 const send = async (
 	handle: SessionSdkHandle,
 	text: string,
-	model: ProviderModelSelection
+	model?: ProviderModelSelection
 ): Promise<Readonly<{ output: string; terminal: AgentTurnEvent }>> => {
 	const terminal = Promise.withResolvers<AgentTurnEvent>();
 	let output = "";
@@ -150,7 +147,10 @@ const send = async (
 		}
 	});
 	try {
-		const admission = await handle.prompt({ model, text });
+		const admission = await handle.prompt({
+			...(model === undefined ? {} : { model }),
+			text,
+		});
 		expect(admission?.rejected).toBe(false);
 		return { output, terminal: await terminal.promise };
 	} finally {
@@ -158,9 +158,20 @@ const send = async (
 	}
 };
 
-const modelFor = (modelId: string): ProviderModelSelection => ({
+const modelFor = (
+	modelId: string,
+	pluginProviderSource?: Readonly<{ pluginId: string; sourceIdentity: string }>
+) => ({
 	modelId: toModelId(modelId),
 	providerId: "shared_provider",
+	...(pluginProviderSource === undefined
+		? {}
+		: {
+				pluginProviderSource: {
+					pluginId: pluginProviderSource.pluginId,
+					sourceIdentity: pluginProviderSource.sourceIdentity,
+				},
+			}),
 });
 
 const textOfModels = (
@@ -220,6 +231,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 	const pluginBAliasPath = path.join(root, "source-b-alias", "provider.ts");
 	const streamStartedFile = path.join(root, "provider-stream-started");
 	const providerActivityFile = path.join(root, "provider-activity.json");
+	const providerActivity = Bun.file(providerActivityFile);
 	const failingPluginPath = path.join(root, "failing-source", "provider.ts");
 	await Promise.all(
 		[
@@ -234,11 +246,23 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 	await Promise.all([
 		Bun.write(
 			pluginAPath,
-			pluginSource("owner-a", "fake-key-a", streamStartedFile)
+			pluginSource(
+				"owner-a",
+				"fake-key-a",
+				streamStartedFile,
+				undefined,
+				"shared-owner-model"
+			)
 		),
 		Bun.write(
 			pluginBPath,
-			pluginSource("owner-b", "fake-key-b", undefined, providerActivityFile)
+			pluginSource(
+				"owner-b",
+				"fake-key-b",
+				undefined,
+				providerActivityFile,
+				"shared-owner-model"
+			)
 		),
 		Bun.write(
 			failingPluginPath,
@@ -350,16 +374,6 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			policy: { cwd: workspace, databasePath, workspace },
 			sources: {
 				configRuntime: () => configRuntime,
-				connections: () =>
-					fromPartial<Connections>({
-						authorize: async () => {
-							throw new Error("Plugin Provider turns must use the SDK.");
-						},
-						connect: async () => {
-							throw new Error("Plugin Providers use their own interaction.");
-						},
-						listProviders: async () => [],
-					}),
 				createProviderCollection: async (pluginRuntime, sessionId) => {
 					const pluginProviders = pluginProvidersFromRuntime(
 						pluginRuntime,
@@ -379,36 +393,32 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 				sessionHostManager: () => manager,
 			},
 		});
-		const selectedA = modelFor("owner-a-model");
+		const selectedA = modelFor("shared-owner-model", {
+			pluginId: "shared_provider_owner",
+			sourceIdentity:
+				runtimeA.getProviderRegistrations()[0]?.sourceIdentity ?? "",
+		});
 		const sessionId = await services.sessionSdk.createEmptySession({
 			model: selectedA,
 		});
-		const host = await manager.openHost({
+		let host = await manager.openHost({
 			autoContinue: false,
 			capabilities: services.capabilities,
 			sessionId,
+			view: false,
+		});
+		handle = await services.sessionSdk.openSession(sessionId, {
+			autoContinue: false,
 			view: true,
 		});
-		handle = fromPartial<SessionSdkHandle>({
-			onEvent: host.onEvent,
-			prompt: ({ model, text }: SessionSdkPrompt) =>
-				host.agentSession.prompt({
-					agent: agentId("build"),
-					composition: { files: [], text },
-					model: model ?? selectedA,
-					sessionModel: selectedA,
-					userText: text,
-				}),
-			sessionId,
-		});
-		const hostCollection = hostCollections[0];
+		let hostCollection = hostCollections.at(-1);
 		if (hostCollection === undefined) {
 			throw new Error(
 				"The Session Host did not create its ProviderCollection."
 			);
 		}
 		expect(hostCollection.getPluginProviderRegistrations()).toHaveLength(1);
-		const controller = host.providerController;
+		let controller = host.providerController;
 		if (controller === undefined) {
 			throw new Error(
 				"The Session Host did not create its ProviderController."
@@ -445,14 +455,16 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		if (ownerAConnection?.kind !== "connected") {
 			throw new Error("The fake owner-A Provider did not connect.");
 		}
-		expect(textOfModels(ownerAConnection.models)).toEqual(["owner-a-model"]);
-		const firstSend = await send(handle, "use owner A", selectedA);
+		expect(textOfModels(ownerAConnection.models)).toEqual([
+			"shared-owner-model",
+		]);
+		const firstSend = await send(handle, "use owner A");
 		expect(firstSend.terminal).toMatchObject({ type: "agent-turn-completed" });
 		expect(assistantText(host.agentSession.getSnapshot().transcript)).toContain(
 			"authorized:owner-a"
 		);
 		// A live Provider send keeps the Host busy, so reload cannot swap its composition.
-		const busyTurn = send(handle, "hold provider for reload", selectedA);
+		const busyTurn = send(handle, "hold provider for reload");
 		const waitStartedAt = Date.now();
 		while (!(await Bun.file(streamStartedFile).exists())) {
 			if (Date.now() - waitStartedAt > 5000) {
@@ -489,10 +501,10 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		expect(getInteractiveRuntimeContext().pluginRuntime).toBe(runtimeA);
 		expect(
 			textOfModels(await controller.getKnownModels(), "shared_provider")
-		).toEqual(["owner-a-model"]);
-		expect(
-			(await send(handle, "old owner still runs", selectedA)).terminal.type
-		).toBe("agent-turn-completed");
+		).toEqual(["shared-owner-model"]);
+		expect((await send(handle, "old owner still runs")).terminal.type).toBe(
+			"agent-turn-completed"
+		);
 		await waitForHostIdle(host);
 		expect(toastMessage).toContain("Kept the active Plugin set");
 
@@ -518,7 +530,11 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 				({ providerId }) => providerId === "shared_provider"
 			)
 		).toEqual([]);
-		const selectedB = modelFor("owner-b-model");
+		const selectedB = modelFor("shared-owner-model", {
+			pluginId: "shared_provider_owner",
+			sourceIdentity:
+				runtimeB.getProviderRegistrations()[0]?.sourceIdentity ?? "",
+		});
 		const ownerBConnection = await controller.connectPluginProvider(
 			"shared_provider",
 			async () => "fake-key-b"
@@ -526,12 +542,87 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		if (ownerBConnection?.kind !== "connected") {
 			throw new Error("The fake owner-B Provider did not connect.");
 		}
-		expect(textOfModels(ownerBConnection.models)).toEqual(["owner-b-model"]);
-		const secondSend = await send(handle, "use owner B", selectedB);
-		expect(secondSend.terminal.type).toBe("agent-turn-completed");
+		expect(textOfModels(ownerBConnection.models)).toEqual([
+			"shared-owner-model",
+		]);
+		const activityBeforeChangedOwnerSelection: Readonly<{
+			authorization: number;
+			connect: number;
+			discovery: number;
+			stream: number;
+		}> = await providerActivity.json();
+		await expect(
+			handle.prompt({ text: "do not redirect owner A selection to owner B" })
+		).rejects.toThrow(pluginProviderOwnerRestoreError);
+		await waitForHostIdle(host);
+		expect(await providerActivity.json()).toEqual(
+			activityBeforeChangedOwnerSelection
+		);
+		const ownerBAdmission = await handle.prompt({
+			model: selectedB,
+			text: "explicitly use owner B",
+		});
+		expect(ownerBAdmission?.rejected).toBe(false);
+		await waitForHostIdle(host);
 		await waitForHostIdle(host);
 		expect(assistantText(host.agentSession.getSnapshot().transcript)).toContain(
 			"authorized:owner-b"
+		);
+		const continuedOwnerB = await send(handle, "continue with owner B");
+		expect(continuedOwnerB.terminal.type).toBe("agent-turn-completed");
+		await waitForHostIdle(host);
+		expect(assistantText(host.agentSession.getSnapshot().transcript)).toContain(
+			"authorized:owner-b"
+		);
+		const latestEffectiveModel = (
+			await services.store.listSessionRecords(sessionId)
+		)
+			.reverse()
+			.flatMap(({ messages }) => messages)
+			.find(({ role, metadata }) => role === "assistant" && metadata?.model)
+			?.metadata?.model;
+		expect(latestEffectiveModel).toEqual(selectedB);
+		expect((await services.store.getSession(sessionId))?.model).toEqual(
+			selectedB
+		);
+
+		// Restored effective turn records keep owner B bound through Session reopen.
+		unsubscribeComposition?.();
+		unsubscribeComposition = undefined;
+		await handle.dispose();
+		handle = undefined;
+		host = await manager.openHost({
+			autoContinue: false,
+			capabilities: services.capabilities,
+			sessionId,
+			view: false,
+		});
+		hostCollection = hostCollections.at(-1);
+		if (hostCollection === undefined) {
+			throw new Error(
+				"The restored Session Host did not create a ProviderCollection."
+			);
+		}
+		controller = host.providerController;
+		if (controller === undefined) {
+			throw new Error("The restored Session Host has no ProviderController.");
+		}
+		const activityBeforeRestoredOwnerSelection = await providerActivity.json();
+		handle = await services.sessionSdk.openSession(sessionId, {
+			autoContinue: false,
+			view: true,
+		});
+		const restoredOwnerBSend = await send(
+			handle,
+			"continue owner B after reopen"
+		);
+		expect(restoredOwnerBSend.terminal.type).toBe("agent-turn-completed");
+		await waitForHostIdle(host);
+		expect(assistantText(host.agentSession.getSnapshot().transcript)).toContain(
+			"authorized:owner-b"
+		);
+		expect(await providerActivity.json()).not.toEqual(
+			activityBeforeRestoredOwnerSelection
 		);
 
 		// If safe built-in-only preparation fails, revocation must fail closed before
@@ -541,7 +632,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			connect: number;
 			discovery: number;
 			stream: number;
-		}> = await Bun.file(providerActivityFile).json();
+		}> = await providerActivity.json();
 		failModelRestores = true;
 		reloadCandidate = revokedRuntime;
 		reloadTrustChanged = true;
@@ -584,7 +675,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 					role: "user",
 				},
 			],
-			modelId: "owner-b-model",
+			modelId: "shared-owner-model",
 			providerId: "shared_provider",
 		})) {
 			revokedChatEvents.push(event);
@@ -599,9 +690,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			},
 			type: "terminal",
 		});
-		expect(await Bun.file(providerActivityFile).json()).toEqual(
-			activityBeforeRevocation
-		);
+		expect(await providerActivity.json()).toEqual(activityBeforeRevocation);
 
 		// Re-enabling the original canonical source can restore its quarantined owner data.
 		const reenabledB = await createPluginRuntime(
@@ -619,10 +708,10 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		await reenabledCollection.restoreModels();
 		expect(
 			textOfModels(reenabledCollection.getModels(), "shared_provider")
-		).toEqual(["owner-b-model"]);
+		).toEqual(["shared-owner-model"]);
 		expect(
 			textOfModels(await reenabledCollection.getAvailable(), "shared_provider")
-		).toEqual(["owner-b-model"]);
+		).toEqual(["shared-owner-model"]);
 		await reenabledCollection.close();
 	} finally {
 		unsubscribeComposition?.();
@@ -721,12 +810,6 @@ test("a Plugin disabled by Session start failure has no Provider in that Session
 			policy: { cwd: workspace, databasePath, workspace },
 			sources: {
 				configRuntime: () => configRuntime,
-				connections: () =>
-					fromPartial<Connections>({
-						authorize: async () => null,
-						connect: async () => undefined,
-						listProviders: async () => [],
-					}),
 				createProviderCollection: (pluginRuntime, sessionId) =>
 					createInteractiveSessionProviderCollection({
 						credentialStore,

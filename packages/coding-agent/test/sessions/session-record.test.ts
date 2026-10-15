@@ -9,8 +9,8 @@ import type {
 	SessionMessageRecord,
 	SessionRecord,
 } from "@wincode/agent-core";
-import type { ChatModelSelection } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/utils";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -32,7 +32,7 @@ import {
 	toolCallId,
 } from "../support/identifiers";
 
-const model: ChatModelSelection = {
+const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
@@ -292,6 +292,36 @@ test("round-trips assistant and tool records independently", async () => {
 	]);
 });
 
+test("reopens effective turn records with their trusted Plugin owner provenance", async () => {
+	const { store } = await createTestStore();
+	const { id, initialRecord } = await createSession(store);
+	const sourceBoundModel: ProviderModelSelection = {
+		...model,
+		pluginProviderSource: {
+			pluginId: "trusted-provider-plugin",
+			sourceIdentity: "/trusted/plugins/provider.ts",
+		},
+	};
+	const sourceBoundRecord: SessionRecord = {
+		...assistantRecord("record-plugin-owner", "owner-bound"),
+		messages: [
+			messageRecord("assistant-plugin-owner", "assistant", "owner-bound", {
+				agent: agentId("build"),
+				model: sourceBoundModel,
+			}),
+		],
+		model: sourceBoundModel,
+	};
+
+	await store.commitSessionRecord({ record: sourceBoundRecord, sessionId: id });
+
+	const records = await store.listSessionRecords(id);
+	expect(records).toEqual([initialRecord, sourceBoundRecord]);
+	expect(projectSessionRecords(records)[1]?.metadata?.model).toEqual(
+		sourceBoundModel
+	);
+});
+
 test("persists an optional Plugin tool without adding a built-in tool name", async () => {
 	const { store } = await createTestStore();
 	const { id } = await createSession(store);
@@ -373,7 +403,7 @@ test("reopening records preserves unknown Provider Model identities and their me
 	});
 });
 
-test("reopening a record drops an unsupported ThinkingLevel but preserves valid metadata", () => {
+test("reopening a record preserves its ThinkingLevel without Provider metadata lookup", () => {
 	const record: SessionRecord = {
 		...assistantRecord("record-unsupported-mode", "done"),
 		messages: [
@@ -389,6 +419,7 @@ test("reopening a record drops an unsupported ThinkingLevel but preserves valid 
 	expect(projectSessionRecords([record])[0]?.metadata).toEqual({
 		agent: agentId("build"),
 		model,
+		thinkingLevel: "minimal",
 		usage: { inputTokens: 10, outputTokens: 5 },
 	});
 });
@@ -580,6 +611,37 @@ test("projects a failed assistant row as its safe transcript message", () => {
 			role: "assistant",
 		},
 	]);
+});
+
+test("restores a Plugin Provider selection with its trusted source owner", async () => {
+	const { store } = await createTestStore();
+	const ownerBoundModel: ProviderModelSelection = {
+		modelId: modelId("shared-model"),
+		pluginProviderSource: {
+			pluginId: "trusted-plugin",
+			sourceIdentity: "/trusted/plugins/provider.ts",
+		},
+		providerId: "shared_provider",
+	};
+	const { id } = await store.createEmptySession({ model: ownerBoundModel });
+	const restored = await store.getSession(id);
+	expect(restored.model).toEqual(ownerBoundModel);
+
+	const record = buildUserSessionRecord({
+		agentId: agentId("build"),
+		message: {
+			...userMessage("use the selected Plugin Provider"),
+			metadata: { model: ownerBoundModel },
+		},
+		model: ownerBoundModel,
+		turnId: agentTurnId("turn-plugin-owner"),
+	});
+	await store.commitSessionRecord({ record, sessionId: id });
+	const [persisted] = await store.listSessionRecords(id);
+	expect(persisted?.messages[0]?.metadata?.model).toEqual(ownerBoundModel);
+	expect(projectSessionRecords([record])[0]?.metadata?.model).toEqual(
+		ownerBoundModel
+	);
 });
 
 test("round-trips the Agent Turn a Steering Message joined", async () => {

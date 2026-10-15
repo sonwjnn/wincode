@@ -1,17 +1,9 @@
 import { type ModelStepObserver, toModelId } from "@wincode/agent-core";
-import type { ModelStepRequest } from "@wincode/ai/model-client";
-import { createModelClient, warmModelRequest } from "@wincode/ai/model-client";
 import {
 	calculateModelUsageCostUsd,
 	type ModelUsage,
 	normalizeModelUsage,
 } from "@wincode/ai/model-usage";
-import {
-	type ChatModelSelection,
-	findSupportedChatModelSelection,
-	promptCacheRetentionTtlMsForModel,
-	supportsPromptCacheWarmingForModel,
-} from "@wincode/ai/models";
 import type {
 	ChatRequest,
 	ProviderCollection,
@@ -21,9 +13,7 @@ import { logger } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import {
 	type ModelPricingEntry,
-	type ModelPricingTable,
 	pricingEntryForProviderModel,
-	resolveModelMetadata,
 } from "@/modules/model-pricing/model-pricing";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
@@ -105,28 +95,20 @@ export type SessionCacheWarming = Readonly<{
 }>;
 
 export type SessionCacheWarmingOptions = Readonly<{
-	getPricingTable: () => ModelPricingTable;
 	initialUsageEntries: readonly SessionUsageEntry[];
-	providerCollection?: ProviderCollection;
+	providerCollection: ProviderCollection;
 	sessionId: SessionId;
 	store: Pick<SessionStore, "createSessionUsageEntry">;
 }>;
 
-type CacheWarmReplayRequest =
-	| Readonly<{
-			kind: "legacy";
-			model: ChatModelSelection;
-			request: ModelStepRequest;
-			ttlMs: number;
-	  }>
-	| Readonly<{
-			kind: "provider-sdk";
-			model: ProviderModelSelection;
-			providerCollection: ProviderCollection;
-			providerModel: ProviderModel;
-			request: ChatRequest;
-			ttlMs: number;
-	  }>;
+type CacheWarmReplayRequest = Readonly<{
+	kind: "provider-sdk";
+	model: ProviderModelSelection;
+	providerCollection: ProviderCollection;
+	providerModel: ProviderModel;
+	request: ChatRequest;
+	ttlMs: number;
+}>;
 
 type CacheWarmSchedule = Readonly<{
 	delayMs: number;
@@ -135,47 +117,6 @@ type CacheWarmSchedule = Readonly<{
 	requestGeneration: number;
 	requestStartedAt: number;
 }>;
-
-const legacyReplayRequestSnapshot = (
-	request: ModelStepRequest
-): CacheWarmReplayRequest | undefined => {
-	const modelSelection: ChatModelSelection = {
-		modelId: request.target.modelId,
-		providerId: request.target.providerId,
-	};
-	const model = findSupportedChatModelSelection(modelSelection);
-	if (
-		model === null ||
-		(request.target.providerId === "openai" &&
-			request.target.authorization.kind === "oauth") ||
-		request.googleCachedContent !== undefined ||
-		!supportsPromptCacheWarmingForModel(model) ||
-		request.target.promptCacheEnabled !== true ||
-		request.target.promptCacheRetention === undefined
-	) {
-		return;
-	}
-	const ttlMs = promptCacheRetentionTtlMsForModel(
-		model,
-		request.target.promptCacheRetention
-	);
-	if (ttlMs === undefined) {
-		return;
-	}
-	const { signal: _signal, ...requestWithoutSignal } = request;
-	try {
-		return {
-			kind: "legacy",
-			model: modelSelection,
-			request: structuredClone(requestWithoutSignal),
-			ttlMs,
-		};
-	} catch {
-		// Requests with opaque values that cannot be faithfully snapshotted are
-		// not eligible for replay.
-		return;
-	}
-};
 
 const providerSdkReplayRequestSnapshot = (
 	request: ChatRequest,
@@ -221,13 +162,11 @@ const providerSdkReplayRequestSnapshot = (
 
 /** One Session-owned best-effort warmer with a separate durable cost path. */
 export const createSessionCacheWarming = ({
-	getPricingTable,
 	initialUsageEntries,
 	providerCollection,
 	sessionId,
 	store,
 }: SessionCacheWarmingOptions): SessionCacheWarming => {
-	const modelClient = createModelClient();
 	const listeners = new Set<() => void>();
 	const notifyListeners = (): void => {
 		for (const listener of [...listeners]) {
@@ -243,7 +182,7 @@ export const createSessionCacheWarming = ({
 	);
 	let status: CacheWarmingStatus = "idle";
 	let generation = 0;
-	let latestRequest: ModelStepRequest | ChatRequest | undefined;
+	let latestRequest: ChatRequest | undefined;
 	let replayRequest: CacheWarmReplayRequest | undefined;
 	let requestStartedAt = 0;
 	let scheduleTimer: NodeJS.Timeout | undefined;
@@ -285,10 +224,7 @@ export const createSessionCacheWarming = ({
 		usage: ModelUsage,
 		warmReplayOutputTokens: number
 	): boolean => {
-		const pricing =
-			replay.kind === "legacy"
-				? (resolveModelMetadata(getPricingTable(), replay.model) ?? undefined)
-				: pricingEntryForProviderModel(replay.providerModel);
+		const pricing = pricingEntryForProviderModel(replay.providerModel);
 		const savings = expectedCacheWarmSavingsUsd(
 			pricing,
 			usage,
@@ -364,10 +300,7 @@ export const createSessionCacheWarming = ({
 				controller.signal,
 				AbortSignal.timeout(horizonRemainingMs),
 			]);
-			const usage =
-				replay.kind === "legacy"
-					? await warmModelRequest(replay.request, modelClient, signal)
-					: await warmProviderSdkRequest(replay, signal);
+			const usage = await warmProviderSdkRequest(replay, signal);
 			if (usage === undefined) {
 				return false;
 			}
@@ -449,24 +382,18 @@ export const createSessionCacheWarming = ({
 		setStatus("scheduled");
 	};
 
-	const onModelStepStarted = (
-		request: ModelStepRequest | ChatRequest
-	): void => {
+	const onModelStepStarted = (request: ChatRequest): void => {
 		cancel();
 		latestRequest = request;
 		requestStartedAt = Date.now();
-		if ("target" in request) {
-			replayRequest = legacyReplayRequestSnapshot(request);
-		} else if (providerCollection !== undefined) {
-			replayRequest = providerSdkReplayRequestSnapshot(
-				request,
-				providerCollection
-			);
-		}
+		replayRequest = providerSdkReplayRequestSnapshot(
+			request,
+			providerCollection
+		);
 	};
 
 	const onModelStepFinished = (
-		request: ModelStepRequest | ChatRequest,
+		request: ChatRequest,
 		usage: ModelUsage | undefined
 	): void => {
 		if (

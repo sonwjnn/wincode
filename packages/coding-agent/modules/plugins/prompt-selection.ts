@@ -1,5 +1,4 @@
-import type { ThinkingLevel } from "@wincode/ai/models";
-import type { ProviderModelSelection } from "@wincode/ai/sdk";
+import type { ProviderModelSelection, ThinkingLevel } from "@wincode/ai/sdk";
 
 /** Prompt-selection mutations currently attached to the focused Interactive composer. */
 export type PluginPromptSelectionTarget = Readonly<{

@@ -1,16 +1,17 @@
-import type { Connections } from "@wincode/ai/connections";
-import type { ThinkingLevel } from "@wincode/ai/models";
-import type {
-	ProviderModel,
-	ProviderModelSelection as ProviderModelIdentity,
-} from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import type { PluginPromptSelectionTarget } from "@/modules/plugins/prompt-selection";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
-	catalogSelectionForProviderModel,
+	arePluginProviderRegistrationsBoundToTrustedOwners,
+	isPluginProviderSelectionBoundToTrustedOwner,
+	isSameProviderModelIdentity,
 	normalizeProviderModelSelection,
+	type PluginProviderOwnerRegistration,
 	type ProviderModelSelection,
+	pluginProviderOwnerMatches,
+	resolveProviderModelSelectionForHost,
 } from "@/modules/providers/provider-model-selection";
+import { getPluginProviderRegistrationsFromCollection } from "@/modules/sessions/provider-collection";
 
 type PromptSelectionMutations = Readonly<{
 	setModel: (model: ProviderModelSelection) => void;
@@ -18,12 +19,54 @@ type PromptSelectionMutations = Readonly<{
 }>;
 
 /** Adapts Plugin selection requests to the focused Interactive composer. */
+const trustedSelection = (
+	selection: ProviderModelSelection,
+	getTrustedRegistrations: () => readonly PluginProviderOwnerRegistration[],
+	providerController: Pick<
+		InteractiveProviderController,
+		"getPluginProviderRegistrations"
+	>
+): ProviderModelSelection | undefined => {
+	try {
+		const trustedRegistrations = getTrustedRegistrations();
+		if (
+			!arePluginProviderRegistrationsBoundToTrustedOwners(
+				trustedRegistrations,
+				getPluginProviderRegistrationsFromCollection(providerController)
+			)
+		) {
+			return;
+		}
+		const resolvedSelection = resolveProviderModelSelectionForHost(
+			selection,
+			trustedRegistrations,
+			true
+		);
+		if (
+			resolvedSelection === undefined ||
+			!isPluginProviderSelectionBoundToTrustedOwner(
+				resolvedSelection,
+				trustedRegistrations,
+				getPluginProviderRegistrationsFromCollection(providerController)
+			)
+		) {
+			return;
+		}
+		return resolvedSelection;
+	} catch {
+		return;
+	}
+};
+
 export const createPluginPromptSelectionTarget = (
-	providerController:
-		| Pick<InteractiveProviderController, "getAvailableModels">
-		| undefined,
+	providerController: Pick<
+		InteractiveProviderController,
+		| "getAvailableProviderModelSelectionCandidates"
+		| "getPluginProviderRegistrations"
+		| "selectProviderModelSelectionCandidate"
+	>,
 	promptSelection: PromptSelectionMutations,
-	connections?: Pick<Connections, "listProviders">
+	getTrustedRegistrations: () => readonly PluginProviderOwnerRegistration[]
 ): PluginPromptSelectionTarget =>
 	Object.freeze({
 		async setModel(model) {
@@ -31,41 +74,49 @@ export const createPluginPromptSelectionTarget = (
 			if (selection === null) {
 				return false;
 			}
-			if (providerController !== undefined) {
-				const availableModels = await providerController.getAvailableModels();
-				if (
-					!availableModels.some((candidate) =>
-						isSameProviderModel(selection, candidate)
-					)
-				) {
+			const selectedWithOwner = trustedSelection(
+				selection,
+				getTrustedRegistrations,
+				providerController
+			);
+			if (selectedWithOwner === undefined) {
+				return false;
+			}
+			const getAvailableCandidates =
+				providerController.getAvailableProviderModelSelectionCandidates;
+			const selectCandidate =
+				providerController.selectProviderModelSelectionCandidate;
+			if (
+				getAvailableCandidates === undefined ||
+				selectCandidate === undefined
+			) {
+				return false;
+			}
+			try {
+				const availableCandidates = await getAvailableCandidates(
+					selectedWithOwner.providerId
+				);
+				const candidate = availableCandidates.find(
+					({ model: availableModel, selection: candidateSelection }) =>
+						isSameProviderModelIdentity(selectedWithOwner, availableModel) &&
+						pluginProviderOwnerMatches(
+							candidateSelection.pluginProviderSource,
+							selectedWithOwner.pluginProviderSource
+						)
+				);
+				if (candidate === undefined) {
 					return false;
 				}
-				promptSelection.setModel(selection);
-				return true;
-			}
-			if (
-				connections === undefined ||
-				catalogSelectionForProviderModel(selection) === null
-			) {
+				return await selectCandidate(
+					candidate,
+					(_availableModel, currentSelection) => {
+						promptSelection.setModel(currentSelection);
+						return true;
+					}
+				);
+			} catch {
 				return false;
 			}
-			const connectedProviders = await connections.listProviders();
-			if (
-				!connectedProviders.some(
-					({ connected, id }) => connected && id === selection.providerId
-				)
-			) {
-				return false;
-			}
-			promptSelection.setModel(selection);
-			return true;
 		},
 		setThinkingLevel: promptSelection.setThinkingLevel,
 	});
-
-const isSameProviderModel = (
-	selection: ProviderModelIdentity,
-	model: ProviderModel
-): boolean =>
-	model.providerId === selection.providerId &&
-	model.modelId === selection.modelId;

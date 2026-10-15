@@ -9,7 +9,7 @@ import type {
 	SubmissionId,
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SessionFilePart,
@@ -51,6 +51,7 @@ export type Session = {
 };
 
 export type CreateSessionInput = {
+	id?: SessionId;
 	agent: AgentId;
 	message: SessionMessage;
 	model: ProviderModelSelection;
@@ -132,7 +133,7 @@ export type SessionStore = {
 		options?: SessionWriterLockOptions
 	) => Promise<SessionWriterLock>;
 	listSessions: () => Promise<Session[]>;
-	listRecentModelSelections: (limit: number) => ChatModelSelection[];
+	listRecentModelSelections: (limit: number) => ProviderModelSelection[];
 	commitSessionRecord: (input: CommitSessionRecordInput) => Promise<void>;
 	listSessionRecords: (sessionId: SessionId) => Promise<SessionRecord[]>;
 	updateSessionSubmission: (

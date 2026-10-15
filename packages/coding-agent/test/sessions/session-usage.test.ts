@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { ChatModelSelection } from "@wincode/ai/models";
 import { createProviderCollection, type ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { resolveCompactionSettings } from "@/modules/sessions/compaction/config";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
@@ -16,9 +16,21 @@ import {
 	sessionUsageEntryId,
 } from "../support/identifiers";
 
-const model: ChatModelSelection = {
+const model: ProviderModelSelection = {
 	modelId: modelId("claude-haiku-4-5"),
 	providerId: "anthropic",
+};
+const anthropicModel: ProviderModel = {
+	limits: { contextWindowTokens: 200_000 },
+	modelId: model.modelId,
+	pricing: {
+		cacheReadPerMillionTokensUsd: 0.25,
+		cacheWritePerMillionTokensUsd: 2,
+		inputPerMillionTokensUsd: 1,
+		outputPerMillionTokensUsd: 5,
+	},
+	protocolId: "fixture",
+	providerId: model.providerId,
 };
 
 const assistant = (
@@ -28,24 +40,19 @@ const assistant = (
 		outputTokens: number;
 		cacheReadTokens?: number;
 		cacheWriteTokens?: number;
-	}
+	},
+	selection: ProviderModelSelection = model
 ): SessionMessage => ({
 	id: sessionMessageId(id),
-	metadata: usage ? { model, usage } : { model },
+	metadata: usage ? { model: selection, usage } : { model: selection },
 	parts: [{ text: id, type: "text" }],
 	role: "assistant",
 });
 
-/**
- * Pricing arithmetic has its own contract and is asserted directly: going
- * through `summarizeSessionUsage` would entangle it with catalog lookup and
- * live-table merging, which have separate cases below.
- */
 describe("turnCostUsd", () => {
 	const rates = { cacheRead: 1, cacheWrite: 2, input: 4, output: 20 };
 
 	test("charges cache reads and writes at their own rates", () => {
-		// 400k uncached * $4 + 1M out * $20 + 500k read * $1 + 100k write * $2.
 		expect(
 			turnCostUsd(
 				{ cost: rates },
@@ -80,21 +87,15 @@ describe("turnCostUsd", () => {
 				{ inputTokensAbove: 500, input: 9, output: 25 },
 			],
 		};
-		// 300 total input crosses the 200 tier but not the 500 one.
 		expect(
 			turnCostUsd(entry, { inputTokens: 300, outputTokens: 1000 })
 		).toBeCloseTo((300 / 1_000_000) * 5 + (1000 / 1_000_000) * 15, 9);
-		// 600 total input crosses both, so the highest applies.
 		expect(
 			turnCostUsd(entry, { inputTokens: 600, outputTokens: 0 })
 		).toBeCloseTo((600 / 1_000_000) * 9, 9);
 	});
 
 	test("counts cached input toward the tier threshold", () => {
-		// The threshold is about how much context the request carried, so a
-		// cache-heavy request must still cross it — but a tier only overrides
-		// the rates it actually declares, so the cache read rate here stays at
-		// the flat one.
 		const entry = {
 			cost: rates,
 			tiers: [{ inputTokensAbove: 200, input: 5, output: 15 }],
@@ -133,7 +134,6 @@ describe("turnCostUsd", () => {
 	});
 
 	test("returns null when the model published no rates", () => {
-		expect(turnCostUsd({}, { inputTokens: 10, outputTokens: 10 })).toBeNull();
 		expect(
 			turnCostUsd(undefined, { inputTokens: 10, outputTokens: 10 })
 		).toBeNull();
@@ -141,33 +141,29 @@ describe("turnCostUsd", () => {
 });
 
 describe("summarizeSessionUsage", () => {
-	test("retains the last provider usage until the next completed assistant", () => {
-		const measured = assistant("assistant-1", {
-			inputTokens: 90,
-			outputTokens: 10,
+	test("uses the last completed Provider usage and its exact model context limit", () => {
+		const messages = [
+			assistant("assistant-1", { inputTokens: 90, outputTokens: 10 }),
+			{ id: sessionMessageId("user-2"), parts: [], role: "user" } as const,
+			assistant("assistant-2", { inputTokens: 40, outputTokens: 5 }),
+		];
+		const summary = summarizeSessionUsage(messages, model, [], "idle", [
+			anthropicModel,
+		]);
+
+		expect(summary).toMatchObject({
+			contextLimit: 200_000,
+			contextTokens: 45,
 		});
-		const beforeNextUsage = summarizeSessionUsage(
-			[measured, { id: sessionMessageId("user-2"), parts: [], role: "user" }],
-			model,
-			{}
+	});
+
+	test("shows unknown context when exact Provider Model metadata is absent", () => {
+		const summary = summarizeSessionUsage(
+			[assistant("assistant-1", { inputTokens: 90, outputTokens: 10 })],
+			model
 		);
 
-		// The catalog supplies the limit even with no live table at all, so the
-		// usage bar no longer depends on a successful fetch.
-		expect(beforeNextUsage?.contextLimit).toBe(200_000);
-		expect(beforeNextUsage?.contextTokens).toBe(100);
-
-		const afterNextUsage = summarizeSessionUsage(
-			[
-				measured,
-				{ id: sessionMessageId("user-2"), parts: [], role: "user" },
-				assistant("assistant-2", { inputTokens: 40, outputTokens: 5 }),
-			],
-			model,
-			{}
-		);
-
-		expect(afterNextUsage?.contextTokens).toBe(45);
+		expect(summary).toMatchObject({ contextLimit: null, contextPercent: null });
 	});
 
 	test("shows session cache totals without reducing the latest context measure", () => {
@@ -186,8 +182,9 @@ describe("summarizeSessionUsage", () => {
 			}),
 		];
 		const transcript = structuredClone(messages);
-
-		const summary = summarizeSessionUsage(messages, model, {});
+		const summary = summarizeSessionUsage(messages, model, [], "idle", [
+			anthropicModel,
+		]);
 
 		expect(summary).toMatchObject({
 			cacheReadTokens: 90,
@@ -197,7 +194,7 @@ describe("summarizeSessionUsage", () => {
 		expect(messages).toEqual(transcript);
 	});
 
-	test("adds durable warm usage to cost once without changing provider context", () => {
+	test("adds durable warm usage once without changing Provider context", () => {
 		const messages = [
 			assistant("assistant-measured", {
 				inputTokens: 100,
@@ -220,14 +217,9 @@ describe("summarizeSessionUsage", () => {
 		const summary = summarizeSessionUsage(
 			messages,
 			model,
-			{
-				"anthropic/claude-haiku-4-5": {
-					cost: { cacheRead: 0.25, input: 1, output: 5 },
-					limits: { context: 1000 },
-				},
-			},
 			[entry],
-			"scheduled"
+			"scheduled",
+			[anthropicModel]
 		);
 
 		expect(summary).toMatchObject({
@@ -241,17 +233,16 @@ describe("summarizeSessionUsage", () => {
 		expect(messages).toHaveLength(1);
 	});
 
-	test("hides the usage bar before any provider usage exists", () => {
+	test("hides the usage bar before any Provider usage exists", () => {
 		expect(
 			summarizeSessionUsage(
 				[{ id: sessionMessageId("user-1"), parts: [], role: "user" }],
-				model,
-				{}
+				model
 			)
 		).toBeNull();
 	});
 
-	test("accumulates a cache-aware session total across measured turns", () => {
+	test("accumulates exact Provider Model prices across measured turns", () => {
 		const summary = summarizeSessionUsage(
 			[
 				assistant("assistant-1", {
@@ -263,54 +254,42 @@ describe("summarizeSessionUsage", () => {
 				assistant("assistant-2", { inputTokens: 1_000_000, outputTokens: 0 }),
 			],
 			model,
-			{
-				"anthropic/claude-haiku-4-5": {
-					cost: { cacheRead: 0.25, cacheWrite: 2, input: 1, output: 5 },
-					limits: { context: 1000 },
-				},
-			}
+			[],
+			"idle",
+			[anthropicModel]
 		);
 
-		// Turn 1: 400k uncached * $1 + 500k read * $0.25 + 100k write * $2 + 1M output * $5. Turn 2: 1M input * $1.
 		expect(summary?.costUsd).toBeCloseTo(6.725, 9);
 		expect(summary?.costedTurns).toBe(2);
 	});
 
-	test("prices Provider Models only from their exact published metadata", () => {
-		const selection = {
+	test("uses only the exact current Provider Model's published prices", () => {
+		const selection: ProviderModelSelection = {
 			modelId: modelId("vendor/current-model"),
 			providerId: "openrouter",
 		};
-		const messages: SessionMessage[] = [
-			{
-				id: sessionMessageId("provider-model-usage"),
-				metadata: {
-					model: selection,
-					usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 },
-				},
-				parts: [],
-				role: "assistant",
+		const providerModel: ProviderModel = {
+			limits: { contextWindowTokens: 80_000 },
+			modelId: selection.modelId,
+			pricing: {
+				inputPerMillionTokensUsd: 2,
+				outputPerMillionTokensUsd: 8,
 			},
-		];
-		const providerModels: readonly ProviderModel[] = [
-			{
-				limits: { contextWindowTokens: 80_000 },
-				modelId: "vendor/current-model",
-				pricing: {
-					inputPerMillionTokensUsd: 2,
-					outputPerMillionTokensUsd: 8,
-				},
-				protocolId: "openai-compatible",
-				providerId: "openrouter",
-			},
-		];
+			protocolId: "openai-compatible",
+			providerId: selection.providerId,
+		};
 		const summary = summarizeSessionUsage(
-			messages,
+			[
+				assistant(
+					"provider-model-usage",
+					{ inputTokens: 1_000_000, outputTokens: 1_000_000 },
+					selection
+				),
+			],
 			selection,
-			{},
 			[],
 			"idle",
-			providerModels
+			[providerModel]
 		);
 
 		expect(summary).toMatchObject({
@@ -320,144 +299,86 @@ describe("summarizeSessionUsage", () => {
 		});
 	});
 
-	test("prices Provider Model cache categories and exact higher-tier rates", () => {
-		const selection = {
+	test("prices cache categories and exact higher-tier rates", () => {
+		const selection: ProviderModelSelection = {
 			modelId: modelId("vendor/tiered-model"),
 			providerId: "openrouter",
 		};
-		const messages: SessionMessage[] = [
-			{
-				id: sessionMessageId("tiered-provider-model-usage"),
-				metadata: {
-					model: selection,
-					usage: {
+		const providerModel: ProviderModel = {
+			modelId: selection.modelId,
+			pricing: {
+				inputPerMillionTokensUsd: 4,
+				outputPerMillionTokensUsd: 20,
+				cacheReadPerMillionTokensUsd: 1,
+				cacheWritePerMillionTokensUsd: 2,
+				tiers: [
+					{
+						inputTokensAbove: 500_000,
+						inputPerMillionTokensUsd: 9,
+						outputPerMillionTokensUsd: 30,
+						cacheReadPerMillionTokensUsd: 3,
+						cacheWritePerMillionTokensUsd: 4,
+					},
+				],
+			},
+			protocolId: "openai-compatible",
+			providerId: selection.providerId,
+		};
+		const summary = summarizeSessionUsage(
+			[
+				assistant(
+					"tiered-provider-model-usage",
+					{
 						cacheReadTokens: 200_000,
 						cacheWriteTokens: 100_000,
 						inputTokens: 1_000_000,
 						outputTokens: 500_000,
 					},
-				},
-				parts: [],
-				role: "assistant",
-			},
-		];
-		const providerModels: readonly ProviderModel[] = [
-			{
-				modelId: selection.modelId,
-				pricing: {
-					inputPerMillionTokensUsd: 4,
-					outputPerMillionTokensUsd: 20,
-					cacheReadPerMillionTokensUsd: 1,
-					cacheWritePerMillionTokensUsd: 2,
-					tiers: [
-						{
-							inputTokensAbove: 500_000,
-							inputPerMillionTokensUsd: 9,
-							outputPerMillionTokensUsd: 30,
-							cacheReadPerMillionTokensUsd: 3,
-							cacheWritePerMillionTokensUsd: 4,
-						},
-					],
-				},
-				protocolId: "openai-compatible",
-				providerId: selection.providerId,
-			},
-		];
-		const summary = summarizeSessionUsage(
-			messages,
+					selection
+				),
+			],
 			selection,
-			{},
 			[],
 			"idle",
-			providerModels
+			[providerModel]
 		);
 
 		expect(summary?.costUsd).toBeCloseTo(22.3, 9);
 		expect(summary?.costedTurns).toBe(1);
 	});
 
-	test("does not substitute legacy catalog prices when a Provider Model is absent", () => {
-		const selection = {
-			modelId: modelId("gpt-5.6-luna"),
-			providerId: "openai",
-		};
-		const summary = summarizeSessionUsage(
-			[
-				{
-					id: sessionMessageId("unknown-provider-model"),
-					metadata: {
-						model: selection,
-						usage: { inputTokens: 10, outputTokens: 5 },
-					},
-					parts: [],
-					role: "assistant",
-				},
-			],
-			selection,
-			{
-				"openai/gpt-5.6-luna": {
-					cost: { input: 1, output: 2 },
-					limits: { context: 100_000 },
-				},
-			},
-			[],
-			"idle",
-			[]
-		);
-
-		expect(summary).toMatchObject({
-			contextLimit: null,
-			contextPercent: null,
-			costUsd: null,
-			costCoverage: "unknown",
-			costedTurns: 0,
-		});
-	});
-
-	test("qualifies session totals when one measured model has unknown rates", () => {
-		const pricedSelection = {
+	test("reports partial totals when one exact Provider Model has unknown rates", () => {
+		const pricedSelection: ProviderModelSelection = {
 			modelId: modelId("vendor/priced-model"),
 			providerId: "openrouter",
 		};
-		const unknownSelection = {
+		const unknownSelection: ProviderModelSelection = {
 			modelId: modelId("vendor/unpriced-model"),
 			providerId: "openrouter",
 		};
-		const messages: SessionMessage[] = [
-			{
-				id: sessionMessageId("priced-usage"),
-				metadata: {
-					model: pricedSelection,
-					usage: { inputTokens: 1_000_000, outputTokens: 0 },
-				},
-				parts: [],
-				role: "assistant",
-			},
-			{
-				id: sessionMessageId("unpriced-usage"),
-				metadata: {
-					model: unknownSelection,
-					usage: { inputTokens: 10, outputTokens: 5 },
-				},
-				parts: [],
-				role: "assistant",
-			},
-		];
-		const providerModels: readonly ProviderModel[] = [
-			{
-				modelId: pricedSelection.modelId,
-				pricing: { inputPerMillionTokensUsd: 2, outputPerMillionTokensUsd: 8 },
-				protocolId: "openai-compatible",
-				providerId: pricedSelection.providerId,
-			},
-		];
+		const providerModel: ProviderModel = {
+			modelId: pricedSelection.modelId,
+			pricing: { inputPerMillionTokensUsd: 2, outputPerMillionTokensUsd: 8 },
+			protocolId: "openai-compatible",
+			providerId: pricedSelection.providerId,
+		};
 		const summary = summarizeSessionUsage(
-			messages,
+			[
+				assistant(
+					"priced-usage",
+					{ inputTokens: 1_000_000, outputTokens: 0 },
+					pricedSelection
+				),
+				assistant(
+					"unpriced-usage",
+					{ inputTokens: 10, outputTokens: 5 },
+					unknownSelection
+				),
+			],
 			pricedSelection,
-			{},
 			[],
 			"idle",
-			providerModels
+			[providerModel]
 		);
 
 		expect(summary).toMatchObject({
@@ -467,21 +388,17 @@ describe("summarizeSessionUsage", () => {
 		});
 	});
 
-	test("rejects invalid Provider context limits before usage and compaction calculations", async () => {
+	test("rejects invalid context limits before usage and compaction calculations", async () => {
 		const providerId = "context-limit-fixture";
-		const selection = {
+		const selection: ProviderModelSelection = {
 			modelId: modelIdentity("context-limit-model"),
 			providerId,
 		};
-		const message: SessionMessage = {
-			id: sessionMessageId("context-limit-usage"),
-			metadata: {
-				model: selection,
-				usage: { inputTokens: 5000, outputTokens: 0 },
-			},
-			parts: [],
-			role: "assistant",
-		};
+		const message = assistant(
+			"context-limit-usage",
+			{ inputTokens: 5000, outputTokens: 0 },
+			selection
+		);
 		const collection = createProviderCollection();
 		const invalidLimits = [
 			0,
@@ -508,12 +425,11 @@ describe("summarizeSessionUsage", () => {
 						yield { type: "finish" };
 					},
 				})
-			).toThrow("Invalid model identity for provider context-limit-fixture.");
+			).toThrow(`Invalid model identity for provider ${providerId}.`);
 
 			const summary = summarizeSessionUsage(
 				[message],
 				selection,
-				{},
 				[],
 				"idle",
 				collection.getModels()
@@ -547,13 +463,9 @@ describe("summarizeSessionUsage", () => {
 			},
 		});
 		const validModels = collection.getModels();
-		expect(collection.getModel(providerId, selection.modelId)).toMatchObject({
-			limits: { contextWindowTokens: 10_000 },
-		});
 		const validSummary = summarizeSessionUsage(
 			[message],
 			selection,
-			{},
 			[],
 			"idle",
 			validModels
@@ -573,27 +485,16 @@ describe("summarizeSessionUsage", () => {
 	});
 
 	test("reports an unknown context limit instead of guessing one", () => {
-		const noSnapshot = summarizeSessionUsage(
-			[
-				{
-					id: sessionMessageId("a1"),
-					metadata: {
-						model: {
-							modelId: modelId("gemini-3-pro-preview"),
-							providerId: "google",
-						},
-						usage: { inputTokens: 1, outputTokens: 1 },
-					},
-					parts: [],
-					role: "assistant",
-				},
-			],
-			{ modelId: modelId("gemini-3-pro-preview"), providerId: "google" },
-			{}
+		const unknownModel: ProviderModelSelection = {
+			modelId: modelId("gemini-3-pro-preview"),
+			providerId: "google",
+		};
+		const summary = summarizeSessionUsage(
+			[assistant("a1", { inputTokens: 1, outputTokens: 1 }, unknownModel)],
+			unknownModel
 		);
-		// No snapshot data for that entry at all, so the denominator is unknown
-		// and the bar must not invent one.
-		expect(noSnapshot?.contextLimit).toBeNull();
-		expect(noSnapshot?.contextPercent).toBeNull();
+
+		expect(summary?.contextLimit).toBeNull();
+		expect(summary?.contextPercent).toBeNull();
 	});
 });

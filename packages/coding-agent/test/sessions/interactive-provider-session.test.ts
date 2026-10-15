@@ -2,9 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fromPartial } from "@total-typescript/shoehorn";
 import { type AgentTurnEvent, toModelId } from "@wincode/agent-core";
-import type { Connections } from "@wincode/ai/connections";
 import {
 	createProviderCollection,
 	type ProviderCollection,
@@ -14,7 +12,10 @@ import {
 	type OpenRouterProviderOptions,
 } from "@wincode/ai/sdk/providers/openrouter";
 import { createInteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import {
+	isSameProviderModelIdentity,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import {
 	createProviderSdkCredentialStore,
 	createProviderSdkModelStore,
@@ -99,20 +100,6 @@ test("Interactive Session connects OpenRouter, refreshes offline-safe Known Mode
 					homeRoot,
 					workspace,
 				}),
-				connections: () =>
-					fromPartial<Connections>({
-						authorize: async () => {
-							throw new Error(
-								"SDK Session must not authorize through legacy Connections."
-							);
-						},
-						connect: async () => {
-							throw new Error(
-								"SDK Session must not connect through legacy Connections."
-							);
-						},
-						listProviders: async () => [],
-					}),
 				createProviderCollection: () => {
 					const collection = createProviderCollectionForTest();
 					collections.push(collection);
@@ -131,7 +118,9 @@ test("Interactive Session connects OpenRouter, refreshes offline-safe Known Mode
 				fetch,
 			})
 		);
-		return collection;
+		return Object.assign(collection, {
+			getPluginProviderRegistrations: (): readonly [] => [],
+		});
 	};
 
 	let services: SessionServices | undefined;
@@ -147,7 +136,7 @@ test("Interactive Session connects OpenRouter, refreshes offline-safe Known Mode
 		});
 		handle = await services.sessionSdk.openSession(sessionId);
 		const firstHandle = handle;
-		const firstCollection = collections[0];
+		const firstCollection = collections.at(-1);
 		if (firstCollection === undefined) {
 			throw new Error(
 				"Interactive Session did not create its own ProviderCollection."
@@ -204,10 +193,8 @@ test("Interactive Session connects OpenRouter, refreshes offline-safe Known Mode
 			modelId: "vendor/stable-model",
 		});
 		expect(
-			(await services.store.listSessionRecords(sessionId)).some(
-				({ model }) =>
-					model.providerId === "openrouter" &&
-					model.modelId === "vendor/stable-model"
+			(await services.store.listSessionRecords(sessionId)).some(({ model }) =>
+				isSameProviderModelIdentity(model, selectedModel)
 			)
 		).toBe(true);
 

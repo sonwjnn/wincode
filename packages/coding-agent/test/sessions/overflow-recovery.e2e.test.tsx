@@ -4,27 +4,20 @@ const restoreEnvironment = createEnvironmentRestorer([
 	"WINCODE_E2E_HOME",
 	"WINCODE_E2E_WORKSPACE",
 	"WINCODE_LOCAL_DB_PATH",
-	"WINCODE_MODEL_PRICING_OFFLINE",
 ]);
-
-process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, expect, mock, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
-import type {
-	ModelStepRequest,
-	ModelStreamPart,
-} from "@wincode/ai/model-client";
+import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai/sdk";
 import { act } from "react";
-import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientRecorder,
-	type FakeModelStepScript,
-	installFakeModelClient,
+	createFakeProviderRecorder,
+	type FakeProviderStepScript,
+	installFakeProviderRecorder,
 } from "@/test/support/e2e-fake-runtime";
 
 const testDirectory = await fs.mkdtemp(
@@ -39,7 +32,6 @@ process.env.WINCODE_E2E_WORKSPACE = testDirectory;
 setInteractiveRuntimeContext({
 	args: [],
 	cwd: testDirectory,
-	runtimeFactory: defaultRuntimeFactory,
 });
 afterAll(async () => {
 	mock.restore();
@@ -62,10 +54,27 @@ let turnCount = 0;
  * after compaction answers normally, proving the Agent Runtime received the
  * updated Session Context.
  */
-const overflowThenAnswer: FakeModelStepScript = async function* (
-	request: ModelStepRequest,
+const overflowThenAnswer: FakeProviderStepScript = async function* (
+	request: ProviderChatRequest,
 	recorder
-): AsyncGenerator<ModelStreamPart> {
+): AsyncGenerator<ProviderChatEvent> {
+	if (request.system?.includes("session summarizer")) {
+		recorder.requests.push({
+			kind: "summary",
+			system: request.system,
+			text: request.messages
+				.flatMap((message) =>
+					message.content.flatMap((part) =>
+						part.type === "text" ? [part.text] : []
+					)
+				)
+				.join("\n"),
+		});
+		yield { delta: recorder.summaryText, type: "text-delta" };
+		yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
+		yield { type: "finish" };
+		return;
+	}
 	turnCount += 1;
 	recorder.requests.push({
 		kind: "chat",
@@ -81,11 +90,15 @@ const overflowThenAnswer: FakeModelStepScript = async function* (
 		throw new Error("The prompt exceeds the model context window.");
 	}
 	yield { delta: "E2E chat response", type: "text-delta" };
-	yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+	yield {
+		type: "usage",
+		usage: { inputTokens: 1, outputTokens: 1 },
+	};
+	yield { type: "finish" };
 };
 
-const recorder = createFakeModelClientRecorder();
-installFakeModelClient(recorder, overflowThenAnswer);
+const recorder = createFakeProviderRecorder();
+installFakeProviderRecorder(recorder, overflowThenAnswer);
 
 import {
 	cleanupSessionRender,

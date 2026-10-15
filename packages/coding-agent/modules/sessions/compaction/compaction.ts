@@ -1,5 +1,5 @@
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
-import type { ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import {
 	isNull,
 	isNumber,
@@ -10,10 +10,7 @@ import {
 	pickTruthy,
 } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
-import {
-	catalogSelectionForProviderModel,
-	type ProviderModelSelection,
-} from "@/modules/providers/provider-model-selection";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	type CompactionId,
 	type SessionId,
@@ -232,7 +229,7 @@ const sameIntent = (left: CompactionIntent, right: CompactionIntent): boolean =>
 type CompactionModuleDependencies = {
 	attachmentStore?: SessionAttachmentStore;
 	store: CompactionStore;
-	summaryGenerator: SummaryGenerator;
+	summaryGenerator?: SummaryGenerator;
 	estimateTokens?: (messages: readonly SessionMessage[]) => number;
 	generateId?: () => CompactionId;
 	now?: () => Date;
@@ -1070,11 +1067,7 @@ const generateCompactionSummary = async (
 				{ cause: error }
 			);
 		}
-		const catalogModel = catalogSelectionForProviderModel(input.model);
-		const failureMessage =
-			catalogModel === null
-				? getModelFailureMessage(error)
-				: getModelFailureMessage(error, catalogModel);
+		const failureMessage = getModelFailureMessage(error);
 		throw new SessionCompactionError(
 			"summary-failed",
 			`Compaction summary generation failed: ${failureMessage}`,
@@ -1249,8 +1242,15 @@ export const createSessionCompaction = ({
 			maxOutputTokens,
 			signal: input.signal,
 		};
+		const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
+		if (selectedSummaryGenerator === undefined) {
+			throw new SessionCompactionError(
+				"summary-failed",
+				"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
+			);
+		}
 		const generated = await generateCompactionSummary(
-			input.summaryGenerator ?? summaryGenerator,
+			selectedSummaryGenerator,
 			generatorInput
 		);
 		assertNotAborted(input.signal);

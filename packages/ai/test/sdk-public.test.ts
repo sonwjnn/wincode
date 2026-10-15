@@ -7,6 +7,8 @@ import {
 	type ProviderChatEvent,
 	ProviderError,
 	type ProviderModel,
+	parseProviderModelSelection,
+	providerModelSelectionSchema,
 } from "@wincode/ai/sdk";
 
 const demoProvider = (): Provider => ({
@@ -34,6 +36,24 @@ const demoProvider = (): Provider => ({
 			usage: { inputTokens: 4, outputTokens: 2 },
 		};
 	},
+});
+
+test("SDK selection parsing preserves exact unknown Provider Model identity", () => {
+	const selection = parseProviderModelSelection(
+		"plugin-provider/vendor/model-v4"
+	);
+	expect(selection).toEqual({
+		modelId: "vendor/model-v4",
+		providerId: "plugin-provider",
+	});
+	expect(providerModelSelectionSchema.safeParse(selection).success).toBe(true);
+	expect(parseProviderModelSelection("plugin-provider/")).toBeNull();
+	expect(
+		providerModelSelectionSchema.safeParse({
+			modelId: "",
+			providerId: "plugin-provider",
+		}).success
+	).toBe(false);
 });
 
 describe("public SDK provider collection", () => {
@@ -923,11 +943,15 @@ describe("public SDK provider collection", () => {
 		const credentials = new Map<string, unknown>([
 			["configured-provider", "configured"],
 		]);
+		const credentialReads: string[] = [];
 		const credentialStore = {
 			delete: async (providerId: string) => {
 				credentials.delete(providerId);
 			},
-			get: async (providerId: string) => credentials.get(providerId),
+			get: async (providerId: string) => {
+				credentialReads.push(providerId);
+				return credentials.get(providerId);
+			},
 			set: async (providerId: string, credential: unknown) => {
 				credentials.set(providerId, credential);
 			},
@@ -964,6 +988,22 @@ describe("public SDK provider collection", () => {
 			otherDiscoveredModel,
 		]);
 		expect(await sdk.getAvailable()).toEqual([staticModel, discoveredModel]);
+		expect(credentialReads).toEqual([
+			"configured-provider",
+			"unconfigured-provider",
+		]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("configured-provider")).toEqual([
+			staticModel,
+			discoveredModel,
+		]);
+		expect(credentialReads).toEqual(["configured-provider"]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("unconfigured-provider")).toEqual([]);
+		expect(credentialReads).toEqual(["unconfigured-provider"]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("missing-provider")).toEqual([]);
+		expect(credentialReads).toEqual([]);
 		expect(authorizationChecks).toBe(0);
 		expect(discoveryCalls).toBe(0);
 

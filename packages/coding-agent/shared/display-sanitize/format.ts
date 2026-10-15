@@ -1,13 +1,8 @@
-import {
-	findSupportedChatModelSelection,
-	formatModelLabel,
-	normalizeChatModelSelection,
-} from "@wincode/ai/models";
 import { isNull, isString, isUndefined } from "@wincode/utils";
 import {
-	catalogSelectionForProviderModel,
 	normalizeProviderModelSelection,
 	type ProviderModelSelection,
+	parseProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
 
 const CAMEL_CASE_BOUNDARY_PATTERN = /([a-z0-9])([A-Z])/g;
@@ -67,18 +62,10 @@ export const formatAgent = (agent: string) =>
 /** Normalizes a model selection to a display label and provider id. */
 export const formatModel = (model: string | ProviderModelSelection) => {
 	const selection = isString(model)
-		? normalizeChatModelSelection(model)
+		? parseProviderModelSelection(model)
 		: normalizeProviderModelSelection(model);
 	if (selection) {
-		const catalogModel = catalogSelectionForProviderModel(selection);
-		const modelDetails =
-			catalogModel === null
-				? null
-				: findSupportedChatModelSelection(catalogModel);
-		return {
-			label: formatModelLabel(modelDetails?.displayName ?? selection.modelId),
-			providerId: selection.providerId,
-		};
+		return { label: selection.modelId, providerId: selection.providerId };
 	}
 
 	return isString(model)

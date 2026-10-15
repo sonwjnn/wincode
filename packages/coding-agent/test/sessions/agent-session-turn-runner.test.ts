@@ -17,14 +17,9 @@ test("SDK model output maxima remain metadata instead of implicit Agent request 
 	});
 
 	const model = await resolveSessionTurnModel({
-		getConnections: () => {
-			throw new Error("A Provider SDK turn must not use legacy Connections.");
-		},
 		model: { modelId: toModelId("gpt-5.6"), providerId: "openai" },
-		modelExecutionMode: "provider-sdk",
 		promptCacheControls: { enabled: false },
 		providerCollection,
-		signal: new AbortController().signal,
 		thinkingSelection: {},
 	});
 
@@ -32,8 +27,7 @@ test("SDK model output maxima remain metadata instead of implicit Agent request 
 	expect(model).not.toHaveProperty("maxOutputTokens");
 });
 
-test("SDK-backed Session sends fail closed instead of routing a Catalog identity to legacy Connections", async () => {
-	let legacyAuthorizationRequested = false;
+test("SDK-backed Session turns fail closed when exact Provider Model metadata is missing", async () => {
 	const providerCollection = fromPartial<ProviderCollection>({
 		getAvailable: async () => [],
 		getModel: () => undefined,
@@ -41,40 +35,12 @@ test("SDK-backed Session sends fail closed instead of routing a Catalog identity
 
 	await expect(
 		resolveSessionTurnModel({
-			getConnections: () => {
-				legacyAuthorizationRequested = true;
-				throw new Error("Legacy Connections must not be used.");
-			},
 			model: { modelId: toModelId("gpt-5.6"), providerId: "openai" },
-			modelExecutionMode: "provider-sdk",
 			promptCacheControls: { enabled: false },
 			providerCollection,
-			signal: new AbortController().signal,
 			thinkingSelection: {},
 		})
 	).rejects.toThrow(
 		"Provider Model openai/gpt-5.6 is not available in this Session Host."
 	);
-	expect(legacyAuthorizationRequested).toBe(false);
-});
-
-test("SDK-backed Session execution fails closed when its ProviderCollection is missing", async () => {
-	let legacyAuthorizationRequested = false;
-
-	await expect(
-		resolveSessionTurnModel({
-			getConnections: () => {
-				legacyAuthorizationRequested = true;
-				throw new Error("Legacy Connections must not be used.");
-			},
-			model: { modelId: toModelId("gpt-5.6"), providerId: "openai" },
-			modelExecutionMode: "provider-sdk",
-			promptCacheControls: { enabled: false },
-			signal: new AbortController().signal,
-			thinkingSelection: {},
-		})
-	).rejects.toThrow(
-		"Provider SDK Session Host is missing its ProviderCollection; Catalog dispatch is disabled."
-	);
-	expect(legacyAuthorizationRequested).toBe(false);
 });

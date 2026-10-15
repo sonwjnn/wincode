@@ -2,7 +2,12 @@ import type { ProviderModel } from "@wincode/ai/sdk";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useState } from "react";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import {
+	isSameProviderModelIdentity,
+	type ProviderModelSelection,
+	type ProviderModelSelectionCandidate,
+	STALE_PROVIDER_MODEL_SELECTION_MESSAGE,
+} from "@/modules/providers/provider-model-selection";
 import {
 	useDialog,
 	useDialogEscape,
@@ -15,14 +20,17 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 type Props = Readonly<{
 	controller: InteractiveProviderController;
 	currentModel: ProviderModelSelection;
-	onSelectModel: (model: ProviderModel) => void;
+	onSelectModel: (
+		model: ProviderModel,
+		selection: ProviderModelSelection
+	) => void | Promise<void>;
 }>;
 
 type Row =
 	| Readonly<{ kind: "refresh" }>
-	| Readonly<{ kind: "model"; model: ProviderModel }>;
+	| Readonly<{ candidate: ProviderModelSelectionCandidate; kind: "model" }>;
 
-/** Selects authenticated Provider Models from the current Host's SDK collection. */
+/** Selects Provider Models with the owner and composition snapshot that fetched them. */
 export const ProviderModelsDialogContent = ({
 	controller,
 	currentModel,
@@ -31,18 +39,29 @@ export const ProviderModelsDialogContent = ({
 	const dialog = useDialog();
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
-	const [models, setModels] = useState<readonly ProviderModel[]>([]);
+	const [candidates, setCandidates] = useState<
+		readonly ProviderModelSelectionCandidate[]
+	>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isRefreshing, setIsRefreshing] = useState(false);
+	const [isSelecting, setIsSelecting] = useState(false);
 
 	useEffect(() => {
 		let active = true;
-		void controller
-			.getAvailableModels()
+		const getAvailableCandidates =
+			controller.getAvailableProviderModelSelectionCandidates;
+		if (getAvailableCandidates === undefined) {
+			setError(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+			setIsLoading(false);
+			return () => {
+				active = false;
+			};
+		}
+		void getAvailableCandidates()
 			.then((available) => {
 				if (active) {
-					setModels(available);
+					setCandidates(available);
 				}
 			})
 			.catch((loadError: unknown) => {
@@ -66,7 +85,12 @@ export const ProviderModelsDialogContent = ({
 		setError(null);
 		setIsRefreshing(true);
 		try {
-			setModels(await controller.refreshModels());
+			const refreshCandidates =
+				controller.refreshProviderModelSelectionCandidates;
+			if (refreshCandidates === undefined) {
+				throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+			}
+			setCandidates(await refreshCandidates());
 		} catch (refreshError) {
 			setError(
 				getErrorMessage(
@@ -78,9 +102,33 @@ export const ProviderModelsDialogContent = ({
 			setIsRefreshing(false);
 		}
 	}, [controller]);
+	const selectCandidate = useCallback(
+		async (candidate: ProviderModelSelectionCandidate): Promise<void> => {
+			setError(null);
+			setIsSelecting(true);
+			try {
+				const select = controller.selectProviderModelSelectionCandidate;
+				if (select === undefined) {
+					throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+				}
+				await select(candidate, onSelectModel);
+				dialog.close();
+			} catch (selectionError) {
+				setError(
+					getErrorMessage(
+						selectionError,
+						"Could not select this Provider Model."
+					)
+				);
+			} finally {
+				setIsSelecting(false);
+			}
+		},
+		[controller, dialog, onSelectModel]
+	);
 	const rows: Row[] = [
 		{ kind: "refresh" },
-		...models.map((model) => ({ kind: "model" as const, model })),
+		...candidates.map((candidate) => ({ kind: "model" as const, candidate })),
 	];
 	useDialogEscape();
 
@@ -99,27 +147,25 @@ export const ProviderModelsDialogContent = ({
 				getKey={(row) =>
 					row.kind === "refresh"
 						? "refresh"
-						: `model:${row.model.providerId}:${row.model.modelId}`
+						: `model:${row.candidate.model.providerId}:${row.candidate.model.modelId}`
 				}
 				getSearchText={(row) =>
 					row.kind === "model"
-						? `${row.model.modelId} ${row.model.providerId}`
+						? `${row.candidate.model.modelId} ${row.candidate.model.providerId}`
 						: "refresh"
 				}
 				isItemActive={(row) =>
 					row.kind === "model" &&
-					row.model.providerId === currentModel.providerId &&
-					row.model.modelId === currentModel.modelId
+					isSameProviderModelIdentity(row.candidate.model, currentModel)
 				}
-				isItemSelectable={() => !(isLoading || isRefreshing)}
+				isItemSelectable={() => !(isLoading || isRefreshing || isSelecting)}
 				items={rows}
 				onSelect={(row) => {
 					if (row.kind === "refresh") {
 						void refreshModels();
 						return;
 					}
-					onSelectModel(row.model);
-					dialog.close();
+					void selectCandidate(row.candidate);
 				}}
 				placeholder="Search Provider Models"
 				renderItem={(row, isSelected, isActive) => {
@@ -131,7 +177,7 @@ export const ProviderModelsDialogContent = ({
 							? "Refreshing Known Models…"
 							: "Refresh Known Models";
 					} else {
-						label = row.model.modelId;
+						label = row.candidate.model.modelId;
 					}
 					if (isSelected) {
 						foreground = selectedTextColor;

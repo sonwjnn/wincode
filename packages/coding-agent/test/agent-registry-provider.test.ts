@@ -1,14 +1,12 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { agentIdSchema } from "@wincode/agent-core";
-import type { Connections } from "@wincode/ai/connections";
 import {
 	claimAgentDiagnosticsToast,
 	resolveInteractiveAgentRegistry,
 } from "@/modules/agents/agent-registry-provider";
 import {
 	buildAgentRegistry,
-	canDeferAgentModelAvailability,
 	resolveActiveAgentId,
 } from "@/modules/agents/registry";
 import type { PluginAgentRegistration } from "@/modules/plugins/public";
@@ -17,7 +15,7 @@ import type {
 	ConfigSnapshot,
 } from "@/shared/config/config-store";
 
-test("retains an exact Provider Model pin without claiming it runs on a legacy host", () => {
+test("preserves exact configured Provider Model pins without a static model policy", () => {
 	const snapshot = fromPartial<ConfigSnapshot>({
 		diagnostics: [],
 		document: {
@@ -38,25 +36,22 @@ test("retains an exact Provider Model pin without claiming it runs on a legacy h
 	);
 
 	expect(agent).toMatchObject({
-		isAvailable: false,
+		isAvailable: true,
 		isSelectable: true,
 		model: { modelId: "plugin-model", providerId: "plugin-provider" },
-		modelUnavailableReason:
-			"Provider Model plugin-provider/plugin-model requires the Provider SDK runtime",
 		thinkingLevel: "high",
-		unavailableReason:
-			"Provider Model plugin-provider/plugin-model requires the Provider SDK runtime",
 	});
+	expect(agent?.unavailableReason).toBeUndefined();
 });
 
-test("defers only a model-connectivity reason and retains other Agent restrictions", () => {
+test("does not apply Provider connectivity state while building Agent availability", () => {
 	const registry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
 			diagnostics: [],
 			document: {
 				agents: {
 					"offline-openai-agent": {
-						description: "Keeps a catalog-known disconnected pin.",
+						description: "Keeps an exact Provider Model pin.",
 						model: "openai/gpt-5.6",
 						role: "primary",
 					},
@@ -64,23 +59,16 @@ test("defers only a model-connectivity reason and retains other Agent restrictio
 			},
 			sourceFor: () => undefined,
 			sources: [],
-		}),
-		{ connectedProviderIds: new Set() }
+		})
 	);
 	const agent = registry.agents.find(
 		({ id }) => id === agentIdSchema.parse("offline-openai-agent")
 	);
 
-	if (agent === undefined) {
-		throw new Error("The configured Agent should be present in the registry.");
-	}
-	expect(canDeferAgentModelAvailability(agent)).toBe(true);
-	expect(
-		canDeferAgentModelAvailability({
-			...agent,
-			unavailableReason: `${agent.unavailableReason}; Missing required child tool: shell`,
-		})
-	).toBe(false);
+	expect(agent).toMatchObject({
+		isAvailable: true,
+		model: { modelId: "gpt-5.6", providerId: "openai" },
+	});
 });
 
 test("restores a known Agent with an unavailable pinned model instead of replacing it", () => {
@@ -99,8 +87,7 @@ test("restores a known Agent with an unavailable pinned model instead of replaci
 			},
 			sourceFor: () => undefined,
 			sources: [],
-		}),
-		{ connectedProviderIds: new Set() }
+		})
 	);
 
 	expect(resolveActiveAgentId(registry, unavailableAgentId)).toBe(
@@ -131,7 +118,6 @@ test("includes Plugin Agent registrations in the TUI shared Agent catalog", asyn
 			homeRoot: "/home/test",
 			workspace: "/workspace",
 		}),
-		fromPartial<Connections>({ listProviders: async () => [] }),
 		{ getAgentRegistrations: () => [registration] }
 	);
 

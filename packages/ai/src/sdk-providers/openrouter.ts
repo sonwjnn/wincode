@@ -13,21 +13,15 @@ import {
 	openAICompatibleProtocolId,
 	openAICompatibleResponseError,
 } from "../sdk-private/openai-compatible.ts";
+import { record } from "../sdk-private/protocols/shared.ts";
 
 const OPENROUTER_PROVIDER_ID = "openrouter";
 const OPENROUTER_MODELS_URL = "models";
-
-type JsonRecord = Record<string, unknown>;
 
 export type OpenRouterProviderOptions = Readonly<{
 	baseUrl?: string;
 	fetch?: OpenAICompatibleFetch;
 }>;
-
-const record = (value: unknown): JsonRecord | undefined =>
-	typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as JsonRecord)
-		: undefined;
 
 const finiteNumber = (value: unknown): number | undefined => {
 	const parsed = typeof value === "string" ? Number(value) : value;

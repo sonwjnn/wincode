@@ -5,15 +5,16 @@ import { isNull, isUndefined } from "@wincode/utils";
 import { useCallback, useState } from "react";
 import {
 	type AgentDiagnostic,
-	agentUnavailableReasonWithoutModelPin,
 	builtInAgents,
 	formatAgentDiagnostic,
 	useAgentRegistry,
 } from "@/modules/agents";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
-	catalogSelectionForProviderModel,
-	normalizeProviderModelSelection,
+	isAvailableProviderModelSelection,
+	isSameProviderModelIdentity,
 	type ProviderModelSelection,
+	providerModelSelectionForProviderModel,
 } from "@/modules/providers/provider-model-selection";
 import {
 	useDialog,
@@ -27,40 +28,40 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 type AgentsDialogContentProps = {
 	availableProviderModels?: readonly ProviderModel[];
 	currentAgent?: AgentId;
-	connectedProviderIds?: ReadonlySet<string>;
+	providerController?: InteractiveProviderController;
 	onSelectAgent: (agent: AgentId, model?: ProviderModelSelection) => void;
 };
 
 type AgentDialogItem = AgentDefinition & {
 	readonly isAvailable?: boolean;
 	readonly model?: ProviderModelSelection;
-	readonly modelUnavailableReason?: string;
 	readonly unavailableReason?: string;
 };
 
 export const canReplaceUnavailableAgentModel = (
 	agent: AgentDialogItem,
 	availableProviderModels: readonly ProviderModel[] | undefined
-): boolean =>
-	agent.model !== undefined &&
-	availableProviderModels !== undefined &&
-	availableProviderModels.length > 0 &&
-	!availableProviderModels.some(
-		(model) =>
-			model.providerId === agent.model?.providerId &&
-			model.modelId === agent.model?.modelId
-	) &&
-	agentUnavailableReasonWithoutModelPin(agent) === undefined &&
-	(agent.isAvailable !== false || agent.modelUnavailableReason !== undefined);
+): boolean => {
+	const pinnedModel = agent.model;
+	return (
+		pinnedModel !== undefined &&
+		availableProviderModels !== undefined &&
+		availableProviderModels.length > 0 &&
+		agent.isAvailable !== false &&
+		!isAvailableProviderModelSelection(pinnedModel, availableProviderModels)
+	);
+};
 
 const AgentModelReplacementDialogContent = ({
 	agent,
 	models,
 	onSelect,
+	providerController,
 }: {
 	agent: AgentDialogItem;
 	models: readonly ProviderModel[];
 	onSelect: (model: ProviderModelSelection) => void;
+	providerController?: InteractiveProviderController;
 }) => {
 	const dialog = useDialog();
 	const { colors } = useTheme();
@@ -73,13 +74,18 @@ const AgentModelReplacementDialogContent = ({
 			isItemSelectable={() => true}
 			items={models}
 			onSelect={(model) => {
-				const selection = normalizeProviderModelSelection({
-					modelId: model.modelId,
-					providerId: model.providerId,
-				});
-				if (selection === null) {
-					return;
-				}
+				const registration = providerController?.getPluginProviderComposition?.(
+					model.providerId
+				)?.registration;
+				const selection = providerModelSelectionForProviderModel(
+					model,
+					registration === undefined
+						? undefined
+						: {
+								pluginId: registration.pluginId,
+								sourceIdentity: registration.sourceIdentity,
+							}
+				);
 				onSelect(selection);
 				dialog.close();
 			}}
@@ -97,35 +103,29 @@ const AgentModelReplacementDialogContent = ({
 
 export const getAgentUnavailableReason = (
 	agent: AgentDialogItem,
-	connectedProviderIds: ReadonlySet<string> | undefined,
 	availableProviderModels?: readonly ProviderModel[]
 ): string | undefined => {
-	if (agent.model) {
-		if (availableProviderModels !== undefined) {
-			const isAvailable = availableProviderModels.some(
-				(model) =>
-					model.providerId === agent.model?.providerId &&
-					model.modelId === agent.model?.modelId
-			);
-			return isAvailable
-				? agentUnavailableReasonWithoutModelPin(agent)
-				: `Provider Model ${agent.model.providerId}/${agent.model.modelId} is unavailable`;
+	if (agent.isAvailable === false) {
+		return agent.unavailableReason ?? "Agent is unavailable";
+	}
+	const pinnedModel = agent.model;
+	if (pinnedModel !== undefined) {
+		if (availableProviderModels === undefined) {
+			return "Provider Model availability cannot be checked in this Host";
 		}
-		if (catalogSelectionForProviderModel(agent.model) === null) {
-			return `Provider Model ${agent.model.providerId}/${agent.model.modelId} requires the Provider SDK runtime`;
-		}
-		if (!isUndefined(connectedProviderIds)) {
-			return connectedProviderIds.has(agent.model.providerId)
-				? undefined
-				: `Connect ${agent.model.providerId}`;
+		const isAvailable = isAvailableProviderModelSelection(
+			pinnedModel,
+			availableProviderModels
+		);
+		if (!isAvailable) {
+			return `Provider Model ${pinnedModel.providerId}/${pinnedModel.modelId} is unavailable`;
 		}
 	}
-	return agent.isAvailable === false ? agent.unavailableReason : undefined;
+	return;
 };
 
 const agentDialogItemLabel = (
 	agent: AgentDialogItem,
-	connectedProviderIds: ReadonlySet<string> | undefined,
 	availableProviderModels: readonly ProviderModel[] | undefined
 ): string => {
 	if (canReplaceUnavailableAgentModel(agent, availableProviderModels)) {
@@ -133,7 +133,6 @@ const agentDialogItemLabel = (
 	}
 	const unavailableReason = getAgentUnavailableReason(
 		agent,
-		connectedProviderIds,
 		availableProviderModels
 	);
 	return unavailableReason === undefined
@@ -174,7 +173,7 @@ export const AgentDiagnosticsFooter = ({
 export const AgentsDialogContent = ({
 	availableProviderModels,
 	currentAgent,
-	connectedProviderIds,
+	providerController,
 	onSelectAgent,
 }: AgentsDialogContentProps) => {
 	const dialog = useDialog();
@@ -194,13 +193,38 @@ export const AgentsDialogContent = ({
 				setReplacementAgent(agent);
 				return;
 			}
+			const pinnedModel = agent.model;
+			const availableModel =
+				pinnedModel === undefined
+					? undefined
+					: availableProviderModels?.find((model) =>
+							isSameProviderModelIdentity(model, pinnedModel)
+						);
+			const registration =
+				availableModel === undefined
+					? undefined
+					: providerController?.getPluginProviderComposition?.(
+							availableModel.providerId
+						)?.registration;
+			const selectedModel =
+				availableModel === undefined
+					? pinnedModel
+					: providerModelSelectionForProviderModel(
+							availableModel,
+							registration === undefined
+								? undefined
+								: {
+										pluginId: registration.pluginId,
+										sourceIdentity: registration.sourceIdentity,
+									}
+						);
 			onSelectAgent(
 				agent.id,
-				availableProviderModels === undefined ? undefined : agent.model
+				availableProviderModels === undefined ? undefined : selectedModel
 			);
 			dialog.close();
 		},
-		[availableProviderModels, onSelectAgent, dialog]
+		[availableProviderModels, onSelectAgent, providerController, dialog]
 	);
 
 	useDialogEscape();
@@ -218,6 +242,7 @@ export const AgentsDialogContent = ({
 						onSelectAgent(replacementAgent.id, replacement);
 						dialog.close();
 					}}
+					providerController={providerController}
 				/>
 			</box>
 		);
@@ -236,13 +261,8 @@ export const AgentsDialogContent = ({
 			getSearchText={(item) => `${item.displayName} ${item.description}`}
 			isItemActive={(item) => item.id === currentAgent}
 			isItemSelectable={(item) =>
-				isUndefined(
-					getAgentUnavailableReason(
-						item,
-						connectedProviderIds,
-						availableProviderModels
-					)
-				) || canReplaceUnavailableAgentModel(item, availableProviderModels)
+				isUndefined(getAgentUnavailableReason(item, availableProviderModels)) ||
+				canReplaceUnavailableAgentModel(item, availableProviderModels)
 			}
 			items={agents}
 			onSelect={handleSelect}
@@ -262,22 +282,14 @@ export const AgentsDialogContent = ({
 				>
 					<text
 						attributes={
-							getAgentUnavailableReason(
-								item,
-								connectedProviderIds,
-								availableProviderModels
-							)
+							getAgentUnavailableReason(item, availableProviderModels)
 								? TextAttributes.DIM
 								: undefined
 						}
 						fg={isSelected ? selectedTextColor : colors.text}
 						selectable={false}
 					>
-						{agentDialogItemLabel(
-							item,
-							connectedProviderIds,
-							availableProviderModels
-						)}
+						{agentDialogItemLabel(item, availableProviderModels)}
 					</text>
 				</SelectableDialogItem>
 			)}

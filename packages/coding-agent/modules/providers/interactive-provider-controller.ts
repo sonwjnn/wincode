@@ -10,6 +10,18 @@ import type {
 	PluginProviderConnectContext,
 } from "@/modules/plugins/public";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
+import {
+	arePluginProviderRegistrationsBoundToTrustedOwners,
+	createProviderModelSelectionSnapshot,
+	type ProviderModelSelection,
+	type ProviderModelSelectionCandidate,
+	type ProviderModelSelectionSnapshot,
+	providerModelSelectionCandidateForModel,
+	providerModelSelectionForCandidate,
+	providerModelSelectionSnapshotsMatch,
+	STALE_PROVIDER_MODEL_SELECTION_MESSAGE,
+	UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE,
+} from "@/modules/providers/provider-model-selection";
 
 const OPENROUTER_PROVIDER_ID = "openrouter";
 const API_KEY_PROVIDER_OPTIONS = [
@@ -51,6 +63,8 @@ export type InteractiveProviderControllerOptions = Readonly<{
 		providerId: string
 	) => PluginProviderComposition | undefined;
 	getPluginProviderRegistrations?: () => readonly PluginProviderDescriptor[];
+	getTrustedPluginProviderRegistrations?: () => readonly PluginProviderDescriptor[];
+	getTrustedPluginProviderRuntime?: () => object | undefined;
 	supportsModelDiscovery?: (providerId: string) => boolean;
 	withSessionWork?: <Result>(action: () => Promise<Result>) => Promise<Result>;
 	getCompositionRevision?: () => number;
@@ -75,15 +89,34 @@ export type InteractiveProviderController = Readonly<{
 		requestTextInput: PluginProviderConnectContext["requestTextInput"],
 		options?: RefreshModelsOptions
 	) => Promise<PluginProviderConnectionOutcome | undefined>;
-	getAvailableModels: () => Promise<readonly ProviderModel[]>;
+	getAvailableModels: (
+		providerId?: string
+	) => Promise<readonly ProviderModel[]>;
+	getAvailableProviderModelSelectionCandidates?: (
+		providerId?: string
+	) => Promise<readonly ProviderModelSelectionCandidate[]>;
 	getCompositionRevision?: () => number;
 	getAvailabilityRevision?: () => number;
 	getConnectableProviders: () => readonly InteractiveProviderOption[];
 	getKnownModels: () => Promise<readonly ProviderModel[]>;
+	getPluginProviderComposition?: (
+		providerId: string
+	) => PluginProviderComposition | undefined;
+	getPluginProviderRegistrations: () => readonly PluginProviderDescriptor[];
 	restoreModels: () => Promise<void>;
 	refreshModels: (
 		options?: RefreshModelsOptions
 	) => Promise<readonly ProviderModel[]>;
+	refreshProviderModelSelectionCandidates?: (
+		options?: RefreshModelsOptions
+	) => Promise<readonly ProviderModelSelectionCandidate[]>;
+	selectProviderModelSelectionCandidate?: <Result>(
+		candidate: ProviderModelSelectionCandidate,
+		action: (
+			model: ProviderModel,
+			selection: ProviderModelSelection
+		) => Result | Promise<Result>
+	) => Promise<Result>;
 	refreshProviderModels: (
 		providerId: string,
 		options?: RefreshModelsOptions
@@ -257,6 +290,73 @@ export const createInteractiveProviderController = (
 		}
 	};
 	const restoreModels = (): Promise<void> => providers.restoreModels();
+	const trustedOwnerRegistrations = () =>
+		(options.getTrustedPluginProviderRegistrations?.() ?? []).map(
+			({ pluginId, providerId, sourceIdentity }) => ({
+				pluginId,
+				providerId,
+				sourceIdentity,
+			})
+		);
+	const hostOwnerRegistrations = () =>
+		getPluginProviderRegistrations().map(
+			({ pluginId, providerId, sourceIdentity }) => ({
+				pluginId,
+				providerId,
+				sourceIdentity,
+			})
+		);
+	const currentProviderModelSelectionSnapshot =
+		(): ProviderModelSelectionSnapshot => {
+			const snapshot = createProviderModelSelectionSnapshot(
+				trustedOwnerRegistrations(),
+				hostOwnerRegistrations(),
+				options.getCompositionRevision?.() ?? 0,
+				options.getTrustedPluginProviderRuntime?.()
+			);
+			if (
+				!arePluginProviderRegistrationsBoundToTrustedOwners(
+					snapshot.trustedRegistrations,
+					snapshot.hostRegistrations
+				)
+			) {
+				throw new Error(UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE);
+			}
+			return snapshot;
+		};
+	const assertProviderModelSelectionSnapshotCurrent = (
+		expected?: ProviderModelSelectionSnapshot
+	): ProviderModelSelectionSnapshot => {
+		const current = currentProviderModelSelectionSnapshot();
+		if (
+			expected !== undefined &&
+			!providerModelSelectionSnapshotsMatch(expected, current)
+		) {
+			throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+		}
+		return current;
+	};
+	const withRequiredProviderModelSelectionWork = async <Result>(
+		action: () => Promise<Result>
+	): Promise<Result> => {
+		if (options.withSessionWork === undefined) {
+			throw new Error(
+				"Provider Model selection requires a reload-blocking Session work lease."
+			);
+		}
+		return options.withSessionWork(action);
+	};
+	const providerModelSelectionCandidatesForModels = (
+		models: readonly ProviderModel[],
+		snapshot: ProviderModelSelectionSnapshot
+	): readonly ProviderModelSelectionCandidate[] =>
+		models.flatMap((model) => {
+			const candidate = providerModelSelectionCandidateForModel(
+				model,
+				snapshot
+			);
+			return candidate === undefined ? [] : [candidate];
+		});
 	const refreshWithAvailabilityNotification = async <Result>(
 		action: () => Promise<Result>
 	): Promise<Result> => {
@@ -305,7 +405,82 @@ export const createInteractiveProviderController = (
 				return providers.getAvailable();
 			})
 		);
+	const getAvailableProviderModelSelectionCandidates = async (
+		providerId?: string
+	): Promise<readonly ProviderModelSelectionCandidate[]> =>
+		withRequiredProviderModelSelectionWork(async () => {
+			const snapshot = currentProviderModelSelectionSnapshot();
+			await restoreModels();
+			assertProviderModelSelectionSnapshotCurrent(snapshot);
+			const models = await providers.getAvailable(providerId);
+			assertProviderModelSelectionSnapshotCurrent(snapshot);
+			return providerModelSelectionCandidatesForModels(models, snapshot);
+		});
+	const refreshProviderModelSelectionCandidates = (
+		refreshOptions?: RefreshModelsOptions
+	): Promise<readonly ProviderModelSelectionCandidate[]> =>
+		withRequiredProviderModelSelectionWork(() =>
+			refreshWithAvailabilityNotification(async () => {
+				const snapshot = currentProviderModelSelectionSnapshot();
+				await restoreModels();
+				assertProviderModelSelectionSnapshotCurrent(snapshot);
+				const providerIds = getDiscoverableProviderIds();
+				const results = await Promise.allSettled(
+					providerIds.map((providerId) =>
+						providers.refreshModels(providerId, refreshOptions)
+					)
+				);
+				if (refreshOptions?.signal?.aborted === true) {
+					throw abortReason(refreshOptions.signal);
+				}
+				const successfulRefreshes = results.filter(
+					(result) => result.status === "fulfilled"
+				).length;
+				if (providerIds.length > 0 && successfulRefreshes === 0) {
+					throw new Error(
+						"Known Model refresh failed; the last-known model snapshots were retained."
+					);
+				}
+				const currentSnapshot =
+					assertProviderModelSelectionSnapshotCurrent(snapshot);
+				const models = await providers.getAvailable();
+				assertProviderModelSelectionSnapshotCurrent(currentSnapshot);
+				return providerModelSelectionCandidatesForModels(
+					models,
+					currentSnapshot
+				);
+			})
+		);
+	const selectProviderModelSelectionCandidate = <Result>(
+		candidate: ProviderModelSelectionCandidate,
+		action: (
+			model: ProviderModel,
+			selection: ProviderModelSelection
+		) => Result | Promise<Result>
+	): Promise<Result> =>
+		withRequiredProviderModelSelectionWork(async () => {
+			const currentSnapshot = currentProviderModelSelectionSnapshot();
+			if (
+				!providerModelSelectionSnapshotsMatch(
+					candidate.snapshot,
+					currentSnapshot
+				)
+			) {
+				throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+			}
+			const selection = providerModelSelectionForCandidate(
+				candidate,
+				currentSnapshot
+			);
+			if (selection === undefined) {
+				throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+			}
+			return await action(candidate.model, selection);
+		});
 	return Object.freeze({
+		getPluginProviderComposition: (providerId) =>
+			pluginCompositionFor(providers, options, providerId),
+		getPluginProviderRegistrations,
 		connectOpenAIOAuth(loginOptions = {}) {
 			return withSessionWork(async () => {
 				const login = options.loginOpenAIOAuth;
@@ -408,10 +583,11 @@ export const createInteractiveProviderController = (
 				}
 			});
 		},
-		async getAvailableModels() {
+		async getAvailableModels(providerId) {
 			await restoreModels();
-			return providers.getAvailable();
+			return providers.getAvailable(providerId);
 		},
+		getAvailableProviderModelSelectionCandidates,
 		getConnectableProviders() {
 			const discoverableProviderIds = new Set(getDiscoverableProviderIds());
 			return Object.freeze([
@@ -453,6 +629,8 @@ export const createInteractiveProviderController = (
 		},
 		restoreModels,
 		refreshModels,
+		refreshProviderModelSelectionCandidates,
 		refreshProviderModels,
+		selectProviderModelSelectionCandidate,
 	});
 };

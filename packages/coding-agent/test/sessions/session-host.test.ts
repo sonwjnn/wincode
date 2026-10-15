@@ -23,20 +23,26 @@ import {
 	type AgentTurnEvent,
 	createOperationalFailure,
 	type SessionRecord,
+	toSubmissionId,
 } from "@wincode/agent-core";
-import type {
-	ModelStepRequest,
-	ModelStreamPart,
-} from "@wincode/ai/model-client";
-import type { ChatModelSelection } from "@wincode/ai/models";
-import type { ModelStore, Provider, ProviderModel } from "@wincode/ai/sdk";
-import type { GoogleProviderOptions } from "@wincode/ai/sdk/providers/google";
+import {
+	createProviderCollection,
+	type ModelStore,
+	type Provider,
+	type ProviderChatEvent,
+	type ProviderChatRequest,
+	type ProviderCollection,
+	type ProviderModel,
+} from "@wincode/ai/sdk";
+import {
+	createGoogleProvider,
+	type GoogleProviderOptions,
+} from "@wincode/ai/sdk/providers/google";
 import { logger } from "@wincode/utils";
 import { z } from "zod";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
-import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import { loadPlugins } from "@/modules/plugins/loader";
 import {
 	createPluginRuntime,
@@ -44,6 +50,7 @@ import {
 	type PluginProviderDescriptor,
 	type PluginRuntime,
 } from "@/modules/plugins/runtime";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { pluginProviderStorageId } from "@/modules/providers/provider-stores";
 import type {
 	SessionSteeringAdmission,
@@ -71,6 +78,7 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { SessionSdkPluginProviderSource } from "@/modules/sessions/plugin-provider-source";
 import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import { createSessionSdkOperations } from "@/modules/sessions/sdk";
 import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
@@ -100,8 +108,9 @@ import {
 	withLoggerHome,
 } from "../../../utils/test/logger-home";
 import {
-	createFakeModelClientRecorder,
-	installFakeModelClient,
+	createFakeProviderCollection,
+	createFakeProviderRecorder,
+	installFakeProviderRecorder,
 } from "../support/e2e-fake-runtime";
 import {
 	agentId,
@@ -115,10 +124,9 @@ import {
 import { createEmptyPluginRuntime } from "../support/plugin-runtime";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
-const recorder = createFakeModelClientRecorder();
-installFakeModelClient(recorder);
+const recorder = createFakeProviderRecorder();
+installFakeProviderRecorder(recorder);
 
-import { defaultRuntimeFactory } from "@/modules/sessions/hooks/runtime-turn";
 import { createSessionHost } from "@/modules/sessions/host/session-host";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
@@ -126,31 +134,107 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 const createSessionHostManager = () => createSessionHostManagerWithRuntime();
 const sessionHostManager = createSessionHostManager();
 
-const model: ChatModelSelection = {
+const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
-const cacheWarmingModel: ChatModelSelection = {
+const cacheWarmingModel: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6"),
 	providerId: "openai",
 };
-const cacheWarmingPricingTable: ModelPricingTable = {
-	"openai/gpt-5.6": { cost: { cacheRead: 0.4, input: 4, output: 20 } },
+const cacheWarmingProviderModel: ProviderModel = {
+	modelId: cacheWarmingModel.modelId,
+	pricing: {
+		cacheReadPerMillionTokensUsd: 0.4,
+		inputPerMillionTokensUsd: 4,
+		outputPerMillionTokensUsd: 20,
+	},
+	protocolId: "fixture",
+	providerId: "openai",
+};
+const hostProviderModels: readonly ProviderModel[] = [
+	{
+		capabilities: ["text", "tools", "reasoning"],
+		limits: { contextWindowTokens: 200_000 },
+		modelId: model.modelId,
+		promptCacheRetentionTiers: ["short"],
+		promptCacheRetentionTtlMs: { short: 30 * 60_000 },
+		protocolId: "fixture",
+		providerId: model.providerId,
+		reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+	},
+	{
+		...cacheWarmingProviderModel,
+		promptCacheRetentionTiers: ["short"],
+		promptCacheRetentionTtlMs: { short: 30 * 60_000 },
+	},
+	{
+		modelId: "claude-opus-4-5",
+		promptCacheRetentionTiers: ["long"],
+		promptCacheRetentionTtlMs: { long: 60 * 60_000 },
+		protocolId: "fixture",
+		providerId: "anthropic",
+	},
+	{
+		modelId: "gemini-3.8-flash",
+		promptCacheRetentionTiers: ["short"],
+		promptCacheRetentionTtlMs: { short: 5 * 60_000 },
+		protocolId: "google",
+		providerId: "google",
+	},
+];
+const createHostProviderCollection = async () => {
+	const [defaultModel, ...additionalModels] = hostProviderModels;
+	if (defaultModel === undefined) {
+		throw new Error("The Host Provider Model fixture was empty.");
+	}
+	const googleModel = additionalModels.find(
+		(providerModel) => providerModel.providerId === "google"
+	);
+	const additionalProviders =
+		googleModel === undefined
+			? []
+			: [createGoogleProvider({ models: [googleModel] })];
+	const collection = createFakeProviderCollection(
+		recorder,
+		defaultModel,
+		additionalModels,
+		additionalProviders
+	);
+	if (googleModel !== undefined) {
+		await collection.setCredential("google", {
+			apiKey: "fake-google-key",
+			kind: "api-key",
+		});
+	}
+	return {
+		...collection,
+		getPluginProviderRegistrations: (): readonly [] => [],
+	};
 };
 const installCacheWarmingStepScript = (): (() => void) => {
 	const previousStepScript = recorder.stepScript;
 	recorder.stepScript = async function* (request) {
-		expect(request.target.promptCacheEnabled).toBe(true);
-		expect(request.target.promptCacheRetention).toBe("short");
+		if (request.system?.includes("session summarizer")) {
+			yield { delta: COMPACTION_SUMMARY_TEXT, type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 10, outputTokens: 2 },
+			};
+			yield { type: "finish" };
+			return;
+		}
+		expect(request.cacheRetention).toBe("short");
 		yield { delta: "cache warming lifecycle response", type: "text-delta" };
 		yield {
-			type: "finish",
+			type: "usage",
 			usage: {
 				cacheReadTokens: 90_000,
 				inputTokens: 100_000,
 				outputTokens: 1,
 			},
 		};
+		yield { type: "finish" };
 	};
 	return () => {
 		recorder.stepScript = previousStepScript;
@@ -192,7 +276,10 @@ const completedOutcome = (): SessionRecord["outcome"] => ({
 const seedSession = async (
 	prefix: string,
 	secondTurnState: "completed" | "interrupted" = "interrupted",
-	selectedModel: Pick<SessionRecord["model"], "modelId" | "providerId"> = model
+	selectedModel: Pick<
+		SessionRecord["model"],
+		"modelId" | "pluginProviderSource" | "providerId"
+	> = model
 ): Promise<{
 	compaction: CompactionId;
 	sessionId: SessionId;
@@ -312,14 +399,12 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
 
 /**
  * The capabilities one Host runs against outside React: the workspace config,
- * a connection that authorizes the Model Target, an empty MCP catalog, the
- * built-in Agent registry and the Session
+ * ProviderCollection, an empty MCP tool catalog, the built-in Agent registry, and the Session
  * Compaction module the Agent Session contract tests fake the same way.
  */
 type SessionHostTestCapabilitiesOptions = Readonly<{
 	configSources?: ConfigSnapshot["sources"];
 	homeRoot?: string;
-	modelPricingTable?: ModelPricingTable;
 	workspace?: string;
 	pluginRuntime?: PluginRuntime;
 }>;
@@ -396,7 +481,7 @@ const createCapabilities = (
 		getCapabilityCeiling: () => undefined,
 		getCompactionModule: () =>
 			compactionModule(async () => ({ text: "summary" })),
-		getCompactionSettings: async () =>
+		getCompactionSettings: async (_model, providerModel) =>
 			fromPartial<ResolvedCompactionSettings>({
 				autoAvailable: false,
 				enabled: true,
@@ -404,22 +489,13 @@ const createCapabilities = (
 				maxMediaAttachments: 4,
 				maxMediaBytes: 1024,
 				maxMediaTokens: 128,
-				modelContextLimit: 200_000,
+				modelContextLimit: providerModel?.limits?.contextWindowTokens ?? null,
 				overflowRecoveryAvailable: false,
 				reserveTokens: 1000,
 				thresholdTokens: null,
 			}),
 		getConfig: () => config,
-		getRuntime: defaultRuntimeFactory,
-		getConnections: () => ({
-			authorize: async () => ({
-				apiKey: "session-host-key",
-				kind: "api-key" as const,
-			}),
-			connect: async () => undefined,
-			listProviders: async () => [],
-		}),
-		getModelPricingTable: () => options.modelPricingTable ?? {},
+		createProviderCollection: createHostProviderCollection,
 		getRegistry: () => registry,
 		getStore: () => sessionStore,
 		getSessionHostManager: () => manager,
@@ -431,7 +507,7 @@ const createCapabilities = (
 		{
 			configRuntime: config,
 			cwd: workspace,
-			getConnections: capabilities.getConnections,
+			createProviderCollection: capabilities.createProviderCollection,
 			getRegistry: () => registry,
 			store: sessionStore,
 			workspace,
@@ -501,26 +577,349 @@ afterAll(async () => {
 	fs.rmSync(testDirectory, { force: true, recursive: true });
 });
 
-test("SDK Session Host refuses a missing ProviderCollection without Catalog fallback", async () => {
+test("SDK Session Host refuses a missing ProviderCollection instead of legacy execution", async () => {
 	const seeded = await seedSession("missing-sdk-provider-collection");
 	const legacyCapabilities = createCapabilities();
-	const { getRuntime: _legacyRuntime, ...sdkCapabilities } = legacyCapabilities;
-	let legacyConnectionsRequested = false;
+	const sdkCapabilities = legacyCapabilities;
 	const capabilities: SessionCapabilities = {
 		...sdkCapabilities,
 		createProviderCollection: async () => undefined,
-		getConnections: () => {
-			legacyConnectionsRequested = true;
-			throw new Error("Legacy Connections must not be used.");
-		},
 	};
 
 	await expect(
 		createSessionHost({ capabilities, sessionId: seeded.sessionId })
 	).rejects.toThrow(
-		"Provider SDK Session Host could not be initialized because its ProviderCollection is unavailable; Catalog dispatch is disabled."
+		"Session Host could not be initialized because its ProviderCollection is unavailable."
 	);
-	expect(legacyConnectionsRequested).toBe(false);
+});
+
+test("Session Host rejects a missing Plugin Provider registration before model restoration or availability", async () => {
+	const manager = createSessionHostManager();
+	const providerId = "host-collision-plugin-provider";
+	const pluginId = "host-collision-plugin";
+	const sourceIdentity = "/trusted/plugins/host-collision.ts";
+	const selectedModel: ProviderModel = {
+		modelId: "host-collision-model",
+		providerId,
+		protocolId: "fake-host-collision-provider",
+	};
+	const registration: PluginProviderDescriptor = {
+		connect: async () => undefined,
+		createProvider: () => {
+			throw new Error("The rejected Plugin Provider must not be constructed.");
+		},
+		displayName: "Trusted collision fixture",
+		pluginId,
+		providerId,
+		sourceIdentity,
+		sourcePath: sourceIdentity,
+	};
+	const pluginRuntime = fromPartial<PluginRuntime>({
+		getProviderRegistrations: () => [registration],
+	});
+	const selected = await seedSession(
+		"host-provider-owner-collision",
+		"completed",
+		{
+			modelId: modelId(selectedModel.modelId),
+			pluginProviderSource: { pluginId, sourceIdentity },
+			providerId,
+		}
+	);
+	const baseCollection = createFakeProviderCollection(recorder, selectedModel);
+	let restoreModelsCalls = 0;
+	let availabilityCalls = 0;
+	const providerCollection: ProviderCollection &
+		Readonly<{
+			getPluginProviderRegistrations: () => readonly PluginProviderDescriptor[];
+		}> = {
+		...baseCollection,
+		getAvailable: async () => {
+			availabilityCalls += 1;
+			return baseCollection.getAvailable();
+		},
+		getPluginProviderRegistrations: (): readonly [] => [],
+		restoreModels: async () => {
+			restoreModelsCalls += 1;
+			await baseCollection.restoreModels();
+		},
+	};
+	let recordCommits = 0;
+	const trackedStore: SessionStore = {
+		...store,
+		commitSessionRecord: async (input) => {
+			recordCommits += 1;
+			await store.commitSessionRecord(input);
+		},
+	};
+	const capabilities: SessionCapabilities = {
+		...createCapabilities(trackedStore, {}, manager, { pluginRuntime }),
+		createProviderCollection: async () => providerCollection,
+	};
+	const requestsBefore = recorder.requests.length;
+	try {
+		await expect(
+			createSessionHost({ capabilities, sessionId: selected.sessionId })
+		).rejects.toThrow(
+			"Session ProviderCollection Plugin Provider registrations do not match the current trusted registrations."
+		);
+		expect(restoreModelsCalls).toBe(0);
+		expect(availabilityCalls).toBe(0);
+		expect(recordCommits).toBe(0);
+		expect(recorder.requests).toHaveLength(requestsBefore);
+	} finally {
+		await manager.shutdownAll();
+		await store.deleteSession(selected.sessionId);
+	}
+});
+
+test("Session Host rejects a stale Plugin Provider snapshot before built-in restoration while history stays readable", async () => {
+	const manager = createSessionHostManager();
+	const builtinModel = {
+		modelId: modelId("gpt-5.6-luna"),
+		providerId: "openai",
+	};
+	const selected = await seedSession(
+		"builtin-stale-plugin-snapshot",
+		"completed",
+		builtinModel
+	);
+	const readableHistory = await store.listSessionRecords(selected.sessionId);
+	const activity = {
+		availabilityCalls: 0,
+		connectCalls: 0,
+		credentialReads: 0,
+		discoveries: 0,
+		modelStoreReads: 0,
+		restoreModelsCalls: 0,
+		streams: 0,
+	};
+	const staleRegistration: PluginProviderDescriptor = {
+		connect: async () => {
+			activity.connectCalls += 1;
+		},
+		createProvider: () => {
+			throw new Error("A stale Plugin Provider must not be constructed.");
+		},
+		displayName: "Stale Plugin Provider",
+		pluginId: "stale-plugin",
+		providerId: "stale-plugin-provider",
+		sourceIdentity: "/plugins/stale.ts",
+		sourcePath: "/plugins/stale.ts",
+	};
+	const pluginRuntime = fromPartial<PluginRuntime>({
+		getProviderRegistrations: () => [],
+	});
+	const baseCollection = createProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: () => {
+				activity.credentialReads += 1;
+				return "fake-host-key";
+			},
+			set: () => undefined,
+		},
+		modelStore: {
+			get: () => {
+				activity.modelStoreReads += 1;
+				return;
+			},
+			set: () => undefined,
+		},
+	});
+	baseCollection.register({
+		id: "openai",
+		models: [
+			{
+				modelId: "gpt-5.6-luna",
+				protocolId: "fake-host-provider",
+				providerId: "openai",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { fake: true } }),
+		discoverModels: () => {
+			activity.discoveries += 1;
+			return [];
+		},
+		async *streamChat(): AsyncGenerator<ProviderChatEvent> {
+			activity.streams += 1;
+			yield { type: "finish" };
+		},
+	});
+	const getAvailable = baseCollection.getAvailable.bind(baseCollection);
+	const restoreModels = baseCollection.restoreModels.bind(baseCollection);
+	const providerCollection: ProviderCollection &
+		Readonly<{
+			getPluginProviderRegistrations: () => readonly PluginProviderDescriptor[];
+		}> = {
+		...baseCollection,
+		getAvailable: async () => {
+			activity.availabilityCalls += 1;
+			return getAvailable();
+		},
+		getPluginProviderRegistrations: () => [staleRegistration],
+		restoreModels: async () => {
+			activity.restoreModelsCalls += 1;
+			await restoreModels();
+		},
+	};
+	const capabilities: SessionCapabilities = {
+		...createCapabilities(store, {}, manager, { pluginRuntime }),
+		createProviderCollection: async () => providerCollection,
+	};
+	const requestsBefore = recorder.requests.length;
+	try {
+		await expect(
+			createSessionHost({ capabilities, sessionId: selected.sessionId })
+		).rejects.toThrow(
+			"Session ProviderCollection Plugin Provider registrations do not match the current trusted registrations."
+		);
+		expect(readableHistory.length).toBeGreaterThan(0);
+		expect(activity).toEqual({
+			availabilityCalls: 0,
+			connectCalls: 0,
+			credentialReads: 0,
+			discoveries: 0,
+			modelStoreReads: 0,
+			restoreModelsCalls: 0,
+			streams: 0,
+		});
+		expect(recorder.requests).toHaveLength(requestsBefore);
+	} finally {
+		await manager.shutdownAll();
+		await store.deleteSession(selected.sessionId);
+	}
+});
+
+test("Session Host rejects a missing or stale Plugin snapshot before reconciling processing Submissions", async () => {
+	const selectedModel = model;
+	const providerModel: ProviderModel = {
+		modelId: selectedModel.modelId,
+		protocolId: "fake-session-host-provider",
+		providerId: selectedModel.providerId,
+	};
+	const staleRegistration: PluginProviderDescriptor = {
+		connect: async () => undefined,
+		createProvider: () => {
+			throw new Error("A stale Plugin Provider must not be constructed.");
+		},
+		displayName: "Stale Plugin Provider",
+		pluginId: "stale-processing-plugin",
+		providerId: "stale-processing-provider",
+		sourceIdentity: "/plugins/stale-processing.ts",
+		sourcePath: "/plugins/stale-processing.ts",
+	};
+	for (const snapshotState of ["missing", "stale"] as const) {
+		const manager = createSessionHostManager();
+		const prefix = `processing-snapshot-${snapshotState}`;
+		const seeded = await seedSession(prefix, "completed", selectedModel);
+		const submissionId = toSubmissionId(`${prefix}-submission`);
+		const submissionMessage: SessionMessage = {
+			...message(`${prefix}-submission-message`, "user", "in progress"),
+			metadata: {
+				model: selectedModel,
+				submissionId,
+				submissionStatus: "pending",
+			},
+		};
+		const submissionRecord = buildUserSessionRecord({
+			agentId: buildId,
+			message: submissionMessage,
+			model: selectedModel,
+			turnId: agentTurnId(`${prefix}-submission-turn`),
+		});
+		await store.commitSessionRecord({
+			record: submissionRecord,
+			sessionId: seeded.sessionId,
+		});
+		await store.updateSessionSubmission({
+			messageId: submissionMessage.id,
+			recordId: submissionRecord.id,
+			sessionId: seeded.sessionId,
+			status: "processing",
+			submissionId,
+		});
+		const before = (await store.listSessionRecords(seeded.sessionId)).find(
+			({ id }) => id === submissionRecord.id
+		);
+		let reconciliationWrites = 0;
+		const trackedStore: SessionStore = {
+			...store,
+			updateSessionSubmission: async (input) => {
+				reconciliationWrites += 1;
+				await store.updateSessionSubmission(input);
+			},
+		};
+		const baseCollection = createFakeProviderCollection(
+			recorder,
+			providerModel
+		);
+		const providerCollection: ProviderCollection =
+			snapshotState === "missing"
+				? Object.assign(baseCollection, {
+						getPluginProviderRegistrations: undefined,
+					})
+				: Object.assign(baseCollection, {
+						getPluginProviderRegistrations: () => [staleRegistration],
+					});
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(trackedStore, {}, manager, {
+				pluginRuntime: fromPartial<PluginRuntime>({
+					getProviderRegistrations: () => [],
+				}),
+			}),
+			createProviderCollection: async () => providerCollection,
+		};
+		try {
+			await expect(
+				createSessionHost({ capabilities, sessionId: seeded.sessionId })
+			).rejects.toThrow(
+				"Session ProviderCollection Plugin Provider registrations do not match the current trusted registrations."
+			);
+			const after = (await store.listSessionRecords(seeded.sessionId)).find(
+				({ id }) => id === submissionRecord.id
+			);
+			expect(reconciliationWrites).toBe(0);
+			expect(before?.messages[0]?.metadata).toMatchObject({
+				submissionId,
+				submissionStatus: "processing",
+			});
+			expect(after?.messages[0]?.metadata).toEqual(
+				before?.messages[0]?.metadata
+			);
+		} finally {
+			await manager.shutdownAll();
+			await store.deleteSession(seeded.sessionId);
+		}
+	}
+});
+
+test("Session Host Manager rejects restored ownerless Providers before ProviderCollection creation", async () => {
+	const manager = createSessionHostManager();
+	const providerId = "ownerless_manager_provider";
+	const restored = await store.createEmptySession({
+		model: {
+			modelId: modelId("ownerless-manager-model"),
+			providerId,
+		},
+	});
+	let providerCollectionCreations = 0;
+	const capabilities: SessionCapabilities = {
+		...createCapabilities(store, {}, manager),
+		createProviderCollection: async () => {
+			providerCollectionCreations += 1;
+			return createHostProviderCollection();
+		},
+	};
+	try {
+		await expect(
+			manager.openHost({ capabilities, sessionId: restored.id })
+		).rejects.toThrow("re-select it in Interactive Mode");
+		expect(providerCollectionCreations).toBe(0);
+	} finally {
+		await manager.shutdownAll();
+		await store.deleteSession(restored.id);
+	}
 });
 
 test("delegated Session Hosts load only the Plugin Provider selected in the child Session", async () => {
@@ -575,17 +974,22 @@ test("delegated Session Hosts load only the Plugin Provider selected in the chil
 	});
 	const credentialReads: string[] = [];
 	let allowedPluginProviderIds: readonly string[] | undefined;
+	let allowedPluginProviderSources:
+		| readonly SessionSdkPluginProviderSource[]
+		| undefined;
 	const baseCapabilities = createCapabilities();
-	const { getRuntime: _legacyRuntime, ...sdkCapabilities } = baseCapabilities;
+	const sdkCapabilities = baseCapabilities;
 	const capabilities: SessionCapabilities = {
 		...sdkCapabilities,
 		getPluginRuntime: () => pluginRuntime,
 		createProviderCollection: async (
 			actualPluginRuntime,
 			sessionId,
-			allowedProviderIds
+			allowedProviderIds,
+			allowedProviderSources
 		) => {
 			allowedPluginProviderIds = allowedProviderIds;
+			allowedPluginProviderSources = allowedProviderSources;
 			return createDefaultSessionProviderCollection(
 				actualPluginRuntime,
 				sessionId,
@@ -593,6 +997,9 @@ test("delegated Session Hosts load only the Plugin Provider selected in the chil
 					...(allowedProviderIds === undefined
 						? {}
 						: { allowedPluginProviderIds: allowedProviderIds }),
+					...(allowedProviderSources === undefined
+						? {}
+						: { allowedPluginProviderSources: allowedProviderSources }),
 					credentialStore: {
 						delete: () => undefined,
 						get: (providerId) => {
@@ -616,6 +1023,10 @@ test("delegated Session Hosts load only the Plugin Provider selected in the chil
 		"completed",
 		{
 			modelId: modelId(selectedModel.modelId),
+			pluginProviderSource: {
+				pluginId: "child-provider-fixture",
+				sourceIdentity: "child-provider-fixture-source",
+			},
 			providerId: selectedProviderId,
 		}
 	);
@@ -625,6 +1036,12 @@ test("delegated Session Hosts load only the Plugin Provider selected in the chil
 	});
 	try {
 		expect(allowedPluginProviderIds).toEqual([selectedProviderId]);
+		expect(allowedPluginProviderSources).toHaveLength(1);
+		expect(allowedPluginProviderSources?.[0]).toMatchObject({
+			pluginId: "child-provider-fixture",
+			providerId: selectedProviderId,
+			sourceIdentity: "child-provider-fixture-source",
+		});
 		expect(
 			host.providerCollection?.getModel(
 				selectedProviderId,
@@ -1133,8 +1550,8 @@ test("Session Host keeps Skill activation separate from coding-tool selection", 
 	const previousStepScript = recorder.stepScript;
 	let skillToolVisible = false;
 	recorder.stepScript = async function* (
-		request: ModelStepRequest
-	): AsyncGenerator<ModelStreamPart> {
+		request: ProviderChatRequest
+	): AsyncGenerator<ProviderChatEvent> {
 		skillToolVisible = (request.tools ?? []).some(
 			({ name }) => name === "skill"
 		);
@@ -1142,7 +1559,8 @@ test("Session Host keeps Skill activation separate from coding-tool selection", 
 			delta: "The available Skill can be used.",
 			type: "text-delta",
 		};
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
 	};
 
 	try {
@@ -1187,8 +1605,8 @@ test("Session Host reports an unavailable Skill target without activating it", a
 	let skillResult: unknown;
 	let availableSkillBodyLoaded = false;
 	recorder.stepScript = async function* (
-		request: ModelStepRequest
-	): AsyncGenerator<ModelStreamPart> {
+		request: ProviderChatRequest
+	): AsyncGenerator<ProviderChatEvent> {
 		modelStep += 1;
 		if (modelStep === 1) {
 			skillToolVisible = (request.tools ?? []).some(
@@ -1212,7 +1630,8 @@ test("Session Host reports an unavailable Skill target without activating it", a
 				type: "text-delta",
 			};
 		}
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
 	};
 
 	try {
@@ -1310,7 +1729,7 @@ describe("Session Host opening", () => {
 
 describe("Session Host lifetime", () => {
 	test("applies the configured cache retention to the selected model's Agent Turn", async () => {
-		const selectedModel: ChatModelSelection = {
+		const selectedModel: ProviderModelSelection = {
 			modelId: modelId("claude-opus-4-5"),
 			providerId: "anthropic",
 		};
@@ -1328,10 +1747,10 @@ describe("Session Host lifetime", () => {
 			capabilities,
 			sessionId: seeded.sessionId,
 		});
-		const previousBeforeStep = recorder.beforeStep;
+		const previousBeforeStep = recorder.beforeChat;
 		let retention: string | undefined;
-		recorder.beforeStep = async (request) => {
-			retention = request.target.promptCacheRetention;
+		recorder.beforeChat = async (request) => {
+			retention = request.cacheRetention;
 		};
 		try {
 			const outcome = await host.agentSession.send({
@@ -1342,7 +1761,7 @@ describe("Session Host lifetime", () => {
 			expect(outcome).toEqual({ rejected: false });
 			expect(retention).toBe("long");
 		} finally {
-			recorder.beforeStep = previousBeforeStep;
+			recorder.beforeChat = previousBeforeStep;
 			await host.shutdown();
 		}
 	});
@@ -1354,9 +1773,7 @@ describe("Session Host lifetime", () => {
 			"interrupted",
 			selectedModel
 		);
-		const capabilities = createCapabilities(store, {}, sessionHostManager, {
-			modelPricingTable: cacheWarmingPricingTable,
-		});
+		const capabilities = createCapabilities(store, {}, sessionHostManager, {});
 		const host = await createSessionHost({
 			capabilities,
 			sessionId: seeded.sessionId,
@@ -1403,9 +1820,7 @@ describe("Session Host lifetime", () => {
 			"interrupted",
 			cacheWarmingModel
 		);
-		const capabilities = createCapabilities(store, {}, sessionHostManager, {
-			modelPricingTable: cacheWarmingPricingTable,
-		});
+		const capabilities = createCapabilities(store, {}, sessionHostManager, {});
 		const host = await createSessionHost({
 			capabilities,
 			sessionId: seeded.sessionId,
@@ -1434,9 +1849,7 @@ describe("Session Host lifetime", () => {
 			"interrupted",
 			cacheWarmingModel
 		);
-		const capabilities = createCapabilities(store, {}, sessionHostManager, {
-			modelPricingTable: cacheWarmingPricingTable,
-		});
+		const capabilities = createCapabilities(store, {}, sessionHostManager, {});
 		const host = await createSessionHost({
 			capabilities,
 			sessionId: seeded.sessionId,
@@ -1464,9 +1877,9 @@ describe("Session Host lifetime", () => {
 			const summaryBeforeWarm = summarizeSessionUsage(
 				beforeWarm.transcript,
 				cacheWarmingModel,
-				cacheWarmingPricingTable,
 				usageBeforeWarm,
-				host.getCacheWarmingStatus()
+				host.getCacheWarmingStatus(),
+				[cacheWarmingProviderModel]
 			);
 
 			vi.advanceTimersByTime(27 * 60_000);
@@ -1477,9 +1890,9 @@ describe("Session Host lifetime", () => {
 			const summaryAfterWarm = summarizeSessionUsage(
 				afterWarm.transcript,
 				cacheWarmingModel,
-				cacheWarmingPricingTable,
 				usageAfterWarm,
-				host.getCacheWarmingStatus()
+				host.getCacheWarmingStatus(),
+				[cacheWarmingProviderModel]
 			);
 			expect(afterWarm.transcript).toEqual(beforeWarm.transcript);
 			expect(afterWarm.context).toEqual(beforeWarm.context);
@@ -1512,7 +1925,7 @@ describe("Session Host lifetime", () => {
 	});
 
 	test("keeps the OpenAI prompt-cache key stable across turns in one Session", async () => {
-		const selectedModel: ChatModelSelection = {
+		const selectedModel: ProviderModelSelection = {
 			modelId: modelId("gpt-5.6-luna"),
 			providerId: "openai",
 		};
@@ -1526,14 +1939,14 @@ describe("Session Host lifetime", () => {
 			capabilities,
 			sessionId: seeded.sessionId,
 		});
-		const previousBeforeStep = recorder.beforeStep;
+		const previousBeforeStep = recorder.beforeChat;
 		const observed: { enabled?: boolean; key?: string; retention?: string }[] =
 			[];
-		recorder.beforeStep = async (request) => {
+		recorder.beforeChat = async (request) => {
 			observed.push({
-				enabled: request.target.promptCacheEnabled,
+				enabled: request.cacheRetention !== undefined,
 				key: request.promptCacheKey,
-				retention: request.target.promptCacheRetention,
+				retention: request.cacheRetention,
 			});
 		};
 		try {
@@ -1558,13 +1971,13 @@ describe("Session Host lifetime", () => {
 				},
 			]);
 		} finally {
-			recorder.beforeStep = previousBeforeStep;
+			recorder.beforeChat = previousBeforeStep;
 			await host.shutdown();
 		}
 	});
 
 	test("Session Host selects and deletes Google CachedContent without freezing Session messages", async () => {
-		const selectedModel: ChatModelSelection = {
+		const selectedModel: ProviderModelSelection = {
 			modelId: modelId("gemini-3.8-flash"),
 			providerId: "google",
 		};
@@ -1573,9 +1986,12 @@ describe("Session Host lifetime", () => {
 			"interrupted",
 			selectedModel
 		);
-		const capabilities = createCapabilities();
+		const capabilities = createCapabilities(store, {
+			promptCache: {
+				modelOverrides: { "google/gemini-3.8-flash": "short" },
+			},
+		});
 		const originalFetch = globalThis.fetch;
-		const previousBeforeStep = recorder.beforeStep;
 		const resourceRequests: {
 			body: Record<string, unknown>;
 			method: string;
@@ -1604,12 +2020,6 @@ describe("Session Host lifetime", () => {
 		}) as typeof globalThis.fetch;
 		globalThis.fetch = fetch;
 		let host: SessionHost | undefined;
-		let observedResource: string | undefined;
-		let observedMessages = 0;
-		recorder.beforeStep = async (request) => {
-			observedResource = request.googleCachedContent?.name;
-			observedMessages = request.messages.length;
-		};
 		try {
 			host = await createSessionHost({
 				capabilities,
@@ -1621,33 +2031,33 @@ describe("Session Host lifetime", () => {
 				sessionModel: selectedModel,
 			});
 			expect(outcome).toEqual({ rejected: false });
-			expect(observedResource).toBe("cachedContents/session-prefix");
-			expect(observedMessages).toBeGreaterThan(0);
-			expect(resourceRequests).toHaveLength(1);
-			expect(resourceRequests[0]?.method).toBe("POST");
-			expect(resourceRequests[0]?.url).toContain("/cachedContents");
-			expect(resourceRequests[0]?.body).toMatchObject({
+			const cacheCreation = resourceRequests.find(
+				({ method, url }) =>
+					method === "POST" && url.includes("/cachedContents")
+			);
+			expect(cacheCreation?.body).toMatchObject({
 				model: "models/gemini-3.8-flash",
 				systemInstruction: { parts: [{ text: expect.any(String) }] },
 				ttl: "300s",
 			});
-			expect(resourceRequests[0]?.body).not.toHaveProperty("contents");
+			expect(cacheCreation?.body).not.toHaveProperty("contents");
 
 			await host.shutdown();
-			expect(resourceRequests).toHaveLength(2);
-			expect(resourceRequests[1]?.method).toBe("DELETE");
-			expect(resourceRequests[1]?.url).toContain(
-				"/cachedContents/session-prefix"
-			);
+			expect(
+				resourceRequests.some(
+					({ method, url }) =>
+						method === "DELETE" &&
+						url.includes("/cachedContents/session-prefix")
+				)
+			).toBe(true);
 		} finally {
 			globalThis.fetch = originalFetch;
-			recorder.beforeStep = previousBeforeStep;
 			await host?.shutdown();
 		}
 	});
 
 	test("SDK Host shutdown cleans its in-flight Google cache without affecting another Host", async () => {
-		const selectedModel: ChatModelSelection = {
+		const selectedModel: ProviderModelSelection = {
 			modelId: modelId("gemini-3.8-flash"),
 			providerId: "google",
 		};
@@ -1697,8 +2107,7 @@ describe("Session Host lifetime", () => {
 			},
 			manager
 		);
-		const { getRuntime: _legacyRuntime, ...sdkCapabilities } =
-			legacyCapabilities;
+		const sdkCapabilities = legacyCapabilities;
 		const capabilities: SessionCapabilities = {
 			...sdkCapabilities,
 			createProviderCollection: async (pluginRuntime, ownerSessionId) => {
@@ -2089,7 +2498,7 @@ describe("Session Host lifetime", () => {
 		const releaseActiveStep = Promise.withResolvers<void>();
 		const deliveredRequest = Promise.withResolvers<string[]>();
 		const completedTurn = Promise.withResolvers<void>();
-		const previousBeforeStep = recorder.beforeStep;
+		const previousBeforeStep = recorder.beforeChat;
 		let heldActiveStep = false;
 		let activeTurnId: string | undefined;
 		const submissionEvents: SessionSubmissionEvent[] = [];
@@ -2106,7 +2515,7 @@ describe("Session Host lifetime", () => {
 				completedTurn.resolve();
 			}
 		});
-		recorder.beforeStep = async ({ messages }) => {
+		recorder.beforeChat = async ({ messages }) => {
 			const userTexts = messages.flatMap(({ content, role }) =>
 				role === "user"
 					? content.flatMap((part) => (part.type === "text" ? [part.text] : []))
@@ -2276,7 +2685,7 @@ describe("Session Host lifetime", () => {
 		} finally {
 			releaseActiveStep.resolve();
 			releaseAttachmentExternalization.resolve();
-			recorder.beforeStep = previousBeforeStep;
+			recorder.beforeChat = previousBeforeStep;
 			unsubscribe();
 			unsubscribeSubmission();
 			await host.shutdown();
@@ -2291,9 +2700,9 @@ describe("Session Host lifetime", () => {
 		});
 		const activeStepStarted = Promise.withResolvers<void>();
 		const releaseActiveStep = Promise.withResolvers<void>();
-		const previousBeforeStep = recorder.beforeStep;
+		const previousBeforeStep = recorder.beforeChat;
 		let heldActiveStep = false;
-		recorder.beforeStep = async ({ messages }) => {
+		recorder.beforeChat = async ({ messages }) => {
 			const hasActivePrompt = messages.some(
 				({ content, role }) =>
 					role === "user" &&
@@ -2384,7 +2793,7 @@ describe("Session Host lifetime", () => {
 			);
 		} finally {
 			releaseActiveStep.resolve();
-			recorder.beforeStep = previousBeforeStep;
+			recorder.beforeChat = previousBeforeStep;
 			await host.shutdown();
 		}
 	});
@@ -2401,7 +2810,7 @@ describe("Session Host lifetime", () => {
 		const resumedStepStarted = Promise.withResolvers<void>();
 		const releaseResumedStep = Promise.withResolvers<void>();
 		const processed = Promise.withResolvers<void>();
-		const previousBeforeStep = recorder.beforeStep;
+		const previousBeforeStep = recorder.beforeChat;
 		let heldActiveStep = false;
 		const resumedRequests: string[][] = [];
 		const submissionEvents: SessionSubmissionEvent[] = [];
@@ -2414,7 +2823,7 @@ describe("Session Host lifetime", () => {
 			composition: { files: [], text: userText },
 			userText,
 		});
-		recorder.beforeStep = async ({ messages }) => {
+		recorder.beforeChat = async ({ messages }) => {
 			const userTexts = messages.flatMap(({ content, role }) =>
 				role === "user"
 					? content.flatMap((part) => (part.type === "text" ? [part.text] : []))
@@ -2506,7 +2915,7 @@ describe("Session Host lifetime", () => {
 		} finally {
 			releaseActiveStep.resolve();
 			releaseResumedStep.resolve();
-			recorder.beforeStep = previousBeforeStep;
+			recorder.beforeChat = previousBeforeStep;
 			unsubscribeInitial();
 			unsubscribeResumed();
 			await host.shutdown();
@@ -2704,26 +3113,39 @@ describe("Session Host lifetime", () => {
 	});
 	test("records background compaction failures without failing the completed turn", async () => {
 		const seeded = await seedSession("background-compaction");
-		const modelRequestsBeforeTurn = recorder.requests.length;
+		const previousBeforeChat = recorder.beforeChat;
+		const previousStepScript = recorder.stepScript;
+		let modelRequestStarted = false;
 		const summaryStarted = Promise.withResolvers<void>();
 		const allowSummaryFailure = Promise.withResolvers<void>();
 		const compactionFailureObserved = Promise.withResolvers<void>();
 		const capabilities: SessionCapabilities = {
 			...createCapabilities(),
-			getCompactionModule: () =>
-				compactionModule(async () => {
-					summaryStarted.resolve();
-					await allowSummaryFailure.promise;
-					throw Object.assign(new Error("private summary detail"), {
-						code: "SUMMARY_FAILED",
-					});
-				}),
 			getCompactionSettings: async () =>
 				fromPartial<ResolvedCompactionSettings>({
-					autoAvailable: recorder.requests.length > modelRequestsBeforeTurn,
+					autoAvailable: modelRequestStarted,
 					enabled: true,
 					thresholdTokens: 1,
 				}),
+		};
+		recorder.beforeChat = async (request) => {
+			if (!request.system?.includes("session summarizer")) {
+				modelRequestStarted = true;
+			}
+			await previousBeforeChat?.(request);
+		};
+		recorder.stepScript = async function* (request) {
+			await recorder.beforeChat?.(request);
+			if (request.system?.includes("session summarizer")) {
+				summaryStarted.resolve();
+				await allowSummaryFailure.promise;
+				throw Object.assign(new Error("private summary detail"), {
+					code: "SUMMARY_FAILED",
+				});
+			}
+			yield { delta: "fake completed turn", type: "text-delta" };
+			yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+			yield { type: "finish" };
 		};
 		await withLoggerHome(async (home) => {
 			const host = await createSessionHost({
@@ -2745,6 +3167,8 @@ describe("Session Host lifetime", () => {
 			} finally {
 				allowSummaryFailure.resolve();
 				unsubscribe();
+				recorder.beforeChat = previousBeforeChat;
+				recorder.stepScript = previousStepScript;
 				await host.shutdown();
 			}
 

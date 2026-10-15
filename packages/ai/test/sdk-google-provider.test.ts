@@ -271,6 +271,70 @@ describe("public Google SDK provider", () => {
 		expect(deleted).toEqual(["cachedContents/1"]);
 	});
 
+	test("does not reuse CachedContent across changed Provider credentials", async () => {
+		const bodyRequests: Record<string, unknown>[] = [];
+		const cacheClientKeys: string[] = [];
+		const deleted: string[] = [];
+		const requestKeys: string[] = [];
+		let cacheCount = 0;
+		const sdk = createProviderCollection();
+		const provider = createGoogleProvider({
+			createCacheClient: (apiKey) => {
+				cacheClientKeys.push(apiKey);
+				return {
+					create: async () => ({ name: `cachedContents/${++cacheCount}` }),
+					delete: async ({ name }) => {
+						deleted.push(name);
+						return {};
+					},
+				};
+			},
+			fetch: async (_url, init) => {
+				requestKeys.push(
+					new Headers(init?.headers).get("x-goog-api-key") ?? ""
+				);
+				bodyRequests.push(
+					JSON.parse(String(init?.body)) as Record<string, unknown>
+				);
+				return sseResponse([{ candidates: [{ finishReason: "STOP" }] }]);
+			},
+		});
+		sdk.register(provider);
+		const send = async (apiKey: string) => {
+			await sdk.setCredential("google", { apiKey, kind: "api-key" });
+			for await (const _event of sdk.chat({
+				cacheRetention: "short",
+				messages: [
+					{ content: [{ text: "Hello", type: "text" }], role: "user" },
+				],
+				modelId: "gemini-3.8-flash",
+				providerId: "google",
+				system: "Stable prefix",
+			})) {
+				// Consume the public stream to its terminal outcome.
+			}
+		};
+
+		await send("credential-one");
+		await send("credential-one");
+		await send("credential-two");
+		await provider.close();
+
+		expect(cacheClientKeys).toEqual(["credential-one", "credential-two"]);
+		expect(requestKeys).toEqual([
+			"credential-one",
+			"credential-one",
+			"credential-two",
+		]);
+		expect(bodyRequests.map((body) => body.cachedContent)).toEqual([
+			"cachedContents/1",
+			"cachedContents/1",
+			"cachedContents/2",
+		]);
+		expect(deleted).toEqual(["cachedContents/1", "cachedContents/2"]);
+		expect(JSON.stringify(bodyRequests)).not.toContain("credential-");
+	});
+
 	test("unsupported cache requests skip creation and supported cache creation failures continue uncached", async () => {
 		const bodies: Record<string, unknown>[] = [];
 		let creates = 0;

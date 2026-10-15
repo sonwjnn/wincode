@@ -1,10 +1,10 @@
-import type { ModelTarget } from "@wincode/ai/model-target";
-import type { ModelId, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import { isNonEmptyString, isObjectLike, isString } from "@wincode/utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import type { ResolvedAgent } from "./agent";
 import {
 	type AgentTurnId,
+	type ModelId,
 	type SessionMessageId,
 	toAgentTurnId,
 	toSessionMessageId,
@@ -118,22 +118,25 @@ export type AgentTurnInput = ReadonlyDeep<{
 	messages: AgentTurnMessage[];
 }>;
 
-/** Model identity and provider-neutral request preferences for one Agent Turn. */
+/** Model identity, request preferences, and non-secret Plugin owner provenance for one Agent Turn. */
 export type AgentModelSelection = Readonly<{
 	maxOutputTokens?: number;
 	modelId: ModelId;
+	pluginProviderSource?: {
+		pluginId: string;
+		sourceIdentity: string;
+	};
 	promptCacheEnabled?: true;
 	promptCacheRetention?: "long" | "short";
 	providerId: string;
 	thinkingLevel?: ThinkingLevel;
 }>;
 
-export type AgentTurnModel = AgentModelSelection | ModelTarget;
+export type AgentTurnModel = AgentModelSelection;
 
 /**
  * A fully resolved Agent Turn ready for one runtime invocation: the Agent,
- * its model identity and request preferences, input session, and gated Tools.
- * The legacy ModelClient path may additionally carry its temporary Model Target.
+ * its provider/model identity and request preferences, input session, and gated Tools.
  */
 export type AgentTurn = Readonly<{
 	agent: ResolvedAgent;

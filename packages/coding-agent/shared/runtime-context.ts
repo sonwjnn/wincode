@@ -1,7 +1,7 @@
-import type { AgentRuntime } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
 import type { ApplicationResourceLoader } from "@/modules/application/resource-loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { SessionProviderCollectionFactory } from "@/modules/sessions/provider-collection";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 export type StartInteractiveInput = {
 	args: readonly string[];
@@ -9,7 +9,7 @@ export type StartInteractiveInput = {
 	configRuntime?: ConfigRuntime;
 	pluginRuntime?: PluginRuntime;
 	resourceLoader?: ApplicationResourceLoader;
-	runtimeFactory?: () => AgentRuntime;
+	createProviderCollection?: SessionProviderCollectionFactory;
 };
 
 let runtimeContext: StartInteractiveInput | undefined;
@@ -40,3 +40,7 @@ export const getInteractiveRuntimeContext = (): StartInteractiveInput => {
 
 export const getInteractivePluginRuntime = (): PluginRuntime | undefined =>
 	runtimeContext?.pluginRuntime;
+
+export const getInteractiveProviderCollectionFactory = ():
+	| SessionProviderCollectionFactory
+	| undefined => runtimeContext?.createProviderCollection;

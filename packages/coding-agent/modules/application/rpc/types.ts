@@ -1,8 +1,8 @@
 import type {
-	ChatModelSelection,
+	ProviderCollection,
 	ThinkingLevel,
 	ThinkingSelection,
-} from "@wincode/ai/models";
+} from "@wincode/ai/sdk";
 import type { ApplicationSessionServicesInput } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
@@ -130,6 +130,7 @@ export type RuntimeModules = Readonly<{
 	createAgentTurnId: () => AgentTurnId;
 	createSessionHost: (input: {
 		capabilities: SessionCapabilities;
+		providerCollection?: ProviderCollection;
 		providerModel?: ProviderModelSelection;
 		sessionId: SessionId;
 	}) => Promise<SessionHost>;
@@ -144,10 +145,6 @@ export type RuntimeModules = Readonly<{
 			data?: ThinkingLevel;
 		};
 	};
-	isSupportedThinkingLevel: (
-		selection: ChatModelSelection,
-		thinkingLevel: ThinkingLevel
-	) => boolean;
 	resolveWorkspaceRoot: (start: string) => string;
 	toSessionId: (value: string) => SessionId;
 }>;

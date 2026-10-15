@@ -4,7 +4,7 @@ import type {
 	SessionMessageId,
 	SubmissionId,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import type { AgentSelectionOverride } from "@/modules/agents/agent-call";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionFilePart } from "@/modules/sessions/message";

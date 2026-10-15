@@ -2,15 +2,22 @@ import { afterAll, expect, mock, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { createAgentRuntime } from "@wincode/agent-core";
 import {
 	createProviderCollection,
 	type Provider,
+	type ProviderChatEvent,
+	type ProviderCollection,
 	ProviderError,
 	type ProviderModel,
 } from "@wincode/ai/sdk";
 import { buildAgentRegistry } from "../modules/agents/registry";
 import { runRpc } from "../modules/application/rpc/runner";
+import {
+	createPluginRuntime,
+	type PluginProviderDescriptor,
+} from "../modules/plugins/runtime";
+import { pluginProviderStorageId } from "../modules/providers/provider-stores";
+import { createDefaultSessionProviderCollection } from "../modules/sessions/provider-collection";
 import { SessionWriterLockFailureError } from "../modules/sessions/storage/session-writer-lock";
 import {
 	agentId,
@@ -29,14 +36,20 @@ await Bun.write(
 const databasePath = path.join(workspace, "conversation.sqlite");
 
 import {
-	createFakeModelClient,
-	createFakeModelClientRecorder,
 	createFakeProviderCollection,
-	installFakeModelClient,
+	createFakeProviderRecorder,
+	installFakeProviderRecorder,
 } from "./support/e2e-fake-runtime";
 
-const recorder = createFakeModelClientRecorder();
-installFakeModelClient(recorder);
+const recorder = createFakeProviderRecorder();
+const rpcProviderModel: ProviderModel = {
+	capabilities: ["reasoning", "text", "tools"],
+	modelId: "gpt-5.6-luna",
+	protocolId: "fake-e2e-provider",
+	providerId: "openai",
+	reasoningEfforts: ["high"],
+};
+installFakeProviderRecorder(recorder);
 
 import { openSessionServices } from "../modules/sessions/host/session-services";
 import { createDatabase } from "../modules/sessions/storage/client";
@@ -74,7 +87,7 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	const steeringAccepted = Promise.withResolvers<void>();
 	let modelStepCount = 0;
 	let secondModelStepReleased = false;
-	recorder.beforeStep = async () => {
+	recorder.beforeChat = async () => {
 		modelStepCount += 1;
 		if (modelStepCount === 1) {
 			modelStepStarted.resolve();
@@ -84,24 +97,11 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 			await releaseSecondModelStep.promise;
 		}
 	};
-	const connections = {
-		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
-		connect: async () => undefined,
-		listProviders: async () => [
-			{
-				connected: true as const,
-				connectionMethod: "api-key" as const,
-				displayName: "OpenAI",
-				id: "openai" as const,
-				methods: ["api-key", "browser"] as const,
-			},
-		],
-	};
 	const assembly = await openSessionServices({
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
-			connections: () => connections,
-			createProviderCollection: () => createFakeProviderCollection(recorder),
+			createProviderCollection: () =>
+				createFakeProviderCollection(recorder, rpcProviderModel),
 		},
 	});
 	const request = (
@@ -130,11 +130,11 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		},
 	})}\n`;
 	const invalidCreate = `${request("invalid-create", "session/create", {
-		initialSubmission: { text: "reject unsupported ThinkingLevel" },
+		initialSubmission: { text: "reject invalid ThinkingLevel" },
 		selection: {
 			agentId: "build",
 			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
-			thinkingLevel: "minimal",
+			thinkingLevel: "not-a-level",
 		},
 	})}\n`;
 	const legacyCreate = `${request("legacy-create", "session/create", {
@@ -276,8 +276,8 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 	const secondAssembly = await openSessionServices({
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
-			connections: () => connections,
-			createProviderCollection: () => createFakeProviderCollection(recorder),
+			createProviderCollection: () =>
+				createFakeProviderCollection(recorder, rpcProviderModel),
 		},
 	});
 	const secondStdoutFrames: string[] = [];
@@ -403,16 +403,6 @@ test("RPC runs an explicitly selected Plugin Provider and emits a secret-free au
 		protocolId: "fake-plugin-auth",
 		providerId: "fake-plugin-auth",
 	};
-	const providerCollection = createProviderCollection({
-		credentialStore: {
-			delete: () => undefined,
-			get: (providerId) => {
-				credentialReads.add(providerId);
-				return providerId === providerModel.providerId ? fakeSecret : undefined;
-			},
-			set: () => undefined,
-		},
-	});
 	const provider: Provider = {
 		id: providerModel.providerId,
 		models: [providerModel],
@@ -423,7 +413,35 @@ test("RPC runs an explicitly selected Plugin Provider and emits a secret-free au
 			yield { type: "finish" };
 		},
 	};
-	providerCollection.register(provider);
+	const pluginId = "rpc-plugin-auth";
+	const sourceIdentity = path.join(authWorkspace, "rpc-plugin-auth.ts");
+	const providerStorageId = pluginProviderStorageId({
+		pluginId,
+		providerId: providerModel.providerId,
+		sourceIdentity,
+	});
+	const registration: PluginProviderDescriptor = {
+		connect: async () => undefined,
+		createProvider: () => provider,
+		displayName: "RPC fake authentication Provider",
+		pluginId,
+		providerId: providerModel.providerId,
+		sourceIdentity,
+		sourcePath: sourceIdentity,
+	};
+	const pluginRuntime = createPluginRuntime(
+		[
+			{
+				commands: [],
+				id: pluginId,
+				providers: [registration],
+				sourcePath: sourceIdentity,
+				tools: [],
+				workspace: authWorkspace,
+			},
+		],
+		[]
+	);
 	const agentRegistry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
 			diagnostics: [],
@@ -432,19 +450,7 @@ test("RPC runs an explicitly selected Plugin Provider and emits a secret-free au
 			sources: [],
 		})
 	);
-	let legacyProviderChecks = 0;
-	const connections = {
-		authorize: async () => {
-			throw new Error("RPC must not authorize through legacy Connections.");
-		},
-		connect: async () => {
-			throw new Error("RPC must not connect through legacy Connections.");
-		},
-		listProviders: async () => {
-			legacyProviderChecks += 1;
-			return [];
-		},
-	};
+	const legacyProviderChecks = 0;
 	const assembly = await openSessionServices({
 		policy: {
 			cwd: authWorkspace,
@@ -452,8 +458,31 @@ test("RPC runs an explicitly selected Plugin Provider and emits a secret-free au
 			workspace: authWorkspace,
 		},
 		sources: {
-			connections: () => connections,
-			createProviderCollection: () => providerCollection,
+			createProviderCollection: (
+				currentPluginRuntime,
+				sessionId,
+				allowedPluginProviderIds,
+				allowedPluginProviderSources
+			) =>
+				createDefaultSessionProviderCollection(
+					currentPluginRuntime,
+					sessionId,
+					{
+						allowedPluginProviderIds,
+						allowedPluginProviderSources,
+						credentialStore: {
+							delete: () => undefined,
+							get: (providerId) => {
+								credentialReads.add(providerId);
+								return providerId === providerStorageId
+									? fakeSecret
+									: undefined;
+							},
+							set: () => undefined,
+						},
+					}
+				),
+			pluginRuntime: () => pluginRuntime,
 			registry: () => agentRegistry,
 		},
 	});
@@ -551,30 +580,721 @@ test("RPC runs an explicitly selected Plugin Provider and emits a secret-free au
 				message: "Model authentication failed.",
 			},
 		});
-		expect([...credentialReads]).toEqual([providerModel.providerId]);
+		expect([...credentialReads]).toEqual([providerStorageId]);
 		expect(stdoutFrames.join("") + stderrFrames.join("")).not.toContain(
 			fakeSecret
 		);
 		expect(stderrFrames).toEqual([]);
 	} finally {
-		await assembly.shutdown();
+		await Promise.all([assembly.shutdown(), pluginRuntime.shutdown()]);
 		await fs.rm(authWorkspace, { force: true, recursive: true });
 	}
 });
 
-test("RPC maps a legacy Host to an actionable structured Provider SDK requirement", async () => {
+test("RPC rejects an unavailable Provider Model before persisting submission messages or attachments", async () => {
+	const rpcWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-rpc-unavailable-model-")
+	);
+	const activity = { availabilityCalls: 0, externalizations: 0 };
+	const databasePath = path.join(rpcWorkspace, "sessions.sqlite");
+	const knownModel: ProviderModel = {
+		...rpcProviderModel,
+		modelId: "another-known-model",
+	};
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: rpcWorkspace,
+			databasePath,
+			workspace: rpcWorkspace,
+		},
+		sources: {
+			createProviderCollection: () => {
+				const collection = createFakeProviderCollection(recorder, knownModel);
+				const getAvailable = collection.getAvailable.bind(collection);
+				return {
+					...collection,
+					getAvailable: async () => {
+						activity.availabilityCalls += 1;
+						return getAvailable();
+					},
+				};
+			},
+		},
+	});
+	const originalExternalizeAttachments =
+		assembly.store.externalizeAttachments.bind(assembly.store);
+	assembly.store.externalizeAttachments = async (...args) => {
+		activity.externalizations += 1;
+		return originalExternalizeAttachments(...args);
+	};
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input: [
+				new TextEncoder().encode(
+					`${request("initialize", "initialize", {
+						capabilities: {},
+						clientInfo: { name: "unavailable-model-preflight" },
+						cwd: rpcWorkspace,
+						protocolVersion: 4,
+					})}\n`
+				),
+				new TextEncoder().encode(
+					`${request("create", "session/create", {
+						initialSubmission: {
+							files: [
+								{
+									content: {
+										data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=",
+										encoding: "base64",
+									},
+									filename: "proof.png",
+									mediaType: "image/png",
+								},
+							],
+							text: "Reject before persisting this attachment.",
+						},
+						selection: {
+							agentId: "build",
+							model: {
+								modelId: rpcProviderModel.modelId,
+								providerId: rpcProviderModel.providerId,
+							},
+						},
+					})}\n`
+				),
+				new TextEncoder().encode(
+					`${request("shutdown", "server/shutdown", {})}\n`
+				),
+			],
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const createFrame = frames.find((frame) => frame.id === "create");
+		expect(createFrame?.error).toMatchObject({
+			message: expect.stringContaining(
+				"Provider Model openai/gpt-5.6-luna is unavailable in this RPC Host."
+			),
+		});
+		expect(activity).toEqual({ availabilityCalls: 1, externalizations: 0 });
+		expect(stderrFrames).toEqual([]);
+		expect(exitCode).toBe(0);
+		const verification = await openSessionServices({
+			policy: {
+				cwd: rpcWorkspace,
+				databasePath,
+				workspace: rpcWorkspace,
+			},
+		});
+		try {
+			expect(await verification.store.listSessions()).toEqual([]);
+		} finally {
+			await verification.shutdown();
+		}
+	} finally {
+		await assembly.shutdown();
+		await fs.rm(rpcWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("RPC uses the explicit selected Provider Model instead of a selectable Agent pin", async () => {
+	const rpcWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-rpc-explicit-model-selection-")
+	);
+	const databasePath = path.join(rpcWorkspace, "sessions.sqlite");
+	const pinnedModel: ProviderModel = {
+		...rpcProviderModel,
+		modelId: "rpc-agent-pinned-model",
+	};
+	const availabilityReads: {
+		modelIds: string[];
+		providerId: string | undefined;
+	}[] = [];
+	const usedModels: string[] = [];
+	const providerCallStarted = Promise.withResolvers<void>();
+	const registry = buildAgentRegistry(
+		fromPartial<ConfigSnapshot>({
+			diagnostics: [],
+			document: {
+				agents: {
+					"rpc-pinned": {
+						description: "An Agent with a distinct pinned Provider Model.",
+						model: `openai/${pinnedModel.modelId}`,
+						role: "primary",
+					},
+				},
+			},
+			sourceFor: () => undefined,
+			sources: [],
+		})
+	);
+	const pinnedAgent = registry.selectableAgents.find(
+		({ id }) => id === "rpc-pinned"
+	);
+	expect(pinnedAgent?.model).toMatchObject({
+		modelId: pinnedModel.modelId,
+		providerId: pinnedModel.providerId,
+	});
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: rpcWorkspace,
+			databasePath,
+			workspace: rpcWorkspace,
+		},
+		sources: {
+			createProviderCollection: () => {
+				const collection = createProviderCollection({
+					credentialStore: {
+						delete: () => undefined,
+						get: () => "fake-rpc-selection-key",
+						set: () => undefined,
+					},
+					modelStore: { get: () => undefined, set: () => undefined },
+				});
+				collection.register({
+					id: "openai",
+					models: [rpcProviderModel, pinnedModel],
+					resolveAuthorization: () => ({ authorization: { fake: true } }),
+					async *streamChat(
+						_request,
+						context
+					): AsyncGenerator<ProviderChatEvent> {
+						usedModels.push(context.model.modelId);
+						providerCallStarted.resolve();
+						yield { type: "finish" };
+					},
+				});
+				const getAvailable = collection.getAvailable.bind(collection);
+				return {
+					...collection,
+					getAvailable: async (providerId) => {
+						const models = await getAvailable(providerId);
+						availabilityReads.push({
+							modelIds: models.map(({ modelId }) => modelId),
+							providerId,
+						});
+						return models;
+					},
+					getPluginProviderRegistrations: () => [] as const,
+				};
+			},
+			registry: () => registry,
+		},
+	});
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const initialized = Promise.withResolvers<void>();
+	const input = (async function* (): AsyncGenerator<Uint8Array> {
+		yield new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "explicit-rpc-model-selection" },
+				cwd: rpcWorkspace,
+				protocolVersion: 4,
+			})}\n`
+		);
+		await initialized.promise;
+		yield new TextEncoder().encode(
+			`${request("create", "session/create", {
+				initialSubmission: { text: "Use the explicitly selected model." },
+				selection: {
+					agentId: "rpc-pinned",
+					model: {
+						modelId: rpcProviderModel.modelId,
+						providerId: rpcProviderModel.providerId,
+					},
+				},
+			})}\n`
+		);
+		await providerCallStarted.promise;
+		yield new TextEncoder().encode(
+			`${request("shutdown", "server/shutdown", {})}\n`
+		);
+	})();
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+					if ((JSON.parse(text) as { id?: string }).id === "initialize") {
+						initialized.resolve();
+					}
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const createFrame = frames.find((frame) => frame.id === "create");
+		expect(exitCode).toBe(0);
+		expect(stderrFrames).toEqual([]);
+		expect(createFrame?.error).toBeUndefined();
+		expect(availabilityReads).toContainEqual({
+			modelIds: [rpcProviderModel.modelId, pinnedModel.modelId],
+			providerId: rpcProviderModel.providerId,
+		});
+		expect(usedModels).toEqual([rpcProviderModel.modelId]);
+	} finally {
+		await assembly.shutdown();
+		await fs.rm(rpcWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("RPC session/submit rejects an unavailable model before storing its attachment or message", async () => {
+	const rpcWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-rpc-submit-unavailable-model-")
+	);
+	const databasePath = path.join(rpcWorkspace, "sessions.sqlite");
+	const activity = { externalizations: 0 };
+	const availabilityReads: string[] = [];
+	const localRecorder = createFakeProviderRecorder();
+	const unrelatedProviderModel: ProviderModel = {
+		modelId: "unrelated-rpc-model",
+		protocolId: "fake-e2e-provider",
+		providerId: "unrelated-rpc-provider",
+	};
+	const availableTurnCompleted = Promise.withResolvers<void>();
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: rpcWorkspace,
+			databasePath,
+			workspace: rpcWorkspace,
+		},
+		sources: {
+			createProviderCollection: () => {
+				const collection = createFakeProviderCollection(
+					localRecorder,
+					rpcProviderModel,
+					[unrelatedProviderModel]
+				);
+				const getAvailable = collection.getAvailable.bind(collection);
+				return {
+					...collection,
+					getAvailable: async (providerId) => {
+						availabilityReads.push(providerId ?? "<all>");
+						return await getAvailable(providerId);
+					},
+					getPluginProviderRegistrations: () => [] as const,
+				};
+			},
+		},
+	});
+	const originalExternalizeAttachments =
+		assembly.store.externalizeAttachments.bind(assembly.store);
+	assembly.store.externalizeAttachments = async (...args) => {
+		activity.externalizations += 1;
+		return originalExternalizeAttachments(...args);
+	};
+	const { id: existingSessionId } = await assembly.store.createEmptySession({
+		model: {
+			modelId: modelId(rpcProviderModel.modelId),
+			providerId: rpcProviderModel.providerId,
+		},
+	});
+	let recordsBeforeSubmit =
+		await assembly.store.listSessionRecords(existingSessionId);
+	let recordsAtUnavailableSubmit = recordsBeforeSubmit;
+	let sessionBeforeSubmit = await assembly.store.getSession(existingSessionId);
+	let sessionAtUnavailableSubmit = sessionBeforeSubmit;
+	let externalizationsAtUnavailableSubmit = -1;
+	let providerCallsAtUnavailableSubmit = -1;
+	let availabilityReadsAtUnavailableSubmit: string[] = [];
+	let transcriptAtUnavailableSubmit: Record<string, unknown> | undefined;
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const initialized = Promise.withResolvers<void>();
+	const sessionOpened = Promise.withResolvers<void>();
+	const unavailableResponse = Promise.withResolvers<Record<string, unknown>>();
+	const failedTurn = Promise.withResolvers<void>();
+	const transcriptResponse = Promise.withResolvers<void>();
+	const availableResponse = Promise.withResolvers<Record<string, unknown>>();
+	const input = (async function* (): AsyncGenerator<Uint8Array> {
+		yield new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "rpc-submit-model-preflight" },
+				cwd: rpcWorkspace,
+				protocolVersion: 4,
+			})}\n`
+		);
+		await initialized.promise;
+		yield new TextEncoder().encode(
+			`${request("open", "session/open", {
+				sessionId: existingSessionId,
+			})}\n`
+		);
+		await sessionOpened.promise;
+		sessionBeforeSubmit = await assembly.store.getSession(existingSessionId);
+		recordsBeforeSubmit =
+			await assembly.store.listSessionRecords(existingSessionId);
+		availabilityReads.length = 0;
+		yield new TextEncoder().encode(
+			`${request("unavailable-submit", "session/submit", {
+				selection: {
+					agentId: "build",
+					model: {
+						modelId: "not-available-in-this-host",
+						providerId: rpcProviderModel.providerId,
+					},
+				},
+				submission: {
+					files: [
+						{
+							content: {
+								data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=",
+								encoding: "base64",
+							},
+							filename: "unavailable.png",
+							mediaType: "image/png",
+						},
+					],
+					text: "Reject this unavailable-model attachment.",
+				},
+			})}\n`
+		);
+		const unavailableFrame = await unavailableResponse.promise;
+		if (unavailableFrame.error === undefined) {
+			await Promise.race([failedTurn.promise, Bun.sleep(2000)]);
+		}
+		providerCallsAtUnavailableSubmit = localRecorder.requests.length;
+		availabilityReadsAtUnavailableSubmit = [...availabilityReads];
+		recordsAtUnavailableSubmit =
+			await assembly.store.listSessionRecords(existingSessionId);
+		sessionAtUnavailableSubmit =
+			await assembly.store.getSession(existingSessionId);
+		externalizationsAtUnavailableSubmit = activity.externalizations;
+		yield new TextEncoder().encode(
+			`${request("transcript", "session/getTranscript", {})}\n`
+		);
+		await transcriptResponse.promise;
+		if (unavailableFrame.error !== undefined) {
+			yield new TextEncoder().encode(
+				`${request("available-submit", "session/submit", {
+					selection: {
+						agentId: "build",
+						model: {
+							modelId: rpcProviderModel.modelId,
+							providerId: rpcProviderModel.providerId,
+						},
+					},
+					submission: { text: "The available-model control succeeds." },
+				})}\n`
+			);
+			await availableResponse.promise;
+			await availableTurnCompleted.promise;
+		}
+		yield new TextEncoder().encode(
+			`${request("shutdown", "server/shutdown", {})}\n`
+		);
+	})();
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+					const frame = JSON.parse(text) as Record<string, unknown>;
+					if (frame.id === "initialize") {
+						initialized.resolve();
+					} else if (frame.id === "open") {
+						sessionOpened.resolve();
+					} else if (frame.id === "unavailable-submit") {
+						unavailableResponse.resolve(frame);
+					} else if (frame.id === "transcript") {
+						transcriptAtUnavailableSubmit = frame.result as
+							| Record<string, unknown>
+							| undefined;
+						transcriptResponse.resolve();
+					} else if (frame.id === "available-submit") {
+						availableResponse.resolve(frame);
+					}
+					if (frame.method === "session/event") {
+						const params = frame.params as Record<string, unknown> | undefined;
+						const wrapper = params?.event as
+							| Record<string, unknown>
+							| undefined;
+						const event = wrapper?.event as Record<string, unknown> | undefined;
+						if (event?.type === "agent-turn-failed") {
+							failedTurn.resolve();
+						}
+						if (event?.type === "agent-turn-completed") {
+							availableTurnCompleted.resolve();
+						}
+					}
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const unavailableFrame = frames.find(
+			(frame) => frame.id === "unavailable-submit"
+		);
+		const availableFrame = frames.find(
+			(frame) => frame.id === "available-submit"
+		);
+		expect(exitCode).toBe(0);
+		expect(stderrFrames).toEqual([]);
+		expect(unavailableFrame?.error).toMatchObject({
+			message: expect.stringContaining("not-available-in-this-host"),
+		});
+		expect(availabilityReadsAtUnavailableSubmit).toEqual([
+			rpcProviderModel.providerId,
+		]);
+		expect(externalizationsAtUnavailableSubmit).toBe(0);
+		expect(providerCallsAtUnavailableSubmit).toBe(0);
+		expect(recordsAtUnavailableSubmit).toEqual(recordsBeforeSubmit);
+		expect(sessionAtUnavailableSubmit).toEqual(sessionBeforeSubmit);
+		expect(transcriptAtUnavailableSubmit).toMatchObject({ messages: [] });
+		expect(availableFrame?.error).toBeUndefined();
+		expect(localRecorder.requests).toHaveLength(1);
+		const verification = await openSessionServices({
+			policy: {
+				cwd: rpcWorkspace,
+				databasePath,
+				workspace: rpcWorkspace,
+			},
+		});
+		try {
+			expect(
+				await verification.store.listSessionRecords(existingSessionId)
+			).toHaveLength(2);
+		} finally {
+			await verification.shutdown();
+		}
+	} finally {
+		await assembly.shutdown();
+		await fs.rm(rpcWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("RPC rejects a mismatched Host Plugin snapshot before persisting a built-in Session or attachments", async () => {
+	const rpcWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-rpc-provider-snapshot-mismatch-")
+	);
+	const databasePath = path.join(rpcWorkspace, "sessions.sqlite");
+	const staleRegistration: PluginProviderDescriptor = {
+		connect: async () => {
+			activity.connectCalls += 1;
+		},
+		createProvider: () => {
+			throw new Error("The stale Plugin Provider must not be constructed.");
+		},
+		displayName: "Stale RPC Plugin Provider",
+		pluginId: "stale-rpc-plugin",
+		providerId: "stale-rpc-provider",
+		sourceIdentity: "/trusted/plugins/stale-rpc.ts",
+		sourcePath: "/trusted/plugins/stale-rpc.ts",
+	};
+	const activity = {
+		availabilityCalls: 0,
+		connectCalls: 0,
+		credentialReads: 0,
+		discoveries: 0,
+		externalizations: 0,
+		modelStoreReads: 0,
+		restoreModelsCalls: 0,
+		streams: 0,
+	};
+	const pluginRuntime = createPluginRuntime([], []);
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: rpcWorkspace,
+			databasePath,
+			workspace: rpcWorkspace,
+		},
+		sources: {
+			createProviderCollection: () => {
+				const collection = createProviderCollection({
+					credentialStore: {
+						delete: () => undefined,
+						get: () => {
+							activity.credentialReads += 1;
+							return "fake-rpc-key";
+						},
+						set: () => undefined,
+					},
+					modelStore: {
+						get: () => {
+							activity.modelStoreReads += 1;
+							return;
+						},
+						set: () => undefined,
+					},
+				});
+				collection.register({
+					id: rpcProviderModel.providerId,
+					models: [rpcProviderModel],
+					resolveAuthorization: () => ({
+						authorization: { fake: true },
+					}),
+					discoverModels: () => {
+						activity.discoveries += 1;
+						return [];
+					},
+					async *streamChat(): AsyncGenerator<ProviderChatEvent> {
+						activity.streams += 1;
+						yield { type: "finish" };
+					},
+				});
+				const getAvailable = collection.getAvailable.bind(collection);
+				const restoreModels = collection.restoreModels.bind(collection);
+				const reportedCollection: ProviderCollection &
+					Readonly<{
+						getPluginProviderRegistrations: () => readonly PluginProviderDescriptor[];
+					}> = {
+					...collection,
+					getAvailable: async () => {
+						activity.availabilityCalls += 1;
+						return getAvailable();
+					},
+					getPluginProviderRegistrations: () => [staleRegistration],
+					restoreModels: async () => {
+						activity.restoreModelsCalls += 1;
+						await restoreModels();
+					},
+				};
+				return reportedCollection;
+			},
+			pluginRuntime: () => pluginRuntime,
+		},
+	});
+	const originalExternalizeAttachments = assembly.store.externalizeAttachments;
+	assembly.store.externalizeAttachments = async (...args) => {
+		activity.externalizations += 1;
+		return originalExternalizeAttachments(...args);
+	};
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const requestsBefore = recorder.requests.length;
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input: [
+				new TextEncoder().encode(
+					`${request("initialize", "initialize", {
+						capabilities: {},
+						clientInfo: { name: "provider-snapshot-mismatch" },
+						cwd: rpcWorkspace,
+						protocolVersion: 4,
+					})}\n`
+				),
+				new TextEncoder().encode(
+					`${request("create", "session/create", {
+						initialSubmission: {
+							text: "Do not persist before Host validation.",
+						},
+						selection: {
+							agentId: "build",
+							model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+						},
+					})}\n`
+				),
+				new TextEncoder().encode(
+					`${request("shutdown", "server/shutdown", {})}\n`
+				),
+			],
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const createFrame = frames.find((frame) => frame.id === "create");
+		expect(exitCode).toBe(0);
+		expect(createFrame?.error).toMatchObject({
+			message: expect.stringContaining(
+				"registrations do not match the current trusted registrations"
+			),
+		});
+		expect(stderrFrames).toEqual([]);
+		expect(activity).toEqual({
+			availabilityCalls: 0,
+			connectCalls: 0,
+			credentialReads: 0,
+			discoveries: 0,
+			externalizations: 0,
+			modelStoreReads: 0,
+			restoreModelsCalls: 0,
+			streams: 0,
+		});
+		expect(recorder.requests).toHaveLength(requestsBefore);
+		const verification = await openSessionServices({
+			policy: {
+				cwd: rpcWorkspace,
+				databasePath,
+				workspace: rpcWorkspace,
+			},
+		});
+		try {
+			expect(await verification.store.listSessions()).toEqual([]);
+		} finally {
+			await verification.shutdown();
+		}
+	} finally {
+		await Promise.all([assembly.shutdown(), pluginRuntime.shutdown()]);
+		await fs.rm(rpcWorkspace, { force: true, recursive: true });
+	}
+});
+
+test("RPC maps an unavailable Provider SDK composition to an actionable error", async () => {
 	const legacyWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-rpc-legacy-runtime-")
 	);
-	const legacyRecorder = createFakeModelClientRecorder();
-	let legacyRuntimeCalls = 0;
-	let legacyConnectionChecks = 0;
-	const legacyRuntime = () => {
-		legacyRuntimeCalls += 1;
-		return createAgentRuntime({
-			modelClient: createFakeModelClient(legacyRecorder),
-		});
-	};
 	const registry = buildAgentRegistry(
 		fromPartial<ConfigSnapshot>({
 			diagnostics: [],
@@ -590,20 +1310,8 @@ test("RPC maps a legacy Host to an actionable structured Provider SDK requiremen
 			workspace: legacyWorkspace,
 		},
 		sources: {
-			connections: () => ({
-				authorize: async () => {
-					throw new Error("RPC must not authorize legacy Connections.");
-				},
-				connect: async () => {
-					throw new Error("RPC must not open a legacy connection prompt.");
-				},
-				listProviders: async () => {
-					legacyConnectionChecks += 1;
-					return [];
-				},
-			}),
+			createProviderCollection: () => undefined,
 			registry: () => registry,
-			runtimeFactory: legacyRuntime,
 		},
 	});
 	const request = (
@@ -664,9 +1372,6 @@ test("RPC maps a legacy Host to an actionable structured Provider SDK requiremen
 				"Connect the Provider in Interactive Mode"
 			),
 		});
-		expect(legacyRuntimeCalls).toBe(1);
-		expect(legacyConnectionChecks).toBe(0);
-		expect(legacyRecorder.requests).toEqual([]);
 		expect(stderrFrames).toEqual([]);
 	} finally {
 		await assembly.shutdown();
@@ -675,19 +1380,6 @@ test("RPC maps a legacy Host to an actionable structured Provider SDK requiremen
 });
 
 test("RPC session/open keeps a held Session Writer as a refusal", async () => {
-	const connections = {
-		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
-		connect: async () => undefined,
-		listProviders: async () => [
-			{
-				connected: true as const,
-				connectionMethod: "api-key" as const,
-				displayName: "OpenAI",
-				id: "openai" as const,
-				methods: ["api-key", "browser"] as const,
-			},
-		],
-	};
 	const conflictDatabasePath = path.join(workspace, "writer-conflict.sqlite");
 	const ownerDatabase = createDatabase(conflictDatabasePath);
 	const ownerStore = createDrizzleSessionStore(ownerDatabase.db, {
@@ -707,9 +1399,7 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 	});
 	const rpcAssembly = await openSessionServices({
 		policy: { cwd: workspace, databasePath: conflictDatabasePath, workspace },
-		sources: {
-			connections: () => connections,
-		},
+		sources: {},
 	});
 	const ownerWriter = await ownerStore.acquireSessionWriter(sessionId, {
 		executionMode: "interactive",
@@ -769,19 +1459,6 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 });
 
 test("RPC session opening keeps lock refusals request-scoped", async () => {
-	const connections = {
-		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
-		connect: async () => undefined,
-		listProviders: async () => [
-			{
-				connected: true as const,
-				connectionMethod: "api-key" as const,
-				displayName: "OpenAI",
-				id: "openai" as const,
-				methods: ["api-key", "browser"] as const,
-			},
-		],
-	};
 	const failureDatabasePath = path.join(
 		workspace,
 		"writer-lock-failure.sqlite"
@@ -789,7 +1466,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 	const failureAssembly = await openSessionServices({
 		policy: { cwd: workspace, databasePath: failureDatabasePath, workspace },
 		sources: {
-			connections: () => connections,
+			createProviderCollection: () => createFakeProviderCollection(recorder),
 		},
 	});
 	const { id: sessionId } = await failureAssembly.store.createSession({
@@ -878,22 +1555,6 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 			workspace,
 		},
 		sources: {
-			connections: () => ({
-				authorize: async () => ({
-					kind: "api-key" as const,
-					apiKey: "switch-test-key",
-				}),
-				connect: async () => undefined,
-				listProviders: async () => [
-					{
-						connected: true as const,
-						connectionMethod: "api-key" as const,
-						displayName: "OpenAI",
-						id: "openai" as const,
-						methods: ["api-key", "browser"] as const,
-					},
-				],
-			}),
 			createProviderCollection: () => createFakeProviderCollection(recorder),
 		},
 	});
@@ -928,8 +1589,8 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 	let firstModelHeld = false;
 	let secondModelSeen = false;
 	let thirdModelSeen = false;
-	const previousBeforeStep = recorder.beforeStep;
-	recorder.beforeStep = async (request) => {
+	const previousBeforeStep = recorder.beforeChat;
+	recorder.beforeChat = async (request) => {
 		const latestUserText = request.messages
 			.filter(({ role }) => role === "user")
 			.at(-1)
@@ -1070,7 +1731,7 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 		exitCode = await run;
 	} finally {
 		releaseFirstModel.resolve();
-		recorder.beforeStep = previousBeforeStep;
+		recorder.beforeChat = previousBeforeStep;
 		unsubscribeManager();
 		await switchAssembly.shutdown();
 	}

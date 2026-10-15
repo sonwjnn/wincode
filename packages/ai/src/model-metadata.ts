@@ -1,30 +1,20 @@
-// Runtime shape of the generated model metadata. The generated module
-// (`./generated/model-metadata.generated.ts`) imports these types; the
-// generator in `../scripts/metadata-model.ts` imports them too, so mapping and
+// Runtime shape of supplemental Provider Model metadata. The provider-specific
+// generated snapshots and their generator import these types, so mapping and
 // shape cannot drift apart.
 
 import { z } from "zod";
+import {
+	type ThinkingLevel,
+	type ThinkingLevelMap,
+	thinkingLevelSchema,
+} from "./thinking-level.ts";
 
-/** Stable reasoning levels Wincode can persist and send. */
-export const thinkingLevelIds = [
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-] as const;
-export type ThinkingLevel = (typeof thinkingLevelIds)[number];
-export type ThinkingLevelMap = Readonly<
-	Partial<Record<ThinkingLevel, string | null>>
->;
-
-export const thinkingLevelSchema = z.enum(thinkingLevelIds);
-
-export type ThinkingSelection = Readonly<{
-	thinkingLevel?: ThinkingLevel;
-}>;
+export type {
+	ThinkingLevel,
+	ThinkingLevelMap,
+	ThinkingSelection,
+} from "./thinking-level.ts";
+export { thinkingLevelIds, thinkingLevelSchema } from "./thinking-level.ts";
 
 /**
  * How a model expresses reasoning, normalized from models.dev
@@ -106,9 +96,8 @@ export type ModelPromptCacheCapabilities = Readonly<{
 }>;
 
 /**
- * Metadata a Model Catalog entry does not carry inline. Every field is
- * optional because the sources are: a fact the upstream does not publish is
- * absent rather than defaulted.
+ * Supplemental facts used to enrich SDK-declared Provider Models. Every field
+ * is optional because unpublished facts remain absent rather than defaulted.
  */
 export type ModelMetadataEntry = Readonly<{
 	cost?: ModelCost;

@@ -1,8 +1,6 @@
-import type { ModelId } from "@wincode/ai/models";
 import type { Tagged } from "type-fest";
 
-export type { ModelId } from "@wincode/ai/models";
-
+export type ModelId = Tagged<string, "ModelId">;
 export type AgentId = Tagged<string, "AgentId">;
 export type AgentTurnId = Tagged<string, "AgentTurnId">;
 export type ToolCallId = Tagged<string, "ToolCallId">;

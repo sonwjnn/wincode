@@ -1,4 +1,18 @@
+import { z } from "zod";
 import type { SupportedPromptCacheRetentionTier } from "./model-metadata";
+
+export type { SupportedPromptCacheRetentionTier } from "./model-metadata";
+export type {
+	PromptCachePolicy,
+	ResolvedPromptCacheControls,
+} from "./prompt-cache-policy.ts";
+export {
+	DEFAULT_PROMPT_CACHE_POLICY,
+	promptCachePolicySchema,
+	resolvePromptCacheControls,
+} from "./prompt-cache-policy.ts";
+export type { ThinkingLevel, ThinkingSelection } from "./thinking-level.ts";
+export { thinkingLevelIds, thinkingLevelSchema } from "./thinking-level.ts";
 
 export type ProviderModelCapability =
 	| "file"
@@ -12,6 +26,33 @@ export type ProviderModelSelection = Readonly<{
 	modelId: string;
 	providerId: string;
 }>;
+
+const nonEmptyProviderIdentity = z
+	.string()
+	.refine((value) => value.trim().length > 0);
+
+/** Validates exact Provider Model identities without a Catalog allowlist. */
+export const providerModelSelectionSchema = z
+	.object({
+		modelId: nonEmptyProviderIdentity,
+		providerId: nonEmptyProviderIdentity,
+	})
+	.strict();
+
+/** Parses a persisted `<providerId>/<modelId>` identity without normalizing either ID. */
+export const parseProviderModelSelection = (
+	value: string
+): ProviderModelSelection | null => {
+	const separatorIndex = value.indexOf("/");
+	if (separatorIndex <= 0 || separatorIndex === value.length - 1) {
+		return null;
+	}
+	const parsed = providerModelSelectionSchema.safeParse({
+		modelId: value.slice(separatorIndex + 1),
+		providerId: value.slice(0, separatorIndex),
+	});
+	return parsed.success ? parsed.data : null;
+};
 
 /** A provider-owned model; optional metadata is preserved rather than inferred. */
 export type ProviderModel = Readonly<{
@@ -338,7 +379,7 @@ export type ProviderCollection = Readonly<{
 	close: () => Promise<void>;
 	deleteCredential: (providerId: string) => Promise<void>;
 	/** Known models whose provider has a stored credential; this does not contact the provider. */
-	getAvailable: () => Promise<readonly ProviderModel[]>;
+	getAvailable: (providerId?: string) => Promise<readonly ProviderModel[]>;
 	getModel: (providerId: string, modelId: string) => ProviderModel | undefined;
 	/** Returns in-memory last-known models. Restore the store before listing a fresh instance. */
 	getModels: () => readonly ProviderModel[];
@@ -958,15 +999,20 @@ export const createProviderCollection = (
 				}
 			});
 		},
-		getAvailable: async () => {
+		getAvailable: async (providerId) => {
 			const configuredProviders = new Set<string>();
-			for (const providerId of providers.keys()) {
-				if ((await credentialStore.get(providerId)) !== undefined) {
-					configuredProviders.add(providerId);
+			const providerIds =
+				providerId === undefined ? providers.keys() : [providerId];
+			for (const configuredProviderId of providerIds) {
+				if (
+					providers.has(configuredProviderId) &&
+					(await credentialStore.get(configuredProviderId)) !== undefined
+				) {
+					configuredProviders.add(configuredProviderId);
 				}
 			}
-			return [...configuredProviders].flatMap((providerId) =>
-				getProviderModels(providerId)
+			return [...configuredProviders].flatMap((configuredProviderId) =>
+				getProviderModels(configuredProviderId)
 			);
 		},
 		getModel: (providerId, modelId) =>

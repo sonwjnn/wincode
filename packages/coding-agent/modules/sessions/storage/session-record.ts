@@ -21,11 +21,7 @@ import {
 	type SessionToolCallPart,
 	toSessionRecordId,
 } from "@wincode/agent-core";
-import {
-	normalizeThinkingSelection,
-	type ThinkingSelection,
-	thinkingLevelSchema,
-} from "@wincode/ai/models";
+import { type ThinkingSelection, thinkingLevelSchema } from "@wincode/ai/sdk";
 import {
 	isArray,
 	isFiniteNonNegativeNumber,
@@ -33,6 +29,7 @@ import {
 	isNonNegativeInteger,
 	isNull,
 	isObjectLike,
+	isPlainObject,
 	isUndefined,
 	omitUndefined,
 	pickTruthy,
@@ -40,7 +37,6 @@ import {
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
 import {
-	catalogSelectionForProviderModel,
 	normalizeProviderModelSelection,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
@@ -66,6 +62,7 @@ const isRecordModel = (value: unknown): boolean => {
 	}
 	const model = value as {
 		modelId?: unknown;
+		pluginProviderSource?: unknown;
 		providerId?: unknown;
 		thinkingLevel?: unknown;
 	};
@@ -75,10 +72,25 @@ const isRecordModel = (value: unknown): boolean => {
 	if (!isNonEmptyString(model.providerId)) {
 		return false;
 	}
+	const pluginProviderSource = model.pluginProviderSource;
+	const validPluginProviderSource =
+		isUndefined(pluginProviderSource) ||
+		(isPlainObject(pluginProviderSource) &&
+			Object.keys(pluginProviderSource).every(
+				(key) => key === "pluginId" || key === "sourceIdentity"
+			) &&
+			isNonEmptyString(pluginProviderSource.pluginId) &&
+			isNonEmptyString(pluginProviderSource.sourceIdentity));
+	if (!validPluginProviderSource) {
+		return false;
+	}
 	if (
 		Object.keys(model).some(
 			(key) =>
-				key !== "modelId" && key !== "providerId" && key !== "thinkingLevel"
+				key !== "modelId" &&
+				key !== "pluginProviderSource" &&
+				key !== "providerId" &&
+				key !== "thinkingLevel"
 		)
 	) {
 		return false;
@@ -255,6 +267,7 @@ const modelSelectionForRecord = (
 ): ProviderModelSelection | undefined =>
 	normalizeProviderModelSelection({
 		modelId: model.modelId,
+		pluginProviderSource: model.pluginProviderSource,
 		providerId: model.providerId,
 	}) ?? undefined;
 
@@ -272,11 +285,6 @@ const metadataForRecord = (
 	const choice: ThinkingSelection = parsedThinkingLevel.success
 		? { thinkingLevel: parsedThinkingLevel.data }
 		: {};
-	const catalogModel =
-		model === undefined ? null : catalogSelectionForProviderModel(model);
-	const normalizedChoice = catalogModel
-		? normalizeThinkingSelection(catalogModel, choice)
-		: choice;
 	const parsed = sessionMessageMetadataSchema.safeParse({
 		...pickTruthy({ agent: metadata?.agent ?? record.agentId }),
 		...omitUndefined({
@@ -289,7 +297,7 @@ const metadataForRecord = (
 			submissionId: metadata?.submissionId,
 			submissionStatus: metadata?.submissionStatus,
 			usage: metadata?.usage,
-			...normalizedChoice,
+			...choice,
 		}),
 	});
 	return parsed.success ? parsed.data : undefined;
@@ -497,7 +505,10 @@ export const buildUserSessionRecord = ({
 }: {
 	agentId: AgentId;
 	message: SessionMessage;
-	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
+	model: Pick<
+		SessionRecord["model"],
+		"modelId" | "pluginProviderSource" | "providerId"
+	>;
 	turnId: AgentTurnId;
 	thinkingLevel?: SessionRecord["model"]["thinkingLevel"];
 }): SessionRecord => {
@@ -515,6 +526,7 @@ export const buildUserSessionRecord = ({
 			modelId: model.modelId,
 			providerId: model.providerId,
 			...omitUndefined({
+				pluginProviderSource: model.pluginProviderSource,
 				thinkingLevel: thinkingLevel ?? message.metadata?.thinkingLevel,
 			}),
 		},

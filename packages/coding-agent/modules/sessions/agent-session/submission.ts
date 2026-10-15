@@ -11,7 +11,7 @@ import {
 	type SessionRecord,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import {
 	getErrorMessage,
 	isError,
@@ -491,6 +491,7 @@ const prepareSessionSubmission = async ({
 }): Promise<SessionPreparationResult> => {
 	const { ports } = deps;
 	try {
+		await ports.assertProviderModelSelection(input);
 		// Settings and the attachment budget are resolved before anything joins a
 		// compaction, so a compaction that starts while they resolve is joined by
 		// the settle that follows rather than raced by this turn.

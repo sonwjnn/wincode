@@ -13,7 +13,7 @@ import type {
 	SubmissionId,
 	ToolCallId,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import type { ReadonlyDeep } from "type-fest";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
@@ -148,7 +148,7 @@ export type SessionExecution = ReadonlyDeep<{
 /**
  * The input the Agent Session starts when the Submission Queue reaches a
  * Queued Submission: the submission as it was accepted, with the composition
- * and Model Target selection it keeps while it waits.
+ * and Provider Model selection it keeps while it waits.
  */
 export type SessionQueuedSendInput = SessionSendInput & {
 	composition: SessionSubmissionComposition;
@@ -404,9 +404,13 @@ export type AgentSessionPorts = Readonly<{
 	) => Promise<void>;
 	/** Resolves the Agent, Model, and thinking level when a Submission starts. */
 	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
+	/** Rejects selections that the current Host cannot execute before admission. */
+	assertProviderModelSelection: (
+		input: SessionSendInput
+	) => void | Promise<void>;
 	/** Resolves the @path file mentions of a prompt. */
 	resolveFileMentions: (text: string) => Promise<FileMentionPart[]>;
-	/** Resolves the compaction settings one Model Target runs with. */
+	/** Resolves compaction settings for one selected Provider Model. */
 	resolveCompactionSettings: (
 		selection: ProviderModelSelection
 	) => Promise<ResolvedCompactionSettings>;
@@ -440,7 +444,7 @@ export type SessionOverflowContinuationOutcome =
 	| { readonly kind: "started" }
 	| { readonly kind: "refused"; readonly reason: string };
 
-/** The Model Target one overflow recovery compacts and continues with. */
+/** The Provider Model selection one overflow recovery compacts and continues with. */
 export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
 	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
@@ -453,8 +457,8 @@ export type SessionOverflowRecoveryCommand = ReadonlyDeep<{
 	/** The user message the failed Agent Turn answered; continuation resumes it. */
 	originalMessageId: SessionMessageId;
 	/**
-	 * The Model Target the recovery's compaction runs against, or null when that
-	 * target has no overflow recovery available.
+	 * The Provider Model selection the recovery's compaction runs against, or
+	 * null when that selection has no overflow recovery available.
 	 */
 	resolveTarget: () => Promise<SessionOverflowRecoveryTarget | null>;
 	/** Continues the existing context once the recovery has compacted. */

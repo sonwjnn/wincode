@@ -7,8 +7,7 @@ import type {
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import type { ThinkingLevel } from "@wincode/ai/models";
-import { defaultChatModelSelection } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { isCodingToolName } from "@/modules/tools";
@@ -430,7 +429,7 @@ export const interruptSessionContext = (
 	const finalized = finalizeAssistantMessageMetadata(target, {
 		interrupted: true,
 		...(isUndefined(execution)
-			? { model: defaultChatModelSelection }
+			? {}
 			: {
 					agent: execution.agent,
 					model: execution.model,

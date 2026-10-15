@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import type {
 	ProviderModelSelection,
 	SessionSdk,

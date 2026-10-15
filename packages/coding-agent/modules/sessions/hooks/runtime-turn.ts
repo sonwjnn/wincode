@@ -13,7 +13,6 @@ import {
 	type AgentTurnModel,
 	type AgentTurnPart,
 	type AgentTurnTerminalEvent,
-	createAgentRuntime,
 	createAgentTurnAbortEvent,
 	createAgentTurnLifecycle,
 	createOperationalFailure,
@@ -30,8 +29,6 @@ import {
 	type ToolFailureDetails,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type { GoogleCachedContentSelection } from "@wincode/ai/model-client";
-import { createModelClient } from "@wincode/ai/model-client";
 import {
 	getErrorMessage,
 	isNonEmptyString,
@@ -86,11 +83,6 @@ import {
 	buildToolSessionRecord,
 } from "../turn-records";
 
-export type RuntimeFactory = () => AgentRuntime;
-
-/** Composition-root default: the provider-neutral Agent Runtime. */
-export const defaultRuntimeFactory: RuntimeFactory = () =>
-	createAgentRuntime({ modelClient: createModelClient() });
 const BASE_AGENT_INSTRUCTIONS =
 	"You are a basic coding agent running in a user's CLI.\nAll file tools are limited to the CLI workspace.";
 
@@ -563,8 +555,8 @@ const toAgentTurnMessages = (message: SessionMessage): AgentTurnMessage[] => {
 };
 
 /**
- * Builds one Agent Turn from the resolved session send. A legacy Model Target
- * or credential-free Provider Model identity is resolved by the caller; Agent
+ * Builds one Agent Turn from the resolved session send. The credential-free
+ * Provider Model identity is resolved by the caller; Agent
  * instructions are composed for the resolved Agent and `tools` carries the
  * gated Resolved Tools the runtime may invoke.
  */
@@ -643,7 +635,6 @@ export type SessionViewState = ReadonlyDeep<{
 }>;
 
 type AgentTurnEventConsumerOptions = {
-	googleCachedContent?: GoogleCachedContentSelection;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	lifecycle?: AgentTurnLifecycle;
 	onViewState?: (state: SessionViewState) => void;
@@ -676,7 +667,6 @@ const consumeAgentTurnEvents = async ({
 	onTerminal,
 	onViewState,
 	runtime,
-	googleCachedContent,
 	modelStepObserver,
 	promptCacheKey,
 	signal,
@@ -724,7 +714,6 @@ const consumeAgentTurnEvents = async ({
 	};
 	for await (const event of runtime.run(turn, {
 		...omitUndefined({
-			googleCachedContent,
 			modelStepObserver,
 			promptCacheKey,
 			takeSteeringMessages,
@@ -815,7 +804,6 @@ export const runAgentTurnToText = async ({
 	onToolCheckpoint,
 	onViewState,
 	runtime,
-	googleCachedContent,
 	modelStepObserver,
 	promptCacheKey,
 	signal,
@@ -830,7 +818,6 @@ export const runAgentTurnToText = async ({
 	onToolCheckpoint?: CheckpointCommitter;
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
-	googleCachedContent?: GoogleCachedContentSelection;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	promptCacheKey?: string;
 	signal?: AbortSignal;
@@ -900,7 +887,6 @@ export const runAgentTurnToText = async ({
 		},
 		onViewState,
 		runtime,
-		googleCachedContent,
 		modelStepObserver,
 		promptCacheKey,
 		signal,

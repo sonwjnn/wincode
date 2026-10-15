@@ -72,6 +72,8 @@ bun run /path/to/wincode/packages/coding-agent/bin/wincode.ts
 | Anthropic | API key |
 | Google | API key |
 | OpenCode Go | API key |
+| DeepSeek | API key |
+| OpenRouter | API key |
 
 Provider credentials are configured interactively with `/connect`, not stored in project configuration.
 
@@ -161,7 +163,7 @@ Type `/` in the chat input to browse Built-in Commands, Custom Commands, and Ski
 | `/settings` | Open application settings |
 | `/agents` | Switch agents and inspect agent configuration |
 | `/models` | Select a model |
-| `/variants` | Select a model variant |
+| `/thinking` | Select the current Provider Model's thinking level |
 | `/sessions` | Browse, rename, pin, or delete local sessions |
 | `/themes` | Change the terminal color theme |
 | `/connect` | Connect a provider account or API key |
@@ -179,7 +181,7 @@ Wincode is a Bun workspace with one private Coding-Agent Application package:
 │   │   └── modules/
 │   │       ├── skills/            # Skill parsing, discovery, catalog, snapshots, activation
 │   │       └── tools/             # Workspace sandbox, filesystem, search, edit, and shell tools
-│   ├── ai/                        # Provider-neutral model catalog, targets, options, usage, failures
+│   ├── ai/                        # Provider SDKs, model metadata, options, usage, failures
 │   └── agent-core/                # Agent Turns, records, events, runtime and tool contracts
 └── docs/
     └── adr/                       # Accepted architecture decisions

@@ -22,7 +22,6 @@ import {
 import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
 import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
-import { RetiredModelError } from "../model-target";
 
 /**
  * Durable Session Record synthesis for one Agent Turn: non-terminal assistant
@@ -82,6 +81,7 @@ const recordModelForTurn = (turn: AgentTurn): SessionRecord["model"] => ({
 	modelId: turn.model.modelId,
 	providerId: turn.model.providerId,
 	...omitUndefined({
+		pluginProviderSource: turn.model.pluginProviderSource,
 		thinkingLevel: turn.model.thinkingLevel,
 	}),
 });
@@ -98,6 +98,9 @@ const assistantRecordMetadata = (
 	model: {
 		modelId: turn.model.modelId,
 		providerId: turn.model.providerId,
+		...omitUndefined({
+			pluginProviderSource: turn.model.pluginProviderSource,
+		}),
 	},
 });
 
@@ -205,7 +208,10 @@ const buildAssistantOutcomeSessionRecord = ({
 }: {
 	agentId: AgentId;
 	assistantMessageId?: SessionMessageId;
-	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
+	model: Pick<
+		SessionRecord["model"],
+		"modelId" | "pluginProviderSource" | "providerId"
+	>;
 	sourceUserMessageId?: SessionMessageId;
 	text: string;
 	terminal: AgentTurnOutcomeRecord;
@@ -222,6 +228,9 @@ const buildAssistantOutcomeSessionRecord = ({
 				model: {
 					modelId: model.modelId,
 					providerId: model.providerId,
+					...omitUndefined({
+						pluginProviderSource: model.pluginProviderSource,
+					}),
 				},
 				...omitUndefined({ sourceUserMessageId, thinkingLevel }),
 			},
@@ -232,7 +241,10 @@ const buildAssistantOutcomeSessionRecord = ({
 	model: {
 		modelId: model.modelId,
 		providerId: model.providerId,
-		...omitUndefined({ thinkingLevel }),
+		...omitUndefined({
+			pluginProviderSource: model.pluginProviderSource,
+			thinkingLevel,
+		}),
 	},
 	outcome: { kind: "assistant", terminal },
 	turnId,
@@ -251,7 +263,10 @@ export const buildAssistantFailureSessionRecord = ({
 	agentId: AgentId;
 	assistantMessageId?: SessionMessageId;
 	error: unknown;
-	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
+	model: Pick<
+		SessionRecord["model"],
+		"modelId" | "pluginProviderSource" | "providerId"
+	>;
 	sourceUserMessageId?: SessionMessageId;
 	turnId: AgentTurnId;
 	thinkingLevel?: SessionRecord["model"]["thinkingLevel"];
@@ -260,8 +275,7 @@ export const buildAssistantFailureSessionRecord = ({
 		modelId: model.modelId,
 		providerId: model.providerId,
 	});
-	const failureText =
-		error instanceof RetiredModelError ? error.message : failure.message;
+	const failureText = failure.message;
 	return buildAssistantOutcomeSessionRecord({
 		assistantMessageId,
 		agentId,
@@ -288,7 +302,10 @@ export const buildAssistantCancelledSessionRecord = ({
 }: {
 	agentId: AgentId;
 	assistantMessageId?: SessionMessageId;
-	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
+	model: Pick<
+		SessionRecord["model"],
+		"modelId" | "pluginProviderSource" | "providerId"
+	>;
 	sourceUserMessageId?: SessionMessageId;
 	turnId: AgentTurnId;
 	thinkingLevel?: SessionRecord["model"]["thinkingLevel"];

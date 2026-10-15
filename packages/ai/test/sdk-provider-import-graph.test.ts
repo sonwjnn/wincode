@@ -5,11 +5,14 @@ import * as path from "node:path";
 import { $ } from "bun";
 
 const AI_ROOT = path.join(import.meta.dir, "..");
-const FULL_MODEL_CATALOG = /\/(?:catalog|model-metadata(?:\.generated)?)\.ts$/u;
+const OBSOLETE_MODEL_POLICY =
+	/\/(?:catalog\.ts|generated\/model-metadata\.generated\.ts)$/u;
 const SDK_PROVIDER_MODULE = /\/sdk-providers\//u;
-const OPENROUTER_MODEL_CATALOG = /\/openrouter-(?:models|catalog)(?:\.ts)?$/u;
+const OPENROUTER_MODEL_SOURCE = /\/openrouter-models(?:\.ts)?$/u;
 const ANTHROPIC_MODEL_ARTIFACT =
 	/(?:^|\/)anthropic-model-metadata(?:\.generated)?\.ts$/u;
+const LEGACY_MODEL_IMPLEMENTATION =
+	/\/model-client\/|\/(?:model-target|model-provider-options)\.ts$/u;
 
 type BundleMetadata = Readonly<{ inputs: Readonly<Record<string, unknown>> }>;
 
@@ -39,17 +42,53 @@ const bundledInputsFor = async (
 };
 
 describe("SDK provider import graphs", () => {
-	test("public SDK core does not bundle built-in providers, catalog, or generated metadata", async () => {
+	test("package exports omit legacy Connections and Catalog surfaces but retain the dormant cleanup seam", async () => {
+		const packageManifest = (await Bun.file(
+			path.join(AI_ROOT, "package.json")
+		).json()) as Readonly<{ exports: Readonly<Record<string, unknown>> }>;
+		const exportNames = Object.keys(packageManifest.exports);
+
+		expect(exportNames).not.toContain(".");
+		expect(exportNames).not.toContain("./model");
+		expect(exportNames).not.toContain("./model-client");
+		expect(exportNames).not.toContain("./model-target");
+		expect(exportNames).not.toContain("./model-provider-options");
+		expect(exportNames).not.toContain("./connections");
+		expect(exportNames).not.toContain("./models");
+		expect(exportNames).not.toContain("./models-dev");
+		expect(exportNames).not.toContain("./catalog");
+		expect(exportNames).toContain("./connections/legacy-cleanup");
+	});
+
+	test("public SDK core does not bundle built-in providers or obsolete model-policy metadata", async () => {
 		const inputs = await bundledInputsFor(path.join(AI_ROOT, "src/sdk.ts"));
 		expect(
 			inputs.some((inputPath) => SDK_PROVIDER_MODULE.test(inputPath))
 		).toBe(false);
-		expect(inputs.some((inputPath) => FULL_MODEL_CATALOG.test(inputPath))).toBe(
-			false
-		);
+		expect(
+			inputs.some((inputPath) => OBSOLETE_MODEL_POLICY.test(inputPath))
+		).toBe(false);
 	});
 
-	test("DeepSeek and OpenRouter imports stay independent of peer providers and bundled model catalogs", async () => {
+	test("built-in Provider entry points do not bundle the removed ModelClient execution path", async () => {
+		for (const providerId of [
+			"anthropic",
+			"deepseek",
+			"google",
+			"openai",
+			"opencode-go",
+			"openrouter",
+		]) {
+			const inputs = await bundledInputsFor(
+				path.join(AI_ROOT, `src/sdk-providers/${providerId}.ts`)
+			);
+			expect(
+				inputs.some((inputPath) => LEGACY_MODEL_IMPLEMENTATION.test(inputPath))
+			).toBe(false);
+		}
+	});
+
+	test("DeepSeek and OpenRouter imports stay independent of peer providers and model sources", async () => {
 		for (const providerId of ["deepseek", "openrouter"]) {
 			const inputs = await bundledInputsFor(
 				path.join(AI_ROOT, `src/sdk-providers/${providerId}.ts`)
@@ -62,28 +101,27 @@ describe("SDK provider import graphs", () => {
 				)
 			).toBe(false);
 			expect(
-				inputs.some((inputPath) => FULL_MODEL_CATALOG.test(inputPath))
+				inputs.some((inputPath) => OBSOLETE_MODEL_POLICY.test(inputPath))
 			).toBe(false);
 			expect(
-				inputs.some((inputPath) => OPENROUTER_MODEL_CATALOG.test(inputPath))
+				inputs.some((inputPath) => OPENROUTER_MODEL_SOURCE.test(inputPath))
 			).toBe(false);
 		}
 	});
 
-	test("Google and OpenCode Go provider imports bundle only their own model and metadata artifacts", async () => {
+	test("Google and OpenCode Go imports bundle only their provider-owned models and metadata", async () => {
 		for (const providerId of ["google", "opencode-go"]) {
 			const inputs = await bundledInputsFor(
 				path.join(AI_ROOT, `src/sdk-providers/${providerId}.ts`)
 			);
 			expect(
-				inputs.some(
-					(inputPath) =>
-						SDK_PROVIDER_MODULE.test(inputPath) &&
-						!inputPath.endsWith(`/sdk-providers/${providerId}.ts`)
-				)
-			).toBe(false);
+				inputs
+					.filter((inputPath) => SDK_PROVIDER_MODULE.test(inputPath))
+					.map((inputPath) => path.basename(inputPath))
+					.toSorted()
+			).toEqual([`${providerId}.ts`, `${providerId}-models.ts`].toSorted());
 			expect(
-				inputs.some((inputPath) => FULL_MODEL_CATALOG.test(inputPath))
+				inputs.some((inputPath) => OBSOLETE_MODEL_POLICY.test(inputPath))
 			).toBe(false);
 			expect(
 				inputs.some((inputPath) =>
@@ -102,7 +140,7 @@ describe("SDK provider import graphs", () => {
 		).toBe(true);
 		expect(
 			googleInputs.some((inputPath) =>
-				inputPath.endsWith("generated/google-sdk-models.generated.ts")
+				inputPath.endsWith("sdk-providers/google-models.ts")
 			)
 		).toBe(true);
 
@@ -121,7 +159,7 @@ describe("SDK provider import graphs", () => {
 		).toBe(false);
 		expect(
 			openCodeGoInputs.some((inputPath) =>
-				inputPath.endsWith("generated/opencode-go-sdk-models.generated.ts")
+				inputPath.endsWith("sdk-providers/opencode-go-models.ts")
 			)
 		).toBe(true);
 		expect(

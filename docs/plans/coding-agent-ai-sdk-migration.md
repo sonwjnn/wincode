@@ -1,6 +1,6 @@
 # Coding-Agent → AI SDK migration plan
 
-Design only. ADR-0049 is the accepted target; PR #198 shipped the standalone SDK but did not migrate Coding-Agent. This plan defines implementation tickets and contract-first acceptance tests; it does not authorize deleting any real credentials or changing the running application now.
+Status: local implementation candidate under independent final review; non-releaseable. ADR-0049 is the accepted target; PR #198 shipped the standalone SDK but did not migrate Coding-Agent. The candidate applies this plan in the existing worktree, but authorizes neither real-credential deletion nor release. The #204 cleanup gate remains dormant until #209 review completes; wiring and activation require a separate reviewed change.
 
 ## Invariants across the cutover
 
@@ -21,7 +21,7 @@ Design only. ADR-0049 is the accepted target; PR #198 shipped the standalone SDK
 | M6 | Selection, settings and historical display | Model picker, defaults, Agent pins, Plugin `setModel`, Session restore, thinking/cache menus, pricing and compaction consume Provider Models instead of the static catalog. Absent model IDs stay visible but sends/compaction require explicit reselection; unknown cost is unknown and absent context limit disables threshold-based auto-compaction. | M3, M5 |
 | M7 | Removal and documentation cutover | Remove obsolete Connections facade/registry/vault, Model Catalog policy and Model Target paths after all consumers move; relocate any credential schema/protocol helper the SDK still needs before deletion. Supersede ADR-0012's allowlist rule, update the glossary from transitional to current language, onboarding docs and package exports. | M1–M6 |
 
-These are *ticket candidates in this document*, not GitHub issues. No branch push or remote issue was created by this design-only work.
+These remain *ticket candidates in this document*, not GitHub issues. This candidate work did not create remote issues or push changes.
 
 ## Integration gates
 

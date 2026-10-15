@@ -11,7 +11,7 @@ import type {
 	SessionMessageId,
 	SessionRecord,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
@@ -69,7 +69,7 @@ import {
 } from "../support/identifiers";
 import { createTestInputScheduler } from "../support/stateful-agent";
 
-const model: ChatModelSelection = {
+const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
@@ -123,6 +123,7 @@ const createPorts = ({
 	},
 	inputScheduler: createTestInputScheduler(),
 	resolveSubmission: (input) => input,
+	assertProviderModelSelection: () => undefined,
 	compaction,
 	resolveCompactionSettings: async () =>
 		fromPartial<ResolvedCompactionSettings>({
@@ -163,6 +164,60 @@ const createTestAgentSession = (
 		ports: createPorts({ compaction: compactionModule, ...overrides }),
 		sessionId: sessionId("agent-session-test"),
 	});
+test("rejects a Provider Model selection before Submission admission or persistence", async () => {
+	let recordCommits = 0;
+	let turnStarts = 0;
+	const rejectedReason =
+		"Plugin Provider model selection is not bound to its trusted source in this Session Host.";
+	const engine = createTestAgentSession([], undefined, {
+		assertProviderModelSelection: () => {
+			throw new Error(rejectedReason);
+		},
+		commitRecord: async () => {
+			recordCommits += 1;
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async () => {
+				turnStarts += 1;
+				return {};
+			},
+		},
+	});
+
+	const admission = await engine.prompt({
+		agent: agentId("build"),
+		composition: { files: [], text: "reject the unowned selection" },
+		model: {
+			modelId: modelId("collision-model"),
+			pluginProviderSource: {
+				pluginId: "trusted-plugin",
+				sourceIdentity: "/trusted/provider.ts",
+			},
+			providerId: "custom-provider",
+		},
+		resolvedAgent: fromPartial<ResolvedCodingAgent>({
+			id: agentId("build"),
+			instructions: "",
+			visibleCodingTools: [],
+		}),
+		sessionModel: {
+			modelId: modelId("collision-model"),
+			pluginProviderSource: {
+				pluginId: "trusted-plugin",
+				sourceIdentity: "/trusted/provider.ts",
+			},
+			providerId: "custom-provider",
+		},
+		userText: "reject the unowned selection",
+	});
+
+	expect(admission).toMatchObject({ rejected: true, reason: rejectedReason });
+	expect(recordCommits).toBe(0);
+	expect(turnStarts).toBe(0);
+	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
+	await engine.internalPort.shutdown();
+});
 test("serializes Session Record writes in Agent Session order after a failure", async () => {
 	const commitOrder: SessionMessageId[] = [];
 	const firstCommitStarted = Promise.withResolvers<void>();
@@ -1117,8 +1172,8 @@ const createQueuedRuntime = ({
 	readonly runtime: AgentSessionPorts["turnRunner"];
 	/** Resolves once `count` Agent Turns have started. */
 	readonly started: (count: number) => Promise<void>;
-	/** The Model Target selection each started turn ran with, in start order. */
-	readonly targets: Array<{
+	/** The Provider Model selection each started turn ran with, in start order. */
+	readonly selections: Array<{
 		model: ProviderModelSelection;
 		thinkingLevel: ThinkingLevel | undefined;
 	}>;
@@ -1130,7 +1185,7 @@ const createQueuedRuntime = ({
 	}> = [];
 	const gates: Array<() => void> = [];
 	const prompts: string[] = [];
-	const targets: Array<{
+	const selections: Array<{
 		model: ProviderModelSelection;
 		thinkingLevel: ThinkingLevel | undefined;
 	}> = [];
@@ -1165,7 +1220,7 @@ const createQueuedRuntime = ({
 			requestOverheadTokens: () => 0,
 			run: async ({ callbacks, execution, messages, takeSteeringMessages }) => {
 				prompts.push(promptOfTurn(messages));
-				targets.push({
+				selections.push({
 					model: execution.model,
 					thinkingLevel: execution.thinkingLevel,
 				});
@@ -1222,7 +1277,7 @@ const createQueuedRuntime = ({
 			},
 		},
 		started: (count) => awaited(startWaiters, startedCount, count),
-		targets,
+		selections,
 	};
 };
 
@@ -1465,7 +1520,7 @@ test("interruptAll recalls queued attachments before externalization completes",
 
 test("continue resumes the last user context without appending another prompt", async () => {
 	const runtime = createQueuedRuntime();
-	const refreshedModel: ChatModelSelection = {
+	const refreshedModel: ProviderModelSelection = {
 		modelId: modelId("gpt-5.6-luna-pro"),
 		providerId: "openai",
 	};
@@ -1493,7 +1548,7 @@ test("continue resumes the last user context without appending another prompt", 
 	await runtime.started(1);
 
 	expect(runtime.prompts).toEqual(["continue me"]);
-	expect(runtime.targets).toEqual([
+	expect(runtime.selections).toEqual([
 		{
 			model: refreshedModel,
 			thinkingLevel: undefined,
@@ -2916,7 +2971,7 @@ test("delivers Steering Messages in the order they were accepted", async () => {
 	]);
 });
 
-test("keeps the Model Target of the turn a Steering Message joined", async () => {
+test("keeps the Provider Model selection of the turn a Steering Message joined", async () => {
 	const runtime = createQueuedRuntime({ boundary: true });
 	const commits: SessionRecord[] = [];
 	const engine = createTestAgentSession([], undefined, {
@@ -2925,7 +2980,7 @@ test("keeps the Model Target of the turn a Steering Message joined", async () =>
 		},
 		turnRunner: runtime.runtime,
 	});
-	const otherModel: ChatModelSelection = {
+	const otherModel: ProviderModelSelection = {
 		modelId: modelId("gpt-5.6-luna-pro"),
 		providerId: "openai",
 	};
@@ -2933,16 +2988,16 @@ test("keeps the Model Target of the turn a Steering Message joined", async () =>
 	const first = engine.send(sendInput({ userText: "one" }));
 	await runtime.started(1);
 	// The composer's selection changes while the turn runs: the correction still
-	// joins the turn on the Model Target that turn already runs with.
+	// joins the turn on the Provider Model selection that turn already runs with.
 	await engine.send(sendInput({ model: otherModel, userText: "correction" }));
 	expect((await engine.steer()).kind).toBe("steered");
 
 	runtime.release();
 	await first;
 
-	// The turn ran on its own Model Target, and the delivered message records
-	// that same one rather than the composer's newer selection.
-	expect(runtime.targets).toEqual([{ model, thinkingLevel: undefined }]);
+	// The turn ran on its own Provider Model selection, and the delivered
+	// message records that same one rather than the composer's newer selection.
+	expect(runtime.selections).toEqual([{ model, thinkingLevel: undefined }]);
 	expect(commits[1]?.messages[0]?.metadata?.model).toEqual(model);
 });
 
@@ -2978,12 +3033,12 @@ test("runs a committed Submission in a new turn when the active run has no safe 
 	]);
 });
 
-test("keeps the active Model Target when a committed Submission falls back to a new turn", async () => {
+test("keeps the active Provider Model selection when a committed Submission falls back to a new turn", async () => {
 	const runtime = createQueuedRuntime();
 	const engine = createTestAgentSession([], undefined, {
 		turnRunner: runtime.runtime,
 	});
-	const otherModel: ChatModelSelection = {
+	const otherModel: ProviderModelSelection = {
 		modelId: modelId("gpt-5.6-luna-pro"),
 		providerId: "openai",
 	};
@@ -2996,9 +3051,9 @@ test("keeps the active Model Target when a committed Submission falls back to a 
 	runtime.release();
 	await runtime.started(2);
 
-	// The new turn uses the Model Target that committed the Submission, not the
-	// composer's changed selection.
-	expect(runtime.targets).toEqual([
+	// The new turn uses the Provider Model selection that committed the
+	// Submission, not the composer's changed selection.
+	expect(runtime.selections).toEqual([
 		{ model, thinkingLevel: undefined },
 		{ model, thinkingLevel: undefined },
 	]);
@@ -3180,7 +3235,7 @@ test("recall and interrupt withdraw the queue tail before steering drains it", a
 	}
 });
 
-test("runs a queued submission with the Model Target selection it was accepted with", async () => {
+test("runs a queued submission with the Provider Model selection it was accepted with", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();
 	const engine = createTestAgentSession(
@@ -3188,7 +3243,7 @@ test("runs a queued submission with the Model Target selection it was accepted w
 		createCompactionModule(summaryGenerator),
 		{ turnRunner: runtime.runtime }
 	);
-	const queuedModel: ChatModelSelection = {
+	const queuedModel: ProviderModelSelection = {
 		modelId: modelId("gpt-5.6-luna-pro"),
 		providerId: "openai",
 	};
@@ -3201,7 +3256,7 @@ test("runs a queued submission with the Model Target selection it was accepted w
 	await runtime.started(1);
 	// The selection the submission was accepted with is the one that runs, even
 	// though the session's own selection could change while it waits.
-	expect(runtime.targets).toEqual([
+	expect(runtime.selections).toEqual([
 		{ model: queuedModel, thinkingLevel: undefined },
 	]);
 

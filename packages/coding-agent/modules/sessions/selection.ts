@@ -1,13 +1,9 @@
 import { type AgentId, agentIdSchema } from "@wincode/agent-core";
 import {
-	defaultChatModelSelection,
-	isSupportedThinkingLevel,
-	normalizeChatModelSelection,
-	normalizeThinkingSelection,
 	type ThinkingLevel,
 	type ThinkingSelection,
 	thinkingLevelSchema,
-} from "@wincode/ai/models";
+} from "@wincode/ai/sdk";
 import {
 	isPlainObject,
 	isString,
@@ -17,9 +13,11 @@ import {
 import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import {
-	catalogSelectionForProviderModel,
+	DEFAULT_PROVIDER_MODEL_SELECTION,
+	isSameProviderModelIdentity,
 	normalizeProviderModelSelection,
 	type ProviderModelSelection,
+	parseProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
 import type { SkillRequestContext } from "@/modules/skills";
 import type { SessionMessage } from "./message";
@@ -77,7 +75,7 @@ export const resolveSessionSdkSelectionDefaults = (
 		(candidate) => candidate.id === agent
 	);
 	const model =
-		options.model ?? selectedAgent?.model ?? defaultChatModelSelection;
+		options.model ?? selectedAgent?.model ?? DEFAULT_PROVIDER_MODEL_SELECTION;
 	return {
 		agent,
 		model,
@@ -189,11 +187,7 @@ const findLastUsedThinkingSelection = (
 			continue;
 		}
 		const metadataModel = normalizeProviderModelSelection(metadata.model);
-		if (
-			!metadataModel ||
-			metadataModel.modelId !== model.modelId ||
-			metadataModel.providerId !== model.providerId
-		) {
+		if (!(metadataModel && isSameProviderModelIdentity(metadataModel, model))) {
 			continue;
 		}
 		const thinking = normalizeSelectionChoice(model, metadata.thinkingLevel);
@@ -206,7 +200,7 @@ const findLastUsedThinkingSelection = (
 
 const normalizeSelection = (model: unknown): ProviderModelSelection | null => {
 	if (isString(model)) {
-		return normalizeChatModelSelection(model);
+		return parseProviderModelSelection(model);
 	}
 
 	if (isPlainObject(model)) {
@@ -258,20 +252,12 @@ export const getOriginatingUserSkill = (
  * Parses one Thinking Level against the model that will run it, or throws when
  * the level is not one the model supports.
  */
-export const strictThinkingSelection = (
-	model: ProviderModelSelection,
-	value: unknown
-): ThinkingSelection => {
+export const strictThinkingSelection = (value: unknown): ThinkingSelection => {
 	if (value === undefined) {
 		return {};
 	}
-	const catalogModel = catalogSelectionForProviderModel(model);
 	const parsed = thinkingLevelSchema.safeParse(value);
-	if (
-		!parsed.success ||
-		(catalogModel !== null &&
-			!isSupportedThinkingLevel(catalogModel, parsed.data))
-	) {
+	if (!parsed.success) {
 		throw new Error("Thinking level is unavailable for the selected model.");
 	}
 	return { thinkingLevel: parsed.data };
@@ -345,16 +331,14 @@ export const resolveSessionSelection = ({
 };
 
 const normalizeSelectionChoice = (
-	model: ProviderModelSelection,
+	_model: ProviderModelSelection,
 	thinkingLevel: ThinkingLevel | undefined
 ): ThinkingSelection => {
 	if (isUndefined(thinkingLevel)) {
 		return {};
 	}
-	const catalogModel = catalogSelectionForProviderModel(model);
-	return catalogModel === null
-		? { thinkingLevel }
-		: normalizeThinkingSelection(catalogModel, { thinkingLevel });
+	const parsed = thinkingLevelSchema.safeParse(thinkingLevel);
+	return parsed.success ? { thinkingLevel: parsed.data } : {};
 };
 
 const hasThinkingSelection = (choice: ThinkingSelection): boolean =>

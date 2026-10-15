@@ -1,10 +1,7 @@
 import * as os from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
-import { createConnections } from "@wincode/ai/connections";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
-import { ConnectionsProvider } from "@/modules/connections";
-import { ModelPricingProvider } from "@/modules/model-pricing";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
@@ -20,8 +17,6 @@ import {
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
 import { CommandControllerProvider } from "../commands/command-controller-provider";
 import { SettingsProviders } from "./settings-providers";
-
-const connections = createConnections();
 
 setInteractiveCleanup(async () => {
 	const interactiveRuntime = getInteractiveRuntimeContext();
@@ -69,24 +64,20 @@ export function RootLayout() {
 	return (
 		<ConfigProvider value={configContext}>
 			<ToastProvider>
-				<ConnectionsProvider connections={connections}>
-					<AgentRegistryProvider>
-						<KeyboardLayerProvider>
-							<SettingsProviders>
-								<ModelPricingProvider>
-									<DialogProvider>
-										<CopyOnSelectFromSettings />
-										<DialogProvider>
-											<CommandControllerProvider>
-												<Outlet key={currentPath} />
-											</CommandControllerProvider>
-										</DialogProvider>
-									</DialogProvider>
-								</ModelPricingProvider>
-							</SettingsProviders>
-						</KeyboardLayerProvider>
-					</AgentRegistryProvider>
-				</ConnectionsProvider>
+				<AgentRegistryProvider>
+					<KeyboardLayerProvider>
+						<SettingsProviders>
+							<DialogProvider>
+								<CopyOnSelectFromSettings />
+								<DialogProvider>
+									<CommandControllerProvider>
+										<Outlet key={currentPath} />
+									</CommandControllerProvider>
+								</DialogProvider>
+							</DialogProvider>
+						</SettingsProviders>
+					</KeyboardLayerProvider>
+				</AgentRegistryProvider>
 			</ToastProvider>
 		</ConfigProvider>
 	);

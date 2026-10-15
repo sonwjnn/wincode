@@ -1,6 +1,6 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
-import type { ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import {
 	index,
 	integer,

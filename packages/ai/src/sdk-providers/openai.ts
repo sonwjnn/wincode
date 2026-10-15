@@ -1,23 +1,6 @@
 import type { JsonObject } from "type-fest";
-import { openAICredentialSchema } from "../connections/credential-schemas.ts";
+import { openAICredentialSchema } from "../credential-schemas.ts";
 import { openAIProviderModelMetadataById } from "../generated/openai-provider-model-metadata.generated.ts";
-import {
-	httpErrorFromResponse,
-	isCacheControlRejection,
-	ModelProviderError,
-} from "../model-client/errors.ts";
-import { openAIChatStrategy } from "../model-client/protocols/openai-chat.ts";
-import { openAIResponsesStrategy } from "../model-client/protocols/openai-responses.ts";
-import { unreachableValue } from "../model-client/protocols/shared.ts";
-import type { ModelProtocolStrategy } from "../model-client/protocols/types";
-import type {
-	ModelPromptMessage,
-	ModelPromptPart,
-	ModelStepRequest,
-	ModelTool,
-} from "../model-client/types";
-import type { ModelTarget } from "../model-target";
-import type { SupportedChatModel } from "../models";
 import {
 	type ChatContentPart,
 	maxOutputTokensForRequest,
@@ -36,6 +19,22 @@ import {
 	OpenAIOAuthRefreshError,
 	refreshOpenAIOAuthCredential,
 } from "../sdk-private/openai-oauth.ts";
+import {
+	httpErrorFromResponse,
+	isCacheControlRejection,
+	ProviderProtocolError,
+} from "../sdk-private/protocol-errors.ts";
+import { openAIChatStrategy } from "../sdk-private/protocols/openai-chat.ts";
+import { openAIResponsesStrategy } from "../sdk-private/protocols/openai-responses.ts";
+import type {
+	ProtocolPromptMessage,
+	ProtocolPromptPart,
+	ProtocolTool,
+	ProviderProtocolRequest,
+} from "../sdk-private/protocols/request.ts";
+import { unreachableValue } from "../sdk-private/protocols/shared.ts";
+import type { ModelProtocolStrategy } from "../sdk-private/protocols/types.ts";
+import { openAIDefaultModelIds } from "./openai-models.ts";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_RESPONSES_PROTOCOL = "openai-responses";
@@ -43,35 +42,27 @@ const OPENAI_CHAT_PROTOCOL = "openai-chat";
 const OPENAI_OAUTH_RESPONSES_URL =
 	"https://chatgpt.com/backend-api/codex/responses";
 const TRAILING_SLASHES = /\/+$/u;
-const DEFAULT_MODELS: readonly ProviderModel[] = [
-	"gpt-5.6",
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gpt-6-sol",
-	"gpt-6.1-sol",
-	"gpt-6-luna",
-	"gpt-6-terra",
-	"gpt-6-astra",
-].map((modelId) => {
-	const metadata = openAIProviderModelMetadataById[modelId];
-	return {
-		modelId,
-		protocolId: OPENAI_RESPONSES_PROTOCOL,
-		providerId: OPENAI_PROVIDER_ID,
-		...(metadata?.limits === undefined ? {} : { limits: metadata.limits }),
-		...(metadata?.pricing === undefined ? {} : { pricing: metadata.pricing }),
-		...(metadata?.promptCacheRetentionTiers === undefined
-			? {}
-			: { promptCacheRetentionTiers: metadata.promptCacheRetentionTiers }),
-		...(metadata?.promptCacheRetentionTtlMs === undefined
-			? {}
-			: { promptCacheRetentionTtlMs: metadata.promptCacheRetentionTtlMs }),
-		...(metadata?.reasoningEfforts === undefined
-			? {}
-			: { reasoningEfforts: metadata.reasoningEfforts }),
-	};
-});
+const DEFAULT_MODELS: readonly ProviderModel[] = openAIDefaultModelIds.map(
+	(modelId) => {
+		const metadata = openAIProviderModelMetadataById[modelId];
+		return {
+			modelId,
+			protocolId: OPENAI_RESPONSES_PROTOCOL,
+			providerId: OPENAI_PROVIDER_ID,
+			...(metadata?.limits === undefined ? {} : { limits: metadata.limits }),
+			...(metadata?.pricing === undefined ? {} : { pricing: metadata.pricing }),
+			...(metadata?.promptCacheRetentionTiers === undefined
+				? {}
+				: { promptCacheRetentionTiers: metadata.promptCacheRetentionTiers }),
+			...(metadata?.promptCacheRetentionTtlMs === undefined
+				? {}
+				: { promptCacheRetentionTtlMs: metadata.promptCacheRetentionTtlMs }),
+			...(metadata?.reasoningEfforts === undefined
+				? {}
+				: { reasoningEfforts: metadata.reasoningEfforts }),
+		};
+	}
+);
 
 export type OpenAIAuthorization =
 	| Readonly<{ apiKey: string; kind: "api-key" }>
@@ -134,17 +125,7 @@ const parseAuthorization = (value: unknown): OpenAIAuthorization => {
 	throw new ProviderError("authentication", "OpenAI authorization is invalid.");
 };
 
-const modelForProtocol = (model: ProviderModel): SupportedChatModel =>
-	({
-		connectionProviderId: OPENAI_PROVIDER_ID,
-		displayName: model.modelId,
-		id: model.modelId as SupportedChatModel["id"],
-		lifecycle: "active",
-		provider: OPENAI_PROVIDER_ID,
-		route: "direct",
-	}) as SupportedChatModel;
-
-const promptPart = (part: ChatContentPart): ModelPromptPart => {
+const promptPart = (part: ChatContentPart): ProtocolPromptPart => {
 	switch (part.type) {
 		case "text":
 			return part;
@@ -163,7 +144,7 @@ const promptPart = (part: ChatContentPart): ModelPromptPart => {
 
 const promptMessage = (
 	message: ProviderChatRequest["messages"][number]
-): ModelPromptMessage => ({
+): ProtocolPromptMessage => ({
 	...(message.role === "assistant" && message.continuation !== undefined
 		? { continuation: message.continuation }
 		: {}),
@@ -174,31 +155,10 @@ const promptMessage = (
 const modelRequestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
-	authorization: OpenAIAuthorization,
 	cacheRetention: ProviderChatRequest["cacheRetention"]
-): ModelStepRequest => {
-	const targetAuthorization =
-		authorization.kind === "api-key"
-			? { apiKey: authorization.apiKey, kind: "api-key" as const }
-			: {
-					accessToken: authorization.accessToken,
-					accountId: authorization.accountId,
-					kind: "oauth" as const,
-				};
-	const target: ModelTarget = {
-		authorization: targetAuthorization,
-		modelId: context.model.modelId as Extract<
-			ModelTarget,
-			{ providerId: "openai" }
-		>["modelId"],
-		providerId: OPENAI_PROVIDER_ID,
-		...(cacheRetention === undefined
-			? {}
-			: {
-					promptCacheEnabled: true,
-					promptCacheRetention: cacheRetention,
-				}),
-	};
+): ProviderProtocolRequest => {
+	const promptCacheEnabled =
+		cacheRetention !== undefined || request.promptCacheKey !== undefined;
 	const reasoningEffort =
 		!request.cacheWarming &&
 		request.reasoningEffort !== undefined &&
@@ -206,12 +166,19 @@ const modelRequestFor = (
 			? request.reasoningEffort
 			: undefined;
 	return {
+		...(request.cacheWarming === true ? { cacheWarming: true } : {}),
+		...(promptCacheEnabled ? { promptCacheEnabled: true } : {}),
+		...(cacheRetention === undefined
+			? {}
+			: { promptCacheRetention: cacheRetention }),
 		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
 		messages: request.messages.map(promptMessage),
-		promptCacheKey: request.promptCacheKey,
+		modelId: context.model.modelId,
+		...(request.promptCacheKey === undefined
+			? {}
+			: { promptCacheKey: request.promptCacheKey }),
 		signal: context.signal,
 		system: request.system,
-		target,
 		tools: request.tools?.map(
 			(tool) =>
 				({
@@ -220,7 +187,7 @@ const modelRequestFor = (
 						: { description: tool.description }),
 					inputSchema: tool.inputSchema as JsonObject,
 					name: tool.name,
-				}) as ModelTool
+				}) as ProtocolTool
 		),
 	};
 };
@@ -240,13 +207,8 @@ const wireRequestFor = (
 	apiRoot: URL,
 	cacheRetention: ProviderChatRequest["cacheRetention"]
 ): OpenAIWireRequest => {
-	const model = modelForProtocol(context.model);
-	const modelRequest = modelRequestFor(
-		request,
-		context,
-		authorization,
-		cacheRetention
-	);
+	const model = context.model;
+	const modelRequest = modelRequestFor(request, context, cacheRetention);
 	const requestedMaxOutputTokens = maxOutputTokensForRequest(
 		request.maxOutputTokens,
 		context.model
@@ -337,7 +299,7 @@ const providerErrorFor = (error: unknown): ProviderError => {
 	if (error instanceof ProviderError) {
 		return error;
 	}
-	if (error instanceof ModelProviderError) {
+	if (error instanceof ProviderProtocolError) {
 		if (error.statusCode === 401 || error.statusCode === 403) {
 			return new ProviderError(
 				"authentication",
@@ -541,5 +503,5 @@ export const createOpenAIProvider = (
 	};
 };
 
-export type { OpenAICredential } from "../connections/credential-schemas.ts";
+export type { OpenAICredential } from "../credential-schemas.ts";
 export type { OpenAIBrowserLoginOptions } from "../sdk-private/openai-oauth.ts";

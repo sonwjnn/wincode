@@ -1,23 +1,4 @@
-import { fromPartial } from "@total-typescript/shoehorn";
-import type { SessionMessageId } from "@wincode/agent-core";
-import { toSubmissionId } from "@wincode/agent-core";
-import { isUndefined } from "@wincode/utils";
-import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
-import {
-	agentTurnId,
-	compactionId,
-	toolCallId as makeToolCallId,
-	modelId,
-	queuedSubmissionId,
-	sessionId,
-	sessionMessageId,
-} from "../support/identifiers";
-
-// The model pricing provider fetches a remote table unless offline mode is
-// enabled, so tests opt out before any app module evaluates the environment.
-process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
-
-import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -37,13 +18,13 @@ import {
 	createRouter,
 	RouterContextProvider,
 } from "@tanstack/react-router";
-import { createConnections } from "@wincode/ai/connections";
+import { fromPartial } from "@total-typescript/shoehorn";
+import type { SessionMessageId } from "@wincode/agent-core";
+import { toSubmissionId } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai/sdk";
+import { isUndefined } from "@wincode/utils";
 import { act, useEffect, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
-import { ConnectionsProvider } from "@/modules/connections";
-import { ModelPricingProvider } from "@/modules/model-pricing";
-import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
 import {
 	PromptConfigProvider,
 	usePromptConfig,
@@ -51,6 +32,7 @@ import {
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
+import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -68,6 +50,15 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import {
+	agentTurnId,
+	compactionId,
+	toolCallId as makeToolCallId,
+	modelId,
+	queuedSubmissionId,
+	sessionId,
+	sessionMessageId,
+} from "../support/identifiers";
 
 beforeAll(() => {
 	// Text parts map through MarkdownMessagePart; the mock client keeps block
@@ -77,15 +68,7 @@ beforeAll(() => {
 	);
 });
 
-// These tests render the provider without a pricing prop, so keep it off the
-// developer's real pricing cache: only the bundled snapshot should show.
-const readModelPricingCacheSpy = spyOn(
-	modelPricingCacheModule,
-	"readModelPricingCache"
-).mockReturnValue(null);
-
 afterAll(() => {
-	readModelPricingCacheSpy.mockRestore();
 	setMarkdownTreeSitterClientForTests(null);
 });
 
@@ -331,35 +314,31 @@ const renderChatShell = async (
 				value={{ configStore, homeRoot: os.homedir(), workspace }}
 			>
 				<ToastProvider>
-					<ConnectionsProvider connections={createConnections()}>
-						<AgentRegistryProvider>
-							<KeyboardLayerProvider>
-								<PromptConfigProvider>
-									<ModelPricingProvider>
-										<DialogProvider>
-											<RouterContextProvider router={router}>
-												<CommandControllerProvider>
-													<ChatShellProbe
-														activeMessages={activeMessages}
-														agentHolder={agent}
-														holder={holder}
-														initialCompactions={initialCompactions}
-														initialMessages={initialMessages}
-														isBusy={isBusy}
-														isCompacting={isCompacting}
-														isInterruptArmed={isInterruptArmed}
-														onRetry={onRetry}
-														providerController={providerController}
-														queuedSubmissions={queuedSubmissions}
-													/>
-												</CommandControllerProvider>
-											</RouterContextProvider>
-										</DialogProvider>
-									</ModelPricingProvider>
-								</PromptConfigProvider>
-							</KeyboardLayerProvider>
-						</AgentRegistryProvider>
-					</ConnectionsProvider>
+					<AgentRegistryProvider>
+						<KeyboardLayerProvider>
+							<PromptConfigProvider>
+								<DialogProvider>
+									<RouterContextProvider router={router}>
+										<CommandControllerProvider>
+											<ChatShellProbe
+												activeMessages={activeMessages}
+												agentHolder={agent}
+												holder={holder}
+												initialCompactions={initialCompactions}
+												initialMessages={initialMessages}
+												isBusy={isBusy}
+												isCompacting={isCompacting}
+												isInterruptArmed={isInterruptArmed}
+												onRetry={onRetry}
+												providerController={providerController}
+												queuedSubmissions={queuedSubmissions}
+											/>
+										</CommandControllerProvider>
+									</RouterContextProvider>
+								</DialogProvider>
+							</PromptConfigProvider>
+						</KeyboardLayerProvider>
+					</AgentRegistryProvider>
 				</ToastProvider>
 			</ConfigProvider>
 		</ThemeProvider>,
@@ -1190,7 +1169,8 @@ describe("ChatShell activity footer", () => {
 			const loadingFrame = setup.captureCharFrame();
 			expect(loadingFrame).toContain("Compacting context... (esc to cancel)");
 			expect(loadingFrame).toContain("Compacting context · Esc cancel");
-			expect(loadingFrame).toContain("1%(7.3K/1.1M)");
+			expect(loadingFrame).toContain("7.3K cost unknown");
+			expect(loadingFrame).not.toContain("1%(7.3K/1.1M)");
 			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
 
 			await Bun.sleep(2000);

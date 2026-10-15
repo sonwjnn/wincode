@@ -1,17 +1,13 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type {
-	ModelPromptMessage,
-	ModelStepRequest,
-} from "@wincode/ai/model-client";
-import { createModelTarget } from "@wincode/ai/model-target";
 import {
+	type ChatMessage,
 	type ChatRequest,
 	createProviderCollection,
 	type Provider,
 	type ProviderCollection,
+	type ProviderModel,
 } from "@wincode/ai/sdk";
 import { createOpenAIProvider } from "@wincode/ai/sdk/providers/openai";
-import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import {
 	computeCacheWarmDelayMs,
 	createSessionCacheWarming,
@@ -21,7 +17,7 @@ import type {
 	CreateSessionUsageEntryInput,
 	SessionUsageEntry,
 } from "@/modules/sessions/storage/session-store";
-import { modelId, sessionId } from "./support/identifiers";
+import { sessionId } from "./support/identifiers";
 
 const originalFetch = globalThis.fetch;
 
@@ -32,30 +28,24 @@ afterEach(() => {
 
 const createWarmRequest = (
 	prompt = "current prompt"
-): { messages: ModelPromptMessage[]; request: ModelStepRequest } => {
-	const messages = [
+): { messages: ChatMessage[]; request: ChatRequest } => {
+	const messages: ChatMessage[] = [
 		{
-			content: [{ text: prompt, type: "text" as const }],
-			role: "user" as const,
+			content: [{ text: prompt, type: "text" }],
+			role: "user",
 		},
 	];
-	const target = createModelTarget(
-		{ modelId: modelId("gpt-5.6"), providerId: "openai" },
-		{ apiKey: "test-key", kind: "api-key" },
-		{
-			maxOutputTokens: 100,
-			promptCacheEnabled: true,
-			promptCacheRetention: "short",
-			thinkingLevel: "high",
-		}
-	);
 	return {
 		messages,
 		request: {
+			cacheRetention: "short",
+			maxOutputTokens: 100,
 			messages,
+			modelId: "gpt-5.6",
 			promptCacheKey: "wincode-session:test",
+			providerId: "openai",
+			reasoningEffort: "high",
 			system: "stable instructions",
-			target,
 		},
 	};
 };
@@ -93,23 +83,42 @@ const createEntryWriter = (): {
 	};
 };
 
+const createDefaultProviderCollection = (): ProviderCollection => {
+	const collection = createProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: () => ({ apiKey: "test-key", kind: "api-key" }),
+			set: () => undefined,
+		},
+		modelStore: { get: () => undefined, set: () => undefined },
+	});
+	const model: ProviderModel = {
+		modelId: "gpt-5.6",
+		pricing: {
+			cacheReadPerMillionTokensUsd: 0.4,
+			inputPerMillionTokensUsd: 4,
+			outputPerMillionTokensUsd: 20,
+		},
+		promptCacheRetentionTiers: ["short"],
+		promptCacheRetentionTtlMs: { short: 30 * 60_000 },
+		protocolId: "openai-responses",
+		providerId: "openai",
+	};
+	collection.register(createOpenAIProvider({ models: [model] }));
+	return collection;
+};
+
 const createWarming = (
 	store: {
 		createSessionUsageEntry: (
 			input: CreateSessionUsageEntryInput
 		) => Promise<SessionUsageEntry>;
 	},
-	providerCollection?: ProviderCollection,
-	getPricingTable: () => ModelPricingTable = () => ({
-		"openai/gpt-5.6": {
-			cost: { cacheRead: 0.4, input: 4, output: 20 },
-		},
-	})
+	providerCollection: ProviderCollection = createDefaultProviderCollection()
 ) =>
 	createSessionCacheWarming({
-		getPricingTable,
 		initialUsageEntries: [],
-		...(providerCollection === undefined ? {} : { providerCollection }),
+		providerCollection,
 		sessionId: sessionId("cache-warm-test"),
 		store,
 	});
@@ -153,10 +162,29 @@ describe("Session Cache Warming", () => {
 
 		expect(calls).toBe(1);
 		expect(body).toMatchObject({
+			input: [
+				{
+					content: [
+						{
+							prompt_cache_breakpoint: { mode: "explicit" },
+							text: "stable instructions",
+							type: "input_text",
+						},
+					],
+					role: "developer",
+					type: "message",
+				},
+				{
+					content: [{ text: "current prompt", type: "input_text" }],
+					role: "user",
+					type: "message",
+				},
+			],
 			max_output_tokens: 1,
+			model: "gpt-5.6",
 			prompt_cache_key: "wincode-session:test",
 			prompt_cache_options: { mode: "explicit", ttl: "30m" },
-			reasoning: { summary: "detailed" },
+			stream: true,
 		});
 		expect(JSON.stringify(body)).toContain("current prompt");
 		expect(JSON.stringify(body)).toContain("stable instructions");
@@ -247,18 +275,18 @@ describe("Session Cache Warming", () => {
 		await warming.dispose();
 	});
 
-	test("an SDK Model Step cancels legacy warm work without a ModelClient replay", async () => {
+	test("a new SDK Provider request cancels scheduled warm work before replay", async () => {
 		vi.useFakeTimers();
 		let calls = 0;
 		globalThis.fetch = (async () => {
 			calls += 1;
-			throw new Error("SDK turns must not replay through ModelClient.");
+			throw new Error("A cancelled SDK warm request must not dispatch.");
 		}) as unknown as typeof fetch;
 		const { entries, store } = createEntryWriter();
 		const warming = createWarming(store);
-		const legacyRequest = createWarmRequest().request;
-		warming.modelStepObserver.onModelStepStarted(legacyRequest);
-		warming.modelStepObserver.onModelStepFinished(legacyRequest, measuredUsage);
+		const warmRequest = createWarmRequest().request;
+		warming.modelStepObserver.onModelStepStarted(warmRequest);
+		warming.modelStepObserver.onModelStepFinished(warmRequest, measuredUsage);
 		expect(warming.getStatus()).toBe("scheduled");
 
 		const sdkRequest: ChatRequest = {
@@ -281,41 +309,6 @@ describe("Session Cache Warming", () => {
 		await flushPromises();
 		expect(calls).toBe(0);
 		expect(entries).toEqual([]);
-		await warming.dispose();
-	});
-
-	test("legacy cache warming skips OpenAI OAuth instead of issuing a bounded replay", async () => {
-		vi.useFakeTimers();
-		let calls = 0;
-		globalThis.fetch = (async () => {
-			calls += 1;
-			return new Response();
-		}) as unknown as typeof fetch;
-		const { store } = createEntryWriter();
-		const warming = createWarming(store);
-		const { request: apiKeyRequest } = createWarmRequest();
-		const request: ModelStepRequest = {
-			...apiKeyRequest,
-			target: createModelTarget(
-				{ modelId: modelId("gpt-5.6"), providerId: "openai" },
-				{
-					accessToken: "fixture-oauth-token",
-					accountId: "fixture-oauth-account",
-					kind: "oauth",
-				},
-				{
-					promptCacheEnabled: true,
-					promptCacheRetention: "short",
-				}
-			),
-		};
-
-		warming.modelStepObserver.onModelStepStarted(request);
-		warming.modelStepObserver.onModelStepFinished(request, measuredUsage);
-		expect(warming.getStatus()).toBe("idle");
-		vi.advanceTimersByTime(60 * 60_000);
-		await flushPromises();
-		expect(calls).toBe(0);
 		await warming.dispose();
 	});
 
@@ -386,18 +379,14 @@ describe("Session Cache Warming", () => {
 		await collection.close();
 	});
 
-	test("SDK warming gates on exact Provider Model prices without reading Catalog pricing", async () => {
+	test("Provider Model cache metadata enables warming without a pricing-table source", async () => {
 		vi.useFakeTimers();
-		let catalogPricingReads = 0;
 		const collection = createProviderCollection();
 		collection.register(
 			createOpenAIProvider({ fetch: async () => new Response() })
 		);
 		const { store } = createEntryWriter();
-		const warming = createWarming(store, collection, () => {
-			catalogPricingReads += 1;
-			throw new Error("SDK warming must not read Catalog pricing.");
-		});
+		const warming = createWarming(store, collection);
 		const request: ChatRequest = {
 			cacheRetention: "short",
 			messages: [
@@ -413,13 +402,12 @@ describe("Session Cache Warming", () => {
 		warming.modelStepObserver.onModelStepStarted(request);
 		warming.modelStepObserver.onModelStepFinished(request, measuredUsage);
 
-		expect(catalogPricingReads).toBe(0);
 		expect(warming.getStatus()).toBe("scheduled");
 		await warming.dispose();
 		await collection.close();
 	});
 
-	test("SDK-only Provider Models absent from Catalog can warm from exact metadata", async () => {
+	test("SDK-declared Provider Models warm from exact model metadata", async () => {
 		vi.useFakeTimers();
 		let authorizationCalls = 0;
 		let streamCalls = 0;
@@ -464,11 +452,7 @@ describe("Session Cache Warming", () => {
 			fixtureCredential: true,
 		});
 		const { entries, store } = createEntryWriter();
-		let catalogPricingReads = 0;
-		const warming = createWarming(store, collection, () => {
-			catalogPricingReads += 1;
-			throw new Error("SDK-only warming must not consult Catalog pricing.");
-		});
+		const warming = createWarming(store, collection);
 		const request: ChatRequest = {
 			cacheRetention: "short",
 			messages: [
@@ -487,7 +471,6 @@ describe("Session Cache Warming", () => {
 		vi.advanceTimersByTime(27 * 60_000);
 		await flushPromises();
 
-		expect(catalogPricingReads).toBe(0);
 		expect(authorizationCalls).toBe(1);
 		expect(streamCalls).toBe(1);
 		expect(receivedOutputTokenCap).toBe(1);
@@ -678,12 +661,8 @@ describe("Session Cache Warming", () => {
 				],
 			})
 		);
-		let catalogPricingReads = 0;
 		const { store } = createEntryWriter();
-		const warming = createWarming(store, collection, () => {
-			catalogPricingReads += 1;
-			throw new Error("SDK warming must not read Catalog pricing.");
-		});
+		const warming = createWarming(store, collection);
 		const request: ChatRequest = {
 			cacheRetention: "short",
 			messages: [
@@ -699,7 +678,6 @@ describe("Session Cache Warming", () => {
 		warming.modelStepObserver.onModelStepStarted(request);
 		warming.modelStepObserver.onModelStepFinished(request, measuredUsage);
 
-		expect(catalogPricingReads).toBe(0);
 		expect(warming.getStatus()).toBe("idle");
 		await warming.dispose();
 		await collection.close();
@@ -731,7 +709,7 @@ describe("Session Cache Warming", () => {
 		await warming.dispose();
 	});
 
-	test("an SDK Model Step aborts an in-flight legacy warmer", async () => {
+	test("a new SDK Provider request aborts an in-flight warm request", async () => {
 		vi.useFakeTimers();
 		let fetchSignal: AbortSignal | undefined;
 		const response = Promise.withResolvers<Response>();
@@ -774,7 +752,7 @@ describe("Session Cache Warming", () => {
 		await warming.dispose();
 	});
 
-	test("isolates failed warm requests and unsafe or Google replays", async () => {
+	test("isolates failed warm requests and unsafe SDK replays", async () => {
 		vi.useFakeTimers();
 		let calls = 0;
 		globalThis.fetch = (async () => {
@@ -802,20 +780,6 @@ describe("Session Cache Warming", () => {
 		};
 		warming.modelStepObserver.onModelStepStarted(unsafe);
 		warming.modelStepObserver.onModelStepFinished(unsafe, measuredUsage);
-		expect(warming.getStatus()).toBe("idle");
-
-		const google = createModelTarget(
-			{ modelId: modelId("gemini-3.8-flash"), providerId: "google" },
-			{ apiKey: "test-key", kind: "api-key" },
-			{ promptCacheEnabled: true, promptCacheRetention: "short" }
-		);
-		const googleRequest: ModelStepRequest = {
-			googleCachedContent: { name: "cachedContents/resource" },
-			messages: [],
-			target: google,
-		};
-		warming.modelStepObserver.onModelStepStarted(googleRequest);
-		warming.modelStepObserver.onModelStepFinished(googleRequest, measuredUsage);
 		expect(warming.getStatus()).toBe("idle");
 
 		const belowSavingsThreshold = createWarmRequest().request;

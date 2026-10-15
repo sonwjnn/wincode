@@ -2,7 +2,7 @@ import type {
 	AgentTurnEvent,
 	AgentTurnTerminalEvent,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import {
 	type PluginSessionContext,
 	type ProviderModelSelection,

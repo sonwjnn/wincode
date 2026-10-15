@@ -60,14 +60,85 @@ test("manual Provider Model refresh notifies availability subscribers only when 
 	}
 });
 
+test("known Provider Model availability scopes credentials while global chooser discovery remains unscoped", async () => {
+	const credentialReads: string[] = [];
+	const selectedModel: ProviderModel = {
+		modelId: "selected-model",
+		protocolId: "fixture",
+		providerId: "openai",
+	};
+	const unrelatedModel: ProviderModel = {
+		modelId: "unrelated-model",
+		protocolId: "fixture",
+		providerId: "anthropic",
+	};
+	const collection = createProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: (providerId) => {
+				credentialReads.push(providerId);
+				return "fake-provider-key";
+			},
+			set: () => undefined,
+		},
+	});
+	for (const model of [selectedModel, unrelatedModel]) {
+		collection.register({
+			id: model.providerId,
+			models: [model],
+			resolveAuthorization: () => ({ authorization: "fake" }),
+			async *streamChat() {
+				yield { type: "finish" };
+			},
+		});
+	}
+	const controller = createInteractiveProviderController(collection, {
+		withSessionWork: async (action) => await action(),
+	});
+	try {
+		expect(await controller.getAvailableModels("openai")).toEqual([
+			selectedModel,
+		]);
+		expect(credentialReads).toEqual(["openai"]);
+		credentialReads.length = 0;
+		expect(await controller.getAvailableModels()).toEqual([
+			selectedModel,
+			unrelatedModel,
+		]);
+		expect(credentialReads).toEqual(["openai", "anthropic"]);
+		credentialReads.length = 0;
+		expect(
+			(
+				await controller.getAvailableProviderModelSelectionCandidates?.(
+					"openai"
+				)
+			)?.map(({ model }) => model)
+		).toEqual([selectedModel]);
+		expect(credentialReads).toEqual(["openai"]);
+		credentialReads.length = 0;
+		expect(
+			(await controller.getAvailableProviderModelSelectionCandidates?.())?.map(
+				({ model }) => model
+			)
+		).toEqual([selectedModel, unrelatedModel]);
+		expect(credentialReads).toEqual(["openai", "anthropic"]);
+	} finally {
+		await collection.close();
+	}
+});
+
 test("built-in API-key connection stores the secret without live validation or Plugin handoff", async () => {
 	const credentials = new Map<string, unknown>();
+	const credentialReadProviderIds: string[] = [];
 	let failCredentialWrites = false;
 	const credentialStore: CredentialStore = {
 		delete: (providerId) => {
 			credentials.delete(providerId);
 		},
-		get: (providerId) => credentials.get(providerId),
+		get: (providerId) => {
+			credentialReadProviderIds.push(providerId);
+			return credentials.get(providerId);
+		},
 		set: (providerId, credential) => {
 			if (failCredentialWrites) {
 				const apiKey =
@@ -178,6 +249,7 @@ test("built-in API-key connection stores the secret without live validation or P
 		expect(oauthModels.some(({ providerId }) => providerId === "openai")).toBe(
 			true
 		);
+		expect(credentialReadProviderIds).toEqual(["openai"]);
 		expect(availabilityNotifications).toBe(1);
 
 		const models = await controller.connectProviderApiKey(

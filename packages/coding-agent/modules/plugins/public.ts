@@ -6,8 +6,11 @@ import type {
 	ToolCallOutput,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/models";
-import type { Provider, ProviderModelSelection } from "@wincode/ai/sdk";
+import type {
+	Provider,
+	ProviderModelSelection,
+	ThinkingLevel,
+} from "@wincode/ai/sdk";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type {
