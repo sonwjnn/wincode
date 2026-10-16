@@ -43,6 +43,7 @@ import {
 import { resolveSessionSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionUsageEntry } from "../storage/session-store";
+import type { SessionWriterLock } from "../storage/session-writer-lock";
 import { createAgentSessionAdapters } from "./agent-session-adapters";
 import {
 	assertPluginProviderRegistrationSnapshot,
@@ -104,6 +105,48 @@ const waitForClosingHost = async (
 	const closing = closingHosts.get(sessionId);
 	if (closing !== undefined) {
 		await closing.catch(() => undefined);
+	}
+};
+
+const shutdownAfterSetupFailure = async (
+	shutdown: () => Promise<void>
+): Promise<void> => {
+	try {
+		await shutdown();
+	} catch {
+		void logger.warn("Session Host cleanup failed after setup failed.", {
+			operation: "session-host",
+			phase: "setup-cleanup",
+		});
+	}
+};
+
+const acquireSessionWriterForHost = async (
+	capabilities: SessionCapabilities,
+	sessionId: SessionHostOptions["sessionId"],
+	executionMode: SessionHostOptions["executionMode"],
+	providerCollection: ProviderCollection | undefined
+): Promise<SessionWriterLock> => {
+	try {
+		await waitForClosingHost(sessionId);
+		return await capabilities
+			.getStore()
+			.acquireSessionWriter(
+				sessionId,
+				executionMode === undefined ? {} : { executionMode }
+			);
+	} catch (error) {
+		if (providerCollection !== undefined) {
+			try {
+				await providerCollection.close();
+			} catch {
+				void logger.warn(
+					"Session Host could not close its ProviderCollection after setup failed.",
+					{ operation: "session-host", phase: "setup-cleanup" }
+				);
+			}
+		}
+		throw error;
 	}
 };
 /**
@@ -318,20 +361,20 @@ export const createSessionHost = async ({
 	providerCollection: prevalidatedProviderCollection,
 	sessionId,
 }: SessionHostOptions): Promise<SessionHost> => {
-	await waitForClosingHost(sessionId);
-	const sessionWriter = await capabilities
-		.getStore()
-		.acquireSessionWriter(
-			sessionId,
-			executionMode === undefined ? {} : { executionMode }
-		);
+	const sessionWriter = await acquireSessionWriterForHost(
+		capabilities,
+		sessionId,
+		executionMode,
+		prevalidatedProviderCollection
+	);
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
 	let agentSession: AgentSession | undefined;
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 	let statefulAgent: StatefulAgent<SessionQueuedSubmission> | undefined;
-	let providerCollection: ProviderCollection | undefined;
+	let providerCollection: ProviderCollection | undefined =
+		prevalidatedProviderCollection;
 	let providerController: InteractiveProviderController | undefined;
 	// The warmer belongs to the loaded Host, not a single Agent Turn; retain it across idle turns.
 	let cacheWarming: SessionCacheWarming | undefined;
@@ -710,7 +753,7 @@ export const createSessionHost = async ({
 			},
 		};
 	} catch (error) {
-		await shutdown();
+		await shutdownAfterSetupFailure(shutdown);
 		throw error;
 	}
 };

@@ -212,6 +212,28 @@ const createHostProviderCollection = async () => {
 		getPluginProviderRegistrations: (): readonly [] => [],
 	};
 };
+const createSessionHostCleanupCollection = (
+	close: () => Promise<void>
+): ProviderCollection => {
+	const collection = createProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: () => undefined,
+			set: () => undefined,
+		},
+		modelStore: { get: () => undefined, set: () => undefined },
+	});
+	collection.register({
+		id: "session-host-cleanup-test",
+		models: [],
+		resolveAuthorization: () => ({ authorization: {} }),
+		close,
+		async *streamChat() {
+			yield { type: "finish" };
+		},
+	});
+	return collection;
+};
 const installCacheWarmingStepScript = (): (() => void) => {
 	const previousStepScript = recorder.stepScript;
 	recorder.stepScript = async function* (request) {
@@ -919,6 +941,115 @@ test("Session Host Manager rejects restored ownerless Providers before ProviderC
 	} finally {
 		await manager.shutdownAll();
 		await store.deleteSession(restored.id);
+	}
+});
+
+test("Session Host Manager closes a transferred ProviderCollection when writer acquisition fails", async () => {
+	const manager = createSessionHostManager();
+	const { id: sessionId } = await store.createEmptySession({});
+	let providerCloseCalls = 0;
+	const providerCollection = createSessionHostCleanupCollection(async () => {
+		providerCloseCalls += 1;
+	});
+	const failingStore: SessionStore = {
+		...store,
+		acquireSessionWriter: async () => {
+			throw new Error("fake Session Writer acquisition failure");
+		},
+	};
+	const capabilities = createCapabilities(failingStore, {}, manager);
+	try {
+		await expect(
+			manager.openHost({ capabilities, providerCollection, sessionId })
+		).rejects.toThrow("fake Session Writer acquisition failure");
+		expect(providerCloseCalls).toBe(1);
+	} finally {
+		await manager.shutdownAll();
+		if (providerCloseCalls === 0) {
+			await providerCollection.close();
+		}
+		await store.deleteSession(sessionId);
+	}
+});
+
+test("Session Host closes a transferred ProviderCollection when the first store read fails", async () => {
+	const pluginRuntime = createEmptyPluginRuntime();
+	const manager = createSessionHostManagerWithRuntime(pluginRuntime);
+	const { id: sessionId } = await store.createEmptySession({});
+	let providerCloseCalls = 0;
+	const providerCollection = createSessionHostCleanupCollection(async () => {
+		providerCloseCalls += 1;
+	});
+	let sessionReads = 0;
+	const failingStore: SessionStore = {
+		...store,
+		getSession: async (requestedSessionId) => {
+			sessionReads += 1;
+			if (sessionReads === 2) {
+				throw new Error("fake Host Session read failure");
+			}
+			return store.getSession(requestedSessionId);
+		},
+	};
+	const capabilities = createCapabilities(failingStore, {}, manager, {
+		pluginRuntime,
+	});
+	try {
+		await expect(
+			manager.openHost({ capabilities, providerCollection, sessionId })
+		).rejects.toThrow("fake Host Session read failure");
+		expect(sessionReads).toBe(2);
+		expect(providerCloseCalls).toBe(1);
+	} finally {
+		await manager.shutdownAll();
+		await pluginRuntime.shutdown();
+		if (providerCloseCalls === 0) {
+			await providerCollection.close();
+		}
+		await store.deleteSession(sessionId);
+	}
+});
+
+test("Session Host preserves the setup error when Provider cleanup fails", async () => {
+	const pluginRuntime = createEmptyPluginRuntime();
+	const manager = createSessionHostManagerWithRuntime(pluginRuntime);
+	const { id: sessionId } = await store.createEmptySession({});
+	let providerCloseCalls = 0;
+	const staleRegistration: PluginProviderDescriptor = {
+		connect: async () => undefined,
+		createProvider: () => {
+			throw new Error("The stale Plugin Provider must not be constructed.");
+		},
+		displayName: "Stale cleanup fixture",
+		pluginId: "stale-cleanup-plugin",
+		providerId: "stale-cleanup-provider",
+		sourceIdentity: "/plugins/stale-cleanup.ts",
+		sourcePath: "/plugins/stale-cleanup.ts",
+	};
+	const providerCollection = Object.assign(
+		createSessionHostCleanupCollection(async () => {
+			providerCloseCalls += 1;
+			throw new Error("fake Provider cleanup failure");
+		}),
+		{ getPluginProviderRegistrations: () => [staleRegistration] }
+	);
+	const capabilities = createCapabilities(store, {}, manager, {
+		pluginRuntime,
+	});
+	try {
+		await expect(
+			manager.openHost({ capabilities, providerCollection, sessionId })
+		).rejects.toThrow(
+			"Session ProviderCollection Plugin Provider registrations do not match the current trusted registrations."
+		);
+		expect(providerCloseCalls).toBe(1);
+	} finally {
+		await manager.shutdownAll();
+		await pluginRuntime.shutdown();
+		if (providerCloseCalls === 0) {
+			await providerCollection.close().catch(() => undefined);
+		}
+		await store.deleteSession(sessionId);
 	}
 });
 
