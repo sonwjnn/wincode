@@ -11,6 +11,12 @@ import type {
 } from "@/modules/plugins/public";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
 import {
+	BUILT_IN_API_KEY_PROVIDER_OPTIONS,
+	BUILT_IN_PROVIDER_CATALOG,
+	OPENAI_PROVIDER_ID,
+	OPENROUTER_PROVIDER_ID,
+} from "@/modules/providers/built-in-provider-catalog";
+import {
 	arePluginProviderRegistrationsBoundToTrustedOwners,
 	createProviderModelSelectionSnapshot,
 	type ProviderModelSelection,
@@ -23,14 +29,7 @@ import {
 	UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE,
 } from "@/modules/providers/provider-model-selection";
 
-const OPENROUTER_PROVIDER_ID = "openrouter";
-const API_KEY_PROVIDER_OPTIONS = [
-	{ displayName: "OpenAI Provider SDK", providerId: "openai" },
-	{ displayName: "Anthropic Provider SDK", providerId: "anthropic" },
-	{ displayName: "Google Provider SDK", providerId: "google" },
-	{ displayName: "OpenCode Go Provider SDK", providerId: "opencode-go" },
-	{ displayName: "DeepSeek Provider SDK", providerId: "deepseek" },
-] as const;
+const API_KEY_PROVIDER_OPTIONS = BUILT_IN_API_KEY_PROVIDER_OPTIONS;
 const API_KEY_PROVIDER_IDS = new Set<string>(
 	API_KEY_PROVIDER_OPTIONS.map(({ providerId }) => providerId)
 );
@@ -595,15 +594,18 @@ export const createInteractiveProviderController = (
 					? []
 					: [
 							{
-								displayName: "OpenAI browser sign-in",
+								displayName:
+									BUILT_IN_PROVIDER_CATALOG[OPENAI_PROVIDER_ID]
+										.oauthDisplayName,
 								kind: "openai-oauth" as const,
-								providerId: "openai",
+								providerId: OPENAI_PROVIDER_ID,
 							},
 						]),
 				...(discoverableProviderIds.has(OPENROUTER_PROVIDER_ID)
 					? [
 							{
-								displayName: "OpenRouter Provider SDK",
+								displayName:
+									BUILT_IN_PROVIDER_CATALOG[OPENROUTER_PROVIDER_ID].displayName,
 								kind: "openrouter" as const,
 								providerId: OPENROUTER_PROVIDER_ID,
 							},

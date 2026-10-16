@@ -23,9 +23,9 @@ import {
 	isTrustedProjectPluginSource,
 	resolveProjectTrust,
 } from "@/modules/project-trust/project-trust";
+import { isBuiltInProviderId } from "@/modules/providers/built-in-provider-catalog";
 import {
 	isAvailableProviderModelSelection,
-	isBuiltInProviderId,
 	isPluginProviderSelectionBoundToTrustedOwner,
 	isSameProviderModelIdentity,
 	type ProviderModelSelection,

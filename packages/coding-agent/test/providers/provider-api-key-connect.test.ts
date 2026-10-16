@@ -226,8 +226,19 @@ test("built-in API-key connection stores the secret without live validation or P
 		expect(
 			connectable
 				.filter(({ kind }) => kind === "api-key")
-				.map(({ providerId }) => providerId)
-		).toEqual(["openai", "anthropic", "google", "opencode-go", "deepseek"]);
+				.map(({ displayName, providerId }) => ({ displayName, providerId }))
+		).toEqual([
+			{ displayName: "OpenAI Provider SDK", providerId: "openai" },
+			{ displayName: "Anthropic Provider SDK", providerId: "anthropic" },
+			{ displayName: "Google Provider SDK", providerId: "google" },
+			{ displayName: "OpenCode Go Provider SDK", providerId: "opencode-go" },
+			{ displayName: "DeepSeek Provider SDK", providerId: "deepseek" },
+		]);
+		expect(connectable).toContainEqual({
+			displayName: "OpenRouter Provider SDK",
+			kind: "openrouter",
+			providerId: "openrouter",
+		});
 		expect(
 			connectable.some(({ providerId }) => providerId === "fixture-plugin")
 		).toBe(true);

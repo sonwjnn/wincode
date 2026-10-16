@@ -10,6 +10,7 @@ import {
 	thinkingLevelIds,
 } from "@wincode/ai/sdk";
 import { z } from "zod";
+import { isBuiltInProviderId as isBuiltInProviderIdFromCatalog } from "@/modules/providers/built-in-provider-catalog";
 
 /** The trusted Plugin owner bound to a Session's exact Provider Model selection. */
 export type PluginProviderSelectionOwner = Readonly<{
@@ -144,18 +145,6 @@ export const DEFAULT_PROVIDER_MODEL_SELECTION: ProviderModelSelection = {
 	providerId: "openai",
 };
 
-const BUILT_IN_PROVIDER_IDS = new Set([
-	"openai",
-	"anthropic",
-	"google",
-	"opencode-go",
-	"deepseek",
-	"openrouter",
-]);
-
-export const isBuiltInProviderId = (providerId: string): boolean =>
-	BUILT_IN_PROVIDER_IDS.has(providerId);
-
 const pluginProviderSelectionOwnerSchema = z
 	.object({
 		pluginId: z.string().min(1),
@@ -212,7 +201,7 @@ export const providerModelSelectionCandidateForModel = (
 		({ providerId }) => providerId === model.providerId
 	);
 	let pluginProviderSource: PluginProviderSelectionOwner | undefined;
-	if (isBuiltInProviderId(model.providerId)) {
+	if (isBuiltInProviderIdFromCatalog(model.providerId)) {
 		if (trustedOwners.length > 0 || hostOwners.length > 0) {
 			return;
 		}
@@ -274,7 +263,10 @@ export const isPluginProviderSelectionBoundToTrustedOwner = (
 	);
 	const owner = selection.pluginProviderSource;
 	if (trustedOwners.length === 0 && (collectionOwners?.length ?? 0) === 0) {
-		return isBuiltInProviderId(selection.providerId) && owner === undefined;
+		return (
+			isBuiltInProviderIdFromCatalog(selection.providerId) &&
+			owner === undefined
+		);
 	}
 	if (
 		trustedOwners.length !== 1 ||
@@ -334,7 +326,7 @@ export const resolveProviderModelSelectionForHost = (
 	if (registrations.length === 0) {
 		if (
 			selection.pluginProviderSource !== undefined ||
-			!isBuiltInProviderId(selection.providerId)
+			!isBuiltInProviderIdFromCatalog(selection.providerId)
 		) {
 			return reject();
 		}

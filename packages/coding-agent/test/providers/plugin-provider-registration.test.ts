@@ -199,28 +199,25 @@ test("duplicate Plugin Provider IDs fail closed across trusted sources and built
 		})
 	).rejects.toThrow("Duplicate Provider ID 'duplicate_provider'.");
 
-	await expect(
-		createInteractiveSessionProviderCollection({
-			credentialStore: unusedCredentialStore,
-			pluginProviders: [
-				registrationFor(
-					"plugin_collision",
-					"openrouter",
-					"/trusted/collision.ts"
-				),
-			],
-		})
-	).rejects.toThrow("Duplicate Provider ID 'openrouter'.");
-	await expect(
-		createInteractiveSessionProviderCollection({
-			credentialStore: unusedCredentialStore,
-			pluginProviders: [
-				registrationFor(
-					"plugin_future_collision",
-					"anthropic",
-					"/trusted/anthropic.ts"
-				),
-			],
-		})
-	).rejects.toThrow("Duplicate Provider ID 'anthropic'.");
+	for (const providerId of [
+		"openai",
+		"anthropic",
+		"google",
+		"opencode-go",
+		"deepseek",
+		"openrouter",
+	]) {
+		await expect(
+			createInteractiveSessionProviderCollection({
+				credentialStore: unusedCredentialStore,
+				pluginProviders: [
+					registrationFor(
+						`plugin_collision_${providerId}`,
+						providerId,
+						`/trusted/${providerId}.ts`
+					),
+				],
+			})
+		).rejects.toThrow(`Duplicate Provider ID '${providerId}'.`);
+	}
 });

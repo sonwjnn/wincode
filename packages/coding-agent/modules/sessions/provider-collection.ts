@@ -36,11 +36,9 @@ import type {
 	PluginProviderDescriptor,
 	PluginRuntime,
 } from "@/modules/plugins/runtime";
+import { isBuiltInProviderId } from "@/modules/providers/built-in-provider-catalog";
 import type { PluginProviderComposition } from "@/modules/providers/interactive-provider-controller";
-import {
-	isBuiltInProviderId,
-	pluginProviderIdentityMatches,
-} from "@/modules/providers/provider-model-selection";
+import { pluginProviderIdentityMatches } from "@/modules/providers/provider-model-selection";
 import {
 	getProviderSdkStores,
 	pluginProviderStorageId,
@@ -184,8 +182,6 @@ const createFailClosedBackend = (): ProviderCollectionBackend =>
 		storageIds: new Map<string, string>(),
 	});
 
-const OPENROUTER_PROVIDER_ID = "openrouter";
-
 const closeProviderInstances = async (
 	providers: readonly Provider[]
 ): Promise<void> => {
@@ -202,41 +198,40 @@ const createProviderBackend = async (
 ): Promise<ProviderCollectionBackend> => {
 	const providers: Provider[] = [];
 	const storageIds = new Map<string, string>();
-	const addProvider = (provider: Provider, storageId: string): void => {
+	const addProvider = (provider: Provider, storageId = provider.id): void => {
 		providers.push(provider);
 		if (storageIds.has(provider.id)) {
 			throw new Error(`Duplicate Provider ID '${provider.id}'.`);
 		}
 		storageIds.set(provider.id, storageId);
 	};
+	const addBuiltInProvider = (provider: Provider): void => {
+		if (!isBuiltInProviderId(provider.id)) {
+			throw new Error(`Unknown built-in Provider ID '${provider.id}'.`);
+		}
+		addProvider(provider);
+	};
 	let openAIProvider: OpenAIProvider;
 	try {
 		openAIProvider = createOpenAIProvider(options.openAIProviderOptions);
-		addProvider(openAIProvider, "openai");
-		addProvider(
-			createAnthropicProvider(options.anthropicProviderOptions),
-			"anthropic"
+		addBuiltInProvider(openAIProvider);
+		addBuiltInProvider(
+			createAnthropicProvider(options.anthropicProviderOptions)
 		);
-		addProvider(
+		addBuiltInProvider(
 			createGoogleProvider({
 				...options.googleProviderOptions,
 				...(options.sessionId === undefined
 					? {}
 					: { sessionId: options.sessionId }),
-			}),
-			"google"
+			})
 		);
-		addProvider(
-			createOpenCodeGoProvider(options.openCodeGoProviderOptions),
-			"opencode-go"
+		addBuiltInProvider(
+			createOpenCodeGoProvider(options.openCodeGoProviderOptions)
 		);
-		addProvider(
-			createDeepSeekProvider(options.deepSeekProviderOptions),
-			"deepseek"
-		);
-		addProvider(
-			createOpenRouterProvider(options.openRouterProviderOptions),
-			OPENROUTER_PROVIDER_ID
+		addBuiltInProvider(createDeepSeekProvider(options.deepSeekProviderOptions));
+		addBuiltInProvider(
+			createOpenRouterProvider(options.openRouterProviderOptions)
 		);
 		for (const registration of pluginProviders) {
 			if (isBuiltInProviderId(registration.providerId)) {
