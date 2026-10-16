@@ -2,6 +2,7 @@ import * as os from "node:os";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
+import { formatStartupDiagnostics } from "@/modules/application/startup-diagnostics";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
@@ -17,6 +18,7 @@ import {
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
 import { CommandControllerProvider } from "../commands/command-controller-provider";
 import { SettingsProviders } from "./settings-providers";
+import { StartupDiagnosticsToast } from "./startup-diagnostics-toast";
 
 setInteractiveCleanup(async () => {
 	const interactiveRuntime = getInteractiveRuntimeContext();
@@ -52,6 +54,14 @@ export function RootLayout() {
 	}, [interactiveRuntime.cwd]);
 	const configContext =
 		interactiveRuntime.configRuntime ?? defaultConfigContext;
+	const startupDiagnostics = useMemo(
+		() =>
+			formatStartupDiagnostics({
+				pluginDiagnostics: interactiveRuntime.pluginRuntime?.diagnostics ?? [],
+				projectTrustDiagnostics: interactiveRuntime.startupDiagnostics ?? [],
+			}),
+		[interactiveRuntime.pluginRuntime, interactiveRuntime.startupDiagnostics]
+	);
 	useEffect(() => {
 		const update = () => setTimeout(forceUpdate, 0);
 		const before = router.subscribe("onBeforeLoad", update);
@@ -64,6 +74,7 @@ export function RootLayout() {
 	return (
 		<ConfigProvider value={configContext}>
 			<ToastProvider>
+				<StartupDiagnosticsToast messages={startupDiagnostics} />
 				<AgentRegistryProvider>
 					<KeyboardLayerProvider>
 						<SettingsProviders>

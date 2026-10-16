@@ -506,7 +506,9 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			"agent-turn-completed"
 		);
 		await waitForHostIdle(host);
-		expect(toastMessage).toContain("Kept the active Plugin set");
+		expect(toastMessage).toContain(
+			"The previous trusted Plugin set and Provider composition were retained"
+		);
 
 		// A different canonical source with the same Plugin and Provider IDs cannot reuse A's data.
 		reloadCandidate = runtimeB;

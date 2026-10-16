@@ -328,8 +328,7 @@ test("discarding a deferred Plugin candidate does not run process cleanup hooks"
 			disabledPluginIds: [],
 			mode: "interactive",
 			pluginPaths: [candidatePath, missingPath],
-			projectTrustOverride: "deny",
-			stdinIsTTY: false,
+			trustSnapshot: { decisions: [], override: "deny" },
 		},
 		{
 			distributionPlugins: [],
@@ -354,7 +353,7 @@ test("discarding a deferred Plugin candidate does not run process cleanup hooks"
 	}
 });
 
-test("unchanged project trust keeps the active Plugins when a reload candidate fails", async () => {
+test("a failed Plugin replacement keeps the active Plugins", async () => {
 	const trustedWorkspace = path.join(root, "trusted-reload-workspace");
 	await fs.mkdir(trustedWorkspace, { recursive: true });
 	await Bun.write(
@@ -383,8 +382,7 @@ test("unchanged project trust keeps the active Plugins when a reload candidate f
 			disabledPluginIds: [],
 			mode: "interactive",
 			pluginPaths: [path.join(trustedWorkspace, "missing-plugin.ts")],
-			projectTrustOverride: "trust",
-			stdinIsTTY: false,
+			trustSnapshot: { decisions: [], override: "trust" },
 		},
 		{
 			distributionPlugins: [],
@@ -401,7 +399,6 @@ test("unchanged project trust keeps the active Plugins when a reload candidate f
 			},
 		});
 
-		expect(result.trustChanged).toBe(false);
 		expect(result.pluginRuntime).toBe(currentPluginRuntime);
 		expect(result.pluginRuntimeChanged).toBe(false);
 		expect(result.diagnostics).toContainEqual(

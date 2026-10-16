@@ -8,7 +8,7 @@ import {
 	type PluginRuntime,
 } from "@/modules/plugins/runtime";
 import {
-	type ProjectTrustDecision,
+	type ProjectTrustSnapshot,
 	resolveProjectTrust,
 } from "@/modules/project-trust/project-trust";
 import { resolveWorkspaceRoot } from "@/modules/tools";
@@ -38,11 +38,11 @@ export type ApplicationResourceReloadResult = ApplicationResourceRuntime &
 	Readonly<{
 		diagnostics: readonly ApplicationResourceDiagnostic[];
 		pluginRuntimeChanged: boolean;
-		trustChanged: boolean;
+		trustChanged?: boolean;
 	}>;
 
 export type ApplicationResourceLoader = Readonly<{
-	/** Reloads from saved or invocation trust without prompting or persisting a decision. */
+	/** Reloads resources under the trust policy captured when the runtime started. */
 	reload: (input: {
 		current: ApplicationResourceRuntime;
 	}) => Promise<ApplicationResourceReloadResult>;
@@ -53,8 +53,7 @@ export type ApplicationResourceLoaderInput = Readonly<{
 	disabledPluginIds: readonly string[];
 	mode: ExecutionMode;
 	pluginPaths: readonly string[];
-	projectTrustOverride?: ProjectTrustDecision;
-	stdinIsTTY: boolean;
+	trustSnapshot: ProjectTrustSnapshot;
 }>;
 
 export type ApplicationResourceLoaderOptions = Readonly<{
@@ -151,7 +150,7 @@ const resolvePluginRuntime = async (input: {
 
 /**
  * Creates the application-level reload facade. Domain loaders still parse
- * their own resources; this module refreshes trust/config before asking them.
+ * their own resources; this module refreshes config under the active trust snapshot.
  */
 export const createApplicationResourceLoader = (
 	input: ApplicationResourceLoaderInput,
@@ -170,22 +169,22 @@ export const createApplicationResourceLoader = (
 		reload: async ({ current }) => {
 			const trust = await resolveProjectTrust({
 				mode: input.mode,
-				...(input.projectTrustOverride === undefined
-					? {}
-					: { override: input.projectTrustOverride }),
-				stdinIsTTY: input.stdinIsTTY,
 				projectTrustDir,
+				trustSnapshot: input.trustSnapshot,
 				workspace,
 			});
+			const trustedProjectRoots = trust.trustedProjectRoots;
+			const untrustedProjectRoots = trust.untrustedProjectRoots;
 			const configStore = createConfigStore({
 				homeRoot,
-				trustedProjectRoots: trust.trustedProjectRoots,
+				trustedProjectRoots,
 			});
 			const configRuntime: ConfigRuntime = Object.freeze({
 				configStore,
 				cwd,
 				homeRoot,
-				trustedProjectRoots: trust.trustedProjectRoots,
+				trustedProjectRoots,
+				untrustedProjectRoots,
 				workspace,
 			});
 			const snapshot = await configStore.refreshSnapshot(workspace);
@@ -203,7 +202,7 @@ export const createApplicationResourceLoader = (
 
 			const trustChanged = !equalRoots(
 				current.configRuntime.trustedProjectRoots,
-				trust.trustedProjectRoots
+				trustedProjectRoots
 			);
 			const pluginResolution = await resolvePluginRuntime({
 				configRuntime,

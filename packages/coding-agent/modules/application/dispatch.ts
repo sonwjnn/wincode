@@ -8,6 +8,7 @@ import type {
 } from "./modes/types";
 import { InvocationError } from "./modes/types";
 import type { OutputWriter as RpcOutputWriter } from "./rpc/types";
+import { formatStartupDiagnostics } from "./startup-diagnostics";
 
 export type DispatchInput = Readonly<{
 	args: readonly string[];
@@ -28,7 +29,10 @@ export type DispatchModeRunner = (
 export type DispatchModeRunners = Readonly<
 	Record<ExecutionMode, DispatchModeRunner>
 > &
-	Readonly<{ promptProjectTrust?: ProjectTrustPrompt }>;
+	Readonly<{
+		cleanup?: () => void | Promise<void>;
+		promptProjectTrust?: ProjectTrustPrompt;
+	}>;
 
 export type DispatchModeLoader = (
 	mode: ExecutionMode
@@ -36,7 +40,7 @@ export type DispatchModeLoader = (
 
 export type DispatchRuntime = Pick<
 	ApplicationContext,
-	"configRuntime" | "pluginRuntime" | "resourceLoader"
+	"configRuntime" | "pluginRuntime" | "resourceLoader" | "sessionTrustDecision"
 > &
 	Readonly<{ startupDiagnostics?: readonly string[] }>;
 export type DispatchProcessRequest = Pick<DispatchInput, "args" | "cwd"> &
@@ -94,18 +98,6 @@ const getVersion = async (): Promise<string> => {
 
 const writeLine = (writer: TextWriter, text: string): void => {
 	writer.write(`${text}\n`);
-};
-
-const writePluginDiagnostics = (
-	runtime: DispatchRuntime | undefined,
-	stderr: TextWriter
-): void => {
-	for (const diagnostic of runtime?.pluginRuntime?.diagnostics ?? []) {
-		writeLine(
-			stderr,
-			`Plugin: ${diagnostic.message} (${diagnostic.sourcePath})`
-		);
-	}
 };
 
 const nextValue = (
@@ -434,19 +426,31 @@ const dispatchParsedInvocation = async (
 		typeof runners === "function"
 			? await runners(parsed.invocation.mode)
 			: runners;
-	const runtime = await initializeApplicationRuntime(
-		input,
-		parsed.invocation,
-		dependencies,
-		resolvedRunners.promptProjectTrust
-	);
-	onRuntime(runtime);
-	for (const diagnostic of runtime?.startupDiagnostics ?? []) {
-		writeLine(input.stderr, `Project trust: ${diagnostic}`);
+	try {
+		const runtime = await initializeApplicationRuntime(
+			input,
+			parsed.invocation,
+			dependencies,
+			resolvedRunners.promptProjectTrust
+		);
+		onRuntime(runtime);
+		if (parsed.invocation.mode !== "interactive") {
+			for (const diagnostic of formatStartupDiagnostics({
+				pluginDiagnostics: runtime?.pluginRuntime?.diagnostics ?? [],
+				projectTrustDiagnostics: runtime?.startupDiagnostics ?? [],
+			})) {
+				writeLine(input.stderr, diagnostic);
+			}
+		}
+		const context = createApplicationContext(input, parsed.invocation, runtime);
+		return await resolvedRunners[parsed.invocation.mode](context);
+	} finally {
+		try {
+			await resolvedRunners.cleanup?.();
+		} catch {
+			// Renderer cleanup must not replace the selected mode's outcome.
+		}
 	}
-	writePluginDiagnostics(runtime, input.stderr);
-	const context = createApplicationContext(input, parsed.invocation, runtime);
-	return await resolvedRunners[parsed.invocation.mode](context);
 };
 
 export const dispatch = async (

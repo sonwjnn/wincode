@@ -1314,7 +1314,6 @@ test("interactive reload preserves the displayed Session Host while changing Plu
 				diagnostics: [],
 				pluginRuntime: replacement,
 				pluginRuntimeChanged: true,
-				trustChanged: false,
 			}),
 		},
 	});
