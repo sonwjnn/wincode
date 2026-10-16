@@ -55,6 +55,7 @@ import type {
 } from "@/modules/sessions/message";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { SettingsRegistryProvider } from "@/modules/settings";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import { shortenHomePath } from "@/shared/paths/display-path";
@@ -338,19 +339,21 @@ const renderChatShell = async (
 										<DialogProvider>
 											<RouterContextProvider router={router}>
 												<CommandControllerProvider>
-													<ChatShellProbe
-														activeMessages={activeMessages}
-														agentHolder={agent}
-														holder={holder}
-														initialCompactions={initialCompactions}
-														initialMessages={initialMessages}
-														isBusy={isBusy}
-														isCompacting={isCompacting}
-														isInterruptArmed={isInterruptArmed}
-														onRetry={onRetry}
-														queuedSubmissions={queuedSubmissions}
-														transcriptNotice={transcriptNotice}
-													/>
+													<SettingsRegistryProvider>
+														<ChatShellProbe
+															activeMessages={activeMessages}
+															agentHolder={agent}
+															holder={holder}
+															initialCompactions={initialCompactions}
+															initialMessages={initialMessages}
+															isBusy={isBusy}
+															isCompacting={isCompacting}
+															isInterruptArmed={isInterruptArmed}
+															onRetry={onRetry}
+															queuedSubmissions={queuedSubmissions}
+															transcriptNotice={transcriptNotice}
+														/>
+													</SettingsRegistryProvider>
 												</CommandControllerProvider>
 											</RouterContextProvider>
 										</DialogProvider>
@@ -1081,17 +1084,19 @@ describe("ChatShell activity footer", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = await waitForFrameText(setup, "1%(7.3K/1.1M)");
+			const frame = await waitForFrameText(setup, "0.7%/1.1m (auto)");
 			const rows = frame.split("\n");
 			const pathRow = rows.findIndex((row) =>
 				row.includes(shortenHomePath(process.cwd()))
 			);
-			const usageRow = rows.findIndex((row) => row.includes("1%(7.3K/1.1M)"));
+			const usageRow = rows.findIndex((row) =>
+				row.includes("0.7%/1.1m (auto)")
+			);
 
 			expect(pathRow).toBeGreaterThanOrEqual(0);
 			expect(usageRow).toBeGreaterThan(pathRow);
 			const pathColumn = rows[pathRow]?.indexOf(shortenHomePath(process.cwd()));
-			const usageColumn = rows[usageRow]?.indexOf("1%");
+			const usageColumn = rows[usageRow]?.indexOf("0.7%");
 			expect(usageColumn).toBe(pathColumn);
 		} finally {
 			setup.renderer.destroy();
@@ -1161,7 +1166,7 @@ describe("ChatShell activity footer", () => {
 			const loadingFrame = setup.captureCharFrame();
 			expect(loadingFrame).toContain("Compacting context... (esc to cancel)");
 			expect(loadingFrame).toContain("Compacting context · Esc cancel");
-			expect(loadingFrame).toContain("1%(7.3K/1.1M)");
+			expect(loadingFrame).toContain("0.7%/1.1m (auto)");
 			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
 
 			await Bun.sleep(2000);

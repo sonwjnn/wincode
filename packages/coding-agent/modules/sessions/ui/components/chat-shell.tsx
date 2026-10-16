@@ -9,6 +9,10 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
+	AUTO_COMPACT_SETTING,
+	useSettingRegistryValue,
+} from "@/modules/settings";
+import {
 	useKeyboardLayer,
 	useToggleShortcut,
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -181,6 +185,9 @@ export function ChatShell({
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
 	const { table } = useModelPricing();
+	const autoCompactSetting = useSettingRegistryValue(AUTO_COMPACT_SETTING);
+	const autoCompact =
+		autoCompactSetting.status === "ready" && autoCompactSetting.value;
 	const focusHandlers = useUiComponentFocus({
 		backgroundComponentIds,
 		componentId: composerId,
@@ -390,7 +397,7 @@ export function ChatShell({
 
 					{usage ? (
 						<box flexDirection="row" justifyContent="flex-start" width="100%">
-							<SessionUsageBar summary={usage} />
+							<SessionUsageBar autoCompact={autoCompact} summary={usage} />
 						</box>
 					) : null}
 				</box>
