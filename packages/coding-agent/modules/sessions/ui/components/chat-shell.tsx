@@ -389,7 +389,7 @@ export function ChatShell({
 					</box>
 
 					{usage ? (
-						<box flexDirection="row" justifyContent="flex-end" width="100%">
+						<box flexDirection="row" justifyContent="flex-start" width="100%">
 							<SessionUsageBar summary={usage} />
 						</box>
 					) : null}

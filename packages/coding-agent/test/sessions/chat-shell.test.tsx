@@ -1090,6 +1090,9 @@ describe("ChatShell activity footer", () => {
 
 			expect(pathRow).toBeGreaterThanOrEqual(0);
 			expect(usageRow).toBeGreaterThan(pathRow);
+			const pathColumn = rows[pathRow]?.indexOf(shortenHomePath(process.cwd()));
+			const usageColumn = rows[usageRow]?.indexOf("1%");
+			expect(usageColumn).toBe(pathColumn);
 		} finally {
 			setup.renderer.destroy();
 		}
