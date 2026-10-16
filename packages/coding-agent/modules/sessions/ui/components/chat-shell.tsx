@@ -375,22 +375,8 @@ export function ChatShell({
 						sessionPromptHistory={promptHistory}
 					/>
 				</box>
-				<box
-					flexDirection="row"
-					flexShrink={0}
-					flexWrap="wrap"
-					gap={2}
-					justifyContent="space-between"
-					paddingLeft={1}
-					width="100%"
-				>
-					<box
-						alignItems="center"
-						flexDirection="row"
-						flexGrow={1}
-						flexShrink={1}
-						gap={2}
-					>
+				<box flexDirection="column" flexShrink={0} paddingLeft={1} width="100%">
+					<box flexDirection="row" width="100%">
 						{isBusy ? (
 							<ActivityFooter
 								agent={agent}
@@ -402,7 +388,11 @@ export function ChatShell({
 						)}
 					</box>
 
-					{usage ? <SessionUsageBar summary={usage} /> : null}
+					{usage ? (
+						<box flexDirection="row" justifyContent="flex-end" width="100%">
+							<SessionUsageBar summary={usage} />
+						</box>
+					) : null}
 				</box>
 			</box>
 		</box>

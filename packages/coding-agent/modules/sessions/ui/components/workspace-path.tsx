@@ -9,7 +9,12 @@ export function WorkspacePath() {
 	const branch = useGitBranch(cwd);
 
 	return (
-		<text bg={colors.filePathBackground} fg={colors.filePath}>
+		<text
+			bg={colors.filePathBackground}
+			fg={colors.filePath}
+			flexShrink={1}
+			wrapMode="none"
+		>
 			<span>{shortenHomePath(cwd)}</span>
 			{branch ? (
 				<>

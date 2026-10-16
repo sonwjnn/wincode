@@ -57,6 +57,7 @@ import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
+import { shortenHomePath } from "@/shared/paths/display-path";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import {
 	KeyboardLayerProvider,
@@ -1056,6 +1057,44 @@ describe("ChatShell waiting message strip", () => {
 });
 
 describe("ChatShell activity footer", () => {
+	test("keeps the workspace path on one row above context usage", async () => {
+		const messages: SessionMessage[] = [
+			userMessage("user-1"),
+			{
+				...assistantMessage(
+					[{ text: "assistant-1", type: "text" }],
+					"assistant-1"
+				),
+				metadata: {
+					model: {
+						modelId: modelId("gpt-5.6-luna"),
+						providerId: "openai",
+					},
+					usage: { inputTokens: 7336, outputTokens: 0 },
+				},
+			},
+		];
+		const { setup } = await renderChatShell(messages, {
+			height: 24,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = await waitForFrameText(setup, "1%(7.3K/1.1M)");
+			const rows = frame.split("\n");
+			const pathRow = rows.findIndex((row) =>
+				row.includes(shortenHomePath(process.cwd()))
+			);
+			const usageRow = rows.findIndex((row) => row.includes("1%(7.3K/1.1M)"));
+
+			expect(pathRow).toBeGreaterThanOrEqual(0);
+			expect(usageRow).toBeGreaterThan(pathRow);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("renders a fading progress trail and keeps the interrupt hint while busy", async () => {
 		const { setup } = await renderChatShell([], {
 			height: 12,
