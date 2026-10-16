@@ -218,7 +218,7 @@ const waitForHostIdle = async (host: SessionHost): Promise<void> => {
 	}
 };
 
-test("Interactive Session connects and sends through the owner-scoped Plugin Provider composition", async () => {
+test("Interactive Session isolates Plugin Provider owners and revokes them after a failed trust reload", async () => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-plugin-provider-session-")
 	);
@@ -321,7 +321,28 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			distributionPlugins: [],
 			userDataDir,
 		});
-		pluginRuntimes.push(runtimeA, runtimeB, failingRuntime, revokedRuntime);
+		const failedStartRuntimeBase = await loadPlugins({
+			cliPaths: [],
+			config: configRuntime,
+			distributionPlugins: [],
+			userDataDir,
+		});
+		const failedStartRuntime: PluginRuntime = Object.freeze({
+			...failedStartRuntimeBase,
+			start: async () => [
+				{
+					message: "fake replacement startup failure",
+					sourcePath: failingPluginPath,
+				},
+			],
+		});
+		pluginRuntimes.push(
+			runtimeA,
+			runtimeB,
+			failingRuntime,
+			revokedRuntime,
+			failedStartRuntime
+		);
 		expect(runtimeA.getProviderRegistrations()[0]?.sourceIdentity).toBe(
 			await fs.realpath(pluginAPath)
 		);
@@ -626,6 +647,83 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		expect(await providerActivity.json()).not.toEqual(
 			activityBeforeRestoredOwnerSelection
 		);
+
+		// A trust-changing replacement start failure must not restore the previous runtime.
+		const activityBeforeFailedStartRevocation = await providerActivity.json();
+		reloadCandidate = failedStartRuntime;
+		reloadTrustChanged = true;
+		await reloadInteractiveResources({
+			refreshAgentRegistry: () => undefined,
+			reloadTheme: () => undefined,
+			toast: { show: ({ message }) => (toastMessage = message) },
+			lifecycle: createInteractiveRuntimeLifecycle(),
+		});
+		const failedStartChatEvents: ChatEvent[] = [];
+		for await (const event of hostCollection.chat({
+			messages: [
+				{
+					content: [
+						{
+							text: "attempt revoked Provider after start failure",
+							type: "text",
+						},
+					],
+					role: "user",
+				},
+			],
+			modelId: "shared-owner-model",
+			providerId: "shared_provider",
+		})) {
+			failedStartChatEvents.push(event);
+		}
+		expect(failedStartChatEvents.at(-1)).toMatchObject({
+			outcome: {
+				failure: {
+					code: "provider-not-found",
+					providerId: "shared_provider",
+				},
+				status: "failure",
+			},
+			type: "terminal",
+		});
+		expect(await providerActivity.json()).toEqual(
+			activityBeforeFailedStartRevocation
+		);
+		const safeRuntime = getInteractiveRuntimeContext().pluginRuntime;
+		expect(safeRuntime).not.toBe(runtimeB);
+		expect(safeRuntime?.getProviderRegistrations()).toEqual([]);
+		expect(hostCollection.getPluginProviderRegistrations()).toEqual([]);
+		expect(
+			textOfModels(await controller.getKnownModels(), "shared_provider")
+		).toEqual([]);
+		await expect(
+			controller.connectPluginProvider(
+				"shared_provider",
+				async () => "fake-key-b"
+			)
+		).rejects.toThrow("Plugin Provider connection is unavailable.");
+		await expect(
+			controller.refreshProviderModels("shared_provider")
+		).rejects.toThrow("Unknown provider: shared_provider");
+
+		const recoveredRuntimeB = await createPluginRuntime(
+			pluginBAliasPath,
+			configRuntime,
+			userDataDir
+		);
+		pluginRuntimes.push(recoveredRuntimeB);
+		reloadCandidate = recoveredRuntimeB;
+		reloadTrustChanged = false;
+		await reloadInteractiveResources({
+			refreshAgentRegistry: () => undefined,
+			reloadTheme: () => undefined,
+			toast: { show: ({ message }) => (toastMessage = message) },
+			lifecycle: createInteractiveRuntimeLifecycle(),
+		});
+		expect(getInteractiveRuntimeContext().pluginRuntime).toBe(
+			recoveredRuntimeB
+		);
+		expect(hostCollection.getPluginProviderRegistrations()).toHaveLength(1);
 
 		// If safe built-in-only preparation fails, revocation must fail closed before
 		// old Provider cleanup yields to later operations.

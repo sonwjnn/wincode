@@ -4,7 +4,10 @@ import type {
 	ApplicationResourceReloadResult,
 	ApplicationResourceRuntime,
 } from "@/modules/application/resource-loader";
-import type { PluginRuntime } from "@/modules/plugins/runtime";
+import {
+	createPluginRuntime,
+	type PluginRuntime,
+} from "@/modules/plugins/runtime";
 import {
 	getInteractiveSessionHostManager,
 	resetInteractiveSessionHostManager,
@@ -102,6 +105,16 @@ const restorePreviousPluginRuntime = async (
 	return previous;
 };
 
+const failClosedAfterTrustChange = async (
+	runtime: PluginRuntime,
+	diagnostics: ApplicationResourceDiagnostic[],
+	message: string
+): Promise<PluginRuntime> => {
+	await shutdownPluginRuntime(runtime, diagnostics);
+	diagnostics.push({ message, resource: "Plugin" });
+	return createPluginRuntime([], []);
+};
+
 const startReplacementPluginRuntime = async (
 	previous: PluginRuntime,
 	result: ApplicationResourceReloadResult,
@@ -111,6 +124,13 @@ const startReplacementPluginRuntime = async (
 		const startDiagnostics = await startDiagnosticsFor(result.pluginRuntime);
 		diagnostics.push(...startDiagnostics);
 		if (startDiagnostics.length > 0) {
+			if (result.trustChanged) {
+				return failClosedAfterTrustChange(
+					result.pluginRuntime,
+					diagnostics,
+					"The previous Plugin set was not restored because Project trust changed and the replacement Plugin runtime did not start cleanly."
+				);
+			}
 			return restorePreviousPluginRuntime(
 				previous,
 				result.pluginRuntime,
@@ -122,6 +142,13 @@ const startReplacementPluginRuntime = async (
 			message: error instanceof Error ? error.message : String(error),
 			resource: "Plugin",
 		});
+		if (result.trustChanged) {
+			return failClosedAfterTrustChange(
+				result.pluginRuntime,
+				diagnostics,
+				"The previous Plugin set was not restored because Project trust changed and the replacement Plugin runtime failed to start."
+			);
+		}
 		return restorePreviousPluginRuntime(
 			previous,
 			result.pluginRuntime,
@@ -136,8 +163,15 @@ const replacePluginRuntime = async (
 	result: ApplicationResourceReloadResult,
 	diagnostics: ApplicationResourceDiagnostic[]
 ): Promise<PluginRuntime> => {
-	if (!result.pluginRuntimeChanged) {
+	if (!(result.pluginRuntimeChanged || result.trustChanged)) {
 		return result.pluginRuntime;
+	}
+	if (result.trustChanged && result.pluginRuntime === previous) {
+		return failClosedAfterTrustChange(
+			previous,
+			diagnostics,
+			"The previous Plugin set was not restored because Project trust changed without a replacement Plugin runtime."
+		);
 	}
 	await shutdownPluginRuntime(previous, diagnostics);
 	return startReplacementPluginRuntime(previous, result, diagnostics);
@@ -174,7 +208,10 @@ const discardUnstartedPluginRuntime = async (
 	current: PluginRuntime,
 	result: ApplicationResourceReloadResult
 ): Promise<void> => {
-	if (!result.pluginRuntimeChanged || result.pluginRuntime === current) {
+	if (
+		!(result.pluginRuntimeChanged || result.trustChanged) ||
+		result.pluginRuntime === current
+	) {
 		return;
 	}
 	await shutdownPluginRuntime(result.pluginRuntime, []);
@@ -243,7 +280,7 @@ export const reloadInteractiveResources = async ({
 					result,
 					diagnostics
 				);
-				if (result.pluginRuntimeChanged) {
+				if (result.pluginRuntimeChanged || result.trustChanged) {
 					try {
 						await hostManager.replacePluginRuntime(pluginRuntime, {
 							trustChanged: result.trustChanged,
