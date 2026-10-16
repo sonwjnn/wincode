@@ -1,8 +1,8 @@
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ProviderModelSelection, ThinkingLevel } from "@wincode/ai/sdk";
 
 /** Prompt-selection mutations currently attached to the focused Interactive composer. */
 export type PluginPromptSelectionTarget = Readonly<{
-	setModel: (model: ChatModelSelection) => Promise<boolean>;
+	setModel: (model: ProviderModelSelection) => Promise<boolean>;
 	setThinkingLevel: (level: ThinkingLevel | undefined) => void;
 }>;
 

@@ -1,9 +1,6 @@
 import * as os from "node:os";
-import type { AgentRuntime } from "@wincode/agent-core";
-import type { Connections } from "@wincode/ai/connections";
 import { omitUndefined } from "@wincode/utils";
 import type { AgentRegistry } from "@/modules/agents/registry";
-import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import {
 	loadPlugins,
 	type PluginPackageReference,
@@ -16,6 +13,7 @@ import type { ConfigRuntime } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { WorkspaceId } from "@/shared/identifiers";
 import type { TurnToolResolver } from "../hooks/runtime-turn";
+import type { SessionProviderCollectionFactory } from "../provider-collection";
 import {
 	createSessionSdkOperations,
 	type SessionSdkRuntimeOptions,
@@ -24,7 +22,6 @@ import type { SessionSdkOperations } from "../sdk-contract";
 import type { SessionStore } from "../storage/session-store";
 import {
 	createSessionCapabilities,
-	resolveConnectionsSource,
 	type SessionCapabilitiesAssembly,
 	type SessionPluginRuntime,
 } from "./session-capabilities";
@@ -54,26 +51,23 @@ export type SessionServicesPolicy = Readonly<{
 
 /**
  * What the caller already owns. The sources a Session's later work must see
- * current — configuration, Connections, Model Catalog pricing, and the Plugin
+ * current — configuration, pricing data, and the Plugin
  * runtime Interactive Mode replaces on Resource Reload — are read when that
  * work runs, because a Session outlives the render, reload, or reconnect that
  * supplied them. The Session Store, Session Host Manager, and turn tool
- * resolver are process-scoped and resolved once at open; the Agent Runtime
- * factory is forwarded, so it is read when a turn needs one; and the Agent
+ * resolver are process-scoped and resolved once at open; and the Agent
  * registry is resolved once at open when the caller supplies no source, read
  * per use when it does.
  */
 export type SessionServicesSources = Readonly<{
 	configRuntime?: () => ConfigRuntime;
-	connections?: () => Connections;
 	registry?: () => AgentRegistry | null;
 	store?: () => SessionStore;
 	sessionHostManager?: () => SessionHostManager;
 	/** Reads the current Plugin runtime; undefined while the caller has none yet. */
 	pluginRuntime?: () => PluginRuntime | undefined;
-	/** Reads the current Model Catalog pricing; the compaction settings read it. */
-	pricing?: () => ModelPricingTable;
-	runtimeFactory?: () => AgentRuntime;
+	/** Creates a fresh per-Host ProviderCollection in the owning execution mode. */
+	createProviderCollection?: SessionProviderCollectionFactory;
 	turnToolResolver?: () => TurnToolResolver;
 }>;
 
@@ -159,12 +153,6 @@ export const openSessionServices = async ({
 	 */
 	const getConfig = (): ConfigRuntime =>
 		sources.configRuntime?.() ?? configRuntime;
-	/**
-	 * The Connections the capabilities read, shared with the Session SDK so a
-	 * child Session's capabilities read the same instance. A child runtime
-	 * resolves its own configuration and Project trust, which the SDK owns.
-	 */
-	const getConnections = resolveConnectionsSource(sources.connections);
 	const plugin = await resolvePluginRuntime(policy, sources, configRuntime);
 	/**
 	 * The Session SDK operations and the capabilities reference each other: the
@@ -190,11 +178,9 @@ export const openSessionServices = async ({
 			getSessionSdk: () => sessionSdk,
 			...omitUndefined({
 				getConfig,
-				getConnections,
 				getPluginRuntime: sources.pluginRuntime,
-				getPricing: sources.pricing,
+				createProviderCollection: sources.createProviderCollection,
 				getRegistry: sources.registry,
-				runtimeFactory: sources.runtimeFactory,
 				sessionHostManager: sources.sessionHostManager?.(),
 				store: sources.store?.(),
 				turnToolResolver: sources.turnToolResolver?.(),
@@ -206,11 +192,32 @@ export const openSessionServices = async ({
 		sessionSdk = createSessionSdkOperations(
 			{
 				cwd,
-				getConnections,
+				getPluginProviderSources: (providerIds) => {
+					const selectedProviderIds = new Set(providerIds);
+					return assembly
+						.getPluginRuntime()
+						.getProviderRegistrations()
+						.filter((provider) => selectedProviderIds.has(provider.providerId))
+						.map(
+							({
+								pluginId,
+								providerId,
+								sourceIdentity,
+								sourcePath,
+								sourceScope,
+							}) => ({
+								pluginId,
+								providerId,
+								sourceIdentity,
+								sourcePath,
+								...(sourceScope === undefined ? {} : { sourceScope }),
+							})
+						);
+				},
 				getRegistry: () => capabilities.getRegistry(),
 				store: assembly.store,
 				...omitUndefined({
-					runtimeFactory: capabilities.getRuntime,
+					createProviderCollection: sources.createProviderCollection,
 					turnToolResolver: capabilities.getTurnToolResolver?.(),
 				}),
 				workspace,

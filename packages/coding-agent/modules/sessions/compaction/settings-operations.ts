@@ -1,5 +1,8 @@
-import type { ChatModelSelection } from "@wincode/ai/models";
-import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
+import type { ProviderModel } from "@wincode/ai/sdk";
+import {
+	isSameProviderModelIdentity,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type { ConfigStore } from "@/shared/config/config-store";
 import {
 	type ResolvedCompactionSettings,
@@ -8,35 +11,43 @@ import {
 
 export type CompactionSettingsOperations = {
 	getCompactionSettings: (
-		model: ChatModelSelection
+		model: ProviderModelSelection,
+		providerModel?: ProviderModel | null
 	) => Promise<ResolvedCompactionSettings>;
 };
 
 type CompactionSettingsDependencies = {
 	configStore: ConfigStore;
-	pricing: ModelPricingTable;
 	workspace: string;
 };
 
 /**
  * Composes the compaction settings operations a compaction module and the
  * Agent Session port both read: the workspace's ConfigStore snapshot, the
- * Model Catalog pricing table, and the compaction settings resolution. It is
- * React-free; Session Services compose it from the configuration and
- * pricing a Session currently reads.
+ * selected Provider Model metadata, and the compaction settings resolution. It is
+ * React-free; Session Services compose it from the configuration a Session currently reads.
  */
 export const createCompactionSettingsOperations = ({
 	configStore,
-	pricing,
 	workspace,
 }: CompactionSettingsDependencies): CompactionSettingsOperations => {
 	const getCompactionSettings = async (
-		model: ChatModelSelection
+		model: ProviderModelSelection,
+		providerModel?: ProviderModel | null
 	): Promise<ResolvedCompactionSettings> => {
 		const snapshot = await configStore
 			.getSnapshot(workspace)
 			.catch(() => undefined);
-		return resolveCompactionSettings({ model, pricing, snapshot });
+		const selectedProviderModel =
+			providerModel !== undefined &&
+			providerModel !== null &&
+			isSameProviderModelIdentity(providerModel, model)
+				? providerModel
+				: undefined;
+		return resolveCompactionSettings({
+			contextLimit: selectedProviderModel?.limits?.contextWindowTokens ?? null,
+			snapshot,
+		});
 	};
 
 	return { getCompactionSettings };

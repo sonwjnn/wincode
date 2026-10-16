@@ -10,7 +10,7 @@ const PROVIDER_ENTRYPOINT = path.join(
 );
 
 describe("Anthropic SDK provider import graph", () => {
-	test("Anthropic factory bundles without other built-ins or the all-provider catalog", async () => {
+	test("Anthropic factory bundles without peer providers or aggregate metadata", async () => {
 		const outputDir = await fs.mkdtemp(
 			path.join(os.tmpdir(), "wincode-anthropic-sdk-graph-")
 		);
@@ -53,7 +53,8 @@ describe("Anthropic SDK provider import graph", () => {
 				inputs
 					.filter((input) => input.includes("/sdk-providers/"))
 					.map((input) => path.basename(input))
-			).toEqual(["anthropic.ts"]);
+					.toSorted()
+			).toEqual(["anthropic-models.ts", "anthropic.ts"].toSorted());
 			expect(
 				inputs.some((input) =>
 					input.endsWith("generated/anthropic-model-metadata.generated.ts")

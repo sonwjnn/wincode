@@ -1,26 +1,10 @@
 import type { JsonObject } from "type-fest";
-import { apiKeyCredentialSchema } from "../connections/credential-schemas.ts";
+import { apiKeyCredentialSchema } from "../credential-schemas.ts";
 import { openCodeGoModelMetadataById } from "../generated/opencode-go-model-metadata.generated.ts";
-import { openCodeGoSdkModels } from "../generated/opencode-go-sdk-models.generated.ts";
-import {
-	httpErrorFromResponse,
-	ModelProviderError,
-} from "../model-client/errors.ts";
-import { createAnthropicStrategy } from "../model-client/protocols/anthropic.ts";
-import { openAIChatStrategy } from "../model-client/protocols/openai-chat.ts";
-import { openAIResponsesStrategy } from "../model-client/protocols/openai-responses.ts";
-import { unreachableValue } from "../model-client/protocols/shared.ts";
-import type { ModelProtocolStrategy } from "../model-client/protocols/types.ts";
-import type {
-	ModelPromptMessage,
-	ModelPromptPart,
-	ModelStepRequest,
-	ModelTool,
-} from "../model-client/types.ts";
-import type { ModelTarget } from "../model-target.ts";
-import type { SupportedChatModel } from "../models.ts";
+import { withProviderModelMetadata } from "../provider-model-metadata.ts";
 import {
 	type ChatContentPart,
+	maxOutputTokensForRequest,
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
@@ -28,10 +12,30 @@ import {
 	ProviderError,
 	type ProviderModel,
 } from "../sdk.ts";
+import {
+	httpErrorFromResponse,
+	ProviderProtocolError,
+} from "../sdk-private/protocol-errors.ts";
+import { createAnthropicStrategy } from "../sdk-private/protocols/anthropic.ts";
+import { openAIChatStrategy } from "../sdk-private/protocols/openai-chat.ts";
+import { openAIResponsesStrategy } from "../sdk-private/protocols/openai-responses.ts";
+import type {
+	AnthropicProtocolOptions,
+	OpenAIProtocolOptions,
+} from "../sdk-private/protocols/provider-options.ts";
+import type {
+	ProtocolPromptMessage,
+	ProtocolPromptPart,
+	ProtocolTool,
+	ProviderProtocolRequest,
+} from "../sdk-private/protocols/request.ts";
+import { unreachableValue } from "../sdk-private/protocols/shared.ts";
+import type { ModelProtocolStrategy } from "../sdk-private/protocols/types.ts";
+import { openCodeGoProviderModels } from "./opencode-go-models.ts";
 
 const OPENCODE_GO_PROVIDER_ID = "opencode-go";
 const openCodeGoAnthropicStrategy = createAnthropicStrategy(
-	(model) => openCodeGoModelMetadataById[model.id]
+	(model) => openCodeGoModelMetadataById[model.modelId]
 );
 const RESPONSES_PROTOCOL_ID = "openai-responses";
 const ANTHROPIC_PROTOCOL_ID = "anthropic";
@@ -56,29 +60,7 @@ export type OpenCodeGoProviderOptions = Readonly<{
 	models?: readonly ProviderModel[];
 }>;
 
-const openCodeGoProtocolForModel = (
-	model: ProviderModel
-): SupportedChatModel => {
-	let protocol: "openai" | "anthropic" | "openai-compatible";
-	if (model.protocolId === RESPONSES_PROTOCOL_ID) {
-		protocol = "openai";
-	} else if (model.protocolId === ANTHROPIC_PROTOCOL_ID) {
-		protocol = "anthropic";
-	} else {
-		protocol = "openai-compatible";
-	}
-	return {
-		connectionProviderId: OPENCODE_GO_PROVIDER_ID,
-		displayName: model.modelId,
-		id: model.modelId,
-		lifecycle: "active",
-		protocol,
-		provider: OPENCODE_GO_PROVIDER_ID,
-		route: "direct",
-	} as SupportedChatModel;
-};
-
-const promptPart = (part: ChatContentPart): ModelPromptPart => {
+const promptPart = (part: ChatContentPart): ProtocolPromptPart => {
 	switch (part.type) {
 		case "text":
 			return part;
@@ -88,6 +70,7 @@ const promptPart = (part: ChatContentPart): ModelPromptPart => {
 		case "tool-call":
 			return part;
 		case "tool-result":
+		case "tool-failure":
 			return part;
 		default:
 			return unreachableValue(part);
@@ -96,7 +79,7 @@ const promptPart = (part: ChatContentPart): ModelPromptPart => {
 
 const promptMessages = (
 	messages: ProviderChatRequest["messages"]
-): readonly ModelPromptMessage[] =>
+): readonly ProtocolPromptMessage[] =>
 	messages.map((message) => ({
 		...(message.role === "assistant" && message.continuation !== undefined
 			? { continuation: message.continuation }
@@ -107,41 +90,43 @@ const promptMessages = (
 
 const modelTools = (
 	tools: ProviderChatRequest["tools"]
-): readonly ModelTool[] | undefined =>
+): readonly ProtocolTool[] | undefined =>
 	tools?.map((tool) => ({
 		description: tool.description ?? "",
 		inputSchema: tool.inputSchema as JsonObject,
 		name: tool.name,
 	}));
 
-const modelTargetFor = (
-	modelId: string,
-	apiKey: string,
-	cacheRetention: ProviderChatRequest["cacheRetention"]
-): ModelTarget =>
-	({
-		authorization: { apiKey, kind: "api-key" },
-		...(cacheRetention === undefined
-			? {}
-			: {
-					promptCacheEnabled: true,
-					promptCacheRetention: cacheRetention,
-				}),
-		modelId,
-		providerId: OPENCODE_GO_PROVIDER_ID,
-	}) as ModelTarget;
-
 const modelRequestFor = (
 	request: ProviderChatRequest,
-	context: ProviderChatContext,
-	apiKey: string
-): ModelStepRequest => ({
-	messages: promptMessages(request.messages),
-	signal: context.signal,
-	system: request.system,
-	target: modelTargetFor(context.model.modelId, apiKey, request.cacheRetention),
-	tools: modelTools(request.tools),
-});
+	context: ProviderChatContext
+): ProviderProtocolRequest => {
+	const reasoningEffort =
+		!request.cacheWarming &&
+		request.reasoningEffort !== undefined &&
+		context.model.reasoningEfforts?.includes(request.reasoningEffort)
+			? request.reasoningEffort
+			: undefined;
+	return {
+		...(request.cacheWarming === true ? { cacheWarming: true } : {}),
+		...(request.cacheRetention !== undefined ||
+		request.promptCacheKey !== undefined
+			? { promptCacheEnabled: true }
+			: {}),
+		...(request.cacheRetention === undefined
+			? {}
+			: { promptCacheRetention: request.cacheRetention }),
+		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+		messages: promptMessages(request.messages),
+		modelId: context.model.modelId,
+		...(request.promptCacheKey === undefined
+			? {}
+			: { promptCacheKey: request.promptCacheKey }),
+		signal: context.signal,
+		system: request.system,
+		tools: modelTools(request.tools),
+	};
+};
 
 type OpenCodeGoWireRequest = Readonly<{
 	body: Record<string, unknown>;
@@ -150,21 +135,46 @@ type OpenCodeGoWireRequest = Readonly<{
 	url: string;
 }>;
 
+const anthropicProviderOptionsFor = (
+	reasoningEffort: ProviderProtocolRequest["reasoningEffort"]
+): AnthropicProtocolOptions | undefined => {
+	if (reasoningEffort === undefined) {
+		return;
+	}
+	if (reasoningEffort === "none") {
+		return { thinking: { type: "disabled" } };
+	}
+	if (reasoningEffort === "minimal") {
+		return;
+	}
+	return { effort: reasoningEffort };
+};
+
+const openAIProviderOptionsFor = (
+	reasoningEffort: ProviderProtocolRequest["reasoningEffort"]
+): OpenAIProtocolOptions | undefined =>
+	reasoningEffort === undefined ? undefined : { reasoningEffort };
+
 const wireRequestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
 	apiKey: string
 ): OpenCodeGoWireRequest => {
-	const model = openCodeGoProtocolForModel(context.model);
-	const modelRequest = modelRequestFor(request, context, apiKey);
+	const model = context.model;
+	const modelRequest = modelRequestFor(request, context);
+	const requestedMaxOutputTokens = maxOutputTokensForRequest(
+		request.maxOutputTokens,
+		context.model
+	);
+	const maxOutputTokens = request.cacheWarming ? 1 : requestedMaxOutputTokens;
 	const protocolId = context.model.protocolId as OpenCodeGoProtocolId;
 	if (protocolId === RESPONSES_PROTOCOL_ID) {
 		return {
 			body: openAIResponsesStrategy.serialize({
-				maxOutputTokens: undefined,
+				maxOutputTokens,
 				model,
 				omitOutputTokenLimit: false,
-				providerOptions: undefined,
+				providerOptions: openAIProviderOptionsFor(modelRequest.reasoningEffort),
 				request: modelRequest,
 			}),
 			headers: {
@@ -178,9 +188,11 @@ const wireRequestFor = (
 	if (protocolId === ANTHROPIC_PROTOCOL_ID) {
 		return {
 			body: openCodeGoAnthropicStrategy.serialize({
-				maxOutputTokens: undefined,
+				maxOutputTokens,
 				model,
-				providerOptions: undefined,
+				providerOptions: anthropicProviderOptionsFor(
+					modelRequest.reasoningEffort
+				),
 				request: modelRequest,
 			}),
 			headers: {
@@ -194,7 +206,7 @@ const wireRequestFor = (
 	}
 	return {
 		body: openAIChatStrategy.serialize({
-			maxOutputTokens: undefined,
+			maxOutputTokens,
 			model,
 			request: modelRequest,
 		}),
@@ -227,7 +239,7 @@ const providerErrorFor = (error: unknown): ProviderError => {
 	if (error instanceof ProviderError) {
 		return error;
 	}
-	if (error instanceof ModelProviderError) {
+	if (error instanceof ProviderProtocolError) {
 		if (error.statusCode === 401 || error.statusCode === 403) {
 			return new ProviderError(
 				"authentication",
@@ -332,7 +344,23 @@ export const createOpenCodeGoProvider = (
 ): Provider => {
 	const fetchImpl: OpenCodeGoFetch =
 		options.fetch ?? globalThis.fetch.bind(globalThis);
-	const models = options.models ?? openCodeGoSdkModels;
+	const models =
+		options.models ??
+		openCodeGoProviderModels.map((model) => {
+			const enriched = withProviderModelMetadata(
+				model,
+				openCodeGoModelMetadataById[model.modelId]
+			);
+			return enriched.protocolId !== ANTHROPIC_PROTOCOL_ID ||
+				enriched.reasoningEfforts === undefined
+				? enriched
+				: {
+						...enriched,
+						reasoningEfforts: enriched.reasoningEfforts.filter(
+							(effort) => effort !== "minimal"
+						),
+					};
+		});
 	if (
 		models.some(
 			(model) =>

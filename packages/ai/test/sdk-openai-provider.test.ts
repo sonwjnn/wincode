@@ -63,6 +63,15 @@ describe("public OpenAI SDK provider", () => {
 						},
 					]);
 				},
+				models: [
+					{
+						modelId: "gpt-5.6",
+						promptCacheRetentionTiers: ["short"],
+						protocolId: "openai-responses",
+						providerId: "openai",
+						reasoningEfforts: ["high"],
+					},
+				],
 			})
 		);
 		await sdk.setCredential("openai", {
@@ -71,13 +80,16 @@ describe("public OpenAI SDK provider", () => {
 		});
 		expect(sdk.getModel("openai", "gpt-5.6")).toEqual({
 			modelId: "gpt-5.6",
+			promptCacheRetentionTiers: ["short"],
 			protocolId: "openai-responses",
 			providerId: "openai",
+			reasoningEfforts: ["high"],
 		});
 
 		const events: ChatEvent[] = [];
 		for await (const event of sdk.chat({
 			cacheRetention: "short",
+			reasoningEffort: "high",
 			messages: [
 				{
 					content: [
@@ -97,6 +109,7 @@ describe("public OpenAI SDK provider", () => {
 				},
 			],
 			modelId: "gpt-5.6",
+			promptCacheKey: "wincode-session:consumer-test",
 			providerId: "openai",
 			system: "Be concise.",
 			tools: [
@@ -123,7 +136,9 @@ describe("public OpenAI SDK provider", () => {
 		const body = requests[0]?.body;
 		expect(body).toMatchObject({
 			model: "gpt-5.6",
+			reasoning: { effort: "high" },
 			stream: true,
+			prompt_cache_key: "wincode-session:consumer-test",
 			prompt_cache_options: { mode: "explicit", ttl: "30m" },
 			tools: [
 				{
@@ -244,6 +259,20 @@ describe("public OpenAI SDK provider", () => {
 			outcome: { continuation, status: "success" },
 			type: "terminal",
 		});
+		for await (const _event of sdk.chat({
+			messages: [
+				{
+					content: [{ text: "Unsupported effort?", type: "text" }],
+					role: "user",
+				},
+			],
+			modelId: "gpt-5.6",
+			providerId: "openai",
+			reasoningEffort: "max",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+		expect(requests[2]?.body).not.toHaveProperty("reasoning");
 	});
 
 	test("OpenAI-compatible Chat Completions models keep their route and stream contract", async () => {
@@ -277,6 +306,7 @@ describe("public OpenAI SDK provider", () => {
 						modelId: "compatible-chat-model",
 						protocolId: "openai-chat",
 						providerId: "openai",
+						reasoningEfforts: ["high"],
 					},
 				],
 			})
@@ -296,6 +326,7 @@ describe("public OpenAI SDK provider", () => {
 			],
 			modelId: "compatible-chat-model",
 			providerId: "openai",
+			reasoningEffort: "high",
 			tools: [
 				{
 					name: "weather",
@@ -316,6 +347,7 @@ describe("public OpenAI SDK provider", () => {
 		);
 		expect(requests[0]?.body).toMatchObject({
 			model: "compatible-chat-model",
+			reasoning_effort: "high",
 			stream: true,
 			stream_options: { include_usage: true },
 			messages: [{ role: "user", content: "Weather?" }],
@@ -332,6 +364,20 @@ describe("public OpenAI SDK provider", () => {
 				},
 			],
 		});
+		for await (const _event of sdk.chat({
+			messages: [
+				{
+					content: [{ text: "Unsupported effort?", type: "text" }],
+					role: "user",
+				},
+			],
+			modelId: "compatible-chat-model",
+			providerId: "openai",
+			reasoningEffort: "max",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+		expect(requests[1]?.body).not.toHaveProperty("reasoning_effort");
 		expect(events).toEqual([
 			{ delta: "The forecast is sunny.", type: "text-delta" },
 			{ delta: "Cloud cover is low.", type: "reasoning-delta" },

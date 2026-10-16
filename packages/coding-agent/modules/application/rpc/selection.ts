@@ -1,8 +1,10 @@
-import type { ThinkingSelection } from "@wincode/ai/models";
-import type {
-	ChatModelSelection,
-	SessionSendInput,
-} from "../../../modules/sessions/host/session-rpc";
+import type { ThinkingSelection } from "@wincode/ai/sdk";
+import {
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+	resolveProviderModelSelectionForHost,
+} from "@/modules/providers/provider-model-selection";
+import type { SessionSendInput } from "../../../modules/sessions/host/session-rpc";
 import type {
 	RpcAssembly,
 	RpcPreparedSubmission,
@@ -48,24 +50,8 @@ export const createSelectionHelpers = (
 		return { agentId, model, record };
 	};
 
-	const parseSelectionThinkingLevel = (
-		value: unknown,
-		model: ChatModelSelection,
-		activeRuntime: RuntimeModules
-	): ThinkingSelection => {
-		const thinkingLevel = activeRuntime.thinkingLevelSchema.safeParse(value);
-		if (thinkingLevel.success !== true || thinkingLevel.data === undefined) {
-			throw appError("selection_unavailable", "Thinking level is invalid.");
-		}
-		if (!activeRuntime.isSupportedThinkingLevel(model, thinkingLevel.data)) {
-			throw appError("selection_unavailable", "Thinking level is unavailable.");
-		}
-		return { thinkingLevel: thinkingLevel.data };
-	};
-
 	const parseSelectionThinking = (
 		record: Record<string, unknown>,
-		model: ChatModelSelection,
 		activeRuntime: RuntimeModules
 	): ThinkingSelection => {
 		if (
@@ -79,9 +65,15 @@ export const createSelectionHelpers = (
 			);
 		}
 		const thinkingLevelValue = record.thinkingLevel;
-		return thinkingLevelValue === undefined
-			? {}
-			: parseSelectionThinkingLevel(thinkingLevelValue, model, activeRuntime);
+		if (thinkingLevelValue === undefined) {
+			return {};
+		}
+		const thinkingLevel =
+			activeRuntime.thinkingLevelSchema.safeParse(thinkingLevelValue);
+		if (!thinkingLevel.success || thinkingLevel.data === undefined) {
+			throw appError("selection_unavailable", "Thinking level is invalid.");
+		}
+		return { thinkingLevel: thinkingLevel.data };
 	};
 
 	const requireSelectableAgent = (
@@ -109,26 +101,6 @@ export const createSelectionHelpers = (
 		}
 	};
 
-	const requireConnectedProvider = async (
-		activeAssembly: RpcAssembly,
-		providerId: string
-	): Promise<void> => {
-		const providers = (await activeAssembly.capabilities
-			.getConnections()
-			.listProviders()) as readonly {
-			id: string;
-			connected: boolean;
-		}[];
-		if (
-			!providers.some(
-				(provider: { id: string; connected: boolean }) =>
-					provider.id === providerId && provider.connected
-			)
-		) {
-			throw appError("selection_unavailable", "Model provider is unavailable.");
-		}
-	};
-
 	const parseSelection = async (value: unknown): Promise<Selection> => {
 		const { agentId, model: modelRecord, record } = readSelectionFields(value);
 		const activeAssembly = getAssembly();
@@ -139,22 +111,38 @@ export const createSelectionHelpers = (
 			);
 		}
 		const activeRuntime = await getRuntime();
-		const modelResult =
-			activeRuntime.modelSelectionSchema.safeParse(modelRecord);
-		if (modelResult.success !== true || modelResult.data === undefined) {
+		const parsedModel = normalizeProviderModelSelection(modelRecord);
+		if (parsedModel === null) {
 			throw appError(
 				"selection_unavailable",
 				"Model selection is unavailable."
 			);
 		}
-		const model = modelResult.data;
-		const thinkingSelection = parseSelectionThinking(
-			record,
-			model,
-			activeRuntime
-		);
+		let model: ProviderModelSelection | undefined;
+		try {
+			model = resolveProviderModelSelectionForHost(
+				parsedModel,
+				activeAssembly.capabilities
+					.getPluginRuntime?.()
+					?.getProviderRegistrations() ?? [],
+				true
+			);
+		} catch (error) {
+			throw appError(
+				"selection_unavailable",
+				error instanceof Error
+					? error.message
+					: "Model selection is unavailable."
+			);
+		}
+		if (model === undefined) {
+			throw appError(
+				"selection_unavailable",
+				"Model selection is unavailable."
+			);
+		}
+		const thinkingSelection = parseSelectionThinking(record, activeRuntime);
 		requireSelectableAgent(activeAssembly, agentId);
-		await requireConnectedProvider(activeAssembly, model.providerId);
 		return { agentId, model, ...thinkingSelection };
 	};
 
@@ -179,6 +167,7 @@ export const createSelectionHelpers = (
 			files: submission.files,
 			model: selection.model as SessionSendInput["model"],
 			resolvedAgent: resolvedAgent as SessionSendInput["resolvedAgent"],
+			selectionOverride: { model: selection.model },
 			sessionModel: selection.model as SessionSendInput["sessionModel"],
 			userText: submission.userText,
 			...(submission.skill === undefined ? {} : { skill: submission.skill }),

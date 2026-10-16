@@ -1,11 +1,20 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { isUndefined } from "@wincode/utils";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { useModelPricing } from "@/modules/model-pricing";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
@@ -55,8 +64,9 @@ type ChatShellProps = {
 	isInterruptArmed: boolean;
 	messages: readonly SessionMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
-	onModelTargetChanged?: () => void;
+	onProviderModelChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	providerController?: InteractiveProviderController;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 	promptHistory: PromptHistoryEntry[];
 	onSubmit: (
@@ -157,8 +167,9 @@ export function ChatShell({
 	isInterruptArmed,
 	messages,
 	onCompact,
-	onModelTargetChanged,
+	onProviderModelChanged,
 	onOpenSettings,
+	providerController,
 	onRetry,
 	promptHistory,
 	onSubmit,
@@ -180,7 +191,71 @@ export function ChatShell({
 	const [scrollRequest, setScrollRequest] = useState(0);
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
-	const { table } = useModelPricing();
+	const subscribeProviderComposition = useCallback(
+		(listener: () => void) =>
+			providerController?.subscribeComposition?.(listener) ?? (() => undefined),
+		[providerController]
+	);
+	const getProviderCompositionRevision = useCallback(
+		() => providerController?.getCompositionRevision?.() ?? 0,
+		[providerController]
+	);
+	const providerCompositionRevision = useSyncExternalStore(
+		subscribeProviderComposition,
+		getProviderCompositionRevision,
+		getProviderCompositionRevision
+	);
+	const subscribeProviderAvailability = useCallback(
+		(listener: () => void) =>
+			providerController?.subscribeAvailability?.(listener) ??
+			(() => undefined),
+		[providerController]
+	);
+	const getProviderAvailabilityRevision = useCallback(
+		() => providerController?.getAvailabilityRevision?.() ?? 0,
+		[providerController]
+	);
+	const providerAvailabilityRevision = useSyncExternalStore(
+		subscribeProviderAvailability,
+		getProviderAvailabilityRevision,
+		getProviderAvailabilityRevision
+	);
+	const [providerModels, setProviderModels] = useState<
+		readonly ProviderModel[] | undefined
+	>(() => (providerController === undefined ? undefined : []));
+	useEffect(() => {
+		if (providerController === undefined) {
+			setProviderModels(undefined);
+			return;
+		}
+		let active = true;
+		const requestedCompositionRevision = providerCompositionRevision;
+		const requestedAvailabilityRevision = providerAvailabilityRevision;
+		const isCurrentRevision = () =>
+			getProviderCompositionRevision() === requestedCompositionRevision &&
+			getProviderAvailabilityRevision() === requestedAvailabilityRevision;
+		void providerController
+			.getKnownModels()
+			.then((models) => {
+				if (active && isCurrentRevision()) {
+					setProviderModels(models);
+				}
+			})
+			.catch(() => {
+				if (active && isCurrentRevision()) {
+					setProviderModels([]);
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, [
+		getProviderAvailabilityRevision,
+		getProviderCompositionRevision,
+		providerAvailabilityRevision,
+		providerCompositionRevision,
+		providerController,
+	]);
 	const focusHandlers = useUiComponentFocus({
 		backgroundComponentIds,
 		componentId: composerId,
@@ -239,11 +314,17 @@ export function ChatShell({
 			summarizeSessionUsage(
 				displayMessages,
 				model,
-				table,
 				sessionUsageEntries,
-				cacheWarmingStatus
+				cacheWarmingStatus,
+				providerModels
 			),
-		[displayMessages, model, table, sessionUsageEntries, cacheWarmingStatus]
+		[
+			displayMessages,
+			model,
+			sessionUsageEntries,
+			cacheWarmingStatus,
+			providerModels,
+		]
 	);
 	useEffect(() => {
 		if (scrollRequest === 0) {
@@ -366,9 +447,10 @@ export function ChatShell({
 						id={composerId}
 						onCompact={onCompact}
 						onEmptySubmit={onEmptySubmit}
-						onModelTargetChanged={onModelTargetChanged}
 						onOpenSettings={onOpenSettings}
+						onProviderModelChanged={onProviderModelChanged}
 						onSubmit={handleSubmit}
+						providerController={providerController}
 						recalledSubmissions={recalledSubmissions}
 						recallRevision={recallRevision}
 						sessionId={viewId}

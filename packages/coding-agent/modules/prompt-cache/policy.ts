@@ -1,16 +1,16 @@
 import type {
+	ProviderModel,
 	ResolvedPromptCacheControls,
-	SupportedChatModel,
 	SupportedPromptCacheRetentionTier,
-} from "@wincode/ai/models";
+} from "@wincode/ai/sdk";
 import {
 	promptCachePolicySchema,
 	resolvePromptCacheControls,
-} from "@wincode/ai/models";
+} from "@wincode/ai/sdk";
 
-/** Resolves the optional `promptCache` settings block for one selected Model. */
+/** Resolves the optional `promptCache` settings block for one Provider Model. */
 export const resolveConfiguredPromptCacheControls = (
-	model: SupportedChatModel,
+	model: ProviderModel,
 	settings: unknown
 ): ResolvedPromptCacheControls => {
 	if (settings === undefined) {
@@ -22,9 +22,8 @@ export const resolveConfiguredPromptCacheControls = (
 		: { enabled: false };
 };
 
-/** Resolves the retention-only view retained by existing policy callers. */
 export const resolveConfiguredPromptCacheRetention = (
-	model: SupportedChatModel,
+	model: ProviderModel,
 	settings: unknown
 ): SupportedPromptCacheRetentionTier | undefined =>
 	resolveConfiguredPromptCacheControls(model, settings).retention;

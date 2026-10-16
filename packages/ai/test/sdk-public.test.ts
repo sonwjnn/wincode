@@ -7,6 +7,8 @@ import {
 	type ProviderChatEvent,
 	ProviderError,
 	type ProviderModel,
+	parseProviderModelSelection,
+	providerModelSelectionSchema,
 } from "@wincode/ai/sdk";
 
 const demoProvider = (): Provider => ({
@@ -34,6 +36,24 @@ const demoProvider = (): Provider => ({
 			usage: { inputTokens: 4, outputTokens: 2 },
 		};
 	},
+});
+
+test("SDK selection parsing preserves exact unknown Provider Model identity", () => {
+	const selection = parseProviderModelSelection(
+		"plugin-provider/vendor/model-v4"
+	);
+	expect(selection).toEqual({
+		modelId: "vendor/model-v4",
+		providerId: "plugin-provider",
+	});
+	expect(providerModelSelectionSchema.safeParse(selection).success).toBe(true);
+	expect(parseProviderModelSelection("plugin-provider/")).toBeNull();
+	expect(
+		providerModelSelectionSchema.safeParse({
+			modelId: "",
+			providerId: "plugin-provider",
+		}).success
+	).toBe(false);
 });
 
 describe("public SDK provider collection", () => {
@@ -69,6 +89,135 @@ describe("public SDK provider collection", () => {
 			},
 			{ type: "usage", usage: { inputTokens: 4, outputTokens: 2 } },
 			{ type: "terminal", outcome: { status: "success" } },
+		]);
+	});
+
+	test("ProviderCollection close awaits every Provider once even when cleanup fails", async () => {
+		const cleanupStarted: string[] = [];
+		const bothCleanupsStarted = Promise.withResolvers<void>();
+		const finishSecondCleanup = Promise.withResolvers<void>();
+		const recordCleanup = (providerId: string): void => {
+			cleanupStarted.push(providerId);
+			if (cleanupStarted.length === 2) {
+				bothCleanupsStarted.resolve();
+			}
+		};
+		const sdk = createProviderCollection();
+		sdk.register({
+			...demoProvider(),
+			close: () => {
+				recordCleanup("failed-provider");
+				throw new Error("private cleanup detail");
+			},
+			id: "failed-provider",
+			models: [
+				{
+					modelId: "failed-model",
+					protocolId: "demo-protocol",
+					providerId: "failed-provider",
+				},
+			],
+		});
+		sdk.register({
+			...demoProvider(),
+			close: async () => {
+				recordCleanup("deferred-provider");
+				await finishSecondCleanup.promise;
+			},
+			id: "deferred-provider",
+			models: [
+				{
+					modelId: "deferred-model",
+					protocolId: "demo-protocol",
+					providerId: "deferred-provider",
+				},
+			],
+		});
+
+		const closing = sdk.close();
+		let settled = false;
+		void closing.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			}
+		);
+		expect(sdk.close()).toBe(closing);
+		await bothCleanupsStarted.promise;
+		expect(cleanupStarted).toEqual(["failed-provider", "deferred-provider"]);
+		expect(settled).toBe(false);
+		finishSecondCleanup.resolve();
+		await expect(closing).rejects.toThrow(
+			"One or more Providers failed to close."
+		);
+		expect(sdk.close()).toBe(closing);
+		expect(cleanupStarted).toEqual(["failed-provider", "deferred-provider"]);
+		expect(() => sdk.register(demoProvider())).toThrow(
+			"ProviderCollection is closed."
+		);
+	});
+
+	test("tool failures in history remain provider-neutral message parts", async () => {
+		const sdk = createProviderCollection();
+		const failedToolMessage: ChatMessage = {
+			content: [
+				{
+					errorText: "Weather lookup failed.",
+					failure: { kind: "timeout" },
+					toolCallId: "call-1",
+					toolName: "weather",
+					type: "tool-failure",
+				},
+			],
+			role: "tool",
+		};
+		const receivedMessages: (readonly ChatMessage[])[] = [];
+		sdk.register({
+			...demoProvider(),
+			id: "tool-failure-provider",
+			models: [
+				{
+					modelId: "tool-failure-model",
+					protocolId: "tool-failure-wire",
+					providerId: "tool-failure-provider",
+				},
+			],
+			async *streamChat(request) {
+				receivedMessages.push(request.messages);
+				expect(request.cacheRetention).toBe("long");
+				expect(request.cacheWarming).toBe(true);
+				expect(request.maxOutputTokens).toBe(384);
+				expect(request.promptCacheKey).toBe("stable-session-cache-key");
+				expect(request.reasoningEffort).toBe("high");
+				yield { type: "usage", usage: { inputTokens: 5, outputTokens: 2 } };
+				yield { type: "finish", continuation: { cursor: "next" } };
+			},
+		});
+		await sdk.setCredential("tool-failure-provider", "configured");
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			cacheRetention: "long",
+			cacheWarming: true,
+			maxOutputTokens: 384,
+			messages: [failedToolMessage],
+			modelId: "tool-failure-model",
+			promptCacheKey: "stable-session-cache-key",
+			providerId: "tool-failure-provider",
+			reasoningEffort: "high",
+		})) {
+			events.push(event);
+		}
+
+		expect(receivedMessages).toEqual([[failedToolMessage]]);
+		expect(events).toEqual([
+			{ type: "usage", usage: { inputTokens: 5, outputTokens: 2 } },
+			{
+				outcome: { continuation: { cursor: "next" }, status: "success" },
+				type: "terminal",
+			},
 		]);
 	});
 
@@ -794,11 +943,15 @@ describe("public SDK provider collection", () => {
 		const credentials = new Map<string, unknown>([
 			["configured-provider", "configured"],
 		]);
+		const credentialReads: string[] = [];
 		const credentialStore = {
 			delete: async (providerId: string) => {
 				credentials.delete(providerId);
 			},
-			get: async (providerId: string) => credentials.get(providerId),
+			get: async (providerId: string) => {
+				credentialReads.push(providerId);
+				return credentials.get(providerId);
+			},
 			set: async (providerId: string, credential: unknown) => {
 				credentials.set(providerId, credential);
 			},
@@ -835,6 +988,22 @@ describe("public SDK provider collection", () => {
 			otherDiscoveredModel,
 		]);
 		expect(await sdk.getAvailable()).toEqual([staticModel, discoveredModel]);
+		expect(credentialReads).toEqual([
+			"configured-provider",
+			"unconfigured-provider",
+		]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("configured-provider")).toEqual([
+			staticModel,
+			discoveredModel,
+		]);
+		expect(credentialReads).toEqual(["configured-provider"]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("unconfigured-provider")).toEqual([]);
+		expect(credentialReads).toEqual(["unconfigured-provider"]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("missing-provider")).toEqual([]);
+		expect(credentialReads).toEqual([]);
 		expect(authorizationChecks).toBe(0);
 		expect(discoveryCalls).toBe(0);
 

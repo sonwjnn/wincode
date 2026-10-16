@@ -11,7 +11,7 @@ import {
 	type SessionRecord,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import {
 	getErrorMessage,
 	isError,
@@ -20,6 +20,7 @@ import {
 	logger,
 	omitUndefined,
 } from "@wincode/utils";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	createSkillSnapshot,
 	type SkillRequestContext,
@@ -239,7 +240,7 @@ export const prepareCompactionBeforeSubmit = async ({
 }: {
 	compaction: AgentSessionPorts["compaction"];
 	getActiveMessages: () => readonly SessionMessage[];
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	runCompaction: (
 		command: SessionCompactionCommand
 	) => Promise<CompactSessionResult>;
@@ -490,6 +491,7 @@ const prepareSessionSubmission = async ({
 }): Promise<SessionPreparationResult> => {
 	const { ports } = deps;
 	try {
+		await ports.assertProviderModelSelection(input);
 		// Settings and the attachment budget are resolved before anything joins a
 		// compaction, so a compaction that starts while they resolve is joined by
 		// the settle that follows rather than raced by this turn.
@@ -654,9 +656,9 @@ const commitPromptRecord = async ({
 	commitRecord: AgentSessionPorts["commitRecord"];
 	diagnosticTurnId?: AgentTurnId;
 	message: SessionMessage;
-	model: ChatModelSelection;
+	model: SessionSendInput["model"];
 	sessionId: SessionId;
-	sessionModel: ChatModelSelection;
+	sessionModel: SessionSendInput["sessionModel"];
 	sessionThinkingLevel?: ThinkingLevel;
 	thinkingLevel?: ThinkingLevel;
 }): Promise<Error | null> => {
@@ -1136,7 +1138,7 @@ const logThresholdSettingsFailure = (
 const maintainAfterTurn = (
 	deps: SubmissionDeps,
 	messages: readonly SessionMessage[],
-	selection: ChatModelSelection,
+	selection: SessionExecution["model"],
 	turnId: AgentTurnId,
 	thinkingLevel?: ThinkingLevel
 ): void => {

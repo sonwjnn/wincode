@@ -1,7 +1,3 @@
-import { isNull, isUndefined } from "@wincode/utils";
-
-process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
-
 import {
 	afterAll,
 	afterEach,
@@ -13,6 +9,7 @@ import {
 	test,
 } from "bun:test";
 import * as os from "node:os";
+import * as path from "node:path";
 import {
 	MockTreeSitterClient,
 	type TestRendererSetup,
@@ -28,25 +25,35 @@ import {
 import { fromPartial } from "@total-typescript/shoehorn";
 import { type AgentId, toSubmissionId } from "@wincode/agent-core";
 import type {
-	ConnectionProviderSummary,
-	Connections,
-} from "@wincode/ai/connections";
-import { createConnections as createDefaultConnections } from "@wincode/ai/connections";
-import {
-	type ChatModelSelection,
-	defaultChatModelSelection,
-} from "@wincode/ai/models";
+	Provider,
+	ProviderCollection,
+	ProviderModel,
+	ThinkingLevel,
+} from "@wincode/ai/sdk";
+import { isNull, isUndefined } from "@wincode/utils";
 import { act, useCallback, useEffect, useRef, useState } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
-import { ConnectionsProvider } from "@/modules/connections";
-import { ModelPricingProvider } from "@/modules/model-pricing";
-import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
-import { createPluginRuntime } from "@/modules/plugins/runtime";
+import {
+	createPluginRuntime,
+	type PluginProviderDescriptor,
+} from "@/modules/plugins/runtime";
 import {
 	PromptConfigProvider,
 	usePromptConfig,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
+import {
+	createInteractiveProviderController,
+	type InteractiveProviderController,
+	type PluginProviderComposition,
+} from "@/modules/providers/interactive-provider-controller";
+import {
+	createProviderModelSelectionSnapshot,
+	DEFAULT_PROVIDER_MODEL_SELECTION,
+	type ProviderModelSelection,
+	type ProviderModelSelectionCandidate,
+	providerModelSelectionCandidateForModel,
+} from "@/modules/providers/provider-model-selection";
 import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
@@ -54,12 +61,18 @@ import type {
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/agent-session/types";
+import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import * as useAgentSessionModule from "@/modules/sessions/hooks/use-agent-session";
-import type { SessionHost } from "@/modules/sessions/host/types";
+import { assertPluginProviderSelectionOwner } from "@/modules/sessions/host/agent-session-turn-runner";
+import type {
+	SessionCapabilities,
+	SessionHost,
+} from "@/modules/sessions/host/types";
 import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { ResolvedSessionSelection } from "@/modules/sessions/selection";
 import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
@@ -110,6 +123,7 @@ type FakeSessionRun = {
 
 let activeFakeSessionRun: FakeSessionRun | null = null;
 let fakeCacheWarmCancellations = 0;
+let fakeCompactionModels: ProviderModelSelection[] = [];
 /** The compositions the view accepted while the turn ran, in order. */
 let fakeWaitingTexts: string[] = [];
 /** The same messages' full compositions, so a round trip can be asserted. */
@@ -158,6 +172,7 @@ const fakeUseAgentSessionModule: Pick<
 		const [steeringMessages, setSteeringMessages] = useState<
 			SessionSteeringMessage[]
 		>([]);
+		const [sentMessages, setSentMessages] = useState<SessionMessage[]>([]);
 		// The opened facts the fake host holds, read once as the real binding
 		// reads a Snapshot.
 		const [opened] = useState(host.getSnapshot);
@@ -231,9 +246,49 @@ const fakeUseAgentSessionModule: Pick<
 			[enqueue]
 		);
 		const prompt = useCallback(
-			async (input: SessionSendInput) =>
-				running.current ? enqueue(input) : await send(input),
-			[enqueue, send]
+			async (input: SessionSendInput) => {
+				if (running.current) {
+					return enqueue(input);
+				}
+				const run = activeFakeSessionRun;
+				if (!run) {
+					throw new Error("No fake session run configured.");
+				}
+				const composition = input.composition ?? {
+					files: input.files ?? [],
+					text: input.userText ?? "",
+				};
+				fakeRunInputs = [...fakeRunInputs, input];
+				fakeRunCompositions = [...fakeRunCompositions, composition];
+				const messageId =
+					input.messageId ??
+					input.reservedMessageId ??
+					sessionMessageId("started-message");
+				setSentMessages((messages) => [
+					...messages,
+					{
+						id: messageId,
+						metadata: { agent: input.agent, model: input.model },
+						parts: [{ text: composition.text, type: "text" }],
+						role: "user",
+					},
+				]);
+				run.sendStarted.resolve();
+				setTurnActive(true);
+				void run.release.promise.then(() => setTurnActive(false));
+				return {
+					disposition: "started" as const,
+					messageId:
+						input.messageId ??
+						input.reservedMessageId ??
+						sessionMessageId("started-message"),
+					rejected: false as const,
+					submissionId:
+						input.submissionId ?? toSubmissionId("started-submission"),
+					...(input.turnId === undefined ? {} : { turnId: input.turnId }),
+				};
+			},
+			[enqueue]
 		);
 		const steer = useCallback(async () => {
 			if (!running.current) {
@@ -313,8 +368,12 @@ const fakeUseAgentSessionModule: Pick<
 			cacheWarmingStatus: "idle",
 			cancel: () => undefined,
 			cancelCompaction: async () => [],
-			compact: async () => {
-				throw new Error("Compaction is not part of this test.");
+			compact: async (_focus, selection) => {
+				fakeCompactionModels = [...fakeCompactionModels, selection];
+				return fromPartial<CompactSessionResult>({
+					activeMessages: [],
+					entry: {},
+				});
 			},
 			interrupt: async () => [],
 			onSubmissionEvent: subscribeToFakeSubmissionEvents,
@@ -325,8 +384,10 @@ const fakeUseAgentSessionModule: Pick<
 			sessionUsageEntries: [],
 			snapshot: {
 				...opened,
+				context: [...opened.context, ...sentMessages],
 				queuedSubmissions,
 				steeringMessages,
+				transcript: [...opened.transcript, ...sentMessages],
 				turnActive,
 			},
 		};
@@ -335,21 +396,16 @@ const fakeUseAgentSessionModule: Pick<
 spyOn(useAgentSessionModule, "useAgentSession").mockImplementation(
 	fakeUseAgentSessionModule.useAgentSession
 );
-// These tests render the provider without a pricing prop, so keep it off the
-// developer's real pricing cache: only the bundled snapshot should show.
-spyOn(modelPricingCacheModule, "readModelPricingCache").mockReturnValue(null);
-
-const createConnections = () =>
-	createDefaultConnections({
-		vault: {
-			load: async () => null,
-			replaceValidated: async () => undefined,
-		},
-	});
-const createTestConfigStore = () =>
+const createTestConfigStore = (settings?: Readonly<Record<string, unknown>>) =>
 	createConfigStore({
 		fs: {
-			readFile: async () => {
+			readFile: async (file) => {
+				if (
+					settings !== undefined &&
+					file === path.join(os.homedir(), ".wincode", "settings.json")
+				) {
+					return JSON.stringify(settings);
+				}
 				throw Object.assign(new Error("Test config is unavailable."), {
 					code: "ENOENT",
 				});
@@ -384,11 +440,24 @@ function PromptModelProbe({
 	onModel,
 }: {
 	onAgent?: (agent: AgentId) => void;
-	onModel: (model: ChatModelSelection) => void;
+	onModel: (model: ProviderModelSelection) => void;
 }) {
 	const { agent, model } = usePromptConfig();
 	useEffect(() => onModel(model), [model, onModel]);
 	useEffect(() => onAgent?.(agent), [agent, onAgent]);
+	return null;
+}
+
+function ThinkingLevelProbe({
+	onThinkingLevel,
+}: {
+	onThinkingLevel: (level: ThinkingLevel | undefined) => void;
+}) {
+	const { thinkingLevel } = usePromptConfig();
+	useEffect(
+		() => onThinkingLevel(thinkingLevel),
+		[onThinkingLevel, thinkingLevel]
+	);
 	return null;
 }
 
@@ -424,14 +493,20 @@ const buildRouter = () => {
  * Agent Session is never reached from this test.
  */
 const createFakeSessionHost = (
-	transcript: readonly SessionMessage[]
+	transcript: readonly SessionMessage[],
+	providerController?: InteractiveProviderController,
+	selection?: ResolvedSessionSelection | null,
+	assertPluginSnapshot: () => void = () => undefined
 ): SessionHost =>
 	fromPartial<SessionHost>({
+		...(providerController === undefined ? {} : { providerController }),
 		agentSession: {},
+		assertCurrentPluginProviderRegistrationSnapshot: assertPluginSnapshot,
+		withSessionWork: <Result,>(action: () => Promise<Result>) => action(),
 		cancelCacheWarming: () => {
 			fakeCacheWarmCancellations += 1;
 		},
-		getSelection: () => null,
+		getSelection: () => selection ?? null,
 		getSnapshot: () => ({
 			catalogDiagnostic: null,
 			compactions: [],
@@ -470,6 +545,27 @@ const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	}
 };
 
+const providerModelCandidate = (providerModel: ProviderModel) => {
+	const snapshot = createProviderModelSelectionSnapshot([], [], 0);
+	const candidate = providerModelSelectionCandidateForModel(
+		providerModel,
+		snapshot
+	);
+	if (candidate === undefined) {
+		throw new Error("The fixture Provider Model must be a built-in model.");
+	}
+	return candidate;
+};
+
+const pluginPickerRegistration = (pluginId: string) =>
+	fromPartial<PluginProviderDescriptor>({
+		connect: async () => undefined,
+		displayName: pluginId,
+		pluginId,
+		providerId: "plugin-picker-provider",
+		sourceIdentity: `/plugins/${pluginId}.ts`,
+	});
+
 beforeAll(() => {
 	setMarkdownTreeSitterClientForTests(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
@@ -484,6 +580,7 @@ afterAll(() => {
 afterEach(() => {
 	activeFakeSessionRun = null;
 	fakeCacheWarmCancellations = 0;
+	fakeCompactionModels = [];
 	fakeQueuedSeed = [];
 	fakeRunCompositions = [];
 	fakeRunInputs = [];
@@ -492,6 +589,234 @@ afterEach(() => {
 	fakeRecalledPayload = null;
 	fakeSessionRecalls = 0;
 	fakeSubmissionEventListeners.clear();
+});
+
+test("manual compaction scopes its stored model check before global replacement discovery", async () => {
+	const modelReads: string[] = [];
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async (providerId: string | undefined) => {
+			modelReads.push(`selected:${providerId ?? "<all>"}`);
+			return [];
+		},
+		getAvailableProviderModelSelectionCandidates: async () => {
+			modelReads.push("global-chooser");
+			return [];
+		},
+		getKnownModels: async () => [],
+	});
+	const { setup } = await renderSessionView({
+		height: 30,
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () => setup.mockInput.typeText("preserve the history"));
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Choose Model for Compaction")
+		);
+		await setup.waitFor(() => modelReads.length >= 2);
+		expect(modelReads).toEqual(["selected:openai", "global-chooser"]);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test("manual compaction rejects a stale Host Plugin snapshot before Provider availability", async () => {
+	let availabilityReads = 0;
+	let snapshotChecks = 0;
+	const providerModel: ProviderModel = {
+		modelId: "gpt-5.6-luna",
+		protocolId: "fake-provider",
+		providerId: "openai",
+	};
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => {
+			availabilityReads += 1;
+			return [providerModel];
+		},
+		getKnownModels: async () => [providerModel],
+	});
+	const { setup } = await renderSessionView({
+		assertPluginSnapshot: () => {
+			snapshotChecks += 1;
+			throw new Error("An unrelated Host Plugin registration is stale.");
+		},
+		height: 30,
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () => setup.mockInput.typeText("preserve the history"));
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() =>
+			setup
+				.captureCharFrame()
+				.includes("unrelated Host Plugin registration is stale")
+		);
+
+		expect(snapshotChecks).toBe(1);
+		expect(availabilityReads).toBe(0);
+		expect(fakeCompactionModels).toHaveLength(0);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test("manual compaction replaces an unavailable Agent pin only with an available Provider Model", async () => {
+	const pinnedAgent = agentId("offline-model-agent");
+	const replacementModel: ProviderModel = {
+		modelId: "replacement-model",
+		protocolId: "fake-provider",
+		providerId: "openai",
+	};
+	const replacementCandidate = providerModelCandidate(replacementModel);
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => [replacementModel],
+		getAvailableProviderModelSelectionCandidates: async () => [
+			replacementCandidate,
+		],
+		getKnownModels: async () => [],
+		selectProviderModelSelectionCandidate: async <Result,>(
+			candidate: ProviderModelSelectionCandidate,
+			action: (
+				model: ProviderModel,
+				selection: ProviderModelSelection
+			) => Result | Promise<Result>
+		): Promise<Result> => await action(candidate.model, candidate.selection),
+	});
+	const { setup } = await renderSessionView({
+		configSettings: {
+			agents: {
+				[pinnedAgent]: {
+					description: "Keeps its unavailable OpenAI pin.",
+					model: "openai/gpt-5.6-luna",
+					role: "primary",
+				},
+			},
+			default_agent: pinnedAgent,
+		},
+		height: 30,
+		initialAgent: pinnedAgent,
+		initialModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () => setup.mockInput.typeText("preserve the history"));
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Choose Model for Compaction")
+		);
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("replacement-model")
+		);
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() => fakeCompactionModels.length === 1);
+
+		expect(fakeCompactionModels).toEqual([
+			{ modelId: modelId("replacement-model"), providerId: "openai" },
+		]);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test("manual compaction rejects a fetched owner-A model after owner B replaces it", async () => {
+	const providerModel: ProviderModel = {
+		modelId: "same-model-id",
+		protocolId: "fake-provider",
+		providerId: "plugin-picker-provider",
+	};
+	let trustedRegistration = pluginPickerRegistration("owner-a");
+	let hostRegistration = trustedRegistration;
+	let trustedRuntime: object = {};
+	let compositionRevision = 1;
+	let availabilityReads = 0;
+	const providerController = createInteractiveProviderController(
+		fromPartial<ProviderCollection>({
+			getAvailable: async () => {
+				availabilityReads += 1;
+				return [providerModel];
+			},
+			getModels: () => [providerModel],
+			restoreModels: async () => undefined,
+		}),
+		{
+			getCompositionRevision: () => compositionRevision,
+			getPluginProviderRegistrations: () => [hostRegistration],
+			getTrustedPluginProviderRegistrations: () => [trustedRegistration],
+			getTrustedPluginProviderRuntime: () => trustedRuntime,
+			withSessionWork: async (action) => await action(),
+		}
+	);
+	const { setup } = await renderSessionView({
+		height: 30,
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () => setup.mockInput.typeText("preserve the history"));
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Choose Model for Compaction")
+		);
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("same-model-id")
+		);
+
+		trustedRegistration = pluginPickerRegistration("owner-b");
+		hostRegistration = trustedRegistration;
+		trustedRuntime = {};
+		compositionRevision += 1;
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() =>
+			setup.captureCharFrame().includes("Provider Model results are stale")
+		);
+
+		expect(availabilityReads).toBe(2);
+		expect(fakeCompactionModels).toHaveLength(0);
+	} finally {
+		setup.renderer.destroy();
+	}
 });
 
 describe("SessionView initial submission", () => {
@@ -527,36 +852,32 @@ describe("SessionView initial submission", () => {
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
 				>
 					<ToastProvider>
-						<ConnectionsProvider connections={createConnections()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<PromptConfigProvider>
-										<ModelPricingProvider>
-											<DialogProvider>
-												<RouterContextProvider router={router}>
-													<CommandControllerProvider>
-														<SessionView
-															host={createFakeSessionHost(initialTranscript)}
-															initialSubmission={{
-																messageId: sessionMessageId("initial-user"),
-															}}
-															initialTranscript={initialTranscript}
-															sessionId={sessionId("session-1")}
-															sessionTitle="Create the session prompt"
-														/>
-														<AgentRegistryReadyProbe
-															onReady={() => {
-																registryIsReady = true;
-															}}
-														/>
-													</CommandControllerProvider>
-												</RouterContextProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</PromptConfigProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</ConnectionsProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<SessionView
+													host={createFakeSessionHost(initialTranscript)}
+													initialSubmission={{
+														messageId: sessionMessageId("initial-user"),
+													}}
+													initialTranscript={initialTranscript}
+													sessionId={sessionId("session-1")}
+													sessionTitle="Create the session prompt"
+												/>
+												<AgentRegistryReadyProbe
+													onReady={() => {
+														registryIsReady = true;
+													}}
+												/>
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ToastProvider>
 				</ConfigProvider>
 			</ThemeProvider>,
@@ -599,6 +920,387 @@ describe("SessionView initial submission", () => {
 		throw new Error(`The composer never held "${text}".`);
 	};
 
+	const createProviderRuntime = (
+		providerId: string,
+		owners: readonly Pick<
+			PluginProviderDescriptor,
+			"pluginId" | "sourceIdentity"
+		>[],
+		workspace: string
+	) =>
+		createPluginRuntime(
+			owners.map(({ pluginId, sourceIdentity }) => ({
+				commands: [],
+				id: pluginId,
+				providers: [
+					{
+						connect: async () => undefined,
+						createProvider: () => fromPartial<Provider>({}),
+						displayName: pluginId,
+						pluginId,
+						providerId,
+						sourceIdentity,
+						sourcePath: sourceIdentity,
+					},
+				],
+				sourcePath: sourceIdentity,
+				tools: [],
+				workspace,
+			})),
+			[]
+		);
+
+	const expectPinRejectedBeforeProviderAvailability = async ({
+		owners,
+		restoredSelection,
+	}: {
+		owners: readonly Pick<
+			PluginProviderDescriptor,
+			"pluginId" | "sourceIdentity"
+		>[];
+		restoredSelection?: ResolvedSessionSelection;
+	}): Promise<void> => {
+		const providerId = "session-view-trusted-provider";
+		const modelIdValue = "session-view-pinned-model";
+		const pinnedAgent = agentId("session-view-plugin-pinned-agent");
+		const workspace = process.cwd();
+		const providerModel: ProviderModel = {
+			modelId: modelId(modelIdValue),
+			protocolId: "fake-provider",
+			providerId,
+		};
+		const pluginRuntime =
+			owners.length === 0
+				? undefined
+				: createProviderRuntime(providerId, owners, workspace);
+		setInteractiveRuntimeContext({
+			args: [],
+			cwd: workspace,
+			...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+		});
+		let availabilityReads = 0;
+		let credentialReads = 0;
+		let modelStoreReads = 0;
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailableModels: async () => {
+				availabilityReads += 1;
+				credentialReads += 1;
+				modelStoreReads += 1;
+				return [providerModel];
+			},
+			getKnownModels: async () => [providerModel],
+			getPluginProviderComposition: (candidateProviderId: string) => {
+				const registration = pluginRuntime
+					?.getProviderRegistrations(sessionId("session-1"))
+					.find(
+						({ providerId: registeredProviderId }) =>
+							registeredProviderId === candidateProviderId
+					);
+				return registration === undefined
+					? undefined
+					: fromPartial<PluginProviderComposition>({ registration });
+			},
+		});
+		const sendStarted = deferred<void>();
+		const release = deferred<void>();
+		activeFakeSessionRun = {
+			navigationRelease: deferred<void>(),
+			navigationStarted: deferred<void>(),
+			release,
+			sendStarted,
+		};
+		const setupResult = await renderSessionView({
+			configSettings: {
+				agents: {
+					[pinnedAgent]: {
+						description: "Uses a Plugin Provider pin.",
+						model: `${providerId}/${modelIdValue}`,
+						role: "primary",
+					},
+				},
+				default_agent: pinnedAgent,
+			},
+			height: 30,
+			initialAgent: pinnedAgent,
+			initialModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+			initialTranscript: [],
+			providerController,
+			restoredSelection,
+			width: 100,
+		});
+
+		try {
+			await typePrompt(setupResult.setup, "submit the Plugin pin");
+			await act(() => setupResult.setup.mockInput.pressEnter());
+			await flushUi(setupResult.setup);
+			expect(fakeRunInputs).toHaveLength(0);
+			expect(availabilityReads).toBe(0);
+			expect(credentialReads).toBe(0);
+			expect(modelStoreReads).toBe(0);
+			expect(
+				setupResult.setup.captureCharFrame().replace(/\s+/gu, " ")
+			).toContain("re-select it in Interactive Mode");
+		} finally {
+			release.resolve();
+			setupResult.setup.renderer.destroy();
+			await pluginRuntime?.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: workspace });
+		}
+	};
+
+	test("rejects a built-in selection before availability when an unrelated Host Plugin snapshot is stale", async () => {
+		let availabilityReads = 0;
+		const providerModel: ProviderModel = {
+			modelId: "gpt-5.6-luna",
+			protocolId: "fake-provider",
+			providerId: "openai",
+		};
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailableModels: async () => {
+				availabilityReads += 1;
+				return [providerModel];
+			},
+			getKnownModels: async () => [providerModel],
+		});
+		let snapshotChecks = 0;
+		const { setup } = await renderSessionView({
+			height: 30,
+			initialModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+			initialTranscript: [],
+			providerController,
+			assertPluginSnapshot: () => {
+				snapshotChecks += 1;
+				throw new Error("An unrelated Host Plugin registration is stale.");
+			},
+			width: 100,
+		});
+
+		try {
+			await typePrompt(setup, "submit the built-in model");
+			await act(() => setup.mockInput.pressEnter());
+			await flushUi(setup);
+			expect(snapshotChecks).toBe(1);
+			expect(availabilityReads).toBe(0);
+			expect(fakeRunInputs).toHaveLength(0);
+			expect(setup.captureCharFrame().replace(/\s+/gu, " ")).toContain(
+				"unrelated Host Plugin registration is stale"
+			);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("uses an Agent pin only when its exact current Provider Model is available", async () => {
+		const pinnedAgent = agentId("current-provider-model-agent");
+		const pinnedModel: ProviderModel = {
+			modelId: "gpt-5.6-luna",
+			protocolId: "fake-provider",
+			providerId: "openai",
+		};
+		const sendStarted = deferred<void>();
+		const release = deferred<void>();
+		activeFakeSessionRun = {
+			navigationRelease: deferred<void>(),
+			navigationStarted: deferred<void>(),
+			release,
+			sendStarted,
+		};
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailableModels: async () => [pinnedModel],
+			getKnownModels: async () => [pinnedModel],
+		});
+		const { setup } = await renderSessionView({
+			configSettings: {
+				agents: {
+					[pinnedAgent]: {
+						description: "Uses an exact current Provider Model.",
+						model: "openai/gpt-5.6-luna",
+						role: "primary",
+					},
+				},
+				default_agent: pinnedAgent,
+			},
+			height: 30,
+			initialAgent: pinnedAgent,
+			initialModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+			initialTranscript: [],
+			providerController,
+			width: 100,
+		});
+
+		try {
+			await typePrompt(setup, "run the pinned model");
+			await act(() => setup.mockInput.pressEnter());
+			await sendStarted.promise;
+			expect(fakeRunInputs[0]).toMatchObject({
+				agent: pinnedAgent,
+				model: {
+					modelId: modelId("gpt-5.6-luna"),
+					providerId: "openai",
+				},
+				resolvedAgent: {
+					id: pinnedAgent,
+					instructions: "",
+				},
+				selectionOverride: {
+					model: {
+						modelId: modelId("gpt-5.6-luna"),
+						providerId: "openai",
+					},
+				},
+			});
+		} finally {
+			release.resolve();
+			setup.renderer.destroy();
+		}
+	});
+
+	test("binds a trusted Plugin Agent pin before availability and submits the Host-valid owner", async () => {
+		const workspace = process.cwd();
+		const providerId = "trusted-session-view-provider";
+		const providerModelId = "trusted-session-view-model";
+		const pinnedAgent = agentId("trusted-session-view-agent");
+		const owner = {
+			pluginId: "trusted-session-view-plugin",
+			sourceIdentity: "/trusted/session-view-provider.ts",
+		};
+		const sessionIdValue = sessionId("session-1");
+		const providerModel: ProviderModel = {
+			modelId: modelId(providerModelId),
+			protocolId: "fake-provider",
+			providerId,
+		};
+		const pluginRuntime = createProviderRuntime(providerId, [owner], workspace);
+		setInteractiveRuntimeContext({ args: [], cwd: workspace, pluginRuntime });
+		let availabilityReads = 0;
+		const trustedRegistrations =
+			pluginRuntime.getProviderRegistrations(sessionIdValue);
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailableModels: async () => {
+				availabilityReads += 1;
+				return [providerModel];
+			},
+			getKnownModels: async () => [providerModel],
+			getPluginProviderComposition: (candidateProviderId: string) => {
+				const registration = trustedRegistrations.find(
+					({ providerId: registeredProviderId }) =>
+						registeredProviderId === candidateProviderId
+				);
+				return registration === undefined
+					? undefined
+					: fromPartial<PluginProviderComposition>({ registration });
+			},
+		});
+		const sendStarted = deferred<void>();
+		const release = deferred<void>();
+		activeFakeSessionRun = {
+			navigationRelease: deferred<void>(),
+			navigationStarted: deferred<void>(),
+			release,
+			sendStarted,
+		};
+		const { setup } = await renderSessionView({
+			configSettings: {
+				agents: {
+					[pinnedAgent]: {
+						description: "Uses a trusted Plugin Provider pin.",
+						model: `${providerId}/${providerModelId}`,
+						role: "primary",
+					},
+				},
+				default_agent: pinnedAgent,
+			},
+			height: 30,
+			initialAgent: pinnedAgent,
+			initialModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+			initialTranscript: [],
+			providerController,
+			width: 100,
+		});
+
+		try {
+			await typePrompt(setup, "submit the trusted Plugin pin");
+			await act(() => setup.mockInput.pressEnter());
+			await sendStarted.promise;
+			const submitted = fakeRunInputs[0];
+			if (submitted === undefined) {
+				throw new Error("The Session View did not submit its Agent pin.");
+			}
+			expect(submitted.model).toEqual({
+				modelId: modelId(providerModelId),
+				pluginProviderSource: owner,
+				providerId,
+			});
+			expect(submitted.selectionOverride?.model).toEqual(submitted.model);
+			expect(availabilityReads).toBe(1);
+
+			const hostProviderCollection = fromPartial<
+				ProviderCollection & {
+					getPluginProviderRegistrations: () => readonly PluginProviderDescriptor[];
+				}
+			>({ getPluginProviderRegistrations: () => trustedRegistrations });
+			assertPluginProviderSelectionOwner(
+				submitted.model,
+				fromPartial<SessionCapabilities>({
+					getPluginRuntime: () => pluginRuntime,
+				}),
+				hostProviderCollection,
+				sessionIdValue
+			);
+		} finally {
+			release.resolve();
+			setup.renderer.destroy();
+			await pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: workspace });
+		}
+	});
+
+	for (const scenario of [
+		{ name: "untrusted", owners: [] },
+		{
+			name: "ambiguous",
+			owners: [
+				{
+					pluginId: "first-session-view-plugin",
+					sourceIdentity: "/trusted/first-session-view-provider.ts",
+				},
+				{
+					pluginId: "second-session-view-plugin",
+					sourceIdentity: "/trusted/second-session-view-provider.ts",
+				},
+			],
+		},
+	]) {
+		test(`rejects ${scenario.name} Plugin Agent pins before availability and credential reads`, async () => {
+			await expectPinRejectedBeforeProviderAvailability({
+				owners: scenario.owners,
+			});
+		});
+	}
+
+	test("does not rebind an ownerless restored Plugin Agent pin before availability", async () => {
+		const providerId = "session-view-trusted-provider";
+		const modelIdValue = "session-view-pinned-model";
+		const pinnedAgent = agentId("session-view-plugin-pinned-agent");
+		await expectPinRejectedBeforeProviderAvailability({
+			owners: [
+				{
+					pluginId: "restored-session-view-plugin",
+					sourceIdentity: "/trusted/restored-session-view-provider.ts",
+				},
+			],
+			restoredSelection: {
+				agent: pinnedAgent,
+				model: {
+					modelId: modelId(modelIdValue),
+					providerId,
+				},
+				persistedAgent: pinnedAgent,
+				thinkingLevel: undefined,
+			},
+		});
+	});
+
 	test("Plugin selection overrides a pinned Agent on the next Submission", async () => {
 		const navigationRelease = deferred<void>();
 		const navigationStarted = deferred<void>();
@@ -606,10 +1308,40 @@ describe("SessionView initial submission", () => {
 		const release = deferred<void>();
 		const workspace = process.cwd();
 		const pinnedAgentId = agentId("plugin-pinned-agent");
-		const selectedModel: ChatModelSelection = {
+		const selectedModel: ProviderModelSelection = {
 			modelId: modelId("gpt-6-luna"),
 			providerId: "openai",
 		};
+		const pinnedProviderModel: ProviderModel = {
+			modelId: "gpt-5.6-luna",
+			protocolId: "fake-provider",
+			providerId: "openai",
+		};
+		const selectedProviderModel: ProviderModel = {
+			modelId: selectedModel.modelId,
+			protocolId: "fake-provider",
+			providerId: selectedModel.providerId,
+		};
+		const modelCandidates = [
+			providerModelCandidate(pinnedProviderModel),
+			providerModelCandidate(selectedProviderModel),
+		];
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailableModels: async () => [
+				pinnedProviderModel,
+				selectedProviderModel,
+			],
+			getAvailableProviderModelSelectionCandidates: async () => modelCandidates,
+			getKnownModels: async () => [pinnedProviderModel, selectedProviderModel],
+			getPluginProviderRegistrations: () => [],
+			selectProviderModelSelectionCandidate: async <Result,>(
+				candidate: ProviderModelSelectionCandidate,
+				action: (
+					model: ProviderModel,
+					selection: ProviderModelSelection
+				) => Result | Promise<Result>
+			): Promise<Result> => await action(candidate.model, candidate.selection),
+		});
 		const bridge = createPluginPromptSelectionBridge();
 		const pluginRuntime = createPluginRuntime(
 			[
@@ -657,17 +1389,6 @@ describe("SessionView initial submission", () => {
 		const router = buildRouter();
 		await router.load();
 		const configStore = createTestConfigStore();
-		const connectedProvider: ConnectionProviderSummary = {
-			connected: true,
-			connectionMethod: "api-key",
-			displayName: "OpenAI",
-			id: "openai",
-			methods: ["api-key"],
-		};
-		const connections: Connections = {
-			...createConnections(),
-			listProviders: async () => [connectedProvider],
-		};
 		let registryIsReady = false;
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
@@ -675,37 +1396,33 @@ describe("SessionView initial submission", () => {
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
 				>
 					<ToastProvider>
-						<ConnectionsProvider connections={connections}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<PromptConfigProvider
-										initialAgent={pinnedAgentId}
-										initialModel={defaultChatModelSelection}
-										initialThinkingLevel="high"
-									>
-										<ModelPricingProvider>
-											<DialogProvider>
-												<RouterContextProvider router={router}>
-													<CommandControllerProvider>
-														<SessionView
-															host={createFakeSessionHost([])}
-															initialTranscript={[]}
-															sessionId={sessionId("session-selection")}
-															sessionTitle="Use the Plugin selection"
-														/>
-														<AgentRegistryReadyProbe
-															onReady={() => {
-																registryIsReady = true;
-															}}
-														/>
-													</CommandControllerProvider>
-												</RouterContextProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</PromptConfigProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</ConnectionsProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider
+									initialAgent={pinnedAgentId}
+									initialModel={DEFAULT_PROVIDER_MODEL_SELECTION}
+									initialThinkingLevel="high"
+								>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<SessionView
+													host={createFakeSessionHost([], providerController)}
+													initialTranscript={[]}
+													sessionId={sessionId("session-selection")}
+													sessionTitle="Use the Plugin selection"
+												/>
+												<AgentRegistryReadyProbe
+													onReady={() => {
+														registryIsReady = true;
+													}}
+												/>
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ToastProvider>
 				</ConfigProvider>
 			</ThemeProvider>,
@@ -746,13 +1463,32 @@ describe("SessionView initial submission", () => {
 		}
 	});
 
-	test("built-in Model picker cancels cache warming when the Model Target changes", async () => {
-		const selectedModel: ChatModelSelection = {
+	test("built-in Model picker cancels cache warming when the Provider Model changes", async () => {
+		const selectedModel: ProviderModelSelection = {
 			modelId: modelId("gpt-6-luna"),
 			providerId: "openai",
 		};
-		let observedModel: ChatModelSelection = defaultChatModelSelection;
-		const recordModel = (model: ChatModelSelection): void => {
+		const providerModel: ProviderModel = {
+			modelId: selectedModel.modelId,
+			protocolId: "fake-provider",
+			providerId: selectedModel.providerId,
+		};
+		const candidate = providerModelCandidate(providerModel);
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailableModels: async () => [providerModel],
+			getAvailableProviderModelSelectionCandidates: async () => [candidate],
+			getKnownModels: async () => [providerModel],
+			selectProviderModelSelectionCandidate: async <Result,>(
+				selected: ProviderModelSelectionCandidate,
+				action: (
+					model: ProviderModel,
+					selection: ProviderModelSelection
+				) => Result | Promise<Result>
+			): Promise<Result> => await action(selected.model, selected.selection),
+		});
+		let observedModel: ProviderModelSelection =
+			DEFAULT_PROVIDER_MODEL_SELECTION;
+		const recordModel = (model: ProviderModelSelection): void => {
 			observedModel = model;
 		};
 		const workspace = process.cwd();
@@ -767,38 +1503,32 @@ describe("SessionView initial submission", () => {
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
 				>
 					<ToastProvider>
-						<ConnectionsProvider connections={createConnections()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<PromptConfigProvider
-										initialModel={defaultChatModelSelection}
-									>
-										<ModelPricingProvider>
-											<DialogProvider>
-												<RouterContextProvider router={router}>
-													<CommandControllerProvider>
-														<SessionView
-															host={createFakeSessionHost([])}
-															initialTranscript={[]}
-															sessionId={sessionId(
-																"model-picker-cancels-warming"
-															)}
-															sessionTitle="Change the selected Model Target"
-														/>
-														<PromptModelProbe onModel={recordModel} />
-														<AgentRegistryReadyProbe
-															onReady={() => {
-																registryIsReady = true;
-															}}
-														/>
-													</CommandControllerProvider>
-												</RouterContextProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</PromptConfigProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</ConnectionsProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider
+									initialModel={DEFAULT_PROVIDER_MODEL_SELECTION}
+								>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<SessionView
+													host={createFakeSessionHost([], providerController)}
+													initialTranscript={[]}
+													sessionId={sessionId("model-picker-cancels-warming")}
+													sessionTitle="Change the selected Provider Model"
+												/>
+												<PromptModelProbe onModel={recordModel} />
+												<AgentRegistryReadyProbe
+													onReady={() => {
+														registryIsReady = true;
+													}}
+												/>
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ToastProvider>
 				</ConfigProvider>
 			</ThemeProvider>,
@@ -814,16 +1544,16 @@ describe("SessionView initial submission", () => {
 			);
 			await act(() => setup.mockInput.pressTab());
 			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("Search models")
+				setup.captureCharFrame().includes("Search Provider Models")
 			);
 			await act(async () => setup.mockInput.typeText("gpt-6-luna"));
 			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("GPT-6 Luna")
+				setup.captureCharFrame().includes("gpt-6-luna")
 			);
 			await act(() => setup.mockInput.pressArrow("down"));
 			await act(() => setup.mockInput.pressEnter());
 			await setup.waitFor(
-				() => !setup.captureCharFrame().includes("Search models")
+				() => !setup.captureCharFrame().includes("Search Provider Models")
 			);
 			await flushUi(setup);
 			expect(observedModel).toMatchObject(selectedModel);
@@ -836,11 +1566,20 @@ describe("SessionView initial submission", () => {
 	test("built-in Agent picker cancels cache warming when the Agent changes", async () => {
 		const workspace = process.cwd();
 		const selectedAgent = agentId("cache-warming-agent");
+		const providerModel: ProviderModel = {
+			modelId: "gpt-5.6-luna",
+			protocolId: "fake-provider",
+			providerId: "openai",
+		};
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailableModels: async () => [providerModel],
+			getKnownModels: async () => [providerModel],
+		});
 		let observedAgent: AgentId = agentId("build");
 		const recordAgent = (agent: AgentId): void => {
 			observedAgent = agent;
 		};
-		const recordModel = (_model: ChatModelSelection): void => undefined;
+		const recordModel = (_model: ProviderModelSelection): void => undefined;
 		const pluginRuntime = createPluginRuntime(
 			[
 				{
@@ -877,59 +1616,42 @@ describe("SessionView initial submission", () => {
 		const router = buildRouter();
 		await router.load();
 		const configStore = createTestConfigStore();
-		const connectedProvider: ConnectionProviderSummary = {
-			connected: true,
-			connectionMethod: "api-key",
-			displayName: "OpenAI",
-			id: "openai",
-			methods: ["api-key"],
-		};
-		const connections: Connections = {
-			...createConnections(),
-			listProviders: async () => [connectedProvider],
-		};
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
 				<ConfigProvider
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
 				>
 					<ToastProvider>
-						<ConnectionsProvider connections={connections}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<PromptConfigProvider
-										initialAgent={agentId("build")}
-										initialModel={defaultChatModelSelection}
-									>
-										<ModelPricingProvider>
-											<DialogProvider>
-												<RouterContextProvider router={router}>
-													<CommandControllerProvider>
-														<SessionView
-															host={createFakeSessionHost([])}
-															initialTranscript={[]}
-															sessionId={sessionId(
-																"agent-picker-cancels-warming"
-															)}
-															sessionTitle="Change the selected Agent"
-														/>
-														<AgentRegistryReadyProbe
-															onReady={() => {
-																registryIsReady = true;
-															}}
-														/>
-														<PromptModelProbe
-															onAgent={recordAgent}
-															onModel={recordModel}
-														/>
-													</CommandControllerProvider>
-												</RouterContextProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</PromptConfigProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</ConnectionsProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider
+									initialAgent={agentId("build")}
+									initialModel={DEFAULT_PROVIDER_MODEL_SELECTION}
+								>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<SessionView
+													host={createFakeSessionHost([], providerController)}
+													initialTranscript={[]}
+													sessionId={sessionId("agent-picker-cancels-warming")}
+													sessionTitle="Change the selected Agent"
+												/>
+												<AgentRegistryReadyProbe
+													onReady={() => {
+														registryIsReady = true;
+													}}
+												/>
+												<PromptModelProbe
+													onAgent={recordAgent}
+													onModel={recordModel}
+												/>
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ToastProvider>
 				</ConfigProvider>
 			</ThemeProvider>,
@@ -986,33 +1708,29 @@ describe("SessionView initial submission", () => {
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
 				>
 					<ToastProvider>
-						<ConnectionsProvider connections={createConnections()}>
-							<AgentRegistryProvider>
-								<KeyboardLayerProvider>
-									<PromptConfigProvider>
-										<ModelPricingProvider>
-											<DialogProvider>
-												<RouterContextProvider router={router}>
-													<CommandControllerProvider>
-														<SessionView
-															host={createFakeSessionHost([])}
-															initialTranscript={[]}
-															sessionId={sessionId("session-1")}
-															sessionTitle="Send an entered prompt"
-														/>
-														<AgentRegistryReadyProbe
-															onReady={() => {
-																registryIsReady = true;
-															}}
-														/>
-													</CommandControllerProvider>
-												</RouterContextProvider>
-											</DialogProvider>
-										</ModelPricingProvider>
-									</PromptConfigProvider>
-								</KeyboardLayerProvider>
-							</AgentRegistryProvider>
-						</ConnectionsProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<SessionView
+													host={createFakeSessionHost([])}
+													initialTranscript={[]}
+													sessionId={sessionId("session-1")}
+													sessionTitle="Send an entered prompt"
+												/>
+												<AgentRegistryReadyProbe
+													onReady={() => {
+														registryIsReady = true;
+													}}
+												/>
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
 					</ToastProvider>
 				</ConfigProvider>
 			</ThemeProvider>,
@@ -1048,17 +1766,31 @@ describe("SessionView initial submission", () => {
 const renderSessionView = async ({
 	height,
 	initialTranscript,
+	initialAgent,
+	initialModel,
+	configSettings,
 	liveTranscript = initialTranscript,
+	onThinkingLevel,
+	providerController,
+	restoredSelection,
+	assertPluginSnapshot,
 	width,
 }: {
 	height: number;
 	initialTranscript: SessionMessage[];
+	initialAgent?: AgentId;
+	initialModel?: ProviderModelSelection;
+	configSettings?: Readonly<Record<string, unknown>>;
 	liveTranscript?: SessionMessage[];
+	onThinkingLevel?: (level: ThinkingLevel | undefined) => void;
+	providerController?: InteractiveProviderController;
+	restoredSelection?: ResolvedSessionSelection | null;
+	assertPluginSnapshot?: () => void;
 	width: number;
 }) => {
 	const router = buildRouter();
 	await router.load();
-	const configStore = createTestConfigStore();
+	const configStore = createTestConfigStore(configSettings);
 	const workspace = process.cwd();
 	let registryIsReady = false;
 	const commandLayer = { isTop: false };
@@ -1068,38 +1800,45 @@ const renderSessionView = async ({
 				value={{ configStore, homeRoot: os.homedir(), workspace }}
 			>
 				<ToastProvider>
-					<ConnectionsProvider connections={createConnections()}>
-						<AgentRegistryProvider>
-							<KeyboardLayerProvider>
-								<PromptConfigProvider>
-									<ModelPricingProvider>
-										<DialogProvider>
-											<RouterContextProvider router={router}>
-												<CommandControllerProvider>
-													<SessionView
-														host={createFakeSessionHost(liveTranscript)}
-														initialTranscript={initialTranscript}
-														sessionId={sessionId("session-1")}
-														sessionTitle="Queue a prompt"
-													/>
-													<AgentRegistryReadyProbe
-														onReady={() => {
-															registryIsReady = true;
-														}}
-													/>
-													<KeyboardLayerProbe
-														onLayer={(isCommandLayer) => {
-															commandLayer.isTop = isCommandLayer;
-														}}
-													/>
-												</CommandControllerProvider>
-											</RouterContextProvider>
-										</DialogProvider>
-									</ModelPricingProvider>
-								</PromptConfigProvider>
-							</KeyboardLayerProvider>
-						</AgentRegistryProvider>
-					</ConnectionsProvider>
+					<AgentRegistryProvider>
+						<KeyboardLayerProvider>
+							<PromptConfigProvider
+								{...(initialAgent === undefined ? {} : { initialAgent })}
+								{...(initialModel === undefined ? {} : { initialModel })}
+							>
+								<DialogProvider>
+									<RouterContextProvider router={router}>
+										<CommandControllerProvider>
+											<SessionView
+												host={createFakeSessionHost(
+													liveTranscript,
+													providerController,
+													restoredSelection,
+													assertPluginSnapshot
+												)}
+												initialTranscript={initialTranscript}
+												sessionId={sessionId("session-1")}
+												sessionTitle="Queue a prompt"
+											/>
+											{onThinkingLevel === undefined ? null : (
+												<ThinkingLevelProbe onThinkingLevel={onThinkingLevel} />
+											)}
+											<AgentRegistryReadyProbe
+												onReady={() => {
+													registryIsReady = true;
+												}}
+											/>
+											<KeyboardLayerProbe
+												onLayer={(isCommandLayer) => {
+													commandLayer.isTop = isCommandLayer;
+												}}
+											/>
+										</CommandControllerProvider>
+									</RouterContextProvider>
+								</DialogProvider>
+							</PromptConfigProvider>
+						</KeyboardLayerProvider>
+					</AgentRegistryProvider>
 				</ToastProvider>
 			</ConfigProvider>
 		</ThemeProvider>,
@@ -1109,6 +1848,67 @@ const renderSessionView = async ({
 	await flushUi(setup);
 	return { commandLayer, setup };
 };
+
+test("refreshes reasoning metadata after model discovery changes on a stable controller", async () => {
+	const model: ProviderModelSelection = {
+		modelId: modelId("reasoning-model"),
+		providerId: "plugin-provider",
+	};
+	let availabilityRevision = 0;
+	let knownModelReads = 0;
+	let knownModels: readonly ProviderModel[] = [];
+	const availabilityListeners = new Set<() => void>();
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => knownModels,
+		getAvailabilityRevision: () => availabilityRevision,
+		getCompositionRevision: () => 0,
+		getKnownModels: async () => {
+			knownModelReads += 1;
+			return knownModels;
+		},
+		subscribeAvailability: (listener: () => void) => {
+			availabilityListeners.add(listener);
+			return () => availabilityListeners.delete(listener);
+		},
+	});
+	let observedThinkingLevel: ThinkingLevel | undefined;
+	const { setup } = await renderSessionView({
+		height: 30,
+		initialModel: model,
+		initialTranscript: [],
+		onThinkingLevel: (level) => {
+			observedThinkingLevel = level;
+		},
+		providerController,
+		width: 100,
+	});
+
+	try {
+		expect(observedThinkingLevel).toBeUndefined();
+		await act(() => {
+			knownModels = [
+				{
+					modelId: model.modelId,
+					protocolId: "fixture",
+					providerId: model.providerId,
+					reasoningEfforts: ["high"],
+				},
+			];
+			availabilityRevision += 1;
+			for (const listener of [...availabilityListeners]) {
+				listener();
+			}
+		});
+		await setup.waitFor(() => knownModelReads >= 2);
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressTab({ shift: true }));
+		await flushUi(setup);
+
+		expect(observedThinkingLevel).toBe("high");
+	} finally {
+		setup.renderer.destroy();
+	}
+});
 
 test("renders unavailable attachment annotations over the unannotated Host transcript", async () => {
 	const id = attachmentId("missing");

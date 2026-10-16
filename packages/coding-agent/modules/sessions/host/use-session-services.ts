@@ -1,12 +1,14 @@
 import { useMemo } from "react";
 import { useAgentRegistry } from "@/modules/agents/agent-registry-provider";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
-import { useConnections } from "@/modules/connections";
-import { useModelPricing } from "@/modules/model-pricing";
 import {
 	createPluginRuntime,
 	type PluginRuntime,
 } from "@/modules/plugins/runtime";
+import {
+	createInteractiveSessionProviderCollection,
+	pluginProvidersFromRuntime,
+} from "@/modules/sessions/provider-collection";
 import { useConfig } from "@/shared/config/config-provider";
 import { useLatest } from "@/shared/hooks/use-latest";
 import {
@@ -42,25 +44,19 @@ export type SessionServicesHandle = Readonly<{
  *
  * The returned handle opens lazily because opening is asynchronous, and every source
  * is a getter because a Session outlives the render that supplied it: a
- * reconnected provider, a reloaded configuration, a replaced Plugin runtime, or
- * an arriving Model Catalog pricing table is what the Session's next work sees.
+ * reconnected Provider, a reloaded configuration, a replaced Plugin runtime, or
+ * updated Provider Model metadata is what the Session's next work sees.
  * These services borrow everything they run on — the store, the Session Host
  * Manager, and the Plugin runtime, which is the process runtime or, before that
  * exists, a process-scoped stand-in — so closing them never stops Plugins a
  * Session Host still uses.
  */
 export const useSessionServicesHandle = (): SessionServicesHandle => {
-	const connections = useConnections();
 	const config = useConfig();
 	const registry = useAgentRegistry();
-	const { table: pricing } = useModelPricing();
-	const connectionsRef = useLatest(connections);
 	const configRef = useLatest(config);
 	const registryRef = useLatest(registry);
-	const pricingRef = useLatest(pricing);
 
-	const runtimeContext = getInteractiveRuntimeContext();
-	const runtimeFactory = runtimeContext.runtimeFactory;
 	const composition = useMemo(() => createApplicationPluginComposition(), []);
 	return useMemo(() => {
 		const sessionHostManager = getInteractiveSessionHostManager();
@@ -83,17 +79,40 @@ export const useSessionServicesHandle = (): SessionServicesHandle => {
 					},
 					sources: {
 						configRuntime: () => configRef.current,
-						connections: () => connectionsRef.current,
-						pricing: () => pricingRef.current,
 						registry: () => registryRef.current,
 						sessionHostManager: () => sessionHostManager,
 						store: () => getSessionStore(),
+						createProviderCollection: (
+							pluginRuntime,
+							sessionId,
+							allowedPluginProviderIds,
+							allowedPluginProviderSources
+						) => {
+							const createProviderCollection =
+								getInteractiveRuntimeContext().createProviderCollection;
+							if (createProviderCollection !== undefined) {
+								return createProviderCollection(
+									pluginRuntime,
+									sessionId,
+									allowedPluginProviderIds,
+									allowedPluginProviderSources
+								);
+							}
+							return createInteractiveSessionProviderCollection({
+								sessionId,
+								pluginProviders: pluginProvidersFromRuntime(
+									pluginRuntime,
+									sessionId,
+									allowedPluginProviderIds,
+									allowedPluginProviderSources
+								),
+							});
+						},
 						turnToolResolver: () => composition.turnToolResolver,
 						pluginRuntime: () =>
 							getInteractiveRuntimeContext().pluginRuntime ??
 							initialPluginRuntime ??
 							interactiveStandInRuntime(),
-						...(runtimeFactory === undefined ? {} : { runtimeFactory }),
 					},
 				}).catch((error: unknown) => {
 					opened = undefined;
@@ -102,5 +121,5 @@ export const useSessionServicesHandle = (): SessionServicesHandle => {
 				return opened;
 			},
 		};
-	}, [composition, runtimeFactory]);
+	}, [composition]);
 };

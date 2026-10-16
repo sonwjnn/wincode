@@ -47,10 +47,12 @@ export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
 							: "  cache warming"}
 					</span>
 				)}
-				{isNull(summary.costUsd) ? null : (
+				{isNull(summary.costUsd) ? (
+					<span> cost unknown</span>
+				) : (
 					// "~" marks a figure derived from published rates instead of an
-					// invoice. See ADR-0015.
-					<span>{`  ~${formatModelUsdAmount(summary.costUsd)}`}</span>
+					// invoice. See ADR-0015. Partial totals exclude unpriced usage.
+					<span>{`  ~${formatModelUsdAmount(summary.costUsd)}${summary.costCoverage === "partial" ? " (partial)" : ""}`}</span>
 				)}
 			</text>
 		</box>

@@ -2,14 +2,17 @@ import {
 	calculateModelUsageCostUsd,
 	getModelContextTokens,
 } from "@wincode/ai/model-usage";
-import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { isNull } from "@wincode/utils";
-import type {
-	ModelPricingEntry,
-	ModelPricingTable,
+import {
+	type ModelPricingEntry,
+	pricingEntryForProviderModel,
 } from "@/modules/model-pricing";
-import { resolveModelMetadata } from "@/modules/model-pricing";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
+import {
+	isSameProviderModelIdentity,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type {
 	SessionMessage,
 	SessionMessageUsage,
@@ -17,8 +20,10 @@ import type {
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 
 export type SessionUsageSummary = {
-	/** Estimated USD for every measured turn in the session, or `null` when no turn has a usable rate. */
+	/** Estimated USD for measured usage with complete rates, or `null` when every rate is unknown. */
 	costUsd: number | null;
+	/** Whether the total covers every measured usage entry or omits unknown rates. */
+	costCoverage: "complete" | "partial" | "unknown";
 	/** How many real Agent Turns contributed a cost estimate. */
 	costedTurns: number;
 	/** How many separate usage entries contributed a cost estimate. */
@@ -29,7 +34,7 @@ export type SessionUsageSummary = {
 	cacheReadTokens: number;
 	/** Session-total cache writes, kept separate from context usage. */
 	cacheWriteTokens: number;
-	/** `null` when the catalog has no limit for the current model. */
+	/** `null` when the current Provider Model publishes no context limit. */
 	contextLimit: number | null;
 	/** `null` when `contextLimit` is unknown. */
 	contextPercent: number | null;
@@ -40,7 +45,7 @@ const clampPercent = (percent: number): number =>
 	Math.max(0, Math.min(100, Math.round(percent)));
 
 type MessageUsageState = {
-	lastSelection: ChatModelSelection | null;
+	lastSelection: ProviderModelSelection | null;
 	lastUsage: SessionMessageUsage | null;
 };
 
@@ -48,7 +53,7 @@ const collectMessageUsage = (
 	messages: readonly SessionMessage[]
 ): MessageUsageState => {
 	let lastUsage: SessionMessageUsage | null = null;
-	let lastSelection: ChatModelSelection | null = null;
+	let lastSelection: ProviderModelSelection | null = null;
 	for (const message of messages) {
 		if (message.role !== "assistant" || !message.metadata?.usage) {
 			continue;
@@ -68,20 +73,38 @@ export const turnCostUsd = (
 	usage: SessionMessageUsage
 ): number | null => calculateModelUsageCostUsd(entry, usage);
 
+const providerModelForSelection = (
+	models: readonly ProviderModel[] | undefined,
+	selection: ProviderModelSelection
+): ProviderModel | undefined =>
+	models?.find((model) => isSameProviderModelIdentity(model, selection));
+
+const resolveProviderModelPricing = (
+	selection: ProviderModelSelection,
+	providerModels: readonly ProviderModel[] | undefined
+): ModelPricingEntry | undefined => {
+	const providerModel = providerModelForSelection(providerModels, selection);
+	return providerModel === undefined
+		? undefined
+		: pricingEntryForProviderModel(providerModel);
+};
+
 const collectSessionUsage = (
 	messages: readonly SessionMessage[],
 	usageEntries: readonly SessionUsageEntry[],
-	fallbackModel: ChatModelSelection,
-	table: ModelPricingTable
+	fallbackModel: ProviderModelSelection,
+	providerModels: readonly ProviderModel[] | undefined
 ): Pick<
 	SessionUsageSummary,
 	| "cacheReadTokens"
 	| "cacheWriteTokens"
 	| "costUsd"
+	| "costCoverage"
 	| "costedTurns"
 	| "costedUsageEntries"
 > => {
 	let total = 0;
+	let measuredTurns = 0;
 	let costedTurns = 0;
 	let costedUsageEntries = 0;
 	let cacheReadTokens = 0;
@@ -91,10 +114,11 @@ const collectSessionUsage = (
 		if (message.role !== "assistant" || !usage) {
 			continue;
 		}
+		measuredTurns += 1;
 		cacheReadTokens += usage.cacheReadTokens ?? 0;
 		cacheWriteTokens += usage.cacheWriteTokens ?? 0;
 		const selection = message.metadata?.model ?? fallbackModel;
-		const entry = resolveModelMetadata(table, selection);
+		const entry = resolveProviderModelPricing(selection, providerModels);
 		const cost = turnCostUsd(entry ?? undefined, usage);
 		if (!isNull(cost)) {
 			total += cost;
@@ -104,17 +128,28 @@ const collectSessionUsage = (
 	for (const entry of usageEntries) {
 		cacheReadTokens += entry.usage.cacheReadTokens ?? 0;
 		cacheWriteTokens += entry.usage.cacheWriteTokens ?? 0;
-		const pricing = resolveModelMetadata(table, entry.model);
+		const pricing = resolveProviderModelPricing(entry.model, providerModels);
 		const cost = turnCostUsd(pricing ?? undefined, entry.usage);
 		if (!isNull(cost)) {
 			total += cost;
 			costedUsageEntries += 1;
 		}
 	}
+	const costedUsageCount = costedTurns + costedUsageEntries;
+	const measuredUsageCount = measuredTurns + usageEntries.length;
+	let costCoverage: SessionUsageSummary["costCoverage"];
+	if (costedUsageCount === 0) {
+		costCoverage = "unknown";
+	} else if (costedUsageCount < measuredUsageCount) {
+		costCoverage = "partial";
+	} else {
+		costCoverage = "complete";
+	}
 	return {
 		cacheReadTokens,
 		cacheWriteTokens,
-		costUsd: costedTurns + costedUsageEntries === 0 ? null : total,
+		costUsd: costedUsageCount === 0 ? null : total,
+		costCoverage,
 		costedTurns,
 		costedUsageEntries,
 	};
@@ -129,25 +164,30 @@ const collectSessionUsage = (
  */
 export const summarizeSessionUsage = (
 	messages: readonly SessionMessage[],
-	fallbackModel: ChatModelSelection,
-	table: ModelPricingTable,
+	fallbackModel: ProviderModelSelection,
 	usageEntries: readonly SessionUsageEntry[] = [],
-	cacheWarmingStatus: CacheWarmingStatus = "idle"
+	cacheWarmingStatus: CacheWarmingStatus = "idle",
+	providerModels?: readonly ProviderModel[]
 ): SessionUsageSummary | null => {
 	const { lastSelection, lastUsage } = collectMessageUsage(messages);
 	if (isNull(lastUsage)) {
 		return null;
 	}
 	const selection = lastSelection ?? fallbackModel;
-	const contextLimit =
-		resolveModelMetadata(table, selection)?.limits?.context ?? null;
+	const providerModel = providerModelForSelection(providerModels, selection);
+	const contextLimit = providerModel?.limits?.contextWindowTokens ?? null;
 	const contextTokens = getModelContextTokens(lastUsage);
 	const contextPercent =
 		!isNull(contextLimit) && contextLimit > 0
 			? clampPercent((contextTokens / contextLimit) * 100)
 			: null;
 	return {
-		...collectSessionUsage(messages, usageEntries, fallbackModel, table),
+		...collectSessionUsage(
+			messages,
+			usageEntries,
+			fallbackModel,
+			providerModels
+		),
 		cacheWarmingStatus,
 		contextLimit,
 		contextPercent,

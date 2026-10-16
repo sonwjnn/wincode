@@ -8,20 +8,21 @@ import {
 	type TextareaRenderable,
 } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
-import {
-	type ChatModelSelection,
-	findSupportedChatModelSelection,
-	getSupportedThinkingLevels,
-	supportedChatModelIdSchema,
-} from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai/sdk";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { spawn } from "bun";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { createPluginPromptSelectionTarget } from "@/modules/application/plugin-prompt-selection";
 import type { CommandSuggestion } from "@/modules/commands/command-controller";
 import { useCommandControllerFactory } from "@/modules/commands/command-controller-context";
 import type { CommandCapability } from "@/modules/commands/commands";
-import { useConnections } from "@/modules/connections";
 import {
 	deleteFileMentionAfterTrailingCharacterDelete,
 	type FileMentionOption,
@@ -30,6 +31,14 @@ import {
 } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import {
+	isAvailableProviderModelSelection,
+	isSameProviderModelIdentity,
+	pluginProviderOwnerMatches,
+	supportedProviderThinkingLevels,
+} from "@/modules/providers/provider-model-selection";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -102,9 +111,10 @@ type ChatTextAreaProps = {
 	draftKey?: string;
 	unavailableCommandCapabilities?: readonly CommandCapability[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
-	onModelTargetChanged?: () => void;
+	onProviderModelChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	onEmptySubmit?: () => void | Promise<void>;
+	providerController?: InteractiveProviderController;
 	/** Compositions a Recall returned, oldest first, waiting to enter the composer. */
 	recalledSubmissions?: readonly SessionSubmissionComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
@@ -160,10 +170,11 @@ export function ChatTextArea({
 	unavailableCommandCapabilities:
 		viewUnavailableCapabilities = EMPTY_COMMAND_CAPABILITIES,
 	onCompact,
-	onModelTargetChanged,
+	onProviderModelChanged,
 	onOpenSettings,
 	onSubmit,
 	onEmptySubmit,
+	providerController,
 	recalledSubmissions = EMPTY_RECALLED_SUBMISSIONS,
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
@@ -175,15 +186,76 @@ export function ChatTextArea({
 		setModelForFutureSubmissions,
 		setThinkingLevelForFutureSubmissions,
 	} = usePromptConfig();
-	const connections = useConnections();
-	const previousConnections = useRef(connections);
+	const subscribeProviderComposition = useCallback(
+		(listener: () => void) =>
+			providerController?.subscribeComposition?.(listener) ?? (() => undefined),
+		[providerController]
+	);
+	const getProviderCompositionRevision = useCallback(
+		() => providerController?.getCompositionRevision?.() ?? 0,
+		[providerController]
+	);
+	const providerCompositionRevision = useSyncExternalStore(
+		subscribeProviderComposition,
+		getProviderCompositionRevision,
+		getProviderCompositionRevision
+	);
+	const subscribeProviderAvailability = useCallback(
+		(listener: () => void) =>
+			providerController?.subscribeAvailability?.(listener) ??
+			(() => undefined),
+		[providerController]
+	);
+	const getProviderAvailabilityRevision = useCallback(
+		() => providerController?.getAvailabilityRevision?.() ?? 0,
+		[providerController]
+	);
+	const providerAvailabilityRevision = useSyncExternalStore(
+		subscribeProviderAvailability,
+		getProviderAvailabilityRevision,
+		getProviderAvailabilityRevision
+	);
+	const [knownProviderModels, setKnownProviderModels] = useState<
+		readonly ProviderModel[]
+	>([]);
 	useEffect(() => {
-		if (previousConnections.current !== connections) {
-			// Connection changes may resolve the selection to a different Model Target.
-			onModelTargetChanged?.();
-			previousConnections.current = connections;
+		let active = true;
+		if (providerController === undefined) {
+			setKnownProviderModels([]);
+			return () => {
+				active = false;
+			};
 		}
-	}, [connections, onModelTargetChanged]);
+		const requestedCompositionRevision = providerCompositionRevision;
+		const requestedAvailabilityRevision = providerAvailabilityRevision;
+		const isCurrentRevision = () =>
+			getProviderCompositionRevision() === requestedCompositionRevision &&
+			getProviderAvailabilityRevision() === requestedAvailabilityRevision;
+		void providerController
+			.getKnownModels()
+			.then((models) => {
+				if (active && isCurrentRevision()) {
+					setKnownProviderModels(models);
+				}
+			})
+			.catch(() => {
+				if (active && isCurrentRevision()) {
+					setKnownProviderModels([]);
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, [
+		getProviderAvailabilityRevision,
+		getProviderCompositionRevision,
+		providerAvailabilityRevision,
+		providerCompositionRevision,
+		providerController,
+	]);
+	const selectedProviderModel = knownProviderModels.find((providerModel) =>
+		isSameProviderModelIdentity(providerModel, model)
+	);
 	const previousAgent = useRef(agent);
 	useEffect(() => {
 		if (previousAgent.current === agent) {
@@ -191,54 +263,85 @@ export function ChatTextArea({
 		}
 
 		// Agent changes can replace system instructions and tools in the cached prefix.
-		onModelTargetChanged?.();
+		onProviderModelChanged?.();
 		previousAgent.current = agent;
-	}, [agent, onModelTargetChanged]);
+	}, [agent, onProviderModelChanged]);
+	const {
+		modelId: selectedModelId,
+		pluginProviderSource,
+		providerId: selectedProviderId,
+	} = model;
 	const setFutureModelSelection = useCallback(
-		(nextModel: ChatModelSelection) => {
+		(nextModel: ProviderModelSelection) => {
 			if (
-				model.modelId !== nextModel.modelId ||
-				model.providerId !== nextModel.providerId
+				!(
+					isSameProviderModelIdentity(
+						{ modelId: selectedModelId, providerId: selectedProviderId },
+						nextModel
+					) &&
+					pluginProviderOwnerMatches(
+						pluginProviderSource,
+						nextModel.pluginProviderSource
+					)
+				)
 			) {
-				onModelTargetChanged?.();
+				onProviderModelChanged?.();
 			}
 			setModelForFutureSubmissions(nextModel);
 		},
 		[
-			model.modelId,
-			model.providerId,
-			onModelTargetChanged,
+			selectedModelId,
+			selectedProviderId,
+			pluginProviderSource,
+			onProviderModelChanged,
 			setModelForFutureSubmissions,
 		]
 	);
+	const setFutureProviderModelSelection = useCallback(
+		(nextModel: ProviderModel, selection: ProviderModelSelection) => {
+			setKnownProviderModels((models) =>
+				isAvailableProviderModelSelection(selection, models)
+					? models
+					: [...models, nextModel]
+			);
+			setFutureModelSelection(selection);
+		},
+		[setFutureModelSelection]
+	);
 	const pluginRuntime = getInteractivePluginRuntime();
 	useEffect(() => {
-		if (disabled || pluginRuntime === undefined) {
+		if (
+			disabled ||
+			pluginRuntime === undefined ||
+			providerController === undefined
+		) {
 			return;
 		}
 		return pluginRuntime.bindPromptSelectionTarget(
-			createPluginPromptSelectionTarget(connections, {
-				setModel: setFutureModelSelection,
-				setThinkingLevel: setThinkingLevelForFutureSubmissions,
-			})
+			createPluginPromptSelectionTarget(
+				providerController,
+				{
+					setModel: setFutureModelSelection,
+					setThinkingLevel: setThinkingLevelForFutureSubmissions,
+				},
+				() =>
+					getInteractivePluginRuntime()?.getProviderRegistrations(sessionId) ??
+					[]
+			)
 		);
 	}, [
-		connections,
 		disabled,
 		pluginRuntime,
+		providerController,
 		setFutureModelSelection,
 		setThinkingLevelForFutureSubmissions,
+		sessionId,
 	]);
-	const supportedModel = findSupportedChatModelSelection(model);
-	const chatModelSelection = isNull(supportedModel)
-		? null
-		: {
-				modelId: supportedChatModelIdSchema.parse(supportedModel.id),
-				providerId: supportedModel.connectionProviderId,
-			};
-	const hideThinkingLevel =
-		chatModelSelection === null ||
-		getSupportedThinkingLevels(chatModelSelection).length === 0;
+	const thinkingLevels =
+		selectedProviderModel === undefined
+			? []
+			: supportedProviderThinkingLevels(selectedProviderModel);
+	const hideThinkingLevel = thinkingLevels.length === 0;
 	const unavailableCommandCapabilities = useMemo(() => {
 		const unavailable = new Set<CommandCapability>(viewUnavailableCapabilities);
 		if (!onCompact) {
@@ -247,8 +350,16 @@ export function ChatTextArea({
 		if (hideThinkingLevel) {
 			unavailable.add("thinking-level-selection");
 		}
+		if (providerController === undefined) {
+			unavailable.add("provider-sdk");
+		}
 		return [...unavailable];
-	}, [hideThinkingLevel, onCompact, viewUnavailableCapabilities]);
+	}, [
+		hideThinkingLevel,
+		onCompact,
+		providerController,
+		viewUnavailableCapabilities,
+	]);
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecalledFilesRevisionRef = useRef(0);
@@ -332,7 +443,9 @@ export function ChatTextArea({
 				onCompact,
 				onError: handleSubmitError,
 				onOpenSettings,
-				onSelectModel: setFutureModelSelection,
+				onSelectProviderModel: setFutureProviderModelSelection,
+				providerController,
+				providerModel: selectedProviderModel,
 			}),
 		[
 			commandControllerFactory,
@@ -340,7 +453,9 @@ export function ChatTextArea({
 			onCompact,
 			onOpenSettings,
 			sessionId,
-			setFutureModelSelection,
+			setFutureProviderModelSelection,
+			providerController,
+			selectedProviderModel,
 			unavailableCommandCapabilities,
 		]
 	);
@@ -352,7 +467,7 @@ export function ChatTextArea({
 		onSubmit,
 		onTab: (shift) => {
 			if (shift) {
-				cycleThinkingLevel();
+				cycleThinkingLevel(selectedProviderModel);
 			}
 		},
 		sessionPromptHistory,

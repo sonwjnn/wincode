@@ -1,15 +1,20 @@
 import type { AgentId } from "@wincode/agent-core";
+import type { ProviderModel, ThinkingSelection } from "@wincode/ai/sdk";
+import { omitUndefined } from "@wincode/utils";
 import {
-	type ChatModelSelection,
-	normalizeThinkingSelection,
-	type ThinkingSelection,
-} from "@wincode/ai/models";
-import { buildAgent, type ResolvedCodingAgent } from "./built-ins";
+	isAvailableProviderModelSelection,
+	isPluginProviderSelectionBoundToTrustedOwner,
+	isSameProviderModelIdentity,
+	type PluginProviderOwnerRegistration,
+	type ProviderModelSelection,
+	resolveProviderModelSelectionForHost,
+} from "@/modules/providers/provider-model-selection";
+import type { ResolvedCodingAgent } from "./built-ins";
 import type { AgentRegistry } from "./registry";
 
 export type AgentCallSelection = {
 	readonly agent: AgentId;
-	readonly model: ChatModelSelection;
+	readonly model: ProviderModelSelection;
 } & ThinkingSelection;
 
 export type PreparedAgentCall = AgentCallSelection & {
@@ -18,75 +23,209 @@ export type PreparedAgentCall = AgentCallSelection & {
 
 export type EffectiveAgentSelection = {
 	readonly agent: AgentId;
-	readonly model: ChatModelSelection;
+	readonly model: ProviderModelSelection;
 	readonly resolvedAgent?: ResolvedCodingAgent;
+	readonly unavailableReason?: string;
 } & ThinkingSelection;
 
 /** Composer-level choices that intentionally take precedence over Agent defaults. */
 export type AgentSelectionOverride = Readonly<{
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinking?: ThinkingSelection;
 }>;
+
+/** Allows the Agent's exact pin only after the Provider SDK confirms it is available. */
+export const withAvailableAgentModelOverride = (
+	registry: AgentRegistry | null,
+	agentId: AgentId,
+	selectionOverride: AgentSelectionOverride | undefined,
+	availableProviderModels: readonly ProviderModel[] | undefined
+): AgentSelectionOverride | undefined => {
+	if (
+		selectionOverride?.model !== undefined ||
+		availableProviderModels === undefined
+	) {
+		return selectionOverride;
+	}
+	const pinnedModel = registry?.agents.find(({ id }) => id === agentId)?.model;
+	if (
+		pinnedModel === undefined ||
+		!isAvailableProviderModelSelection(pinnedModel, availableProviderModels)
+	) {
+		return selectionOverride;
+	}
+	return { ...selectionOverride, model: pinnedModel };
+};
+
+const hasUnavailableAgentModel = (
+	agent: AgentRegistry["agents"][number] | undefined,
+	allowSubagent: boolean
+): boolean => {
+	if (agent === undefined || agent.model === undefined) {
+		return false;
+	}
+	return !(agent.isAvailable && (allowSubagent || agent.isSelectable));
+};
+
+const unavailableAgentReason = (
+	agent: AgentRegistry["agents"][number] | undefined,
+	allowSubagent: boolean
+): string | undefined => {
+	if (agent === undefined || !hasUnavailableAgentModel(agent, allowSubagent)) {
+		return;
+	}
+	return (
+		agent.unavailableReason ?? `Agent ${agent.displayName} is unavailable.`
+	);
+};
+
+const thinkingSelectionForAgent = (
+	agent: AgentRegistry["agents"][number] | undefined,
+	fallback: ThinkingSelection,
+	override: AgentSelectionOverride | undefined
+): ThinkingSelection => {
+	if (override?.thinking !== undefined) {
+		return override.thinking;
+	}
+	if (agent?.model === undefined) {
+		return fallback;
+	}
+	if (
+		override?.model !== undefined &&
+		!isSameProviderModelIdentity(override.model, agent.model)
+	) {
+		return fallback;
+	}
+	return agent.thinkingLevel === undefined
+		? {}
+		: { thinkingLevel: agent.thinkingLevel };
+};
+
+const resolvedAgentFor = (
+	agent: AgentRegistry["agents"][number] | undefined,
+	allowSubagent: boolean
+): ResolvedCodingAgent | undefined => {
+	if (agent === undefined) {
+		return;
+	}
+	const isAvailable =
+		agent.isAvailable && (allowSubagent || agent.isSelectable);
+	if (!isAvailable) {
+		return;
+	}
+	return {
+		id: agent.id,
+		instructions: agent.instructions,
+		role: agent.role,
+		visibleCodingTools: [...agent.visibleCodingTools],
+	};
+};
 
 export const resolveEffectiveAgentSelection = (
 	registry: AgentRegistry | null,
 	agentId: AgentId,
-	fallbackModel: ChatModelSelection,
+	fallbackModel: ProviderModelSelection,
 	fallbackSelection: ThinkingSelection,
 	allowSubagent = false,
 	selectionOverride?: AgentSelectionOverride
 ): EffectiveAgentSelection => {
-	const candidates = allowSubagent
-		? (registry?.agents ?? [])
-		: (registry?.selectableAgents ?? []);
-	const selected = candidates.find(
-		(agent) => agent.id === agentId && agent.isAvailable
+	const requested = registry?.agents.find(
+		(agent) =>
+			agent.id === agentId && (allowSubagent || agent.role !== "subagent")
 	);
-	const fallbackAgent = candidates.find(
-		(agent) => agent.id === "build" && agent.isAvailable
+	const fallbackAgent = registry?.agents.find(
+		(agent) => agent.id === "build" && agent.isAvailable && agent.isSelectable
 	);
-	const effectiveAgent = selected ?? fallbackAgent;
-	const effectiveAgentId =
-		effectiveAgent?.id ?? (registry ? buildAgent.id : agentId);
-	const model =
-		selectionOverride?.model ?? effectiveAgent?.model ?? fallbackModel;
-	const hasSelectionOverride =
-		selectionOverride?.model !== undefined ||
-		selectionOverride?.thinking !== undefined;
-	const selectionUsesAgentModel =
-		effectiveAgent?.model !== undefined &&
-		(selectionOverride?.model === undefined ||
-			(selectionOverride.model.modelId === effectiveAgent.model.modelId &&
-				selectionOverride.model.providerId ===
-					effectiveAgent.model.providerId));
-	let thinkingSelection: ThinkingSelection;
-	if (selectionOverride?.thinking !== undefined) {
-		thinkingSelection = selectionOverride.thinking;
-	} else if (!selectionUsesAgentModel) {
-		thinkingSelection = fallbackSelection;
-	} else if (effectiveAgent.thinkingLevel === undefined) {
-		thinkingSelection = {};
-	} else {
-		thinkingSelection = { thinkingLevel: effectiveAgent.thinkingLevel };
+	let selected = fallbackAgent;
+	if (hasUnavailableAgentModel(requested, allowSubagent)) {
+		selected = requested;
+	} else if (
+		requested?.isAvailable &&
+		(requested.isSelectable || allowSubagent)
+	) {
+		selected = requested;
 	}
-	const resolvedThinkingSelection = hasSelectionOverride
-		? normalizeThinkingSelection(model, thinkingSelection)
-		: thinkingSelection;
+	const model = selectionOverride?.model ?? selected?.model ?? fallbackModel;
+	const thinkingSelection = thinkingSelectionForAgent(
+		selected,
+		fallbackSelection,
+		selectionOverride
+	);
 	return {
-		agent: effectiveAgentId,
+		agent: selected?.id ?? agentId,
 		model,
-		...(effectiveAgent
-			? {
-					resolvedAgent: {
-						id: effectiveAgent.id,
-						instructions: effectiveAgent.instructions,
-						role: effectiveAgent.role,
-						visibleCodingTools: [...effectiveAgent.visibleCodingTools],
-					},
-				}
-			: {}),
-		...resolvedThinkingSelection,
+		...omitUndefined({
+			resolvedAgent: resolvedAgentFor(selected, allowSubagent),
+			unavailableReason: unavailableAgentReason(requested, allowSubagent),
+		}),
+		...thinkingSelection,
 	};
+};
+
+/**
+ * Resolves a fresh Interactive Agent pin before Provider availability is read.
+ * Restored Session models remain strict so their Plugin owner is never inferred.
+ */
+export const resolveInteractiveAgentSelection = (
+	registry: AgentRegistry | null,
+	agentId: AgentId,
+	fallbackModel: ProviderModelSelection,
+	fallbackSelection: ThinkingSelection,
+	selectionOverride: AgentSelectionOverride | undefined,
+	trustedProviderRegistrations: readonly PluginProviderOwnerRegistration[],
+	restoredModel?: ProviderModelSelection,
+	allowSubagent = false,
+	hostProviderRegistrations?: (
+		providerId: string
+	) => readonly PluginProviderOwnerRegistration[] | undefined
+): EffectiveAgentSelection => {
+	const effective = resolveEffectiveAgentSelection(
+		registry,
+		agentId,
+		fallbackModel,
+		fallbackSelection,
+		allowSubagent,
+		selectionOverride
+	);
+	const selectedAgent = registry?.agents.find(
+		(candidate) => candidate.id === effective.agent
+	);
+	const selectedAgentPin =
+		selectionOverride?.model === undefined &&
+		selectedAgent?.model !== undefined &&
+		isSameProviderModelIdentity(selectedAgent.model, effective.model);
+	const isRestoredModel =
+		selectionOverride?.model === undefined &&
+		restoredModel !== undefined &&
+		isSameProviderModelIdentity(restoredModel, effective.model);
+	const model =
+		isRestoredModel && restoredModel !== undefined
+			? restoredModel
+			: effective.model;
+	const resolvedModel = resolveProviderModelSelectionForHost(
+		model,
+		trustedProviderRegistrations,
+		selectedAgentPin && !isRestoredModel
+	);
+	if (resolvedModel === undefined) {
+		throw new Error("Could not verify the selected Provider SDK Model.");
+	}
+	const collectionRegistrations = hostProviderRegistrations?.(
+		resolvedModel.providerId
+	);
+	if (
+		hostProviderRegistrations !== undefined &&
+		!isPluginProviderSelectionBoundToTrustedOwner(
+			resolvedModel,
+			trustedProviderRegistrations,
+			collectionRegistrations
+		)
+	) {
+		throw new Error(
+			`Plugin Provider model selection ${resolvedModel.providerId}/${resolvedModel.modelId} is not bound to its trusted source in this Session Host.`
+		);
+	}
+	return { ...effective, model: resolvedModel };
 };
 
 export const prepareAgentCall = (

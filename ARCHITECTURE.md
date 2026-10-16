@@ -50,7 +50,7 @@ Agent Session.
 │   │       ├── application/       # Mode orchestration and shared execution contracts
 │   │       ├── skills/            # Skill parsing, discovery, catalog, snapshots, activation
 │   │       └── tools/             # Workspace-bound filesystem and bounded coding tools
-│   ├── ai/                        # Provider-neutral model catalog, targets, options, usage, failures
+│   ├── ai/                        # Provider SDKs, model metadata, options, usage, failures
 │   └── agent-core/                # Agents, Agent Turns, events, records, runtime and tool contracts
 └── docs/
     └── adr/                       # Accepted architecture decisions
@@ -132,14 +132,14 @@ Session schema changes update the current Drizzle schema directly; this project 
 
 ## Model metadata
 
-The Model Catalog in `packages/ai/src/catalog.ts` is the curated product allowlist. Reasoning levels, cost rates, cost tiers, and token limits are generated into `packages/ai/src/generated/model-metadata.generated.ts` from `https://models.dev/api.json`, read through `packages/ai/src/models-dev.ts` — the one converter, shared with the offline generator so a fetched value and a committed one cannot be interpreted differently.
+SDK Providers own their declared Provider Models and protocol identities; there is no cross-provider Model Catalog or lifecycle allowlist. Supplemental reasoning, cost, limits, and cache metadata is generated into provider-specific snapshots under `packages/ai/src/generated/` from `https://models.dev/api.json`, using model declarations in `packages/ai/src/sdk-providers/*-models.ts` and the shared converter in `packages/ai/src/models-dev.ts`. These snapshots enrich Provider Models but never authorize or substitute model identity.
 
 ```sh
 bun run sync-model-metadata                   # regenerate the snapshot
 bun run sync-model-metadata -- --check        # fail when it is stale
 ```
 
-The snapshot is a build input, not a fetch dependency: a context limit resolves with no network at all, which is what keeps automatic compaction available offline. Facts the upstream does not publish are manual overlays in `packages/ai/scripts/metadata-model.ts` and are reported by name in the generated file's header.
+The snapshots are build inputs, not fetch dependencies: a context limit resolves with no network at all, which is what keeps automatic compaction available offline. Facts the upstream does not publish are manual overlays in `packages/ai/scripts/metadata-model.ts` and remain visible in the generator's coverage report.
 
 ## Architecture decisions
 
@@ -148,7 +148,7 @@ Detailed rationale lives in [`docs/adr/`](docs/adr/):
 - [Coding-Agent application modes](docs/adr/0027-coding-agent-application-modes.md)
 - [One Session Host per JSONL RPC process](docs/adr/0025-one-session-host-per-jsonl-rpc-process.md)
 - [Session Host assembles and owns a session](docs/adr/0023-session-host-assembles-and-owns-a-session.md)
-- [Model Catalog lifecycle](docs/adr/0012-model-catalog-lifecycle.md)
+- [Historical Model Catalog lifecycle, superseded by ADR-0049](docs/adr/0012-model-catalog-lifecycle.md)
 - [Reasoning as a request](docs/adr/0013-reasoning-as-request.md)
 - [Model metadata pipeline](docs/adr/0014-model-metadata-pipeline.md)
 - [Cost and limits in the catalog](docs/adr/0015-cost-and-limits-in-catalog.md)

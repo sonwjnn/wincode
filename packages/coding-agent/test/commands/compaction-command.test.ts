@@ -17,6 +17,8 @@ test("dispatches manual compaction focus to its registered action", async () => 
 		"thinking.select": () => undefined,
 		"model.select": () => undefined,
 		"project.trust": () => undefined,
+		"provider.connect": () => undefined,
+		"provider.model.select": () => undefined,
 		"session.compact": compact,
 		"session.new": () => undefined,
 		"settings.open": () => undefined,

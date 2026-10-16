@@ -3,13 +3,13 @@ import {
 	type AgentTurnId,
 	type AttachmentId,
 	agentIdSchema,
+	type ModelId,
 	type ModelStepId,
 	type SessionMessageId,
 	type SessionRecordId,
 	type ToolCallId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type { ModelId, SupportedChatModelId } from "@wincode/ai/models";
 import type { McpSnapshotId } from "@wincode/mcp";
 import type {
 	CompactionId,
@@ -37,7 +37,7 @@ export const compactionId = <const Value extends string>(
 
 export const modelId = <const Value extends string>(
 	value: Value
-): Value & SupportedChatModelId => value as Value & SupportedChatModelId;
+): Value & ModelId => value as Value & ModelId;
 export const modelIdentity = <const Value extends string>(
 	value: Value
 ): Value & ModelId => value as Value & ModelId;

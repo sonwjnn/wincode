@@ -1,22 +1,10 @@
 import type { JsonObject } from "type-fest";
-import { apiKeyCredentialSchema } from "../connections/credential-schemas.ts";
-import {
-	httpErrorFromResponse,
-	isCacheControlRejection,
-	ModelProviderError,
-} from "../model-client/errors.ts";
-import { anthropicStrategy } from "../model-client/protocols/anthropic-default.ts";
-import { unreachableValue } from "../model-client/protocols/shared.ts";
-import type {
-	ModelPromptMessage,
-	ModelPromptPart,
-	ModelStepRequest,
-	ModelTool,
-} from "../model-client/types.ts";
-import type { ModelTarget } from "../model-target.ts";
-import type { SupportedChatModel } from "../models.ts";
+import { apiKeyCredentialSchema } from "../credential-schemas.ts";
+import { anthropicModelMetadataById } from "../generated/anthropic-model-metadata.generated.ts";
+import { withProviderModelMetadata } from "../provider-model-metadata.ts";
 import {
 	type ChatContentPart,
+	maxOutputTokensForRequest,
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
@@ -24,32 +12,44 @@ import {
 	ProviderError,
 	type ProviderModel,
 } from "../sdk.ts";
+import {
+	httpErrorFromResponse,
+	isCacheControlRejection,
+	ProviderProtocolError,
+} from "../sdk-private/protocol-errors.ts";
+import { anthropicStrategy } from "../sdk-private/protocols/anthropic-default.ts";
+import type { AnthropicProtocolOptions } from "../sdk-private/protocols/provider-options.ts";
+import type {
+	ProtocolPromptMessage,
+	ProtocolPromptPart,
+	ProtocolTool,
+	ProviderProtocolRequest,
+} from "../sdk-private/protocols/request.ts";
+import { unreachableValue } from "../sdk-private/protocols/shared.ts";
+import { anthropicDefaultModelIds } from "./anthropic-models.ts";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 const ANTHROPIC_PROTOCOL_ID = "anthropic";
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
-const DEFAULT_MODELS = [
-	"claude-opus-5.5",
-	"claude-opus-4-5",
-	"claude-opus-4-5-20251101",
-	"claude-opus-4-7",
-	"claude-sonnet-5",
-	"claude-opus-4-8",
-	"claude-fable-5",
-	"claude-fable-5-1",
-	"claude-opus-5",
-	"claude-opus-4-6",
-	"claude-sonnet-4-6",
-	"claude-haiku-4-5",
-	"claude-haiku-4-5-20251001",
-	"claude-sonnet-4-5",
-	"claude-sonnet-4-5-20250929",
-].map(
-	(modelId): ProviderModel => ({
-		modelId,
-		protocolId: ANTHROPIC_PROTOCOL_ID,
-		providerId: ANTHROPIC_PROVIDER_ID,
-	})
+const DEFAULT_MODELS: readonly ProviderModel[] = anthropicDefaultModelIds.map(
+	(modelId): ProviderModel => {
+		const model = withProviderModelMetadata(
+			{
+				modelId,
+				protocolId: ANTHROPIC_PROTOCOL_ID,
+				providerId: ANTHROPIC_PROVIDER_ID,
+			},
+			anthropicModelMetadataById[modelId]
+		);
+		return model.reasoningEfforts === undefined
+			? model
+			: {
+					...model,
+					reasoningEfforts: model.reasoningEfforts.filter(
+						(effort) => effort !== "minimal"
+					),
+				};
+	}
 );
 
 type AnthropicAuthorization = Readonly<{ apiKey: string }>;
@@ -64,17 +64,7 @@ export type AnthropicProviderOptions = Readonly<{
 	models?: readonly ProviderModel[];
 }>;
 
-const modelForProtocol = (model: ProviderModel): SupportedChatModel =>
-	({
-		connectionProviderId: ANTHROPIC_PROVIDER_ID,
-		displayName: model.modelId,
-		id: model.modelId as SupportedChatModel["id"],
-		lifecycle: "active",
-		provider: ANTHROPIC_PROVIDER_ID,
-		route: "direct",
-	}) as SupportedChatModel;
-
-const promptPart = (part: ChatContentPart): ModelPromptPart => {
+const promptPart = (part: ChatContentPart): ProtocolPromptPart => {
 	switch (part.type) {
 		case "text":
 			return part;
@@ -84,6 +74,7 @@ const promptPart = (part: ChatContentPart): ModelPromptPart => {
 		case "tool-call":
 			return part;
 		case "tool-result":
+		case "tool-failure":
 			return part;
 		default:
 			return unreachableValue(part);
@@ -92,7 +83,7 @@ const promptPart = (part: ChatContentPart): ModelPromptPart => {
 
 const promptMessage = (
 	message: ProviderChatRequest["messages"][number]
-): ModelPromptMessage => ({
+): ProtocolPromptMessage => ({
 	...(message.role === "assistant" && message.continuation !== undefined
 		? { continuation: message.continuation }
 		: {}),
@@ -102,28 +93,31 @@ const promptMessage = (
 
 const modelRequestFor = (
 	request: ProviderChatRequest,
-	context: ProviderChatContext,
-	authorization: AnthropicAuthorization
-): ModelStepRequest => {
-	const target: ModelTarget = {
-		authorization: { apiKey: authorization.apiKey, kind: "api-key" },
+	context: ProviderChatContext
+): ProviderProtocolRequest => {
+	const reasoningEffort =
+		!request.cacheWarming &&
+		request.reasoningEffort !== undefined &&
+		context.model.reasoningEfforts?.includes(request.reasoningEffort)
+			? request.reasoningEffort
+			: undefined;
+	return {
+		...(request.cacheWarming === true ? { cacheWarming: true } : {}),
+		...(request.cacheRetention !== undefined ||
+		request.promptCacheKey !== undefined
+			? { promptCacheEnabled: true }
+			: {}),
 		...(request.cacheRetention === undefined
 			? {}
-			: {
-					promptCacheEnabled: true as const,
-					promptCacheRetention: request.cacheRetention,
-				}),
-		modelId: context.model.modelId as Extract<
-			ModelTarget,
-			{ providerId: "anthropic" }
-		>["modelId"],
-		providerId: ANTHROPIC_PROVIDER_ID,
-	};
-	return {
+			: { promptCacheRetention: request.cacheRetention }),
+		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
 		messages: request.messages.map(promptMessage),
+		modelId: context.model.modelId,
+		...(request.promptCacheKey === undefined
+			? {}
+			: { promptCacheKey: request.promptCacheKey }),
 		signal: context.signal,
 		system: request.system,
-		target,
 		tools: request.tools?.map(
 			(tool) =>
 				({
@@ -132,7 +126,7 @@ const modelRequestFor = (
 						: { description: tool.description }),
 					inputSchema: tool.inputSchema as JsonObject,
 					name: tool.name,
-				}) as ModelTool
+				}) as ProtocolTool
 		),
 	};
 };
@@ -156,7 +150,7 @@ const providerErrorFor = (error: unknown): ProviderError => {
 	if (error instanceof ProviderError) {
 		return error;
 	}
-	if (error instanceof ModelProviderError) {
+	if (error instanceof ProviderProtocolError) {
 		if (error.statusCode === 401 || error.statusCode === 403) {
 			return new ProviderError(
 				"authentication",
@@ -188,19 +182,45 @@ type AnthropicWireRequest = Readonly<{
 	hasCacheControls: boolean;
 }>;
 
+const anthropicProviderOptionsFor = (
+	reasoningEffort: ProviderProtocolRequest["reasoningEffort"]
+): AnthropicProtocolOptions | undefined => {
+	if (reasoningEffort === undefined) {
+		return;
+	}
+	if (reasoningEffort === "none") {
+		return { thinking: { type: "disabled" } };
+	}
+	if (reasoningEffort === "minimal") {
+		return;
+	}
+	return { effort: reasoningEffort };
+};
+
 const wireRequestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
-	authorization: AnthropicAuthorization,
-	model: SupportedChatModel,
+	model: ProviderModel,
 	cacheRetention: ProviderChatRequest["cacheRetention"]
 ): AnthropicWireRequest => {
 	const requestWithCache = { ...request, cacheRetention };
+	const modelRequest = modelRequestFor(requestWithCache, context);
+	const requestedMaxOutputTokens = maxOutputTokensForRequest(
+		request.maxOutputTokens,
+		context.model
+	);
+	const maxOutputTokens = request.cacheWarming
+		? 1
+		: (requestedMaxOutputTokens ??
+			maxOutputTokensForRequest(
+				context.model.limits?.maxOutputTokens,
+				context.model
+			));
 	const body = anthropicStrategy.serialize({
-		maxOutputTokens: context.model.limits?.maxOutputTokens,
+		maxOutputTokens,
 		model,
-		providerOptions: undefined,
-		request: modelRequestFor(requestWithCache, context, authorization),
+		providerOptions: anthropicProviderOptionsFor(modelRequest.reasoningEffort),
+		request: modelRequest,
 	});
 	return {
 		body: JSON.stringify(body),
@@ -262,7 +282,7 @@ const streamWithCacheFallback = async function* (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
 	authorization: AnthropicAuthorization,
-	model: SupportedChatModel,
+	model: ProviderModel,
 	fetchImpl: AnthropicFetch,
 	cachedRequest: AnthropicWireRequest
 ): AsyncIterable<ProviderChatEvent> {
@@ -281,6 +301,7 @@ const streamWithCacheFallback = async function* (
 		}
 	} catch (error) {
 		if (
+			request.cacheWarming ||
 			outputStarted ||
 			!cachedRequest.hasCacheControls ||
 			!isCacheControlRejection(error) ||
@@ -288,13 +309,7 @@ const streamWithCacheFallback = async function* (
 		) {
 			throw error;
 		}
-		const uncachedRequest = wireRequestFor(
-			request,
-			context,
-			authorization,
-			model,
-			undefined
-		);
+		const uncachedRequest = wireRequestFor(request, context, model, undefined);
 		yield* streamWireRequest(
 			uncachedRequest,
 			authorization,
@@ -311,11 +326,10 @@ const streamAnthropic = (fetchImpl: AnthropicFetch) =>
 	): AsyncIterable<ProviderChatEvent> {
 		try {
 			const authorization = parseAuthorization(context.authorization);
-			const model = modelForProtocol(context.model);
+			const model = context.model;
 			const cachedRequest = wireRequestFor(
 				request,
 				context,
-				authorization,
 				model,
 				request.cacheRetention
 			);

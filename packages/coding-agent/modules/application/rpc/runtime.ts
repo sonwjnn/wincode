@@ -1,8 +1,4 @@
-import {
-	isSupportedThinkingLevel,
-	modelSelectionSchema,
-	thinkingLevelSchema,
-} from "@wincode/ai/models";
+import { thinkingLevelSchema } from "@wincode/ai/sdk";
 import {
 	createAgentTurnId,
 	createSessionUserMessage,
@@ -33,8 +29,6 @@ export const loadRuntime = async (
 			view: true,
 		}),
 	createSessionUserMessage,
-	isSupportedThinkingLevel,
-	modelSelectionSchema,
 	thinkingLevelSchema,
 	resolveWorkspaceRoot,
 	toSessionId,

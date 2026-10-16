@@ -1,5 +1,5 @@
 import { getModelFailureMessage } from "@wincode/ai/model-failures";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import {
 	isNull,
 	isNumber,
@@ -10,6 +10,7 @@ import {
 	pickTruthy,
 } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	type CompactionId,
 	type SessionId,
@@ -146,8 +147,9 @@ type CompactionStore = Pick<
 
 export type CompactSessionInput = {
 	session: CompactionSession;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
+	summaryGenerator?: SummaryGenerator;
 	settings: Pick<
 		ResolvedCompactionSettings,
 		"enabled" | "keepRecentTokens" | "thresholdTokens"
@@ -227,7 +229,7 @@ const sameIntent = (left: CompactionIntent, right: CompactionIntent): boolean =>
 type CompactionModuleDependencies = {
 	attachmentStore?: SessionAttachmentStore;
 	store: CompactionStore;
-	summaryGenerator: SummaryGenerator;
+	summaryGenerator?: SummaryGenerator;
 	estimateTokens?: (messages: readonly SessionMessage[]) => number;
 	generateId?: () => CompactionId;
 	now?: () => Date;
@@ -894,7 +896,7 @@ const appendInputFor = ({
 	cutPoint: CutPoint;
 	focus?: string;
 	thinkingLevel?: ThinkingLevel;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	previous: SessionCompaction | null;
 	settings: CompactSessionInput["settings"];
 	summarySpan: readonly SessionMessage[];
@@ -1065,10 +1067,7 @@ const generateCompactionSummary = async (
 				{ cause: error }
 			);
 		}
-		const failureMessage = getModelFailureMessage(error, {
-			modelId: input.model.modelId,
-			providerId: input.model.providerId,
-		});
+		const failureMessage = getModelFailureMessage(error);
 		throw new SessionCompactionError(
 			"summary-failed",
 			`Compaction summary generation failed: ${failureMessage}`,
@@ -1123,7 +1122,7 @@ export const createSessionCompaction = ({
 		entryId: CompactionId;
 		estimateTokens: (messages: readonly SessionMessage[]) => number;
 		focus?: string;
-		model: ChatModelSelection;
+		model: ProviderModelSelection;
 		now: () => Date;
 		previous: SessionCompaction | null;
 		settings: CompactSessionInput["settings"];
@@ -1243,8 +1242,15 @@ export const createSessionCompaction = ({
 			maxOutputTokens,
 			signal: input.signal,
 		};
+		const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
+		if (selectedSummaryGenerator === undefined) {
+			throw new SessionCompactionError(
+				"summary-failed",
+				"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
+			);
+		}
 		const generated = await generateCompactionSummary(
-			summaryGenerator,
+			selectedSummaryGenerator,
 			generatorInput
 		);
 		assertNotAborted(input.signal);

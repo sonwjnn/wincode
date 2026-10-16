@@ -16,10 +16,14 @@ type StoredSessionHistoryViewProps = Readonly<{
 	compactions: readonly SessionCompaction[];
 	isRefreshing: boolean;
 	isRetrying: boolean;
+	isSelectingModel: boolean;
 	messages: readonly SessionMessage[];
 	onRefresh: () => void;
 	onRetry: () => void;
+	onReselectModel: () => void;
 	owner: SessionWriterLockOwner | undefined;
+	selectionError?: string;
+	selectionPickerError?: string;
 	sessionTitle: string;
 }>;
 
@@ -27,10 +31,14 @@ export function StoredSessionHistoryView({
 	compactions,
 	isRefreshing,
 	isRetrying,
+	isSelectingModel,
 	messages,
 	onRefresh,
 	onRetry,
+	onReselectModel,
 	owner,
+	selectionError,
+	selectionPickerError,
 	sessionTitle,
 }: StoredSessionHistoryViewProps) {
 	const { colors } = useTheme();
@@ -39,7 +47,7 @@ export function StoredSessionHistoryView({
 		item.kind === "turn" ? [item.turn] : []
 	);
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
-	const isBusy = isRefreshing || isRetrying;
+	const isBusy = isRefreshing || isRetrying || isSelectingModel;
 
 	return (
 		<box
@@ -53,10 +61,25 @@ export function StoredSessionHistoryView({
 				<text attributes={TextAttributes.BOLD} fg={colors.text}>
 					Stored Session History · Read-only
 				</text>
-				<text fg={colors.textMuted}>
-					A writer lock is held. This view cannot change that session.
-				</text>
-				<SessionWriterOwnerLabel owner={owner} />
+				{selectionError === undefined ? (
+					<>
+						<text fg={colors.textMuted}>
+							A writer lock is held. This view cannot change that session.
+						</text>
+						<SessionWriterOwnerLabel owner={owner} />
+					</>
+				) : (
+					<>
+						<text fg={colors.error}>{selectionError}</text>
+						<text fg={colors.textMuted}>
+							This history remains read-only until you choose a Provider Model
+							again.
+						</text>
+					</>
+				)}
+				{selectionPickerError === undefined ? null : (
+					<text fg={colors.error}>{selectionPickerError}</text>
+				)}
 				<text fg={colors.text}>{sessionTitle}</text>
 				<box flexDirection="row" gap={2}>
 					<SessionWriterAction
@@ -65,14 +88,29 @@ export function StoredSessionHistoryView({
 						label={isRefreshing ? "Refreshing history..." : "Refresh history"}
 						onActivate={onRefresh}
 					/>
-					<SessionWriterAction
-						disabled={isBusy}
-						id="stored-session-history-open"
-						label={
-							isRetrying ? "Opening for editing..." : "Retry / Open for editing"
-						}
-						onActivate={onRetry}
-					/>
+					{selectionError === undefined ? (
+						<SessionWriterAction
+							disabled={isBusy}
+							id="stored-session-history-open"
+							label={
+								isRetrying
+									? "Opening for editing..."
+									: "Retry / Open for editing"
+							}
+							onActivate={onRetry}
+						/>
+					) : (
+						<SessionWriterAction
+							disabled={isBusy}
+							id="stored-session-history-reselect-model"
+							label={
+								isSelectingModel
+									? "Loading Provider Models..."
+									: "Reselect Provider Model to continue"
+							}
+							onActivate={onReselectModel}
+						/>
+					)}
 				</box>
 			</box>
 			<scrollbox

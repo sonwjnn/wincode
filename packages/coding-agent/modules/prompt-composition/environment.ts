@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ModelId } from "@wincode/ai/models";
+import type { ModelId } from "@wincode/agent-core";
 import { isNull, isString, isUndefined } from "@wincode/utils";
 import { getGitBranch } from "@/shared/git/get-git-branch";
 import {

@@ -693,7 +693,8 @@ test("a response beyond the exact output bound emits output_overflow", async () 
 					params: {
 						capabilities: {},
 						clientInfo: { name: "test-client" },
-						cwd: process.cwd(),
+						// Keep the request under its own byte limit; the echoed ID overflows the response.
+						cwd: "/",
 						protocolVersion: 4,
 					},
 				})}\n`

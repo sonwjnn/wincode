@@ -1,10 +1,4 @@
-import {
-	type ChatModelSelection,
-	getSupportedThinkingLevels,
-	type SupportedChatModel,
-	supportedChatModelIdSchema,
-	type ThinkingLevel,
-} from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import { useCallback } from "react";
 import {
 	useDialog,
@@ -17,7 +11,7 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
 type ThinkingLevelDialogContentProps = {
 	currentThinkingLevel: ThinkingLevel | undefined;
-	currentModel: SupportedChatModel;
+	thinkingLevels: readonly ThinkingLevel[];
 	onSelectDefault: () => void;
 	onSelectThinkingLevel: (thinkingLevel: ThinkingLevel) => void;
 };
@@ -35,20 +29,16 @@ const thinkingLevelLabel = (level: ThinkingLevel): string => {
 
 export const ThinkingLevelDialogContent = ({
 	currentThinkingLevel,
-	currentModel,
+	thinkingLevels,
 	onSelectDefault,
 	onSelectThinkingLevel,
 }: ThinkingLevelDialogContentProps) => {
 	const dialog = useDialog();
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
-	const modelSelection: ChatModelSelection = {
-		modelId: supportedChatModelIdSchema.parse(currentModel.id),
-		providerId: currentModel.connectionProviderId,
-	};
 	const options: ThinkingLevelOption[] = [
 		{ kind: "default", label: "Provider default" },
-		...getSupportedThinkingLevels(modelSelection).map((value) => ({
+		...thinkingLevels.map((value) => ({
 			kind: "level" as const,
 			label: thinkingLevelLabel(value),
 			value,

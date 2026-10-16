@@ -1,0 +1,328 @@
+import { expect, test } from "bun:test";
+import { fromAny } from "@total-typescript/shoehorn";
+import { parsePromptCacheTtlMs } from "../src/model-metadata";
+import { withProviderModelMetadata } from "../src/provider-model-metadata";
+import type { Provider, ProviderModel } from "../src/sdk";
+import { createProviderCollection } from "../src/sdk";
+import { createAnthropicProvider } from "../src/sdk-providers/anthropic";
+import { createDeepSeekProvider } from "../src/sdk-providers/deepseek";
+import { createGoogleProvider } from "../src/sdk-providers/google";
+import { createOpenAIProvider } from "../src/sdk-providers/openai";
+import { createOpenCodeGoProvider } from "../src/sdk-providers/opencode-go";
+
+const providerFor = (models: readonly ProviderModel[]): Provider => ({
+	id: "fixture",
+	models,
+	resolveAuthorization: () => ({ authorization: "fixture" }),
+	async *streamChat() {
+		yield { type: "finish" };
+	},
+});
+
+test("ProviderCollection preserves explicit support metadata and rejects invented values", () => {
+	const collection = createProviderCollection();
+	collection.register(
+		providerFor([
+			{
+				modelId: "declared",
+				promptCacheRetentionTiers: ["short", "long"],
+				protocolId: "fixture",
+				providerId: "fixture",
+				reasoningEfforts: ["none", "high"],
+			},
+			{
+				modelId: "undeclared",
+				protocolId: "fixture",
+				providerId: "fixture",
+			},
+		])
+	);
+
+	expect(collection.getModel("fixture", "declared")).toMatchObject({
+		promptCacheRetentionTiers: ["short", "long"],
+		reasoningEfforts: ["none", "high"],
+	});
+	expect(collection.getModel("fixture", "undeclared")).toEqual({
+		modelId: "undeclared",
+		protocolId: "fixture",
+		providerId: "fixture",
+	});
+
+	const invalidCollection = createProviderCollection();
+	expect(() =>
+		invalidCollection.register(
+			providerFor(
+				fromAny([
+					{
+						modelId: "bad-effort",
+						protocolId: "fixture",
+						providerId: "fixture",
+						reasoningEfforts: ["guess"],
+					},
+				])
+			)
+		)
+	).toThrow("Invalid model identity");
+});
+
+test("first-party Provider Models expose only their published thinking and cache choices", () => {
+	const providers = [
+		createOpenAIProvider({ fetch: async () => new Response() }),
+		createAnthropicProvider({ fetch: async () => new Response() }),
+		createDeepSeekProvider(),
+		createGoogleProvider({ fetch: async () => new Response() }),
+		createOpenCodeGoProvider({ fetch: async () => new Response() }),
+	];
+	const modelFor = (providerId: string, modelId: string): ProviderModel => {
+		const model = providers
+			.find((provider) => provider.id === providerId)
+			?.models.find((candidate) => candidate.modelId === modelId);
+		if (!model) {
+			throw new Error(`Missing Provider Model ${providerId}/${modelId}`);
+		}
+		return model;
+	};
+
+	expect(modelFor("openai", "gpt-5.6")).toMatchObject({
+		modelId: "gpt-5.6",
+		limits: { contextWindowTokens: 1_050_000, maxOutputTokens: 128_000 },
+		pricing: {
+			inputPerMillionTokensUsd: 4,
+			outputPerMillionTokensUsd: 20,
+			cacheReadPerMillionTokensUsd: 0.4,
+			cacheWritePerMillionTokensUsd: 5,
+			tiers: [
+				{
+					inputTokensAbove: 200_000,
+					inputPerMillionTokensUsd: 8,
+					outputPerMillionTokensUsd: 30,
+					cacheReadPerMillionTokensUsd: 0.8,
+					cacheWritePerMillionTokensUsd: 10,
+				},
+				{
+					inputTokensAbove: 272_000,
+					inputPerMillionTokensUsd: 8,
+					outputPerMillionTokensUsd: 30,
+					cacheReadPerMillionTokensUsd: 0.8,
+					cacheWritePerMillionTokensUsd: 10,
+				},
+			],
+		},
+		reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+		promptCacheRetentionTiers: ["short"],
+	});
+	expect(modelFor("openai", "gpt-6-terra")).toMatchObject({
+		modelId: "gpt-6-terra",
+		promptCacheRetentionTiers: ["short"],
+	});
+	expect(modelFor("openai", "gpt-6-terra")).not.toHaveProperty(
+		"reasoningEfforts"
+	);
+
+	expect(modelFor("anthropic", "claude-opus-4-5")).toMatchObject({
+		limits: { contextWindowTokens: 200_000, maxOutputTokens: 64_000 },
+		pricing: {
+			inputPerMillionTokensUsd: 5,
+			outputPerMillionTokensUsd: 25,
+			cacheReadPerMillionTokensUsd: 0.5,
+			cacheWritePerMillionTokensUsd: 6.25,
+		},
+		reasoningEfforts: ["low", "medium", "high"],
+		promptCacheRetentionTiers: ["short", "long"],
+	});
+	expect(modelFor("anthropic", "claude-opus-5.5")).toMatchObject({
+		promptCacheRetentionTiers: ["short", "long"],
+	});
+	expect(modelFor("anthropic", "claude-opus-5.5")).not.toHaveProperty(
+		"reasoningEfforts"
+	);
+	expect(modelFor("anthropic", "claude-haiku-4-5")).not.toHaveProperty(
+		"reasoningEfforts"
+	);
+
+	expect(modelFor("google", "gemini-3.6-flash")).toMatchObject({
+		reasoningEfforts: ["minimal", "low", "medium", "high"],
+	});
+	expect(modelFor("google", "gemini-3.6-flash")).not.toHaveProperty(
+		"promptCacheRetentionTiers"
+	);
+	expect(modelFor("google", "gemini-3.8-flash")).toMatchObject({
+		limits: { contextWindowTokens: 1_048_576, maxOutputTokens: 65_536 },
+		pricing: {
+			inputPerMillionTokensUsd: 0.75,
+			outputPerMillionTokensUsd: 3.75,
+			cacheReadPerMillionTokensUsd: 0.075,
+		},
+		reasoningEfforts: ["low", "medium", "high"],
+		promptCacheRetentionTiers: ["short", "long"],
+	});
+
+	expect(modelFor("opencode-go", "gpt-5.6-luna")).toMatchObject({
+		limits: { contextWindowTokens: 1_050_000, maxOutputTokens: 128_000 },
+		pricing: {
+			inputPerMillionTokensUsd: 0.2,
+			outputPerMillionTokensUsd: 1.2,
+			cacheReadPerMillionTokensUsd: 0.02,
+			cacheWritePerMillionTokensUsd: 0.25,
+			tiers: [
+				{
+					inputTokensAbove: 200_000,
+					inputPerMillionTokensUsd: 0.4,
+					outputPerMillionTokensUsd: 1.8,
+					cacheReadPerMillionTokensUsd: 0.04,
+					cacheWritePerMillionTokensUsd: 0.5,
+				},
+				{
+					inputTokensAbove: 272_000,
+					inputPerMillionTokensUsd: 0.4,
+					outputPerMillionTokensUsd: 1.8,
+					cacheReadPerMillionTokensUsd: 0.04,
+					cacheWritePerMillionTokensUsd: 0.5,
+				},
+			],
+		},
+	});
+	expect(modelFor("opencode-go", "grok-4.6")).toMatchObject({
+		limits: { contextWindowTokens: 500_000, maxOutputTokens: 500_000 },
+		pricing: {
+			inputPerMillionTokensUsd: 2,
+			outputPerMillionTokensUsd: 6,
+			cacheReadPerMillionTokensUsd: 0.5,
+		},
+		reasoningEfforts: ["low", "medium", "high", "xhigh"],
+	});
+	expect(modelFor("opencode-go", "longcat-2.0")).toMatchObject({
+		reasoningEfforts: ["none"],
+	});
+	expect(modelFor("opencode-go", "glm-5.1")).toEqual({
+		modelId: "glm-5.1",
+		protocolId: "openai-compatible",
+		providerId: "opencode-go",
+	});
+	expect(modelFor("deepseek", "deepseek-reasoner")).not.toHaveProperty(
+		"reasoningEfforts"
+	);
+	expect(modelFor("deepseek", "deepseek-reasoner")).not.toHaveProperty(
+		"promptCacheRetentionTiers"
+	);
+	expect(modelFor("deepseek", "deepseek-reasoner")).not.toHaveProperty(
+		"limits"
+	);
+	expect(modelFor("deepseek", "deepseek-reasoner")).not.toHaveProperty(
+		"pricing"
+	);
+});
+
+test("Provider Model enrichment preserves exact limits and every published price tier", () => {
+	const model: ProviderModel = {
+		modelId: "priced-model",
+		protocolId: "openai-responses",
+		providerId: "openai",
+	};
+
+	expect(
+		withProviderModelMetadata(model, {
+			cost: { cacheRead: 0.4, cacheWrite: 5, input: 4, output: 20 },
+			limits: { context: 1_050_000, output: 128_000 },
+			tiers: [
+				{
+					inputTokensAbove: 200_000,
+					cacheRead: 0.8,
+					cacheWrite: 10,
+					input: 8,
+					output: 30,
+				},
+			],
+		})
+	).toEqual({
+		...model,
+		limits: { contextWindowTokens: 1_050_000, maxOutputTokens: 128_000 },
+		pricing: {
+			cacheReadPerMillionTokensUsd: 0.4,
+			cacheWritePerMillionTokensUsd: 5,
+			inputPerMillionTokensUsd: 4,
+			outputPerMillionTokensUsd: 20,
+			tiers: [
+				{
+					inputTokensAbove: 200_000,
+					cacheReadPerMillionTokensUsd: 0.8,
+					cacheWritePerMillionTokensUsd: 10,
+					inputPerMillionTokensUsd: 8,
+					outputPerMillionTokensUsd: 30,
+				},
+			],
+		},
+	});
+	// An absent source fact cannot be made up from a Catalog or adjacent model.
+	expect(withProviderModelMetadata(model, {})).toEqual(model);
+});
+
+test("Provider Model cache TTL uses only explicit protocol retention values", () => {
+	const model: ProviderModel = {
+		modelId: "cache-model",
+		protocolId: "openai-responses",
+		providerId: "openai",
+	};
+	const promptCache = {
+		explicit: { retentionTiers: ["short", "long"] },
+		protocols: {
+			"openai-responses": {
+				eligibility: { minimumInputTokens: 1024 },
+				retention: {
+					field: "prompt_cache_options.ttl",
+					values: { short: "30m", long: "1h" },
+				},
+			},
+		},
+	} as const;
+
+	expect(withProviderModelMetadata(model, { promptCache })).toMatchObject({
+		promptCacheRetentionTiers: ["short", "long"],
+		promptCacheRetentionTtlMs: { long: 3_600_000, short: 1_800_000 },
+	});
+	expect(parsePromptCacheTtlMs("300s")).toBe(300_000);
+	expect(parsePromptCacheTtlMs("30m")).toBe(1_800_000);
+	expect(parsePromptCacheTtlMs("1h")).toBe(3_600_000);
+	expect(parsePromptCacheTtlMs("1d")).toBeUndefined();
+	expect(parsePromptCacheTtlMs("0s")).toBeUndefined();
+});
+
+test("Provider Model reasoning maps named levels and explicit overrides only", () => {
+	const model = providerFor([
+		{
+			modelId: "policy-model",
+			protocolId: "fixture",
+			providerId: "fixture",
+		},
+	]).models[0];
+	if (!model) {
+		throw new Error("Missing fixture Provider Model");
+	}
+
+	expect(
+		withProviderModelMetadata(model, {
+			thinking: {
+				levels: ["low", "high"],
+				levelMap: { low: null, max: "maximum", off: "disabled" },
+			},
+			promptCache: { explicit: { retentionTiers: ["short", "long"] } },
+		})
+	).toMatchObject({
+		reasoningEfforts: ["none", "high", "max"],
+		promptCacheRetentionTiers: ["short", "long"],
+	});
+
+	expect(
+		withProviderModelMetadata(model, { thinking: { toggle: true } })
+	).toEqual({ ...model, reasoningEfforts: ["none"] });
+	expect(
+		withProviderModelMetadata(model, {
+			thinking: { levels: ["low"], toggle: true },
+		})
+	).toMatchObject({ reasoningEfforts: ["none", "low"] });
+	expect(
+		withProviderModelMetadata(model, {
+			thinking: { toggle: true, unlevelled: true },
+		})
+	).toMatchObject({ reasoningEfforts: ["none"] });
+});

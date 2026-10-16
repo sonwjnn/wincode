@@ -43,8 +43,8 @@ only committed Steering Messages survive restart reconciliation.
   never starts an Agent Turn.
 - The current model request and its Tool Call batch finish before pending
   Steering Messages are consumed. Preparation at that safe boundary supports
-  attachments and explicit Skill intent, uses the active Agent and Model Target
-  without switching the running turn, and uses the same Custom Command
+  attachments and explicit Skill intent, uses the active Agent and its exact
+  Provider Model selection without switching the running turn, and uses the same Custom Command
   expansion path as ordinary Submission preparation. A Custom Command's
   expanded prompt is retained and is not expanded or executed a second time.
   Attachment content remains available until the committed message is prepared.

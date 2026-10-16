@@ -3,26 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": {
-      "default": "./src/model.ts"
-    },
-    "./model": {
-      "default": "./src/model.ts"
-    },
     "./model-failures": {
       "default": "./src/model-failures.ts"
     },
-    "./model-provider-options": {
-      "default": "./src/model-provider-options.ts"
-    },
-    "./model-target": {
-      "default": "./src/model-target.ts"
+    "./model-output-limit": {
+      "default": "./src/model-output-limit.ts"
     },
     "./model-usage": {
       "default": "./src/model-usage.ts"
-    },
-    "./model-client": {
-      "default": "./src/model-client/index.ts"
     },
     "./sdk": {
       "default": "./src/sdk.ts"
@@ -30,14 +18,8 @@
     "./sdk/providers/*": {
       "default": "./src/sdk-providers/*.ts"
     },
-    "./connections": {
-      "default": "./src/connections/index.ts"
-    },
-    "./models-dev": {
-      "default": "./src/models-dev.ts"
-    },
-    "./models": {
-      "default": "./src/models.ts"
+    "./connections/legacy-cleanup": {
+      "default": "./src/connections/legacy-credential-cleanup.ts"
     }
   },
   "scripts": {

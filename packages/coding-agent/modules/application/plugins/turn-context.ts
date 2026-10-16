@@ -1,9 +1,10 @@
 import type { AgentId, AgentTurnId } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import type {
 	PluginRuntime,
 	PluginToolDescriptor,
 } from "@/modules/plugins/runtime";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
@@ -21,7 +22,7 @@ export type TurnToolPluginContext = Readonly<{
 	agentId?: AgentId;
 	/** Optional tool ceiling inherited by child Sessions delegated from this Agent. */
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	turnId?: AgentTurnId;
 	/** Tools explicitly selected for this Agent. */

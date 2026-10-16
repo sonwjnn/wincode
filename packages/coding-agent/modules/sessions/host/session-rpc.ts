@@ -1,16 +1,8 @@
 export type { AgentTurnId, SubmissionId } from "@wincode/agent-core";
 export { createAgentTurnId, toSubmissionId } from "@wincode/agent-core";
-export type { Connections } from "@wincode/ai/connections";
-export type {
-	ChatModelSelection,
-	ThinkingLevel,
-} from "@wincode/ai/models";
-export {
-	isSupportedThinkingLevel,
-	modelSelectionSchema,
-	normalizeThinkingLevel,
-	thinkingLevelSchema,
-} from "@wincode/ai/models";
+export type { ThinkingLevel } from "@wincode/ai/sdk";
+export { thinkingLevelSchema } from "@wincode/ai/sdk";
+export type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 export { resolveWorkspaceRoot } from "@/modules/tools";
 export type { SessionId, SessionUsageEntryId } from "@/shared/identifiers";
 export { toSessionId, toSessionUsageEntryId } from "@/shared/identifiers";

@@ -25,8 +25,8 @@ scoping: the Engine tracks the live Agent Turn executions of a session with
 their parent linkage, exposes the Session View State of the most recently
 active execution, and a finishing execution drops only its own view, while the
 turn-scoped values themselves (Agent Turn Identifier, assistant message
-identity, source user message, start time, Agent and resolved Agent, Model
-Target selection and variant, session-level selection, MCP snapshot, child
+identity, source user message, start time, Agent and resolved Agent, Provider
+Model selection and reasoning request, session-level selection, MCP snapshot, child
 abort registry, and Skill catalog) are created with the execution and
 discarded with it. Compaction has shipped as the first Session Command: the
 Engine runs it against the Session Compaction module as its port, publishes the

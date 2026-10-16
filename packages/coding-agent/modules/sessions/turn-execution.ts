@@ -5,8 +5,9 @@ import {
 	createAgentTurnId,
 	type SessionMessageId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import { omitUndefined } from "@wincode/utils";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SkillExecution,
 	SkillRequestContext,
@@ -35,11 +36,11 @@ export type TurnExecution = {
 	readonly agent: AgentId;
 	/** The first assistant Session Message for this execution. */
 	readonly assistantId: SessionMessageId;
-	/** The Model Target selection the execution runs against. */
-	readonly model: ChatModelSelection;
+	/** The Provider Model identity the execution runs against. */
+	readonly model: ProviderModelSelection;
 	readonly resolvedAgent?: ResolvedCodingAgent;
 	/** The session-level selection recorded on this execution's Session Records. */
-	readonly sessionModel: ChatModelSelection;
+	readonly sessionModel: ProviderModelSelection;
 	readonly sessionThinkingLevel?: ThinkingLevel;
 	/** The Session Context message this execution answers. */
 	readonly sourceUserMessageId: SessionMessageId | null;
@@ -58,9 +59,9 @@ export type BeginTurnExecutionInput = {
 	readonly agent: AgentId;
 	/** The Skill catalog armed for the execution's turn, when one was built. */
 	readonly armedSkill?: TurnExecutionSkill;
-	readonly model: ChatModelSelection;
+	readonly model: ProviderModelSelection;
 	readonly resolvedAgent?: ResolvedCodingAgent;
-	readonly sessionModel: ChatModelSelection;
+	readonly sessionModel: ProviderModelSelection;
 	readonly sessionThinkingLevel?: ThinkingLevel;
 	/** The Skill, if any, this execution's turn must load. */
 	readonly skillRequest?: SkillRequestContext;

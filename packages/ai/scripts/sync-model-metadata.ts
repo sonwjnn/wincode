@@ -1,25 +1,32 @@
-// Regenerates shared and provider-only model metadata.
+// Regenerates provider-owned model metadata and retires obsolete generated output.
 //
-// Usage: bun run packages/ai/scripts/sync-model-metadata.ts [--check]
+// Usage:
+//   bun run packages/ai/scripts/sync-model-metadata.ts [--check]
+//   bun run packages/ai/scripts/sync-model-metadata.ts --retire-legacy-aggregate
 //
 // Sources, in order of authority:
 //   1. manual overlays declared below (facts models.dev does not publish);
 //   2. `https://models.dev/api.json` (reasoning options, cost, limits).
 //
 // Entries absent upstream are reported, never fabricated. Run with `--check`
-// to fail when the committed file is not what the current inputs produce.
+// to fail when committed provider snapshots differ from current inputs. The
+// `--retire-legacy-aggregate` mode is offline and does not fetch models.dev.
 
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { readUtf8File } from "@wincode/utils";
-import { modelCatalog } from "../src/catalog";
+import { anthropicDefaultModelIds } from "../src/sdk-providers/anthropic-models";
+import { googleProviderModels } from "../src/sdk-providers/google-models";
+import { openAIDefaultModelIds } from "../src/sdk-providers/openai-models";
+import { openCodeGoProviderModels } from "../src/sdk-providers/opencode-go-models";
 import { buildModelMetadataFile, MANUAL_OVERLAYS } from "./metadata-model";
 
 const DEFAULT_URL = "https://models.dev/api.json";
-const REQUEST_TIMEOUT_MS = 20_000;
-const OUTPUT_PATH = path.join(
+const LEGACY_AGGREGATE_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/model-metadata.generated.ts"
 );
+const REQUEST_TIMEOUT_MS = 20_000;
 const ANTHROPIC_MODEL_METADATA_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/anthropic-model-metadata.generated.ts"
@@ -28,21 +35,17 @@ const OPENAI_PROMPT_CACHE_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/openai-prompt-cache.generated.ts"
 );
+const OPENAI_PROVIDER_MODEL_METADATA_OUTPUT_PATH = path.join(
+	import.meta.dir,
+	"../src/generated/openai-provider-model-metadata.generated.ts"
+);
 const GOOGLE_MODEL_METADATA_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/google-model-metadata.generated.ts"
 );
-const GOOGLE_SDK_MODELS_OUTPUT_PATH = path.join(
-	import.meta.dir,
-	"../src/generated/google-sdk-models.generated.ts"
-);
 const OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH = path.join(
 	import.meta.dir,
 	"../src/generated/opencode-go-model-metadata.generated.ts"
-);
-const OPENCODE_GO_SDK_MODELS_OUTPUT_PATH = path.join(
-	import.meta.dir,
-	"../src/generated/opencode-go-sdk-models.generated.ts"
 );
 
 const sourceUrlForOutput = (value: string): string => {
@@ -58,27 +61,32 @@ const sourceUrlForOutput = (value: string): string => {
 	}
 };
 
+if (process.argv.includes("--retire-legacy-aggregate")) {
+	await fs.rm(LEGACY_AGGREGATE_OUTPUT_PATH, { force: true });
+	process.stdout.write(`Retired ${LEGACY_AGGREGATE_OUTPUT_PATH}\n`);
+	process.exit(0);
+}
+
 const isCheck = process.argv.includes("--check");
-const current = isCheck ? await readUtf8File(OUTPUT_PATH) : undefined;
+const legacyAggregateExists = await Bun.file(
+	LEGACY_AGGREGATE_OUTPUT_PATH
+).exists();
 const currentAnthropicModelMetadata = isCheck
 	? await readUtf8File(ANTHROPIC_MODEL_METADATA_OUTPUT_PATH)
 	: undefined;
 const currentOpenAIPromptCache = isCheck
 	? await readUtf8File(OPENAI_PROMPT_CACHE_OUTPUT_PATH)
 	: undefined;
+const currentOpenAIProviderModelMetadata = isCheck
+	? await readUtf8File(OPENAI_PROVIDER_MODEL_METADATA_OUTPUT_PATH)
+	: undefined;
 const currentGoogleModelMetadata = isCheck
 	? await readUtf8File(GOOGLE_MODEL_METADATA_OUTPUT_PATH)
-	: undefined;
-const currentGoogleSdkModels = isCheck
-	? await readUtf8File(GOOGLE_SDK_MODELS_OUTPUT_PATH)
 	: undefined;
 const currentOpenCodeGoModelMetadata = isCheck
 	? await readUtf8File(OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH)
 	: undefined;
-const currentOpenCodeGoSdkModels = isCheck
-	? await readUtf8File(OPENCODE_GO_SDK_MODELS_OUTPUT_PATH)
-	: undefined;
-const committedSnapshotDate = current?.match(
+const committedSnapshotDate = currentOpenAIProviderModelMetadata?.match(
 	/^\/\/ Snapshot date: (\d{4}-\d{2}-\d{2})\./m
 )?.[1];
 
@@ -98,8 +106,26 @@ const payload: unknown = await response.json();
 const generatedAt =
 	committedSnapshotDate ?? new Date().toISOString().slice(0, 10);
 
+const providerModels = [
+	...openAIDefaultModelIds.map((modelId) => ({
+		modelId,
+		providerId: "openai",
+	})),
+	...anthropicDefaultModelIds.map((modelId) => ({
+		modelId,
+		providerId: "anthropic",
+	})),
+	...googleProviderModels.map(({ modelId, providerId }) => ({
+		modelId,
+		providerId,
+	})),
+	...openCodeGoProviderModels.map(({ modelId, providerId }) => ({
+		modelId,
+		providerId,
+	})),
+];
 const rendered = buildModelMetadataFile({
-	catalog: modelCatalog,
+	providerModels,
 	generatedAt,
 	overlays: MANUAL_OVERLAYS,
 	payload,
@@ -107,31 +133,33 @@ const rendered = buildModelMetadataFile({
 });
 
 process.stdout.write(
-	`${rendered.coverage.activeEntries} active catalog entries\n` +
+	`${rendered.coverage.providerModelCount} Provider SDK models\n` +
 		`  from ${sourceUrl}: ${rendered.coverage.fromSource}\n` +
 		`  from manual overlay: ${rendered.coverage.fromOverlay.join(", ") || "none"}\n` +
 		`  absent upstream: ${rendered.coverage.absentUpstream.join(", ") || "none"}\n`
 );
 
 if (isCheck) {
-	if (
-		current !== rendered.contents ||
-		currentAnthropicModelMetadata !== rendered.anthropicModelMetadataContents ||
-		currentOpenAIPromptCache !== rendered.openAIPromptCacheContents ||
-		currentGoogleModelMetadata !== rendered.googleModelMetadataContents ||
-		currentGoogleSdkModels !== rendered.googleSdkModelsContents ||
-		currentOpenCodeGoModelMetadata !==
-			rendered.openCodeGoModelMetadataContents ||
-		currentOpenCodeGoSdkModels !== rendered.openCodeGoSdkModelsContents
-	) {
+	if (legacyAggregateExists) {
 		throw new Error(
-			"Generated model metadata is stale. Run `bun run packages/ai/scripts/sync-model-metadata.ts`."
+			"The legacy aggregate metadata file remains. Run `bun run sync-model-metadata -- --retire-legacy-aggregate` to remove it."
 		);
 	}
-	process.stdout.write("Generated model metadata is current.\n");
+	if (
+		currentAnthropicModelMetadata !== rendered.anthropicModelMetadataContents ||
+		currentOpenAIPromptCache !== rendered.openAIPromptCacheContents ||
+		currentOpenAIProviderModelMetadata !==
+			rendered.openAIProviderModelMetadataContents ||
+		currentGoogleModelMetadata !== rendered.googleModelMetadataContents ||
+		currentOpenCodeGoModelMetadata !== rendered.openCodeGoModelMetadataContents
+	) {
+		throw new Error(
+			"Generated Provider Model metadata is stale. Run `bun run packages/ai/scripts/sync-model-metadata.ts`."
+		);
+	}
+	process.stdout.write("Generated Provider Model metadata is current.\n");
 } else {
 	await Promise.all([
-		Bun.write(OUTPUT_PATH, rendered.contents),
 		Bun.write(
 			ANTHROPIC_MODEL_METADATA_OUTPUT_PATH,
 			rendered.anthropicModelMetadataContents
@@ -141,24 +169,22 @@ if (isCheck) {
 			rendered.openAIPromptCacheContents
 		),
 		Bun.write(
+			OPENAI_PROVIDER_MODEL_METADATA_OUTPUT_PATH,
+			rendered.openAIProviderModelMetadataContents
+		),
+		Bun.write(
 			GOOGLE_MODEL_METADATA_OUTPUT_PATH,
 			rendered.googleModelMetadataContents
 		),
-		Bun.write(GOOGLE_SDK_MODELS_OUTPUT_PATH, rendered.googleSdkModelsContents),
 		Bun.write(
 			OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH,
 			rendered.openCodeGoModelMetadataContents
 		),
-		Bun.write(
-			OPENCODE_GO_SDK_MODELS_OUTPUT_PATH,
-			rendered.openCodeGoSdkModelsContents
-		),
 	]);
-	process.stdout.write(`Wrote ${OUTPUT_PATH}\n`);
+	await fs.rm(LEGACY_AGGREGATE_OUTPUT_PATH, { force: true });
 	process.stdout.write(`Wrote ${ANTHROPIC_MODEL_METADATA_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${OPENAI_PROMPT_CACHE_OUTPUT_PATH}\n`);
+	process.stdout.write(`Wrote ${OPENAI_PROVIDER_MODEL_METADATA_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${GOOGLE_MODEL_METADATA_OUTPUT_PATH}\n`);
-	process.stdout.write(`Wrote ${GOOGLE_SDK_MODELS_OUTPUT_PATH}\n`);
 	process.stdout.write(`Wrote ${OPENCODE_GO_MODEL_METADATA_OUTPUT_PATH}\n`);
-	process.stdout.write(`Wrote ${OPENCODE_GO_SDK_MODELS_OUTPUT_PATH}\n`);
 }

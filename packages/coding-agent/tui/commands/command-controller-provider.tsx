@@ -19,7 +19,6 @@ import type { CommandSpec } from "@/modules/commands/commands";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import { createCommandExecutor } from "@/modules/commands/execute-command";
-import { useConnections } from "@/modules/connections";
 import { PluginStatusPanelDialogContent } from "@/modules/plugins/ui/plugin-status-panel-dialog";
 import {
 	getProjectTrustStatus,
@@ -27,7 +26,6 @@ import {
 	saveProjectTrustDecision,
 } from "@/modules/project-trust/project-trust";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
-import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { discoverSkills, type Skill } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
 import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
@@ -56,7 +54,6 @@ export function CommandControllerProvider({
 	const dialog = useDialog();
 	const toast = useToast();
 	const { reloadTheme } = useTheme();
-	const connections = useConnections();
 	const refreshAgentRegistry = useRefreshAgentRegistry();
 	const promptConfig = usePromptConfig();
 	const [customCommands, setCustomCommands] = useState<CustomCommandSpec[]>([]);
@@ -173,15 +170,14 @@ export function CommandControllerProvider({
 			const execute = createCommandExecutor(
 				createCommandHandlers({
 					config: promptConfig,
-					connections,
 					dialog,
-					getRecentModelSelections: (limit) =>
-						getSessionStore().listRecentModelSelections(limit),
 					navigateHome: () => {
 						router.navigate({ to: "/" }).catch(() => undefined);
 					},
 					onCompact: options.onCompact,
-					onSelectModel: options.onSelectModel,
+					onSelectProviderModel: options.onSelectProviderModel,
+					providerController: options.providerController,
+					providerModel: options.providerModel,
 					onReload: reloadResources,
 					onTrust: trustProject,
 					onOpenSettings: options.onOpenSettings,
@@ -257,7 +253,6 @@ export function CommandControllerProvider({
 			});
 		},
 		[
-			connections,
 			config.workspace,
 			customCommands,
 			dialog,

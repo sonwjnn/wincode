@@ -5,8 +5,7 @@ import { isArray, isString, isUndefined } from "@wincode/utils";
 //
 // This module MUST NOT import `./generated/*`. The generator imports it, so a
 // generated import here would close a cycle and break regeneration from a clean
-// tree. The read path over the generated snapshot lives in
-// `./model-metadata-snapshot`.
+// tree. Provider-specific generated metadata is read by SDK Provider modules.
 
 import {
 	isFiniteNonNegativeNumber,
@@ -66,7 +65,7 @@ const THINKING_LEVEL_IDS: ReadonlySet<string> = new Set(
 type ModelSource = Readonly<{ modelId: string; providerId: string }>;
 
 // DeepSeek publishes these only as aliases for the named models below.
-// `minimal` remains distinct for other model catalogs.
+// `minimal` remains distinct for other Providers.
 const DEEPSEEK_EFFORT_ALIASES: Readonly<Record<string, ThinkingLevel>> = {
 	minimal: "low",
 	medium: "high",

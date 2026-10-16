@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { createModelTarget } from "@wincode/ai/model-target";
-import { supportedChatModelIdSchema } from "@wincode/ai/models";
 import {
 	AGENT_TURN_EVENT_TERMINAL_TYPES,
 	AGENT_TURN_EVENT_TYPES,
@@ -21,20 +19,21 @@ import {
 	type ModelStepId,
 	OPERATIONAL_FAILURE_VERSION,
 	type ToolCallId,
+	toModelId,
 	toSessionMessageId,
 } from "../src/index";
 
 const agentId = (value: string): AgentId => agentIdSchema.parse(value);
-const modelId = (value: string) => supportedChatModelIdSchema.parse(value);
+const modelId = (value: string) => toModelId(value);
 const turnId = (value: string): AgentTurnId => value as AgentTurnId;
 const messageId = (value: string) => toSessionMessageId(value);
 const stepId = (value: string): ModelStepId => value as ModelStepId;
 const toolCallId = (value: string): ToolCallId => value as ToolCallId;
 
-const testModelTarget = createModelTarget(
-	{ modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
-	{ kind: "api-key", apiKey: "test-key" }
-);
+const testModel = {
+	modelId: modelId("gpt-5.6-luna"),
+	providerId: "openai",
+} as const;
 
 const baseEvent = (type: AgentTurnEvent["type"]): AgentTurnEvent => {
 	const common = { sequence: 1, turnId: turnId("turn-1") };
@@ -197,7 +196,7 @@ describe("Agent Turn execution identity", () => {
 			},
 			id: turnId("turn-primary"),
 			input: { messages: [] },
-			model: testModelTarget,
+			model: testModel,
 		};
 		const subagentTurn: AgentTurn = {
 			...parent,
@@ -306,7 +305,7 @@ describe("Agent Turn contract", () => {
 					},
 				],
 			},
-			model: testModelTarget,
+			model: testModel,
 		} satisfies AgentTurn;
 		expect(turn.input.messages[0]?.parts[0]).toEqual({
 			text: "hello",

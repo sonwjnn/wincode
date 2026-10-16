@@ -1,6 +1,5 @@
 import type { ModelUsage } from "@wincode/ai/model-usage";
 import { modelUsageSchema } from "@wincode/ai/model-usage";
-import type { ModelId } from "@wincode/ai/models";
 import {
 	isFiniteNonNegativeNumber,
 	isNonEmptyString,
@@ -13,6 +12,7 @@ import type { UnknownRecord } from "type-fest";
 import { type AgentId, isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
 import { isOperationalFailure } from "./failures";
+import type { ModelId } from "./identifiers";
 import type { ModelStepId } from "./model-step";
 import {
 	isToolCallId,

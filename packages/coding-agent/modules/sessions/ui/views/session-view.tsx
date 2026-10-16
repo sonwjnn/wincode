@@ -1,12 +1,7 @@
 import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
-import {
-	type ChatModelSelection,
-	normalizeChatModelSelection,
-	normalizeThinkingSelection,
-	type ThinkingSelection,
-} from "@wincode/ai/models";
+import type { ProviderModel, ThinkingSelection } from "@wincode/ai/sdk";
 import {
 	getErrorMessage,
 	isNull,
@@ -17,11 +12,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type AgentRegistry,
 	type AgentSelectionOverride,
-	resolveEffectiveAgentSelection,
+	type EffectiveAgentSelection,
+	resolveInteractiveAgentSelection,
 	useAgentRegistry,
+	withAvailableAgentModelOverride,
 } from "@/modules/agents";
 import { ProjectTrustNotice } from "@/modules/project-trust/ui/project-trust-notice";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import {
+	isSameProviderModelIdentity,
+	normalizeProviderModelSelection,
+	normalizeProviderModelThinkingSelection,
+	type PluginProviderOwnerRegistration,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
+import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import {
 	createSessionUserMessage,
@@ -34,6 +40,7 @@ import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import type { SessionWaitingMessage } from "../../agent-session/types";
 import { isSessionBusy } from "../../agent-session/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
@@ -82,11 +89,15 @@ type SessionSendInput = Pick<
 type SessionSelectionInput = {
 	agent: AgentId;
 	initialMessage: SessionMessage;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	registry: AgentRegistry;
 	restoredConfig: ResolvedSessionSelection | null;
 	selectionOverride: AgentSelectionOverride;
 	thinkingSelection: ThinkingSelection;
+	trustedProviderRegistrations: readonly PluginProviderOwnerRegistration[];
+	hostProviderRegistrations?: (
+		providerId: string
+	) => readonly PluginProviderOwnerRegistration[] | undefined;
 };
 
 type RecallKeyEvent = {
@@ -97,6 +108,69 @@ type RecallKeyEvent = {
 	shift: boolean;
 };
 
+const resolveInteractiveSubmissionSelection = async ({
+	agent,
+	fallbackModel,
+	hostProviderRegistrations,
+	assertProviderSnapshot,
+	providerController,
+	registry,
+	restoredModel,
+	selectionOverride,
+	thinkingSelection,
+	trustedProviderRegistrations,
+}: {
+	agent: AgentId;
+	fallbackModel: ProviderModelSelection;
+	hostProviderRegistrations?: (
+		providerId: string
+	) => readonly PluginProviderOwnerRegistration[] | undefined;
+	assertProviderSnapshot: () => void;
+	providerController: InteractiveProviderController | undefined;
+	registry: AgentRegistry;
+	restoredModel?: ProviderModelSelection;
+	selectionOverride: AgentSelectionOverride | undefined;
+	thinkingSelection: ThinkingSelection;
+	trustedProviderRegistrations: readonly PluginProviderOwnerRegistration[];
+}): Promise<{
+	effective: EffectiveAgentSelection;
+	selectionOverride: AgentSelectionOverride;
+}> => {
+	assertProviderSnapshot();
+	const effective = resolveInteractiveAgentSelection(
+		registry,
+		agent,
+		fallbackModel,
+		thinkingSelection,
+		selectionOverride,
+		trustedProviderRegistrations,
+		restoredModel,
+		false,
+		hostProviderRegistrations
+	);
+	if (effective.unavailableReason !== undefined) {
+		throw new Error(effective.unavailableReason);
+	}
+	const availableProviderModels =
+		providerController === undefined
+			? undefined
+			: await providerController.getAvailableModels(effective.model.providerId);
+	assertProviderSnapshot();
+	const availableSelectionOverride = withAvailableAgentModelOverride(
+		registry,
+		agent,
+		selectionOverride,
+		availableProviderModels
+	);
+	return {
+		effective,
+		selectionOverride: {
+			...(availableSelectionOverride ?? {}),
+			model: effective.model,
+		},
+	};
+};
+
 const resolveInitialSessionSelection = ({
 	agent,
 	initialMessage,
@@ -105,27 +179,25 @@ const resolveInitialSessionSelection = ({
 	restoredConfig,
 	selectionOverride,
 	thinkingSelection,
+	trustedProviderRegistrations,
+	hostProviderRegistrations,
 }: SessionSelectionInput): SessionSendInput => {
 	const resolvedModel =
-		normalizeChatModelSelection(initialMessage.metadata?.model ?? model) ??
+		normalizeProviderModelSelection(initialMessage.metadata?.model ?? model) ??
 		model;
 	const sessionModel = restoredConfig?.model ?? model;
 	const sessionThinkingLevel =
 		restoredConfig?.thinkingLevel ?? thinkingSelection.thinkingLevel;
-	const sessionThinkingSelection = normalizeThinkingSelection(
-		sessionModel,
+	const sessionThinkingSelection: ThinkingSelection =
 		sessionThinkingLevel === undefined
 			? {}
-			: { thinkingLevel: sessionThinkingLevel }
-	);
+			: { thinkingLevel: sessionThinkingLevel };
 	const persistedThinkingLevel =
 		restoredConfig?.thinkingLevel ?? initialMessage.metadata?.thinkingLevel;
-	const persistedSelection = normalizeThinkingSelection(
-		resolvedModel,
+	const persistedSelection: ThinkingSelection =
 		persistedThinkingLevel === undefined
 			? {}
-			: { thinkingLevel: persistedThinkingLevel }
-	);
+			: { thinkingLevel: persistedThinkingLevel };
 	const persistedAgentId =
 		initialMessage.metadata?.agent ?? restoredConfig?.agent ?? agent;
 	const persistedSubagentIsAvailable =
@@ -139,13 +211,16 @@ const resolveInitialSessionSelection = ({
 		registry.selectableAgents.some(
 			({ id, isAvailable }) => id === persistedAgentId && isAvailable
 		);
-	const effective = resolveEffectiveAgentSelection(
+	const effective = resolveInteractiveAgentSelection(
 		registry,
 		persistedAgentId,
 		persistedAgentIsAvailable ? resolvedModel : sessionModel,
 		persistedAgentIsAvailable ? persistedSelection : sessionThinkingSelection,
+		selectionOverride,
+		trustedProviderRegistrations,
+		sessionModel,
 		persistedSubagentIsAvailable,
-		selectionOverride
+		hostProviderRegistrations
 	);
 	return {
 		agent: effective.agent,
@@ -153,7 +228,7 @@ const resolveInitialSessionSelection = ({
 		sessionThinkingLevel: sessionThinkingSelection.thinkingLevel,
 		model: effective.model,
 		resolvedAgent: effective.resolvedAgent,
-		selectionOverride,
+		selectionOverride: { ...selectionOverride, model: effective.model },
 		...(effective.thinkingLevel === undefined
 			? {}
 			: { thinkingLevel: effective.thinkingLevel }),
@@ -182,6 +257,25 @@ export function SessionView({
 		[thinkingLevel]
 	);
 	const registry = useAgentRegistry();
+	const getTrustedProviderRegistrations = useCallback(
+		() =>
+			getInteractivePluginRuntime()?.getProviderRegistrations(sessionId) ?? [],
+		[sessionId]
+	);
+	const getHostProviderRegistrations = useCallback(
+		(providerId: string) => {
+			const providerController = host.providerController;
+			if (providerController?.getPluginProviderComposition === undefined) {
+				return;
+			}
+			const registration =
+				providerController.getPluginProviderComposition(
+					providerId
+				)?.registration;
+			return registration === undefined ? [] : [registration];
+		},
+		[host]
+	);
 	const dialog = useDialog();
 	const sessionStore = useMemo(() => getSessionStore(), []);
 	const [editMode, setEditMode] = useState<EditMode>("hashline");
@@ -224,7 +318,9 @@ export function SessionView({
 	const settingsRuntime = useMemo(
 		() => ({
 			editMode,
-			model,
+			...omitUndefined({
+				model,
+			}),
 			onEditModeChanged: setSessionEditMode,
 			sessionId,
 			setEditMode: persistSessionEditMode,
@@ -544,49 +640,135 @@ export function SessionView({
 			});
 			return false;
 		}
-		try {
-			const effective = resolveEffectiveAgentSelection(
-				registry,
-				agent,
-				model,
-				currentThinkingSelection
-			);
-			const thinkingSelection: ThinkingSelection =
-				effective.thinkingLevel === undefined
-					? {}
-					: { thinkingLevel: effective.thinkingLevel };
-			await compact(focus, effective.model, thinkingSelection);
-			return true;
-		} catch (error) {
-			show({
-				message: getErrorMessage(error, "Compaction failed."),
-				variant: "error",
-			});
-			return false;
-		}
+		return host.withSessionWork(
+			async () => {
+				try {
+					host.assertCurrentPluginProviderRegistrationSnapshot();
+					const effective = resolveInteractiveAgentSelection(
+						registry,
+						agent,
+						model,
+						currentThinkingSelection,
+						submissionSelectionOverride,
+						getTrustedProviderRegistrations(),
+						restoredConfig?.model,
+						false,
+						getHostProviderRegistrations
+					);
+					if (
+						effective.unavailableReason !== undefined &&
+						host.providerController === undefined
+					) {
+						show({ message: effective.unavailableReason, variant: "error" });
+						return false;
+					}
+					const thinkingSelection: ThinkingSelection =
+						effective.thinkingLevel === undefined
+							? {}
+							: { thinkingLevel: effective.thinkingLevel };
+					const compactWithProviderModel = async (
+						selection: ProviderModelSelection,
+						providerModel: ProviderModel
+					): Promise<void> => {
+						const normalizedThinking = normalizeProviderModelThinkingSelection(
+							providerModel,
+							thinkingSelection
+						);
+						await compact(focus, selection, normalizedThinking);
+					};
+					const availableModels =
+						(await host.providerController?.getAvailableModels(
+							effective.model.providerId
+						)) ?? [];
+					host.assertCurrentPluginProviderRegistrationSnapshot();
+					const currentProviderModel = availableModels.find((providerModel) =>
+						isSameProviderModelIdentity(providerModel, effective.model)
+					);
+					if (currentProviderModel !== undefined) {
+						await compactWithProviderModel(
+							effective.model,
+							currentProviderModel
+						);
+						return true;
+					}
+					const providerController = host.providerController;
+					if (providerController === undefined) {
+						show({
+							message: `Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable. Choose a current model to compact this session.`,
+							variant: "error",
+						});
+						return false;
+					}
+					dialog.open({
+						children: (
+							<ProviderModelsDialogContent
+								controller={providerController}
+								currentModel={effective.model}
+								onSelectModel={async (providerModel, selection) => {
+									host.assertCurrentPluginProviderRegistrationSnapshot();
+									try {
+										await compactWithProviderModel(selection, providerModel);
+									} catch (error) {
+										show({
+											message: getErrorMessage(error, "Compaction failed."),
+											variant: "error",
+										});
+									}
+								}}
+							/>
+						),
+						title: "Choose Model for Compaction",
+					});
+					return true;
+				} catch (error) {
+					show({
+						message: getErrorMessage(error, "Compaction failed."),
+						variant: "error",
+					});
+					return false;
+				}
+			},
+			(reason) => {
+				show({ message: reason, variant: "error" });
+				return false;
+			}
+		);
 	};
 
 	const executeCompactionCommand = (focus?: string) =>
 		runManualCompaction(focus);
 
-	const submitMessage = async (submission: ChatPromptSubmission) => {
-		const { composition, files, text, skill } = submission;
+	const submitWithinSessionWork = async (
+		submission: ChatPromptSubmission,
+		activeRegistry: AgentRegistry
+	): Promise<boolean> => {
+		const { composition, files, skill, text } = submission;
 		const userText = text.trim();
-		if (text.trim().length === 0 && files.length === 0 && isUndefined(skill)) {
+		let effective: EffectiveAgentSelection;
+		let selectionOverride: AgentSelectionOverride;
+		try {
+			const resolved = await resolveInteractiveSubmissionSelection({
+				agent,
+				fallbackModel: model,
+				hostProviderRegistrations: getHostProviderRegistrations,
+				assertProviderSnapshot:
+					host.assertCurrentPluginProviderRegistrationSnapshot,
+				providerController: host.providerController,
+				registry: activeRegistry,
+				restoredModel: restoredConfig?.model,
+				selectionOverride: submissionSelectionOverride,
+				thinkingSelection: currentThinkingSelection,
+				trustedProviderRegistrations: getTrustedProviderRegistrations(),
+			});
+			effective = resolved.effective;
+			selectionOverride = resolved.selectionOverride;
+		} catch (error) {
+			show({
+				message: getErrorMessage(error, "Could not inspect Provider Models."),
+				variant: "error",
+			});
 			return false;
 		}
-		if (isNull(registry) || !isPromptConfigRestored) {
-			return false;
-		}
-
-		const effective = resolveEffectiveAgentSelection(
-			registry,
-			agent,
-			model,
-			currentThinkingSelection,
-			false,
-			submissionSelectionOverride
-		);
 		const optimisticMessage = isBusy
 			? undefined
 			: createSessionUserMessage(
@@ -604,48 +786,57 @@ export function SessionView({
 		if (optimisticMessage) {
 			setOptimisticMessages((pending) => [...pending, optimisticMessage]);
 		}
-		// Prompt admission resets the composer without waiting for turn completion;
-		// a busy session keeps the submission queued until explicitly steered.
-		void prompt({
-			agent: effective.agent,
-			sessionModel: model,
-			...(thinkingLevel === undefined
-				? {}
-				: { sessionThinkingLevel: thinkingLevel }),
-			selectionOverride: submissionSelectionOverride,
-			composition,
-			files,
-			model: effective.model,
-			resolvedAgent: effective.resolvedAgent,
-			...(effective.thinkingLevel === undefined
-				? {}
-				: { thinkingLevel: effective.thinkingLevel }),
-			userText,
-			reservedMessageId: optimisticMessage?.id,
-			skill,
-		})
-			.then((outcome) => {
-				if (outcome.rejected) {
-					show({
-						message: outcome.reason,
-						variant: "error",
-					});
-				}
-			})
-			.catch(() => {
-				show({
-					message: "Could not submit the prompt",
-					variant: "error",
-				});
-			})
-			.finally(() => {
-				if (optimisticMessage) {
-					setOptimisticMessages((pending) =>
-						pending.filter(({ id }) => id !== optimisticMessage.id)
-					);
-				}
+		try {
+			const outcome = await prompt({
+				agent: effective.agent,
+				sessionModel: model,
+				...(thinkingLevel === undefined
+					? {}
+					: { sessionThinkingLevel: thinkingLevel }),
+				selectionOverride,
+				composition,
+				files,
+				model: effective.model,
+				resolvedAgent: effective.resolvedAgent,
+				...(effective.thinkingLevel === undefined
+					? {}
+					: { thinkingLevel: effective.thinkingLevel }),
+				userText,
+				reservedMessageId: optimisticMessage?.id,
+				skill,
 			});
-		return true;
+			if (outcome.rejected) {
+				show({ message: outcome.reason, variant: "error" });
+				return false;
+			}
+			return true;
+		} catch {
+			show({ message: "Could not submit the prompt", variant: "error" });
+			return false;
+		} finally {
+			if (optimisticMessage) {
+				setOptimisticMessages((pending) =>
+					pending.filter(({ id }) => id !== optimisticMessage.id)
+				);
+			}
+		}
+	};
+
+	const submitMessage = async (submission: ChatPromptSubmission) => {
+		const { files, skill, text } = submission;
+		if (text.trim().length === 0 && files.length === 0 && isUndefined(skill)) {
+			return false;
+		}
+		if (isNull(registry) || !isPromptConfigRestored) {
+			return false;
+		}
+		return host.withSessionWork(
+			() => submitWithinSessionWork(submission, registry),
+			(reason) => {
+				show({ message: reason, variant: "error" });
+				return false;
+			}
+		);
 	};
 	const steerQueuedHead = async () => {
 		try {
@@ -669,20 +860,29 @@ export function SessionView({
 		if (initialMessage?.role !== "user") {
 			return;
 		}
-		const outcome = await send({
-			...resolveInitialSessionSelection({
-				agent,
-				initialMessage,
-				model,
-				registry,
-				restoredConfig,
-				selectionOverride: submissionSelectionOverride,
-				thinkingSelection: currentThinkingSelection,
-			}),
-			messageId,
-		});
-		if (outcome.rejected) {
-			show({ message: outcome.reason, variant: "error" });
+		try {
+			const outcome = await send({
+				...resolveInitialSessionSelection({
+					agent,
+					initialMessage,
+					model,
+					registry,
+					restoredConfig,
+					selectionOverride: submissionSelectionOverride,
+					thinkingSelection: currentThinkingSelection,
+					trustedProviderRegistrations: getTrustedProviderRegistrations(),
+					hostProviderRegistrations: getHostProviderRegistrations,
+				}),
+				messageId,
+			});
+			if (outcome.rejected) {
+				show({ message: outcome.reason, variant: "error" });
+			}
+		} catch (error) {
+			show({
+				message: getErrorMessage(error, "Could not retry the Agent Turn."),
+				variant: "error",
+			});
 		}
 	};
 
@@ -759,6 +959,8 @@ export function SessionView({
 						restoredConfig,
 						selectionOverride: submissionSelectionOverride,
 						thinkingSelection: currentThinkingSelection,
+						trustedProviderRegistrations: getTrustedProviderRegistrations(),
+						hostProviderRegistrations: getHostProviderRegistrations,
 					}),
 					messageId: initialMessage.id,
 				});
@@ -785,6 +987,8 @@ export function SessionView({
 		registry,
 		restoredConfig,
 		router,
+		getTrustedProviderRegistrations,
+		getHostProviderRegistrations,
 		submissionSelectionOverride,
 		send,
 		sessionId,
@@ -808,11 +1012,12 @@ export function SessionView({
 					messages={messages}
 					onCompact={executeCompactionCommand}
 					onEmptySubmit={steerQueuedHead}
-					onModelTargetChanged={host.cancelCacheWarming}
 					onOpenSettings={openSettings}
+					onProviderModelChanged={host.cancelCacheWarming}
 					onRetry={retryMessage}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
+					providerController={host.providerController}
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}

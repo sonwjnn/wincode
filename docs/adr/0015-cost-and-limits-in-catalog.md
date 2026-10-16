@@ -4,7 +4,11 @@ A catalog entry carries its cost rates, cost tiers, and context/output limits
 as model metadata. Remote pricing refresh updates those values; it is no longer
 the only place they exist.
 
-Status: accepted
+Status: superseded by ADR-0049 for Provider Model metadata ownership.
+
+This decision records the former Catalog-based cost and limit contract. Its
+unknown-cost and explicit-tier rationale remains useful; current Provider Model
+metadata and pricing behavior follow ADR-0049.
 
 ## Context
 

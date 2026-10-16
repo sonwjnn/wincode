@@ -1,10 +1,10 @@
-import type { AgentRuntime, AgentTurnEvent } from "@wincode/agent-core";
-import type { Connections } from "@wincode/ai/connections";
-import type { ChatModelSelection } from "@wincode/ai/models";
+import type { AgentTurnEvent } from "@wincode/agent-core";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai/sdk";
 import type { AgentRegistry } from "@/modules/agents/registry";
-import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
@@ -12,6 +12,7 @@ import type { AgentSession, LiveSessionSnapshot } from "../agent-session/types";
 import type { SessionCompactionModule } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
 import type { TurnToolResolver } from "../hooks/runtime-turn";
+import type { SessionSdkPluginProviderSource } from "../plugin-provider-source";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
@@ -21,27 +22,30 @@ import type { SessionStore, SessionUsageEntry } from "../storage/session-store";
 /**
  * What one Session Host needs from the surface that constructed it, as lazy
  * getters rather than values: a session outlives the render that supplied its
- * connections, configuration, and catalogs, so a capability is read when the
+ * Provider composition and configuration, so a capability is read when the
  * work that needs it runs, not when the session opened. Nothing here is
  * React-shaped, so a plain Node process satisfies the same contract.
  */
 export type SessionCapabilities = Readonly<{
 	/** The Session Compaction module whose in-flight map owns admission. */
 	getCompactionModule: () => SessionCompactionModule;
-	/** Resolves the compaction settings one Model Target runs with. */
+	/** Resolves the compaction settings for one selected Provider Model. */
 	getCompactionSettings: (
-		model: ChatModelSelection
+		model: ProviderModelSelection,
+		providerModel?: ProviderModel | null
 	) => Promise<ResolvedCompactionSettings>;
 	getConfig: () => ConfigRuntime;
-	getConnections: () => Connections;
-	/** Current pricing snapshot used only for best-effort cache-warming economics. */
-	getModelPricingTable?: () => ModelPricingTable;
+	/** Creates a Host-owned ProviderCollection when this Host uses the SDK path. */
+	createProviderCollection?: (
+		pluginRuntime?: PluginRuntime,
+		sessionId?: string,
+		allowedPluginProviderIds?: readonly string[],
+		allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[]
+	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	/** The Agent registry, which resolves only after the session opened. */
 	getRegistry: () => AgentRegistry | null;
 	/** The durable store this session's records, compactions, and attachments live in. */
 	getStore: () => SessionStore;
-	/** Optional runtime factory for non-default application adapters and tests. */
-	getRuntime?: () => AgentRuntime;
 	getSessionHostManager: () => SessionHostManager;
 	getSessionSdk?: () => SessionSdkOperations | undefined;
 	getPluginRuntime?: () => PluginRuntime;
@@ -56,6 +60,21 @@ export type SessionCapabilities = Readonly<{
  */
 export type SessionHost = Readonly<{
 	agentSession: AgentSession;
+	/** Holds a reload-blocking lease across Host preflight and Session work admission. */
+	withSessionWork: <Result>(
+		action: () => Promise<Result>,
+		onRejected: (reason: string) => Result
+	) => Promise<Result>;
+	/** Revalidates the complete trusted Plugin snapshot before Session side effects. */
+	assertCurrentPluginProviderRegistrationSnapshot: () => void;
+	providerCollection?: ProviderCollection;
+	providerController?: InteractiveProviderController;
+	/** Prepares a fresh Plugin Provider composition while the Host is idle. */
+	prepareProviderComposition?: (
+		pluginRuntime: PluginRuntime,
+		options?: Readonly<{ includePluginProviders?: boolean }>
+	) => Promise<PreparedSessionProviderComposition>;
+	failProviderCompositionClosed?: () => Promise<void>;
 	/**
 	 * The Session Selection the session opened with — the last-used Agent,
 	 * model, and reasoning choice, resolved against the live Agent registry — so a
@@ -65,7 +84,7 @@ export type SessionHost = Readonly<{
 	getSelection: () => ResolvedSessionSelection | null;
 	getSnapshot: () => LiveSessionSnapshot;
 	getCacheWarmingStatus: () => CacheWarmingStatus;
-	/** Cancels scheduled/in-flight warming after its Model Target changes. */
+	/** Cancels scheduled/in-flight warming after its Provider Model changes. */
 	cancelCacheWarming: () => void;
 	getSessionUsageEntries: () => readonly SessionUsageEntry[];
 	/**
@@ -77,6 +96,11 @@ export type SessionHost = Readonly<{
 	shutdown: () => Promise<void>;
 	/** Notifies that session facts changed; no payload, as the Agent Session publishes. */
 	subscribe: (listener: () => void) => () => void;
+}>;
+
+export type PreparedSessionProviderComposition = Readonly<{
+	commit: () => Promise<void>;
+	discard: () => Promise<void>;
 }>;
 
 export type SessionHostManagerEvent = Readonly<{
@@ -93,13 +117,19 @@ export type SessionHostManager = Readonly<{
 	assertIdleForReload: () => Promise<void>;
 	tryAcquireSessionWork: () => SessionWorkAdmission;
 	withIdleForReload: <Result>(action: () => Promise<Result>) => Promise<Result>;
-	/** Rebind open Plugin Session scopes without closing their Session Hosts. */
-	replacePluginRuntime: (runtime: PluginRuntime) => Promise<void>;
+	/** Rebind open Plugin Session scopes and idle Provider compositions. */
+	replacePluginRuntime: (
+		runtime: PluginRuntime,
+		options?: Readonly<{ trustChanged?: boolean }>
+	) => Promise<void>;
 	onEvent: (listener: (event: SessionHostManagerEvent) => void) => () => void;
 	openHost: (input: {
 		autoContinue?: boolean;
 		capabilities: SessionCapabilities;
+		providerCollection?: ProviderCollection;
 		executionMode?: ExecutionMode;
+		providerModel?: ProviderModelSelection;
+		agentPinSelection?: ProviderModelSelection;
 		sessionId: SessionId;
 		view?: boolean;
 	}) => Promise<SessionHost>;
@@ -110,6 +140,8 @@ export type SessionHostManager = Readonly<{
 export type SessionHostOptions = Readonly<{
 	autoContinue?: boolean;
 	capabilities: SessionCapabilities;
+	providerCollection?: ProviderCollection;
 	executionMode?: ExecutionMode;
+	providerModel?: ProviderModelSelection;
 	sessionId: SessionId;
 }>;

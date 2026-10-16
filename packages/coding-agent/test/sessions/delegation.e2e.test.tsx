@@ -1,13 +1,13 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
-import { createAgentRuntime } from "@wincode/agent-core";
 import type {
-	ModelStepRequest,
-	ModelStreamPart,
-} from "@wincode/ai/model-client";
+	ProviderChatEvent,
+	ProviderChatRequest,
+	ProviderModel,
+} from "@wincode/ai/sdk";
 import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,
@@ -20,13 +20,15 @@ import { createConfigStore } from "@/shared/config/config-store";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClient,
-	createFakeModelClientRecorder,
+	createFakeProviderCollection,
+	createFakeProviderRecorder,
+	installFakeProviderRecorder,
 } from "@/test/support/e2e-fake-runtime";
 import {
 	cleanupSessionRender,
 	createE2ePricing,
 	createE2eStore,
+	E2E_MODEL,
 	renderSession,
 	seedCompactionHistory,
 	settleSessionUi,
@@ -38,15 +40,29 @@ import { createEnvironmentRestorer } from "@/test/support/environment";
 import { toolCallId } from "../support/identifiers";
 
 const restoreEnvironment = createEnvironmentRestorer([
+	"HOME",
+	"USERPROFILE",
 	"WINCODE_E2E_HOME",
 	"WINCODE_E2E_WORKSPACE",
 	"WINCODE_LOCAL_DB_PATH",
-	"WINCODE_MODEL_PRICING_OFFLINE",
 	"WINCODE_SUBAGENTS_DB_PATH",
 ]);
 const testDirectory = await fs.mkdtemp(
 	path.join(os.tmpdir(), "wincode-delegation-e2e-")
 );
+const trustDirectory = path.join(testDirectory, ".wincode");
+await Bun.write(
+	path.join(trustDirectory, "project-trust.json"),
+	JSON.stringify({
+		decisions: [
+			{ directory: await fs.realpath(process.cwd()), decision: "trust" },
+		],
+		version: 1,
+	})
+);
+const homeDirSpy = spyOn(os, "homedir").mockReturnValue(testDirectory);
+process.env.HOME = testDirectory;
+process.env.USERPROFILE = testDirectory;
 process.env.WINCODE_LOCAL_DB_PATH = path.join(
 	testDirectory,
 	"conversation.sqlite"
@@ -57,11 +73,17 @@ process.env.WINCODE_SUBAGENTS_DB_PATH = path.join(
 );
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
-process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
-const recorder = createFakeModelClientRecorder();
-const runtimeFactory = () =>
-	createAgentRuntime({ modelClient: createFakeModelClient(recorder) });
+const recorder = createFakeProviderRecorder();
+installFakeProviderRecorder(recorder);
+const sessionProviderModel: ProviderModel = {
+	capabilities: ["reasoning", "text", "tools"],
+	modelId: E2E_MODEL.modelId,
+	promptCacheRetentionTiers: ["short"],
+	providerId: E2E_MODEL.providerId,
+	protocolId: "fake-e2e-provider",
+	reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+};
 const taskStore = await getSharedSubagentsTaskStore(
 	resolveSubagentsDatabasePath(testDirectory, resolveUserDataDir())
 );
@@ -81,8 +103,9 @@ const pluginRuntime = await loadPlugins({
 setInteractiveRuntimeContext({
 	args: [],
 	cwd: testDirectory,
+	createProviderCollection: () =>
+		createFakeProviderCollection(recorder, sessionProviderModel),
 	pluginRuntime,
-	runtimeFactory,
 });
 const sessionHostManager = getInteractiveSessionHostManager(pluginRuntime);
 
@@ -90,6 +113,8 @@ afterAll(async () => {
 	await sessionHostManager.shutdownAll();
 	await pluginRuntime.shutdown();
 	taskStore.close();
+	homeDirSpy.mockRestore();
+	mock.restore();
 	restoreEnvironment();
 	await fs.rm(testDirectory, { force: true, recursive: true });
 });
@@ -109,8 +134,8 @@ test("projects delegated work as a separate durable Session, not parent transcri
 	const priorStepScript = recorder.stepScript;
 	const callId = toolCallId("separate-session-delegation");
 	recorder.stepScript = async function* (
-		request: ModelStepRequest
-	): AsyncGenerator<ModelStreamPart> {
+		request: ProviderChatRequest
+	): AsyncGenerator<ProviderChatEvent> {
 		const latestUserText =
 			request.messages
 				.filter(({ role }) => role === "user")
@@ -119,12 +144,14 @@ test("projects delegated work as a separate durable Session, not parent transcri
 				.join("\n") ?? "";
 		if (latestUserText === CHILD_PROMPT) {
 			yield { delta: CHILD_OUTPUT, type: "text-delta" };
-			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+			yield { type: "finish" };
 			return;
 		}
 		if (request.messages.some(({ role }) => role === "tool")) {
 			yield { delta: PARENT_OUTPUT, type: "text-delta" };
-			yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+			yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+			yield { type: "finish" };
 			return;
 		}
 		yield {
@@ -133,7 +160,8 @@ test("projects delegated work as a separate durable Session, not parent transcri
 			toolName: "delegate",
 			type: "tool-call",
 		};
-		yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
 	};
 	let setup: TestRendererSetup | undefined;
 	try {

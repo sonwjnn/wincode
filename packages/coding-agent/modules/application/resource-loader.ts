@@ -3,7 +3,10 @@ import {
 	loadPlugins,
 	type PluginPackageReference,
 } from "@/modules/plugins/loader";
-import type { PluginRuntime } from "@/modules/plugins/runtime";
+import {
+	createPluginRuntime,
+	type PluginRuntime,
+} from "@/modules/plugins/runtime";
 import {
 	type ProjectTrustSnapshot,
 	resolveProjectTrust,
@@ -35,6 +38,7 @@ export type ApplicationResourceReloadResult = ApplicationResourceRuntime &
 	Readonly<{
 		diagnostics: readonly ApplicationResourceDiagnostic[];
 		pluginRuntimeChanged: boolean;
+		trustChanged?: boolean;
 	}>;
 
 export type ApplicationResourceLoader = Readonly<{
@@ -59,6 +63,18 @@ export type ApplicationResourceLoaderOptions = Readonly<{
 	userDataDir?: string;
 }>;
 
+const equalRoots = (
+	first: readonly string[] | undefined,
+	second: readonly string[]
+): boolean => {
+	const firstSet = new Set(first ?? []);
+	const secondSet = new Set(second);
+	return (
+		firstSet.size === secondSet.size &&
+		[...firstSet].every((root) => secondSet.has(root))
+	);
+};
+
 type PluginRuntimeResolution = Pick<
 	ApplicationResourceReloadResult,
 	"pluginRuntime" | "pluginRuntimeChanged"
@@ -71,14 +87,17 @@ const resolvePluginRuntime = async (input: {
 	disabledPluginIds: readonly string[];
 	distributionPlugins: readonly PluginPackageReference[];
 	pluginPaths: readonly string[];
+	trustChanged: boolean;
 	userDataDir: string;
 	workspace: string;
 }): Promise<PluginRuntimeResolution> => {
 	let pluginRuntime = input.current.pluginRuntime;
 	let pluginRuntimeChanged = false;
-	await input.current.configRuntime.configStore.refreshSnapshot(
-		input.workspace
-	);
+	if (!input.trustChanged) {
+		await input.current.configRuntime.configStore.refreshSnapshot(
+			input.workspace
+		);
+	}
 	try {
 		const candidate = await loadPlugins({
 			cliPaths: input.pluginPaths,
@@ -100,7 +119,7 @@ const resolvePluginRuntime = async (input: {
 				sourcePath,
 			}))
 		);
-		if (candidateHasErrors) {
+		if (candidateHasErrors && !input.trustChanged) {
 			// This candidate is deferred and was never published or started.
 			input.diagnostics.push({
 				message:
@@ -116,6 +135,15 @@ const resolvePluginRuntime = async (input: {
 			message: error instanceof Error ? error.message : String(error),
 			resource: "Plugin",
 		});
+		if (input.trustChanged) {
+			pluginRuntime = createPluginRuntime([], []);
+			pluginRuntimeChanged = true;
+			input.diagnostics.push({
+				message:
+					"All active Plugins were unloaded because project trust changed and the replacement set could not be loaded.",
+				resource: "Plugin",
+			});
+		}
 	}
 	return { pluginRuntime, pluginRuntimeChanged };
 };
@@ -172,6 +200,10 @@ export const createApplicationResourceLoader = (
 				})),
 			];
 
+			const trustChanged = !equalRoots(
+				current.configRuntime.trustedProjectRoots,
+				trustedProjectRoots
+			);
 			const pluginResolution = await resolvePluginRuntime({
 				configRuntime,
 				current,
@@ -179,6 +211,7 @@ export const createApplicationResourceLoader = (
 				disabledPluginIds: input.disabledPluginIds,
 				distributionPlugins,
 				pluginPaths: input.pluginPaths,
+				trustChanged,
 				userDataDir,
 				workspace,
 			});
@@ -188,6 +221,7 @@ export const createApplicationResourceLoader = (
 				diagnostics: Object.freeze(diagnostics),
 				pluginRuntime: pluginResolution.pluginRuntime,
 				pluginRuntimeChanged: pluginResolution.pluginRuntimeChanged,
+				trustChanged,
 			});
 		},
 	});

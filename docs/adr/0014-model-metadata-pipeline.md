@@ -6,7 +6,11 @@ catalog. Generated output and manual overlays are both first-class sources; the
 script records which entries used which, and reports entries that upstream no
 longer serves instead of inventing a baseline for them.
 
-Status: accepted
+Status: superseded by ADR-0049 for current Provider Model metadata generation.
+
+This decision records the former global Catalog artifact and remains useful for
+its provenance, no-invented-baseline, and generator dependency rationale. The
+current output scope and provider-owned metadata are defined by ADR-0049.
 
 ## Context
 

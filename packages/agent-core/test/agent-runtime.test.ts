@@ -6,19 +6,25 @@ import {
 	createAgentRuntime,
 	createAgentTurnMessage,
 	createStatefulAgent,
+	type ModelStepObserver,
 	type ResolvedTool,
 	type ToolCallId,
 	type ToolDefinition,
 	toAgentTurnId,
+	toModelId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type {
-	ModelClient,
-	ModelStepRequest,
-	ModelStreamPart,
-} from "@wincode/ai/model-client";
-import { createModelTarget } from "@wincode/ai/model-target";
-import { supportedChatModelIdSchema } from "@wincode/ai/models";
+import type { ModelUsage } from "@wincode/ai/model-usage";
+import {
+	type ChatRequest,
+	type CredentialStore,
+	createProviderCollection,
+	type Provider,
+	type ProviderChatEvent,
+	type ProviderChatRequest,
+	type ProviderCollection,
+	ProviderError,
+} from "@wincode/ai/sdk";
 import { z } from "zod";
 
 const buildTurn = (tools: readonly ResolvedTool[] = []): AgentTurn => ({
@@ -38,13 +44,10 @@ const buildTurn = (tools: readonly ResolvedTool[] = []): AgentTurn => ({
 			},
 		],
 	},
-	model: createModelTarget(
-		{
-			modelId: supportedChatModelIdSchema.parse("gpt-5.6-luna"),
-			providerId: "openai",
-		},
-		{ kind: "api-key", apiKey: "test-key" }
-	),
+	model: {
+		modelId: toModelId("sdk-model"),
+		providerId: "test-provider",
+	},
 	tools,
 });
 
@@ -58,27 +61,50 @@ const consume = async (
 	return events;
 };
 
-const scriptedClient = (
+const scriptedProvider = (
 	script: (
-		request: ModelStepRequest,
-		index: number
-	) => AsyncIterable<ModelStreamPart>
-): { client: ModelClient; requests: ModelStepRequest[] } => {
-	const requests: ModelStepRequest[] = [];
-	return {
-		client: {
-			stream(request) {
-				requests.push(request);
-				return script(request, requests.length - 1);
+		request: ProviderChatRequest,
+		index: number,
+		signal: AbortSignal | undefined
+	) => AsyncIterable<ProviderChatEvent>
+): {
+	providerCollection: ProviderCollection;
+	requests: ProviderChatRequest[];
+} => {
+	const requests: ProviderChatRequest[] = [];
+	const providerCollection = createProviderCollection();
+	providerCollection.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["file", "image", "reasoning", "text", "tools"],
+				modelId: "sdk-model",
+				promptCacheRetentionTiers: ["long", "short"],
+				reasoningEfforts: [
+					"none",
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max",
+				],
+				protocolId: "test-protocol",
+				providerId: "test-provider",
 			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "fake" } }),
+		streamChat(request, { signal }) {
+			requests.push(request);
+			return script(request, requests.length - 1, signal);
 		},
-		requests,
-	};
+	});
+	return { providerCollection, requests };
 };
 
-const scriptedParts = (
-	...parts: ModelStreamPart[]
-): AsyncIterable<ModelStreamPart> => ({
+const scriptedEvents = (
+	...parts: ProviderChatEvent[]
+): AsyncIterable<ProviderChatEvent> => ({
 	async *[Symbol.asyncIterator]() {
 		yield* parts;
 	},
@@ -91,18 +117,19 @@ const readDefinition = {
 } satisfies ToolDefinition;
 
 test("Agent Runtime streams model output and reports normalized step usage", async () => {
-	const { client } = scriptedClient(() =>
-		scriptedParts(
+	const { providerCollection } = scriptedProvider(() =>
+		scriptedEvents(
 			{ delta: "Hello", type: "text-delta" },
 			{ delta: " world", type: "text-delta" },
 			{
-				type: "finish",
+				type: "usage",
 				usage: { inputTokens: 12, outputTokens: 7, totalTokens: 19 },
-			}
+			},
+			{ type: "finish" }
 		)
 	);
 	const events = await consume(
-		createAgentRuntime({ modelClient: client }).run(buildTurn())
+		createAgentRuntime({ providerCollection }).run(buildTurn())
 	);
 
 	expect(events.map(({ type }) => type)).toEqual([
@@ -124,19 +151,19 @@ test("Agent Runtime streams model output and reports normalized step usage", asy
 });
 
 test("Agent Runtime isolates Session request observers from active Turns", async () => {
-	const { client, requests } = scriptedClient(() =>
-		scriptedParts({
-			type: "finish",
-			usage: { inputTokens: 2, outputTokens: 1 },
-		})
+	const { providerCollection, requests } = scriptedProvider(() =>
+		scriptedEvents(
+			{ type: "usage", usage: { inputTokens: 2, outputTokens: 1 } },
+			{ type: "finish" }
+		)
 	);
-	const started: ModelStepRequest[] = [];
+	const started: ChatRequest[] = [];
 	const finished: {
-		request: ModelStepRequest;
-		usage: { inputTokens: number; outputTokens: number } | undefined;
+		request: ChatRequest;
+		usage: ModelUsage | undefined;
 	}[] = [];
 	const events = await consume(
-		createAgentRuntime({ modelClient: client }).run(buildTurn(), {
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
 			modelStepObserver: {
 				onModelStepFinished: (request, usage) => {
 					finished.push({ request, usage });
@@ -152,27 +179,460 @@ test("Agent Runtime isolates Session request observers from active Turns", async
 
 	expect(events.at(-1)).toMatchObject({ type: "agent-turn-completed" });
 	expect(requests).toHaveLength(1);
-	expect(started).toEqual(requests);
+	expect(started).toHaveLength(1);
+	expect(started[0]).toMatchObject({
+		modelId: "sdk-model",
+		providerId: "test-provider",
+	});
 	expect(finished).toHaveLength(1);
-	expect(finished[0]?.request).toBe(requests[0]);
-	expect(finished[0]?.usage).toEqual({ inputTokens: 2, outputTokens: 1 });
+	expect(finished[0]?.request).toBe(started[0]);
+	expect(finished[0]?.usage).toEqual({
+		inputTokens: 2,
+		outputTokens: 1,
+		totalTokens: 3,
+	});
 });
 
 test("Agent Runtime forwards the Session-stable prompt-cache key to each Model Step", async () => {
-	const { client, requests } = scriptedClient(() =>
-		scriptedParts({
-			type: "finish",
-			usage: { inputTokens: 1, outputTokens: 1 },
-		})
+	const { providerCollection, requests } = scriptedProvider(() =>
+		scriptedEvents(
+			{ type: "usage", usage: { inputTokens: 1, outputTokens: 1 } },
+			{ type: "finish" }
+		)
 	);
 	await consume(
-		createAgentRuntime({ modelClient: client }).run(buildTurn(), {
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
 			promptCacheKey: "wincode-session:session-123",
 		})
 	);
 
 	expect(requests).toHaveLength(1);
 	expect(requests[0]?.promptCacheKey).toBe("wincode-session:session-123");
+});
+
+test("SDK-backed Agent Runtime forwards request controls to the fake Provider", async () => {
+	const requests: Parameters<Provider["streamChat"]>[0][] = [];
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["reasoning", "text"],
+				modelId: "sdk-controls-model",
+				protocolId: "test-protocol",
+				providerId: "test-provider",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat(request) {
+			requests.push(request);
+			yield { delta: "Controls arrived.", type: "text-delta" };
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const events = await consume(
+		createAgentRuntime({ providerCollection: providers }).run(
+			{
+				...buildTurn(),
+				model: {
+					maxOutputTokens: 321,
+					modelId: toModelId("sdk-controls-model"),
+					promptCacheEnabled: true,
+					promptCacheRetention: "long",
+					providerId: "test-provider",
+					thinkingLevel: "high",
+				},
+			},
+			{
+				cacheWarming: true,
+				promptCacheKey: "wincode-session:controls-session",
+			}
+		)
+	);
+
+	expect(events.at(-1)).toMatchObject({ type: "agent-turn-completed" });
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).toMatchObject({
+		cacheRetention: "long",
+		cacheWarming: true,
+		maxOutputTokens: 321,
+		promptCacheKey: "wincode-session:controls-session",
+		reasoningEffort: "high",
+	});
+});
+
+test("SDK Agent Runtime maps explicit reasoning off to none but leaves unset effort absent", async () => {
+	const requests: Parameters<Provider["streamChat"]>[0][] = [];
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["reasoning", "text"],
+				modelId: "sdk-reasoning-model",
+				protocolId: "test-protocol",
+				providerId: "test-provider",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat(request) {
+			requests.push(request);
+			yield { type: "finish" };
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const runtime = createAgentRuntime({ providerCollection: providers });
+	const turnFor = (thinkingLevel?: "off"): AgentTurn => ({
+		...buildTurn(),
+		model: {
+			modelId: toModelId("sdk-reasoning-model"),
+			providerId: "test-provider",
+			...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+		},
+	});
+
+	await consume(runtime.run(turnFor("off")));
+	await consume(runtime.run(turnFor()));
+
+	expect(requests).toHaveLength(2);
+	expect(requests[0]?.reasoningEffort).toBe("none");
+	expect(requests[1]?.reasoningEffort).toBeUndefined();
+});
+
+test("SDK provider failures map safely and never complete an Agent Turn", async () => {
+	const providerId = "test-provider";
+	const sdkModelId = "sdk-failure-model";
+	type FailureScenario = Readonly<{
+		credentialStoreFailure?: boolean;
+		expectedCode: string;
+		expectedRetry: string;
+		name: string;
+		providerFailure?: ProviderError;
+		registerProvider?: boolean;
+		requestModelId: string;
+		requestProviderId: string;
+		tool?: boolean;
+	}>;
+	const scenarios: readonly FailureScenario[] = [
+		{
+			expectedCode: "invalid-request",
+			expectedRetry: "never",
+			name: "unregistered provider",
+			registerProvider: false,
+			requestModelId: sdkModelId,
+			requestProviderId: "missing-provider",
+		},
+		{
+			expectedCode: "invalid-request",
+			expectedRetry: "never",
+			name: "unavailable model",
+			requestModelId: "missing-model",
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "invalid-request",
+			expectedRetry: "never",
+			name: "unsupported tool capability",
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+			tool: true,
+		},
+		{
+			expectedCode: "authentication",
+			expectedRetry: "never",
+			name: "provider authentication failure",
+			providerFailure: new ProviderError(
+				"authentication",
+				"private provider detail"
+			),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "unknown",
+			expectedRetry: "never",
+			name: "credential store failure",
+			credentialStoreFailure: true,
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "unknown",
+			expectedRetry: "never",
+			name: "provider failure",
+			providerFailure: new ProviderError("provider", "private provider detail"),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "context-overflow",
+			expectedRetry: "with-changes",
+			name: "provider context overflow",
+			providerFailure: new ProviderError(
+				"provider",
+				"The prompt exceeds the model context window."
+			),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
+			expectedCode: "network",
+			expectedRetry: "after-delay",
+			name: "transport failure",
+			providerFailure: new ProviderError(
+				"transport",
+				"private transport detail"
+			),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+	];
+
+	for (const scenario of scenarios) {
+		const credentialStore: CredentialStore | undefined =
+			scenario.credentialStoreFailure
+				? {
+						delete: () => undefined,
+						get: () => {
+							throw new Error("private credential store detail");
+						},
+						set: () => undefined,
+					}
+				: undefined;
+		const providers = createProviderCollection(
+			credentialStore === undefined ? {} : { credentialStore }
+		);
+		if (scenario.registerProvider !== false) {
+			providers.register({
+				id: providerId,
+				models: [
+					{
+						capabilities: scenario.tool ? ["text"] : ["text", "tools"],
+						modelId: sdkModelId,
+						protocolId: "test-protocol",
+						providerId,
+					},
+				],
+				resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+				async *streamChat() {
+					if (scenario.providerFailure !== undefined) {
+						throw scenario.providerFailure;
+					}
+					yield { delta: "unexpected success", type: "text-delta" };
+				},
+			});
+		}
+		const turn: AgentTurn = {
+			...buildTurn(
+				scenario.tool
+					? [
+							{
+								definition: readDefinition,
+								execute: async () => ({
+									output: { content: "source text" },
+									type: "success",
+								}),
+							},
+						]
+					: []
+			),
+			model: {
+				modelId: toModelId(scenario.requestModelId),
+				providerId: scenario.requestProviderId,
+			},
+		};
+		const events = await consume(
+			createAgentRuntime({ providerCollection: providers }).run(turn)
+		);
+		const terminal = events.at(-1);
+
+		expect(terminal, scenario.name).toMatchObject({
+			failure: {
+				code: scenario.expectedCode,
+				details: {
+					modelId: scenario.requestModelId,
+					providerId: scenario.requestProviderId,
+				},
+				retry: scenario.expectedRetry,
+				source: "model",
+			},
+			type: "agent-turn-failed",
+		});
+		expect(
+			events.filter(({ type }) => type === "agent-turn-completed")
+		).toEqual([]);
+		expect(JSON.stringify(terminal)).not.toContain("private");
+	}
+});
+
+test("SDK-backed Agent Runtime delivers late steering using Provider Model identity", async () => {
+	const providerModel = {
+		capabilities: ["text", "tools"] as const,
+		modelId: "sdk-model",
+		protocolId: "test-protocol",
+		providerId: "test-provider",
+	};
+	const requests: Parameters<Provider["streamChat"]>[0][] = [];
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat(request) {
+			requests.push(request);
+			if (requests.length === 1) {
+				yield {
+					input: { path: "src/main.ts" },
+					toolCallId: "sdk-read-call",
+					toolName: "read",
+					type: "tool-call",
+				};
+				yield {
+					type: "usage",
+					usage: { inputTokens: 10, outputTokens: 4 },
+				};
+				yield { continuation: { responseId: "sdk-step-one" }, type: "finish" };
+				return;
+			}
+			yield { delta: "Continued after steering.", type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 14, outputTokens: 3 },
+			};
+			yield { type: "finish" };
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const tool: ResolvedTool = {
+		definition: readDefinition,
+		execute: async () => ({
+			output: { content: "source text" },
+			type: "success",
+		}),
+	};
+	const turn: AgentTurn = {
+		...buildTurn([tool]),
+		model: { modelId: toModelId("sdk-model"), providerId: "test-provider" },
+	};
+	const steering = createAgentTurnMessage(
+		"user",
+		"Focus on the error path.",
+		toSessionMessageId("sdk-steering-message")
+	);
+	const pendingSteering = [steering];
+	type ObservedChatRequest = Parameters<
+		ModelStepObserver["onModelStepStarted"]
+	>[0];
+	const observedStarts: ObservedChatRequest[] = [];
+	const observedFinishes: {
+		request: ObservedChatRequest;
+		inputTokens?: number;
+		outputTokens?: number;
+	}[] = [];
+	const events = await consume(
+		createAgentRuntime({ providerCollection: providers }).run(turn, {
+			modelStepObserver: {
+				onModelStepFinished: (request, usage) => {
+					observedFinishes.push({
+						request,
+						inputTokens: usage?.inputTokens,
+						outputTokens: usage?.outputTokens,
+					});
+				},
+				onModelStepStarted: (request) => observedStarts.push(request),
+			},
+			takeSteeringMessages: () => pendingSteering.splice(0),
+		})
+	);
+
+	expect(events.map(({ type }) => type)).toEqual([
+		"agent-turn-started",
+		"model-step-started",
+		"tool-call-started",
+		"tool-call-finished",
+		"model-step-finished",
+		"model-step-started",
+		"text-delta",
+		"model-step-finished",
+		"agent-turn-completed",
+	]);
+	expect(requests).toHaveLength(2);
+	expect(observedStarts).toHaveLength(2);
+	expect(observedFinishes).toMatchObject([
+		{ inputTokens: 10, outputTokens: 4 },
+		{ inputTokens: 14, outputTokens: 3 },
+	]);
+	for (const request of observedStarts) {
+		expect(request).toMatchObject({
+			modelId: "sdk-model",
+			providerId: "test-provider",
+		});
+		expect("target" in request).toBe(false);
+	}
+	expect(requests[1]?.messages.map(({ role }) => role)).toEqual([
+		"user",
+		"assistant",
+		"tool",
+		"user",
+	]);
+	expect(requests[1]?.messages[1]).toMatchObject({
+		continuation: { responseId: "sdk-step-one" },
+		role: "assistant",
+	});
+	expect(requests[1]?.messages[2]).toMatchObject({
+		content: [
+			{
+				output: { content: "source text" },
+				toolCallId: "sdk-read-call",
+				type: "tool-result",
+			},
+		],
+		role: "tool",
+	});
+	expect(requests[1]?.messages[3]?.content).toEqual([
+		{ text: "Focus on the error path.", type: "text" },
+	]);
+	expect(events.at(-1)).toMatchObject({
+		type: "agent-turn-completed",
+		usage: { inputTokens: 24, outputTokens: 7, totalTokens: 31 },
+	});
+});
+
+test("ProviderCollection abort without caller cancellation cancels the Agent Turn", async () => {
+	const providers = createProviderCollection();
+	providers.register({
+		id: "test-provider",
+		models: [
+			{
+				capabilities: ["text"],
+				modelId: "sdk-abort-model",
+				protocolId: "test-protocol",
+				providerId: "test-provider",
+			},
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat() {
+			yield { delta: "Partial output.", type: "text-delta" };
+			throw new DOMException("provider abort", "AbortError");
+		},
+	});
+	await providers.setCredential("test-provider", "fake-sdk-credential");
+	const events = await consume(
+		createAgentRuntime({ providerCollection: providers }).run({
+			...buildTurn(),
+			model: {
+				modelId: toModelId("sdk-abort-model"),
+				providerId: "test-provider",
+			},
+		})
+	);
+
+	expect(events.map(({ type }) => type)).toEqual([
+		"agent-turn-started",
+		"model-step-started",
+		"text-delta",
+		"agent-turn-cancelled",
+	]);
 });
 
 test("Agent Runtime delivers steering after tool results and continues the same turn", async () => {
@@ -188,21 +648,24 @@ test("Agent Runtime delivers steering after tool results and continues the same 
 			return { output: { content: "source text" }, type: "success" };
 		},
 	};
-	const { client, requests } = scriptedClient((_request, index) =>
-		index === 0
-			? scriptedParts(
-					{
-						input: { path: "src/main.ts" },
-						toolCallId: "call-read",
-						toolName: "read",
-						type: "tool-call",
-					},
-					{ type: "finish", usage: { inputTokens: 10, outputTokens: 4 } }
-				)
-			: scriptedParts(
-					{ delta: "Found it.", type: "text-delta" },
-					{ type: "finish", usage: { inputTokens: 14, outputTokens: 3 } }
-				)
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) =>
+			index === 0
+				? scriptedEvents(
+						{
+							input: { path: "src/main.ts" },
+							toolCallId: "call-read",
+							toolName: "read",
+							type: "tool-call",
+						},
+						{ type: "usage", usage: { inputTokens: 10, outputTokens: 4 } },
+						{ type: "finish" }
+					)
+				: scriptedEvents(
+						{ delta: "Found it.", type: "text-delta" },
+						{ type: "usage", usage: { inputTokens: 14, outputTokens: 3 } },
+						{ type: "finish" }
+					)
 	);
 	const steering = createAgentTurnMessage(
 		"user",
@@ -211,7 +674,7 @@ test("Agent Runtime delivers steering after tool results and continues the same 
 	);
 	const pendingSteering = [steering];
 	const events = await consume(
-		createAgentRuntime({ modelClient: client }).run(buildTurn([tool]), {
+		createAgentRuntime({ providerCollection }).run(buildTurn([tool]), {
 			takeSteeringMessages: () => pendingSteering.splice(0),
 		})
 	);
@@ -264,17 +727,18 @@ test("pending steering continues the same turn after a text-only model step", as
 			toSessionMessageId("steering-text-only")
 		),
 	];
-	const { client, requests } = scriptedClient((_request, index) =>
-		scriptedParts(
+	const { providerCollection, requests } = scriptedProvider((_request, index) =>
+		scriptedEvents(
 			{
 				delta: index === 0 ? "Original answer." : "Corrected answer.",
 				type: "text-delta",
 			},
-			{ type: "finish", usage: { inputTokens: 10, outputTokens: 4 } }
+			{ type: "usage", usage: { inputTokens: 10, outputTokens: 4 } },
+			{ type: "finish" }
 		)
 	);
 	const events = await consume(
-		createAgentRuntime({ modelClient: client }).run(turn, {
+		createAgentRuntime({ providerCollection }).run(turn, {
 			takeSteeringMessages: () => steering.splice(0),
 		})
 	);
@@ -309,8 +773,8 @@ test("late steering committed during the final safe-boundary read continues the 
 		"Correct the parent before it completes.",
 		toSessionMessageId("late-steering")
 	);
-	const { client, requests } = scriptedClient((_request, index) =>
-		scriptedParts(
+	const { providerCollection, requests } = scriptedProvider((_request, index) =>
+		scriptedEvents(
 			{
 				delta:
 					index === 0 ? "The parent response." : "The steering was handled.",
@@ -321,7 +785,7 @@ test("late steering committed during the final safe-boundary read continues the 
 	);
 	let steeringReadCount = 0;
 	const statefulAgent = createStatefulAgent({
-		runtime: createAgentRuntime({ modelClient: client }),
+		runtime: createAgentRuntime({ providerCollection }),
 	});
 	const runningTurn = consume(
 		statefulAgent.run(buildTurn(), {
@@ -375,36 +839,38 @@ test("Stateful Agent delivers queued steering at safe boundaries after tool resu
 			return { output: { content: "source text" }, type: "success" };
 		},
 	};
-	const { client, requests } = scriptedClient((request, index) => {
-		observedPrompts.push(
-			request.messages.map(({ content, role }) => ({
-				role,
-				text: content
-					.flatMap((part) => (part.type === "text" ? [part.text] : []))
-					.join("\n"),
-			}))
-		);
-		if (index === 0) {
-			return scriptedParts(
+	const { providerCollection, requests } = scriptedProvider(
+		(request, index) => {
+			observedPrompts.push(
+				request.messages.map(({ content, role }) => ({
+					role,
+					text: content
+						.flatMap((part) => (part.type === "text" ? [part.text] : []))
+						.join("\n"),
+				}))
+			);
+			if (index === 0) {
+				return scriptedEvents(
+					{
+						input: { path: "src/main.ts" },
+						toolCallId: "steering-read",
+						toolName: "read",
+						type: "tool-call",
+					},
+					{ type: "finish" }
+				);
+			}
+			return scriptedEvents(
 				{
-					input: { path: "src/main.ts" },
-					toolCallId: "steering-read",
-					toolName: "read",
-					type: "tool-call",
+					delta: "The parent handled the steering.",
+					type: "text-delta",
 				},
 				{ type: "finish" }
 			);
 		}
-		return scriptedParts(
-			{
-				delta: "The parent handled the steering.",
-				type: "text-delta",
-			},
-			{ type: "finish" }
-		);
-	});
+	);
 	const statefulAgent = createStatefulAgent({
-		runtime: createAgentRuntime({ modelClient: client }),
+		runtime: createAgentRuntime({ providerCollection }),
 	});
 	const pendingSteering = createAgentTurnMessage(
 		"user",
@@ -447,24 +913,25 @@ test("aborting a Stateful Agent drops queued steering before the next Model Step
 			return { output: { content: "source text" }, type: "success" };
 		},
 	};
-	const { client, requests } = scriptedClient((_request, index) =>
-		index === 0
-			? scriptedParts(
-					{
-						input: { path: "src/main.ts" },
-						toolCallId: "interrupted-read",
-						toolName: "read",
-						type: "tool-call",
-					},
-					{ type: "finish" }
-				)
-			: scriptedParts(
-					{ delta: "The new user turn completed.", type: "text-delta" },
-					{ type: "finish" }
-				)
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) =>
+			index === 0
+				? scriptedEvents(
+						{
+							input: { path: "src/main.ts" },
+							toolCallId: "interrupted-read",
+							toolName: "read",
+							type: "tool-call",
+						},
+						{ type: "finish" }
+					)
+				: scriptedEvents(
+						{ delta: "The new user turn completed.", type: "text-delta" },
+						{ type: "finish" }
+					)
 	);
 	const statefulAgent = createStatefulAgent({
-		runtime: createAgentRuntime({ modelClient: client }),
+		runtime: createAgentRuntime({ providerCollection }),
 	});
 	const interruptedTurn = buildTurn([tool]);
 	const firstUser = interruptedTurn.input.messages[0];
@@ -526,24 +993,25 @@ test("invalid model tool input fails visibly without executing the tool", async 
 			return { output: "unexpected", type: "success" };
 		},
 	};
-	const { client, requests } = scriptedClient((_request, index) =>
-		index === 0
-			? scriptedParts(
-					{
-						input: { path: 42 },
-						toolCallId: "call-invalid",
-						toolName: "read",
-						type: "tool-call",
-					},
-					{ type: "finish" }
-				)
-			: scriptedParts(
-					{ delta: "I need a valid path.", type: "text-delta" },
-					{ type: "finish" }
-				)
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) =>
+			index === 0
+				? scriptedEvents(
+						{
+							input: { path: 42 },
+							toolCallId: "call-invalid",
+							toolName: "read",
+							type: "tool-call",
+						},
+						{ type: "finish" }
+					)
+				: scriptedEvents(
+						{ delta: "I need a valid path.", type: "text-delta" },
+						{ type: "finish" }
+					)
 	);
 	const events = await consume(
-		createAgentRuntime({ modelClient: client }).run(buildTurn([tool]))
+		createAgentRuntime({ providerCollection }).run(buildTurn([tool]))
 	);
 	const outcome = events.find(({ type }) => type === "tool-call-finished");
 
@@ -564,13 +1032,13 @@ test("invalid model tool input fails visibly without executing the tool", async 
 test("cancellation during a model step emits cancellation rather than completion", async () => {
 	const pending = Promise.withResolvers<void>();
 	const controller = new AbortController();
-	const { client } = scriptedClient(() => ({
+	const { providerCollection } = scriptedProvider(() => ({
 		async *[Symbol.asyncIterator]() {
 			await pending.promise;
 			yield { type: "finish" };
 		},
 	}));
-	const iterator = createAgentRuntime({ modelClient: client })
+	const iterator = createAgentRuntime({ providerCollection })
 		.run(buildTurn(), { signal: controller.signal })
 		[Symbol.asyncIterator]();
 
@@ -592,25 +1060,26 @@ test("tool-armed turns continue past twenty model steps until the model complete
 			return { output: "source text", type: "success" };
 		},
 	};
-	const { client, requests } = scriptedClient((_request, index) =>
-		index < 25
-			? scriptedParts(
-					{
-						input: { path: `src/file-${index}.ts` },
-						toolCallId: `call-${index}`,
-						toolName: "read",
-						type: "tool-call",
-					},
-					{ type: "finish" }
-				)
-			: scriptedParts(
-					{ delta: "Finished all files.", type: "text-delta" },
-					{ type: "finish" }
-				)
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) =>
+			index < 25
+				? scriptedEvents(
+						{
+							input: { path: `src/file-${index}.ts` },
+							toolCallId: `call-${index}`,
+							toolName: "read",
+							type: "tool-call",
+						},
+						{ type: "finish" }
+					)
+				: scriptedEvents(
+						{ delta: "Finished all files.", type: "text-delta" },
+						{ type: "finish" }
+					)
 	);
 
 	const events = await consume(
-		createAgentRuntime({ modelClient: client }).run(buildTurn([tool]))
+		createAgentRuntime({ providerCollection }).run(buildTurn([tool]))
 	);
 
 	expect(requests).toHaveLength(26);
@@ -629,15 +1098,28 @@ test("tool-armed turns continue past twenty model steps until the model complete
 
 test("runtime deadlines fail the turn with the deadline disposition", async () => {
 	const pending = Promise.withResolvers<void>();
-	const { client } = scriptedClient(() => ({
-		async *[Symbol.asyncIterator]() {
-			await pending.promise;
-			yield { type: "finish" };
-		},
-	}));
+	const { providerCollection } = scriptedProvider(
+		(_request, _index, signal) => ({
+			async *[Symbol.asyncIterator]() {
+				if (signal === undefined) {
+					await pending.promise;
+				} else {
+					const aborted = Promise.withResolvers<void>();
+					signal.addEventListener("abort", () => aborted.resolve(), {
+						once: true,
+					});
+					await Promise.race([pending.promise, aborted.promise]);
+					if (signal.aborted) {
+						throw signal.reason ?? new DOMException("Aborted", "AbortError");
+					}
+				}
+				yield { type: "finish" };
+			},
+		})
+	);
 
 	const events = await consume(
-		createAgentRuntime({ modelClient: client }).run(buildTurn(), {
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
 			deadlineMs: 10,
 		})
 	);
@@ -669,9 +1151,9 @@ test("refuses every Tool Call in a batch that includes an exclusive submit_resul
 			return { output: "unexpected", type: "success" };
 		},
 	};
-	const { client } = scriptedClient((_request, index) =>
+	const { providerCollection } = scriptedProvider((_request, index) =>
 		index === 0
-			? scriptedParts(
+			? scriptedEvents(
 					{
 						input: { path: "final report" },
 						toolCallId: "call-submit-result",
@@ -686,13 +1168,13 @@ test("refuses every Tool Call in a batch that includes an exclusive submit_resul
 					},
 					{ type: "finish" }
 				)
-			: scriptedParts(
+			: scriptedEvents(
 					{ delta: "No batch side effect ran.", type: "text-delta" },
 					{ type: "finish" }
 				)
 	);
 	const events = await consume(
-		createAgentRuntime({ modelClient: client }).run(
+		createAgentRuntime({ providerCollection }).run(
 			buildTurn([submitResultTool, readTool])
 		)
 	);

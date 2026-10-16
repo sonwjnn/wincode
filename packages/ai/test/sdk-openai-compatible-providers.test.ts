@@ -194,10 +194,11 @@ describe("public OpenAI-compatible SDK providers", () => {
 				{
 					content: [
 						{
-							output: { temperature: 20 },
+							errorText: "Weather lookup failed.",
+							failure: { kind: "timeout" },
 							toolCallId: "call-weather",
 							toolName: "weather",
-							type: "tool-result",
+							type: "tool-failure",
 						},
 					],
 					role: "tool",
@@ -222,7 +223,7 @@ describe("public OpenAI-compatible SDK providers", () => {
 				],
 			},
 			{
-				content: '{"temperature":20}',
+				content: "Weather lookup failed.",
 				role: "tool",
 				tool_call_id: "call-weather",
 			},

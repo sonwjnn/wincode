@@ -1,3 +1,5 @@
+import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	DEFAULT_MODEL_ATTACHMENT_BUDGET,
 	MAX_ATTACHMENT_BYTES,
@@ -10,11 +12,7 @@ import type {
 	SessionWaitingMessage,
 } from "../../../modules/sessions/host/session-rpc";
 import type { SessionSubmissionComposition } from "../../../modules/sessions/submission-types";
-import {
-	AGENT_EVENT_TYPES,
-	SESSION_TOOL_PART_TYPES,
-	type Selection,
-} from "./types";
+import { AGENT_EVENT_TYPES, SESSION_TOOL_PART_TYPES } from "./types";
 import {
 	asRecord,
 	base64ByteLength,
@@ -24,10 +22,14 @@ import {
 } from "./validation";
 
 const projectSelection = (
-	agentId: Selection["agentId"],
-	model: Selection["model"],
-	thinkingLevel: Selection["thinkingLevel"]
-): Selection => ({
+	agentId: string,
+	model: ProviderModelSelection,
+	thinkingLevel: ThinkingLevel | undefined
+): Readonly<{
+	agentId: string;
+	model: ProviderModelSelection;
+	thinkingLevel?: ThinkingLevel;
+}> => ({
 	agentId,
 	model,
 	...(thinkingLevel === undefined ? {} : { thinkingLevel }),

@@ -23,12 +23,11 @@ the raw one.
   build one.
 - Split the input. `policy` is what the caller asks opening Session Services to create —
   cwd, workspace, database path, and Plugin policy.
-  `sources` is what the caller already owns: configuration, Connections, Agent
-  registry, Model Catalog pricing, Session Store, Session Host Manager, Plugin
-  runtime, Agent Runtime factory, and turn tool resolver.
-  The sources a Session's later work must see current — configuration, which a
-  Resource Reload replaces, Connections, pricing, and the Plugin runtime
-  Interactive Mode replaces on Resource Reload — are read when that work runs.
+  `sources` is what the caller already owns: configuration, Agent registry,
+  ProviderCollection factory, Session Store, Session Host Manager, Plugin
+  runtime, and turn tool resolver. The sources a Session's later work must see
+  current — configuration, pricing data, and the Plugin runtime Interactive
+  Mode replaces on Resource Reload — are read when that work runs.
   The process-scoped ones are resolved once at open, except the Agent Runtime
   factory, which is forwarded and read when a turn needs a runtime. The Agent
   registry is resolved once at open when the caller supplies no source, and read
@@ -82,6 +81,6 @@ the raw one.
   headless disagreement.
 - Interactive Mode keeps a React adapter that reads its providers and calls the
   same factory, so the TUI stops maintaining a second capability graph.
-- A reconnected provider needs no rebuild to reach compaction: the Connections
-  facade reads stored credentials per call, so the Session Compaction module
-  keeps one admission record for its whole life.
+- Reconnecting a Provider does not require rebuilding Session Services: the
+  Provider SDK resolves credentials through the shared CredentialStore, while
+  the Session Compaction module keeps one admission record for its whole life.

@@ -1,28 +1,10 @@
 import type { JsonObject } from "type-fest";
-import { apiKeyCredentialSchema } from "../connections/credential-schemas.ts";
+import { apiKeyCredentialSchema } from "../credential-schemas.ts";
 import { googleModelMetadataById } from "../generated/google-model-metadata.generated.ts";
-import { googleSdkModels } from "../generated/google-sdk-models.generated.ts";
-import {
-	httpErrorFromResponse,
-	isCacheControlRejection,
-	ModelProviderError,
-} from "../model-client/errors.ts";
-import {
-	createGoogleCachedContentResourceManager,
-	type GoogleCachedContentClient,
-	type GoogleCachedContentResourceManager,
-} from "../model-client/google-cached-content-manager.ts";
-import { googleStrategy } from "../model-client/protocols/google.ts";
-import { unreachableValue } from "../model-client/protocols/shared.ts";
-import type {
-	ModelPromptMessage,
-	ModelPromptPart,
-	ModelStepRequest,
-	ModelTool,
-} from "../model-client/types.ts";
-import type { ModelTarget } from "../model-target.ts";
+import { withProviderModelMetadata } from "../provider-model-metadata.ts";
 import {
 	type ChatContentPart,
+	maxOutputTokensForRequest,
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
@@ -30,11 +12,39 @@ import {
 	ProviderError,
 	type ProviderModel,
 } from "../sdk.ts";
+import {
+	createGoogleCachedContentResourceManager,
+	type GoogleCachedContentClient,
+	type GoogleCachedContentResourceManager,
+} from "../sdk-private/google-cached-content-manager.ts";
+import {
+	httpErrorFromResponse,
+	isCacheControlRejection,
+	ProviderProtocolError,
+} from "../sdk-private/protocol-errors.ts";
+import { googleStrategy } from "../sdk-private/protocols/google.ts";
+import type { GoogleProtocolOptions } from "../sdk-private/protocols/provider-options.ts";
+import type {
+	GoogleCachedContentSelection,
+	ProtocolPromptMessage,
+	ProtocolPromptPart,
+	ProtocolTool,
+	ProviderProtocolRequest,
+} from "../sdk-private/protocols/request.ts";
+import { unreachableValue } from "../sdk-private/protocols/shared.ts";
+import { googleProviderModels } from "./google-models.ts";
 
 const GOOGLE_PROVIDER_ID = "google";
 const GOOGLE_PROTOCOL_ID = "google";
 const GOOGLE_API_ROOT =
 	"https://generativelanguage.googleapis.com/v1beta/models";
+const GOOGLE_FORWARDED_REASONING_EFFORTS = new Set([
+	"none",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+]);
 
 export type GoogleFetch = (
 	input: string | URL | Request,
@@ -51,7 +61,7 @@ export type GoogleProviderOptions = Readonly<{
 export type GoogleProvider = Provider &
 	Readonly<{ close: () => Promise<void> }>;
 
-const promptPart = (part: ChatContentPart): ModelPromptPart => {
+const promptPart = (part: ChatContentPart): ProtocolPromptPart => {
 	switch (part.type) {
 		case "text":
 			return part;
@@ -61,6 +71,7 @@ const promptPart = (part: ChatContentPart): ModelPromptPart => {
 		case "tool-call":
 			return part;
 		case "tool-result":
+		case "tool-failure":
 			return part;
 		default:
 			return unreachableValue(part);
@@ -69,7 +80,7 @@ const promptPart = (part: ChatContentPart): ModelPromptPart => {
 
 const promptMessage = (
 	message: ProviderChatRequest["messages"][number]
-): ModelPromptMessage => ({
+): ProtocolPromptMessage => ({
 	...(message.role === "assistant" && message.continuation !== undefined
 		? { continuation: message.continuation }
 		: {}),
@@ -79,45 +90,46 @@ const promptMessage = (
 
 const modelTools = (
 	tools: ProviderChatRequest["tools"]
-): readonly ModelTool[] | undefined =>
+): readonly ProtocolTool[] | undefined =>
 	tools?.map((tool) => ({
 		description: tool.description ?? "",
 		inputSchema: tool.inputSchema as JsonObject,
 		name: tool.name,
 	}));
 
-const modelTargetFor = (
-	modelId: string,
-	apiKey: string,
-	cacheRetention: ProviderChatRequest["cacheRetention"]
-): ModelTarget =>
-	({
-		authorization: { apiKey, kind: "api-key" },
-		...(cacheRetention === undefined
-			? {}
-			: {
-					promptCacheEnabled: true,
-					promptCacheRetention: cacheRetention,
-				}),
-		modelId,
-		providerId: GOOGLE_PROVIDER_ID,
-	}) as ModelTarget;
-
 const modelRequestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
-	apiKey: string,
-	cachedContent?: ModelStepRequest["googleCachedContent"]
-): ModelStepRequest => ({
-	...(cachedContent === undefined
-		? {}
-		: { googleCachedContent: cachedContent }),
-	messages: request.messages.map(promptMessage),
-	signal: context.signal,
-	system: request.system,
-	target: modelTargetFor(context.model.modelId, apiKey, request.cacheRetention),
-	tools: modelTools(request.tools),
-});
+	cachedContent?: GoogleCachedContentSelection
+): ProviderProtocolRequest => {
+	const reasoningEffort =
+		!request.cacheWarming &&
+		request.reasoningEffort !== undefined &&
+		context.model.reasoningEfforts?.includes(request.reasoningEffort)
+			? request.reasoningEffort
+			: undefined;
+	return {
+		...(request.cacheWarming === true ? { cacheWarming: true } : {}),
+		...(cachedContent === undefined
+			? {}
+			: { googleCachedContent: cachedContent }),
+		...(request.cacheRetention === undefined
+			? {}
+			: {
+					promptCacheEnabled: true,
+					promptCacheRetention: request.cacheRetention,
+				}),
+		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+		messages: request.messages.map(promptMessage),
+		modelId: context.model.modelId,
+		...(request.promptCacheKey === undefined
+			? {}
+			: { promptCacheKey: request.promptCacheKey }),
+		signal: context.signal,
+		system: request.system,
+		tools: modelTools(request.tools),
+	};
+};
 
 const apiKeyFor = (value: unknown): string => {
 	if (
@@ -136,7 +148,7 @@ const providerErrorFor = (error: unknown): ProviderError => {
 	if (error instanceof ProviderError) {
 		return error;
 	}
-	if (error instanceof ModelProviderError) {
+	if (error instanceof ProviderProtocolError) {
 		if (error.statusCode === 401 || error.statusCode === 403) {
 			return new ProviderError(
 				"authentication",
@@ -160,19 +172,37 @@ const providerErrorFor = (error: unknown): ProviderError => {
 const apiUrlFor = (modelId: string): string =>
 	`${GOOGLE_API_ROOT}/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
 
+const googleProviderOptionsFor = (
+	reasoningEffort: ProviderProtocolRequest["reasoningEffort"]
+): GoogleProtocolOptions | undefined => {
+	if (reasoningEffort === "none") {
+		return { thinkingConfig: { thinkingBudget: 0 } };
+	}
+	if (
+		reasoningEffort === "minimal" ||
+		reasoningEffort === "low" ||
+		reasoningEffort === "medium" ||
+		reasoningEffort === "high"
+	) {
+		return { thinkingConfig: { thinkingLevel: reasoningEffort } };
+	}
+	return;
+};
+
 const streamRequest = async function* (
-	request: ModelStepRequest,
+	request: ProviderProtocolRequest,
 	apiKey: string,
+	maxOutputTokens: number | undefined,
 	fetchImpl: GoogleFetch
 ): AsyncIterable<ProviderChatEvent> {
 	const body = googleStrategy.serialize({
-		maxOutputTokens: undefined,
-		providerOptions: undefined,
+		maxOutputTokens,
+		providerOptions: googleProviderOptionsFor(request.reasoningEffort),
 		request,
 	});
 	let response: Response;
 	try {
-		response = await fetchImpl(apiUrlFor(request.target.modelId), {
+		response = await fetchImpl(apiUrlFor(request.modelId), {
 			body: JSON.stringify(body),
 			headers: {
 				"content-type": "application/json",
@@ -221,22 +251,22 @@ const cacheSelectionFor = (
 	request.cacheRetention === undefined
 		? undefined
 		: cacheManager.select({
+				apiKey,
+				cacheRetention: request.cacheRetention,
+				modelId: context.model.modelId,
+				providerId: context.model.providerId,
 				system: request.system ?? "",
-				target: modelTargetFor(
-					context.model.modelId,
-					apiKey,
-					request.cacheRetention
-				),
 				tools: modelTools(request.tools) ?? [],
 			});
 
 const shouldRetryWithoutCache = (
 	error: unknown,
 	outputStarted: boolean,
-	selectedCache: ModelStepRequest["googleCachedContent"],
-	signal: AbortSignal | undefined
+	selectedCache: GoogleCachedContentSelection | undefined,
+	signal: AbortSignal | undefined,
+	cacheWarming: boolean
 ): boolean =>
-	!outputStarted &&
+	!(cacheWarming || outputStarted) &&
 	selectedCache !== undefined &&
 	isCacheControlRejection(error) &&
 	!signal?.aborted;
@@ -245,14 +275,20 @@ const streamWithCacheFallback = async function* (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
 	apiKey: string,
-	selectedCache: ModelStepRequest["googleCachedContent"],
+	selectedCache: GoogleCachedContentSelection | undefined,
 	fetchImpl: GoogleFetch
 ): AsyncIterable<ProviderChatEvent> {
 	let outputStarted = false;
+	const requestedMaxOutputTokens = maxOutputTokensForRequest(
+		request.maxOutputTokens,
+		context.model
+	);
+	const maxOutputTokens = request.cacheWarming ? 1 : requestedMaxOutputTokens;
 	try {
 		for await (const event of streamRequest(
-			modelRequestFor(request, context, apiKey, selectedCache),
+			modelRequestFor(request, context, selectedCache),
 			apiKey,
+			maxOutputTokens,
 			fetchImpl
 		)) {
 			if (event.type !== "finish") {
@@ -267,15 +303,17 @@ const streamWithCacheFallback = async function* (
 				error,
 				outputStarted,
 				selectedCache,
-				context.signal
+				context.signal,
+				request.cacheWarming === true
 			)
 		) {
 			throw error;
 		}
 		await selectedCache.onRejected?.(selectedCache.name);
 		yield* streamRequest(
-			modelRequestFor(request, context, apiKey),
+			modelRequestFor(request, context),
 			apiKey,
+			maxOutputTokens,
 			fetchImpl
 		);
 	}
@@ -323,7 +361,22 @@ export const createGoogleProvider = (
 ): GoogleProvider => {
 	const fetchImpl: GoogleFetch =
 		options.fetch ?? globalThis.fetch.bind(globalThis);
-	const models = options.models ?? googleSdkModels;
+	const models =
+		options.models ??
+		googleProviderModels.map((model) => {
+			const enriched = withProviderModelMetadata(
+				model,
+				googleModelMetadataById[model.modelId]
+			);
+			return enriched.reasoningEfforts === undefined
+				? enriched
+				: {
+						...enriched,
+						reasoningEfforts: enriched.reasoningEfforts.filter((effort) =>
+							GOOGLE_FORWARDED_REASONING_EFFORTS.has(effort)
+						),
+					};
+		});
 	if (
 		models.some(
 			(model) =>

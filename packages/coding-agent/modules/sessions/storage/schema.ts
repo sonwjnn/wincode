@@ -1,6 +1,6 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai/model-usage";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai/sdk";
 import {
 	index,
 	integer,
@@ -10,6 +10,7 @@ import {
 	unique,
 } from "drizzle-orm/sqlite-core";
 import type { Jsonify } from "type-fest";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { EditMode, FileVersion } from "@/modules/tools";
 import type { SessionCompaction } from "../compaction/types";
 import type {
@@ -49,7 +50,7 @@ export const session = sqliteTable(
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 		lastMessageAt: integer("last_message_at", { mode: "timestamp_ms" }),
 		modelJson: text("model_json", { mode: "json" }).$type<
-			SerializedJson<ChatModelSelection>
+			SerializedJson<ProviderModelSelection>
 		>(),
 		thinkingLevel: text("thinking_level").$type<ThinkingLevel>(),
 		editMode: text("edit_mode").$type<EditMode>().notNull().default("hashline"),
@@ -352,7 +353,7 @@ export const sessionUsageEntry = sqliteTable(
 			}),
 		kind: text("kind").$type<SessionUsageEntry["kind"]>().notNull(),
 		modelJson: text("model_json", { mode: "json" })
-			.$type<SerializedJson<ChatModelSelection>>()
+			.$type<SerializedJson<SessionUsageEntry["model"]>>()
 			.notNull(),
 		usageJson: text("usage_json", { mode: "json" })
 			.$type<SerializedJson<ModelUsage>>()
