@@ -127,6 +127,25 @@ test("known Provider Model availability scopes credentials while global chooser 
 	}
 });
 
+test("OAuth methods are omitted when their provider-specific login is unavailable", async () => {
+	const collection = createProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: () => undefined,
+			set: () => undefined,
+		},
+	});
+	const controller = createInteractiveProviderController(collection);
+
+	try {
+		expect(
+			controller.getConnectableProviders().some(({ kind }) => kind === "oauth")
+		).toBe(false);
+	} finally {
+		await collection.close();
+	}
+});
+
 test("built-in API-key connection stores the secret without live validation or Plugin handoff", async () => {
 	const credentials = new Map<string, unknown>();
 	const credentialReadProviderIds: string[] = [];
@@ -234,26 +253,36 @@ test("built-in API-key connection stores the secret without live validation or P
 			{ displayName: "OpenCode Go Provider SDK", providerId: "opencode-go" },
 			{ displayName: "DeepSeek Provider SDK", providerId: "deepseek" },
 		]);
-		expect(connectable).toContainEqual({
-			displayName: "OpenRouter Provider SDK",
-			kind: "openrouter",
-			providerId: "openrouter",
-		});
+		expect(connectable).toContainEqual(
+			expect.objectContaining({
+				displayName: "OpenRouter Provider SDK",
+				kind: "api-key-with-model-discovery",
+				methodId: "openrouter-api-key",
+				providerId: "openrouter",
+			})
+		);
 		expect(
 			connectable.some(({ providerId }) => providerId === "fixture-plugin")
 		).toBe(true);
-		expect(connectable).toContainEqual({
-			displayName: "OpenAI browser sign-in",
-			kind: "openai-oauth",
-			providerId: "openai",
-		});
+		expect(connectable).toContainEqual(
+			expect.objectContaining({
+				displayName: "OpenAI browser sign-in",
+				kind: "oauth",
+				methodId: "openai-browser",
+				providerId: "openai",
+			})
+		);
+		const oauthOption = connectable.find(({ kind }) => kind === "oauth");
+		if (oauthOption?.kind !== "oauth") {
+			throw new Error("The OpenAI OAuth connection method was unavailable.");
+		}
 		const oauthSignal = new AbortController().signal;
-		const oauthModels = await controller.connectOpenAIOAuth({
-			openBrowser: false,
+		const oauthModels = await oauthOption.connectOAuth({
+			onStatus: () => undefined,
 			signal: oauthSignal,
 		});
 		expect(loginOptions).toMatchObject({
-			openBrowser: false,
+			onStatus: expect.any(Function),
 			signal: oauthSignal,
 		});
 		expect(credentials.get("openai")).toEqual(fakeOAuthCredential);
@@ -263,8 +292,13 @@ test("built-in API-key connection stores the secret without live validation or P
 		expect(credentialReadProviderIds).toEqual(["openai"]);
 		expect(availabilityNotifications).toBe(1);
 
-		const models = await controller.connectProviderApiKey(
-			"google",
+		const googleApiKeyOption = connectable.find(
+			(option) => option.kind === "api-key" && option.providerId === "google"
+		);
+		if (googleApiKeyOption?.kind !== "api-key") {
+			throw new Error("The Google API-key connection method was unavailable.");
+		}
+		const models = await googleApiKeyOption.connectApiKey(
 			"  fake-google-key  "
 		);
 		expect(credentials.get("google")).toEqual({

@@ -34,32 +34,53 @@ export type BuiltInProviderFactoryOptions = Readonly<{
 	sessionId?: string;
 }>;
 
+export type BuiltInProviderConnectMethod =
+	| Readonly<{ kind: "api-key"; methodId: "provider-api-key" }>
+	| Readonly<{
+			inputPrompt?: string;
+			kind: "api-key-with-model-discovery";
+			methodId: string;
+			successMessage?: string;
+	  }>
+	| Readonly<{
+			displayName: string;
+			kind: "oauth";
+			methodId: string;
+			successMessage?: string;
+	  }>;
+
 type BuiltInProviderDefinition = Readonly<{
-	connectionMode: "api-key" | "api-key-with-model-discovery";
+	connectMethods: readonly BuiltInProviderConnectMethod[];
 	createProvider: (options: BuiltInProviderFactoryOptions) => Provider;
 	defaultModelId?: string;
 	displayName: string;
-	oauthDisplayName?: string;
 }>;
 
 /** User-facing metadata and construction for built-in Provider integrations. */
 export const BUILT_IN_PROVIDER_CATALOG = {
 	openai: {
-		connectionMode: "api-key",
+		connectMethods: [
+			{ kind: "api-key", methodId: "provider-api-key" },
+			{
+				displayName: "OpenAI browser sign-in",
+				kind: "oauth",
+				methodId: "openai-browser",
+				successMessage: "OpenAI connected with browser sign-in.",
+			},
+		],
 		createProvider: (options) =>
 			createOpenAIProvider(options.openAIProviderOptions),
 		defaultModelId: "gpt-5.6-luna",
 		displayName: "OpenAI Provider SDK",
-		oauthDisplayName: "OpenAI browser sign-in",
 	},
 	anthropic: {
-		connectionMode: "api-key",
+		connectMethods: [{ kind: "api-key", methodId: "provider-api-key" }],
 		createProvider: (options) =>
 			createAnthropicProvider(options.anthropicProviderOptions),
 		displayName: "Anthropic Provider SDK",
 	},
 	google: {
-		connectionMode: "api-key",
+		connectMethods: [{ kind: "api-key", methodId: "provider-api-key" }],
 		createProvider: (options) =>
 			createGoogleProvider({
 				...options.googleProviderOptions,
@@ -70,19 +91,27 @@ export const BUILT_IN_PROVIDER_CATALOG = {
 		displayName: "Google Provider SDK",
 	},
 	"opencode-go": {
-		connectionMode: "api-key",
+		connectMethods: [{ kind: "api-key", methodId: "provider-api-key" }],
 		createProvider: (options) =>
 			createOpenCodeGoProvider(options.openCodeGoProviderOptions),
 		displayName: "OpenCode Go Provider SDK",
 	},
 	deepseek: {
-		connectionMode: "api-key",
+		connectMethods: [{ kind: "api-key", methodId: "provider-api-key" }],
 		createProvider: (options) =>
 			createDeepSeekProvider(options.deepSeekProviderOptions),
 		displayName: "DeepSeek Provider SDK",
 	},
 	openrouter: {
-		connectionMode: "api-key-with-model-discovery",
+		connectMethods: [
+			{
+				inputPrompt: "Paste OpenRouter API key",
+				kind: "api-key-with-model-discovery",
+				methodId: "openrouter-api-key",
+				successMessage:
+					"OpenRouter Provider connected and Known Models refreshed.",
+			},
+		],
 		createProvider: (options) =>
 			createOpenRouterProvider(options.openRouterProviderOptions),
 		displayName: "OpenRouter Provider SDK",
@@ -103,7 +132,7 @@ export const isBuiltInProviderId = (providerId: string): boolean =>
 export const BUILT_IN_API_KEY_PROVIDER_OPTIONS = Object.freeze(
 	Object.entries(BUILT_IN_PROVIDER_CATALOG).flatMap(
 		([providerId, definition]) =>
-			definition.connectionMode === "api-key"
+			definition.connectMethods.some(({ kind }) => kind === "api-key")
 				? [{ displayName: definition.displayName, providerId }]
 				: []
 	)

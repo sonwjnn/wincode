@@ -155,7 +155,15 @@ test("OpenRouter connect holds reload admission until asynchronous model discove
 	let reloadActionStarted = false;
 
 	try {
-		const pendingConnect = controller.connectOpenRouterApiKey(
+		const openRouterConnectOption = controller
+			.getConnectableProviders()
+			.find(({ methodId }) => methodId === "openrouter-api-key");
+		if (openRouterConnectOption?.kind !== "api-key-with-model-discovery") {
+			throw new Error(
+				"The OpenRouter discovery connection method was unavailable."
+			);
+		}
+		const pendingConnect = openRouterConnectOption.connectApiKey(
 			"fake-openrouter-key"
 		);
 		await discoveryStarted.promise;

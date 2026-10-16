@@ -13,7 +13,7 @@ import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
 import {
 	BUILT_IN_API_KEY_PROVIDER_OPTIONS,
 	BUILT_IN_PROVIDER_CATALOG,
-	OPENAI_PROVIDER_ID,
+	type BuiltInProviderConnectMethod,
 	OPENROUTER_PROVIDER_ID,
 } from "@/modules/providers/built-in-provider-catalog";
 import {
@@ -34,11 +34,193 @@ const API_KEY_PROVIDER_IDS = new Set<string>(
 	API_KEY_PROVIDER_OPTIONS.map(({ providerId }) => providerId)
 );
 
-export type InteractiveProviderOption = Readonly<{
-	displayName: string;
-	kind: "api-key" | "openai-oauth" | "openrouter" | "plugin";
-	providerId: string;
+export type ProviderOAuthConnectOptions = Readonly<{
+	onStatus?: (status: string) => void;
+	signal?: AbortSignal;
 }>;
+
+type ProviderApiKeyConnect = (
+	providerId: string,
+	apiKey: string,
+	options?: RefreshModelsOptions
+) => Promise<readonly ProviderModel[]>;
+
+type ProviderOAuthConnect = (
+	options?: ProviderOAuthConnectOptions
+) => Promise<readonly ProviderModel[]>;
+
+type ProviderPluginConnect = (
+	requestTextInput: PluginProviderConnectContext["requestTextInput"],
+	options?: RefreshModelsOptions
+) => Promise<PluginProviderConnectionOutcome | undefined>;
+
+type BuiltInProviderConnectHandlers = Readonly<{
+	apiKey: ReadonlyMap<string, ProviderApiKeyConnect>;
+	discovery: ReadonlyMap<string, ProviderApiKeyConnect>;
+	oauth: ReadonlyMap<string, ProviderOAuthConnect>;
+	availableOAuthMethodIds: ReadonlySet<string>;
+}>;
+
+export type InteractiveProviderOption =
+	| Readonly<{
+			connectApiKey: (
+				apiKey: string,
+				options?: RefreshModelsOptions
+			) => Promise<readonly ProviderModel[]>;
+			displayName: string;
+			kind: "api-key";
+			methodId: string;
+			providerId: string;
+	  }>
+	| Readonly<{
+			connectApiKey: (
+				apiKey: string,
+				options?: RefreshModelsOptions
+			) => Promise<readonly ProviderModel[]>;
+			displayName: string;
+			inputPrompt?: string;
+			kind: "api-key-with-model-discovery";
+			methodId: string;
+			providerId: string;
+			successMessage?: string;
+	  }>
+	| Readonly<{
+			connectOAuth: ProviderOAuthConnect;
+			displayName: string;
+			kind: "oauth";
+			methodId: string;
+			providerId: string;
+			successMessage?: string;
+	  }>
+	| Readonly<{
+			connectPlugin: ProviderPluginConnect;
+			displayName: string;
+			kind: "plugin";
+			methodId: "plugin";
+			providerId: string;
+	  }>;
+
+type BuiltInConnectableProviderOption = Exclude<
+	InteractiveProviderOption,
+	{ kind: "plugin" }
+>;
+
+const connectMethodOrder = {
+	oauth: 0,
+	"api-key-with-model-discovery": 1,
+	"api-key": 2,
+} satisfies Record<BuiltInConnectableProviderOption["kind"], number>;
+
+const createBuiltInConnectableProviderOption = (
+	providerId: string,
+	displayName: string,
+	method: BuiltInProviderConnectMethod,
+	knownProviderIds: ReadonlySet<string>,
+	discoverableProviderIds: ReadonlySet<string>,
+	handlers: BuiltInProviderConnectHandlers
+): BuiltInConnectableProviderOption | undefined => {
+	switch (method.kind) {
+		case "api-key": {
+			if (!knownProviderIds.has(providerId)) {
+				return;
+			}
+			const connect = handlers.apiKey.get(method.methodId);
+			if (connect === undefined) {
+				throw new Error(
+					`No API-key handler is registered for '${method.methodId}'.`
+				);
+			}
+			return Object.freeze({
+				connectApiKey: (apiKey, options) =>
+					connect(providerId, apiKey, options),
+				displayName,
+				kind: method.kind,
+				methodId: method.methodId,
+				providerId,
+			});
+		}
+		case "api-key-with-model-discovery": {
+			if (!discoverableProviderIds.has(providerId)) {
+				return;
+			}
+			const connect = handlers.discovery.get(method.methodId);
+			if (connect === undefined) {
+				throw new Error(
+					`No model-discovery handler is registered for '${method.methodId}'.`
+				);
+			}
+			return Object.freeze({
+				connectApiKey: (apiKey, options) =>
+					connect(providerId, apiKey, options),
+				displayName,
+				inputPrompt: method.inputPrompt,
+				kind: method.kind,
+				methodId: method.methodId,
+				providerId,
+				...(method.successMessage === undefined
+					? {}
+					: { successMessage: method.successMessage }),
+			});
+		}
+		case "oauth": {
+			const connect = handlers.oauth.get(method.methodId);
+			if (connect === undefined) {
+				throw new Error(
+					`No OAuth handler is registered for '${method.methodId}'.`
+				);
+			}
+			if (!handlers.availableOAuthMethodIds.has(method.methodId)) {
+				return;
+			}
+			return Object.freeze({
+				connectOAuth: connect,
+				displayName: method.displayName,
+				kind: method.kind,
+				methodId: method.methodId,
+				providerId,
+				...(method.successMessage === undefined
+					? {}
+					: { successMessage: method.successMessage }),
+			});
+		}
+		default:
+			throw new Error("Unknown built-in Provider connection method.");
+	}
+};
+
+const getBuiltInConnectableProviders = (
+	knownModels: readonly ProviderModel[],
+	discoverableProviderIds: ReadonlySet<string>,
+	handlers: BuiltInProviderConnectHandlers
+): readonly BuiltInConnectableProviderOption[] => {
+	const knownProviderIds = new Set(
+		knownModels.map(({ providerId }) => providerId)
+	);
+	const options: BuiltInConnectableProviderOption[] = [];
+	for (const [providerId, definition] of Object.entries(
+		BUILT_IN_PROVIDER_CATALOG
+	)) {
+		for (const method of definition.connectMethods) {
+			const option = createBuiltInConnectableProviderOption(
+				providerId,
+				definition.displayName,
+				method,
+				knownProviderIds,
+				discoverableProviderIds,
+				handlers
+			);
+			if (option !== undefined) {
+				options.push(option);
+			}
+		}
+	}
+	return Object.freeze(
+		options.sort(
+			(left, right) =>
+				connectMethodOrder[left.kind] - connectMethodOrder[right.kind]
+		)
+	);
+};
 
 export type PluginProviderComposition = Readonly<{
 	providerCollection: ProviderCollection;
@@ -476,32 +658,141 @@ export const createInteractiveProviderController = (
 			}
 			return await action(candidate.model, selection);
 		});
+	const connectOpenAIOAuth = (
+		loginOptions: OpenAIBrowserLoginOptions = {}
+	): Promise<readonly ProviderModel[]> =>
+		withSessionWork(async () => {
+			const login = options.loginOpenAIOAuth;
+			if (login === undefined) {
+				throw new Error("OpenAI browser sign-in is unavailable.");
+			}
+			throwIfAborted(loginOptions.signal);
+			await restoreModels();
+			try {
+				const models = await login(loginOptions);
+				throwIfAborted(loginOptions.signal);
+				return models;
+			} catch {
+				if (loginOptions.signal?.aborted) {
+					throw abortReason(loginOptions.signal);
+				}
+				throw new Error("OpenAI browser sign-in failed.");
+			} finally {
+				notifyAvailabilityChanged();
+			}
+		});
+	const connectOpenRouterApiKey = (
+		apiKey: string,
+		refreshOptions?: RefreshModelsOptions
+	): Promise<readonly ProviderModel[]> =>
+		withSessionWork(async () => {
+			const trimmedApiKey = apiKey.trim();
+			if (trimmedApiKey.length === 0) {
+				throw new Error("OpenRouter API key must not be empty.");
+			}
+			if (refreshOptions?.signal?.aborted === true) {
+				throw abortReason(refreshOptions.signal);
+			}
+			await restoreModels();
+			await providers.setCredential(OPENROUTER_PROVIDER_ID, {
+				apiKey: trimmedApiKey,
+				kind: "api-key",
+			});
+			try {
+				return await providers.refreshModels(
+					OPENROUTER_PROVIDER_ID,
+					refreshOptions
+				);
+			} catch (error) {
+				throw new Error(
+					"OpenRouter credentials were saved, but Known Model refresh failed; the last-known models were retained.",
+					{ cause: error }
+				);
+			} finally {
+				notifyAvailabilityChanged();
+			}
+		});
+	const connectProviderApiKey = (
+		providerId: string,
+		apiKey: string,
+		refreshOptions?: RefreshModelsOptions
+	): Promise<readonly ProviderModel[]> =>
+		withSessionWork(async () => {
+			const signal = refreshOptions?.signal;
+			if (!API_KEY_PROVIDER_IDS.has(providerId)) {
+				throw new Error("Provider SDK API-key connection is unavailable.");
+			}
+			const trimmedApiKey = apiKey.trim();
+			if (trimmedApiKey.length === 0) {
+				throw new Error("Provider SDK API key must not be empty.");
+			}
+			throwIfAborted(signal);
+			await restoreModels();
+			throwIfAborted(signal);
+			try {
+				await providers.setCredential(providerId, {
+					apiKey: trimmedApiKey,
+					kind: "api-key",
+				});
+			} catch {
+				throw new Error("Could not save Provider SDK credentials.");
+			} finally {
+				notifyAvailabilityChanged();
+			}
+			return providers
+				.getModels()
+				.filter((model) => model.providerId === providerId);
+		});
+	const connectPluginProvider = (
+		providerId: string,
+		requestTextInput: PluginProviderConnectContext["requestTextInput"],
+		refreshOptions?: RefreshModelsOptions
+	): Promise<PluginProviderConnectionOutcome | undefined> =>
+		withSessionWork(async () => {
+			try {
+				return await runPluginProviderConnection(
+					providers,
+					options,
+					providerId,
+					requestTextInput,
+					refreshOptions
+				);
+			} finally {
+				notifyAvailabilityChanged();
+			}
+		});
+	const oauthConnectHandlers = new Map<string, ProviderOAuthConnect>([
+		["openai-browser", (oauthOptions) => connectOpenAIOAuth(oauthOptions)],
+	]);
+	const availableOAuthMethodIds = new Set<string>();
+	if (options.loginOpenAIOAuth !== undefined) {
+		availableOAuthMethodIds.add("openai-browser");
+	}
+	const builtInConnectHandlers: BuiltInProviderConnectHandlers = {
+		apiKey: new Map<string, ProviderApiKeyConnect>([
+			["provider-api-key", connectProviderApiKey],
+		]),
+		discovery: new Map<string, ProviderApiKeyConnect>([
+			[
+				"openrouter-api-key",
+				(providerId, apiKey, refreshOptions) => {
+					if (providerId !== OPENROUTER_PROVIDER_ID) {
+						throw new Error(
+							"OpenRouter API-key discovery method is configured for an unsupported Provider."
+						);
+					}
+					return connectOpenRouterApiKey(apiKey, refreshOptions);
+				},
+			],
+		]),
+		oauth: oauthConnectHandlers,
+		availableOAuthMethodIds,
+	};
 	return Object.freeze({
 		getPluginProviderComposition: (providerId) =>
 			pluginCompositionFor(providers, options, providerId),
 		getPluginProviderRegistrations,
-		connectOpenAIOAuth(loginOptions = {}) {
-			return withSessionWork(async () => {
-				const login = options.loginOpenAIOAuth;
-				if (login === undefined) {
-					throw new Error("OpenAI browser sign-in is unavailable.");
-				}
-				throwIfAborted(loginOptions.signal);
-				await restoreModels();
-				try {
-					const models = await login(loginOptions);
-					throwIfAborted(loginOptions.signal);
-					return models;
-				} catch {
-					if (loginOptions.signal?.aborted) {
-						throw abortReason(loginOptions.signal);
-					}
-					throw new Error("OpenAI browser sign-in failed.");
-				} finally {
-					notifyAvailabilityChanged();
-				}
-			});
-		},
+		connectOpenAIOAuth,
 		getCompositionRevision: () => options.getCompositionRevision?.() ?? 0,
 		subscribeComposition: (listener) =>
 			options.subscribeComposition?.(listener) ?? (() => undefined),
@@ -510,78 +801,9 @@ export const createInteractiveProviderController = (
 			availabilityListeners.add(listener);
 			return () => availabilityListeners.delete(listener);
 		},
-		connectOpenRouterApiKey(apiKey, refreshOptions) {
-			return withSessionWork(async () => {
-				const trimmedApiKey = apiKey.trim();
-				if (trimmedApiKey.length === 0) {
-					throw new Error("OpenRouter API key must not be empty.");
-				}
-				if (refreshOptions?.signal?.aborted === true) {
-					throw abortReason(refreshOptions.signal);
-				}
-				await restoreModels();
-				await providers.setCredential(OPENROUTER_PROVIDER_ID, {
-					apiKey: trimmedApiKey,
-					kind: "api-key",
-				});
-				try {
-					return await providers.refreshModels(
-						OPENROUTER_PROVIDER_ID,
-						refreshOptions
-					);
-				} catch (error) {
-					throw new Error(
-						"OpenRouter credentials were saved, but Known Model refresh failed; the last-known models were retained.",
-						{ cause: error }
-					);
-				} finally {
-					notifyAvailabilityChanged();
-				}
-			});
-		},
-		connectProviderApiKey(providerId, apiKey, refreshOptions) {
-			return withSessionWork(async () => {
-				const signal = refreshOptions?.signal;
-				if (!API_KEY_PROVIDER_IDS.has(providerId)) {
-					throw new Error("Provider SDK API-key connection is unavailable.");
-				}
-				const trimmedApiKey = apiKey.trim();
-				if (trimmedApiKey.length === 0) {
-					throw new Error("Provider SDK API key must not be empty.");
-				}
-				throwIfAborted(signal);
-				await restoreModels();
-				throwIfAborted(signal);
-				try {
-					await providers.setCredential(providerId, {
-						apiKey: trimmedApiKey,
-						kind: "api-key",
-					});
-				} catch {
-					throw new Error("Could not save Provider SDK credentials.");
-				} finally {
-					notifyAvailabilityChanged();
-				}
-				return providers
-					.getModels()
-					.filter((model) => model.providerId === providerId);
-			});
-		},
-		connectPluginProvider(providerId, requestTextInput, refreshOptions) {
-			return withSessionWork(async () => {
-				try {
-					return await runPluginProviderConnection(
-						providers,
-						options,
-						providerId,
-						requestTextInput,
-						refreshOptions
-					);
-				} finally {
-					notifyAvailabilityChanged();
-				}
-			});
-		},
+		connectOpenRouterApiKey,
+		connectProviderApiKey,
+		connectPluginProvider,
 		async getAvailableModels(providerId) {
 			await restoreModels();
 			return providers.getAvailable(providerId);
@@ -590,36 +812,25 @@ export const createInteractiveProviderController = (
 		getConnectableProviders() {
 			const discoverableProviderIds = new Set(getDiscoverableProviderIds());
 			return Object.freeze([
-				...(options.loginOpenAIOAuth === undefined
-					? []
-					: [
-							{
-								displayName:
-									BUILT_IN_PROVIDER_CATALOG[OPENAI_PROVIDER_ID]
-										.oauthDisplayName,
-								kind: "openai-oauth" as const,
-								providerId: OPENAI_PROVIDER_ID,
-							},
-						]),
-				...(discoverableProviderIds.has(OPENROUTER_PROVIDER_ID)
-					? [
-							{
-								displayName:
-									BUILT_IN_PROVIDER_CATALOG[OPENROUTER_PROVIDER_ID].displayName,
-								kind: "openrouter" as const,
-								providerId: OPENROUTER_PROVIDER_ID,
-							},
-						]
-					: []),
-				...API_KEY_PROVIDER_OPTIONS.filter(({ providerId }) =>
-					providers.getModels().some((model) => model.providerId === providerId)
-				).map(({ displayName, providerId }) =>
-					Object.freeze({ displayName, kind: "api-key" as const, providerId })
+				...getBuiltInConnectableProviders(
+					providers.getModels(),
+					discoverableProviderIds,
+					builtInConnectHandlers
 				),
 				...getPluginProviderRegistrations().map((registration) =>
 					Object.freeze({
+						connectPlugin: (
+							requestTextInput: PluginProviderConnectContext["requestTextInput"],
+							refreshOptions?: RefreshModelsOptions
+						) =>
+							connectPluginProvider(
+								registration.providerId,
+								requestTextInput,
+								refreshOptions
+							),
 						displayName: registration.displayName,
 						kind: "plugin" as const,
+						methodId: "plugin" as const,
 						providerId: registration.providerId,
 					})
 				),
