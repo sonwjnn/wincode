@@ -355,7 +355,7 @@ export function ChatShell({
 				flexDirection="column"
 				flexShrink={0}
 				gap={1}
-				paddingY={1}
+				paddingBottom={1}
 				width="100%"
 			>
 				<WaitingMessageStrip queued={queuedSubmissions} />
