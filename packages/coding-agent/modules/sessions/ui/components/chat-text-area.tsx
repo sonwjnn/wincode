@@ -1106,6 +1106,7 @@ export function ChatTextArea({
 				border={["top", "right", "bottom", "left"]}
 				borderColor={isFocused ? colors.borderActive : colors.border}
 				colors={colors}
+				contentBackgroundColor={colors.background}
 				contentGap={0}
 				contentJustifyContent="center"
 				customBorderChars={RoundedBorderChars}

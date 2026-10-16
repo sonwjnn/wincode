@@ -7,7 +7,7 @@ export function StatusBar() {
 	const { colors } = useTheme();
 	return (
 		<box
-			backgroundColor={colors.backgroundElement}
+			backgroundColor={colors.background}
 			bottom={0}
 			paddingX={1}
 			position="absolute"
