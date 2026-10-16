@@ -41,7 +41,7 @@ function ComposerPreview() {
 	);
 }
 
-test("shows the active provider over the composer border without model, thinking level, or agent", async () => {
+test("shows provider, model, and thinking level over the composer border without agent", async () => {
 	const setup = await testRender(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider
@@ -81,13 +81,13 @@ test("shows the active provider over the composer border without model, thinking
 		await flushTestRenderer(setup, 3);
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("Anthropic");
+		expect(frame).toContain("Claude Sonnet 5");
+		expect(frame).toContain("low");
 		const providerRow = frame
 			.split("\n")
 			.find((line) => line.includes("Anthropic"));
 		expect(providerRow).toContain("╰");
 		expect(providerRow).toContain("╯");
-		expect(frame).not.toContain("Claude");
-		expect(frame).not.toContain("low");
 		expect(frame).not.toContain("Build");
 	} finally {
 		act(() => setup.renderer.destroy());
