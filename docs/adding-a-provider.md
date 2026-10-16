@@ -22,7 +22,7 @@ Capabilities, reasoning efforts, cache tiers, context/output limits, and pricing
 
 Add the implementation under `packages/ai/src/sdk-providers/`. Implement `resolveAuthorization` and `streamChat` against the Provider SDK contracts in `packages/ai/src/sdk.ts`; keep credentials in Provider authorization state, not in chat requests or model identity. Reuse protocol serializers, stream parsers, and errors from `packages/ai/src/sdk-private/` when appropriate. Do not introduce a Model Target, Model Client, Catalog adapter, or Connections execution fallback.
 
-Each provider entry point is separately exported through `@wincode/ai/sdk/providers/*`. Keep the SDK core independent from built-in provider imports. Register built-ins in `packages/coding-agent/modules/sessions/provider-collection.ts`; Plugin Providers use the trusted Plugin registration path.
+Each provider entry point is separately exported through `@wincode/ai/sdk/providers/*`. Keep the SDK core independent from built-in provider imports. Register built-in construction and connection metadata in `packages/coding-agent/modules/providers/built-in-provider-catalog.ts`; the Session Provider collection composes catalog Providers with Plugin Providers from the trusted Plugin registration path.
 
 ## Validation
 

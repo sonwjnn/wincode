@@ -10,7 +10,11 @@ import {
 	thinkingLevelIds,
 } from "@wincode/ai/sdk";
 import { z } from "zod";
-import { isBuiltInProviderId as isBuiltInProviderIdFromCatalog } from "@/modules/providers/built-in-provider-catalog";
+import {
+	BUILT_IN_PROVIDER_CATALOG,
+	isBuiltInProviderId as isBuiltInProviderIdFromCatalog,
+	OPENAI_PROVIDER_ID,
+} from "./built-in-provider-catalog";
 
 /** The trusted Plugin owner bound to a Session's exact Provider Model selection. */
 export type PluginProviderSelectionOwner = Readonly<{
@@ -141,8 +145,10 @@ export type ProviderModelSelection = SdkProviderModelSelection &
 	}>;
 
 export const DEFAULT_PROVIDER_MODEL_SELECTION: ProviderModelSelection = {
-	modelId: toModelId("gpt-5.6-luna"),
-	providerId: "openai",
+	modelId: toModelId(
+		BUILT_IN_PROVIDER_CATALOG[OPENAI_PROVIDER_ID].defaultModelId
+	),
+	providerId: OPENAI_PROVIDER_ID,
 };
 
 const pluginProviderSelectionOwnerSchema = z

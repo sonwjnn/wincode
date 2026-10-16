@@ -3,6 +3,7 @@ import { toModelId } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai/sdk";
 import {
 	arePluginProviderRegistrationsBoundToTrustedOwners,
+	DEFAULT_PROVIDER_MODEL_SELECTION,
 	isAvailableProviderModelSelection,
 	isPluginProviderSelectionBoundToTrustedOwner,
 	isSameProviderModelIdentity,
@@ -14,6 +15,13 @@ import {
 	resolveProviderModelSelectionForHost,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
+
+test("the global default remains the OpenAI gpt-5.6-luna Provider Model", () => {
+	expect(DEFAULT_PROVIDER_MODEL_SELECTION).toEqual({
+		modelId: toModelId("gpt-5.6-luna"),
+		providerId: "openai",
+	});
+});
 
 test("Provider Model selections preserve exact identities without accepting empty IDs", () => {
 	const openRouterModel = {

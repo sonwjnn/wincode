@@ -6,37 +6,20 @@ import {
 	type ProviderCollection,
 	type ProviderModel,
 } from "@wincode/ai/sdk";
-import {
-	type AnthropicProviderOptions,
-	createAnthropicProvider,
-} from "@wincode/ai/sdk/providers/anthropic";
-import {
-	createDeepSeekProvider,
-	type DeepSeekProviderOptions,
-} from "@wincode/ai/sdk/providers/deepseek";
-import {
-	createGoogleProvider,
-	type GoogleProviderOptions,
-} from "@wincode/ai/sdk/providers/google";
-import {
-	createOpenAIProvider,
-	type OpenAIBrowserLoginOptions,
-	type OpenAIProvider,
-	type OpenAIProviderOptions,
+import type {
+	OpenAIBrowserLoginOptions,
+	OpenAIProvider,
 } from "@wincode/ai/sdk/providers/openai";
-import {
-	createOpenCodeGoProvider,
-	type OpenCodeGoProviderOptions,
-} from "@wincode/ai/sdk/providers/opencode-go";
-import {
-	createOpenRouterProvider,
-	type OpenRouterProviderOptions,
-} from "@wincode/ai/sdk/providers/openrouter";
 import type {
 	PluginProviderDescriptor,
 	PluginRuntime,
 } from "@/modules/plugins/runtime";
-import { isBuiltInProviderId } from "@/modules/providers/built-in-provider-catalog";
+import {
+	BUILT_IN_PROVIDER_CATALOG,
+	type BuiltInProviderFactoryOptions,
+	isBuiltInProviderId,
+	OPENAI_PROVIDER_ID,
+} from "@/modules/providers/built-in-provider-catalog";
 import type { PluginProviderComposition } from "@/modules/providers/interactive-provider-controller";
 import { pluginProviderIdentityMatches } from "@/modules/providers/provider-model-selection";
 import {
@@ -74,19 +57,14 @@ export const createDefaultSessionProviderCollection = (
 	});
 };
 
-export type InteractiveSessionProviderCollectionOptions = Readonly<{
-	anthropicProviderOptions?: AnthropicProviderOptions;
-	credentialStore?: CredentialStore;
-	deepSeekProviderOptions?: DeepSeekProviderOptions;
-	googleProviderOptions?: GoogleProviderOptions;
-	modelStore?: ModelStore;
-	openAIProviderOptions?: OpenAIProviderOptions;
-	openCodeGoProviderOptions?: OpenCodeGoProviderOptions;
-	openRouterProviderOptions?: OpenRouterProviderOptions;
-	pluginProviders?: readonly PluginProviderDescriptor[];
-	sessionId?: string;
-	userDataDir?: string;
-}>;
+export type InteractiveSessionProviderCollectionOptions =
+	BuiltInProviderFactoryOptions &
+		Readonly<{
+			credentialStore?: CredentialStore;
+			modelStore?: ModelStore;
+			pluginProviders?: readonly PluginProviderDescriptor[];
+			userDataDir?: string;
+		}>;
 
 export type PreparedProviderComposition = Readonly<{
 	commit: () => Promise<void>;
@@ -192,6 +170,24 @@ const closeProviderInstances = async (
 	);
 };
 
+const registerBuiltInProviders = (
+	options: BuiltInProviderFactoryOptions,
+	addBuiltInProvider: (provider: Provider) => void
+): OpenAIProvider => {
+	const openAIProvider =
+		BUILT_IN_PROVIDER_CATALOG[OPENAI_PROVIDER_ID].createProvider(options);
+	addBuiltInProvider(openAIProvider);
+	for (const [providerId, definition] of Object.entries(
+		BUILT_IN_PROVIDER_CATALOG
+	)) {
+		if (providerId === OPENAI_PROVIDER_ID) {
+			continue;
+		}
+		addBuiltInProvider(definition.createProvider(options));
+	}
+	return openAIProvider;
+};
+
 const createProviderBackend = async (
 	options: InteractiveSessionProviderCollectionOptions,
 	pluginProviders: readonly PluginProviderDescriptor[]
@@ -213,26 +209,7 @@ const createProviderBackend = async (
 	};
 	let openAIProvider: OpenAIProvider;
 	try {
-		openAIProvider = createOpenAIProvider(options.openAIProviderOptions);
-		addBuiltInProvider(openAIProvider);
-		addBuiltInProvider(
-			createAnthropicProvider(options.anthropicProviderOptions)
-		);
-		addBuiltInProvider(
-			createGoogleProvider({
-				...options.googleProviderOptions,
-				...(options.sessionId === undefined
-					? {}
-					: { sessionId: options.sessionId }),
-			})
-		);
-		addBuiltInProvider(
-			createOpenCodeGoProvider(options.openCodeGoProviderOptions)
-		);
-		addBuiltInProvider(createDeepSeekProvider(options.deepSeekProviderOptions));
-		addBuiltInProvider(
-			createOpenRouterProvider(options.openRouterProviderOptions)
-		);
+		openAIProvider = registerBuiltInProviders(options, addBuiltInProvider);
 		for (const registration of pluginProviders) {
 			if (isBuiltInProviderId(registration.providerId)) {
 				throw new Error(`Duplicate Provider ID '${registration.providerId}'.`);
@@ -434,11 +411,11 @@ export const createInteractiveSessionProviderCollection = async (
 			if (closePromise !== undefined) {
 				throw new Error("ProviderCollection is closed.");
 			}
-			await activeCollection().setCredential("openai", credential);
+			await activeCollection().setCredential(OPENAI_PROVIDER_ID, credential);
 			return activeCollection()
-				.getAvailable("openai")
+				.getAvailable(OPENAI_PROVIDER_ID)
 				.then((models) =>
-					models.filter((model) => model.providerId === "openai")
+					models.filter((model) => model.providerId === OPENAI_PROVIDER_ID)
 				);
 		},
 		async preparePluginProviderRegistrations(registrations) {
