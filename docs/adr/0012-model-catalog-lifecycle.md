@@ -3,11 +3,9 @@
 This ADR records the pre-SDK model-selection contract. ADR-0049 supersedes it
 for Coding-Agent: issue #209 moved model selection and execution to exact SDK
 Provider/Provider Model identities. The Model Catalog and lifecycle selectors
-were removed; they are not an execution fallback. The #204 credential-cleanup gate remains
-dormant, so this local integration is not authorized for real credentials or
-live provider requests.
+were removed; they are not an execution fallback.
 
-Status: superseded by ADR-0049 at the Provider SDK-only cutover (issue #209); release use remains blocked on the separately reviewed credential-cleanup gate
+Status: superseded by ADR-0049 at the Provider SDK-only cutover (issue #209)
 
 ## Context
 

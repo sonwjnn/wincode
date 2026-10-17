@@ -1,6 +1,6 @@
 # Provider-aware prompt caching stays separate from Session Context
 
-Provider prompt caching reuses provider-side processing of a matching prefix; it does not shorten the model's context, which remains the concern of Session Compaction. This decision describes the SDK Provider caching contract for Anthropic, OpenAI, Google, and OpenCode Go. The Provider SDK implementation is carried by ADR-0049; release remains subject to its independent-review and credential-cleanup requirements.
+Provider prompt caching reuses provider-side processing of a matching prefix; it does not shorten the model's context, which remains the concern of Session Compaction. This decision describes the SDK Provider caching contract for Anthropic, OpenAI, Google, and OpenCode Go. The Provider SDK implementation is carried by ADR-0049.
 
 Status: accepted
 

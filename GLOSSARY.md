@@ -2,7 +2,7 @@
 
 ## AI Provider and Model selection
 
-These terms describe the shipped SDK and Coding-Agent's Provider SDK-only selection and execution introduced by issue #209 under [ADR-0048](docs/adr/0048-extensible-ai-sdk-providers-and-app-owned-model-selection.md) and [ADR-0049](docs/adr/0049-migrate-coding-agent-to-provider-sdk.md). The #204 credential-cleanup gate remains dormant: this local integration must not use real credentials or live provider endpoints until the separately reviewed gate is approved. Connection Provider and Connection below describe retained pre-cutover concepts; neither is a fallback source for current Agent Turns.
+These terms describe the shipped SDK and Coding-Agent's Provider SDK-only selection and execution introduced by issue #209 under [ADR-0048](docs/adr/0048-extensible-ai-sdk-providers-and-app-owned-model-selection.md) and [ADR-0049](docs/adr/0049-migrate-coding-agent-to-provider-sdk.md). Connection Provider and Connection below describe retained pre-cutover concepts; neither is a fallback source for current Agent Turns.
 
 **SDK Provider**:
 A runtime identity that owns authentication, its known models, and the behavior for invoking them. Several SDK Providers may use the same Model Protocol without sharing an identity. _Avoid_: Connection Provider, Model Protocol
@@ -23,7 +23,7 @@ A Known Model belonging to a registered Provider with configured authorization a
 The trusted Plugin identity and source responsible for a custom SDK Provider in Coding-Agent. A Provider ID alone does not establish this ownership. _Avoid_: Provider ID, Plugin path alone
 
 **Legacy Connection Credential**:
-A credential stored for the pre-migration Connection Provider. It is distinct from an SDK credential and is never carried into the new store during the accepted cutover. _Avoid_: reusable SDK credential
+A credential stored for the pre-migration Connection Provider. It is distinct from an SDK credential and is not copied into the SDK CredentialStore. _Avoid_: reusable SDK credential
 
 ## Connection Provider
 
@@ -31,7 +31,7 @@ A legacy Connection Provider defined how the CLI authenticated with an AI provid
 
 ## Connection
 
-A Connection is a credential record for one legacy Connection Provider. It belongs to the pre-SDK Connections subsystem, not the SDK CredentialStore used by ProviderCollection. The issue #209 local cutover neither reads Connection credentials as SDK credentials nor falls back to them. The destructive legacy-credential cleanup remains gated separately by ADR-0049 and #204; do not access or delete real credentials before that gate is approved. _Avoid_: SDK Credential
+A Connection is a credential record for one legacy Connection Provider. It belongs to the pre-SDK Connections subsystem, not the SDK CredentialStore used by ProviderCollection. The issue #209 local cutover neither reads Connection credentials as SDK credentials nor falls back to them. _Avoid_: SDK Credential
 
 **ThinkingLevel**:
 Wincode's normalized reasoning selection: `off`, `minimal`, `low`, `medium`,

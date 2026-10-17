@@ -42,7 +42,7 @@ const bundledInputsFor = async (
 };
 
 describe("SDK provider import graphs", () => {
-	test("package exports expose the SDK at the root without restoring legacy Connections and Catalog surfaces", async () => {
+	test("package exports omit legacy Connections and Catalog surfaces", async () => {
 		const packageManifest = (await Bun.file(
 			path.join(AI_ROOT, "package.json")
 		).json()) as Readonly<{ exports: Readonly<Record<string, unknown>> }>;
@@ -60,7 +60,7 @@ describe("SDK provider import graphs", () => {
 		expect(exportNames).not.toContain("./models");
 		expect(exportNames).not.toContain("./models-dev");
 		expect(exportNames).not.toContain("./catalog");
-		expect(exportNames).toContain("./connections/legacy-cleanup");
+		expect(exportNames).not.toContain("./connections/legacy-cleanup");
 	});
 
 	test("public SDK core does not bundle built-in providers or obsolete model-policy metadata", async () => {

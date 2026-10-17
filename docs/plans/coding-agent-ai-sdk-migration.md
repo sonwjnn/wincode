@@ -1,20 +1,20 @@
 # Coding-Agent → AI SDK migration plan
 
-Status: local implementation candidate under independent final review; non-releaseable. ADR-0049 is the accepted target; PR #198 shipped the standalone SDK but did not migrate Coding-Agent. The candidate applies this plan in the existing worktree, but authorizes neither real-credential deletion nor release. The #204 cleanup gate remains dormant until #209 review completes; wiring and activation require a separate reviewed change.
+Status: development implementation plan. ADR-0049 is the accepted target; PR #198 shipped the standalone SDK but did not migrate Coding-Agent.
 
 ## Invariants across the cutover
 
 - The persisted Session Record keeps its `{providerId, modelId}` and usage; a missing model is displayed under its stored IDs but is not silently substituted or invoked, including for compaction.
 - The Stateful Agent continues to own the Tool Call loop, Agent Turn event order, abort semantics, Steering Messages and continuation. One successful SDK terminal outcome completes one Model Step; failure or abort never becomes success. Coding-Agent never persists a credential in a Session Record.
 - Auth-aware availability is **not** health. Known/discovered models survive offline restores and failed refreshes. A Provider ID collision, changed Plugin registration owner, or missing default must never redirect requests or disclose a credential to a different Provider.
-- No legacy secret is deleted before the cutover implementation and its deletion tests are reviewed. Keep the #204 gate unwired through #208 and dormant until #209's final review approves the combined cutover; wiring/activation after that approval is a separately reviewed change. Once enabled, deletion is a one-way, fail-closed, retryable gate; Session history and attachments remain intact.
+- SDK Provider credentials are stored separately from legacy Connection credentials; legacy credentials are never copied automatically. Each Provider authenticates through its explicit connect flow.
 
 ## Dependency-ordered tickets
 
 | ID | Scope | External contract to defend | Prerequisite |
 | --- | --- | --- | --- |
 | M1 | SDK chat capabilities | Public `chat()` carries provider-neutral effort/output limit/cache key and optional warming, preserves tool failures/opaque continuation and normalized terminal errors; Node and Bun fake-provider consumers exercise each control. Unsupported cache preference stays best-effort. | ADR-0049 |
-| M2 | Application stores and destructive cutover | A fake OS store + file fallback with different legacy secrets is fully deleted and verified before the new namespace is enabled. Partial failure reports *identifiers/status only*, blocks every execution mode, never claims rollback, and retry completes idempotently. New CredentialStore serializes writes/refresh; ModelStore commits snapshots atomically under abort and keeps previous results on failure. | M1 for integration; storage contract can be implemented/tested independently |
+| M2 | Application stores | CredentialStore scopes credentials by Provider identity and serializes writes/refresh; ModelStore commits snapshots atomically under abort and keeps previous results on failure. | M1 for integration; storage contracts can be implemented/tested independently |
 | M3 | Plugin registration and connection | A trusted Plugin registers a Provider factory and connect interaction; built-in or Plugin ID collision fails; stored Plugin ID + trusted source identity prevents cross-project secret reuse. Headless modes return actionable noninteractive auth errors; absent Plugin keeps data quarantined. Candidate `/reload` takes effect only at idle, rolls back when safe, and cannot revive newly untrusted code. | M2 |
 | M4 | Agent Runtime SDK boundary | Replace ModelClient/ModelStepRequest and secret-bearing ModelTarget with `{providerId, modelId}` SDK requests. Contract tests assert text/reasoning/tool/usage events, continuation, errors, abort and cache accounting across multiple Model Steps and late Steering Messages. No lasting compatibility adapter. | M1, M3 |
 | M5 | Host and mode composition | Each Session Host creates its own ProviderCollection/instances and closes Google CachedContent on unload; credential/model stores are shared by user, refresh applies at next turn. TUI, one-shot, JSON, RPC, compaction and delegated Sessions all use the same runtime; children load only explicitly selected Plugin paths. Explicit OAuth/browser interaction remains possible in Interactive Mode. | M2–M4 |
@@ -23,13 +23,12 @@ Status: local implementation candidate under independent final review; non-relea
 
 These remain *ticket candidates in this document*, not GitHub issues. This candidate work did not create remote issues or push changes.
 
-## Integration gates
+## Integration checks
 
 1. In a fresh tree based on merged `master`, write failing public SDK/Session behavior tests before each implementation slice. Use fake transports, fake OS secret backend, temp file fallback and temp user-scoped stores; never test with real keys or live provider endpoints.
-2. Prove safe credential deletion under: only OS secret, only file fallback, both, inaccessible backend, deletion failure after earlier deletion, verification failure, process restart mid-gate, and idempotent retry. No log, error or snapshot may contain a secret value. Keep this destructive gate dormant through #208 and until #209's final review approves the combined cutover; then wire it in a separately reviewed change before any release or real-credential model request. Test CLI/JSON/RPC fail-closed behavior without corrupting stdout protocols.
-3. Prove Plugin trust boundaries across two workspaces with the same Plugin ID from different sources, a disabled Plugin, provider collisions, a failed `/reload`, trust revocation, and explicit child Plugin selection. Prove shared stores do not cause cross-Host Google cache reuse.
-4. Test full Session history: old ID still displays after model removal; model missing from current provider list refuses new sends and compaction; offline restored model list stays distinct from remote reachability; discovery updates do not redirect an in-flight turn; no automatic default substitution.
-5. Run `bun fix`, `bun check`, `bun check-types`, `bun run test` and `bun run test:e2e`; investigate any failures rather than assuming they predate this migration. Independently review the complete base-to-candidate diff and destructive-operation test evidence before integration. Do not push or commit unless explicitly requested.
+2. Prove Plugin trust boundaries across two workspaces with the same Plugin ID from different sources, a disabled Plugin, provider collisions, a failed `/reload`, trust revocation, and explicit child Plugin selection. Prove shared stores do not cause cross-Host Google cache reuse.
+3. Test full Session history: old ID still displays after model removal; model missing from current provider list refuses new sends and compaction; offline restored model list stays distinct from remote reachability; discovery updates do not redirect an in-flight turn; no automatic default substitution.
+4. Run `bun fix`, `bun check`, `bun check-types`, `bun run test` and `bun run test:e2e`; investigate any failures rather than assuming they predate this migration. Independently review the complete base-to-candidate diff and provider, store, and Session test evidence before integration. Do not push or commit unless explicitly requested.
 
 ## Explicitly out of scope
 

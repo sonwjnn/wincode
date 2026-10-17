@@ -20,9 +20,6 @@
     },
     "./sdk/providers/*": {
       "default": "./src/sdk-providers/*.ts"
-    },
-    "./connections/legacy-cleanup": {
-      "default": "./src/connections/legacy-credential-cleanup.ts"
     }
   },
   "scripts": {
