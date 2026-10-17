@@ -13,20 +13,33 @@ export type ProjectTrustOverride = ProjectTrustDecision;
 export type ProjectTrustChoice =
 	| ProjectTrustDecision
 	| "trust-parent"
+	| "trust-session"
+	| "deny-session"
 	| "cancel";
 export type ProjectTrustSelection = Exclude<ProjectTrustChoice, "cancel">;
 export type ProjectTrustSelectionResolution = Readonly<{
 	decision: ProjectTrustDecision;
+	/** Session selections apply to the running process and are never saved. */
+	persist: boolean;
 	scope: "parent" | "project";
 }>;
 export type ProjectTrustSessionStatus = "trusted" | "untrusted" | "pending";
 
+const PROJECT_TRUST_SELECTION_RESOLUTIONS = {
+	deny: { decision: "deny", persist: true, scope: "project" },
+	"deny-session": { decision: "deny", persist: false, scope: "project" },
+	trust: { decision: "trust", persist: true, scope: "project" },
+	"trust-parent": { decision: "trust", persist: true, scope: "parent" },
+	"trust-session": { decision: "trust", persist: false, scope: "project" },
+} as const satisfies Record<
+	ProjectTrustSelection,
+	ProjectTrustSelectionResolution
+>;
+
 export const resolveProjectTrustSelection = (
 	selection: ProjectTrustSelection
-): ProjectTrustSelectionResolution => ({
-	decision: selection === "deny" ? "deny" : "trust",
-	scope: selection === "trust-parent" ? "parent" : "project",
-});
+): ProjectTrustSelectionResolution =>
+	PROJECT_TRUST_SELECTION_RESOLUTIONS[selection];
 
 export type ProjectTrustSavedDecision = Readonly<{
 	decision: ProjectTrustDecision;
@@ -50,9 +63,21 @@ export type ProjectTrustPrompt = (
 	request: ProjectTrustPromptRequest
 ) => Promise<ProjectTrustChoice>;
 
+export type ProjectTrustSnapshot = Readonly<{
+	decisions: readonly Readonly<{
+		decision: ProjectTrustDecision;
+		directory: string;
+	}>[];
+	override?: ProjectTrustOverride;
+	sessionDecision?: ProjectTrustDecision;
+}>;
+
 export type ProjectTrustResolution = Readonly<{
 	diagnostics: readonly string[];
+	sessionDecision?: ProjectTrustDecision;
+	trustSnapshot: ProjectTrustSnapshot;
 	trustedProjectRoots: readonly string[];
+	untrustedProjectRoots: readonly string[];
 }>;
 
 export type ProjectTrustStatus = Readonly<{
@@ -67,6 +92,7 @@ export type ResolveProjectTrustInput = Readonly<{
 	prompt?: ProjectTrustPrompt;
 	stdinIsTTY?: boolean;
 	projectTrustDir: string;
+	trustSnapshot?: ProjectTrustSnapshot;
 	workspace: string;
 }>;
 
@@ -92,6 +118,10 @@ const pathContains = (parent: string, target: string): boolean => {
 			!path.isAbsolute(relative))
 	);
 };
+
+/** Trusted and untrusted roots share one shape so consumers can rely on both. */
+const expandProjectRoots = (roots: readonly string[]): readonly string[] =>
+	Object.freeze(roots.flatMap((root) => [root, path.resolve(root)]));
 
 const exists = async (filePath: string): Promise<boolean> =>
 	await Bun.file(filePath).exists();
@@ -392,6 +422,11 @@ const shouldPromptForProjectTrust = ({
 		(projectRoot) => nearestDecision(projectRoot, decisions) === undefined
 	);
 
+type ProjectTrustPromptOutcome = Readonly<{
+	choice: ProjectTrustChoice;
+	selection: ProjectTrustSelectionResolution;
+}>;
+
 const requestProjectTrustChoice = async ({
 	mode,
 	override,
@@ -406,7 +441,7 @@ const requestProjectTrustChoice = async ({
 	parentDirectory: string;
 	protectedRoots: readonly string[];
 	decisions: readonly StoredTrustDecision[];
-}): Promise<ProjectTrustChoice | undefined> => {
+}): Promise<ProjectTrustPromptOutcome | undefined> => {
 	if (
 		prompt === undefined ||
 		!shouldPromptForProjectTrust({
@@ -426,42 +461,46 @@ const requestProjectTrustChoice = async ({
 		protectedRoots: getRootStatuses(protectedRoots, decisions, () => "pending"),
 		workspace,
 	});
-	if (choice !== "cancel") {
-		const { decision, scope } = resolveProjectTrustSelection(choice);
+	if (choice === "cancel") {
+		return {
+			choice,
+			// Keep cancellation as a non-persistent denial in this runtime's snapshot.
+			selection: PROJECT_TRUST_SELECTION_RESOLUTIONS["deny-session"],
+		};
+	}
+	const selection = resolveProjectTrustSelection(choice);
+	if (selection.persist) {
 		await saveProjectTrustDecision({
-			decision,
+			decision: selection.decision,
 			projectTrustDir,
-			scope,
+			scope: selection.scope,
 			workspace,
 		});
 	}
-	return choice;
+	return { choice, selection };
 };
 
 const getDecisionForRoot = (
 	projectRoot: string,
 	override: ProjectTrustOverride | undefined,
-	promptedChoice: ProjectTrustChoice | undefined,
+	prompted: ProjectTrustPromptOutcome | undefined,
 	promptedParentDirectory: string,
 	decisions: readonly StoredTrustDecision[]
 ): ProjectTrustDecision | undefined => {
 	if (override !== undefined) {
 		return override;
 	}
-	if (promptedChoice === "cancel") {
-		return;
+	if (prompted === undefined) {
+		return nearestDecision(projectRoot, decisions)?.decision;
 	}
-	if (promptedChoice !== undefined) {
-		const resolution = resolveProjectTrustSelection(promptedChoice);
-		if (
-			resolution.scope === "parent" &&
-			!pathContains(promptedParentDirectory, projectRoot)
-		) {
-			return nearestDecision(projectRoot, decisions)?.decision;
-		}
-		return resolution.decision;
+	const { selection } = prompted;
+	if (
+		selection.scope === "parent" &&
+		!pathContains(promptedParentDirectory, projectRoot)
+	) {
+		return nearestDecision(projectRoot, decisions)?.decision;
 	}
-	return nearestDecision(projectRoot, decisions)?.decision;
+	return selection.decision;
 };
 
 /** Resolves user-owned trust before the application reads project config or resources. */
@@ -471,34 +510,43 @@ export const resolveProjectTrust = async ({
 	prompt,
 	stdinIsTTY = false,
 	projectTrustDir,
+	trustSnapshot,
 	workspace,
 }: ResolveProjectTrustInput): Promise<ProjectTrustResolution> => {
 	const protectedRoots = await getProtectedProjectRoots(workspace);
 	const trustFilePath = path.join(projectTrustDir, TRUST_FILE_NAME);
 	const decisions = await canonicalizeTrustDecisions(
-		await loadTrustFile(trustFilePath)
+		trustSnapshot?.decisions ?? (await loadTrustFile(trustFilePath))
 	);
 	const canonicalWorkspace = await canonicalPath(workspace);
 	const promptedParentDirectory = path.dirname(canonicalWorkspace);
-	const promptedChoice = await requestProjectTrustChoice({
-		mode,
-		override,
-		prompt,
-		stdinIsTTY,
-		projectTrustDir,
-		parentDirectory: promptedParentDirectory,
-		workspace: canonicalWorkspace,
-		protectedRoots,
-		decisions,
-	});
+	const resolutionOverride =
+		trustSnapshot === undefined
+			? override
+			: (trustSnapshot.sessionDecision ?? trustSnapshot.override);
+	const prompted =
+		trustSnapshot === undefined
+			? await requestProjectTrustChoice({
+					mode,
+					override: resolutionOverride,
+					prompt,
+					stdinIsTTY,
+					projectTrustDir,
+					parentDirectory: promptedParentDirectory,
+					workspace: canonicalWorkspace,
+					protectedRoots,
+					decisions,
+				})
+			: undefined;
 	const trustedCanonicalRoots = new Set<string>();
+	const untrustedProjectRoots: string[] = [];
 	const diagnostics: string[] = [];
 
 	for (const projectRoot of protectedRoots) {
 		const decision = getDecisionForRoot(
 			projectRoot,
-			override,
-			promptedChoice,
+			resolutionOverride,
+			prompted,
 			promptedParentDirectory,
 			decisions
 		);
@@ -506,6 +554,7 @@ export const resolveProjectTrust = async ({
 			trustedCanonicalRoots.add(projectRoot);
 			continue;
 		}
+		untrustedProjectRoots.push(projectRoot);
 		diagnostics.push(
 			`Skipped protected project resources from untrusted directory ${projectRoot}; use --trust-project for this invocation to load them.`
 		);
@@ -520,11 +569,31 @@ export const resolveProjectTrust = async ({
 		);
 	}
 
+	const sessionDecision =
+		trustSnapshot?.sessionDecision ??
+		(prompted?.selection !== undefined && !prompted.selection.persist
+			? prompted.selection.decision
+			: undefined);
+	let snapshotDecisions = decisions;
+	if (trustSnapshot === undefined && prompted?.selection?.persist === true) {
+		snapshotDecisions = await canonicalizeTrustDecisions(
+			await loadTrustFile(trustFilePath)
+		);
+	}
+	const nextTrustSnapshot =
+		trustSnapshot ??
+		Object.freeze({
+			decisions: Object.freeze(snapshotDecisions),
+			...(override === undefined ? {} : { override }),
+			...(sessionDecision === undefined ? {} : { sessionDecision }),
+		});
+
 	return Object.freeze({
 		diagnostics: Object.freeze(diagnostics),
-		trustedProjectRoots: Object.freeze(
-			[...trustedCanonicalRoots].flatMap((root) => [root, path.resolve(root)])
-		),
+		...(sessionDecision === undefined ? {} : { sessionDecision }),
+		trustSnapshot: nextTrustSnapshot,
+		trustedProjectRoots: expandProjectRoots([...trustedCanonicalRoots]),
+		untrustedProjectRoots: expandProjectRoots(untrustedProjectRoots),
 	});
 };
 

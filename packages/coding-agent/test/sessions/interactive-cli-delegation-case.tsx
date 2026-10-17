@@ -11,7 +11,7 @@ import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,
 } from "@wincode/subagents/plugin";
-import type { DispatchModeRunners } from "@/modules/application/dispatch";
+import { act } from "react";
 import { dispatch } from "@/modules/application/dispatch";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";
@@ -25,7 +25,9 @@ import {
 	createE2eStore,
 	waitForSessionCondition,
 } from "@/test/support/e2e-fixture";
+import { runProjectTrustPreflight } from "@/tui/project-trust-preflight";
 import { runInteractive } from "@/tui/runtime";
+import { createModeRunnerLoader } from "../../bin/mode-runners";
 import { toolCallId } from "../support/identifiers";
 import {
 	cleanupTestDirectory,
@@ -133,21 +135,24 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 		rendererReady.resolve(rendered);
 		return rendered.renderer;
 	};
-	const runners: DispatchModeRunners = {
-		interactive: async (context) => {
+	const createProviderCollection =
+		getInteractiveRuntimeContext().createProviderCollection;
+	if (createProviderCollection === undefined) {
+		throw new Error(
+			"Interactive CLI test requires the fake provider collection."
+		);
+	}
+	const runners = createModeRunnerLoader({
+		promptProjectTrust: runProjectTrustPreflight,
+		rendererFactory,
+		runInteractive: (session) => {
 			setInteractiveRuntimeContext({
 				...getInteractiveRuntimeContext(),
-				args: context.args,
-				configRuntime: context.configRuntime,
-				cwd: context.cwd,
-				pluginRuntime: context.pluginRuntime,
+				createProviderCollection,
 			});
-			return runInteractive(rendererFactory);
+			return runInteractive(session);
 		},
-		json: async () => 0,
-		print: async () => 0,
-		rpc: async () => 0,
-	};
+	});
 	const cliRun = dispatch(
 		{
 			args: [],
@@ -158,7 +163,29 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 		},
 		runners,
 		{
-			initializeRuntime: async ({ cwd, disabledPluginIds, pluginPaths }) => {
+			initializeRuntime: async ({
+				cwd,
+				disabledPluginIds,
+				pluginPaths,
+				promptProjectTrust,
+			}) => {
+				if (promptProjectTrust === undefined) {
+					throw new Error(
+						"Interactive runtime omitted its Project trust prompt."
+					);
+				}
+				const trustChoice = await promptProjectTrust({
+					protectedRoots: [
+						{
+							currentSessionStatus: "pending",
+							projectRoot: cwd,
+						},
+					],
+					workspace: cwd,
+				});
+				if (trustChoice !== "trust") {
+					throw new Error(`Expected Project trust, received ${trustChoice}.`);
+				}
 				const configRuntime = {
 					...interactiveConfigRuntime,
 					cwd,
@@ -185,7 +212,17 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 				);
 			}),
 		]);
-		await waitForFrame(setup, (frame) => frame.includes("Ask anything"));
+		const interactiveSetup = setup;
+		await waitForFrame(
+			interactiveSetup,
+			(frame) =>
+				frame.includes("Project Trust") &&
+				frame.includes("Trust (this session only)")
+		);
+		await act(() => interactiveSetup.mockInput.pressEnter());
+		await waitForFrame(interactiveSetup, (frame) =>
+			frame.includes("Ask anything")
+		);
 		await Bun.sleep(500);
 		await setup.mockInput.typeText(SUBMISSION);
 		setup.mockInput.pressEnter();

@@ -110,7 +110,7 @@ const startReplacementPluginRuntime = async (
 	try {
 		const startDiagnostics = await startDiagnosticsFor(result.pluginRuntime);
 		diagnostics.push(...startDiagnostics);
-		if (startDiagnostics.length > 0 && !result.trustChanged) {
+		if (startDiagnostics.length > 0) {
 			return restorePreviousPluginRuntime(
 				previous,
 				result.pluginRuntime,
@@ -122,13 +122,11 @@ const startReplacementPluginRuntime = async (
 			message: error instanceof Error ? error.message : String(error),
 			resource: "Plugin",
 		});
-		if (!result.trustChanged) {
-			return restorePreviousPluginRuntime(
-				previous,
-				result.pluginRuntime,
-				diagnostics
-			);
-		}
+		return restorePreviousPluginRuntime(
+			previous,
+			result.pluginRuntime,
+			diagnostics
+		);
 	}
 	return result.pluginRuntime;
 };
@@ -188,8 +186,8 @@ const showReloadSummary = (
 	toast: ToastContextValue
 ): void => {
 	const summary = pluginRuntimeChanged
-		? "Reloaded Plugins, Skills, custom commands, and theme preference. Context files refresh on the next turn; built-in keybindings are unchanged."
-		: "Kept the active Plugin set; reloaded Skills, custom commands, and theme preference. Context files refresh on the next turn; built-in keybindings are unchanged.";
+		? "Reloaded keybindings, plugins, skills, commands, and context files."
+		: "Reloaded keybindings, skills, commands, and context files";
 	const details = diagnostics
 		.slice(0, 2)
 		.map(({ resource, message }) => `${resource}: ${message}`)
@@ -247,15 +245,8 @@ export const reloadInteractiveResources = async ({
 				);
 				if (result.pluginRuntimeChanged) {
 					try {
-						await hostManager.replacePluginRuntime(pluginRuntime, {
-							trustChanged: result.trustChanged,
-						});
+						await hostManager.replacePluginRuntime(pluginRuntime);
 					} catch {
-						if (result.trustChanged) {
-							throw new Error(
-								"Could not establish a safe Provider composition after Project trust changed."
-							);
-						}
 						if (pluginRuntime === active.pluginRuntime) {
 							diagnostics.push({
 								message:

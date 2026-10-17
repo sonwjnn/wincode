@@ -72,7 +72,6 @@ test("reload summary does not claim Plugins were reloaded when the active set wa
 			diagnostics: [],
 			pluginRuntime: current.pluginRuntime,
 			pluginRuntimeChanged: false,
-			trustChanged: false,
 		}),
 	};
 	setInteractiveRuntimeContext({
@@ -90,27 +89,28 @@ test("reload summary does not claim Plugins were reloaded when the active set wa
 			toast: { show: ({ message }) => (toastMessage = message) },
 			lifecycle,
 		});
-		expect(toastMessage).toContain("Kept the active Plugin set");
-		expect(toastMessage).not.toContain("Reloaded Plugins");
+		expect(toastMessage).toContain(
+			"Reloaded keybindings, skills, commands, and context files"
+		);
+		expect(toastMessage).not.toContain("plugins");
 	} finally {
 		await pluginRuntime.shutdown();
 	}
 });
 
-test("reload does not ask for Project trust; users decide with /trust", async () => {
+test("interactive reload does not pass a new trust decision to the resource loader", async () => {
 	const lifecycle = createInteractiveRuntimeLifecycle();
 	const configRuntime = configRuntimeFor(root);
 	const pluginRuntime = observableRuntime({});
-	let trustPromptPassed = false;
+	let reloadRequestKeys: string[] = [];
 	const resourceLoader: ApplicationResourceLoader = {
 		reload: async (request) => {
-			trustPromptPassed = Reflect.has(request, "promptProjectTrust");
+			reloadRequestKeys = Object.keys(request);
 			return {
 				configRuntime: request.current.configRuntime,
 				diagnostics: [],
 				pluginRuntime: request.current.pluginRuntime,
 				pluginRuntimeChanged: false,
-				trustChanged: false,
 			};
 		},
 	};
@@ -129,7 +129,7 @@ test("reload does not ask for Project trust; users decide with /trust", async ()
 			toast: { show: () => undefined },
 			lifecycle,
 		});
-		expect(trustPromptPassed).toBe(false);
+		expect(reloadRequestKeys).toEqual(["current"]);
 	} finally {
 		await resetInteractiveSessionHostManager();
 		await pluginRuntime.shutdown();
@@ -151,7 +151,6 @@ test("reload retains its Session Host manager when publishing a new Plugin runti
 			diagnostics: [],
 			pluginRuntime: replacementRuntime,
 			pluginRuntimeChanged: true,
-			trustChanged: false,
 		}),
 	};
 	setInteractiveRuntimeContext({
@@ -181,7 +180,9 @@ test("reload retains its Session Host manager when publishing a new Plugin runti
 			lifecycle,
 		});
 		await runtimeObserved.promise;
-		expect(toastMessage).toContain("Reloaded Plugins");
+		expect(toastMessage).toContain(
+			"Reloaded keybindings, plugins, skills, commands, and context files"
+		);
 		const manager = managerObservedDuringReplacement;
 		expect(manager).toBe(managerBeforeReload);
 		if (manager === undefined) {
@@ -232,7 +233,6 @@ test("shutdown during resource loading prevents the unstarted replacement from s
 				diagnostics: [],
 				pluginRuntime: replacementRuntime,
 				pluginRuntimeChanged: true,
-				trustChanged: false,
 			};
 			return result;
 		},

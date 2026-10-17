@@ -23,7 +23,7 @@ import type { SessionMessageId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
-import { act, useEffect, useState } from "react";
+import { act, type ReactNode, useEffect, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import {
 	PromptConfigProvider,
@@ -168,6 +168,7 @@ type ChatShellProbeProps = {
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
+	transcriptNotice?: ReactNode;
 };
 
 /**
@@ -193,6 +194,7 @@ function ChatShellProbe({
 	isInterruptArmed = false,
 	onRetry,
 	queuedSubmissions,
+	transcriptNotice,
 }: ChatShellProbeProps) {
 	const { pop, push } = useKeyboardLayer();
 	const [compactions, setCompactions] = useState(initialCompactions);
@@ -230,6 +232,7 @@ function ChatShellProbe({
 				promptHistory={[]}
 				providerController={providerController}
 				queuedSubmissions={queuedSubmissions}
+				transcriptNotice={transcriptNotice}
 				viewId="test"
 			/>
 		</>
@@ -254,6 +257,7 @@ type ChatShellRenderOptions = {
 	isInterruptArmed?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
+	transcriptNotice?: ReactNode;
 };
 
 const renderChatShell = async (
@@ -270,6 +274,7 @@ const renderChatShell = async (
 		isInterruptArmed = false,
 		onRetry,
 		queuedSubmissions,
+		transcriptNotice,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
 	const workspace = process.cwd();
@@ -332,6 +337,7 @@ const renderChatShell = async (
 												onRetry={onRetry}
 												providerController={providerController}
 												queuedSubmissions={queuedSubmissions}
+												transcriptNotice={transcriptNotice}
 											/>
 										</CommandControllerProvider>
 									</RouterContextProvider>
@@ -350,6 +356,21 @@ const renderChatShell = async (
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await Bun.sleep(20);
 	await setup.renderOnce();
+};
+
+/** First column a span containing `text` occupies in the rendered frame. */
+const spanColumn = (setup: TestRendererSetup, text: string): number => {
+	for (const line of setup.captureSpans().lines) {
+		let column = 0;
+		for (const span of line.spans) {
+			const index = span.text.indexOf(text);
+			if (index >= 0) {
+				return column + Bun.stringWidth(span.text.slice(0, index));
+			}
+			column += span.width;
+		}
+	}
+	throw new Error(`No rendered span contains ${JSON.stringify(text)}`);
 };
 
 /**
@@ -1768,6 +1789,86 @@ describe("ChatShell composer draft", () => {
 		} finally {
 			writeComposerDraft("draft-test-key", "");
 			setup.setup.renderer.destroy();
+		}
+	});
+});
+
+describe("ChatShell transcript notice", () => {
+	test("renders the transcript notice below the last transcript entry", async () => {
+		const marker = "Transcript notice marker";
+		const { setup } = await renderChatShell(
+			[assistantMessage([{ text: "Last transcript entry", type: "text" }])],
+			{
+				height: 24,
+				transcriptNotice: <text>{marker}</text>,
+				width: 100,
+			}
+		);
+		try {
+			await flushUi(setup);
+			const lines = setup.captureCharFrame().split("\n");
+			const noticeLine = lines.findIndex((line) => line.includes(marker));
+			const messageLine = lines.findIndex((line) =>
+				line.includes("Last transcript entry")
+			);
+			expect(messageLine).toBeGreaterThan(-1);
+			expect(noticeLine).toBeGreaterThan(messageLine);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("keeps the transcript notice above messages that arrive later", async () => {
+		const marker = "Frozen notice marker";
+		const { holder, setup } = await renderChatShell(
+			[userMessage("first entry")],
+			{
+				height: 24,
+				transcriptNotice: <text>{marker}</text>,
+				width: 100,
+			}
+		);
+		try {
+			await flushUi(setup);
+			await act(async () => {
+				holder.current?.setMessages([
+					userMessage("first entry"),
+					userMessage("second entry"),
+				]);
+				await setup.renderOnce();
+			});
+			const frame = await setup.waitForFrame(
+				(text) => text.includes(marker) && text.includes("second entry")
+			);
+			const lines = frame.split("\n");
+			const noticeLine = lines.findIndex((line) => line.includes(marker));
+			const secondLine = lines.findIndex((line) =>
+				line.includes("second entry")
+			);
+			expect(noticeLine).toBeGreaterThan(-1);
+			expect(secondLine).toBeGreaterThan(-1);
+			expect(noticeLine).toBeLessThan(secondLine);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("aligns the transcript notice with transcript text", async () => {
+		const messageText = "AlignedTranscriptEntry";
+		const marker = "AlignedNoticeMarker";
+		const { setup } = await renderChatShell(
+			[assistantMessage([{ text: messageText, type: "text" }])],
+			{
+				height: 24,
+				transcriptNotice: <text>{marker}</text>,
+				width: 100,
+			}
+		);
+		try {
+			await flushUi(setup);
+			expect(spanColumn(setup, marker)).toBe(spanColumn(setup, messageText));
+		} finally {
+			setup.renderer.destroy();
 		}
 	});
 });

@@ -17,6 +17,7 @@ import {
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { PluginStatusIndicator } from "@/modules/plugins/ui/plugin-status-indicator";
+import { ProjectTrustNotice } from "@/modules/project-trust/ui/project-trust-notice";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import {
 	createInteractiveProviderController,
@@ -629,6 +630,7 @@ export function NewSessionView({
 					>
 						<WorkspacePath />
 					</box>
+					<ProjectTrustNotice />
 				</box>
 			</box>
 

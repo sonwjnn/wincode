@@ -77,6 +77,8 @@ export type ConfigRuntime = {
 	readonly cwd?: string;
 	/** Project roots whose configuration and resources were trusted before loading. */
 	readonly trustedProjectRoots?: readonly string[];
+	/** Protected project roots skipped because the project is untrusted in this run. */
+	readonly untrustedProjectRoots?: readonly string[];
 	workspace: string;
 };
 

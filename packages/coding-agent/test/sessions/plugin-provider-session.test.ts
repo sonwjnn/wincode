@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type AgentTurnEvent, toModelId } from "@wincode/agent-core";
 import type {
-	ChatEvent,
 	CredentialStore,
 	ModelStore,
 	Provider,
@@ -289,7 +288,6 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 	let handle: SessionSdkHandle | undefined;
 	let unsubscribeComposition: (() => void) | undefined;
 	let reloadCandidate: PluginRuntime | undefined;
-	let reloadTrustChanged = false;
 	let toastMessage = "";
 	let previousRuntimeContext: StartInteractiveInput | undefined;
 	try {
@@ -315,13 +313,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			configRuntime,
 			userDataDir
 		);
-		const revokedRuntime = await loadPlugins({
-			cliPaths: [],
-			config: configRuntime,
-			distributionPlugins: [],
-			userDataDir,
-		});
-		pluginRuntimes.push(runtimeA, runtimeB, failingRuntime, revokedRuntime);
+		pluginRuntimes.push(runtimeA, runtimeB, failingRuntime);
 		expect(runtimeA.getProviderRegistrations()[0]?.sourceIdentity).toBe(
 			await fs.realpath(pluginAPath)
 		);
@@ -337,20 +329,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			platformStore: null,
 			userDataDir,
 		});
-		const storedModelStore = createProviderSdkModelStore({ userDataDir });
-		let failModelRestores = false;
-		let failedSafeCompositionReads = 0;
-		const modelStore: ModelStore = {
-			get: (providerId) => {
-				if (failModelRestores) {
-					failedSafeCompositionReads += 1;
-					throw new Error("fake safe-composition snapshot failure");
-				}
-				return storedModelStore.get(providerId);
-			},
-			set: (providerId, models, options) =>
-				storedModelStore.set(providerId, models, options),
-		};
+		const modelStore = createProviderSdkModelStore({ userDataDir });
 		const resourceLoader: ApplicationResourceLoader = {
 			reload: async ({ current }) => ({
 				configRuntime: current.configRuntime,
@@ -359,7 +338,6 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 				pluginRuntimeChanged:
 					reloadCandidate !== undefined &&
 					reloadCandidate !== current.pluginRuntime,
-				trustChanged: reloadTrustChanged,
 			}),
 		};
 		setInteractiveRuntimeContext({
@@ -506,11 +484,12 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			"agent-turn-completed"
 		);
 		await waitForHostIdle(host);
-		expect(toastMessage).toContain("Kept the active Plugin set");
+		expect(toastMessage).toContain(
+			"previous trusted Plugin set and Provider composition were retained"
+		);
 
 		// A different canonical source with the same Plugin and Provider IDs cannot reuse A's data.
 		reloadCandidate = runtimeB;
-		reloadTrustChanged = false;
 		await reloadInteractiveResources({
 			refreshAgentRegistry: () => undefined,
 			reloadTheme: () => undefined,
@@ -625,74 +604,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			activityBeforeRestoredOwnerSelection
 		);
 
-		// If safe built-in-only preparation fails, revocation must fail closed before
-		// old Provider cleanup yields to later operations.
-		const activityBeforeRevocation: Readonly<{
-			authorization: number;
-			connect: number;
-			discovery: number;
-			stream: number;
-		}> = await providerActivity.json();
-		failModelRestores = true;
-		reloadCandidate = revokedRuntime;
-		reloadTrustChanged = true;
-		await reloadInteractiveResources({
-			refreshAgentRegistry: () => undefined,
-			reloadTheme: () => undefined,
-			toast: { show: ({ message }) => (toastMessage = message) },
-			lifecycle: createInteractiveRuntimeLifecycle(),
-		});
-		failModelRestores = false;
-		expect(failedSafeCompositionReads).toBeGreaterThan(0);
-		expect(getInteractiveRuntimeContext().pluginRuntime).toBe(revokedRuntime);
-		expect(
-			controller
-				.getConnectableProviders()
-				.map(({ providerId }) => providerId)
-				.filter((providerId) => providerId === "shared_provider")
-		).toEqual([]);
-		expect(hostCollection.getPluginProviderRegistrations()).toEqual([]);
-		expect(
-			hostCollection.getPluginProviderComposition("shared_provider")
-		).toBeUndefined();
-		expect(
-			textOfModels(await controller.getKnownModels(), "shared_provider")
-		).toEqual([]);
-		await expect(
-			controller.connectPluginProvider(
-				"shared_provider",
-				async () => "fake-key-b"
-			)
-		).rejects.toThrow("Plugin Provider connection is unavailable.");
-		await expect(
-			controller.refreshProviderModels("shared_provider")
-		).rejects.toThrow("Unknown provider: shared_provider");
-		const revokedChatEvents: ChatEvent[] = [];
-		for await (const event of hostCollection.chat({
-			messages: [
-				{
-					content: [{ text: "attempt revoked Provider", type: "text" }],
-					role: "user",
-				},
-			],
-			modelId: "shared-owner-model",
-			providerId: "shared_provider",
-		})) {
-			revokedChatEvents.push(event);
-		}
-		expect(revokedChatEvents.at(-1)).toMatchObject({
-			outcome: {
-				failure: {
-					code: "provider-not-found",
-					providerId: "shared_provider",
-				},
-				status: "failure",
-			},
-			type: "terminal",
-		});
-		expect(await providerActivity.json()).toEqual(activityBeforeRevocation);
-
-		// Re-enabling the original canonical source can restore its quarantined owner data.
+		// A fresh ProviderCollection restores the canonical Plugin owner's cached Models.
 		const reenabledB = await createPluginRuntime(
 			pluginBAliasPath,
 			configRuntime,

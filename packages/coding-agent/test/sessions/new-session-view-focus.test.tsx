@@ -804,6 +804,78 @@ describe("NewSessionView composer focus", () => {
 			setup.renderer.destroy();
 		}
 	});
+
+	test("renders the untrusted project notice below the composer", async () => {
+		const workspace = process.cwd();
+		const router = createRouter({
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+			routeTree: createRootRoute({}),
+		});
+		await router.load();
+		writeComposerDraft("new-session", "");
+
+		const app = (
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ConfigProvider
+					value={{
+						configStore: createConfigStore({
+							fs: {
+								readFile: async () =>
+									Promise.reject(
+										Object.assign(new Error("Test config is unavailable."), {
+											code: "ENOENT",
+										})
+									),
+							},
+						}),
+						homeRoot: os.homedir(),
+						trustedProjectRoots: [],
+						untrustedProjectRoots: [workspace],
+						workspace,
+					}}
+				>
+					<ToastProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<NewSessionView />
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
+					</ToastProvider>
+				</ConfigProvider>
+			</ThemeProvider>
+		);
+		const setup = await testRender(app, { height: 30, width: 100 });
+		try {
+			await act(async () => {
+				await Bun.sleep(20);
+				await setup.renderOnce();
+			});
+			const composer = setup.renderer.root.findDescendantById(
+				"new-session-view-composer"
+			);
+			expect(composer).toBeInstanceOf(TextareaRenderable);
+			if (!(composer instanceof TextareaRenderable)) {
+				throw new Error("The new-session composer did not render.");
+			}
+			const lines = setup.captureCharFrame().split("\n");
+			const noticeLine = lines.findIndex((line) =>
+				line.includes("This project is not trusted.")
+			);
+			expect(noticeLine).toBeGreaterThanOrEqual(
+				composer.screenY + composer.height
+			);
+		} finally {
+			await act(async () => setup.renderer.destroy());
+		}
+	});
 });
 
 describe("NewSessionView pinned Plugin Agent model preflight", () => {
