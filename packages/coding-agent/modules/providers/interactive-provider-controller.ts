@@ -19,6 +19,7 @@ import {
 import {
 	arePluginProviderRegistrationsBoundToTrustedOwners,
 	createProviderModelSelectionSnapshot,
+	isSameProviderModelIdentity,
 	type ProviderModelSelection,
 	type ProviderModelSelectionCandidate,
 	type ProviderModelSelectionSnapshot,
@@ -656,7 +657,19 @@ export const createInteractiveProviderController = (
 			if (selection === undefined) {
 				throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
 			}
-			return await action(candidate.model, selection);
+			await restoreModels();
+			assertProviderModelSelectionSnapshotCurrent(currentSnapshot);
+			const availableModels = await providers.getAvailable(
+				selection.providerId
+			);
+			assertProviderModelSelectionSnapshotCurrent(currentSnapshot);
+			const model = availableModels.find((availableModel) =>
+				isSameProviderModelIdentity(selection, availableModel)
+			);
+			if (model === undefined) {
+				throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+			}
+			return await action(model, selection);
 		});
 	const connectOpenAIOAuth = (
 		loginOptions: OpenAIBrowserLoginOptions = {}
