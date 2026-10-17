@@ -1,7 +1,4 @@
-import {
-	formatModelTokenCount,
-	formatModelUsdAmount,
-} from "@wincode/ai/model-usage";
+import { formatModelTokenCount, formatModelUsdAmount } from "@wincode/ai";
 import { isNull } from "@wincode/utils";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionUsageSummary } from "../../usage/session-usage";

@@ -1,4 +1,4 @@
-import { getModelContextTokens } from "@wincode/ai/model-usage";
+import { getModelContextTokens } from "@wincode/ai";
 import {
 	isBoolean,
 	isNull,

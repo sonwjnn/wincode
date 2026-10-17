@@ -19,7 +19,7 @@ import {
 	toSessionMessageId,
 	toSessionRecordId,
 } from "@wincode/agent-core";
-import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
+import { type ModelUsage, normalizeModelUsage } from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 

@@ -1,5 +1,5 @@
 import type { ChatEvent, ProviderCollection, ProviderModel } from "@wincode/ai";
-import { normalizeModelUsage } from "@wincode/ai/model-usage";
+import { normalizeModelUsage } from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import {
 	isAvailableProviderModelSelection,

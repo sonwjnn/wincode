@@ -1,5 +1,5 @@
-import type { ModelUsage } from "@wincode/ai/model-usage";
-import { modelUsageSchema } from "@wincode/ai/model-usage";
+import type { ModelUsage } from "@wincode/ai";
+import { modelUsageSchema } from "@wincode/ai";
 import {
 	isFiniteNonNegativeNumber,
 	isNonEmptyString,

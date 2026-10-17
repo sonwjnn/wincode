@@ -14,6 +14,7 @@ import {
 	toModelId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
+import type { ModelUsage } from "@wincode/ai";
 import {
 	type ChatRequest,
 	type CredentialStore,
@@ -24,7 +25,6 @@ import {
 	type ProviderCollection,
 	ProviderError,
 } from "@wincode/ai";
-import type { ModelUsage } from "@wincode/ai/model-usage";
 import { z } from "zod";
 
 const buildTurn = (tools: readonly ResolvedTool[] = []): AgentTurn => ({

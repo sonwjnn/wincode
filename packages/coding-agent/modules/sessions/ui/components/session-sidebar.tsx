@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { formatModelTokenCount } from "@wincode/ai/model-usage";
+import { formatModelTokenCount } from "@wincode/ai";
 import { isNull, isUndefined } from "@wincode/utils";
 import { useMemo } from "react";
 import { builtInAgents } from "@/modules/agents";

@@ -1,4 +1,4 @@
-import type { ModelUsage } from "@wincode/ai/model-usage";
+import type { ModelUsage } from "@wincode/ai";
 import type { ModelId, ModelStepId } from "./identifiers";
 
 export type { ModelStepId } from "./identifiers";

@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { formatModelTokenCount } from "@wincode/ai/model-usage";
+import { formatModelTokenCount } from "@wincode/ai";
 import { useState } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionCompaction } from "../../compaction";

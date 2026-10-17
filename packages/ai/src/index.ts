@@ -1,3 +1,6 @@
+export * from "./model-failures.ts";
+export * from "./model-output-limit.ts";
+export * from "./model-usage.ts";
 export * from "./sdk.ts";
 export * from "./sdk-providers/anthropic.ts";
 export * from "./sdk-providers/deepseek.ts";

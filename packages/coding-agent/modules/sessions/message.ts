@@ -15,8 +15,8 @@ import {
 	toSessionMessageId,
 	toSubmissionId,
 } from "@wincode/agent-core";
+import type { ModelUsage } from "@wincode/ai";
 import { type ThinkingLevel, thinkingLevelSchema } from "@wincode/ai";
-import type { ModelUsage } from "@wincode/ai/model-usage";
 import {
 	isArray,
 	isObjectLike,

@@ -8,9 +8,10 @@ import type {
 } from "@wincode/ai";
 import {
 	type ModelFailure,
+	type ModelUsage,
 	normalizeModelFailure,
-} from "@wincode/ai/model-failures";
-import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
+	normalizeModelUsage,
+} from "@wincode/ai";
 import {
 	getErrorMessage,
 	isError,

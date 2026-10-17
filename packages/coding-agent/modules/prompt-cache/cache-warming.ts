@@ -8,7 +8,7 @@ import {
 	calculateModelUsageCostUsd,
 	type ModelUsage,
 	normalizeModelUsage,
-} from "@wincode/ai/model-usage";
+} from "@wincode/ai";
 import { logger } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import {

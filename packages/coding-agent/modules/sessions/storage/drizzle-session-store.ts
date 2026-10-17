@@ -10,7 +10,7 @@ import {
 	toSessionMessageId,
 	toSessionRecordId,
 } from "@wincode/agent-core";
-import { modelUsageSchema } from "@wincode/ai/model-usage";
+import { modelUsageSchema } from "@wincode/ai";
 import {
 	isArray,
 	isNull,

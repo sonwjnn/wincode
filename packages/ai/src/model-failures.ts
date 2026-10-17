@@ -5,8 +5,8 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
-	omitUndefined,
-} from "@wincode/utils";
+} from "@wincode/utils/guards";
+import { omitUndefined } from "@wincode/utils/objects";
 
 import { z } from "zod";
 export const MODEL_FAILURE_VERSION = 1 as const;

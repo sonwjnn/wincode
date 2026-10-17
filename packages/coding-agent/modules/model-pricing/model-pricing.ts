@@ -1,5 +1,4 @@
-import type { ProviderModel } from "@wincode/ai";
-import type { ModelCost, ModelCostTier } from "@wincode/ai/model-usage";
+import type { ModelCost, ModelCostTier, ProviderModel } from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 
 /** Pricing copied from the exact Provider Model used by the Session. */

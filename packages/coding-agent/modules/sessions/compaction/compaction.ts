@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@wincode/ai";
-import { getModelFailureMessage } from "@wincode/ai/model-failures";
+import { getModelFailureMessage } from "@wincode/ai";
 import {
 	isNull,
 	isNumber,
