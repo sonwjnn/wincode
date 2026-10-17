@@ -1,15 +1,11 @@
-import type { AgentId } from "@wincode/agent-core";
 import { isObjectLike, isString, isUndefined } from "@wincode/utils";
 import { findFileMentionRanges } from "@/modules/file-mentions";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { getAgentColor } from "@/shared/providers/theme/themes";
-import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { ATTACHMENT_ID_DISPLAY_LENGTH } from "../../storage/attachment-store";
 import { MarkdownContent } from "./markdown-message-part";
 
 type UserMessageProps = {
-	agent: AgentId;
 	appliedSkill?: AppliedSkill;
 	submissionFailure?: string;
 	parts: SessionMessage["parts"];
@@ -106,14 +102,11 @@ const getImageBadgeKeys = (
 	});
 };
 export function UserMessage({
-	agent,
 	appliedSkill,
 	parts,
 	submissionFailure,
 }: UserMessageProps) {
 	const { colors } = useTheme();
-
-	const borderColor = getAgentColor(colors, agent);
 	const message = parts
 		.filter(isTextPart)
 		.map((part) => part.text)
@@ -125,18 +118,11 @@ export function UserMessage({
 
 	return (
 		<box alignItems="center" width="100%">
-			<BorderedContentBlock
-				borderColor={borderColor}
-				colors={colors}
-				contentBackgroundColor={colors.backgroundPanel}
-				contentGap={0}
-				customBorderChars={{
-					bottomLeft: "╹",
-					topLeft: "╻",
-				}}
+			<box
+				backgroundColor={colors.backgroundPanel}
+				flexDirection="column"
 				marginBottom={0}
-				paddingX={0}
-				paddingY={0}
+				width="100%"
 			>
 				{body && (
 					<box justifyContent="center" paddingX={2} paddingY={1} width="100%">
@@ -205,7 +191,7 @@ export function UserMessage({
 						))}
 					</box>
 				)}
-			</BorderedContentBlock>
+			</box>
 			{submissionFailure ? (
 				<box paddingX={2} width="100%">
 					<text fg={colors.error} truncate>

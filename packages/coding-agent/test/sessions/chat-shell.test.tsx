@@ -22,6 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	CliRenderEvents,
+	MarkdownRenderable,
 	RGBA,
 	type ScrollBoxRenderable,
 	TextareaRenderable,
@@ -394,6 +395,16 @@ const spanColumn = (setup: TestRendererSetup, text: string): number => {
  * Waits for a frame the transcript produces, so a scroll or expansion settles
  * before it is asserted instead of being read from the frame it started in.
  */
+const findMarkdownRenderables = (node: {
+	getChildren(): unknown[];
+}): MarkdownRenderable[] =>
+	node.getChildren().flatMap((child) => {
+		if (child instanceof MarkdownRenderable) {
+			return [child];
+		}
+		return findMarkdownRenderables(child as { getChildren(): unknown[] });
+	});
+
 const waitForFrameText = async (
 	setup: TestRendererSetup,
 	text: string,
@@ -513,6 +524,51 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+describe("ChatShell transcript Markdown streaming", () => {
+	test("only the latest assistant message in the active turn remains streaming", async () => {
+		const messages = [
+			userMessage("user-1"),
+			assistantMessage([{ text: "Completed answer", type: "text" }]),
+			userMessage("user-2"),
+			assistantMessage(
+				[{ text: "Current answer", type: "text" }],
+				"assistant-2"
+			),
+		];
+		const active = await renderChatShell(messages, {
+			height: 20,
+			isBusy: true,
+			width: 100,
+		});
+		const completed = await renderChatShell(messages, {
+			height: 20,
+			isBusy: false,
+			width: 100,
+		});
+
+		try {
+			const activeMarkdown = findMarkdownRenderables(
+				active.setup.renderer.root
+			).filter(({ content }) => content.includes("answer"));
+			const completedMarkdown = findMarkdownRenderables(
+				completed.setup.renderer.root
+			).filter(({ content }) => content.includes("answer"));
+			expect(activeMarkdown).toHaveLength(2);
+			expect(activeMarkdown.map(({ streaming }) => streaming)).toEqual([
+				false,
+				true,
+			]);
+			expect(completedMarkdown.map(({ streaming }) => streaming)).toEqual([
+				false,
+				false,
+			]);
+		} finally {
+			active.setup.renderer.destroy();
+			completed.setup.renderer.destroy();
+		}
+	});
+});
+
 describe("ChatShell composer focus", () => {
 	test("routes typing to the composer when terminal focus returns", async () => {
 		const { setup } = await renderChatShell([], { height: 20, width: 100 });
@@ -1558,7 +1614,7 @@ describe("ChatShell shell output blocks", () => {
 		});
 		const { holder, setup } = await renderChatShell(
 			[assistantMessage([alpha, beta, streamedText("first stream")])],
-			{ height: 60, width: 100 }
+			{ height: 60, isBusy: true, width: 100 }
 		);
 
 		try {

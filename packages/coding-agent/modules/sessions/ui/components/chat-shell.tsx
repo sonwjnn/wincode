@@ -348,6 +348,7 @@ export function ChatShell({
 									footerMessage={footerMessages.get(turn.id)}
 									messages={turn.messages}
 									onRetry={canRetryTurn ? onRetry : undefined}
+									streaming={isBusy && turn.id === turns.at(-1)?.id}
 								/>
 							</box>
 						);
@@ -361,7 +362,6 @@ export function ChatShell({
 				backgroundColor={colors.background}
 				flexDirection="column"
 				flexShrink={0}
-				gap={1}
 				paddingBottom={1}
 				width="100%"
 			>

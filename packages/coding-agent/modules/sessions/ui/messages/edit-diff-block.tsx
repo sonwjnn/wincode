@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { type BoxRenderable, pathToFiletype } from "@opentui/core";
+import { pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
 import {
 	isArray,
@@ -8,7 +8,7 @@ import {
 	isUndefined,
 	omitUndefined,
 } from "@wincode/utils";
-import { type ReactNode, useMemo, useRef, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { type EditDiff, isRenderableEditDiff } from "@/modules/tools";
 import { stripControlCharacters } from "@/shared/display-sanitize";
@@ -32,7 +32,6 @@ type EditDiffBlockProps = {
 	part: EditToolPart;
 };
 
-const DIFF_BREAKPOINT_COLUMNS = 120;
 const DIFF_COLLAPSE_LINES = 30;
 const DIFF_BLOCK_PADDING_X = 2;
 
@@ -380,8 +379,6 @@ const getMultiEditStatus = (
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: output states intentionally share one compact diff/status renderer.
 function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 	const { colors } = useTheme();
-	const blockRef = useRef<BoxRenderable>(null);
-	const [blockWidth, setBlockWidth] = useState(0);
 	const output = getOutput(part);
 	const result = isEditOutputWithDiff(part);
 	const path = formatEditPath(result?.path ?? getEditPath(part, output));
@@ -435,25 +432,11 @@ function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 		return <EmptyPatchStatus colors={colors} editDiff={editDiff} path={path} />;
 	}
 
-	const handleBlockResize = () => {
-		const width = blockRef.current?.width ?? 0;
-		if (width <= 0) {
-			return;
-		}
-		queueMicrotask(() => {
-			setBlockWidth((current) => (current === width ? current : width));
-		});
-	};
-	const view = blockWidth > DIFF_BREAKPOINT_COLUMNS ? "split" : "unified";
+	const view = "unified";
 	const syntaxStyle = resolveSyntaxStyle(colors);
 
 	return (
-		<BorderedContentBlock
-			blockRef={blockRef}
-			colors={colors}
-			onSizeChange={handleBlockResize}
-			paddingX={DIFF_BLOCK_PADDING_X}
-		>
+		<BorderedContentBlock colors={colors} paddingX={DIFF_BLOCK_PADDING_X}>
 			<DiffHeader
 				additions={editDiff.additions}
 				colors={colors}

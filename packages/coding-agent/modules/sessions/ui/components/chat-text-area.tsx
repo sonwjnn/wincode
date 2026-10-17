@@ -1111,13 +1111,10 @@ export function ChatTextArea({
 				contentJustifyContent="center"
 				customBorderChars={RoundedBorderChars}
 				marginBottom={0}
-				paddingX={2}
+				paddingX={1}
 				paddingY={0}
 			>
 				<box flexDirection="row" gap={1} width="100%">
-					<text fg={colors.textMuted} selectable={false}>
-						›
-					</text>
 					<textarea
 						flexGrow={1}
 						focused={isFocused}
