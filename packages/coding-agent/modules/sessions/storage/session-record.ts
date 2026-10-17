@@ -21,13 +21,7 @@ import {
 	type SessionToolCallPart,
 	toSessionRecordId,
 } from "@wincode/agent-core";
-import {
-	type ChatModelSelection,
-	modelSelectionSchema,
-	normalizeThinkingSelection,
-	type ThinkingSelection,
-	thinkingLevelSchema,
-} from "@wincode/ai/models";
+import { type ThinkingSelection, thinkingLevelSchema } from "@wincode/ai";
 import {
 	isArray,
 	isFiniteNonNegativeNumber,
@@ -35,12 +29,17 @@ import {
 	isNonNegativeInteger,
 	isNull,
 	isObjectLike,
+	isPlainObject,
 	isUndefined,
 	omitUndefined,
 	pickTruthy,
 } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import type { UnknownRecord } from "type-fest";
+import {
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import { codingToolNames } from "@/modules/tools";
 import { attachmentReferenceToFilePart } from "../attachment-reference";
 import type {
@@ -63,6 +62,7 @@ const isRecordModel = (value: unknown): boolean => {
 	}
 	const model = value as {
 		modelId?: unknown;
+		pluginProviderSource?: unknown;
 		providerId?: unknown;
 		thinkingLevel?: unknown;
 	};
@@ -72,10 +72,25 @@ const isRecordModel = (value: unknown): boolean => {
 	if (!isNonEmptyString(model.providerId)) {
 		return false;
 	}
+	const pluginProviderSource = model.pluginProviderSource;
+	const validPluginProviderSource =
+		isUndefined(pluginProviderSource) ||
+		(isPlainObject(pluginProviderSource) &&
+			Object.keys(pluginProviderSource).every(
+				(key) => key === "pluginId" || key === "sourceIdentity"
+			) &&
+			isNonEmptyString(pluginProviderSource.pluginId) &&
+			isNonEmptyString(pluginProviderSource.sourceIdentity));
+	if (!validPluginProviderSource) {
+		return false;
+	}
 	if (
 		Object.keys(model).some(
 			(key) =>
-				key !== "modelId" && key !== "providerId" && key !== "thinkingLevel"
+				key !== "modelId" &&
+				key !== "pluginProviderSource" &&
+				key !== "providerId" &&
+				key !== "thinkingLevel"
 		)
 	) {
 		return false;
@@ -249,13 +264,12 @@ const isStaticToolName = (name: string): name is StaticToolName =>
 
 const modelSelectionForRecord = (
 	model: SessionRecord["model"]
-): ChatModelSelection | undefined => {
-	const parsed = modelSelectionSchema.safeParse({
+): ProviderModelSelection | undefined =>
+	normalizeProviderModelSelection({
 		modelId: model.modelId,
+		pluginProviderSource: model.pluginProviderSource,
 		providerId: model.providerId,
-	});
-	return parsed.success ? parsed.data : undefined;
-};
+	}) ?? undefined;
 
 const metadataForRecord = (
 	record: Pick<SessionRecord, "agentId" | "model">,
@@ -263,17 +277,13 @@ const metadataForRecord = (
 ): SessionMessageMetadata | undefined => {
 	let model = modelSelectionForRecord(record.model);
 	if (!isUndefined(metadata?.model)) {
-		const parsedModel = modelSelectionSchema.safeParse(metadata.model);
-		model = parsedModel.success ? parsedModel.data : undefined;
+		model = normalizeProviderModelSelection(metadata.model) ?? undefined;
 	}
 	const thinkingLevelValue =
 		metadata?.thinkingLevel ?? record.model.thinkingLevel;
 	const parsedThinkingLevel = thinkingLevelSchema.safeParse(thinkingLevelValue);
 	const choice: ThinkingSelection = parsedThinkingLevel.success
 		? { thinkingLevel: parsedThinkingLevel.data }
-		: {};
-	const normalizedChoice = model
-		? normalizeThinkingSelection(model, choice)
 		: {};
 	const parsed = sessionMessageMetadataSchema.safeParse({
 		...pickTruthy({ agent: metadata?.agent ?? record.agentId }),
@@ -287,7 +297,7 @@ const metadataForRecord = (
 			submissionId: metadata?.submissionId,
 			submissionStatus: metadata?.submissionStatus,
 			usage: metadata?.usage,
-			...normalizedChoice,
+			...choice,
 		}),
 	});
 	return parsed.success ? parsed.data : undefined;
@@ -495,7 +505,10 @@ export const buildUserSessionRecord = ({
 }: {
 	agentId: AgentId;
 	message: SessionMessage;
-	model: Pick<SessionRecord["model"], "modelId" | "providerId">;
+	model: Pick<
+		SessionRecord["model"],
+		"modelId" | "pluginProviderSource" | "providerId"
+	>;
 	turnId: AgentTurnId;
 	thinkingLevel?: SessionRecord["model"]["thinkingLevel"];
 }): SessionRecord => {
@@ -513,6 +526,7 @@ export const buildUserSessionRecord = ({
 			modelId: model.modelId,
 			providerId: model.providerId,
 			...omitUndefined({
+				pluginProviderSource: model.pluginProviderSource,
 				thinkingLevel: thinkingLevel ?? message.metadata?.thinkingLevel,
 			}),
 		},

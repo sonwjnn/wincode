@@ -1,4 +1,3 @@
-import type { Connections } from "@wincode/ai/connections";
 import { isNull } from "@wincode/utils";
 import {
 	createContext,
@@ -9,7 +8,6 @@ import {
 	useMemo,
 	useState,
 } from "react";
-import { useConnections } from "@/modules/connections";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { useConfig } from "@/shared/config/config-provider";
 import type { ConfigRuntime } from "@/shared/config/config-store";
@@ -41,17 +39,11 @@ export const claimAgentDiagnosticsToast = (configStore: object): boolean => {
 
 export const resolveInteractiveAgentRegistry = async (
 	config: ConfigRuntime,
-	connections: Connections,
 	pluginRuntime: Pick<PluginRuntime, "getAgentRegistrations"> | undefined
-): Promise<AgentRegistry> => {
-	const providers = await connections.listProviders();
-	return resolveAgentRegistry(config, {
-		connectedProviderIds: new Set(
-			providers.filter(({ connected }) => connected).map(({ id }) => id)
-		),
+): Promise<AgentRegistry> =>
+	resolveAgentRegistry(config, {
 		pluginAgentRegistrations: pluginRuntime?.getAgentRegistrations(),
 	});
-};
 
 /**
  * Loads the Agent Registry from the active ConfigRuntime and PluginRuntime.
@@ -60,7 +52,6 @@ export const resolveInteractiveAgentRegistry = async (
  */
 export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 	const config = useConfig();
-	const connections = useConnections();
 	const toast = useToast();
 	const pluginRuntime = getInteractivePluginRuntime();
 	const [registry, setRegistry] = useState<AgentRegistry | null>(null);
@@ -72,7 +63,7 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 		const resolveCurrentRegistry = async (
 			_refreshRevision: number
 		): Promise<AgentRegistry> =>
-			resolveInteractiveAgentRegistry(config, connections, pluginRuntime);
+			resolveInteractiveAgentRegistry(config, pluginRuntime);
 		resolveCurrentRegistry(revision)
 			.then((resolved) => {
 				if (!ignore) {
@@ -83,7 +74,7 @@ export function AgentRegistryProvider({ children }: { children: ReactNode }) {
 		return () => {
 			ignore = true;
 		};
-	}, [config, connections, pluginRuntime, revision]);
+	}, [config, pluginRuntime, revision]);
 
 	useEffect(() => {
 		if (

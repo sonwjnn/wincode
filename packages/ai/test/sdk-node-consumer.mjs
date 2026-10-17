@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createProviderCollection } from "@wincode/ai/sdk";
+import { createProviderCollection } from "@wincode/ai";
 
 const sdk = createProviderCollection();
 sdk.register({

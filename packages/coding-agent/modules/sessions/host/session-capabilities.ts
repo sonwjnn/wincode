@@ -1,12 +1,10 @@
 import type { Database } from "bun:sqlite";
-import type { AgentRuntime } from "@wincode/agent-core";
-import { type Connections, createConnections } from "@wincode/ai/connections";
+import type { ProviderCollection } from "@wincode/ai";
 import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,
 	resolveAgentRegistry,
 } from "@/modules/agents/registry";
-import type { ModelPricingTable } from "@/modules/model-pricing/model-pricing";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { toWorkspaceId, type WorkspaceId } from "@/shared/identifiers";
@@ -16,8 +14,9 @@ import {
 } from "../compaction/compaction";
 import { estimateCompactionTokens } from "../compaction/config";
 import { createCompactionSettingsOperations } from "../compaction/settings-operations";
-import { createDirectSummaryGenerator } from "../compaction/summary-generator";
 import { resolveTurnTools, type TurnToolResolver } from "../hooks/runtime-turn";
+import type { SessionSdkPluginProviderSource } from "../plugin-provider-source";
+import { createDefaultSessionProviderCollection } from "../provider-collection";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
@@ -42,27 +41,6 @@ import type { SessionStore } from "../storage/session-store";
 import { createSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities, SessionHostManager } from "./types";
 
-/** The table compaction settings resolve against when a caller supplies none. */
-const EMPTY_MODEL_PRICING: ModelPricingTable = Object.freeze({});
-
-/**
- * The Connections a capability reads: the caller's source when it has one,
- * otherwise one Connections this process resolves on first read, so every
- * capability in one assembly reads the same instance.
- */
-export const resolveConnectionsSource = (
-	live?: () => Connections
-): (() => Connections) => {
-	if (live !== undefined) {
-		return live;
-	}
-	let fallback: Connections | undefined;
-	return () => {
-		fallback ??= createConnections();
-		return fallback;
-	};
-};
-
 /** The Plugin runtime a Session runs on, and who closes it. */
 export type SessionPluginRuntime = Readonly<{
 	/** Whether the caller that passes this runtime also loaded it. */
@@ -72,20 +50,22 @@ export type SessionPluginRuntime = Readonly<{
 
 export type SessionCapabilitiesOptions = Readonly<{
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
+	createProviderCollection?: (
+		pluginRuntime?: PluginRuntime,
+		sessionId?: string,
+		allowedPluginProviderIds?: readonly string[],
+		allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[]
+	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	database?: SessionDatabase;
 	databasePath?: string;
 	/** Reads the current configuration, resolved per read so a reload lands. */
 	getConfig: () => ConfigRuntime;
-	/** Reads the current Connections, resolved per read. */
-	getConnections?: () => Connections;
 	/**
 	 * Reads the current Plugin runtime, falling back to the resolved one while
 	 * the source has none: Interactive Mode replaces its process runtime on
 	 * Resource Reload and may not have one yet when a Session opens.
 	 */
 	getPluginRuntime?: () => PluginRuntime | undefined;
-	/** Reads the current Model Catalog pricing, resolved per read. */
-	getPricing?: () => ModelPricingTable;
 	/** Reads the current Agent registry, resolved per read. */
 	getRegistry?: () => AgentRegistry | null;
 	/** Reads the Plugin-facing Session SDK operations while the Session is open. */
@@ -96,7 +76,6 @@ export type SessionCapabilitiesOptions = Readonly<{
 	 * another Session still uses.
 	 */
 	plugin: SessionPluginRuntime;
-	runtimeFactory?: () => AgentRuntime;
 	sessionHostManager?: SessionHostManager;
 	store?: SessionStore;
 	turnToolResolver?: TurnToolResolver;
@@ -169,14 +148,25 @@ const openSessionDatabase = async ({
  * the returned shutdown function; injected resources remain caller-owned.
  */
 export const createSessionCapabilities = async ({
-	getConnections: providedGetConnections,
 	getConfig: providedGetConfig,
+	createProviderCollection: providerCollectionFactory = (
+		pluginRuntime,
+		sessionId,
+		allowedPluginProviderIds,
+		allowedPluginProviderSources
+	) =>
+		createDefaultSessionProviderCollection(pluginRuntime, sessionId, {
+			...(allowedPluginProviderIds === undefined
+				? {}
+				: { allowedPluginProviderIds }),
+			...(allowedPluginProviderSources === undefined
+				? {}
+				: { allowedPluginProviderSources }),
+		}),
 	capabilityCeiling,
 	database: providedDatabase,
 	databasePath,
-	getPricing: providedGetPricing,
 	getRegistry: providedGetRegistry,
-	runtimeFactory,
 	store: providedStore,
 	plugin,
 	getPluginRuntime: providedGetPluginRuntime,
@@ -193,8 +183,6 @@ export const createSessionCapabilities = async ({
 		if (providedDatabase === undefined && providedStore === undefined) {
 			ownedDatabase = await openSessionDatabase({ databasePath, workspace });
 		}
-		/** The Connections a capability reads, resolved per read. */
-		const readConnections = resolveConnectionsSource(providedGetConnections);
 		const database = providedDatabase ?? ownedDatabase?.db;
 		const store =
 			providedStore ??
@@ -216,25 +204,14 @@ export const createSessionCapabilities = async ({
 			const registry = await resolveAgentRegistry(readConfigRuntime(), {
 				capabilityCeiling,
 				pluginAgentRegistrations: pluginRuntime.getAgentRegistrations(),
-				connectedProviderIds: new Set(
-					(await readConnections().listProviders())
-						.filter((provider) => provider.connected)
-						.map((provider) => provider.id)
-				),
 			});
 			return () => registry;
 		};
 		const getRegistry = await resolveRegistry();
-		const pricing = (): ModelPricingTable =>
-			providedGetPricing?.() ?? EMPTY_MODEL_PRICING;
 		const compaction: SessionCompactionModule = createSessionCompaction({
 			attachmentStore: store.attachmentStore,
 			estimateTokens: estimateCompactionTokens,
 			store,
-			// The summary generator resolves its Model Target through the
-			// Connections facade, which reads stored credentials per call, so a
-			// reconnected provider reaches compaction without rebuilding the module.
-			summaryGenerator: createDirectSummaryGenerator(readConnections()),
 		});
 		const sessionHostManager = sessionHostManagerFor(
 			providedSessionHostManager,
@@ -263,26 +240,22 @@ export const createSessionCapabilities = async ({
 		const getPluginRuntime = (): PluginRuntime =>
 			providedGetPluginRuntime?.() ?? pluginRuntime;
 		const capabilities: SessionCapabilities = {
+			createProviderCollection: providerCollectionFactory,
 			getCapabilityCeiling: () => capabilityCeiling,
-			getModelPricingTable: pricing,
 			getCompactionModule: () => compaction,
-			getCompactionSettings: (model) =>
+			getCompactionSettings: (model, providerModel) =>
 				createCompactionSettingsOperations({
-					// The store follows the configuration a capability reads, so a
-					// Resource Reload that swaps it lands here too.
+					// A Resource Reload that swaps the ConfigStore lands on the next read.
 					configStore: providedGetConfig().configStore,
-					pricing: pricing(),
 					workspace,
-				}).getCompactionSettings(model),
+				}).getCompactionSettings(model, providerModel),
 			getConfig: readConfigRuntime,
-			getConnections: readConnections,
 			getRegistry,
 			getStore: () => store,
 			getSessionHostManager: () => sessionHostManager,
 			...(getSessionSdk === undefined ? {} : { getSessionSdk }),
 			getPluginRuntime,
 			getTurnToolResolver: () => turnToolResolver ?? resolveTurnTools,
-			...(runtimeFactory === undefined ? {} : { getRuntime: runtimeFactory }),
 		};
 		return {
 			capabilities,

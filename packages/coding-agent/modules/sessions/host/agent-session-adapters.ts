@@ -2,6 +2,10 @@ import type { AgentId } from "@wincode/agent-core";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
+import {
+	isAvailableProviderModelSelection,
+	isSameProviderModelIdentity,
+} from "@/modules/providers/provider-model-selection";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
 import {
 	buildSkillToolDefinition,
@@ -17,16 +21,21 @@ import type {
 	SessionSkillResolution,
 } from "../agent-session/types";
 import { SessionCompactionError } from "../compaction/error";
+import { createProviderSummaryGenerator } from "../compaction/summary-generator";
 import type { SessionMessage } from "../message";
 import { strictThinkingSelection } from "../selection";
 import {
 	type AgentSessionTurnRunnerOptions,
+	assertPluginProviderSelectionOwner,
 	createAgentSessionTurnRunner,
 } from "./agent-session-turn-runner";
 
 /** The Host inputs the adapters need on top of one Agent Turn's. */
 export type AgentSessionAdaptersOptions = AgentSessionTurnRunnerOptions &
-	Readonly<{ isShutDown: () => boolean }>;
+	Readonly<{
+		isShutDown: () => boolean;
+		withSessionWork: (action: () => Promise<void>) => Promise<void>;
+	}>;
 
 const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
 	if (catalog.diagnostics.length === 0) {
@@ -96,8 +105,9 @@ export const createAgentSessionAdapters = (
 	const {
 		cacheWarming,
 		capabilities,
-		googleCachedContentResourceManager,
+		providerCollection,
 		isShutDown,
+		withSessionWork,
 		sessionId,
 		statefulAgent,
 	} = options;
@@ -108,10 +118,20 @@ export const createAgentSessionAdapters = (
 	const turnRunnerInputs: AgentSessionTurnRunnerOptions = {
 		cacheWarming,
 		capabilities,
-		googleCachedContentResourceManager,
+		providerCollection,
 		sessionId,
 		statefulAgent,
 	};
+	const summaryGenerator = createProviderSummaryGenerator(
+		providerCollection,
+		(model) =>
+			assertPluginProviderSelectionOwner(
+				model,
+				capabilities,
+				providerCollection,
+				sessionId
+			)
+	);
 	const assertHostOpen = (): void => {
 		if (isShutDown()) {
 			throw new SessionCompactionError(
@@ -172,6 +192,70 @@ export const createAgentSessionAdapters = (
 		}
 		return activateExplicitSkill(parsedSkill.data.name, execution);
 	};
+	const resolveSubmission: AgentSessionPorts["resolveSubmission"] = (input) => {
+		const selection = strictThinkingSelection(input.thinkingLevel);
+		strictThinkingSelection(input.sessionThinkingLevel);
+		const registry = capabilities.getRegistry();
+		if (isNull(registry)) {
+			return input;
+		}
+		const effective = resolveEffectiveAgentSelection(
+			registry,
+			input.agent,
+			input.model,
+			selection,
+			true,
+			input.selectionOverride
+		);
+		if (effective.unavailableReason !== undefined) {
+			throw new Error(effective.unavailableReason);
+		}
+		strictThinkingSelection(effective.thinkingLevel);
+		const effectiveModel =
+			effective.model.pluginProviderSource === undefined &&
+			input.model.pluginProviderSource !== undefined &&
+			isSameProviderModelIdentity(effective.model, input.model)
+				? {
+						...effective.model,
+						pluginProviderSource: input.model.pluginProviderSource,
+					}
+				: effective.model;
+		const {
+			resolvedAgent: _resolvedAgent,
+			selectionOverride: _selectionOverride,
+			thinkingLevel: _thinkingLevel,
+			...unresolvedInput
+		} = input;
+		return {
+			...unresolvedInput,
+			agent: effective.agent,
+			model: effectiveModel,
+			...omitUndefined({
+				resolvedAgent: effective.resolvedAgent,
+				thinkingLevel: effective.thinkingLevel,
+			}),
+		};
+	};
+	const assertProviderModelSelection: AgentSessionPorts["assertProviderModelSelection"] =
+		(input) =>
+			withSessionWork(async () => {
+				for (const model of [input.model, input.sessionModel]) {
+					assertPluginProviderSelectionOwner(
+						model,
+						capabilities,
+						providerCollection,
+						sessionId
+					);
+				}
+				const availableModels = await providerCollection.getAvailable(
+					input.model.providerId
+				);
+				if (!isAvailableProviderModelSelection(input.model, availableModels)) {
+					throw new Error(
+						`Provider Model ${input.model.providerId}/${input.model.modelId} is unavailable in this Session Host.`
+					);
+				}
+			});
 
 	return {
 		inputScheduler: statefulAgent,
@@ -206,49 +290,20 @@ export const createAgentSessionAdapters = (
 			compact: (input) =>
 				capabilities.getCompactionModule().compact({
 					...input,
+					...omitUndefined({ summaryGenerator }),
 					assertAuthority: assertHostOpen,
 				}),
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
 			needsCompaction: (messages, settings) =>
 				capabilities.getCompactionModule().needsCompaction(messages, settings),
 		},
-		resolveSubmission: (input) => {
-			const selection = strictThinkingSelection(
-				input.model,
-				input.thinkingLevel
-			);
-			strictThinkingSelection(input.sessionModel, input.sessionThinkingLevel);
-			const registry = capabilities.getRegistry();
-			if (isNull(registry)) {
-				return input;
-			}
-			const effective = resolveEffectiveAgentSelection(
-				registry,
-				input.agent,
-				input.model,
-				selection,
-				true,
-				input.selectionOverride
-			);
-			strictThinkingSelection(effective.model, effective.thinkingLevel);
-			const {
-				resolvedAgent: _resolvedAgent,
-				selectionOverride: _selectionOverride,
-				thinkingLevel: _thinkingLevel,
-				...unresolvedInput
-			} = input;
-			return {
-				...unresolvedInput,
-				agent: effective.agent,
-				model: effective.model,
-				...omitUndefined({
-					resolvedAgent: effective.resolvedAgent,
-					thinkingLevel: effective.thinkingLevel,
-				}),
-			};
-		},
+		resolveSubmission,
+		assertProviderModelSelection,
 		resolveCompactionSettings: (model) =>
-			capabilities.getCompactionSettings(model),
+			capabilities.getCompactionSettings(
+				model,
+				providerCollection.getModel(model.providerId, model.modelId) ?? null
+			),
 		resolveFileMentions: (text) => resolveFileMentionParts(text),
 		turnRunner: createAgentSessionTurnRunner(turnRunnerInputs),
 		skills: { createTurnSkill, resolveSkill },

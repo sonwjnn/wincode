@@ -6,7 +6,11 @@ import type {
 	ToolCallOutput,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type {
+	Provider,
+	ProviderModelSelection,
+	ThinkingLevel,
+} from "@wincode/ai";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type {
@@ -77,6 +81,24 @@ export type PluginConfigFileStore = Readonly<{
 		value: PluginJsonValue | undefined,
 		targetPath?: string
 	) => Promise<PluginConfigSnapshot>;
+}>;
+
+export type PluginProviderConnectContext = Readonly<{
+	requestTextInput: (
+		prompt: string,
+		signal: AbortSignal
+	) => Promise<string | undefined>;
+	signal: AbortSignal;
+}>;
+
+/** A trusted Plugin's factory and host-mediated connection interaction. */
+export type PluginProviderRegistration = Readonly<{
+	connect: (
+		context: PluginProviderConnectContext
+	) => Promise<PluginJsonValue | undefined>;
+	createProvider: () => Provider;
+	displayName: string;
+	providerId: string;
 }>;
 
 export type PluginStatus = "idle" | "pending" | "success" | "warning" | "error";
@@ -248,6 +270,7 @@ export type PluginProcessStartHook = (
 export type PluginDefinitionAPI = PluginRegistrationAPI &
 	Readonly<{
 		secrets: PluginSecretStore;
+		registerProvider: (provider: PluginProviderRegistration) => void;
 		registerMcpServer: (name: string, config: PluginJsonValue) => void;
 		registerAgent: (agent: PluginAgentRegistration) => void;
 		registerResource: (name: string, resource: unknown) => void;
@@ -262,7 +285,7 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 export type PluginAPI = Readonly<{
 	definePlugin: (identity: Readonly<{ id: string }>) => PluginDefinitionAPI;
 	/** Set the focused Interactive composer model for future Submissions. */
-	setModel: (model: ChatModelSelection) => Promise<boolean>;
+	setModel: (model: ProviderModelSelection) => Promise<boolean>;
 	/** Set or clear the focused composer ThinkingLevel for future Submissions. */
 	setThinkingLevel: (level: ThinkingLevel | undefined) => void;
 }>;

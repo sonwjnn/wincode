@@ -4,10 +4,7 @@ const restoreEnvironment = createEnvironmentRestorer([
 	"WINCODE_E2E_HOME",
 	"WINCODE_E2E_WORKSPACE",
 	"WINCODE_LOCAL_DB_PATH",
-	"WINCODE_MODEL_PRICING_OFFLINE",
 ]);
-
-process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, expect, mock, test } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -18,7 +15,20 @@ import {
 	createOperationalFailure,
 	type SessionRecord,
 } from "@wincode/agent-core";
+import type { Provider, ProviderModel } from "@wincode/ai";
 import { act } from "react";
+import {
+	createPluginRuntime,
+	type LoadedPlugin,
+	type PluginProviderDescriptor,
+	type PluginRuntime,
+} from "@/modules/plugins/runtime";
+import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
+import type { SessionSdkPluginProviderSource } from "@/modules/sessions/plugin-provider-source";
+import {
+	createInteractiveSessionProviderCollection,
+	pluginProvidersFromRuntime,
+} from "@/modules/sessions/provider-collection";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
@@ -31,14 +41,19 @@ import {
 	SessionWriterLockFailureError,
 } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionId } from "@/shared/identifiers";
-import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientRecorder,
-	installFakeModelClient,
+	getInteractiveRuntimeContext,
+	setInteractiveRuntimeContext,
+} from "@/shared/runtime-context";
+import {
+	createFakeProviderCollection,
+	createFakeProviderRecorder,
+	installFakeProviderRecorder,
 } from "@/test/support/e2e-fake-runtime";
 import {
 	agentId,
 	agentTurnId,
+	modelId,
 	sessionId,
 	sessionMessageId,
 	sessionRecordId,
@@ -52,7 +67,10 @@ const databasePath = path.join(testDirectory, "conversation.sqlite");
 process.env.WINCODE_LOCAL_DB_PATH = databasePath;
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
-setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
+setInteractiveRuntimeContext({
+	args: [],
+	cwd: testDirectory,
+});
 const aliasDatabasePath = path.join(
 	testDirectory,
 	"conversation-owner-alias.sqlite"
@@ -66,8 +84,8 @@ afterAll(async () => {
 	await fs.rm(testDirectory, { force: true, recursive: true });
 });
 
-const recorder = createFakeModelClientRecorder();
-installFakeModelClient(recorder);
+const recorder = createFakeProviderRecorder();
+installFakeProviderRecorder(recorder);
 
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import {
@@ -191,6 +209,294 @@ const commitInterruptedHistoryRecord = async (
 	});
 };
 
+type CurrentAgentPinActivity = {
+	collectionConstructions: number;
+	credentialReads: number;
+	modelStoreReads: number;
+	modelDiscoveryCalls: number;
+	providerConstructions: number;
+	availabilityCalls: number;
+	streamCalls: number;
+};
+
+const createCurrentAgentPinFixture = (ownerCount: number) => {
+	const agentIdValue = agentId("session-agent-pin");
+	const providerId = "session_agent_pin_provider";
+	const pluginId = "session-agent-pin-plugin";
+	const sourceIdentity = path.join(testDirectory, "session-agent-provider.ts");
+	const selectedModel = {
+		...createE2ePricing(200_000),
+		modelId: modelId("session-agent-pin-model"),
+		providerId,
+		protocolId: "fake-session-agent-pin-provider",
+	};
+	const activity: CurrentAgentPinActivity = {
+		availabilityCalls: 0,
+		collectionConstructions: 0,
+		credentialReads: 0,
+		modelStoreReads: 0,
+		modelDiscoveryCalls: 0,
+		providerConstructions: 0,
+		streamCalls: 0,
+	};
+	const provider: Provider = {
+		discoverModels: async () => {
+			activity.modelDiscoveryCalls += 1;
+			return [selectedModel];
+		},
+		id: providerId,
+		models: [selectedModel],
+		resolveAuthorization: ({ credential }) =>
+			credential === undefined ? null : { authorization: credential },
+		async *streamChat() {
+			activity.streamCalls += 1;
+			yield { delta: "existing Agent pin succeeded", type: "text-delta" };
+			yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+			yield { type: "finish" };
+		},
+	};
+	const registrations = Array.from(
+		{ length: ownerCount },
+		(_, index): PluginProviderDescriptor => ({
+			connect: async () => undefined,
+			createProvider: () => {
+				activity.providerConstructions += 1;
+				return provider;
+			},
+			displayName: `Session Agent Pin Provider ${index}`,
+			pluginId: `${pluginId}-${index}`,
+			providerId,
+			sourceIdentity: `${sourceIdentity}-${index}`,
+			sourcePath: sourceIdentity,
+		})
+	);
+	const pluginRuntime = createPluginRuntime(
+		registrations.map(
+			(registration, index): LoadedPlugin => ({
+				commands: [],
+				id: `${pluginId}-${index}`,
+				providers: [registration],
+				sourcePath: sourceIdentity,
+				tools: [],
+				workspace: testDirectory,
+			})
+		),
+		[]
+	);
+	const configDocument = JSON.stringify({
+		agents: {
+			[agentIdValue]: {
+				description: "Uses the exact current Plugin Provider pin.",
+				instructions: "Use the selected Provider Model.",
+				model: `${providerId}/${selectedModel.modelId}`,
+				role: "primary",
+			},
+		},
+		default_agent: agentIdValue,
+	});
+	const createProviderCollection = async (
+		runtime: PluginRuntime | undefined,
+		scopedSessionId: string | undefined,
+		allowedPluginProviderIds?: readonly string[],
+		allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[]
+	) => {
+		activity.collectionConstructions += 1;
+		const collection = await createInteractiveSessionProviderCollection({
+			credentialStore: {
+				delete: async () => undefined,
+				get: async () => {
+					activity.credentialReads += 1;
+					return "fake-session-agent-pin-credential";
+				},
+				set: async () => undefined,
+			},
+			modelStore: {
+				get: async () => {
+					activity.modelStoreReads += 1;
+					return;
+				},
+				set: async () => undefined,
+			},
+			pluginProviders: pluginProvidersFromRuntime(
+				runtime,
+				scopedSessionId,
+				allowedPluginProviderIds,
+				allowedPluginProviderSources
+			),
+		});
+		const getAvailable = collection.getAvailable.bind(collection);
+		return {
+			...collection,
+			getAvailable: async () => {
+				activity.availabilityCalls += 1;
+				return await getAvailable();
+			},
+		};
+	};
+	return {
+		activity,
+		configDocument,
+		createProviderCollection,
+		pluginRuntime,
+		providerId,
+		selectedModel,
+		sessionAgentId: agentIdValue,
+	};
+};
+
+for (const [ownerCount, ownerState] of [
+	[0, "missing"],
+	[2, "ambiguous"],
+] as const) {
+	test(
+		`keeps existing Sessions read-only before Provider SDK side effects for a ${ownerState} current Agent-pin owner`,
+		async () => {
+			const fixture = createCurrentAgentPinFixture(ownerCount);
+			const previousRuntimeContext = getInteractiveRuntimeContext();
+			const { id: currentAgentPinSessionId } = await store.createEmptySession({
+				model: E2E_MODEL,
+			});
+			let setup: TestRendererSetup | undefined;
+			try {
+				const rendered = await renderSession({
+					configDocument: fixture.configDocument,
+					createProviderCollection: fixture.createProviderCollection,
+					pluginRuntime: fixture.pluginRuntime,
+					pricing: createE2ePricing(200_000),
+					sessionId: currentAgentPinSessionId,
+				});
+				setup = rendered.setup;
+				await rendered.registryReady;
+				await waitForSessionFrame(
+					setup,
+					(frame) =>
+						frame.includes("Stored Session History · Read-only") &&
+						frame.includes("no matching trusted source")
+				);
+				expect(fixture.activity).toMatchObject({
+					availabilityCalls: 0,
+					collectionConstructions: 0,
+					credentialReads: 0,
+					modelDiscoveryCalls: 0,
+					modelStoreReads: 0,
+					providerConstructions: 0,
+					streamCalls: 0,
+				});
+			} finally {
+				cleanupSessionRender();
+				setup?.renderer.destroy();
+				await getInteractiveSessionHostManager().releaseView(
+					currentAgentPinSessionId
+				);
+				await fixture.pluginRuntime.shutdown();
+				setInteractiveRuntimeContext(previousRuntimeContext);
+			}
+		},
+		{ timeout: 15_000 }
+	);
+}
+
+test("keeps ownerless historical selection read-only instead of rebinding to the current Agent pin", async () => {
+	const fixture = createCurrentAgentPinFixture(1);
+	const previousRuntimeContext = getInteractiveRuntimeContext();
+	const { id: historicalSessionId } = await store.createEmptySession({
+		model: {
+			modelId: modelId("historical-ownerless-agent-pin-model"),
+			providerId: fixture.providerId,
+		},
+	});
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			configDocument: fixture.configDocument,
+			createProviderCollection: fixture.createProviderCollection,
+			pluginRuntime: fixture.pluginRuntime,
+			pricing: createE2ePricing(200_000),
+			sessionId: historicalSessionId,
+		});
+		setup = rendered.setup;
+		await rendered.registryReady;
+		await waitForSessionFrame(setup, (frame) => {
+			const normalizedFrame = frame.replace(/\s+/g, " ");
+			return (
+				normalizedFrame.includes("Stored Session History · Read-only") &&
+				normalizedFrame.includes("no matching trusted source")
+			);
+		});
+		expect(fixture.activity).toMatchObject({
+			availabilityCalls: 0,
+			collectionConstructions: 0,
+			credentialReads: 0,
+			modelDiscoveryCalls: 0,
+			modelStoreReads: 0,
+			providerConstructions: 0,
+			streamCalls: 0,
+		});
+	} finally {
+		cleanupSessionRender();
+		setup?.renderer.destroy();
+		await getInteractiveSessionHostManager().releaseView(historicalSessionId);
+		await fixture.pluginRuntime.shutdown();
+		setInteractiveRuntimeContext(previousRuntimeContext);
+	}
+}, 15_000);
+
+test("validates and opens an existing Session with its unique current Agent pin before SDK model-store reads", async () => {
+	const fixture = createCurrentAgentPinFixture(1);
+	const previousRuntimeContext = getInteractiveRuntimeContext();
+	const { id: currentAgentPinSessionId } = await store.createEmptySession({
+		model: E2E_MODEL,
+	});
+	let setup: TestRendererSetup | undefined;
+	try {
+		const rendered = await renderSession({
+			configDocument: fixture.configDocument,
+			createProviderCollection: fixture.createProviderCollection,
+			pluginRuntime: fixture.pluginRuntime,
+			pricing: createE2ePricing(200_000),
+			sessionId: currentAgentPinSessionId,
+		});
+		setup = rendered.setup;
+		await rendered.registryReady;
+		await waitForSessionFrame(setup, (frame) =>
+			frame.includes("Ask anything...")
+		);
+		expect(fixture.activity.collectionConstructions).toBe(1);
+		expect(fixture.activity.providerConstructions).toBe(1);
+		expect(fixture.activity.modelStoreReads).toBeGreaterThan(0);
+		await act(async () => {
+			await setup?.mockInput.typeText("use the current Agent pin");
+			setup?.mockInput.pressEnter();
+		});
+		await waitForSessionFrame(setup, (frame) =>
+			frame.includes("existing Agent pin succeeded")
+		);
+		expect(fixture.activity.availabilityCalls).toBeGreaterThan(0);
+		expect(fixture.activity.credentialReads).toBeGreaterThan(0);
+		expect(fixture.activity.streamCalls).toBe(1);
+		const records = await store.listSessionRecords(currentAgentPinSessionId);
+		expect(
+			records.some(
+				(record) =>
+					record.model.providerId === fixture.providerId &&
+					record.model.modelId === fixture.selectedModel.modelId &&
+					record.model.pluginProviderSource?.pluginId ===
+						"session-agent-pin-plugin-0" &&
+					record.model.pluginProviderSource.sourceIdentity ===
+						`${path.join(testDirectory, "session-agent-provider.ts")}-0`
+			)
+		).toBe(true);
+	} finally {
+		cleanupSessionRender();
+		setup?.renderer.destroy();
+		await getInteractiveSessionHostManager().releaseView(
+			currentAgentPinSessionId
+		);
+		await fixture.pluginRuntime.shutdown();
+		setInteractiveRuntimeContext(previousRuntimeContext);
+	}
+}, 15_000);
+
 test("shows the opening state, then the session it opened", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
@@ -233,6 +539,392 @@ test("shows the failure when the session cannot open", async () => {
 	} finally {
 		cleanupSessionRender();
 		setup?.renderer.destroy();
+	}
+});
+
+test("keeps historical Plugin Sessions readable without constructing a ProviderCollection", async () => {
+	const staleModel = {
+		modelId: modelId("historical-plugin-model"),
+		providerId: "historical-plugin-provider",
+	};
+	const { id: historicalSessionId } = await store.createEmptySession({
+		model: staleModel,
+	});
+	const historicalMessage = {
+		id: sessionMessageId("historical-plugin-user"),
+		parts: [{ text: "read the old conversation", type: "text" as const }],
+		role: "user" as const,
+	};
+	await store.commitSessionRecord({
+		record: buildUserSessionRecord({
+			agentId: agentId("build"),
+			message: historicalMessage,
+			model: staleModel,
+			turnId: agentTurnId("historical-plugin-turn"),
+		}),
+		sessionId: historicalSessionId,
+	});
+
+	let setup: TestRendererSetup | undefined;
+	let providerCollectionConstructions = 0;
+	const requestCount = chatRequests().length;
+	try {
+		const rendered = await renderSession({
+			createProviderCollection: () => {
+				providerCollectionConstructions += 1;
+				return createFakeProviderCollection(recorder);
+			},
+			pricing: createE2ePricing(200_000),
+			sessionId: historicalSessionId,
+		});
+		setup = rendered.setup;
+		await rendered.registryReady;
+		await waitForSessionFrame(
+			setup,
+			(frame) =>
+				frame.includes("Stored Session History · Read-only") &&
+				frame.includes("read the old conversation")
+		);
+
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("no matching trusted source");
+		expect(frame).toContain("Reselect Provider Model to continue");
+		expect(frame).not.toContain("Ask anything...");
+		expect(providerCollectionConstructions).toBe(0);
+		expect(chatRequests()).toHaveLength(requestCount);
+	} finally {
+		cleanupSessionRender();
+		setup?.renderer.destroy();
+	}
+});
+
+test(
+	"continues historical Plugin Sessions only after explicit trusted-model reselection",
+	async () => {
+		const providerId = "history_reselection_provider";
+		const pluginId = "history-reselection-plugin";
+		const sourceIdentity = path.join(testDirectory, "trusted-provider.ts");
+		const selectedModelId = modelId("history-reselection-model");
+		const selectedModel: ProviderModel = {
+			...createE2ePricing(200_000),
+			modelId: selectedModelId,
+			providerId,
+			protocolId: "fake-history-reselection-provider",
+		};
+		let credentialReads = 0;
+		let modelStoreReads = 0;
+		let modelDiscoveryCalls = 0;
+		let streamCalls = 0;
+		let providerCollectionConstructions = 0;
+		const provider: Provider = {
+			discoverModels: async () => {
+				modelDiscoveryCalls += 1;
+				return [selectedModel];
+			},
+			id: providerId,
+			models: [selectedModel],
+			resolveAuthorization: ({ credential }) =>
+				credential === undefined ? null : { authorization: credential },
+			async *streamChat() {
+				streamCalls += 1;
+				yield { delta: "continued with the trusted owner", type: "text-delta" };
+				yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+				yield { type: "finish" };
+			},
+		};
+		const registration: PluginProviderDescriptor = {
+			connect: async () => undefined,
+			createProvider: () => provider,
+			displayName: "History Reselection Provider",
+			pluginId,
+			providerId,
+			sourceIdentity,
+			sourcePath: sourceIdentity,
+		};
+		const plugin: LoadedPlugin = {
+			commands: [],
+			id: pluginId,
+			providers: [registration],
+			sourcePath: sourceIdentity,
+			tools: [],
+			workspace: testDirectory,
+		};
+		const pluginRuntime = createPluginRuntime([plugin], []);
+		const previousRuntimeContext = getInteractiveRuntimeContext();
+		const { id: historicalSessionId } = await store.createEmptySession({
+			model: {
+				modelId: selectedModelId,
+				providerId,
+			},
+		});
+		const historicalMessage = {
+			id: sessionMessageId("historical-plugin-reselection-user"),
+			parts: [
+				{
+					text: "continue this historical conversation",
+					type: "text" as const,
+				},
+			],
+			role: "user" as const,
+		};
+		await store.commitSessionRecord({
+			record: buildUserSessionRecord({
+				agentId: agentId("build"),
+				message: historicalMessage,
+				model: { modelId: selectedModelId, providerId },
+				turnId: agentTurnId("historical-plugin-reselection-turn"),
+			}),
+			sessionId: historicalSessionId,
+		});
+
+		let setup: TestRendererSetup | undefined;
+		try {
+			const rendered = await renderSession({
+				createProviderCollection: async (runtime, scopedSessionId) => {
+					providerCollectionConstructions += 1;
+					return createInteractiveSessionProviderCollection({
+						credentialStore: {
+							delete: async () => undefined,
+							get: async () => {
+								credentialReads += 1;
+								return "fake-history-provider-credential";
+							},
+							set: async () => undefined,
+						},
+						modelStore: {
+							get: async () => {
+								modelStoreReads += 1;
+								return;
+							},
+							set: async () => undefined,
+						},
+						pluginProviders:
+							runtime?.getProviderRegistrations(scopedSessionId) ?? [],
+					});
+				},
+				pluginRuntime,
+				pricing: createE2ePricing(200_000),
+				sessionId: historicalSessionId,
+			});
+			setup = rendered.setup;
+			await rendered.registryReady;
+			await waitForSessionFrame(
+				setup,
+				(frame) =>
+					frame.includes("Stored Session History · Read-only") &&
+					frame.includes("continue this historical conversation")
+			);
+			expect(providerCollectionConstructions).toBe(0);
+			expect(credentialReads).toBe(0);
+			expect(modelStoreReads).toBe(0);
+			expect(modelDiscoveryCalls).toBe(0);
+			expect(streamCalls).toBe(0);
+
+			await activateSessionWriterAction(
+				setup,
+				"stored-session-history-reselect-model"
+			);
+			await waitForSessionFrame(setup, (frame) =>
+				frame.includes(selectedModel.modelId)
+			);
+			expect(credentialReads).toBeGreaterThan(0);
+			expect(modelStoreReads).toBeGreaterThan(0);
+			expect(modelDiscoveryCalls).toBe(0);
+			expect(streamCalls).toBe(0);
+			await act(async () => {
+				await setup?.mockInput.typeText(selectedModel.modelId);
+			});
+			await settleSessionUi(setup);
+			await act(() => setup?.mockInput.pressEnter());
+			await waitForSessionFrame(setup, (frame) =>
+				frame.includes("Ask anything...")
+			);
+			expect(setup.captureCharFrame()).not.toContain("Stored Session History");
+			expect(streamCalls).toBe(0);
+			expect(modelDiscoveryCalls).toBe(0);
+
+			await act(async () => {
+				await setup?.mockInput.typeText("continue after reselection");
+				setup?.mockInput.pressEnter();
+			});
+			await waitForSessionFrame(setup, (frame) =>
+				frame.includes("continued with the trusted owner")
+			);
+			const records = await store.listSessionRecords(historicalSessionId);
+			expect(streamCalls).toBe(1);
+			expect(modelDiscoveryCalls).toBe(0);
+			expect(
+				records.some(
+					(record) =>
+						record.model.providerId === providerId &&
+						record.model.modelId === selectedModel.modelId &&
+						record.model.pluginProviderSource?.pluginId === pluginId &&
+						record.model.pluginProviderSource.sourceIdentity === sourceIdentity
+				)
+			).toBe(true);
+		} finally {
+			cleanupSessionRender();
+			setup?.renderer.destroy();
+			await getInteractiveSessionHostManager().releaseView(historicalSessionId);
+			await pluginRuntime.shutdown();
+			setInteractiveRuntimeContext(previousRuntimeContext);
+		}
+	},
+	{ timeout: 15_000 }
+);
+
+test("historical reselection rejects missing or mismatched Host owners before model access", async () => {
+	for (const registrationMetadata of ["missing", "mismatched"] as const) {
+		const providerId = `history_registration_${registrationMetadata}_provider`;
+		const pluginId = `history-registration-${registrationMetadata}-plugin`;
+		const sourceIdentity = path.join(testDirectory, `${pluginId}.ts`);
+		const selectedModelId = modelId(`${pluginId}-model`);
+		const selectedModel: ProviderModel = {
+			...createE2ePricing(200_000),
+			modelId: selectedModelId,
+			providerId,
+			protocolId: `fake-${pluginId}`,
+		};
+		let credentialReads = 0;
+		let modelStoreReads = 0;
+		let modelDiscoveryCalls = 0;
+		let availabilityCalls = 0;
+		let providerCollectionConstructions = 0;
+		const provider: Provider = {
+			discoverModels: async () => {
+				modelDiscoveryCalls += 1;
+				return [selectedModel];
+			},
+			id: providerId,
+			models: [selectedModel],
+			resolveAuthorization: ({ credential }) =>
+				credential === undefined ? null : { authorization: credential },
+			async *streamChat() {
+				yield { type: "finish" };
+			},
+		};
+		const registration: PluginProviderDescriptor = {
+			connect: async () => undefined,
+			createProvider: () => provider,
+			displayName: "History Registration Provider",
+			pluginId,
+			providerId,
+			sourceIdentity,
+			sourcePath: sourceIdentity,
+		};
+		const plugin: LoadedPlugin = {
+			commands: [],
+			id: pluginId,
+			providers: [registration],
+			sourcePath: sourceIdentity,
+			tools: [],
+			workspace: testDirectory,
+		};
+		const pluginRuntime = createPluginRuntime([plugin], []);
+		const previousRuntimeContext = getInteractiveRuntimeContext();
+		const { id: historicalSessionId } = await store.createEmptySession({
+			model: {
+				modelId: selectedModelId,
+				providerId,
+			},
+		});
+		await store.commitSessionRecord({
+			record: buildUserSessionRecord({
+				agentId: agentId("build"),
+				message: {
+					id: sessionMessageId(`${pluginId}-user`),
+					parts: [{ text: "inspect this stored session", type: "text" }],
+					role: "user",
+				},
+				model: { modelId: selectedModelId, providerId },
+				turnId: agentTurnId(`${pluginId}-turn`),
+			}),
+			sessionId: historicalSessionId,
+		});
+
+		let setup: TestRendererSetup | undefined;
+		try {
+			const rendered = await renderSession({
+				createProviderCollection: async (runtime, scopedSessionId) => {
+					providerCollectionConstructions += 1;
+					const collection = await createInteractiveSessionProviderCollection({
+						credentialStore: {
+							delete: async () => undefined,
+							get: async () => {
+								credentialReads += 1;
+								return "fake-history-registration-credential";
+							},
+							set: async () => undefined,
+						},
+						modelStore: {
+							get: async () => {
+								modelStoreReads += 1;
+								return;
+							},
+							set: async () => undefined,
+						},
+						pluginProviders:
+							runtime?.getProviderRegistrations(scopedSessionId) ?? [],
+					});
+					const getAvailable = collection.getAvailable.bind(collection);
+					if (registrationMetadata === "missing") {
+						const collectionWithoutRegistrationMetadata = { ...collection };
+						Reflect.deleteProperty(
+							collectionWithoutRegistrationMetadata,
+							"getPluginProviderRegistrations"
+						);
+						return {
+							...collectionWithoutRegistrationMetadata,
+							getAvailable: async () => {
+								availabilityCalls += 1;
+								return await getAvailable();
+							},
+						};
+					}
+					return {
+						...collection,
+						getAvailable: async () => {
+							availabilityCalls += 1;
+							return await getAvailable();
+						},
+						getPluginProviderRegistrations: () => [],
+					};
+				},
+				pluginRuntime,
+				pricing: createE2ePricing(200_000),
+				sessionId: historicalSessionId,
+			});
+			setup = rendered.setup;
+			await rendered.registryReady;
+			await waitForSessionFrame(setup, (frame) =>
+				frame.includes("inspect this stored session")
+			);
+			expect(credentialReads).toBe(0);
+			expect(modelStoreReads).toBe(0);
+			expect(availabilityCalls).toBe(0);
+
+			await activateSessionWriterAction(
+				setup,
+				"stored-session-history-reselect-model"
+			);
+			await waitForSessionFrame(setup, (frame) =>
+				frame.includes("do not match the current trusted")
+			);
+			expect(setup.captureCharFrame()).toContain(
+				"do not match the current trusted"
+			);
+			expect(providerCollectionConstructions).toBe(1);
+			expect(credentialReads).toBe(0);
+			expect(modelStoreReads).toBe(0);
+			expect(modelDiscoveryCalls).toBe(0);
+			expect(availabilityCalls).toBe(0);
+		} finally {
+			cleanupSessionRender();
+			setup?.renderer.destroy();
+			await getInteractiveSessionHostManager().releaseView(historicalSessionId);
+			await pluginRuntime.shutdown();
+			setInteractiveRuntimeContext(previousRuntimeContext);
+		}
 	}
 });
 
@@ -371,11 +1063,11 @@ test("stored history labels durable interrupted turns", async () => {
 		);
 		await activateSessionWriterAction(setup, "session-contention-view-history");
 		await waitForSessionFrame(setup, (frame) =>
-			frame.includes("Build · GPT-5.6 Luna · interrupted")
+			frame.includes("Build · openai/gpt-5.6-luna · interrupted")
 		);
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("The request ended safely.");
-		expect(frame).toContain("Build · GPT-5.6 Luna · interrupted");
+		expect(frame).toContain("Build · openai/gpt-5.6-luna · interrupted");
 		expect(frame).not.toContain("Ask anything...");
 	} finally {
 		await contender.release();

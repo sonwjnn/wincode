@@ -9,7 +9,7 @@ text-only/delayed-commit promotion and Recall behavior.
 
 Status: accepted
 
-Runtime-mechanism note: [ADR-0029](0029-own-model-protocols-and-agent-runtime.md) replaces the AI SDK step hook with a Wincode-owned Model Step boundary. Steering delivery semantics remain unchanged; references below to the AI SDK describe the earlier implementation.
+Runtime-mechanism note: Wincode's Agent Runtime delivers Steering Messages at its Model Step boundary, as established in [ADR-0029](0029-own-model-protocols-and-agent-runtime.md) and retained by [ADR-0048](0048-extensible-ai-sdk-providers-and-app-owned-model-selection.md) and [ADR-0049](0049-migrate-coding-agent-to-provider-sdk.md). This ADR's delivery semantics remain unchanged.
 
 ## Decision
 
@@ -28,7 +28,8 @@ Runtime-mechanism note: [ADR-0029](0029-own-model-protocols-and-agent-runtime.md
 - The running model request and its Tool Call batch finish before the Agent
   Runtime consumes pending messages at a safe Model Step boundary. All messages
   accepted before that boundary remain distinct and ordered in the next model
-  request. The current Agent and Model Target remain fixed for that Agent Turn.
+  request. The current Agent and its exact Provider Model selection remain fixed
+  for that Agent Turn.
 - Shared Submission preparation supports text, attachments, explicit Skill
   intent, and expanded Custom Command prompts. Custom Commands expand once
   through the same preparation path as ordinary input and retain their expanded
@@ -68,8 +69,8 @@ Runtime-mechanism note: [ADR-0029](0029-own-model-protocols-and-agent-runtime.md
 - **Merging several steered messages into one user message** — rejected:
   separate records preserve distinct user intent and FIFO identity even when a
   single model request reads them together.
-- **Rebuilding the active Agent or Model Target for each steered message** —
-  rejected: mid-turn input prepares only its content and explicit Skill intent;
+- **Rebuilding the active Agent or Provider Model selection for each steered
+  message** — rejected: mid-turn input prepares only its content and explicit Skill intent;
   it does not silently change the running execution's selection.
 - **Reusing a spent attachment budget for mid-turn hydration** — rejected:
   attachment preparation refreshes its budget at the next Model Step boundary.
@@ -85,7 +86,7 @@ Runtime-mechanism note: [ADR-0029](0029-own-model-protocols-and-agent-runtime.md
 - A preparation or request failure blocks later pending input and requires
   deliberate retry; a possibly received model request is never replayed blindly.
 - The Session Command invariant admits steering during a running Agent Turn,
-  while preserving its active Agent and Model Target. An Agent Turn may process
+  while preserving its active Agent and exact Provider Model selection. An Agent Turn may process
   multiple distinct user messages without merging their Transcript records.
 - Steering and Recall have different durability boundaries: only uncommitted
   queued Submissions return to the composer.

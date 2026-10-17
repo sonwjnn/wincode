@@ -6,14 +6,15 @@ import { build } from "bun";
 
 const SCRIPTS_DIR = path.join(import.meta.dir, "../scripts");
 const ENTRIES = [
-	path.join(SCRIPTS_DIR, "sync-model-metadata.ts"),
 	path.join(SCRIPTS_DIR, "metadata-model.ts"),
+	path.join(SCRIPTS_DIR, "sync-provider-model-catalog.ts"),
+	path.join(SCRIPTS_DIR, "provider-model-catalog.ts"),
 ];
-const GENERATED_IMPORT = /model-metadata\.generated/;
+const GENERATED_IMPORT = /\.generated(?:\.ts)?$/;
 const CONVERTER_IMPORT = /models-dev(?:\.ts)?$/;
 
-describe("model metadata generator import graph", () => {
-	test("bundles the converter without bundling generated output (#57)", async () => {
+describe("model generation import graph", () => {
+	test("bundles generators without importing generated output (#57)", async () => {
 		const outputDir = await fs.mkdtemp(
 			path.join(os.tmpdir(), "wincode-generator-graph-")
 		);

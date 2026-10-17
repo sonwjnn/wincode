@@ -1,10 +1,5 @@
 import type { CliRenderer } from "@opentui/core";
-import type { Connections } from "@wincode/ai/connections";
-import {
-	type ChatModelSelection,
-	findSupportedChatModelSelection,
-	modelCatalog,
-} from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai";
 import open from "open";
 import { createElement, type ReactNode } from "react";
 import {
@@ -13,13 +8,17 @@ import {
 	type CommandDefinitionFor,
 } from "@/modules/commands/commands";
 import type { CommandHandlerMap } from "@/modules/commands/execute-command";
-import { ConnectDialogContent } from "@/modules/connections";
 import type { PromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
-import { getModelsForPicker } from "@/modules/prompt-settings/ui/model-picker-options";
-import { ModelsDialogContent } from "@/modules/prompt-settings/ui/models-dialog";
 import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
 import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinking-level-dialog";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import {
+	type ProviderModelSelection,
+	supportedProviderThinkingLevels,
+} from "@/modules/providers/provider-model-selection";
+import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
+import { ProviderSdkConnectDialogContent } from "@/modules/providers/ui/provider-sdk-connect-dialog";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import type { ToastContextValue } from "@/shared/providers/toast/toast-provider";
@@ -28,11 +27,15 @@ import { openCommandDialog } from "./dialog-command";
 
 export type CommandStrategyContext = {
 	config: PromptConfig;
-	connections: Pick<Connections, "listProviders">;
 	dialog: Pick<DialogContextValue, "open">;
-	getRecentModelSelections: (limit: number) => ChatModelSelection[];
+	getRecentModelSelections?: (limit: number) => ProviderModelSelection[];
 	navigateHome: () => void;
-	onSelectModel?: (model: ChatModelSelection) => void;
+	onSelectProviderModel?: (
+		model: ProviderModel,
+		selection: ProviderModelSelection
+	) => void | Promise<void>;
+	providerController?: InteractiveProviderController;
+	providerModel?: ProviderModel;
 	onCompact?: (focus?: string) => boolean | Promise<boolean>;
 	onReload: () => Promise<void>;
 	onTrust: () => Promise<void>;
@@ -129,41 +132,100 @@ const STRATEGIES = {
 	"agent.select": {
 		kind: "prepared-dialog",
 		title: "Select Agent",
-		content: async ({ config, connections }) => {
-			const providers = await connections.listProviders();
+		content: async ({ config, providerController }) => {
+			if (providerController === undefined) {
+				throw new Error(
+					"Provider Model availability is unavailable in this view."
+				);
+			}
 			return createElement(AgentsDialogContent, {
-				connectedProviderIds: new Set(
-					providers.filter(({ connected }) => connected).map(({ id }) => id)
-				),
+				availableProviderModels: await providerController.getAvailableModels(),
 				currentAgent: config.agent,
-				onSelectAgent: config.setAgent,
+				providerController,
+				onSelectAgent: (agent, model) => {
+					config.setAgent(agent);
+					if (model !== undefined) {
+						config.setModelForFutureSubmissions(model);
+					}
+				},
 			});
 		},
 	},
 	"model.select": {
 		kind: "dialog",
 		title: "Select Model",
-		content: ({ config, getRecentModelSelections, onSelectModel }) =>
-			createElement(ModelsDialogContent, {
+		content: ({
+			config,
+			getRecentModelSelections,
+			onSelectProviderModel,
+			providerController,
+		}) => {
+			if (!(providerController && onSelectProviderModel)) {
+				throw new Error(
+					"Provider Model selection is unavailable in this view."
+				);
+			}
+			return createElement(ProviderModelsDialogContent, {
+				controller: providerController,
 				currentModel: config.model,
-				models: getModelsForPicker(modelCatalog, config.model),
-				onSelectModel: onSelectModel ?? config.setModelForFutureSubmissions,
-				recentSelections: getRecentModelSelections(10),
-			}),
+				onSelectModel: onSelectProviderModel,
+				recentSelections: getRecentModelSelections?.(10) ?? [],
+			});
+		},
 	},
+	"provider.model.select": {
+		kind: "dialog",
+		title: "Provider SDK Models",
+		content: ({
+			config,
+			getRecentModelSelections,
+			onSelectProviderModel,
+			providerController,
+		}) => {
+			if (!(providerController && onSelectProviderModel)) {
+				throw new Error(
+					"Provider Model selection is unavailable in this view."
+				);
+			}
+			return createElement(ProviderModelsDialogContent, {
+				controller: providerController,
+				currentModel: config.model,
+				onSelectModel: onSelectProviderModel,
+				recentSelections: getRecentModelSelections?.(10) ?? [],
+			});
+		},
+	},
+	"provider.connect": {
+		kind: "dialog",
+		title: "Connect Provider SDK",
+		content: ({ providerController }) => {
+			if (!providerController) {
+				throw new Error("Provider SDK connection is unavailable in this view.");
+			}
+			return createElement(ProviderSdkConnectDialogContent, {
+				controller: providerController,
+			});
+		},
+	},
+
 	"thinking.select": {
 		kind: "dialog",
 		title: "Select Thinking Level",
-		content: ({ config }) => {
-			const supportedModel = findSupportedChatModelSelection(config.model);
-			if (!supportedModel) {
+		content: ({ config, providerModel }) => {
+			if (providerModel === undefined) {
+				throw new Error(
+					"Thinking-level selection is unavailable in this view."
+				);
+			}
+			const levels = supportedProviderThinkingLevels(providerModel);
+			if (levels.length === 0) {
 				throw new Error(
 					"Thinking-level selection is unavailable in this view."
 				);
 			}
 			return createElement(ThinkingLevelDialogContent, {
 				currentThinkingLevel: config.thinkingLevel,
-				currentModel: supportedModel,
+				thinkingLevels: levels,
 				onSelectDefault: () =>
 					config.setThinkingLevelForFutureSubmissions(undefined),
 				onSelectThinkingLevel: config.setThinkingLevelForFutureSubmissions,
@@ -181,12 +243,14 @@ const STRATEGIES = {
 		content: () => createElement(ThemeDialogContent),
 	},
 	"connection.open": {
-		kind: "prepared-dialog",
+		kind: "dialog",
 		title: "Connect",
-		content: async ({ connections, refreshAgentRegistry, renderer, toast }) => {
-			const connectedProviders = await connections.listProviders();
-			return createElement(ConnectDialogContent, {
-				connectedProviders,
+		content: ({ providerController, renderer, toast }) => {
+			if (providerController === undefined) {
+				throw new Error("Provider SDK connection is unavailable in this view.");
+			}
+			return createElement(ProviderSdkConnectDialogContent, {
+				controller: providerController,
 				onBrowserCopyUrl: async (url: string) => {
 					await copyBrowserAuthorizationUrl(renderer, url);
 					toast.show({
@@ -196,13 +260,6 @@ const STRATEGIES = {
 				},
 				onBrowserOpenUrl: async (url: string) => {
 					await open(url);
-				},
-				onConnected: (summary) => {
-					refreshAgentRegistry();
-					toast.show({
-						message: `${summary.displayName} connected.`,
-						variant: "success",
-					});
 				},
 			});
 		},

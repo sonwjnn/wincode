@@ -1,26 +1,134 @@
+import { z } from "zod";
+import {
+	type ModelPromptCacheCapabilities,
+	modelMetadataEntrySchema,
+	type SupportedPromptCacheRetentionTier,
+	supportedPromptCacheRetentionTierIds,
+} from "./model-metadata.ts";
+import { type ThinkingLevel, thinkingLevelIds } from "./thinking-level.ts";
+
+export type { SupportedPromptCacheRetentionTier } from "./model-metadata.ts";
+export type {
+	PromptCachePolicy,
+	ResolvedPromptCacheControls,
+} from "./prompt-cache-policy.ts";
+export {
+	DEFAULT_PROMPT_CACHE_POLICY,
+	promptCachePolicySchema,
+	resolvePromptCacheControls,
+} from "./prompt-cache-policy.ts";
+export type { ThinkingLevel, ThinkingSelection } from "./thinking-level.ts";
+export { thinkingLevelIds, thinkingLevelSchema } from "./thinking-level.ts";
+
+export const providerModelCapabilityIds = [
+	"file",
+	"image",
+	"reasoning",
+	"text",
+	"tools",
+] as const;
 export type ProviderModelCapability =
-	| "file"
-	| "image"
-	| "reasoning"
-	| "text"
-	| "tools";
+	(typeof providerModelCapabilityIds)[number];
+
+/** Provider-neutral identity used in Session, Agent, and Plugin selections. */
+export type ProviderModelSelection = Readonly<{
+	modelId: string;
+	providerId: string;
+}>;
+
+const nonEmptyProviderIdentity = z
+	.string()
+	.refine((value) => value.trim().length > 0);
+
+/** Validates exact Provider Model identities without a Catalog allowlist. */
+export const providerModelSelectionSchema = z
+	.object({
+		modelId: nonEmptyProviderIdentity,
+		providerId: nonEmptyProviderIdentity,
+	})
+	.strict();
+
+/** Parses a persisted `<providerId>/<modelId>` identity without normalizing either ID. */
+export const parseProviderModelSelection = (
+	value: string
+): ProviderModelSelection | null => {
+	const separatorIndex = value.indexOf("/");
+	if (separatorIndex <= 0 || separatorIndex === value.length - 1) {
+		return null;
+	}
+	const parsed = providerModelSelectionSchema.safeParse({
+		modelId: value.slice(separatorIndex + 1),
+		providerId: value.slice(0, separatorIndex),
+	});
+	return parsed.success ? parsed.data : null;
+};
 
 /** A provider-owned model; optional metadata is preserved rather than inferred. */
 export type ProviderModel = Readonly<{
 	/** When present, unsupported image/file/tool inputs fail before provider dispatch. */
 	capabilities?: readonly ProviderModelCapability[];
+	/** Exact provider-specific cache controls verified for this model. */
+	promptCache?: ModelPromptCacheCapabilities;
+	/** Cache retention choices this model explicitly supports. */
+	promptCacheRetentionTiers?: readonly SupportedPromptCacheRetentionTier[];
+	/** Exact per-retention cache lifetime published for this Provider Model. */
+	promptCacheRetentionTtlMs?: Readonly<
+		Partial<Record<SupportedPromptCacheRetentionTier, number>>
+	>;
 	limits?: Readonly<{
 		contextWindowTokens?: number;
 		maxOutputTokens?: number;
 	}>;
 	modelId: string;
+	/** Reasoning effort values this model explicitly supports. */
+	reasoningEfforts?: readonly ThinkingLevel[];
+	/** Exact published price data; absent rates remain unknown. */
 	pricing?: Readonly<{
+		cacheReadPerMillionTokensUsd?: number;
+		cacheWritePerMillionTokensUsd?: number;
 		inputPerMillionTokensUsd?: number;
 		outputPerMillionTokensUsd?: number;
+		tiers?: readonly Readonly<{
+			cacheReadPerMillionTokensUsd?: number;
+			cacheWritePerMillionTokensUsd?: number;
+			inputPerMillionTokensUsd: number;
+			inputTokensAbove: number;
+			outputPerMillionTokensUsd: number;
+		}>[];
 	}>;
 	protocolId: string;
 	providerId: string;
 }>;
+
+const isPositiveSafeInteger = (value: unknown): value is number =>
+	typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+/** Rejects invalid caller-supplied output budgets at SDK request boundaries. */
+export const assertValidMaxOutputTokens = (
+	requested: number | undefined
+): void => {
+	if (requested !== undefined && !isPositiveSafeInteger(requested)) {
+		throw new RangeError("maxOutputTokens must be a positive safe integer.");
+	}
+};
+
+/** Applies a validated request budget without inferring one from model metadata. */
+export const maxOutputTokensForRequest = (
+	requested: number | undefined,
+	model: ProviderModel
+): number | undefined => {
+	assertValidMaxOutputTokens(requested);
+	const maximum = model.limits?.maxOutputTokens;
+	if (maximum !== undefined && !isPositiveSafeInteger(maximum)) {
+		throw new RangeError(
+			"Provider Model maxOutputTokens must be a positive safe integer."
+		);
+	}
+	if (requested === undefined) {
+		return;
+	}
+	return maximum === undefined ? requested : Math.min(requested, maximum);
+};
 
 export type ChatContentPart =
 	| Readonly<{ text: string; type: "text" }>
@@ -40,6 +148,13 @@ export type ChatContentPart =
 			toolCallId: string;
 			toolName: string;
 			type: "tool-result";
+	  }>
+	| Readonly<{
+			errorText: string;
+			failure?: unknown;
+			toolCallId: string;
+			toolName: string;
+			type: "tool-failure";
 	  }>;
 
 type ChatMessageContent = Readonly<{
@@ -66,10 +181,14 @@ export type ChatTool = Readonly<{
 }>;
 
 export type ChatRequest = Readonly<{
-	cacheRetention?: "long" | "short";
+	cacheRetention?: SupportedPromptCacheRetentionTier;
+	cacheWarming?: true;
+	maxOutputTokens?: number;
 	messages: readonly ChatMessage[];
 	modelId: string;
+	promptCacheKey?: string;
 	providerId: string;
+	reasoningEffort?: ThinkingLevel;
 	signal?: AbortSignal;
 	system?: string;
 	tools?: readonly ChatTool[];
@@ -77,7 +196,11 @@ export type ChatRequest = Readonly<{
 
 export type ProviderChatRequest = Readonly<{
 	cacheRetention?: ChatRequest["cacheRetention"];
+	cacheWarming?: ChatRequest["cacheWarming"];
+	maxOutputTokens?: ChatRequest["maxOutputTokens"];
 	messages: ChatRequest["messages"];
+	promptCacheKey?: ChatRequest["promptCacheKey"];
+	reasoningEffort?: ChatRequest["reasoningEffort"];
 	system?: ChatRequest["system"];
 	tools?: ChatRequest["tools"];
 }>;
@@ -148,6 +271,15 @@ export type Provider = Readonly<{
 		request: ProviderChatRequest,
 		context: ProviderChatContext
 	) => AsyncIterable<ProviderChatEvent>;
+	/** Synchronously reports whether this credential/model can enforce a bounded output request. */
+	canEnforceMaxOutputTokens?: (
+		input: Readonly<{
+			credential: unknown;
+			model: ProviderModel;
+		}>
+	) => boolean;
+	/** Release resources owned by this Provider when its collection is disposed. */
+	close?: () => void | Promise<void>;
 }>;
 
 /** Application-owned persistence for one credential per provider ID in this collection. */
@@ -184,7 +316,16 @@ export type ModelStore = Readonly<{
 }>;
 
 export type RefreshModelsOptions = Readonly<{
+	/** Provider IDs to refresh; omitted means every registered provider with discovery. */
+	providerIds?: readonly string[];
 	signal?: AbortSignal;
+}>;
+
+export type RefreshModelsResult = Readonly<{
+	/** True when the caller's signal aborted the refresh operation. */
+	aborted: boolean;
+	/** Failures keyed by provider ID; a provider failure does not stop other refreshes. */
+	errors: ReadonlyMap<string, Error>;
 }>;
 
 export type ChatFailure =
@@ -240,19 +381,25 @@ export class ProviderError extends Error {
 
 export type ProviderCollection = Readonly<{
 	chat: (request: ChatRequest) => AsyncIterable<ChatEvent>;
+	/** Checks bounded-output support from stored credentials without resolving authorization or network access. */
+	canEnforceMaxOutputTokens: (
+		providerId: string,
+		modelId: string
+	) => Promise<boolean>;
+	/** Closes every registered Provider once and waits for all cleanup attempts. */
+	close: () => Promise<void>;
 	deleteCredential: (providerId: string) => Promise<void>;
 	/** Known models whose provider has a stored credential; this does not contact the provider. */
-	getAvailable: () => Promise<readonly ProviderModel[]>;
+	getAvailable: (providerId?: string) => Promise<readonly ProviderModel[]>;
 	getModel: (providerId: string, modelId: string) => ProviderModel | undefined;
 	/** Returns in-memory last-known models. Restore the store before listing a fresh instance. */
 	getModels: () => readonly ProviderModel[];
 	/** Loads persisted dynamic models for providers registered so far, without network access. */
 	restoreModels: () => Promise<void>;
-	/** Discovers and persists models; failures leave the last-known list unchanged. */
+	/** Refreshes selected dynamic providers concurrently; static providers are skipped. */
 	refreshModels: (
-		providerId: string,
 		options?: RefreshModelsOptions
-	) => Promise<readonly ProviderModel[]>;
+	) => Promise<RefreshModelsResult>;
 	register: (provider: Provider) => void;
 	setCredential: (providerId: string, credential: unknown) => Promise<void>;
 }>;
@@ -322,49 +469,145 @@ const throwIfAborted = (signal: AbortSignal | undefined): void => {
 const isNonNegativeFiniteNumber = (value: unknown): value is number =>
 	typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-const isProviderModel = (value: unknown): value is ProviderModel => {
-	if (typeof value !== "object" || value === null) {
-		return false;
-	}
-	const model = value as Record<string, unknown>;
-	if (
-		typeof model.providerId !== "string" ||
-		model.providerId.trim().length === 0 ||
-		typeof model.modelId !== "string" ||
-		model.modelId.trim().length === 0 ||
-		typeof model.protocolId !== "string" ||
-		model.protocolId.trim().length === 0
-	) {
-		return false;
-	}
-	if (
-		model.capabilities !== undefined &&
-		!(
-			Array.isArray(model.capabilities) &&
-			model.capabilities.every((capability: unknown) =>
-				["file", "image", "reasoning", "text", "tools"].includes(
-					String(capability)
-				)
-			)
-		)
-	) {
-		return false;
-	}
-	for (const field of ["limits", "pricing"] as const) {
-		const metadata = model[field];
-		if (metadata === undefined) {
-			continue;
-		}
-		if (typeof metadata !== "object" || metadata === null) {
-			return false;
-		}
-		for (const value of Object.values(metadata)) {
-			if (!isNonNegativeFiniteNumber(value)) {
-				return false;
+const THINKING_LEVELS: readonly ThinkingLevel[] = thinkingLevelIds;
+const PROMPT_CACHE_RETENTION_TIERS: readonly SupportedPromptCacheRetentionTier[] =
+	supportedPromptCacheRetentionTierIds;
+const PROVIDER_MODEL_CAPABILITIES: readonly ProviderModelCapability[] =
+	providerModelCapabilityIds;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isNonEmptyString = (value: unknown): value is string =>
+	typeof value === "string" && value.trim().length > 0;
+
+const isStringArrayOf = <Value extends string>(
+	value: unknown,
+	allowedValues: readonly Value[]
+): value is readonly Value[] =>
+	Array.isArray(value) &&
+	value.every(
+		(candidate) =>
+			typeof candidate === "string" &&
+			allowedValues.includes(candidate as Value)
+	);
+
+const isOptionalStringArrayOf = <Value extends string>(
+	value: unknown,
+	allowedValues: readonly Value[]
+): boolean => value === undefined || isStringArrayOf(value, allowedValues);
+
+const isOptionalNumberRecord = (
+	value: unknown,
+	allowedKeys: readonly string[]
+): boolean =>
+	value === undefined ||
+	(isRecord(value) &&
+		Object.entries(value).every(
+			([key, candidate]) =>
+				allowedKeys.includes(key) &&
+				(candidate === undefined || isNonNegativeFiniteNumber(candidate))
+		));
+
+const isOptionalProviderModelLimits = (value: unknown): boolean =>
+	value === undefined ||
+	(isRecord(value) &&
+		Object.entries(value).every(([key, candidate]) => {
+			if (key === "contextWindowTokens") {
+				return candidate === undefined || isPositiveSafeInteger(candidate);
 			}
-		}
+			if (key === "maxOutputTokens") {
+				return candidate === undefined || isPositiveSafeInteger(candidate);
+			}
+			return false;
+		}));
+
+const isProviderModelPricingTier = (value: unknown): boolean =>
+	isRecord(value) &&
+	Number.isSafeInteger(value.inputTokensAbove) &&
+	(value.inputTokensAbove as number) > 0 &&
+	isOptionalNumberRecord(
+		{
+			cacheReadPerMillionTokensUsd: value.cacheReadPerMillionTokensUsd,
+			cacheWritePerMillionTokensUsd: value.cacheWritePerMillionTokensUsd,
+			inputPerMillionTokensUsd: value.inputPerMillionTokensUsd,
+			outputPerMillionTokensUsd: value.outputPerMillionTokensUsd,
+		},
+		[
+			"cacheReadPerMillionTokensUsd",
+			"cacheWritePerMillionTokensUsd",
+			"inputPerMillionTokensUsd",
+			"outputPerMillionTokensUsd",
+		]
+	) &&
+	isNonNegativeFiniteNumber(value.inputPerMillionTokensUsd) &&
+	isNonNegativeFiniteNumber(value.outputPerMillionTokensUsd);
+
+const isOptionalProviderModelPricing = (value: unknown): boolean =>
+	value === undefined ||
+	(isRecord(value) &&
+		isOptionalNumberRecord(
+			{
+				cacheReadPerMillionTokensUsd: value.cacheReadPerMillionTokensUsd,
+				cacheWritePerMillionTokensUsd: value.cacheWritePerMillionTokensUsd,
+				inputPerMillionTokensUsd: value.inputPerMillionTokensUsd,
+				outputPerMillionTokensUsd: value.outputPerMillionTokensUsd,
+			},
+			[
+				"cacheReadPerMillionTokensUsd",
+				"cacheWritePerMillionTokensUsd",
+				"inputPerMillionTokensUsd",
+				"outputPerMillionTokensUsd",
+			]
+		) &&
+		(value.tiers === undefined ||
+			(Array.isArray(value.tiers) &&
+				value.tiers.every(isProviderModelPricingTier))));
+
+const isOptionalPromptCacheRetentionTtlRecord = (value: unknown): boolean =>
+	value === undefined ||
+	(isRecord(value) &&
+		Object.values(value).every(
+			(candidate) =>
+				typeof candidate === "number" &&
+				Number.isSafeInteger(candidate) &&
+				candidate > 0
+		));
+
+const isOptionalProviderModelPromptCache = (value: unknown): boolean =>
+	value === undefined ||
+	modelMetadataEntrySchema.safeParse({ promptCache: value }).success;
+
+const isProviderModel = (value: unknown): value is ProviderModel =>
+	isRecord(value) &&
+	isNonEmptyString(value.providerId) &&
+	isNonEmptyString(value.modelId) &&
+	isNonEmptyString(value.protocolId) &&
+	isOptionalStringArrayOf(value.capabilities, PROVIDER_MODEL_CAPABILITIES) &&
+	isOptionalStringArrayOf(value.reasoningEfforts, THINKING_LEVELS) &&
+	isOptionalStringArrayOf(
+		value.promptCacheRetentionTiers,
+		PROMPT_CACHE_RETENTION_TIERS
+	) &&
+	isOptionalPromptCacheRetentionTtlRecord(value.promptCacheRetentionTtlMs) &&
+	isOptionalProviderModelPromptCache(value.promptCache) &&
+	isOptionalProviderModelLimits(value.limits) &&
+	isOptionalProviderModelPricing(value.pricing);
+
+const normalizeProviderModel = (model: ProviderModel): ProviderModel => {
+	const pricing = model.pricing;
+	if (pricing?.tiers === undefined) {
+		return model;
 	}
-	return true;
+	return {
+		...model,
+		pricing: {
+			...pricing,
+			tiers: [...pricing.tiers].sort(
+				(left, right) => left.inputTokensAbove - right.inputTokensAbove
+			),
+		},
+	};
 };
 
 const validateProviderModels = (
@@ -389,7 +632,7 @@ const validateProviderModels = (
 			);
 		}
 		modelIds.add(candidate.modelId);
-		models.push(candidate);
+		models.push(normalizeProviderModel(candidate));
 	}
 	return models;
 };
@@ -570,6 +813,40 @@ export const createProviderCollection = (
 			: [];
 	};
 
+	const canEnforceMaxOutputTokens = async (
+		providerId: string,
+		modelId: string
+	): Promise<boolean> => {
+		const registered = providers.get(providerId);
+		const model = getProviderModels(providerId).find(
+			(candidate) => candidate.modelId === modelId
+		);
+		if (registered === undefined || model === undefined) {
+			return false;
+		}
+		return withProviderCredentialLock(providerId, async () => {
+			let credential: unknown | undefined;
+			try {
+				credential = await credentialStore.get(providerId);
+			} catch {
+				return false;
+			}
+			if (credential === undefined) {
+				return false;
+			}
+			try {
+				return (
+					registered.provider.canEnforceMaxOutputTokens?.({
+						credential,
+						model,
+					}) ?? true
+				);
+			} catch {
+				return false;
+			}
+		});
+	};
+
 	const resolveAuthorization = async (
 		provider: Provider,
 		signal: AbortSignal | undefined
@@ -604,6 +881,34 @@ export const createProviderCollection = (
 			return resolved.authorization;
 		});
 
+	const toProviderChatRequest = (request: ChatRequest): ProviderChatRequest => {
+		const providerRequest: {
+			-readonly [Key in keyof ProviderChatRequest]: ProviderChatRequest[Key];
+		} = { messages: request.messages };
+		if (request.cacheRetention !== undefined) {
+			providerRequest.cacheRetention = request.cacheRetention;
+		}
+		if (request.cacheWarming !== undefined) {
+			providerRequest.cacheWarming = request.cacheWarming;
+		}
+		if (request.maxOutputTokens !== undefined) {
+			providerRequest.maxOutputTokens = request.maxOutputTokens;
+		}
+		if (request.promptCacheKey !== undefined) {
+			providerRequest.promptCacheKey = request.promptCacheKey;
+		}
+		if (request.reasoningEffort !== undefined) {
+			providerRequest.reasoningEffort = request.reasoningEffort;
+		}
+		if (request.system !== undefined) {
+			providerRequest.system = request.system;
+		}
+		if (request.tools !== undefined) {
+			providerRequest.tools = request.tools;
+		}
+		return providerRequest;
+	};
+
 	const streamSelectedChat = async function* (
 		request: ChatRequest,
 		selection: ChatTarget
@@ -615,12 +920,7 @@ export const createProviderCollection = (
 				request.signal
 			);
 			throwIfAborted(request.signal);
-			const providerRequest: ProviderChatRequest = {
-				cacheRetention: request.cacheRetention,
-				messages: request.messages,
-				system: request.system,
-				tools: request.tools,
-			};
+			const providerRequest = toProviderChatRequest(request);
 			let continuation: unknown | undefined;
 			for await (const event of selection.registered.provider.streamChat(
 				providerRequest,
@@ -650,6 +950,7 @@ export const createProviderCollection = (
 	const streamChat = async function* (
 		request: ChatRequest
 	): AsyncIterable<ChatEvent> {
+		assertValidMaxOutputTokens(request.maxOutputTokens);
 		const selection = selectChatTarget(providers, dynamicModels, request);
 		if (selection.kind === "failed") {
 			yield terminal({ failure: selection.failure, status: "failure" });
@@ -658,8 +959,32 @@ export const createProviderCollection = (
 		yield* streamSelectedChat(request, selection);
 	};
 
+	let closePromise: Promise<void> | undefined;
+	const close = (): Promise<void> => {
+		if (closePromise !== undefined) {
+			return closePromise;
+		}
+		const closings = [...providers.values()].map(({ provider }) =>
+			Promise.resolve().then(() => provider.close?.())
+		);
+		closePromise = Promise.allSettled(closings).then((results) => {
+			const failures = results.flatMap((result) =>
+				result.status === "rejected" ? [result.reason] : []
+			);
+			if (failures.length > 0) {
+				throw new AggregateError(
+					failures,
+					"One or more Providers failed to close."
+				);
+			}
+		});
+		return closePromise;
+	};
+
 	return {
+		canEnforceMaxOutputTokens,
 		chat: streamChat,
+		close,
 		deleteCredential: async (providerId) => {
 			getRegisteredProvider(providerId);
 			await withProviderCredentialLock(providerId, async () => {
@@ -676,15 +1001,20 @@ export const createProviderCollection = (
 				}
 			});
 		},
-		getAvailable: async () => {
+		getAvailable: async (providerId) => {
 			const configuredProviders = new Set<string>();
-			for (const providerId of providers.keys()) {
-				if ((await credentialStore.get(providerId)) !== undefined) {
-					configuredProviders.add(providerId);
+			const providerIds =
+				providerId === undefined ? providers.keys() : [providerId];
+			for (const configuredProviderId of providerIds) {
+				if (
+					providers.has(configuredProviderId) &&
+					(await credentialStore.get(configuredProviderId)) !== undefined
+				) {
+					configuredProviders.add(configuredProviderId);
 				}
 			}
-			return [...configuredProviders].flatMap((providerId) =>
-				getProviderModels(providerId)
+			return [...configuredProviders].flatMap((configuredProviderId) =>
+				getProviderModels(configuredProviderId)
 			);
 		},
 		getModel: (providerId, modelId) =>
@@ -714,65 +1044,104 @@ export const createProviderCollection = (
 				restoredProviders.add(providerId);
 			}
 		},
-		refreshModels: async (providerId, refreshOptions = {}) => {
-			const registered = getRegisteredProvider(providerId);
-			const discoverModels = registered.provider.discoverModels;
-			if (!discoverModels) {
-				throw new Error(
-					`Provider ${providerId} does not support model discovery.`
-				);
+		refreshModels: async (refreshOptions = {}) => {
+			const selectedProviderIds =
+				refreshOptions.providerIds === undefined
+					? undefined
+					: new Set(refreshOptions.providerIds);
+			const errors = new Map<string, Error>();
+			if (refreshOptions.signal?.aborted) {
+				return { aborted: true, errors };
 			}
-			throwIfAborted(refreshOptions.signal);
-			const authorization = await resolveAuthorization(
-				registered.provider,
-				refreshOptions.signal
-			);
-			throwIfAborted(refreshOptions.signal);
-			const discovered = validateProviderModels(
-				await discoverModels({
-					authorization,
-					signal: refreshOptions.signal,
-				}),
-				providerId,
-				"Provider discovery"
-			);
-			throwIfAborted(refreshOptions.signal);
-			if (modelStore) {
-				await modelStore.set(providerId, discovered, {
-					signal: refreshOptions.signal,
-				});
+			if (selectedProviderIds !== undefined) {
+				for (const providerId of selectedProviderIds) {
+					if (!providers.has(providerId)) {
+						errors.set(
+							providerId,
+							new Error(`Unknown provider: ${providerId}`)
+						);
+					}
+				}
 			}
-			dynamicModels.set(providerId, discovered);
-			restoredProviders.add(providerId);
-			return getProviderModels(providerId);
+			const discoverableProviders = [...providers.entries()].filter(
+				([providerId, registered]) =>
+					registered.provider.discoverModels !== undefined &&
+					(selectedProviderIds === undefined ||
+						selectedProviderIds.has(providerId))
+			);
+			await Promise.all(
+				discoverableProviders.map(async ([providerId, registered]) => {
+					try {
+						throwIfAborted(refreshOptions.signal);
+						const authorization = await resolveAuthorization(
+							registered.provider,
+							refreshOptions.signal
+						);
+						throwIfAborted(refreshOptions.signal);
+						const discovered = validateProviderModels(
+							await registered.provider.discoverModels?.({
+								authorization,
+								signal: refreshOptions.signal,
+							}),
+							providerId,
+							"Provider discovery"
+						);
+						throwIfAborted(refreshOptions.signal);
+						if (modelStore) {
+							await modelStore.set(providerId, discovered, {
+								signal: refreshOptions.signal,
+							});
+						}
+						dynamicModels.set(providerId, discovered);
+						restoredProviders.add(providerId);
+					} catch (error) {
+						if (!refreshOptions.signal?.aborted) {
+							errors.set(
+								providerId,
+								error instanceof Error ? error : new Error(errorMessage(error))
+							);
+						}
+					}
+				})
+			);
+			return {
+				aborted: refreshOptions.signal?.aborted ?? false,
+				errors,
+			};
 		},
 		register: (provider) => {
+			if (closePromise !== undefined) {
+				throw new Error("ProviderCollection is closed.");
+			}
 			if (providers.has(provider.id)) {
 				throw new Error(`Provider already registered: ${provider.id}`);
 			}
 			if (provider.id.trim().length === 0) {
 				throw new Error("Provider ID must not be empty.");
 			}
+			const models: ProviderModel[] = [];
 			const modelIds = new Set<string>();
-			for (const model of provider.models) {
+			for (const candidate of provider.models) {
 				if (
-					model.providerId !== provider.id ||
-					model.modelId.trim().length === 0 ||
-					model.protocolId.trim().length === 0
+					!isProviderModel(candidate) ||
+					candidate.providerId !== provider.id ||
+					candidate.modelId.trim().length === 0 ||
+					candidate.protocolId.trim().length === 0
 				) {
 					throw new Error(
 						`Invalid model identity for provider ${provider.id}.`
 					);
 				}
-				if (modelIds.has(model.modelId)) {
+				if (modelIds.has(candidate.modelId)) {
 					throw new Error(
-						`Duplicate model ID for provider ${provider.id}: ${model.modelId}`
+						`Duplicate model ID for provider ${provider.id}: ${candidate.modelId}`
 					);
 				}
-				modelIds.add(model.modelId);
+				modelIds.add(candidate.modelId);
+				models.push(normalizeProviderModel(candidate));
 			}
 			providers.set(provider.id, {
-				models: [...provider.models],
+				models,
 				provider,
 			});
 		},

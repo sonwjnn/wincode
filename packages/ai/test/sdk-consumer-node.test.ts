@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { $ } from "bun";
 
 const nodeConsumer = `
 import assert from "node:assert/strict";
-import { createProviderCollection } from "@wincode/ai/sdk";
-import { createGoogleProvider } from "@wincode/ai/sdk/providers/google";
-import { createOpenCodeGoProvider } from "@wincode/ai/sdk/providers/opencode-go";
+import { createProviderCollection, ProviderError } from "@wincode/ai";
+import { createGoogleProvider } from "@wincode/ai";
+import { createOpenCodeGoProvider } from "@wincode/ai";
 
 const separator = String.fromCharCode(10);
 const sse = (events) => new Response(events.map((event) => "data: " + JSON.stringify(event) + separator + separator).join(""), { headers: { "content-type": "text/event-stream" } });
@@ -56,6 +57,63 @@ const googleEvents = await collect("google", "gemini-3.8-flash", "short");
 const goEvents = await collect("opencode-go", "grok-4.6");
 assert(googleEvents.some((event) => event.type === "text-delta" && event.delta === "Node Google"));
 assert(goEvents.some((event) => event.type === "text-delta" && event.delta === "Node OpenCode"));
+const controlRequests = [];
+sdk.register({
+  id: "node-control-provider",
+  models: [{ modelId: "control-model", protocolId: "fake-wire", providerId: "node-control-provider" }],
+  resolveAuthorization: async () => ({ authorization: "fake" }),
+  async *streamChat(request) {
+    controlRequests.push(request);
+    yield { type: "usage", usage: { inputTokens: 5, outputTokens: 2, cacheReadTokens: 3 } };
+    yield { type: "finish", continuation: { cursor: "next" } };
+  },
+});
+const controlEvents = [];
+for await (const event of sdk.chat({
+  messages: [
+    { role: "assistant", continuation: { cursor: "previous" }, content: [{ type: "tool-call", toolCallId: "node-call", toolName: "weather", input: { city: "Paris" } }] },
+    { role: "tool", content: [{ type: "tool-failure", toolCallId: "node-call", toolName: "weather", errorText: "Weather lookup failed.", failure: { kind: "timeout" } }] },
+  ],
+  modelId: "control-model",
+  providerId: "node-control-provider",
+  cacheRetention: "long",
+  reasoningEffort: "high",
+  maxOutputTokens: 384,
+  promptCacheKey: "stable-node-cache-key",
+  cacheWarming: true,
+})) controlEvents.push(event);
+assert.equal(controlRequests[0].reasoningEffort, "high");
+assert.equal(controlRequests[0].maxOutputTokens, 384);
+assert.equal(controlRequests[0].promptCacheKey, "stable-node-cache-key");
+assert.equal(controlRequests[0].cacheWarming, true);
+assert.equal(controlRequests[0].cacheRetention, "long");
+assert.equal(controlRequests[0].messages[0].continuation.cursor, "previous");
+assert.deepEqual(controlRequests[0].messages[1].content[0], { type: "tool-failure", toolCallId: "node-call", toolName: "weather", errorText: "Weather lookup failed.", failure: { kind: "timeout" } });
+assert(controlEvents.some((event) => event.type === "usage" && event.usage.cacheReadTokens === 3));
+assert.equal(controlEvents.at(-1).outcome.status, "success");
+assert.equal(controlEvents.at(-1).outcome.continuation.cursor, "next");
+const defaultControlEvents = [];
+for await (const event of sdk.chat({
+  messages: [],
+  modelId: "control-model",
+  providerId: "node-control-provider",
+})) defaultControlEvents.push(event);
+assert.equal(defaultControlEvents.at(-1).outcome.status, "success");
+assert.deepEqual(Object.keys(controlRequests[1]), ["messages"]);
+sdk.register({
+  id: "node-failure-provider",
+  models: [{ modelId: "failure-model", protocolId: "fake-wire", providerId: "node-failure-provider" }],
+  resolveAuthorization: async () => ({ authorization: "fake" }),
+  async *streamChat() { throw new ProviderError("transport", "fake transport failed"); },
+});
+const failureEvents = [];
+for await (const event of sdk.chat({ messages: [], modelId: "failure-model", providerId: "node-failure-provider" })) failureEvents.push(event);
+assert.deepEqual(failureEvents.at(-1), { type: "terminal", outcome: { status: "failure", failure: { code: "transport", message: "fake transport failed", providerId: "node-failure-provider" } } });
+const abortController = new AbortController();
+abortController.abort(new DOMException("Node request cancelled", "AbortError"));
+const abortEvents = [];
+for await (const event of sdk.chat({ messages: [], modelId: "control-model", providerId: "node-control-provider", signal: abortController.signal })) abortEvents.push(event);
+assert.deepEqual(abortEvents, [{ type: "terminal", outcome: { status: "aborted", reason: "Node request cancelled" } }]);
 assert.equal(cache.created, 1);
 await google.close();
 assert.equal(cache.deleted, 1);
@@ -63,7 +121,10 @@ process.stdout.write("Node public SDK consumer passed");
 `;
 
 describe("Node external @wincode/ai consumer", () => {
-	test("registers Google and OpenCode Go through public subpaths without Bun runtime APIs", async () => {
+	test("Node consumers import the public SDK", async () => {
+		await $`bun run build`
+			.cwd(path.resolve(import.meta.dir, "../../utils"))
+			.quiet();
 		const consumerDir = await fs.mkdtemp(
 			path.join(os.tmpdir(), "wincode-ai-node-consumer-")
 		);

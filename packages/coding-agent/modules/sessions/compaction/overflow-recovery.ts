@@ -2,7 +2,7 @@ import {
 	isOperationalFailure,
 	type SessionMessageId,
 } from "@wincode/agent-core";
-import { isModelContextOverflowError } from "@wincode/ai/model-failures";
+import { isModelContextOverflowError } from "@wincode/ai";
 import type { SessionMessage } from "../message";
 import { sanitizeInterruptedSessionMessages } from "../message";
 

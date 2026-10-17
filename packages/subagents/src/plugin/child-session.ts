@@ -1,5 +1,6 @@
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai";
 import type {
+	ProviderModelSelection,
 	SessionSdk,
 	SessionSdkCapabilityCeiling,
 	SessionSdkHandle,
@@ -10,7 +11,7 @@ import type { DelegationTask, SessionId } from "./task-types";
 export type SubagentChildSessionOptions = Readonly<{
 	agentId: DelegationTask["agentId"];
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 }>;
 
@@ -101,16 +102,30 @@ export const createSubagentChildSessionFactory = (
 	pluginPath: string
 ): SubagentChildSessionFactory => {
 	const createChildRuntime = (
-		capabilityCeiling?: SessionSdkCapabilityCeiling
+		capabilityCeiling?: SessionSdkCapabilityCeiling,
+		selection?: Readonly<{
+			pluginProviderIds?: readonly string[];
+			sessionId?: SessionId;
+		}>
 	) =>
 		sessionSdk.createSessionRuntime({
 			...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 			pluginPaths: [pluginPath],
+			...(selection?.pluginProviderIds === undefined
+				? {}
+				: { pluginProviderIds: selection.pluginProviderIds }),
+			...(selection?.sessionId === undefined
+				? {}
+				: { sessionId: selection.sessionId }),
 		});
 
 	return Object.freeze({
 		create: async (options) => {
-			const sdk = await createChildRuntime(options.capabilityCeiling);
+			const sdk = await createChildRuntime(options.capabilityCeiling, {
+				...(options.model === undefined
+					? {}
+					: { pluginProviderIds: [options.model.providerId] }),
+			});
 			try {
 				const sessionId = await sdk.createEmptySession({
 					agent: options.agentId,
@@ -127,7 +142,7 @@ export const createSubagentChildSessionFactory = (
 		},
 		open: async (sessionId, options) => {
 			const { capabilityCeiling, ...openOptions } = options ?? {};
-			const sdk = await createChildRuntime(capabilityCeiling);
+			const sdk = await createChildRuntime(capabilityCeiling, { sessionId });
 			const childSession = createChildSession(sdk, sessionId);
 			try {
 				await childSession.open(openOptions);

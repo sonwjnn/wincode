@@ -1,9 +1,9 @@
-import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
+import type { ThinkingLevel } from "@wincode/ai";
 import {
-	type ModelId,
-	type ThinkingLevel,
+	type ModelUsage,
+	modelUsageSchema,
 	thinkingLevelSchema,
-} from "@wincode/ai/models";
+} from "@wincode/ai";
 import {
 	isArray,
 	isBoolean,
@@ -20,6 +20,7 @@ import type { OperationalFailure } from "./failures";
 import type {
 	AgentId,
 	AttachmentId,
+	ModelId,
 	SessionMessageId,
 	SessionRecordId,
 	SubmissionId,
@@ -103,7 +104,7 @@ export type SessionSubmissionStatus =
 	| "processed"
 	| "processing";
 
-/** Per-message metadata safe to retain outside a transient Model Target. */
+/** Per-message metadata safe to retain independently of a Provider Model selection. */
 export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	agent?: AgentId;
 	/**
@@ -115,6 +116,11 @@ export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	joinedTurnId?: AgentTurnId;
 	model?: {
 		modelId: ModelId;
+		/** Non-secret owner provenance; Provider Model identity stays the ID pair. */
+		pluginProviderSource?: {
+			pluginId: string;
+			sourceIdentity: string;
+		};
 		providerId: string;
 	};
 	responseTimeMs?: number;
@@ -202,6 +208,11 @@ export type SessionRecord = ReadonlyDeep<{
 	messages: SessionMessageRecord[];
 	model: {
 		modelId: ModelId;
+		/** Non-secret owner provenance; Provider Model identity stays the ID pair. */
+		pluginProviderSource?: {
+			pluginId: string;
+			sourceIdentity: string;
+		};
 		providerId: string;
 		thinkingLevel?: ThinkingLevel;
 	};
@@ -233,14 +244,29 @@ const isSessionMessageMetadataRecord = (
 		return false;
 	}
 	const modelMetadata = value.model;
+	const pluginProviderSource = isPlainObject(modelMetadata)
+		? modelMetadata.pluginProviderSource
+		: undefined;
+	const validPluginProviderSource =
+		isUndefined(pluginProviderSource) ||
+		(isPlainObject(pluginProviderSource) &&
+			Object.keys(pluginProviderSource).every(
+				(key) => key === "pluginId" || key === "sourceIdentity"
+			) &&
+			isNonEmptyString(pluginProviderSource.pluginId) &&
+			isNonEmptyString(pluginProviderSource.sourceIdentity));
 	const validModelMetadata =
 		isUndefined(modelMetadata) ||
 		(isPlainObject(modelMetadata) &&
 			Object.keys(modelMetadata).every(
-				(key) => key === "modelId" || key === "providerId"
+				(key) =>
+					key === "modelId" ||
+					key === "providerId" ||
+					key === "pluginProviderSource"
 			) &&
 			isNonEmptyString(modelMetadata.modelId) &&
-			isNonEmptyString(modelMetadata.providerId));
+			isNonEmptyString(modelMetadata.providerId) &&
+			validPluginProviderSource);
 	return (
 		Object.keys(value).every(
 			(key) =>

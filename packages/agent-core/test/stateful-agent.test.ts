@@ -1,6 +1,4 @@
 import { expect, test } from "bun:test";
-import { createModelTarget } from "@wincode/ai/model-target";
-import { supportedChatModelIdSchema } from "@wincode/ai/models";
 import {
 	type AgentRuntime,
 	type AgentTurn,
@@ -9,6 +7,7 @@ import {
 	agentIdSchema,
 	createStatefulAgent,
 	toAgentTurnId,
+	toModelId,
 	toSessionMessageId,
 } from "../src/index";
 
@@ -34,13 +33,10 @@ const buildTurn = (
 	},
 	id: toAgentTurnId(id),
 	input: { messages: [...messages] },
-	model: createModelTarget(
-		{
-			modelId: supportedChatModelIdSchema.parse("gpt-5.6-luna"),
-			providerId: "openai",
-		},
-		{ kind: "api-key", apiKey: "test-key" }
-	),
+	model: {
+		modelId: toModelId("gpt-5.6-luna"),
+		providerId: "openai",
+	},
 });
 
 const consume = async (

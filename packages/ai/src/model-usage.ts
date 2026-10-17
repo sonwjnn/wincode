@@ -1,12 +1,13 @@
 import {
 	isNonNegativeInteger,
-	isNumber,
 	isObjectLike,
 	isUndefined,
-} from "@wincode/utils/guards";
+} from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
-import type { ModelCost, ModelCostTier, ModelMetadataEntry } from "./models";
+import type { ModelCost, ModelCostTier } from "./model-metadata.ts";
+
+export type { ModelCost, ModelCostTier } from "./model-metadata.ts";
 export const modelUsageSchema = z
 	.object({
 		cacheReadTokens: z.number().int().nonnegative().optional(),
@@ -20,35 +21,22 @@ export const modelUsageSchema = z
 
 const TOKENS_PER_MILLION = 1_000_000;
 
-type UsagePricing = ModelCost | ModelMetadataEntry;
+type UsagePricing =
+	| ModelCost
+	| Readonly<{
+			cost: ModelCost;
+			tiers?: readonly ModelCostTier[];
+	  }>;
 type ResolvedUsagePricing = Readonly<{
 	cost: ModelCost | undefined;
 	tiers: readonly ModelCostTier[] | undefined;
 }>;
 
-const isModelCost = (value: unknown): value is ModelCost => {
-	if (!isObjectLike(value)) {
-		return false;
-	}
-	return (
-		"input" in value &&
-		isNumber(value.input) &&
-		"output" in value &&
-		isNumber(value.output)
-	);
-};
-
 const resolveUsagePricing = (pricing: UsagePricing): ResolvedUsagePricing => {
 	if ("cost" in pricing) {
-		return {
-			cost: isModelCost(pricing.cost) ? pricing.cost : undefined,
-			tiers: pricing.tiers,
-		};
+		return { cost: pricing.cost, tiers: pricing.tiers };
 	}
-	return {
-		cost: isModelCost(pricing) ? pricing : undefined,
-		tiers: undefined,
-	};
+	return { cost: pricing, tiers: undefined };
 };
 
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
@@ -101,7 +89,7 @@ export const getModelContextTokens = (usage: ModelUsage): number =>
 
 /**
  * USD cost for a single model usage. `null` when pricing is unknown.
- * `pricing` may be a raw cost record or catalog metadata with cost tiers.
+ * `pricing` may be a raw cost record or a cost record with tier overrides.
  */
 export const calculateModelUsageCostUsd = (
 	pricing: UsagePricing | null | undefined,
@@ -119,9 +107,16 @@ export const calculateModelUsageCostUsd = (
 	const uncachedInput = Math.max(0, usage.inputTokens - cacheRead - cacheWrite);
 	const totalInput = uncachedInput + cacheRead + cacheWrite;
 	const rates =
-		tiers
-			?.filter((candidate) => totalInput > candidate.inputTokensAbove)
-			.at(-1) ?? cost;
+		tiers?.reduce<ModelCostTier | undefined>((highest, candidate) => {
+			if (
+				totalInput <= candidate.inputTokensAbove ||
+				(highest !== undefined &&
+					candidate.inputTokensAbove <= highest.inputTokensAbove)
+			) {
+				return highest;
+			}
+			return candidate;
+		}, undefined) ?? cost;
 	const cacheReadRate = rates.cacheRead ?? cost.cacheRead;
 	const cacheWriteRate = rates.cacheWrite ?? cost.cacheWrite;
 	let cacheReadCost = 0;

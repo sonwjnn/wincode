@@ -15,12 +15,13 @@ the general `settings.json` or `settings.jsonc` document:
 }
 ```
 
-Overrides are keyed by `<connection-provider-id>/<model-id>` and accept
-`short`, `long`, or `off`. Wincode sends a control only when the selected
-model's metadata declares that control and its Model Protocol. Missing or
-unsupported capabilities leave the corresponding option out of the request.
-OpenCode Go is routed by the selected model's actual Model Protocol; it does not
-inherit cache capabilities from its Connection Provider ID.
+Overrides are keyed by the exact Provider Model identity,
+`<provider-id>/<model-id>`, and accept `short`, `long`, or `off`. Wincode sends a
+control only when the selected model's metadata declares that control and its
+Model Protocol. Missing or unsupported capabilities leave the corresponding
+option out of the request. OpenCode Go routes are evaluated using the selected
+model's actual Model Protocol and declared metadata; Wincode does not infer
+cache support from provider identity.
 
 ## OpenAI
 

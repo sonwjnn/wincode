@@ -1,23 +1,4 @@
-import { fromPartial } from "@total-typescript/shoehorn";
-import type { SessionMessageId } from "@wincode/agent-core";
-import { toSubmissionId } from "@wincode/agent-core";
-import { isUndefined } from "@wincode/utils";
-import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
-import {
-	agentTurnId,
-	compactionId,
-	toolCallId as makeToolCallId,
-	modelId,
-	queuedSubmissionId,
-	sessionId,
-	sessionMessageId,
-} from "../support/identifiers";
-
-// The model pricing provider fetches a remote table unless offline mode is
-// enabled, so tests opt out before any app module evaluates the environment.
-process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
-
-import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -37,18 +18,21 @@ import {
 	createRouter,
 	RouterContextProvider,
 } from "@tanstack/react-router";
-import { createConnections } from "@wincode/ai/connections";
+import { fromPartial } from "@total-typescript/shoehorn";
+import type { SessionMessageId } from "@wincode/agent-core";
+import { toSubmissionId } from "@wincode/agent-core";
+import type { ProviderModel } from "@wincode/ai";
+import { isUndefined } from "@wincode/utils";
 import { act, type ReactNode, useEffect, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
-import { ConnectionsProvider } from "@/modules/connections";
-import { ModelPricingProvider } from "@/modules/model-pricing";
-import * as modelPricingCacheModule from "@/modules/model-pricing/model-pricing-cache";
 import {
 	PromptConfigProvider,
 	usePromptConfig,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
+import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
+import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -66,6 +50,15 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import {
+	agentTurnId,
+	compactionId,
+	toolCallId as makeToolCallId,
+	modelId,
+	queuedSubmissionId,
+	sessionId,
+	sessionMessageId,
+} from "../support/identifiers";
 
 beforeAll(() => {
 	// Text parts map through MarkdownMessagePart; the mock client keeps block
@@ -75,15 +68,7 @@ beforeAll(() => {
 	);
 });
 
-// These tests render the provider without a pricing prop, so keep it off the
-// developer's real pricing cache: only the bundled snapshot should show.
-const readModelPricingCacheSpy = spyOn(
-	modelPricingCacheModule,
-	"readModelPricingCache"
-).mockReturnValue(null);
-
 afterAll(() => {
-	readModelPricingCacheSpy.mockRestore();
 	setMarkdownTreeSitterClientForTests(null);
 });
 
@@ -173,6 +158,7 @@ const buildTestRouter = () =>
 
 type ChatShellProbeProps = {
 	activeMessages?: readonly SessionMessage[];
+	providerController?: InteractiveProviderController;
 	agentHolder: { current: string };
 	holder: { current: ChatShellProbeHandle | null };
 	initialCompactions?: SessionCompaction[];
@@ -203,6 +189,7 @@ function ChatShellProbe({
 	initialCompactions = [],
 	initialMessages,
 	isBusy = false,
+	providerController,
 	isCompacting: initialIsCompacting = false,
 	isInterruptArmed = false,
 	onRetry,
@@ -243,6 +230,7 @@ function ChatShellProbe({
 				onRetry={onRetry}
 				onSubmit={() => true}
 				promptHistory={[]}
+				providerController={providerController}
 				queuedSubmissions={queuedSubmissions}
 				transcriptNotice={transcriptNotice}
 				viewId="test"
@@ -259,6 +247,7 @@ type ChatShellSetup = {
 };
 type ChatShellRenderOptions = {
 	activeMessages?: readonly SessionMessage[];
+	providerController?: InteractiveProviderController;
 	height: number;
 	width: number;
 	initialCompactions?: SessionCompaction[];
@@ -275,6 +264,7 @@ const renderChatShell = async (
 	initialMessages: SessionMessage[],
 	{
 		activeMessages,
+		providerController,
 		height,
 		width,
 		initialCompactions = [],
@@ -329,35 +319,32 @@ const renderChatShell = async (
 				value={{ configStore, homeRoot: os.homedir(), workspace }}
 			>
 				<ToastProvider>
-					<ConnectionsProvider connections={createConnections()}>
-						<AgentRegistryProvider>
-							<KeyboardLayerProvider>
-								<PromptConfigProvider>
-									<ModelPricingProvider>
-										<DialogProvider>
-											<RouterContextProvider router={router}>
-												<CommandControllerProvider>
-													<ChatShellProbe
-														activeMessages={activeMessages}
-														agentHolder={agent}
-														holder={holder}
-														initialCompactions={initialCompactions}
-														initialMessages={initialMessages}
-														isBusy={isBusy}
-														isCompacting={isCompacting}
-														isInterruptArmed={isInterruptArmed}
-														onRetry={onRetry}
-														queuedSubmissions={queuedSubmissions}
-														transcriptNotice={transcriptNotice}
-													/>
-												</CommandControllerProvider>
-											</RouterContextProvider>
-										</DialogProvider>
-									</ModelPricingProvider>
-								</PromptConfigProvider>
-							</KeyboardLayerProvider>
-						</AgentRegistryProvider>
-					</ConnectionsProvider>
+					<AgentRegistryProvider>
+						<KeyboardLayerProvider>
+							<PromptConfigProvider>
+								<DialogProvider>
+									<RouterContextProvider router={router}>
+										<CommandControllerProvider>
+											<ChatShellProbe
+												activeMessages={activeMessages}
+												agentHolder={agent}
+												holder={holder}
+												initialCompactions={initialCompactions}
+												initialMessages={initialMessages}
+												isBusy={isBusy}
+												isCompacting={isCompacting}
+												isInterruptArmed={isInterruptArmed}
+												onRetry={onRetry}
+												providerController={providerController}
+												queuedSubmissions={queuedSubmissions}
+												transcriptNotice={transcriptNotice}
+											/>
+										</CommandControllerProvider>
+									</RouterContextProvider>
+								</DialogProvider>
+							</PromptConfigProvider>
+						</KeyboardLayerProvider>
+					</AgentRegistryProvider>
 				</ToastProvider>
 			</ConfigProvider>
 		</ThemeProvider>,
@@ -414,6 +401,19 @@ const expandShellBlock = async (setup: TestRendererSetup): Promise<string> => {
 		setup.mockInput.pressKey("o", { ctrl: true });
 		const frame = await waitForFrameText(setup, "(Ctrl+O: Collapse)", 400);
 		if (frame.includes("(Ctrl+O: Collapse)")) {
+			return frame;
+		}
+	}
+	return setup.captureCharFrame();
+};
+
+const collapseShellBlock = async (
+	setup: TestRendererSetup
+): Promise<string> => {
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		setup.mockInput.pressKey("o", { ctrl: true });
+		const frame = await waitForFrameText(setup, "(Ctrl+O: Expand)", 400);
+		if (frame.includes("(Ctrl+O: Expand)")) {
 			return frame;
 		}
 	}
@@ -1090,6 +1090,77 @@ describe("ChatShell activity footer", () => {
 			setup.renderer.destroy();
 		}
 	});
+	test("refreshes Provider Model usage metadata after model discovery changes", async () => {
+		const selection = {
+			modelId: modelId("provider-context-model"),
+			providerId: "plugin-provider",
+		};
+		let availabilityRevision = 0;
+		let knownModels: readonly ProviderModel[] = [
+			{
+				limits: { contextWindowTokens: 200_000 },
+				modelId: selection.modelId,
+				pricing: {
+					inputPerMillionTokensUsd: 1,
+					outputPerMillionTokensUsd: 1,
+				},
+				protocolId: "fake-provider",
+				providerId: selection.providerId,
+			},
+		];
+		const availabilityListeners = new Set<() => void>();
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailabilityRevision: () => availabilityRevision,
+			getCompositionRevision: () => 0,
+			getKnownModels: async () => knownModels,
+			subscribeAvailability: (listener: () => void) => {
+				availabilityListeners.add(listener);
+				return () => availabilityListeners.delete(listener);
+			},
+		});
+		const usageMessage: SessionMessage = {
+			...assistantMessage([], "provider-usage"),
+			metadata: {
+				model: selection,
+				usage: { inputTokens: 99_999, outputTokens: 1 },
+			},
+		};
+		const { setup } = await renderChatShell([usageMessage], {
+			height: 12,
+			providerController,
+			width: 100,
+		});
+
+		try {
+			const initialFrame = await waitForFrameText(setup, "200K");
+			expect(initialFrame).toContain("~$0.10");
+			await act(() => {
+				knownModels = [
+					{
+						limits: { contextWindowTokens: 300_000 },
+						modelId: selection.modelId,
+						pricing: {
+							inputPerMillionTokensUsd: 10,
+							outputPerMillionTokensUsd: 10,
+						},
+						protocolId: "fake-provider",
+						providerId: selection.providerId,
+					},
+				];
+				availabilityRevision += 1;
+				for (const listener of [...availabilityListeners]) {
+					listener();
+				}
+			});
+			const updatedFrame = await waitForFrameText(setup, "300K");
+			expect(updatedFrame).toContain("~$1.00");
+			expect(updatedFrame).not.toContain("200K");
+			expect(updatedFrame).not.toContain("~$0.10");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("shows compacting activity while retaining provider usage", async () => {
 		const messages: SessionMessage[] = [
 			userMessage("user-1"),
@@ -1119,7 +1190,8 @@ describe("ChatShell activity footer", () => {
 			const loadingFrame = setup.captureCharFrame();
 			expect(loadingFrame).toContain("Compacting context... (esc to cancel)");
 			expect(loadingFrame).toContain("Compacting context · Esc cancel");
-			expect(loadingFrame).toContain("1%(7.3K/1.1M)");
+			expect(loadingFrame).toContain("7.3K cost unknown");
+			expect(loadingFrame).not.toContain("1%(7.3K/1.1M)");
 			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
 
 			await Bun.sleep(2000);
@@ -1438,9 +1510,7 @@ describe("ChatShell shell output blocks", () => {
 			let frame = setup.captureCharFrame();
 			expect(frame).toContain("… 4 more lines");
 
-			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
+			frame = await expandShellBlock(setup);
 			expect(frame).toContain("row 10");
 
 			// Resizing reflows the preview but keeps the block expanded.
@@ -1451,9 +1521,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(frame).not.toContain("more lines");
 
 			// Collapsing after the resize restores a preview for the new width.
-			setup.mockInput.pressKey("o", { ctrl: true });
-			await flushUi(setup);
-			frame = setup.captureCharFrame();
+			frame = await collapseShellBlock(setup);
 			expect(frame).toContain("row 1");
 			expect(frame).not.toContain("row 7");
 			expect(frame).toContain("… 4 more lines");

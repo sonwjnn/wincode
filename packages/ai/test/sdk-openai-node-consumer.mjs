@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { createProviderCollection } from "@wincode/ai/sdk";
-import { createOpenAIProvider } from "@wincode/ai/sdk/providers/openai";
+import { createOpenAIProvider, createProviderCollection } from "@wincode/ai";
 
 const sdk = createProviderCollection();
 let apiKeyHeader;

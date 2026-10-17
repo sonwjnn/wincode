@@ -8,11 +8,9 @@ import type {
 	SessionRecord,
 } from "@wincode/agent-core";
 import { createOperationalFailure } from "@wincode/agent-core";
-import { createModelTarget } from "@wincode/ai/model-target";
 import { isObjectLike, isUndefined } from "@wincode/utils";
 import { z } from "zod";
 import { buildAgent } from "@/modules/agents/built-ins";
-import { RetiredModelError } from "@/modules/model-target";
 import {
 	buildAgentTurn,
 	isSettledSessionToolCallPart,
@@ -56,21 +54,31 @@ test("replays namespaced Plugin tool calls without core-specific tool names", ()
 	).toBe(false);
 });
 
-test("preserves the actionable retired-model refusal in the failure message", () => {
-	// Regression #57: retired sessions must tell the user how to recover.
+test("persists Provider Model errors as safe failures with exact request identity", () => {
 	const record = buildAssistantFailureSessionRecord({
 		agentId: agentId("build"),
-		error: new RetiredModelError("openai", "gpt-5.6-luna"),
+		error: new Error(
+			"Provider Model openai/gpt-5.6-luna is unavailable in this Session Host."
+		),
 		model,
-		turnId: agentTurnId("turn-retired-model"),
+		turnId: agentTurnId("turn-unavailable-provider-model"),
 	});
 
 	expect(record.messages[0]?.parts).toEqual([
-		{
-			text: "Model openai/gpt-5.6-luna is no longer available. Choose another model to continue this session.",
-			type: "text",
-		},
+		{ text: "The model request failed.", type: "text" },
 	]);
+	expect(record.outcome).toMatchObject({
+		kind: "assistant",
+		terminal: {
+			failure: {
+				code: "unknown",
+				details: {
+					modelId: model.modelId,
+					providerId: model.providerId,
+				},
+			},
+		},
+	});
 });
 
 const createTurn = (): AgentTurn => ({
@@ -90,10 +98,7 @@ const createTurn = (): AgentTurn => ({
 			},
 		],
 	},
-	model: createModelTarget(model, {
-		apiKey: "test-key",
-		kind: "api-key",
-	}),
+	model,
 });
 
 test("keeps inline file parts in the Agent Turn model input", () => {
@@ -110,7 +115,7 @@ test("keeps inline file parts in the Agent Turn model input", () => {
 				role: "user",
 			},
 		],
-		modelTarget: createTurn().model,
+		model: createTurn().model,
 		resolvedAgent: buildAgent,
 		turnId: agentTurnId("turn-file-input"),
 	});
@@ -141,7 +146,7 @@ test("places the Skill context before the user message it was selected for", () 
 				role: "user",
 			},
 		],
-		modelTarget: createTurn().model,
+		model: createTurn().model,
 		resolvedAgent: buildAgent,
 		skill: {
 			contentHash: "hash-1",
@@ -179,7 +184,7 @@ test("appends the Skill context when the current user message is absent", () => 
 				role: "assistant",
 			},
 		],
-		modelTarget: createTurn().model,
+		model: createTurn().model,
 		resolvedAgent: buildAgent,
 		skill: {
 			contentHash: "hash-1",
@@ -223,7 +228,7 @@ test("appends the Skill context when the current user message is empty", () => {
 				role: "user",
 			},
 		],
-		modelTarget: createTurn().model,
+		model: createTurn().model,
 		resolvedAgent: buildAgent,
 		skill: {
 			contentHash: "hash-1",
@@ -382,8 +387,15 @@ test("Agent Turn definitions restrict edit input to the active mode", async () =
 	).toBe(false);
 });
 
-test("commits only the durable assistant outcome before exposing terminal output", async () => {
-	const turn = createTurn();
+test("commits Plugin owner provenance with the durable effective model selection", async () => {
+	const pluginProviderSource = {
+		pluginId: "runtime-test-plugin",
+		sourceIdentity: "/trusted/plugins/runtime-test.ts",
+	};
+	const turn: AgentTurn = {
+		...createTurn(),
+		model: { ...model, pluginProviderSource },
+	};
 	const callbackOrder: string[] = [];
 	const checkpoints: SessionRecord[] = [];
 	const runtime: AgentRuntime = {
@@ -448,7 +460,7 @@ test("commits only the durable assistant outcome before exposing terminal output
 		{
 			id: sessionMessageId("assistant-turn-runtime-test"),
 			metadata: {
-				model,
+				model: { ...model, pluginProviderSource },
 				sourceUserMessageId: sessionMessageId("message-user"),
 				usage: { inputTokens: 12, outputTokens: 4 },
 			},
@@ -456,10 +468,18 @@ test("commits only the durable assistant outcome before exposing terminal output
 			role: "assistant",
 		},
 	]);
+	expect(record.model.pluginProviderSource).toEqual(pluginProviderSource);
 });
 
-test("checkpoints completed Tool Calls separately from terminal assistant text", async () => {
-	const turn = createTurn();
+test("checkpoints completed Tool Calls with the effective Plugin Provider owner", async () => {
+	const pluginProviderSource = {
+		pluginId: "runtime-test-plugin",
+		sourceIdentity: "/trusted/plugins/runtime-test.ts",
+	};
+	const turn: AgentTurn = {
+		...createTurn(),
+		model: { ...model, pluginProviderSource },
+	};
 	const checkpoints: SessionRecord[] = [];
 	const runtime: AgentRuntime = {
 		async *run(currentTurn): AsyncGenerator<AgentTurnEvent> {
@@ -516,6 +536,12 @@ test("checkpoints completed Tool Calls separately from terminal assistant text",
 		"tool",
 		"assistant",
 	]);
+	expect(checkpoints[0]?.messages[0]?.metadata?.model).toMatchObject({
+		pluginProviderSource,
+	});
+	expect(checkpoints[0]?.model.pluginProviderSource).toEqual(
+		pluginProviderSource
+	);
 	expect(checkpoints[0]?.messages[0]?.parts).toEqual([
 		{
 			input: { command: "git status" },

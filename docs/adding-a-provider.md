@@ -1,81 +1,25 @@
-# Adding a direct model provider
+# Adding a Provider SDK implementation
 
-Wincode runs model requests locally. A provider connection supplies credentials owned by the user; there is no Wincode account or hosted execution path.
+Wincode executes model requests through the Provider SDK. A Provider owns its model identity, authorization resolution, protocol request/stream behavior, and any Provider-scoped resources; Coding-Agent owns credential persistence and selection.
 
-## Model catalog
+## Provider Models
 
-Add a direct entry to `packages/ai/src/catalog.ts`:
+For built-in static inventories, add model IDs to `packages/ai/scripts/provider-model-catalog.source.json`. Declare the provider's default protocol once; use a model object only for a protocol or capability override. Run `bun run sync-provider-model-catalog`; it combines the manifest with models.dev facts and `packages/ai/scripts/metadata-model.ts` overlays, then imports the generated `packages/ai/src/generated/<provider>.generated.ts` baseline directly from the provider factory. Metadata enriches listed models but never adds identities. Do not keep a parallel `*-models.ts` wrapper.
 
-```ts
-{
-	connectionProviderId: "example",
-	route: "direct",
-	displayName: "Example Model",
-	id: "example-model",
-	provider: "example",
-	lifecycle: "active",
-}
-```
+When adding a model fact that models.dev does not publish, add a keyed manual overlay in `metadata-model.ts`. The generator only applies overlays to models already present in the provider manifest.
 
-For direct entries, `connectionProviderId` and `provider` must match one of the supported provider IDs. Model identity is the pair `(provider, modelId)`, not the model ID alone.
+Use `discoverModels` for account- or endpoint-specific inventories instead of adding them to the static baseline. Every returned model must use the exact Provider ID and model ID that consumers select. Capabilities, reasoning efforts, cache tiers, context/output limits, and pricing are optional published metadata. Do not infer missing metadata from a neighboring model.
 
-A new entry carries no reasoning levels, cost, or limits. Those come from the generated snapshot, so a model the upstream does not list needs a manual overlay in `packages/ai/scripts/metadata-model.ts` before it can offer any reasoning level at all. Run the generator and read its coverage report:
+Call `ProviderCollection.refreshModels()` explicitly to refresh every registered provider with `discoverModels`; pass `providerIds` to limit the refresh. Static providers are skipped. The result reports caller cancellation in `aborted` and per-provider failures in `errors`, so one provider's failure does not block other refreshes. Refresh failures preserve last-known snapshots. Call `restoreModels()` after registering providers to load persisted snapshots without network access.
 
-```sh
-bun run packages/ai/scripts/sync-model-metadata.ts
-```
+## Provider implementation
 
-It prints which entries came from the source, which from an overlay, and which are absent upstream. An `active` entry in the last group cannot offer levels, limits, or prices, and the report is the only place that gap is visible.
+Add the implementation under `packages/ai/src/sdk-providers/`. Implement `resolveAuthorization` and `streamChat` against the Provider SDK contracts in `packages/ai/src/sdk.ts`; keep credentials in Provider authorization state, not in chat requests or model identity. Factories must reject unsupported Provider or protocol IDs at construction so a bad manifest mapping cannot become selectable. Reuse protocol serializers, stream parsers, and errors from `packages/ai/src/sdk-private/` when appropriate. Do not introduce a Model Target, Model Client, Catalog adapter, or Connections execution fallback.
 
-To retire a model instead of deleting it, set `lifecycle: "retired"`. Retired entries stay resolvable so existing Session Records keep their model identity, and they stop being selectable in the model picker. See [ADR-0012](adr/0012-model-catalog-lifecycle.md).
-
-## Model policy and protocol clients
-
-Reasoning options are translated once, in `packages/ai/src/model-provider-options.ts` (`resolveReasoning`), from the entry's published `ThinkingPolicy` into whichever provider shape reaches the wire. Do not add a per-model table for a provider: if a model needs a different level set or budget bound, that is a metadata problem, so fix the overlay or the upstream reading in `packages/ai/src/models-dev.ts`.
-
-The `providerChosenBudgetModels` set in that file is the one hand-maintained exception, for providers that pick their own reasoning budget. Adding a model there is a deliberate statement, not a default.
-
-Register one adapter per Connection Provider in
-`packages/ai/src/model-client/provider-adapters/index.ts`. Each adapter owns its
-default Model Protocol, endpoint, authorization, headers, and provider-specific
-body policy; use existing Model Catalog protocol metadata only to override a
-provider default. Do not add route configuration to every model.
-
-Implement request-body serialization and streamed response parsing together in a
-reusable Model Protocol strategy under
-`packages/ai/src/model-client/protocols/`, then bind that strategy in the
-provider adapter. The adapter carries the selected strategy through request
-serialization and response streaming, with no second protocol-name lookup. The
-provider-adapter registry is exhaustive and typed. A Connection Provider may
-reuse an existing strategy, and unsupported provider/protocol combinations
-must fail explicitly. Keep common SSE transport, usage normalization, and
-error translation shared.
-
-Keep callers on provider-neutral `ModelClient.stream()`. The Agent Runtime must
-not acquire provider-specific wire behavior.
-
-## CLI credentials
-
-Add the provider definition in `packages/ai/src/connections/provider-definition.ts`:
-
-- display name;
-- supported connection methods;
-- strict credential schema;
-- credential validation;
-- provider-neutral authorization used by the model client;
-- connection status.
-
-Add the factory and deterministic order entry in `packages/ai/src/connections/provider-registry.ts`. The provider must be present in the model catalog, resolver registry, and AI connection registry together.
+The package root, `@wincode/ai`, re-exports the Provider SDK, built-in provider factories, and shared model helpers; use it for application and test imports. Existing SDK and model-helper subpath exports remain available. Keep `packages/ai/src/sdk.ts` independent from built-in provider imports. Register built-in construction and connect-method metadata in `packages/coding-agent/modules/providers/built-in-provider-catalog.ts`; bind method IDs to their distinct controller handlers in `packages/coding-agent/modules/providers/interactive-provider-controller.ts`. The connect dialog consumes executable method descriptors by capability rather than branching on provider IDs. Keep API-key persistence, discovery, OAuth/device, and trusted Plugin connection flows distinct. The Session Provider collection composes catalog Providers with Plugin Providers from the trusted Plugin registration path.
 
 ## Validation
 
-Run:
+Use fake-only tests at the public Provider SDK seam. Cover the observable request payload, stream events and usage, continuation, supported reasoning/cache behavior, authentication/provider/transport failures, abort, and exact Provider Model identity. Do not call live endpoints or use real credentials.
 
-```sh
-bun run --cwd packages/coding-agent check-types
-bun run --cwd packages/coding-agent test
-bun run test
-bun run check
-```
-
-Add focused tests for catalog route coverage, request serialization, stream/error mapping, credential validation, and provider registration. Do not add account, subscription, quota, hosted transport, remote session, or billing behavior.
+Run focused tests for the Provider, then `bun fix`, `bun check`, `bun check-types`, the default test suite, and the E2E suite. Do not add account, subscription, quota, hosted transport, remote session, or billing behavior.

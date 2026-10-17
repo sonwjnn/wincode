@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type ChatEvent, createProviderCollection } from "@wincode/ai/sdk";
 import {
+	type ChatEvent,
 	createGoogleProvider,
+	createProviderCollection,
 	type GoogleFetch,
-} from "@wincode/ai/sdk/providers/google";
+} from "@wincode/ai";
 
 const sseResponse = (chunks: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(
@@ -104,6 +105,7 @@ describe("public Google SDK provider", () => {
 			messages: input,
 			modelId: "gemini-3.8-flash",
 			providerId: "google",
+			reasoningEffort: "high",
 			system: "Stable system instructions.",
 			tools: [
 				{
@@ -133,6 +135,7 @@ describe("public Google SDK provider", () => {
 		);
 		expect(requests[0]?.body).toMatchObject({
 			cachedContent: "cachedContents/session",
+			generationConfig: { thinkingConfig: { thinkingLevel: "high" } },
 			contents: [
 				{
 					role: "user",
@@ -206,9 +209,21 @@ describe("public Google SDK provider", () => {
 				},
 			},
 		]);
-		await provider.close();
+		await sdk.close();
 		expect(cacheDeletes).toEqual([{ name: "cachedContents/session" }]);
 		expect(JSON.stringify(events)).not.toContain("app-owned-google-key");
+		expect(
+			sdk.getModel("google", "gemini-3.8-flash")?.reasoningEfforts
+		).not.toContain("xhigh");
+		for await (const _event of sdk.chat({
+			messages: input,
+			modelId: "gemini-3.8-flash",
+			providerId: "google",
+			reasoningEffort: "xhigh",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+		expect(requests[1]?.body).not.toHaveProperty("generationConfig");
 	});
 
 	test("reuses session CachedContent and retries an invalid resource uncached", async () => {
@@ -257,6 +272,70 @@ describe("public Google SDK provider", () => {
 		expect(deleted).toEqual(["cachedContents/1"]);
 	});
 
+	test("does not reuse CachedContent across changed Provider credentials", async () => {
+		const bodyRequests: Record<string, unknown>[] = [];
+		const cacheClientKeys: string[] = [];
+		const deleted: string[] = [];
+		const requestKeys: string[] = [];
+		let cacheCount = 0;
+		const sdk = createProviderCollection();
+		const provider = createGoogleProvider({
+			createCacheClient: (apiKey) => {
+				cacheClientKeys.push(apiKey);
+				return {
+					create: async () => ({ name: `cachedContents/${++cacheCount}` }),
+					delete: async ({ name }) => {
+						deleted.push(name);
+						return {};
+					},
+				};
+			},
+			fetch: async (_url, init) => {
+				requestKeys.push(
+					new Headers(init?.headers).get("x-goog-api-key") ?? ""
+				);
+				bodyRequests.push(
+					JSON.parse(String(init?.body)) as Record<string, unknown>
+				);
+				return sseResponse([{ candidates: [{ finishReason: "STOP" }] }]);
+			},
+		});
+		sdk.register(provider);
+		const send = async (apiKey: string) => {
+			await sdk.setCredential("google", { apiKey, kind: "api-key" });
+			for await (const _event of sdk.chat({
+				cacheRetention: "short",
+				messages: [
+					{ content: [{ text: "Hello", type: "text" }], role: "user" },
+				],
+				modelId: "gemini-3.8-flash",
+				providerId: "google",
+				system: "Stable prefix",
+			})) {
+				// Consume the public stream to its terminal outcome.
+			}
+		};
+
+		await send("credential-one");
+		await send("credential-one");
+		await send("credential-two");
+		await provider.close();
+
+		expect(cacheClientKeys).toEqual(["credential-one", "credential-two"]);
+		expect(requestKeys).toEqual([
+			"credential-one",
+			"credential-one",
+			"credential-two",
+		]);
+		expect(bodyRequests.map((body) => body.cachedContent)).toEqual([
+			"cachedContents/1",
+			"cachedContents/1",
+			"cachedContents/2",
+		]);
+		expect(deleted).toEqual(["cachedContents/1", "cachedContents/2"]);
+		expect(JSON.stringify(bodyRequests)).not.toContain("credential-");
+	});
+
 	test("unsupported cache requests skip creation and supported cache creation failures continue uncached", async () => {
 		const bodies: Record<string, unknown>[] = [];
 		let creates = 0;
@@ -283,16 +362,21 @@ describe("public Google SDK provider", () => {
 		});
 		sdk.register(provider);
 		await sdk.setCredential("google", { apiKey: "key", kind: "api-key" });
-		for await (const _event of sdk.chat({
+		const unsupportedCacheEvents: ChatEvent[] = [];
+		for await (const event of sdk.chat({
 			cacheRetention: "short",
 			messages: [{ content: [{ text: "Hello", type: "text" }], role: "user" }],
 			modelId: "custom-gemini",
 			providerId: "google",
 			system: "System prefix",
 		})) {
-			// Consume the terminal outcome.
+			unsupportedCacheEvents.push(event);
 		}
 
+		expect(unsupportedCacheEvents.at(-1)).toEqual({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
 		expect(creates).toBe(0);
 		expect(bodies[0]).toMatchObject({
 			systemInstruction: { parts: [{ text: "System prefix" }] },
@@ -323,15 +407,20 @@ describe("public Google SDK provider", () => {
 			apiKey: "key",
 			kind: "api-key",
 		});
-		for await (const _event of supportedSdk.chat({
+		const fallbackEvents: ChatEvent[] = [];
+		for await (const event of supportedSdk.chat({
 			cacheRetention: "short",
 			messages: [{ content: [{ text: "Hello", type: "text" }], role: "user" }],
 			modelId: "gemini-3.8-flash",
 			providerId: "google",
 			system: "System prefix",
 		})) {
-			// Consume the public stream after the cache manager falls back.
+			fallbackEvents.push(event);
 		}
+		expect(fallbackEvents.at(-1)).toEqual({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
 		expect(cacheCreationAttempts).toBe(1);
 		expect(uncachedBody).toMatchObject({
 			systemInstruction: { parts: [{ text: "System prefix" }] },
@@ -480,5 +569,43 @@ describe("public Google SDK provider", () => {
 			type: "terminal",
 		});
 		await abortingProvider.close();
+	});
+
+	test("Google disables declared thinking when the shared reasoning level is off", async () => {
+		let body: Record<string, unknown> | undefined;
+		const sdk = createProviderCollection();
+		sdk.register(
+			createGoogleProvider({
+				fetch: async (_url, init) => {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					return sseResponse([{ candidates: [{ finishReason: "STOP" }] }]);
+				},
+				models: [
+					{
+						modelId: "off-model",
+						protocolId: "google",
+						providerId: "google",
+						reasoningEfforts: ["off"],
+					},
+				],
+			})
+		);
+		await sdk.setCredential("google", {
+			apiKey: "google-test-key",
+			kind: "api-key",
+		});
+
+		for await (const _event of sdk.chat({
+			messages: [{ content: [{ text: "Hello", type: "text" }], role: "user" }],
+			modelId: "off-model",
+			providerId: "google",
+			reasoningEffort: "off",
+		})) {
+			// Consume the stream to verify the provider's wire contract.
+		}
+
+		expect(body).toMatchObject({
+			generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+		});
 	});
 });

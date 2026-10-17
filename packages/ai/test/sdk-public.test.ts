@@ -7,7 +7,9 @@ import {
 	type ProviderChatEvent,
 	ProviderError,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
+	parseProviderModelSelection,
+	providerModelSelectionSchema,
+} from "@wincode/ai";
 
 const demoProvider = (): Provider => ({
 	id: "demo-provider",
@@ -34,6 +36,24 @@ const demoProvider = (): Provider => ({
 			usage: { inputTokens: 4, outputTokens: 2 },
 		};
 	},
+});
+
+test("SDK selection parsing preserves exact unknown Provider Model identity", () => {
+	const selection = parseProviderModelSelection(
+		"plugin-provider/vendor/model-v4"
+	);
+	expect(selection).toEqual({
+		modelId: "vendor/model-v4",
+		providerId: "plugin-provider",
+	});
+	expect(providerModelSelectionSchema.safeParse(selection).success).toBe(true);
+	expect(parseProviderModelSelection("plugin-provider/")).toBeNull();
+	expect(
+		providerModelSelectionSchema.safeParse({
+			modelId: "",
+			providerId: "plugin-provider",
+		}).success
+	).toBe(false);
 });
 
 describe("public SDK provider collection", () => {
@@ -69,6 +89,135 @@ describe("public SDK provider collection", () => {
 			},
 			{ type: "usage", usage: { inputTokens: 4, outputTokens: 2 } },
 			{ type: "terminal", outcome: { status: "success" } },
+		]);
+	});
+
+	test("ProviderCollection close awaits every Provider once even when cleanup fails", async () => {
+		const cleanupStarted: string[] = [];
+		const bothCleanupsStarted = Promise.withResolvers<void>();
+		const finishSecondCleanup = Promise.withResolvers<void>();
+		const recordCleanup = (providerId: string): void => {
+			cleanupStarted.push(providerId);
+			if (cleanupStarted.length === 2) {
+				bothCleanupsStarted.resolve();
+			}
+		};
+		const sdk = createProviderCollection();
+		sdk.register({
+			...demoProvider(),
+			close: () => {
+				recordCleanup("failed-provider");
+				throw new Error("private cleanup detail");
+			},
+			id: "failed-provider",
+			models: [
+				{
+					modelId: "failed-model",
+					protocolId: "demo-protocol",
+					providerId: "failed-provider",
+				},
+			],
+		});
+		sdk.register({
+			...demoProvider(),
+			close: async () => {
+				recordCleanup("deferred-provider");
+				await finishSecondCleanup.promise;
+			},
+			id: "deferred-provider",
+			models: [
+				{
+					modelId: "deferred-model",
+					protocolId: "demo-protocol",
+					providerId: "deferred-provider",
+				},
+			],
+		});
+
+		const closing = sdk.close();
+		let settled = false;
+		void closing.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			}
+		);
+		expect(sdk.close()).toBe(closing);
+		await bothCleanupsStarted.promise;
+		expect(cleanupStarted).toEqual(["failed-provider", "deferred-provider"]);
+		expect(settled).toBe(false);
+		finishSecondCleanup.resolve();
+		await expect(closing).rejects.toThrow(
+			"One or more Providers failed to close."
+		);
+		expect(sdk.close()).toBe(closing);
+		expect(cleanupStarted).toEqual(["failed-provider", "deferred-provider"]);
+		expect(() => sdk.register(demoProvider())).toThrow(
+			"ProviderCollection is closed."
+		);
+	});
+
+	test("tool failures in history remain provider-neutral message parts", async () => {
+		const sdk = createProviderCollection();
+		const failedToolMessage: ChatMessage = {
+			content: [
+				{
+					errorText: "Weather lookup failed.",
+					failure: { kind: "timeout" },
+					toolCallId: "call-1",
+					toolName: "weather",
+					type: "tool-failure",
+				},
+			],
+			role: "tool",
+		};
+		const receivedMessages: (readonly ChatMessage[])[] = [];
+		sdk.register({
+			...demoProvider(),
+			id: "tool-failure-provider",
+			models: [
+				{
+					modelId: "tool-failure-model",
+					protocolId: "tool-failure-wire",
+					providerId: "tool-failure-provider",
+				},
+			],
+			async *streamChat(request) {
+				receivedMessages.push(request.messages);
+				expect(request.cacheRetention).toBe("long");
+				expect(request.cacheWarming).toBe(true);
+				expect(request.maxOutputTokens).toBe(384);
+				expect(request.promptCacheKey).toBe("stable-session-cache-key");
+				expect(request.reasoningEffort).toBe("high");
+				yield { type: "usage", usage: { inputTokens: 5, outputTokens: 2 } };
+				yield { type: "finish", continuation: { cursor: "next" } };
+			},
+		});
+		await sdk.setCredential("tool-failure-provider", "configured");
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			cacheRetention: "long",
+			cacheWarming: true,
+			maxOutputTokens: 384,
+			messages: [failedToolMessage],
+			modelId: "tool-failure-model",
+			promptCacheKey: "stable-session-cache-key",
+			providerId: "tool-failure-provider",
+			reasoningEffort: "high",
+		})) {
+			events.push(event);
+		}
+
+		expect(receivedMessages).toEqual([[failedToolMessage]]);
+		expect(events).toEqual([
+			{ type: "usage", usage: { inputTokens: 5, outputTokens: 2 } },
+			{
+				outcome: { continuation: { cursor: "next" }, status: "success" },
+				type: "terminal",
+			},
 		]);
 	});
 
@@ -573,7 +722,10 @@ describe("public SDK provider collection", () => {
 		const restoring = sdk.restoreModels();
 		await readStarted.promise;
 
-		await sdk.refreshModels("racing-provider");
+		const refresh = await sdk.refreshModels({
+			providerIds: ["racing-provider"],
+		});
+		expect(refresh.errors.size).toBe(0);
 		expect(sdk.getModels()).toEqual([staticModel, refreshedModel]);
 		storedSnapshot.resolve([staleModel]);
 		await restoring;
@@ -655,7 +807,8 @@ describe("public SDK provider collection", () => {
 		await sdk.restoreModels();
 		await sdk.setCredential("atomic-write-provider", "configured");
 		const controller = new AbortController();
-		const refreshing = sdk.refreshModels("atomic-write-provider", {
+		const refreshing = sdk.refreshModels({
+			providerIds: ["atomic-write-provider"],
 			signal: controller.signal,
 		});
 		await writeStarted.promise;
@@ -663,7 +816,7 @@ describe("public SDK provider collection", () => {
 		controller.abort(
 			new DOMException("model-store write cancelled", "AbortError")
 		);
-		await expect(refreshing).rejects.toThrow("model-store write cancelled");
+		expect((await refreshing).aborted).toBe(true);
 		expect(sdk.getModels()).toEqual([staticModel, lastKnownModel]);
 		expect(persistedModels.get("atomic-write-provider")).toEqual([
 			lastKnownModel,
@@ -721,7 +874,7 @@ describe("public SDK provider collection", () => {
 		await sdk.restoreModels();
 		await sdk.setCredential("dynamic-provider", "configured-secret");
 
-		await sdk.refreshModels("dynamic-provider");
+		await sdk.refreshModels({ providerIds: ["dynamic-provider"] });
 		expect(sdk.getModels()).toEqual([staticModel, discoveredModel]);
 		const events: ChatEvent[] = [];
 		for await (const event of sdk.chat({
@@ -753,6 +906,96 @@ describe("public SDK provider collection", () => {
 			type: "terminal",
 		});
 		expect(discoveries).toBe(1);
+	});
+
+	test("collection refresh updates every dynamic provider and isolates provider failures", async () => {
+		const successStaticModel: ProviderModel = {
+			modelId: "success-static",
+			protocolId: "success-wire",
+			providerId: "success-provider",
+		};
+		const refreshedModel: ProviderModel = {
+			modelId: "refreshed-model",
+			protocolId: "success-wire",
+			providerId: "success-provider",
+		};
+		const failureStaticModel: ProviderModel = {
+			modelId: "failure-static",
+			protocolId: "failure-wire",
+			providerId: "failure-provider",
+		};
+		const lastKnownModel: ProviderModel = {
+			modelId: "last-known-model",
+			protocolId: "failure-wire",
+			providerId: "failure-provider",
+		};
+		const staticOnlyModel: ProviderModel = {
+			modelId: "static-only-model",
+			protocolId: "static-wire",
+			providerId: "static-provider",
+		};
+		const snapshots = new Map<string, readonly ProviderModel[]>([
+			["failure-provider", [lastKnownModel]],
+		]);
+		const modelStore = {
+			get: async (providerId: string) => snapshots.get(providerId),
+			set: async (providerId: string, models: readonly ProviderModel[]) => {
+				snapshots.set(providerId, models);
+			},
+		};
+		const discoveryCalls: string[] = [];
+		const makeProvider = (
+			id: string,
+			model: ProviderModel,
+			discoverModels?: Provider["discoverModels"]
+		): Provider => ({
+			...(discoverModels === undefined ? {} : { discoverModels }),
+			id,
+			models: [model],
+			resolveAuthorization: async ({ credential }) =>
+				credential === undefined ? null : { authorization: credential },
+			async *streamChat() {
+				yield* [];
+			},
+		});
+		const collection = createProviderCollection({ modelStore });
+		collection.register(
+			makeProvider("success-provider", successStaticModel, async () => {
+				discoveryCalls.push("success-provider");
+				return [refreshedModel];
+			})
+		);
+		collection.register(
+			makeProvider("failure-provider", failureStaticModel, async () => {
+				discoveryCalls.push("failure-provider");
+				throw new Error("provider model endpoint unavailable");
+			})
+		);
+		collection.register(makeProvider("static-provider", staticOnlyModel));
+		await collection.restoreModels();
+		await collection.setCredential("success-provider", "success-key");
+		await collection.setCredential("failure-provider", "failure-key");
+
+		const result = await collection.refreshModels();
+
+		expect(result.aborted).toBe(false);
+		expect([...result.errors.keys()]).toEqual(["failure-provider"]);
+		expect(result.errors.get("failure-provider")?.message).toBe(
+			"provider model endpoint unavailable"
+		);
+		expect(discoveryCalls.sort()).toEqual([
+			"failure-provider",
+			"success-provider",
+		]);
+		expect(collection.getModels()).toEqual([
+			successStaticModel,
+			refreshedModel,
+			failureStaticModel,
+			lastKnownModel,
+			staticOnlyModel,
+		]);
+		expect(snapshots.get("failure-provider")).toEqual([lastKnownModel]);
+		await collection.close();
 	});
 
 	test("known models and credential-filtered availability do not perform health checks", async () => {
@@ -794,11 +1037,15 @@ describe("public SDK provider collection", () => {
 		const credentials = new Map<string, unknown>([
 			["configured-provider", "configured"],
 		]);
+		const credentialReads: string[] = [];
 		const credentialStore = {
 			delete: async (providerId: string) => {
 				credentials.delete(providerId);
 			},
-			get: async (providerId: string) => credentials.get(providerId),
+			get: async (providerId: string) => {
+				credentialReads.push(providerId);
+				return credentials.get(providerId);
+			},
 			set: async (providerId: string, credential: unknown) => {
 				credentials.set(providerId, credential);
 			},
@@ -835,10 +1082,29 @@ describe("public SDK provider collection", () => {
 			otherDiscoveredModel,
 		]);
 		expect(await sdk.getAvailable()).toEqual([staticModel, discoveredModel]);
+		expect(credentialReads).toEqual([
+			"configured-provider",
+			"unconfigured-provider",
+		]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("configured-provider")).toEqual([
+			staticModel,
+			discoveredModel,
+		]);
+		expect(credentialReads).toEqual(["configured-provider"]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("unconfigured-provider")).toEqual([]);
+		expect(credentialReads).toEqual(["unconfigured-provider"]);
+		credentialReads.length = 0;
+		expect(await sdk.getAvailable("missing-provider")).toEqual([]);
+		expect(credentialReads).toEqual([]);
 		expect(authorizationChecks).toBe(0);
 		expect(discoveryCalls).toBe(0);
 
-		await sdk.refreshModels("configured-provider");
+		const refresh = await sdk.refreshModels({
+			providerIds: ["configured-provider"],
+		});
+		expect(refresh.errors.size).toBe(0);
 		expect(
 			sdk.getModel("unconfigured-provider", "other-discovered-model")
 		).toEqual(otherDiscoveredModel);
@@ -921,27 +1187,39 @@ describe("public SDK provider collection", () => {
 		sdk.register(provider);
 		await sdk.restoreModels();
 		await sdk.setCredential("retry-provider", "configured");
-		await sdk.refreshModels("retry-provider");
+		const initialRefresh = await sdk.refreshModels({
+			providerIds: ["retry-provider"],
+		});
+		expect(initialRefresh.errors.size).toBe(0);
 		const previousList = [staticModel, lastKnownModel];
 		expect(sdk.getModels()).toEqual(previousList);
 
 		await sdk.deleteCredential("retry-provider");
-		await expect(sdk.refreshModels("retry-provider")).rejects.toThrow(
-			"has no usable credentials"
+		const unconfiguredRefresh = await sdk.refreshModels({
+			providerIds: ["retry-provider"],
+		});
+		expect(unconfiguredRefresh.errors.get("retry-provider")?.message).toBe(
+			"Provider retry-provider has no usable credentials."
 		);
 		expect(sdk.getModels()).toEqual(previousList);
 		expect(storedModels.get("retry-provider")).toEqual([lastKnownModel]);
 		await sdk.setCredential("retry-provider", "configured");
 
 		discoveryMode = "network-failure";
-		await expect(sdk.refreshModels("retry-provider")).rejects.toThrow(
+		const networkFailure = await sdk.refreshModels({
+			providerIds: ["retry-provider"],
+		});
+		expect(networkFailure.errors.get("retry-provider")?.message).toBe(
 			"discovery endpoint unavailable"
 		);
 		expect(sdk.getModels()).toEqual(previousList);
 		expect(storedModels.get("retry-provider")).toEqual([lastKnownModel]);
 
 		discoveryMode = "malformed";
-		await expect(sdk.refreshModels("retry-provider")).rejects.toThrow(
+		const malformedRefresh = await sdk.refreshModels({
+			providerIds: ["retry-provider"],
+		});
+		expect(malformedRefresh.errors.get("retry-provider")?.message).toContain(
 			"invalid model for provider retry-provider"
 		);
 		expect(sdk.getModels()).toEqual(previousList);
@@ -950,15 +1228,21 @@ describe("public SDK provider collection", () => {
 		discoveryMode = "success";
 		const controller = new AbortController();
 		activeController = controller;
-		await expect(
-			sdk.refreshModels("retry-provider", { signal: controller.signal })
-		).rejects.toThrow("discovery cancelled");
+		const cancelledRefresh = sdk.refreshModels({
+			providerIds: ["retry-provider"],
+			signal: controller.signal,
+		});
+		const cancelledResult = await cancelledRefresh;
+		expect(cancelledResult.aborted).toBe(true);
 		activeController = undefined;
 		expect(sdk.getModels()).toEqual(previousList);
 		expect(storedModels.get("retry-provider")).toEqual([lastKnownModel]);
 		expect(modelStoreWrites).toHaveLength(1);
 
-		await sdk.refreshModels("retry-provider");
+		const successfulRefresh = await sdk.refreshModels({
+			providerIds: ["retry-provider"],
+		});
+		expect(successfulRefresh.errors.size).toBe(0);
 		expect(sdk.getModels()).toEqual([staticModel, nextModel]);
 		expect(storedModels.get("retry-provider")).toEqual([nextModel]);
 		expect(modelStoreWrites).toHaveLength(2);

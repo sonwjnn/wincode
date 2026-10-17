@@ -1,15 +1,17 @@
 import type {
-	ModelClient,
-	ModelPromptMessage,
-	ModelStepRequest,
-	ModelStreamPart,
-	ModelTool,
-} from "@wincode/ai/model-client";
+	ChatEvent,
+	ChatFailure,
+	ChatMessage,
+	ChatRequest,
+	ChatTool,
+	ProviderCollection,
+} from "@wincode/ai";
 import {
 	type ModelFailure,
+	type ModelUsage,
 	normalizeModelFailure,
-} from "@wincode/ai/model-failures";
-import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
+	normalizeModelUsage,
+} from "@wincode/ai";
 import {
 	getErrorMessage,
 	isError,
@@ -45,9 +47,34 @@ import {
 import type { AgentTurn, AgentTurnMessage, AgentTurnPart } from "./turn";
 
 export type AgentRuntimeOptions = Readonly<{
-	/** Provider-neutral Model Client stream consumed by this runtime. */
-	modelClient: ModelClient;
+	/** Direct public SDK invocation; model identity carries no authorization. */
+	providerCollection: ProviderCollection;
 }>;
+
+type AgentModelInvocation = Readonly<{
+	providerCollection: ProviderCollection;
+}>;
+
+class ProviderCollectionChatAbortedError extends Error {
+	constructor() {
+		super("SDK provider request was aborted.");
+		this.name = "ProviderCollectionChatAbortedError";
+	}
+}
+
+class ProviderCollectionChatFailureError extends Error {
+	readonly failure: ChatFailure;
+
+	constructor(failure: ChatFailure) {
+		super(
+			failure.code === "authentication" || failure.code === "credential-store"
+				? "SDK provider authorization failed."
+				: "SDK provider request failed."
+		);
+		this.name = "ProviderCollectionChatFailureError";
+		this.failure = failure;
+	}
+}
 
 const isAbortLike = (error: unknown): boolean =>
 	isObjectLike(error) && "name" in error && error.name === "AbortError";
@@ -62,6 +89,36 @@ const resolveTerminalFailure = (
 			details: getAgentTurnFailureDetails(turn),
 			retry: "never",
 			source: "runtime",
+		});
+	}
+	if (error instanceof ProviderCollectionChatFailureError) {
+		if (error.failure.code === "provider") {
+			const modelFailure = normalizeModelFailure(error.failure, {
+				modelId: turn.model.modelId,
+				providerId: turn.model.providerId,
+			});
+			return createOperationalFailure({
+				code: modelFailure.code,
+				details: getAgentTurnFailureDetails(turn),
+				retry: modelFailure.retry,
+				source: "model",
+			});
+		}
+		const mapping = {
+			authentication: { code: "authentication", retry: "never" },
+			"credential-store": { code: "unknown", retry: "never" },
+			"model-not-found": { code: "invalid-request", retry: "never" },
+			"provider-not-found": { code: "invalid-request", retry: "never" },
+			provider: { code: "unknown", retry: "never" },
+			transport: { code: "network", retry: "after-delay" },
+			"unsupported-capability": { code: "invalid-request", retry: "never" },
+		} as const;
+		const mapped = mapping[error.failure.code];
+		return createOperationalFailure({
+			code: mapped.code,
+			details: getAgentTurnFailureDetails(turn),
+			retry: mapped.retry,
+			source: "model",
 		});
 	}
 	const modelFailure: ModelFailure = normalizeModelFailure(error, {
@@ -130,19 +187,19 @@ const awaitWithAbort = async <Value>(
 	}
 };
 
-const closeModelStream = (iterator: AsyncIterator<ModelStreamPart>): void => {
+const closeModelStream = async (
+	iterator: AsyncIterator<unknown>
+): Promise<void> => {
 	const closing = iterator.return?.();
-	if (!isUndefined(closing)) {
-		void closing.catch(() => undefined);
-	}
+	await closing?.catch(() => undefined);
 };
 
-const modelPromptMessage = (message: AgentTurnMessage): ModelPromptMessage => ({
+const modelPromptMessage = (message: AgentTurnMessage): ChatMessage => ({
 	content: message.parts,
 	role: message.role,
 });
 
-export const toModelTool = (tool: ResolvedTool): ModelTool => {
+export const toModelTool = (tool: ResolvedTool): ChatTool => {
 	const inputSchema = tool.definition.inputSchema;
 	const jsonSchema =
 		"jsonSchema" in inputSchema
@@ -216,7 +273,7 @@ const executeToolCall = async (
 	}
 };
 
-const isModelStreamPart = (value: unknown): value is ModelStreamPart => {
+const isChatEvent = (value: unknown): value is ChatEvent => {
 	if (!(isObjectLike(value) && "type" in value && isString(value.type))) {
 		return false;
 	}
@@ -232,8 +289,17 @@ const isModelStreamPart = (value: unknown): value is ModelStreamPart => {
 				"toolName" in value &&
 				isString(value.toolName)
 			);
-		case "finish":
-			return true;
+		case "usage":
+			return "usage" in value && isObjectLike(value.usage);
+		case "terminal":
+			return (
+				"outcome" in value &&
+				isObjectLike(value.outcome) &&
+				"status" in value.outcome &&
+				(value.outcome.status === "success" ||
+					value.outcome.status === "failure" ||
+					value.outcome.status === "aborted")
+			);
 		default:
 			return false;
 	}
@@ -298,13 +364,16 @@ const toAgentTurnTerminalEvent = (
 	type: "agent-turn-failed",
 });
 
-export const createAgentRuntime = ({
-	modelClient,
-}: AgentRuntimeOptions): AgentRuntime => {
+export const createAgentRuntime = (
+	options: AgentRuntimeOptions
+): AgentRuntime => {
+	const invocation: AgentModelInvocation = {
+		providerCollection: options.providerCollection,
+	};
 	const run = (
 		turn: AgentTurn,
 		runOptions: AgentRuntimeRunOptions = {}
-	): AgentTurnEventStream => runAgentTurn(turn, runOptions, modelClient);
+	): AgentTurnEventStream => runAgentTurn(turn, runOptions, invocation);
 	return { run };
 };
 
@@ -321,8 +390,8 @@ type EventEmitter = ((event: AgentTurnEvent) => AgentTurnEvent) & {
 
 type ModelStepStreamOptions = Readonly<{
 	emit: EventEmitter;
-	modelClient: ModelClient;
-	request: ModelStepRequest;
+	invocation: AgentModelInvocation;
+	request: ChatRequest;
 	seenToolCallIds: Set<ToolCallId>;
 	signal?: AbortSignal;
 	toolsByName: ReadonlyMap<string, ResolvedTool>;
@@ -330,14 +399,14 @@ type ModelStepStreamOptions = Readonly<{
 }>;
 
 const resolveToolCall = (
-	part: Extract<ModelStreamPart, { type: "tool-call" }>,
+	part: Extract<ChatEvent, { type: "tool-call" }>,
 	toolsByName: ReadonlyMap<string, ResolvedTool>,
 	seenToolCallIds: Set<ToolCallId>
 ): PendingToolCall => {
 	if (!(isToolCallId(part.toolCallId) && isNonEmptyString(part.toolName))) {
 		throw new AgentInvariantError(
 			"invalid-event",
-			"Model client emitted a tool call without an identity.",
+			"Provider SDK emitted a tool call without an identity.",
 			{ cause: part }
 		);
 	}
@@ -360,9 +429,60 @@ const resolveToolCall = (
 	return { input: part.input, tool, toolCallId: part.toolCallId };
 };
 
+type ProviderChatUpdate =
+	| Readonly<{ kind: "finish"; continuation?: unknown }>
+	| Readonly<{
+			kind: "part";
+			part: Exclude<ChatEvent, { type: "terminal" | "usage" }>;
+	  }>
+	| Readonly<{ kind: "usage"; usage?: ModelUsage }>;
+
+const createModelStepStream = (
+	invocation: AgentModelInvocation,
+	request: ChatRequest
+): AsyncIterable<ChatEvent> => invocation.providerCollection.chat(request);
+
+const parseProviderChatUpdate = (value: unknown): ProviderChatUpdate => {
+	if (!isChatEvent(value)) {
+		throw new AgentInvariantError(
+			"invalid-event",
+			"ProviderCollection emitted an invalid chat event.",
+			{ cause: value }
+		);
+	}
+	switch (value.type) {
+		case "text-delta":
+		case "reasoning-delta":
+		case "tool-call":
+			return { kind: "part", part: value };
+		case "usage":
+			return {
+				kind: "usage",
+				usage: normalizeModelUsage(value.usage) ?? undefined,
+			};
+		case "terminal":
+			if (value.outcome.status === "failure") {
+				throw new ProviderCollectionChatFailureError(value.outcome.failure);
+			}
+			if (value.outcome.status === "aborted") {
+				throw new ProviderCollectionChatAbortedError();
+			}
+			return {
+				kind: "finish",
+				...omitUndefined({ continuation: value.outcome.continuation }),
+			};
+		default:
+			throw new AgentInvariantError(
+				"invalid-event",
+				"ProviderCollection emitted an unknown chat event.",
+				{ cause: value }
+			);
+	}
+};
+
 const drainModelStep = async function* ({
 	emit,
-	modelClient,
+	invocation,
 	request,
 	seenToolCallIds,
 	signal,
@@ -373,7 +493,8 @@ const drainModelStep = async function* ({
 	ModelStepOutput | null,
 	undefined
 > {
-	const iterator = modelClient.stream(request)[Symbol.asyncIterator]();
+	const stream = createModelStepStream(invocation, request);
+	const iterator: AsyncIterator<ChatEvent> = stream[Symbol.asyncIterator]();
 	const assistantParts: AgentTurnPart[] = [];
 	const toolCalls: PendingToolCall[] = [];
 	let bufferedText = "";
@@ -386,21 +507,24 @@ const drainModelStep = async function* ({
 			if (next.done) {
 				break;
 			}
-			if (!isModelStreamPart(next.value)) {
-				throw new AgentInvariantError(
-					"invalid-event",
-					"Model client emitted an invalid stream part.",
-					{ cause: next.value }
-				);
-			}
-			const part = next.value;
 			if (finished) {
 				throw new AgentInvariantError(
 					"invalid-event",
-					"Model client emitted a stream part after finishing a step.",
-					{ cause: part }
+					"The provider stream emitted an event after its terminal outcome.",
+					{ cause: next.value }
 				);
 			}
+			const update = parseProviderChatUpdate(next.value);
+			if (update.kind === "usage") {
+				usage = sumUsage(usage, update.usage);
+				continue;
+			}
+			if (update.kind === "finish") {
+				finished = true;
+				continuation = update.continuation;
+				continue;
+			}
+			const part = update.part;
 			switch (part.type) {
 				case "text-delta":
 					bufferedText += part.delta;
@@ -440,21 +564,16 @@ const drainModelStep = async function* ({
 					});
 					break;
 				}
-				case "finish":
-					finished = true;
-					usage = normalizeModelUsage(part.usage) ?? undefined;
-					continuation = part.continuation;
-					break;
 				default:
 					throw new AgentInvariantError(
 						"invalid-event",
-						"Model client emitted an unknown stream part.",
+						"ProviderCollection emitted an unknown chat part.",
 						{ cause: part }
 					);
 			}
 		}
 	} finally {
-		closeModelStream(iterator);
+		await closeModelStream(iterator);
 	}
 	if (!finished) {
 		return null;
@@ -481,7 +600,7 @@ const executeToolCalls = async function* ({
 	turnId,
 }: ExecuteToolCallsOptions): AsyncGenerator<
 	AgentTurnEvent,
-	{ messages: readonly ModelPromptMessage[]; stopTurn: boolean },
+	{ messages: readonly ChatMessage[]; stopTurn: boolean },
 	undefined
 > {
 	const exclusive =
@@ -508,7 +627,7 @@ const executeToolCalls = async function* ({
 				),
 		signal
 	);
-	const messages: ModelPromptMessage[] = [];
+	const messages: ChatMessage[] = [];
 	let stopTurn = false;
 	for (const [index, call] of calls.entries()) {
 		const outcome = outcomes[index];
@@ -570,12 +689,12 @@ const createToolsByName = (
 };
 
 type ExecuteModelStepsOptions = Readonly<{
+	cacheWarming?: true;
 	emit: EventEmitter;
 	lifecycle: AgentTurnLifecycle;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
-	modelClient: ModelClient;
-	modelMessages: ModelPromptMessage[];
-	googleCachedContent?: ModelStepRequest["googleCachedContent"];
+	invocation: AgentModelInvocation;
+	modelMessages: ChatMessage[];
 	promptCacheKey?: string;
 	runtimeSignal?: AbortSignal;
 	takeSteeringMessages?: AgentRuntimeRunOptions["takeSteeringMessages"];
@@ -583,8 +702,44 @@ type ExecuteModelStepsOptions = Readonly<{
 	toolsByName: ReadonlyMap<string, ResolvedTool>;
 	turn: AgentTurn;
 }>;
+
+type BuildChatRequestOptions = Readonly<{
+	cacheWarming?: true;
+	modelMessages: ChatMessage[];
+	promptCacheKey?: string;
+	runtimeSignal?: AbortSignal;
+	toolDefinitions: ChatTool[];
+	turn: AgentTurn;
+}>;
+
+const buildChatRequest = ({
+	cacheWarming,
+	modelMessages,
+	promptCacheKey,
+	runtimeSignal,
+	toolDefinitions,
+	turn,
+}: BuildChatRequestOptions): ChatRequest => ({
+	messages: modelMessages,
+	modelId: turn.model.modelId,
+	providerId: turn.model.providerId,
+	...omitUndefined({
+		cacheRetention:
+			turn.model.promptCacheEnabled === true
+				? turn.model.promptCacheRetention
+				: undefined,
+		cacheWarming,
+		maxOutputTokens: turn.model.maxOutputTokens,
+		promptCacheKey,
+		reasoningEffort: turn.model.thinkingLevel,
+		signal: runtimeSignal,
+		system: turn.agent.instructions,
+		tools: toolDefinitions,
+	}),
+});
+
 const appendAssistantOutput = (
-	modelMessages: ModelPromptMessage[],
+	modelMessages: ChatMessage[],
 	output: ModelStepOutput
 ): void => {
 	modelMessages.push({
@@ -595,7 +750,7 @@ const appendAssistantOutput = (
 };
 
 const appendSteeringMessages = (
-	modelMessages: ModelPromptMessage[],
+	modelMessages: ChatMessage[],
 	output: ModelStepOutput,
 	messages: readonly AgentTurnMessage[]
 ): void => {
@@ -605,7 +760,7 @@ const appendSteeringMessages = (
 	modelMessages.push(...messages.map(modelPromptMessage));
 };
 const appendLateSteeringMessages = async (
-	modelMessages: ModelPromptMessage[],
+	modelMessages: ChatMessage[],
 	output: ModelStepOutput,
 	assistantOutputAlreadyAppended: boolean,
 	takeSteeringMessages: AgentRuntimeRunOptions["takeSteeringMessages"]
@@ -623,7 +778,7 @@ const appendLateSteeringMessages = async (
 
 const notifyModelStepStarted = (
 	observer: AgentRuntimeRunOptions["modelStepObserver"],
-	request: ModelStepRequest
+	request: ChatRequest
 ): void => {
 	try {
 		observer?.onModelStepStarted(request);
@@ -634,7 +789,7 @@ const notifyModelStepStarted = (
 
 const notifyModelStepFinished = (
 	observer: AgentRuntimeRunOptions["modelStepObserver"],
-	request: ModelStepRequest,
+	request: ChatRequest,
 	usage: ModelUsage | undefined
 ): void => {
 	try {
@@ -645,11 +800,11 @@ const notifyModelStepFinished = (
 };
 
 const runLoop = async function* ({
+	cacheWarming,
 	emit,
 	lifecycle,
-	modelClient,
+	invocation,
 	modelMessages,
-	googleCachedContent,
 	modelStepObserver,
 	promptCacheKey,
 	runtimeSignal,
@@ -677,18 +832,18 @@ const runLoop = async function* ({
 			turnId: turn.id,
 			type: "model-step-started",
 		});
-		const request: ModelStepRequest = {
-			messages: modelMessages,
-			...omitUndefined({ googleCachedContent, promptCacheKey }),
-			...omitUndefined({ signal: runtimeSignal }),
-			system: turn.agent.instructions,
-			target: turn.model,
-			tools: toolDefinitions,
-		};
+		const request = buildChatRequest({
+			cacheWarming,
+			modelMessages,
+			promptCacheKey,
+			runtimeSignal,
+			toolDefinitions,
+			turn,
+		});
 		notifyModelStepStarted(modelStepObserver, request);
 		const output = yield* drainModelStep({
 			emit,
-			modelClient,
+			invocation,
 			request,
 			seenToolCallIds,
 			...omitUndefined({ signal: runtimeSignal }),
@@ -768,14 +923,14 @@ const runLoop = async function* ({
 const runAgentTurn = async function* (
 	turn: AgentTurn,
 	{
+		cacheWarming,
 		deadlineMs,
-		googleCachedContent,
 		modelStepObserver,
 		promptCacheKey,
 		signal,
 		takeSteeringMessages,
 	}: AgentRuntimeRunOptions,
-	modelClient: ModelClient
+	invocation: AgentModelInvocation
 ): AsyncGenerator<AgentTurnEvent, void, undefined> {
 	const lifecycle = createAgentTurnLifecycle(turn.id);
 	const runtimeSignal = resolveRuntimeSignal(signal, deadlineMs);
@@ -806,10 +961,10 @@ const runAgentTurn = async function* (
 		yield* runLoop({
 			emit,
 			lifecycle,
-			modelClient,
+			invocation,
 			modelMessages,
 			...omitUndefined({
-				googleCachedContent,
+				cacheWarming,
 				modelStepObserver,
 				promptCacheKey,
 				runtimeSignal,
@@ -827,6 +982,10 @@ const runAgentTurn = async function* (
 			yield emit(
 				createAgentTurnAbortEvent(turn, runtimeSignal, emit.nextSequence())
 			);
+			return;
+		}
+		if (error instanceof ProviderCollectionChatAbortedError) {
+			yield lifecycle.cancel(emit.nextSequence());
 			return;
 		}
 		yield emit(toAgentTurnTerminalEvent(turn, error, emit.nextSequence()));

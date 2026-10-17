@@ -4,10 +4,7 @@ const restoreEnvironment = createEnvironmentRestorer([
 	"WINCODE_E2E_HOME",
 	"WINCODE_E2E_WORKSPACE",
 	"WINCODE_LOCAL_DB_PATH",
-	"WINCODE_MODEL_PRICING_OFFLINE",
 ]);
-
-process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, expect, mock, test } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -17,8 +14,8 @@ import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientRecorder,
-	installFakeModelClient,
+	createFakeProviderRecorder,
+	installFakeProviderRecorder,
 } from "@/test/support/e2e-fake-runtime";
 import { sessionMessageId } from "../support/identifiers";
 
@@ -31,15 +28,18 @@ process.env.WINCODE_LOCAL_DB_PATH = path.join(
 );
 process.env.WINCODE_E2E_HOME = testDirectory;
 process.env.WINCODE_E2E_WORKSPACE = testDirectory;
-setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
+setInteractiveRuntimeContext({
+	args: [],
+	cwd: testDirectory,
+});
 afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();
 	await fs.rm(testDirectory, { force: true, recursive: true });
 });
 
-const recorder = createFakeModelClientRecorder();
-installFakeModelClient(recorder);
+const recorder = createFakeProviderRecorder();
+installFakeProviderRecorder(recorder);
 
 import {
 	cleanupSessionRender,

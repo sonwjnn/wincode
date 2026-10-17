@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { ChatModelSelection } from "@wincode/ai/models";
 import { isUndefined } from "@wincode/utils";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	openSessionServices,
 	type SessionServices,
@@ -17,7 +17,7 @@ import {
 	sessionMessageId,
 } from "../support/identifiers";
 
-const model: ChatModelSelection = {
+const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
@@ -143,13 +143,7 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 
 		assembly = await openSessionServices({
 			policy: { cwd: directory, databasePath, workspace: directory },
-			sources: {
-				connections: () => ({
-					authorize: async () => ({ kind: "api-key", apiKey: "test-key" }),
-					connect: async () => undefined,
-					listProviders: async () => [],
-				}),
-			},
+			sources: {},
 		});
 		expect(await assembly.store.listSessions()).toEqual([]);
 		expect(await assembly.store.getPromptHistory()).toEqual([

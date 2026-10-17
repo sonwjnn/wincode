@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
+import { toModelId } from "@wincode/agent-core";
 import type {
 	SessionRuntimeOptions,
 	SessionSdk,
@@ -14,7 +15,7 @@ import { agentId, sessionId } from "./identifiers";
 const childSessionId = sessionId("subagent-child");
 const pluginPath = "/plugins/subagents.ts";
 
-test("Subagents creates children with its Plugin and capability ceiling, then closes them", async () => {
+test("Subagents loads only the explicitly selected Provider Plugin into a child", async () => {
 	const capabilityCeiling: SessionSdkCapabilityCeiling = { tools: ["read"] };
 	let requestedSdkOptions: unknown;
 	let requestedSessionOptions: unknown;
@@ -50,9 +51,14 @@ test("Subagents creates children with its Plugin and capability ceiling, then cl
 	});
 	const factory = createSubagentChildSessionFactory(sessionSdk, pluginPath);
 
+	const model = {
+		modelId: toModelId("selected-plugin-model"),
+		providerId: "selected-plugin-provider",
+	};
 	const childSession = await factory.create({
 		agentId: agentId("build"),
 		capabilityCeiling,
+		model,
 		thinkingLevel: "high",
 	});
 	await childSession.open({ view: true });
@@ -61,9 +67,11 @@ test("Subagents creates children with its Plugin and capability ceiling, then cl
 	expect(requestedSdkOptions).toEqual({
 		capabilityCeiling,
 		pluginPaths: [pluginPath],
+		pluginProviderIds: [model.providerId],
 	});
 	expect(requestedSessionOptions).toEqual({
 		agent: agentId("build"),
+		model,
 		thinkingLevel: "high",
 	});
 	expect(childSession.sessionId).toBe(childSessionId);
@@ -99,6 +107,7 @@ test("reopening a child Session reapplies its stored capability ceiling", async 
 	expect(requestedRuntimeOptions).toEqual({
 		capabilityCeiling,
 		pluginPaths: [pluginPath],
+		sessionId: childSessionId,
 	});
 	expect(sdkDisposed).toBe(true);
 });

@@ -424,6 +424,7 @@ test("recovery marks an abandoned child interrupted without auto-continuing it",
 		expect(runtimeOptions).toEqual({
 			capabilityCeiling,
 			pluginPaths: [pluginPath],
+			sessionId: task.childSessionId,
 		});
 		expect(taskStore.getTask(task.id)).toMatchObject({
 			outcome: {

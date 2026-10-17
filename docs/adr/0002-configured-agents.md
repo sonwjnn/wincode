@@ -26,11 +26,11 @@ Status: accepted
   reserved identity and `primary` role are immutable, and it cannot be disabled.
   Configured instructions replace the built-in-specific text while the Wincode
   base instructions remain immutable.
-- **Catalog-backed model overrides** - optional `model` uses
-  `<connectionProviderId>/<modelId>` and is authoritative for that Agent. Optional
+- **Provider Model pins** - optional `model` selects an exact
+  `{ providerId, modelId }` pair and is authoritative for that Agent. Optional
   `thinking_level` is valid only with a configured model and must be supported by
-  that model's metadata. Without a model, the Agent inherits the session model
-  and its selected ThinkingLevel.
+  that Provider Model. Without a model, the Agent inherits the session model and
+  its selected ThinkingLevel.
 
 ## Consequences
 
@@ -52,8 +52,9 @@ Status: accepted
   an available `primary` or `all` Agent; otherwise Wincode visibly falls back to Build.
   Persisted session selection takes precedence when reopening a session.
 - `/agents` orders the effective default first and all other selectable Agents by
-  canonical ID. Model-pinned Agents with a missing Connection remain visible but are
-  disabled; an unavailable configured default falls back to Build with a notice.
+  canonical ID. A configured Provider Model pin remains exact and never falls back
+  to a different model when it cannot be invoked; an unavailable configured default
+  falls back to Build with a notice.
 - Persisted session state and message metadata migrate from `mode` to `agent`.
   Legacy `mode: build | plan` metadata is normalized when read; this preserves
   compatibility for stored history only, not a selectable Plan Agent. New writes use

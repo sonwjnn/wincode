@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { createProviderCollection } from "@wincode/ai/sdk";
-import { createDeepSeekProvider } from "@wincode/ai/sdk/providers/deepseek";
-import { createOpenRouterProvider } from "@wincode/ai/sdk/providers/openrouter";
+import {
+	createDeepSeekProvider,
+	createOpenRouterProvider,
+	createProviderCollection,
+} from "@wincode/ai";
 
 const credentials = new Map();
 const modelSnapshots = new Map();
@@ -80,7 +82,12 @@ await sdk.setCredential("openrouter", {
 	kind: "api-key",
 	apiKey: "node-openrouter-key",
 });
-const openRouterModels = await sdk.refreshModels("openrouter");
+const refresh = await sdk.refreshModels({ providerIds: ["openrouter"] });
+assert.equal(refresh.aborted, false);
+assert.equal(refresh.errors.size, 0);
+const openRouterModels = sdk
+	.getModels()
+	.filter((model) => model.providerId === "openrouter");
 assert.equal(openRouterModels[0].modelId, "org/model-with/vendor-id");
 
 const collect = async (providerId, modelId) => {

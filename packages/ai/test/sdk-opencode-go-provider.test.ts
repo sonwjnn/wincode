@@ -1,15 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type ChatEvent,
-	createProviderCollection,
-	type ProviderCollection,
-} from "@wincode/ai/sdk";
-import { createAnthropicProvider } from "@wincode/ai/sdk/providers/anthropic";
-import { createOpenAIProvider } from "@wincode/ai/sdk/providers/openai";
-import {
+	createAnthropicProvider,
+	createOpenAIProvider,
 	createOpenCodeGoProvider,
+	createProviderCollection,
 	type OpenCodeGoFetch,
-} from "@wincode/ai/sdk/providers/opencode-go";
+	type ProviderCollection,
+	type ThinkingLevel,
+} from "@wincode/ai";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(
@@ -24,7 +23,8 @@ const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 
 const collect = async (
 	sdk: ProviderCollection,
-	modelId: string
+	modelId: string,
+	reasoningEffort?: ThinkingLevel
 ): Promise<ChatEvent[]> => {
 	const events: ChatEvent[] = [];
 	for await (const event of sdk.chat({
@@ -33,6 +33,7 @@ const collect = async (
 		],
 		modelId,
 		providerId: "opencode-go",
+		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
 	})) {
 		events.push(event);
 	}
@@ -73,7 +74,7 @@ describe("public OpenCode Go SDK provider", () => {
 					},
 				]);
 			}
-			if (responses === 2) {
+			if (responses === 2 || responses === 4) {
 				return sseResponse([
 					{ type: "message_start", message: { usage: { input_tokens: 4 } } },
 					{
@@ -128,9 +129,12 @@ describe("public OpenCode Go SDK provider", () => {
 		const modelIds = sdk
 			.getModels()
 			.map((model) => `${model.providerId}/${model.modelId}`);
-		const responsesEvents = await collect(sdk, "gpt-5.6-luna");
-		const messagesEvents = await collect(sdk, "minimax-m3");
-		const compatibleEvents = await collect(sdk, "grok-4.6");
+		const responsesEvents = await collect(sdk, "gpt-5.6-luna", "high");
+		const messagesEvents = await collect(sdk, "qwen3.8-max", "xhigh");
+		const compatibleEvents = await collect(sdk, "deepseek-v4.1-flash", "high");
+		await collect(sdk, "qwen3.8-max", "minimal");
+		await collect(sdk, "gpt-5.6-luna", "off");
+		await collect(sdk, "qwen3.8-max", "off");
 
 		expect(modelIds).toContain("openai/gpt-5.6");
 		expect(modelIds).toContain("anthropic/claude-sonnet-4-6");
@@ -139,25 +143,39 @@ describe("public OpenCode Go SDK provider", () => {
 			"https://opencode.ai/zen/go/v1/responses",
 			"https://opencode.ai/zen/go/v1/messages",
 			"https://opencode.ai/zen/go/v1/chat/completions",
+			"https://opencode.ai/zen/go/v1/messages",
+			"https://opencode.ai/zen/go/v1/responses",
+			"https://opencode.ai/zen/go/v1/messages",
 		]);
+		expect(
+			provider.models.find(({ modelId }) => modelId === "qwen3.8-max")
+				?.reasoningEfforts
+		).not.toContain("minimal");
+		expect(requests[3]?.body).not.toHaveProperty("output_config");
+		expect(requests[4]?.body).toMatchObject({ reasoning: { effort: "none" } });
+		expect(requests[5]?.body).not.toHaveProperty("thinking");
+		expect(requests[5]?.body).not.toHaveProperty("output_config");
 		expect(requests[0]?.headers.get("authorization")).toBe(
 			"Bearer opencode-go-secret"
 		);
 		expect(requests[0]?.body).toMatchObject({
 			model: "gpt-5.6-luna",
+			reasoning: { effort: "high" },
 			stream: true,
 		});
 		expect(requests[1]?.headers.get("x-api-key")).toBe("opencode-go-secret");
 		expect(requests[1]?.headers.get("anthropic-version")).toBe("2023-06-01");
 		expect(requests[1]?.body).toMatchObject({
-			model: "minimax-m3",
+			model: "qwen3.8-max",
+			output_config: { effort: "xhigh" },
 			stream: true,
 		});
 		expect(requests[2]?.headers.get("authorization")).toBe(
 			"Bearer opencode-go-secret"
 		);
 		expect(requests[2]?.body).toMatchObject({
-			model: "grok-4.6",
+			model: "deepseek-v4.1-flash",
+			reasoning_effort: "high",
 			stream: true,
 			stream_options: { include_usage: true },
 		});
@@ -200,6 +218,49 @@ describe("public OpenCode Go SDK provider", () => {
 		expect(provider.models.map(({ protocolId }) => protocolId)).toContain(
 			"openai-compatible"
 		);
+	});
+
+	test("gpt-luna-6 is selectable through OpenCode Go's Responses route", async () => {
+		const requests: { body: Record<string, unknown>; url: string }[] = [];
+		const sdk = createProviderCollection();
+		const provider = createOpenCodeGoProvider({
+			fetch: async (url, init) => {
+				requests.push({
+					body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+					url: String(url),
+				});
+				return sseResponse([
+					{
+						type: "response.completed",
+						response: {
+							output: [],
+							usage: { input_tokens: 1, output_tokens: 1 },
+						},
+					},
+				]);
+			},
+		});
+		sdk.register(provider);
+		await sdk.setCredential("opencode-go", {
+			apiKey: "opencode-go-secret",
+			kind: "api-key",
+		});
+
+		expect(provider.models).toContainEqual(
+			expect.objectContaining({
+				modelId: "gpt-luna-6",
+				protocolId: "openai-responses",
+				providerId: "opencode-go",
+			})
+		);
+		await collect(sdk, "gpt-luna-6");
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe("https://opencode.ai/zen/go/v1/responses");
+		expect(requests[0]?.body).toMatchObject({
+			model: "gpt-luna-6",
+			stream: true,
+		});
 	});
 
 	test("Responses tool continuation and results are replayed once by the selected OpenCode Go model", async () => {

@@ -1,5 +1,5 @@
-import type { ChatModelSelection } from "@wincode/ai/models";
 import type { ReactNode } from "react";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { EditMode } from "@/modules/tools";
 import type {
 	ConfigOrigin,
@@ -14,7 +14,7 @@ export type SettingContextRequirement = "model" | "none" | "session";
 export type SettingPersistence = "config" | "runtime" | "session";
 export type SettingRuntimeContext = {
 	readonly editMode?: EditMode;
-	readonly model?: ChatModelSelection;
+	readonly model?: ProviderModelSelection;
 	readonly onRegisteredSettingChanged?: (id: string, value: unknown) => void;
 	readonly onEditModeChanged?: (mode: EditMode) => void;
 	readonly sessionId?: string;

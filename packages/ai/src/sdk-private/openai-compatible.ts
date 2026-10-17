@@ -1,13 +1,6 @@
-import { apiKeyCredentialSchema } from "../connections/credential-schemas.ts";
-import { ModelProviderError } from "../model-client/errors.ts";
-import { openAICompatibleChatProtocol } from "../model-client/protocols/openai-chat.ts";
-import { unreachableValue } from "../model-client/protocols/shared.ts";
-import type {
-	ModelPromptMessage,
-	ModelPromptPart,
-	ModelStreamPart,
-} from "../model-client/types";
+import { apiKeyCredentialSchema } from "../credential-schemas.ts";
 import {
+	maxOutputTokensForRequest,
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
@@ -15,6 +8,14 @@ import {
 	ProviderError,
 	type ProviderModel,
 } from "../sdk.ts";
+import { ProviderProtocolError } from "./protocol-errors.ts";
+import { openAICompatibleChatProtocol } from "./protocols/openai-chat.ts";
+import type {
+	ProtocolPromptMessage,
+	ProtocolPromptPart,
+	ProtocolStreamPart,
+} from "./protocols/request.ts";
+import { unreachableValue } from "./protocols/shared.ts";
 
 const OPENAI_COMPATIBLE_PROTOCOL_ID = "openai-compatible";
 const TRAILING_SLASHES = /\/+$/u;
@@ -72,7 +73,7 @@ const apiKeyForAuthorization = (
 
 const promptPart = (
 	part: ProviderChatRequest["messages"][number]["content"][number]
-): ModelPromptPart => {
+): ProtocolPromptPart => {
 	switch (part.type) {
 		case "text":
 			return part;
@@ -82,6 +83,7 @@ const promptPart = (
 		case "tool-call":
 			return part;
 		case "tool-result":
+		case "tool-failure":
 			return part;
 		default:
 			return unreachableValue(part);
@@ -90,7 +92,7 @@ const promptPart = (
 
 const promptMessages = (
 	messages: ProviderChatRequest["messages"]
-): readonly ModelPromptMessage[] =>
+): readonly ProtocolPromptMessage[] =>
 	messages.map((message) => ({
 		content: message.content.map(promptPart),
 		role: message.role,
@@ -103,7 +105,7 @@ const providerErrorFor = (
 	if (error instanceof ProviderError) {
 		return error;
 	}
-	if (error instanceof ModelProviderError) {
+	if (error instanceof ProviderProtocolError) {
 		if (error.statusCode === 401 || error.statusCode === 403) {
 			return new ProviderError(
 				"authentication",
@@ -125,7 +127,7 @@ const providerErrorFor = (
 };
 
 const streamEvents = function* (
-	parts: Iterable<ModelStreamPart>
+	parts: Iterable<ProtocolStreamPart>
 ): Iterable<ProviderChatEvent> {
 	for (const part of parts) {
 		if (part.type === "finish") {
@@ -142,13 +144,23 @@ const streamEvents = function* (
 const requestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext
-) =>
-	openAICompatibleChatProtocol.serialize({
+) => {
+	const requestedMaxOutputTokens = maxOutputTokensForRequest(
+		request.maxOutputTokens,
+		context.model
+	);
+	return openAICompatibleChatProtocol.serialize({
+		maxOutputTokens: request.cacheWarming ? 1 : requestedMaxOutputTokens,
 		messages: promptMessages(request.messages),
 		modelId: context.model.modelId,
+		...(request.reasoningEffort !== undefined &&
+		context.model.reasoningEfforts?.includes(request.reasoningEffort)
+			? { reasoningEffort: request.reasoningEffort }
+			: {}),
 		system: request.system,
 		tools: request.tools,
 	});
+};
 
 const cancelResponseBody = async (
 	response: OpenAICompatibleFetchResponse
