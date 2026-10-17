@@ -267,7 +267,7 @@ test("Provider Thinking options expose only declared reasoning efforts", () => {
 		modelId: "reasoning-model",
 		protocolId: "fixture",
 		providerId: "fixture",
-		reasoningEfforts: ["none", "high"],
+		reasoningEfforts: ["off", "high"],
 	};
 	const undeclared: ProviderModel = {
 		modelId: "plain-model",
@@ -277,7 +277,7 @@ test("Provider Thinking options expose only declared reasoning efforts", () => {
 
 	expect(supportedProviderThinkingLevels(model)).toEqual(["off", "high"]);
 	expect(providerModelReasoningEffort(model, "high")).toBe("high");
-	expect(providerModelReasoningEffort(model, "off")).toBe("none");
+	expect(providerModelReasoningEffort(model, "off")).toBe("off");
 	expect(providerModelReasoningEffort(model, "medium")).toBeUndefined();
 	expect(
 		normalizeProviderModelThinkingSelection(model, {

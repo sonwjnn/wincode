@@ -81,7 +81,7 @@ const scriptedProvider = (
 				modelId: "sdk-model",
 				promptCacheRetentionTiers: ["long", "short"],
 				reasoningEfforts: [
-					"none",
+					"off",
 					"minimal",
 					"low",
 					"medium",
@@ -261,7 +261,7 @@ test("SDK-backed Agent Runtime forwards request controls to the fake Provider", 
 	});
 });
 
-test("SDK Agent Runtime maps explicit reasoning off to none but leaves unset effort absent", async () => {
+test("SDK Agent Runtime forwards explicit reasoning off and leaves unset effort absent", async () => {
 	const requests: Parameters<Provider["streamChat"]>[0][] = [];
 	const providers = createProviderCollection();
 	providers.register({
@@ -295,7 +295,7 @@ test("SDK Agent Runtime maps explicit reasoning off to none but leaves unset eff
 	await consume(runtime.run(turnFor()));
 
 	expect(requests).toHaveLength(2);
-	expect(requests[0]?.reasoningEffort).toBe("none");
+	expect(requests[0]?.reasoningEffort).toBe("off");
 	expect(requests[1]?.reasoningEffort).toBeUndefined();
 });
 

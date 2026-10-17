@@ -130,16 +130,17 @@ Session schema changes update the current Drizzle schema directly; this project 
 - Coding filesystem tools resolve paths within the active workspace. Resource profiles continue to bound coding-tool inputs and outputs; neither mechanism contains arbitrary processes.
 - Skill instructions are untrusted, turn-scoped context. Activating a Skill does not grant process privileges.
 
-## Model metadata
+## Model catalog and metadata
 
-SDK Providers own their declared Provider Models and protocol identities; there is no cross-provider Model Catalog or lifecycle allowlist. Supplemental reasoning, cost, limits, and cache metadata is generated into provider-specific snapshots under `packages/ai/src/generated/` from `https://models.dev/api.json`, using model declarations in `packages/ai/src/sdk-providers/*-models.ts` and the shared converter in `packages/ai/src/models-dev.ts`. These snapshots enrich Provider Models but never authorize or substitute model identity.
+SDK Providers own their Provider Models and protocol identities; the runtime has no cross-provider lifecycle allowlist. The curated inventory lives in `packages/ai/scripts/provider-model-catalog.source.json`. Each provider declares its default protocol once, with per-model protocol or capability overrides only where needed. `sync-provider-model-catalog` combines these identities with `https://models.dev/api.json` and the manual overlays in `packages/ai/scripts/metadata-model.ts`, then emits complete provider-scoped `ProviderModel` baselines under `packages/ai/src/generated/`. Metadata can enrich only manifest-declared identities; missing facts remain absent.
 
 ```sh
-bun run sync-model-metadata                   # regenerate the snapshot
-bun run sync-model-metadata -- --check        # fail when it is stale
+bun run sync-provider-model-catalog                    # regenerate complete provider baselines
+bun run sync-provider-model-catalog -- --check         # fetch source and fail when generated files drift
+bun run sync-provider-model-catalog -- --models-dev-data <path> --check # check from a local fixture
 ```
 
-The snapshots are build inputs, not fetch dependencies: a context limit resolves with no network at all, which is what keeps automatic compaction available offline. Facts the upstream does not publish are manual overlays in `packages/ai/scripts/metadata-model.ts` and remain visible in the generator's coverage report.
+Generated baselines are the runtime inputs, so provider requests and model selection do not fetch metadata. The generator reports upstream and overlay coverage to keep missing facts visible.
 
 ## Architecture decisions
 

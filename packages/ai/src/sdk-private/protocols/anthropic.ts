@@ -1,13 +1,10 @@
 import { isNonNegativeInteger } from "@wincode/utils";
-import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
+import type { SupportedPromptCacheRetentionTier } from "../../model-metadata.ts";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "../../model-output-limit.ts";
 import { normalizeModelUsage } from "../../model-usage.ts";
 import type { ProviderModel } from "../../sdk.ts";
 import { readSseEvents } from "../sse.ts";
-import {
-	type AnthropicModelMetadataLookup,
-	createAnthropicPromptCacheStrategy,
-} from "./anthropic-prompt-cache.ts";
+import { createAnthropicPromptCacheStrategy } from "./anthropic-prompt-cache.ts";
 import type {
 	ProtocolPromptMessage,
 	ProtocolPromptPart,
@@ -28,7 +25,7 @@ import {
 import type {
 	ModelProtocolStrategy,
 	ProviderProtocolRequestContextByProtocol,
-} from "./types";
+} from "./types.ts";
 
 const anthropicContent = (
 	content: readonly ProtocolPromptPart[]
@@ -380,7 +377,6 @@ const anthropicCacheControl = (
 
 const serializeAnthropic = (
 	context: ProviderProtocolRequestContextByProtocol["anthropic"],
-	modelMetadataFor: AnthropicModelMetadataLookup,
 	promptCache: ModelProtocolStrategy<"anthropic">["promptCache"]
 ): JsonRecord => {
 	const { request, model, maxOutputTokens, providerOptions } = context;
@@ -394,7 +390,7 @@ const serializeAnthropic = (
 		model: request.modelId,
 		max_tokens:
 			maxOutputTokens ??
-			modelMetadataFor(model)?.limits?.output ??
+			model.limits?.maxOutputTokens ??
 			MODEL_OUTPUT_TOKEN_LIMIT,
 		messages: anthropicMessages(request.messages, cacheControl),
 		stream: true,
@@ -436,15 +432,13 @@ const serializeAnthropic = (
 	return body;
 };
 
-export const createAnthropicStrategy = (
-	modelMetadataFor: AnthropicModelMetadataLookup
-): ModelProtocolStrategy<"anthropic"> => {
-	const promptCache = createAnthropicPromptCacheStrategy(modelMetadataFor);
-	return {
-		protocol: "anthropic",
-		promptCache,
-		serialize: (context) =>
-			serializeAnthropic(context, modelMetadataFor, promptCache),
-		stream: anthropicStream,
+export const createAnthropicStrategy =
+	(): ModelProtocolStrategy<"anthropic"> => {
+		const promptCache = createAnthropicPromptCacheStrategy();
+		return {
+			protocol: "anthropic",
+			promptCache,
+			serialize: (context) => serializeAnthropic(context, promptCache),
+			stream: anthropicStream,
+		};
 	};
-};

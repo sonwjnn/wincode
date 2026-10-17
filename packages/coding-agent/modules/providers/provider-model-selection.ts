@@ -1,6 +1,5 @@
 import { type ModelId, toModelId } from "@wincode/agent-core";
 import {
-	type ChatReasoningEffort,
 	type ProviderModel,
 	parseProviderModelSelection as parseSdkProviderModelSelection,
 	type ProviderModelSelection as SdkProviderModelSelection,
@@ -405,16 +404,17 @@ export const parseProviderModelSelection = (
 		: { ...selection, modelId: toModelId(selection.modelId) };
 };
 
-/** Normalizes one selected level against the current Provider Model declaration. */
+/** Validates the shared ThinkingLevel against the current Provider Model. */
 export const providerModelReasoningEffort = (
 	model: ProviderModel,
 	thinkingLevel: ThinkingLevel | undefined
-): ChatReasoningEffort | undefined => {
+): ThinkingLevel | undefined => {
 	if (thinkingLevel === undefined) {
 		return;
 	}
-	const effort = thinkingLevel === "off" ? "none" : thinkingLevel;
-	return model.reasoningEfforts?.includes(effort) ? effort : undefined;
+	return model.reasoningEfforts?.includes(thinkingLevel)
+		? thinkingLevel
+		: undefined;
 };
 
 /** The selectable Thinking Levels a Provider Model explicitly declares. */

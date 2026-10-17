@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** Stable reasoning levels Wincode can persist and send. */
+/** Stable reasoning choices Wincode can persist and send. */
 export const thinkingLevelIds = [
 	"off",
 	"minimal",

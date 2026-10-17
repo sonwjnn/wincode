@@ -1,4 +1,3 @@
-import { openAIPromptCacheByModelId } from "../../generated/openai-prompt-cache.generated.ts";
 import type {
 	OpenAIPromptCacheProtocol,
 	SupportedPromptCacheRetentionTier,
@@ -6,7 +5,7 @@ import type {
 import { parsePromptCacheTtlMs } from "../../prompt-cache-ttl.ts";
 import type { ProviderModel } from "../../sdk.ts";
 import type { ProviderProtocolRequest } from "./request.ts";
-import type { ModelProtocolPromptCacheStrategy } from "./types";
+import type { ModelProtocolPromptCacheStrategy } from "./types.ts";
 
 export type OpenAIPromptCacheControls = Readonly<{
 	breakpoints: boolean;
@@ -20,7 +19,7 @@ const openAIPromptCacheCapabilitiesFor = (
 	protocol: OpenAIPromptCacheProtocol
 ) =>
 	model.providerId === "openai"
-		? openAIPromptCacheByModelId[model.modelId]?.[protocol]
+		? model.promptCache?.protocols?.[protocol]
 		: undefined;
 
 export const openAIPromptCacheStrategyFor = (

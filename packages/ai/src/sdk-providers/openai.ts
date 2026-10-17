@@ -1,6 +1,6 @@
 import type { JsonObject } from "type-fest";
 import { openAICredentialSchema } from "../credential-schemas.ts";
-import { openAIProviderModelMetadataById } from "../generated/openai-provider-model-metadata.generated.ts";
+import { providerModels as openAIProviderModels } from "../generated/openai.generated.ts";
 import {
 	type ChatContentPart,
 	maxOutputTokensForRequest,
@@ -26,6 +26,7 @@ import {
 } from "../sdk-private/protocol-errors.ts";
 import { openAIChatStrategy } from "../sdk-private/protocols/openai-chat.ts";
 import { openAIResponsesStrategy } from "../sdk-private/protocols/openai-responses.ts";
+import { openAIProtocolReasoningEffortFor } from "../sdk-private/protocols/provider-options.ts";
 import type {
 	ProtocolPromptMessage,
 	ProtocolPromptPart,
@@ -34,35 +35,19 @@ import type {
 } from "../sdk-private/protocols/request.ts";
 import { unreachableValue } from "../sdk-private/protocols/shared.ts";
 import type { ModelProtocolStrategy } from "../sdk-private/protocols/types.ts";
-import { openAIDefaultModelIds } from "./openai-models.ts";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_RESPONSES_PROTOCOL = "openai-responses";
 const OPENAI_CHAT_PROTOCOL = "openai-chat";
+// Keep model validation aligned with the protocol dispatch in wireRequestFor.
+const OPENAI_SUPPORTED_PROTOCOL_IDS = new Set([
+	OPENAI_RESPONSES_PROTOCOL,
+	OPENAI_CHAT_PROTOCOL,
+]);
 const OPENAI_OAUTH_RESPONSES_URL =
 	"https://chatgpt.com/backend-api/codex/responses";
 const TRAILING_SLASHES = /\/+$/u;
-const DEFAULT_MODELS: readonly ProviderModel[] = openAIDefaultModelIds.map(
-	(modelId) => {
-		const metadata = openAIProviderModelMetadataById[modelId];
-		return {
-			modelId,
-			protocolId: OPENAI_RESPONSES_PROTOCOL,
-			providerId: OPENAI_PROVIDER_ID,
-			...(metadata?.limits === undefined ? {} : { limits: metadata.limits }),
-			...(metadata?.pricing === undefined ? {} : { pricing: metadata.pricing }),
-			...(metadata?.promptCacheRetentionTiers === undefined
-				? {}
-				: { promptCacheRetentionTiers: metadata.promptCacheRetentionTiers }),
-			...(metadata?.promptCacheRetentionTtlMs === undefined
-				? {}
-				: { promptCacheRetentionTtlMs: metadata.promptCacheRetentionTtlMs }),
-			...(metadata?.reasoningEfforts === undefined
-				? {}
-				: { reasoningEfforts: metadata.reasoningEfforts }),
-		};
-	}
-);
+const DEFAULT_MODELS: readonly ProviderModel[] = openAIProviderModels;
 
 export type OpenAIAuthorization =
 	| Readonly<{ apiKey: string; kind: "api-key" }>
@@ -235,7 +220,11 @@ const wireRequestFor = (
 			providerOptions:
 				modelRequest.reasoningEffort === undefined
 					? undefined
-					: { reasoningEffort: modelRequest.reasoningEffort },
+					: {
+							reasoningEffort: openAIProtocolReasoningEffortFor(
+								modelRequest.reasoningEffort
+							),
+						},
 			request: modelRequest,
 		});
 		if (authorization.kind === "oauth") {
@@ -442,6 +431,11 @@ export const createOpenAIProvider = (
 	const models = options.models ?? DEFAULT_MODELS;
 	if (models.some((model) => model.providerId !== OPENAI_PROVIDER_ID)) {
 		throw new Error("OpenAI provider models must use provider ID openai.");
+	}
+	if (
+		models.some((model) => !OPENAI_SUPPORTED_PROTOCOL_IDS.has(model.protocolId))
+	) {
+		throw new Error("OpenAI provider models must use a supported protocol ID.");
 	}
 	return {
 		canEnforceMaxOutputTokens: ({ credential }) => {

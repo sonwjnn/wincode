@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { SupportedPromptCacheRetentionTier } from "./model-metadata.ts";
+import {
+	promptCacheRetentionTierSchema,
+	type SupportedPromptCacheRetentionTier,
+} from "./model-metadata.ts";
 import type { ProviderModel } from "./sdk.ts";
 
 export type PromptCachePolicy = Readonly<{
@@ -21,7 +24,7 @@ export const DEFAULT_PROMPT_CACHE_POLICY: PromptCachePolicy = {
 export const promptCachePolicySchema = z
 	.object({
 		modelOverrides: z
-			.record(z.string(), z.enum(["short", "long", "off"]))
+			.record(z.string(), promptCacheRetentionTierSchema)
 			.optional(),
 	})
 	.strict() satisfies z.ZodType<PromptCachePolicy>;

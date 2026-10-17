@@ -10,7 +10,7 @@ import type {
 	ProtocolPromptPart,
 	ProtocolStreamPart,
 } from "./request.ts";
-import type { JsonRecord, SsePayload } from "./shared";
+import type { JsonRecord, SsePayload } from "./shared.ts";
 import {
 	fileDataUri,
 	incompleteStreamError,
@@ -26,7 +26,7 @@ import {
 import type {
 	ModelProtocolStrategy,
 	ProviderProtocolRequestContextByProtocol,
-} from "./types";
+} from "./types.ts";
 
 type ResponsesInputItem = Readonly<Record<string, unknown>>;
 
@@ -446,13 +446,8 @@ const serializeOpenAIResponses = (
 	if (providerOptions?.store !== undefined) {
 		body.store = providerOptions.store;
 	}
-	const effort = providerOptions?.reasoningEffort;
-	const summary = providerOptions?.reasoningSummary;
-	if (effort !== undefined || summary !== undefined) {
-		body.reasoning = {
-			...(effort === undefined ? {} : { effort }),
-			...(summary === undefined ? {} : { summary }),
-		};
+	if (providerOptions?.reasoningEffort !== undefined) {
+		body.reasoning = { effort: providerOptions.reasoningEffort };
 	}
 	const tools = request.tools?.map((tool) => ({
 		type: "function",

@@ -28,7 +28,7 @@ test("ProviderCollection preserves explicit support metadata and rejects invente
 				promptCacheRetentionTiers: ["short", "long"],
 				protocolId: "fixture",
 				providerId: "fixture",
-				reasoningEfforts: ["none", "high"],
+				reasoningEfforts: ["off", "high"],
 			},
 			{
 				modelId: "undeclared",
@@ -40,7 +40,7 @@ test("ProviderCollection preserves explicit support metadata and rejects invente
 
 	expect(collection.getModel("fixture", "declared")).toMatchObject({
 		promptCacheRetentionTiers: ["short", "long"],
-		reasoningEfforts: ["none", "high"],
+		reasoningEfforts: ["off", "high"],
 	});
 	expect(collection.getModel("fixture", "undeclared")).toEqual({
 		modelId: "undeclared",
@@ -108,7 +108,7 @@ test("first-party Provider Models expose only their published thinking and cache
 				},
 			],
 		},
-		reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+		reasoningEfforts: ["off", "low", "medium", "high", "xhigh", "max"],
 		promptCacheRetentionTiers: ["short"],
 	});
 	expect(modelFor("openai", "gpt-6-terra")).toMatchObject({
@@ -184,15 +184,32 @@ test("first-party Provider Models expose only their published thinking and cache
 	});
 	expect(modelFor("opencode-go", "grok-4.6")).toMatchObject({
 		limits: { contextWindowTokens: 500_000, maxOutputTokens: 500_000 },
+		modelId: "grok-4.6",
 		pricing: {
+			cacheReadPerMillionTokensUsd: 0.5,
 			inputPerMillionTokensUsd: 2,
 			outputPerMillionTokensUsd: 6,
-			cacheReadPerMillionTokensUsd: 0.5,
+			tiers: [
+				{
+					cacheReadPerMillionTokensUsd: 1,
+					inputPerMillionTokensUsd: 4,
+					inputTokensAbove: 200_000,
+					outputPerMillionTokensUsd: 12,
+				},
+				{
+					cacheReadPerMillionTokensUsd: 1,
+					inputPerMillionTokensUsd: 4,
+					inputTokensAbove: 200_000,
+					outputPerMillionTokensUsd: 12,
+				},
+			],
 		},
+		protocolId: "openai-compatible",
+		providerId: "opencode-go",
 		reasoningEfforts: ["low", "medium", "high", "xhigh"],
 	});
 	expect(modelFor("opencode-go", "longcat-2.0")).toMatchObject({
-		reasoningEfforts: ["none"],
+		reasoningEfforts: ["off"],
 	});
 	expect(modelFor("opencode-go", "glm-5.1")).toEqual({
 		modelId: "glm-5.1",
@@ -308,21 +325,21 @@ test("Provider Model reasoning maps named levels and explicit overrides only", (
 			promptCache: { explicit: { retentionTiers: ["short", "long"] } },
 		})
 	).toMatchObject({
-		reasoningEfforts: ["none", "high", "max"],
+		reasoningEfforts: ["off", "high", "max"],
 		promptCacheRetentionTiers: ["short", "long"],
 	});
 
 	expect(
 		withProviderModelMetadata(model, { thinking: { toggle: true } })
-	).toEqual({ ...model, reasoningEfforts: ["none"] });
+	).toEqual({ ...model, reasoningEfforts: ["off"] });
 	expect(
 		withProviderModelMetadata(model, {
 			thinking: { levels: ["low"], toggle: true },
 		})
-	).toMatchObject({ reasoningEfforts: ["none", "low"] });
+	).toMatchObject({ reasoningEfforts: ["off", "low"] });
 	expect(
 		withProviderModelMetadata(model, {
 			thinking: { toggle: true, unlevelled: true },
 		})
-	).toMatchObject({ reasoningEfforts: ["none"] });
+	).toMatchObject({ reasoningEfforts: ["off"] });
 });

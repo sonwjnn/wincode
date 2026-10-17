@@ -6,6 +6,21 @@ import {
 	type OpenAIProvider,
 } from "@wincode/ai";
 
+const openAIResponsePromptCache = {
+	explicit: { retentionTiers: ["short"] },
+	protocols: {
+		"openai-responses": {
+			breakpoints: true,
+			eligibility: { minimumInputTokens: 1024 },
+			promptCacheKey: true,
+			retention: {
+				field: "prompt_cache_options.ttl",
+				values: { short: "30m" },
+			},
+		},
+	},
+} as const;
+
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(
 		events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
@@ -13,6 +28,20 @@ const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	);
 
 describe("public OpenAI SDK provider", () => {
+	test("rejects unsupported protocol mappings before a model becomes selectable", () => {
+		expect(() =>
+			createOpenAIProvider({
+				models: [
+					{
+						modelId: "gpt-invalid-protocol",
+						protocolId: "openai-respones",
+						providerId: "openai",
+					},
+				],
+			})
+		).toThrow("OpenAI provider models must use a supported protocol ID.");
+	});
+
 	test("API-key consumers retain Responses multimodal, tool, cache, usage, and continuation behavior", async () => {
 		const continuation = [
 			{ id: "rs_private", type: "reasoning" },
@@ -31,6 +60,16 @@ describe("public OpenAI SDK provider", () => {
 		const sdk = createProviderCollection();
 		sdk.register(
 			createOpenAIProvider({
+				models: [
+					{
+						modelId: "gpt-5.6",
+						promptCache: openAIResponsePromptCache,
+						promptCacheRetentionTiers: ["short"],
+						protocolId: "openai-responses",
+						providerId: "openai",
+						reasoningEfforts: ["high"],
+					},
+				],
 				fetch: async (input, init) => {
 					requests.push({
 						body: JSON.parse(String(init?.body)) as Record<string, unknown>,
@@ -64,23 +103,15 @@ describe("public OpenAI SDK provider", () => {
 						},
 					]);
 				},
-				models: [
-					{
-						modelId: "gpt-5.6",
-						promptCacheRetentionTiers: ["short"],
-						protocolId: "openai-responses",
-						providerId: "openai",
-						reasoningEfforts: ["high"],
-					},
-				],
 			})
 		);
 		await sdk.setCredential("openai", {
 			kind: "api-key",
 			apiKey: "openai-test-key",
 		});
-		expect(sdk.getModel("openai", "gpt-5.6")).toEqual({
+		expect(sdk.getModel("openai", "gpt-5.6")).toMatchObject({
 			modelId: "gpt-5.6",
+			promptCache: openAIResponsePromptCache,
 			promptCacheRetentionTiers: ["short"],
 			protocolId: "openai-responses",
 			providerId: "openai",
@@ -699,5 +730,65 @@ describe("public OpenAI SDK provider", () => {
 				type: "terminal",
 			},
 		]);
+	});
+
+	test("shared reasoning off serializes as native none for both OpenAI APIs", async () => {
+		const requests: Record<string, unknown>[] = [];
+		const sdk = createProviderCollection();
+		sdk.register(
+			createOpenAIProvider({
+				models: [
+					{
+						modelId: "responses-off-model",
+						protocolId: "openai-responses",
+						providerId: "openai",
+						reasoningEfforts: ["off"],
+					},
+					{
+						modelId: "chat-off-model",
+						protocolId: "openai-chat",
+						providerId: "openai",
+						reasoningEfforts: ["off"],
+					},
+				],
+				fetch: async (input, init) => {
+					requests.push(
+						JSON.parse(String(init?.body)) as Record<string, unknown>
+					);
+					return String(input).endsWith("/responses")
+						? sseResponse([
+								{
+									type: "response.completed",
+									response: {
+										output: [],
+										usage: { input_tokens: 1, output_tokens: 0 },
+									},
+								},
+							])
+						: sseResponse([
+								{ choices: [{ delta: {}, finish_reason: "stop" }] },
+							]);
+				},
+			})
+		);
+		await sdk.setCredential("openai", {
+			kind: "api-key",
+			apiKey: "off-reasoning-test-key",
+		});
+
+		for (const modelId of ["responses-off-model", "chat-off-model"]) {
+			for await (const _event of sdk.chat({
+				messages: [{ content: [{ text: "Hi", type: "text" }], role: "user" }],
+				modelId,
+				providerId: "openai",
+				reasoningEffort: "off",
+			})) {
+				// Consume the stream to verify the public provider boundary.
+			}
+		}
+
+		expect(requests).toHaveLength(2);
+		expect(requests[0]).toMatchObject({ reasoning: { effort: "none" } });
+		expect(requests[1]).toMatchObject({ reasoning_effort: "none" });
 	});
 });

@@ -731,10 +731,7 @@ const buildChatRequest = ({
 		cacheWarming,
 		maxOutputTokens: turn.model.maxOutputTokens,
 		promptCacheKey,
-		reasoningEffort:
-			turn.model.thinkingLevel === "off"
-				? ("none" as const)
-				: turn.model.thinkingLevel,
+		reasoningEffort: turn.model.thinkingLevel,
 		signal: runtimeSignal,
 		system: turn.agent.instructions,
 		tools: toolDefinitions,

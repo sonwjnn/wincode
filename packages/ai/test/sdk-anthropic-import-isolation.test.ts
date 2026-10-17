@@ -54,12 +54,17 @@ describe("Anthropic SDK provider import graph", () => {
 					.filter((input) => input.includes("/sdk-providers/"))
 					.map((input) => path.basename(input))
 					.toSorted()
-			).toEqual(["anthropic-models.ts", "anthropic.ts"].toSorted());
+			).toEqual(["anthropic.ts"]);
+			expect(
+				inputs.some((input) =>
+					input.endsWith("generated/anthropic.generated.ts")
+				)
+			).toBe(true);
 			expect(
 				inputs.some((input) =>
 					input.endsWith("generated/anthropic-model-metadata.generated.ts")
 				)
-			).toBe(true);
+			).toBe(false);
 		} finally {
 			await fs.rm(outputDir, { force: true, recursive: true });
 		}

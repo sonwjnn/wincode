@@ -1,23 +1,11 @@
-// Assembles the generated model metadata module from the shared models.dev
-// converter plus the manual overlays. Fetching lives in
-// `sync-model-metadata.ts`; interpretation lives in `../src/models-dev.ts`.
+// Combines manifest-declared Provider Models with exact models.dev facts and
+// manual overlays. Fetching and file generation live in sync-provider-model-catalog.ts.
 
-import type {
-	ModelMetadataEntry,
-	ModelPromptCacheProtocolCapabilities,
-	ModelThinkingPolicy,
-	OpenAIPromptCacheProtocol,
-	SupportedPromptCacheRetentionTier,
-} from "../src/model-metadata";
+import type { ModelMetadataEntry } from "../src/model-metadata";
 import { metadataForModel } from "../src/models-dev";
 import { modelsDevBlocksFromPayload } from "../src/models-dev-payload";
-import { withProviderModelMetadata } from "../src/provider-model-metadata";
-import type { ChatReasoningEffort, ProviderModel } from "../src/sdk";
-
-type ProviderModelMetadataSource = Readonly<{
-	modelId: string;
-	providerId: string;
-}>;
+import { withProviderModelMetadata } from "../src/provider-model-metadata.ts";
+import type { ProviderModel } from "../src/sdk.ts";
 
 // Anthropic documents explicit prompt caching for all active Claude models
 // on the Claude API, with 5-minute and 1-hour retention. The OpenCode Go models
@@ -56,10 +44,7 @@ const OPENAI_RESPONSES_PROMPT_CACHE = {
 	},
 } as const;
 
-/**
- * Facts models.dev does not publish. Every key here is a gap that must stay
- * visible rather than being silently defaulted.
- */
+/** Facts models.dev does not publish; these never add Provider Model identities. */
 export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	"anthropic/claude-opus-5.5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
 	"anthropic/claude-opus-4-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
@@ -96,306 +81,67 @@ export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	"google/gemini-3.8-flash": {
 		promptCache: GOOGLE_CACHED_CONTENT_PROMPT_CACHE,
 	},
-	"openai/gpt-5.6": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		reasoningSummary: true,
-	},
-	"openai/gpt-5.6-luna": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		reasoningSummary: true,
-	},
-	"openai/gpt-5.6-sol": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		reasoningSummary: true,
-	},
-	"openai/gpt-5.6-terra": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		reasoningSummary: true,
-	},
+	"openai/gpt-5.6": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-5.6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-5.6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-5.6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6.1-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6-astra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"opencode-go/gpt-5.6-luna": { reasoningSummary: true },
+	// Keep the last published models.dev facts while the manifest still declares this model.
+	"opencode-go/grok-4.6": {
+		cost: { input: 2, output: 6, cacheRead: 0.5 },
+		limits: { context: 500_000, output: 500_000 },
+		thinking: { levels: ["low", "medium", "high", "xhigh"] },
+		tiers: [
+			{
+				inputTokensAbove: 200_000,
+				input: 4,
+				output: 12,
+				cacheRead: 1,
+			},
+			{
+				inputTokensAbove: 200_000,
+				input: 4,
+				output: 12,
+				cacheRead: 1,
+			},
+		],
+	},
 };
 
-export type BuildInput = {
-	readonly providerModels: readonly ProviderModelMetadataSource[];
-	readonly generatedAt: string;
-	readonly overlays: Readonly<Record<string, ModelMetadataEntry>>;
-	readonly payload: unknown;
-	readonly source: string;
-};
-
-type OpenAIPromptCacheEntries = Readonly<
-	Record<
-		string,
-		Readonly<
-			Partial<
-				Record<OpenAIPromptCacheProtocol, ModelPromptCacheProtocolCapabilities>
-			>
-		>
-	>
->;
-
-type ProviderModelMetadataEntries = Readonly<
-	Record<string, ModelMetadataEntry>
->;
-type OpenAIProviderModelMetadata = Readonly<{
-	limits?: ProviderModel["limits"];
-	pricing?: ProviderModel["pricing"];
-	promptCacheRetentionTiers?: readonly SupportedPromptCacheRetentionTier[];
-	promptCacheRetentionTtlMs?: ProviderModel["promptCacheRetentionTtlMs"];
-	reasoningEfforts?: readonly ChatReasoningEffort[];
+export type BuildInput = Readonly<{
+	overlays: Readonly<Record<string, ModelMetadataEntry>>;
+	payload: unknown;
+	providerModels: readonly ProviderModel[];
 }>;
-type OpenAIProviderModelMetadataEntries = Readonly<
-	Record<string, OpenAIProviderModelMetadata>
->;
-const providerModelMetadataEntriesFor = (
-	rows: Readonly<Record<string, ModelMetadataEntry>>,
-	providerId: string
-): ProviderModelMetadataEntries => {
-	const entries: Record<string, ModelMetadataEntry> = {};
-	for (const key of Object.keys(rows).sort()) {
-		if (key.startsWith(`${providerId}/`)) {
-			entries[key.slice(providerId.length + 1)] = rows[key] ?? {};
-		}
-	}
-	return entries;
-};
 
-const providerModelMetadataContentsFor = (
-	entries: ProviderModelMetadataEntries,
-	providerId: "anthropic" | "google" | "opencode-go",
-	generatedAt: string,
-	source: string
-): string => {
-	const body = JSON.stringify(entries, null, "\t");
-	const exportName = providerId === "opencode-go" ? "openCodeGo" : providerId;
-	const providerName = {
-		anthropic: "Anthropic",
-		google: "Google",
-		"opencode-go": "OpenCode Go",
-	}[providerId];
-	return [
-		"// Generated by packages/ai/scripts/sync-model-metadata.ts — do not edit.",
-		`// Snapshot date: ${generatedAt}. Source: ${source}.`,
-		`// ${providerName}-only model metadata; other provider entries are excluded.`,
-		"",
-		'import type { ModelMetadataEntry } from "../model-metadata";',
-		"",
-		`export const ${exportName}ModelMetadataById: Readonly<`,
-		"\tRecord<string, ModelMetadataEntry>",
-		`> = ${body};`,
-		"",
-	].join("\n");
-};
+export type BuildResult = Readonly<{
+	entries: Readonly<Record<string, ModelMetadataEntry>>;
+	providerModels: readonly ProviderModel[];
+	coverage: Readonly<{
+		absentUpstream: readonly string[];
+		fromOverlay: readonly string[];
+		fromSource: number;
+		providerModelCount: number;
+		uncovered: readonly string[];
+	}>;
+}>;
 
-export type BuildResult = {
-	/** The in-memory entries that the generated module will export. */
-	readonly entries: Readonly<Record<string, ModelMetadataEntry>>;
-	readonly anthropicModelMetadataContents: string;
-	readonly anthropicModelMetadataEntries: ProviderModelMetadataEntries;
-	readonly googleModelMetadataContents: string;
-	readonly googleModelMetadataEntries: ProviderModelMetadataEntries;
-	readonly openCodeGoModelMetadataContents: string;
-	readonly openCodeGoModelMetadataEntries: ProviderModelMetadataEntries;
-	readonly openAIPromptCacheContents: string;
-	readonly openAIPromptCacheEntries: OpenAIPromptCacheEntries;
-	readonly openAIProviderModelMetadataContents: string;
-	readonly openAIProviderModelMetadataEntries: OpenAIProviderModelMetadataEntries;
-	readonly coverage: {
-		readonly providerModelCount: number;
-		readonly absentUpstream: readonly string[];
-		readonly fromOverlay: readonly string[];
-		readonly fromSource: number;
-		/** Absent upstream with no overlay either: the entries with nothing. */
-		readonly uncovered: readonly string[];
-	};
-};
-
-const openAIPromptCacheEntriesFor = (
-	rows: Readonly<Record<string, ModelMetadataEntry>>
-): OpenAIPromptCacheEntries => {
-	const entries: Record<
-		string,
-		NonNullable<NonNullable<ModelMetadataEntry["promptCache"]>["protocols"]>
-	> = {};
-	for (const key of Object.keys(rows).sort()) {
-		if (!key.startsWith("openai/")) {
-			continue;
-		}
-		const protocols = rows[key]?.promptCache?.protocols;
-		if (protocols) {
-			entries[key.slice("openai/".length)] = protocols;
-		}
-	}
-	return entries;
-};
-
-const openAIPromptCacheContentsFor = (
-	entries: OpenAIPromptCacheEntries,
-	generatedAt: string,
-	source: string
-): string => {
-	const body = JSON.stringify(entries, null, "\t");
-	return [
-		"// Generated by packages/ai/scripts/sync-model-metadata.ts — do not edit.",
-		`// Snapshot date: ${generatedAt}. Source: ${source}.`,
-		"// OpenAI-only protocol cache controls; other provider metadata is excluded.",
-		"",
-		'import type { ModelPromptCacheProtocolCapabilities, OpenAIPromptCacheProtocol } from "../model-metadata";',
-		"",
-		"export const openAIPromptCacheByModelId: Readonly<",
-		"\tRecord<",
-		"\t\tstring,",
-		"\t\tReadonly<",
-		"\t\t\tPartial<",
-		"\t\t\t\tRecord<",
-		"\t\t\t\t\tOpenAIPromptCacheProtocol,",
-		"\t\t\t\t\tModelPromptCacheProtocolCapabilities",
-		"\t\t\t\t>",
-		"\t\t\t>",
-		"\t\t>",
-		"\t>",
-		"> =",
-		`${body};`,
-		"",
-	].join("\n");
-};
-
-const openAIThinkingPolicyFor = (
-	policy: ModelMetadataEntry["thinking"]
-): ModelThinkingPolicy | undefined =>
-	policy === undefined
-		? undefined
-		: {
-				...(policy.toggle === true ? { toggle: true as const } : {}),
-				...(policy.levels === undefined ? {} : { levels: policy.levels }),
-				...(policy.levelMap === undefined ? {} : { levelMap: policy.levelMap }),
-			};
-
-const openAIProviderModelMetadataFor = (
-	modelId: string,
-	metadata: ModelMetadataEntry
-): OpenAIProviderModelMetadata => {
-	const model: ProviderModel = {
-		modelId,
-		protocolId: "openai-responses",
-		providerId: "openai",
-	};
-	const thinking = openAIThinkingPolicyFor(metadata.thinking);
-	const normalized = withProviderModelMetadata(model, {
-		...(metadata.cost === undefined ? {} : { cost: metadata.cost }),
-		...(metadata.limits === undefined ? {} : { limits: metadata.limits }),
-		...(metadata.tiers === undefined ? {} : { tiers: metadata.tiers }),
-		...(metadata.promptCache === undefined
-			? {}
-			: { promptCache: metadata.promptCache }),
-		...(thinking === undefined ? {} : { thinking }),
-	});
-	return {
-		...(normalized.limits === undefined ? {} : { limits: normalized.limits }),
-		...(normalized.pricing === undefined
-			? {}
-			: { pricing: normalized.pricing }),
-		...(normalized.promptCacheRetentionTiers === undefined
-			? {}
-			: { promptCacheRetentionTiers: normalized.promptCacheRetentionTiers }),
-		...(normalized.promptCacheRetentionTtlMs === undefined
-			? {}
-			: { promptCacheRetentionTtlMs: normalized.promptCacheRetentionTtlMs }),
-		...(normalized.reasoningEfforts === undefined
-			? {}
-			: { reasoningEfforts: normalized.reasoningEfforts }),
-	};
-};
-
-const openAIProviderModelMetadataEntriesFor = (
-	rows: Readonly<Record<string, ModelMetadataEntry>>
-): OpenAIProviderModelMetadataEntries => {
-	const entries: Record<string, OpenAIProviderModelMetadata> = {};
-	for (const [key, metadata] of Object.entries(rows).toSorted(
-		([left], [right]) => left.localeCompare(right)
-	)) {
-		if (!key.startsWith("openai/")) {
-			continue;
-		}
-		const modelId = key.slice("openai/".length);
-		const modelMetadata = openAIProviderModelMetadataFor(modelId, metadata);
-		if (
-			modelMetadata.limits === undefined &&
-			modelMetadata.pricing === undefined &&
-			modelMetadata.reasoningEfforts === undefined &&
-			modelMetadata.promptCacheRetentionTiers === undefined &&
-			modelMetadata.promptCacheRetentionTtlMs === undefined
-		) {
-			continue;
-		}
-		entries[modelId] = modelMetadata;
-	}
-	return entries;
-};
-
-const openAIProviderModelMetadataContentsFor = (
-	entries: OpenAIProviderModelMetadataEntries,
-	generatedAt: string,
-	source: string
-): string => {
-	const body = JSON.stringify(entries, null, "\t");
-	return [
-		"// Generated by packages/ai/scripts/sync-model-metadata.ts — do not edit.",
-		`// Snapshot date: ${generatedAt}. Source: ${source}.`,
-		"// OpenAI-only exact limits, prices, reasoning, and cache choices; unknown values stay absent.",
-		"",
-		'import type { ProviderModel } from "../sdk";',
-		'import type { SupportedPromptCacheRetentionTier } from "../model-metadata";',
-		"",
-		"export type OpenAIProviderModelMetadata = Readonly<{",
-		'\tlimits?: ProviderModel["limits"];',
-		'\tpricing?: ProviderModel["pricing"];',
-		'\treasoningEfforts?: ProviderModel["reasoningEfforts"];',
-		"\tpromptCacheRetentionTiers?: readonly SupportedPromptCacheRetentionTier[];",
-		'\tpromptCacheRetentionTtlMs?: ProviderModel["promptCacheRetentionTtlMs"];',
-		"}>;",
-		"",
-		"export const openAIProviderModelMetadataById: Readonly<",
-		"\tRecord<string, OpenAIProviderModelMetadata>",
-		`> = ${body};`,
-		"",
-	].join("\n");
-};
-
-export const buildOpenAIProviderModelMetadataFile = (
-	rows: Readonly<Record<string, ModelMetadataEntry>>,
-	generatedAt: string,
-	source: string
-): Readonly<{
-	contents: string;
-	entries: OpenAIProviderModelMetadataEntries;
-}> => {
-	const entries = openAIProviderModelMetadataEntriesFor(rows);
-	return {
-		contents: openAIProviderModelMetadataContentsFor(
-			entries,
-			generatedAt,
-			source
-		),
-		entries,
-	};
-};
-
-/** Builds provider-owned metadata snapshots and reports uncovered SDK models. */
-export const buildModelMetadataFile = (input: BuildInput): BuildResult => {
+/** Enriches only manifest-declared Provider Models; metadata never adds identity. */
+export const buildProviderModelsWithMetadata = (
+	input: BuildInput
+): BuildResult => {
 	const blocks = modelsDevBlocksFromPayload(input.payload);
-	const rows: Record<string, ModelMetadataEntry> = {};
+	const entries: Record<string, ModelMetadataEntry> = {};
 	const absentUpstream: string[] = [];
 	const uncovered: string[] = [];
 	const fromOverlay: string[] = [];
 	let fromSource = 0;
 
-	for (const model of input.providerModels) {
+	const providerModels = input.providerModels.map((model) => {
 		const key = `${model.providerId}/${model.modelId}`;
 		const upstream = blocks.get(model.providerId)?.get(model.modelId);
 		const overlay = input.overlays[key];
@@ -417,63 +163,14 @@ export const buildModelMetadataFile = (input: BuildInput): BuildResult => {
 		if (overlay) {
 			fromOverlay.push(key);
 		}
-		rows[key] = { ...upstreamMetadata, ...overlay };
-	}
-
-	const anthropicModelMetadataEntries = providerModelMetadataEntriesFor(
-		rows,
-		"anthropic"
-	);
-	const anthropicModelMetadataContents = providerModelMetadataContentsFor(
-		anthropicModelMetadataEntries,
-		"anthropic",
-		input.generatedAt,
-		input.source
-	);
-	const googleModelMetadataEntries = providerModelMetadataEntriesFor(
-		rows,
-		"google"
-	);
-	const googleModelMetadataContents = providerModelMetadataContentsFor(
-		googleModelMetadataEntries,
-		"google",
-		input.generatedAt,
-		input.source
-	);
-	const openCodeGoModelMetadataEntries = providerModelMetadataEntriesFor(
-		rows,
-		"opencode-go"
-	);
-	const openCodeGoModelMetadataContents = providerModelMetadataContentsFor(
-		openCodeGoModelMetadataEntries,
-		"opencode-go",
-		input.generatedAt,
-		input.source
-	);
-	const openAIPromptCacheEntries = openAIPromptCacheEntriesFor(rows);
-	const openAIPromptCacheContents = openAIPromptCacheContentsFor(
-		openAIPromptCacheEntries,
-		input.generatedAt,
-		input.source
-	);
-	const openAIProviderModelMetadata = buildOpenAIProviderModelMetadataFile(
-		rows,
-		input.generatedAt,
-		input.source
-	);
+		const metadata = { ...upstreamMetadata, ...overlay };
+		entries[key] = metadata;
+		return withProviderModelMetadata(model, metadata);
+	});
 
 	return {
-		anthropicModelMetadataContents,
-		anthropicModelMetadataEntries,
-		entries: rows,
-		googleModelMetadataContents,
-		googleModelMetadataEntries,
-		openCodeGoModelMetadataContents,
-		openCodeGoModelMetadataEntries,
-		openAIPromptCacheContents,
-		openAIPromptCacheEntries,
-		openAIProviderModelMetadataContents: openAIProviderModelMetadata.contents,
-		openAIProviderModelMetadataEntries: openAIProviderModelMetadata.entries,
+		entries,
+		providerModels,
 		coverage: {
 			absentUpstream,
 			fromOverlay,

@@ -1,6 +1,6 @@
-// Runtime shape of supplemental Provider Model metadata. The provider-specific
-// generated snapshots and their generator import these types, so mapping and
-// shape cannot drift apart.
+// Runtime shape of supplemental facts merged into manifest-declared Provider
+// Models by the build-time catalog generator. The generator and its runtime
+// validation share these types so metadata mapping and shape cannot drift.
 
 import { z } from "zod";
 import {
@@ -58,16 +58,32 @@ export type ModelLimits = Readonly<{
 	output?: number;
 }>;
 
-export type PromptCacheRetentionTier = "short" | "long" | "off";
-export type SupportedPromptCacheRetentionTier = Exclude<
-	PromptCacheRetentionTier,
-	"off"
->;
+export const supportedPromptCacheRetentionTierIds = ["short", "long"] as const;
+export const promptCacheRetentionTierIds = [
+	...supportedPromptCacheRetentionTierIds,
+	"off",
+] as const;
+export type SupportedPromptCacheRetentionTier =
+	(typeof supportedPromptCacheRetentionTierIds)[number];
+export type PromptCacheRetentionTier =
+	(typeof promptCacheRetentionTierIds)[number];
+export const supportedPromptCacheRetentionTierSchema = z.enum(
+	supportedPromptCacheRetentionTierIds
+);
+export const promptCacheRetentionTierSchema = z.enum(
+	promptCacheRetentionTierIds
+);
 
 export { parsePromptCacheTtlMs } from "./prompt-cache-ttl.ts";
 
 /** The explicit cache controls and retention tiers verified for one Model. */
-export type OpenAIPromptCacheProtocol = "openai-chat" | "openai-responses";
+export const openAIPromptCacheProtocolIds = [
+	"openai-chat",
+	"openai-responses",
+] as const;
+export type OpenAIPromptCacheProtocol =
+	(typeof openAIPromptCacheProtocolIds)[number];
+const openAIPromptCacheProtocolSchema = z.enum(openAIPromptCacheProtocolIds);
 
 export type ModelPromptCacheProtocolCapabilities = Readonly<{
 	breakpoints?: true;
@@ -103,7 +119,6 @@ export type ModelMetadataEntry = Readonly<{
 	cost?: ModelCost;
 	limits?: ModelLimits;
 	promptCache?: ModelPromptCacheCapabilities;
-	reasoningSummary?: true;
 	thinking?: ModelThinkingPolicy;
 	tiers?: readonly ModelCostTier[];
 }>;
@@ -121,17 +136,14 @@ const modelCostTierSchema = modelCostSchema
 	.extend({ inputTokensAbove: z.number().int().positive() })
 	.strict();
 
-const thinkingLevelMapSchema = z
-	.object({
-		off: z.string().nullable().optional(),
-		minimal: z.string().nullable().optional(),
-		low: z.string().nullable().optional(),
-		medium: z.string().nullable().optional(),
-		high: z.string().nullable().optional(),
-		xhigh: z.string().nullable().optional(),
-		max: z.string().nullable().optional(),
-	})
-	.strict() satisfies z.ZodType<ThinkingLevelMap>;
+const thinkingLevelMapSchema = z.partialRecord(
+	thinkingLevelSchema,
+	z.string().nullable()
+) satisfies z.ZodType<ThinkingLevelMap>;
+
+const promptCacheRetentionValuesSchema = z
+	.partialRecord(supportedPromptCacheRetentionTierSchema, z.string().min(1))
+	.refine((values) => Object.keys(values).length > 0);
 
 const modelPromptCacheProtocolCapabilitiesSchema = z
 	.object({
@@ -143,13 +155,7 @@ const modelPromptCacheProtocolCapabilitiesSchema = z
 		retention: z
 			.object({
 				field: z.enum(["prompt_cache_options.ttl", "prompt_cache_retention"]),
-				values: z
-					.object({
-						short: z.string().min(1).optional(),
-						long: z.string().min(1).optional(),
-					})
-					.strict()
-					.refine((values) => Object.keys(values).length > 0),
+				values: promptCacheRetentionValuesSchema,
 			})
 			.strict()
 			.optional(),
@@ -160,28 +166,20 @@ const modelPromptCacheCapabilitiesSchema = z
 	.object({
 		explicit: z
 			.object({
-				retentionTiers: z.array(z.enum(["short", "long"])).min(1),
+				retentionTiers: z.array(supportedPromptCacheRetentionTierSchema).min(1),
 			})
 			.strict(),
 		googleCachedContent: z
 			.object({
-				ttl: z
-					.object({
-						short: z.string().min(1).optional(),
-						long: z.string().min(1).optional(),
-					})
-					.strict()
-					.refine((values) => Object.keys(values).length > 0),
+				ttl: promptCacheRetentionValuesSchema,
 			})
 			.strict()
 			.optional(),
 		protocols: z
-			.object({
-				"openai-chat": modelPromptCacheProtocolCapabilitiesSchema.optional(),
-				"openai-responses":
-					modelPromptCacheProtocolCapabilitiesSchema.optional(),
-			})
-			.strict()
+			.partialRecord(
+				openAIPromptCacheProtocolSchema,
+				modelPromptCacheProtocolCapabilitiesSchema
+			)
 			.optional(),
 	})
 	.strict() satisfies z.ZodType<ModelPromptCacheCapabilities>;
@@ -213,7 +211,6 @@ export const modelMetadataEntrySchema = z
 			.strict()
 			.optional(),
 		promptCache: modelPromptCacheCapabilitiesSchema.optional(),
-		reasoningSummary: z.literal(true).optional(),
 		thinking: modelThinkingPolicySchema.optional(),
 		tiers: z.array(modelCostTierSchema).optional(),
 	})

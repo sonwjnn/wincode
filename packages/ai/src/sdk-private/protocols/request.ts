@@ -1,7 +1,7 @@
 import type { JsonObject } from "type-fest";
 import type { SupportedPromptCacheRetentionTier } from "../../model-metadata.ts";
 import type { ModelUsage } from "../../model-usage.ts";
-import type { ChatReasoningEffort } from "../../sdk.ts";
+import type { ThinkingLevel } from "../../sdk.ts";
 
 export type ProtocolPromptPart =
 	| Readonly<{ text: string; type: "text" }>
@@ -54,7 +54,7 @@ export type ProviderProtocolRequest = Readonly<{
 	promptCacheEnabled?: true;
 	promptCacheKey?: string;
 	promptCacheRetention?: SupportedPromptCacheRetentionTier;
-	reasoningEffort?: ChatReasoningEffort;
+	reasoningEffort?: ThinkingLevel;
 	signal?: AbortSignal;
 	system?: string;
 	tools?: readonly ProtocolTool[];

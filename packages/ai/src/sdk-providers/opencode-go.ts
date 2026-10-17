@@ -1,7 +1,6 @@
 import type { JsonObject } from "type-fest";
 import { apiKeyCredentialSchema } from "../credential-schemas.ts";
-import { openCodeGoModelMetadataById } from "../generated/opencode-go-model-metadata.generated.ts";
-import { withProviderModelMetadata } from "../provider-model-metadata.ts";
+import { providerModels as openCodeGoProviderModels } from "../generated/opencode-go.generated.ts";
 import {
 	type ChatContentPart,
 	maxOutputTokensForRequest,
@@ -19,9 +18,10 @@ import {
 import { createAnthropicStrategy } from "../sdk-private/protocols/anthropic.ts";
 import { openAIChatStrategy } from "../sdk-private/protocols/openai-chat.ts";
 import { openAIResponsesStrategy } from "../sdk-private/protocols/openai-responses.ts";
-import type {
-	AnthropicProtocolOptions,
-	OpenAIProtocolOptions,
+import {
+	type AnthropicProtocolOptions,
+	type OpenAIProtocolOptions,
+	openAIProtocolReasoningEffortFor,
 } from "../sdk-private/protocols/provider-options.ts";
 import type {
 	ProtocolPromptMessage,
@@ -31,12 +31,9 @@ import type {
 } from "../sdk-private/protocols/request.ts";
 import { unreachableValue } from "../sdk-private/protocols/shared.ts";
 import type { ModelProtocolStrategy } from "../sdk-private/protocols/types.ts";
-import { openCodeGoProviderModels } from "./opencode-go-models.ts";
 
 const OPENCODE_GO_PROVIDER_ID = "opencode-go";
-const openCodeGoAnthropicStrategy = createAnthropicStrategy(
-	(model) => openCodeGoModelMetadataById[model.modelId]
-);
+const openCodeGoAnthropicStrategy = createAnthropicStrategy();
 const RESPONSES_PROTOCOL_ID = "openai-responses";
 const ANTHROPIC_PROTOCOL_ID = "anthropic";
 const OPENAI_COMPATIBLE_PROTOCOL_ID = "openai-compatible";
@@ -141,7 +138,7 @@ const anthropicProviderOptionsFor = (
 	if (reasoningEffort === undefined) {
 		return;
 	}
-	if (reasoningEffort === "none") {
+	if (reasoningEffort === "off") {
 		return { thinking: { type: "disabled" } };
 	}
 	if (reasoningEffort === "minimal") {
@@ -153,7 +150,9 @@ const anthropicProviderOptionsFor = (
 const openAIProviderOptionsFor = (
 	reasoningEffort: ProviderProtocolRequest["reasoningEffort"]
 ): OpenAIProtocolOptions | undefined =>
-	reasoningEffort === undefined ? undefined : { reasoningEffort };
+	reasoningEffort === undefined
+		? undefined
+		: { reasoningEffort: openAIProtocolReasoningEffortFor(reasoningEffort) };
 
 const wireRequestFor = (
 	request: ProviderChatRequest,
@@ -344,23 +343,19 @@ export const createOpenCodeGoProvider = (
 ): Provider => {
 	const fetchImpl: OpenCodeGoFetch =
 		options.fetch ?? globalThis.fetch.bind(globalThis);
-	const models =
+	const models: readonly ProviderModel[] =
 		options.models ??
-		openCodeGoProviderModels.map((model) => {
-			const enriched = withProviderModelMetadata(
-				model,
-				openCodeGoModelMetadataById[model.modelId]
-			);
-			return enriched.protocolId !== ANTHROPIC_PROTOCOL_ID ||
-				enriched.reasoningEfforts === undefined
-				? enriched
+		openCodeGoProviderModels.map((model: ProviderModel) =>
+			model.protocolId !== ANTHROPIC_PROTOCOL_ID ||
+			model.reasoningEfforts === undefined
+				? model
 				: {
-						...enriched,
-						reasoningEfforts: enriched.reasoningEfforts.filter(
+						...model,
+						reasoningEfforts: model.reasoningEfforts.filter(
 							(effort) => effort !== "minimal"
 						),
-					};
-		});
+					}
+		);
 	if (
 		models.some(
 			(model) =>

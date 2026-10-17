@@ -570,4 +570,42 @@ describe("public Google SDK provider", () => {
 		});
 		await abortingProvider.close();
 	});
+
+	test("Google disables declared thinking when the shared reasoning level is off", async () => {
+		let body: Record<string, unknown> | undefined;
+		const sdk = createProviderCollection();
+		sdk.register(
+			createGoogleProvider({
+				fetch: async (_url, init) => {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					return sseResponse([{ candidates: [{ finishReason: "STOP" }] }]);
+				},
+				models: [
+					{
+						modelId: "off-model",
+						protocolId: "google",
+						providerId: "google",
+						reasoningEfforts: ["off"],
+					},
+				],
+			})
+		);
+		await sdk.setCredential("google", {
+			apiKey: "google-test-key",
+			kind: "api-key",
+		});
+
+		for await (const _event of sdk.chat({
+			messages: [{ content: [{ text: "Hello", type: "text" }], role: "user" }],
+			modelId: "off-model",
+			providerId: "google",
+			reasoningEffort: "off",
+		})) {
+			// Consume the stream to verify the provider's wire contract.
+		}
+
+		expect(body).toMatchObject({
+			generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+		});
+	});
 });

@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type ChatEvent,
-	type ChatReasoningEffort,
 	createAnthropicProvider,
 	createOpenAIProvider,
 	createOpenCodeGoProvider,
 	createProviderCollection,
 	type OpenCodeGoFetch,
 	type ProviderCollection,
+	type ThinkingLevel,
 } from "@wincode/ai";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
@@ -24,7 +24,7 @@ const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 const collect = async (
 	sdk: ProviderCollection,
 	modelId: string,
-	reasoningEffort?: ChatReasoningEffort
+	reasoningEffort?: ThinkingLevel
 ): Promise<ChatEvent[]> => {
 	const events: ChatEvent[] = [];
 	for await (const event of sdk.chat({
@@ -131,8 +131,10 @@ describe("public OpenCode Go SDK provider", () => {
 			.map((model) => `${model.providerId}/${model.modelId}`);
 		const responsesEvents = await collect(sdk, "gpt-5.6-luna", "high");
 		const messagesEvents = await collect(sdk, "qwen3.8-max", "xhigh");
-		const compatibleEvents = await collect(sdk, "grok-4.6", "high");
+		const compatibleEvents = await collect(sdk, "deepseek-v4.1-flash", "high");
 		await collect(sdk, "qwen3.8-max", "minimal");
+		await collect(sdk, "gpt-5.6-luna", "off");
+		await collect(sdk, "qwen3.8-max", "off");
 
 		expect(modelIds).toContain("openai/gpt-5.6");
 		expect(modelIds).toContain("anthropic/claude-sonnet-4-6");
@@ -142,12 +144,17 @@ describe("public OpenCode Go SDK provider", () => {
 			"https://opencode.ai/zen/go/v1/messages",
 			"https://opencode.ai/zen/go/v1/chat/completions",
 			"https://opencode.ai/zen/go/v1/messages",
+			"https://opencode.ai/zen/go/v1/responses",
+			"https://opencode.ai/zen/go/v1/messages",
 		]);
 		expect(
 			provider.models.find(({ modelId }) => modelId === "qwen3.8-max")
 				?.reasoningEfforts
 		).not.toContain("minimal");
 		expect(requests[3]?.body).not.toHaveProperty("output_config");
+		expect(requests[4]?.body).toMatchObject({ reasoning: { effort: "none" } });
+		expect(requests[5]?.body).not.toHaveProperty("thinking");
+		expect(requests[5]?.body).not.toHaveProperty("output_config");
 		expect(requests[0]?.headers.get("authorization")).toBe(
 			"Bearer opencode-go-secret"
 		);
@@ -167,7 +174,7 @@ describe("public OpenCode Go SDK provider", () => {
 			"Bearer opencode-go-secret"
 		);
 		expect(requests[2]?.body).toMatchObject({
-			model: "grok-4.6",
+			model: "deepseek-v4.1-flash",
 			reasoning_effort: "high",
 			stream: true,
 			stream_options: { include_usage: true },

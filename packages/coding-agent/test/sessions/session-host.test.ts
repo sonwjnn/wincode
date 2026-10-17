@@ -175,6 +175,10 @@ const hostProviderModels: readonly ProviderModel[] = [
 	},
 	{
 		modelId: "gemini-3.8-flash",
+		promptCache: {
+			explicit: { retentionTiers: ["short"] },
+			googleCachedContent: { ttl: { short: "300s" } },
+		},
 		promptCacheRetentionTiers: ["short"],
 		promptCacheRetentionTtlMs: { short: 5 * 60_000 },
 		protocolId: "google",

@@ -99,6 +99,20 @@ const createDefaultProviderCollection = (): ProviderCollection => {
 			inputPerMillionTokensUsd: 4,
 			outputPerMillionTokensUsd: 20,
 		},
+		promptCache: {
+			explicit: { retentionTiers: ["short"] },
+			protocols: {
+				"openai-responses": {
+					breakpoints: true,
+					eligibility: { minimumInputTokens: 1 },
+					promptCacheKey: true,
+					retention: {
+						field: "prompt_cache_options.ttl",
+						values: { short: "30m" },
+					},
+				},
+			},
+		},
 		promptCacheRetentionTiers: ["short"],
 		promptCacheRetentionTtlMs: { short: 30 * 60_000 },
 		protocolId: "openai-responses",

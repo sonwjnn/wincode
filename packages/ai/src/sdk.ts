@@ -1,7 +1,13 @@
 import { z } from "zod";
-import type { SupportedPromptCacheRetentionTier } from "./model-metadata";
+import {
+	type ModelPromptCacheCapabilities,
+	modelMetadataEntrySchema,
+	type SupportedPromptCacheRetentionTier,
+	supportedPromptCacheRetentionTierIds,
+} from "./model-metadata.ts";
+import { type ThinkingLevel, thinkingLevelIds } from "./thinking-level.ts";
 
-export type { SupportedPromptCacheRetentionTier } from "./model-metadata";
+export type { SupportedPromptCacheRetentionTier } from "./model-metadata.ts";
 export type {
 	PromptCachePolicy,
 	ResolvedPromptCacheControls,
@@ -14,12 +20,15 @@ export {
 export type { ThinkingLevel, ThinkingSelection } from "./thinking-level.ts";
 export { thinkingLevelIds, thinkingLevelSchema } from "./thinking-level.ts";
 
+export const providerModelCapabilityIds = [
+	"file",
+	"image",
+	"reasoning",
+	"text",
+	"tools",
+] as const;
 export type ProviderModelCapability =
-	| "file"
-	| "image"
-	| "reasoning"
-	| "text"
-	| "tools";
+	(typeof providerModelCapabilityIds)[number];
 
 /** Provider-neutral identity used in Session, Agent, and Plugin selections. */
 export type ProviderModelSelection = Readonly<{
@@ -58,6 +67,8 @@ export const parseProviderModelSelection = (
 export type ProviderModel = Readonly<{
 	/** When present, unsupported image/file/tool inputs fail before provider dispatch. */
 	capabilities?: readonly ProviderModelCapability[];
+	/** Exact provider-specific cache controls verified for this model. */
+	promptCache?: ModelPromptCacheCapabilities;
 	/** Cache retention choices this model explicitly supports. */
 	promptCacheRetentionTiers?: readonly SupportedPromptCacheRetentionTier[];
 	/** Exact per-retention cache lifetime published for this Provider Model. */
@@ -70,7 +81,7 @@ export type ProviderModel = Readonly<{
 	}>;
 	modelId: string;
 	/** Reasoning effort values this model explicitly supports. */
-	reasoningEfforts?: readonly ChatReasoningEffort[];
+	reasoningEfforts?: readonly ThinkingLevel[];
 	/** Exact published price data; absent rates remain unknown. */
 	pricing?: Readonly<{
 		cacheReadPerMillionTokensUsd?: number;
@@ -169,15 +180,6 @@ export type ChatTool = Readonly<{
 	name: string;
 }>;
 
-export type ChatReasoningEffort =
-	| "none"
-	| "minimal"
-	| "low"
-	| "medium"
-	| "high"
-	| "xhigh"
-	| "max";
-
 export type ChatRequest = Readonly<{
 	cacheRetention?: SupportedPromptCacheRetentionTier;
 	cacheWarming?: true;
@@ -186,7 +188,7 @@ export type ChatRequest = Readonly<{
 	modelId: string;
 	promptCacheKey?: string;
 	providerId: string;
-	reasoningEffort?: ChatReasoningEffort;
+	reasoningEffort?: ThinkingLevel;
 	signal?: AbortSignal;
 	system?: string;
 	tools?: readonly ChatTool[];
@@ -459,24 +461,11 @@ const throwIfAborted = (signal: AbortSignal | undefined): void => {
 const isNonNegativeFiniteNumber = (value: unknown): value is number =>
 	typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-const CHAT_REASONING_EFFORTS: readonly ChatReasoningEffort[] = [
-	"none",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-];
+const THINKING_LEVELS: readonly ThinkingLevel[] = thinkingLevelIds;
 const PROMPT_CACHE_RETENTION_TIERS: readonly SupportedPromptCacheRetentionTier[] =
-	["short", "long"];
-const PROVIDER_MODEL_CAPABILITIES: readonly ProviderModelCapability[] = [
-	"file",
-	"image",
-	"reasoning",
-	"text",
-	"tools",
-];
+	supportedPromptCacheRetentionTierIds;
+const PROVIDER_MODEL_CAPABILITIES: readonly ProviderModelCapability[] =
+	providerModelCapabilityIds;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
@@ -577,18 +566,23 @@ const isOptionalPromptCacheRetentionTtlRecord = (value: unknown): boolean =>
 				candidate > 0
 		));
 
+const isOptionalProviderModelPromptCache = (value: unknown): boolean =>
+	value === undefined ||
+	modelMetadataEntrySchema.safeParse({ promptCache: value }).success;
+
 const isProviderModel = (value: unknown): value is ProviderModel =>
 	isRecord(value) &&
 	isNonEmptyString(value.providerId) &&
 	isNonEmptyString(value.modelId) &&
 	isNonEmptyString(value.protocolId) &&
 	isOptionalStringArrayOf(value.capabilities, PROVIDER_MODEL_CAPABILITIES) &&
-	isOptionalStringArrayOf(value.reasoningEfforts, CHAT_REASONING_EFFORTS) &&
+	isOptionalStringArrayOf(value.reasoningEfforts, THINKING_LEVELS) &&
 	isOptionalStringArrayOf(
 		value.promptCacheRetentionTiers,
 		PROMPT_CACHE_RETENTION_TIERS
 	) &&
 	isOptionalPromptCacheRetentionTtlRecord(value.promptCacheRetentionTtlMs) &&
+	isOptionalProviderModelPromptCache(value.promptCache) &&
 	isOptionalProviderModelLimits(value.limits) &&
 	isOptionalProviderModelPricing(value.pricing);
 

@@ -1,11 +1,11 @@
 import { isArray, isString, isUndefined } from "@wincode/utils";
-// The single models.dev -> Wincode metadata converter. Both the offline
-// generator (`scripts/sync-model-metadata.ts`) and the runtime pricing refresh
-// call this, so a fact can only ever be interpreted one way. See ADR-0014.
+// The single models.dev -> Wincode metadata converter. Both the build-time
+// catalog generator and runtime pricing refresh call this, so a fact can only
+// ever be interpreted one way. See ADR-0049.
 //
 // This module MUST NOT import `./generated/*`. The generator imports it, so a
 // generated import here would close a cycle and break regeneration from a clean
-// tree. Provider-specific generated metadata is read by SDK Provider modules.
+// tree. SDK Providers consume the complete generated ProviderModel arrays.
 
 import {
 	isFiniteNonNegativeNumber,
@@ -17,19 +17,19 @@ import {
 	pickTruthy,
 } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
-import {
-	type ModelCost,
-	type ModelCostTier,
-	type ModelLimits,
-	type ModelMetadataEntry,
-	type ModelThinkingPolicy,
-	type ThinkingLevel,
-	thinkingLevelIds,
-} from "./model-metadata";
+import type {
+	ModelCost,
+	ModelCostTier,
+	ModelLimits,
+	ModelMetadataEntry,
+	ModelThinkingPolicy,
+	ThinkingLevel,
+} from "./model-metadata.ts";
 import {
 	type ModelsDevModel,
 	modelsDevBlocksFromPayload,
-} from "./models-dev-payload";
+} from "./models-dev-payload.ts";
+import { thinkingLevelIds } from "./thinking-level.ts";
 
 export type {
 	ModelCost,
@@ -38,9 +38,9 @@ export type {
 	ModelMetadataEntry,
 	ModelThinkingPolicy,
 	ThinkingLevel,
-} from "./model-metadata";
-export { modelMetadataEntrySchema } from "./model-metadata";
-export type { ModelsDevModel } from "./models-dev-payload";
+} from "./model-metadata.ts";
+export { modelMetadataEntrySchema } from "./model-metadata.ts";
+export type { ModelsDevModel } from "./models-dev-payload.ts";
 
 const parseReasoningOptions = (
 	value: unknown

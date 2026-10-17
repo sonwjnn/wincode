@@ -1,14 +1,11 @@
-import { googleModelMetadataById } from "../../generated/google-model-metadata.generated.ts";
-import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
-import type { ModelProtocolPromptCacheStrategy } from "./types";
+import type { SupportedPromptCacheRetentionTier } from "../../model-metadata.ts";
+import type { ModelProtocolPromptCacheStrategy } from "./types.ts";
 
 export const googlePromptCacheStrategy: ModelProtocolPromptCacheStrategy = {
 	canWarmRequest: false,
 	routeForModel: (model) => {
 		const capabilities =
-			model.providerId === "google"
-				? googleModelMetadataById[model.modelId]?.promptCache
-				: undefined;
+			model.providerId === "google" ? model.promptCache : undefined;
 		if (!capabilities) {
 			return;
 		}

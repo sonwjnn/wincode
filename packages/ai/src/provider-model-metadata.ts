@@ -1,15 +1,16 @@
-import type {
-	ModelMetadataEntry,
-	OpenAIPromptCacheProtocol,
-	SupportedPromptCacheRetentionTier,
-	ThinkingLevel,
+import {
+	type ModelMetadataEntry,
+	type OpenAIPromptCacheProtocol,
+	type SupportedPromptCacheRetentionTier,
+	supportedPromptCacheRetentionTierIds,
+	type ThinkingLevel,
 } from "./model-metadata.ts";
 import { parsePromptCacheTtlMs } from "./prompt-cache-ttl.ts";
-import type { ChatReasoningEffort, ProviderModel } from "./sdk.ts";
+import type { ProviderModel } from "./sdk.ts";
 
 const addExplicitOffEffort = (
 	policy: NonNullable<ModelMetadataEntry["thinking"]>,
-	efforts: Set<ChatReasoningEffort>
+	efforts: Set<ThinkingLevel>
 ): void => {
 	const offMapValue = policy.levelMap?.off;
 	if (offMapValue === null) {
@@ -20,13 +21,13 @@ const addExplicitOffEffort = (
 		policy.levels?.includes("off") ||
 		offMapValue !== undefined
 	) {
-		efforts.add("none");
+		efforts.add("off");
 	}
 };
 
 const addNamedReasoningEfforts = (
 	policy: NonNullable<ModelMetadataEntry["thinking"]>,
-	efforts: Set<ChatReasoningEffort>
+	efforts: Set<ThinkingLevel>
 ): void => {
 	if (policy.unlevelled) {
 		return;
@@ -68,7 +69,7 @@ const promptCacheRetentionTtlMsFor = (
 		return;
 	}
 	const ttlMs: Partial<Record<SupportedPromptCacheRetentionTier, number>> = {};
-	for (const tier of ["short", "long"] as const) {
+	for (const tier of supportedPromptCacheRetentionTierIds) {
 		const value = retention.values[tier];
 		if (value !== undefined) {
 			const ttl = parsePromptCacheTtlMs(value);
@@ -134,13 +135,13 @@ const pricingFor = (
 
 const reasoningEffortsFor = (
 	metadata: ModelMetadataEntry | undefined
-): readonly ChatReasoningEffort[] | undefined => {
+): readonly ThinkingLevel[] | undefined => {
 	const policy = metadata?.thinking;
 	if (!policy) {
 		return;
 	}
 
-	const efforts = new Set<ChatReasoningEffort>();
+	const efforts = new Set<ThinkingLevel>();
 	addExplicitOffEffort(policy, efforts);
 	addNamedReasoningEfforts(policy, efforts);
 	return efforts.size > 0 ? [...efforts] : undefined;
@@ -159,6 +160,7 @@ export const withProviderModelMetadata = (
 	const promptCacheRetentionTtlMs =
 		model.promptCacheRetentionTtlMs ??
 		promptCacheRetentionTtlMsFor(model, metadata);
+	const promptCache = model.promptCache ?? metadata?.promptCache;
 	const limits = model.limits ?? limitsFor(metadata);
 	const pricing = model.pricing ?? pricingFor(metadata);
 	return {
@@ -172,5 +174,6 @@ export const withProviderModelMetadata = (
 		...(promptCacheRetentionTtlMs === undefined
 			? {}
 			: { promptCacheRetentionTtlMs }),
+		...(promptCache === undefined ? {} : { promptCache }),
 	};
 };

@@ -4,6 +4,7 @@ import {
 	openAIPromptCacheControlsForRequest,
 	openAIPromptCacheStrategyFor,
 } from "./openai-prompt-cache.ts";
+import { openAIProtocolReasoningEffortFor } from "./provider-options.ts";
 import type {
 	ProtocolPromptMessage,
 	ProtocolPromptPart,
@@ -26,7 +27,7 @@ import {
 import type {
 	ModelProtocolStrategy,
 	ProviderProtocolRequestContextByProtocol,
-} from "./types";
+} from "./types.ts";
 
 const appendChatCompletionsPart = (
 	part: ProtocolPromptPart,
@@ -359,7 +360,9 @@ const serializeOpenAICompatibleChat = (
 		body.max_tokens = request.maxOutputTokens;
 	}
 	if (request.reasoningEffort !== undefined) {
-		body.reasoning_effort = request.reasoningEffort;
+		body.reasoning_effort = openAIProtocolReasoningEffortFor(
+			request.reasoningEffort
+		);
 	}
 	const tools = request.tools?.map((tool) => ({
 		type: "function",

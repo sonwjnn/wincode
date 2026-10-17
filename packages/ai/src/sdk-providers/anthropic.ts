@@ -1,7 +1,6 @@
 import type { JsonObject } from "type-fest";
 import { apiKeyCredentialSchema } from "../credential-schemas.ts";
-import { anthropicModelMetadataById } from "../generated/anthropic-model-metadata.generated.ts";
-import { withProviderModelMetadata } from "../provider-model-metadata.ts";
+import { providerModels as anthropicProviderModels } from "../generated/anthropic.generated.ts";
 import {
 	type ChatContentPart,
 	maxOutputTokensForRequest,
@@ -26,30 +25,20 @@ import type {
 	ProviderProtocolRequest,
 } from "../sdk-private/protocols/request.ts";
 import { unreachableValue } from "../sdk-private/protocols/shared.ts";
-import { anthropicDefaultModelIds } from "./anthropic-models.ts";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 const ANTHROPIC_PROTOCOL_ID = "anthropic";
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
-const DEFAULT_MODELS: readonly ProviderModel[] = anthropicDefaultModelIds.map(
-	(modelId): ProviderModel => {
-		const model = withProviderModelMetadata(
-			{
-				modelId,
-				protocolId: ANTHROPIC_PROTOCOL_ID,
-				providerId: ANTHROPIC_PROVIDER_ID,
-			},
-			anthropicModelMetadataById[modelId]
-		);
-		return model.reasoningEfforts === undefined
+const DEFAULT_MODELS: readonly ProviderModel[] = anthropicProviderModels.map(
+	(model: ProviderModel) =>
+		model.reasoningEfforts === undefined
 			? model
 			: {
 					...model,
 					reasoningEfforts: model.reasoningEfforts.filter(
 						(effort) => effort !== "minimal"
 					),
-				};
-	}
+				}
 );
 
 type AnthropicAuthorization = Readonly<{ apiKey: string }>;
@@ -188,7 +177,7 @@ const anthropicProviderOptionsFor = (
 	if (reasoningEffort === undefined) {
 		return;
 	}
-	if (reasoningEffort === "none") {
+	if (reasoningEffort === "off") {
 		return { thinking: { type: "disabled" } };
 	}
 	if (reasoningEffort === "minimal") {

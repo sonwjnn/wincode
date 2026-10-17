@@ -1,15 +1,20 @@
-import type { ChatReasoningEffort } from "../../sdk.ts";
+import type { ThinkingLevel } from "../../sdk.ts";
+
+/** OpenAI wire values; SDK callers use `off` instead of the native `none`. */
+export type OpenAIProtocolReasoningEffort =
+	| Exclude<ThinkingLevel, "off">
+	| "none";
+
+export const openAIProtocolReasoningEffortFor = (
+	effort: ThinkingLevel
+): OpenAIProtocolReasoningEffort => (effort === "off" ? "none" : effort);
 
 export type OpenAIProtocolOptions = Readonly<{
-	reasoningEffort?: ChatReasoningEffort;
-	reasoningSummary?: "detailed";
+	reasoningEffort?: OpenAIProtocolReasoningEffort;
 	store?: boolean;
 }>;
 
-export type AnthropicProtocolEffort = Exclude<
-	ChatReasoningEffort,
-	"minimal" | "none"
->;
+export type AnthropicProtocolEffort = Exclude<ThinkingLevel, "minimal" | "off">;
 
 export type AnthropicProtocolThinking = Readonly<
 	| { type: "adaptive" }
@@ -23,7 +28,7 @@ export type AnthropicProtocolOptions = Readonly<{
 }>;
 
 export type GoogleProtocolThinkingLevel = Extract<
-	ChatReasoningEffort,
+	ThinkingLevel,
 	"minimal" | "low" | "medium" | "high"
 >;
 

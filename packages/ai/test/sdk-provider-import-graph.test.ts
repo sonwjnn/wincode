@@ -9,8 +9,6 @@ const OBSOLETE_MODEL_POLICY =
 	/\/(?:catalog\.ts|generated\/model-metadata\.generated\.ts)$/u;
 const SDK_PROVIDER_MODULE = /\/sdk-providers\//u;
 const OPENROUTER_MODEL_SOURCE = /\/openrouter-models(?:\.ts)?$/u;
-const ANTHROPIC_MODEL_ARTIFACT =
-	/(?:^|\/)anthropic-model-metadata(?:\.generated)?\.ts$/u;
 const LEGACY_MODEL_IMPLEMENTATION =
 	/\/model-client\/|\/(?:model-target|model-provider-options)\.ts$/u;
 
@@ -73,7 +71,7 @@ describe("SDK provider import graphs", () => {
 		).toBe(false);
 	});
 
-	test("built-in Provider entry points do not bundle the removed ModelClient execution path", async () => {
+	test("built-in providers bundle their static model baseline without the removed ModelClient path", async () => {
 		for (const providerId of [
 			"anthropic",
 			"deepseek",
@@ -88,6 +86,13 @@ describe("SDK provider import graphs", () => {
 			expect(
 				inputs.some((inputPath) => LEGACY_MODEL_IMPLEMENTATION.test(inputPath))
 			).toBe(false);
+			if (providerId !== "openrouter") {
+				expect(
+					inputs.some((inputPath) =>
+						inputPath.endsWith(`generated/${providerId}.generated.ts`)
+					)
+				).toBe(true);
+			}
 		}
 	});
 
@@ -112,7 +117,7 @@ describe("SDK provider import graphs", () => {
 		}
 	});
 
-	test("Google and OpenCode Go imports bundle only their provider-owned models and metadata", async () => {
+	test("Google and OpenCode Go bundle their enriched provider-owned models without metadata shards", async () => {
 		for (const providerId of ["google", "opencode-go"]) {
 			const inputs = await bundledInputsFor(
 				path.join(AI_ROOT, `src/sdk-providers/${providerId}.ts`)
@@ -122,53 +127,22 @@ describe("SDK provider import graphs", () => {
 					.filter((inputPath) => SDK_PROVIDER_MODULE.test(inputPath))
 					.map((inputPath) => path.basename(inputPath))
 					.toSorted()
-			).toEqual([`${providerId}.ts`, `${providerId}-models.ts`].toSorted());
+			).toEqual([`${providerId}.ts`]);
 			expect(
 				inputs.some((inputPath) => OBSOLETE_MODEL_POLICY.test(inputPath))
 			).toBe(false);
 			expect(
-				inputs.some((inputPath) =>
-					inputPath.endsWith("generated/model-metadata.generated.ts")
+				inputs.some(
+					(inputPath) =>
+						inputPath.includes("generated/") &&
+						inputPath.includes("model-metadata.generated.ts")
 				)
 			).toBe(false);
+			expect(
+				inputs.some((inputPath) =>
+					inputPath.endsWith(`generated/${providerId}.generated.ts`)
+				)
+			).toBe(true);
 		}
-
-		const googleInputs = await bundledInputsFor(
-			path.join(AI_ROOT, "src/sdk-providers/google.ts")
-		);
-		expect(
-			googleInputs.some((inputPath) =>
-				inputPath.endsWith("generated/google-model-metadata.generated.ts")
-			)
-		).toBe(true);
-		expect(
-			googleInputs.some((inputPath) =>
-				inputPath.endsWith("sdk-providers/google-models.ts")
-			)
-		).toBe(true);
-
-		const openCodeGoInputs = await bundledInputsFor(
-			path.join(AI_ROOT, "src/sdk-providers/opencode-go.ts")
-		);
-		expect(
-			openCodeGoInputs.some((inputPath) =>
-				inputPath.endsWith("generated/anthropic-model-metadata.generated.ts")
-			)
-		).toBe(false);
-		expect(
-			openCodeGoInputs.some((inputPath) =>
-				ANTHROPIC_MODEL_ARTIFACT.test(inputPath)
-			)
-		).toBe(false);
-		expect(
-			openCodeGoInputs.some((inputPath) =>
-				inputPath.endsWith("sdk-providers/opencode-go-models.ts")
-			)
-		).toBe(true);
-		expect(
-			openCodeGoInputs.some((inputPath) =>
-				inputPath.endsWith("generated/opencode-go-model-metadata.generated.ts")
-			)
-		).toBe(true);
 	});
 });

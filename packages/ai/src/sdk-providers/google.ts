@@ -1,7 +1,6 @@
 import type { JsonObject } from "type-fest";
 import { apiKeyCredentialSchema } from "../credential-schemas.ts";
-import { googleModelMetadataById } from "../generated/google-model-metadata.generated.ts";
-import { withProviderModelMetadata } from "../provider-model-metadata.ts";
+import { providerModels as googleProviderModels } from "../generated/google.generated.ts";
 import {
 	type ChatContentPart,
 	maxOutputTokensForRequest,
@@ -32,7 +31,6 @@ import type {
 	ProviderProtocolRequest,
 } from "../sdk-private/protocols/request.ts";
 import { unreachableValue } from "../sdk-private/protocols/shared.ts";
-import { googleProviderModels } from "./google-models.ts";
 
 const GOOGLE_PROVIDER_ID = "google";
 const GOOGLE_PROTOCOL_ID = "google";
@@ -175,7 +173,7 @@ const apiUrlFor = (modelId: string): string =>
 const googleProviderOptionsFor = (
 	reasoningEffort: ProviderProtocolRequest["reasoningEffort"]
 ): GoogleProtocolOptions | undefined => {
-	if (reasoningEffort === "none") {
+	if (reasoningEffort === "off") {
 		return { thinkingConfig: { thinkingBudget: 0 } };
 	}
 	if (
@@ -361,22 +359,18 @@ export const createGoogleProvider = (
 ): GoogleProvider => {
 	const fetchImpl: GoogleFetch =
 		options.fetch ?? globalThis.fetch.bind(globalThis);
-	const models =
+	const models: readonly ProviderModel[] =
 		options.models ??
-		googleProviderModels.map((model) => {
-			const enriched = withProviderModelMetadata(
-				model,
-				googleModelMetadataById[model.modelId]
-			);
-			return enriched.reasoningEfforts === undefined
-				? enriched
+		googleProviderModels.map((model: ProviderModel) =>
+			model.reasoningEfforts === undefined
+				? model
 				: {
-						...enriched,
-						reasoningEfforts: enriched.reasoningEfforts.filter((effort) =>
+						...model,
+						reasoningEfforts: model.reasoningEfforts.filter((effort) =>
 							GOOGLE_FORWARDED_REASONING_EFFORTS.has(effort)
 						),
-					};
-		});
+					}
+		);
 	if (
 		models.some(
 			(model) =>
@@ -388,10 +382,11 @@ export const createGoogleProvider = (
 			"Google provider models must use provider ID and protocol ID google."
 		);
 	}
+	const modelsById = new Map(models.map((model) => [model.modelId, model]));
 	const cacheManager = createGoogleCachedContentResourceManager({
 		bestEffortCacheCreation: true,
 		cacheTtlForModel: (modelId, retention) => {
-			const promptCache = googleModelMetadataById[modelId]?.promptCache;
+			const promptCache = modelsById.get(modelId)?.promptCache;
 			return promptCache?.explicit.retentionTiers.includes(retention)
 				? promptCache.googleCachedContent?.ttl[retention]
 				: undefined;

@@ -720,4 +720,48 @@ describe("public Anthropic SDK provider", () => {
 			type: "terminal",
 		});
 	});
+
+	test("Anthropic disables declared thinking when the shared reasoning level is off", async () => {
+		let body: Record<string, unknown> | undefined;
+		const sdk = createProviderCollection();
+		sdk.register(
+			createAnthropicProvider({
+				fetch: async (_url, init) => {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					return sseResponse([
+						{
+							type: "message_start",
+							message: { usage: { input_tokens: 1 } },
+						},
+						{ type: "message_delta", usage: { output_tokens: 0 } },
+						{ type: "message_stop" },
+					]);
+				},
+				models: [
+					{
+						modelId: "off-model",
+						protocolId: "anthropic",
+						providerId: "anthropic",
+						reasoningEfforts: ["off"],
+					},
+				],
+			})
+		);
+		await sdk.setCredential("anthropic", {
+			apiKey: "anthropic-test-key",
+			kind: "api-key",
+		});
+
+		for await (const _event of sdk.chat({
+			messages: [{ content: [{ text: "Hello", type: "text" }], role: "user" }],
+			modelId: "off-model",
+			providerId: "anthropic",
+			reasoningEffort: "off",
+		})) {
+			// Consume the stream to verify the provider's wire contract.
+		}
+
+		expect(body).not.toHaveProperty("thinking");
+		expect(body).not.toHaveProperty("output_config");
+	});
 });

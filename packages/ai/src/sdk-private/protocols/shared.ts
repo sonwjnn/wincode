@@ -3,7 +3,7 @@ import {
 	ProviderProtocolError,
 	providerEventError,
 } from "../protocol-errors.ts";
-import type { ModelProtocol } from "./types";
+import type { ModelProtocol } from "./types.ts";
 
 export type JsonRecord = Record<string, unknown>;
 export type SsePayload = Readonly<{ eventName?: string; value: JsonRecord }>;

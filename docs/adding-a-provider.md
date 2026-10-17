@@ -4,23 +4,15 @@ Wincode executes model requests through the Provider SDK. A Provider owns its mo
 
 ## Provider Models
 
-Declare baseline `ProviderModel` values or implement `discoverModels` in the Provider. Every model must use the exact Provider ID and model ID that consumers select:
+For built-in static inventories, add model IDs to `packages/ai/scripts/provider-model-catalog.source.json`. Declare the provider's default protocol once; use a model object only for a protocol or capability override. Run `bun run sync-provider-model-catalog`; it combines the manifest with models.dev facts and `packages/ai/scripts/metadata-model.ts` overlays, then imports the generated `packages/ai/src/generated/<provider>.generated.ts` baseline directly from the provider factory. Metadata enriches listed models but never adds identities. Do not keep a parallel `*-models.ts` wrapper.
 
-```ts
-const models: readonly ProviderModel[] = [
-	{
-		modelId: "example-model",
-		protocolId: "example-protocol",
-		providerId: "example",
-	},
-];
-```
+When adding a model fact that models.dev does not publish, add a keyed manual overlay in `metadata-model.ts`. The generator only applies overlays to models already present in the provider manifest.
 
-Capabilities, reasoning efforts, cache tiers, context/output limits, and pricing are optional published metadata. Do not infer missing metadata from a neighboring model. Dynamic discovery returns Provider-owned models and failed refreshes must preserve the last-known snapshot.
+Use `discoverModels` for account- or endpoint-specific inventories instead of adding them to the static baseline. Every returned model must use the exact Provider ID and model ID that consumers select. Capabilities, reasoning efforts, cache tiers, context/output limits, and pricing are optional published metadata. Do not infer missing metadata from a neighboring model. Dynamic discovery failures must preserve the last-known snapshot.
 
 ## Provider implementation
 
-Add the implementation under `packages/ai/src/sdk-providers/`. Implement `resolveAuthorization` and `streamChat` against the Provider SDK contracts in `packages/ai/src/sdk.ts`; keep credentials in Provider authorization state, not in chat requests or model identity. Reuse protocol serializers, stream parsers, and errors from `packages/ai/src/sdk-private/` when appropriate. Do not introduce a Model Target, Model Client, Catalog adapter, or Connections execution fallback.
+Add the implementation under `packages/ai/src/sdk-providers/`. Implement `resolveAuthorization` and `streamChat` against the Provider SDK contracts in `packages/ai/src/sdk.ts`; keep credentials in Provider authorization state, not in chat requests or model identity. Factories must reject unsupported Provider or protocol IDs at construction so a bad manifest mapping cannot become selectable. Reuse protocol serializers, stream parsers, and errors from `packages/ai/src/sdk-private/` when appropriate. Do not introduce a Model Target, Model Client, Catalog adapter, or Connections execution fallback.
 
 The package root, `@wincode/ai`, re-exports the Provider SDK, built-in provider factories, and shared model helpers; use it for application and test imports. Existing SDK and model-helper subpath exports remain available. Keep `packages/ai/src/sdk.ts` independent from built-in provider imports. Register built-in construction and connect-method metadata in `packages/coding-agent/modules/providers/built-in-provider-catalog.ts`; bind method IDs to their distinct controller handlers in `packages/coding-agent/modules/providers/interactive-provider-controller.ts`. The connect dialog consumes executable method descriptors by capability rather than branching on provider IDs. Keep API-key persistence, discovery, OAuth/device, and trusted Plugin connection flows distinct. The Session Provider collection composes catalog Providers with Plugin Providers from the trusted Plugin registration path.
 
