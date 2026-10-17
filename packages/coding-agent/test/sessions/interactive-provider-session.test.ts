@@ -4,13 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type AgentTurnEvent, toModelId } from "@wincode/agent-core";
 import {
-	createProviderCollection,
-	type ProviderCollection,
-} from "@wincode/ai/sdk";
-import {
 	createOpenRouterProvider,
+	createProviderCollection,
 	type OpenRouterProviderOptions,
-} from "@wincode/ai/sdk/providers/openrouter";
+	type ProviderCollection,
+} from "@wincode/ai";
 import { createInteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
 	isSameProviderModelIdentity,

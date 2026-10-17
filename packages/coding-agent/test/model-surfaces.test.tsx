@@ -7,7 +7,7 @@ import type {
 	ProviderCollection,
 	ProviderModel,
 	ThinkingLevel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { act, useEffect, useRef } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";

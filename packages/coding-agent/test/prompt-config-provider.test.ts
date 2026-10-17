@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import {
 	resolveInitialPromptThinkingSelection,
 	updatePromptConfigModel,

@@ -42,13 +42,16 @@ const bundledInputsFor = async (
 };
 
 describe("SDK provider import graphs", () => {
-	test("package exports omit legacy Connections and Catalog surfaces but retain the dormant cleanup seam", async () => {
+	test("package exports expose the SDK at the root without restoring legacy Connections and Catalog surfaces", async () => {
 		const packageManifest = (await Bun.file(
 			path.join(AI_ROOT, "package.json")
 		).json()) as Readonly<{ exports: Readonly<Record<string, unknown>> }>;
 		const exportNames = Object.keys(packageManifest.exports);
 
-		expect(exportNames).not.toContain(".");
+		expect(exportNames).toContain(".");
+		expect(packageManifest.exports["."]).toEqual({
+			default: "./src/index.ts",
+		});
 		expect(exportNames).not.toContain("./model");
 		expect(exportNames).not.toContain("./model-client");
 		expect(exportNames).not.toContain("./model-target");

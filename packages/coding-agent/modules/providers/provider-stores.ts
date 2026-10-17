@@ -1,9 +1,5 @@
 import * as path from "node:path";
-import type {
-	CredentialStore,
-	ModelStore,
-	ProviderModel,
-} from "@wincode/ai/sdk";
+import type { CredentialStore, ModelStore, ProviderModel } from "@wincode/ai";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
 import {
 	readSecureJsonFile,

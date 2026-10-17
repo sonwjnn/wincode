@@ -11,7 +11,7 @@ import {
 	type SessionRecord,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import {
 	getErrorMessage,
 	isError,

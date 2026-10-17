@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { agentIdSchema } from "@wincode/agent-core";
-import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai/sdk";
+import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai";
 import {
 	type OneShotCompositionInput,
 	type OneShotDependencies,

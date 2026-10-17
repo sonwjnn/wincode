@@ -18,7 +18,7 @@ const restoreEnvironment = createEnvironmentRestorer([
 process.env.WINCODE_TEST_PLUGIN_LIFECYCLE_LOG = lifecycleLogPath;
 
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { loadPlugins } from "@/modules/plugins/loader";

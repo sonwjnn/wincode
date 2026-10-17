@@ -1,4 +1,4 @@
-import type { CredentialStore } from "@wincode/ai/sdk";
+import type { CredentialStore } from "@wincode/ai";
 
 export const createInMemoryCredentialStore = (
 	credentials: Map<string, unknown>,

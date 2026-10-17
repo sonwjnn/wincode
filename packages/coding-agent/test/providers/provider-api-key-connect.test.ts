@@ -5,7 +5,7 @@ import {
 	type ModelStore,
 	type Provider,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
 import { createInteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import { createInteractiveSessionProviderCollection } from "@/modules/sessions/provider-collection";

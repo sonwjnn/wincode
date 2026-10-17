@@ -1,6 +1,6 @@
 import type { SessionMessageId } from "@wincode/agent-core";
+import type { ThinkingLevel } from "@wincode/ai";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "@wincode/ai/model-output-limit";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
 import type { Except, ReadonlyDeep } from "type-fest";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {

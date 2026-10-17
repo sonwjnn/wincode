@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { toModelId } from "@wincode/agent-core";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import {
 	arePluginProviderRegistrationsBoundToTrustedOwners,
 	DEFAULT_PROVIDER_MODEL_SELECTION,

@@ -1,4 +1,4 @@
-import type { ThinkingSelection } from "@wincode/ai/sdk";
+import type { ThinkingSelection } from "@wincode/ai";
 import { useEffect, useMemo, useState } from "react";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";

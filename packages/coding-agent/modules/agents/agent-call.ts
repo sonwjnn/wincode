@@ -1,5 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
-import type { ProviderModel, ThinkingSelection } from "@wincode/ai/sdk";
+import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import {
 	isAvailableProviderModelSelection,

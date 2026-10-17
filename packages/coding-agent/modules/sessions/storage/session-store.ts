@@ -8,8 +8,8 @@ import type {
 	SessionSubmissionStatus,
 	SubmissionId,
 } from "@wincode/agent-core";
+import type { ThinkingLevel } from "@wincode/ai";
 import type { ModelUsage } from "@wincode/ai/model-usage";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SessionFilePart,

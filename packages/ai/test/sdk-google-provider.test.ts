@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type ChatEvent, createProviderCollection } from "@wincode/ai/sdk";
 import {
+	type ChatEvent,
 	createGoogleProvider,
+	createProviderCollection,
 	type GoogleFetch,
-} from "@wincode/ai/sdk/providers/google";
+} from "@wincode/ai";
 
 const sseResponse = (chunks: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(

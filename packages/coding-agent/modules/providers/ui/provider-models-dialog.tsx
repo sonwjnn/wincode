@@ -1,4 +1,4 @@
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useState } from "react";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";

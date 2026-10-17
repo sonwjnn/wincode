@@ -1,8 +1,8 @@
+import type { ProviderModel } from "@wincode/ai";
 import {
 	calculateModelUsageCostUsd,
 	getModelContextTokens,
 } from "@wincode/ai/model-usage";
-import type { ProviderModel } from "@wincode/ai/sdk";
 import { isNull } from "@wincode/utils";
 import {
 	type ModelPricingEntry,

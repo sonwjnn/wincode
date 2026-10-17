@@ -3,7 +3,7 @@ import {
 	agentRoleSchema,
 	MAX_AGENT_INSTRUCTIONS_LENGTH,
 } from "@wincode/agent-core";
-import { thinkingLevelSchema } from "@wincode/ai/sdk";
+import { thinkingLevelSchema } from "@wincode/ai";
 import {
 	isJsonObject,
 	isNonEmptyString,

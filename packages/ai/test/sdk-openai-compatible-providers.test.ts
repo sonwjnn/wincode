@@ -1,16 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type ChatEvent,
+	createDeepSeekProvider,
+	createOpenAIProvider,
+	createOpenRouterProvider,
 	createProviderCollection,
+	type OpenAIProviderOptions,
 	type Provider,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
-import { createDeepSeekProvider } from "@wincode/ai/sdk/providers/deepseek";
-import {
-	createOpenAIProvider,
-	type OpenAIProviderOptions,
-} from "@wincode/ai/sdk/providers/openai";
-import { createOpenRouterProvider } from "@wincode/ai/sdk/providers/openrouter";
+} from "@wincode/ai";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(

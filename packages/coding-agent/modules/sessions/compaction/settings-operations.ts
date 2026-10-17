@@ -1,4 +1,4 @@
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import {
 	isSameProviderModelIdentity,
 	type ProviderModelSelection,

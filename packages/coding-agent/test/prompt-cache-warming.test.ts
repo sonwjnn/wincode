@@ -2,12 +2,12 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import {
 	type ChatMessage,
 	type ChatRequest,
+	createOpenAIProvider,
 	createProviderCollection,
 	type Provider,
 	type ProviderCollection,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
-import { createOpenAIProvider } from "@wincode/ai/sdk/providers/openai";
+} from "@wincode/ai";
 import {
 	computeCacheWarmDelayMs,
 	createSessionCacheWarming,

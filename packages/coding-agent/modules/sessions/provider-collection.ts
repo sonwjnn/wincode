@@ -1,3 +1,4 @@
+import type { OpenAIBrowserLoginOptions, OpenAIProvider } from "@wincode/ai";
 import {
 	type CredentialStore,
 	createProviderCollection,
@@ -5,11 +6,7 @@ import {
 	type Provider,
 	type ProviderCollection,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
-import type {
-	OpenAIBrowserLoginOptions,
-	OpenAIProvider,
-} from "@wincode/ai/sdk/providers/openai";
+} from "@wincode/ai";
 import type {
 	PluginProviderDescriptor,
 	PluginRuntime,

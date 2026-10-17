@@ -1,7 +1,7 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
 import {
 	useCallback,

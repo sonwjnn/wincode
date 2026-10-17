@@ -9,7 +9,7 @@ import type {
 	ModelStore,
 	Provider,
 	ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import type { ApplicationResourceLoader } from "@/modules/application/resource-loader";
 import { loadPlugins } from "@/modules/plugins/loader";
 import {

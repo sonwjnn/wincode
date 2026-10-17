@@ -5,7 +5,7 @@ import {
 	type ProviderChatRequest,
 	type ProviderCollection,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 
 export type FakeMessageRequest = {
 	readonly role: string;

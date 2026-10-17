@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { ChatEvent, CredentialStore, Provider } from "@wincode/ai/sdk";
+import type { ChatEvent, CredentialStore, Provider } from "@wincode/ai";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
 import { createInteractiveSessionProviderCollection } from "@/modules/sessions/provider-collection";
 

@@ -1,8 +1,3 @@
-import {
-	type ModelFailure,
-	normalizeModelFailure,
-} from "@wincode/ai/model-failures";
-import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
 import type {
 	ChatEvent,
 	ChatFailure,
@@ -10,7 +5,12 @@ import type {
 	ChatRequest,
 	ChatTool,
 	ProviderCollection,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
+import {
+	type ModelFailure,
+	normalizeModelFailure,
+} from "@wincode/ai/model-failures";
+import { type ModelUsage, normalizeModelUsage } from "@wincode/ai/model-usage";
 import {
 	getErrorMessage,
 	isError,

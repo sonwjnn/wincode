@@ -1,28 +1,18 @@
-import type { Provider } from "@wincode/ai/sdk";
+import type { Provider } from "@wincode/ai";
 import {
 	type AnthropicProviderOptions,
 	createAnthropicProvider,
-} from "@wincode/ai/sdk/providers/anthropic";
-import {
 	createDeepSeekProvider,
-	type DeepSeekProviderOptions,
-} from "@wincode/ai/sdk/providers/deepseek";
-import {
 	createGoogleProvider,
-	type GoogleProviderOptions,
-} from "@wincode/ai/sdk/providers/google";
-import {
 	createOpenAIProvider,
-	type OpenAIProviderOptions,
-} from "@wincode/ai/sdk/providers/openai";
-import {
 	createOpenCodeGoProvider,
-	type OpenCodeGoProviderOptions,
-} from "@wincode/ai/sdk/providers/opencode-go";
-import {
 	createOpenRouterProvider,
+	type DeepSeekProviderOptions,
+	type GoogleProviderOptions,
+	type OpenAIProviderOptions,
+	type OpenCodeGoProviderOptions,
 	type OpenRouterProviderOptions,
-} from "@wincode/ai/sdk/providers/openrouter";
+} from "@wincode/ai";
 
 export type BuiltInProviderFactoryOptions = Readonly<{
 	anthropicProviderOptions?: AnthropicProviderOptions;

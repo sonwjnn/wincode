@@ -3,12 +3,12 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import type {
 	ChatEvent,
 	ChatRequest,
+	GoogleProviderOptions,
 	ModelStore,
 	Provider,
 	ProviderCollection,
 	ProviderModel,
-} from "@wincode/ai/sdk";
-import type { GoogleProviderOptions } from "@wincode/ai/sdk/providers/google";
+} from "@wincode/ai";
 import type {
 	PluginProviderDescriptor,
 	PluginRuntime,

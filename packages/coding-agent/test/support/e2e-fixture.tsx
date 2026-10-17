@@ -12,7 +12,7 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";

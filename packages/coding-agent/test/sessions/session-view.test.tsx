@@ -29,7 +29,7 @@ import type {
 	ProviderCollection,
 	ProviderModel,
 	ThinkingLevel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { isNull, isUndefined } from "@wincode/utils";
 import { act, useCallback, useEffect, useRef, useState } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";

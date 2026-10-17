@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
     "./model-failures": {
       "default": "./src/model-failures.ts"
     },

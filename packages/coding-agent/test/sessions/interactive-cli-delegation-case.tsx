@@ -6,7 +6,7 @@ import {
 	createTestRenderer,
 	type TestRendererSetup,
 } from "@opentui/core/testing";
-import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai/sdk";
+import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai";
 import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,

@@ -17,7 +17,7 @@ import type {
 	Provider,
 	ProviderCollection,
 	ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { act, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";

@@ -5,9 +5,9 @@ import * as path from "node:path";
 
 const bunConsumer = `
 import assert from "node:assert/strict";
-import { createProviderCollection, ProviderError } from "@wincode/ai/sdk";
-import { createGoogleProvider } from "@wincode/ai/sdk/providers/google";
-import { createOpenCodeGoProvider } from "@wincode/ai/sdk/providers/opencode-go";
+import { createProviderCollection, ProviderError } from "@wincode/ai";
+import { createGoogleProvider } from "@wincode/ai";
+import { createOpenCodeGoProvider } from "@wincode/ai";
 
 const separator = String.fromCharCode(10);
 const sse = (events) => new Response(events.map((event) => "data: " + JSON.stringify(event) + separator + separator).join(""), { headers: { "content-type": "text/event-stream" } });

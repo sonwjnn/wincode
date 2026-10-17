@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import { isNonEmptyString, isObjectLike, isString } from "@wincode/utils";
 import type { ReadonlyDeep, UnknownRecord } from "type-fest";
 import type { ResolvedAgent } from "./agent";

@@ -26,18 +26,16 @@ import {
 	toSubmissionId,
 } from "@wincode/agent-core";
 import {
+	createGoogleProvider,
 	createProviderCollection,
+	type GoogleProviderOptions,
 	type ModelStore,
 	type Provider,
 	type ProviderChatEvent,
 	type ProviderChatRequest,
 	type ProviderCollection,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
-import {
-	createGoogleProvider,
-	type GoogleProviderOptions,
-} from "@wincode/ai/sdk/providers/google";
+} from "@wincode/ai";
 import { logger } from "@wincode/utils";
 import { z } from "zod";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";

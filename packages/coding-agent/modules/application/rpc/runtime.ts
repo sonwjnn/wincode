@@ -1,4 +1,4 @@
-import { thinkingLevelSchema } from "@wincode/ai/sdk";
+import { thinkingLevelSchema } from "@wincode/ai";
 import {
 	createAgentTurnId,
 	createSessionUserMessage,

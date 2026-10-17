@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { createProviderCollection } from "@wincode/ai/sdk";
-import { createDeepSeekProvider } from "@wincode/ai/sdk/providers/deepseek";
-import { createOpenRouterProvider } from "@wincode/ai/sdk/providers/openrouter";
+import {
+	createDeepSeekProvider,
+	createOpenRouterProvider,
+	createProviderCollection,
+} from "@wincode/ai";
 
 const credentials = new Map();
 const modelSnapshots = new Map();

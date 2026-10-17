@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import type { AgentDefinition, AgentId } from "@wincode/agent-core";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { isNull, isUndefined } from "@wincode/utils";
 import { useCallback, useState } from "react";
 import {

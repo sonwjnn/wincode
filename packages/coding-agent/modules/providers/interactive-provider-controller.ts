@@ -1,9 +1,9 @@
 import type {
+	OpenAIBrowserLoginOptions,
 	ProviderCollection,
 	ProviderModel,
 	RefreshModelsOptions,
-} from "@wincode/ai/sdk";
-import type { OpenAIBrowserLoginOptions } from "@wincode/ai/sdk/providers/openai";
+} from "@wincode/ai";
 import { isJsonValue } from "@wincode/utils";
 import type {
 	PluginJsonValue,

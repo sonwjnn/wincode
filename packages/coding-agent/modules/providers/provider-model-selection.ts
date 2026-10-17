@@ -8,7 +8,7 @@ import {
 	type ThinkingLevel,
 	type ThinkingSelection,
 	thinkingLevelIds,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { z } from "zod";
 import {
 	BUILT_IN_PROVIDER_CATALOG,

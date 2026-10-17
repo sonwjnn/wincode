@@ -9,7 +9,7 @@ import {
 	type ProviderCollection,
 	ProviderError,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { buildAgentRegistry } from "../modules/agents/registry";
 import { runRpc } from "../modules/application/rpc/runner";
 import {

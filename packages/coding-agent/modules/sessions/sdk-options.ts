@@ -1,5 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
 import type { SessionSdkCapabilityCeiling } from "./sdk-contract";
 

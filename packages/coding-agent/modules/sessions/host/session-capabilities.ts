@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { ProviderCollection } from "@wincode/ai/sdk";
+import type { ProviderCollection } from "@wincode/ai";
 import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,

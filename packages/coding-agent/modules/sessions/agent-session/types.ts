@@ -13,7 +13,7 @@ import type {
 	SubmissionId,
 	ToolCallId,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import type { ReadonlyDeep } from "type-fest";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {

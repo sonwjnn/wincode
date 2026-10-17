@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { fromAny } from "@total-typescript/shoehorn";
 import {
+	createOpenAIProvider,
 	createProviderCollection,
 	type Provider,
 	type ProviderChatRequest,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
-import { createOpenAIProvider } from "@wincode/ai/sdk/providers/openai";
+} from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { serializeMessagesForCompaction } from "@/modules/sessions/compaction/compaction";
 import { createProviderSummaryGenerator } from "@/modules/sessions/compaction/summary-generator";

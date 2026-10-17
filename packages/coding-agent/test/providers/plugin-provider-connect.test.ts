@@ -4,7 +4,7 @@ import type {
 	ModelStore,
 	Provider,
 	ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import {
 	createPluginRuntime,
 	type PluginProviderDescriptor,

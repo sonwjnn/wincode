@@ -1,4 +1,4 @@
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type { PluginCommandDescriptor } from "@/modules/plugins/runtime";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";

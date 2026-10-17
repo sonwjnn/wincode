@@ -6,10 +6,7 @@ import {
 	agentLabelFromId,
 	MAX_AGENT_INSTRUCTIONS_LENGTH,
 } from "@wincode/agent-core";
-import {
-	parseProviderModelSelection,
-	thinkingLevelSchema,
-} from "@wincode/ai/sdk";
+import { parseProviderModelSelection, thinkingLevelSchema } from "@wincode/ai";
 import type { PluginAgentRegistration } from "@wincode/coding-agent";
 import { getErrorMessage, readUtf8File } from "@wincode/utils";
 import { parse as parseYaml } from "yaml";

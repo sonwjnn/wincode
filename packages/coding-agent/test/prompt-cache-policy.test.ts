@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { resolveConfiguredPromptCacheControls } from "@/modules/prompt-cache/policy";
 
 const providerModel = (

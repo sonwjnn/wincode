@@ -11,7 +11,7 @@ import {
 	type ProviderChatRequest,
 	type ProviderCollection,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import {
 	type AgentRegistry,
 	buildAgentRegistry,

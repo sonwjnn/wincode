@@ -5,7 +5,7 @@ import {
 	createAgentTurnId,
 	type SessionMessageId,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {

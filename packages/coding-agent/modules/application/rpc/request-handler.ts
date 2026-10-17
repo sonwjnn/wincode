@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { ProviderCollection } from "@wincode/ai/sdk";
+import type { ProviderCollection } from "@wincode/ai";
 import { randomUUIDv7 } from "bun";
 import { isAvailableProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { AttachmentReferenceResolver } from "@/modules/sessions/attachment-reference";

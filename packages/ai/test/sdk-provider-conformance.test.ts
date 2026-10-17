@@ -2,17 +2,17 @@ import { expect, test } from "bun:test";
 import {
 	type ChatEvent,
 	type ChatRequest,
+	createAnthropicProvider,
+	createDeepSeekProvider,
+	createGoogleProvider,
+	createOpenAIProvider,
+	createOpenCodeGoProvider,
+	createOpenRouterProvider,
 	createProviderCollection,
 	type Provider,
 	type ProviderCollection,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
-import { createAnthropicProvider } from "@wincode/ai/sdk/providers/anthropic";
-import { createDeepSeekProvider } from "@wincode/ai/sdk/providers/deepseek";
-import { createGoogleProvider } from "@wincode/ai/sdk/providers/google";
-import { createOpenAIProvider } from "@wincode/ai/sdk/providers/openai";
-import { createOpenCodeGoProvider } from "@wincode/ai/sdk/providers/opencode-go";
-import { createOpenRouterProvider } from "@wincode/ai/sdk/providers/openrouter";
+} from "@wincode/ai";
 
 type ProviderFetch = (
 	input: string | URL | Request,

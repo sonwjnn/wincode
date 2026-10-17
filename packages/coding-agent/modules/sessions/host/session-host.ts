@@ -7,7 +7,7 @@ import {
 	type StatefulAgent,
 	toSubmissionId,
 } from "@wincode/agent-core";
-import type { ProviderCollection, ThinkingLevel } from "@wincode/ai/sdk";
+import type { ProviderCollection, ThinkingLevel } from "@wincode/ai";
 import { isNull, logger, omitUndefined } from "@wincode/utils";
 import {
 	type AgentRegistry,

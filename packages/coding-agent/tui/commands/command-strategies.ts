@@ -1,5 +1,5 @@
 import type { CliRenderer } from "@opentui/core";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { createElement, type ReactNode } from "react";
 import {
 	COMMANDS,

@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { type AgentTurnEvent, agentIdSchema } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import {
 	createProviderCollection,
 	type Provider,
@@ -15,7 +15,7 @@ import {
 	type ProviderCollection,
 	ProviderError,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import {
 	createSessionSdk as createPublicSessionSdk,
 	type SessionSdkOptions,

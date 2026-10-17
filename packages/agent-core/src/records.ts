@@ -1,6 +1,6 @@
+import type { ThinkingLevel } from "@wincode/ai";
+import { thinkingLevelSchema } from "@wincode/ai";
 import { type ModelUsage, modelUsageSchema } from "@wincode/ai/model-usage";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
-import { thinkingLevelSchema } from "@wincode/ai/sdk";
 import {
 	isArray,
 	isBoolean,

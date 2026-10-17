@@ -7,7 +7,7 @@ import type {
 	ProviderChatEvent,
 	ProviderChatRequest,
 	ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,

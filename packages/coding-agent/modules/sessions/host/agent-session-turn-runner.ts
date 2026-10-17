@@ -11,7 +11,7 @@ import type {
 	ResolvedPromptCacheControls,
 	ThinkingLevel,
 	ThinkingSelection,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import { resolveAgentToolResourceLimits } from "@/modules/agents/registry";
 import type { TurnToolPluginContext } from "@/modules/application/plugins/turn-context";

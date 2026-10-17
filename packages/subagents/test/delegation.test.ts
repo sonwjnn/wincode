@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseProviderModelSelection } from "@wincode/ai/sdk";
+import { parseProviderModelSelection } from "@wincode/ai";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,

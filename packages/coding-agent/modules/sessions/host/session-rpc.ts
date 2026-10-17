@@ -1,7 +1,7 @@
 export type { AgentTurnId, SubmissionId } from "@wincode/agent-core";
 export { createAgentTurnId, toSubmissionId } from "@wincode/agent-core";
-export type { ThinkingLevel } from "@wincode/ai/sdk";
-export { thinkingLevelSchema } from "@wincode/ai/sdk";
+export type { ThinkingLevel } from "@wincode/ai";
+export { thinkingLevelSchema } from "@wincode/ai";
 export type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 export { resolveWorkspaceRoot } from "@/modules/tools";
 export type { SessionId, SessionUsageEntryId } from "@/shared/identifiers";

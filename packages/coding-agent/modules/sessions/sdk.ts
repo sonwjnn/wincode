@@ -6,7 +6,7 @@ import type {
 	ProviderCollection,
 	ProviderModel,
 	ThinkingLevel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import {

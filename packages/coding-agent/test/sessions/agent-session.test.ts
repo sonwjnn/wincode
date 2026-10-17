@@ -11,7 +11,7 @@ import type {
 	SessionMessageId,
 	SessionRecord,
 } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";

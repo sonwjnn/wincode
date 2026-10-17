@@ -9,7 +9,7 @@ import {
 	type ProviderModel,
 	parseProviderModelSelection,
 	providerModelSelectionSchema,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 
 const demoProvider = (): Provider => ({
 	id: "demo-provider",

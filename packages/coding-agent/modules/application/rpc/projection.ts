@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	DEFAULT_MODEL_ATTACHMENT_BUDGET,

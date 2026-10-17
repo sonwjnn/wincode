@@ -2,15 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
 	type ChatEvent,
 	type ChatReasoningEffort,
-	createProviderCollection,
-	type ProviderCollection,
-} from "@wincode/ai/sdk";
-import { createAnthropicProvider } from "@wincode/ai/sdk/providers/anthropic";
-import { createOpenAIProvider } from "@wincode/ai/sdk/providers/openai";
-import {
+	createAnthropicProvider,
+	createOpenAIProvider,
 	createOpenCodeGoProvider,
+	createProviderCollection,
 	type OpenCodeGoFetch,
-} from "@wincode/ai/sdk/providers/opencode-go";
+	type ProviderCollection,
+} from "@wincode/ai";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(

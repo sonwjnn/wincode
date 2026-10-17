@@ -1,5 +1,5 @@
 import type { AgentTurnEvent } from "@wincode/agent-core";
-import type { ProviderCollection, ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";

@@ -21,7 +21,7 @@ import {
 	type SessionToolCallPart,
 	toSessionRecordId,
 } from "@wincode/agent-core";
-import { type ThinkingSelection, thinkingLevelSchema } from "@wincode/ai/sdk";
+import { type ThinkingSelection, thinkingLevelSchema } from "@wincode/ai";
 import {
 	isArray,
 	isFiniteNonNegativeNumber,

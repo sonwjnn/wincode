@@ -3,7 +3,7 @@ import type {
 	ProviderModel,
 	ThinkingLevel,
 	ThinkingSelection,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { isNull } from "@wincode/utils";
 import {
 	createContext,

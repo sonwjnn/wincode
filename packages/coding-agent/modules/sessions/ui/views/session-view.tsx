@@ -1,7 +1,7 @@
 import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
-import type { ProviderModel, ThinkingSelection } from "@wincode/ai/sdk";
+import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
 import {
 	getErrorMessage,
 	isNull,

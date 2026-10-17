@@ -21,7 +21,7 @@ import {
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
 import { act, useEffect, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";

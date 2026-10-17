@@ -1,5 +1,5 @@
+import type { ChatRequest } from "@wincode/ai";
 import type { ModelUsage } from "@wincode/ai/model-usage";
-import type { ChatRequest } from "@wincode/ai/sdk";
 import { isObjectLike, isString } from "@wincode/utils";
 import { AgentInvariantError } from "./errors";
 import type { AgentTurnEvent, AgentTurnTerminalEvent } from "./events";

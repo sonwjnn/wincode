@@ -15,7 +15,7 @@ import {
 	createOperationalFailure,
 	type SessionRecord,
 } from "@wincode/agent-core";
-import type { Provider, ProviderModel } from "@wincode/ai/sdk";
+import type { Provider, ProviderModel } from "@wincode/ai";
 import { act } from "react";
 import {
 	createPluginRuntime,

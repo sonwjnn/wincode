@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type ChatEvent, createProviderCollection } from "@wincode/ai/sdk";
 import {
 	type AnthropicFetch,
+	type ChatEvent,
 	createAnthropicProvider,
-} from "@wincode/ai/sdk/providers/anthropic";
+	createProviderCollection,
+} from "@wincode/ai";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(

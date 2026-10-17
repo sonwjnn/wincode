@@ -3,7 +3,7 @@ import {
 	type ThinkingLevel,
 	type ThinkingSelection,
 	thinkingLevelSchema,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import {
 	isPlainObject,
 	isString,

@@ -3,7 +3,7 @@ import {
 	createProviderCollection,
 	type Provider,
 	type ProviderModel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import {
 	createInteractiveProviderController,
 	type InteractiveProviderController,

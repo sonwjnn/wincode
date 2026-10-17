@@ -2,11 +2,11 @@ import type {
 	ProviderModel,
 	ResolvedPromptCacheControls,
 	SupportedPromptCacheRetentionTier,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import {
 	promptCachePolicySchema,
 	resolvePromptCacheControls,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 
 /** Resolves the optional `promptCache` settings block for one Provider Model. */
 export const resolveConfiguredPromptCacheControls = (

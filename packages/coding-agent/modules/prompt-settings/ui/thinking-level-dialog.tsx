@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import { useCallback } from "react";
 import {
 	useDialog,

@@ -6,7 +6,7 @@ import {
 	agentRoleSchema,
 	MAX_AGENT_ID_LENGTH,
 } from "@wincode/agent-core";
-import { type ThinkingLevel, thinkingLevelSchema } from "@wincode/ai/sdk";
+import { type ThinkingLevel, thinkingLevelSchema } from "@wincode/ai";
 import {
 	isPlainObject,
 	isString,

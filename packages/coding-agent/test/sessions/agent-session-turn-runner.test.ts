@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { toModelId } from "@wincode/agent-core";
-import type { ProviderCollection, ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai";
 import { resolveSessionTurnModel } from "@/modules/sessions/host/agent-session-turn-runner";
 
 test("SDK model output maxima remain metadata instead of implicit Agent request budgets", async () => {

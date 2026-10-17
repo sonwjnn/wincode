@@ -3,7 +3,7 @@ import type {
 	ProviderCollection,
 	ProviderModel,
 	ThinkingSelection,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { getErrorMessage } from "@wincode/utils";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

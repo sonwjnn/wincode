@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createProviderCollection, type ProviderModel } from "@wincode/ai/sdk";
+import { createProviderCollection, type ProviderModel } from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { resolveCompactionSettings } from "@/modules/sessions/compaction/config";
 import type { SessionMessage } from "@/modules/sessions/message";

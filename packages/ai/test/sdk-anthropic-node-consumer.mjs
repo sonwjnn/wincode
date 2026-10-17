@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { createProviderCollection } from "@wincode/ai/sdk";
-import { createAnthropicProvider } from "@wincode/ai/sdk/providers/anthropic";
+import { createAnthropicProvider, createProviderCollection } from "@wincode/ai";
 
 const sdk = createProviderCollection();
 let apiKeyHeader;

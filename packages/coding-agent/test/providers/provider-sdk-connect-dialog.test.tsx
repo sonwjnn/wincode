@@ -3,7 +3,7 @@ import { InputRenderable } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { ProviderModel, RefreshModelsOptions } from "@wincode/ai/sdk";
+import type { ProviderModel, RefreshModelsOptions } from "@wincode/ai";
 import { act, useEffect, useRef } from "react";
 import type { PluginProviderConnectContext } from "@/modules/plugins/public";
 import type {

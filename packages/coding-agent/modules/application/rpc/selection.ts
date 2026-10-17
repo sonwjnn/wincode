@@ -1,4 +1,4 @@
-import type { ThinkingSelection } from "@wincode/ai/sdk";
+import type { ThinkingSelection } from "@wincode/ai";
 import {
 	normalizeProviderModelSelection,
 	type ProviderModelSelection,

@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
-import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai/sdk";
+import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai";
 import { act } from "react";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {

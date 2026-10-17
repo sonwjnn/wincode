@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { pricingEntryForProviderModel } from "@/modules/model-pricing/model-pricing";
 
 test("Provider Model pricing is reported directly from SDK metadata", () => {

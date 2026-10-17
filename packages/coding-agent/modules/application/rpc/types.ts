@@ -2,7 +2,7 @@ import type {
 	ProviderCollection,
 	ThinkingLevel,
 	ThinkingSelection,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import type { ApplicationSessionServicesInput } from "@/modules/application/plugin-composition";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";

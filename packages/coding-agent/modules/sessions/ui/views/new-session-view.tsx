@@ -5,7 +5,7 @@ import type {
 	ProviderCollection,
 	ProviderModel,
 	ThinkingSelection,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { getErrorMessage, isNull, isUndefined, logger } from "@wincode/utils";
 import {
 	useCallback,

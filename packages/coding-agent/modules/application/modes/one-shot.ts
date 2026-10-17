@@ -3,12 +3,12 @@ import {
 	type AgentTurnEvent,
 	agentIdSchema,
 } from "@wincode/agent-core";
-import type { ProviderCollection, ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai";
 import {
 	type ThinkingLevel,
 	type ThinkingSelection,
 	thinkingLevelSchema,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import { getErrorMessage, omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import {

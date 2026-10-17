@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { toModelId } from "@wincode/agent-core";
-import type { ProviderModel } from "@wincode/ai/sdk";
+import type { ProviderModel } from "@wincode/ai";
 import { createPluginPromptSelectionTarget } from "@/modules/application/plugin-prompt-selection";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
 import {

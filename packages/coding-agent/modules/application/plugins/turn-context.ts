@@ -1,5 +1,5 @@
 import type { AgentId, AgentTurnId } from "@wincode/agent-core";
-import type { ThinkingLevel } from "@wincode/ai/sdk";
+import type { ThinkingLevel } from "@wincode/ai";
 import type {
 	PluginRuntime,
 	PluginToolDescriptor,

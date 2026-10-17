@@ -10,7 +10,7 @@ import type {
 	Provider,
 	ProviderModelSelection,
 	ThinkingLevel,
-} from "@wincode/ai/sdk";
+} from "@wincode/ai";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type {
