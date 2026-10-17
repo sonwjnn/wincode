@@ -49,6 +49,10 @@
           "modelId": "gpt-5.6-luna",
           "protocolId": "openai-responses"
         },
+        {
+          "modelId": "gpt-luna-6",
+          "protocolId": "openai-responses"
+        },
         "glm-5.3-flash",
         "glm-5.3",
         "glm-5.2",

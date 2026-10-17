@@ -220,6 +220,49 @@ describe("public OpenCode Go SDK provider", () => {
 		);
 	});
 
+	test("gpt-luna-6 is selectable through OpenCode Go's Responses route", async () => {
+		const requests: { body: Record<string, unknown>; url: string }[] = [];
+		const sdk = createProviderCollection();
+		const provider = createOpenCodeGoProvider({
+			fetch: async (url, init) => {
+				requests.push({
+					body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+					url: String(url),
+				});
+				return sseResponse([
+					{
+						type: "response.completed",
+						response: {
+							output: [],
+							usage: { input_tokens: 1, output_tokens: 1 },
+						},
+					},
+				]);
+			},
+		});
+		sdk.register(provider);
+		await sdk.setCredential("opencode-go", {
+			apiKey: "opencode-go-secret",
+			kind: "api-key",
+		});
+
+		expect(provider.models).toContainEqual(
+			expect.objectContaining({
+				modelId: "gpt-luna-6",
+				protocolId: "openai-responses",
+				providerId: "opencode-go",
+			})
+		);
+		await collect(sdk, "gpt-luna-6");
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe("https://opencode.ai/zen/go/v1/responses");
+		expect(requests[0]?.body).toMatchObject({
+			model: "gpt-luna-6",
+			stream: true,
+		});
+	});
+
 	test("Responses tool continuation and results are replayed once by the selected OpenCode Go model", async () => {
 		const requests: Record<string, unknown>[] = [];
 		let call = 0;

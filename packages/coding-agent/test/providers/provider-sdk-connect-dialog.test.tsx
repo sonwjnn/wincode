@@ -152,6 +152,7 @@ const selectPluginProvider = async (
 	setup: TestRendererSetup
 ): Promise<void> => {
 	await act(() => setup.mockInput.pressArrow("down"));
+	await act(() => setup.mockInput.pressArrow("down"));
 	await act(() => setup.mockInput.pressEnter());
 	await flushTestRenderer(setup, 3);
 };
@@ -182,6 +183,8 @@ test("built-in Provider API keys are masked and saved only through the host cont
 	const fakeSecret = "never-render-this-google-key";
 
 	try {
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
 		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 3);
 		const apiKeyInput = setup.renderer.root.findDescendantById(
@@ -231,14 +234,13 @@ test("OpenAI API-key selection remains distinct from OAuth despite a shared Prov
 	const fakeSecret = "selected-openai-api-key";
 
 	try {
-		await act(() => setup.mockInput.pressArrow("down"));
-		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
 		await act(() => setup.mockInput.pressArrow("down"));
 		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 3);
-		expect(setup.captureCharFrame()).toContain(
-			"Paste OpenAI Provider SDK API key"
-		);
+		expect(setup.captureCharFrame()).toContain("OpenAI API key");
+		expect(setup.captureCharFrame()).toContain("Paste API key");
 		const apiKeyInput = setup.renderer.root.findDescendantById(
 			"provider-api-key-input"
 		);
@@ -279,8 +281,8 @@ test("OpenAI browser sign-in dispatches through its OAuth method descriptor", as
 	const { setup } = await renderConnectDialog(controller);
 
 	try {
-		await act(() => setup.mockInput.pressArrow("down"));
-		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
 		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 4);
 		expect(await started.promise).toMatchObject({
@@ -293,9 +295,11 @@ test("OpenAI browser sign-in dispatches through its OAuth method descriptor", as
 	}
 });
 
-test("device OAuth methods dispatch through their own descriptor", async () => {
+test("device OAuth methods retain the browser URL and copy affordance", async () => {
+	const authorizationUrl = new URL("https://auth.example/sign-in");
 	const started = Promise.withResolvers<{
 		methodId: string;
+		openBrowser: boolean | undefined;
 		signal: AbortSignal | undefined;
 	}>();
 	const connectResult = Promise.withResolvers<readonly ProviderModel[]>();
@@ -303,8 +307,10 @@ test("device OAuth methods dispatch through their own descriptor", async () => {
 		getConnectableProviders: () => [
 			{
 				connectOAuth: async (options?: ProviderOAuthConnectOptions) => {
+					options?.onAuthorizationUrl?.(authorizationUrl);
 					started.resolve({
 						methodId: "example-device-oauth",
+						openBrowser: options?.openBrowser,
 						signal: options?.signal,
 					});
 					return connectResult.promise;
@@ -321,13 +327,17 @@ test("device OAuth methods dispatch through their own descriptor", async () => {
 	try {
 		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 3);
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
 		expect(await started.promise).toMatchObject({
 			methodId: "example-device-oauth",
+			openBrowser: false,
 			signal: expect.any(AbortSignal),
 		});
-		expect(setup.captureCharFrame()).toContain(
-			"Preparing Example Device Sign-in"
-		);
+		await setup.waitForFrame((frame) => frame.includes(authorizationUrl.href));
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("Waiting for browser sign-in.");
+		expect(frame).toContain("copy");
 	} finally {
 		connectResult.resolve([]);
 		await act(() => setup.renderer.destroy());
@@ -372,7 +382,9 @@ test("discovery-backed API-key methods dispatch through their descriptors", asyn
 	try {
 		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 3);
-		expect(setup.captureCharFrame()).toContain("Paste Example Search API key");
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
+		expect(setup.captureCharFrame()).toContain("Paste API key");
 		const apiKeyInput = setup.renderer.root.findDescendantById(
 			"provider-api-key-input"
 		);
@@ -415,15 +427,28 @@ test("Escape closes only the top Provider connect dialog and leaves the underlyi
 	const { setup } = await renderConnectDialog(controller, true);
 
 	try {
+		await act(() => setup.mockInput.pressArrow("down"));
 		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 3);
-		expect(setup.captureCharFrame()).toContain("Paste OpenRouter API key");
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
+		expect(setup.captureCharFrame()).toContain("OpenRouter API key");
+		expect(setup.captureCharFrame()).toContain("Paste API key");
+
+		await act(() => setup.mockInput.pressEscape());
+		await flushTestRenderer(setup, 3);
+		expect(setup.captureCharFrame()).toContain("Choose method");
+		expect(setup.captureCharFrame()).not.toContain("Paste API key");
+
+		await act(() => setup.mockInput.pressEscape());
+		await flushTestRenderer(setup, 3);
+		expect(setup.captureCharFrame()).toContain("Search providers");
 
 		await act(() => setup.mockInput.pressEscape());
 		await flushTestRenderer(setup, 3);
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("Underlying dialog remains open");
-		expect(frame).not.toContain("Paste OpenRouter API key");
+		expect(frame).not.toContain("Search providers");
 	} finally {
 		await act(() => setup.renderer.destroy());
 	}

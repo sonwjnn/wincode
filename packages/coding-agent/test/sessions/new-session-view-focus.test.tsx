@@ -261,11 +261,12 @@ const createConnectedHomeProviderCollection = (pluginRuntime?: PluginRuntime) =>
 const waitForHomeModelStatus = async (
 	setup: TestRendererSetup
 ): Promise<void> => {
+	const storedDefault = `${DEFAULT_PROVIDER_MODEL_SELECTION.providerId}/${DEFAULT_PROVIDER_MODEL_SELECTION.modelId}`;
 	await act(async () => {
 		for (let attempt = 0; attempt < 30; attempt += 1) {
 			await Bun.sleep(10);
 			await setup.renderOnce();
-			if (setup.captureCharFrame().includes("Stored default unavailable:")) {
+			if (setup.captureCharFrame().includes(storedDefault)) {
 				break;
 			}
 		}
@@ -368,6 +369,9 @@ const renderHomeView = async (
 	return setup;
 };
 
+const captureNormalizedHomeFrame = (setup: TestRendererSetup): string =>
+	setup.captureCharFrame().replaceAll(/[┃║│]/gu, " ").replaceAll(/\s+/gu, " ");
+
 const waitForHomeFrame = async (
 	setup: TestRendererSetup,
 	text: string
@@ -376,7 +380,7 @@ const waitForHomeFrame = async (
 		for (let attempt = 0; attempt < 50; attempt += 1) {
 			await Bun.sleep(10);
 			await setup.renderOnce();
-			if (setup.captureCharFrame().includes(text)) {
+			if (captureNormalizedHomeFrame(setup).includes(text)) {
 				return;
 			}
 		}
@@ -613,7 +617,7 @@ describe("NewSessionView composer focus", () => {
 		}
 	});
 
-	test("Home preserves and marks its stored default unavailable instead of sending it through Catalog", async () => {
+	test("Home avoids duplicate model status and retains actionable submit errors", async () => {
 		const workspace = process.cwd();
 		const router = createRouter({
 			history: createMemoryHistory({ initialEntries: ["/"] }),
@@ -666,9 +670,10 @@ describe("NewSessionView composer focus", () => {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
 			const storedDefault = `${DEFAULT_PROVIDER_MODEL_SELECTION.providerId}/${DEFAULT_PROVIDER_MODEL_SELECTION.modelId}`;
-			expect(setup.captureCharFrame()).toContain(
-				`Stored default unavailable: ${storedDefault}`
-			);
+			const initialFrame = setup.captureCharFrame();
+			expect(initialFrame.split(storedDefault)).toHaveLength(2);
+			expect(initialFrame).not.toContain("Provider Model:");
+			expect(initialFrame).not.toContain("Stored default unavailable:");
 
 			const composer = setup.renderer.root.findDescendantById(
 				"new-session-view-composer"
@@ -683,7 +688,7 @@ describe("NewSessionView composer focus", () => {
 			await flushTestRenderer(setup, 20);
 
 			expect(router.state.location.pathname).toBe("/");
-			expect(setup.captureCharFrame()).toContain(
+			expect(captureNormalizedHomeFrame(setup)).toContain(
 				"explicitly select an available Provider SDK Model"
 			);
 		} finally {
@@ -876,7 +881,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			);
 			try {
 				await waitForHomeFrame(setup, "do not match the current trusted");
-				expect(setup.captureCharFrame()).toContain(
+				expect(captureNormalizedHomeFrame(setup)).toContain(
 					"do not match the current trusted"
 				);
 				expect(operations).toContain("provider-collection");
@@ -912,7 +917,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		);
 		try {
 			await waitForHomeFrame(setup, "has no matching trusted source");
-			expect(setup.captureCharFrame()).toContain(
+			expect(captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
 			);
 			expect(operations).toEqual([]);
@@ -945,7 +950,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		);
 		try {
 			await waitForHomeFrame(setup, "has no matching trusted source");
-			expect(setup.captureCharFrame()).toContain(
+			expect(captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
 			);
 			expect(operations).toEqual([]);
@@ -981,7 +986,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		);
 		try {
 			await waitForHomeFrame(setup, "has no matching trusted source");
-			expect(setup.captureCharFrame()).toContain(
+			expect(captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
 			);
 			expect(operations).toEqual([]);
@@ -1022,7 +1027,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			await waitForHomeModelStatus(setup);
 			await submitHomePrompt(setup);
 			await waitForHomeFrame(setup, "is unavailable");
-			expect(setup.captureCharFrame().replaceAll(/\s+/gu, " ")).toContain(
+			expect(captureNormalizedHomeFrame(setup)).toContain(
 				`Provider Model ${fixture.model.providerId}/${fixture.model.modelId} is unavailable.`
 			);
 			expect(operations).toContain("availability");

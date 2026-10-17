@@ -9,22 +9,18 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "bun": "./src/index.ts",
       "import": "./dist/index.js"
     },
     "./guards": {
       "types": "./src/guards.ts",
-      "bun": "./src/guards.ts",
       "import": "./dist/guards.js"
     },
     "./errors": {
       "types": "./src/errors.ts",
-      "bun": "./src/errors.ts",
       "import": "./dist/errors.js"
     },
     "./objects": {
       "types": "./src/objects.ts",
-      "bun": "./src/objects.ts",
       "import": "./dist/objects.js"
     }
   },

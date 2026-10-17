@@ -7,13 +7,7 @@ import type {
 	ThinkingSelection,
 } from "@wincode/ai";
 import { getErrorMessage, isNull, isUndefined, logger } from "@wincode/utils";
-import {
-	useCallback,
-	useEffect,
-	useMemo,
-	useState,
-	useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
 	type EffectiveAgentSelection,
 	resolveActiveAgentId,
@@ -207,12 +201,6 @@ export function NewSessionView({
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
 	const [providerController, setProviderController] =
 		useState<InteractiveProviderController>();
-	const [availableProviderModels, setAvailableProviderModels] = useState<
-		readonly ProviderModel[]
-	>([]);
-	const [isLoadingProviderModels, setIsLoadingProviderModels] = useState(true);
-	const [isLoadingProviderCollection, setIsLoadingProviderCollection] =
-		useState(true);
 	const [canCreateProviderCollection, setCanCreateProviderCollection] =
 		useState(false);
 	const [restoredModelSelection, setRestoredModelSelection] =
@@ -293,8 +281,6 @@ export function NewSessionView({
 		}
 		if (selectionPreflight.status === "error") {
 			setError(selectionPreflight.message);
-			setIsLoadingProviderCollection(false);
-			setIsLoadingProviderModels(false);
 			return;
 		}
 		setCanCreateProviderCollection(true);
@@ -314,7 +300,6 @@ export function NewSessionView({
 			closePromise ??= closeHomeProviderCollection(providerCollection);
 			return closePromise;
 		};
-		setIsLoadingProviderCollection(true);
 		const openProviderSelection = async (): Promise<void> => {
 			try {
 				providerCollection = await createProviderCollection(pluginRuntime);
@@ -338,11 +323,9 @@ export function NewSessionView({
 					return;
 				}
 				setProviderController(controller);
-				setIsLoadingProviderCollection(false);
 			} catch (providerError) {
 				await closeOwnedProviderCollection();
 				if (active) {
-					setIsLoadingProviderCollection(false);
 					setError(
 						getErrorMessage(
 							providerError,
@@ -359,110 +342,32 @@ export function NewSessionView({
 		};
 	}, [canCreateProviderCollection, createProviderCollection, pluginRuntime]);
 
-	const subscribeProviderAvailability = useCallback(
-		(listener: () => void) => {
-			const unsubscribeComposition =
-				providerController?.subscribeComposition?.(listener) ??
-				(() => undefined);
-			const unsubscribeAvailability =
-				providerController?.subscribeAvailability?.(listener) ??
-				(() => undefined);
-			return () => {
-				unsubscribeComposition();
-				unsubscribeAvailability();
-			};
-		},
-		[providerController]
-	);
-	const getProviderAvailabilityRevision = useCallback(
-		() =>
-			`${providerController?.getCompositionRevision?.() ?? 0}:${providerController?.getAvailabilityRevision?.() ?? 0}`,
-		[providerController]
-	);
-	const providerAvailabilityRevision = useSyncExternalStore(
-		subscribeProviderAvailability,
-		getProviderAvailabilityRevision,
-		getProviderAvailabilityRevision
-	);
 	useEffect(() => {
-		if (selectionPreflight.status === "pending") {
-			setAvailableProviderModels([]);
-			setIsLoadingProviderModels(true);
+		if (
+			selectionPreflight.status !== "ready" ||
+			providerController === undefined
+		) {
 			return;
 		}
-		if (selectionPreflight.status === "error") {
-			setAvailableProviderModels([]);
-			setIsLoadingProviderModels(false);
-			return;
-		}
-		if (providerController === undefined) {
-			setAvailableProviderModels([]);
-			setIsLoadingProviderModels(true);
-			return;
-		}
-		let active = true;
-		const requestedRevision = providerAvailabilityRevision;
 		const loadCandidates =
 			providerController.getAvailableProviderModelSelectionCandidates;
-		setIsLoadingProviderModels(true);
 		if (loadCandidates === undefined) {
-			setAvailableProviderModels([]);
-			setIsLoadingProviderModels(false);
 			return;
 		}
-		void loadCandidates(selectionPreflight.selection.model.providerId)
-			.then((candidates) => {
-				if (active && getProviderAvailabilityRevision() === requestedRevision) {
-					setAvailableProviderModels(candidates.map(({ model }) => model));
-				}
-			})
-			.catch(() => {
-				if (active && getProviderAvailabilityRevision() === requestedRevision) {
-					setAvailableProviderModels([]);
-				}
-			})
-			.finally(() => {
-				if (active && getProviderAvailabilityRevision() === requestedRevision) {
-					setIsLoadingProviderModels(false);
-				}
-			});
-		return () => {
-			active = false;
+		const providerId = selectionPreflight.selection.model.providerId;
+		const loadAvailableModels = () => {
+			void loadCandidates(providerId).catch(() => undefined);
 		};
-	}, [
-		getProviderAvailabilityRevision,
-		providerAvailabilityRevision,
-		providerController,
-		selectionPreflight,
-	]);
-	const currentProviderModelAvailable = isAvailableProviderModelSelection(
-		model,
-		availableProviderModels
-	);
-	const providerModelStatus = (() => {
-		if (isLoadingProviderCollection || isLoadingProviderModels) {
-			return <text fg={colors.textMuted}>Loading Provider SDK Models…</text>;
-		}
-		if (providerController === undefined) {
-			return (
-				<text fg={colors.error}>
-					Provider SDK Model selection is unavailable.
-				</text>
-			);
-		}
-		if (currentProviderModelAvailable) {
-			return (
-				<text fg={colors.textMuted}>
-					{`Provider Model: ${model.providerId}/${model.modelId}`}
-				</text>
-			);
-		}
-		return (
-			<text fg={colors.error}>
-				{`Stored default unavailable: ${model.providerId}/${model.modelId}. Connect a Provider and choose an available Model with /provider-models.`}
-			</text>
-		);
-	})();
+		const unsubscribeComposition =
+			providerController.subscribeComposition?.(loadAvailableModels);
+		const unsubscribeAvailability =
+			providerController.subscribeAvailability?.(loadAvailableModels);
+		loadAvailableModels();
+		return () => {
+			unsubscribeComposition?.();
+			unsubscribeAvailability?.();
+		};
+	}, [providerController, selectionPreflight]);
 
 	useEffect(() => {
 		if (!isUndefined(defaultAgentId)) {
@@ -696,7 +601,6 @@ export function NewSessionView({
 					paddingX={2}
 					width="100%"
 				>
-					{providerModelStatus}
 					{error === null ? null : <text fg={colors.error}>{error}</text>}
 					<ChatTextArea
 						disabled={isCreatingSession}

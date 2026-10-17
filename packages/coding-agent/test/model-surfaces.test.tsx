@@ -178,7 +178,6 @@ test("Provider Model picker rejects owner A results instead of binding them to o
 	trustedRuntime = {};
 	compositionRevision += 1;
 
-	await act(() => setup.mockInput.pressArrow("down"));
 	await act(() => setup.mockInput.pressEnter());
 	await setup.waitForFrame((frame) =>
 		frame.includes("Provider Model results are stale")
@@ -221,7 +220,6 @@ test("built-in Provider Model results expire when the whole composition revision
 	hostRegistration = trustedRegistration;
 	trustedRuntime = {};
 	compositionRevision += 1;
-	await act(() => setup.mockInput.pressArrow("down"));
 	await act(() => setup.mockInput.pressEnter());
 	await setup.waitForFrame((frame) =>
 		frame.includes("Provider Model results are stale")

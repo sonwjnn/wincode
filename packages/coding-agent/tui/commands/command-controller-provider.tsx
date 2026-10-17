@@ -26,6 +26,7 @@ import {
 	saveProjectTrustDecision,
 } from "@/modules/project-trust/project-trust";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { discoverSkills, type Skill } from "@/modules/skills";
 import { useConfig } from "@/shared/config/config-provider";
 import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
@@ -145,6 +146,8 @@ export function CommandControllerProvider({
 				createCommandHandlers({
 					config: promptConfig,
 					dialog,
+					getRecentModelSelections: (limit) =>
+						getSessionStore().listRecentModelSelections(limit),
 					navigateHome: () => {
 						router.navigate({ to: "/" }).catch(() => undefined);
 					},

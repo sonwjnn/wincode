@@ -77,6 +77,11 @@ export const providerModels = [
 		]
 	},
 	{
+		"modelId": "gpt-luna-6",
+		"protocolId": "openai-responses",
+		"providerId": "opencode-go"
+	},
+	{
 		"modelId": "glm-5.3-flash",
 		"protocolId": "openai-compatible",
 		"providerId": "opencode-go",

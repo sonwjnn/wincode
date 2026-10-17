@@ -26,7 +26,10 @@ import {
 } from "../sdk-private/protocol-errors.ts";
 import { openAIChatStrategy } from "../sdk-private/protocols/openai-chat.ts";
 import { openAIResponsesStrategy } from "../sdk-private/protocols/openai-responses.ts";
-import { openAIProtocolReasoningEffortFor } from "../sdk-private/protocols/provider-options.ts";
+import {
+	type OpenAIProtocolOptions,
+	openAIProtocolReasoningEffortFor,
+} from "../sdk-private/protocols/provider-options.ts";
 import type {
 	ProtocolPromptMessage,
 	ProtocolPromptPart,
@@ -177,6 +180,16 @@ const modelRequestFor = (
 	};
 };
 
+const openAIResponsesProviderOptionsFor = (
+	authorization: OpenAIAuthorization,
+	reasoningEffort: ProviderProtocolRequest["reasoningEffort"]
+): OpenAIProtocolOptions => ({
+	...(authorization.kind === "oauth" ? { store: false } : {}),
+	...(reasoningEffort === undefined
+		? {}
+		: { reasoningEffort: openAIProtocolReasoningEffortFor(reasoningEffort) }),
+});
+
 type OpenAIWireRequest = Readonly<{
 	body: string;
 	hasCacheControls: boolean;
@@ -213,18 +226,15 @@ const wireRequestFor = (
 			);
 		}
 		strategy = openAIResponsesStrategy;
+		const providerOptions = openAIResponsesProviderOptionsFor(
+			authorization,
+			modelRequest.reasoningEffort
+		);
 		body = strategy.serialize({
 			maxOutputTokens,
 			model,
 			omitOutputTokenLimit: authorization.kind === "oauth",
-			providerOptions:
-				modelRequest.reasoningEffort === undefined
-					? undefined
-					: {
-							reasoningEffort: openAIProtocolReasoningEffortFor(
-								modelRequest.reasoningEffort
-							),
-						},
+			providerOptions,
 			request: modelRequest,
 		});
 		if (authorization.kind === "oauth") {
@@ -381,8 +391,10 @@ const streamWithCacheFallback = async function* (
 		) {
 			throw error;
 		}
+		const { promptCacheKey: _promptCacheKey, ...requestWithoutCacheKey } =
+			request;
 		const uncachedRequest = wireRequestFor(
-			request,
+			requestWithoutCacheKey,
 			context,
 			authorization,
 			apiRoot,

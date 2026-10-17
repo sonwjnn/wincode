@@ -37,7 +37,9 @@ const API_KEY_PROVIDER_IDS = new Set<string>(
 );
 
 export type ProviderOAuthConnectOptions = Readonly<{
+	onAuthorizationUrl?: (authorizationUrl: URL) => void;
 	onStatus?: (status: string) => void;
+	openBrowser?: boolean;
 	signal?: AbortSignal;
 }>;
 

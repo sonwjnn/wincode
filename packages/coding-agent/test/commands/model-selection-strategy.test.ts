@@ -15,15 +15,26 @@ import {
 
 const readElement = (
 	children: unknown
-): ReactElement<{ currentModel: ProviderModelSelection }> => {
+): ReactElement<{
+	currentModel: ProviderModelSelection;
+	recentSelections: readonly ProviderModelSelection[];
+}> => {
 	if (!isValidElement(children)) {
 		throw new Error("The model command did not open a React dialog.");
 	}
-	return children as ReactElement<{ currentModel: ProviderModelSelection }>;
+	return children as ReactElement<{
+		currentModel: ProviderModelSelection;
+		recentSelections: readonly ProviderModelSelection[];
+	}>;
 };
 
-test("model selection opens the Provider Models dialog with the stored identity", () => {
+test("model selection keeps its legacy title and recent Provider Model history", () => {
 	let dialogChildren: unknown;
+	let dialogTitle: string | undefined;
+	const recentSelection = fromPartial<ProviderModelSelection>({
+		modelId: "recent-model",
+		providerId: "openai",
+	});
 	const providerController = fromPartial<InteractiveProviderController>({
 		getAvailableModels: async () => [],
 	});
@@ -32,10 +43,12 @@ test("model selection opens the Provider Models dialog with the stored identity"
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		}),
 		dialog: {
-			open: ({ children }: { children: ReactNode }) => {
+			open: ({ children, title }: { children: ReactNode; title: string }) => {
 				dialogChildren = children;
+				dialogTitle = title;
 			},
 		},
+		getRecentModelSelections: () => [recentSelection],
 		onSelectProviderModel: () => undefined,
 		providerController,
 	});
@@ -43,8 +56,10 @@ test("model selection opens the Provider Models dialog with the stored identity"
 	createCommandHandlers(context)["model.select"]();
 
 	const element = readElement(dialogChildren);
+	expect(dialogTitle).toBe("Select Model");
 	expect(element.type).toBe(ProviderModelsDialogContent);
 	expect(element.props.currentModel).toEqual(DEFAULT_PROVIDER_MODEL_SELECTION);
+	expect(element.props.recentSelections).toEqual([recentSelection]);
 });
 
 test("model selection fails closed when its Provider controller is unavailable", () => {

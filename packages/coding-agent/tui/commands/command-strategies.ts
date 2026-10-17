@@ -1,5 +1,6 @@
 import type { CliRenderer } from "@opentui/core";
 import type { ProviderModel } from "@wincode/ai";
+import open from "open";
 import { createElement, type ReactNode } from "react";
 import {
 	COMMANDS,
@@ -21,11 +22,13 @@ import { ProviderSdkConnectDialogContent } from "@/modules/providers/ui/provider
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import type { ToastContextValue } from "@/shared/providers/toast/toast-provider";
+import { copyBrowserAuthorizationUrl } from "./browser-authorization";
 import { openCommandDialog } from "./dialog-command";
 
 export type CommandStrategyContext = {
 	config: PromptConfig;
 	dialog: Pick<DialogContextValue, "open">;
+	getRecentModelSelections?: (limit: number) => ProviderModelSelection[];
 	navigateHome: () => void;
 	onSelectProviderModel?: (
 		model: ProviderModel,
@@ -150,8 +153,13 @@ const STRATEGIES = {
 	},
 	"model.select": {
 		kind: "dialog",
-		title: "Select Provider Model",
-		content: ({ config, onSelectProviderModel, providerController }) => {
+		title: "Select Model",
+		content: ({
+			config,
+			getRecentModelSelections,
+			onSelectProviderModel,
+			providerController,
+		}) => {
 			if (!(providerController && onSelectProviderModel)) {
 				throw new Error(
 					"Provider Model selection is unavailable in this view."
@@ -161,13 +169,19 @@ const STRATEGIES = {
 				controller: providerController,
 				currentModel: config.model,
 				onSelectModel: onSelectProviderModel,
+				recentSelections: getRecentModelSelections?.(10) ?? [],
 			});
 		},
 	},
 	"provider.model.select": {
 		kind: "dialog",
 		title: "Provider SDK Models",
-		content: ({ config, onSelectProviderModel, providerController }) => {
+		content: ({
+			config,
+			getRecentModelSelections,
+			onSelectProviderModel,
+			providerController,
+		}) => {
 			if (!(providerController && onSelectProviderModel)) {
 				throw new Error(
 					"Provider Model selection is unavailable in this view."
@@ -177,6 +191,7 @@ const STRATEGIES = {
 				controller: providerController,
 				currentModel: config.model,
 				onSelectModel: onSelectProviderModel,
+				recentSelections: getRecentModelSelections?.(10) ?? [],
 			});
 		},
 	},
@@ -229,13 +244,23 @@ const STRATEGIES = {
 	},
 	"connection.open": {
 		kind: "dialog",
-		title: "Connect Provider",
-		content: ({ providerController }) => {
+		title: "Connect",
+		content: ({ providerController, renderer, toast }) => {
 			if (providerController === undefined) {
 				throw new Error("Provider SDK connection is unavailable in this view.");
 			}
 			return createElement(ProviderSdkConnectDialogContent, {
 				controller: providerController,
+				onBrowserCopyUrl: async (url: string) => {
+					await copyBrowserAuthorizationUrl(renderer, url);
+					toast.show({
+						message: "Authorization URL copied.",
+						variant: "success",
+					});
+				},
+				onBrowserOpenUrl: async (url: string) => {
+					await open(url);
+				},
 			});
 		},
 	},

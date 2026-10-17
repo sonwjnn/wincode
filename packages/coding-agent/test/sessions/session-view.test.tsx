@@ -738,7 +738,6 @@ test("manual compaction replaces an unavailable Agent pin only with an available
 		await setup.waitFor(() =>
 			setup.captureCharFrame().includes("replacement-model")
 		);
-		await act(() => setup.mockInput.pressArrow("down"));
 		await act(() => setup.mockInput.pressEnter());
 		await setup.waitFor(() => fakeCompactionModels.length === 1);
 
@@ -806,7 +805,6 @@ test("manual compaction rejects a fetched owner-A model after owner B replaces i
 		hostRegistration = trustedRegistration;
 		trustedRuntime = {};
 		compositionRevision += 1;
-		await act(() => setup.mockInput.pressArrow("down"));
 		await act(() => setup.mockInput.pressEnter());
 		await setup.waitFor(() =>
 			setup.captureCharFrame().includes("Provider Model results are stale")
@@ -1544,7 +1542,7 @@ describe("SessionView initial submission", () => {
 			);
 			await act(() => setup.mockInput.pressTab());
 			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("Search Provider Models")
+				setup.captureCharFrame().includes("Search models")
 			);
 			await act(async () => setup.mockInput.typeText("gpt-6-luna"));
 			await setup.waitFor(() =>
@@ -1552,8 +1550,9 @@ describe("SessionView initial submission", () => {
 			);
 			await act(() => setup.mockInput.pressArrow("down"));
 			await act(() => setup.mockInput.pressEnter());
+			await flushUi(setup);
 			await setup.waitFor(
-				() => !setup.captureCharFrame().includes("Search Provider Models")
+				() => !setup.captureCharFrame().includes("Search models")
 			);
 			await flushUi(setup);
 			expect(observedModel).toMatchObject(selectedModel);

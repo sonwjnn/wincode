@@ -1,6 +1,12 @@
+import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
 import type { ProviderModel } from "@wincode/ai";
 import { getErrorMessage } from "@wincode/utils";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+	BUILT_IN_PROVIDER_CATALOG,
+	isBuiltInProviderId,
+} from "@/modules/providers/built-in-provider-catalog";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
 	isSameProviderModelIdentity,
@@ -20,6 +26,7 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 type Props = Readonly<{
 	controller: InteractiveProviderController;
 	currentModel: ProviderModelSelection;
+	recentSelections?: readonly ProviderModelSelection[];
 	onSelectModel: (
 		model: ProviderModel,
 		selection: ProviderModelSelection
@@ -27,18 +34,142 @@ type Props = Readonly<{
 }>;
 
 type Row =
-	| Readonly<{ kind: "refresh" }>
-	| Readonly<{ candidate: ProviderModelSelectionCandidate; kind: "model" }>;
+	| Readonly<{ kind: "header"; label: string; sectionKey: string }>
+	| Readonly<{
+			kind: "model";
+			candidate: ProviderModelSelectionCandidate;
+			recent: boolean;
+	  }>
+	| Readonly<{ kind: "refresh" }>;
+
+type ModelPickerRowProps = Readonly<{
+	isActive: boolean;
+	isRefreshing: boolean;
+	isSearching: boolean;
+	isSelected: boolean;
+	providerName: (providerId: string) => string;
+	row: Row;
+}>;
+
+const EMPTY_RECENT_MODEL_SELECTIONS: readonly ProviderModelSelection[] = [];
+const PROVIDER_SDK_SUFFIX = / Provider SDK$/u;
+
+const getModelSectionKey = (row: Row): string => {
+	if (row.kind === "header") {
+		return row.sectionKey;
+	}
+	if (row.kind === "refresh") {
+		return "refresh";
+	}
+	return row.recent ? "recent" : `provider:${row.candidate.model.providerId}`;
+};
+
+const getProviderDisplayNames = (
+	controller: InteractiveProviderController
+): ReadonlyMap<string, string> => {
+	const displayNames = new Map<string, string>();
+	for (const [providerId, definition] of Object.entries(
+		BUILT_IN_PROVIDER_CATALOG
+	)) {
+		displayNames.set(
+			providerId,
+			definition.displayName.replace(PROVIDER_SDK_SUFFIX, "")
+		);
+	}
+	for (const registration of controller.getPluginProviderRegistrations?.() ??
+		[]) {
+		displayNames.set(registration.providerId, registration.displayName);
+	}
+	return displayNames;
+};
+
+const getModelSearchText = (
+	row: Row,
+	providerName: (providerId: string) => string
+): string => {
+	switch (row.kind) {
+		case "header":
+			return "";
+		case "refresh":
+			return "refresh";
+		case "model":
+			return `${row.candidate.model.modelId} ${providerName(row.candidate.model.providerId)} ${row.candidate.model.providerId}`;
+		default:
+			return "";
+	}
+};
+
+const ModelPickerRow = ({
+	isActive,
+	isRefreshing,
+	isSearching,
+	isSelected,
+	providerName,
+	row,
+}: ModelPickerRowProps) => {
+	const { colors } = useTheme();
+	const selectedTextColor = getContrastingTextColor(colors.selection);
+	if (row.kind === "header") {
+		return (
+			<SelectableDialogItem>
+				<text fg={colors.primary}>{row.label}</text>
+			</SelectableDialogItem>
+		);
+	}
+	if (row.kind === "refresh") {
+		return (
+			<SelectableDialogItem>
+				<text fg={isSelected ? selectedTextColor : colors.primary}>
+					{isRefreshing ? "Refreshing Known Models…" : "Refresh Known Models"}
+				</text>
+			</SelectableDialogItem>
+		);
+	}
+
+	const primaryTextColor = isSelected ? selectedTextColor : colors.text;
+	const secondaryTextColor = isSelected ? selectedTextColor : colors.textMuted;
+	const providerDisplayName = providerName(row.candidate.model.providerId);
+	return (
+		<SelectableDialogItem
+			status={isActive ? <text fg={primaryTextColor}>●</text> : null}
+		>
+			<box
+				flexDirection="row"
+				flexGrow={1}
+				justifyContent={isSearching ? "space-between" : "flex-start"}
+				paddingRight={isSearching ? 3 : 0}
+			>
+				<text fg={primaryTextColor}>{row.candidate.model.modelId}</text>
+				{(row.recent || isSearching) && (
+					<>
+						{!isSearching && <text fg={primaryTextColor}> · </text>}
+						<text
+							attributes={isSelected ? undefined : TextAttributes.DIM}
+							fg={secondaryTextColor}
+						>
+							{providerDisplayName}
+						</text>
+					</>
+				)}
+			</box>
+		</SelectableDialogItem>
+	);
+};
 
 /** Selects Provider Models with the owner and composition snapshot that fetched them. */
 export const ProviderModelsDialogContent = ({
 	controller,
 	currentModel,
 	onSelectModel,
+	recentSelections = EMPTY_RECENT_MODEL_SELECTIONS,
 }: Props) => {
 	const dialog = useDialog();
+	const { height } = useTerminalDimensions();
 	const { colors } = useTheme();
-	const selectedTextColor = getContrastingTextColor(colors.selection);
+	const providerDisplayNames = useMemo(
+		() => getProviderDisplayNames(controller),
+		[controller]
+	);
 	const [candidates, setCandidates] = useState<
 		readonly ProviderModelSelectionCandidate[]
 	>([]);
@@ -126,71 +257,125 @@ export const ProviderModelsDialogContent = ({
 		},
 		[controller, dialog, onSelectModel]
 	);
+
+	const recentKeys = new Set<string>();
+	const recentCandidates = recentSelections.flatMap((selection) => {
+		const candidate = candidates.find(({ model }) =>
+			isSameProviderModelIdentity(model, selection)
+		);
+		if (candidate === undefined) {
+			return [];
+		}
+		const key = `${candidate.model.providerId}:${candidate.model.modelId}`;
+		if (recentKeys.has(key)) {
+			return [];
+		}
+		recentKeys.add(key);
+		return [candidate];
+	});
+	const candidateProviderIds = new Set(
+		candidates.map(({ model }) => model.providerId)
+	);
+	const providerIds = [
+		...Object.keys(BUILT_IN_PROVIDER_CATALOG).filter((providerId) =>
+			candidateProviderIds.has(providerId)
+		),
+		...[...candidateProviderIds]
+			.filter((providerId) => !isBuiltInProviderId(providerId))
+			.sort((left, right) =>
+				(providerDisplayNames.get(left) ?? left).localeCompare(
+					providerDisplayNames.get(right) ?? right
+				)
+			),
+	];
+	const providerName = (providerId: string): string =>
+		providerDisplayNames.get(providerId) ?? providerId;
 	const rows: Row[] = [
+		...(recentCandidates.length === 0
+			? []
+			: [
+					{ kind: "header" as const, label: "Recent", sectionKey: "recent" },
+					...recentCandidates.map((candidate) => ({
+						kind: "model" as const,
+						candidate,
+						recent: true,
+					})),
+				]),
+		...providerIds.flatMap((providerId) => {
+			const providerCandidates = candidates.filter(
+				({ model }) =>
+					model.providerId === providerId &&
+					!recentKeys.has(`${model.providerId}:${model.modelId}`)
+			);
+			return providerCandidates.length === 0
+				? []
+				: [
+						{
+							kind: "header" as const,
+							label: providerName(providerId),
+							sectionKey: `provider:${providerId}`,
+						},
+						...providerCandidates.map((candidate) => ({
+							kind: "model" as const,
+							candidate,
+							recent: false,
+						})),
+					];
+		}),
 		{ kind: "refresh" },
-		...candidates.map((candidate) => ({ kind: "model" as const, candidate })),
 	];
 	useDialogEscape();
 
 	return (
-		<box flexDirection="column" gap={1}>
-			<text fg={colors.textMuted}>
-				Available models are filtered by the current user's credentials.
-				Providers are contacted only when you refresh.
-			</text>
+		<>
 			{error ? <text fg={colors.error}>{error}</text> : null}
 			{isLoading ? (
 				<text fg={colors.textMuted}>Restoring Known Models…</text>
 			) : null}
 			<SearchListDialogWrapper
-				emptyText="No authenticated Provider Models. Connect a Provider or refresh Known Models."
-				getKey={(row) =>
-					row.kind === "refresh"
-						? "refresh"
-						: `model:${row.candidate.model.providerId}:${row.candidate.model.modelId}`
-				}
-				getSearchText={(row) =>
-					row.kind === "model"
-						? `${row.candidate.model.modelId} ${row.candidate.model.providerId}`
-						: "refresh"
-				}
+				emptyText="No matching models"
+				getItemSectionKey={getModelSectionKey}
+				getKey={(row) => {
+					if (row.kind === "header") {
+						return `header:${row.label}`;
+					}
+					if (row.kind === "refresh") {
+						return "refresh";
+					}
+					return `model:${row.candidate.model.providerId}:${row.candidate.model.modelId}`;
+				}}
+				getSearchText={(row) => getModelSearchText(row, providerName)}
 				isItemActive={(row) =>
 					row.kind === "model" &&
 					isSameProviderModelIdentity(row.candidate.model, currentModel)
 				}
-				isItemSelectable={() => !(isLoading || isRefreshing || isSelecting)}
+				isItemSelectable={(row) =>
+					!(isLoading || isRefreshing || isSelecting) &&
+					(row.kind === "model" || row.kind === "refresh")
+				}
 				items={rows}
+				maxVisibleItems={Math.max(1, Math.floor(height * 0.5))}
 				onSelect={(row) => {
 					if (row.kind === "refresh") {
 						void refreshModels();
 						return;
 					}
-					void selectCandidate(row.candidate);
-				}}
-				placeholder="Search Provider Models"
-				renderItem={(row, isSelected, isActive) => {
-					let foreground = colors.text;
-					let label: string;
-					if (row.kind === "refresh") {
-						foreground = colors.primary;
-						label = isRefreshing
-							? "Refreshing Known Models…"
-							: "Refresh Known Models";
-					} else {
-						label = row.candidate.model.modelId;
+					if (row.kind === "model") {
+						void selectCandidate(row.candidate);
 					}
-					if (isSelected) {
-						foreground = selectedTextColor;
-					}
-					return (
-						<SelectableDialogItem
-							status={isActive ? <text fg={colors.primary}>●</text> : null}
-						>
-							<text fg={foreground}>{label}</text>
-						</SelectableDialogItem>
-					);
 				}}
+				placeholder="Search models"
+				renderItem={(row, isSelected, isActive, isSearching) => (
+					<ModelPickerRow
+						isActive={isActive}
+						isRefreshing={isRefreshing}
+						isSearching={isSearching}
+						isSelected={isSelected}
+						providerName={providerName}
+						row={row}
+					/>
+				)}
 			/>
-		</box>
+		</>
 	);
 };
