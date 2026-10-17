@@ -1,4 +1,4 @@
-import { isObjectLike } from "@wincode/utils/guards";
+import { isObjectLike } from "@wincode/utils";
 import { normalizeModelUsage } from "../../model-usage.ts";
 import { readSseEvents } from "../sse.ts";
 import {

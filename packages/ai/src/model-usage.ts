@@ -2,7 +2,7 @@ import {
 	isNonNegativeInteger,
 	isObjectLike,
 	isUndefined,
-} from "@wincode/utils/guards";
+} from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
 import type { ModelCost, ModelCostTier } from "./model-metadata.ts";

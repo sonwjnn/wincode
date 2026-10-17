@@ -1,4 +1,4 @@
-import { isPlainObject } from "@wincode/utils/guards";
+import { isPlainObject } from "@wincode/utils";
 import {
 	ProviderProtocolError,
 	providerEventError,

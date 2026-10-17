@@ -1,4 +1,4 @@
-import { isNonNegativeInteger } from "@wincode/utils/guards";
+import { isNonNegativeInteger } from "@wincode/utils";
 import type { SupportedPromptCacheRetentionTier } from "../../model-metadata";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "../../model-output-limit.ts";
 import { normalizeModelUsage } from "../../model-usage.ts";

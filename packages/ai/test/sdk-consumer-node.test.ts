@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { $ } from "bun";
 
 const nodeConsumer = `
 import assert from "node:assert/strict";
@@ -120,7 +121,10 @@ process.stdout.write("Node public SDK consumer passed");
 `;
 
 describe("Node external @wincode/ai consumer", () => {
-	test("Node consumers import the public SDK and omit undefined provider controls", async () => {
+	test("Node consumers import the public SDK", async () => {
+		await $`bun run build`
+			.cwd(path.resolve(import.meta.dir, "../../utils"))
+			.quiet();
 		const consumerDir = await fs.mkdtemp(
 			path.join(os.tmpdir(), "wincode-ai-node-consumer-")
 		);

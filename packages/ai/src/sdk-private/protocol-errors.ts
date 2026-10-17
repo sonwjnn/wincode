@@ -1,4 +1,4 @@
-import { isObjectLike } from "@wincode/utils/guards";
+import { isObjectLike } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 
 export class ProviderProtocolError extends Error {
