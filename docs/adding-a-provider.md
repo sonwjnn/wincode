@@ -8,7 +8,9 @@ For built-in static inventories, add model IDs to `packages/ai/scripts/provider-
 
 When adding a model fact that models.dev does not publish, add a keyed manual overlay in `metadata-model.ts`. The generator only applies overlays to models already present in the provider manifest.
 
-Use `discoverModels` for account- or endpoint-specific inventories instead of adding them to the static baseline. Every returned model must use the exact Provider ID and model ID that consumers select. Capabilities, reasoning efforts, cache tiers, context/output limits, and pricing are optional published metadata. Do not infer missing metadata from a neighboring model. Dynamic discovery failures must preserve the last-known snapshot.
+Use `discoverModels` for account- or endpoint-specific inventories instead of adding them to the static baseline. Every returned model must use the exact Provider ID and model ID that consumers select. Capabilities, reasoning efforts, cache tiers, context/output limits, and pricing are optional published metadata. Do not infer missing metadata from a neighboring model.
+
+Call `ProviderCollection.refreshModels()` explicitly to refresh every registered provider with `discoverModels`; pass `providerIds` to limit the refresh. Static providers are skipped. The result reports caller cancellation in `aborted` and per-provider failures in `errors`, so one provider's failure does not block other refreshes. Refresh failures preserve last-known snapshots. Call `restoreModels()` after registering providers to load persisted snapshots without network access.
 
 ## Provider implementation
 

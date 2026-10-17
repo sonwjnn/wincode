@@ -3,6 +3,7 @@ import type {
 	ProviderCollection,
 	ProviderModel,
 	RefreshModelsOptions,
+	RefreshModelsResult,
 } from "@wincode/ai";
 import { isJsonValue } from "@wincode/utils";
 import type {
@@ -321,6 +322,41 @@ const throwIfAborted = (signal: AbortSignal | undefined): void => {
 	}
 };
 
+const refreshModelsForProvider = async (
+	collection: ProviderCollection,
+	providerId: string,
+	refreshOptions?: RefreshModelsOptions
+): Promise<readonly ProviderModel[]> => {
+	const result = await collection.refreshModels({
+		...refreshOptions,
+		providerIds: [providerId],
+	});
+	throwIfAborted(refreshOptions?.signal);
+	const error = result.errors.get(providerId);
+	if (error !== undefined) {
+		throw error;
+	}
+	return collection
+		.getModels()
+		.filter((model) => model.providerId === providerId);
+};
+
+const throwIfRefreshFailed = (
+	providerIds: readonly string[],
+	result: RefreshModelsResult,
+	signal?: AbortSignal
+): void => {
+	throwIfAborted(signal);
+	const successfulRefreshes = providerIds.filter(
+		(providerId) => !result.errors.has(providerId)
+	).length;
+	if (providerIds.length > 0 && successfulRefreshes === 0) {
+		throw new Error(
+			"Known Model refresh failed; the last-known model snapshots were retained."
+		);
+	}
+};
+
 const pluginCompositionFor = (
 	providers: ProviderCollection,
 	options: InteractiveProviderControllerOptions,
@@ -401,7 +437,8 @@ const savePluginCredential = async (
 		};
 	}
 	try {
-		const models = await composition.providerCollection.refreshModels(
+		const models = await refreshModelsForProvider(
+			composition.providerCollection,
 			providerId,
 			refreshOptions
 		);
@@ -551,6 +588,16 @@ export const createInteractiveProviderController = (
 			}
 		}
 	};
+	const refreshDiscoverableProviderModels = async (
+		refreshOptions?: RefreshModelsOptions
+	): Promise<void> => {
+		const providerIds = getDiscoverableProviderIds();
+		const result = await providers.refreshModels({
+			...refreshOptions,
+			providerIds,
+		});
+		throwIfRefreshFailed(providerIds, result, refreshOptions?.signal);
+	};
 	const refreshProviderModels = (
 		providerId: string,
 		refreshOptions?: RefreshModelsOptions
@@ -558,7 +605,7 @@ export const createInteractiveProviderController = (
 		withSessionWork(() =>
 			refreshWithAvailabilityNotification(async () => {
 				await restoreModels();
-				return providers.refreshModels(providerId, refreshOptions);
+				return refreshModelsForProvider(providers, providerId, refreshOptions);
 			})
 		);
 	const refreshModels = (
@@ -567,23 +614,7 @@ export const createInteractiveProviderController = (
 		withSessionWork(() =>
 			refreshWithAvailabilityNotification(async () => {
 				await restoreModels();
-				const providerIds = getDiscoverableProviderIds();
-				const results = await Promise.allSettled(
-					providerIds.map((providerId) =>
-						providers.refreshModels(providerId, refreshOptions)
-					)
-				);
-				if (refreshOptions?.signal?.aborted === true) {
-					throw abortReason(refreshOptions.signal);
-				}
-				const successfulRefreshes = results.filter(
-					(result) => result.status === "fulfilled"
-				).length;
-				if (providerIds.length > 0 && successfulRefreshes === 0) {
-					throw new Error(
-						"Known Model refresh failed; the last-known model snapshots were retained."
-					);
-				}
+				await refreshDiscoverableProviderModels(refreshOptions);
 				return providers.getAvailable();
 			})
 		);
@@ -606,23 +637,7 @@ export const createInteractiveProviderController = (
 				const snapshot = currentProviderModelSelectionSnapshot();
 				await restoreModels();
 				assertProviderModelSelectionSnapshotCurrent(snapshot);
-				const providerIds = getDiscoverableProviderIds();
-				const results = await Promise.allSettled(
-					providerIds.map((providerId) =>
-						providers.refreshModels(providerId, refreshOptions)
-					)
-				);
-				if (refreshOptions?.signal?.aborted === true) {
-					throw abortReason(refreshOptions.signal);
-				}
-				const successfulRefreshes = results.filter(
-					(result) => result.status === "fulfilled"
-				).length;
-				if (providerIds.length > 0 && successfulRefreshes === 0) {
-					throw new Error(
-						"Known Model refresh failed; the last-known model snapshots were retained."
-					);
-				}
+				await refreshDiscoverableProviderModels(refreshOptions);
 				const currentSnapshot =
 					assertProviderModelSelectionSnapshotCurrent(snapshot);
 				const models = await providers.getAvailable();
@@ -712,7 +727,8 @@ export const createInteractiveProviderController = (
 				kind: "api-key",
 			});
 			try {
-				return await providers.refreshModels(
+				return await refreshModelsForProvider(
+					providers,
 					OPENROUTER_PROVIDER_ID,
 					refreshOptions
 				);

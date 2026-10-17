@@ -316,7 +316,16 @@ export type ModelStore = Readonly<{
 }>;
 
 export type RefreshModelsOptions = Readonly<{
+	/** Provider IDs to refresh; omitted means every registered provider with discovery. */
+	providerIds?: readonly string[];
 	signal?: AbortSignal;
+}>;
+
+export type RefreshModelsResult = Readonly<{
+	/** True when the caller's signal aborted the refresh operation. */
+	aborted: boolean;
+	/** Failures keyed by provider ID; a provider failure does not stop other refreshes. */
+	errors: ReadonlyMap<string, Error>;
 }>;
 
 export type ChatFailure =
@@ -387,11 +396,10 @@ export type ProviderCollection = Readonly<{
 	getModels: () => readonly ProviderModel[];
 	/** Loads persisted dynamic models for providers registered so far, without network access. */
 	restoreModels: () => Promise<void>;
-	/** Discovers and persists models; failures leave the last-known list unchanged. */
+	/** Refreshes selected dynamic providers concurrently; static providers are skipped. */
 	refreshModels: (
-		providerId: string,
 		options?: RefreshModelsOptions
-	) => Promise<readonly ProviderModel[]>;
+	) => Promise<RefreshModelsResult>;
 	register: (provider: Provider) => void;
 	setCredential: (providerId: string, credential: unknown) => Promise<void>;
 }>;
@@ -1036,37 +1044,70 @@ export const createProviderCollection = (
 				restoredProviders.add(providerId);
 			}
 		},
-		refreshModels: async (providerId, refreshOptions = {}) => {
-			const registered = getRegisteredProvider(providerId);
-			const discoverModels = registered.provider.discoverModels;
-			if (!discoverModels) {
-				throw new Error(
-					`Provider ${providerId} does not support model discovery.`
-				);
+		refreshModels: async (refreshOptions = {}) => {
+			const selectedProviderIds =
+				refreshOptions.providerIds === undefined
+					? undefined
+					: new Set(refreshOptions.providerIds);
+			const errors = new Map<string, Error>();
+			if (refreshOptions.signal?.aborted) {
+				return { aborted: true, errors };
 			}
-			throwIfAborted(refreshOptions.signal);
-			const authorization = await resolveAuthorization(
-				registered.provider,
-				refreshOptions.signal
-			);
-			throwIfAborted(refreshOptions.signal);
-			const discovered = validateProviderModels(
-				await discoverModels({
-					authorization,
-					signal: refreshOptions.signal,
-				}),
-				providerId,
-				"Provider discovery"
-			);
-			throwIfAborted(refreshOptions.signal);
-			if (modelStore) {
-				await modelStore.set(providerId, discovered, {
-					signal: refreshOptions.signal,
-				});
+			if (selectedProviderIds !== undefined) {
+				for (const providerId of selectedProviderIds) {
+					if (!providers.has(providerId)) {
+						errors.set(
+							providerId,
+							new Error(`Unknown provider: ${providerId}`)
+						);
+					}
+				}
 			}
-			dynamicModels.set(providerId, discovered);
-			restoredProviders.add(providerId);
-			return getProviderModels(providerId);
+			const discoverableProviders = [...providers.entries()].filter(
+				([providerId, registered]) =>
+					registered.provider.discoverModels !== undefined &&
+					(selectedProviderIds === undefined ||
+						selectedProviderIds.has(providerId))
+			);
+			await Promise.all(
+				discoverableProviders.map(async ([providerId, registered]) => {
+					try {
+						throwIfAborted(refreshOptions.signal);
+						const authorization = await resolveAuthorization(
+							registered.provider,
+							refreshOptions.signal
+						);
+						throwIfAborted(refreshOptions.signal);
+						const discovered = validateProviderModels(
+							await registered.provider.discoverModels?.({
+								authorization,
+								signal: refreshOptions.signal,
+							}),
+							providerId,
+							"Provider discovery"
+						);
+						throwIfAborted(refreshOptions.signal);
+						if (modelStore) {
+							await modelStore.set(providerId, discovered, {
+								signal: refreshOptions.signal,
+							});
+						}
+						dynamicModels.set(providerId, discovered);
+						restoredProviders.add(providerId);
+					} catch (error) {
+						if (!refreshOptions.signal?.aborted) {
+							errors.set(
+								providerId,
+								error instanceof Error ? error : new Error(errorMessage(error))
+							);
+						}
+					}
+				})
+			);
+			return {
+				aborted: refreshOptions.signal?.aborted ?? false,
+				errors,
+			};
 		},
 		register: (provider) => {
 			if (closePromise !== undefined) {

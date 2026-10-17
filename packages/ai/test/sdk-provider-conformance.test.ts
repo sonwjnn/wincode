@@ -221,7 +221,15 @@ const discoverOpenRouterModel = async (
 		apiKey: "fake-openrouter-key",
 		kind: "api-key",
 	});
-	return collection.refreshModels("openrouter");
+	const refresh = await collection.refreshModels({
+		providerIds: ["openrouter"],
+	});
+	if (refresh.aborted || refresh.errors.size > 0) {
+		throw new Error("OpenRouter model discovery failed.");
+	}
+	return collection
+		.getModels()
+		.filter(({ providerId }) => providerId === "openrouter");
 };
 
 test("OpenRouter discovery publishes the exact discovered model identity", async () => {

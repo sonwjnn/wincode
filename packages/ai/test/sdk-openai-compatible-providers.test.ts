@@ -291,7 +291,13 @@ describe("public OpenAI-compatible SDK providers", () => {
 			apiKey: "openrouter-test-key",
 			kind: "api-key",
 		});
-		const discovered = await online.refreshModels("openrouter");
+		const refresh = await online.refreshModels({
+			providerIds: ["openrouter"],
+		});
+		expect(refresh.errors.size).toBe(0);
+		const discovered = online
+			.getModels()
+			.filter(({ providerId }) => providerId === "openrouter");
 		expect(discovered).toEqual([
 			{
 				limits: { contextWindowTokens: 8192, maxOutputTokens: 2048 },
@@ -412,7 +418,8 @@ describe("public OpenAI-compatible SDK providers", () => {
 			apiKey: "openai-route-key",
 			kind: "api-key",
 		});
-		await sdk.refreshModels("openrouter");
+		const refresh = await sdk.refreshModels({ providerIds: ["openrouter"] });
+		expect(refresh.errors.size).toBe(0);
 		expect(sdk.getModel("deepseek", "deepseek-chat")?.protocolId).toBe(
 			"openai-compatible"
 		);
@@ -503,12 +510,18 @@ describe("public OpenAI-compatible SDK providers", () => {
 			apiKey: "discovery-race-key",
 			kind: "api-key",
 		});
-		const knownModels = await sdk.refreshModels("openrouter");
+		const initialRefresh = await sdk.refreshModels({
+			providerIds: ["openrouter"],
+		});
+		expect(initialRefresh.errors.size).toBe(0);
+		const knownModels = sdk.getModels();
 		returnFailure = true;
 
-		await expect(
-			sdk.refreshModels("openrouter", { signal: controller.signal })
-		).rejects.toThrow("OpenRouter refresh cancelled");
+		const cancelledRefresh = await sdk.refreshModels({
+			providerIds: ["openrouter"],
+			signal: controller.signal,
+		});
+		expect(cancelledRefresh.aborted).toBe(true);
 		expect(sdk.getModels()).toEqual(knownModels);
 	});
 
@@ -767,12 +780,19 @@ describe("public OpenAI-compatible SDK providers", () => {
 			apiKey: "configured-openrouter-key",
 			kind: "api-key",
 		});
-		const knownModels = await sdk.refreshModels("openrouter");
+		const initialRefresh = await sdk.refreshModels({
+			providerIds: ["openrouter"],
+		});
+		expect(initialRefresh.errors.size).toBe(0);
+		const knownModels = sdk.getModels();
 		expect(knownModels.map((model) => model.modelId)).toEqual(["stable/model"]);
 		expect(await sdk.getAvailable()).toEqual(knownModels);
 
 		mode = "failure";
-		await expect(sdk.refreshModels("openrouter")).rejects.toThrow(
+		const failedRefresh = await sdk.refreshModels({
+			providerIds: ["openrouter"],
+		});
+		expect(failedRefresh.errors.get("openrouter")?.message).toBe(
 			"OpenRouter model discovery failed (503)."
 		);
 		expect(sdk.getModels()).toEqual(knownModels);
@@ -780,12 +800,13 @@ describe("public OpenAI-compatible SDK providers", () => {
 
 		mode = "cancel";
 		const controller = new AbortController();
-		const cancelledRefresh = sdk.refreshModels("openrouter", {
+		const cancelledRefresh = sdk.refreshModels({
+			providerIds: ["openrouter"],
 			signal: controller.signal,
 		});
 		await cancellationFetchStarted.promise;
 		controller.abort(new DOMException("refresh cancelled", "AbortError"));
-		await expect(cancelledRefresh).rejects.toThrow("refresh cancelled");
+		expect((await cancelledRefresh).aborted).toBe(true);
 		expect(discoveryRequests).toBe(3);
 		expect(sdk.getModels()).toEqual(knownModels);
 		expect(await sdk.getAvailable()).toEqual(knownModels);

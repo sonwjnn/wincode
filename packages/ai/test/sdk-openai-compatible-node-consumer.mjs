@@ -82,7 +82,12 @@ await sdk.setCredential("openrouter", {
 	kind: "api-key",
 	apiKey: "node-openrouter-key",
 });
-const openRouterModels = await sdk.refreshModels("openrouter");
+const refresh = await sdk.refreshModels({ providerIds: ["openrouter"] });
+assert.equal(refresh.aborted, false);
+assert.equal(refresh.errors.size, 0);
+const openRouterModels = sdk
+	.getModels()
+	.filter((model) => model.providerId === "openrouter");
 assert.equal(openRouterModels[0].modelId, "org/model-with/vendor-id");
 
 const collect = async (providerId, modelId) => {

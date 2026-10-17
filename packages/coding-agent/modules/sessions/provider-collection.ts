@@ -346,8 +346,8 @@ export const createInteractiveSessionProviderCollection = async (
 			activeCollection().getModel(providerId, modelId),
 		getModels: () => activeCollection().getModels(),
 		restoreModels: () => activeCollection().restoreModels(),
-		refreshModels: (providerId, refreshOptions) =>
-			activeCollection().refreshModels(providerId, refreshOptions),
+		refreshModels: (refreshOptions) =>
+			activeCollection().refreshModels(refreshOptions),
 		register: (provider) => {
 			if (closePromise !== undefined) {
 				throw new Error("ProviderCollection is closed.");

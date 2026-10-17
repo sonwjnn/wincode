@@ -140,7 +140,10 @@ test("fail-closed switches away from revoked Providers before asynchronous clean
 		closing = collection.failClosed();
 		expect(collection.getPluginProviderRegistrations()).toEqual([]);
 		expect(collection.getPluginProviderComposition(providerId)).toBeUndefined();
-		await expect(collection.refreshModels(providerId)).rejects.toThrow(
+		const refresh = await collection.refreshModels({
+			providerIds: [providerId],
+		});
+		expect(refresh.errors.get(providerId)?.message).toBe(
 			`Unknown provider: ${providerId}`
 		);
 		const chatEvents: ChatEvent[] = [];

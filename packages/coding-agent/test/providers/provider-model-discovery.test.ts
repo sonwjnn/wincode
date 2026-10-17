@@ -116,7 +116,10 @@ test("selection uses refreshed metadata when the exact model identity remains av
 	try {
 		const { getCandidates, refreshCandidates, selectCandidate } =
 			selectionOperationsFor(controller);
-		await providers.refreshModels(PROVIDER_ID);
+		const refresh = await providers.refreshModels({
+			providerIds: [PROVIDER_ID],
+		});
+		expect(refresh.errors.size).toBe(0);
 		const [candidate] = await getCandidates();
 		if (candidate === undefined) {
 			throw new Error("The discovered Provider Model should be selectable.");

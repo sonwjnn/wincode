@@ -165,9 +165,10 @@ describe("Provider Model output-token limits", () => {
 
 			const discoveryCollection = createProviderCollection();
 			discoveryCollection.register(providerFor([], () => [invalidModel]));
-			await expect(
-				discoveryCollection.refreshModels("fixture")
-			).rejects.toThrow(
+			const discoveryResult = await discoveryCollection.refreshModels({
+				providerIds: ["fixture"],
+			});
+			expect(discoveryResult.errors.get("fixture")?.message).toContain(
 				"Provider discovery contains an invalid model for provider fixture."
 			);
 			expect(
@@ -233,7 +234,10 @@ describe("Provider Model output-token limits", () => {
 				?.pricing?.tiers?.map(({ inputTokensAbove }) => inputTokensAbove);
 
 		expect(tierThresholds("static")).toEqual([200, 500]);
-		await collection.refreshModels("fixture");
+		const refresh = await collection.refreshModels({
+			providerIds: ["fixture"],
+		});
+		expect(refresh.errors.size).toBe(0);
 		expect(tierThresholds("discovered")).toEqual([200, 500]);
 		await collection.close();
 	});
@@ -584,7 +588,10 @@ describe("Provider Model output-token limits", () => {
 			"openrouter",
 			apiKeyCredential("fake-openrouter-key")
 		);
-		await collection.refreshModels("openrouter");
+		const refresh = await collection.refreshModels({
+			providerIds: ["openrouter"],
+		});
+		expect(refresh.errors.size).toBe(0);
 		const model = collection.getModel("openrouter", "fixture/model");
 		expect(model).toMatchObject({
 			limits: { contextWindowTokens: 12_000, maxOutputTokens: 64 },
