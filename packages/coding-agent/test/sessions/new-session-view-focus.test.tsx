@@ -228,6 +228,15 @@ describe("NewSessionView composer focus", () => {
 				);
 			}
 			expect(setup.renderer.currentFocusedRenderable).toBe(composer);
+			await setup.flush({ maxPasses: 20 });
+			// The first prompt must use the same full-width, bottom-docked input
+			// area as an active session, rather than floating beneath the logo.
+			const frame = setup.captureCharFrame().split("\n");
+			const composerBorderLine = frame.findIndex(
+				(line) => line.includes("╭") && line.includes("╮")
+			);
+			expect(composerBorderLine).toBeGreaterThanOrEqual(14);
+			expect(frame[composerBorderLine]?.indexOf("╮")).toBeGreaterThan(85);
 
 			await act(async () => {
 				await setup.mockInput.typeText("before");

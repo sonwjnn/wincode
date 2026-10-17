@@ -135,8 +135,6 @@ export function SearchListDialogWrapper<T>({
 		isScrollReady,
 		searchValue,
 		selectedIndex,
-		selectedIndexRef,
-		setSelectedIndex,
 		inputRef,
 		scrollRef,
 		handleContentChange,
@@ -249,13 +247,6 @@ export function SearchListDialogWrapper<T>({
 									marginRight={itemMargin.right}
 									marginTop={itemMargin.top}
 									onMouseDown={() => selectable && onSelect(item)}
-									onMouseMove={() => {
-										if (!selectable) {
-											return;
-										}
-										selectedIndexRef.current = i;
-										setSelectedIndex(i);
-									}}
 									overflow="hidden"
 								>
 									{renderItem(

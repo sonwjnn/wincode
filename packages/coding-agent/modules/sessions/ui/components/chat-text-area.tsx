@@ -30,11 +30,11 @@ import {
 } from "@/modules/file-mentions";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
+import { RoundedBorderChars } from "@/shared/constants";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { getAgentColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
@@ -1103,27 +1103,33 @@ export function ChatTextArea({
 			)}
 
 			<BorderedContentBlock
-				borderColor={getAgentColor(colors, agent)}
+				border={["top", "right", "bottom", "left"]}
+				borderColor={isFocused ? colors.borderActive : colors.border}
 				colors={colors}
-				contentGap={1}
+				contentBackgroundColor={colors.background}
+				contentGap={0}
 				contentJustifyContent="center"
+				customBorderChars={RoundedBorderChars}
 				marginBottom={0}
-				paddingX={2}
-				paddingY={1}
+				paddingX={1}
+				paddingY={0}
 			>
-				<textarea
-					focused={isFocused}
-					focusedTextColor={disabled ? colors.textDisabled : colors.text}
-					id={id}
-					keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
-					onContentChange={handleTextareaContentChange}
-					placeholder={`Ask anything... "Fix broken tests"`}
-					placeholderColor={colors.textMuted}
-					ref={textAreaRef}
-					textColor={disabled ? colors.textDisabled : colors.text}
-				/>
-				<StatusBar />
+				<box flexDirection="row" gap={1} width="100%">
+					<textarea
+						flexGrow={1}
+						focused={isFocused}
+						focusedTextColor={disabled ? colors.textDisabled : colors.text}
+						id={id}
+						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
+						onContentChange={handleTextareaContentChange}
+						placeholder={`Ask anything... "Fix broken tests"`}
+						placeholderColor={colors.textMuted}
+						ref={textAreaRef}
+						textColor={disabled ? colors.textDisabled : colors.text}
+					/>
+				</box>
 			</BorderedContentBlock>
+			<StatusBar />
 		</box>
 	);
 }

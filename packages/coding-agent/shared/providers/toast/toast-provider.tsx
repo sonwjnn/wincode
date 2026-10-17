@@ -8,8 +8,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
-import { SplitBorderChars } from "../../constants";
 import { useTheme } from "../theme/theme-provider";
 import type { ToastOptions, ToastVariant } from "./types";
 import { DEFAULT_DURATION } from "./types";
@@ -91,10 +89,6 @@ function Toast({ currentToast }: ToastProps) {
 		info: colors.info,
 	};
 
-	const borderColor = currentToast.variant
-		? variantColors[currentToast.variant]
-		: variantColors.info;
-
 	return (
 		<box
 			position="absolute"
@@ -102,20 +96,15 @@ function Toast({ currentToast }: ToastProps) {
 			top={2}
 			width={Math.max(1, Math.min(currentToast.width ?? 60, width - 6))}
 		>
-			<BorderedContentBlock
-				border={["left", "right"]}
-				borderColor={borderColor}
-				colors={colors}
-				contentBackgroundColor={colors.backgroundMenu}
-				customBorderChars={SplitBorderChars}
-				marginBottom={0}
-				paddingX={2}
-				paddingY={1}
-			>
-				<text fg={colors.text} width="100%" wrapMode="word">
+			<box backgroundColor={colors.backgroundMenu} paddingX={2} paddingY={1}>
+				<text
+					fg={variantColors[currentToast.variant ?? "info"]}
+					width="100%"
+					wrapMode="word"
+				>
 					{currentToast.message}
 				</text>
-			</BorderedContentBlock>
+			</box>
 		</box>
 	);
 }

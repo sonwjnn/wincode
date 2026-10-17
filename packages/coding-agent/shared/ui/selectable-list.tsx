@@ -145,7 +145,6 @@ export function SelectableList({
 						height={1}
 						key={item.id}
 						onMouseDown={() => onConfirm(realIndex)}
-						onMouseMove={() => onSelect(realIndex)}
 						overflow="hidden"
 						paddingX={1}
 					>

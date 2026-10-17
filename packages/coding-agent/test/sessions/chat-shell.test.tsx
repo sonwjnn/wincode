@@ -22,6 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	CliRenderEvents,
+	MarkdownRenderable,
 	RGBA,
 	type ScrollBoxRenderable,
 	TextareaRenderable,
@@ -55,8 +56,10 @@ import type {
 } from "@/modules/sessions/message";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { SettingsRegistryProvider } from "@/modules/settings";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
+import { shortenHomePath } from "@/shared/paths/display-path";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import {
 	KeyboardLayerProvider,
@@ -337,19 +340,21 @@ const renderChatShell = async (
 										<DialogProvider>
 											<RouterContextProvider router={router}>
 												<CommandControllerProvider>
-													<ChatShellProbe
-														activeMessages={activeMessages}
-														agentHolder={agent}
-														holder={holder}
-														initialCompactions={initialCompactions}
-														initialMessages={initialMessages}
-														isBusy={isBusy}
-														isCompacting={isCompacting}
-														isInterruptArmed={isInterruptArmed}
-														onRetry={onRetry}
-														queuedSubmissions={queuedSubmissions}
-														transcriptNotice={transcriptNotice}
-													/>
+													<SettingsRegistryProvider>
+														<ChatShellProbe
+															activeMessages={activeMessages}
+															agentHolder={agent}
+															holder={holder}
+															initialCompactions={initialCompactions}
+															initialMessages={initialMessages}
+															isBusy={isBusy}
+															isCompacting={isCompacting}
+															isInterruptArmed={isInterruptArmed}
+															onRetry={onRetry}
+															queuedSubmissions={queuedSubmissions}
+															transcriptNotice={transcriptNotice}
+														/>
+													</SettingsRegistryProvider>
 												</CommandControllerProvider>
 											</RouterContextProvider>
 										</DialogProvider>
@@ -390,6 +395,16 @@ const spanColumn = (setup: TestRendererSetup, text: string): number => {
  * Waits for a frame the transcript produces, so a scroll or expansion settles
  * before it is asserted instead of being read from the frame it started in.
  */
+const findMarkdownRenderables = (node: {
+	getChildren(): unknown[];
+}): MarkdownRenderable[] =>
+	node.getChildren().flatMap((child) => {
+		if (child instanceof MarkdownRenderable) {
+			return [child];
+		}
+		return findMarkdownRenderables(child as { getChildren(): unknown[] });
+	});
+
 const waitForFrameText = async (
 	setup: TestRendererSetup,
 	text: string,
@@ -509,6 +524,51 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+describe("ChatShell transcript Markdown streaming", () => {
+	test("only the latest assistant message in the active turn remains streaming", async () => {
+		const messages = [
+			userMessage("user-1"),
+			assistantMessage([{ text: "Completed answer", type: "text" }]),
+			userMessage("user-2"),
+			assistantMessage(
+				[{ text: "Current answer", type: "text" }],
+				"assistant-2"
+			),
+		];
+		const active = await renderChatShell(messages, {
+			height: 20,
+			isBusy: true,
+			width: 100,
+		});
+		const completed = await renderChatShell(messages, {
+			height: 20,
+			isBusy: false,
+			width: 100,
+		});
+
+		try {
+			const activeMarkdown = findMarkdownRenderables(
+				active.setup.renderer.root
+			).filter(({ content }) => content.includes("answer"));
+			const completedMarkdown = findMarkdownRenderables(
+				completed.setup.renderer.root
+			).filter(({ content }) => content.includes("answer"));
+			expect(activeMarkdown).toHaveLength(2);
+			expect(activeMarkdown.map(({ streaming }) => streaming)).toEqual([
+				false,
+				true,
+			]);
+			expect(completedMarkdown.map(({ streaming }) => streaming)).toEqual([
+				false,
+				false,
+			]);
+		} finally {
+			active.setup.renderer.destroy();
+			completed.setup.renderer.destroy();
+		}
+	});
+});
+
 describe("ChatShell composer focus", () => {
 	test("routes typing to the composer when terminal focus returns", async () => {
 		const { setup } = await renderChatShell([], { height: 20, width: 100 });
@@ -1056,6 +1116,49 @@ describe("ChatShell waiting message strip", () => {
 });
 
 describe("ChatShell activity footer", () => {
+	test("keeps the workspace path on one row above context usage", async () => {
+		const messages: SessionMessage[] = [
+			userMessage("user-1"),
+			{
+				...assistantMessage(
+					[{ text: "assistant-1", type: "text" }],
+					"assistant-1"
+				),
+				metadata: {
+					model: {
+						modelId: modelId("gpt-5.6-luna"),
+						providerId: "openai",
+					},
+					usage: { inputTokens: 7336, outputTokens: 0 },
+				},
+			},
+		];
+		const { setup } = await renderChatShell(messages, {
+			height: 24,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = await waitForFrameText(setup, "0.7%/1.1m (auto)");
+			const rows = frame.split("\n");
+			const pathRow = rows.findIndex((row) =>
+				row.includes(shortenHomePath(process.cwd()))
+			);
+			const usageRow = rows.findIndex((row) =>
+				row.includes("0.7%/1.1m (auto)")
+			);
+
+			expect(pathRow).toBeGreaterThanOrEqual(0);
+			expect(usageRow).toBeGreaterThan(pathRow);
+			const pathColumn = rows[pathRow]?.indexOf(shortenHomePath(process.cwd()));
+			const usageColumn = rows[usageRow]?.indexOf("0.7%");
+			expect(usageColumn).toBe(pathColumn);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("renders a fading progress trail and keeps the interrupt hint while busy", async () => {
 		const { setup } = await renderChatShell([], {
 			height: 12,
@@ -1119,7 +1222,7 @@ describe("ChatShell activity footer", () => {
 			const loadingFrame = setup.captureCharFrame();
 			expect(loadingFrame).toContain("Compacting context... (esc to cancel)");
 			expect(loadingFrame).toContain("Compacting context · Esc cancel");
-			expect(loadingFrame).toContain("1%(7.3K/1.1M)");
+			expect(loadingFrame).toContain("0.7%/1.1m (auto)");
 			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
 
 			await Bun.sleep(2000);
@@ -1511,7 +1614,7 @@ describe("ChatShell shell output blocks", () => {
 		});
 		const { holder, setup } = await renderChatShell(
 			[assistantMessage([alpha, beta, streamedText("first stream")])],
-			{ height: 60, width: 100 }
+			{ height: 60, isBusy: true, width: 100 }
 		);
 
 		try {
