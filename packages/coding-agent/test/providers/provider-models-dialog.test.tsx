@@ -2,12 +2,20 @@ import { expect, test } from "bun:test";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { ProviderModel } from "@wincode/ai";
+import {
+	createProviderCollection,
+	type Provider,
+	type ProviderModel,
+} from "@wincode/ai";
 import { act, useEffect, useRef } from "react";
-import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import {
+	createInteractiveProviderController,
+	type InteractiveProviderController,
+} from "@/modules/providers/interactive-provider-controller";
 import type {
 	ProviderModelSelection,
 	ProviderModelSelectionCandidate,
+	ProviderModelSelectionRefreshResult,
 } from "@/modules/providers/provider-model-selection";
 import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
 import {
@@ -29,6 +37,80 @@ const models: readonly ProviderModel[] = [
 const candidates = models.map((model) =>
 	fromPartial<ProviderModelSelectionCandidate>({ model })
 );
+const createFailingDiscoveryController = () => {
+	const credentialStore = new Map<string, unknown>([
+		["openai", "fixture-provider-credential"],
+	]);
+	const modelStore = new Map<string, readonly ProviderModel[]>([
+		["openai", models.filter((model) => model.providerId === "openai")],
+	]);
+	const providers = createProviderCollection({
+		credentialStore: {
+			delete: (providerId) => void credentialStore.delete(providerId),
+			get: (providerId) => credentialStore.get(providerId),
+			set: (providerId, credential) =>
+				void credentialStore.set(providerId, credential),
+		},
+		modelStore: {
+			get: (providerId) => modelStore.get(providerId),
+			set: (providerId, providerModels) =>
+				void modelStore.set(providerId, providerModels),
+		},
+	});
+	const provider: Provider = {
+		discoverModels: async () => {
+			throw new Error("fixture discovery unavailable");
+		},
+		id: "openai",
+		models: [],
+		resolveAuthorization: async ({ credential }) =>
+			credential === undefined ? null : { authorization: credential },
+		async *streamChat() {
+			yield { type: "finish" };
+		},
+	};
+	providers.register(provider);
+	return {
+		controller: createInteractiveProviderController(providers, {
+			getDiscoverableProviderIds: () => ["openai"],
+			withSessionWork: async (action) => action(),
+		}),
+		providers,
+	};
+};
+const createUnconnectedOpenRouterController = () => {
+	const providers = createProviderCollection({
+		credentialStore: {
+			delete: () => undefined,
+			get: () => undefined,
+			set: () => undefined,
+		},
+		modelStore: {
+			get: () => undefined,
+			set: () => undefined,
+		},
+	});
+	providers.register({
+		discoverModels: async () => {
+			throw new Error("Discovery should not run without credentials.");
+		},
+		id: "openrouter",
+		models: [],
+		resolveAuthorization: async ({ credential }) =>
+			credential === undefined ? null : { authorization: credential },
+		async *streamChat() {
+			yield { type: "finish" };
+		},
+	});
+	return {
+		controller: createInteractiveProviderController(providers, {
+			getDiscoverableProviderIds: () => ["openrouter"],
+			withSessionWork: async (action) => action(),
+		}),
+		providers,
+	};
+};
+
 const renderPicker = async (
 	pickerController: InteractiveProviderController,
 	recentSelections: readonly ProviderModelSelection[] = [],
@@ -98,7 +180,11 @@ test("model picker preserves its search, Recent, and provider-group surface", as
 	const testController = fromPartial<InteractiveProviderController>({
 		getAvailableProviderModelSelectionCandidates: () =>
 			cachedCandidates.promise,
-		refreshProviderModelSelectionCandidates: async () => candidates,
+		refreshProviderModelSelectionCandidates: async () => ({
+			candidates,
+			failedProviderIds: [],
+			refreshedProviderIds: ["openai", "anthropic"],
+		}),
 	});
 	const setup = await renderPicker(testController, [
 		fromPartial<ProviderModelSelection>({
@@ -137,17 +223,14 @@ test("refreshes known models in the background after cached models render", asyn
 	});
 	const cachedCandidates =
 		Promise.withResolvers<readonly ProviderModelSelectionCandidate[]>();
-	const refresh =
-		Promise.withResolvers<readonly ProviderModelSelectionCandidate[]>();
-	const retryRefresh =
-		Promise.withResolvers<readonly ProviderModelSelectionCandidate[]>();
-	let refreshCalls = 0;
+	const refresh = Promise.withResolvers<ProviderModelSelectionRefreshResult>();
+	const refreshStarted = Promise.withResolvers<void>();
 	const refreshController = fromPartial<InteractiveProviderController>({
 		getAvailableProviderModelSelectionCandidates: () =>
 			cachedCandidates.promise,
 		refreshProviderModelSelectionCandidates: () => {
-			refreshCalls += 1;
-			return refreshCalls === 1 ? refresh.promise : retryRefresh.promise;
+			refreshStarted.resolve();
+			return refresh.promise;
 		},
 	});
 	const setup = await renderPicker(refreshController);
@@ -158,36 +241,23 @@ test("refreshes known models in the background after cached models render", asyn
 			await Bun.sleep(20);
 		});
 		await flushTestRenderer(setup, 3);
-		await setup.waitForFrame(
-			(frame) =>
-				frame.includes("gpt-4o") && frame.includes("Refreshing Known Models…")
-		);
-		expect(refreshCalls).toBe(1);
+		await refreshStarted.promise;
+		await setup.waitForFrame((frame) => frame.includes("gpt-4o"));
 		expect(setup.captureCharFrame()).not.toContain("gpt-5.1");
 
 		await act(async () => {
-			refresh.resolve([...candidates, refreshedCandidate]);
+			refresh.resolve({
+				candidates: [...candidates, refreshedCandidate],
+				failedProviderIds: [],
+				refreshedProviderIds: ["openai"],
+			});
 			await Bun.sleep(20);
 		});
 		await flushTestRenderer(setup, 3);
 		await setup.waitForFrame((frame) => frame.includes("gpt-5.1"));
-		expect(setup.captureCharFrame()).toContain("Refresh Known Models");
-
-		await act(async () => {
-			setup.mockInput.typeText("refresh");
-			await Bun.sleep(20);
-		});
-		await flushTestRenderer(setup, 2);
-		await act(async () => {
-			setup.mockInput.pressEnter();
-			await Bun.sleep(20);
-		});
-		expect(refreshCalls).toBe(2);
-		await act(async () => {
-			retryRefresh.resolve([...candidates, refreshedCandidate]);
-			await Bun.sleep(20);
-		});
-		await flushTestRenderer(setup, 3);
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("gpt-5.1");
+		expect(frame).not.toContain("Refresh Known Models");
 	} finally {
 		await act(() => setup.renderer.destroy());
 	}
@@ -196,13 +266,16 @@ test("refreshes known models in the background after cached models render", asyn
 test("cached models stay selectable while the background refresh is pending", async () => {
 	const cachedCandidates =
 		Promise.withResolvers<readonly ProviderModelSelectionCandidate[]>();
-	const refresh =
-		Promise.withResolvers<readonly ProviderModelSelectionCandidate[]>();
+	const refresh = Promise.withResolvers<ProviderModelSelectionRefreshResult>();
+	const refreshStarted = Promise.withResolvers<void>();
 	let selectedModelId: string | undefined;
 	const controller = fromPartial<InteractiveProviderController>({
 		getAvailableProviderModelSelectionCandidates: () =>
 			cachedCandidates.promise,
-		refreshProviderModelSelectionCandidates: () => refresh.promise,
+		refreshProviderModelSelectionCandidates: () => {
+			refreshStarted.resolve();
+			return refresh.promise;
+		},
 		selectProviderModelSelectionCandidate,
 	});
 	const setup = await renderPicker(controller, [], (model) => {
@@ -215,10 +288,8 @@ test("cached models stay selectable while the background refresh is pending", as
 			await Bun.sleep(20);
 		});
 		await flushTestRenderer(setup, 3);
-		await setup.waitForFrame(
-			(frame) =>
-				frame.includes("Refreshing Known Models…") && frame.includes("gpt-4o")
-		);
+		await refreshStarted.promise;
+		await setup.waitForFrame((frame) => frame.includes("gpt-4o"));
 
 		await act(async () => {
 			setup.mockInput.typeText("gpt-4o");
@@ -235,44 +306,65 @@ test("cached models stay selectable while the background refresh is pending", as
 	}
 });
 
-test("preserves last-known models and reports an automatic refresh failure", async () => {
-	const cachedCandidates =
-		Promise.withResolvers<readonly ProviderModelSelectionCandidate[]>();
-	const refresh =
-		Promise.withResolvers<readonly ProviderModelSelectionCandidate[]>();
-	let refreshCalls = 0;
-	const failedRefreshController = fromPartial<InteractiveProviderController>({
-		getAvailableProviderModelSelectionCandidates: () =>
-			cachedCandidates.promise,
-		refreshProviderModelSelectionCandidates: () => {
-			refreshCalls += 1;
-			return refresh.promise;
-		},
-	});
-	const setup = await renderPicker(failedRefreshController);
+test("an unconnected OpenRouter shows neither a refresh error nor false success", async () => {
+	const { controller, providers } = createUnconnectedOpenRouterController();
+	const setup = await renderPicker(controller);
 	try {
-		await flushTestRenderer(setup, 1);
-		await act(async () => {
-			cachedCandidates.resolve(candidates);
-			await Bun.sleep(20);
-		});
-		await flushTestRenderer(setup, 3);
-		await setup.waitForFrame((frame) =>
-			frame.includes("Refreshing Known Models…")
-		);
-		await act(async () => {
-			refresh.reject(new Error("provider catalog unreachable"));
-			await Bun.sleep(20);
-		});
-		await flushTestRenderer(setup, 2);
-		await setup.waitForFrame((frame) =>
-			frame.includes("provider catalog unreachable")
-		);
+		await flushTestRenderer(setup, 5);
+		await setup.waitForFrame((frame) => frame.includes("Search models"));
 		const frame = setup.captureCharFrame();
-		expect(refreshCalls).toBe(1);
-		expect(frame).toContain("gpt-4o");
-		expect(frame).toContain("Refresh Known Models");
+		expect(frame).not.toContain("Could not refresh openrouter");
+		expect(frame).not.toContain("Model catalogs refreshed.");
 	} finally {
 		await act(() => setup.renderer.destroy());
+		await providers.close();
+	}
+});
+
+test("background discovery failure identifies provider and keeps cached models", async () => {
+	const { controller, providers } = createFailingDiscoveryController();
+	const refreshProbe = await providers.refreshModels({
+		providerIds: ["openai"],
+	});
+	expect(refreshProbe.errors.get("openai")?.message).toBe(
+		"fixture discovery unavailable"
+	);
+	const setup = await renderPicker(controller);
+	try {
+		await flushTestRenderer(setup, 5);
+		await setup.waitForFrame((frame) => frame.includes("gpt-4o"));
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("gpt-4o");
+		expect(frame).toContain("Could not refresh openai; showing cached models.");
+		const frameLines = frame.split("\n");
+		const errorLine = frameLines.find((line) =>
+			line.includes("Could not refresh openai;")
+		);
+		const searchLine = frameLines.find((line) =>
+			line.includes("Search models")
+		);
+		const modelLineIndex = frameLines.findIndex((line) =>
+			line.includes("gpt-4o")
+		);
+		const errorLineIndex = frameLines.findIndex((line) =>
+			line.includes("Could not refresh openai;")
+		);
+		const hintLineIndex = frameLines.findIndex((line) =>
+			line.includes("navigate")
+		);
+		expect(errorLine).toBeDefined();
+		expect(searchLine).toBeDefined();
+		expect(errorLine?.indexOf("Could not refresh openai;")).toBe(
+			searchLine?.indexOf("Search models")
+		);
+		expect(errorLineIndex).toBeGreaterThan(modelLineIndex);
+		expect(errorLineIndex).toBeLessThan(hintLineIndex);
+		expect(frame).not.toContain(
+			"Known Model refresh failed; the last-known model snapshots were retained."
+		);
+		expect(frame).not.toContain("Refresh Known Models");
+	} finally {
+		await act(() => setup.renderer.destroy());
+		await providers.close();
 	}
 });

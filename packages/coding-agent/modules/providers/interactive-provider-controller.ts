@@ -23,6 +23,7 @@ import {
 	isSameProviderModelIdentity,
 	type ProviderModelSelection,
 	type ProviderModelSelectionCandidate,
+	type ProviderModelSelectionRefreshResult,
 	type ProviderModelSelectionSnapshot,
 	providerModelSelectionCandidateForModel,
 	providerModelSelectionForCandidate,
@@ -294,7 +295,7 @@ export type InteractiveProviderController = Readonly<{
 	) => Promise<readonly ProviderModel[]>;
 	refreshProviderModelSelectionCandidates?: (
 		options?: RefreshModelsOptions
-	) => Promise<readonly ProviderModelSelectionCandidate[]>;
+	) => Promise<ProviderModelSelectionRefreshResult>;
 	selectProviderModelSelectionCandidate?: <Result>(
 		candidate: ProviderModelSelectionCandidate,
 		action: (
@@ -590,15 +591,32 @@ export const createInteractiveProviderController = (
 			}
 		}
 	};
-	const refreshDiscoverableProviderModels = async (
-		refreshOptions?: RefreshModelsOptions
-	): Promise<void> => {
-		const providerIds = getDiscoverableProviderIds();
+	const refreshDiscoverableProviderModels = async ({
+		configuredOnly = false,
+		refreshOptions,
+	}: Readonly<{
+		configuredOnly?: boolean;
+		refreshOptions?: RefreshModelsOptions;
+	}> = {}): Promise<
+		Readonly<{ providerIds: readonly string[]; result: RefreshModelsResult }>
+	> => {
+		throwIfAborted(refreshOptions?.signal);
+		let providerIds = getDiscoverableProviderIds();
+		if (configuredOnly) {
+			const configuredProviderIds = new Set(
+				await providers.getConfiguredProviderIds()
+			);
+			throwIfAborted(refreshOptions?.signal);
+			providerIds = providerIds.filter((providerId) =>
+				configuredProviderIds.has(providerId)
+			);
+		}
 		const result = await providers.refreshModels({
 			...refreshOptions,
 			providerIds,
 		});
-		throwIfRefreshFailed(providerIds, result, refreshOptions?.signal);
+		throwIfAborted(refreshOptions?.signal);
+		return { providerIds, result };
 	};
 	const refreshProviderModels = (
 		providerId: string,
@@ -616,7 +634,10 @@ export const createInteractiveProviderController = (
 		withSessionWork(() =>
 			refreshWithAvailabilityNotification(async () => {
 				await restoreModels();
-				await refreshDiscoverableProviderModels(refreshOptions);
+				const { providerIds, result } = await refreshDiscoverableProviderModels(
+					{ refreshOptions }
+				);
+				throwIfRefreshFailed(providerIds, result, refreshOptions?.signal);
 				return providers.getAvailable();
 			})
 		);
@@ -633,21 +654,34 @@ export const createInteractiveProviderController = (
 		});
 	const refreshProviderModelSelectionCandidates = (
 		refreshOptions?: RefreshModelsOptions
-	): Promise<readonly ProviderModelSelectionCandidate[]> =>
+	): Promise<ProviderModelSelectionRefreshResult> =>
 		withRequiredProviderModelSelectionWork(() =>
 			refreshWithAvailabilityNotification(async () => {
 				const snapshot = currentProviderModelSelectionSnapshot();
 				await restoreModels();
 				assertProviderModelSelectionSnapshotCurrent(snapshot);
-				await refreshDiscoverableProviderModels(refreshOptions);
+				const { providerIds, result } = await refreshDiscoverableProviderModels(
+					{
+						configuredOnly: true,
+						refreshOptions,
+					}
+				);
 				const currentSnapshot =
 					assertProviderModelSelectionSnapshotCurrent(snapshot);
 				const models = await providers.getAvailable();
 				assertProviderModelSelectionSnapshotCurrent(currentSnapshot);
-				return providerModelSelectionCandidatesForModels(
-					models,
-					currentSnapshot
-				);
+				return {
+					candidates: providerModelSelectionCandidatesForModels(
+						models,
+						currentSnapshot
+					),
+					failedProviderIds: providerIds.filter((providerId) =>
+						result.errors.has(providerId)
+					),
+					refreshedProviderIds: providerIds.filter(
+						(providerId) => !result.errors.has(providerId)
+					),
+				};
 			})
 		);
 	const selectProviderModelSelectionCandidate = <Result>(

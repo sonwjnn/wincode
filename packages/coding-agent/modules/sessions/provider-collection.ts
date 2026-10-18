@@ -342,6 +342,8 @@ export const createInteractiveSessionProviderCollection = async (
 		deleteCredential: (providerId) =>
 			activeCollection().deleteCredential(providerId),
 		getAvailable: (providerId) => activeCollection().getAvailable(providerId),
+		getConfiguredProviderIds: () =>
+			activeCollection().getConfiguredProviderIds(),
 		getModel: (providerId, modelId) =>
 			activeCollection().getModel(providerId, modelId),
 		getModels: () => activeCollection().getModels(),

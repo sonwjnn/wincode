@@ -128,6 +128,7 @@ const createProviderModelPickerController = ({
 	createInteractiveProviderController(
 		fromPartial<ProviderCollection>({
 			getAvailable,
+			getConfiguredProviderIds: async () => [],
 			getModels: () => [],
 			restoreModels: async () => undefined,
 		}),
@@ -256,7 +257,9 @@ test("Provider Model picker blocks credential reads when trusted and Host snapsh
 	);
 
 	await setup.waitForFrame((frame) =>
-		frame.includes(UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE)
+		frame
+			.replace(/\s+/gu, " ")
+			.includes(UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE)
 	);
 	expect(credentialReads).toBe(0);
 });

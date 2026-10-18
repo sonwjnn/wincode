@@ -20,6 +20,7 @@ import {
 } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { DialogInset } from "@/shared/ui/dialog-inset";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
@@ -39,17 +40,10 @@ type Row =
 			kind: "model";
 			candidate: ProviderModelSelectionCandidate;
 			recent: boolean;
-	  }>
-	| Readonly<{ kind: "refresh" }>;
-
-type ModelRefreshRequest = Readonly<{
-	background?: boolean;
-	signal?: AbortSignal;
-}>;
+	  }>;
 
 type ModelPickerRowProps = Readonly<{
 	isActive: boolean;
-	isRefreshing: boolean;
 	isSearching: boolean;
 	isSelected: boolean;
 	providerName: (providerId: string) => string;
@@ -59,12 +53,23 @@ type ModelPickerRowProps = Readonly<{
 const EMPTY_RECENT_MODEL_SELECTIONS: readonly ProviderModelSelection[] = [];
 const PROVIDER_SDK_SUFFIX = / Provider SDK$/u;
 
+type RefreshStatus = "refreshing" | "success" | null;
+
+const getRefreshErrorMessage = (
+	failedProviderIds: readonly string[]
+): string | null => {
+	if (failedProviderIds.length === 0) {
+		return null;
+	}
+	if (failedProviderIds.length === 1) {
+		return `Could not refresh ${failedProviderIds[0]}; showing cached models.`;
+	}
+	return `Could not refresh ${failedProviderIds.length} model catalogs (${failedProviderIds.join(", ")}); showing cached models.`;
+};
+
 const getModelSectionKey = (row: Row): string => {
 	if (row.kind === "header") {
 		return row.sectionKey;
-	}
-	if (row.kind === "refresh") {
-		return "refresh";
 	}
 	return row.recent ? "recent" : `provider:${row.candidate.model.providerId}`;
 };
@@ -95,8 +100,6 @@ const getModelSearchText = (
 	switch (row.kind) {
 		case "header":
 			return "";
-		case "refresh":
-			return "refresh";
 		case "model":
 			return `${row.candidate.model.modelId} ${providerName(row.candidate.model.providerId)} ${row.candidate.model.providerId}`;
 		default:
@@ -106,7 +109,6 @@ const getModelSearchText = (
 
 const ModelPickerRow = ({
 	isActive,
-	isRefreshing,
 	isSearching,
 	isSelected,
 	providerName,
@@ -121,16 +123,6 @@ const ModelPickerRow = ({
 			</SelectableDialogItem>
 		);
 	}
-	if (row.kind === "refresh") {
-		return (
-			<SelectableDialogItem>
-				<text fg={isSelected ? selectedTextColor : colors.primary}>
-					{isRefreshing ? "Refreshing Known Models…" : "Refresh Known Models"}
-				</text>
-			</SelectableDialogItem>
-		);
-	}
-
 	const primaryTextColor = isSelected ? selectedTextColor : colors.text;
 	const secondaryTextColor = isSelected ? selectedTextColor : colors.textMuted;
 	const providerDisplayName = providerName(row.candidate.model.providerId);
@@ -180,8 +172,7 @@ export const ProviderModelsDialogContent = ({
 	>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
-	const [isRefreshing, setIsRefreshing] = useState(false);
-	const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
+	const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>(null);
 	const [isSelecting, setIsSelecting] = useState(false);
 
 	useEffect(() => {
@@ -219,43 +210,43 @@ export const ProviderModelsDialogContent = ({
 	}, [controller]);
 
 	const refreshModels = useCallback(
-		async (request: ModelRefreshRequest = {}): Promise<void> => {
-			const { background = false, signal } = request;
+		async (signal?: AbortSignal): Promise<void> => {
 			const isAborted = (): boolean => signal?.aborted === true;
 			if (isAborted()) {
 				return;
 			}
-			if (!background) {
-				setError(null);
-			}
-			setIsRefreshing(true);
-			setIsBackgroundRefreshing(background);
+			setRefreshStatus("refreshing");
 			try {
 				const refreshCandidates =
 					controller.refreshProviderModelSelectionCandidates;
 				if (refreshCandidates === undefined) {
 					throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
 				}
-				const refreshedCandidates = await refreshCandidates(
+				const refreshResult = await refreshCandidates(
 					signal === undefined ? undefined : { signal }
 				);
 				if (!isAborted()) {
-					setCandidates(refreshedCandidates);
-					setError(null);
+					setCandidates(refreshResult.candidates);
+					const refreshError = getRefreshErrorMessage(
+						refreshResult.failedProviderIds
+					);
+					setError(refreshError);
+					setRefreshStatus(
+						refreshError === null &&
+							refreshResult.refreshedProviderIds.length > 0
+							? "success"
+							: null
+					);
 				}
 			} catch (refreshError) {
 				if (!isAborted()) {
 					setError(
 						getErrorMessage(
 							refreshError,
-							"Known Model refresh failed; the last-known models were retained."
+							"Could not refresh model catalogs; showing cached models."
 						)
 					);
-				}
-			} finally {
-				if (!isAborted()) {
-					setIsRefreshing(false);
-					setIsBackgroundRefreshing(false);
+					setRefreshStatus(null);
 				}
 			}
 		},
@@ -270,16 +261,12 @@ export const ProviderModelsDialogContent = ({
 			controller.getAvailableProviderModelSelectionCandidates === undefined ||
 			controller.refreshProviderModelSelectionCandidates === undefined
 		) {
-			setIsRefreshing(false);
-			setIsBackgroundRefreshing(false);
+			setRefreshStatus(null);
 			return;
 		}
 
 		const abortController = new AbortController();
-		void refreshModels({
-			background: true,
-			signal: abortController.signal,
-		});
+		void refreshModels(abortController.signal);
 		return () => abortController.abort();
 	}, [controller, isLoading, refreshModels]);
 
@@ -372,25 +359,33 @@ export const ProviderModelsDialogContent = ({
 						})),
 					];
 		}),
-		{ kind: "refresh" },
 	];
 	useDialogEscape();
 
 	return (
 		<>
-			{error ? <text fg={colors.error}>{error}</text> : null}
 			{isLoading ? (
-				<text fg={colors.textMuted}>Restoring Known Models…</text>
+				<DialogInset>
+					<text fg={colors.textMuted}>Restoring Known Models…</text>
+				</DialogInset>
+			) : null}
+			{refreshStatus === "refreshing" ? (
+				<DialogInset>
+					<text fg={colors.textMuted}>Refreshing model catalogs…</text>
+				</DialogInset>
+			) : null}
+			{refreshStatus === "success" ? (
+				<DialogInset>
+					<text fg={colors.success}>Model catalogs refreshed.</text>
+				</DialogInset>
 			) : null}
 			<SearchListDialogWrapper
 				emptyText="No matching models"
+				error={error}
 				getItemSectionKey={getModelSectionKey}
 				getKey={(row) => {
 					if (row.kind === "header") {
 						return `header:${row.label}`;
-					}
-					if (row.kind === "refresh") {
-						return "refresh";
 					}
 					return `model:${row.candidate.model.providerId}:${row.candidate.model.modelId}`;
 				}}
@@ -399,22 +394,12 @@ export const ProviderModelsDialogContent = ({
 					row.kind === "model" &&
 					isSameProviderModelIdentity(row.candidate.model, currentModel)
 				}
-				isItemSelectable={(row) => {
-					if (isLoading || isSelecting) {
-						return false;
-					}
-					if (row.kind === "model") {
-						return !isRefreshing || isBackgroundRefreshing;
-					}
-					return row.kind === "refresh" && !isRefreshing;
-				}}
+				isItemSelectable={(row) =>
+					!(isLoading || isSelecting) && row.kind === "model"
+				}
 				items={rows}
 				maxVisibleItems={Math.max(1, Math.floor(height * 0.5))}
 				onSelect={(row) => {
-					if (row.kind === "refresh") {
-						void refreshModels();
-						return;
-					}
 					if (row.kind === "model") {
 						void selectCandidate(row.candidate);
 					}
@@ -423,7 +408,6 @@ export const ProviderModelsDialogContent = ({
 				renderItem={(row, isSelected, isActive, isSearching) => (
 					<ModelPickerRow
 						isActive={isActive}
-						isRefreshing={isRefreshing}
 						isSearching={isSearching}
 						isSelected={isSelected}
 						providerName={providerName}

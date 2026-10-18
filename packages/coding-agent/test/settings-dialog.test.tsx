@@ -393,10 +393,11 @@ test("keeps the persisted value visible while a write is pending and reports err
 	write.reject(new Error("Config file is read-only."));
 	await flushUi(setup);
 	await flushUi(setup);
-	expect(setup.captureCharFrame()).toContain(
-		"Error: Config file is read-only."
-	);
-	expect(setup.captureCharFrame()).toContain("Auto-compact: off");
+	const frame = setup.captureCharFrame();
+	const errorIndex = frame.indexOf("Error: Config file is read-only.");
+	expect(errorIndex).toBeGreaterThan(frame.indexOf("Search"));
+	expect(errorIndex).toBeLessThan(frame.indexOf("change"));
+	expect(frame).toContain("Auto-compact: off");
 	await act(() => setup.renderer.destroy());
 });
 test("refreshes the persisted value when the latest queued mutation fails", async () => {

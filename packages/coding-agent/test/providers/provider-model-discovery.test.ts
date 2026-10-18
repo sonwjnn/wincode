@@ -15,15 +15,17 @@ type DiscoverModels = NonNullable<Provider["discoverModels"]>;
 
 const createDiscoveryHarness = (
 	discoverModels: DiscoverModels,
-	initialModels?: readonly ProviderModel[]
+	initialModels?: readonly ProviderModel[],
+	hasCredential = true
 ) => {
 	const storedModels = new Map<string, readonly ProviderModel[]>();
 	if (initialModels !== undefined) {
 		storedModels.set(PROVIDER_ID, initialModels);
 	}
-	const credentials = new Map<string, unknown>([
-		[PROVIDER_ID, "fake-provider-credential"],
-	]);
+	const credentials = new Map<string, unknown>();
+	if (hasCredential) {
+		credentials.set(PROVIDER_ID, "fake-provider-credential");
+	}
 	const providers = createProviderCollection({
 		credentialStore: {
 			delete: (id) => void credentials.delete(id),
@@ -66,6 +68,28 @@ const selectionOperationsFor = (controller: InteractiveProviderController) => {
 	}
 	return { getCandidates, refreshCandidates, selectCandidate };
 };
+
+test("an unconnected discoverable provider does not become a picker refresh failure", async () => {
+	let discoveryCalls = 0;
+	const { controller, providers } = createDiscoveryHarness(
+		async () => {
+			discoveryCalls += 1;
+			throw new Error("OpenRouter requires an API key");
+		},
+		undefined,
+		false
+	);
+
+	try {
+		const { refreshCandidates } = selectionOperationsFor(controller);
+		const result = await refreshCandidates();
+		expect(discoveryCalls).toBe(0);
+		expect(result.failedProviderIds).toEqual([]);
+		expect(result.refreshedProviderIds).toEqual([]);
+	} finally {
+		await providers.close();
+	}
+});
 
 test("a model removed by discovery cannot be selected from a stale candidate", async () => {
 	const lastKnownModel: ProviderModel = {
@@ -174,9 +198,12 @@ test("failed or cancelled discovery leaves last-known model candidates selectabl
 			throw new Error("The stored Provider Model should be selectable.");
 		}
 
-		await expect(refreshCandidates()).rejects.toThrow(
-			"Known Model refresh failed"
-		);
+		const refreshResult = await refreshCandidates();
+		expect(refreshResult.failedProviderIds).toEqual([PROVIDER_ID]);
+		expect(refreshResult.refreshedProviderIds).toEqual([]);
+		expect(refreshResult.candidates.map(({ model }) => model)).toEqual([
+			lastKnownModel,
+		]);
 		expect(storedModels.get(PROVIDER_ID)).toEqual([lastKnownModel]);
 		await expect(selectCandidate(candidate, (model) => model)).resolves.toEqual(
 			lastKnownModel
@@ -194,6 +221,79 @@ test("failed or cancelled discovery leaves last-known model candidates selectabl
 		await expect(selectCandidate(candidate, (model) => model)).resolves.toEqual(
 			lastKnownModel
 		);
+	} finally {
+		await providers.close();
+	}
+});
+
+test("partial discovery refresh updates successes and reports cached failures", async () => {
+	const successfulProviderId = "openrouter";
+	const failedProviderId = "deepseek";
+	const refreshedModel: ProviderModel = {
+		modelId: "refreshed-model",
+		protocolId: "fixture-wire",
+		providerId: successfulProviderId,
+	};
+	const lastKnownFailedModel: ProviderModel = {
+		modelId: "last-known-failed-model",
+		protocolId: "fixture-wire",
+		providerId: failedProviderId,
+	};
+	const credentials = new Map<string, unknown>([
+		[successfulProviderId, "fixture-credential"],
+		[failedProviderId, "fixture-credential"],
+	]);
+	const storedModels = new Map<string, readonly ProviderModel[]>([
+		[successfulProviderId, []],
+		[failedProviderId, [lastKnownFailedModel]],
+	]);
+	const providers = createProviderCollection({
+		credentialStore: {
+			delete: (providerId) => void credentials.delete(providerId),
+			get: (providerId) => credentials.get(providerId),
+			set: (providerId, credential) =>
+				void credentials.set(providerId, credential),
+		},
+		modelStore: {
+			get: (providerId) => storedModels.get(providerId),
+			set: (providerId, models) => void storedModels.set(providerId, models),
+		},
+	});
+	const registerProvider = (
+		providerId: string,
+		discoverModels: DiscoverModels
+	): void => {
+		providers.register({
+			discoverModels,
+			id: providerId,
+			models: [],
+			resolveAuthorization: async ({ credential }) =>
+				credential === undefined ? null : { authorization: credential },
+			async *streamChat() {
+				yield { type: "finish" };
+			},
+		});
+	};
+	registerProvider(successfulProviderId, async () => [refreshedModel]);
+	registerProvider(failedProviderId, async () => {
+		throw new Error("discovery endpoint unavailable");
+	});
+	const controller = createInteractiveProviderController(providers, {
+		getDiscoverableProviderIds: () => [successfulProviderId, failedProviderId],
+		withSessionWork: async (action) => action(),
+	});
+
+	try {
+		const { refreshCandidates } = selectionOperationsFor(controller);
+		const result = await refreshCandidates();
+		expect(result.failedProviderIds).toEqual([failedProviderId]);
+		expect(result.refreshedProviderIds).toEqual([successfulProviderId]);
+		expect(result.candidates.map(({ model }) => model.modelId).sort()).toEqual([
+			"last-known-failed-model",
+			"refreshed-model",
+		]);
+		expect(storedModels.get(successfulProviderId)).toEqual([refreshedModel]);
+		expect(storedModels.get(failedProviderId)).toEqual([lastKnownFailedModel]);
 	} finally {
 		await providers.close();
 	}

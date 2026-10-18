@@ -172,59 +172,55 @@ const ProviderPicker = ({
 	useDialogEscape();
 
 	return (
-		<box flexDirection="column" gap={1}>
-			{error === undefined ? null : <text fg={colors.error}>{error}</text>}
-			<SearchListDialogWrapper
-				emptyText="No matching providers"
-				getKey={(provider) => provider.providerId}
-				getSearchText={(provider) =>
-					`${provider.displayName} ${getProviderDetails(provider.options)} ${provider.providerId}`
-				}
-				isItemActive={(provider) =>
-					connectedProviderIds.has(provider.providerId)
-				}
-				isItemSelectable={() => connectingProviderId === undefined}
-				items={providers}
-				onSelect={onSelect}
-				placeholder="Search providers"
-				renderItem={(provider, isSelected, isActive) => (
-					<SelectableDialogItem
-						status={
-							isActive ? (
-								<text
-									fg={isSelected ? selectedTextColor : colors.success}
-									selectable={false}
-								>
-									{"✓"}
-								</text>
-							) : null
-						}
-					>
-						<box flexDirection="row" gap={1}>
-							<box flexShrink={0} width={labelColumnWidth}>
-								<text
-									fg={isSelected ? selectedTextColor : colors.text}
-									selectable={false}
-								>
-									{connectingProviderId === provider.providerId
-										? `Connecting ${provider.displayName}…`
-										: provider.displayName}
-								</text>
-							</box>
-							<box flexGrow={1} flexShrink={1} overflow="hidden">
-								<text
-									attributes={isSelected ? undefined : TextAttributes.DIM}
-									fg={isSelected ? selectedTextColor : colors.textMuted}
-									selectable={false}
-								>
-									{getProviderDetails(provider.options)}
-								</text>
-							</box>
+		<SearchListDialogWrapper
+			emptyText="No matching providers"
+			error={error}
+			getKey={(provider) => provider.providerId}
+			getSearchText={(provider) =>
+				`${provider.displayName} ${getProviderDetails(provider.options)} ${provider.providerId}`
+			}
+			isItemActive={(provider) => connectedProviderIds.has(provider.providerId)}
+			isItemSelectable={() => connectingProviderId === undefined}
+			items={providers}
+			onSelect={onSelect}
+			placeholder="Search providers"
+			renderItem={(provider, isSelected, isActive) => (
+				<SelectableDialogItem
+					status={
+						isActive ? (
+							<text
+								fg={isSelected ? selectedTextColor : colors.success}
+								selectable={false}
+							>
+								{"✓"}
+							</text>
+						) : null
+					}
+				>
+					<box flexDirection="row" gap={1}>
+						<box flexShrink={0} width={labelColumnWidth}>
+							<text
+								fg={isSelected ? selectedTextColor : colors.text}
+								selectable={false}
+							>
+								{connectingProviderId === provider.providerId
+									? `Connecting ${provider.displayName}…`
+									: provider.displayName}
+							</text>
 						</box>
-					</SelectableDialogItem>
-				)}
-			/>
-		</box>
+						<box flexGrow={1} flexShrink={1} overflow="hidden">
+							<text
+								attributes={isSelected ? undefined : TextAttributes.DIM}
+								fg={isSelected ? selectedTextColor : colors.textMuted}
+								selectable={false}
+							>
+								{getProviderDetails(provider.options)}
+							</text>
+						</box>
+					</box>
+				</SelectableDialogItem>
+			)}
+		/>
 	);
 };
 

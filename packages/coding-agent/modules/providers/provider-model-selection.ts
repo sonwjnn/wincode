@@ -44,6 +44,13 @@ export type ProviderModelSelectionCandidate = Readonly<{
 	snapshot: ProviderModelSelectionSnapshot;
 }>;
 
+/** Refreshed model choices plus providers whose last-known snapshots were retained. */
+export type ProviderModelSelectionRefreshResult = Readonly<{
+	candidates: readonly ProviderModelSelectionCandidate[];
+	failedProviderIds: readonly string[];
+	refreshedProviderIds: readonly string[];
+}>;
+
 /** Copies a complete provider-owner snapshot so later runtime mutation cannot rewrite it. */
 export const createProviderModelSelectionSnapshot = (
 	trustedRegistrations: readonly PluginProviderOwnerRegistration[],

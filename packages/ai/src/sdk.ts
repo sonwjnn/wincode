@@ -391,6 +391,8 @@ export type ProviderCollection = Readonly<{
 	deleteCredential: (providerId: string) => Promise<void>;
 	/** Known models whose provider has a stored credential; this does not contact the provider. */
 	getAvailable: (providerId?: string) => Promise<readonly ProviderModel[]>;
+	/** Registered provider IDs with stored credentials; this does not contact the provider. */
+	getConfiguredProviderIds: () => Promise<readonly string[]>;
 	getModel: (providerId: string, modelId: string) => ProviderModel | undefined;
 	/** Returns in-memory last-known models. Restore the store before listing a fresh instance. */
 	getModels: () => readonly ProviderModel[];
@@ -1016,6 +1018,13 @@ export const createProviderCollection = (
 			return [...configuredProviders].flatMap((configuredProviderId) =>
 				getProviderModels(configuredProviderId)
 			);
+		},
+		getConfiguredProviderIds: async () => {
+			const providerIds = [...providers.keys()];
+			const credentials = await Promise.all(
+				providerIds.map((providerId) => credentialStore.get(providerId))
+			);
+			return providerIds.filter((_, index) => credentials[index] !== undefined);
 		},
 		getModel: (providerId, modelId) =>
 			getProviderModels(providerId).find((model) => model.modelId === modelId),

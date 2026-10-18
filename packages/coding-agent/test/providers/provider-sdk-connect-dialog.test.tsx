@@ -526,6 +526,29 @@ test("saved credentials are reported after dismissal without closing a different
 	}
 });
 
+test("Plugin connection failures use the shared search-list error slot", async () => {
+	const controller = fromPartial<InteractiveProviderController>({
+		getConnectableProviders: () =>
+			createProviderOptions({
+				plugin: async () => {
+					throw new Error("Plugin credentials were rejected.");
+				},
+			}),
+	});
+	const { setup } = await renderConnectDialog(controller);
+
+	try {
+		await selectPluginProvider(setup);
+		await flushTestRenderer(setup, 3);
+		const frame = setup.captureCharFrame();
+		const errorIndex = frame.indexOf("Plugin credentials were rejected.");
+		expect(errorIndex).toBeGreaterThan(frame.indexOf("Search providers"));
+		expect(errorIndex).toBeLessThan(frame.indexOf("navigate"));
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
 test("opening and dismissing nested Plugin text input does not abort its parent flow", async () => {
 	const connectStarted = Promise.withResolvers<AbortSignal | undefined>();
 	const controller = fromPartial<InteractiveProviderController>({
