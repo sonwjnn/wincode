@@ -42,6 +42,11 @@ type Row =
 	  }>
 	| Readonly<{ kind: "refresh" }>;
 
+type ModelRefreshRequest = Readonly<{
+	background?: boolean;
+	signal?: AbortSignal;
+}>;
+
 type ModelPickerRowProps = Readonly<{
 	isActive: boolean;
 	isRefreshing: boolean;
@@ -176,6 +181,7 @@ export const ProviderModelsDialogContent = ({
 	const [error, setError] = useState<string | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isRefreshing, setIsRefreshing] = useState(false);
+	const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
 	const [isSelecting, setIsSelecting] = useState(false);
 
 	useEffect(() => {
@@ -212,27 +218,71 @@ export const ProviderModelsDialogContent = ({
 		};
 	}, [controller]);
 
-	const refreshModels = useCallback(async () => {
-		setError(null);
-		setIsRefreshing(true);
-		try {
-			const refreshCandidates =
-				controller.refreshProviderModelSelectionCandidates;
-			if (refreshCandidates === undefined) {
-				throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+	const refreshModels = useCallback(
+		async (request: ModelRefreshRequest = {}): Promise<void> => {
+			const { background = false, signal } = request;
+			const isAborted = (): boolean => signal?.aborted === true;
+			if (isAborted()) {
+				return;
 			}
-			setCandidates(await refreshCandidates());
-		} catch (refreshError) {
-			setError(
-				getErrorMessage(
-					refreshError,
-					"Known Model refresh failed; the last-known models were retained."
-				)
-			);
-		} finally {
-			setIsRefreshing(false);
+			if (!background) {
+				setError(null);
+			}
+			setIsRefreshing(true);
+			setIsBackgroundRefreshing(background);
+			try {
+				const refreshCandidates =
+					controller.refreshProviderModelSelectionCandidates;
+				if (refreshCandidates === undefined) {
+					throw new Error(STALE_PROVIDER_MODEL_SELECTION_MESSAGE);
+				}
+				const refreshedCandidates = await refreshCandidates(
+					signal === undefined ? undefined : { signal }
+				);
+				if (!isAborted()) {
+					setCandidates(refreshedCandidates);
+					setError(null);
+				}
+			} catch (refreshError) {
+				if (!isAborted()) {
+					setError(
+						getErrorMessage(
+							refreshError,
+							"Known Model refresh failed; the last-known models were retained."
+						)
+					);
+				}
+			} finally {
+				if (!isAborted()) {
+					setIsRefreshing(false);
+					setIsBackgroundRefreshing(false);
+				}
+			}
+		},
+		[controller]
+	);
+
+	useEffect(() => {
+		if (isLoading) {
+			return;
 		}
-	}, [controller]);
+		if (
+			controller.getAvailableProviderModelSelectionCandidates === undefined ||
+			controller.refreshProviderModelSelectionCandidates === undefined
+		) {
+			setIsRefreshing(false);
+			setIsBackgroundRefreshing(false);
+			return;
+		}
+
+		const abortController = new AbortController();
+		void refreshModels({
+			background: true,
+			signal: abortController.signal,
+		});
+		return () => abortController.abort();
+	}, [controller, isLoading, refreshModels]);
+
 	const selectCandidate = useCallback(
 		async (candidate: ProviderModelSelectionCandidate): Promise<void> => {
 			setError(null);
@@ -349,10 +399,15 @@ export const ProviderModelsDialogContent = ({
 					row.kind === "model" &&
 					isSameProviderModelIdentity(row.candidate.model, currentModel)
 				}
-				isItemSelectable={(row) =>
-					!(isLoading || isRefreshing || isSelecting) &&
-					(row.kind === "model" || row.kind === "refresh")
-				}
+				isItemSelectable={(row) => {
+					if (isLoading || isSelecting) {
+						return false;
+					}
+					if (row.kind === "model") {
+						return !isRefreshing || isBackgroundRefreshing;
+					}
+					return row.kind === "refresh" && !isRefreshing;
+				}}
 				items={rows}
 				maxVisibleItems={Math.max(1, Math.floor(height * 0.5))}
 				onSelect={(row) => {
