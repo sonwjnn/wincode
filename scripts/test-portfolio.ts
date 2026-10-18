@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isError, isUndefined, readUtf8File } from "@wincode/utils";
-import { spawn } from "bun";
+import { $, spawn } from "bun";
+import { isError, isUndefined, readUtf8File } from "../packages/utils/src";
 import {
 	compareStableStrings,
 	type DiscoveredTestFile,
@@ -43,6 +43,28 @@ const SCRUBBED_ENVIRONMENT_NAMES = [
 
 const isMissingPathError = (error: unknown): boolean =>
 	isError(error) && "code" in error && error.code === "ENOENT";
+
+const buildWorkspaceRuntimeDependencies = async (
+	root: string
+): Promise<number> => {
+	try {
+		await fs.access(path.join(root, "packages", "utils", "package.json"));
+	} catch (error) {
+		if (isMissingPathError(error)) {
+			return 0;
+		}
+		throw error;
+	}
+
+	console.log("\nBuilding workspace runtime dependencies");
+	const result = await $`bun run build:utils`.cwd(root).nothrow();
+	if (result.exitCode !== 0) {
+		console.error(
+			`Workspace runtime dependency build failed (exit ${result.exitCode}).`
+		);
+	}
+	return result.exitCode;
+};
 
 type RunnerArguments = {
 	readonly packageFilter?: string;
@@ -321,15 +343,22 @@ const runDefaultPortfolio = async (
 	}
 
 	const grouped = groupTestsByPackage(files);
+	const packageNames = [...grouped.keys()]
+		.filter((packageName) => packageMatches(packageName, packageFilter))
+		.sort(compareStableStrings);
+	if (packageNames.length > 0) {
+		const buildExitCode = await buildWorkspaceRuntimeDependencies(root);
+		if (buildExitCode !== 0) {
+			return buildExitCode || 1;
+		}
+	}
+
 	const failures: {
 		readonly exitCode: number;
 		readonly packageName: string;
 	}[] = [];
 	let executed = 0;
-	for (const packageName of [...grouped.keys()].sort(compareStableStrings)) {
-		if (!packageMatches(packageName, packageFilter)) {
-			continue;
-		}
+	for (const packageName of packageNames) {
 		const packageFiles = grouped.get(packageName);
 		if (!packageFiles) {
 			continue;
@@ -361,11 +390,18 @@ const runE2EPortfolio = async (
 		return 1;
 	}
 
-	let executed = 0;
-	for (const file of files) {
-		if (!packageMatches(file.packageName, packageFilter)) {
-			continue;
+	const selectedFiles = files.filter((file) =>
+		packageMatches(file.packageName, packageFilter)
+	);
+	if (selectedFiles.length > 0) {
+		const buildExitCode = await buildWorkspaceRuntimeDependencies(root);
+		if (buildExitCode !== 0) {
+			return buildExitCode || 1;
 		}
+	}
+
+	let executed = 0;
+	for (const file of selectedFiles) {
 		executed += 1;
 		console.log(`\nRunning E2E test: ${file.path}`);
 		const exitCode = await runE2EFile(root, file);

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isError } from "@wincode/utils";
 import { spawnSync } from "bun";
+import { isError } from "../packages/utils/src";
 
 const repositoryRoot = path.resolve(import.meta.dir, "..");
 const runnerPath = path.join(repositoryRoot, "scripts/test-portfolio.ts");
@@ -117,6 +117,45 @@ test("valid package named after an ignored directory", () => {
 				"unsupported test classification suffix .integration"
 			);
 			expect(invalid.output).toContain("unsupported test extension .js");
+		} finally {
+			await fs.rm(root, { force: true, recursive: true });
+		}
+	});
+
+	test("builds workspace runtime dependencies before running selected package tests", async () => {
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-test-runtime-build-")
+		);
+		try {
+			await writeFixture(
+				root,
+				"package.json",
+				JSON.stringify({ scripts: { "build:utils": "bun build-utils.ts" } })
+			);
+			await writeFixture(
+				root,
+				"build-utils.ts",
+				'await Bun.write("packages/utils/dist/index.js", "export {};");\n'
+			);
+			await writeFixture(root, "packages/utils/package.json", "{}\n");
+			await writeFixture(
+				root,
+				"packages/utils/test/runtime-build.test.ts",
+				`import { expect, test } from "bun:test";
+test("generated runtime files exist before the test suite starts", async () => {
+	expect(await Bun.file("packages/utils/dist/index.js").exists()).toBe(true);
+});
+`
+			);
+
+			const result = runPortfolio(root, "default");
+			expect(result.exitCode).toBe(0);
+			expect(result.output).toContain(
+				"Building workspace runtime dependencies"
+			);
+			expect(result.output).toContain(
+				"generated runtime files exist before the test suite starts"
+			);
 		} finally {
 			await fs.rm(root, { force: true, recursive: true });
 		}
