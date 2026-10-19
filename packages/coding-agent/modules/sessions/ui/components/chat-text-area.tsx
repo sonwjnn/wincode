@@ -344,7 +344,6 @@ export function ChatTextArea({
 		providerController,
 		setFutureModelSelection,
 		setThinkingLevelForFutureSubmissions,
-		selectedProviderModel,
 		sessionId,
 	]);
 	const thinkingLevels =
