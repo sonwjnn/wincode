@@ -54,11 +54,18 @@ export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	"anthropic/claude-opus-4-7": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
 	"anthropic/claude-sonnet-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
 	"anthropic/claude-opus-4-8": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
-	"anthropic/claude-fable-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-fable-5": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
+	},
 	"anthropic/claude-fable-5-1": {
 		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
 	},
-	"anthropic/claude-opus-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-5": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
+	},
 	"anthropic/claude-opus-4-6": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
 	"anthropic/claude-sonnet-4-6": {
 		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
@@ -78,30 +85,36 @@ export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	"google/gemini-3-pro-preview": {
 		thinking: { levels: ["low", "high"] },
 	},
+	"google/gemini-3.6-flash": { thinking: { levelMap: { off: null } } },
+	"google/gemini-3.7-flash": { thinking: { levelMap: { off: null } } },
 	"google/gemini-3.8-flash": {
 		promptCache: GOOGLE_CACHED_CONTENT_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
 	},
 	"openai/gpt-5.6": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-5.6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-5.6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-5.6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-6.1-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6.1-sol": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
+	},
 	"openai/gpt-6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-6-astra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6-astra": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
+	},
 	// Keep the last published models.dev facts while the manifest still declares this model.
 	"opencode-go/grok-4.6": {
 		cost: { input: 2, output: 6, cacheRead: 0.5 },
 		limits: { context: 500_000, output: 500_000 },
-		thinking: { levels: ["low", "medium", "high", "xhigh"] },
+		thinking: {
+			levels: ["low", "medium", "high", "xhigh"],
+			levelMap: { off: null },
+		},
 		tiers: [
-			{
-				inputTokensAbove: 200_000,
-				input: 4,
-				output: 12,
-				cacheRead: 1,
-			},
 			{
 				inputTokensAbove: 200_000,
 				input: 4,
@@ -110,6 +123,36 @@ export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 			},
 		],
 	},
+	"opencode-go/gpt-5.6-luna": { thinking: { levelMap: { off: null } } },
+	"opencode-go/glm-5.3-flash": { thinking: { levelMap: { off: null } } },
+	"opencode-go/glm-5.3": { thinking: { levelMap: { off: null } } },
+	"opencode-go/glm-5.2": { thinking: { levelMap: { off: null } } },
+	"opencode-go/kimi-k3": { thinking: { levelMap: { off: null } } },
+	"opencode-go/muse-spark-1.3-contributor": {
+		thinking: { levelMap: { off: null } },
+	},
+	"opencode-go/muse-spark-1.2-contributor": {
+		thinking: { levelMap: { off: null } },
+	},
+	"opencode-go/deepseek-v4.1-flash": {
+		thinking: { levelMap: { off: null } },
+	},
+	"opencode-go/deepseek-v4-flash": {
+		thinking: {
+			levels: ["low", "high", "max"],
+			levelMap: { minimal: null, medium: null, xhigh: null },
+		},
+	},
+	"opencode-go/deepseek-v4-flash-vision-exp": {
+		thinking: {
+			levels: ["low", "high", "max"],
+			levelMap: { minimal: null, medium: null, xhigh: null },
+		},
+	},
+	"opencode-go/kimi-k2.7-code": { thinking: { toggle: true } },
+	"opencode-go/minimax-m2.7": { thinking: { toggle: true } },
+	"opencode-go/mimo-v2.5": { thinking: { toggle: true } },
+	"opencode-go/mimo-v2.5-pro": { thinking: { toggle: true } },
 };
 
 export type BuildInput = Readonly<{
@@ -129,6 +172,50 @@ export type BuildResult = Readonly<{
 		uncovered: readonly string[];
 	}>;
 }>;
+
+const mergeModelMetadata = (
+	source: ModelMetadataEntry | undefined,
+	overlay: ModelMetadataEntry | undefined
+): ModelMetadataEntry => {
+	const sourceThinking = source?.thinking;
+	const overlayThinking = overlay?.thinking;
+	let thinking: ModelMetadataEntry["thinking"];
+	if (sourceThinking === undefined) {
+		thinking = overlayThinking;
+	} else if (overlayThinking === undefined) {
+		thinking = sourceThinking;
+	} else {
+		const levels =
+			sourceThinking.levels === undefined &&
+			overlayThinking.levels === undefined
+				? undefined
+				: [
+						...new Set([
+							...(sourceThinking.levels ?? []),
+							...(overlayThinking.levels ?? []),
+						]),
+					];
+		const levelMap =
+			sourceThinking.levelMap === undefined &&
+			overlayThinking.levelMap === undefined
+				? undefined
+				: {
+						...sourceThinking.levelMap,
+						...overlayThinking.levelMap,
+					};
+		thinking = {
+			...sourceThinking,
+			...overlayThinking,
+			...(levels === undefined ? {} : { levels }),
+			...(levelMap === undefined ? {} : { levelMap }),
+		};
+	}
+	return {
+		...source,
+		...overlay,
+		...(thinking === undefined ? {} : { thinking }),
+	};
+};
 
 /** Enriches only manifest-declared Provider Models; metadata never adds identity. */
 export const buildProviderModelsWithMetadata = (
@@ -163,7 +250,7 @@ export const buildProviderModelsWithMetadata = (
 		if (overlay) {
 			fromOverlay.push(key);
 		}
-		const metadata = { ...upstreamMetadata, ...overlay };
+		const metadata = mergeModelMetadata(upstreamMetadata, overlay);
 		entries[key] = metadata;
 		return withProviderModelMetadata(model, metadata);
 	});

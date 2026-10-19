@@ -29,6 +29,12 @@ const payload = {
 			"from-source": {
 				cost: { input: 1, output: 2 },
 				limit: { context: 1000 },
+				reasoning_options: [
+					{
+						type: "effort",
+						values: ["low", "medium", "high", "xhigh", "max"],
+					},
+				],
 			},
 			"empty-source": {},
 			unlisted: {
@@ -91,6 +97,23 @@ describe("Provider Model metadata enrichment", () => {
 			outputPerMillionTokensUsd: 2,
 		});
 		expect(model?.limits).toEqual({ contextWindowTokens: 1000 });
+	});
+
+	test("manual reasoning overlays add a missing effort without hiding published levels", () => {
+		const result = build({
+			"openai/from-source": { thinking: { levels: ["minimal"] } },
+		});
+		expect(result.entries["openai/from-source"]?.thinking?.levels).toEqual([
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+			"minimal",
+		]);
+		expect(
+			modelById(result.providerModels, "from-source")?.reasoningEfforts
+		).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 	});
 
 	test("unknown source facts remain absent instead of receiving defaults", () => {

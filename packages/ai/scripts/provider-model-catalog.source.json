@@ -44,7 +44,10 @@
       "providerId": "opencode-go",
       "protocolId": "openai-compatible",
       "models": [
-        "grok-4.6",
+        {
+          "modelId": "grok-4.6",
+          "protocolId": "openai-responses"
+        },
         {
           "modelId": "gpt-5.6-luna",
           "protocolId": "openai-responses"

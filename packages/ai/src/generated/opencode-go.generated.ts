@@ -5,7 +5,7 @@ import type { ProviderModel } from "../sdk.ts";
 export const providerModels = [
 	{
 		"modelId": "grok-4.6",
-		"protocolId": "openai-compatible",
+		"protocolId": "openai-responses",
 		"providerId": "opencode-go",
 		"limits": {
 			"contextWindowTokens": 500000,
@@ -21,17 +21,10 @@ export const providerModels = [
 					"inputPerMillionTokensUsd": 4,
 					"outputPerMillionTokensUsd": 12,
 					"cacheReadPerMillionTokensUsd": 1
-				},
-				{
-					"inputTokensAbove": 200000,
-					"inputPerMillionTokensUsd": 4,
-					"outputPerMillionTokensUsd": 12,
-					"cacheReadPerMillionTokensUsd": 1
 				}
 			]
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high",
@@ -69,7 +62,6 @@ export const providerModels = [
 			]
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high",
@@ -130,7 +122,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.03
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"high",
 			"max"
@@ -150,7 +141,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.26
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"high",
 			"max"
@@ -170,7 +160,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.26
 		},
 		"reasoningEfforts": [
-			"off",
 			"high",
 			"max"
 		]
@@ -194,7 +183,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.3
 		},
 		"reasoningEfforts": [
-			"off",
 			"max"
 		]
 	},
@@ -210,7 +198,14 @@ export const providerModels = [
 			"inputPerMillionTokensUsd": 0.95,
 			"outputPerMillionTokensUsd": 4,
 			"cacheReadPerMillionTokensUsd": 0.19
-		}
+		},
+		"reasoningEfforts": [
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
+		]
 	},
 	{
 		"modelId": "kimi-k2.6",
@@ -231,7 +226,11 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.006
 		},
 		"reasoningEfforts": [
-			"off"
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
 		]
 	},
 	{
@@ -248,7 +247,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.002
 		},
 		"reasoningEfforts": [
-			"off",
 			"minimal",
 			"low",
 			"medium",
@@ -270,7 +268,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.002
 		},
 		"reasoningEfforts": [
-			"off",
 			"minimal",
 			"low",
 			"medium",
@@ -306,7 +303,11 @@ export const providerModels = [
 			]
 		},
 		"reasoningEfforts": [
-			"off"
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
 		]
 	},
 	{
@@ -322,7 +323,14 @@ export const providerModels = [
 			"outputPerMillionTokensUsd": 1.2,
 			"cacheReadPerMillionTokensUsd": 0.06,
 			"cacheWritePerMillionTokensUsd": 0.375
-		}
+		},
+		"reasoningEfforts": [
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
+		]
 	},
 	{
 		"modelId": "qwen3.8-max",
@@ -402,7 +410,11 @@ export const providerModels = [
 			]
 		},
 		"reasoningEfforts": [
-			"off"
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
 		]
 	},
 	{
@@ -424,7 +436,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.003
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"high",
 			"max"
@@ -452,12 +463,24 @@ export const providerModels = [
 	{
 		"modelId": "deepseek-v4-flash",
 		"protocolId": "openai-compatible",
-		"providerId": "opencode-go"
+		"providerId": "opencode-go",
+		"reasoningEfforts": [
+			"off",
+			"low",
+			"high",
+			"max"
+		]
 	},
 	{
 		"modelId": "deepseek-v4-flash-vision-exp",
 		"protocolId": "openai-compatible",
-		"providerId": "opencode-go"
+		"providerId": "opencode-go",
+		"reasoningEfforts": [
+			"off",
+			"low",
+			"high",
+			"max"
+		]
 	},
 	{
 		"modelId": "mimo-v2.5",
@@ -471,7 +494,14 @@ export const providerModels = [
 			"inputPerMillionTokensUsd": 0.14,
 			"outputPerMillionTokensUsd": 0.28,
 			"cacheReadPerMillionTokensUsd": 0.0028
-		}
+		},
+		"reasoningEfforts": [
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
+		]
 	},
 	{
 		"modelId": "mimo-v2.5-pro",
@@ -485,7 +515,14 @@ export const providerModels = [
 			"inputPerMillionTokensUsd": 0.435,
 			"outputPerMillionTokensUsd": 0.87,
 			"cacheReadPerMillionTokensUsd": 0.003625
-		}
+		},
+		"reasoningEfforts": [
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
+		]
 	},
 	{
 		"modelId": "hy4-preview",

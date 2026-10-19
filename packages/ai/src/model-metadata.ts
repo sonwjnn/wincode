@@ -19,21 +19,21 @@ export { thinkingLevelIds, thinkingLevelSchema } from "./thinking-level.ts";
 /**
  * How a model expresses reasoning, normalized from models.dev
  * `reasoning_options[]`. A present policy makes Off selectable unless
- * `levelMap.off` is explicitly null. A per-model map carries selectable levels
- * and their provider-native values; budget-only models keep their derived
- * automatic budget without a selectable level.
+ * `levelMap.off` is explicitly null. Published levels and per-model maps
+ * override the shared defaults; budget-only controls retain their range for
+ * request mapping.
  */
 export type ModelThinkingPolicy = Readonly<{
 	/** Per-model native level overrides; null means unsupported, including for Off. */
 	levelMap?: ThinkingLevelMap;
-	/** Source-published thinking levels, used to derive the model's level map. */
+	/** Source-published named levels; when present, these replace shared defaults. */
 	levels?: readonly ThinkingLevel[];
 	/** The model exposes a binary thinking switch. */
 	toggle?: true;
 	/** Reasoning budget bounds (`budget_tokens.min` / `.max`). */
 	budgetMin?: number;
 	budgetMax?: number;
-	/** The model's budget is derived automatically, with no selectable level. */
+	/** The source publishes a budget range but no named effort ladder. */
 	unlevelled?: true;
 }>;
 

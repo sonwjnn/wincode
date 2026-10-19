@@ -4,9 +4,18 @@ import {
 	type SupportedPromptCacheRetentionTier,
 	supportedPromptCacheRetentionTierIds,
 	type ThinkingLevel,
+	thinkingLevelIds,
 } from "./model-metadata.ts";
 import { parsePromptCacheTtlMs } from "./prompt-cache-ttl.ts";
 import type { ProviderModel } from "./sdk.ts";
+
+/** Shared choices used when reasoning is declared without named effort levels. */
+const DEFAULT_REASONING_EFFORTS: readonly ThinkingLevel[] = [
+	"minimal",
+	"low",
+	"medium",
+	"high",
+];
 
 const addOffEffort = (
 	policy: NonNullable<ModelMetadataEntry["thinking"]>,
@@ -21,10 +30,7 @@ const addNamedReasoningEfforts = (
 	policy: NonNullable<ModelMetadataEntry["thinking"]>,
 	efforts: Set<ThinkingLevel>
 ): void => {
-	if (policy.unlevelled) {
-		return;
-	}
-	for (const level of policy.levels ?? []) {
+	for (const level of policy.levels ?? DEFAULT_REASONING_EFFORTS) {
 		if (level !== "off") {
 			efforts.add(level);
 		}
@@ -154,10 +160,12 @@ const reasoningEffortsFor = (
 	const efforts = new Set<ThinkingLevel>();
 	addOffEffort(policy, efforts);
 	addNamedReasoningEfforts(policy, efforts);
-	return efforts.size > 0 ? [...efforts] : undefined;
+	return efforts.size > 0
+		? thinkingLevelIds.filter((level) => efforts.has(level))
+		: undefined;
 };
 
-/** Adds only exact limits, prices, reasoning, and prompt-cache metadata. */
+/** Adds normalized limits, pricing, reasoning efforts, and prompt-cache metadata. */
 export const withProviderModelMetadata = (
 	model: ProviderModel,
 	metadata: ModelMetadataEntry | undefined

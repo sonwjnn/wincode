@@ -161,7 +161,7 @@ describe("public OpenCode Go SDK provider", () => {
 				?.reasoningEfforts
 		).not.toContain("minimal");
 		expect(requests[3]?.body).not.toHaveProperty("output_config");
-		expect(requests[4]?.body).toMatchObject({ reasoning: { effort: "none" } });
+		expect(requests[4]?.body).not.toHaveProperty("reasoning");
 		expect(requests[5]?.body).not.toHaveProperty("thinking");
 		expect(requests[5]?.body).not.toHaveProperty("output_config");
 		expect(requests[0]?.headers.get("authorization")).toBe(
@@ -227,6 +227,49 @@ describe("public OpenCode Go SDK provider", () => {
 		expect(provider.models.map(({ protocolId }) => protocolId)).toContain(
 			"openai-compatible"
 		);
+	});
+
+	test("grok-4.6 avoids OpenCode Go's rejecting Chat Completions protocol", async () => {
+		const requests: { body: Record<string, unknown>; url: string }[] = [];
+		const sdk = createProviderCollection();
+		const provider = createOpenCodeGoProvider({
+			fetch: async (url, init) => {
+				requests.push({
+					body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+					url: String(url),
+				});
+				return sseResponse([
+					{
+						type: "response.completed",
+						response: {
+							output: [],
+							usage: { input_tokens: 1, output_tokens: 1 },
+						},
+					},
+				]);
+			},
+		});
+		sdk.register(provider);
+		await sdk.setCredential("opencode-go", {
+			apiKey: "opencode-go-secret",
+			kind: "api-key",
+		});
+
+		expect(provider.models).toContainEqual(
+			expect.objectContaining({
+				modelId: "grok-4.6",
+				protocolId: "openai-responses",
+				providerId: "opencode-go",
+			})
+		);
+		await collect(sdk, "grok-4.6");
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe("https://opencode.ai/zen/go/v1/responses");
+		expect(requests[0]?.body).toMatchObject({
+			model: "grok-4.6",
+			stream: true,
+		});
 	});
 
 	test("gpt-6-luna is selectable through OpenCode Go's Responses route", async () => {

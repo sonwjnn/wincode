@@ -206,7 +206,6 @@ export const providerModels = [
 			"cacheWritePerMillionTokensUsd": 12.5
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high",
@@ -241,7 +240,6 @@ export const providerModels = [
 			"cacheWritePerMillionTokensUsd": 12.5
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high",
@@ -276,7 +274,6 @@ export const providerModels = [
 			"cacheWritePerMillionTokensUsd": 6.25
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high",
@@ -379,7 +376,11 @@ export const providerModels = [
 			"cacheWritePerMillionTokensUsd": 1.25
 		},
 		"reasoningEfforts": [
-			"off"
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
 		],
 		"promptCacheRetentionTiers": [
 			"short",
@@ -409,7 +410,11 @@ export const providerModels = [
 			"cacheWritePerMillionTokensUsd": 1.25
 		},
 		"reasoningEfforts": [
-			"off"
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
 		],
 		"promptCacheRetentionTiers": [
 			"short",
@@ -439,7 +444,11 @@ export const providerModels = [
 			"cacheWritePerMillionTokensUsd": 3.75
 		},
 		"reasoningEfforts": [
-			"off"
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
 		],
 		"promptCacheRetentionTiers": [
 			"short",
@@ -469,7 +478,11 @@ export const providerModels = [
 			"cacheWritePerMillionTokensUsd": 3.75
 		},
 		"reasoningEfforts": [
-			"off"
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high"
 		],
 		"promptCacheRetentionTiers": [
 			"short",

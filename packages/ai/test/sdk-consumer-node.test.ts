@@ -29,11 +29,11 @@ const google = createGoogleProvider({
 });
 const opencode = createOpenCodeGoProvider({
   fetch: async (url, init) => {
-    assert.equal(String(url), "https://opencode.ai/zen/go/v1/chat/completions");
+    assert.equal(String(url), "https://opencode.ai/zen/go/v1/responses");
     assert.equal(new Headers(init.headers).get("authorization"), "Bearer node-go-key");
     return sse([
-      { choices: [{ delta: { content: "Node OpenCode" }, finish_reason: null }] },
-      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { type: "response.output_text.delta", delta: "Node OpenCode" },
+      { type: "response.completed", response: { output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
     ]);
   },
 });

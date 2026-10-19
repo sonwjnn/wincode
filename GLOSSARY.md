@@ -13,6 +13,12 @@ A model identified within an SDK Provider and associated with a Model Protocol. 
 **Provider Model Metadata**:
 Supplemental reasoning, cost, context-limit, and prompt-cache facts associated with an exact Provider Model. Metadata may enrich that identity but cannot authorize, discover, or substitute for it. _Avoid_: model policy, availability
 
+**Reasoning Capability**:
+A Provider Model's ability to use reasoning behavior; it does not identify a specific effort value. _Avoid_: reasoning effort
+
+**Reasoning Effort**:
+A selectable intensity for reasoning that a Provider Model may support. _Avoid_: reasoning capability
+
 **Known Model**:
 A Provider Model in the provider's last-known list, including one restored from an offline snapshot. It is distinct from an invocable model and from the identity retained by an old Session. _Avoid_: available model, product allowlist
 

@@ -125,11 +125,9 @@ const toThinkingPolicy = (
 	const budgetBounded = !(isUndefined(budgetMin) && isUndefined(budgetMax));
 	// A source-published `none` value is not a selectable ThinkingLevel
 	// level. Preserve it as a toggle when the source has no separate toggle.
-	// A published budget range is a reasoning control even with no ladder: it
-	// says how much thinking the model may do. With no switch and no ladder the
-	// user has nothing to pick, so the model gets no selectable level and its
-	// budget is derived rather than chosen. Without recording this, Claude 4.5
-	// would look like a model with no reasoning control at all.
+	// A published budget range is a reasoning control even with no ladder.
+	// Preserve it as unlevelled so request adapters can derive a budget, while
+	// the shared reasoning defaults remain available to model selection.
 	const switchable = hasToggle || budgetBounded;
 	if (!(switchable || levels)) {
 		return;

@@ -42,6 +42,60 @@ describe("public OpenAI SDK provider", () => {
 		).toThrow("OpenAI provider models must use a supported protocol ID.");
 	});
 
+	test("OpenAI Responses sends a model-declared minimal reasoning effort", async () => {
+		const requests: Record<string, unknown>[] = [];
+		const sdk = createProviderCollection();
+		sdk.register(
+			createOpenAIProvider({
+				models: [
+					{
+						modelId: "custom-minimal-model",
+						protocolId: "openai-responses",
+						providerId: "openai",
+						reasoningEfforts: ["minimal"],
+					},
+				],
+				fetch: async (_input, init) => {
+					requests.push(
+						JSON.parse(String(init?.body)) as Record<string, unknown>
+					);
+					return sseResponse([
+						{
+							type: "response.completed",
+							response: {
+								output: [],
+								usage: {
+									input_tokens: 1,
+									output_tokens: 1,
+									total_tokens: 2,
+								},
+							},
+						},
+					]);
+				},
+			})
+		);
+		await sdk.setCredential("openai", {
+			kind: "api-key",
+			apiKey: "openai-test-key",
+		});
+
+		for await (const _event of sdk.chat({
+			messages: [{ content: [{ text: "Hi", type: "text" }], role: "user" }],
+			modelId: "custom-minimal-model",
+			providerId: "openai",
+			reasoningEffort: "minimal",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({
+			model: "custom-minimal-model",
+			reasoning: { effort: "minimal" },
+		});
+	});
+
 	test("API-key consumers retain Responses multimodal, tool, cache, usage, and continuation behavior", async () => {
 		const continuation = [
 			{ id: "rs_private", type: "reasoning" },

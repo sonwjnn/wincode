@@ -65,7 +65,21 @@ test("ProviderCollection preserves explicit support metadata and rejects invente
 	).toThrow("Invalid model identity");
 });
 
-test("first-party Provider Models expose Off when reasoning support is declared", () => {
+test("OpenAI GPT-6 Luna follows its documented direct-API reasoning ladder", () => {
+	const model = createOpenAIProvider({
+		fetch: async () => new Response(),
+	}).models.find((candidate) => candidate.modelId === "gpt-6-luna");
+	expect(model?.reasoningEfforts).toEqual([
+		"off",
+		"low",
+		"medium",
+		"high",
+		"xhigh",
+		"max",
+	]);
+});
+
+test("first-party Provider Models expose shared defaults and model-specific effort limits", () => {
 	const providers = [
 		createOpenAIProvider({ fetch: async () => new Response() }),
 		createAnthropicProvider({ fetch: async () => new Response() }),
@@ -137,11 +151,10 @@ test("first-party Provider Models expose Off when reasoning support is declared"
 		"reasoningEfforts"
 	);
 	expect(modelFor("anthropic", "claude-haiku-4-5")).toMatchObject({
-		reasoningEfforts: ["off"],
+		reasoningEfforts: ["off", "low", "medium", "high"],
 	});
 
 	expect(modelFor("google", "gemini-3.6-flash").reasoningEfforts).toEqual([
-		"off",
 		"minimal",
 		"low",
 		"medium",
@@ -157,9 +170,104 @@ test("first-party Provider Models expose Off when reasoning support is declared"
 			outputPerMillionTokensUsd: 3.75,
 			cacheReadPerMillionTokensUsd: 0.075,
 		},
-		reasoningEfforts: ["off", "low", "medium", "high"],
+		reasoningEfforts: ["low", "medium", "high"],
 		promptCacheRetentionTiers: ["short", "long"],
 	});
+
+	// Per-model maps can remove defaults or enable extended levels.
+	const expectedReasoningEfforts = [
+		["anthropic", "claude-opus-4-5-20251101", ["off", "low", "medium", "high"]],
+		[
+			"anthropic",
+			"claude-opus-4-7",
+			["off", "low", "medium", "high", "xhigh", "max"],
+		],
+		[
+			"anthropic",
+			"claude-sonnet-5",
+			["off", "low", "medium", "high", "xhigh", "max"],
+		],
+		[
+			"anthropic",
+			"claude-opus-4-8",
+			["off", "low", "medium", "high", "xhigh", "max"],
+		],
+		["anthropic", "claude-fable-5", ["low", "medium", "high", "xhigh", "max"]],
+		[
+			"anthropic",
+			"claude-fable-5-1",
+			["low", "medium", "high", "xhigh", "max"],
+		],
+		["anthropic", "claude-opus-5", ["low", "medium", "high", "xhigh", "max"]],
+		["anthropic", "claude-opus-4-6", ["off", "low", "medium", "high", "max"]],
+		["anthropic", "claude-sonnet-4-6", ["off", "low", "medium", "high", "max"]],
+		[
+			"anthropic",
+			"claude-haiku-4-5-20251001",
+			["off", "low", "medium", "high"],
+		],
+		["anthropic", "claude-sonnet-4-5", ["off", "low", "medium", "high"]],
+		[
+			"anthropic",
+			"claude-sonnet-4-5-20250929",
+			["off", "low", "medium", "high"],
+		],
+		["google", "gemini-3.6-flash", ["minimal", "low", "medium", "high"]],
+		["google", "gemini-3.7-flash", ["low", "medium", "high"]],
+		["google", "gemini-3.8-flash", ["low", "medium", "high"]],
+		["openai", "gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"]],
+		["openai", "gpt-6-astra", ["low", "medium", "high", "xhigh", "max"]],
+		["opencode-go", "grok-4.6", ["low", "medium", "high", "xhigh"]],
+		["opencode-go", "gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"]],
+		["opencode-go", "glm-5.3-flash", ["low", "high", "max"]],
+		["opencode-go", "glm-5.3", ["low", "high", "max"]],
+		["opencode-go", "glm-5.2", ["high", "max"]],
+		["opencode-go", "kimi-k3", ["max"]],
+		[
+			"opencode-go",
+			"muse-spark-1.3-contributor",
+			["minimal", "low", "medium", "high", "xhigh"],
+		],
+		[
+			"opencode-go",
+			"muse-spark-1.2-contributor",
+			["minimal", "low", "medium", "high", "xhigh"],
+		],
+		["opencode-go", "deepseek-v4.1-flash", ["low", "high", "max"]],
+		["opencode-go", "qwen3.8-max", ["off", "low", "medium", "xhigh"]],
+		["opencode-go", "qwen3.8-flash", ["off", "low", "medium", "xhigh"]],
+		[
+			"opencode-go",
+			"kimi-k2.7-code",
+			["off", "minimal", "low", "medium", "high"],
+		],
+		["opencode-go", "minimax-m2.7", ["off", "low", "medium", "high"]],
+		["opencode-go", "mimo-v2.5", ["off", "minimal", "low", "medium", "high"]],
+		[
+			"opencode-go",
+			"mimo-v2.5-pro",
+			["off", "minimal", "low", "medium", "high"],
+		],
+		["opencode-go", "minimax-m3", ["off", "low", "medium", "high"]],
+		["opencode-go", "qwen3.7-plus", ["off", "low", "medium", "high"]],
+		["opencode-go", "deepseek-v4-flash", ["off", "low", "high", "max"]],
+		[
+			"opencode-go",
+			"deepseek-v4-flash-vision-exp",
+			["off", "low", "high", "max"],
+		],
+	] as const;
+	for (const [providerId, modelId, efforts] of expectedReasoningEfforts) {
+		expect(modelFor(providerId, modelId).reasoningEfforts).toEqual(efforts);
+	}
+	// A reasoning declaration without a model-specific map uses shared defaults.
+	expect(modelFor("opencode-go", "longcat-2.0").reasoningEfforts).toEqual([
+		"off",
+		"minimal",
+		"low",
+		"medium",
+		"high",
+	]);
 
 	expect(modelFor("opencode-go", "gpt-5.6-luna")).toMatchObject({
 		limits: { contextWindowTokens: 1_050_000, maxOutputTokens: 128_000 },
@@ -200,20 +308,14 @@ test("first-party Provider Models expose Off when reasoning support is declared"
 					inputTokensAbove: 200_000,
 					outputPerMillionTokensUsd: 12,
 				},
-				{
-					cacheReadPerMillionTokensUsd: 1,
-					inputPerMillionTokensUsd: 4,
-					inputTokensAbove: 200_000,
-					outputPerMillionTokensUsd: 12,
-				},
 			],
 		},
-		protocolId: "openai-compatible",
+		protocolId: "openai-responses",
 		providerId: "opencode-go",
-		reasoningEfforts: ["off", "low", "medium", "high", "xhigh"],
+		reasoningEfforts: ["low", "medium", "high", "xhigh"],
 	});
 	expect(modelFor("opencode-go", "longcat-2.0")).toMatchObject({
-		reasoningEfforts: ["off"],
+		reasoningEfforts: ["off", "minimal", "low", "medium", "high"],
 	});
 	expect(modelFor("opencode-go", "glm-5.1")).toEqual({
 		modelId: "glm-5.1",
@@ -308,7 +410,7 @@ test("Provider Model cache TTL uses only explicit protocol retention values", ()
 	expect(parsePromptCacheTtlMs("0s")).toBeUndefined();
 });
 
-test("Provider Model reasoning exposes Off by default unless metadata disables it", () => {
+test("Provider Model reasoning exposes shared defaults unless metadata restricts them", () => {
 	const model = providerFor([
 		{
 			modelId: "policy-model",
@@ -335,7 +437,10 @@ test("Provider Model reasoning exposes Off by default unless metadata disables i
 
 	expect(
 		withProviderModelMetadata(model, { thinking: { toggle: true } })
-	).toEqual({ ...model, reasoningEfforts: ["off"] });
+	).toEqual({
+		...model,
+		reasoningEfforts: ["off", "minimal", "low", "medium", "high"],
+	});
 	expect(
 		withProviderModelMetadata(model, {
 			thinking: { levels: ["low"] },
@@ -350,5 +455,7 @@ test("Provider Model reasoning exposes Off by default unless metadata disables i
 		withProviderModelMetadata(model, {
 			thinking: { toggle: true, unlevelled: true },
 		})
-	).toMatchObject({ reasoningEfforts: ["off"] });
+	).toMatchObject({
+		reasoningEfforts: ["off", "minimal", "low", "medium", "high"],
+	});
 });

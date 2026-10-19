@@ -369,7 +369,6 @@ export const providerModels = [
 			]
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high",
@@ -536,7 +535,6 @@ export const providerModels = [
 			]
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high",

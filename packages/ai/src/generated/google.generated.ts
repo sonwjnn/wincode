@@ -17,7 +17,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.075
 		},
 		"reasoningEfforts": [
-			"off",
 			"minimal",
 			"low",
 			"medium",
@@ -38,7 +37,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.075
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high"
@@ -58,7 +56,6 @@ export const providerModels = [
 			"cacheReadPerMillionTokensUsd": 0.075
 		},
 		"reasoningEfforts": [
-			"off",
 			"low",
 			"medium",
 			"high"
