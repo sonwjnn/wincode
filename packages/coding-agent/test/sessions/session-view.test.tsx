@@ -1374,6 +1374,14 @@ describe("SessionView initial submission", () => {
 								return selected ? "selection updated" : "selection unavailable";
 							},
 						});
+						plugin.registerCommand({
+							description: "Use the Provider default Thinking Level.",
+							name: "use_provider_default_thinking",
+							handler: async () => {
+								api.setThinkingLevel(undefined);
+								return "selection cleared";
+							},
+						});
 					},
 				},
 			],
@@ -1457,8 +1465,10 @@ describe("SessionView initial submission", () => {
 			expect(commandResult).toBe("selection updated");
 			expect(fakeCacheWarmCancellations).toBe(1);
 			await typePrompt(setup, "submit with the override");
-			setup.mockInput.pressEnter();
-			await sendStarted.promise;
+			await act(async () => {
+				setup.mockInput.pressEnter();
+				await sendStarted.promise;
+			});
 
 			expect(fakeRunInputs.at(-1)).toMatchObject({
 				agent: pinnedAgentId,
@@ -1469,6 +1479,42 @@ describe("SessionView initial submission", () => {
 				},
 				thinkingLevel: "off",
 			});
+
+			const providerDefaultStarted = deferred<void>();
+			await act(async () => {
+				release.resolve();
+				await Promise.resolve();
+			});
+			await flushUi(setup);
+			if (activeFakeSessionRun === null) {
+				throw new Error("No fake session run configured.");
+			}
+			activeFakeSessionRun.sendStarted = providerDefaultStarted;
+			let defaultCommandResult = "";
+			await act(async () => {
+				defaultCommandResult = await pluginRuntime.executeCommand(
+					"pinned_agent_plugin",
+					"use_provider_default_thinking",
+					{
+						argument: "",
+						sessionId: "session-selection",
+						workspace,
+					}
+				);
+			});
+			expect(defaultCommandResult).toBe("selection cleared");
+			await typePrompt(setup, "next");
+			await act(async () => {
+				setup.mockInput.pressEnter();
+				await providerDefaultStarted.promise;
+			});
+
+			expect(fakeRunInputs.at(-1)).toMatchObject({
+				agent: pinnedAgentId,
+				model: selectedModel,
+				selectionOverride: { model: selectedModel, thinking: {} },
+			});
+			expect(fakeRunInputs.at(-1)?.thinkingLevel).toBeUndefined();
 		} finally {
 			release.resolve();
 			await flushUi(setup);
