@@ -50,7 +50,7 @@
           "protocolId": "openai-responses"
         },
         {
-          "modelId": "gpt-luna-6",
+          "modelId": "gpt-6-luna",
           "protocolId": "openai-responses"
         },
         "glm-5.3-flash",

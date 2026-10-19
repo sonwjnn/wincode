@@ -65,7 +65,7 @@ test("ProviderCollection preserves explicit support metadata and rejects invente
 	).toThrow("Invalid model identity");
 });
 
-test("first-party Provider Models expose only their published thinking and cache choices", () => {
+test("first-party Provider Models expose Off when reasoning support is declared", () => {
 	const providers = [
 		createOpenAIProvider({ fetch: async () => new Response() }),
 		createAnthropicProvider({ fetch: async () => new Response() }),
@@ -127,7 +127,7 @@ test("first-party Provider Models expose only their published thinking and cache
 			cacheReadPerMillionTokensUsd: 0.5,
 			cacheWritePerMillionTokensUsd: 6.25,
 		},
-		reasoningEfforts: ["low", "medium", "high"],
+		reasoningEfforts: ["off", "low", "medium", "high"],
 		promptCacheRetentionTiers: ["short", "long"],
 	});
 	expect(modelFor("anthropic", "claude-opus-5.5")).toMatchObject({
@@ -136,13 +136,17 @@ test("first-party Provider Models expose only their published thinking and cache
 	expect(modelFor("anthropic", "claude-opus-5.5")).not.toHaveProperty(
 		"reasoningEfforts"
 	);
-	expect(modelFor("anthropic", "claude-haiku-4-5")).not.toHaveProperty(
-		"reasoningEfforts"
-	);
-
-	expect(modelFor("google", "gemini-3.6-flash")).toMatchObject({
-		reasoningEfforts: ["minimal", "low", "medium", "high"],
+	expect(modelFor("anthropic", "claude-haiku-4-5")).toMatchObject({
+		reasoningEfforts: ["off"],
 	});
+
+	expect(modelFor("google", "gemini-3.6-flash").reasoningEfforts).toEqual([
+		"off",
+		"minimal",
+		"low",
+		"medium",
+		"high",
+	]);
 	expect(modelFor("google", "gemini-3.6-flash")).not.toHaveProperty(
 		"promptCacheRetentionTiers"
 	);
@@ -153,7 +157,7 @@ test("first-party Provider Models expose only their published thinking and cache
 			outputPerMillionTokensUsd: 3.75,
 			cacheReadPerMillionTokensUsd: 0.075,
 		},
-		reasoningEfforts: ["low", "medium", "high"],
+		reasoningEfforts: ["off", "low", "medium", "high"],
 		promptCacheRetentionTiers: ["short", "long"],
 	});
 
@@ -206,7 +210,7 @@ test("first-party Provider Models expose only their published thinking and cache
 		},
 		protocolId: "openai-compatible",
 		providerId: "opencode-go",
-		reasoningEfforts: ["low", "medium", "high", "xhigh"],
+		reasoningEfforts: ["off", "low", "medium", "high", "xhigh"],
 	});
 	expect(modelFor("opencode-go", "longcat-2.0")).toMatchObject({
 		reasoningEfforts: ["off"],
@@ -304,7 +308,7 @@ test("Provider Model cache TTL uses only explicit protocol retention values", ()
 	expect(parsePromptCacheTtlMs("0s")).toBeUndefined();
 });
 
-test("Provider Model reasoning maps named levels and explicit overrides only", () => {
+test("Provider Model reasoning exposes Off by default unless metadata disables it", () => {
 	const model = providerFor([
 		{
 			modelId: "policy-model",
@@ -334,9 +338,14 @@ test("Provider Model reasoning maps named levels and explicit overrides only", (
 	).toEqual({ ...model, reasoningEfforts: ["off"] });
 	expect(
 		withProviderModelMetadata(model, {
-			thinking: { levels: ["low"], toggle: true },
+			thinking: { levels: ["low"] },
 		})
 	).toMatchObject({ reasoningEfforts: ["off", "low"] });
+	expect(
+		withProviderModelMetadata(model, {
+			thinking: { levels: ["low"], levelMap: { off: null } },
+		})
+	).toMatchObject({ reasoningEfforts: ["low"] });
 	expect(
 		withProviderModelMetadata(model, {
 			thinking: { toggle: true, unlevelled: true },

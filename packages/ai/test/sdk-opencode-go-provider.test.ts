@@ -147,6 +147,15 @@ describe("public OpenCode Go SDK provider", () => {
 			"https://opencode.ai/zen/go/v1/responses",
 			"https://opencode.ai/zen/go/v1/messages",
 		]);
+		const sessionId = requests[0]?.headers.get("x-opencode-session") ?? null;
+		expect(sessionId).toBeTruthy();
+		expect(
+			requests.map(({ headers }) => headers.get("x-opencode-session"))
+		).toEqual(requests.map(() => sessionId));
+		expect(
+			provider.models.find(({ modelId }) => modelId === "qwen3.8-max")
+				?.reasoningEfforts
+		).toContain("off");
 		expect(
 			provider.models.find(({ modelId }) => modelId === "qwen3.8-max")
 				?.reasoningEfforts
@@ -220,7 +229,7 @@ describe("public OpenCode Go SDK provider", () => {
 		);
 	});
 
-	test("gpt-luna-6 is selectable through OpenCode Go's Responses route", async () => {
+	test("gpt-6-luna is selectable through OpenCode Go's Responses route", async () => {
 		const requests: { body: Record<string, unknown>; url: string }[] = [];
 		const sdk = createProviderCollection();
 		const provider = createOpenCodeGoProvider({
@@ -248,17 +257,17 @@ describe("public OpenCode Go SDK provider", () => {
 
 		expect(provider.models).toContainEqual(
 			expect.objectContaining({
-				modelId: "gpt-luna-6",
+				modelId: "gpt-6-luna",
 				protocolId: "openai-responses",
 				providerId: "opencode-go",
 			})
 		);
-		await collect(sdk, "gpt-luna-6");
+		await collect(sdk, "gpt-6-luna");
 
 		expect(requests).toHaveLength(1);
 		expect(requests[0]?.url).toBe("https://opencode.ai/zen/go/v1/responses");
 		expect(requests[0]?.body).toMatchObject({
-			model: "gpt-luna-6",
+			model: "gpt-6-luna",
 			stream: true,
 		});
 	});

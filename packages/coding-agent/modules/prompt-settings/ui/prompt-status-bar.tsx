@@ -14,7 +14,6 @@ export function StatusBar() {
 		registry?.agents.find(({ id }) => id === agent)?.displayName ??
 		agentLabelFromId(agent);
 	const modelName = `${model.providerId}/${model.modelId}`;
-	const thinkingValue = thinkingLevel ?? "default";
 	return (
 		<box flexDirection="row" gap={1}>
 			<text fg={agentColor}>{agentLabel}</text>
@@ -22,12 +21,16 @@ export function StatusBar() {
 				∙
 			</text>
 			<text fg={colors.text}>{modelName}</text>
-			<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-				∙
-			</text>
-			<text attributes={TextAttributes.BOLD} fg={colors.secondary}>
-				{thinkingValue}
-			</text>
+			{thinkingLevel === undefined ? null : (
+				<>
+					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
+						∙
+					</text>
+					<text attributes={TextAttributes.BOLD} fg={colors.secondary}>
+						{thinkingLevel === "off" ? "thinking off" : thinkingLevel}
+					</text>
+				</>
+			)}
 		</box>
 	);
 }

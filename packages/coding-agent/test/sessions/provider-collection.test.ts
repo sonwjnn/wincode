@@ -21,6 +21,58 @@ import { pluginProviderStorageId } from "@/modules/providers/provider-stores";
 import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
+test("OpenCode Go requests carry the Host session ID for provider routing", async () => {
+	const requestHeaders: Headers[] = [];
+	const collection = await createDefaultSessionProviderCollection(
+		undefined,
+		"session-for-opencode-go",
+		{
+			credentialStore: createInMemoryCredentialStore(new Map()),
+			modelStore: {
+				get: () => undefined,
+				set: () => undefined,
+			},
+			openCodeGoProviderOptions: {
+				fetch: async (_input, init) => {
+					requestHeaders.push(new Headers(init?.headers));
+					return new Response(
+						'event: response.completed\ndata: {"type":"response.completed","response":{"output":[],"usage":{"input_tokens":1,"output_tokens":1}}}\n\n',
+						{ headers: { "content-type": "text/event-stream" } }
+					);
+				},
+			},
+		}
+	);
+
+	try {
+		await collection.setCredential("opencode-go", {
+			apiKey: "fake-opencode-go-key",
+			kind: "api-key",
+		});
+		const events: ChatEvent[] = [];
+		for await (const event of collection.chat({
+			messages: [
+				{ content: [{ text: "Say hello", type: "text" }], role: "user" },
+			],
+			modelId: "gpt-6-luna",
+			providerId: "opencode-go",
+		})) {
+			events.push(event);
+		}
+
+		expect(events.at(-1)).toMatchObject({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
+		expect(requestHeaders).toHaveLength(1);
+		expect(requestHeaders[0]?.get("x-opencode-session")).toBe(
+			"session-for-opencode-go"
+		);
+	} finally {
+		await collection.close();
+	}
+});
+
 test("Host Google caches stay isolated over shared user-scoped Provider stores", async () => {
 	const credentials = new Map<string, unknown>();
 	const modelSnapshots = new Map<string, readonly ProviderModel[]>();

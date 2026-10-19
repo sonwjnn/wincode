@@ -83,7 +83,12 @@ export const BUILT_IN_PROVIDER_CATALOG = {
 	"opencode-go": {
 		connectMethods: [{ kind: "api-key", methodId: "provider-api-key" }],
 		createProvider: (options) =>
-			createOpenCodeGoProvider(options.openCodeGoProviderOptions),
+			createOpenCodeGoProvider({
+				...options.openCodeGoProviderOptions,
+				...(options.sessionId === undefined
+					? {}
+					: { sessionId: options.sessionId }),
+			}),
 		displayName: "OpenCode Go Provider SDK",
 	},
 	deepseek: {

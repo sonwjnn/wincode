@@ -21,7 +21,10 @@ import {
 	useAgentRegistry,
 } from "@/modules/agents";
 import {
+	clampProviderModelThinkingSelection,
 	DEFAULT_PROVIDER_MODEL_SELECTION,
+	isSameProviderModelSelection,
+	normalizeProviderModelThinkingSelection,
 	type ProviderModelSelection,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
@@ -35,7 +38,10 @@ export type PromptConfig = PromptConfigState & {
 	cycleThinkingLevel: (providerModel?: ProviderModel) => void;
 	setAgent: (agent: AgentId) => void;
 	setModel: (model: ProviderModelSelection) => void;
-	setModelForFutureSubmissions: (model: ProviderModelSelection) => void;
+	setModelForFutureSubmissions: (
+		providerModel: ProviderModel,
+		selection: ProviderModelSelection
+	) => void;
 	setThinkingLevel: (thinkingLevel: ThinkingLevel | undefined) => void;
 	setThinkingLevelForFutureSubmissions: (
 		thinkingLevel: ThinkingLevel | undefined
@@ -52,10 +58,53 @@ export const resolveInitialPromptThinkingSelection = (
 		? {}
 		: { thinkingLevel: initialThinkingLevel };
 
+export const nextThinkingLevelInCycle = (
+	currentLevel: ThinkingLevel | undefined,
+	levels: readonly ThinkingLevel[]
+): ThinkingLevel | undefined => {
+	if (levels.length === 0) {
+		return;
+	}
+	const currentIndex =
+		currentLevel === undefined ? -1 : levels.indexOf(currentLevel);
+	return levels[(currentIndex + 1) % levels.length];
+};
+
 export const updatePromptConfigModel = (
 	current: PromptConfigState,
-	nextModel: ProviderModelSelection
-): PromptConfigState => ({ ...current, model: nextModel });
+	nextModel: ProviderModelSelection,
+	providerModel: ProviderModel
+): PromptConfigState => ({
+	agent: current.agent,
+	model: nextModel,
+	...(isSameProviderModelSelection(current.model, nextModel)
+		? normalizeProviderModelThinkingSelection(providerModel, current)
+		: clampProviderModelThinkingSelection(providerModel, "low")),
+});
+
+export const updatePromptConfigModelOverride = (
+	current: AgentSelectionOverride,
+	currentModel: ProviderModelSelection,
+	nextModel: ProviderModelSelection,
+	providerModel: ProviderModel
+): AgentSelectionOverride => {
+	let thinking: ThinkingSelection | undefined;
+	if (isSameProviderModelSelection(currentModel, nextModel)) {
+		if (current.thinking !== undefined) {
+			thinking = normalizeProviderModelThinkingSelection(
+				providerModel,
+				current.thinking
+			);
+		}
+	} else {
+		thinking = clampProviderModelThinkingSelection(providerModel, "low");
+	}
+	return {
+		...current,
+		model: nextModel,
+		...(thinking === undefined ? {} : { thinking }),
+	};
+};
 
 export const updatePromptConfigSelection = (
 	current: PromptConfigState,
@@ -90,6 +139,7 @@ export function PromptConfigProvider({
 	}));
 	const [submissionSelectionOverride, setSubmissionSelectionOverride] =
 		useState<AgentSelectionOverride>({});
+	const modelSelectionRef = useRef(initialModel);
 
 	useEffect(() => {
 		if (isNull(registry) || hasExplicitAgent.current) {
@@ -107,16 +157,16 @@ export function PromptConfigProvider({
 				providerModel === undefined
 					? []
 					: supportedProviderThinkingLevels(providerModel);
-			const options: (ThinkingLevel | undefined)[] = [undefined, ...levels];
-			const currentIndex = options.indexOf(config.thinkingLevel);
-			const next = options[(currentIndex + 1) % options.length];
-			const selection = next === undefined ? {} : { thinkingLevel: next };
+			const next = nextThinkingLevelInCycle(config.thinkingLevel, levels);
+			if (next === undefined) {
+				return;
+			}
+			const selection = { thinkingLevel: next };
 			setConfig((current) => updatePromptConfigSelection(current, selection));
-			setSubmissionSelectionOverride((current) =>
-				current.thinking === undefined
-					? current
-					: { ...current, thinking: selection }
-			);
+			setSubmissionSelectionOverride((current) => ({
+				...current,
+				thinking: selection,
+			}));
 		},
 		[config.thinkingLevel]
 	);
@@ -139,15 +189,27 @@ export function PromptConfigProvider({
 	);
 
 	const setModel = useCallback((model: ProviderModelSelection) => {
-		setConfig((current) => updatePromptConfigModel(current, model));
+		modelSelectionRef.current = model;
+		setConfig((current) => ({ ...current, model }));
 	}, []);
 
 	const setModelForFutureSubmissions = useCallback(
-		(model: ProviderModelSelection) => {
-			setModel(model);
-			setSubmissionSelectionOverride((current) => ({ ...current, model }));
+		(providerModel: ProviderModel, selection: ProviderModelSelection) => {
+			const currentModel = modelSelectionRef.current;
+			modelSelectionRef.current = selection;
+			setConfig((current) =>
+				updatePromptConfigModel(current, selection, providerModel)
+			);
+			setSubmissionSelectionOverride((current) =>
+				updatePromptConfigModelOverride(
+					current,
+					currentModel,
+					selection,
+					providerModel
+				)
+			);
 		},
-		[setModel]
+		[]
 	);
 
 	const setThinkingLevelForFutureSubmissions = useCallback(

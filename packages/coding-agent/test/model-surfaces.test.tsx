@@ -11,7 +11,9 @@ import type {
 import { act, useEffect, useRef } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
+import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
+import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinking-level-dialog";
 import { createInteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
@@ -377,7 +379,6 @@ const renderThinkingLevels = async (
 	renderSurfaces(() => (
 		<ThinkingLevelDialogContent
 			currentThinkingLevel={currentThinkingLevel}
-			onSelectDefault={() => undefined}
 			onSelectThinkingLevel={() => undefined}
 			thinkingLevels={thinkingLevels}
 		/>
@@ -388,7 +389,7 @@ test("thinking selection renders only levels declared by the Provider Model", as
 	await setup.waitForFrame((frame) => frame.includes("Extra high"));
 
 	const frame = setup.captureCharFrame();
-	expect(frame).toContain("Provider default");
+	expect(frame).not.toContain("Provider default");
 	expect(frame).toContain("Minimal");
 	expect(frame).toContain("Low");
 	expect(frame).toContain("Medium");
@@ -402,33 +403,34 @@ test("thinking selection renders only levels declared by the Provider Model", as
 	]);
 });
 
-test("choosing Provider default clears an active thinking level", async () => {
-	let cleared = false;
+test("Off remains an explicit selectable ThinkingLevel", async () => {
+	let selectedLevel: ThinkingLevel | undefined;
 	const setup = await renderDialogSurface(
 		<ThinkingLevelDialogContent
 			currentThinkingLevel="low"
-			onSelectDefault={() => {
-				cleared = true;
+			onSelectThinkingLevel={(level) => {
+				selectedLevel = level;
 			}}
-			onSelectThinkingLevel={() => undefined}
-			thinkingLevels={["low"]}
+			thinkingLevels={["off", "low"]}
 		/>
 	);
 
-	await act(async () => setup.mockInput.typeText("default"));
+	await act(async () => setup.mockInput.typeText("off"));
 	await flushUi(setup);
 	await act(() => setup.mockInput.pressEnter());
 	await flushUi(setup);
 
-	expect(cleared).toBe(true);
+	expect(selectedLevel).toBe("off");
 });
 
-test("an unsupported Provider Model effort cannot be selected", async () => {
+test("an unsupported Provider Model exposes no synthetic default level", async () => {
 	const setup = await renderThinkingLevels(undefined, []);
-	await setup.waitForFrame((frame) => frame.includes("Provider default"));
+	await setup.waitForFrame((frame) =>
+		frame.includes("No thinking levels available")
+	);
 
 	const frame = setup.captureCharFrame();
-	expect(frame).toContain("Provider default");
+	expect(frame).not.toContain("Provider default");
 	for (const unsupportedLevel of [
 		"Off",
 		"Minimal",
@@ -439,6 +441,70 @@ test("an unsupported Provider Model effort cannot be selected", async () => {
 	]) {
 		expect(frame).not.toContain(unsupportedLevel);
 	}
+});
+
+test("status bar omits the Thinking Level label when it is unset", async () => {
+	const snapshot = fromPartial<ConfigSnapshot>({
+		diagnostics: [],
+		document: { agents: {} },
+		sourceFor: () => undefined,
+		sources: [],
+	});
+	const config = fromPartial<ConfigRuntime>({
+		configStore: { getSnapshot: async () => snapshot },
+		homeRoot: "/tmp",
+		workspace: "/tmp",
+	});
+	const setup = await testRender(
+		<ThemeProvider>
+			<ConfigProvider value={config}>
+				<ToastProvider>
+					<AgentRegistryProvider>
+						<PromptConfigProvider>
+							<StatusBar />
+						</PromptConfigProvider>
+					</AgentRegistryProvider>
+				</ToastProvider>
+			</ConfigProvider>
+		</ThemeProvider>,
+		{ height: 10, width: 120 }
+	);
+	activeSetups.push(setup);
+	await flushUi(setup);
+
+	expect(setup.captureCharFrame()).not.toContain("default");
+});
+
+test("status bar labels an explicit Off selection as thinking off", async () => {
+	const snapshot = fromPartial<ConfigSnapshot>({
+		diagnostics: [],
+		document: { agents: {} },
+		sourceFor: () => undefined,
+		sources: [],
+	});
+	const config = fromPartial<ConfigRuntime>({
+		configStore: { getSnapshot: async () => snapshot },
+		homeRoot: "/tmp",
+		workspace: "/tmp",
+	});
+	const setup = await testRender(
+		<ThemeProvider>
+			<ConfigProvider value={config}>
+				<ToastProvider>
+					<AgentRegistryProvider>
+						<PromptConfigProvider initialThinkingLevel="off">
+							<StatusBar />
+						</PromptConfigProvider>
+					</AgentRegistryProvider>
+				</ToastProvider>
+			</ConfigProvider>
+		</ThemeProvider>,
+		{ height: 10, width: 120 }
+	);
+	activeSetups.push(setup);
+	await flushUi(setup);
+
+	expect(setup.captureCharFrame()).toContain("thinking off");
 });
 
 describe("session usage bar", () => {

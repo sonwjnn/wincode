@@ -18,12 +18,13 @@ export { thinkingLevelIds, thinkingLevelSchema } from "./thinking-level.ts";
 
 /**
  * How a model expresses reasoning, normalized from models.dev
- * `reasoning_options[]`. A per-model map carries selectable levels and their
- * provider-native values; budget-only models keep their derived automatic
- * budget without a selectable level.
+ * `reasoning_options[]`. A present policy makes Off selectable unless
+ * `levelMap.off` is explicitly null. A per-model map carries selectable levels
+ * and their provider-native values; budget-only models keep their derived
+ * automatic budget without a selectable level.
  */
 export type ModelThinkingPolicy = Readonly<{
-	/** Per-model native level overrides; null means unsupported. */
+	/** Per-model native level overrides; null means unsupported, including for Off. */
 	levelMap?: ThinkingLevelMap;
 	/** Source-published thinking levels, used to derive the model's level map. */
 	levels?: readonly ThinkingLevel[];

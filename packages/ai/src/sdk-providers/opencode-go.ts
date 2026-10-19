@@ -55,6 +55,8 @@ export type OpenCodeGoFetch = (
 export type OpenCodeGoProviderOptions = Readonly<{
 	fetch?: OpenCodeGoFetch;
 	models?: readonly ProviderModel[];
+	/** Stable across requests for one conversation; defaults to a generated ID. */
+	sessionId?: string;
 }>;
 
 const promptPart = (part: ChatContentPart): ProtocolPromptPart => {
@@ -157,7 +159,8 @@ const openAIProviderOptionsFor = (
 const wireRequestFor = (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
-	apiKey: string
+	apiKey: string,
+	sessionId: string
 ): OpenCodeGoWireRequest => {
 	const model = context.model;
 	const modelRequest = modelRequestFor(request, context);
@@ -179,6 +182,7 @@ const wireRequestFor = (
 			headers: {
 				...JSON_HEADERS,
 				authorization: `Bearer ${apiKey}`,
+				"x-opencode-session": sessionId,
 			},
 			strategy: openAIResponsesStrategy,
 			url: RESPONSES_URL,
@@ -198,6 +202,7 @@ const wireRequestFor = (
 				...JSON_HEADERS,
 				"anthropic-version": "2023-06-01",
 				"x-api-key": apiKey,
+				"x-opencode-session": sessionId,
 			},
 			strategy: openCodeGoAnthropicStrategy,
 			url: MESSAGES_URL,
@@ -212,6 +217,7 @@ const wireRequestFor = (
 		headers: {
 			...JSON_HEADERS,
 			authorization: `Bearer ${apiKey}`,
+			"x-opencode-session": sessionId,
 		},
 		strategy: openAIChatStrategy,
 		url: CHAT_COMPLETIONS_URL,
@@ -315,14 +321,14 @@ const streamOpenCodeGoResponse = async function* (
 	}
 };
 
-const streamOpenCodeGo = (fetchImpl: OpenCodeGoFetch) =>
+const streamOpenCodeGo = (fetchImpl: OpenCodeGoFetch, sessionId: string) =>
 	async function* (
 		request: ProviderChatRequest,
 		context: ProviderChatContext
 	): AsyncIterable<ProviderChatEvent> {
 		try {
 			const apiKey = apiKeyFor(context.authorization);
-			const wireRequest = wireRequestFor(request, context, apiKey);
+			const wireRequest = wireRequestFor(request, context, apiKey, sessionId);
 			const response = await fetchOpenCodeGoResponse(
 				wireRequest,
 				fetchImpl,
@@ -343,6 +349,7 @@ export const createOpenCodeGoProvider = (
 ): Provider => {
 	const fetchImpl: OpenCodeGoFetch =
 		options.fetch ?? globalThis.fetch.bind(globalThis);
+	const sessionId = options.sessionId ?? globalThis.crypto.randomUUID();
 	const models: readonly ProviderModel[] =
 		options.models ??
 		openCodeGoProviderModels.map((model: ProviderModel) =>
@@ -380,6 +387,6 @@ export const createOpenCodeGoProvider = (
 				? { authorization: { apiKey: parsed.data.apiKey } }
 				: null;
 		},
-		streamChat: streamOpenCodeGo(fetchImpl),
+		streamChat: streamOpenCodeGo(fetchImpl, sessionId),
 	};
 };

@@ -93,7 +93,7 @@ const createTarget = (
 	createPluginPromptSelectionTarget(
 		providerController(models, hostRegistrations, onAvailability),
 		{
-			setModel: (model) => selectedModels.push(model),
+			setModel: (_providerModel, selection) => selectedModels.push(selection),
 			setThinkingLevel: () => undefined,
 		},
 		() => trustedRegistrations

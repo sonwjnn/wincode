@@ -272,22 +272,25 @@ export function ChatTextArea({
 		providerId: selectedProviderId,
 	} = model;
 	const setFutureModelSelection = useCallback(
-		(nextModel: ProviderModelSelection) => {
+		(
+			nextProviderModel: ProviderModel,
+			nextSelection: ProviderModelSelection
+		) => {
 			if (
 				!(
 					isSameProviderModelIdentity(
 						{ modelId: selectedModelId, providerId: selectedProviderId },
-						nextModel
+						nextSelection
 					) &&
 					pluginProviderOwnerMatches(
 						pluginProviderSource,
-						nextModel.pluginProviderSource
+						nextSelection.pluginProviderSource
 					)
 				)
 			) {
 				onProviderModelChanged?.();
 			}
-			setModelForFutureSubmissions(nextModel);
+			setModelForFutureSubmissions(nextProviderModel, nextSelection);
 		},
 		[
 			selectedModelId,
@@ -304,7 +307,7 @@ export function ChatTextArea({
 					? models
 					: [...models, nextModel]
 			);
-			setFutureModelSelection(selection);
+			setFutureModelSelection(nextModel, selection);
 		},
 		[setFutureModelSelection]
 	);

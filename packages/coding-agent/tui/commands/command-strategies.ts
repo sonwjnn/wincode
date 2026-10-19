@@ -14,6 +14,7 @@ import { ThemeDialogContent } from "@/modules/prompt-settings/ui/theme-dialog";
 import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinking-level-dialog";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
+	isSameProviderModelIdentity,
 	type ProviderModelSelection,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
@@ -138,14 +139,21 @@ const STRATEGIES = {
 					"Provider Model availability is unavailable in this view."
 				);
 			}
+			const availableProviderModels =
+				await providerController.getAvailableModels();
 			return createElement(AgentsDialogContent, {
-				availableProviderModels: await providerController.getAvailableModels(),
+				availableProviderModels,
 				currentAgent: config.agent,
 				providerController,
-				onSelectAgent: (agent, model) => {
+				onSelectAgent: (agent, selection) => {
 					config.setAgent(agent);
-					if (model !== undefined) {
-						config.setModelForFutureSubmissions(model);
+					if (selection !== undefined) {
+						const providerModel = availableProviderModels.find((candidate) =>
+							isSameProviderModelIdentity(candidate, selection)
+						);
+						if (providerModel !== undefined) {
+							config.setModelForFutureSubmissions(providerModel, selection);
+						}
 					}
 				},
 			});
@@ -226,8 +234,6 @@ const STRATEGIES = {
 			return createElement(ThinkingLevelDialogContent, {
 				currentThinkingLevel: config.thinkingLevel,
 				thinkingLevels: levels,
-				onSelectDefault: () =>
-					config.setThinkingLevelForFutureSubmissions(undefined),
 				onSelectThinkingLevel: config.setThinkingLevelForFutureSubmissions,
 			});
 		},

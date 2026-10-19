@@ -38,6 +38,7 @@ const GOOGLE_API_ROOT =
 	"https://generativelanguage.googleapis.com/v1beta/models";
 const GOOGLE_FORWARDED_REASONING_EFFORTS = new Set([
 	"none",
+	"off",
 	"minimal",
 	"low",
 	"medium",

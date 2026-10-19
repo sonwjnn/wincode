@@ -12,13 +12,13 @@ import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 type ThinkingLevelDialogContentProps = {
 	currentThinkingLevel: ThinkingLevel | undefined;
 	thinkingLevels: readonly ThinkingLevel[];
-	onSelectDefault: () => void;
 	onSelectThinkingLevel: (thinkingLevel: ThinkingLevel) => void;
 };
 
-type ThinkingLevelOption =
-	| Readonly<{ kind: "default"; label: string }>
-	| Readonly<{ kind: "level"; label: string; value: ThinkingLevel }>;
+type ThinkingLevelOption = Readonly<{
+	label: string;
+	value: ThinkingLevel;
+}>;
 
 const thinkingLevelLabel = (level: ThinkingLevel): string => {
 	if (level === "xhigh") {
@@ -30,31 +30,22 @@ const thinkingLevelLabel = (level: ThinkingLevel): string => {
 export const ThinkingLevelDialogContent = ({
 	currentThinkingLevel,
 	thinkingLevels,
-	onSelectDefault,
 	onSelectThinkingLevel,
 }: ThinkingLevelDialogContentProps) => {
 	const dialog = useDialog();
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
-	const options: ThinkingLevelOption[] = [
-		{ kind: "default", label: "Provider default" },
-		...thinkingLevels.map((value) => ({
-			kind: "level" as const,
-			label: thinkingLevelLabel(value),
-			value,
-		})),
-	];
+	const options: ThinkingLevelOption[] = thinkingLevels.map((value) => ({
+		label: thinkingLevelLabel(value),
+		value,
+	}));
 
 	const handleSelect = useCallback(
 		(option: ThinkingLevelOption) => {
-			if (option.kind === "default") {
-				onSelectDefault();
-			} else {
-				onSelectThinkingLevel(option.value);
-			}
+			onSelectThinkingLevel(option.value);
 			dialog.close();
 		},
-		[dialog, onSelectDefault, onSelectThinkingLevel]
+		[dialog, onSelectThinkingLevel]
 	);
 
 	useDialogEscape();
@@ -62,23 +53,14 @@ export const ThinkingLevelDialogContent = ({
 	return (
 		<SearchListDialogWrapper
 			emptyText="No thinking levels available for this model"
-			getKey={(option) =>
-				option.kind === "default" ? "default" : `level:${option.value}`
-			}
+			getKey={(option) => `level:${option.value}`}
 			getSearchText={(option) => option.label}
-			isItemActive={(option) =>
-				option.kind === "default"
-					? currentThinkingLevel === undefined
-					: option.value === currentThinkingLevel
-			}
+			isItemActive={(option) => option.value === currentThinkingLevel}
 			items={options}
 			onSelect={handleSelect}
 			placeholder="Search thinking levels"
 			renderItem={(option, isSelected, isActive) => {
-				const activeTextColor =
-					isActive && option.kind !== "default"
-						? colors.secondary
-						: colors.text;
+				const activeTextColor = isActive ? colors.secondary : colors.text;
 				const labelColor = isSelected ? selectedTextColor : activeTextColor;
 				return (
 					<SelectableDialogItem

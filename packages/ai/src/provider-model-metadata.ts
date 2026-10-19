@@ -8,19 +8,11 @@ import {
 import { parsePromptCacheTtlMs } from "./prompt-cache-ttl.ts";
 import type { ProviderModel } from "./sdk.ts";
 
-const addExplicitOffEffort = (
+const addOffEffort = (
 	policy: NonNullable<ModelMetadataEntry["thinking"]>,
 	efforts: Set<ThinkingLevel>
 ): void => {
-	const offMapValue = policy.levelMap?.off;
-	if (offMapValue === null) {
-		return;
-	}
-	if (
-		policy.toggle === true ||
-		policy.levels?.includes("off") ||
-		offMapValue !== undefined
-	) {
+	if (policy.levelMap?.off !== null) {
 		efforts.add("off");
 	}
 };
@@ -51,6 +43,24 @@ const addNamedReasoningEfforts = (
 			efforts.add(level);
 		}
 	}
+};
+
+const reasoningEffortsForModel = (
+	model: ProviderModel,
+	metadata: ModelMetadataEntry | undefined
+): readonly ThinkingLevel[] | undefined => {
+	const efforts = model.reasoningEfforts ?? reasoningEffortsFor(metadata);
+	const policy = metadata?.thinking;
+	if (efforts === undefined) {
+		return;
+	}
+	if (policy?.levelMap?.off === null) {
+		return efforts.filter((effort) => effort !== "off");
+	}
+	if (efforts.length === 0 && policy === undefined) {
+		return efforts;
+	}
+	return efforts.includes("off") ? efforts : ["off", ...efforts];
 };
 
 const promptCacheRetentionTtlMsFor = (
@@ -142,7 +152,7 @@ const reasoningEffortsFor = (
 	}
 
 	const efforts = new Set<ThinkingLevel>();
-	addExplicitOffEffort(policy, efforts);
+	addOffEffort(policy, efforts);
 	addNamedReasoningEfforts(policy, efforts);
 	return efforts.size > 0 ? [...efforts] : undefined;
 };
@@ -152,8 +162,7 @@ export const withProviderModelMetadata = (
 	model: ProviderModel,
 	metadata: ModelMetadataEntry | undefined
 ): ProviderModel => {
-	const reasoningEfforts =
-		model.reasoningEfforts ?? reasoningEffortsFor(metadata);
+	const reasoningEfforts = reasoningEffortsForModel(model, metadata);
 	const promptCacheRetentionTiers =
 		model.promptCacheRetentionTiers ??
 		metadata?.promptCache?.explicit.retentionTiers;

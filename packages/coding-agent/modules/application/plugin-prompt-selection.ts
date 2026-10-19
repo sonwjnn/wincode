@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@wincode/ai";
+import type { ProviderModel, ThinkingLevel } from "@wincode/ai";
 import type { PluginPromptSelectionTarget } from "@/modules/plugins/prompt-selection";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
@@ -14,7 +14,7 @@ import {
 import { getPluginProviderRegistrationsFromCollection } from "@/modules/sessions/provider-collection";
 
 type PromptSelectionMutations = Readonly<{
-	setModel: (model: ProviderModelSelection) => void;
+	setModel: (model: ProviderModel, selection: ProviderModelSelection) => void;
 	setThinkingLevel: (level: ThinkingLevel | undefined) => void;
 }>;
 
@@ -109,8 +109,8 @@ export const createPluginPromptSelectionTarget = (
 				}
 				return await selectCandidate(
 					candidate,
-					(_availableModel, currentSelection) => {
-						promptSelection.setModel(currentSelection);
+					(availableModel, currentSelection) => {
+						promptSelection.setModel(availableModel, currentSelection);
 						return true;
 					}
 				);

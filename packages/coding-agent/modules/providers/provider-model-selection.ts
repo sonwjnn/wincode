@@ -312,6 +312,17 @@ export const isSameProviderModelIdentity = (
 ): boolean =>
 	left.providerId === right.providerId && left.modelId === right.modelId;
 
+/** Compares Provider Model identity and its optional trusted Plugin owner. */
+export const isSameProviderModelSelection = (
+	left: ProviderModelSelection,
+	right: ProviderModelSelection
+): boolean =>
+	isSameProviderModelIdentity(left, right) &&
+	pluginProviderOwnerMatches(
+		left.pluginProviderSource,
+		right.pluginProviderSource
+	);
+
 export class ProviderModelSelectionOwnershipError extends Error {
 	constructor(selection: ProviderModelSelection) {
 		super(
@@ -440,3 +451,30 @@ export const normalizeProviderModelThinkingSelection = (
 	providerModelReasoningEffort(model, selection.thinkingLevel) === undefined
 		? {}
 		: { thinkingLevel: selection.thinkingLevel };
+
+/** Clamps to a declared Thinking Level, preferring stronger levels before weaker ones. */
+export const clampProviderModelThinkingSelection = (
+	model: ProviderModel,
+	requestedLevel: ThinkingLevel
+): ThinkingSelection => {
+	const availableLevels = supportedProviderThinkingLevels(model);
+	const requestedIndex = thinkingLevelIds.indexOf(requestedLevel);
+
+	for (
+		let index = requestedIndex;
+		index < thinkingLevelIds.length;
+		index += 1
+	) {
+		const level = thinkingLevelIds[index];
+		if (level !== undefined && availableLevels.includes(level)) {
+			return { thinkingLevel: level };
+		}
+	}
+	for (let index = requestedIndex - 1; index >= 0; index -= 1) {
+		const level = thinkingLevelIds[index];
+		if (level !== undefined && availableLevels.includes(level)) {
+			return { thinkingLevel: level };
+		}
+	}
+	return {};
+};
