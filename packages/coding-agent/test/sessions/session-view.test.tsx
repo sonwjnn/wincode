@@ -33,6 +33,7 @@ import type {
 import { isNull, isUndefined } from "@wincode/utils";
 import { act, useCallback, useEffect, useRef, useState } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
+import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
 import {
 	createPluginRuntime,
@@ -1341,12 +1342,14 @@ describe("SessionView initial submission", () => {
 				) => Result | Promise<Result>
 			): Promise<Result> => await action(candidate.model, candidate.selection),
 		});
-		const bridge = createPluginPromptSelectionBridge();
-		const pluginRuntime = createPluginRuntime(
-			[
+		const configStore = createTestConfigStore();
+		const pluginRuntime = await loadPlugins({
+			bundledPlugins: [
 				{
-					agents: [
-						{
+					id: "pinned_agent_plugin",
+					factory: (api) => {
+						const plugin = api.definePlugin({ id: "pinned_agent_plugin" });
+						plugin.registerAgent({
 							agent: {
 								description: "Agent with a pinned model.",
 								displayName: "Pinned Model Agent",
@@ -1360,20 +1363,29 @@ describe("SessionView initial submission", () => {
 								path: "/plugins/pinned-agent.md",
 								scope: "user",
 							},
-						},
-					],
-					commands: [],
-					id: "pinned-agent-plugin",
-					sourcePath: "/plugins/pinned-agent.ts",
-					tools: [],
-					workspace,
+						});
+						plugin.registerCommand({
+							description: "Set model and thinking selection.",
+							name: "select_model_and_thinking",
+							handler: async () => {
+								const selected = await api.setModel(selectedModel);
+								api.setThinkingLevel("off");
+								api.setThinkingLevel("high");
+								return selected ? "selection updated" : "selection unavailable";
+							},
+						});
+					},
 				},
 			],
-			[],
-			[],
-			[],
-			bridge
-		);
+			cliPaths: [],
+			config: {
+				configStore,
+				cwd: workspace,
+				homeRoot: os.homedir(),
+				trustedProjectRoots: [],
+				workspace,
+			},
+		});
 		setInteractiveRuntimeContext({
 			args: [],
 			cwd: workspace,
@@ -1387,7 +1399,6 @@ describe("SessionView initial submission", () => {
 		};
 		const router = buildRouter();
 		await router.load();
-		const configStore = createTestConfigStore();
 		let registryIsReady = false;
 		const setup = await testRender(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
@@ -1431,13 +1442,19 @@ describe("SessionView initial submission", () => {
 		try {
 			await setup.waitFor(() => registryIsReady);
 			await flushUi(setup);
-			let modelSelected = false;
+			let commandResult = "";
 			await act(async () => {
-				modelSelected = await bridge.setModel(selectedModel);
-				bridge.setThinkingLevel("off");
-				bridge.setThinkingLevel("high");
+				commandResult = await pluginRuntime.executeCommand(
+					"pinned_agent_plugin",
+					"select_model_and_thinking",
+					{
+						argument: "",
+						sessionId: "session-selection",
+						workspace,
+					}
+				);
 			});
-			expect(modelSelected).toBe(true);
+			expect(commandResult).toBe("selection updated");
 			expect(fakeCacheWarmCancellations).toBe(1);
 			await typePrompt(setup, "submit with the override");
 			setup.mockInput.pressEnter();
