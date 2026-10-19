@@ -44,6 +44,7 @@ export type PromptConfig = PromptConfigState & {
 	) => void;
 	setThinkingLevel: (thinkingLevel: ThinkingLevel | undefined) => void;
 	setThinkingLevelForFutureSubmissions: (
+		providerModel: ProviderModel | undefined,
 		thinkingLevel: ThinkingLevel | undefined
 	) => void;
 	submissionSelectionOverride: AgentSelectionOverride;
@@ -213,7 +214,19 @@ export function PromptConfigProvider({
 	);
 
 	const setThinkingLevelForFutureSubmissions = useCallback(
-		(thinkingLevel: ThinkingLevel | undefined) => {
+		(
+			providerModel: ProviderModel | undefined,
+			thinkingLevel: ThinkingLevel | undefined
+		) => {
+			if (
+				thinkingLevel !== undefined &&
+				(providerModel === undefined ||
+					!supportedProviderThinkingLevels(providerModel).includes(
+						thinkingLevel
+					))
+			) {
+				return;
+			}
 			setThinkingLevel(thinkingLevel);
 			setSubmissionSelectionOverride((current) => ({
 				...current,

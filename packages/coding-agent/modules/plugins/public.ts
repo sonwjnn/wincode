@@ -286,7 +286,7 @@ export type PluginAPI = Readonly<{
 	definePlugin: (identity: Readonly<{ id: string }>) => PluginDefinitionAPI;
 	/** Set the focused Interactive composer model for future Submissions. */
 	setModel: (model: ProviderModelSelection) => Promise<boolean>;
-	/** Set or clear the focused composer ThinkingLevel for future Submissions. */
+	/** Set or clear the focused composer ThinkingLevel for future Submissions; unsupported levels are ignored. */
 	setThinkingLevel: (level: ThinkingLevel | undefined) => void;
 }>;
 

@@ -1299,7 +1299,7 @@ describe("SessionView initial submission", () => {
 		});
 	});
 
-	test("Plugin selection overrides a pinned Agent on the next Submission", async () => {
+	test("Plugin Thinking Level requests are limited to the selected model on the next Submission", async () => {
 		const navigationRelease = deferred<void>();
 		const navigationStarted = deferred<void>();
 		const sendStarted = deferred<void>();
@@ -1319,6 +1319,7 @@ describe("SessionView initial submission", () => {
 			modelId: selectedModel.modelId,
 			protocolId: "fake-provider",
 			providerId: selectedModel.providerId,
+			reasoningEfforts: ["off", "low"],
 		};
 		const modelCandidates = [
 			providerModelCandidate(pinnedProviderModel),
@@ -1433,12 +1434,11 @@ describe("SessionView initial submission", () => {
 			let modelSelected = false;
 			await act(async () => {
 				modelSelected = await bridge.setModel(selectedModel);
+				bridge.setThinkingLevel("off");
+				bridge.setThinkingLevel("high");
 			});
 			expect(modelSelected).toBe(true);
 			expect(fakeCacheWarmCancellations).toBe(1);
-			await act(async () => {
-				bridge.setThinkingLevel("low");
-			});
 			await typePrompt(setup, "submit with the override");
 			setup.mockInput.pressEnter();
 			await sendStarted.promise;
@@ -1448,9 +1448,9 @@ describe("SessionView initial submission", () => {
 				model: selectedModel,
 				selectionOverride: {
 					model: selectedModel,
-					thinking: { thinkingLevel: "low" },
+					thinking: { thinkingLevel: "off" },
 				},
-				thinkingLevel: "low",
+				thinkingLevel: "off",
 			});
 		} finally {
 			release.resolve();

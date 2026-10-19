@@ -256,6 +256,7 @@ export function ChatTextArea({
 	const selectedProviderModel = knownProviderModels.find((providerModel) =>
 		isSameProviderModelIdentity(providerModel, model)
 	);
+	const selectedProviderModelRef = useLatest(selectedProviderModel);
 	const previousAgent = useRef(agent);
 	useEffect(() => {
 		if (previousAgent.current === agent) {
@@ -276,6 +277,7 @@ export function ChatTextArea({
 			nextProviderModel: ProviderModel,
 			nextSelection: ProviderModelSelection
 		) => {
+			selectedProviderModelRef.current = nextProviderModel;
 			if (
 				!(
 					isSameProviderModelIdentity(
@@ -325,7 +327,11 @@ export function ChatTextArea({
 				providerController,
 				{
 					setModel: setFutureModelSelection,
-					setThinkingLevel: setThinkingLevelForFutureSubmissions,
+					setThinkingLevel: (level) =>
+						setThinkingLevelForFutureSubmissions(
+							selectedProviderModelRef.current,
+							level
+						),
 				},
 				() =>
 					getInteractivePluginRuntime()?.getProviderRegistrations(sessionId) ??
@@ -338,6 +344,7 @@ export function ChatTextArea({
 		providerController,
 		setFutureModelSelection,
 		setThinkingLevelForFutureSubmissions,
+		selectedProviderModel,
 		sessionId,
 	]);
 	const thinkingLevels =

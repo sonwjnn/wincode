@@ -234,7 +234,8 @@ const STRATEGIES = {
 			return createElement(ThinkingLevelDialogContent, {
 				currentThinkingLevel: config.thinkingLevel,
 				thinkingLevels: levels,
-				onSelectThinkingLevel: config.setThinkingLevelForFutureSubmissions,
+				onSelectThinkingLevel: (level) =>
+					config.setThinkingLevelForFutureSubmissions(providerModel, level),
 			});
 		},
 	},
