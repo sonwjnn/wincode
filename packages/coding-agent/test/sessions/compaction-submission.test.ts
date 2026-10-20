@@ -1,6 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { prepareCompactionBeforeSubmit } from "@/modules/sessions/agent-session/submission";
 import type {
 	CompactSessionResult,
@@ -11,7 +11,7 @@ import { SessionCompactionError } from "@/modules/sessions/compaction/error";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { modelId, sessionMessageId } from "../support/identifiers";
 
-const model: ChatModelSelection = {
+const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
@@ -46,6 +46,28 @@ const createSubmission = ({
 		settings,
 		settleCompaction,
 	});
+
+test("skips threshold compaction when the model context limit is unknown", async () => {
+	const runCompaction = mock(async () =>
+		fromPartial<CompactSessionResult>({ activeMessages: [], entry: {} })
+	);
+	const result = await prepareCompactionBeforeSubmit({
+		compaction: fromPartial<SessionCompactionModule>({
+			needsCompaction: mock(() => true),
+		}),
+		getActiveMessages: () => [message("u1")],
+		model,
+		runCompaction,
+		settings: fromPartial<ResolvedCompactionSettings>({
+			autoAvailable: false,
+			thresholdTokens: null,
+		}),
+		settleCompaction: async () => null,
+	});
+
+	expect(result).toEqual({ ok: true });
+	expect(runCompaction).not.toHaveBeenCalled();
+});
 
 test("keeps a submission's threshold when another compaction owns the swap", async () => {
 	const compactionCalls: string[] = [];

@@ -10,11 +10,7 @@ import {
 	toSessionMessageId,
 	toSessionRecordId,
 } from "@wincode/agent-core";
-import { modelUsageSchema } from "@wincode/ai/model-usage";
-import {
-	type ChatModelSelection,
-	modelSelectionSchema,
-} from "@wincode/ai/models";
+import { modelUsageSchema } from "@wincode/ai";
 import {
 	isArray,
 	isNull,
@@ -25,6 +21,11 @@ import {
 import { randomUUIDv7 } from "bun";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import {
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+	providerModelSelectionSchema,
+} from "@/modules/providers/provider-model-selection";
 import type { EditMode } from "@/modules/tools";
 import {
 	type CompactionId,
@@ -326,7 +327,7 @@ type SessionRecordRow = typeof sessionRecord.$inferSelect;
 type SessionUsageEntryRow = typeof sessionUsageEntry.$inferSelect;
 
 const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
-	const summarizationModel = modelSelectionSchema.parse(
+	const summarizationModel = providerModelSelectionSchema.parse(
 		row.summarizationModelJson
 	);
 	const summary = parseCompactionSummary(row.summaryJson);
@@ -400,9 +401,7 @@ const deriveSessionTitle = (messages: SessionMessage[]): string => {
 };
 
 const toSession = (row: SessionRow): Session => {
-	const parsedModel = row.modelJson
-		? modelSelectionSchema.safeParse(row.modelJson)
-		: undefined;
+	const model = normalizeProviderModelSelection(row.modelJson) ?? undefined;
 	return {
 		createdAt: row.createdAt,
 		id: toSessionId(row.id),
@@ -410,18 +409,24 @@ const toSession = (row: SessionRow): Session => {
 		pinned: row.pinned,
 		title: row.title ?? UNTITLED_SESSION_TITLE,
 		...omitUndefined({
-			model: parsedModel?.data,
+			model,
 			thinkingLevel: row.thinkingLevel ?? undefined,
 		}),
 	};
 };
 const toSessionRecordModel = (
-	model: Pick<SessionRecord["model"], "modelId" | "providerId">,
+	model: Pick<
+		SessionRecord["model"],
+		"modelId" | "pluginProviderSource" | "providerId"
+	>,
 	thinkingLevel: SessionRecord["model"]["thinkingLevel"]
 ): SessionRecord["model"] => ({
 	modelId: model.modelId,
 	providerId: model.providerId,
-	...omitUndefined({ thinkingLevel }),
+	...omitUndefined({
+		pluginProviderSource: model.pluginProviderSource,
+		thinkingLevel,
+	}),
 });
 const toSessionUsageEntry = (row: SessionUsageEntryRow): SessionUsageEntry => {
 	if (row.kind !== "cache-warm") {
@@ -431,7 +436,7 @@ const toSessionUsageEntry = (row: SessionUsageEntryRow): SessionUsageEntry => {
 		createdAt: row.createdAt,
 		id: toSessionUsageEntryId(row.id),
 		kind: row.kind,
-		model: modelSelectionSchema.parse(row.modelJson),
+		model: providerModelSelectionSchema.parse(row.modelJson),
 		sessionId: toSessionId(row.sessionId),
 		usage: modelUsageSchema.parse(row.usageJson),
 	};
@@ -878,6 +883,7 @@ export const createDrizzleSessionStore = (
 			await collectAttachments().catch(() => undefined);
 		},
 		createSession: async ({
+			id: requestedId,
 			agent,
 			message,
 			model,
@@ -888,7 +894,7 @@ export const createDrizzleSessionStore = (
 			if (isUndefined(durableMessage) || durableMessage.role !== "user") {
 				throw new Error("Initial session message has no durable parts.");
 			}
-			const id = createSessionId();
+			const id = requestedId ?? createSessionId();
 			const now = new Date();
 			const recordModel = toSessionRecordModel(
 				message.metadata?.model ?? model,
@@ -1116,10 +1122,10 @@ export const createDrizzleSessionStore = (
 				.orderBy(desc(sessionRecord.createdAt))
 				.limit(Math.max(limit * 8, limit))
 				.all();
-			const result: ChatModelSelection[] = [];
+			const result: ProviderModelSelection[] = [];
 			const seen = new Set<string>();
 			for (const row of rows) {
-				const parsed = modelSelectionSchema.safeParse({
+				const parsed = providerModelSelectionSchema.safeParse({
 					modelId: row.model.modelId,
 					providerId: row.model.providerId,
 				});

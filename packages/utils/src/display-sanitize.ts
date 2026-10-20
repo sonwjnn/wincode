@@ -1,4 +1,4 @@
-import { isNonEmptyString, isUndefined } from "./guards";
+import { isNonEmptyString, isUndefined } from "./guards.ts";
 
 const URL_LIKE_PATTERN = /https?:\/\/[^\s,;]+/gi;
 const SECRET_VALUE_PATTERN =

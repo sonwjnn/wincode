@@ -1,0 +1,196 @@
+import {
+	type ModelMetadataEntry,
+	type OpenAIPromptCacheProtocol,
+	type SupportedPromptCacheRetentionTier,
+	supportedPromptCacheRetentionTierIds,
+	type ThinkingLevel,
+	thinkingLevelIds,
+} from "./model-metadata.ts";
+import { parsePromptCacheTtlMs } from "./prompt-cache-ttl.ts";
+import type { ProviderModel } from "./sdk.ts";
+
+/** Shared choices used when reasoning is declared without named effort levels. */
+const DEFAULT_REASONING_EFFORTS: readonly ThinkingLevel[] = [
+	"minimal",
+	"low",
+	"medium",
+	"high",
+];
+
+const addOffEffort = (
+	policy: NonNullable<ModelMetadataEntry["thinking"]>,
+	efforts: Set<ThinkingLevel>
+): void => {
+	if (policy.levelMap?.off !== null) {
+		efforts.add("off");
+	}
+};
+
+const addNamedReasoningEfforts = (
+	policy: NonNullable<ModelMetadataEntry["thinking"]>,
+	efforts: Set<ThinkingLevel>
+): void => {
+	for (const level of policy.levels ?? DEFAULT_REASONING_EFFORTS) {
+		if (level !== "off") {
+			efforts.add(level);
+		}
+	}
+	for (const level of Object.keys(policy.levelMap ?? {}) as ThinkingLevel[]) {
+		if (level === "off") {
+			continue;
+		}
+		const nativeValue = policy.levelMap?.[level];
+		if (nativeValue === undefined) {
+			continue;
+		}
+		if (nativeValue === null) {
+			efforts.delete(level);
+		} else {
+			efforts.add(level);
+		}
+	}
+};
+
+const reasoningEffortsForModel = (
+	model: ProviderModel,
+	metadata: ModelMetadataEntry | undefined
+): readonly ThinkingLevel[] | undefined => {
+	const efforts = model.reasoningEfforts ?? reasoningEffortsFor(metadata);
+	const policy = metadata?.thinking;
+	if (efforts === undefined) {
+		return;
+	}
+	if (policy?.levelMap?.off === null) {
+		return efforts.filter((effort) => effort !== "off");
+	}
+	if (efforts.length === 0 && policy === undefined) {
+		return efforts;
+	}
+	return efforts.includes("off") ? efforts : ["off", ...efforts];
+};
+
+const promptCacheRetentionTtlMsFor = (
+	model: ProviderModel,
+	metadata: ModelMetadataEntry | undefined
+): ProviderModel["promptCacheRetentionTtlMs"] => {
+	if (
+		model.protocolId !== "openai-chat" &&
+		model.protocolId !== "openai-responses"
+	) {
+		return;
+	}
+	const protocol = model.protocolId as OpenAIPromptCacheProtocol;
+	const retention = metadata?.promptCache?.protocols?.[protocol]?.retention;
+	if (retention === undefined) {
+		return;
+	}
+	const ttlMs: Partial<Record<SupportedPromptCacheRetentionTier, number>> = {};
+	for (const tier of supportedPromptCacheRetentionTierIds) {
+		const value = retention.values[tier];
+		if (value !== undefined) {
+			const ttl = parsePromptCacheTtlMs(value);
+			if (ttl !== undefined) {
+				ttlMs[tier] = ttl;
+			}
+		}
+	}
+	return Object.keys(ttlMs).length === 0 ? undefined : ttlMs;
+};
+
+const limitsFor = (
+	metadata: ModelMetadataEntry | undefined
+): ProviderModel["limits"] => {
+	const limits = metadata?.limits;
+	if (limits === undefined) {
+		return;
+	}
+	return {
+		contextWindowTokens: limits.context,
+		...(limits.output === undefined ? {} : { maxOutputTokens: limits.output }),
+	};
+};
+
+const pricingFor = (
+	metadata: ModelMetadataEntry | undefined
+): ProviderModel["pricing"] => {
+	const cost = metadata?.cost;
+	const tiers = metadata?.tiers;
+	if (cost === undefined && tiers === undefined) {
+		return;
+	}
+	return {
+		...(cost === undefined
+			? {}
+			: {
+					inputPerMillionTokensUsd: cost.input,
+					outputPerMillionTokensUsd: cost.output,
+					...(cost.cacheRead === undefined
+						? {}
+						: { cacheReadPerMillionTokensUsd: cost.cacheRead }),
+					...(cost.cacheWrite === undefined
+						? {}
+						: { cacheWritePerMillionTokensUsd: cost.cacheWrite }),
+				}),
+		...(tiers === undefined || tiers.length === 0
+			? {}
+			: {
+					tiers: tiers.map((tier) => ({
+						inputTokensAbove: tier.inputTokensAbove,
+						inputPerMillionTokensUsd: tier.input,
+						outputPerMillionTokensUsd: tier.output,
+						...(tier.cacheRead === undefined
+							? {}
+							: { cacheReadPerMillionTokensUsd: tier.cacheRead }),
+						...(tier.cacheWrite === undefined
+							? {}
+							: { cacheWritePerMillionTokensUsd: tier.cacheWrite }),
+					})),
+				}),
+	};
+};
+
+const reasoningEffortsFor = (
+	metadata: ModelMetadataEntry | undefined
+): readonly ThinkingLevel[] | undefined => {
+	const policy = metadata?.thinking;
+	if (!policy) {
+		return;
+	}
+
+	const efforts = new Set<ThinkingLevel>();
+	addOffEffort(policy, efforts);
+	addNamedReasoningEfforts(policy, efforts);
+	return efforts.size > 0
+		? thinkingLevelIds.filter((level) => efforts.has(level))
+		: undefined;
+};
+
+/** Adds normalized limits, pricing, reasoning efforts, and prompt-cache metadata. */
+export const withProviderModelMetadata = (
+	model: ProviderModel,
+	metadata: ModelMetadataEntry | undefined
+): ProviderModel => {
+	const reasoningEfforts = reasoningEffortsForModel(model, metadata);
+	const promptCacheRetentionTiers =
+		model.promptCacheRetentionTiers ??
+		metadata?.promptCache?.explicit.retentionTiers;
+	const promptCacheRetentionTtlMs =
+		model.promptCacheRetentionTtlMs ??
+		promptCacheRetentionTtlMsFor(model, metadata);
+	const promptCache = model.promptCache ?? metadata?.promptCache;
+	const limits = model.limits ?? limitsFor(metadata);
+	const pricing = model.pricing ?? pricingFor(metadata);
+	return {
+		...model,
+		...(limits === undefined ? {} : { limits }),
+		...(pricing === undefined ? {} : { pricing }),
+		...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+		...(promptCacheRetentionTiers === undefined
+			? {}
+			: { promptCacheRetentionTiers }),
+		...(promptCacheRetentionTtlMs === undefined
+			? {}
+			: { promptCacheRetentionTtlMs }),
+		...(promptCache === undefined ? {} : { promptCache }),
+	};
+};

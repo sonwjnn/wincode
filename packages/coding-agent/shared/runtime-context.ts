@@ -3,6 +3,7 @@ import { isUndefined } from "@wincode/utils";
 import type { ApplicationResourceLoader } from "@/modules/application/resource-loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { ProjectTrustDecision } from "@/modules/project-trust/project-trust";
+import type { SessionProviderCollectionFactory } from "@/modules/sessions/provider-collection";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 export type StartInteractiveInput = {
 	args: readonly string[];
@@ -10,6 +11,7 @@ export type StartInteractiveInput = {
 	configRuntime?: ConfigRuntime;
 	pluginRuntime?: PluginRuntime;
 	resourceLoader?: ApplicationResourceLoader;
+	createProviderCollection?: SessionProviderCollectionFactory;
 	runtimeFactory?: () => AgentRuntime;
 	sessionTrustDecision?: ProjectTrustDecision;
 	startupDiagnostics?: readonly string[];
@@ -43,3 +45,7 @@ export const getInteractiveRuntimeContext = (): StartInteractiveInput => {
 
 export const getInteractivePluginRuntime = (): PluginRuntime | undefined =>
 	runtimeContext?.pluginRuntime;
+
+export const getInteractiveProviderCollectionFactory = ():
+	| SessionProviderCollectionFactory
+	| undefined => runtimeContext?.createProviderCollection;

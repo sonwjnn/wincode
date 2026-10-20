@@ -1,13 +1,13 @@
 import {
 	type AgentId,
 	type AgentTurnEvent,
+	createAgentRuntime,
 	createStatefulAgent,
 	type SessionRecord,
 	type StatefulAgent,
 	toSubmissionId,
 } from "@wincode/agent-core";
-import { createGoogleCachedContentResourceManager } from "@wincode/ai/model-client";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ProviderCollection, ThinkingLevel } from "@wincode/ai";
 import { isNull, logger, omitUndefined } from "@wincode/utils";
 import {
 	type AgentRegistry,
@@ -15,6 +15,11 @@ import {
 } from "@/modules/agents/registry";
 import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import { createSessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
+import {
+	createInteractiveProviderController,
+	type InteractiveProviderController,
+} from "@/modules/providers/interactive-provider-controller";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import { AgentSessionImpl } from "../agent-session/agent-session";
 import type {
@@ -26,15 +31,23 @@ import type {
 } from "../agent-session/types";
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
-import { defaultRuntimeFactory } from "../hooks/runtime-turn";
 import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
 } from "../message";
+import {
+	type InteractiveSessionProviderCollection,
+	ProviderCollectionUnavailableError,
+	pluginProvidersFromRuntime,
+} from "../provider-collection";
 import { resolveSessionSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionUsageEntry } from "../storage/session-store";
 import { createAgentSessionAdapters } from "./agent-session-adapters";
+import {
+	assertPluginProviderRegistrationSnapshot,
+	assertPluginProviderSelectionOwner,
+} from "./agent-session-turn-runner";
 import type {
 	SessionCapabilities,
 	SessionHost,
@@ -49,13 +62,41 @@ import type {
 type OpenedSession = Readonly<{
 	compactions: SessionCompaction[];
 	context: SessionMessage[];
-	model: ChatModelSelection | undefined;
+	model: ProviderModelSelection | undefined;
 	steeringMessages: SessionSteeringMessage[];
 	transcript: SessionMessage[];
 	thinkingLevel: ThinkingLevel | undefined;
 	usageEntries: SessionUsageEntry[];
 }>;
 const closingHosts = new Map<SessionHostOptions["sessionId"], Promise<void>>();
+
+const isInteractiveSessionProviderCollection = (
+	providers: ProviderCollection
+): providers is InteractiveSessionProviderCollection =>
+	"preparePluginProviderRegistrations" in providers &&
+	typeof providers.preparePluginProviderRegistrations === "function";
+
+const requireProviderCollection = (
+	providerCollection: ProviderCollection | undefined
+): ProviderCollection => {
+	if (providerCollection === undefined) {
+		throw new ProviderCollectionUnavailableError();
+	}
+	return providerCollection;
+};
+
+const pluginProviderIdsForExecutionMode = (
+	executionMode: SessionHostOptions["executionMode"],
+	providerModel: ProviderModelSelection | undefined
+): readonly string[] | undefined => {
+	if (executionMode === "interactive") {
+		return;
+	}
+	if (providerModel === undefined) {
+		return [];
+	}
+	return [providerModel.providerId];
+};
 
 const waitForClosingHost = async (
 	sessionId: SessionHostOptions["sessionId"]
@@ -97,7 +138,7 @@ const restoreSteeringMessages = (
 	records: readonly SessionRecord[],
 	transcript: readonly SessionMessage[],
 	session: {
-		model?: ChatModelSelection;
+		model?: ProviderModelSelection;
 		thinkingLevel?: ThinkingLevel;
 	}
 ): SessionSteeringMessage[] =>
@@ -166,7 +207,8 @@ const restoreSteeringMessages = (
  */
 const openSession = async (
 	capabilities: SessionCapabilities,
-	sessionId: SessionHostOptions["sessionId"]
+	sessionId: SessionHostOptions["sessionId"],
+	providerModel?: ProviderModelSelection
 ): Promise<OpenedSession> => {
 	const store = capabilities.getStore();
 	const [session, compactions, loadedRecords, usageEntries] = await Promise.all(
@@ -220,7 +262,7 @@ const openSession = async (
 	return {
 		compactions,
 		context: rebuildActiveMessages(active, compactions.at(-1) ?? null),
-		model: session.model,
+		model: providerModel ?? session.model,
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
 		thinkingLevel: session.thinkingLevel,
@@ -272,6 +314,8 @@ export const createSessionHost = async ({
 	autoContinue = true,
 	capabilities,
 	executionMode,
+	providerModel,
+	providerCollection: prevalidatedProviderCollection,
 	sessionId,
 }: SessionHostOptions): Promise<SessionHost> => {
 	await waitForClosingHost(sessionId);
@@ -281,17 +325,18 @@ export const createSessionHost = async ({
 			sessionId,
 			executionMode === undefined ? {} : { executionMode }
 		);
-	const googleCachedContentResourceManager =
-		createGoogleCachedContentResourceManager({ sessionId });
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
 	let agentSession: AgentSession | undefined;
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
 	let isShutDown = false;
 	let shutdownPromise: Promise<void> | undefined;
 	let statefulAgent: StatefulAgent<SessionQueuedSubmission> | undefined;
+	let providerCollection: ProviderCollection | undefined;
+	let providerController: InteractiveProviderController | undefined;
 	// The warmer belongs to the loaded Host, not a single Agent Turn; retain it across idle turns.
 	let cacheWarming: SessionCacheWarming | undefined;
 	let unsubscribeContext: (() => void) | undefined;
+	let unsubscribeProviderComposition: (() => void) | undefined;
 
 	/**
 	 * Reports one event to the Host's observers. Everything the Agent Session
@@ -324,6 +369,7 @@ export const createSessionHost = async ({
 		const activeAgentSession = agentSession;
 		const activeInternalPort = agentSessionInternalPort;
 		unsubscribeContext?.();
+		unsubscribeProviderComposition?.();
 		const cacheWarmingShutdown = cacheWarming?.dispose() ?? Promise.resolve();
 		let agentSessionShutdown: Promise<void> = Promise.resolve();
 		if (activeAgentSession !== undefined) {
@@ -348,8 +394,10 @@ export const createSessionHost = async ({
 					statefulAgent?.shutdown() ?? Promise.resolve(),
 					cacheWarmingShutdown,
 				]);
-				await googleCachedContentResourceManager.close();
-				const failure = results.find(
+				const cleanupResults = await Promise.allSettled([
+					providerCollection?.close() ?? Promise.resolve(),
+				]);
+				const failure = [...results, ...cleanupResults].find(
 					(result): result is PromiseRejectedResult =>
 						result.status === "rejected"
 				);
@@ -381,31 +429,88 @@ export const createSessionHost = async ({
 		return closingShutdown;
 	};
 	try {
-		const opened = await openSession(capabilities, sessionId);
-		cacheWarming = createSessionCacheWarming({
-			getPricingTable: () => capabilities.getModelPricingTable?.() ?? {},
-			initialUsageEntries: opened.usageEntries,
+		const storedSession = await capabilities.getStore().getSession(sessionId);
+		const selectedProviderModel = providerModel ?? storedSession.model;
+		const sessionWorkManager = capabilities.getSessionHostManager();
+		const withAsyncSessionWork = async <Result>(
+			action: () => Promise<Result>,
+			onRejected: (reason: string) => Result
+		): Promise<Result> => {
+			const admission = sessionWorkManager.tryAcquireSessionWork();
+			if (admission.kind === "rejected") {
+				return onRejected(admission.reason);
+			}
+			try {
+				return await action();
+			} finally {
+				admission.release();
+			}
+		};
+		const allowedPluginProviderIds = pluginProviderIdsForExecutionMode(
+			executionMode,
+			selectedProviderModel
+		);
+		const pluginRuntime = capabilities.getPluginRuntime?.();
+		const allowedPluginProviderSources = pluginProvidersFromRuntime(
+			pluginRuntime,
 			sessionId,
-			store: capabilities.getStore(),
+			allowedPluginProviderIds
+		);
+		const sessionProviderCollection = requireProviderCollection(
+			prevalidatedProviderCollection ??
+				(await capabilities.createProviderCollection?.(
+					pluginRuntime,
+					sessionId,
+					allowedPluginProviderIds,
+					allowedPluginProviderSources
+				))
+		);
+		providerCollection = sessionProviderCollection;
+		assertPluginProviderRegistrationSnapshot(
+			allowedPluginProviderSources,
+			sessionProviderCollection
+		);
+		const opened = await openSession(
+			capabilities,
+			sessionId,
+			selectedProviderModel
+		);
+		const sessionRuntime = createAgentRuntime({
+			providerCollection: sessionProviderCollection,
 		});
-		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
-			getQueuedSubmissionId: ({ id }) => id,
-			runtime: capabilities.getRuntime?.() ?? defaultRuntimeFactory(),
-		});
-		const ports: AgentSessionPorts = withEventChannel(
-			createAgentSessionAdapters({
-				cacheWarming,
-				capabilities,
-				googleCachedContentResourceManager,
-				isShutDown: () => isShutDown,
-				sessionId,
-				statefulAgent,
-			}),
-			publish
+		providerController = createInteractiveProviderController(
+			sessionProviderCollection,
+			isInteractiveSessionProviderCollection(sessionProviderCollection)
+				? {
+						getPluginProviderComposition:
+							sessionProviderCollection.getPluginProviderComposition,
+						getPluginProviderRegistrations:
+							sessionProviderCollection.getPluginProviderRegistrations,
+						getTrustedPluginProviderRegistrations: () =>
+							capabilities
+								.getPluginRuntime?.()
+								?.getProviderRegistrations(sessionId) ?? [],
+						getTrustedPluginProviderRuntime: () =>
+							capabilities.getPluginRuntime?.(),
+						loginOpenAIOAuth: sessionProviderCollection.loginOpenAIOAuth,
+						getDiscoverableProviderIds:
+							sessionProviderCollection.getDiscoverableProviderIds,
+						getCompositionRevision:
+							sessionProviderCollection.getCompositionRevision,
+						subscribeComposition:
+							sessionProviderCollection.subscribeComposition,
+						supportsModelDiscovery:
+							sessionProviderCollection.supportsModelDiscovery,
+						withSessionWork: (action) =>
+							withAsyncSessionWork(action, (reason) => {
+								throw new Error(reason);
+							}),
+					}
+				: undefined
 		);
 		const initialRegistry = capabilities.getRegistry();
-		const resolveOpenedSelection = (registry: AgentRegistry | null) => {
-			const selection = resolveSessionSelection({
+		const resolveOpenedSelection = (registry: AgentRegistry | null) =>
+			resolveSessionSelection({
 				messages: [...opened.transcript],
 				sessionModel: opened.model,
 				sessionThinkingLevel: opened.thinkingLevel,
@@ -416,14 +521,54 @@ export const createSessionHost = async ({
 								resolveActiveAgentId(registry, agentId),
 						}),
 			});
-			return selection;
-		};
 		const initialSelection = resolveOpenedSelection(initialRegistry);
+		const selectedHostModel = selectedProviderModel ?? initialSelection?.model;
+		if (selectedHostModel !== undefined) {
+			assertPluginProviderSelectionOwner(
+				selectedHostModel,
+				capabilities,
+				sessionProviderCollection,
+				sessionId
+			);
+		}
+		await providerController.restoreModels();
+		cacheWarming = createSessionCacheWarming({
+			initialUsageEntries: opened.usageEntries,
+			providerCollection: sessionProviderCollection,
+			sessionId,
+			store: capabilities.getStore(),
+		});
+		if (isInteractiveSessionProviderCollection(sessionProviderCollection)) {
+			unsubscribeProviderComposition =
+				sessionProviderCollection.subscribeComposition(() =>
+					cacheWarming?.cancel()
+				);
+		}
+		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
+			getQueuedSubmissionId: ({ id }) => id,
+			runtime: sessionRuntime,
+		});
+		const ports: AgentSessionPorts = withEventChannel(
+			createAgentSessionAdapters({
+				cacheWarming,
+				capabilities,
+				providerCollection: sessionProviderCollection,
+				isShutDown: () => isShutDown,
+				sessionId,
+				statefulAgent,
+				withSessionWork: (action) =>
+					withAsyncSessionWork(action, (reason) => {
+						throw new Error(reason);
+					}),
+			}),
+			publish
+		);
 		const initialAgent = initialSelection?.agent;
 		const openedAgentSession = new AgentSessionImpl({
 			initialCompactions: opened.compactions,
 			...omitUndefined({
 				initialAgent,
+				initialSessionModel: opened.model ?? initialSelection?.model,
 				initialSessionThinkingLevel:
 					opened.thinkingLevel ?? initialSelection?.thinkingLevel,
 			}),
@@ -450,21 +595,6 @@ export const createSessionHost = async ({
 		) {
 			openedAgentSession.continue();
 		}
-		const sessionWorkManager = capabilities.getSessionHostManager();
-		const withAsyncSessionWork = async <Result>(
-			action: () => Promise<Result>,
-			onRejected: (reason: string) => Result
-		): Promise<Result> => {
-			const admission = sessionWorkManager.tryAcquireSessionWork();
-			if (admission.kind === "rejected") {
-				return onRejected(admission.reason);
-			}
-			try {
-				return await action();
-			} finally {
-				admission.release();
-			}
-		};
 		const withSyncSessionWork = <Result>(
 			action: () => Result,
 			onRejected: (reason: string) => Result
@@ -520,9 +650,41 @@ export const createSessionHost = async ({
 			operation: "session-host",
 			phase: "opened",
 		});
+		const interactiveProviderCollection =
+			providerCollection !== undefined &&
+			isInteractiveSessionProviderCollection(providerCollection)
+				? providerCollection
+				: undefined;
 
 		return {
 			agentSession: guardedAgentSession,
+			withSessionWork: withAsyncSessionWork,
+			assertCurrentPluginProviderRegistrationSnapshot: () =>
+				assertPluginProviderRegistrationSnapshot(
+					pluginProvidersFromRuntime(
+						capabilities.getPluginRuntime?.(),
+						sessionId,
+						allowedPluginProviderIds
+					),
+					sessionProviderCollection
+				),
+			...(providerCollection === undefined ? {} : { providerCollection }),
+			...(providerController === undefined ? {} : { providerController }),
+			...(interactiveProviderCollection === undefined
+				? {}
+				: {
+						prepareProviderComposition: async (
+							nextPluginRuntime,
+							{ includePluginProviders = true } = {}
+						) =>
+							interactiveProviderCollection.preparePluginProviderRegistrations(
+								includePluginProviders
+									? pluginProvidersFromRuntime(nextPluginRuntime, sessionId)
+									: []
+							),
+						failProviderCompositionClosed: () =>
+							interactiveProviderCollection.failClosed(),
+					}),
 			getSelection: () => resolveOpenedSelection(capabilities.getRegistry()),
 			getSnapshot: openedAgentSession.getSnapshot,
 			getCacheWarmingStatus: () => cacheWarming?.getStatus() ?? "idle",

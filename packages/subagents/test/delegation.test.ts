@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseCatalogModelSelection } from "@wincode/ai/models";
+import { parseProviderModelSelection } from "@wincode/ai";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
@@ -125,9 +125,9 @@ test("delegation applies the current Agent ceiling before starting a child task"
 });
 
 test("delegation forwards a Markdown profile's model and thinking level to the child task", async () => {
-	const model = parseCatalogModelSelection("openai/gpt-5.6-luna");
+	const model = parseProviderModelSelection("openai/gpt-5.6-luna");
 	if (model === null) {
-		throw new Error("Expected the test model to exist in the catalog.");
+		throw new Error("Expected a valid Provider Model identity.");
 	}
 	const sessionSdk = {
 		getAgentCatalog: async () => [

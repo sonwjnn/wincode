@@ -1,9 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { type ChatEvent, createProviderCollection } from "@wincode/ai/sdk";
 import {
+	type ChatEvent,
 	createOpenAIProvider,
+	createProviderCollection,
 	type OpenAIProvider,
-} from "@wincode/ai/sdk/providers/openai";
+} from "@wincode/ai";
+
+const openAIResponsePromptCache = {
+	explicit: { retentionTiers: ["short"] },
+	protocols: {
+		"openai-responses": {
+			breakpoints: true,
+			eligibility: { minimumInputTokens: 1024 },
+			promptCacheKey: true,
+			retention: {
+				field: "prompt_cache_options.ttl",
+				values: { short: "30m" },
+			},
+		},
+	},
+} as const;
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(
@@ -12,6 +28,74 @@ const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	);
 
 describe("public OpenAI SDK provider", () => {
+	test("rejects unsupported protocol mappings before a model becomes selectable", () => {
+		expect(() =>
+			createOpenAIProvider({
+				models: [
+					{
+						modelId: "gpt-invalid-protocol",
+						protocolId: "openai-respones",
+						providerId: "openai",
+					},
+				],
+			})
+		).toThrow("OpenAI provider models must use a supported protocol ID.");
+	});
+
+	test("OpenAI Responses sends a model-declared minimal reasoning effort", async () => {
+		const requests: Record<string, unknown>[] = [];
+		const sdk = createProviderCollection();
+		sdk.register(
+			createOpenAIProvider({
+				models: [
+					{
+						modelId: "custom-minimal-model",
+						protocolId: "openai-responses",
+						providerId: "openai",
+						reasoningEfforts: ["minimal"],
+					},
+				],
+				fetch: async (_input, init) => {
+					requests.push(
+						JSON.parse(String(init?.body)) as Record<string, unknown>
+					);
+					return sseResponse([
+						{
+							type: "response.completed",
+							response: {
+								output: [],
+								usage: {
+									input_tokens: 1,
+									output_tokens: 1,
+									total_tokens: 2,
+								},
+							},
+						},
+					]);
+				},
+			})
+		);
+		await sdk.setCredential("openai", {
+			kind: "api-key",
+			apiKey: "openai-test-key",
+		});
+
+		for await (const _event of sdk.chat({
+			messages: [{ content: [{ text: "Hi", type: "text" }], role: "user" }],
+			modelId: "custom-minimal-model",
+			providerId: "openai",
+			reasoningEffort: "minimal",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({
+			model: "custom-minimal-model",
+			reasoning: { effort: "minimal" },
+		});
+	});
+
 	test("API-key consumers retain Responses multimodal, tool, cache, usage, and continuation behavior", async () => {
 		const continuation = [
 			{ id: "rs_private", type: "reasoning" },
@@ -30,6 +114,16 @@ describe("public OpenAI SDK provider", () => {
 		const sdk = createProviderCollection();
 		sdk.register(
 			createOpenAIProvider({
+				models: [
+					{
+						modelId: "gpt-5.6",
+						promptCache: openAIResponsePromptCache,
+						promptCacheRetentionTiers: ["short"],
+						protocolId: "openai-responses",
+						providerId: "openai",
+						reasoningEfforts: ["high"],
+					},
+				],
 				fetch: async (input, init) => {
 					requests.push({
 						body: JSON.parse(String(init?.body)) as Record<string, unknown>,
@@ -69,15 +163,19 @@ describe("public OpenAI SDK provider", () => {
 			kind: "api-key",
 			apiKey: "openai-test-key",
 		});
-		expect(sdk.getModel("openai", "gpt-5.6")).toEqual({
+		expect(sdk.getModel("openai", "gpt-5.6")).toMatchObject({
 			modelId: "gpt-5.6",
+			promptCache: openAIResponsePromptCache,
+			promptCacheRetentionTiers: ["short"],
 			protocolId: "openai-responses",
 			providerId: "openai",
+			reasoningEfforts: ["high"],
 		});
 
 		const events: ChatEvent[] = [];
 		for await (const event of sdk.chat({
 			cacheRetention: "short",
+			reasoningEffort: "high",
 			messages: [
 				{
 					content: [
@@ -97,6 +195,7 @@ describe("public OpenAI SDK provider", () => {
 				},
 			],
 			modelId: "gpt-5.6",
+			promptCacheKey: "wincode-session:consumer-test",
 			providerId: "openai",
 			system: "Be concise.",
 			tools: [
@@ -123,7 +222,9 @@ describe("public OpenAI SDK provider", () => {
 		const body = requests[0]?.body;
 		expect(body).toMatchObject({
 			model: "gpt-5.6",
+			reasoning: { effort: "high" },
 			stream: true,
+			prompt_cache_key: "wincode-session:consumer-test",
 			prompt_cache_options: { mode: "explicit", ttl: "30m" },
 			tools: [
 				{
@@ -244,6 +345,20 @@ describe("public OpenAI SDK provider", () => {
 			outcome: { continuation, status: "success" },
 			type: "terminal",
 		});
+		for await (const _event of sdk.chat({
+			messages: [
+				{
+					content: [{ text: "Unsupported effort?", type: "text" }],
+					role: "user",
+				},
+			],
+			modelId: "gpt-5.6",
+			providerId: "openai",
+			reasoningEffort: "max",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+		expect(requests[2]?.body).not.toHaveProperty("reasoning");
 	});
 
 	test("OpenAI-compatible Chat Completions models keep their route and stream contract", async () => {
@@ -277,6 +392,7 @@ describe("public OpenAI SDK provider", () => {
 						modelId: "compatible-chat-model",
 						protocolId: "openai-chat",
 						providerId: "openai",
+						reasoningEfforts: ["high"],
 					},
 				],
 			})
@@ -296,6 +412,7 @@ describe("public OpenAI SDK provider", () => {
 			],
 			modelId: "compatible-chat-model",
 			providerId: "openai",
+			reasoningEffort: "high",
 			tools: [
 				{
 					name: "weather",
@@ -316,6 +433,7 @@ describe("public OpenAI SDK provider", () => {
 		);
 		expect(requests[0]?.body).toMatchObject({
 			model: "compatible-chat-model",
+			reasoning_effort: "high",
 			stream: true,
 			stream_options: { include_usage: true },
 			messages: [{ role: "user", content: "Weather?" }],
@@ -332,6 +450,20 @@ describe("public OpenAI SDK provider", () => {
 				},
 			],
 		});
+		for await (const _event of sdk.chat({
+			messages: [
+				{
+					content: [{ text: "Unsupported effort?", type: "text" }],
+					role: "user",
+				},
+			],
+			modelId: "compatible-chat-model",
+			providerId: "openai",
+			reasoningEffort: "max",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+		expect(requests[1]?.body).not.toHaveProperty("reasoning_effort");
 		expect(events).toEqual([
 			{ delta: "The forecast is sunny.", type: "text-delta" },
 			{ delta: "Cloud cover is low.", type: "reasoning-delta" },
@@ -355,7 +487,7 @@ describe("public OpenAI SDK provider", () => {
 		]);
 	});
 
-	test("unsupported Responses cache controls retry once without failing the chat", async () => {
+	test("chat succeeds when unsupported Responses cache options trigger an uncached retry", async () => {
 		const bodies: Record<string, unknown>[] = [];
 		let attempts = 0;
 		const sdk = createProviderCollection();
@@ -363,10 +495,15 @@ describe("public OpenAI SDK provider", () => {
 			createOpenAIProvider({
 				fetch: async (_input, init) => {
 					attempts += 1;
-					bodies.push(
-						JSON.parse(String(init?.body)) as Record<string, unknown>
-					);
-					if (attempts === 1) {
+					const body = JSON.parse(String(init?.body)) as Record<
+						string,
+						unknown
+					>;
+					bodies.push(body);
+					if (
+						Object.hasOwn(body, "prompt_cache_key") ||
+						Object.hasOwn(body, "prompt_cache_options")
+					) {
 						return Response.json(
 							{ error: { message: "prompt_cache_options is not supported" } },
 							{ status: 400 }
@@ -396,16 +533,80 @@ describe("public OpenAI SDK provider", () => {
 				{ content: [{ text: "cached prompt", type: "text" }], role: "user" },
 			],
 			modelId: "gpt-5.6",
+			promptCacheKey: "wincode-session:cache-fallback",
 			providerId: "openai",
+			system: "Be concise.",
 		})) {
 			events.push(event);
 		}
 
 		expect(attempts).toBe(2);
-		expect(bodies[0]?.prompt_cache_options).toEqual({ ttl: "30m" });
+		expect(bodies[0]?.prompt_cache_key).toBe("wincode-session:cache-fallback");
+		expect(bodies[0]?.prompt_cache_options).toEqual({
+			mode: "explicit",
+			ttl: "30m",
+		});
+		expect(bodies[1]).not.toHaveProperty("prompt_cache_key");
 		expect(bodies[1]).not.toHaveProperty("prompt_cache_options");
 		expect(events.at(-1)).toEqual({
 			outcome: { continuation: [], status: "success" },
+			type: "terminal",
+		});
+	});
+
+	test("OpenAI OAuth sets store false so the Codex endpoint accepts chat requests", async () => {
+		const requests: {
+			body: Record<string, unknown>;
+			url: string;
+		}[] = [];
+		const provider = createOpenAIProvider({
+			fetch: async (input, init) => {
+				const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				requests.push({ body, url: String(input) });
+				if (body.store !== false) {
+					return Response.json(
+						{ detail: "Store must be set to false" },
+						{ status: 400 }
+					);
+				}
+				return sseResponse([
+					{
+						type: "response.completed",
+						response: {
+							output: [],
+							usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
+						},
+					},
+				]);
+			},
+		});
+		const sdk = createProviderCollection();
+		sdk.register(provider);
+		await sdk.setCredential("openai", {
+			accessToken: "oauth-test-access",
+			accountId: "acct-test",
+			expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+			kind: "oauth-session",
+			refreshToken: "oauth-test-refresh",
+			updatedAt: new Date().toISOString(),
+		});
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [{ content: [{ text: "hello", type: "text" }], role: "user" }],
+			modelId: "gpt-5.6",
+			providerId: "openai",
+		})) {
+			events.push(event);
+		}
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe(
+			"https://chatgpt.com/backend-api/codex/responses"
+		);
+		expect(requests[0]?.body.store).toBe(false);
+		expect(events.at(-1)).toMatchObject({
+			outcome: { status: "success" },
 			type: "terminal",
 		});
 	});
@@ -652,5 +853,65 @@ describe("public OpenAI SDK provider", () => {
 				type: "terminal",
 			},
 		]);
+	});
+
+	test("shared reasoning off serializes as native none for both OpenAI APIs", async () => {
+		const requests: Record<string, unknown>[] = [];
+		const sdk = createProviderCollection();
+		sdk.register(
+			createOpenAIProvider({
+				models: [
+					{
+						modelId: "responses-off-model",
+						protocolId: "openai-responses",
+						providerId: "openai",
+						reasoningEfforts: ["off"],
+					},
+					{
+						modelId: "chat-off-model",
+						protocolId: "openai-chat",
+						providerId: "openai",
+						reasoningEfforts: ["off"],
+					},
+				],
+				fetch: async (input, init) => {
+					requests.push(
+						JSON.parse(String(init?.body)) as Record<string, unknown>
+					);
+					return String(input).endsWith("/responses")
+						? sseResponse([
+								{
+									type: "response.completed",
+									response: {
+										output: [],
+										usage: { input_tokens: 1, output_tokens: 0 },
+									},
+								},
+							])
+						: sseResponse([
+								{ choices: [{ delta: {}, finish_reason: "stop" }] },
+							]);
+				},
+			})
+		);
+		await sdk.setCredential("openai", {
+			kind: "api-key",
+			apiKey: "off-reasoning-test-key",
+		});
+
+		for (const modelId of ["responses-off-model", "chat-off-model"]) {
+			for await (const _event of sdk.chat({
+				messages: [{ content: [{ text: "Hi", type: "text" }], role: "user" }],
+				modelId,
+				providerId: "openai",
+				reasoningEffort: "off",
+			})) {
+				// Consume the stream to verify the public provider boundary.
+			}
+		}
+
+		expect(requests).toHaveLength(2);
+		expect(requests[0]).toMatchObject({ reasoning: { effort: "none" } });
+		expect(requests[1]).toMatchObject({ reasoning_effort: "none" });
 	});
 });

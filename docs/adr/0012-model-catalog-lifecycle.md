@@ -1,13 +1,11 @@
-# Model Catalog entries carry a lifecycle state
+# Historical: Model Catalog entries carry a lifecycle state
 
-The Model Catalog is a curated product allowlist, not a mirror of what a
-provider serves. Entries therefore carry `lifecycle: "active" | "retired"`.
-The model picker and Agent pinning accept only `active` entries; retired
-entries remain resolvable so existing Session Records keep their model label
-and variant, and a turn attempting to send with a retired model is refused
-with a visible prompt to pick another one.
+This ADR records the pre-SDK model-selection contract. ADR-0049 supersedes it
+for Coding-Agent: issue #209 moved model selection and execution to exact SDK
+Provider/Provider Model identities. The Model Catalog and lifecycle selectors
+were removed; they are not an execution fallback.
 
-Status: accepted
+Status: superseded by ADR-0049 at the Provider SDK-only cutover (issue #209)
 
 ## Context
 
@@ -38,19 +36,25 @@ remain readable.
 - **`lifecycle` on the entry (accepted)** — one source, one read path, and the
   same array serves selection, restore, and display.
 
-## Consequences
+## Consequences (pre-cutover)
 
-- `lifecycle` is a property of the *definition*; runtime provenance
-  (`source`, `stale`, `refreshedAt`) stays on the registry descriptor returned
-  at read time. The two must not be merged.
+These rules describe the historical catalog-backed application and do not
+govern current Coding-Agent selection or dispatch. The SDK path restores and
+invokes the exact persisted `{ providerId, modelId }` only when that Provider
+Model is available in the owning Session Host; it does not normalize through
+this catalog or fall back to Connections.
+
+- `lifecycle` was a property of the *definition*; runtime provenance
+  (`source`, `stale`, `refreshedAt`) stayed on the registry descriptor returned
+  at read time. The two were not merged.
 - Selection predicates split in two: `normalizeChatModelSelection` (restore,
   lenient — accepts retired and returns the entry) and the send-path gate
   (strict — refuses retired with a typed reason).
-- The picker filters `lifecycle === "active"`; the settings dialog keeps
-  showing the current selection even when it is retired.
-- Retiring an entry is not the same as the model disappearing upstream. When
-  upstream drops a model that is still `active`, the metadata pipeline reports
-  the gap rather than silently emitting a baseline-less entry.
+- The picker filtered `lifecycle === "active"`; the settings dialog kept
+  showing the current selection even when it was retired.
+- Retiring an entry was not the same as the model disappearing upstream. When
+  upstream dropped a model that was still `active`, the metadata pipeline
+  reported the gap rather than silently emitting a baseline-less entry.
 
 ## Explicit clean-cutover prune
 
@@ -60,7 +64,7 @@ Later curation brought the catalog to 49 active entries: three Google Flash
 models and 27 OpenCode Go models. The official Go endpoint table confirms
 `longcat-2.0` uses OpenAI-compatible Chat Completions, while
 `muse-spark-1.3-contributor` and `muse-spark-1.2-contributor` use OpenAI
-Responses. The current catalog has zero retired entries.
+Responses. At supersession, the catalog had zero retired entries.
 
 - **openai (deleted)** → `o1`, `o1-pro`, `o3`, `o3-mini`, `o3-pro`, `o4-mini`, `gpt-5`,
   `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5-codex`, `gpt-5.1`,

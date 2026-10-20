@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type ChatEvent, createProviderCollection } from "@wincode/ai/sdk";
 import {
 	type AnthropicFetch,
+	type ChatEvent,
 	createAnthropicProvider,
-} from "@wincode/ai/sdk/providers/anthropic";
+	createProviderCollection,
+} from "@wincode/ai";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(
@@ -141,6 +142,7 @@ describe("public Anthropic SDK provider", () => {
 			],
 			modelId: "claude-sonnet-4-6",
 			providerId: "anthropic",
+			reasoningEffort: "high",
 			system: "Be concise.",
 			tools: [
 				{
@@ -169,6 +171,7 @@ describe("public Anthropic SDK provider", () => {
 			model: "claude-sonnet-4-6",
 			stream: true,
 			max_tokens: 128_000,
+			output_config: { effort: "high" },
 			system: "Be concise.",
 			messages: [
 				{
@@ -209,6 +212,23 @@ describe("public Anthropic SDK provider", () => {
 			{ outcome: { continuation, status: "success" }, type: "terminal" },
 		]);
 		expect(JSON.stringify(events)).not.toContain("anthropic-app-secret");
+		expect(
+			sdk.getModel("anthropic", "claude-sonnet-4-6")?.reasoningEfforts
+		).not.toContain("minimal");
+		for await (const _event of sdk.chat({
+			messages: [
+				{
+					content: [{ text: "Unsupported effort?", type: "text" }],
+					role: "user",
+				},
+			],
+			modelId: "claude-sonnet-4-6",
+			providerId: "anthropic",
+			reasoningEffort: "minimal",
+		})) {
+			// Consume the fake stream to inspect the serialized request.
+		}
+		expect(requests[1]?.body).not.toHaveProperty("output_config");
 	});
 
 	test("tool follow-ups preserve opaque Anthropic continuation and multimodal user inputs", async () => {
@@ -699,5 +719,49 @@ describe("public Anthropic SDK provider", () => {
 			},
 			type: "terminal",
 		});
+	});
+
+	test("Anthropic disables declared thinking when the shared reasoning level is off", async () => {
+		let body: Record<string, unknown> | undefined;
+		const sdk = createProviderCollection();
+		sdk.register(
+			createAnthropicProvider({
+				fetch: async (_url, init) => {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					return sseResponse([
+						{
+							type: "message_start",
+							message: { usage: { input_tokens: 1 } },
+						},
+						{ type: "message_delta", usage: { output_tokens: 0 } },
+						{ type: "message_stop" },
+					]);
+				},
+				models: [
+					{
+						modelId: "off-model",
+						protocolId: "anthropic",
+						providerId: "anthropic",
+						reasoningEfforts: ["off"],
+					},
+				],
+			})
+		);
+		await sdk.setCredential("anthropic", {
+			apiKey: "anthropic-test-key",
+			kind: "api-key",
+		});
+
+		for await (const _event of sdk.chat({
+			messages: [{ content: [{ text: "Hello", type: "text" }], role: "user" }],
+			modelId: "off-model",
+			providerId: "anthropic",
+			reasoningEffort: "off",
+		})) {
+			// Consume the stream to verify the provider's wire contract.
+		}
+
+		expect(body).not.toHaveProperty("thinking");
+		expect(body).not.toHaveProperty("output_config");
 	});
 });

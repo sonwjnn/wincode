@@ -1,5 +1,4 @@
-import type { ModelStepRequest } from "@wincode/ai/model-client";
-import type { ModelUsage } from "@wincode/ai/model-usage";
+import type { ChatRequest, ModelUsage } from "@wincode/ai";
 import { isObjectLike, isString } from "@wincode/utils";
 import { AgentInvariantError } from "./errors";
 import type { AgentTurnEvent, AgentTurnTerminalEvent } from "./events";
@@ -151,13 +150,13 @@ export const createAgentTurnAbortEvent = (
 	}
 };
 
-/** Best-effort notifications around each streaming Model request. */
+/** Best-effort notifications around each Provider SDK chat request. */
 export type ModelStepObserver = Readonly<{
-	/** Called immediately before each streaming Model request. */
-	onModelStepStarted: (request: ModelStepRequest) => void;
-	/** Called after a real streaming Model request completes. */
+	/** Called immediately before each Provider SDK chat request. */
+	onModelStepStarted: (request: ChatRequest) => void;
+	/** Called after a Provider SDK chat request completes. */
 	onModelStepFinished: (
-		request: ModelStepRequest,
+		request: ChatRequest,
 		usage: ModelUsage | undefined
 	) => void;
 }>;
@@ -166,8 +165,8 @@ export type ModelStepObserver = Readonly<{
 export type AgentRuntimeRunOptions = Readonly<{
 	/** Session-owned notifications for streaming Model request lifecycle. */
 	modelStepObserver?: ModelStepObserver;
-	/** A Session-selected Google resource for its stable prompt prefix. */
-	googleCachedContent?: ModelStepRequest["googleCachedContent"];
+	/** Marks this individual request as a best-effort cache-warm replay. */
+	cacheWarming?: true;
 	/** Stable Session-scoped routing hint; Model Protocols emit it only when supported. */
 	promptCacheKey?: string;
 	/** Aborts the running turn. Consumers own the signal. */

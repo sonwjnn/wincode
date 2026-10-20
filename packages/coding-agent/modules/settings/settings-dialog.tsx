@@ -356,6 +356,9 @@ export function SettingsDialogContent({
 					? "No settings registered."
 					: "No matching settings."
 			}
+			error={
+				selectedError === undefined ? undefined : `Error: ${selectedError}`
+			}
 			footer={
 				selectedSetting ? (
 					<box flexDirection="column" gap={1}>
@@ -367,9 +370,6 @@ export function SettingsDialogContent({
 						) : null}
 						{pendingById[selectedSetting.descriptor.id] ? (
 							<text fg={colors.textMuted}>Saving…</text>
-						) : null}
-						{selectedError ? (
-							<text fg={colors.error}>{`Error: ${selectedError}`}</text>
 						) : null}
 					</box>
 				) : undefined

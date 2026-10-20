@@ -1343,6 +1343,8 @@ export class AgentSessionImpl implements AgentSession {
 			getExternalization: (id) => sessionState.queue.externalizations.get(id),
 			getSnapshot: () => this.#state,
 			inputScheduler: ports.inputScheduler,
+			resolveSubmission: ports.resolveSubmission,
+			assertProviderModelSelection: ports.assertProviderModelSelection,
 			isClosed: () => sessionState.shutdown.closed,
 			isExecutionBusy: () =>
 				sessionState.lane.runs > 0 ||

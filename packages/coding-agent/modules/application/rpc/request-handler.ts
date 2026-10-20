@@ -1,6 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { ProviderCollection } from "@wincode/ai";
+import { randomUUIDv7 } from "bun";
+import { isAvailableProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { AttachmentReferenceResolver } from "@/modules/sessions/attachment-reference";
+import { createValidatedPluginProviderCollectionForSelection } from "@/modules/sessions/host/agent-session-turn-runner";
+import { ProviderCollectionUnavailableError } from "@/modules/sessions/provider-collection";
 import { createSkillSnapshot } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
@@ -66,6 +71,17 @@ export type RpcRequestHandlerContext = Readonly<{
 	) => SessionSendInput;
 	state: RpcSessionState;
 }>;
+
+const mapProviderCollectionUnavailableError = (
+	error: unknown
+): RpcApplicationError | undefined =>
+	error instanceof ProviderCollectionUnavailableError
+		? appError(
+				"provider_sdk_required",
+				"Connect the Provider in Interactive Mode before using RPC.",
+				{ executionMode: "rpc", stage: "host" }
+			)
+		: undefined;
 
 const mapSessionWriterError = (
 	error: unknown,
@@ -273,131 +289,181 @@ export const createRpcRequestHandler = (
 				);
 			}
 			const selection = await parseSelection(params.selection);
-			const draft = await readSubmission(
-				params,
-				"initialSubmission",
-				createAttachmentReferenceResolver(store.attachmentStore)
-			);
-			const submission = await prepareSubmission(draft);
-			const turnId = activeRuntime.createAgentTurnId();
-			const baseMessage = activeRuntime.createSessionUserMessage(
-				submission.userText,
-				{
+			const plannedSessionId = activeRuntime.toSessionId(randomUUIDv7());
+			let providerCollection: ProviderCollection;
+			try {
+				providerCollection =
+					await createValidatedPluginProviderCollectionForSelection(
+						selection.model,
+						activeAssembly.capabilities,
+						plannedSessionId,
+						[selection.model.providerId]
+					);
+			} catch (error) {
+				const providerError = mapProviderCollectionUnavailableError(error);
+				if (providerError !== undefined) {
+					throw providerError;
+				}
+				throw rpcInvalidParams(
+					error instanceof Error
+						? error.message
+						: "Plugin Provider ownership could not be validated."
+				);
+			}
+			let providerCollectionTransferred = false;
+			try {
+				await providerCollection.restoreModels();
+				const availableProviderModels = await providerCollection.getAvailable(
+					selection.model.providerId
+				);
+				if (
+					!isAvailableProviderModelSelection(
+						selection.model,
+						availableProviderModels
+					)
+				) {
+					throw rpcInvalidParams(
+						`Provider Model ${selection.model.providerId}/${selection.model.modelId} is unavailable in this RPC Host.`
+					);
+				}
+				const draft = await readSubmission(
+					params,
+					"initialSubmission",
+					createAttachmentReferenceResolver(store.attachmentStore)
+				);
+				const submission = await prepareSubmission(draft);
+				const turnId = activeRuntime.createAgentTurnId();
+				const baseMessage = activeRuntime.createSessionUserMessage(
+					submission.userText,
+					{
+						agent: selection.agentId as SessionSendInput["agent"],
+						model: selection.model,
+						...(selection.thinkingLevel === undefined
+							? {}
+							: { thinkingLevel: selection.thinkingLevel }),
+						...(submission.skill === undefined
+							? {}
+							: { skill: createSkillSnapshot(submission.skill, "explicit") }),
+					}
+				);
+				const initialMessage = {
+					...baseMessage,
+					parts: [...baseMessage.parts, ...submission.files],
+				};
+				const [externalizedMessage] = await store.externalizeAttachments(
+					[initialMessage],
+					undefined,
+					{ rejectInvalid: true }
+				);
+				const message = externalizedMessage ?? initialMessage;
+				const messageFiles = message.parts.filter(
+					(part): part is SessionFilePart => part.type === "file"
+				);
+				const storedSubmission: RpcPreparedSubmission = {
+					...submission,
+					composition: { ...submission.composition, files: messageFiles },
+					files: messageFiles,
+				};
+				const created = await store.createSession({
+					id: plannedSessionId,
 					agent: selection.agentId as SessionSendInput["agent"],
+					message,
 					model: selection.model,
+					turnId,
 					...(selection.thinkingLevel === undefined
 						? {}
 						: { thinkingLevel: selection.thinkingLevel }),
-					...(submission.skill === undefined
-						? {}
-						: { skill: createSkillSnapshot(submission.skill, "explicit") }),
-				}
-			);
-			const initialMessage = {
-				...baseMessage,
-				parts: [...baseMessage.parts, ...submission.files],
-			};
-			const [externalizedMessage] = await store.externalizeAttachments(
-				[initialMessage],
-				undefined,
-				{ rejectInvalid: true }
-			);
-			const message = externalizedMessage ?? initialMessage;
-			const messageFiles = message.parts.filter(
-				(part): part is SessionFilePart => part.type === "file"
-			);
-			const storedSubmission: RpcPreparedSubmission = {
-				...submission,
-				composition: { ...submission.composition, files: messageFiles },
-				files: messageFiles,
-			};
-			const created = await store.createSession({
-				agent: selection.agentId as SessionSendInput["agent"],
-				message,
-				model: selection.model,
-				turnId,
-				...(selection.thinkingLevel === undefined
-					? {}
-					: { thinkingLevel: selection.thinkingLevel }),
-			});
-			const createdId = activeRuntime.toSessionId(String(created.id));
-			const previousSessionId = state.boundSessionId;
-			const manager = activeAssembly.capabilities.getSessionHostManager();
-			const restorePreviousBinding = async (): Promise<void> => {
-				if (previousSessionId === undefined || state.signalRequested) {
-					return;
-				}
-				const restoredHost = await activeRuntime.createSessionHost({
-					capabilities: activeAssembly.capabilities,
-					sessionId: previousSessionId,
 				});
-				bind(restoredHost, previousSessionId);
-			};
-			let createdHost: SessionHost | undefined;
-			try {
-				createdHost = await activeRuntime.createSessionHost({
-					capabilities: activeAssembly.capabilities,
-					sessionId: createdId,
-				});
-				if (
-					state.signalRequested ||
-					(state.lifecycle !== "initialized" && state.lifecycle !== "bound")
-				) {
-					await manager.releaseView(createdId).catch(() => undefined);
-					createdHost = undefined;
-					throw appError("server_closing", "The RPC server is closing.");
-				}
-				bind(createdHost, createdId);
-				const admission = await state.host?.agentSession.prompt(
-					sendInput(selection, storedSubmission, {
-						messageId: message.id,
-						turnId,
-					})
-				);
-				if (admission === undefined || admission.rejected) {
-					unbind();
-					createdHost = undefined;
-					await restorePreviousBinding();
+				const createdId = activeRuntime.toSessionId(String(created.id));
+				const previousSessionId = state.boundSessionId;
+				const manager = activeAssembly.capabilities.getSessionHostManager();
+				const restorePreviousBinding = async (): Promise<void> => {
+					if (previousSessionId === undefined || state.signalRequested) {
+						return;
+					}
+					const restoredHost = await activeRuntime.createSessionHost({
+						capabilities: activeAssembly.capabilities,
+						sessionId: previousSessionId,
+					});
+					bind(restoredHost, previousSessionId);
+				};
+				let createdHost: SessionHost | undefined;
+				try {
+					providerCollectionTransferred = true;
+					createdHost = await activeRuntime.createSessionHost({
+						capabilities: activeAssembly.capabilities,
+						providerCollection,
+						providerModel: selection.model,
+						sessionId: createdId,
+					});
+					if (
+						state.signalRequested ||
+						(state.lifecycle !== "initialized" && state.lifecycle !== "bound")
+					) {
+						await manager.releaseView(createdId).catch(() => undefined);
+						createdHost = undefined;
+						throw appError("server_closing", "The RPC server is closing.");
+					}
+					bind(createdHost, createdId);
+					const admission = await state.host?.agentSession.prompt(
+						sendInput(selection, storedSubmission, {
+							messageId: message.id,
+							turnId,
+						})
+					);
+					if (admission === undefined || admission.rejected) {
+						unbind();
+						createdHost = undefined;
+						await restorePreviousBinding();
+						throw appError(
+							"session_created_but_unbound",
+							"Session admission failed after creation.",
+							{
+								sessionId: createdId,
+								stage: "admission",
+							}
+						);
+					}
+					return success(request.id, {
+						admission,
+						sessionId: createdId,
+						state: currentState(),
+					});
+				} catch (error) {
+					if (createdHost !== undefined) {
+						const failedHost = createdHost;
+						createdHost = undefined;
+						if (state.host === failedHost) {
+							unbind();
+							await restorePreviousBinding();
+						} else {
+							await manager.releaseView(createdId).catch(() => undefined);
+						}
+					}
+					if (error instanceof RpcApplicationError) {
+						throw error;
+					}
+					const providerError = mapProviderCollectionUnavailableError(error);
+					if (providerError !== undefined) {
+						throw providerError;
+					}
+					const writerError = mapSessionWriterError(error, createdId);
+					if (writerError !== undefined) {
+						throw writerError;
+					}
 					throw appError(
 						"session_created_but_unbound",
-						"Session admission failed after creation.",
+						"Session Host could not be opened.",
 						{
 							sessionId: createdId,
-							stage: "admission",
+							stage: "host",
 						}
 					);
 				}
-				return success(request.id, {
-					admission,
-					sessionId: createdId,
-					state: currentState(),
-				});
-			} catch (error) {
-				if (createdHost !== undefined) {
-					const failedHost = createdHost;
-					createdHost = undefined;
-					if (state.host === failedHost) {
-						unbind();
-						await restorePreviousBinding();
-					} else {
-						await manager.releaseView(createdId).catch(() => undefined);
-					}
+			} finally {
+				if (!providerCollectionTransferred) {
+					await providerCollection.close().catch(() => undefined);
 				}
-				if (error instanceof RpcApplicationError) {
-					throw error;
-				}
-				const writerError = mapSessionWriterError(error, createdId);
-				if (writerError !== undefined) {
-					throw writerError;
-				}
-				throw appError(
-					"session_created_but_unbound",
-					"Session Host could not be opened.",
-					{
-						sessionId: createdId,
-						stage: "host",
-					}
-				);
 			}
 		}
 		if (request.method === "session/open") {
@@ -447,6 +513,10 @@ export const createRpcRequestHandler = (
 				bind(openedHost, sessionId);
 				return success(request.id, { sessionId, state: currentState() });
 			} catch (error) {
+				const providerError = mapProviderCollectionUnavailableError(error);
+				if (providerError !== undefined) {
+					throw providerError;
+				}
 				const writerError = mapSessionWriterError(error, sessionId);
 				if (writerError !== undefined) {
 					throw writerError;

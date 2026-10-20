@@ -2,21 +2,31 @@
   "name": "@wincode/utils",
   "version": "0.1.0",
   "type": "module",
+  "files": [
+    "dist",
+    "src"
+  ],
   "exports": {
     ".": {
-      "default": "./src/index.ts"
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
     },
     "./guards": {
-      "default": "./src/guards.ts"
+      "types": "./src/guards.ts",
+      "import": "./dist/guards.js"
     },
     "./errors": {
-      "default": "./src/errors.ts"
+      "types": "./src/errors.ts",
+      "import": "./dist/errors.js"
     },
     "./objects": {
-      "default": "./src/objects.ts"
+      "types": "./src/objects.ts",
+      "import": "./dist/objects.js"
     }
   },
   "scripts": {
+    "build": "bun build ./src/index.ts ./src/guards.ts ./src/errors.ts ./src/objects.ts --outdir ./dist --target node --format esm --packages external",
+    "prepack": "bun run build",
     "check-types": "tsc --noEmit",
     "test": "bun ../../scripts/test-portfolio.ts default --package utils"
   },

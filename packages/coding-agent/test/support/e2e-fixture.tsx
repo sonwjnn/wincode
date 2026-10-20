@@ -11,28 +11,17 @@ import {
 	createRouter,
 	RouterContextProvider,
 } from "@tanstack/react-router";
-import { fromAny } from "@total-typescript/shoehorn";
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
-import type {
-	AuthorizationByProvider,
-	Connections,
-} from "@wincode/ai/connections";
-import type {
-	ChatModelSelection,
-	ConnectionProviderId,
-} from "@wincode/ai/models";
+import type { ProviderModel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
-import { ConnectionsProvider } from "@/modules/connections";
-import {
-	ModelPricingProvider,
-	type ModelPricingTable,
-} from "@/modules/model-pricing";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionProviderCollectionFactory } from "@/modules/sessions/provider-collection";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import { resolveLocalAttachmentRoot } from "@/modules/sessions/storage/path";
@@ -49,7 +38,12 @@ import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboar
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import {
+	getInteractiveRuntimeContext,
+	setInteractiveRuntimeContext,
+} from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import { createInstalledFakeProviderCollection } from "./e2e-fake-runtime";
 import {
 	agentId,
 	agentTurnId,
@@ -58,14 +52,24 @@ import {
 	sessionRecordId,
 } from "./identifiers";
 
-export const E2E_MODEL: ChatModelSelection = {
+export const E2E_MODEL = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };
 
-export const createE2ePricing = (context: number): ModelPricingTable => ({
-	"openai/gpt-5.6-luna": { limits: { context } },
+export const createE2eProviderModel = (context: number): ProviderModel => ({
+	capabilities: ["reasoning", "text", "tools"],
+	limits: { contextWindowTokens: context },
+	modelId: E2E_MODEL.modelId,
+	pricing: { inputPerMillionTokensUsd: 1, outputPerMillionTokensUsd: 1 },
+	promptCacheRetentionTiers: ["short"],
+	promptCacheRetentionTtlMs: { short: 30 * 60_000 },
+	providerId: E2E_MODEL.providerId,
+	protocolId: "fake-e2e-provider",
+	reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
 });
+
+export const createE2ePricing = createE2eProviderModel;
 
 const contextBody = "context detail ".repeat(120);
 const fixtureIdentifier = (prefix: string, value: string): string =>
@@ -119,18 +123,6 @@ const createAssistantRecord = (
 		),
 		version: 1,
 	};
-};
-
-const createTestConnections = (): Connections => {
-	const connections: Connections = {
-		authorize: async <P extends ConnectionProviderId>(
-			providerId: P
-		): Promise<AuthorizationByProvider[P]> =>
-			fromAny({ apiKey: `${providerId}-e2e-key`, kind: "api-key" }),
-		connect: async () => undefined,
-		listProviders: async () => [],
-	};
-	return connections;
 };
 
 const createTestConfigStore = (configDocument?: string) => {
@@ -243,15 +235,19 @@ export const seedCompactionHistory = async (
 
 export const renderSession = async ({
 	configDocument,
+	createProviderCollection,
 	initialSubmission,
+	pluginRuntime,
 	pricing,
 	sessionId,
 }: {
 	/** JSONC served as the workspace config; the registry reads it on mount. */
 	readonly configDocument?: string;
+	readonly createProviderCollection?: SessionProviderCollectionFactory;
 	/** Navigation state that starts the session's first turn. */
 	readonly initialSubmission?: SessionInitialSubmission;
-	readonly pricing: ModelPricingTable;
+	readonly pluginRuntime?: PluginRuntime;
+	readonly pricing: ProviderModel;
 	readonly sessionId: SessionId;
 }): Promise<{
 	registryReady: Promise<void>;
@@ -266,6 +262,14 @@ export const renderSession = async ({
 	setMarkdownTreeSitterClientForTests(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
+	setInteractiveRuntimeContext({
+		...getInteractiveRuntimeContext(),
+		cwd: workspace,
+		...(pluginRuntime === undefined ? {} : { pluginRuntime }),
+		createProviderCollection:
+			createProviderCollection ??
+			(() => createInstalledFakeProviderCollection(pricing)),
+	});
 	const registryReady = Promise.withResolvers<void>();
 	const resolveRegistryReady = (): void => {
 		registryReady.resolve(undefined);
@@ -280,27 +284,23 @@ export const renderSession = async ({
 				}}
 			>
 				<ToastProvider>
-					<ConnectionsProvider connections={createTestConnections()}>
-						<AgentRegistryProvider>
-							<KeyboardLayerProvider>
-								<PromptConfigProvider initialModel={E2E_MODEL}>
-									<ModelPricingProvider pricing={pricing}>
-										<DialogProvider>
-											<RouterContextProvider router={router}>
-												<CommandControllerProvider>
-													<SessionSurface
-														initialSubmission={initialSubmission}
-														sessionId={sessionId}
-													/>
-													<RegistryReadyProbe onReady={resolveRegistryReady} />
-												</CommandControllerProvider>
-											</RouterContextProvider>
-										</DialogProvider>
-									</ModelPricingProvider>
-								</PromptConfigProvider>
-							</KeyboardLayerProvider>
-						</AgentRegistryProvider>
-					</ConnectionsProvider>
+					<AgentRegistryProvider>
+						<KeyboardLayerProvider>
+							<PromptConfigProvider initialModel={E2E_MODEL}>
+								<DialogProvider>
+									<RouterContextProvider router={router}>
+										<CommandControllerProvider>
+											<SessionSurface
+												initialSubmission={initialSubmission}
+												sessionId={sessionId}
+											/>
+											<RegistryReadyProbe onReady={resolveRegistryReady} />
+										</CommandControllerProvider>
+									</RouterContextProvider>
+								</DialogProvider>
+							</PromptConfigProvider>
+						</KeyboardLayerProvider>
+					</AgentRegistryProvider>
 				</ToastProvider>
 			</ConfigProvider>
 		</ThemeProvider>,

@@ -521,14 +521,19 @@ test("submit refuses when fallback selection is unavailable before admission", a
 	expect(controls.inputs).toHaveLength(0);
 });
 
-test("failed Session creation stays durable and can be reopened", async () => {
+test("RPC refuses fresh Session creation before persistence when its ProviderCollection is unavailable", async () => {
 	const selection: Selection = { agentId: "build", model };
+	let createSessionCalls = 0;
+	let externalizationCalls = 0;
 	const store = fromPartial<SessionStore>({
-		createSession: async () => ({ id: "session-1" }),
-		externalizeAttachments: async (messages: readonly SessionMessage[]) => [
-			...messages,
-		],
-		getSession: async () => fromPartial({ id: "session-1" }),
+		createSession: async () => {
+			createSessionCalls += 1;
+			return { id: "session-1" };
+		},
+		externalizeAttachments: async (messages: readonly SessionMessage[]) => {
+			externalizationCalls += 1;
+			return [...messages];
+		},
 	});
 	const state: RpcSessionState = {
 		lifecycle: "uninitialized",
@@ -635,15 +640,13 @@ test("failed Session creation stays durable and can be reopened", async () => {
 			})
 		)
 	).rejects.toMatchObject({
-		code: "session_created_but_unbound",
-		data: { sessionId: "session-1", stage: "host" },
+		code: "provider_sdk_required",
+		data: { executionMode: "rpc", stage: "host" },
 	});
+	expect(createSessionCalls).toBe(0);
+	expect(externalizationCalls).toBe(0);
+	expect(hostAttempts).toBe(0);
 	expect(state.host).toBeUndefined();
 	expect(state.boundSessionId).toBeUndefined();
 	expect(state.lifecycle).toBe("initialized");
-
-	await expect(
-		handler(request("open", "session/open", { sessionId: "session-1" }))
-	).resolves.toMatchObject({ result: { sessionId: "session-1" } });
-	expect(hostAttempts).toBe(2);
 });

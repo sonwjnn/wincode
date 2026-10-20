@@ -4,6 +4,7 @@ const NO_INPUT = { kind: "none" } as const;
 
 export const COMMAND_CAPABILITIES = [
 	"compaction",
+	"provider-sdk",
 	"thinking-level-selection",
 ] as const;
 
@@ -66,6 +67,24 @@ export const COMMANDS = [
 		kind: "builtin",
 		action: "model.select",
 		input: NO_INPUT,
+	},
+	{
+		description: "Select an authenticated Provider SDK model",
+		name: "provider-models",
+		value: "/provider-models",
+		kind: "builtin",
+		action: "provider.model.select",
+		input: NO_INPUT,
+		requires: ["provider-sdk"],
+	},
+	{
+		description: "Connect a Provider to the Provider SDK",
+		name: "provider-connect",
+		value: "/provider-connect",
+		kind: "builtin",
+		action: "provider.connect",
+		input: NO_INPUT,
+		requires: ["provider-sdk"],
 	},
 	{
 		description: "Select Thinking Level",

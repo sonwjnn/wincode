@@ -1,56 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { buildModelMetadataFile } from "../scripts/metadata-model";
-import { anthropicModelMetadataById } from "../src/generated/anthropic-model-metadata.generated";
-import { googleModelMetadataById } from "../src/generated/google-model-metadata.generated";
-import { googleSdkModels } from "../src/generated/google-sdk-models.generated";
-import { modelMetadataByKey } from "../src/generated/model-metadata.generated";
-import { openCodeGoSdkModels } from "../src/generated/opencode-go-sdk-models.generated";
+import { buildProviderModelsWithMetadata } from "../scripts/metadata-model";
+import type { ModelMetadataEntry } from "../src/model-metadata";
 import { modelMetadataEntrySchema } from "../src/model-metadata";
+import type { ProviderModel } from "../src/sdk";
 
-/**
- * The generator is what guarantees every selectable model has metadata to
- * offer, so these cases assert the two ways that guarantee breaks: an entry
- * missing from the output, and a coverage report that miscounts what it
- * covered — the latter already shipped once and made the printed summary
- * overstate its own reach (#57).
- */
-
-const catalog = [
+const providerModels: readonly ProviderModel[] = [
 	{
-		connectionProviderId: "openai",
-		id: "from-source",
-		lifecycle: "active" as const,
-		provider: "openai",
+		modelId: "from-source",
+		protocolId: "openai-responses",
+		providerId: "openai",
 	},
 	{
-		connectionProviderId: "openai",
-		id: "from-overlay",
-		lifecycle: "active" as const,
-		provider: "openai",
+		modelId: "from-overlay",
+		protocolId: "openai-responses",
+		providerId: "openai",
 	},
+	{ modelId: "absent", protocolId: "google", providerId: "google" },
 	{
-		connectionProviderId: "google",
-		id: "absent",
-		lifecycle: "active" as const,
-		provider: "google",
-	},
-	{
-		connectionProviderId: "openai",
-		id: "empty-source",
-		lifecycle: "active" as const,
-		provider: "openai",
-	},
-	{
-		connectionProviderId: "openai",
-		id: "gone",
-		lifecycle: "retired" as const,
-		provider: "openai",
-	},
-	{
-		connectionProviderId: "openai",
-		id: "retired-source",
-		lifecycle: "retired" as const,
-		provider: "openai",
+		modelId: "empty-source",
+		protocolId: "openai-responses",
+		providerId: "openai",
 	},
 ];
 
@@ -60,74 +29,56 @@ const payload = {
 			"from-source": {
 				cost: { input: 1, output: 2 },
 				limit: { context: 1000 },
+				reasoning_options: [
+					{
+						type: "effort",
+						values: ["low", "medium", "high", "xhigh", "max"],
+					},
+				],
 			},
 			"empty-source": {},
-			"retired-source": {
-				reasoning_options: [{ type: "effort", values: ["low"] }],
+			unlisted: {
+				cost: { input: 99, output: 99 },
+				limit: { context: 99_000 },
 			},
 		},
 	},
 };
 
-const build = (overlays = {}) =>
-	buildModelMetadataFile({
-		catalog,
-		generatedAt: "2026-01-01",
+const build = (overlays: Readonly<Record<string, ModelMetadataEntry>> = {}) =>
+	buildProviderModelsWithMetadata({
 		overlays,
 		payload,
-		source: "https://example.test/api.json",
+		providerModels,
 	});
 
-describe("buildModelMetadataFile", () => {
-	test("returns an entry for every catalog model, including retired ones", () => {
-		const { entries } = build();
-		expect(Object.keys(entries).sort()).toEqual(
-			catalog.map((entry) => `${entry.connectionProviderId}/${entry.id}`).sort()
+const modelById = (models: readonly ProviderModel[], modelId: string) =>
+	models.find((model) => model.modelId === modelId);
+
+describe("Provider Model metadata enrichment", () => {
+	test("only enriches identities declared by the provider manifest", () => {
+		const result = build();
+		expect(
+			result.providerModels.map(
+				({ providerId, modelId }) => `${providerId}/${modelId}`
+			)
+		).toEqual(
+			providerModels.map(
+				({ providerId, modelId }) => `${providerId}/${modelId}`
+			)
 		);
+		expect(
+			result.providerModels.some((model) => model.modelId === "unlisted")
+		).toBe(false);
+		expect(result.coverage.providerModelCount).toBe(4);
 	});
 
-	test("keeps a retired entry empty rather than dropping it", () => {
-		expect(build().entries["openai/gone"]).toEqual({});
-	});
-	test("preserves available metadata for retired entries", () => {
-		expect(build().entries["openai/retired-source"]).toEqual({
-			thinking: { levels: ["low"] },
-		});
-	});
-	test("counts active entries rather than counting each source separately", () => {
-		const { coverage } = build({
+	test("coverage counts each declared model once across source and overlay", () => {
+		const result = build({
 			"openai/from-overlay": { cost: { input: 9, output: 9 } },
 		});
-		// One entry is served by both the source and an overlay; counting the
-		// overlay as its own entry reported more models than the catalog holds.
-		expect(coverage.activeEntries).toBe(4);
-		expect(coverage.fromSource).toBe(1);
-		expect(coverage.fromOverlay).toEqual(["openai/from-overlay"]);
-		expect(coverage.retiredEntries).toBe(2);
-	});
-
-	test("reports an entry with no source at all as absent and uncovered", () => {
-		const { coverage } = build();
-		// `from-overlay` and `empty-source` have no usable metadata, while
-		// `absent` never appears upstream, so all three are real gaps.
-		expect(coverage.absentUpstream).toEqual([
-			"openai/from-overlay",
-			"google/absent",
-			"openai/empty-source",
-		]);
-		expect(coverage.uncovered).toEqual([
-			"openai/from-overlay",
-			"google/absent",
-			"openai/empty-source",
-		]);
-	});
-
-	test("does not name an overlayed gap as uncovered", () => {
-		const result = build({
-			"openai/from-overlay": { reasoningSummary: true },
-		});
-		// Both keys are still absent upstream, but only the unoverlayed one is
-		// a gap the header should warn about.
+		expect(result.coverage.fromSource).toBe(1);
+		expect(result.coverage.fromOverlay).toEqual(["openai/from-overlay"]);
 		expect(result.coverage.absentUpstream).toEqual([
 			"openai/from-overlay",
 			"google/absent",
@@ -137,74 +88,42 @@ describe("buildModelMetadataFile", () => {
 			"google/absent",
 			"openai/empty-source",
 		]);
-		expect(result.coverage.fromOverlay).toEqual(["openai/from-overlay"]);
-		expect(result.contents).toContain(
-			"// Upstream-missing entries (including overlay-covered): openai/from-overlay, google/absent, openai/empty-source."
-		);
 	});
 
-	test("lets an overlay add and override metadata facts", () => {
-		const { entries } = build({
-			"openai/from-source": { reasoningSummary: true },
+	test("published source facts become ProviderModel pricing and limits", () => {
+		const model = modelById(build().providerModels, "from-source");
+		expect(model?.pricing).toEqual({
+			inputPerMillionTokensUsd: 1,
+			outputPerMillionTokensUsd: 2,
 		});
-		expect(entries["openai/from-source"]).toEqual({
-			cost: { input: 1, output: 2 },
-			limits: { context: 1000 },
-			reasoningSummary: true,
-		});
-
-		const overridden = build({
-			"openai/from-source": { cost: { input: 9, output: 9 } },
-		}).entries["openai/from-source"];
-		expect(overridden).toEqual({
-			cost: { input: 9, output: 9 },
-			limits: { context: 1000 },
-		});
+		expect(model?.limits).toEqual({ contextWindowTokens: 1000 });
 	});
 
-	test("preserves explicit cache retention capabilities through metadata overlays", () => {
-		const promptCache = {
-			explicit: { retentionTiers: ["short", "long"] },
-		} as const;
-		const result = build({ "openai/from-overlay": { promptCache } });
-
-		expect(result.entries["openai/from-overlay"]?.promptCache).toEqual(
-			promptCache
-		);
-		expect(modelMetadataEntrySchema.safeParse({ promptCache }).success).toBe(
-			true
-		);
+	test("manual reasoning overlays add a missing effort without hiding published levels", () => {
+		const result = build({
+			"openai/from-source": { thinking: { levels: ["minimal"] } },
+		});
+		expect(result.entries["openai/from-source"]?.thinking?.levels).toEqual([
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+			"minimal",
+		]);
 		expect(
-			modelMetadataEntrySchema.safeParse({
-				promptCache: { explicit: { retentionTiers: ["unsupported"] } },
-			}).success
-		).toBe(false);
+			modelById(result.providerModels, "from-source")?.reasoningEfforts
+		).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 	});
 
-	test("preserves Google CachedContent TTL capabilities through metadata generation", () => {
-		const promptCache = {
-			explicit: { retentionTiers: ["short", "long"] },
-			googleCachedContent: {
-				ttl: { short: "300s", long: "3600s" },
-			},
-		} as const;
-		const { entries } = build({ "google/absent": { promptCache } });
-
-		expect(entries["google/absent"]?.promptCache).toEqual(promptCache);
-		expect(modelMetadataEntrySchema.safeParse({ promptCache }).success).toBe(
-			true
-		);
-		expect(
-			modelMetadataEntrySchema.safeParse({
-				promptCache: {
-					explicit: { retentionTiers: ["short"] },
-					googleCachedContent: { ttl: {} },
-				},
-			}).success
-		).toBe(false);
+	test("unknown source facts remain absent instead of receiving defaults", () => {
+		const result = build();
+		const model = modelById(result.providerModels, "absent");
+		expect(model).toEqual(providerModels[2]);
+		expect(result.entries["google/absent"]).toEqual({});
 	});
 
-	test("preserves protocol-specific prompt-cache eligibility through metadata generation", () => {
+	test("manual overlays override source values and survive on the generated model", () => {
 		const promptCache = {
 			explicit: { retentionTiers: ["short"] },
 			protocols: {
@@ -219,217 +138,53 @@ describe("buildModelMetadataFile", () => {
 				},
 			},
 		} as const;
-		const { entries } = build({ "openai/from-overlay": { promptCache } });
-		expect(entries["openai/from-overlay"]?.promptCache).toEqual(promptCache);
-		expect(modelMetadataEntrySchema.safeParse({ promptCache }).success).toBe(
-			true
-		);
-		expect(
-			modelMetadataEntrySchema.safeParse({
-				promptCache: {
-					...promptCache,
-					protocols: {
-						"openai-responses": {
-							breakpoints: true,
-							promptCacheKey: true,
-							retention: {
-								field: "prompt_cache_options.ttl",
-								values: { short: "30m" },
-							},
-							eligibility: {},
-							// Missing eligibility is deliberately invalid.
-						},
-					},
-				},
-			}).success
-		).toBe(false);
-	});
-
-	test("generates OpenAI-only cache metadata for the isolated provider runtime", () => {
-		const openAIResponseCache = {
-			breakpoints: true,
-			eligibility: { minimumInputTokens: 1024 },
-			promptCacheKey: true,
-			retention: {
-				field: "prompt_cache_options.ttl",
-				values: { short: "30m" },
-			},
-		} as const;
 		const result = build({
-			"openai/from-overlay": {
-				promptCache: {
-					explicit: { retentionTiers: ["short"] },
-					protocols: { "openai-responses": openAIResponseCache },
-				},
-			},
-			"google/absent": {
-				promptCache: {
-					explicit: { retentionTiers: ["short"] },
-					googleCachedContent: { ttl: { short: "300s" } },
-				},
+			"openai/from-source": {
+				cost: { input: 9, output: 9 },
+				promptCache,
 			},
 		});
-
-		expect(result.openAIPromptCacheEntries).toEqual({
-			"from-overlay": { "openai-responses": openAIResponseCache },
+		const model = modelById(result.providerModels, "from-source");
+		expect(result.entries["openai/from-source"]).toMatchObject({
+			cost: { input: 9, output: 9 },
+			limits: { context: 1000 },
 		});
-		expect(result.openAIPromptCacheContents).not.toContain("google");
-		expect(result.openAIPromptCacheContents).not.toContain(
-			"googleCachedContent"
-		);
+		expect(model).toMatchObject({
+			pricing: {
+				inputPerMillionTokensUsd: 9,
+				outputPerMillionTokensUsd: 9,
+			},
+			limits: { contextWindowTokens: 1000 },
+			promptCache,
+			promptCacheRetentionTiers: ["short"],
+			promptCacheRetentionTtlMs: { short: 1_800_000 },
+		});
 	});
 
-	test("generates Anthropic-only model metadata for the isolated provider runtime", () => {
+	test("Google CachedContent TTL is carried by its ProviderModel", () => {
 		const promptCache = {
 			explicit: { retentionTiers: ["short", "long"] },
+			googleCachedContent: {
+				ttl: { short: "300s", long: "3600s" },
+			},
 		} as const;
-		const result = buildModelMetadataFile({
-			catalog: [
-				{
-					connectionProviderId: "anthropic",
-					id: "claude-custom",
-					lifecycle: "active",
-					provider: "anthropic",
-				},
-			],
-			generatedAt: "2026-01-01",
-			overlays: { "anthropic/claude-custom": { promptCache } },
+		const googleModel: ProviderModel = {
+			modelId: "gemini-cache",
+			protocolId: "google",
+			providerId: "google",
+		};
+		const result = buildProviderModelsWithMetadata({
+			overlays: { "google/gemini-cache": { promptCache } },
 			payload: {},
-			source: "https://example.test/api.json",
+			providerModels: [googleModel],
 		});
-
-		expect(result.anthropicModelMetadataEntries).toEqual({
-			"claude-custom": { promptCache },
+		expect(result.providerModels[0]).toMatchObject({
+			promptCache,
+			promptCacheRetentionTiers: ["short", "long"],
 		});
-		expect(result.anthropicModelMetadataContents).toContain(
-			'"claude-custom": {\n\t\t"promptCache"'
-		);
-		expect(result.anthropicModelMetadataContents).not.toContain("openai/");
-		expect(result.anthropicModelMetadataContents).not.toContain("google/");
 	});
 
-	test("emits provider-only active models and Google metadata from the canonical catalog", () => {
-		const result = buildModelMetadataFile({
-			catalog: [
-				{
-					connectionProviderId: "google",
-					displayName: "Gemini current",
-					id: "gemini-current",
-					lifecycle: "active",
-					provider: "google",
-				},
-				{
-					connectionProviderId: "google",
-					displayName: "Gemini retired",
-					id: "gemini-retired",
-					lifecycle: "retired",
-					provider: "google",
-				},
-				{
-					connectionProviderId: "opencode-go",
-					displayName: "OpenAI route",
-					id: "zen-openai",
-					lifecycle: "active",
-					protocol: "openai",
-					provider: "opencode-go",
-				},
-				{
-					connectionProviderId: "opencode-go",
-					displayName: "Messages route",
-					id: "zen-messages",
-					lifecycle: "active",
-					protocol: "anthropic",
-					provider: "opencode-go",
-				},
-				{
-					connectionProviderId: "opencode-go",
-					displayName: "Compatible route",
-					id: "zen-compatible",
-					lifecycle: "active",
-					protocol: "openai-compatible",
-					provider: "opencode-go",
-				},
-			],
-			generatedAt: "2026-01-01",
-			overlays: {
-				"google/gemini-current": {
-					promptCache: {
-						explicit: { retentionTiers: ["short"] },
-						googleCachedContent: { ttl: { short: "300s" } },
-					},
-				},
-			},
-			payload: {},
-			source: "https://example.test/api.json",
-		});
-
-		expect(result.googleSdkModels).toEqual([
-			{
-				modelId: "gemini-current",
-				protocolId: "google",
-				providerId: "google",
-			},
-		]);
-		expect(result.openCodeGoSdkModels).toEqual([
-			{
-				modelId: "zen-openai",
-				protocolId: "openai-responses",
-				providerId: "opencode-go",
-			},
-			{
-				modelId: "zen-messages",
-				protocolId: "anthropic",
-				providerId: "opencode-go",
-			},
-			{
-				modelId: "zen-compatible",
-				protocolId: "openai-compatible",
-				providerId: "opencode-go",
-			},
-		]);
-		expect(
-			result.googleModelMetadataEntries["gemini-current"]?.promptCache
-		).toEqual({
-			explicit: { retentionTiers: ["short"] },
-			googleCachedContent: { ttl: { short: "300s" } },
-		});
-		expect(result.googleModelMetadataContents).not.toContain("openai/");
-	});
-
-	test("generated Google SDK models and metadata remain provider-only", () => {
-		expect(
-			googleSdkModels.every((model) => model.providerId === "google")
-		).toBe(true);
-		expect(googleSdkModels).toHaveLength(3);
-		expect(googleModelMetadataById["gemini-3.8-flash"]?.promptCache).toEqual(
-			modelMetadataByKey["google/gemini-3.8-flash"]?.promptCache
-		);
-		expect(
-			Object.fromEntries(
-				Object.entries(modelMetadataByKey)
-					.filter(([key]) => key.startsWith("google/"))
-					.map(([key, metadata]) => [key.slice("google/".length), metadata])
-			)
-		).toEqual(googleModelMetadataById);
-		expect(
-			openCodeGoSdkModels.every((model) => model.providerId === "opencode-go")
-		).toBe(true);
-		expect(openCodeGoSdkModels).toHaveLength(27);
-		expect(
-			googleSdkModels.some((model) => model.modelId === "gemini-3.6-flash")
-		).toBe(true);
-	});
-
-	test("committed Anthropic-only metadata matches the provider entries in the shared snapshot", () => {
-		const sharedAnthropicMetadata = Object.fromEntries(
-			Object.entries(modelMetadataByKey)
-				.filter(([key]) => key.startsWith("anthropic/"))
-				.map(([key, value]) => [key.slice("anthropic/".length), value])
-		);
-		expect(anthropicModelMetadataById).toEqual(sharedAnthropicMetadata);
-	});
-
-	test("returns entries accepted by the runtime metadata schema", () => {
+	test("metadata overlay entries retain their runtime schema", () => {
 		for (const entry of Object.values(build().entries)) {
 			expect(modelMetadataEntrySchema.safeParse(entry).success).toBe(true);
 		}

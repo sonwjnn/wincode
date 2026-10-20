@@ -5,8 +5,9 @@ import type {
 	SessionMessageId,
 	SubmissionId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai";
 import type { SessionId } from "../../shared/identifiers";
+import type { ProviderModelSelection } from "../providers/provider-model-selection";
 
 /** Model-visible tool names a child Session is permitted to invoke. */
 export type SessionSdkCapabilityCeiling = Readonly<{
@@ -34,7 +35,7 @@ export const snapshotSessionSdkCapabilityCeiling = (
 
 export type SessionSdkPrompt = Readonly<{
 	agent?: AgentId | string;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	submissionId?: SubmissionId;
 	text: string;
@@ -49,7 +50,7 @@ export type SessionSdkCreateOptions = Readonly<{
 	sessionId?: SessionId;
 	agent?: AgentId | string;
 	initialPrompt?: string;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 }>;
 
@@ -64,7 +65,7 @@ export type SessionSdkAgent = Readonly<{
 	description?: string;
 	id: AgentId;
 	isAvailable: boolean;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	role: string;
 	source?: SessionSdkAgentSource;
@@ -121,7 +122,9 @@ export type SessionSdkHandle = Readonly<{
 export type SessionRuntimeOptions = Readonly<{
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
 	pluginPaths?: readonly string[];
+	pluginProviderIds?: readonly string[];
 	projectTrust?: "trust" | "deny";
+	sessionId?: SessionId | string;
 }>;
 
 export type SessionSdk = Readonly<{

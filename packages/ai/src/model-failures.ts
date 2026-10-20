@@ -9,10 +9,6 @@ import {
 } from "@wincode/utils";
 
 import { z } from "zod";
-import {
-	type ConnectionProviderId,
-	connectionProviderIdSchema,
-} from "./models";
 export const MODEL_FAILURE_VERSION = 1 as const;
 
 export const modelFailureCodes = [
@@ -47,7 +43,7 @@ export type ModelFailureRetryDisposition =
 
 export type ModelFailureDetails = Readonly<{
 	modelId?: string;
-	providerId?: ConnectionProviderId;
+	providerId?: string;
 	retryAfterMs?: number;
 	statusCode?: number;
 }>;
@@ -67,7 +63,7 @@ export type ModelFailure = Readonly<{
 const modelFailureDetailsSchema = z
 	.object({
 		modelId: z.string().min(1).optional(),
-		providerId: connectionProviderIdSchema.optional(),
+		providerId: z.string().min(1).optional(),
 		retryAfterMs: z.number().int().positive().optional(),
 		statusCode: z.number().int().min(100).max(599).optional(),
 	})

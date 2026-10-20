@@ -63,6 +63,24 @@ export default jiraPlugin;
 
 Plugin Identifiers use lowercase ASCII letters, digits, and underscores; local Tool names also allow hyphens. Wincode exposes `plugin_jira_search_issues` to the Agent. The owner-qualified Plugin name prevents collisions but has no authorization meaning. Registered Plugin Tools execute without a Wincode per-call allow/deny decision; explicitly enabling Plugin code is the trust boundary. Project-selected Plugins are considered only after Project trust has been granted.
 
+### Provider SDK Providers
+
+A trusted Plugin may register a custom SDK Provider with `registerProvider`. The host calls `createProvider()` for each Session Host, so return a fresh Provider instance. The `connect` interaction receives only the host's `requestTextInput` operation and an abort signal, then returns a JSON credential value or `undefined` to cancel:
+
+```ts
+plugin.registerProvider({
+  providerId: "acme",
+  displayName: "Acme Model Service",
+  createProvider: () => createAcmeProvider(),
+  connect: async ({ requestTextInput, signal }) => {
+    const apiKey = await requestTextInput("Acme API key", signal);
+    return apiKey === undefined ? undefined : { apiKey };
+  },
+});
+```
+
+The Plugin supplies Provider behavior and its connect interaction; Wincode owns persistence. Plugin code receives no CredentialStore API and cannot look up stored credentials by Provider ID. At invocation, the SDK supplies only the credential stored for that registration's Plugin ID and canonical trusted source identity. The same owner identity scopes Known Model snapshots; a different source must connect again, and records for an absent Plugin remain quarantined. Provider IDs colliding with built-ins or another Plugin are rejected.
+
 Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas may be Zod or JSON Schema. Handlers return the common Tool outcome shape: `{ type: "success", output }` or `{ type: "failure", errorText }`. Successful output is bounded to 64 KiB of UTF-8 text or JSON; failures become safe failed Tool Calls.
 
 Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeAgentTurn(context, scope)`. The pre-Turn context contains the Session ID, Agent ID, workspace, and abort signal. Within one Plugin, Turn registrations override Session registrations, which override factory registrations. A same-scope registration replaces that Plugin's previous definition; `unregisterTool(name)` masks an outer definition only in that scope. Other Plugins cannot replace its tools. A failed pre-Turn hook contributes no tools for that Plugin on the affected Turn.
@@ -71,7 +89,7 @@ Plugin Commands appear in the Interactive command menu and run only after a trac
 
 ### Prompt selection
 
-The root `PluginAPI` exposes `setModel(model)` and `setThinkingLevel(level)` for the focused Interactive composer. They change the effective selection for future Submissions, taking precedence over model and ThinkingLevel defaults on the selected Agent while preserving the Agent's identity, instructions, and tools. They do not change an in-flight Agent Turn or configured defaults for new Wincode processes. `setModel` returns `false` when there is no Interactive composer, the model is unsupported or retired, or its Connection Provider is not connected. Thinking levels are normalized against the effective model; pass `undefined` to use the provider default, including when the Agent has a configured ThinkingLevel. Outside Interactive Mode, `setModel` returns `false` and `setThinkingLevel` has no effect.
+The root `PluginAPI` exposes `setModel(model)` and `setThinkingLevel(level)` for the focused Interactive composer. They change the effective selection for future Submissions, taking precedence over model and ThinkingLevel defaults on the selected Agent while preserving the Agent's identity, instructions, and tools. They do not change an in-flight Agent Turn or configured defaults for new Wincode processes. On an actual model change, Thinking Level starts at `low` when supported; otherwise the host searches higher supported levels first, then lower ones. `Off` is an explicit level and may be the final fallback if declared. `setModel` returns `false` when there is no Interactive composer, the model is unsupported or retired, or its Connection Provider is not connected. Thinking-level requests are checked against the effective model; unsupported non-`undefined` levels are ignored. Pass `undefined` to use the provider default, including when the Agent has a configured ThinkingLevel. Outside Interactive Mode, `setModel` returns `false` and `setThinkingLevel` has no effect.
 
 These controls are process-global and target the currently focused composer, not an arbitrary Session Host. A Plugin that needs to change a model for a future turn can call them from a user-invoked Plugin Command or another Plugin callback while the Interactive composer is active.
 

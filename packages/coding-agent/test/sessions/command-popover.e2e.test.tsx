@@ -4,10 +4,7 @@ const restoreEnvironment = createEnvironmentRestorer([
 	"WINCODE_E2E_HOME",
 	"WINCODE_E2E_WORKSPACE",
 	"WINCODE_LOCAL_DB_PATH",
-	"WINCODE_MODEL_PRICING_OFFLINE",
 ]);
-
-process.env.WINCODE_MODEL_PRICING_OFFLINE = "true";
 
 import { afterAll, expect, mock, test } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -20,8 +17,8 @@ import { loadPlugins } from "@/modules/plugins/loader";
 import { createConfigStore } from "@/shared/config/config-store";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import {
-	createFakeModelClientRecorder,
-	installFakeModelClient,
+	createFakeProviderRecorder,
+	installFakeProviderRecorder,
 } from "@/test/support/e2e-fake-runtime";
 
 const testDirectory = await fs.mkdtemp(
@@ -72,6 +69,10 @@ const pluginRuntime = await loadPlugins({
 		workspace: testDirectory,
 	},
 });
+setInteractiveRuntimeContext({
+	args: [],
+	cwd: testDirectory,
+});
 afterAll(async () => {
 	mock.restore();
 	restoreEnvironment();
@@ -80,8 +81,8 @@ afterAll(async () => {
 	await fs.rm(mentionFixtureDirectory, { force: true, recursive: true });
 });
 
-const recorder = createFakeModelClientRecorder();
-installFakeModelClient(recorder);
+const recorder = createFakeProviderRecorder();
+installFakeProviderRecorder(recorder);
 
 import {
 	cleanupSessionRender,
@@ -141,7 +142,10 @@ test("selecting a Plugin Command forwards arguments and displays its result", as
 		);
 		expect(activeSetup.captureCharFrame()).toContain("Opened WCO-12");
 	} finally {
-		setInteractiveRuntimeContext({ args: [], cwd: testDirectory });
+		setInteractiveRuntimeContext({
+			args: [],
+			cwd: testDirectory,
+		});
 		if (setup) {
 			writeE2EFrame(setup);
 			setup.renderer.destroy();
@@ -171,7 +175,7 @@ test("Tab opens a Built-in Command that does not accept invocation arguments", a
 
 		await act(() => activeSetup.mockInput.pressTab());
 		await settleSessionUi(activeSetup);
-		expect(activeSetup.captureCharFrame()).toContain("Search models");
+		expect(activeSetup.captureCharFrame()).toContain("Select Model");
 	} finally {
 		if (setup) {
 			writeE2EFrame(setup);

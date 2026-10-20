@@ -6,10 +6,7 @@ import {
 	agentLabelFromId,
 	MAX_AGENT_INSTRUCTIONS_LENGTH,
 } from "@wincode/agent-core";
-import {
-	resolveAgentModelSelection,
-	thinkingLevelSchema,
-} from "@wincode/ai/models";
+import { parseProviderModelSelection, thinkingLevelSchema } from "@wincode/ai";
 import type { PluginAgentRegistration } from "@wincode/coding-agent";
 import { getErrorMessage, readUtf8File } from "@wincode/utils";
 import { parse as parseYaml } from "yaml";
@@ -42,19 +39,25 @@ const agentFrontmatterSchema = z
 	})
 	.strict()
 	.superRefine((selection, context) => {
-		const validation = resolveAgentModelSelection(selection);
-		if (validation.invalidModel) {
+		const model =
+			selection.model === undefined
+				? null
+				: parseProviderModelSelection(selection.model);
+		if (selection.model !== undefined && model === null) {
 			context.addIssue({
 				code: "custom",
-				message: "Model must be a supported Model Catalog selection",
+				message: "Model must be a valid <providerId>/<modelId> identity",
 				path: ["model"],
 			});
 		}
-		if (validation.invalidThinkingLevel) {
+		if (
+			selection.thinkingLevel !== undefined &&
+			(model === null ||
+				!thinkingLevelSchema.safeParse(selection.thinkingLevel).success)
+		) {
 			context.addIssue({
 				code: "custom",
-				message:
-					"Thinking level requires a configured model and must be supported by its Model Catalog entry",
+				message: "Thinking level requires a valid Provider Model identity",
 				path: ["thinkingLevel"],
 			});
 		}

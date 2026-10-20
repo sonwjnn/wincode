@@ -2,8 +2,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { JsonValue } from "type-fest";
-import { isObjectLike } from "./guards";
-import { isSensitiveKey } from "./sensitive-key";
+import { isObjectLike } from "./guards.ts";
+import { isSensitiveKey } from "./sensitive-key.ts";
 
 const LOG_RETENTION_DAYS = 14;
 const REDACTED = "[REDACTED]";

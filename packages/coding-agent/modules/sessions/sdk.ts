@@ -1,18 +1,42 @@
 import * as os from "node:os";
+import * as path from "node:path";
 import type { AgentId, SubmissionId } from "@wincode/agent-core";
-import { agentIdSchema, toSubmissionId } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
-import { defaultChatModelSelection } from "@wincode/ai/models";
+import { toSubmissionId } from "@wincode/agent-core";
+import type {
+	ProviderCollection,
+	ProviderModel,
+	ThinkingLevel,
+} from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
-import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
+import { randomUUIDv7 } from "bun";
+import {
+	resolveEffectiveAgentSelection,
+	withAvailableAgentModelOverride,
+} from "@/modules/agents/agent-call";
 import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,
 } from "@/modules/agents/registry";
-import { loadPlugins } from "@/modules/plugins/loader";
+import { loadPlugins, pluginSourceIdentity } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
 import {
+	isTrustedProjectPluginSource,
+	resolveProjectTrust,
+} from "@/modules/project-trust/project-trust";
+import { isBuiltInProviderId } from "@/modules/providers/built-in-provider-catalog";
+import {
+	isAvailableProviderModelSelection,
+	isPluginProviderSelectionBoundToTrustedOwner,
+	isSameProviderModelIdentity,
+	type ProviderModelSelection,
+	ProviderModelSelectionOwnershipError,
+	pluginProviderIdentityMatches,
+	pluginProviderOwnerMatches,
+	resolveProviderModelSelectionForHost,
+} from "@/modules/providers/provider-model-selection";
+import type { SessionSdkPluginProviderSource } from "./plugin-provider-source";
+import {
+	type SessionRuntimeOptions,
 	type SessionSdk,
 	type SessionSdkCapabilityCeiling,
 	type SessionSdkCreateOptions,
@@ -27,6 +51,7 @@ export type * from "./sdk-contract";
 export type { SessionSdkOptions } from "./sdk-options";
 
 import type { SessionSubmissionAdmission } from "@/modules/sessions/agent-session/types";
+import { createValidatedPluginProviderCollectionForSelection } from "@/modules/sessions/host/agent-session-turn-runner";
 import {
 	createSessionCapabilities,
 	type SessionCapabilitiesAssembly,
@@ -36,6 +61,18 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "@/modules/sessions/host/types";
+import {
+	createDefaultSessionProviderCollection,
+	getPluginProviderRegistrationsFromCollection,
+} from "@/modules/sessions/provider-collection";
+import {
+	getLastUsedSelection,
+	resolveRestoredSessionSdkSelection,
+	resolveSessionSdkPromptSelection,
+	resolveSessionSdkSelectionDefaults,
+	type SessionSdkSelectionDefaults,
+} from "@/modules/sessions/selection";
+import { projectSessionMessageRecords } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
@@ -59,9 +96,13 @@ export type SessionSdkRuntimeOptions = Omit<
 		/** The configuration store this SDK builds its configuration runtime from. */
 		configStore?: ConfigStore;
 		cwd?: string;
-		model?: ChatModelSelection;
+		model?: ProviderModelSelection;
 		thinkingLevel?: ThinkingLevel;
+		getPluginProviderSources?: (
+			providerIds: readonly string[]
+		) => readonly SessionSdkPluginProviderSource[];
 		pluginPaths?: readonly string[];
+		pluginProviderSources?: readonly SessionSdkPluginProviderSource[];
 		projectTrust?: "trust" | "deny";
 		workspace?: string;
 	}>;
@@ -98,7 +139,9 @@ const optionsForSessionRuntime = (
 		capabilityCeiling: _parentCapabilityCeiling,
 		configRuntime: _configRuntime,
 		configStore: _configStore,
+		getPluginProviderSources: _getPluginProviderSources,
 		model: _model,
+		pluginProviderSources: _pluginProviderSources,
 		projectTrust: _projectTrust,
 		thinkingLevel: _thinkingLevel,
 		...sharedOptions
@@ -109,77 +152,511 @@ const optionsForSessionRuntime = (
 	};
 };
 
-type SessionSelectionDefaults = Readonly<{
-	agent: AgentId;
-	model: ChatModelSelection;
-	thinkingLevel?: ThinkingLevel;
-}>;
-
-const parseAgent = (value: AgentId | string): AgentId => {
-	const parsed = agentIdSchema.safeParse(value);
-	if (!parsed.success) {
-		throw new Error(`Invalid Agent Identifier: ${value}`);
+const closeUntransferredProviderCollection = async (
+	providerCollection: ProviderCollection | undefined,
+	ownershipTransferred: boolean
+): Promise<void> => {
+	if (!ownershipTransferred) {
+		await providerCollection?.close().catch(() => undefined);
 	}
-	return parsed.data;
 };
 
-const defaultsFor = (
-	registry: AgentRegistry | null,
-	options: Pick<SessionSdkRuntimeOptions, "agent" | "model" | "thinkingLevel">
-): SessionSelectionDefaults => {
-	const agent =
-		options.agent === undefined
-			? (registry?.defaultAgentId ?? DEFAULT_AGENT_ID)
-			: parseAgent(options.agent);
-	const selectedAgent = registry?.agents.find(
-		(candidate) => candidate.id === agent && candidate.isAvailable
+const pluginProviderIdsForSources = (
+	allowedProviderIds: readonly string[] | undefined,
+	selectedSources: readonly SessionSdkPluginProviderSource[]
+): readonly string[] => {
+	const selectedIds = new Set(
+		selectedSources.map(({ providerId }) => providerId)
 	);
+	return allowedProviderIds === undefined || allowedProviderIds.length === 0
+		? [...selectedIds]
+		: allowedProviderIds.filter((providerId) => selectedIds.has(providerId));
+};
+
+const loadSessionSdkPluginRuntime = async ({
+	configRuntime,
+	ignoreConfiguredPlugins,
+	pluginPaths,
+	selectedSources,
+	projectTrust,
+}: Readonly<{
+	configRuntime: ConfigRuntime;
+	ignoreConfiguredPlugins: boolean;
+	pluginPaths: readonly string[];
+	projectTrust: "trust" | "deny" | undefined;
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined;
+}>): Promise<PluginRuntime> => {
+	const sources = selectedSources ?? [];
+	const explicitSources = pluginPaths.map((sourcePath) => {
+		const resolvedSourcePath = path.resolve(
+			configRuntime.workspace,
+			sourcePath
+		);
+		return {
+			sourceIdentity: pluginSourceIdentity(resolvedSourcePath),
+			sourcePath: resolvedSourcePath,
+		};
+	});
+	for (const source of explicitSources) {
+		if (
+			!(await isTrustedProjectPluginSource({
+				allowUnscopedExternal: true,
+				override: projectTrust,
+				projectTrustDir: resolveUserWincodeDir(),
+				sourceIdentity: source.sourceIdentity,
+				sourcePath: source.sourcePath,
+				workspace: configRuntime.workspace,
+			}))
+		) {
+			throw new Error(
+				`Explicit Plugin source '${source.sourcePath}' is not trusted in the child Session.`
+			);
+		}
+	}
+	for (const source of sources) {
+		if (
+			source.sourcePath.startsWith("factory:") ||
+			pluginSourceIdentity(source.sourcePath) !== source.sourceIdentity
+		) {
+			throw new Error(
+				`Selected Plugin Provider '${source.providerId}' from Plugin '${source.pluginId}' has changed source identity. Re-select it in Interactive Mode.`
+			);
+		}
+		if (
+			!(await isTrustedProjectPluginSource({
+				allowUnscopedExternal: source.sourceScope !== "project",
+				override: projectTrust,
+				projectTrustDir: resolveUserWincodeDir(),
+				sourceIdentity: source.sourceIdentity,
+				sourcePath: source.sourcePath,
+				workspace: configRuntime.workspace,
+			}))
+		) {
+			throw new Error(
+				`Selected Plugin Provider '${source.providerId}' from Plugin '${source.pluginId}' is not trusted in the child Session.`
+			);
+		}
+	}
+	const runtime = await loadPlugins({
+		cliPaths: [
+			...new Set([
+				...explicitSources.map(({ sourceIdentity }) => sourceIdentity),
+				...sources.map(({ sourceIdentity }) => sourceIdentity),
+			]),
+		],
+		config: configRuntime,
+		ignoreConfiguredPlugins,
+	});
+	for (const source of sources) {
+		const sourceIsRegistered = runtime
+			.getProviderRegistrations()
+			.some((provider) => pluginProviderIdentityMatches(provider, source));
+		if (!sourceIsRegistered) {
+			await runtime.shutdown();
+			throw new Error(
+				`Selected Plugin Provider '${source.providerId}' from Plugin '${source.pluginId}' could not be verified in the child Session. Re-select it in Interactive Mode.`
+			);
+		}
+	}
+	return runtime;
+};
+
+const pluginProviderSourcesFor = (
+	providerId: string,
+	pluginRuntime: PluginRuntime | undefined,
+	getPluginProviderSources:
+		| SessionSdkRuntimeOptions["getPluginProviderSources"]
+		| undefined
+): readonly SessionSdkPluginProviderSource[] => {
+	const registrations =
+		pluginRuntime
+			?.getProviderRegistrations()
+			.filter((registration) => registration.providerId === providerId) ?? [];
+	if (registrations.length > 0) {
+		return registrations.map(
+			({
+				pluginId,
+				providerId: registeredProviderId,
+				sourceIdentity,
+				sourcePath,
+				sourceScope,
+			}) => ({
+				pluginId,
+				providerId: registeredProviderId,
+				sourceIdentity,
+				sourcePath,
+				...(sourceScope === undefined ? {} : { sourceScope }),
+			})
+		);
+	}
+	return (
+		getPluginProviderSources?.([providerId]).filter(
+			(source) => source.providerId === providerId
+		) ?? []
+	);
+};
+
+const currentSessionPluginProviderRegistration = (
+	providerId: string,
+	pluginRuntime: PluginRuntime | undefined,
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
+	getPluginProviderSources:
+		| SessionSdkRuntimeOptions["getPluginProviderSources"]
+		| undefined
+): SessionSdkPluginProviderSource | undefined => {
+	const registrations = pluginProviderSourcesFor(
+		providerId,
+		pluginRuntime,
+		getPluginProviderSources
+	);
+	if (registrations.length !== 1) {
+		return;
+	}
+	const [registration] = registrations;
+	if (registration === undefined) {
+		return;
+	}
+	if (selectedSources !== undefined) {
+		const matchingSources = selectedSources.filter(
+			(source) => source.providerId === providerId
+		);
+		const [matchingSource] = matchingSources;
+		if (
+			matchingSources.length !== 1 ||
+			matchingSource === undefined ||
+			!pluginProviderIdentityMatches(registration, matchingSource)
+		) {
+			return;
+		}
+	}
+	return registration;
+};
+
+const resolvePromptModelForHost = ({
+	allowFreshOwnerBinding,
+	getPluginProviderSources,
+	host,
+	model,
+	pluginRuntime,
+	selectedSources,
+}: {
+	allowFreshOwnerBinding: boolean;
+	getPluginProviderSources:
+		| SessionSdkRuntimeOptions["getPluginProviderSources"]
+		| undefined;
+	host: SessionHost;
+	model: ProviderModelSelection;
+	pluginRuntime: PluginRuntime | undefined;
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined;
+}): ProviderModelSelection => {
+	const registration = currentSessionPluginProviderRegistration(
+		model.providerId,
+		pluginRuntime,
+		selectedSources,
+		getPluginProviderSources
+	);
+	const trustedRegistrations = registration === undefined ? [] : [registration];
+	const resolvedModel = resolveProviderModelSelectionForHost(
+		model,
+		trustedRegistrations,
+		allowFreshOwnerBinding
+	);
+	if (
+		resolvedModel === undefined ||
+		!isPluginProviderSelectionBoundToTrustedOwner(
+			resolvedModel,
+			trustedRegistrations,
+			getPluginProviderRegistrationsFromCollection(host.providerCollection)
+		)
+	) {
+		throw new ProviderModelSelectionOwnershipError(model);
+	}
+	return resolvedModel;
+};
+
+const bindFreshSessionSdkSelectionToPluginOwner = (
+	selection: SessionSdkSelectionDefaults,
+	pluginRuntime: PluginRuntime | undefined,
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
+	getPluginProviderSources:
+		| SessionSdkRuntimeOptions["getPluginProviderSources"]
+		| undefined
+): SessionSdkSelectionDefaults => {
+	if (selection.model.pluginProviderSource !== undefined) {
+		return selection;
+	}
+	const registration = currentSessionPluginProviderRegistration(
+		selection.model.providerId,
+		pluginRuntime,
+		selectedSources,
+		getPluginProviderSources
+	);
+	if (registration === undefined) {
+		return selection;
+	}
 	return {
-		agent,
-		model: options.model ?? selectedAgent?.model ?? defaultChatModelSelection,
-		...omitUndefined({
-			thinkingLevel: options.thinkingLevel ?? selectedAgent?.thinkingLevel,
-		}),
+		...selection,
+		model: {
+			...selection.model,
+			pluginProviderSource: {
+				pluginId: registration.pluginId,
+				sourceIdentity: registration.sourceIdentity,
+			},
+		},
 	};
 };
 
-const resolvedAgentFor = (
-	registry: AgentRegistry | null,
-	agent: AgentId
-): SessionSendInput["resolvedAgent"] => {
-	const candidate = registry?.agents.find(
-		(item) => item.id === agent && item.isAvailable
+const assertSessionSdkPluginProviderSelectionIsCurrent = (
+	model: ProviderModelSelection,
+	pluginRuntime: PluginRuntime | undefined,
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
+	getPluginProviderSources:
+		| SessionSdkRuntimeOptions["getPluginProviderSources"]
+		| undefined
+): void => {
+	const registrations = pluginProviderSourcesFor(
+		model.providerId,
+		pluginRuntime,
+		getPluginProviderSources
 	);
-	if (registry !== null && candidate === undefined) {
-		throw new Error(`Agent is unavailable: ${agent}`);
+	const selectedSourcesForProvider =
+		selectedSources?.filter(
+			(source) => source.providerId === model.providerId
+		) ?? [];
+	if (registrations.length === 0) {
+		if (
+			model.pluginProviderSource !== undefined ||
+			selectedSourcesForProvider.length > 0
+		) {
+			throw new Error(
+				`Plugin Provider selection ${model.providerId}/${model.modelId} has no matching trusted source; re-select it in Interactive Mode.`
+			);
+		}
+		return;
 	}
-	return candidate === undefined
-		? undefined
-		: {
-				id: candidate.id,
-				instructions: candidate.instructions,
-				role: candidate.role,
-				visibleCodingTools: [...candidate.visibleCodingTools],
-			};
+	const registration = currentSessionPluginProviderRegistration(
+		model.providerId,
+		pluginRuntime,
+		selectedSources,
+		getPluginProviderSources
+	);
+	if (
+		registration === undefined ||
+		!pluginProviderOwnerMatches(registration, model.pluginProviderSource)
+	) {
+		throw new Error(
+			`Plugin Provider selection ${model.providerId}/${model.modelId} has no matching trusted source; re-select it in Interactive Mode.`
+		);
+	}
 };
 
-const promptInputFor = (
-	input: SessionSdkPrompt,
-	defaults: SessionSelectionDefaults,
-	registry: AgentRegistry | null
-): SessionSendInput => {
-	const thinkingLevel = input.thinkingLevel ?? defaults.thinkingLevel;
-	const agent =
-		input.agent === undefined ? defaults.agent : parseAgent(input.agent);
-	const model = input.model ?? defaults.model;
-	return {
-		agent,
-		composition: { files: [], text: input.text },
+const assertRestoredSessionSdkPluginProviderSelectionIsSafe = (
+	model: ProviderModelSelection,
+	pluginRuntime: PluginRuntime | undefined,
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
+	getPluginProviderSources:
+		| SessionSdkRuntimeOptions["getPluginProviderSources"]
+		| undefined,
+	allowExistingHostOwnerCheck: boolean
+): void => {
+	if (allowExistingHostOwnerCheck && model.pluginProviderSource !== undefined) {
+		// Keep the stored owner; the long-lived Host checks it before Agent Turn dispatch.
+		return;
+	}
+	const registrations = pluginProviderSourcesFor(
+		model.providerId,
+		pluginRuntime,
+		getPluginProviderSources
+	);
+	const selectedSourcesForProvider =
+		selectedSources?.filter(
+			(source) => source.providerId === model.providerId
+		) ?? [];
+	if (
+		registrations.length === 0 &&
+		selectedSourcesForProvider.length === 0 &&
+		model.pluginProviderSource === undefined &&
+		!isBuiltInProviderId(model.providerId)
+	) {
+		throw new Error(
+			`Plugin Provider selection ${model.providerId}/${model.modelId} has no matching trusted source; re-select it in Interactive Mode.`
+		);
+	}
+	assertSessionSdkPluginProviderSelectionIsCurrent(
 		model,
-		resolvedAgent: resolvedAgentFor(registry, agent),
-		sessionModel: defaults.model,
-		...omitUndefined({ thinkingLevel }),
-		...omitUndefined({ sessionThinkingLevel: thinkingLevel }),
+		pluginRuntime,
+		selectedSources,
+		getPluginProviderSources
+	);
+};
+
+const createProviderCollectionFactoryForPluginSources = (
+	inheritedFactory: SessionCapabilitiesOptions["createProviderCollection"],
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined
+): SessionCapabilitiesOptions["createProviderCollection"] => {
+	if (selectedSources === undefined) {
+		return inheritedFactory;
+	}
+	if (inheritedFactory === undefined) {
+		return (
+			pluginProviderRuntime,
+			sessionId,
+			allowedPluginProviderIds,
+			allowedPluginProviderSources
+		) =>
+			createDefaultSessionProviderCollection(pluginProviderRuntime, sessionId, {
+				allowedPluginProviderSources: allowedPluginProviderSources ?? [],
+				allowedPluginProviderIds: pluginProviderIdsForSources(
+					allowedPluginProviderIds,
+					allowedPluginProviderSources ?? []
+				),
+			});
+	}
+	return (pluginProviderRuntime, sessionId, allowedPluginProviderIds) =>
+		inheritedFactory(
+			pluginProviderRuntime,
+			sessionId,
+			pluginProviderIdsForSources(allowedPluginProviderIds, selectedSources),
+			selectedSources
+		);
+};
+
+const promptInputFor = async (
+	input: SessionSdkPrompt,
+	defaults: SessionSdkSelectionDefaults,
+	registry: AgentRegistry | null,
+	host: SessionHost,
+	pluginRuntime: PluginRuntime | undefined,
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
+	getPluginProviderSources:
+		| SessionSdkRuntimeOptions["getPluginProviderSources"]
+		| undefined
+): Promise<SessionSendInput> => {
+	host.assertCurrentPluginProviderRegistrationSnapshot();
+	const resolvedSelection = resolveSessionSdkPromptSelection(input, defaults);
+	const resolveModelForHost = (
+		model: ProviderModelSelection,
+		allowFreshOwnerBinding: boolean
+	): ProviderModelSelection =>
+		resolvePromptModelForHost({
+			allowFreshOwnerBinding,
+			getPluginProviderSources,
+			host,
+			model,
+			pluginRuntime,
+			selectedSources,
+		});
+	const selection = {
+		...resolvedSelection,
+		model: resolveModelForHost(
+			resolvedSelection.model,
+			input.model !== undefined
+		),
+	};
+	const pinnedAgentModel = registry?.agents.find(
+		(candidate) => candidate.id === selection.agent
+	)?.model;
+	const hasExplicitModelReplacement =
+		input.model !== undefined ||
+		(pinnedAgentModel !== undefined &&
+			!(
+				isSameProviderModelIdentity(pinnedAgentModel, selection.model) &&
+				pluginProviderOwnerMatches(
+					pinnedAgentModel.pluginProviderSource,
+					selection.model.pluginProviderSource
+				)
+			));
+	const usesPinnedAgentModel =
+		pinnedAgentModel !== undefined &&
+		isSameProviderModelIdentity(pinnedAgentModel, selection.model) &&
+		pluginProviderOwnerMatches(
+			pinnedAgentModel.pluginProviderSource,
+			selection.model.pluginProviderSource
+		);
+	const explicitSelectionOverride = hasExplicitModelReplacement
+		? { model: selection.model }
+		: undefined;
+	const preAvailabilityEffective = resolveEffectiveAgentSelection(
+		registry,
+		selection.agent,
+		selection.model,
+		selection,
+		false,
+		explicitSelectionOverride
+	);
+	if (preAvailabilityEffective.unavailableReason !== undefined) {
+		throw new Error(preAvailabilityEffective.unavailableReason);
+	}
+	const effectiveBeforeAvailability = {
+		...preAvailabilityEffective,
+		model: resolveModelForHost(preAvailabilityEffective.model, false),
+	};
+	const availableProviderModels: readonly ProviderModel[] | undefined =
+		host.providerCollection === undefined
+			? undefined
+			: await host.providerCollection.getAvailable(
+					effectiveBeforeAvailability.model.providerId
+				);
+	if (
+		usesPinnedAgentModel &&
+		availableProviderModels !== undefined &&
+		!isAvailableProviderModelSelection(
+			pinnedAgentModel,
+			availableProviderModels
+		)
+	) {
+		throw new Error(
+			`Provider Model ${pinnedAgentModel.providerId}/${pinnedAgentModel.modelId} is unavailable in this Session Host.`
+		);
+	}
+	const selectionOverride = withAvailableAgentModelOverride(
+		registry,
+		selection.agent,
+		explicitSelectionOverride,
+		availableProviderModels
+	);
+	const effective = resolveEffectiveAgentSelection(
+		registry,
+		selection.agent,
+		selection.model,
+		selection,
+		false,
+		selectionOverride
+	);
+	if (effective.unavailableReason !== undefined) {
+		throw new Error(effective.unavailableReason);
+	}
+	if (
+		!(
+			isSameProviderModelIdentity(
+				effective.model,
+				effectiveBeforeAvailability.model
+			) &&
+			pluginProviderOwnerMatches(
+				effective.model.pluginProviderSource,
+				effectiveBeforeAvailability.model.pluginProviderSource
+			)
+		)
+	) {
+		throw new ProviderModelSelectionOwnershipError(effective.model);
+	}
+	if (
+		availableProviderModels !== undefined &&
+		!isAvailableProviderModelSelection(effective.model, availableProviderModels)
+	) {
+		throw new Error(
+			`Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable in this Session Host.`
+		);
+	}
+	return {
+		agent: effective.agent,
+		composition: { files: [], text: input.text },
+		model: effective.model,
+		resolvedAgent: effective.resolvedAgent,
+		...omitUndefined({ selectionOverride }),
+		sessionModel: input.model === undefined ? defaults.model : selection.model,
+		...omitUndefined({ thinkingLevel: effective.thinkingLevel }),
+		...omitUndefined({ sessionThinkingLevel: selection.thinkingLevel }),
 		...(input.submissionId === undefined
 			? {}
 			: { submissionId: input.submissionId }),
@@ -196,18 +673,68 @@ const handleFor = (
 	assembly: SessionCapabilitiesAssembly,
 	host: SessionHost,
 	sessionId: SessionId,
-	defaults: SessionSelectionDefaults
+	defaults: SessionSdkSelectionDefaults,
+	pluginRuntime: PluginRuntime | undefined,
+	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
+	getPluginProviderSources:
+		| SessionSdkRuntimeOptions["getPluginProviderSources"]
+		| undefined
 ): SessionSdkHandle => {
 	const { capabilities } = assembly;
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
+	let currentDefaults = defaults;
+	const admitPrompt = async (
+		input: SessionSdkPrompt,
+		selectionDefaults: SessionSdkSelectionDefaults,
+		promptRegistry: AgentRegistry | null,
+		currentPluginRuntime: PluginRuntime | undefined
+	): Promise<{
+		admission: SessionSubmissionAdmission;
+		sendInput?: SessionSendInput;
+	}> => {
+		let sendInput: SessionSendInput | undefined;
+		const admission = await host.withSessionWork(
+			async () => {
+				sendInput = await promptInputFor(
+					input,
+					selectionDefaults,
+					promptRegistry,
+					host,
+					currentPluginRuntime,
+					selectedSources,
+					getPluginProviderSources
+				);
+				host.assertCurrentPluginProviderRegistrationSnapshot();
+				return await host.agentSession.prompt(sendInput);
+			},
+			(reason) => ({ rejected: true as const, reason })
+		);
+		return {
+			admission,
+			...(sendInput === undefined ? {} : { sendInput }),
+		};
+	};
 	const prompt: SessionSdkHandle["prompt"] = async (input) => {
 		if (disposed) {
 			return { reason: "Session handle is disposed.", rejected: true };
 		}
-		return host.agentSession.prompt(
-			promptInputFor(input, defaults, capabilities.getRegistry())
+		const { admission, sendInput } = await admitPrompt(
+			input,
+			currentDefaults,
+			capabilities.getRegistry(),
+			capabilities.getPluginRuntime?.() ?? pluginRuntime
 		);
+		if (!admission.rejected && sendInput !== undefined) {
+			currentDefaults = {
+				agent: sendInput.agent,
+				model: sendInput.sessionModel,
+				...omitUndefined({
+					thinkingLevel: sendInput.sessionThinkingLevel,
+				}),
+			};
+		}
+		return admission;
 	};
 	let deliveries = deliveryTransactions.get(host);
 	if (deliveries === undefined) {
@@ -329,14 +856,17 @@ const handleFor = (
 					rejected: true as const,
 				};
 			}
-			return promptAndWaitForDurableDelivery(submissionId, () =>
-				host.agentSession.prompt({
-					...promptInputFor(
-						{ text: input.text, submissionId },
-						defaults,
-						capabilities.getRegistry()
-					),
-				})
+			return promptAndWaitForDurableDelivery(
+				submissionId,
+				async () =>
+					(
+						await admitPrompt(
+							{ text: input.text, submissionId },
+							defaults,
+							capabilities.getRegistry(),
+							pluginRuntime
+						)
+					).admission
 			);
 		})();
 		deliveries.set(input.idempotencyKey, pending);
@@ -423,26 +953,40 @@ const createSessionSdkInternal = async (
 					...options.configRuntime,
 					trustedProjectRoots,
 				};
-	const pluginRuntime: PluginRuntime = await loadPlugins({
-		cliPaths: options.pluginPaths ?? [],
-		config: configRuntime,
+	const inheritedPluginProviderSources = options.pluginProviderSources;
+	const pluginRuntime = await loadSessionSdkPluginRuntime({
+		configRuntime,
 		ignoreConfiguredPlugins: shared?.ignoreConfiguredPlugins ?? false,
+		pluginPaths: options.pluginPaths ?? [],
+		projectTrust: options.projectTrust,
+		selectedSources: inheritedPluginProviderSources,
 	});
 	const {
 		agent,
 		capabilityCeiling: _capabilityCeiling,
 		configRuntime: _configRuntime,
 		configStore: _configStore,
+		createProviderCollection: inheritedProviderCollectionFactory,
 		cwd: _cwd,
+		getPluginProviderSources,
 		model,
 		pluginPaths: _pluginPaths,
+		pluginProviderSources: _pluginProviderSources,
 		thinkingLevel,
 		workspace: _workspace,
 		...capabilityOptions
 	} = options;
+	const createProviderCollection =
+		createProviderCollectionFactoryForPluginSources(
+			inheritedProviderCollectionFactory,
+			inheritedPluginProviderSources
+		);
 	let sdk: SessionSdk | undefined;
 	const assembly = await createSessionCapabilities({
 		...capabilityOptions,
+		...(createProviderCollection === undefined
+			? {}
+			: { createProviderCollection }),
 		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 		getConfig: () => configRuntime,
 		plugin: { ownedByCaller: true, runtime: pluginRuntime },
@@ -459,41 +1003,133 @@ const createSessionSdkInternal = async (
 	const sessionRuntimes = new Set<SessionSdk>();
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
-	const defaultSelection = defaultsFor(assembly.capabilities.getRegistry(), {
-		...(agent === undefined ? {} : { agent }),
-		...(model === undefined ? {} : { model }),
-		...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-	});
+	const unresolvedDefaultSelection = resolveSessionSdkSelectionDefaults(
+		assembly.capabilities.getRegistry(),
+		{
+			...(agent === undefined ? {} : { agent }),
+			...(model === undefined ? {} : { model }),
+			...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+		}
+	);
+	const defaultSelection =
+		agent === undefined && model === undefined
+			? unresolvedDefaultSelection
+			: bindFreshSessionSdkSelectionToPluginOwner(
+					unresolvedDefaultSelection,
+					pluginRuntime,
+					inheritedPluginProviderSources,
+					getPluginProviderSources
+				);
+	const bindNewSessionSelection = (
+		selection: SessionSdkSelectionDefaults
+	): SessionSdkSelectionDefaults => {
+		const boundSelection = bindFreshSessionSdkSelectionToPluginOwner(
+			selection,
+			pluginRuntime,
+			inheritedPluginProviderSources,
+			getPluginProviderSources
+		);
+		if (
+			!isBuiltInProviderId(boundSelection.model.providerId) &&
+			boundSelection.model.pluginProviderSource === undefined
+		) {
+			throw new ProviderModelSelectionOwnershipError(boundSelection.model);
+		}
+		assertSessionSdkPluginProviderSelectionIsCurrent(
+			boundSelection.model,
+			pluginRuntime,
+			inheritedPluginProviderSources,
+			getPluginProviderSources
+		);
+		return boundSelection;
+	};
 	const openSession = async (
 		id: SessionId | string,
 		openOptions: Readonly<{ autoContinue?: boolean; view?: boolean }> = {},
-		selection = defaultSelection
+		selection = defaultSelection,
+		providerCollection?: ProviderCollection
 	): Promise<SessionSdkHandle> => {
-		if (disposed) {
-			throw new Error("Session SDK is disposed.");
+		let providerCollectionTransferred = false;
+		try {
+			if (disposed) {
+				throw new Error("Session SDK is disposed.");
+			}
+			const sessionId = toSessionId(id);
+			const stored = await assembly.store.getSession(sessionId);
+			const records = await assembly.store.listSessionRecords(sessionId);
+			const persistedSelection = getLastUsedSelection(
+				records.flatMap((record) =>
+					projectSessionMessageRecords(record.messages, record)
+				)
+			);
+			const priorSelection =
+				persistedSelection === undefined
+					? null
+					: {
+							agent: persistedSelection.agent,
+							model: persistedSelection.model,
+							thinkingLevel: persistedSelection.thinkingLevel,
+						};
+			const hasStoredProviderModelSelection =
+				stored.model !== undefined || priorSelection !== null;
+			const fallbackSelection = hasStoredProviderModelSelection
+				? selection
+				: bindNewSessionSelection(selection);
+			const restoredDefaults = resolveRestoredSessionSdkSelection(
+				fallbackSelection,
+				stored,
+				priorSelection
+			);
+			assertRestoredSessionSdkPluginProviderSelectionIsSafe(
+				restoredDefaults.model,
+				pluginRuntime,
+				inheritedPluginProviderSources,
+				getPluginProviderSources,
+				shared !== undefined && inheritedPluginProviderSources === undefined
+			);
+			providerCollectionTransferred = providerCollection !== undefined;
+			const host = await assembly.capabilities
+				.getSessionHostManager()
+				.openHost({
+					autoContinue: openOptions.autoContinue ?? true,
+					capabilities: assembly.capabilities,
+					...(providerCollection === undefined ? {} : { providerCollection }),
+					...(hasStoredProviderModelSelection ||
+					fallbackSelection.model.pluginProviderSource === undefined
+						? {}
+						: { providerModel: fallbackSelection.model }),
+					sessionId,
+					view: openOptions.view ?? true,
+				});
+			const defaults = resolveRestoredSessionSdkSelection(
+				fallbackSelection,
+				stored,
+				hasStoredProviderModelSelection ? host.getSelection() : null
+			);
+			assertRestoredSessionSdkPluginProviderSelectionIsSafe(
+				defaults.model,
+				pluginRuntime,
+				inheritedPluginProviderSources,
+				getPluginProviderSources,
+				shared !== undefined && inheritedPluginProviderSources === undefined
+			);
+			const handle = handleFor(
+				assembly,
+				host,
+				sessionId,
+				defaults,
+				pluginRuntime,
+				inheritedPluginProviderSources,
+				getPluginProviderSources
+			);
+			handles.add(handle);
+			return handle;
+		} finally {
+			await closeUntransferredProviderCollection(
+				providerCollection,
+				providerCollectionTransferred
+			);
 		}
-		const sessionId = toSessionId(id);
-		const host = await assembly.capabilities.getSessionHostManager().openHost({
-			autoContinue: openOptions.autoContinue ?? true,
-			capabilities: assembly.capabilities,
-			sessionId,
-			view: openOptions.view ?? true,
-		});
-		const stored = await assembly.store.getSession(sessionId);
-		const prior = host.getSelection();
-		const defaults: SessionSelectionDefaults = {
-			agent: prior?.agent ?? selection.agent,
-			model: prior?.model ?? stored.model ?? selection.model,
-			...omitUndefined({
-				thinkingLevel:
-					prior?.thinkingLevel ??
-					stored.thinkingLevel ??
-					selection.thinkingLevel,
-			}),
-		};
-		const handle = handleFor(assembly, host, sessionId, defaults);
-		handles.add(handle);
-		return handle;
 	};
 	const createEmptySession: SessionSdk["createEmptySession"] = async (
 		createOptions
@@ -501,7 +1137,7 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
-		const selection = defaultsFor(
+		const resolvedSelection = resolveSessionSdkSelectionDefaults(
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,
@@ -509,14 +1145,27 @@ const createSessionSdkInternal = async (
 				thinkingLevel: createOptions?.thinkingLevel ?? thinkingLevel,
 			})
 		);
-		const { id } = await assembly.store.createEmptySession(
-			omitUndefined({
-				id: createOptions?.sessionId,
-				model: selection.model,
-				thinkingLevel: selection.thinkingLevel,
-			})
-		);
-		return id;
+		const selection = bindNewSessionSelection(resolvedSelection);
+		const id = createOptions?.sessionId ?? toSessionId(randomUUIDv7());
+		const providerCollection =
+			await createValidatedPluginProviderCollectionForSelection(
+				selection.model,
+				assembly.capabilities,
+				id,
+				[selection.model.providerId]
+			);
+		try {
+			await assembly.store.createEmptySession(
+				omitUndefined({
+					id,
+					model: selection.model,
+					thinkingLevel: selection.thinkingLevel,
+				})
+			);
+			return id;
+		} finally {
+			await providerCollection.close().catch(() => undefined);
+		}
 	};
 	const createSession = async (
 		createOptions?: SessionSdkCreateOptions
@@ -524,7 +1173,7 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
-		const selection = defaultsFor(
+		const resolvedSelection = resolveSessionSdkSelectionDefaults(
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,
@@ -532,28 +1181,64 @@ const createSessionSdkInternal = async (
 				thinkingLevel: createOptions?.thinkingLevel ?? thinkingLevel,
 			})
 		);
-		const id = await createEmptySession({
-			...createOptions,
-			agent: selection.agent,
-			model: selection.model,
-			thinkingLevel: createOptions?.thinkingLevel ?? selection.thinkingLevel,
-		});
-		const handle = await openSession(id, {}, selection);
-		if (createOptions?.initialPrompt !== undefined) {
-			const admission = await handle.prompt({
-				text: createOptions.initialPrompt,
-				...omitUndefined({
-					agent: createOptions.agent,
-					model: createOptions.model,
-					thinkingLevel: createOptions.thinkingLevel,
-				}),
-			});
-			if (admission.rejected) {
-				await handle.dispose();
-				throw new Error(admission.reason);
+		const selection = bindNewSessionSelection(resolvedSelection);
+		const id = createOptions?.sessionId ?? toSessionId(randomUUIDv7());
+		const providerCollection =
+			await createValidatedPluginProviderCollectionForSelection(
+				selection.model,
+				assembly.capabilities,
+				id,
+				[selection.model.providerId]
+			);
+		let providerCollectionTransferred = false;
+		try {
+			if (createOptions?.initialPrompt !== undefined) {
+				await providerCollection.restoreModels();
+				const availableProviderModels = await providerCollection.getAvailable(
+					selection.model.providerId
+				);
+				if (
+					!isAvailableProviderModelSelection(
+						selection.model,
+						availableProviderModels
+					)
+				) {
+					throw new Error(
+						`Provider Model ${selection.model.providerId}/${selection.model.modelId} is unavailable in this Session Host.`
+					);
+				}
 			}
+			await assembly.store.createEmptySession(
+				omitUndefined({
+					id,
+					model: selection.model,
+					thinkingLevel:
+						createOptions?.thinkingLevel ?? selection.thinkingLevel,
+				})
+			);
+			providerCollectionTransferred = true;
+			const handle = await openSession(id, {}, selection, providerCollection);
+			if (createOptions?.initialPrompt !== undefined) {
+				const admission = await handle.prompt({
+					text: createOptions.initialPrompt,
+					...omitUndefined({
+						agent: createOptions.agent,
+						model: selection.model,
+						thinkingLevel: createOptions.thinkingLevel,
+					}),
+				});
+				if (admission.rejected) {
+					await handle.dispose();
+					throw new Error(admission.reason);
+				}
+			}
+			return handle;
+		} finally {
+			await closeUntransferredProviderCollection(
+				providerCollection,
+				providerCollectionTransferred
+			);
 		}
-		return handle;
 	};
 	const createSessionRuntime: SessionSdk["createSessionRuntime"] = async (
 		runtimeOptions = {}
@@ -565,11 +1250,56 @@ const createSessionSdkInternal = async (
 			capabilityCeiling,
 			runtimeOptions.capabilityCeiling
 		);
+		const selectedProviderIds = new Set(runtimeOptions.pluginProviderIds ?? []);
+		if (runtimeOptions.sessionId !== undefined) {
+			const storedSession = await assembly.store.getSession(
+				toSessionId(runtimeOptions.sessionId)
+			);
+			if (storedSession.model !== undefined) {
+				selectedProviderIds.add(storedSession.model.providerId);
+			}
+		}
+		const requestedProviderIds = [...selectedProviderIds];
+		const availableProviderSources =
+			getPluginProviderSources?.(requestedProviderIds) ??
+			pluginRuntime
+				.getProviderRegistrations()
+				.filter((provider) =>
+					requestedProviderIds.includes(provider.providerId)
+				)
+				.map((provider) => {
+					const inheritedSource = inheritedPluginProviderSources?.find(
+						(source) => pluginProviderIdentityMatches(source, provider)
+					);
+					const sourceScope =
+						inheritedSource?.sourceScope ?? provider.sourceScope;
+					return {
+						pluginId: provider.pluginId,
+						providerId: provider.providerId,
+						sourceIdentity: provider.sourceIdentity,
+						sourcePath: inheritedSource?.sourcePath ?? provider.sourcePath,
+						...(sourceScope === undefined ? {} : { sourceScope }),
+					};
+				});
+		const selectedPluginProviderSources = requestedProviderIds.flatMap(
+			(providerId) => {
+				const matchingSources = availableProviderSources.filter(
+					(source) => source.providerId === providerId
+				);
+				if (matchingSources.length > 1) {
+					throw new Error(
+						`Provider ID '${providerId}' is registered by multiple Plugins; the child Session cannot select it safely.`
+					);
+				}
+				return matchingSources;
+			}
+		);
 		const runtimeSdk = await createSessionSdkInternal(
 			{
 				...optionsForSessionRuntime(options, runtimeCapabilityCeiling),
 				cwd,
 				pluginPaths: runtimeOptions.pluginPaths ?? [],
+				pluginProviderSources: selectedPluginProviderSources,
 				...(runtimeOptions.projectTrust === undefined
 					? {}
 					: { projectTrust: runtimeOptions.projectTrust }),
@@ -596,29 +1326,23 @@ const createSessionSdkInternal = async (
 			)
 		);
 		return Object.freeze(
-			(catalogRegistry?.agents ?? []).map(
-				({
-					description,
-					id,
-					isAvailable,
-					model,
-					thinkingLevel,
-					role,
-					source,
-					requiredTools,
-					unavailableReason,
-				}) => ({
-					description,
-					id,
-					isAvailable,
-					...(model === undefined ? {} : { model }),
-					...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-					role,
-					...(source === undefined ? {} : { source: source.scope }),
-					...(requiredTools === undefined ? {} : { requiredTools }),
-					...(unavailableReason === undefined ? {} : { unavailableReason }),
-				})
-			)
+			(catalogRegistry?.agents ?? []).map((agent) => ({
+				description: agent.description,
+				id: agent.id,
+				isAvailable: agent.isAvailable,
+				...(agent.model === undefined ? {} : { model: agent.model }),
+				...(agent.thinkingLevel === undefined
+					? {}
+					: { thinkingLevel: agent.thinkingLevel }),
+				role: agent.role,
+				...(agent.source === undefined ? {} : { source: agent.source.scope }),
+				...(agent.requiredTools === undefined
+					? {}
+					: { requiredTools: agent.requiredTools }),
+				...(agent.unavailableReason === undefined
+					? {}
+					: { unavailableReason: agent.unavailableReason }),
+			}))
 		);
 	};
 	const sdkApi: SessionSdk = Object.freeze({
@@ -677,32 +1401,65 @@ export const createSessionSdkOperations = (
 	const capabilityCeiling = snapshotCapabilityCeiling(
 		hostRuntimeOptions.capabilityCeiling
 	);
-	const createSessionRuntime: SessionSdkOperations["createSessionRuntime"] = (
-		runtimeOptions = {}
-	) => {
-		const runtimeCapabilityCeiling = snapshotCapabilityCeiling(
-			capabilityCeiling,
-			runtimeOptions.capabilityCeiling
-		);
-		return createSessionSdkInternal(
-			{
-				...optionsForSessionRuntime(
-					hostRuntimeOptions,
-					runtimeCapabilityCeiling
-				),
-				pluginPaths: runtimeOptions.pluginPaths ?? [],
-				store,
-				...(runtimeOptions.projectTrust === undefined
-					? {}
-					: { projectTrust: runtimeOptions.projectTrust }),
-			},
-			{ ignoreConfiguredPlugins: true, manager, store }
-		);
-	};
+	const createSessionRuntime: SessionSdkOperations["createSessionRuntime"] =
+		async (runtimeOptions = {}) => {
+			const runtimeCapabilityCeiling = snapshotCapabilityCeiling(
+				capabilityCeiling,
+				runtimeOptions.capabilityCeiling
+			);
+			const selectedProviderIds = new Set(
+				runtimeOptions.pluginProviderIds ?? []
+			);
+			if (runtimeOptions.sessionId !== undefined) {
+				const storedSession = await store.getSession(
+					toSessionId(runtimeOptions.sessionId)
+				);
+				if (storedSession.model !== undefined) {
+					selectedProviderIds.add(storedSession.model.providerId);
+				}
+			}
+			const requestedProviderIds = [...selectedProviderIds];
+			const availableProviderSources =
+				hostRuntimeOptions.getPluginProviderSources?.(requestedProviderIds) ??
+				hostRuntimeOptions.pluginProviderSources ??
+				[];
+			const selectedPluginProviderSources = requestedProviderIds.flatMap(
+				(providerId) => {
+					const matchingSources = availableProviderSources.filter(
+						(source) => source.providerId === providerId
+					);
+					if (matchingSources.length > 1) {
+						throw new Error(
+							`Provider ID '${providerId}' is registered by multiple Plugins; the child Session cannot select it safely.`
+						);
+					}
+					return matchingSources;
+				}
+			);
+			return createSessionSdkInternal(
+				{
+					...optionsForSessionRuntime(
+						hostRuntimeOptions,
+						runtimeCapabilityCeiling
+					),
+					getPluginProviderSources: hostRuntimeOptions.getPluginProviderSources,
+					pluginPaths: runtimeOptions.pluginPaths ?? [],
+					...(requestedProviderIds.length === 0
+						? {}
+						: { pluginProviderSources: selectedPluginProviderSources }),
+					...(runtimeOptions.projectTrust === undefined
+						? {}
+						: { projectTrust: runtimeOptions.projectTrust }),
+					store,
+				},
+				{ ignoreConfiguredPlugins: true, manager, store }
+			);
+		};
 	const withSessionRuntime = async <Result>(
-		operation: (sdk: SessionSdk) => Promise<Result>
+		operation: (sdk: SessionSdk) => Promise<Result>,
+		runtimeOptions?: SessionRuntimeOptions
 	): Promise<Result> => {
-		const sdk = await createSessionRuntime();
+		const sdk = await createSessionRuntime(runtimeOptions);
 		try {
 			return await operation(sdk);
 		} finally {
@@ -712,7 +1469,12 @@ export const createSessionSdkOperations = (
 	return {
 		createSessionRuntime,
 		createEmptySession: (createOptions) =>
-			withSessionRuntime((sdk) => sdk.createEmptySession(createOptions)),
+			withSessionRuntime((sdk) => sdk.createEmptySession(createOptions), {
+				pluginProviderIds:
+					createOptions?.model === undefined
+						? []
+						: [createOptions.model.providerId],
+			}),
 		getAgentCatalog: (catalogOptions) =>
 			withSessionRuntime((sdk) => sdk.getAgentCatalog(catalogOptions)),
 		deliverToSession: (sessionId, input) =>

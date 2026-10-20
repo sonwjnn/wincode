@@ -1,12 +1,11 @@
 import { isArray, isString, isUndefined } from "@wincode/utils";
-// The single models.dev -> Wincode metadata converter. Both the offline
-// generator (`scripts/sync-model-metadata.ts`) and the runtime pricing refresh
-// call this, so a fact can only ever be interpreted one way. See ADR-0014.
+// The single models.dev -> Wincode metadata converter. Both the build-time
+// catalog generator and runtime pricing refresh call this, so a fact can only
+// ever be interpreted one way. See ADR-0049.
 //
 // This module MUST NOT import `./generated/*`. The generator imports it, so a
 // generated import here would close a cycle and break regeneration from a clean
-// tree. The read path over the generated snapshot lives in
-// `./model-metadata-snapshot`.
+// tree. SDK Providers consume the complete generated ProviderModel arrays.
 
 import {
 	isFiniteNonNegativeNumber,
@@ -18,19 +17,19 @@ import {
 	pickTruthy,
 } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
-import {
-	type ModelCost,
-	type ModelCostTier,
-	type ModelLimits,
-	type ModelMetadataEntry,
-	type ModelThinkingPolicy,
-	type ThinkingLevel,
-	thinkingLevelIds,
-} from "./model-metadata";
+import type {
+	ModelCost,
+	ModelCostTier,
+	ModelLimits,
+	ModelMetadataEntry,
+	ModelThinkingPolicy,
+	ThinkingLevel,
+} from "./model-metadata.ts";
 import {
 	type ModelsDevModel,
 	modelsDevBlocksFromPayload,
-} from "./models-dev-payload";
+} from "./models-dev-payload.ts";
+import { thinkingLevelIds } from "./thinking-level.ts";
 
 export type {
 	ModelCost,
@@ -39,9 +38,9 @@ export type {
 	ModelMetadataEntry,
 	ModelThinkingPolicy,
 	ThinkingLevel,
-} from "./model-metadata";
-export { modelMetadataEntrySchema } from "./model-metadata";
-export type { ModelsDevModel } from "./models-dev-payload";
+} from "./model-metadata.ts";
+export { modelMetadataEntrySchema } from "./model-metadata.ts";
+export type { ModelsDevModel } from "./models-dev-payload.ts";
 
 const parseReasoningOptions = (
 	value: unknown
@@ -66,7 +65,7 @@ const THINKING_LEVEL_IDS: ReadonlySet<string> = new Set(
 type ModelSource = Readonly<{ modelId: string; providerId: string }>;
 
 // DeepSeek publishes these only as aliases for the named models below.
-// `minimal` remains distinct for other model catalogs.
+// `minimal` remains distinct for other Providers.
 const DEEPSEEK_EFFORT_ALIASES: Readonly<Record<string, ThinkingLevel>> = {
 	minimal: "low",
 	medium: "high",
@@ -126,11 +125,9 @@ const toThinkingPolicy = (
 	const budgetBounded = !(isUndefined(budgetMin) && isUndefined(budgetMax));
 	// A source-published `none` value is not a selectable ThinkingLevel
 	// level. Preserve it as a toggle when the source has no separate toggle.
-	// A published budget range is a reasoning control even with no ladder: it
-	// says how much thinking the model may do. With no switch and no ladder the
-	// user has nothing to pick, so the model gets no selectable level and its
-	// budget is derived rather than chosen. Without recording this, Claude 4.5
-	// would look like a model with no reasoning control at all.
+	// A published budget range is a reasoning control even with no ladder.
+	// Preserve it as unlevelled so request adapters can derive a budget, while
+	// the shared reasoning defaults remain available to model selection.
 	const switchable = hasToggle || budgetBounded;
 	if (!(switchable || levels)) {
 		return;
