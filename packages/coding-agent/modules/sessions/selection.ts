@@ -1,15 +1,24 @@
-import type { AgentId } from "@wincode/agent-core";
+import { type AgentId, agentIdSchema } from "@wincode/agent-core";
 import {
-	type ChatModelSelection,
-	isSupportedThinkingLevel,
-	modelSelectionSchema,
-	normalizeChatModelSelection,
-	normalizeThinkingSelection,
 	type ThinkingLevel,
 	type ThinkingSelection,
 	thinkingLevelSchema,
-} from "@wincode/ai/models";
-import { isPlainObject, isString, isUndefined } from "@wincode/utils";
+} from "@wincode/ai";
+import {
+	isPlainObject,
+	isString,
+	isUndefined,
+	omitUndefined,
+} from "@wincode/utils";
+import { DEFAULT_AGENT_ID } from "@/modules/agents/built-ins";
+import type { AgentRegistry } from "@/modules/agents/registry";
+import {
+	DEFAULT_PROVIDER_MODEL_SELECTION,
+	isSameProviderModelIdentity,
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+	parseProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type { SkillRequestContext } from "@/modules/skills";
 import type { SessionMessage } from "./message";
 import {
@@ -18,9 +27,9 @@ import {
 } from "./message";
 
 /**
- * The session-selection module owns every read of message metadata:
- * the last-used selection, the originating Skill, and the precedence chain
- * that resolves what a new turn or an opened session actually uses.
+ * The session-selection module owns model, Agent, and ThinkingLevel precedence
+ * for SDK defaults, restored Sessions, message metadata, and outgoing turns.
+ * It also owns the Skill context a new turn inherits from message metadata.
  *
  * Two policies intentionally coexist here:
  * - restore reads leniently — a selection survives partially broken metadata;
@@ -29,8 +38,100 @@ import {
 
 export type LastUsedSelection = {
 	agent: AgentId;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
+};
+
+export type SessionSdkSelectionDefaults = Readonly<{
+	agent: AgentId;
+	model: ProviderModelSelection;
+	thinkingLevel?: ThinkingLevel;
+}>;
+
+export type SessionSdkSelectionOptions = Readonly<{
+	agent?: AgentId | string;
+	model?: ProviderModelSelection;
+	thinkingLevel?: ThinkingLevel;
+}>;
+
+const parseSelectionAgent = (value: AgentId | string): AgentId => {
+	const parsed = agentIdSchema.safeParse(value);
+	if (!parsed.success) {
+		throw new Error(`Invalid Agent Identifier: ${value}`);
+	}
+	return parsed.data;
+};
+
+/** Resolves the current SDK defaults from explicit, Agent, then product defaults. */
+export const resolveSessionSdkSelectionDefaults = (
+	registry: AgentRegistry | null,
+	options: SessionSdkSelectionOptions
+): SessionSdkSelectionDefaults => {
+	const agent =
+		options.agent === undefined
+			? (registry?.defaultAgentId ?? DEFAULT_AGENT_ID)
+			: parseSelectionAgent(options.agent);
+	const selectedAgent = registry?.agents.find(
+		(candidate) => candidate.id === agent
+	);
+	const model =
+		options.model ?? selectedAgent?.model ?? DEFAULT_PROVIDER_MODEL_SELECTION;
+	return {
+		agent,
+		model,
+		...omitUndefined({
+			thinkingLevel: normalizeSelectionChoice(
+				model,
+				options.thinkingLevel ?? selectedAgent?.thinkingLevel
+			).thinkingLevel,
+		}),
+	};
+};
+
+/** Restores an SDK handle's next-turn defaults without replacing stored identity. */
+export const resolveRestoredSessionSdkSelection = (
+	fallback: SessionSdkSelectionDefaults,
+	stored: Readonly<{
+		model?: ProviderModelSelection;
+		thinkingLevel?: ThinkingLevel;
+	}>,
+	prior: Pick<
+		ResolvedSessionSelection,
+		"agent" | "model" | "thinkingLevel"
+	> | null
+): SessionSdkSelectionDefaults => {
+	const model = prior?.model ?? stored.model ?? fallback.model;
+	return {
+		agent: prior?.agent ?? fallback.agent,
+		model,
+		...omitUndefined({
+			thinkingLevel: normalizeSelectionChoice(
+				model,
+				prior?.thinkingLevel ?? stored.thinkingLevel ?? fallback.thinkingLevel
+			).thinkingLevel,
+		}),
+	};
+};
+
+/** Resolves one SDK prompt against the defaults restored for its open handle. */
+export const resolveSessionSdkPromptSelection = (
+	input: SessionSdkSelectionOptions,
+	defaults: SessionSdkSelectionDefaults
+): SessionSdkSelectionDefaults => {
+	const model = input.model ?? defaults.model;
+	return {
+		agent:
+			input.agent === undefined
+				? defaults.agent
+				: parseSelectionAgent(input.agent),
+		model,
+		...omitUndefined({
+			thinkingLevel: normalizeSelectionChoice(
+				model,
+				input.thinkingLevel ?? defaults.thinkingLevel
+			).thinkingLevel,
+		}),
+	};
 };
 
 /**
@@ -42,7 +143,7 @@ export type LastUsedSelection = {
 export const getLastUsedSelection = (
 	messages: SessionMessage[]
 ): LastUsedSelection | undefined => {
-	let selection: { agent: AgentId; model: ChatModelSelection } | undefined;
+	let selection: { agent: AgentId; model: ProviderModelSelection } | undefined;
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const metadata = messages[index]?.metadata;
 		if (!metadata?.model) {
@@ -54,7 +155,7 @@ export const getLastUsedSelection = (
 			continue;
 		}
 
-		const model = normalizeChatModelSelection(metadata.model);
+		const model = normalizeProviderModelSelection(metadata.model);
 		if (!model) {
 			continue;
 		}
@@ -78,19 +179,15 @@ export const getLastUsedSelection = (
  */
 const findLastUsedThinkingSelection = (
 	messages: SessionMessage[],
-	model: ChatModelSelection
+	model: ProviderModelSelection
 ): ThinkingSelection => {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const metadata = messages[index]?.metadata;
 		if (!metadata?.model) {
 			continue;
 		}
-		const metadataModel = normalizeChatModelSelection(metadata.model);
-		if (
-			!metadataModel ||
-			metadataModel.modelId !== model.modelId ||
-			metadataModel.providerId !== model.providerId
-		) {
+		const metadataModel = normalizeProviderModelSelection(metadata.model);
+		if (!(metadataModel && isSameProviderModelIdentity(metadataModel, model))) {
 			continue;
 		}
 		const thinking = normalizeSelectionChoice(model, metadata.thinkingLevel);
@@ -101,14 +198,13 @@ const findLastUsedThinkingSelection = (
 	return {};
 };
 
-const normalizeSelection = (model: unknown): ChatModelSelection | null => {
+const normalizeSelection = (model: unknown): ProviderModelSelection | null => {
 	if (isString(model)) {
-		return normalizeChatModelSelection(model);
+		return parseProviderModelSelection(model);
 	}
 
 	if (isPlainObject(model)) {
-		const parsed = modelSelectionSchema.safeParse(model);
-		return parsed.success ? parsed.data : null;
+		return normalizeProviderModelSelection(model);
 	}
 
 	return null;
@@ -156,15 +252,12 @@ export const getOriginatingUserSkill = (
  * Parses one Thinking Level against the model that will run it, or throws when
  * the level is not one the model supports.
  */
-export const strictThinkingSelection = (
-	model: ChatModelSelection,
-	value: unknown
-): ThinkingSelection => {
+export const strictThinkingSelection = (value: unknown): ThinkingSelection => {
 	if (value === undefined) {
 		return {};
 	}
 	const parsed = thinkingLevelSchema.safeParse(value);
-	if (!(parsed.success && isSupportedThinkingLevel(model, parsed.data))) {
+	if (!parsed.success) {
 		throw new Error("Thinking level is unavailable for the selected model.");
 	}
 	return { thinkingLevel: parsed.data };
@@ -173,20 +266,20 @@ export const strictThinkingSelection = (
 export type ResolvedSessionSelection = {
 	agent: AgentId | undefined;
 	persistedAgent: AgentId | undefined;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	thinkingLevel: ThinkingLevel | undefined;
 };
 
 export type SessionSelectionRefs = {
 	agent?: AgentId;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 };
 
 type ResolveSessionSelectionInput = {
 	messages: SessionMessage[];
 	resolveAgent?: (agentId: AgentId | undefined) => AgentId;
-	sessionModel?: ChatModelSelection;
+	sessionModel?: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 	refs?: SessionSelectionRefs;
 };
@@ -238,12 +331,15 @@ export const resolveSessionSelection = ({
 };
 
 const normalizeSelectionChoice = (
-	model: ChatModelSelection,
+	_model: ProviderModelSelection,
 	thinkingLevel: ThinkingLevel | undefined
-): ThinkingSelection =>
-	isUndefined(thinkingLevel)
-		? {}
-		: normalizeThinkingSelection(model, { thinkingLevel });
+): ThinkingSelection => {
+	if (isUndefined(thinkingLevel)) {
+		return {};
+	}
+	const parsed = thinkingLevelSchema.safeParse(thinkingLevel);
+	return parsed.success ? { thinkingLevel: parsed.data } : {};
+};
 
 const hasThinkingSelection = (choice: ThinkingSelection): boolean =>
 	choice.thinkingLevel !== undefined;
@@ -283,14 +379,14 @@ export const resolveLastUsedSessionSelection = ({
 
 export type SelectionFallback = {
 	agent: AgentId;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	skill?: SkillRequestContext;
 };
 
 export type OutgoingChatSelection = {
 	agent: AgentId | undefined;
-	model: ChatModelSelection | undefined;
+	model: ProviderModelSelection | undefined;
 	thinkingLevel: ThinkingLevel | undefined;
 	skill: SkillRequestContext | undefined;
 };

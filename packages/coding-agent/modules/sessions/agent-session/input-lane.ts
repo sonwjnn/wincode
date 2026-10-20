@@ -63,6 +63,8 @@ export type SessionInputLanePort = Readonly<{
 	) => SessionInputExternalization | undefined;
 	getSnapshot: () => LiveSessionSnapshot;
 	inputScheduler: AgentSessionPorts["inputScheduler"];
+	resolveSubmission: AgentSessionPorts["resolveSubmission"];
+	assertProviderModelSelection: AgentSessionPorts["assertProviderModelSelection"];
 	isClosed: () => boolean;
 	isExecutionBusy: () => boolean;
 	isExternalizing: (id: SessionQueuedSubmission["id"]) => boolean;
@@ -444,6 +446,9 @@ export const createSessionInputLaneWorkflow = (
 					},
 				};
 			}
+			await port.assertProviderModelSelection(
+				port.resolveSubmission(current.input)
+			);
 			return await port.commitSteeringSubmission(current);
 		} catch (error) {
 			return {
@@ -546,6 +551,22 @@ export const createSessionInputLaneWorkflow = (
 		if (port.isClosed()) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
+		try {
+			const validation = port.assertProviderModelSelection(
+				port.resolveSubmission(input)
+			);
+			if (validation instanceof Promise) {
+				await validation;
+			}
+		} catch (error) {
+			return {
+				rejected: true,
+				reason: getErrorMessage(
+					error,
+					"Provider Model selection is not valid."
+				),
+			};
+		}
 		const composition: SessionSubmissionComposition = input.composition ?? {
 			files: input.files ?? [],
 			text: input.userText ?? "",
@@ -576,6 +597,22 @@ export const createSessionInputLaneWorkflow = (
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
 		if (port.isClosed()) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
+		}
+		try {
+			const validation = port.assertProviderModelSelection(
+				port.resolveSubmission(input)
+			);
+			if (validation instanceof Promise) {
+				await validation;
+			}
+		} catch (error) {
+			return {
+				rejected: true,
+				reason: getErrorMessage(
+					error,
+					"Provider Model selection is not valid."
+				),
+			};
 		}
 		const composition: SessionSubmissionComposition = input.composition ?? {
 			files: input.files ?? [],

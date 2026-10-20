@@ -1,60 +1,70 @@
 import { expect, test } from "bun:test";
-import { modelCatalog } from "@wincode/ai/models";
-import {
-	resolveConfiguredPromptCacheControls,
-	resolveConfiguredPromptCacheRetention,
-} from "@/modules/prompt-cache/policy";
+import type { ProviderModel } from "@wincode/ai";
+import { resolveConfiguredPromptCacheControls } from "@/modules/prompt-cache/policy";
 
-test("uses short by default and honors only capability-supported model overrides", () => {
-	const opus = modelCatalog.find(
-		(model) =>
-			model.connectionProviderId === "anthropic" &&
-			model.id === "claude-opus-4-5"
-	);
-	const opencodeAnthropic = modelCatalog.find(
-		(model) =>
-			model.connectionProviderId === "opencode-go" && model.id === "minimax-m3"
-	);
-	if (!(opus && opencodeAnthropic)) {
-		throw new Error("Prompt cache model fixtures are missing.");
-	}
-
-	expect(resolveConfiguredPromptCacheRetention(opus, undefined)).toBe("short");
-	expect(
-		resolveConfiguredPromptCacheRetention(opus, {
-			modelOverrides: { "anthropic/claude-opus-4-5": "long" },
-		})
-	).toBe("long");
-	expect(
-		resolveConfiguredPromptCacheRetention(opus, {
-			modelOverrides: { "anthropic/claude-opus-4-5": "off" },
-		})
-	).toBeUndefined();
-	expect(
-		resolveConfiguredPromptCacheRetention(opencodeAnthropic, {
-			modelOverrides: { "opencode-go/minimax-m3": "long" },
-		})
-	).toBeUndefined();
-	expect(
-		resolveConfiguredPromptCacheRetention(opus, {
-			modelOverrides: { "anthropic/claude-opus-4-5": "invalid" },
-		})
-	).toBeUndefined();
+const providerModel = (
+	providerId: string,
+	modelId: string,
+	promptCacheRetentionTiers?: ProviderModel["promptCacheRetentionTiers"]
+): ProviderModel => ({
+	modelId,
+	protocolId: "fixture",
+	providerId,
+	...(promptCacheRetentionTiers === undefined
+		? {}
+		: { promptCacheRetentionTiers }),
 });
 
-test("enables only declared controls and lets off omit the Session key", () => {
-	const openai = modelCatalog.find(
-		(model) =>
-			model.connectionProviderId === "openai" && model.id === "gpt-5.6-luna"
-	);
-	const openCodeGoOpenAI = modelCatalog.find(
-		(model) =>
-			model.connectionProviderId === "opencode-go" &&
-			model.id === "gpt-5.6-luna"
-	);
-	if (!(openai && openCodeGoOpenAI)) {
-		throw new Error("Prompt cache model fixtures are missing.");
-	}
+test("uses the default tier and honors only declared Provider Model overrides", () => {
+	const opus = providerModel("anthropic", "claude-opus-4-5", ["short", "long"]);
+	const opencodeAnthropic = providerModel("opencode-go", "minimax-m3", [
+		"short",
+	]);
+
+	expect(resolveConfiguredPromptCacheControls(opus, undefined)).toEqual({
+		enabled: true,
+		retention: "short",
+	});
+	expect(
+		resolveConfiguredPromptCacheControls(opus, {
+			modelOverrides: { "anthropic/claude-opus-4-5": "long" },
+		})
+	).toEqual({ enabled: true, retention: "long" });
+	expect(
+		resolveConfiguredPromptCacheControls(opus, {
+			modelOverrides: { "anthropic/claude-opus-4-5": "off" },
+		})
+	).toEqual({ enabled: false });
+	expect(
+		resolveConfiguredPromptCacheControls(opencodeAnthropic, {
+			modelOverrides: { "opencode-go/minimax-m3": "long" },
+		})
+	).toEqual({ enabled: false });
+	expect(
+		resolveConfiguredPromptCacheControls(opus, {
+			modelOverrides: { "anthropic/claude-opus-4-5": "invalid" },
+		})
+	).toEqual({ enabled: false });
+});
+
+test("requires explicit Provider Model retention metadata before enabling cache", () => {
+	const undeclared = providerModel("fixture", "undeclared");
+
+	expect(resolveConfiguredPromptCacheControls(undeclared, undefined)).toEqual({
+		enabled: false,
+	});
+	expect(
+		resolveConfiguredPromptCacheControls(undeclared, {
+			modelOverrides: { "fixture/undeclared": "short" },
+		})
+	).toEqual({ enabled: false });
+});
+
+test("does not apply a cache override to a different Provider Model identity", () => {
+	const openai = providerModel("openai", "gpt-5.6-luna", ["short"]);
+	const openCodeGoOpenAI = providerModel("opencode-go", "gpt-5.6-luna", [
+		"short",
+	]);
 
 	expect(resolveConfiguredPromptCacheControls(openai, undefined)).toEqual({
 		enabled: true,
@@ -66,6 +76,8 @@ test("enables only declared controls and lets off omit the Session key", () => {
 		})
 	).toEqual({ enabled: false });
 	expect(
-		resolveConfiguredPromptCacheControls(openCodeGoOpenAI, undefined)
-	).toEqual({ enabled: false });
+		resolveConfiguredPromptCacheControls(openCodeGoOpenAI, {
+			modelOverrides: { "openai/gpt-5.6-luna": "off" },
+		})
+	).toEqual({ enabled: true, retention: "short" });
 });

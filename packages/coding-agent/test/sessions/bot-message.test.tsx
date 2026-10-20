@@ -4,7 +4,10 @@ import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
 import { act, useEffect, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
+import {
+	BotMessageContent,
+	BotMessageFooter,
+} from "@/modules/sessions/ui/messages/bot-message";
 import { buildAddedPreviewPatch } from "@/modules/sessions/ui/messages/edit-diff-block";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
 import { setTreeSitterClientForTests } from "@/modules/sessions/ui/messages/syntax-style";
@@ -14,7 +17,11 @@ import {
 } from "@/modules/sessions/ui/messages/write-block";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
-import { toolCallId } from "../support/identifiers";
+import {
+	modelIdentity,
+	sessionMessageId,
+	toolCallId,
+} from "../support/identifiers";
 import { flushTestRenderer as flushUi } from "../support/opentui";
 
 beforeAll(() => {
@@ -67,6 +74,34 @@ const renderFrame = async (
 };
 
 describe("BotMessageContent", () => {
+	test("shows the stored Provider identity for history even when its model is unknown", async () => {
+		const message: SessionMessage = {
+			id: sessionMessageId("historical-provider-assistant"),
+			metadata: {
+				model: {
+					modelId: modelIdentity("vendor/retired-model"),
+					providerId: "plugin-provider",
+				},
+			},
+			parts: [],
+			role: "assistant",
+		};
+		const setup = await testRender(
+			<ThemeProvider>
+				<BotMessageFooter message={message} />
+			</ThemeProvider>,
+			{ height: 8, width: 100 }
+		);
+
+		try {
+			await flushUi(setup, 3);
+			expect(setup.captureCharFrame()).toContain(
+				"plugin-provider/vendor/retired-model"
+			);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 	test("renders completed MCP calls as compact rows without runtime details", async () => {
 		const part = {
 			input: {

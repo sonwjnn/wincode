@@ -5,28 +5,26 @@ import type {
 } from "@google/genai";
 import { ApiError } from "@google/genai";
 import {
-	createGoogleCachedContentResourceManager,
+	createGoogleCachedContentResourceManager as createGoogleCacheManager,
 	type GoogleCachedContentResourceManager,
-} from "../src/model-client/google-cached-content";
-import type { ModelTool } from "../src/model-client/types";
-import { createModelTarget } from "../src/model-target";
-import { supportedChatModelIdSchema } from "../src/models";
+	type GoogleCachedContentResourceManagerOptions,
+} from "../src/sdk-private/google-cached-content-manager.ts";
+import type { ProtocolTool } from "../src/sdk-private/protocols/request.ts";
 
-const makeTarget = (apiKey = "google-key", maxOutputTokens = 256) =>
-	createModelTarget(
-		{
-			modelId: supportedChatModelIdSchema.parse("gemini-3.8-flash"),
-			providerId: "google",
+const createManager = (
+	options: Omit<GoogleCachedContentResourceManagerOptions, "cacheTtlForModel">
+) =>
+	createGoogleCacheManager({
+		...options,
+		cacheTtlForModel: (modelId, retention) => {
+			if (!modelId.startsWith("gemini-3.8-")) {
+				return;
+			}
+			return retention === "short" ? "300s" : "3600s";
 		},
-		{ apiKey, kind: "api-key" },
-		{
-			maxOutputTokens,
-			promptCacheEnabled: true,
-			promptCacheRetention: "short",
-		}
-	);
+	});
 
-const lookupTool: ModelTool = {
+const lookupTool: ProtocolTool = {
 	description: "Find a record.",
 	inputSchema: {
 		properties: { query: { type: "string" } },
@@ -54,15 +52,24 @@ const createCacheClient = (calls: CacheCalls) => ({
 
 const select = (
 	manager: GoogleCachedContentResourceManager,
-	target = makeTarget(),
-	system = "Stable system instructions",
-	tools: readonly ModelTool[] = [lookupTool]
-) => manager.select({ system, target, tools });
+	selection: Partial<
+		Parameters<GoogleCachedContentResourceManager["select"]>[0]
+	> = {}
+) =>
+	manager.select({
+		apiKey: "google-key",
+		cacheRetention: "short",
+		modelId: "gemini-3.8-flash",
+		providerId: "google",
+		system: "Stable system instructions",
+		tools: [lookupTool],
+		...selection,
+	});
 
 describe("Google CachedContent resource lifecycle", () => {
 	test("creates and reuses only the stable system and tool prefix", async () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
-		const manager = createGoogleCachedContentResourceManager({
+		const manager = createManager({
 			createClient: () => createCacheClient(calls),
 			sessionId: "session-one",
 		});
@@ -97,11 +104,59 @@ describe("Google CachedContent resource lifecycle", () => {
 		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/1" }]);
 	});
 
+	test("isolates in-flight CachedContent cleanup across Host-owned managers", async () => {
+		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
+		const creation = Promise.withResolvers<{ name: string }>();
+		const createStarted = Promise.withResolvers<void>();
+		let createCount = 0;
+		const client = {
+			create: async (params: CreateCachedContentParameters) => {
+				calls.createCalls.push(params);
+				createCount += 1;
+				if (createCount === 1) {
+					createStarted.resolve();
+					return creation.promise;
+				}
+				return { name: `cachedContents/${createCount}` };
+			},
+			delete: async (params: DeleteCachedContentParameters) => {
+				calls.deleteCalls.push(params);
+				return {};
+			},
+		};
+		const firstHostManager = createManager({
+			createClient: () => client,
+			sessionId: "first-host-session",
+		});
+		const secondHostManager = createManager({
+			createClient: () => client,
+			sessionId: "second-host-session",
+		});
+
+		const firstSelection = select(firstHostManager);
+		await createStarted.promise;
+		expect((await select(secondHostManager))?.name).toBe("cachedContents/2");
+		const closingFirstHost = firstHostManager.close();
+		creation.resolve({ name: "cachedContents/1" });
+
+		expect(await firstSelection).toBeUndefined();
+		await closingFirstHost;
+		expect((await select(secondHostManager))?.name).toBe("cachedContents/2");
+		expect(calls.createCalls).toHaveLength(2);
+		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/1" }]);
+
+		await secondHostManager.close();
+		expect(calls.deleteCalls).toEqual([
+			{ name: "cachedContents/1" },
+			{ name: "cachedContents/2" },
+		]);
+	});
+
 	test("coalesces concurrent selections so close deletes the one owned resource", async () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
 		const pendingCreations: PromiseWithResolvers<{ name: string }>[] = [];
 		const createStarted = Promise.withResolvers<void>();
-		const manager = createGoogleCachedContentResourceManager({
+		const manager = createManager({
 			createClient: () => ({
 				create: async (params) => {
 					calls.createCalls.push(params);
@@ -137,7 +192,7 @@ describe("Google CachedContent resource lifecycle", () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
 		const creation = Promise.withResolvers<{ name: string }>();
 		const createStarted = Promise.withResolvers<void>();
-		const manager = createGoogleCachedContentResourceManager({
+		const manager = createManager({
 			createClient: () => ({
 				create: async (params) => {
 					calls.createCalls.push(params);
@@ -164,14 +219,14 @@ describe("Google CachedContent resource lifecycle", () => {
 
 	test("serializes different identities and ignores invalidation for a replaced resource", async () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
-		const manager = createGoogleCachedContentResourceManager({
+		const manager = createManager({
 			createClient: () => createCacheClient(calls),
 			sessionId: "session-one",
 		});
 
 		const [first, second] = await Promise.all([
-			select(manager, makeTarget(), "First system instructions"),
-			select(manager, makeTarget(), "Second system instructions"),
+			select(manager, { system: "First system instructions" }),
+			select(manager, { system: "Second system instructions" }),
 		]);
 
 		expect(first?.name).toBe("cachedContents/1");
@@ -184,31 +239,40 @@ describe("Google CachedContent resource lifecycle", () => {
 		]);
 	});
 
-	test("deletes and replaces a resource when the exact prefix or Model Target changes", async () => {
+	test("deletes and replaces a resource when the prefix, model, or retention changes", async () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
-		const manager = createGoogleCachedContentResourceManager({
+		const manager = createManager({
 			createClient: () => createCacheClient(calls),
 			sessionId: "session-one",
 		});
 
 		await select(manager);
-		const changedPrefix = await select(
-			manager,
-			makeTarget(),
-			"Updated system instructions"
-		);
+		const changedPrefix = await select(manager, {
+			system: "Updated system instructions",
+		});
 		expect(changedPrefix?.name).toBe("cachedContents/2");
 		expect(calls.deleteCalls).toEqual([{ name: "cachedContents/1" }]);
 
-		const changedTarget = await select(
-			manager,
-			makeTarget("google-key", 512),
-			"Updated system instructions"
-		);
-		expect(changedTarget?.name).toBe("cachedContents/3");
+		const changedModel = await select(manager, {
+			modelId: "gemini-3.8-pro",
+			system: "Updated system instructions",
+		});
+		expect(changedModel?.name).toBe("cachedContents/3");
 		expect(calls.deleteCalls).toEqual([
 			{ name: "cachedContents/1" },
 			{ name: "cachedContents/2" },
+		]);
+
+		const changedRetention = await select(manager, {
+			cacheRetention: "long",
+			modelId: "gemini-3.8-pro",
+			system: "Updated system instructions",
+		});
+		expect(changedRetention?.name).toBe("cachedContents/4");
+		expect(calls.deleteCalls).toEqual([
+			{ name: "cachedContents/1" },
+			{ name: "cachedContents/2" },
+			{ name: "cachedContents/3" },
 		]);
 
 		await manager.close();
@@ -216,7 +280,7 @@ describe("Google CachedContent resource lifecycle", () => {
 
 	test("invalidates only the rejected resource so the next turn creates a fresh one", async () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
-		const manager = createGoogleCachedContentResourceManager({
+		const manager = createManager({
 			createClient: () => createCacheClient(calls),
 			sessionId: "session-one",
 		});
@@ -232,30 +296,16 @@ describe("Google CachedContent resource lifecycle", () => {
 
 	test("omits Wincode resources when policy or model metadata does not enable them", async () => {
 		const calls: CacheCalls = { createCalls: [], deleteCalls: [] };
-		const manager = createGoogleCachedContentResourceManager({
+		const manager = createManager({
 			createClient: () => createCacheClient(calls),
 			sessionId: "session-one",
 		});
 
 		const enabled = await select(manager);
-		const off = await select(manager, {
-			...makeTarget(),
-			promptCacheEnabled: undefined,
+		const off = await select(manager, { cacheRetention: undefined });
+		const unsupported = await select(manager, {
+			modelId: "gemini-3.6-flash",
 		});
-		const unsupported = await select(
-			manager,
-			createModelTarget(
-				{
-					modelId: supportedChatModelIdSchema.parse("gemini-3.6-flash"),
-					providerId: "google",
-				},
-				{ apiKey: "google-key", kind: "api-key" },
-				{
-					promptCacheEnabled: true,
-					promptCacheRetention: "short",
-				}
-			)
-		);
 
 		expect(enabled?.name).toBe("cachedContents/1");
 		expect(off).toBeUndefined();
@@ -269,7 +319,7 @@ describe("Google CachedContent resource lifecycle", () => {
 			message: "Cached content is unsupported for this model.",
 			status: 400,
 		});
-		const manager = createGoogleCachedContentResourceManager({
+		const manager = createManager({
 			createClient: () => ({
 				create: async () => {
 					throw cacheError;
@@ -286,7 +336,7 @@ describe("Google CachedContent resource lifecycle", () => {
 			message: "Cached content permission denied.",
 			status: 403,
 		});
-		const failingManager = createGoogleCachedContentResourceManager({
+		const failingManager = createManager({
 			createClient: () => ({
 				create: async () => {
 					throw unrelated;

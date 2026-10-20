@@ -1,21 +1,53 @@
 import { useRouter } from "@tanstack/react-router";
 import { createAgentTurnId } from "@wincode/agent-core";
-import type { ThinkingSelection } from "@wincode/ai/models";
-import { isNull, isUndefined } from "@wincode/utils";
-import { useEffect, useState } from "react";
+import type {
+	ProviderCollection,
+	ProviderModel,
+	ThinkingSelection,
+} from "@wincode/ai";
+import { getErrorMessage, isNull, isUndefined, logger } from "@wincode/utils";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+	type EffectiveAgentSelection,
 	resolveActiveAgentId,
-	resolveEffectiveAgentSelection,
+	resolveInteractiveAgentSelection,
 	useAgentRegistry,
 } from "@/modules/agents";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { ProjectTrustNotice } from "@/modules/project-trust/ui/project-trust-notice";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import {
+	createInteractiveProviderController,
+	type InteractiveProviderController,
+	type InteractiveProviderControllerOptions,
+} from "@/modules/providers/interactive-provider-controller";
+import {
+	arePluginProviderRegistrationsBoundToTrustedOwners,
+	isAvailableProviderModelSelection,
+	isPluginProviderSelectionBoundToTrustedOwner,
+	type ProviderModelSelection,
+	ProviderModelSelectionOwnershipError,
+	UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE,
+} from "@/modules/providers/provider-model-selection";
+import {
+	getInteractiveSessionHostManager,
+	withSessionManagerWork,
+} from "@/modules/sessions/host/session-host-manager";
 import { createSessionUserMessage } from "@/modules/sessions/message";
+import {
+	createDefaultSessionProviderCollection,
+	getPluginProviderRegistrationsFromCollection,
+	type InteractiveSessionProviderCollection,
+} from "@/modules/sessions/provider-collection";
 import { useSettingsHubDialog } from "@/modules/settings";
 import { createSkillSnapshot } from "@/modules/skills";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
+import {
+	getInteractivePluginRuntime,
+	getInteractiveProviderCollectionFactory,
+} from "@/shared/runtime-context";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import { resolveLastUsedSessionSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
@@ -58,10 +90,120 @@ const NEW_SESSION_DRAFT_KEY = "new-session";
 const NEW_SESSION_VIEW_ID = "new-session-view";
 const NEW_SESSION_COMPOSER_ID = `${NEW_SESSION_VIEW_ID}-composer`;
 
-export function NewSessionView() {
+const closeHomeProviderCollection = async (
+	providerCollection: Pick<ProviderCollection, "close">
+): Promise<void> => {
+	try {
+		await providerCollection.close();
+	} catch {
+		logger.warn("Home ProviderCollection cleanup failed.");
+	}
+};
+
+type HomeProviderCollection = ProviderCollection &
+	Partial<
+		Pick<
+			InteractiveSessionProviderCollection,
+			| "getPluginProviderComposition"
+			| "getPluginProviderRegistrations"
+			| "loginOpenAIOAuth"
+			| "getDiscoverableProviderIds"
+			| "getCompositionRevision"
+			| "subscribeComposition"
+			| "supportsModelDiscovery"
+		>
+	>;
+
+const homeProviderControllerOptions = (
+	providerCollection: HomeProviderCollection
+): InteractiveProviderControllerOptions => ({
+	...(providerCollection.getPluginProviderComposition === undefined
+		? {}
+		: {
+				getPluginProviderComposition:
+					providerCollection.getPluginProviderComposition,
+			}),
+	...(providerCollection.getPluginProviderRegistrations === undefined
+		? {}
+		: {
+				getPluginProviderRegistrations:
+					providerCollection.getPluginProviderRegistrations,
+			}),
+	getTrustedPluginProviderRegistrations: () =>
+		getInteractivePluginRuntime()?.getProviderRegistrations() ?? [],
+	getTrustedPluginProviderRuntime: () => getInteractivePluginRuntime(),
+	withSessionWork: (action) =>
+		withSessionManagerWork(getInteractiveSessionHostManager(), action),
+	...(providerCollection.loginOpenAIOAuth === undefined
+		? {}
+		: { loginOpenAIOAuth: providerCollection.loginOpenAIOAuth }),
+	...(providerCollection.getDiscoverableProviderIds === undefined
+		? {}
+		: {
+				getDiscoverableProviderIds:
+					providerCollection.getDiscoverableProviderIds,
+			}),
+	...(providerCollection.getCompositionRevision === undefined
+		? {}
+		: {
+				getCompositionRevision: providerCollection.getCompositionRevision,
+			}),
+	...(providerCollection.subscribeComposition === undefined
+		? {}
+		: { subscribeComposition: providerCollection.subscribeComposition }),
+	...(providerCollection.supportsModelDiscovery === undefined
+		? {}
+		: {
+				supportsModelDiscovery: providerCollection.supportsModelDiscovery,
+			}),
+});
+
+type HomeProviderCollectionFactory = (
+	pluginRuntime?: PluginRuntime
+) => Promise<HomeProviderCollection>;
+
+type NewSessionViewProps = Readonly<{
+	createProviderCollection?: HomeProviderCollectionFactory;
+}>;
+
+type HomeSelectionPreflight =
+	| Readonly<{ status: "pending" }>
+	| Readonly<{ message: string; status: "error" }>
+	| Readonly<{ selection: EffectiveAgentSelection; status: "ready" }>;
+
+export function NewSessionView({
+	createProviderCollection: providedCreateProviderCollection,
+}: NewSessionViewProps) {
+	const runtimeProviderCollectionFactory =
+		getInteractiveProviderCollectionFactory();
+	const createProviderCollection = useCallback(
+		async (pluginRuntime?: PluginRuntime): Promise<HomeProviderCollection> => {
+			if (providedCreateProviderCollection !== undefined) {
+				return await providedCreateProviderCollection(pluginRuntime);
+			}
+			if (runtimeProviderCollectionFactory === undefined) {
+				return await createDefaultSessionProviderCollection(pluginRuntime);
+			}
+			const collection = await runtimeProviderCollectionFactory(pluginRuntime);
+			if (collection === undefined) {
+				throw new Error(
+					"ProviderCollection is unavailable in this Interactive runtime."
+				);
+			}
+			return collection;
+		},
+		[providedCreateProviderCollection, runtimeProviderCollectionFactory]
+	);
 	const router = useRouter();
-	const [_error, setError] = useState<string | null>(null);
+	const [error, setError] = useState<string | null>(null);
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
+	const [providerController, setProviderController] =
+		useState<InteractiveProviderController>();
+	const [canCreateProviderCollection, setCanCreateProviderCollection] =
+		useState(false);
+	const [restoredModelSelection, setRestoredModelSelection] =
+		useState<ProviderModelSelection>();
+	const pluginRuntime = getInteractivePluginRuntime();
 	const focusHandlers = useUiComponentFocus({
 		componentId: NEW_SESSION_COMPOSER_ID,
 		enabled: !isCreatingSession,
@@ -87,6 +229,143 @@ export function NewSessionView() {
 	const { show } = useToast();
 	const registry = useAgentRegistry();
 	const defaultAgentId = registry?.defaultAgentId;
+	const selectionPreflight = useMemo<HomeSelectionPreflight>(() => {
+		if (
+			registry === null ||
+			!isPromptConfigRestored ||
+			initializedDefaultAgentId !== defaultAgentId
+		) {
+			return { status: "pending" };
+		}
+		try {
+			const selection = resolveInteractiveAgentSelection(
+				registry,
+				agent,
+				model,
+				thinkingLevel === undefined ? {} : { thinkingLevel },
+				submissionSelectionOverride,
+				pluginRuntime?.getProviderRegistrations() ?? [],
+				restoredModelSelection
+			);
+			if (selection.unavailableReason !== undefined) {
+				return { message: selection.unavailableReason, status: "error" };
+			}
+			return { selection, status: "ready" };
+		} catch (selectionError) {
+			return {
+				message: getErrorMessage(
+					selectionError,
+					"Could not verify the selected Provider SDK Model."
+				),
+				status: "error",
+			};
+		}
+	}, [
+		agent,
+		defaultAgentId,
+		initializedDefaultAgentId,
+		thinkingLevel,
+		isPromptConfigRestored,
+		model,
+		pluginRuntime,
+		registry,
+		restoredModelSelection,
+		submissionSelectionOverride,
+	]);
+
+	useEffect(() => {
+		if (selectionPreflight.status === "pending") {
+			return;
+		}
+		if (selectionPreflight.status === "error") {
+			setError(selectionPreflight.message);
+			return;
+		}
+		setCanCreateProviderCollection(true);
+	}, [selectionPreflight]);
+
+	useEffect(() => {
+		if (!canCreateProviderCollection) {
+			return;
+		}
+		let active = true;
+		let providerCollection: HomeProviderCollection | undefined;
+		let closePromise: Promise<void> | undefined;
+		const closeOwnedProviderCollection = (): Promise<void> => {
+			if (providerCollection === undefined) {
+				return Promise.resolve();
+			}
+			closePromise ??= closeHomeProviderCollection(providerCollection);
+			return closePromise;
+		};
+		const openProviderSelection = async (): Promise<void> => {
+			try {
+				providerCollection = await createProviderCollection(pluginRuntime);
+				const trustedRegistrations =
+					pluginRuntime?.getProviderRegistrations() ?? [];
+				if (
+					!arePluginProviderRegistrationsBoundToTrustedOwners(
+						trustedRegistrations,
+						getPluginProviderRegistrationsFromCollection(providerCollection)
+					)
+				) {
+					throw new Error(UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE);
+				}
+				const controller = createInteractiveProviderController(
+					providerCollection,
+					homeProviderControllerOptions(providerCollection)
+				);
+				await controller.restoreModels();
+				if (!active) {
+					await closeOwnedProviderCollection();
+					return;
+				}
+				setProviderController(controller);
+			} catch (providerError) {
+				await closeOwnedProviderCollection();
+				if (active) {
+					setError(
+						getErrorMessage(
+							providerError,
+							"Provider SDK model selection is unavailable."
+						)
+					);
+				}
+			}
+		};
+		void openProviderSelection();
+		return () => {
+			active = false;
+			void closeOwnedProviderCollection();
+		};
+	}, [canCreateProviderCollection, createProviderCollection, pluginRuntime]);
+
+	useEffect(() => {
+		if (
+			selectionPreflight.status !== "ready" ||
+			providerController === undefined
+		) {
+			return;
+		}
+		const loadCandidates =
+			providerController.getAvailableProviderModelSelectionCandidates;
+		if (loadCandidates === undefined) {
+			return;
+		}
+		const providerId = selectionPreflight.selection.model.providerId;
+		const loadAvailableModels = () => {
+			void loadCandidates(providerId).catch(() => undefined);
+		};
+		const unsubscribeComposition =
+			providerController.subscribeComposition?.(loadAvailableModels);
+		const unsubscribeAvailability =
+			providerController.subscribeAvailability?.(loadAvailableModels);
+		loadAvailableModels();
+		return () => {
+			unsubscribeComposition?.();
+			unsubscribeAvailability?.();
+		};
+	}, [providerController, selectionPreflight]);
 
 	useEffect(() => {
 		if (!isUndefined(defaultAgentId)) {
@@ -102,6 +381,7 @@ export function NewSessionView() {
 		}
 		let ignore = false;
 		setIsPromptConfigRestored(false);
+		setRestoredModelSelection(undefined);
 
 		const restoreLatestSessionConfig = async () => {
 			try {
@@ -126,6 +406,7 @@ export function NewSessionView() {
 					setAgent(selection.agent);
 				}
 
+				setRestoredModelSelection(selection.model);
 				setModel(selection.model);
 				setThinkingLevel(selection.thinkingLevel);
 			} finally {
@@ -165,8 +446,7 @@ export function NewSessionView() {
 		setIsCreatingSession(true);
 
 		try {
-			await createSession(prompt, files, skill);
-			return true;
+			return await createSession(prompt, files, skill);
 		} catch {
 			setError("Could not create chat session.");
 			return false;
@@ -179,16 +459,84 @@ export function NewSessionView() {
 		input: string,
 		files: ChatPromptSubmission["files"],
 		skill: ChatPromptSubmission["skill"]
-	) => {
+	): Promise<boolean> => {
+		let effective: EffectiveAgentSelection;
+		try {
+			effective = resolveInteractiveAgentSelection(
+				registry,
+				agent,
+				model,
+				currentThinkingSelection,
+				submissionSelectionOverride,
+				pluginRuntime?.getProviderRegistrations() ?? [],
+				restoredModelSelection
+			);
+		} catch (selectionError) {
+			setError(
+				getErrorMessage(
+					selectionError,
+					"Could not verify the selected Provider SDK Model."
+				)
+			);
+			return false;
+		}
+		if (effective.unavailableReason !== undefined) {
+			setError(effective.unavailableReason);
+			return false;
+		}
+		if (providerController === undefined) {
+			setError("Provider SDK model selection is unavailable.");
+			return false;
+		}
+		const trustedRegistrations =
+			pluginRuntime?.getProviderRegistrations() ?? [];
+		const collectionRegistrations =
+			providerController.getPluginProviderRegistrations();
+		if (
+			!arePluginProviderRegistrationsBoundToTrustedOwners(
+				trustedRegistrations,
+				collectionRegistrations
+			)
+		) {
+			setError(UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE);
+			return false;
+		}
+		if (
+			!isPluginProviderSelectionBoundToTrustedOwner(
+				effective.model,
+				trustedRegistrations,
+				collectionRegistrations
+			)
+		) {
+			setError(
+				new ProviderModelSelectionOwnershipError(effective.model).message
+			);
+			return false;
+		}
+		let currentlyAvailableModels: readonly ProviderModel[];
+		try {
+			currentlyAvailableModels =
+				(
+					await providerController.getAvailableProviderModelSelectionCandidates?.(
+						effective.model.providerId
+					)
+				)?.map(({ model }) => model) ?? [];
+		} catch {
+			setError("Could not verify the selected Provider SDK Model.");
+			return false;
+		}
+		if (
+			!isAvailableProviderModelSelection(
+				effective.model,
+				currentlyAvailableModels
+			)
+		) {
+			setError(
+				`Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable. Connect a Provider and explicitly select an available Provider SDK Model.`
+			);
+			return false;
+		}
 		const fileMentions = await resolveFileMentionParts(input);
-		const effective = resolveEffectiveAgentSelection(
-			registry,
-			agent,
-			model,
-			currentThinkingSelection,
-			false,
-			submissionSelectionOverride
-		);
 		const initialMessage = createSessionUserMessage(
 			input,
 			{
@@ -210,7 +558,7 @@ export function NewSessionView() {
 		const { id } = await store.createSession({
 			agent: effective.agent,
 			message: durableMessage,
-			model,
+			model: effective.model,
 			turnId: createAgentTurnId(),
 			thinkingLevel: effective.thinkingLevel,
 		});
@@ -222,6 +570,7 @@ export function NewSessionView() {
 			}),
 			to: "/sessions/$id",
 		});
+		return true;
 	};
 
 	return (
@@ -250,6 +599,7 @@ export function NewSessionView() {
 				paddingX={2}
 				width="100%"
 			>
+				{error === null ? null : <text fg={colors.error}>{error}</text>}
 				<ChatTextArea
 					disabled={isCreatingSession}
 					draftKey={NEW_SESSION_DRAFT_KEY}
@@ -263,6 +613,7 @@ export function NewSessionView() {
 					}}
 					onOpenSettings={openSettings}
 					onSubmit={handleSubmit}
+					providerController={providerController}
 					unavailableCommandCapabilities={HOME_UNAVAILABLE_COMMAND_CAPABILITIES}
 				/>
 				<box flexDirection="column" flexShrink={0} paddingLeft={1} width="100%">

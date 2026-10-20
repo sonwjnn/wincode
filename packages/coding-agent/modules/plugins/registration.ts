@@ -3,7 +3,7 @@ import {
 	agentRoleSchema,
 	MAX_AGENT_INSTRUCTIONS_LENGTH,
 } from "@wincode/agent-core";
-import { thinkingLevelSchema } from "@wincode/ai/models";
+import { thinkingLevelSchema } from "@wincode/ai";
 import {
 	isJsonObject,
 	isNonEmptyString,
@@ -15,6 +15,7 @@ import type {
 	PluginAgentRegistration,
 	PluginCommandRegistration,
 	PluginInputSchema,
+	PluginProviderRegistration,
 	PluginToolRegistration,
 } from "./public";
 import type { PluginCommand, PluginTool } from "./types";
@@ -22,6 +23,7 @@ import type { PluginCommand, PluginTool } from "./types";
 const pluginToolNamePattern = /^[a-z0-9_-]+$/u;
 const pluginCommandNamePattern = /^[a-z0-9_-]+$/u;
 const pluginStatusPanelIdPattern = /^[a-z][a-z0-9_-]{0,63}$/u;
+const pluginProviderIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const pluginModelNamePattern = /^[a-zA-Z0-9_-]+$/u;
 const pluginAgentRegistrationSchema = z
 	.object({
@@ -176,6 +178,31 @@ export const validatePluginTool = (candidate: unknown): PluginTool => {
 		inputSchema: tool.inputSchema,
 		...(modelName === undefined ? {} : { modelName }),
 		name: tool.name,
+	});
+};
+
+/** Validates a Plugin Provider's host-mediated connection contract. */
+export const validatePluginProvider = (
+	candidate: unknown
+): PluginProviderRegistration => {
+	if (
+		!isPlainObject(candidate) ||
+		typeof candidate.providerId !== "string" ||
+		!pluginProviderIdPattern.test(candidate.providerId) ||
+		!isNonEmptyString(candidate.displayName) ||
+		typeof candidate.createProvider !== "function" ||
+		typeof candidate.connect !== "function"
+	) {
+		throw new Error(
+			"Plugin Providers require a Provider ID, display name, factory, and connect interaction."
+		);
+	}
+	return Object.freeze({
+		connect: candidate.connect as PluginProviderRegistration["connect"],
+		createProvider:
+			candidate.createProvider as PluginProviderRegistration["createProvider"],
+		displayName: candidate.displayName.trim(),
+		providerId: candidate.providerId,
 	});
 };
 

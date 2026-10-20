@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
+import {
+	DEFAULT_PROVIDER_MODEL_SELECTION,
+	parseProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	resolveCompactionSettings,
 } from "@/modules/sessions/compaction/config";
-import type { ConfigSnapshot } from "@/shared/config/config-store";
+import { createCompactionSettingsOperations } from "@/modules/sessions/compaction/settings-operations";
+import type { ConfigSnapshot, ConfigStore } from "@/shared/config/config-store";
 
 const snapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
 	diagnostics: [],
@@ -56,6 +62,44 @@ describe("resolveCompactionSettings", () => {
 				severity: "warning",
 			})
 		);
+	});
+
+	test("keeps context unknown when a Provider Model is not supplied", async () => {
+		const operations = createCompactionSettingsOperations({
+			configStore: fromPartial<ConfigStore>({
+				getSnapshot: async () => snapshot({}),
+			}),
+			workspace: "/workspace",
+		});
+
+		const settings = await operations.getCompactionSettings(
+			DEFAULT_PROVIDER_MODEL_SELECTION,
+			null
+		);
+
+		expect(settings.modelContextLimit).toBeNull();
+		expect(settings.autoAvailable).toBe(false);
+	});
+
+	test("does not guess context limits for an absent Provider Model", async () => {
+		const operations = createCompactionSettingsOperations({
+			configStore: fromPartial<ConfigStore>({
+				getSnapshot: async () => snapshot({}),
+			}),
+			workspace: "/workspace",
+		});
+
+		const model = parseProviderModelSelection(
+			"unknown-provider/unlisted-model"
+		);
+		if (model === null) {
+			throw new Error("The unknown Provider Model fixture was invalid.");
+		}
+		const settings = await operations.getCompactionSettings(model, null);
+
+		expect(settings.modelContextLimit).toBeNull();
+		expect(settings.autoAvailable).toBe(false);
+		expect(settings.enabled).toBe(true);
 	});
 
 	test("retains the root config path for legacy top-level settings", () => {

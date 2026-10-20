@@ -13,8 +13,9 @@ import type {
 	SubmissionId,
 	ToolCallId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai";
 import type { ReadonlyDeep } from "type-fest";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SkillContext,
 	SkillExecution,
@@ -131,10 +132,10 @@ export type SessionExecution = ReadonlyDeep<{
 	agent: AgentId;
 	/** The first assistant Session Message for this execution. */
 	assistantId: SessionMessageId;
-	/** The Model Target selection the execution runs against. */
-	model: ChatModelSelection;
+	/** The Provider Model identity this execution runs against. */
+	model: ProviderModelSelection;
 	/** The session-level selection recorded on this execution's Session Records. */
-	sessionModel: ChatModelSelection;
+	sessionModel: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 	/** The Session Context message this execution answers. */
 	sourceUserMessageId: SessionMessageId | null;
@@ -147,7 +148,7 @@ export type SessionExecution = ReadonlyDeep<{
 /**
  * The input the Agent Session starts when the Submission Queue reaches a
  * Queued Submission: the submission as it was accepted, with the composition
- * and Model Target selection it keeps while it waits.
+ * and Provider Model selection it keeps while it waits.
  */
 export type SessionQueuedSendInput = SessionSendInput & {
 	composition: SessionSubmissionComposition;
@@ -226,8 +227,8 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 /** What starts one Agent Turn execution. */
 export type SessionExecutionInput = ReadonlyDeep<{
 	agent: AgentId;
-	model: ChatModelSelection;
-	sessionModel: ChatModelSelection;
+	model: ProviderModelSelection;
+	sessionModel: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 	submissionId?: SubmissionId;
 	/** The Session Context message this execution answers, when known. */
@@ -253,7 +254,7 @@ export type SessionResolvedAgent = Readonly<
 export type SessionCommitInput = {
 	record: SessionRecord;
 	sessionId: SessionId;
-	sessionModel?: ChatModelSelection;
+	sessionModel?: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 };
 export type SessionSubmissionStatusUpdate = Readonly<{
@@ -403,11 +404,15 @@ export type AgentSessionPorts = Readonly<{
 	) => Promise<void>;
 	/** Resolves the Agent, Model, and thinking level when a Submission starts. */
 	resolveSubmission: (input: SessionSendInput) => SessionSendInput;
+	/** Rejects selections that the current Host cannot execute before admission. */
+	assertProviderModelSelection: (
+		input: SessionSendInput
+	) => void | Promise<void>;
 	/** Resolves the @path file mentions of a prompt. */
 	resolveFileMentions: (text: string) => Promise<FileMentionPart[]>;
-	/** Resolves the compaction settings one Model Target runs with. */
+	/** Resolves compaction settings for one selected Provider Model. */
 	resolveCompactionSettings: (
-		selection: ChatModelSelection
+		selection: ProviderModelSelection
 	) => Promise<ResolvedCompactionSettings>;
 	turnRunner: SessionTurnRunner;
 	skills: SessionSkillPort;
@@ -417,7 +422,7 @@ export type AgentSessionOptions = Readonly<{
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
-	initialSessionModel?: ChatModelSelection;
+	initialSessionModel?: ProviderModelSelection;
 	initialSessionThinkingLevel?: ThinkingLevel;
 	initialSteeringMessages?: readonly SessionSteeringMessage[];
 	initialTranscript: readonly SessionMessage[];
@@ -439,9 +444,9 @@ export type SessionOverflowContinuationOutcome =
 	| { readonly kind: "started" }
 	| { readonly kind: "refused"; readonly reason: string };
 
-/** The Model Target one overflow recovery compacts and continues with. */
+/** The Provider Model selection one overflow recovery compacts and continues with. */
 export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 }>;
 
@@ -452,8 +457,8 @@ export type SessionOverflowRecoveryCommand = ReadonlyDeep<{
 	/** The user message the failed Agent Turn answered; continuation resumes it. */
 	originalMessageId: SessionMessageId;
 	/**
-	 * The Model Target the recovery's compaction runs against, or null when that
-	 * target has no overflow recovery available.
+	 * The Provider Model selection the recovery's compaction runs against, or
+	 * null when that selection has no overflow recovery available.
 	 */
 	resolveTarget: () => Promise<SessionOverflowRecoveryTarget | null>;
 	/** Continues the existing context once the recovery has compacted. */
@@ -489,7 +494,7 @@ export type SessionCompactionPort = Pick<
 /** One compaction request as a Session Command the Agent Session runs. */
 export type SessionCompactionCommand = ReadonlyDeep<{
 	focus?: string;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	/** Merged into the Session Transcript before compacting, when supplied. */
 	nextMessages?: readonly SessionMessage[];
 	/** Compacted in place of the Session Transcript, when supplied. */

@@ -236,6 +236,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Provider model metadata is merged into generated Provider Models.**
+  `bun run sync-provider-model-catalog` combines the curated identity manifest,
+  models.dev facts, and manual overlays. The generated provider baselines carry
+  pricing, limits, reasoning, and cache metadata, so factories no longer join
+  separate metadata snapshots at startup.
+
 - **Model protocol and Agent Runtime ownership moved into Wincode.** `@wincode/ai`
   owns the provider clients and Connections; `@wincode/agent-core` runs Model
   Steps and Tools over their provider-neutral stream. Compaction uses the same

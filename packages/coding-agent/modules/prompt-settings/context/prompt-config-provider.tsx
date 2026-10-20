@@ -1,12 +1,9 @@
 import type { AgentId } from "@wincode/agent-core";
-import {
-	type ChatModelSelection,
-	defaultChatModelSelection,
-	getSupportedThinkingLevels,
-	normalizeThinkingSelection,
-	type ThinkingLevel,
-	type ThinkingSelection,
-} from "@wincode/ai/models";
+import type {
+	ProviderModel,
+	ThinkingLevel,
+	ThinkingSelection,
+} from "@wincode/ai";
 import { isNull } from "@wincode/utils";
 import {
 	createContext,
@@ -23,18 +20,31 @@ import {
 	resolveActiveAgentId,
 	useAgentRegistry,
 } from "@/modules/agents";
+import {
+	clampProviderModelThinkingSelection,
+	DEFAULT_PROVIDER_MODEL_SELECTION,
+	isSameProviderModelSelection,
+	normalizeProviderModelThinkingSelection,
+	type ProviderModelSelection,
+	supportedProviderThinkingLevels,
+} from "@/modules/providers/provider-model-selection";
 
 type PromptConfigState = {
 	agent: AgentId;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 } & ThinkingSelection;
 export type PromptConfig = PromptConfigState & {
-	cycleThinkingLevel: () => void;
+	isAgentSelectionReady: boolean;
+	cycleThinkingLevel: (providerModel?: ProviderModel) => void;
 	setAgent: (agent: AgentId) => void;
-	setModel: (model: ChatModelSelection) => void;
-	setModelForFutureSubmissions: (model: ChatModelSelection) => void;
+	setModel: (model: ProviderModelSelection) => void;
+	setModelForFutureSubmissions: (
+		providerModel: ProviderModel,
+		selection: ProviderModelSelection
+	) => void;
 	setThinkingLevel: (thinkingLevel: ThinkingLevel | undefined) => void;
 	setThinkingLevelForFutureSubmissions: (
+		providerModel: ProviderModel | undefined,
 		thinkingLevel: ThinkingLevel | undefined
 	) => void;
 	submissionSelectionOverride: AgentSelectionOverride;
@@ -43,21 +53,59 @@ export type PromptConfig = PromptConfigState & {
 const PromptConfigContext = createContext<PromptConfig | null>(null);
 
 export const resolveInitialPromptThinkingSelection = (
-	model: ChatModelSelection,
 	initialThinkingLevel: ThinkingLevel | undefined
 ): ThinkingSelection =>
-	normalizeThinkingSelection(model, {
-		thinkingLevel: initialThinkingLevel ?? "low",
-	});
+	initialThinkingLevel === undefined
+		? {}
+		: { thinkingLevel: initialThinkingLevel };
+
+export const nextThinkingLevelInCycle = (
+	currentLevel: ThinkingLevel | undefined,
+	levels: readonly ThinkingLevel[]
+): ThinkingLevel | undefined => {
+	if (levels.length === 0) {
+		return;
+	}
+	const currentIndex =
+		currentLevel === undefined ? -1 : levels.indexOf(currentLevel);
+	return levels[(currentIndex + 1) % levels.length];
+};
 
 export const updatePromptConfigModel = (
 	current: PromptConfigState,
-	nextModel: ChatModelSelection
+	nextModel: ProviderModelSelection,
+	providerModel: ProviderModel
 ): PromptConfigState => ({
 	agent: current.agent,
 	model: nextModel,
-	...normalizeThinkingSelection(nextModel, current),
+	...(isSameProviderModelSelection(current.model, nextModel)
+		? normalizeProviderModelThinkingSelection(providerModel, current)
+		: clampProviderModelThinkingSelection(providerModel, "low")),
 });
+
+export const updatePromptConfigModelOverride = (
+	current: AgentSelectionOverride,
+	currentModel: ProviderModelSelection,
+	nextModel: ProviderModelSelection,
+	providerModel: ProviderModel
+): AgentSelectionOverride => {
+	let thinking: ThinkingSelection | undefined;
+	if (isSameProviderModelSelection(currentModel, nextModel)) {
+		if (current.thinking !== undefined) {
+			thinking = normalizeProviderModelThinkingSelection(
+				providerModel,
+				current.thinking
+			);
+		}
+	} else {
+		thinking = clampProviderModelThinkingSelection(providerModel, "low");
+	}
+	return {
+		...current,
+		model: nextModel,
+		...(thinking === undefined ? {} : { thinking }),
+	};
+};
 
 export const updatePromptConfigSelection = (
 	current: PromptConfigState,
@@ -65,7 +113,7 @@ export const updatePromptConfigSelection = (
 ): PromptConfigState => ({
 	agent: current.agent,
 	model: current.model,
-	...normalizeThinkingSelection(current.model, selection),
+	...selection,
 });
 
 type InitialThinkingSelection = Readonly<{
@@ -75,12 +123,12 @@ type InitialThinkingSelection = Readonly<{
 type PromptConfigProviderProps = {
 	children: ReactNode;
 	initialAgent?: AgentId;
-	initialModel?: ChatModelSelection;
+	initialModel?: ProviderModelSelection;
 } & InitialThinkingSelection;
 export function PromptConfigProvider({
 	children,
 	initialAgent = buildAgent.id,
-	initialModel = defaultChatModelSelection,
+	initialModel = DEFAULT_PROVIDER_MODEL_SELECTION,
 	initialThinkingLevel,
 }: PromptConfigProviderProps) {
 	const registry = useAgentRegistry();
@@ -88,13 +136,11 @@ export function PromptConfigProvider({
 	const [config, setConfig] = useState<PromptConfigState>(() => ({
 		agent: initialAgent,
 		model: initialModel,
-		...resolveInitialPromptThinkingSelection(
-			initialModel,
-			initialThinkingLevel
-		),
+		...resolveInitialPromptThinkingSelection(initialThinkingLevel),
 	}));
 	const [submissionSelectionOverride, setSubmissionSelectionOverride] =
 		useState<AgentSelectionOverride>({});
+	const modelSelectionRef = useRef(initialModel);
 
 	useEffect(() => {
 		if (isNull(registry) || hasExplicitAgent.current) {
@@ -106,21 +152,25 @@ export function PromptConfigProvider({
 		}));
 	}, [registry]);
 
-	const cycleThinkingLevel = useCallback(() => {
-		const options: (ThinkingLevel | undefined)[] = [
-			undefined,
-			...getSupportedThinkingLevels(config.model),
-		];
-		const currentIndex = options.indexOf(config.thinkingLevel);
-		const next = options[(currentIndex + 1) % options.length];
-		const selection = next === undefined ? {} : { thinkingLevel: next };
-		setConfig((current) => updatePromptConfigSelection(current, selection));
-		setSubmissionSelectionOverride((current) =>
-			current.thinking === undefined
-				? current
-				: { ...current, thinking: selection }
-		);
-	}, [config.model, config.thinkingLevel]);
+	const cycleThinkingLevel = useCallback(
+		(providerModel?: ProviderModel) => {
+			const levels =
+				providerModel === undefined
+					? []
+					: supportedProviderThinkingLevels(providerModel);
+			const next = nextThinkingLevelInCycle(config.thinkingLevel, levels);
+			if (next === undefined) {
+				return;
+			}
+			const selection = { thinkingLevel: next };
+			setConfig((current) => updatePromptConfigSelection(current, selection));
+			setSubmissionSelectionOverride((current) => ({
+				...current,
+				thinking: selection,
+			}));
+		},
+		[config.thinkingLevel]
+	);
 
 	const setAgent = useCallback((agent: AgentId) => {
 		hasExplicitAgent.current = true;
@@ -139,20 +189,44 @@ export function PromptConfigProvider({
 		[]
 	);
 
-	const setModel = useCallback((model: ChatModelSelection) => {
-		setConfig((current) => updatePromptConfigModel(current, model));
+	const setModel = useCallback((model: ProviderModelSelection) => {
+		modelSelectionRef.current = model;
+		setConfig((current) => ({ ...current, model }));
 	}, []);
 
 	const setModelForFutureSubmissions = useCallback(
-		(model: ChatModelSelection) => {
-			setModel(model);
-			setSubmissionSelectionOverride((current) => ({ ...current, model }));
+		(providerModel: ProviderModel, selection: ProviderModelSelection) => {
+			const currentModel = modelSelectionRef.current;
+			modelSelectionRef.current = selection;
+			setConfig((current) =>
+				updatePromptConfigModel(current, selection, providerModel)
+			);
+			setSubmissionSelectionOverride((current) =>
+				updatePromptConfigModelOverride(
+					current,
+					currentModel,
+					selection,
+					providerModel
+				)
+			);
 		},
-		[setModel]
+		[]
 	);
 
 	const setThinkingLevelForFutureSubmissions = useCallback(
-		(thinkingLevel: ThinkingLevel | undefined) => {
+		(
+			providerModel: ProviderModel | undefined,
+			thinkingLevel: ThinkingLevel | undefined
+		) => {
+			if (
+				thinkingLevel !== undefined &&
+				(providerModel === undefined ||
+					!supportedProviderThinkingLevels(providerModel).includes(
+						thinkingLevel
+					))
+			) {
+				return;
+			}
 			setThinkingLevel(thinkingLevel);
 			setSubmissionSelectionOverride((current) => ({
 				...current,
@@ -166,6 +240,10 @@ export function PromptConfigProvider({
 		<PromptConfigContext.Provider
 			value={{
 				...config,
+				isAgentSelectionReady:
+					!isNull(registry) &&
+					(hasExplicitAgent.current ||
+						config.agent === registry.defaultAgentId),
 				cycleThinkingLevel,
 				setAgent,
 				setModel,

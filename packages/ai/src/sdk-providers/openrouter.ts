@@ -13,21 +13,15 @@ import {
 	openAICompatibleProtocolId,
 	openAICompatibleResponseError,
 } from "../sdk-private/openai-compatible.ts";
+import { record } from "../sdk-private/protocols/shared.ts";
 
 const OPENROUTER_PROVIDER_ID = "openrouter";
 const OPENROUTER_MODELS_URL = "models";
-
-type JsonRecord = Record<string, unknown>;
 
 export type OpenRouterProviderOptions = Readonly<{
 	baseUrl?: string;
 	fetch?: OpenAICompatibleFetch;
 }>;
-
-const record = (value: unknown): JsonRecord | undefined =>
-	typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as JsonRecord)
-		: undefined;
 
 const finiteNumber = (value: unknown): number | undefined => {
 	const parsed = typeof value === "string" ? Number(value) : value;
@@ -57,6 +51,8 @@ const modelFromOpenRouter = (value: unknown): ProviderModel => {
 	const pricing = record(data.pricing);
 	const inputPrice = finiteNumber(pricing?.prompt);
 	const outputPrice = finiteNumber(pricing?.completion);
+	const cacheReadPrice = finiteNumber(pricing?.input_cache_read);
+	const cacheWritePrice = finiteNumber(pricing?.input_cache_write);
 	return {
 		...(contextWindowTokens === undefined && maxOutputTokens === undefined
 			? {}
@@ -69,10 +65,19 @@ const modelFromOpenRouter = (value: unknown): ProviderModel => {
 					},
 				}),
 		modelId: data.id,
-		...(inputPrice === undefined && outputPrice === undefined
+		...(inputPrice === undefined &&
+		cacheReadPrice === undefined &&
+		cacheWritePrice === undefined &&
+		outputPrice === undefined
 			? {}
 			: {
 					pricing: {
+						...(cacheReadPrice === undefined
+							? {}
+							: { cacheReadPerMillionTokensUsd: cacheReadPrice * 1_000_000 }),
+						...(cacheWritePrice === undefined
+							? {}
+							: { cacheWritePerMillionTokensUsd: cacheWritePrice * 1_000_000 }),
 						...(inputPrice === undefined
 							? {}
 							: { inputPerMillionTokensUsd: inputPrice * 1_000_000 }),

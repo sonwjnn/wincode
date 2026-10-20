@@ -1,4 +1,4 @@
-import { isUndefined } from "./guards";
+import { isUndefined } from "./guards.ts";
 
 /**
  * Removes every own enumerable string key the predicate accepts, without

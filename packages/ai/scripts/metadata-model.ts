@@ -1,23 +1,11 @@
-// Assembles the generated model metadata module from the shared models.dev
-// converter plus the manual overlays. Fetching lives in
-// `sync-model-metadata.ts`; interpretation lives in `../src/models-dev.ts`.
+// Combines manifest-declared Provider Models with exact models.dev facts and
+// manual overlays. Fetching and file generation live in sync-provider-model-catalog.ts.
 
-import type {
-	ModelMetadataEntry,
-	ModelPromptCacheProtocolCapabilities,
-	OpenAIPromptCacheProtocol,
-} from "../src/model-metadata";
+import type { ModelMetadataEntry } from "../src/model-metadata";
 import { metadataForModel } from "../src/models-dev";
 import { modelsDevBlocksFromPayload } from "../src/models-dev-payload";
-
-type CatalogEntry = {
-	readonly connectionProviderId: string;
-	readonly displayName?: string;
-	readonly id: string;
-	readonly lifecycle: "active" | "retired";
-	readonly protocol?: string;
-	readonly provider: string;
-};
+import { withProviderModelMetadata } from "../src/provider-model-metadata.ts";
+import type { ProviderModel } from "../src/sdk.ts";
 
 // Anthropic documents explicit prompt caching for all active Claude models
 // on the Claude API, with 5-minute and 1-hour retention. The OpenCode Go models
@@ -56,10 +44,7 @@ const OPENAI_RESPONSES_PROMPT_CACHE = {
 	},
 } as const;
 
-/**
- * Facts models.dev does not publish. Every key here is a gap that must stay
- * visible rather than being silently defaulted.
- */
+/** Facts models.dev does not publish; these never add Provider Model identities. */
 export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	"anthropic/claude-opus-5.5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
 	"anthropic/claude-opus-4-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
@@ -69,11 +54,18 @@ export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	"anthropic/claude-opus-4-7": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
 	"anthropic/claude-sonnet-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
 	"anthropic/claude-opus-4-8": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
-	"anthropic/claude-fable-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-fable-5": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
+	},
 	"anthropic/claude-fable-5-1": {
 		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
 	},
-	"anthropic/claude-opus-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
+	"anthropic/claude-opus-5": {
+		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
+	},
 	"anthropic/claude-opus-4-6": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
 	"anthropic/claude-sonnet-4-6": {
 		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
@@ -93,269 +85,164 @@ export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
 	"google/gemini-3-pro-preview": {
 		thinking: { levels: ["low", "high"] },
 	},
+	"google/gemini-3.6-flash": { thinking: { levelMap: { off: null } } },
+	"google/gemini-3.7-flash": { thinking: { levelMap: { off: null } } },
 	"google/gemini-3.8-flash": {
 		promptCache: GOOGLE_CACHED_CONTENT_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
 	},
-	"openai/gpt-5.6": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		reasoningSummary: true,
-	},
-	"openai/gpt-5.6-luna": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		reasoningSummary: true,
-	},
-	"openai/gpt-5.6-sol": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		reasoningSummary: true,
-	},
-	"openai/gpt-5.6-terra": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		reasoningSummary: true,
-	},
+	"openai/gpt-5.6": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-5.6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-5.6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-5.6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-6.1-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
+	"openai/gpt-6.1-sol": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
+	},
 	"openai/gpt-6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
 	"openai/gpt-6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-6-astra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"opencode-go/gpt-5.6-luna": { reasoningSummary: true },
+	"openai/gpt-6-astra": {
+		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
+		thinking: { levelMap: { off: null } },
+	},
+	// Keep the last published models.dev facts while the manifest still declares this model.
+	"opencode-go/grok-4.6": {
+		cost: { input: 2, output: 6, cacheRead: 0.5 },
+		limits: { context: 500_000, output: 500_000 },
+		thinking: {
+			levels: ["low", "medium", "high", "xhigh"],
+			levelMap: { off: null },
+		},
+		tiers: [
+			{
+				inputTokensAbove: 200_000,
+				input: 4,
+				output: 12,
+				cacheRead: 1,
+			},
+		],
+	},
+	"opencode-go/gpt-5.6-luna": { thinking: { levelMap: { off: null } } },
+	"opencode-go/glm-5.3-flash": { thinking: { levelMap: { off: null } } },
+	"opencode-go/glm-5.3": { thinking: { levelMap: { off: null } } },
+	"opencode-go/glm-5.2": { thinking: { levelMap: { off: null } } },
+	"opencode-go/kimi-k3": { thinking: { levelMap: { off: null } } },
+	"opencode-go/muse-spark-1.3-contributor": {
+		thinking: { levelMap: { off: null } },
+	},
+	"opencode-go/muse-spark-1.2-contributor": {
+		thinking: { levelMap: { off: null } },
+	},
+	"opencode-go/deepseek-v4.1-flash": {
+		thinking: { levelMap: { off: null } },
+	},
+	"opencode-go/deepseek-v4-flash": {
+		thinking: {
+			levels: ["low", "high", "max"],
+			levelMap: { minimal: null, medium: null, xhigh: null },
+		},
+	},
+	"opencode-go/deepseek-v4-flash-vision-exp": {
+		thinking: {
+			levels: ["low", "high", "max"],
+			levelMap: { minimal: null, medium: null, xhigh: null },
+		},
+	},
+	"opencode-go/kimi-k2.7-code": { thinking: { toggle: true } },
+	"opencode-go/minimax-m2.7": { thinking: { toggle: true } },
+	"opencode-go/mimo-v2.5": { thinking: { toggle: true } },
+	"opencode-go/mimo-v2.5-pro": { thinking: { toggle: true } },
 };
 
-export type BuildInput = {
-	readonly catalog: readonly CatalogEntry[];
-	readonly generatedAt: string;
-	readonly overlays: Readonly<Record<string, ModelMetadataEntry>>;
-	readonly payload: unknown;
-	readonly source: string;
-};
+export type BuildInput = Readonly<{
+	overlays: Readonly<Record<string, ModelMetadataEntry>>;
+	payload: unknown;
+	providerModels: readonly ProviderModel[];
+}>;
 
-type OpenAIPromptCacheEntries = Readonly<
-	Record<
-		string,
-		Readonly<
-			Partial<
-				Record<OpenAIPromptCacheProtocol, ModelPromptCacheProtocolCapabilities>
-			>
-		>
-	>
->;
+export type BuildResult = Readonly<{
+	entries: Readonly<Record<string, ModelMetadataEntry>>;
+	providerModels: readonly ProviderModel[];
+	coverage: Readonly<{
+		absentUpstream: readonly string[];
+		fromOverlay: readonly string[];
+		fromSource: number;
+		providerModelCount: number;
+		uncovered: readonly string[];
+	}>;
+}>;
 
-type ProviderModelMetadataEntries = Readonly<
-	Record<string, ModelMetadataEntry>
->;
-type SdkProviderModels = readonly Readonly<{
-	modelId: string;
-	protocolId: string;
-	providerId: string;
-}>[];
-
-const providerModelMetadataEntriesFor = (
-	rows: Readonly<Record<string, ModelMetadataEntry>>,
-	providerId: string
-): ProviderModelMetadataEntries => {
-	const entries: Record<string, ModelMetadataEntry> = {};
-	for (const key of Object.keys(rows).sort()) {
-		if (key.startsWith(`${providerId}/`)) {
-			entries[key.slice(providerId.length + 1)] = rows[key] ?? {};
-		}
+const mergeModelMetadata = (
+	source: ModelMetadataEntry | undefined,
+	overlay: ModelMetadataEntry | undefined
+): ModelMetadataEntry => {
+	const sourceThinking = source?.thinking;
+	const overlayThinking = overlay?.thinking;
+	let thinking: ModelMetadataEntry["thinking"];
+	if (sourceThinking === undefined) {
+		thinking = overlayThinking;
+	} else if (overlayThinking === undefined) {
+		thinking = sourceThinking;
+	} else {
+		const levels =
+			sourceThinking.levels === undefined &&
+			overlayThinking.levels === undefined
+				? undefined
+				: [
+						...new Set([
+							...(sourceThinking.levels ?? []),
+							...(overlayThinking.levels ?? []),
+						]),
+					];
+		const levelMap =
+			sourceThinking.levelMap === undefined &&
+			overlayThinking.levelMap === undefined
+				? undefined
+				: {
+						...sourceThinking.levelMap,
+						...overlayThinking.levelMap,
+					};
+		thinking = {
+			...sourceThinking,
+			...overlayThinking,
+			...(levels === undefined ? {} : { levels }),
+			...(levelMap === undefined ? {} : { levelMap }),
+		};
 	}
-	return entries;
-};
-
-const providerModelMetadataContentsFor = (
-	entries: ProviderModelMetadataEntries,
-	providerId: "anthropic" | "google" | "opencode-go",
-	generatedAt: string,
-	source: string
-): string => {
-	const body = JSON.stringify(entries, null, "\t");
-	const exportName = providerId === "opencode-go" ? "openCodeGo" : providerId;
-	const providerName = {
-		anthropic: "Anthropic",
-		google: "Google",
-		"opencode-go": "OpenCode Go",
-	}[providerId];
-	return [
-		"// Generated by packages/ai/scripts/sync-model-metadata.ts — do not edit.",
-		`// Snapshot date: ${generatedAt}. Source: ${source}.`,
-		`// ${providerName}-only model metadata; other provider entries are excluded.`,
-		"",
-		'import type { ModelMetadataEntry } from "../model-metadata";',
-		"",
-		`export const ${exportName}ModelMetadataById: Readonly<`,
-		"\tRecord<string, ModelMetadataEntry>",
-		`> = ${body};`,
-		"",
-	].join("\n");
-};
-
-const sdkProtocolIdFor = (
-	entry: CatalogEntry,
-	providerId: "google" | "opencode-go"
-): string => {
-	if (providerId === "google") {
-		return "google";
-	}
-	if (entry.protocol === "openai") {
-		return "openai-responses";
-	}
-	if (entry.protocol === "anthropic") {
-		return "anthropic";
-	}
-	return "openai-compatible";
-};
-
-const sdkProviderModelsFor = (
-	catalog: readonly CatalogEntry[],
-	providerId: "google" | "opencode-go"
-): SdkProviderModels =>
-	catalog
-		.filter(
-			(entry) =>
-				entry.connectionProviderId === providerId &&
-				entry.lifecycle === "active"
-		)
-		.map((entry) => ({
-			modelId: entry.id,
-			protocolId: sdkProtocolIdFor(entry, providerId),
-			providerId,
-		}));
-
-const sdkProviderModelsContentsFor = (
-	models: SdkProviderModels,
-	providerId: "google" | "opencode-go"
-): string => {
-	const name =
-		providerId === "google" ? "googleSdkModels" : "openCodeGoSdkModels";
-	const providerName = providerId === "google" ? "Google" : "OpenCode Go";
-	return [
-		"// Generated by packages/ai/scripts/sync-model-metadata.ts — do not edit.",
-		`// ${providerName}-only active SDK models from the canonical catalog.`,
-		"",
-		'import type { ProviderModel } from "../sdk";',
-		"",
-		`export const ${name}: readonly ProviderModel[] = ${JSON.stringify(models, null, "\t")};`,
-		"",
-	].join("\n");
-};
-
-export type BuildResult = {
-	/** The in-memory entries that the generated module will export. */
-	readonly entries: Readonly<Record<string, ModelMetadataEntry>>;
-	readonly anthropicModelMetadataContents: string;
-	readonly anthropicModelMetadataEntries: ProviderModelMetadataEntries;
-	readonly googleModelMetadataContents: string;
-	readonly googleModelMetadataEntries: ProviderModelMetadataEntries;
-	readonly openCodeGoModelMetadataContents: string;
-	readonly openCodeGoModelMetadataEntries: ProviderModelMetadataEntries;
-	readonly googleSdkModelsContents: string;
-	readonly googleSdkModels: SdkProviderModels;
-	readonly openCodeGoSdkModelsContents: string;
-	readonly openCodeGoSdkModels: SdkProviderModels;
-	readonly openAIPromptCacheContents: string;
-	readonly openAIPromptCacheEntries: OpenAIPromptCacheEntries;
-	readonly contents: string;
-	readonly coverage: {
-		readonly activeEntries: number;
-		readonly absentUpstream: readonly string[];
-		readonly fromOverlay: readonly string[];
-		readonly fromSource: number;
-		readonly retiredEntries: number;
-		/** Absent upstream with no overlay either: the entries with nothing. */
-		readonly uncovered: readonly string[];
+	return {
+		...source,
+		...overlay,
+		...(thinking === undefined ? {} : { thinking }),
 	};
 };
 
-const openAIPromptCacheEntriesFor = (
-	rows: Readonly<Record<string, ModelMetadataEntry>>
-): OpenAIPromptCacheEntries => {
-	const entries: Record<
-		string,
-		NonNullable<NonNullable<ModelMetadataEntry["promptCache"]>["protocols"]>
-	> = {};
-	for (const key of Object.keys(rows).sort()) {
-		if (!key.startsWith("openai/")) {
-			continue;
-		}
-		const protocols = rows[key]?.promptCache?.protocols;
-		if (protocols) {
-			entries[key.slice("openai/".length)] = protocols;
-		}
-	}
-	return entries;
-};
-
-const openAIPromptCacheContentsFor = (
-	entries: OpenAIPromptCacheEntries,
-	generatedAt: string,
-	source: string
-): string => {
-	const body = JSON.stringify(entries, null, "\t");
-	return [
-		"// Generated by packages/ai/scripts/sync-model-metadata.ts — do not edit.",
-		`// Snapshot date: ${generatedAt}. Source: ${source}.`,
-		"// OpenAI-only protocol cache controls; other provider metadata is excluded.",
-		"",
-		'import type { ModelPromptCacheProtocolCapabilities, OpenAIPromptCacheProtocol } from "../model-metadata";',
-		"",
-		"export const openAIPromptCacheByModelId: Readonly<",
-		"\tRecord<",
-		"\t\tstring,",
-		"\t\tReadonly<",
-		"\t\t\tPartial<",
-		"\t\t\t\tRecord<",
-		"\t\t\t\t\tOpenAIPromptCacheProtocol,",
-		"\t\t\t\t\tModelPromptCacheProtocolCapabilities",
-		"\t\t\t\t>",
-		"\t\t\t>",
-		"\t\t>",
-		"\t>",
-		"> =",
-		`${body};`,
-		"",
-	].join("\n");
-};
-
-/**
- * Builds the generated metadata module plus a coverage summary. Active catalog
- * entries with no upstream model are reported; retired entries retain any
- * available source or overlay metadata so persisted reasoning choices survive.
- */
-export const buildModelMetadataFile = (input: BuildInput): BuildResult => {
+/** Enriches only manifest-declared Provider Models; metadata never adds identity. */
+export const buildProviderModelsWithMetadata = (
+	input: BuildInput
+): BuildResult => {
 	const blocks = modelsDevBlocksFromPayload(input.payload);
-	const rows: Record<string, ModelMetadataEntry> = {};
+	const entries: Record<string, ModelMetadataEntry> = {};
 	const absentUpstream: string[] = [];
 	const uncovered: string[] = [];
 	const fromOverlay: string[] = [];
-	let activeEntries = 0;
 	let fromSource = 0;
-	let retiredEntries = 0;
 
-	for (const entry of input.catalog) {
-		const key = `${entry.connectionProviderId}/${entry.id}`;
-		const upstream = blocks.get(entry.provider)?.get(entry.id);
+	const providerModels = input.providerModels.map((model) => {
+		const key = `${model.providerId}/${model.modelId}`;
+		const upstream = blocks.get(model.providerId)?.get(model.modelId);
 		const overlay = input.overlays[key];
 		const sourceMetadata = upstream
-			? metadataForModel(upstream, {
-					modelId: entry.id,
-					providerId: entry.provider,
-				})
+			? metadataForModel(upstream, model)
 			: undefined;
 		const upstreamMetadata =
 			sourceMetadata && Object.keys(sourceMetadata).length > 0
 				? sourceMetadata
 				: undefined;
-		if (entry.lifecycle !== "active") {
-			rows[key] = { ...upstreamMetadata, ...overlay };
-			retiredEntries += 1;
-			continue;
-		}
-		activeEntries += 1;
 		if (upstreamMetadata) {
 			fromSource += 1;
 		} else {
 			absentUpstream.push(key);
-			// An overlay covering the gap is not the same as nothing covering
-			// it, and only the latter is a problem worth naming in the header.
 			if (!overlay) {
 				uncovered.push(key);
 			}
@@ -363,95 +250,19 @@ export const buildModelMetadataFile = (input: BuildInput): BuildResult => {
 		if (overlay) {
 			fromOverlay.push(key);
 		}
-		rows[key] = { ...upstreamMetadata, ...overlay };
-	}
-
-	const header = [
-		"// Generated by packages/ai/scripts/sync-model-metadata.ts — do not edit.",
-		`// Snapshot date: ${input.generatedAt}. Source: ${input.source}.`,
-		`// Catalog: ${activeEntries} active entries (${retiredEntries} retired), ${fromSource} from the source above.`,
-		`// Upstream-missing entries (including overlay-covered): ${absentUpstream.join(", ") || "none"}.`,
-		"//",
-		"// Manual overlays supply facts the source does not publish:",
-		`// ${fromOverlay.join(", ") || "none"}.`,
-		"// Absent upstream, with no overlay either (reported, never fabricated):",
-		`// ${uncovered.join(", ") || "none"}.`,
-		`// Absent upstream but overlayed: ${absentUpstream.length - uncovered.length}.`,
-		"",
-	].join("\n");
-	const body = JSON.stringify(rows, null, "\t");
-	const contents = `${header}// The build-time age of this data, so a reader can tell how current it is.\nexport const modelMetadataSnapshotDate = ${JSON.stringify(input.generatedAt)};\n\nimport type { ModelMetadataEntry } from "../model-metadata";\n\nexport const modelMetadataByKey: Readonly<\n\tRecord<string, ModelMetadataEntry>\n> = ${body};\n`;
-	const anthropicModelMetadataEntries = providerModelMetadataEntriesFor(
-		rows,
-		"anthropic"
-	);
-	const anthropicModelMetadataContents = providerModelMetadataContentsFor(
-		anthropicModelMetadataEntries,
-		"anthropic",
-		input.generatedAt,
-		input.source
-	);
-	const googleModelMetadataEntries = providerModelMetadataEntriesFor(
-		rows,
-		"google"
-	);
-	const googleModelMetadataContents = providerModelMetadataContentsFor(
-		googleModelMetadataEntries,
-		"google",
-		input.generatedAt,
-		input.source
-	);
-	const openCodeGoModelMetadataEntries = providerModelMetadataEntriesFor(
-		rows,
-		"opencode-go"
-	);
-	const openCodeGoModelMetadataContents = providerModelMetadataContentsFor(
-		openCodeGoModelMetadataEntries,
-		"opencode-go",
-		input.generatedAt,
-		input.source
-	);
-	const googleSdkModels = sdkProviderModelsFor(input.catalog, "google");
-	const googleSdkModelsContents = sdkProviderModelsContentsFor(
-		googleSdkModels,
-		"google"
-	);
-	const openCodeGoSdkModels = sdkProviderModelsFor(
-		input.catalog,
-		"opencode-go"
-	);
-	const openCodeGoSdkModelsContents = sdkProviderModelsContentsFor(
-		openCodeGoSdkModels,
-		"opencode-go"
-	);
-	const openAIPromptCacheEntries = openAIPromptCacheEntriesFor(rows);
-	const openAIPromptCacheContents = openAIPromptCacheContentsFor(
-		openAIPromptCacheEntries,
-		input.generatedAt,
-		input.source
-	);
+		const metadata = mergeModelMetadata(upstreamMetadata, overlay);
+		entries[key] = metadata;
+		return withProviderModelMetadata(model, metadata);
+	});
 
 	return {
-		anthropicModelMetadataContents,
-		anthropicModelMetadataEntries,
-		contents,
-		entries: rows,
-		googleModelMetadataContents,
-		googleModelMetadataEntries,
-		googleSdkModelsContents,
-		googleSdkModels,
-		openCodeGoModelMetadataContents,
-		openCodeGoModelMetadataEntries,
-		openCodeGoSdkModelsContents,
-		openCodeGoSdkModels,
-		openAIPromptCacheContents,
-		openAIPromptCacheEntries,
+		entries,
+		providerModels,
 		coverage: {
 			absentUpstream,
-			activeEntries,
 			fromOverlay,
 			fromSource,
-			retiredEntries,
+			providerModelCount: input.providerModels.length,
 			uncovered,
 		},
 	};

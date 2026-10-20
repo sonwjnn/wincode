@@ -2,15 +2,8 @@ import { afterAll, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { agentIdSchema, createAgentRuntime } from "@wincode/agent-core";
-import type {
-	ModelStepRequest,
-	ModelStreamPart,
-} from "@wincode/ai/model-client";
-import {
-	type ChatModelSelection,
-	defaultChatModelSelection,
-} from "@wincode/ai/models";
+import { agentIdSchema } from "@wincode/agent-core";
+import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai";
 import {
 	type OneShotCompositionInput,
 	type OneShotDependencies,
@@ -24,12 +17,17 @@ import type {
 import { createApplicationResourceLoader } from "@/modules/application/resource-loader";
 import { runRpc } from "@/modules/application/rpc/runner";
 import { loadPlugins } from "@/modules/plugins/loader";
+import {
+	DEFAULT_PROVIDER_MODEL_SELECTION,
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
-	createFakeModelClient,
-	createFakeModelClientRecorder,
-	type FakeModelStepScript,
+	createFakeProviderCollection,
+	createFakeProviderRecorder,
+	type FakeProviderStepScript,
 } from "../support/e2e-fake-runtime";
 import { toolCallId } from "../support/identifiers";
 
@@ -485,7 +483,7 @@ test("Plugin Agent registrations preserve a supported ThinkingLevel", async () =
 });
 
 test("Plugin commands can change the focused composer selection for later Submissions", async () => {
-	const selectedModels: ChatModelSelection[] = [];
+	const selectedModels: ProviderModelSelection[] = [];
 	const selectedThinkingLevels: string[] = [];
 	const runtime = await loadPlugins({
 		bundledPlugins: [
@@ -498,7 +496,7 @@ test("Plugin commands can change the focused composer selection for later Submis
 						name: "select_fast_model",
 						handler: async () => {
 							const modelSelected = await api.setModel(
-								defaultChatModelSelection
+								DEFAULT_PROVIDER_MODEL_SELECTION
 							);
 							api.setThinkingLevel("high");
 							return modelSelected
@@ -514,7 +512,10 @@ test("Plugin commands can change the focused composer selection for later Submis
 	});
 	const unbind = runtime.bindPromptSelectionTarget({
 		setModel: async (model) => {
-			selectedModels.push(model);
+			const normalized = normalizeProviderModelSelection(model);
+			if (normalized !== null) {
+				selectedModels.push(normalized);
+			}
 			return true;
 		},
 		setThinkingLevel: (level) => {
@@ -532,7 +533,7 @@ test("Plugin commands can change the focused composer selection for later Submis
 				workspace,
 			})
 		).resolves.toBe("selection updated");
-		expect(selectedModels).toEqual([defaultChatModelSelection]);
+		expect(selectedModels).toEqual([DEFAULT_PROVIDER_MODEL_SELECTION]);
 		expect(selectedThinkingLevels).toEqual(["high"]);
 	} finally {
 		unbind();
@@ -551,7 +552,7 @@ test("Plugin model selection returns false when no interactive composer is bound
 						description: "Attempt to set the model without a composer.",
 						name: "select_model",
 						handler: async () =>
-							String(await api.setModel(defaultChatModelSelection)),
+							String(await api.setModel(DEFAULT_PROVIDER_MODEL_SELECTION)),
 					});
 				},
 			},
@@ -1064,11 +1065,11 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 		cliPaths: ["plugins/jira.ts"],
 		config: configRuntime,
 	});
-	const recorder = createFakeModelClientRecorder();
+	const recorder = createFakeProviderRecorder();
 	let steps = 0;
-	const script: FakeModelStepScript = async function* (
-		request: ModelStepRequest
-	): AsyncGenerator<ModelStreamPart> {
+	const script: FakeProviderStepScript = async function* (
+		request: ProviderChatRequest
+	): AsyncGenerator<ProviderChatEvent> {
 		steps += 1;
 		const results = request.messages
 			.flatMap(({ content }) => content)
@@ -1083,27 +1084,10 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 				type: "tool-call",
 			};
 		}
-		yield {
-			type: "finish",
-			usage: { inputTokens: 1, outputTokens: 1 },
-		};
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
 	};
-	const modelRuntime = createAgentRuntime({
-		modelClient: createFakeModelClient(recorder, script),
-	});
-	const connections = {
-		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
-		connect: async () => undefined,
-		listProviders: async () => [
-			{
-				connected: true as const,
-				connectionMethod: "api-key" as const,
-				displayName: "OpenAI",
-				id: "openai" as const,
-				methods: ["api-key", "browser"] as const,
-			},
-		],
-	};
+	recorder.stepScript = script;
 	const assembly = await openSessionServices({
 		policy: {
 			cwd: workspace,
@@ -1112,9 +1096,8 @@ test("RPC Mode returns Plugin Tool results through JSON-RPC without polluting st
 		},
 		sources: {
 			configRuntime: () => configRuntime,
-			connections: () => connections,
+			createProviderCollection: () => createFakeProviderCollection(recorder),
 			pluginRuntime: () => pluginRuntime,
-			runtimeFactory: () => modelRuntime,
 		},
 	});
 	const initialized = Promise.withResolvers<void>();
@@ -1219,13 +1202,13 @@ const runPluginToolInOneShot = async (
 	format: "json" | "print",
 	pluginRuntime: NonNullable<ApplicationContext["pluginRuntime"]>
 ) => {
-	const recorder = createFakeModelClientRecorder();
+	const recorder = createFakeProviderRecorder();
 	const visibleTools: string[][] = [];
 	const mappedToolResults: string[] = [];
 	let steps = 0;
-	const script: FakeModelStepScript = async function* (
-		request: ModelStepRequest
-	): AsyncGenerator<ModelStreamPart> {
+	const script: FakeProviderStepScript = async function* (
+		request: ProviderChatRequest
+	): AsyncGenerator<ProviderChatEvent> {
 		steps += 1;
 		visibleTools.push((request.tools ?? []).map(({ name }) => name));
 		const results = request.messages
@@ -1242,27 +1225,10 @@ const runPluginToolInOneShot = async (
 				type: "tool-call",
 			};
 		}
-		yield {
-			type: "finish",
-			usage: { inputTokens: 1, outputTokens: 1 },
-		};
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
 	};
-	const runtime = createAgentRuntime({
-		modelClient: createFakeModelClient(recorder, script),
-	});
-	const connections = {
-		authorize: async () => ({ kind: "api-key" as const, apiKey: "test-key" }),
-		connect: async () => undefined,
-		listProviders: async () => [
-			{
-				connected: true as const,
-				connectionMethod: "api-key" as const,
-				displayName: "OpenAI",
-				id: "openai" as const,
-				methods: ["api-key", "browser"] as const,
-			},
-		],
-	};
+	recorder.stepScript = script;
 	const composeServices: OneShotDependencies["composeServices"] = async ({
 		configRuntime: modeConfigRuntime,
 		cwd,
@@ -1276,8 +1242,7 @@ const runPluginToolInOneShot = async (
 				workspace: modeWorkspace,
 			},
 			sources: {
-				connections: () => connections,
-				runtimeFactory: () => runtime,
+				createProviderCollection: () => createFakeProviderCollection(recorder),
 				...(modeConfigRuntime === undefined
 					? {}
 					: { configRuntime: () => modeConfigRuntime }),

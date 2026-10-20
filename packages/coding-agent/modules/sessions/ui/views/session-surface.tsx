@@ -1,8 +1,38 @@
+import type { AgentId } from "@wincode/agent-core";
+import type {
+	ProviderCollection,
+	ProviderModel,
+	ThinkingSelection,
+} from "@wincode/ai";
 import { getErrorMessage } from "@wincode/utils";
 import type { Dispatch, SetStateAction } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type AgentSelectionOverride,
+	resolveActiveAgentId,
+	resolveInteractiveAgentSelection,
+	useAgentRegistry,
+} from "@/modules/agents";
+import type { AgentRegistry } from "@/modules/agents/registry";
+import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
+import {
+	createInteractiveProviderController,
+	type InteractiveProviderController,
+} from "@/modules/providers/interactive-provider-controller";
+import {
+	arePluginProviderRegistrationsBoundToTrustedOwners,
+	DEFAULT_PROVIDER_MODEL_SELECTION,
+	isSameProviderModelIdentity,
+	type PluginProviderOwnerRegistration,
+	type ProviderModelSelection,
+	ProviderModelSelectionOwnershipError,
+	UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE,
+} from "@/modules/providers/provider-model-selection";
+import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
+import { withSessionManagerWork } from "@/modules/sessions/host/session-host-manager";
 import type {
+	SessionCapabilities,
 	SessionHost,
 	SessionHostManager,
 } from "@/modules/sessions/host/types";
@@ -11,14 +41,22 @@ import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
 } from "@/modules/sessions/message";
+import { getPluginProviderRegistrationsFromCollection } from "@/modules/sessions/provider-collection";
+import {
+	getLastUsedSelection,
+	resolveSessionSelection,
+} from "@/modules/sessions/selection";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { projectSessionRecords } from "@/modules/sessions/storage/session-record";
+import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
 	SessionInUseError,
 	type SessionWriterLockOwner,
 } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionId } from "@/shared/identifiers";
+import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import {
 	SessionWriterAction,
 	SessionWriterOwnerLabel,
@@ -29,14 +67,26 @@ import { StoredSessionHistoryView } from "./stored-session-history-view";
 
 type OpenedSession = Readonly<{
 	host: SessionHost;
+	initialSubmission?: SessionInitialSubmission;
 	sessionTitle: string;
 	transcript: readonly SessionMessage[];
 }>;
 type StoredSessionHistory = Readonly<{
 	compactions: readonly SessionCompaction[];
+	model: ProviderModelSelection | undefined;
 	sessionTitle: string;
 	transcript: readonly SessionMessage[];
 }>;
+
+type SessionProviderSelection = Readonly<{
+	agentPinSelection?: ProviderModelSelection;
+	providerModel?: ProviderModelSelection;
+}>;
+
+type AgentPinPreflight =
+	| { kind: "pending" }
+	| { kind: "ready"; selection: ProviderModelSelection | undefined }
+	| { error: unknown; kind: "error" };
 
 type SessionSurfaceState =
 	| { kind: "opening" }
@@ -50,8 +100,11 @@ type SessionSurfaceState =
 			history: StoredSessionHistory;
 			isRefreshing: boolean;
 			isRetrying: boolean;
+			isSelectingModel: boolean;
 			kind: "history";
 			owner: SessionWriterLockOwner | undefined;
+			selectionError: string | undefined;
+			selectionPickerError: string | undefined;
 	  }
 	| { kind: "failure"; message: string };
 type SetSessionSurface = Dispatch<SetStateAction<SessionSurfaceState>>;
@@ -84,6 +137,73 @@ const handleSessionOpenFailure = (
 	});
 };
 
+const transcriptForDisplay = (
+	host: SessionHost,
+	store: SessionStore
+): Promise<readonly SessionMessage[]> => {
+	const transcript = host.getSnapshot().transcript;
+	return (
+		store.attachmentStore?.annotateMessagesForDisplay(transcript) ??
+		Promise.resolve(transcript)
+	);
+};
+
+const createProviderReselection = async (
+	capabilities: SessionCapabilities,
+	sessionId: SessionId
+): Promise<
+	Readonly<{
+		controller: InteractiveProviderController;
+		providerCollection: ProviderCollection;
+	}>
+> => {
+	const pluginRuntime = capabilities.getPluginRuntime?.();
+	const providerCollection = await capabilities.createProviderCollection?.(
+		pluginRuntime,
+		sessionId
+	);
+	if (providerCollection === undefined) {
+		throw new Error("Provider Model selection is unavailable.");
+	}
+	const trustedRegistrations =
+		pluginRuntime?.getProviderRegistrations(sessionId) ?? [];
+	const collectionRegistrations =
+		getPluginProviderRegistrationsFromCollection(providerCollection);
+	if (
+		!arePluginProviderRegistrationsBoundToTrustedOwners(
+			trustedRegistrations,
+			collectionRegistrations
+		)
+	) {
+		await providerCollection.close().catch(() => undefined);
+		throw new Error(UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE);
+	}
+	const getCompositionRevision = (): number => {
+		if (
+			"getCompositionRevision" in providerCollection &&
+			typeof providerCollection.getCompositionRevision === "function"
+		) {
+			return providerCollection.getCompositionRevision();
+		}
+		return 0;
+	};
+	return {
+		controller: createInteractiveProviderController(providerCollection, {
+			getCompositionRevision,
+			getPluginProviderRegistrations: () =>
+				getPluginProviderRegistrationsFromCollection(providerCollection) ?? [],
+			getTrustedPluginProviderRegistrations: () =>
+				capabilities
+					.getPluginRuntime?.()
+					?.getProviderRegistrations(sessionId) ?? [],
+			getTrustedPluginProviderRuntime: () => capabilities.getPluginRuntime?.(),
+			withSessionWork: (action) =>
+				withSessionManagerWork(capabilities.getSessionHostManager(), action),
+		}),
+		providerCollection,
+	};
+};
+
 const loadStoredSessionHistory = async (
 	sessionId: SessionId
 ): Promise<StoredSessionHistory> => {
@@ -99,8 +219,106 @@ const loadStoredSessionHistory = async (
 	const transcript = store.attachmentStore
 		? await store.attachmentStore.annotateMessagesForDisplay(savedTranscript)
 		: savedTranscript;
-	return { compactions, sessionTitle: row.title, transcript };
+	return {
+		compactions,
+		model: row.model ?? getLastUsedSelection(savedTranscript)?.model,
+		sessionTitle: row.title,
+		transcript,
+	};
 };
+
+const resolveCurrentAgentPin = async ({
+	agent,
+	model,
+	registry,
+	selectionOverride,
+	sessionId,
+	thinkingSelection,
+	trustedRegistrations,
+}: {
+	readonly agent: AgentId;
+	readonly model: ProviderModelSelection;
+	readonly registry: AgentRegistry;
+	readonly selectionOverride: AgentSelectionOverride;
+	readonly sessionId: SessionId;
+	readonly thinkingSelection: ThinkingSelection;
+	readonly trustedRegistrations: readonly PluginProviderOwnerRegistration[];
+}): Promise<ProviderModelSelection | undefined> => {
+	const store = getSessionStore();
+	const [row, records] = await Promise.all([
+		store.getSession(sessionId),
+		store.listSessionRecords(sessionId),
+	]);
+	const transcript = projectSessionRecords(records);
+	const persisted = getLastUsedSelection(transcript);
+	const sessionModel = row.model ?? undefined;
+	const storedSelection = resolveSessionSelection({
+		messages: transcript,
+		resolveAgent: (persistedAgent) =>
+			resolveActiveAgentId(registry, persistedAgent),
+		sessionModel,
+		sessionThinkingLevel: row.thinkingLevel ?? undefined,
+		refs: {
+			agent,
+			model,
+			...thinkingSelection,
+		},
+	});
+	const effective = resolveInteractiveAgentSelection(
+		registry,
+		storedSelection?.agent ?? agent,
+		storedSelection?.model ?? model,
+		storedSelection?.thinkingLevel === undefined
+			? thinkingSelection
+			: { thinkingLevel: storedSelection.thinkingLevel },
+		selectionOverride,
+		trustedRegistrations,
+		sessionModel ?? persisted?.model
+	);
+	const selectedAgent = registry.agents.find(
+		(candidate) => candidate.id === effective.agent
+	);
+	const currentModel = selectionOverride.model ?? selectedAgent?.model;
+	if (
+		currentModel === undefined ||
+		!isSameProviderModelIdentity(currentModel, effective.model)
+	) {
+		return;
+	}
+	return effective.model;
+};
+
+function ProviderModelReselectionDialog({
+	controller,
+	currentModel,
+	onDismiss,
+	onSelectModel,
+	providerCollection,
+}: {
+	readonly controller: InteractiveProviderController;
+	readonly currentModel: ProviderModelSelection;
+	readonly onDismiss: () => void;
+	readonly onSelectModel: (
+		model: ProviderModel,
+		selection: ProviderModelSelection
+	) => void | Promise<void>;
+	readonly providerCollection: ProviderCollection;
+}) {
+	useEffect(
+		() => () => {
+			onDismiss();
+			void providerCollection.close().catch(() => undefined);
+		},
+		[onDismiss, providerCollection]
+	);
+	return (
+		<ProviderModelsDialogContent
+			controller={controller}
+			currentModel={currentModel}
+			onSelectModel={onSelectModel}
+		/>
+	);
+}
 
 /**
  * Renders one Session view. The process-level Session Host manager owns loaded
@@ -116,12 +334,39 @@ export function SessionSurface({
 }) {
 	const { colors } = useTheme();
 	const sessionServicesHandle = useSessionServicesHandle();
+	const registry = useAgentRegistry();
+	const {
+		agent,
+		isAgentSelectionReady,
+		model,
+		submissionSelectionOverride,
+		thinkingLevel,
+	} = usePromptConfig();
+	const pluginRuntime = getInteractivePluginRuntime();
+	const thinkingSelection = useMemo<ThinkingSelection>(
+		() => (thinkingLevel === undefined ? {} : { thinkingLevel }),
+		[thinkingLevel]
+	);
+	const [agentPinPreflight, setAgentPinPreflight] = useState<AgentPinPreflight>(
+		{ kind: "pending" }
+	);
+	const dialog = useDialog();
+	// DialogProvider recreates its value when the stack changes; keep picker updates
+	// from tearing down the Session Host effect.
+	const dialogRef = useRef(dialog);
+	dialogRef.current = dialog;
 	const [surface, setSurface] = useState<SessionSurfaceState>({
 		kind: "opening",
 	});
+	const initialSubmissionRef = useRef(initialSubmission);
+	initialSubmissionRef.current = initialSubmission;
+	const surfaceRef = useRef(surface);
+	surfaceRef.current = surface;
 	const refreshHistoryRef = useRef<(() => void) | null>(null);
 	const retryOpenRef = useRef<(() => void) | null>(null);
+	const reselectModelRef = useRef<(() => void) | null>(null);
 	const viewHistoryRef = useRef<(() => void) | null>(null);
+	const selectionDialogOpenRef = useRef(false);
 	const handleRefreshHistory = useCallback(() => {
 		refreshHistoryRef.current?.();
 	}, []);
@@ -131,6 +376,61 @@ export function SessionSurface({
 	const handleViewHistory = useCallback(() => {
 		viewHistoryRef.current?.();
 	}, []);
+	const handleReselectModel = useCallback(() => {
+		reselectModelRef.current?.();
+	}, []);
+	const handleSelectionDialogDismiss = useCallback(() => {
+		selectionDialogOpenRef.current = false;
+		setSurface((current) =>
+			current.kind === "history"
+				? { ...current, isSelectingModel: false }
+				: current
+		);
+	}, []);
+
+	useEffect(() => {
+		if (
+			agentPinPreflight.kind !== "pending" ||
+			!isAgentSelectionReady ||
+			registry === null
+		) {
+			return;
+		}
+		let active = true;
+		void resolveCurrentAgentPin({
+			agent,
+			model,
+			registry,
+			selectionOverride: submissionSelectionOverride,
+			sessionId,
+			thinkingSelection,
+			trustedRegistrations:
+				pluginRuntime?.getProviderRegistrations(sessionId) ?? [],
+		})
+			.then((selection) => {
+				if (active) {
+					setAgentPinPreflight({ kind: "ready", selection });
+				}
+			})
+			.catch((error: unknown) => {
+				if (active) {
+					setAgentPinPreflight({ error, kind: "error" });
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, [
+		agent,
+		agentPinPreflight.kind,
+		isAgentSelectionReady,
+		model,
+		pluginRuntime,
+		registry,
+		sessionId,
+		submissionSelectionOverride,
+		thinkingSelection,
+	]);
 
 	useEffect(() => {
 		let ignore = false;
@@ -150,7 +450,9 @@ export function SessionSurface({
 			viewAcquired = false;
 			void manager.releaseView(sessionId).catch(() => undefined);
 		};
-		const open = async (): Promise<OpenedSession | null> => {
+		const open = async (
+			providerSelection?: SessionProviderSelection
+		): Promise<OpenedSession | null> => {
 			const services = await sessionServicesHandle.open();
 			if (ignore || releaseRequested) {
 				return null;
@@ -160,6 +462,7 @@ export function SessionSurface({
 			const host = await sessionHostManager.openHost({
 				capabilities: services.capabilities,
 				executionMode: "interactive",
+				...providerSelection,
 				sessionId,
 				view: true,
 			});
@@ -172,17 +475,16 @@ export function SessionSurface({
 				const store = getSessionStore();
 				const [row, transcript] = await Promise.all([
 					store.getSession(sessionId),
-					store.attachmentStore
-						? store.attachmentStore.annotateMessagesForDisplay(
-								host.getSnapshot().transcript
-							)
-						: host.getSnapshot().transcript,
+					transcriptForDisplay(host, store),
 				]);
 				if (ignore) {
 					return null;
 				}
 				return {
 					host,
+					...(providerSelection?.providerModel === undefined
+						? { initialSubmission: initialSubmissionRef.current }
+						: {}),
 					sessionTitle: row.title,
 					transcript,
 				};
@@ -192,7 +494,56 @@ export function SessionSurface({
 			}
 		};
 
-		const openWritableSession = async (fromHistory: boolean): Promise<void> => {
+		const showSelectionHistory = async (
+			error: ProviderModelSelectionOwnershipError
+		): Promise<void> => {
+			try {
+				const history = await loadStoredSessionHistory(sessionId);
+				if (!ignore) {
+					setSurface({
+						history,
+						isRefreshing: false,
+						isRetrying: false,
+						isSelectingModel: false,
+						kind: "history",
+						owner: undefined,
+						selectionError: error.message,
+						selectionPickerError: undefined,
+					});
+				}
+			} catch (historyError) {
+				if (!ignore) {
+					setSurface({
+						kind: "failure",
+						message: getErrorMessage(
+							historyError,
+							"Could not load the read-only Session history."
+						),
+					});
+				}
+			}
+		};
+
+		const handleOpenFailure = async (
+			error: unknown,
+			fromHistory: boolean
+		): Promise<void> => {
+			if (ignore) {
+				return;
+			}
+			if (error instanceof ProviderModelSelectionOwnershipError) {
+				await showSelectionHistory(error);
+				return;
+			}
+			handleSessionOpenFailure(error, fromHistory, setSurface, (owner) => {
+				contentionOwner = owner;
+			});
+		};
+
+		const openWritableSession = async (
+			fromHistory: boolean,
+			providerSelection?: SessionProviderSelection
+		): Promise<void> => {
 			if (ignore || opening) {
 				return;
 			}
@@ -200,21 +551,28 @@ export function SessionSurface({
 			if (fromHistory) {
 				setSurface((current) =>
 					current.kind === "history"
-						? { ...current, isRetrying: true }
+						? {
+								...current,
+								isRetrying: true,
+								isSelectingModel: false,
+								...(providerSelection?.providerModel === undefined
+									? {}
+									: {
+											selectionError: undefined,
+											selectionPickerError: undefined,
+										}),
+							}
 						: current
 				);
 			}
 			try {
-				const next = await open();
+				const next = await open(providerSelection);
 				if (next && !ignore) {
 					setSurface({ kind: "opened", session: next });
 				}
 			} catch (error) {
-				if (!ignore) {
-					handleSessionOpenFailure(error, fromHistory, setSurface, (owner) => {
-						contentionOwner = owner;
-					});
-				}
+				opening = false;
+				await handleOpenFailure(error, fromHistory);
 			} finally {
 				opening = false;
 			}
@@ -260,8 +618,11 @@ export function SessionSurface({
 						history,
 						isRefreshing: false,
 						isRetrying: false,
+						isSelectingModel: false,
 						kind: "history",
 						owner: contentionOwner,
+						selectionError: undefined,
+						selectionPickerError: undefined,
 					})
 			);
 		};
@@ -287,27 +648,125 @@ export function SessionSurface({
 				return;
 			}
 			historyActionInFlight = true;
-			void openWritableSession(true).finally(() => {
+			void openWritableSession(
+				true,
+				agentPinPreflight.kind === "ready" &&
+					agentPinPreflight.selection !== undefined
+					? { agentPinSelection: agentPinPreflight.selection }
+					: undefined
+			).finally(() => {
 				historyActionInFlight = false;
 			});
+		};
+		const updatePickerError = (error: unknown): void => {
+			selectionDialogOpenRef.current = false;
+			const message = getErrorMessage(
+				error,
+				"Provider Model selection is unavailable."
+			);
+			setSurface((current) =>
+				current.kind === "history"
+					? {
+							...current,
+							isSelectingModel: false,
+							selectionPickerError: message,
+						}
+					: current
+			);
+		};
+		const openReselectionDialog = async (): Promise<void> => {
+			const services = await sessionServicesHandle.open();
+			if (ignore) {
+				selectionDialogOpenRef.current = false;
+				return;
+			}
+			const picker = await createProviderReselection(
+				services.capabilities,
+				sessionId
+			);
+			if (ignore) {
+				selectionDialogOpenRef.current = false;
+				await picker.providerCollection.close().catch(() => undefined);
+				return;
+			}
+			const currentSelection =
+				surfaceRef.current.kind === "history"
+					? surfaceRef.current.history.model
+					: undefined;
+			const onSelectModel = async (
+				_model: ProviderModel,
+				selection: ProviderModelSelection
+			): Promise<void> => {
+				await openWritableSession(true, { providerModel: selection });
+			};
+			dialogRef.current.open({
+				children: (
+					<ProviderModelReselectionDialog
+						controller={picker.controller}
+						currentModel={currentSelection ?? DEFAULT_PROVIDER_MODEL_SELECTION}
+						onDismiss={handleSelectionDialogDismiss}
+						onSelectModel={onSelectModel}
+						providerCollection={picker.providerCollection}
+					/>
+				),
+				title: "Reselect Provider Model",
+			});
+		};
+		const reselectModel = (): void => {
+			if (
+				ignore ||
+				opening ||
+				historyActionInFlight ||
+				selectionDialogOpenRef.current
+			) {
+				return;
+			}
+			selectionDialogOpenRef.current = true;
+			setSurface((current) =>
+				current.kind === "history"
+					? {
+							...current,
+							isSelectingModel: true,
+							selectionPickerError: undefined,
+						}
+					: current
+			);
+			void openReselectionDialog().catch(updatePickerError);
 		};
 
 		refreshHistoryRef.current = refreshHistory;
 		retryOpenRef.current = retryOpen;
+		reselectModelRef.current = reselectModel;
 		viewHistoryRef.current = viewStoredHistory;
-		void openWritableSession(false);
+		if (agentPinPreflight.kind === "ready") {
+			void openWritableSession(
+				false,
+				agentPinPreflight.selection === undefined
+					? undefined
+					: { agentPinSelection: agentPinPreflight.selection }
+			);
+		} else if (agentPinPreflight.kind === "error") {
+			void handleOpenFailure(agentPinPreflight.error, false);
+		}
 
 		return () => {
 			ignore = true;
 			refreshHistoryRef.current = null;
 			retryOpenRef.current = null;
+			reselectModelRef.current = null;
 			viewHistoryRef.current = null;
+			selectionDialogOpenRef.current = false;
 			releaseView();
 			// These services borrowed this view's providers; closing them releases
 			// only a Plugin runtime they had to create for themselves.
 			void sessionServicesHandle.close();
 		};
-	}, [sessionServicesHandle, sessionId]);
+	}, [
+		agentPinPreflight,
+		handleSelectionDialogDismiss,
+		sessionServicesHandle,
+		sessionId,
+	]);
 
 	if (surface.kind === "failure") {
 		return <text fg={colors.error}>{surface.message}</text>;
@@ -348,10 +807,14 @@ export function SessionSurface({
 				compactions={surface.history.compactions}
 				isRefreshing={surface.isRefreshing}
 				isRetrying={surface.isRetrying}
+				isSelectingModel={surface.isSelectingModel}
 				messages={surface.history.transcript}
 				onRefresh={handleRefreshHistory}
+				onReselectModel={handleReselectModel}
 				onRetry={handleRetryOpen}
 				owner={surface.owner}
+				selectionError={surface.selectionError}
+				selectionPickerError={surface.selectionPickerError}
 				sessionTitle={surface.history.sessionTitle}
 			/>
 		);
@@ -361,7 +824,7 @@ export function SessionSurface({
 		<box flexDirection="column" flexGrow={1} width="100%">
 			<SessionView
 				host={surface.session.host}
-				initialSubmission={initialSubmission}
+				initialSubmission={surface.session.initialSubmission}
 				initialTranscript={surface.session.transcript}
 				sessionId={sessionId}
 				sessionTitle={surface.session.sessionTitle}

@@ -95,6 +95,8 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
+      - name: Build runtime dependency for direct lock tests
+        run: bun run build:utils
       - name: Verify native runner target
         env:
           EXPECTED_PLATFORM: ${{ matrix.platform }}

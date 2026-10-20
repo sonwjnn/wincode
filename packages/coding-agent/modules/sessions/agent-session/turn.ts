@@ -5,11 +5,10 @@ import type {
 	SessionMessageId,
 	ToolCallId,
 } from "@wincode/agent-core";
-import type { ModelUsage } from "@wincode/ai/model-usage";
-import { normalizeModelUsage } from "@wincode/ai/model-usage";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
-import { defaultChatModelSelection } from "@wincode/ai/models";
+import type { ModelUsage, ThinkingLevel } from "@wincode/ai";
+import { normalizeModelUsage } from "@wincode/ai";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { isCodingToolName } from "@/modules/tools";
 import {
 	isSessionToolPart,
@@ -216,7 +215,7 @@ const buildTerminalMessageMetadata = ({
 	agent: AgentId;
 	base: SessionMessage;
 	event: AgentTurnTerminalEvent;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	startedAt: number | null;
 	usage: ModelUsage | null;
 	thinkingLevel?: ThinkingLevel;
@@ -385,7 +384,7 @@ const finalizeAssistantMessageMetadata = (
 	message: SessionMessage,
 	context: {
 		agent?: AgentId;
-		model?: ChatModelSelection;
+		model?: ProviderModelSelection;
 		thinkingLevel?: ThinkingLevel;
 		interrupted: boolean;
 		responseTimeMs?: number;
@@ -429,7 +428,7 @@ export const interruptSessionContext = (
 	const finalized = finalizeAssistantMessageMetadata(target, {
 		interrupted: true,
 		...(isUndefined(execution)
-			? { model: defaultChatModelSelection }
+			? {}
 			: {
 					agent: execution.agent,
 					model: execution.model,

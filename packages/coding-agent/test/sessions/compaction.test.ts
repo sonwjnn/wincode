@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fromAny, fromPartial } from "@total-typescript/shoehorn";
-import type { ChatModelSelection } from "@wincode/ai/models";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import {
 	createSessionCompaction,
@@ -36,7 +36,7 @@ import {
 	toolCallId,
 } from "../support/identifiers";
 
-const model: ChatModelSelection = {
+const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
 };

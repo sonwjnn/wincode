@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { isUndefined } from "@wincode/utils";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	PluginStatus,
 	PluginStatusItem,
@@ -21,7 +21,7 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
-import { PluginTextInputDialog } from "./plugin-text-input-dialog";
+import { createPluginTextInputRequester } from "./request-plugin-text-input";
 
 const statusLabel = (status: PluginStatus): string => {
 	switch (status) {
@@ -104,33 +104,8 @@ export const PluginStatusPanelDialogContent = ({
 	const busyItemsRef = useRef(new Set<string>());
 	const refreshingRef = useRef(false);
 	const mountedRef = useRef(true);
-	const requestTextInput = useCallback(
-		(prompt: string, signal: AbortSignal): Promise<string | undefined> => {
-			const result = Promise.withResolvers<string | undefined>();
-			if (signal.aborted) {
-				result.resolve(undefined);
-				return result.promise;
-			}
-			let settled = false;
-			const settle = (value: string | undefined): void => {
-				if (settled) {
-					return;
-				}
-				settled = true;
-				signal.removeEventListener("abort", abort);
-				result.resolve(value);
-			};
-			const abort = (): void => {
-				dialog.close();
-				settle(undefined);
-			};
-			signal.addEventListener("abort", abort, { once: true });
-			dialog.open({
-				children: <PluginTextInputDialog onResolve={settle} prompt={prompt} />,
-				title: "Plugin Input",
-			});
-			return result.promise;
-		},
+	const requestTextInput = useMemo(
+		() => createPluginTextInputRequester(dialog),
 		[dialog]
 	);
 

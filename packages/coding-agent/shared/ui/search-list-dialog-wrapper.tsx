@@ -49,6 +49,7 @@ type SearchListDialogWrapperProps<T> = {
 	getItemSectionKey?: (item: T) => string | undefined;
 	placeholder?: string;
 	showSearch?: boolean;
+	error?: string | null;
 	emptyText?: string;
 	initialSelectedIndex?: number;
 	maxVisibleItems?: number;
@@ -80,6 +81,7 @@ export function SearchListDialogWrapper<T>({
 	isItemActive,
 	isItemSelectable = () => true,
 	placeholder = "Search",
+	error,
 	emptyText = "No results",
 	showSearch = true,
 	initialSelectedIndex = getInitialSelectedIndex(
@@ -263,6 +265,11 @@ export function SearchListDialogWrapper<T>({
 			)}
 			{footer ? (
 				<DialogInset margin={footerMargin}>{footer}</DialogInset>
+			) : null}
+			{error ? (
+				<DialogInset margin={contentMargin}>
+					<text fg={colors.error}>{error}</text>
+				</DialogInset>
 			) : null}
 			{navigationHint || footerHints ? (
 				<DialogInset margin={contentMargin}>

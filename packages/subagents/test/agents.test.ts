@@ -133,7 +133,7 @@ test("an invalid higher-scope Markdown file does not hide the packaged agent", a
 	}
 });
 
-test("an unsupported higher-scope model does not hide the packaged Agent", async () => {
+test("a higher-scope Agent retains its exact unavailable Provider Model pin", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-agent-model-"));
 	const builtinRoot = path.join(root, "package-agents");
 	const userDataDir = path.join(root, "user-data");
@@ -145,7 +145,7 @@ test("an unsupported higher-scope model does not hide the packaged Agent", async
 		);
 		await Bun.write(
 			path.join(userDataDir, "agents", "scout.md"),
-			"---\nname: scout\ndescription: Unsupported user model.\nmodel: openai/unknown-model\n---\nUser instructions.\n"
+			"---\nname: scout\ndescription: User-pinned Provider Model.\nmodel: openai/unknown-model\n---\nUser instructions.\n"
 		);
 
 		const discovered = await discoverSubagentAgents({
@@ -154,17 +154,15 @@ test("an unsupported higher-scope model does not hide the packaged Agent", async
 			userDataDir,
 		});
 		expect(discovered.agents).toHaveLength(1);
-		expect(discovered.agents[0]?.agent.instructions).toBe(
-			"Package instructions."
-		);
-		expect(discovered.diagnostics[0]).toContain("Ignored invalid Agent file");
-		expect(discovered.diagnostics[0]).toContain("Model must be a supported");
+		expect(discovered.agents[0]?.agent.instructions).toBe("User instructions.");
+		expect(discovered.agents[0]?.model).toBe("openai/unknown-model");
+		expect(discovered.diagnostics).toEqual([]);
 	} finally {
 		await fs.rm(root, { force: true, recursive: true });
 	}
 });
 
-test("Markdown agents reject ThinkingLevels unsupported by the selected model", async () => {
+test("Markdown Agent discovery preserves valid Thinking Levels without Catalog policy", async () => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-invalid-agent-thinking-level-")
 	);
@@ -181,12 +179,10 @@ test("Markdown agents reject ThinkingLevels unsupported by the selected model", 
 			trustedProjectRoots: [],
 			userDataDir,
 		});
-		expect(discovered.agents).toEqual([]);
-		expect(discovered.diagnostics).toHaveLength(1);
-		expect(discovered.diagnostics[0]).toContain("Ignored invalid Agent file");
-		expect(discovered.diagnostics[0]).toContain(
-			"Thinking level requires a configured model"
-		);
+		expect(discovered.agents).toHaveLength(1);
+		expect(discovered.agents[0]?.model).toBe("openai/gpt-5.6-luna");
+		expect(discovered.agents[0]?.thinkingLevel).toBe("minimal");
+		expect(discovered.diagnostics).toEqual([]);
 	} finally {
 		await fs.rm(root, { force: true, recursive: true });
 	}

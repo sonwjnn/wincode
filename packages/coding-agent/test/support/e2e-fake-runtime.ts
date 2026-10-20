@@ -1,14 +1,11 @@
-import { spyOn } from "bun:test";
-import type {
-	ModelClient,
-	ModelPromptMessage,
-	ModelStepRequest,
-	ModelStreamPart,
-	ModelTextGenerationMessage,
-	ModelTextGenerationOptions,
-	ModelTextGenerationResult,
-} from "@wincode/ai/model-client";
-import * as modelClientModule from "@wincode/ai/model-client";
+import {
+	createProviderCollection,
+	type Provider,
+	type ProviderChatEvent,
+	type ProviderChatRequest,
+	type ProviderCollection,
+	type ProviderModel,
+} from "@wincode/ai";
 
 export type FakeMessageRequest = {
 	readonly role: string;
@@ -26,103 +23,195 @@ export type FakeGenerationRequest =
 			readonly text: string;
 	  };
 
-export type FakeModelClientRecorder = {
+export type FakeProviderRecorder = {
 	readonly requests: FakeGenerationRequest[];
 	readonly summaryText: string;
-	/** A per-test hook that can hold a real model request in flight. */
-	beforeStep?: (request: ModelStepRequest) => Promise<void>;
+	/** A per-test hook that can hold a fake Provider request in flight. */
+	beforeChat?: (request: ProviderChatRequest) => Promise<void>;
 	/** A test-specific script for conversation-level integration journeys. */
-	stepScript?: FakeModelStepScript;
+	stepScript?: FakeProviderStepScript;
 	/** Pauses after streamed text reaches the Session Snapshot. */
 	afterTextDelta?: () => Promise<void>;
 };
 
-export type FakeModelStepScript = (
-	request: ModelStepRequest,
-	recorder: FakeModelClientRecorder
-) => AsyncGenerator<ModelStreamPart>;
+export type FakeProviderStepScript = (
+	request: ProviderChatRequest,
+	recorder: FakeProviderRecorder
+) => AsyncGenerator<ProviderChatEvent>;
 
-const promptMessageText = (message: ModelPromptMessage): string =>
-	message.content
-		.flatMap((part) => (part.type === "text" ? [part.text] : []))
+const requestText = (request: ProviderChatRequest): string =>
+	request.messages
+		.flatMap((message) =>
+			message.content.flatMap((part) => {
+				if (part.type === "text") {
+					return [part.text];
+				}
+				if (part.type === "tool-result") {
+					return [String(part.output)];
+				}
+				if (part.type === "tool-failure") {
+					return [part.errorText];
+				}
+				return [];
+			})
+		)
 		.join("\n");
 
-const defaultModelStepScript: FakeModelStepScript = async function* (
+const requestMessages = (request: ProviderChatRequest): FakeMessageRequest[] =>
+	request.messages.map((message) => ({
+		role: message.role,
+		text: message.content
+			.flatMap((part) => {
+				if (part.type === "text") {
+					return [part.text];
+				}
+				if (part.type === "tool-result") {
+					return [String(part.output)];
+				}
+				if (part.type === "tool-failure") {
+					return [part.errorText];
+				}
+				return [];
+			})
+			.join("\n"),
+	}));
+
+const isSummaryRequest = (request: ProviderChatRequest): boolean =>
+	request.system?.includes("session summarizer") === true;
+
+const defaultProviderStepScript: FakeProviderStepScript = async function* (
 	request,
 	recorder
-): AsyncGenerator<ModelStreamPart> {
+): AsyncGenerator<ProviderChatEvent> {
 	if (recorder.stepScript !== undefined) {
 		yield* recorder.stepScript(request, recorder);
 		return;
 	}
+	await recorder.beforeChat?.(request);
+	if (isSummaryRequest(request)) {
+		recorder.requests.push({
+			kind: "summary",
+			system: request.system ?? "",
+			text: requestText(request),
+		});
+		yield { delta: recorder.summaryText, type: "text-delta" };
+		yield {
+			type: "usage",
+			usage: { inputTokens: 10, outputTokens: 2 },
+		};
+		yield { type: "finish" };
+		return;
+	}
 	recorder.requests.push({
 		kind: "chat",
-		messages: request.messages.map((message) => ({
-			role: message.role,
-			text: promptMessageText(message),
-		})),
+		messages: requestMessages(request),
 	});
-	await recorder.beforeStep?.(request);
 	yield { delta: "E2E chat response", type: "text-delta" };
 	await recorder.afterTextDelta?.();
 	yield {
-		type: "finish",
+		type: "usage",
 		usage: { inputTokens: 1, outputTokens: 1 },
 	};
+	yield { type: "finish" };
 };
 
-export const createFakeModelClient = (
-	recorder: FakeModelClientRecorder,
-	run: FakeModelStepScript = defaultModelStepScript
-): ModelClient => ({ stream: (request) => run(request, recorder) });
-
-const createFakeModelClientModule = (
-	recorder: FakeModelClientRecorder,
-	run: FakeModelStepScript = defaultModelStepScript
-) => ({
-	createModelClient: () => createFakeModelClient(recorder, run),
-	generateModelText: async (
-		options: ModelTextGenerationOptions
-	): Promise<ModelTextGenerationResult> => {
-		const text =
-			options.messages
-				?.map((message: ModelTextGenerationMessage) => message.content)
-				.join("\n") ??
-			options.prompt ??
-			"";
-		recorder.requests.push({
-			kind: "summary",
-			system: options.system,
-			text,
-		});
-		return {
-			text: recorder.summaryText,
-			usage: { inputTokens: 10, outputTokens: 2 },
-		};
-	},
-});
-
-export const createFakeModelClientRecorder = (): FakeModelClientRecorder => ({
+export const createFakeProviderRecorder = (): FakeProviderRecorder => ({
 	requests: [],
 	summaryText: "E2E compacted summary",
 });
 
-/**
- * Replaces the real model client for every consumer that imports
- * `@wincode/ai/model-client` without poisoning the module registry the way
- * `mock.module` does. Consumers read the live module binding, so installing
- * the spy before the first turn runs is enough. Callers restore it through
- * `mock.restore()`.
- */
-export const installFakeModelClient = (
-	recorder: FakeModelClientRecorder,
-	run: FakeModelStepScript = defaultModelStepScript
+const fakeProviderModel: ProviderModel = {
+	capabilities: ["reasoning", "text", "tools"],
+	limits: { contextWindowTokens: 200_000 },
+	modelId: "gpt-5.6-luna",
+	promptCacheRetentionTiers: ["short"],
+	promptCacheRetentionTtlMs: { short: 30 * 60_000 },
+	providerId: "openai",
+	protocolId: "fake-e2e-provider",
+	reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+};
+
+export const createFakeProviderCollection = (
+	recorder: FakeProviderRecorder,
+	model: ProviderModel = fakeProviderModel,
+	additionalModels: readonly ProviderModel[] = [],
+	additionalProviders: readonly Provider[] = []
+): ProviderCollection &
+	Readonly<{ getPluginProviderRegistrations: () => readonly [] }> => {
+	const models = [model, ...additionalModels];
+	const modelsByProvider = new Map<string, ProviderModel[]>();
+	for (const providerModel of models) {
+		const providerModels = modelsByProvider.get(providerModel.providerId) ?? [];
+		providerModels.push(providerModel);
+		modelsByProvider.set(providerModel.providerId, providerModels);
+	}
+	const credentials = new Map<string, unknown>();
+	const providers = createProviderCollection({
+		credentialStore: {
+			delete: (providerId) => {
+				credentials.delete(providerId);
+			},
+			get: (providerId) =>
+				credentials.get(providerId) ??
+				(modelsByProvider.has(providerId)
+					? "fake-e2e-provider-key"
+					: undefined),
+			set: (providerId, credential) => {
+				credentials.set(providerId, credential);
+			},
+		},
+		modelStore: { get: () => undefined, set: () => undefined },
+	});
+	const providerOverrides = new Map(
+		additionalProviders.map((provider) => [provider.id, provider])
+	);
+	for (const [providerId, providerModels] of modelsByProvider) {
+		if (providerOverrides.has(providerId)) {
+			continue;
+		}
+		const provider: Provider = {
+			id: providerId,
+			models: providerModels,
+			resolveAuthorization: ({ credential }) =>
+				credential === undefined ? null : { authorization: credential },
+			async *streamChat(request): AsyncGenerator<ProviderChatEvent> {
+				yield* (recorder.stepScript ?? defaultProviderStepScript)(
+					request,
+					recorder
+				);
+			},
+		};
+		providers.register(provider);
+	}
+	for (const provider of additionalProviders) {
+		providers.register(provider);
+	}
+	return {
+		...providers,
+		getPluginProviderRegistrations: (): readonly [] => [],
+	};
+};
+
+let installedRecorder: FakeProviderRecorder | undefined;
+
+/** Installs the fake Provider recorder used by the interactive test fixture. */
+export const installFakeProviderRecorder = (
+	recorder: FakeProviderRecorder,
+	stepScript?: FakeProviderStepScript
 ): void => {
-	const fake = createFakeModelClientModule(recorder, run);
-	spyOn(modelClientModule, "createModelClient").mockImplementation(
-		fake.createModelClient
-	);
-	spyOn(modelClientModule, "generateModelText").mockImplementation(
-		fake.generateModelText
-	);
+	if (stepScript !== undefined) {
+		recorder.stepScript = stepScript;
+	}
+	installedRecorder = recorder;
+};
+
+/** Creates the next test Host's isolated fake ProviderCollection. */
+export const createInstalledFakeProviderCollection = (
+	model?: ProviderModel
+): ProviderCollection &
+	Readonly<{ getPluginProviderRegistrations: () => readonly [] }> => {
+	if (installedRecorder === undefined) {
+		throw new Error("The fake Provider recorder was not installed.");
+	}
+	return createFakeProviderCollection(installedRecorder, model);
 };

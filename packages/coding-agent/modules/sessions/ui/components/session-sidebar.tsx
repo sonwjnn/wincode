@@ -1,13 +1,8 @@
 import { TextAttributes } from "@opentui/core";
-import { formatModelTokenCount } from "@wincode/ai/model-usage";
-import {
-	findSupportedChatModelSelection,
-	formatModelLabel,
-} from "@wincode/ai/models";
+import { formatModelTokenCount } from "@wincode/ai";
 import { isNull, isUndefined } from "@wincode/utils";
 import { useMemo } from "react";
 import { builtInAgents } from "@/modules/agents";
-import { useModelPricing } from "@/modules/model-pricing";
 import { PluginStatusSidebar } from "@/modules/plugins/ui/plugin-status-sidebar";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { SessionMessage } from "@/modules/sessions/message";
@@ -39,15 +34,11 @@ export function SessionSidebar({
 }: SessionSidebarProps) {
 	const { colors } = useTheme();
 	const { model } = usePromptConfig();
-	const { table } = useModelPricing();
 	const usage = useMemo(
-		() => summarizeSessionUsage(messages, model, table),
-		[messages, model, table]
+		() => summarizeSessionUsage(messages, model),
+		[messages, model]
 	);
-	const chatModel = findSupportedChatModelSelection(model);
-	const modelLabel = chatModel
-		? formatModelLabel(chatModel.displayName)
-		: model.modelId;
+	const modelLabel = `${model.providerId}/${model.modelId}`;
 	const isContextWarning =
 		!(isNull(usage?.contextPercent) || isUndefined(usage?.contextPercent)) &&
 		usage.contextPercent >= CONTEXT_WARNING_PERCENT;

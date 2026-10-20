@@ -1,4 +1,6 @@
+import type { ThinkingLevel } from "@wincode/ai";
 import { isPlainObject } from "@wincode/utils";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	AttachmentReference,
 	AttachmentReferenceResolver,
@@ -17,7 +19,6 @@ import {
 	RpcProtocolError,
 	type RpcSubmissionDraft,
 	type RpcSubmissionIntent,
-	type Selection,
 	type WireValue,
 } from "./types";
 
@@ -382,7 +383,11 @@ export const readSubmission = async (
 };
 
 export const selectionWire = (
-	selection: Selection
+	selection: Readonly<{
+		agentId: string;
+		model: ProviderModelSelection;
+		thinkingLevel?: ThinkingLevel;
+	}>
 ): Record<string, unknown> => ({
 	agentId: selection.agentId,
 	model: selection.model,

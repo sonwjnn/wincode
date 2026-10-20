@@ -34,6 +34,7 @@ import type {
 	PluginJsonValue,
 	PluginLoadContext,
 	PluginProcessStartHook,
+	PluginProviderRegistration,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginShutdownHook,
@@ -42,6 +43,7 @@ import type {
 import {
 	validatePluginAgent,
 	validatePluginCommand,
+	validatePluginProvider,
 	validatePluginTool,
 } from "./registration";
 import {
@@ -49,6 +51,8 @@ import {
 	type LoadedPlugin,
 	type PluginCommandDescriptor,
 	type PluginDiagnostic,
+	type PluginProviderDescriptor,
+	type PluginProviderSourceScope,
 	type PluginResourceDescriptor,
 	type PluginRuntime,
 	type PluginToolDescriptor,
@@ -81,6 +85,7 @@ type MutablePluginDraft = {
 	agents: Map<string, PluginAgentRegistration>;
 	commands: Map<string, PluginCommand>;
 	mcpServers: Map<string, PluginJsonValue>;
+	providers: Map<string, PluginProviderRegistration>;
 	resources: Map<string, PluginResourceDescriptor>;
 	statusPanels: Map<string, PluginStatusPanelRegistration>;
 	id: string;
@@ -103,6 +108,7 @@ type PluginPath = Readonly<{
 	precedence?: number;
 	required?: boolean;
 	source: string;
+	sourceScope?: PluginProviderSourceScope;
 }>;
 
 const PLUGIN_KEY = "plugins";
@@ -184,6 +190,7 @@ const pathsFromSource = (
 					scope: source.scope,
 				}),
 				source: source.path,
+				sourceScope: source.scope,
 			},
 		];
 	});
@@ -358,6 +365,25 @@ const createRegistrationAPI = (
 				}
 			);
 		},
+		registerProvider(provider) {
+			assertOpen();
+			try {
+				const validated = validatePluginProvider(provider);
+				if (plugin.providers.has(validated.providerId)) {
+					throw new Error(
+						`Plugin Provider '${validated.providerId}' is already registered by this Plugin.`
+					);
+				}
+				plugin.providers.set(validated.providerId, validated);
+			} catch (error) {
+				addDiagnostic(
+					diagnostics,
+					`Plugin Provider registration failed: ${messageFor(error)}`,
+					plugin.sourcePath
+				);
+				throw error;
+			}
+		},
 		registerCommand(command) {
 			assertOpen();
 			try {
@@ -440,6 +466,7 @@ const createPluginAPI = (
 				agents: new Map(),
 				commands: new Map(),
 				mcpServers: new Map(),
+				providers: new Map(),
 				resources: new Map(),
 				statusPanels: new Map(),
 				id: identity.id,
@@ -463,7 +490,8 @@ const createPluginAPI = (
 const loadedPluginFromDraft = (
 	draft: MutablePluginDraft,
 	toolNames: Set<string>,
-	commandNames: Set<string>
+	commandNames: Set<string>,
+	sourceScope?: PluginProviderSourceScope
 ): LoadedPlugin => {
 	if (!pluginIdentifierPattern.test(draft.id)) {
 		throw new Error(
@@ -542,6 +570,18 @@ const loadedPluginFromDraft = (
 				value: `/${command.name}`,
 			})
 	);
+	const sourceIdentity = pluginSourceIdentity(draft.sourcePath);
+	const registeredProviders: PluginProviderDescriptor[] = [
+		...draft.providers.values(),
+	].map((provider) =>
+		Object.freeze({
+			...provider,
+			pluginId: draft.id,
+			sourceIdentity,
+			sourcePath: draft.sourcePath,
+			sourceScope: sourceScope ?? "explicit",
+		})
+	);
 	return Object.freeze({
 		agents: Object.freeze([...draft.agents.values()]),
 		commands: Object.freeze(registeredCommands),
@@ -553,6 +593,8 @@ const loadedPluginFromDraft = (
 		id: draft.id,
 		resources: Object.freeze([...draft.resources.values()]),
 		statusPanels: Object.freeze([...draft.statusPanels.values()]),
+		providers: Object.freeze(registeredProviders),
+		sourceIdentity,
 		onBeforeAgentTurn: draft.onBeforeAgentTurn,
 		onStart: draft.onStart,
 		onSessionShutdown: draft.onSessionShutdown,
@@ -584,6 +626,17 @@ const canonicalPath = (sourcePath: string): string => {
 		return fs.realpathSync(sourcePath);
 	} catch {
 		return path.resolve(sourcePath);
+	}
+};
+
+export const pluginSourceIdentity = (sourcePath: string): string => {
+	if (sourcePath.startsWith("factory:")) {
+		return sourcePath;
+	}
+	try {
+		return fs.realpathSync(sourcePath);
+	} catch {
+		throw new Error("Plugin source path could not be resolved.");
 	}
 };
 
@@ -901,6 +954,7 @@ const sourcePaths = async (
 		path: path.resolve(input.config.workspace, value),
 		precedence: resourceSourcePrecedence("user-explicit"),
 		source: "--plugin",
+		sourceScope: "explicit" as const,
 	}));
 	// Plugin IDs are first-wins; load higher-precedence classes first. Stable
 	// ordering preserves CLI-before-configured order within user-explicit paths.
@@ -1165,7 +1219,8 @@ const publishPluginDraft = async (
 		const loaded = loadedPluginFromDraft(
 			draft,
 			state.toolNames,
-			state.commandNames
+			state.commandNames,
+			candidate.sourceScope
 		);
 		state.pluginSources.set(loaded.id, candidate.path);
 		state.loadedPlugins.push(loaded);

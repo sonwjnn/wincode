@@ -24,7 +24,6 @@ import {
 	computeContentWidth,
 	formatAgent,
 	formatMcpToolName,
-	formatModel,
 	formatResponseTime,
 	formatSkillHash,
 	formatToolName,
@@ -347,8 +346,10 @@ const resolveFooterItems = (
 
 	const model = metadata.model;
 	if (model) {
-		const { label } = formatModel(model);
-		items.push({ color: colors.textMuted, label });
+		items.push({
+			color: colors.textMuted,
+			label: `${model.providerId}/${model.modelId}`,
+		});
 	}
 
 	if (!isUndefined(metadata.responseTimeMs)) {

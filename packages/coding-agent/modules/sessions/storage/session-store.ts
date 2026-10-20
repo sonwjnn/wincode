@@ -8,8 +8,8 @@ import type {
 	SessionSubmissionStatus,
 	SubmissionId,
 } from "@wincode/agent-core";
-import type { ModelUsage } from "@wincode/ai/model-usage";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ModelUsage, ThinkingLevel } from "@wincode/ai";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	SessionFilePart,
 	SessionMessage,
@@ -43,22 +43,23 @@ export type Session = {
 	createdAt: Date;
 	id: SessionId;
 	lastMessageAt: Date | null;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	pinned: boolean;
 	title: string;
 	thinkingLevel?: ThinkingLevel;
 };
 
 export type CreateSessionInput = {
+	id?: SessionId;
 	agent: AgentId;
 	message: SessionMessage;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	turnId: AgentTurnId;
 	thinkingLevel?: ThinkingLevel;
 };
 export type CreateEmptySessionInput = Readonly<{
 	id?: SessionId;
-	model?: ChatModelSelection;
+	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 }>;
 export type UpdateSessionInput = {
@@ -71,7 +72,7 @@ export type SessionUsageEntry = Readonly<{
 	createdAt: Date;
 	id: SessionUsageEntryId;
 	kind: "cache-warm";
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	sessionId: SessionId;
 	usage: ModelUsage;
 }>;
@@ -90,7 +91,7 @@ export type CreateSessionUsageEntryInput = Omit<
  * partial durable state.
  */
 export type CommitSessionRecordInput = {
-	sessionModel?: ChatModelSelection;
+	sessionModel?: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
 	record: SessionRecord;
 	sessionId: SessionId;
@@ -131,7 +132,7 @@ export type SessionStore = {
 		options?: SessionWriterLockOptions
 	) => Promise<SessionWriterLock>;
 	listSessions: () => Promise<Session[]>;
-	listRecentModelSelections: (limit: number) => ChatModelSelection[];
+	listRecentModelSelections: (limit: number) => ProviderModelSelection[];
 	commitSessionRecord: (input: CommitSessionRecordInput) => Promise<void>;
 	listSessionRecords: (sessionId: SessionId) => Promise<SessionRecord[]>;
 	updateSessionSubmission: (

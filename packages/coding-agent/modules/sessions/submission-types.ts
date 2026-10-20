@@ -4,8 +4,9 @@ import type {
 	SessionMessageId,
 	SubmissionId,
 } from "@wincode/agent-core";
-import type { ChatModelSelection, ThinkingLevel } from "@wincode/ai/models";
+import type { ThinkingLevel } from "@wincode/ai";
 import type { AgentSelectionOverride } from "@/modules/agents/agent-call";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SkillContext } from "@/modules/skills";
 import type { SessionResolvedAgent } from "./agent-session/types";
@@ -33,9 +34,9 @@ export type SessionSendInput = Readonly<{
 	turnId?: AgentTurnId;
 	/** A reserved user-message identity for a new Submission. */
 	reservedMessageId?: SessionMessageId;
-	sessionModel: ChatModelSelection;
+	sessionModel: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
-	model: ChatModelSelection;
+	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	selectionOverride?: AgentSelectionOverride;
 	resolvedAgent?: SessionResolvedAgent;

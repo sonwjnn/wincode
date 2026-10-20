@@ -1,6 +1,7 @@
-import type { ChatModelSelection, ThinkingSelection } from "@wincode/ai/models";
+import type { ThinkingSelection } from "@wincode/ai";
 import { useEffect, useMemo, useState } from "react";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	AgentSession,
 	LiveSessionSnapshot,
@@ -20,10 +21,10 @@ export type AgentSessionBinding = Readonly<{
 	onSubmissionEvent: AgentSession["onSubmissionEvent"];
 	/** Aborts the compaction command in flight and recalls the waiting messages with it. */
 	cancelCompaction: AgentSession["cancelCompaction"];
-	/** Runs a manual compaction command against one Model Target. */
+	/** Runs a manual compaction command against one selected Provider Model. */
 	compact: (
 		focus: string | undefined,
-		selection: ChatModelSelection,
+		selection: ProviderModelSelection,
 		thinkingSelection?: ThinkingSelection
 	) => Promise<CompactSessionResult>;
 	/** Interrupts the Agent Turn the session is running and recalls everything waiting. */
@@ -83,7 +84,7 @@ export function useAgentSession(host: SessionHost): AgentSessionBinding {
 		() =>
 			(
 				focus: string | undefined,
-				selection: ChatModelSelection,
+				selection: ProviderModelSelection,
 				thinkingSelection: ThinkingSelection = {}
 			) =>
 				agentSession.compact({
