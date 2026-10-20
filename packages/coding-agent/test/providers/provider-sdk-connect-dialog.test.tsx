@@ -437,7 +437,7 @@ test("Escape closes only the top Provider connect dialog and leaves the underlyi
 
 		await act(() => setup.mockInput.pressEscape());
 		await flushTestRenderer(setup, 3);
-		expect(setup.captureCharFrame()).toContain("Choose method");
+		expect(setup.captureCharFrame()).toContain("Choose action");
 		expect(setup.captureCharFrame()).not.toContain("Paste API key");
 
 		await act(() => setup.mockInput.pressEscape());
@@ -583,6 +583,67 @@ test("opening and dismissing nested Plugin text input does not abort its parent 
 		await flushTestRenderer(setup, 3);
 		expect(signal?.aborted).toBe(false);
 		expect(setup.captureCharFrame()).toContain("Example Plugin Provider");
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
+test("provider status stays configured until explicit verification and logout updates it", async () => {
+	let verifyCalls = 0;
+	let logoutCalls = 0;
+	const controller = fromPartial<InteractiveProviderController>({
+		checkProviderAuth: async () => ({
+			source: "stored-credential",
+			status: "configured",
+		}),
+		getConnectableProviders: () => [
+			{
+				connectApiKey: async () => [],
+				displayName: "Fixture Provider SDK",
+				kind: "api-key",
+				methodId: "provider-api-key",
+				providerId: "fixture-provider",
+			},
+		],
+		logoutProvider: async () => {
+			logoutCalls += 1;
+			return { status: "logged-out" };
+		},
+		verifyProviderAuth: async () => {
+			verifyCalls += 1;
+			return { source: "stored-credential", status: "verified" };
+		},
+	});
+	const { setup } = await renderConnectDialog(controller);
+
+	try {
+		await flushTestRenderer(setup, 3);
+		expect(setup.captureCharFrame()).toContain(
+			"Credential saved · not verified"
+		);
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 2);
+		expect(setup.captureCharFrame()).toContain("Verify saved credentials");
+		expect(setup.captureCharFrame()).toContain("Log out");
+
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
+		expect(verifyCalls).toBe(1);
+		await act(() => setup.mockInput.pressEscape());
+		await flushTestRenderer(setup, 2);
+		expect(setup.captureCharFrame()).toContain("Verified in this session");
+
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 2);
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressArrow("down"));
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 3);
+		expect(logoutCalls).toBe(1);
+		await act(() => setup.mockInput.pressEscape());
+		await flushTestRenderer(setup, 2);
+		expect(setup.captureCharFrame()).toContain("No credential saved");
 	} finally {
 		await act(() => setup.renderer.destroy());
 	}

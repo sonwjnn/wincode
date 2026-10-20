@@ -9,6 +9,7 @@ import {
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
 import { createInteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import { createInteractiveSessionProviderCollection } from "@/modules/sessions/provider-collection";
+import { createInMemoryCredentialStore } from "@/test/support/provider-stores";
 
 test("manual Provider Model refresh notifies availability subscribers only when the model list changes", async () => {
 	const providerId = "fixture-refresh";
@@ -19,12 +20,9 @@ test("manual Provider Model refresh notifies availability subscribers only when 
 	});
 	let discoveredModels = [makeModel("first-model")];
 	const collection = createProviderCollection({
-		credentialStore: {
-			delete: () => undefined,
-			get: (storedProviderId) =>
-				storedProviderId === providerId ? "fixture-key" : undefined,
-			set: () => undefined,
-		},
+		credentialStore: createInMemoryCredentialStore(
+			new Map([[providerId, "fixture-key"]])
+		),
 	});
 	collection.register({
 		discoverModels: () => discoveredModels,
@@ -60,8 +58,7 @@ test("manual Provider Model refresh notifies availability subscribers only when 
 	}
 });
 
-test("known Provider Model availability scopes credentials while global chooser discovery remains unscoped", async () => {
-	const credentialReads: string[] = [];
+test("known Provider Model availability scopes configured metadata without reading secrets", async () => {
 	const selectedModel: ProviderModel = {
 		modelId: "selected-model",
 		protocolId: "fixture",
@@ -73,14 +70,12 @@ test("known Provider Model availability scopes credentials while global chooser 
 		providerId: "anthropic",
 	};
 	const collection = createProviderCollection({
-		credentialStore: {
-			delete: () => undefined,
-			get: (providerId) => {
-				credentialReads.push(providerId);
-				return "fake-provider-key";
-			},
-			set: () => undefined,
-		},
+		credentialStore: createInMemoryCredentialStore(
+			new Map([
+				["openai", "fake-provider-key"],
+				["anthropic", "fake-provider-key"],
+			])
+		),
 	});
 	for (const model of [selectedModel, unrelatedModel]) {
 		collection.register({
@@ -99,14 +94,10 @@ test("known Provider Model availability scopes credentials while global chooser 
 		expect(await controller.getAvailableModels("openai")).toEqual([
 			selectedModel,
 		]);
-		expect(credentialReads).toEqual(["openai"]);
-		credentialReads.length = 0;
 		expect(await controller.getAvailableModels()).toEqual([
 			selectedModel,
 			unrelatedModel,
 		]);
-		expect(credentialReads).toEqual(["openai", "anthropic"]);
-		credentialReads.length = 0;
 		expect(
 			(
 				await controller.getAvailableProviderModelSelectionCandidates?.(
@@ -114,14 +105,11 @@ test("known Provider Model availability scopes credentials while global chooser 
 				)
 			)?.map(({ model }) => model)
 		).toEqual([selectedModel]);
-		expect(credentialReads).toEqual(["openai"]);
-		credentialReads.length = 0;
 		expect(
 			(await controller.getAvailableProviderModelSelectionCandidates?.())?.map(
 				({ model }) => model
 			)
 		).toEqual([selectedModel, unrelatedModel]);
-		expect(credentialReads).toEqual(["openai", "anthropic"]);
 	} finally {
 		await collection.close();
 	}
@@ -129,11 +117,7 @@ test("known Provider Model availability scopes credentials while global chooser 
 
 test("OAuth methods are omitted when their provider-specific login is unavailable", async () => {
 	const collection = createProviderCollection({
-		credentialStore: {
-			delete: () => undefined,
-			get: () => undefined,
-			set: () => undefined,
-		},
+		credentialStore: createInMemoryCredentialStore(new Map()),
 	});
 	const controller = createInteractiveProviderController(collection);
 
@@ -154,21 +138,36 @@ test("built-in API-key connection stores the secret without live validation or P
 		delete: (providerId) => {
 			credentials.delete(providerId);
 		},
-		get: (providerId) => {
-			credentialReadProviderIds.push(providerId);
-			return credentials.get(providerId);
-		},
-		set: (providerId, credential) => {
-			if (failCredentialWrites) {
-				const apiKey =
+		list: () =>
+			[...credentials].map(([providerId, credential]) => ({
+				providerId,
+				type:
 					typeof credential === "object" &&
 					credential !== null &&
-					"apiKey" in credential
-						? String(credential.apiKey)
-						: "unknown";
-				throw new Error(`Fake secure storage rejected ${apiKey}.`);
+					"kind" in credential &&
+					typeof credential.kind === "string"
+						? credential.kind
+						: "unknown",
+			})),
+		modify: async (providerId, update) => {
+			const replacement = await update(credentials.get(providerId));
+			if (replacement !== undefined) {
+				if (failCredentialWrites) {
+					const apiKey =
+						typeof replacement === "object" &&
+						replacement !== null &&
+						"apiKey" in replacement
+							? String(replacement.apiKey)
+							: "unknown";
+					throw new Error(`Fake secure storage rejected ${apiKey}.`);
+				}
+				credentials.set(providerId, replacement);
 			}
-			credentials.set(providerId, credential);
+			return credentials.get(providerId);
+		},
+		read: (providerId) => {
+			credentialReadProviderIds.push(providerId);
+			return credentials.get(providerId);
 		},
 	};
 	const modelStore: ModelStore = {
@@ -289,7 +288,7 @@ test("built-in API-key connection stores the secret without live validation or P
 		expect(oauthModels.some(({ providerId }) => providerId === "openai")).toBe(
 			true
 		);
-		expect(credentialReadProviderIds).toEqual(["openai"]);
+		expect(credentialReadProviderIds).toEqual([]);
 		expect(availabilityNotifications).toBe(1);
 
 		const googleApiKeyOption = connectable.find(
@@ -336,6 +335,92 @@ test("built-in API-key connection stores the secret without live validation or P
 			controller.connectProviderApiKey("fixture-plugin", "plugin-secret")
 		).rejects.toThrow("Provider SDK API-key connection is unavailable.");
 		expect(pluginConnectCalls).toBe(0);
+	} finally {
+		unsubscribe?.();
+		await collection.close();
+	}
+});
+
+test("controller separates configured, resolved, verified, and logged-out auth states", async () => {
+	const providerId = "lifecycle-fixture";
+	const model: ProviderModel = {
+		headers: { "X-Model-Header": "model-value" },
+		modelId: "lifecycle-model",
+		protocolId: "lifecycle-fixture",
+		providerId,
+	};
+	const credentialReads: string[] = [];
+	let verificationCalls = 0;
+	let sessionWorkCalls = 0;
+	const credentialStore = createInMemoryCredentialStore(
+		new Map([[providerId, { token: "fixture-secret" }]]),
+		undefined,
+		(readProviderId) => credentialReads.push(readProviderId)
+	);
+	const collection = createProviderCollection({ credentialStore });
+	collection.register({
+		checkAuth: ({ credential }) =>
+			typeof credential === "object" &&
+			credential !== null &&
+			"token" in credential,
+		id: providerId,
+		models: [model],
+		resolveAuthorization: ({ credential }) => ({
+			authorization: { credential },
+			headers: { "X-Auth-Header": "auth-value" },
+		}),
+		verifyAuth: ({ authorization }) => {
+			verificationCalls += 1;
+			expect(authorization).toEqual({
+				credential: { token: "fixture-secret" },
+			});
+		},
+		async *streamChat() {
+			yield { type: "finish" };
+		},
+	});
+	const controller = createInteractiveProviderController(collection, {
+		withSessionWork: async (action) => {
+			sessionWorkCalls += 1;
+			return await action();
+		},
+	});
+	let availabilityNotifications = 0;
+	const unsubscribe = controller.subscribeAvailability?.(() => {
+		availabilityNotifications += 1;
+	});
+
+	try {
+		expect(await controller.getConfiguredProviderIds()).toEqual([providerId]);
+		expect(credentialReads).toEqual([]);
+		expect(await controller.checkProviderAuth(providerId)).toEqual({
+			source: "stored-credential",
+			status: "configured",
+		});
+		expect(verificationCalls).toBe(0);
+		const auth = await controller.resolveProviderAuth(model);
+		expect(auth).toMatchObject({
+			authorization: { credential: { token: "fixture-secret" } },
+			headers: {
+				"X-Auth-Header": "auth-value",
+				"X-Model-Header": "model-value",
+			},
+			source: "stored-credential",
+		});
+		expect(verificationCalls).toBe(0);
+		expect(await controller.verifyProviderAuth(providerId)).toEqual({
+			source: "stored-credential",
+			status: "verified",
+		});
+		expect(verificationCalls).toBe(1);
+		expect(await controller.logoutProvider(providerId)).toEqual({
+			status: "logged-out",
+		});
+		expect(await controller.checkProviderAuth(providerId)).toEqual({
+			status: "missing",
+		});
+		expect(availabilityNotifications).toBe(1);
+		expect(sessionWorkCalls).toBe(5);
 	} finally {
 		unsubscribe?.();
 		await collection.close();

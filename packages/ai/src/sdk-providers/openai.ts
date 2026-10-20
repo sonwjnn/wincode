@@ -7,8 +7,10 @@ import {
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
+	type ProviderChatHeaderContext,
 	type ProviderChatRequest,
 	ProviderError,
+	type ProviderLoginOptions,
 	type ProviderModel,
 } from "../sdk.ts";
 import {
@@ -67,12 +69,7 @@ export type OpenAIProviderOptions = Readonly<{
 	models?: readonly ProviderModel[];
 }>;
 
-export type OpenAIProvider = Provider &
-	Readonly<{
-		login: (
-			options?: OpenAIBrowserLoginOptions
-		) => Promise<OpenAIOAuthCredential>;
-	}>;
+export type OpenAIProvider = Provider;
 
 const apiRootFor = (baseUrl: string): URL => {
 	const apiRoot = new URL(baseUrl);
@@ -193,10 +190,41 @@ const openAIResponsesProviderOptionsFor = (
 type OpenAIWireRequest = Readonly<{
 	body: string;
 	hasCacheControls: boolean;
-	headers: Readonly<Record<string, string>>;
 	strategy: ModelProtocolStrategy;
 	url: string;
 }>;
+
+const openAIChatHeadersFor = (
+	context: ProviderChatHeaderContext
+): Readonly<Record<string, string>> => {
+	const authorization = parseAuthorization(context.authorization);
+	const jsonHeaders = { "content-type": "application/json" };
+	if (context.model.protocolId === OPENAI_RESPONSES_PROTOCOL) {
+		if (authorization.kind === "oauth") {
+			return {
+				...jsonHeaders,
+				authorization: `Bearer ${authorization.accessToken}`,
+				"chatgpt-account-id": authorization.accountId,
+				"openai-beta": "responses=experimental",
+				originator: "wincode",
+			};
+		}
+		return { ...jsonHeaders, authorization: `Bearer ${authorization.apiKey}` };
+	}
+	if (context.model.protocolId === OPENAI_CHAT_PROTOCOL) {
+		if (authorization.kind === "oauth") {
+			throw new ProviderError(
+				"provider",
+				"OpenAI OAuth supports the Responses protocol only."
+			);
+		}
+		return { ...jsonHeaders, authorization: `Bearer ${authorization.apiKey}` };
+	}
+	throw new ProviderError(
+		"provider",
+		`Unsupported OpenAI model protocol: ${context.model.protocolId}`
+	);
+};
 
 const wireRequestFor = (
 	request: ProviderChatRequest,
@@ -212,12 +240,10 @@ const wireRequestFor = (
 		context.model
 	);
 	const maxOutputTokens = request.cacheWarming ? 1 : requestedMaxOutputTokens;
-	const jsonHeaders = { "content-type": "application/json" };
 	const protocolId = context.model.protocolId;
 	let strategy: ModelProtocolStrategy;
 	let body: Record<string, unknown>;
 	let url: string;
-	let headers: Readonly<Record<string, string>>;
 	if (protocolId === OPENAI_RESPONSES_PROTOCOL) {
 		if (authorization.kind === "oauth" && maxOutputTokens !== undefined) {
 			throw new ProviderError(
@@ -239,19 +265,8 @@ const wireRequestFor = (
 		});
 		if (authorization.kind === "oauth") {
 			url = OPENAI_OAUTH_RESPONSES_URL;
-			headers = {
-				...jsonHeaders,
-				authorization: `Bearer ${authorization.accessToken}`,
-				"chatgpt-account-id": authorization.accountId,
-				"openai-beta": "responses=experimental",
-				originator: "wincode",
-			};
 		} else {
 			url = new URL("responses", apiRoot).href;
-			headers = {
-				...jsonHeaders,
-				authorization: `Bearer ${authorization.apiKey}`,
-			};
 		}
 	} else if (protocolId === OPENAI_CHAT_PROTOCOL) {
 		if (authorization.kind === "oauth") {
@@ -267,10 +282,6 @@ const wireRequestFor = (
 			request: modelRequest,
 		});
 		url = new URL("chat/completions", apiRoot).href;
-		headers = {
-			...jsonHeaders,
-			authorization: `Bearer ${authorization.apiKey}`,
-		};
 	} else {
 		throw new ProviderError(
 			"provider",
@@ -282,7 +293,6 @@ const wireRequestFor = (
 		hasCacheControls:
 			cacheRetention !== undefined &&
 			strategy.promptCache.routeForModel(model)?.hasControls === true,
-		headers,
 		strategy,
 		url,
 	};
@@ -321,6 +331,7 @@ const providerErrorFor = (error: unknown): ProviderError => {
 
 const streamWireRequest = async function* (
 	wireRequest: OpenAIWireRequest,
+	headers: Readonly<Record<string, string>>,
 	fetchImpl: OpenAIFetch,
 	signal?: AbortSignal
 ): AsyncIterable<ProviderChatEvent> {
@@ -328,7 +339,7 @@ const streamWireRequest = async function* (
 	try {
 		response = await fetchImpl(wireRequest.url, {
 			body: wireRequest.body,
-			headers: wireRequest.headers,
+			headers,
 			method: "POST",
 			signal,
 		});
@@ -373,6 +384,7 @@ const streamWithCacheFallback = async function* (
 	try {
 		for await (const event of streamWireRequest(
 			cachedRequest,
+			context.headers,
 			fetchImpl,
 			context.signal
 		)) {
@@ -400,7 +412,12 @@ const streamWithCacheFallback = async function* (
 			apiRoot,
 			undefined
 		);
-		yield* streamWireRequest(uncachedRequest, fetchImpl, context.signal);
+		yield* streamWireRequest(
+			uncachedRequest,
+			context.headers,
+			fetchImpl,
+			context.signal
+		);
 	}
 };
 
@@ -456,13 +473,29 @@ export const createOpenAIProvider = (
 				parsedCredential.success && parsedCredential.data.kind === "api-key"
 			);
 		},
+		checkAuth: ({ credential }) =>
+			openAICredentialSchema.safeParse(credential).success,
 		id: OPENAI_PROVIDER_ID,
 		models,
-		login: (loginOptions = {}) =>
-			(
+		login: async ({
+			methodId,
+			options: loginOptions,
+			signal,
+		}: ProviderLoginOptions) => {
+			if (methodId !== "openai-browser") {
+				return;
+			}
+			const browserOptions =
+				typeof loginOptions === "object" &&
+				loginOptions !== null &&
+				!Array.isArray(loginOptions)
+					? (loginOptions as OpenAIBrowserLoginOptions)
+					: {};
+			return (
 				options.login ??
 				((input) => acquireOpenAIOAuthCredential(input, fetchImpl))
-			)(loginOptions),
+			)({ ...browserOptions, signal });
+		},
 		resolveAuthorization: async ({ credential, signal }) => {
 			const parsedCredential = openAICredentialSchema.safeParse(credential);
 			if (!parsedCredential.success) {
@@ -502,6 +535,40 @@ export const createOpenAIProvider = (
 						? error.message
 						: "OpenAI OAuth credentials expired; sign in again.",
 					{ cause: error }
+				);
+			}
+		},
+		getChatHeaders: openAIChatHeadersFor,
+		verifyAuth: async ({ authorization, signal }) => {
+			const resolved = parseAuthorization(authorization);
+			if (resolved.kind === "oauth") {
+				return "unsupported";
+			}
+			let response: Response;
+			try {
+				response = await fetchImpl(new URL("models", apiRoot), {
+					headers: { authorization: `Bearer ${resolved.apiKey}` },
+					method: "GET",
+					signal,
+				});
+			} catch (error) {
+				if (signal?.aborted) {
+					throw signal.reason ?? error;
+				}
+				throw new ProviderError(
+					"transport",
+					"OpenAI credential verification request failed.",
+					{ cause: error }
+				);
+			}
+			if (!response.ok) {
+				throw new ProviderError(
+					response.status === 401 || response.status === 403
+						? "authentication"
+						: "provider",
+					response.status === 401 || response.status === 403
+						? "OpenAI credentials were rejected."
+						: `OpenAI credential verification failed (${response.status}).`
 				);
 			}
 		},

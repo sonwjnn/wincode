@@ -5,6 +5,7 @@ import {
 	createAnthropicProvider,
 	createProviderCollection,
 } from "@wincode/ai";
+import { createInMemoryCredentialStore } from "./support/credential-store.ts";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(
@@ -40,15 +41,7 @@ describe("public Anthropic SDK provider", () => {
 		}[] = [];
 		const credentials = new Map<string, unknown>();
 		const sdk = createProviderCollection({
-			credentialStore: {
-				delete: (providerId) => {
-					credentials.delete(providerId);
-				},
-				get: (providerId) => credentials.get(providerId),
-				set: (providerId, credential) => {
-					credentials.set(providerId, credential);
-				},
-			},
+			credentialStore: createInMemoryCredentialStore(credentials),
 		});
 		sdk.register(
 			createAnthropicProvider({

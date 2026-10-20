@@ -1,6 +1,11 @@
 import type {
+	CredentialStoreOptions,
 	OpenAIBrowserLoginOptions,
+	ProviderAuth,
+	ProviderAuthCheckResult,
+	ProviderAuthVerificationResult,
 	ProviderCollection,
+	ProviderLogoutResult,
 	ProviderModel,
 	RefreshModelsOptions,
 	RefreshModelsResult,
@@ -278,6 +283,23 @@ export type InteractiveProviderController = Readonly<{
 	getAvailableModels: (
 		providerId?: string
 	) => Promise<readonly ProviderModel[]>;
+	getConfiguredProviderIds: () => Promise<readonly string[]>;
+	checkProviderAuth: (
+		providerId: string,
+		options?: CredentialStoreOptions
+	) => Promise<ProviderAuthCheckResult>;
+	resolveProviderAuth: (
+		provider: string | ProviderModel,
+		options?: CredentialStoreOptions
+	) => Promise<ProviderAuth | undefined>;
+	verifyProviderAuth: (
+		provider: string | ProviderModel,
+		options?: CredentialStoreOptions
+	) => Promise<ProviderAuthVerificationResult>;
+	logoutProvider: (
+		providerId: string,
+		options?: CredentialStoreOptions
+	) => Promise<ProviderLogoutResult>;
 	getAvailableProviderModelSelectionCandidates?: (
 		providerId?: string
 	) => Promise<readonly ProviderModelSelectionCandidate[]>;
@@ -808,6 +830,29 @@ export const createInteractiveProviderController = (
 				.getModels()
 				.filter((model) => model.providerId === providerId);
 		});
+	const checkProviderAuth = (
+		providerId: string,
+		authOptions?: CredentialStoreOptions
+	) => withSessionWork(() => providers.checkAuth(providerId, authOptions));
+	const resolveProviderAuth = (
+		provider: string | ProviderModel,
+		authOptions?: CredentialStoreOptions
+	) => withSessionWork(() => providers.getAuth(provider, authOptions));
+	const verifyProviderAuth = (
+		provider: string | ProviderModel,
+		authOptions?: CredentialStoreOptions
+	) => withSessionWork(() => providers.verifyAuth(provider, authOptions));
+	const logoutProvider = (
+		providerId: string,
+		authOptions?: CredentialStoreOptions
+	) =>
+		withSessionWork(async () => {
+			try {
+				return await providers.logout(providerId, authOptions);
+			} finally {
+				notifyAvailabilityChanged();
+			}
+		});
 	const connectPluginProvider = (
 		providerId: string,
 		requestTextInput: PluginProviderConnectContext["requestTextInput"],
@@ -873,6 +918,11 @@ export const createInteractiveProviderController = (
 			await restoreModels();
 			return providers.getAvailable(providerId);
 		},
+		getConfiguredProviderIds: () => providers.getConfiguredProviderIds(),
+		checkProviderAuth,
+		resolveProviderAuth,
+		verifyProviderAuth,
+		logoutProvider,
 		getAvailableProviderModelSelectionCandidates,
 		getConnectableProviders() {
 			const discoverableProviderIds = new Set(getDiscoverableProviderIds());

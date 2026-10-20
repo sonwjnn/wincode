@@ -12,7 +12,6 @@ import {
 import { fromPartial } from "@total-typescript/shoehorn";
 import { type AgentId, agentIdSchema } from "@wincode/agent-core";
 import type {
-	CredentialStore,
 	ModelStore,
 	Provider,
 	ProviderCollection,
@@ -53,6 +52,7 @@ import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import { modelId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
+import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const previousLocalDatabasePath = process.env.WINCODE_LOCAL_DB_PATH;
 process.env.WINCODE_LOCAL_DB_PATH = ":memory:";
@@ -71,11 +71,9 @@ const createHomeProviderCollection = (
 	pluginRuntime?: PluginRuntime,
 	openAIKey?: string
 ) => {
-	const credentialStore: CredentialStore = {
-		delete: () => undefined,
-		get: (providerId) => (providerId === "openai" ? openAIKey : undefined),
-		set: () => undefined,
-	};
+	const credentialStore = createInMemoryCredentialStore(
+		new Map(openAIKey === undefined ? [] : [["openai", openAIKey]])
+	);
 	const modelStore: ModelStore = {
 		get: () => undefined,
 		set: () => undefined,
@@ -210,13 +208,23 @@ const createTrackedHomeProviderCollectionFactory =
 			{
 				credentialStore: {
 					delete: () => undefined,
-					get: (candidateProviderId) => {
+					list: () => [
+						{ providerId: credentialStorageId, type: "fixture-token" },
+					],
+					modify: async (candidateProviderId, update) => {
+						operations.push(`credential:${candidateProviderId}`);
+						const current =
+							candidateProviderId === credentialStorageId
+								? { token: "fake-provider-credential" }
+								: undefined;
+						return (await update(current)) ?? current;
+					},
+					read: (candidateProviderId) => {
 						operations.push(`credential:${candidateProviderId}`);
 						return candidateProviderId === credentialStorageId
 							? { token: "fake-provider-credential" }
 							: undefined;
 					},
-					set: () => undefined,
 				},
 				modelStore: {
 					get: () => {

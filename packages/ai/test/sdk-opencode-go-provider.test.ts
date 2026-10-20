@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type ChatEvent,
+	type ChatRequest,
 	createAnthropicProvider,
 	createOpenAIProvider,
 	createOpenCodeGoProvider,
@@ -24,7 +25,8 @@ const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 const collect = async (
 	sdk: ProviderCollection,
 	modelId: string,
-	reasoningEffort?: ThinkingLevel
+	reasoningEffort?: ThinkingLevel,
+	headerOptions: Pick<ChatRequest, "headers" | "transformHeaders"> = {}
 ): Promise<ChatEvent[]> => {
 	const events: ChatEvent[] = [];
 	for await (const event of sdk.chat({
@@ -34,6 +36,7 @@ const collect = async (
 		modelId,
 		providerId: "opencode-go",
 		...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+		...headerOptions,
 	})) {
 		events.push(event);
 	}
@@ -55,7 +58,7 @@ describe("public OpenCode Go SDK provider", () => {
 				url: String(url),
 			});
 			responses += 1;
-			if (responses === 1) {
+			if (responses === 1 || responses === 7) {
 				return sseResponse([
 					{
 						type: "response.reasoning_summary_text.delta",
@@ -135,6 +138,16 @@ describe("public OpenCode Go SDK provider", () => {
 		await collect(sdk, "qwen3.8-max", "minimal");
 		await collect(sdk, "gpt-5.6-luna", "off");
 		await collect(sdk, "qwen3.8-max", "off");
+		await collect(sdk, "gpt-5.6-luna", undefined, {
+			transformHeaders: (headers) => {
+				expect(headers.authorization).toBe("Bearer opencode-go-secret");
+				expect(headers["x-opencode-session"]).toBeTruthy();
+				return {
+					"x-opencode-session": null,
+					authorization: "Bearer trusted-gateway-override",
+				};
+			},
+		});
 
 		expect(modelIds).toContain("openai/gpt-5.6");
 		expect(modelIds).toContain("anthropic/claude-sonnet-4-6");
@@ -146,12 +159,19 @@ describe("public OpenCode Go SDK provider", () => {
 			"https://opencode.ai/zen/go/v1/messages",
 			"https://opencode.ai/zen/go/v1/responses",
 			"https://opencode.ai/zen/go/v1/messages",
+			"https://opencode.ai/zen/go/v1/responses",
 		]);
 		const sessionId = requests[0]?.headers.get("x-opencode-session") ?? null;
 		expect(sessionId).toBeTruthy();
 		expect(
-			requests.map(({ headers }) => headers.get("x-opencode-session"))
-		).toEqual(requests.map(() => sessionId));
+			requests
+				.slice(0, 6)
+				.map(({ headers }) => headers.get("x-opencode-session"))
+		).toEqual(requests.slice(0, 6).map(() => sessionId));
+		expect(requests[6]?.headers.get("authorization")).toBe(
+			"Bearer trusted-gateway-override"
+		);
+		expect(requests[6]?.headers.has("x-opencode-session")).toBe(false);
 		expect(
 			provider.models.find(({ modelId }) => modelId === "qwen3.8-max")
 				?.reasoningEfforts

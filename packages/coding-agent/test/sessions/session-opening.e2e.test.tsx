@@ -23,6 +23,7 @@ import {
 	type PluginProviderDescriptor,
 	type PluginRuntime,
 } from "@/modules/plugins/runtime";
+import { pluginProviderStorageId } from "@/modules/providers/provider-stores";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import type { SessionSdkPluginProviderSource } from "@/modules/sessions/plugin-provider-source";
 import {
@@ -301,14 +302,29 @@ const createCurrentAgentPinFixture = (ownerCount: number) => {
 		allowedPluginProviderSources?: readonly SessionSdkPluginProviderSource[]
 	) => {
 		activity.collectionConstructions += 1;
+		const pluginProviders = pluginProvidersFromRuntime(
+			runtime,
+			scopedSessionId,
+			allowedPluginProviderIds,
+			allowedPluginProviderSources
+		);
 		const collection = await createInteractiveSessionProviderCollection({
 			credentialStore: {
 				delete: async () => undefined,
-				get: async () => {
+				list: () =>
+					pluginProviders.map((registration) => ({
+						providerId: pluginProviderStorageId(registration),
+						type: "plugin",
+					})),
+				modify: async (_providerId, update) => {
+					activity.credentialReads += 1;
+					const replacement = await update("fake-session-agent-pin-credential");
+					return replacement ?? "fake-session-agent-pin-credential";
+				},
+				read: async (_providerId) => {
 					activity.credentialReads += 1;
 					return "fake-session-agent-pin-credential";
 				},
-				set: async () => undefined,
 			},
 			modelStore: {
 				get: async () => {
@@ -317,12 +333,7 @@ const createCurrentAgentPinFixture = (ownerCount: number) => {
 				},
 				set: async () => undefined,
 			},
-			pluginProviders: pluginProvidersFromRuntime(
-				runtime,
-				scopedSessionId,
-				allowedPluginProviderIds,
-				allowedPluginProviderSources
-			),
+			pluginProviders,
 		});
 		const getAvailable = collection.getAvailable.bind(collection);
 		return {
@@ -685,11 +696,24 @@ test(
 					return createInteractiveSessionProviderCollection({
 						credentialStore: {
 							delete: async () => undefined,
-							get: async () => {
+							list: () =>
+								(runtime?.getProviderRegistrations(scopedSessionId) ?? []).map(
+									(registration) => ({
+										providerId: pluginProviderStorageId(registration),
+										type: "plugin",
+									})
+								),
+							modify: async (_providerId, update) => {
+								credentialReads += 1;
+								const replacement = await update(
+									"fake-history-provider-credential"
+								);
+								return replacement ?? "fake-history-provider-credential";
+							},
+							read: async () => {
 								credentialReads += 1;
 								return "fake-history-provider-credential";
 							},
-							set: async () => undefined,
 						},
 						modelStore: {
 							get: async () => {
@@ -850,11 +874,24 @@ test("historical reselection rejects missing or mismatched Host owners before mo
 					const collection = await createInteractiveSessionProviderCollection({
 						credentialStore: {
 							delete: async () => undefined,
-							get: async () => {
+							list: () =>
+								(runtime?.getProviderRegistrations(scopedSessionId) ?? []).map(
+									(registration) => ({
+										providerId: pluginProviderStorageId(registration),
+										type: "plugin",
+									})
+								),
+							modify: async (_providerId, update) => {
+								credentialReads += 1;
+								const replacement = await update(
+									"fake-history-registration-credential"
+								);
+								return replacement ?? "fake-history-registration-credential";
+							},
+							read: async () => {
 								credentialReads += 1;
 								return "fake-history-registration-credential";
 							},
-							set: async () => undefined,
 						},
 						modelStore: {
 							get: async () => {

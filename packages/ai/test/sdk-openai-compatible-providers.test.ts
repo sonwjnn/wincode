@@ -9,6 +9,7 @@ import {
 	type Provider,
 	type ProviderModel,
 } from "@wincode/ai";
+import { createInMemoryCredentialStore } from "./support/credential-store.ts";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	new Response(
@@ -18,17 +19,9 @@ const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
 	);
 
 describe("public OpenAI-compatible SDK providers", () => {
-	test("DeepSeek baseline stays known offline and streams API-key chat without cache controls", async () => {
+	test("DeepSeek uses finalized collection headers without reapplying protocol defaults", async () => {
 		const credentialValues = new Map<string, unknown>();
-		const credentialStore = {
-			delete: (providerId: string) => {
-				credentialValues.delete(providerId);
-			},
-			get: (providerId: string) => credentialValues.get(providerId),
-			set: (providerId: string, credential: unknown) => {
-				credentialValues.set(providerId, credential);
-			},
-		};
+		const credentialStore = createInMemoryCredentialStore(credentialValues);
 		const requests: {
 			body: Record<string, unknown>;
 			headers: Headers;
@@ -103,6 +96,7 @@ describe("public OpenAI-compatible SDK providers", () => {
 		const events: ChatEvent[] = [];
 		for await (const event of sdk.chat({
 			cacheRetention: "long",
+			headers: { Authorization: "Bearer request-override" },
 			messages: [
 				{ content: [{ text: "Forecast?", type: "text" }], role: "user" },
 			],
@@ -118,6 +112,10 @@ describe("public OpenAI-compatible SDK providers", () => {
 					name: "weather",
 				},
 			],
+			transformHeaders: async () => ({
+				Authorization: "Bearer transformed-override",
+				"content-type": null,
+			}),
 		})) {
 			events.push(event);
 		}
@@ -125,8 +123,9 @@ describe("public OpenAI-compatible SDK providers", () => {
 		expect(requests).toHaveLength(1);
 		expect(requests[0]?.url).toBe("https://api.deepseek.com/chat/completions");
 		expect(requests[0]?.headers.get("authorization")).toBe(
-			"Bearer deepseek-test-key"
+			"Bearer transformed-override"
 		);
+		expect(requests[0]?.headers.has("content-type")).toBe(false);
 		expect(requests[0]?.body).toMatchObject({
 			model: "deepseek-reasoner",
 			stream: true,

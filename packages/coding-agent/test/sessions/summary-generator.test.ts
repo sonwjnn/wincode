@@ -13,6 +13,7 @@ import { createProviderSummaryGenerator } from "@/modules/sessions/compaction/su
 import type { SummaryGeneratorInput } from "@/modules/sessions/compaction/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { modelId, sessionMessageId, toolCallId } from "../support/identifiers";
+import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const selection: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -165,16 +166,11 @@ test("summary availability reads credentials only for the selected Provider", as
 		providerId: "unrelated-summary-provider",
 	};
 	const collection = createProviderCollection({
-		credentialStore: {
-			delete: () => undefined,
-			get: (providerId) => {
-				credentialReads.push(providerId);
-				return providerId === providerModel.providerId
-					? "fixture-key"
-					: undefined;
-			},
-			set: () => undefined,
-		},
+		credentialStore: createInMemoryCredentialStore(
+			new Map([[providerModel.providerId, "fixture-key"]]),
+			undefined,
+			(providerId) => credentialReads.push(providerId)
+		),
 	});
 	for (const model of [providerModel, unrelatedProviderModel]) {
 		collection.register({

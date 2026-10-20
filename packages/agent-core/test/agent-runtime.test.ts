@@ -393,10 +393,13 @@ test("SDK provider failures map safely and never complete an Agent Turn", async 
 			scenario.credentialStoreFailure
 				? {
 						delete: () => undefined,
-						get: () => {
+						list: () => [],
+						modify: () => {
 							throw new Error("private credential store detail");
 						},
-						set: () => undefined,
+						read: () => {
+							throw new Error("private credential store detail");
+						},
 					}
 				: undefined;
 		const providers = createProviderCollection(

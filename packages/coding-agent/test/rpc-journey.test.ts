@@ -25,6 +25,7 @@ import {
 	modelId,
 	sessionMessageId,
 } from "./support/identifiers";
+import { createInMemoryCredentialStore } from "./support/provider-stores";
 
 const workspace = await fs.mkdtemp(path.join("/tmp", "wincode-rpc-journey-"));
 const commandDirectory = path.join(workspace, ".wincode", "commands");
@@ -472,13 +473,20 @@ test("RPC runs an explicitly selected Plugin Provider and emits a secret-free au
 						allowedPluginProviderSources,
 						credentialStore: {
 							delete: () => undefined,
-							get: (providerId) => {
+							list: () => [{ providerId: providerStorageId, type: "api-key" }],
+							modify: async (providerId, update) => {
+								credentialReads.add(providerId);
+								const current =
+									providerId === providerStorageId ? fakeSecret : undefined;
+								const replacement = await update(current);
+								return replacement ?? current;
+							},
+							read: (providerId) => {
 								credentialReads.add(providerId);
 								return providerId === providerStorageId
 									? fakeSecret
 									: undefined;
 							},
-							set: () => undefined,
 						},
 					}
 				),
@@ -762,11 +770,9 @@ test("RPC uses the explicit selected Provider Model instead of a selectable Agen
 		sources: {
 			createProviderCollection: () => {
 				const collection = createProviderCollection({
-					credentialStore: {
-						delete: () => undefined,
-						get: () => "fake-rpc-selection-key",
-						set: () => undefined,
-					},
+					credentialStore: createInMemoryCredentialStore(
+						new Map([["openai", "fake-rpc-selection-key"]])
+					),
 					modelStore: { get: () => undefined, set: () => undefined },
 				});
 				collection.register({
@@ -1149,11 +1155,15 @@ test("RPC rejects a mismatched Host Plugin snapshot before persisting a built-in
 				const collection = createProviderCollection({
 					credentialStore: {
 						delete: () => undefined,
-						get: () => {
+						list: () => {
+							activity.credentialReads += 1;
+							return [];
+						},
+						modify: () => undefined,
+						read: () => {
 							activity.credentialReads += 1;
 							return "fake-rpc-key";
 						},
-						set: () => undefined,
 					},
 					modelStore: {
 						get: () => {

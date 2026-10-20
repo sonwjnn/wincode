@@ -5,6 +5,7 @@ import {
 	createProviderCollection,
 	type OpenAIProvider,
 } from "@wincode/ai";
+import { createInMemoryCredentialStore } from "./support/credential-store.ts";
 
 const openAIResponsePromptCache = {
 	explicit: { retentionTiers: ["short"] },
@@ -554,15 +555,20 @@ describe("public OpenAI SDK provider", () => {
 		});
 	});
 
-	test("OpenAI OAuth sets store false so the Codex endpoint accepts chat requests", async () => {
+	test("OpenAI OAuth defaults are finalized before collection overrides reach dispatch", async () => {
 		const requests: {
 			body: Record<string, unknown>;
+			headers: Headers;
 			url: string;
 		}[] = [];
 		const provider = createOpenAIProvider({
 			fetch: async (input, init) => {
 				const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-				requests.push({ body, url: String(input) });
+				requests.push({
+					body,
+					headers: new Headers(init?.headers),
+					url: String(input),
+				});
 				if (body.store !== false) {
 					return Response.json(
 						{ detail: "Store must be set to false" },
@@ -596,6 +602,13 @@ describe("public OpenAI SDK provider", () => {
 			messages: [{ content: [{ text: "hello", type: "text" }], role: "user" }],
 			modelId: "gpt-5.6",
 			providerId: "openai",
+			transformHeaders: (headers) => {
+				expect(headers["chatgpt-account-id"]).toBe("acct-test");
+				return {
+					"chatgpt-account-id": null,
+					authorization: "Bearer trusted-gateway-override",
+				};
+			},
 		})) {
 			events.push(event);
 		}
@@ -605,6 +618,13 @@ describe("public OpenAI SDK provider", () => {
 			"https://chatgpt.com/backend-api/codex/responses"
 		);
 		expect(requests[0]?.body.store).toBe(false);
+		expect(requests[0]?.headers.get("authorization")).toBe(
+			"Bearer trusted-gateway-override"
+		);
+		expect(requests[0]?.headers.has("chatgpt-account-id")).toBe(false);
+		expect(requests[0]?.headers.get("openai-beta")).toBe(
+			"responses=experimental"
+		);
 		expect(events.at(-1)).toMatchObject({
 			outcome: { status: "success" },
 			type: "terminal",
@@ -627,16 +647,12 @@ describe("public OpenAI SDK provider", () => {
 		let refreshCount = 0;
 		let loginOptions: { openBrowser?: boolean } | undefined;
 		const apiRequests: { headers: Headers; url: string }[] = [];
-		const credentialStore = {
-			delete: async (providerId: string) => {
-				storedCredentials.delete(providerId);
-			},
-			get: async (providerId: string) => storedCredentials.get(providerId),
-			set: async (providerId: string, credential: unknown) => {
-				storedCredentials.set(providerId, credential);
+		const credentialStore = createInMemoryCredentialStore(
+			storedCredentials,
+			(_providerId, credential) => {
 				writes.push(credential);
-			},
-		};
+			}
+		);
 		const provider = createOpenAIProvider({
 			fetch: async (input, init) => {
 				const url = String(input);
@@ -668,10 +684,11 @@ describe("public OpenAI SDK provider", () => {
 		});
 		const sdk = createProviderCollection({ credentialStore });
 		sdk.register(provider);
-		await sdk.setCredential(
-			"openai",
-			await provider.login({ openBrowser: false })
-		);
+		const login = await sdk.login("openai", {
+			methodId: "openai-browser",
+			options: { openBrowser: false },
+		});
+		expect(login).toEqual({ status: "saved" });
 		expect(loginOptions?.openBrowser).toBe(false);
 
 		const chat = async () => {
@@ -712,6 +729,84 @@ describe("public OpenAI SDK provider", () => {
 				outcome: { status: "success" },
 				type: "terminal",
 			});
+		}
+	});
+
+	test("caller cancellation does not discard a started OAuth refresh or rotation", async () => {
+		const abortController = new AbortController();
+		const refreshStarted = Promise.withResolvers<void>();
+		const finishRefresh = Promise.withResolvers<Response>();
+		const storedCredentials = new Map<string, unknown>();
+		let refreshSignal: AbortSignal | undefined;
+		const credentialStore = createInMemoryCredentialStore(storedCredentials);
+		const credential = {
+			accessToken: "expired-access",
+			accountId: "acct-test",
+			expiresAt: new Date(Date.now() - 60_000).toISOString(),
+			kind: "oauth-session",
+			refreshToken: "cancelled-refresh-secret",
+			updatedAt: new Date().toISOString(),
+		};
+		const provider = createOpenAIProvider({
+			fetch: async (_input, init) => {
+				refreshSignal = init?.signal ?? undefined;
+				refreshStarted.resolve();
+				return finishRefresh.promise;
+			},
+		});
+		const sdk = createProviderCollection({ credentialStore });
+		sdk.register(provider);
+		await sdk.setCredential("openai", credential);
+		const eventsPromise = (async () => {
+			const events: ChatEvent[] = [];
+			for await (const event of sdk.chat({
+				messages: [],
+				modelId: "gpt-5.6",
+				providerId: "openai",
+				signal: abortController.signal,
+			})) {
+				events.push(event);
+			}
+			return events;
+		})();
+
+		try {
+			await refreshStarted.promise;
+			expect(refreshSignal).toBeInstanceOf(AbortSignal);
+			expect(refreshSignal).not.toBe(abortController.signal);
+			abortController.abort(
+				new DOMException("refresh cancelled", "AbortError")
+			);
+			const events = await eventsPromise;
+			expect(events.at(-1)).toMatchObject({
+				outcome: { reason: "refresh cancelled", status: "aborted" },
+				type: "terminal",
+			});
+			expect(JSON.stringify(events)).not.toContain("cancelled-refresh-secret");
+
+			finishRefresh.resolve(
+				Response.json({
+					access_token: "rotated-access",
+					expires_in: 3600,
+					refresh_token: "rotated-refresh-secret",
+					token_type: "Bearer",
+				})
+			);
+			const auth = await sdk.getAuth("openai");
+			expect(auth).toMatchObject({
+				authorization: {
+					accessToken: "rotated-access",
+					accountId: "acct-test",
+					kind: "oauth",
+				},
+			});
+			expect(storedCredentials.get("openai")).toMatchObject({
+				accessToken: "rotated-access",
+				refreshToken: "rotated-refresh-secret",
+			});
+		} finally {
+			finishRefresh.resolve(new Response(null, { status: 500 }));
+			await sdk.close();
 		}
 	});
 

@@ -2,14 +2,18 @@ import { describe, expect, test } from "bun:test";
 import {
 	type ChatEvent,
 	type ChatMessage,
+	type ChatRequest,
+	type CredentialStore,
 	createProviderCollection,
 	type Provider,
 	type ProviderChatEvent,
+	type ProviderCollection,
 	ProviderError,
 	type ProviderModel,
 	parseProviderModelSelection,
 	providerModelSelectionSchema,
 } from "@wincode/ai";
+import { createInMemoryCredentialStore } from "./support/credential-store.ts";
 
 const demoProvider = (): Provider => ({
 	id: "demo-provider",
@@ -90,6 +94,179 @@ describe("public SDK provider collection", () => {
 			{ type: "usage", usage: { inputTokens: 4, outputTokens: 2 } },
 			{ type: "terminal", outcome: { status: "success" } },
 		]);
+	});
+
+	test("chat forwards one collection-finalized, case-insensitive header map to dispatch", async () => {
+		const sdk = createProviderCollection();
+		let headerPreparationCount = 0;
+		let transformCount = 0;
+		let dispatchCount = 0;
+		let dispatchedHeaders: Readonly<Record<string, string>> | undefined;
+		sdk.register({
+			...demoProvider(),
+			headers: {
+				"X-Order": "provider",
+				"x-provider-delete": null,
+				"x-transform-delete": "provider",
+			},
+			getChatHeaders: ({ authorization, model }) => {
+				headerPreparationCount++;
+				expect(authorization).toEqual({ token: "configured" });
+				expect(model.modelId).toBe("demo-model");
+				return {
+					Authorization: "Bearer provider-token",
+					"X-Order": "protocol",
+					"x-provider-delete": "protocol",
+					"x-model-delete": "authorization",
+					"x-request-delete": "model",
+				};
+			},
+			models: [
+				{
+					modelId: "demo-model",
+					protocolId: "demo-protocol",
+					providerId: "demo-provider",
+					headers: {
+						"X-Order": "model",
+						"x-model-delete": null,
+						"x-request-delete": "model",
+						"x-transform-delete": "model",
+						"x-model": "configured",
+						"X-Provider": "model",
+					},
+				},
+			],
+			async *streamChat(request, context) {
+				dispatchCount++;
+				dispatchedHeaders = context.headers;
+				expect(request).not.toHaveProperty("headers");
+				expect(request).not.toHaveProperty("transformHeaders");
+				yield { type: "finish" };
+			},
+		});
+		await sdk.setCredential("demo-provider", { token: "configured" });
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			headers: {
+				"X-Order": "request",
+				"x-request-delete": null,
+				"x-transform-delete": "request",
+				"x-request": "explicit",
+			},
+			messages: [],
+			modelId: "demo-model",
+			providerId: "demo-provider",
+			transformHeaders: async (headers) => {
+				transformCount++;
+				expect(new Headers(headers).get("authorization")).toBe(
+					"Bearer provider-token"
+				);
+				expect(new Headers(headers).get("x-model")).toBe("configured");
+				expect(new Headers(headers).has("x-provider-delete")).toBe(false);
+				expect(new Headers(headers).has("x-model-delete")).toBe(false);
+				expect(new Headers(headers).has("x-request-delete")).toBe(false);
+				return {
+					"X-Order": "transformed",
+					"x-order": "transform-final",
+					"x-transform-delete": null,
+					"x-transform-added": "once",
+				};
+			},
+		})) {
+			events.push(event);
+		}
+
+		expect(events.at(-1)).toEqual({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
+		const finalHeaders = new Headers(dispatchedHeaders);
+		expect(finalHeaders.get("authorization")).toBe("Bearer provider-token");
+		expect(finalHeaders.get("x-order")).toBe("transform-final");
+		expect(finalHeaders.get("x-request")).toBe("explicit");
+		expect(finalHeaders.get("x-transform-added")).toBe("once");
+		expect(finalHeaders.has("x-provider-delete")).toBe(false);
+		expect(finalHeaders.has("x-model-delete")).toBe(false);
+		expect(finalHeaders.has("x-request-delete")).toBe(false);
+		expect(finalHeaders.has("x-transform-delete")).toBe(false);
+		expect(
+			Object.keys(dispatchedHeaders ?? {}).map((name) => name.toLowerCase())
+		).toHaveLength(
+			new Set(
+				Object.keys(dispatchedHeaders ?? {}).map((name) => name.toLowerCase())
+			).size
+		);
+		expect(headerPreparationCount).toBe(1);
+		expect(transformCount).toBe(1);
+		expect(dispatchCount).toBe(1);
+	});
+
+	test("failed or cancelled header transforms prevent provider dispatch", async () => {
+		let dispatchCount = 0;
+		const createCollection = () => {
+			const sdk = createProviderCollection();
+			sdk.register({
+				...demoProvider(),
+				async *streamChat() {
+					dispatchCount++;
+					yield { type: "finish" };
+				},
+			});
+			return sdk;
+		};
+		const collectTerminal = async (
+			sdk: ProviderCollection,
+			transformHeaders: NonNullable<ChatRequest["transformHeaders"]>,
+			signal?: AbortSignal
+		): Promise<ChatEvent | undefined> => {
+			await sdk.setCredential("demo-provider", "configured");
+			const events: ChatEvent[] = [];
+			for await (const event of sdk.chat({
+				messages: [],
+				modelId: "demo-model",
+				providerId: "demo-provider",
+				signal,
+				transformHeaders,
+			})) {
+				events.push(event);
+			}
+			return events.at(-1);
+		};
+
+		const failed = createCollection();
+		await expect(
+			collectTerminal(failed, async () => {
+				throw new Error("gateway policy failed");
+			})
+		).resolves.toMatchObject({
+			outcome: {
+				failure: { code: "provider", message: "gateway policy failed" },
+				status: "failure",
+			},
+			type: "terminal",
+		});
+		await failed.close();
+
+		const cancelled = createCollection();
+		const controller = new AbortController();
+		await expect(
+			collectTerminal(
+				cancelled,
+				async () => {
+					controller.abort(
+						new DOMException("header work cancelled", "AbortError")
+					);
+					return { "x-too-late": "never-sent" };
+				},
+				controller.signal
+			)
+		).resolves.toMatchObject({
+			outcome: { reason: "header work cancelled", status: "aborted" },
+			type: "terminal",
+		});
+		await cancelled.close();
+		expect(dispatchCount).toBe(0);
 	});
 
 	test("ProviderCollection close awaits every Provider once even when cleanup fails", async () => {
@@ -497,19 +674,15 @@ describe("public SDK provider collection", () => {
 	});
 
 	test("app-owned credentials are refreshed serially and default credentials stay instance-local", async () => {
-		let storedCredential: unknown = "initial";
+		const credentials = new Map<string, unknown>();
 		const observedCredentials: unknown[] = [];
 		const storeWrites: unknown[] = [];
-		const credentialStore = {
-			delete: async () => {
-				storedCredential = undefined;
-			},
-			get: async () => storedCredential,
-			set: async (_providerId: string, credential: unknown) => {
-				storedCredential = credential;
+		const credentialStore = createInMemoryCredentialStore(
+			credentials,
+			(_providerId, credential) => {
 				storeWrites.push(credential);
-			},
-		};
+			}
+		);
 		const makeProvider = (): Provider => ({
 			id: "rotating-provider",
 			models: [
@@ -553,7 +726,7 @@ describe("public SDK provider collection", () => {
 
 		expect(observedCredentials).toEqual(["initial", "rotated"]);
 		expect(storeWrites).toEqual(["initial", "rotated"]);
-		expect(storedCredential).toBe("rotated");
+		expect(credentials.get("rotating-provider")).toBe("rotated");
 
 		const isolated = createProviderCollection();
 		isolated.register(makeProvider());
@@ -578,6 +751,56 @@ describe("public SDK provider collection", () => {
 				type: "terminal",
 			},
 		]);
+	});
+
+	test("cancellation stops waiting without discarding an in-flight OAuth rotation", async () => {
+		const credentials = new Map<string, unknown>([
+			["cancelled-rotation-provider", "initial"],
+		]);
+		const resolverStarted = Promise.withResolvers<void>();
+		const finishResolver = Promise.withResolvers<void>();
+		const modificationFinished = Promise.withResolvers<void>();
+		const baseStore = createInMemoryCredentialStore(credentials);
+		const credentialStore: CredentialStore = {
+			...baseStore,
+			modify: async (providerId, update, options) => {
+				try {
+					return await baseStore.modify(providerId, update, options);
+				} finally {
+					modificationFinished.resolve();
+				}
+			},
+		};
+		const sdk = createProviderCollection({ credentialStore });
+		sdk.register({
+			id: "cancelled-rotation-provider",
+			models: [
+				{
+					modelId: "cancelled-rotation-model",
+					protocolId: "cancelled-rotation-wire",
+					providerId: "cancelled-rotation-provider",
+				},
+			],
+			resolveAuthorization: async ({ credential }) => {
+				resolverStarted.resolve();
+				await finishResolver.promise;
+				return { authorization: credential, credential: "rotated" };
+			},
+			async *streamChat() {
+				yield { type: "finish" };
+			},
+		});
+		const controller = new AbortController();
+		const auth = sdk.getAuth("cancelled-rotation-provider", {
+			signal: controller.signal,
+		});
+
+		await resolverStarted.promise;
+		controller.abort(new DOMException("rotation cancelled", "AbortError"));
+		await expect(auth).rejects.toThrow("rotation cancelled");
+		finishResolver.resolve();
+		await modificationFinished.promise;
+		expect(credentials.get("cancelled-rotation-provider")).toBe("rotated");
 	});
 
 	test("providers sharing a protocol keep their models and credentials separate", async () => {
@@ -699,15 +922,7 @@ describe("public SDK provider collection", () => {
 		const credentials = new Map<string, unknown>([
 			["racing-provider", "configured"],
 		]);
-		const credentialStore = {
-			delete: async (providerId: string) => {
-				credentials.delete(providerId);
-			},
-			get: async (providerId: string) => credentials.get(providerId),
-			set: async (providerId: string, credential: unknown) => {
-				credentials.set(providerId, credential);
-			},
-		};
+		const credentialStore = createInMemoryCredentialStore(credentials);
 		const provider: Provider = {
 			id: "racing-provider",
 			models: [staticModel],
@@ -783,15 +998,7 @@ describe("public SDK provider collection", () => {
 			},
 		};
 		const credentials = new Map<string, unknown>();
-		const credentialStore = {
-			delete: async (providerId: string) => {
-				credentials.delete(providerId);
-			},
-			get: async (providerId: string) => credentials.get(providerId),
-			set: async (providerId: string, credential: unknown) => {
-				credentials.set(providerId, credential);
-			},
-		};
+		const credentialStore = createInMemoryCredentialStore(credentials);
 		const provider: Provider = {
 			id: "atomic-write-provider",
 			models: [staticModel],
@@ -845,15 +1052,7 @@ describe("public SDK provider collection", () => {
 				storedModels.set(providerId, models);
 			},
 		};
-		const credentialStore = {
-			delete: async (providerId: string) => {
-				storedCredentials.delete(providerId);
-			},
-			get: async (providerId: string) => storedCredentials.get(providerId),
-			set: async (providerId: string, credential: unknown) => {
-				storedCredentials.set(providerId, credential);
-			},
-		};
+		const credentialStore = createInMemoryCredentialStore(storedCredentials);
 		let discoveries = 0;
 		const provider = (): Provider => ({
 			id: "dynamic-provider",
@@ -998,6 +1197,197 @@ describe("public SDK provider collection", () => {
 		await collection.close();
 	});
 
+	test("ProviderCollection distinguishes configured, resolved, verified, and logged-out auth", async () => {
+		const providerId = "lifecycle-provider";
+		const model: ProviderModel = {
+			headers: { "X-Model-Header": "model-value" },
+			modelId: "lifecycle-model",
+			protocolId: "lifecycle-wire",
+			providerId,
+		};
+		const credential = { kind: "fixture-secret", token: "stored-token" };
+		const credentials = new Map<string, unknown>([[providerId, credential]]);
+		const credentialReads: string[] = [];
+		const credentialStore = createInMemoryCredentialStore(
+			credentials,
+			undefined,
+			(readProviderId) => credentialReads.push(readProviderId)
+		);
+		let verificationCalls = 0;
+		const sdk = createProviderCollection({ credentialStore });
+		sdk.register({
+			checkAuth: ({ credential: stored }) =>
+				typeof stored === "object" && stored !== null && "token" in stored,
+			id: providerId,
+			models: [model],
+			resolveAuthorization: ({ credential: stored }) => ({
+				authorization: { stored },
+				headers: { "X-Auth-Header": "auth-value" },
+			}),
+			verifyAuth: ({ authorization, model: selectedModel }) => {
+				verificationCalls += 1;
+				expect(authorization).toEqual({ stored: credential });
+				expect(selectedModel).toEqual(model);
+			},
+			async *streamChat() {
+				yield { type: "finish" };
+			},
+		});
+
+		try {
+			expect(await sdk.getConfiguredProviderIds()).toEqual([providerId]);
+			expect(credentialReads).toEqual([]);
+			expect(await sdk.checkAuth(providerId)).toEqual({
+				source: "stored-credential",
+				status: "configured",
+			});
+			expect(verificationCalls).toBe(0);
+			const auth = await sdk.getAuth(model);
+			expect(auth).toMatchObject({
+				authorization: { stored: credential },
+				headers: {
+					"X-Auth-Header": "auth-value",
+					"X-Model-Header": "model-value",
+				},
+				source: "stored-credential",
+			});
+			expect(verificationCalls).toBe(0);
+			expect(await sdk.verifyAuth(model)).toEqual({
+				source: "stored-credential",
+				status: "verified",
+			});
+			expect(verificationCalls).toBe(1);
+			expect(
+				await sdk.login(providerId, {
+					credential: { kind: "fixture-secret", token: "login-token" },
+					methodId: "fixture-login",
+				})
+			).toEqual({ status: "saved" });
+			const metadata = await credentialStore.list();
+			expect(metadata).toEqual([{ providerId, type: "fixture-secret" }]);
+			expect(JSON.stringify(metadata)).not.toContain("login-token");
+			expect(await sdk.logout(providerId)).toEqual({ status: "logged-out" });
+			expect(await sdk.checkAuth(providerId)).toEqual({ status: "missing" });
+		} finally {
+			await sdk.close();
+		}
+	});
+
+	test("credential lifecycle failures never expose stored secrets", async () => {
+		const secret = "must-not-appear-in-lifecycle-errors";
+		const providerId = "failing-lifecycle-provider";
+		const sdk = createProviderCollection({
+			credentialStore: {
+				delete: async () => {
+					throw new Error(`delete failed: ${secret}`);
+				},
+				list: () => [{ providerId, type: "api-key" }],
+				modify: async () => {
+					throw new Error(`modify failed: ${secret}`);
+				},
+				read: async () => {
+					throw new Error(`read failed: ${secret}`);
+				},
+			},
+		});
+		sdk.register({
+			id: providerId,
+			models: [{ modelId: "failing-model", protocolId: "fixture", providerId }],
+			resolveAuthorization: () => null,
+			async *streamChat() {
+				yield { type: "finish" };
+			},
+		});
+
+		try {
+			const results = [
+				await sdk.checkAuth(providerId),
+				await sdk.login(providerId, {
+					credential: secret,
+					methodId: "fixture-login",
+				}),
+				await sdk.logout(providerId),
+			];
+			const events: ChatEvent[] = [];
+			for await (const event of sdk.chat({
+				messages: [],
+				modelId: "failing-model",
+				providerId,
+			})) {
+				events.push(event);
+			}
+			expect(JSON.stringify([...results, ...events])).not.toContain(secret);
+			expect(results).toMatchObject([
+				{ failure: { code: "credential-store" }, status: "error" },
+				{ failure: { code: "credential-store" }, status: "error" },
+				{ failure: { code: "credential-store" }, status: "error" },
+			]);
+			expect(events.at(-1)).toMatchObject({
+				outcome: {
+					failure: { code: "credential-store" },
+					status: "failure",
+				},
+				type: "terminal",
+			});
+		} finally {
+			await sdk.close();
+		}
+	});
+
+	test("provider auth exception text cannot leak through getAuth or chat outcomes", async () => {
+		const secret = "provider-auth-exception-secret";
+		const providerId = "throwing-auth-provider";
+		const credentialStore = createInMemoryCredentialStore(
+			new Map([[providerId, { token: secret }]])
+		);
+		const sdk = createProviderCollection({ credentialStore });
+		sdk.register({
+			id: providerId,
+			models: [
+				{ modelId: "throwing-auth-model", protocolId: "fixture", providerId },
+			],
+			resolveAuthorization: () => {
+				throw new Error(`auth resolver failed: ${secret}`);
+			},
+			async *streamChat() {
+				yield { type: "finish" };
+			},
+		});
+		try {
+			const authError = await sdk
+				.getAuth(providerId)
+				.catch((error: unknown) => error);
+			const events: ChatEvent[] = [];
+			for await (const event of sdk.chat({
+				messages: [],
+				modelId: "throwing-auth-model",
+				providerId,
+			})) {
+				events.push(event);
+			}
+			expect(authError).toBeInstanceOf(ProviderError);
+			expect((authError as Error).message).toBe(
+				"Provider authentication operation failed."
+			);
+			expect(
+				String((authError as Error & { cause?: unknown }).cause)
+			).not.toContain(secret);
+			expect(JSON.stringify(events)).not.toContain(secret);
+			expect(events.at(-1)).toMatchObject({
+				outcome: {
+					failure: {
+						code: "provider",
+						message: "Provider authentication operation failed.",
+					},
+					status: "failure",
+				},
+				type: "terminal",
+			});
+		} finally {
+			await sdk.close();
+		}
+	});
+
 	test("known models and credential-filtered availability do not perform health checks", async () => {
 		const staticModel = {
 			modelId: "shared-model",
@@ -1042,12 +1432,24 @@ describe("public SDK provider collection", () => {
 			delete: async (providerId: string) => {
 				credentials.delete(providerId);
 			},
-			get: async (providerId: string) => {
-				credentialReads.push(providerId);
+			list: () =>
+				[...credentials].map(([providerId, credential]) => ({
+					providerId,
+					type: typeof credential === "string" ? "api-key" : "unknown",
+				})),
+			modify: async (
+				providerId: string,
+				update: (credential: unknown | undefined) => unknown | undefined
+			) => {
+				const replacement = await update(credentials.get(providerId));
+				if (replacement !== undefined) {
+					credentials.set(providerId, replacement);
+				}
 				return credentials.get(providerId);
 			},
-			set: async (providerId: string, credential: unknown) => {
-				credentials.set(providerId, credential);
+			read: async (providerId: string) => {
+				credentialReads.push(providerId);
+				return credentials.get(providerId);
 			},
 		};
 		let authorizationChecks = 0;
@@ -1082,20 +1484,11 @@ describe("public SDK provider collection", () => {
 			otherDiscoveredModel,
 		]);
 		expect(await sdk.getAvailable()).toEqual([staticModel, discoveredModel]);
-		expect(credentialReads).toEqual([
-			"configured-provider",
-			"unconfigured-provider",
-		]);
-		credentialReads.length = 0;
 		expect(await sdk.getAvailable("configured-provider")).toEqual([
 			staticModel,
 			discoveredModel,
 		]);
-		expect(credentialReads).toEqual(["configured-provider"]);
-		credentialReads.length = 0;
 		expect(await sdk.getAvailable("unconfigured-provider")).toEqual([]);
-		expect(credentialReads).toEqual(["unconfigured-provider"]);
-		credentialReads.length = 0;
 		expect(await sdk.getAvailable("missing-provider")).toEqual([]);
 		expect(credentialReads).toEqual([]);
 		expect(authorizationChecks).toBe(0);
@@ -1144,15 +1537,7 @@ describe("public SDK provider collection", () => {
 			},
 		};
 		const credentials = new Map<string, unknown>();
-		const credentialStore = {
-			delete: async (providerId: string) => {
-				credentials.delete(providerId);
-			},
-			get: async (providerId: string) => credentials.get(providerId),
-			set: async (providerId: string, credential: unknown) => {
-				credentials.set(providerId, credential);
-			},
-		};
+		const credentialStore = createInMemoryCredentialStore(credentials);
 		let discoveryMode: "malformed" | "network-failure" | "success" = "success";
 		let activeController: AbortController | undefined;
 		const provider: Provider = {

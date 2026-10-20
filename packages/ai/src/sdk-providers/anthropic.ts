@@ -7,6 +7,7 @@ import {
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
+	type ProviderChatHeaderContext,
 	type ProviderChatRequest,
 	ProviderError,
 	type ProviderModel,
@@ -135,6 +136,17 @@ const parseAuthorization = (value: unknown): AnthropicAuthorization => {
 	);
 };
 
+const anthropicChatHeadersFor = (
+	context: ProviderChatHeaderContext
+): Readonly<Record<string, string>> => {
+	const authorization = parseAuthorization(context.authorization);
+	return {
+		"anthropic-version": "2023-06-01",
+		"content-type": "application/json",
+		"x-api-key": authorization.apiKey,
+	};
+};
+
 const providerErrorFor = (error: unknown): ProviderError => {
 	if (error instanceof ProviderError) {
 		return error;
@@ -221,7 +233,7 @@ const wireRequestFor = (
 
 const streamWireRequest = async function* (
 	wireRequest: AnthropicWireRequest,
-	authorization: AnthropicAuthorization,
+	headers: Readonly<Record<string, string>>,
 	fetchImpl: AnthropicFetch,
 	signal?: AbortSignal
 ): AsyncIterable<ProviderChatEvent> {
@@ -229,11 +241,7 @@ const streamWireRequest = async function* (
 	try {
 		response = await fetchImpl(ANTHROPIC_MESSAGES_URL, {
 			body: wireRequest.body,
-			headers: {
-				"anthropic-version": "2023-06-01",
-				"content-type": "application/json",
-				"x-api-key": authorization.apiKey,
-			},
+			headers,
 			method: "POST",
 			signal,
 		});
@@ -270,7 +278,6 @@ const streamWireRequest = async function* (
 const streamWithCacheFallback = async function* (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
-	authorization: AnthropicAuthorization,
 	model: ProviderModel,
 	fetchImpl: AnthropicFetch,
 	cachedRequest: AnthropicWireRequest
@@ -279,7 +286,7 @@ const streamWithCacheFallback = async function* (
 	try {
 		for await (const event of streamWireRequest(
 			cachedRequest,
-			authorization,
+			context.headers,
 			fetchImpl,
 			context.signal
 		)) {
@@ -301,7 +308,7 @@ const streamWithCacheFallback = async function* (
 		const uncachedRequest = wireRequestFor(request, context, model, undefined);
 		yield* streamWireRequest(
 			uncachedRequest,
-			authorization,
+			context.headers,
 			fetchImpl,
 			context.signal
 		);
@@ -314,7 +321,6 @@ const streamAnthropic = (fetchImpl: AnthropicFetch) =>
 		context: ProviderChatContext
 	): AsyncIterable<ProviderChatEvent> {
 		try {
-			const authorization = parseAuthorization(context.authorization);
 			const model = context.model;
 			const cachedRequest = wireRequestFor(
 				request,
@@ -325,7 +331,6 @@ const streamAnthropic = (fetchImpl: AnthropicFetch) =>
 			yield* streamWithCacheFallback(
 				request,
 				context,
-				authorization,
 				model,
 				fetchImpl,
 				cachedRequest
@@ -366,6 +371,7 @@ export const createAnthropicProvider = (
 					}
 				: null;
 		},
+		getChatHeaders: anthropicChatHeadersFor,
 		streamChat: streamAnthropic(fetchImpl),
 	};
 };
