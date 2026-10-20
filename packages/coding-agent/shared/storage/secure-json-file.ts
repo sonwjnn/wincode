@@ -1,3 +1,4 @@
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isObjectLike, readUtf8File } from "@wincode/utils";
@@ -62,9 +63,46 @@ export const writeSecureJsonFile = async (
 	}
 	const directory = path.dirname(filePath);
 	await fs.mkdir(directory, { recursive: true, mode: DIRECTORY_MODE });
-	const directoryStats = await fs.lstat(directory);
-	if (!directoryStats.isDirectory()) {
+	let directoryStats = await fs.lstat(directory);
+	const userId = process.getuid?.();
+	if (
+		!directoryStats.isDirectory() ||
+		(userId !== undefined && directoryStats.uid !== userId)
+	) {
 		throw new Error(`Refusing insecure ${label} directory: ${directory}`);
+	}
+	if (directoryStats.mode % 0o100 !== 0) {
+		const originalStats = directoryStats;
+		if (userId === undefined) {
+			throw new Error(`Refusing insecure ${label} directory: ${directory}`);
+		}
+		// biome-ignore lint/suspicious/noBitwiseOperators: POSIX open flags form a bitmask.
+		const flags = nodeFs.constants.O_DIRECTORY | nodeFs.constants.O_NOFOLLOW;
+		const handle = await fs.open(directory, flags);
+		try {
+			const openedStats = await handle.stat();
+			if (
+				!openedStats.isDirectory() ||
+				openedStats.uid !== userId ||
+				openedStats.dev !== directoryStats.dev ||
+				openedStats.ino !== directoryStats.ino
+			) {
+				throw new Error(`Refusing insecure ${label} directory: ${directory}`);
+			}
+			await handle.chmod(DIRECTORY_MODE);
+		} finally {
+			await handle.close();
+		}
+		directoryStats = await fs.lstat(directory);
+		if (
+			!directoryStats.isDirectory() ||
+			directoryStats.uid !== userId ||
+			directoryStats.mode % 0o100 !== 0 ||
+			directoryStats.dev !== originalStats.dev ||
+			directoryStats.ino !== originalStats.ino
+		) {
+			throw new Error(`Refusing insecure ${label} directory: ${directory}`);
+		}
 	}
 	assertSecureMode(directoryStats.mode, directory, label);
 	const temporaryPath = `${filePath}.${crypto.randomUUID()}.tmp`;

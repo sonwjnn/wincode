@@ -2,7 +2,12 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { CredentialStore, ProviderModel } from "@wincode/ai";
+import {
+	type ChatEvent,
+	type CredentialStore,
+	createProviderCollection,
+	type ProviderModel,
+} from "@wincode/ai";
 import {
 	createProviderSdkCredentialStore,
 	createProviderSdkModelStore,
@@ -203,6 +208,118 @@ await store.modify("openai", (credential) => {
 		finishFirstUpdate.resolve();
 		child.kill();
 		await child.exited;
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("chat with an existing platform credential repairs a database-created 0755 directory without manual chmod", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-provider-directory-permissions-")
+	);
+	const userDataDir = path.join(root, "user");
+	await fs.mkdir(userDataDir, { mode: 0o755 });
+	await fs.chmod(userDataDir, 0o755);
+	const platformStore = {
+		get: async ({ name }: { name: string }) =>
+			name === "provider-sdk:openai"
+				? JSON.stringify({ apiKey: "synthetic-key", kind: "api-key" })
+				: null,
+	};
+	const sdk = createProviderCollection({
+		credentialStore: createProviderSdkCredentialStore({
+			platformStore,
+			userDataDir,
+		}),
+	});
+	sdk.register({
+		id: "openai",
+		models: [
+			{ modelId: "test-model", protocolId: "test", providerId: "openai" },
+		],
+		resolveAuthorization: ({ credential }) =>
+			credential === undefined ? null : { authorization: "synthetic-auth" },
+		async *streamChat() {
+			yield { delta: "hello", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	});
+	try {
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [],
+			modelId: "test-model",
+			providerId: "openai",
+		})) {
+			events.push(event);
+		}
+		expect(events.at(-1)).toEqual({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
+		expect((await fs.stat(userDataDir)).mode % 0o1000).toBe(0o700);
+		expect(
+			(
+				await fs.stat(
+					path.join(userDataDir, "provider-sdk-credential-index.json")
+				)
+			).mode % 0o1000
+		).toBe(0o600);
+	} finally {
+		await sdk.close();
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("chat refuses a symlinked credential directory instead of changing its target's permissions", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-provider-symlink-permissions-")
+	);
+	const target = path.join(root, "target");
+	const userDataDir = path.join(root, "user");
+	await fs.mkdir(target, { mode: 0o755 });
+	await fs.chmod(target, 0o755);
+	await fs.symlink(target, userDataDir, "dir");
+	const credentialStore = createProviderSdkCredentialStore({
+		platformStore: {
+			get: async () =>
+				JSON.stringify({ apiKey: "synthetic-key", kind: "api-key" }),
+		},
+		userDataDir,
+	});
+	const sdk = createProviderCollection({ credentialStore });
+	sdk.register({
+		id: "openai",
+		models: [
+			{ modelId: "test-model", protocolId: "test", providerId: "openai" },
+		],
+		resolveAuthorization: ({ credential }) =>
+			credential === undefined ? null : { authorization: "synthetic-auth" },
+		async *streamChat() {
+			yield { delta: "hello", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	});
+	try {
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [],
+			modelId: "test-model",
+			providerId: "openai",
+		})) {
+			events.push(event);
+		}
+		expect(events.at(-1)).toMatchObject({
+			outcome: { failure: { code: "credential-store" }, status: "failure" },
+			type: "terminal",
+		});
+		expect((await fs.stat(target)).mode % 0o1000).toBe(0o755);
+		expect(
+			await Bun.file(
+				path.join(target, "provider-sdk-credential-index.json")
+			).exists()
+		).toBe(false);
+	} finally {
+		await sdk.close();
 		await fs.rm(root, { force: true, recursive: true });
 	}
 });
