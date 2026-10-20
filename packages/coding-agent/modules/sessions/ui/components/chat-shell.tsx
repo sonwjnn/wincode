@@ -18,6 +18,10 @@ import type { InteractiveProviderController } from "@/modules/providers/interact
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
+	AUTO_COMPACT_SETTING,
+	useSettingRegistryValue,
+} from "@/modules/settings";
+import {
 	useKeyboardLayer,
 	useToggleShortcut,
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -191,6 +195,9 @@ export function ChatShell({
 	const [scrollRequest, setScrollRequest] = useState(0);
 	const { agent, model } = usePromptConfig();
 	const { colors } = useTheme();
+	const autoCompactSetting = useSettingRegistryValue(AUTO_COMPACT_SETTING);
+	const autoCompact =
+		autoCompactSetting.status === "ready" && autoCompactSetting.value;
 	const subscribeProviderComposition = useCallback(
 		(listener: () => void) =>
 			providerController?.subscribeComposition?.(listener) ?? (() => undefined),
@@ -422,6 +429,7 @@ export function ChatShell({
 									footerMessage={footerMessages.get(turn.id)}
 									messages={turn.messages}
 									onRetry={canRetryTurn ? onRetry : undefined}
+									streaming={isBusy && turn.id === turns.at(-1)?.id}
 								/>
 							</box>
 						);
@@ -435,8 +443,7 @@ export function ChatShell({
 				backgroundColor={colors.background}
 				flexDirection="column"
 				flexShrink={0}
-				gap={1}
-				paddingY={1}
+				paddingBottom={1}
 				width="100%"
 			>
 				<WaitingMessageStrip queued={queuedSubmissions} />
@@ -457,22 +464,8 @@ export function ChatShell({
 						sessionPromptHistory={promptHistory}
 					/>
 				</box>
-				<box
-					flexDirection="row"
-					flexShrink={0}
-					flexWrap="wrap"
-					gap={2}
-					justifyContent="space-between"
-					paddingLeft={1}
-					width="100%"
-				>
-					<box
-						alignItems="center"
-						flexDirection="row"
-						flexGrow={1}
-						flexShrink={1}
-						gap={2}
-					>
+				<box flexDirection="column" flexShrink={0} paddingLeft={1} width="100%">
+					<box flexDirection="row" width="100%">
 						{isBusy ? (
 							<ActivityFooter
 								agent={agent}
@@ -484,7 +477,11 @@ export function ChatShell({
 						)}
 					</box>
 
-					{usage ? <SessionUsageBar summary={usage} /> : null}
+					{usage ? (
+						<box flexDirection="row" justifyContent="flex-start" width="100%">
+							<SessionUsageBar autoCompact={autoCompact} summary={usage} />
+						</box>
+					) : null}
 				</box>
 			</box>
 		</box>

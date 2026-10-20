@@ -40,8 +40,8 @@
     "@deepseek-ai/node-addon-system": "0.1.2",
     "@lickle/lock": "0.0.1",
 
-    "@opentui/core": "0.4.5",
-    "@opentui/react": "0.4.5",
+    "@opentui/core": "0.5.14",
+    "@opentui/react": "0.5.14",
     "@tanstack/react-router": "catalog:",
     "@wincode/agent-core": "workspace:*",
     "@wincode/ai": "workspace:*",

@@ -16,13 +16,18 @@ export function ChatMessage({
 	footerMessage,
 	messages,
 	onRetry,
+	streaming = false,
 }: {
 	footerMessage?: SessionMessage;
 	messages: SessionMessage[];
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
+	streaming?: boolean;
 }) {
 	const { colors } = useTheme();
 	const retryMessageId = resolveRetryMessageId(messages);
+	const latestAssistant = messages.findLast(
+		(message) => message.role === "assistant"
+	);
 	const handleRetry = () => {
 		if (isUndefined(retryMessageId) || isUndefined(onRetry)) {
 			return;
@@ -37,7 +42,6 @@ export function ChatMessage({
 					if (message.role === "user") {
 						return (
 							<UserMessage
-								agent={message.metadata?.agent ?? buildAgent.id}
 								appliedSkill={getAppliedSkill(message.metadata)}
 								key={message.id}
 								parts={message.parts}
@@ -51,6 +55,7 @@ export function ChatMessage({
 							agent={message.metadata?.agent ?? buildAgent.id}
 							key={message.id}
 							parts={message.parts}
+							streaming={streaming && message === latestAssistant}
 						/>
 					);
 				})}

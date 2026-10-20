@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
-	getTreeSitterClientForTests,
+	getMarkdownTreeSitterClient,
 	resolveSyntaxStyle,
 	setTreeSitterClientForTests,
 } from "./syntax-style";
@@ -22,21 +22,22 @@ const isMarkdownSafeCharacter = (code: number): boolean =>
  * CSI introducer 0x9b) are all neutralized so a hostile or corrupted text
  * part can never inject escape sequences into the parse.
  */
-const stripMarkdownControlCharacters = (value: string): string =>
+export const stripMarkdownControlCharacters = (value: string): string =>
 	Array.from(value, (character) =>
 		isMarkdownSafeCharacter(character.charCodeAt(0)) ? character : " "
 	).join("");
 
 /**
- * Renders message content through OpenTUI Markdown after sanitizing terminal
- * controls. Thinking content keeps Markdown formatting while italicizing the
- * complete block; user and assistant content use the standard theme.
+ * OpenTUI retains stable top-level blocks while only the trailing block grows.
+ * The upstream highlighter bounds pending work per block during streaming.
  */
 export const MarkdownContent = memo(function MarkdownContent({
 	text,
+	streaming = true,
 	variant = "standard",
 }: {
 	text: string;
+	streaming?: boolean;
 	variant?: "standard" | "thinking";
 }) {
 	const { colors } = useTheme();
@@ -51,9 +52,9 @@ export const MarkdownContent = memo(function MarkdownContent({
 			conceal
 			content={sanitized}
 			internalBlockMode="top-level"
-			streaming
+			streaming={streaming}
 			syntaxStyle={syntaxStyle}
-			treeSitterClient={getTreeSitterClientForTests()}
+			treeSitterClient={getMarkdownTreeSitterClient()}
 			width="100%"
 		/>
 	);
@@ -61,16 +62,40 @@ export const MarkdownContent = memo(function MarkdownContent({
 
 export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 	text,
+	streaming = false,
 	variant = "standard",
 }: {
 	text: string;
+	streaming?: boolean;
 	variant?: "standard" | "thinking";
 }) {
 	const { colors } = useTheme();
+	const syntaxStyle = useMemo(
+		() => resolveSyntaxStyle(colors, variant),
+		[colors, variant]
+	);
+	const content = useMemo(() => {
+		const sanitized = stripMarkdownControlCharacters(text);
+		return variant === "thinking" ? sanitized : sanitized.trim();
+	}, [text, variant]);
+
+	if (!content) {
+		return null;
+	}
 
 	return (
-		<box backgroundColor={colors.background} paddingX={3} width="100%">
-			<MarkdownContent text={text} variant={variant} />
+		<box flexShrink={0} paddingLeft={3}>
+			<markdown
+				bg={colors.background}
+				conceal
+				content={content}
+				fg={variant === "thinking" ? colors.thinkingText : colors.text}
+				internalBlockMode="top-level"
+				streaming={streaming}
+				syntaxStyle={syntaxStyle}
+				tableOptions={{ style: "grid", cellPaddingX: 1 }}
+				treeSitterClient={getMarkdownTreeSitterClient()}
+			/>
 		</box>
 	);
 });

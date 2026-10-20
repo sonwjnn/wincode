@@ -47,6 +47,7 @@ import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { Spinner } from "@/shared/ui/spinner";
 import { EditDiffBlock } from "./edit-diff-block";
 import { MarkdownMessagePart } from "./markdown-message-part";
+import { ReasoningMessagePart } from "./reasoning-message-part";
 import { isRenderableWritePart, WriteBlock } from "./write-block";
 
 type MessagePart = SessionMessage["parts"][number];
@@ -273,6 +274,14 @@ const getContentPartKey = (
 	part: Extract<MessagePart, { type: "reasoning" | "text" }>,
 	index: number
 ): string => `${part.type}-${index}`;
+
+const getReasoningText = (parts: readonly MessagePart[]): string =>
+	parts.reduce((text, part) => {
+		if (part.type !== "reasoning" || part.text.trim().length === 0) {
+			return text;
+		}
+		return text.length === 0 ? part.text : `${text}\n\n${part.text}`;
+	}, "");
 
 const groupConsecutiveParts = (parts: readonly MessagePart[]): PartGroup[] => {
 	const groups: PartGroup[] = [];
@@ -644,10 +653,12 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 export function BotMessageContent({
 	agent = buildAgent.id,
 	parts,
+	streaming = false,
 }: {
 	/** The agent that produced the message; drives the running-tool spinner color. */
 	agent?: AgentId;
 	parts: SessionMessage["parts"];
+	streaming?: boolean;
 }) {
 	const { colors } = useTheme();
 	const hideThinking = useHideThinking();
@@ -682,19 +693,9 @@ export function BotMessageContent({
 									</text>
 								</box>
 							) : (
-								<MarkdownMessagePart
-									text={group.parts.reduce((text, part) => {
-										if (
-											part.type !== "reasoning" ||
-											part.text.trim().length === 0
-										) {
-											return text;
-										}
-										return text.length === 0
-											? part.text
-											: `${text}\n\n${part.text}`;
-									}, "")}
-									variant="thinking"
+								<ReasoningMessagePart
+									streaming={streaming}
+									text={getReasoningText(group.parts)}
 								/>
 							)}
 						</box>
@@ -718,6 +719,7 @@ export function BotMessageContent({
 								return (
 									<MarkdownMessagePart
 										key={getContentPartKey(part, index)}
+										streaming={streaming}
 										text={part.text}
 									/>
 								);

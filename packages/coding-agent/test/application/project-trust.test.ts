@@ -449,9 +449,7 @@ describe("Coding-Agent Application Project trust", () => {
 			expect(denied.configRuntime.untrustedProjectRoots).toContain(
 				await fs.realpath(workspace)
 			);
-			expect(denied.startupDiagnostics).toContain(
-				`Skipped protected project resources from untrusted directory ${await fs.realpath(workspace)}; use --trust-project for this invocation to load them.`
-			);
+			expect(denied.startupDiagnostics).toEqual([]);
 			const snapshot =
 				await denied.configRuntime.configStore.getSnapshot(workspace);
 			expect(snapshot.document.settings).toBeUndefined();

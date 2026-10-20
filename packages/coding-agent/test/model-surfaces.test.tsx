@@ -527,12 +527,18 @@ describe("session usage bar", () => {
 	test("shows used context within the limit and marks estimated cost", async () => {
 		const setup = await renderSurfaces(() => (
 			<SessionUsageBar
-				summary={summary({ contextLimit: 1_000_000, costUsd: 1.2345 })}
+				summary={summary({
+					contextLimit: 1_000_000,
+					contextPercent: 42,
+					contextTokens: 420_000,
+					costUsd: 1.2345,
+				})}
 			/>
 		));
 
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("42%(84K/1.0M)");
+		expect(frame).toContain("42.0%/1m");
+		// The tilde is the honesty marker: these are published rates, not a bill.
 		expect(frame).toContain("~$1.23");
 	});
 
@@ -566,7 +572,7 @@ describe("session usage bar", () => {
 		));
 
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("42%(84K/200K)");
+		expect(frame).toContain("42.0%/200k");
 		expect(frame).toContain("cache warming scheduled");
 		expect(frame).toContain("~$1.25");
 	});
@@ -583,9 +589,27 @@ describe("session usage bar", () => {
 		));
 
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("29%(79K/272K)");
+		expect(frame).toContain("29.0%/272k");
 		expect(frame).not.toContain("cache read");
 		expect(frame).toContain("cost unknown");
+	});
+
+	test("marks context as auto only when auto-compact is enabled", async () => {
+		const context = summary({
+			contextLimit: 272_000,
+			contextPercent: 94,
+			contextTokens: 255_952,
+		});
+		const manualSetup = await renderSurfaces(() => (
+			<SessionUsageBar summary={context} />
+		));
+		const autoSetup = await renderSurfaces(() => (
+			<SessionUsageBar autoCompact summary={context} />
+		));
+
+		expect(manualSetup.captureCharFrame()).toContain("94.1%/272k");
+		expect(manualSetup.captureCharFrame()).not.toContain("(auto)");
+		expect(autoSetup.captureCharFrame()).toContain("94.1%/272k (auto)");
 	});
 
 	test("qualifies totals that exclude usage with unknown rates", async () => {

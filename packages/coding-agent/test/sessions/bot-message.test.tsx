@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { TextAttributes } from "@opentui/core";
 import { MockTreeSitterClient } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
@@ -883,8 +882,7 @@ describe("BotMessageContent", () => {
 		expect(frame).toContain("The model is still thinking.");
 	});
 
-	test("renders thinking as italic Markdown without a Thinking prefix", async () => {
-		const previousTreeSitterClient = setMarkdownTreeSitterClientForTests(null);
+	test("renders reasoning with the Markdown filetype and no Thinking prefix", async () => {
 		const setup = await testRender(
 			<ThemeProvider>
 				<KeyboardLayerProvider>
@@ -895,6 +893,7 @@ describe("BotMessageContent", () => {
 								type: "reasoning",
 							},
 						]}
+						streaming
 					/>
 				</KeyboardLayerProvider>
 			</ThemeProvider>,
@@ -904,29 +903,11 @@ describe("BotMessageContent", () => {
 		try {
 			await flushUi(setup, 3);
 			const frame = setup.captureCharFrame();
-			const bodySpans = setup
-				.captureSpans()
-				.lines.flatMap((line) => line.spans)
-				.filter(({ text }) =>
-					["Evaluating", "Checking", "asset"].some((word) =>
-						text.includes(word)
-					)
-				);
-
-			expect(frame).toContain("Evaluating alias management");
-			expect(frame).not.toContain("**");
-			expect(frame).not.toContain("`");
+			expect(frame).toContain("**Evaluating alias management**");
+			expect(frame).toContain("Checking the `asset` alias.");
 			expect(frame).not.toContain("Thinking:");
-			expect(bodySpans.length).toBeGreaterThan(0);
-			expect(
-				bodySpans.every(
-					// biome-ignore lint/suspicious/noBitwiseOperators: OpenTUI attributes are bit flags.
-					({ attributes }) => (attributes & TextAttributes.ITALIC) !== 0
-				)
-			).toBe(true);
 		} finally {
 			act(() => setup.renderer.destroy());
-			setMarkdownTreeSitterClientForTests(previousTreeSitterClient);
 		}
 	});
 

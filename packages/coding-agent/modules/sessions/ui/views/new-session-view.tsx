@@ -1,4 +1,3 @@
-import { TextAttributes } from "@opentui/core";
 import { useRouter } from "@tanstack/react-router";
 import { createAgentTurnId } from "@wincode/agent-core";
 import type {
@@ -16,7 +15,6 @@ import {
 } from "@/modules/agents";
 import { resolveFileMentionParts } from "@/modules/file-mentions";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import { PluginStatusIndicator } from "@/modules/plugins/ui/plugin-status-indicator";
 import { ProjectTrustNotice } from "@/modules/project-trust/ui/project-trust-notice";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import {
@@ -44,7 +42,6 @@ import {
 } from "@/modules/sessions/provider-collection";
 import { useSettingsHubDialog } from "@/modules/settings";
 import { createSkillSnapshot } from "@/modules/skills";
-import { APP_VERSION } from "@/shared/app-info";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import {
@@ -589,65 +586,42 @@ export function NewSessionView({
 			<box
 				alignItems="center"
 				flexGrow={1}
-				gap={2}
 				justifyContent="center"
-				position="relative"
 				width="100%"
 			>
 				<AsciiArt />
-				<box
-					flexDirection="column"
-					gap={1}
-					maxWidth={78}
-					paddingX={2}
-					width="100%"
-				>
-					{error === null ? null : <text fg={colors.error}>{error}</text>}
-					<ChatTextArea
-						disabled={isCreatingSession}
-						draftKey={NEW_SESSION_DRAFT_KEY}
-						id={NEW_SESSION_COMPOSER_ID}
-						onCompact={() => {
-							show({
-								message: "Compaction is unavailable without an active session.",
-								variant: "error",
-							});
-							return false;
-						}}
-						onOpenSettings={openSettings}
-						onSubmit={handleSubmit}
-						providerController={providerController}
-						unavailableCommandCapabilities={
-							HOME_UNAVAILABLE_COMMAND_CAPABILITIES
-						}
-					/>
-					<box
-						flexDirection="row"
-						flexShrink={0}
-						gap={2}
-						justifyContent="space-between"
-						width="100%"
-					>
-						<WorkspacePath />
-					</box>
-					<ProjectTrustNotice />
-				</box>
 			</box>
-
 			<box
-				alignItems="center"
-				flexDirection="row"
+				backgroundColor={colors.background}
+				flexDirection="column"
 				flexShrink={0}
-				gap={2}
-				justifyContent="space-between"
 				paddingBottom={1}
 				paddingX={2}
 				width="100%"
 			>
-				<PluginStatusIndicator />
-				<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-					{`v${APP_VERSION}`}
-				</text>
+				{error === null ? null : <text fg={colors.error}>{error}</text>}
+				<ChatTextArea
+					disabled={isCreatingSession}
+					draftKey={NEW_SESSION_DRAFT_KEY}
+					id={NEW_SESSION_COMPOSER_ID}
+					onCompact={() => {
+						show({
+							message: "Compaction is unavailable without an active session.",
+							variant: "error",
+						});
+						return false;
+					}}
+					onOpenSettings={openSettings}
+					onSubmit={handleSubmit}
+					providerController={providerController}
+					unavailableCommandCapabilities={HOME_UNAVAILABLE_COMMAND_CAPABILITIES}
+				/>
+				<box flexDirection="column" flexShrink={0} paddingLeft={1} width="100%">
+					<box flexDirection="row" width="100%">
+						<WorkspacePath />
+					</box>
+					<ProjectTrustNotice />
+				</box>
 			</box>
 		</box>
 	);

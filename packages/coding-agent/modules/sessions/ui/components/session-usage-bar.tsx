@@ -4,34 +4,47 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionUsageSummary } from "../../usage/session-usage";
 
 const CONTEXT_WARNING_PERCENT = 80;
-const CONTEXT_LIMIT_FORMAT_OPTIONS = { preserveTrailingZero: true };
 
-export function SessionUsageBar({ summary }: { summary: SessionUsageSummary }) {
+type SessionUsageBarProps = {
+	autoCompact?: boolean;
+	summary: SessionUsageSummary;
+};
+
+export function SessionUsageBar({
+	autoCompact = false,
+	summary,
+}: SessionUsageBarProps) {
 	const { colors } = useTheme();
 	const tokensText = formatModelTokenCount(summary.contextTokens);
+	const contextPercent =
+		isNull(summary.contextPercent) ||
+		isNull(summary.contextLimit) ||
+		summary.contextLimit <= 0
+			? null
+			: Math.min(
+					100,
+					Math.max(0, (summary.contextTokens / summary.contextLimit) * 100)
+				);
 	const percentColor =
-		!isNull(summary.contextPercent) &&
-		summary.contextPercent >= CONTEXT_WARNING_PERCENT
+		contextPercent !== null && contextPercent >= CONTEXT_WARNING_PERCENT
 			? colors.error
 			: colors.textMuted;
+	const contextText =
+		contextPercent === null || isNull(summary.contextLimit)
+			? tokensText
+			: `${contextPercent.toFixed(1)}%/${formatModelTokenCount(
+					summary.contextLimit
+				).toLowerCase()}`;
 
 	return (
 		<box flexDirection="row" flexShrink={0}>
 			<text fg={colors.textMuted}>
-				{!(isNull(summary.contextPercent) || isNull(summary.contextLimit)) &&
-				summary.contextLimit > 0 ? (
-					<>
-						<span fg={percentColor}>{summary.contextPercent}%</span>
-						<span>
-							{`(${tokensText}/${formatModelTokenCount(
-								summary.contextLimit,
-								CONTEXT_LIMIT_FORMAT_OPTIONS
-							)})`}
-						</span>
-					</>
+				{contextPercent === null ? (
+					<span>{contextText}</span>
 				) : (
-					<span>{tokensText}</span>
+					<span fg={percentColor}>{contextText}</span>
 				)}
+				{autoCompact ? <span> (auto)</span> : null}
 				{summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0 ? (
 					<span>{`  cache read ${formatModelTokenCount(
 						summary.cacheReadTokens

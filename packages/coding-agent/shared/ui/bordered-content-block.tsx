@@ -5,7 +5,7 @@ import type { ThemeColors } from "@/shared/providers/theme/themes";
 
 type BorderedContentBlockProps = {
 	blockRef?: Ref<BoxRenderable>;
-	border?: Array<"left" | "right">;
+	border?: Array<"bottom" | "left" | "right" | "top">;
 	borderColor?: string;
 	children: ReactNode;
 	colors: ThemeColors;
