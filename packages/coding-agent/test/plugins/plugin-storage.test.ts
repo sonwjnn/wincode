@@ -17,7 +17,7 @@ test("Plugins own durable data in userDataDir without a host-managed secrets API
 	const statePath = path.join(pluginDataDir, "state.txt");
 	await fs.mkdir(workspace, { recursive: true });
 	await fs.mkdir(pluginDataDir, { recursive: true });
-	await fs.writeFile(statePath, "seeded-plugin-state");
+	await Bun.write(statePath, "seeded-plugin-state");
 
 	const hostSecretsApiPresent: boolean[] = [];
 	const receivedUserDataDirs: string[] = [];
@@ -32,8 +32,8 @@ test("Plugins own durable data in userDataDir without a host-managed secrets API
 			"storage_plugin",
 			"state.txt"
 		);
-		observedPluginStates.push(await fs.readFile(pluginStatePath, "utf8"));
-		await fs.writeFile(pluginStatePath, "plugin-owned-state");
+		observedPluginStates.push(await Bun.file(pluginStatePath).text());
+		await Bun.write(pluginStatePath, "plugin-owned-state");
 	};
 	const load = () =>
 		loadPlugins({
