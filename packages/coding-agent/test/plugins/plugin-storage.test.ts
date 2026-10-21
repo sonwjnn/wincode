@@ -2,36 +2,42 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { PluginFactory } from "@wincode/coding-agent";
 import { loadPlugins } from "@/modules/plugins/loader";
-import type { PluginFactory } from "@/modules/plugins/public";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { createConfigStore } from "@/shared/config/config-store";
 
-test("Plugin definitions expose owner-scoped secret storage", async () => {
+test("Plugins own durable data in userDataDir without a host-managed secrets API", async () => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-plugin-owned-storage-")
 	);
 	const workspace = path.join(root, "workspace");
 	const userDataDir = path.join(root, "user-data");
+	const pluginDataDir = path.join(userDataDir, "plugins", "storage_plugin");
+	const statePath = path.join(pluginDataDir, "state.txt");
 	await fs.mkdir(workspace, { recursive: true });
-	let firstPluginSecret: string | undefined;
-	let secondPluginSecret: string | undefined;
-	const firstPlugin: PluginFactory = async (api) => {
-		const definition = api.definePlugin({ id: "first_plugin" });
-		await definition.secrets.set("oauth.token", "first-plugin-secret");
-		firstPluginSecret = await definition.secrets.get("oauth.token");
+	await fs.mkdir(pluginDataDir, { recursive: true });
+	await fs.writeFile(statePath, "seeded-plugin-state");
+
+	const hostSecretsApiPresent: boolean[] = [];
+	const receivedUserDataDirs: string[] = [];
+	const observedPluginStates: string[] = [];
+	const plugin: PluginFactory = async (api, context) => {
+		const definition = api.definePlugin({ id: "storage_plugin" });
+		hostSecretsApiPresent.push("secrets" in definition);
+		receivedUserDataDirs.push(context.userDataDir);
+		const pluginStatePath = path.join(
+			context.userDataDir,
+			"plugins",
+			"storage_plugin",
+			"state.txt"
+		);
+		observedPluginStates.push(await fs.readFile(pluginStatePath, "utf8"));
+		await fs.writeFile(pluginStatePath, "plugin-owned-state");
 	};
-	const secondPlugin: PluginFactory = async (api) => {
-		const definition = api.definePlugin({ id: "second_plugin" });
-		secondPluginSecret = await definition.secrets.get("oauth.token");
-	};
-	let runtime: PluginRuntime | undefined;
-	try {
-		runtime = await loadPlugins({
-			bundledPlugins: [
-				{ factory: firstPlugin, id: "first_plugin" },
-				{ factory: secondPlugin, id: "second_plugin" },
-			],
+	const load = () =>
+		loadPlugins({
+			bundledPlugins: [{ factory: plugin, id: "storage_plugin" }],
 			cliPaths: [],
 			config: {
 				configStore: createConfigStore({ homeRoot: root }),
@@ -41,8 +47,19 @@ test("Plugin definitions expose owner-scoped secret storage", async () => {
 			},
 			userDataDir,
 		});
-		expect(firstPluginSecret).toBe("first-plugin-secret");
-		expect(secondPluginSecret).toBeUndefined();
+
+	let runtime: PluginRuntime | undefined;
+	try {
+		runtime = await load();
+		await runtime.shutdown();
+		runtime = await load();
+
+		expect(hostSecretsApiPresent).toEqual([false, false]);
+		expect(receivedUserDataDirs).toEqual([userDataDir, userDataDir]);
+		expect(observedPluginStates).toEqual([
+			"seeded-plugin-state",
+			"plugin-owned-state",
+		]);
 	} finally {
 		await runtime?.shutdown();
 		await fs.rm(root, { recursive: true, force: true });
