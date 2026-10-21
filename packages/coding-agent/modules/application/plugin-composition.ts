@@ -1,3 +1,5 @@
+import { createMcpPluginFactory } from "@wincode/mcp/plugin";
+import { createMcpSecretStore } from "@/modules/mcp/mcp-secret-store";
 import type { PluginPackageReference } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
@@ -9,7 +11,13 @@ import { openSessionServices } from "@/modules/sessions/host/session-services";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 
 const DISTRIBUTED_PLUGINS: readonly PluginPackageReference[] = Object.freeze([
-	{ id: "mcp", specifier: "@wincode/mcp/plugin" },
+	{
+		factory: createMcpPluginFactory({
+			createSecretStore: createMcpSecretStore,
+		}),
+		id: "mcp",
+		specifier: "@wincode/mcp/plugin",
+	},
 	{ id: "subagents", specifier: "@wincode/subagents/plugin" },
 ]);
 
@@ -18,7 +26,7 @@ export type ApplicationPluginComposition = Readonly<{
 	turnToolResolver: TurnToolResolver;
 }>;
 
-/** Selects the distribution's default Plugin packages without importing them. */
+/** Selects the distribution's default Plugins and wires their host-owned capabilities. */
 export const createApplicationPluginComposition =
 	(): ApplicationPluginComposition => ({
 		distributionPlugins: DISTRIBUTED_PLUGINS,

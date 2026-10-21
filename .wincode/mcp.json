@@ -1,0 +1,54 @@
+{
+  "mcpServers": {
+    "local-echo-test": {
+      "type": "stdio",
+      "command": "bun",
+      "args": ["run", "packages/coding-agent/test/support/mcp-stdio-server.ts"],
+      "cwd": ".",
+      "enabled": false,
+      "description": "Local stdio echo MCP server for testing.",
+      "exposure": "direct"
+    },
+    "tavily": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "tavily-mcp@latest"],
+      "env": {
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}"
+      },
+      "enabled": true,
+      "description": "Tavily search MCP server.",
+      "exposure": "direct"
+    },
+    "exa": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "exa-mcp-server@latest"],
+      "env": {
+        "EXA_API_KEY": "${EXA_API_KEY}"
+      },
+      "enabled": true,
+      "description": "Exa search MCP server.",
+      "exposure": "direct"
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "enabled": true,
+      "description": "Browser automation MCP server.",
+      "exposure": "direct",
+      "toolExposure": {
+        "browser_run_code_unsafe": "hidden"
+      }
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp/oauth",
+      "auth": "oauth",
+      "enabled": true,
+      "description": "Context7 documentation search MCP server.",
+      "exposure": "direct"
+    }
+  }
+}

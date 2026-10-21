@@ -9,6 +9,7 @@ import {
 	type InteractiveProviderController,
 } from "@/modules/providers/interactive-provider-controller";
 import { STALE_PROVIDER_MODEL_SELECTION_MESSAGE } from "@/modules/providers/provider-model-selection";
+import { createInMemoryCredentialStore } from "@/test/support/provider-stores";
 
 const PROVIDER_ID = "openrouter";
 type DiscoverModels = NonNullable<Provider["discoverModels"]>;
@@ -27,11 +28,7 @@ const createDiscoveryHarness = (
 		credentials.set(PROVIDER_ID, "fake-provider-credential");
 	}
 	const providers = createProviderCollection({
-		credentialStore: {
-			delete: (id) => void credentials.delete(id),
-			get: (id) => credentials.get(id),
-			set: (id, credential) => void credentials.set(id, credential),
-		},
+		credentialStore: createInMemoryCredentialStore(credentials),
 		modelStore: {
 			get: (id) => storedModels.get(id),
 			set: (id, models) => void storedModels.set(id, models),
@@ -248,12 +245,7 @@ test("partial discovery refresh updates successes and reports cached failures", 
 		[failedProviderId, [lastKnownFailedModel]],
 	]);
 	const providers = createProviderCollection({
-		credentialStore: {
-			delete: (providerId) => void credentials.delete(providerId),
-			get: (providerId) => credentials.get(providerId),
-			set: (providerId, credential) =>
-				void credentials.set(providerId, credential),
-		},
+		credentialStore: createInMemoryCredentialStore(credentials),
 		modelStore: {
 			get: (providerId) => storedModels.get(providerId),
 			set: (providerId, models) => void storedModels.set(providerId, models),

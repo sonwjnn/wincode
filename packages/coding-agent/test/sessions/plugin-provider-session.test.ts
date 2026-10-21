@@ -3,12 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AgentTurnEvent, toModelId } from "@wincode/agent-core";
-import type {
-	CredentialStore,
-	ModelStore,
-	Provider,
-	ProviderModel,
-} from "@wincode/ai";
+import type { ModelStore, Provider, ProviderModel } from "@wincode/ai";
 import type { ApplicationResourceLoader } from "@/modules/application/resource-loader";
 import { loadPlugins } from "@/modules/plugins/loader";
 import {
@@ -48,6 +43,7 @@ import {
 } from "@/shared/runtime-context";
 import { createInteractiveRuntimeLifecycle } from "@/shared/runtime-lifecycle";
 import { reloadInteractiveResources } from "@/tui/commands/reload-resources";
+import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const pluginProviderOwnerRestoreError = /Plugin Provider.*trusted source/i;
 
@@ -325,10 +321,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		);
 
 		const manager = getInteractiveSessionHostManager(runtimeA);
-		const credentialStore = createProviderSdkCredentialStore({
-			platformStore: null,
-			userDataDir,
-		});
+		const credentialStore = createProviderSdkCredentialStore({ userDataDir });
 		const modelStore = createProviderSdkModelStore({ userDataDir });
 		const resourceLoader: ApplicationResourceLoader = {
 			reload: async ({ current }) => ({
@@ -700,15 +693,7 @@ test("a Plugin disabled by Session start failure has no Provider in that Session
 	const manager = createSessionHostManager(runtime);
 	const credentials = new Map<string, unknown>();
 	const snapshots = new Map<string, readonly ProviderModel[]>();
-	const credentialStore: CredentialStore = {
-		delete: (id) => {
-			credentials.delete(id);
-		},
-		get: (id) => credentials.get(id),
-		set: (id, credential) => {
-			credentials.set(id, credential);
-		},
-	};
+	const credentialStore = createInMemoryCredentialStore(credentials);
 	const modelStore: ModelStore = {
 		get: (id) => snapshots.get(id),
 		set: (id, models) => {

@@ -25,6 +25,7 @@ import {
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { flushTestRenderer } from "../support/opentui";
+import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const models: readonly ProviderModel[] = [
 	{ modelId: "gpt-4o", protocolId: "openai-responses", providerId: "openai" },
@@ -45,12 +46,7 @@ const createFailingDiscoveryController = () => {
 		["openai", models.filter((model) => model.providerId === "openai")],
 	]);
 	const providers = createProviderCollection({
-		credentialStore: {
-			delete: (providerId) => void credentialStore.delete(providerId),
-			get: (providerId) => credentialStore.get(providerId),
-			set: (providerId, credential) =>
-				void credentialStore.set(providerId, credential),
-		},
+		credentialStore: createInMemoryCredentialStore(credentialStore),
 		modelStore: {
 			get: (providerId) => modelStore.get(providerId),
 			set: (providerId, providerModels) =>
@@ -80,11 +76,7 @@ const createFailingDiscoveryController = () => {
 };
 const createUnconnectedOpenRouterController = () => {
 	const providers = createProviderCollection({
-		credentialStore: {
-			delete: () => undefined,
-			get: () => undefined,
-			set: () => undefined,
-		},
+		credentialStore: createInMemoryCredentialStore(new Map()),
 		modelStore: {
 			get: () => undefined,
 			set: () => undefined,

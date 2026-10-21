@@ -2,237 +2,247 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ProviderModel } from "@wincode/ai";
+import {
+	type ChatEvent,
+	type CredentialStore,
+	createProviderCollection,
+} from "@wincode/ai";
 import {
 	createProviderSdkCredentialStore,
 	createProviderSdkModelStore,
 	getProviderSdkStores,
 } from "@/modules/providers/provider-stores";
 
-test("separate Home and Host Provider compositions share app-owned user stores", () => {
+const saveCredential = (
+	store: CredentialStore,
+	id: string,
+	credential: unknown
+) => store.modify(id, () => credential);
+
+test("separate Home and Host compositions share app-owned Provider stores", () => {
 	const userDataDir = path.join(
 		os.tmpdir(),
-		`wincode-provider-store-sharing-${crypto.randomUUID()}`
+		`wincode-store-sharing-${crypto.randomUUID()}`
 	);
-	const homeStores = getProviderSdkStores({ userDataDir });
-	const sessionStores = getProviderSdkStores({ userDataDir });
-
-	expect(sessionStores.credentialStore).toBe(homeStores.credentialStore);
-	expect(sessionStores.modelStore).toBe(homeStores.modelStore);
+	expect(getProviderSdkStores({ userDataDir })).toBe(
+		getProviderSdkStores({ userDataDir })
+	);
 });
 
-const savedModels: readonly ProviderModel[] = [
-	{
-		capabilities: ["text", "tools"],
-		limits: { contextWindowTokens: 32_000, maxOutputTokens: 4000 },
-		modelId: "vendor/saved-model",
-		pricing: {
-			inputPerMillionTokensUsd: 1,
-			outputPerMillionTokensUsd: 2,
-		},
-		protocolId: "openai-compatible",
-		providerId: "openrouter",
-	},
-];
-
-test("Provider SDK credentials and Known Models are user-scoped, reloadable, and cancellation-safe", async () => {
+test("Provider credentials and Known Models survive restart without leaking to another user", async () => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-provider-stores-")
 	);
-	const userOne = path.join(root, "user-one");
-	const userTwo = path.join(root, "user-two");
-	const credentialsOne = createProviderSdkCredentialStore({
-		platformStore: null,
-		userDataDir: userOne,
-	});
-	const modelsOne = createProviderSdkModelStore({ userDataDir: userOne });
-	const credentialsTwo = createProviderSdkCredentialStore({
-		platformStore: null,
-		userDataDir: userTwo,
-	});
-	const modelsTwo = createProviderSdkModelStore({ userDataDir: userTwo });
-
+	const one = path.join(root, "one");
+	const two = path.join(root, "two");
 	try {
-		await credentialsOne.set("openrouter", {
-			apiKey: "fake-user-one-key",
-			kind: "api-key",
-		});
-		await modelsOne.set("openrouter", savedModels, { signal: undefined });
-
-		const restartedCredentials = createProviderSdkCredentialStore({
-			platformStore: null,
-			userDataDir: userOne,
-		});
-		const restartedModels = createProviderSdkModelStore({
-			userDataDir: userOne,
-		});
-		expect(await restartedCredentials.get("openrouter")).toEqual({
-			apiKey: "fake-user-one-key",
-			kind: "api-key",
-		});
-		expect(await restartedModels.get("openrouter")).toEqual(savedModels);
-		expect(await credentialsTwo.get("openrouter")).toBeUndefined();
-		expect(await modelsTwo.get("openrouter")).toBeUndefined();
-
-		const cancelled = new AbortController();
-		cancelled.abort(new DOMException("snapshot cancelled", "AbortError"));
-		await expect(
-			restartedModels.set("openrouter", [], { signal: cancelled.signal })
-		).rejects.toThrow("snapshot cancelled");
-		expect(await restartedModels.get("openrouter")).toEqual(savedModels);
-	} finally {
-		await fs.rm(root, { force: true, recursive: true });
-	}
-});
-
-test("Provider credentials fall back to the secure file after platform-store recovery reports no account", async () => {
-	const root = await fs.mkdtemp(
-		path.join(os.tmpdir(), "wincode-provider-credential-recovery-")
-	);
-	const userDataDir = path.join(root, "user");
-	const credential = { apiKey: "fake-outage-key", kind: "api-key" } as const;
-	const unavailablePlatformStore = {
-		delete: async () => {
-			throw new Error("fake platform store unavailable");
-		},
-		get: async () => {
-			throw new Error("fake platform store unavailable");
-		},
-		set: async () => {
-			throw new Error("fake platform store unavailable");
-		},
-	};
-	try {
-		const duringOutage = createProviderSdkCredentialStore({
-			platformStore: unavailablePlatformStore,
-			userDataDir,
-		});
-		await duringOutage.set("openrouter", credential);
-
-		const afterRestart = createProviderSdkCredentialStore({
-			platformStore: {
-				delete: async () => false,
-				get: async () => null,
-				set: async () => undefined,
-			},
-			userDataDir,
-		});
-		expect(await afterRestart.get("openrouter")).toEqual(credential);
-	} finally {
-		await fs.rm(root, { force: true, recursive: true });
-	}
-});
-
-test("successful platform credential writes and deletes clear stale secure-file entries", async () => {
-	const root = await fs.mkdtemp(
-		path.join(os.tmpdir(), "wincode-provider-credential-reconcile-")
-	);
-	const userDataDir = path.join(root, "user");
-	const fallback = createProviderSdkCredentialStore({
-		platformStore: null,
-		userDataDir,
-	});
-	const staleCredential = {
-		apiKey: "fake-stale-key",
-		kind: "api-key",
-	} as const;
-	const replacementCredential = {
-		apiKey: "fake-replacement-key",
-		kind: "api-key",
-	} as const;
-	const platformValues = new Map<string, string>();
-	const platformKey = (service: string, name: string): string =>
-		`${service}:${name}`;
-	try {
-		await fallback.set("openrouter", staleCredential);
-		await fallback.set("anthropic", staleCredential);
-
-		const recovered = createProviderSdkCredentialStore({
-			platformStore: {
-				delete: async ({ name, service }) =>
-					platformValues.delete(platformKey(service, name)),
-				get: async ({ name, service }) =>
-					platformValues.get(platformKey(service, name)) ?? null,
-				set: async ({ name, service, value }) => {
-					platformValues.set(platformKey(service, name), value);
-				},
-			},
-			userDataDir,
-		});
-		await recovered.set("openrouter", replacementCredential);
-		await recovered.delete("anthropic");
-
-		const laterOutage = createProviderSdkCredentialStore({
-			platformStore: {
-				delete: async () => {
-					throw new Error("fake platform store unavailable");
-				},
-				get: async () => {
-					throw new Error("fake platform store unavailable");
-				},
-				set: async () => {
-					throw new Error("fake platform store unavailable");
-				},
-			},
-			userDataDir,
-		});
-		expect(await laterOutage.get("openrouter")).toBeUndefined();
-		expect(await laterOutage.get("anthropic")).toBeUndefined();
-	} finally {
-		await fs.rm(root, { force: true, recursive: true });
-	}
-});
-
-test("Provider credential deletion can retry on the same store after platform failure", async () => {
-	const root = await fs.mkdtemp(
-		path.join(os.tmpdir(), "wincode-provider-credential-delete-failure-")
-	);
-	const userDataDir = path.join(root, "user");
-	const credential = { apiKey: "fake-delete-key", kind: "api-key" } as const;
-	const fallback = createProviderSdkCredentialStore({
-		platformStore: null,
-		userDataDir,
-	});
-	let deleteAttempts = 0;
-	try {
-		await fallback.set("openrouter", credential);
-		const recoveringPlatform = createProviderSdkCredentialStore({
-			platformStore: {
-				delete: async () => {
-					deleteAttempts++;
-					if (deleteAttempts === 1) {
-						throw new Error("simulated platform delete failure");
-					}
-					return true;
-				},
-				get: async () => null,
-				set: async () => undefined,
-			},
-			userDataDir,
-		});
-		await expect(recoveringPlatform.delete("openrouter")).rejects.toThrow(
-			"Could not delete Provider SDK credential from the platform secret store."
+		await saveCredential(
+			createProviderSdkCredentialStore({ userDataDir: one }),
+			"openrouter",
+			{
+				kind: "api-key",
+				apiKey: "synthetic-key",
+			}
 		);
-		expect(await fallback.get("openrouter")).toEqual(credential);
-
-		await recoveringPlatform.delete("openrouter");
-		expect(deleteAttempts).toBe(2);
-		const laterOutage = createProviderSdkCredentialStore({
-			platformStore: {
-				delete: async () => {
-					throw new Error("fake platform store unavailable");
-				},
-				get: async () => {
-					throw new Error("fake platform store unavailable");
-				},
-				set: async () => {
-					throw new Error("fake platform store unavailable");
-				},
-			},
-			userDataDir,
-		});
-		expect(await laterOutage.get("openrouter")).toBeUndefined();
+		const models = [
+			{ modelId: "model", protocolId: "test", providerId: "openrouter" },
+		];
+		await createProviderSdkModelStore({ userDataDir: one }).set(
+			"openrouter",
+			models,
+			{ signal: undefined }
+		);
+		expect(
+			await createProviderSdkCredentialStore({ userDataDir: one }).list()
+		).toEqual([{ providerId: "openrouter", type: "api-key" }]);
+		expect(
+			await createProviderSdkCredentialStore({ userDataDir: two }).read(
+				"openrouter"
+			)
+		).toBeUndefined();
+		expect(
+			await createProviderSdkModelStore({ userDataDir: one }).get("openrouter")
+		).toEqual(models);
+		expect(
+			await createProviderSdkModelStore({ userDataDir: two }).get("openrouter")
+		).toBeUndefined();
+		const controller = new AbortController();
+		controller.abort(new DOMException("cancelled", "AbortError"));
+		await expect(
+			createProviderSdkCredentialStore({ userDataDir: one }).modify(
+				"openrouter",
+				() => ({ kind: "api-key" }),
+				{ signal: controller.signal }
+			)
+		).rejects.toThrow("cancelled");
+		expect(
+			await createProviderSdkCredentialStore({ userDataDir: one }).read(
+				"openrouter"
+			)
+		).toMatchObject({ apiKey: "synthetic-key" });
 	} finally {
-		await fs.rm(root, { force: true, recursive: true });
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+test("separate processes serialize Provider refreshes without losing a newer credential", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-provider-lock-")
+	);
+	const store = createProviderSdkCredentialStore({ userDataDir: root });
+	const started = Promise.withResolvers<void>();
+	const finish = Promise.withResolvers<void>();
+	const ready = path.join(root, "child-ready");
+	const childSource = `
+import { createProviderSdkCredentialStore } from "./packages/coding-agent/modules/providers/provider-stores.ts";
+const store = createProviderSdkCredentialStore({ userDataDir: process.env.TEST_AUTH_DIR });
+await Bun.write(process.env.TEST_AUTH_READY, "ready");
+await store.modify("openai", (credential) => ({ ...credential, revision: credential.revision + 1 }));
+`;
+	let child: Bun.Subprocess | undefined;
+	try {
+		await saveCredential(store, "openai", {
+			kind: "oauth-session",
+			revision: 0,
+		});
+		const first = store.modify("openai", async (credential) => {
+			started.resolve();
+			await finish.promise;
+			return { ...(credential as object), revision: 1 };
+		});
+		await started.promise;
+		child = Bun.spawn([process.execPath, "-e", childSource], {
+			cwd: process.cwd(),
+			env: { ...process.env, TEST_AUTH_DIR: root, TEST_AUTH_READY: ready },
+			stderr: "pipe",
+			stdout: "pipe",
+		});
+		for (
+			let attempt = 0;
+			attempt < 500 && !(await Bun.file(ready).exists());
+			attempt += 1
+		) {
+			await Bun.sleep(10);
+		}
+		expect(await Bun.file(ready).exists()).toBe(true);
+		finish.resolve();
+		await first;
+		expect(await child.exited).toBe(0);
+		expect(await store.read("openai")).toMatchObject({ revision: 2 });
+	} finally {
+		finish.resolve();
+		child?.kill();
+		if (child !== undefined) {
+			await child.exited;
+		}
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+test("a started refresh persists its replacement after its caller cancels", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-auth-refresh-")
+	);
+	try {
+		const store = createProviderSdkCredentialStore({ userDataDir: root });
+		await saveCredential(store, "openai", {
+			kind: "oauth-session",
+			revision: 0,
+		});
+		const started = Promise.withResolvers<void>();
+		const finish = Promise.withResolvers<void>();
+		const controller = new AbortController();
+		const refresh = store.modify(
+			"openai",
+			async () => {
+				started.resolve();
+				await finish.promise;
+				return { kind: "oauth-session", revision: 1 };
+			},
+			{ signal: controller.signal }
+		);
+		await started.promise;
+		controller.abort(new DOMException("caller cancelled", "AbortError"));
+		finish.resolve();
+		expect(await refresh).toMatchObject({ revision: 1 });
+		expect(
+			await createProviderSdkCredentialStore({ userDataDir: root }).read(
+				"openai"
+			)
+		).toMatchObject({ revision: 1 });
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+test("chat with a stored credential tightens an owned 0755 directory without manual chmod", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-auth-permissions-")
+	);
+	const userDataDir = path.join(root, "user");
+	await fs.mkdir(userDataDir, { mode: 0o755 });
+	await fs.chmod(userDataDir, 0o755);
+	const store = createProviderSdkCredentialStore({ userDataDir });
+	const sdk = createProviderCollection({ credentialStore: store });
+	sdk.register({
+		id: "openai",
+		models: [
+			{ modelId: "test-model", protocolId: "test", providerId: "openai" },
+		],
+		resolveAuthorization: ({ credential }) =>
+			credential === undefined ? null : { authorization: "synthetic-auth" },
+		async *streamChat() {
+			yield { delta: "hello", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	});
+	try {
+		await saveCredential(store, "openai", {
+			kind: "api-key",
+			apiKey: "synthetic-key",
+		});
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [],
+			modelId: "test-model",
+			providerId: "openai",
+		})) {
+			events.push(event);
+		}
+		expect(events.at(-1)).toMatchObject({
+			outcome: { status: "success" },
+			type: "terminal",
+		});
+		expect((await fs.stat(userDataDir)).mode % 0o1000).toBe(0o700);
+		expect(
+			(await fs.stat(path.join(userDataDir, "auth.json"))).mode % 0o1000
+		).toBe(0o600);
+	} finally {
+		await sdk.close();
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+test("a symlinked auth directory is rejected without changing its target", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-auth-symlink-")
+	);
+	const target = path.join(root, "target");
+	const userDataDir = path.join(root, "user");
+	await fs.mkdir(target, { mode: 0o755 });
+	await fs.chmod(target, 0o755);
+	await fs.symlink(target, userDataDir, "dir");
+	try {
+		await expect(
+			saveCredential(
+				createProviderSdkCredentialStore({ userDataDir }),
+				"openai",
+				{ kind: "api-key" }
+			)
+		).rejects.toThrow("Refusing insecure auth directory");
+		expect((await fs.stat(target)).mode % 0o1000).toBe(0o755);
+		expect(await Bun.file(path.join(target, "auth.json")).exists()).toBe(false);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
 	}
 });

@@ -82,10 +82,7 @@ test("Interactive Session connects OpenRouter, refreshes offline-safe Known Mode
 		});
 		return chatResponse(`response from ${body.model}`);
 	};
-	const credentialStore = createProviderSdkCredentialStore({
-		platformStore: null,
-		userDataDir,
-	});
+	const credentialStore = createProviderSdkCredentialStore({ userDataDir });
 	const modelStore = createProviderSdkModelStore({ userDataDir });
 	const collections: ProviderCollection[] = [];
 	const servicesFor = async (): Promise<SessionServices> =>

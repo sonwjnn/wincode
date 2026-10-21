@@ -1,6 +1,6 @@
 # `@wincode/mcp`
 
-`@wincode/mcp` is a Wincode-owned MCP extension package, not MCP support built into Coding-Agent. Its root export is host-agnostic MCP client/domain code; `@wincode/mcp/plugin` is the Wincode Plugin adapter and imports only the host's public Plugin contracts. This keeps the extension boundary without introducing a Pi-specific adapter or a native MCP registration API in Coding-Agent.
+`@wincode/mcp` is a Wincode-owned MCP extension package, not MCP support built into Coding-Agent. Its root export is host-agnostic MCP client/domain code; `@wincode/mcp/plugin` is the Wincode Plugin adapter and imports only the host's public Plugin contracts. This keeps the extension boundary without introducing an internal MCP registration API in Coding-Agent.
 
 ## Owns
 
@@ -37,7 +37,7 @@ General settings and MCP server definitions are separate namespaces:
 }
 ```
 
-Pi-style `$NAME`, `${NAME}`, and `$env:NAME` references are expanded from the process environment. `$$` and `$!` escape a literal dollar sign and exclamation mark. A leading `!` in an `env` or `headers` value runs a shell command and uses its trimmed standard output; command execution is time-limited and output-bounded. Keep secret values in environment variables or Wincode's user-scoped secret storage, never in project files. MCP configuration rejects `oauth.clientSecret` at every scope; OAuth client secrets and tokens belong in the host-owned secret store.
+Shell-style `$NAME`, `${NAME}`, and `$env:NAME` references are expanded from the process environment. `$$` and `$!` escape a literal dollar sign and exclamation mark. A leading `!` in an `env` or `headers` value runs a shell command and uses its trimmed standard output; command execution is time-limited and output-bounded. Keep secret values in environment variables or Wincode's user-scoped secret storage, never in project files. MCP configuration rejects `oauth.clientSecret` at every scope; OAuth client secrets and tokens belong in the dedicated host-managed MCP secret store.
 
 Trusted project definitions can configure local commands, remote endpoints, and headers. A project definition replaces the user definition for that server rather than inheriting its credentials. A project may overlay only `enabled`, `exposure`, and `toolExposure` on a user-defined server; it cannot apply partial overlays to Plugin-registered servers. Project MCP configuration is omitted unless the project root has been trusted. Trust is not a sandbox: trusted local MCP processes run with Wincode's operating-system privileges.
 
@@ -45,14 +45,14 @@ Plugin-owned MCP registrations enter the same managed catalog with Plugin proven
 
 ## Public management API
 
-The package root exports `createMcpManagement`. Its `list`, `add`, `remove`, `login`, and `logout` operations own MCP configuration semantics, including the Pi-compatible `mcpServers` shape, validation, scope precedence, resolution, and diagnostics. The Coding-Agent CLI adapter supplies a namespace-scoped config reader/writer, the process environment and workspace, a host-owned write-authorization callback, and a user-scoped secret store implementing `McpSecretStore` for OAuth operations.
+The package root exports `createMcpManagement`. Its `list`, `add`, `remove`, `login`, and `logout` operations own MCP configuration semantics, including the canonical `mcpServers` shape, validation, scope precedence, resolution, and diagnostics. The Coding-Agent CLI adapter supplies a namespace-scoped config reader/writer, the process environment and workspace, a host-owned write-authorization callback, and a dedicated user-scoped MCP secret store implementing `McpSecretStore` for OAuth operations.
 
 The API does not read or write files, resolve paths, decide whether a project is trusted, or create a secret store. Hosts provide those capabilities; the MCP package interprets only the MCP namespace. The CLI calls this API before starting the TUI or loading any Plugin runtime.
 
 ## Public Plugin boundary
 
-The MCP Plugin imports only public contracts from `@wincode/coding-agent`. It reads the host's generic namespace-scoped config snapshot for `mcp`, interprets the `mcpServers` data itself, and registers tools and status contributions through the generic Plugin API. Coding-Agent does not import MCP registry types or own MCP-specific UI. The package-level peer dependency exists for this adapter subpath; the client/domain and management contracts do not import Coding-Agent types.
+The MCP Plugin imports only public contracts from `@wincode/coding-agent`. It reads the host's generic namespace-scoped config snapshot for `mcp`, interprets the `mcpServers` data itself, and registers tools and status contributions through the generic Plugin API. The application injects the dedicated MCP secret store into the factory for MCP OAuth; generic Plugins own their other durable data and no generic host-managed Plugin secret store is exposed. Coding-Agent does not import MCP registry types or own MCP-specific UI. The package-level peer dependency exists for this adapter subpath; the client/domain and management contracts do not import Coding-Agent types.
 
-Application entry points select `@wincode/mcp/plugin` by default as a distribution package. SDK callers select its resolved file path explicitly with `pluginPaths`. A missing selected distribution package is reported as an installation error and can be disabled with `--no-plugin mcp`.
+Application entry points select `@wincode/mcp/plugin` by default as a distribution package and inject the host-managed MCP secret store. SDK callers may select the resolved file path with `pluginPaths`; however, the package's default `mcpPluginFactory` has no secret-store dependency, so that path alone does not enable MCP OAuth. For OAuth, provide a custom Plugin entry module that exports `createMcpPluginFactory({ createSecretStore })`, where `createSecretStore` returns a host-managed `McpSecretStore` for the supplied `userDataDir`, then select that module with `pluginPaths`. Keep MCP OAuth in this dedicated store rather than mixing it with Plugin-owned data. A missing selected distribution package is reported as an installation error and can be disabled with `--no-plugin mcp`.
 
 Discovered tools marked hidden are omitted from the model-visible catalog and cannot be dispatched. Directly exposed MCP resources are available through the resource tools. Tool exposure controls visibility, not authorization; the host's Tool Gate remains a separate policy boundary. Use OS-level isolation when stronger process containment is required.

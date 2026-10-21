@@ -20,7 +20,6 @@ import { codingToolNames } from "@/modules/tools";
 import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
-import { createPluginSecretStore } from "./plugin-secret-store";
 import {
 	createPluginPromptSelectionBridge,
 	type PluginPromptSelectionBridge,
@@ -60,6 +59,7 @@ import {
 import type { PluginCommand, PluginTool } from "./types";
 
 export type PluginPackageReference = Readonly<{
+	factory?: PluginFactory;
 	id: string;
 	specifier: string;
 }>;
@@ -211,8 +211,7 @@ const createRegistrationAPI = (
 	diagnostics: PluginDiagnostic[],
 	toolNames: ReadonlySet<string>,
 	commandNames: ReadonlySet<string>,
-	customCommandNames: ReadonlySet<string>,
-	userDataDir: string
+	customCommandNames: ReadonlySet<string>
 ): PluginDefinitionAPI => {
 	const assertOpen = (): void => {
 		if (!isOpen()) {
@@ -304,7 +303,6 @@ const createRegistrationAPI = (
 		register();
 	};
 	return Object.freeze({
-		secrets: createPluginSecretStore(plugin.id, userDataDir),
 		registerMcpServer,
 		registerAgent(agent) {
 			assertOpen();
@@ -481,8 +479,7 @@ const createPluginAPI = (
 				diagnostics,
 				toolNames,
 				commandNames,
-				customCommandNames,
-				context.userDataDir
+				customCommandNames
 			);
 		},
 	});
@@ -1030,7 +1027,8 @@ const createCandidatePlan = async (
 			path: `factory:${id}`,
 			source: `Plugin factory '${id}'`,
 		})),
-		...(input.distributionPlugins ?? []).map(({ id, specifier }) => ({
+		...(input.distributionPlugins ?? []).map(({ factory, id, specifier }) => ({
+			...(factory === undefined ? {} : { factory }),
 			distributionId: id,
 			knownPluginId: id,
 			moduleSpecifier: specifier,

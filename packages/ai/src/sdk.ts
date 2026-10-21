@@ -1,4 +1,6 @@
+import { logger } from "@wincode/utils";
 import { z } from "zod";
+import { normalizeModelFailure } from "./model-failures.ts";
 import {
 	type ModelPromptCacheCapabilities,
 	modelMetadataEntrySchema,
@@ -6,6 +8,44 @@ import {
 	supportedPromptCacheRetentionTierIds,
 } from "./model-metadata.ts";
 import { type ThinkingLevel, thinkingLevelIds } from "./thinking-level.ts";
+
+const SAFE_DIAGNOSTIC_ERROR_CODE_PATTERN = /^(?:E[A-Z0-9_]+|ERR_[A-Z0-9_]+)$/u;
+
+const diagnosticCauseCategoryFor = (cause: unknown): string | undefined => {
+	if (!(cause instanceof Error)) {
+		return;
+	}
+	const message = cause.message.toLowerCase();
+	if (message.includes("persistent storage lock")) {
+		return "storage-lock";
+	}
+	if (message.includes("refusing insecure")) {
+		return "storage-permissions";
+	}
+	if (message.includes("invalid provider sdk credential index")) {
+		return "invalid-credential-index";
+	}
+	if (message.includes("invalid provider sdk credential")) {
+		return "invalid-credential";
+	}
+	if (message.includes("could not serialize provider sdk credential")) {
+		return "credential-serialization";
+	}
+	if (message.includes("platform secret store")) {
+		return "platform-secret-store";
+	}
+	if (
+		message.includes("permission denied") ||
+		message.includes("eacces") ||
+		message.includes("eperm")
+	) {
+		return "filesystem-permission";
+	}
+	if (message.includes("no space left") || message.includes("enospc")) {
+		return "storage-full";
+	}
+	return "other-error";
+};
 
 export type { SupportedPromptCacheRetentionTier } from "./model-metadata.ts";
 export type {
@@ -36,6 +76,9 @@ export type ProviderModelSelection = Readonly<{
 	providerId: string;
 }>;
 
+/** Header overrides; names are case-insensitive and null removes a lower-level value. */
+export type ProviderHeaders = Readonly<Record<string, string | null>>;
+
 const nonEmptyProviderIdentity = z
 	.string()
 	.refine((value) => value.trim().length > 0);
@@ -65,6 +108,8 @@ export const parseProviderModelSelection = (
 
 /** A provider-owned model; optional metadata is preserved rather than inferred. */
 export type ProviderModel = Readonly<{
+	/** Per-model HTTP header overrides applied after provider defaults. */
+	headers?: ProviderHeaders;
 	/** When present, unsupported image/file/tool inputs fail before provider dispatch. */
 	capabilities?: readonly ProviderModelCapability[];
 	/** Exact provider-specific cache controls verified for this model. */
@@ -183,6 +228,11 @@ export type ChatTool = Readonly<{
 export type ChatRequest = Readonly<{
 	cacheRetention?: SupportedPromptCacheRetentionTier;
 	cacheWarming?: true;
+	headers?: ProviderHeaders;
+	/** Returned entries override the merged headers; null removes a header. */
+	transformHeaders?: (
+		headers: Readonly<Record<string, string>>
+	) => ProviderHeaders | Promise<ProviderHeaders>;
 	maxOutputTokens?: number;
 	messages: readonly ChatMessage[];
 	modelId: string;
@@ -207,6 +257,8 @@ export type ProviderChatRequest = Readonly<{
 
 export type ProviderAuthorization = Readonly<{
 	authorization: unknown;
+	/** Authorization-derived HTTP headers for the collection-owned request pipeline. */
+	headers?: ProviderHeaders;
 	/** A rotated credential is persisted before the next request resolves auth. */
 	credential?: unknown;
 }>;
@@ -239,11 +291,17 @@ export type ProviderChatEvent =
 	  }>
 	| ProviderChatFinish;
 
-export type ProviderChatContext = Readonly<{
+export type ProviderChatHeaderContext = Readonly<{
 	authorization: unknown;
 	model: ProviderModel;
 	signal?: AbortSignal;
 }>;
+
+/** Finalized non-null headers and request authorization passed to chat dispatch. */
+export type ProviderChatContext = ProviderChatHeaderContext &
+	Readonly<{
+		headers: Readonly<Record<string, string>>;
+	}>;
 
 /** Authorization and cancellation passed to provider-owned model discovery. */
 export type ProviderModelDiscoveryContext = Readonly<{
@@ -251,8 +309,60 @@ export type ProviderModelDiscoveryContext = Readonly<{
 	signal?: AbortSignal;
 }>;
 
+export type CredentialMetadata = Readonly<{
+	providerId: string;
+	type: string;
+}>;
+
+export type CredentialStoreOptions = Readonly<{ signal?: AbortSignal }>;
+
+/** Non-secret result of a provider-owned lifecycle operation. */
+export type ProviderLifecycleFailure = Readonly<{
+	code:
+		| "authentication"
+		| "credential-store"
+		| "oauth-refresh"
+		| "provider"
+		| "transport";
+	message: string;
+}>;
+
+export type ProviderAuth = Readonly<{
+	authorization: unknown;
+	headers?: Readonly<Record<string, string>>;
+	source: "stored-credential";
+}>;
+
+export type ProviderAuthCheckResult =
+	| Readonly<{ source: "stored-credential"; status: "configured" }>
+	| Readonly<{ status: "missing" | "invalid" | "aborted" }>
+	| Readonly<{ failure: ProviderLifecycleFailure; status: "error" }>;
+
+export type ProviderAuthVerificationResult =
+	| Readonly<{ source: "stored-credential"; status: "verified" }>
+	| Readonly<{ status: "unsupported" | "missing" | "invalid" | "aborted" }>
+	| Readonly<{ failure: ProviderLifecycleFailure; status: "error" }>;
+
+export type ProviderLoginOptions = Readonly<{
+	credential?: unknown;
+	methodId: string;
+	options?: unknown;
+	signal?: AbortSignal;
+}>;
+
+export type ProviderLoginResult =
+	| Readonly<{ status: "saved" }>
+	| Readonly<{ status: "unsupported" | "cancelled" }>
+	| Readonly<{ failure: ProviderLifecycleFailure; status: "error" }>;
+
+export type ProviderLogoutResult =
+	| Readonly<{ status: "logged-out" | "aborted" }>
+	| Readonly<{ failure: ProviderLifecycleFailure; status: "error" }>;
+
 /** A registered provider owns its authorization lifecycle, model list, and wire behavior. */
 export type Provider = Readonly<{
+	/** Shared HTTP header overrides applied after protocol and authorization headers. */
+	headers?: ProviderHeaders;
 	id: string;
 	/** Static baseline models remain available alongside discovered models. */
 	models: readonly ProviderModel[];
@@ -260,13 +370,34 @@ export type Provider = Readonly<{
 	discoverModels?: (
 		context: ProviderModelDiscoveryContext
 	) => readonly ProviderModel[] | Promise<readonly ProviderModel[]>;
-	/** Return null when not configured; include credential only when rotating it. */
+	/** Inspect local credential configuration without refreshing or contacting upstream. */
+	checkAuth?: (
+		input: Readonly<{ credential: unknown; signal?: AbortSignal }>
+	) => boolean | Promise<boolean>;
+	/** Return null when not configured; after refresh starts, return any rotation despite caller cancellation so the store can persist it. */
 	resolveAuthorization: (
 		input: Readonly<{
 			credential: unknown | undefined;
+			model?: ProviderModel;
 			signal?: AbortSignal;
 		}>
 	) => ProviderAuthorization | null | Promise<ProviderAuthorization | null>;
+	/** Explicit, provider-owned remote credential check; never inferred from chat. */
+	verifyAuth?: (
+		input: Readonly<{
+			authorization: unknown;
+			model?: ProviderModel;
+			signal?: AbortSignal;
+		}>
+	) => undefined | "unsupported" | Promise<undefined | "unsupported">;
+	/** Explicit provider-owned login interaction; undefined means cancelled. */
+	login?: (
+		options: ProviderLoginOptions
+	) => unknown | undefined | Promise<unknown | undefined>;
+	/** Supplies protocol and authorization headers before the collection transform. */
+	getChatHeaders?: (
+		context: ProviderChatHeaderContext
+	) => ProviderHeaders | Promise<ProviderHeaders>;
 	streamChat: (
 		request: ProviderChatRequest,
 		context: ProviderChatContext
@@ -282,13 +413,33 @@ export type Provider = Readonly<{
 	close?: () => void | Promise<void>;
 }>;
 
-/** Application-owned persistence for one credential per provider ID in this collection. */
+/** Application-owned, atomic persistence for SDK Provider credentials. */
 export type CredentialStore = Readonly<{
-	delete: (providerId: string) => void | Promise<void>;
-	get: (
-		providerId: string
+	delete: (
+		providerId: string,
+		options?: CredentialStoreOptions
+	) => void | Promise<void>;
+	/** Lists non-secret provider/type metadata without resolving credential values. */
+	list: (
+		options?: CredentialStoreOptions
+	) => readonly CredentialMetadata[] | Promise<readonly CredentialMetadata[]>;
+	/** Checks whether a known provider has a stored credential without returning it. */
+	has?: (
+		providerId: string,
+		options?: CredentialStoreOptions
+	) => boolean | Promise<boolean>;
+	/** Serializes the read-modify-write callback; once it starts, persist its replacement even if the caller cancels. */
+	modify: (
+		providerId: string,
+		update: (
+			credential: unknown | undefined
+		) => unknown | undefined | Promise<unknown | undefined>,
+		options?: CredentialStoreOptions
 	) => unknown | undefined | Promise<unknown | undefined>;
-	set: (providerId: string, credential: unknown) => void | Promise<void>;
+	read: (
+		providerId: string,
+		options?: CredentialStoreOptions
+	) => unknown | undefined | Promise<unknown | undefined>;
 }>;
 
 /** Cancellation options for an atomic model snapshot write. */
@@ -338,9 +489,15 @@ export type ChatFailure =
 			providerId: string;
 	  }>
 	| Readonly<{
-			code: "authentication" | "credential-store" | "provider" | "transport";
+			code:
+				| "authentication"
+				| "credential-store"
+				| "oauth-refresh"
+				| "provider"
+				| "transport";
 			message: string;
 			providerId: string;
+			statusCode?: number;
 	  }>;
 
 export type ChatOutcome =
@@ -355,6 +512,8 @@ export type ChatEvent =
 
 export type ProviderErrorCode =
 	| "authentication"
+	| "credential-store"
+	| "oauth-refresh"
 	| "provider"
 	| "transport"
 	| "unsupported-capability";
@@ -389,6 +548,31 @@ export type ProviderCollection = Readonly<{
 	/** Closes every registered Provider once and waits for all cleanup attempts. */
 	close: () => Promise<void>;
 	deleteCredential: (providerId: string) => Promise<void>;
+	/** Checks stored authorization configuration without refreshing or contacting upstream. */
+	checkAuth: (
+		providerId: string,
+		options?: CredentialStoreOptions
+	) => Promise<ProviderAuthCheckResult>;
+	/** Resolves request-scoped authorization; undefined means no usable stored credential. */
+	getAuth: (
+		provider: string | ProviderModel,
+		options?: CredentialStoreOptions
+	) => Promise<ProviderAuth | undefined>;
+	/** Explicitly asks a provider to verify credentials when it has a safe endpoint. */
+	verifyAuth: (
+		provider: string | ProviderModel,
+		options?: CredentialStoreOptions
+	) => Promise<ProviderAuthVerificationResult>;
+	/** Explicit login; credential input is stored only in this provider's owner-scoped slot. */
+	login: (
+		providerId: string,
+		options: ProviderLoginOptions
+	) => Promise<ProviderLoginResult>;
+	/** Removes the stored SDK credential without revoking upstream or ambient auth. */
+	logout: (
+		providerId: string,
+		options?: CredentialStoreOptions
+	) => Promise<ProviderLogoutResult>;
 	/** Known models whose provider has a stored credential; this does not contact the provider. */
 	getAvailable: (providerId?: string) => Promise<readonly ProviderModel[]>;
 	/** Registered provider IDs with stored credentials; this does not contact the provider. */
@@ -433,16 +617,69 @@ type CredentialStoreFailure = Readonly<{
 
 const createDefaultCredentialStore = (): CredentialStore => {
 	const credentials = new Map<string, unknown>();
+	const queues = new Map<string, Promise<void>>();
+	const withLock = async <Result>(
+		providerId: string,
+		operation: () => Result | Promise<Result>,
+		signal?: AbortSignal
+	): Promise<Result> => {
+		throwIfAborted(signal);
+		const previous = queues.get(providerId) ?? Promise.resolve();
+		const release = Promise.withResolvers<void>();
+		const queued = previous.catch(() => undefined).then(() => release.promise);
+		queues.set(providerId, queued);
+		void queued.then(() => {
+			if (queues.get(providerId) === queued) {
+				queues.delete(providerId);
+			}
+		});
+		try {
+			await awaitWithSignal(previous, signal);
+			throwIfAborted(signal);
+			return await operation();
+		} finally {
+			release.resolve();
+		}
+	};
 	return {
-		delete: (providerId) => {
-			credentials.delete(providerId);
+		async delete(providerId, { signal } = {}) {
+			await withLock(
+				providerId,
+				() => {
+					credentials.delete(providerId);
+				},
+				signal
+			);
 		},
-		get: (providerId) => credentials.get(providerId),
-		set: (providerId, credential) => {
-			credentials.set(providerId, credential);
+		async list({ signal } = {}) {
+			throwIfAborted(signal);
+			return [...credentials.entries()].map(([providerId, credential]) => ({
+				providerId,
+				type: credentialTypeFor(credential),
+			}));
 		},
+		modify: (providerId, update, { signal } = {}) =>
+			withLock(
+				providerId,
+				async () => {
+					const current = credentials.get(providerId);
+					const replacement = await update(current);
+					if (replacement !== undefined) {
+						credentials.set(providerId, replacement);
+					}
+					return credentials.get(providerId);
+				},
+				signal
+			),
+		read: (providerId, { signal } = {}) =>
+			withLock(providerId, () => credentials.get(providerId), signal),
 	};
 };
+
+const credentialTypeFor = (credential: unknown): string =>
+	isRecord(credential) && typeof credential.kind === "string"
+		? credential.kind
+		: "unknown";
 
 const isCredentialStoreFailure = (
 	value: unknown
@@ -459,12 +696,60 @@ const credentialStoreFailure = (cause: unknown): CredentialStoreFailure => ({
 const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
+const mergeProviderHeaders = (
+	...layers: readonly (ProviderHeaders | undefined)[]
+): Readonly<Record<string, string>> => {
+	const headers = new Map<string, Readonly<{ name: string; value: string }>>();
+	for (const layer of layers) {
+		if (layer === undefined) {
+			continue;
+		}
+		for (const [name, value] of Object.entries(layer)) {
+			if (value !== null && typeof value !== "string") {
+				throw new TypeError("Provider headers must contain strings or null.");
+			}
+			const normalizedName = name.toLowerCase();
+			if (value === null) {
+				headers.delete(normalizedName);
+			} else {
+				headers.set(normalizedName, { name, value });
+			}
+		}
+	}
+	return Object.fromEntries(
+		[...headers.values()].map(({ name, value }) => [name, value])
+	);
+};
+
 const isAbortError = (error: unknown): boolean =>
 	error instanceof Error && error.name === "AbortError";
 
 const throwIfAborted = (signal: AbortSignal | undefined): void => {
 	if (signal?.aborted) {
 		throw signal.reason ?? new DOMException("Aborted", "AbortError");
+	}
+};
+
+const awaitWithSignal = async <Result>(
+	operation: Promise<Result>,
+	signal: AbortSignal | undefined
+): Promise<Result> => {
+	if (signal?.aborted) {
+		void operation.catch(() => undefined);
+		throwIfAborted(signal);
+	}
+	if (signal === undefined) {
+		return operation;
+	}
+	const aborted = Promise.withResolvers<never>();
+	const onAbort = (): void => {
+		aborted.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+	};
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		return await Promise.race([operation, aborted.promise]);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
 	}
 };
 
@@ -479,6 +764,13 @@ const PROVIDER_MODEL_CAPABILITIES: readonly ProviderModelCapability[] =
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isOptionalProviderHeaders = (value: unknown): boolean =>
+	value === undefined ||
+	(isRecord(value) &&
+		Object.values(value).every(
+			(header) => typeof header === "string" || header === null
+		));
 
 const isNonEmptyString = (value: unknown): value is string =>
 	typeof value === "string" && value.trim().length > 0;
@@ -585,6 +877,7 @@ const isProviderModel = (value: unknown): value is ProviderModel =>
 	isNonEmptyString(value.providerId) &&
 	isNonEmptyString(value.modelId) &&
 	isNonEmptyString(value.protocolId) &&
+	isOptionalProviderHeaders(value.headers) &&
 	isOptionalStringArrayOf(value.capabilities, PROVIDER_MODEL_CAPABILITIES) &&
 	isOptionalStringArrayOf(value.reasoningEfforts, THINKING_LEVELS) &&
 	isOptionalStringArrayOf(
@@ -656,6 +949,25 @@ const modelsForProvider = (
 	return [...models.values()];
 };
 
+const lifecycleFailureForError = (error: unknown): ProviderLifecycleFailure => {
+	if (isCredentialStoreFailure(error)) {
+		return {
+			code: "credential-store",
+			message: "Provider credential storage operation failed.",
+		};
+	}
+	if (error instanceof ProviderError) {
+		return {
+			code: error.code === "unsupported-capability" ? "provider" : error.code,
+			message: "Provider authentication operation failed.",
+		};
+	}
+	return {
+		code: "provider",
+		message: "Provider authentication operation failed.",
+	};
+};
+
 const failureForError = (
 	error: unknown,
 	providerId: string,
@@ -664,7 +976,7 @@ const failureForError = (
 	if (isCredentialStoreFailure(error)) {
 		return {
 			code: "credential-store",
-			message: errorMessage(error.cause),
+			message: "Provider credential storage operation failed.",
 			providerId,
 		};
 	}
@@ -677,7 +989,16 @@ const failureForError = (
 				providerId,
 			};
 		}
-		return { code: error.code, message: error.message, providerId };
+		const statusCode =
+			error.code === "provider"
+				? normalizeModelFailure(error).details?.statusCode
+				: undefined;
+		return {
+			code: error.code,
+			message: error.message,
+			providerId,
+			...(statusCode === undefined ? {} : { statusCode }),
+		};
 	}
 	return { code: "provider", message: errorMessage(error), providerId };
 };
@@ -719,10 +1040,41 @@ const terminalForStreamError = (
 			status: "aborted",
 		});
 	}
-	return terminal({
-		failure: failureForError(error, request.providerId, request.modelId),
-		status: "failure",
+	const failure = failureForError(error, request.providerId, request.modelId);
+	const modelFailure =
+		failure.code === "provider" ? normalizeModelFailure(failure) : undefined;
+	const statusCode = "statusCode" in failure ? failure.statusCode : undefined;
+	let cause: unknown;
+	if (isCredentialStoreFailure(error)) {
+		cause = error.cause;
+	} else if (error instanceof Error) {
+		cause = error.cause;
+	}
+	const causeCategory = diagnosticCauseCategoryFor(cause);
+	let causeCode: string | undefined;
+	if (
+		typeof cause === "object" &&
+		cause !== null &&
+		"code" in cause &&
+		typeof cause.code === "string" &&
+		SAFE_DIAGNOSTIC_ERROR_CODE_PATTERN.test(cause.code)
+	) {
+		causeCode = cause.code;
+	}
+	logger.debug("Provider chat request failed", {
+		errorName: error instanceof Error ? error.name : "Unknown",
+		failureCode: failure.code,
+		modelId: request.modelId,
+		providerId: request.providerId,
+		...(cause instanceof Error ? { causeName: cause.name } : {}),
+		...(causeCategory === undefined ? {} : { causeCategory }),
+		...(causeCode === undefined ? {} : { causeCode }),
+		...(modelFailure === undefined
+			? {}
+			: { modelFailureCode: modelFailure.code }),
+		...(statusCode === undefined ? {} : { statusCode }),
 	});
+	return terminal({ failure, status: "failure" });
 };
 
 const selectChatTarget = (
@@ -780,25 +1132,6 @@ export const createProviderCollection = (
 	const providers = new Map<string, RegisteredProvider>();
 	const dynamicModels = new Map<string, readonly ProviderModel[]>();
 	const restoredProviders = new Set<string>();
-	const authQueues = new Map<string, Promise<void>>();
-
-	const withProviderCredentialLock = async <T>(
-		providerId: string,
-		operation: () => Promise<T>
-	): Promise<T> => {
-		const previous = authQueues.get(providerId) ?? Promise.resolve();
-		const next = Promise.withResolvers<void>();
-		authQueues.set(providerId, next.promise);
-		await previous;
-		try {
-			return await operation();
-		} finally {
-			next.resolve();
-			if (authQueues.get(providerId) === next.promise) {
-				authQueues.delete(providerId);
-			}
-		}
-	};
 
 	const getRegisteredProvider = (providerId: string): RegisteredProvider => {
 		const registered = providers.get(providerId);
@@ -826,62 +1159,386 @@ export const createProviderCollection = (
 		if (registered === undefined || model === undefined) {
 			return false;
 		}
-		return withProviderCredentialLock(providerId, async () => {
-			let credential: unknown | undefined;
-			try {
-				credential = await credentialStore.get(providerId);
-			} catch {
-				return false;
-			}
-			if (credential === undefined) {
-				return false;
-			}
-			try {
-				return (
-					registered.provider.canEnforceMaxOutputTokens?.({
-						credential,
-						model,
-					}) ?? true
-				);
-			} catch {
-				return false;
-			}
-		});
+		let credential: unknown | undefined;
+		try {
+			credential = await credentialStore.read(providerId);
+		} catch {
+			return false;
+		}
+		if (credential === undefined) {
+			return false;
+		}
+		try {
+			return (
+				registered.provider.canEnforceMaxOutputTokens?.({
+					credential,
+					model,
+				}) ?? true
+			);
+		} catch {
+			return false;
+		}
+	};
+
+	const resolveProviderAuth = async (
+		provider: Provider,
+		model: ProviderModel | undefined,
+		signal: AbortSignal | undefined
+	): Promise<ProviderAuth | undefined> => {
+		let resolved: ProviderAuthorization | null | undefined;
+		let resolverFailed = false;
+		const modification = Promise.resolve()
+			.then(() =>
+				credentialStore.modify(
+					provider.id,
+					async (credential) => {
+						throwIfAborted(signal);
+						try {
+							resolved = await provider.resolveAuthorization({
+								credential,
+								model,
+								signal,
+							});
+						} catch (error) {
+							resolverFailed = true;
+							if (signal?.aborted || isAbortError(error)) {
+								throw error;
+							}
+							const failure = lifecycleFailureForError(error);
+							throw new ProviderError(failure.code, failure.message);
+						}
+						return resolved?.credential;
+					},
+					{ signal }
+				)
+			)
+			.catch((error: unknown) => {
+				if (resolverFailed || signal?.aborted || isAbortError(error)) {
+					throw error;
+				}
+				throw credentialStoreFailure(error);
+			});
+		await awaitWithSignal(modification, signal);
+		throwIfAborted(signal);
+		if (resolved == null) {
+			return;
+		}
+		return {
+			authorization: resolved.authorization,
+			...(resolved.headers === undefined
+				? {}
+				: { headers: mergeProviderHeaders(resolved.headers) }),
+			source: "stored-credential",
+		};
 	};
 
 	const resolveAuthorization = async (
 		provider: Provider,
+		model: ProviderModel | undefined,
 		signal: AbortSignal | undefined
-	): Promise<unknown> =>
-		withProviderCredentialLock(provider.id, async () => {
+	): Promise<ProviderAuth> => {
+		const resolved = await resolveProviderAuth(provider, model, signal);
+		if (resolved === undefined) {
+			throw new ProviderError(
+				"authentication",
+				`Provider ${provider.id} has no usable credentials.`
+			);
+		}
+		return resolved;
+	};
+
+	const providerAuthTargetFor = (
+		provider: string | ProviderModel
+	): Readonly<{ model?: ProviderModel; provider: Provider }> => {
+		const providerId =
+			typeof provider === "string" ? provider : provider.providerId;
+		const registered = providers.get(providerId);
+		if (registered === undefined) {
+			throw new ProviderError("provider", `Unknown provider: ${providerId}`);
+		}
+		if (typeof provider === "string") {
+			return { provider: registered.provider };
+		}
+		const model = getProviderModels(providerId).find(
+			(candidate) => candidate.modelId === provider.modelId
+		);
+		if (model === undefined) {
+			throw new ProviderError(
+				"provider",
+				`Unknown Provider Model: ${providerId}/${provider.modelId}`
+			);
+		}
+		return { model, provider: registered.provider };
+	};
+
+	const readCredentialForCheck = async (
+		providerId: string,
+		signal: AbortSignal | undefined
+	): Promise<Readonly<{ credential?: unknown; error?: unknown }>> => {
+		try {
+			return { credential: await credentialStore.read(providerId, { signal }) };
+		} catch (error) {
+			return { error };
+		}
+	};
+
+	const checkStoredCredential = async (
+		provider: Provider,
+		credential: unknown,
+		signal: AbortSignal | undefined
+	): Promise<ProviderAuthCheckResult> => {
+		try {
+			const configured =
+				(await provider.checkAuth?.({ credential, signal })) ?? true;
 			if (signal?.aborted) {
-				throw signal.reason ?? new DOMException("Aborted", "AbortError");
+				return { status: "aborted" };
 			}
-			let credential: unknown | undefined;
-			try {
-				credential = await credentialStore.get(provider.id);
-			} catch (error) {
-				throw credentialStoreFailure(error);
+			return configured
+				? { source: "stored-credential", status: "configured" }
+				: { status: "invalid" };
+		} catch (error) {
+			return signal?.aborted || isAbortError(error)
+				? { status: "aborted" }
+				: { failure: lifecycleFailureForError(error), status: "error" };
+		}
+	};
+
+	const checkAuth = async (
+		providerId: string,
+		{ signal }: CredentialStoreOptions = {}
+	): Promise<ProviderAuthCheckResult> => {
+		const registered = providers.get(providerId);
+		if (registered === undefined) {
+			return {
+				failure: {
+					code: "provider",
+					message: `Unknown provider: ${providerId}`,
+				},
+				status: "error",
+			};
+		}
+		if (signal?.aborted) {
+			return { status: "aborted" };
+		}
+		const readResult = await readCredentialForCheck(providerId, signal);
+		if ("error" in readResult) {
+			return signal?.aborted || isAbortError(readResult.error)
+				? { status: "aborted" }
+				: {
+						failure: {
+							code: "credential-store",
+							message: "Provider credentials could not be read.",
+						},
+						status: "error",
+					};
+		}
+		if (signal?.aborted) {
+			return { status: "aborted" };
+		}
+		if (readResult.credential === undefined) {
+			return { status: "missing" };
+		}
+		return checkStoredCredential(
+			registered.provider,
+			readResult.credential,
+			signal
+		);
+	};
+
+	const getAuth = async (
+		providerInput: string | ProviderModel,
+		{ signal }: CredentialStoreOptions = {}
+	): Promise<ProviderAuth | undefined> => {
+		const target = providerAuthTargetFor(providerInput);
+		try {
+			const auth = await resolveProviderAuth(
+				target.provider,
+				target.model,
+				signal
+			);
+			if (auth === undefined || target.model?.headers === undefined) {
+				return auth;
 			}
-			const resolved = await provider.resolveAuthorization({
-				credential,
+			return {
+				...auth,
+				headers: mergeProviderHeaders(auth.headers, target.model.headers),
+			};
+		} catch (error) {
+			if (signal?.aborted || isAbortError(error)) {
+				throw error;
+			}
+			const failure = lifecycleFailureForError(error);
+			throw new ProviderError(failure.code, failure.message);
+		}
+	};
+
+	const verifyConfiguredProvider = async (
+		target: Readonly<{ model?: ProviderModel; provider: Provider }>,
+		signal: AbortSignal | undefined
+	): Promise<ProviderAuthVerificationResult> => {
+		const verifyProviderAuth = target.provider.verifyAuth;
+		if (verifyProviderAuth === undefined) {
+			return { status: "unsupported" };
+		}
+		try {
+			const auth = await resolveProviderAuth(
+				target.provider,
+				target.model,
+				signal
+			);
+			if (signal?.aborted) {
+				return { status: "aborted" };
+			}
+			if (auth === undefined) {
+				return { status: "invalid" };
+			}
+			const result = await verifyProviderAuth({
+				authorization: auth.authorization,
+				model: target.model,
 				signal,
 			});
-			if (!resolved) {
-				throw new ProviderError(
-					"authentication",
-					`Provider ${provider.id} has no usable credentials.`
-				);
+			if (signal?.aborted) {
+				return { status: "aborted" };
 			}
-			if (resolved.credential !== undefined) {
-				try {
-					await credentialStore.set(provider.id, resolved.credential);
-				} catch (error) {
-					throw credentialStoreFailure(error);
-				}
-			}
-			return resolved.authorization;
-		});
+			return result === "unsupported"
+				? { status: "unsupported" }
+				: { source: auth.source, status: "verified" };
+		} catch (error) {
+			return signal?.aborted || isAbortError(error)
+				? { status: "aborted" }
+				: { failure: lifecycleFailureForError(error), status: "error" };
+		}
+	};
+
+	const verifyAuth = async (
+		providerInput: string | ProviderModel,
+		{ signal }: CredentialStoreOptions = {}
+	): Promise<ProviderAuthVerificationResult> => {
+		let target: Readonly<{ model?: ProviderModel; provider: Provider }>;
+		try {
+			target = providerAuthTargetFor(providerInput);
+		} catch (error) {
+			return { failure: lifecycleFailureForError(error), status: "error" };
+		}
+		const configuration = await checkAuth(target.provider.id, { signal });
+		if (configuration.status === "error") {
+			return configuration;
+		}
+		if (configuration.status !== "configured") {
+			return { status: configuration.status };
+		}
+		return verifyConfiguredProvider(target, signal);
+	};
+
+	const acquireLoginCredential = async (
+		provider: Provider,
+		loginOptions: ProviderLoginOptions
+	): Promise<
+		| Readonly<{ credential: unknown }>
+		| Readonly<{ result: ProviderLoginResult }>
+	> => {
+		if (loginOptions.signal?.aborted) {
+			return { result: { status: "cancelled" } };
+		}
+		if (provider.login === undefined) {
+			return loginOptions.credential === undefined
+				? { result: { status: "unsupported" } }
+				: { credential: loginOptions.credential };
+		}
+		try {
+			const credential = await provider.login(loginOptions);
+			return loginOptions.signal?.aborted || credential === undefined
+				? { result: { status: "cancelled" } }
+				: { credential };
+		} catch (error) {
+			return loginOptions.signal?.aborted || isAbortError(error)
+				? { result: { status: "cancelled" } }
+				: {
+						result: {
+							failure: lifecycleFailureForError(error),
+							status: "error",
+						},
+					};
+		}
+	};
+
+	const saveLoginCredential = async (
+		providerId: string,
+		credential: unknown,
+		signal: AbortSignal | undefined
+	): Promise<ProviderLoginResult> => {
+		try {
+			await credentialStore.modify(providerId, () => credential, { signal });
+			return { status: "saved" };
+		} catch (error) {
+			return signal?.aborted || isAbortError(error)
+				? { status: "cancelled" }
+				: {
+						failure: {
+							code: "credential-store",
+							message: "Provider credentials could not be saved.",
+						},
+						status: "error",
+					};
+		}
+	};
+
+	const login = async (
+		providerId: string,
+		loginOptions: ProviderLoginOptions
+	): Promise<ProviderLoginResult> => {
+		const registered = providers.get(providerId);
+		if (registered === undefined) {
+			return {
+				failure: {
+					code: "provider",
+					message: `Unknown provider: ${providerId}`,
+				},
+				status: "error",
+			};
+		}
+		const loginResult = await acquireLoginCredential(
+			registered.provider,
+			loginOptions
+		);
+		if ("result" in loginResult) {
+			return loginResult.result;
+		}
+		return saveLoginCredential(
+			providerId,
+			loginResult.credential,
+			loginOptions.signal
+		);
+	};
+
+	const logout = async (
+		providerId: string,
+		{ signal }: CredentialStoreOptions = {}
+	): Promise<ProviderLogoutResult> => {
+		if (!providers.has(providerId)) {
+			return {
+				failure: {
+					code: "provider",
+					message: `Unknown provider: ${providerId}`,
+				},
+				status: "error",
+			};
+		}
+		try {
+			await credentialStore.delete(providerId, { signal });
+			return { status: "logged-out" };
+		} catch (error) {
+			return signal?.aborted || isAbortError(error)
+				? { status: "aborted" }
+				: {
+						failure: {
+							code: "credential-store",
+							message: "Provider credentials could not be removed.",
+						},
+						status: "error",
+					};
+		}
+	};
 
 	const toProviderChatRequest = (request: ChatRequest): ProviderChatRequest => {
 		const providerRequest: {
@@ -917,21 +1574,41 @@ export const createProviderCollection = (
 	): AsyncIterable<ChatEvent> {
 		try {
 			throwIfAborted(request.signal);
-			const authorization = await resolveAuthorization(
-				selection.registered.provider,
+			const provider = selection.registered.provider;
+			const auth = await resolveAuthorization(
+				provider,
+				selection.model,
 				request.signal
 			);
 			throwIfAborted(request.signal);
+			const headerContext: ProviderChatHeaderContext = {
+				authorization: auth.authorization,
+				model: selection.model,
+				signal: request.signal,
+			};
+			const protocolHeaders = await provider.getChatHeaders?.(headerContext);
+			throwIfAborted(request.signal);
+			let headers = mergeProviderHeaders(
+				protocolHeaders,
+				auth.headers,
+				provider.headers,
+				selection.model.headers,
+				request.headers
+			);
+			if (request.transformHeaders !== undefined) {
+				const transformed = await awaitWithSignal(
+					Promise.resolve(request.transformHeaders(headers)),
+					request.signal
+				);
+				throwIfAborted(request.signal);
+				headers = mergeProviderHeaders(headers, transformed);
+			}
 			const providerRequest = toProviderChatRequest(request);
 			let continuation: unknown | undefined;
-			for await (const event of selection.registered.provider.streamChat(
-				providerRequest,
-				{
-					authorization,
-					model: selection.model,
-					signal: request.signal,
-				}
-			)) {
+			for await (const event of provider.streamChat(providerRequest, {
+				...headerContext,
+				headers,
+			})) {
 				throwIfAborted(request.signal);
 				if (event.type === "finish") {
 					continuation = event.continuation;
@@ -961,6 +1638,29 @@ export const createProviderCollection = (
 		yield* streamSelectedChat(request, selection);
 	};
 
+	const getConfiguredProviderIdsFromStore = async (
+		providerIds: readonly string[]
+	): Promise<ReadonlySet<string>> => {
+		const configuredProviderIds = new Set(
+			(await credentialStore.list()).map(({ providerId }) => providerId)
+		);
+		const providerIdsWithoutMetadata = providerIds.filter(
+			(providerId) =>
+				providers.has(providerId) && !configuredProviderIds.has(providerId)
+		);
+		const targetedCredentialPresence = await Promise.all(
+			providerIdsWithoutMetadata.map(
+				async (providerId) => (await credentialStore.has?.(providerId)) === true
+			)
+		);
+		providerIdsWithoutMetadata.forEach((providerId, index) => {
+			if (targetedCredentialPresence[index]) {
+				configuredProviderIds.add(providerId);
+			}
+		});
+		return configuredProviderIds;
+	};
+
 	let closePromise: Promise<void> | undefined;
 	const close = (): Promise<void> => {
 		if (closePromise !== undefined) {
@@ -988,43 +1688,41 @@ export const createProviderCollection = (
 		chat: streamChat,
 		close,
 		deleteCredential: async (providerId) => {
-			getRegisteredProvider(providerId);
-			await withProviderCredentialLock(providerId, async () => {
-				try {
-					await credentialStore.delete(providerId);
-				} catch (error) {
-					throw new ProviderError(
-						"provider",
-						"Could not delete provider credentials.",
-						{
-							cause: error,
-						}
-					);
-				}
-			});
-		},
-		getAvailable: async (providerId) => {
-			const configuredProviders = new Set<string>();
-			const providerIds =
-				providerId === undefined ? providers.keys() : [providerId];
-			for (const configuredProviderId of providerIds) {
-				if (
-					providers.has(configuredProviderId) &&
-					(await credentialStore.get(configuredProviderId)) !== undefined
-				) {
-					configuredProviders.add(configuredProviderId);
-				}
+			const result = await logout(providerId);
+			if (result.status === "error") {
+				throw new ProviderError(result.failure.code, result.failure.message);
 			}
-			return [...configuredProviders].flatMap((configuredProviderId) =>
-				getProviderModels(configuredProviderId)
-			);
+			if (result.status === "aborted") {
+				throw new DOMException("Credential deletion aborted.", "AbortError");
+			}
+		},
+		checkAuth,
+		getAuth,
+		verifyAuth,
+		login,
+		logout,
+		getAvailable: async (providerId) => {
+			const providerIds =
+				providerId === undefined ? [...providers.keys()] : [providerId];
+			const configuredProviders =
+				await getConfiguredProviderIdsFromStore(providerIds);
+			return providerIds
+				.filter(
+					(configuredProviderId) =>
+						providers.has(configuredProviderId) &&
+						configuredProviders.has(configuredProviderId)
+				)
+				.flatMap((configuredProviderId) =>
+					getProviderModels(configuredProviderId)
+				);
 		},
 		getConfiguredProviderIds: async () => {
 			const providerIds = [...providers.keys()];
-			const credentials = await Promise.all(
-				providerIds.map((providerId) => credentialStore.get(providerId))
+			const configuredProviders =
+				await getConfiguredProviderIdsFromStore(providerIds);
+			return providerIds.filter((providerId) =>
+				configuredProviders.has(providerId)
 			);
-			return providerIds.filter((_, index) => credentials[index] !== undefined);
 		},
 		getModel: (providerId, modelId) =>
 			getProviderModels(providerId).find((model) => model.modelId === modelId),
@@ -1082,14 +1780,15 @@ export const createProviderCollection = (
 				discoverableProviders.map(async ([providerId, registered]) => {
 					try {
 						throwIfAborted(refreshOptions.signal);
-						const authorization = await resolveAuthorization(
+						const auth = await resolveAuthorization(
 							registered.provider,
+							undefined,
 							refreshOptions.signal
 						);
 						throwIfAborted(refreshOptions.signal);
 						const discovered = validateProviderModels(
 							await registered.provider.discoverModels?.({
-								authorization,
+								authorization: auth.authorization,
 								signal: refreshOptions.signal,
 							}),
 							providerId,
@@ -1128,6 +1827,9 @@ export const createProviderCollection = (
 			if (provider.id.trim().length === 0) {
 				throw new Error("Provider ID must not be empty.");
 			}
+			if (!isOptionalProviderHeaders(provider.headers)) {
+				throw new Error(`Invalid default headers for provider ${provider.id}.`);
+			}
 			const models: ProviderModel[] = [];
 			const modelIds = new Set<string>();
 			for (const candidate of provider.models) {
@@ -1156,19 +1858,15 @@ export const createProviderCollection = (
 		},
 		setCredential: async (providerId, credential) => {
 			getRegisteredProvider(providerId);
-			await withProviderCredentialLock(providerId, async () => {
-				try {
-					await credentialStore.set(providerId, credential);
-				} catch (error) {
-					throw new ProviderError(
-						"provider",
-						"Could not save provider credentials.",
-						{
-							cause: error,
-						}
-					);
-				}
-			});
+			try {
+				await credentialStore.modify(providerId, () => credential);
+			} catch (error) {
+				throw new ProviderError(
+					"credential-store",
+					"Could not save provider credentials.",
+					{ cause: error }
+				);
+			}
 		},
 	};
 };

@@ -7,7 +7,7 @@ import {
 	type McpManagementOAuthOperations,
 } from "@wincode/mcp";
 import open from "open";
-import { createPluginSecretStore } from "@/modules/plugins/plugin-secret-store";
+import { createMcpSecretStore } from "@/modules/mcp/mcp-secret-store";
 import { resolveProjectTrust } from "@/modules/project-trust/project-trust";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { ConfigStore } from "@/shared/config/config-store";
@@ -324,7 +324,7 @@ const runLogin = async (
 	io: McpCliIo,
 	options: McpCliOptions
 ): Promise<void> => {
-	const secrets = createPluginSecretStore("mcp", userDataDir);
+	const secrets = createMcpSecretStore(userDataDir);
 	await management.login({
 		name,
 		openAuthorizationUrl:
@@ -367,7 +367,7 @@ const runLogout = async (
 ): Promise<void> => {
 	await management.logout({
 		name,
-		secrets: createPluginSecretStore("mcp", userDataDir),
+		secrets: createMcpSecretStore(userDataDir),
 	});
 	outputLine(io.stdout, `MCP Server '${name}' is signed out.`);
 };

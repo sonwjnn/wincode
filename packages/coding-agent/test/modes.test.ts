@@ -34,6 +34,7 @@ import {
 	type PluginProviderDescriptor,
 	type PluginRuntime,
 } from "../modules/plugins/runtime";
+import { pluginProviderStorageId } from "../modules/providers/provider-stores";
 import { createSessionHost } from "../modules/sessions/host/session-host";
 import {
 	openSessionServices,
@@ -51,6 +52,7 @@ import {
 	createFakeProviderRecorder,
 	type FakeProviderStepScript,
 } from "./support/e2e-fake-runtime";
+import { createInMemoryCredentialStore } from "./support/provider-stores";
 
 const fakeRecorder = createFakeProviderRecorder();
 
@@ -232,11 +234,14 @@ const oneShotPluginProviderCollectionFactory: SessionServicesSources["createProv
 			throw new Error("The fake One-Shot Plugin Provider was not trusted.");
 		}
 		return createInteractiveSessionProviderCollection({
-			credentialStore: {
-				delete: () => undefined,
-				get: () => ({ fake: true }),
-				set: () => undefined,
-			},
+			credentialStore: createInMemoryCredentialStore(
+				new Map(
+					pluginProviders.map(({ pluginId, providerId, sourceIdentity }) => [
+						pluginProviderStorageId({ pluginId, providerId, sourceIdentity }),
+						{ fake: true },
+					])
+				)
+			),
 			modelStore: { get: () => undefined, set: () => undefined },
 			pluginProviders,
 			...(sessionId === undefined ? {} : { sessionId }),
@@ -878,15 +883,7 @@ test("headless Print and JSON report actionable SDK authentication failures with
 		registry,
 		async () =>
 			createInteractiveSessionProviderCollection({
-				credentialStore: {
-					delete: (providerId) => {
-						credentialStore.delete(providerId);
-					},
-					get: (providerId) => credentialStore.get(providerId),
-					set: (providerId, credential) => {
-						credentialStore.set(providerId, credential);
-					},
-				},
+				credentialStore: createInMemoryCredentialStore(credentialStore),
 				modelStore: {
 					get: (providerId) => modelStore.get(providerId),
 					set: (providerId, models) => {
@@ -988,11 +985,7 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 		registry,
 		async () =>
 			createInteractiveSessionProviderCollection({
-				credentialStore: {
-					delete: () => undefined,
-					get: () => undefined,
-					set: () => undefined,
-				},
+				credentialStore: createInMemoryCredentialStore(new Map()),
 				modelStore: {
 					get: () => undefined,
 					set: () => undefined,
@@ -1060,11 +1053,15 @@ test("One-Shot rejects restored ownerless Provider Models before constructing or
 			const collection = createProviderCollection({
 				credentialStore: {
 					delete: () => undefined,
-					get: () => {
+					list: () => {
+						activity.credentialReads += 1;
+						return [];
+					},
+					modify: () => undefined,
+					read: () => {
 						activity.credentialReads += 1;
 						return { fake: true };
 					},
-					set: () => undefined,
 				},
 				modelStore: {
 					get: () => {
@@ -1187,11 +1184,15 @@ test("One-Shot rejects a Host Provider collection without the trusted snapshot b
 			const collection = createProviderCollection({
 				credentialStore: {
 					delete: () => undefined,
-					get: () => {
+					list: () => {
+						activity.credentialReads += 1;
+						return [];
+					},
+					modify: () => undefined,
+					read: () => {
 						activity.credentialReads += 1;
 						return { fake: true };
 					},
-					set: () => undefined,
 				},
 				modelStore: {
 					get: () => {
@@ -1310,11 +1311,15 @@ test("One-Shot rejects a stale Host Plugin snapshot before reserving a built-in 
 			const collection = createProviderCollection({
 				credentialStore: {
 					delete: () => undefined,
-					get: () => {
+					list: () => {
+						activity.credentialReads += 1;
+						return [];
+					},
+					modify: () => undefined,
+					read: () => {
 						activity.credentialReads += 1;
 						return "fake-one-shot-key";
 					},
-					set: () => undefined,
 				},
 				modelStore: {
 					get: () => {

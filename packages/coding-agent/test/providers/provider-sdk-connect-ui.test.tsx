@@ -75,7 +75,7 @@ test("legacy provider connect flow still shows a separate method picker", async 
 		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 3);
 		const methodFrame = setup.captureCharFrame();
-		expect(methodFrame).toContain("Choose method");
+		expect(methodFrame).toContain("Choose action");
 		expect(methodFrame).toContain("Search methods");
 		expect(methodFrame).toContain("Browser sign-in");
 		expect(methodFrame).toContain("API key");

@@ -1,21 +1,21 @@
 import * as path from "node:path";
-import type { CredentialStore, ModelStore, ProviderModel } from "@wincode/ai";
+import type {
+	CredentialMetadata,
+	CredentialStore,
+	ModelStore,
+	ProviderModel,
+} from "@wincode/ai";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import { withAuthFile } from "@/shared/storage/auth-file";
 import {
 	readSecureJsonFile,
 	writeSecureJsonFile,
 } from "@/shared/storage/secure-json-file";
-import { createUserSecretStore } from "@/shared/storage/user-secret-store";
 
 const providerIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
-const modelWriteQueues = new Map<string, Promise<void>>();
+const fileWriteQueues = new Map<string, Promise<void>>();
 
-type BunSecretStore = Partial<typeof Bun.secrets>;
-
-export type ProviderSdkStoreOptions = Readonly<{
-	platformStore?: BunSecretStore | null;
-	userDataDir?: string;
-}>;
+export type ProviderSdkStoreOptions = Readonly<{ userDataDir?: string }>;
 
 const providerIdForStorage = (providerId: string): string => {
 	if (!providerIdPattern.test(providerId)) {
@@ -43,18 +43,18 @@ export const pluginProviderStorageId = (input: {
 	return `plugin-${digest}`;
 };
 
-const queueModelWrite = async (
+const queueFileWrite = async (
 	filePath: string,
 	write: () => Promise<void>
 ): Promise<void> => {
-	const previous = modelWriteQueues.get(filePath) ?? Promise.resolve();
+	const previous = fileWriteQueues.get(filePath) ?? Promise.resolve();
 	const current = previous.catch(() => undefined).then(write);
-	modelWriteQueues.set(filePath, current);
+	fileWriteQueues.set(filePath, current);
 	try {
 		await current;
 	} finally {
-		if (modelWriteQueues.get(filePath) === current) {
-			modelWriteQueues.delete(filePath);
+		if (fileWriteQueues.get(filePath) === current) {
+			fileWriteQueues.delete(filePath);
 		}
 	}
 };
@@ -69,40 +69,106 @@ const modelSnapshotPathFor = (
 		`${providerIdForStorage(providerId)}.json`
 	);
 
+const credentialTypeFor = (credential: unknown): string => {
+	if (typeof credential !== "object" || credential === null) {
+		return "unknown";
+	}
+	if ("kind" in credential && typeof credential.kind === "string") {
+		return credential.kind;
+	}
+	if ("type" in credential && typeof credential.type === "string") {
+		return credential.type;
+	}
+	return "unknown";
+};
+
+const assertCredential = (credential: unknown): void => {
+	if (JSON.stringify(credential) === undefined) {
+		throw new Error("Provider SDK credential must be JSON serializable.");
+	}
+};
+
 /** Creates the distinct application Provider SDK credential namespace. */
 export const createProviderSdkCredentialStore = (
 	options: ProviderSdkStoreOptions = {}
 ): CredentialStore => {
 	const userDataDir = options.userDataDir ?? resolveUserDataDir();
-	const secrets = createUserSecretStore({
-		accountPrefix: "provider-sdk",
-		filePath: path.join(userDataDir, "provider-sdk-credentials.json"),
-		platformService: "wincode-provider-sdk",
-		platformStore: options.platformStore,
-		secretLabel: "Provider SDK credential",
-		validateKey: providerIdForStorage,
-	});
 	return Object.freeze({
-		delete: (providerId) => secrets.delete(providerIdForStorage(providerId)),
-		get: async (providerId) => {
-			const stored = await secrets.get(providerIdForStorage(providerId));
-			if (stored === undefined) {
-				return;
-			}
-			try {
-				return JSON.parse(stored) as unknown;
-			} catch {
-				throw new Error("Stored Provider SDK credential is invalid.");
-			}
+		delete(providerId, { signal } = {}) {
+			const storageId = providerIdForStorage(providerId);
+			return withAuthFile(
+				userDataDir,
+				async (document, save) => {
+					if (!Object.hasOwn(document.providers, storageId)) {
+						return;
+					}
+					delete document.providers[storageId];
+					await save();
+				},
+				signal
+			);
 		},
-		set: (providerId, credential) =>
-			secrets.set(providerIdForStorage(providerId), JSON.stringify(credential)),
+		list({ signal } = {}): Promise<readonly CredentialMetadata[]> {
+			return withAuthFile(
+				userDataDir,
+				async (document) =>
+					Object.entries(document.providers)
+						.filter(([id]) => providerIdPattern.test(id))
+						.map(([providerId, credential]) => ({
+							providerId,
+							type: credentialTypeFor(credential),
+						}))
+						.sort((left, right) =>
+							left.providerId.localeCompare(right.providerId)
+						),
+				signal
+			);
+		},
+		has(providerId, { signal } = {}) {
+			const storageId = providerIdForStorage(providerId);
+			return withAuthFile(
+				userDataDir,
+				async (document) => Object.hasOwn(document.providers, storageId),
+				signal
+			);
+		},
+		modify(providerId, update, { signal } = {}) {
+			const storageId = providerIdForStorage(providerId);
+			return withAuthFile(
+				userDataDir,
+				async (document, save) => {
+					const previous = Object.hasOwn(document.providers, storageId)
+						? document.providers[storageId]
+						: undefined;
+					const replacement = await update(previous);
+					if (replacement === undefined) {
+						return previous;
+					}
+					assertCredential(replacement);
+					document.providers[storageId] = replacement;
+					await save();
+					return replacement;
+				},
+				signal
+			);
+		},
+		read(providerId, { signal } = {}) {
+			const storageId = providerIdForStorage(providerId);
+			return withAuthFile(
+				userDataDir,
+				async (document) =>
+					Object.hasOwn(document.providers, storageId)
+						? document.providers[storageId]
+						: undefined,
+				signal
+			);
+		},
 	});
 };
 
 /** Creates a user-scoped offline store for last-successful Provider Models. */
 export const createProviderSdkModelStore = (
-	options: Pick<ProviderSdkStoreOptions, "userDataDir"> = {}
+	options: ProviderSdkStoreOptions = {}
 ): ModelStore => {
 	const userDataDir = options.userDataDir ?? resolveUserDataDir();
 	return Object.freeze({
@@ -122,7 +188,7 @@ export const createProviderSdkModelStore = (
 		},
 		set(providerId, models, { signal }): Promise<void> {
 			const filePath = modelSnapshotPathFor(userDataDir, providerId);
-			return queueModelWrite(filePath, () =>
+			return queueFileWrite(filePath, () =>
 				writeSecureJsonFile(filePath, models, "Provider Model snapshot", {
 					signal,
 				})
@@ -140,7 +206,7 @@ const providerSdkStoresByUserDataDir = new Map<string, ProviderSdkStores>();
 
 /** Shares the app-owned Provider SDK stores across separate Host compositions. */
 export const getProviderSdkStores = (
-	options: Pick<ProviderSdkStoreOptions, "userDataDir"> = {}
+	options: ProviderSdkStoreOptions = {}
 ): ProviderSdkStores => {
 	const userDataDir = options.userDataDir ?? resolveUserDataDir();
 	let stores = providerSdkStoresByUserDataDir.get(userDataDir);

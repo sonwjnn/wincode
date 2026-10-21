@@ -167,6 +167,23 @@ const getDiagnosticText = (value: unknown): string => {
 const getCombinedDiagnosticText = (chain: readonly unknown[]): string =>
 	chain.map(getDiagnosticText).filter(Boolean).join("\n");
 
+const getStructuredFailureCode = (
+	chain: readonly unknown[]
+): ModelFailureCode | undefined => {
+	for (const value of chain) {
+		const code = getProperty(value, "code");
+		if (code === "transport") {
+			return "network";
+		}
+		const modelFailureCode = modelFailureCodes.find(
+			(candidate) => candidate === code
+		);
+		if (modelFailureCode !== undefined) {
+			return modelFailureCode;
+		}
+	}
+};
+
 const getFailureCode = (
 	chain: readonly unknown[],
 	text: string,
@@ -201,7 +218,12 @@ const getFailureCode = (
 	) {
 		return "cancelled";
 	}
-	if (statusCode === 400 || INVALID_REQUEST_PATTERN.test(text)) {
+	if (
+		statusCode === 400 ||
+		statusCode === 404 ||
+		statusCode === 422 ||
+		INVALID_REQUEST_PATTERN.test(text)
+	) {
 		return "invalid-request";
 	}
 	if (!isUndefined(statusCode) && statusCode >= 500) {
@@ -210,7 +232,7 @@ const getFailureCode = (
 	if (NETWORK_PATTERN.test(text)) {
 		return "network";
 	}
-	return "unknown";
+	return getStructuredFailureCode(chain) ?? "unknown";
 };
 
 const getSource = (

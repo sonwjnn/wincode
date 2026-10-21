@@ -35,14 +35,29 @@ type ProviderGroup = Readonly<{
 	providerId: string;
 }>;
 
-type MethodOption = Readonly<{
-	details: string;
-	label: string;
-	option: InteractiveProviderOption;
-}>;
+type MethodOption =
+	| Readonly<{
+			kind: "connect";
+			details: string;
+			label: string;
+			option: InteractiveProviderOption;
+	  }>
+	| Readonly<{
+			kind: "verify" | "logout";
+			details: string;
+			label: string;
+	  }>;
+
+type ProviderAuthStatus =
+	| "checking"
+	| "configured"
+	| "verified"
+	| "missing"
+	| "invalid"
+	| "error";
 
 type ProviderPickerProps = Readonly<{
-	connectedProviderIds: ReadonlySet<string>;
+	authStatusByProviderId: ReadonlyMap<string, ProviderAuthStatus>;
 	connectingProviderId: string | undefined;
 	error: string | undefined;
 	onSelect: (provider: ProviderGroup) => void;
@@ -50,7 +65,8 @@ type ProviderPickerProps = Readonly<{
 }>;
 
 type ProviderMethodPickerProps = Readonly<{
-	onSelect: (option: InteractiveProviderOption) => void;
+	isConfigured: boolean;
+	onSelect: (method: MethodOption) => void;
 	options: readonly InteractiveProviderOption[];
 }>;
 
@@ -81,6 +97,27 @@ const getProviderDetails = (options: readonly InteractiveProviderOption[]) => {
 		return "Plugin sign-in";
 	}
 	return "API key only";
+};
+
+const getProviderAuthStatusLabel = (
+	status: ProviderAuthStatus | undefined
+): string => {
+	switch (status) {
+		case "checking":
+			return "Checking credentials";
+		case "configured":
+			return "Credential saved · not verified";
+		case "verified":
+			return "Verified in this session";
+		case "missing":
+			return "No credential saved";
+		case "invalid":
+			return "Credential is invalid";
+		case "error":
+			return "Status unavailable";
+		default:
+			return "Status unavailable";
+	}
 };
 
 const groupProviders = (
@@ -124,40 +161,69 @@ const groupProviders = (
 	});
 };
 
+const connectMethodCopyFor = (
+	option: InteractiveProviderOption
+): Readonly<{ details: string; label: string }> => {
+	if (option.kind === "plugin") {
+		return {
+			details: "Use the Plugin Provider sign-in flow.",
+			label: "Plugin sign-in",
+		};
+	}
+	if (option.kind === "oauth") {
+		return {
+			details: "Open a browser and copy the URL.",
+			label: "Browser sign-in",
+		};
+	}
+	return {
+		details: "Paste a key directly into the terminal.",
+		label: "API key",
+	};
+};
+
 const methodOptionsFor = (
-	options: readonly InteractiveProviderOption[]
-): readonly MethodOption[] =>
-	options.flatMap((option) => {
-		if (option.kind === "plugin") {
-			return [];
-		}
-		return [
-			{
-				details:
-					option.kind === "oauth"
-						? "Open a browser and copy the URL."
-						: "Paste a key directly into the terminal.",
-				label: option.kind === "oauth" ? "Browser sign-in" : "API key",
-				option,
-			},
-		];
-	});
+	options: readonly InteractiveProviderOption[],
+	isConfigured: boolean
+): readonly MethodOption[] => [
+	...options.map(
+		(option): MethodOption => ({
+			kind: "connect",
+			...connectMethodCopyFor(option),
+			option,
+		})
+	),
+	...(isConfigured
+		? [
+				{
+					kind: "verify" as const,
+					details: "Ask the provider to validate saved credentials.",
+					label: "Verify saved credentials",
+				},
+				{
+					kind: "logout" as const,
+					details: "Remove this Provider SDK credential.",
+					label: "Log out",
+				},
+			]
+		: []),
+];
 
 const apiKeyDialogMethodsFor = (
 	options: readonly InteractiveProviderOption[]
 ): readonly ("api-key" | "browser")[] =>
-	methodOptionsFor(options).map(({ option }) => {
-		if (option.kind === "oauth") {
-			return "browser";
+	options.flatMap((option) => {
+		if (option.kind === "plugin") {
+			return [];
 		}
-		return "api-key";
+		return [option.kind === "oauth" ? "browser" : "api-key"];
 	});
 
 const getMethodLabelColumnWidth = (options: readonly MethodOption[]): number =>
 	Math.max(17, ...options.map(({ label }) => label.length + 2));
 
 const ProviderPicker = ({
-	connectedProviderIds,
+	authStatusByProviderId,
 	connectingProviderId,
 	error,
 	onSelect,
@@ -177,9 +243,12 @@ const ProviderPicker = ({
 			error={error}
 			getKey={(provider) => provider.providerId}
 			getSearchText={(provider) =>
-				`${provider.displayName} ${getProviderDetails(provider.options)} ${provider.providerId}`
+				`${provider.displayName} ${getProviderDetails(provider.options)} ${provider.providerId} ${authStatusByProviderId.get(provider.providerId) ?? ""}`
 			}
-			isItemActive={(provider) => connectedProviderIds.has(provider.providerId)}
+			isItemActive={(provider) =>
+				authStatusByProviderId.get(provider.providerId) === "configured" ||
+				authStatusByProviderId.get(provider.providerId) === "verified"
+			}
 			isItemSelectable={() => connectingProviderId === undefined}
 			items={providers}
 			onSelect={onSelect}
@@ -204,7 +273,7 @@ const ProviderPicker = ({
 								selectable={false}
 							>
 								{connectingProviderId === provider.providerId
-									? `Connecting ${provider.displayName}…`
+									? `Updating ${provider.displayName}…`
 									: provider.displayName}
 							</text>
 						</box>
@@ -214,7 +283,7 @@ const ProviderPicker = ({
 								fg={isSelected ? selectedTextColor : colors.textMuted}
 								selectable={false}
 							>
-								{getProviderDetails(provider.options)}
+								{`${getProviderDetails(provider.options)} · ${getProviderAuthStatusLabel(authStatusByProviderId.get(provider.providerId))}`}
 							</text>
 						</box>
 					</box>
@@ -225,22 +294,25 @@ const ProviderPicker = ({
 };
 
 const ProviderMethodPicker = ({
+	isConfigured,
 	onSelect,
 	options,
 }: ProviderMethodPickerProps) => {
 	const { colors } = useTheme();
 	const selectedTextColor = getContrastingTextColor(colors.selection);
-	const methods = methodOptionsFor(options);
+	const methods = methodOptionsFor(options, isConfigured);
 	const labelColumnWidth = getMethodLabelColumnWidth(methods);
 	useDialogEscape();
 
 	return (
 		<SearchListDialogWrapper
 			emptyText="No available methods"
-			getKey={(method) => method.option.methodId}
+			getKey={(method) =>
+				method.kind === "connect" ? method.option.methodId : method.kind
+			}
 			getSearchText={(method) => `${method.label} ${method.details}`}
 			items={methods}
-			onSelect={(method) => onSelect(method.option)}
+			onSelect={onSelect}
 			placeholder="Search methods"
 			renderItem={(method, isSelected) => (
 				<SelectableDialogItem>
@@ -309,7 +381,7 @@ const ProviderOAuthProgress = ({
 				show({
 					message:
 						option.successMessage ??
-						`${providerName} connected with browser sign-in.`,
+						`${providerName} browser sign-in completed and credentials were saved.`,
 					variant: "success",
 				});
 			})
@@ -402,9 +474,9 @@ export const ProviderSdkConnectDialogContent = ({
 	const dialog = useDialog();
 	const { show } = useToast();
 	const [connectingProviderId, setConnectingProviderId] = useState<string>();
-	const [connectedProviderIds, setConnectedProviderIds] = useState<
-		ReadonlySet<string>
-	>(new Set());
+	const [authStatusByProviderId, setAuthStatusByProviderId] = useState<
+		ReadonlyMap<string, ProviderAuthStatus>
+	>(new Map());
 	const [error, setError] = useState<string>();
 	const connectAbortController = useRef<AbortController | undefined>(undefined);
 	const requestTextInput = useMemo(
@@ -419,34 +491,52 @@ export const ProviderSdkConnectDialogContent = ({
 
 	useEffect(() => {
 		let active = true;
-		const getAvailableModels = controller.getAvailableModels;
-		if (getAvailableModels === undefined) {
+		const checkProviderAuth = controller.checkProviderAuth;
+		if (checkProviderAuth === undefined) {
+			setAuthStatusByProviderId(new Map());
 			return () => {
 				active = false;
 			};
 		}
+		const abortController = new AbortController();
+		setAuthStatusByProviderId(
+			new Map(providers.map(({ providerId }) => [providerId, "checking"]))
+		);
 		void Promise.all(
 			providers.map(async ({ providerId }) => {
 				try {
-					const models = await getAvailableModels(providerId);
-					return models.length > 0 ? providerId : undefined;
+					const result = await checkProviderAuth(providerId, {
+						signal: abortController.signal,
+					});
+					let status: ProviderAuthStatus;
+					switch (result.status) {
+						case "configured":
+							status = "configured";
+							break;
+						case "invalid":
+							status = "invalid";
+							break;
+						case "error":
+							status = "error";
+							break;
+						default:
+							status = "missing";
+					}
+					return [providerId, status] as const;
 				} catch {
-					return;
+					return [providerId, "error"] as const;
 				}
 			})
-		).then((availableProviderIds) => {
+		).then((statuses) => {
 			if (active) {
-				setConnectedProviderIds(
-					new Set(
-						availableProviderIds.filter(
-							(providerId): providerId is string => providerId !== undefined
-						)
-					)
-				);
+				setAuthStatusByProviderId(new Map(statuses));
 			}
 		});
 		return () => {
 			active = false;
+			abortController.abort(
+				new DOMException("Provider status check cancelled", "AbortError")
+			);
 		};
 	}, [controller, providers]);
 
@@ -484,7 +574,7 @@ export const ProviderSdkConnectDialogContent = ({
 				}
 				dialog.closeAll();
 				show({
-					message: `${provider.displayName} connected and Known Models refreshed.`,
+					message: `${provider.displayName} sign-in completed and Known Models refreshed.`,
 					variant: "success",
 				});
 			} catch (connectError) {
@@ -507,20 +597,142 @@ export const ProviderSdkConnectDialogContent = ({
 		[dialog, requestTextInput, show]
 	);
 
+	const verifyProviderAuth = useCallback(
+		async (provider: ProviderGroup, signal: AbortSignal): Promise<void> => {
+			const result = await controller.verifyProviderAuth(provider.providerId, {
+				signal,
+			});
+			if (result.status === "aborted" || signal.aborted) {
+				return;
+			}
+			switch (result.status) {
+				case "error":
+					show({ message: result.failure.message, variant: "error" });
+					return;
+				case "verified":
+					setAuthStatusByProviderId((current) =>
+						new Map(current).set(provider.providerId, "verified")
+					);
+					show({
+						message: `${provider.displayName} credentials were verified by the provider.`,
+						variant: "success",
+					});
+					return;
+				case "unsupported":
+					show({
+						message: `${provider.displayName} does not support explicit credential verification.`,
+						variant: "info",
+					});
+					return;
+				case "missing":
+					setAuthStatusByProviderId((current) =>
+						new Map(current).set(provider.providerId, "missing")
+					);
+					show({
+						message: `${provider.displayName} has no saved credentials.`,
+						variant: "error",
+					});
+					return;
+				case "invalid":
+					setAuthStatusByProviderId((current) =>
+						new Map(current).set(provider.providerId, "invalid")
+					);
+					show({
+						message: `${provider.displayName} credentials are invalid.`,
+						variant: "error",
+					});
+					return;
+				default:
+					return;
+			}
+		},
+		[controller, show]
+	);
+
+	const logoutProviderAuth = useCallback(
+		async (provider: ProviderGroup, signal: AbortSignal): Promise<void> => {
+			const result = await controller.logoutProvider(provider.providerId, {
+				signal,
+			});
+			if (result.status === "aborted" || signal.aborted) {
+				return;
+			}
+			if (result.status === "error") {
+				show({ message: result.failure.message, variant: "error" });
+				return;
+			}
+			setAuthStatusByProviderId((current) =>
+				new Map(current).set(provider.providerId, "missing")
+			);
+			show({
+				message: `${provider.displayName} Provider SDK credentials were removed.`,
+				variant: "success",
+			});
+		},
+		[controller, show]
+	);
+
+	const runProviderAuthAction = useCallback(
+		async (provider: ProviderGroup, action: "verify" | "logout") => {
+			const abortController = new AbortController();
+			connectAbortController.current = abortController;
+			setConnectingProviderId(provider.providerId);
+			try {
+				if (action === "verify") {
+					await verifyProviderAuth(provider, abortController.signal);
+				} else {
+					await logoutProviderAuth(provider, abortController.signal);
+				}
+			} catch (actionError) {
+				if (!abortController.signal.aborted) {
+					show({
+						message: getErrorMessage(
+							actionError,
+							"Provider auth action failed."
+						),
+						variant: "error",
+					});
+				}
+			} finally {
+				if (connectAbortController.current === abortController) {
+					connectAbortController.current = undefined;
+					if (!abortController.signal.aborted) {
+						setConnectingProviderId(undefined);
+					}
+				}
+			}
+		},
+		[logoutProviderAuth, show, verifyProviderAuth]
+	);
+
 	const openProviderMethods = useCallback(
 		(provider: ProviderGroup) => {
 			setError(undefined);
+			const isConfigured =
+				authStatusByProviderId.get(provider.providerId) === "configured" ||
+				authStatusByProviderId.get(provider.providerId) === "verified";
 			const pluginOption = provider.options.find(
 				(option): option is PluginConnectOption => option.kind === "plugin"
 			);
-			if (pluginOption !== undefined) {
+			if (pluginOption !== undefined && !isConfigured) {
 				void connectPluginProvider(provider, pluginOption);
 				return;
 			}
 			dialog.open({
 				children: (
 					<ProviderMethodPicker
-						onSelect={(option) => {
+						isConfigured={isConfigured}
+						onSelect={(method) => {
+							if (method.kind !== "connect") {
+								void runProviderAuthAction(provider, method.kind);
+								return;
+							}
+							const option = method.option;
+							if (option.kind === "plugin") {
+								dialog.close();
+								void connectPluginProvider(provider, option);
+								return;
+							}
 							if (option.kind === "oauth") {
 								dialog.open({
 									children: (
@@ -556,7 +768,7 @@ export const ProviderSdkConnectDialogContent = ({
 												message:
 													option.kind === "api-key-with-model-discovery"
 														? (option.successMessage ??
-															`${provider.displayName} connected and Known Models refreshed.`)
+															`${provider.displayName} API key saved and Known Models refreshed.`)
 														: `${provider.displayName} API key saved to the Provider SDK.`,
 												variant: "success",
 											});
@@ -574,16 +786,24 @@ export const ProviderSdkConnectDialogContent = ({
 						options={provider.options}
 					/>
 				),
-				title: "Choose method",
+				title: "Choose action",
 				width: PROVIDER_DIALOG_WIDTH,
 			});
 		},
-		[connectPluginProvider, dialog, onBrowserCopyUrl, onBrowserOpenUrl, show]
+		[
+			authStatusByProviderId,
+			connectPluginProvider,
+			dialog,
+			onBrowserCopyUrl,
+			onBrowserOpenUrl,
+			runProviderAuthAction,
+			show,
+		]
 	);
 
 	return (
 		<ProviderPicker
-			connectedProviderIds={connectedProviderIds}
+			authStatusByProviderId={authStatusByProviderId}
 			connectingProviderId={connectingProviderId}
 			error={error}
 			onSelect={openProviderMethods}

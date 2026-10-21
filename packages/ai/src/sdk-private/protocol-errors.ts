@@ -109,6 +109,18 @@ const statusFromErrorPayload = (payload: unknown): number | undefined => {
 	) {
 		return 403;
 	}
+	if (
+		classification.includes("model_not_found") ||
+		classification.includes("not_found")
+	) {
+		return 404;
+	}
+	if (
+		classification.includes("invalid_request") ||
+		classification.includes("bad_request")
+	) {
+		return 400;
+	}
 };
 
 const messageFromPayload = (payload: unknown): string | undefined => {

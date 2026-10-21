@@ -4,6 +4,7 @@ import {
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
+	type ProviderChatHeaderContext,
 	type ProviderChatRequest,
 	ProviderError,
 	type ProviderModel,
@@ -191,15 +192,11 @@ const fetchChatResponse = async (
 	request: ProviderChatRequest,
 	context: ProviderChatContext
 ): Promise<OpenAICompatibleFetchResponse> => {
-	const apiKey = apiKeyForAuthorization(context.authorization, providerName);
 	let response: OpenAICompatibleFetchResponse;
 	try {
 		response = await fetchImpl(modelUrl(apiRoot), {
 			body: JSON.stringify(requestFor(request, context)),
-			headers: {
-				authorization: `Bearer ${apiKey}`,
-				"content-type": "application/json",
-			},
+			headers: context.headers,
 			method: "POST",
 			signal: context.signal,
 		});
@@ -282,6 +279,13 @@ export const createOpenAICompatibleProvider = (
 		}
 	}
 	return {
+		getChatHeaders: (context: ProviderChatHeaderContext) => ({
+			authorization: `Bearer ${apiKeyForAuthorization(
+				context.authorization,
+				options.providerName
+			)}`,
+			"content-type": "application/json",
+		}),
 		id: options.providerId,
 		models: options.models,
 		resolveAuthorization: async ({ credential }) => {

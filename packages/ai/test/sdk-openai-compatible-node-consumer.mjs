@@ -9,8 +9,19 @@ const credentials = new Map();
 const modelSnapshots = new Map();
 const credentialStore = {
 	delete: (providerId) => credentials.delete(providerId),
-	get: (providerId) => credentials.get(providerId),
-	set: (providerId, credential) => credentials.set(providerId, credential),
+	list: () =>
+		[...credentials].map(([providerId, credential]) => ({
+			providerId,
+			type: credential?.kind ?? "unknown",
+		})),
+	modify: async (providerId, update) => {
+		const replacement = await update(credentials.get(providerId));
+		if (replacement !== undefined) {
+			credentials.set(providerId, replacement);
+		}
+		return credentials.get(providerId);
+	},
+	read: (providerId) => credentials.get(providerId),
 };
 const modelStore = {
 	get: (providerId) => modelSnapshots.get(providerId),

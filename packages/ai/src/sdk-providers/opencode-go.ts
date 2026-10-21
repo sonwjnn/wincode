@@ -7,6 +7,7 @@ import {
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
+	type ProviderChatHeaderContext,
 	type ProviderChatRequest,
 	ProviderError,
 	type ProviderModel,
@@ -158,9 +159,7 @@ const openAIProviderOptionsFor = (
 
 const wireRequestFor = (
 	request: ProviderChatRequest,
-	context: ProviderChatContext,
-	apiKey: string,
-	sessionId: string
+	context: ProviderChatContext
 ): OpenCodeGoWireRequest => {
 	const model = context.model;
 	const modelRequest = modelRequestFor(request, context);
@@ -179,11 +178,7 @@ const wireRequestFor = (
 				providerOptions: openAIProviderOptionsFor(modelRequest.reasoningEffort),
 				request: modelRequest,
 			}),
-			headers: {
-				...JSON_HEADERS,
-				authorization: `Bearer ${apiKey}`,
-				"x-opencode-session": sessionId,
-			},
+			headers: context.headers,
 			strategy: openAIResponsesStrategy,
 			url: RESPONSES_URL,
 		};
@@ -198,12 +193,7 @@ const wireRequestFor = (
 				),
 				request: modelRequest,
 			}),
-			headers: {
-				...JSON_HEADERS,
-				"anthropic-version": "2023-06-01",
-				"x-api-key": apiKey,
-				"x-opencode-session": sessionId,
-			},
+			headers: context.headers,
 			strategy: openCodeGoAnthropicStrategy,
 			url: MESSAGES_URL,
 		};
@@ -214,11 +204,7 @@ const wireRequestFor = (
 			model,
 			request: modelRequest,
 		}),
-		headers: {
-			...JSON_HEADERS,
-			authorization: `Bearer ${apiKey}`,
-			"x-opencode-session": sessionId,
-		},
+		headers: context.headers,
 		strategy: openAIChatStrategy,
 		url: CHAT_COMPLETIONS_URL,
 	};
@@ -321,14 +307,13 @@ const streamOpenCodeGoResponse = async function* (
 	}
 };
 
-const streamOpenCodeGo = (fetchImpl: OpenCodeGoFetch, sessionId: string) =>
+const streamOpenCodeGo = (fetchImpl: OpenCodeGoFetch) =>
 	async function* (
 		request: ProviderChatRequest,
 		context: ProviderChatContext
 	): AsyncIterable<ProviderChatEvent> {
 		try {
-			const apiKey = apiKeyFor(context.authorization);
-			const wireRequest = wireRequestFor(request, context, apiKey, sessionId);
+			const wireRequest = wireRequestFor(request, context);
 			const response = await fetchOpenCodeGoResponse(
 				wireRequest,
 				fetchImpl,
@@ -379,6 +364,21 @@ export const createOpenCodeGoProvider = (
 		);
 	}
 	return {
+		getChatHeaders: (context: ProviderChatHeaderContext) => {
+			const apiKey = apiKeyFor(context.authorization);
+			const protocolHeaders: Readonly<Record<string, string>> =
+				context.model.protocolId === ANTHROPIC_PROTOCOL_ID
+					? {
+							"anthropic-version": "2023-06-01",
+							"x-api-key": apiKey,
+						}
+					: { authorization: `Bearer ${apiKey}` };
+			return {
+				...JSON_HEADERS,
+				...protocolHeaders,
+				"x-opencode-session": sessionId,
+			};
+		},
 		id: OPENCODE_GO_PROVIDER_ID,
 		models,
 		resolveAuthorization: async ({ credential }) => {
@@ -387,6 +387,6 @@ export const createOpenCodeGoProvider = (
 				? { authorization: { apiKey: parsed.data.apiKey } }
 				: null;
 		},
-		streamChat: streamOpenCodeGo(fetchImpl, sessionId),
+		streamChat: streamOpenCodeGo(fetchImpl),
 	};
 };

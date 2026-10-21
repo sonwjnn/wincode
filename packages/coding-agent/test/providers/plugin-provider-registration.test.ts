@@ -28,8 +28,9 @@ const registrationFor = (
 
 const unusedCredentialStore: CredentialStore = {
 	delete: () => undefined,
-	get: () => undefined,
-	set: () => undefined,
+	list: () => [],
+	modify: () => undefined,
+	read: () => undefined,
 };
 
 test("failed candidate Provider composition waits for every asynchronous close before rejecting", async () => {

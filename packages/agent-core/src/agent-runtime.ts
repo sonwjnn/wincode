@@ -107,6 +107,7 @@ const resolveTerminalFailure = (
 		const mapping = {
 			authentication: { code: "authentication", retry: "never" },
 			"credential-store": { code: "unknown", retry: "never" },
+			"oauth-refresh": { code: "authentication", retry: "never" },
 			"model-not-found": { code: "invalid-request", retry: "never" },
 			"provider-not-found": { code: "invalid-request", retry: "never" },
 			provider: { code: "unknown", retry: "never" },

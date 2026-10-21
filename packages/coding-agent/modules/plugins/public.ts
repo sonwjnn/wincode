@@ -58,13 +58,6 @@ export type PluginConfigReader = Readonly<{
 	refreshSnapshot: () => Promise<PluginConfigSnapshot>;
 }>;
 
-/** Generic namespace-scoped JSON file access owned by the host. */
-export type PluginSecretStore = Readonly<{
-	delete: (key: string) => Promise<void>;
-	get: (key: string) => Promise<string | undefined>;
-	set: (key: string, value: string) => Promise<void>;
-}>;
-
 export type PluginMcpServerRegistration = Readonly<{
 	config: PluginJsonValue;
 	name: string;
@@ -168,6 +161,7 @@ export type PluginLoadContext = Readonly<{
 	getMcpServerRegistrations: () => readonly PluginMcpServerRegistration[];
 	trustedProjectRoots?: readonly string[];
 	sourcePath: string;
+	/** Shared user-data root; Plugins choose and secure their own storage beneath it. */
 	userDataDir: string;
 	workspace: string;
 }>;
@@ -269,7 +263,6 @@ export type PluginProcessStartHook = (
 
 export type PluginDefinitionAPI = PluginRegistrationAPI &
 	Readonly<{
-		secrets: PluginSecretStore;
 		registerProvider: (provider: PluginProviderRegistration) => void;
 		registerMcpServer: (name: string, config: PluginJsonValue) => void;
 		registerAgent: (agent: PluginAgentRegistration) => void;
