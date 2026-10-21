@@ -15,7 +15,7 @@ import {
 import { modelId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 
-test("shows the selected agent, provider model, and thinking level", async () => {
+test("shows the provider model and effort without the agent label", async () => {
 	const setup = await testRender(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider
@@ -46,9 +46,8 @@ test("shows the selected agent, provider model, and thinking level", async () =>
 	try {
 		await flushTestRenderer(setup, 3);
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("Build");
-		expect(frame).toContain("anthropic/claude-sonnet-5");
-		expect(frame).toContain("low");
+		expect(frame).toContain("anthropic/claude-sonnet-5 ∙ low");
+		expect(frame).not.toContain("Build");
 	} finally {
 		act(() => setup.renderer.destroy());
 	}

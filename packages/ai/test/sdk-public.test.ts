@@ -1058,6 +1058,69 @@ describe("public SDK provider collection", () => {
 		expect(persistedModels).toEqual([refreshedModel]);
 	});
 
+	test("concurrent consumers restore each provider snapshot in parallel once", async () => {
+		const providerIds = ["first-provider", "second-provider", "third-provider"];
+		const models = new Map(
+			providerIds.map((providerId) => [
+				providerId,
+				{
+					modelId: `${providerId}-model`,
+					protocolId: "restore-wire",
+					providerId,
+				} satisfies ProviderModel,
+			])
+		);
+		const pendingReads = new Map(
+			providerIds.map((providerId) => [
+				providerId,
+				Promise.withResolvers<readonly ProviderModel[] | undefined>(),
+			])
+		);
+		const reads: string[] = [];
+		const modelStore = {
+			get: (providerId: string) => {
+				reads.push(providerId);
+				const pending = pendingReads.get(providerId);
+				if (pending === undefined) {
+					throw new Error(`Unexpected model snapshot read for ${providerId}.`);
+				}
+				return pending.promise;
+			},
+			set: async () => undefined,
+		};
+		const collection = createProviderCollection({ modelStore });
+		for (const providerId of providerIds) {
+			collection.register({
+				id: providerId,
+				models: [],
+				resolveAuthorization: async () => null,
+				async *streamChat(): AsyncIterable<ProviderChatEvent> {
+					yield* [];
+				},
+			});
+		}
+
+		const firstRestore = collection.restoreModels();
+		const secondRestore = collection.restoreModels();
+		try {
+			expect(reads.toSorted()).toEqual(providerIds.toSorted());
+		} finally {
+			for (const providerId of providerIds) {
+				const model = models.get(providerId);
+				if (model !== undefined) {
+					pendingReads.get(providerId)?.resolve([model]);
+				}
+			}
+			await Promise.all([firstRestore, secondRestore]);
+		}
+		expect(collection.getModels()).toEqual(
+			providerIds.flatMap((id) => {
+				const model = models.get(id);
+				return model === undefined ? [] : [model];
+			})
+		);
+	});
+
 	test("aborting a pending model-store write preserves the last-known snapshot", async () => {
 		const staticModel = {
 			modelId: "static-model",

@@ -1132,6 +1132,7 @@ export const createProviderCollection = (
 	const providers = new Map<string, RegisteredProvider>();
 	const dynamicModels = new Map<string, readonly ProviderModel[]>();
 	const restoredProviders = new Set<string>();
+	const providerRestorePromises = new Map<string, Promise<void>>();
 
 	const getRegisteredProvider = (providerId: string): RegisteredProvider => {
 		const registered = providers.get(providerId);
@@ -1146,6 +1147,41 @@ export const createProviderCollection = (
 		return registered
 			? modelsForProvider(registered, dynamicModels.get(providerId) ?? [])
 			: [];
+	};
+
+	const restoreProviderModels = async (providerId: string): Promise<void> => {
+		const stored = await modelStore?.get(providerId);
+		if (restoredProviders.has(providerId)) {
+			return;
+		}
+		const restored =
+			stored === undefined
+				? []
+				: validateProviderModels(stored, providerId, "Model store snapshot");
+		dynamicModels.set(providerId, restored);
+		restoredProviders.add(providerId);
+	};
+
+	const restoreModels = async (): Promise<void> => {
+		const restores = [...providers.keys()].flatMap((providerId) => {
+			if (restoredProviders.has(providerId)) {
+				return [];
+			}
+			const existingRestore = providerRestorePromises.get(providerId);
+			if (existingRestore !== undefined) {
+				return [existingRestore];
+			}
+
+			let restore: Promise<void>;
+			restore = restoreProviderModels(providerId).finally(() => {
+				if (providerRestorePromises.get(providerId) === restore) {
+					providerRestorePromises.delete(providerId);
+				}
+			});
+			providerRestorePromises.set(providerId, restore);
+			return [restore];
+		});
+		await Promise.all(restores);
 	};
 
 	const canEnforceMaxOutputTokens = async (
@@ -1730,27 +1766,7 @@ export const createProviderCollection = (
 			[...providers.keys()].flatMap((providerId) =>
 				getProviderModels(providerId)
 			),
-		restoreModels: async () => {
-			for (const providerId of providers.keys()) {
-				if (restoredProviders.has(providerId)) {
-					continue;
-				}
-				const stored = await modelStore?.get(providerId);
-				if (restoredProviders.has(providerId)) {
-					continue;
-				}
-				const restored =
-					stored === undefined
-						? []
-						: validateProviderModels(
-								stored,
-								providerId,
-								"Model store snapshot"
-							);
-				dynamicModels.set(providerId, restored);
-				restoredProviders.add(providerId);
-			}
-		},
+		restoreModels,
 		refreshModels: async (refreshOptions = {}) => {
 			const selectedProviderIds =
 				refreshOptions.providerIds === undefined
