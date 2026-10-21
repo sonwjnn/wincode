@@ -1,9 +1,9 @@
 import * as path from "node:path";
+import { isValidSecretKey } from "@/shared/storage/secret-key";
 import { createUserSecretStore } from "@/shared/storage/user-secret-store";
 
 const SERVICE_NAME = "wincode-plugin";
 const pluginIdPattern = /^[a-z0-9_]+$/u;
-const secretKeyPattern = /^[a-zA-Z0-9_.:-]{1,128}$/u;
 
 type BunSecretStore = Partial<typeof Bun.secrets>;
 
@@ -23,7 +23,7 @@ export const createPluginSecretStore = (
 		throw new Error("Invalid Plugin Identifier for secret storage.");
 	}
 	const validateKey = (key: string): void => {
-		if (!secretKeyPattern.test(key)) {
+		if (!isValidSecretKey(key)) {
 			throw new Error("Plugin secret keys must be short identifiers.");
 		}
 	};

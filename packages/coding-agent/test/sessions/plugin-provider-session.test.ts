@@ -321,10 +321,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		);
 
 		const manager = getInteractiveSessionHostManager(runtimeA);
-		const credentialStore = createProviderSdkCredentialStore({
-			platformStore: null,
-			userDataDir,
-		});
+		const credentialStore = createProviderSdkCredentialStore({ userDataDir });
 		const modelStore = createProviderSdkModelStore({ userDataDir });
 		const resourceLoader: ApplicationResourceLoader = {
 			reload: async ({ current }) => ({

@@ -1,4 +1,6 @@
+import { logger } from "@wincode/utils";
 import { z } from "zod";
+import { normalizeModelFailure } from "./model-failures.ts";
 import {
 	type ModelPromptCacheCapabilities,
 	modelMetadataEntrySchema,
@@ -6,6 +8,44 @@ import {
 	supportedPromptCacheRetentionTierIds,
 } from "./model-metadata.ts";
 import { type ThinkingLevel, thinkingLevelIds } from "./thinking-level.ts";
+
+const SAFE_DIAGNOSTIC_ERROR_CODE_PATTERN = /^(?:E[A-Z0-9_]+|ERR_[A-Z0-9_]+)$/u;
+
+const diagnosticCauseCategoryFor = (cause: unknown): string | undefined => {
+	if (!(cause instanceof Error)) {
+		return;
+	}
+	const message = cause.message.toLowerCase();
+	if (message.includes("persistent storage lock")) {
+		return "storage-lock";
+	}
+	if (message.includes("refusing insecure")) {
+		return "storage-permissions";
+	}
+	if (message.includes("invalid provider sdk credential index")) {
+		return "invalid-credential-index";
+	}
+	if (message.includes("invalid provider sdk credential")) {
+		return "invalid-credential";
+	}
+	if (message.includes("could not serialize provider sdk credential")) {
+		return "credential-serialization";
+	}
+	if (message.includes("platform secret store")) {
+		return "platform-secret-store";
+	}
+	if (
+		message.includes("permission denied") ||
+		message.includes("eacces") ||
+		message.includes("eperm")
+	) {
+		return "filesystem-permission";
+	}
+	if (message.includes("no space left") || message.includes("enospc")) {
+		return "storage-full";
+	}
+	return "other-error";
+};
 
 export type { SupportedPromptCacheRetentionTier } from "./model-metadata.ts";
 export type {
@@ -383,6 +423,11 @@ export type CredentialStore = Readonly<{
 	list: (
 		options?: CredentialStoreOptions
 	) => readonly CredentialMetadata[] | Promise<readonly CredentialMetadata[]>;
+	/** Checks whether a known provider has a stored credential without returning it. */
+	has?: (
+		providerId: string,
+		options?: CredentialStoreOptions
+	) => boolean | Promise<boolean>;
 	/** Serializes the read-modify-write callback; once it starts, persist its replacement even if the caller cancels. */
 	modify: (
 		providerId: string,
@@ -452,6 +497,7 @@ export type ChatFailure =
 				| "transport";
 			message: string;
 			providerId: string;
+			statusCode?: number;
 	  }>;
 
 export type ChatOutcome =
@@ -940,7 +986,16 @@ const failureForError = (
 				providerId,
 			};
 		}
-		return { code: error.code, message: error.message, providerId };
+		const statusCode =
+			error.code === "provider"
+				? normalizeModelFailure(error).details?.statusCode
+				: undefined;
+		return {
+			code: error.code,
+			message: error.message,
+			providerId,
+			...(statusCode === undefined ? {} : { statusCode }),
+		};
 	}
 	return { code: "provider", message: errorMessage(error), providerId };
 };
@@ -982,10 +1037,41 @@ const terminalForStreamError = (
 			status: "aborted",
 		});
 	}
-	return terminal({
-		failure: failureForError(error, request.providerId, request.modelId),
-		status: "failure",
+	const failure = failureForError(error, request.providerId, request.modelId);
+	const modelFailure =
+		failure.code === "provider" ? normalizeModelFailure(failure) : undefined;
+	const statusCode = "statusCode" in failure ? failure.statusCode : undefined;
+	let cause: unknown;
+	if (isCredentialStoreFailure(error)) {
+		cause = error.cause;
+	} else if (error instanceof Error) {
+		cause = error.cause;
+	}
+	const causeCategory = diagnosticCauseCategoryFor(cause);
+	let causeCode: string | undefined;
+	if (
+		typeof cause === "object" &&
+		cause !== null &&
+		"code" in cause &&
+		typeof cause.code === "string" &&
+		SAFE_DIAGNOSTIC_ERROR_CODE_PATTERN.test(cause.code)
+	) {
+		causeCode = cause.code;
+	}
+	logger.debug("Provider chat request failed", {
+		errorName: error instanceof Error ? error.name : "Unknown",
+		failureCode: failure.code,
+		modelId: request.modelId,
+		providerId: request.providerId,
+		...(cause instanceof Error ? { causeName: cause.name } : {}),
+		...(causeCategory === undefined ? {} : { causeCategory }),
+		...(causeCode === undefined ? {} : { causeCode }),
+		...(modelFailure === undefined
+			? {}
+			: { modelFailureCode: modelFailure.code }),
+		...(statusCode === undefined ? {} : { statusCode }),
 	});
+	return terminal({ failure, status: "failure" });
 };
 
 const selectChatTarget = (
@@ -1546,6 +1632,29 @@ export const createProviderCollection = (
 		yield* streamSelectedChat(request, selection);
 	};
 
+	const getConfiguredProviderIdsFromStore = async (
+		providerIds: readonly string[]
+	): Promise<ReadonlySet<string>> => {
+		const configuredProviderIds = new Set(
+			(await credentialStore.list()).map(({ providerId }) => providerId)
+		);
+		const providerIdsWithoutMetadata = providerIds.filter(
+			(providerId) =>
+				providers.has(providerId) && !configuredProviderIds.has(providerId)
+		);
+		const legacyCredentialPresence = await Promise.all(
+			providerIdsWithoutMetadata.map(
+				async (providerId) => (await credentialStore.has?.(providerId)) === true
+			)
+		);
+		providerIdsWithoutMetadata.forEach((providerId, index) => {
+			if (legacyCredentialPresence[index]) {
+				configuredProviderIds.add(providerId);
+			}
+		});
+		return configuredProviderIds;
+	};
+
 	let closePromise: Promise<void> | undefined;
 	const close = (): Promise<void> => {
 		if (closePromise !== undefined) {
@@ -1587,11 +1696,10 @@ export const createProviderCollection = (
 		login,
 		logout,
 		getAvailable: async (providerId) => {
-			const configuredProviders = new Set(
-				(await credentialStore.list()).map(({ providerId: id }) => id)
-			);
 			const providerIds =
 				providerId === undefined ? [...providers.keys()] : [providerId];
+			const configuredProviders =
+				await getConfiguredProviderIdsFromStore(providerIds);
 			return providerIds
 				.filter(
 					(configuredProviderId) =>
@@ -1603,10 +1711,10 @@ export const createProviderCollection = (
 				);
 		},
 		getConfiguredProviderIds: async () => {
-			const configuredProviders = new Set(
-				(await credentialStore.list()).map(({ providerId }) => providerId)
-			);
-			return [...providers.keys()].filter((providerId) =>
+			const providerIds = [...providers.keys()];
+			const configuredProviders =
+				await getConfiguredProviderIdsFromStore(providerIds);
+			return providerIds.filter((providerId) =>
 				configuredProviders.has(providerId)
 			);
 		},

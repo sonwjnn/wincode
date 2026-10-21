@@ -58,7 +58,7 @@ export type PluginConfigReader = Readonly<{
 	refreshSnapshot: () => Promise<PluginConfigSnapshot>;
 }>;
 
-/** Generic namespace-scoped JSON file access owned by the host. */
+/** Host-managed key/value secret storage scoped to one Plugin. */
 export type PluginSecretStore = Readonly<{
 	delete: (key: string) => Promise<void>;
 	get: (key: string) => Promise<string | undefined>;

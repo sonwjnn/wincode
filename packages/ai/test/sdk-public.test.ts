@@ -486,6 +486,53 @@ describe("public SDK provider collection", () => {
 		]);
 	});
 
+	test("preserves upstream HTTP status for consumer-visible provider failure classification", async () => {
+		const sdk = createProviderCollection();
+		sdk.register({
+			...demoProvider(),
+			id: "status-provider",
+			models: [
+				{
+					modelId: "status-model",
+					protocolId: "custom-wire",
+					providerId: "status-provider",
+				},
+			],
+			resolveAuthorization: async () => ({ authorization: "ok" }),
+			async *streamChat() {
+				yield { delta: "partial", type: "text-delta" };
+				throw new ProviderError("provider", "OpenAI request failed (503).", {
+					cause: { statusCode: 503 },
+				});
+			},
+		});
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [],
+			modelId: "status-model",
+			providerId: "status-provider",
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toEqual([
+			{ delta: "partial", type: "text-delta" },
+			{
+				outcome: {
+					failure: {
+						code: "provider",
+						message: "OpenAI request failed (503).",
+						providerId: "status-provider",
+						statusCode: 503,
+					},
+					status: "failure",
+				},
+				type: "terminal",
+			},
+		]);
+	});
+
 	test("aborting after partial output produces an abort terminal instead of success", async () => {
 		const sdk = createProviderCollection();
 		sdk.register({

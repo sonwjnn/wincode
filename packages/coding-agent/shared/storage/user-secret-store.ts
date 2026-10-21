@@ -1,8 +1,7 @@
 import * as fs from "node:fs/promises";
 import { withCrossProcessFileLock } from "./cross-process-file-lock";
+import { isValidSecretKey } from "./secret-key";
 import { readSecureJsonFile, writeSecureJsonFile } from "./secure-json-file";
-
-const defaultKeyPattern = /^[a-zA-Z0-9_.:-]{1,128}$/u;
 
 type BunSecretStore = Partial<typeof Bun.secrets>;
 
@@ -145,7 +144,7 @@ export const createUserSecretStore = ({
 			validateKey(key);
 			return;
 		}
-		if (!defaultKeyPattern.test(key)) {
+		if (!isValidSecretKey(key)) {
 			throw new Error(`${secretLabel} keys must be short identifiers.`);
 		}
 	};

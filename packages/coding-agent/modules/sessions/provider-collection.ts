@@ -1,6 +1,7 @@
 import type { OpenAIBrowserLoginOptions, OpenAIProvider } from "@wincode/ai";
 import {
 	type CredentialStore,
+	type CredentialStoreOptions,
 	createProviderCollection,
 	type ModelStore,
 	type Provider,
@@ -272,6 +273,7 @@ const createProviderBackend = async (
 	const providerIdsByStorageId = new Map(
 		[...storageIds].map(([providerId, storageId]) => [storageId, providerId])
 	);
+	const hasStoredCredential = backingCredentials.has;
 	const credentialStore: CredentialStore = Object.freeze({
 		delete: (providerId, storeOptions) =>
 			backingCredentials.delete(storageIdFor(providerId), storeOptions),
@@ -282,6 +284,12 @@ const createProviderBackend = async (
 				return providerId === undefined ? [] : [{ providerId, type }];
 			});
 		},
+		...(hasStoredCredential === undefined
+			? {}
+			: {
+					has: (providerId: string, storeOptions?: CredentialStoreOptions) =>
+						hasStoredCredential(storageIdFor(providerId), storeOptions),
+				}),
 		modify: (providerId, update, storeOptions) =>
 			backingCredentials.modify(storageIdFor(providerId), update, storeOptions),
 		read: (providerId, storeOptions) =>

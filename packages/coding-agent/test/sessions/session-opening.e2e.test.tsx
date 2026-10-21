@@ -751,7 +751,7 @@ test(
 			await waitForSessionFrame(setup, (frame) =>
 				frame.includes(selectedModel.modelId)
 			);
-			expect(credentialReads).toBeGreaterThan(0);
+			expect(credentialReads).toBe(0);
 			expect(modelStoreReads).toBeGreaterThan(0);
 			expect(modelDiscoveryCalls).toBe(0);
 			expect(streamCalls).toBe(0);
@@ -776,6 +776,7 @@ test(
 			);
 			const records = await store.listSessionRecords(historicalSessionId);
 			expect(streamCalls).toBe(1);
+			expect(credentialReads).toBeGreaterThan(0);
 			expect(modelDiscoveryCalls).toBe(0);
 			expect(
 				records.some(

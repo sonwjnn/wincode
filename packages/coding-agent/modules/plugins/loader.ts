@@ -60,6 +60,7 @@ import {
 import type { PluginCommand, PluginTool } from "./types";
 
 export type PluginPackageReference = Readonly<{
+	factory?: PluginFactory;
 	id: string;
 	specifier: string;
 }>;
@@ -1030,7 +1031,8 @@ const createCandidatePlan = async (
 			path: `factory:${id}`,
 			source: `Plugin factory '${id}'`,
 		})),
-		...(input.distributionPlugins ?? []).map(({ id, specifier }) => ({
+		...(input.distributionPlugins ?? []).map(({ factory, id, specifier }) => ({
+			...(factory === undefined ? {} : { factory }),
 			distributionId: id,
 			knownPluginId: id,
 			moduleSpecifier: specifier,

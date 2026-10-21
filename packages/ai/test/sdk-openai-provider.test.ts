@@ -43,6 +43,58 @@ describe("public OpenAI SDK provider", () => {
 		).toThrow("OpenAI provider models must use a supported protocol ID.");
 	});
 
+	test("preserves model-not-found status from a successful HTTP stream error event", async () => {
+		const sdk = createProviderCollection();
+		sdk.register(
+			createOpenAIProvider({
+				models: [
+					{
+						modelId: "gpt-5.6-luna",
+						protocolId: "openai-responses",
+						providerId: "openai",
+					},
+				],
+				fetch: async () =>
+					sseResponse([
+						{
+							error: {
+								code: "model_not_found",
+								message: "The requested model is unavailable.",
+							},
+							type: "error",
+						},
+					]),
+			})
+		);
+		await sdk.setCredential("openai", {
+			apiKey: "openai-test-key",
+			kind: "api-key",
+		});
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [{ content: [{ text: "Hi", type: "text" }], role: "user" }],
+			modelId: "gpt-5.6-luna",
+			providerId: "openai",
+		})) {
+			events.push(event);
+		}
+
+		expect(events.at(-1)).toMatchObject({
+			outcome: {
+				failure: {
+					code: "provider",
+					message: "OpenAI request failed (404).",
+					providerId: "openai",
+					statusCode: 404,
+				},
+				status: "failure",
+			},
+			type: "terminal",
+		});
+		expect(JSON.stringify(events)).not.toContain("openai-test-key");
+	});
+
 	test("OpenAI Responses sends a model-declared minimal reasoning effort", async () => {
 		const requests: Record<string, unknown>[] = [];
 		const sdk = createProviderCollection();
@@ -629,6 +681,72 @@ describe("public OpenAI SDK provider", () => {
 			outcome: { status: "success" },
 			type: "terminal",
 		});
+	});
+
+	test("OpenAI browser login accepts the localhost callback before token exchange", async () => {
+		const tokenPayload = new TextEncoder()
+			.encode(
+				JSON.stringify({
+					"https://api.openai.com/auth": { chatgpt_account_id: "acct-test" },
+				})
+			)
+			.toBase64({ alphabet: "base64url", omitPadding: true });
+		const requests: { body: string; url: string }[] = [];
+		let callbackStatus: number | undefined;
+		const credentialStore = createInMemoryCredentialStore(new Map());
+		const sdk = createProviderCollection({ credentialStore });
+		sdk.register(
+			createOpenAIProvider({
+				fetch: async (input, init) => {
+					requests.push({
+						body: String(init?.body ?? ""),
+						url: String(input),
+					});
+					return Response.json({
+						access_token: "fixture-access-token",
+						expires_in: 3600,
+						id_token: `header.${tokenPayload}.signature`,
+						refresh_token: "fixture-refresh-token",
+						token_type: "Bearer",
+					});
+				},
+			})
+		);
+		try {
+			const result = await sdk.login("openai", {
+				methodId: "openai-browser",
+				options: {
+					browser: async (authorizationUrlText: string) => {
+						const authorizationUrl = new URL(authorizationUrlText);
+						const redirectUri =
+							authorizationUrl.searchParams.get("redirect_uri");
+						const state = authorizationUrl.searchParams.get("state");
+						if (redirectUri === null || state === null) {
+							throw new Error("OpenAI authorization URL is incomplete.");
+						}
+						const callbackUrl = new URL(redirectUri);
+						callbackUrl.searchParams.set("code", "fixture-authorization-code");
+						callbackUrl.searchParams.set("state", state);
+						const response = await fetch(callbackUrl);
+						callbackStatus = response.status;
+						expect(await response.text()).toContain("Connected.");
+					},
+				},
+			});
+			expect(result).toEqual({ status: "saved" });
+			expect(callbackStatus).toBe(200);
+			expect(requests).toHaveLength(1);
+			expect(requests[0]?.url).toBe("https://auth.openai.com/oauth/token");
+			expect(new URLSearchParams(requests[0]?.body).get("code")).toBe(
+				"fixture-authorization-code"
+			);
+			expect(await credentialStore.read("openai")).toMatchObject({
+				accountId: "acct-test",
+				kind: "oauth-session",
+			});
+		} finally {
+			await sdk.close();
+		}
 	});
 
 	test("browser OAuth credentials refresh once through app storage without exposing refresh tokens", async () => {

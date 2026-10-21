@@ -1,5 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
+import * as path from "node:path";
 import { TextareaRenderable } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
@@ -29,7 +31,10 @@ import {
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
-import { pluginProviderStorageId } from "@/modules/providers/provider-stores";
+import {
+	createProviderSdkCredentialStore,
+	pluginProviderStorageId,
+} from "@/modules/providers/provider-stores";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import {
 	createDefaultSessionProviderCollection,
@@ -1131,6 +1136,49 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			await fixture.pluginRuntime.shutdown();
 			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
 			await store.resetSessionData();
+		}
+	});
+
+	test("an existing auth-file OpenAI credential keeps the default Provider Model submit-able", async () => {
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-new-session-platform-openai-")
+		);
+		const credentialStore = createProviderSdkCredentialStore({
+			userDataDir: path.join(root, "user"),
+		});
+		await credentialStore.modify("openai", () => ({
+			accessToken: "fixture-openai-access",
+			accountId: "fixture-account",
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			kind: "oauth-session",
+			refreshToken: "fixture-openai-refresh",
+			updatedAt: new Date().toISOString(),
+		}));
+		const modelStore: ModelStore = {
+			get: () => undefined,
+			set: () => undefined,
+		};
+		const createCollection: HomeProviderCollectionFactory = (pluginRuntime) =>
+			createDefaultSessionProviderCollection(pluginRuntime, undefined, {
+				credentialStore,
+				modelStore,
+			});
+		const sessionStore = getSessionStore();
+		await sessionStore.resetSessionData();
+		const setup = await renderHomeView(createCollection);
+		try {
+			await waitForHomeModelStatus(setup);
+			await submitHomePrompt(setup);
+			await waitForHomeFrame(setup, "Connect a Provider");
+			expect(captureNormalizedHomeFrame(setup)).not.toContain(
+				"Provider Model openai/gpt-5.6-luna is unavailable. Connect a Provider and explicitly select an available Provider SDK Model."
+			);
+			expect(await sessionStore.listSessions()).toHaveLength(1);
+		} finally {
+			await act(() => setup.renderer.destroy());
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await sessionStore.resetSessionData();
+			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
 });

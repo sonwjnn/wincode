@@ -365,6 +365,18 @@ test("SDK provider failures map safely and never complete an Agent Turn", async 
 			requestProviderId: providerId,
 		},
 		{
+			expectedCode: "unavailable",
+			expectedRetry: "after-delay",
+			name: "provider HTTP unavailable status",
+			providerFailure: new ProviderError(
+				"provider",
+				"OpenAI request failed (503).",
+				{ cause: { statusCode: 503 } }
+			),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
 			expectedCode: "context-overflow",
 			expectedRetry: "with-changes",
 			name: "provider context overflow",
