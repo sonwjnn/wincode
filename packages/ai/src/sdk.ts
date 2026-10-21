@@ -1642,13 +1642,13 @@ export const createProviderCollection = (
 			(providerId) =>
 				providers.has(providerId) && !configuredProviderIds.has(providerId)
 		);
-		const legacyCredentialPresence = await Promise.all(
+		const targetedCredentialPresence = await Promise.all(
 			providerIdsWithoutMetadata.map(
 				async (providerId) => (await credentialStore.has?.(providerId)) === true
 			)
 		);
 		providerIdsWithoutMetadata.forEach((providerId, index) => {
-			if (legacyCredentialPresence[index]) {
+			if (targetedCredentialPresence[index]) {
 				configuredProviderIds.add(providerId);
 			}
 		});
