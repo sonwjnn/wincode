@@ -1749,6 +1749,46 @@ describe("Session Host opening", () => {
 });
 
 describe("Session Host lifetime", () => {
+	test("restoring a Session reads its selected Provider snapshot without waiting for unrelated Providers", async () => {
+		const manager = createSessionHostManager();
+		const seeded = await seedSession(
+			"selected-provider-restore-scope",
+			"completed",
+			model
+		);
+		const collection = createFakeProviderCollection(
+			recorder,
+			hostProviderModels[0]
+		);
+		const requestedProviderIds: Array<string | undefined> = [];
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(store, {}, manager),
+			createProviderCollection: async () => ({
+				...collection,
+				restoreModels: async (providerId) => {
+					requestedProviderIds.push(providerId);
+					if (providerId === undefined) {
+						throw new Error(
+							"Restoring unrelated Providers blocks the Session."
+						);
+					}
+					await collection.restoreModels(providerId);
+				},
+			}),
+		};
+		try {
+			const host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			expect(host.getSelection()?.model).toEqual(model);
+			expect(requestedProviderIds).toEqual([model.providerId]);
+		} finally {
+			await manager.shutdownAll();
+			await store.deleteSession(seeded.sessionId);
+		}
+	});
+
 	test("applies the configured cache retention to the selected model's Agent Turn", async () => {
 		const selectedModel: ProviderModelSelection = {
 			modelId: modelId("claude-opus-4-5"),

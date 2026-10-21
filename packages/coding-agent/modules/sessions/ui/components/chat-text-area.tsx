@@ -8,7 +8,7 @@ import {
 	type TextareaRenderable,
 } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
-import type { ProviderModel } from "@wincode/ai";
+import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { spawn } from "bun";
 import {
@@ -34,6 +34,7 @@ import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
+	clampProviderModelThinkingSelection,
 	isAvailableProviderModelSelection,
 	isSameProviderModelIdentity,
 	pluginProviderOwnerMatches,
@@ -115,6 +116,8 @@ type ChatTextAreaProps = {
 	onOpenSettings?: (section?: string) => Promise<void> | void;
 	onEmptySubmit?: () => void | Promise<void>;
 	providerController?: InteractiveProviderController;
+	isSelectionReady?: boolean;
+	statusBarThinkingSelection?: ThinkingSelection;
 	/** Compositions a Recall returned, oldest first, waiting to enter the composer. */
 	recalledSubmissions?: readonly SessionSubmissionComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
@@ -175,6 +178,8 @@ export function ChatTextArea({
 	onSubmit,
 	onEmptySubmit,
 	providerController,
+	isSelectionReady = true,
+	statusBarThinkingSelection,
 	recalledSubmissions = EMPTY_RECALLED_SUBMISSIONS,
 	recallRevision = 0,
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
@@ -183,6 +188,7 @@ export function ChatTextArea({
 		agent,
 		cycleThinkingLevel,
 		model,
+		thinkingLevel,
 		setModelForFutureSubmissions,
 		setThinkingLevelForFutureSubmissions,
 	} = usePromptConfig();
@@ -215,13 +221,17 @@ export function ChatTextArea({
 		getProviderAvailabilityRevision,
 		getProviderAvailabilityRevision
 	);
-	const [knownProviderModels, setKnownProviderModels] = useState<
-		readonly ProviderModel[]
-	>([]);
+	const [knownProviderModels, setKnownProviderModels] = useState<{
+		controller: InteractiveProviderController;
+		providerId: string;
+		compositionRevision: number;
+		availabilityRevision: number;
+		models: readonly ProviderModel[];
+	} | null>(null);
 	useEffect(() => {
 		let active = true;
 		if (providerController === undefined) {
-			setKnownProviderModels([]);
+			setKnownProviderModels(null);
 			return () => {
 				active = false;
 			};
@@ -232,15 +242,27 @@ export function ChatTextArea({
 			getProviderCompositionRevision() === requestedCompositionRevision &&
 			getProviderAvailabilityRevision() === requestedAvailabilityRevision;
 		void providerController
-			.getKnownModels()
+			.getKnownModels(model.providerId)
 			.then((models) => {
 				if (active && isCurrentRevision()) {
-					setKnownProviderModels(models);
+					setKnownProviderModels({
+						controller: providerController,
+						providerId: model.providerId,
+						compositionRevision: requestedCompositionRevision,
+						availabilityRevision: requestedAvailabilityRevision,
+						models,
+					});
 				}
 			})
 			.catch(() => {
 				if (active && isCurrentRevision()) {
-					setKnownProviderModels([]);
+					setKnownProviderModels({
+						controller: providerController,
+						providerId: model.providerId,
+						compositionRevision: requestedCompositionRevision,
+						availabilityRevision: requestedAvailabilityRevision,
+						models: [],
+					});
 				}
 			});
 		return () => {
@@ -252,10 +274,49 @@ export function ChatTextArea({
 		providerAvailabilityRevision,
 		providerCompositionRevision,
 		providerController,
+		model.providerId,
 	]);
-	const selectedProviderModel = knownProviderModels.find((providerModel) =>
-		isSameProviderModelIdentity(providerModel, model)
-	);
+	const isProviderStatusReady =
+		knownProviderModels !== null &&
+		knownProviderModels.controller === providerController &&
+		knownProviderModels.providerId === model.providerId &&
+		knownProviderModels.compositionRevision === providerCompositionRevision &&
+		knownProviderModels.availabilityRevision === providerAvailabilityRevision;
+	const selectedProviderModel = isProviderStatusReady
+		? knownProviderModels.models.find((providerModel) =>
+				isSameProviderModelIdentity(providerModel, model)
+			)
+		: undefined;
+	const initialThinkingResolved = useRef(false);
+	useEffect(() => {
+		if (
+			initialThinkingResolved.current ||
+			!isSelectionReady ||
+			selectedProviderModel === undefined
+		) {
+			return;
+		}
+		initialThinkingResolved.current = true;
+		if (
+			thinkingLevel !== undefined ||
+			statusBarThinkingSelection?.thinkingLevel !== undefined
+		) {
+			return;
+		}
+		const initialLevel = clampProviderModelThinkingSelection(
+			selectedProviderModel,
+			"low"
+		).thinkingLevel;
+		if (initialLevel !== undefined) {
+			setThinkingLevelForFutureSubmissions(selectedProviderModel, initialLevel);
+		}
+	}, [
+		isSelectionReady,
+		selectedProviderModel,
+		setThinkingLevelForFutureSubmissions,
+		statusBarThinkingSelection?.thinkingLevel,
+		thinkingLevel,
+	]);
 	const selectedProviderModelRef = useLatest(selectedProviderModel);
 	const previousAgent = useRef(agent);
 	useEffect(() => {
@@ -304,10 +365,11 @@ export function ChatTextArea({
 	);
 	const setFutureProviderModelSelection = useCallback(
 		(nextModel: ProviderModel, selection: ProviderModelSelection) => {
-			setKnownProviderModels((models) =>
-				isAvailableProviderModelSelection(selection, models)
-					? models
-					: [...models, nextModel]
+			setKnownProviderModels((current) =>
+				current === null ||
+				isAvailableProviderModelSelection(selection, current.models)
+					? current
+					: { ...current, models: [...current.models, nextModel] }
 			);
 			setFutureModelSelection(nextModel, selection);
 		},
@@ -1253,16 +1315,23 @@ export function ChatTextArea({
 					/>
 				</box>
 			</BorderedContentBlock>
-			<box
-				backgroundColor={colors.background}
-				bottom={0}
-				paddingX={1}
-				position="absolute"
-				right={1}
-				zIndex={1}
-			>
-				<StatusBar />
-			</box>
+			{isProviderStatusReady &&
+			isSelectionReady &&
+			(selectedProviderModel === undefined ||
+				supportedProviderThinkingLevels(selectedProviderModel).length === 0 ||
+				thinkingLevel !== undefined ||
+				statusBarThinkingSelection?.thinkingLevel !== undefined) ? (
+				<box
+					backgroundColor={colors.background}
+					paddingX={1}
+					position="absolute"
+					right={2}
+					top={0}
+					zIndex={1}
+				>
+					<StatusBar thinkingSelection={statusBarThinkingSelection} />
+				</box>
+			) : null}
 		</box>
 	);
 }

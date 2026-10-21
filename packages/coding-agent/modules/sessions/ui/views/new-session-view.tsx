@@ -199,8 +199,7 @@ export function NewSessionView({
 	const [isCreatingSession, setIsCreatingSession] = useState(false);
 	const [providerController, setProviderController] =
 		useState<InteractiveProviderController>();
-	const [canCreateProviderCollection, setCanCreateProviderCollection] =
-		useState(false);
+	const [initialProviderId, setInitialProviderId] = useState<string>();
 	const [restoredModelSelection, setRestoredModelSelection] =
 		useState<ProviderModelSelection>();
 	const pluginRuntime = getInteractivePluginRuntime();
@@ -281,11 +280,13 @@ export function NewSessionView({
 			setError(selectionPreflight.message);
 			return;
 		}
-		setCanCreateProviderCollection(true);
+		setInitialProviderId(
+			(current) => current ?? selectionPreflight.selection.model.providerId
+		);
 	}, [selectionPreflight]);
 
 	useEffect(() => {
-		if (!canCreateProviderCollection) {
+		if (initialProviderId === undefined) {
 			return;
 		}
 		let active = true;
@@ -315,7 +316,7 @@ export function NewSessionView({
 					providerCollection,
 					homeProviderControllerOptions(providerCollection)
 				);
-				await controller.restoreModels();
+				await controller.restoreModels(initialProviderId);
 				if (!active) {
 					await closeOwnedProviderCollection();
 					return;
@@ -338,7 +339,7 @@ export function NewSessionView({
 			active = false;
 			void closeOwnedProviderCollection();
 		};
-	}, [canCreateProviderCollection, createProviderCollection, pluginRuntime]);
+	}, [initialProviderId, createProviderCollection, pluginRuntime]);
 
 	useEffect(() => {
 		if (
@@ -604,6 +605,7 @@ export function NewSessionView({
 					disabled={isCreatingSession}
 					draftKey={NEW_SESSION_DRAFT_KEY}
 					id={NEW_SESSION_COMPOSER_ID}
+					isSelectionReady={isPromptConfigRestored}
 					onCompact={() => {
 						show({
 							message: "Compaction is unavailable without an active session.",
@@ -614,6 +616,13 @@ export function NewSessionView({
 					onOpenSettings={openSettings}
 					onSubmit={handleSubmit}
 					providerController={providerController}
+					statusBarThinkingSelection={
+						selectionPreflight.status === "ready"
+							? {
+									thinkingLevel: selectionPreflight.selection.thinkingLevel,
+								}
+							: undefined
+					}
 					unavailableCommandCapabilities={HOME_UNAVAILABLE_COMMAND_CAPABILITIES}
 				/>
 				<box flexDirection="column" flexShrink={0} paddingLeft={1} width="100%">

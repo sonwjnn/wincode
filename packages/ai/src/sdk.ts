@@ -580,8 +580,8 @@ export type ProviderCollection = Readonly<{
 	getModel: (providerId: string, modelId: string) => ProviderModel | undefined;
 	/** Returns in-memory last-known models. Restore the store before listing a fresh instance. */
 	getModels: () => readonly ProviderModel[];
-	/** Loads persisted dynamic models for providers registered so far, without network access. */
-	restoreModels: () => Promise<void>;
+	/** Loads persisted dynamic models for one provider, or all registered providers when omitted. */
+	restoreModels: (providerId?: string) => Promise<void>;
 	/** Refreshes selected dynamic providers concurrently; static providers are skipped. */
 	refreshModels: (
 		options?: RefreshModelsOptions
@@ -1162,8 +1162,14 @@ export const createProviderCollection = (
 		restoredProviders.add(providerId);
 	};
 
-	const restoreModels = async (): Promise<void> => {
+	const restoreModels = async (selectedProviderId?: string): Promise<void> => {
 		const restores = [...providers.keys()].flatMap((providerId) => {
+			if (
+				selectedProviderId !== undefined &&
+				providerId !== selectedProviderId
+			) {
+				return [];
+			}
 			if (restoredProviders.has(providerId)) {
 				return [];
 			}

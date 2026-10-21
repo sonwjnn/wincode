@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
+import { getGitRepositoryWebUrl } from "@/shared/git/get-git-branch";
 import { useGitBranch } from "@/shared/git/use-git-branch";
 import { runGit } from "./support/git";
 
@@ -27,7 +28,7 @@ const expectBranch = async (setup: TestRendererSetup, branch: string) => {
 	expect(frame).toContain(branch);
 };
 
-describe("useGitBranch", () => {
+describe("git repository metadata", () => {
 	let dir: string;
 
 	beforeEach(() => {
@@ -36,6 +37,34 @@ describe("useGitBranch", () => {
 
 	afterEach(() => {
 		fs.rmSync(dir, { force: true, recursive: true });
+	});
+
+	test("resolves an SSH origin to the repository browser URL", async () => {
+		await runGit(dir, ["init", "--initial-branch=main"]);
+		await runGit(dir, [
+			"remote",
+			"add",
+			"origin",
+			"git@github.com:sonwjnn/wincode.git",
+		]);
+
+		expect(await getGitRepositoryWebUrl(dir)).toBe(
+			"https://github.com/sonwjnn/wincode"
+		);
+	});
+
+	test("preserves HTTPS origins when resolving the repository browser URL", async () => {
+		await runGit(dir, ["init", "--initial-branch=main"]);
+		await runGit(dir, [
+			"remote",
+			"add",
+			"origin",
+			"https://github.com/sonwjnn/wincode.git",
+		]);
+
+		expect(await getGitRepositoryWebUrl(dir)).toBe(
+			"https://github.com/sonwjnn/wincode"
+		);
 	});
 
 	test("updates after checkout without changing the workspace path", async () => {

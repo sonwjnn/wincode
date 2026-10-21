@@ -1,5 +1,8 @@
+import * as path from "node:path";
+import * as url from "node:url";
+import { useEffect, useState } from "react";
+import { getGitRepositoryWebUrl } from "@/shared/git/get-git-branch";
 import { useGitBranch } from "@/shared/git/use-git-branch";
-import { shortenHomePath } from "@/shared/paths/display-path";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 /** Current workspace as `cwd:branch`, dropping the branch outside a git repo. */
@@ -7,6 +10,27 @@ export function WorkspacePath() {
 	const { colors } = useTheme();
 	const cwd = process.cwd();
 	const branch = useGitBranch(cwd);
+	const [repositoryUrl, setRepositoryUrl] = useState<string | null>(null);
+
+	useEffect(() => {
+		let ignore = false;
+		void getGitRepositoryWebUrl(cwd).then((result) => {
+			if (!ignore) {
+				setRepositoryUrl(result);
+			}
+		});
+		return () => {
+			ignore = true;
+		};
+	}, [cwd]);
+
+	const branchUrl =
+		branch && repositoryUrl
+			? `${repositoryUrl}/tree/${branch
+					.split("/")
+					.map(encodeURIComponent)
+					.join("/")}`
+			: null;
 
 	return (
 		<text
@@ -15,11 +39,23 @@ export function WorkspacePath() {
 			flexShrink={1}
 			wrapMode="none"
 		>
-			<span>{shortenHomePath(cwd)}</span>
+			<a href={url.pathToFileURL(cwd).href}>
+				<u>
+					<span fg={colors.filePath}>{path.basename(cwd) || path.sep}</span>
+				</u>
+			</a>
 			{branch ? (
 				<>
 					<span>:</span>
-					<b fg={colors.success}>{branch}</b>
+					{branchUrl ? (
+						<a href={branchUrl}>
+							<u>
+								<b fg={colors.success}>{branch}</b>
+							</u>
+						</a>
+					) : (
+						<b fg={colors.success}>{branch}</b>
+					)}
 				</>
 			) : null}
 		</text>

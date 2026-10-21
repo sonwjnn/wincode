@@ -1121,6 +1121,50 @@ describe("public SDK provider collection", () => {
 		);
 	});
 
+	test("restoring a selected Provider's thinking metadata does not wait for unrelated snapshots", async () => {
+		const slowRead = Promise.withResolvers<readonly ProviderModel[]>();
+		const reads: string[] = [];
+		const collection = createProviderCollection({
+			modelStore: {
+				get: (providerId) => {
+					reads.push(providerId);
+					return providerId === "slow-provider"
+						? slowRead.promise
+						: [
+								{
+									modelId: "reasoning-model",
+									protocolId: "fixture",
+									providerId,
+									reasoningEfforts: ["low", "high"] as const,
+								},
+							];
+				},
+				set: () => undefined,
+			},
+		});
+		for (const id of ["selected-provider", "slow-provider"]) {
+			collection.register({ ...demoProvider(), id, models: [] });
+		}
+		try {
+			const restored = await Promise.race([
+				collection.restoreModels("selected-provider").then(() => true),
+				Bun.sleep(30).then(() => false),
+			]);
+			expect(restored).toBe(true);
+			expect(reads).toEqual(["selected-provider"]);
+			expect(
+				collection.getModel("selected-provider", "reasoning-model")
+					?.reasoningEfforts
+			).toEqual(["low", "high"]);
+			const globalRestore = collection.restoreModels();
+			expect(reads).toEqual(["selected-provider", "slow-provider"]);
+			slowRead.resolve([]);
+			await globalRestore;
+		} finally {
+			slowRead.resolve([]);
+		}
+	});
+
 	test("aborting a pending model-store write preserves the last-known snapshot", async () => {
 		const staticModel = {
 			modelId: "static-model",

@@ -306,12 +306,12 @@ export type InteractiveProviderController = Readonly<{
 	getCompositionRevision?: () => number;
 	getAvailabilityRevision?: () => number;
 	getConnectableProviders: () => readonly InteractiveProviderOption[];
-	getKnownModels: () => Promise<readonly ProviderModel[]>;
+	getKnownModels: (providerId?: string) => Promise<readonly ProviderModel[]>;
 	getPluginProviderComposition?: (
 		providerId: string
 	) => PluginProviderComposition | undefined;
 	getPluginProviderRegistrations: () => readonly PluginProviderDescriptor[];
-	restoreModels: () => Promise<void>;
+	restoreModels: (providerId?: string) => Promise<void>;
 	refreshModels: (
 		options?: RefreshModelsOptions
 	) => Promise<readonly ProviderModel[]>;
@@ -533,7 +533,8 @@ export const createInteractiveProviderController = (
 			}
 		}
 	};
-	const restoreModels = (): Promise<void> => providers.restoreModels();
+	const restoreModels = (providerId?: string): Promise<void> =>
+		providers.restoreModels(providerId);
 	const trustedOwnerRegistrations = () =>
 		(options.getTrustedPluginProviderRegistrations?.() ?? []).map(
 			({ pluginId, providerId, sourceIdentity }) => ({
@@ -668,7 +669,7 @@ export const createInteractiveProviderController = (
 	): Promise<readonly ProviderModelSelectionCandidate[]> =>
 		withRequiredProviderModelSelectionWork(async () => {
 			const snapshot = currentProviderModelSelectionSnapshot();
-			await restoreModels();
+			await restoreModels(providerId);
 			assertProviderModelSelectionSnapshotCurrent(snapshot);
 			const models = await providers.getAvailable(providerId);
 			assertProviderModelSelectionSnapshotCurrent(snapshot);
@@ -915,7 +916,7 @@ export const createInteractiveProviderController = (
 		connectProviderApiKey,
 		connectPluginProvider,
 		async getAvailableModels(providerId) {
-			await restoreModels();
+			await restoreModels(providerId);
 			return providers.getAvailable(providerId);
 		},
 		getConfiguredProviderIds: () => providers.getConfiguredProviderIds(),
@@ -951,9 +952,13 @@ export const createInteractiveProviderController = (
 				),
 			]);
 		},
-		async getKnownModels() {
-			await restoreModels();
-			return providers.getModels();
+		async getKnownModels(providerId) {
+			await restoreModels(providerId);
+			return providers
+				.getModels()
+				.filter(
+					(model) => providerId === undefined || model.providerId === providerId
+				);
 		},
 		restoreModels,
 		refreshModels,

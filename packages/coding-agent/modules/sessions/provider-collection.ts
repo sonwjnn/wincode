@@ -378,7 +378,7 @@ export const createInteractiveSessionProviderCollection = async (
 		getModel: (providerId, modelId) =>
 			activeCollection().getModel(providerId, modelId),
 		getModels: () => activeCollection().getModels(),
-		restoreModels: () => activeCollection().restoreModels(),
+		restoreModels: (providerId) => activeCollection().restoreModels(providerId),
 		refreshModels: (refreshOptions) =>
 			activeCollection().refreshModels(refreshOptions),
 		register: (provider) => {

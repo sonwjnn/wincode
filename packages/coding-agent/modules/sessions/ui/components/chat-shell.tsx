@@ -64,6 +64,7 @@ type ChatShellProps = {
 	draftKey?: string;
 	error?: unknown;
 	isBusy: boolean;
+	isSelectionReady?: boolean;
 	isCompacting: boolean;
 	isInterruptArmed: boolean;
 	messages: readonly SessionMessage[];
@@ -167,6 +168,7 @@ export function ChatShell({
 	draftKey,
 	error,
 	isBusy,
+	isSelectionReady,
 	isCompacting,
 	isInterruptArmed,
 	messages,
@@ -452,6 +454,7 @@ export function ChatShell({
 					<ChatTextArea
 						draftKey={draftKey}
 						id={composerId}
+						isSelectionReady={isSelectionReady}
 						onCompact={onCompact}
 						onEmptySubmit={onEmptySubmit}
 						onOpenSettings={onOpenSettings}
@@ -464,23 +467,24 @@ export function ChatShell({
 						sessionPromptHistory={promptHistory}
 					/>
 				</box>
-				<box flexDirection="column" flexShrink={0} paddingLeft={1} width="100%">
-					<box flexDirection="row" width="100%">
-						{isBusy ? (
-							<ActivityFooter
-								agent={agent}
-								isCompacting={isCompacting}
-								isInterruptArmed={isInterruptArmed}
-							/>
-						) : (
-							<WorkspacePath />
-						)}
-					</box>
-
+				<box
+					flexDirection="row"
+					flexShrink={0}
+					justifyContent="space-between"
+					paddingLeft={1}
+					width="100%"
+				>
+					{isBusy ? (
+						<ActivityFooter
+							agent={agent}
+							isCompacting={isCompacting}
+							isInterruptArmed={isInterruptArmed}
+						/>
+					) : (
+						<WorkspacePath />
+					)}
 					{usage ? (
-						<box flexDirection="row" justifyContent="flex-start" width="100%">
-							<SessionUsageBar autoCompact={autoCompact} summary={usage} />
-						</box>
+						<SessionUsageBar autoCompact={autoCompact} summary={usage} />
 					) : null}
 				</box>
 			</box>

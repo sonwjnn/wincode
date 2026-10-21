@@ -18,6 +18,7 @@ import type {
 	Provider,
 	ProviderCollection,
 	ProviderModel,
+	ThinkingLevel,
 } from "@wincode/ai";
 import { act, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
@@ -105,6 +106,8 @@ const createAgentProviderFixture = (
 		availableModelId?: string;
 		operations?: string[];
 		ownerCount?: number;
+		supportsThinking?: boolean;
+		thinkingLevel?: ThinkingLevel;
 	}> = {}
 ): AgentProviderFixture => {
 	const providerId = "interactive-agent-provider";
@@ -114,6 +117,12 @@ const createAgentProviderFixture = (
 		modelId: pinnedModelId,
 		providerId,
 	};
+	let reasoningEfforts: ThinkingLevel[] = [];
+	if (options.supportsThinking) {
+		reasoningEfforts = ["off", "low", "high"];
+	} else if (options.thinkingLevel !== undefined) {
+		reasoningEfforts = [options.thinkingLevel];
+	}
 	const availableModel: ProviderModel = fromPartial<ProviderModel>({
 		capabilities: ["text", "tools"],
 		modelId:
@@ -122,6 +131,7 @@ const createAgentProviderFixture = (
 				: modelId(options.availableModelId),
 		providerId,
 		protocolId: "fake-interactive-agent-provider",
+		reasoningEfforts,
 	});
 	let providerConstructionCount = 0;
 	const registrations = Array.from(
@@ -156,6 +166,9 @@ const createAgentProviderFixture = (
 			role: "primary",
 		},
 		model: `${providerId}/${pinnedModelId}`,
+		...(options.thinkingLevel === undefined
+			? {}
+			: { thinkingLevel: options.thinkingLevel }),
 		source: {
 			path: "/trusted/plugins/interactive-agent.md",
 			scope: "user",
@@ -201,7 +214,9 @@ const createTrackedHomeProviderCollectionFactory =
 		registrationMetadata:
 			| "authoritative"
 			| "missing"
-			| "mismatched" = "authoritative"
+			| "mismatched" = "authoritative",
+		slowSnapshot?: Promise<readonly ProviderModel[]>,
+		slowProviderId = "openrouter"
 	): HomeProviderCollectionFactory =>
 	async (pluginRuntime) => {
 		counters.collectionConstructions += 1;
@@ -232,9 +247,9 @@ const createTrackedHomeProviderCollectionFactory =
 					},
 				},
 				modelStore: {
-					get: () => {
+					get: (providerId) => {
 						operations.push("model-store");
-						return;
+						return providerId === slowProviderId ? slowSnapshot : undefined;
 					},
 					set: () => undefined,
 				},
@@ -256,9 +271,9 @@ const createTrackedHomeProviderCollectionFactory =
 								? () => []
 								: getPluginProviderRegistrations,
 					}),
-			restoreModels: async () => {
+			restoreModels: async (providerId) => {
 				operations.push("restore-models");
-				await restoreModels();
+				await restoreModels(providerId);
 			},
 			getAvailable: async (providerId) => {
 				operations.push("availability");
@@ -458,12 +473,14 @@ describe("NewSessionView composer focus", () => {
 					.every((operation) => operation === "restore")
 			).toBe(true);
 			expect(
-				operations.filter((operation) =>
-					operation.startsWith("availability-provider:")
-				)
-			).toEqual([
-				`availability-provider:${DEFAULT_PROVIDER_MODEL_SELECTION.providerId}`,
-			]);
+				operations
+					.filter((operation) => operation.startsWith("availability-provider:"))
+					.every(
+						(operation) =>
+							operation ===
+							`availability-provider:${DEFAULT_PROVIDER_MODEL_SELECTION.providerId}`
+					)
+			).toBe(true);
 			expect(operations).not.toContain("refresh");
 			await act(() => setup.renderer.destroy());
 			destroyed = true;
@@ -945,6 +962,159 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 					sourceIdentity: "fake-interactive-provider-source-0",
 				},
 			});
+		} finally {
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
+		}
+	});
+
+	test("initializes the available low thinking level before creating a new reasoning Session", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({
+			operations,
+			supportsThinking: true,
+		});
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const createCollection = createTrackedHomeProviderCollectionFactory(
+			operations,
+			fixture.credentialStorageId,
+			counters
+		);
+		const store = getSessionStore();
+		await store.resetSessionData();
+		const setup = await renderHomeView(createCollection, {
+			defaultAgentId: fixture.agentId,
+			pluginRuntime: fixture.pluginRuntime,
+		});
+
+		try {
+			await waitForHomeModelStatus(setup);
+			await flushTestRenderer(setup, 3);
+			expect(captureNormalizedHomeFrame(setup)).toContain("∙ low");
+			await submitHomePrompt(setup);
+			const [session] = await store.listSessions();
+			if (session === undefined) {
+				throw new Error("The reasoning Provider did not create a Session.");
+			}
+			expect(session.thinkingLevel).toBe("low");
+		} finally {
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
+		}
+	});
+
+	test("shows model and thinking together after Provider metadata loads", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({
+			operations,
+			supportsThinking: true,
+		});
+		const pendingSnapshot = Promise.withResolvers<readonly ProviderModel[]>();
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const createCollection = createTrackedHomeProviderCollectionFactory(
+			operations,
+			fixture.credentialStorageId,
+			counters,
+			"authoritative",
+			pendingSnapshot.promise,
+			"openai"
+		);
+		const store = getSessionStore();
+		await store.resetSessionData();
+		const setup = await renderHomeView(createCollection, {
+			defaultAgentId: fixture.agentId,
+			pluginRuntime: fixture.pluginRuntime,
+		});
+
+		try {
+			expect(captureNormalizedHomeFrame(setup)).not.toContain(
+				"openai/gpt-5.6-luna"
+			);
+			await act(async () => {
+				pendingSnapshot.resolve([]);
+				await Promise.resolve();
+			});
+			await waitForHomeFrame(setup, "openai/gpt-5.6-luna ∙ low");
+			expect(captureNormalizedHomeFrame(setup)).toContain(
+				"openai/gpt-5.6-luna ∙ low"
+			);
+		} finally {
+			pendingSnapshot.resolve([]);
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
+		}
+	});
+
+	test("shows selected Provider thinking before an unrelated Provider snapshot finishes", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({
+			operations,
+			supportsThinking: true,
+		});
+		const pendingSnapshot = Promise.withResolvers<readonly ProviderModel[]>();
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const createCollection = createTrackedHomeProviderCollectionFactory(
+			operations,
+			fixture.credentialStorageId,
+			counters,
+			"authoritative",
+			pendingSnapshot.promise
+		);
+		const store = getSessionStore();
+		await store.resetSessionData();
+		const setup = await renderHomeView(createCollection, {
+			defaultAgentId: fixture.agentId,
+			pluginRuntime: fixture.pluginRuntime,
+		});
+
+		try {
+			await waitForHomeFrame(setup, "∙ low");
+			expect(captureNormalizedHomeFrame(setup)).toContain("∙ low");
+		} finally {
+			pendingSnapshot.resolve([]);
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
+		}
+	});
+
+	test("shows an Agent-pinned ThinkingLevel on a fresh session without changing submission selection", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({
+			operations,
+			thinkingLevel: "high",
+		});
+		const counters = { collectionConstructions: 0, storeConstructions: 0 };
+		const createCollection = createTrackedHomeProviderCollectionFactory(
+			operations,
+			fixture.credentialStorageId,
+			counters
+		);
+		const store = getSessionStore();
+		await store.resetSessionData();
+		const setup = await renderHomeView(createCollection, {
+			defaultAgentId: fixture.agentId,
+			pluginRuntime: fixture.pluginRuntime,
+		});
+
+		try {
+			await waitForHomeModelStatus(setup);
+			await flushTestRenderer(setup, 3);
+			expect(captureNormalizedHomeFrame(setup)).toContain("∙ high");
+
+			await submitHomePrompt(setup);
+			const [session] = await store.listSessions();
+			if (session === undefined) {
+				throw new Error("The trusted Agent pin did not create a Session.");
+			}
+			expect(session.thinkingLevel).toBe("high");
 		} finally {
 			await act(() => setup.renderer.destroy());
 			await fixture.pluginRuntime.shutdown();

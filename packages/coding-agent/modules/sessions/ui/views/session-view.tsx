@@ -1008,6 +1008,7 @@ export function SessionView({
 					isBusy={isBusy}
 					isCompacting={snapshot.isCompacting}
 					isInterruptArmed={isInterruptArmed}
+					isSelectionReady={isPromptConfigRestored}
 					key={sessionId}
 					messages={messages}
 					onCompact={executeCompactionCommand}

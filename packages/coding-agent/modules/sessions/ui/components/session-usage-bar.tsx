@@ -46,9 +46,9 @@ export function SessionUsageBar({
 				)}
 				{autoCompact ? <span> (auto)</span> : null}
 				{summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0 ? (
-					<span>{`  cache read ${formatModelTokenCount(
+					<span>{`↑${formatModelTokenCount(
 						summary.cacheReadTokens
-					)} / write ${formatModelTokenCount(summary.cacheWriteTokens)}`}</span>
+					)} ↓${formatModelTokenCount(summary.cacheWriteTokens)}`}</span>
 				) : null}
 				{summary.cacheWarmingStatus === "idle" ? null : (
 					<span>

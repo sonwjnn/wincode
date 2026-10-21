@@ -22,7 +22,7 @@ import {
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { SessionMessageId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
-import type { ProviderModel } from "@wincode/ai";
+import type { ProviderModel, ThinkingLevel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
 import { act, type ReactNode, useEffect, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
@@ -43,7 +43,6 @@ import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messa
 import { SettingsRegistryProvider } from "@/modules/settings";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
-import { shortenHomePath } from "@/shared/paths/display-path";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import {
 	KeyboardLayerProvider,
@@ -254,6 +253,7 @@ type ChatShellRenderOptions = {
 	height: number;
 	width: number;
 	initialCompactions?: SessionCompaction[];
+	initialThinkingLevel?: ThinkingLevel;
 	configuredAgent?: boolean;
 	isBusy?: boolean;
 	isCompacting?: boolean;
@@ -271,6 +271,7 @@ const renderChatShell = async (
 		height,
 		width,
 		initialCompactions = [],
+		initialThinkingLevel,
 		configuredAgent = false,
 		isBusy = false,
 		isCompacting = false,
@@ -325,7 +326,9 @@ const renderChatShell = async (
 					<SettingsRegistryProvider>
 						<AgentRegistryProvider>
 							<KeyboardLayerProvider>
-								<PromptConfigProvider>
+								<PromptConfigProvider
+									initialThinkingLevel={initialThinkingLevel}
+								>
 									<DialogProvider>
 										<RouterContextProvider router={router}>
 											<CommandControllerProvider>
@@ -1116,7 +1119,86 @@ describe("ChatShell waiting message strip", () => {
 });
 
 describe("ChatShell activity footer", () => {
-	test("keeps the workspace path on one row above context usage", async () => {
+	test("shows model and thinking together only after selected Provider metadata loads", async () => {
+		const pending = Promise.withResolvers<readonly ProviderModel[]>();
+		const selectedModel: ProviderModel = {
+			modelId: modelId("gpt-5.6-luna"),
+			protocolId: "fake-provider",
+			providerId: "openai",
+			reasoningEfforts: ["low", "high"],
+		};
+		const providerController = fromPartial<InteractiveProviderController>({
+			getKnownModels: () => pending.promise,
+		});
+		const { setup } = await renderChatShell([], {
+			height: 24,
+			providerController,
+			width: 100,
+		});
+		try {
+			await flushUi(setup);
+			expect(setup.captureCharFrame()).not.toContain("openai/gpt-5.6-luna");
+			pending.resolve([selectedModel]);
+			const frame = await waitForFrameText(setup, "openai/gpt-5.6-luna ∙ low");
+			expect(frame).toContain("openai/gpt-5.6-luna ∙ low");
+		} finally {
+			pending.resolve([selectedModel]);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("initializes low for an unselected reasoning model instead of reporting a synthetic default", async () => {
+		const providerController = fromPartial<InteractiveProviderController>({
+			getKnownModels: async () => [
+				{
+					modelId: modelId("gpt-5.6-luna"),
+					protocolId: "fake-provider",
+					providerId: "openai",
+					reasoningEfforts: ["off", "low", "high"],
+				},
+			],
+		});
+		const { setup } = await renderChatShell([], {
+			height: 24,
+			providerController,
+			width: 100,
+		});
+
+		try {
+			const frame = await waitForFrameText(setup, "∙ low");
+			expect(frame).toContain("openai/gpt-5.6-luna ∙ low");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("keeps the selected thinking level visible in the composer status bar", async () => {
+		const providerController = fromPartial<InteractiveProviderController>({
+			getKnownModels: async () => [
+				{
+					modelId: modelId("gpt-5.6-luna"),
+					protocolId: "fake-provider",
+					providerId: "openai",
+					reasoningEfforts: ["low"],
+				},
+			],
+		});
+		const { setup } = await renderChatShell([], {
+			height: 24,
+			initialThinkingLevel: "low",
+			providerController,
+			width: 100,
+		});
+
+		try {
+			const frame = await waitForFrameText(setup, "∙ low");
+			expect(frame).toContain("openai/gpt-5.6-luna ∙ low");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("keeps the workspace path left of context usage on the same footer row", async () => {
 		const selection = {
 			modelId: modelId("gpt-5.6-luna"),
 			providerId: "openai",
@@ -1156,17 +1238,19 @@ describe("ChatShell activity footer", () => {
 			const frame = await waitForFrameText(setup, "0.7%/1.1m (auto)");
 			const rows = frame.split("\n");
 			const pathRow = rows.findIndex((row) =>
-				row.includes(shortenHomePath(process.cwd()))
+				row.includes(path.basename(process.cwd()) || path.sep)
 			);
 			const usageRow = rows.findIndex((row) =>
 				row.includes("0.7%/1.1m (auto)")
 			);
 
 			expect(pathRow).toBeGreaterThanOrEqual(0);
-			expect(usageRow).toBeGreaterThan(pathRow);
-			const pathColumn = rows[pathRow]?.indexOf(shortenHomePath(process.cwd()));
-			const usageColumn = rows[usageRow]?.indexOf("0.7%");
-			expect(usageColumn).toBe(pathColumn);
+			expect(usageRow).toBe(pathRow);
+			const pathColumn = (rows[pathRow] ?? "").indexOf(
+				path.basename(process.cwd()) || path.sep
+			);
+			const usageColumn = (rows[usageRow] ?? "").indexOf("0.7%");
+			expect(usageColumn).toBeGreaterThan(pathColumn);
 		} finally {
 			setup.renderer.destroy();
 		}

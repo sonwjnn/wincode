@@ -531,7 +531,7 @@ export const createSessionHost = async ({
 				sessionId
 			);
 		}
-		await providerController.restoreModels();
+		await providerController.restoreModels(selectedHostModel?.providerId);
 		cacheWarming = createSessionCacheWarming({
 			initialUsageEntries: opened.usageEntries,
 			providerCollection: sessionProviderCollection,
