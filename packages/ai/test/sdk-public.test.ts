@@ -267,6 +267,32 @@ describe("public SDK provider collection", () => {
 		});
 		await cancelled.close();
 
+		const selfAborted = createCollection();
+		const selfAbortController = new AbortController();
+		const rejectTransform =
+			Promise.withResolvers<NonNullable<ChatRequest["headers"]>>();
+		await expect(
+			collectTerminal(
+				selfAborted,
+				() => {
+					selfAbortController.abort(
+						new DOMException("header transform cancelled", "AbortError")
+					);
+					return rejectTransform.promise;
+				},
+				selfAbortController.signal
+			)
+		).resolves.toMatchObject({
+			outcome: {
+				reason: "header transform cancelled",
+				status: "aborted",
+			},
+			type: "terminal",
+		});
+		rejectTransform.reject(new Error("late header transform failure"));
+		await Bun.sleep(0);
+		await selfAborted.close();
+
 		const pending = createCollection();
 		const pendingController = new AbortController();
 		const transformStarted = Promise.withResolvers<void>();

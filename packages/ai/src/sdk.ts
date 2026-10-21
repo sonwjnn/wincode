@@ -734,7 +734,10 @@ const awaitWithSignal = async <Result>(
 	operation: Promise<Result>,
 	signal: AbortSignal | undefined
 ): Promise<Result> => {
-	throwIfAborted(signal);
+	if (signal?.aborted) {
+		void operation.catch(() => undefined);
+		throwIfAborted(signal);
+	}
 	if (signal === undefined) {
 		return operation;
 	}
