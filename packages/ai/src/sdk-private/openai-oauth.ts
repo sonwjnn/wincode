@@ -15,6 +15,7 @@ const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_ISSUER = "https://auth.openai.com";
 const OPENAI_REDIRECT_URI = "http://localhost:1455/auth/callback";
 const OPENAI_REFRESH_SKEW_MS = 5 * 60 * 1000;
+const OPENAI_REFRESH_TIMEOUT_MS = 30_000;
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const tokenResponseSchema = z
 	.object({
@@ -129,6 +130,9 @@ export const refreshOpenAIOAuthCredential = async (
 	if (Date.parse(credential.expiresAt) - Date.now() > OPENAI_REFRESH_SKEW_MS) {
 		return credential;
 	}
+	if (signal?.aborted) {
+		throw signal.reason ?? new DOMException("Aborted", "AbortError");
+	}
 	let response: Response;
 	try {
 		response = await fetchImpl(new URL("/oauth/token", OPENAI_ISSUER), {
@@ -137,8 +141,8 @@ export const refreshOpenAIOAuthCredential = async (
 				grant_type: "refresh_token",
 				refresh_token: credential.refreshToken,
 			}),
-			signal,
 			method: "POST",
+			signal: AbortSignal.timeout(OPENAI_REFRESH_TIMEOUT_MS),
 		});
 	} catch (error) {
 		if (signal?.aborted) {

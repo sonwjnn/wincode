@@ -55,7 +55,8 @@ export const BUILT_IN_PROVIDER_CATALOG = {
 				displayName: "OpenAI browser sign-in",
 				kind: "oauth",
 				methodId: "openai-browser",
-				successMessage: "OpenAI connected with browser sign-in.",
+				successMessage:
+					"OpenAI browser sign-in completed and credentials were saved.",
 			},
 		],
 		createProvider: (options) =>
@@ -103,8 +104,7 @@ export const BUILT_IN_PROVIDER_CATALOG = {
 				inputPrompt: "Paste OpenRouter API key",
 				kind: "api-key-with-model-discovery",
 				methodId: "openrouter-api-key",
-				successMessage:
-					"OpenRouter Provider connected and Known Models refreshed.",
+				successMessage: "OpenRouter API key saved and Known Models refreshed.",
 			},
 		],
 		createProvider: (options) =>

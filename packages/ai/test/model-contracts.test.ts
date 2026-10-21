@@ -162,6 +162,40 @@ describe("provider-neutral model contracts", () => {
 		expect(
 			normalizeModelFailure({ message: "unauthorized", statusCode: 401 }).code
 		).toBe("authentication");
+		expect(
+			normalizeModelFailure({
+				code: "provider",
+				message: "OpenAI request failed (404).",
+				statusCode: 404,
+			}).code
+		).toBe("invalid-request");
+		expect(
+			normalizeModelFailure({
+				code: "provider",
+				message: "OpenAI request failed (503).",
+				statusCode: 503,
+			}).code
+		).toBe("unavailable");
+	});
+
+	test("preserves structured authentication failures without exposing provider diagnostics", () => {
+		const failure = normalizeModelFailure(
+			{
+				code: "authentication",
+				message: "OpenAI rejected the configured credential.",
+				providerId: "openai",
+			},
+			{ modelId: "gpt-5.6-luna", providerId: "openai" }
+		);
+		expect(failure).toEqual({
+			code: "authentication",
+			details: { modelId: "gpt-5.6-luna", providerId: "openai" },
+			message: "Model authentication failed.",
+			retry: "never",
+			source: "provider",
+			version: 1,
+		});
+		expect(JSON.stringify(failure)).not.toContain("OpenAI rejected");
 	});
 
 	test("unwraps stream error envelopes before classifying failures", () => {

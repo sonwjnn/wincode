@@ -175,7 +175,7 @@ export const resolveLocalDatabasePath = (): string => {
 	const databasePath =
 		process.env.WINCODE_LOCAL_DB_PATH ??
 		path.join(resolveUserDataDir(), DATABASE_FILE_NAME);
-	fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+	fs.mkdirSync(path.dirname(databasePath), { mode: 0o700, recursive: true });
 	return databasePath;
 };
 

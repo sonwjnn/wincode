@@ -1,6 +1,7 @@
 import type { OpenAIBrowserLoginOptions, OpenAIProvider } from "@wincode/ai";
 import {
 	type CredentialStore,
+	type CredentialStoreOptions,
 	createProviderCollection,
 	type ModelStore,
 	type Provider,
@@ -143,8 +144,9 @@ const createFailClosedBackend = (): ProviderCollectionBackend =>
 		collection: createProviderCollection({
 			credentialStore: {
 				delete: () => undefined,
-				get: () => undefined,
-				set: () => undefined,
+				list: () => [],
+				modify: () => undefined,
+				read: () => undefined,
 			},
 			modelStore: {
 				get: () => undefined,
@@ -268,11 +270,30 @@ const createProviderBackend = async (
 		}
 		return storageId;
 	};
+	const providerIdsByStorageId = new Map(
+		[...storageIds].map(([providerId, storageId]) => [storageId, providerId])
+	);
+	const hasStoredCredential = backingCredentials.has;
 	const credentialStore: CredentialStore = Object.freeze({
-		delete: (providerId) => backingCredentials.delete(storageIdFor(providerId)),
-		get: (providerId) => backingCredentials.get(storageIdFor(providerId)),
-		set: (providerId, credential) =>
-			backingCredentials.set(storageIdFor(providerId), credential),
+		delete: (providerId, storeOptions) =>
+			backingCredentials.delete(storageIdFor(providerId), storeOptions),
+		list: async (storeOptions) => {
+			const metadata = await backingCredentials.list(storeOptions);
+			return metadata.flatMap(({ providerId: storageId, type }) => {
+				const providerId = providerIdsByStorageId.get(storageId);
+				return providerId === undefined ? [] : [{ providerId, type }];
+			});
+		},
+		...(hasStoredCredential === undefined
+			? {}
+			: {
+					has: (providerId: string, storeOptions?: CredentialStoreOptions) =>
+						hasStoredCredential(storageIdFor(providerId), storeOptions),
+				}),
+		modify: (providerId, update, storeOptions) =>
+			backingCredentials.modify(storageIdFor(providerId), update, storeOptions),
+		read: (providerId, storeOptions) =>
+			backingCredentials.read(storageIdFor(providerId), storeOptions),
 	});
 	const modelStore: ModelStore = Object.freeze({
 		get: (providerId) => backingModels.get(storageIdFor(providerId)),
@@ -341,6 +362,16 @@ export const createInteractiveSessionProviderCollection = async (
 		close,
 		deleteCredential: (providerId) =>
 			activeCollection().deleteCredential(providerId),
+		checkAuth: (providerId, authOptions) =>
+			activeCollection().checkAuth(providerId, authOptions),
+		getAuth: (provider, authOptions) =>
+			activeCollection().getAuth(provider, authOptions),
+		verifyAuth: (provider, authOptions) =>
+			activeCollection().verifyAuth(provider, authOptions),
+		login: (providerId, loginOptions) =>
+			activeCollection().login(providerId, loginOptions),
+		logout: (providerId, logoutOptions) =>
+			activeCollection().logout(providerId, logoutOptions),
 		getAvailable: (providerId) => activeCollection().getAvailable(providerId),
 		getConfiguredProviderIds: () =>
 			activeCollection().getConfiguredProviderIds(),
@@ -396,21 +427,26 @@ export const createInteractiveSessionProviderCollection = async (
 			if (closePromise !== undefined) {
 				throw new Error("ProviderCollection is closed.");
 			}
-			const openAIProvider = backend.openAIProvider;
-			if (openAIProvider === undefined) {
+			if (backend.openAIProvider === undefined) {
 				throw new Error("OpenAI browser sign-in is unavailable.");
 			}
-			const credential = await openAIProvider.login(loginOptions);
-			if (loginOptions.signal?.aborted) {
-				throw (
-					loginOptions.signal.reason ??
-					new DOMException("Aborted", "AbortError")
-				);
+			const result = await activeCollection().login(OPENAI_PROVIDER_ID, {
+				methodId: "openai-browser",
+				options: loginOptions,
+				signal: loginOptions.signal,
+			});
+			if (result.status === "error") {
+				throw new Error(result.failure.message);
 			}
-			if (closePromise !== undefined) {
-				throw new Error("ProviderCollection is closed.");
+			if (result.status !== "saved") {
+				if (loginOptions.signal?.aborted) {
+					throw (
+						loginOptions.signal.reason ??
+						new DOMException("Aborted", "AbortError")
+					);
+				}
+				throw new Error("OpenAI browser sign-in was cancelled.");
 			}
-			await activeCollection().setCredential(OPENAI_PROVIDER_ID, credential);
 			return activeCollection()
 				.getAvailable(OPENAI_PROVIDER_ID)
 				.then((models) =>

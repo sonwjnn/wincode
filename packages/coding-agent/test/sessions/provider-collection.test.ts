@@ -275,7 +275,21 @@ test("delegated Plugin Provider access requires the selected Plugin source ident
 			allowedPluginProviderSources: [selectedSource],
 			credentialStore: {
 				delete: () => undefined,
-				get: (storedProviderId) => {
+				list: () => [
+					{ providerId: selectedCredentialId, type: "plugin" },
+					{ providerId: unselectedCredentialId, type: "plugin" },
+				],
+				modify: async (storedProviderId, update) => {
+					credentialReads.push(storedProviderId);
+					let current: string | undefined;
+					if (storedProviderId === selectedCredentialId) {
+						current = "fake-selected-plugin-credential";
+					} else if (storedProviderId === unselectedCredentialId) {
+						current = "fake-unselected-plugin-credential";
+					}
+					return (await update(current)) ?? current;
+				},
+				read: (storedProviderId) => {
 					credentialReads.push(storedProviderId);
 					if (storedProviderId === selectedCredentialId) {
 						return "fake-selected-plugin-credential";
@@ -283,9 +297,7 @@ test("delegated Plugin Provider access requires the selected Plugin source ident
 					if (storedProviderId === unselectedCredentialId) {
 						return "fake-unselected-plugin-credential";
 					}
-					return;
 				},
-				set: () => undefined,
 			},
 			modelStore: {
 				get: () => undefined,
@@ -301,8 +313,7 @@ test("delegated Plugin Provider access requires the selected Plugin source ident
 			providerCollection.getModel(providerId, otherPluginModel.modelId)
 		).toBeUndefined();
 		await providerCollection.getAvailable();
-		expect(credentialReads).toContain(selectedCredentialId);
-		expect(credentialReads).not.toContain(unselectedCredentialId);
+		expect(credentialReads).toEqual([]);
 	} finally {
 		await providerCollection.close();
 	}

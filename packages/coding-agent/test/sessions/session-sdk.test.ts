@@ -63,6 +63,7 @@ import {
 	createFakeProviderRecorder,
 } from "../support/e2e-fake-runtime";
 import { agentId, modelId, sessionId } from "../support/identifiers";
+import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");
@@ -189,18 +190,30 @@ const createImplicitDefaultAgentPinSdk = async (
 				allowedPluginProviderSources
 			) => {
 				activity.collectionConstructions += 1;
+				const pluginProviders =
+					pluginRuntime?.getProviderRegistrations(sessionId) ?? [];
 				const collection = await createDefaultSessionProviderCollection(
 					pluginRuntime,
 					sessionId,
 					{
 						credentialStore: {
 							delete: () => undefined,
-							get: (providerId) => {
+							list: () =>
+								pluginProviders.map((registration) => ({
+									providerId: pluginProviderStorageId(registration),
+									type: "plugin",
+								})),
+							modify: async (providerId, update) => {
+								activity.credentialReads += 1;
+								activity.credentialProviderIds.push(providerId);
+								const current = { fake: true };
+								return (await update(current)) ?? current;
+							},
+							read: (providerId) => {
 								activity.credentialReads += 1;
 								activity.credentialProviderIds.push(providerId);
 								return { fake: true };
 							},
-							set: () => undefined,
 						},
 						modelStore: {
 							get: () => {
@@ -652,11 +665,18 @@ test("createSession rejects a stale Host Plugin snapshot before reserving a buil
 			const collection = createProviderCollection({
 				credentialStore: {
 					delete: () => undefined,
-					get: () => {
+					list: () => {
+						activity.credentialReads += 1;
+						return [];
+					},
+					modify: async (_providerId, update) => {
+						activity.credentialReads += 1;
+						return (await update("fake-sdk-key")) ?? "fake-sdk-key";
+					},
+					read: () => {
 						activity.credentialReads += 1;
 						return "fake-sdk-key";
 					},
-					set: () => undefined,
 				},
 				modelStore: {
 					get: () => {
@@ -759,11 +779,18 @@ test("Session SDK prompt rejects an unrelated stale Plugin snapshot before avail
 			const collection = createProviderCollection({
 				credentialStore: {
 					delete: () => undefined,
-					get: () => {
+					list: () => {
+						activity.credentialReads += 1;
+						return [];
+					},
+					modify: async (_providerId, update) => {
+						activity.credentialReads += 1;
+						return (await update("fake-sdk-key")) ?? "fake-sdk-key";
+					},
+					read: () => {
 						activity.credentialReads += 1;
 						return "fake-sdk-key";
 					},
-					set: () => undefined,
 				},
 				modelStore: { get: () => undefined, set: () => undefined },
 			});
@@ -840,11 +867,9 @@ test("Session SDK holds a reload-blocking lease through Provider availability an
 			createProviderCollection: () => {
 				const collection = Object.assign(
 					createProviderCollection({
-						credentialStore: {
-							delete: () => undefined,
-							get: () => "fake-sdk-key",
-							set: () => undefined,
-						},
+						credentialStore: createInMemoryCredentialStore(
+							new Map([["openai", "fake-sdk-key"]])
+						),
 						modelStore: { get: () => undefined, set: () => undefined },
 					}),
 					{ getPluginProviderRegistrations: () => [] as const }
@@ -990,27 +1015,20 @@ const createSdkPinnedAgentRuntime = async (
 		protocolId: "openai-responses",
 		providerId: "openai",
 	};
+	const credential = options.oauth
+		? {
+				accessToken: "fake-openai-oauth-access-token",
+				accountId: "fake-openai-account",
+				expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+				kind: "oauth-session" as const,
+				refreshToken: "fake-openai-oauth-refresh-token",
+				updatedAt: new Date().toISOString(),
+			}
+		: { apiKey: "sdk-test-key", kind: "api-key" as const };
 	const providerCollection = await createInteractiveSessionProviderCollection({
-		credentialStore: {
-			delete: () => undefined,
-			get: (providerId) => {
-				if (providerId !== "openai") {
-					return;
-				}
-				if (options.oauth) {
-					return {
-						accessToken: "fake-openai-oauth-access-token",
-						accountId: "fake-openai-account",
-						expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
-						kind: "oauth-session" as const,
-						refreshToken: "fake-openai-oauth-refresh-token",
-						updatedAt: new Date().toISOString(),
-					};
-				}
-				return { apiKey: "sdk-test-key", kind: "api-key" };
-			},
-			set: () => undefined,
-		},
+		credentialStore: createInMemoryCredentialStore(
+			new Map([["openai", credential]])
+		),
 		modelStore: {
 			get: (providerId) =>
 				withExactModel && providerId === "openai" ? [pinnedModel] : undefined,
@@ -1135,15 +1153,7 @@ test("public Session SDK drives multiple Agent Model Steps through exact Provide
 			"fake-session-sdk-credential",
 		],
 	]);
-	const credentialStore = {
-		delete: (providerId: string) => {
-			credentials.delete(providerId);
-		},
-		get: (providerId: string) => credentials.get(providerId),
-		set: (providerId: string, credential: unknown) => {
-			credentials.set(providerId, credential);
-		},
-	};
+	const credentialStore = createInMemoryCredentialStore(credentials);
 	const providerCollections: ProviderCollection[] = [];
 	const providerCloseCalls: number[] = [];
 	const requests: ProviderChatRequest[] = [];
@@ -1747,14 +1757,9 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 	const providerCollectionForHost =
 		async (): Promise<InteractiveSessionProviderCollection> => {
 			const providers = createProviderCollection({
-				credentialStore: {
-					delete: () => undefined,
-					get: (providerId) =>
-						providerId === selectedProviderModel.providerId
-							? "sdk-test-key"
-							: undefined,
-					set: () => undefined,
-				},
+				credentialStore: createInMemoryCredentialStore(
+					new Map([[selectedProviderModel.providerId, "sdk-test-key"]])
+				),
 			});
 			providers.register({
 				id: selectedProviderModel.providerId,
@@ -2470,11 +2475,7 @@ export default (api) => {
 				...(allowedProviderSources === undefined
 					? {}
 					: { allowedPluginProviderSources: allowedProviderSources }),
-				credentialStore: {
-					delete: () => undefined,
-					get: () => undefined,
-					set: () => undefined,
-				},
+				credentialStore: createInMemoryCredentialStore(new Map()),
 				modelStore: {
 					get: () => undefined,
 					set: () => undefined,
@@ -2544,11 +2545,18 @@ test("ownerless non-built-in Provider restore fails before Host or Provider cons
 			const collection = createProviderCollection({
 				credentialStore: {
 					delete: () => undefined,
-					get: () => {
+					list: () => {
+						activity.credentialReads += 1;
+						return [];
+					},
+					modify: () => {
 						activity.credentialReads += 1;
 						return;
 					},
-					set: () => undefined,
+					read: () => {
+						activity.credentialReads += 1;
+						return;
+					},
 				},
 			});
 			activity.providers += 1;
@@ -2686,11 +2694,18 @@ export default (api) => {
 				allowedPluginProviderSources,
 				credentialStore: {
 					delete: () => undefined,
-					get: () => {
+					list: () => {
+						providerActivity.credentialReads++;
+						return [];
+					},
+					modify: () => {
 						providerActivity.credentialReads++;
 						return;
 					},
-					set: () => undefined,
+					read: () => {
+						providerActivity.credentialReads++;
+						return;
+					},
 				},
 				modelStore: {
 					get: () => {

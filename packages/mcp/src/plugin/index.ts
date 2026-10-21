@@ -13,6 +13,7 @@ import {
 	createMcpOAuthProvider,
 	loginMcpServer,
 	logoutMcpServer,
+	type McpSecretStore,
 } from "../oauth";
 import {
 	createMcpRegistry,
@@ -26,7 +27,10 @@ import { createMcpConfigLoader } from "./config";
 
 export type McpPluginDependencies = Readonly<
 	Pick<McpRegistryDeps, "createClient" | "createOAuthProvider" | "env"> &
-		Partial<Pick<McpRegistryDeps, "loadConfig" | "loginOAuth" | "logoutOAuth">>
+		Partial<
+			Pick<McpRegistryDeps, "loadConfig" | "loginOAuth" | "logoutOAuth">
+		> &
+		Readonly<{ createSecretStore?: (userDataDir: string) => McpSecretStore }>
 >;
 
 const statusFor = (state: McpServerStatus["state"]): PluginStatus => {
@@ -326,7 +330,7 @@ const failure = (errorText: string): ToolCallOutput => ({
 	type: "failure",
 });
 
-/** Creates MCP's complete public-Plugin factory without a host adapter. */
+/** Creates MCP's Plugin factory with injectable OAuth storage and runtime adapters. */
 export const createMcpPluginFactory =
 	(dependencies: McpPluginDependencies = {}): PluginFactory =>
 	async (api, context) => {
@@ -338,6 +342,15 @@ export const createMcpPluginFactory =
 			return registry;
 		};
 		const plugin = api.definePlugin({ id: "mcp" });
+		const secrets = dependencies.createSecretStore?.(context.userDataDir);
+		const requireSecrets = (): McpSecretStore => {
+			if (secrets === undefined) {
+				throw new Error(
+					"MCP OAuth requires an MCP secret store from the host."
+				);
+			}
+			return secrets;
+		};
 		plugin.onStart(async () => {
 			const nextRegistry = createMcpRegistry({
 				...(dependencies.createClient === undefined
@@ -348,7 +361,7 @@ export const createMcpPluginFactory =
 							createOAuthProvider: (config) =>
 								createMcpOAuthProvider({
 									oauth: config.oauth,
-									secrets: plugin.secrets,
+									secrets: requireSecrets(),
 									serverName: config.name,
 								}),
 						}
@@ -369,7 +382,7 @@ export const createMcpPluginFactory =
 							},
 							oauth: config.oauth,
 							...(readRedirectUrl === undefined ? {} : { readRedirectUrl }),
-							secrets: plugin.secrets,
+							secrets: requireSecrets(),
 							serverName: config.name,
 							serverUrl: config.url,
 						});
@@ -377,7 +390,7 @@ export const createMcpPluginFactory =
 				logoutOAuth:
 					dependencies.logoutOAuth ??
 					(async (config) => {
-						await logoutMcpServer(plugin.secrets, config.name);
+						await logoutMcpServer(requireSecrets(), config.name);
 					}),
 				workspace: context.workspace,
 			});

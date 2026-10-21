@@ -715,11 +715,18 @@ test("Session Host rejects a stale Plugin Provider snapshot before built-in rest
 	const baseCollection = createProviderCollection({
 		credentialStore: {
 			delete: () => undefined,
-			get: () => {
+			list: () => {
+				activity.credentialReads += 1;
+				return [];
+			},
+			modify: () => {
+				activity.credentialReads += 1;
+				return;
+			},
+			read: () => {
 				activity.credentialReads += 1;
 				return "fake-host-key";
 			},
-			set: () => undefined,
 		},
 		modelStore: {
 			get: () => {
@@ -1004,7 +1011,21 @@ test("delegated Session Hosts load only the Plugin Provider selected in the chil
 						: { allowedPluginProviderSources: allowedProviderSources }),
 					credentialStore: {
 						delete: () => undefined,
-						get: (providerId) => {
+						list: () => [
+							{ providerId: selectedStorageId, type: "plugin" },
+							{ providerId: unselectedStorageId, type: "plugin" },
+						],
+						modify: async (providerId, update) => {
+							credentialReads.push(providerId);
+							let current: string | undefined;
+							if (providerId === selectedStorageId) {
+								current = "fake-selected-child-provider-credential";
+							} else if (providerId === unselectedStorageId) {
+								current = "fake-unselected-child-provider-credential";
+							}
+							return (await update(current)) ?? current;
+						},
+						read: (providerId) => {
 							credentialReads.push(providerId);
 							if (providerId === selectedStorageId) {
 								return "fake-selected-child-provider-credential";
@@ -1012,9 +1033,7 @@ test("delegated Session Hosts load only the Plugin Provider selected in the chil
 							if (providerId === unselectedStorageId) {
 								return "fake-unselected-child-provider-credential";
 							}
-							return;
 						},
-						set: () => undefined,
 					},
 				}
 			);
@@ -1056,9 +1075,10 @@ test("delegated Session Hosts load only the Plugin Provider selected in the chil
 				unselectedModel.modelId
 			)
 		).toBeUndefined();
-		await host.providerCollection?.getAvailable();
-		expect(credentialReads).toContain(selectedStorageId);
-		expect(credentialReads).not.toContain(unselectedStorageId);
+		expect(await host.providerCollection?.getAvailable()).toEqual([
+			selectedModel,
+		]);
+		expect(credentialReads).toEqual([]);
 	} finally {
 		await host.shutdown();
 	}

@@ -40,7 +40,7 @@ const tokens = {
 	token_type: "Bearer",
 } satisfies StoredOAuthTokens;
 
-test("MCP OAuth credentials are isolated by server and persisted through Plugin secrets", async () => {
+test("MCP OAuth credentials are isolated by server and persisted through the injected secret store", async () => {
 	const { secrets, values } = createSecretStore();
 	const provider = createMcpOAuthProvider({
 		oauth: { clientId: "configured-client" },

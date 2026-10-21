@@ -87,8 +87,10 @@ const createDefaultProviderCollection = (): ProviderCollection => {
 	const collection = createProviderCollection({
 		credentialStore: {
 			delete: () => undefined,
-			get: () => ({ apiKey: "test-key", kind: "api-key" }),
-			set: () => undefined,
+			list: () => [{ providerId: "openai", type: "api-key" }],
+			modify: async (_providerId, update) =>
+				update({ apiKey: "test-key", kind: "api-key" }),
+			read: () => ({ apiKey: "test-key", kind: "api-key" }),
 		},
 		modelStore: { get: () => undefined, set: () => undefined },
 	});

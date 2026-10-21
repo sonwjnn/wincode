@@ -7,6 +7,7 @@ import {
 	type Provider,
 	type ProviderChatContext,
 	type ProviderChatEvent,
+	type ProviderChatHeaderContext,
 	type ProviderChatRequest,
 	ProviderError,
 	type ProviderModel,
@@ -143,6 +144,13 @@ const apiKeyFor = (value: unknown): string => {
 	throw new ProviderError("authentication", "Google authorization is invalid.");
 };
 
+const googleChatHeadersFor = (
+	context: ProviderChatHeaderContext
+): Readonly<Record<string, string>> => ({
+	"content-type": "application/json",
+	"x-goog-api-key": apiKeyFor(context.authorization),
+});
+
 const providerErrorFor = (error: unknown): ProviderError => {
 	if (error instanceof ProviderError) {
 		return error;
@@ -190,7 +198,7 @@ const googleProviderOptionsFor = (
 
 const streamRequest = async function* (
 	request: ProviderProtocolRequest,
-	apiKey: string,
+	headers: Readonly<Record<string, string>>,
 	maxOutputTokens: number | undefined,
 	fetchImpl: GoogleFetch
 ): AsyncIterable<ProviderChatEvent> {
@@ -203,10 +211,7 @@ const streamRequest = async function* (
 	try {
 		response = await fetchImpl(apiUrlFor(request.modelId), {
 			body: JSON.stringify(body),
-			headers: {
-				"content-type": "application/json",
-				"x-goog-api-key": apiKey,
-			},
+			headers,
 			method: "POST",
 			signal: request.signal,
 		});
@@ -273,7 +278,6 @@ const shouldRetryWithoutCache = (
 const streamWithCacheFallback = async function* (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
-	apiKey: string,
 	selectedCache: GoogleCachedContentSelection | undefined,
 	fetchImpl: GoogleFetch
 ): AsyncIterable<ProviderChatEvent> {
@@ -286,7 +290,7 @@ const streamWithCacheFallback = async function* (
 	try {
 		for await (const event of streamRequest(
 			modelRequestFor(request, context, selectedCache),
-			apiKey,
+			context.headers,
 			maxOutputTokens,
 			fetchImpl
 		)) {
@@ -311,7 +315,7 @@ const streamWithCacheFallback = async function* (
 		await selectedCache.onRejected?.(selectedCache.name);
 		yield* streamRequest(
 			modelRequestFor(request, context),
-			apiKey,
+			context.headers,
 			maxOutputTokens,
 			fetchImpl
 		);
@@ -342,7 +346,6 @@ const streamGoogle = (
 			yield* streamWithCacheFallback(
 				request,
 				context,
-				apiKey,
 				selectedCache,
 				fetchImpl
 			);
@@ -405,6 +408,7 @@ export const createGoogleProvider = (
 				? { authorization: { apiKey: parsed.data.apiKey } }
 				: null;
 		},
+		getChatHeaders: googleChatHeadersFor,
 		streamChat: streamGoogle(fetchImpl, cacheManager),
 	};
 };

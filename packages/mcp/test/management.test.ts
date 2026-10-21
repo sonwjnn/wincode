@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import type { PluginSecretStore } from "@wincode/coding-agent";
 import {
 	createMcpManagement,
 	type McpConfigSnapshot,
 	type McpConfigSource,
+	type McpSecretStore,
 } from "@wincode/mcp";
 
 const source = (
@@ -19,7 +19,7 @@ const snapshot = (sources: readonly McpConfigSource[]): McpConfigSnapshot => ({
 	sources,
 });
 
-test("MCP management writes the selected transport in Pi shape at its selected scope", async () => {
+test("MCP management writes the selected transport in the canonical shape at its selected scope", async () => {
 	const writes: unknown[] = [];
 	const management = createMcpManagement({
 		authorizeWrite: () => undefined,
@@ -134,7 +134,7 @@ test("MCP management list preserves config-resolution diagnostics for callers", 
 });
 
 test("MCP management login and logout resolve OAuth servers through injected capabilities", async () => {
-	const secrets: PluginSecretStore = {
+	const secrets: McpSecretStore = {
 		delete: async () => undefined,
 		get: async () => undefined,
 		set: async () => undefined,

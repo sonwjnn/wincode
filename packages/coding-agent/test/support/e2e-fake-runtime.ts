@@ -151,14 +151,27 @@ export const createFakeProviderCollection = (
 			delete: (providerId) => {
 				credentials.delete(providerId);
 			},
-			get: (providerId) =>
+			list: () =>
+				[...new Set([...credentials.keys(), ...modelsByProvider.keys()])].map(
+					(providerId) => ({ providerId, type: "unknown" })
+				),
+			modify: async (providerId, update) => {
+				const current =
+					credentials.get(providerId) ??
+					(modelsByProvider.has(providerId)
+						? "fake-e2e-provider-key"
+						: undefined);
+				const replacement = await update(current);
+				if (replacement !== undefined) {
+					credentials.set(providerId, replacement);
+				}
+				return credentials.get(providerId) ?? current;
+			},
+			read: (providerId) =>
 				credentials.get(providerId) ??
 				(modelsByProvider.has(providerId)
 					? "fake-e2e-provider-key"
 					: undefined),
-			set: (providerId, credential) => {
-				credentials.set(providerId, credential);
-			},
 		},
 		modelStore: { get: () => undefined, set: () => undefined },
 	});
