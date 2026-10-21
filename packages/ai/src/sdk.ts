@@ -1593,7 +1593,10 @@ export const createProviderCollection = (
 				request.headers
 			);
 			if (request.transformHeaders !== undefined) {
-				const transformed = await request.transformHeaders(headers);
+				const transformed = await awaitWithSignal(
+					Promise.resolve(request.transformHeaders(headers)),
+					request.signal
+				);
 				throwIfAborted(request.signal);
 				headers = mergeProviderHeaders(headers, transformed);
 			}

@@ -202,7 +202,7 @@ describe("public SDK provider collection", () => {
 		expect(dispatchCount).toBe(1);
 	});
 
-	test("failed or cancelled header transforms prevent provider dispatch", async () => {
+	test("failed or cancelled header transforms prevent dispatch, even while pending", async () => {
 		let dispatchCount = 0;
 		const createCollection = () => {
 			const sdk = createProviderCollection();
@@ -266,6 +266,41 @@ describe("public SDK provider collection", () => {
 			type: "terminal",
 		});
 		await cancelled.close();
+
+		const pending = createCollection();
+		const pendingController = new AbortController();
+		const transformStarted = Promise.withResolvers<void>();
+		const finishTransform =
+			Promise.withResolvers<NonNullable<ChatRequest["headers"]>>();
+		const pendingRequest = collectTerminal(
+			pending,
+			() => {
+				transformStarted.resolve();
+				return finishTransform.promise;
+			},
+			pendingController.signal
+		);
+		await transformStarted.promise;
+		pendingController.abort(
+			new DOMException("header wait cancelled", "AbortError")
+		);
+		const resultBeforeTransformSettles = await Promise.race([
+			pendingRequest.then((terminal) => ({
+				status: "settled" as const,
+				terminal,
+			})),
+			Bun.sleep(100).then(() => ({ status: "pending" as const })),
+		]);
+		finishTransform.resolve({ "x-too-late": "never-sent" });
+		await pendingRequest;
+		await pending.close();
+		expect(resultBeforeTransformSettles).toMatchObject({
+			status: "settled",
+			terminal: {
+				outcome: { reason: "header wait cancelled", status: "aborted" },
+				type: "terminal",
+			},
+		});
 		expect(dispatchCount).toBe(0);
 	});
 
