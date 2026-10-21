@@ -475,7 +475,7 @@ test("status bar omits the Thinking Level label when it is unset", async () => {
 	expect(setup.captureCharFrame()).not.toContain("default");
 });
 
-test("status bar labels an explicit Off selection as thinking off", async () => {
+test("status bar shows an explicit Off selection as the effort value", async () => {
 	const snapshot = fromPartial<ConfigSnapshot>({
 		diagnostics: [],
 		document: { agents: {} },
@@ -504,7 +504,7 @@ test("status bar labels an explicit Off selection as thinking off", async () => 
 	activeSetups.push(setup);
 	await flushUi(setup);
 
-	expect(setup.captureCharFrame()).toContain("thinking off");
+	expect(setup.captureCharFrame()).toContain("∙ off");
 });
 
 describe("session usage bar", () => {

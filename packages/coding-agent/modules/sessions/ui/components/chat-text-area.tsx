@@ -1253,7 +1253,16 @@ export function ChatTextArea({
 					/>
 				</box>
 			</BorderedContentBlock>
-			<StatusBar />
+			<box
+				backgroundColor={colors.background}
+				bottom={0}
+				paddingX={1}
+				position="absolute"
+				right={1}
+				zIndex={1}
+			>
+				<StatusBar />
+			</box>
 		</box>
 	);
 }
