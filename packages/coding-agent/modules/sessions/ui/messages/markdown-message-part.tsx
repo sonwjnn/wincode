@@ -3,8 +3,8 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
 	getMarkdownTreeSitterClient,
 	setTreeSitterClientForTests,
-} from "./syntax-style";
-import { useSyntaxStyle } from "./use-syntax-style";
+} from "../syntax-style";
+import { useSyntaxStyle } from "../use-syntax-style";
 
 export const setMarkdownTreeSitterClientForTests = setTreeSitterClientForTests;
 

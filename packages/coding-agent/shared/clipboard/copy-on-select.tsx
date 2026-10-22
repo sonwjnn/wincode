@@ -39,7 +39,7 @@ export async function handleSelection(
 		show({
 			message:
 				error instanceof ClipboardTooLargeError
-					? error.message
+					? "Selection is too large to copy."
 					: "Failed to copy selection.",
 			variant: "error",
 		});

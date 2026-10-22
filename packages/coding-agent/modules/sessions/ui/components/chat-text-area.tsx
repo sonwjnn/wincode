@@ -38,7 +38,7 @@ import {
 	pluginProviderOwnerMatches,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
-import { useSyntaxStyle } from "@/modules/sessions/ui/messages/use-syntax-style";
+import { useSyntaxStyle } from "@/modules/sessions/ui/use-syntax-style";
 import { type ClipboardReader, useClipboard } from "@/shared/clipboard";
 import { RoundedBorderChars } from "@/shared/constants";
 import { useLatest } from "@/shared/hooks/use-latest";

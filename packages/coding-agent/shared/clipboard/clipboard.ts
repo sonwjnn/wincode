@@ -25,7 +25,7 @@ export type ClipboardReader = Pick<TuiClipboard, "read">;
 /** Raised when the text exceeds the clipboard service's UTF-8 write budget. */
 export class ClipboardTooLargeError extends Error {
 	constructor(options?: ErrorOptions) {
-		super("Selection is too large to copy.", options);
+		super("Clipboard payload exceeds the write limit.", options);
 		this.name = "ClipboardTooLargeError";
 	}
 }
@@ -45,8 +45,12 @@ export const CLIPBOARD_IMAGE_MIME_TYPES = [
 export type ClipboardImageMimeType =
 	(typeof CLIPBOARD_IMAGE_MIME_TYPES)[number];
 
-const unsupportedHost: HostClipboardService = {
-	maxWriteBytes: 0,
+const CLIPBOARD_WRITE_BUDGET_BYTES = 8 * 1024 * 1024;
+
+export const UNSUPPORTED_HOST_CLIPBOARD: HostClipboardService = {
+	// Match OpenTUI's default budget so validation does not reject text before
+	// the terminal fallback gets a chance to copy it.
+	maxWriteBytes: CLIPBOARD_WRITE_BUDGET_BYTES,
 	read: async () => ({ status: "unsupported" }),
 	writeText: async () => ({ status: "unsupported" }),
 	clear: async () => ({ status: "unsupported" }),
@@ -60,23 +64,17 @@ const createAvailableHostClipboard = (): HostClipboardService => {
 		void logger.warn("Native clipboard unavailable; falling back to OSC52.", {
 			error: getErrorMessage(error, "Unknown clipboard error."),
 		});
-		return unsupportedHost;
+		return UNSUPPORTED_HOST_CLIPBOARD;
 	}
 };
 
 /**
  * OpenTUI rejects NUL characters and unpaired UTF-16 surrogates. Strip NUL and
- * replace a split surrogate pair with the replacement character so a cell
- * selection that bisects an emoji still copies.
+ * repair split surrogate pairs so a cell selection that bisects an emoji still
+ * copies.
  */
 const sanitizeClipboardText = (text: string): string =>
-	Array.from(text, (character) => {
-		const codePoint = character.codePointAt(0) ?? 0;
-		if (codePoint === 0) {
-			return "";
-		}
-		return codePoint >= 0xd8_00 && codePoint <= 0xdf_ff ? "\uFFFD" : character;
-	}).join("");
+	text.replaceAll("\0", "").toWellFormed();
 
 const writeSucceeded = (result: ClipboardWriteResult): boolean =>
 	result.host.status === "written" || result.terminal.status === "attempted";

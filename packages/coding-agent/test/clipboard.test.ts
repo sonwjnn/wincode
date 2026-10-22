@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import type {
-	ClipboardReadOptions,
-	ClipboardReadResult,
-	ClipboardWriteOptions,
-	ClipboardWriteResult,
+import {
+	type ClipboardReadOptions,
+	type ClipboardReadResult,
+	type ClipboardWriteOptions,
+	type ClipboardWriteResult,
+	createClipboard,
 } from "@opentui/core";
 import {
 	type ClipboardServiceLike,
 	ClipboardTooLargeError,
 	createClipboardAdapter,
+	UNSUPPORTED_HOST_CLIPBOARD,
 } from "@/shared/clipboard";
 
 const notAttemptedTerminal = {
@@ -84,6 +86,30 @@ describe("createClipboardAdapter", () => {
 		);
 
 		await expect(reader.read()).resolves.toBeUndefined();
+	});
+
+	test("falls back to the terminal when the native host is unsupported", async () => {
+		let terminalWrites = 0;
+		const adapter = createClipboardAdapter(
+			createClipboard({
+				host: UNSUPPORTED_HOST_CLIPBOARD,
+				terminal: {
+					remote: false,
+					writeText: () => {
+						terminalWrites += 1;
+						return { status: "attempted", capability: "supported" };
+					},
+					clear: () => ({
+						status: "not-attempted",
+						capability: "unknown",
+					}),
+				},
+			})
+		);
+
+		await adapter.write("hello");
+
+		expect(terminalWrites).toBe(1);
 	});
 
 	test("writes both the host and terminal so local and tmux clipboards stay in sync", async () => {

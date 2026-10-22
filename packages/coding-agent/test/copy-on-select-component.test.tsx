@@ -86,6 +86,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 		{ height: 24, width: 80 }
 	);
 	await flush(setup);
+	// Guard the contract: copy-on-select must never clear the selection.
 	setup.renderer.clearSelection = () => {
 		clears += 1;
 	};
@@ -154,6 +155,7 @@ test("does not copy until a saved disabled preference loads", async () => {
 		</ClipboardProvider>,
 		{ height: 24, width: 80 }
 	);
+	// Guard the contract: copy-on-select must never clear the selection.
 	setup.renderer.clearSelection = () => {
 		clears += 1;
 	};

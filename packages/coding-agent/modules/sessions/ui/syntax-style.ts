@@ -69,11 +69,27 @@ const cachedSyntaxStyles = new WeakMap<
 	CachedSyntaxStyles
 >();
 
+const buildComposerSyntaxStyles = (
+	colors: ThemeColors
+): Record<string, StyleDefinitionInput> => ({
+	attachment: { bg: colors.primary, bold: true, fg: colors.background },
+	fileMention: { bold: true, fg: colors.primary },
+	pastedText: { bg: colors.primary, bold: true, fg: colors.background },
+});
+
+const SYNTAX_STYLE_BUILDERS: Record<
+	SyntaxStyleKey,
+	(colors: ThemeColors) => Record<string, StyleDefinitionInput>
+> = {
+	standard: (colors) => buildSyntaxStyles(colors, "standard"),
+	thinking: (colors) => buildSyntaxStyles(colors, "thinking"),
+	composer: buildComposerSyntaxStyles,
+};
+
 const resolveCachedSyntaxStyle = (
 	owner: NativeResourceOwner,
 	colors: ThemeColors,
-	key: SyntaxStyleKey,
-	build: () => SyntaxStyle
+	key: SyntaxStyleKey
 ): SyntaxStyle => {
 	const colorsKey = JSON.stringify(colors);
 	let cached = cachedSyntaxStyles.get(owner);
@@ -88,7 +104,10 @@ const resolveCachedSyntaxStyle = (
 	if (existing) {
 		return existing;
 	}
-	const style = build();
+	const style = SyntaxStyle.fromStyles(
+		SYNTAX_STYLE_BUILDERS[key](colors),
+		owner
+	);
 	cached.styles.set(key, style);
 	return style;
 };
@@ -96,27 +115,8 @@ const resolveCachedSyntaxStyle = (
 export const resolveSyntaxStyle = (
 	owner: NativeResourceOwner,
 	colors: ThemeColors,
-	variant: SyntaxStyleVariant = "standard"
-): SyntaxStyle =>
-	resolveCachedSyntaxStyle(owner, colors, variant, () =>
-		SyntaxStyle.fromStyles(buildSyntaxStyles(colors, variant), owner)
-	);
-
-const buildComposerSyntaxStyles = (
-	colors: ThemeColors
-): Record<string, StyleDefinitionInput> => ({
-	attachment: { bg: colors.primary, bold: true, fg: colors.background },
-	fileMention: { bold: true, fg: colors.primary },
-	pastedText: { bg: colors.primary, bold: true, fg: colors.background },
-});
-
-export const resolveComposerSyntaxStyle = (
-	owner: NativeResourceOwner,
-	colors: ThemeColors
-): SyntaxStyle =>
-	resolveCachedSyntaxStyle(owner, colors, "composer", () =>
-		SyntaxStyle.fromStyles(buildComposerSyntaxStyles(colors), owner)
-	);
+	key: SyntaxStyleKey = "standard"
+): SyntaxStyle => resolveCachedSyntaxStyle(owner, colors, key);
 
 /**
  * Tree-sitter can report a bracketed label in a standalone strong line as a

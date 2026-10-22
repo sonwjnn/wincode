@@ -29,13 +29,7 @@ export const createRendererSession = async (
 		targetFps: 120,
 		useMouse: true,
 	});
-	let clipboard: TuiClipboard;
-	try {
-		clipboard = createTuiClipboard(renderer);
-	} catch (error) {
-		renderer.destroy();
-		throw error;
-	}
+	const clipboard = createTuiClipboard(renderer);
 	const root: Root = createRoot(renderer);
 	const destroyRenderer = renderer.destroy.bind(renderer);
 	let destroyed = false;

@@ -55,9 +55,7 @@ Viewport culling is separate and defaults on: it skips fully invisible children,
 
 **Minimized cause:** At the failing boundary, `LineNumberRenderable.renderSelf` calls `buffer.fillRect` for a colored line with a negative translated `y` (for example, `y = -1`). OpenTUI's JavaScript `OptimizedBuffer.fillRect` forwarded `x` and `y` to the native FFI binding as unsigned integers. On the measured Bun/macOS runtime, `fillRect(0, -1, ...)` painted row `0` instead of rejecting or clipping the out-of-viewport row. The glyph path uses signed coordinates and clips correctly, so the background can survive without its glyph and an empty split alignment lane can inherit the preceding added row's color.
 
-**Renderer correction:** Wincode carries a local patch for `@opentui/core@0.4.5` that clips negative coordinates before native submission. This prevents `fillRect` from painting the viewport edge for the measured boundary case.
-
-The executable [`scripts/opentui-diff-clipping-repro.ts`](../../scripts/opentui-diff-clipping-repro.ts) accepts `OPENTUI_CORE_SPECIFIER` so the probe can run against extracted package builds. The workspace remains pinned to patched `@opentui/core@0.4.5`; the newer `0.5.11` release still reproduces the negative-coordinate bleed without this correction.
+**Renderer correction (historical):** Wincode previously carried a local patch for `@opentui/core@0.5.14` that clipped negative coordinates before native submission. `@opentui/core@0.6.6` routes `fillRect` through `drawChecked`, which clips the boundary natively; the boundary was re-checked against `0.6.6` before the patch was removed. `0.5.11` reproduced the negative-coordinate bleed without the correction.
 
 This is an OpenTUI coordinate-boundary defect, not a Wincode render-tree mismatch. The application remains on direct `scrollbox`/`diff` composition and keeps all theme backgrounds, gutters, signs, line numbers, wrapping, and split/unified behavior.
 

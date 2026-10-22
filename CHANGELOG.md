@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Clipboard access uses OpenTUI's native service.** Copying writes the host
   clipboard and OSC 52 together, image paste reads the host clipboard directly,
   and the `pbcopy`/`xclip`/`wl-paste`/PowerShell fallbacks are gone. OpenTUI is
-  upgraded to 0.6.6 and the local `fillRect` patch is removed.
+  upgraded to 0.6.6 and the local `fillRect` patch is removed. Copy-on-select
+  also stops clearing the selection so multi-click history survives.
 
 - **One Session Services bundle now serves what a Session runs on.** Print, JSON, RPC,
   and Interactive Mode compose the same factory — the Plugin runtime, durable

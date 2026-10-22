@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getMarkdownTreeSitterClient } from "../syntax-style";
+import { useSyntaxStyle } from "../use-syntax-style";
 import { stripMarkdownControlCharacters } from "./markdown-message-part";
-import { getMarkdownTreeSitterClient } from "./syntax-style";
-import { useSyntaxStyle } from "./use-syntax-style";
 
 export function ReasoningMessagePart({
 	streaming,

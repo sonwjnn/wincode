@@ -10,8 +10,8 @@ import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-la
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { Spinner } from "@/shared/ui/spinner";
-import { getRawTreeSitterClient } from "./syntax-style";
-import { useSyntaxStyle } from "./use-syntax-style";
+import { getRawTreeSitterClient } from "../syntax-style";
+import { useSyntaxStyle } from "../use-syntax-style";
 
 type WriteToolPart = Extract<
 	SessionMessage["parts"][number],

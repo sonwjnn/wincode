@@ -10,11 +10,11 @@ import {
 } from "@/modules/sessions/ui/messages/bot-message";
 import { buildAddedPreviewPatch } from "@/modules/sessions/ui/messages/edit-diff-block";
 import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
-import { setTreeSitterClientForTests } from "@/modules/sessions/ui/messages/syntax-style";
 import {
 	buildWritePreview,
 	countWriteLines,
 } from "@/modules/sessions/ui/messages/write-block";
+import { setTreeSitterClientForTests } from "@/modules/sessions/ui/syntax-style";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import {
