@@ -1,8 +1,6 @@
 import type { ClipboardContent, ClipboardReader } from "@/shared/clipboard";
 
-export type ClipboardImage = ClipboardContent;
-
-export type ClipboardImageResult = ClipboardImage | { unavailable: true };
+export type ClipboardImageResult = ClipboardContent | { unavailable: true };
 
 const unavailable = (): ClipboardImageResult => ({ unavailable: true });
 const QUOTED_PATH = /^(?:'([^']*)'|"((?:\\.|[^"\\])*)")$/;

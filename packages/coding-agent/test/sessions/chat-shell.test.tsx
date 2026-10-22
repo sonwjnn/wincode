@@ -61,7 +61,7 @@ import {
 	sessionId,
 	sessionMessageId,
 } from "../support/identifiers";
-import { captureTestFrame } from "../support/opentui";
+import { captureTestFrame, requireTestFrame } from "../support/opentui";
 
 beforeAll(() => {
 	// Text parts map through MarkdownMessagePart; the mock client keeps block
@@ -411,6 +411,8 @@ const waitForFrameText = async (
 	text: string,
 	budgetMs = 2000
 ): Promise<string> => {
+	// setup.waitForFrame breaks once the scheduler is idle, but these tests
+	// resolve fake promises without scheduling a render, so poll the frame.
 	const deadline = Date.now() + budgetMs;
 	let frame = captureTestFrame(setup) ?? "";
 	while (!frame.includes(text) && Date.now() < deadline) {
@@ -433,7 +435,7 @@ const expandShellBlock = async (setup: TestRendererSetup): Promise<string> => {
 			return frame;
 		}
 	}
-	return captureTestFrame(setup) ?? "";
+	return requireTestFrame(setup);
 };
 
 const collapseShellBlock = async (
@@ -446,7 +448,7 @@ const collapseShellBlock = async (
 			return frame;
 		}
 	}
-	return captureTestFrame(setup) ?? "";
+	return requireTestFrame(setup);
 };
 
 type SummaryDiffClippingCase = {
@@ -515,7 +517,7 @@ const assertSummaryDiffClipping = async ({
 		for (let scrollStep = 0; scrollStep < 30; scrollStep += 1) {
 			await setup.mockMouse.scroll(50, 5, "down");
 			await setup.renderOnce();
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			if (
 				!frame.includes(summaryMarker) ||
 				frame.includes("replacement") ||
@@ -602,7 +604,7 @@ describe("ChatShell composer focus", () => {
 			});
 			await flushUi(setup);
 
-			expect(captureTestFrame(setup) ?? "").toContain("focus return prompt");
+			expect(requireTestFrame(setup)).toContain("focus return prompt");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -625,7 +627,7 @@ describe("ChatShell composer focus", () => {
 			});
 			await flushUi(setup);
 
-			expect(captureTestFrame(setup) ?? "").toContain("hover return prompt");
+			expect(requireTestFrame(setup)).toContain("hover return prompt");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -822,7 +824,7 @@ describe("ChatShell retry controls", () => {
 
 		try {
 			await flushUi(setup);
-			expect((captureTestFrame(setup) ?? "").match(/Retry/gu)).toHaveLength(1);
+			expect(requireTestFrame(setup).match(/Retry/gu)).toHaveLength(1);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-1");
 			expect(retryControl?.focusable).toBe(true);
@@ -892,7 +894,7 @@ describe("ChatShell retry controls", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).toContain("revise the output");
 			expect(frame).toContain(reason);
 			expect(frame).not.toMatch(WAITING_COUNT_PATTERN);
@@ -945,7 +947,7 @@ describe("ChatShell waiting message strip", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).not.toMatch(WAITING_COUNT_PATTERN);
 			expect(frame).not.toContain("Alt+Up");
 		} finally {
@@ -965,7 +967,7 @@ describe("ChatShell waiting message strip", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).toContain("2 waiting");
 			expect(frame).toContain("rewrite the loader");
 			expect(frame).toContain("then run the tests");
@@ -994,7 +996,7 @@ describe("ChatShell waiting message strip", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			// Recall operates only on the uncommitted queue.
 			expect(stripLine(frame, "rewrite the loader")).toContain("▸");
 			expect(stripLine(frame, "then run the tests")).not.toContain("▸");
@@ -1020,7 +1022,7 @@ describe("ChatShell waiting message strip", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).toContain("[Pasted ~20 lines]");
 			expect(frame).not.toContain("0 files");
 		} finally {
@@ -1039,7 +1041,7 @@ describe("ChatShell waiting message strip", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).toContain("first line second line third line");
 		} finally {
 			setup.renderer.destroy();
@@ -1061,7 +1063,7 @@ describe("ChatShell waiting message strip", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).toContain("5 waiting");
 			for (const text of [
 				"first waiting",
@@ -1099,7 +1101,7 @@ describe("ChatShell waiting message strip", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).toContain("1 image");
 			expect(frame).toContain("2 files");
 			expect(frame).not.toContain("[Image 1]");
@@ -1119,7 +1121,7 @@ describe("ChatShell waiting message strip", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).toContain("long long");
 			expect(frame).toContain("…");
 			expect(frame).not.toContain("tail");
@@ -1148,9 +1150,7 @@ describe("ChatShell activity footer", () => {
 		});
 		try {
 			await flushUi(setup);
-			expect(captureTestFrame(setup) ?? "").not.toContain(
-				"openai/gpt-5.6-luna"
-			);
+			expect(requireTestFrame(setup)).not.toContain("openai/gpt-5.6-luna");
 			pending.resolve([selectedModel]);
 			const frame = await waitForFrameText(setup, "openai/gpt-5.6-luna:low");
 			expect(frame).toContain("openai/gpt-5.6-luna:low");
@@ -1300,7 +1300,7 @@ describe("ChatShell activity footer", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			const rows = frame.split("\n");
 			const activityRow = rows.findIndex((row) => row.includes("Working..."));
 			const activityRowText = rows[activityRow] ?? "";
@@ -1442,7 +1442,7 @@ describe("ChatShell activity footer", () => {
 
 		try {
 			await flushUi(setup);
-			const loadingFrame = captureTestFrame(setup) ?? "";
+			const loadingFrame = requireTestFrame(setup);
 			expect(loadingFrame).toContain("Auto-compacting...");
 			expect(loadingFrame).not.toContain("Auto-compacting context");
 			expect(loadingFrame).not.toContain("esc to cancel");
@@ -1457,7 +1457,7 @@ describe("ChatShell activity footer", () => {
 				holder.current?.setCompacting(false);
 			});
 			await flushUi(setup);
-			const completedFrame = captureTestFrame(setup) ?? "";
+			const completedFrame = requireTestFrame(setup);
 			expect(completedFrame).toContain("Compacted (manual) · 7.3K→4.9K tokens");
 			expect(completedFrame).toContain("4.9K");
 			expect(completedFrame).not.toContain("Updating context…");
@@ -1476,7 +1476,7 @@ describe("ChatShell activity footer", () => {
 
 		try {
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 			expect(frame).toContain("Compacting...");
 			expect(frame).not.toContain("Auto-compacting...");
 			expect(frame).not.toContain("Compacting context");
@@ -1509,7 +1509,7 @@ describe("ChatShell activity footer", () => {
 
 		try {
 			await flushUi(setup);
-			expect(captureTestFrame(setup) ?? "").toContain(
+			expect(requireTestFrame(setup)).toContain(
 				"Compacted (manual) · 7.3K→4.9K tokens"
 			);
 		} finally {
@@ -1534,7 +1534,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 
 			for (const index of [1, 2, 3, 4, 5, 6]) {
 				expect(frame).toContain(`line ${index}`);
@@ -1562,7 +1562,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 
 			for (const index of [1, 2, 3, 4, 5, 6]) {
 				expect(frame).toContain(`edge ${index}`);
@@ -1588,7 +1588,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 
 			expect(frame).toContain("… more output");
 			expect(frame).not.toContain("more lines");
@@ -1620,7 +1620,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 
 			expect(frame).toContain("exit 1 · truncated");
 			expect(frame).toContain("timed out");
@@ -1643,7 +1643,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			let frame = captureTestFrame(setup) ?? "";
+			let frame = requireTestFrame(setup);
 
 			expect(frame).toContain("line1");
 			expect(frame).toContain("line2");
@@ -1680,7 +1680,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			let frame = captureTestFrame(setup) ?? "";
+			let frame = requireTestFrame(setup);
 
 			expect(frame).toContain("[redacted]");
 			expect(frame).not.toContain("hidden-token");
@@ -1714,7 +1714,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			let frame = captureTestFrame(setup) ?? "";
+			let frame = requireTestFrame(setup);
 			expect(frame).toContain("… 4 more lines");
 			expect(frame).toContain("(Ctrl+O: Expand)");
 			expect(frame).not.toContain("long 7");
@@ -1724,7 +1724,7 @@ describe("ChatShell shell output blocks", () => {
 				.findIndex((row) => row.includes("$ bun test"));
 			await setup.mockMouse.click(10, blockRow);
 			await flushUi(setup);
-			frame = captureTestFrame(setup) ?? "";
+			frame = requireTestFrame(setup);
 
 			expect(frame).toContain("… 4 more lines");
 			expect(frame).toContain("(Ctrl+O: Expand)");
@@ -1739,7 +1739,7 @@ describe("ChatShell shell output blocks", () => {
 
 			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
-			frame = captureTestFrame(setup) ?? "";
+			frame = requireTestFrame(setup);
 
 			expect(frame).toContain("… 4 more lines");
 			expect(frame).not.toContain("long 7");
@@ -1759,7 +1759,7 @@ describe("ChatShell shell output blocks", () => {
 			await flushUi(setup);
 			setup.mockInput.pressKey("o", { ctrl: true });
 			await flushUi(setup);
-			const frame = captureTestFrame(setup) ?? "";
+			const frame = requireTestFrame(setup);
 
 			expect(frame).toContain("1 passing");
 			expect(frame).toContain("2 passing");
@@ -1782,7 +1782,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			let frame = captureTestFrame(setup) ?? "";
+			let frame = requireTestFrame(setup);
 			expect(frame).toContain("… 4 more lines");
 
 			frame = await expandShellBlock(setup);
@@ -1791,7 +1791,7 @@ describe("ChatShell shell output blocks", () => {
 			// Resizing reflows the preview but keeps the block expanded.
 			setup.resize(140, 40);
 			await flushUi(setup);
-			frame = captureTestFrame(setup) ?? "";
+			frame = requireTestFrame(setup);
 			expect(frame).toContain("row 10");
 			expect(frame).not.toContain("more lines");
 
@@ -1827,7 +1827,7 @@ describe("ChatShell shell output blocks", () => {
 			expect(scrollbox).toBeDefined();
 			scrollbox?.scrollTo(0);
 			await setup.renderOnce();
-			let frame = captureTestFrame(setup) ?? "";
+			let frame = requireTestFrame(setup);
 			expect(frame).toContain("history 1");
 			expect(frame).not.toContain("tail 12");
 
@@ -1860,7 +1860,7 @@ describe("ChatShell shell output blocks", () => {
 		try {
 			await setup.renderOnce();
 			await flushUi(setup);
-			let frame = captureTestFrame(setup) ?? "";
+			let frame = requireTestFrame(setup);
 
 			for (const prefix of ["alpha", "beta"]) {
 				for (const index of [1, 2, 3, 4, 5, 6]) {
@@ -1876,7 +1876,7 @@ describe("ChatShell shell output blocks", () => {
 				assistantMessage([alpha, beta, streamedText("second stream")]),
 			]);
 			await flushUi(setup);
-			frame = captureTestFrame(setup) ?? "";
+			frame = requireTestFrame(setup);
 
 			for (const prefix of ["alpha", "beta"]) {
 				for (const index of [1, 2, 3, 4, 5, 6]) {
@@ -1946,7 +1946,7 @@ describe("ChatShell edit diff blocks", () => {
 			for (let offset = 0; offset < 30; offset += 1) {
 				scrollbox?.scrollTo(offset);
 				await setup.renderOnce();
-				const topRow = (captureTestFrame(setup) ?? "").split("\n")[0] ?? "";
+				const topRow = requireTestFrame(setup).split("\n")[0] ?? "";
 				if (!topRow.includes("removed") || topRow.includes("replacement")) {
 					continue;
 				}
@@ -2081,7 +2081,7 @@ describe("ChatShell transcript notice", () => {
 		);
 		try {
 			await flushUi(setup);
-			const lines = (captureTestFrame(setup) ?? "").split("\n");
+			const lines = requireTestFrame(setup).split("\n");
 			const noticeLine = lines.findIndex((line) => line.includes(marker));
 			const messageLine = lines.findIndex((line) =>
 				line.includes("Last transcript entry")

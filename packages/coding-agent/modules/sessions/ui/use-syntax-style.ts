@@ -8,7 +8,9 @@ import { useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
 import { buildComposerSyntaxStyles } from "./composer-syntax-style";
-import { buildSyntaxStyles, type SyntaxStyleSet } from "./syntax-style";
+import { buildSyntaxStyles, type SyntaxStyleVariant } from "./syntax-style";
+
+export type SyntaxStyleSet = SyntaxStyleVariant | "composer";
 
 const SYNTAX_STYLE_BUILDERS: Record<
 	SyntaxStyleSet,

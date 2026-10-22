@@ -49,5 +49,3 @@ export const buildSyntaxStyles = (
 		constructor: codeStyle(colors.syntaxFunction),
 	};
 };
-
-export type SyntaxStyleSet = SyntaxStyleVariant | "composer";

@@ -3,6 +3,9 @@ import type {
 	ClipboardWriter,
 } from "@/shared/clipboard";
 
+const copyFailure = (cause?: unknown): Error =>
+	new Error("Failed to copy URL.", cause === undefined ? undefined : { cause });
+
 /**
  * Copies the authorization URL and maps any clipboard failure to the message
  * the connect dialog renders, keeping that user-facing text in one place.
@@ -15,9 +18,9 @@ export async function copyBrowserAuthorizationUrl(
 	try {
 		outcome = await clipboard.write(url);
 	} catch (error) {
-		throw new Error("Failed to copy URL.", { cause: error });
+		throw copyFailure(error);
 	}
 	if (outcome !== "copied") {
-		throw new Error("Failed to copy URL.");
+		throw copyFailure();
 	}
 }
