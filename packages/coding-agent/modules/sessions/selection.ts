@@ -28,6 +28,9 @@ import { sessionMessageSkillSchema } from "./message";
  * can tell a restored choice from a prompt-config ref without re-deriving the
  * order.
  *
+ * The module also owns the strict read of an explicit ThinkingLevel in a
+ * request and the Skill context a new turn inherits from message metadata.
+ *
  * Defaults for a Session that never recorded a choice are a separate question:
  * `sessionSelectionDefaults` resolves them, and each caller composes them with
  * a restore in the order its mode requires. Provider availability, provider
@@ -42,6 +45,11 @@ export type SessionSelectionRefs = Readonly<{
 	thinkingLevel?: ThinkingLevel;
 }>;
 
+export type RecordedSelection = Readonly<{
+	model?: ProviderModelSelection;
+	thinkingLevel?: ThinkingLevel;
+}>;
+
 export type SessionSelectionMaterial = Readonly<{
 	messages: readonly SessionMessage[];
 	/** The caller's current prompt-config selection. */
@@ -49,10 +57,7 @@ export type SessionSelectionMaterial = Readonly<{
 	/** Resolve a recorded Agent against the live registry. */
 	resolveAgent?: (agentId: AgentId) => AgentId;
 	/** The durable session row, which records the session-level choice. */
-	row?: Readonly<{
-		model?: ProviderModelSelection;
-		thinkingLevel?: ThinkingLevel;
-	}>;
+	row?: RecordedSelection;
 }>;
 
 export type ResolvedSessionSelection = Readonly<{
@@ -197,6 +202,16 @@ const recordedTiers = (
 	},
 ];
 
+const resolveRecordedAgent = (
+	material: SessionSelectionMaterial,
+	persistedAgent: AgentId | undefined
+): AgentId | undefined => {
+	if (material.resolveAgent === undefined || isUndefined(persistedAgent)) {
+		return persistedAgent;
+	}
+	return material.resolveAgent(persistedAgent);
+};
+
 const firstThinkingLevel = (
 	tiers: readonly RecordedTier[]
 ): ThinkingLevel | undefined => {
@@ -232,13 +247,9 @@ export const restoreSelection = (
 	const model = modelTier.model;
 
 	const persistedAgent = persisted?.agent ?? material.refs?.agent;
-	const agent =
-		material.resolveAgent && !isUndefined(persistedAgent)
-			? material.resolveAgent(persistedAgent)
-			: persistedAgent;
 
 	return {
-		agent,
+		agent: resolveRecordedAgent(material, persistedAgent),
 		model,
 		persistedAgent,
 		source: modelTier.source,
@@ -262,9 +273,7 @@ export const nextChatSelection = (
 	}
 
 	return {
-		agent: material.resolveAgent
-			? material.resolveAgent(persisted.agent)
-			: persisted.agent,
+		agent: resolveRecordedAgent(material, persisted.agent),
 		model: tier.model,
 		persistedAgent: persisted.agent,
 		source: tier.source,
@@ -304,10 +313,7 @@ export const sessionSelectionDefaults = (
 /** Restores an SDK handle's next-turn defaults without replacing stored identity. */
 export const resolveRestoredSessionSdkSelection = (
 	fallback: SessionSdkSelectionDefaults,
-	stored: Readonly<{
-		model?: ProviderModelSelection;
-		thinkingLevel?: ThinkingLevel;
-	}>,
+	stored: RecordedSelection,
 	prior: Pick<
 		ResolvedSessionSelection,
 		"agent" | "model" | "thinkingLevel"

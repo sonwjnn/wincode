@@ -73,12 +73,13 @@ The last-used Agent, Model, and ThinkingLevel recorded in a session's message
 metadata, resolved when a session opens or a turn is sent. Two tiers are recorded
 on write and merged on read: the session row holds the session-level choice (the
 user's prompt-config selection), and message metadata holds the effective choice
-(what a turn actually ran with, including Agent pins). Restore reads leniently;
-the request body reads strictly. Precedence is per value, not one ladder: Model
-and ThinkingLevel merge session row, then message metadata, then prompt-config
-refs, while Agent has no session-row tier and merges message metadata, then
-prompt-config refs. The next-chat default reads message metadata alone when it
-carries a complete pair. _Avoid_: chat config, latest config
+(what a turn actually ran with, including Agent pins). Precedence is per value,
+not one ladder: Model and ThinkingLevel merge session row, then message
+metadata, then prompt-config refs, while Agent has no session-row tier and
+merges message metadata, then prompt-config refs. The next-chat default reads message metadata alone when it
+carries a complete pair. Recorded tiers restore leniently: an unusable level is
+dropped rather than rejected, while an explicitly requested ThinkingLevel is
+validated strictly before it reaches a request. _Avoid_: chat config, latest config
 
 ## Session Execution
 

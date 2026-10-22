@@ -156,7 +156,7 @@ test("drops a Thinking level the schema rejects instead of failing the restore",
 	expect(selection?.thinkingLevel).toBeUndefined();
 });
 
-test("keeps the last Thinking level recorded with the restored Model", () => {
+test("keeps the last Thinking level recorded with the newest message Model", () => {
 	const selection = restoreSelection({
 		messages: [
 			messageWithSelection("m1", messageModel, agentId("build"), "max"),
