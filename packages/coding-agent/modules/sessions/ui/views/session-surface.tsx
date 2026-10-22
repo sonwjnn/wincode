@@ -220,10 +220,7 @@ const loadStoredSessionHistory = async (
 		: savedTranscript;
 	return {
 		compactions,
-		model: restoreSelection({
-			messages: savedTranscript,
-			row: { model: row.model, thinkingLevel: row.thinkingLevel },
-		})?.model,
+		model: restoreSelection({ messages: savedTranscript, row })?.model,
 		sessionTitle: row.title,
 		transcript,
 	};
@@ -256,10 +253,7 @@ const resolveCurrentAgentPin = async ({
 		messages: transcript,
 		resolveAgent: (persistedAgent) =>
 			resolveActiveAgentId(registry, persistedAgent),
-		row: {
-			model: row.model,
-			thinkingLevel: row.thinkingLevel,
-		},
+		row,
 		refs: {
 			agent,
 			model,

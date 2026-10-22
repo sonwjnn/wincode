@@ -288,10 +288,7 @@ export const createSessionHostManager = (
 		);
 		// The Session's recorded tiers, and the newest message's own choice when
 		// an Agent pin has to be validated against every identity it may restore.
-		const restored = restoreSelection({
-			messages,
-			row: { model: session.model, thinkingLevel: session.thinkingLevel },
-		});
+		const restored = restoreSelection({ messages, row: session });
 		const lastMessageModel = restoreSelection({ messages })?.model;
 		const pluginRuntime =
 			capabilities.getPluginRuntime?.() ?? currentPluginRuntime;

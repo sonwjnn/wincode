@@ -162,7 +162,35 @@ test("keeps the last Thinking level recorded with the newest message Model", () 
 			messageWithSelection("m1", messageModel, agentId("build"), "max"),
 			messageWithSelection("m2", messageModel, agentId("build")),
 		],
-		row: { model: messageModel },
+		row: { model: rowModel },
+	});
+
+	expect(selection?.model).toEqual(rowModel);
+	expect(selection?.thinkingLevel).toBe("max");
+});
+
+test("an unusable session-row Thinking level falls through to the message's", () => {
+	const selection = restoreSelection({
+		messages: [
+			messageWithSelection("m1", messageModel, agentId("build"), "low"),
+		],
+		row: { model: messageModel, thinkingLevel: "bogus" as ThinkingLevel },
+	});
+
+	expect(selection?.thinkingLevel).toBe("low");
+});
+
+test("an unusable message Thinking level falls through to the prompt-config refs", () => {
+	const selection = restoreSelection({
+		messages: [
+			messageWithSelection(
+				"m1",
+				messageModel,
+				agentId("build"),
+				"bogus" as ThinkingLevel
+			),
+		],
+		refs: { thinkingLevel: "max" },
 	});
 
 	expect(selection?.thinkingLevel).toBe("max");

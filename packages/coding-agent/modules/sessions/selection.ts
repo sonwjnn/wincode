@@ -28,8 +28,11 @@ import { sessionMessageSkillSchema } from "./message";
  * can tell a restored choice from a prompt-config ref without re-deriving the
  * order.
  *
- * The module also owns the strict read of an explicit ThinkingLevel in a
- * request and the Skill context a new turn inherits from message metadata.
+ * `nextChatSelection` is the narrower next-chat variant, and
+ * `restorableSelectionModel` owns the restore guard: a Session restores only a
+ * Model its selected Agent can still run. The module also owns the strict read
+ * of an explicit ThinkingLevel in a request and the Skill context a new turn
+ * inherits from message metadata.
  *
  * Defaults for a Session that never recorded a choice are a separate question:
  * `sessionSelectionDefaults` resolves them, and each caller composes them with
@@ -170,11 +173,7 @@ const findLastUsedThinkingSelection = (
 	return {};
 };
 
-type RecordedTier = Readonly<{
-	source: SelectionSource;
-	model?: ProviderModelSelection;
-	thinkingLevel?: ThinkingLevel;
-}>;
+type RecordedTier = RecordedSelection & Readonly<{ source: SelectionSource }>;
 
 const messageTier = (
 	persisted: LastUsedSelection | undefined
@@ -267,17 +266,16 @@ export const nextChatSelection = (
 	material: SessionSelectionMaterial
 ): SessionSelection | null => {
 	const persisted = getLastUsedSelection(material.messages);
-	const tier = messageTier(persisted);
-	if (persisted === undefined || tier.model === undefined) {
+	if (persisted === undefined) {
 		return restoreSelection(material);
 	}
 
 	return {
 		agent: resolveRecordedAgent(material, persisted.agent),
-		model: tier.model,
+		model: persisted.model,
 		persistedAgent: persisted.agent,
-		source: tier.source,
-		thinkingLevel: normalizeThinkingLevel(tier.thinkingLevel),
+		source: "message",
+		thinkingLevel: normalizeThinkingLevel(persisted.thinkingLevel),
 	};
 };
 

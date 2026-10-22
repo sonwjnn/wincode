@@ -397,10 +397,7 @@ export function NewSessionView({
 						await store.listSessionRecords(session.id)
 					),
 					resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
-					row: {
-						model: session.model,
-						thinkingLevel: session.thinkingLevel,
-					},
+					row: session,
 				});
 				if (ignore || !selection) {
 					return;

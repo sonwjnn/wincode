@@ -557,10 +557,7 @@ const preflightOneShotHost = async (
 		messages: storedRecords.flatMap((record) =>
 			projectSessionMessageRecords(record.messages, record)
 		),
-		row: {
-			model: storedSession?.model,
-			thinkingLevel: storedSession?.thinkingLevel,
-		},
+		...(storedSession === undefined ? {} : { row: storedSession }),
 	});
 	const explicitAgent = parseAgent(context.invocation.agent);
 	const explicitModel = parseModel(context.invocation.model);
