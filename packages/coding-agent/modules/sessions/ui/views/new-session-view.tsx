@@ -49,7 +49,7 @@ import {
 	getInteractiveProviderCollectionFactory,
 } from "@/shared/runtime-context";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
-import { resolveLastUsedSessionSelection } from "../../selection";
+import { nextChatSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
 import { projectSessionRecords } from "../../storage/session-record";
 import { type ChatPromptSubmission, getMostRecentSession } from "../../utils";
@@ -392,13 +392,15 @@ export function NewSessionView({
 					return;
 				}
 
-				const selection = resolveLastUsedSessionSelection({
+				const selection = nextChatSelection({
 					messages: projectSessionRecords(
 						await store.listSessionRecords(session.id)
 					),
 					resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
-					sessionModel: session.model,
-					sessionThinkingLevel: session.thinkingLevel,
+					row: {
+						model: session.model,
+						thinkingLevel: session.thinkingLevel,
+					},
 				});
 				if (ignore || !selection) {
 					return;

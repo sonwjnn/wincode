@@ -22,7 +22,6 @@ import {
 import {
 	arePluginProviderRegistrationsBoundToTrustedOwners,
 	DEFAULT_PROVIDER_MODEL_SELECTION,
-	isSameProviderModelIdentity,
 	type PluginProviderOwnerRegistration,
 	type ProviderModelSelection,
 	ProviderModelSelectionOwnershipError,
@@ -44,7 +43,8 @@ import {
 import { getPluginProviderRegistrationsFromCollection } from "@/modules/sessions/provider-collection";
 import {
 	getLastUsedSelection,
-	resolveSessionSelection,
+	restorableSelectionModel,
+	restoreSelection,
 } from "@/modules/sessions/selection";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { projectSessionRecords } from "@/modules/sessions/storage/session-record";
@@ -252,12 +252,14 @@ const resolveCurrentAgentPin = async ({
 	const transcript = projectSessionRecords(records);
 	const persisted = getLastUsedSelection(transcript);
 	const sessionModel = row.model ?? undefined;
-	const storedSelection = resolveSessionSelection({
+	const storedSelection = restoreSelection({
 		messages: transcript,
 		resolveAgent: (persistedAgent) =>
 			resolveActiveAgentId(registry, persistedAgent),
-		sessionModel,
-		sessionThinkingLevel: row.thinkingLevel ?? undefined,
+		row: {
+			model: sessionModel,
+			thinkingLevel: row.thinkingLevel ?? undefined,
+		},
 		refs: {
 			agent,
 			model,
@@ -279,13 +281,7 @@ const resolveCurrentAgentPin = async ({
 		(candidate) => candidate.id === effective.agent
 	);
 	const currentModel = selectionOverride.model ?? selectedAgent?.model;
-	if (
-		currentModel === undefined ||
-		!isSameProviderModelIdentity(currentModel, effective.model)
-	) {
-		return;
-	}
-	return effective.model;
+	return restorableSelectionModel(effective, currentModel);
 };
 
 function ProviderModelReselectionDialog({

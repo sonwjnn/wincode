@@ -40,7 +40,7 @@ import {
 	ProviderCollectionUnavailableError,
 	pluginProvidersFromRuntime,
 } from "../provider-collection";
-import { resolveSessionSelection } from "../selection";
+import { restoreSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionUsageEntry } from "../storage/session-store";
 import { createAgentSessionAdapters } from "./agent-session-adapters";
@@ -510,10 +510,12 @@ export const createSessionHost = async ({
 		);
 		const initialRegistry = capabilities.getRegistry();
 		const resolveOpenedSelection = (registry: AgentRegistry | null) =>
-			resolveSessionSelection({
-				messages: [...opened.transcript],
-				sessionModel: opened.model,
-				sessionThinkingLevel: opened.thinkingLevel,
+			restoreSelection({
+				messages: opened.transcript,
+				row: {
+					model: opened.model,
+					thinkingLevel: opened.thinkingLevel,
+				},
 				...(isNull(registry)
 					? {}
 					: {

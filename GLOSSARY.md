@@ -74,8 +74,11 @@ metadata, resolved when a session opens or a turn is sent. Two tiers are recorde
 on write and merged on read: the session row holds the session-level choice (the
 user's prompt-config selection), and message metadata holds the effective choice
 (what a turn actually ran with, including Agent pins). Restore reads leniently;
-the request body reads strictly. Sources merge in a fixed order — session row,
-then message metadata, then prompt-config refs. _Avoid_: chat config, latest config
+the request body reads strictly. Precedence is per value, not one ladder: Model
+and ThinkingLevel merge session row, then message metadata, then prompt-config
+refs, while Agent has no session-row tier and merges message metadata, then
+prompt-config refs. The next-chat default reads message metadata alone when it
+carries a complete pair. _Avoid_: chat config, latest config
 
 ## Session Execution
 

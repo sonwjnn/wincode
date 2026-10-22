@@ -69,8 +69,8 @@ import {
 	getLastUsedSelection,
 	resolveRestoredSessionSdkSelection,
 	resolveSessionSdkPromptSelection,
-	resolveSessionSdkSelectionDefaults,
 	type SessionSdkSelectionDefaults,
+	sessionSelectionDefaults,
 } from "@/modules/sessions/selection";
 import { projectSessionMessageRecords } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
@@ -1003,7 +1003,7 @@ const createSessionSdkInternal = async (
 	const sessionRuntimes = new Set<SessionSdk>();
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
-	const unresolvedDefaultSelection = resolveSessionSdkSelectionDefaults(
+	const unresolvedDefaultSelection = sessionSelectionDefaults(
 		assembly.capabilities.getRegistry(),
 		{
 			...(agent === undefined ? {} : { agent }),
@@ -1137,7 +1137,7 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
-		const resolvedSelection = resolveSessionSdkSelectionDefaults(
+		const resolvedSelection = sessionSelectionDefaults(
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,
@@ -1173,7 +1173,7 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
-		const resolvedSelection = resolveSessionSdkSelectionDefaults(
+		const resolvedSelection = sessionSelectionDefaults(
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,
