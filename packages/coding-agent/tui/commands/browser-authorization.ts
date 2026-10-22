@@ -9,7 +9,9 @@ export async function copyBrowserAuthorizationUrl(
 	url: string
 ): Promise<void> {
 	try {
-		await clipboard.write(url);
+		if (!(await clipboard.write(url))) {
+			throw new Error("Clipboard write was skipped.");
+		}
 	} catch (error) {
 		throw new Error("Failed to copy URL.", { cause: error });
 	}

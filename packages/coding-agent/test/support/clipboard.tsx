@@ -19,8 +19,9 @@ export function createRecordingClipboard(
 			return;
 		},
 		async write(text) {
-			writes.push(text);
 			await write(text);
+			writes.push(text);
+			return true;
 		},
 		async dispose() {
 			return;
@@ -30,11 +31,10 @@ export function createRecordingClipboard(
 
 export const testRenderWithClipboard = (
 	node: ReactNode,
-	options: TestRendererOptions
+	options: TestRendererOptions,
+	clipboard: TuiClipboard = createRecordingClipboard()
 ): Promise<TestRendererSetup> =>
 	testRender(
-		<ClipboardProvider clipboard={createRecordingClipboard()}>
-			{node}
-		</ClipboardProvider>,
+		<ClipboardProvider clipboard={clipboard}>{node}</ClipboardProvider>,
 		options
 	);

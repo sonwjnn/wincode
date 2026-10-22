@@ -7,7 +7,9 @@ import { ClipboardTooLargeError, type ClipboardWriter } from "./clipboard";
 import { useClipboard } from "./provider";
 
 export type HandleSelectionOptions = {
+	clipboard: ClipboardWriter;
 	enabled?: boolean;
+	show: (options: ToastOptions) => void;
 };
 
 type SelectionText = Pick<
@@ -17,9 +19,7 @@ type SelectionText = Pick<
 
 export async function handleSelection(
 	selection: SelectionText,
-	show: (options: ToastOptions) => void,
-	clipboard: ClipboardWriter,
-	{ enabled = true }: HandleSelectionOptions = {}
+	{ clipboard, enabled = true, show }: HandleSelectionOptions
 ): Promise<void> {
 	if (!enabled) {
 		return;
@@ -33,8 +33,10 @@ export async function handleSelection(
 		return;
 	}
 	try {
-		await clipboard.write(text);
-		show({ message: "Copied to clipboard", variant: "success", width: 30 });
+		const copied = await clipboard.write(text);
+		if (copied) {
+			show({ message: "Copied to clipboard", variant: "success", width: 30 });
+		}
 	} catch (error) {
 		show({
 			message:
@@ -57,7 +59,11 @@ export function CopyOnSelect({ enabled }: CopyOnSelectProps) {
 
 	useEffect(() => {
 		const onSelection = (selection: Selection) => {
-			void handleSelection(selection, toast.show, clipboard, { enabled });
+			void handleSelection(selection, {
+				clipboard,
+				enabled,
+				show: toast.show,
+			});
 		};
 		renderer.on("selection", onSelection);
 		return () => {

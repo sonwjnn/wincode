@@ -26,7 +26,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import { resolveLocalAttachmentRoot } from "@/modules/sessions/storage/path";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
-import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
 import { SessionSurface } from "@/modules/sessions/ui/views/session-surface";
 import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
@@ -259,7 +259,7 @@ export const renderSession = async ({
 	await router.load();
 	// Each rendered app owns a fresh process lifetime, so its composer starts empty.
 	writeComposerDraft(sessionId, "");
-	setMarkdownTreeSitterClientForTests(
+	setTreeSitterClientOverride(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
 	setInteractiveRuntimeContext({
@@ -310,7 +310,7 @@ export const renderSession = async ({
 };
 
 export const cleanupSessionRender = (): void => {
-	setMarkdownTreeSitterClientForTests(null);
+	setTreeSitterClientOverride(null);
 };
 
 export const shutdownSessionHosts = (): Promise<void> =>

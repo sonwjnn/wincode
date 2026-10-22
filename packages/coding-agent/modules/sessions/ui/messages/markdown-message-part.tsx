@@ -3,11 +3,8 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
 	getMarkdownTreeSitterClient,
 	type SyntaxStyleVariant,
-	setTreeSitterClientForTests,
 } from "../syntax-style";
 import { useSyntaxStyle } from "../use-syntax-style";
-
-export const setMarkdownTreeSitterClientForTests = setTreeSitterClientForTests;
 
 /** Printable output characters plus tab and newline (structure must survive). */
 const isMarkdownSafeCharacter = (code: number): boolean =>

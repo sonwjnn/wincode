@@ -38,7 +38,7 @@ import type {
 	SessionMessage,
 } from "@/modules/sessions/message";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
-import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
 import { SettingsRegistryProvider } from "@/modules/settings";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -65,13 +65,13 @@ import {
 beforeAll(() => {
 	// Text parts map through MarkdownMessagePart; the mock client keeps block
 	// rendering deterministic without the tree-sitter worker.
-	setMarkdownTreeSitterClientForTests(
+	setTreeSitterClientOverride(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
 });
 
 afterAll(() => {
-	setMarkdownTreeSitterClientForTests(null);
+	setTreeSitterClientOverride(null);
 });
 
 type ShellToolPart = Extract<

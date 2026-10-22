@@ -193,7 +193,7 @@ const normalizeTreeSitterClient = (
 
 let treeSitterClientOverride: TreeSitterClient | null = null;
 
-export const setTreeSitterClientForTests = (
+export const setTreeSitterClientOverride = (
 	client: TreeSitterClient | null
 ): TreeSitterClient | null => {
 	const previous = treeSitterClientOverride;
@@ -201,7 +201,7 @@ export const setTreeSitterClientForTests = (
 	return previous;
 };
 
-export const getRawTreeSitterClient = (): TreeSitterClient | undefined =>
+export const getTreeSitterClientOverride = (): TreeSitterClient | undefined =>
 	treeSitterClientOverride ?? undefined;
 
 export const getMarkdownTreeSitterClient = (): TreeSitterClient =>

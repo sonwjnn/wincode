@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import type { Selection } from "@opentui/core";
-import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
 import {
 	CopyOnSelectFromSettings,
@@ -8,11 +7,13 @@ import {
 	SettingsRegistryProvider,
 	useSettingsOperations,
 } from "@/modules/settings";
-import { ClipboardProvider } from "@/shared/clipboard";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
-import { createRecordingClipboard } from "./support/clipboard";
+import {
+	createRecordingClipboard,
+	testRenderWithClipboard,
+} from "./support/clipboard";
 import {
 	TEST_CONFIG_ROOT as CONFIG_ROOT,
 	createInMemoryConfigStore as createTestConfigStore,
@@ -71,19 +72,18 @@ test("a Settings write immediately changes the root selection handler", async ()
 		return <CopyOnSelectFromSettings />;
 	}
 
-	const setup = await testRender(
-		<ClipboardProvider clipboard={clipboard}>
-			<ConfigProvider value={configValue}>
-				<ThemeProvider>
-					<ToastProvider>
-						<SettingsRegistryProvider>
-							<Harness />
-						</SettingsRegistryProvider>
-					</ToastProvider>
-				</ThemeProvider>
-			</ConfigProvider>
-		</ClipboardProvider>,
-		{ height: 24, width: 80 }
+	const setup = await testRenderWithClipboard(
+		<ConfigProvider value={configValue}>
+			<ThemeProvider>
+				<ToastProvider>
+					<SettingsRegistryProvider>
+						<Harness />
+					</SettingsRegistryProvider>
+				</ToastProvider>
+			</ThemeProvider>
+		</ConfigProvider>,
+		{ height: 24, width: 80 },
+		clipboard
 	);
 	await flush(setup);
 	// Guard the contract: copy-on-select must never clear the selection.
@@ -141,19 +141,18 @@ test("does not copy until a saved disabled preference loads", async () => {
 		return <CopyOnSelectFromSettings />;
 	}
 
-	const setup = await testRender(
-		<ClipboardProvider clipboard={clipboard}>
-			<ConfigProvider value={configValue}>
-				<ThemeProvider>
-					<ToastProvider>
-						<SettingsRegistryProvider>
-							<Harness />
-						</SettingsRegistryProvider>
-					</ToastProvider>
-				</ThemeProvider>
-			</ConfigProvider>
-		</ClipboardProvider>,
-		{ height: 24, width: 80 }
+	const setup = await testRenderWithClipboard(
+		<ConfigProvider value={configValue}>
+			<ThemeProvider>
+				<ToastProvider>
+					<SettingsRegistryProvider>
+						<Harness />
+					</SettingsRegistryProvider>
+				</ToastProvider>
+			</ThemeProvider>
+		</ConfigProvider>,
+		{ height: 24, width: 80 },
+		clipboard
 	);
 	// Guard the contract: copy-on-select must never clear the selection.
 	setup.renderer.clearSelection = () => {

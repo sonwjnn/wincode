@@ -15,7 +15,7 @@ export type ClipboardContent = Readonly<{
 
 export type TuiClipboard = Readonly<{
 	read: () => Promise<ClipboardContent | undefined>;
-	write: (text: string) => Promise<void>;
+	write: (text: string) => Promise<boolean>;
 	dispose: () => Promise<void>;
 }>;
 
@@ -46,6 +46,8 @@ export type ClipboardImageMimeType =
 	(typeof CLIPBOARD_IMAGE_MIME_TYPES)[number];
 
 const CLIPBOARD_WRITE_BUDGET_BYTES = 8 * 1024 * 1024;
+const CLIPBOARD_HOST_READ_BUDGET_BYTES = 16 * 1024 * 1024;
+const CLIPBOARD_HOST_TIMEOUT_MS = 5000;
 
 export const UNSUPPORTED_HOST_CLIPBOARD: HostClipboardService = {
 	// Match OpenTUI's default budget so validation does not reject text before
@@ -59,7 +61,10 @@ export const UNSUPPORTED_HOST_CLIPBOARD: HostClipboardService = {
 
 const createAvailableHostClipboard = (): HostClipboardService => {
 	try {
-		return createHostClipboard();
+		return createHostClipboard({
+			maxReadBytes: CLIPBOARD_HOST_READ_BUDGET_BYTES,
+			timeoutMs: CLIPBOARD_HOST_TIMEOUT_MS,
+		});
 	} catch (error) {
 		void logger.warn("Native clipboard unavailable; falling back to OSC52.", {
 			error: getErrorMessage(error, "Unknown clipboard error."),
@@ -88,6 +93,11 @@ export function createClipboardAdapter(
 				preferredTypes: CLIPBOARD_IMAGE_MIME_TYPES,
 				selection: "clipboard",
 			});
+			if (result.status === "limit-exceeded") {
+				void logger.warn(
+					"Clipboard image exceeds the read budget; falling back to text."
+				);
+			}
 			if (result.status !== "read") {
 				return;
 			}
@@ -96,7 +106,7 @@ export function createClipboardAdapter(
 		async write(text) {
 			const sanitized = sanitizeClipboardText(text);
 			if (sanitized.length === 0) {
-				return;
+				return false;
 			}
 			let result: ClipboardWriteResult;
 			try {
@@ -113,7 +123,7 @@ export function createClipboardAdapter(
 				throw error;
 			}
 			if (writeSucceeded(result)) {
-				return;
+				return true;
 			}
 			if (result.host.status === "failed") {
 				throw result.host.error;

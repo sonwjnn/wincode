@@ -123,7 +123,7 @@ describe("createClipboardAdapter", () => {
 			})
 		);
 
-		await writer.write("hello");
+		await expect(writer.write("hello")).resolves.toBe(true);
 
 		expect(writes).toEqual([
 			{
@@ -219,7 +219,7 @@ describe("createClipboardAdapter", () => {
 			})
 		);
 
-		await writer.write("");
+		await expect(writer.write("")).resolves.toBe(false);
 
 		expect(writes).toBe(0);
 	});

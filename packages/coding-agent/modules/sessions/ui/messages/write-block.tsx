@@ -10,7 +10,7 @@ import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-la
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { Spinner } from "@/shared/ui/spinner";
-import { getRawTreeSitterClient } from "../syntax-style";
+import { getTreeSitterClientOverride } from "../syntax-style";
 import { useSyntaxStyle } from "../use-syntax-style";
 
 type WriteToolPart = Extract<
@@ -206,7 +206,7 @@ const WritePreview = ({
 			removedSignColor={colors.diffHighlightRemoved}
 			showLineNumbers
 			syntaxStyle={syntaxStyle}
-			treeSitterClient={getRawTreeSitterClient()}
+			treeSitterClient={getTreeSitterClientOverride()}
 			view="unified"
 			width="100%"
 			wrapMode="word"

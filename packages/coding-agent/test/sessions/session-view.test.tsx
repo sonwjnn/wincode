@@ -77,7 +77,7 @@ import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/submission-types";
-import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
 import { SessionView } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -568,14 +568,14 @@ const pluginPickerRegistration = (pluginId: string) =>
 	});
 
 beforeAll(() => {
-	setMarkdownTreeSitterClientForTests(
+	setTreeSitterClientOverride(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
 });
 
 afterAll(() => {
 	mock.restore();
-	setMarkdownTreeSitterClientForTests(null);
+	setTreeSitterClientOverride(null);
 });
 
 afterEach(() => {

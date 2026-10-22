@@ -39,11 +39,12 @@ export const createRendererSession = async (
 			return;
 		}
 		destroyed = true;
+		// Start native shutdown before unmounting so it is not cut short by renderer teardown.
+		void clipboard.dispose().catch(() => undefined);
 		try {
 			root.unmount();
 		} finally {
 			unregisterCrashTeardown();
-			void clipboard.dispose().catch(() => undefined);
 			destroyRenderer();
 		}
 	};
