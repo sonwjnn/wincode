@@ -101,7 +101,11 @@ import {
 	sessionMessageId,
 	steeringMessageId,
 } from "../support/identifiers";
-import { frameIncludes } from "../support/opentui";
+import {
+	captureTestFrame,
+	frameIncludes,
+	waitForFrame,
+} from "../support/opentui";
 
 type Deferred<T> = {
 	promise: Promise<T>;
@@ -533,7 +537,7 @@ const createFakeSessionHost = (
  */
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await setup.waitForVisualIdle();
-	let previous = setup.captureCharFrame();
+	let previous = captureTestFrame(setup) ?? "";
 	// Two passes minimum: the first gives an asynchronous commit a window to
 	// land, the second sees whether it did. A command slower than that needs a
 	// wait of its own, which is what the assertions here rely on.
@@ -541,7 +545,7 @@ const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 		await Bun.sleep(20);
 		await setup.renderOnce();
 		await setup.waitForVisualIdle();
-		const frame = setup.captureCharFrame();
+		const frame = captureTestFrame(setup) ?? "";
 		if (attempt >= 1 && frame === previous) {
 			return;
 		}
@@ -1601,7 +1605,7 @@ describe("SessionView initial submission", () => {
 			await act(() => setup.mockInput.pressArrow("down"));
 			await act(() => setup.mockInput.pressEnter());
 			await flushUi(setup);
-			await setup.waitFor(() => !frameIncludes(setup, "Search models"));
+			await waitForFrame(setup, (frame) => !frame.includes("Search models"));
 			await flushUi(setup);
 			expect(observedModel).toMatchObject(selectedModel);
 			expect(fakeCacheWarmCancellations).toBe(1);
@@ -1715,7 +1719,7 @@ describe("SessionView initial submission", () => {
 			await act(async () => setup.mockInput.typeText("Cache Warming Agent"));
 			await setup.waitFor(() => frameIncludes(setup, "Cache Warming Agent"));
 			await act(() => setup.mockInput.pressEnter());
-			await setup.waitFor(() => !frameIncludes(setup, "Search agents"));
+			await waitForFrame(setup, (frame) => !frame.includes("Search agents"));
 			await setup.waitFor(() => observedAgent === selectedAgent);
 			expect(fakeCacheWarmCancellations).toBe(1);
 		} finally {

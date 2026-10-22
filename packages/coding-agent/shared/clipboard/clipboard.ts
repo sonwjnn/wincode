@@ -92,6 +92,9 @@ const createAvailableHostClipboard = (): HostClipboardService => {
 const sanitizeClipboardText = (text: string): string =>
 	text.replaceAll("\0", "").toWellFormed();
 
+const isWriteLimitError = (error: unknown): boolean =>
+	error instanceof RangeError && error.message.includes("byte limit");
+
 const writeSucceeded = (result: ClipboardWriteResult): boolean =>
 	result.host.status === "written" || result.terminal.status === "attempted";
 
@@ -135,7 +138,7 @@ export function createClipboardAdapter(
 					selection: "clipboard",
 				});
 			} catch (error) {
-				if (error instanceof RangeError) {
+				if (isWriteLimitError(error)) {
 					throw new ClipboardTooLargeError({ cause: error });
 				}
 				throw error;

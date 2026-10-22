@@ -22,6 +22,22 @@ export const frameIncludes = (
 	text: string
 ): boolean => captureTestFrame(setup)?.includes(text) ?? false;
 
+export const waitForFrame = async (
+	setup: TestRendererSetup,
+	predicate: (frame: string) => boolean,
+	timeoutMs = 5000
+): Promise<string> => {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const frame = captureTestFrame(setup);
+		if (frame !== undefined && predicate(frame)) {
+			return frame;
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error("Timed out waiting for a frame");
+};
+
 export const flushTestRenderer = async (
 	setup: TestRendererSetup,
 	passes = 1

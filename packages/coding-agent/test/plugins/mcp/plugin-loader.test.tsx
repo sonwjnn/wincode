@@ -30,7 +30,11 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { agentId, sessionId, toolCallId } from "../../support/identifiers";
-import { flushTestRenderer, frameIncludes } from "../../support/opentui";
+import {
+	flushTestRenderer,
+	frameIncludes,
+	waitForFrame,
+} from "../../support/opentui";
 
 const savedMcpTextArtifactPattern =
 	/\[MCP text\/plain content saved to ([^\]]+)\]/;
@@ -823,12 +827,7 @@ test("the generic MCP panel shows safe failures and routes reconnect and disable
 					break;
 				}
 			}
-			for (let attempt = 0; attempt < 20; attempt += 1) {
-				await flushTestRenderer(setup);
-				if (!frameIncludes(setup, "Working...")) {
-					break;
-				}
-			}
+			await waitForFrame(setup, (frame) => !frame.includes("Working..."));
 			expect(connectionAttempts).toBe(2);
 			expect(panel.getSnapshot().items[0]).toMatchObject({
 				actions: [

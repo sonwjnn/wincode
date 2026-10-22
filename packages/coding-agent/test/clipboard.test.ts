@@ -266,7 +266,9 @@ describe("createClipboardAdapter", () => {
 		const writer = createClipboardAdapter(
 			coreClipboard({
 				writeText: async () => {
-					throw new RangeError("writeText exceeds the configured limit");
+					throw new RangeError(
+						"writeText exceeds the configured 8388608 byte limit"
+					);
 				},
 			})
 		);
@@ -274,6 +276,19 @@ describe("createClipboardAdapter", () => {
 		await expect(writer.write("hello")).rejects.toBeInstanceOf(
 			ClipboardTooLargeError
 		);
+	});
+
+	test("does not mislabel an unrelated RangeError as a size limit", async () => {
+		const failure = new RangeError("unrelated range failure");
+		const writer = createClipboardAdapter(
+			coreClipboard({
+				writeText: async () => {
+					throw failure;
+				},
+			})
+		);
+
+		await expect(writer.write("hello")).rejects.toBe(failure);
 	});
 
 	test("dispose releases the underlying clipboard service", async () => {
