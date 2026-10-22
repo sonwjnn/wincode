@@ -95,12 +95,9 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 			{ maxPasses: 200 }
 		);
 		await settleSessionUi(activeSetup);
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("Compacted (manual)"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Compacted (manual)")
+		);
 		const compactions = await store.getCompactions(sessionId);
 		expect(compactions).toHaveLength(1);
 		const entry = compactions[0];
@@ -135,12 +132,9 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 			recorder.requests.some((request) => request.kind === "chat")
 		);
 		await settleSessionUi(activeSetup);
-		await act(async () => {
-			await activeSetup.waitForFrame(
-				(frame) => frame.includes("E2E chat response"),
-				{ maxPasses: 200 }
-			);
-		});
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("E2E chat response")
+		);
 
 		const chatRequests = recorder.requests.filter(
 			(request) => request.kind === "chat"

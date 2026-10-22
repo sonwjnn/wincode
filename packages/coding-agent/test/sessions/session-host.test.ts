@@ -1776,14 +1776,16 @@ describe("Session Host lifetime", () => {
 				},
 			}),
 		};
+		let host: SessionHost | undefined;
 		try {
-			const host = await createSessionHost({
+			host = await createSessionHost({
 				capabilities,
 				sessionId: seeded.sessionId,
 			});
 			expect(host.getSelection()?.model).toEqual(model);
 			expect(requestedProviderIds).toEqual([model.providerId]);
 		} finally {
+			await host?.shutdown();
 			await manager.shutdownAll();
 			await store.deleteSession(seeded.sessionId);
 		}

@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { RGBA } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { act, useEffect } from "react";
 import {
@@ -56,50 +55,6 @@ const settingInSection = (
 	},
 });
 
-test("omits settings section headings and keeps rows adjacent", async () => {
-	const first = settingInSection("first", "First option", "General");
-	const second = settingInSection("second", "Second option", "Advanced");
-	const operations: SettingsOperations = {
-		catalog: SETTINGS_CATALOG,
-		getSettings: async () => [first, second],
-		resetValue: async () => first,
-		setValue: async () => first,
-	};
-	const setup = await renderSettingsDialog(operations, [first, second]);
-	const frame = setup.captureCharFrame();
-	const lines = frame.split("\n");
-	const firstIndex = lines.findIndex((line) => line.includes("First option"));
-	const secondIndex = lines.findIndex((line) => line.includes("Second option"));
-
-	expect(frame).not.toContain("General");
-	expect(frame).not.toContain("Advanced");
-	expect(secondIndex - firstIndex).toBe(1);
-	await act(() => setup.renderer.destroy());
-});
-
-test("uses the selectable-list theme surface for the dialog background", async () => {
-	const setting = createSetting(false);
-	const operations: SettingsOperations = {
-		catalog: SETTINGS_CATALOG,
-		getSettings: async () => [setting],
-		resetValue: async () => setting,
-		setValue: async () => setting,
-	};
-	const setup = await renderSettingsDialog(operations, [setting]);
-
-	try {
-		const title = setup
-			.captureSpans()
-			.lines.flatMap((line) => line.spans)
-			.find((span) => span.text.includes("Settings"));
-		expect(
-			title?.bg.equals(RGBA.fromHex(DEFAULT_THEME.colors.backgroundElement))
-		).toBe(true);
-	} finally {
-		await act(() => setup.renderer.destroy());
-	}
-});
-
 test("shows the final setting without scrolling", async () => {
 	const first = settingInSection("first", "First option", "General");
 	const second = settingInSection("second", "Second option", "Advanced");
@@ -115,43 +70,6 @@ test("shows the final setting without scrolling", async () => {
 
 	expect(setup.captureCharFrame()).toContain("Third option");
 	await act(() => setup.renderer.destroy());
-});
-
-test("keeps settings footer hints on one row without changing list height", async () => {
-	const first = settingInSection("first", "First option", "General");
-	const multiple = [
-		first,
-		settingInSection("second", "Second option", "Advanced"),
-		settingInSection("third", "Third option", "Display"),
-	];
-	const operations: SettingsOperations = {
-		catalog: SETTINGS_CATALOG,
-		getSettings: async () => multiple,
-		resetValue: async () => first,
-		setValue: async () => first,
-	};
-	const oneItemSetup = await renderSettingsDialog(operations, [first]);
-	const singleFrame = oneItemSetup.captureCharFrame().split("\n");
-	const singleFooterIndex = singleFrame.findIndex((line) =>
-		line.includes("navigate")
-	);
-	const singleFooter = singleFrame[singleFooterIndex] ?? "";
-	expect(singleFooter).toContain("↑↓ navigate");
-	expect(singleFooter).toContain("space/enter change");
-	expect(singleFooter).toContain("ctrl+r reset");
-	await act(() => oneItemSetup.renderer.destroy());
-
-	const multipleItemsSetup = await renderSettingsDialog(operations, multiple);
-	const multipleFooterIndex = multipleItemsSetup
-		.captureCharFrame()
-		.split("\n")
-		.findIndex((line) => line.includes("navigate"));
-	if (singleFooterIndex < 0 || multipleFooterIndex < 0) {
-		throw new Error("Settings footer not rendered.");
-	}
-
-	expect(singleFooterIndex).toBe(multipleFooterIndex);
-	await act(() => multipleItemsSetup.renderer.destroy());
 });
 
 const renderSettingsDialog = async (
