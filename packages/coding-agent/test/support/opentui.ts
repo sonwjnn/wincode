@@ -17,6 +17,14 @@ export const captureTestFrame = (
 	}
 };
 
+export const requireTestFrame = (setup: TestRendererSetup): string => {
+	const frame = captureTestFrame(setup);
+	if (frame === undefined) {
+		throw new Error("OpenTUI output buffer busy");
+	}
+	return frame;
+};
+
 export const frameIncludes = (
 	setup: TestRendererSetup,
 	text: string

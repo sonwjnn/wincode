@@ -1,4 +1,7 @@
-import type { ClipboardWriter } from "@/shared/clipboard";
+import type {
+	ClipboardWriteOutcome,
+	ClipboardWriter,
+} from "@/shared/clipboard";
 
 /**
  * Copies the authorization URL and maps any clipboard failure to the message
@@ -8,11 +11,13 @@ export async function copyBrowserAuthorizationUrl(
 	clipboard: ClipboardWriter,
 	url: string
 ): Promise<void> {
+	let outcome: ClipboardWriteOutcome;
 	try {
-		if ((await clipboard.write(url)) !== "copied") {
-			throw new Error("Clipboard write was skipped.");
-		}
+		outcome = await clipboard.write(url);
 	} catch (error) {
 		throw new Error("Failed to copy URL.", { cause: error });
+	}
+	if (outcome !== "copied") {
+		throw new Error("Failed to copy URL.");
 	}
 }

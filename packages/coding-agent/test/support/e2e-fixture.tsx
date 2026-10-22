@@ -365,6 +365,7 @@ export const waitForSessionFrame = async (
 ): Promise<void> => {
 	await waitForSessionCondition(async () => {
 		await settleSessionUi(setup);
-		return predicate(setup.captureCharFrame());
+		const frame = captureTestFrame(setup);
+		return frame !== undefined && predicate(frame);
 	});
 };

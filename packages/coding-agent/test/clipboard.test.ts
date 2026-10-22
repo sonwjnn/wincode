@@ -39,7 +39,7 @@ const coreClipboard = (options: {
 });
 
 describe("createClipboardAdapter", () => {
-	test("reads image bytes from the clipboard with every supported MIME type", async () => {
+	test("requests every supported image MIME type from the clipboard", async () => {
 		const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47]);
 		let readOptions: ClipboardReadOptions | undefined;
 		const reader = createClipboardAdapter(
