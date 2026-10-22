@@ -8,9 +8,11 @@ import {
 } from "@opentui/core";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
 
+export type SyntaxStyleVariant = "standard" | "thinking";
+
 const buildSyntaxStyles = (
 	colors: ThemeColors,
-	variant: "standard" | "thinking"
+	variant: SyntaxStyleVariant
 ): Record<string, StyleDefinitionInput> => {
 	const isThinking = variant === "thinking";
 	const markdownStyle = (
@@ -55,9 +57,11 @@ const buildSyntaxStyles = (
 	};
 };
 
+type SyntaxStyleKey = SyntaxStyleVariant | "composer";
+
 type CachedSyntaxStyles = {
 	key: string;
-	styles: Record<"standard" | "thinking", SyntaxStyle | undefined>;
+	styles: Map<SyntaxStyleKey, SyntaxStyle>;
 };
 
 const cachedSyntaxStyles = new WeakMap<
@@ -65,34 +69,54 @@ const cachedSyntaxStyles = new WeakMap<
 	CachedSyntaxStyles
 >();
 
+const resolveCachedSyntaxStyle = (
+	owner: NativeResourceOwner,
+	colors: ThemeColors,
+	key: SyntaxStyleKey,
+	build: () => SyntaxStyle
+): SyntaxStyle => {
+	const colorsKey = JSON.stringify(colors);
+	let cached = cachedSyntaxStyles.get(owner);
+	if (cached?.key !== colorsKey) {
+		for (const style of cached?.styles.values() ?? []) {
+			style.destroy();
+		}
+		cached = { key: colorsKey, styles: new Map() };
+		cachedSyntaxStyles.set(owner, cached);
+	}
+	const existing = cached.styles.get(key);
+	if (existing) {
+		return existing;
+	}
+	const style = build();
+	cached.styles.set(key, style);
+	return style;
+};
+
 export const resolveSyntaxStyle = (
 	owner: NativeResourceOwner,
 	colors: ThemeColors,
-	variant: "standard" | "thinking" = "standard"
-): SyntaxStyle => {
-	const key = JSON.stringify(colors);
-	let cached = cachedSyntaxStyles.get(owner);
-	if (cached?.key !== key) {
-		for (const style of Object.values(cached?.styles ?? {})) {
-			style?.destroy();
-		}
-		cached = {
-			key,
-			styles: { standard: undefined, thinking: undefined },
-		};
-		cachedSyntaxStyles.set(owner, cached);
-	}
-	const cachedStyle = cached.styles[variant];
-	if (cachedStyle) {
-		return cachedStyle;
-	}
-	const style = SyntaxStyle.fromStyles(
-		buildSyntaxStyles(colors, variant),
-		owner
+	variant: SyntaxStyleVariant = "standard"
+): SyntaxStyle =>
+	resolveCachedSyntaxStyle(owner, colors, variant, () =>
+		SyntaxStyle.fromStyles(buildSyntaxStyles(colors, variant), owner)
 	);
-	cached.styles[variant] = style;
-	return style;
-};
+
+const buildComposerSyntaxStyles = (
+	colors: ThemeColors
+): Record<string, StyleDefinitionInput> => ({
+	attachment: { bg: colors.primary, bold: true, fg: colors.background },
+	fileMention: { bold: true, fg: colors.primary },
+	pastedText: { bg: colors.primary, bold: true, fg: colors.background },
+});
+
+export const resolveComposerSyntaxStyle = (
+	owner: NativeResourceOwner,
+	colors: ThemeColors
+): SyntaxStyle =>
+	resolveCachedSyntaxStyle(owner, colors, "composer", () =>
+		SyntaxStyle.fromStyles(buildComposerSyntaxStyles(colors), owner)
+	);
 
 /**
  * Tree-sitter can report a bracketed label in a standalone strong line as a
@@ -183,7 +207,7 @@ export const setTreeSitterClientForTests = (
 	return previous;
 };
 
-export const getTreeSitterClientForTests = (): TreeSitterClient | undefined =>
+export const getRawTreeSitterClient = (): TreeSitterClient | undefined =>
 	treeSitterClientOverride ?? undefined;
 
 export const getMarkdownTreeSitterClient = (): TreeSitterClient =>

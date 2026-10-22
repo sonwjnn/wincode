@@ -7,18 +7,13 @@ import type { ReactNode } from "react";
 import type { TuiClipboard } from "@/shared/clipboard/clipboard";
 import { ClipboardProvider } from "@/shared/clipboard/provider";
 
-export type RecordingClipboard = TuiClipboard &
-	Readonly<{ disposed: number; writes: string[] }>;
+export type RecordingClipboard = TuiClipboard & Readonly<{ writes: string[] }>;
 
 export function createRecordingClipboard(
 	write: (text: string) => Promise<void> = async () => undefined
 ): RecordingClipboard {
 	const writes: string[] = [];
-	let disposed = 0;
 	return {
-		get disposed() {
-			return disposed;
-		},
 		writes,
 		async read() {
 			return;
@@ -28,7 +23,7 @@ export function createRecordingClipboard(
 			await write(text);
 		},
 		async dispose() {
-			disposed += 1;
+			return;
 		},
 	};
 }

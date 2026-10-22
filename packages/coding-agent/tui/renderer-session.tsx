@@ -2,7 +2,6 @@ import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot, type Root } from "@opentui/react";
 import type { ReactNode } from "react";
 import {
-	type ClipboardFactory,
 	ClipboardProvider,
 	createTuiClipboard,
 	type TuiClipboard,
@@ -22,8 +21,7 @@ export type RendererSession = Readonly<{
 }>;
 
 export const createRendererSession = async (
-	rendererFactory: typeof createCliRenderer = createCliRenderer,
-	clipboardFactory: ClipboardFactory = createTuiClipboard
+	rendererFactory: typeof createCliRenderer = createCliRenderer
 ): Promise<RendererSession> => {
 	const renderer = await rendererFactory({
 		enableMouseMovement: true,
@@ -33,7 +31,7 @@ export const createRendererSession = async (
 	});
 	let clipboard: TuiClipboard;
 	try {
-		clipboard = clipboardFactory(renderer);
+		clipboard = createTuiClipboard(renderer);
 	} catch (error) {
 		renderer.destroy();
 		throw error;
@@ -51,7 +49,7 @@ export const createRendererSession = async (
 			root.unmount();
 		} finally {
 			unregisterCrashTeardown();
-			void clipboard.dispose();
+			void clipboard.dispose().catch(() => undefined);
 			destroyRenderer();
 		}
 	};

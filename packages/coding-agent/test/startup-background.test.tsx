@@ -3,15 +3,11 @@ import { RGBA } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { act } from "react";
 import { createRendererSession } from "@/tui/renderer-session";
-import { createRecordingClipboard } from "./support/clipboard";
 import { flushTestRenderer } from "./support/opentui";
 
 test("startup canvas remains text-free and keeps one background while content changes", async () => {
 	const setup = await createTestRenderer({ height: 24, width: 80 });
-	const session = await createRendererSession(
-		async () => setup.renderer,
-		() => createRecordingClipboard()
-	);
+	const session = await createRendererSession(async () => setup.renderer);
 	try {
 		await flushTestRenderer(setup, 2);
 		expect(setup.captureCharFrame().trim()).toBe("");

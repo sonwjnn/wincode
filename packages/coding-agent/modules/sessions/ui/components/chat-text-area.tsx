@@ -3,10 +3,9 @@ import * as path from "node:path";
 import {
 	decodePasteBytes,
 	type PasteEvent,
-	SyntaxStyle,
 	type TextareaRenderable,
 } from "@opentui/core";
-import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
+import { useKeyboard, usePaste } from "@opentui/react";
 import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import {
@@ -39,6 +38,7 @@ import {
 	pluginProviderOwnerMatches,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
+import { useComposerSyntaxStyle } from "@/modules/sessions/ui/messages/use-syntax-style";
 import { type ClipboardReader, useClipboard } from "@/shared/clipboard";
 import { RoundedBorderChars } from "@/shared/constants";
 import { useLatest } from "@/shared/hooks/use-latest";
@@ -489,30 +489,10 @@ export function ChatTextArea({
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
-	const renderer = useRenderer();
 	const clipboard = useClipboard();
 	const { show } = useToast();
 	const commandControllerFactory = useCommandControllerFactory();
-	const mentionSyntaxStyle = useMemo(
-		() =>
-			SyntaxStyle.fromStyles(
-				{
-					attachment: {
-						bg: colors.primary,
-						bold: true,
-						fg: colors.background,
-					},
-					fileMention: { bold: true, fg: colors.primary },
-					pastedText: {
-						bg: colors.primary,
-						bold: true,
-						fg: colors.background,
-					},
-				},
-				renderer.nativeScene
-			),
-		[colors.background, colors.primary, renderer.nativeScene]
-	);
+	const mentionSyntaxStyle = useComposerSyntaxStyle();
 	const pastedTextStyleId = mentionSyntaxStyle.getStyleId("pastedText");
 	const pastedTextRef = useRef<
 		Array<{ extmarkId: number; text: string; token: string }>

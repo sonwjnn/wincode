@@ -20,9 +20,6 @@ export type TuiClipboard = Readonly<{
 
 export type ClipboardWriter = Pick<TuiClipboard, "write">;
 export type ClipboardReader = Pick<TuiClipboard, "read">;
-export type ClipboardFactory = (
-	renderer: RendererClipboardBoundary
-) => TuiClipboard;
 
 /** Raised when the text exceeds the clipboard service's UTF-8 write budget. */
 export class ClipboardTooLargeError extends Error {
@@ -36,18 +33,6 @@ export type ClipboardServiceLike = Pick<
 	ClipboardService,
 	"read" | "writeText" | "dispose"
 >;
-
-export type ClipboardComponents = Readonly<{
-	createClipboard: typeof createClipboard;
-	createHostClipboard: typeof createHostClipboard;
-	createRendererClipboardAdapter: typeof createRendererClipboardAdapter;
-}>;
-
-const nativeClipboardComponents: ClipboardComponents = {
-	createClipboard,
-	createHostClipboard,
-	createRendererClipboardAdapter,
-};
 
 export const CLIPBOARD_IMAGE_MIME_TYPES = [
 	"image/png",
@@ -89,7 +74,8 @@ export function createClipboardAdapter(
 			}
 			let result: ClipboardWriteResult;
 			try {
-				// allowRemoteHost stays false: over SSH the host clipboard belongs to the remote machine.
+				// allowRemoteHost is intentionally not exposed: OpenTUI's default keeps
+				// the host clipboard untouched over SSH, where it belongs to the remote machine.
 				result = await clipboard.writeText(sanitized, {
 					destination: "all-available",
 					selection: "clipboard",
@@ -115,13 +101,12 @@ export function createClipboardAdapter(
 }
 
 export function createTuiClipboard(
-	renderer: RendererClipboardBoundary,
-	components: ClipboardComponents = nativeClipboardComponents
+	renderer: RendererClipboardBoundary
 ): TuiClipboard {
 	return createClipboardAdapter(
-		components.createClipboard({
-			host: components.createHostClipboard(),
-			terminal: components.createRendererClipboardAdapter(renderer),
+		createClipboard({
+			host: createHostClipboard(),
+			terminal: createRendererClipboardAdapter(renderer),
 		})
 	);
 }

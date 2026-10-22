@@ -18,7 +18,6 @@ import {
 	createRendererSession,
 	type RendererSession,
 } from "@/tui/renderer-session";
-import { createRecordingClipboard } from "./support/clipboard";
 import { flushTestRenderer } from "./support/opentui";
 
 const request: ProjectTrustPromptRequest = {
@@ -129,8 +128,7 @@ test("startup trust cancellation keeps the shared renderer alive", async () => {
 			destroy();
 		};
 		rendererSession = await createRendererSession(
-			async () => testSetup.renderer,
-			() => createRecordingClipboard()
+			async () => testSetup.renderer
 		);
 		const workspaceOnlyRequest: ProjectTrustPromptRequest = {
 			...request,
