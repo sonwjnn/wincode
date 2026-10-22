@@ -21,7 +21,7 @@ const expectBranch = async (setup: TestRendererSetup, branch: string) => {
 			await Bun.sleep(10);
 			await setup.renderOnce();
 		});
-		frame = captureTestFrame(setup);
+		frame = captureTestFrame(setup) ?? "";
 		if (frame.includes(branch)) {
 			break;
 		}

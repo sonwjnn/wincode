@@ -11,6 +11,7 @@ import { getErrorMessage, logger } from "@wincode/utils";
 
 export type ClipboardContent = Readonly<{
 	bytes: Uint8Array;
+	mimeType: ClipboardImageMimeType;
 }>;
 
 export type ClipboardWriteOutcome = "copied" | "empty";
@@ -48,6 +49,11 @@ export const CLIPBOARD_IMAGE_MIME_TYPES = [
 export type ClipboardImageMimeType =
 	(typeof CLIPBOARD_IMAGE_MIME_TYPES)[number];
 
+const isClipboardImageMimeType = (
+	value: string
+): value is ClipboardImageMimeType =>
+	(CLIPBOARD_IMAGE_MIME_TYPES as readonly string[]).includes(value);
+
 // The fallback only writes to the terminal; accept OpenTUI's u32 ceiling.
 const CLIPBOARD_WRITE_BUDGET_BYTES = 0xff_ff_ff_ff;
 const CLIPBOARD_HOST_READ_BUDGET_BYTES = 16 * 1024 * 1024;
@@ -55,8 +61,8 @@ const CLIPBOARD_HOST_TIMEOUT_MS = 5000;
 
 /** Fallback host used when the native clipboard service cannot initialize. */
 export const UNSUPPORTED_HOST_CLIPBOARD: HostClipboardService = {
-	// Match OpenTUI's default budget so validation does not reject text before
-	// the terminal fallback gets a chance to copy it.
+	// Use OpenTUI's u32 ceiling so validation does not reject text before the
+	// terminal fallback gets a chance to copy it.
 	maxWriteBytes: CLIPBOARD_WRITE_BUDGET_BYTES,
 	read: async () => ({ status: "unsupported" }),
 	writeText: async () => ({ status: "unsupported" }),
@@ -106,7 +112,14 @@ export function createClipboardAdapter(
 			if (result.status !== "read") {
 				return;
 			}
-			return { bytes: result.representation.bytes };
+			const mimeType = result.representation.mimeType;
+			if (!isClipboardImageMimeType(mimeType)) {
+				return;
+			}
+			return {
+				bytes: result.representation.bytes,
+				mimeType,
+			};
 		},
 		async write(text) {
 			const sanitized = sanitizeClipboardText(text);

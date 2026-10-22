@@ -51,7 +51,7 @@ import {
 	sessionMessageId,
 	sessionRecordId,
 } from "./identifiers";
-import { isOpenTuiOutputBusy } from "./opentui";
+import { captureTestFrame } from "./opentui";
 
 export const E2E_MODEL = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -323,14 +323,11 @@ export const writeE2EFrame = (setup: TestRendererSetup): void => {
 		return;
 	}
 	fs.mkdirSync(path.dirname(framePath), { recursive: true });
-	try {
-		fs.writeFileSync(framePath, setup.captureCharFrame(), "utf8");
-	} catch (error) {
-		// Debug artifact only: a busy native buffer must not fail the test.
-		if (!isOpenTuiOutputBusy(error)) {
-			throw error;
-		}
+	const frame = captureTestFrame(setup);
+	if (frame === undefined) {
+		return;
 	}
+	fs.writeFileSync(framePath, frame, "utf8");
 };
 
 export const settleSessionUi = async (

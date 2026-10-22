@@ -36,7 +36,7 @@ describe("readClipboardImage", () => {
 			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 		]);
 		const result = await readClipboardImage({
-			read: async () => ({ bytes }),
+			read: async () => ({ bytes, mimeType: "image/png" }),
 		});
 		expect(result).toEqual({ bytes, mediaType: "image/png" });
 	});
@@ -48,11 +48,12 @@ describe("readClipboardImage", () => {
 		expect(result).toEqual({ unavailable: true });
 	});
 
-	test("ignores text bytes that are not a supported image format", async () => {
+	test("returns the MIME type reported by the clipboard service", async () => {
+		const bytes = new TextEncoder().encode("image data");
 		const result = await readClipboardImage({
-			read: async () => ({ bytes: new TextEncoder().encode("text") }),
+			read: async () => ({ bytes, mimeType: "image/webp" }),
 		});
-		expect(result).toEqual({ unavailable: true });
+		expect(result).toEqual({ bytes, mediaType: "image/webp" });
 	});
 
 	test("reports unavailable instead of failing the paste when the read throws", async () => {

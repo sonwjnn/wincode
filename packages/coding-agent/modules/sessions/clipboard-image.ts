@@ -111,7 +111,7 @@ export async function readClipboardImage(
 		const content = await clipboard.read();
 		return content === undefined
 			? unavailable()
-			: imageFromBytes(content.bytes);
+			: { bytes: content.bytes, mediaType: content.mimeType };
 	} catch {
 		return unavailable();
 	}

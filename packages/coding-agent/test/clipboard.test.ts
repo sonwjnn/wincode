@@ -5,6 +5,7 @@ import {
 	type ClipboardWriteOptions,
 	type ClipboardWriteResult,
 	createClipboard,
+	type HostClipboardService,
 } from "@opentui/core";
 import {
 	CLIPBOARD_IMAGE_MIME_TYPES,
@@ -53,7 +54,10 @@ describe("createClipboardAdapter", () => {
 			})
 		);
 
-		await expect(reader.read()).resolves.toEqual({ bytes });
+		await expect(reader.read()).resolves.toEqual({
+			bytes,
+			mimeType: "image/png",
+		});
 		expect(readOptions).toEqual({
 			preferredTypes: CLIPBOARD_IMAGE_MIME_TYPES,
 			selection: "clipboard",
@@ -111,6 +115,39 @@ describe("createClipboardAdapter", () => {
 		await adapter.write("hello");
 
 		expect(terminalWrites).toBe(1);
+	});
+
+	test("skips the process host clipboard over SSH", async () => {
+		let hostWrites = 0;
+		const host: HostClipboardService = {
+			maxWriteBytes: 1024,
+			read: async () => ({ status: "empty" }),
+			writeText: async () => {
+				hostWrites += 1;
+				return { status: "written" };
+			},
+			clear: async () => ({ status: "cleared" }),
+			dispose: async () => undefined,
+		};
+		const adapter = createClipboardAdapter(
+			createClipboard({
+				host,
+				terminal: {
+					remote: true,
+					writeText: () => ({
+						status: "attempted",
+						capability: "supported",
+					}),
+					clear: () => ({
+						status: "not-attempted",
+						capability: "unknown",
+					}),
+				},
+			})
+		);
+
+		await expect(adapter.write("hello")).resolves.toBe("copied");
+		expect(hostWrites).toBe(0);
 	});
 
 	test("writes both the host and terminal so local and tmux clipboards stay in sync", async () => {
