@@ -14,7 +14,7 @@ describe("readClipboardImage", () => {
 			readFile: async () => icon,
 			stat: async () => ({ isFile: () => true }),
 		});
-		expect(result).toEqual({ bytes: icon, mediaType: "image/png" });
+		expect(result).toEqual({ bytes: icon, mimeType: "image/png" });
 		expect(decodeImagePath("notes.txt")).toBeNull();
 	});
 
@@ -38,7 +38,7 @@ describe("readClipboardImage", () => {
 		const result = await readClipboardImage({
 			read: async () => ({ bytes, mimeType: "image/png" }),
 		});
-		expect(result).toEqual({ bytes, mediaType: "image/png" });
+		expect(result).toEqual({ bytes, mimeType: "image/png" });
 	});
 
 	test("reports unavailable when the clipboard holds no image", async () => {
@@ -53,7 +53,7 @@ describe("readClipboardImage", () => {
 		const result = await readClipboardImage({
 			read: async () => ({ bytes, mimeType: "image/webp" }),
 		});
-		expect(result).toEqual({ bytes, mediaType: "image/webp" });
+		expect(result).toEqual({ bytes, mimeType: "image/webp" });
 	});
 
 	test("reports unavailable instead of failing the paste when the read throws", async () => {

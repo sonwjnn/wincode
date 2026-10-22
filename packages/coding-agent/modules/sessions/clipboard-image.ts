@@ -5,7 +5,7 @@ import type {
 
 export type ClipboardImage = {
 	bytes: Uint8Array;
-	mediaType: ClipboardImageMimeType;
+	mimeType: ClipboardImageMimeType;
 };
 
 export type ClipboardImageResult = ClipboardImage | { unavailable: true };
@@ -25,7 +25,7 @@ export function imageFromBytes(bytes: Uint8Array): ClipboardImageResult {
 					value === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index]
 			)
 	) {
-		return { bytes, mediaType: "image/png" };
+		return { bytes, mimeType: "image/png" };
 	}
 	if (
 		bytes.length >= 3 &&
@@ -33,20 +33,20 @@ export function imageFromBytes(bytes: Uint8Array): ClipboardImageResult {
 		bytes[1] === 0xd8 &&
 		bytes[2] === 0xff
 	) {
-		return { bytes, mediaType: "image/jpeg" };
+		return { bytes, mimeType: "image/jpeg" };
 	}
 	if (
 		bytes.length >= 6 &&
 		new TextDecoder().decode(bytes.slice(0, 6)) === "GIF8"
 	) {
-		return { bytes, mediaType: "image/gif" };
+		return { bytes, mimeType: "image/gif" };
 	}
 	if (
 		bytes.length >= 12 &&
 		new TextDecoder().decode(bytes.slice(0, 4)) === "RIFF" &&
 		new TextDecoder().decode(bytes.slice(8, 12)) === "WEBP"
 	) {
-		return { bytes, mediaType: "image/webp" };
+		return { bytes, mimeType: "image/webp" };
 	}
 	return unavailable();
 }
@@ -111,7 +111,7 @@ export async function readClipboardImage(
 		const content = await clipboard.read();
 		return content === undefined
 			? unavailable()
-			: { bytes: content.bytes, mediaType: content.mimeType };
+			: { bytes: content.bytes, mimeType: content.mimeType };
 	} catch {
 		return unavailable();
 	}

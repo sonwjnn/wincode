@@ -147,7 +147,7 @@ test("selecting a Plugin Command forwards arguments and displays its result", as
 			cwd: testDirectory,
 		});
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -178,7 +178,7 @@ test("Tab opens a Built-in Command that does not accept invocation arguments", a
 		expect(activeSetup.captureCharFrame()).toContain("Select Model");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -210,7 +210,7 @@ test("bare slash queries fuzzy-match Skills without the namespace", async () => 
 		expect(activeSetup.captureCharFrame()).toContain("/skill:model-4o ");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -262,7 +262,7 @@ test("the aggregate Skill suggestion enters namespaced search before selection",
 		expect(activeSetup.captureCharFrame()).toContain("/skill:model-4o ");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -293,7 +293,7 @@ test("Tab completes a Built-in Command that accepts invocation arguments", async
 		expect(activeSetup.captureCharFrame()).toContain("/compact ");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -454,7 +454,7 @@ test("filters a transposed skill query and keeps folder mentions searchable", as
 		expect(activeSetup.captureCharFrame()).toContain("No matching files");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -498,7 +498,7 @@ test("bare queries still find Skills whose names start with skills", async () =>
 		expect(activeSetup.captureCharFrame()).toContain("/skill:skills-helper ");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -551,7 +551,7 @@ test("restoring command results after no matches keeps the item aligned", async 
 		expect(commandColumn(activeSetup.captureCharFrame())).toBe(initialColumn);
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -584,7 +584,7 @@ test("an unmatched slash prompt submits as ordinary text", async () => {
 		expect(submittedFrame).toContain("Ask anything");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -634,7 +634,7 @@ test("a typed Skill invocation stays ordinary text", async () => {
 		expect(request).not.toContain("untrusted-skill-context");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -668,7 +668,7 @@ test("selecting a Skill keeps the prose around the trigger", async () => {
 		);
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -724,7 +724,7 @@ test("selecting a Skill keeps the text after the cursor", async () => {
 		expect(request).toContain("model-4o");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -781,7 +781,7 @@ test("a slash inside prose opens Skill search and Escape keeps the text", async 
 		expect(request).not.toContain("untrusted-skill-context");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();
@@ -811,7 +811,7 @@ test("hides the aggregate Skill suggestion when no Skills are discovered", async
 		expect(frame).toContain("No matching commands");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();

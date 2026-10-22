@@ -1,8 +1,4 @@
-import type {
-	NativeResourceOwner,
-	StyleDefinitionInput,
-	SyntaxStyle,
-} from "@opentui/core";
+import type { StyleDefinitionInput } from "@opentui/core";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
 
 export type SyntaxStyleVariant = "standard" | "thinking";
@@ -55,37 +51,3 @@ export const buildSyntaxStyles = (
 };
 
 export type SyntaxStyleSet = SyntaxStyleVariant | "composer";
-
-type CachedSyntaxStyles = {
-	key: string;
-	styles: Map<SyntaxStyleSet, SyntaxStyle>;
-};
-
-const cachedSyntaxStyles = new WeakMap<
-	NativeResourceOwner,
-	CachedSyntaxStyles
->();
-
-export const resolveSyntaxStyle = (
-	owner: NativeResourceOwner,
-	colors: ThemeColors,
-	key: SyntaxStyleSet,
-	build: () => SyntaxStyle
-): SyntaxStyle => {
-	const colorsKey = JSON.stringify(colors);
-	let cached = cachedSyntaxStyles.get(owner);
-	if (cached?.key !== colorsKey) {
-		for (const style of cached?.styles.values() ?? []) {
-			style.destroy();
-		}
-		cached = { key: colorsKey, styles: new Map() };
-		cachedSyntaxStyles.set(owner, cached);
-	}
-	const existing = cached.styles.get(key);
-	if (existing) {
-		return existing;
-	}
-	const style = build();
-	cached.styles.set(key, style);
-	return style;
-};

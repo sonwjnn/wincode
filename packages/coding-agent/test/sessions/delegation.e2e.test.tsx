@@ -245,7 +245,7 @@ test("projects delegated work as a separate durable Session, not parent transcri
 	} finally {
 		recorder.stepScript = priorStepScript;
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();

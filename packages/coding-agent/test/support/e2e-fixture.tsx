@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
@@ -317,17 +316,20 @@ export const cleanupSessionRender = (): void => {
 export const shutdownSessionHosts = (): Promise<void> =>
 	getInteractiveSessionHostManager().shutdownAll();
 
-export const writeE2EFrame = (setup: TestRendererSetup): void => {
+export const writeE2EFrame = async (
+	setup: TestRendererSetup
+): Promise<void> => {
 	const framePath = process.env.WINCODE_E2E_FRAME_PATH;
 	if (!framePath) {
 		return;
 	}
-	fs.mkdirSync(path.dirname(framePath), { recursive: true });
+	await setup.waitForVisualIdle();
 	const frame = captureTestFrame(setup);
 	if (frame === undefined) {
+		console.warn("Skipping E2E frame capture: OpenTUI buffer busy.");
 		return;
 	}
-	fs.writeFileSync(framePath, frame, "utf8");
+	await Bun.write(framePath, frame);
 };
 
 export const settleSessionUi = async (

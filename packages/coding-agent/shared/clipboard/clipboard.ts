@@ -92,6 +92,7 @@ const createAvailableHostClipboard = (): HostClipboardService => {
 const sanitizeClipboardText = (text: string): string =>
 	text.replaceAll("\0", "").toWellFormed();
 
+// OpenTUI exposes no error code for the write limit; its RangeError message is the only signal.
 const isWriteLimitError = (error: unknown): boolean =>
 	error instanceof RangeError && error.message.includes("byte limit");
 

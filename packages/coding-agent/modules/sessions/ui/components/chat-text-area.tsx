@@ -1177,7 +1177,7 @@ export function ChatTextArea({
 
 			stageImage(
 				image.bytes,
-				image.mediaType,
+				image.mimeType,
 				"unavailable" in pathImage ? "clipboard" : path.basename(pastedText)
 			);
 		},

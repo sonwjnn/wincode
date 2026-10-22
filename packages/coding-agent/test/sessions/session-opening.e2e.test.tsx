@@ -525,7 +525,7 @@ test("shows the opening state, then the session it opened", async () => {
 		await waitForSessionFrame(setup, (frame) =>
 			frame.includes("start this turn")
 		);
-		writeE2EFrame(setup);
+		await writeE2EFrame(setup);
 	} finally {
 		cleanupSessionRender();
 		setup?.renderer.destroy();
@@ -546,7 +546,7 @@ test("shows the failure when the session cannot open", async () => {
 		);
 		expect(setup.captureCharFrame()).not.toContain("Stored Session History");
 		expect(setup.captureCharFrame()).not.toContain("Refresh history");
-		writeE2EFrame(setup);
+		await writeE2EFrame(setup);
 	} finally {
 		cleanupSessionRender();
 		setup?.renderer.destroy();
@@ -984,7 +984,7 @@ test("starts the first turn from navigation state exactly once", async () => {
 		expect(chatRequests()[0]?.messages.at(-1)?.text).toContain(
 			"start this turn"
 		);
-		writeE2EFrame(setup);
+		await writeE2EFrame(setup);
 	} finally {
 		cleanupSessionRender();
 		setup?.renderer.destroy();
