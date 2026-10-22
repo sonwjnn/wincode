@@ -18,7 +18,7 @@ export type RendererSession = Readonly<{
 	renderer: CliRenderer;
 	render: (node: ReactNode) => void;
 	renderStartupBackground: () => void;
-	destroy: () => void;
+	destroy: () => void | Promise<void>;
 }>;
 
 export const createRendererSession = async (
@@ -41,19 +41,20 @@ export const createRendererSession = async (
 	const destroyRenderer = renderer.destroy.bind(renderer);
 	let destroyed = false;
 	let unregisterCrashTeardown: () => void = () => undefined;
-	const destroy = (): void => {
+	const destroy = (): void | Promise<void> => {
 		if (destroyed) {
 			return;
 		}
 		destroyed = true;
-		// Start native shutdown before unmounting so it is not cut short by renderer teardown.
-		void clipboard.dispose().catch(() => undefined);
+		// Start native shutdown before unmounting; return it so crash teardown can await it.
+		const disposal = clipboard.dispose().catch(() => undefined);
 		try {
 			root.unmount();
 		} finally {
 			unregisterCrashTeardown();
 			destroyRenderer();
 		}
+		return disposal;
 	};
 	unregisterCrashTeardown = registerCrashTeardown(destroy);
 	const render = (node: ReactNode): void => {

@@ -8,6 +8,7 @@ import { act } from "react";
 import { getGitRepositoryWebUrl } from "@/shared/git/get-git-branch";
 import { useGitBranch } from "@/shared/git/use-git-branch";
 import { runGit } from "./support/git";
+import { flushTestRenderer, requireTestFrame } from "./support/opentui";
 
 type BranchObserver = { current: string | null | undefined };
 
@@ -125,6 +126,8 @@ describe("git repository metadata", () => {
 		);
 		try {
 			await expectBranch(setup, observer, "feature/first");
+			await flushTestRenderer(setup);
+			expect(requireTestFrame(setup)).toContain("feature/first");
 			await runGit(worktree, ["checkout", "-b", "feature/next"]);
 			await expectBranch(setup, observer, "feature/next");
 		} finally {
