@@ -49,6 +49,6 @@ single ladder that no implementation used.
   the stored-tier order.
 - Reading the newest message's own choice stays inside the module. Callers that
   need only that tier — the SDK's next-turn defaults, the Agent-pin preflight's
-  per-record validation — call `restoreSelection` with the material they have
-  instead of scanning message metadata themselves.
+  per-record validation — ask for it by name instead of scanning message
+  metadata themselves.
 - `resolveOutgoingSelection` and its helpers are deleted; no caller used them.

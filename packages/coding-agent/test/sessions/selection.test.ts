@@ -204,6 +204,8 @@ test("next-chat default reads the newest message pair alone when it exists", () 
 
 	expect(selection?.model).toEqual(messageModel);
 	expect(selection?.agent).toBe(agentId("review"));
+	// The row's own Thinking level does not leak into a next-chat default.
+	expect(selection?.thinkingLevel).toBeUndefined();
 });
 
 test("next-chat default falls back to the stored tiers when no message pair exists", () => {

@@ -13,9 +13,7 @@ import {
 	normalizeProviderModelSelection,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
-import type { SkillRequestContext } from "@/modules/skills";
 import type { SessionMessage } from "./message";
-import { sessionMessageSkillSchema } from "./message";
 
 /**
  * The Session Selection module owns Model, Agent, and ThinkingLevel precedence
@@ -31,8 +29,7 @@ import { sessionMessageSkillSchema } from "./message";
  * `nextChatSelection` is the narrower next-chat variant, and
  * `restorableSelectionModel` owns the restore guard: a Session restores only a
  * Model its selected Agent can still run. The module also owns the strict read
- * of an explicit ThinkingLevel in a request and the Skill context a new turn
- * inherits from message metadata.
+ * of an explicit ThinkingLevel in a request.
  *
  * Defaults for a Session that never recorded a choice are a separate question:
  * `sessionSelectionDefaults` resolves them, and each caller composes them with
@@ -175,14 +172,6 @@ const findLastUsedThinkingSelection = (
 
 type RecordedTier = RecordedSelection & Readonly<{ source: SelectionSource }>;
 
-const messageTier = (
-	persisted: LastUsedSelection | undefined
-): RecordedTier => ({
-	source: "message",
-	model: persisted?.model,
-	thinkingLevel: persisted?.thinkingLevel,
-});
-
 /** The recorded tiers, highest precedence first. Agent has no session-row tier. */
 const recordedTiers = (
 	material: SessionSelectionMaterial,
@@ -193,7 +182,11 @@ const recordedTiers = (
 		model: material.row?.model,
 		thinkingLevel: material.row?.thinkingLevel,
 	},
-	messageTier(persisted),
+	{
+		source: "message",
+		model: persisted?.model,
+		thinkingLevel: persisted?.thinkingLevel,
+	},
 	{
 		source: "refs",
 		model: material.refs?.model,
@@ -275,7 +268,7 @@ export const nextChatSelection = (
 		model: persisted.model,
 		persistedAgent: persisted.agent,
 		source: "message",
-		thinkingLevel: normalizeThinkingLevel(persisted.thinkingLevel),
+		thinkingLevel: persisted.thinkingLevel,
 	};
 };
 
@@ -364,31 +357,6 @@ export const restorableSelectionModel = (
 	return isSameProviderModelIdentity(selection.model, pinnedModel)
 		? selection.model
 		: undefined;
-};
-
-/**
- * Resolves the Skill payload the current user turn carries for the model loop.
- * Sanitized activation metadata without instructions means the Skill no longer
- * applies and returns `undefined`.
- */
-export const getOriginatingUserSkill = (
-	messages: readonly SessionMessage[]
-): SkillRequestContext | undefined => {
-	const message = [...messages].reverse().find(({ role }) => role === "user");
-	const parsed = sessionMessageSkillSchema.safeParse(message?.metadata?.skill);
-	if (!parsed.success) {
-		return;
-	}
-	const skill = parsed.data;
-	if (!("instructions" in skill)) {
-		return;
-	}
-	return {
-		contentHash: skill.contentHash,
-		instructions: skill.instructions,
-		name: skill.name,
-		source: skill.source ?? "explicit",
-	};
 };
 
 /**

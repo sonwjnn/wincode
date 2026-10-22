@@ -2,7 +2,7 @@ import type { PluginSessionContext } from "@/modules/plugins/public";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProviderModelSelectionForHost } from "@/modules/providers/provider-model-selection";
 import type { SessionId } from "@/shared/identifiers";
-import { restoreSelection } from "../selection";
+import { nextChatSelection, restoreSelection } from "../selection";
 import { projectSessionMessageRecords } from "../storage/session-record";
 import { createSessionHost } from "./session-host";
 import type {
@@ -289,7 +289,7 @@ export const createSessionHostManager = (
 		// The Session's recorded tiers, and the newest message's own choice when
 		// an Agent pin has to be validated against every identity it may restore.
 		const restored = restoreSelection({ messages, row: session });
-		const lastMessageModel = restoreSelection({ messages })?.model;
+		const lastMessageModel = nextChatSelection({ messages })?.model;
 		const pluginRuntime =
 			capabilities.getPluginRuntime?.() ?? currentPluginRuntime;
 		const trustedRegistrations =
