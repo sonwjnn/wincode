@@ -94,8 +94,14 @@ export type LoadedPlugin = Readonly<{
 	workspace: string;
 }>;
 
+export type LoadedPluginReference = Readonly<{
+	id: string;
+	sourcePath: string;
+}>;
+
 export type PluginRuntime = Readonly<{
 	readonly diagnostics: readonly PluginDiagnostic[];
+	getLoadedPlugins: () => readonly LoadedPluginReference[];
 	disablePlugin: (pluginId: string, message: string) => void;
 	executeCommand: (
 		pluginId: string,
@@ -712,6 +718,13 @@ export const createPluginRuntime = (
 				);
 				throw commandFailure(name);
 			}
+		},
+		getLoadedPlugins() {
+			return Object.freeze(
+				plugins
+					.filter((plugin) => isEnabledForSession(plugin))
+					.map(({ id, sourcePath }) => Object.freeze({ id, sourcePath }))
+			);
 		},
 		getAgentRegistrations() {
 			return Object.freeze(

@@ -43,6 +43,9 @@ export const getInteractiveRuntimeContext = (): StartInteractiveInput => {
 	return runtimeContext;
 };
 
+export const getInteractiveStartupDiagnostics = (): readonly string[] =>
+	runtimeContext?.startupDiagnostics ?? [];
+
 export const getInteractivePluginRuntime = (): PluginRuntime | undefined =>
 	runtimeContext?.pluginRuntime;
 

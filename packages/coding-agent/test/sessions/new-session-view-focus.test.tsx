@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { TextareaRenderable } from "@opentui/core";
+import { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import {
@@ -42,6 +42,7 @@ import {
 	type InteractiveSessionProviderCollection,
 } from "@/modules/sessions/provider-collection";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+import { CompactNameList } from "@/modules/sessions/ui/components/startup-overview";
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import {
@@ -429,7 +430,118 @@ const submitHomePrompt = async (setup: TestRendererSetup): Promise<void> => {
 	await flushTestRenderer(setup, 20);
 };
 
+describe("startup resource name wrapping", () => {
+	test("keeps a long resource name intact when the list wraps", async () => {
+		const setup = await testRender(
+			<CompactNameList
+				color="#ffffff"
+				items={[
+					{ key: "alpha", name: "alpha" },
+					{ key: "beta", name: "beta" },
+					{ key: "folder-structure", name: "folder-structure" },
+					{ key: "next", name: "next" },
+				]}
+			/>,
+			{ height: 4, width: 22 }
+		);
+		try {
+			await act(async () => setup.renderOnce());
+			const lines = setup.captureCharFrame().split("\n");
+			const firstNameLine = lines.find((line) => line.includes("alpha,"));
+			expect(firstNameLine?.indexOf("alpha,")).toBe(1);
+			const longNameLine = lines.find((line) =>
+				line.includes("folder-structure,")
+			);
+			expect(longNameLine).toBeDefined();
+			expect(longNameLine?.indexOf("folder-structure,")).toBe(0);
+			expect(
+				lines.some(
+					(line) =>
+						line.includes("folder-") && !line.includes("folder-structure")
+				)
+			).toBe(false);
+		} finally {
+			await act(async () => setup.renderer.destroy());
+		}
+	});
+});
+
 describe("NewSessionView composer focus", () => {
+	test("shows a compact startup overview above the new-session composer", async () => {
+		const setup = await renderHomeView(createTestHomeProviderCollection);
+		try {
+			await flushTestRenderer(setup);
+			const frame = captureNormalizedHomeFrame(setup);
+			expect(frame).toContain("Wincode v");
+			expect(frame).toContain("Click or press Ctrl+O to show");
+			expect(frame).not.toContain("Agent Build");
+			expect(frame).not.toContain("Notices:");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("Ctrl+O expands startup resources without moving focus from the composer", async () => {
+		const pluginRuntime = createPluginRuntime(
+			[
+				{
+					commands: [],
+					id: "startup-overview-plugin",
+					sourcePath: "/trusted/plugins/startup-overview.ts",
+					tools: [],
+					workspace: process.cwd(),
+				},
+			],
+			[]
+		);
+		const setup = await renderHomeView(createTestHomeProviderCollection, {
+			pluginRuntime,
+		});
+		let expanded = false;
+		try {
+			await act(async () => {
+				setup.mockInput.pressKey("o", { ctrl: true });
+				await setup.renderOnce();
+			});
+			expanded = true;
+			await waitForHomeFrame(
+				setup,
+				"Ctrl+O to collapse startup help and resources"
+			);
+			const startupScrollbox = setup.renderer.root.findDescendantById(
+				"new-session-view-startup-scrollbox"
+			);
+			expect(startupScrollbox).toBeInstanceOf(ScrollBoxRenderable);
+			if (!(startupScrollbox instanceof ScrollBoxRenderable)) {
+				throw new Error("The startup overview is not scrollable.");
+			}
+			startupScrollbox.scrollChildIntoView(
+				"startup-plugin-startup-overview-plugin"
+			);
+			await act(async () => setup.renderOnce());
+			const pluginRow = setup
+				.captureCharFrame()
+				.split("\n")
+				.find((line) => line.includes("startup-overview-plugin"));
+			expect(pluginRow?.indexOf("startup-overview-plugin")).toBeGreaterThan(0);
+			const frame = captureNormalizedHomeFrame(setup);
+			expect(frame).toContain("Ctrl+O to collapse startup help and resources");
+			expect(frame).toContain("[Plugins]");
+			expect(frame).toContain("startup-overview-plugin");
+			expect(setup.renderer.currentFocusedRenderable?.id ?? null).toBe(
+				"new-session-view-composer"
+			);
+		} finally {
+			if (expanded) {
+				await act(async () => {
+					setup.mockInput.pressKey("o", { ctrl: true });
+					await setup.renderOnce();
+				});
+			}
+			setup.renderer.destroy();
+		}
+	});
+
 	test("Home restores Provider snapshots before availability reads and closes its collection on unmount", async () => {
 		const operations: string[] = [];
 		const createCollection: HomeProviderCollectionFactory = async (
@@ -992,7 +1104,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
-			expect(captureNormalizedHomeFrame(setup)).toContain("∙ low");
+			expect(captureNormalizedHomeFrame(setup)).toContain(":low");
 			await submitHomePrompt(setup);
 			const [session] = await store.listSessions();
 			if (session === undefined) {
@@ -1038,9 +1150,9 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 				pendingSnapshot.resolve([]);
 				await Promise.resolve();
 			});
-			await waitForHomeFrame(setup, "openai/gpt-5.6-luna ∙ low");
+			await waitForHomeFrame(setup, "openai/gpt-5.6-luna:low");
 			expect(captureNormalizedHomeFrame(setup)).toContain(
-				"openai/gpt-5.6-luna ∙ low"
+				"openai/gpt-5.6-luna:low"
 			);
 		} finally {
 			pendingSnapshot.resolve([]);
@@ -1074,8 +1186,8 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		});
 
 		try {
-			await waitForHomeFrame(setup, "∙ low");
-			expect(captureNormalizedHomeFrame(setup)).toContain("∙ low");
+			await waitForHomeFrame(setup, ":low");
+			expect(captureNormalizedHomeFrame(setup)).toContain(":low");
 		} finally {
 			pendingSnapshot.resolve([]);
 			await act(() => setup.renderer.destroy());
@@ -1107,7 +1219,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
-			expect(captureNormalizedHomeFrame(setup)).toContain("∙ high");
+			expect(captureNormalizedHomeFrame(setup)).toContain(":high");
 
 			await submitHomePrompt(setup);
 			const [session] = await store.listSessions();

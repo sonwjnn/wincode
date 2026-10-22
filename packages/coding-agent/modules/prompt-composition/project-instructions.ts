@@ -13,7 +13,6 @@ import {
 } from "@/shared/paths/project-roots";
 
 export const PROJECT_INSTRUCTION_FILE_NAME = "AGENTS.md";
-export const MAX_PROJECT_INSTRUCTION_SOURCE_CHARS = 12_000;
 export const MAX_PROJECT_INSTRUCTION_TOTAL_BYTES = 24 * 1024;
 const MAX_PROJECT_INSTRUCTION_CACHE_ENTRIES = 32;
 const projectInstructionEncoder = new TextEncoder();
@@ -57,10 +56,8 @@ export const escapeXml = (value: string): string =>
 export const escapePromptValue = (value: string): string =>
 	escapeControlCharacters(escapeXml(value), isPromptControlCode);
 
-const MAX_PROJECT_INSTRUCTION_SOURCE_BYTES =
-	MAX_PROJECT_INSTRUCTION_SOURCE_CHARS * 4 + 3;
 const MAX_PROJECT_INSTRUCTION_READ_BYTES =
-	MAX_PROJECT_INSTRUCTION_SOURCE_BYTES + 1;
+	MAX_PROJECT_INSTRUCTION_TOTAL_BYTES + 1;
 const PROJECT_INSTRUCTION_OPEN_FLAGS =
 	// biome-ignore lint/suspicious/noBitwiseOperators: POSIX open flags are bit masks.
 	fs.constants.O_RDONLY |
@@ -103,8 +100,7 @@ export type ProjectInstructionDiagnosticCode =
 	| "invalid-utf8"
 	| "not-a-file"
 	| "project-total-too-large"
-	| "read-error"
-	| "source-too-large";
+	| "read-error";
 
 export type ProjectInstructionDiagnostic = {
 	readonly byteLength?: number;
@@ -391,8 +387,6 @@ const diagnosticMessage = (code: ProjectInstructionDiagnosticCode): string => {
 	switch (code) {
 		case "invalid-utf8":
 			return "Project instruction source is not valid UTF-8.";
-		case "source-too-large":
-			return `Project instruction source exceeds the ${MAX_PROJECT_INSTRUCTION_SOURCE_CHARS}-character limit.`;
 		case "project-total-too-large":
 			return `Project instructions exceed the ${MAX_PROJECT_INSTRUCTION_TOTAL_BYTES}-byte limit.`;
 		case "not-a-file":
@@ -415,9 +409,20 @@ const invalidDiagnostic = (
 	sourcePath,
 });
 type SourceInspection = {
-	readonly byteLength?: number;
+	readonly byteLength: number;
 	readonly characterLength?: number;
 	readonly exceedsLimit: boolean;
+};
+
+const utf8CharacterByteLength = (character: string): number => {
+	const codePoint = character.codePointAt(0) ?? 0xff_fd;
+	if (codePoint <= 0x7f) {
+		return 1;
+	}
+	if (codePoint <= 0x7_ff) {
+		return 2;
+	}
+	return codePoint <= 0xff_ff ? 3 : 4;
 };
 
 const inspectSourceSize = (value: Uint8Array | string): SourceInspection => {
@@ -425,17 +430,19 @@ const inspectSourceSize = (value: Uint8Array | string): SourceInspection => {
 		const byteLength = value.byteLength;
 		return {
 			byteLength,
-			exceedsLimit: byteLength > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES,
+			exceedsLimit: byteLength > MAX_PROJECT_INSTRUCTION_TOTAL_BYTES,
 		};
 	}
+	let byteLength = 0;
 	let characterLength = 0;
-	for (const _character of value) {
+	for (const character of value) {
+		byteLength += utf8CharacterByteLength(character);
 		characterLength += 1;
-		if (characterLength > MAX_PROJECT_INSTRUCTION_SOURCE_CHARS) {
-			return { characterLength, exceedsLimit: true };
+		if (byteLength > MAX_PROJECT_INSTRUCTION_TOTAL_BYTES) {
+			return { byteLength, characterLength, exceedsLimit: true };
 		}
 	}
-	return { characterLength, exceedsLimit: false };
+	return { byteLength, characterLength, exceedsLimit: false };
 };
 
 type LoadedProjectInstructionSource = {
@@ -474,7 +481,7 @@ const readSource = async (
 		return {
 			diagnostic: invalidDiagnostic(
 				candidate.sourcePath,
-				"source-too-large",
+				"project-total-too-large",
 				sourceInspection.byteLength,
 				sourceInspection.characterLength
 			),
@@ -495,19 +502,6 @@ const readSource = async (
 	}
 	const characterLength =
 		sourceInspection.characterLength ?? countCharacters(content);
-	if (
-		isUndefined(sourceInspection.characterLength) &&
-		characterLength > MAX_PROJECT_INSTRUCTION_SOURCE_CHARS
-	) {
-		return {
-			diagnostic: invalidDiagnostic(
-				candidate.sourcePath,
-				"source-too-large",
-				bytes.byteLength,
-				characterLength
-			),
-		};
-	}
 
 	const contentHash = new Bun.CryptoHasher("sha256")
 		.update(bytes)
@@ -525,7 +519,7 @@ const readSource = async (
 		return {
 			diagnostic: invalidDiagnostic(
 				candidate.sourcePath,
-				"source-too-large",
+				"project-total-too-large",
 				bytes.byteLength,
 				characterLength
 			),
@@ -568,12 +562,12 @@ const loadSourceCandidate = async (
 	if (
 		fileMetadata.kind === "present" &&
 		!isNull(fileMetadata.size) &&
-		fileMetadata.size > MAX_PROJECT_INSTRUCTION_SOURCE_BYTES
+		fileMetadata.size > MAX_PROJECT_INSTRUCTION_TOTAL_BYTES
 	) {
 		return {
 			diagnostic: invalidDiagnostic(
 				candidate.sourcePath,
-				"source-too-large",
+				"project-total-too-large",
 				fileMetadata.size
 			),
 		};
@@ -716,6 +710,25 @@ const freezeSnapshot = (
 			snapshot.sources.map((source) => Object.freeze(source))
 		),
 	});
+
+/** Uses the same workspace boundary and current directory for preview and turn composition. */
+export const createWorkspaceProjectInstructionSnapshot = async (
+	input: ProjectInstructionSnapshotInput & { readonly cwd?: string },
+	cache?: Map<string, ProjectInstructionSnapshot>
+): Promise<ProjectInstructionSnapshot> => {
+	const workspace = await canonicalPath(input.workspace);
+	const cwd = await canonicalPath(input.cwd ?? input.workspace);
+	return createProjectInstructionSnapshot(
+		{
+			...input,
+			workspace: cwd,
+			provenanceWorkspace: workspace,
+			projectRoots:
+				input.projectRoots ?? getProjectRootsWithinWorkspace(workspace, cwd),
+		},
+		cache
+	);
+};
 
 /**
  * Loads only AGENTS.md from the active root-to-workspace chain. Each source is

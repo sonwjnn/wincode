@@ -1,16 +1,13 @@
 import type { ResolvedAgent, ResolvedTool } from "@wincode/agent-core";
 import { isNull, isUndefined } from "@wincode/utils";
 import {
-	canonicalPath,
-	getProjectRootsWithinWorkspace,
-} from "@/shared/paths/project-roots";
-import {
 	createEnvironmentSnapshot,
 	type PromptEnvironmentSnapshot,
 	type PromptEnvironmentSnapshotInput,
 } from "./environment";
 import {
 	createProjectInstructionSnapshot,
+	createWorkspaceProjectInstructionSnapshot,
 	escapePromptValue,
 	type ProjectInstructionDiagnostic,
 	type ProjectInstructionFileSystem,
@@ -353,23 +350,11 @@ export const createPromptCompositionPipeline = (
 ): PromptCompositionPipeline => ({
 	composeSystemPrompt,
 	snapshot: async (input) => {
-		const workspace = await canonicalPath(input.workspace);
-		const cwd = await canonicalPath(input.cwd ?? input.workspace);
-		const projectInstructions = await createProjectInstructionSnapshot(
-			{
-				fs: input.fs,
-				projectRoots:
-					input.projectRoots ?? getProjectRootsWithinWorkspace(workspace, cwd),
-				provenanceWorkspace: workspace,
-				workspace: cwd,
-			},
+		const projectInstructions = await createWorkspaceProjectInstructionSnapshot(
+			input,
 			cache
 		);
-		const environment = await createEnvironmentSnapshot({
-			...input,
-			cwd,
-			workspace,
-		});
+		const environment = await createEnvironmentSnapshot(input);
 		return { environment, projectInstructions };
 	},
 	snapshotEnvironment: createEnvironmentSnapshot,

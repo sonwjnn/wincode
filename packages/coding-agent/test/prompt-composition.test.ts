@@ -526,12 +526,26 @@ describe("Prompt Composition", () => {
 			new Date().toISOString().slice(0, 10)
 		);
 	});
-	test("omits oversized files without truncating valid sources", async () => {
+	test("loads a large AGENTS.md when it fits the aggregate byte budget", async () => {
+		const content = "a".repeat(12_566);
+		const snapshot = await createProjectInstructionSnapshot({
+			fs: fileSystem({ "/repo/AGENTS.md": content }),
+			projectRoots: ["/repo"],
+			workspace: "/repo",
+		});
+
+		expect(snapshot.sources).toHaveLength(1);
+		expect(snapshot.sources[0]?.sourcePath).toBe("AGENTS.md");
+		expect(snapshot.sources[0]?.content).toBe(content);
+		expect(snapshot.diagnostics).toEqual([]);
+	});
+
+	test("omits sources beyond the aggregate budget without truncating retained sources", async () => {
 		const files = {
 			"/repo/AGENTS.md": "r".repeat(12_000),
 			"/repo/packages/AGENTS.md": "p".repeat(12_000),
 			"/repo/packages/coding-agent/AGENTS.md": "t".repeat(1000),
-			"/repo/packages/coding-agent/src/AGENTS.md": "s".repeat(12_001),
+			"/repo/packages/coding-agent/src/AGENTS.md": "s".repeat(24 * 1024 + 1),
 		};
 		const snapshot = await createProjectInstructionSnapshot({
 			fs: fileSystem(files),
@@ -562,11 +576,11 @@ describe("Prompt Composition", () => {
 			}))
 		).toEqual([
 			{ code: "project-total-too-large", sourcePath: "../../AGENTS.md" },
-			{ code: "source-too-large", sourcePath: "src/AGENTS.md" },
+			{ code: "project-total-too-large", sourcePath: "src/AGENTS.md" },
 		]);
 	});
 
-	test("rejects a source whose escaped XML exceeds the byte limit", async () => {
+	test("rejects a source whose escaped XML exceeds the aggregate byte budget", async () => {
 		const content = "&".repeat(12_000);
 		const snapshot = await createProjectInstructionSnapshot({
 			fs: fileSystem({ "/repo/AGENTS.md": content }),
@@ -579,10 +593,9 @@ describe("Prompt Composition", () => {
 			{
 				byteLength: 12_000,
 				characterLength: 12_000,
-				code: "source-too-large",
-				message:
-					"Project instruction source exceeds the 12000-character limit.",
-				reason: "source-too-large",
+				code: "project-total-too-large",
+				message: "Project instructions exceed the 24576-byte limit.",
+				reason: "project-total-too-large",
 				sourcePath: "AGENTS.md",
 			},
 		]);
@@ -668,8 +681,8 @@ describe("Prompt Composition", () => {
 		).toEqual([{ code: "read-error", sourcePath: "../AGENTS.md" }]);
 	});
 
-	test("applies the per-source limit to characters before encoded bytes", async () => {
-		const content = "é".repeat(11_000);
+	test("allows multibyte instruction sources above the former character limit within the byte budget", async () => {
+		const content = "é".repeat(12_100);
 		const snapshot = await createProjectInstructionSnapshot({
 			fs: fileSystem({ "/repo/AGENTS.md": content }),
 			projectRoots: ["/repo"],
@@ -677,8 +690,8 @@ describe("Prompt Composition", () => {
 		});
 
 		expect(snapshot.sources[0]).toMatchObject({
-			byteLength: 22_000,
-			characterLength: 11_000,
+			byteLength: 24_200,
+			characterLength: 12_100,
 			content,
 		});
 		expect(snapshot.diagnostics).toEqual([]);
