@@ -66,9 +66,9 @@ import {
 	getPluginProviderRegistrationsFromCollection,
 } from "@/modules/sessions/provider-collection";
 import {
-	getLastUsedSelection,
 	resolveRestoredSessionSdkSelection,
 	resolveSessionSdkPromptSelection,
+	restoreSelection,
 	type SessionSdkSelectionDefaults,
 	sessionSelectionDefaults,
 } from "@/modules/sessions/selection";
@@ -1057,19 +1057,11 @@ const createSessionSdkInternal = async (
 			const sessionId = toSessionId(id);
 			const stored = await assembly.store.getSession(sessionId);
 			const records = await assembly.store.listSessionRecords(sessionId);
-			const persistedSelection = getLastUsedSelection(
-				records.flatMap((record) =>
+			const priorSelection = restoreSelection({
+				messages: records.flatMap((record) =>
 					projectSessionMessageRecords(record.messages, record)
-				)
-			);
-			const priorSelection =
-				persistedSelection === undefined
-					? null
-					: {
-							agent: persistedSelection.agent,
-							model: persistedSelection.model,
-							thinkingLevel: persistedSelection.thinkingLevel,
-						};
+				),
+			});
 			const hasStoredProviderModelSelection =
 				stored.model !== undefined || priorSelection !== null;
 			const fallbackSelection = hasStoredProviderModelSelection

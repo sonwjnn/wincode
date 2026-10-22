@@ -19,7 +19,9 @@ single ladder that no implementation used.
 ## Decision
 
 - `restoreSelection(material)` in `modules/sessions/selection.ts` is the only
-  order table for stored tiers. It merges the session row, then message
+  place the recorded tiers are ordered. A caller that already holds a restored
+  value may still prefer its own current prompt-config pick; that is the refs
+  tier expressed at the call site, not a second order table. It merges the session row, then message
   metadata, then prompt-config refs, and reports the tier that supplied the
   Model as `source`, so a caller can tell a restored choice from a ref it passed
   in. It returns nothing when no tier carries a Model.
@@ -45,4 +47,8 @@ single ladder that no implementation used.
   then the handle's defaults) remains its own documented variant. It answers a
   different question — what an already-open handle defaults to next — and is not
   the stored-tier order.
+- Reading the newest message's own choice stays inside the module. Callers that
+  need only that tier — stored-history display, the Agent-pin preflight, the SDK's
+  next-turn defaults, One-Shot preflight — call `restoreSelection` without a row
+  or refs instead of scanning metadata themselves.
 - `resolveOutgoingSelection` and its helpers are deleted; no caller used them.

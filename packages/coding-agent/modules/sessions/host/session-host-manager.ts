@@ -2,7 +2,7 @@ import type { PluginSessionContext } from "@/modules/plugins/public";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProviderModelSelectionForHost } from "@/modules/providers/provider-model-selection";
 import type { SessionId } from "@/shared/identifiers";
-import { getLastUsedSelection } from "../selection";
+import { restoreSelection } from "../selection";
 import { projectSessionMessageRecords } from "../storage/session-record";
 import { createSessionHost } from "./session-host";
 import type {
@@ -283,17 +283,22 @@ export const createSessionHostManager = (
 			store.getSession(sessionId),
 			store.listSessionRecords(sessionId),
 		]);
-		const persisted = getLastUsedSelection(
-			records.flatMap((record) =>
-				projectSessionMessageRecords(record.messages, record)
-			)
+		const messages = records.flatMap((record) =>
+			projectSessionMessageRecords(record.messages, record)
 		);
+		// The Session's recorded tiers, and the newest message's own choice when
+		// an Agent pin has to be validated against every identity it may restore.
+		const restored = restoreSelection({
+			messages,
+			row: { model: session.model, thinkingLevel: session.thinkingLevel },
+		});
+		const lastMessageModel = restoreSelection({ messages })?.model;
 		const pluginRuntime =
 			capabilities.getPluginRuntime?.() ?? currentPluginRuntime;
 		const trustedRegistrations =
 			pluginRuntime?.getProviderRegistrations() ?? [];
 		if (agentPinSelection !== undefined) {
-			for (const storedSelection of [session.model, persisted?.model]) {
+			for (const storedSelection of [session.model, lastMessageModel]) {
 				if (storedSelection !== undefined) {
 					resolveProviderModelSelectionForHost(
 						storedSelection,
@@ -302,8 +307,7 @@ export const createSessionHostManager = (
 				}
 			}
 		}
-		const selection =
-			providerModel ?? agentPinSelection ?? session.model ?? persisted?.model;
+		const selection = providerModel ?? agentPinSelection ?? restored?.model;
 		resolveProviderModelSelectionForHost(selection, trustedRegistrations);
 	};
 	const getOpenEntry = async (

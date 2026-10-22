@@ -214,27 +214,40 @@ test("next-chat default reports nothing when no tier carries a Model", () => {
 	).toBeNull();
 });
 
-test("defaults prefer an explicit choice over the Agent pin and the product default", () => {
+test("defaults use the selected Agent's pinned Model when nothing is chosen", () => {
 	expect(sessionSelectionDefaults(registryWithPin(rowModel), {}).model).toEqual(
 		rowModel
 	);
+});
+
+test("defaults keep an explicit Model over the Agent pin", () => {
 	expect(
 		sessionSelectionDefaults(registryWithPin(rowModel), { model: refsModel })
 			.model
 	).toEqual(refsModel);
-	expect(sessionSelectionDefaults(null, {}).model).toEqual(
-		DEFAULT_PROVIDER_MODEL_SELECTION
-	);
-	expect(sessionSelectionDefaults(null, {}).agent).toBe(DEFAULT_AGENT_ID);
+});
+
+test("defaults fall back to the product Agent and Model without a registry", () => {
+	const defaults = sessionSelectionDefaults(null, {});
+
+	expect(defaults.model).toEqual(DEFAULT_PROVIDER_MODEL_SELECTION);
+	expect(defaults.agent).toBe(DEFAULT_AGENT_ID);
+});
+
+test("defaults reject an Agent selector that is not an identifier", () => {
+	expect(() =>
+		sessionSelectionDefaults(null, { agent: "Not An Agent" })
+	).toThrow("Invalid Agent Identifier");
 });
 
 test("defaults take the Agent's own Thinking level", () => {
-	const defaults = sessionSelectionDefaults(
-		registryWithPin(rowModel, "medium"),
-		{}
-	);
+	expect(
+		sessionSelectionDefaults(registryWithPin(rowModel, "medium"), {})
+			.thinkingLevel
+	).toBe("medium");
+});
 
-	expect(defaults.thinkingLevel).toBe("medium");
+test("defaults keep an explicit Thinking level over the Agent's", () => {
 	expect(
 		sessionSelectionDefaults(registryWithPin(rowModel, "medium"), {
 			thinkingLevel: "max",
@@ -242,7 +255,7 @@ test("defaults take the Agent's own Thinking level", () => {
 	).toBe("max");
 });
 
-test("the restored Model is only restorable while the Agent pin still matches it", () => {
+test("a restored Model is restorable while the Agent pin still matches it", () => {
 	const selection = restoreSelection({
 		messages: [messageWithSelection("m1", messageModel)],
 	});
@@ -250,6 +263,13 @@ test("the restored Model is only restorable while the Agent pin still matches it
 	expect(restorableSelectionModel(selection, { ...messageModel })).toEqual(
 		messageModel
 	);
+});
+
+test("a restored Model the Agent pin no longer matches is not restorable", () => {
+	const selection = restoreSelection({
+		messages: [messageWithSelection("m1", messageModel)],
+	});
+
 	expect(restorableSelectionModel(selection, rowModel)).toBeUndefined();
 });
 

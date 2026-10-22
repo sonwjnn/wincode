@@ -36,18 +36,18 @@ import { sessionMessageSkillSchema } from "./message";
 
 export type SelectionSource = "row" | "message" | "refs";
 
-export type SessionSelectionRefs = {
+export type SessionSelectionRefs = Readonly<{
 	agent?: AgentId;
 	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
-};
+}>;
 
 export type SessionSelectionMaterial = Readonly<{
 	messages: readonly SessionMessage[];
 	/** The caller's current prompt-config selection. */
 	refs?: SessionSelectionRefs;
 	/** Resolve a recorded Agent against the live registry. */
-	resolveAgent?: (agentId: AgentId | undefined) => AgentId | undefined;
+	resolveAgent?: (agentId: AgentId) => AgentId;
 	/** The durable session row, which records the session-level choice. */
 	row?: Readonly<{
 		model?: ProviderModelSelection;
@@ -55,12 +55,12 @@ export type SessionSelectionMaterial = Readonly<{
 	}>;
 }>;
 
-export type ResolvedSessionSelection = {
+export type ResolvedSessionSelection = Readonly<{
 	agent: AgentId | undefined;
 	persistedAgent: AgentId | undefined;
 	model: ProviderModelSelection;
 	thinkingLevel: ThinkingLevel | undefined;
-};
+}>;
 
 export type SessionSelection = ResolvedSessionSelection &
 	Readonly<{ source: SelectionSource }>;
@@ -111,7 +111,7 @@ const hasThinkingSelection = (choice: ThinkingSelection): boolean =>
  * to the last choice used with that model, because a user message submitted
  * without re-picking a choice drops that key at the JSON round trip.
  */
-export const getLastUsedSelection = (
+const getLastUsedSelection = (
 	messages: readonly SessionMessage[]
 ): LastUsedSelection | undefined => {
 	let selection: { agent: AgentId; model: ProviderModelSelection } | undefined;
@@ -169,6 +169,21 @@ const findLastUsedThinkingSelection = (
 	return {};
 };
 
+/** The tier that supplies the Model, and the Model itself, in one decision. */
+const selectionTier = (
+	rowModel: ProviderModelSelection | undefined,
+	messageModel: ProviderModelSelection | undefined,
+	refsModel: ProviderModelSelection | undefined
+): readonly [SelectionSource, ProviderModelSelection | undefined] => {
+	if (rowModel !== undefined) {
+		return ["row", rowModel];
+	}
+	if (messageModel !== undefined) {
+		return ["message", messageModel];
+	}
+	return ["refs", refsModel];
+};
+
 /**
  * The selection a Session restores from its recorded tiers, merging sources in
  * one fixed order per value — session row, then message metadata, then
@@ -186,7 +201,11 @@ export const restoreSelection = (
 ): SessionSelection | null => {
 	const rowModel = material.row?.model;
 	const persisted = getLastUsedSelection(material.messages);
-	const model = rowModel ?? persisted?.model ?? material.refs?.model;
+	const [source, model] = selectionTier(
+		rowModel,
+		persisted?.model,
+		material.refs?.model
+	);
 	if (model === undefined) {
 		return null;
 	}
@@ -194,7 +213,7 @@ export const restoreSelection = (
 	const persistedAgent = persisted?.agent ?? material.refs?.agent;
 	const agent =
 		material.resolveAgent && !isUndefined(persistedAgent)
-			? (material.resolveAgent(persistedAgent) ?? persistedAgent)
+			? material.resolveAgent(persistedAgent)
 			: persistedAgent;
 
 	const sessionChoice = normalizeSelectionChoice(
@@ -216,13 +235,6 @@ export const restoreSelection = (
 	if (hasThinkingSelection(sessionChoice)) {
 		choice = sessionChoice;
 	}
-
-	const source: SelectionSource = (() => {
-		if (rowModel !== undefined) {
-			return "row";
-		}
-		return persisted?.model === undefined ? "refs" : "message";
-	})();
 
 	return {
 		agent,
@@ -249,7 +261,7 @@ export const nextChatSelection = (
 
 	return {
 		agent: material.resolveAgent
-			? (material.resolveAgent(persisted.agent) ?? persisted.agent)
+			? material.resolveAgent(persisted.agent)
 			: persisted.agent,
 		model: persisted.model,
 		persistedAgent: persisted.agent,

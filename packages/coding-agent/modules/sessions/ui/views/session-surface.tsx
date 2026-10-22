@@ -42,7 +42,6 @@ import {
 } from "@/modules/sessions/message";
 import { getPluginProviderRegistrationsFromCollection } from "@/modules/sessions/provider-collection";
 import {
-	getLastUsedSelection,
 	restorableSelectionModel,
 	restoreSelection,
 } from "@/modules/sessions/selection";
@@ -221,7 +220,10 @@ const loadStoredSessionHistory = async (
 		: savedTranscript;
 	return {
 		compactions,
-		model: row.model ?? getLastUsedSelection(savedTranscript)?.model,
+		model: restoreSelection({
+			messages: savedTranscript,
+			row: { model: row.model, thinkingLevel: row.thinkingLevel },
+		})?.model,
 		sessionTitle: row.title,
 		transcript,
 	};
@@ -250,15 +252,13 @@ const resolveCurrentAgentPin = async ({
 		store.listSessionRecords(sessionId),
 	]);
 	const transcript = projectSessionRecords(records);
-	const persisted = getLastUsedSelection(transcript);
-	const sessionModel = row.model ?? undefined;
 	const storedSelection = restoreSelection({
 		messages: transcript,
 		resolveAgent: (persistedAgent) =>
 			resolveActiveAgentId(registry, persistedAgent),
 		row: {
-			model: sessionModel,
-			thinkingLevel: row.thinkingLevel ?? undefined,
+			model: row.model,
+			thinkingLevel: row.thinkingLevel,
 		},
 		refs: {
 			agent,
@@ -275,7 +275,8 @@ const resolveCurrentAgentPin = async ({
 			: { thinkingLevel: storedSelection.thinkingLevel },
 		selectionOverride,
 		trustedRegistrations,
-		sessionModel ?? persisted?.model
+		// Only a recorded tier is restored; a prompt-config ref is the caller's own choice.
+		storedSelection?.source === "refs" ? undefined : storedSelection?.model
 	);
 	const selectedAgent = registry.agents.find(
 		(candidate) => candidate.id === effective.agent
