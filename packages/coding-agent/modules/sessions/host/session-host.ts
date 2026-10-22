@@ -512,10 +512,8 @@ export const createSessionHost = async ({
 		const resolveOpenedSelection = (registry: AgentRegistry | null) =>
 			restoreSelection({
 				messages: opened.transcript,
-				row: {
-					model: opened.model,
-					thinkingLevel: opened.thinkingLevel,
-				},
+				// The opened Session carries the durable session-level choice.
+				row: opened,
 				...(isNull(registry)
 					? {}
 					: {
