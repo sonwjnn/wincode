@@ -317,6 +317,7 @@ type HomeProviderCollectionFactory = (
 
 type HomeViewOptions = Readonly<{
 	defaultAgentId?: AgentId;
+	homeRoot?: string;
 	pluginRuntime?: PluginRuntime;
 }>;
 
@@ -325,6 +326,7 @@ const renderHomeView = async (
 	options: HomeViewOptions = {}
 ): Promise<TestRendererSetup> => {
 	const workspace = process.cwd();
+	const homeRoot = options.homeRoot ?? os.homedir();
 	const router = createRouter({
 		history: createMemoryHistory({ initialEntries: ["/"] }),
 		routeTree: createRootRoute({}),
@@ -351,7 +353,7 @@ const renderHomeView = async (
 								),
 						},
 					}),
-					homeRoot: os.homedir(),
+					homeRoot,
 					workspace,
 				}
 			: fromPartial<ConfigRuntime>({
@@ -364,7 +366,7 @@ const renderHomeView = async (
 								sources: [],
 							}),
 					},
-					homeRoot: os.homedir(),
+					homeRoot,
 					workspace,
 				});
 	const app = (
@@ -473,11 +475,50 @@ describe("NewSessionView composer focus", () => {
 			await flushTestRenderer(setup);
 			const frame = captureNormalizedHomeFrame(setup);
 			expect(frame).toContain("Wincode v");
-			expect(frame).toContain("Click or press Ctrl+O to show");
+			expect(frame).toContain("Show details · Ctrl+O");
+			expect(frame).not.toContain("Hide details");
 			expect(frame).not.toContain("Agent Build");
 			expect(frame).not.toContain("Notices:");
 		} finally {
 			setup.renderer.destroy();
+		}
+	});
+
+	test("expanded Prompts show the custom command source path", async () => {
+		const homeRoot = await fs.mkdtemp(
+			path.join(os.tmpdir(), "startup-overview-home-")
+		);
+		const commandsRoot = path.join(homeRoot, ".wincode", "commands");
+		await fs.mkdir(commandsRoot, { recursive: true });
+		await Bun.write(
+			path.join(commandsRoot, "deploy.md"),
+			"---\ndescription: Deploy code\n---\nDeploy the app."
+		);
+		const setup = await renderHomeView(createTestHomeProviderCollection, {
+			homeRoot,
+		});
+		let expanded = false;
+		try {
+			await act(async () => {
+				setup.mockInput.pressKey("o", { ctrl: true });
+				await setup.renderOnce();
+			});
+			expanded = true;
+			await waitForHomeFrame(setup, ".wincode/commands/deploy.md");
+			const frame = captureNormalizedHomeFrame(setup);
+			expect(frame).toContain("[Prompts]");
+			expect(frame).toContain("/deploy");
+			expect(frame).toContain(".wincode/commands/deploy.md");
+		} finally {
+			if (expanded) {
+				await act(async () => {
+					setup.mockInput.pressKey("o", { ctrl: true });
+					await setup.renderOnce();
+				});
+				await waitForHomeFrame(setup, "Show details · Ctrl+O");
+			}
+			await act(async () => setup.renderer.destroy());
+			await fs.rm(homeRoot, { force: true, recursive: true });
 		}
 	});
 
@@ -519,13 +560,13 @@ describe("NewSessionView composer focus", () => {
 				"startup-plugin-startup-overview-plugin"
 			);
 			await act(async () => setup.renderOnce());
+			await waitForHomeFrame(setup, "startup-overview-plugin");
 			const pluginRow = setup
 				.captureCharFrame()
 				.split("\n")
 				.find((line) => line.includes("startup-overview-plugin"));
 			expect(pluginRow?.indexOf("startup-overview-plugin")).toBeGreaterThan(0);
 			const frame = captureNormalizedHomeFrame(setup);
-			expect(frame).toContain("Ctrl+O to collapse startup help and resources");
 			expect(frame).toContain("[Plugins]");
 			expect(frame).toContain("startup-overview-plugin");
 			expect(setup.renderer.currentFocusedRenderable?.id ?? null).toBe(
@@ -537,6 +578,7 @@ describe("NewSessionView composer focus", () => {
 					setup.mockInput.pressKey("o", { ctrl: true });
 					await setup.renderOnce();
 				});
+				await waitForHomeFrame(setup, "Show details · Ctrl+O");
 			}
 			setup.renderer.destroy();
 		}

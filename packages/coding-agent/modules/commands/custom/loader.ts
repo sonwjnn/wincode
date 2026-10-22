@@ -43,6 +43,7 @@ export async function loadCustomCommands(
 			);
 			byName.set(name, {
 				description: parsed.description,
+				filePath: candidate.filePath,
 				kind: "custom",
 				name,
 				template: parsed.template,

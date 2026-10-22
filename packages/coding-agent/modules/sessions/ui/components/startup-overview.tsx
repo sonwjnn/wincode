@@ -199,8 +199,7 @@ function StartupHelp({
 				<text fg={colors.textMuted}>v{APP_VERSION}</text>
 				{expanded ? null : (
 					<text fg={colors.textMuted}>
-						Enter send · Shift+Enter newline · / commands · @ files · Ctrl+O
-						more
+						Enter send · Shift+Enter newline · / commands · @ files
 					</text>
 				)}
 			</box>
@@ -219,7 +218,7 @@ function StartupHelp({
 			) : (
 				<StartupTogglePrompt
 					color={colors.textMuted}
-					label="Click or press Ctrl+O to show full startup help and loaded resources."
+					label="Show details · Ctrl+O"
 					onToggle={onToggleExpanded}
 				/>
 			)}
@@ -273,6 +272,7 @@ function StartupResourceSections({
 				colors={colors}
 				commands={customCommands}
 				expanded={expanded}
+				homeRoot={homeRoot}
 				isLoading={commandsLoading}
 			/>
 			<PluginsStartupSection
@@ -449,11 +449,13 @@ function CommandsStartupSection({
 	colors,
 	commands,
 	expanded,
+	homeRoot,
 	isLoading,
 }: Readonly<{
 	colors: StartupSectionColors;
 	commands: readonly CustomCommandSpec[];
 	expanded: boolean;
+	homeRoot: string;
 	isLoading: boolean;
 }>) {
 	if (isLoading) {
@@ -471,18 +473,23 @@ function CommandsStartupSection({
 	return (
 		<StartupSection color={colors.primary} title="Prompts">
 			{expanded ? (
-				commands.map(({ description, name }) => (
-					<box flexDirection="row" key={name} paddingLeft={2} width="100%">
-						<text fg={colors.secondary} flexShrink={0} wrapMode="none">
-							/{name}
-						</text>
-						<text
-							fg={colors.textMuted}
-							flexGrow={1}
-							flexShrink={1}
-							wrapMode="word"
-						>
-							— {description}
+				commands.map(({ description, filePath, name }) => (
+					<box flexDirection="column" key={name} paddingLeft={2} width="100%">
+						<box flexDirection="row" width="100%">
+							<text fg={colors.secondary} flexShrink={0} wrapMode="none">
+								/{name}
+							</text>
+							<text
+								fg={colors.textMuted}
+								flexGrow={1}
+								flexShrink={1}
+								wrapMode="word"
+							>
+								— {description}
+							</text>
+						</box>
+						<text fg={colors.textMuted} paddingLeft={2} wrapMode="word">
+							· {shortenHomePath(filePath, homeRoot)}
 						</text>
 					</box>
 				))
