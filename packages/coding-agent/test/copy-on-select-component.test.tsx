@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import type { Selection } from "@opentui/core";
 import { act } from "react";
 import {
 	CopyOnSelectFromSettings,
@@ -12,6 +11,7 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import {
 	createRecordingClipboard,
+	createSelection,
 	testRenderWithClipboard,
 } from "./support/clipboard";
 import {
@@ -48,13 +48,6 @@ const createConfigStoreWithDelayedInitialRead = (
 		releaseInitialRead: () => releaseInitialRead.resolve(),
 	};
 };
-
-const selection = (text: string) =>
-	({
-		behavior: "word",
-		getSelectedText: () => text,
-		isStart: false,
-	}) as Selection;
 
 test("a Settings write immediately changes the root selection handler", async () => {
 	const configStore = createTestConfigStore();
@@ -96,7 +89,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 		throw new Error("Settings operations did not initialize.");
 	}
 	await act(async () => {
-		setup.renderer.emit("selection", selection("enabled"));
+		setup.renderer.emit("selection", createSelection("enabled"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
@@ -105,7 +98,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 	});
 	await flush(setup);
 	await act(async () => {
-		setup.renderer.emit("selection", selection("disabled"));
+		setup.renderer.emit("selection", createSelection("disabled"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
@@ -114,7 +107,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 	});
 	await flush(setup);
 	await act(async () => {
-		setup.renderer.emit("selection", selection("enabled again"));
+		setup.renderer.emit("selection", createSelection("enabled again"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
@@ -160,7 +153,7 @@ test("does not copy until a saved disabled preference loads", async () => {
 	};
 	await delayedStore.initialReadStarted;
 	await act(async () => {
-		setup.renderer.emit("selection", selection("before preference load"));
+		setup.renderer.emit("selection", createSelection("before preference load"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
@@ -172,7 +165,7 @@ test("does not copy until a saved disabled preference loads", async () => {
 		throw new Error("Settings operations did not initialize.");
 	}
 	await act(async () => {
-		setup.renderer.emit("selection", selection("saved disabled"));
+		setup.renderer.emit("selection", createSelection("saved disabled"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);

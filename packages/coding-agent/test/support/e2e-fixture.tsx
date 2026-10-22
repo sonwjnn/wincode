@@ -11,7 +11,7 @@ import {
 } from "@tanstack/react-router";
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
-import { isUndefined } from "@wincode/utils";
+import { isUndefined, logger } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
@@ -326,7 +326,7 @@ export const writeE2EFrame = async (
 	await setup.waitForVisualIdle();
 	const frame = captureTestFrame(setup);
 	if (frame === undefined) {
-		console.warn("Skipping E2E frame capture: OpenTUI buffer busy.");
+		void logger.warn("Skipping E2E frame capture: OpenTUI buffer busy.");
 		return;
 	}
 	await Bun.write(framePath, frame);

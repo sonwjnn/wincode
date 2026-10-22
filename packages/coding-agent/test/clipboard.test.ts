@@ -9,7 +9,7 @@ import {
 } from "@opentui/core";
 import {
 	CLIPBOARD_IMAGE_MIME_TYPES,
-	type ClipboardServiceLike,
+	type ClipboardServicePort,
 	ClipboardTooLargeError,
 	createClipboardAdapter,
 	UNSUPPORTED_HOST_CLIPBOARD,
@@ -32,7 +32,7 @@ const coreClipboard = (options: {
 		input: ClipboardWriteOptions
 	) => Promise<ClipboardWriteResult>;
 	dispose?: () => Promise<void>;
-}): ClipboardServiceLike => ({
+}): ClipboardServicePort => ({
 	read: options.read ?? (async () => ({ status: "empty" })),
 	writeText: options.writeText ?? (async () => hostWritten()),
 	dispose: options.dispose ?? (async () => undefined),

@@ -38,7 +38,6 @@ import {
 	pluginProviderOwnerMatches,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
-import { useSyntaxStyle } from "@/modules/sessions/ui/use-syntax-style";
 import { type ClipboardReader, useClipboard } from "@/shared/clipboard";
 import { RoundedBorderChars } from "@/shared/constants";
 import { useLatest } from "@/shared/hooks/use-latest";
@@ -68,6 +67,7 @@ import { useChatInputController } from "../../hooks/input-controller/use-chat-in
 import { summarizePastedText } from "../../pasted-text";
 import type { SessionSubmissionComposition } from "../../submission-types";
 import type { ChatPromptSubmission } from "../../utils";
+import { useSyntaxStyle } from "../use-syntax-style";
 
 const MAX_IMAGE_ATTACHMENTS = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;

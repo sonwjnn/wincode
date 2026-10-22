@@ -1,3 +1,4 @@
+import type { Selection, SelectionBehavior } from "@opentui/core";
 import type {
 	TestRendererOptions,
 	TestRendererSetup,
@@ -8,6 +9,16 @@ import type { TuiClipboard } from "@/shared/clipboard";
 import { ClipboardProvider } from "@/shared/clipboard";
 
 export type RecordingClipboard = TuiClipboard & Readonly<{ writes: string[] }>;
+
+export const createSelection = (
+	text: string,
+	extra: { isStart?: boolean; behavior?: SelectionBehavior } = {}
+): Selection =>
+	({
+		behavior: extra.behavior ?? "word",
+		getSelectedText: () => text,
+		isStart: extra.isStart ?? false,
+	}) as Selection;
 
 export function createRecordingClipboard(
 	write: (text: string) => Promise<void> = async () => undefined

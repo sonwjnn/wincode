@@ -59,6 +59,7 @@ import {
 	sessionMessageId,
 	sessionRecordId,
 } from "../support/identifiers";
+import { captureTestFrame } from "../support/opentui";
 import { startSessionWriterContender } from "../support/session-writer-process";
 
 const testDirectory = await fs.mkdtemp(
@@ -519,7 +520,7 @@ test("shows the opening state, then the session it opened", async () => {
 		// The Agent Session does not exist until opening completes, so the surface
 		// shows a session opening rather than a blank frame.
 		await setup.renderOnce();
-		expect(setup.captureCharFrame()).toContain("Loading session...");
+		expect(captureTestFrame(setup) ?? "").toContain("Loading session...");
 
 		await rendered.registryReady;
 		await waitForSessionFrame(setup, (frame) =>
@@ -544,8 +545,10 @@ test("shows the failure when the session cannot open", async () => {
 		await waitForSessionFrame(setup, (frame) =>
 			frame.includes("Session not found")
 		);
-		expect(setup.captureCharFrame()).not.toContain("Stored Session History");
-		expect(setup.captureCharFrame()).not.toContain("Refresh history");
+		expect(captureTestFrame(setup) ?? "").not.toContain(
+			"Stored Session History"
+		);
+		expect(captureTestFrame(setup) ?? "").not.toContain("Refresh history");
 		await writeE2EFrame(setup);
 	} finally {
 		cleanupSessionRender();
@@ -597,7 +600,7 @@ test("keeps historical Plugin Sessions readable without constructing a ProviderC
 				frame.includes("read the old conversation")
 		);
 
-		const frame = setup.captureCharFrame();
+		const frame = captureTestFrame(setup) ?? "";
 		expect(frame).toContain("no matching trusted source");
 		expect(frame).toContain("Reselect Provider Model to continue");
 		expect(frame).not.toContain("Ask anything...");
@@ -763,7 +766,9 @@ test(
 			await waitForSessionFrame(setup, (frame) =>
 				frame.includes("Ask anything...")
 			);
-			expect(setup.captureCharFrame()).not.toContain("Stored Session History");
+			expect(captureTestFrame(setup) ?? "").not.toContain(
+				"Stored Session History"
+			);
 			expect(streamCalls).toBe(0);
 			expect(modelDiscoveryCalls).toBe(0);
 
@@ -948,7 +953,7 @@ test("historical reselection rejects missing or mismatched Host owners before mo
 			await waitForSessionFrame(setup, (frame) =>
 				frame.includes("do not match the current trusted")
 			);
-			expect(setup.captureCharFrame()).toContain(
+			expect(captureTestFrame(setup) ?? "").toContain(
 				"do not match the current trusted"
 			);
 			expect(providerCollectionConstructions).toBe(1);
@@ -1010,7 +1015,7 @@ test("offers read-only history during process contention and retries with fresh 
 		await waitForSessionFrame(setup, (frame) =>
 			frame.includes("View Stored Session History")
 		);
-		const contentionFrame = setup.captureCharFrame();
+		const contentionFrame = captureTestFrame(setup) ?? "";
 		expect(contentionFrame).toContain(`PID ${contender.pid}`);
 		expect(contentionFrame).toContain("Unverified lock owner");
 		expect(contentionFrame).not.toContain("Stored Session History · Read-only");
@@ -1021,7 +1026,7 @@ test("offers read-only history during process contention and retries with fresh 
 			frame.includes("Stored Session History · Read-only")
 		);
 
-		const initialFrame = setup.captureCharFrame();
+		const initialFrame = captureTestFrame(setup) ?? "";
 		expect(initialFrame).toContain(`PID ${contender.pid}`);
 		expect(initialFrame).toContain("Unverified lock owner");
 		expect(initialFrame).toContain("mode interactive");
@@ -1041,7 +1046,7 @@ test("offers read-only history during process contention and retries with fresh 
 			refreshedMessage
 		);
 		await settleSessionUi(setup);
-		expect(setup.captureCharFrame()).not.toContain(refreshedMessage);
+		expect(captureTestFrame(setup) ?? "").not.toContain(refreshedMessage);
 
 		await activateSessionWriterAction(setup, "stored-session-history-refresh");
 		await waitForSessionFrame(setup, (frame) =>
@@ -1055,7 +1060,7 @@ test("offers read-only history during process contention and retries with fresh 
 		await waitForSessionFrame(setup, (frame) =>
 			frame.includes(`PID ${contender.pid}`)
 		);
-		const retryConflictFrame = setup.captureCharFrame();
+		const retryConflictFrame = captureTestFrame(setup) ?? "";
 		expect(retryConflictFrame).toContain("Stored Session History");
 		expect(retryConflictFrame).toContain("Unverified lock owner");
 		expect(retryConflictFrame).not.toContain("Ask anything...");
@@ -1073,7 +1078,9 @@ test("offers read-only history during process contention and retries with fresh 
 			(frame) =>
 				frame.includes(freshHostMessage) && frame.includes("Ask anything...")
 		);
-		expect(setup.captureCharFrame()).not.toContain("Stored Session History");
+		expect(captureTestFrame(setup) ?? "").not.toContain(
+			"Stored Session History"
+		);
 	} finally {
 		await contender.release();
 		cleanupSessionRender();
@@ -1103,7 +1110,7 @@ test("stored history labels durable interrupted turns", async () => {
 		await waitForSessionFrame(setup, (frame) =>
 			frame.includes("Build · openai/gpt-5.6-luna · interrupted")
 		);
-		const frame = setup.captureCharFrame();
+		const frame = captureTestFrame(setup) ?? "";
 		expect(frame).toContain("The request ended safely.");
 		expect(frame).toContain("Build · openai/gpt-5.6-luna · interrupted");
 		expect(frame).not.toContain("Ask anything...");
@@ -1175,7 +1182,7 @@ test("does not offer history when acquiring the OS writer lock fails", async () 
 			setup,
 			(frame) => !frame.includes("Loading session...")
 		);
-		const frame = setup.captureCharFrame();
+		const frame = captureTestFrame(setup) ?? "";
 		expect(frame).not.toContain("Stored Session History");
 		expect(frame).not.toContain("Refresh history");
 		expect(frame).not.toContain("Retry / Open for editing");

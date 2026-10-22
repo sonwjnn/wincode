@@ -1,12 +1,6 @@
-import type {
-	ClipboardImageMimeType,
-	ClipboardReader,
-} from "@/shared/clipboard";
+import type { ClipboardContent, ClipboardReader } from "@/shared/clipboard";
 
-export type ClipboardImage = {
-	bytes: Uint8Array;
-	mimeType: ClipboardImageMimeType;
-};
+export type ClipboardImage = ClipboardContent;
 
 export type ClipboardImageResult = ClipboardImage | { unavailable: true };
 
@@ -108,10 +102,7 @@ export async function readClipboardImage(
 	clipboard: ClipboardReader
 ): Promise<ClipboardImageResult> {
 	try {
-		const content = await clipboard.read();
-		return content === undefined
-			? unavailable()
-			: { bytes: content.bytes, mimeType: content.mimeType };
+		return (await clipboard.read()) ?? unavailable();
 	} catch {
 		return unavailable();
 	}

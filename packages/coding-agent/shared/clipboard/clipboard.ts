@@ -34,7 +34,7 @@ export class ClipboardTooLargeError extends Error {
 }
 
 /** Port used by the adapter tests and by the clipboard factory. */
-export type ClipboardServiceLike = Pick<
+export type ClipboardServicePort = Pick<
 	ClipboardService,
 	"read" | "writeText" | "dispose"
 >;
@@ -100,7 +100,7 @@ const writeSucceeded = (result: ClipboardWriteResult): boolean =>
 	result.host.status === "written" || result.terminal.status === "attempted";
 
 export function createClipboardAdapter(
-	clipboard: ClipboardServiceLike
+	clipboard: ClipboardServicePort
 ): TuiClipboard {
 	return {
 		async read() {
