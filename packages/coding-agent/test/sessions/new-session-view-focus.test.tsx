@@ -911,6 +911,7 @@ describe("NewSessionView composer focus", () => {
 			await act(async () => {
 				await Bun.sleep(20);
 				await setup.renderOnce();
+				await setup.waitForVisualIdle();
 			});
 			const composer = setup.renderer.root.findDescendantById(
 				"new-session-view-composer"

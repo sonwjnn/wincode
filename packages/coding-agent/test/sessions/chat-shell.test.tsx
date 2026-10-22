@@ -38,7 +38,7 @@ import type {
 	SessionMessage,
 } from "@/modules/sessions/message";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
-import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SettingsRegistryProvider } from "@/modules/settings";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";

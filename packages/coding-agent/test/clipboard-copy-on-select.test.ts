@@ -78,6 +78,17 @@ describe("handleSelection", () => {
 		]);
 	});
 
+	test("stays silent when the write resolves without copying", async () => {
+		const toasts: unknown[] = [];
+
+		await handleSelection(selection("hello"), {
+			clipboard: { write: async () => false },
+			show: (toast) => toasts.push(toast),
+		});
+
+		expect(toasts).toEqual([]);
+	});
+
 	test("reports a rejected write without claiming the selection was copied", async () => {
 		const toasts: { message: string; variant?: string }[] = [];
 

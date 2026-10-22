@@ -77,7 +77,7 @@ import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/submission-types";
-import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SessionView } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -531,6 +531,7 @@ const createFakeSessionHost = (
  * the frame in the middle of that window.
  */
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
+	await setup.waitForVisualIdle();
 	let previous = setup.captureCharFrame();
 	// Two passes minimum: the first gives an asynchronous commit a window to
 	// land, the second sees whether it did. A command slower than that needs a
@@ -538,6 +539,7 @@ const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	for (let attempt = 0; attempt < 50; attempt += 1) {
 		await Bun.sleep(20);
 		await setup.renderOnce();
+		await setup.waitForVisualIdle();
 		const frame = setup.captureCharFrame();
 		if (attempt >= 1 && frame === previous) {
 			return;

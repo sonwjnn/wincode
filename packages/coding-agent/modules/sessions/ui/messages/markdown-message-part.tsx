@@ -1,9 +1,7 @@
 import { memo, useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import {
-	getMarkdownTreeSitterClient,
-	type SyntaxStyleVariant,
-} from "../syntax-style";
+import type { SyntaxStyleVariant } from "../syntax-style";
+import { getMarkdownTreeSitterClient } from "../tree-sitter-client";
 import { useSyntaxStyle } from "../use-syntax-style";
 
 /** Printable output characters plus tab and newline (structure must survive). */

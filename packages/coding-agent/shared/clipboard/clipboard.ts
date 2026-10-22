@@ -30,6 +30,7 @@ export class ClipboardTooLargeError extends Error {
 	}
 }
 
+/** Port used by the adapter tests and by the clipboard factory. */
 export type ClipboardServiceLike = Pick<
 	ClipboardService,
 	"read" | "writeText" | "dispose"
@@ -49,6 +50,7 @@ const CLIPBOARD_WRITE_BUDGET_BYTES = 8 * 1024 * 1024;
 const CLIPBOARD_HOST_READ_BUDGET_BYTES = 16 * 1024 * 1024;
 const CLIPBOARD_HOST_TIMEOUT_MS = 5000;
 
+/** Fallback host used when the native clipboard service cannot initialize. */
 export const UNSUPPORTED_HOST_CLIPBOARD: HostClipboardService = {
 	// Match OpenTUI's default budget so validation does not reject text before
 	// the terminal fallback gets a chance to copy it.

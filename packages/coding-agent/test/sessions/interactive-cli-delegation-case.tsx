@@ -38,6 +38,7 @@ import {
 	restoreScrollTo,
 	testDirectory,
 } from "../support/interactive-cli-delegation-setup";
+import { isOpenTuiOutputBusy } from "../support/opentui";
 
 const waitForFrame = async (
 	setup: TestRendererSetup,
@@ -51,7 +52,10 @@ const waitForFrame = async (
 			frame = setup.captureCharFrame();
 			lastError = undefined;
 		} catch (error) {
-			// The live renderer owns its output buffer between frames; retry instead of failing.
+			// The live renderer owns its output buffer between frames; retry only that contention.
+			if (!isOpenTuiOutputBusy(error)) {
+				throw error;
+			}
 			lastError = error;
 		}
 		if (lastError === undefined && predicate(frame)) {

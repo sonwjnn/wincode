@@ -26,7 +26,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import { resolveLocalAttachmentRoot } from "@/modules/sessions/storage/path";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
-import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SessionSurface } from "@/modules/sessions/ui/views/session-surface";
 import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
@@ -51,6 +51,7 @@ import {
 	sessionMessageId,
 	sessionRecordId,
 } from "./identifiers";
+import { isOpenTuiOutputBusy } from "./opentui";
 
 export const E2E_MODEL = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -322,7 +323,13 @@ export const writeE2EFrame = (setup: TestRendererSetup): void => {
 		return;
 	}
 	fs.mkdirSync(path.dirname(framePath), { recursive: true });
-	fs.writeFileSync(framePath, setup.captureCharFrame(), "utf8");
+	try {
+		fs.writeFileSync(framePath, setup.captureCharFrame(), "utf8");
+	} catch (error) {
+		if (!isOpenTuiOutputBusy(error)) {
+			throw error;
+		}
+	}
 };
 
 export const settleSessionUi = async (

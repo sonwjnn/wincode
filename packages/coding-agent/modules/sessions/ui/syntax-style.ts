@@ -1,12 +1,10 @@
 import {
-	getTreeSitterClient,
 	type NativeResourceOwner,
-	type SimpleHighlight,
 	type StyleDefinitionInput,
 	SyntaxStyle,
-	type TreeSitterClient,
 } from "@opentui/core";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
+import { buildComposerSyntaxStyles } from "./composer-syntax-style";
 
 export type SyntaxStyleVariant = "standard" | "thinking";
 
@@ -57,11 +55,11 @@ const buildSyntaxStyles = (
 	};
 };
 
-export type SyntaxStyleKey = SyntaxStyleVariant | "composer";
+export type SyntaxStyleSet = SyntaxStyleVariant | "composer";
 
 type CachedSyntaxStyles = {
 	key: string;
-	styles: Map<SyntaxStyleKey, SyntaxStyle>;
+	styles: Map<SyntaxStyleSet, SyntaxStyle>;
 };
 
 const cachedSyntaxStyles = new WeakMap<
@@ -69,16 +67,8 @@ const cachedSyntaxStyles = new WeakMap<
 	CachedSyntaxStyles
 >();
 
-const buildComposerSyntaxStyles = (
-	colors: ThemeColors
-): Record<string, StyleDefinitionInput> => ({
-	attachment: { bg: colors.primary, bold: true, fg: colors.background },
-	fileMention: { bold: true, fg: colors.primary },
-	pastedText: { bg: colors.primary, bold: true, fg: colors.background },
-});
-
 const SYNTAX_STYLE_BUILDERS: Record<
-	SyntaxStyleKey,
+	SyntaxStyleSet,
 	(colors: ThemeColors) => Record<string, StyleDefinitionInput>
 > = {
 	standard: (colors) => buildSyntaxStyles(colors, "standard"),
@@ -89,7 +79,7 @@ const SYNTAX_STYLE_BUILDERS: Record<
 export const resolveSyntaxStyle = (
 	owner: NativeResourceOwner,
 	colors: ThemeColors,
-	key: SyntaxStyleKey
+	key: SyntaxStyleSet
 ): SyntaxStyle => {
 	const colorsKey = JSON.stringify(colors);
 	let cached = cachedSyntaxStyles.get(owner);
@@ -111,98 +101,3 @@ export const resolveSyntaxStyle = (
 	cached.styles.set(key, style);
 	return style;
 };
-
-/**
- * Tree-sitter can report a bracketed label in a standalone strong line as a
- * link-label candidate. Normalize only that scope to strong text; normal inline
- * links do not match, and the Markdown source remains untouched.
- */
-const STANDALONE_STRONG_BRACKETED_LABEL_PATTERN =
-	/^\s*\*\*\[[^\]\n]+\]\*\*\s*$/;
-const normalizedTreeSitterClients = new WeakMap<
-	TreeSitterClient,
-	TreeSitterClient
->();
-
-const lineForHighlight = (
-	content: string,
-	start: number,
-	end: number
-): string => {
-	const lineStart = content.lastIndexOf("\n", start - 1) + 1;
-	const nextLineBreak = content.indexOf("\n", end);
-	const lineEnd = nextLineBreak === -1 ? content.length : nextLineBreak;
-	return content.slice(lineStart, lineEnd);
-};
-
-const normalizeStandaloneSectionLabelScopes = (
-	content: string,
-	highlights: SimpleHighlight[]
-): SimpleHighlight[] =>
-	highlights.map((highlight) => {
-		const [start, end, scope, metadata] = highlight;
-		if (
-			(scope !== "markup.link.label" && scope !== "nospell") ||
-			!STANDALONE_STRONG_BRACKETED_LABEL_PATTERN.test(
-				lineForHighlight(content, start, end)
-			)
-		) {
-			return highlight;
-		}
-		return [start, end, "markup.strong", metadata];
-	});
-
-const normalizeTreeSitterClient = (
-	client: TreeSitterClient
-): TreeSitterClient => {
-	const cachedClient = normalizedTreeSitterClients.get(client);
-	if (cachedClient) {
-		return cachedClient;
-	}
-
-	const normalizedClient = new Proxy(client, {
-		get(target, property) {
-			if (property === "highlightOnce") {
-				return async (content: string, filetype: string) => {
-					const result = await target.highlightOnce(content, filetype);
-					if (
-						(filetype !== "markdown" && filetype !== "markdown_inline") ||
-						!result.highlights
-					) {
-						return result;
-					}
-					return {
-						...result,
-						highlights: normalizeStandaloneSectionLabelScopes(
-							content,
-							result.highlights
-						),
-					};
-				};
-			}
-			const value = Reflect.get(target, property, target);
-			return typeof value === "function" ? value.bind(target) : value;
-		},
-		set(target, property, value) {
-			return Reflect.set(target, property, value, target);
-		},
-	});
-	normalizedTreeSitterClients.set(client, normalizedClient);
-	return normalizedClient;
-};
-
-let treeSitterClientOverride: TreeSitterClient | null = null;
-
-export const setTreeSitterClientOverride = (
-	client: TreeSitterClient | null
-): TreeSitterClient | null => {
-	const previous = treeSitterClientOverride;
-	treeSitterClientOverride = client;
-	return previous;
-};
-
-export const getTreeSitterClientOverride = (): TreeSitterClient | undefined =>
-	treeSitterClientOverride ?? undefined;
-
-export const getMarkdownTreeSitterClient = (): TreeSitterClient =>
-	normalizeTreeSitterClient(treeSitterClientOverride ?? getTreeSitterClient());

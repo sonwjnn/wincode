@@ -9,7 +9,7 @@ import {
 import { testRender } from "@opentui/react/test-utils";
 import { act, useEffect, useState } from "react";
 import { MarkdownMessagePart } from "@/modules/sessions/ui/messages/markdown-message-part";
-import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 
 /**

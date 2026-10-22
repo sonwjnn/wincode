@@ -6,7 +6,7 @@ import {
 import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
 import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
-import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import {
 	type SettingsOperations,
 	SettingsRegistryProvider,

@@ -13,7 +13,7 @@ import {
 	buildWritePreview,
 	countWriteLines,
 } from "@/modules/sessions/ui/messages/write-block";
-import { setTreeSitterClientOverride } from "@/modules/sessions/ui/syntax-style";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import {

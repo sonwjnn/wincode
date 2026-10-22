@@ -13,6 +13,7 @@ import { ThemedRoot } from "./layouts/themed-root";
 export type RendererFactory = typeof createCliRenderer;
 
 export type RendererSession = Readonly<{
+	/** Clipboard owned by this session; disposed with it. */
 	clipboard: TuiClipboard;
 	renderer: CliRenderer;
 	render: (node: ReactNode) => void;
