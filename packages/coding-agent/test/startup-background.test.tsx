@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { RGBA } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { act } from "react";
 import { createRendererSession } from "@/tui/renderer-session";
@@ -15,7 +16,8 @@ test("startup canvas remains text-free and keeps one background while content ch
 		await flushTestRenderer(setup, 2);
 		expect(setup.captureCharFrame().trim()).toBe("");
 		const background = setup.captureSpans().lines[0]?.spans[0]?.bg;
-		expect(background).toBeDefined();
+		// ThemedRoot leaves the canvas transparent so the terminal background shows through.
+		expect(background).toEqual(RGBA.fromValues(0, 0, 0, 0));
 
 		await act(() => session.render(<text>Ready</text>));
 		await flushTestRenderer(setup, 2);

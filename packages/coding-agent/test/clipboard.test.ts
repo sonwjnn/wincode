@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import type {
+	ClipboardOptions,
 	ClipboardReadOptions,
 	ClipboardReadResult,
+	ClipboardService,
 	ClipboardWriteOptions,
 	ClipboardWriteResult,
+	HostClipboardService,
+	RendererClipboardBoundary,
+	TerminalClipboardAdapter,
 } from "@opentui/core";
 import {
 	type ClipboardServiceLike,
 	ClipboardTooLargeError,
 	createClipboardAdapter,
+	createTuiClipboard,
 } from "@/shared/clipboard/clipboard";
 
 const notAttemptedTerminal = {
@@ -32,6 +38,53 @@ const coreClipboard = (options: {
 	read: options.read ?? (async () => ({ status: "empty" })),
 	writeText: options.writeText ?? (async () => hostWritten()),
 	dispose: options.dispose ?? (async () => undefined),
+});
+
+describe("createTuiClipboard", () => {
+	test("wires the native host and the renderer terminal adapter into the core clipboard", () => {
+		const host: HostClipboardService = {
+			maxWriteBytes: 1024,
+			read: async () => ({ status: "empty" }),
+			writeText: async () => ({ status: "written" }),
+			clear: async () => ({ status: "cleared" }),
+			dispose: async () => undefined,
+		};
+		const terminal: TerminalClipboardAdapter = {
+			remote: false,
+			writeText: () => ({ status: "not-attempted", capability: "unknown" }),
+			clear: () => ({ status: "not-attempted", capability: "unknown" }),
+		};
+		const service: ClipboardService = {
+			read: async () => ({ status: "empty" }),
+			writeText: async () => hostWritten(),
+			clear: async () => ({
+				host: { status: "cleared" },
+				terminal: notAttemptedTerminal,
+			}),
+			dispose: async () => undefined,
+		};
+		const renderer: RendererClipboardBoundary = {
+			capabilities: null,
+			clearClipboardOSC52: () => false,
+			copyToClipboardOSC52: () => false,
+		};
+		let wired: ClipboardOptions | undefined;
+
+		const clipboard = createTuiClipboard(renderer, {
+			createClipboard: (options) => {
+				wired = options;
+				return service;
+			},
+			createHostClipboard: () => host,
+			createRendererClipboardAdapter: (value) => {
+				expect(value).toBe(renderer);
+				return terminal;
+			},
+		});
+
+		expect(wired).toEqual({ host, terminal });
+		expect(clipboard).toBeDefined();
+	});
 });
 
 describe("createClipboardAdapter", () => {

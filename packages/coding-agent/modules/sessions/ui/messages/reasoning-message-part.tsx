@@ -1,11 +1,8 @@
-import { useRenderer } from "@opentui/react";
 import { useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { stripMarkdownControlCharacters } from "./markdown-message-part";
-import {
-	getMarkdownTreeSitterClient,
-	resolveSyntaxStyle,
-} from "./syntax-style";
+import { getMarkdownTreeSitterClient } from "./syntax-style";
+import { useSyntaxStyle } from "./use-syntax-style";
 
 export function ReasoningMessagePart({
 	streaming,
@@ -15,12 +12,8 @@ export function ReasoningMessagePart({
 	text: string;
 }) {
 	const { colors } = useTheme();
-	const renderer = useRenderer();
 	const content = useMemo(() => stripMarkdownControlCharacters(text), [text]);
-	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(renderer.nativeScene, colors, "thinking"),
-		[colors, renderer.nativeScene]
-	);
+	const syntaxStyle = useSyntaxStyle("thinking");
 
 	return (
 		<box flexShrink={0} paddingLeft={1}>

@@ -37,6 +37,18 @@ export type ClipboardServiceLike = Pick<
 	"read" | "writeText" | "dispose"
 >;
 
+export type ClipboardComponents = Readonly<{
+	createClipboard: typeof createClipboard;
+	createHostClipboard: typeof createHostClipboard;
+	createRendererClipboardAdapter: typeof createRendererClipboardAdapter;
+}>;
+
+const nativeClipboardComponents: ClipboardComponents = {
+	createClipboard,
+	createHostClipboard,
+	createRendererClipboardAdapter,
+};
+
 export const CLIPBOARD_IMAGE_MIME_TYPES = [
 	"image/png",
 	"image/jpeg",
@@ -77,6 +89,7 @@ export function createClipboardAdapter(
 			}
 			let result: ClipboardWriteResult;
 			try {
+				// allowRemoteHost stays false: over SSH the host clipboard belongs to the remote machine.
 				result = await clipboard.writeText(sanitized, {
 					destination: "all-available",
 					selection: "clipboard",
@@ -101,10 +114,14 @@ export function createClipboardAdapter(
 	};
 }
 
-export const createTuiClipboard: ClipboardFactory = (renderer) =>
-	createClipboardAdapter(
-		createClipboard({
-			host: createHostClipboard(),
-			terminal: createRendererClipboardAdapter(renderer),
+export function createTuiClipboard(
+	renderer: RendererClipboardBoundary,
+	components: ClipboardComponents = nativeClipboardComponents
+): TuiClipboard {
+	return createClipboardAdapter(
+		components.createClipboard({
+			host: components.createHostClipboard(),
+			terminal: components.createRendererClipboardAdapter(renderer),
 		})
 	);
+}

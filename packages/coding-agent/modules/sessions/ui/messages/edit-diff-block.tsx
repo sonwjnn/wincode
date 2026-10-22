@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import { pathToFiletype } from "@opentui/core";
-import { useRenderer } from "@opentui/react";
 import type { AgentId } from "@wincode/agent-core";
 import {
 	isArray,
@@ -18,10 +17,8 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { Spinner } from "@/shared/ui/spinner";
-import {
-	getTreeSitterClientForTests,
-	resolveSyntaxStyle,
-} from "./syntax-style";
+import { getTreeSitterClientForTests } from "./syntax-style";
+import { useSyntaxStyle } from "./use-syntax-style";
 
 type EditToolPart = Extract<
 	SessionMessage["parts"][number],
@@ -380,7 +377,7 @@ const getMultiEditStatus = (
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: output states intentionally share one compact diff/status renderer.
 function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 	const { colors } = useTheme();
-	const renderer = useRenderer();
+	const syntaxStyle = useSyntaxStyle();
 	const output = getOutput(part);
 	const result = isEditOutputWithDiff(part);
 	const path = formatEditPath(result?.path ?? getEditPath(part, output));
@@ -435,7 +432,6 @@ function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 	}
 
 	const view = "unified";
-	const syntaxStyle = resolveSyntaxStyle(renderer.nativeScene, colors);
 
 	return (
 		<BorderedContentBlock colors={colors} paddingX={DIFF_BLOCK_PADDING_X}>

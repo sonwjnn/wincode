@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import { pathToFiletype } from "@opentui/core";
-import { useRenderer } from "@opentui/react";
 import type { AgentId } from "@wincode/agent-core";
 import { isNull, isPlainObject, isString } from "@wincode/utils";
 import { useMemo, useState } from "react";
@@ -11,10 +10,8 @@ import { useToggleShortcut } from "@/shared/providers/keyboard-layer/keyboard-la
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { Spinner } from "@/shared/ui/spinner";
-import {
-	getTreeSitterClientForTests,
-	resolveSyntaxStyle,
-} from "./syntax-style";
+import { getTreeSitterClientForTests } from "./syntax-style";
+import { useSyntaxStyle } from "./use-syntax-style";
 
 type WriteToolPart = Extract<
 	SessionMessage["parts"][number],
@@ -186,11 +183,7 @@ const WritePreview = ({
 	visibleContent: string;
 }) => {
 	const { colors } = useTheme();
-	const renderer = useRenderer();
-	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(renderer.nativeScene, colors),
-		[colors, renderer.nativeScene]
-	);
+	const syntaxStyle = useSyntaxStyle();
 
 	if (isRunning && content.length === 0) {
 		return null;

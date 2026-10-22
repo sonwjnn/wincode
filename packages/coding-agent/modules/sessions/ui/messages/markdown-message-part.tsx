@@ -1,11 +1,10 @@
-import { useRenderer } from "@opentui/react";
 import { memo, useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
 	getMarkdownTreeSitterClient,
-	resolveSyntaxStyle,
 	setTreeSitterClientForTests,
 } from "./syntax-style";
+import { useSyntaxStyle } from "./use-syntax-style";
 
 export const setMarkdownTreeSitterClientForTests = setTreeSitterClientForTests;
 
@@ -41,12 +40,7 @@ export const MarkdownContent = memo(function MarkdownContent({
 	streaming?: boolean;
 	variant?: "standard" | "thinking";
 }) {
-	const { colors } = useTheme();
-	const renderer = useRenderer();
-	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(renderer.nativeScene, colors, variant),
-		[colors, renderer.nativeScene, variant]
-	);
+	const syntaxStyle = useSyntaxStyle(variant);
 	const sanitized = useMemo(() => stripMarkdownControlCharacters(text), [text]);
 
 	return (
@@ -71,12 +65,8 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 	streaming?: boolean;
 	variant?: "standard" | "thinking";
 }) {
+	const syntaxStyle = useSyntaxStyle(variant);
 	const { colors } = useTheme();
-	const renderer = useRenderer();
-	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(renderer.nativeScene, colors, variant),
-		[colors, renderer.nativeScene, variant]
-	);
 	const content = useMemo(() => {
 		const sanitized = stripMarkdownControlCharacters(text);
 		return variant === "thinking" ? sanitized : sanitized.trim();
