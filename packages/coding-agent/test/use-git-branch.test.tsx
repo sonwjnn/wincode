@@ -8,6 +8,7 @@ import { act } from "react";
 import { getGitRepositoryWebUrl } from "@/shared/git/get-git-branch";
 import { useGitBranch } from "@/shared/git/use-git-branch";
 import { runGit } from "./support/git";
+import { captureTestFrame } from "./support/opentui";
 
 function BranchProbe({ cwd }: { cwd: string }) {
 	const branch = useGitBranch(cwd);
@@ -15,12 +16,12 @@ function BranchProbe({ cwd }: { cwd: string }) {
 }
 const expectBranch = async (setup: TestRendererSetup, branch: string) => {
 	let frame = "";
-	for (let attempt = 0; attempt < 250; attempt++) {
+	for (let attempt = 0; attempt < 500; attempt++) {
 		await act(async () => {
 			await Bun.sleep(10);
 			await setup.renderOnce();
 		});
-		frame = setup.captureCharFrame();
+		frame = captureTestFrame(setup);
 		if (frame.includes(branch)) {
 			break;
 		}

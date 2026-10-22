@@ -21,7 +21,7 @@ export function createRecordingClipboard(
 		async write(text) {
 			await write(text);
 			writes.push(text);
-			return true;
+			return "copied";
 		},
 		async dispose() {
 			return;

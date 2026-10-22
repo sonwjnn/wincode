@@ -82,7 +82,7 @@ describe("handleSelection", () => {
 		const toasts: unknown[] = [];
 
 		await handleSelection(selection("hello"), {
-			clipboard: { write: async () => false },
+			clipboard: { write: async () => "empty" },
 			show: (toast) => toasts.push(toast),
 		});
 

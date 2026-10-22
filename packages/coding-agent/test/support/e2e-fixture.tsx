@@ -326,6 +326,7 @@ export const writeE2EFrame = (setup: TestRendererSetup): void => {
 	try {
 		fs.writeFileSync(framePath, setup.captureCharFrame(), "utf8");
 	} catch (error) {
+		// Debug artifact only: a busy native buffer must not fail the test.
 		if (!isOpenTuiOutputBusy(error)) {
 			throw error;
 		}

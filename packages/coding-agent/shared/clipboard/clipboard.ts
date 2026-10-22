@@ -13,9 +13,11 @@ export type ClipboardContent = Readonly<{
 	bytes: Uint8Array;
 }>;
 
+export type ClipboardWriteOutcome = "copied" | "empty";
+
 export type TuiClipboard = Readonly<{
 	read: () => Promise<ClipboardContent | undefined>;
-	write: (text: string) => Promise<boolean>;
+	write: (text: string) => Promise<ClipboardWriteOutcome>;
 	dispose: () => Promise<void>;
 }>;
 
@@ -46,7 +48,8 @@ export const CLIPBOARD_IMAGE_MIME_TYPES = [
 export type ClipboardImageMimeType =
 	(typeof CLIPBOARD_IMAGE_MIME_TYPES)[number];
 
-const CLIPBOARD_WRITE_BUDGET_BYTES = 8 * 1024 * 1024;
+// The fallback only writes to the terminal; accept OpenTUI's u32 ceiling.
+const CLIPBOARD_WRITE_BUDGET_BYTES = 0xff_ff_ff_ff;
 const CLIPBOARD_HOST_READ_BUDGET_BYTES = 16 * 1024 * 1024;
 const CLIPBOARD_HOST_TIMEOUT_MS = 5000;
 
@@ -108,7 +111,7 @@ export function createClipboardAdapter(
 		async write(text) {
 			const sanitized = sanitizeClipboardText(text);
 			if (sanitized.length === 0) {
-				return false;
+				return "empty";
 			}
 			let result: ClipboardWriteResult;
 			try {
@@ -125,7 +128,7 @@ export function createClipboardAdapter(
 				throw error;
 			}
 			if (writeSucceeded(result)) {
-				return true;
+				return "copied";
 			}
 			if (result.host.status === "failed") {
 				throw result.host.error;

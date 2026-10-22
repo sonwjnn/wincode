@@ -30,7 +30,7 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { agentId, sessionId, toolCallId } from "../../support/identifiers";
-import { flushTestRenderer } from "../../support/opentui";
+import { flushTestRenderer, frameIncludes } from "../../support/opentui";
 
 const savedMcpTextArtifactPattern =
 	/\[MCP text\/plain content saved to ([^\]]+)\]/;
@@ -150,7 +150,7 @@ test("the distributed MCP package renders its contribution in the generic status
 		try {
 			for (let attempt = 0; attempt < 5; attempt += 1) {
 				await flushTestRenderer(dialogSetup);
-				if (dialogSetup.captureCharFrame().includes("offline")) {
+				if (frameIncludes(dialogSetup, "offline")) {
 					break;
 				}
 			}
@@ -181,7 +181,7 @@ test("the distributed MCP package renders its contribution in the generic status
 			});
 			for (let attempt = 0; attempt < 5; attempt += 1) {
 				await flushTestRenderer(dialogSetup);
-				if (dialogSetup.captureCharFrame().includes("refreshed")) {
+				if (frameIncludes(dialogSetup, "refreshed")) {
 					break;
 				}
 			}
@@ -610,7 +610,7 @@ test("generic Plugin status panels refresh from Ctrl+R", async () => {
 			});
 			for (let attempt = 0; attempt < 5; attempt += 1) {
 				await flushTestRenderer(setup);
-				if (setup.captureCharFrame().includes("refresh count 1")) {
+				if (frameIncludes(setup, "refresh count 1")) {
 					break;
 				}
 			}
@@ -803,7 +803,7 @@ test("the generic MCP panel shows safe failures and routes reconnect and disable
 		try {
 			for (let attempt = 0; attempt < 5; attempt += 1) {
 				await flushTestRenderer(setup);
-				if (setup.captureCharFrame().includes("broken")) {
+				if (frameIncludes(setup, "broken")) {
 					break;
 				}
 			}
@@ -825,7 +825,7 @@ test("the generic MCP panel shows safe failures and routes reconnect and disable
 			}
 			for (let attempt = 0; attempt < 20; attempt += 1) {
 				await flushTestRenderer(setup);
-				if (!setup.captureCharFrame().includes("Working...")) {
+				if (!frameIncludes(setup, "Working...")) {
 					break;
 				}
 			}

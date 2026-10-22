@@ -28,7 +28,7 @@ import {
 	createInMemoryConfigStore,
 	TEST_CONFIG_ROOT,
 } from "./support/config-store";
-import { flushTestRenderer as flushUi } from "./support/opentui";
+import { flushTestRenderer as flushUi, frameIncludes } from "./support/opentui";
 
 const createSetting = (value: boolean): ResolvedSetting => ({
 	available: true,
@@ -191,10 +191,7 @@ const renderSettingsDialog = async (
 	const settingLabel = initialSettings[0]?.descriptor.label;
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		await flushUi(setup);
-		if (
-			settingLabel === undefined ||
-			setup.captureCharFrame().includes(settingLabel)
-		) {
+		if (settingLabel === undefined || frameIncludes(setup, settingLabel)) {
 			break;
 		}
 	}

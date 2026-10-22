@@ -23,7 +23,7 @@ import {
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
-import { flushTestRenderer } from "../../support/opentui";
+import { flushTestRenderer, frameIncludes } from "../../support/opentui";
 
 const OpenStatusPanel = ({
 	panel,
@@ -140,9 +140,7 @@ test("/mcps sign-in accepts a pasted OAuth redirect when the loopback callback i
 			});
 			for (let attempt = 0; attempt < 10; attempt += 1) {
 				await flushTestRenderer(setup);
-				if (
-					setup.captureCharFrame().includes("Paste the full OAuth redirect URL")
-				) {
+				if (frameIncludes(setup, "Paste the full OAuth redirect URL")) {
 					break;
 				}
 			}

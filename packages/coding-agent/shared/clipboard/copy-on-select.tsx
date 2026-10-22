@@ -33,8 +33,8 @@ export async function handleSelection(
 		return;
 	}
 	try {
-		const copied = await clipboard.write(text);
-		if (copied) {
+		const outcome = await clipboard.write(text);
+		if (outcome === "copied") {
 			show({ message: "Copied to clipboard", variant: "success", width: 30 });
 		}
 	} catch (error) {

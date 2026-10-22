@@ -20,7 +20,7 @@ import {
 	TEST_CONFIG_ROOT,
 	TEST_HOME_ROOT,
 } from "../support/config-store";
-import { flushTestRenderer } from "../support/opentui";
+import { flushTestRenderer, frameIncludes } from "../support/opentui";
 
 const WORKSPACE = "/workspace";
 
@@ -76,7 +76,7 @@ test("global Hide thinking replaces live and historical reasoning and reset rest
 			for (let pass = 0; pass < 20; pass += 1) {
 				await Bun.sleep(20);
 				await setup.renderOnce();
-				if (setup.captureCharFrame().includes("previous thought")) {
+				if (frameIncludes(setup, "previous thought")) {
 					break;
 				}
 			}

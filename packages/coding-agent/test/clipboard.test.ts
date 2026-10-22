@@ -7,6 +7,7 @@ import {
 	createClipboard,
 } from "@opentui/core";
 import {
+	CLIPBOARD_IMAGE_MIME_TYPES,
 	type ClipboardServiceLike,
 	ClipboardTooLargeError,
 	createClipboardAdapter,
@@ -54,7 +55,7 @@ describe("createClipboardAdapter", () => {
 
 		await expect(reader.read()).resolves.toEqual({ bytes });
 		expect(readOptions).toEqual({
-			preferredTypes: ["image/png", "image/jpeg", "image/webp", "image/gif"],
+			preferredTypes: CLIPBOARD_IMAGE_MIME_TYPES,
 			selection: "clipboard",
 		});
 	});
@@ -123,7 +124,7 @@ describe("createClipboardAdapter", () => {
 			})
 		);
 
-		await expect(writer.write("hello")).resolves.toBe(true);
+		await expect(writer.write("hello")).resolves.toBe("copied");
 
 		expect(writes).toEqual([
 			{
@@ -143,7 +144,7 @@ describe("createClipboardAdapter", () => {
 			})
 		);
 
-		await writer.write("hello");
+		await expect(writer.write("hello")).resolves.toBe("copied");
 	});
 
 	test("surfaces the host failure instead of reporting a successful copy", async () => {
@@ -219,7 +220,7 @@ describe("createClipboardAdapter", () => {
 			})
 		);
 
-		await expect(writer.write("")).resolves.toBe(false);
+		await expect(writer.write("")).resolves.toBe("empty");
 
 		expect(writes).toBe(0);
 	});

@@ -5,6 +5,31 @@ export const isOpenTuiOutputBusy = (error: unknown): boolean =>
 	error instanceof Error &&
 	error.message.includes("ot_session_acquire_buffer_lease");
 
+export const captureTestFrame = (setup: TestRendererSetup): string => {
+	try {
+		return setup.captureCharFrame();
+	} catch (error) {
+		if (isOpenTuiOutputBusy(error)) {
+			return "";
+		}
+		throw error;
+	}
+};
+
+export const frameIncludes = (
+	setup: TestRendererSetup,
+	text: string
+): boolean => {
+	try {
+		return setup.captureCharFrame().includes(text);
+	} catch (error) {
+		if (isOpenTuiOutputBusy(error)) {
+			return false;
+		}
+		throw error;
+	}
+};
+
 export const flushTestRenderer = async (
 	setup: TestRendererSetup,
 	passes = 1

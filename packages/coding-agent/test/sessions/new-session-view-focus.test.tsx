@@ -57,7 +57,7 @@ import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import { testRenderWithClipboard } from "../support/clipboard";
 import { modelId } from "../support/identifiers";
-import { flushTestRenderer } from "../support/opentui";
+import { flushTestRenderer, frameIncludes } from "../support/opentui";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const previousLocalDatabasePath = process.env.WINCODE_LOCAL_DB_PATH;
@@ -294,7 +294,7 @@ const waitForHomeModelStatus = async (
 		for (let attempt = 0; attempt < 30; attempt += 1) {
 			await Bun.sleep(10);
 			await setup.renderOnce();
-			if (setup.captureCharFrame().includes(storedDefault)) {
+			if (frameIncludes(setup, storedDefault)) {
 				break;
 			}
 		}

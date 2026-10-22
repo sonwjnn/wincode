@@ -101,6 +101,7 @@ import {
 	sessionMessageId,
 	steeringMessageId,
 } from "../support/identifiers";
+import { frameIncludes } from "../support/opentui";
 
 type Deferred<T> = {
 	promise: Promise<T>;
@@ -616,16 +617,14 @@ test("manual compaction scopes its stored model check before global replacement 
 
 	try {
 		await act(async () => setup.mockInput.typeText("/compact"));
-		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("Compact session history")
-		);
+		await setup.waitFor(() => frameIncludes(setup, "Compact session history"));
 		await act(() => setup.mockInput.pressTab());
 		await flushUi(setup);
 		await act(async () => setup.mockInput.typeText("preserve the history"));
 		await flushUi(setup);
 		await act(() => setup.mockInput.pressEnter());
 		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("Choose Model for Compaction")
+			frameIncludes(setup, "Choose Model for Compaction")
 		);
 		await setup.waitFor(() => modelReads.length >= 2);
 		expect(modelReads).toEqual(["selected:openai", "global-chooser"]);
@@ -662,9 +661,7 @@ test("manual compaction rejects a stale Host Plugin snapshot before Provider ava
 
 	try {
 		await act(async () => setup.mockInput.typeText("/compact"));
-		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("Compact session history")
-		);
+		await setup.waitFor(() => frameIncludes(setup, "Compact session history"));
 		await act(() => setup.mockInput.pressTab());
 		await flushUi(setup);
 		await act(async () => setup.mockInput.typeText("preserve the history"));
@@ -727,20 +724,16 @@ test("manual compaction replaces an unavailable Agent pin only with an available
 
 	try {
 		await act(async () => setup.mockInput.typeText("/compact"));
-		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("Compact session history")
-		);
+		await setup.waitFor(() => frameIncludes(setup, "Compact session history"));
 		await act(() => setup.mockInput.pressTab());
 		await flushUi(setup);
 		await act(async () => setup.mockInput.typeText("preserve the history"));
 		await flushUi(setup);
 		await act(() => setup.mockInput.pressEnter());
 		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("Choose Model for Compaction")
+			frameIncludes(setup, "Choose Model for Compaction")
 		);
-		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("replacement-model")
-		);
+		await setup.waitFor(() => frameIncludes(setup, "replacement-model"));
 		await act(() => setup.mockInput.pressEnter());
 		await setup.waitFor(() => fakeCompactionModels.length === 1);
 
@@ -789,20 +782,16 @@ test("manual compaction rejects a fetched owner-A model after owner B replaces i
 
 	try {
 		await act(async () => setup.mockInput.typeText("/compact"));
-		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("Compact session history")
-		);
+		await setup.waitFor(() => frameIncludes(setup, "Compact session history"));
 		await act(() => setup.mockInput.pressTab());
 		await flushUi(setup);
 		await act(async () => setup.mockInput.typeText("preserve the history"));
 		await flushUi(setup);
 		await act(() => setup.mockInput.pressEnter());
 		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("Choose Model for Compaction")
+			frameIncludes(setup, "Choose Model for Compaction")
 		);
-		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("same-model-id")
-		);
+		await setup.waitFor(() => frameIncludes(setup, "same-model-id"));
 
 		trustedRegistration = pluginPickerRegistration("owner-b");
 		hostRegistration = trustedRegistration;
@@ -810,7 +799,7 @@ test("manual compaction rejects a fetched owner-A model after owner B replaces i
 		compositionRevision += 1;
 		await act(() => setup.mockInput.pressEnter());
 		await setup.waitFor(() =>
-			setup.captureCharFrame().includes("Provider Model results are stale")
+			frameIncludes(setup, "Provider Model results are stale")
 		);
 
 		expect(availabilityReads).toBe(2);
@@ -914,7 +903,7 @@ describe("SessionView initial submission", () => {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
 			await setup.mockInput.typeText(text);
 			await flushUi(setup);
-			if (setup.captureCharFrame().includes(text)) {
+			if (frameIncludes(setup, text)) {
 				return;
 			}
 		}
@@ -1603,22 +1592,16 @@ describe("SessionView initial submission", () => {
 			await flushUi(setup);
 			await typePrompt(setup, "/models");
 			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("Select AI model for generation")
+				frameIncludes(setup, "Select AI model for generation")
 			);
 			await act(() => setup.mockInput.pressTab());
-			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("Search models")
-			);
+			await setup.waitFor(() => frameIncludes(setup, "Search models"));
 			await act(async () => setup.mockInput.typeText("gpt-6-luna"));
-			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("gpt-6-luna")
-			);
+			await setup.waitFor(() => frameIncludes(setup, "gpt-6-luna"));
 			await act(() => setup.mockInput.pressArrow("down"));
 			await act(() => setup.mockInput.pressEnter());
 			await flushUi(setup);
-			await setup.waitFor(
-				() => !setup.captureCharFrame().includes("Search models")
-			);
+			await setup.waitFor(() => !frameIncludes(setup, "Search models"));
 			await flushUi(setup);
 			expect(observedModel).toMatchObject(selectedModel);
 			expect(fakeCacheWarmCancellations).toBe(1);
@@ -1726,21 +1709,13 @@ describe("SessionView initial submission", () => {
 			await setup.waitFor(() => registryIsReady);
 			await flushUi(setup);
 			await typePrompt(setup, "/agents");
-			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("Switch agents")
-			);
+			await setup.waitFor(() => frameIncludes(setup, "Switch agents"));
 			await act(() => setup.mockInput.pressTab());
-			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("Search agents")
-			);
+			await setup.waitFor(() => frameIncludes(setup, "Search agents"));
 			await act(async () => setup.mockInput.typeText("Cache Warming Agent"));
-			await setup.waitFor(() =>
-				setup.captureCharFrame().includes("Cache Warming Agent")
-			);
+			await setup.waitFor(() => frameIncludes(setup, "Cache Warming Agent"));
 			await act(() => setup.mockInput.pressEnter());
-			await setup.waitFor(
-				() => !setup.captureCharFrame().includes("Search agents")
-			);
+			await setup.waitFor(() => !frameIncludes(setup, "Search agents"));
 			await setup.waitFor(() => observedAgent === selectedAgent);
 			expect(fakeCacheWarmCancellations).toBe(1);
 		} finally {
@@ -2021,7 +1996,7 @@ const renderBusySessionView = async () => {
 	for (let attempt = 0; attempt < 3; attempt += 1) {
 		await setup.mockInput.typeText("first prompt");
 		await flushUi(setup);
-		if (setup.captureCharFrame().includes("first prompt")) {
+		if (frameIncludes(setup, "first prompt")) {
 			break;
 		}
 	}
@@ -2042,7 +2017,7 @@ describe("SessionView waiting messages", () => {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
 			await setup.mockInput.typeText(text);
 			await flushUi(setup);
-			if (setup.captureCharFrame().includes(text)) {
+			if (frameIncludes(setup, text)) {
 				return;
 			}
 		}
