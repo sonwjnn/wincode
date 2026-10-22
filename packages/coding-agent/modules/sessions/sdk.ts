@@ -66,9 +66,9 @@ import {
 	getPluginProviderRegistrationsFromCollection,
 } from "@/modules/sessions/provider-collection";
 import {
+	nextChatSelection,
 	resolveRestoredSessionSdkSelection,
 	resolveSessionSdkPromptSelection,
-	restoreSelection,
 	type SessionSdkSelectionDefaults,
 	sessionSelectionDefaults,
 } from "@/modules/sessions/selection";
@@ -1057,7 +1057,7 @@ const createSessionSdkInternal = async (
 			const sessionId = toSessionId(id);
 			const stored = await assembly.store.getSession(sessionId);
 			const records = await assembly.store.listSessionRecords(sessionId);
-			const priorSelection = restoreSelection({
+			const priorSelection = nextChatSelection({
 				messages: records.flatMap((record) =>
 					projectSessionMessageRecords(record.messages, record)
 				),
