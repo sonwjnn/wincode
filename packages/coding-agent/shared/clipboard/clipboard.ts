@@ -4,12 +4,13 @@ import {
 	createClipboard,
 	createHostClipboard,
 	createRendererClipboardAdapter,
+	type HostClipboardService,
 	type RendererClipboardBoundary,
 } from "@opentui/core";
+import { getErrorMessage, logger } from "@wincode/utils";
 
 export type ClipboardContent = Readonly<{
 	bytes: Uint8Array;
-	mimeType: string;
 }>;
 
 export type TuiClipboard = Readonly<{
@@ -44,7 +45,38 @@ export const CLIPBOARD_IMAGE_MIME_TYPES = [
 export type ClipboardImageMimeType =
 	(typeof CLIPBOARD_IMAGE_MIME_TYPES)[number];
 
-const PREFERRED_READ_TYPES = CLIPBOARD_IMAGE_MIME_TYPES;
+const unsupportedHost: HostClipboardService = {
+	maxWriteBytes: 0,
+	read: async () => ({ status: "unsupported" }),
+	writeText: async () => ({ status: "unsupported" }),
+	clear: async () => ({ status: "unsupported" }),
+	dispose: async () => undefined,
+};
+
+const createAvailableHostClipboard = (): HostClipboardService => {
+	try {
+		return createHostClipboard();
+	} catch (error) {
+		void logger.warn("Native clipboard unavailable; falling back to OSC52.", {
+			error: getErrorMessage(error, "Unknown clipboard error."),
+		});
+		return unsupportedHost;
+	}
+};
+
+/**
+ * OpenTUI rejects NUL characters and unpaired UTF-16 surrogates. Strip NUL and
+ * replace a split surrogate pair with the replacement character so a cell
+ * selection that bisects an emoji still copies.
+ */
+const sanitizeClipboardText = (text: string): string =>
+	Array.from(text, (character) => {
+		const codePoint = character.codePointAt(0) ?? 0;
+		if (codePoint === 0) {
+			return "";
+		}
+		return codePoint >= 0xd8_00 && codePoint <= 0xdf_ff ? "\uFFFD" : character;
+	}).join("");
 
 const writeSucceeded = (result: ClipboardWriteResult): boolean =>
 	result.host.status === "written" || result.terminal.status === "attempted";
@@ -55,20 +87,16 @@ export function createClipboardAdapter(
 	return {
 		async read() {
 			const result = await clipboard.read({
-				preferredTypes: PREFERRED_READ_TYPES,
+				preferredTypes: CLIPBOARD_IMAGE_MIME_TYPES,
 				selection: "clipboard",
 			});
 			if (result.status !== "read") {
 				return;
 			}
-			return {
-				bytes: result.representation.bytes,
-				mimeType: result.representation.mimeType,
-			};
+			return { bytes: result.representation.bytes };
 		},
 		async write(text) {
-			// OpenTUI rejects NUL before any destination; clipboard text cannot contain it.
-			const sanitized = text.replaceAll("\0", "");
+			const sanitized = sanitizeClipboardText(text);
 			if (sanitized.length === 0) {
 				return;
 			}
@@ -105,7 +133,7 @@ export function createTuiClipboard(
 ): TuiClipboard {
 	return createClipboardAdapter(
 		createClipboard({
-			host: createHostClipboard(),
+			host: createAvailableHostClipboard(),
 			terminal: createRendererClipboardAdapter(renderer),
 		})
 	);

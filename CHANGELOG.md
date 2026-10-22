@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+- **Clipboard access uses OpenTUI's native service.** Copying writes the host
+  clipboard and OSC 52 together, image paste reads the host clipboard directly,
+  and the `pbcopy`/`xclip`/`wl-paste`/PowerShell fallbacks are gone. OpenTUI is
+  upgraded to 0.6.6 and the local `fillRect` patch is removed.
+
 - **One Session Services bundle now serves what a Session runs on.** Print, JSON, RPC,
   and Interactive Mode compose the same factory — the Plugin runtime, durable
   Session storage, the Session Host Manager, Session Capabilities, and the bound

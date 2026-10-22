@@ -38,7 +38,7 @@ import {
 	pluginProviderOwnerMatches,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
-import { useComposerSyntaxStyle } from "@/modules/sessions/ui/messages/use-syntax-style";
+import { useSyntaxStyle } from "@/modules/sessions/ui/messages/use-syntax-style";
 import { type ClipboardReader, useClipboard } from "@/shared/clipboard";
 import { RoundedBorderChars } from "@/shared/constants";
 import { useLatest } from "@/shared/hooks/use-latest";
@@ -492,7 +492,7 @@ export function ChatTextArea({
 	const clipboard = useClipboard();
 	const { show } = useToast();
 	const commandControllerFactory = useCommandControllerFactory();
-	const mentionSyntaxStyle = useComposerSyntaxStyle();
+	const mentionSyntaxStyle = useSyntaxStyle("composer");
 	const pastedTextStyleId = mentionSyntaxStyle.getStyleId("pastedText");
 	const pastedTextRef = useRef<
 		Array<{ extmarkId: number; text: string; token: string }>

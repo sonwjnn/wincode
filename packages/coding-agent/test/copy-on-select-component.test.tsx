@@ -8,7 +8,7 @@ import {
 	SettingsRegistryProvider,
 	useSettingsOperations,
 } from "@/modules/settings";
-import { ClipboardProvider } from "@/shared/clipboard/provider";
+import { ClipboardProvider } from "@/shared/clipboard";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
@@ -64,6 +64,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 	};
 	let settingsOperations: SettingsOperations | undefined;
 	const clipboard = createRecordingClipboard();
+	let clears = 0;
 
 	function Harness() {
 		settingsOperations = useSettingsOperations();
@@ -85,6 +86,9 @@ test("a Settings write immediately changes the root selection handler", async ()
 		{ height: 24, width: 80 }
 	);
 	await flush(setup);
+	setup.renderer.clearSelection = () => {
+		clears += 1;
+	};
 
 	const operations = settingsOperations;
 	if (operations === undefined) {
@@ -115,6 +119,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 	await flush(setup);
 
 	expect(clipboard.writes).toEqual(["enabled", "enabled again"]);
+	expect(clears).toBe(0);
 	act(() => setup.renderer.destroy());
 });
 test("does not copy until a saved disabled preference loads", async () => {
@@ -128,6 +133,7 @@ test("does not copy until a saved disabled preference loads", async () => {
 	};
 	let settingsOperations: SettingsOperations | undefined;
 	const clipboard = createRecordingClipboard();
+	let clears = 0;
 
 	function Harness() {
 		settingsOperations = useSettingsOperations();
@@ -148,6 +154,9 @@ test("does not copy until a saved disabled preference loads", async () => {
 		</ClipboardProvider>,
 		{ height: 24, width: 80 }
 	);
+	setup.renderer.clearSelection = () => {
+		clears += 1;
+	};
 	await delayedStore.initialReadStarted;
 	await act(async () => {
 		setup.renderer.emit("selection", selection("before preference load"));
@@ -168,5 +177,6 @@ test("does not copy until a saved disabled preference loads", async () => {
 	await flush(setup);
 
 	expect(clipboard.writes).toEqual([]);
+	expect(clears).toBe(0);
 	act(() => setup.renderer.destroy());
 });

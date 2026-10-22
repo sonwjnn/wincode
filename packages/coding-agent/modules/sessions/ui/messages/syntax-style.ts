@@ -57,7 +57,7 @@ const buildSyntaxStyles = (
 	};
 };
 
-type SyntaxStyleKey = SyntaxStyleVariant | "composer";
+export type SyntaxStyleKey = SyntaxStyleVariant | "composer";
 
 type CachedSyntaxStyles = {
 	key: string;

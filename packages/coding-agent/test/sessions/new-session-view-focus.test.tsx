@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { TextareaRenderable } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -56,7 +55,7 @@ import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
-import { withTestClipboard } from "../support/clipboard";
+import { testRenderWithClipboard } from "../support/clipboard";
 import { modelId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
@@ -390,7 +389,7 @@ const renderHomeView = async (
 			</ConfigProvider>
 		</ThemeProvider>
 	);
-	const setup = await testRender(withTestClipboard(app), {
+	const setup = await testRenderWithClipboard(app, {
 		height: 24,
 		width: 120,
 	});
@@ -620,7 +619,7 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(withTestClipboard(app), {
+		const setup = await testRenderWithClipboard(app, {
 			height: 24,
 			width: 100,
 		});
@@ -702,7 +701,7 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(withTestClipboard(app), {
+		const setup = await testRenderWithClipboard(app, {
 			height: 24,
 			width: 120,
 		});
@@ -787,7 +786,7 @@ describe("NewSessionView composer focus", () => {
 		);
 		let renderedSetup: TestRendererSetup | undefined;
 		await act(async () => {
-			const mounted = await testRender(withTestClipboard(app), {
+			const mounted = await testRenderWithClipboard(app, {
 				height: 24,
 				width: 100,
 			});
@@ -904,7 +903,7 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(withTestClipboard(app), {
+		const setup = await testRenderWithClipboard(app, {
 			height: 30,
 			width: 100,
 		});

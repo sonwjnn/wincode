@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SelectionBehavior } from "@opentui/core";
-import { ClipboardTooLargeError } from "@/shared/clipboard/clipboard";
-import { handleSelection } from "@/shared/clipboard/copy-on-select";
+import { ClipboardTooLargeError, handleSelection } from "@/shared/clipboard";
 import { createRecordingClipboard } from "./support/clipboard";
 
 const selection = (

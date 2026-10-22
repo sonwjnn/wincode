@@ -9,7 +9,7 @@ import {
 	type ClipboardServiceLike,
 	ClipboardTooLargeError,
 	createClipboardAdapter,
-} from "@/shared/clipboard/clipboard";
+} from "@/shared/clipboard";
 
 const notAttemptedTerminal = {
 	status: "not-attempted",
@@ -50,10 +50,7 @@ describe("createClipboardAdapter", () => {
 			})
 		);
 
-		await expect(reader.read()).resolves.toEqual({
-			bytes,
-			mimeType: "image/png",
-		});
+		await expect(reader.read()).resolves.toEqual({ bytes });
 		expect(readOptions).toEqual({
 			preferredTypes: ["image/png", "image/jpeg", "image/webp", "image/gif"],
 			selection: "clipboard",
@@ -166,6 +163,23 @@ describe("createClipboardAdapter", () => {
 		await writer.write("a\0b\0c");
 
 		expect(written).toBe("abc");
+	});
+
+	test("replaces a split surrogate pair so an emoji selection still copies", async () => {
+		const writes: string[] = [];
+		const writer = createClipboardAdapter(
+			coreClipboard({
+				writeText: async (text) => {
+					writes.push(text);
+					return hostWritten();
+				},
+			})
+		);
+
+		await writer.write("a\uD83Db");
+		await writer.write("😀");
+
+		expect(writes).toEqual(["a\uFFFDb", "😀"]);
 	});
 
 	test("does not call the clipboard service for empty text", async () => {

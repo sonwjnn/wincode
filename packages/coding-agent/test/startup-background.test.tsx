@@ -12,7 +12,9 @@ test("startup canvas remains text-free and keeps one background while content ch
 		await flushTestRenderer(setup, 2);
 		expect(setup.captureCharFrame().trim()).toBe("");
 		const background = setup.captureSpans().lines[0]?.spans[0]?.bg;
-		// ThemedRoot leaves the canvas transparent so the terminal background shows through.
+		// ThemedRoot and RootLayout paint no background, so the canvas is transparent
+		// and the terminal background shows through. The buffer was transparent on
+		// 0.5.14 too, so this is not a 0.6.6 capture artifact.
 		expect(background).toEqual(RGBA.fromValues(0, 0, 0, 0));
 
 		await act(() => session.render(<text>Ready</text>));

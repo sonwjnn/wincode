@@ -4,23 +4,17 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
 	resolveComposerSyntaxStyle,
 	resolveSyntaxStyle,
-	type SyntaxStyleVariant,
+	type SyntaxStyleKey,
 } from "./syntax-style";
 
-export function useSyntaxStyle(variant: SyntaxStyleVariant = "standard") {
+export function useSyntaxStyle(key: SyntaxStyleKey = "standard") {
 	const { colors } = useTheme();
 	const renderer = useRenderer();
 	return useMemo(
-		() => resolveSyntaxStyle(renderer.nativeScene, colors, variant),
-		[colors, renderer.nativeScene, variant]
-	);
-}
-
-export function useComposerSyntaxStyle() {
-	const { colors } = useTheme();
-	const renderer = useRenderer();
-	return useMemo(
-		() => resolveComposerSyntaxStyle(renderer.nativeScene, colors),
-		[colors, renderer.nativeScene]
+		() =>
+			key === "composer"
+				? resolveComposerSyntaxStyle(renderer.nativeScene, colors)
+				: resolveSyntaxStyle(renderer.nativeScene, colors, key),
+		[colors, key, renderer.nativeScene]
 	);
 }

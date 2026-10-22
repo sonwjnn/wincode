@@ -36,7 +36,7 @@ describe("readClipboardImage", () => {
 			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 		]);
 		const result = await readClipboardImage({
-			read: async () => ({ bytes, mimeType: "image/png" }),
+			read: async () => ({ bytes }),
 		});
 		expect(result).toEqual({ bytes, mediaType: "image/png" });
 	});
@@ -50,10 +50,7 @@ describe("readClipboardImage", () => {
 
 	test("ignores text bytes that are not a supported image format", async () => {
 		const result = await readClipboardImage({
-			read: async () => ({
-				bytes: new TextEncoder().encode("text"),
-				mimeType: "text/plain",
-			}),
+			read: async () => ({ bytes: new TextEncoder().encode("text") }),
 		});
 		expect(result).toEqual({ unavailable: true });
 	});

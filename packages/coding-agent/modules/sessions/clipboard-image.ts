@@ -1,7 +1,7 @@
 import type {
 	ClipboardImageMimeType,
 	ClipboardReader,
-} from "@/shared/clipboard/clipboard";
+} from "@/shared/clipboard";
 
 export type ClipboardImage = {
 	bytes: Uint8Array;
