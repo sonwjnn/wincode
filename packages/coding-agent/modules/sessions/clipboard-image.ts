@@ -1,8 +1,7 @@
-import type { ClipboardImageMimeType } from "@/shared/clipboard";
-
-export type ClipboardImageReader = Readonly<{
-	read: () => Promise<{ bytes: Uint8Array } | undefined>;
-}>;
+import type {
+	ClipboardImageMimeType,
+	ClipboardReader,
+} from "@/shared/clipboard";
 
 export type ClipboardImage = {
 	bytes: Uint8Array;
@@ -106,7 +105,7 @@ export async function readImagePath(
 }
 
 export async function readClipboardImage(
-	clipboard: ClipboardImageReader
+	clipboard: ClipboardReader
 ): Promise<ClipboardImageResult> {
 	try {
 		const content = await clipboard.read();

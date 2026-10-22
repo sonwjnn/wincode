@@ -2,6 +2,7 @@ import { memo, useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
 	getMarkdownTreeSitterClient,
+	type SyntaxStyleVariant,
 	setTreeSitterClientForTests,
 } from "../syntax-style";
 import { useSyntaxStyle } from "../use-syntax-style";
@@ -38,7 +39,7 @@ export const MarkdownContent = memo(function MarkdownContent({
 }: {
 	text: string;
 	streaming?: boolean;
-	variant?: "standard" | "thinking";
+	variant?: SyntaxStyleVariant;
 }) {
 	const syntaxStyle = useSyntaxStyle(variant);
 	const sanitized = useMemo(() => stripMarkdownControlCharacters(text), [text]);
@@ -63,7 +64,7 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 }: {
 	text: string;
 	streaming?: boolean;
-	variant?: "standard" | "thinking";
+	variant?: SyntaxStyleVariant;
 }) {
 	const syntaxStyle = useSyntaxStyle(variant);
 	const { colors } = useTheme();

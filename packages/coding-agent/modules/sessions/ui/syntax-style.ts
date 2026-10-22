@@ -86,7 +86,7 @@ const SYNTAX_STYLE_BUILDERS: Record<
 	composer: buildComposerSyntaxStyles,
 };
 
-const resolveCachedSyntaxStyle = (
+export const resolveSyntaxStyle = (
 	owner: NativeResourceOwner,
 	colors: ThemeColors,
 	key: SyntaxStyleKey
@@ -111,12 +111,6 @@ const resolveCachedSyntaxStyle = (
 	cached.styles.set(key, style);
 	return style;
 };
-
-export const resolveSyntaxStyle = (
-	owner: NativeResourceOwner,
-	colors: ThemeColors,
-	key: SyntaxStyleKey = "standard"
-): SyntaxStyle => resolveCachedSyntaxStyle(owner, colors, key);
 
 /**
  * Tree-sitter can report a bracketed label in a standalone strong line as a

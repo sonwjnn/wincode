@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upgraded to 0.6.6 and the local `fillRect` patch is removed. Copy-on-select
   also stops clearing the selection so multi-click history survives.
 
+- **Transcript notices realign with message text.** The notice row now uses the
+  same horizontal padding as transcript content.
+
 - **One Session Services bundle now serves what a Session runs on.** Print, JSON, RPC,
   and Interactive Mode compose the same factory — the Plugin runtime, durable
   Session storage, the Session Host Manager, Session Capabilities, and the bound
