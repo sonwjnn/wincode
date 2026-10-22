@@ -1,19 +1,12 @@
-import type { CliRenderer } from "@opentui/core";
-import {
-	type ClipboardSpawn,
-	writeClipboard,
-} from "@/shared/clipboard/clipboard";
+import type { ClipboardWriter } from "@/shared/clipboard";
 
 export async function copyBrowserAuthorizationUrl(
-	renderer: Pick<CliRenderer, "copyToClipboardOSC52">,
-	url: string,
-	spawnProcess?: ClipboardSpawn
+	clipboard: ClipboardWriter,
+	url: string
 ): Promise<void> {
-	if (await writeClipboard(renderer, url, spawnProcess)) {
-		return;
+	try {
+		await clipboard.write(url);
+	} catch (error) {
+		throw new Error("Failed to copy URL.", { cause: error });
 	}
-	if (process.platform !== "darwin") {
-		throw new Error("Clipboard is not supported by this terminal.");
-	}
-	throw new Error("Failed to copy URL.");
 }

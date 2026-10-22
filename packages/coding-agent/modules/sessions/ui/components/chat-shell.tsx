@@ -405,7 +405,7 @@ export function ChatShell({
 					{transcriptEntries.map((entry) => {
 						if (entry === TRANSCRIPT_NOTICE) {
 							return (
-								<box key="transcript-notice" paddingX={3} width="100%">
+								<box key="transcript-notice" paddingX={1} width="100%">
 									{transcriptNotice}
 								</box>
 							);

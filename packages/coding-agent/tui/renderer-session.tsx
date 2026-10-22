@@ -1,6 +1,12 @@
 import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot, type Root } from "@opentui/react";
 import type { ReactNode } from "react";
+import {
+	type ClipboardFactory,
+	ClipboardProvider,
+	createTuiClipboard,
+	type TuiClipboard,
+} from "../shared/clipboard";
 import { registerCrashTeardown } from "../shared/crash-guard";
 import { ThemeProvider } from "../shared/providers/theme/theme-provider";
 import { ThemedRoot } from "./layouts/themed-root";
@@ -8,6 +14,7 @@ import { ThemedRoot } from "./layouts/themed-root";
 export type RendererFactory = typeof createCliRenderer;
 
 export type RendererSession = Readonly<{
+	clipboard: TuiClipboard;
 	renderer: CliRenderer;
 	render: (node: ReactNode) => void;
 	renderStartupBackground: () => void;
@@ -15,7 +22,8 @@ export type RendererSession = Readonly<{
 }>;
 
 export const createRendererSession = async (
-	rendererFactory: typeof createCliRenderer = createCliRenderer
+	rendererFactory: typeof createCliRenderer = createCliRenderer,
+	clipboardFactory: ClipboardFactory = createTuiClipboard
 ): Promise<RendererSession> => {
 	const renderer = await rendererFactory({
 		enableMouseMovement: true,
@@ -23,6 +31,13 @@ export const createRendererSession = async (
 		targetFps: 120,
 		useMouse: true,
 	});
+	let clipboard: TuiClipboard;
+	try {
+		clipboard = clipboardFactory(renderer);
+	} catch (error) {
+		renderer.destroy();
+		throw error;
+	}
 	const root: Root = createRoot(renderer);
 	const destroyRenderer = renderer.destroy.bind(renderer);
 	let destroyed = false;
@@ -36,6 +51,7 @@ export const createRendererSession = async (
 			root.unmount();
 		} finally {
 			unregisterCrashTeardown();
+			void clipboard.dispose();
 			destroyRenderer();
 		}
 	};
@@ -44,7 +60,9 @@ export const createRendererSession = async (
 		if (!destroyed) {
 			root.render(
 				<ThemeProvider>
-					<ThemedRoot>{node}</ThemedRoot>
+					<ThemedRoot>
+						<ClipboardProvider clipboard={clipboard}>{node}</ClipboardProvider>
+					</ThemedRoot>
 				</ThemeProvider>
 			);
 		}
@@ -57,6 +75,7 @@ export const createRendererSession = async (
 		throw error;
 	}
 	return Object.freeze({
+		clipboard,
 		destroy,
 		render,
 		renderStartupBackground,

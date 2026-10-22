@@ -1,3 +1,4 @@
+import { useRenderer } from "@opentui/react";
 import { memo, useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
@@ -41,9 +42,10 @@ export const MarkdownContent = memo(function MarkdownContent({
 	variant?: "standard" | "thinking";
 }) {
 	const { colors } = useTheme();
+	const renderer = useRenderer();
 	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(colors, variant),
-		[colors, variant]
+		() => resolveSyntaxStyle(renderer.nativeScene, colors, variant),
+		[colors, renderer.nativeScene, variant]
 	);
 	const sanitized = useMemo(() => stripMarkdownControlCharacters(text), [text]);
 
@@ -70,9 +72,10 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 	variant?: "standard" | "thinking";
 }) {
 	const { colors } = useTheme();
+	const renderer = useRenderer();
 	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(colors, variant),
-		[colors, variant]
+		() => resolveSyntaxStyle(renderer.nativeScene, colors, variant),
+		[colors, renderer.nativeScene, variant]
 	);
 	const content = useMemo(() => {
 		const sanitized = stripMarkdownControlCharacters(text);

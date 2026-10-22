@@ -14,7 +14,6 @@ import {
 	MockTreeSitterClient,
 	type TestRendererSetup,
 } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -92,6 +91,7 @@ import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import { testRenderWithClipboard } from "../support/clipboard";
 import {
 	agentId,
 	attachmentId,
@@ -845,7 +845,7 @@ describe("SessionView initial submission", () => {
 		];
 		const configStore = createTestConfigStore();
 		const workspace = process.cwd();
-		const setup = await testRender(
+		const setup = await testRenderWithClipboard(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
 				<ConfigProvider
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
@@ -1408,7 +1408,7 @@ describe("SessionView initial submission", () => {
 		const router = buildRouter();
 		await router.load();
 		let registryIsReady = false;
-		const setup = await testRender(
+		const setup = await testRenderWithClipboard(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
 				<ConfigProvider
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
@@ -1558,7 +1558,7 @@ describe("SessionView initial submission", () => {
 		const router = buildRouter();
 		await router.load();
 		const configStore = createTestConfigStore();
-		const setup = await testRender(
+		const setup = await testRenderWithClipboard(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
 				<ConfigProvider
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
@@ -1678,7 +1678,7 @@ describe("SessionView initial submission", () => {
 		const router = buildRouter();
 		await router.load();
 		const configStore = createTestConfigStore();
-		const setup = await testRender(
+		const setup = await testRenderWithClipboard(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
 				<ConfigProvider
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
@@ -1764,7 +1764,7 @@ describe("SessionView initial submission", () => {
 		await router.load();
 		const configStore = createTestConfigStore();
 		const workspace = process.cwd();
-		const setup = await testRender(
+		const setup = await testRenderWithClipboard(
 			<ThemeProvider themeName={DEFAULT_THEME.name}>
 				<ConfigProvider
 					value={{ configStore, homeRoot: os.homedir(), workspace }}
@@ -1856,7 +1856,7 @@ const renderSessionView = async ({
 	const workspace = process.cwd();
 	let registryIsReady = false;
 	const commandLayer = { isTop: false };
-	const setup = await testRender(
+	const setup = await testRenderWithClipboard(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider
 				value={{ configStore, homeRoot: os.homedir(), workspace }}

@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { pathToFiletype } from "@opentui/core";
+import { useRenderer } from "@opentui/react";
 import type { AgentId } from "@wincode/agent-core";
 import {
 	isArray,
@@ -379,6 +380,7 @@ const getMultiEditStatus = (
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: output states intentionally share one compact diff/status renderer.
 function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 	const { colors } = useTheme();
+	const renderer = useRenderer();
 	const output = getOutput(part);
 	const result = isEditOutputWithDiff(part);
 	const path = formatEditPath(result?.path ?? getEditPath(part, output));
@@ -433,7 +435,7 @@ function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 	}
 
 	const view = "unified";
-	const syntaxStyle = resolveSyntaxStyle(colors);
+	const syntaxStyle = resolveSyntaxStyle(renderer.nativeScene, colors);
 
 	return (
 		<BorderedContentBlock colors={colors} paddingX={DIFF_BLOCK_PADDING_X}>

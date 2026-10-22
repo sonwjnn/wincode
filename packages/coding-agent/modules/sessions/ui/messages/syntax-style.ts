@@ -1,5 +1,6 @@
 import {
 	getTreeSitterClient,
+	type NativeResourceOwner,
 	type SimpleHighlight,
 	type StyleDefinitionInput,
 	SyntaxStyle,
@@ -59,28 +60,37 @@ type CachedSyntaxStyles = {
 	styles: Record<"standard" | "thinking", SyntaxStyle | undefined>;
 };
 
-let cachedSyntaxStyles: CachedSyntaxStyles | null = null;
+const cachedSyntaxStyles = new WeakMap<
+	NativeResourceOwner,
+	CachedSyntaxStyles
+>();
 
 export const resolveSyntaxStyle = (
+	owner: NativeResourceOwner,
 	colors: ThemeColors,
 	variant: "standard" | "thinking" = "standard"
 ): SyntaxStyle => {
 	const key = JSON.stringify(colors);
-	if (cachedSyntaxStyles?.key !== key) {
-		for (const style of Object.values(cachedSyntaxStyles?.styles ?? {})) {
+	let cached = cachedSyntaxStyles.get(owner);
+	if (cached?.key !== key) {
+		for (const style of Object.values(cached?.styles ?? {})) {
 			style?.destroy();
 		}
-		cachedSyntaxStyles = {
+		cached = {
 			key,
 			styles: { standard: undefined, thinking: undefined },
 		};
+		cachedSyntaxStyles.set(owner, cached);
 	}
-	const cachedStyle = cachedSyntaxStyles.styles[variant];
+	const cachedStyle = cached.styles[variant];
 	if (cachedStyle) {
 		return cachedStyle;
 	}
-	const style = SyntaxStyle.fromStyles(buildSyntaxStyles(colors, variant));
-	cachedSyntaxStyles.styles[variant] = style;
+	const style = SyntaxStyle.fromStyles(
+		buildSyntaxStyles(colors, variant),
+		owner
+	);
+	cached.styles[variant] = style;
 	return style;
 };
 

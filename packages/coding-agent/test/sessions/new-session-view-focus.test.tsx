@@ -56,6 +56,7 @@ import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import { withTestClipboard } from "../support/clipboard";
 import { modelId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
@@ -389,7 +390,10 @@ const renderHomeView = async (
 			</ConfigProvider>
 		</ThemeProvider>
 	);
-	const setup = await testRender(app, { height: 24, width: 120 });
+	const setup = await testRender(withTestClipboard(app), {
+		height: 24,
+		width: 120,
+	});
 	await act(async () => {
 		await Bun.sleep(20);
 		await setup.renderOnce();
@@ -616,7 +620,10 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(app, { height: 24, width: 100 });
+		const setup = await testRender(withTestClipboard(app), {
+			height: 24,
+			width: 100,
+		});
 		try {
 			await act(async () => {
 				await Bun.sleep(20);
@@ -695,7 +702,10 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(app, { height: 24, width: 120 });
+		const setup = await testRender(withTestClipboard(app), {
+			height: 24,
+			width: 120,
+		});
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
@@ -777,7 +787,10 @@ describe("NewSessionView composer focus", () => {
 		);
 		let renderedSetup: TestRendererSetup | undefined;
 		await act(async () => {
-			const mounted = await testRender(app, { height: 24, width: 100 });
+			const mounted = await testRender(withTestClipboard(app), {
+				height: 24,
+				width: 100,
+			});
 			renderedSetup = mounted;
 			await Bun.sleep(20);
 			await mounted.renderOnce();
@@ -891,7 +904,10 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(app, { height: 30, width: 100 });
+		const setup = await testRender(withTestClipboard(app), {
+			height: 30,
+			width: 100,
+		});
 		try {
 			await act(async () => {
 				await Bun.sleep(20);
@@ -992,7 +1008,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
-			expect(captureNormalizedHomeFrame(setup)).toContain("∙ low");
+			expect(captureNormalizedHomeFrame(setup)).toContain(":low");
 			await submitHomePrompt(setup);
 			const [session] = await store.listSessions();
 			if (session === undefined) {
@@ -1038,9 +1054,9 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 				pendingSnapshot.resolve([]);
 				await Promise.resolve();
 			});
-			await waitForHomeFrame(setup, "openai/gpt-5.6-luna ∙ low");
+			await waitForHomeFrame(setup, "openai/gpt-5.6-luna:low");
 			expect(captureNormalizedHomeFrame(setup)).toContain(
-				"openai/gpt-5.6-luna ∙ low"
+				"openai/gpt-5.6-luna:low"
 			);
 		} finally {
 			pendingSnapshot.resolve([]);
@@ -1074,8 +1090,8 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		});
 
 		try {
-			await waitForHomeFrame(setup, "∙ low");
-			expect(captureNormalizedHomeFrame(setup)).toContain("∙ low");
+			await waitForHomeFrame(setup, ":low");
+			expect(captureNormalizedHomeFrame(setup)).toContain(":low");
 		} finally {
 			pendingSnapshot.resolve([]);
 			await act(() => setup.renderer.destroy());
@@ -1107,7 +1123,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
-			expect(captureNormalizedHomeFrame(setup)).toContain("∙ high");
+			expect(captureNormalizedHomeFrame(setup)).toContain(":high");
 
 			await submitHomePrompt(setup);
 			const [session] = await store.listSessions();

@@ -1,3 +1,4 @@
+import { useRenderer } from "@opentui/react";
 import { useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { stripMarkdownControlCharacters } from "./markdown-message-part";
@@ -14,10 +15,11 @@ export function ReasoningMessagePart({
 	text: string;
 }) {
 	const { colors } = useTheme();
+	const renderer = useRenderer();
 	const content = useMemo(() => stripMarkdownControlCharacters(text), [text]);
 	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(colors, "thinking"),
-		[colors]
+		() => resolveSyntaxStyle(renderer.nativeScene, colors, "thinking"),
+		[colors, renderer.nativeScene]
 	);
 
 	return (

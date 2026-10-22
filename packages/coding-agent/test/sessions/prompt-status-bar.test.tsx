@@ -46,7 +46,7 @@ test("shows the provider model and effort without the agent label", async () => 
 	try {
 		await flushTestRenderer(setup, 3);
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("anthropic/claude-sonnet-5 ∙ low");
+		expect(frame).toContain("anthropic/claude-sonnet-5:low");
 		expect(frame).not.toContain("Build");
 	} finally {
 		act(() => setup.renderer.destroy());

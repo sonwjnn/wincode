@@ -257,6 +257,7 @@ describe("route error boundary", () => {
 			defaultOnCatch: onCatch,
 			history: createMemoryHistory({ initialEntries: ["/"] }),
 			isServer: false,
+			origin: "http://localhost",
 			routeTree: createRootRoute({ component: Child }),
 			scrollRestoration: false,
 		});

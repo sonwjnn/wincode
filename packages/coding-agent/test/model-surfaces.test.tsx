@@ -504,7 +504,7 @@ test("status bar shows an explicit Off selection as the effort value", async () 
 	activeSetups.push(setup);
 	await flushUi(setup);
 
-	expect(setup.captureCharFrame()).toContain("∙ off");
+	expect(setup.captureCharFrame()).toContain(":off");
 });
 
 describe("session usage bar", () => {
@@ -554,8 +554,8 @@ describe("session usage bar", () => {
 		));
 
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("cache read 1.2K");
-		expect(frame).toContain("write 100");
+		expect(frame).toContain("↑1.2K");
+		expect(frame).toContain("↓100");
 		expect(frame).toContain("~$1.23");
 	});
 

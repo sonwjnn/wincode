@@ -43,6 +43,7 @@ import {
 	setInteractiveRuntimeContext,
 } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import { withTestClipboard } from "./clipboard";
 import { createInstalledFakeProviderCollection } from "./e2e-fake-runtime";
 import {
 	agentId,
@@ -275,35 +276,37 @@ export const renderSession = async ({
 		registryReady.resolve(undefined);
 	};
 	const setup = await testRender(
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ConfigProvider
-				value={{
-					configStore: createTestConfigStore(configDocument),
-					homeRoot,
-					workspace,
-				}}
-			>
-				<ToastProvider>
-					<AgentRegistryProvider>
-						<KeyboardLayerProvider>
-							<PromptConfigProvider initialModel={E2E_MODEL}>
-								<DialogProvider>
-									<RouterContextProvider router={router}>
-										<CommandControllerProvider>
-											<SessionSurface
-												initialSubmission={initialSubmission}
-												sessionId={sessionId}
-											/>
-											<RegistryReadyProbe onReady={resolveRegistryReady} />
-										</CommandControllerProvider>
-									</RouterContextProvider>
-								</DialogProvider>
-							</PromptConfigProvider>
-						</KeyboardLayerProvider>
-					</AgentRegistryProvider>
-				</ToastProvider>
-			</ConfigProvider>
-		</ThemeProvider>,
+		withTestClipboard(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ConfigProvider
+					value={{
+						configStore: createTestConfigStore(configDocument),
+						homeRoot,
+						workspace,
+					}}
+				>
+					<ToastProvider>
+						<AgentRegistryProvider>
+							<KeyboardLayerProvider>
+								<PromptConfigProvider initialModel={E2E_MODEL}>
+									<DialogProvider>
+										<RouterContextProvider router={router}>
+											<CommandControllerProvider>
+												<SessionSurface
+													initialSubmission={initialSubmission}
+													sessionId={sessionId}
+												/>
+												<RegistryReadyProbe onReady={resolveRegistryReady} />
+											</CommandControllerProvider>
+										</RouterContextProvider>
+									</DialogProvider>
+								</PromptConfigProvider>
+							</KeyboardLayerProvider>
+						</AgentRegistryProvider>
+					</ToastProvider>
+				</ConfigProvider>
+			</ThemeProvider>
+		),
 		{ height: 40, width: 120 }
 	);
 	return { registryReady: registryReady.promise, setup };

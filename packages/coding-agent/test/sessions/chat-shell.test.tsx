@@ -52,6 +52,7 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import { withTestClipboard } from "../support/clipboard";
 import {
 	agentTurnId,
 	compactionId,
@@ -329,43 +330,45 @@ const renderChatShell = async (
 	// Each rendered shell owns its composer draft key; drop drafts earlier cases left.
 	writeComposerDraft("draft-test-key", "");
 	const setup = await testRender(
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ConfigProvider
-				value={{ configStore, homeRoot: os.homedir(), workspace }}
-			>
-				<ToastProvider>
-					<SettingsRegistryProvider>
-						<AgentRegistryProvider>
-							<KeyboardLayerProvider>
-								<PromptConfigProvider
-									initialThinkingLevel={initialThinkingLevel}
-								>
-									<DialogProvider>
-										<RouterContextProvider router={router}>
-											<CommandControllerProvider>
-												<ChatShellProbe
-													activeMessages={activeMessages}
-													agentHolder={agent}
-													holder={holder}
-													initialCompactions={initialCompactions}
-													initialMessages={initialMessages}
-													isBusy={isBusy}
-													isCompacting={isCompacting}
-													onRetry={onRetry}
-													providerController={providerController}
-													queuedSubmissions={queuedSubmissions}
-													transcriptNotice={transcriptNotice}
-												/>
-											</CommandControllerProvider>
-										</RouterContextProvider>
-									</DialogProvider>
-								</PromptConfigProvider>
-							</KeyboardLayerProvider>
-						</AgentRegistryProvider>
-					</SettingsRegistryProvider>
-				</ToastProvider>
-			</ConfigProvider>
-		</ThemeProvider>,
+		withTestClipboard(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ConfigProvider
+					value={{ configStore, homeRoot: os.homedir(), workspace }}
+				>
+					<ToastProvider>
+						<SettingsRegistryProvider>
+							<AgentRegistryProvider>
+								<KeyboardLayerProvider>
+									<PromptConfigProvider
+										initialThinkingLevel={initialThinkingLevel}
+									>
+										<DialogProvider>
+											<RouterContextProvider router={router}>
+												<CommandControllerProvider>
+													<ChatShellProbe
+														activeMessages={activeMessages}
+														agentHolder={agent}
+														holder={holder}
+														initialCompactions={initialCompactions}
+														initialMessages={initialMessages}
+														isBusy={isBusy}
+														isCompacting={isCompacting}
+														onRetry={onRetry}
+														providerController={providerController}
+														queuedSubmissions={queuedSubmissions}
+														transcriptNotice={transcriptNotice}
+													/>
+												</CommandControllerProvider>
+											</RouterContextProvider>
+										</DialogProvider>
+									</PromptConfigProvider>
+								</KeyboardLayerProvider>
+							</AgentRegistryProvider>
+						</SettingsRegistryProvider>
+					</ToastProvider>
+				</ConfigProvider>
+			</ThemeProvider>
+		),
 		{ height, width }
 	);
 	return { agent, holder, setup };

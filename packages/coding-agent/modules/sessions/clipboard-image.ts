@@ -1,21 +1,14 @@
+import type {
+	ClipboardImageMimeType,
+	ClipboardReader,
+} from "@/shared/clipboard/clipboard";
+
 export type ClipboardImage = {
 	bytes: Uint8Array;
-	mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+	mediaType: ClipboardImageMimeType;
 };
 
 export type ClipboardImageResult = ClipboardImage | { unavailable: true };
-
-type CommandResult = { exitCode: number; stdout: Uint8Array };
-
-export type ClipboardImageDeps = {
-	platform?: NodeJS.Platform;
-	environment?: Record<string, string | undefined>;
-	run: (command: string, args: string[]) => Promise<CommandResult>;
-	readFile: (path: string) => Promise<Uint8Array>;
-	stat?: (path: string) => Promise<{ isFile: () => boolean }>;
-	removeFile: (path: string) => Promise<void>;
-	temporaryPath: () => string;
-};
 
 const unavailable = (): ClipboardImageResult => ({ unavailable: true });
 const QUOTED_PATH = /^(?:'([^']*)'|"((?:\\.|[^"\\])*)")$/;
@@ -58,8 +51,6 @@ export function imageFromBytes(bytes: Uint8Array): ClipboardImageResult {
 	return unavailable();
 }
 
-const png = (bytes: Uint8Array): ClipboardImageResult => imageFromBytes(bytes);
-
 export function decodeImagePath(text: string): string | null {
 	const value = text.trim();
 	if (!value || value.includes("\n")) {
@@ -90,9 +81,14 @@ export function decodeImagePath(text: string): string | null {
 		: null;
 }
 
+export type ImagePathDeps = {
+	readFile: (path: string) => Promise<Uint8Array>;
+	stat?: (path: string) => Promise<{ isFile: () => boolean }>;
+};
+
 export async function readImagePath(
 	text: string,
-	deps: Pick<ClipboardImageDeps, "readFile" | "stat">
+	deps: ImagePathDeps
 ): Promise<ClipboardImageResult> {
 	const path = decodeImagePath(text);
 	if (!(path && deps.stat)) {
@@ -108,84 +104,15 @@ export async function readImagePath(
 	}
 }
 
-const decodeBase64 = (bytes: Uint8Array): Uint8Array =>
-	Uint8Array.from(
-		Buffer.from(new TextDecoder().decode(bytes).trim(), "base64")
-	);
-
-async function macClipboard(
-	deps: ClipboardImageDeps
-): Promise<ClipboardImageResult> {
-	const path = deps.temporaryPath();
-	try {
-		const result = await deps.run("osascript", [
-			"-e",
-			'on run argv\nset outputPath to item 1 of argv\ntry\nset imageData to the clipboard as «class PNGf»\nset fileRef to open for access outputPath with write permission\nset eof fileRef to 0\nwrite imageData to fileRef\nclose access fileRef\nreturn "ok"\non error\ntry\nclose access outputPath\nend try\nreturn "unavailable"\nend try\nend run',
-			path,
-		]);
-		if (
-			result.exitCode !== 0 ||
-			new TextDecoder().decode(result.stdout).trim() !== "ok"
-		) {
-			return unavailable();
-		}
-		return png(await deps.readFile(path));
-	} catch {
-		return unavailable();
-	} finally {
-		await deps.removeFile(path).catch(() => undefined);
-	}
-}
-
-async function powershellClipboard(
-	deps: ClipboardImageDeps,
-	command: string
-): Promise<ClipboardImageResult> {
-	try {
-		const result = await deps.run(command, [
-			"-NoProfile",
-			"-NonInteractive",
-			"-Command",
-			"[Console]::OutputEncoding = [Text.Encoding]::ASCII; Add-Type -AssemblyName PresentationCore; $image = [System.Windows.Clipboard]::GetImage(); if ($null -eq $image) { exit 3 }; $stream = New-Object IO.MemoryStream; $encoder = New-Object Windows.Media.Imaging.PngBitmapEncoder; $frame = [Windows.Media.Imaging.BitmapFrame]::Create($image); $encoder.Frames.Add($frame); $encoder.Save($stream); [Convert]::ToBase64String($stream.ToArray())",
-		]);
-		return result.exitCode === 0
-			? png(decodeBase64(result.stdout))
-			: unavailable();
-	} catch {
-		return unavailable();
-	}
-}
-
 export async function readClipboardImage(
-	deps: ClipboardImageDeps
+	clipboard: ClipboardReader
 ): Promise<ClipboardImageResult> {
-	const platform = deps.platform ?? process.platform;
-	if (platform === "darwin") {
-		return macClipboard(deps);
+	try {
+		const content = await clipboard.read();
+		return content === undefined
+			? unavailable()
+			: imageFromBytes(content.bytes);
+	} catch {
+		return unavailable();
 	}
-	if (platform === "win32") {
-		return powershellClipboard(deps, "powershell.exe");
-	}
-	if (platform === "linux") {
-		if (deps.environment?.WSL_INTEROP) {
-			return powershellClipboard(deps, "powershell.exe");
-		}
-		for (const args of [
-			["--type", "image/png", "--no-newline"],
-			["-selection", "clipboard", "-t", "image/png", "-o"],
-		]) {
-			try {
-				const result = await deps.run(
-					args[0] === "--type" ? "wl-paste" : "xclip",
-					args
-				);
-				if (result.exitCode === 0) {
-					return png(result.stdout);
-				}
-			} catch {
-				// Missing clipboard command is an expected unavailable result.
-			}
-		}
-	}
-	return unavailable();
 }

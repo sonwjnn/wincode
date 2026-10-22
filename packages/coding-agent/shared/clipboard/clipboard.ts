@@ -1,64 +1,110 @@
-import type { CliRenderer } from "@opentui/core";
+import {
+	type ClipboardService,
+	type ClipboardWriteResult,
+	createClipboard,
+	createHostClipboard,
+	createRendererClipboardAdapter,
+	type RendererClipboardBoundary,
+} from "@opentui/core";
 
-export type ClipboardRenderer = Pick<CliRenderer, "copyToClipboardOSC52">;
-export type ClipboardSpawn = (
-	command: string[],
-	text: string
-) => Promise<number>;
+export type ClipboardContent = Readonly<{
+	bytes: Uint8Array;
+	mimeType: string;
+}>;
 
-const nativeCommands: Record<string, string[][]> = {
-	darwin: [["pbcopy"]],
-	linux: [
-		["wl-copy"],
-		["xclip", "-selection", "clipboard"],
-		["xsel", "--clipboard", "--input"],
-	],
-	win32: [["powershell", "-NoProfile", "-Command", "Set-Clipboard"]],
-};
+export type TuiClipboard = Readonly<{
+	read: () => Promise<ClipboardContent | undefined>;
+	write: (text: string) => Promise<void>;
+	dispose: () => Promise<void>;
+}>;
 
-const defaultSpawn: ClipboardSpawn = async (command, text) => {
-	const bun = globalThis as typeof globalThis & {
-		Bun: {
-			spawn: (
-				command: string[],
-				options: { stdin: Blob }
-			) => { exited: Promise<number> };
-		};
-	};
-	const process = bun.Bun.spawn(command, { stdin: new Blob([text]) });
-	return await process.exited;
-};
+export type ClipboardWriter = Pick<TuiClipboard, "write">;
+export type ClipboardReader = Pick<TuiClipboard, "read">;
+export type ClipboardFactory = (
+	renderer: RendererClipboardBoundary
+) => TuiClipboard;
 
-export async function writeClipboard(
-	renderer: ClipboardRenderer,
-	text: string,
-	spawn: ClipboardSpawn = defaultSpawn,
-	platform = process.platform
-): Promise<boolean> {
-	let copied = false;
-	try {
-		copied = renderer.copyToClipboardOSC52(text);
-	} catch {
-		// Renderer clipboard capability can be unavailable.
+/** Raised when the text exceeds the clipboard service's UTF-8 write budget. */
+export class ClipboardTooLargeError extends Error {
+	constructor(options?: ErrorOptions) {
+		super("Selection is too large to copy.", options);
+		this.name = "ClipboardTooLargeError";
 	}
+}
 
-	if (copied) {
-		return true;
-	}
+export type ClipboardServiceLike = Pick<
+	ClipboardService,
+	"read" | "writeText" | "dispose"
+>;
 
-	for (const command of nativeCommands[platform] ?? []) {
-		try {
-			if ((await spawn(command, text)) === 0) {
-				copied = true;
-				break;
+export const CLIPBOARD_IMAGE_MIME_TYPES = [
+	"image/png",
+	"image/jpeg",
+	"image/webp",
+	"image/gif",
+] as const;
+
+export type ClipboardImageMimeType =
+	(typeof CLIPBOARD_IMAGE_MIME_TYPES)[number];
+
+const PREFERRED_READ_TYPES = CLIPBOARD_IMAGE_MIME_TYPES;
+
+const writeSucceeded = (result: ClipboardWriteResult): boolean =>
+	result.host.status === "written" || result.terminal.status === "attempted";
+
+export function createClipboardAdapter(
+	clipboard: ClipboardServiceLike
+): TuiClipboard {
+	return {
+		async read() {
+			const result = await clipboard.read({
+				preferredTypes: PREFERRED_READ_TYPES,
+				selection: "clipboard",
+			});
+			if (result.status !== "read") {
+				return;
 			}
-		} catch {
-			// Missing native clipboard command is a normal fallback case.
-		}
-	}
-	return copied;
+			return {
+				bytes: result.representation.bytes,
+				mimeType: result.representation.mimeType,
+			};
+		},
+		async write(text) {
+			// OpenTUI rejects NUL before any destination; clipboard text cannot contain it.
+			const sanitized = text.replaceAll("\0", "");
+			if (sanitized.length === 0) {
+				return;
+			}
+			let result: ClipboardWriteResult;
+			try {
+				result = await clipboard.writeText(sanitized, {
+					destination: "all-available",
+					selection: "clipboard",
+				});
+			} catch (error) {
+				if (error instanceof RangeError) {
+					throw new ClipboardTooLargeError({ cause: error });
+				}
+				throw error;
+			}
+			if (writeSucceeded(result)) {
+				return;
+			}
+			if (result.host.status === "failed") {
+				throw result.host.error;
+			}
+			throw new Error(
+				`Clipboard write failed (host: ${result.host.status}, terminal: ${result.terminal.status})`
+			);
+		},
+		dispose: () => clipboard.dispose(),
+	};
 }
 
-export function clipboardCommands(platform: string): string[][] {
-	return nativeCommands[platform] ?? [];
-}
+export const createTuiClipboard: ClipboardFactory = (renderer) =>
+	createClipboardAdapter(
+		createClipboard({
+			host: createHostClipboard(),
+			terminal: createRendererClipboardAdapter(renderer),
+		})
+	);

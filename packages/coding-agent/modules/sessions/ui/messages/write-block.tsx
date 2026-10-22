@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { pathToFiletype } from "@opentui/core";
+import { useRenderer } from "@opentui/react";
 import type { AgentId } from "@wincode/agent-core";
 import { isNull, isPlainObject, isString } from "@wincode/utils";
 import { useMemo, useState } from "react";
@@ -185,7 +186,11 @@ const WritePreview = ({
 	visibleContent: string;
 }) => {
 	const { colors } = useTheme();
-	const syntaxStyle = useMemo(() => resolveSyntaxStyle(colors), [colors]);
+	const renderer = useRenderer();
+	const syntaxStyle = useMemo(
+		() => resolveSyntaxStyle(renderer.nativeScene, colors),
+		[colors, renderer.nativeScene]
+	);
 
 	if (isRunning && content.length === 0) {
 		return null;

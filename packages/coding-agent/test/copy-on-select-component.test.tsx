@@ -8,9 +8,11 @@ import {
 	SettingsRegistryProvider,
 	useSettingsOperations,
 } from "@/modules/settings";
+import { ClipboardProvider } from "@/shared/clipboard/provider";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import { createRecordingClipboard } from "./support/clipboard";
 import {
 	TEST_CONFIG_ROOT as CONFIG_ROOT,
 	createInMemoryConfigStore as createTestConfigStore,
@@ -47,7 +49,11 @@ const createConfigStoreWithDelayedInitialRead = (
 };
 
 const selection = (text: string) =>
-	({ getSelectedText: () => text }) as Selection;
+	({
+		behavior: "word",
+		getSelectedText: () => text,
+		isStart: false,
+	}) as Selection;
 
 test("a Settings write immediately changes the root selection handler", async () => {
 	const configStore = createTestConfigStore();
@@ -57,34 +63,27 @@ test("a Settings write immediately changes the root selection handler", async ()
 		workspace: WORKSPACE,
 	};
 	let settingsOperations: SettingsOperations | undefined;
-	let writes = 0;
-	let clears = 0;
-	const write = async () => {
-		writes += 1;
-		return true;
-	};
+	const clipboard = createRecordingClipboard();
 
 	function Harness() {
 		settingsOperations = useSettingsOperations();
-		return <CopyOnSelectFromSettings write={write} />;
+		return <CopyOnSelectFromSettings />;
 	}
 
 	const setup = await testRender(
-		<ConfigProvider value={configValue}>
-			<ThemeProvider>
-				<ToastProvider>
-					<SettingsRegistryProvider>
-						<Harness />
-					</SettingsRegistryProvider>
-				</ToastProvider>
-			</ThemeProvider>
-		</ConfigProvider>,
+		<ClipboardProvider clipboard={clipboard}>
+			<ConfigProvider value={configValue}>
+				<ThemeProvider>
+					<ToastProvider>
+						<SettingsRegistryProvider>
+							<Harness />
+						</SettingsRegistryProvider>
+					</ToastProvider>
+				</ThemeProvider>
+			</ConfigProvider>
+		</ClipboardProvider>,
 		{ height: 24, width: 80 }
 	);
-	setup.renderer.copyToClipboardOSC52 = () => true;
-	setup.renderer.clearSelection = () => {
-		clears += 1;
-	};
 	await flush(setup);
 
 	const operations = settingsOperations;
@@ -115,8 +114,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 	});
 	await flush(setup);
 
-	expect(writes).toBe(2);
-	expect(clears).toBe(2);
+	expect(clipboard.writes).toEqual(["enabled", "enabled again"]);
 	act(() => setup.renderer.destroy());
 });
 test("does not copy until a saved disabled preference loads", async () => {
@@ -129,45 +127,34 @@ test("does not copy until a saved disabled preference loads", async () => {
 		workspace: WORKSPACE,
 	};
 	let settingsOperations: SettingsOperations | undefined;
-	let writes = 0;
-	let clears = 0;
+	const clipboard = createRecordingClipboard();
 
 	function Harness() {
 		settingsOperations = useSettingsOperations();
-		return (
-			<CopyOnSelectFromSettings
-				write={async () => {
-					writes += 1;
-					return true;
-				}}
-			/>
-		);
+		return <CopyOnSelectFromSettings />;
 	}
 
 	const setup = await testRender(
-		<ConfigProvider value={configValue}>
-			<ThemeProvider>
-				<ToastProvider>
-					<SettingsRegistryProvider>
-						<Harness />
-					</SettingsRegistryProvider>
-				</ToastProvider>
-			</ThemeProvider>
-		</ConfigProvider>,
+		<ClipboardProvider clipboard={clipboard}>
+			<ConfigProvider value={configValue}>
+				<ThemeProvider>
+					<ToastProvider>
+						<SettingsRegistryProvider>
+							<Harness />
+						</SettingsRegistryProvider>
+					</ToastProvider>
+				</ThemeProvider>
+			</ConfigProvider>
+		</ClipboardProvider>,
 		{ height: 24, width: 80 }
 	);
-	setup.renderer.copyToClipboardOSC52 = () => true;
-	setup.renderer.clearSelection = () => {
-		clears += 1;
-	};
 	await delayedStore.initialReadStarted;
 	await act(async () => {
 		setup.renderer.emit("selection", selection("before preference load"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
-	expect(writes).toBe(0);
-	expect(clears).toBe(0);
+	expect(clipboard.writes).toEqual([]);
 
 	delayedStore.releaseInitialRead();
 	await flush(setup);
@@ -180,7 +167,6 @@ test("does not copy until a saved disabled preference loads", async () => {
 	});
 	await flush(setup);
 
-	expect(writes).toBe(0);
-	expect(clears).toBe(0);
+	expect(clipboard.writes).toEqual([]);
 	act(() => setup.renderer.destroy());
 });

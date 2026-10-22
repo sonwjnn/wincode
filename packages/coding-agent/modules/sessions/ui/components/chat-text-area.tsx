@@ -1,5 +1,4 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
 	decodePasteBytes,
@@ -7,10 +6,9 @@ import {
 	SyntaxStyle,
 	type TextareaRenderable,
 } from "@opentui/core";
-import { useKeyboard, usePaste } from "@opentui/react";
+import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
 import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
-import { spawn } from "bun";
 import {
 	type ReactNode,
 	useCallback,
@@ -41,6 +39,7 @@ import {
 	pluginProviderOwnerMatches,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
+import { type ClipboardReader, useClipboard } from "@/shared/clipboard";
 import { RoundedBorderChars } from "@/shared/constants";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
@@ -180,29 +179,10 @@ function ComposerTopBorder({
 	);
 }
 
-const readPastedImage = () =>
-	readClipboardImage({
-		environment: process.env,
-		readFile: (path) => Bun.file(path).bytes(),
-		stat: async (path) => fs.stat(path),
-		removeFile: (path) => fs.rm(path, { force: true }),
-		run: async (command, args) => {
-			const childProcess = spawn([command, ...args], {
-				stderr: "ignore",
-				stdout: "pipe",
-			});
-			return {
-				exitCode: await childProcess.exited,
-				stdout: new Uint8Array(
-					await new Response(childProcess.stdout).arrayBuffer()
-				),
-			};
-		},
-		temporaryPath: () =>
-			path.join(os.tmpdir(), `wincode-clipboard-${crypto.randomUUID()}.png`),
-	});
-
-const readPastedImageOrPath = async (pastedText: string) => {
+const readPastedImageOrPath = async (
+	clipboard: ClipboardReader,
+	pastedText: string
+) => {
 	const pathImage = pastedText
 		? await readImagePath(pastedText, {
 				readFile: (path) => Bun.file(path).bytes(),
@@ -212,7 +192,7 @@ const readPastedImageOrPath = async (pastedText: string) => {
 	return {
 		image:
 			!pastedText || "unavailable" in pathImage
-				? await readPastedImage()
+				? await readClipboardImage(clipboard)
 				: pathImage,
 		pathImage,
 	};
@@ -509,24 +489,29 @@ export function ChatTextArea({
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
 	const { colors } = useTheme();
+	const renderer = useRenderer();
+	const clipboard = useClipboard();
 	const { show } = useToast();
 	const commandControllerFactory = useCommandControllerFactory();
 	const mentionSyntaxStyle = useMemo(
 		() =>
-			SyntaxStyle.fromStyles({
-				attachment: {
-					bg: colors.primary,
-					bold: true,
-					fg: colors.background,
+			SyntaxStyle.fromStyles(
+				{
+					attachment: {
+						bg: colors.primary,
+						bold: true,
+						fg: colors.background,
+					},
+					fileMention: { bold: true, fg: colors.primary },
+					pastedText: {
+						bg: colors.primary,
+						bold: true,
+						fg: colors.background,
+					},
 				},
-				fileMention: { bold: true, fg: colors.primary },
-				pastedText: {
-					bg: colors.primary,
-					bold: true,
-					fg: colors.background,
-				},
-			}),
-		[colors.background, colors.primary]
+				renderer.nativeScene
+			),
+		[colors.background, colors.primary, renderer.nativeScene]
 	);
 	const pastedTextStyleId = mentionSyntaxStyle.getStyleId("pastedText");
 	const pastedTextRef = useRef<
@@ -1195,7 +1180,10 @@ export function ChatTextArea({
 
 			event.preventDefault();
 			const pastedText = decodePasteBytes(event.bytes);
-			const { image, pathImage } = await readPastedImageOrPath(pastedText);
+			const { image, pathImage } = await readPastedImageOrPath(
+				clipboard,
+				pastedText
+			);
 			if (pasteSequence !== pasteSequenceRef.current) {
 				applyTextPaste(event);
 				return;
@@ -1213,7 +1201,14 @@ export function ChatTextArea({
 				"unavailable" in pathImage ? "clipboard" : path.basename(pastedText)
 			);
 		},
-		[applyTextPaste, disabled, isTopLayer, stageImage, stagePastedText]
+		[
+			applyTextPaste,
+			clipboard,
+			disabled,
+			isTopLayer,
+			stageImage,
+			stagePastedText,
+		]
 	);
 
 	usePaste((event) => {

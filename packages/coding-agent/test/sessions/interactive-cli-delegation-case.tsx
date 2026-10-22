@@ -44,10 +44,24 @@ const waitForFrame = async (
 	predicate: (frame: string) => boolean
 ): Promise<void> => {
 	const deadline = Date.now() + 5000;
-	while (!predicate(setup.captureCharFrame())) {
+	let frame = "";
+	let lastError: unknown;
+	for (;;) {
+		try {
+			frame = setup.captureCharFrame();
+			lastError = undefined;
+		} catch (error) {
+			// The live renderer owns its output buffer between frames; retry instead of failing.
+			lastError = error;
+		}
+		if (lastError === undefined && predicate(frame)) {
+			return;
+		}
 		if (Date.now() >= deadline) {
 			throw new Error(
-				`Timed out waiting for a TUI frame:\n${setup.captureCharFrame()}`
+				`Timed out waiting for a TUI frame:\n${
+					lastError === undefined ? frame : String(lastError)
+				}`
 			);
 		}
 		await Bun.sleep(10);

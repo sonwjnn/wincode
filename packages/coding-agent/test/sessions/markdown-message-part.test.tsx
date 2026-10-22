@@ -284,7 +284,10 @@ describe("MarkdownMessagePart", () => {
 		const markdown = new MarkdownRenderable(setup.renderer, {
 			id: "streamed-prose",
 			content: "## First\n\nStable text.\n\n## Final Chorus\n\nWhen the world",
-			syntaxStyle: SyntaxStyle.fromStyles({ default: { fg: "#cccccc" } }),
+			syntaxStyle: SyntaxStyle.fromStyles(
+				{ default: { fg: "#cccccc" } },
+				setup.renderer.nativeScene
+			),
 			streaming: true,
 			internalBlockMode: "top-level",
 			treeSitterClient: client,
@@ -323,7 +326,10 @@ describe("MarkdownMessagePart", () => {
 		const markdown = new MarkdownRenderable(setup.renderer, {
 			id: "finalizing-prose",
 			content: "## Final Chorus\n\nResponse remains visible",
-			syntaxStyle: SyntaxStyle.fromStyles({ default: { fg: "#cccccc" } }),
+			syntaxStyle: SyntaxStyle.fromStyles(
+				{ default: { fg: "#cccccc" } },
+				setup.renderer.nativeScene
+			),
 			streaming: true,
 			internalBlockMode: "top-level",
 			treeSitterClient: client,

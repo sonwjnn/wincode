@@ -1,24 +1,31 @@
-import type { CliRenderer, Selection } from "@opentui/core";
+import type { Selection } from "@opentui/core";
 import { useRenderer } from "@opentui/react";
 import { useEffect } from "react";
 import { useToast } from "../providers/toast/toast-provider";
 import type { ToastOptions } from "../providers/toast/types";
-import { writeClipboard } from "./clipboard";
-
-type SelectionRenderer = CliRenderer;
+import { ClipboardTooLargeError, type ClipboardWriter } from "./clipboard";
+import { useClipboard } from "./provider";
 
 export type HandleSelectionOptions = {
 	enabled?: boolean;
-	write?: typeof writeClipboard;
 };
 
+type SelectionText = Pick<
+	Selection,
+	"getSelectedText" | "isStart" | "behavior"
+>;
+
 export async function handleSelection(
-	selection: Pick<Selection, "getSelectedText">,
-	renderer: Pick<SelectionRenderer, "clearSelection" | "copyToClipboardOSC52">,
+	selection: SelectionText,
 	show: (options: ToastOptions) => void,
-	{ enabled = true, write = writeClipboard }: HandleSelectionOptions = {}
+	clipboard: ClipboardWriter,
+	{ enabled = true }: HandleSelectionOptions = {}
 ): Promise<void> {
 	if (!enabled) {
+		return;
+	}
+	// A plain click creates a one-cell selection; copying it would toast on every click.
+	if (selection.isStart && selection.behavior === "cell") {
 		return;
 	}
 	const text = selection.getSelectedText();
@@ -26,40 +33,37 @@ export async function handleSelection(
 		return;
 	}
 	try {
-		const copied = await write(renderer, text);
+		await clipboard.write(text);
+		show({ message: "Copied to clipboard", variant: "success", width: 30 });
+	} catch (error) {
 		show({
-			message: copied ? "Copied to clipboard" : "Failed to copy selection.",
-			variant: copied ? "success" : "error",
-			...(copied ? { width: 30 } : {}),
+			message:
+				error instanceof ClipboardTooLargeError
+					? error.message
+					: "Failed to copy selection.",
+			variant: "error",
 		});
-	} catch {
-		show({ message: "Failed to copy selection.", variant: "error" });
-	} finally {
-		renderer.clearSelection();
 	}
 }
 
 export type CopyOnSelectProps = {
 	enabled: boolean;
-	write?: typeof writeClipboard;
 };
 
-export function CopyOnSelect({
-	enabled,
-	write = writeClipboard,
-}: CopyOnSelectProps) {
+export function CopyOnSelect({ enabled }: CopyOnSelectProps) {
 	const renderer = useRenderer();
+	const clipboard = useClipboard();
 	const toast = useToast();
 
 	useEffect(() => {
 		const onSelection = (selection: Selection) => {
-			void handleSelection(selection, renderer, toast.show, { enabled, write });
+			void handleSelection(selection, toast.show, clipboard, { enabled });
 		};
 		renderer.on("selection", onSelection);
 		return () => {
 			renderer.off("selection", onSelection);
 		};
-	}, [enabled, renderer, toast.show, write]);
+	}, [enabled, renderer, toast.show, clipboard]);
 
 	return null;
 }
