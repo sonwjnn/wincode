@@ -1,4 +1,3 @@
-import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -279,7 +278,6 @@ const ProviderPicker = ({
 						</box>
 						<box flexGrow={1} flexShrink={1} overflow="hidden">
 							<text
-								attributes={isSelected ? undefined : TextAttributes.DIM}
 								fg={isSelected ? selectedTextColor : colors.textMuted}
 								selectable={false}
 							>
@@ -327,7 +325,6 @@ const ProviderMethodPicker = ({
 						</box>
 						<box flexGrow={1} flexShrink={1} overflow="hidden">
 							<text
-								attributes={isSelected ? undefined : TextAttributes.DIM}
 								fg={isSelected ? selectedTextColor : colors.textMuted}
 								selectable={false}
 							>

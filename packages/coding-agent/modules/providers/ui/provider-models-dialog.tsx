@@ -1,4 +1,3 @@
-import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
 import type { ProviderModel } from "@wincode/ai";
 import { getErrorMessage } from "@wincode/utils";
@@ -140,12 +139,7 @@ const ModelPickerRow = ({
 				{(row.recent || isSearching) && (
 					<>
 						{!isSearching && <text fg={primaryTextColor}> · </text>}
-						<text
-							attributes={isSelected ? undefined : TextAttributes.DIM}
-							fg={secondaryTextColor}
-						>
-							{providerDisplayName}
-						</text>
+						<text fg={secondaryTextColor}>{providerDisplayName}</text>
 					</>
 				)}
 			</box>

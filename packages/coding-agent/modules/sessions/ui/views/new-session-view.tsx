@@ -592,14 +592,7 @@ export function NewSessionView({
 			>
 				<AsciiArt />
 			</box>
-			<box
-				backgroundColor={colors.background}
-				flexDirection="column"
-				flexShrink={0}
-				paddingBottom={1}
-				paddingX={2}
-				width="100%"
-			>
+			<box flexDirection="column" flexShrink={0} paddingBottom={1} width="100%">
 				{error === null ? null : <text fg={colors.error}>{error}</text>}
 				<ChatTextArea
 					disabled={isCreatingSession}

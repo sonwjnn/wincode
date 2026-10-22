@@ -26,8 +26,11 @@ import {
 	useToggleShortcut,
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { getAgentColor } from "@/shared/providers/theme/themes";
-import { ProgressBar } from "@/shared/ui/progress-bar";
+import {
+	getThinkingLevelBorderColor,
+	getThinkingLevelColor,
+} from "@/shared/providers/theme/themes";
+import { Spinner } from "@/shared/ui/spinner";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import type { SessionQueuedSubmission } from "../../agent-session/types";
 import {
@@ -66,7 +69,6 @@ type ChatShellProps = {
 	isBusy: boolean;
 	isSelectionReady?: boolean;
 	isCompacting: boolean;
-	isInterruptArmed: boolean;
 	messages: readonly SessionMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onProviderModelChanged?: () => void;
@@ -91,34 +93,24 @@ type ChatShellProps = {
 	transcriptNotice?: ReactNode;
 };
 function ActivityFooter({
+	accentColor,
 	agent,
+	autoCompact,
 	isCompacting,
-	isInterruptArmed,
 }: {
+	accentColor: string;
 	agent: AgentId;
+	autoCompact: boolean;
 	isCompacting: boolean;
-	isInterruptArmed: boolean;
 }) {
-	const { colors } = useTheme();
-	const agentColor = getAgentColor(colors, agent);
+	const compactionLabel = autoCompact ? "Auto-compacting..." : "Compacting...";
 	return (
-		<>
-			<ProgressBar agent={agent} />
-			{isCompacting ? (
-				<text>
-					<span fg={colors.textMuted}>Compacting context · </span>
-					<span fg={agentColor}>Esc</span>
-					<span fg={colors.textMuted}> cancel</span>
-				</text>
-			) : (
-				<text>
-					<span fg={agentColor}>Esc</span>
-					<span fg={colors.textMuted}>
-						{isInterruptArmed ? " again to interrupt" : " interrupt"}
-					</span>
-				</text>
-			)}
-		</>
+		<box alignItems="center" flexDirection="row" gap={1}>
+			<Spinner agent={agent} color={accentColor} />
+			<text fg={accentColor}>
+				{isCompacting ? compactionLabel : "Working..."}
+			</text>
+		</box>
 	);
 }
 const findNewestCompaction = (
@@ -170,7 +162,6 @@ export function ChatShell({
 	isBusy,
 	isSelectionReady,
 	isCompacting,
-	isInterruptArmed,
 	messages,
 	onCompact,
 	onProviderModelChanged,
@@ -195,8 +186,20 @@ export function ChatShell({
 	const backgroundComponentIds = useMemo(() => [transcriptId], [transcriptId]);
 	const { isTopLayer } = useKeyboardLayer();
 	const [scrollRequest, setScrollRequest] = useState(0);
-	const { agent, model } = usePromptConfig();
+	const { agent, model, thinkingLevel } = usePromptConfig();
 	const { colors } = useTheme();
+	const isComposerFocused = isTopLayer("base") || isTopLayer("command");
+	const defaultComposerBorderColor = isComposerFocused
+		? colors.borderActive
+		: colors.border;
+	const composerBorderColor =
+		thinkingLevel === undefined
+			? defaultComposerBorderColor
+			: getThinkingLevelBorderColor(colors, thinkingLevel);
+	const activityAccentColor =
+		thinkingLevel === undefined
+			? defaultComposerBorderColor
+			: getThinkingLevelColor(colors, thinkingLevel);
 	const autoCompactSetting = useSettingRegistryValue(AUTO_COMPACT_SETTING);
 	const autoCompact =
 		autoCompactSetting.status === "ready" && autoCompactSetting.value;
@@ -381,7 +384,7 @@ export function ChatShell({
 			onMouseDown={focusHandlers.onMouseDown}
 			onMouseMove={focusHandlers.onMouseMove}
 			paddingTop={0}
-			paddingX={1}
+			paddingX={0}
 			width="100%"
 		>
 			<scrollbox
@@ -437,21 +440,28 @@ export function ChatShell({
 						);
 					})}
 					{liveCompaction ? <CompactionDivider entry={liveCompaction} /> : null}
-					{isCompacting ? <CompactionStatus agent={agent} /> : null}
+					{isCompacting ? (
+						<CompactionStatus agent={agent} autoCompact={autoCompact} />
+					) : null}
 					{error ? <ErrorMessage error={error} /> : null}
 				</box>
 			</scrollbox>
-			<box
-				backgroundColor={colors.background}
-				flexDirection="column"
-				flexShrink={0}
-				paddingBottom={1}
-				width="100%"
-			>
+			<box flexDirection="column" flexShrink={0} paddingBottom={1} width="100%">
 				<WaitingMessageStrip queued={queuedSubmissions} />
 
-				<box flexShrink={0} width="100%">
+				<box flexShrink={0} position="relative" width="100%">
 					<ChatTextArea
+						activityIndicator={
+							isBusy ? (
+								<ActivityFooter
+									accentColor={activityAccentColor}
+									agent={agent}
+									autoCompact={autoCompact}
+									isCompacting={isCompacting}
+								/>
+							) : undefined
+						}
+						composerBorderColor={composerBorderColor}
 						draftKey={draftKey}
 						id={composerId}
 						isSelectionReady={isSelectionReady}
@@ -474,15 +484,7 @@ export function ChatShell({
 					paddingLeft={1}
 					width="100%"
 				>
-					{isBusy ? (
-						<ActivityFooter
-							agent={agent}
-							isCompacting={isCompacting}
-							isInterruptArmed={isInterruptArmed}
-						/>
-					) : (
-						<WorkspacePath />
-					)}
+					<WorkspacePath />
 					{usage ? (
 						<SessionUsageBar autoCompact={autoCompact} summary={usage} />
 					) : null}

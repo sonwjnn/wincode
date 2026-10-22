@@ -5,7 +5,6 @@ import {
 } from "@wincode/agent-core";
 import { normalizeModelFailure } from "@wincode/ai";
 import { isError, isObjectLike, isString, isUndefined } from "@wincode/utils";
-import { EmptyBorder } from "@/shared/constants";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 const unauthorizedPattern = /\bunauthorized\b/i;
@@ -69,18 +68,8 @@ export function ErrorMessage({ error }: ErrorMessageProps) {
 
 	return (
 		<box alignItems="center" width="100%">
-			<box
-				border={["left"]}
-				borderColor={colors.error}
-				customBorderChars={{
-					...EmptyBorder,
-					bottomLeft: "╹",
-					vertical: "┃",
-				}}
-				width="100%"
-			>
+			<box width="100%">
 				<box
-					backgroundColor={colors.backgroundPanel}
 					justifyContent="center"
 					paddingBottom={1}
 					paddingTop={1}

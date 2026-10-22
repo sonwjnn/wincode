@@ -12,6 +12,7 @@ import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
 import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { spawn } from "bun";
 import {
+	type ReactNode,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -45,6 +46,7 @@ import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import { getThinkingLevelBorderColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
@@ -109,6 +111,8 @@ type ChatTextAreaProps = {
 	id: string;
 	sessionId?: string;
 	disabled?: boolean;
+	activityIndicator?: ReactNode;
+	composerBorderColor?: string;
 	draftKey?: string;
 	unavailableCommandCapabilities?: readonly CommandCapability[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
@@ -127,6 +131,54 @@ type ChatTextAreaProps = {
 		submission: ChatPromptSubmission
 	) => boolean | Promise<boolean> | void | Promise<void>;
 };
+
+function ComposerTopBorder({
+	activityIndicator,
+	borderColor,
+	statusBar,
+}: {
+	activityIndicator?: ReactNode;
+	borderColor: string;
+	statusBar?: ReactNode;
+}) {
+	const hasActivityIndicator = activityIndicator !== undefined;
+	const hasStatusBar = statusBar !== undefined;
+	return (
+		<box alignItems="center" flexDirection="row" height={1} width="100%">
+			<box
+				border={["top", "left"]}
+				borderColor={borderColor}
+				customBorderChars={RoundedBorderChars}
+				flexShrink={0}
+				width={hasActivityIndicator ? 2 : 1}
+			/>
+			{hasActivityIndicator ? (
+				<box flexShrink={0} paddingX={1}>
+					{activityIndicator}
+				</box>
+			) : null}
+			<box
+				border={["top"]}
+				borderColor={borderColor}
+				customBorderChars={RoundedBorderChars}
+				flexGrow={1}
+				minWidth={0}
+			/>
+			{hasStatusBar ? (
+				<box flexShrink={0} paddingX={1}>
+					{statusBar}
+				</box>
+			) : null}
+			<box
+				border={["top", "right"]}
+				borderColor={borderColor}
+				customBorderChars={RoundedBorderChars}
+				flexShrink={0}
+				width={2}
+			/>
+		</box>
+	);
+}
 
 const readPastedImage = () =>
 	readClipboardImage({
@@ -169,6 +221,8 @@ export function ChatTextArea({
 	id,
 	sessionId,
 	disabled = false,
+	activityIndicator,
+	composerBorderColor,
 	draftKey,
 	unavailableCommandCapabilities:
 		viewUnavailableCapabilities = EMPTY_COMMAND_CAPABILITIES,
@@ -1233,6 +1287,21 @@ export function ChatTextArea({
 	});
 
 	const isFocused = !disabled && (isTopLayer("base") || isTopLayer("command"));
+	const selectedThinkingLevel =
+		statusBarThinkingSelection?.thinkingLevel ?? thinkingLevel;
+	const defaultBorderColor = isFocused ? colors.borderActive : colors.border;
+	const borderColor =
+		composerBorderColor ??
+		(selectedThinkingLevel === undefined
+			? defaultBorderColor
+			: getThinkingLevelBorderColor(colors, selectedThinkingLevel));
+	const showStatusBar =
+		isProviderStatusReady &&
+		isSelectionReady &&
+		(selectedProviderModel === undefined ||
+			supportedProviderThinkingLevels(selectedProviderModel).length === 0 ||
+			thinkingLevel !== undefined ||
+			statusBarThinkingSelection?.thinkingLevel !== undefined);
 
 	return (
 		<box
@@ -1288,11 +1357,20 @@ export function ChatTextArea({
 				</box>
 			)}
 
+			<ComposerTopBorder
+				activityIndicator={activityIndicator}
+				borderColor={borderColor}
+				statusBar={
+					showStatusBar ? (
+						<StatusBar thinkingSelection={statusBarThinkingSelection} />
+					) : undefined
+				}
+			/>
 			<BorderedContentBlock
-				border={["top", "right", "bottom", "left"]}
-				borderColor={isFocused ? colors.borderActive : colors.border}
+				border={["left", "right", "bottom"]}
+				borderColor={borderColor}
 				colors={colors}
-				contentBackgroundColor={colors.background}
+				contentBackgroundColor="transparent"
 				contentGap={0}
 				contentJustifyContent="center"
 				customBorderChars={RoundedBorderChars}
@@ -1308,30 +1386,13 @@ export function ChatTextArea({
 						id={id}
 						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
 						onContentChange={handleTextareaContentChange}
-						placeholder={`Ask anything... "Fix broken tests"`}
+						placeholder={"Ask anything..."}
 						placeholderColor={colors.textMuted}
 						ref={textAreaRef}
 						textColor={disabled ? colors.textDisabled : colors.text}
 					/>
 				</box>
 			</BorderedContentBlock>
-			{isProviderStatusReady &&
-			isSelectionReady &&
-			(selectedProviderModel === undefined ||
-				supportedProviderThinkingLevels(selectedProviderModel).length === 0 ||
-				thinkingLevel !== undefined ||
-				statusBarThinkingSelection?.thinkingLevel !== undefined) ? (
-				<box
-					backgroundColor={colors.background}
-					paddingX={1}
-					position="absolute"
-					right={2}
-					top={0}
-					zIndex={1}
-				>
-					<StatusBar thinkingSelection={statusBarThinkingSelection} />
-				</box>
-			) : null}
 		</box>
 	);
 }

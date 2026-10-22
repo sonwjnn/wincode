@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { RGBA } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { act, useEffect } from "react";
 import {
@@ -21,6 +22,7 @@ import {
 	useKeyboardLayer,
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import {
 	createInMemoryConfigStore,
@@ -75,6 +77,29 @@ test("omits settings section headings and keeps rows adjacent", async () => {
 	await act(() => setup.renderer.destroy());
 });
 
+test("uses the selectable-list theme surface for the dialog background", async () => {
+	const setting = createSetting(false);
+	const operations: SettingsOperations = {
+		catalog: SETTINGS_CATALOG,
+		getSettings: async () => [setting],
+		resetValue: async () => setting,
+		setValue: async () => setting,
+	};
+	const setup = await renderSettingsDialog(operations, [setting]);
+
+	try {
+		const title = setup
+			.captureSpans()
+			.lines.flatMap((line) => line.spans)
+			.find((span) => span.text.includes("Settings"));
+		expect(
+			title?.bg.equals(RGBA.fromHex(DEFAULT_THEME.colors.backgroundElement))
+		).toBe(true);
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
 test("shows the final setting without scrolling", async () => {
 	const first = settingInSection("first", "First option", "General");
 	const second = settingInSection("second", "Second option", "Advanced");
@@ -111,6 +136,7 @@ test("keeps settings footer hints on one row without changing list height", asyn
 		line.includes("navigate")
 	);
 	const singleFooter = singleFrame[singleFooterIndex] ?? "";
+	expect(singleFooter).toContain("↑↓ navigate");
 	expect(singleFooter).toContain("space/enter change");
 	expect(singleFooter).toContain("ctrl+r reset");
 	await act(() => oneItemSetup.renderer.destroy());
@@ -151,7 +177,7 @@ const renderSettingsDialog = async (
 	}
 
 	const setup = await testRender(
-		<ThemeProvider>
+		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<KeyboardLayerProvider>
 				<ToastProvider>
 					<DialogProvider>

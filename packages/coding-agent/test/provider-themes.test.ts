@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { getColorContrastRatio } from "@/shared/providers/theme/color-contrast";
 import { DIFF_TOKEN_OVERRIDES } from "@/shared/providers/theme/diff-token-overrides";
 import { MARKDOWN_TOKEN_OVERRIDES } from "@/shared/providers/theme/markdown-token-overrides";
 import type { ThemeDefinition } from "@/shared/providers/theme/themes";
 import {
 	DEFAULT_THEME,
 	findThemeByName,
+	getThinkingLevelBorderColor,
+	getThinkingLevelColor,
 	resolveTheme,
 	THEMES,
 } from "@/shared/providers/theme/themes";
@@ -58,9 +61,30 @@ const DIFF_TOKEN_KEYS = [
 	"diffRemovedLineNumberBg",
 ] as const;
 
+const THINKING_LEVELS = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const;
+
+const THINKING_BORDER_COLOR_KEYS = [
+	"thinkingOff",
+	"thinkingMinimal",
+	"thinkingLow",
+	"thinkingMedium",
+	"thinkingHigh",
+	"thinkingXhigh",
+	"thinkingMax",
+] as const;
+
 const COLOR_RE = /^(?:transparent|#[\da-f]{3,4}|#[\da-f]{6}(?:[\da-f]{2})?)$/iu;
 
 const HEX_COLOR_RE = /^#([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/i;
+const SOLID_HEX_COLOR_RE = /^#[\da-f]{6}$/iu;
 
 describe("theme token resolution", () => {
 	test("fills canonical markdown tokens for themes that do not define them", () => {
@@ -94,6 +118,141 @@ describe("theme token resolution", () => {
 		expect(theme.colors.syntaxType).toBe("#4ec9b0");
 		expect(theme.colors.syntaxOperator).toBe("#d4d4d4");
 		expect(theme.colors.syntaxPunctuation).toBe("#d4d4d4");
+	});
+
+	test("uses distinct theme palette colors for each thinking level", () => {
+		const theme = resolveTheme({
+			name: "custom",
+			colors: MINIMAL_COLORS,
+		});
+
+		expect(theme.colors.thinkingOff).toBe(MINIMAL_COLORS.border);
+		expect(theme.colors.thinkingMinimal).toBe(MINIMAL_COLORS.borderSubtle);
+		expect(theme.colors.thinkingLow).toBe(MINIMAL_COLORS.primary);
+		expect(theme.colors.thinkingMedium).toBe(MINIMAL_COLORS.secondary);
+		expect(theme.colors.thinkingHigh).toBe(MINIMAL_COLORS.info);
+		expect(theme.colors.thinkingXhigh).toBe(MINIMAL_COLORS.thinking);
+		expect(theme.colors.thinkingMax).toBe(MINIMAL_COLORS.error);
+		expect(
+			new Set(THINKING_BORDER_COLOR_KEYS.map((key) => theme.colors[key])).size
+		).toBe(7);
+		expect(getThinkingLevelColor(theme.colors, "low")).toBe(
+			theme.colors.thinkingLow
+		);
+		expect(getThinkingLevelColor(theme.colors, "max")).toBe(
+			theme.colors.thinkingMax
+		);
+	});
+
+	test("uses the theme border color for a visible off-level border", () => {
+		const theme = resolveTheme({
+			name: "custom",
+			colors: MINIMAL_COLORS,
+		});
+
+		expect(getThinkingLevelColor(theme.colors, "off")).toBe(
+			MINIMAL_COLORS.border
+		);
+		expect(getThinkingLevelBorderColor(theme.colors, "off")).toBe("#48484899");
+	});
+
+	test("ramps thinking border opacity from 60% at off to 100% at max", () => {
+		const theme = resolveTheme({
+			name: "custom",
+			colors: MINIMAL_COLORS,
+		});
+		const alphas = THINKING_LEVELS.map((level) =>
+			Number.parseInt(
+				getThinkingLevelBorderColor(theme.colors, level).slice(-2),
+				16
+			)
+		);
+
+		expect(alphas[0]).toBe(153);
+		expect(alphas.at(-1)).toBe(255);
+		expect(alphas).toEqual([...alphas].sort((first, second) => first - second));
+	});
+
+	test("allows explicit thinking-level border color overrides", () => {
+		const theme = resolveTheme({
+			name: "custom",
+			colors: {
+				...MINIMAL_COLORS,
+				thinkingLow: "#123456",
+				thinkingXhigh: "#abcdef",
+				thinkingMax: "#fedcba",
+			},
+		});
+
+		expect(theme.colors.thinkingLow).toBe("#123456");
+		expect(theme.colors.thinkingXhigh).toBe("#abcdef");
+		expect(theme.colors.thinkingMax).toBe("#fedcba");
+	});
+
+	test("hue-shifts conflicting accents without borrowing neutral or background colors", () => {
+		const repeatedAccent = "#123456";
+		const theme = resolveTheme({
+			name: "repeated-accent",
+			colors: {
+				...MINIMAL_COLORS,
+				primary: repeatedAccent,
+				secondary: repeatedAccent,
+				thinking: repeatedAccent,
+				info: repeatedAccent,
+				warning: repeatedAccent,
+				success: repeatedAccent,
+				error: repeatedAccent,
+				selection: repeatedAccent,
+			},
+		});
+
+		const thinkingColors = THINKING_BORDER_COLOR_KEYS.map(
+			(key) => theme.colors[key]
+		);
+		expect(new Set(thinkingColors).size).toBe(7);
+		expect(
+			thinkingColors.every((color) => SOLID_HEX_COLOR_RE.test(color))
+		).toBe(true);
+	});
+
+	test("hue-shifts Ayu's near-blue accents and keeps max red", () => {
+		const theme = findThemeByName(THEMES, "ayu");
+		expect(theme).toBeDefined();
+		if (theme === undefined) {
+			return;
+		}
+
+		expect(theme.colors.thinkingLow).toBe(theme.colors.primary);
+		expect(theme.colors.thinkingHigh).not.toBe(theme.colors.info);
+		expect(theme.colors.thinkingHigh).not.toBe(theme.colors.thinkingLow);
+		expect(theme.colors.thinkingMax).toBe(theme.colors.error);
+	});
+
+	test("keeps every theme border visible against its element surface", () => {
+		for (const theme of THEMES) {
+			if (!HEX_COLOR_RE.test(theme.colors.backgroundElement)) {
+				continue;
+			}
+			expect(
+				getColorContrastRatio(
+					theme.colors.backgroundElement,
+					theme.colors.border
+				),
+				`${theme.name}.border`
+			).toBeGreaterThanOrEqual(3);
+		}
+	});
+
+	test("resolves every bundled theme with a distinct thinking border palette", () => {
+		for (const theme of THEMES) {
+			const thinkingColors = THINKING_BORDER_COLOR_KEYS.map(
+				(key) => theme.colors[key]
+			);
+			for (const key of THINKING_BORDER_COLOR_KEYS) {
+				expect(theme.colors[key], `${theme.name}.${key}`).toMatch(COLOR_RE);
+			}
+			expect(new Set(thinkingColors).size, theme.name).toBe(7);
+		}
 	});
 
 	test("keeps per-theme markdown and syntax overrides", () => {

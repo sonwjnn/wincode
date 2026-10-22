@@ -46,7 +46,7 @@ export function SessionUsageBar({
 				)}
 				{autoCompact ? <span> (auto)</span> : null}
 				{summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0 ? (
-					<span>{`↑${formatModelTokenCount(
+					<span>{` ↑${formatModelTokenCount(
 						summary.cacheReadTokens
 					)} ↓${formatModelTokenCount(summary.cacheWriteTokens)}`}</span>
 				) : null}

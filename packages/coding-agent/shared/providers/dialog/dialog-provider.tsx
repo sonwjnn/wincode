@@ -235,7 +235,7 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 		>
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events. */}
 			<box
-				backgroundColor={colors.backgroundMenu}
+				backgroundColor={colors.backgroundElement}
 				flexDirection="column"
 				gap={1}
 				height="auto"
@@ -269,11 +269,7 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 						{title}
 					</text>
 					{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
-					<text
-						attributes={TextAttributes.DIM}
-						fg={colors.textMuted}
-						onMouseDown={() => close()}
-					>
+					<text fg={colors.textMuted} onMouseDown={() => close()}>
 						esc
 					</text>
 				</box>

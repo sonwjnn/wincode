@@ -83,10 +83,9 @@ type EditToolPart = Extract<
 	{ type: "tool-edit" }
 >;
 
-const ACTIVE_PROGRESS_REGEX = /■+/u;
+const SPINNER_FRAME_REGEX = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/u;
 /** The strip's count line, e.g. `2 waiting`; the workspace path never has one. */
 const WAITING_COUNT_PATTERN = /\d+ waiting/u;
-const PROGRESS_BAR_REGEX = /[■⬝]{12}/u;
 
 const shellPart = (overrides: Partial<ShellToolPart> = {}): ShellToolPart =>
 	fromPartial<ShellToolPart>({
@@ -167,7 +166,6 @@ type ChatShellProbeProps = {
 	initialMessages: SessionMessage[];
 	isBusy?: boolean;
 	isCompacting?: boolean;
-	isInterruptArmed?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
 	transcriptNotice?: ReactNode;
@@ -193,7 +191,6 @@ function ChatShellProbe({
 	isBusy = false,
 	providerController,
 	isCompacting: initialIsCompacting = false,
-	isInterruptArmed = false,
 	onRetry,
 	queuedSubmissions,
 	transcriptNotice,
@@ -226,7 +223,6 @@ function ChatShellProbe({
 				error={undefined}
 				isBusy={isBusy || isCompacting}
 				isCompacting={isCompacting}
-				isInterruptArmed={isInterruptArmed}
 				key={composerRevision}
 				messages={messages}
 				onRetry={onRetry}
@@ -255,9 +251,9 @@ type ChatShellRenderOptions = {
 	initialCompactions?: SessionCompaction[];
 	initialThinkingLevel?: ThinkingLevel;
 	configuredAgent?: boolean;
+	autoCompact?: boolean;
 	isBusy?: boolean;
 	isCompacting?: boolean;
-	isInterruptArmed?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
 	transcriptNotice?: ReactNode;
@@ -273,9 +269,9 @@ const renderChatShell = async (
 		initialCompactions = [],
 		initialThinkingLevel,
 		configuredAgent = false,
+		autoCompact,
 		isBusy = false,
 		isCompacting = false,
-		isInterruptArmed = false,
 		onRetry,
 		queuedSubmissions,
 		transcriptNotice,
@@ -288,6 +284,12 @@ const renderChatShell = async (
 		? createConfigStore({
 				fs: {
 					readFile: async (file) => {
+						if (
+							autoCompact !== undefined &&
+							file === path.join(os.homedir(), ".wincode", "settings.jsonc")
+						) {
+							return JSON.stringify({ compaction: { auto: autoCompact } });
+						}
 						if (file === path.join(workspace, ".wincode", "settings.jsonc")) {
 							return JSON.stringify({
 								agents: {
@@ -296,6 +298,9 @@ const renderChatShell = async (
 										role: "primary",
 									},
 								},
+								...(autoCompact === undefined
+									? {}
+									: { compaction: { auto: autoCompact } }),
 							});
 						}
 						throw Object.assign(new Error("Test config is unavailable."), {
@@ -306,7 +311,13 @@ const renderChatShell = async (
 			})
 		: createConfigStore({
 				fs: {
-					readFile: async () => {
+					readFile: async (file) => {
+						if (
+							autoCompact !== undefined &&
+							file === path.join(os.homedir(), ".wincode", "settings.jsonc")
+						) {
+							return JSON.stringify({ compaction: { auto: autoCompact } });
+						}
 						throw Object.assign(new Error("Test config is unavailable."), {
 							code: "ENOENT",
 						});
@@ -340,7 +351,6 @@ const renderChatShell = async (
 													initialMessages={initialMessages}
 													isBusy={isBusy}
 													isCompacting={isCompacting}
-													isInterruptArmed={isInterruptArmed}
 													onRetry={onRetry}
 													providerController={providerController}
 													queuedSubmissions={queuedSubmissions}
@@ -1139,8 +1149,8 @@ describe("ChatShell activity footer", () => {
 			await flushUi(setup);
 			expect(setup.captureCharFrame()).not.toContain("openai/gpt-5.6-luna");
 			pending.resolve([selectedModel]);
-			const frame = await waitForFrameText(setup, "openai/gpt-5.6-luna ∙ low");
-			expect(frame).toContain("openai/gpt-5.6-luna ∙ low");
+			const frame = await waitForFrameText(setup, "openai/gpt-5.6-luna:low");
+			expect(frame).toContain("openai/gpt-5.6-luna:low");
 		} finally {
 			pending.resolve([selectedModel]);
 			setup.renderer.destroy();
@@ -1165,14 +1175,14 @@ describe("ChatShell activity footer", () => {
 		});
 
 		try {
-			const frame = await waitForFrameText(setup, "∙ low");
-			expect(frame).toContain("openai/gpt-5.6-luna ∙ low");
+			const frame = await waitForFrameText(setup, ":low");
+			expect(frame).toContain("openai/gpt-5.6-luna:low");
 		} finally {
 			setup.renderer.destroy();
 		}
 	});
 
-	test("keeps the selected thinking level visible in the composer status bar", async () => {
+	test("keeps transparent status inside rounded composer borders without backplates", async () => {
 		const providerController = fromPartial<InteractiveProviderController>({
 			getKnownModels: async () => [
 				{
@@ -1191,8 +1201,27 @@ describe("ChatShell activity footer", () => {
 		});
 
 		try {
-			const frame = await waitForFrameText(setup, "∙ low");
-			expect(frame).toContain("openai/gpt-5.6-luna ∙ low");
+			const frame = await waitForFrameText(setup, ":low");
+			const statusText = "openai/gpt-5.6-luna:low";
+			expect(frame).toContain(statusText);
+			const statusRow = frame
+				.split("\n")
+				.find((row) => row.includes(statusText));
+			const statusStart = statusRow?.indexOf(statusText) ?? -1;
+			expect(statusRow?.trimStart().startsWith("╭")).toBe(true);
+			expect(statusRow?.trimEnd().endsWith("╮")).toBe(true);
+			expect(statusRow?.[statusStart - 2]).toBe("─");
+			expect(statusRow?.[statusStart - 1]).toBe(" ");
+			expect(statusRow?.[statusStart + statusText.length]).toBe(" ");
+			expect(statusRow?.[statusStart + statusText.length + 1]).toBe("─");
+			const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
+			const composerPlaceholder = spans.find((span) =>
+				span.text.includes("Ask anything...")
+			);
+			const thinkingStatus = spans.find((span) => span.text.includes(":low"));
+
+			expect(composerPlaceholder?.bg.a).toBe(0);
+			expect(thinkingStatus?.bg.a).toBe(0);
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -1251,41 +1280,63 @@ describe("ChatShell activity footer", () => {
 			);
 			const usageColumn = (rows[usageRow] ?? "").indexOf("0.7%");
 			expect(usageColumn).toBeGreaterThan(pathColumn);
+			const footerSpans = setup.captureSpans().lines[pathRow]?.spans ?? [];
+			expect(footerSpans.every((span) => span.bg.a === 0)).toBe(true);
 		} finally {
 			setup.renderer.destroy();
 		}
 	});
 
-	test("renders a fading progress trail and keeps the interrupt hint while busy", async () => {
+	test("shows the Working spinner above the composer and keeps the workspace path while busy", async () => {
 		const { setup } = await renderChatShell([], {
 			height: 12,
+			initialThinkingLevel: "low",
 			isBusy: true,
-			isInterruptArmed: true,
 			width: 100,
 		});
 
 		try {
-			await setup.renderOnce();
 			await flushUi(setup);
 			const frame = setup.captureCharFrame();
-
-			expect(frame).toMatch(PROGRESS_BAR_REGEX);
-			expect(frame).toContain("Esc");
-			expect(frame).toContain("again to interrupt");
-			expect(frame).not.toContain(process.cwd());
-
-			await Bun.sleep(450);
-			await setup.renderOnce();
-			const trailSpans = setup
-				.captureSpans()
-				.lines.flatMap((line) => line.spans)
-				.filter((span) => span.text.includes("■"));
-			const trailColors = new Set(
-				trailSpans.map((span) => [...span.fg.buffer.slice(0, 3)].join(","))
+			const rows = frame.split("\n");
+			const activityRow = rows.findIndex((row) => row.includes("Working..."));
+			const activityRowText = rows[activityRow] ?? "";
+			const spinnerStart = activityRowText.search(SPINNER_FRAME_REGEX);
+			const activityLabelStart = activityRowText.indexOf("Working...");
+			const composerRow = rows.findIndex((row) =>
+				row.includes("Ask anything...")
 			);
+			const workspaceRow = rows.findIndex((row) =>
+				row.includes(path.basename(process.cwd()) || path.sep)
+			);
+			const activitySpans =
+				setup.captureSpans().lines[activityRow]?.spans ?? [];
+			const activityLabel = activitySpans.find((span) =>
+				span.text.includes("Working...")
+			);
+			const activitySpinner = activitySpans.find((span) =>
+				SPINNER_FRAME_REGEX.test(span.text)
+			);
+			const thinkingAccent = RGBA.fromHex(DEFAULT_THEME.colors.thinkingLow);
 
-			expect(trailSpans.length).toBeGreaterThan(2);
-			expect(trailColors.size).toBeGreaterThan(2);
+			expect(frame).toMatch(SPINNER_FRAME_REGEX);
+			expect(activityRow).toBe(composerRow - 1);
+			expect(activityRowText.trimStart().startsWith("╭")).toBe(true);
+			expect(activityRowText.trimEnd().endsWith("╮")).toBe(true);
+			expect(activityRowText[spinnerStart - 2]).toBe("─");
+			expect(activityRowText[spinnerStart - 1]).toBe(" ");
+			expect(activityRowText[activityLabelStart + "Working...".length]).toBe(
+				" "
+			);
+			expect(
+				activityRowText[activityLabelStart + "Working...".length + 1]
+			).toBe("─");
+			expect(workspaceRow).toBeGreaterThan(composerRow);
+			expect(activityLabel?.fg.equals(thinkingAccent)).toBe(true);
+			expect(activitySpinner?.fg.equals(thinkingAccent)).toBe(true);
+			expect(activityLabel?.bg.a).toBe(0);
+			expect(frame).not.toContain("interrupt");
+			expect(frame).not.toContain("■");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -1361,7 +1412,7 @@ describe("ChatShell activity footer", () => {
 		}
 	});
 
-	test("shows compacting activity while retaining provider usage", async () => {
+	test("labels compaction as automatic while retaining provider usage", async () => {
 		const messages: SessionMessage[] = [
 			userMessage("user-1"),
 			{
@@ -1380,6 +1431,7 @@ describe("ChatShell activity footer", () => {
 			userMessage("user-2"),
 		];
 		const { holder, setup } = await renderChatShell(messages, {
+			autoCompact: true,
 			height: 16,
 			isCompacting: true,
 			width: 100,
@@ -1388,17 +1440,14 @@ describe("ChatShell activity footer", () => {
 		try {
 			await flushUi(setup);
 			const loadingFrame = setup.captureCharFrame();
-			expect(loadingFrame).toContain("Compacting context... (esc to cancel)");
-			expect(loadingFrame).toContain("Compacting context · Esc cancel");
+			expect(loadingFrame).toContain("Auto-compacting...");
+			expect(loadingFrame).not.toContain("Auto-compacting context");
+			expect(loadingFrame).not.toContain("esc to cancel");
 			expect(loadingFrame).toContain("7.3K");
 			expect(loadingFrame).toContain("(auto)");
 			expect(loadingFrame).toContain("cost unknown");
 			expect(loadingFrame).not.toContain("1%(7.3K/1.1M)");
-			expect(loadingFrame).toMatch(PROGRESS_BAR_REGEX);
-
-			await Bun.sleep(2000);
-			await setup.renderOnce();
-			expect(setup.captureCharFrame()).toMatch(ACTIVE_PROGRESS_REGEX);
+			expect(loadingFrame).toMatch(SPINNER_FRAME_REGEX);
 
 			await act(async () => {
 				holder.current?.setCompactions([completedCompaction()]);
@@ -1414,6 +1463,27 @@ describe("ChatShell activity footer", () => {
 			setup.renderer.destroy();
 		}
 	});
+	test("labels compaction manually when auto-compact is disabled", async () => {
+		const { setup } = await renderChatShell([], {
+			autoCompact: false,
+			height: 16,
+			isCompacting: true,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("Compacting...");
+			expect(frame).not.toContain("Auto-compacting...");
+			expect(frame).not.toContain("Compacting context");
+			expect(frame).not.toContain("esc to cancel");
+			expect(frame).not.toContain("(auto)");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("keeps a newly completed divider at the bottom of a long transcript", async () => {
 		const messages: SessionMessage[] = [
 			userMessage("user-1"),

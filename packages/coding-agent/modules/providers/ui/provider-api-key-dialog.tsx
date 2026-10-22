@@ -1,4 +1,4 @@
-import { type InputRenderable, TextAttributes } from "@opentui/core";
+import type { InputRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -147,11 +147,7 @@ export function ProviderApiKeyDialogContent({
 	return (
 		<DialogInset>
 			<box flexDirection="column" gap={1}>
-				<text
-					attributes={TextAttributes.DIM}
-					fg={colors.textMuted}
-					selectable={false}
-				>
+				<text fg={colors.textMuted} selectable={false}>
 					{description}
 				</text>
 				<input

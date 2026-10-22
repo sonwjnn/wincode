@@ -16,17 +16,12 @@ export function StatusBar({
 	const { colors } = useTheme();
 	const modelName = `${model.providerId}/${model.modelId}`;
 	return (
-		<box flexDirection="row" gap={1}>
+		<box flexDirection="row">
 			<text fg={colors.text}>{modelName}</text>
 			{thinkingLevel === undefined ? null : (
-				<>
-					<text attributes={TextAttributes.DIM} fg={colors.textMuted}>
-						∙
-					</text>
-					<text attributes={TextAttributes.BOLD} fg={colors.secondary}>
-						{thinkingLevel}
-					</text>
-				</>
+				<text attributes={TextAttributes.BOLD} fg={colors.secondary}>
+					:{thinkingLevel}
+				</text>
 			)}
 		</box>
 	);

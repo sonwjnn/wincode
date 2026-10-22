@@ -1,4 +1,4 @@
-import { RGBA, TextAttributes } from "@opentui/core";
+import { RGBA } from "@opentui/core";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -101,11 +101,7 @@ function SessionListItem({
 					{session.title}
 				</text>
 				<box flexGrow={1} />
-				<text
-					attributes={TextAttributes.DIM}
-					fg={secondaryTextColor}
-					selectable={false}
-				>
+				<text fg={secondaryTextColor} selectable={false}>
 					{timeFormatter.format(
 						new Date(session.lastMessageAt ?? session.createdAt)
 					)}

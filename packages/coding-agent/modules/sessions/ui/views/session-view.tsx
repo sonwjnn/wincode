@@ -333,7 +333,6 @@ export function SessionView({
 	const submittedInitialMessageRef = useRef<SessionMessageId | null>(null);
 	const interruptResetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 	const interruptArmedRef = useRef(false);
-	const [isInterruptArmed, setIsInterruptArmed] = useState(false);
 	const [isStartingInitialTurn, setIsStartingInitialTurn] = useState(
 		!isUndefined(initialSubmission)
 	);
@@ -530,19 +529,16 @@ export function SessionView({
 			}
 
 			interruptArmedRef.current = false;
-			setIsInterruptArmed(false);
 			void recallIntoComposer(interrupt());
 			return;
 		}
 
 		interruptArmedRef.current = true;
-		setIsInterruptArmed(true);
 
 		clearTimeout(interruptResetTimeoutRef.current ?? 0);
 
 		interruptResetTimeoutRef.current = setTimeout(() => {
 			interruptArmedRef.current = false;
-			setIsInterruptArmed(false);
 			interruptResetTimeoutRef.current = null;
 		}, INTERRUPT_CONFIRMATION_TIMEOUT_MS);
 	};
@@ -622,7 +618,6 @@ export function SessionView({
 		}
 
 		interruptArmedRef.current = false;
-		setIsInterruptArmed(false);
 	}, [isBusy]);
 
 	useEffect(
@@ -998,7 +993,7 @@ export function SessionView({
 
 	return (
 		<box flexDirection="row" height="100%" width="100%">
-			<box flexGrow={1} height="100%" paddingX={1}>
+			<box flexGrow={1} height="100%">
 				<ChatShell
 					activeMessages={activeMessages}
 					cacheWarmingStatus={cacheWarmingStatus}
@@ -1007,7 +1002,6 @@ export function SessionView({
 					error={error}
 					isBusy={isBusy}
 					isCompacting={snapshot.isCompacting}
-					isInterruptArmed={isInterruptArmed}
 					isSelectionReady={isPromptConfigRestored}
 					key={sessionId}
 					messages={messages}

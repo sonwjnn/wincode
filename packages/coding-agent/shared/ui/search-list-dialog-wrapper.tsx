@@ -1,5 +1,4 @@
 import type { RGBA } from "@opentui/core";
-import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { Fragment, type ReactNode, useCallback, useEffect } from "react";
 import { fuzzyMatch } from "../fuzzy";
@@ -206,7 +205,6 @@ export function SearchListDialogWrapper<T>({
 			) : null}
 			{filtered.length === 0 ? (
 				<text
-					attributes={TextAttributes.DIM}
 					fg={colors.textMuted}
 					height={visibleHeight}
 					marginBottom={contentMargin.bottom ?? 1}

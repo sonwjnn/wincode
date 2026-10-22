@@ -1,3 +1,4 @@
+import type { ThinkingLevel } from "@wincode/ai";
 import type { Except, SetRequired } from "type-fest";
 import { getContrastingTextColor } from "./color-contrast";
 import {
@@ -16,6 +17,13 @@ export type ThemeColors = {
 	selection: string;
 	thinking: string;
 	thinkingText: string;
+	thinkingOff: string;
+	thinkingMinimal: string;
+	thinkingLow: string;
+	thinkingMedium: string;
+	thinkingHigh: string;
+	thinkingXhigh: string;
+	thinkingMax: string;
 	tool: string;
 	success: string;
 	error: string;
@@ -99,6 +107,27 @@ const FILE_PATH_BRIGHTNESS = 0.35;
 const DIFF_BACKGROUND_ALPHA = 0.18;
 const DIFF_LINE_NUMBER_ALPHA = 0.1;
 
+const THINKING_LEVEL_COLOR_KEYS = {
+	off: "thinkingOff",
+	minimal: "thinkingMinimal",
+	low: "thinkingLow",
+	medium: "thinkingMedium",
+	high: "thinkingHigh",
+	xhigh: "thinkingXhigh",
+	max: "thinkingMax",
+} as const satisfies Record<ThinkingLevel, keyof ThemeColors>;
+const THINKING_LEVEL_ORDER = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const satisfies readonly ThinkingLevel[];
+const THINKING_LEVEL_MIN_OPACITY = 0.6;
+const THINKING_LEVEL_MAX_OPACITY = 1;
+
 /**
  * Canonical markdown prose palette, tuned from pi's dark theme (gold
  * headings, muted blue-gray links, cyan inline code, gray quotes) plus
@@ -129,6 +158,123 @@ const SYNTAX_OPERATOR_COLOR = "#d4d4d4";
 const SYNTAX_PUNCTUATION_COLOR = "#d4d4d4";
 
 const HEX_COLOR_RE = /^#([\da-f]{3,4}|[\da-f]{6}(?:[\da-f]{2})?)$/iu;
+const THINKING_LEVEL_HUE_SHIFTS = [60, 120, 180, 240, 300] as const;
+const THINKING_LEVEL_HUE_COLLISION_DEGREES = 25;
+
+const expandHexColor = (color: string): string | undefined => {
+	const hex = color.match(HEX_COLOR_RE)?.[1];
+	if (hex === undefined) {
+		return;
+	}
+	return hex.length <= 4
+		? [...hex].map((value) => `${value}${value}`).join("")
+		: hex;
+};
+
+const normalizeColorKey = (color: string): string => {
+	const expanded = expandHexColor(color);
+	return expanded
+		? `#${expanded.slice(0, 6).toLowerCase()}`
+		: color.toLowerCase();
+};
+
+const withOpacity = (color: string, opacity: number): string => {
+	const expanded = expandHexColor(color);
+	if (expanded === undefined) {
+		return color;
+	}
+	const alpha = Math.round(opacity * 255)
+		.toString(16)
+		.padStart(2, "0");
+	return `#${expanded.slice(0, 6)}${alpha}`;
+};
+
+type HslColor = {
+	hue: number;
+	lightness: number;
+	saturation: number;
+};
+
+const getHslColor = (color: string): HslColor | undefined => {
+	const expanded = expandHexColor(color);
+	if (expanded === undefined) {
+		return;
+	}
+	const red = Number.parseInt(expanded.slice(0, 2), 16) / 255;
+	const green = Number.parseInt(expanded.slice(2, 4), 16) / 255;
+	const blue = Number.parseInt(expanded.slice(4, 6), 16) / 255;
+	const max = Math.max(red, green, blue);
+	const min = Math.min(red, green, blue);
+	const delta = max - min;
+	let hue = 0;
+	if (delta !== 0) {
+		if (max === red) {
+			hue = 60 * (((green - blue) / delta) % 6);
+		} else if (max === green) {
+			hue = 60 * ((blue - red) / delta + 2);
+		} else {
+			hue = 60 * ((red - green) / delta + 4);
+		}
+	}
+	const lightness = (max + min) / 2;
+	const saturation =
+		delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1));
+	return {
+		hue: ((hue % 360) + 360) % 360,
+		lightness,
+		saturation,
+	};
+};
+
+const hslColorToHex = ({ hue, lightness, saturation }: HslColor): string => {
+	const normalizedHue = ((hue % 360) + 360) % 360;
+	const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+	const secondary = chroma * (1 - Math.abs(((normalizedHue / 60) % 2) - 1));
+	const offset = lightness - chroma / 2;
+	let channels: [number, number, number];
+	if (normalizedHue < 60) {
+		channels = [chroma, secondary, 0];
+	} else if (normalizedHue < 120) {
+		channels = [secondary, chroma, 0];
+	} else if (normalizedHue < 180) {
+		channels = [0, chroma, secondary];
+	} else if (normalizedHue < 240) {
+		channels = [0, secondary, chroma];
+	} else if (normalizedHue < 300) {
+		channels = [secondary, 0, chroma];
+	} else {
+		channels = [chroma, 0, secondary];
+	}
+	return `#${channels
+		.map((channel) =>
+			Math.round((channel + offset) * 255)
+				.toString(16)
+				.padStart(2, "0")
+		)
+		.join("")}`;
+};
+
+const rotateHueColor = (color: string, degrees: number): string => {
+	const hsl = getHslColor(color);
+	return hsl ? hslColorToHex({ ...hsl, hue: hsl.hue + degrees }) : color;
+};
+
+const getHueDistance = (first: string, second: string): number | undefined => {
+	const firstHsl = getHslColor(first);
+	const secondHsl = getHslColor(second);
+	if (
+		firstHsl === undefined ||
+		secondHsl === undefined ||
+		firstHsl.saturation < 0.12 ||
+		secondHsl.saturation < 0.12 ||
+		firstHsl.lightness < 0.2 ||
+		secondHsl.lightness < 0.2
+	) {
+		return;
+	}
+	const difference = Math.abs(firstHsl.hue - secondHsl.hue);
+	return Math.min(difference, 360 - difference);
+};
 
 const brightenColor = (color: string, amount: number) => {
 	const match = color.match(HEX_COLOR_RE);
@@ -209,7 +355,7 @@ const THEME_DEFINITIONS = [
 			background: "#0f0f0f",
 			backgroundPanel: "#15141b",
 			backgroundMenu: "#15141b",
-			border: "#2d2d2d",
+			border: "#666666",
 			borderSubtle: "#2d2d2d",
 			borderActive: "#6d6d6d",
 		},
@@ -253,7 +399,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1a1a1a",
 			backgroundElement: "#1b1b1b",
 			backgroundMenu: "#1e1e1e",
-			border: "#303030",
+			border: "#6a6a6a",
 			borderSubtle: "#262626",
 			borderActive: "#33b1ff",
 		},
@@ -275,7 +421,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#292c3c",
 			backgroundElement: "#282a3a",
 			backgroundMenu: "#232634",
-			border: "#414559",
+			border: "#747786",
 			borderSubtle: "#626880",
 			borderActive: "#51576d",
 		},
@@ -297,7 +443,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1e2030",
 			backgroundElement: "#1c1e2e",
 			backgroundMenu: "#181926",
-			border: "#363a4f",
+			border: "#6a6d7c",
 			borderSubtle: "#5b6078",
 			borderActive: "#494d64",
 		},
@@ -319,7 +465,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#181825",
 			backgroundElement: "#161622",
 			backgroundMenu: "#11111b",
-			border: "#313244",
+			border: "#666774",
 			borderSubtle: "#585b70",
 			borderActive: "#45475a",
 		},
@@ -341,7 +487,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#122738",
 			backgroundElement: "#152f42",
 			backgroundMenu: "#1f4662",
-			border: "#1f4662",
+			border: "#627d91",
 			borderSubtle: "#0e1e2e",
 			borderActive: "#0088ff",
 		},
@@ -363,7 +509,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#141414",
 			backgroundElement: "#181818",
 			backgroundMenu: "#262626",
-			border: "#e4e4e413",
+			border: "#686868",
 			borderSubtle: "#0f0f0f",
 			borderActive: "#88c0d0",
 		},
@@ -385,7 +531,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#21222c",
 			backgroundElement: "#2a2b38",
 			backgroundMenu: "#44475a",
-			border: "#44475a",
+			border: "#767886",
 			borderSubtle: "#191a21",
 			borderActive: "#bd93f9",
 		},
@@ -429,7 +575,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1C1B1A",
 			backgroundElement: "#1f1e1d",
 			backgroundMenu: "#282726",
-			border: "#575653",
+			border: "#6e6d6a",
 			borderSubtle: "#403E3C",
 			borderActive: "#6F6E69",
 		},
@@ -451,7 +597,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#010409",
 			backgroundElement: "#060a0f",
 			backgroundMenu: "#161b22",
-			border: "#30363d",
+			border: "#5d6167",
 			borderSubtle: "#21262d",
 			borderActive: "#58a6ff",
 		},
@@ -473,7 +619,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#3c3836",
 			backgroundElement: "#413c3a",
 			backgroundMenu: "#504945",
-			border: "#665c54",
+			border: "#918a84",
 			borderSubtle: "#504945",
 			borderActive: "#ebdbb2",
 		},
@@ -495,7 +641,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#2A2A37",
 			backgroundElement: "#2d2d3b",
 			backgroundMenu: "#363646",
-			border: "#54546D",
+			border: "#79798d",
 			borderSubtle: "#363646",
 			borderActive: "#C38D9D",
 		},
@@ -538,7 +684,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1e272c",
 			backgroundElement: "#242f35",
 			backgroundMenu: "#37474f",
-			border: "#37474f",
+			border: "#717c82",
 			borderSubtle: "#1e272c",
 			borderActive: "#82aaff",
 		},
@@ -560,7 +706,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#0e130d",
 			backgroundElement: "#10150e",
 			backgroundMenu: "#141c12",
-			border: "#1e2a1b",
+			border: "#60685d",
 			borderSubtle: "#141c12",
 			borderActive: "#2eff6a",
 		},
@@ -582,7 +728,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#10101a",
 			backgroundElement: "#161621",
 			backgroundMenu: "#272735",
-			border: "#b4b7c81f",
+			border: "#67676f",
 			borderSubtle: "#b4b7c814",
 			borderActive: "#8da4f5",
 		},
@@ -604,7 +750,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1e1f1c",
 			backgroundElement: "#262622",
 			backgroundMenu: "#3e3d32",
-			border: "#3e3d32",
+			border: "#74736b",
 			borderSubtle: "#1e1f1c",
 			borderActive: "#66d9ef",
 		},
@@ -647,7 +793,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#3B4252",
 			backgroundElement: "#3d4455",
 			backgroundMenu: "#434C5E",
-			border: "#434C5E",
+			border: "#8f949f",
 			borderSubtle: "#434C5E",
 			borderActive: "#4C566A",
 		},
@@ -669,7 +815,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#21252b",
 			backgroundElement: "#262a32",
 			backgroundMenu: "#353b45",
-			border: "#393f4a",
+			border: "#73777f",
 			borderSubtle: "#2c313a",
 			borderActive: "#61afef",
 		},
@@ -691,7 +837,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#141414",
 			backgroundElement: "#161616",
 			backgroundMenu: "#1e1e1e",
-			border: "#484848",
+			border: "#676767",
 			borderSubtle: "#3c3c3c",
 			borderActive: "#606060",
 		},
@@ -735,7 +881,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1a2520",
 			backgroundElement: "#1c2a23",
 			backgroundMenu: "#23372B",
-			border: "#3d4a44",
+			border: "#6d7672",
 			borderSubtle: "#23372B",
 			borderActive: "#2DD5B7",
 		},
@@ -757,7 +903,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1e2132",
 			backgroundElement: "#232638",
 			backgroundMenu: "#32364a",
-			border: "#32364a",
+			border: "#717481",
 			borderSubtle: "#1e2132",
 			borderActive: "#82aaff",
 		},
@@ -779,7 +925,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1f1d2e",
 			backgroundElement: "#211e31",
 			backgroundMenu: "#26233a",
-			border: "#403d52",
+			border: "#6f6d7d",
 			borderSubtle: "#21202e",
 			borderActive: "#9ccfd8",
 		},
@@ -800,7 +946,7 @@ const THEME_DEFINITIONS = [
 			background: "#002b36",
 			backgroundPanel: "#073642",
 			backgroundMenu: "#073642",
-			border: "#073642",
+			border: "#66838a",
 			borderSubtle: "#073642",
 			borderActive: "#586e75",
 		},
@@ -822,7 +968,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1e1a29",
 			backgroundElement: "#211c2d",
 			backgroundMenu: "#2a2139",
-			border: "#495495",
+			border: "#6069a2",
 			borderSubtle: "#241b2f",
 			borderActive: "#36f9f6",
 		},
@@ -866,7 +1012,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#1A1A1A",
 			backgroundElement: "#1e1e1e",
 			backgroundMenu: "#292929",
-			border: "#1F1F1F",
+			border: "#6d6d6d",
 			borderSubtle: "#1A1A1A",
 			borderActive: "#454545",
 		},
@@ -887,7 +1033,7 @@ const THEME_DEFINITIONS = [
 			background: "#101010",
 			backgroundPanel: "#101010",
 			backgroundMenu: "#101010",
-			border: "#282828",
+			border: "#646464",
 			borderSubtle: "#1C1C1C",
 			borderActive: "#FFC799",
 		},
@@ -909,7 +1055,7 @@ const THEME_DEFINITIONS = [
 			backgroundPanel: "#4f4f4f",
 			backgroundElement: "#535353",
 			backgroundMenu: "#5f5f5f",
-			border: "#5f5f5f",
+			border: "#a7a7a7",
 			borderSubtle: "#4f4f4f",
 			borderActive: "#8cd0d3",
 		},
@@ -959,6 +1105,128 @@ const resolveMarkdownAndSyntaxTokens = (
 			colors.syntaxPunctuation ??
 			overrides.syntaxPunctuation ??
 			SYNTAX_PUNCTUATION_COLOR,
+	};
+};
+
+const getMinimumHueDistance = (
+	color: string,
+	compareTo: readonly string[]
+): number => {
+	const distances = compareTo
+		.map((usedColor) => getHueDistance(color, usedColor))
+		.filter((distance): distance is number => distance !== undefined);
+	return distances.length > 0 ? Math.min(...distances) : 180;
+};
+
+const hasThinkingColorCollision = (
+	color: string,
+	usedColors: ReadonlyMap<string, string>,
+	reservedColors: readonly string[]
+): boolean => {
+	const key = normalizeColorKey(color);
+	if (
+		usedColors.has(key) ||
+		reservedColors.some(
+			(reservedColor) => normalizeColorKey(reservedColor) === key
+		)
+	) {
+		return true;
+	}
+	const compareTo = [...usedColors.values(), ...reservedColors];
+	return (
+		getMinimumHueDistance(color, compareTo) <
+		THINKING_LEVEL_HUE_COLLISION_DEGREES
+	);
+};
+
+const findHueShiftedThinkingColor = (
+	preferred: string,
+	hueSources: readonly string[],
+	usedColors: ReadonlyMap<string, string>,
+	reservedColors: readonly string[]
+): string | undefined => {
+	const compareTo = [...usedColors.values(), ...reservedColors];
+	const usedKeys = new Set([
+		...usedColors.keys(),
+		...reservedColors.map(normalizeColorKey),
+	]);
+	let fallbackColor: string | undefined;
+	let fallbackHueDistance = -1;
+	for (const source of [preferred, ...hueSources]) {
+		for (const degrees of THINKING_LEVEL_HUE_SHIFTS) {
+			const shifted = rotateHueColor(source, degrees);
+			if (usedKeys.has(normalizeColorKey(shifted))) {
+				continue;
+			}
+			const hueDistance = getMinimumHueDistance(shifted, compareTo);
+			if (hueDistance > fallbackHueDistance) {
+				fallbackColor = shifted;
+				fallbackHueDistance = hueDistance;
+			}
+			if (hueDistance >= THINKING_LEVEL_HUE_COLLISION_DEGREES) {
+				return shifted;
+			}
+		}
+	}
+	return fallbackColor;
+};
+
+const resolveThinkingLevelTokens = (
+	colors: ThemeDefinition["colors"]
+): Pick<
+	ThemeColors,
+	| "thinkingOff"
+	| "thinkingMinimal"
+	| "thinkingLow"
+	| "thinkingMedium"
+	| "thinkingHigh"
+	| "thinkingXhigh"
+	| "thinkingMax"
+> => {
+	const usedColors = new Map<string, string>();
+	const hueSources = [
+		colors.primary,
+		colors.secondary,
+		colors.thinking,
+		colors.info,
+		colors.warning,
+		colors.success,
+		colors.error,
+	];
+	const reservedMaxColor = colors.thinkingMax ?? colors.error;
+	const resolveColor = (
+		override: string | undefined,
+		preferred: string,
+		reserveMax = true
+	): string => {
+		if (override !== undefined) {
+			usedColors.set(normalizeColorKey(override), override);
+			return override;
+		}
+		const reservedColors = reserveMax ? [reservedMaxColor] : [];
+		const preferredKey = normalizeColorKey(preferred);
+		if (!hasThinkingColorCollision(preferred, usedColors, reservedColors)) {
+			usedColors.set(preferredKey, preferred);
+			return preferred;
+		}
+		const color =
+			findHueShiftedThinkingColor(
+				preferred,
+				hueSources,
+				usedColors,
+				reservedColors
+			) ?? preferred;
+		usedColors.set(normalizeColorKey(color), color);
+		return color;
+	};
+	return {
+		thinkingOff: resolveColor(colors.thinkingOff, colors.border),
+		thinkingMinimal: resolveColor(colors.thinkingMinimal, colors.borderSubtle),
+		thinkingLow: resolveColor(colors.thinkingLow, colors.primary),
+		thinkingMedium: resolveColor(colors.thinkingMedium, colors.secondary),
+		thinkingHigh: resolveColor(colors.thinkingHigh, colors.info),
+		thinkingXhigh: resolveColor(colors.thinkingXhigh, colors.thinking),
+		thinkingMax: resolveColor(colors.thinkingMax, colors.error, false),
 	};
 };
 
@@ -1044,6 +1312,7 @@ export const resolveTheme = ({ colors, name }: ThemeDefinition): Theme => {
 			...colors,
 			...resolveDiffTokens(colors, name, backgroundElement, textMuted),
 			...resolveMarkdownAndSyntaxTokens(colors, name),
+			...resolveThinkingLevelTokens(colors),
 			agent: { build: colors.primary },
 			backgroundElement,
 			borderActive: colors.borderActive ?? colors.primary,
@@ -1087,6 +1356,23 @@ export const THEMES: Theme[] = THEME_DEFINITIONS.map(resolveTheme);
 
 export const getAgentColor = (colors: ThemeColors, agent: string): string =>
 	colors.agent[agent] ?? colors.primary;
+
+export const getThinkingLevelColor = (
+	colors: ThemeColors,
+	level: ThinkingLevel
+): string => colors[THINKING_LEVEL_COLOR_KEYS[level]];
+
+export const getThinkingLevelBorderColor = (
+	colors: ThemeColors,
+	level: ThinkingLevel
+): string => {
+	const levelIndex = THINKING_LEVEL_ORDER.indexOf(level);
+	const opacity =
+		THINKING_LEVEL_MIN_OPACITY +
+		((THINKING_LEVEL_MAX_OPACITY - THINKING_LEVEL_MIN_OPACITY) * levelIndex) /
+			(THINKING_LEVEL_ORDER.length - 1);
+	return withOpacity(getThinkingLevelColor(colors, level), opacity);
+};
 
 export const OPENCODE_THEME_NAME = "opencode";
 export function findThemeByName(

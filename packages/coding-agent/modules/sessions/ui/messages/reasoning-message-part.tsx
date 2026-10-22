@@ -21,9 +21,8 @@ export function ReasoningMessagePart({
 	);
 
 	return (
-		<box flexShrink={0} paddingLeft={3}>
+		<box flexShrink={0} paddingLeft={1}>
 			<code
-				bg={colors.background}
 				conceal
 				content={content}
 				fg={colors.thinkingText}

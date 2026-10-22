@@ -376,7 +376,7 @@ const ToolFailureMessage = ({
 }) => {
 	const recoveryHint = getRecoveryHint(part);
 	return (
-		<box marginBottom={1} paddingX={3} width="100%">
+		<box marginBottom={1} paddingX={1} width="100%">
 			<text fg={colors.error}>{errorText}</text>
 			{recoveryHint === "" ? null : (
 				<text fg={colors.textMuted}>{`↳ ${recoveryHint}`}</text>
@@ -562,7 +562,7 @@ function ToolCallLine({
 
 	if (!isRunning) {
 		return (
-			<box marginBottom={1} paddingX={3} width="100%">
+			<box marginBottom={1} paddingX={1} width="100%">
 				{toolContent}
 			</box>
 		);
@@ -574,7 +574,7 @@ function ToolCallLine({
 				flexDirection="row"
 				gap={1}
 				marginBottom={1}
-				paddingX={3}
+				paddingX={1}
 				width="100%"
 			>
 				<Spinner agent={agent} />
@@ -683,11 +683,7 @@ export function BotMessageContent({
 					{group.type === "reasoning" ? (
 						<box marginBottom={1} width="100%">
 							{hideThinking ? (
-								<box
-									backgroundColor={colors.background}
-									paddingX={3}
-									width="100%"
-								>
+								<box paddingX={1} width="100%">
 									<text fg={colors.thinkingText}>
 										<em>Thinking...</em>
 									</text>
@@ -743,7 +739,7 @@ export function BotMessageFooter({ message }: { message: SessionMessage }) {
 	}
 
 	return (
-		<box paddingX={3} width="100%">
+		<box paddingX={1} width="100%">
 			<text>
 				{footerItems.map((item, index) => (
 					<span key={`${item.color}-${item.label}`}>

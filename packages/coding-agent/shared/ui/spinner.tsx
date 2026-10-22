@@ -8,9 +8,10 @@ const SPINNER_INTERVAL_MS = 80;
 
 type Props = {
 	agent: AgentId;
+	color?: string;
 };
 
-export function Spinner({ agent }: Props) {
+export function Spinner({ agent, color }: Props) {
 	const { colors } = useTheme();
 	const [frameIndex, setFrameIndex] = useState(0);
 
@@ -22,7 +23,7 @@ export function Spinner({ agent }: Props) {
 	}, []);
 
 	return (
-		<text fg={getAgentColor(colors, agent)}>
+		<text fg={color ?? getAgentColor(colors, agent)}>
 			{SPINNER_FRAMES[frameIndex] ?? SPINNER_FRAMES[0]}
 		</text>
 	);

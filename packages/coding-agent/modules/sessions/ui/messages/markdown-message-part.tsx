@@ -84,9 +84,8 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 	}
 
 	return (
-		<box flexShrink={0} paddingLeft={3}>
+		<box flexShrink={0} paddingLeft={1}>
 			<markdown
-				bg={colors.background}
 				conceal
 				content={content}
 				fg={variant === "thinking" ? colors.thinkingText : colors.text}
