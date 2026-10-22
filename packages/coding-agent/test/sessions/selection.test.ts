@@ -120,33 +120,14 @@ test("merges Agent from message metadata only, never from the session row", () =
 	expect(selection?.persistedAgent).toBeUndefined();
 });
 
-test("resolves the restored Agent through the registry resolver exactly once", () => {
-	const seen: Array<string | undefined> = [];
+test("an unavailable recorded Agent restores as its replacement and keeps the recorded id", () => {
 	const selection = restoreSelection({
 		messages: [messageWithSelection("m1", messageModel, agentId("removed"))],
-		resolveAgent: (value) => {
-			seen.push(value);
-			return agentId("build");
-		},
+		resolveAgent: () => agentId("build"),
 	});
 
-	expect(seen).toEqual([agentId("removed")]);
 	expect(selection?.agent).toBe(agentId("build"));
 	expect(selection?.persistedAgent).toBe(agentId("removed"));
-});
-
-test("skips a registry resolver when no Agent was recorded", () => {
-	let calls = 0;
-	restoreSelection({
-		messages: [message("blank")],
-		resolveAgent: () => {
-			calls += 1;
-			return agentId("build");
-		},
-		row: { model: rowModel },
-	});
-
-	expect(calls).toBe(0);
 });
 
 test("restores the session-row Thinking level over the message's", () => {

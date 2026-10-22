@@ -519,7 +519,7 @@ export const createSessionHost = async ({
 				...(isNull(registry)
 					? {}
 					: {
-							resolveAgent: (agentId: AgentId | undefined) =>
+							resolveAgent: (agentId: AgentId) =>
 								resolveActiveAgentId(registry, agentId),
 						}),
 			});

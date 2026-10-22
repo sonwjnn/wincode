@@ -65,7 +65,7 @@ export type ResolvedSessionSelection = Readonly<{
 export type SessionSelection = ResolvedSessionSelection &
 	Readonly<{ source: SelectionSource }>;
 
-export type LastUsedSelection = {
+type LastUsedSelection = {
 	agent: AgentId;
 	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
@@ -91,19 +91,15 @@ const parseSelectionAgent = (value: AgentId | string): AgentId => {
 	return parsed.data;
 };
 
-const normalizeSelectionChoice = (
-	_model: ProviderModelSelection,
+const normalizeThinkingLevel = (
 	thinkingLevel: ThinkingLevel | undefined
-): ThinkingSelection => {
+): ThinkingLevel | undefined => {
 	if (isUndefined(thinkingLevel)) {
-		return {};
+		return;
 	}
 	const parsed = thinkingLevelSchema.safeParse(thinkingLevel);
-	return parsed.success ? { thinkingLevel: parsed.data } : {};
+	return parsed.success ? parsed.data : undefined;
 };
-
-const hasThinkingSelection = (choice: ThinkingSelection): boolean =>
-	choice.thinkingLevel !== undefined;
 
 /**
  * The last selection actually used in a session: agent and model come
@@ -161,27 +157,55 @@ const findLastUsedThinkingSelection = (
 		if (!(metadataModel && isSameProviderModelIdentity(metadataModel, model))) {
 			continue;
 		}
-		const thinking = normalizeSelectionChoice(model, metadata.thinkingLevel);
-		if (hasThinkingSelection(thinking)) {
-			return thinking;
+		const thinkingLevel = normalizeThinkingLevel(metadata.thinkingLevel);
+		if (thinkingLevel !== undefined) {
+			return { thinkingLevel };
 		}
 	}
 	return {};
 };
 
-/** The tier that supplies the Model, and the Model itself, in one decision. */
-const selectionTier = (
-	rowModel: ProviderModelSelection | undefined,
-	messageModel: ProviderModelSelection | undefined,
-	refsModel: ProviderModelSelection | undefined
-): readonly [SelectionSource, ProviderModelSelection | undefined] => {
-	if (rowModel !== undefined) {
-		return ["row", rowModel];
+type RecordedTier = Readonly<{
+	source: SelectionSource;
+	model?: ProviderModelSelection;
+	thinkingLevel?: ThinkingLevel;
+}>;
+
+const messageTier = (
+	persisted: LastUsedSelection | undefined
+): RecordedTier => ({
+	source: "message",
+	model: persisted?.model,
+	thinkingLevel: persisted?.thinkingLevel,
+});
+
+/** The recorded tiers, highest precedence first. Agent has no session-row tier. */
+const recordedTiers = (
+	material: SessionSelectionMaterial,
+	persisted: LastUsedSelection | undefined
+): readonly RecordedTier[] => [
+	{
+		source: "row",
+		model: material.row?.model,
+		thinkingLevel: material.row?.thinkingLevel,
+	},
+	messageTier(persisted),
+	{
+		source: "refs",
+		model: material.refs?.model,
+		thinkingLevel: material.refs?.thinkingLevel,
+	},
+];
+
+const firstThinkingLevel = (
+	tiers: readonly RecordedTier[]
+): ThinkingLevel | undefined => {
+	for (const tier of tiers) {
+		const thinkingLevel = normalizeThinkingLevel(tier.thinkingLevel);
+		if (thinkingLevel !== undefined) {
+			return thinkingLevel;
+		}
 	}
-	if (messageModel !== undefined) {
-		return ["message", messageModel];
-	}
-	return ["refs", refsModel];
 };
 
 /**
@@ -199,16 +223,13 @@ const selectionTier = (
 export const restoreSelection = (
 	material: SessionSelectionMaterial
 ): SessionSelection | null => {
-	const rowModel = material.row?.model;
 	const persisted = getLastUsedSelection(material.messages);
-	const [source, model] = selectionTier(
-		rowModel,
-		persisted?.model,
-		material.refs?.model
-	);
-	if (model === undefined) {
+	const tiers = recordedTiers(material, persisted);
+	const modelTier = tiers.find((tier) => tier.model !== undefined);
+	if (modelTier?.model === undefined) {
 		return null;
 	}
+	const model = modelTier.model;
 
 	const persistedAgent = persisted?.agent ?? material.refs?.agent;
 	const agent =
@@ -216,32 +237,12 @@ export const restoreSelection = (
 			? material.resolveAgent(persistedAgent)
 			: persistedAgent;
 
-	const sessionChoice = normalizeSelectionChoice(
-		model,
-		material.row?.thinkingLevel
-	);
-	const messageChoice = normalizeSelectionChoice(
-		model,
-		persisted?.thinkingLevel
-	);
-	const refsChoice = normalizeSelectionChoice(
-		model,
-		material.refs?.thinkingLevel
-	);
-	let choice = refsChoice;
-	if (hasThinkingSelection(messageChoice)) {
-		choice = messageChoice;
-	}
-	if (hasThinkingSelection(sessionChoice)) {
-		choice = sessionChoice;
-	}
-
 	return {
 		agent,
 		model,
 		persistedAgent,
-		source,
-		thinkingLevel: choice.thinkingLevel,
+		source: modelTier.source,
+		thinkingLevel: firstThinkingLevel(tiers),
 	};
 };
 
@@ -255,7 +256,8 @@ export const nextChatSelection = (
 	material: SessionSelectionMaterial
 ): SessionSelection | null => {
 	const persisted = getLastUsedSelection(material.messages);
-	if (!persisted) {
+	const tier = messageTier(persisted);
+	if (persisted === undefined || tier.model === undefined) {
 		return restoreSelection(material);
 	}
 
@@ -263,18 +265,17 @@ export const nextChatSelection = (
 		agent: material.resolveAgent
 			? material.resolveAgent(persisted.agent)
 			: persisted.agent,
-		model: persisted.model,
+		model: tier.model,
 		persistedAgent: persisted.agent,
-		source: "message",
-		thinkingLevel: persisted.thinkingLevel,
+		source: tier.source,
+		thinkingLevel: normalizeThinkingLevel(tier.thinkingLevel),
 	};
 };
 
 /**
  * Resolves the defaults for a Session that has not recorded a choice: the
  * explicit option, then the selected Agent's own pin, then the product default.
- * ThinkingLevel follows the same order and never restores a level the selected
- * Model cannot run.
+ * ThinkingLevel follows the same order.
  */
 export const sessionSelectionDefaults = (
 	registry: AgentRegistry | null,
@@ -293,10 +294,9 @@ export const sessionSelectionDefaults = (
 		agent,
 		model,
 		...omitUndefined({
-			thinkingLevel: normalizeSelectionChoice(
-				model,
+			thinkingLevel: normalizeThinkingLevel(
 				options.thinkingLevel ?? selectedAgent?.thinkingLevel
-			).thinkingLevel,
+			),
 		}),
 	};
 };
@@ -318,10 +318,9 @@ export const resolveRestoredSessionSdkSelection = (
 		agent: prior?.agent ?? fallback.agent,
 		model,
 		...omitUndefined({
-			thinkingLevel: normalizeSelectionChoice(
-				model,
+			thinkingLevel: normalizeThinkingLevel(
 				prior?.thinkingLevel ?? stored.thinkingLevel ?? fallback.thinkingLevel
-			).thinkingLevel,
+			),
 		}),
 	};
 };
@@ -339,10 +338,9 @@ export const resolveSessionSdkPromptSelection = (
 				: parseSelectionAgent(input.agent),
 		model,
 		...omitUndefined({
-			thinkingLevel: normalizeSelectionChoice(
-				model,
+			thinkingLevel: normalizeThinkingLevel(
 				input.thinkingLevel ?? defaults.thinkingLevel
-			).thinkingLevel,
+			),
 		}),
 	};
 };

@@ -48,7 +48,7 @@ single ladder that no implementation used.
   different question — what an already-open handle defaults to next — and is not
   the stored-tier order.
 - Reading the newest message's own choice stays inside the module. Callers that
-  need only that tier — stored-history display, the Agent-pin preflight, the SDK's
-  next-turn defaults, One-Shot preflight — call `restoreSelection` without a row
-  or refs instead of scanning metadata themselves.
+  need only that tier — the SDK's next-turn defaults, the Agent-pin preflight's
+  per-record validation — call `restoreSelection` with the material they have
+  instead of scanning message metadata themselves.
 - `resolveOutgoingSelection` and its helpers are deleted; no caller used them.
