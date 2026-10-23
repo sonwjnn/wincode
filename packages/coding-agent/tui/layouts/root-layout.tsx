@@ -17,6 +17,7 @@ import {
 } from "@/shared/runtime-context";
 import { setInteractiveCleanup } from "@/shared/runtime-lifecycle";
 import { CommandControllerProvider } from "../commands/command-controller-provider";
+import { LinkOpenErrorToast } from "./link-open-error-toast";
 import { SettingsProviders } from "./settings-providers";
 import { StartupDiagnosticsToast } from "./startup-diagnostics-toast";
 
@@ -75,6 +76,7 @@ export function RootLayout() {
 		<ConfigProvider value={configContext}>
 			<ToastProvider>
 				<StartupDiagnosticsToast messages={startupDiagnostics} />
+				<LinkOpenErrorToast />
 				<AgentRegistryProvider>
 					<KeyboardLayerProvider>
 						<SettingsProviders>

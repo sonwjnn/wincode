@@ -1,6 +1,5 @@
 import type { CliRenderer } from "@opentui/core";
 import type { ProviderModel } from "@wincode/ai";
-import open from "open";
 import { createElement, type ReactNode } from "react";
 import {
 	COMMANDS,
@@ -22,6 +21,7 @@ import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-mod
 import { ProviderSdkConnectDialogContent } from "@/modules/providers/ui/provider-sdk-connect-dialog";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import type { ClipboardWriter } from "@/shared/clipboard";
+import { openExternalLink } from "@/shared/links/open-external-link";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import type { ToastContextValue } from "@/shared/providers/toast/toast-provider";
 import { copyBrowserAuthorizationUrl } from "./browser-authorization";
@@ -268,7 +268,7 @@ const STRATEGIES = {
 					});
 				},
 				onBrowserOpenUrl: async (url: string) => {
-					await open(url);
+					await openExternalLink(url);
 				},
 			});
 		},

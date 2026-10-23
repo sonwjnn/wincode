@@ -13,6 +13,12 @@ import {
 	resolveCompactionSettings,
 } from "@/modules/sessions/compaction";
 import { type EditMode, editModeSchema } from "@/modules/tools";
+import {
+	COPY_BEHAVIORS,
+	type CopyBehavior,
+	DEFAULT_COPY_BEHAVIOR,
+	isCopyBehavior,
+} from "@/shared/clipboard/copy-behavior";
 import type {
 	ConfigDocument,
 	ConfigScope,
@@ -289,18 +295,23 @@ export const AUTO_COMPACT_SETTING: SettingsRegistryDescriptor<
 		return changeAutoCompact(value, context);
 	},
 };
-export const COPY_ON_SELECT_SETTING_ID = "clipboard.copyOnSelect";
-export const COPY_ON_SELECT_GLOBAL_PATH = [
-	"clipboard",
-	"copyOnSelect",
-] as const;
+export const COPY_BEHAVIOR_SETTING_ID = "clipboard.copy";
+export const COPY_BEHAVIOR_GLOBAL_PATH = ["clipboard", "copy"] as const;
 export const HIDE_THINKING_SETTING_ID = "display.hideThinking";
 export const HIDE_THINKING_GLOBAL_PATH = ["display", "hideThinking"] as const;
 
-const COPY_ON_SELECT_REGISTRY_ENTRY = {
-	defaultValue: true,
-	path: COPY_ON_SELECT_GLOBAL_PATH,
+const COPY_BEHAVIOR_REGISTRY_ENTRY = {
+	defaultValue: DEFAULT_COPY_BEHAVIOR,
+	path: COPY_BEHAVIOR_GLOBAL_PATH,
 } as const;
+const COPY_BEHAVIOR_LABELS: Record<CopyBehavior, string> = {
+	manual: "Manual",
+	select: "On select",
+};
+const COPY_BEHAVIOR_OPTIONS = COPY_BEHAVIORS.map((value) => ({
+	label: COPY_BEHAVIOR_LABELS[value],
+	value,
+})) satisfies readonly { label: string; value: CopyBehavior }[];
 const HIDE_THINKING_REGISTRY_ENTRY = {
 	defaultValue: false,
 	path: HIDE_THINKING_GLOBAL_PATH,
@@ -325,12 +336,13 @@ const getGlobalValueAtPath = (
 	return { sourcePath, value };
 };
 
-const readGlobalBooleanSetting = (
+const readGlobalSetting = <Value>(
 	snapshot: ConfigSnapshot,
-	preference: SettingsRegistryMetadata<boolean>
-): SettingResolution<boolean> => {
+	preference: SettingsRegistryMetadata<Value>,
+	validate: (value: unknown) => value is Value
+): SettingResolution<Value> => {
 	const entry = getGlobalValueAtPath(snapshot, preference.path);
-	if (!isBoolean(entry.value) || entry.sourcePath === undefined) {
+	if (!validate(entry.value) || entry.sourcePath === undefined) {
 		return {
 			available: true,
 			source: { kind: "default" },
@@ -349,19 +361,25 @@ const readGlobalBooleanSetting = (
 	};
 };
 
-type GlobalBooleanSettingChange = {
+const readGlobalBooleanSetting = (
+	snapshot: ConfigSnapshot,
+	preference: SettingsRegistryMetadata<boolean>
+): SettingResolution<boolean> =>
+	readGlobalSetting(snapshot, preference, isBoolean);
+
+type GlobalSettingChange<Value> = {
 	readonly context: SettingOperationContext;
 	readonly label: string;
-	readonly preference: SettingsRegistryMetadata<boolean>;
-	readonly value: boolean | undefined;
+	readonly preference: SettingsRegistryMetadata<Value>;
+	readonly value: Value | undefined;
 };
 
-const changeGlobalBooleanSetting = async ({
+const changeGlobalSetting = async <Value>({
 	context,
 	label,
 	preference,
 	value,
-}: GlobalBooleanSettingChange): Promise<void> => {
+}: GlobalSettingChange<Value>): Promise<void> => {
 	const paths = [preference.path];
 	const previous = collectPersistedValues(context.snapshot, paths).filter(
 		(entry) => entry.scope === "global"
@@ -407,14 +425,14 @@ const changeGlobalBooleanSetting = async ({
 	}
 };
 
-const changeCopyOnSelect = (
-	value: boolean | undefined,
+const changeCopyBehavior = (
+	value: CopyBehavior | undefined,
 	context: SettingOperationContext
 ): Promise<void> =>
-	changeGlobalBooleanSetting({
+	changeGlobalSetting({
 		context,
-		label: "Copy on select",
-		preference: COPY_ON_SELECT_REGISTRY_ENTRY,
+		label: "Copy behavior",
+		preference: COPY_BEHAVIOR_REGISTRY_ENTRY,
 		value,
 	});
 
@@ -422,35 +440,37 @@ const changeHideThinking = (
 	value: boolean | undefined,
 	context: SettingOperationContext
 ): Promise<void> =>
-	changeGlobalBooleanSetting({
+	changeGlobalSetting({
 		context,
 		label: "Hide thinking",
 		preference: HIDE_THINKING_REGISTRY_ENTRY,
 		value,
 	});
 
-export const COPY_ON_SELECT_SETTING: SettingsRegistryDescriptor<
-	BooleanSettingDescriptor,
-	typeof COPY_ON_SELECT_SETTING_ID
+export const COPY_BEHAVIOR_SETTING: SettingsRegistryDescriptor<
+	SelectSettingDescriptor,
+	typeof COPY_BEHAVIOR_SETTING_ID
 > = {
-	description: "Copy selected terminal text to the clipboard automatically.",
-	registry: COPY_ON_SELECT_REGISTRY_ENTRY,
-	id: COPY_ON_SELECT_SETTING_ID,
-	kind: "boolean",
-	label: "Copy on select",
+	description:
+		"Copy selected terminal text immediately or wait for the copy shortcut.",
+	registry: COPY_BEHAVIOR_REGISTRY_ENTRY,
+	id: COPY_BEHAVIOR_SETTING_ID,
+	kind: "select",
+	label: "Copy behavior",
+	options: COPY_BEHAVIOR_OPTIONS,
 	persistence: "config",
 	requiredContext: "none",
 	read: (snapshot) =>
-		readGlobalBooleanSetting(snapshot, COPY_ON_SELECT_REGISTRY_ENTRY),
-	reset: (context) => changeCopyOnSelect(undefined, context),
+		readGlobalSetting(snapshot, COPY_BEHAVIOR_REGISTRY_ENTRY, isCopyBehavior),
+	reset: (context) => changeCopyBehavior(undefined, context),
 	scope: "global",
 	section: "Clipboard",
-	validate: (value): value is boolean => isBoolean(value),
+	validate: isCopyBehavior,
 	write: (value, context) => {
-		if (!isBoolean(value)) {
-			throw new Error("Copy on select must be a boolean.");
+		if (!isCopyBehavior(value)) {
+			throw new Error("Copy behavior must be manual or select.");
 		}
-		return changeCopyOnSelect(value, context);
+		return changeCopyBehavior(value, context);
 	},
 };
 
@@ -553,6 +573,6 @@ export const EDIT_MODE_SETTING: SelectSettingDescriptor = {
 export const SETTINGS_CATALOG = [
 	AUTO_COMPACT_SETTING,
 	EDIT_MODE_SETTING,
-	COPY_ON_SELECT_SETTING,
+	COPY_BEHAVIOR_SETTING,
 	HIDE_THINKING_SETTING,
 ] as const satisfies SettingsCatalog;

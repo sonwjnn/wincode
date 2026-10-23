@@ -1,83 +1,28 @@
-import type { Selection } from "@opentui/core";
-import { useRenderer } from "@opentui/react";
+import type { KeyEvent, Selection } from "@opentui/core";
+import { useAppContext, useRenderer } from "@opentui/react";
 import { useEffect } from "react";
+import { useOptionalKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "../providers/toast/toast-provider";
-import type { ToastOptions } from "../providers/toast/types";
-import {
-	ClipboardTooLargeError,
-	type ClipboardWriter,
-	getClipboardTextTransform,
-} from "./clipboard";
+import type { CopyBehavior } from "./copy-behavior";
 import { useClipboard } from "./provider";
-
-export type HandleSelectionOptions = {
-	clipboard: ClipboardWriter;
-	enabled?: boolean;
-	focusedRenderable?: object;
-	show: (options: ToastOptions) => void;
-};
-
-type SelectionText = Pick<Selection, "getSelectedText" | "isStart"> & {
-	readonly selectedRenderables?: readonly object[];
-};
-
-const resolveClipboardText = (
-	selection: SelectionText,
-	focusedRenderable: object | undefined
-): string => {
-	const text = selection.getSelectedText();
-	if (!focusedRenderable) {
-		return text;
-	}
-	const isSelected =
-		selection.selectedRenderables?.includes(focusedRenderable) === true;
-	const transform = isSelected
-		? getClipboardTextTransform(focusedRenderable)
-		: undefined;
-	return transform ? transform(text) : text;
-};
-
-export async function handleSelection(
-	selection: SelectionText,
-	{ clipboard, enabled = true, focusedRenderable, show }: HandleSelectionOptions
-): Promise<void> {
-	if (!enabled) {
-		return;
-	}
-	// Selection.isStart stays true until the pointer moves, so it is the
-	// no-drag flag at the point the selection event fires. OpenCode gates its
-	// copy-on-select on MouseEvent.isDragging for the same behavior.
-	if (selection.isStart) {
-		return;
-	}
-	const text = resolveClipboardText(selection, focusedRenderable);
-	if (!text) {
-		return;
-	}
-	try {
-		const outcome = await clipboard.write(text);
-		if (outcome === "copied") {
-			show({ message: "Copied to clipboard", variant: "success", width: 30 });
-		}
-	} catch (error) {
-		show({
-			message:
-				error instanceof ClipboardTooLargeError
-					? "Selection is too large to copy."
-					: "Failed to copy selection.",
-			variant: "error",
-		});
-	}
-}
+import {
+	copySelection,
+	handleSelection,
+	handleSelectionKey,
+} from "./selection";
+import { subscribeSelectionCopyRequest } from "./selection-copy-requests";
 
 export type CopyOnSelectProps = {
-	enabled: boolean;
+	behavior: CopyBehavior;
 };
 
-export function CopyOnSelect({ enabled }: CopyOnSelectProps) {
+export function CopyOnSelect({ behavior }: CopyOnSelectProps) {
 	const renderer = useRenderer();
 	const clipboard = useClipboard();
 	const toast = useToast();
+	const { keyHandler } = useAppContext();
+	const keyboardLayer = useOptionalKeyboardLayer();
+	const enabled = behavior === "select";
 
 	useEffect(() => {
 		const onSelection = (selection: Selection) => {
@@ -93,6 +38,55 @@ export function CopyOnSelect({ enabled }: CopyOnSelectProps) {
 			renderer.off("selection", onSelection);
 		};
 	}, [enabled, renderer, toast.show, clipboard]);
+
+	useEffect(
+		() =>
+			subscribeSelectionCopyRequest(() => {
+				if (enabled) {
+					return false;
+				}
+				if (keyboardLayer && !keyboardLayer.isTopLayer("base")) {
+					return false;
+				}
+				const selection = renderer.getSelection();
+				if (!selection) {
+					return false;
+				}
+				return copySelection(selection, {
+					clipboard,
+					focusedRenderable: renderer.currentFocusedRenderable ?? undefined,
+					show: toast.show,
+				});
+			}),
+		[enabled, keyboardLayer, renderer, toast.show, clipboard]
+	);
+
+	useEffect(() => {
+		if (!keyHandler) {
+			return;
+		}
+		const onKey = (key: KeyEvent) => {
+			if (keyboardLayer && !keyboardLayer.isTopLayer("base")) {
+				return;
+			}
+			handleSelectionKey(
+				key,
+				{
+					clearSelection: () => renderer.clearSelection(),
+					currentFocusedEditor: renderer.currentFocusedEditor,
+					currentFocusedRenderable: renderer.currentFocusedRenderable,
+					getSelection: () => renderer.getSelection(),
+				},
+				{ clipboard, show: toast.show }
+			);
+		};
+		// Run before dialog/session key handlers, just as OpenCode intercepts
+		// selection keys ahead of its app bindings.
+		keyHandler.prependListener("keypress", onKey);
+		return () => {
+			keyHandler.off("keypress", onKey);
+		};
+	}, [keyHandler, keyboardLayer, renderer, toast.show, clipboard]);
 
 	return null;
 }

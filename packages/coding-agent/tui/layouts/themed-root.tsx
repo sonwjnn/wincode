@@ -1,9 +1,9 @@
-import type { MouseEvent } from "@opentui/core";
+import { MouseButton, type MouseEvent } from "@opentui/core";
 import { useRenderer } from "@opentui/react";
-import { getErrorMessage, logger } from "@wincode/utils";
-import open from "open";
 import type { ReactNode } from "react";
+import { requestSelectionCopy } from "@/shared/clipboard";
 import { clickedLink } from "@/shared/links/clicked-link";
+import { openExternalLink } from "@/shared/links/open-external-link";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 type Props = {
@@ -13,28 +13,21 @@ type Props = {
 export function ThemedRoot({ children }: Props) {
 	const { colors } = useTheme();
 	const renderer = useRenderer();
+	const handleMouseDown = (event: MouseEvent): void => {
+		if (event.button !== MouseButton.RIGHT) {
+			return;
+		}
+		if (requestSelectionCopy()) {
+			event.preventDefault();
+			event.stopPropagation();
+		}
+	};
 	const handleMouseUp = (event: MouseEvent): void => {
 		const url = clickedLink(renderer, event);
 		if (!url) {
 			return;
 		}
-		let protocol: string;
-		try {
-			protocol = new URL(url).protocol;
-		} catch {
-			return;
-		}
-		if (
-			!(protocol === "http:" || protocol === "https:" || protocol === "file:")
-		) {
-			return;
-		}
-		void open(url).catch((error: unknown) => {
-			void logger.warn("Failed to open link.", {
-				error: getErrorMessage(error, "Unknown link error."),
-				url,
-			});
-		});
+		void openExternalLink(url);
 	};
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
@@ -42,6 +35,7 @@ export function ThemedRoot({ children }: Props) {
 			backgroundColor={colors.background}
 			flexGrow={1}
 			height="100%"
+			onMouseDown={handleMouseDown}
 			onMouseUp={handleMouseUp}
 			width="100%"
 		>

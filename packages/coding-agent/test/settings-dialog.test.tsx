@@ -4,7 +4,7 @@ import { testRender } from "@opentui/react/test-utils";
 import { act, useEffect } from "react";
 import {
 	AUTO_COMPACT_SETTING,
-	COPY_ON_SELECT_SETTING,
+	COPY_BEHAVIOR_SETTING,
 	SETTINGS_CATALOG,
 } from "@/modules/settings/catalog";
 import { createSettingsOperations } from "@/modules/settings/operations";
@@ -13,6 +13,10 @@ import type {
 	ResolvedSetting,
 	SettingsOperations,
 } from "@/modules/settings/types";
+import {
+	type CopyBehavior,
+	DEFAULT_COPY_BEHAVIOR,
+} from "@/shared/clipboard/copy-behavior";
 import {
 	DialogProvider,
 	useDialog,
@@ -36,9 +40,9 @@ const createSetting = (value: boolean): ResolvedSetting => ({
 	source: { kind: "default" },
 	value,
 });
-const copyOnSelectSetting = (value: boolean): ResolvedSetting => ({
+const copyBehaviorSetting = (value: CopyBehavior): ResolvedSetting => ({
 	available: true,
-	descriptor: COPY_ON_SELECT_SETTING,
+	descriptor: COPY_BEHAVIOR_SETTING,
 	source: { kind: "default" },
 	value,
 });
@@ -236,31 +240,31 @@ test("space persists the selected setting and escape closes the hub", async () =
 	expect(setup.captureCharFrame()).not.toContain("Auto-compact");
 	await act(() => setup.renderer.destroy());
 });
-test("Settings dialog toggles Copy on select", async () => {
+test("Settings dialog cycles Copy behavior", async () => {
 	let changed: { id: string; value: unknown } | undefined;
-	const setting = copyOnSelectSetting(true);
+	const setting = copyBehaviorSetting("select");
 	const operations: SettingsOperations = {
 		catalog: SETTINGS_CATALOG,
 		getSettings: async () => [setting],
-		resetValue: async () => copyOnSelectSetting(true),
+		resetValue: async () => copyBehaviorSetting(DEFAULT_COPY_BEHAVIOR),
 		setValue: async (id, value) => {
 			changed = { id, value };
-			return copyOnSelectSetting(value === true);
+			return copyBehaviorSetting(value as CopyBehavior);
 		},
 	};
 	const setup = await renderSettingsDialog(operations, [setting]);
 
-	expect(setup.captureCharFrame()).toContain("Copy on select: on");
+	expect(setup.captureCharFrame()).toContain("Copy behavior: On select");
 	await act(async () => {
 		await setup.mockInput.typeText(" ");
 	});
 	await flushUi(setup);
 
 	expect(changed).toEqual({
-		id: "clipboard.copyOnSelect",
-		value: false,
+		id: "clipboard.copy",
+		value: "manual",
 	});
-	expect(setup.captureCharFrame()).toContain("Copy on select: off");
+	expect(setup.captureCharFrame()).toContain("Copy behavior: Manual");
 	await act(() => setup.renderer.destroy());
 });
 test("search reports no matching settings without hiding the hub", async () => {
@@ -324,11 +328,11 @@ test("reset uses the descriptor reset operation", async () => {
 test("Ctrl+R removes the persisted copy preference and restores the default", async () => {
 	const configFile = `${TEST_CONFIG_ROOT}/settings.json`;
 	const files: Record<string, string> = {
-		[configFile]: '{"clipboard":{"copyOnSelect":false}}',
+		[configFile]: '{"clipboard":{"copy":"manual"}}',
 	};
 	const configStore = createInMemoryConfigStore(files);
 	const operations = createSettingsOperations({
-		catalog: [COPY_ON_SELECT_SETTING],
+		catalog: [COPY_BEHAVIOR_SETTING],
 		configStore,
 		workspace: "/workspace",
 	});
@@ -341,7 +345,7 @@ test("Ctrl+R removes the persisted copy preference and restores the default", as
 	await flushUi(setup);
 
 	expect(await operations.getSettings()).toMatchObject([
-		{ source: { kind: "default" }, value: true },
+		{ source: { kind: "default" }, value: DEFAULT_COPY_BEHAVIOR },
 	]);
 	expect(JSON.parse(files[configFile] ?? "{}")).toEqual({ clipboard: {} });
 	act(() => setup.renderer.destroy());

@@ -3,7 +3,7 @@ import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
 import {
 	AUTO_COMPACT_SETTING,
-	COPY_ON_SELECT_SETTING,
+	COPY_BEHAVIOR_SETTING,
 	createSettingsRegistry,
 	HIDE_THINKING_SETTING,
 	type SettingRegistryItem,
@@ -12,6 +12,7 @@ import {
 	useSettingRegistryValue,
 	useSettingsOperations,
 } from "@/modules/settings";
+import { DEFAULT_COPY_BEHAVIOR } from "@/shared/clipboard/copy-behavior";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import {
 	createInMemoryConfigStore,
@@ -206,14 +207,10 @@ test("registry uses descriptor defaults when the initial config read fails", asy
 	};
 
 	function Harness() {
-		const copyOnSelect = useSettingRegistryValue(COPY_ON_SELECT_SETTING);
-		let label = "loading";
-		if (copyOnSelect.status === "ready" && copyOnSelect.value) {
-			label = "on";
-		} else if (copyOnSelect.status === "ready") {
-			label = "off";
-		}
-		return <text>Copy on select: {label}</text>;
+		const copyBehavior = useSettingRegistryValue(COPY_BEHAVIOR_SETTING);
+		const label =
+			copyBehavior.status === "ready" ? copyBehavior.value : "loading";
+		return <text>Copy behavior: {label}</text>;
 	}
 
 	const setup = await testRender(
@@ -233,7 +230,9 @@ test("registry uses descriptor defaults when the initial config read fails", asy
 			await setup.renderOnce();
 		});
 		await setup.flush({ maxPasses: 20 });
-		expect(setup.captureCharFrame()).toContain("Copy on select: on");
+		expect(setup.captureCharFrame()).toContain(
+			`Copy behavior: ${DEFAULT_COPY_BEHAVIOR}`
+		);
 	} finally {
 		failInitialRead.resolve();
 		act(() => setup.renderer.destroy());

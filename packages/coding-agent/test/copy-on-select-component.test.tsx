@@ -50,7 +50,9 @@ const createConfigStoreWithDelayedInitialRead = (
 };
 
 test("a Settings write immediately changes the root selection handler", async () => {
-	const configStore = createTestConfigStore();
+	const configStore = createTestConfigStore({
+		[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copy":"select"}}',
+	});
 	const configValue = {
 		configStore,
 		homeRoot: HOME_ROOT,
@@ -94,7 +96,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 	});
 	await flush(setup);
 	await act(async () => {
-		await operations.setValue("clipboard.copyOnSelect", false);
+		await operations.setValue("clipboard.copy", "manual");
 	});
 	await flush(setup);
 	await act(async () => {
@@ -103,7 +105,7 @@ test("a Settings write immediately changes the root selection handler", async ()
 	});
 	await flush(setup);
 	await act(async () => {
-		await operations.setValue("clipboard.copyOnSelect", true);
+		await operations.setValue("clipboard.copy", "select");
 	});
 	await flush(setup);
 	await act(async () => {
@@ -116,9 +118,9 @@ test("a Settings write immediately changes the root selection handler", async ()
 	expect(clears).toBe(0);
 	act(() => setup.renderer.destroy());
 });
-test("does not copy until a saved disabled preference loads", async () => {
+test("does not copy until a saved manual preference loads", async () => {
 	const delayedStore = createConfigStoreWithDelayedInitialRead({
-		[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copyOnSelect":false}}',
+		[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copy":"manual"}}',
 	});
 	const configValue = {
 		configStore: delayedStore.configStore,
@@ -165,7 +167,7 @@ test("does not copy until a saved disabled preference loads", async () => {
 		throw new Error("Settings operations did not initialize.");
 	}
 	await act(async () => {
-		setup.renderer.emit("selection", createSelection("saved disabled"));
+		setup.renderer.emit("selection", createSelection("saved manual"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);

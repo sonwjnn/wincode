@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TUI links open on a plain click.** The root mouse handler resolves the
   OSC 8 link under the pointer only when the gesture is a click, so dragging
   still selects and copies text and modified clicks stay with the terminal.
+  Wrapped links resolve their full URL from any rendered row, and a failed
+  `open()` now shows an error toast instead of only logging.
+
+- **Selection keys and right-click follow the terminal clipboard contract.**
+  The global `clipboard.copy` setting now has `manual` and `select` modes
+  (default `select`, or `manual` on Windows), replacing the old
+  `clipboard.copyOnSelect` boolean. In `manual` mode, right-click or
+  Cmd+C on macOS / Ctrl+C elsewhere copies the selection; in `select` mode,
+  selecting copies immediately and the shortcut copies again without clearing
+  it. A copy shortcut while a selection exists absorbs the key so it cannot
+  trigger the app's exit binding. Escape clears a selection, while typing
+  dismisses a non-editor selection and leaves an editor-owned one alone.
 
 - **Clipboard access uses OpenTUI's native service.** Copying writes the host
   clipboard and OSC 52 together, image paste reads the host clipboard directly,

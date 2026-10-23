@@ -1,11 +1,12 @@
 import { CopyOnSelect } from "@/shared/clipboard";
-import { COPY_ON_SELECT_SETTING } from "./catalog";
+import { isCopyBehavior } from "@/shared/clipboard/copy-behavior";
+import { COPY_BEHAVIOR_SETTING } from "./catalog";
 import { useSettingRegistryValue } from "./settings-registry";
 
 export function CopyOnSelectFromSettings() {
-	const setting = useSettingRegistryValue(COPY_ON_SELECT_SETTING);
-	if (setting.status !== "ready") {
+	const setting = useSettingRegistryValue(COPY_BEHAVIOR_SETTING);
+	if (setting.status !== "ready" || !isCopyBehavior(setting.value)) {
 		return null;
 	}
-	return <CopyOnSelect enabled={setting.value} />;
+	return <CopyOnSelect behavior={setting.value} />;
 }
