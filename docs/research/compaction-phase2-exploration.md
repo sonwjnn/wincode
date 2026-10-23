@@ -135,7 +135,7 @@ Defer map/reduce/chunked summarization initially. It introduces multiple paid re
 
 ## 3. Per-model compaction policy
 
-Proposed configuration shape, not yet implemented:
+Initial proposed configuration shape, implemented for exact-model reserve/recent budgets in Phase 2B:
 
 ```json
 {
@@ -244,7 +244,7 @@ The disposable diagnostic intentionally reported the five reproduced gaps above.
 
 ## 7. Implemented scope
 
-The implementation scope was confirmed as Phase 2A summary safety plus the Phase 1 Host model-forwarding prerequisite. Per-model policy overrides (2B) and explicit summary-model routing (2C) are deferred.
+Phase 2A summary safety and the Phase 1 Host model-forwarding prerequisite were implemented first. Phase 2B exact-model policies are now implemented; explicit summary-model routing (2C) remains deferred.
 
 Implemented contracts:
 
@@ -254,11 +254,14 @@ Implemented contracts:
 - Tool-call and tool-result metadata remain intact while input, output and error previews are independently bounded; reasoning is omitted only from summary serialization.
 - Injected summary generators cannot persist nonempty output above the planned budget; repeated compaction acceptance compares fallback estimates for the current projected Context, not the un-compacted Transcript.
 - The Host forwards the selected conversation model to threshold checks, preventing stale usage from another model from triggering compaction.
+- `compaction.modelOverrides` resolves exact, case-sensitive `providerId/modelId` entries (including slash-containing model IDs) for `reserveTokens` and `keepRecentTokens`, after merged ordinary values and before session overrides. Model-limit clamps apply last.
+- Desired and effective budgets retain the winning nested config paths and sources. Invalid matching budget values fall back field-by-field with diagnostics; malformed model keys and unsupported per-model scalar fields are also diagnosed and never applied.
+- Manual, threshold, and overflow compaction resolve policy for their selected conversation model. Admitted compactions keep their resolved policy, while a waiting submission checks the settled Context against its own model policy before sending.
 
 The implementation uses the existing `truncateUtf8()`/`keepTailUtf8()` helpers. Prompt/output token counts remain heuristics rather than tokenizer-exact guarantees.
 
 ## 8. Validation
 
-- `bun run test`: 1,833 passed, 0 failed.
-- `bun run test:e2e`: 35 passed, 0 failed.
+- `bun run test`: 1,843 passed across 207 files, 0 failed.
+- `bun run test:e2e`: 35 passed across 7 files, 0 failed.
 - `bun check-types`, `bun check`, and `bun fix`: passed.

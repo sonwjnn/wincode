@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
+import type { ProviderModel } from "@wincode/ai";
 import {
 	DEFAULT_PROVIDER_MODEL_SELECTION,
+	type ProviderModelSelection,
 	parseProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
 import {
@@ -22,6 +24,222 @@ const snapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
 });
 
 describe("resolveCompactionSettings", () => {
+	test("applies an exact slash-preserving model override per field", () => {
+		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
+		if (model === null) {
+			throw new Error("The Provider Model fixture was invalid.");
+		}
+		const settings = resolveCompactionSettings({
+			contextLimit: 100_000,
+			model,
+			snapshot: {
+				diagnostics: [],
+				document: {
+					compaction: {
+						keepRecentTokens: 18_000,
+						modelOverrides: {
+							"openai/gpt-4.1/2025-04-14": { reserveTokens: 30_000 },
+						},
+						reserveTokens: 10_000,
+					},
+				},
+				sourceFor: (path) =>
+					path[1] === "modelOverrides"
+						? { path: "/home/user/.wincode/settings.json", scope: "global" }
+						: { path: "/workspace/.wincode/settings.json", scope: "project" },
+				sources: [],
+			},
+		});
+
+		expect(settings.desired).toMatchObject({
+			keepRecentTokens: 18_000,
+			reserveTokens: 30_000,
+		});
+		expect(settings.resolved).toMatchObject({
+			keepRecentTokens: 18_000,
+			reserveTokens: 30_000,
+		});
+		expect(settings.settingPaths.keepRecentTokens).toEqual([
+			"compaction",
+			"keepRecentTokens",
+		]);
+		expect(settings.settingPaths.reserveTokens).toEqual([
+			"compaction",
+			"modelOverrides",
+			"openai/gpt-4.1/2025-04-14",
+			"reserveTokens",
+		]);
+		expect(settings.sources.keepRecentTokens).toEqual({
+			kind: "config",
+			path: "/workspace/.wincode/settings.json",
+			scope: "project",
+		});
+		expect(settings.sources.reserveTokens).toEqual({
+			kind: "config",
+			path: "/home/user/.wincode/settings.json",
+			scope: "global",
+		});
+	});
+
+	test("applies session overrides after exact-model values field by field", () => {
+		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
+		if (model === null) {
+			throw new Error("The Provider Model fixture was invalid.");
+		}
+		const settings = resolveCompactionSettings({
+			contextLimit: 100_000,
+			model,
+			sessionOverrides: { keepRecentTokens: 7000 },
+			snapshot: snapshot({
+				compaction: {
+					modelOverrides: {
+						"openai/gpt-4.1/2025-04-14": {
+							keepRecentTokens: 14_000,
+							reserveTokens: 30_000,
+						},
+					},
+				},
+			}),
+		});
+
+		expect(settings.desired).toMatchObject({
+			keepRecentTokens: 7000,
+			reserveTokens: 30_000,
+		});
+		expect(settings.sources.keepRecentTokens).toEqual({ kind: "session" });
+		expect(settings.sources.reserveTokens.kind).toBe("config");
+	});
+
+	test("diagnoses malformed per-model identity keys", () => {
+		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
+		if (model === null) {
+			throw new Error("The Provider Model fixture was invalid.");
+		}
+		const settings = resolveCompactionSettings({
+			contextLimit: 100_000,
+			model,
+			snapshot: snapshot({
+				compaction: {
+					modelOverrides: {
+						"not-a-provider-model": { reserveTokens: 9000 },
+					},
+				},
+			}),
+		});
+
+		expect(settings.reserveTokens).toBe(
+			DEFAULT_COMPACTION_SETTINGS.reserveTokens
+		);
+		expect(settings.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "invalid-value",
+				configPath: ["compaction", "modelOverrides", "not-a-provider-model"],
+				severity: "error",
+			})
+		);
+	});
+
+	test("diagnoses per-model fields outside the supported budgets", () => {
+		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
+		if (model === null) {
+			throw new Error("The Provider Model fixture was invalid.");
+		}
+		const settings = resolveCompactionSettings({
+			contextLimit: 100_000,
+			model,
+			snapshot: snapshot({
+				compaction: {
+					modelOverrides: {
+						"openai/gpt-4.1/2025-04-14": { auto: false },
+					},
+				},
+			}),
+		});
+
+		expect(settings.auto).toBe(true);
+		expect(settings.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "invalid-value",
+				configPath: [
+					"compaction",
+					"modelOverrides",
+					"openai/gpt-4.1/2025-04-14",
+					"auto",
+				],
+				severity: "error",
+			})
+		);
+	});
+
+	test("diagnoses an invalid matching override and retains field-wise fallback", () => {
+		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
+		if (model === null) {
+			throw new Error("The Provider Model fixture was invalid.");
+		}
+		const settings = resolveCompactionSettings({
+			contextLimit: 100_000,
+			model,
+			snapshot: snapshot({
+				compaction: {
+					keepRecentTokens: 12_000,
+					modelOverrides: {
+						"openai/gpt-4.1/2025-04-14": { reserveTokens: 0 },
+					},
+					reserveTokens: 8000,
+				},
+			}),
+		});
+
+		expect(settings.reserveTokens).toBe(8000);
+		expect(settings.settingPaths.reserveTokens).toEqual([
+			"compaction",
+			"reserveTokens",
+		]);
+		expect(settings.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "invalid-value",
+				configPath: [
+					"compaction",
+					"modelOverrides",
+					"openai/gpt-4.1/2025-04-14",
+					"reserveTokens",
+				],
+				severity: "error",
+			})
+		);
+	});
+
+	test("clamps exact-model budgets to the selected model's small window", () => {
+		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
+		if (model === null) {
+			throw new Error("The Provider Model fixture was invalid.");
+		}
+		const settings = resolveCompactionSettings({
+			contextLimit: 32_000,
+			model,
+			snapshot: snapshot({
+				compaction: {
+					modelOverrides: {
+						"openai/gpt-4.1/2025-04-14": {
+							keepRecentTokens: 30_000,
+							reserveTokens: 30_000,
+						},
+					},
+				},
+			}),
+		});
+
+		expect(settings.desired).toMatchObject({
+			keepRecentTokens: 30_000,
+			reserveTokens: 30_000,
+		});
+		expect(settings.resolved).toMatchObject({
+			keepRecentTokens: 8000,
+			reserveTokens: 16_000,
+		});
+		expect(settings.thresholdTokens).toBe(16_000);
+	});
+
 	test("uses defaults and clamps desired values to a small model", () => {
 		const settings = resolveCompactionSettings({
 			contextLimit: 32_000,
@@ -62,6 +280,52 @@ describe("resolveCompactionSettings", () => {
 				severity: "warning",
 			})
 		);
+	});
+
+	test("passes the selected model identity into settings resolution", async () => {
+		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
+		const switchedModel = parseProviderModelSelection(
+			"anthropic/gpt-4.1/2025-04-14"
+		);
+		if (model === null || switchedModel === null) {
+			throw new Error("The Provider Model fixture was invalid.");
+		}
+		const providerModel = (
+			selection: ProviderModelSelection
+		): ProviderModel => ({
+			limits: { contextWindowTokens: 100_000 },
+			modelId: selection.modelId,
+			protocolId: "fixture",
+			providerId: selection.providerId,
+		});
+		const operations = createCompactionSettingsOperations({
+			configStore: fromPartial<ConfigStore>({
+				getSnapshot: async () =>
+					snapshot({
+						compaction: {
+							modelOverrides: {
+								"openai/gpt-4.1/2025-04-14": { reserveTokens: 30_000 },
+								"anthropic/gpt-4.1/2025-04-14": { reserveTokens: 8000 },
+							},
+						},
+					}),
+			}),
+			workspace: "/workspace",
+		});
+
+		const first = await operations.getCompactionSettings(
+			model,
+			providerModel(model)
+		);
+		const afterModelSwitch = await operations.getCompactionSettings(
+			switchedModel,
+			providerModel(switchedModel)
+		);
+
+		expect(first.reserveTokens).toBe(30_000);
+		expect(first.modelContextLimit).toBe(100_000);
+		expect(afterModelSwitch.reserveTokens).toBe(8000);
+		expect(afterModelSwitch.modelContextLimit).toBe(100_000);
 	});
 
 	test("keeps context unknown when a Provider Model is not supplied", async () => {
