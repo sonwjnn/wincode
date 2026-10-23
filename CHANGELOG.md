@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+- **TUI links open on a plain click.** The root mouse handler resolves the
+  OSC 8 link under the pointer only when the gesture is a click, so dragging
+  still selects and copies text and modified clicks stay with the terminal.
+
 - **Clipboard access uses OpenTUI's native service.** Copying writes the host
   clipboard and OSC 52 together, image paste reads the host clipboard directly,
   and the `pbcopy`/`xclip`/`wl-paste`/PowerShell fallbacks are gone. OpenTUI is
