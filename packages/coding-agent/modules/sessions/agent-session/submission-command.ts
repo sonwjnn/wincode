@@ -1,9 +1,8 @@
 import {
 	createAgentTurnAbortReason,
-	createAgentTurnId,
 	type SessionMessageId,
 } from "@wincode/agent-core";
-import { getErrorMessage, isError } from "@wincode/utils";
+import { isError } from "@wincode/utils";
 import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
 import { sessionSendCancelled } from "./submission";
 
@@ -19,34 +18,32 @@ export type SessionSubmissionStart = Readonly<{
 }>;
 
 export type SessionSubmissionCommandPort = Readonly<{
-	beginSubmission: (input: SessionSendInput) => SessionSubmissionStart;
+	runInSubmissionLane: (
+		input: SessionSendInput,
+		options: RunSubmissionOptions,
+		run: () => Promise<SessionSendOutcome>
+	) => Promise<SessionSendOutcome>;
 	cancelCompaction: () => void;
 	deadlineMs: number;
-	drainQueuedSubmissions: () => Promise<void>;
-	finishSubmission: (
-		input: SessionSendInput,
-		ownsTurnReservation: boolean
-	) => void;
 	getActiveSend: () => SessionActiveSend | undefined;
-	isBusyForContinuation: () => boolean;
+	prepareContinuation: (
+		input: SessionSendInput
+	) => Promise<SessionContinuationPreparation>;
 	isClosed: () => boolean;
 	pipelineSend: (
 		input: SessionSendInput,
 		signal: AbortSignal
 	) => Promise<SessionSendOutcome>;
 	publishError: (error: Error) => void;
-	rememberContinuationInput: (input: SessionSendInput) => void;
-	reportSubmissionFailure: (
-		input: SessionSendInput,
-		messageId: SessionMessageId | undefined,
-		reason: string
-	) => void;
 	setActiveSend: (active: SessionActiveSend | undefined) => void;
-	trackBackgroundTask: (task: Promise<unknown>) => void;
-	waitForSubmissionLane: () => Promise<void>;
+	waitForActiveSend: () => Promise<void>;
 }>;
 
 type RunSubmissionOptions = Readonly<{ reportFailure?: boolean }>;
+type SessionContinuationPreparation =
+	| { readonly kind: "closed" }
+	| { readonly kind: "busy" }
+	| { readonly kind: "ready"; readonly input: SessionSendInput };
 export type SessionSubmissionCommand = Readonly<{
 	abortActiveSend: (
 		reason: "cancelled" | "deadline-exceeded" | "interrupted"
@@ -124,55 +121,23 @@ export const createSessionSubmissionCommand = (
 		port.setActiveSend({ controller, deadlineTimer, promise });
 		return promise;
 	};
-	const waitForActiveSend = async (): Promise<void> => {
-		while (port.getActiveSend() !== undefined) {
-			await port.getActiveSend()?.promise.catch(() => undefined);
-		}
-	};
-	const runSubmission = async (
+	const waitForActiveSend = (): Promise<void> => port.waitForActiveSend();
+	const runSubmission = (
 		input: SessionSendInput,
-		{ reportFailure = true }: RunSubmissionOptions = {}
-	): Promise<SessionSendOutcome> => {
-		const { messageId, ownsTurnReservation } = port.beginSubmission(input);
-		try {
-			const outcome = await runActiveSend(input);
-			if (outcome.rejected && reportFailure) {
-				port.reportSubmissionFailure(input, messageId, outcome.reason);
-			}
-			return outcome;
-		} catch (error) {
-			if (reportFailure) {
-				port.reportSubmissionFailure(
-					input,
-					messageId,
-					getErrorMessage(error, "The Submission failed.")
-				);
-			}
-			throw error;
-		} finally {
-			port.finishSubmission(input, ownsTurnReservation);
-		}
-	};
+		options: RunSubmissionOptions = {}
+	): Promise<SessionSendOutcome> =>
+		port.runInSubmissionLane(input, options, () => runActiveSend(input));
 	const continueContext = async (
 		input: SessionSendInput
 	): Promise<SessionSendOutcome> => {
-		if (port.isClosed()) {
+		const preparation = await port.prepareContinuation(input);
+		if (preparation.kind === "closed") {
 			return { rejected: true, reason: "The session has ended." };
 		}
-		await waitForActiveSend();
-		await port.waitForSubmissionLane();
-		if (port.isClosed()) {
-			return { rejected: true, reason: "The session has ended." };
-		}
-		if (port.isBusyForContinuation()) {
+		if (preparation.kind === "busy") {
 			return { rejected: true, reason: "The Agent Session is busy." };
 		}
-		const continuationInput = {
-			...input,
-			turnId: input.turnId ?? createAgentTurnId(),
-		};
-		port.rememberContinuationInput(continuationInput);
-		return runSubmission(continuationInput);
+		return runSubmission(preparation.input);
 	};
 	return {
 		abortActiveSend,
