@@ -255,13 +255,13 @@ Implemented contracts:
 - Injected summary generators cannot persist nonempty output above the planned budget; repeated compaction acceptance compares fallback estimates for the current projected Context, not the un-compacted Transcript.
 - The Host forwards the selected conversation model to threshold checks, preventing stale usage from another model from triggering compaction.
 - `compaction.modelOverrides` resolves exact, case-sensitive `providerId/modelId` entries (including slash-containing model IDs) for `reserveTokens` and `keepRecentTokens`, after merged ordinary values and before session overrides. Model-limit clamps apply last.
-- Desired and effective budgets retain the winning nested config paths and sources. Invalid matching budget values fall back field-by-field with diagnostics; malformed model keys and unsupported per-model scalar fields are also diagnosed and never applied.
+- Desired and effective budgets retain the winning nested config paths and sources. Invalid matching budget values fall back field-by-field with diagnostics; malformed model identities and unsupported per-model fields—including unknown keys—are diagnosed and never applied.
 - Manual, threshold, and overflow compaction resolve policy for their selected conversation model. Admitted compactions keep their resolved policy, while a waiting submission checks the settled Context against its own model policy before sending.
 
 The implementation uses the existing `truncateUtf8()`/`keepTailUtf8()` helpers. Prompt/output token counts remain heuristics rather than tokenizer-exact guarantees.
 
 ## 8. Validation
 
-- `bun run test`: 1,843 passed across 207 files, 0 failed.
+- `bun run test`: 1,844 passed across 207 files, 0 failed.
 - `bun run test:e2e`: 35 passed across 7 files, 0 failed.
 - `bun check-types`, `bun check`, and `bun fix`: passed.

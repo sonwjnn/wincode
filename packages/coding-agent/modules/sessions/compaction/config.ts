@@ -229,10 +229,7 @@ const diagnoseUnsupportedModelOverrideSettings = (
 	state: ModelOverrideResolutionState
 ): void => {
 	for (const key of Object.keys(override)) {
-		if (
-			!Object.hasOwn(DEFAULT_COMPACTION_SETTINGS, key) ||
-			isModelOverrideSettingKey(key)
-		) {
+		if (isModelOverrideSettingKey(key)) {
 			continue;
 		}
 		const settingPath = [...overridePath, key];
@@ -241,7 +238,7 @@ const diagnoseUnsupportedModelOverrideSettings = (
 				state.snapshot,
 				"invalid-value",
 				settingPath,
-				`${settingPath.join(".")} cannot be configured per model.`
+				`${settingPath.join(".")} is not a supported per-model compaction setting.`
 			)
 		);
 	}

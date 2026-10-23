@@ -1,10 +1,7 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { OperationalFailure } from "@wincode/agent-core";
-import {
-	type ProviderModelSelection,
-	parseProviderModelSelection,
-} from "@/modules/providers/provider-model-selection";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
 	createSessionMaintenanceWorkflow,
 	type SessionMaintenancePort,
@@ -23,20 +20,15 @@ import type { ConfigSnapshot } from "@/shared/config/config-store";
 import {
 	agentTurnId,
 	compactionId,
+	providerModelSelectionFixture,
 	sessionId,
 	sessionMessageId,
 } from "../support/identifiers";
 
-const selectedModel = (identity: string): ProviderModelSelection => {
-	const model = parseProviderModelSelection(identity);
-	if (model === null) {
-		throw new Error(`Invalid Provider Model fixture: ${identity}`);
-	}
-	return model;
-};
-
-const manualModel = selectedModel("openai/gpt-4.1/2025-04-14");
-const automaticModel = selectedModel("anthropic/claude-3-7-sonnet");
+const manualModel = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
+const automaticModel = providerModelSelectionFixture(
+	"anthropic/claude-3-7-sonnet"
+);
 const sourceMessage = fromPartial<SessionMessage>({
 	id: sessionMessageId("overflow-source"),
 	parts: [{ text: "original request", type: "text" }],

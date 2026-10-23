@@ -1,9 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import {
-	type ProviderModelSelection,
-	parseProviderModelSelection,
-} from "@/modules/providers/provider-model-selection";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { prepareCompactionBeforeSubmit } from "@/modules/sessions/agent-session/submission";
 import type {
 	CompactSessionResult,
@@ -15,7 +12,11 @@ import {
 } from "@/modules/sessions/compaction/config";
 import { SessionCompactionError } from "@/modules/sessions/compaction/error";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { modelId, sessionMessageId } from "../support/identifiers";
+import {
+	modelId,
+	providerModelSelectionFixture,
+	sessionMessageId,
+} from "../support/identifiers";
 
 const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -121,12 +122,9 @@ test("compacts on its own when the joined compaction left the threshold unmet", 
 });
 
 test("rechecks settled Context using the waiting model's exact policy", async () => {
-	const waitingModel = parseProviderModelSelection(
+	const waitingModel = providerModelSelectionFixture(
 		"anthropic/claude-3-7-sonnet"
 	);
-	if (waitingModel === null) {
-		throw new Error("The waiting Provider Model fixture was invalid.");
-	}
 	const waitingSettings = resolveCompactionSettings({
 		contextLimit: 100_000,
 		model: waitingModel,

@@ -4,7 +4,6 @@ import type { ProviderModel } from "@wincode/ai";
 import {
 	DEFAULT_PROVIDER_MODEL_SELECTION,
 	type ProviderModelSelection,
-	parseProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
@@ -12,6 +11,7 @@ import {
 } from "@/modules/sessions/compaction/config";
 import { createCompactionSettingsOperations } from "@/modules/sessions/compaction/settings-operations";
 import type { ConfigSnapshot, ConfigStore } from "@/shared/config/config-store";
+import { providerModelSelectionFixture } from "../support/identifiers";
 
 const snapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
 	diagnostics: [],
@@ -25,10 +25,7 @@ const snapshot = (document: Record<string, unknown>): ConfigSnapshot => ({
 
 describe("resolveCompactionSettings", () => {
 	test("applies an exact slash-preserving model override per field", () => {
-		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
-		if (model === null) {
-			throw new Error("The Provider Model fixture was invalid.");
-		}
+		const model = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
 		const settings = resolveCompactionSettings({
 			contextLimit: 100_000,
 			model,
@@ -82,10 +79,7 @@ describe("resolveCompactionSettings", () => {
 	});
 
 	test("applies session overrides after exact-model values field by field", () => {
-		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
-		if (model === null) {
-			throw new Error("The Provider Model fixture was invalid.");
-		}
+		const model = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
 		const settings = resolveCompactionSettings({
 			contextLimit: 100_000,
 			model,
@@ -111,10 +105,7 @@ describe("resolveCompactionSettings", () => {
 	});
 
 	test("diagnoses malformed per-model identity keys", () => {
-		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
-		if (model === null) {
-			throw new Error("The Provider Model fixture was invalid.");
-		}
+		const model = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
 		const settings = resolveCompactionSettings({
 			contextLimit: 100_000,
 			model,
@@ -140,10 +131,7 @@ describe("resolveCompactionSettings", () => {
 	});
 
 	test("diagnoses per-model fields outside the supported budgets", () => {
-		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
-		if (model === null) {
-			throw new Error("The Provider Model fixture was invalid.");
-		}
+		const model = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
 		const settings = resolveCompactionSettings({
 			contextLimit: 100_000,
 			model,
@@ -171,11 +159,37 @@ describe("resolveCompactionSettings", () => {
 		);
 	});
 
+	test("diagnoses unknown keys in a matching model override", () => {
+		const identity = "openai/gpt-4.1/2025-04-14";
+		const settings = resolveCompactionSettings({
+			contextLimit: 100_000,
+			model: providerModelSelectionFixture(identity),
+			snapshot: snapshot({
+				compaction: {
+					modelOverrides: {
+						[identity]: { reserveToken: 30_000 },
+					},
+					reserveTokens: 8000,
+				},
+			}),
+		});
+
+		expect(settings.reserveTokens).toBe(8000);
+		expect(settings.settingPaths.reserveTokens).toEqual([
+			"compaction",
+			"reserveTokens",
+		]);
+		expect(settings.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "invalid-value",
+				configPath: ["compaction", "modelOverrides", identity, "reserveToken"],
+				severity: "error",
+			})
+		);
+	});
+
 	test("diagnoses an invalid matching override and retains field-wise fallback", () => {
-		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
-		if (model === null) {
-			throw new Error("The Provider Model fixture was invalid.");
-		}
+		const model = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
 		const settings = resolveCompactionSettings({
 			contextLimit: 100_000,
 			model,
@@ -210,10 +224,7 @@ describe("resolveCompactionSettings", () => {
 	});
 
 	test("clamps exact-model budgets to the selected model's small window", () => {
-		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
-		if (model === null) {
-			throw new Error("The Provider Model fixture was invalid.");
-		}
+		const model = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
 		const settings = resolveCompactionSettings({
 			contextLimit: 32_000,
 			model,
@@ -283,13 +294,10 @@ describe("resolveCompactionSettings", () => {
 	});
 
 	test("passes the selected model identity into settings resolution", async () => {
-		const model = parseProviderModelSelection("openai/gpt-4.1/2025-04-14");
-		const switchedModel = parseProviderModelSelection(
+		const model = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
+		const switchedModel = providerModelSelectionFixture(
 			"anthropic/gpt-4.1/2025-04-14"
 		);
-		if (model === null || switchedModel === null) {
-			throw new Error("The Provider Model fixture was invalid.");
-		}
 		const providerModel = (
 			selection: ProviderModelSelection
 		): ProviderModel => ({
@@ -353,12 +361,9 @@ describe("resolveCompactionSettings", () => {
 			workspace: "/workspace",
 		});
 
-		const model = parseProviderModelSelection(
+		const model = providerModelSelectionFixture(
 			"unknown-provider/unlisted-model"
 		);
-		if (model === null) {
-			throw new Error("The unknown Provider Model fixture was invalid.");
-		}
 		const settings = await operations.getCompactionSettings(model, null);
 
 		expect(settings.modelContextLimit).toBeNull();
