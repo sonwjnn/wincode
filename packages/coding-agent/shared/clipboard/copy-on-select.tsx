@@ -3,32 +3,56 @@ import { useRenderer } from "@opentui/react";
 import { useEffect } from "react";
 import { useToast } from "../providers/toast/toast-provider";
 import type { ToastOptions } from "../providers/toast/types";
-import { ClipboardTooLargeError, type ClipboardWriter } from "./clipboard";
+import {
+	type ClipboardTextRenderable,
+	ClipboardTooLargeError,
+	type ClipboardWriter,
+} from "./clipboard";
 import { useClipboard } from "./provider";
 
 export type HandleSelectionOptions = {
 	clipboard: ClipboardWriter;
 	enabled?: boolean;
+	focusedRenderable?: ClipboardTextRenderable;
 	show: (options: ToastOptions) => void;
 };
 
-type SelectionText = Pick<
-	Selection,
-	"getSelectedText" | "isStart" | "behavior"
->;
+type SelectionText = Pick<Selection, "getSelectedText" | "isStart"> & {
+	readonly selectedRenderables?: readonly ClipboardTextRenderable[];
+};
+
+const resolveClipboardText = (
+	selection: SelectionText,
+	focusedRenderable: ClipboardTextRenderable | undefined
+): string => {
+	const text = selection.getSelectedText();
+	if (!focusedRenderable) {
+		return text;
+	}
+	const isSelected =
+		selection.selectedRenderables?.some(
+			(renderable) => renderable.id === focusedRenderable.id
+		) === true;
+	const transform = focusedRenderable.getClipboardText;
+	return isSelected && transform
+		? transform.call(focusedRenderable, text)
+		: text;
+};
 
 export async function handleSelection(
 	selection: SelectionText,
-	{ clipboard, enabled = true, show }: HandleSelectionOptions
+	{ clipboard, enabled = true, focusedRenderable, show }: HandleSelectionOptions
 ): Promise<void> {
 	if (!enabled) {
 		return;
 	}
-	// A plain click creates a one-cell selection; copying it would toast on every click.
-	if (selection.isStart && selection.behavior === "cell") {
+	// Selection.isStart stays true until the pointer moves, so it is the
+	// no-drag flag at the point the selection event fires. OpenCode gates its
+	// copy-on-select on MouseEvent.isDragging for the same behavior.
+	if (selection.isStart) {
 		return;
 	}
-	const text = selection.getSelectedText();
+	const text = resolveClipboardText(selection, focusedRenderable);
 	if (!text) {
 		return;
 	}
@@ -62,6 +86,7 @@ export function CopyOnSelect({ enabled }: CopyOnSelectProps) {
 			void handleSelection(selection, {
 				clipboard,
 				enabled,
+				focusedRenderable: renderer.currentFocusedRenderable ?? undefined,
 				show: toast.show,
 			});
 		};

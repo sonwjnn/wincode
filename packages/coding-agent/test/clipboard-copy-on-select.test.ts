@@ -17,34 +17,76 @@ describe("handleSelection", () => {
 		expect(toasts).toHaveLength(0);
 	});
 
-	test("does not copy the one-cell selection produced by a plain click", async () => {
+	test("does not copy selections that never dragged", async () => {
 		const toasts: unknown[] = [];
 		const clipboard = createRecordingClipboard();
 
-		await handleSelection(
-			createSelection("x", { behavior: "cell", isStart: true }),
-			{
-				clipboard,
-				show: (toast) => toasts.push(toast),
-			}
-		);
+		for (const behavior of ["cell", "word", "line"] as const) {
+			await handleSelection(
+				createSelection(behavior, { behavior, isStart: true }),
+				{
+					clipboard,
+					show: (toast) => toasts.push(toast),
+				}
+			);
+		}
 
 		expect(clipboard.writes).toEqual([]);
 		expect(toasts).toHaveLength(0);
 	});
 
-	test("copies a double-click word selection even though the pointer never dragged", async () => {
+	test("copies the focused renderable's clipboard text when it is selected", async () => {
 		const clipboard = createRecordingClipboard();
+		const focusedRenderable = {
+			id: "composer",
+			getClipboardText: (text: string) =>
+				text.replace("[Pasted ~3 lines]", "one\ntwo\nthree"),
+		};
 
 		await handleSelection(
-			createSelection("word", { behavior: "word", isStart: true }),
+			createSelection("[Pasted ~3 lines]", {
+				selectedRenderables: [focusedRenderable],
+			}),
 			{
 				clipboard,
+				focusedRenderable,
 				show: () => undefined,
 			}
 		);
 
-		expect(clipboard.writes).toEqual(["word"]);
+		expect(clipboard.writes).toEqual(["one\ntwo\nthree"]);
+	});
+
+	test("keeps the raw selection when the focused renderable has no clipboard transform", async () => {
+		const clipboard = createRecordingClipboard();
+		const focusedRenderable = { id: "composer" };
+
+		await handleSelection(
+			createSelection("raw", { selectedRenderables: [focusedRenderable] }),
+			{
+				clipboard,
+				focusedRenderable,
+				show: () => undefined,
+			}
+		);
+
+		expect(clipboard.writes).toEqual(["raw"]);
+	});
+
+	test("keeps the raw selection when the focused renderable is outside it", async () => {
+		const clipboard = createRecordingClipboard();
+		const focusedRenderable = {
+			id: "composer",
+			getClipboardText: () => "transformed",
+		};
+
+		await handleSelection(createSelection("raw"), {
+			clipboard,
+			focusedRenderable,
+			show: () => undefined,
+		});
+
+		expect(clipboard.writes).toEqual(["raw"]);
 	});
 
 	test("ignores an empty selection", async () => {

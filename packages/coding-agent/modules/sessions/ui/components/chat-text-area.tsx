@@ -38,7 +38,11 @@ import {
 	pluginProviderOwnerMatches,
 	supportedProviderThinkingLevels,
 } from "@/modules/providers/provider-model-selection";
-import { type ClipboardReader, useClipboard } from "@/shared/clipboard";
+import {
+	type ClipboardReader,
+	type ClipboardTextRenderable,
+	useClipboard,
+} from "@/shared/clipboard";
 import { RoundedBorderChars } from "@/shared/constants";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
@@ -64,7 +68,11 @@ import { readClipboardImage, readImagePath } from "../../clipboard-image";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import type { TrackedPastedText } from "../../hooks/input-controller/submit";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
-import { summarizePastedText } from "../../pasted-text";
+import {
+	expandPastedText,
+	expandPastedTextInRange,
+	summarizePastedText,
+} from "../../pasted-text";
 import type { SessionSubmissionComposition } from "../../submission-types";
 import type { ChatPromptSubmission } from "../../utils";
 import { useSyntaxStyle } from "../use-syntax-style";
@@ -518,6 +526,30 @@ export function ChatTextArea({
 			);
 		return pastedTextRef.current;
 	}, []);
+
+	const attachTextArea = useCallback(
+		(textarea: TextareaRenderable | null) => {
+			textAreaRef.current = textarea;
+			if (textarea) {
+				const clipboardTextarea: ClipboardTextRenderable = textarea;
+				clipboardTextarea.getClipboardText = (text: string) => {
+					const selection = textarea.getSelection();
+					if (!selection) {
+						return expandPastedText(text, pastedTextRef.current);
+					}
+					if (textarea.getSelectedText() !== text) {
+						return text;
+					}
+					return expandPastedTextInRange(
+						text,
+						selection,
+						getTrackedPastedTexts(textarea, syncPastedTexts())
+					);
+				};
+			}
+		},
+		[syncPastedTexts]
+	);
 
 	const handleSubmitError = useCallback(
 		(message: string) => {
@@ -1363,7 +1395,7 @@ export function ChatTextArea({
 						onContentChange={handleTextareaContentChange}
 						placeholder={"Ask anything..."}
 						placeholderColor={colors.textMuted}
-						ref={textAreaRef}
+						ref={attachTextArea}
 						textColor={disabled ? colors.textDisabled : colors.text}
 					/>
 				</box>

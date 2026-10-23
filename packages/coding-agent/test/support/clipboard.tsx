@@ -5,19 +5,24 @@ import type {
 } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import type { ReactNode } from "react";
-import type { TuiClipboard } from "@/shared/clipboard";
+import type { ClipboardTextRenderable, TuiClipboard } from "@/shared/clipboard";
 import { ClipboardProvider } from "@/shared/clipboard";
 
 export type RecordingClipboard = TuiClipboard & Readonly<{ writes: string[] }>;
 
 export const createSelection = (
 	text: string,
-	extra: { isStart?: boolean; behavior?: SelectionBehavior } = {}
+	extra: {
+		behavior?: SelectionBehavior;
+		isStart?: boolean;
+		selectedRenderables?: readonly ClipboardTextRenderable[];
+	} = {}
 ): Selection =>
 	({
 		behavior: extra.behavior ?? "word",
 		getSelectedText: () => text,
 		isStart: extra.isStart ?? false,
+		selectedRenderables: extra.selectedRenderables ?? [],
 	}) as Selection;
 
 export function createRecordingClipboard(

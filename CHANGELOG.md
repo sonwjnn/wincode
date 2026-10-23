@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clipboard and OSC 52 together, image paste reads the host clipboard directly,
   and the `pbcopy`/`xclip`/`wl-paste`/PowerShell fallbacks are gone. OpenTUI is
   upgraded to 0.6.6 and the local `fillRect` patch is removed. Copy-on-select
-  also stops clearing the selection so multi-click history survives.
+  also stops clearing the selection so multi-click history survives, now
+  requires a drag (double-click and triple-click no longer copy), and expands
+  `[Pasted ~N lines]` placeholders when copying from the composer.
 
 - **Transcript notices realign with message text.** The notice row now uses the
   same horizontal padding as transcript content.

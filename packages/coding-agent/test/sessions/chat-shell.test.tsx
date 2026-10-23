@@ -40,6 +40,7 @@ import type {
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SettingsRegistryProvider } from "@/modules/settings";
+import type { ClipboardTextRenderable } from "@/shared/clipboard";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
@@ -586,6 +587,46 @@ describe("ChatShell transcript Markdown streaming", () => {
 });
 
 describe("ChatShell composer focus", () => {
+	test("expands a pasted-text placeholder in the composer's clipboard transform", async () => {
+		const { setup } = await renderChatShell([], { height: 20, width: 100 });
+
+		try {
+			await flushUi(setup);
+			const composer = setup.renderer.currentFocusedRenderable;
+			if (!(composer instanceof TextareaRenderable)) {
+				throw new Error("The chat composer did not receive startup focus.");
+			}
+			const clipboardText = (
+				composer as TextareaRenderable & ClipboardTextRenderable
+			).getClipboardText;
+
+			await act(async () => {
+				await setup.mockInput.pasteBracketedText("one\ntwo\nthree");
+			});
+			await flushUi(setup);
+			await act(async () => {
+				await setup.mockInput.pasteBracketedText("four\nfive\nsix");
+			});
+			await flushUi(setup);
+
+			const token = "[Pasted ~3 lines]";
+			const firstStart = composer.plainText.indexOf(token);
+			const selectedStart = composer.plainText.lastIndexOf(token);
+			expect(selectedStart).toBeGreaterThan(firstStart);
+			await act(async () => {
+				composer.setSelection(selectedStart, selectedStart + token.length);
+			});
+
+			expect(clipboardText).toBeDefined();
+			expect(clipboardText?.(token)).toBe("four\nfive\nsix");
+			expect(clipboardText?.("outside the composer selection")).toBe(
+				"outside the composer selection"
+			);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("routes typing to the composer when terminal focus returns", async () => {
 		const { setup } = await renderChatShell([], { height: 20, width: 100 });
 

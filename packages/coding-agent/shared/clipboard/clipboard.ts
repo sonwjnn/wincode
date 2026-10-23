@@ -16,6 +16,12 @@ export type ClipboardContent = Readonly<{
 
 export type ClipboardWriteOutcome = "copied" | "empty";
 
+/** A focused renderable that can transform selected display text for the clipboard. */
+export type ClipboardTextRenderable = {
+	id: string;
+	getClipboardText?: (text: string) => string;
+};
+
 export type TuiClipboard = Readonly<{
 	read: () => Promise<ClipboardContent | undefined>;
 	write: (text: string) => Promise<ClipboardWriteOutcome>;
