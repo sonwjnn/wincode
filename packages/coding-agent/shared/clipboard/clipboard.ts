@@ -16,11 +16,23 @@ export type ClipboardContent = Readonly<{
 
 export type ClipboardWriteOutcome = "copied" | "empty";
 
-/** A focused renderable that can transform selected display text for the clipboard. */
-export type ClipboardTextRenderable = {
-	id: string;
-	getClipboardText?: (text: string) => string;
+/** A transform that rewrites selected display text for the clipboard. */
+export type ClipboardTextTransform = (text: string) => string;
+
+const clipboardTextTransforms = new WeakMap<object, ClipboardTextTransform>();
+
+/** Registers a clipboard transform without adding properties to a renderable. */
+export const registerClipboardTextTransform = (
+	renderable: object,
+	transform: ClipboardTextTransform
+): void => {
+	clipboardTextTransforms.set(renderable, transform);
 };
+
+export const getClipboardTextTransform = (
+	renderable: object
+): ClipboardTextTransform | undefined =>
+	clipboardTextTransforms.get(renderable);
 
 export type TuiClipboard = Readonly<{
 	read: () => Promise<ClipboardContent | undefined>;

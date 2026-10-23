@@ -40,7 +40,7 @@ import type {
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SettingsRegistryProvider } from "@/modules/settings";
-import type { ClipboardTextRenderable } from "@/shared/clipboard";
+import { getClipboardTextTransform } from "@/shared/clipboard";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
@@ -596,9 +596,7 @@ describe("ChatShell composer focus", () => {
 			if (!(composer instanceof TextareaRenderable)) {
 				throw new Error("The chat composer did not receive startup focus.");
 			}
-			const clipboardText = (
-				composer as TextareaRenderable & ClipboardTextRenderable
-			).getClipboardText;
+			const clipboardText = getClipboardTextTransform(composer);
 
 			await act(async () => {
 				await setup.mockInput.pasteBracketedText("one\ntwo\nthree");

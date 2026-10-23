@@ -4,39 +4,37 @@ import { useEffect } from "react";
 import { useToast } from "../providers/toast/toast-provider";
 import type { ToastOptions } from "../providers/toast/types";
 import {
-	type ClipboardTextRenderable,
 	ClipboardTooLargeError,
 	type ClipboardWriter,
+	getClipboardTextTransform,
 } from "./clipboard";
 import { useClipboard } from "./provider";
 
 export type HandleSelectionOptions = {
 	clipboard: ClipboardWriter;
 	enabled?: boolean;
-	focusedRenderable?: ClipboardTextRenderable;
+	focusedRenderable?: object;
 	show: (options: ToastOptions) => void;
 };
 
 type SelectionText = Pick<Selection, "getSelectedText" | "isStart"> & {
-	readonly selectedRenderables?: readonly ClipboardTextRenderable[];
+	readonly selectedRenderables?: readonly object[];
 };
 
 const resolveClipboardText = (
 	selection: SelectionText,
-	focusedRenderable: ClipboardTextRenderable | undefined
+	focusedRenderable: object | undefined
 ): string => {
 	const text = selection.getSelectedText();
 	if (!focusedRenderable) {
 		return text;
 	}
 	const isSelected =
-		selection.selectedRenderables?.some(
-			(renderable) => renderable.id === focusedRenderable.id
-		) === true;
-	const transform = focusedRenderable.getClipboardText;
-	return isSelected && transform
-		? transform.call(focusedRenderable, text)
-		: text;
+		selection.selectedRenderables?.includes(focusedRenderable) === true;
+	const transform = isSelected
+		? getClipboardTextTransform(focusedRenderable)
+		: undefined;
+	return transform ? transform(text) : text;
 };
 
 export async function handleSelection(

@@ -40,7 +40,7 @@ import {
 } from "@/modules/providers/provider-model-selection";
 import {
 	type ClipboardReader,
-	type ClipboardTextRenderable,
+	registerClipboardTextTransform,
 	useClipboard,
 } from "@/shared/clipboard";
 import { RoundedBorderChars } from "@/shared/constants";
@@ -531,8 +531,7 @@ export function ChatTextArea({
 		(textarea: TextareaRenderable | null) => {
 			textAreaRef.current = textarea;
 			if (textarea) {
-				const clipboardTextarea: ClipboardTextRenderable = textarea;
-				clipboardTextarea.getClipboardText = (text: string) => {
+				registerClipboardTextTransform(textarea, (text: string) => {
 					const selection = textarea.getSelection();
 					if (!selection) {
 						return expandPastedText(text, pastedTextRef.current);
@@ -545,7 +544,7 @@ export function ChatTextArea({
 						selection,
 						getTrackedPastedTexts(textarea, syncPastedTexts())
 					);
-				};
+				});
 			}
 		},
 		[syncPastedTexts]

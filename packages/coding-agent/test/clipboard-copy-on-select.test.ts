@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { ClipboardTooLargeError, handleSelection } from "@/shared/clipboard";
+import { type Renderable, Selection } from "@opentui/core";
+import {
+	ClipboardTooLargeError,
+	handleSelection,
+	registerClipboardTextTransform,
+} from "@/shared/clipboard";
 import { createRecordingClipboard, createSelection } from "./support/clipboard";
 
 describe("handleSelection", () => {
@@ -37,11 +42,10 @@ describe("handleSelection", () => {
 
 	test("copies the focused renderable's clipboard text when it is selected", async () => {
 		const clipboard = createRecordingClipboard();
-		const focusedRenderable = {
-			id: "composer",
-			getClipboardText: (text: string) =>
-				text.replace("[Pasted ~3 lines]", "one\ntwo\nthree"),
-		};
+		const focusedRenderable = {};
+		registerClipboardTextTransform(focusedRenderable, (text: string) =>
+			text.replace("[Pasted ~3 lines]", "one\ntwo\nthree")
+		);
 
 		await handleSelection(
 			createSelection("[Pasted ~3 lines]", {
@@ -59,7 +63,7 @@ describe("handleSelection", () => {
 
 	test("keeps the raw selection when the focused renderable has no clipboard transform", async () => {
 		const clipboard = createRecordingClipboard();
-		const focusedRenderable = { id: "composer" };
+		const focusedRenderable = {};
 
 		await handleSelection(
 			createSelection("raw", { selectedRenderables: [focusedRenderable] }),
@@ -75,10 +79,8 @@ describe("handleSelection", () => {
 
 	test("keeps the raw selection when the focused renderable is outside it", async () => {
 		const clipboard = createRecordingClipboard();
-		const focusedRenderable = {
-			id: "composer",
-			getClipboardText: () => "transformed",
-		};
+		const focusedRenderable = {};
+		registerClipboardTextTransform(focusedRenderable, () => "transformed");
 
 		await handleSelection(createSelection("raw"), {
 			clipboard,
@@ -87,6 +89,31 @@ describe("handleSelection", () => {
 		});
 
 		expect(clipboard.writes).toEqual(["raw"]);
+	});
+
+	test("uses the registered transform through a real Selection", async () => {
+		const clipboard = createRecordingClipboard();
+		const renderable = {
+			getSelectedText: () => "hello",
+			x: 0,
+			y: 0,
+		} as unknown as Renderable;
+		registerClipboardTextTransform(renderable, (text: string) => `${text}!`);
+		const selection = new Selection(
+			renderable,
+			{ x: 0, y: 0 },
+			{ x: 5, y: 0 },
+			"word"
+		);
+		selection.updateSelectedRenderables([renderable]);
+
+		await handleSelection(selection, {
+			clipboard,
+			focusedRenderable: renderable,
+			show: () => undefined,
+		});
+
+		expect(clipboard.writes).toEqual(["hello!"]);
 	});
 
 	test("ignores an empty selection", async () => {
