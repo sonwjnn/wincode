@@ -50,6 +50,7 @@ import {
 	buildAssistantFailureSessionRecord,
 	buildTerminalSessionRecord,
 } from "../turn-records";
+import { getSessionContextEpoch } from "../usage/context-usage";
 import { getReportableSessionFailureFields } from "./session-error-diagnostics";
 import { projectAgentTurnEvent, projectAgentTurnTerminal } from "./turn";
 import type {
@@ -224,9 +225,11 @@ const thresholdCompactionFailure = async (
 const needsThresholdCompaction = (
 	compaction: AgentSessionPorts["compaction"],
 	messages: readonly SessionMessage[],
-	settings: ResolvedCompactionSettings
+	settings: ResolvedCompactionSettings,
+	model: ProviderModelSelection
 ): boolean =>
-	settings.autoAvailable && compaction.needsCompaction(messages, settings);
+	settings.autoAvailable &&
+	compaction.needsCompaction(messages, settings, model);
 
 export const prepareCompactionBeforeSubmit = async ({
 	compaction,
@@ -253,7 +256,14 @@ export const prepareCompactionBeforeSubmit = async ({
 	// sends, so a compaction another caller owns is joined and the need
 	// re-checked against the settled context rather than raced.
 	while (true) {
-		if (!needsThresholdCompaction(compaction, getActiveMessages(), settings)) {
+		if (
+			!needsThresholdCompaction(
+				compaction,
+				getActiveMessages(),
+				settings,
+				model
+			)
+		) {
 			return { ok: true };
 		}
 		try {
@@ -1147,7 +1157,12 @@ const maintainAfterTurn = (
 		try {
 			settings = await deps.ports.resolveCompactionSettings(selection);
 			if (
-				!needsThresholdCompaction(deps.ports.compaction, messages, settings)
+				!needsThresholdCompaction(
+					deps.ports.compaction,
+					deps.getContext(),
+					settings,
+					selection
+				)
 			) {
 				return;
 			}
@@ -1193,6 +1208,7 @@ const runTurn = async ({
 	onTurnFailure: () => void;
 	signal: AbortSignal;
 }): Promise<SessionSendOutcome> => {
+	const contextEpoch = getSessionContextEpoch(modelMessages);
 	let executionActive = true;
 	const turnIsLive = (): boolean =>
 		executionActive && !deps.isShutDown() && !signal.aborted;
@@ -1229,7 +1245,8 @@ const runTurn = async ({
 			const projected = projectAgentTurnEvent(
 				deps.getContext(),
 				currentExecution,
-				event
+				event,
+				contextEpoch
 			);
 			if (isUndefined(projected)) {
 				return;

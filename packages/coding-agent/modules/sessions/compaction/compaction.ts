@@ -31,15 +31,18 @@ import {
 	type SessionAttachmentStore,
 } from "../storage/attachment-store";
 import type { SessionStore } from "../storage/session-store";
+import { estimateSessionContextTokens } from "../usage/context-usage";
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionTokens,
-	estimateSessionContextTokens,
 	type ResolvedCompactionSettings,
 } from "./config";
 import { SessionCompactionError } from "./error";
-import { createCompactionSummaryMessage } from "./summary-message";
+import {
+	createCompactionSummaryMessage,
+	isCompactionSummaryMessage,
+} from "./summary-message";
 import {
 	type AppendSessionCompactionInput,
 	type CompactionSession,
@@ -194,7 +197,8 @@ export type SessionCompactionModule = {
 	getInFlight: (sessionId: SessionId) => Promise<CompactSessionResult> | null;
 	needsCompaction: (
 		messages: readonly SessionMessage[],
-		settings: Pick<ResolvedCompactionSettings, "enabled" | "thresholdTokens">
+		settings: Pick<ResolvedCompactionSettings, "enabled" | "thresholdTokens">,
+		model?: ProviderModelSelection
 	) => boolean;
 };
 
@@ -942,8 +946,13 @@ const appendInputFor = ({
 			createCompactionSummaryMessage({ id: entryId, summary }),
 			...projectMessagesForEstimate(cutPoint.activeMessages, settings),
 		]),
-		tokensBefore: estimateSessionContextTokens(session.messages, estimateTokens)
-			.tokens,
+		tokensBefore: estimateSessionContextTokens(
+			previous && !session.messages.some(isCompactionSummaryMessage)
+				? rebuildActiveMessages(session.messages, previous)
+				: session.messages,
+			estimateTokens,
+			model
+		).tokens,
 		trigger,
 		id: entryId,
 		priorCompactionId: previous?.id,
@@ -1303,12 +1312,12 @@ export const createSessionCompaction = ({
 	return {
 		compact,
 		getInFlight: (sessionId) => inFlight.get(sessionId)?.operation ?? null,
-		needsCompaction: (messages, settings) => {
+		needsCompaction: (messages, settings, model) => {
 			if (!settings.enabled || isNull(settings.thresholdTokens)) {
 				return false;
 			}
 			return (
-				estimateSessionContextTokens(messages, estimateTokens).tokens >=
+				estimateSessionContextTokens(messages, estimateTokens, model).tokens >=
 				settings.thresholdTokens
 			);
 		},

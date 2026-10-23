@@ -1281,6 +1281,11 @@ describe("ChatShell activity footer", () => {
 				metadata: {
 					model: selection,
 					usage: { inputTokens: 7336, outputTokens: 0 },
+					contextMeasurement: {
+						epoch: "initial",
+						stepId: "step-1",
+						usage: { inputTokens: 7336, outputTokens: 0 },
+					},
 				},
 			},
 		];
@@ -1453,6 +1458,11 @@ describe("ChatShell activity footer", () => {
 						providerId: "openai",
 					},
 					usage: { inputTokens: 7336, outputTokens: 0 },
+					contextMeasurement: {
+						epoch: "initial",
+						stepId: "step-1",
+						usage: { inputTokens: 7336, outputTokens: 0 },
+					},
 				},
 			},
 			userMessage("user-2"),

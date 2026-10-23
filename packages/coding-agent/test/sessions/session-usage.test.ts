@@ -44,7 +44,13 @@ const assistant = (
 	selection: ProviderModelSelection = model
 ): SessionMessage => ({
 	id: sessionMessageId(id),
-	metadata: usage ? { model: selection, usage } : { model: selection },
+	metadata: usage
+		? {
+				model: selection,
+				usage,
+				contextMeasurement: { epoch: "initial", stepId: "step-1", usage },
+			}
+		: { model: selection },
 	parts: [{ text: id, type: "text" }],
 	role: "assistant",
 });
@@ -141,6 +147,106 @@ describe("turnCostUsd", () => {
 });
 
 describe("summarizeSessionUsage", () => {
+	test("uses compacted context for occupancy while preserving transcript billing and warm totals", () => {
+		const old = assistant("before", {
+			inputTokens: 90_000,
+			outputTokens: 100,
+			cacheReadTokens: 20_000,
+		});
+		const handoff: SessionMessage = {
+			id: sessionMessageId("compaction:usage-epoch"),
+			role: "user",
+			parts: [{ type: "text", text: "Short handoff" }],
+		};
+		const compacted = summarizeSessionUsage(
+			[old],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[handoff, old]
+		);
+		expect(compacted).toMatchObject({
+			contextSource: "estimated",
+			cacheReadTokens: 20_000,
+			costedTurns: 1,
+		});
+		expect(compacted?.contextTokens).toBeLessThan(100);
+		const fresh: SessionMessage = {
+			...assistant("after", { inputTokens: 100, outputTokens: 10 }),
+			metadata: {
+				model,
+				usage: { inputTokens: 100, outputTokens: 10 },
+				contextMeasurement: {
+					epoch: handoff.id,
+					stepId: "step-1",
+					usage: { inputTokens: 100, outputTokens: 10 },
+				},
+			},
+		};
+		const measured = summarizeSessionUsage(
+			[old, fresh],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[handoff, fresh]
+		);
+		expect(measured).toMatchObject({
+			contextTokens: 110,
+			contextSource: "measured",
+			costedTurns: 2,
+			cacheReadTokens: 20_000,
+		});
+		expect(measured?.costUsd).toBeCloseTo(0.075_65, 9);
+	});
+
+	test("switching models does not pair a foreign measurement with the selected model limit", () => {
+		const selected: ProviderModelSelection = {
+			providerId: "google",
+			modelId: modelId("other-model"),
+		};
+		const result = summarizeSessionUsage(
+			[assistant("old-model", { inputTokens: 90_000, outputTokens: 100 })],
+			selected,
+			[],
+			"idle",
+			[
+				anthropicModel,
+				{
+					...selected,
+					protocolId: "fixture",
+					limits: { contextWindowTokens: 10_000 },
+				},
+			]
+		);
+		expect(result).toMatchObject({
+			contextLimit: 10_000,
+			contextSource: "estimated",
+			costedTurns: 1,
+		});
+		expect(result?.contextTokens).toBeLessThan(100);
+		expect(result?.costUsd).toBeCloseTo(0.0905, 9);
+	});
+
+	test("aggregate-only historical records are estimated rather than treated as request measurements", () => {
+		const historic: SessionMessage = {
+			id: sessionMessageId("legacy"),
+			role: "assistant",
+			parts: [{ type: "text", text: "Done" }],
+			metadata: { model, usage: { inputTokens: 90_000, outputTokens: 100 } },
+		};
+		const result = summarizeSessionUsage([historic], model, [], "idle", [
+			anthropicModel,
+		]);
+		expect(result).toMatchObject({
+			contextSource: "estimated",
+			costedTurns: 1,
+		});
+		expect(result?.contextTokens).toBeLessThan(100);
+		expect(result?.costUsd).toBeCloseTo(0.0905, 9);
+	});
+
 	test("uses the last completed Provider usage and its exact model context limit", () => {
 		const messages = [
 			assistant("assistant-1", { inputTokens: 90, outputTokens: 10 }),

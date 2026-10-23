@@ -15,6 +15,7 @@ const CONTEXT_WARNING_PERCENT = 80;
 
 type SessionSidebarProps = {
 	messages: SessionMessage[];
+	context: readonly SessionMessage[];
 	sessionTitle: string;
 	width: `${number}%`;
 };
@@ -29,14 +30,16 @@ function SectionLabel({ text, color }: { text: string; color: string }) {
 
 export function SessionSidebar({
 	messages,
+	context,
 	sessionTitle,
 	width,
 }: SessionSidebarProps) {
 	const { colors } = useTheme();
 	const { model } = usePromptConfig();
 	const usage = useMemo(
-		() => summarizeSessionUsage(messages, model),
-		[messages, model]
+		() =>
+			summarizeSessionUsage(messages, model, [], "idle", undefined, context),
+		[messages, context, model]
 	);
 	const modelLabel = `${model.providerId}/${model.modelId}`;
 	const isContextWarning =

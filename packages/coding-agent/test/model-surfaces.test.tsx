@@ -448,6 +448,7 @@ describe("session usage bar", () => {
 		contextLimit: 200_000,
 		contextPercent: 42,
 		contextTokens: 84_000,
+		contextSource: "measured",
 		cacheReadTokens: 0,
 		cacheWriteTokens: 0,
 		cacheWarmingStatus: "idle",
@@ -474,6 +475,16 @@ describe("session usage bar", () => {
 		expect(frame).toContain("42.0%/1m");
 		// The tilde is the honesty marker: these are published rates, not a bill.
 		expect(frame).toContain("~$1.23");
+	});
+
+	test.each([
+		"estimated",
+		"mixed",
+	] as const)("marks %s context as approximate rather than a provider measurement", async (contextSource) => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar summary={summary({ contextSource })} />
+		));
+		expect(setup.captureCharFrame()).toContain("~42.0%/200k");
 	});
 
 	test("shows cache warming status and cost without changing context", async () => {

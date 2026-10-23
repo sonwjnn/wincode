@@ -15,6 +15,7 @@ import {
 	isUndefined,
 } from "@wincode/utils";
 import type { ReadonlyDeep } from "type-fest";
+import { z } from "zod";
 import { isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
 import type {
@@ -104,6 +105,18 @@ export type SessionSubmissionStatus =
 	| "processed"
 	| "processing";
 
+/** One request observation, separate from aggregate Agent Turn billing. */
+export const sessionContextMeasurementSchema = z
+	.object({
+		epoch: z.string().min(1),
+		stepId: z.string().min(1),
+		usage: modelUsageSchema,
+	})
+	.strict();
+export type SessionContextMeasurement = z.infer<
+	typeof sessionContextMeasurementSchema
+>;
+
 /** Per-message metadata safe to retain independently of a Provider Model selection. */
 export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	agent?: AgentId;
@@ -130,6 +143,7 @@ export type SessionMessageMetadataRecord = ReadonlyDeep<{
 	submissionId?: SubmissionId;
 	submissionStatus?: SessionSubmissionStatus;
 	usage?: ModelUsage;
+	contextMeasurement?: SessionContextMeasurement;
 	thinkingLevel?: ThinkingLevel;
 }>;
 
@@ -280,6 +294,7 @@ const isSessionMessageMetadataRecord = (
 				key === "submissionId" ||
 				key === "submissionStatus" ||
 				key === "usage" ||
+				key === "contextMeasurement" ||
 				key === "thinkingLevel"
 		) &&
 		(isUndefined(value.agent) || isAgentId(value.agent)) &&
@@ -302,6 +317,9 @@ const isSessionMessageMetadataRecord = (
 		(isUndefined(value.submissionStatus) || !isUndefined(value.submissionId)) &&
 		(isUndefined(value.usage) ||
 			modelUsageSchema.safeParse(value.usage).success) &&
+		(isUndefined(value.contextMeasurement) ||
+			sessionContextMeasurementSchema.safeParse(value.contextMeasurement)
+				.success) &&
 		(isUndefined(value.thinkingLevel) ||
 			thinkingLevelSchema.safeParse(value.thinkingLevel).success)
 	);

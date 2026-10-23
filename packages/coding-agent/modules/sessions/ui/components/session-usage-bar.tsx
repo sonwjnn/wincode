@@ -29,6 +29,7 @@ export function SessionUsageBar({
 		contextPercent !== null && contextPercent >= CONTEXT_WARNING_PERCENT
 			? colors.error
 			: colors.textMuted;
+	const estimateMarker = summary.contextSource === "measured" ? "" : "~";
 	const contextText =
 		contextPercent === null || isNull(summary.contextLimit)
 			? tokensText
@@ -40,9 +41,15 @@ export function SessionUsageBar({
 		<box flexDirection="row" flexShrink={0}>
 			<text fg={colors.textMuted}>
 				{contextPercent === null ? (
-					<span>{contextText}</span>
+					<span>
+						{estimateMarker}
+						{contextText}
+					</span>
 				) : (
-					<span fg={percentColor}>{contextText}</span>
+					<span fg={percentColor}>
+						{estimateMarker}
+						{contextText}
+					</span>
 				)}
 				{autoCompact ? <span> (auto)</span> : null}
 				{summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0 ? (

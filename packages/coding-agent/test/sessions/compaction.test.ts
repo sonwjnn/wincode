@@ -156,6 +156,80 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 	);
 });
 
+test("compaction invalidates retained usage on reopen and reports the current projection on the next compact", async () => {
+	let sequence = 0;
+	const compaction = createSessionCompaction({
+		store: makeStore(),
+		generateId: () => compactionId(`epoch-${++sequence}`),
+		summaryGenerator: async () => ({ text: "Short handoff." }),
+	});
+	const messages: SessionMessage[] = [
+		message("u1", "user", "x".repeat(20_000)),
+		message("a1", "assistant", "y".repeat(20_000)),
+		message("u2", "user", "u".repeat(1000)),
+		{
+			...message("a2", "assistant", "a".repeat(1000)),
+			metadata: {
+				model,
+				usage: { inputTokens: 90_000, outputTokens: 100 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: { inputTokens: 90_000, outputTokens: 100 },
+				},
+			},
+		},
+	];
+	const policy = {
+		enabled: true,
+		keepRecentTokens: 600,
+		thresholdTokens: 80_000,
+	};
+	const first = await compaction.compact({
+		session: { sessionId: sessionId("epoch-session"), messages },
+		model,
+		settings: policy,
+		trigger: "threshold",
+	});
+	expect(compaction.needsCompaction(first.activeMessages, policy)).toBe(false);
+	expect(
+		compaction.needsCompaction(
+			rebuildActiveMessages(messages, first.entry),
+			policy
+		)
+	).toBe(false);
+	const fresh: SessionMessage[] = [
+		message("u3", "user", "n".repeat(1000)),
+		{
+			...message("a3", "assistant", "r".repeat(1000)),
+			metadata: {
+				model,
+				usage: { inputTokens: 40_000, outputTokens: 10 },
+				contextMeasurement: {
+					epoch: `compaction:${first.entry.id}`,
+					stepId: "step-2",
+					usage: { inputTokens: 40_000, outputTokens: 10 },
+				},
+			},
+		},
+	];
+	const transcript = [...messages, ...fresh];
+	const second = await compaction.compact({
+		session: { sessionId: sessionId("epoch-session"), messages: transcript },
+		model,
+		settings: policy,
+		trigger: "manual",
+	});
+	expect(second.entry.tokensBefore).toBe(40_010);
+	expect(
+		compaction.needsCompaction(
+			rebuildActiveMessages(transcript, second.entry),
+			policy
+		)
+	).toBe(false);
+	expect(messages.at(-1)?.metadata?.usage?.inputTokens).toBe(90_000);
+});
+
 test("keeps the turn a Steering Message joined whole", async () => {
 	const store = makeStore();
 	const compaction = createSessionCompaction({
@@ -371,6 +445,11 @@ test("uses provider-reported usage for threshold decisions", () => {
 			metadata: {
 				model,
 				usage: { inputTokens: 90, outputTokens: 20 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: { inputTokens: 90, outputTokens: 20 },
+				},
 			},
 		},
 	];
@@ -399,6 +478,16 @@ test("counts cached input within the provider total for compaction thresholds", 
 					cacheWriteTokens: 10,
 					inputTokens: 90,
 					outputTokens: 20,
+				},
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: {
+						inputTokens: 90,
+						outputTokens: 20,
+						cacheReadTokens: 60,
+						cacheWriteTokens: 10,
+					},
 				},
 			},
 		},
@@ -431,6 +520,11 @@ test("adds estimated trailing context after the latest provider usage", () => {
 			metadata: {
 				model,
 				usage: { inputTokens: 90, outputTokens: 10 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: { inputTokens: 90, outputTokens: 10 },
+				},
 			},
 		},
 		message("u2", "user", "new request"),

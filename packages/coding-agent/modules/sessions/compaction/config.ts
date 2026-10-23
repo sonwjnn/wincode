@@ -1,4 +1,3 @@
-import { getModelContextTokens } from "@wincode/ai";
 import {
 	isBoolean,
 	isNull,
@@ -527,42 +526,6 @@ const estimateCanonicalMessages = (
 		characters += 1;
 	}
 	return { characters, mediaTokens };
-};
-
-/**
- * Estimates the provider-visible session context without serializing the
- * application message objects. Provider usage is authoritative through the
- * latest measured assistant; only the unmeasured suffix is estimated.
- */
-export const estimateSessionContextTokens = (
-	messages: readonly SessionMessage[],
-	estimateTokens: (
-		messages: readonly SessionMessage[]
-	) => number = estimateCompactionTokens
-): {
-	lastUsageIndex: number;
-	providerTokens: number | null;
-	tokens: number;
-	trailingTokens: number;
-} => {
-	let lastUsageIndex = -1;
-	let providerTokens: number | null = null;
-	for (const [index, message] of messages.entries()) {
-		if (message.role !== "assistant" || isUndefined(message.metadata?.usage)) {
-			continue;
-		}
-		lastUsageIndex = index;
-		providerTokens = getModelContextTokens(message.metadata.usage);
-	}
-	const trailingTokens = estimateTokens(
-		lastUsageIndex === -1 ? messages : messages.slice(lastUsageIndex + 1)
-	);
-	return {
-		lastUsageIndex,
-		providerTokens,
-		tokens: Math.max(0, (providerTokens ?? 0) + trailingTokens),
-		trailingTokens,
-	};
 };
 
 /**

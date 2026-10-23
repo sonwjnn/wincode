@@ -297,6 +297,7 @@ const metadataForRecord = (
 			submissionId: metadata?.submissionId,
 			submissionStatus: metadata?.submissionStatus,
 			usage: metadata?.usage,
+			contextMeasurement: metadata?.contextMeasurement,
 			...choice,
 		}),
 	});
@@ -428,6 +429,7 @@ const toDurableMetadata = (
 				metadata.submissionId === undefined ? undefined : metadata.submissionId,
 			submissionStatus: metadata.submissionStatus,
 			usage: metadata.usage,
+			contextMeasurement: metadata.contextMeasurement,
 			thinkingLevel: metadata.thinkingLevel,
 		}),
 	};

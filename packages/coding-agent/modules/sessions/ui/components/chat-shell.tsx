@@ -328,10 +328,12 @@ export function ChatShell({
 				model,
 				sessionUsageEntries,
 				cacheWarmingStatus,
-				providerModels
+				providerModels,
+				activeMessages ?? displayMessages
 			),
 		[
 			displayMessages,
+			activeMessages,
 			model,
 			sessionUsageEntries,
 			cacheWarmingStatus,

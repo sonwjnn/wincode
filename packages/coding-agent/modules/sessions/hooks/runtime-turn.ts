@@ -20,6 +20,7 @@ import {
 	isAgentInvariantError,
 	isToolCallId,
 	type ResolvedTool,
+	type SessionContextMeasurement,
 	type SessionMessageId,
 	type SessionRecord,
 	type ToolCallId,
@@ -82,6 +83,10 @@ import {
 	buildTerminalSessionRecord,
 	buildToolSessionRecord,
 } from "../turn-records";
+import {
+	contextMeasurementForStep,
+	getSessionContextEpoch,
+} from "../usage/context-usage";
 
 const BASE_AGENT_INSTRUCTIONS =
 	"You are a basic coding agent running in a user's CLI.\nAll file tools are limited to the CLI workspace.";
@@ -831,6 +836,9 @@ export const runAgentTurnToText = async ({
 	let terminal: AgentTurnTerminalEvent | undefined;
 	let lastSequence = -1;
 	let completedToolCalls = 0;
+	let stepHasToolCalls = false;
+	let contextMeasurement: SessionContextMeasurement | undefined;
+	const contextEpoch = getSessionContextEpoch(turn.input.messages);
 	const startedTools = new Map<
 		string,
 		{ readonly input: unknown; readonly toolName: string }
@@ -854,10 +862,22 @@ export const runAgentTurnToText = async ({
 	await consumeAgentTurnEvents({
 		onEvent: async (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);
+			if (event.type === "model-step-started") {
+				stepHasToolCalls = false;
+				contextMeasurement = undefined;
+			}
+			if (event.type === "model-step-finished") {
+				contextMeasurement = contextMeasurementForStep(
+					event,
+					contextEpoch,
+					stepHasToolCalls
+				);
+			}
 			if (event.type === "text-delta") {
 				assistantText += event.delta;
 			}
 			if (event.type === "tool-call-started") {
+				stepHasToolCalls = true;
 				startedTools.set(event.toolCallId, {
 					input: event.input,
 					toolName: event.toolName,
@@ -907,6 +927,7 @@ export const runAgentTurnToText = async ({
 		assistantMessageId: getAssistantMessageId?.(),
 		assistantText,
 		hasCompletedToolCalls: completedToolCalls > 0,
+		contextMeasurement,
 		event: terminalEvent,
 		sourceUserMessageId,
 		turn,

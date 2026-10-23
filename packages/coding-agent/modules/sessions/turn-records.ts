@@ -10,6 +10,7 @@ import {
 	createOperationalFailure,
 	normalizeOperationalFailure,
 	SESSION_RECORD_VERSION,
+	type SessionContextMeasurement,
 	type SessionMessageId,
 	type SessionMessageMetadataRecord,
 	type SessionRecord,
@@ -88,12 +89,14 @@ const recordModelForTurn = (turn: AgentTurn): SessionRecord["model"] => ({
 const assistantRecordMetadata = (
 	turn: AgentTurn,
 	usage?: ModelUsage,
-	sourceUserMessageId?: SessionMessageId
+	sourceUserMessageId?: SessionMessageId,
+	contextMeasurement?: SessionContextMeasurement
 ): SessionMessageMetadataRecord => ({
 	...omitUndefined({
 		sourceUserMessageId,
 		thinkingLevel: turn.model.thinkingLevel,
 		usage,
+		contextMeasurement,
 	}),
 	model: {
 		modelId: turn.model.modelId,
@@ -114,6 +117,7 @@ export const buildTerminalSessionRecord = ({
 	assistantText,
 	event,
 	hasCompletedToolCalls = false,
+	contextMeasurement,
 	sourceUserMessageId,
 	turn,
 }: {
@@ -121,6 +125,7 @@ export const buildTerminalSessionRecord = ({
 	assistantText: string;
 	event: AgentTurnTerminalEvent;
 	hasCompletedToolCalls?: boolean;
+	contextMeasurement?: SessionContextMeasurement;
 	sourceUserMessageId?: SessionMessageId;
 	turn: AgentTurn;
 }): SessionRecord | undefined => {
@@ -185,7 +190,14 @@ export const buildTerminalSessionRecord = ({
 		messages: [
 			{
 				id: assistantMessageId ?? agentTurnAssistantMessageId(turn.id),
-				metadata: assistantRecordMetadata(turn, safeUsage, sourceUserMessageId),
+				metadata: assistantRecordMetadata(
+					turn,
+					safeUsage,
+					sourceUserMessageId,
+					safeEvent.type === "agent-turn-completed"
+						? contextMeasurement
+						: undefined
+				),
 				parts: [{ text, type: "text" }],
 				role: "assistant",
 			},

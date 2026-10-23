@@ -1,5 +1,5 @@
 import type { ProviderModel } from "@wincode/ai";
-import { calculateModelUsageCostUsd, getModelContextTokens } from "@wincode/ai";
+import { calculateModelUsageCostUsd } from "@wincode/ai";
 import { isNull } from "@wincode/utils";
 import {
 	type ModelPricingEntry,
@@ -15,6 +15,10 @@ import type {
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import {
+	estimateSessionContextTokens,
+	type SessionContextUsage,
+} from "./context-usage";
 
 export type SessionUsageSummary = {
 	/** Estimated USD for measured usage with complete rates, or `null` when every rate is unknown. */
@@ -36,6 +40,7 @@ export type SessionUsageSummary = {
 	/** `null` when `contextLimit` is unknown. */
 	contextPercent: number | null;
 	contextTokens: number;
+	contextSource: SessionContextUsage["source"];
 };
 
 const clampPercent = (percent: number): number =>
@@ -152,28 +157,30 @@ const collectSessionUsage = (
 	};
 };
 
-/**
- * Displays only the last completed provider usage for the context measure.
- * Compaction estimates are diagnostic metadata and never replace the usage
- * bar's provider measurement. Cost accumulates across the session instead,
- * because a per-turn figure answers a question nobody asked while a session
- * total answers the one everybody does.
- */
+/** Context comes from the active projection; billing always retains the full transcript. */
 export const summarizeSessionUsage = (
 	messages: readonly SessionMessage[],
 	fallbackModel: ProviderModelSelection,
 	usageEntries: readonly SessionUsageEntry[] = [],
 	cacheWarmingStatus: CacheWarmingStatus = "idle",
-	providerModels?: readonly ProviderModel[]
+	providerModels?: readonly ProviderModel[],
+	contextMessages: readonly SessionMessage[] = messages
 ): SessionUsageSummary | null => {
-	const { lastSelection, lastUsage } = collectMessageUsage(messages);
+	const { lastUsage } = collectMessageUsage(messages);
 	if (isNull(lastUsage)) {
 		return null;
 	}
-	const selection = lastSelection ?? fallbackModel;
-	const providerModel = providerModelForSelection(providerModels, selection);
+	const providerModel = providerModelForSelection(
+		providerModels,
+		fallbackModel
+	);
 	const contextLimit = providerModel?.limits?.contextWindowTokens ?? null;
-	const contextTokens = getModelContextTokens(lastUsage);
+	const context = estimateSessionContextTokens(
+		contextMessages,
+		undefined,
+		fallbackModel
+	);
+	const contextTokens = context.tokens;
 	const contextPercent =
 		!isNull(contextLimit) && contextLimit > 0
 			? clampPercent((contextTokens / contextLimit) * 100)
@@ -189,5 +196,6 @@ export const summarizeSessionUsage = (
 		contextLimit,
 		contextPercent,
 		contextTokens,
+		contextSource: context.source,
 	};
 };

@@ -7,17 +7,34 @@ import type {
 	AgentTurnEvent,
 	SessionRecord,
 } from "@wincode/agent-core";
-import { createOperationalFailure } from "@wincode/agent-core";
+import {
+	createAgentRuntime,
+	createOperationalFailure,
+	toModelStepId,
+} from "@wincode/agent-core";
+import { createProviderCollection } from "@wincode/ai";
 import { isObjectLike, isUndefined } from "@wincode/utils";
 import { z } from "zod";
 import { buildAgent } from "@/modules/agents/built-ins";
+import {
+	projectAgentTurnEvent,
+	projectAgentTurnTerminal,
+} from "@/modules/sessions/agent-session/turn";
 import {
 	buildAgentTurn,
 	isSettledSessionToolCallPart,
 	resolveTurnTools,
 	runAgentTurnToText,
 } from "@/modules/sessions/hooks/runtime-turn";
+import type { SessionMessage } from "@/modules/sessions/message";
+import {
+	getSessionRecordValidationError,
+	projectSessionRecords,
+	toDurableSessionMessageRecord,
+} from "@/modules/sessions/storage/session-record";
 import { buildAssistantFailureSessionRecord } from "@/modules/sessions/turn-records";
+import { estimateSessionContextTokens } from "@/modules/sessions/usage/context-usage";
+import { summarizeSessionUsage } from "@/modules/sessions/usage/session-usage";
 import {
 	createMemoryFileObservationStore,
 	getToolResourceLimits,
@@ -99,6 +116,223 @@ const createTurn = (): AgentTurn => ({
 		],
 	},
 	model,
+});
+
+test("a two-step turn retains billed usage without inflating live or restored context", async () => {
+	const providers = createProviderCollection();
+	let requests = 0;
+	providers.register({
+		id: model.providerId,
+		models: [
+			{ ...model, protocolId: "fixture", capabilities: ["text", "tools"] },
+		],
+		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
+		async *streamChat() {
+			requests += 1;
+			if (requests === 1) {
+				yield {
+					type: "tool-call",
+					toolCallId: "read-accounting",
+					toolName: "read",
+					input: { path: "main.ts" },
+				};
+				yield {
+					type: "usage",
+					usage: { inputTokens: 10_000, outputTokens: 4 },
+				};
+			} else {
+				yield { type: "text-delta", delta: "Done" };
+				yield {
+					type: "usage",
+					usage: { inputTokens: 14_000, outputTokens: 3 },
+				};
+			}
+			yield { type: "finish" };
+		},
+	});
+	await providers.setCredential(model.providerId, "offline-test-credential");
+	const retainedSummary = {
+		id: sessionMessageId("compaction:restored-epoch"),
+		role: "user" as const,
+		parts: [{ type: "text" as const, text: "Prior handoff" }],
+	};
+	const turn: AgentTurn = {
+		...createTurn(),
+		input: { messages: [retainedSummary, ...createTurn().input.messages] },
+		tools: [
+			{
+				definition: {
+					name: "read",
+					description: "Read",
+					inputSchema: z.object({ path: z.string() }),
+				},
+				execute: async () => ({ type: "success", output: "source" }),
+			},
+		],
+	};
+	const execution = {
+		agent: turn.agent.id,
+		assistantId: sessionMessageId(`assistant-${turn.id}`),
+		model,
+		sessionModel: model,
+		sourceUserMessageId: sessionMessageId("message-user"),
+		startedAt: 100,
+		turnId: turn.id,
+	};
+	let live: SessionMessage[] = [retainedSummary];
+	const records: SessionRecord[] = [];
+	try {
+		await runAgentTurnToText({
+			turn,
+			runtime: createAgentRuntime({ providerCollection: providers }),
+			onCheckpoint: (record) => {
+				records.push(record);
+			},
+			onToolCheckpoint: (record) => {
+				records.push(record);
+			},
+			onEvent: (event) => {
+				live = projectAgentTurnEvent(live, execution, event)?.messages ?? live;
+			},
+			onTerminal: (event) => {
+				live = projectAgentTurnTerminal(live, execution, event);
+			},
+		});
+		expect(requests).toBe(2);
+		expect(records.at(-1)?.messages[0]?.metadata?.usage).toMatchObject({
+			inputTokens: 24_000,
+			outputTokens: 7,
+		});
+		expect(
+			records.at(-1)?.messages[0]?.metadata?.contextMeasurement?.epoch
+		).toBe("compaction:restored-epoch");
+		for (const record of records) {
+			expect(
+				getSessionRecordValidationError(JSON.parse(JSON.stringify(record)))
+			).toBeNull();
+		}
+		const restored = [retainedSummary, ...projectSessionRecords(records)];
+		const restoredAssistant = restored.at(-1);
+		if (!restoredAssistant) {
+			throw new Error("Expected a restored assistant");
+		}
+		expect(
+			toDurableSessionMessageRecord(restoredAssistant)?.metadata
+				?.contextMeasurement
+		).toMatchObject({
+			epoch: "compaction:restored-epoch",
+			usage: { inputTokens: 14_000, outputTokens: 3 },
+		});
+		for (const context of [live, restored]) {
+			expect(estimateSessionContextTokens(context).tokens).toBe(14_003);
+			expect(summarizeSessionUsage(context, model)?.contextTokens).toBe(14_003);
+		}
+	} finally {
+		await providers.close();
+	}
+});
+
+test.each([
+	"tool-results",
+	"missing-usage",
+] as const)("%s at the last step cannot revive an earlier context measurement", async (scenario) => {
+	const turn = createTurn();
+	const records: SessionRecord[] = [];
+	const runtime: AgentRuntime = {
+		async *run() {
+			const base = { turnId: turn.id };
+			yield {
+				...base,
+				type: "agent-turn-started",
+				agentId: turn.agent.id,
+				sequence: 0,
+				startedAt: 0,
+			};
+			yield {
+				...base,
+				type: "model-step-started",
+				stepId: toModelStepId("step-1"),
+				sequence: 1,
+			};
+			yield {
+				...base,
+				type: "text-delta",
+				delta: "First response",
+				sequence: 2,
+			};
+			yield {
+				...base,
+				type: "model-step-finished",
+				stepId: toModelStepId("step-1"),
+				usage: { inputTokens: 90_000, outputTokens: 1 },
+				sequence: 3,
+			};
+			yield {
+				...base,
+				type: "model-step-started",
+				stepId: toModelStepId("step-2"),
+				sequence: 4,
+			};
+			if (scenario === "tool-results") {
+				yield {
+					...base,
+					type: "tool-call-started",
+					toolCallId: toolCallId("last-tool"),
+					toolName: "read",
+					input: { path: "main.ts" },
+					sequence: 5,
+				};
+				yield {
+					...base,
+					type: "tool-call-finished",
+					toolCallId: toolCallId("last-tool"),
+					toolName: "read",
+					outcome: { type: "success", output: "unmeasured result".repeat(100) },
+					sequence: 6,
+				};
+			} else {
+				yield {
+					...base,
+					type: "text-delta",
+					delta: "Unmeasured response",
+					sequence: 5,
+				};
+			}
+			yield {
+				...base,
+				type: "model-step-finished",
+				stepId: toModelStepId("step-2"),
+				...(scenario === "tool-results"
+					? { usage: { inputTokens: 14_000, outputTokens: 1 } }
+					: {}),
+				sequence: scenario === "tool-results" ? 7 : 6,
+			};
+			yield {
+				...base,
+				type: "agent-turn-completed",
+				usage: { inputTokens: 104_000, outputTokens: 2 },
+				sequence: scenario === "tool-results" ? 8 : 7,
+				finishedAt: 100,
+			};
+		},
+	};
+	await runAgentTurnToText({
+		turn,
+		runtime,
+		onCheckpoint: (record) => {
+			records.push(record);
+		},
+		onToolCheckpoint: (record) => {
+			records.push(record);
+		},
+	});
+	const context = projectSessionRecords(records);
+	expect(context.at(-1)?.metadata?.contextMeasurement).toBeUndefined();
+	expect(estimateSessionContextTokens(context)).toMatchObject({
+		providerTokens: null,
+		source: "estimated",
+	});
+	expect(context.at(-1)?.metadata?.usage?.inputTokens).toBe(104_000);
 });
 
 test("keeps inline file parts in the Agent Turn model input", () => {
