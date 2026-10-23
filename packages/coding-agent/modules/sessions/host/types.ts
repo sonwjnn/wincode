@@ -17,7 +17,7 @@ import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
 } from "../sdk-contract";
-import type { ResolvedSessionSelection } from "../selection";
+import type { SessionSelection } from "../selection";
 import type { SessionStore, SessionUsageEntry } from "../storage/session-store";
 /**
  * What one Session Host needs from the surface that constructed it, as lazy
@@ -81,7 +81,7 @@ export type SessionHost = Readonly<{
 	 * consumer runs the next turn with what the session was using. Null when no
 	 * source carries a model.
 	 */
-	getSelection: () => ResolvedSessionSelection | null;
+	getSelection: () => SessionSelection | null;
 	getSnapshot: () => LiveSessionSnapshot;
 	getCacheWarmingStatus: () => CacheWarmingStatus;
 	/** Cancels scheduled/in-flight warming after its Provider Model changes. */

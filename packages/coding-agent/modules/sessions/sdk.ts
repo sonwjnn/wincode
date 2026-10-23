@@ -66,11 +66,11 @@ import {
 	getPluginProviderRegistrationsFromCollection,
 } from "@/modules/sessions/provider-collection";
 import {
-	getLastUsedSelection,
+	nextChatSelection,
 	resolveRestoredSessionSdkSelection,
 	resolveSessionSdkPromptSelection,
-	resolveSessionSdkSelectionDefaults,
 	type SessionSdkSelectionDefaults,
+	sessionSelectionDefaults,
 } from "@/modules/sessions/selection";
 import { projectSessionMessageRecords } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
@@ -1003,7 +1003,7 @@ const createSessionSdkInternal = async (
 	const sessionRuntimes = new Set<SessionSdk>();
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
-	const unresolvedDefaultSelection = resolveSessionSdkSelectionDefaults(
+	const unresolvedDefaultSelection = sessionSelectionDefaults(
 		assembly.capabilities.getRegistry(),
 		{
 			...(agent === undefined ? {} : { agent }),
@@ -1057,19 +1057,11 @@ const createSessionSdkInternal = async (
 			const sessionId = toSessionId(id);
 			const stored = await assembly.store.getSession(sessionId);
 			const records = await assembly.store.listSessionRecords(sessionId);
-			const persistedSelection = getLastUsedSelection(
-				records.flatMap((record) =>
+			const priorSelection = nextChatSelection({
+				messages: records.flatMap((record) =>
 					projectSessionMessageRecords(record.messages, record)
-				)
-			);
-			const priorSelection =
-				persistedSelection === undefined
-					? null
-					: {
-							agent: persistedSelection.agent,
-							model: persistedSelection.model,
-							thinkingLevel: persistedSelection.thinkingLevel,
-						};
+				),
+			});
 			const hasStoredProviderModelSelection =
 				stored.model !== undefined || priorSelection !== null;
 			const fallbackSelection = hasStoredProviderModelSelection
@@ -1137,7 +1129,7 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
-		const resolvedSelection = resolveSessionSdkSelectionDefaults(
+		const resolvedSelection = sessionSelectionDefaults(
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,
@@ -1173,7 +1165,7 @@ const createSessionSdkInternal = async (
 		if (disposed) {
 			throw new Error("Session SDK is disposed.");
 		}
-		const resolvedSelection = resolveSessionSdkSelectionDefaults(
+		const resolvedSelection = sessionSelectionDefaults(
 			assembly.capabilities.getRegistry(),
 			omitUndefined({
 				agent: createOptions?.agent ?? agent,

@@ -1709,11 +1709,12 @@ describe("Session Host opening", () => {
 		expect(snapshot.compactions.map(({ id }) => id)).toEqual([
 			seeded.compaction,
 		]);
-		// The session exposes what its next turn runs with.
+		// The session exposes what its next turn runs with, and which tier supplied it.
 		expect(host.getSelection()).toEqual({
 			agent: buildId,
 			model,
 			persistedAgent: buildId,
+			source: "row",
 			thinkingLevel: undefined,
 		});
 
@@ -1776,14 +1777,16 @@ describe("Session Host lifetime", () => {
 				},
 			}),
 		};
+		let host: SessionHost | undefined;
 		try {
-			const host = await createSessionHost({
+			host = await createSessionHost({
 				capabilities,
 				sessionId: seeded.sessionId,
 			});
 			expect(host.getSelection()?.model).toEqual(model);
 			expect(requestedProviderIds).toEqual([model.providerId]);
 		} finally {
+			await host?.shutdown();
 			await manager.shutdownAll();
 			await store.deleteSession(seeded.sessionId);
 		}

@@ -236,6 +236,7 @@ It removes session records and attachment blobs while preserving prompt
 history and workspace/configuration data.
 
 - `submission-types.ts` — immutable Submission inputs, compositions, and outcomes shared by session commands and their consumers.
+- `selection.ts` — Session Selection: the one order table for the stored Model, Agent, and ThinkingLevel tiers (`restoreSelection`), the narrower next-chat variant (`nextChatSelection`), the defaults a Session that never recorded a choice starts from (`sessionSelectionDefaults`), and the restore guard (`restorableSelectionModel`). Provider availability, provider ownership, and error surfacing stay with the caller.
 - `agent-session/` (Agent Session) — the command and Snapshot projection boundary for one Session. `agent-session.ts` implements the public API and keeps state-write capabilities in `AgentSessionInternalPort`; `types.ts` defines its Snapshot, internal Ports, `SessionTurnRunner`, and admission outcomes; `submission.ts` prepares and runs Submissions. The `StatefulAgent` in `@wincode/agent-core` owns live model context, the transient Submission FIFO, and input scheduling for one Session Host.
 - `agent-session/input-lane.ts` — application admission, attachment externalization/retention, durable queue-head Steer commit, Recall cleanup, and run preparation around the Stateful Agent's queue scheduler.
 - `agent-session/submission-command.ts` — one Submission's run/cancellation/deadline ordering; active execution state remains on the owner.

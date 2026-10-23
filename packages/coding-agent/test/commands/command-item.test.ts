@@ -19,6 +19,7 @@ const MODELS: CommandItem = {
 
 const GIT_COMMIT: CommandItem = {
 	description: "Commit with conventional commits",
+	filePath: "/tmp/commands/git-commit.md",
 	kind: "custom",
 	name: "git-commit",
 	template: "Commit the staged changes.",

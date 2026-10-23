@@ -25,6 +25,7 @@ const AUDIT_SKILL: Skill = {
 
 const COMMIT_COMMAND: CustomCommandSpec = {
 	description: "Commit staged changes",
+	filePath: "/tmp/commands/git-commit.md",
 	kind: "custom",
 	name: "git-commit",
 	template: "Commit the staged changes.",

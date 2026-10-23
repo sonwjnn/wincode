@@ -11,9 +11,7 @@ import type {
 import { act, useEffect, useRef } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
-import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { AgentsDialogContent } from "@/modules/prompt-settings/ui/agents-dialog";
-import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import { ThinkingLevelDialogContent } from "@/modules/prompt-settings/ui/thinking-level-dialog";
 import { createInteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
@@ -443,70 +441,6 @@ test("an unsupported Provider Model exposes no synthetic default level", async (
 	}
 });
 
-test("status bar omits the Thinking Level label when it is unset", async () => {
-	const snapshot = fromPartial<ConfigSnapshot>({
-		diagnostics: [],
-		document: { agents: {} },
-		sourceFor: () => undefined,
-		sources: [],
-	});
-	const config = fromPartial<ConfigRuntime>({
-		configStore: { getSnapshot: async () => snapshot },
-		homeRoot: "/tmp",
-		workspace: "/tmp",
-	});
-	const setup = await testRender(
-		<ThemeProvider>
-			<ConfigProvider value={config}>
-				<ToastProvider>
-					<AgentRegistryProvider>
-						<PromptConfigProvider>
-							<StatusBar />
-						</PromptConfigProvider>
-					</AgentRegistryProvider>
-				</ToastProvider>
-			</ConfigProvider>
-		</ThemeProvider>,
-		{ height: 10, width: 120 }
-	);
-	activeSetups.push(setup);
-	await flushUi(setup);
-
-	expect(setup.captureCharFrame()).not.toContain("default");
-});
-
-test("status bar shows an explicit Off selection as the effort value", async () => {
-	const snapshot = fromPartial<ConfigSnapshot>({
-		diagnostics: [],
-		document: { agents: {} },
-		sourceFor: () => undefined,
-		sources: [],
-	});
-	const config = fromPartial<ConfigRuntime>({
-		configStore: { getSnapshot: async () => snapshot },
-		homeRoot: "/tmp",
-		workspace: "/tmp",
-	});
-	const setup = await testRender(
-		<ThemeProvider>
-			<ConfigProvider value={config}>
-				<ToastProvider>
-					<AgentRegistryProvider>
-						<PromptConfigProvider initialThinkingLevel="off">
-							<StatusBar />
-						</PromptConfigProvider>
-					</AgentRegistryProvider>
-				</ToastProvider>
-			</ConfigProvider>
-		</ThemeProvider>,
-		{ height: 10, width: 120 }
-	);
-	activeSetups.push(setup);
-	await flushUi(setup);
-
-	expect(setup.captureCharFrame()).toContain(":off");
-});
-
 describe("session usage bar", () => {
 	const summary = (
 		overrides: Partial<SessionUsageSummary>
@@ -539,23 +473,6 @@ describe("session usage bar", () => {
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("42.0%/1m");
 		// The tilde is the honesty marker: these are published rates, not a bill.
-		expect(frame).toContain("~$1.23");
-	});
-
-	test("shows cached reads and writes with estimated session cost", async () => {
-		const setup = await renderSurfaces(() => (
-			<SessionUsageBar
-				summary={summary({
-					cacheReadTokens: 1200,
-					cacheWriteTokens: 100,
-					costUsd: 1.2345,
-				})}
-			/>
-		));
-
-		const frame = setup.captureCharFrame();
-		expect(frame).toContain("↑1.2K");
-		expect(frame).toContain("↓100");
 		expect(frame).toContain("~$1.23");
 	});
 

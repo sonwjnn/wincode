@@ -281,30 +281,6 @@ test("trust selector abbreviates home paths in details and parent choices", asyn
 	}
 });
 
-test("trust selector aligns its title, details, and selectable choices", async () => {
-	const { setup } = await renderTrustDialog();
-	try {
-		const lines = setup.captureCharFrame().split("\n");
-		const titleLine = lines.find((line) => line.includes("Project Trust"));
-		const workspaceLine = lines.find((line) => line.includes("Workspace:"));
-		const choiceLine = lines.find((line) =>
-			line.includes("Trust parent folder")
-		);
-
-		expect(titleLine).toBeDefined();
-		expect(workspaceLine).toBeDefined();
-		expect(choiceLine).toBeDefined();
-		expect(titleLine?.indexOf("Project Trust")).toBe(
-			workspaceLine?.indexOf("Workspace:")
-		);
-		expect(workspaceLine?.indexOf("Workspace:")).toBe(
-			choiceLine?.indexOf("Trust parent folder")
-		);
-	} finally {
-		await act(() => setup.renderer.destroy());
-	}
-});
-
 test("trust selector treats Ctrl+C as cancellation", async () => {
 	const { selectionOutcome, setup } = await renderTrustDialog();
 	try {

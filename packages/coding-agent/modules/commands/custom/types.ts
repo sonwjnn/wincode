@@ -7,6 +7,7 @@ export type CustomCommandCandidate = {
 };
 
 export type CustomCommandSpec = BaseSpec & {
+	filePath: string;
 	kind: "custom";
 	template: string;
 };

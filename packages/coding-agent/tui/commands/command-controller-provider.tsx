@@ -15,6 +15,7 @@ import {
 	createCommandController,
 } from "@/modules/commands/command-controller";
 import { CommandControllerFactoryProvider } from "@/modules/commands/command-controller-context";
+import { CommandResourcesContext } from "@/modules/commands/command-resources-context";
 import type { CommandSpec } from "@/modules/commands/commands";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
@@ -61,6 +62,10 @@ export function CommandControllerProvider({
 	const promptConfig = usePromptConfig();
 	const [customCommands, setCustomCommands] = useState<CustomCommandSpec[]>([]);
 	const [skills, setSkills] = useState<Skill[]>([]);
+	const [commandsLoading, setCommandsLoading] = useState(true);
+	const [skillsLoading, setSkillsLoading] = useState(true);
+	const [commandError, setCommandError] = useState<string>();
+	const [skillError, setSkillError] = useState<string>();
 	const discoverCustomCommands = useCallback(
 		() => getCustomCommands(config),
 		[config]
@@ -141,26 +146,38 @@ export function CommandControllerProvider({
 
 	useEffect(() => {
 		let active = true;
+		setCommandsLoading(true);
+		setSkillsLoading(true);
+		setCommandError(undefined);
+		setSkillError(undefined);
 		void discoverCustomCommands()
 			.then((commands) => {
 				if (active) {
 					setCustomCommands(commands);
+					setCommandsLoading(false);
 				}
 			})
-			.catch(() => {
+			.catch((error: unknown) => {
 				if (active) {
 					setCustomCommands([]);
+					setCommandsLoading(false);
+					setCommandError(
+						getErrorMessage(error, "Custom Command discovery failed.")
+					);
 				}
 			});
 		void discoverAvailableSkills()
 			.then((availableSkills) => {
 				if (active) {
 					setSkills(availableSkills);
+					setSkillsLoading(false);
 				}
 			})
-			.catch(() => {
+			.catch((error: unknown) => {
 				if (active) {
 					setSkills([]);
+					setSkillsLoading(false);
+					setSkillError(getErrorMessage(error, "Skill discovery failed."));
 				}
 			});
 		return () => {
@@ -281,9 +298,31 @@ export function CommandControllerProvider({
 		[create]
 	);
 
+	const resources = useMemo(
+		() => ({
+			customCommands,
+			skills,
+			commandsLoading,
+			skillsLoading,
+			diagnostics: [commandError, skillError].filter(
+				(message): message is string => message !== undefined
+			),
+		}),
+		[
+			customCommands,
+			skills,
+			commandsLoading,
+			skillsLoading,
+			commandError,
+			skillError,
+		]
+	);
+
 	return (
-		<CommandControllerFactoryProvider factory={factory}>
-			{children}
-		</CommandControllerFactoryProvider>
+		<CommandResourcesContext.Provider value={resources}>
+			<CommandControllerFactoryProvider factory={factory}>
+				{children}
+			</CommandControllerFactoryProvider>
+		</CommandResourcesContext.Provider>
 	);
 }

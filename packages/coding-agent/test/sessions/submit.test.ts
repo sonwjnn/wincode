@@ -30,6 +30,7 @@ const AUDIT_SKILL: Skill = {
 
 const TEST_CUSTOM_COMMAND: CustomCommandSpec = {
 	description: "Commit with conventional commits",
+	filePath: "/tmp/commands/git-commit.md",
 	kind: "custom",
 	name: "git-commit",
 	template: "Commit the staged changes with a conventional message.",

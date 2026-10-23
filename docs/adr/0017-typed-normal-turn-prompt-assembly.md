@@ -15,7 +15,7 @@ Wincode keeps normal Agent Turn Prompt Composition in the TUI composition root. 
 ## Consequences
 
 - Primary Agents and same-workspace Subagents receive the same Project Instruction and environment snapshot, while Agent instructions, roles, tools, Skills, and transcripts remain turn-specific.
-- `AGENTS.md` content is bounded to 12,000 characters per file and 24 KiB total. Missing files are ignored; invalid, unreadable, or oversized sources are omitted with diagnostics rather than failing or silently truncating a turn.
+- `AGENTS.md` sources share a 24 KiB total-byte budget; there is no separate per-file character cap. Missing files are ignored; invalid, unreadable, or sources that exceed the aggregate budget are omitted with diagnostics rather than failing or silently truncating a turn.
 - Project Instructions carry workspace-relative provenance and SHA-256 content hashes. Raw repository instructions are not persisted in Session Records, telemetry, or compaction input.
 - Snapshots are resolved before the first Model Step and remain stable for the Agent Turn. Cache reuse is keyed by canonical workspace and instruction-file metadata; later turns observe workspace changes.
 - Stable environment is placed before dynamic tool policy and volatile status so the cacheable prompt prefix remains stable when only per-turn data changes. Environment variables, credentials, unnecessary absolute paths, full diffs, workspace trees, and machine metadata remain excluded.

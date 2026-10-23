@@ -9,7 +9,7 @@ row, then message metadata, then prompt-config refs) is the single policy,
 owned by the session-selection module and exercised by chat-view,
 home-view, and the routing transport alike.
 
-Status: accepted
+Status: accepted (per-value precedence and the next-chat variant amended by ADR-0054)
 
 ## Considered Options
 

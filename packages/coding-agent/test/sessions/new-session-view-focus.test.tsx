@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { TextareaRenderable } from "@opentui/core";
+import { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import {
 	createMemoryHistory,
@@ -41,6 +41,7 @@ import {
 	type InteractiveSessionProviderCollection,
 } from "@/modules/sessions/provider-collection";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+import { CompactNameList } from "@/modules/sessions/ui/components/startup-overview";
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import {
@@ -316,6 +317,7 @@ type HomeProviderCollectionFactory = (
 
 type HomeViewOptions = Readonly<{
 	defaultAgentId?: AgentId;
+	homeRoot?: string;
 	pluginRuntime?: PluginRuntime;
 }>;
 
@@ -324,6 +326,7 @@ const renderHomeView = async (
 	options: HomeViewOptions = {}
 ): Promise<TestRendererSetup> => {
 	const workspace = process.cwd();
+	const homeRoot = options.homeRoot ?? os.homedir();
 	const router = createRouter({
 		history: createMemoryHistory({ initialEntries: ["/"] }),
 		routeTree: createRootRoute({}),
@@ -350,7 +353,7 @@ const renderHomeView = async (
 								),
 						},
 					}),
-					homeRoot: os.homedir(),
+					homeRoot,
 					workspace,
 				}
 			: fromPartial<ConfigRuntime>({
@@ -363,7 +366,7 @@ const renderHomeView = async (
 								sources: [],
 							}),
 					},
-					homeRoot: os.homedir(),
+					homeRoot,
 					workspace,
 				});
 	const app = (
@@ -432,7 +435,158 @@ const submitHomePrompt = async (setup: TestRendererSetup): Promise<void> => {
 	await flushTestRenderer(setup, 20);
 };
 
+describe("startup resource name wrapping", () => {
+	test("keeps a long resource name intact when the list wraps", async () => {
+		const setup = await testRenderWithClipboard(
+			<CompactNameList
+				color="#ffffff"
+				items={[
+					{ key: "alpha", name: "alpha" },
+					{ key: "beta", name: "beta" },
+					{ key: "folder-structure", name: "folder-structure" },
+					{ key: "next", name: "next" },
+				]}
+			/>,
+			{ height: 4, width: 22 }
+		);
+		try {
+			await act(async () => setup.renderOnce());
+			const lines = setup.captureCharFrame().split("\n");
+			const firstNameLine = lines.find((line) => line.includes("alpha,"));
+			expect(firstNameLine?.indexOf("alpha,")).toBe(1);
+			const longNameLine = lines.find((line) =>
+				line.includes("folder-structure,")
+			);
+			expect(longNameLine).toBeDefined();
+			expect(longNameLine?.indexOf("folder-structure,")).toBe(0);
+			expect(
+				lines.some(
+					(line) =>
+						line.includes("folder-") && !line.includes("folder-structure")
+				)
+			).toBe(false);
+		} finally {
+			await act(async () => setup.renderer.destroy());
+		}
+	});
+});
+
 describe("NewSessionView composer focus", () => {
+	test("shows a compact startup overview above the new-session composer", async () => {
+		const setup = await renderHomeView(createTestHomeProviderCollection);
+		try {
+			await flushTestRenderer(setup);
+			const frame = captureNormalizedHomeFrame(setup);
+			expect(frame).toContain("Wincode v");
+			expect(frame).toContain("Show details · Ctrl+O");
+			expect(frame).not.toContain("Hide details");
+			expect(frame).not.toContain("Agent Build");
+			expect(frame).not.toContain("Notices:");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("expanded Prompts show the custom command source path", async () => {
+		const homeRoot = await fs.mkdtemp(
+			path.join(os.tmpdir(), "startup-overview-home-")
+		);
+		const commandsRoot = path.join(homeRoot, ".wincode", "commands");
+		await fs.mkdir(commandsRoot, { recursive: true });
+		await Bun.write(
+			path.join(commandsRoot, "deploy.md"),
+			"---\ndescription: Deploy code\n---\nDeploy the app."
+		);
+		const setup = await renderHomeView(createTestHomeProviderCollection, {
+			homeRoot,
+		});
+		let expanded = false;
+		try {
+			await act(async () => {
+				setup.mockInput.pressKey("o", { ctrl: true });
+				await setup.renderOnce();
+			});
+			expanded = true;
+			await waitForHomeFrame(setup, ".wincode/commands/deploy.md");
+			const frame = captureNormalizedHomeFrame(setup);
+			expect(frame).toContain("[Prompts]");
+			expect(frame).toContain("/deploy");
+			expect(frame).toContain(".wincode/commands/deploy.md");
+		} finally {
+			if (expanded) {
+				await act(async () => {
+					setup.mockInput.pressKey("o", { ctrl: true });
+					await setup.renderOnce();
+				});
+				await waitForHomeFrame(setup, "Show details · Ctrl+O");
+			}
+			await act(async () => setup.renderer.destroy());
+			await fs.rm(homeRoot, { force: true, recursive: true });
+		}
+	});
+
+	test("Ctrl+O expands startup resources without moving focus from the composer", async () => {
+		const pluginRuntime = createPluginRuntime(
+			[
+				{
+					commands: [],
+					id: "startup-overview-plugin",
+					sourcePath: "/trusted/plugins/startup-overview.ts",
+					tools: [],
+					workspace: process.cwd(),
+				},
+			],
+			[]
+		);
+		const setup = await renderHomeView(createTestHomeProviderCollection, {
+			pluginRuntime,
+		});
+		let expanded = false;
+		try {
+			await act(async () => {
+				setup.mockInput.pressKey("o", { ctrl: true });
+				await setup.renderOnce();
+			});
+			expanded = true;
+			await waitForHomeFrame(
+				setup,
+				"Ctrl+O to collapse startup help and resources"
+			);
+			const startupScrollbox = setup.renderer.root.findDescendantById(
+				"new-session-view-startup-scrollbox"
+			);
+			expect(startupScrollbox).toBeInstanceOf(ScrollBoxRenderable);
+			if (!(startupScrollbox instanceof ScrollBoxRenderable)) {
+				throw new Error("The startup overview is not scrollable.");
+			}
+			startupScrollbox.scrollChildIntoView(
+				"startup-plugin-startup-overview-plugin"
+			);
+			await act(async () => setup.renderOnce());
+			await waitForHomeFrame(setup, "startup-overview-plugin");
+			const pluginRow = setup
+				.captureCharFrame()
+				.split("\n")
+				.find((line) => line.includes("startup-overview-plugin"));
+			expect(pluginRow?.indexOf("startup-overview-plugin")).toBeGreaterThan(0);
+			const frame = captureNormalizedHomeFrame(setup);
+			expect(frame).toContain("[Plugins]");
+			expect(frame).toContain("startup-overview-plugin");
+			expect(setup.renderer.currentFocusedRenderable?.id ?? null).toBe(
+				"new-session-view-composer"
+			);
+		} finally {
+			if (expanded) {
+				await act(async () => {
+					setup.mockInput.pressKey("o", { ctrl: true });
+					await setup.renderOnce();
+				});
+				await waitForHomeFrame(setup, "Show details · Ctrl+O");
+			}
+			setup.renderer.destroy();
+		}
+	});
+
 	test("Home restores Provider snapshots before availability reads and closes its collection on unmount", async () => {
 		const operations: string[] = [];
 		const createCollection: HomeProviderCollectionFactory = async (

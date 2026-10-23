@@ -42,9 +42,14 @@ describe("loadCustomCommands", () => {
 				},
 			},
 		]);
+		const candidate = candidates[0];
+		if (candidate === undefined) {
+			throw new Error("Expected a custom command candidate.");
+		}
 		expect(await loadCustomCommands(candidates)).toEqual([
 			{
 				description: "Run tests with coverage",
+				filePath: candidate.filePath,
 				kind: "custom",
 				name: "test",
 				template: "Run the full test suite.",
@@ -70,6 +75,7 @@ describe("loadCustomCommands", () => {
 		expect(commands).toHaveLength(1);
 		expect(commands[0]).toMatchObject({
 			description: "project",
+			filePath: candidates[1]?.filePath,
 			name: "test",
 			template: "Project template.",
 		});

@@ -49,12 +49,12 @@ import {
 	getInteractiveProviderCollectionFactory,
 } from "@/shared/runtime-context";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
-import { resolveLastUsedSessionSelection } from "../../selection";
+import { nextChatSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
 import { projectSessionRecords } from "../../storage/session-record";
 import { type ChatPromptSubmission, getMostRecentSession } from "../../utils";
-import { AsciiArt } from "../components/ascii-art";
 import { ChatTextArea } from "../components/chat-text-area";
+import { StartupOverview } from "../components/startup-overview";
 import { WorkspacePath } from "../components/workspace-path";
 
 type HomePromptReadiness = {
@@ -392,13 +392,12 @@ export function NewSessionView({
 					return;
 				}
 
-				const selection = resolveLastUsedSessionSelection({
+				const selection = nextChatSelection({
 					messages: projectSessionRecords(
 						await store.listSessionRecords(session.id)
 					),
 					resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
-					sessionModel: session.model,
-					sessionThinkingLevel: session.thinkingLevel,
+					row: session,
 				});
 				if (ignore || !selection) {
 					return;
@@ -584,14 +583,15 @@ export function NewSessionView({
 			onMouseMove={focusHandlers.onMouseMove}
 			width="100%"
 		>
-			<box
-				alignItems="center"
+			<scrollbox
 				flexGrow={1}
-				justifyContent="center"
-				width="100%"
+				focusable={false}
+				height="100%"
+				id="new-session-view-startup-scrollbox"
+				verticalScrollbarOptions={{ visible: false }}
 			>
-				<AsciiArt />
-			</box>
+				<StartupOverview />
+			</scrollbox>
 			<box flexDirection="column" flexShrink={0} paddingBottom={1} width="100%">
 				{error === null ? null : <text fg={colors.error}>{error}</text>}
 				<ChatTextArea

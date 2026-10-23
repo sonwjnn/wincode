@@ -294,6 +294,9 @@ test("file Plugins expose generic resources to host UI integrations", async () =
 		config: configRuntime,
 	});
 	expect(runtime.diagnostics).toEqual([]);
+	expect(runtime.getLoadedPlugins()).toEqual([
+		{ id: "resource_fixture", sourcePath: resourcePath },
+	]);
 
 	expect(
 		runtime.getResource<{ state: string }>("resource_fixture", "service")
