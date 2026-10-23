@@ -16,6 +16,7 @@ import {
 	type SessionId,
 	toCompactionId,
 } from "@/shared/identifiers";
+import { keepTailUtf8, truncateUtf8 } from "../../tools/output-bounds";
 import {
 	isSessionToolPart,
 	type SessionMessage,
@@ -44,6 +45,10 @@ import {
 	isCompactionSummaryMessage,
 } from "./summary-message";
 import {
+	prepareSummaryRequest,
+	SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS,
+} from "./summary-prompt";
+import {
 	type AppendSessionCompactionInput,
 	type CompactionSession,
 	type CompactionSummary,
@@ -57,6 +62,9 @@ import {
 } from "./types";
 
 const MAX_SERIALIZED_PART_LENGTH = 12_000;
+const MAX_SERIALIZED_TOOL_INPUT_BYTES = 2000;
+const MAX_SERIALIZED_TOOL_OUTPUT_BYTES = 4000;
+const MAX_SERIALIZED_TOOL_ERROR_BYTES = 2000;
 const RAW_IMAGE_DATA_URL_PATTERN =
 	/data:image\/[^;,]+;base64,(?:(?:[A-Za-z0-9+/]\s*){4})*(?:(?:[A-Za-z0-9+/]\s*){2}==|(?:[A-Za-z0-9+/]\s*){3}=|(?:[A-Za-z0-9+/]\s*){1,4})(?![A-Za-z0-9+/=])/giu;
 const DATA_URL_PAYLOAD_PATTERN = /^data:[^,]+,(.*)$/su;
@@ -322,8 +330,104 @@ const replaceAttachmentPayload = (part: unknown) => {
 	};
 };
 
+const truncateHeadTailUtf8 = (value: string, maxBytes: number): string => {
+	if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+		return value;
+	}
+	const headBytes = Math.floor(maxBytes / 2);
+	const tailBytes = maxBytes - headBytes;
+	return `${truncateUtf8(value, headBytes)}…[truncated]…${keepTailUtf8(value, tailBytes)}`;
+};
+
+const serializeBoundedJson = (value: unknown, maxBytes: number): string => {
+	let serialized: string;
+	try {
+		serialized = JSON.stringify(value) ?? "[unserializable value]";
+	} catch {
+		serialized = "[unserializable value]";
+	}
+	return truncateHeadTailUtf8(serialized, maxBytes);
+};
+
+const addBoundedToolResultFields = (
+	serializedPart: Record<string, string>,
+	output: unknown,
+	errorText: unknown
+): void => {
+	if (!isUndefined(output)) {
+		serializedPart.outputPreview = serializeBoundedJson(
+			output,
+			MAX_SERIALIZED_TOOL_OUTPUT_BYTES
+		);
+	}
+	if (isString(errorText)) {
+		serializedPart.errorText = truncateHeadTailUtf8(
+			errorText,
+			MAX_SERIALIZED_TOOL_ERROR_BYTES
+		);
+	}
+};
+
+const serializeToolResultPart = (part: unknown): string | null => {
+	if (
+		!(isObjectLike(part) && "type" in part) ||
+		part.type !== "tool-result" ||
+		!("toolCallId" in part) ||
+		!isString(part.toolCallId)
+	) {
+		return null;
+	}
+	const serializedPart: Record<string, string> = {
+		type: "tool-result",
+		toolCallId: part.toolCallId,
+	};
+	addBoundedToolResultFields(
+		serializedPart,
+		"output" in part ? part.output : undefined,
+		"errorText" in part ? part.errorText : undefined
+	);
+	return JSON.stringify(serializedPart);
+};
+
+const serializeToolPart = (
+	part: Extract<SessionMessage["parts"][number], { state: string }>
+): string => {
+	const serializedPart: Record<string, string> = {
+		type: part.type,
+		toolCallId: part.toolCallId,
+		state: part.state,
+	};
+	if ("toolName" in part && typeof part.toolName === "string") {
+		serializedPart.toolName = part.toolName;
+	}
+	if (part.input !== undefined) {
+		serializedPart.inputPreview = serializeBoundedJson(
+			part.input,
+			MAX_SERIALIZED_TOOL_INPUT_BYTES
+		);
+	}
+	addBoundedToolResultFields(serializedPart, part.output, part.errorText);
+	if (part.failure !== undefined) {
+		serializedPart.failure = serializeBoundedJson(
+			part.failure,
+			MAX_SERIALIZED_TOOL_ERROR_BYTES
+		);
+	}
+	return JSON.stringify(serializedPart);
+};
+
 const serializePart = (part: SessionMessage["parts"][number]): string => {
+	const toolResult = serializeToolResultPart(part);
+	if (!isNull(toolResult)) {
+		return toolResult;
+	}
 	const type = getPartType(part);
+	if (type === "reasoning") {
+		return "";
+	}
+	if (isSessionToolPart(part)) {
+		return serializeToolPart(part);
+	}
 	const text = getTextFromPart(part);
 	if (!isNull(text)) {
 		return text;
@@ -842,14 +946,16 @@ const projectMessagesForEstimate = (
 const resolveSummaryOutputBudget = (
 	cutPoint: CutPoint,
 	settings: CompactSessionInput["settings"],
-	estimateTokens: (messages: readonly SessionMessage[]) => number
+	estimateTokens: (messages: readonly SessionMessage[]) => number,
+	estimatedInputTokens: number
 ): number => {
-	const retainedTokens = Math.max(
-		0,
-		estimateTokens(
-			projectMessagesForEstimate(cutPoint.activeMessages, settings)
-		)
-	);
+	const contextLimit = settings.modelContextLimit;
+	if (isUndefined(contextLimit) || isNull(contextLimit)) {
+		throw new SessionCompactionError(
+			"context-still-too-large",
+			"Cannot determine the compaction summary budget because the selected conversation model has no known context-window limit. Choose a model with a known context window and retry."
+		);
+	}
 	const reserveTokens = Math.max(
 		0,
 		Math.floor(
@@ -863,19 +969,29 @@ const resolveSummaryOutputBudget = (
 				DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
 		)
 	);
-	const overheadTokens = Math.max(
+	const summaryContextAvailable =
+		contextLimit - estimatedInputTokens - SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS;
+	const retainedTokens = Math.max(
+		0,
+		estimateTokens(
+			projectMessagesForEstimate(cutPoint.activeMessages, settings)
+		)
+	);
+	const requestOverheadTokens = Math.max(
 		0,
 		Math.floor(
 			settings.compactionOverheadTokens ?? COMPACTION_REQUEST_OVERHEAD_TOKENS
 		)
 	);
-	const contextAvailable =
-		isUndefined(settings.modelContextLimit) ||
-		isNull(settings.modelContextLimit)
-			? Number.POSITIVE_INFINITY
-			: settings.modelContextLimit - retainedTokens - overheadTokens;
+	const conversationContextAvailable =
+		contextLimit - retainedTokens - requestOverheadTokens - reserveTokens;
 	return Math.floor(
-		Math.min(reserveTokens, configuredMaximum, contextAvailable)
+		Math.min(
+			reserveTokens,
+			configuredMaximum,
+			summaryContextAvailable,
+			conversationContextAvailable
+		)
 	);
 };
 
@@ -1090,6 +1206,18 @@ const generateCompactionSummary = async (
 			"Compaction summary generation returned no content."
 		);
 	}
+	const estimatedOutputTokens = Math.ceil(generated.text.length / 4);
+	const reportedOutputTokens = generated.usage?.outputTokens ?? 0;
+	if (
+		input.maxOutputTokens !== undefined &&
+		Math.max(estimatedOutputTokens, reportedOutputTokens) >
+			input.maxOutputTokens
+	) {
+		throw new SessionCompactionError(
+			"summary-failed",
+			`Compaction summary exceeded its ${input.maxOutputTokens}-token output budget.`
+		);
+	}
 	return generated;
 };
 
@@ -1162,8 +1290,12 @@ export const createSessionCompaction = ({
 			trigger,
 			thinkingLevel,
 		});
+		const currentMessages =
+			previous && !messages.some(isCompactionSummaryMessage)
+				? rebuildActiveMessages(messages, previous)
+				: messages;
 		const estimatedTokensBefore = estimate(
-			projectMessagesForEstimate(messages, settings)
+			projectMessagesForEstimate(currentMessages, settings)
 		);
 		if (entryInput.estimatedTokensAfter >= estimatedTokensBefore) {
 			throw new SessionCompactionError(
@@ -1225,22 +1357,8 @@ export const createSessionCompaction = ({
 			input.settings.keepRecentTokens,
 			estimateTokens
 		);
-		const maxOutputTokens = resolveSummaryOutputBudget(
-			cutPoint,
-			input.settings,
-			estimateTokens
-		);
-		if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
-			throw new SessionCompactionError(
-				"not-needed",
-				`Compaction summary budget is ${maxOutputTokens} tokens; at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} are required.`
-			);
-		}
-		const attachmentMetadata = attachmentStore
-			? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
-			: undefined;
 		const focus = normalizeFocus(input.focus);
-		const generatorInput: SummaryGeneratorInput = {
+		const summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {
 			...omitUndefined({
 				thinkingLevel: input.thinkingLevel,
 				focus,
@@ -1248,8 +1366,28 @@ export const createSessionCompaction = ({
 			model: input.model,
 			previousSummary: previous?.summary,
 			serializedMessages: serializeMessagesForCompaction(summarySpan),
-			maxOutputTokens,
 			signal: input.signal,
+		};
+		const preparedRequest = prepareSummaryRequest(summaryInput);
+		const maxOutputTokens = resolveSummaryOutputBudget(
+			cutPoint,
+			input.settings,
+			estimateTokens,
+			preparedRequest.estimatedInputTokens
+		);
+		if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
+			throw new SessionCompactionError(
+				"context-still-too-large",
+				`Compaction cannot fit a viable summary: the final prompt is estimated at ${preparedRequest.estimatedInputTokens} tokens, and the current summary/conversation budgets allow only ${Math.max(0, maxOutputTokens)} output tokens; at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} are required. Choose a larger-context model, reduce historical or retained input, or adjust request overhead/reserve.`
+			);
+		}
+		const attachmentMetadata = attachmentStore
+			? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
+			: undefined;
+		const generatorInput: SummaryGeneratorInput = {
+			...summaryInput,
+			maxOutputTokens,
+			preparedRequest,
 		};
 		const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
 		if (selectedSummaryGenerator === undefined) {

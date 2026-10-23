@@ -57,6 +57,11 @@ export type AppendSessionCompactionInput = Except<
 	createdAt?: Date;
 	completedAt?: Date;
 };
+export type PreparedSummaryRequest = Readonly<{
+	estimatedInputTokens: number;
+	prompt: string;
+}>;
+
 export type SummaryGeneratorInput = {
 	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
@@ -64,6 +69,7 @@ export type SummaryGeneratorInput = {
 	serializedMessages: string;
 	focus?: string;
 	maxOutputTokens?: number;
+	preparedRequest?: PreparedSummaryRequest;
 	signal?: AbortSignal;
 };
 

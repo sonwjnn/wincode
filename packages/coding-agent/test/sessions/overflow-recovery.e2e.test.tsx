@@ -127,7 +127,7 @@ test("continues the compacted Session Context after a provider context overflow"
 	try {
 		const rendered = await renderSession({
 			configDocument: CONFIG_DOCUMENT,
-			pricing: createE2ePricing(12_000),
+			pricing: createE2ePricing(20_000),
 			sessionId,
 		});
 		const activeSetup = rendered.setup;

@@ -15,6 +15,10 @@ import type { SessionMessage } from "@/modules/sessions/message";
 import { modelId, sessionMessageId, toolCallId } from "../support/identifiers";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
+const MINIMUM_HANDOFF_OUTPUT_ERROR = /minimum.*256/i;
+const SUMMARY_CONTEXT_FIT_ERROR = /estimated.*context window/i;
+const UNKNOWN_SUMMARY_CONTEXT_ERROR = /context-window limit is unavailable/i;
+
 const selection: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
@@ -28,7 +32,7 @@ type SummaryCapture = Readonly<{
 const runSummary = async (
 	input: SummaryGeneratorInput,
 	providerModel: ProviderModel = {
-		limits: { maxOutputTokens: 128 },
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 2048 },
 		modelId: selection.modelId,
 		protocolId: "fixture",
 		providerId: selection.providerId,
@@ -78,7 +82,7 @@ test("summarizes with the exact invocable Provider Model and declared reasoning 
 		providerId: "fixture",
 	};
 	const providerModel: ProviderModel = {
-		limits: { maxOutputTokens: 128 },
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 512 },
 		modelId: providerModelId,
 		protocolId: "fixture",
 		providerId: "fixture",
@@ -96,7 +100,7 @@ test("summarizes with the exact invocable Provider Model and declared reasoning 
 
 	expect(text).toBe("provider summary");
 	expect(request).toMatchObject({
-		maxOutputTokens: 128,
+		maxOutputTokens: 256,
 		reasoningEffort: "high",
 	});
 });
@@ -155,7 +159,7 @@ test("an explicit OAuth summary cap fails closed before provider network I/O", a
 test("summary availability reads credentials only for the selected Provider", async () => {
 	const credentialReads: string[] = [];
 	const providerModel: ProviderModel = {
-		limits: { maxOutputTokens: 128 },
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 512 },
 		modelId: "selected-summary-model",
 		protocolId: "fixture",
 		providerId: "selected-summary-provider",
@@ -294,19 +298,165 @@ test("sends historical records and the shared handoff schema in one user prompt"
 test("caps summary output at the exact Provider Model limit", async () => {
 	const { request } = await runSummary(
 		{
-			maxOutputTokens: 512,
+			maxOutputTokens: 1024,
 			model: selection,
 			serializedMessages: "transcript",
 		},
 		{
-			limits: { maxOutputTokens: 128 },
+			limits: { contextWindowTokens: 8192, maxOutputTokens: 512 },
 			modelId: selection.modelId,
 			protocolId: "fixture",
 			providerId: selection.providerId,
 		}
 	);
 
-	expect(request?.maxOutputTokens).toBe(128);
+	expect(request?.maxOutputTokens).toBe(512);
+});
+
+test("budgets output from the exact escaped system and user prompt sent to the Provider", async () => {
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 16_384 },
+		modelId: selection.modelId,
+		protocolId: "fixture",
+		providerId: selection.providerId,
+	};
+	const { request } = await runSummary(
+		{
+			focus: "&".repeat(500),
+			maxOutputTokens: 16_384,
+			model: selection,
+			previousSummary: {
+				coveredMessageIds: [],
+				formatVersion: 1,
+				text: "&".repeat(500),
+			},
+			serializedMessages: "history",
+		},
+		providerModel
+	);
+	const prompt = summaryPrompt(request);
+	const estimatedInputTokens = Math.ceil(
+		(prompt.length + (request?.system?.length ?? 0)) / 4
+	);
+
+	expect(request?.maxOutputTokens).toBe(8192 - estimatedInputTokens - 256);
+});
+
+test("fails before dispatch when the Provider Model clamps output below the viable handoff size", async () => {
+	let requests = 0;
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 128 },
+		modelId: selection.modelId,
+		protocolId: "fixture",
+		providerId: selection.providerId,
+	};
+	const collection = createProviderCollection();
+	collection.register({
+		id: selection.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			requests += 1;
+			yield { delta: "too short", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	});
+	await collection.setCredential(selection.providerId, {
+		token: "fixture-only",
+	});
+
+	try {
+		await expect(
+			createProviderSummaryGenerator(collection)({
+				maxOutputTokens: 1024,
+				model: selection,
+				serializedMessages: "history",
+			})
+		).rejects.toThrow(MINIMUM_HANDOFF_OUTPUT_ERROR);
+		expect(requests).toBe(0);
+	} finally {
+		await collection.close();
+	}
+});
+
+test("fails closed before dispatch when the Provider Model has no context-window limit", async () => {
+	let requests = 0;
+	const providerModel: ProviderModel = {
+		limits: { maxOutputTokens: 1024 },
+		modelId: selection.modelId,
+		protocolId: "fixture",
+		providerId: selection.providerId,
+	};
+	const collection = createProviderCollection();
+	collection.register({
+		id: selection.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			requests += 1;
+			yield { delta: "summary", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	});
+	await collection.setCredential(selection.providerId, {
+		token: "fixture-only",
+	});
+
+	try {
+		await expect(
+			createProviderSummaryGenerator(collection)({
+				model: selection,
+				serializedMessages: "history",
+			})
+		).rejects.toThrow(UNKNOWN_SUMMARY_CONTEXT_ERROR);
+		expect(requests).toBe(0);
+	} finally {
+		await collection.close();
+	}
+});
+
+test("rejects an escaped summary prompt that cannot fit before provider dispatch", async () => {
+	let requests = 0;
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 1024 },
+		modelId: selection.modelId,
+		protocolId: "fixture",
+		providerId: selection.providerId,
+	};
+	const collection = createProviderCollection();
+	collection.register({
+		id: selection.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			requests += 1;
+			yield { delta: "summary", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	});
+	await collection.setCredential(selection.providerId, {
+		token: "fixture-only",
+	});
+
+	try {
+		await expect(
+			createProviderSummaryGenerator(collection)({
+				focus: "preserve this decision",
+				maxOutputTokens: 1024,
+				model: selection,
+				previousSummary: {
+					coveredMessageIds: [],
+					formatVersion: 1,
+					text: "prior summary",
+				},
+				preparedRequest: { estimatedInputTokens: 1, prompt: "forged" },
+				serializedMessages: "&".repeat(40_000),
+			})
+		).rejects.toThrow(SUMMARY_CONTEXT_FIT_ERROR);
+		expect(requests).toBe(0);
+	} finally {
+		await collection.close();
+	}
 });
 
 test("updates prior work and resolved progress in the shared handoff schema", async () => {

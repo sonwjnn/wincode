@@ -65,13 +65,13 @@ import {
 } from "@/test/support/e2e-fixture";
 
 const store = createE2eStore();
-const { sessionId } = await seedCompactionHistory(store);
+const { sessionId } = await seedCompactionHistory(store, 28);
 
 test("compacts automatically before sending and uses the rebuilt context", async () => {
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
-			pricing: createE2ePricing(12_000),
+			pricing: createE2ePricing(40_000),
 			sessionId,
 		});
 		const activeSetup = rendered.setup;
@@ -136,7 +136,7 @@ test("compacts automatically before sending and uses the rebuilt context", async
 		);
 		const requestText = chatRequest.messages.map(({ text }) => text).join("\n");
 		expect(requestText).toContain(entry.summary.text);
-		expect(requestText).toContain("retained-turn-10");
+		expect(requestText).toContain("retained-turn-28");
 		expect(requestText).not.toContain("compacted-turn-1 context");
 	} finally {
 		if (setup) {

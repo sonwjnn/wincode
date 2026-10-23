@@ -294,8 +294,10 @@ export const createAgentSessionAdapters = (
 					assertAuthority: assertHostOpen,
 				}),
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
-			needsCompaction: (messages, settings) =>
-				capabilities.getCompactionModule().needsCompaction(messages, settings),
+			needsCompaction: (messages, settings, model) =>
+				capabilities
+					.getCompactionModule()
+					.needsCompaction(messages, settings, model),
 		},
 		resolveSubmission,
 		assertProviderModelSelection,

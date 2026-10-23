@@ -141,6 +141,7 @@ const cacheWarmingModel: ProviderModelSelection = {
 	providerId: "openai",
 };
 const cacheWarmingProviderModel: ProviderModel = {
+	limits: { contextWindowTokens: 200_000 },
 	modelId: cacheWarmingModel.modelId,
 	pricing: {
 		cacheReadPerMillionTokensUsd: 0.4,
@@ -3189,6 +3190,7 @@ describe("Session Host lifetime", () => {
 				fromPartial<ResolvedCompactionSettings>({
 					autoAvailable: modelRequestStarted,
 					enabled: true,
+					modelContextLimit: 65_536,
 					thresholdTokens: 1,
 				}),
 		};
@@ -3277,6 +3279,7 @@ describe("Session Host lifetime", () => {
 				fromPartial<ResolvedCompactionSettings>({
 					autoAvailable: recorder.requests.length > modelRequestsBeforeTurn,
 					enabled: true,
+					modelContextLimit: 65_536,
 					thresholdTokens: 1,
 				}),
 		};
