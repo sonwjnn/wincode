@@ -108,12 +108,18 @@ export function createClipboardAdapter(
 				preferredTypes: CLIPBOARD_IMAGE_MIME_TYPES,
 				selection: "clipboard",
 			});
-			if (result.status === "limit-exceeded") {
-				void logger.warn(
-					"Clipboard image exceeds the read budget; falling back to text."
-				);
-			}
 			if (result.status !== "read") {
+				if (result.status === "limit-exceeded") {
+					void logger.warn(
+						"Clipboard image exceeds the read budget; falling back to text."
+					);
+				} else if (result.status === "failed") {
+					void logger.warn("Clipboard read failed.", {
+						error: getErrorMessage(result.error, "Unknown clipboard error."),
+					});
+				} else if (result.status === "timed-out") {
+					void logger.warn("Clipboard read timed out.");
+				}
 				return;
 			}
 			const mimeType = result.representation.mimeType;
