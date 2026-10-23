@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createProviderCollection, type ProviderModel } from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { resolveCompactionSettings } from "@/modules/sessions/compaction/config";
+import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
@@ -9,6 +10,7 @@ import {
 	turnCostUsd,
 } from "@/modules/sessions/usage/session-usage";
 import {
+	compactionId,
 	modelId,
 	modelIdentity,
 	sessionId,
@@ -187,10 +189,13 @@ describe("summarizeSessionUsage", () => {
 		]);
 
 		expect(summary).toMatchObject({
+			inputTokens: 190,
+			outputTokens: 15,
 			cacheReadTokens: 90,
 			cacheWriteTokens: 30,
 			contextTokens: 100,
 		});
+		expect(summary?.cacheHitPercent).toBeCloseTo(66.7, 1);
 		expect(messages).toEqual(transcript);
 	});
 
@@ -223,6 +228,8 @@ describe("summarizeSessionUsage", () => {
 		);
 
 		expect(summary).toMatchObject({
+			inputTokens: 1_000_100,
+			outputTokens: 6,
 			cacheReadTokens: 700_020,
 			cacheWarmingStatus: "scheduled",
 			contextTokens: 105,
@@ -240,6 +247,60 @@ describe("summarizeSessionUsage", () => {
 				model
 			)
 		).toBeNull();
+	});
+
+	test("includes compaction usage in session totals and pricing, not latest-turn context", () => {
+		const compaction: SessionCompaction = {
+			id: compactionId("compaction-1"),
+			sessionId: sessionId("compaction-session"),
+			sequence: 1,
+			summary: { coveredMessageIds: [], formatVersion: 1, text: "summary" },
+			firstKeptUiMessageId: sessionMessageId("assistant-2"),
+			throughMessageUiId: sessionMessageId("assistant-2"),
+			tokensBefore: 100,
+			estimatedTokensAfter: 20,
+			trigger: "manual",
+			summarizationModel: model,
+			summarizationUsage: {
+				cacheReadTokens: 5,
+				cacheWriteTokens: 4,
+				inputTokens: 20,
+				outputTokens: 3,
+			},
+			createdAt: new Date(0),
+			completedAt: new Date(0),
+		};
+		const summary = summarizeSessionUsage(
+			[
+				assistant("assistant-1", {
+					inputTokens: 100,
+					outputTokens: 5,
+					cacheReadTokens: 30,
+					cacheWriteTokens: 10,
+				}),
+				assistant("assistant-2", {
+					inputTokens: 90,
+					outputTokens: 10,
+					cacheReadTokens: 60,
+				}),
+			],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[compaction]
+		);
+
+		expect(summary).toMatchObject({
+			inputTokens: 210,
+			outputTokens: 18,
+			cacheReadTokens: 95,
+			cacheWriteTokens: 14,
+			contextTokens: 100,
+			costedCompactions: 1,
+		});
+		expect(summary?.cacheHitPercent).toBeCloseTo(66.7, 1);
+		expect(summary?.costUsd).toBeCloseTo(0.000_242_75, 9);
 	});
 
 	test("accumulates exact Provider Model prices across measured turns", () => {

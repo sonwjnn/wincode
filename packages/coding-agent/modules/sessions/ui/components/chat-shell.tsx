@@ -328,7 +328,8 @@ export function ChatShell({
 				model,
 				sessionUsageEntries,
 				cacheWarmingStatus,
-				providerModels
+				providerModels,
+				compactions
 			),
 		[
 			displayMessages,
@@ -336,6 +337,7 @@ export function ChatShell({
 			sessionUsageEntries,
 			cacheWarmingStatus,
 			providerModels,
+			compactions,
 		]
 	);
 	useEffect(() => {

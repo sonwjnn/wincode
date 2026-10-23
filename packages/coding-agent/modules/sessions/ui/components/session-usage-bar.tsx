@@ -3,11 +3,51 @@ import { isNull } from "@wincode/utils";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionUsageSummary } from "../../usage/session-usage";
 
-const CONTEXT_WARNING_PERCENT = 80;
+const CONTEXT_WARNING_PERCENT = 70;
+const CONTEXT_ERROR_PERCENT = 90;
+
+const contextColorForPercent = (
+	percent: number | null
+): "error" | "textMuted" | "warning" => {
+	if (percent === null || percent <= CONTEXT_WARNING_PERCENT) {
+		return "textMuted";
+	}
+	if (percent <= CONTEXT_ERROR_PERCENT) {
+		return "warning";
+	}
+	return "error";
+};
 
 type SessionUsageBarProps = {
 	autoCompact?: boolean;
 	summary: SessionUsageSummary;
+};
+
+const tokenStatsForSummary = (summary: SessionUsageSummary): string => {
+	const uncachedInputTokens = Math.max(
+		0,
+		summary.inputTokens - summary.cacheReadTokens - summary.cacheWriteTokens
+	);
+	return [
+		uncachedInputTokens > 0
+			? `↑${formatModelTokenCount(uncachedInputTokens)}`
+			: null,
+		summary.outputTokens > 0
+			? `↓${formatModelTokenCount(summary.outputTokens)}`
+			: null,
+		summary.cacheReadTokens > 0
+			? `R${formatModelTokenCount(summary.cacheReadTokens)}`
+			: null,
+		summary.cacheWriteTokens > 0
+			? `W${formatModelTokenCount(summary.cacheWriteTokens)}`
+			: null,
+		(summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0) &&
+		summary.cacheHitPercent !== null
+			? `CH${summary.cacheHitPercent.toFixed(1)}%`
+			: null,
+	]
+		.filter((stat) => stat !== null)
+		.join(" ");
 };
 
 export function SessionUsageBar({
@@ -25,31 +65,19 @@ export function SessionUsageBar({
 					100,
 					Math.max(0, (summary.contextTokens / summary.contextLimit) * 100)
 				);
-	const percentColor =
-		contextPercent !== null && contextPercent >= CONTEXT_WARNING_PERCENT
-			? colors.error
-			: colors.textMuted;
+	const percentColor = colors[contextColorForPercent(contextPercent)];
 	const contextText =
 		contextPercent === null || isNull(summary.contextLimit)
 			? tokensText
 			: `${contextPercent.toFixed(1)}%/${formatModelTokenCount(
 					summary.contextLimit
 				).toLowerCase()}`;
+	const tokenStats = tokenStatsForSummary(summary);
 
 	return (
 		<box flexDirection="row" flexShrink={0}>
 			<text fg={colors.textMuted}>
-				{contextPercent === null ? (
-					<span>{contextText}</span>
-				) : (
-					<span fg={percentColor}>{contextText}</span>
-				)}
-				{autoCompact ? <span> (auto)</span> : null}
-				{summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0 ? (
-					<span>{` ↑${formatModelTokenCount(
-						summary.cacheReadTokens
-					)} ↓${formatModelTokenCount(summary.cacheWriteTokens)}`}</span>
-				) : null}
+				{tokenStats.length > 0 ? <span>{tokenStats}</span> : null}
 				{summary.cacheWarmingStatus === "idle" ? null : (
 					<span>
 						{summary.cacheWarmingStatus === "scheduled"
@@ -64,6 +92,12 @@ export function SessionUsageBar({
 					// invoice. See ADR-0015. Partial totals exclude unpriced usage.
 					<span>{`  ~${formatModelUsdAmount(summary.costUsd)}${summary.costCoverage === "partial" ? " (partial)" : ""}`}</span>
 				)}
+				{contextPercent === null ? (
+					<span>{`  ${contextText}`}</span>
+				) : (
+					<span fg={percentColor}>{`  ${contextText}`}</span>
+				)}
+				{autoCompact ? <span> (auto)</span> : null}
 			</text>
 		</box>
 	);
