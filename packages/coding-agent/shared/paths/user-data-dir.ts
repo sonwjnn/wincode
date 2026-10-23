@@ -53,12 +53,15 @@ export const resolveOperatingSystemUserDataDir = (): string =>
 		APP_DATA_DIR_NAME
 	);
 
-export const resolveUserDataDir = (): string => {
-	let base = resolvePlatformUserDataBase(os.homedir());
+export const resolveUserDataDir = (
+	environment: Readonly<Record<string, string | undefined>> = process.env,
+	homeRoot = os.homedir()
+): string => {
+	let base = resolvePlatformUserDataBase(homeRoot);
 	if (process.platform === "win32") {
-		base = process.env.APPDATA ?? base;
+		base = environment.APPDATA ?? base;
 	} else if (process.platform !== "darwin") {
-		base = process.env.XDG_DATA_HOME ?? base;
+		base = environment.XDG_DATA_HOME ?? base;
 	}
 	return path.join(base, APP_DATA_DIR_NAME);
 };

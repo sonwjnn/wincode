@@ -150,6 +150,49 @@ test("Agent Runtime streams model output and reports normalized step usage", asy
 	});
 });
 
+test("Agent Runtime does not start a model request beyond the configured step budget", async () => {
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) =>
+			index === 0
+				? scriptedEvents(
+						{
+							input: { path: "fixture.txt" },
+							toolCallId: "budget-read-call",
+							toolName: "read",
+							type: "tool-call",
+						},
+						{ type: "finish" }
+					)
+				: scriptedEvents(
+						{ delta: "unexpected request", type: "text-delta" },
+						{ type: "finish" }
+					)
+	);
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(
+			buildTurn([
+				{
+					definition: readDefinition,
+					execute: async () => ({
+						output: { content: "fixture" },
+						type: "success",
+					}),
+				},
+			]),
+			{ maximumModelSteps: 1 }
+		)
+	);
+
+	expect(requests).toHaveLength(1);
+	expect(
+		events.filter(({ type }) => type === "model-step-started")
+	).toHaveLength(1);
+	expect(events.at(-1)).toMatchObject({
+		failure: { code: "model-step-limit", retry: "never", source: "runtime" },
+		type: "agent-turn-failed",
+	});
+});
+
 test("Agent Runtime isolates Session request observers from active Turns", async () => {
 	const { providerCollection, requests } = scriptedProvider(() =>
 		scriptedEvents(

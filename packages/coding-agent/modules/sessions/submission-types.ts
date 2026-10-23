@@ -35,6 +35,7 @@ export type SessionSendInput = Readonly<{
 	/** A reserved user-message identity for a new Submission. */
 	reservedMessageId?: SessionMessageId;
 	sessionModel: ProviderModelSelection;
+	maximumModelSteps?: number;
 	sessionThinkingLevel?: ThinkingLevel;
 	model: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;

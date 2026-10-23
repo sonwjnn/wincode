@@ -877,6 +877,7 @@ export class AgentSessionImpl implements AgentSession {
 				model: input.model,
 				...omitUndefined({
 					sessionThinkingLevel: input.sessionThinkingLevel,
+					maximumModelSteps: input.maximumModelSteps,
 					submissionId: input.submissionId,
 					thinkingLevel: input.thinkingLevel,
 				}),

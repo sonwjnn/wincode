@@ -257,6 +257,51 @@ describe("application dispatch", () => {
 		});
 	});
 
+	test("routes a strict model-step ceiling through the JSON CLI contract", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		let routedInvocation: InvocationOptions | undefined;
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, [
+				"--mode",
+				"json",
+				"--prompt",
+				"Read the fixture.",
+				"--max-model-steps",
+				"3",
+			]),
+			{
+				...noOpRunners,
+				json: async (context) => {
+					routedInvocation = context.invocation;
+					return 0;
+				},
+			}
+		);
+
+		expect(exitCode).toBe(0);
+		expect(routedInvocation?.maximumModelSteps).toBe(3);
+	});
+
+	test("rejects a zero model-step ceiling before any Provider request", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, [
+				"--mode",
+				"json",
+				"--prompt",
+				"Read the fixture.",
+				"--max-model-steps",
+				"0",
+			]),
+			noOpRunners
+		);
+
+		expect(exitCode).toBe(2);
+		expect(stderr.output).toContain("positive integer");
+	});
+
 	test("routes explicit off through the print CLI contract", async () => {
 		const stdout = capture();
 		const stderr = capture();

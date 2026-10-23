@@ -205,14 +205,25 @@ bun install --frozen-lockfile
 | Command | Purpose |
 | --- | --- |
 | `bun run dev:cli` | Run the CLI in watch mode |
-| `bun run test` | Run the repository Default test portfolio |
+| `./test.sh` | Run Default tests with isolated credentials and temporary user data |
 | `bun run test:e2e` | Run each E2E journey in its own process |
 | `bun test --timeout=30000 path/to/file.test.ts` | Run one test file directly during development, not the full portfolio |
 | `bun run check-types` | Type-check every workspace package |
 | `bun run check` | Run Ultracite checks |
 | `bun run fix` | Apply Ultracite formatting and safe fixes |
 
-Use `bun run test` and `bun run test:e2e` for full portfolios. Bare `bun test` uses Bun's 5-second default timeout and bypasses the repository runner's discovery and environment setup.
+Use `./test.sh` for the Default portfolio and `bun run test:e2e` for E2E journeys.
+`test.sh` works from any directory, forwards runner arguments (for example,
+`./test.sh --package coding-agent`), uses temporary HOME/XDG data directories
+and Session database indexes, and does not inherit Provider credentials or load
+checkout `.env` files in the runner and test processes. The Session index override
+is honored only with `NODE_ENV=test`; production keeps its OS-wide index. It leaves your real `auth.json` untouched and removes
+temporary data on exit. This is environment isolation, not an OS/network sandbox;
+test code and explicitly spawned subprocesses still have your process privileges.
+External Provider tests and manual tmux checks remain separate and require explicit
+approval before billable requests. `bun run test` remains the underlying runner.
+Bare `bun test` uses Bun's 5-second default timeout and bypasses the repository
+runner's discovery and environment setup.
 
 
 Tests belong to the owning package's `test/` tree. Keep small package test trees

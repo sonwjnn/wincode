@@ -563,15 +563,18 @@ describe("NewSessionView composer focus", () => {
 				"startup-plugin-startup-overview-plugin"
 			);
 			await act(async () => setup.renderOnce());
-			await waitForHomeFrame(setup, "startup-overview-plugin");
+			await waitForHomeFrame(setup, "/trusted/plugins/startup-overview.ts");
 			const pluginRow = setup
 				.captureCharFrame()
 				.split("\n")
-				.find((line) => line.includes("startup-overview-plugin"));
-			expect(pluginRow?.indexOf("startup-overview-plugin")).toBeGreaterThan(0);
+				.find((line) => line.includes("/trusted/plugins/startup-overview.ts"));
+			expect(
+				pluginRow?.indexOf("/trusted/plugins/startup-overview.ts")
+			).toBeGreaterThan(0);
 			const frame = captureNormalizedHomeFrame(setup);
 			expect(frame).toContain("[Plugins]");
-			expect(frame).toContain("startup-overview-plugin");
+			expect(frame).toContain("/trusted/plugins/startup-overview.ts");
+			expect(frame).not.toContain("startup-overview-plugin");
 			expect(setup.renderer.currentFocusedRenderable?.id ?? null).toBe(
 				"new-session-view-composer"
 			);
