@@ -57,7 +57,7 @@ const buildWorkspaceRuntimeDependencies = async (
 	}
 
 	console.log("\nBuilding workspace runtime dependencies");
-	const result = await $`bun run build:utils`.cwd(root).nothrow();
+	const result = await $`bun --no-env-file run build:utils`.cwd(root).nothrow();
 	if (result.exitCode !== 0) {
 		console.error(
 			`Workspace runtime dependency build failed (exit ${result.exitCode}).`
@@ -146,6 +146,7 @@ const runDefaultPackage = async (
 		const result = spawn(
 			[
 				"bun",
+				"--no-env-file",
 				"test",
 				"--timeout",
 				String(TEST_TIMEOUT_MS),
@@ -262,6 +263,7 @@ const runE2EFile = async (
 		const result = spawn(
 			[
 				"bun",
+				"--no-env-file",
 				"test",
 				"--timeout",
 				String(TEST_TIMEOUT_MS),

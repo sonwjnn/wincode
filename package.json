@@ -24,8 +24,8 @@
   "scripts": {
     "build:utils": "bun run --cwd packages/utils build",
     "check-types": "bun run --parallel --filter '*' check-types",
-    "test": "bun scripts/test-portfolio.ts default",
-    "test:e2e": "bun scripts/test-portfolio.ts e2e",
+    "test": "bun --no-env-file scripts/test-portfolio.ts default",
+    "test:e2e": "bun --no-env-file scripts/test-portfolio.ts e2e",
     "sync-provider-model-catalog": "bun run packages/ai/scripts/sync-provider-model-catalog.ts",
     "dev:cli": "bun run --cwd packages/coding-agent dev",
     "check": "ultracite check",
