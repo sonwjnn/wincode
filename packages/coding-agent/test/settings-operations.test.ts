@@ -10,6 +10,7 @@ import type {
 	SettingRuntimeContext,
 } from "@/modules/settings/types";
 import type { EditMode } from "@/modules/tools";
+import { DEFAULT_COPY_BEHAVIOR } from "@/shared/clipboard/copy-behavior";
 import { createConfigStore } from "@/shared/config/config-store";
 import {
 	TEST_CONFIG_ROOT as CONFIG_ROOT,
@@ -20,27 +21,27 @@ import {
 const WORKSPACE = "/workspace";
 
 describe("createSettingsOperations", () => {
-	test("defaults Copy on select to enabled without writing missing config", async () => {
+	test("defaults Copy behavior without writing missing config", async () => {
 		const files: Record<string, string> = {};
 		const operations = createSettingsOperations({
 			configStore: createTestStore(files),
 			workspace: WORKSPACE,
 		});
 		const setting = (await operations.getSettings()).find(
-			({ descriptor }) => descriptor.id === "clipboard.copyOnSelect"
+			({ descriptor }) => descriptor.id === "clipboard.copy"
 		);
 		expect(setting).toMatchObject({
 			available: true,
 			source: { kind: "default" },
-			value: true,
+			value: DEFAULT_COPY_BEHAVIOR,
 		});
 		expect(files).toEqual({});
 	});
 	test("uses the global copy preference and leaves project config untouched", async () => {
 		const projectConfig =
-			'{"clipboard":{"copyOnSelect":true},"agents":{"build":{"description":"Keep"}}}';
+			'{"clipboard":{"copy":"select"},"agents":{"build":{"description":"Keep"}}}';
 		const files: Record<string, string> = {
-			[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copyOnSelect":false}}',
+			[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copy":"manual"}}',
 			[`${WORKSPACE}/.wincode/settings.json`]: projectConfig,
 		};
 		const operations = createSettingsOperations({
@@ -49,18 +50,18 @@ describe("createSettingsOperations", () => {
 		});
 
 		const setting = (await operations.getSettings()).find(
-			({ descriptor }) => descriptor.id === "clipboard.copyOnSelect"
+			({ descriptor }) => descriptor.id === "clipboard.copy"
 		);
 
 		expect(setting).toMatchObject({
 			source: { kind: "config", scope: "global" },
-			value: false,
+			value: "manual",
 		});
 		expect(files[`${WORKSPACE}/.wincode/settings.json`]).toBe(projectConfig);
 	});
-	test("writes and resets Copy on select in global config only", async () => {
+	test("writes and resets Copy behavior in global config only", async () => {
 		const projectConfig =
-			'{"clipboard":{"copyOnSelect":false},"agents":{"build":{"description":"Keep"}}}';
+			'{"clipboard":{"copy":"select"},"agents":{"build":{"description":"Keep"}}}';
 		const files: Record<string, string> = {
 			[`${WORKSPACE}/.wincode/settings.json`]: projectConfig,
 		};
@@ -69,20 +70,20 @@ describe("createSettingsOperations", () => {
 			workspace: WORKSPACE,
 		});
 
-		const disabled = await operations.setValue("clipboard.copyOnSelect", false);
-		expect(disabled).toMatchObject({
+		const written = await operations.setValue("clipboard.copy", "manual");
+		expect(written).toMatchObject({
 			source: { kind: "config", scope: "global" },
-			value: false,
+			value: "manual",
 		});
 		expect(JSON.parse(files[`${CONFIG_ROOT}/settings.json`] ?? "{}")).toEqual({
-			clipboard: { copyOnSelect: false },
+			clipboard: { copy: "manual" },
 		});
 		expect(files[`${WORKSPACE}/.wincode/settings.json`]).toBe(projectConfig);
 
-		const reset = await operations.resetValue("clipboard.copyOnSelect");
+		const reset = await operations.resetValue("clipboard.copy");
 		expect(reset).toMatchObject({
 			source: { kind: "default" },
-			value: true,
+			value: DEFAULT_COPY_BEHAVIOR,
 		});
 		expect(JSON.parse(files[`${CONFIG_ROOT}/settings.json`] ?? "{}")).toEqual({
 			clipboard: {},
@@ -92,7 +93,7 @@ describe("createSettingsOperations", () => {
 	test("reset clears the selected JSONC preference and leaves shadowed JSON intact", async () => {
 		const primaryGlobalConfig = `${CONFIG_ROOT}/settings.json`;
 		const selectedGlobalConfig = `${CONFIG_ROOT}/settings.jsonc`;
-		const primaryContents = '{"clipboard":{"copyOnSelect":false}}';
+		const primaryContents = '{"clipboard":{"copy":"manual"}}';
 		const files: Record<string, string> = {
 			[primaryGlobalConfig]: primaryContents,
 			[selectedGlobalConfig]: primaryContents,
@@ -102,11 +103,11 @@ describe("createSettingsOperations", () => {
 			workspace: WORKSPACE,
 		});
 
-		const reset = await operations.resetValue("clipboard.copyOnSelect");
+		const reset = await operations.resetValue("clipboard.copy");
 
 		expect(reset).toMatchObject({
 			source: { kind: "default" },
-			value: true,
+			value: DEFAULT_COPY_BEHAVIOR,
 		});
 		expect(files[primaryGlobalConfig]).toBe(primaryContents);
 		expect(JSON.parse(files[selectedGlobalConfig] ?? "{}")).toEqual({
@@ -124,13 +125,13 @@ describe("createSettingsOperations", () => {
 			workspace: WORKSPACE,
 		});
 
-		await operations.setValue("clipboard.copyOnSelect", false);
-		expect(changes).toEqual([{ id: "clipboard.copyOnSelect", value: false }]);
+		await operations.setValue("clipboard.copy", "manual");
+		expect(changes).toEqual([{ id: "clipboard.copy", value: "manual" }]);
 
-		await operations.resetValue("clipboard.copyOnSelect");
+		await operations.resetValue("clipboard.copy");
 		expect(changes).toEqual([
-			{ id: "clipboard.copyOnSelect", value: false },
-			{ id: "clipboard.copyOnSelect", value: true },
+			{ id: "clipboard.copy", value: "manual" },
+			{ id: "clipboard.copy", value: DEFAULT_COPY_BEHAVIOR },
 		]);
 	});
 	test("writes and resets Edit Mode through the session callback before notifying the view", async () => {

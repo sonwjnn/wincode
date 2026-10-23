@@ -23,6 +23,21 @@ export const expandRangeOverNeighbouringSpace = (
 
 export type TextReplacementRange = Readonly<OffsetRange & { text: string }>;
 
+/** Keeps ranges fully inside `selection` and rebases them to its start. */
+export const rebaseTextRangesWithin = (
+	ranges: readonly TextReplacementRange[],
+	selection: OffsetRange
+): TextReplacementRange[] =>
+	ranges
+		.filter(
+			({ start, end }) => start >= selection.start && end <= selection.end
+		)
+		.map(({ start, end, text }) => ({
+			end: end - selection.start,
+			start: start - selection.start,
+			text,
+		}));
+
 /** Splices each range's replacement text into the original, right to left. */
 export const replaceTextRanges = (
 	text: string,

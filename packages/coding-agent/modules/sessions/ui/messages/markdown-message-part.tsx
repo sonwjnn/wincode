@@ -1,12 +1,8 @@
 import { memo, useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import {
-	getMarkdownTreeSitterClient,
-	resolveSyntaxStyle,
-	setTreeSitterClientForTests,
-} from "./syntax-style";
-
-export const setMarkdownTreeSitterClientForTests = setTreeSitterClientForTests;
+import type { SyntaxStyleVariant } from "../syntax-style";
+import { getMarkdownTreeSitterClient } from "../tree-sitter-client";
+import { useSyntaxStyle } from "../use-syntax-style";
 
 /** Printable output characters plus tab and newline (structure must survive). */
 const isMarkdownSafeCharacter = (code: number): boolean =>
@@ -38,13 +34,9 @@ export const MarkdownContent = memo(function MarkdownContent({
 }: {
 	text: string;
 	streaming?: boolean;
-	variant?: "standard" | "thinking";
+	variant?: SyntaxStyleVariant;
 }) {
-	const { colors } = useTheme();
-	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(colors, variant),
-		[colors, variant]
-	);
+	const syntaxStyle = useSyntaxStyle(variant);
 	const sanitized = useMemo(() => stripMarkdownControlCharacters(text), [text]);
 
 	return (
@@ -67,13 +59,10 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 }: {
 	text: string;
 	streaming?: boolean;
-	variant?: "standard" | "thinking";
+	variant?: SyntaxStyleVariant;
 }) {
+	const syntaxStyle = useSyntaxStyle(variant);
 	const { colors } = useTheme();
-	const syntaxStyle = useMemo(
-		() => resolveSyntaxStyle(colors, variant),
-		[colors, variant]
-	);
 	const content = useMemo(() => {
 		const sanitized = stripMarkdownControlCharacters(text);
 		return variant === "thinking" ? sanitized : sanitized.trim();

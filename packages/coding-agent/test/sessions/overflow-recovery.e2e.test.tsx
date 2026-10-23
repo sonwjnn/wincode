@@ -201,7 +201,7 @@ test("continues the compacted Session Context after a provider context overflow"
 		).toHaveLength(1);
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();

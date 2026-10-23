@@ -1,4 +1,6 @@
 import {
+	type OffsetRange,
+	rebaseTextRangesWithin,
 	replaceTextRanges,
 	type TextReplacementRange,
 } from "@/shared/utils/text-ranges";
@@ -40,6 +42,14 @@ export const expandPastedText = (
 	}
 	return replaceTextRanges(text, occurrences);
 };
+
+/** Expands only the tracked markers fully covered by the selected range. */
+export const expandPastedTextInRange = (
+	text: string,
+	selection: OffsetRange,
+	markers: readonly TextReplacementRange[]
+): string =>
+	replaceTextRanges(text, rebaseTextRangesWithin(markers, selection));
 
 /** Removes paste markers whose payload cannot be rebuilt from restored text. */
 export const stripPastedTextTokens = (text: string): string =>

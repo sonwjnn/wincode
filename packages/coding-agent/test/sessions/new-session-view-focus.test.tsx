@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -57,8 +56,9 @@ import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import { testRenderWithClipboard } from "../support/clipboard";
 import { modelId } from "../support/identifiers";
-import { flushTestRenderer } from "../support/opentui";
+import { flushTestRenderer, frameIncludes } from "../support/opentui";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const previousLocalDatabasePath = process.env.WINCODE_LOCAL_DB_PATH;
@@ -295,7 +295,7 @@ const waitForHomeModelStatus = async (
 		for (let attempt = 0; attempt < 30; attempt += 1) {
 			await Bun.sleep(10);
 			await setup.renderOnce();
-			if (setup.captureCharFrame().includes(storedDefault)) {
+			if (frameIncludes(setup, storedDefault)) {
 				break;
 			}
 		}
@@ -392,7 +392,10 @@ const renderHomeView = async (
 			</ConfigProvider>
 		</ThemeProvider>
 	);
-	const setup = await testRender(app, { height: 24, width: 120 });
+	const setup = await testRenderWithClipboard(app, {
+		height: 24,
+		width: 120,
+	});
 	await act(async () => {
 		await Bun.sleep(20);
 		await setup.renderOnce();
@@ -434,7 +437,7 @@ const submitHomePrompt = async (setup: TestRendererSetup): Promise<void> => {
 
 describe("startup resource name wrapping", () => {
 	test("keeps a long resource name intact when the list wraps", async () => {
-		const setup = await testRender(
+		const setup = await testRenderWithClipboard(
 			<CompactNameList
 				color="#ffffff"
 				items={[
@@ -770,7 +773,10 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(app, { height: 24, width: 100 });
+		const setup = await testRenderWithClipboard(app, {
+			height: 24,
+			width: 100,
+		});
 		try {
 			await act(async () => {
 				await Bun.sleep(20);
@@ -849,7 +855,10 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(app, { height: 24, width: 120 });
+		const setup = await testRenderWithClipboard(app, {
+			height: 24,
+			width: 120,
+		});
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
@@ -931,7 +940,10 @@ describe("NewSessionView composer focus", () => {
 		);
 		let renderedSetup: TestRendererSetup | undefined;
 		await act(async () => {
-			const mounted = await testRender(app, { height: 24, width: 100 });
+			const mounted = await testRenderWithClipboard(app, {
+				height: 24,
+				width: 100,
+			});
 			renderedSetup = mounted;
 			await Bun.sleep(20);
 			await mounted.renderOnce();
@@ -1045,11 +1057,15 @@ describe("NewSessionView composer focus", () => {
 				</ConfigProvider>
 			</ThemeProvider>
 		);
-		const setup = await testRender(app, { height: 30, width: 100 });
+		const setup = await testRenderWithClipboard(app, {
+			height: 30,
+			width: 100,
+		});
 		try {
 			await act(async () => {
 				await Bun.sleep(20);
 				await setup.renderOnce();
+				await setup.waitForVisualIdle();
 			});
 			const composer = setup.renderer.root.findDescendantById(
 				"new-session-view-composer"

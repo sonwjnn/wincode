@@ -8,10 +8,8 @@ import {
 } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { act, useEffect, useState } from "react";
-import {
-	MarkdownMessagePart,
-	setMarkdownTreeSitterClientForTests,
-} from "@/modules/sessions/ui/messages/markdown-message-part";
+import { MarkdownMessagePart } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 
 /**
@@ -195,18 +193,18 @@ const renderFrame = async (
 
 describe("MarkdownMessagePart", () => {
 	beforeAll(() => {
-		setMarkdownTreeSitterClientForTests(
+		setTreeSitterClientOverride(
 			new MockTreeSitterClient({ autoResolveTimeout: 0 })
 		);
 	});
 
 	afterAll(() => {
-		setMarkdownTreeSitterClientForTests(null);
+		setTreeSitterClientOverride(null);
 	});
 
 	test("standalone bold bracket titles keep their preview style after highlighting without changing text", async () => {
 		const client = new SectionTitleTreeSitterClient();
-		setMarkdownTreeSitterClientForTests(client);
+		setTreeSitterClientOverride(client);
 		const setup = await testRender(
 			<ThemeProvider themeName="ayu">
 				<MarkdownMessagePart streaming text="**[Final Chorus]**" />
@@ -236,7 +234,7 @@ describe("MarkdownMessagePart", () => {
 			client.resolveAllHighlightOnce();
 			setup.renderer.destroy();
 			await client.destroy();
-			setMarkdownTreeSitterClientForTests(
+			setTreeSitterClientOverride(
 				new MockTreeSitterClient({ autoResolveTimeout: 0 })
 			);
 		}
@@ -244,7 +242,7 @@ describe("MarkdownMessagePart", () => {
 
 	test("normal inline links retain link-label styling after the section-title fix", async () => {
 		const client = new SectionTitleTreeSitterClient();
-		setMarkdownTreeSitterClientForTests(client);
+		setTreeSitterClientOverride(client);
 		const setup = await testRender(
 			<ThemeProvider themeName="ayu">
 				<MarkdownMessagePart
@@ -272,7 +270,7 @@ describe("MarkdownMessagePart", () => {
 			client.resolveAllHighlightOnce();
 			setup.renderer.destroy();
 			await client.destroy();
-			setMarkdownTreeSitterClientForTests(
+			setTreeSitterClientOverride(
 				new MockTreeSitterClient({ autoResolveTimeout: 0 })
 			);
 		}
@@ -284,7 +282,10 @@ describe("MarkdownMessagePart", () => {
 		const markdown = new MarkdownRenderable(setup.renderer, {
 			id: "streamed-prose",
 			content: "## First\n\nStable text.\n\n## Final Chorus\n\nWhen the world",
-			syntaxStyle: SyntaxStyle.fromStyles({ default: { fg: "#cccccc" } }),
+			syntaxStyle: SyntaxStyle.fromStyles(
+				{ default: { fg: "#cccccc" } },
+				setup.renderer.nativeScene
+			),
 			streaming: true,
 			internalBlockMode: "top-level",
 			treeSitterClient: client,
@@ -323,7 +324,10 @@ describe("MarkdownMessagePart", () => {
 		const markdown = new MarkdownRenderable(setup.renderer, {
 			id: "finalizing-prose",
 			content: "## Final Chorus\n\nResponse remains visible",
-			syntaxStyle: SyntaxStyle.fromStyles({ default: { fg: "#cccccc" } }),
+			syntaxStyle: SyntaxStyle.fromStyles(
+				{ default: { fg: "#cccccc" } },
+				setup.renderer.nativeScene
+			),
 			streaming: true,
 			internalBlockMode: "top-level",
 			treeSitterClient: client,
@@ -466,7 +470,7 @@ describe("MarkdownMessagePart", () => {
 
 	test("a completed response is visible after its initial highlight settles", async () => {
 		const client = new MockTreeSitterClient();
-		setMarkdownTreeSitterClientForTests(client);
+		setTreeSitterClientOverride(client);
 		const setup = await testRender(
 			<ThemeProvider themeName="opencode">
 				<MarkdownMessagePart streaming={false} text="Saved response" />
@@ -481,7 +485,7 @@ describe("MarkdownMessagePart", () => {
 		} finally {
 			client.resolveAllHighlightOnce();
 			setup.renderer.destroy();
-			setMarkdownTreeSitterClientForTests(
+			setTreeSitterClientOverride(
 				new MockTreeSitterClient({ autoResolveTimeout: 0 })
 			);
 		}
@@ -489,7 +493,7 @@ describe("MarkdownMessagePart", () => {
 
 	test("finalizing an assistant response keeps text visible while completion UI appears", async () => {
 		const client = new CountingTreeSitterClient({ autoResolveTimeout: 0 });
-		setMarkdownTreeSitterClientForTests(client);
+		setTreeSitterClientOverride(client);
 		const setup = await testRender(
 			<ThemeProvider themeName="opencode">
 				<FinalizingMarkdown />
@@ -515,7 +519,7 @@ describe("MarkdownMessagePart", () => {
 			expect(setup.captureCharFrame()).toContain("done");
 		} finally {
 			setup.renderer.destroy();
-			setMarkdownTreeSitterClientForTests(
+			setTreeSitterClientOverride(
 				new MockTreeSitterClient({ autoResolveTimeout: 0 })
 			);
 		}
@@ -527,14 +531,14 @@ describe("MarkdownMessagePart", () => {
 		// blank the message.
 		const client = new MockTreeSitterClient({ autoResolveTimeout: 0 });
 		client.setMockResult({ error: "worker init failed" });
-		setMarkdownTreeSitterClientForTests(client);
+		setTreeSitterClientOverride(client);
 		try {
 			const frame = await renderFrame("plain **text** here");
 			const codeFrame = await renderFrame("```ts\nconst answer = 42;\n```");
 			expect(frame).toContain("plain **text** here");
 			expect(codeFrame).toContain("const answer = 42;");
 		} finally {
-			setMarkdownTreeSitterClientForTests(null);
+			setTreeSitterClientOverride(null);
 		}
 	});
 });

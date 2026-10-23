@@ -1,101 +1,183 @@
 import { describe, expect, test } from "bun:test";
-import { handleSelection } from "@/shared/clipboard/copy-on-select";
-
-const selection = (text: string) => ({ getSelectedText: () => text });
-const baseRenderer = () => ({
-	copyToClipboardOSC52: () => false,
-	clearSelection: () => undefined,
-});
+import { type Renderable, Selection } from "@opentui/core";
+import {
+	ClipboardTooLargeError,
+	handleSelection,
+	registerClipboardTextTransform,
+} from "@/shared/clipboard";
+import { createRecordingClipboard, createSelection } from "./support/clipboard";
 
 describe("handleSelection", () => {
-	test("preserves the selection without copying or toasting when disabled", async () => {
-		let writes = 0;
-		let clears = 0;
+	test("does not copy or toast while copy-on-select is disabled", async () => {
 		const toasts: unknown[] = [];
-		await handleSelection(
-			selection("hello"),
-			{
-				...baseRenderer(),
-				clearSelection: () => {
-					clears += 1;
-				},
-			},
-			(toast) => toasts.push(toast),
-			{
-				enabled: false,
-				write: async () => {
-					writes += 1;
-					return true;
-				},
-			}
-		);
-		expect(writes).toBe(0);
-		expect(toasts).toHaveLength(0);
-		expect(clears).toBe(0);
-	});
+		const clipboard = createRecordingClipboard();
 
-	test("ignores empty selection", async () => {
-		let writes = 0;
-		const renderer = baseRenderer();
-		await handleSelection(selection(""), renderer, () => undefined, {
-			write: async () => {
-				writes += 1;
-				return true;
-			},
+		await handleSelection(createSelection("hello"), {
+			clipboard,
+			enabled: false,
+			show: (toast) => toasts.push(toast),
 		});
-		expect(writes).toBe(0);
+
+		expect(clipboard.writes).toEqual([]);
+		expect(toasts).toHaveLength(0);
 	});
 
-	test("writes once, toasts, and clears on success or failure", async () => {
-		for (const [result, expectedWidth] of [
-			[true, 30],
-			[false, undefined],
-		] as const) {
-			let clears = 0;
-			let writes = 0;
-			const toasts: { message: string; width?: number }[] = [];
+	test("does not copy selections that never dragged", async () => {
+		const toasts: unknown[] = [];
+		const clipboard = createRecordingClipboard();
+
+		for (const behavior of ["cell", "word", "line"] as const) {
 			await handleSelection(
-				selection("hello"),
+				createSelection(behavior, { behavior, isStart: true }),
 				{
-					...baseRenderer(),
-					clearSelection: () => {
-						clears += 1;
-					},
-				},
-				(toast) => toasts.push(toast),
-				{
-					write: async () => {
-						writes += 1;
-						return result;
-					},
+					clipboard,
+					show: (toast) => toasts.push(toast),
 				}
 			);
-			expect(writes).toBe(1);
-			expect(clears).toBe(1);
-			expect(toasts).toHaveLength(1);
-			expect(toasts[0]?.width).toBe(expectedWidth);
 		}
+
+		expect(clipboard.writes).toEqual([]);
+		expect(toasts).toHaveLength(0);
 	});
 
-	test("clears and reports rejected writes", async () => {
-		let clears = 0;
-		const toasts: string[] = [];
+	test("copies the focused renderable's clipboard text when it is selected", async () => {
+		const clipboard = createRecordingClipboard();
+		const focusedRenderable = {};
+		registerClipboardTextTransform(focusedRenderable, (text: string) =>
+			text.replace("[Pasted ~3 lines]", "one\ntwo\nthree")
+		);
+
 		await handleSelection(
-			selection("hello"),
+			createSelection("[Pasted ~3 lines]", {
+				selectedRenderables: [focusedRenderable],
+			}),
 			{
-				...baseRenderer(),
-				clearSelection: () => {
-					clears += 1;
-				},
-			},
-			(toast) => toasts.push(toast.message),
-			{
-				write: async () => {
-					throw new Error("failed");
-				},
+				clipboard,
+				focusedRenderable,
+				show: () => undefined,
 			}
 		);
-		expect(clears).toBe(1);
-		expect(toasts).toEqual(["Failed to copy selection."]);
+
+		expect(clipboard.writes).toEqual(["one\ntwo\nthree"]);
+	});
+
+	test("keeps the raw selection when the focused renderable has no clipboard transform", async () => {
+		const clipboard = createRecordingClipboard();
+		const focusedRenderable = {};
+
+		await handleSelection(
+			createSelection("raw", { selectedRenderables: [focusedRenderable] }),
+			{
+				clipboard,
+				focusedRenderable,
+				show: () => undefined,
+			}
+		);
+
+		expect(clipboard.writes).toEqual(["raw"]);
+	});
+
+	test("keeps the raw selection when the focused renderable is outside it", async () => {
+		const clipboard = createRecordingClipboard();
+		const focusedRenderable = {};
+		registerClipboardTextTransform(focusedRenderable, () => "transformed");
+
+		await handleSelection(createSelection("raw"), {
+			clipboard,
+			focusedRenderable,
+			show: () => undefined,
+		});
+
+		expect(clipboard.writes).toEqual(["raw"]);
+	});
+
+	test("uses the registered transform through a real Selection", async () => {
+		const clipboard = createRecordingClipboard();
+		const renderable = {
+			getSelectedText: () => "hello",
+			x: 0,
+			y: 0,
+		} as unknown as Renderable;
+		registerClipboardTextTransform(renderable, (text: string) => `${text}!`);
+		const selection = new Selection(
+			renderable,
+			{ x: 0, y: 0 },
+			{ x: 5, y: 0 },
+			"word"
+		);
+		selection.updateSelectedRenderables([renderable]);
+
+		await handleSelection(selection, {
+			clipboard,
+			focusedRenderable: renderable,
+			show: () => undefined,
+		});
+
+		expect(clipboard.writes).toEqual(["hello!"]);
+	});
+
+	test("ignores an empty selection", async () => {
+		const clipboard = createRecordingClipboard();
+
+		await handleSelection(createSelection(""), {
+			clipboard,
+			show: () => undefined,
+		});
+
+		expect(clipboard.writes).toEqual([]);
+	});
+
+	test("toasts success with the compact width after a copy", async () => {
+		const toasts: { message: string; variant?: string; width?: number }[] = [];
+
+		await handleSelection(createSelection("hello"), {
+			clipboard: createRecordingClipboard(),
+			show: (toast) => toasts.push(toast),
+		});
+
+		expect(toasts).toEqual([
+			{ message: "Copied to clipboard", variant: "success", width: 30 },
+		]);
+	});
+
+	test("stays silent when the write resolves without copying", async () => {
+		const toasts: unknown[] = [];
+
+		await handleSelection(createSelection("hello"), {
+			clipboard: { write: async () => "empty" },
+			show: (toast) => toasts.push(toast),
+		});
+
+		expect(toasts).toEqual([]);
+	});
+
+	test("reports a rejected write without claiming the selection was copied", async () => {
+		const toasts: { message: string; variant?: string }[] = [];
+
+		await handleSelection(createSelection("hello"), {
+			clipboard: createRecordingClipboard(async () => {
+				throw new Error("host failed");
+			}),
+			show: (toast) => toasts.push(toast),
+		});
+
+		expect(toasts).toEqual([
+			{ message: "Failed to copy selection.", variant: "error" },
+		]);
+	});
+
+	test("reports an oversized selection with the size-specific message", async () => {
+		const toasts: { message: string; variant?: string }[] = [];
+
+		await handleSelection(createSelection("hello"), {
+			clipboard: createRecordingClipboard(async () => {
+				throw new ClipboardTooLargeError();
+			}),
+			show: (toast) => toasts.push(toast),
+		});
+
+		expect(toasts).toEqual([
+			{ message: "Selection is too large to copy.", variant: "error" },
+		]);
 	});
 });

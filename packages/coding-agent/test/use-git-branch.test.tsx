@@ -8,24 +8,37 @@ import { act } from "react";
 import { getGitRepositoryWebUrl } from "@/shared/git/get-git-branch";
 import { useGitBranch } from "@/shared/git/use-git-branch";
 import { runGit } from "./support/git";
+import { flushTestRenderer, requireTestFrame } from "./support/opentui";
 
-function BranchProbe({ cwd }: { cwd: string }) {
+type BranchObserver = { current: string | null | undefined };
+
+function BranchProbe({
+	cwd,
+	observer,
+}: {
+	cwd: string;
+	observer: BranchObserver;
+}) {
 	const branch = useGitBranch(cwd);
+	observer.current = branch;
 	return <text>{branch ?? "no branch"}</text>;
 }
-const expectBranch = async (setup: TestRendererSetup, branch: string) => {
-	let frame = "";
-	for (let attempt = 0; attempt < 250; attempt++) {
+const expectBranch = async (
+	setup: TestRendererSetup,
+	observer: BranchObserver,
+	branch: string
+) => {
+	const deadline = Date.now() + 20_000;
+	while (Date.now() < deadline) {
 		await act(async () => {
 			await Bun.sleep(10);
 			await setup.renderOnce();
 		});
-		frame = setup.captureCharFrame();
-		if (frame.includes(branch)) {
-			break;
+		if (observer.current === branch) {
+			return;
 		}
 	}
-	expect(frame).toContain(branch);
+	throw new Error(`Timed out waiting for branch ${branch}`);
 };
 
 describe("git repository metadata", () => {
@@ -69,15 +82,19 @@ describe("git repository metadata", () => {
 
 	test("updates after checkout without changing the workspace path", async () => {
 		await runGit(dir, ["init", "--initial-branch=main"]);
-		const setup = await testRender(<BranchProbe cwd={dir} />, {
-			width: 80,
-			height: 2,
-		});
+		const observer: BranchObserver = { current: undefined };
+		const setup = await testRender(
+			<BranchProbe cwd={dir} observer={observer} />,
+			{
+				width: 80,
+				height: 2,
+			}
+		);
 		try {
-			await expectBranch(setup, "main");
+			await expectBranch(setup, observer, "main");
 
 			await runGit(dir, ["checkout", "-b", "feature/sidebar"]);
-			await expectBranch(setup, "feature/sidebar");
+			await expectBranch(setup, observer, "feature/sidebar");
 		} finally {
 			act(() => setup.renderer.destroy());
 		}
@@ -99,14 +116,20 @@ describe("git repository metadata", () => {
 			"initial",
 		]);
 		await runGit(repo, ["worktree", "add", "-b", "feature/first", worktree]);
-		const setup = await testRender(<BranchProbe cwd={worktree} />, {
-			width: 80,
-			height: 2,
-		});
+		const observer: BranchObserver = { current: undefined };
+		const setup = await testRender(
+			<BranchProbe cwd={worktree} observer={observer} />,
+			{
+				width: 80,
+				height: 2,
+			}
+		);
 		try {
-			await expectBranch(setup, "feature/first");
+			await expectBranch(setup, observer, "feature/first");
+			await flushTestRenderer(setup);
+			expect(requireTestFrame(setup)).toContain("feature/first");
 			await runGit(worktree, ["checkout", "-b", "feature/next"]);
-			await expectBranch(setup, "feature/next");
+			await expectBranch(setup, observer, "feature/next");
 		} finally {
 			act(() => setup.renderer.destroy());
 		}

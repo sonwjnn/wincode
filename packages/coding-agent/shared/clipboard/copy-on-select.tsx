@@ -1,65 +1,92 @@
-import type { CliRenderer, Selection } from "@opentui/core";
-import { useRenderer } from "@opentui/react";
+import type { KeyEvent, Selection } from "@opentui/core";
+import { useAppContext, useRenderer } from "@opentui/react";
 import { useEffect } from "react";
+import { useOptionalKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "../providers/toast/toast-provider";
-import type { ToastOptions } from "../providers/toast/types";
-import { writeClipboard } from "./clipboard";
-
-type SelectionRenderer = CliRenderer;
-
-export type HandleSelectionOptions = {
-	enabled?: boolean;
-	write?: typeof writeClipboard;
-};
-
-export async function handleSelection(
-	selection: Pick<Selection, "getSelectedText">,
-	renderer: Pick<SelectionRenderer, "clearSelection" | "copyToClipboardOSC52">,
-	show: (options: ToastOptions) => void,
-	{ enabled = true, write = writeClipboard }: HandleSelectionOptions = {}
-): Promise<void> {
-	if (!enabled) {
-		return;
-	}
-	const text = selection.getSelectedText();
-	if (!text) {
-		return;
-	}
-	try {
-		const copied = await write(renderer, text);
-		show({
-			message: copied ? "Copied to clipboard" : "Failed to copy selection.",
-			variant: copied ? "success" : "error",
-			...(copied ? { width: 30 } : {}),
-		});
-	} catch {
-		show({ message: "Failed to copy selection.", variant: "error" });
-	} finally {
-		renderer.clearSelection();
-	}
-}
+import type { CopyBehavior } from "./copy-behavior";
+import { useClipboard } from "./provider";
+import {
+	copySelection,
+	handleSelection,
+	handleSelectionKey,
+} from "./selection";
+import { subscribeSelectionCopyRequest } from "./selection-copy-requests";
 
 export type CopyOnSelectProps = {
-	enabled: boolean;
-	write?: typeof writeClipboard;
+	behavior: CopyBehavior;
 };
 
-export function CopyOnSelect({
-	enabled,
-	write = writeClipboard,
-}: CopyOnSelectProps) {
+export function CopyOnSelect({ behavior }: CopyOnSelectProps) {
 	const renderer = useRenderer();
+	const clipboard = useClipboard();
 	const toast = useToast();
+	const { keyHandler } = useAppContext();
+	const keyboardLayer = useOptionalKeyboardLayer();
+	const enabled = behavior === "select";
 
 	useEffect(() => {
 		const onSelection = (selection: Selection) => {
-			void handleSelection(selection, renderer, toast.show, { enabled, write });
+			void handleSelection(selection, {
+				clipboard,
+				enabled,
+				focusedRenderable: renderer.currentFocusedRenderable ?? undefined,
+				show: toast.show,
+			});
 		};
 		renderer.on("selection", onSelection);
 		return () => {
 			renderer.off("selection", onSelection);
 		};
-	}, [enabled, renderer, toast.show, write]);
+	}, [enabled, renderer, toast.show, clipboard]);
+
+	useEffect(
+		() =>
+			subscribeSelectionCopyRequest(() => {
+				if (enabled) {
+					return false;
+				}
+				if (keyboardLayer && !keyboardLayer.isTopLayer("base")) {
+					return false;
+				}
+				const selection = renderer.getSelection();
+				if (!selection) {
+					return false;
+				}
+				return copySelection(selection, {
+					clipboard,
+					focusedRenderable: renderer.currentFocusedRenderable ?? undefined,
+					show: toast.show,
+				});
+			}),
+		[enabled, keyboardLayer, renderer, toast.show, clipboard]
+	);
+
+	useEffect(() => {
+		if (!keyHandler) {
+			return;
+		}
+		const onKey = (key: KeyEvent) => {
+			if (keyboardLayer && !keyboardLayer.isTopLayer("base")) {
+				return;
+			}
+			handleSelectionKey(
+				key,
+				{
+					clearSelection: () => renderer.clearSelection(),
+					currentFocusedEditor: renderer.currentFocusedEditor,
+					currentFocusedRenderable: renderer.currentFocusedRenderable,
+					getSelection: () => renderer.getSelection(),
+				},
+				{ clipboard, show: toast.show }
+			);
+		};
+		// Run before dialog/session key handlers, just as OpenCode intercepts
+		// selection keys ahead of its app bindings.
+		keyHandler.prependListener("keypress", onKey);
+		return () => {
+			keyHandler.off("keypress", onKey);
+		};
+	}, [keyHandler, keyboardLayer, renderer, toast.show, clipboard]);
 
 	return null;
 }

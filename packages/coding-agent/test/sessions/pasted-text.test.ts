@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	expandPastedText,
+	expandPastedTextInRange,
 	normalizePastedText,
 	summarizePastedText,
 } from "@/modules/sessions/pasted-text";
@@ -19,6 +20,27 @@ describe("pasted text", () => {
 		expect(expandPastedText(`前${a.token}中${a.token}後`, [a, a])).toBe(
 			"前猫\n犬\n鳥中猫\n犬\n鳥後"
 		);
+		expect(expandPastedText(a.token, [a])).toBe(a.text);
+	});
+	test("expands only the marker covered by the selected range", () => {
+		const token = "[Pasted ~3 lines]";
+		const first = { end: token.length, start: 0, text: "a\nb\nc" };
+		const secondStart = token.length + 1;
+		const second = {
+			end: secondStart + token.length,
+			start: secondStart,
+			text: "x\ny\nz",
+		};
+		const selection = { end: second.end, start: second.start - 1 };
+		const selectedText = `${token} ${token}`.slice(
+			selection.start,
+			selection.end
+		);
+
+		expect(selectedText).toBe(` ${token}`);
+		expect(
+			expandPastedTextInRange(selectedText, selection, [first, second])
+		).toBe(` ${second.text}`);
 	});
 	test("drops removed marker", () => {
 		const a = { token: "[Pasted ~3 lines]", text: "one\ntwo\nthree" };

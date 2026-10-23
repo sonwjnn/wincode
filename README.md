@@ -83,13 +83,13 @@ General settings live in `~/.wincode/settings.json` (or `settings.jsonc`) and tr
 
 MCP Servers are configured separately in `~/.wincode/mcp.json` and, after Project trust, `<project>/.wincode/mcp.json`. Both files use the Pi-compatible top-level `mcpServers` map. A project entry replaces a user entry with the same name; a project entry containing only `enabled`, `exposure`, and `toolExposure` overrides those fields without borrowing a different endpoint's credentials.
 
-The Settings dialog exposes the global-only `clipboard.copyOnSelect` setting (default `true`). Project-scope values are ignored; changes in Settings apply immediately, and Reset removes the key to restore the default.
+The Settings dialog exposes the global-only `clipboard.copy` setting with `manual` and `select` values (default `select`, or `manual` on Windows). Project-scope values are ignored; changes in Settings apply immediately, and Reset removes the key to restore the default.
 
 To disable automatic clipboard writes, set this value in `~/.wincode/settings.json`:
 
 ```jsonc
 {
-  "clipboard": { "copyOnSelect": false },
+  "clipboard": { "copy": "manual" },
   "default_agent": "build",
   "agents": {
     "review": {

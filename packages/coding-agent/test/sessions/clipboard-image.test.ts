@@ -1,22 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
-	type ClipboardImageDeps,
 	decodeImagePath,
 	readClipboardImage,
 	readImagePath,
 } from "@/modules/sessions/clipboard-image";
-
-const deps = (
-	overrides: Partial<ClipboardImageDeps> = {}
-): ClipboardImageDeps => ({
-	platform: "linux",
-	environment: {},
-	run: async () => ({ exitCode: 1, stdout: new Uint8Array() }),
-	readFile: async () => new Uint8Array(),
-	removeFile: async () => undefined,
-	temporaryPath: () => "/tmp/clipboard.png",
-	...overrides,
-});
 
 describe("readClipboardImage", () => {
 	test("reads actual image bytes from a pasted filepath", async () => {
@@ -27,7 +14,7 @@ describe("readClipboardImage", () => {
 			readFile: async () => icon,
 			stat: async () => ({ isFile: () => true }),
 		});
-		expect(result).toEqual({ bytes: icon, mediaType: "image/png" });
+		expect(result).toEqual({ bytes: icon, mimeType: "image/png" });
 		expect(decodeImagePath("notes.txt")).toBeNull();
 	});
 
@@ -44,30 +31,37 @@ describe("readClipboardImage", () => {
 		expect(reads).toBe(1);
 	});
 
-	test("reads Wayland PNG bytes", async () => {
+	test("returns image bytes from the clipboard service", async () => {
 		const bytes = Uint8Array.from([
 			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 		]);
-		const result = await readClipboardImage(
-			deps({ run: async () => ({ exitCode: 0, stdout: bytes }) })
-		);
-		expect(result).toEqual({ bytes, mediaType: "image/png" });
+		const result = await readClipboardImage({
+			read: async () => ({ bytes, mimeType: "image/png" }),
+		});
+		expect(result).toEqual({ bytes, mimeType: "image/png" });
 	});
 
-	test("falls back to X11 and reports unavailable for text", async () => {
-		const commands: string[] = [];
-		const result = await readClipboardImage(
-			deps({
-				run: async (command) => {
-					commands.push(command);
-					return {
-						exitCode: command === "xclip" ? 0 : 1,
-						stdout: new TextEncoder().encode("text"),
-					};
-				},
-			})
-		);
-		expect(commands).toEqual(["wl-paste", "xclip"]);
+	test("reports unavailable when the clipboard holds no image", async () => {
+		const result = await readClipboardImage({
+			read: async () => undefined,
+		});
+		expect(result).toEqual({ unavailable: true });
+	});
+
+	test("returns the MIME type reported by the clipboard service", async () => {
+		const bytes = new TextEncoder().encode("image data");
+		const result = await readClipboardImage({
+			read: async () => ({ bytes, mimeType: "image/webp" }),
+		});
+		expect(result).toEqual({ bytes, mimeType: "image/webp" });
+	});
+
+	test("reports unavailable instead of failing the paste when the read throws", async () => {
+		const result = await readClipboardImage({
+			read: async () => {
+				throw new Error("pasteboard busy");
+			},
+		});
 		expect(result).toEqual({ unavailable: true });
 	});
 });

@@ -153,7 +153,7 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 		expect(requestText).not.toContain("compacted-turn-1 context");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();

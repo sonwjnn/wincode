@@ -38,20 +38,25 @@ import {
 	restoreScrollTo,
 	testDirectory,
 } from "../support/interactive-cli-delegation-setup";
+import { captureTestFrame } from "../support/opentui";
 
 const waitForFrame = async (
 	setup: TestRendererSetup,
 	predicate: (frame: string) => boolean
 ): Promise<void> => {
+	// setup.waitForFrame breaks once the scheduler is idle, but this live TUI can
+	// be waiting on an external event while the frame still needs to change.
 	const deadline = Date.now() + 5000;
-	while (!predicate(setup.captureCharFrame())) {
-		if (Date.now() >= deadline) {
-			throw new Error(
-				`Timed out waiting for a TUI frame:\n${setup.captureCharFrame()}`
-			);
+	while (Date.now() < deadline) {
+		const frame = captureTestFrame(setup);
+		if (frame !== undefined && predicate(frame)) {
+			return;
 		}
 		await Bun.sleep(10);
 	}
+	throw new Error(
+		`Timed out waiting for a TUI frame:\n${captureTestFrame(setup) ?? ""}`
+	);
 };
 
 const CHILD_PROMPT = "Inspect the repository state.";

@@ -1,6 +1,4 @@
 import { expect, test } from "bun:test";
-import type { Selection } from "@opentui/core";
-import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
 import {
 	CopyOnSelectFromSettings,
@@ -11,6 +9,11 @@ import {
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import {
+	createRecordingClipboard,
+	createSelection,
+	testRenderWithClipboard,
+} from "./support/clipboard";
 import {
 	TEST_CONFIG_ROOT as CONFIG_ROOT,
 	createInMemoryConfigStore as createTestConfigStore,
@@ -46,30 +49,25 @@ const createConfigStoreWithDelayedInitialRead = (
 	};
 };
 
-const selection = (text: string) =>
-	({ getSelectedText: () => text }) as Selection;
-
 test("a Settings write immediately changes the root selection handler", async () => {
-	const configStore = createTestConfigStore();
+	const configStore = createTestConfigStore({
+		[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copy":"select"}}',
+	});
 	const configValue = {
 		configStore,
 		homeRoot: HOME_ROOT,
 		workspace: WORKSPACE,
 	};
 	let settingsOperations: SettingsOperations | undefined;
-	let writes = 0;
+	const clipboard = createRecordingClipboard();
 	let clears = 0;
-	const write = async () => {
-		writes += 1;
-		return true;
-	};
 
 	function Harness() {
 		settingsOperations = useSettingsOperations();
-		return <CopyOnSelectFromSettings write={write} />;
+		return <CopyOnSelectFromSettings />;
 	}
 
-	const setup = await testRender(
+	const setup = await testRenderWithClipboard(
 		<ConfigProvider value={configValue}>
 			<ThemeProvider>
 				<ToastProvider>
@@ -79,49 +77,50 @@ test("a Settings write immediately changes the root selection handler", async ()
 				</ToastProvider>
 			</ThemeProvider>
 		</ConfigProvider>,
-		{ height: 24, width: 80 }
+		{ height: 24, width: 80 },
+		clipboard
 	);
-	setup.renderer.copyToClipboardOSC52 = () => true;
+	await flush(setup);
+	// Guard the contract: copy-on-select must never clear the selection.
 	setup.renderer.clearSelection = () => {
 		clears += 1;
 	};
-	await flush(setup);
 
 	const operations = settingsOperations;
 	if (operations === undefined) {
 		throw new Error("Settings operations did not initialize.");
 	}
 	await act(async () => {
-		setup.renderer.emit("selection", selection("enabled"));
+		setup.renderer.emit("selection", createSelection("enabled"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
 	await act(async () => {
-		await operations.setValue("clipboard.copyOnSelect", false);
+		await operations.setValue("clipboard.copy", "manual");
 	});
 	await flush(setup);
 	await act(async () => {
-		setup.renderer.emit("selection", selection("disabled"));
+		setup.renderer.emit("selection", createSelection("disabled"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
 	await act(async () => {
-		await operations.setValue("clipboard.copyOnSelect", true);
+		await operations.setValue("clipboard.copy", "select");
 	});
 	await flush(setup);
 	await act(async () => {
-		setup.renderer.emit("selection", selection("enabled again"));
+		setup.renderer.emit("selection", createSelection("enabled again"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
 
-	expect(writes).toBe(2);
-	expect(clears).toBe(2);
+	expect(clipboard.writes).toEqual(["enabled", "enabled again"]);
+	expect(clears).toBe(0);
 	act(() => setup.renderer.destroy());
 });
-test("does not copy until a saved disabled preference loads", async () => {
+test("does not copy until a saved manual preference loads", async () => {
 	const delayedStore = createConfigStoreWithDelayedInitialRead({
-		[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copyOnSelect":false}}',
+		[`${CONFIG_ROOT}/settings.json`]: '{"clipboard":{"copy":"manual"}}',
 	});
 	const configValue = {
 		configStore: delayedStore.configStore,
@@ -129,22 +128,15 @@ test("does not copy until a saved disabled preference loads", async () => {
 		workspace: WORKSPACE,
 	};
 	let settingsOperations: SettingsOperations | undefined;
-	let writes = 0;
+	const clipboard = createRecordingClipboard();
 	let clears = 0;
 
 	function Harness() {
 		settingsOperations = useSettingsOperations();
-		return (
-			<CopyOnSelectFromSettings
-				write={async () => {
-					writes += 1;
-					return true;
-				}}
-			/>
-		);
+		return <CopyOnSelectFromSettings />;
 	}
 
-	const setup = await testRender(
+	const setup = await testRenderWithClipboard(
 		<ConfigProvider value={configValue}>
 			<ThemeProvider>
 				<ToastProvider>
@@ -154,20 +146,20 @@ test("does not copy until a saved disabled preference loads", async () => {
 				</ToastProvider>
 			</ThemeProvider>
 		</ConfigProvider>,
-		{ height: 24, width: 80 }
+		{ height: 24, width: 80 },
+		clipboard
 	);
-	setup.renderer.copyToClipboardOSC52 = () => true;
+	// Guard the contract: copy-on-select must never clear the selection.
 	setup.renderer.clearSelection = () => {
 		clears += 1;
 	};
 	await delayedStore.initialReadStarted;
 	await act(async () => {
-		setup.renderer.emit("selection", selection("before preference load"));
+		setup.renderer.emit("selection", createSelection("before preference load"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
-	expect(writes).toBe(0);
-	expect(clears).toBe(0);
+	expect(clipboard.writes).toEqual([]);
 
 	delayedStore.releaseInitialRead();
 	await flush(setup);
@@ -175,12 +167,12 @@ test("does not copy until a saved disabled preference loads", async () => {
 		throw new Error("Settings operations did not initialize.");
 	}
 	await act(async () => {
-		setup.renderer.emit("selection", selection("saved disabled"));
+		setup.renderer.emit("selection", createSelection("saved manual"));
 		await Bun.sleep(20);
 	});
 	await flush(setup);
 
-	expect(writes).toBe(0);
+	expect(clipboard.writes).toEqual([]);
 	expect(clears).toBe(0);
 	act(() => setup.renderer.destroy());
 });

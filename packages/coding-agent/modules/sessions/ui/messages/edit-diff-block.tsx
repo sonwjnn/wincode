@@ -17,10 +17,8 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { Spinner } from "@/shared/ui/spinner";
-import {
-	getTreeSitterClientForTests,
-	resolveSyntaxStyle,
-} from "./syntax-style";
+import { getTreeSitterClientOverride } from "../tree-sitter-client";
+import { useSyntaxStyle } from "../use-syntax-style";
 
 type EditToolPart = Extract<
 	SessionMessage["parts"][number],
@@ -379,6 +377,7 @@ const getMultiEditStatus = (
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: output states intentionally share one compact diff/status renderer.
 function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 	const { colors } = useTheme();
+	const syntaxStyle = useSyntaxStyle();
 	const output = getOutput(part);
 	const result = isEditOutputWithDiff(part);
 	const path = formatEditPath(result?.path ?? getEditPath(part, output));
@@ -433,7 +432,6 @@ function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 	}
 
 	const view = "unified";
-	const syntaxStyle = resolveSyntaxStyle(colors);
 
 	return (
 		<BorderedContentBlock colors={colors} paddingX={DIFF_BLOCK_PADDING_X}>
@@ -465,7 +463,7 @@ function EditDiffContent({ agent, part }: EditDiffBlockProps) {
 					removedSignColor={colors.diffHighlightRemoved}
 					showLineNumbers
 					syntaxStyle={syntaxStyle}
-					treeSitterClient={getTreeSitterClientForTests()}
+					treeSitterClient={getTreeSitterClientOverride()}
 					view={view}
 					width="100%"
 					wrapMode="word"

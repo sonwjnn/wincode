@@ -1,6 +1,5 @@
 import type { CliRenderer } from "@opentui/core";
 import type { ProviderModel } from "@wincode/ai";
-import open from "open";
 import { createElement, type ReactNode } from "react";
 import {
 	COMMANDS,
@@ -21,12 +20,15 @@ import {
 import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
 import { ProviderSdkConnectDialogContent } from "@/modules/providers/ui/provider-sdk-connect-dialog";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
+import type { ClipboardWriter } from "@/shared/clipboard";
+import { openExternalLink } from "@/shared/links/open-external-link";
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import type { ToastContextValue } from "@/shared/providers/toast/toast-provider";
 import { copyBrowserAuthorizationUrl } from "./browser-authorization";
 import { openCommandDialog } from "./dialog-command";
 
 export type CommandStrategyContext = {
+	clipboard: ClipboardWriter;
 	config: PromptConfig;
 	dialog: Pick<DialogContextValue, "open">;
 	getRecentModelSelections?: (limit: number) => ProviderModelSelection[];
@@ -42,7 +44,7 @@ export type CommandStrategyContext = {
 	onTrust: () => Promise<void>;
 	onOpenSettings?: (section?: string) => void | Promise<void>;
 	refreshAgentRegistry: () => void;
-	renderer: Pick<CliRenderer, "copyToClipboardOSC52" | "destroy">;
+	renderer: Pick<CliRenderer, "destroy">;
 	toast: Pick<ToastContextValue, "show">;
 };
 
@@ -252,21 +254,21 @@ const STRATEGIES = {
 	"connection.open": {
 		kind: "dialog",
 		title: "Connect",
-		content: ({ providerController, renderer, toast }) => {
+		content: ({ clipboard, providerController, toast }) => {
 			if (providerController === undefined) {
 				throw new Error("Provider SDK connection is unavailable in this view.");
 			}
 			return createElement(ProviderSdkConnectDialogContent, {
 				controller: providerController,
 				onBrowserCopyUrl: async (url: string) => {
-					await copyBrowserAuthorizationUrl(renderer, url);
+					await copyBrowserAuthorizationUrl(clipboard, url);
 					toast.show({
 						message: "Authorization URL copied.",
 						variant: "success",
 					});
 				},
 				onBrowserOpenUrl: async (url: string) => {
-					await open(url);
+					await openExternalLink(url);
 				},
 			});
 		},

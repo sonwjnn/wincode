@@ -6,7 +6,7 @@ import {
 import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
 import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
-import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import {
 	type SettingsOperations,
 	SettingsRegistryProvider,
@@ -20,7 +20,7 @@ import {
 	TEST_CONFIG_ROOT,
 	TEST_HOME_ROOT,
 } from "../support/config-store";
-import { flushTestRenderer } from "../support/opentui";
+import { flushTestRenderer, frameIncludes } from "../support/opentui";
 
 const WORKSPACE = "/workspace";
 
@@ -54,7 +54,7 @@ test("global Hide thinking replaces live and historical reasoning and reset rest
 		);
 	}
 
-	const previousTreeSitterClient = setMarkdownTreeSitterClientForTests(
+	const previousTreeSitterClient = setTreeSitterClientOverride(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
 
@@ -76,7 +76,7 @@ test("global Hide thinking replaces live and historical reasoning and reset rest
 			for (let pass = 0; pass < 20; pass += 1) {
 				await Bun.sleep(20);
 				await setup.renderOnce();
-				if (setup.captureCharFrame().includes("previous thought")) {
+				if (frameIncludes(setup, "previous thought")) {
 					break;
 				}
 			}
@@ -111,7 +111,7 @@ test("global Hide thinking replaces live and historical reasoning and reset rest
 		expect(resetFrame).toContain("current thought");
 	} finally {
 		act(() => setup.renderer.destroy());
-		setMarkdownTreeSitterClientForTests(previousTreeSitterClient);
+		setTreeSitterClientOverride(previousTreeSitterClient);
 	}
 });
 
@@ -136,7 +136,7 @@ test("keeps reasoning visible until a saved Hide thinking preference loads", asy
 		homeRoot: TEST_HOME_ROOT,
 		workspace: WORKSPACE,
 	};
-	const previousTreeSitterClient = setMarkdownTreeSitterClientForTests(
+	const previousTreeSitterClient = setTreeSitterClientOverride(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
 	const setup = await testRender(
@@ -168,6 +168,6 @@ test("keeps reasoning visible until a saved Hide thinking preference loads", asy
 		expect(loadedFrame).not.toContain("stored thought");
 	} finally {
 		act(() => setup.renderer.destroy());
-		setMarkdownTreeSitterClientForTests(previousTreeSitterClient);
+		setTreeSitterClientOverride(previousTreeSitterClient);
 	}
 });

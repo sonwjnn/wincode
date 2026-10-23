@@ -140,7 +140,7 @@ test("compacts automatically before sending and uses the rebuilt context", async
 		expect(requestText).not.toContain("compacted-turn-1 context");
 	} finally {
 		if (setup) {
-			writeE2EFrame(setup);
+			await writeE2EFrame(setup);
 			setup.renderer.destroy();
 		}
 		cleanupSessionRender();

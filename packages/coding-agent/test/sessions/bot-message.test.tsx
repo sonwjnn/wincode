@@ -9,12 +9,11 @@ import {
 	BotMessageFooter,
 } from "@/modules/sessions/ui/messages/bot-message";
 import { buildAddedPreviewPatch } from "@/modules/sessions/ui/messages/edit-diff-block";
-import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
-import { setTreeSitterClientForTests } from "@/modules/sessions/ui/messages/syntax-style";
 import {
 	buildWritePreview,
 	countWriteLines,
 } from "@/modules/sessions/ui/messages/write-block";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import {
@@ -27,13 +26,13 @@ import { flushTestRenderer as flushUi } from "../support/opentui";
 beforeAll(() => {
 	// Text parts map through MarkdownMessagePart; the mock client keeps the
 	// block rendering deterministic without the tree-sitter worker.
-	setMarkdownTreeSitterClientForTests(
+	setTreeSitterClientOverride(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
 });
 
 afterAll(() => {
-	setMarkdownTreeSitterClientForTests(null);
+	setTreeSitterClientOverride(null);
 });
 type MessagePart = SessionMessage["parts"][number];
 type DynamicToolPart = Extract<MessagePart, { type: "dynamic-tool" }>;
@@ -315,7 +314,7 @@ describe("BotMessageContent", () => {
 	test("uses OpenTUI filetype resolution for diff paths", async () => {
 		const client = new RecordingTreeSitterClient({ autoResolveTimeout: 0 });
 		client.setMockResult({ highlights: [] });
-		const previousClient = setTreeSitterClientForTests(client);
+		const previousClient = setTreeSitterClientOverride(client);
 		const cases = [
 			{ expected: "dockerfile", path: "Dockerfile" },
 			{ expected: "typescriptreact", path: "src\\component.tsx" },
@@ -346,7 +345,7 @@ describe("BotMessageContent", () => {
 				expect(client.filetypes).toContain(expected);
 			}
 		} finally {
-			setTreeSitterClientForTests(previousClient);
+			setTreeSitterClientOverride(previousClient);
 		}
 	});
 
@@ -912,7 +911,7 @@ describe("BotMessageContent", () => {
 	});
 
 	test("preserves indentation that makes thinking Markdown a code block", async () => {
-		const previousTreeSitterClient = setMarkdownTreeSitterClientForTests(null);
+		const previousTreeSitterClient = setTreeSitterClientOverride(null);
 		const setup = await testRender(
 			<ThemeProvider>
 				<KeyboardLayerProvider>
@@ -934,7 +933,7 @@ describe("BotMessageContent", () => {
 			expect(setup.captureCharFrame()).toContain("**indented code**");
 		} finally {
 			act(() => setup.renderer.destroy());
-			setMarkdownTreeSitterClientForTests(previousTreeSitterClient);
+			setTreeSitterClientOverride(previousTreeSitterClient);
 		}
 	});
 

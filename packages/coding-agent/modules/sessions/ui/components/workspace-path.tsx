@@ -33,7 +33,7 @@ export function WorkspacePath() {
 			: null;
 
 	return (
-		<text fg={colors.filePath} flexShrink={1} wrapMode="none">
+		<text fg={colors.filePath} flexShrink={1} selectable wrapMode="none">
 			<a href={url.pathToFileURL(cwd).href}>
 				<u>
 					<span fg={colors.filePath}>{path.basename(cwd) || path.sep}</span>

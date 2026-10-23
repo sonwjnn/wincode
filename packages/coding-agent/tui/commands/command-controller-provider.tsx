@@ -29,6 +29,7 @@ import {
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { discoverSkills, type Skill } from "@/modules/skills";
+import { useClipboard } from "@/shared/clipboard";
 import { useConfig } from "@/shared/config/config-provider";
 import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
@@ -50,6 +51,7 @@ export function CommandControllerProvider({
 	children: ReactNode;
 }) {
 	const config = useConfig();
+	const clipboard = useClipboard();
 	const pluginRuntime = getInteractivePluginRuntime();
 	const renderer = useRenderer();
 	const router = useRouter();
@@ -187,6 +189,7 @@ export function CommandControllerProvider({
 		(options) => {
 			const execute = createCommandExecutor(
 				createCommandHandlers({
+					clipboard,
 					config: promptConfig,
 					dialog,
 					getRecentModelSelections: (limit) =>
@@ -273,6 +276,7 @@ export function CommandControllerProvider({
 			});
 		},
 		[
+			clipboard,
 			config.workspace,
 			customCommands,
 			dialog,

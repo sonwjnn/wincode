@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+- **TUI links open on a plain click.** The root mouse handler resolves the
+  OSC 8 link under the pointer only when the gesture is a click, so dragging
+  still selects and copies text and modified clicks stay with the terminal.
+  Wrapped links resolve their full URL from any rendered row, and a failed
+  `open()` now shows an error toast instead of only logging.
+
+- **Selection keys and right-click follow the terminal clipboard contract.**
+  The global `clipboard.copy` setting now has `manual` and `select` modes
+  (default `select`, or `manual` on Windows), replacing the old
+  `clipboard.copyOnSelect` boolean. In `manual` mode, right-click or
+  Cmd+C on macOS / Ctrl+C elsewhere copies the selection; in `select` mode,
+  selecting copies immediately and the shortcut copies again without clearing
+  it. A copy shortcut while a selection exists absorbs the key so it cannot
+  trigger the app's exit binding. Escape clears a selection, while typing
+  dismisses a non-editor selection and leaves an editor-owned one alone.
+
+- **Clipboard access uses OpenTUI's native service.** Copying writes the host
+  clipboard and OSC 52 together, image paste reads the host clipboard directly,
+  and the `pbcopy`/`xclip`/`wl-paste`/PowerShell fallbacks are gone. OpenTUI is
+  upgraded to 0.6.6 and the local `fillRect` patch is removed. Copy-on-select
+  also stops clearing the selection so multi-click history survives, now
+  requires a drag (double-click and triple-click no longer copy), and expands
+  `[Pasted ~N lines]` placeholders when copying from the composer.
+
+- **Transcript notices realign with message text.** The notice row now uses the
+  same horizontal padding as transcript content.
+
 - **One Session Services bundle now serves what a Session runs on.** Print, JSON, RPC,
   and Interactive Mode compose the same factory — the Plugin runtime, durable
   Session storage, the Session Host Manager, Session Capabilities, and the bound

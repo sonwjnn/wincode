@@ -1,9 +1,7 @@
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { MockTreeSitterClient } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -13,7 +11,7 @@ import {
 } from "@tanstack/react-router";
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
-import { isUndefined } from "@wincode/utils";
+import { isUndefined, logger } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
@@ -27,7 +25,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import { resolveLocalAttachmentRoot } from "@/modules/sessions/storage/path";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
-import { setMarkdownTreeSitterClientForTests } from "@/modules/sessions/ui/messages/markdown-message-part";
+import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SessionSurface } from "@/modules/sessions/ui/views/session-surface";
 import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
@@ -43,6 +41,7 @@ import {
 	setInteractiveRuntimeContext,
 } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
+import { testRenderWithClipboard } from "./clipboard";
 import { createInstalledFakeProviderCollection } from "./e2e-fake-runtime";
 import {
 	agentId,
@@ -51,6 +50,7 @@ import {
 	sessionMessageId,
 	sessionRecordId,
 } from "./identifiers";
+import { captureTestFrame } from "./opentui";
 
 export const E2E_MODEL = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -259,7 +259,7 @@ export const renderSession = async ({
 	await router.load();
 	// Each rendered app owns a fresh process lifetime, so its composer starts empty.
 	writeComposerDraft(sessionId, "");
-	setMarkdownTreeSitterClientForTests(
+	setTreeSitterClientOverride(
 		new MockTreeSitterClient({ autoResolveTimeout: 0 })
 	);
 	setInteractiveRuntimeContext({
@@ -274,7 +274,7 @@ export const renderSession = async ({
 	const resolveRegistryReady = (): void => {
 		registryReady.resolve(undefined);
 	};
-	const setup = await testRender(
+	const setup = await testRenderWithClipboard(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider
 				value={{
@@ -310,19 +310,26 @@ export const renderSession = async ({
 };
 
 export const cleanupSessionRender = (): void => {
-	setMarkdownTreeSitterClientForTests(null);
+	setTreeSitterClientOverride(null);
 };
 
 export const shutdownSessionHosts = (): Promise<void> =>
 	getInteractiveSessionHostManager().shutdownAll();
 
-export const writeE2EFrame = (setup: TestRendererSetup): void => {
+export const writeE2EFrame = async (
+	setup: TestRendererSetup
+): Promise<void> => {
 	const framePath = process.env.WINCODE_E2E_FRAME_PATH;
 	if (!framePath) {
 		return;
 	}
-	fs.mkdirSync(path.dirname(framePath), { recursive: true });
-	fs.writeFileSync(framePath, setup.captureCharFrame(), "utf8");
+	await setup.waitForVisualIdle();
+	const frame = captureTestFrame(setup);
+	if (frame === undefined) {
+		void logger.warn("Skipping E2E frame capture: OpenTUI buffer busy.");
+		return;
+	}
+	await Bun.write(framePath, frame);
 };
 
 export const settleSessionUi = async (
@@ -358,6 +365,7 @@ export const waitForSessionFrame = async (
 ): Promise<void> => {
 	await waitForSessionCondition(async () => {
 		await settleSessionUi(setup);
-		return predicate(setup.captureCharFrame());
+		const frame = captureTestFrame(setup);
+		return frame !== undefined && predicate(frame);
 	});
 };

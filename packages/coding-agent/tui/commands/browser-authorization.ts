@@ -1,19 +1,26 @@
-import type { CliRenderer } from "@opentui/core";
-import {
-	type ClipboardSpawn,
-	writeClipboard,
-} from "@/shared/clipboard/clipboard";
+import type {
+	ClipboardWriteOutcome,
+	ClipboardWriter,
+} from "@/shared/clipboard";
 
+const copyFailure = (cause?: unknown): Error =>
+	new Error("Failed to copy URL.", cause === undefined ? undefined : { cause });
+
+/**
+ * Copies the authorization URL and maps any clipboard failure to the message
+ * the connect dialog renders, keeping that user-facing text in one place.
+ */
 export async function copyBrowserAuthorizationUrl(
-	renderer: Pick<CliRenderer, "copyToClipboardOSC52">,
-	url: string,
-	spawnProcess?: ClipboardSpawn
+	clipboard: ClipboardWriter,
+	url: string
 ): Promise<void> {
-	if (await writeClipboard(renderer, url, spawnProcess)) {
-		return;
+	let outcome: ClipboardWriteOutcome;
+	try {
+		outcome = await clipboard.write(url);
+	} catch (error) {
+		throw copyFailure(error);
 	}
-	if (process.platform !== "darwin") {
-		throw new Error("Clipboard is not supported by this terminal.");
+	if (outcome !== "copied") {
+		throw copyFailure();
 	}
-	throw new Error("Failed to copy URL.");
 }
