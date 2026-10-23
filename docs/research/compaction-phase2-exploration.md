@@ -259,6 +259,6 @@ The implementation uses the existing `truncateUtf8()`/`keepTailUtf8()` helpers. 
 
 ## 8. Validation
 
-- `bun run test`: 1,832 passed, 0 failed.
+- `bun run test`: 1,833 passed, 0 failed.
 - `bun run test:e2e`: 35 passed, 0 failed.
 - `bun check-types`, `bun check`, and `bun fix`: passed.

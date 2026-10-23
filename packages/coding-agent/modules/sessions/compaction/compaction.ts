@@ -65,6 +65,8 @@ const MAX_SERIALIZED_PART_LENGTH = 12_000;
 const MAX_SERIALIZED_TOOL_INPUT_BYTES = 2000;
 const MAX_SERIALIZED_TOOL_OUTPUT_BYTES = 4000;
 const MAX_SERIALIZED_TOOL_ERROR_BYTES = 2000;
+const TRUNCATION_MARKER = "…[truncated]…";
+const TRUNCATION_MARKER_BYTES = Buffer.byteLength(TRUNCATION_MARKER, "utf8");
 const RAW_IMAGE_DATA_URL_PATTERN =
 	/data:image\/[^;,]+;base64,(?:(?:[A-Za-z0-9+/]\s*){4})*(?:(?:[A-Za-z0-9+/]\s*){2}==|(?:[A-Za-z0-9+/]\s*){3}=|(?:[A-Za-z0-9+/]\s*){1,4})(?![A-Za-z0-9+/=])/giu;
 const DATA_URL_PAYLOAD_PATTERN = /^data:[^,]+,(.*)$/su;
@@ -331,12 +333,17 @@ const replaceAttachmentPayload = (part: unknown) => {
 };
 
 const truncateHeadTailUtf8 = (value: string, maxBytes: number): string => {
-	if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+	const byteLimit = Math.max(0, Math.floor(maxBytes));
+	if (Buffer.byteLength(value, "utf8") <= byteLimit) {
 		return value;
 	}
-	const headBytes = Math.floor(maxBytes / 2);
-	const tailBytes = maxBytes - headBytes;
-	return `${truncateUtf8(value, headBytes)}…[truncated]…${keepTailUtf8(value, tailBytes)}`;
+	if (byteLimit <= TRUNCATION_MARKER_BYTES) {
+		return truncateUtf8(TRUNCATION_MARKER, byteLimit);
+	}
+	const contentBytes = byteLimit - TRUNCATION_MARKER_BYTES;
+	const headBytes = Math.floor(contentBytes / 2);
+	const tailBytes = contentBytes - headBytes;
+	return `${truncateUtf8(value, headBytes)}${TRUNCATION_MARKER}${keepTailUtf8(value, tailBytes)}`;
 };
 
 const serializeBoundedJson = (value: unknown, maxBytes: number): string => {
@@ -381,6 +388,9 @@ const serializeToolResultPart = (part: unknown): string | null => {
 		type: "tool-result",
 		toolCallId: part.toolCallId,
 	};
+	if ("toolName" in part && isString(part.toolName)) {
+		serializedPart.toolName = part.toolName;
+	}
 	addBoundedToolResultFields(
 		serializedPart,
 		"output" in part ? part.output : undefined,

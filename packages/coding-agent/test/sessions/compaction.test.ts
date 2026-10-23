@@ -1270,6 +1270,7 @@ test("omits reasoning while preserving terminal tool outcomes beside bounded pay
 				{
 					output: { output: `${"x".repeat(16_000)}CRITICAL_TOOL_RESULT_TAIL` },
 					toolCallId: toolCallId("call-result"),
+					toolName: "shell",
 					type: "tool-result",
 				},
 			],
@@ -1282,7 +1283,68 @@ test("omits reasoning while preserving terminal tool outcomes beside bounded pay
 	expect(serialized).toContain("output-error");
 	expect(serialized).toContain("CRITICAL_OUTCOME_MARKER");
 	expect(serialized).toContain("call-result");
+	expect(serialized).toContain('"toolName":"shell"');
 	expect(serialized).toContain("CRITICAL_TOOL_RESULT_TAIL");
+});
+
+test("keeps tool payload previews within their UTF-8 byte caps", () => {
+	const serialized = serializeMessagesForCompaction([
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("tool-call-byte-caps"),
+			parts: [
+				{
+					errorText: "é".repeat(20_000),
+					input: { value: "ié".repeat(10_000) },
+					output: "🙂".repeat(5000),
+					state: "output-error",
+					toolCallId: toolCallId("call-byte-caps"),
+					type: "tool-shell",
+				},
+			],
+			role: "assistant",
+		}),
+		fromAny<SessionMessage, object>({
+			id: sessionMessageId("tool-result-byte-caps"),
+			parts: [
+				{
+					errorText: "r🙂".repeat(10_000),
+					output: "ø".repeat(20_000),
+					toolCallId: toolCallId("result-byte-caps"),
+					type: "tool-result",
+				},
+			],
+			role: "tool",
+		}),
+	]);
+	const serializedToolParts = serialized
+		.split("\n")
+		.filter((line) => line.startsWith('{"type":"tool-'))
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+	const [toolCall, toolResult] = serializedToolParts;
+
+	expect(toolCall).toBeDefined();
+	expect(toolResult).toBeDefined();
+	if (!(toolCall && toolResult)) {
+		throw new Error("The serialized tool call or result is missing.");
+	}
+	expect(typeof toolCall.inputPreview).toBe("string");
+	if (typeof toolCall.inputPreview === "string") {
+		expect(
+			Buffer.byteLength(toolCall.inputPreview, "utf8")
+		).toBeLessThanOrEqual(2000);
+	}
+	for (const preview of [toolCall.outputPreview, toolResult.outputPreview]) {
+		expect(typeof preview).toBe("string");
+		if (typeof preview === "string") {
+			expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(4000);
+		}
+	}
+	for (const errorText of [toolCall.errorText, toolResult.errorText]) {
+		expect(typeof errorText).toBe("string");
+		if (typeof errorText === "string") {
+			expect(Buffer.byteLength(errorText, "utf8")).toBeLessThanOrEqual(2000);
+		}
+	}
 });
 
 test("serializes old attachments as bounded metadata", () => {
