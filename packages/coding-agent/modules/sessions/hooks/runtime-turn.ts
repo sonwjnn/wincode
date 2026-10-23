@@ -636,6 +636,7 @@ export type SessionViewState = ReadonlyDeep<{
 
 type AgentTurnEventConsumerOptions = {
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
+	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	lifecycle?: AgentTurnLifecycle;
 	onViewState?: (state: SessionViewState) => void;
 	promptCacheKey?: string;
@@ -668,6 +669,7 @@ const consumeAgentTurnEvents = async ({
 	onViewState,
 	runtime,
 	modelStepObserver,
+	maximumModelSteps,
 	promptCacheKey,
 	signal,
 	takeSteeringMessages,
@@ -715,6 +717,7 @@ const consumeAgentTurnEvents = async ({
 	for await (const event of runtime.run(turn, {
 		...omitUndefined({
 			modelStepObserver,
+			maximumModelSteps,
 			promptCacheKey,
 			takeSteeringMessages,
 		}),
@@ -805,6 +808,7 @@ export const runAgentTurnToText = async ({
 	onViewState,
 	runtime,
 	modelStepObserver,
+	maximumModelSteps,
 	promptCacheKey,
 	signal,
 	sourceUserMessageId,
@@ -819,6 +823,7 @@ export const runAgentTurnToText = async ({
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
+	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	promptCacheKey?: string;
 	signal?: AbortSignal;
 	sourceUserMessageId?: SessionMessageId;
@@ -888,6 +893,7 @@ export const runAgentTurnToText = async ({
 		onViewState,
 		runtime,
 		modelStepObserver,
+		maximumModelSteps,
 		promptCacheKey,
 		signal,
 		...omitUndefined({

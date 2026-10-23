@@ -693,6 +693,7 @@ type ExecuteModelStepsOptions = Readonly<{
 	cacheWarming?: true;
 	emit: EventEmitter;
 	lifecycle: AgentTurnLifecycle;
+	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	invocation: AgentModelInvocation;
 	modelMessages: ChatMessage[];
@@ -804,6 +805,7 @@ const runLoop = async function* ({
 	cacheWarming,
 	emit,
 	lifecycle,
+	maximumModelSteps,
 	invocation,
 	modelMessages,
 	modelStepObserver,
@@ -823,6 +825,21 @@ const runLoop = async function* ({
 			yield emit(
 				createAgentTurnAbortEvent(turn, runtimeSignal, emit.nextSequence())
 			);
+			return;
+		}
+		if (maximumModelSteps !== undefined && stepNumber > maximumModelSteps) {
+			yield emit({
+				failure: createOperationalFailure({
+					code: "model-step-limit",
+					details: getAgentTurnFailureDetails(turn),
+					retry: "never",
+					source: "runtime",
+				}),
+				finishedAt: Date.now(),
+				sequence: emit.nextSequence(),
+				turnId: turn.id,
+				type: "agent-turn-failed",
+			});
 			return;
 		}
 		const stepId = toModelStepId(`step-${stepNumber}`);
@@ -926,6 +943,7 @@ const runAgentTurn = async function* (
 	{
 		cacheWarming,
 		deadlineMs,
+		maximumModelSteps,
 		modelStepObserver,
 		promptCacheKey,
 		signal,
@@ -966,6 +984,7 @@ const runAgentTurn = async function* (
 			modelMessages,
 			...omitUndefined({
 				cacheWarming,
+				maximumModelSteps,
 				modelStepObserver,
 				promptCacheKey,
 				runtimeSignal,

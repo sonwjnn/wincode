@@ -14,6 +14,7 @@ export type InvocationOptions = Readonly<{
 	agent?: string;
 	mode: ExecutionMode;
 	model?: string;
+	maximumModelSteps?: number;
 	prompt?: string;
 	session?: string;
 	thinkingLevel?: string;

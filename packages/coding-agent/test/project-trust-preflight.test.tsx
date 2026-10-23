@@ -65,9 +65,11 @@ const renderTrustDialog = async (
 	{
 		includeSessionOnly = false,
 		showTrustStatus = true,
+		homeRoot,
 	}: Readonly<{
 		includeSessionOnly?: boolean;
 		showTrustStatus?: boolean;
+		homeRoot?: string;
 	}> = {}
 ) => {
 	let selectionOutcome: Promise<
@@ -81,7 +83,7 @@ const renderTrustDialog = async (
 		useEffect(() => {
 			selectionOutcome = requestProjectTrust(
 				{ open },
-				{ ...trustRequest, includeSessionOnly, showTrustStatus }
+				{ ...trustRequest, includeSessionOnly, showTrustStatus, homeRoot }
 			).then(
 				(choice) =>
 					choice === "cancel"
@@ -245,24 +247,28 @@ test("trust selector offers session-only choices only to the startup prompt", as
 });
 
 test("trust selector abbreviates home paths in details and parent choices", async () => {
-	const parentDirectory = path.join(os.homedir(), "workspace");
+	const homeRoot = path.join(os.tmpdir(), "wincode-trust-selector-home");
+	const parentDirectory = path.join(homeRoot, "workspace");
 	const projectRoot = path.join(parentDirectory, "repo");
 	const workspace = path.join(projectRoot, "nested");
-	const { setup } = await renderTrustDialog({
-		parentDirectory,
-		protectedRoots: [
-			{
-				currentSessionStatus: "pending",
-				projectRoot,
-				savedDecision: {
-					decision: "trust",
-					directory: parentDirectory,
-					inherited: true,
+	const { setup } = await renderTrustDialog(
+		{
+			parentDirectory,
+			protectedRoots: [
+				{
+					currentSessionStatus: "pending",
+					projectRoot,
+					savedDecision: {
+						decision: "trust",
+						directory: parentDirectory,
+						inherited: true,
+					},
 				},
-			},
-		],
-		workspace,
-	});
+			],
+			workspace,
+		},
+		{ homeRoot }
+	);
 	try {
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain(
