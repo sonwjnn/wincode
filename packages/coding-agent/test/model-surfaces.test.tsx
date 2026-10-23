@@ -448,12 +448,16 @@ describe("session usage bar", () => {
 		contextLimit: 200_000,
 		contextPercent: 42,
 		contextTokens: 84_000,
+		inputTokens: 0,
+		outputTokens: 0,
 		cacheReadTokens: 0,
 		cacheWriteTokens: 0,
+		cacheHitPercent: null,
 		cacheWarmingStatus: "idle",
 		costUsd: null,
 		costCoverage: overrides.costUsd == null ? "unknown" : "complete",
 		costedTurns: 0,
+		costedCompactions: 0,
 		costedUsageEntries: 0,
 		...overrides,
 	});
@@ -474,6 +478,35 @@ describe("session usage bar", () => {
 		expect(frame).toContain("42.0%/1m");
 		// The tilde is the honesty marker: these are published rates, not a bill.
 		expect(frame).toContain("~$1.23");
+	});
+
+	test("matches pi's token, cost, and context order while omitting zero counts", async () => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({
+					inputTokens: 138_000,
+					outputTokens: 22_000,
+					cacheReadTokens: 12_000,
+					cacheWriteTokens: 0,
+					cacheHitPercent: 45,
+					costUsd: 1.23,
+				})}
+			/>
+		));
+
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("↑126K");
+		expect(frame).toContain("↓22K");
+		expect(frame).toContain("R12K");
+		expect(frame).toContain("CH45.0%");
+		expect(frame).toContain("~$1.23");
+		expect(frame).toContain("42.0%/200k");
+		expect(frame.indexOf("↑126K")).toBeLessThan(frame.indexOf("↓22K"));
+		expect(frame.indexOf("↓22K")).toBeLessThan(frame.indexOf("R12K"));
+		expect(frame.indexOf("R12K")).toBeLessThan(frame.indexOf("CH45.0%"));
+		expect(frame.indexOf("CH45.0%")).toBeLessThan(frame.indexOf("~$1.23"));
+		expect(frame.indexOf("~$1.23")).toBeLessThan(frame.indexOf("42.0%/200k"));
+		expect(frame).not.toContain("W0");
 	});
 
 	test("shows cache warming status and cost without changing context", async () => {
@@ -509,6 +542,41 @@ describe("session usage bar", () => {
 		expect(frame).toContain("29.0%/272k");
 		expect(frame).not.toContain("cache read");
 		expect(frame).toContain("cost unknown");
+	});
+
+	test("uses pi's warning and error context thresholds", async () => {
+		const at70 = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({ contextLimit: 100, contextTokens: 70 })}
+			/>
+		));
+		const at71 = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({ contextLimit: 100, contextTokens: 71 })}
+			/>
+		));
+		const at90 = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({ contextLimit: 100, contextTokens: 90 })}
+			/>
+		));
+		const at91 = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({ contextLimit: 100, contextTokens: 91 })}
+			/>
+		));
+		const contextForeground = (setup: RenderSetup) =>
+			setup
+				.captureSpans()
+				.lines.flatMap(({ spans }) => spans)
+				.find(({ text }) => text.includes("%/"))?.fg;
+		const normal = contextForeground(at70);
+		const warning = contextForeground(at71);
+
+		expect(warning).toBeDefined();
+		expect(warning).not.toEqual(normal);
+		expect(contextForeground(at90)).toEqual(warning);
+		expect(contextForeground(at91)).not.toEqual(warning);
 	});
 
 	test("marks context as auto only when auto-compact is enabled", async () => {
