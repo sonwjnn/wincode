@@ -1709,11 +1709,12 @@ describe("Session Host opening", () => {
 		expect(snapshot.compactions.map(({ id }) => id)).toEqual([
 			seeded.compaction,
 		]);
-		// The session exposes what its next turn runs with.
+		// The session exposes what its next turn runs with, and which tier supplied it.
 		expect(host.getSelection()).toEqual({
 			agent: buildId,
 			model,
 			persistedAgent: buildId,
+			source: "row",
 			thinkingLevel: undefined,
 		});
 

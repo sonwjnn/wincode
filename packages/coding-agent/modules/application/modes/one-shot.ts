@@ -43,8 +43,8 @@ import type {
 	SessionHostManager,
 } from "../../../modules/sessions/host/types";
 import {
-	getLastUsedSelection,
 	type ResolvedSessionSelection,
+	restoreSelection,
 } from "../../../modules/sessions/selection";
 import { projectSessionMessageRecords } from "../../../modules/sessions/storage/session-record";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
@@ -552,20 +552,20 @@ const preflightOneShotHost = async (
 					services.store.getSession(sessionId),
 					services.store.listSessionRecords(sessionId),
 				]);
-	const lastUsedSelection = getLastUsedSelection(
-		storedRecords.flatMap((record) =>
+	// The Session's recorded tiers: the row choice, then the newest message pair.
+	const restoredSelection = restoreSelection({
+		messages: storedRecords.flatMap((record) =>
 			projectSessionMessageRecords(record.messages, record)
-		)
-	);
+		),
+		row: storedSession,
+	});
 	const explicitAgent = parseAgent(context.invocation.agent);
 	const explicitModel = parseModel(context.invocation.model);
 	const restoredModel =
-		explicitAgent === undefined
-			? (storedSession?.model ?? lastUsedSelection?.model)
-			: undefined;
+		explicitAgent === undefined ? restoredSelection?.model : undefined;
 	const selectedAgent =
 		explicitAgent ??
-		lastUsedSelection?.agent ??
+		restoredSelection?.agent ??
 		registry?.defaultAgentId ??
 		agentIdSchema.parse("build");
 	const candidate = candidateAgent(registry, selectedAgent);
