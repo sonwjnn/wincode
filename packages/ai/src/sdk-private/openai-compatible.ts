@@ -1,4 +1,5 @@
 import { apiKeyCredentialSchema } from "../credential-schemas.ts";
+import { normalizeModelFailure } from "../model-failures.ts";
 import {
 	maxOutputTokensForRequest,
 	type Provider,
@@ -9,7 +10,10 @@ import {
 	ProviderError,
 	type ProviderModel,
 } from "../sdk.ts";
-import { ProviderProtocolError } from "./protocol-errors.ts";
+import {
+	httpErrorFromPayload,
+	ProviderProtocolError,
+} from "./protocol-errors.ts";
 import { openAICompatibleChatProtocol } from "./protocols/openai-chat.ts";
 import type {
 	ProtocolPromptMessage,
@@ -175,14 +179,31 @@ export const openAICompatibleResponseError = async (
 	providerName: string,
 	operation: "model discovery" | "request"
 ): Promise<ProviderError> => {
-	await cancelResponseBody(response);
+	let protocolError: ProviderProtocolError | undefined;
+	if (operation === "request") {
+		const payload = await response.json().catch(async () => {
+			await cancelResponseBody(response);
+			return;
+		});
+		const parsedError = httpErrorFromPayload(
+			response.status,
+			response.headers,
+			payload
+		);
+		if (normalizeModelFailure(parsedError).code === "context-overflow") {
+			protocolError = parsedError;
+		}
+	} else {
+		await cancelResponseBody(response);
+	}
 	const isAuthenticationFailure =
 		response.status === 401 || response.status === 403;
 	return new ProviderError(
 		isAuthenticationFailure ? "authentication" : "provider",
 		isAuthenticationFailure
 			? `${providerName} rejected the configured credential${operation === "model discovery" ? " during model discovery" : ""}.`
-			: `${providerName} ${operation} failed (${response.status}).`
+			: `${providerName} ${operation} failed (${response.status}).`,
+		{ ...(protocolError ? { cause: protocolError } : {}) }
 	);
 };
 

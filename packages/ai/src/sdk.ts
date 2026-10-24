@@ -1017,13 +1017,15 @@ const failureForError = (
 				providerId,
 			};
 		}
+		const modelFailure = normalizeModelFailure(error, { modelId, providerId });
 		const statusCode =
-			error.code === "provider"
-				? normalizeModelFailure(error).details?.statusCode
-				: undefined;
+			error.code === "provider" ? modelFailure.details?.statusCode : undefined;
 		return {
 			code: error.code,
-			message: error.message,
+			message:
+				modelFailure.code === "context-overflow"
+					? modelFailure.message
+					: error.message,
 			providerId,
 			...(statusCode === undefined ? {} : { statusCode }),
 		};

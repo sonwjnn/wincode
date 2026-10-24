@@ -178,6 +178,37 @@ describe("provider-neutral model contracts", () => {
 		).toBe("unavailable");
 	});
 
+	test("classifies provider-specific prompt-limit wording as context overflow", () => {
+		for (const message of [
+			"request_too_large",
+			"Maximum prompt length is 32000",
+			"The request exceeded model token limit",
+			"range of input length should be 1 to 32000",
+		]) {
+			expect(normalizeModelFailure(new Error(message)).code).toBe(
+				"context-overflow"
+			);
+		}
+	});
+
+	test("does not classify token throttling or an unsupported bare 413 as context overflow", () => {
+		expect(
+			normalizeModelFailure(
+				new Error("Throttling error: Too many tokens, please wait")
+			).code
+		).toBe("rate-limited");
+		expect(
+			normalizeModelFailure(new Error("Too many tokens per minute")).code
+		).toBe("rate-limited");
+		expect(
+			normalizeModelFailure({
+				code: "provider",
+				message: "OpenAI-compatible request failed (413).",
+				statusCode: 413,
+			}).code
+		).not.toBe("context-overflow");
+	});
+
 	test("preserves structured authentication failures without exposing provider diagnostics", () => {
 		const failure = normalizeModelFailure(
 			{

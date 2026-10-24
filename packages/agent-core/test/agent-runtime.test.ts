@@ -629,6 +629,18 @@ test("SDK provider failures map safely and never complete an Agent Turn", async 
 			requestProviderId: providerId,
 		},
 		{
+			expectedCode: "context-overflow",
+			expectedRetry: "with-changes",
+			name: "provider request_too_large code",
+			providerFailure: new ProviderError(
+				"provider",
+				"OpenAI-compatible request failed (413).",
+				{ cause: { providerCode: "request_too_large", statusCode: 413 } }
+			),
+			requestModelId: sdkModelId,
+			requestProviderId: providerId,
+		},
+		{
 			expectedCode: "network",
 			expectedRetry: "after-delay",
 			name: "transport failure",
