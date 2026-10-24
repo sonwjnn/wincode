@@ -669,6 +669,83 @@ test("logs unexpected submission preparation failures without user content", asy
 	});
 });
 
+test("compacts against a smaller selected model before dispatching its provider request", async () => {
+	const previousModel: ProviderModelSelection = {
+		modelId: modelId("large-context"),
+		providerId: "large-provider",
+	};
+	const selectedModel: ProviderModelSelection = {
+		modelId: modelId("small-context"),
+		providerId: "small-provider",
+	};
+	const requestOrder: string[] = [];
+	const measuredUsage = { inputTokens: 90_000, outputTokens: 100 };
+	const initialTranscript: SessionMessage[] = [
+		message("u0", "earlier request"),
+		{ ...message("a0", "earlier answer"), role: "assistant" },
+		message("u1", "previous request"),
+		{
+			...message("a1", "previous answer"),
+			metadata: {
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "large-model-step",
+					usage: measuredUsage,
+				},
+				model: previousModel,
+				usage: measuredUsage,
+			},
+			role: "assistant",
+		},
+	];
+	const compaction = createCompactionModule(async () => {
+		requestOrder.push("compaction");
+		return { text: "handoff" };
+	});
+	const engine = createTestAgentSession(initialTranscript, compaction, {
+		resolveCompactionSettings: async (model) => {
+			const usesSelectedModel = model?.providerId === selectedModel.providerId;
+			return fromPartial<ResolvedCompactionSettings>({
+				autoAvailable: true,
+				enabled: true,
+				keepRecentTokens: 1,
+				maxMediaAttachments: 4,
+				maxMediaBytes: 1024,
+				maxMediaTokens: 128,
+				modelContextLimit: usesSelectedModel ? 100_000 : 1_000_000,
+				overflowRecoveryAvailable: false,
+				reserveTokens: 20_000,
+				thresholdTokens: usesSelectedModel ? 80_000 : 800_000,
+			});
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async ({ messages }) => {
+				requestOrder.push("conversation request");
+				expect(messages.map(({ id }) => id)).toContain(
+					compactionSummaryMessageId(compactionId("entry-compacted"))
+				);
+				return {};
+			},
+		},
+	});
+
+	try {
+		const outcome = await engine.send(
+			sendInput({
+				model: selectedModel,
+				sessionModel: selectedModel,
+				userText: "continue with the smaller model",
+			})
+		);
+
+		expect(outcome).toEqual({ rejected: false });
+		expect(requestOrder).toEqual(["compaction", "conversation request"]);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
+
 test("keeps the admission turn ID on preparation-triggered threshold diagnostics", async () => {
 	await withLoggerHome(async (home) => {
 		const turnId = agentTurnId("threshold-preparation-turn");

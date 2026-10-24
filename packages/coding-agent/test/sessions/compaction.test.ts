@@ -458,7 +458,7 @@ test("fails closed when a durable compaction boundary is missing", () => {
 	).toThrow("entry-invalid");
 });
 
-test("Host threshold checks reject usage measured for a different conversation model", () => {
+test("Host threshold checks carry forward same-epoch usage measured by the previous conversation model", () => {
 	const compaction = createSessionCompaction({
 		store: makeStore(),
 		summaryGenerator: async () => ({ text: "summary" }),
@@ -508,7 +508,51 @@ test("Host threshold checks reject usage measured for a different conversation m
 			{ enabled: true, thresholdTokens: 80_000 },
 			selectedModel
 		)
-	).toBe(false);
+	).toBe(true);
+});
+
+test("Host threshold estimates messages added after previous-model usage", () => {
+	const compaction = createSessionCompaction({
+		store: makeStore(),
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => messages.length * 500,
+	});
+	const previousModel: ProviderModelSelection = {
+		modelId: modelId("old-model"),
+		providerId: "old-provider",
+	};
+	const selectedModel: ProviderModelSelection = {
+		modelId: modelId("selected-model"),
+		providerId: "selected-provider",
+	};
+	const measuredUsage = { inputTokens: 70_000, outputTokens: 100 };
+	const messages: SessionMessage[] = [
+		message("u1", "user", "request"),
+		{
+			...message("a1", "assistant", "answer"),
+			metadata: {
+				model: previousModel,
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: measuredUsage,
+				},
+			},
+		},
+		message("u2", "user", "unmeasured follow-up"),
+		{
+			...message("a2", "assistant", "answer without a measurement"),
+			metadata: { model: selectedModel },
+		},
+	];
+
+	expect(
+		compaction.needsCompaction(
+			messages,
+			{ enabled: true, thresholdTokens: 70_700 },
+			selectedModel
+		)
+	).toBe(true);
 });
 
 test("uses provider-reported usage for threshold decisions", () => {

@@ -39,7 +39,10 @@ import {
 	type SessionAttachmentStore,
 } from "../storage/attachment-store";
 import type { SessionStore } from "../storage/session-store";
-import { estimateSessionContextTokens } from "../usage/context-usage";
+import {
+	estimateSessionContextTokens,
+	estimateSessionContextTokensForThreshold,
+} from "../usage/context-usage";
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	DEFAULT_COMPACTION_SETTINGS,
@@ -2041,8 +2044,11 @@ export const createSessionCompaction = ({
 				return false;
 			}
 			return (
-				estimateSessionContextTokens(messages, estimateTokens, model).tokens >=
-				settings.thresholdTokens
+				estimateSessionContextTokensForThreshold(
+					messages,
+					estimateTokens,
+					model
+				).tokens >= settings.thresholdTokens
 			);
 		},
 	};

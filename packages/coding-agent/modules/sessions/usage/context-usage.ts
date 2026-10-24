@@ -36,40 +36,46 @@ export type SessionContextUsage = {
 	source: "measured" | "mixed" | "estimated";
 };
 
-/** Billing totals are never a context sample. Only matching projection observations qualify. */
-export const estimateSessionContextTokens = (
+const estimateSessionContextUsage = (
 	messages: readonly SessionMessage[],
-	estimateTokens: (
-		messages: readonly SessionMessage[]
-	) => number = estimateCompactionTokens,
-	model?: ProviderModelSelection
+	estimateTokens: (messages: readonly SessionMessage[]) => number,
+	model: ProviderModelSelection | undefined,
+	acceptForeignModelMeasurements: boolean
 ): SessionContextUsage => {
 	const epoch = getSessionContextEpoch(messages);
 	let lastUsageIndex = -1;
 	let providerTokens: number | null = null;
+	let lastMeasurementMatchesModel = true;
 	for (const [index, message] of messages.entries()) {
 		const sample = message.metadata?.contextMeasurement;
+		const measurementModel = message.metadata?.model;
 		if (
 			message.role !== "assistant" ||
 			!sample ||
 			sample.epoch !== epoch ||
 			(model &&
 				!(
-					message.metadata?.model &&
-					isSameProviderModelIdentity(model, message.metadata.model)
+					measurementModel &&
+					(acceptForeignModelMeasurements ||
+						isSameProviderModelIdentity(model, measurementModel))
 				))
 		) {
 			continue;
 		}
 		lastUsageIndex = index;
 		providerTokens = getModelContextTokens(sample.usage);
+		lastMeasurementMatchesModel =
+			model === undefined ||
+			(measurementModel !== undefined &&
+				isSameProviderModelIdentity(model, measurementModel));
 	}
 	const suffix =
 		lastUsageIndex === -1 ? messages : messages.slice(lastUsageIndex + 1);
 	const trailingTokens = suffix.length === 0 ? 0 : estimateTokens(suffix);
 	let source: SessionContextUsage["source"] = "estimated";
 	if (providerTokens !== null) {
-		source = suffix.length === 0 ? "measured" : "mixed";
+		source =
+			suffix.length === 0 && lastMeasurementMatchesModel ? "measured" : "mixed";
 	}
 	return {
 		lastUsageIndex,
@@ -79,3 +85,23 @@ export const estimateSessionContextTokens = (
 		source,
 	};
 };
+
+/** Restricts occupancy measurements to the selected Provider Model when supplied. */
+export const estimateSessionContextTokens = (
+	messages: readonly SessionMessage[],
+	estimateTokens: (
+		messages: readonly SessionMessage[]
+	) => number = estimateCompactionTokens,
+	model?: ProviderModelSelection
+): SessionContextUsage =>
+	estimateSessionContextUsage(messages, estimateTokens, model, false);
+
+/** Uses the latest same-epoch Provider measurement as a threshold baseline across model switches. */
+export const estimateSessionContextTokensForThreshold = (
+	messages: readonly SessionMessage[],
+	estimateTokens: (
+		messages: readonly SessionMessage[]
+	) => number = estimateCompactionTokens,
+	model?: ProviderModelSelection
+): SessionContextUsage =>
+	estimateSessionContextUsage(messages, estimateTokens, model, true);

@@ -29,6 +29,8 @@ Use exact, case-sensitive `providerId/modelId` identities from your configured P
 
 Only reserve/recent budgets support model overrides. Invalid values and unsupported fields are diagnosed.
 
+Threshold checks use the selected model's resolved compaction threshold and the latest valid context measurement in the current compaction epoch, even when another conversation model produced that measurement. Messages after that observation are estimated. Switching models does not compact immediately; the selected model's threshold is checked before its next request. The usage bar remains model-specific and estimates context instead of presenting a different model's measurement as exact.
+
 ## Long-running turns
 
 When automatic compaction is enabled, the Host also checks context before a subsequent Model Step, after tools have settled. It checkpoints completed text without declaring the turn finished, and compacts older durable history when needed. The newest assistant/tool batch and delivered steering remain intact, including opaque Provider continuation. Successful tools are never rerun to rebuild context.
