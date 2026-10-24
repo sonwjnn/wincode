@@ -1735,7 +1735,13 @@ const createLongLoopHost = async (
 	summarize: () => Promise<string> = async () =>
 		"Earlier steps read files successfully. Continue the task.",
 	storePort: SessionStore = store,
-	options: { toolOutput?: string; toolSteps?: number } = {}
+	options: {
+		autoCompact?: boolean;
+		overflowAtStep?: number;
+		providerInputTokens?: number;
+		toolOutput?: string;
+		toolSteps?: number;
+	} = {}
 ) => {
 	const seeded = await seedSession(prefix, "completed");
 	const counts = { effects: 0, modelCalls: 0, summaries: 0 };
@@ -1762,7 +1768,16 @@ const createLongLoopHost = async (
 			} else {
 				yield { type: "text-delta", delta: "final answer" };
 			}
-			yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
+			yield {
+				type: "usage",
+				usage: {
+					inputTokens:
+						counts.modelCalls === (options.overflowAtStep ?? 1)
+							? (options.providerInputTokens ?? 10)
+							: 10,
+					outputTokens: 2,
+				},
+			};
 		}
 		yield {
 			completion: { kind: "completed" },
@@ -1772,7 +1787,9 @@ const createLongLoopHost = async (
 	};
 	const document = {
 		compaction: {
+			auto: options.autoCompact ?? true,
 			keepRecentTokens: 2000,
+			overflowRecovery: true,
 			reserveTokens: 16_384,
 			summary: { maxOutputTokens: 512 },
 		},
@@ -1816,6 +1833,49 @@ const createLongLoopHost = async (
 };
 
 describe("Session Host opening", () => {
+	test("compacts a provider-accepted context overflow between tool steps without replaying effects", async () => {
+		const { counts, requests, previousScript, seeded, capabilities, host } =
+			await createLongLoopHost(
+				"silent-overflow",
+				async () =>
+					"Prior context compacted; continue with the completed tool result.",
+				store,
+				{
+					autoCompact: false,
+					overflowAtStep: 3,
+					providerInputTokens: 200_001,
+					toolOutput: "silent-overflow-tool-result ".repeat(23_000),
+					toolSteps: 3,
+				}
+			);
+		try {
+			const outcome = await host.agentSession.send(
+				sendInput(capabilities, "run the long task")
+			);
+
+			expect(outcome.rejected).toBe(false);
+			expect(host.getSnapshot().compactionError).toBeNull();
+			expect(host.getSnapshot().error).toBeNull();
+			expect(counts.effects).toBe(3);
+			expect(counts.modelCalls).toBe(4);
+			expect(counts.summaries).toBe(1);
+
+			const compactions = await store.getCompactions(seeded.sessionId);
+			expect(compactions).toHaveLength(2);
+			expect(compactions.at(-1)?.trigger).toBe("overflow");
+			const continuedRequest = requests.at(-1);
+			expect(JSON.stringify(continuedRequest)).toContain(
+				"Prior context compacted; continue with the completed tool result."
+			);
+			expect(JSON.stringify(continuedRequest)).toContain(
+				"silent-overflow-tool-result"
+			);
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
 	test("a long tool loop compacts between settled steps without replay and reopens its checkpointed text", async () => {
 		const { counts, requests, previousScript, seeded, capabilities, host } =
 			await createLongLoopHost("between-steps");

@@ -37,6 +37,15 @@ export const isContextOverflowFailure = (error: unknown): boolean =>
 	isModelContextOverflowError(error) ||
 	(isOperationalFailure(error) && error.code === "context-overflow");
 
+/** Whether a Provider-reported request input exceeded the effective context window. */
+export const isProviderReportedContextOverflow = (
+	inputTokens: number | null | undefined,
+	contextWindowTokens: number
+): boolean =>
+	inputTokens !== null &&
+	inputTokens !== undefined &&
+	inputTokens > contextWindowTokens;
+
 /**
  * The messages one overflow recovery compacts: the Session Transcript up to and
  * including the original user message, with the interrupted turn that followed

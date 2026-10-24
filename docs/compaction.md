@@ -37,6 +37,8 @@ Threshold checks use the selected model's resolved compaction threshold and the 
 
 When automatic compaction is enabled, the Host also checks context before a subsequent Model Step, after tools have settled. It checkpoints completed text without declaring the turn finished, and compacts older durable history when needed. The newest assistant/tool batch and delivered steering remain intact, including opaque Provider continuation. Successful tools are never rerun to rebuild context.
 
+With `overflowRecovery` enabled, a successful Provider response that reports input usage above the selected model's effective context window also triggers compaction, even when automatic threshold compaction is disabled. For a continuing turn, this runs after its tool calls settle and resumes from the preserved assistant/tool batch. This uses Provider-reported input usage, not the estimated usage bar.
+
 If that protected batch cannot fit, or checkpointing/summarization/persistence fails, the turn stops rather than dispatching an unsafe next request. Cancellation propagates to preparation. If a durable checkpoint or compaction write has already succeeded, its complete result is reconciled before cancellation settles; cancellation does not roll back committed storage. Aggregate billing stays on the terminal turn record; non-terminal text checkpoints do not add billed usage.
 
 ## Overflow recovery after completed tools

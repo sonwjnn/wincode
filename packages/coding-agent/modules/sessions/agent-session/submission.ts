@@ -31,7 +31,10 @@ import { logSessionPersistenceFailure } from "@/shared/utils/session-persistence
 import type { CompactSessionResult } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
 import { SessionCompactionError } from "../compaction/error";
-import { isContextOverflowFailure } from "../compaction/overflow-recovery";
+import {
+	isContextOverflowFailure,
+	isProviderReportedContextOverflow,
+} from "../compaction/overflow-recovery";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import {
 	createSessionUserMessage,
@@ -238,6 +241,27 @@ const needsThresholdCompaction = (
 ): boolean =>
 	settings.autoAvailable &&
 	compaction.needsCompaction(messages, settings, model);
+
+const getContextCompactionTrigger = (
+	compaction: AgentSessionPorts["compaction"],
+	messages: readonly SessionMessage[],
+	settings: ResolvedCompactionSettings,
+	model: ProviderModelSelection,
+	providerInputTokens: number | null
+): "overflow" | "threshold" | null => {
+	if (
+		settings.overflowRecoveryAvailable &&
+		isProviderReportedContextOverflow(
+			providerInputTokens,
+			settings.modelContextLimit
+		)
+	) {
+		return "overflow";
+	}
+	return needsThresholdCompaction(compaction, messages, settings, model)
+		? "threshold"
+		: null;
+};
 
 export const prepareCompactionBeforeSubmit = async ({
 	compaction,
@@ -1277,6 +1301,7 @@ const runTurn = async ({
 	signal: AbortSignal;
 }): Promise<SessionSendOutcome> => {
 	let contextEpoch = getSessionContextEpoch(modelMessages);
+	let lastModelStepInputTokens: number | null = null;
 	let executionActive = true;
 	let terminalCommitted = false;
 	const turnIsLive = (): boolean =>
@@ -1326,6 +1351,7 @@ const runTurn = async ({
 			}
 			markExecutionStarted();
 			if (event.type === "model-step-finished") {
+				lastModelStepInputTokens = event.usage?.inputTokens ?? null;
 				await deps.acknowledgeSteeringMessages(execution.turnId, "processed");
 			}
 			const currentExecution = {
@@ -1429,16 +1455,14 @@ const runTurn = async ({
 				const settings = await deps.ports.resolveCompactionSettings(
 					execution.model
 				);
-				if (
-					!(
-						settings.autoAvailable &&
-						deps.ports.compaction.needsCompaction(
-							deps.getContext(),
-							settings,
-							execution.model
-						)
-					)
-				) {
+				const trigger = getContextCompactionTrigger(
+					deps.ports.compaction,
+					deps.getContext(),
+					settings,
+					execution.model,
+					lastModelStepInputTokens
+				);
+				if (trigger === null) {
 					return;
 				}
 				const activeIds = new Set(
@@ -1468,10 +1492,13 @@ const runTurn = async ({
 						sourceMessages,
 						protectedMessageIds: protectedIds,
 						signal,
-						trigger: "threshold",
+						trigger,
 						turnId: execution.turnId,
 						...omitUndefined({ thinkingLevel: execution.thinkingLevel }),
 					});
+					if (trigger === "overflow") {
+						lastModelStepInputTokens = null;
+					}
 					assertSendNotCancelled(signal);
 					const protectedSet = new Set(protectedIds);
 					const index = result.activeMessages.findIndex((message) =>
