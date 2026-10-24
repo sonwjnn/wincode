@@ -1,11 +1,12 @@
 import type { Database } from "bun:sqlite";
-import type { ProviderCollection } from "@wincode/ai";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai";
 import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,
 	resolveAgentRegistry,
 } from "@/modules/agents/registry";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { toWorkspaceId, type WorkspaceId } from "@/shared/identifiers";
 import {
@@ -249,12 +250,15 @@ export const createSessionCapabilities = async ({
 			createProviderCollection: providerCollectionFactory,
 			getCapabilityCeiling: () => capabilityCeiling,
 			getCompactionModule: () => compaction,
-			getCompactionSettings: (model) =>
+			getCompactionSettings: (
+				model: ProviderModelSelection,
+				providerModel?: ProviderModel | null
+			) =>
 				createCompactionSettingsOperations({
 					// A Resource Reload that swaps the ConfigStore lands on the next read.
 					configStore: providedGetConfig().configStore,
 					workspace,
-				}).getCompactionSettings(model),
+				}).getCompactionSettings(model, providerModel),
 			getConfig: readConfigRuntime,
 			getRegistry,
 			getStore: () => store,

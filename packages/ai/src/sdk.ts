@@ -1,4 +1,4 @@
-import { logger } from "@wincode/utils";
+import { logger, omitUndefined } from "@wincode/utils";
 import { z } from "zod";
 import { normalizeModelFailure } from "./model-failures.ts";
 import {
@@ -824,7 +824,9 @@ const isOptionalProviderModelLimits = (value: unknown): boolean =>
 	(isRecord(value) &&
 		Object.entries(value).every(([key, candidate]) => {
 			if (key === "contextWindowTokens") {
-				return candidate === undefined || isPositiveSafeInteger(candidate);
+				// Context metadata is advisory; normalization drops invalid values so
+				// the consumer can use its documented fallback.
+				return true;
 			}
 			if (key === "maxOutputTokens") {
 				return candidate === undefined || isPositiveSafeInteger(candidate);
@@ -906,12 +908,22 @@ const isProviderModel = (value: unknown): value is ProviderModel =>
 	isOptionalProviderModelPricing(value.pricing);
 
 const normalizeProviderModel = (model: ProviderModel): ProviderModel => {
-	const pricing = model.pricing;
+	const limits = model.limits;
+	const normalizedModel =
+		limits !== undefined && !isPositiveSafeInteger(limits.contextWindowTokens)
+			? {
+					...model,
+					limits: omitUndefined({
+						maxOutputTokens: limits.maxOutputTokens,
+					}),
+				}
+			: model;
+	const pricing = normalizedModel.pricing;
 	if (pricing?.tiers === undefined) {
-		return model;
+		return normalizedModel;
 	}
 	return {
-		...model,
+		...normalizedModel,
 		pricing: {
 			...pricing,
 			tiers: [...pricing.tiers].sort(

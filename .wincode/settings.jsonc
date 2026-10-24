@@ -1,8 +1,7 @@
 {
-  // Effective context window for every Provider Model, including chat and
-  // summary models. This intentionally takes precedence over Provider metadata.
-  // Override the default of 272,000 tokens here, or in the global settings file.
-  // Must be a positive safe integer.
+  // Optional settings override for all Provider Models, including chat and summary.
+  // When unset, use each model's context metadata; if missing or invalid, fall
+  // back to 272,000 tokens. Must be a positive safe integer.
   // "contextWindowTokens": 272000,
   // Global Settings defaults:
   // - Auto-compact: true (also listed below)

@@ -150,7 +150,10 @@ export const createSessionMaintenanceWorkflow = (
 	): Promise<CompactSessionInput["settings"]> => {
 		const settings = await port.resolveCompactionSettings(model);
 		return {
-			...omitUndefined({ summary: settings.summary }),
+			...omitUndefined({
+				contextWindowOverrideTokens: settings.contextWindowOverrideTokens,
+				summary: settings.summary,
+			}),
 			compactionOverheadTokens: port.requestOverheadTokens(),
 			enabled: settings.enabled,
 			keepRecentTokens: settings.keepRecentTokens,

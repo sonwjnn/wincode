@@ -52,7 +52,6 @@ import type {
 	SessionSubmissionComposition,
 	SessionSendInput as SessionSubmissionInput,
 } from "../../submission-types";
-import { resolveContextWindowTokens } from "../../usage/context-window";
 import type { ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
@@ -280,7 +279,6 @@ export function SessionView({
 	);
 	const dialog = useDialog();
 	const { snapshot: configSnapshot } = useConfig();
-	const contextWindowTokens = resolveContextWindowTokens(configSnapshot).tokens;
 	const sessionStore = useMemo(() => getSessionStore(), []);
 	const [editMode, setEditMode] = useState<EditMode>("hashline");
 	const editModeLoadRevisionRef = useRef(0);
@@ -1002,7 +1000,7 @@ export function SessionView({
 					activeMessages={activeMessages}
 					cacheWarmingStatus={cacheWarmingStatus}
 					compactions={snapshot.compactions}
-					contextWindowTokens={contextWindowTokens}
+					contextSnapshot={configSnapshot}
 					draftKey={sessionId}
 					error={error}
 					isBusy={isBusy}

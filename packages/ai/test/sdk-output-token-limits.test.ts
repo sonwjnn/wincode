@@ -148,7 +148,7 @@ describe("Provider Model output-token limits", () => {
 		await collection.close();
 	});
 
-	test("rejects invalid context limits at registration, discovery, and restoration", async () => {
+	test("drops invalid context limits at registration, discovery, and restoration", async () => {
 		const invalidContextLimits = [
 			0,
 			1.5,
@@ -178,9 +178,11 @@ describe("Provider Model output-token limits", () => {
 				providerId: "fixture",
 			};
 			const registrationCollection = createProviderCollection();
-			expect(() =>
-				registrationCollection.register(providerFor([invalidModel]))
-			).toThrow("Invalid model identity for provider fixture.");
+			registrationCollection.register(providerFor([invalidModel]));
+			expect(
+				registrationCollection.getModel("fixture", invalidModel.modelId)?.limits
+					?.contextWindowTokens
+			).toBeUndefined();
 			await registrationCollection.close();
 
 			const discoveryCollection = createProviderCollection();
@@ -188,11 +190,10 @@ describe("Provider Model output-token limits", () => {
 			const discoveryResult = await discoveryCollection.refreshModels({
 				providerIds: ["fixture"],
 			});
-			expect(discoveryResult.errors.get("fixture")?.message).toContain(
-				"Provider discovery contains an invalid model for provider fixture."
-			);
+			expect(discoveryResult.errors.has("fixture")).toBe(false);
 			expect(
-				discoveryCollection.getModel("fixture", invalidModel.modelId)
+				discoveryCollection.getModel("fixture", invalidModel.modelId)?.limits
+					?.contextWindowTokens
 			).toBeUndefined();
 			await discoveryCollection.close();
 
@@ -203,11 +204,12 @@ describe("Provider Model output-token limits", () => {
 				},
 			});
 			restorationCollection.register(providerFor([]));
-			await expect(restorationCollection.restoreModels()).rejects.toThrow(
-				"Model store snapshot contains an invalid model for provider fixture."
-			);
+			await expect(
+				restorationCollection.restoreModels()
+			).resolves.toBeUndefined();
 			expect(
-				restorationCollection.getModel("fixture", invalidModel.modelId)
+				restorationCollection.getModel("fixture", invalidModel.modelId)?.limits
+					?.contextWindowTokens
 			).toBeUndefined();
 			await restorationCollection.close();
 		}

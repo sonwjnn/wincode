@@ -18,6 +18,7 @@ const restoreEnvironment = createEnvironmentRestorer([
 process.env.WINCODE_TEST_PLUGIN_LIFECYCLE_LOG = lifecycleLogPath;
 
 import { fromPartial } from "@total-typescript/shoehorn";
+import type { ProviderModel } from "@wincode/ai";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { loadPlugins } from "@/modules/plugins/loader";
@@ -190,7 +191,7 @@ test("reads its sources when the work needs them, not when it opens", async () =
 	await services.shutdown();
 });
 
-test("resolves default and configured context windows from merged settings", async () => {
+test("resolves fallback, model metadata, and explicit override through Session Services", async () => {
 	const model: ProviderModelSelection = {
 		modelId: modelId("gpt-5.6-luna"),
 		providerId: "openai",
@@ -225,8 +226,22 @@ test("resolves default and configured context windows from merged settings", asy
 	expect(first.modelContextLimit).toBe(272_000);
 	expect(first.enabled).toBe(true);
 
+	const providerModel = fromPartial<ProviderModel>({
+		limits: { contextWindowTokens: 100_000 },
+		modelId: model.modelId,
+		providerId: model.providerId,
+	});
+	const fromModelMetadata = await services.capabilities.getCompactionSettings(
+		model,
+		providerModel
+	);
+	expect(fromModelMetadata.modelContextLimit).toBe(100_000);
+
 	currentConfig = configured(false, 200_000);
-	const second = await services.capabilities.getCompactionSettings(model);
+	const second = await services.capabilities.getCompactionSettings(
+		model,
+		providerModel
+	);
 	expect(second.modelContextLimit).toBe(200_000);
 	expect(second.enabled).toBe(false);
 	await services.shutdown();

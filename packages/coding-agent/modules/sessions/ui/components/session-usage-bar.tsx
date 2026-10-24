@@ -15,42 +15,24 @@ export function SessionUsageBar({
 	summary,
 }: SessionUsageBarProps) {
 	const { colors } = useTheme();
-	const tokensText = formatModelTokenCount(summary.contextTokens);
-	const contextPercent =
-		isNull(summary.contextPercent) ||
-		isNull(summary.contextLimit) ||
-		summary.contextLimit <= 0
-			? null
-			: Math.min(
-					100,
-					Math.max(0, (summary.contextTokens / summary.contextLimit) * 100)
-				);
+	const contextPercent = Math.min(
+		100,
+		Math.max(0, (summary.contextTokens / summary.contextLimit) * 100)
+	);
 	const percentColor =
-		contextPercent !== null && contextPercent >= CONTEXT_WARNING_PERCENT
-			? colors.error
-			: colors.textMuted;
+		contextPercent >= CONTEXT_WARNING_PERCENT ? colors.error : colors.textMuted;
 	const estimateMarker = summary.contextSource === "measured" ? "" : "~";
-	const contextText =
-		contextPercent === null || isNull(summary.contextLimit)
-			? tokensText
-			: `${contextPercent.toFixed(1)}%/${formatModelTokenCount(
-					summary.contextLimit
-				).toLowerCase()}`;
+	const contextText = `${contextPercent.toFixed(1)}%/${formatModelTokenCount(
+		summary.contextLimit
+	).toLowerCase()}`;
 
 	return (
 		<box flexDirection="row" flexShrink={0}>
 			<text fg={colors.textMuted}>
-				{contextPercent === null ? (
-					<span>
-						{estimateMarker}
-						{contextText}
-					</span>
-				) : (
-					<span fg={percentColor}>
-						{estimateMarker}
-						{contextText}
-					</span>
-				)}
+				<span fg={percentColor}>
+					{estimateMarker}
+					{contextText}
+				</span>
 				{autoCompact ? <span> (auto)</span> : null}
 				{summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0 ? (
 					<span>{` ↑${formatModelTokenCount(

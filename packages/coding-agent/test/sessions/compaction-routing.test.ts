@@ -14,7 +14,6 @@ import {
 	createAgentSessionAdapters,
 } from "@/modules/sessions/host/agent-session-adapters";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import {
 	createFakeProviderCollection,
@@ -65,7 +64,7 @@ const fixture = (
 		registered: readonly PluginProviderOwnerRegistration[];
 	} = { trusted: [], registered: [] },
 	lifecycle?: CompactionLifecycle,
-	contextWindowTokens = DEFAULT_CONTEXT_WINDOW_TOKENS
+	contextWindowTokens?: number
 ) => {
 	const requests: ChatRequest[] = [];
 	const summaryUsageEntries: unknown[] = [];
@@ -83,9 +82,10 @@ const fixture = (
 	};
 	const document = {
 		compaction: { keepRecentTokens: 1, reserveTokens: 1000, summary },
-		contextWindowTokens,
+		...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
 	};
 	const settings = resolveCompactionSettings({
+		contextLimit: chatModel.limits?.contextWindowTokens,
 		model: conversation,
 		snapshot: {
 			document,
@@ -283,7 +283,7 @@ test("an unsupported explicit summary thinking level is rejected rather than sil
 	expect(requests).toHaveLength(0);
 });
 
-test("the global context window overrides a smaller summary-model context declaration", async () => {
+test("an explicit global override overrides a smaller summary-model context declaration", async () => {
 	const { compact, requests } = fixture(
 		{ model: "anthropic/summary/large" },
 		messages,
@@ -315,14 +315,39 @@ test("a summary target's output cap below the minimum dispatches nothing", async
 	expect(requests).toHaveLength(0);
 });
 
-test("a summary model without published context metadata uses Wincode's global default", async () => {
+test("summary budgeting uses the summary model's metadata when no override is set", async () => {
 	const { compact, requests } = fixture(
 		{ model: "anthropic/summary/large" },
 		messages,
-		{ ...summaryModel, limits: {} },
-		{ trusted: [], registered: [] },
-		undefined,
-		DEFAULT_CONTEXT_WINDOW_TOKENS
+		{
+			...summaryModel,
+			limits: { contextWindowTokens: 4000, maxOutputTokens: 4096 },
+		}
+	);
+
+	await expect(compact()).rejects.toBeDefined();
+	expect(requests).toHaveLength(0);
+});
+
+test("invalid summary-model context metadata uses the 272k fallback", async () => {
+	const { compact, requests } = fixture(
+		{ model: "anthropic/summary/large" },
+		messages,
+		{
+			...summaryModel,
+			limits: { contextWindowTokens: 0, maxOutputTokens: 4096 },
+		}
+	);
+
+	await expect(compact()).resolves.toBeDefined();
+	expect(requests).toHaveLength(1);
+});
+
+test("a summary model without context metadata uses the 272k fallback", async () => {
+	const { compact, requests } = fixture(
+		{ model: "anthropic/summary/large" },
+		messages,
+		{ ...summaryModel, limits: {} }
 	);
 
 	await expect(compact()).resolves.toBeDefined();

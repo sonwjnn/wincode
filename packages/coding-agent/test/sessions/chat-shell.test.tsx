@@ -1296,13 +1296,13 @@ describe("ChatShell activity footer", () => {
 		});
 		try {
 			await flushUi(setup);
-			const frame = await waitForFrameText(setup, "2.7%/272k (auto)");
+			const frame = await waitForFrameText(setup, "0.7%/1.1m (auto)");
 			const rows = frame.split("\n");
 			const pathRow = rows.findIndex((row) =>
 				row.includes(path.basename(process.cwd()) || path.sep)
 			);
 			const usageRow = rows.findIndex((row) =>
-				row.includes("2.7%/272k (auto)")
+				row.includes("0.7%/1.1m (auto)")
 			);
 
 			expect(pathRow).toBeGreaterThanOrEqual(0);
@@ -1310,7 +1310,7 @@ describe("ChatShell activity footer", () => {
 			const pathColumn = (rows[pathRow] ?? "").indexOf(
 				path.basename(process.cwd()) || path.sep
 			);
-			const usageColumn = (rows[usageRow] ?? "").indexOf("2.7%");
+			const usageColumn = (rows[usageRow] ?? "").indexOf("0.7%");
 			expect(usageColumn).toBeGreaterThan(pathColumn);
 			const footerSpans = setup.captureSpans().lines[pathRow]?.spans ?? [];
 			expect(footerSpans.every((span) => span.bg.a === 0)).toBe(true);

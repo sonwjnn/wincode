@@ -1,5 +1,5 @@
 import type { AgentTurnEvent } from "@wincode/agent-core";
-import type { ProviderCollection } from "@wincode/ai";
+import type { ProviderCollection, ProviderModel } from "@wincode/ai";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
@@ -31,7 +31,8 @@ export type SessionCapabilities = Readonly<{
 	getCompactionModule: () => SessionCompactionModule;
 	/** Resolves the compaction settings for one selected Provider Model. */
 	getCompactionSettings: (
-		model: ProviderModelSelection
+		model: ProviderModelSelection,
+		providerModel?: ProviderModel | null
 	) => Promise<ResolvedCompactionSettings>;
 	getConfig: () => ConfigRuntime;
 	/** Creates a Host-owned ProviderCollection when this Host uses the SDK path. */

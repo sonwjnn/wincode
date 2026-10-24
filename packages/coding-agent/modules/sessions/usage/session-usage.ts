@@ -15,11 +15,12 @@ import type {
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
 import {
 	estimateSessionContextTokens,
 	type SessionContextUsage,
 } from "./context-usage";
-import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "./context-window";
+import { resolveContextWindowTokens } from "./context-window";
 
 export type SessionUsageSummary = {
 	/** Estimated USD for measured usage with complete rates, or `null` when every rate is unknown. */
@@ -36,10 +37,10 @@ export type SessionUsageSummary = {
 	cacheReadTokens: number;
 	/** Session-total cache writes, kept separate from context usage. */
 	cacheWriteTokens: number;
-	/** Effective Wincode context window applied regardless of Provider metadata. */
-	contextLimit: number | null;
-	/** `null` only when the caller cannot provide an effective context limit. */
-	contextPercent: number | null;
+	/** Selected model's effective context limit: override, metadata, then fallback. */
+	contextLimit: number;
+	/** Context occupancy percentage, clamped to the visible 0–100 range. */
+	contextPercent: number;
 	contextTokens: number;
 	contextSource: SessionContextUsage["source"];
 };
@@ -166,23 +167,27 @@ export const summarizeSessionUsage = (
 	cacheWarmingStatus: CacheWarmingStatus = "idle",
 	providerModels?: readonly ProviderModel[],
 	contextMessages: readonly SessionMessage[] = messages,
-	contextWindowTokens: number = DEFAULT_CONTEXT_WINDOW_TOKENS
+	contextSnapshot?: ConfigSnapshot
 ): SessionUsageSummary | null => {
 	const { lastUsage } = collectMessageUsage(messages);
 	if (isNull(lastUsage)) {
 		return null;
 	}
-	const contextLimit = contextWindowTokens;
+	const selectedProviderModel = providerModelForSelection(
+		providerModels,
+		fallbackModel
+	);
+	const contextLimit = resolveContextWindowTokens(
+		contextSnapshot,
+		selectedProviderModel?.limits?.contextWindowTokens
+	).tokens;
 	const context = estimateSessionContextTokens(
 		contextMessages,
 		undefined,
 		fallbackModel
 	);
 	const contextTokens = context.tokens;
-	const contextPercent =
-		!isNull(contextLimit) && contextLimit > 0
-			? clampPercent((contextTokens / contextLimit) * 100)
-			: null;
+	const contextPercent = clampPercent((contextTokens / contextLimit) * 100);
 	return {
 		...collectSessionUsage(
 			messages,

@@ -319,7 +319,10 @@ export const createAgentSessionAdapters = (
 		resolveSubmission,
 		assertProviderModelSelection,
 		resolveCompactionSettings: (model) =>
-			capabilities.getCompactionSettings(model),
+			capabilities.getCompactionSettings(
+				model,
+				providerCollection.getModel(model.providerId, model.modelId)
+			),
 		resolveFileMentions: (text) => resolveFileMentionParts(text),
 		turnRunner: createAgentSessionTurnRunner(turnRunnerInputs),
 		skills: { createTurnSkill, resolveSkill },

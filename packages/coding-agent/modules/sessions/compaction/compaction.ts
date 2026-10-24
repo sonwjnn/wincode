@@ -200,6 +200,7 @@ export type CompactSessionInput = {
 				| "maxMediaBytes"
 				| "maxMediaTokens"
 				| "modelContextLimit"
+				| "contextWindowOverrideTokens"
 				| "reserveTokens"
 			>
 		> & {

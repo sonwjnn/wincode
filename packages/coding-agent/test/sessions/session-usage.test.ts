@@ -9,6 +9,7 @@ import {
 	summarizeSessionUsage,
 	turnCostUsd,
 } from "@/modules/sessions/usage/session-usage";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
 import {
 	modelId,
 	modelIdentity,
@@ -21,6 +22,13 @@ const model: ProviderModelSelection = {
 	modelId: modelId("claude-haiku-4-5"),
 	providerId: "anthropic",
 };
+const contextSnapshot = (contextWindowTokens: number): ConfigSnapshot => ({
+	diagnostics: [],
+	document: { contextWindowTokens },
+	sourceFor: () => undefined,
+	sources: [],
+});
+
 const anthropicModel: ProviderModel = {
 	limits: { contextWindowTokens: 200_000 },
 	modelId: model.modelId,
@@ -202,7 +210,7 @@ describe("summarizeSessionUsage", () => {
 		expect(measured?.costUsd).toBeCloseTo(0.075_65, 9);
 	});
 
-	test("switching models keeps the global context window instead of the selected model metadata", () => {
+	test("switching models uses the selected model's context metadata", () => {
 		const selected: ProviderModelSelection = {
 			providerId: "google",
 			modelId: modelId("other-model"),
@@ -222,7 +230,7 @@ describe("summarizeSessionUsage", () => {
 			]
 		);
 		expect(result).toMatchObject({
-			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+			contextLimit: 10_000,
 			contextSource: "estimated",
 			costedTurns: 1,
 		});
@@ -248,7 +256,7 @@ describe("summarizeSessionUsage", () => {
 		expect(result?.costUsd).toBeCloseTo(0.0905, 9);
 	});
 
-	test("uses the global context window even when Provider metadata differs", () => {
+	test("uses Provider metadata when no explicit global override is set", () => {
 		const messages = [
 			assistant("assistant-1", { inputTokens: 90, outputTokens: 10 }),
 			{ id: sessionMessageId("user-2"), parts: [], role: "user" } as const,
@@ -259,12 +267,12 @@ describe("summarizeSessionUsage", () => {
 		]);
 
 		expect(summary).toMatchObject({
-			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+			contextLimit: 200_000,
 			contextTokens: 45,
 		});
 	});
 
-	test("uses the global context window when Provider Model metadata is absent", () => {
+	test("uses the 272k fallback when Provider Model metadata is absent", () => {
 		const summary = summarizeSessionUsage(
 			[assistant("assistant-1", { inputTokens: 90, outputTokens: 10 })],
 			model
@@ -276,7 +284,7 @@ describe("summarizeSessionUsage", () => {
 		});
 	});
 
-	test("uses the configured global context window for the occupancy percentage", () => {
+	test("uses the explicit context-window override for the occupancy percentage", () => {
 		const summary = summarizeSessionUsage(
 			[assistant("assistant-1", { inputTokens: 9000, outputTokens: 100 })],
 			model,
@@ -284,7 +292,7 @@ describe("summarizeSessionUsage", () => {
 			"idle",
 			[anthropicModel],
 			undefined,
-			10_000
+			contextSnapshot(10_000)
 		);
 
 		expect(summary).toMatchObject({ contextLimit: 10_000, contextPercent: 91 });
@@ -417,7 +425,7 @@ describe("summarizeSessionUsage", () => {
 		);
 
 		expect(summary).toMatchObject({
-			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+			contextLimit: 80_000,
 			costUsd: 10,
 			costedTurns: 1,
 		});
@@ -512,7 +520,7 @@ describe("summarizeSessionUsage", () => {
 		});
 	});
 
-	test("Provider context metadata cannot override the global context window", async () => {
+	test("invalid Provider context metadata falls back while valid metadata sets the limit", async () => {
 		const providerId = "context-limit-fixture";
 		const selection: ProviderModelSelection = {
 			modelId: modelIdentity("context-limit-model"),
@@ -523,7 +531,6 @@ describe("summarizeSessionUsage", () => {
 			{ inputTokens: 5000, outputTokens: 0 },
 			selection
 		);
-		const collection = createProviderCollection();
 		const invalidLimits = [
 			0,
 			1.5,
@@ -532,28 +539,41 @@ describe("summarizeSessionUsage", () => {
 			Number.POSITIVE_INFINITY,
 			Number.NEGATIVE_INFINITY,
 		];
-		for (const contextWindowTokens of invalidLimits) {
-			expect(() =>
-				collection.register({
-					id: providerId,
-					models: [
-						{
-							limits: { contextWindowTokens },
-							modelId: selection.modelId,
-							protocolId: "fixture",
-							providerId,
-						},
-					],
-					resolveAuthorization: () => ({ authorization: "fixture-only" }),
-					async *streamChat() {
-						yield { type: "finish" };
+		for (const [index, contextWindowTokens] of invalidLimits.entries()) {
+			const invalidSelection: ProviderModelSelection = {
+				...selection,
+				modelId: modelIdentity(`invalid-context-model-${index}`),
+			};
+			const collection = createProviderCollection();
+			collection.register({
+				id: providerId,
+				models: [
+					{
+						limits: { contextWindowTokens },
+						modelId: invalidSelection.modelId,
+						protocolId: "fixture",
+						providerId,
 					},
-				})
-			).toThrow(`Invalid model identity for provider ${providerId}.`);
+				],
+				resolveAuthorization: () => ({ authorization: "fixture-only" }),
+				async *streamChat() {
+					yield { type: "finish" };
+				},
+			});
+			const providerModel = collection.getModel(
+				providerId,
+				invalidSelection.modelId
+			);
+			expect(providerModel?.limits?.contextWindowTokens).toBeUndefined();
 
+			const invalidMessage = assistant(
+				`context-limit-usage-${index}`,
+				{ inputTokens: 5000, outputTokens: 0 },
+				invalidSelection
+			);
 			const summary = summarizeSessionUsage(
-				[message],
-				selection,
+				[invalidMessage],
+				invalidSelection,
 				[],
 				"idle",
 				collection.getModels()
@@ -568,8 +588,10 @@ describe("summarizeSessionUsage", () => {
 				modelContextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
 				thresholdTokens: 255_616,
 			});
+			await collection.close();
 		}
 
+		const collection = createProviderCollection();
 		collection.register({
 			id: providerId,
 			models: [
@@ -594,20 +616,20 @@ describe("summarizeSessionUsage", () => {
 			validModels
 		);
 		expect(validSummary).toMatchObject({
-			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
-			contextPercent: 2,
+			contextLimit: 10_000,
+			contextPercent: 50,
 		});
 		expect(
 			resolveCompactionSettings({ contextLimit: validSummary?.contextLimit })
 		).toMatchObject({
 			autoAvailable: true,
-			modelContextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
-			thresholdTokens: 255_616,
+			modelContextLimit: 10_000,
+			thresholdTokens: 5000,
 		});
 		await collection.close();
 	});
 
-	test("uses the Wincode context default for an unknown Provider model", () => {
+	test("uses the 272k fallback for an unknown Provider Model", () => {
 		const unknownModel: ProviderModelSelection = {
 			modelId: modelId("gemini-3-pro-preview"),
 			providerId: "google",

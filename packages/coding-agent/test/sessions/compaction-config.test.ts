@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
+import type { ProviderModel } from "@wincode/ai";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
@@ -275,7 +276,7 @@ describe("resolveCompactionSettings", () => {
 		});
 	});
 
-	test("uses the global 272k context window when Provider metadata is absent", () => {
+	test("uses the 272k fallback when Provider metadata is absent", () => {
 		const settings = resolveCompactionSettings();
 
 		expect(settings.enabled).toBe(DEFAULT_COMPACTION_SETTINGS.enabled);
@@ -288,21 +289,29 @@ describe("resolveCompactionSettings", () => {
 		);
 	});
 
-	test("uses a configured global context window instead of the default", () => {
-		const settings = resolveCompactionSettings({
-			snapshot: snapshot({ contextWindowTokens: 96_000 }),
-		});
+	test("uses Provider metadata when no global context-window override is set", () => {
+		const settings = resolveCompactionSettings({ contextLimit: 96_000 });
 
 		expect(settings.modelContextLimit).toBe(96_000);
 		expect(settings.thresholdTokens).toBe(79_616);
 	});
 
-	test("falls back to the global default and diagnoses an invalid context window", () => {
+	test("an explicit global override takes precedence over Provider metadata", () => {
 		const settings = resolveCompactionSettings({
+			contextLimit: 200_000,
+			snapshot: snapshot({ contextWindowTokens: 96_000 }),
+		});
+
+		expect(settings.modelContextLimit).toBe(96_000);
+	});
+
+	test("falls back to Provider metadata and diagnoses an invalid override", () => {
+		const settings = resolveCompactionSettings({
+			contextLimit: 96_000,
 			snapshot: snapshot({ contextWindowTokens: 0 }),
 		});
 
-		expect(settings.modelContextLimit).toBe(DEFAULT_CONTEXT_WINDOW_TOKENS);
+		expect(settings.modelContextLimit).toBe(96_000);
 		expect(settings.diagnostics).toContainEqual(
 			expect.objectContaining({
 				code: "invalid-value",
@@ -343,6 +352,28 @@ describe("resolveCompactionSettings", () => {
 		expect(afterModelSwitch.modelContextLimit).toBe(180_000);
 	});
 
+	test("uses the selected Provider Model's metadata when no override is configured", async () => {
+		const operations = createCompactionSettingsOperations({
+			configStore: fromPartial<ConfigStore>({
+				getSnapshot: async () => snapshot({}),
+			}),
+			workspace: "/workspace",
+		});
+		const model = providerModelSelectionFixture("openai/gpt-4.1");
+		const providerModel = fromPartial<ProviderModel>({
+			...model,
+			limits: { contextWindowTokens: 96_000 },
+		});
+
+		const settings = await operations.getCompactionSettings(
+			model,
+			providerModel
+		);
+
+		expect(settings.modelContextLimit).toBe(96_000);
+		expect(settings.thresholdTokens).toBe(79_616);
+	});
+
 	test("uses the default context window when a Provider Model is not supplied", async () => {
 		const operations = createCompactionSettingsOperations({
 			configStore: fromPartial<ConfigStore>({
@@ -359,7 +390,7 @@ describe("resolveCompactionSettings", () => {
 		expect(settings.autoAvailable).toBe(true);
 	});
 
-	test("uses the global context default for an unlisted Provider Model", async () => {
+	test("uses the 272k fallback for an unlisted Provider Model", async () => {
 		const operations = createCompactionSettingsOperations({
 			configStore: fromPartial<ConfigStore>({
 				getSnapshot: async () => snapshot({}),

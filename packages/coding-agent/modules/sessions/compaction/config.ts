@@ -4,6 +4,7 @@ import {
 	isObjectLike,
 	isPositiveSafeInteger,
 	isUndefined,
+	omitUndefined,
 	pickTruthy,
 } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
@@ -60,11 +61,7 @@ export type CompactionSettings = {
 };
 
 export type CompactionDiagnostic = {
-	code:
-		| ConfigDiagnostic["code"]
-		| "invalid-value"
-		| "invalid-record"
-		| "unknown-context-limit";
+	code: ConfigDiagnostic["code"] | "invalid-value" | "invalid-record";
 	configPath: readonly string[];
 	message: string;
 	origin?: ConfigOrigin;
@@ -84,7 +81,8 @@ export type ResolvedCompactionSettings = {
 	maxMediaAttachments: number;
 	maxMediaBytes: number;
 	maxMediaTokens: number;
-	modelContextLimit: number | null;
+	modelContextLimit: number;
+	contextWindowOverrideTokens?: number;
 	overflowRecoveryAvailable: boolean;
 	resolved: CompactionSettings;
 	reserveTokens: number;
@@ -97,6 +95,7 @@ export type ResolvedCompactionSettings = {
 };
 
 export type CompactionConfigurationInput = {
+	/** Selected Provider Model's published context-window metadata, if available. */
 	contextLimit?: number | null;
 	/** Conversation target whose exact-model policy applies to these settings. */
 	model?: ProviderModelSelection;
@@ -471,10 +470,11 @@ export const resolveCompactionSettings = (
 		sessionOverrides,
 		snapshot,
 	} = input;
-	const contextWindow = resolveContextWindowTokens(snapshot);
-	const contextLimit = isUndefined(requestedContextLimit)
-		? contextWindow.tokens
-		: requestedContextLimit;
+	const contextWindow = resolveContextWindowTokens(
+		snapshot,
+		requestedContextLimit
+	);
+	const contextLimit = contextWindow.tokens;
 	const { configPath, desired, diagnostics, settingPaths, sources } =
 		resolveDesiredSettings(snapshot, sessionOverrides, model);
 	const resolved = { ...desired };
@@ -491,37 +491,15 @@ export const resolveCompactionSettings = (
 		);
 	}
 
-	if (isNull(contextLimit) || isUndefined(contextLimit)) {
-		diagnostics.push(
-			diagnosticFor(
-				snapshot,
-				"unknown-context-limit",
-				["compaction"],
-				"Automatic compaction is unavailable because the effective context window is unavailable.",
-				"warning"
-			)
-		);
-	} else if (isPositiveSafeInteger(contextLimit)) {
-		resolved.reserveTokens = Math.min(
-			desired.reserveTokens,
-			Math.floor(contextLimit / 2)
-		);
-		thresholdTokens = Math.max(0, contextLimit - resolved.reserveTokens);
-		resolved.keepRecentTokens = Math.min(
-			desired.keepRecentTokens,
-			Math.floor(thresholdTokens / 2)
-		);
-	} else {
-		diagnostics.push(
-			diagnosticFor(
-				snapshot,
-				"unknown-context-limit",
-				["compaction"],
-				"Automatic compaction is unavailable because the effective context window is invalid.",
-				"warning"
-			)
-		);
-	}
+	resolved.reserveTokens = Math.min(
+		desired.reserveTokens,
+		Math.floor(contextLimit / 2)
+	);
+	thresholdTokens = Math.max(0, contextLimit - resolved.reserveTokens);
+	resolved.keepRecentTokens = Math.min(
+		desired.keepRecentTokens,
+		Math.floor(thresholdTokens / 2)
+	);
 
 	const config = snapshot ? getConfigRecord(snapshot) : null;
 	return {
@@ -530,9 +508,11 @@ export const resolveCompactionSettings = (
 			"summary",
 		]),
 		configPath,
+		...omitUndefined({
+			contextWindowOverrideTokens: contextWindow.overrideTokens,
+		}),
 		auto: resolved.auto,
-		autoAvailable:
-			resolved.enabled && resolved.auto && !isNull(thresholdTokens),
+		autoAvailable: resolved.enabled && resolved.auto,
 		desired,
 		diagnostics,
 		enabled: resolved.enabled,
@@ -540,10 +520,7 @@ export const resolveCompactionSettings = (
 		maxMediaAttachments: resolved.maxMediaAttachments,
 		maxMediaBytes: resolved.maxMediaBytes,
 		maxMediaTokens: resolved.maxMediaTokens,
-		modelContextLimit:
-			!(isUndefined(contextLimit) || isNull(contextLimit)) && contextLimit > 0
-				? contextLimit
-				: null,
+		modelContextLimit: contextLimit,
 		overflowRecovery: resolved.overflowRecovery,
 		overflowRecoveryAvailable: resolved.enabled && resolved.overflowRecovery,
 		resolved,

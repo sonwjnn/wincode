@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { formatModelTokenCount } from "@wincode/ai";
-import { isNull, isUndefined } from "@wincode/utils";
+import { isNull } from "@wincode/utils";
 import { useMemo } from "react";
 import { builtInAgents } from "@/modules/agents";
 import { PluginStatusSidebar } from "@/modules/plugins/ui/plugin-status-sidebar";
@@ -43,8 +43,7 @@ export function SessionSidebar({
 	);
 	const modelLabel = `${model.providerId}/${model.modelId}`;
 	const isContextWarning =
-		!(isNull(usage?.contextPercent) || isUndefined(usage?.contextPercent)) &&
-		usage.contextPercent >= CONTEXT_WARNING_PERCENT;
+		!isNull(usage) && usage.contextPercent >= CONTEXT_WARNING_PERCENT;
 
 	return (
 		<box
@@ -74,11 +73,9 @@ export function SessionSidebar({
 								<text fg={colors.textMuted}>
 									{`${formatModelTokenCount(usage.contextTokens)} tokens`}
 								</text>
-								{isNull(usage.contextPercent) ? null : (
-									<text
-										fg={isContextWarning ? colors.error : colors.textMuted}
-									>{`${usage.contextPercent}% used`}</text>
-								)}
+								<text fg={isContextWarning ? colors.error : colors.textMuted}>
+									{`${usage.contextPercent}% used`}
+								</text>
 							</>
 						) : (
 							<text fg={colors.textMuted}>No usage yet</text>

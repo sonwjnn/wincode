@@ -1,5 +1,5 @@
 import type { ProviderCollection } from "@wincode/ai";
-import { isPositiveSafeInteger, omitUndefined } from "@wincode/utils";
+import { omitUndefined } from "@wincode/utils";
 import {
 	providerModelReasoningEffort,
 	providerModelSelectionForProviderModel,
@@ -9,7 +9,7 @@ import type { CompactSessionInput } from "../compaction/compaction";
 import { SessionCompactionError } from "../compaction/error";
 import { resolveSummaryModelCapability } from "../compaction/summary-generator";
 import { DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS } from "../compaction/types";
-import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../usage/context-window";
+import { resolveContextWindowTokens } from "../usage/context-window";
 import { assertPluginProviderSelectionOwner } from "./agent-session-turn-runner";
 import type { SessionCapabilities } from "./types";
 
@@ -74,14 +74,11 @@ export const resolveCompactionSummaryRoute = async (
 		};
 	}
 	const { model } = resolved;
-	const contextLimit =
-		input.settings.modelContextLimit ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-	if (!isPositiveSafeInteger(contextLimit)) {
-		throw new SessionCompactionError(
-			"summary-failed",
-			`Cannot verify the summary budget for ${model.providerId}/${model.modelId}: the configured context-window limit is invalid.`
-		);
-	}
+	const contextLimit = resolveContextWindowTokens(
+		undefined,
+		model.limits?.contextWindowTokens,
+		input.settings.contextWindowOverrideTokens
+	).tokens;
 	const thinkingLevel =
 		policy?.thinkingLevel ?? providerModelReasoningEffort(model, "off");
 	if (

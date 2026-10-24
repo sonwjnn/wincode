@@ -554,15 +554,11 @@ describe("session usage bar", () => {
 		expect(setup.captureCharFrame()).toContain("~$1.25 (partial)");
 	});
 
-	test("shows used tokens when the current Provider Model has no context limit", async () => {
+	test("shows the 272k fallback when the current Provider Model has no context metadata", async () => {
 		const setup = await renderSurfaces(() => (
-			<SessionUsageBar
-				summary={summary({ contextLimit: null, contextPercent: null })}
-			/>
+			<SessionUsageBar summary={summary({ contextLimit: 272_000 })} />
 		));
 
-		const frame = setup.captureCharFrame();
-		expect(frame).toContain("84K");
-		expect(frame).not.toContain("42%");
+		expect(setup.captureCharFrame()).toContain("30.9%/272k");
 	});
 });

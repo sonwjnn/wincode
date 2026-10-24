@@ -21,6 +21,7 @@ import {
 	AUTO_COMPACT_SETTING,
 	useSettingRegistryValue,
 } from "@/modules/settings";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
 import {
 	useKeyboardLayer,
 	useToggleShortcut,
@@ -89,7 +90,7 @@ type ChatShellProps = {
 	viewId: string;
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	cacheWarmingStatus?: CacheWarmingStatus;
-	contextWindowTokens?: number;
+	contextSnapshot?: ConfigSnapshot;
 	/** Rendered at the bottom of the transcript; the shell never persists it. */
 	transcriptNotice?: ReactNode;
 };
@@ -178,7 +179,7 @@ export function ChatShell({
 	viewId,
 	sessionUsageEntries = [],
 	cacheWarmingStatus = "idle",
-	contextWindowTokens,
+	contextSnapshot,
 	transcriptNotice,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
@@ -332,7 +333,7 @@ export function ChatShell({
 				cacheWarmingStatus,
 				providerModels,
 				activeMessages ?? displayMessages,
-				contextWindowTokens
+				contextSnapshot
 			),
 		[
 			displayMessages,
@@ -341,7 +342,7 @@ export function ChatShell({
 			sessionUsageEntries,
 			cacheWarmingStatus,
 			providerModels,
-			contextWindowTokens,
+			contextSnapshot,
 		]
 	);
 	useEffect(() => {
