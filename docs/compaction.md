@@ -33,7 +33,19 @@ Only reserve/recent budgets support model overrides. Invalid values and unsuppor
 
 When automatic compaction is enabled, the Host also checks context before a subsequent Model Step, after tools have settled. It checkpoints completed text without declaring the turn finished, and compacts older durable history when needed. The newest assistant/tool batch and delivered steering remain intact, including opaque Provider continuation. Successful tools are never rerun to rebuild context.
 
-If that protected batch cannot fit, or checkpointing/summarization/persistence fails, the turn stops rather than dispatching an unsafe next request. Cancellation propagates to preparation. If a durable checkpoint or compaction write has already succeeded, its complete result is reconciled before cancellation settles; cancellation does not roll back committed storage. Aggregate billing stays on the terminal turn record; non-terminal text checkpoints do not add billed usage. Expanded overflow replay, cumulative file-operation tracking, and public compaction hooks are separate follow-ups.
+If that protected batch cannot fit, or checkpointing/summarization/persistence fails, the turn stops rather than dispatching an unsafe next request. Cancellation propagates to preparation. If a durable checkpoint or compaction write has already succeeded, its complete result is reconciled before cancellation settles; cancellation does not roll back committed storage. Aggregate billing stays on the terminal turn record; non-terminal text checkpoints do not add billed usage.
+
+## Overflow recovery after completed tools
+
+Recovery keeps completed side effects. When the refused attempt already completed Tool Calls, recovery no longer replays the original prompt: it summarizes older durable history, protects the newest settled assistant/tool batch, and continues the compacted Session Context from that batch. The failed attempt's terminal row is dropped from that source. If no older history can be compacted while preserving the continuation, recovery fails closed instead of rerunning a tool. Without completed tools, the earlier prompt-anchored recovery applies unchanged.
+
+## Cumulative file operations
+
+Each automatic or manual compaction records the files its completed built-in Tool Calls read and modified, derived only from the declared Read/Write/Edit output contracts. Compaction entries carry the cumulative sets across repeated compactions, and the handoff text ends with a host-owned `## Files` section listing them. A Read that reports no File Version (a directory or symlink) is not a file observation; Shell, Glob and Grep declare no deterministic path and contribute nothing. Each list is capped at 200 deterministic paths.
+
+## Plugin compaction hooks
+
+Plugins may register `onBeforeCompaction`, `onCompactionCompleted`, and `onCompactionFailed`. The pre-compaction hook may cancel with a reason or supply handoff text instead of a summary model; the post hooks observe a committed entry identifier and token counts, or a safe failure message. Plugins never receive transcript text, choose a cut boundary, change a budget, or write an entry. A custom summary still passes host validation: empty text or text above the effective output-token budget fails before persistence, and the ordinary reduction and safe-threshold checks still apply.
 
 ## Summary policy
 

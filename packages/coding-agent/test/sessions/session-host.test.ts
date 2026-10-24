@@ -1884,6 +1884,127 @@ describe("Session Host opening", () => {
 		}
 	});
 
+	test("overflow recovery after completed tools continues the checkpointed context without a prompt replay", async () => {
+		const seeded = await seedSession("overflow-tools", "completed");
+		const counts = { effects: 0, modelCalls: 0, summaries: 0 };
+		const requests: ProviderChatRequest[] = [];
+		const previousScript = recorder.stepScript;
+		recorder.stepScript = async function* (request) {
+			if (request.system?.includes("session summarizer")) {
+				counts.summaries += 1;
+				yield { type: "text-delta", delta: "Earlier step read one file." };
+			} else {
+				requests.push(request);
+				counts.modelCalls += 1;
+				if (counts.modelCalls === 1) {
+					yield { type: "text-delta", delta: "checkpoint text" };
+					yield {
+						input: { path: "file.ts" },
+						toolCallId: "overflow-read-1",
+						toolName: "read",
+						type: "tool-call",
+					};
+				} else if (counts.modelCalls === 2) {
+					throw new Error("The prompt exceeds the model context window.");
+				} else {
+					yield { type: "text-delta", delta: "recovered answer" };
+				}
+				yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
+			}
+			yield { type: "finish" };
+		};
+		const document = {
+			compaction: {
+				keepRecentTokens: 1,
+				reserveTokens: 16_384,
+				summary: { maxOutputTokens: 512 },
+			},
+		};
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(store, document),
+			getCompactionModule: () => createSessionCompaction({ store }),
+			getCompactionSettings: async (selection, providerModel) =>
+				resolveCompactionSettings({
+					model: selection,
+					contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
+					snapshot: {
+						document,
+						sources: [],
+						diagnostics: [],
+						sourceFor: () => undefined,
+					},
+				}),
+			getTurnToolResolver: () => async () => [
+				{
+					definition: {
+						name: "read",
+						description: "Read test content",
+						inputSchema: z.object({ path: z.string() }),
+					},
+					execute: async () => {
+						counts.effects += 1;
+						return { type: "success", output: "tool payload ".repeat(500) };
+					},
+				},
+			],
+		};
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const recovered = Promise.withResolvers<void>();
+		const hasRecovered = (): boolean =>
+			!host.getSnapshot().turnActive &&
+			host
+				.getSnapshot()
+				.transcript.some((message) =>
+					message.parts.some(
+						(part) => part.type === "text" && part.text === "recovered answer"
+					)
+				);
+		const unsubscribe = host.subscribe(() => {
+			if (hasRecovered()) {
+				recovered.resolve();
+			}
+		});
+		try {
+			expect(
+				await host.agentSession.send(sendInput(capabilities, "run the tools"))
+			).toEqual({ rejected: false });
+			if (hasRecovered()) {
+				recovered.resolve();
+			}
+			await recovered.promise;
+			// The completed Tool Call ran exactly once; recovery compacted and continued
+			// instead of answering the prompt again.
+			expect(counts.effects).toBe(1);
+			expect(counts.modelCalls).toBe(3);
+			expect(counts.summaries).toBe(1);
+			const continuation = requests.at(-1);
+			const serialized = JSON.stringify(continuation);
+			expect(serialized).toContain("Earlier step read one file.");
+			expect(serialized).toContain("tool payload");
+			expect(serialized).not.toContain("run the tools");
+			const latest = await store.getLatestCompaction(seeded.sessionId);
+			expect(latest?.trigger).toBe("overflow");
+			expect(latest?.id).not.toBe(seeded.compaction);
+			const records = await store.listSessionRecords(seeded.sessionId);
+			expect(
+				records.flatMap((record) =>
+					record.messages.flatMap((message) => message.parts)
+				)
+			).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ text: "recovered answer", type: "text" }),
+				])
+			);
+		} finally {
+			unsubscribe();
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
 	for (const failure of ["summary", "persistence", "checkpoint"] as const) {
 		test(`between-step ${failure} failure preserves settled tools and sends no next model request`, async () => {
 			const storePort: SessionStore = {

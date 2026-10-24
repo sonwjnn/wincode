@@ -23,6 +23,7 @@ import {
 	providerModelSelectionFixture,
 	sessionId,
 	sessionMessageId,
+	toolCallId,
 } from "../support/identifiers";
 
 const manualModel = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
@@ -205,4 +206,194 @@ test("keeps a started compaction's selected model policy stable", async () => {
 	expect(requests.map(({ settings }) => settings.reserveTokens)).toEqual([
 		6000, 12_000,
 	]);
+});
+
+const toolAttemptMessages: SessionMessage[] = [
+	fromPartial<SessionMessage>({
+		id: sessionMessageId("older-user"),
+		parts: [{ text: "older request", type: "text" }],
+		role: "user",
+	}),
+	fromPartial<SessionMessage>({
+		id: sessionMessageId("older-assistant"),
+		parts: [{ text: "older answer", type: "text" }],
+		role: "assistant",
+	}),
+	fromPartial<SessionMessage>({
+		id: sessionMessageId("attempt-user"),
+		parts: [{ text: "run the tool", type: "text" }],
+		role: "user",
+	}),
+	fromPartial<SessionMessage>({
+		id: sessionMessageId("step-assistant"),
+		parts: [
+			{
+				input: { command: "pwd" },
+				output: { output: "/workspace" },
+				state: "output-available",
+				toolCallId: toolCallId("call-step"),
+				type: "tool-shell",
+			},
+		],
+		role: "assistant",
+	}),
+	fromPartial<SessionMessage>({
+		id: sessionMessageId("failed-assistant"),
+		metadata: { terminalOutcome: "failed" },
+		parts: [{ text: "The prompt exceeds the context window.", type: "text" }],
+		role: "assistant",
+	}),
+];
+
+const createRecoveryWorkflow = (
+	compact: SessionMaintenancePort["compaction"]["compact"],
+	overrides: Partial<SessionMaintenancePort> = {}
+) =>
+	createSessionMaintenanceWorkflow(
+		fromPartial<SessionMaintenancePort>({
+			addCompactionRequest: () => undefined,
+			addRecoveryAttempt: () => undefined,
+			addRecoveryRun: () => undefined,
+			applyContext: () => undefined,
+			compaction: {
+				compact,
+				getInFlight: () => null,
+				needsCompaction: () => false,
+			},
+			drainQueuedSubmissions: async () => undefined,
+			finishCompactionCommand: () => undefined,
+			getActiveCompaction: () => undefined,
+			getContext: () => toolAttemptMessages,
+			getRecoveryGeneration: () => 0,
+			getTranscript: () => toolAttemptMessages,
+			hasAttemptedRecovery: () => false,
+			isClosed: () => false,
+			mergeTranscript: (messages: readonly SessionMessage[]) => messages,
+			recordCompaction: () => undefined,
+			removeCompactionRequest: () => undefined,
+			removeRecoveryAttempt: () => undefined,
+			removeRecoveryRun: () => undefined,
+			requestOverheadTokens: () => 256,
+			resolveCompactionSettings: async (model: ProviderModelSelection) =>
+				resolveCompactionSettings({
+					contextLimit: 100_000,
+					model,
+					snapshot: configuration,
+				}),
+			setActiveCompaction: () => undefined,
+			setCompactionError: () => undefined,
+			setCompactionPhase: () => undefined,
+			shutdownSignal: new AbortController().signal,
+			sessionId: sessionId("maintenance-overflow"),
+			trackBackgroundTask: () => undefined,
+			waitForExecutionEnd: async () => undefined,
+			...overrides,
+		})
+	);
+
+test("overflow recovery after completed tools continues the durable context", async () => {
+	const requests: CompactSessionInput[] = [];
+	const continuations: string[] = [];
+	const workflow = createRecoveryWorkflow(async (input) => {
+		requests.push(input);
+		return fromPartial<CompactSessionResult>({
+			activeMessages: [...input.session.messages],
+			entry: fromPartial<SessionCompaction>({
+				id: compactionId("entry-overflow"),
+				trigger: "overflow",
+			}),
+		});
+	});
+
+	const outcome = await workflow.recoverOverflow({
+		continueContext: async ({ originalMessageId }) => {
+			continuations.push(originalMessageId);
+			return { kind: "started" };
+		},
+		error: fromPartial<OperationalFailure>({ code: "context-overflow" }),
+		originalMessageId: sessionMessageId("attempt-user"),
+		resolveTarget: async () => ({ model: automaticModel }),
+		turnId: agentTurnId("overflow-tool-turn"),
+	});
+
+	expect(outcome.kind).toBe("recovered");
+	// The completed Tool Call and its settled step stay out of the summary.
+	expect(requests[0]?.protectedMessageIds?.map((id) => id as string)).toEqual([
+		"step-assistant",
+	]);
+	expect(
+		requests[0]?.session.messages.map(({ id }) => id as string)
+	).not.toContain("failed-assistant");
+	// The continuation resumes the existing context; it does not answer the prompt again.
+	expect(continuations).toEqual(["attempt-user"]);
+});
+
+test("an unshortenable continuation fails closed instead of replaying tools", async () => {
+	const continuations: string[] = [];
+	const workflow = createRecoveryWorkflow(async () => {
+		throw fromPartial<Error & { code: string; name: string }>({
+			code: "history-too-short",
+			message:
+				"There is no older durable step history that can be compacted while preserving the current continuation.",
+			name: "SessionCompactionError",
+		});
+	});
+
+	const outcome = await workflow.recoverOverflow({
+		continueContext: async ({ originalMessageId }) => {
+			continuations.push(originalMessageId);
+			return { kind: "started" };
+		},
+		error: fromPartial<OperationalFailure>({ code: "context-overflow" }),
+		originalMessageId: sessionMessageId("attempt-user"),
+		resolveTarget: async () => ({ model: automaticModel }),
+		turnId: agentTurnId("overflow-unshortenable"),
+	});
+
+	expect(outcome.kind).toBe("failed");
+	expect(continuations).toEqual([]);
+});
+
+test("recovery compacts work settled while its target settings were loading", async () => {
+	const messages: SessionMessage[] = [...toolAttemptMessages];
+	const requests: CompactSessionInput[] = [];
+	const workflow = createRecoveryWorkflow(
+		async (input) => {
+			requests.push(input);
+			return fromPartial<CompactSessionResult>({
+				activeMessages: [...input.session.messages],
+				entry: fromPartial<SessionCompaction>({
+					id: compactionId("entry-late-settlement"),
+					trigger: "overflow",
+				}),
+			});
+		},
+		{
+			getContext: () => messages,
+			getTranscript: () => messages,
+		}
+	);
+
+	const outcome = await workflow.recoverOverflow({
+		continueContext: async () => ({ kind: "started" }),
+		error: fromPartial<OperationalFailure>({ code: "context-overflow" }),
+		originalMessageId: sessionMessageId("attempt-user"),
+		resolveTarget: async () => {
+			// A steering message settles while the target's settings resolve.
+			messages.push(
+				fromPartial<SessionMessage>({
+					id: sessionMessageId("late-steering"),
+					parts: [{ text: "also check the tests", type: "text" }],
+					role: "user",
+				})
+			);
+			return { model: automaticModel };
+		},
+		turnId: agentTurnId("overflow-late-settlement"),
+	});
+
+	expect(outcome.kind).toBe("recovered");
+	expect(requests[0]?.session.messages.map(({ id }) => id as string)).toContain(
+		"late-steering"
+	);
 });

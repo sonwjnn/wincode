@@ -3496,13 +3496,14 @@ test("fails delivered steering when overflow recovery is refused", async () => {
 	}
 });
 
-test("does not recover a context overflow after a completed Tool Call", async () => {
+test("recovers a context overflow after a completed Tool Call without replaying it", async () => {
 	const toolId = toolCallId("overflow-completed-tool");
-	let turnStarted = false;
+	const continuation = Promise.withResolvers<readonly SessionMessage[]>();
+	let turns = 0;
 	let recoveryTargetRequested = false;
-	const engine = createOverflowTestSession([], {
+	const engine = createOverflowTestSession(compactionHistory(), {
 		resolveCompactionSettings: async () => {
-			if (turnStarted) {
+			if (turns > 0) {
 				recoveryTargetRequested = true;
 			}
 			return overflowRecoverySettings();
@@ -3510,7 +3511,11 @@ test("does not recover a context overflow after a completed Tool Call", async ()
 		turnRunner: {
 			...overflowTurnRunner,
 			run: async (request) => {
-				turnStarted = true;
+				turns += 1;
+				if (turns > 1) {
+					continuation.resolve(request.messages);
+					return { error: overflowFailure() };
+				}
 				reportTurnStarted(request);
 				request.callbacks.onEvent({
 					input: { path: "file.txt" },
@@ -3539,17 +3544,23 @@ test("does not recover a context overflow after a completed Tool Call", async ()
 	await expect(
 		engine.send(sendInput({ userText: "read a file" }))
 	).resolves.toEqual({ rejected: false });
+	const continuedMessages = await continuation.promise;
 
-	const completedTool = engine
+	const completedTools = engine
 		.getSnapshot()
 		.context.flatMap(({ parts }) => parts)
-		.find((part) => part.type === "tool-read" && part.toolCallId === toolId);
-	expect(completedTool).toMatchObject({
-		state: "output-available",
-		toolCallId: toolId,
-	});
-	expect(recoveryTargetRequested).toBe(false);
-	expect(engine.getSnapshot().compactions).toEqual([]);
+		.filter((part) => part.type === "tool-read" && part.toolCallId === toolId);
+	// The successful Tool Call survives recovery once, and the continuation
+	// resumes the settled batch instead of answering the prompt again.
+	expect(completedTools).toHaveLength(1);
+	expect(completedTools[0]).toMatchObject({ state: "output-available" });
+	expect(recoveryTargetRequested).toBe(true);
+	expect(
+		engine.getSnapshot().compactions.map(({ trigger }) => trigger)
+	).toEqual(["overflow"]);
+	const serialized = JSON.stringify(continuedMessages);
+	expect(serialized).toContain("completed side effect");
+	expect(serialized).not.toContain("read a file");
 	await engine.internalPort.shutdown();
 });
 

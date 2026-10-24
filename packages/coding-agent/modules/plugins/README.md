@@ -120,8 +120,18 @@ The Wincode distribution selects MCP and Subagents packages by default for appli
 
 Dispose child handles and child SDK runtimes when their work is complete. Coding and shell remain native Session tools; Skills remain native host capabilities.
 
+## Compaction hooks
+
+Compaction runs under Session Host authority. Plugins observe it through three bounded hooks:
+
+- `onBeforeCompaction(context)` runs once before a summary request. Returning `{ cancel: reason }` refuses that compaction; returning `{ summary: text }` supplies the handoff instead of calling a summary model. Returning nothing leaves compaction to the host.
+- `onCompactionCompleted(context)` reports a durable compaction by identifier, `tokensBefore` and `estimatedTokensAfter`.
+- `onCompactionFailed(context)` reports the safe failure message of a compaction that did not persist.
+
+The context carries `sessionId`, `workspace`, `trigger` (`manual`, `threshold` or `overflow`), `signal`, and optional `focus`/`turnId`. A Plugin never receives transcript text, chooses a cut boundary, changes a token budget, or writes a compaction entry. Custom summaries still pass host validation: empty text or text above the effective output-token budget fails before persistence, and the normal reduction and safe-threshold checks still apply. The first Plugin that cancels wins and later Plugins are not consulted; a thrown hook is logged and the next Plugin may still decide.
+
 ## Lifecycle
 
-The factory runs when its Plugin runtime is built: once at startup, and again when `/reload` replaces that runtime. A Plugin may register one `onStart`, `onSessionStart`, `onSessionShutdown`, `onBeforeAgentTurn`, and `onShutdown` hook. `onStart` and `onShutdown` bracket process resources and may run more than once during a Wincode process; they must safely initialize and release those resources on each cycle. Session hooks follow each loaded Session runtime: when an idle runtime unloads and later reopens, Wincode sends a new start/shutdown pair. A failed process start disables that Plugin in the candidate runtime; a failed Session start disables it only for that Session; a failed pre-Turn hook omits that Plugin's tools only for the affected Turn. Cleanup hooks are idempotent.
+The factory runs when its Plugin runtime is built: once at startup, and again when `/reload` replaces that runtime. A Plugin may register one `onStart`, `onSessionStart`, `onSessionShutdown`, `onBeforeAgentTurn`, `onBeforeCompaction`, `onCompactionCompleted`, `onCompactionFailed`, and `onShutdown` hook. `onStart` and `onShutdown` bracket process resources and may run more than once during a Wincode process; they must safely initialize and release those resources on each cycle. Session hooks follow each loaded Session runtime: when an idle runtime unloads and later reopens, Wincode sends a new start/shutdown pair. A failed process start disables that Plugin in the candidate runtime; a failed Session start disables it only for that Session; a failed pre-Turn hook omits that Plugin's tools only for the affected Turn; a failed compaction hook is logged and never fails or rolls back a compaction. Cleanup hooks are idempotent.
 
 Interactive `/reload` re-resolves Project trust and reloads file-backed Plugins after every Session Host is idle. Wincode tears down the active Plugin process resources before starting replacements. If a replacement process hook fails and Project trust did not change, it restores the previous Plugin runtime. On a trust change, it does not restore Plugins that may have come from newly untrusted project resources. Built-in keybindings are currently compiled into Wincode, so `/reload` does not change them.

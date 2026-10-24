@@ -2032,3 +2032,315 @@ test("projects the newest attachment against the media budget for estimatedToken
 	// the large attachment and report 5 instead.
 	expect(result.entry.estimatedTokensAfter).toBe(10);
 });
+
+const toolMessage = (
+	id: string,
+	toolName: "edit" | "read" | "write",
+	output: unknown
+): SessionMessage =>
+	fromPartial<SessionMessage>({
+		id: sessionMessageId(id),
+		parts: [
+			{
+				output,
+				state: "output-available",
+				toolCallId: toolCallId(`call-${id}`),
+				type: `tool-${toolName}`,
+			},
+		],
+		role: "assistant",
+	});
+
+const fileVersionFixture = (seed: string): string =>
+	seed.repeat(32).slice(0, 32);
+
+test("summarizes deterministic read and modified files from completed Tool Calls", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "file summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: [
+				message("u1", "user", "read and edit"),
+				toolMessage("read-a", "read", {
+					content: "1 | a",
+					fileVersion: fileVersionFixture("a"),
+					path: "src/a.ts",
+				}),
+				toolMessage("read-dir", "read", {
+					content: "src/",
+					path: "src",
+				}),
+				toolMessage("edit-b", "edit", {
+					files: [
+						{
+							hunkCount: 1,
+							newFileVersion: fileVersionFixture("b"),
+							oldFileVersion: fileVersionFixture("c"),
+							path: "src/b.ts",
+							status: "committed",
+						},
+					],
+				}),
+				// The common one-file Edit shape reports no files list.
+				toolMessage("edit-single", "edit", {
+					newFileVersion: fileVersionFixture("d"),
+					oldFileVersion: fileVersionFixture("e"),
+					path: "src/c.ts",
+					replacements: 1,
+				}),
+				message("u2", "user", "current"),
+				message("a2", "assistant", "current answer"),
+			],
+			sessionId: sessionId("session-file-operations"),
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 1,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
+	// The directory read is not a file observation, and the deterministic
+	// handoff outlives the model's own prose.
+	expect(result.entry.summary.fileOperations).toEqual({
+		modified: ["src/b.ts", "src/c.ts"],
+		read: ["src/a.ts"],
+	});
+	expect(result.entry.summary.text).toEndWith(
+		"## Files\nRead: src/a.ts\nModified: src/b.ts, src/c.ts"
+	);
+});
+
+test("a repeated compaction carries the prior cumulative file sets forward", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "carried summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+	const initialMessages = [
+		message("u1", "user", "first"),
+		toolMessage("read-a", "read", {
+			content: "1 | a",
+			fileVersion: fileVersionFixture("a"),
+			path: "src/a.ts",
+		}),
+		message("u2", "user", "second"),
+		message("a2", "assistant", "second answer"),
+	];
+	await compaction.compact({
+		session: {
+			messages: initialMessages,
+			sessionId: sessionId("session-carry"),
+		},
+		model,
+		settings,
+		trigger: "manual",
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: [
+				...initialMessages,
+				toolMessage("write-c", "write", {
+					bytesWritten: 3,
+					newFileVersion: fileVersionFixture("c"),
+					path: "src/c.ts",
+				}),
+				message("u3", "user", "third"),
+				message("a3", "assistant", "third answer"),
+			],
+			sessionId: sessionId("session-carry"),
+		},
+		model,
+		settings,
+		trigger: "threshold",
+	});
+
+	// The earlier Read is outside the new summary span but still tracked.
+	expect(result.entry.summary.fileOperations).toEqual({
+		modified: ["src/c.ts"],
+		read: ["src/a.ts"],
+	});
+});
+
+const lifecycleMessages = [
+	message("u1", "user", "first request"),
+	message("a1", "assistant", "first answer"),
+	message("u2", "user", "current request"),
+	message("a2", "assistant", "current answer"),
+];
+
+test("a Plugin cancellation refuses compaction before any summary call", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const failed = mock(async () => undefined);
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ cancel: "Compaction is paused." }),
+			failed,
+		},
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: lifecycleMessages,
+				sessionId: sessionId("session-plugin-cancel"),
+			},
+			model,
+			settings,
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({
+		code: "cancelled",
+		message: "Compaction is paused.",
+	});
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+	// A deliberate refusal is not a compaction failure.
+	expect(failed).not.toHaveBeenCalled();
+});
+
+test("a Plugin custom summary still passes host validation and persistence", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const completed: SessionCompaction[] = [];
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ summary: "Plugin handoff text." }),
+			completed: async (entry) => {
+				completed.push(entry);
+			},
+		},
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: lifecycleMessages,
+			sessionId: sessionId("session-plugin-summary"),
+		},
+		model,
+		settings,
+		trigger: "manual",
+	});
+
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(result.entry.summary.text).toContain("Plugin handoff text.");
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+	expect(completed).toEqual([result.entry]);
+});
+
+test("an oversized Plugin summary fails before persistence and reports the failure once", async () => {
+	const store = makeStore();
+	const failures: unknown[] = [];
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ summary: "x".repeat(1200) }),
+			failed: async ({ error }) => {
+				failures.push(error);
+			},
+		},
+		store,
+		summaryGenerator: async () => ({ text: "generated" }),
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: [
+					message("u1", "user", "a".repeat(20_000)),
+					message("a1", "assistant", "old answer"),
+					message("u2", "user", "current request"),
+					message("a2", "assistant", "current answer"),
+				],
+				sessionId: sessionId("session-plugin-summary-overrun"),
+			},
+			model,
+			settings: {
+				enabled: true,
+				keepRecentTokens: 100,
+				modelContextLimit: 8192,
+				reserveTokens: 256,
+				thresholdTokens: null,
+			},
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "summary-failed" });
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+	expect(failures).toHaveLength(1);
+});
+
+test("a failing persistence notifies the compaction failure hook once", async () => {
+	const store = {
+		appendCompaction: mock(async () => {
+			throw new Error("store unavailable");
+		}),
+		getLatestCompaction: mock(async () => null),
+	};
+	const failures: unknown[] = [];
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			failed: async ({ error }) => {
+				failures.push(error);
+			},
+		},
+		store,
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: lifecycleMessages,
+				sessionId: sessionId("session-plugin-persistence"),
+			},
+			model,
+			settings,
+			trigger: "threshold",
+		})
+	).rejects.toMatchObject({ code: "persistence-failed" });
+	expect(failures).toHaveLength(1);
+});
+
+test("a throwing completed observer cannot undo a committed compaction", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			completed: async () => {
+				throw new Error("observer exploded");
+			},
+		},
+		store,
+		summaryGenerator: async () => ({ text: "committed summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: lifecycleMessages,
+			sessionId: sessionId("session-plugin-observer"),
+		},
+		model,
+		settings,
+		trigger: "manual",
+	});
+
+	expect(result.entry.summary.text).toContain("committed summary");
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+});

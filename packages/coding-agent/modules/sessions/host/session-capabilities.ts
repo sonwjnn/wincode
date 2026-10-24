@@ -38,6 +38,7 @@ import {
 } from "../storage/path";
 import { resetLocalSessionData } from "../storage/reset-local-session-data";
 import type { SessionStore } from "../storage/session-store";
+import { createPluginCompactionLifecycle } from "./plugin-compaction-lifecycle";
 import { createSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities, SessionHostManager } from "./types";
 
@@ -208,9 +209,16 @@ export const createSessionCapabilities = async ({
 			return () => registry;
 		};
 		const getRegistry = await resolveRegistry();
+		const getPluginRuntime = (): PluginRuntime =>
+			providedGetPluginRuntime?.() ?? pluginRuntime;
+		const pluginCompactionLifecycle = createPluginCompactionLifecycle({
+			getRuntime: getPluginRuntime,
+			workspace,
+		});
 		const compaction: SessionCompactionModule = createSessionCompaction({
 			attachmentStore: store.attachmentStore,
 			estimateTokens: estimateCompactionTokens,
+			lifecycle: pluginCompactionLifecycle,
 			store,
 		});
 		const sessionHostManager = sessionHostManagerFor(
@@ -237,8 +245,6 @@ export const createSessionCapabilities = async ({
 			shutdownPromise = closing;
 			return closing;
 		};
-		const getPluginRuntime = (): PluginRuntime =>
-			providedGetPluginRuntime?.() ?? pluginRuntime;
 		const capabilities: SessionCapabilities = {
 			createProviderCollection: providerCollectionFactory,
 			getCapabilityCeiling: () => capabilityCeiling,

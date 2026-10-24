@@ -306,6 +306,7 @@ const prepareSubmitContext = async ({
 	activeMessages,
 	armSkill,
 	input,
+	isContextContinuation,
 	resolveSkill,
 	signal,
 }: {
@@ -315,6 +316,7 @@ const prepareSubmitContext = async ({
 		signal: AbortSignal
 	) => Promise<SessionSkillCatalog>;
 	input: SessionSendInput;
+	isContextContinuation: boolean;
 	resolveSkill: AgentSessionPorts["skills"]["resolveSkill"];
 	signal: AbortSignal;
 }): Promise<SubmitContextResult> => {
@@ -332,7 +334,13 @@ const prepareSubmitContext = async ({
 	const anchoredMessage = isUndefined(input.messageId)
 		? undefined
 		: activeMessages.find(({ id }) => id === input.messageId);
-	if (!isUndefined(input.messageId) && anchoredMessage?.role !== "user") {
+	// A continuation of the existing context keeps its originating user message
+	// only for bookkeeping; compaction may already have summarized it away.
+	if (
+		!isUndefined(input.messageId) &&
+		anchoredMessage?.role !== "user" &&
+		!(isContextContinuation && isUndefined(anchoredMessage))
+	) {
 		return {
 			kind: "rejected",
 			reason: "The stored message to continue is unavailable",
@@ -544,6 +552,7 @@ const prepareSessionSubmission = async ({
 			activeMessages: deps.getContext(),
 			armSkill,
 			input,
+			isContextContinuation,
 			resolveSkill,
 			signal,
 		});
@@ -1598,7 +1607,9 @@ export const createSubmissionPipeline = (
 				executionInputForSubmit({
 					input: resolvedInput,
 					sourceUserMessageId:
-						context.anchoredMessage?.id ?? prepared.newMessage?.id,
+						context.anchoredMessage?.id ??
+						(isContextContinuation ? resolvedInput.messageId : undefined) ??
+						prepared.newMessage?.id,
 					startedAt,
 				})
 			);

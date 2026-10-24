@@ -16,7 +16,9 @@ import type {
 import { SessionCompactionError } from "../compaction/error";
 import {
 	isContextOverflowFailure,
+	type OverflowContinuationSource,
 	OverflowRecoveryError,
+	prepareOverflowContinuationSource,
 	prepareOverflowRecoveryMessages,
 } from "../compaction/overflow-recovery";
 import type { SessionCompaction } from "../compaction/types";
@@ -182,6 +184,7 @@ export const createSessionMaintenanceWorkflow = (
 			focus: command.focus,
 			protectedMessageIds: command.protectedMessageIds,
 			thinkingLevel: command.thinkingLevel,
+			turnId: command.turnId,
 		}),
 		signal,
 	});
@@ -364,14 +367,16 @@ export const createSessionMaintenanceWorkflow = (
 				(message) =>
 					message.id === command.originalMessageId && message.role === "user"
 			);
-		if (
-			originalMessageIndex !== -1 &&
-			hasCompletedToolArtifact(
-				getSessionAttemptMessages(port.getContext(), originalMessageIndex)
-			)
-		) {
-			return { kind: "ineligible" };
-		}
+		const attemptMessages =
+			originalMessageIndex === -1
+				? []
+				: getSessionAttemptMessages(port.getContext(), originalMessageIndex);
+		/**
+		 * Completed tools make a prompt replay unsafe. Recovery then continues
+		 * the durable context: older history is summarized and the newest
+		 * settled assistant/tool batch stays intact.
+		 */
+		const usesContinuation = hasCompletedToolArtifact(attemptMessages);
 		port.addRecoveryAttempt(command.originalMessageId);
 		const recoveryEpoch = port.getRecoveryGeneration();
 		let target: SessionOverflowRecoveryTarget | null;
@@ -396,17 +401,29 @@ export const createSessionMaintenanceWorkflow = (
 		if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
 			return { kind: "ineligible" };
 		}
+		// Snapshot the durable source after target resolution, so work settled
+		// while the settings loaded is compacted instead of being dropped.
+		let recoverySource: OverflowContinuationSource | null = null;
+		if (usesContinuation) {
+			recoverySource = prepareOverflowContinuationSource(port.getTranscript());
+			if (recoverySource === null) {
+				return { kind: "ineligible" };
+			}
+		}
 		let result: CompactSessionResult;
 		try {
 			result = await compact({
 				model: target.model,
-				sourceMessages: prepareOverflowRecoveryMessages(
-					port.getTranscript(),
-					command.originalMessageId
-				),
+				sourceMessages:
+					recoverySource?.sourceMessages ??
+					prepareOverflowRecoveryMessages(
+						port.getTranscript(),
+						command.originalMessageId
+					),
 				trigger: "overflow",
 				turnId: command.turnId,
 				...omitUndefined({
+					protectedMessageIds: recoverySource?.protectedMessageIds,
 					thinkingLevel: target.thinkingLevel,
 				}),
 			});
@@ -414,11 +431,14 @@ export const createSessionMaintenanceWorkflow = (
 			if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
 				return { kind: "ineligible" };
 			}
+			const detail = getErrorMessage(error, "");
 			return failRecovery(
 				error instanceof OverflowRecoveryError
 					? error
 					: recoveryError(
-							`Context overflow recovery could not compact the session.${getErrorMessage(error, "")}`,
+							detail.length === 0
+								? "Context overflow recovery could not compact the session."
+								: `Context overflow recovery could not compact the session. ${detail}`,
 							error
 						)
 			);

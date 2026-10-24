@@ -139,6 +139,12 @@ const compactionSummarySchema = z.object({
 	coveredMessageIds: z
 		.array(z.string().min(1))
 		.transform((messageIds) => messageIds.map(toSessionMessageId)),
+	fileOperations: z
+		.object({
+			modified: z.array(z.string()),
+			read: z.array(z.string()),
+		})
+		.optional(),
 	formatVersion: z.literal(1),
 	focus: z.string().optional(),
 	text: z.string(),

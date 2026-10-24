@@ -4,7 +4,7 @@
 
 Add a generic context-preparation boundary between Model Steps, after completed tools and steering settlement. Coding-Agent owns compaction policy and publication. Never replay successful tools. The operator approved non-terminal model-step text checkpoints so compaction can safely summarize earlier steps of the same live turn and reopen does not lose their content.
 
-TDD seams: Agent Runtime pre-request continuation, Session Host with scripted ProviderCollection dispatch, durable Session Store reopen. Expanded overflow recovery, cumulative file tracking, and bounded Plugin compaction hooks follow this foundation; the existing completed-tool overflow replay guard stays in place.
+TDD seams: Agent Runtime pre-request continuation, Session Host with scripted ProviderCollection dispatch, durable Session Store reopen. The follow-ups this foundation deferred are implemented in [Phase 3 follow-ups](./compaction-phase3-followups.md): expanded overflow recovery, cumulative file tracking, and bounded Plugin compaction hooks.
 
 ## Contracts
 

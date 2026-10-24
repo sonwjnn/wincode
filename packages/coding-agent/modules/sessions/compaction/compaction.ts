@@ -1,11 +1,15 @@
+import type { AgentTurnId } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import { getModelFailureMessage } from "@wincode/ai";
 import {
+	getErrorMessage,
+	isNonEmptyString,
 	isNull,
 	isNumber,
 	isObjectLike,
 	isString,
 	isUndefined,
+	logger,
 	omitUndefined,
 	pickTruthy,
 } from "@wincode/utils";
@@ -41,6 +45,11 @@ import {
 } from "./config";
 import { SessionCompactionError } from "./error";
 import {
+	type CompactionFileOperations,
+	collectCumulativeFileOperations,
+	withFileOperationsSection,
+} from "./file-operations";
+import {
 	createCompactionSummaryMessage,
 	isCompactionSummaryMessage,
 } from "./summary-message";
@@ -51,6 +60,8 @@ import {
 import type { CompactionSummarySettings } from "./summary-settings";
 import {
 	type AppendSessionCompactionInput,
+	type CompactionLifecycle,
+	type CompactionLifecycleContext,
 	type CompactionSession,
 	type CompactionSummary,
 	type CompactionTriggerReason,
@@ -189,6 +200,8 @@ export type CompactSessionInput = {
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	signal?: AbortSignal;
+	/** The Agent Turn that initiated this compaction, for diagnostics and lifecycle callbacks. */
+	turnId?: AgentTurnId;
 	/** Revalidates Session Host authority immediately before persistence. */
 	assertAuthority?: () => void;
 };
@@ -248,6 +261,7 @@ const sameIntent = (left: CompactionIntent, right: CompactionIntent): boolean =>
 
 type CompactionModuleDependencies = {
 	attachmentStore?: SessionAttachmentStore;
+	lifecycle?: CompactionLifecycle;
 	store: CompactionStore;
 	summaryGenerator?: SummaryGenerator;
 	estimateTokens?: (messages: readonly SessionMessage[]) => number;
@@ -1017,6 +1031,7 @@ const appendInputFor = ({
 	attachmentMetadata,
 	session,
 	cutPoint,
+	fileOperations,
 	focus,
 	model,
 	previous,
@@ -1032,6 +1047,7 @@ const appendInputFor = ({
 	attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 	session: CompactionSession;
 	cutPoint: CutPoint;
+	fileOperations?: CompactionFileOperations;
 	focus?: string;
 	thinkingLevel?: ThinkingLevel;
 	model: ProviderModelSelection;
@@ -1061,8 +1077,11 @@ const appendInputFor = ({
 			? { attachments: [...attachmentMetadata] }
 			: {}),
 		coveredMessageIds: summarySpan.map((message) => message.id),
+		...omitUndefined({ fileOperations }),
 		formatVersion: 1,
-		text: sanitizeSummaryText(summarization.text),
+		text: sanitizeSummaryText(
+			withFileOperationsSection(summarization.text, fileOperations)
+		),
 		...omitUndefined({ focus: normalizedFocus }),
 	};
 	const nowValue = now();
@@ -1296,8 +1315,40 @@ const generateCompactionSummary = async (
 	return generated;
 };
 
+const isExpectedCompactionCancellation = (error: unknown): boolean =>
+	error instanceof SessionCompactionError && error.code === "cancelled";
+
+/** Characters per output token the context estimator assumes. */
+const SUMMARY_CHARACTERS_PER_TOKEN = 4;
+
+/**
+ * A Plugin-supplied summary still has to fit the same output budget as a
+ * generated one; it never bypasses the host's reduction or persistence checks.
+ */
+const validateLifecycleSummary = (
+	summary: string,
+	maxOutputTokens: number
+): SummaryGeneratorResult => {
+	const text = summary.trim();
+	if (text.length === 0) {
+		throw new SessionCompactionError(
+			"summary-failed",
+			"The Plugin compaction summary was empty."
+		);
+	}
+	const budgetCharacters = maxOutputTokens * SUMMARY_CHARACTERS_PER_TOKEN;
+	if (text.length > budgetCharacters) {
+		throw new SessionCompactionError(
+			"summary-failed",
+			`The Plugin compaction summary exceeds its ${maxOutputTokens} output-token budget; shorten it or configure a larger summary budget.`
+		);
+	}
+	return { text };
+};
+
 export const createSessionCompaction = ({
 	attachmentStore,
+	lifecycle,
 	store,
 	summaryGenerator,
 	estimateTokens = estimateCompactionTokens,
@@ -1316,6 +1367,7 @@ export const createSessionCompaction = ({
 		cutPoint,
 		entryId,
 		estimateTokens: estimate,
+		fileOperations,
 		focus,
 		model,
 		now: nowFn,
@@ -1333,6 +1385,7 @@ export const createSessionCompaction = ({
 		cutPoint: CutPoint;
 		entryId: CompactionId;
 		estimateTokens: (messages: readonly SessionMessage[]) => number;
+		fileOperations?: CompactionFileOperations;
 		focus?: string;
 		model: ProviderModelSelection;
 		now: () => Date;
@@ -1355,6 +1408,7 @@ export const createSessionCompaction = ({
 			cutPoint,
 			entryId,
 			estimateTokens: estimate,
+			fileOperations,
 			focus,
 			model,
 			now: nowFn,
@@ -1460,22 +1514,46 @@ export const createSessionCompaction = ({
 		const attachmentMetadata = attachmentStore
 			? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
 			: undefined;
+		const fileOperations = collectCumulativeFileOperations({
+			messages: summarySpan,
+			previous: previous?.summary.fileOperations,
+		});
+		const lifecycleContext: CompactionLifecycleContext = {
+			trigger: input.trigger,
+			sessionId: input.session.sessionId,
+			...omitUndefined({
+				focus,
+				signal: input.signal,
+				turnId: input.turnId,
+			}),
+		};
+		const decision = await lifecycle?.before?.(lifecycleContext);
+		if (isNonEmptyString(decision?.cancel)) {
+			throw new SessionCompactionError("cancelled", decision.cancel);
+		}
+		assertNotAborted(input.signal);
 		const generatorInput: SummaryGeneratorInput = {
 			...summaryInput,
 			maxOutputTokens,
 			preparedRequest,
 		};
 		const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
-		if (selectedSummaryGenerator === undefined) {
-			throw new SessionCompactionError(
-				"summary-failed",
-				"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
+		const lifecycleSummary = decision?.summary;
+		let generated: SummaryGeneratorResult;
+		if (isNonEmptyString(lifecycleSummary)) {
+			generated = validateLifecycleSummary(lifecycleSummary, maxOutputTokens);
+		} else {
+			if (selectedSummaryGenerator === undefined) {
+				throw new SessionCompactionError(
+					"summary-failed",
+					"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
+				);
+			}
+			generated = await generateCompactionSummary(
+				selectedSummaryGenerator,
+				generatorInput
 			);
 		}
-		const generated = await generateCompactionSummary(
-			selectedSummaryGenerator,
-			generatorInput
-		);
 		assertNotAborted(input.signal);
 		const { activeMessages, entry } = await persistCompactionEntry({
 			assertAuthority: input.assertAuthority,
@@ -1485,6 +1563,7 @@ export const createSessionCompaction = ({
 			cutPoint,
 			entryId: createId(),
 			estimateTokens,
+			fileOperations,
 			focus,
 			model: input.summaryModel ?? input.model,
 			now,
@@ -1495,6 +1574,17 @@ export const createSessionCompaction = ({
 			trigger: input.trigger,
 			thinkingLevel: input.thinkingLevel,
 		});
+		try {
+			await lifecycle?.completed?.(entry, lifecycleContext);
+		} catch (error) {
+			// The entry is already durable: a lifecycle observer cannot undo it.
+			void logger.warn("Compaction lifecycle observer failed", {
+				cause: getErrorMessage(error, String(error)),
+				operation: "session.compaction",
+				phase: "completed",
+				trigger: input.trigger,
+			});
+		}
 		return { activeMessages, entry };
 	};
 
@@ -1515,7 +1605,32 @@ export const createSessionCompaction = ({
 			);
 		}
 		let operation: Promise<CompactSessionResult>;
-		operation = compactNow(input).finally(() => {
+		operation = (async () => {
+			try {
+				return await compactNow(input);
+			} catch (error) {
+				if (
+					lifecycle?.failed !== undefined &&
+					!isExpectedCompactionCancellation(error)
+				) {
+					try {
+						await lifecycle.failed({
+							error,
+							trigger: input.trigger,
+							sessionId: session,
+							...omitUndefined({
+								focus: normalizeFocus(input.focus),
+								signal: input.signal,
+								turnId: input.turnId,
+							}),
+						});
+					} catch {
+						// A failure observer cannot mask the compaction failure it observed.
+					}
+				}
+				throw error;
+			}
+		})().finally(() => {
 			if (inFlight.get(session)?.operation === operation) {
 				inFlight.delete(session);
 			}
