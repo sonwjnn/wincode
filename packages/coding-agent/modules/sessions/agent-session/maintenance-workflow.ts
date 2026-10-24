@@ -180,6 +180,7 @@ export const createSessionMaintenanceWorkflow = (
 		trigger: command.trigger,
 		...omitUndefined({
 			focus: command.focus,
+			protectedMessageIds: command.protectedMessageIds,
 			thinkingLevel: command.thinkingLevel,
 		}),
 		signal,
@@ -189,6 +190,11 @@ export const createSessionMaintenanceWorkflow = (
 		messages: readonly SessionMessage[]
 	): Promise<CompactSessionResult> => {
 		const controller = new AbortController();
+		const signal = AbortSignal.any([
+			controller.signal,
+			port.shutdownSignal,
+			...(command.signal === undefined ? [] : [command.signal]),
+		]);
 		const registration = Promise.withResolvers<void>();
 		const { promise, reject, resolve } =
 			Promise.withResolvers<CompactSessionResult>();
@@ -205,12 +211,8 @@ export const createSessionMaintenanceWorkflow = (
 		);
 		void (async () => {
 			try {
-				const request = await compactionRequest(
-					command,
-					messages,
-					AbortSignal.any([controller.signal, port.shutdownSignal])
-				);
-				if (controller.signal.aborted || port.isClosed()) {
+				const request = await compactionRequest(command, messages, signal);
+				if (signal.aborted || port.isClosed()) {
 					throw new SessionCompactionError(
 						"cancelled",
 						SESSION_SHUT_DOWN_ERROR
@@ -220,15 +222,16 @@ export const createSessionMaintenanceWorkflow = (
 				port.setCompactionPhase(activeCommand, "running");
 				registration.resolve();
 				const result = await admitted;
-				if (controller.signal.aborted || port.isClosed()) {
+				// Successful persistence is the commit point. Reconcile it even if cancellation won later.
+				port.applyContext(result.activeMessages);
+				port.recordCompaction(result.entry);
+				port.setCompactionError(null);
+				if (signal.aborted || port.isClosed()) {
 					throw new SessionCompactionError(
 						"cancelled",
 						SESSION_SHUT_DOWN_ERROR
 					);
 				}
-				port.applyContext(result.activeMessages);
-				port.recordCompaction(result.entry);
-				port.setCompactionError(null);
 				void logger.debug(
 					"Session compaction completed",
 					compactionDiagnosticFields(command, "completed")
@@ -264,7 +267,9 @@ export const createSessionMaintenanceWorkflow = (
 		const request = await compactionRequest(
 			command,
 			messages,
-			port.shutdownSignal
+			command.signal === undefined
+				? port.shutdownSignal
+				: AbortSignal.any([port.shutdownSignal, command.signal])
 		);
 		if (port.isClosed()) {
 			throw new SessionCompactionError("cancelled", SESSION_SHUT_DOWN_ERROR);

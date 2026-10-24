@@ -1,4 +1,5 @@
 import type {
+	AgentContextPreparation,
 	AgentId,
 	AgentTurn,
 	AgentTurnEvent,
@@ -335,6 +336,8 @@ export type SessionAttachmentPort = Readonly<{
  * Durable Session Records the runtime produced through the Agent Session.
  */
 export type SessionTurnCallbacks = Readonly<{
+	/** Commits settled text and rotates the transient assistant before preparation. */
+	commitStep: (record: SessionRecord | undefined) => Promise<void>;
 	/** Commits the terminal Session Record of the execution. */
 	commitTerminal: (record: SessionRecord) => Promise<void>;
 	/** Commits each completed Tool Call as its own Session Record. */
@@ -347,8 +350,17 @@ export type SessionTurnCallbacks = Readonly<{
 	onViewState: (viewState: SessionViewState) => void;
 }>;
 
+export type SessionContextPreparation = AgentContextPreparation &
+	Readonly<{
+		protectedMessageIds: readonly SessionMessageId[];
+	}>;
+
 /** One Agent Turn execution the host runs against the Agent Runtime. */
 export type SessionTurnRequest = Readonly<{
+	/** Returns replacement history only; runtime retains the newest raw step suffix. */
+	prepareNextStep: (
+		input: SessionContextPreparation
+	) => Promise<readonly SessionMessage[] | undefined>;
 	/** The Skill catalog the submission armed for this execution. */
 	armedSkill: SessionSkillCatalog;
 	/** Reports what happens inside the execution back to the Agent Session. */
@@ -499,6 +511,10 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 	nextMessages?: readonly SessionMessage[];
 	/** Compacted in place of the Session Transcript, when supplied. */
 	sourceMessages?: readonly SessionMessage[];
+	/** A live continuation may not summarize or split its newest settled step. */
+	protectedMessageIds?: readonly SessionMessageId[];
+	/** Cancels preparation together with the owning active turn. */
+	signal?: AbortSignal;
 	trigger: CompactionTriggerReason;
 	/** The Agent Turn that initiated this compaction, for diagnostics. */
 	turnId?: AgentTurnId;

@@ -182,7 +182,7 @@ const isSessionRecordOutcome = (
 	if (outcome.kind === "user") {
 		return Object.keys(outcome).length === 1;
 	}
-	if (outcome.kind === "tool") {
+	if (outcome.kind === "tool" || outcome.kind === "checkpoint") {
 		return Object.keys(outcome).length === 1;
 	}
 	return (
@@ -247,7 +247,9 @@ export const getSessionRecordValidationError = (
 	}
 	if (
 		(record.outcome.kind === "user" && message.role !== "user") ||
-		(record.outcome.kind === "assistant" && message.role !== "assistant") ||
+		((record.outcome.kind === "assistant" ||
+			record.outcome.kind === "checkpoint") &&
+			message.role !== "assistant") ||
 		(record.outcome.kind === "tool" &&
 			(message.role !== "assistant" ||
 				!message.parts.some(isSessionToolCallPart)))

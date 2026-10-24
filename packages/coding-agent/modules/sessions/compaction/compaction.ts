@@ -166,6 +166,7 @@ export type CompactSessionInput = {
 	summaryModel?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	summaryGenerator?: SummaryGenerator;
+	protectedMessageIds?: readonly SessionMessage["id"][];
 	settings: Pick<
 		ResolvedCompactionSettings,
 		"enabled" | "keepRecentTokens" | "thresholdTokens"
@@ -1130,11 +1131,44 @@ const externalizeForCompaction = async (
 	}
 };
 
+/** Durable settled-step rows permit a cut inside the active user turn, never its newest batch. */
+const chooseCheckpointCutPoint = (
+	messages: SessionMessage[],
+	protectedStart: number,
+	keepRecentTokens: number,
+	estimateTokens: (messages: readonly SessionMessage[]) => number
+): CutPoint => {
+	let boundary = protectedStart;
+	while (
+		boundary > 0 &&
+		estimateTokens(messages.slice(boundary)) < keepRecentTokens
+	) {
+		boundary -= 1;
+	}
+	const safeBoundary = resolveToolSafeCutStart(messages, boundary);
+	if (
+		safeBoundary === null ||
+		safeBoundary <= 0 ||
+		safeBoundary > protectedStart
+	) {
+		throw new SessionCompactionError(
+			"history-too-short",
+			"There is no older durable step history that can be compacted while preserving the current continuation."
+		);
+	}
+	return {
+		activeMessages: messages.slice(safeBoundary),
+		firstKeptIndex: safeBoundary,
+		throughIndex: safeBoundary - 1,
+	};
+};
+
 const chooseCompactionSpan = (
 	messages: SessionMessage[],
 	previous: SessionCompaction | null,
 	keepRecentTokens: number,
-	estimateTokens: (messages: readonly SessionMessage[]) => number
+	estimateTokens: (messages: readonly SessionMessage[]) => number,
+	protectedMessageIds: readonly SessionMessage["id"][] = []
 ): { cutPoint: CutPoint; summarySpan: SessionMessage[] } => {
 	const previousIndex = isNull(previous)
 		? -1
@@ -1167,11 +1201,35 @@ const chooseCompactionSpan = (
 	const selectedMessages = previousSplitApplied
 		? applyDurableSplitBoundary(messages.slice(selectionStart), previous)
 		: messages.slice(selectionStart);
-	const selectedCutPoint = chooseCutPoint(
-		selectedMessages,
-		Math.max(1, keepRecentTokens),
-		estimateTokens
+	const protectedIds = new Set(protectedMessageIds);
+	const protectedStart = selectedMessages.findIndex((message) =>
+		protectedIds.has(message.id)
 	);
+	if (
+		protectedIds.size > 0 &&
+		(protectedStart < 0 ||
+			[...protectedIds].some(
+				(id) => !selectedMessages.some((message) => message.id === id)
+			))
+	) {
+		throw new SessionCompactionError(
+			"invalid-boundary",
+			"The protected continuation checkpoint is missing from compaction history."
+		);
+	}
+	const selectedCutPoint =
+		protectedStart < 0
+			? chooseCutPoint(
+					selectedMessages,
+					Math.max(1, keepRecentTokens),
+					estimateTokens
+				)
+			: chooseCheckpointCutPoint(
+					selectedMessages,
+					protectedStart,
+					keepRecentTokens,
+					estimateTokens
+				);
 	const cutPoint: CutPoint = {
 		...selectedCutPoint,
 		...(previousSplitApplied ? { previousSplitApplied: true } : {}),
@@ -1372,7 +1430,8 @@ export const createSessionCompaction = ({
 			externalizedMessages,
 			previous,
 			input.settings.keepRecentTokens,
-			estimateTokens
+			estimateTokens,
+			input.protectedMessageIds
 		);
 		const focus = normalizeFocus(input.focus);
 		const summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {

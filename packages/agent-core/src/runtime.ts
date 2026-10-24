@@ -161,8 +161,22 @@ export type ModelStepObserver = Readonly<{
 	) => void;
 }>;
 
+/** A settled step's next request; the newest assistant/tool/steering suffix is protected. */
+export type AgentContextPreparation = Readonly<{
+	request: ChatRequest;
+	protectedFromIndex: number;
+}>;
+export type PrepareAgentContext = (
+	input: AgentContextPreparation
+) => Promise<readonly AgentTurnMessage[] | undefined>;
+
 /** Options for one Agent Runtime invocation. */
 export type AgentRuntimeRunOptions = Readonly<{
+	/** Awaited only when another Model Step is needed, after tools and steering settle.
+	 * Returns replacement history BEFORE protectedFromIndex; the runtime keeps the newest suffix intact.
+	 * Failure ends the turn; undefined leaves context unchanged. No tools are replayed.
+	 */
+	prepareNextStep?: PrepareAgentContext;
 	/** Session-owned notifications for streaming Model request lifecycle. */
 	modelStepObserver?: ModelStepObserver;
 	/** Marks this individual request as a best-effort cache-warm replay. */

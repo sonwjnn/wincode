@@ -196,7 +196,8 @@ export type AgentTurnOutcomeRecord = ReadonlyDeep<
 
 /**
  * Durable meaning of one Session Record row. User and Tool rows are ordinary
- * content checkpoints; assistant rows represent terminal Agent Turn outcomes.
+ * content checkpoints; checkpoint rows retain settled Model Step text without
+ * declaring the Agent Turn terminal. Assistant rows represent terminal outcomes.
  */
 export type SessionRecordOutcome = ReadonlyDeep<
 	| {
@@ -204,6 +205,9 @@ export type SessionRecordOutcome = ReadonlyDeep<
 	  }
 	| {
 			kind: "tool";
+	  }
+	| {
+			kind: "checkpoint";
 	  }
 	| {
 			kind: "assistant";

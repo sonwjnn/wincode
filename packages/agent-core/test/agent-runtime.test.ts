@@ -116,6 +116,247 @@ const readDefinition = {
 	name: "read",
 } satisfies ToolDefinition;
 
+test("context preparation replaces history only after settled tools and keeps successful effects exactly once", async () => {
+	let executions = 0;
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) =>
+			index === 0
+				? scriptedEvents(
+						{
+							type: "tool-call",
+							toolCallId: "read-once",
+							toolName: "read",
+							input: { path: "a.ts" },
+						},
+						{ type: "usage", usage: { inputTokens: 10, outputTokens: 2 } },
+						{ type: "finish" }
+					)
+				: scriptedEvents(
+						{ type: "text-delta", delta: "done" },
+						{ type: "usage", usage: { inputTokens: 4, outputTokens: 1 } },
+						{ type: "finish" }
+					)
+	);
+	const prepared: number[] = [];
+	const observedRequests: ChatRequest[] = [];
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(
+			buildTurn([
+				{
+					definition: readDefinition,
+					execute: async () => {
+						executions += 1;
+						return { type: "success", output: "read result" };
+					},
+				},
+			]),
+			{
+				modelStepObserver: {
+					onModelStepStarted: (request) => observedRequests.push(request),
+					onModelStepFinished: () => undefined,
+				},
+				prepareNextStep: async ({ protectedFromIndex }) => {
+					expect(executions).toBe(1);
+					prepared.push(protectedFromIndex);
+					return [
+						{
+							id: toSessionMessageId("summary"),
+							role: "user",
+							parts: [{ type: "text", text: "history summary" }],
+						},
+					];
+				},
+			}
+		)
+	);
+	expect(prepared).toEqual([1]);
+	expect(observedRequests[0]?.messages).toHaveLength(1);
+	expect(executions).toBe(1);
+	expect(requests[1]?.messages).toMatchObject([
+		{ role: "user", content: [{ type: "text", text: "history summary" }] },
+		{
+			role: "assistant",
+			content: [{ type: "tool-call", toolCallId: "read-once" }],
+		},
+		{
+			role: "tool",
+			content: [{ type: "tool-result", toolCallId: "read-once" }],
+		},
+	]);
+	expect(events.at(-1)).toMatchObject({
+		type: "agent-turn-completed",
+		usage: { inputTokens: 14, outputTokens: 3 },
+	});
+});
+
+test("steering delivered before and during preparation appears once beside the untouched tool continuation", async () => {
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) =>
+			index === 0
+				? scriptedEvents(
+						{
+							type: "tool-call",
+							toolCallId: "prepare-read",
+							toolName: "read",
+							input: { path: "a.ts" },
+						},
+						{ type: "finish", continuation: { signed: "opaque" } }
+					)
+				: scriptedEvents(
+						{ type: "text-delta", delta: "done" },
+						{ type: "finish" }
+					)
+	);
+	const pending = [
+		createAgentTurnMessage(
+			"user",
+			"before preparation",
+			toSessionMessageId("before")
+		),
+	];
+	const events = await consume(
+		createStatefulAgent({
+			runtime: createAgentRuntime({ providerCollection }),
+		}).run(
+			buildTurn([
+				{
+					definition: readDefinition,
+					execute: async () => ({ type: "success", output: "read" }),
+				},
+			]),
+			{
+				takeSteeringMessages: () => pending.splice(0),
+				prepareNextStep: async () => {
+					await Promise.resolve();
+					pending.push(
+						createAgentTurnMessage(
+							"user",
+							"during preparation",
+							toSessionMessageId("during")
+						)
+					);
+					return [
+						createAgentTurnMessage(
+							"user",
+							"summary",
+							toSessionMessageId("summary")
+						),
+					];
+				},
+			}
+		)
+	);
+	expect(requests).toHaveLength(2);
+	expect(requests[1]?.messages).toMatchObject([
+		{ role: "user", content: [{ type: "text", text: "summary" }] },
+		{ role: "assistant", continuation: { signed: "opaque" } },
+		{ role: "tool" },
+		{ role: "user", content: [{ type: "text", text: "before preparation" }] },
+		{ role: "user", content: [{ type: "text", text: "during preparation" }] },
+	]);
+	expect(
+		events.filter((event) => event.type === "agent-turn-completed")
+	).toHaveLength(1);
+});
+
+for (const disposition of ["cancel", "failure"] as const) {
+	test(`preparation ${disposition} preserves settled effects but dispatches no next request`, async () => {
+		let effects = 0;
+		const controller = new AbortController();
+		const { providerCollection, requests } = scriptedProvider(() =>
+			scriptedEvents(
+				{
+					type: "tool-call",
+					toolCallId: "settled",
+					toolName: "read",
+					input: { path: "a.ts" },
+				},
+				{ type: "finish" }
+			)
+		);
+		const events = await consume(
+			createAgentRuntime({ providerCollection }).run(
+				buildTurn([
+					{
+						definition: readDefinition,
+						execute: async () => {
+							effects += 1;
+							return { type: "success", output: "durable effect" };
+						},
+					},
+				]),
+				{
+					signal: controller.signal,
+					prepareNextStep: async () => {
+						if (disposition === "failure") {
+							throw new Error("preparation failed");
+						}
+						controller.abort();
+						return [];
+					},
+				}
+			)
+		);
+		expect(effects).toBe(1);
+		expect(requests).toHaveLength(1);
+		expect(events.at(-1)?.type).toBe(
+			disposition === "cancel" ? "agent-turn-cancelled" : "agent-turn-failed"
+		);
+		expect(
+			events.filter(
+				(event) =>
+					event.type.startsWith("agent-turn-") &&
+					event.type !== "agent-turn-started"
+			)
+		).toHaveLength(1);
+	});
+}
+
+for (const stopsWithTool of [false, true]) {
+	test(`a ${stopsWithTool ? "stop-turn tool" : "final text-only step"} never starts context preparation`, async () => {
+		const { providerCollection, requests } = scriptedProvider(() =>
+			stopsWithTool
+				? scriptedEvents(
+						{
+							type: "tool-call",
+							toolCallId: "stop",
+							toolName: "read",
+							input: { path: "a.ts" },
+						},
+						{ type: "finish" }
+					)
+				: scriptedEvents(
+						{ type: "text-delta", delta: "done" },
+						{ type: "finish" }
+					)
+		);
+		let preparations = 0;
+		const events = await consume(
+			createAgentRuntime({ providerCollection }).run(
+				buildTurn([
+					{
+						definition: readDefinition,
+						execute: async () => ({
+							type: "success",
+							output: "stopped",
+							stopTurn: true,
+						}),
+					},
+				]),
+				{
+					prepareNextStep: async () => {
+						preparations += 1;
+						throw new Error("must not prepare");
+					},
+				}
+			)
+		);
+		expect(requests).toHaveLength(1);
+		expect(preparations).toBe(0);
+		expect(events.at(-1)?.type).toBe("agent-turn-completed");
+	});
+}
+
 test("Agent Runtime streams model output and reports normalized step usage", async () => {
 	const { providerCollection } = scriptedProvider(() =>
 		scriptedEvents(

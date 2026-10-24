@@ -94,6 +94,7 @@ import {
 	type SessionWriterLock,
 } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
+import { estimateSessionContextTokens } from "@/modules/sessions/usage/context-usage";
 import { summarizeSessionUsage } from "@/modules/sessions/usage/session-usage";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -1680,7 +1681,464 @@ test("Session Host reports an unavailable Skill target without activating it", a
 	}
 });
 
+const createLongLoopHost = async (
+	prefix: string,
+	summarize: () => Promise<string> = async () =>
+		"Earlier steps read files successfully. Continue the task.",
+	storePort: SessionStore = store,
+	options: { toolOutput?: string; toolSteps?: number } = {}
+) => {
+	const seeded = await seedSession(prefix, "completed");
+	const counts = { effects: 0, modelCalls: 0, summaries: 0 };
+	const requests: ProviderChatRequest[] = [];
+	const previousScript = recorder.stepScript;
+	recorder.stepScript = async function* (request) {
+		if (request.system?.includes("session summarizer")) {
+			counts.summaries += 1;
+			yield { type: "text-delta", delta: await summarize() };
+		} else {
+			requests.push(request);
+			counts.modelCalls += 1;
+			if (counts.modelCalls <= (options.toolSteps ?? 3)) {
+				yield {
+					type: "text-delta",
+					delta: `checkpoint text ${counts.modelCalls}`,
+				};
+				yield {
+					type: "tool-call",
+					toolCallId: `long-read-${counts.modelCalls}`,
+					toolName: "read",
+					input: { path: `file-${counts.modelCalls}.ts` },
+				};
+			} else {
+				yield { type: "text-delta", delta: "final answer" };
+			}
+			yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
+		}
+		yield { type: "finish", continuation: { opaqueStep: counts.modelCalls } };
+	};
+	const document = {
+		compaction: {
+			keepRecentTokens: 2000,
+			reserveTokens: 16_384,
+			summary: { maxOutputTokens: 512 },
+		},
+	};
+	const capabilities: SessionCapabilities = {
+		...createCapabilities(storePort, document),
+		getCompactionModule: () => createSessionCompaction({ store: storePort }),
+		getCompactionSettings: async (selection, providerModel) =>
+			resolveCompactionSettings({
+				model: selection,
+				contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
+				snapshot: {
+					document,
+					sources: [],
+					diagnostics: [],
+					sourceFor: () => undefined,
+				},
+			}),
+		getTurnToolResolver: () => async () => [
+			{
+				definition: {
+					name: "read",
+					description: "Read test content",
+					inputSchema: z.object({ path: z.string() }),
+				},
+				execute: async () => {
+					counts.effects += 1;
+					return {
+						type: "success",
+						output: options.toolOutput ?? "tool payload ".repeat(23_000),
+					};
+				},
+			},
+		],
+	};
+	const host = await createSessionHost({
+		capabilities,
+		sessionId: seeded.sessionId,
+	});
+	return { counts, requests, previousScript, seeded, capabilities, host };
+};
+
 describe("Session Host opening", () => {
+	test("a long tool loop compacts between settled steps without replay and reopens its checkpointed text", async () => {
+		const { counts, requests, previousScript, seeded, capabilities, host } =
+			await createLongLoopHost("between-steps");
+		try {
+			expect(
+				await host.agentSession.send(
+					sendInput(capabilities, "run the long task")
+				)
+			).toEqual({ rejected: false });
+			expect(host.getSnapshot().compactionError).toBeNull();
+			expect(host.getSnapshot().error).toBeNull();
+			expect(counts.effects).toBe(3);
+			expect(counts.modelCalls).toBe(4);
+			expect(counts.summaries).toBe(1);
+			expect(
+				estimateSessionContextTokens(host.getSnapshot().context).source
+			).toBe("measured");
+			const lastRequest = requests.at(-1);
+			expect(JSON.stringify(lastRequest)).toContain(
+				"Earlier steps read files successfully"
+			);
+			expect(
+				lastRequest?.messages.findLast(
+					(message) => message.role === "assistant"
+				)?.continuation
+			).toEqual({ opaqueStep: 3 });
+			const records = await store.listSessionRecords(seeded.sessionId);
+			const ownRecords = records.filter(
+				(record) =>
+					record.turnId !== agentTurnId("between-steps-turn-1") &&
+					record.turnId !== agentTurnId("between-steps-turn-2")
+			);
+			expect(
+				ownRecords.filter((record) => record.outcome.kind === "checkpoint")
+			).toHaveLength(3);
+			expect(
+				ownRecords
+					.filter((record) => record.outcome.kind === "assistant")
+					.at(-1)?.messages[0]?.metadata?.usage
+			).toMatchObject({ inputTokens: 40, outputTokens: 8 });
+			expect(
+				textOf(
+					host.getSnapshot().transcript.flatMap((message) => message.parts)
+				)
+			).toContain("checkpoint text 1");
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+		const reopened = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		try {
+			const transcriptText = textOf(
+				reopened.getSnapshot().transcript.flatMap((message) => message.parts)
+			);
+			expect(transcriptText).toContain("checkpoint text 1");
+			expect(transcriptText).toContain("checkpoint text 2");
+			expect(transcriptText).toContain("checkpoint text 3");
+			expect(
+				estimateSessionContextTokens(reopened.getSnapshot().context).source
+			).toBe("measured");
+			expect(reopened.getSnapshot().context[0]?.parts).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						text: expect.stringContaining(
+							"Earlier steps read files successfully"
+						),
+					}),
+				])
+			);
+			expect(counts.effects).toBe(3);
+		} finally {
+			await reopened.shutdown();
+		}
+	});
+	test("the same live turn can compact twice without re-running a successful tool", async () => {
+		const { host, capabilities, seeded, counts, previousScript } =
+			await createLongLoopHost("repeat-preparation", undefined, store, {
+				toolSteps: 5,
+			});
+		try {
+			await host.agentSession.send(sendInput(capabilities));
+			expect(counts).toEqual({ effects: 5, modelCalls: 6, summaries: 2 });
+			expect(host.getSnapshot().compactionError).toBeNull();
+			expect(host.getSnapshot().compactions).toHaveLength(3);
+			const records = await store.listSessionRecords(seeded.sessionId);
+			expect(
+				records.filter((record) => record.outcome.kind === "checkpoint")
+			).toHaveLength(5);
+			expect(
+				records.filter((record) => record.outcome.kind === "assistant").at(-1)
+					?.messages[0]?.metadata?.usage
+			).toMatchObject({ inputTokens: 60, outputTokens: 12 });
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	test("an oversized newest tool batch fails closed instead of splitting or replaying its results", async () => {
+		const { host, capabilities, seeded, counts, previousScript } =
+			await createLongLoopHost("protected-too-large", undefined, store, {
+				toolOutput: "large ".repeat(200_000),
+			});
+		try {
+			await host.agentSession.send(sendInput(capabilities));
+			expect(counts).toEqual({ effects: 1, modelCalls: 1, summaries: 0 });
+			expect(host.getSnapshot().compactionError).toMatchObject({
+				code: "context-still-too-large",
+			});
+			expect((await store.getLatestCompaction(seeded.sessionId))?.id).toBe(
+				seeded.compaction
+			);
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	for (const failure of ["summary", "persistence", "checkpoint"] as const) {
+		test(`between-step ${failure} failure preserves settled tools and sends no next model request`, async () => {
+			const storePort: SessionStore = {
+				...store,
+				commitSessionRecord: async (input) => {
+					if (
+						failure === "checkpoint" &&
+						input.record.outcome.kind === "checkpoint"
+					) {
+						throw new Error("checkpoint unavailable");
+					}
+					await store.commitSessionRecord(input);
+				},
+				appendCompaction: async (input) => {
+					if (failure === "persistence") {
+						throw new Error("compaction persistence unavailable");
+					}
+					return store.appendCompaction(input);
+				},
+			};
+			const fixture = await createLongLoopHost(
+				`preparation-${failure}`,
+				async () => {
+					if (failure === "summary") {
+						throw new Error("summary unavailable");
+					}
+					return "Completed tools remain durable.";
+				},
+				storePort
+			);
+			const { host, capabilities, seeded, counts, previousScript } = fixture;
+			try {
+				await host.agentSession.send(sendInput(capabilities));
+				const expectedEffects = failure === "checkpoint" ? 1 : 3;
+				expect(counts.effects).toBe(expectedEffects);
+				expect(counts.modelCalls).toBe(expectedEffects);
+				expect((await store.getLatestCompaction(seeded.sessionId))?.id).toBe(
+					seeded.compaction
+				);
+				const records = await store.listSessionRecords(seeded.sessionId);
+				expect(
+					records.filter((record) => record.outcome.kind === "tool")
+				).toHaveLength(expectedEffects);
+				expect(
+					records.filter((record) => record.outcome.kind === "assistant").at(-1)
+						?.outcome
+				).toMatchObject({ terminal: { kind: "failed" } });
+			} finally {
+				await host.shutdown();
+				recorder.stepScript = previousScript;
+			}
+		});
+	}
+
+	test("cancelling a between-step summary preserves completed tools and never resumes the next model step", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<string>();
+		const { host, capabilities, seeded, counts, previousScript } =
+			await createLongLoopHost("cancel-preparation", async () => {
+				started.resolve();
+				return release.promise;
+			});
+		const sending = host.agentSession.send(sendInput(capabilities));
+		try {
+			await started.promise;
+			const interrupting = host.agentSession.interruptAll();
+			release.resolve("Discard this cancelled summary.");
+			await Promise.all([sending, interrupting]);
+			expect(counts.effects).toBe(3);
+			expect(counts.modelCalls).toBe(3);
+			expect((await store.getLatestCompaction(seeded.sessionId))?.id).toBe(
+				seeded.compaction
+			);
+			const records = await store.listSessionRecords(seeded.sessionId);
+			expect(
+				records.filter((record) => record.outcome.kind === "tool")
+			).toHaveLength(3);
+			expect(
+				records.filter((record) => record.outcome.kind === "checkpoint")
+			).toHaveLength(3);
+		} finally {
+			release.resolve("");
+			await sending;
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	for (const boundary of ["checkpoint", "compaction"] as const) {
+		test(`cancellation during ${boundary} persistence reconciles the durable winner without duplicate assistant IDs`, async () => {
+			const writeStarted = Promise.withResolvers<void>();
+			const releaseWrite = Promise.withResolvers<void>();
+			const storePort: SessionStore = {
+				...store,
+				commitSessionRecord: async (input) => {
+					if (
+						boundary === "checkpoint" &&
+						input.record.outcome.kind === "checkpoint"
+					) {
+						writeStarted.resolve();
+						await releaseWrite.promise;
+					}
+					await store.commitSessionRecord(input);
+				},
+				appendCompaction: async (input) => {
+					if (boundary === "compaction") {
+						writeStarted.resolve();
+						await releaseWrite.promise;
+					}
+					return store.appendCompaction(input);
+				},
+			};
+			const { host, seeded, capabilities, counts, previousScript } =
+				await createLongLoopHost(
+					`cancel-durable-${boundary}`,
+					undefined,
+					storePort
+				);
+			const sending = host.agentSession.send(sendInput(capabilities));
+			let liveIds: SessionMessage["id"][] = [];
+			try {
+				await writeStarted.promise;
+				const interrupting = host.agentSession.interruptAll();
+				releaseWrite.resolve();
+				await Promise.all([sending, interrupting]);
+				expect(counts.effects).toBe(boundary === "checkpoint" ? 1 : 3);
+				expect(counts.modelCalls).toBe(counts.effects);
+				const records = await store.listSessionRecords(seeded.sessionId);
+				const messageIds = records.flatMap((record) =>
+					record.messages.map((message) => message.id)
+				);
+				expect(new Set(messageIds).size).toBe(messageIds.length);
+				const latest = await store.getLatestCompaction(seeded.sessionId);
+				expect(host.getSnapshot().compactions.at(-1)?.id).toBe(latest?.id);
+				liveIds = host.getSnapshot().context.map((message) => message.id);
+			} finally {
+				releaseWrite.resolve();
+				await sending;
+				await host.shutdown();
+				recorder.stepScript = previousScript;
+			}
+			const reopened = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			try {
+				expect(
+					reopened.getSnapshot().context.map((message) => message.id)
+				).toEqual(liveIds);
+				expect(counts.modelCalls).toBe(counts.effects);
+			} finally {
+				await reopened.shutdown();
+			}
+		});
+	}
+
+	test("steering committed while between-step summarization waits is delivered once to the next request", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<string>();
+		const { host, capabilities, counts, requests, previousScript } =
+			await createLongLoopHost("steer-preparation", async () => {
+				started.resolve();
+				return release.promise;
+			});
+		const sending = host.agentSession.send(sendInput(capabilities));
+		try {
+			await started.promise;
+			expect(
+				await host.agentSession.prompt(
+					sendInput(capabilities, "steer while compacting")
+				)
+			).toMatchObject({ rejected: false, disposition: "queued" });
+			expect((await host.agentSession.steer()).kind).toBe("steered");
+			release.resolve("Earlier tools are complete.");
+			await sending;
+			expect(counts.modelCalls).toBe(4);
+			expect(counts.effects).toBe(3);
+			const delivered = requests
+				.at(-1)
+				?.messages.flatMap((message) => message.content)
+				.filter(
+					(part) =>
+						part.type === "text" && part.text === "steer while compacting"
+				);
+			expect(delivered).toHaveLength(1);
+			expect(host.getSnapshot().steeringMessages).toHaveLength(0);
+		} finally {
+			release.resolve("");
+			await sending;
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	test("a stop-tool turn retains aggregate billing after earlier text was checkpointed", async () => {
+		const seeded = await seedSession("checkpoint-billing", "completed");
+		const previousScript = recorder.stepScript;
+		let calls = 0;
+		recorder.stepScript = async function* () {
+			calls += 1;
+			if (calls === 1) {
+				yield { type: "text-delta", delta: "checkpoint this text" };
+			}
+			yield {
+				type: "tool-call",
+				toolCallId: `billing-${calls}`,
+				toolName: "read",
+				input: { path: "a.ts" },
+			};
+			yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
+			yield { type: "finish" };
+		};
+		let effects = 0;
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(),
+			getTurnToolResolver: () => async () => [
+				{
+					definition: {
+						name: "read",
+						description: "read",
+						inputSchema: z.object({ path: z.string() }),
+					},
+					execute: async () => {
+						effects += 1;
+						return {
+							type: "success",
+							output: "read",
+							...(effects === 2 ? { stopTurn: true as const } : {}),
+						};
+					},
+				},
+			],
+		};
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		try {
+			await host.agentSession.send(sendInput(capabilities));
+			const records = await store.listSessionRecords(seeded.sessionId);
+			expect(host.getSnapshot().error).toBeNull();
+			expect(host.getSnapshot().compactionError).toBeNull();
+			expect(effects).toBe(2);
+			expect(
+				records.filter((record) => record.outcome.kind === "checkpoint")
+			).toHaveLength(1);
+			expect(
+				records.filter((record) => record.outcome.kind === "assistant").at(-1)
+					?.messages[0]?.metadata?.usage
+			).toMatchObject({ inputTokens: 20, outputTokens: 4 });
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
 	test("a configured summary target does not change the Session Selection or the next chat target", async () => {
 		const seeded = await seedSession("summary-routing", "completed");
 		const document = {

@@ -75,6 +75,10 @@ export type SubmissionDeps = Readonly<{
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	endExecution: (turnId: AgentTurnId) => void;
 	getAssistantMessageId: (turnId: AgentTurnId) => SessionMessageId;
+	finishModelStep: (
+		turnId: AgentTurnId,
+		record: SessionRecord | undefined
+	) => void;
 	isShutDown: () => boolean;
 	/** Persists delivered Steering Message state transitions. */
 	acknowledgeSteeringMessages: (
@@ -1208,8 +1212,9 @@ const runTurn = async ({
 	onTurnFailure: () => void;
 	signal: AbortSignal;
 }): Promise<SessionSendOutcome> => {
-	const contextEpoch = getSessionContextEpoch(modelMessages);
+	let contextEpoch = getSessionContextEpoch(modelMessages);
 	let executionActive = true;
+	let terminalCommitted = false;
 	const turnIsLive = (): boolean =>
 		executionActive && !deps.isShutDown() && !signal.aborted;
 	const commitRecord = async (record: SessionRecord): Promise<void> => {
@@ -1223,11 +1228,25 @@ const runTurn = async ({
 			return;
 		}
 		await commitExecutionRecord(deps, execution, record);
+		terminalCommitted = true;
 	};
 	let executionStarted = false;
 	let terminalObserved = false;
 	let terminalFailure: OperationalFailure | undefined;
 	const callbacks: SessionTurnCallbacks = {
+		commitStep: async (record) => {
+			if (!turnIsLive()) {
+				throw new SessionSendCancelledError();
+			}
+			if (record !== undefined) {
+				await commitRecord(record);
+			}
+			// A completed durable write wins cancellation: seal its identity before terminal persistence.
+			deps.finishModelStep(execution.turnId, record);
+			if (!turnIsLive()) {
+				throw new SessionSendCancelledError();
+			}
+		},
 		commitTerminal,
 		commitToolCall: commitRecord,
 		onEvent: async (event) => {
@@ -1255,7 +1274,12 @@ const runTurn = async ({
 			deps.mergeTranscript([projected.message]);
 		},
 		onTerminal: async (event) => {
-			if (!turnIsLive()) {
+			// Only a committed terminal outcome may reconcile after cancellation; late Provider callbacks cannot.
+			if (
+				!executionActive ||
+				deps.isShutDown() ||
+				(signal.aborted && !terminalCommitted)
+			) {
 				return;
 			}
 			executionStarted = true;
@@ -1325,6 +1349,83 @@ const runTurn = async ({
 			callbacks,
 			execution,
 			getAssistantMessageId: () => deps.getAssistantMessageId(execution.turnId),
+			prepareNextStep: async ({ protectedMessageIds }) => {
+				assertSendNotCancelled(signal);
+				const pendingFailure = await deps.settleCompaction();
+				if (pendingFailure !== null) {
+					throw pendingFailure;
+				}
+				const settings = await deps.ports.resolveCompactionSettings(
+					execution.model
+				);
+				if (
+					!(
+						settings.autoAvailable &&
+						deps.ports.compaction.needsCompaction(
+							deps.getContext(),
+							settings,
+							execution.model
+						)
+					)
+				) {
+					return;
+				}
+				const activeIds = new Set(
+					deps.getContext().map((message) => message.id)
+				);
+				const transcript = deps.getTranscript();
+				const durableIds = new Set(transcript.map((message) => message.id));
+				const protectedIds = protectedMessageIds.filter((id) =>
+					durableIds.has(id)
+				);
+				if (
+					protectedIds.length === 0 ||
+					protectedIds.some((id) => !activeIds.has(id))
+				) {
+					throw new Error(
+						"The current durable continuation checkpoint is missing from active context."
+					);
+				}
+				const sourceMessages = transcript.filter(
+					(message) =>
+						message.metadata?.joinedTurnId === undefined ||
+						activeIds.has(message.id)
+				);
+				try {
+					const result = await deps.compact({
+						model: execution.model,
+						sourceMessages,
+						protectedMessageIds: protectedIds,
+						signal,
+						trigger: "threshold",
+						turnId: execution.turnId,
+						...omitUndefined({ thinkingLevel: execution.thinkingLevel }),
+					});
+					assertSendNotCancelled(signal);
+					const protectedSet = new Set(protectedIds);
+					const index = result.activeMessages.findIndex((message) =>
+						protectedSet.has(message.id)
+					);
+					if (index < 0) {
+						throw new Error(
+							"Compaction lost the protected continuation checkpoint."
+						);
+					}
+					contextEpoch = getSessionContextEpoch(result.activeMessages);
+					return deps.ports.attachments.hydrate({
+						budget: attachmentBudget,
+						messages: result.activeMessages.slice(0, index),
+						signal,
+					});
+				} catch (error) {
+					deps.setCompactionError(
+						isError(error)
+							? error
+							: new Error("Between-step compaction failed.")
+					);
+					throw error;
+				}
+			},
 			messages: hydrated,
 			resolvedAgent: context.resolvedAgent,
 			...omitUndefined({ skillRequest: context.skill }),
@@ -1346,7 +1447,7 @@ const runTurn = async ({
 			});
 			maintainAfterTurn(
 				deps,
-				deps.getTranscript(),
+				deps.getContext(),
 				execution.model,
 				execution.turnId,
 				execution.thinkingLevel

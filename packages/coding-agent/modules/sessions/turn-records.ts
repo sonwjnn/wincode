@@ -117,6 +117,7 @@ export const buildTerminalSessionRecord = ({
 	assistantText,
 	event,
 	hasCompletedToolCalls = false,
+	hasCheckpointedText = false,
 	contextMeasurement,
 	sourceUserMessageId,
 	turn,
@@ -125,6 +126,7 @@ export const buildTerminalSessionRecord = ({
 	assistantText: string;
 	event: AgentTurnTerminalEvent;
 	hasCompletedToolCalls?: boolean;
+	hasCheckpointedText?: boolean;
 	contextMeasurement?: SessionContextMeasurement;
 	sourceUserMessageId?: SessionMessageId;
 	turn: AgentTurn;
@@ -140,7 +142,8 @@ export const buildTerminalSessionRecord = ({
 			: safeEvent.failure.message;
 	if (
 		text.length === 0 &&
-		(safeEvent.type !== "agent-turn-completed" || hasCompletedToolCalls)
+		(safeEvent.type !== "agent-turn-completed" ||
+			(hasCompletedToolCalls && !hasCheckpointedText))
 	) {
 		return;
 	}
@@ -346,6 +349,41 @@ export const buildAssistantCancelledSessionRecord = ({
 		thinkingLevel,
 	});
 };
+
+/** Settled text only: no terminal outcome and no duplicated aggregate billing. */
+export const buildStepCheckpointSessionRecord = ({
+	assistantMessageId,
+	text,
+	sourceUserMessageId,
+	turn,
+}: {
+	assistantMessageId: SessionMessageId;
+	text: string;
+	sourceUserMessageId?: SessionMessageId;
+	turn: AgentTurn;
+}): SessionRecord | undefined =>
+	text.length === 0
+		? undefined
+		: {
+				agentId: turn.agent.id,
+				id: toSessionRecordId(`record-${randomUUIDv7()}`),
+				messages: [
+					{
+						id: assistantMessageId,
+						role: "assistant",
+						parts: [{ type: "text", text }],
+						metadata: assistantRecordMetadata(
+							turn,
+							undefined,
+							sourceUserMessageId
+						),
+					},
+				],
+				model: recordModelForTurn(turn),
+				outcome: { kind: "checkpoint" },
+				turnId: turn.id,
+				version: SESSION_RECORD_VERSION,
+			};
 
 export const buildToolSessionRecord = ({
 	input,

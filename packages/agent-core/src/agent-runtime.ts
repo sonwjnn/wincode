@@ -694,6 +694,7 @@ type ExecuteModelStepsOptions = Readonly<{
 	emit: EventEmitter;
 	lifecycle: AgentTurnLifecycle;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
+	prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
 	invocation: AgentModelInvocation;
 	modelMessages: ChatMessage[];
 	promptCacheKey?: string;
@@ -721,7 +722,7 @@ const buildChatRequest = ({
 	toolDefinitions,
 	turn,
 }: BuildChatRequestOptions): ChatRequest => ({
-	messages: modelMessages,
+	messages: [...modelMessages],
 	modelId: turn.model.modelId,
 	providerId: turn.model.providerId,
 	...omitUndefined({
@@ -800,6 +801,41 @@ const notifyModelStepFinished = (
 	}
 };
 
+const prepareModelStepHistory = async (
+	options: BuildChatRequestOptions & {
+		output: ModelStepOutput;
+		prepareNextStep: NonNullable<AgentRuntimeRunOptions["prepareNextStep"]>;
+		protectedFromIndex: number;
+		takeSteeringMessages: AgentRuntimeRunOptions["takeSteeringMessages"];
+	}
+): Promise<void> => {
+	const { modelMessages, protectedFromIndex, runtimeSignal } = options;
+	const prepared = await options.prepareNextStep({
+		protectedFromIndex,
+		request: buildChatRequest({
+			...options,
+			modelMessages: [...modelMessages],
+		}),
+	});
+	if (runtimeSignal?.aborted) {
+		return;
+	}
+	if (prepared !== undefined) {
+		modelMessages.splice(
+			0,
+			protectedFromIndex,
+			...prepared.map(modelPromptMessage)
+		);
+	}
+	// Preparation can await a Provider; steering committed meanwhile joins this request once.
+	await appendLateSteeringMessages(
+		modelMessages,
+		options.output,
+		true,
+		options.takeSteeringMessages
+	);
+};
+
 const runLoop = async function* ({
 	cacheWarming,
 	emit,
@@ -807,6 +843,7 @@ const runLoop = async function* ({
 	invocation,
 	modelMessages,
 	modelStepObserver,
+	prepareNextStep,
 	promptCacheKey,
 	runtimeSignal,
 	takeSteeringMessages,
@@ -825,6 +862,7 @@ const runLoop = async function* ({
 			);
 			return;
 		}
+		const protectedFromIndex = modelMessages.length;
 		const stepId = toModelStepId(`step-${stepNumber}`);
 		yield emit({
 			modelId: turn.model.modelId,
@@ -917,6 +955,20 @@ const runLoop = async function* ({
 			});
 			return;
 		}
+		if (prepareNextStep !== undefined) {
+			await prepareModelStepHistory({
+				cacheWarming,
+				modelMessages,
+				output,
+				prepareNextStep,
+				protectedFromIndex,
+				promptCacheKey,
+				runtimeSignal,
+				takeSteeringMessages,
+				toolDefinitions,
+				turn,
+			});
+		}
 		stepNumber += 1;
 	}
 };
@@ -927,6 +979,7 @@ const runAgentTurn = async function* (
 		cacheWarming,
 		deadlineMs,
 		modelStepObserver,
+		prepareNextStep,
 		promptCacheKey,
 		signal,
 		takeSteeringMessages,
@@ -967,6 +1020,7 @@ const runAgentTurn = async function* (
 			...omitUndefined({
 				cacheWarming,
 				modelStepObserver,
+				prepareNextStep,
 				promptCacheKey,
 				runtimeSignal,
 				takeSteeringMessages,

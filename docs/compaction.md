@@ -29,6 +29,12 @@ Use exact, case-sensitive `providerId/modelId` identities from your configured P
 
 Only reserve/recent budgets support model overrides. Invalid values and unsupported fields are diagnosed.
 
+## Long-running turns
+
+When automatic compaction is enabled, the Host also checks context before a subsequent Model Step, after tools have settled. It checkpoints completed text without declaring the turn finished, and compacts older durable history when needed. The newest assistant/tool batch and delivered steering remain intact, including opaque Provider continuation. Successful tools are never rerun to rebuild context.
+
+If that protected batch cannot fit, or checkpointing/summarization/persistence fails, the turn stops rather than dispatching an unsafe next request. Cancellation propagates to preparation. If a durable checkpoint or compaction write has already succeeded, its complete result is reconciled before cancellation settles; cancellation does not roll back committed storage. Aggregate billing stays on the terminal turn record; non-terminal text checkpoints do not add billed usage. Expanded overflow replay, cumulative file-operation tracking, and public compaction hooks are separate follow-ups.
+
 ## Summary policy
 
 All three `summary` fields are optional:
