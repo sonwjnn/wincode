@@ -5,7 +5,10 @@ import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { PluginProviderOwnerRegistration } from "@/modules/providers/provider-model-selection";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
 import { resolveCompactionSettings } from "@/modules/sessions/compaction/config";
-import type { SessionCompaction } from "@/modules/sessions/compaction/types";
+import type {
+	CompactionLifecycle,
+	SessionCompaction,
+} from "@/modules/sessions/compaction/types";
 import {
 	type AgentSessionAdaptersOptions,
 	createAgentSessionAdapters,
@@ -58,7 +61,8 @@ const fixture = (
 	owners: {
 		trusted: readonly PluginProviderOwnerRegistration[];
 		registered: readonly PluginProviderOwnerRegistration[];
-	} = { trusted: [], registered: [] }
+	} = { trusted: [], registered: [] },
+	lifecycle?: CompactionLifecycle
 ) => {
 	const requests: ChatRequest[] = [];
 	const recorder = createFakeProviderRecorder();
@@ -87,6 +91,7 @@ const fixture = (
 		},
 	});
 	const compaction = createSessionCompaction({
+		...(lifecycle === undefined ? {} : { lifecycle }),
 		store: {
 			getLatestCompaction: async () => null,
 			appendCompaction: async (input) =>
@@ -299,4 +304,92 @@ test("an unknown summary context window fails before dispatch instead of borrowi
 		"context-window limit is unavailable"
 	);
 	expect(requests).toHaveLength(0);
+});
+
+test("a Plugin summary compacts even when the summary target cannot enforce an output cap", async () => {
+	const { compact, requests, collection } = fixture(
+		{},
+		messages,
+		summaryModel,
+		{ trusted: [], registered: [] },
+		{ before: async () => ({ summary: "Plugin handoff for OAuth users." }) }
+	);
+	// The target stays invocable, so the deferred failure is the output-cap one.
+	collection.canEnforceMaxOutputTokens = async () => false;
+
+	const result = await compact();
+
+	// No summary request is dispatched, and the committed handoff is the Plugin's.
+	expect(requests).toHaveLength(0);
+	expect(result.entry.summary.text).toContain(
+		"Plugin handoff for OAuth users."
+	);
+});
+
+test("a Plugin summary does not mask an unauthenticated configured target", async () => {
+	const { compact, requests, collection } = fixture(
+		{},
+		messages,
+		summaryModel,
+		{ trusted: [], registered: [] },
+		{
+			before: async () => ({ summary: "Plugin handoff without a credential." }),
+		}
+	);
+	collection.getAvailable = async () => [];
+
+	// A broken configured target stays visible; only the output-cap limitation
+	// is replaceable by a Plugin handoff.
+	await expect(compact()).rejects.toMatchObject({
+		code: "summary-failed",
+		message: expect.stringContaining("not invocable"),
+	});
+	expect(requests).toHaveLength(0);
+});
+
+test("a Plugin handoff is not limited by the generated summary prompt room", async () => {
+	const handoff = `Plugin handoff. ${"detail ".repeat(50)}`.trim();
+	const { compact, requests } = fixture(
+		{ model: "anthropic/summary/large" },
+		messages,
+		summaryModel,
+		{ trusted: [], registered: [] },
+		{ before: async () => ({ summary: handoff }) }
+	);
+
+	const result = await compact();
+
+	// The oversized shared history exhausts the generation prompt budget, but
+	// a host-owned handoff needs no summary request and still fits the reserve.
+	expect(requests).toHaveLength(0);
+	expect(result.entry.summary.text).toContain("Plugin handoff.");
+});
+
+test("without a Plugin summary an incapable target still fails with its guidance", async () => {
+	const { compact, requests, collection } = fixture({}, messages, summaryModel);
+	collection.canEnforceMaxOutputTokens = async () => false;
+
+	await expect(compact()).rejects.toMatchObject({
+		code: "summary-failed",
+		message: expect.stringContaining(
+			"cannot enforce the required output-token"
+		),
+	});
+	expect(requests).toHaveLength(0);
+});
+
+test("a deferred summary target does not inherit the conversation thinking level", async () => {
+	const { compact, collection } = fixture(
+		{},
+		messages,
+		summaryModel,
+		{ trusted: [], registered: [] },
+		{ before: async () => ({ summary: "Plugin handoff." }) }
+	);
+	collection.canEnforceMaxOutputTokens = async () => false;
+
+	const result = await compact();
+
+	// The summary target was never invoked, and chat thinking is not summary provenance.
+	expect(result.entry.summarizationThinkingLevel).toBeUndefined();
 });

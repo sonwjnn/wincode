@@ -2344,3 +2344,99 @@ test("a throwing completed observer cannot undo a committed compaction", async (
 	expect(result.entry.summary.text).toContain("committed summary");
 	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
+
+test("a Plugin summary defers an unusable summary target without calling it", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const completed: SessionCompaction[] = [];
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ summary: "Plugin handoff without a model." }),
+			completed: async (entry) => {
+				completed.push(entry);
+			},
+		},
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: lifecycleMessages,
+			sessionId: sessionId("session-deferred-target"),
+		},
+		model,
+		settings,
+		summaryModelFailure: "The summary target cannot enforce its output cap.",
+		trigger: "manual",
+	});
+
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(result.entry.summary.text).toContain(
+		"Plugin handoff without a model."
+	);
+	expect(completed).toEqual([result.entry]);
+});
+
+test("an unusable summary target fails with its guidance when no Plugin supplies a summary", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: lifecycleMessages,
+				sessionId: sessionId("session-unusable-target"),
+			},
+			model,
+			settings,
+			summaryModelFailure:
+				"Compaction is unavailable for Provider Model openai/gpt-5.6. OpenAI OAuth cannot enforce the required output-token limit.",
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({
+		code: "summary-failed",
+		message: expect.stringContaining("OpenAI OAuth cannot enforce"),
+	});
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("a Plugin summary needs no conversation context-window limit", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({
+				summary: "Plugin handoff with an unknown window.",
+			}),
+		},
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: lifecycleMessages,
+			sessionId: sessionId("session-unknown-window"),
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 1,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
+	// The generation budget would have required a known conversation window.
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(result.entry.summary.text).toContain("unknown window");
+});

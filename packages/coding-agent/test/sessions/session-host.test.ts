@@ -64,6 +64,7 @@ import {
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
 import type {
 	AppendSessionCompactionInput,
+	SessionCompaction,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
 import {
@@ -3821,6 +3822,101 @@ describe("Session Host lifetime", () => {
 				seeded.sessionId
 			);
 		});
+	});
+	test("automatic compaction uses a Plugin summary when the summary target cannot enforce an output cap", async () => {
+		const seeded = await seedSession("auto-plugin-summary", "completed");
+		const previousStepScript = recorder.stepScript;
+		const summaryRequests: ProviderChatRequest[] = [];
+		recorder.stepScript = async function* (request) {
+			if (request.system?.includes("session summarizer")) {
+				summaryRequests.push(request);
+				yield { delta: "model summary", type: "text-delta" };
+			} else {
+				yield { delta: "answered the request", type: "text-delta" };
+			}
+			yield {
+				type: "usage",
+				usage: { inputTokens: 10_000, outputTokens: 10 },
+			};
+			yield { type: "finish" };
+		};
+		const triggers: string[] = [];
+		const completed: SessionCompaction[] = [];
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(),
+			getCompactionModule: () =>
+				createSessionCompaction({
+					lifecycle: {
+						before: async (context) => {
+							triggers.push(context.trigger);
+							return { summary: "Automatic Plugin handoff." };
+						},
+						completed: async (entry) => {
+							completed.push(entry);
+						},
+					},
+					store,
+				}),
+			getCompactionSettings: async () =>
+				fromPartial<ResolvedCompactionSettings>({
+					autoAvailable: true,
+					enabled: true,
+					keepRecentTokens: 1,
+					maxMediaAttachments: 4,
+					maxMediaBytes: 1024,
+					maxMediaTokens: 128,
+					modelContextLimit: 65_536,
+					overflowRecoveryAvailable: false,
+					reserveTokens: 1000,
+					// Above the compacted estimate, below the measured live context:
+					// auto runs and the result also satisfies the safe-threshold check.
+					thresholdTokens: 5000,
+				}),
+			createProviderCollection: async () => {
+				const collection = await createHostProviderCollection();
+				// OpenAI OAuth cannot enforce a bounded summary request.
+				return {
+					...collection,
+					canEnforceMaxOutputTokens: async () => false,
+				};
+			},
+		};
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const compacted = Promise.withResolvers<void>();
+		const unsubscribe = host.subscribe(() => {
+			if (
+				!host.getSnapshot().isCompacting &&
+				host.getSnapshot().compactions.length > 1
+			) {
+				compacted.resolve();
+			}
+		});
+		try {
+			expect(await host.agentSession.send(sendInput(capabilities))).toEqual({
+				rejected: false,
+			});
+			await compacted.promise;
+
+			const latest = await store.getLatestCompaction(seeded.sessionId);
+			if (latest === null) {
+				throw new Error("Automatic compaction did not persist an entry.");
+			}
+			// The automatic trigger compacted without a summary-model request.
+			expect(summaryRequests).toEqual([]);
+			expect(triggers).toContain("threshold");
+			expect(latest.trigger).toBe("threshold");
+			expect(latest.id).not.toBe(seeded.compaction);
+			expect(latest.summary.text).toContain("Automatic Plugin handoff.");
+			expect(completed.map(({ id }) => id)).toContain(latest.id);
+			expect(host.getSnapshot().compactionError).toBeNull();
+		} finally {
+			unsubscribe();
+			await host.shutdown();
+			recorder.stepScript = previousStepScript;
+		}
 	});
 	test("records background compaction failures without failing the completed turn", async () => {
 		const seeded = await seedSession("background-compaction");

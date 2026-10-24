@@ -202,6 +202,11 @@ export type CompactSessionInput = {
 	signal?: AbortSignal;
 	/** The Agent Turn that initiated this compaction, for diagnostics and lifecycle callbacks. */
 	turnId?: AgentTurnId;
+	/**
+	 * Why the selected summary target cannot generate one. Defers the failure
+	 * until generation is needed, so a Plugin-supplied summary still compacts.
+	 */
+	summaryModelFailure?: string;
 	/** Revalidates Session Host authority immediately before persistence. */
 	assertAuthority?: () => void;
 };
@@ -973,6 +978,40 @@ const projectMessagesForEstimate = (
 		})
 		.toReversed();
 };
+const configuredSummaryOutputTokens = (
+	settings: CompactSessionInput["settings"]
+): number =>
+	Math.max(
+		0,
+		Math.floor(
+			settings.summaryMaxOutputTokens ??
+				DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
+		)
+	);
+
+const configuredReserveTokens = (
+	settings: CompactSessionInput["settings"]
+): number =>
+	Math.max(
+		0,
+		Math.floor(
+			settings.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens
+		)
+	);
+
+/**
+ * A host-owned handoff is not a summary request, so it is bounded by the
+ * configured output budget and the conversation reserve rather than by the
+ * prompt room a generated summary would need.
+ */
+const resolveLifecycleSummaryBudget = (
+	settings: CompactSessionInput["settings"]
+): number =>
+	Math.min(
+		configuredSummaryOutputTokens(settings),
+		configuredReserveTokens(settings)
+	);
+
 const resolveSummaryOutputBudget = (
 	cutPoint: CutPoint,
 	settings: CompactSessionInput["settings"],
@@ -986,19 +1025,8 @@ const resolveSummaryOutputBudget = (
 			"Cannot determine the compaction summary budget because the selected conversation model has no known context-window limit. Choose a model with a known context window and retry."
 		);
 	}
-	const reserveTokens = Math.max(
-		0,
-		Math.floor(
-			settings.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens
-		)
-	);
-	const configuredMaximum = Math.max(
-		0,
-		Math.floor(
-			settings.summaryMaxOutputTokens ??
-				DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
-		)
-	);
+	const reserveTokens = configuredReserveTokens(settings);
+	const configuredMaximum = configuredSummaryOutputTokens(settings);
 	const summaryContextAvailable =
 		(settings.summaryContextLimit ?? contextLimit) -
 		estimatedInputTokens -
@@ -1327,7 +1355,7 @@ const SUMMARY_CHARACTERS_PER_TOKEN = 4;
  */
 const validateLifecycleSummary = (
 	summary: string,
-	maxOutputTokens: number
+	{ maxOutputTokens }: { maxOutputTokens: number }
 ): SummaryGeneratorResult => {
 	const text = summary.trim();
 	if (text.length === 0) {
@@ -1344,6 +1372,59 @@ const validateLifecycleSummary = (
 		);
 	}
 	return { text };
+};
+
+const produceCompactionSummary = async ({
+	cutPoint,
+	estimateTokens,
+	input,
+	lifecycleSummary,
+	summaryGenerator,
+	summaryInput,
+}: {
+	cutPoint: CutPoint;
+	estimateTokens: (messages: readonly SessionMessage[]) => number;
+	input: CompactSessionInput;
+	lifecycleSummary: string | undefined;
+	summaryGenerator: SummaryGenerator | undefined;
+	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
+}): Promise<SummaryGeneratorResult> => {
+	if (isNonEmptyString(lifecycleSummary)) {
+		return validateLifecycleSummary(lifecycleSummary, {
+			maxOutputTokens: resolveLifecycleSummaryBudget(input.settings),
+		});
+	}
+	if (input.summaryModelFailure !== undefined) {
+		throw new SessionCompactionError(
+			"summary-failed",
+			input.summaryModelFailure
+		);
+	}
+	const preparedRequest = prepareSummaryRequest(summaryInput);
+	const maxOutputTokens = resolveSummaryOutputBudget(
+		cutPoint,
+		input.settings,
+		estimateTokens,
+		preparedRequest.estimatedInputTokens
+	);
+	if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
+		throw new SessionCompactionError(
+			"context-still-too-large",
+			`Compaction cannot fit a viable summary: the final prompt is estimated at ${preparedRequest.estimatedInputTokens} tokens, and the current summary/conversation budgets allow only ${Math.max(0, maxOutputTokens)} output tokens; at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} are required. Choose a larger-context model, reduce historical or retained input, or adjust request overhead/reserve.`
+		);
+	}
+	const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
+	if (selectedSummaryGenerator === undefined) {
+		throw new SessionCompactionError(
+			"summary-failed",
+			"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
+		);
+	}
+	return generateCompactionSummary(selectedSummaryGenerator, {
+		...summaryInput,
+		maxOutputTokens,
+		preparedRequest,
+	});
 };
 
 export const createSessionCompaction = ({
@@ -1498,19 +1579,6 @@ export const createSessionCompaction = ({
 			serializedMessages: serializeMessagesForCompaction(summarySpan),
 			signal: input.signal,
 		};
-		const preparedRequest = prepareSummaryRequest(summaryInput);
-		const maxOutputTokens = resolveSummaryOutputBudget(
-			cutPoint,
-			input.settings,
-			estimateTokens,
-			preparedRequest.estimatedInputTokens
-		);
-		if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
-			throw new SessionCompactionError(
-				"context-still-too-large",
-				`Compaction cannot fit a viable summary: the final prompt is estimated at ${preparedRequest.estimatedInputTokens} tokens, and the current summary/conversation budgets allow only ${Math.max(0, maxOutputTokens)} output tokens; at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} are required. Choose a larger-context model, reduce historical or retained input, or adjust request overhead/reserve.`
-			);
-		}
 		const attachmentMetadata = attachmentStore
 			? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
 			: undefined;
@@ -1527,33 +1595,21 @@ export const createSessionCompaction = ({
 				turnId: input.turnId,
 			}),
 		};
+		// The hook decides before any generation budget is spent, so a
+		// Plugin-supplied handoff never needs a usable summary target.
 		const decision = await lifecycle?.before?.(lifecycleContext);
 		if (isNonEmptyString(decision?.cancel)) {
 			throw new SessionCompactionError("cancelled", decision.cancel);
 		}
 		assertNotAborted(input.signal);
-		const generatorInput: SummaryGeneratorInput = {
-			...summaryInput,
-			maxOutputTokens,
-			preparedRequest,
-		};
-		const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
-		const lifecycleSummary = decision?.summary;
-		let generated: SummaryGeneratorResult;
-		if (isNonEmptyString(lifecycleSummary)) {
-			generated = validateLifecycleSummary(lifecycleSummary, maxOutputTokens);
-		} else {
-			if (selectedSummaryGenerator === undefined) {
-				throw new SessionCompactionError(
-					"summary-failed",
-					"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
-				);
-			}
-			generated = await generateCompactionSummary(
-				selectedSummaryGenerator,
-				generatorInput
-			);
-		}
+		const generated = await produceCompactionSummary({
+			cutPoint,
+			estimateTokens,
+			input,
+			lifecycleSummary: decision?.summary,
+			summaryGenerator,
+			summaryInput,
+		});
 		assertNotAborted(input.signal);
 		const { activeMessages, entry } = await persistCompactionEntry({
 			assertAuthority: input.assertAuthority,

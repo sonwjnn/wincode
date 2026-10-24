@@ -33,20 +33,61 @@ const isAvailableProviderModel = async (
 		await collection.getAvailable(selection.providerId)
 	);
 
+const unavailableSummaryModel = (selection: ProviderModelSelection): string =>
+	`Provider Model ${selection.providerId}/${selection.modelId} is unavailable. Choose another model to compact this session.`;
+
+const notInvocableSummaryModel = (selection: ProviderModelSelection): string =>
+	`Provider Model ${selection.providerId}/${selection.modelId} is not invocable. Connect its Provider or choose another model.`;
+
+const outputCapabilityGuidance = (model: ProviderModel): string =>
+	model.providerId === "openai"
+		? "OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or explicitly configure compaction.summary.model with a capable Provider Model."
+		: "This Provider credential cannot enforce the required output-token limit. Configure compaction.summary.model with a capable Provider Model.";
+
+/**
+ * Resolves whether a summary model can actually generate one. A caller that
+ * may not need generation (a Plugin can supply the handoff) receives the
+ * failure as data instead of an exception, so it can defer it.
+ */
+export const resolveSummaryModelCapability = async (
+	collection: ProviderCollection,
+	selection: ProviderModelSelection
+): Promise<
+	| { deferrable: boolean; failure: string; model?: never }
+	| { failure?: never; model: ProviderModel }
+> => {
+	const model = providerModelFor(collection, selection);
+	if (model === undefined) {
+		return { deferrable: false, failure: unavailableSummaryModel(selection) };
+	}
+	if (!(await isAvailableProviderModel(collection, selection))) {
+		return { deferrable: false, failure: notInvocableSummaryModel(selection) };
+	}
+	if (
+		!(await collection.canEnforceMaxOutputTokens(
+			model.providerId,
+			model.modelId
+		))
+	) {
+		// Only this credential capability can be replaced by a Plugin handoff.
+		return {
+			deferrable: true,
+			failure: `Compaction is unavailable for Provider Model ${model.providerId}/${model.modelId}. ${outputCapabilityGuidance(model)}`,
+		};
+	}
+	return { model };
+};
+
 export const requireInvocableProviderModel = async (
 	collection: ProviderCollection,
 	selection: ProviderModelSelection
 ): Promise<ProviderModel> => {
 	const model = providerModelFor(collection, selection);
 	if (model === undefined) {
-		throw new Error(
-			`Provider Model ${selection.providerId}/${selection.modelId} is unavailable. Choose another model to compact this session.`
-		);
+		throw new Error(unavailableSummaryModel(selection));
 	}
 	if (!(await isAvailableProviderModel(collection, selection))) {
-		throw new Error(
-			`Provider Model ${selection.providerId}/${selection.modelId} is not invocable. Connect its Provider or choose another model.`
-		);
+		throw new Error(notInvocableSummaryModel(selection));
 	}
 	return model;
 };
@@ -108,12 +149,8 @@ export const requireSummaryOutputCapability = async (
 	) {
 		return;
 	}
-	const guidance =
-		model.providerId === "openai"
-			? "OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or explicitly configure compaction.summary.model with a capable Provider Model."
-			: "This Provider credential cannot enforce the required output-token limit. Configure compaction.summary.model with a capable Provider Model.";
 	throw new Error(
-		`Compaction is unavailable for Provider Model ${model.providerId}/${model.modelId}. ${guidance}`
+		`Compaction is unavailable for Provider Model ${model.providerId}/${model.modelId}. ${outputCapabilityGuidance(model)}`
 	);
 };
 
