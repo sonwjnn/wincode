@@ -33,7 +33,7 @@ const isAvailableProviderModel = async (
 		await collection.getAvailable(selection.providerId)
 	);
 
-const requireInvocableProviderModel = async (
+export const requireInvocableProviderModel = async (
 	collection: ProviderCollection,
 	selection: ProviderModelSelection
 ): Promise<ProviderModel> => {
@@ -99,24 +99,29 @@ const collectProviderSummary = async (
 	return { text, ...omitUndefined({ usage }) };
 };
 
+export const requireSummaryOutputCapability = async (
+	collection: ProviderCollection,
+	model: ProviderModel
+): Promise<void> => {
+	if (
+		await collection.canEnforceMaxOutputTokens(model.providerId, model.modelId)
+	) {
+		return;
+	}
+	const guidance =
+		model.providerId === "openai"
+			? "OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or explicitly configure compaction.summary.model with a capable Provider Model."
+			: "This Provider credential cannot enforce the required output-token limit. Configure compaction.summary.model with a capable Provider Model.";
+	throw new Error(
+		`Compaction is unavailable for Provider Model ${model.providerId}/${model.modelId}. ${guidance}`
+	);
+};
+
 const providerSummaryGenerator =
 	(collection: ProviderCollection): SummaryGenerator =>
 	async (input) => {
 		const model = await requireInvocableProviderModel(collection, input.model);
-		if (
-			!(await collection.canEnforceMaxOutputTokens(
-				model.providerId,
-				model.modelId
-			))
-		) {
-			const guidance =
-				model.providerId === "openai"
-					? "OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or choose another Provider Model."
-					: "This Provider credential cannot enforce the required output-token limit. Choose another Provider Model.";
-			throw new Error(
-				`Compaction is unavailable for Provider Model ${model.providerId}/${model.modelId}. ${guidance}`
-			);
-		}
+		await requireSummaryOutputCapability(collection, model);
 		const preparedRequest = resolvePreparedSummaryRequest(input);
 		const contextWindowTokens = model.limits?.contextWindowTokens;
 		if (

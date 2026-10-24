@@ -29,6 +29,7 @@ import {
 	assertPluginProviderSelectionOwner,
 	createAgentSessionTurnRunner,
 } from "./agent-session-turn-runner";
+import { resolveCompactionSummaryRoute } from "./compaction-summary-route";
 
 /** The Host inputs the adapters need on top of one Agent Turn's. */
 export type AgentSessionAdaptersOptions = AgentSessionTurnRunnerOptions &
@@ -287,9 +288,14 @@ export const createAgentSessionAdapters = (
 		updateSubmissionStatus: (input) =>
 			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
 		compaction: {
-			compact: (input) =>
+			compact: async (input) =>
 				capabilities.getCompactionModule().compact({
-					...input,
+					...(await resolveCompactionSummaryRoute(
+						input,
+						providerCollection,
+						capabilities,
+						sessionId
+					)),
 					...omitUndefined({ summaryGenerator }),
 					assertAuthority: assertHostOpen,
 				}),

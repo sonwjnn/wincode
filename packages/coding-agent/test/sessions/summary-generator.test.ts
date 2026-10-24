@@ -150,7 +150,7 @@ test("an explicit OAuth summary cap fails closed before provider network I/O", a
 			serializedMessages: "history",
 		})
 	).rejects.toThrow(
-		"Compaction is unavailable for Provider Model openai/gpt-5.6. OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or choose another Provider Model."
+		"Compaction is unavailable for Provider Model openai/gpt-5.6. OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or explicitly configure compaction.summary.model with a capable Provider Model."
 	);
 	expect(requests).toBe(0);
 	await collection.close();

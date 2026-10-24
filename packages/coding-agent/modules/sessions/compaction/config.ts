@@ -30,6 +30,11 @@ import {
 	getAttachmentReference,
 } from "../storage/attachment-store";
 
+import {
+	type CompactionSummarySettings,
+	resolveCompactionSummarySettings,
+} from "./summary-settings";
+
 export const DEFAULT_COMPACTION_SETTINGS = {
 	auto: true,
 	enabled: true,
@@ -69,6 +74,7 @@ export type CompactionSettingSource =
 	| { kind: "session" }
 	| (ConfigOrigin & { kind: "config" });
 export type ResolvedCompactionSettings = {
+	summary?: CompactionSummarySettings;
 	autoAvailable: boolean;
 	configPath: readonly string[];
 	desired: CompactionSettings;
@@ -499,7 +505,12 @@ export const resolveCompactionSettings = (
 		);
 	}
 
+	const config = snapshot ? getConfigRecord(snapshot) : null;
 	return {
+		summary: resolveCompactionSummarySettings(config?.record?.summary, [
+			...configPath,
+			"summary",
+		]),
 		configPath,
 		auto: resolved.auto,
 		autoAvailable:

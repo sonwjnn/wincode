@@ -244,7 +244,7 @@ The disposable diagnostic intentionally reported the five reproduced gaps above.
 
 ## 7. Implemented scope
 
-Phase 2A summary safety and the Phase 1 Host model-forwarding prerequisite were implemented first. Phase 2B exact-model policies are now implemented; explicit summary-model routing (2C) remains deferred.
+Phase 2A summary safety and the Phase 1 Host model-forwarding prerequisite were implemented first. Phase 2B exact-model policies and Phase 2C explicit summary-model routing are now implemented. See [compaction configuration](../compaction.md) for usage and the transcript-sharing implications of another Provider.
 
 Implemented contracts:
 
@@ -257,11 +257,21 @@ Implemented contracts:
 - `compaction.modelOverrides` resolves exact, case-sensitive `providerId/modelId` entries (including slash-containing model IDs) for `reserveTokens` and `keepRecentTokens`, after merged ordinary values and before session overrides. Model-limit clamps apply last.
 - Desired and effective budgets retain the winning nested config paths and sources. Invalid matching budget values fall back field-by-field with diagnostics; malformed model identities and unsupported per-model fields—including unknown keys—are diagnosed and never applied.
 - Manual, threshold, and overflow compaction resolve policy for their selected conversation model. Admitted compactions keep their resolved policy, while a waiting submission checks the settled Context against its own model policy before sending.
+- `compaction.summary` captures an optional exact summary model, output ceiling, and independent thinking level. The Host binds custom targets to their current trusted Plugin owner and checks invocability/output-bound capability without changing the conversation selection.
+- Summary input budgeting uses the summary target's context limit; retention, threshold, response reserve, and rebuilt-context acceptance still use the conversation target. Actual summary identity and thinking level are persisted. Invalid policy, unsupported thinking, missing auth/owner, unknown context limits, or incapable credentials dispatch no fallback request.
+- Provider finish-reason propagation remains a separate SDK task; Phase 2C does not claim detection of Provider-truncated successful summaries.
 
 The implementation uses the existing `truncateUtf8()`/`keepTailUtf8()` helpers. Prompt/output token counts remain heuristics rather than tokenizer-exact guarantees.
 
 ## 8. Validation
 
-- `bun run test`: 1,844 passed across 207 files, 0 failed.
+Phase 2B baseline: Default 1,844 passed across 207 files; E2E 35 passed across 7 files.
+
+Phase 2C final validation:
+
+- Focused compaction/routing/Host/generator/config/maintenance tests: 131 passed, 0 failed.
+- `bun run test`: 1,863 passed across 208 files, 0 failed.
 - `bun run test:e2e`: 35 passed across 7 files, 0 failed.
 - `bun check-types`, `bun check`, and `bun fix`: passed.
+- Independent Standards review: no documented-standard violations; non-blocking suggestion to group resolved summary-route fields was deferred to avoid unrelated refactoring.
+- Independent Spec review: no missing requirements, incorrect behavior, or scope creep found.

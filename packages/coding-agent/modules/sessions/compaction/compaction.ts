@@ -48,6 +48,7 @@ import {
 	prepareSummaryRequest,
 	SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS,
 } from "./summary-prompt";
+import type { CompactionSummarySettings } from "./summary-settings";
 import {
 	type AppendSessionCompactionInput,
 	type CompactionSession,
@@ -161,6 +162,8 @@ type CompactionStore = Pick<
 export type CompactSessionInput = {
 	session: CompactionSession;
 	model: ProviderModelSelection;
+	/** Resolved summary target; never changes conversation retention or thresholds. */
+	summaryModel?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	summaryGenerator?: SummaryGenerator;
 	settings: Pick<
@@ -178,6 +181,8 @@ export type CompactSessionInput = {
 			>
 		> & {
 			compactionOverheadTokens?: number;
+			summary?: CompactionSummarySettings;
+			summaryContextLimit?: number;
 			summaryMaxOutputTokens?: number;
 		};
 	trigger: CompactionTriggerReason;
@@ -980,7 +985,9 @@ const resolveSummaryOutputBudget = (
 		)
 	);
 	const summaryContextAvailable =
-		contextLimit - estimatedInputTokens - SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS;
+		(settings.summaryContextLimit ?? contextLimit) -
+		estimatedInputTokens -
+		SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS;
 	const retainedTokens = Math.max(
 		0,
 		estimateTokens(
@@ -1373,7 +1380,7 @@ export const createSessionCompaction = ({
 				thinkingLevel: input.thinkingLevel,
 				focus,
 			}),
-			model: input.model,
+			model: input.summaryModel ?? input.model,
 			previousSummary: previous?.summary,
 			serializedMessages: serializeMessagesForCompaction(summarySpan),
 			signal: input.signal,
@@ -1420,7 +1427,7 @@ export const createSessionCompaction = ({
 			entryId: createId(),
 			estimateTokens,
 			focus,
-			model: input.model,
+			model: input.summaryModel ?? input.model,
 			now,
 			previous,
 			settings: input.settings,

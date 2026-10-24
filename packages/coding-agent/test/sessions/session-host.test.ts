@@ -26,6 +26,7 @@ import {
 	toSubmissionId,
 } from "@wincode/agent-core";
 import {
+	type ChatRequest,
 	createGoogleProvider,
 	createProviderCollection,
 	type GoogleProviderOptions,
@@ -56,7 +57,10 @@ import type {
 	SessionSubmissionEvent,
 } from "@/modules/sessions/agent-session/types";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
-import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
+import {
+	type ResolvedCompactionSettings,
+	resolveCompactionSettings,
+} from "@/modules/sessions/compaction/config";
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
 import type {
 	AppendSessionCompactionInput,
@@ -1677,6 +1681,69 @@ test("Session Host reports an unavailable Skill target without activating it", a
 });
 
 describe("Session Host opening", () => {
+	test("a configured summary target does not change the Session Selection or the next chat target", async () => {
+		const seeded = await seedSession("summary-routing", "completed");
+		const document = {
+			compaction: {
+				keepRecentTokens: 1,
+				reserveTokens: 1000,
+				auto: false,
+				summary: { model: "openai/gpt-5.6", maxOutputTokens: 512 },
+			},
+		};
+		const baseCapabilities = createCapabilities(store, document);
+		const requests: ChatRequest[] = [];
+		const capabilities: SessionCapabilities = {
+			...baseCapabilities,
+			createProviderCollection: async () => {
+				const collection = await createHostProviderCollection();
+				return {
+					...collection,
+					chat: (request: ChatRequest) => {
+						requests.push(request);
+						return collection.chat(request);
+					},
+				};
+			},
+			getCompactionSettings: async (selection, providerModel) =>
+				resolveCompactionSettings({
+					model: selection,
+					contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
+					snapshot: {
+						document,
+						diagnostics: [],
+						sources: [],
+						sourceFor: () => undefined,
+					},
+				}),
+		};
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const before = host.getSelection();
+		try {
+			const result = await host.agentSession.compact({
+				model,
+				thinkingLevel: "high",
+				trigger: "manual",
+			});
+			expect(result.entry.summarizationModel).toEqual(cacheWarmingModel);
+			expect(result.entry.summarizationThinkingLevel).toBeUndefined();
+			expect(host.getSelection()).toEqual(before);
+			expect(
+				await host.agentSession.send(
+					sendInput(capabilities, "chat remains selected")
+				)
+			).toEqual({ rejected: false });
+			expect(host.getSelection()?.model).toEqual(model);
+			expect(
+				requests.map(({ providerId, modelId }) => `${providerId}/${modelId}`)
+			).toEqual(["openai/gpt-5.6", "openai/gpt-5.6-luna"]);
+		} finally {
+			await host.shutdown();
+		}
+	});
 	test("opens the transcript, context, compactions, and Session Selection a consumer reads", async () => {
 		const seeded = await seedSession("open");
 		const capabilities = createCapabilities();
