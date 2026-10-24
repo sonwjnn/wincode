@@ -481,6 +481,20 @@ describe("session usage bar", () => {
 		expect(frame).toContain("~$1.23");
 	});
 
+	test("displays context usage above 100% when it exceeds the model limit", async () => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({
+					contextLimit: 200_000,
+					contextPercent: 200,
+					contextTokens: 400_000,
+				})}
+			/>
+		));
+
+		expect(setup.captureCharFrame()).toContain("200.0%/200k");
+	});
+
 	test.each([
 		"estimated",
 		"mixed",

@@ -39,14 +39,11 @@ export type SessionUsageSummary = {
 	cacheWriteTokens: number;
 	/** Selected model's effective context limit: override, metadata, then fallback. */
 	contextLimit: number;
-	/** Context occupancy percentage, clamped to the visible 0–100 range. */
+	/** Rounded context occupancy; may exceed 100 when usage exceeds the model limit. */
 	contextPercent: number;
 	contextTokens: number;
 	contextSource: SessionContextUsage["source"];
 };
-
-const clampPercent = (percent: number): number =>
-	Math.max(0, Math.min(100, Math.round(percent)));
 
 type MessageUsageState = {
 	lastSelection: ProviderModelSelection | null;
@@ -187,7 +184,7 @@ export const summarizeSessionUsage = (
 		fallbackModel
 	);
 	const contextTokens = context.tokens;
-	const contextPercent = clampPercent((contextTokens / contextLimit) * 100);
+	const contextPercent = Math.round((contextTokens / contextLimit) * 100);
 	return {
 		...collectSessionUsage(
 			messages,

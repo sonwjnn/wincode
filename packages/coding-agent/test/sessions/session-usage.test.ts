@@ -298,6 +298,23 @@ describe("summarizeSessionUsage", () => {
 		expect(summary).toMatchObject({ contextLimit: 10_000, contextPercent: 91 });
 	});
 
+	test("reports context occupancy above 100 when measured usage exceeds the limit", () => {
+		const summary = summarizeSessionUsage(
+			[assistant("over-limit", { inputTokens: 20_000, outputTokens: 0 })],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			undefined,
+			contextSnapshot(10_000)
+		);
+
+		expect(summary).toMatchObject({
+			contextLimit: 10_000,
+			contextPercent: 200,
+		});
+	});
+
 	test("shows session cache totals without reducing the latest context measure", () => {
 		const messages = [
 			assistant("assistant-1", {

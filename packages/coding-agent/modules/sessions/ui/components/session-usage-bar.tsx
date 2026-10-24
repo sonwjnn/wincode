@@ -15,9 +15,9 @@ export function SessionUsageBar({
 	summary,
 }: SessionUsageBarProps) {
 	const { colors } = useTheme();
-	const contextPercent = Math.min(
-		100,
-		Math.max(0, (summary.contextTokens / summary.contextLimit) * 100)
+	const contextPercent = Math.max(
+		0,
+		(summary.contextTokens / summary.contextLimit) * 100
 	);
 	const percentColor =
 		contextPercent >= CONTEXT_WARNING_PERCENT ? colors.error : colors.textMuted;
