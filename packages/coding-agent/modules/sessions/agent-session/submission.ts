@@ -98,7 +98,10 @@ export type SubmissionDeps = Readonly<{
 	recoverOverflow: (
 		command: SessionOverflowRecoveryCommand
 	) => Promise<SessionOverflowRecoveryOutcome>;
-	continueContext: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	continueContext: (
+		input: SessionSendInput,
+		onExecutionStarted: () => void
+	) => Promise<SessionSendOutcome>;
 	isContextContinuation: (input: SessionSendInput) => boolean;
 	sessionId: SessionId;
 	setCatalogDiagnostic: (diagnostic: string | null) => void;
@@ -973,18 +976,48 @@ const continueOverflowContext = async ({
 }): Promise<SessionOverflowContinuationOutcome> => {
 	const previousError = deps.getError();
 	const previousMessageIds = new Set(deps.getTranscript().map(({ id }) => id));
-	const outcome = await deps.continueContext({
-		agent: execution.agent,
-		messageId: originalMessageId,
-		model: execution.model,
-		resolvedAgent: context.resolvedAgent,
-		sessionModel: execution.sessionModel,
-		...omitUndefined({
-			sessionThinkingLevel: execution.sessionThinkingLevel,
-			thinkingLevel: execution.thinkingLevel,
-		}),
-	});
+	let continuationStarted = false;
+	let outcome: SessionSendOutcome;
+	try {
+		outcome = await deps.continueContext(
+			{
+				agent: execution.agent,
+				messageId: originalMessageId,
+				model: execution.model,
+				resolvedAgent: context.resolvedAgent,
+				sessionModel: execution.sessionModel,
+				...omitUndefined({
+					sessionThinkingLevel: execution.sessionThinkingLevel,
+					thinkingLevel: execution.thinkingLevel,
+				}),
+			},
+			() => {
+				continuationStarted = true;
+			}
+		);
+	} catch (error) {
+		return continuationStarted
+			? { kind: "failed" }
+			: {
+					kind: "refused",
+					reason: getErrorMessage(error, "The continuation could not start."),
+				};
+	}
 	const continuationError = deps.getError();
+	if (!continuationStarted) {
+		let reason: string;
+		if (outcome.rejected) {
+			reason = outcome.reason;
+		} else if (
+			continuationError !== null &&
+			continuationError !== previousError
+		) {
+			reason = continuationError.message;
+		} else {
+			reason = "The continuation did not start.";
+		}
+		return { kind: "refused", reason };
+	}
 	const failedContinuation = deps
 		.getTranscript()
 		.some(
@@ -1230,6 +1263,7 @@ const runTurn = async ({
 	deps,
 	execution,
 	modelMessages,
+	onExecutionStarted,
 	onTurnFailure,
 	signal,
 }: {
@@ -1238,6 +1272,7 @@ const runTurn = async ({
 	deps: SubmissionDeps;
 	execution: SessionExecution;
 	modelMessages: readonly SessionMessage[];
+	onExecutionStarted?: () => void;
 	onTurnFailure: () => void;
 	signal: AbortSignal;
 }): Promise<SessionSendOutcome> => {
@@ -1260,6 +1295,13 @@ const runTurn = async ({
 		terminalCommitted = true;
 	};
 	let executionStarted = false;
+	const markExecutionStarted = (): void => {
+		if (executionStarted) {
+			return;
+		}
+		executionStarted = true;
+		onExecutionStarted?.();
+	};
 	let terminalObserved = false;
 	let terminalFailure: OperationalFailure | undefined;
 	const callbacks: SessionTurnCallbacks = {
@@ -1282,7 +1324,7 @@ const runTurn = async ({
 			if (!turnIsLive()) {
 				return;
 			}
-			executionStarted = true;
+			markExecutionStarted();
 			if (event.type === "model-step-finished") {
 				await deps.acknowledgeSteeringMessages(execution.turnId, "processed");
 			}
@@ -1311,7 +1353,7 @@ const runTurn = async ({
 			) {
 				return;
 			}
-			executionStarted = true;
+			markExecutionStarted();
 			terminalObserved = true;
 			const failed = event.type !== "agent-turn-completed";
 			const deferSteeringFailure =
@@ -1547,7 +1589,8 @@ const runTurn = async ({
 export type SubmissionPipeline = Readonly<{
 	send: (
 		input: SessionSendInput,
-		signal: AbortSignal
+		signal: AbortSignal,
+		onExecutionStarted?: () => void
 	) => Promise<SessionSendOutcome>;
 }>;
 
@@ -1574,7 +1617,8 @@ export const createSubmissionPipeline = (
 	};
 	const send = async (
 		input: SessionSendInput,
-		signal: AbortSignal
+		signal: AbortSignal,
+		onExecutionStarted?: () => void
 		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Each cancellation checkpoint fences one awaited state mutation.
 	): Promise<SessionSendOutcome> => {
 		if (deps.isShutDown() || signal.aborted) {
@@ -1640,6 +1684,7 @@ export const createSubmissionPipeline = (
 				deps,
 				execution,
 				modelMessages,
+				onExecutionStarted,
 				onTurnFailure: () => {
 					failedTurnId = execution.turnId;
 				},

@@ -32,7 +32,8 @@ export type SessionSubmissionCommandPort = Readonly<{
 	isClosed: () => boolean;
 	pipelineSend: (
 		input: SessionSendInput,
-		signal: AbortSignal
+		signal: AbortSignal,
+		onExecutionStarted?: () => void
 	) => Promise<SessionSendOutcome>;
 	publishError: (error: Error) => void;
 	rememberContinuationInput: (input: SessionSendInput) => void;
@@ -46,12 +47,18 @@ export type SessionSubmissionCommandPort = Readonly<{
 	waitForSubmissionLane: () => Promise<void>;
 }>;
 
-type RunSubmissionOptions = Readonly<{ reportFailure?: boolean }>;
+type RunSubmissionOptions = Readonly<{
+	onExecutionStarted?: () => void;
+	reportFailure?: boolean;
+}>;
 export type SessionSubmissionCommand = Readonly<{
 	abortActiveSend: (
 		reason: "cancelled" | "deadline-exceeded" | "interrupted"
 	) => void;
-	continueContext: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	continueContext: (
+		input: SessionSendInput,
+		onExecutionStarted: () => void
+	) => Promise<SessionSendOutcome>;
 	runSubmission: (
 		input: SessionSendInput,
 		options?: RunSubmissionOptions
@@ -74,7 +81,8 @@ export const createSessionSubmissionCommand = (
 		}
 	};
 	const runActiveSend = (
-		input: SessionSendInput
+		input: SessionSendInput,
+		onExecutionStarted?: () => void
 	): Promise<SessionSendOutcome> => {
 		if (port.getActiveSend() !== undefined) {
 			return Promise.resolve({
@@ -102,7 +110,11 @@ export const createSessionSubmissionCommand = (
 				};
 				controller.signal.addEventListener("abort", stop, { once: true });
 				try {
-					return await port.pipelineSend(input, controller.signal);
+					return await port.pipelineSend(
+						input,
+						controller.signal,
+						onExecutionStarted
+					);
 				} catch (error) {
 					if (!port.isClosed()) {
 						port.publishError(
@@ -131,11 +143,11 @@ export const createSessionSubmissionCommand = (
 	};
 	const runSubmission = async (
 		input: SessionSendInput,
-		{ reportFailure = true }: RunSubmissionOptions = {}
+		{ onExecutionStarted, reportFailure = true }: RunSubmissionOptions = {}
 	): Promise<SessionSendOutcome> => {
 		const { messageId, ownsTurnReservation } = port.beginSubmission(input);
 		try {
-			const outcome = await runActiveSend(input);
+			const outcome = await runActiveSend(input, onExecutionStarted);
 			if (outcome.rejected && reportFailure) {
 				port.reportSubmissionFailure(input, messageId, outcome.reason);
 			}
@@ -154,7 +166,8 @@ export const createSessionSubmissionCommand = (
 		}
 	};
 	const continueContext = async (
-		input: SessionSendInput
+		input: SessionSendInput,
+		onExecutionStarted: () => void
 	): Promise<SessionSendOutcome> => {
 		if (port.isClosed()) {
 			return { rejected: true, reason: "The session has ended." };
@@ -172,7 +185,7 @@ export const createSessionSubmissionCommand = (
 			turnId: input.turnId ?? createAgentTurnId(),
 		};
 		port.rememberContinuationInput(continuationInput);
-		return runSubmission(continuationInput);
+		return runSubmission(continuationInput, { onExecutionStarted });
 	};
 	return {
 		abortActiveSend,

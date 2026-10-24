@@ -3614,6 +3614,55 @@ test("reports a continuation turn failure after the overflow compaction is commi
 	}
 });
 
+test("reports a pre-start continuation failure as refused after overflow compaction", async () => {
+	const reason = "continuation model unavailable";
+	let runCount = 0;
+	const engine = createOverflowTestSession(compactionHistory(), {
+		assertProviderModelSelection: () => {
+			if (runCount > 0) {
+				throw new Error(reason);
+			}
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async (request) => {
+				runCount += 1;
+				reportTurnStarted(request);
+				return { error: overflowFailure() };
+			},
+		},
+	});
+
+	try {
+		await expect(
+			engine.send(sendInput({ userText: "original request" }))
+		).resolves.toEqual({ rejected: false });
+		for (
+			let attempt = 0;
+			engine.internalPort.hasPendingWork() && attempt < 100;
+			attempt += 1
+		) {
+			await Bun.sleep(0);
+		}
+		expect(engine.internalPort.hasPendingWork()).toBe(false);
+		expect(runCount).toBe(1);
+		expect(
+			engine.getSnapshot().compactions.map(({ trigger }) => trigger)
+		).toEqual(["overflow"]);
+		const error = engine.getSnapshot().compactionError;
+		if (error === null) {
+			throw new Error("The refused continuation was not reported.");
+		}
+
+		expect(error).toMatchObject({ code: "continuation-refused" });
+		expect(error.message).toContain("saved a compacted Session Context");
+		expect(error.message).toContain("continuation was refused");
+		expect(error.message).toContain(reason);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
+
 test("does not run overflow recovery for an unrelated runtime failure", async () => {
 	let turnStarted = false;
 	let recoveryTargetRequested = false;

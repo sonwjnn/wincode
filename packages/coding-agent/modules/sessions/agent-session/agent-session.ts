@@ -1141,7 +1141,8 @@ export class AgentSessionImpl implements AgentSession {
 				});
 			},
 			compact,
-			continueContext: (input) => submissionCommand.continueContext(input),
+			continueContext: (input, onExecutionStarted) =>
+				submissionCommand.continueContext(input, onExecutionStarted),
 			endExecution,
 			acknowledgeSteeringMessages: (turnId, status, failure) =>
 				steering.acknowledge(turnId, status, failure),
@@ -1253,7 +1254,8 @@ export class AgentSessionImpl implements AgentSession {
 				this.#state.isCompacting ||
 				sessionState.compaction.activeCommand !== undefined,
 			isClosed: () => sessionState.shutdown.closed,
-			pipelineSend: (input, signal) => pipeline.send(input, signal),
+			pipelineSend: (input, signal, onExecutionStarted) =>
+				pipeline.send(input, signal, onExecutionStarted),
 			publishError: (error) => publish({ error }),
 			rememberContinuationInput: (input) => {
 				sessionState.continuationInputs.add(input);
