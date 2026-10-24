@@ -4,6 +4,7 @@ Configure compaction in global or project `.wincode/settings.json` (or `.jsonc`)
 
 ```json
 {
+  "contextWindowTokens": 272000,
   "compaction": {
     "reserveTokens": 16384,
     "keepRecentTokens": 20000,
@@ -25,11 +26,13 @@ Use exact, case-sensitive `providerId/modelId` identities from your configured P
 
 ## Conversation policy
 
-`reserveTokens` and `keepRecentTokens` govern the conversation target, not the summary target. Resolution uses built-in defaults, merged ordinary global/project values, the matching model override per field, session overrides, then the conversation model's context-window clamps. File layering happens before model lookup, so a global model-specific setting can beat a project-wide fallback.
+`contextWindowTokens` is the effective Wincode context window for every Provider Model, including the conversation and summary targets. It defaults to **272,000** and deliberately overrides Provider-published context metadata; set a positive safe integer in global or project `.wincode/settings.jsonc` to change it. Project configuration takes precedence over global configuration. If the override exceeds a Provider's actual limit, that Provider may reject the request, so choose a value suitable for the models you use.
+
+`reserveTokens` and `keepRecentTokens` govern the conversation target, not the summary target. Resolution uses built-in defaults, merged ordinary global/project values, the matching model override per field, session overrides, then clamps against `contextWindowTokens`. File layering happens before model lookup, so a global model-specific setting can beat a project-wide fallback.
 
 Only reserve/recent budgets support model overrides. Invalid values and unsupported fields are diagnosed.
 
-Threshold checks use the selected model's resolved compaction threshold and the latest valid context measurement in the current compaction epoch, even when another conversation model produced that measurement. Messages after that observation are estimated. Switching models does not compact immediately; the selected model's threshold is checked before its next request. The usage bar remains model-specific and estimates context instead of presenting a different model's measurement as exact.
+Threshold checks use the selected model's resolved compaction threshold and the latest valid context measurement in the current compaction epoch, even when another conversation model produced that measurement. Messages after that observation are estimated. Switching models does not compact immediately; the selected model's threshold is checked before its next request. The usage bar uses the effective Wincode context window and estimates context instead of presenting a different model's measurement as exact.
 
 ## Long-running turns
 
@@ -56,7 +59,7 @@ Plugins may register `onBeforeCompaction`, `onCompactionCompleted`, and `onCompa
 All three `summary` fields are optional:
 
 - `model`: exact summary target. Omit it to use the conversation model; there is no automatic model fallback.
-- `maxOutputTokens`: positive integer ceiling, further limited by the summary model's output/context limits and the conversation's room for the resulting summary. An effective budget below 256 tokens fails before dispatch.
+- `maxOutputTokens`: positive integer ceiling, further limited by the summary model's output-token limit and the conversation's room for the resulting summary under `contextWindowTokens`. An effective budget below 256 tokens fails before dispatch.
 - `thinkingLevel`: independently selected reasoning level. If omitted, compaction prefers `off` only when explicitly supported, otherwise leaves reasoning unset. It never inherits the chat's reasoning level. Explicit unsupported levels fail rather than being dropped.
 
 The selected summary target must be known, authenticated/invocable, bound to its trusted Plugin owner where applicable, and able to enforce an output-token maximum. Invalid configuration or an unknown/unauthenticated target fails with guidance, without dispatching to a replacement model. The output-token-enforcement check alone is deferred when a Plugin supplies the handoff through `onBeforeCompaction`: a Plugin summary generates nothing, so it compacts even when the conversation credential cannot enforce an output cap. Without a Plugin summary that same guidance fails before any generation. OpenAI OAuth's output-bound limitation is therefore not bypassed for a generated summary: use a supported credential, explicitly select a capable summary target, or supply the handoff from a Plugin.

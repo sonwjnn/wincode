@@ -1,5 +1,5 @@
 import type { ProviderCollection } from "@wincode/ai";
-import { omitUndefined } from "@wincode/utils";
+import { isPositiveSafeInteger, omitUndefined } from "@wincode/utils";
 import {
 	providerModelReasoningEffort,
 	providerModelSelectionForProviderModel,
@@ -9,6 +9,7 @@ import type { CompactSessionInput } from "../compaction/compaction";
 import { SessionCompactionError } from "../compaction/error";
 import { resolveSummaryModelCapability } from "../compaction/summary-generator";
 import { DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS } from "../compaction/types";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../usage/context-window";
 import { assertPluginProviderSelectionOwner } from "./agent-session-turn-runner";
 import type { SessionCapabilities } from "./types";
 
@@ -73,15 +74,12 @@ export const resolveCompactionSummaryRoute = async (
 		};
 	}
 	const { model } = resolved;
-	const contextLimit = model.limits?.contextWindowTokens;
-	if (
-		contextLimit === undefined ||
-		!Number.isSafeInteger(contextLimit) ||
-		contextLimit <= 0
-	) {
+	const contextLimit =
+		input.settings.modelContextLimit ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+	if (!isPositiveSafeInteger(contextLimit)) {
 		throw new SessionCompactionError(
 			"summary-failed",
-			`Cannot verify the summary budget for ${model.providerId}/${model.modelId}: its context-window limit is unavailable. Configure compaction.summary.model with a known context window.`
+			`Cannot verify the summary budget for ${model.providerId}/${model.modelId}: the configured context-window limit is invalid.`
 		);
 	}
 	const thinkingLevel =

@@ -1,15 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { ProviderModel } from "@wincode/ai";
-import {
-	DEFAULT_PROVIDER_MODEL_SELECTION,
-	type ProviderModelSelection,
-} from "@/modules/providers/provider-model-selection";
+import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	resolveCompactionSettings,
 } from "@/modules/sessions/compaction/config";
 import { createCompactionSettingsOperations } from "@/modules/sessions/compaction/settings-operations";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import type { ConfigSnapshot, ConfigStore } from "@/shared/config/config-store";
 import { providerModelSelectionFixture } from "../support/identifiers";
 
@@ -278,34 +275,48 @@ describe("resolveCompactionSettings", () => {
 		});
 	});
 
-	test("keeps manual compaction available when the context limit is unknown", () => {
+	test("uses the global 272k context window when Provider metadata is absent", () => {
 		const settings = resolveCompactionSettings();
 
 		expect(settings.enabled).toBe(DEFAULT_COMPACTION_SETTINGS.enabled);
-		expect(settings.autoAvailable).toBe(false);
+		expect(settings.modelContextLimit).toBe(DEFAULT_CONTEXT_WINDOW_TOKENS);
+		expect(settings.autoAvailable).toBe(true);
 		expect(settings.overflowRecoveryAvailable).toBe(true);
-		expect(settings.thresholdTokens).toBeNull();
+		expect(settings.thresholdTokens).toBe(255_616);
+		expect(settings.diagnostics).not.toContainEqual(
+			expect.objectContaining({ code: "unknown-context-limit" })
+		);
+	});
+
+	test("uses a configured global context window instead of the default", () => {
+		const settings = resolveCompactionSettings({
+			snapshot: snapshot({ contextWindowTokens: 96_000 }),
+		});
+
+		expect(settings.modelContextLimit).toBe(96_000);
+		expect(settings.thresholdTokens).toBe(79_616);
+	});
+
+	test("falls back to the global default and diagnoses an invalid context window", () => {
+		const settings = resolveCompactionSettings({
+			snapshot: snapshot({ contextWindowTokens: 0 }),
+		});
+
+		expect(settings.modelContextLimit).toBe(DEFAULT_CONTEXT_WINDOW_TOKENS);
 		expect(settings.diagnostics).toContainEqual(
 			expect.objectContaining({
-				code: "unknown-context-limit",
-				severity: "warning",
+				code: "invalid-value",
+				configPath: ["contextWindowTokens"],
+				severity: "error",
 			})
 		);
 	});
 
-	test("passes the selected model identity into settings resolution", async () => {
+	test("applies the configured global context window across Provider model switches", async () => {
 		const model = providerModelSelectionFixture("openai/gpt-4.1/2025-04-14");
 		const switchedModel = providerModelSelectionFixture(
 			"anthropic/gpt-4.1/2025-04-14"
 		);
-		const providerModel = (
-			selection: ProviderModelSelection
-		): ProviderModel => ({
-			limits: { contextWindowTokens: 100_000 },
-			modelId: selection.modelId,
-			protocolId: "fixture",
-			providerId: selection.providerId,
-		});
 		const operations = createCompactionSettingsOperations({
 			configStore: fromPartial<ConfigStore>({
 				getSnapshot: async () =>
@@ -316,27 +327,23 @@ describe("resolveCompactionSettings", () => {
 								"anthropic/gpt-4.1/2025-04-14": { reserveTokens: 8000 },
 							},
 						},
+						contextWindowTokens: 180_000,
 					}),
 			}),
 			workspace: "/workspace",
 		});
 
-		const first = await operations.getCompactionSettings(
-			model,
-			providerModel(model)
-		);
-		const afterModelSwitch = await operations.getCompactionSettings(
-			switchedModel,
-			providerModel(switchedModel)
-		);
+		const first = await operations.getCompactionSettings(model);
+		const afterModelSwitch =
+			await operations.getCompactionSettings(switchedModel);
 
 		expect(first.reserveTokens).toBe(30_000);
-		expect(first.modelContextLimit).toBe(100_000);
+		expect(first.modelContextLimit).toBe(180_000);
 		expect(afterModelSwitch.reserveTokens).toBe(8000);
-		expect(afterModelSwitch.modelContextLimit).toBe(100_000);
+		expect(afterModelSwitch.modelContextLimit).toBe(180_000);
 	});
 
-	test("keeps context unknown when a Provider Model is not supplied", async () => {
+	test("uses the default context window when a Provider Model is not supplied", async () => {
 		const operations = createCompactionSettingsOperations({
 			configStore: fromPartial<ConfigStore>({
 				getSnapshot: async () => snapshot({}),
@@ -345,15 +352,14 @@ describe("resolveCompactionSettings", () => {
 		});
 
 		const settings = await operations.getCompactionSettings(
-			DEFAULT_PROVIDER_MODEL_SELECTION,
-			null
+			DEFAULT_PROVIDER_MODEL_SELECTION
 		);
 
-		expect(settings.modelContextLimit).toBeNull();
-		expect(settings.autoAvailable).toBe(false);
+		expect(settings.modelContextLimit).toBe(DEFAULT_CONTEXT_WINDOW_TOKENS);
+		expect(settings.autoAvailable).toBe(true);
 	});
 
-	test("does not guess context limits for an absent Provider Model", async () => {
+	test("uses the global context default for an unlisted Provider Model", async () => {
 		const operations = createCompactionSettingsOperations({
 			configStore: fromPartial<ConfigStore>({
 				getSnapshot: async () => snapshot({}),
@@ -364,10 +370,10 @@ describe("resolveCompactionSettings", () => {
 		const model = providerModelSelectionFixture(
 			"unknown-provider/unlisted-model"
 		);
-		const settings = await operations.getCompactionSettings(model, null);
+		const settings = await operations.getCompactionSettings(model);
 
-		expect(settings.modelContextLimit).toBeNull();
-		expect(settings.autoAvailable).toBe(false);
+		expect(settings.modelContextLimit).toBe(DEFAULT_CONTEXT_WINDOW_TOKENS);
+		expect(settings.autoAvailable).toBe(true);
 		expect(settings.enabled).toBe(true);
 	});
 

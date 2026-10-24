@@ -962,7 +962,7 @@ test("does not generate or persist when the summary budget is not viable", async
 	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
-test("fails before an injected generator runs when the context limit is unknown", async () => {
+test("uses the global default context window when compaction settings omit one", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "summary" }));
 	const compaction = createSessionCompaction({
@@ -971,29 +971,27 @@ test("fails before an injected generator runs when the context limit is unknown"
 		estimateTokens: (messages) => messages.length * 10,
 	});
 
-	await expect(
-		compaction.compact({
-			session: {
-				messages: [
-					message("u1", "user", "first"),
-					message("a1", "assistant", "answer"),
-					message("u2", "user", "current"),
-					message("a2", "assistant", "answer"),
-				],
-				sessionId: sessionId("session-unknown-context-budget"),
-			},
-			model,
-			settings: {
-				enabled: true,
-				keepRecentTokens: 20,
-				reserveTokens: 1024,
-				thresholdTokens: null,
-			},
-			trigger: "manual",
-		})
-	).rejects.toThrow("Cannot determine the compaction summary budget");
-	expect(summaryGenerator).not.toHaveBeenCalled();
-	expect(store.appendCompaction).not.toHaveBeenCalled();
+	await compaction.compact({
+		session: {
+			messages: [
+				message("u1", "user", "first"),
+				message("a1", "assistant", "answer"),
+				message("u2", "user", "current"),
+				message("a2", "assistant", "answer"),
+			],
+			sessionId: sessionId("session-unknown-context-budget"),
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 20,
+			reserveTokens: 1024,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+	expect(summaryGenerator).toHaveBeenCalledTimes(1);
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
 test("repeated compaction passes the prior summary and only the new compacted span", async () => {

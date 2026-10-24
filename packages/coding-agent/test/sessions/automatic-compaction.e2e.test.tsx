@@ -71,6 +71,7 @@ test("compacts automatically before sending and uses the rebuilt context", async
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
+			configDocument: JSON.stringify({ contextWindowTokens: 40_000 }),
 			pricing: createE2ePricing(40_000),
 			sessionId,
 		});

@@ -4,6 +4,7 @@ import type { ProviderModelSelection } from "@/modules/providers/provider-model-
 import { resolveCompactionSettings } from "@/modules/sessions/compaction/config";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import {
 	summarizeSessionUsage,
 	turnCostUsd,
@@ -201,7 +202,7 @@ describe("summarizeSessionUsage", () => {
 		expect(measured?.costUsd).toBeCloseTo(0.075_65, 9);
 	});
 
-	test("switching models does not pair a foreign measurement with the selected model limit", () => {
+	test("switching models keeps the global context window instead of the selected model metadata", () => {
 		const selected: ProviderModelSelection = {
 			providerId: "google",
 			modelId: modelId("other-model"),
@@ -221,7 +222,7 @@ describe("summarizeSessionUsage", () => {
 			]
 		);
 		expect(result).toMatchObject({
-			contextLimit: 10_000,
+			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
 			contextSource: "estimated",
 			costedTurns: 1,
 		});
@@ -247,7 +248,7 @@ describe("summarizeSessionUsage", () => {
 		expect(result?.costUsd).toBeCloseTo(0.0905, 9);
 	});
 
-	test("uses the last completed Provider usage and its exact model context limit", () => {
+	test("uses the global context window even when Provider metadata differs", () => {
 		const messages = [
 			assistant("assistant-1", { inputTokens: 90, outputTokens: 10 }),
 			{ id: sessionMessageId("user-2"), parts: [], role: "user" } as const,
@@ -258,18 +259,35 @@ describe("summarizeSessionUsage", () => {
 		]);
 
 		expect(summary).toMatchObject({
-			contextLimit: 200_000,
+			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
 			contextTokens: 45,
 		});
 	});
 
-	test("shows unknown context when exact Provider Model metadata is absent", () => {
+	test("uses the global context window when Provider Model metadata is absent", () => {
 		const summary = summarizeSessionUsage(
 			[assistant("assistant-1", { inputTokens: 90, outputTokens: 10 })],
 			model
 		);
 
-		expect(summary).toMatchObject({ contextLimit: null, contextPercent: null });
+		expect(summary).toMatchObject({
+			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+			contextPercent: expect.any(Number),
+		});
+	});
+
+	test("uses the configured global context window for the occupancy percentage", () => {
+		const summary = summarizeSessionUsage(
+			[assistant("assistant-1", { inputTokens: 9000, outputTokens: 100 })],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			undefined,
+			10_000
+		);
+
+		expect(summary).toMatchObject({ contextLimit: 10_000, contextPercent: 91 });
 	});
 
 	test("shows session cache totals without reducing the latest context measure", () => {
@@ -399,7 +417,7 @@ describe("summarizeSessionUsage", () => {
 		);
 
 		expect(summary).toMatchObject({
-			contextLimit: 80_000,
+			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
 			costUsd: 10,
 			costedTurns: 1,
 		});
@@ -494,7 +512,7 @@ describe("summarizeSessionUsage", () => {
 		});
 	});
 
-	test("rejects invalid context limits before usage and compaction calculations", async () => {
+	test("Provider context metadata cannot override the global context window", async () => {
 		const providerId = "context-limit-fixture";
 		const selection: ProviderModelSelection = {
 			modelId: modelIdentity("context-limit-model"),
@@ -541,15 +559,14 @@ describe("summarizeSessionUsage", () => {
 				collection.getModels()
 			);
 			expect(summary).toMatchObject({
-				contextLimit: null,
-				contextPercent: null,
+				contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
 			});
 			expect(
 				resolveCompactionSettings({ contextLimit: summary?.contextLimit })
 			).toMatchObject({
-				autoAvailable: false,
-				modelContextLimit: null,
-				thresholdTokens: null,
+				autoAvailable: true,
+				modelContextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+				thresholdTokens: 255_616,
 			});
 		}
 
@@ -577,20 +594,20 @@ describe("summarizeSessionUsage", () => {
 			validModels
 		);
 		expect(validSummary).toMatchObject({
-			contextLimit: 10_000,
-			contextPercent: 50,
+			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+			contextPercent: 2,
 		});
 		expect(
 			resolveCompactionSettings({ contextLimit: validSummary?.contextLimit })
 		).toMatchObject({
 			autoAvailable: true,
-			modelContextLimit: 10_000,
-			thresholdTokens: 5000,
+			modelContextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+			thresholdTokens: 255_616,
 		});
 		await collection.close();
 	});
 
-	test("reports an unknown context limit instead of guessing one", () => {
+	test("uses the Wincode context default for an unknown Provider model", () => {
 		const unknownModel: ProviderModelSelection = {
 			modelId: modelId("gemini-3-pro-preview"),
 			providerId: "google",
@@ -600,7 +617,7 @@ describe("summarizeSessionUsage", () => {
 			unknownModel
 		);
 
-		expect(summary?.contextLimit).toBeNull();
-		expect(summary?.contextPercent).toBeNull();
+		expect(summary?.contextLimit).toBe(DEFAULT_CONTEXT_WINDOW_TOKENS);
+		expect(summary?.contextPercent).not.toBeNull();
 	});
 });

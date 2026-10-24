@@ -18,7 +18,6 @@ const restoreEnvironment = createEnvironmentRestorer([
 process.env.WINCODE_TEST_PLUGIN_LIFECYCLE_LOG = lifecycleLogPath;
 
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { ProviderModel } from "@wincode/ai";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import { buildAgentRegistry } from "@/modules/agents/registry";
 import { loadPlugins } from "@/modules/plugins/loader";
@@ -191,31 +190,27 @@ test("reads its sources when the work needs them, not when it opens", async () =
 	await services.shutdown();
 });
 
-test("resolves compaction settings from the exact Provider Model metadata", async () => {
+test("resolves default and configured context windows from merged settings", async () => {
 	const model: ProviderModelSelection = {
 		modelId: modelId("gpt-5.6-luna"),
 		providerId: "openai",
 	};
-	const providerModel = (contextWindowTokens: number): ProviderModel => ({
-		limits: { contextWindowTokens },
-		modelId: model.modelId,
-		protocolId: "fixture",
-		providerId: model.providerId,
-	});
-	const configured = (enabled: boolean): ConfigRuntime => ({
+	const configured = (
+		enabled: boolean,
+		contextWindowTokens: number
+	): ConfigRuntime => ({
 		...configRuntime,
 		configStore: {
 			...configRuntime.configStore,
 			getSnapshot: async () =>
 				fromPartial<ConfigSnapshot>({
 					diagnostics: [],
-					document: { compaction: { enabled } },
+					document: { compaction: { enabled }, contextWindowTokens },
 					sourceFor: () => undefined,
 					sources: [],
 				}),
 		},
 	});
-	let currentContextLimit = 100_000;
 	let currentConfig = configRuntime;
 	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
@@ -226,19 +221,12 @@ test("resolves compaction settings from the exact Provider Model metadata", asyn
 		},
 	});
 
-	const first = await services.capabilities.getCompactionSettings(
-		model,
-		providerModel(currentContextLimit)
-	);
-	expect(first.modelContextLimit).toBe(100_000);
+	const first = await services.capabilities.getCompactionSettings(model);
+	expect(first.modelContextLimit).toBe(272_000);
 	expect(first.enabled).toBe(true);
 
-	currentContextLimit = 200_000;
-	currentConfig = configured(false);
-	const second = await services.capabilities.getCompactionSettings(
-		model,
-		providerModel(currentContextLimit)
-	);
+	currentConfig = configured(false, 200_000);
+	const second = await services.capabilities.getCompactionSettings(model);
 	expect(second.modelContextLimit).toBe(200_000);
 	expect(second.enabled).toBe(false);
 	await services.shutdown();

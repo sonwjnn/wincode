@@ -14,6 +14,7 @@ import {
 	createAgentSessionAdapters,
 } from "@/modules/sessions/host/agent-session-adapters";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import {
 	createFakeProviderCollection,
@@ -63,7 +64,8 @@ const fixture = (
 		trusted: readonly PluginProviderOwnerRegistration[];
 		registered: readonly PluginProviderOwnerRegistration[];
 	} = { trusted: [], registered: [] },
-	lifecycle?: CompactionLifecycle
+	lifecycle?: CompactionLifecycle,
+	contextWindowTokens = DEFAULT_CONTEXT_WINDOW_TOKENS
 ) => {
 	const requests: ChatRequest[] = [];
 	const summaryUsageEntries: unknown[] = [];
@@ -81,9 +83,9 @@ const fixture = (
 	};
 	const document = {
 		compaction: { keepRecentTokens: 1, reserveTokens: 1000, summary },
+		contextWindowTokens,
 	};
 	const settings = resolveCompactionSettings({
-		contextLimit: 8000,
 		model: conversation,
 		snapshot: {
 			document,
@@ -281,16 +283,21 @@ test("an unsupported explicit summary thinking level is rejected rather than sil
 	expect(requests).toHaveLength(0);
 });
 
-test("the summary target's smaller window rejects an oversized prompt before dispatch", async () => {
+test("the global context window overrides a smaller summary-model context declaration", async () => {
 	const { compact, requests } = fixture(
 		{ model: "anthropic/summary/large" },
 		messages,
-		{ ...summaryModel, limits: { contextWindowTokens: 4000 } }
+		{
+			...summaryModel,
+			limits: { contextWindowTokens: 4000, maxOutputTokens: 4096 },
+		},
+		{ trusted: [], registered: [] },
+		undefined,
+		200_000
 	);
-	await expect(compact()).rejects.toMatchObject({
-		code: "context-still-too-large",
-	});
-	expect(requests).toHaveLength(0);
+
+	await expect(compact()).resolves.toBeDefined();
+	expect(requests).toHaveLength(1);
 });
 
 test("a summary target's output cap below the minimum dispatches nothing", async () => {
@@ -308,16 +315,18 @@ test("a summary target's output cap below the minimum dispatches nothing", async
 	expect(requests).toHaveLength(0);
 });
 
-test("an unknown summary context window fails before dispatch instead of borrowing chat limits", async () => {
+test("a summary model without published context metadata uses Wincode's global default", async () => {
 	const { compact, requests } = fixture(
 		{ model: "anthropic/summary/large" },
 		messages,
-		{ ...summaryModel, limits: {} }
+		{ ...summaryModel, limits: {} },
+		{ trusted: [], registered: [] },
+		undefined,
+		DEFAULT_CONTEXT_WINDOW_TOKENS
 	);
-	await expect(compact()).rejects.toThrow(
-		"context-window limit is unavailable"
-	);
-	expect(requests).toHaveLength(0);
+
+	await expect(compact()).resolves.toBeDefined();
+	expect(requests).toHaveLength(1);
 });
 
 test("a Plugin summary compacts even when the summary target cannot enforce an output cap", async () => {

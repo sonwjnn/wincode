@@ -43,6 +43,7 @@ import {
 	estimateSessionContextTokens,
 	estimateSessionContextTokensForThreshold,
 } from "../usage/context-usage";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../usage/context-window";
 import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	DEFAULT_COMPACTION_SETTINGS,
@@ -1051,13 +1052,8 @@ const resolveSummaryOutputBudget = (
 	estimateTokens: (messages: readonly SessionMessage[]) => number,
 	estimatedInputTokens: number
 ): number => {
-	const contextLimit = settings.modelContextLimit;
-	if (isUndefined(contextLimit) || isNull(contextLimit)) {
-		throw new SessionCompactionError(
-			"context-still-too-large",
-			"Cannot determine the compaction summary budget because the selected conversation model has no known context-window limit. Choose a model with a known context window and retry."
-		);
-	}
+	const contextLimit =
+		settings.modelContextLimit ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
 	const reserveTokens = configuredReserveTokens(settings);
 	const configuredMaximum = configuredSummaryOutputTokens(settings);
 	const summaryContextAvailable =
@@ -1916,6 +1912,10 @@ export const createSessionCompaction = ({
 				focus,
 			}),
 			model: input.summaryModel ?? input.model,
+			contextWindowTokens:
+				input.settings.summaryContextLimit ??
+				input.settings.modelContextLimit ??
+				DEFAULT_CONTEXT_WINDOW_TOKENS,
 			previousSummary: previous?.summary,
 			serializedMessages: serializeMessagesForCompaction(summarySpan),
 			signal: input.signal,

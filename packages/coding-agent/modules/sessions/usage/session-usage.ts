@@ -19,6 +19,7 @@ import {
 	estimateSessionContextTokens,
 	type SessionContextUsage,
 } from "./context-usage";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "./context-window";
 
 export type SessionUsageSummary = {
 	/** Estimated USD for measured usage with complete rates, or `null` when every rate is unknown. */
@@ -35,9 +36,9 @@ export type SessionUsageSummary = {
 	cacheReadTokens: number;
 	/** Session-total cache writes, kept separate from context usage. */
 	cacheWriteTokens: number;
-	/** `null` when the current Provider Model publishes no context limit. */
+	/** Effective Wincode context window applied regardless of Provider metadata. */
 	contextLimit: number | null;
-	/** `null` when `contextLimit` is unknown. */
+	/** `null` only when the caller cannot provide an effective context limit. */
 	contextPercent: number | null;
 	contextTokens: number;
 	contextSource: SessionContextUsage["source"];
@@ -164,17 +165,14 @@ export const summarizeSessionUsage = (
 	usageEntries: readonly SessionUsageEntry[] = [],
 	cacheWarmingStatus: CacheWarmingStatus = "idle",
 	providerModels?: readonly ProviderModel[],
-	contextMessages: readonly SessionMessage[] = messages
+	contextMessages: readonly SessionMessage[] = messages,
+	contextWindowTokens: number = DEFAULT_CONTEXT_WINDOW_TOKENS
 ): SessionUsageSummary | null => {
 	const { lastUsage } = collectMessageUsage(messages);
 	if (isNull(lastUsage)) {
 		return null;
 	}
-	const providerModel = providerModelForSelection(
-		providerModels,
-		fallbackModel
-	);
-	const contextLimit = providerModel?.limits?.contextWindowTokens ?? null;
+	const contextLimit = contextWindowTokens;
 	const context = estimateSessionContextTokens(
 		contextMessages,
 		undefined,

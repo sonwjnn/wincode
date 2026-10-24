@@ -96,6 +96,7 @@ import {
 } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import { estimateSessionContextTokens } from "@/modules/sessions/usage/context-usage";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import { summarizeSessionUsage } from "@/modules/sessions/usage/session-usage";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -393,7 +394,7 @@ const seedSummaryChainSession = async (
 	prefix: string
 ): Promise<{ sessionId: SessionId }> => {
 	const seeded = await seedSession(prefix, "completed");
-	for (let index = 0; index < 12; index += 1) {
+	for (let index = 0; index < 24; index += 1) {
 		const turnId = agentTurnId(`${prefix}-summary-turn-${index}`);
 		const userMessage = message(
 			`${prefix}-summary-user-${index}`,
@@ -537,7 +538,7 @@ const createCapabilities = (
 		getCapabilityCeiling: () => undefined,
 		getCompactionModule: () =>
 			compactionModule(async () => ({ text: "summary" })),
-		getCompactionSettings: async (_model, providerModel) =>
+		getCompactionSettings: async () =>
 			fromPartial<ResolvedCompactionSettings>({
 				autoAvailable: false,
 				enabled: true,
@@ -545,7 +546,7 @@ const createCapabilities = (
 				maxMediaAttachments: 4,
 				maxMediaBytes: 1024,
 				maxMediaTokens: 128,
-				modelContextLimit: providerModel?.limits?.contextWindowTokens ?? null,
+				modelContextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
 				overflowRecoveryAvailable: false,
 				reserveTokens: 1000,
 				thresholdTokens: null,
@@ -1775,14 +1776,14 @@ const createLongLoopHost = async (
 			reserveTokens: 16_384,
 			summary: { maxOutputTokens: 512 },
 		},
+		contextWindowTokens: 200_000,
 	};
 	const capabilities: SessionCapabilities = {
 		...createCapabilities(storePort, document),
 		getCompactionModule: () => createSessionCompaction({ store: storePort }),
-		getCompactionSettings: async (selection, providerModel) =>
+		getCompactionSettings: async (selection) =>
 			resolveCompactionSettings({
 				model: selection,
-				contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
 				snapshot: {
 					document,
 					sources: [],
@@ -1971,14 +1972,14 @@ describe("Session Host opening", () => {
 				reserveTokens: 16_384,
 				summary: { maxOutputTokens: 512 },
 			},
+			contextWindowTokens: 200_000,
 		};
 		const capabilities: SessionCapabilities = {
 			...createCapabilities(store, document),
 			getCompactionModule: () => createSessionCompaction({ store }),
-			getCompactionSettings: async (selection, providerModel) =>
+			getCompactionSettings: async (selection) =>
 				resolveCompactionSettings({
 					model: selection,
-					contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
 					snapshot: {
 						document,
 						sources: [],
@@ -2321,6 +2322,7 @@ describe("Session Host opening", () => {
 				auto: false,
 				summary: { model: "openai/gpt-5.6", maxOutputTokens: 512 },
 			},
+			contextWindowTokens: 200_000,
 		};
 		const baseCapabilities = createCapabilities(store, document);
 		const requests: ChatRequest[] = [];
@@ -2336,10 +2338,9 @@ describe("Session Host opening", () => {
 					},
 				};
 			},
-			getCompactionSettings: async (selection, providerModel) =>
+			getCompactionSettings: async (selection) =>
 				resolveCompactionSettings({
 					model: selection,
-					contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
 					snapshot: {
 						document,
 						diagnostics: [],
@@ -2401,6 +2402,7 @@ describe("Session Host opening", () => {
 					model: "openai/gpt-5.6-summary-small",
 				},
 			},
+			contextWindowTokens: 12_000,
 		};
 		const baseCapabilities = createCapabilities(store, document);
 		const snapshot: ConfigSnapshot = {
@@ -2413,12 +2415,8 @@ describe("Session Host opening", () => {
 			...baseCapabilities,
 			createProviderCollection: async () => collection,
 			getCompactionModule: () => createSessionCompaction({ store }),
-			getCompactionSettings: async (selection, providerModel) =>
-				resolveCompactionSettings({
-					model: selection,
-					contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
-					snapshot,
-				}),
+			getCompactionSettings: async (selection) =>
+				resolveCompactionSettings({ model: selection, snapshot }),
 		};
 		const previousStepScript = recorder.stepScript;
 		const summaryRequests: {
@@ -2473,7 +2471,7 @@ describe("Session Host opening", () => {
 			expect(
 				summaryRequests.every(
 					({ estimatedInputTokens, maxOutputTokens }) =>
-						estimatedInputTokens + 256 + maxOutputTokens <= 4096
+						estimatedInputTokens + 256 + maxOutputTokens <= 12_000
 				)
 			).toBe(true);
 			expect(
@@ -2572,6 +2570,7 @@ describe("Session Host opening", () => {
 					model: "openai/gpt-5.6-summary-failing",
 				},
 			},
+			contextWindowTokens: 12_000,
 		};
 		const baseCapabilities = createCapabilities(store, document);
 		const snapshot: ConfigSnapshot = {
@@ -2584,12 +2583,8 @@ describe("Session Host opening", () => {
 			...baseCapabilities,
 			createProviderCollection: async () => collection,
 			getCompactionModule: () => createSessionCompaction({ store }),
-			getCompactionSettings: async (selection, providerModel) =>
-				resolveCompactionSettings({
-					model: selection,
-					contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
-					snapshot,
-				}),
+			getCompactionSettings: async (selection) =>
+				resolveCompactionSettings({ model: selection, snapshot }),
 		};
 		const previousStepScript = recorder.stepScript;
 		let summaryAttempts = 0;

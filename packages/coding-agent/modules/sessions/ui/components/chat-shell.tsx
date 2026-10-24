@@ -89,6 +89,7 @@ type ChatShellProps = {
 	viewId: string;
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	cacheWarmingStatus?: CacheWarmingStatus;
+	contextWindowTokens?: number;
 	/** Rendered at the bottom of the transcript; the shell never persists it. */
 	transcriptNotice?: ReactNode;
 };
@@ -177,6 +178,7 @@ export function ChatShell({
 	viewId,
 	sessionUsageEntries = [],
 	cacheWarmingStatus = "idle",
+	contextWindowTokens,
 	transcriptNotice,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
@@ -329,7 +331,8 @@ export function ChatShell({
 				sessionUsageEntries,
 				cacheWarmingStatus,
 				providerModels,
-				activeMessages ?? displayMessages
+				activeMessages ?? displayMessages,
+				contextWindowTokens
 			),
 		[
 			displayMessages,
@@ -338,6 +341,7 @@ export function ChatShell({
 			sessionUsageEntries,
 			cacheWarmingStatus,
 			providerModels,
+			contextWindowTokens,
 		]
 	);
 	useEffect(() => {

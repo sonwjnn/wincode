@@ -1296,13 +1296,13 @@ describe("ChatShell activity footer", () => {
 		});
 		try {
 			await flushUi(setup);
-			const frame = await waitForFrameText(setup, "0.7%/1.1m (auto)");
+			const frame = await waitForFrameText(setup, "2.7%/272k (auto)");
 			const rows = frame.split("\n");
 			const pathRow = rows.findIndex((row) =>
 				row.includes(path.basename(process.cwd()) || path.sep)
 			);
 			const usageRow = rows.findIndex((row) =>
-				row.includes("0.7%/1.1m (auto)")
+				row.includes("2.7%/272k (auto)")
 			);
 
 			expect(pathRow).toBeGreaterThanOrEqual(0);
@@ -1310,7 +1310,7 @@ describe("ChatShell activity footer", () => {
 			const pathColumn = (rows[pathRow] ?? "").indexOf(
 				path.basename(process.cwd()) || path.sep
 			);
-			const usageColumn = (rows[usageRow] ?? "").indexOf("0.7%");
+			const usageColumn = (rows[usageRow] ?? "").indexOf("2.7%");
 			expect(usageColumn).toBeGreaterThan(pathColumn);
 			const footerSpans = setup.captureSpans().lines[pathRow]?.spans ?? [];
 			expect(footerSpans.every((span) => span.bg.a === 0)).toBe(true);
@@ -1444,7 +1444,7 @@ describe("ChatShell activity footer", () => {
 		}
 	});
 
-	test("labels compaction as automatic while retaining provider usage", async () => {
+	test("labels automatic compaction against the configured global context window", async () => {
 		const messages: SessionMessage[] = [
 			userMessage("user-1"),
 			{
@@ -1480,10 +1480,10 @@ describe("ChatShell activity footer", () => {
 			expect(loadingFrame).toContain("Auto-compacting...");
 			expect(loadingFrame).not.toContain("Auto-compacting context");
 			expect(loadingFrame).not.toContain("esc to cancel");
-			expect(loadingFrame).toContain("7.3K");
+			expect(loadingFrame).toContain("~2.7%/272k");
 			expect(loadingFrame).toContain("(auto)");
 			expect(loadingFrame).toContain("cost unknown");
-			expect(loadingFrame).not.toContain("1%(7.3K/1.1M)");
+			expect(loadingFrame).not.toContain("1.1M");
 			expect(loadingFrame).toMatch(SPINNER_FRAME_REGEX);
 
 			await act(async () => {

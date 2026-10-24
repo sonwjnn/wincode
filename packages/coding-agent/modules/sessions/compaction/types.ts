@@ -69,6 +69,8 @@ export type PreparedSummaryRequest = Readonly<{
 
 export type SummaryGeneratorInput = {
 	model: ProviderModelSelection;
+	/** Effective Wincode window for the selected summary target. */
+	contextWindowTokens?: number;
 	thinkingLevel?: ThinkingLevel;
 	previousSummary?: CompactionSummary;
 	serializedMessages: string;

@@ -5,12 +5,13 @@ import type {
 	ProviderModel,
 } from "@wincode/ai";
 import { normalizeModelUsage } from "@wincode/ai";
-import { omitUndefined } from "@wincode/utils";
+import { isPositiveSafeInteger, omitUndefined } from "@wincode/utils";
 import {
 	isAvailableProviderModelSelection,
 	type ProviderModelSelection,
 	providerModelReasoningEffort,
 } from "@/modules/providers/provider-model-selection";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../usage/context-window";
 import {
 	COMPACTION_SUMMARY_SYSTEM_PROMPT,
 	resolvePreparedSummaryRequest,
@@ -188,14 +189,11 @@ const providerSummaryGenerator =
 		const model = await requireInvocableProviderModel(collection, input.model);
 		await requireSummaryOutputCapability(collection, model);
 		const preparedRequest = resolvePreparedSummaryRequest(input);
-		const contextWindowTokens = model.limits?.contextWindowTokens;
-		if (
-			contextWindowTokens === undefined ||
-			!Number.isSafeInteger(contextWindowTokens) ||
-			contextWindowTokens <= 0
-		) {
+		const contextWindowTokens =
+			input.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+		if (!isPositiveSafeInteger(contextWindowTokens)) {
 			throw new Error(
-				`Cannot verify that the summary request fits Provider Model ${model.providerId}/${model.modelId}: its context-window limit is unavailable.`
+				`Cannot verify that the summary request fits Provider Model ${model.providerId}/${model.modelId}: the configured context-window limit is invalid.`
 			);
 		}
 		const contextOutputBudget =
@@ -204,7 +202,7 @@ const providerSummaryGenerator =
 			SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS;
 		if (contextOutputBudget < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
 			throw new Error(
-				`The summary prompt is estimated at ${preparedRequest.estimatedInputTokens} tokens; only ${Math.max(0, contextOutputBudget)} output tokens remain in the Provider Model context window of ${contextWindowTokens}, below the ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS}-token minimum.`
+				`The summary prompt is estimated at ${preparedRequest.estimatedInputTokens} tokens; only ${Math.max(0, contextOutputBudget)} output tokens remain in the effective Wincode context window of ${contextWindowTokens}, below the ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS}-token minimum.`
 			);
 		}
 		const maxOutputTokens = Math.floor(

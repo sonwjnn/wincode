@@ -249,12 +249,12 @@ export const createSessionCapabilities = async ({
 			createProviderCollection: providerCollectionFactory,
 			getCapabilityCeiling: () => capabilityCeiling,
 			getCompactionModule: () => compaction,
-			getCompactionSettings: (model, providerModel) =>
+			getCompactionSettings: (model) =>
 				createCompactionSettingsOperations({
 					// A Resource Reload that swaps the ConfigStore lands on the next read.
 					configStore: providedGetConfig().configStore,
 					workspace,
-				}).getCompactionSettings(model, providerModel),
+				}).getCompactionSettings(model),
 			getConfig: readConfigRuntime,
 			getRegistry,
 			getStore: () => store,

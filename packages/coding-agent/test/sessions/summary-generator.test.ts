@@ -18,7 +18,6 @@ import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const MINIMUM_HANDOFF_OUTPUT_ERROR = /minimum.*256/i;
 const SUMMARY_CONTEXT_FIT_ERROR = /estimated.*context window/i;
-const UNKNOWN_SUMMARY_CONTEXT_ERROR = /context-window limit is unavailable/i;
 
 const selection: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -324,6 +323,7 @@ test("budgets output from the exact escaped system and user prompt sent to the P
 	};
 	const { request } = await runSummary(
 		{
+			contextWindowTokens: 8192,
 			focus: "&".repeat(500),
 			maxOutputTokens: 16_384,
 			model: selection,
@@ -381,7 +381,7 @@ test("fails before dispatch when the Provider Model clamps output below the viab
 	}
 });
 
-test("fails closed before dispatch when the Provider Model has no context-window limit", async () => {
+test("uses the 272k Wincode default when Provider metadata omits a context window", async () => {
 	let requests = 0;
 	const providerModel: ProviderModel = {
 		limits: { maxOutputTokens: 1024 },
@@ -397,7 +397,7 @@ test("fails closed before dispatch when the Provider Model has no context-window
 		async *streamChat() {
 			requests += 1;
 			yield { delta: "summary", type: "text-delta" };
-			yield { type: "finish" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	});
 	await collection.setCredential(selection.providerId, {
@@ -410,11 +410,30 @@ test("fails closed before dispatch when the Provider Model has no context-window
 				model: selection,
 				serializedMessages: "history",
 			})
-		).rejects.toThrow(UNKNOWN_SUMMARY_CONTEXT_ERROR);
-		expect(requests).toBe(0);
+		).resolves.toMatchObject({ text: "summary" });
+		expect(requests).toBe(1);
 	} finally {
 		await collection.close();
 	}
+});
+
+test("uses the configured Wincode context window instead of smaller Provider metadata", async () => {
+	const { request } = await runSummary(
+		{
+			contextWindowTokens: 16_384,
+			maxOutputTokens: 1024,
+			model: selection,
+			serializedMessages: "x".repeat(36_000),
+		},
+		{
+			limits: { contextWindowTokens: 8192, maxOutputTokens: 2048 },
+			modelId: selection.modelId,
+			protocolId: "fixture",
+			providerId: selection.providerId,
+		}
+	);
+
+	expect(request?.maxOutputTokens).toBe(1024);
 });
 
 test("rejects an escaped summary prompt that cannot fit before provider dispatch", async () => {
@@ -443,6 +462,7 @@ test("rejects an escaped summary prompt that cannot fit before provider dispatch
 	try {
 		await expect(
 			createProviderSummaryGenerator(collection)({
+				contextWindowTokens: 8192,
 				focus: "preserve this decision",
 				maxOutputTokens: 1024,
 				model: selection,

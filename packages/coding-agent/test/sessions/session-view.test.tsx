@@ -30,7 +30,14 @@ import type {
 	ThinkingLevel,
 } from "@wincode/ai";
 import { isNull, isUndefined } from "@wincode/utils";
-import { act, useCallback, useEffect, useRef, useState } from "react";
+import {
+	act,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
@@ -80,7 +87,11 @@ import type {
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SessionView } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
-import { createConfigStore } from "@/shared/config/config-store";
+import {
+	type ConfigRuntime,
+	type ConfigStore,
+	createConfigStore,
+} from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import {
 	KeyboardLayerProvider,
@@ -1809,6 +1820,24 @@ describe("SessionView initial submission", () => {
 	});
 });
 
+type MutableConfigProviderControl = {
+	replace: (config: ConfigRuntime) => void;
+};
+
+const MutableConfigProvider = ({
+	children,
+	control,
+	initial,
+}: {
+	children: ReactNode;
+	control: MutableConfigProviderControl;
+	initial: ConfigRuntime;
+}) => {
+	const [config, setConfig] = useState(initial);
+	control.replace = (next) => setConfig(next);
+	return <ConfigProvider value={config}>{children}</ConfigProvider>;
+};
+
 /** The provider stack one SessionView test renders under. */
 const renderSessionView = async ({
 	height,
@@ -1816,6 +1845,8 @@ const renderSessionView = async ({
 	initialAgent,
 	initialModel,
 	configSettings,
+	configStore: providedConfigStore,
+	configProviderControl,
 	liveTranscript = initialTranscript,
 	onThinkingLevel,
 	providerController,
@@ -1828,6 +1859,8 @@ const renderSessionView = async ({
 	initialAgent?: AgentId;
 	initialModel?: ProviderModelSelection;
 	configSettings?: Readonly<Record<string, unknown>>;
+	configStore?: ConfigStore;
+	configProviderControl?: MutableConfigProviderControl;
 	liveTranscript?: SessionMessage[];
 	onThinkingLevel?: (level: ThinkingLevel | undefined) => void;
 	providerController?: InteractiveProviderController;
@@ -1837,64 +1870,127 @@ const renderSessionView = async ({
 }) => {
 	const router = buildRouter();
 	await router.load();
-	const configStore = createTestConfigStore(configSettings);
+	const configStore =
+		providedConfigStore ?? createTestConfigStore(configSettings);
 	const workspace = process.cwd();
+	const configRuntime = { configStore, homeRoot: os.homedir(), workspace };
 	let registryIsReady = false;
 	const commandLayer = { isTop: false };
-	const setup = await testRenderWithClipboard(
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ConfigProvider
-				value={{ configStore, homeRoot: os.homedir(), workspace }}
+	const children = (
+		<ToastProvider>
+			<AgentRegistryProvider>
+				<KeyboardLayerProvider>
+					<PromptConfigProvider
+						{...(initialAgent === undefined ? {} : { initialAgent })}
+						{...(initialModel === undefined ? {} : { initialModel })}
+					>
+						<DialogProvider>
+							<RouterContextProvider router={router}>
+								<CommandControllerProvider>
+									<SessionView
+										host={createFakeSessionHost(
+											liveTranscript,
+											providerController,
+											restoredSelection,
+											assertPluginSnapshot
+										)}
+										initialTranscript={initialTranscript}
+										sessionId={sessionId("session-1")}
+										sessionTitle="Queue a prompt"
+									/>
+									{onThinkingLevel === undefined ? null : (
+										<ThinkingLevelProbe onThinkingLevel={onThinkingLevel} />
+									)}
+									<AgentRegistryReadyProbe
+										onReady={() => {
+											registryIsReady = true;
+										}}
+									/>
+									<KeyboardLayerProbe
+										onLayer={(isCommandLayer) => {
+											commandLayer.isTop = isCommandLayer;
+										}}
+									/>
+								</CommandControllerProvider>
+							</RouterContextProvider>
+						</DialogProvider>
+					</PromptConfigProvider>
+				</KeyboardLayerProvider>
+			</AgentRegistryProvider>
+		</ToastProvider>
+	);
+	const configTree =
+		configProviderControl === undefined ? (
+			<ConfigProvider value={configRuntime}>{children}</ConfigProvider>
+		) : (
+			<MutableConfigProvider
+				control={configProviderControl}
+				initial={configRuntime}
 			>
-				<ToastProvider>
-					<AgentRegistryProvider>
-						<KeyboardLayerProvider>
-							<PromptConfigProvider
-								{...(initialAgent === undefined ? {} : { initialAgent })}
-								{...(initialModel === undefined ? {} : { initialModel })}
-							>
-								<DialogProvider>
-									<RouterContextProvider router={router}>
-										<CommandControllerProvider>
-											<SessionView
-												host={createFakeSessionHost(
-													liveTranscript,
-													providerController,
-													restoredSelection,
-													assertPluginSnapshot
-												)}
-												initialTranscript={initialTranscript}
-												sessionId={sessionId("session-1")}
-												sessionTitle="Queue a prompt"
-											/>
-											{onThinkingLevel === undefined ? null : (
-												<ThinkingLevelProbe onThinkingLevel={onThinkingLevel} />
-											)}
-											<AgentRegistryReadyProbe
-												onReady={() => {
-													registryIsReady = true;
-												}}
-											/>
-											<KeyboardLayerProbe
-												onLayer={(isCommandLayer) => {
-													commandLayer.isTop = isCommandLayer;
-												}}
-											/>
-										</CommandControllerProvider>
-									</RouterContextProvider>
-								</DialogProvider>
-							</PromptConfigProvider>
-						</KeyboardLayerProvider>
-					</AgentRegistryProvider>
-				</ToastProvider>
-			</ConfigProvider>
-		</ThemeProvider>,
+				{children}
+			</MutableConfigProvider>
+		);
+	const setup = await testRenderWithClipboard(
+		<ThemeProvider themeName={DEFAULT_THEME.name}>{configTree}</ThemeProvider>,
 		{ height, width }
 	);
 	await setup.waitFor(() => registryIsReady);
 	await flushUi(setup);
 	return { commandLayer, setup };
 };
+
+test("updates the usage-bar context window after a global config reload", async () => {
+	const workspace = process.cwd();
+	let currentConfigStore = createTestConfigStore({
+		contextWindowTokens: 272_000,
+	});
+	const transcript: SessionMessage[] = [
+		userMessage("usage-user", "review context"),
+		{
+			id: sessionMessageId("usage-assistant"),
+			metadata: {
+				agent: agentId("build"),
+				model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+				usage: { inputTokens: 7336, outputTokens: 0 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "usage-step",
+					usage: { inputTokens: 7336, outputTokens: 0 },
+				},
+			},
+			parts: [{ text: "assistant response", type: "text" }],
+			role: "assistant",
+		},
+	];
+	const configProviderControl: MutableConfigProviderControl = {
+		replace: () => undefined,
+	};
+	const { setup } = await renderSessionView({
+		configProviderControl,
+		configStore: currentConfigStore,
+		height: 30,
+		initialTranscript: transcript,
+		liveTranscript: transcript,
+		width: 100,
+	});
+
+	try {
+		await setup.waitForFrame((frame) => frame.includes("2.7%/272k"));
+		currentConfigStore = createTestConfigStore({
+			contextWindowTokens: 100_000,
+		});
+		await act(async () => {
+			configProviderControl.replace({
+				configStore: currentConfigStore,
+				homeRoot: os.homedir(),
+				workspace,
+			});
+		});
+		await setup.waitForFrame((frame) => frame.includes("7.3%/100k"));
+	} finally {
+		setup.renderer.destroy();
+	}
+});
 
 test("refreshes reasoning metadata after model discovery changes on a stable controller", async () => {
 	const model: ProviderModelSelection = {

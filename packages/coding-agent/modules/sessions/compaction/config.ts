@@ -1,8 +1,8 @@
 import {
 	isBoolean,
 	isNull,
-	isNumber,
 	isObjectLike,
+	isPositiveSafeInteger,
 	isUndefined,
 	pickTruthy,
 } from "@wincode/utils";
@@ -29,6 +29,7 @@ import {
 	estimateAttachmentTokensForDataUrl,
 	getAttachmentReference,
 } from "../storage/attachment-store";
+import { resolveContextWindowTokens } from "../usage/context-window";
 
 import {
 	type CompactionSummarySettings,
@@ -109,9 +110,6 @@ const settingsRecordSchema = z.record(z.string(), z.unknown());
 
 const BOOLEAN_SETTING_KEYS = ["enabled", "auto", "overflowRecovery"] as const;
 
-const isPositiveInteger = (value: unknown): value is number =>
-	isNumber(value) && Number.isSafeInteger(value) && value > 0;
-
 const isSettingKey = (value: string): value is CompactionSettingKey =>
 	Object.hasOwn(DEFAULT_COMPACTION_SETTINGS, value);
 
@@ -168,7 +166,7 @@ const settingValueIsValid = (
 	) {
 		return isBoolean(value);
 	}
-	return isPositiveInteger(value);
+	return isPositiveSafeInteger(value);
 };
 
 const includeConfigDiagnostics = (
@@ -256,7 +254,7 @@ const applyModelOverrideSetting = (
 	settingPath: readonly string[],
 	state: ModelOverrideResolutionState
 ): void => {
-	if (!isPositiveInteger(value)) {
+	if (!isPositiveSafeInteger(value)) {
 		state.diagnostics.push(
 			diagnosticFor(
 				state.snapshot,
@@ -467,11 +465,31 @@ const resolveDesiredSettings = (
 export const resolveCompactionSettings = (
 	input: CompactionConfigurationInput = {}
 ): ResolvedCompactionSettings => {
-	const { contextLimit = null, model, sessionOverrides, snapshot } = input;
+	const {
+		contextLimit: requestedContextLimit,
+		model,
+		sessionOverrides,
+		snapshot,
+	} = input;
+	const contextWindow = resolveContextWindowTokens(snapshot);
+	const contextLimit = isUndefined(requestedContextLimit)
+		? contextWindow.tokens
+		: requestedContextLimit;
 	const { configPath, desired, diagnostics, settingPaths, sources } =
 		resolveDesiredSettings(snapshot, sessionOverrides, model);
 	const resolved = { ...desired };
 	let thresholdTokens: number | null = null;
+
+	if (contextWindow.invalid) {
+		diagnostics.push(
+			diagnosticFor(
+				snapshot,
+				"invalid-value",
+				["contextWindowTokens"],
+				"contextWindowTokens must be a positive safe integer."
+			)
+		);
+	}
 
 	if (isNull(contextLimit) || isUndefined(contextLimit)) {
 		diagnostics.push(
@@ -479,21 +497,11 @@ export const resolveCompactionSettings = (
 				snapshot,
 				"unknown-context-limit",
 				["compaction"],
-				"Automatic compaction is unavailable because the model context limit is unknown.",
+				"Automatic compaction is unavailable because the effective context window is unavailable.",
 				"warning"
 			)
 		);
-	} else if (!Number.isSafeInteger(contextLimit) || contextLimit <= 0) {
-		diagnostics.push(
-			diagnosticFor(
-				snapshot,
-				"unknown-context-limit",
-				["compaction"],
-				"Automatic compaction is unavailable because the model context limit is invalid.",
-				"warning"
-			)
-		);
-	} else {
+	} else if (isPositiveSafeInteger(contextLimit)) {
 		resolved.reserveTokens = Math.min(
 			desired.reserveTokens,
 			Math.floor(contextLimit / 2)
@@ -502,6 +510,16 @@ export const resolveCompactionSettings = (
 		resolved.keepRecentTokens = Math.min(
 			desired.keepRecentTokens,
 			Math.floor(thresholdTokens / 2)
+		);
+	} else {
+		diagnostics.push(
+			diagnosticFor(
+				snapshot,
+				"unknown-context-limit",
+				["compaction"],
+				"Automatic compaction is unavailable because the effective context window is invalid.",
+				"warning"
+			)
 		);
 	}
 
