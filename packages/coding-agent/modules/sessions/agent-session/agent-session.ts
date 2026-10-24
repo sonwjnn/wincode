@@ -1095,6 +1095,7 @@ export class AgentSessionImpl implements AgentSession {
 			applyContext,
 			beginExecution,
 			getAssistantMessageId,
+			getError: () => this.#state.error,
 			finishModelStep: (turnId, record) => {
 				const assistantId = getAssistantMessageId(turnId);
 				const text =

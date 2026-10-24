@@ -11,7 +11,10 @@ import {
 } from "../message";
 
 export class OverflowRecoveryError extends Error {
-	readonly code: "continuation-failed" | "continuation-refused";
+	readonly code:
+		| "compaction-failed"
+		| "continuation-failed"
+		| "continuation-refused";
 
 	constructor(
 		code: OverflowRecoveryError["code"],
@@ -49,7 +52,7 @@ export const prepareOverflowRecoveryMessages = (
 	);
 	if (originalIndex === -1) {
 		throw new OverflowRecoveryError(
-			"continuation-failed",
+			"compaction-failed",
 			"Context overflow recovery could not find the original user message."
 		);
 	}

@@ -435,7 +435,7 @@ const toSessionRecordModel = (
 	}),
 });
 const toSessionUsageEntry = (row: SessionUsageEntryRow): SessionUsageEntry => {
-	if (row.kind !== "cache-warm") {
+	if (row.kind !== "cache-warm" && row.kind !== "compaction-summary") {
 		throw new Error(`Unsupported Session Usage Entry kind: ${row.kind}`);
 	}
 	return {

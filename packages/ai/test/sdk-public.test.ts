@@ -92,7 +92,10 @@ describe("public SDK provider collection", () => {
 				type: "tool-call",
 			},
 			{ type: "usage", usage: { inputTokens: 4, outputTokens: 2 } },
-			{ type: "terminal", outcome: { status: "success" } },
+			{
+				type: "terminal",
+				outcome: { completion: { kind: "unknown" }, status: "success" },
+			},
 		]);
 	});
 
@@ -178,7 +181,10 @@ describe("public SDK provider collection", () => {
 		}
 
 		expect(events.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "unknown" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 		const finalHeaders = new Headers(dispatchedHeaders);
@@ -453,7 +459,11 @@ describe("public SDK provider collection", () => {
 		expect(events).toEqual([
 			{ type: "usage", usage: { inputTokens: 5, outputTokens: 2 } },
 			{
-				outcome: { continuation: { cursor: "next" }, status: "success" },
+				outcome: {
+					completion: { kind: "unknown" },
+					continuation: { cursor: "next" },
+					status: "success",
+				},
 				type: "terminal",
 			},
 		]);
@@ -686,7 +696,10 @@ describe("public SDK provider collection", () => {
 
 		expect(requests).toEqual([multimodalMessages]);
 		expect(supportedEvents.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "unknown" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 		expect(unsupportedEvents).toEqual([
@@ -990,7 +1003,10 @@ describe("public SDK provider collection", () => {
 		}
 
 		expect(events.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "unknown" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 	});
@@ -1300,7 +1316,10 @@ describe("public SDK provider collection", () => {
 		}
 		expect(events).toEqual([
 			{ delta: "published-model", type: "text-delta" },
-			{ outcome: { status: "success" }, type: "terminal" },
+			{
+				outcome: { completion: { kind: "unknown" }, status: "success" },
+				type: "terminal",
+			},
 		]);
 
 		const restored = createProviderCollection({ credentialStore, modelStore });
@@ -1316,7 +1335,10 @@ describe("public SDK provider collection", () => {
 			restoredEvents.push(event);
 		}
 		expect(restoredEvents.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "unknown" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 		expect(discoveries).toBe(1);
@@ -1907,13 +1929,20 @@ describe("public SDK provider collection", () => {
 
 		expect(firstEvents).toEqual([
 			{
-				outcome: { continuation, status: "success" },
+				outcome: {
+					completion: { kind: "unknown" },
+					continuation,
+					status: "success",
+				},
 				type: "terminal",
 			},
 		]);
 		expect(receivedContinuations).toEqual([undefined, continuation]);
 		expect(secondEvents.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "unknown" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 	});

@@ -113,6 +113,7 @@ describe("public Anthropic SDK provider", () => {
 						{ type: "content_block_stop", index: 2 },
 						{
 							type: "message_delta",
+							delta: { stop_reason: "tool_use" },
 							usage: { output_tokens: 5 },
 						},
 						{ type: "message_stop" },
@@ -202,7 +203,14 @@ describe("public Anthropic SDK provider", () => {
 					outputTokens: 5,
 				},
 			},
-			{ outcome: { continuation, status: "success" }, type: "terminal" },
+			{
+				outcome: {
+					completion: { kind: "completed" },
+					continuation,
+					status: "success",
+				},
+				type: "terminal",
+			},
 		]);
 		expect(JSON.stringify(events)).not.toContain("anthropic-app-secret");
 		expect(
@@ -299,6 +307,10 @@ describe("public Anthropic SDK provider", () => {
 									},
 								},
 								{ type: "content_block_stop", index: 2 },
+								{
+									type: "message_delta",
+									delta: { stop_reason: "tool_use" },
+								},
 								{ type: "message_stop" },
 							])
 						: sseResponse([
@@ -313,6 +325,10 @@ describe("public Anthropic SDK provider", () => {
 									delta: { type: "text_delta", text: "The label is red." },
 								},
 								{ type: "content_block_stop", index: 0 },
+								{
+									type: "message_delta",
+									delta: { stop_reason: "end_turn" },
+								},
 								{ type: "message_stop" },
 							]);
 				},
@@ -391,7 +407,11 @@ describe("public Anthropic SDK provider", () => {
 		}
 
 		expect(firstTerminal).toEqual({
-			outcome: { continuation, status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				continuation,
+				status: "success",
+			},
 			type: "terminal",
 		});
 		expect(bodies).toHaveLength(2);
@@ -427,6 +447,7 @@ describe("public Anthropic SDK provider", () => {
 		]);
 		expect(secondEvents.at(-1)).toEqual({
 			outcome: {
+				completion: { kind: "completed" },
 				continuation: [{ text: "The label is red.", type: "text" }],
 				status: "success",
 			},
@@ -456,7 +477,11 @@ describe("public Anthropic SDK provider", () => {
 							type: "message_start",
 							message: { usage: { input_tokens: 7 } },
 						},
-						{ type: "message_delta", usage: { output_tokens: 2 } },
+						{
+							type: "message_delta",
+							delta: { stop_reason: "end_turn" },
+							usage: { output_tokens: 2 },
+						},
 						{ type: "message_stop" },
 					]);
 				},
@@ -494,7 +519,10 @@ describe("public Anthropic SDK provider", () => {
 				type: "usage",
 				usage: { inputTokens: 7, outputTokens: 2 },
 			},
-			{ outcome: { status: "success" }, type: "terminal" },
+			{
+				outcome: { completion: { kind: "completed" }, status: "success" },
+				type: "terminal",
+			},
 		]);
 	});
 
@@ -535,7 +563,10 @@ describe("public Anthropic SDK provider", () => {
 		expect(body?.system).toBe("Uncacheable metadata is optional.");
 		expect(JSON.stringify(body)).not.toContain("cache_control");
 		expect(events.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "unknown" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 	});

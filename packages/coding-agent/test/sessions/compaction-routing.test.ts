@@ -14,6 +14,7 @@ import {
 	createAgentSessionAdapters,
 } from "@/modules/sessions/host/agent-session-adapters";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
@@ -65,6 +66,7 @@ const fixture = (
 	lifecycle?: CompactionLifecycle
 ) => {
 	const requests: ChatRequest[] = [];
+	const summaryUsageEntries: unknown[] = [];
 	const recorder = createFakeProviderRecorder();
 	const baseCollection = createFakeProviderCollection(recorder, chatModel, [
 		targetModel,
@@ -113,6 +115,12 @@ const fixture = (
 					}),
 			},
 			providerCollection: collection,
+			usageLedger: fromPartial<AgentSessionAdaptersOptions["usageLedger"]>({
+				record: async (entry: Parameters<SessionUsageLedger["record"]>[0]) => {
+					summaryUsageEntries.push(entry);
+					return fromPartial({});
+				},
+			}),
 			sessionId: sessionId("routing"),
 			isShutDown: () => false,
 		})
@@ -125,11 +133,11 @@ const fixture = (
 			settings: { ...settings, compactionOverheadTokens: 256 },
 			trigger: "manual",
 		});
-	return { compact, requests, collection, settings };
+	return { compact, requests, collection, settings, summaryUsageEntries };
 };
 
 test("Host routes only the summary to the configured model and preserves the chat retention budget", async () => {
-	const { compact, requests } = fixture();
+	const { compact, requests, summaryUsageEntries } = fixture();
 	const result = await compact();
 	expect(requests).toHaveLength(1);
 	expect(requests[0]).toMatchObject({
@@ -140,6 +148,12 @@ test("Host routes only the summary to the configured model and preserves the cha
 	});
 	expect(result.entry.summarizationModel).toEqual(summarizer);
 	expect(result.entry.summarizationThinkingLevel).toBe("off");
+	expect(summaryUsageEntries).toHaveLength(1);
+	expect(summaryUsageEntries[0]).toMatchObject({
+		kind: "compaction-summary",
+		model: summarizer,
+		usage: { inputTokens: 10, outputTokens: 2 },
+	});
 	expect(result.activeMessages.slice(1).map((message) => message.id)).toEqual([
 		sessionMessageId("last-user"),
 		sessionMessageId("last-answer"),

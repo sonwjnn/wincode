@@ -17,6 +17,7 @@ import type {
 	ProtocolStreamPart,
 } from "./protocols/request.ts";
 import { unreachableValue } from "./protocols/shared.ts";
+import { providerChatFinish } from "./provider-events.ts";
 
 const OPENAI_COMPATIBLE_PROTOCOL_ID = "openai-compatible";
 const TRAILING_SLASHES = /\/+$/u;
@@ -135,7 +136,7 @@ const streamEvents = function* (
 			if (part.usage) {
 				yield { type: "usage", usage: part.usage };
 			}
-			yield { type: "finish" };
+			yield providerChatFinish(part);
 			continue;
 		}
 		yield part;

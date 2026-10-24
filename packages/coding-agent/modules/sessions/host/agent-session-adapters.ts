@@ -7,6 +7,7 @@ import {
 	isSameProviderModelIdentity,
 } from "@/modules/providers/provider-model-selection";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
+import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import {
 	buildSkillToolDefinition,
 	createSkillExecution,
@@ -35,6 +36,7 @@ import { resolveCompactionSummaryRoute } from "./compaction-summary-route";
 export type AgentSessionAdaptersOptions = AgentSessionTurnRunnerOptions &
 	Readonly<{
 		isShutDown: () => boolean;
+		usageLedger: Pick<SessionUsageLedger, "record">;
 		withSessionWork: (action: () => Promise<void>) => Promise<void>;
 	}>;
 
@@ -107,6 +109,7 @@ export const createAgentSessionAdapters = (
 		cacheWarming,
 		capabilities,
 		providerCollection,
+		usageLedger,
 		isShutDown,
 		withSessionWork,
 		sessionId,
@@ -297,6 +300,14 @@ export const createAgentSessionAdapters = (
 						sessionId
 					)),
 					...omitUndefined({ summaryGenerator }),
+					recordSummaryUsage: async ({ id, model, usage }) => {
+						await usageLedger.record({
+							id,
+							kind: "compaction-summary",
+							model,
+							usage,
+						});
+					},
 					assertAuthority: assertHostOpen,
 				}),
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),

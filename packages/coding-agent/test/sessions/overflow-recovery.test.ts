@@ -49,7 +49,7 @@ test("refuses recovery when its original user message is gone", () => {
 		)
 	).toThrow(
 		expect.objectContaining({
-			code: "continuation-failed",
+			code: "compaction-failed",
 			message: expect.stringContaining("original user message"),
 		})
 	);

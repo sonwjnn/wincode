@@ -3,6 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fromAny, fromPartial } from "@total-typescript/shoehorn";
+import {
+	createProviderCollection,
+	type Provider,
+	type ProviderModel,
+} from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import {
@@ -12,6 +17,7 @@ import {
 } from "@/modules/sessions/compaction/compaction";
 import { estimateCompactionTokens } from "@/modules/sessions/compaction/config";
 import type { SessionCompactionError } from "@/modules/sessions/compaction/error";
+import { createProviderSummaryGenerator } from "@/modules/sessions/compaction/summary-generator";
 import type {
 	SessionCompaction,
 	SummaryGeneratorInput,
@@ -779,6 +785,100 @@ test("rejects an escaped summary request before generation or persistence", asyn
 	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
+test("rejects a summary chain beyond four requests without committing a partial handoff", async () => {
+	const store = makeStore();
+	const summaryInputs: SummaryGeneratorInput[] = [];
+	const summaryGenerator = mock(async (input: SummaryGeneratorInput) => {
+		summaryInputs.push(input);
+		return { text: "bounded intermediate handoff" };
+	});
+	const compaction = createSessionCompaction({ store, summaryGenerator });
+	const messages = Array.from({ length: 32 }, (_, index) => [
+		message(
+			`summary-limit-user-${index}`,
+			"user",
+			`user evidence ${index} ${"historical user detail ".repeat(320)}`
+		),
+		message(
+			`summary-limit-assistant-${index}`,
+			"assistant",
+			`assistant evidence ${index} ${"historical assistant detail ".repeat(320)}`
+		),
+	]).flat();
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages,
+				sessionId: sessionId("session-summary-chain-request-limit"),
+			},
+			model,
+			settings: {
+				...settings,
+				summaryContextLimit: 4096,
+				summaryMaxOutputTokens: 1024,
+			},
+			trigger: "manual",
+		})
+	).rejects.toThrow("4-request limit");
+
+	expect(summaryInputs.length).toBeGreaterThan(0);
+	expect(summaryInputs.length).toBeLessThanOrEqual(4);
+	expect(
+		summaryInputs.reduce(
+			(total, { maxOutputTokens }) => total + (maxOutputTokens ?? 0),
+			0
+		)
+	).toBeLessThanOrEqual(1024);
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("rejects aggregate estimated summary input above 128,000 tokens without persisting", async () => {
+	const store = makeStore();
+	const summaryInputs: SummaryGeneratorInput[] = [];
+	const summaryGenerator = mock(async (input: SummaryGeneratorInput) => {
+		summaryInputs.push(input);
+		return { text: "bounded intermediate handoff" };
+	});
+	const compaction = createSessionCompaction({ store, summaryGenerator });
+	const largeTurn = (index: number) => [
+		message(
+			`summary-input-user-${index}`,
+			"user",
+			`user ${index} ${"x".repeat(80_000)}`
+		),
+		message(
+			`summary-input-assistant-${index}`,
+			"assistant",
+			`assistant ${index} ${"y".repeat(80_000)}`
+		),
+	];
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: Array.from({ length: 12 }, (_, index) =>
+					largeTurn(index + 1)
+				).flat(),
+				sessionId: sessionId("session-summary-chain-input-limit"),
+			},
+			model,
+			settings: {
+				...settings,
+				keepRecentTokens: 1,
+				modelContextLimit: 1_000_000,
+				summaryContextLimit: 1_000_000,
+				summaryMaxOutputTokens: 512,
+			},
+			trigger: "manual",
+		})
+	).rejects.toThrow("128000-token estimated input budget");
+
+	expect(summaryInputs.length).toBeGreaterThan(0);
+	expect(summaryInputs).toHaveLength(1);
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
 test("does not generate or persist when the summary budget is not viable", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "summary" }));
@@ -1103,6 +1203,61 @@ test("summary failure and cancellation do not append durable state", async () =>
 			signal: controller.signal,
 		})
 	).rejects.toMatchObject({ code: "cancelled" });
+});
+
+test("an output-limited Provider summary never becomes durable handoff context", async () => {
+	const store = makeStore();
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 512 },
+		modelId: "fixture-summary",
+		protocolId: "fixture",
+		providerId: "fixture",
+	};
+	const provider: Provider = {
+		id: providerModel.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			yield { delta: "partial handoff", type: "text-delta" };
+			yield {
+				completion: { kind: "incomplete", reason: "output-limit" },
+				type: "finish",
+			};
+		},
+	};
+	const collection = createProviderCollection();
+	collection.register(provider);
+	await collection.setCredential("fixture", { token: "fixture-only" });
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: createProviderSummaryGenerator(collection),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	try {
+		await expect(
+			compaction.compact({
+				session: {
+					messages: [
+						message("u1", "user", "first"),
+						message("a1", "assistant", "answer"),
+						message("u2", "user", "second"),
+						message("a2", "assistant", "answer"),
+					],
+					sessionId: sessionId("session-incomplete-summary"),
+				},
+				model: {
+					modelId: modelId(providerModel.modelId),
+					providerId: providerModel.providerId,
+				},
+				settings,
+				trigger: "manual",
+			})
+		).rejects.toMatchObject({ code: "summary-failed" });
+		expect(store.appendCompaction).not.toHaveBeenCalled();
+	} finally {
+		await collection.close();
+	}
 });
 
 test("persistence failure does not commit a compaction entry", async () => {

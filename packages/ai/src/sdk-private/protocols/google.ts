@@ -1,7 +1,12 @@
 import { normalizeModelUsage } from "../../model-usage.ts";
 import { readSseEvents } from "../sse.ts";
+import {
+	googleGenerationCompletion,
+	unknownGenerationCompletion,
+} from "./generation-completion.ts";
 import { googlePromptCacheStrategy } from "./google-prompt-cache.ts";
 import type {
+	ProtocolGenerationCompletion,
 	ProtocolPromptMessage,
 	ProtocolPromptPart,
 	ProtocolStreamPart,
@@ -103,6 +108,7 @@ const googleUsage = (usageValue: unknown): unknown => {
 
 type GoogleStreamState = {
 	completed: boolean;
+	completion: ProtocolGenerationCompletion;
 	continuation: unknown[];
 	toolSequence: number;
 	usage: unknown;
@@ -159,12 +165,15 @@ const googleEventParts = function* (
 	const value = payload.value;
 	const candidates = Array.isArray(value.candidates) ? value.candidates : [];
 	const candidate = record(candidates[0]);
-	if (stringValue(candidate?.finishReason) !== undefined) {
+	const finishReason = stringValue(candidate?.finishReason);
+	if (finishReason !== undefined) {
 		state.completed = true;
+		state.completion = googleGenerationCompletion(finishReason);
 	}
 	const promptFeedback = record(value.promptFeedback);
 	if (stringValue(promptFeedback?.blockReason) !== undefined) {
 		state.completed = true;
+		state.completion = { kind: "incomplete", reason: "filtered" };
 	}
 	const content = record(candidate?.content);
 	const parts = Array.isArray(content?.parts) ? content.parts : [];
@@ -180,6 +189,7 @@ const googleStream = async function* (
 ): AsyncIterable<ProtocolStreamPart> {
 	const state: GoogleStreamState = {
 		completed: false,
+		completion: unknownGenerationCompletion(),
 		continuation: [],
 		toolSequence: 0,
 		usage: undefined,
@@ -199,6 +209,7 @@ const googleStream = async function* (
 	}
 	const normalized = normalizeModelUsage(state.usage);
 	yield {
+		completion: state.completion,
 		type: "finish",
 		...(normalized ? { usage: normalized } : {}),
 		...(state.continuation.length > 0

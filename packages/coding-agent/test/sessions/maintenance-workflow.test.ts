@@ -6,6 +6,7 @@ import {
 	createSessionMaintenanceWorkflow,
 	type SessionMaintenancePort,
 } from "@/modules/sessions/agent-session/maintenance-workflow";
+import type { SessionOverflowContinuationOutcome } from "@/modules/sessions/agent-session/types";
 import type {
 	CompactSessionInput,
 	CompactSessionResult,
@@ -352,6 +353,117 @@ test("an unshortenable continuation fails closed instead of replaying tools", as
 
 	expect(outcome.kind).toBe("failed");
 	expect(continuations).toEqual([]);
+});
+
+test("overflow recovery guidance distinguishes compaction failure from saved-context continuation failure", async () => {
+	const continuations: string[] = [];
+	const compactionFailure = await createRecoveryWorkflow(async () => {
+		throw new Error("summary generation was refused");
+	}).recoverOverflow({
+		continueContext: async ({ originalMessageId }) => {
+			continuations.push(originalMessageId);
+			return { kind: "started" };
+		},
+		error: fromPartial<OperationalFailure>({ code: "context-overflow" }),
+		originalMessageId: sessionMessageId("attempt-user"),
+		resolveTarget: async () => ({ model: automaticModel }),
+		turnId: agentTurnId("overflow-compaction-guidance"),
+	});
+
+	expect(compactionFailure.kind).toBe("failed");
+	if (compactionFailure.kind !== "failed") {
+		throw new Error("The failed compaction recovery unexpectedly succeeded.");
+	}
+	expect(compactionFailure.error).toMatchObject({ code: "compaction-failed" });
+	expect(compactionFailure.error.message).toContain(
+		"No compaction was committed"
+	);
+	expect(compactionFailure.error.message).toContain(
+		"No new session was created"
+	);
+	expect(compactionFailure.error.message).toContain(
+		"completed tool effects were not replayed"
+	);
+	expect(compactionFailure.error.message).toContain(
+		"Review the existing Session"
+	);
+	expect(continuations).toEqual([]);
+
+	let compactionCount = 0;
+	const continuationRefusal = await createRecoveryWorkflow(async () => {
+		compactionCount += 1;
+		return fromPartial<CompactSessionResult>({
+			activeMessages: toolAttemptMessages,
+			entry: fromPartial<SessionCompaction>({
+				id: compactionId("entry-refused-continuation"),
+				trigger: "overflow",
+			}),
+		});
+	}).recoverOverflow({
+		continueContext: async ({ originalMessageId }) => {
+			continuations.push(originalMessageId);
+			return { kind: "refused", reason: "another Session command is active" };
+		},
+		error: fromPartial<OperationalFailure>({ code: "context-overflow" }),
+		originalMessageId: sessionMessageId("attempt-user"),
+		resolveTarget: async () => ({ model: automaticModel }),
+		turnId: agentTurnId("overflow-continuation-guidance"),
+	});
+
+	expect(continuationRefusal.kind).toBe("failed");
+	if (continuationRefusal.kind !== "failed") {
+		throw new Error("The refused continuation unexpectedly succeeded.");
+	}
+	expect(continuationRefusal.error).toMatchObject({
+		code: "continuation-refused",
+	});
+	expect(continuationRefusal.error.message).toContain(
+		"saved a compacted Session Context"
+	);
+	expect(continuationRefusal.error.message).toContain(
+		"No new session was created"
+	);
+	expect(continuationRefusal.error.message).toContain(
+		"completed tool effects were not replayed"
+	);
+	expect(continuationRefusal.error.message).toContain(
+		"do not resubmit the original request"
+	);
+	expect(compactionCount).toBe(1);
+	expect(continuations).toEqual([sessionMessageId("attempt-user")]);
+});
+
+test("post-commit continuation turn failure reports the saved-context recovery state", async () => {
+	const outcome = await createRecoveryWorkflow(async () =>
+		fromPartial<CompactSessionResult>({
+			activeMessages: toolAttemptMessages,
+			entry: fromPartial<SessionCompaction>({
+				id: compactionId("entry-failed-continuation"),
+				trigger: "overflow",
+			}),
+		})
+	).recoverOverflow({
+		continueContext: async () =>
+			fromPartial<SessionOverflowContinuationOutcome>({ kind: "failed" }),
+		error: fromPartial<OperationalFailure>({ code: "context-overflow" }),
+		originalMessageId: sessionMessageId("attempt-user"),
+		resolveTarget: async () => ({ model: automaticModel }),
+		turnId: agentTurnId("overflow-continuation-failed"),
+	});
+
+	expect(outcome.kind).toBe("failed");
+	if (outcome.kind !== "failed") {
+		throw new Error("The failed continuation unexpectedly recovered.");
+	}
+	expect(outcome.error).toMatchObject({ code: "continuation-failed" });
+	expect(outcome.error.message).toContain("saved a compacted Session Context");
+	expect(outcome.error.message).toContain("No new session was created");
+	expect(outcome.error.message).toContain(
+		"completed tool effects were not replayed"
+	);
+	expect(outcome.error.message).toContain(
+		"do not resubmit the original request"
+	);
 });
 
 test("recovery compacts work settled while its target settings were loading", async () => {

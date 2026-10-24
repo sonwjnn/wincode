@@ -3564,6 +3564,56 @@ test("recovers a context overflow after a completed Tool Call without replaying 
 	await engine.internalPort.shutdown();
 });
 
+test("reports a continuation turn failure after the overflow compaction is committed", async () => {
+	const prompts: string[] = [];
+	let runCount = 0;
+	const engine = createOverflowTestSession(compactionHistory(), {
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async (request) => {
+				runCount += 1;
+				prompts.push(promptOfTurn(request.messages));
+				reportTurnStarted(request);
+				return runCount === 1
+					? { error: overflowFailure() }
+					: { error: new Error("continuation provider failure") };
+			},
+		},
+	});
+
+	try {
+		await expect(
+			engine.send(sendInput({ userText: "original request" }))
+		).resolves.toEqual({ rejected: false });
+		for (
+			let attempt = 0;
+			engine.internalPort.hasPendingWork() && attempt < 100;
+			attempt += 1
+		) {
+			await Bun.sleep(0);
+		}
+		expect(engine.internalPort.hasPendingWork()).toBe(false);
+		expect(runCount).toBe(2);
+		const error = engine.getSnapshot().compactionError;
+		if (error === null) {
+			throw new Error("The failed continuation was not reported.");
+		}
+
+		expect(error).toMatchObject({ code: "continuation-failed" });
+		expect(error.message).toContain("saved a compacted Session Context");
+		expect(error.message).toContain("No new session was created");
+		expect(error.message).toContain("completed tool effects were not replayed");
+		expect(error.message).toContain("do not resubmit the original request");
+		expect(
+			engine.getSnapshot().compactions.map(({ trigger }) => trigger)
+		).toEqual(["overflow"]);
+		expect(prompts).toEqual(["original request", "original request"]);
+		expect(runCount).toBe(2);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
+
 test("does not run overflow recovery for an unrelated runtime failure", async () => {
 	let turnStarted = false;
 	let recoveryTargetRequested = false;
@@ -3879,11 +3929,7 @@ test("refuses overflow continuation while a public compaction is active", async 
 				manualCompaction = engine.compact({ model, trigger: "manual" });
 			}
 			const error = snapshot.compactionError;
-			if (
-				error?.message.includes(
-					"could not continue the compacted Session Context"
-				)
-			) {
+			if (error?.message.includes("saved a compacted Session Context")) {
 				continuationRefused.resolve(error);
 			}
 		});
@@ -3965,7 +4011,7 @@ test("logs failed overflow compaction without continuation or payloads", async (
 			await engine.send(sendInput({ userText: "private overflow request" }));
 			const failure = await compactionError.promise;
 
-			expect(failure.message).toContain("could not compact the session");
+			expect(failure.message).toContain("could not compact this session");
 			expect(engine.getSnapshot().compactions).toEqual([]);
 			expect(runCount).toBe(1);
 

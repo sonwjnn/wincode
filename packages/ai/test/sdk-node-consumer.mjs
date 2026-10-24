@@ -57,5 +57,8 @@ assert.deepEqual(events, [
 		type: "tool-call",
 	},
 	{ type: "usage", usage: { inputTokens: 3, outputTokens: 1 } },
-	{ type: "terminal", outcome: { status: "success" } },
+	{
+		type: "terminal",
+		outcome: { completion: { kind: "unknown" }, status: "success" },
+	},
 ]);

@@ -448,12 +448,13 @@ export type SessionOverflowContinuationInput = ReadonlyDeep<{
 }>;
 
 /**
- * What one context continuation reported: the Agent Turn it starts, or the
- * refusal that stopped it. A refusal — an active Session Command — is reported
- * instead of overlapped, and the recovery never queues it.
+ * What one context continuation reported: its Agent Turn started, failed after
+ * starting, or was refused before starting. A refusal — an active Session
+ * Command — is reported instead of overlapped, and recovery never queues it.
  */
 export type SessionOverflowContinuationOutcome =
 	| { readonly kind: "started" }
+	| { readonly kind: "failed" }
 	| { readonly kind: "refused"; readonly reason: string };
 
 /** The Provider Model selection one overflow recovery compacts and continues with. */

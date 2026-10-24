@@ -94,6 +94,26 @@ const requestBody = (init: RequestInit | undefined): Record<string, unknown> =>
 	JSON.parse(String(init?.body)) as Record<string, unknown>;
 
 describe("Provider Model output-token limits", () => {
+	test("marks a custom Provider finish without completion evidence as unknown", async () => {
+		const provider: Provider = {
+			id: "fixture",
+			models: [wireModel("fixture", "unknown-completion", "fixture")],
+			resolveAuthorization: () => ({ authorization: "fixture-only" }),
+			async *streamChat() {
+				yield { delta: "partial", type: "text-delta" };
+				yield { type: "finish" };
+			},
+		};
+		const events = await runChat(provider, "fixture", "unknown-completion", {
+			token: "fixture-only",
+		});
+
+		expect(events.at(-1)).toMatchObject({
+			type: "terminal",
+			outcome: { completion: { kind: "unknown" }, status: "success" },
+		});
+	});
+
 	test("rejects invalid Provider Model output ceilings and explicit request caps", async () => {
 		const invalidMaxima = [
 			0,
@@ -321,11 +341,248 @@ describe("Provider Model output-token limits", () => {
 			);
 			expect(events.at(-1)).toMatchObject({
 				type: "terminal",
-				outcome: { status: "success" },
+				outcome: {
+					completion: { kind: "completed" },
+					status: "success",
+				},
 			});
 		}
 		expect(requests[0]).toHaveProperty("max_output_tokens", 32);
 		expect(requests[1]).toHaveProperty("max_tokens", 48);
+	});
+
+	test("preserves provider output-limit completion through successful terminal events", async () => {
+		const openAIResponses = createOpenAIProvider({
+			fetch: async () =>
+				responseFor(
+					[
+						'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"partial"}\n\n',
+						'event: response.incomplete\ndata: {"type":"response.incomplete","response":{"output":[],"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":2,"output_tokens":64}}}\n\n',
+					].join("")
+				),
+			models: [wireModel("openai", "responses-incomplete", "openai-responses")],
+		});
+		const responses = await runChat(
+			openAIResponses,
+			"openai",
+			"responses-incomplete",
+			apiKeyCredential("fake-openai-key")
+		);
+		expect(responses.at(-1)).toMatchObject({
+			type: "terminal",
+			outcome: {
+				completion: { kind: "incomplete", reason: "output-limit" },
+				status: "success",
+			},
+		});
+
+		const openAIChat = createOpenAIProvider({
+			fetch: async () =>
+				responseFor(
+					[
+						'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n\n',
+						"data: [DONE]\n\n",
+					].join("")
+				),
+			models: [wireModel("openai", "chat-incomplete", "openai-chat")],
+		});
+		const chat = await runChat(
+			openAIChat,
+			"openai",
+			"chat-incomplete",
+			apiKeyCredential("fake-openai-key")
+		);
+		expect(chat.at(-1)).toMatchObject({
+			type: "terminal",
+			outcome: {
+				completion: { kind: "incomplete", reason: "output-limit" },
+				status: "success",
+			},
+		});
+
+		const anthropic = createAnthropicProvider({
+			fetch: async () =>
+				responseFor(
+					[
+						'event: message_start\ndata: {"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","model":"fixture","content":[],"stop_reason":null,"usage":{"input_tokens":2}}}\n\n',
+						'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":64}}\n\n',
+						'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+					].join("")
+				),
+			models: [wireModel("anthropic", "messages-incomplete", "anthropic")],
+		});
+		const messages = await runChat(
+			anthropic,
+			"anthropic",
+			"messages-incomplete",
+			apiKeyCredential("fake-anthropic-key")
+		);
+		expect(messages.at(-1)).toMatchObject({
+			type: "terminal",
+			outcome: {
+				completion: { kind: "incomplete", reason: "output-limit" },
+				status: "success",
+			},
+		});
+
+		const google = createGoogleProvider({
+			fetch: async () =>
+				responseFor(
+					'data: {"candidates":[{"content":{"parts":[{"text":"partial"}]},"finishReason":"MAX_TOKENS"}]}\n\n'
+				),
+			models: [wireModel("google", "generate-incomplete", "google")],
+		});
+		const generate = await runChat(
+			google,
+			"google",
+			"generate-incomplete",
+			apiKeyCredential("fake-google-key")
+		);
+		expect(generate.at(-1)).toMatchObject({
+			type: "terminal",
+			outcome: {
+				completion: { kind: "incomplete", reason: "output-limit" },
+				status: "success",
+			},
+		});
+	});
+
+	test("preserves completion metadata through OpenCode Go and compatible adapters", async () => {
+		const openCodeGo = createOpenCodeGoProvider({
+			fetch: async () =>
+				responseFor(
+					[
+						'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"partial"}\n\n',
+						'event: response.incomplete\ndata: {"type":"response.incomplete","response":{"output":[],"incomplete_details":{"reason":"max_output_tokens"}}}\n\n',
+					].join("")
+				),
+			models: [wireModel("opencode-go", "go-incomplete", "openai-responses")],
+		});
+		const go = await runChat(
+			openCodeGo,
+			"opencode-go",
+			"go-incomplete",
+			apiKeyCredential("fake-opencode-key")
+		);
+		expect(go.at(-1)).toMatchObject({
+			outcome: {
+				completion: { kind: "incomplete", reason: "output-limit" },
+			},
+		});
+
+		const deepSeek = createDeepSeekProvider({
+			fetch: async () =>
+				responseFor(
+					[
+						'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n\n',
+						"data: [DONE]\n\n",
+					].join("")
+				),
+		});
+		const compatible = await runChat(
+			deepSeek,
+			"deepseek",
+			"deepseek-chat",
+			apiKeyCredential("fake-deepseek-key")
+		);
+		expect(compatible.at(-1)).toMatchObject({
+			outcome: {
+				completion: { kind: "incomplete", reason: "output-limit" },
+			},
+		});
+	});
+
+	test("keeps an incomplete Responses event incomplete when its reason is absent", async () => {
+		const provider = createOpenAIProvider({
+			fetch: async () =>
+				responseFor(
+					'event: response.incomplete\ndata: {"type":"response.incomplete","response":{"output":[]}}\n\n'
+				),
+			models: [
+				wireModel("openai", "responses-incomplete-unknown", "openai-responses"),
+			],
+		});
+		const events = await runChat(
+			provider,
+			"openai",
+			"responses-incomplete-unknown",
+			apiKeyCredential("fake-openai-key")
+		);
+
+		expect(events.at(-1)).toMatchObject({
+			outcome: { completion: { kind: "incomplete", reason: "other" } },
+		});
+	});
+
+	test("classifies filtered generation endings across built-in protocols", async () => {
+		const openAIResponses = createOpenAIProvider({
+			fetch: async () =>
+				responseFor(
+					'event: response.incomplete\ndata: {"type":"response.incomplete","response":{"output":[],"incomplete_details":{"reason":"content_filter"}}}\n\n'
+				),
+			models: [wireModel("openai", "responses-filtered", "openai-responses")],
+		});
+		const responses = await runChat(
+			openAIResponses,
+			"openai",
+			"responses-filtered",
+			apiKeyCredential("fake-openai-key")
+		);
+		expect(responses.at(-1)).toMatchObject({
+			outcome: { completion: { kind: "incomplete", reason: "filtered" } },
+		});
+
+		const openAIChat = createOpenAIProvider({
+			fetch: async () =>
+				responseFor(
+					'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\n'
+				),
+			models: [wireModel("openai", "chat-filtered", "openai-chat")],
+		});
+		const chat = await runChat(
+			openAIChat,
+			"openai",
+			"chat-filtered",
+			apiKeyCredential("fake-openai-key")
+		);
+		expect(chat.at(-1)).toMatchObject({
+			outcome: { completion: { kind: "incomplete", reason: "filtered" } },
+		});
+
+		const anthropic = createAnthropicProvider({
+			fetch: async () =>
+				responseFor(
+					[
+						'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"refusal"}}\n\n',
+						'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+					].join("")
+				),
+			models: [wireModel("anthropic", "messages-filtered", "anthropic")],
+		});
+		const messages = await runChat(
+			anthropic,
+			"anthropic",
+			"messages-filtered",
+			apiKeyCredential("fake-anthropic-key")
+		);
+		expect(messages.at(-1)).toMatchObject({
+			outcome: { completion: { kind: "incomplete", reason: "filtered" } },
+		});
+
+		const google = createGoogleProvider({
+			fetch: async () =>
+				responseFor('data: {"promptFeedback":{"blockReason":"SAFETY"}}\n\n'),
+			models: [wireModel("google", "generate-filtered", "google")],
+		});
+		const generate = await runChat(
+			google,
+			"google",
+			"generate-filtered",
+			apiKeyCredential("fake-google-key")
+		);
+		expect(generate.at(-1)).toMatchObject({
+			outcome: { completion: { kind: "incomplete", reason: "filtered" } },
+		});
 	});
 
 	test("OpenAI OAuth fails closed before network I/O when a bounded request cannot be enforced", async () => {
@@ -446,7 +703,10 @@ describe("Provider Model output-token limits", () => {
 		expect(body).toHaveProperty("max_tokens", 80);
 		expect(events.at(-1)).toMatchObject({
 			type: "terminal",
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				status: "success",
+			},
 		});
 	});
 
@@ -469,7 +729,10 @@ describe("Provider Model output-token limits", () => {
 		expect(body).toHaveProperty("generationConfig.maxOutputTokens", 96);
 		expect(events.at(-1)).toMatchObject({
 			type: "terminal",
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				status: "success",
+			},
 		});
 	});
 

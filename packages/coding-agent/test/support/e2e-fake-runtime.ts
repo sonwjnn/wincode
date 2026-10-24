@@ -99,7 +99,7 @@ const defaultProviderStepScript: FakeProviderStepScript = async function* (
 			type: "usage",
 			usage: { inputTokens: 10, outputTokens: 2 },
 		};
-		yield { type: "finish" };
+		yield { completion: { kind: "completed" }, type: "finish" };
 		return;
 	}
 	recorder.requests.push({
@@ -112,7 +112,7 @@ const defaultProviderStepScript: FakeProviderStepScript = async function* (
 		type: "usage",
 		usage: { inputTokens: 1, outputTokens: 1 },
 	};
-	yield { type: "finish" };
+	yield { completion: { kind: "completed" }, type: "finish" };
 };
 
 export const createFakeProviderRecorder = (): FakeProviderRecorder => ({
@@ -188,10 +188,13 @@ export const createFakeProviderCollection = (
 			resolveAuthorization: ({ credential }) =>
 				credential === undefined ? null : { authorization: credential },
 			async *streamChat(request): AsyncGenerator<ProviderChatEvent> {
-				yield* (recorder.stepScript ?? defaultProviderStepScript)(
-					request,
-					recorder
-				);
+				for await (const event of (
+					recorder.stepScript ?? defaultProviderStepScript
+				)(request, recorder)) {
+					yield event.type === "finish" && event.completion === undefined
+						? { ...event, completion: { kind: "completed" } }
+						: event;
+				}
 			},
 		};
 		providers.register(provider);

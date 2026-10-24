@@ -13,6 +13,9 @@ import type { CompactionFileOperations } from "./file-operations";
 export const DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS =
 	MODEL_OUTPUT_TOKEN_LIMIT;
 export const MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS = 256;
+export const MAX_COMPACTION_SUMMARY_REQUESTS = 4;
+export const MAX_COMPACTION_SUMMARY_INPUT_TOKENS = 128_000;
+export const MAX_COMPACTION_SUMMARY_OUTPUT_TOKENS = MODEL_OUTPUT_TOKEN_LIMIT;
 export const COMPACTION_TRIGGER_REASONS = [
 	"manual",
 	"threshold",
@@ -72,6 +75,7 @@ export type SummaryGeneratorInput = {
 	focus?: string;
 	maxOutputTokens?: number;
 	preparedRequest?: PreparedSummaryRequest;
+	reportUsage?: (usage: SessionMessageUsage) => Promise<void>;
 	signal?: AbortSignal;
 };
 

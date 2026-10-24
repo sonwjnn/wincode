@@ -75,6 +75,7 @@ export type SubmissionDeps = Readonly<{
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	endExecution: (turnId: AgentTurnId) => void;
 	getAssistantMessageId: (turnId: AgentTurnId) => SessionMessageId;
+	getError: () => Error | null;
 	finishModelStep: (
 		turnId: AgentTurnId,
 		record: SessionRecord | undefined
@@ -970,6 +971,8 @@ const continueOverflowContext = async ({
 	execution: SessionExecution;
 	originalMessageId: SessionMessageId;
 }): Promise<SessionOverflowContinuationOutcome> => {
+	const previousError = deps.getError();
+	const previousMessageIds = new Set(deps.getTranscript().map(({ id }) => id));
 	const outcome = await deps.continueContext({
 		agent: execution.agent,
 		messageId: originalMessageId,
@@ -981,6 +984,23 @@ const continueOverflowContext = async ({
 			thinkingLevel: execution.thinkingLevel,
 		}),
 	});
+	const continuationError = deps.getError();
+	const failedContinuation = deps
+		.getTranscript()
+		.some(
+			({ id, metadata, role }) =>
+				role === "assistant" &&
+				!previousMessageIds.has(id) &&
+				metadata?.sourceUserMessageId === originalMessageId &&
+				metadata?.terminalOutcome !== undefined
+		);
+	if (
+		(continuationError !== null &&
+			(!outcome.rejected || continuationError !== previousError)) ||
+		failedContinuation
+	) {
+		return { kind: "failed" };
+	}
 	return outcome.rejected
 		? { kind: "refused", reason: outcome.reason }
 		: { kind: "started" };

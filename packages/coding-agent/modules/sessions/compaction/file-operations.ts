@@ -126,3 +126,20 @@ export const withFileOperationsSection = (
 	const trimmed = text.trimEnd();
 	return trimmed.length === 0 ? section : `${trimmed}\n\n${section}`;
 };
+
+/** Removes only the exact host-owned suffix before rendering the structured snapshot. */
+export const withoutFileOperationsSection = (
+	text: string,
+	operations: CompactionFileOperations | undefined
+): string => {
+	const section = renderFileOperationsSection(operations);
+	if (section.length === 0) {
+		return text;
+	}
+	const suffix = `\n\n${section}`;
+	let visibleText = text;
+	while (visibleText.endsWith(suffix)) {
+		visibleText = visibleText.slice(0, -suffix.length);
+	}
+	return visibleText === section ? "" : visibleText;
+};

@@ -16,12 +16,8 @@ import {
 	pricingEntryForProviderModel,
 } from "@/modules/model-pricing/model-pricing";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
-import type {
-	CreateSessionUsageEntryInput,
-	SessionStore,
-	SessionUsageEntry,
-} from "@/modules/sessions/storage/session-store";
-import { type SessionId, toSessionUsageEntryId } from "@/shared/identifiers";
+import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
+import { toSessionUsageEntryId } from "@/shared/identifiers";
 
 const WARMING_MARGIN_MS = 10_000;
 const MAX_WARMING_HORIZON_MS = 60 * 60_000;
@@ -89,16 +85,13 @@ export type SessionCacheWarming = Readonly<{
 	cancel: () => void;
 	dispose: () => Promise<void>;
 	getStatus: () => CacheWarmingStatus;
-	getUsageEntries: () => readonly SessionUsageEntry[];
 	modelStepObserver: ModelStepObserver;
 	subscribe: (listener: () => void) => () => void;
 }>;
 
 export type SessionCacheWarmingOptions = Readonly<{
-	initialUsageEntries: readonly SessionUsageEntry[];
 	providerCollection: ProviderCollection;
-	sessionId: SessionId;
-	store: Pick<SessionStore, "createSessionUsageEntry">;
+	usageLedger: Pick<SessionUsageLedger, "record">;
 }>;
 
 type CacheWarmReplayRequest = Readonly<{
@@ -162,10 +155,8 @@ const providerSdkReplayRequestSnapshot = (
 
 /** One Session-owned best-effort warmer with a separate durable cost path. */
 export const createSessionCacheWarming = ({
-	initialUsageEntries,
 	providerCollection,
-	sessionId,
-	store,
+	usageLedger,
 }: SessionCacheWarmingOptions): SessionCacheWarming => {
 	const listeners = new Set<() => void>();
 	const notifyListeners = (): void => {
@@ -177,9 +168,6 @@ export const createSessionCacheWarming = ({
 			}
 		}
 	};
-	const usageEntries = new Map(
-		initialUsageEntries.map((entry) => [entry.id, entry])
-	);
 	let status: CacheWarmingStatus = "idle";
 	let generation = 0;
 	let latestRequest: ChatRequest | undefined;
@@ -237,16 +225,12 @@ export const createSessionCacheWarming = ({
 		model: ProviderModelSelection,
 		usage: ModelUsage
 	): Promise<void> => {
-		const input: CreateSessionUsageEntryInput = {
+		await usageLedger.record({
 			id: toSessionUsageEntryId(randomUUIDv7()),
 			kind: "cache-warm",
 			model,
-			sessionId,
 			usage,
-		};
-		const entry = await store.createSessionUsageEntry(input);
-		usageEntries.set(entry.id, entry);
-		notifyListeners();
+		});
 	};
 
 	const warmProviderSdkRequest = async (
@@ -433,7 +417,6 @@ export const createSessionCacheWarming = ({
 			listeners.clear();
 		},
 		getStatus: () => status,
-		getUsageEntries: () => [...usageEntries.values()],
 		modelStepObserver: { onModelStepFinished, onModelStepStarted },
 		subscribe: (listener) => {
 			listeners.add(listener);

@@ -1521,6 +1521,63 @@ describe("ChatShell activity footer", () => {
 		}
 	});
 
+	test("reveals the persisted file snapshot once and activates the divider from the keyboard", async () => {
+		const base = completedCompaction();
+		const compaction: SessionCompaction = {
+			...base,
+			summary: {
+				...base.summary,
+				fileOperations: {
+					modified: ["src/edited.ts"],
+					read: ["src/shared.ts"],
+				},
+				text: "Preserved model narrative.\n\n## Files\nRead: src/shared.ts\nModified: src/edited.ts\n\n## Files\nRead: src/shared.ts\nModified: src/edited.ts",
+			},
+		};
+		const { setup } = await renderChatShell([], {
+			height: 30,
+			initialCompactions: [compaction],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const collapsedFrame = requireTestFrame(setup);
+			expect(collapsedFrame).not.toContain("src/shared.ts");
+			expect(collapsedFrame).not.toContain("src/edited.ts");
+
+			const divider = setup.renderer.root.findDescendantById(
+				`compaction-divider-${compaction.id}`
+			);
+			expect(divider?.focusable).toBe(true);
+			if (!divider) {
+				throw new Error("Compaction divider was not rendered.");
+			}
+			await act(async () => {
+				divider.focus();
+				setup.mockInput.pressEnter();
+			});
+			await flushUi(setup);
+
+			const expandedFrame = requireTestFrame(setup);
+			expect(expandedFrame).toContain("Preserved model narrative.");
+			expect(expandedFrame).not.toContain("## Files");
+			expect(expandedFrame).toContain("Tracked file snapshot");
+			expect(expandedFrame).toContain("200 paths per group");
+			expect(expandedFrame).toContain("Read");
+			expect(expandedFrame).toContain("src/shared.ts");
+			expect(expandedFrame).toContain("Modified");
+			expect(expandedFrame).toContain("src/edited.ts");
+			await act(async () => {
+				await setup.mockMouse.click(divider.x + 1, divider.y);
+			});
+			await flushUi(setup);
+			expect(requireTestFrame(setup)).not.toContain("src/shared.ts");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("keeps a newly completed divider at the bottom of a long transcript", async () => {
 		const messages: SessionMessage[] = [
 			userMessage("user-1"),

@@ -389,6 +389,53 @@ const seedSession = async (
 	};
 };
 
+const seedSummaryChainSession = async (
+	prefix: string
+): Promise<{ sessionId: SessionId }> => {
+	const seeded = await seedSession(prefix, "completed");
+	for (let index = 0; index < 12; index += 1) {
+		const turnId = agentTurnId(`${prefix}-summary-turn-${index}`);
+		const userMessage = message(
+			`${prefix}-summary-user-${index}`,
+			"user",
+			`user evidence ${index} ${"u".repeat(700)}`
+		);
+		await store.commitSessionRecord({
+			record: buildUserSessionRecord({
+				agentId: buildId,
+				message: userMessage,
+				model,
+				turnId,
+			}),
+			sessionId: seeded.sessionId,
+		});
+		await store.commitSessionRecord({
+			record: {
+				agentId: buildId,
+				id: sessionRecordId(`${prefix}-summary-record-${index}`),
+				messages: [
+					{
+						id: sessionMessageId(`${prefix}-summary-assistant-${index}`),
+						parts: [
+							{
+								text: `assistant evidence ${index} ${"a".repeat(700)}`,
+								type: "text",
+							},
+						],
+						role: "assistant",
+					},
+				],
+				model,
+				outcome: completedOutcome(),
+				turnId,
+				version: 1,
+			},
+			sessionId: seeded.sessionId,
+		});
+	}
+	return { sessionId: seeded.sessionId };
+};
+
 const compactionModule = (summaryGenerator: SummaryGenerator) =>
 	createSessionCompaction({
 		estimateTokens: (messages) => messages.length,
@@ -1716,7 +1763,11 @@ const createLongLoopHost = async (
 			}
 			yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
 		}
-		yield { type: "finish", continuation: { opaqueStep: counts.modelCalls } };
+		yield {
+			completion: { kind: "completed" },
+			continuation: { opaqueStep: counts.modelCalls },
+			type: "finish",
+		};
 	};
 	const document = {
 		compaction: {
@@ -2322,6 +2373,289 @@ describe("Session Host opening", () => {
 			).toEqual(["openai/gpt-5.6", "openai/gpt-5.6-luna"]);
 		} finally {
 			await host.shutdown();
+		}
+	});
+	test("bounded multi-request summaries commit once and restore from durable Session history", async () => {
+		const seeded = await seedSummaryChainSession("bounded-summary-chain");
+
+		const smallSummaryModel: ProviderModel = {
+			capabilities: ["text"],
+			limits: { contextWindowTokens: 4096, maxOutputTokens: 8192 },
+			modelId: "gpt-5.6-summary-small",
+			pricing: { inputPerMillionTokensUsd: 1, outputPerMillionTokensUsd: 1 },
+			protocolId: "fixture",
+			providerId: "openai",
+		};
+		const collection = createFakeProviderCollection(
+			recorder,
+			hostProviderModels[0],
+			[...hostProviderModels.slice(1), smallSummaryModel]
+		);
+		const document = {
+			compaction: {
+				keepRecentTokens: 512,
+				reserveTokens: 512,
+				auto: false,
+				summary: {
+					maxOutputTokens: 512,
+					model: "openai/gpt-5.6-summary-small",
+				},
+			},
+		};
+		const baseCapabilities = createCapabilities(store, document);
+		const snapshot: ConfigSnapshot = {
+			diagnostics: [],
+			document,
+			sourceFor: () => undefined,
+			sources: [],
+		};
+		const capabilities: SessionCapabilities = {
+			...baseCapabilities,
+			createProviderCollection: async () => collection,
+			getCompactionModule: () => createSessionCompaction({ store }),
+			getCompactionSettings: async (selection, providerModel) =>
+				resolveCompactionSettings({
+					model: selection,
+					contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
+					snapshot,
+				}),
+		};
+		const previousStepScript = recorder.stepScript;
+		const summaryRequests: {
+			estimatedInputTokens: number;
+			maxOutputTokens: number;
+		}[] = [];
+		recorder.stepScript = async function* (request) {
+			if (request.system?.includes("session summarizer") !== true) {
+				yield { delta: "unused chat response", type: "text-delta" };
+				yield { type: "finish" };
+				return;
+			}
+			const promptText = request.messages
+				.flatMap(({ content }) => content)
+				.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n");
+			const estimatedInputTokens = Math.ceil(
+				((request.system?.length ?? 0) + promptText.length) / 4
+			);
+			summaryRequests.push({
+				estimatedInputTokens,
+				maxOutputTokens: request.maxOutputTokens ?? 0,
+			});
+			yield {
+				delta: `bounded handoff ${summaryRequests.length}`,
+				type: "text-delta",
+			};
+			yield {
+				type: "usage",
+				usage: { inputTokens: estimatedInputTokens, outputTokens: 3 },
+			};
+			yield { type: "finish" };
+		};
+
+		let host: SessionHost | undefined;
+		let reopenedHost: SessionHost | undefined;
+		try {
+			host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			const transcriptBefore = host
+				.getSnapshot()
+				.transcript.map(({ id }) => id);
+			const result = await host.agentSession.compact({
+				model,
+				trigger: "manual",
+			});
+
+			expect(summaryRequests.length).toBeGreaterThan(1);
+			expect(summaryRequests.length).toBeLessThanOrEqual(4);
+			expect(
+				summaryRequests.every(
+					({ estimatedInputTokens, maxOutputTokens }) =>
+						estimatedInputTokens + 256 + maxOutputTokens <= 4096
+				)
+			).toBe(true);
+			expect(
+				summaryRequests.reduce(
+					(total, { estimatedInputTokens }) => total + estimatedInputTokens,
+					0
+				)
+			).toBeLessThanOrEqual(128_000);
+			expect(
+				summaryRequests.reduce(
+					(total, { maxOutputTokens }) => total + maxOutputTokens,
+					0
+				)
+			).toBeLessThanOrEqual(32_000);
+			expect(result.entry.summary.text).toBe(
+				`bounded handoff ${summaryRequests.length}`
+			);
+			expect(result.entry.summarizationUsage).toMatchObject({
+				inputTokens: summaryRequests.reduce(
+					(total, { estimatedInputTokens }) => total + estimatedInputTokens,
+					0
+				),
+				outputTokens: summaryRequests.length * 3,
+			});
+			const usageEntries = host.getSessionUsageEntries();
+			expect(usageEntries).toHaveLength(summaryRequests.length);
+			expect(usageEntries.map(({ kind }) => String(kind))).toEqual(
+				Array.from(
+					{ length: summaryRequests.length },
+					() => "compaction-summary"
+				)
+			);
+			const usageSummary = summarizeSessionUsage(
+				[
+					{
+						...message("bounded-summary-billing-turn", "assistant", "done"),
+						metadata: {
+							model,
+							usage: { inputTokens: 1, outputTokens: 1 },
+						},
+					},
+				],
+				model,
+				usageEntries,
+				host.getCacheWarmingStatus(),
+				[smallSummaryModel]
+			);
+			expect(usageSummary?.costedUsageEntries).toBe(summaryRequests.length);
+			expect(host.getSnapshot().transcript.map(({ id }) => id)).toEqual(
+				transcriptBefore
+			);
+			await host.shutdown();
+			host = undefined;
+
+			reopenedHost = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			expect(reopenedHost.getSnapshot().compactions.at(-1)).toEqual(
+				result.entry
+			);
+			expect(reopenedHost.getSessionUsageEntries()).toHaveLength(
+				summaryRequests.length
+			);
+			expect(
+				textOf(reopenedHost.getSnapshot().context[0]?.parts ?? [])
+			).toContain(result.entry.summary.text);
+		} finally {
+			recorder.stepScript = previousStepScript;
+			await reopenedHost?.shutdown();
+			await host?.shutdown();
+		}
+	});
+	test("failed summary chains retain reported attempt usage without publishing partial context", async () => {
+		const seeded = await seedSummaryChainSession("failed-summary-chain");
+
+		const smallSummaryModel: ProviderModel = {
+			capabilities: ["text"],
+			limits: { contextWindowTokens: 4096, maxOutputTokens: 8192 },
+			modelId: "gpt-5.6-summary-failing",
+			protocolId: "fixture",
+			providerId: "openai",
+		};
+		const collection = createFakeProviderCollection(
+			recorder,
+			hostProviderModels[0],
+			[...hostProviderModels.slice(1), smallSummaryModel]
+		);
+		const document = {
+			compaction: {
+				keepRecentTokens: 512,
+				reserveTokens: 512,
+				auto: false,
+				summary: {
+					maxOutputTokens: 512,
+					model: "openai/gpt-5.6-summary-failing",
+				},
+			},
+		};
+		const baseCapabilities = createCapabilities(store, document);
+		const snapshot: ConfigSnapshot = {
+			diagnostics: [],
+			document,
+			sourceFor: () => undefined,
+			sources: [],
+		};
+		const capabilities: SessionCapabilities = {
+			...baseCapabilities,
+			createProviderCollection: async () => collection,
+			getCompactionModule: () => createSessionCompaction({ store }),
+			getCompactionSettings: async (selection, providerModel) =>
+				resolveCompactionSettings({
+					model: selection,
+					contextLimit: providerModel?.limits?.contextWindowTokens ?? null,
+					snapshot,
+				}),
+		};
+		const previousStepScript = recorder.stepScript;
+		let summaryAttempts = 0;
+		recorder.stepScript = async function* (request) {
+			if (request.system?.includes("session summarizer") !== true) {
+				yield { delta: "unused chat response", type: "text-delta" };
+				yield { type: "finish" };
+				return;
+			}
+			summaryAttempts += 1;
+			yield { delta: `partial handoff ${summaryAttempts}`, type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 150, outputTokens: 3 },
+			};
+			if (summaryAttempts === 2) {
+				throw new Error("synthetic summary transport failure");
+			}
+			yield { type: "finish" };
+		};
+
+		let host: SessionHost | undefined;
+		let reopenedHost: SessionHost | undefined;
+		try {
+			host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			const contextBefore = host.getSnapshot().context;
+			const transcriptBefore = host.getSnapshot().transcript;
+			const compactionCountBefore = host.getSnapshot().compactions.length;
+			await expect(
+				host.agentSession.compact({ model, trigger: "manual" })
+			).rejects.toMatchObject({ code: "summary-failed" });
+
+			const usageEntries = host.getSessionUsageEntries();
+			expect(summaryAttempts).toBe(2);
+			expect(usageEntries).toHaveLength(2);
+			expect(usageEntries.map(({ kind }) => String(kind))).toEqual([
+				"compaction-summary",
+				"compaction-summary",
+			]);
+			expect(usageEntries.map(({ usage }) => usage.outputTokens)).toEqual([
+				3, 3,
+			]);
+			expect(host.getSnapshot().context).toEqual(contextBefore);
+			expect(host.getSnapshot().transcript).toEqual(transcriptBefore);
+			expect(host.getSnapshot().compactions).toHaveLength(
+				compactionCountBefore
+			);
+			await host.shutdown();
+			host = undefined;
+
+			reopenedHost = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			expect(reopenedHost.getSessionUsageEntries()).toEqual(usageEntries);
+			expect(reopenedHost.getSnapshot().context).toEqual(contextBefore);
+			expect(reopenedHost.getSnapshot().compactions).toHaveLength(
+				compactionCountBefore
+			);
+		} finally {
+			recorder.stepScript = previousStepScript;
+			await reopenedHost?.shutdown();
+			await host?.shutdown();
 		}
 	});
 	test("opens the transcript, context, compactions, and Session Selection a consumer reads", async () => {

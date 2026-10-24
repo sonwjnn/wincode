@@ -5,6 +5,7 @@ import {
 	createProviderCollection,
 	type Provider,
 	type ProviderChatRequest,
+	type ProviderGenerationCompletion,
 	type ProviderModel,
 } from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
@@ -36,7 +37,8 @@ const runSummary = async (
 		modelId: selection.modelId,
 		protocolId: "fixture",
 		providerId: selection.providerId,
-	}
+	},
+	completion: ProviderGenerationCompletion = { kind: "completed" }
 ): Promise<SummaryCapture> => {
 	let request: ProviderChatRequest | undefined;
 	const provider: Provider = {
@@ -50,7 +52,7 @@ const runSummary = async (
 				type: "usage",
 				usage: { inputTokens: 12, outputTokens: 4 },
 			};
-			yield { type: "finish" };
+			yield { completion, type: "finish" };
 		},
 	};
 	const collection = createProviderCollection();
@@ -184,7 +186,7 @@ test("summary availability reads credentials only for the selected Provider", as
 				credential === undefined ? null : { authorization: credential },
 			async *streamChat() {
 				yield { delta: "summary", type: "text-delta" };
-				yield { type: "finish" };
+				yield { completion: { kind: "completed" }, type: "finish" };
 			},
 		});
 	}
@@ -485,6 +487,32 @@ test("updates prior work and resolved progress in the shared handoff schema", as
 	expect(prompt).toContain("Update the schema docs.");
 	expect(prompt).toContain("## Progress");
 	expect(prompt).toContain("### Blocked");
+});
+
+test("refuses a summary when Provider generation completion is unknown", async () => {
+	await expect(
+		runSummary({ model: selection, serializedMessages: "history" }, undefined, {
+			kind: "unknown",
+		})
+	).rejects.toThrow("did not complete (unknown)");
+});
+
+test("refuses a nonempty summary stopped by the output-token limit", async () => {
+	await expect(
+		runSummary({ model: selection, serializedMessages: "history" }, undefined, {
+			kind: "incomplete",
+			reason: "output-limit",
+		})
+	).rejects.toThrow("did not complete (output-limit)");
+});
+
+test("refuses a nonempty summary stopped by provider filtering", async () => {
+	await expect(
+		runSummary({ model: selection, serializedMessages: "history" }, undefined, {
+			kind: "incomplete",
+			reason: "filtered",
+		})
+	).rejects.toThrow("did not complete (filtered)");
 });
 
 test("keeps transcript, prior-summary, and focus text inside their prompt boundaries", async () => {

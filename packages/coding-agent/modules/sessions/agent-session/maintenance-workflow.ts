@@ -39,6 +39,8 @@ import type {
 } from "./types";
 
 const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
+const CONTINUATION_FAILURE_GUIDANCE =
+	"Context overflow recovery saved a compacted Session Context, but could not continue it. No new session was created, and completed tool effects were not replayed. Review the saved compaction and any completed tool results; do not resubmit the original request until its effects are checked.";
 const compactionDiagnosticFields = (
 	command: SessionCompactionCommand,
 	phase: "started" | "completed" | "failed"
@@ -339,10 +341,11 @@ export const createSessionMaintenanceWorkflow = (
 		}
 	};
 	const recoveryError = (
+		code: OverflowRecoveryError["code"],
 		message: string,
 		cause: unknown
 	): OverflowRecoveryError =>
-		new OverflowRecoveryError("continuation-failed", message, { cause });
+		new OverflowRecoveryError(code, message, { cause });
 	const failRecovery = (
 		error: OverflowRecoveryError
 	): SessionOverflowRecoveryOutcome => {
@@ -389,7 +392,8 @@ export const createSessionMaintenanceWorkflow = (
 			logOverflowRecoveryFailure(error, "target-resolution", command.turnId);
 			return failRecovery(
 				recoveryError(
-					"Context overflow recovery could not resolve its compaction settings.",
+					"compaction-failed",
+					"Context overflow recovery could not resolve its compaction settings. No compaction was committed. No new session was created, and completed tool effects were not replayed. Review the existing Session and model settings before continuing manually.",
 					error
 				)
 			);
@@ -432,15 +436,16 @@ export const createSessionMaintenanceWorkflow = (
 				return { kind: "ineligible" };
 			}
 			const detail = getErrorMessage(error, "");
+			const reason =
+				detail.length === 0
+					? "The existing history could not be summarized safely."
+					: detail;
 			return failRecovery(
-				error instanceof OverflowRecoveryError
-					? error
-					: recoveryError(
-							detail.length === 0
-								? "Context overflow recovery could not compact the session."
-								: `Context overflow recovery could not compact the session. ${detail}`,
-							error
-						)
+				recoveryError(
+					"compaction-failed",
+					`Context overflow recovery could not compact this session: ${reason} No compaction was committed. No new session was created, and completed tool effects were not replayed. Review the existing Session and its tool results, reduce context or correct the compaction settings, then continue manually.`,
+					error
+				)
 			);
 		}
 		await port.waitForExecutionEnd(command.turnId);
@@ -459,7 +464,8 @@ export const createSessionMaintenanceWorkflow = (
 			logOverflowRecoveryFailure(error, "continuation", command.turnId);
 			return failRecovery(
 				recoveryError(
-					"Context overflow recovery could not continue the compacted Session Context.",
+					"continuation-failed",
+					CONTINUATION_FAILURE_GUIDANCE,
 					error
 				)
 			);
@@ -470,7 +476,16 @@ export const createSessionMaintenanceWorkflow = (
 		if (continuationOutcome.kind === "refused") {
 			const error = new OverflowRecoveryError(
 				"continuation-refused",
-				`Context overflow recovery could not continue the compacted Session Context: ${continuationOutcome.reason}`,
+				`Context overflow recovery saved a compacted Session Context, but continuation was refused: ${continuationOutcome.reason}. No new session was created, and completed tool effects were not replayed. Review the saved compaction and any completed tool results; do not resubmit the original request until its effects are checked.`,
+				{ cause: command.error }
+			);
+			logOverflowRecoveryFailure(error, "continuation", command.turnId);
+			return failRecovery(error);
+		}
+		if (continuationOutcome.kind === "failed") {
+			const error = new OverflowRecoveryError(
+				"continuation-failed",
+				CONTINUATION_FAILURE_GUIDANCE,
 				{ cause: command.error }
 			);
 			logOverflowRecoveryFailure(error, "continuation", command.turnId);

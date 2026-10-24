@@ -1,4 +1,9 @@
-import type { ChatEvent, ProviderCollection, ProviderModel } from "@wincode/ai";
+import type {
+	ChatEvent,
+	ChatOutcome,
+	ProviderCollection,
+	ProviderModel,
+} from "@wincode/ai";
 import { normalizeModelUsage } from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import {
@@ -15,6 +20,7 @@ import {
 	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	type SummaryGenerator,
+	type SummaryGeneratorInput,
 	type SummaryGeneratorResult,
 } from "./types";
 
@@ -93,49 +99,71 @@ export const requireInvocableProviderModel = async (
 };
 
 const throwForProviderSummaryTerminal = (
-	status: string,
-	failureCode: string | undefined,
+	outcome: ChatOutcome,
 	selection: ProviderModelSelection,
 	signal: AbortSignal | undefined
 ): void => {
-	if (status === "failure") {
+	if (outcome.status === "failure") {
 		throw new Error(
-			`Provider Model ${selection.providerId}/${selection.modelId} failed: ${failureCode ?? "provider"}.`
+			`Provider Model ${selection.providerId}/${selection.modelId} failed: ${outcome.failure.code}.`
 		);
 	}
-	if (status === "aborted") {
+	if (outcome.status === "aborted") {
 		throw signal?.reason ?? new DOMException("Aborted", "AbortError");
+	}
+	if (outcome.status === "success" && outcome.completion.kind !== "completed") {
+		const reason =
+			outcome.completion.kind === "incomplete"
+				? outcome.completion.reason
+				: "unknown";
+		throw new Error(
+			`Summary generation from Provider Model ${selection.providerId}/${selection.modelId} did not complete (${reason}); refusing partial output.`
+		);
 	}
 };
 
 const collectProviderSummary = async (
 	events: AsyncIterable<ChatEvent>,
 	selection: ProviderModelSelection,
-	signal: AbortSignal | undefined
+	signal: AbortSignal | undefined,
+	reportUsage: SummaryGeneratorInput["reportUsage"]
 ): Promise<SummaryGeneratorResult> => {
 	let text = "";
 	let usage: SummaryGeneratorResult["usage"];
-	for await (const event of events) {
-		switch (event.type) {
-			case "text-delta":
-				text += event.delta;
-				break;
-			case "usage":
-				usage = normalizeModelUsage(event.usage) ?? undefined;
-				break;
-			case "terminal":
-				throwForProviderSummaryTerminal(
-					event.outcome.status,
-					event.outcome.status === "failure"
-						? event.outcome.failure.code
-						: undefined,
-					selection,
-					signal
-				);
-				break;
-			default:
-				break;
+	let generationFailed = false;
+	let generationError: unknown;
+	try {
+		for await (const event of events) {
+			switch (event.type) {
+				case "text-delta":
+					text += event.delta;
+					break;
+				case "usage":
+					usage = normalizeModelUsage(event.usage) ?? undefined;
+					break;
+				case "terminal":
+					throwForProviderSummaryTerminal(event.outcome, selection, signal);
+					break;
+				default:
+					break;
+			}
 		}
+	} catch (error) {
+		generationFailed = true;
+		generationError = error;
+	}
+	if (generationFailed && usage !== undefined) {
+		try {
+			await reportUsage?.(usage);
+		} catch (usageError) {
+			throw new AggregateError(
+				[generationError, usageError],
+				"Provider generation failed and its usage could not be persisted."
+			);
+		}
+	}
+	if (generationFailed) {
+		throw generationError;
 	}
 	return { text, ...omitUndefined({ usage }) };
 };
@@ -215,7 +243,12 @@ const providerSummaryGenerator =
 			}),
 			system: COMPACTION_SUMMARY_SYSTEM_PROMPT,
 		});
-		return collectProviderSummary(events, input.model, input.signal);
+		return collectProviderSummary(
+			events,
+			input.model,
+			input.signal,
+			input.reportUsage
+		);
 	};
 
 /** Uses only an explicitly invocable SDK Provider Model without changing its stored identity. */

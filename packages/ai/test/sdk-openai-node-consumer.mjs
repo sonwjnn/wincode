@@ -36,5 +36,12 @@ assert.equal(apiKeyHeader, "Bearer node-openai-key");
 assert.deepEqual(events, [
 	{ delta: "external", type: "text-delta" },
 	{ type: "usage", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
-	{ type: "terminal", outcome: { continuation: [], status: "success" } },
+	{
+		type: "terminal",
+		outcome: {
+			completion: { kind: "completed" },
+			continuation: [],
+			status: "success",
+		},
+	},
 ]);

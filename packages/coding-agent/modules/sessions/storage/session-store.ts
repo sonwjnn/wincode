@@ -71,7 +71,7 @@ export type UpdateSessionInput = {
 export type SessionUsageEntry = Readonly<{
 	createdAt: Date;
 	id: SessionUsageEntryId;
-	kind: "cache-warm";
+	kind: "cache-warm" | "compaction-summary";
 	model: ProviderModelSelection;
 	sessionId: SessionId;
 	usage: ModelUsage;

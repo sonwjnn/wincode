@@ -167,7 +167,10 @@ describe("public OpenAI-compatible SDK providers", () => {
 					totalTokens: 24,
 				},
 			},
-			{ outcome: { status: "success" }, type: "terminal" },
+			{
+				outcome: { completion: { kind: "completed" }, status: "success" },
+				type: "terminal",
+			},
 		]);
 		expect(JSON.stringify(events)).not.toContain("deepseek-test-key");
 
@@ -329,7 +332,10 @@ describe("public OpenAI-compatible SDK providers", () => {
 		expect(calls[1]?.body).not.toHaveProperty("prompt_cache_key");
 		expect(calls[1]?.body).not.toHaveProperty("prompt_cache_options");
 		expect(chatEvents.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 		expect(JSON.stringify(chatEvents)).not.toContain("openrouter-test-key");
