@@ -44,11 +44,7 @@ import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { CompactNameList } from "@/modules/sessions/ui/components/startup-overview";
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
-import {
-	type ConfigRuntime,
-	type ConfigSnapshot,
-	createConfigStore,
-} from "@/shared/config/config-store";
+import { createConfigStore } from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -340,35 +336,29 @@ const renderHomeView = async (
 			? {}
 			: { pluginRuntime: options.pluginRuntime }),
 	});
-	const configValue =
-		options.defaultAgentId === undefined
-			? {
-					configStore: createConfigStore({
-						fs: {
-							readFile: async () =>
-								Promise.reject(
-									Object.assign(new Error("Test config is unavailable."), {
-										code: "ENOENT",
-									})
-								),
-						},
-					}),
-					homeRoot,
-					workspace,
-				}
-			: fromPartial<ConfigRuntime>({
-					configStore: {
-						getSnapshot: async () =>
-							fromPartial<ConfigSnapshot>({
-								diagnostics: [],
-								document: { default_agent: options.defaultAgentId },
-								sourceFor: () => undefined,
-								sources: [],
-							}),
-					},
-					homeRoot,
-					workspace,
-				});
+	const configValue = {
+		configStore: createConfigStore({
+			homeRoot,
+			trustedProjectRoots: [],
+			fs: {
+				readFile: async (file) => {
+					if (
+						options.defaultAgentId !== undefined &&
+						file === path.join(homeRoot, ".wincode", "settings.json")
+					) {
+						return JSON.stringify({ default_agent: options.defaultAgentId });
+					}
+					throw Object.assign(new Error("Test config is unavailable."), {
+						code: "ENOENT",
+					});
+				},
+			},
+		}),
+		homeRoot,
+		workspace,
+	};
+	// Application startup publishes configuration before mounting the TUI.
+	await configValue.configStore.getSnapshot(workspace);
 	const app = (
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider value={configValue}>
@@ -403,23 +393,17 @@ const renderHomeView = async (
 	return setup;
 };
 
-const captureNormalizedHomeFrame = (setup: TestRendererSetup): string =>
-	setup.captureCharFrame().replaceAll(/[┃║│]/gu, " ").replaceAll(/\s+/gu, " ");
+const normalizeHomeFrame = (frame: string): string =>
+	frame.replaceAll(/[┃║│]/gu, " ").replaceAll(/\s+/gu, " ");
 
-const waitForHomeFrame = async (
+const captureNormalizedHomeFrame = (setup: TestRendererSetup): string =>
+	normalizeHomeFrame(setup.captureCharFrame());
+
+const waitForHomeFrame = (
 	setup: TestRendererSetup,
 	text: string
-): Promise<void> => {
-	await act(async () => {
-		for (let attempt = 0; attempt < 50; attempt += 1) {
-			await Bun.sleep(10);
-			await setup.renderOnce();
-			if (captureNormalizedHomeFrame(setup).includes(text)) {
-				return;
-			}
-		}
-	});
-};
+): Promise<string> =>
+	setup.waitForFrame((frame) => normalizeHomeFrame(frame).includes(text));
 
 const submitHomePrompt = async (setup: TestRendererSetup): Promise<void> => {
 	const composer = setup.renderer.root.findDescendantById(
@@ -563,13 +547,16 @@ describe("NewSessionView composer focus", () => {
 				"startup-plugin-startup-overview-plugin"
 			);
 			await act(async () => setup.renderOnce());
-			await waitForHomeFrame(setup, "startup-overview-plugin");
-			const pluginRow = setup
-				.captureCharFrame()
+			const pluginFrame = await setup.waitForFrame((frame) =>
+				frame
+					.split("\n")
+					.some((line) => line.includes("startup-overview-plugin"))
+			);
+			const pluginRow = pluginFrame
 				.split("\n")
 				.find((line) => line.includes("startup-overview-plugin"));
 			expect(pluginRow?.indexOf("startup-overview-plugin")).toBeGreaterThan(0);
-			const frame = captureNormalizedHomeFrame(setup);
+			const frame = normalizeHomeFrame(pluginFrame);
 			expect(frame).toContain("[Plugins]");
 			expect(frame).toContain("startup-overview-plugin");
 			expect(setup.renderer.currentFocusedRenderable?.id ?? null).toBe(
@@ -1074,7 +1061,10 @@ describe("NewSessionView composer focus", () => {
 			if (!(composer instanceof TextareaRenderable)) {
 				throw new Error("The new-session composer did not render.");
 			}
-			const lines = setup.captureCharFrame().split("\n");
+			const frame = await setup.waitForFrame((value) =>
+				value.includes("This project is not trusted.")
+			);
+			const lines = frame.split("\n");
 			const noticeLine = lines.findIndex((line) =>
 				line.includes("This project is not trusted.")
 			);
@@ -1201,17 +1191,14 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		});
 
 		try {
-			expect(captureNormalizedHomeFrame(setup)).not.toContain(
-				"openai/gpt-5.6-luna"
+			await setup.waitForFrame(
+				(frame) => !frame.includes("openai/gpt-5.6-luna")
 			);
 			await act(async () => {
 				pendingSnapshot.resolve([]);
 				await Promise.resolve();
 			});
 			await waitForHomeFrame(setup, "openai/gpt-5.6-luna:low");
-			expect(captureNormalizedHomeFrame(setup)).toContain(
-				"openai/gpt-5.6-luna:low"
-			);
 		} finally {
 			pendingSnapshot.resolve([]);
 			await act(() => setup.renderer.destroy());
@@ -1509,8 +1496,11 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await submitHomePrompt(setup);
-			await waitForHomeFrame(setup, "Connect a Provider");
-			expect(captureNormalizedHomeFrame(setup)).not.toContain(
+			await setup.waitFor(
+				async () => (await sessionStore.listSessions()).length === 1
+			);
+			const frame = await setup.waitForFrame(() => true);
+			expect(normalizeHomeFrame(frame)).not.toContain(
 				"Provider Model openai/gpt-5.6-luna is unavailable. Connect a Provider and explicitly select an available Provider SDK Model."
 			);
 			expect(await sessionStore.listSessions()).toHaveLength(1);

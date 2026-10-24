@@ -31,6 +31,75 @@ const fileSystem = (files: Record<string, string>, reads?: string[]) => ({
 });
 
 describe("createConfigStore", () => {
+	test("publishes refreshed and persisted settings to workspace observers without rereading during render", async () => {
+		const settingsPath = `${HOME_ROOT}/.wincode/settings.json`;
+		const files: Record<string, string> = {
+			[settingsPath]: '{"contextWindowTokens":96000}',
+		};
+		const reads: string[] = [];
+		const store = createConfigStore({
+			fs: {
+				...fileSystem(files, reads),
+				writeFile: async (file, contents) => {
+					files[file] = contents;
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+		const observed: unknown[] = [];
+		const unsubscribe = store.subscribeSnapshot(WORKSPACE, () => {
+			observed.push(
+				store.readSnapshot(WORKSPACE)?.document.contextWindowTokens
+			);
+		});
+		expect(store.readSnapshot(WORKSPACE)).toBeUndefined();
+		const initial = await store.getSnapshot(WORKSPACE);
+		expect(store.readSnapshot(WORKSPACE)).toBe(initial);
+		const readCount = reads.length;
+		store.readSnapshot(WORKSPACE);
+		expect(reads).toHaveLength(readCount);
+
+		files[settingsPath] = '{"contextWindowTokens":100000}';
+		await store.refreshSnapshot(WORKSPACE);
+		await store.setValue(WORKSPACE, "global", ["contextWindowTokens"], 120_000);
+		expect(observed).toEqual([96_000, 100_000, 120_000]);
+		unsubscribe();
+		await store.refreshSnapshot(WORKSPACE);
+		expect(observed).toEqual([96_000, 100_000, 120_000]);
+	});
+
+	test("a slower superseded config load cannot overwrite a newer published snapshot", async () => {
+		const firstRead = Promise.withResolvers<string>();
+		const started = Promise.withResolvers<void>();
+		const settingsPath = `${HOME_ROOT}/.wincode/settings.json`;
+		let reads = 0;
+		const store = createConfigStore({
+			fs: {
+				readFile: async (file) => {
+					if (file !== settingsPath) {
+						throw Object.assign(new Error("missing"), { code: "ENOENT" });
+					}
+					reads += 1;
+					if (reads === 1) {
+						started.resolve();
+						return firstRead.promise;
+					}
+					return '{"contextWindowTokens":100000}';
+				},
+			},
+			homeRoot: HOME_ROOT,
+		});
+		const oldLoad = store.getSnapshot(WORKSPACE);
+		await started.promise;
+		const latest = await store.refreshSnapshot(WORKSPACE);
+		firstRead.resolve('{"contextWindowTokens":96000}');
+		await oldLoad;
+		expect(store.readSnapshot(WORKSPACE)).toBe(latest);
+		expect(
+			(await store.getSnapshot(WORKSPACE)).document.contextWindowTokens
+		).toBe(100_000);
+	});
+
 	test("loads settings only from trusted .wincode scopes and prefers settings.jsonc", async () => {
 		const userJsonPath = `${HOME_ROOT}/.wincode/settings.json`;
 		const userJsoncPath = `${HOME_ROOT}/.wincode/settings.jsonc`;

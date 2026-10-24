@@ -23,10 +23,7 @@ import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-mod
 import { SessionUsageBar } from "@/modules/sessions/ui/components/session-usage-bar";
 import type { SessionUsageSummary } from "@/modules/sessions/usage/session-usage";
 import { ConfigProvider } from "@/shared/config/config-provider";
-import type {
-	ConfigRuntime,
-	ConfigSnapshot,
-} from "@/shared/config/config-store";
+import { createConfigStore } from "@/shared/config/config-store";
 import {
 	type DialogContextValue,
 	DialogProvider,
@@ -271,25 +268,30 @@ test("Agent selection offers an exact available replacement without changing the
 		protocolId: "fixture",
 		providerId: "plugin-provider",
 	};
-	const snapshot = fromPartial<ConfigSnapshot>({
-		diagnostics: [],
-		document: {
-			agents: {
-				reviewer: {
-					description: "Reviews changes with a Provider Model.",
-					model: "plugin-provider/stale-model-v1",
-					role: "primary",
+	const config = {
+		configStore: createConfigStore({
+			homeRoot: "/tmp",
+			trustedProjectRoots: [],
+			fs: {
+				readFile: async (file) => {
+					if (file !== "/tmp/.wincode/settings.json") {
+						throw Object.assign(new Error("missing"), { code: "ENOENT" });
+					}
+					return JSON.stringify({
+						agents: {
+							reviewer: {
+								description: "Reviews changes with a Provider Model.",
+								model: "plugin-provider/stale-model-v1",
+								role: "primary",
+							},
+						},
+					});
 				},
 			},
-		},
-		sourceFor: () => undefined,
-		sources: [],
-	});
-	const config = fromPartial<ConfigRuntime>({
-		configStore: { getSnapshot: async () => snapshot },
+		}),
 		homeRoot: "/tmp",
 		workspace: "/tmp",
-	});
+	};
 	const selected = Promise.withResolvers<{
 		agent: AgentId;
 		model?: ProviderModelSelection;
@@ -353,7 +355,9 @@ test("Agent selection offers an exact available replacement without changing the
 			providerId: "plugin-provider",
 		},
 	});
-	expect(snapshot.document.agents).toMatchObject({
+	expect(
+		(await config.configStore.getSnapshot(config.workspace)).document.agents
+	).toMatchObject({
 		reviewer: { model: "plugin-provider/stale-model-v1" },
 	});
 });

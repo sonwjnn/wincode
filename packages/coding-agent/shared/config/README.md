@@ -1,6 +1,8 @@
 # Shared Config
 
-Domain-neutral Wincode configuration infrastructure for CLI capabilities. `createConfigStore()` returns memoized, immutable settings snapshots through one `getSnapshot(workspace)` interface.
+Domain-neutral Wincode configuration infrastructure for CLI capabilities. `createConfigStore()` returns memoized, immutable settings snapshots through `getSnapshot(workspace)`.
+
+Reactive consumers use `readSnapshot(workspace)` for a synchronous, I/O-free read and `subscribeSnapshot(workspace, listener)` to observe publication. Subscribing starts the initial load if needed. Refreshes and successful settings writes publish to the same workspace; a superseded load cannot overwrite newer settings. `ConfigProvider` adapts that store with `useSyncExternalStore` and exposes the published `snapshot` through `useConfig()`. Views derive values from that snapshot rather than maintaining asynchronous copies of configuration in component state. Capability resolvers remain responsible for their own defaults and validation.
 
 General settings are loaded from the user's `~/.wincode/settings.json` or `settings.jsonc`, followed by trusted project `.wincode/settings.json` or `settings.jsonc` files from ancestor to workspace. `settings.jsonc` wins when both filenames exist at one scope and produces a duplicate-config diagnostic. Old XDG roots and project-root `wincode.json` / `wincode.jsonc` files are not runtime sources. Project settings are not read until Project trust has been granted.
 

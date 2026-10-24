@@ -52,10 +52,7 @@ import type {
 	SessionSubmissionComposition,
 	SessionSendInput as SessionSubmissionInput,
 } from "../../submission-types";
-import {
-	DEFAULT_CONTEXT_WINDOW_TOKENS,
-	resolveContextWindowTokens,
-} from "../../usage/context-window";
+import { resolveContextWindowTokens } from "../../usage/context-window";
 import type { ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
@@ -282,30 +279,9 @@ export function SessionView({
 		[host]
 	);
 	const dialog = useDialog();
-	const { configStore, workspace } = useConfig();
+	const { snapshot: configSnapshot } = useConfig();
+	const contextWindowTokens = resolveContextWindowTokens(configSnapshot).tokens;
 	const sessionStore = useMemo(() => getSessionStore(), []);
-	const [contextWindowTokens, setContextWindowTokens] = useState(
-		DEFAULT_CONTEXT_WINDOW_TOKENS
-	);
-	useEffect(() => {
-		let active = true;
-		void configStore
-			.getSnapshot(workspace)
-			.then((snapshot) => resolveContextWindowTokens(snapshot).tokens)
-			.then((tokens) => {
-				if (active) {
-					setContextWindowTokens(tokens);
-				}
-			})
-			.catch(() => {
-				if (active) {
-					setContextWindowTokens(DEFAULT_CONTEXT_WINDOW_TOKENS);
-				}
-			});
-		return () => {
-			active = false;
-		};
-	}, [configStore, workspace]);
 	const [editMode, setEditMode] = useState<EditMode>("hashline");
 	const editModeLoadRevisionRef = useRef(0);
 	const setSessionEditMode = useCallback((mode: EditMode) => {

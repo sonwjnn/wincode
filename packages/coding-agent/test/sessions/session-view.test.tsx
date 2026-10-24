@@ -1939,11 +1939,10 @@ const renderSessionView = async ({
 	return { commandLayer, setup };
 };
 
-test("updates the usage-bar context window after a global config reload", async () => {
+test("updates the usage-bar context window when the active ConfigStore refreshes", async () => {
 	const workspace = process.cwd();
-	let currentConfigStore = createTestConfigStore({
-		contextWindowTokens: 272_000,
-	});
+	const settings = { contextWindowTokens: 272_000 };
+	const currentConfigStore = createTestConfigStore(settings);
 	const transcript: SessionMessage[] = [
 		userMessage("usage-user", "review context"),
 		{
@@ -1976,17 +1975,29 @@ test("updates the usage-bar context window after a global config reload", async 
 
 	try {
 		await setup.waitForFrame((frame) => frame.includes("2.7%/272k"));
-		currentConfigStore = createTestConfigStore({
-			contextWindowTokens: 100_000,
-		});
 		await act(async () => {
+			settings.contextWindowTokens = 100_000;
+			await currentConfigStore.refreshSnapshot(workspace);
+		});
+		await setup.waitForFrame((frame) => frame.includes("7.3%/100k"));
+		await act(async () => {
+			const replacement = createTestConfigStore({
+				contextWindowTokens: 200_000,
+			});
+			await replacement.getSnapshot(workspace);
 			configProviderControl.replace({
-				configStore: currentConfigStore,
+				configStore: replacement,
 				homeRoot: os.homedir(),
 				workspace,
 			});
 		});
-		await setup.waitForFrame((frame) => frame.includes("7.3%/100k"));
+		await setup.waitForFrame((frame) => frame.includes("3.7%/200k"));
+		await act(async () => {
+			settings.contextWindowTokens = 50_000;
+			await currentConfigStore.refreshSnapshot(workspace);
+		});
+		await flushUi(setup);
+		expect(setup.captureCharFrame()).toContain("3.7%/200k");
 	} finally {
 		setup.renderer.destroy();
 	}
