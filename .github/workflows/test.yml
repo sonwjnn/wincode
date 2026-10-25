@@ -108,6 +108,78 @@ jobs:
           process.env.EXPECTED_ARCH + ", got " + process.platform + "/" +
           process.arch);
           }'
+      - name: Prepare isolated test-entrypoint fixture
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'wincode test entrypoint fixture'
+          $testDirectory = Join-Path $fixtureRoot 'packages/probe/test'
+          New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null
+          $testSource = @'
+          import * as fs from "node:fs";
+          import * as path from "node:path";
+          import { expect, test } from "bun:test";
+
+          test("Windows launchers isolate user data and provider credentials", () => {
+            expect(process.env.OPENAI_API_KEY).toBeUndefined();
+            expect(process.env.HOME).toBe(process.env.USERPROFILE);
+            const directoryNames = [
+              "HOME",
+              "USERPROFILE",
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "XDG_CACHE_HOME",
+              "APPDATA",
+              "LOCALAPPDATA",
+              "TEMP",
+              "TMP",
+              "TMPDIR",
+              "WINCODE_TEST_SESSION_INDEX_DIR",
+            ];
+            const directories = directoryNames.map((name) => process.env[name]);
+            for (const directory of directories) {
+              expect(directory).toBeDefined();
+              expect(path.isAbsolute(directory ?? "")).toBe(true);
+            }
+            fs.writeFileSync(
+              path.resolve(import.meta.dir, "../../../test-entrypoint-paths.json"),
+              JSON.stringify(directories)
+            );
+          });
+          '@
+          Set-Content -LiteralPath (Join-Path $testDirectory 'entrypoint.test.ts') -Value $testSource -Encoding utf8
+      - name: Smoke PowerShell test entrypoint
+        if: matrix.platform == 'win32'
+        env:
+          OPENAI_API_KEY: wrapper-smoke-secret
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'wincode test entrypoint fixture'
+          & .\test.ps1 --root $fixtureRoot --package probe
+      - name: Verify PowerShell entrypoint cleanup
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'wincode test entrypoint fixture'
+          $marker = Join-Path $fixtureRoot 'test-entrypoint-paths.json'
+          $directories = @(Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json)
+          $remaining = @($directories | Where-Object { Test-Path -LiteralPath $_ })
+          if ($remaining.Count -gt 0) { throw "PowerShell test wrapper left temporary user data behind." }
+      - name: Smoke batch test entrypoint
+        if: matrix.platform == 'win32'
+        env:
+          OPENAI_API_KEY: wrapper-smoke-secret
+        shell: cmd
+        run: test.bat --root "%RUNNER_TEMP%\wincode test entrypoint fixture" --package probe
+      - name: Verify batch entrypoint cleanup
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'wincode test entrypoint fixture'
+          $marker = Join-Path $fixtureRoot 'test-entrypoint-paths.json'
+          $directories = @(Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json)
+          $remaining = @($directories | Where-Object { Test-Path -LiteralPath $_ })
+          if ($remaining.Count -gt 0) { throw "Batch test wrapper left temporary user data behind." }
       - run: bun test packages/coding-agent/test/sessions/session-writer-lock-target.test.ts
       - name: Run native lock smoke and process contract
         shell: bash
