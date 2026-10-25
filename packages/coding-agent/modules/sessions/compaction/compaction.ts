@@ -74,7 +74,6 @@ import {
 	type CompactionTriggerReason,
 	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	MAX_COMPACTION_SUMMARY_INPUT_TOKENS,
-	MAX_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	MAX_COMPACTION_SUMMARY_REQUESTS,
 	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	type PreparedSummaryRequest,
@@ -214,11 +213,6 @@ export type CompactSessionInput = {
 	signal?: AbortSignal;
 	/** The Agent Turn that initiated this compaction, for diagnostics and lifecycle callbacks. */
 	turnId?: AgentTurnId;
-	/**
-	 * Why the selected summary target cannot generate one. Defers the failure
-	 * until generation is needed, so a Plugin-supplied summary still compacts.
-	 */
-	summaryModelFailure?: string;
 	recordSummaryUsage?: (input: {
 		id: SessionUsageEntryId;
 		model: ProviderModelSelection;
@@ -1077,7 +1071,6 @@ const resolveSummaryOutputBudget = (
 		contextLimit - retainedTokens - requestOverheadTokens - reserveTokens;
 	return Math.floor(
 		Math.min(
-			reserveTokens,
 			configuredMaximum,
 			summaryContextAvailable,
 			conversationContextAvailable
@@ -1457,10 +1450,7 @@ type SummaryChainBudget = Readonly<{
 const resolveSummaryChainBudget = (
 	settings: CompactSessionInput["settings"]
 ): SummaryChainBudget => {
-	const outputTokenBudget = Math.min(
-		MAX_COMPACTION_SUMMARY_OUTPUT_TOKENS,
-		configuredSummaryOutputTokens(settings)
-	);
+	const outputTokenBudget = configuredSummaryOutputTokens(settings);
 	const maxRequestCount = Math.min(
 		MAX_COMPACTION_SUMMARY_REQUESTS,
 		Math.floor(outputTokenBudget / MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS)
@@ -1741,12 +1731,6 @@ const produceCompactionSummary = async ({
 		return validateLifecycleSummary(lifecycleSummary, {
 			maxOutputTokens: resolveLifecycleSummaryBudget(input.settings),
 		});
-	}
-	if (input.summaryModelFailure !== undefined) {
-		throw new SessionCompactionError(
-			"summary-failed",
-			input.summaryModelFailure
-		);
 	}
 	const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
 	if (selectedSummaryGenerator === undefined) {

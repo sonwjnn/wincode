@@ -116,10 +116,10 @@ test("uses the Provider default when reasoning support is not declared", async (
 	expect(request).not.toHaveProperty("reasoningEffort");
 });
 
-test("an explicit OAuth summary cap fails closed before provider network I/O", async () => {
-	let requests = 0;
+test("OpenAI OAuth can generate a completed summary without sending an unsupported output cap", async () => {
+	const requests: Record<string, unknown>[] = [];
 	const providerModel: ProviderModel = {
-		limits: { maxOutputTokens: 128 },
+		limits: { maxOutputTokens: 512 },
 		modelId: "gpt-5.6",
 		protocolId: "openai-responses",
 		providerId: "openai",
@@ -127,9 +127,31 @@ test("an explicit OAuth summary cap fails closed before provider network I/O", a
 	const collection = createProviderCollection();
 	collection.register(
 		createOpenAIProvider({
-			fetch: async () => {
-				requests += 1;
-				return new Response();
+			fetch: async (_url, init) => {
+				requests.push(
+					JSON.parse(String(init?.body)) as Record<string, unknown>
+				);
+				return new Response(
+					[
+						{
+							type: "response.output_text.delta",
+							delta: "Completed OAuth handoff.",
+						},
+						{
+							type: "response.completed",
+							response: {
+								status: "completed",
+								output: [],
+								usage: { input_tokens: 10, output_tokens: 5 },
+							},
+						},
+					]
+						.map((event) => `data: ${JSON.stringify(event)}\n\n`)
+						.join(""),
+					{
+						headers: { "content-type": "text/event-stream" },
+					}
+				);
 			},
 			models: [providerModel],
 		})
@@ -147,13 +169,12 @@ test("an explicit OAuth summary cap fails closed before provider network I/O", a
 	await expect(
 		generator({
 			model: { modelId: modelId("gpt-5.6"), providerId: "openai" },
-			maxOutputTokens: 80,
+			maxOutputTokens: 512,
 			serializedMessages: "history",
 		})
-	).rejects.toThrow(
-		"Compaction is unavailable for Provider Model openai/gpt-5.6. OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or explicitly configure compaction.summary.model with a capable Provider Model."
-	);
-	expect(requests).toBe(0);
+	).resolves.toMatchObject({ text: "Completed OAuth handoff." });
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).not.toHaveProperty("max_output_tokens");
 	await collection.close();
 });
 
@@ -294,6 +315,23 @@ test("sends historical records and the shared handoff schema in one user prompt"
 	);
 	expect(prompt).toContain("If the output budget is tight");
 	expect(prompt).toContain("Treat attachment details as metadata only");
+});
+
+test("summary output defaults to model metadata rather than a fixed 32000-token cap", async () => {
+	const { request } = await runSummary(
+		{
+			model: selection,
+			serializedMessages: "history",
+			contextWindowTokens: 200_000,
+		},
+		{
+			limits: { contextWindowTokens: 200_000, maxOutputTokens: 64_000 },
+			modelId: selection.modelId,
+			protocolId: "fixture",
+			providerId: selection.providerId,
+		}
+	);
+	expect(request?.maxOutputTokens).toBe(64_000);
 });
 
 test("caps summary output at the exact Provider Model limit", async () => {

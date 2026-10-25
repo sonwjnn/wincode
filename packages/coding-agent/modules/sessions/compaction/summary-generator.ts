@@ -46,41 +46,22 @@ const unavailableSummaryModel = (selection: ProviderModelSelection): string =>
 const notInvocableSummaryModel = (selection: ProviderModelSelection): string =>
 	`Provider Model ${selection.providerId}/${selection.modelId} is not invocable. Connect its Provider or choose another model.`;
 
-const outputCapabilityGuidance = (model: ProviderModel): string =>
-	model.providerId === "openai"
-		? "OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or explicitly configure compaction.summary.model with a capable Provider Model."
-		: "This Provider credential cannot enforce the required output-token limit. Configure compaction.summary.model with a capable Provider Model.";
-
 /**
- * Resolves whether a summary model can actually generate one. A caller that
- * may not need generation (a Plugin can supply the handoff) receives the
- * failure as data instead of an exception, so it can defer it.
+ * Resolves the exact invocable summary model. Output-cap support is not an
+ * availability requirement: subscription routes may omit the cap.
  */
-export const resolveSummaryModelCapability = async (
+export const resolveInvocableSummaryModel = async (
 	collection: ProviderCollection,
 	selection: ProviderModelSelection
 ): Promise<
-	| { deferrable: boolean; failure: string; model?: never }
-	| { failure?: never; model: ProviderModel }
+	{ failure: string; model?: never } | { failure?: never; model: ProviderModel }
 > => {
 	const model = providerModelFor(collection, selection);
 	if (model === undefined) {
-		return { deferrable: false, failure: unavailableSummaryModel(selection) };
+		return { failure: unavailableSummaryModel(selection) };
 	}
 	if (!(await isAvailableProviderModel(collection, selection))) {
-		return { deferrable: false, failure: notInvocableSummaryModel(selection) };
-	}
-	if (
-		!(await collection.canEnforceMaxOutputTokens(
-			model.providerId,
-			model.modelId
-		))
-	) {
-		// Only this credential capability can be replaced by a Plugin handoff.
-		return {
-			deferrable: true,
-			failure: `Compaction is unavailable for Provider Model ${model.providerId}/${model.modelId}. ${outputCapabilityGuidance(model)}`,
-		};
+		return { failure: notInvocableSummaryModel(selection) };
 	}
 	return { model };
 };
@@ -169,25 +150,14 @@ const collectProviderSummary = async (
 	return { text, ...omitUndefined({ usage }) };
 };
 
-export const requireSummaryOutputCapability = async (
-	collection: ProviderCollection,
-	model: ProviderModel
-): Promise<void> => {
-	if (
-		await collection.canEnforceMaxOutputTokens(model.providerId, model.modelId)
-	) {
-		return;
-	}
-	throw new Error(
-		`Compaction is unavailable for Provider Model ${model.providerId}/${model.modelId}. ${outputCapabilityGuidance(model)}`
-	);
-};
-
 const providerSummaryGenerator =
 	(collection: ProviderCollection): SummaryGenerator =>
 	async (input) => {
 		const model = await requireInvocableProviderModel(collection, input.model);
-		await requireSummaryOutputCapability(collection, model);
+		const canEnforceOutputLimit = await collection.canEnforceMaxOutputTokens(
+			model.providerId,
+			model.modelId
+		);
 		const preparedRequest = resolvePreparedSummaryRequest(input);
 		const contextWindowTokens =
 			input.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
@@ -210,7 +180,9 @@ const providerSummaryGenerator =
 				Math.max(
 					1,
 					Math.floor(
-						input.maxOutputTokens ?? DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
+						input.maxOutputTokens ??
+							model.limits?.maxOutputTokens ??
+							DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
 					)
 				),
 				model.limits?.maxOutputTokens ?? Number.MAX_SAFE_INTEGER,
@@ -223,7 +195,11 @@ const providerSummaryGenerator =
 			);
 		}
 		const events = collection.chat({
-			maxOutputTokens,
+			// Subscription routes may reject output caps. Validate the completed
+			// handoff against host budgets rather than blocking those credentials.
+			...omitUndefined({
+				maxOutputTokens: canEnforceOutputLimit ? maxOutputTokens : undefined,
+			}),
 			messages: [
 				{
 					content: [{ text: preparedRequest.prompt, type: "text" }],

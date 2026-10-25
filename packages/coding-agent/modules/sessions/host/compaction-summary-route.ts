@@ -7,7 +7,7 @@ import {
 import type { SessionId } from "@/shared/identifiers";
 import type { CompactSessionInput } from "../compaction/compaction";
 import { SessionCompactionError } from "../compaction/error";
-import { resolveSummaryModelCapability } from "../compaction/summary-generator";
+import { resolveInvocableSummaryModel } from "../compaction/summary-generator";
 import { DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS } from "../compaction/types";
 import { resolveContextWindowTokens } from "../usage/context-window";
 import { assertPluginProviderSelectionOwner } from "./agent-session-turn-runner";
@@ -47,31 +47,10 @@ export const resolveCompactionSummaryRoute = async (
 		collection,
 		sessionId
 	);
-	const resolved = await resolveSummaryModelCapability(collection, selection);
+	const resolved = await resolveInvocableSummaryModel(collection, selection);
 	if (resolved.model === undefined) {
-		if (!resolved.deferrable) {
-			// An unknown or unauthenticated configured target stays a hard error;
-			// a Plugin handoff must not mask a broken summary configuration.
-			throw new SessionCompactionError("summary-failed", resolved.failure);
-		}
-		// A Plugin may supply the handoff instead of generating one, so this
-		// capability failure is deferred to where generation is needed.
-		// Chat thinking never becomes summary thinking; only an explicit policy
-		// selection is retained for provenance.
-		const { thinkingLevel: _chatThinking, ...request } = input;
-		return {
-			...request,
-			summaryModel: selection,
-			summaryModelFailure: resolved.failure,
-			settings: {
-				...input.settings,
-				summaryMaxOutputTokens:
-					policy?.maxOutputTokens ??
-					input.settings.summaryMaxOutputTokens ??
-					DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
-			},
-			...omitUndefined({ thinkingLevel: policy?.thinkingLevel }),
-		};
+		// A Plugin handoff must not hide an unknown or unauthenticated target.
+		throw new SessionCompactionError("summary-failed", resolved.failure);
 	}
 	const { model } = resolved;
 	const contextLimit = resolveContextWindowTokens(
@@ -101,6 +80,7 @@ export const resolveCompactionSummaryRoute = async (
 			summaryMaxOutputTokens: Math.min(
 				policy?.maxOutputTokens ??
 					input.settings.summaryMaxOutputTokens ??
+					model.limits?.maxOutputTokens ??
 					DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 				model.limits?.maxOutputTokens ?? Number.MAX_SAFE_INTEGER
 			),

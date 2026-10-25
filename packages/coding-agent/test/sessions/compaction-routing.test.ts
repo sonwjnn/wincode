@@ -216,11 +216,34 @@ test("an unauthenticated summary provider dispatches nothing without falling bac
 	expect(requests).toHaveLength(0);
 });
 
-test("a summary credential that cannot enforce the output cap dispatches nothing", async () => {
+test("summary output uses model metadata instead of the conversation reserve when the handoff fits", async () => {
+	const { compact, requests } = fixture({ model: "anthropic/summary/large" });
+	await compact();
+	expect(requests[0]?.maxOutputTokens).toBe(4096);
+});
+
+test("a large-output summary model is not capped by the legacy 32000-token chain allocation", async () => {
+	const { compact, requests } = fixture(
+		{ model: "anthropic/summary/large" },
+		messages,
+		{
+			...summaryModel,
+			limits: { contextWindowTokens: 200_000, maxOutputTokens: 64_000 },
+		},
+		{ trusted: [], registered: [] },
+		undefined,
+		200_000
+	);
+	await compact();
+	expect(requests[0]?.maxOutputTokens).toBe(64_000);
+});
+
+test("an invocable summary credential can compact without a provider-enforced output cap", async () => {
 	const { compact, requests, collection } = fixture();
 	collection.canEnforceMaxOutputTokens = async () => false;
-	await expect(compact()).rejects.toThrow("cannot enforce");
-	expect(requests).toHaveLength(0);
+	await expect(compact()).resolves.toBeDefined();
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).not.toHaveProperty("maxOutputTokens");
 });
 
 test("an ownerless custom summary provider is rejected before dispatch", async () => {
@@ -413,17 +436,18 @@ test("a Plugin handoff is not limited by the generated summary prompt room", asy
 	expect(result.entry.summary.text).toContain("Plugin handoff.");
 });
 
-test("without a Plugin summary an incapable target still fails with its guidance", async () => {
-	const { compact, requests, collection } = fixture({}, messages, summaryModel);
+test("without a Plugin summary an invocable uncapped target generates a handoff", async () => {
+	const { compact, requests, collection } = fixture(
+		{ model: "anthropic/summary/large" },
+		messages,
+		summaryModel
+	);
 	collection.canEnforceMaxOutputTokens = async () => false;
 
-	await expect(compact()).rejects.toMatchObject({
-		code: "summary-failed",
-		message: expect.stringContaining(
-			"cannot enforce the required output-token"
-		),
-	});
-	expect(requests).toHaveLength(0);
+	const result = await compact();
+	expect(result.entry.summary.text).not.toBeEmpty();
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).not.toHaveProperty("maxOutputTokens");
 });
 
 test("a deferred summary target does not inherit the conversation thinking level", async () => {

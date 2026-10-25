@@ -716,7 +716,7 @@ test("fallback estimation follows canonical visible content", () => {
 	]);
 	expect(roleToolEstimate).toBeGreaterThan(shortEstimate);
 });
-test("caps one summary attempt at the explicit reserve after prompt-fit budgeting", async () => {
+test("summary output leaves room for the retained conversation, overhead, and next response reserve", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async (_input: SummaryGeneratorInput) => ({
 		text: "budgeted summary",
@@ -755,7 +755,8 @@ test("caps one summary attempt at the explicit reserve after prompt-fit budgetin
 	});
 
 	expect(summaryGenerator).toHaveBeenCalledTimes(1);
-	expect(summaryGenerator.mock.calls[0]?.[0].maxOutputTokens).toBe(800);
+	// 2000 context - 20 retained - 10 request overhead - 800 next-response reserve.
+	expect(summaryGenerator.mock.calls[0]?.[0].maxOutputTokens).toBe(1170);
 });
 
 test("limits summary size by the rebuilt conversation's real request overhead and reserve", async () => {
@@ -1054,6 +1055,7 @@ test("rejects an injected summary that exceeds the planned output budget", async
 			},
 			model,
 			settings: {
+				summaryMaxOutputTokens: 256,
 				enabled: true,
 				keepRecentTokens: 100,
 				modelContextLimit: 8192,
@@ -2542,7 +2544,7 @@ test("a throwing completed observer cannot undo a committed compaction", async (
 	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
-test("a Plugin summary defers an unusable summary target without calling it", async () => {
+test("a Plugin summary avoids invoking a summary generator", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "generated" }));
 	const completed: SessionCompaction[] = [];
@@ -2565,7 +2567,6 @@ test("a Plugin summary defers an unusable summary target without calling it", as
 		},
 		model,
 		settings,
-		summaryModelFailure: "The summary target cannot enforce its output cap.",
 		trigger: "manual",
 	});
 
@@ -2574,35 +2575,6 @@ test("a Plugin summary defers an unusable summary target without calling it", as
 		"Plugin handoff without a model."
 	);
 	expect(completed).toEqual([result.entry]);
-});
-
-test("an unusable summary target fails with its guidance when no Plugin supplies a summary", async () => {
-	const store = makeStore();
-	const summaryGenerator = mock(async () => ({ text: "generated" }));
-	const compaction = createSessionCompaction({
-		store,
-		summaryGenerator,
-		estimateTokens: (messages) => messages.length,
-	});
-
-	await expect(
-		compaction.compact({
-			session: {
-				messages: lifecycleMessages,
-				sessionId: sessionId("session-unusable-target"),
-			},
-			model,
-			settings,
-			summaryModelFailure:
-				"Compaction is unavailable for Provider Model openai/gpt-5.6. OpenAI OAuth cannot enforce the required output-token limit.",
-			trigger: "manual",
-		})
-	).rejects.toMatchObject({
-		code: "summary-failed",
-		message: expect.stringContaining("OpenAI OAuth cannot enforce"),
-	});
-	expect(summaryGenerator).not.toHaveBeenCalled();
-	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
 test("a Plugin summary needs no conversation context-window limit", async () => {

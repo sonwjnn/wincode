@@ -4212,7 +4212,7 @@ describe("Session Host lifetime", () => {
 			);
 		});
 	});
-	test("automatic compaction uses a Plugin summary when the summary target cannot enforce an output cap", async () => {
+	test("automatic compaction persists a generated summary when the credential cannot enforce an output cap", async () => {
 		const seeded = await seedSession("auto-plugin-summary", "completed");
 		const previousStepScript = recorder.stepScript;
 		const summaryRequests: ProviderChatRequest[] = [];
@@ -4238,7 +4238,7 @@ describe("Session Host lifetime", () => {
 					lifecycle: {
 						before: async (context) => {
 							triggers.push(context.trigger);
-							return { summary: "Automatic Plugin handoff." };
+							return;
 						},
 						completed: async (entry) => {
 							completed.push(entry);
@@ -4293,12 +4293,13 @@ describe("Session Host lifetime", () => {
 			if (latest === null) {
 				throw new Error("Automatic compaction did not persist an entry.");
 			}
-			// The automatic trigger compacted without a summary-model request.
-			expect(summaryRequests).toEqual([]);
+			// Subscription credentials may omit the cap but still publish a completed handoff.
+			expect(summaryRequests).toHaveLength(1);
+			expect(summaryRequests[0]).not.toHaveProperty("maxOutputTokens");
 			expect(triggers).toContain("threshold");
 			expect(latest.trigger).toBe("threshold");
 			expect(latest.id).not.toBe(seeded.compaction);
-			expect(latest.summary.text).toContain("Automatic Plugin handoff.");
+			expect(latest.summary.text).toContain("model summary");
 			expect(completed.map(({ id }) => id)).toContain(latest.id);
 			expect(host.getSnapshot().compactionError).toBeNull();
 		} finally {
