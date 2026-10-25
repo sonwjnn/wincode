@@ -222,7 +222,7 @@ test("summary output uses model metadata instead of the conversation reserve whe
 	expect(requests[0]?.maxOutputTokens).toBe(4096);
 });
 
-test("a large-output summary model is not capped by the legacy 32000-token chain allocation", async () => {
+test("a large-output summary model uses its declared output limit without a fallback cap", async () => {
 	const { compact, requests } = fixture(
 		{ model: "anthropic/summary/large" },
 		messages,

@@ -830,13 +830,9 @@ test("rejects an escaped summary request before generation or persistence", asyn
 	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
-test("rejects a summary chain beyond four requests without committing a partial handoff", async () => {
+test("does not chain an oversized history into partial summary requests", async () => {
 	const store = makeStore();
-	const summaryInputs: SummaryGeneratorInput[] = [];
-	const summaryGenerator = mock(async (input: SummaryGeneratorInput) => {
-		summaryInputs.push(input);
-		return { text: "bounded intermediate handoff" };
-	});
+	const summaryGenerator = mock(async () => ({ text: "partial handoff" }));
 	const compaction = createSessionCompaction({ store, summaryGenerator });
 	const messages = Array.from({ length: 32 }, (_, index) => [
 		message(
@@ -855,73 +851,69 @@ test("rejects a summary chain beyond four requests without committing a partial 
 		compaction.compact({
 			session: {
 				messages,
-				sessionId: sessionId("session-summary-chain-request-limit"),
+				sessionId: sessionId("session-summary-request-does-not-fit"),
 			},
 			model,
 			settings: {
 				...settings,
-				summaryContextLimit: 4096,
+				summaryContextLimit: 10_000,
 				summaryMaxOutputTokens: 1024,
 			},
 			trigger: "manual",
 		})
-	).rejects.toThrow("4-request limit");
+	).rejects.toMatchObject({ code: "context-still-too-large" });
 
-	expect(summaryInputs.length).toBeGreaterThan(0);
-	expect(summaryInputs.length).toBeLessThanOrEqual(4);
-	expect(
-		summaryInputs.reduce(
-			(total, { maxOutputTokens }) => total + (maxOutputTokens ?? 0),
-			0
-		)
-	).toBeLessThanOrEqual(1024);
+	expect(summaryGenerator).not.toHaveBeenCalled();
 	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
-test("rejects aggregate estimated summary input above 128,000 tokens without persisting", async () => {
+test("sends the complete eligible history in one request when it fits the summary context", async () => {
 	const store = makeStore();
 	const summaryInputs: SummaryGeneratorInput[] = [];
 	const summaryGenerator = mock(async (input: SummaryGeneratorInput) => {
 		summaryInputs.push(input);
-		return { text: "bounded intermediate handoff" };
+		return { text: "single complete handoff" };
 	});
 	const compaction = createSessionCompaction({ store, summaryGenerator });
 	const largeTurn = (index: number) => [
 		message(
 			`summary-input-user-${index}`,
 			"user",
-			`user ${index} ${"x".repeat(80_000)}`
+			`history-user-${index} ${"x".repeat(80_000)}`
 		),
 		message(
 			`summary-input-assistant-${index}`,
 			"assistant",
-			`assistant ${index} ${"y".repeat(80_000)}`
+			`history-assistant-${index} ${"y".repeat(80_000)}`
 		),
 	];
 
-	await expect(
-		compaction.compact({
-			session: {
-				messages: Array.from({ length: 12 }, (_, index) =>
-					largeTurn(index + 1)
-				).flat(),
-				sessionId: sessionId("session-summary-chain-input-limit"),
-			},
-			model,
-			settings: {
-				...settings,
-				keepRecentTokens: 1,
-				modelContextLimit: 1_000_000,
-				summaryContextLimit: 1_000_000,
-				summaryMaxOutputTokens: 512,
-			},
-			trigger: "manual",
-		})
-	).rejects.toThrow("128000-token estimated input budget");
+	const result = await compaction.compact({
+		session: {
+			messages: Array.from({ length: 12 }, (_, index) =>
+				largeTurn(index + 1)
+			).flat(),
+			sessionId: sessionId("session-summary-single-request"),
+		},
+		model,
+		settings: {
+			...settings,
+			keepRecentTokens: 1,
+			modelContextLimit: 1_000_000,
+			summaryContextLimit: 1_000_000,
+			summaryMaxOutputTokens: 4096,
+		},
+		trigger: "manual",
+	});
 
-	expect(summaryInputs.length).toBeGreaterThan(0);
 	expect(summaryInputs).toHaveLength(1);
-	expect(store.appendCompaction).not.toHaveBeenCalled();
+	expect(summaryInputs[0]?.serializedMessages).toContain("history-user-1");
+	expect(summaryInputs[0]?.serializedMessages).toContain(
+		"history-assistant-11"
+	);
+	expect(summaryInputs[0]?.serializedMessages).not.toContain("history-user-12");
+	expect(result.entry.summary.text).toBe("single complete handoff");
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
 test("does not generate or persist when the summary budget is not viable", async () => {
@@ -1037,38 +1029,39 @@ test("repeated compaction passes the prior summary and only the new compacted sp
 	);
 });
 
-test("rejects an injected summary that exceeds the planned output budget", async () => {
+test("accepts a completed summary above its planned output budget when it reduces context", async () => {
 	const store = makeStore();
-	const summaryGenerator = mock(async () => ({ text: "x".repeat(1200) }));
+	const summaryText = "x".repeat(1200);
+	const summaryGenerator = mock(async () => ({ text: summaryText }));
 	const compaction = createSessionCompaction({ store, summaryGenerator });
 
-	await expect(
-		compaction.compact({
-			session: {
-				messages: [
-					message("u1", "user", "a".repeat(20_000)),
-					message("a1", "assistant", "old answer"),
-					message("u2", "user", "current request"),
-					message("a2", "assistant", "current answer"),
-				],
-				sessionId: sessionId("session-summary-output-overrun"),
-			},
-			model,
-			settings: {
-				summaryMaxOutputTokens: 256,
-				enabled: true,
-				keepRecentTokens: 100,
-				modelContextLimit: 8192,
-				reserveTokens: 256,
-				thresholdTokens: null,
-			},
-			trigger: "manual",
-		})
-	).rejects.toMatchObject({ code: "summary-failed" });
+	const result = await compaction.compact({
+		session: {
+			messages: [
+				message("u1", "user", "a".repeat(20_000)),
+				message("a1", "assistant", "old answer"),
+				message("u2", "user", "current request"),
+				message("a2", "assistant", "current answer"),
+			],
+			sessionId: sessionId("session-summary-output-overrun"),
+		},
+		model,
+		settings: {
+			summaryMaxOutputTokens: 256,
+			enabled: true,
+			keepRecentTokens: 100,
+			modelContextLimit: 8192,
+			reserveTokens: 256,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
 	expect(summaryGenerator).toHaveBeenCalledWith(
 		expect.objectContaining({ maxOutputTokens: 256 })
 	);
-	expect(store.appendCompaction).not.toHaveBeenCalled();
+	expect(result.entry.summary.text).toBe(summaryText);
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
 test("a repeated compaction must reduce the current context, not the source transcript", async () => {
@@ -1247,6 +1240,71 @@ test("summary failure and cancellation do not append durable state", async () =>
 			signal: controller.signal,
 		})
 	).rejects.toMatchObject({ code: "cancelled" });
+});
+
+test("persists a completed Provider summary that exceeds its planned output budget", async () => {
+	const store = makeStore();
+	const oversizedHandoff = `completed handoff ${"x".repeat(1200)}`;
+	let requestedOutputTokens: number | undefined;
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 65_536, maxOutputTokens: 1024 },
+		modelId: "fixture-summary-over-budget",
+		protocolId: "fixture",
+		providerId: "fixture",
+	};
+	const provider: Provider = {
+		id: providerModel.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		canEnforceMaxOutputTokens: () => true,
+		async *streamChat(request) {
+			requestedOutputTokens = request.maxOutputTokens;
+			yield { delta: oversizedHandoff, type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 12, outputTokens: 300 },
+			};
+			yield { completion: { kind: "completed" }, type: "finish" };
+		},
+	};
+	const collection = createProviderCollection();
+	collection.register(provider);
+	await collection.setCredential("fixture", { token: "fixture-only" });
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: createProviderSummaryGenerator(collection),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	try {
+		const result = await compaction.compact({
+			session: {
+				messages: [
+					message("u1", "user", "first"),
+					message("a1", "assistant", "answer"),
+					message("u2", "user", "second"),
+					message("a2", "assistant", "answer"),
+				],
+				sessionId: sessionId("session-completed-provider-summary-over-budget"),
+			},
+			model: {
+				modelId: modelId(providerModel.modelId),
+				providerId: providerModel.providerId,
+			},
+			settings: { ...settings, summaryMaxOutputTokens: 256 },
+			trigger: "manual",
+		});
+
+		expect(requestedOutputTokens).toBe(256);
+		expect(result.entry.summary.text).toContain(oversizedHandoff);
+		expect(result.entry.summarizationUsage).toMatchObject({
+			inputTokens: 12,
+			outputTokens: 300,
+		});
+		expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+	} finally {
+		await collection.close();
+	}
 });
 
 test("an output-limited Provider summary never becomes durable handoff context", async () => {
@@ -1830,12 +1888,12 @@ test("does not recompact an unchanged split transcript", async () => {
 
 test("splits the latest oversized turn without retaining older context", async () => {
 	const store = makeStore();
-	let serialized = "";
+	const serialized: string[] = [];
 	const compaction = createSessionCompaction({
 		generateId: () => compactionId("entry-latest-split"),
 		store,
 		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
-			serialized = input.serializedMessages;
+			serialized.push(input.serializedMessages);
 			return { text: "latest split summary" };
 		}),
 		estimateTokens: (messages) =>
@@ -1886,7 +1944,131 @@ test("splits the latest oversized turn without retaining older context", async (
 		sessionMessageId("u2"),
 		sessionMessageId("a2"),
 	]);
-	expect(serialized).toContain("old request");
+	expect(serialized).toHaveLength(2);
+	expect(serialized[0]).toContain("old request");
+	expect(serialized[0]).not.toContain("current request");
+	expect(serialized[1]).toContain("current request");
+	expect(serialized[1]).not.toContain("old request");
+});
+
+test("summarizes split-turn history and unfinished prefix in separate requests", async () => {
+	const store = makeStore();
+	const summaryInputs: SummaryGeneratorInput[] = [];
+	let generated = 0;
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
+			summaryInputs.push(input);
+			generated += 1;
+			return {
+				text: generated === 1 ? "history handoff" : "turn prefix handoff",
+				usage: { inputTokens: 10, outputTokens: 5 },
+			};
+		}),
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+	const assistant = fromPartial<SessionMessage>({
+		id: sessionMessageId("split-turn-assistant"),
+		parts: [
+			{ text: "prefix one", type: "text" },
+			{ text: "prefix two", type: "text" },
+			{ text: "recent suffix", type: "text" },
+		],
+		role: "assistant",
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: [
+				message("split-history-user", "user", "older request"),
+				message("split-history-assistant", "assistant", "older answer"),
+				message("split-current-user", "user", "current request"),
+				assistant,
+			],
+			sessionId: sessionId("session-split-turn-summary-requests"),
+		},
+		model,
+		settings: {
+			...settings,
+			keepRecentTokens: 2,
+			summaryMaxOutputTokens: 1024,
+		},
+		trigger: "manual",
+	});
+
+	expect(summaryInputs).toHaveLength(2);
+	expect(summaryInputs[0]?.serializedMessages).toContain("older request");
+	expect(summaryInputs[0]?.serializedMessages).not.toContain("current request");
+	expect(summaryInputs[1]?.serializedMessages).toContain("current request");
+	expect(summaryInputs[1]?.serializedMessages).toContain("prefix two");
+	expect(summaryInputs[1]?.serializedMessages).not.toContain("older request");
+	expect(result.entry.summary.text).toContain("history handoff");
+	expect(result.entry.summary.text).toContain("Turn Context (split turn)");
+	expect(result.entry.summary.text).toContain("turn prefix handoff");
+	expect(result.entry.summarizationUsage).toMatchObject({
+		inputTokens: 20,
+		outputTokens: 10,
+	});
+});
+
+test("a failed split-turn prefix request never commits the completed history handoff", async () => {
+	const store = makeStore();
+	const reportedUsage: { inputTokens: number; outputTokens: number }[] = [];
+	let requests = 0;
+	const summaryGenerator = mock(async () => {
+		requests += 1;
+		if (requests === 2) {
+			throw new Error("turn prefix summary unavailable");
+		}
+		return {
+			text: "completed history handoff",
+			usage: { inputTokens: 10, outputTokens: 5 },
+		};
+	});
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+	const assistant = fromPartial<SessionMessage>({
+		id: sessionMessageId("split-failure-assistant"),
+		parts: [
+			{ text: "prefix one", type: "text" },
+			{ text: "prefix two", type: "text" },
+			{ text: "recent suffix", type: "text" },
+		],
+		role: "assistant",
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: [
+					message("split-failure-history-user", "user", "older request"),
+					message(
+						"split-failure-history-assistant",
+						"assistant",
+						"older answer"
+					),
+					message("split-failure-current-user", "user", "current request"),
+					assistant,
+				],
+				sessionId: sessionId("session-split-turn-prefix-failure"),
+			},
+			model,
+			settings: { ...settings, keepRecentTokens: 2 },
+			trigger: "manual",
+			recordSummaryUsage: async ({ usage }) => {
+				reportedUsage.push(usage);
+			},
+		})
+	).rejects.toMatchObject({ code: "summary-failed" });
+
+	expect(summaryGenerator).toHaveBeenCalledTimes(2);
+	expect(reportedUsage).toEqual([{ inputTokens: 10, outputTokens: 5 }]);
+	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
 test("resumes the next summary span after a split-turn boundary", async () => {
@@ -2023,9 +2205,12 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 		sessionMessageId("u2"),
 		sessionMessageId("a2"),
 	]);
+	expect(serialized).toHaveLength(3);
 	expect(serialized[1]).toContain("first suffix");
 	expect(serialized[1]).not.toContain("first prefix");
-	expect(serialized[1]).toContain("second prefix");
+	expect(serialized[1]).not.toContain("second prefix");
+	expect(serialized[2]).toContain("second prefix");
+	expect(serialized[2]).not.toContain("first prefix");
 });
 
 test("keeps a split tool call paired with its result", async () => {

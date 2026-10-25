@@ -390,7 +390,7 @@ const seedSession = async (
 	};
 };
 
-const seedSummaryChainSession = async (
+const seedCompactionHistorySession = async (
 	prefix: string
 ): Promise<{ sessionId: SessionId }> => {
 	const seeded = await seedSession(prefix, "completed");
@@ -2436,12 +2436,12 @@ describe("Session Host opening", () => {
 			await host.shutdown();
 		}
 	});
-	test("bounded multi-request summaries commit once and restore from durable Session history", async () => {
-		const seeded = await seedSummaryChainSession("bounded-summary-chain");
+	test("single-request summaries commit once and restore from durable Session history", async () => {
+		const seeded = await seedCompactionHistorySession("single-summary-request");
 
 		const smallSummaryModel: ProviderModel = {
 			capabilities: ["text"],
-			limits: { contextWindowTokens: 4096, maxOutputTokens: 8192 },
+			limits: { contextWindowTokens: 20_000, maxOutputTokens: 8192 },
 			modelId: "gpt-5.6-summary-small",
 			pricing: { inputPerMillionTokensUsd: 1, outputPerMillionTokensUsd: 1 },
 			protocolId: "fixture",
@@ -2462,7 +2462,7 @@ describe("Session Host opening", () => {
 					model: "openai/gpt-5.6-summary-small",
 				},
 			},
-			contextWindowTokens: 12_000,
+			contextWindowTokens: 20_000,
 		};
 		const baseCapabilities = createCapabilities(store, document);
 		const snapshot: ConfigSnapshot = {
@@ -2526,26 +2526,14 @@ describe("Session Host opening", () => {
 				trigger: "manual",
 			});
 
-			expect(summaryRequests.length).toBeGreaterThan(1);
-			expect(summaryRequests.length).toBeLessThanOrEqual(4);
+			expect(summaryRequests).toHaveLength(1);
 			expect(
 				summaryRequests.every(
 					({ estimatedInputTokens, maxOutputTokens }) =>
-						estimatedInputTokens + 256 + maxOutputTokens <= 12_000
+						estimatedInputTokens + 256 + maxOutputTokens <= 20_000
 				)
 			).toBe(true);
-			expect(
-				summaryRequests.reduce(
-					(total, { estimatedInputTokens }) => total + estimatedInputTokens,
-					0
-				)
-			).toBeLessThanOrEqual(128_000);
-			expect(
-				summaryRequests.reduce(
-					(total, { maxOutputTokens }) => total + maxOutputTokens,
-					0
-				)
-			).toBeLessThanOrEqual(32_000);
+			expect(summaryRequests[0]?.maxOutputTokens).toBeLessThanOrEqual(512);
 			expect(result.entry.summary.text).toBe(
 				`bounded handoff ${summaryRequests.length}`
 			);
@@ -2605,12 +2593,12 @@ describe("Session Host opening", () => {
 			await host?.shutdown();
 		}
 	});
-	test("failed summary chains retain reported attempt usage without publishing partial context", async () => {
-		const seeded = await seedSummaryChainSession("failed-summary-chain");
+	test("failed summary requests retain reported usage without publishing partial context", async () => {
+		const seeded = await seedCompactionHistorySession("failed-summary-request");
 
 		const smallSummaryModel: ProviderModel = {
 			capabilities: ["text"],
-			limits: { contextWindowTokens: 4096, maxOutputTokens: 8192 },
+			limits: { contextWindowTokens: 20_000, maxOutputTokens: 8192 },
 			modelId: "gpt-5.6-summary-failing",
 			protocolId: "fixture",
 			providerId: "openai",
@@ -2630,7 +2618,7 @@ describe("Session Host opening", () => {
 					model: "openai/gpt-5.6-summary-failing",
 				},
 			},
-			contextWindowTokens: 12_000,
+			contextWindowTokens: 20_000,
 		};
 		const baseCapabilities = createCapabilities(store, document);
 		const snapshot: ConfigSnapshot = {
@@ -2660,7 +2648,7 @@ describe("Session Host opening", () => {
 				type: "usage",
 				usage: { inputTokens: 150, outputTokens: 3 },
 			};
-			if (summaryAttempts === 2) {
+			if (summaryAttempts === 1) {
 				throw new Error("synthetic summary transport failure");
 			}
 			yield { type: "finish" };
@@ -2681,15 +2669,12 @@ describe("Session Host opening", () => {
 			).rejects.toMatchObject({ code: "summary-failed" });
 
 			const usageEntries = host.getSessionUsageEntries();
-			expect(summaryAttempts).toBe(2);
-			expect(usageEntries).toHaveLength(2);
+			expect(summaryAttempts).toBe(1);
+			expect(usageEntries).toHaveLength(1);
 			expect(usageEntries.map(({ kind }) => String(kind))).toEqual([
 				"compaction-summary",
-				"compaction-summary",
 			]);
-			expect(usageEntries.map(({ usage }) => usage.outputTokens)).toEqual([
-				3, 3,
-			]);
+			expect(usageEntries.map(({ usage }) => usage.outputTokens)).toEqual([3]);
 			expect(host.getSnapshot().context).toEqual(contextBefore);
 			expect(host.getSnapshot().transcript).toEqual(transcriptBefore);
 			expect(host.getSnapshot().compactions).toHaveLength(

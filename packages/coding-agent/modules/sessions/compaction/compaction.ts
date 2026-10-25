@@ -73,10 +73,7 @@ import {
 	type CompactionSummary,
 	type CompactionTriggerReason,
 	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
-	MAX_COMPACTION_SUMMARY_INPUT_TOKENS,
-	MAX_COMPACTION_SUMMARY_REQUESTS,
 	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
-	type PreparedSummaryRequest,
 	type SessionCompaction,
 	type SummaryGenerator,
 	type SummaryGeneratorInput,
@@ -612,24 +609,6 @@ const resolveToolSafeCutStart = (
 		return boundary < messages.length ? boundary : null;
 	}
 	return null;
-};
-
-const groupSummarySerializationUnits = (
-	messages: readonly SessionMessage[]
-): SessionMessage[][] => {
-	const units: SessionMessage[][] = [];
-	let start = 0;
-	for (let boundary = 1; boundary < messages.length; boundary += 1) {
-		if (resolveToolSafeCutStart(messages, boundary) !== boundary) {
-			continue;
-		}
-		units.push(messages.slice(start, boundary));
-		start = boundary;
-	}
-	if (start < messages.length) {
-		units.push(messages.slice(start));
-	}
-	return units;
 };
 
 const splitsToolPairWithinAssistant = (
@@ -1354,18 +1333,6 @@ const generateCompactionSummary = async (
 			"Compaction summary generation returned no content."
 		);
 	}
-	const estimatedOutputTokens = Math.ceil(generated.text.length / 4);
-	const reportedOutputTokens = generated.usage?.outputTokens ?? 0;
-	if (
-		input.maxOutputTokens !== undefined &&
-		Math.max(estimatedOutputTokens, reportedOutputTokens) >
-			input.maxOutputTokens
-	) {
-		throw new SessionCompactionError(
-			"summary-failed",
-			`Compaction summary exceeded its ${input.maxOutputTokens}-token output budget.`
-		);
-	}
 	return generated;
 };
 
@@ -1400,6 +1367,22 @@ const validateLifecycleSummary = (
 	return { text };
 };
 
+const reportSummaryUsage = (
+	input: CompactSessionInput,
+	attemptId: SessionUsageEntryId
+): SummaryGeneratorInput["reportUsage"] => {
+	const recordUsage = input.recordSummaryUsage;
+	if (recordUsage === undefined) {
+		return;
+	}
+	return (usage) =>
+		recordUsage({
+			id: attemptId,
+			model: input.summaryModel ?? input.model,
+			usage,
+		});
+};
+
 const sumKnownUsageField = (
 	usages: readonly SessionMessageUsage[],
 	key:
@@ -1415,8 +1398,14 @@ const sumKnownUsageField = (
 };
 
 const aggregateSummaryUsage = (
-	usages: readonly SessionMessageUsage[]
+	results: readonly SummaryGeneratorResult[]
 ): SessionMessageUsage | undefined => {
+	if (results.some(({ usage }) => usage === undefined)) {
+		return;
+	}
+	const usages = results.flatMap(({ usage }) =>
+		usage === undefined ? [] : [usage]
+	);
 	if (usages.length === 0) {
 		return;
 	}
@@ -1435,278 +1424,70 @@ const aggregateSummaryUsage = (
 	};
 };
 
-type SummaryRequestPlan = {
-	endUnit: number;
-	input: Omit<SummaryGeneratorInput, "maxOutputTokens">;
-	maxOutputTokens: number;
-	preparedRequest: PreparedSummaryRequest;
-};
-
-type SummaryChainBudget = Readonly<{
-	maxRequestCount: number;
-	outputTokenBudget: number;
-}>;
-
-const resolveSummaryChainBudget = (
-	settings: CompactSessionInput["settings"]
-): SummaryChainBudget => {
-	const outputTokenBudget = configuredSummaryOutputTokens(settings);
-	const maxRequestCount = Math.min(
-		MAX_COMPACTION_SUMMARY_REQUESTS,
-		Math.floor(outputTokenBudget / MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS)
-	);
-	if (maxRequestCount < 1) {
-		throw new SessionCompactionError(
-			"context-still-too-large",
-			`Compaction needs at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} output tokens, but its total configured output allocation is only ${outputTokenBudget}.`
-		);
-	}
-	return { maxRequestCount, outputTokenBudget };
-};
-
-const summaryRequestPlanForRange = ({
-	accumulatedSummary,
-	cutPoint,
-	endUnit,
-	estimateInputTokens,
-	estimateTokens,
-	input,
-	nextUnit,
-	remainingOutputTokens,
-	candidateOutputAllocation,
-	summaryInput,
-	units,
-}: {
-	accumulatedSummary: CompactionSummary | undefined;
-	cutPoint: CutPoint;
-	endUnit: number;
-	estimateInputTokens: number;
-	estimateTokens: (messages: readonly SessionMessage[]) => number;
-	input: CompactSessionInput;
-	nextUnit: number;
-	remainingOutputTokens: number;
-	candidateOutputAllocation: number;
-	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
-	units: readonly SessionMessage[][];
-}): SummaryRequestPlan | undefined => {
-	const candidateInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {
-		...summaryInput,
-		previousSummary: accumulatedSummary,
-		serializedMessages: serializeMessagesForCompaction(
-			units.slice(nextUnit, endUnit).flat()
-		),
-	};
-	const preparedRequest = prepareSummaryRequest(candidateInput);
-	if (
-		estimateInputTokens + preparedRequest.estimatedInputTokens >
-		MAX_COMPACTION_SUMMARY_INPUT_TOKENS
-	) {
-		return;
-	}
-	const availableOutputTokens = resolveSummaryOutputBudget(
-		cutPoint,
-		input.settings,
-		estimateTokens,
-		preparedRequest.estimatedInputTokens
-	);
-	const maxOutputTokens = Math.min(
-		availableOutputTokens,
-		endUnit === units.length ? remainingOutputTokens : candidateOutputAllocation
-	);
-	if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
-		return;
-	}
-	return { endUnit, input: candidateInput, maxOutputTokens, preparedRequest };
-};
-
-const selectSummaryRequest = ({
-	accumulatedSummary,
-	cutPoint,
-	estimateInputTokens,
-	estimateTokens,
-	input,
-	nextUnit,
-	remainingOutputTokens,
-	remainingRequests,
-	summaryInput,
-	units,
-}: {
-	accumulatedSummary: CompactionSummary | undefined;
-	cutPoint: CutPoint;
-	estimateInputTokens: number;
-	estimateTokens: (messages: readonly SessionMessage[]) => number;
-	input: CompactSessionInput;
-	nextUnit: number;
-	remainingOutputTokens: number;
-	remainingRequests: number;
-	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
-	units: readonly SessionMessage[][];
-}): SummaryRequestPlan | undefined => {
-	const candidateOutputAllocation = Math.ceil(
-		remainingOutputTokens / remainingRequests
-	);
-	const planFor = (endUnit: number) =>
-		summaryRequestPlanForRange({
-			accumulatedSummary,
-			cutPoint,
-			endUnit,
-			estimateInputTokens,
-			estimateTokens,
-			input,
-			nextUnit,
-			remainingOutputTokens,
-			candidateOutputAllocation,
-			summaryInput,
-			units,
-		});
-	const finalPlan = planFor(units.length);
-	if (finalPlan !== undefined) {
-		return finalPlan;
-	}
-
-	// Prompt input grows monotonically with each complete serialization unit.
-	let low = nextUnit + 1;
-	let high = units.length - 1;
-	let bestPlan: SummaryRequestPlan | undefined;
-	while (low <= high) {
-		const endUnit = Math.floor((low + high) / 2);
-		const candidate = planFor(endUnit);
-		if (candidate === undefined) {
-			high = endUnit - 1;
-		} else {
-			bestPlan = candidate;
-			low = endUnit + 1;
-		}
-	}
-	return bestPlan;
-};
-
-const reportSummaryUsage = (
-	input: CompactSessionInput,
-	attemptId: SessionUsageEntryId
-): SummaryGeneratorInput["reportUsage"] => {
-	const recordUsage = input.recordSummaryUsage;
-	if (recordUsage === undefined) {
-		return;
-	}
-	return (usage) =>
-		recordUsage({
-			id: attemptId,
-			model: input.summaryModel ?? input.model,
-			usage,
-		});
-};
-
-const generateSummaryChain = async ({
+const generateSummaryRequest = async ({
 	cutPoint,
 	estimateTokens,
 	input,
 	summaryGenerator,
 	summaryInput,
-	summarySpan,
 }: {
 	cutPoint: CutPoint;
 	estimateTokens: (messages: readonly SessionMessage[]) => number;
 	input: CompactSessionInput;
 	summaryGenerator: SummaryGenerator;
 	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
-	summarySpan: readonly SessionMessage[];
 }): Promise<SummaryGeneratorResult> => {
-	const { maxRequestCount, outputTokenBudget } = resolveSummaryChainBudget(
-		input.settings
+	const preparedRequest = prepareSummaryRequest(summaryInput);
+	const maxOutputTokens = resolveSummaryOutputBudget(
+		cutPoint,
+		input.settings,
+		estimateTokens,
+		preparedRequest.estimatedInputTokens
 	);
-	const units = groupSummarySerializationUnits(summarySpan);
-	let nextUnit = 0;
-	let requestCount = 0;
-	let estimatedInputTokens = 0;
-	let allocatedOutputTokens = 0;
-	let accumulatedSummary = summaryInput.previousSummary;
-	let text = "";
-	let usageComplete = true;
-	const usages: SessionMessageUsage[] = [];
-
-	while (nextUnit < units.length) {
-		const remainingOutputTokens = outputTokenBudget - allocatedOutputTokens;
-		const remainingRequests = Math.min(
-			maxRequestCount - requestCount,
-			Math.floor(remainingOutputTokens / MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS)
+	if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
+		throw new SessionCompactionError(
+			"context-still-too-large",
+			`The complete summary request leaves only ${Math.max(0, maxOutputTokens)} output tokens, below the ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS}-token minimum; no partial summary was committed.`
 		);
-		if (remainingRequests < 1) {
-			throw new SessionCompactionError(
-				"context-still-too-large",
-				`Compaction cannot cover all historical messages within its ${outputTokenBudget}-token output allocation and ${maxRequestCount}-request limit; no partial summary was committed.`
-			);
-		}
-		const selectedRequest = selectSummaryRequest({
-			accumulatedSummary,
-			cutPoint,
-			estimateInputTokens: estimatedInputTokens,
-			estimateTokens,
-			input,
-			nextUnit,
-			remainingOutputTokens,
-			remainingRequests,
-			summaryInput,
-			units,
-		});
-		if (selectedRequest === undefined) {
-			throw new SessionCompactionError(
-				"context-still-too-large",
-				`Compaction cannot fit one complete historical unit with its current handoff and summary scaffolding within the ${MAX_COMPACTION_SUMMARY_INPUT_TOKENS}-token estimated input budget. Choose a larger-context summary model or shorten history; no partial summary was committed.`
-			);
-		}
-		if (selectedRequest.endUnit < units.length && remainingRequests === 1) {
-			throw new SessionCompactionError(
-				"context-still-too-large",
-				`Compaction cannot cover all historical messages within its ${maxRequestCount}-request limit; no partial summary was committed.`
-			);
-		}
-
-		requestCount += 1;
-		estimatedInputTokens +=
-			selectedRequest.preparedRequest.estimatedInputTokens;
-		allocatedOutputTokens += selectedRequest.maxOutputTokens;
-		const attemptReportUsage = reportSummaryUsage(
-			input,
-			toSessionUsageEntryId(randomUUIDv7())
-		);
-		const generated = await generateCompactionSummary(summaryGenerator, {
-			...selectedRequest.input,
-			maxOutputTokens: selectedRequest.maxOutputTokens,
-			preparedRequest: selectedRequest.preparedRequest,
-			...omitUndefined({ reportUsage: attemptReportUsage }),
-		});
-		if (generated.usage === undefined) {
-			usageComplete = false;
-		} else {
-			usages.push(generated.usage);
-			const reportedInputTokens = usages.reduce(
-				(total, usage) => total + usage.inputTokens,
-				0
-			);
-			if (reportedInputTokens > MAX_COMPACTION_SUMMARY_INPUT_TOKENS) {
-				throw new SessionCompactionError(
-					"context-still-too-large",
-					`Provider-reported summary input exceeded the ${MAX_COMPACTION_SUMMARY_INPUT_TOKENS}-token chain limit; no partial summary was committed.`
-				);
-			}
-		}
-		text = generated.text;
-		accumulatedSummary = {
-			...(accumulatedSummary ?? {
-				coveredMessageIds: [],
-				formatVersion: 1 as const,
-			}),
-			text,
-		};
-		nextUnit = selectedRequest.endUnit;
 	}
+	const attemptReportUsage = reportSummaryUsage(
+		input,
+		toSessionUsageEntryId(randomUUIDv7())
+	);
+	return generateCompactionSummary(summaryGenerator, {
+		...summaryInput,
+		maxOutputTokens,
+		preparedRequest,
+		...omitUndefined({ reportUsage: attemptReportUsage }),
+	});
+};
 
+const splitTurnSummarySpan = (
+	summarySpan: readonly SessionMessage[]
+):
+	| Readonly<{
+			history: readonly SessionMessage[];
+			turnPrefix: readonly SessionMessage[];
+	  }>
+	| undefined => {
+	const assistantIndex = summarySpan.findLastIndex(
+		({ role }) => role === "assistant"
+	);
+	if (assistantIndex !== summarySpan.length - 1) {
+		return;
+	}
+	const userIndex = summarySpan.findLastIndex(
+		(message, index) =>
+			index < assistantIndex &&
+			message.role === "user" &&
+			isUndefined(message.metadata?.joinedTurnId)
+	);
+	if (userIndex < 0) {
+		return;
+	}
 	return {
-		text,
-		...(usageComplete
-			? omitUndefined({ usage: aggregateSummaryUsage(usages) })
-			: {}),
+		history: summarySpan.slice(0, userIndex),
+		turnPrefix: summarySpan.slice(userIndex),
 	};
 };
 
@@ -1739,13 +1520,60 @@ const produceCompactionSummary = async ({
 			"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
 		);
 	}
-	return generateSummaryChain({
+	if (cutPoint.firstKeptAssistantPartIndex !== undefined) {
+		const split = splitTurnSummarySpan(summarySpan);
+		if (split !== undefined) {
+			const historyResult =
+				split.history.length > 0
+					? await generateSummaryRequest({
+							cutPoint,
+							estimateTokens,
+							input,
+							summaryGenerator: selectedSummaryGenerator,
+							summaryInput: {
+								...summaryInput,
+								serializedMessages: serializeMessagesForCompaction(
+									split.history
+								),
+							},
+						})
+					: undefined;
+			const turnPrefixResult = await generateSummaryRequest({
+				cutPoint,
+				estimateTokens,
+				input,
+				summaryGenerator: selectedSummaryGenerator,
+				summaryInput: omitUndefined({
+					...summaryInput,
+					previousSummary: undefined,
+					serializedMessages: serializeMessagesForCompaction(split.turnPrefix),
+				}),
+			});
+			const historyText =
+				historyResult?.text ??
+				summaryInput.previousSummary?.text ??
+				"No prior history.";
+			const requestResults =
+				historyResult === undefined
+					? [turnPrefixResult]
+					: [historyResult, turnPrefixResult];
+			return {
+				text: `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`,
+				...omitUndefined({
+					usage: aggregateSummaryUsage(requestResults),
+				}),
+			};
+		}
+	}
+	return generateSummaryRequest({
 		cutPoint,
 		estimateTokens,
 		input,
 		summaryGenerator: selectedSummaryGenerator,
-		summaryInput,
-		summarySpan,
+		summaryInput: {
+			...summaryInput,
+			serializedMessages: serializeMessagesForCompaction(summarySpan),
+		},
 	});
 };
 

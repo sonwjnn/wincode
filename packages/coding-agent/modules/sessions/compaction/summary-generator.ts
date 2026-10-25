@@ -195,8 +195,8 @@ const providerSummaryGenerator =
 			);
 		}
 		const events = collection.chat({
-			// Subscription routes may reject output caps. Validate the completed
-			// handoff against host budgets rather than blocking those credentials.
+			// Subscription routes may reject output caps. Omit unsupported caps and
+			// let the caller require explicit completion before accepting the handoff.
 			...omitUndefined({
 				maxOutputTokens: canEnforceOutputLimit ? maxOutputTokens : undefined,
 			}),
