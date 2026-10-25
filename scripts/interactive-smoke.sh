@@ -142,6 +142,10 @@ wait_for_text() {
 }
 
 wait_for_text 'Ask anything...' 150
+if [[ "$LIVE" == 1 || -z "$BINARY" ]]; then
+  # The composer appears before Provider model selection has finished loading.
+  wait_for_text 'openai/gpt-5.6-luna:low' 150
+fi
 if [[ "$LIVE" == 1 ]]; then
   tmux send-keys -l -t "$SESSION" 'Reply only with smoke followed by a hyphen, live, a hyphen, and ok. Do not use tools.'
   tmux send-keys -t "$SESSION" Enter
