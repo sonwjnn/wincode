@@ -1756,6 +1756,7 @@ export const createSessionCompaction = ({
 			throw new SessionCompactionError("cancelled", decision.cancel);
 		}
 		assertNotAborted(input.signal);
+		const summaryWasSuppliedByPlugin = isNonEmptyString(decision?.summary);
 		const generated = await produceCompactionSummary({
 			cutPoint,
 			estimateTokens,
@@ -1783,7 +1784,9 @@ export const createSessionCompaction = ({
 			summarySpan,
 			summarization: generated,
 			trigger: input.trigger,
-			thinkingLevel: input.thinkingLevel,
+			thinkingLevel: summaryWasSuppliedByPlugin
+				? undefined
+				: input.thinkingLevel,
 		});
 		try {
 			await lifecycle?.completed?.(entry, lifecycleContext);

@@ -1,4 +1,3 @@
-import { type ThinkingLevel, thinkingLevelSchema } from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import { z } from "zod";
 import {
@@ -10,7 +9,6 @@ import {
 export type CompactionSummarySettings = Readonly<{
 	model?: ProviderModelSelection;
 	maxOutputTokens?: number;
-	thinkingLevel?: ThinkingLevel;
 	/** Invalid explicit policy must fail compaction rather than select a fallback. */
 	error?: string;
 }>;
@@ -24,7 +22,6 @@ const summarySettingsSchema = z
 			.positive()
 			.max(Number.MAX_SAFE_INTEGER)
 			.optional(),
-		thinkingLevel: thinkingLevelSchema.optional(),
 	})
 	.strict();
 
@@ -54,7 +51,6 @@ export const resolveCompactionSummarySettings = (
 		...omitUndefined({
 			model,
 			maxOutputTokens: parsed.data.maxOutputTokens,
-			thinkingLevel: parsed.data.thinkingLevel,
 		}),
 	};
 };

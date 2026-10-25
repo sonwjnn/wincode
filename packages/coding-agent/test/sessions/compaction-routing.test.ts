@@ -38,7 +38,7 @@ const summaryModel: ProviderModel = {
 	...summarizer,
 	protocolId: "fixture",
 	limits: { contextWindowTokens: 200_000, maxOutputTokens: 4096 },
-	reasoningEfforts: ["off", "low"],
+	reasoningEfforts: ["off", "low", "high"],
 };
 const messages: SessionMessage[] = (
 	[
@@ -146,10 +146,10 @@ test("Host routes only the summary to the configured model and preserves the cha
 		providerId: "anthropic",
 		modelId: "summary/large",
 		maxOutputTokens: 512,
-		reasoningEffort: "off",
+		reasoningEffort: "high",
 	});
 	expect(result.entry.summarizationModel).toEqual(summarizer);
-	expect(result.entry.summarizationThinkingLevel).toBe("off");
+	expect(result.entry.summarizationThinkingLevel).toBe("high");
 	expect(summaryUsageEntries).toHaveLength(1);
 	expect(summaryUsageEntries[0]).toMatchObject({
 		kind: "compaction-summary",
@@ -169,30 +169,30 @@ const shortHistory = messages.map((message) => ({
 	],
 }));
 
-test("without a summary target the Host uses chat identity but does not inherit chat thinking", async () => {
+test("without a summary target the Host uses chat identity and inherits chat thinking", async () => {
 	const { compact, requests } = fixture({}, shortHistory);
 	const result = await compact();
 	expect(requests[0]).toMatchObject({ providerId: "openai", modelId: "chat" });
-	expect(requests[0]?.reasoningEffort).toBeUndefined();
+	expect(requests[0]?.reasoningEffort).toBe("high");
 	expect(result.entry.summarizationModel).toEqual(conversation);
-	expect(result.entry.summarizationThinkingLevel).toBeUndefined();
+	expect(result.entry.summarizationThinkingLevel).toBe("high");
 });
 
-test("an explicit summary thinking level is dispatched and persisted independently", async () => {
-	const { compact, requests } = fixture({
-		model: "anthropic/summary/large",
-		thinkingLevel: "low",
-		maxOutputTokens: 512,
+test("a summary model that does not support the session thinking level fails before dispatch", async () => {
+	const { compact, requests } = fixture(undefined, messages, {
+		...summaryModel,
+		reasoningEfforts: ["off", "low"],
 	});
-	const result = await compact();
-	expect(requests[0]?.reasoningEffort).toBe("low");
-	expect(result.entry.summarizationThinkingLevel).toBe("low");
+	await expect(compact()).rejects.toThrow(
+		"does not support the active Session thinking level high"
+	);
+	expect(requests).toHaveLength(0);
 });
 
 for (const summary of [
 	{ model: "not-an-identity" },
 	{ model: "anthropic/summary/large", maxOutputTokens: 0 },
-	{ model: "anthropic/summary/large", thinkingLevel: "unlimited" },
+	{ model: "anthropic/summary/large", thinkingLevel: "low" },
 	{ model: "anthropic/summary/large", typo: true },
 	null,
 ]) {
@@ -294,15 +294,6 @@ test("a summary Plugin owner mismatch rejects the configured target without disp
 		}
 	);
 	await expect(compact()).rejects.toThrow("not bound to its trusted source");
-	expect(requests).toHaveLength(0);
-});
-
-test("an unsupported explicit summary thinking level is rejected rather than silently dropped", async () => {
-	const { compact, requests } = fixture({
-		model: "anthropic/summary/large",
-		thinkingLevel: "max",
-	});
-	await expect(compact()).rejects.toThrow("does not support thinkingLevel max");
 	expect(requests).toHaveLength(0);
 });
 
@@ -450,7 +441,7 @@ test("without a Plugin summary an invocable uncapped target generates a handoff"
 	expect(requests[0]).not.toHaveProperty("maxOutputTokens");
 });
 
-test("a deferred summary target does not inherit the conversation thinking level", async () => {
+test("a Plugin-supplied summary has no Provider thinking level", async () => {
 	const { compact, collection } = fixture(
 		{},
 		messages,
@@ -462,6 +453,6 @@ test("a deferred summary target does not inherit the conversation thinking level
 
 	const result = await compact();
 
-	// The summary target was never invoked, and chat thinking is not summary provenance.
+	// No Provider request ran, so there is no summarization thinking level to record.
 	expect(result.entry.summarizationThinkingLevel).toBeUndefined();
 });

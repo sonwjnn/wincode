@@ -28,6 +28,7 @@ import type {
 	ProviderCollection,
 	ProviderModel,
 	ThinkingLevel,
+	ThinkingSelection,
 } from "@wincode/ai";
 import { isNull, isUndefined } from "@wincode/utils";
 import {
@@ -137,6 +138,7 @@ type FakeSessionRun = {
 let activeFakeSessionRun: FakeSessionRun | null = null;
 let fakeCacheWarmCancellations = 0;
 let fakeCompactionModels: ProviderModelSelection[] = [];
+let fakeCompactionThinkingSelections: (ThinkingSelection | undefined)[] = [];
 /** The compositions the view accepted while the turn ran, in order. */
 let fakeWaitingTexts: string[] = [];
 /** The same messages' full compositions, so a round trip can be asserted. */
@@ -381,8 +383,12 @@ const fakeUseAgentSessionModule: Pick<
 			cacheWarmingStatus: "idle",
 			cancel: () => undefined,
 			cancelCompaction: async () => [],
-			compact: async (_focus, selection) => {
+			compact: async (_focus, selection, thinkingSelection) => {
 				fakeCompactionModels = [...fakeCompactionModels, selection];
+				fakeCompactionThinkingSelections = [
+					...fakeCompactionThinkingSelections,
+					thinkingSelection,
+				];
 				return fromPartial<CompactSessionResult>({
 					activeMessages: [],
 					entry: {},
@@ -596,6 +602,7 @@ afterEach(() => {
 	activeFakeSessionRun = null;
 	fakeCacheWarmCancellations = 0;
 	fakeCompactionModels = [];
+	fakeCompactionThinkingSelections = [];
 	fakeQueuedSeed = [];
 	fakeRunCompositions = [];
 	fakeRunInputs = [];
@@ -754,6 +761,69 @@ test("manual compaction replaces an unavailable Agent pin only with an available
 
 		expect(fakeCompactionModels).toEqual([
 			{ modelId: modelId("replacement-model"), providerId: "openai" },
+		]);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test("manual compaction preserves the Session thinking level when the summary model cannot honor it", async () => {
+	const summaryModel: ProviderModel = {
+		modelId: "low-only-summary-model",
+		protocolId: "fake-provider",
+		providerId: "openai",
+		reasoningEfforts: ["low"],
+	};
+	const summaryCandidate = providerModelCandidate(summaryModel);
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => [summaryModel],
+		getAvailableProviderModelSelectionCandidates: async () => [
+			summaryCandidate,
+		],
+		getKnownModels: async () => [],
+		selectProviderModelSelectionCandidate: async <Result,>(
+			candidate: ProviderModelSelectionCandidate,
+			action: (
+				model: ProviderModel,
+				selection: ProviderModelSelection
+			) => Result | Promise<Result>
+		): Promise<Result> => await action(candidate.model, candidate.selection),
+	});
+	const { setup } = await renderSessionView({
+		height: 30,
+		initialModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+		initialThinkingLevel: "high",
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitForFrame((frame) =>
+			frame.includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () =>
+			setup.mockInput.typeText("preserve the active thinking level")
+		);
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitForFrame((frame) =>
+			frame.includes("Choose Model for Compaction")
+		);
+		await setup.waitForFrame((frame) =>
+			frame.includes("low-only-summary-model")
+		);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() => fakeCompactionModels.length === 1);
+
+		expect(fakeCompactionModels).toEqual([
+			{ modelId: modelId("low-only-summary-model"), providerId: "openai" },
+		]);
+		expect(fakeCompactionThinkingSelections).toEqual([
+			{ thinkingLevel: "high" },
 		]);
 	} finally {
 		setup.renderer.destroy();
@@ -1844,6 +1914,7 @@ const renderSessionView = async ({
 	initialTranscript,
 	initialAgent,
 	initialModel,
+	initialThinkingLevel,
 	configSettings,
 	configStore: providedConfigStore,
 	configProviderControl,
@@ -1858,6 +1929,7 @@ const renderSessionView = async ({
 	initialTranscript: SessionMessage[];
 	initialAgent?: AgentId;
 	initialModel?: ProviderModelSelection;
+	initialThinkingLevel?: ThinkingLevel;
 	configSettings?: Readonly<Record<string, unknown>>;
 	configStore?: ConfigStore;
 	configProviderControl?: MutableConfigProviderControl;
@@ -1883,6 +1955,9 @@ const renderSessionView = async ({
 					<PromptConfigProvider
 						{...(initialAgent === undefined ? {} : { initialAgent })}
 						{...(initialModel === undefined ? {} : { initialModel })}
+						{...(initialThinkingLevel === undefined
+							? {}
+							: { initialThinkingLevel })}
 					>
 						<DialogProvider>
 							<RouterContextProvider router={router}>

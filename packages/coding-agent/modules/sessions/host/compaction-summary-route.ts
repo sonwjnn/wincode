@@ -58,20 +58,18 @@ export const resolveCompactionSummaryRoute = async (
 		model.limits?.contextWindowTokens,
 		input.settings.contextWindowOverrideTokens
 	).tokens;
-	const thinkingLevel =
-		policy?.thinkingLevel ?? providerModelReasoningEffort(model, "off");
+	const thinkingLevel = input.thinkingLevel;
 	if (
 		thinkingLevel !== undefined &&
 		providerModelReasoningEffort(model, thinkingLevel) === undefined
 	) {
 		throw new SessionCompactionError(
 			"summary-failed",
-			`Summary model ${model.providerId}/${model.modelId} does not support thinkingLevel ${thinkingLevel}. Correct compaction.summary.thinkingLevel.`
+			`Summary model ${model.providerId}/${model.modelId} does not support the active Session thinking level ${thinkingLevel}. Select a summary model that supports it.`
 		);
 	}
-	const { thinkingLevel: _chatThinking, ...request } = input;
 	return {
-		...request,
+		...input,
 		summaryModel: selection,
 		...omitUndefined({ thinkingLevel }),
 		settings: {

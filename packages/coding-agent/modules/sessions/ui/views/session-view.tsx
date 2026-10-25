@@ -1,7 +1,7 @@
 import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
-import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
+import type { ThinkingSelection } from "@wincode/ai";
 import {
 	getErrorMessage,
 	isNull,
@@ -23,7 +23,6 @@ import type { InteractiveProviderController } from "@/modules/providers/interact
 import {
 	isSameProviderModelIdentity,
 	normalizeProviderModelSelection,
-	normalizeProviderModelThinkingSelection,
 	type PluginProviderOwnerRegistration,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
@@ -664,14 +663,9 @@ export function SessionView({
 							? {}
 							: { thinkingLevel: effective.thinkingLevel };
 					const compactWithProviderModel = async (
-						selection: ProviderModelSelection,
-						providerModel: ProviderModel
+						selection: ProviderModelSelection
 					): Promise<void> => {
-						const normalizedThinking = normalizeProviderModelThinkingSelection(
-							providerModel,
-							thinkingSelection
-						);
-						await compact(focus, selection, normalizedThinking);
+						await compact(focus, selection, thinkingSelection);
 					};
 					const availableModels =
 						(await host.providerController?.getAvailableModels(
@@ -682,10 +676,7 @@ export function SessionView({
 						isSameProviderModelIdentity(providerModel, effective.model)
 					);
 					if (currentProviderModel !== undefined) {
-						await compactWithProviderModel(
-							effective.model,
-							currentProviderModel
-						);
+						await compactWithProviderModel(effective.model);
 						return true;
 					}
 					const providerController = host.providerController;
@@ -701,10 +692,10 @@ export function SessionView({
 							<ProviderModelsDialogContent
 								controller={providerController}
 								currentModel={effective.model}
-								onSelectModel={async (providerModel, selection) => {
+								onSelectModel={async (_providerModel, selection) => {
 									host.assertCurrentPluginProviderRegistrationSnapshot();
 									try {
-										await compactWithProviderModel(selection, providerModel);
+										await compactWithProviderModel(selection);
 									} catch (error) {
 										show({
 											message: getErrorMessage(error, "Compaction failed."),

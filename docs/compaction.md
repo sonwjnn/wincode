@@ -14,8 +14,7 @@ Configure compaction in global or project `.wincode/settings.json` (or `.jsonc`)
     },
     "summary": {
       "model": "openai/gpt-5.6",
-      "maxOutputTokens": 4096,
-      "thinkingLevel": "off"
+      "maxOutputTokens": 4096
     }
   }
 }
@@ -57,11 +56,12 @@ Plugins may register `onBeforeCompaction`, `onCompactionCompleted`, and `onCompa
 
 ## Summary policy
 
-All three `summary` fields are optional:
+Both `summary` fields are optional:
 
 - `model`: exact summary target. Omit it to use the conversation model; there is no automatic model fallback.
 - `maxOutputTokens`: optional positive integer ceiling. When omitted, the summary model's output-token metadata supplies the budget, falling back to 32,000 when absent. The effective budget also respects the summary request's context room and the rebuilt conversation's room for the handoff plus the next response reserve; the reserve is not itself an output cap. An effective budget below 256 tokens fails before dispatch.
-- `thinkingLevel`: independently selected reasoning level. If omitted, compaction prefers `off` only when explicitly supported, otherwise leaves reasoning unset. It never inherits the chat's reasoning level. Explicit unsupported levels fail rather than being dropped.
+
+The summary request inherits the active Session's thinking level; there is no summary-only thinking-level setting. If the summary model does not declare support for that level, compaction fails before dispatch rather than downgrading it or using the Provider default. If the Session has no thinking level, the Provider default applies.
 
 The selected summary target must be known, authenticated/invocable, and bound to its trusted Plugin owner where applicable. Invalid configuration or an unknown/unauthenticated target fails without dispatching to a replacement model. Credentials such as OpenAI OAuth may generate summaries even when their route cannot enforce an output-token cap: Wincode omits the unsupported request parameter. This does not guarantee bounded generation cost. Provider-generated summaries must be nonempty and carry completed evidence, but the Host does not reject completed output solely because its estimated or reported token count exceeds the planned budget. The result must still reduce context and pass the safe-threshold check; incomplete output and results failing those checks are not committed. A Plugin may supply the handoff without a model request, but Plugin-supplied text remains bounded by the effective output-token budget and cannot mask an unknown or unauthenticated target.
 

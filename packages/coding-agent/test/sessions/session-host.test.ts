@@ -157,6 +157,7 @@ const cacheWarmingProviderModel: ProviderModel = {
 	},
 	protocolId: "fixture",
 	providerId: "openai",
+	reasoningEfforts: ["high"],
 };
 const hostProviderModels: readonly ProviderModel[] = [
 	{
@@ -2421,7 +2422,7 @@ describe("Session Host opening", () => {
 				trigger: "manual",
 			});
 			expect(result.entry.summarizationModel).toEqual(cacheWarmingModel);
-			expect(result.entry.summarizationThinkingLevel).toBeUndefined();
+			expect(result.entry.summarizationThinkingLevel).toBe("high");
 			expect(host.getSelection()).toEqual(before);
 			expect(
 				await host.agentSession.send(
