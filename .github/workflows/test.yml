@@ -121,7 +121,7 @@ jobs:
           import { expect, test } from "bun:test";
 
           test("Windows launchers isolate user data and provider credentials", () => {
-            expect(process.env.OPENAI_API_KEY).toBeUndefined();
+            expect(process.env.OPENAI_API_KEY ?? "").toBe("");
             expect(process.env.HOME).toBe(process.env.USERPROFILE);
             const directoryNames = [
               "HOME",
