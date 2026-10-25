@@ -3,6 +3,7 @@ import { parseProviderModelSelection } from "@wincode/ai";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
+	SessionSdkPluginFactory,
 } from "@wincode/coding-agent";
 import {
 	createDelegationExecutor,
@@ -47,9 +48,14 @@ const request: DelegationRequest = {
 	prompt: "Research the question.",
 };
 
+const pluginFactory: SessionSdkPluginFactory = {
+	factory: () => undefined,
+	id: "subagents",
+};
+
 const turn: SubagentsTurnContext = {
 	agentId: agentId("build"),
-	pluginPath: "/plugins/subagents.ts",
+	pluginFactory,
 	sessionId: sessionId("parent-session"),
 	sessionSdk: unavailableAgentCatalog,
 	turnId: agentTurnId("parent-turn"),

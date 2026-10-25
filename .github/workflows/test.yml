@@ -180,6 +180,9 @@ jobs:
           $directories = @(Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json)
           $remaining = @($directories | Where-Object { Test-Path -LiteralPath $_ })
           if ($remaining.Count -gt 0) { throw "Batch test wrapper left temporary user data behind." }
+      - name: Windows headless interactive startup contracts (not ConPTY)
+        if: matrix.platform == 'win32'
+        run: bun test packages/coding-agent/test/application/cli-startup.test.ts --timeout=30000
       - run: bun test packages/coding-agent/test/sessions/session-writer-lock-target.test.ts
       - name: Run native lock smoke and process contract
         shell: bash
@@ -209,10 +212,41 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  interactive-smoke:
+    name: Faux TUI smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run build:utils
+      - name: Install tmux on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux on macOS
+        if: runner.os == 'macOS'
+        run: command -v tmux || brew install tmux
+      - run: bun run test:tui
+      - name: Upload faux smoke frames and failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interactive-smoke-${{ matrix.os }}
+          path: test-artifacts/interactive-smoke
+          if-no-files-found: ignore
+          retention-days: 7
+
   gate:
     name: Required test gate
     if: always()
-    needs: [check-types, default, e2e, session-writer-lock]
+    needs: [check-types, default, e2e, session-writer-lock, interactive-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -222,3 +256,4 @@ jobs:
           test "${{ needs.default.result }}" = success
           test "${{ needs.e2e.result }}" = success
           test "${{ needs.session-writer-lock.result }}" = success
+          test "${{ needs.interactive-smoke.result }}" = success

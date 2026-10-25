@@ -58,7 +58,11 @@ import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import { testRenderWithClipboard } from "../support/clipboard";
 import { modelId } from "../support/identifiers";
-import { flushTestRenderer, frameIncludes } from "../support/opentui";
+import {
+	flushTestRenderer,
+	frameIncludes,
+	waitForTestFrame,
+} from "../support/opentui";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const previousLocalDatabasePath = process.env.WINCODE_LOCAL_DB_PATH;
@@ -403,22 +407,30 @@ const renderHomeView = async (
 	return setup;
 };
 
-const captureNormalizedHomeFrame = (setup: TestRendererSetup): string =>
-	setup.captureCharFrame().replaceAll(/[┃║│]/gu, " ").replaceAll(/\s+/gu, " ");
+const normalizeHomeFrame = (frame: string): string =>
+	frame.replaceAll(/[┃║│]/gu, " ").replaceAll(/\s+/gu, " ");
+
+const captureNormalizedHomeFrame = async (
+	setup: TestRendererSetup
+): Promise<string> => normalizeHomeFrame(await waitForTestFrame(setup));
 
 const waitForHomeFrame = async (
 	setup: TestRendererSetup,
 	text: string
-): Promise<void> => {
+): Promise<string | undefined> => {
+	let matchingFrame: string | undefined;
 	await act(async () => {
 		for (let attempt = 0; attempt < 50; attempt += 1) {
 			await Bun.sleep(10);
 			await setup.renderOnce();
-			if (captureNormalizedHomeFrame(setup).includes(text)) {
+			const frame = await waitForTestFrame(setup);
+			if (normalizeHomeFrame(frame).includes(text)) {
+				matchingFrame = frame;
 				return;
 			}
 		}
 	});
+	return matchingFrame;
 };
 
 const submitHomePrompt = async (setup: TestRendererSetup): Promise<void> => {
@@ -451,7 +463,7 @@ describe("startup resource name wrapping", () => {
 		);
 		try {
 			await act(async () => setup.renderOnce());
-			const lines = setup.captureCharFrame().split("\n");
+			const lines = (await waitForTestFrame(setup)).split("\n");
 			const firstNameLine = lines.find((line) => line.includes("alpha,"));
 			expect(firstNameLine?.indexOf("alpha,")).toBe(1);
 			const longNameLine = lines.find((line) =>
@@ -476,7 +488,7 @@ describe("NewSessionView composer focus", () => {
 		const setup = await renderHomeView(createTestHomeProviderCollection);
 		try {
 			await flushTestRenderer(setup);
-			const frame = captureNormalizedHomeFrame(setup);
+			const frame = await captureNormalizedHomeFrame(setup);
 			expect(frame).toContain("Wincode v");
 			expect(frame).toContain("Show details · Ctrl+O");
 			expect(frame).not.toContain("Hide details");
@@ -508,7 +520,7 @@ describe("NewSessionView composer focus", () => {
 			});
 			expanded = true;
 			await waitForHomeFrame(setup, ".wincode/commands/deploy.md");
-			const frame = captureNormalizedHomeFrame(setup);
+			const frame = await captureNormalizedHomeFrame(setup);
 			expect(frame).toContain("[Prompts]");
 			expect(frame).toContain("/deploy");
 			expect(frame).toContain(".wincode/commands/deploy.md");
@@ -541,17 +553,39 @@ describe("NewSessionView composer focus", () => {
 		const setup = await renderHomeView(createTestHomeProviderCollection, {
 			pluginRuntime,
 		});
-		let expanded = false;
-		try {
+		let initialExpanded: boolean | undefined;
+		let currentExpanded: boolean | undefined;
+		const toggleStartupDetails = async () => {
 			await act(async () => {
 				setup.mockInput.pressKey("o", { ctrl: true });
 				await setup.renderOnce();
 			});
-			expanded = true;
-			await waitForHomeFrame(
-				setup,
+		};
+		try {
+			const initialFrame = await captureNormalizedHomeFrame(setup);
+			initialExpanded = initialFrame.includes(
 				"Ctrl+O to collapse startup help and resources"
 			);
+			currentExpanded = initialExpanded;
+			if (currentExpanded) {
+				await toggleStartupDetails();
+				currentExpanded = false;
+				if (
+					(await waitForHomeFrame(setup, "Show details · Ctrl+O")) === undefined
+				) {
+					throw new Error("The startup overview did not collapse.");
+				}
+			}
+			await toggleStartupDetails();
+			currentExpanded = true;
+			if (
+				(await waitForHomeFrame(
+					setup,
+					"Ctrl+O to collapse startup help and resources"
+				)) === undefined
+			) {
+				throw new Error("The startup overview did not expand.");
+			}
 			const startupScrollbox = setup.renderer.root.findDescendantById(
 				"new-session-view-startup-scrollbox"
 			);
@@ -559,19 +593,34 @@ describe("NewSessionView composer focus", () => {
 			if (!(startupScrollbox instanceof ScrollBoxRenderable)) {
 				throw new Error("The startup overview is not scrollable.");
 			}
-			startupScrollbox.scrollChildIntoView(
-				"startup-plugin-startup-overview-plugin"
-			);
-			await act(async () => setup.renderOnce());
-			await waitForHomeFrame(setup, "/trusted/plugins/startup-overview.ts");
-			const pluginRow = setup
-				.captureCharFrame()
+			const pluginPath = "/trusted/plugins/startup-overview.ts";
+			let pluginFrame: string | undefined;
+			await act(async () => {
+				for (let attempt = 0; attempt < 50; attempt += 1) {
+					await Bun.sleep(10);
+					await setup.renderOnce();
+					await setup.waitForVisualIdle();
+					startupScrollbox.scrollChildIntoView(
+						"startup-plugin-startup-overview-plugin"
+					);
+					await setup.renderOnce();
+					const frame = await waitForTestFrame(setup);
+					if (normalizeHomeFrame(frame).includes(pluginPath)) {
+						pluginFrame = frame;
+						return;
+					}
+				}
+			});
+			if (pluginFrame === undefined) {
+				throw new Error("The trusted Plugin path did not appear in Home.");
+			}
+			const pluginRow = pluginFrame
 				.split("\n")
 				.find((line) => line.includes("/trusted/plugins/startup-overview.ts"));
 			expect(
 				pluginRow?.indexOf("/trusted/plugins/startup-overview.ts")
 			).toBeGreaterThan(0);
-			const frame = captureNormalizedHomeFrame(setup);
+			const frame = normalizeHomeFrame(pluginFrame);
 			expect(frame).toContain("[Plugins]");
 			expect(frame).toContain("/trusted/plugins/startup-overview.ts");
 			expect(frame).not.toContain("startup-overview-plugin");
@@ -579,12 +628,18 @@ describe("NewSessionView composer focus", () => {
 				"new-session-view-composer"
 			);
 		} finally {
-			if (expanded) {
-				await act(async () => {
-					setup.mockInput.pressKey("o", { ctrl: true });
-					await setup.renderOnce();
-				});
-				await waitForHomeFrame(setup, "Show details · Ctrl+O");
+			if (
+				initialExpanded !== undefined &&
+				currentExpanded !== undefined &&
+				currentExpanded !== initialExpanded
+			) {
+				await toggleStartupDetails();
+				await waitForHomeFrame(
+					setup,
+					initialExpanded
+						? "Ctrl+O to collapse startup help and resources"
+						: "Show details · Ctrl+O"
+				);
 			}
 			setup.renderer.destroy();
 		}
@@ -866,7 +921,7 @@ describe("NewSessionView composer focus", () => {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
 			const storedDefault = `${DEFAULT_PROVIDER_MODEL_SELECTION.providerId}/${DEFAULT_PROVIDER_MODEL_SELECTION.modelId}`;
-			const initialFrame = setup.captureCharFrame();
+			const initialFrame = await waitForTestFrame(setup);
 			expect(initialFrame.split(storedDefault)).toHaveLength(2);
 			expect(initialFrame).not.toContain("Provider Model:");
 			expect(initialFrame).not.toContain("Stored default unavailable:");
@@ -884,7 +939,7 @@ describe("NewSessionView composer focus", () => {
 			await flushTestRenderer(setup, 20);
 
 			expect(router.state.location.pathname).toBe("/");
-			expect(captureNormalizedHomeFrame(setup)).toContain(
+			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"explicitly select an available Provider SDK Model"
 			);
 		} finally {
@@ -970,7 +1025,7 @@ describe("NewSessionView composer focus", () => {
 			await setup.flush({ maxPasses: 20 });
 			// The first prompt must use the same full-width, bottom-docked input
 			// area as an active session, rather than floating beneath the logo.
-			const frame = setup.captureCharFrame().split("\n");
+			const frame = (await waitForTestFrame(setup)).split("\n");
 			const composerBorderLine = frame.findIndex(
 				(line) => line.includes("╭") && line.includes("╮")
 			);
@@ -1077,7 +1132,7 @@ describe("NewSessionView composer focus", () => {
 			if (!(composer instanceof TextareaRenderable)) {
 				throw new Error("The new-session composer did not render.");
 			}
-			const lines = setup.captureCharFrame().split("\n");
+			const lines = (await waitForTestFrame(setup)).split("\n");
 			const noticeLine = lines.findIndex((line) =>
 				line.includes("This project is not trusted.")
 			);
@@ -1165,7 +1220,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
-			expect(captureNormalizedHomeFrame(setup)).toContain(":low");
+			expect(await captureNormalizedHomeFrame(setup)).toContain(":low");
 			await submitHomePrompt(setup);
 			const [session] = await store.listSessions();
 			if (session === undefined) {
@@ -1204,7 +1259,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		});
 
 		try {
-			expect(captureNormalizedHomeFrame(setup)).not.toContain(
+			expect(await captureNormalizedHomeFrame(setup)).not.toContain(
 				"openai/gpt-5.6-luna"
 			);
 			await act(async () => {
@@ -1212,7 +1267,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 				await Promise.resolve();
 			});
 			await waitForHomeFrame(setup, "openai/gpt-5.6-luna:low");
-			expect(captureNormalizedHomeFrame(setup)).toContain(
+			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"openai/gpt-5.6-luna:low"
 			);
 		} finally {
@@ -1248,7 +1303,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 
 		try {
 			await waitForHomeFrame(setup, ":low");
-			expect(captureNormalizedHomeFrame(setup)).toContain(":low");
+			expect(await captureNormalizedHomeFrame(setup)).toContain(":low");
 		} finally {
 			pendingSnapshot.resolve([]);
 			await act(() => setup.renderer.destroy());
@@ -1280,7 +1335,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await flushTestRenderer(setup, 3);
-			expect(captureNormalizedHomeFrame(setup)).toContain(":high");
+			expect(await captureNormalizedHomeFrame(setup)).toContain(":high");
 
 			await submitHomePrompt(setup);
 			const [session] = await store.listSessions();
@@ -1318,7 +1373,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			);
 			try {
 				await waitForHomeFrame(setup, "do not match the current trusted");
-				expect(captureNormalizedHomeFrame(setup)).toContain(
+				expect(await captureNormalizedHomeFrame(setup)).toContain(
 					"do not match the current trusted"
 				);
 				expect(operations).toContain("provider-collection");
@@ -1354,7 +1409,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		);
 		try {
 			await waitForHomeFrame(setup, "has no matching trusted source");
-			expect(captureNormalizedHomeFrame(setup)).toContain(
+			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
 			);
 			expect(operations).toEqual([]);
@@ -1387,7 +1442,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		);
 		try {
 			await waitForHomeFrame(setup, "has no matching trusted source");
-			expect(captureNormalizedHomeFrame(setup)).toContain(
+			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
 			);
 			expect(operations).toEqual([]);
@@ -1423,7 +1478,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		);
 		try {
 			await waitForHomeFrame(setup, "has no matching trusted source");
-			expect(captureNormalizedHomeFrame(setup)).toContain(
+			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
 			);
 			expect(operations).toEqual([]);
@@ -1464,7 +1519,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			await waitForHomeModelStatus(setup);
 			await submitHomePrompt(setup);
 			await waitForHomeFrame(setup, "is unavailable");
-			expect(captureNormalizedHomeFrame(setup)).toContain(
+			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				`Provider Model ${fixture.model.providerId}/${fixture.model.modelId} is unavailable.`
 			);
 			expect(operations).toContain("availability");
@@ -1513,7 +1568,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			await waitForHomeModelStatus(setup);
 			await submitHomePrompt(setup);
 			await waitForHomeFrame(setup, "Connect a Provider");
-			expect(captureNormalizedHomeFrame(setup)).not.toContain(
+			expect(await captureNormalizedHomeFrame(setup)).not.toContain(
 				"Provider Model openai/gpt-5.6-luna is unavailable. Connect a Provider and explicitly select an available Provider SDK Model."
 			);
 			expect(await sessionStore.listSessions()).toHaveLength(1);

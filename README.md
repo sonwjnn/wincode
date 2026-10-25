@@ -15,7 +15,7 @@
 Wincode is an interactive terminal UI for working with AI coding agents. It combines direct model-provider connections, workspace-aware coding tools, durable local sessions, configurable agents, Skills, custom commands, and MCP servers in one interface.
 
 > [!NOTE]
-> Wincode is under active development and currently runs from a source checkout; it is not published as a standalone package yet.
+> Wincode is under active development and is not published as a standalone package yet. Version-tag builds stage cross-platform executables as draft GitHub Releases for manual review.
 
 ## Features
 
@@ -211,6 +211,7 @@ bun install --frozen-lockfile
 | `.\test.ps1` | PowerShell entrypoint with the same isolation |
 | `test.bat` | Batch entrypoint that forwards to PowerShell |
 | `bun run test:e2e` | Run each E2E journey in its own process |
+| `bun run test:tui` | Deterministic tmux smoke with the shared faux Provider (Linux/macOS) |
 | `bun test --timeout=30000 path/to/file.test.ts` | Run one test file directly during development, not the full portfolio |
 | `bun run check-types` | Type-check every workspace package |
 | `bun run check` | Run Ultracite checks |
@@ -227,8 +228,10 @@ The Session index override is honored only with `NODE_ENV=test`; production keep
 its OS-wide index. The wrappers leave real auth untouched and remove temporary data
 on exit. This is environment isolation, not an OS/network sandbox; test code and
 explicitly spawned subprocesses still have the caller's process privileges.
-External Provider tests and manual tmux checks remain separate and require explicit
-approval before billable requests.
+The faux tmux smoke runs as a separate Linux/macOS CI gate. For an opt-in live
+smoke with an already configured Provider, run
+`bun run test:tui --live --approve-billable --model 'openai/<model-id>'`; this can
+incur costs. See [smoke coverage and remaining platform/release limits](docs/testing-smoke.md).
 Bare `bun test` uses Bun's 5-second default timeout and bypasses the repository
 runner's discovery and environment setup.
 

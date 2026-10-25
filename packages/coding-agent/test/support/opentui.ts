@@ -2,7 +2,9 @@ import type { TestRendererSetup } from "@opentui/core/testing";
 import { act } from "react";
 
 export const isOpenTuiOutputBusy = (error: unknown): boolean =>
-	error instanceof Error && error.message.includes("acquire_buffer_lease");
+	error instanceof Error &&
+	error.message.includes("acquire_buffer_lease") &&
+	error.message.includes("OutputBusy");
 
 export const captureTestFrame = (
 	setup: TestRendererSetup
@@ -15,6 +17,22 @@ export const captureTestFrame = (
 		}
 		throw error;
 	}
+};
+
+/** Native output may acquire a lease after visual-idle resolves; retry only that transient state. */
+export const waitForTestFrame = async (
+	setup: TestRendererSetup
+): Promise<string> => {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		const frame = captureTestFrame(setup);
+		if (frame !== undefined) {
+			return frame;
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error(
+		"OpenTUI output buffer remained busy while capturing a test frame"
+	);
 };
 
 export const requireTestFrame = (setup: TestRendererSetup): string => {

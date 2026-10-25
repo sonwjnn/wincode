@@ -8,14 +8,18 @@ import type {
 	SessionSdkCreateOptions,
 	SessionSdkHandle,
 	SessionSdkOperations,
+	SessionSdkPluginFactory,
 } from "@wincode/coding-agent";
 import { createSubagentChildSessionFactory } from "../src/plugin/child-session";
 import { agentId, sessionId } from "./identifiers";
 
 const childSessionId = sessionId("subagent-child");
-const pluginPath = "/plugins/subagents.ts";
+const pluginFactory: SessionSdkPluginFactory = {
+	factory: () => undefined,
+	id: "subagents",
+};
 
-test("Subagents loads only the explicitly selected Provider Plugin into a child", async () => {
+test("Subagents child Sessions receive their own factory and only the selected Provider ID", async () => {
 	const capabilityCeiling: SessionSdkCapabilityCeiling = { tools: ["read"] };
 	let requestedSdkOptions: unknown;
 	let requestedSessionOptions: unknown;
@@ -49,7 +53,7 @@ test("Subagents loads only the explicitly selected Provider Plugin into a child"
 			return childSdk;
 		},
 	});
-	const factory = createSubagentChildSessionFactory(sessionSdk, pluginPath);
+	const factory = createSubagentChildSessionFactory(sessionSdk, pluginFactory);
 
 	const model = {
 		modelId: toModelId("selected-plugin-model"),
@@ -66,7 +70,7 @@ test("Subagents loads only the explicitly selected Provider Plugin into a child"
 
 	expect(requestedSdkOptions).toEqual({
 		capabilityCeiling,
-		pluginPaths: [pluginPath],
+		pluginFactories: [pluginFactory],
 		pluginProviderIds: [model.providerId],
 	});
 	expect(requestedSessionOptions).toEqual({
@@ -80,7 +84,7 @@ test("Subagents loads only the explicitly selected Provider Plugin into a child"
 	expect(sdkDisposeCount).toBe(1);
 });
 
-test("reopening a child Session reapplies its stored capability ceiling", async () => {
+test("reopening a child Session keeps its factory and stored capability ceiling", async () => {
 	const capabilityCeiling: SessionSdkCapabilityCeiling = { tools: ["read"] };
 	let requestedRuntimeOptions: SessionRuntimeOptions | undefined;
 	let sdkDisposed = false;
@@ -98,7 +102,7 @@ test("reopening a child Session reapplies its stored capability ceiling", async 
 			return childSdk;
 		},
 	});
-	const factory = createSubagentChildSessionFactory(sessionSdk, pluginPath);
+	const factory = createSubagentChildSessionFactory(sessionSdk, pluginFactory);
 
 	await expect(
 		factory.open(childSessionId, { capabilityCeiling })
@@ -106,7 +110,7 @@ test("reopening a child Session reapplies its stored capability ceiling", async 
 
 	expect(requestedRuntimeOptions).toEqual({
 		capabilityCeiling,
-		pluginPaths: [pluginPath],
+		pluginFactories: [pluginFactory],
 		sessionId: childSessionId,
 	});
 	expect(sdkDisposed).toBe(true);

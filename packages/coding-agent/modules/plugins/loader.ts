@@ -800,7 +800,10 @@ const resolvePluginCandidate = (
 	candidate: PluginPath,
 	diagnostics: PluginDiagnostic[]
 ): PluginPath | undefined => {
-	if (candidate.moduleSpecifier === undefined) {
+	if (
+		candidate.moduleSpecifier === undefined ||
+		candidate.factory !== undefined
+	) {
 		return candidate;
 	}
 	try {
@@ -1032,7 +1035,7 @@ const createCandidatePlan = async (
 			distributionId: id,
 			knownPluginId: id,
 			moduleSpecifier: specifier,
-			path: specifier,
+			path: factory === undefined ? specifier : `factory:${id}`,
 			required: true,
 			source: `distributed Plugin '${id}' from '${specifier}'`,
 		})),

@@ -26,4 +26,32 @@ tmux kill-session -t "$SESSION"
 
 The launcher uses a local fake Provider; no external model request is sent. If the Session Writer OS lock cannot be established, report **not verified**; do not stop another process.
 
-For release smoke tests, start tmux with `-c /tmp` and replace the launcher with the absolute release-binary path. Test each supported runtime separately, submit a prompt, and wait for the model reply; startup alone is not a passing smoke test. Get explicit approval before any billable Provider request.
+## Live Provider / release smoke (may incur costs)
+
+The faux smoke above is deterministic and does not contact a Provider. To test a
+real built-in Provider, explicitly approve the billable request and name the
+Provider/model:
+
+```bash
+bun run test:tui --live --approve-billable --model 'openai/<model-id>'
+```
+
+To run an existing executable instead of the source CLI, add its absolute path:
+
+```bash
+bun run test:tui --live --approve-billable \
+  --model 'openai/<model-id>' --binary /absolute/path/to/wincode
+```
+
+Use built-in Provider credentials already configured in Wincode. The smoke reads only the selected
+Provider credential, copies it into the temporary isolated auth store, and does
+not write credential data to the normal auth store or pass Provider API-key
+environment variables to the TUI. The temp home is removed on exit. Both `--live` and
+`--approve-billable` are required; never run the live command without approval.
+
+A passing live smoke must submit the prompt, receive `smoke-live-ok`, and exit
+cleanly. Startup alone is not a pass. The smoke cannot guarantee token usage or
+cost, and does not verify cancellation or tool calls. Run it against each actual
+release artifact when available; a source run is not release proof. The current
+repo has no release-build pipeline, and headless tmux does not verify native
+Windows ConPTY.

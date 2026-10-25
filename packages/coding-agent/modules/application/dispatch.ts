@@ -1,3 +1,4 @@
+import { APP_VERSION } from "@/shared/app-info";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { ProjectTrustPrompt } from "../project-trust/project-trust";
 import { type McpCliOptions, runMcpCli } from "./mcp-cli";
@@ -87,15 +88,6 @@ const HELP_TEXT = [
 	"  -h, --help           Show this help",
 	"  -v, --version        Show the version",
 ].join("\n");
-
-const VERSION_URL = new URL("../../package.json", import.meta.url);
-
-const getVersion = async (): Promise<string> => {
-	const metadata = (await Bun.file(VERSION_URL).json()) as {
-		version?: unknown;
-	};
-	return typeof metadata.version === "string" ? metadata.version : "unknown";
-};
 
 const writeLine = (writer: TextWriter, text: string): void => {
 	writer.write(`${text}\n`);
@@ -361,7 +353,7 @@ const writeEarlyResponse = async (
 		return 0;
 	}
 	if (parsed.version) {
-		writeLine(input.stdout, await getVersion());
+		writeLine(input.stdout, APP_VERSION);
 		return 0;
 	}
 };

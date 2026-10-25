@@ -63,13 +63,13 @@ test("terminal smoke plugin uses the latest prompt after cancellation", async ()
 			{
 				capabilities: ["text", "tools"],
 				modelId: "fake",
-				protocolId: "fake-plugin-provider",
+				protocolId: "faux",
 				providerId: "terminal-smoke",
 			},
 		]);
 		expect(
 			await provider.resolveAuthorization({ credential: undefined })
-		).toEqual({ authorization: { kind: "local-test" } });
+		).toEqual({ authorization: { kind: "faux" } });
 
 		const model = provider.models[0];
 		if (model === undefined) {
@@ -92,7 +92,6 @@ test("terminal smoke plugin uses the latest prompt after cancellation", async ()
 			],
 		};
 		const controller = new AbortController();
-		controller.abort();
 		const events: ProviderChatEvent[] = [];
 		for await (const event of provider.streamChat(request, {
 			authorization: { kind: "local-test" },

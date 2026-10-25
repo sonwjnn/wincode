@@ -8,6 +8,7 @@ import type {
 	SessionSdkDelivery,
 	SessionSdkHandle,
 	SessionSdkOperations,
+	SessionSdkPluginFactory,
 } from "@wincode/coding-agent";
 import {
 	createSubagentsTaskStore,
@@ -25,7 +26,10 @@ import {
 
 const parentSessionId = sessionId("parent-session");
 const childSessionId = sessionId("child-session");
-const pluginPath = "/plugins/subagents.ts";
+const pluginFactory: SessionSdkPluginFactory = {
+	factory: () => undefined,
+	id: "subagents",
+};
 
 const createTask = (
 	taskStore: SubagentsTaskStore,
@@ -74,7 +78,7 @@ test("a durable Subagents report is idempotently delivered through the public Se
 				};
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore, pluginPath).onSessionStart(
+		getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
 			pluginSessionContext(sessionSdk)
 		);
 		await deliveryAttempted.promise;
@@ -120,7 +124,7 @@ test("concurrent task completions deliver durable reports in FIFO order", async 
 				};
 			},
 		});
-		const coordinator = getSubagentsTaskCoordinator(taskStore, pluginPath);
+		const coordinator = getSubagentsTaskCoordinator(taskStore, pluginFactory);
 		coordinator.onSessionStart(pluginSessionContext(sessionSdk));
 		await Bun.sleep(0);
 
@@ -188,7 +192,7 @@ test("a rejected SDK delivery leaves the durable report available for retry", as
 				return { reason: "Parent is unavailable.", rejected: true };
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore, pluginPath).onSessionStart(
+		getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
 			pluginSessionContext(sessionSdk)
 		);
 		await deliveryAttempted.promise;
@@ -236,13 +240,13 @@ test("active Subagents tasks do not pin the parent Session view and cancel on sh
 			return fromPartial<SessionSdkHandle>({ dispose: async () => undefined });
 		},
 	});
-	const coordinator = getSubagentsTaskCoordinator(taskStore, pluginPath);
+	const coordinator = getSubagentsTaskCoordinator(taskStore, pluginFactory);
 	coordinator.onSessionStart(pluginSessionContext(parentSdk));
 
 	try {
 		const started = await coordinator.startTask({
 			agentId: agentId("build"),
-			pluginPath,
+			pluginFactory,
 			parentSessionId,
 			parentToolCallId: toolCallId("delegate-call"),
 			parentTurnId: agentTurnId("parent-turn"),
@@ -302,7 +306,7 @@ test("task persistence uses the child runtime's capability ceiling snapshot", as
 			return childSdk;
 		},
 	});
-	const coordinator = getSubagentsTaskCoordinator(taskStore, pluginPath);
+	const coordinator = getSubagentsTaskCoordinator(taskStore, pluginFactory);
 	const context = pluginSessionContext(parentSdk);
 	coordinator.onSessionStart(context);
 
@@ -310,7 +314,7 @@ test("task persistence uses the child runtime's capability ceiling snapshot", as
 		const startingTask = coordinator.startTask({
 			agentId: agentId("build"),
 			capabilityCeiling: { tools },
-			pluginPath,
+			pluginFactory,
 			parentSessionId,
 			parentToolCallId: toolCallId("snapshot-delegate-call"),
 			parentTurnId: agentTurnId("snapshot-parent-turn"),
@@ -346,7 +350,7 @@ test("awaiting-report children survive recovery and parent shutdown for explicit
 			},
 		});
 		const context = pluginSessionContext(sessionSdk);
-		const coordinator = getSubagentsTaskCoordinator(taskStore, pluginPath);
+		const coordinator = getSubagentsTaskCoordinator(taskStore, pluginFactory);
 		coordinator.onSessionStart(context);
 
 		expect(childRecoveryStarted).toBe(false);
@@ -415,7 +419,7 @@ test("recovery marks an abandoned child interrupted without auto-continuing it",
 				};
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore, pluginPath).onSessionStart(
+		getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
 			pluginSessionContext(parentSdk)
 		);
 		await deliveryAttempted.promise;
@@ -423,7 +427,7 @@ test("recovery marks an abandoned child interrupted without auto-continuing it",
 		expect(openOptions).toEqual({ autoContinue: false, view: true });
 		expect(runtimeOptions).toEqual({
 			capabilityCeiling,
-			pluginPaths: [pluginPath],
+			pluginFactories: [pluginFactory],
 			sessionId: task.childSessionId,
 		});
 		expect(taskStore.getTask(task.id)).toMatchObject({
@@ -452,7 +456,7 @@ test("recovery reports an interrupted task when its child Session cannot be reop
 				throw new Error("Parent Session is unavailable.");
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore, pluginPath).onSessionStart(
+		getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
 			pluginSessionContext(sessionSdk)
 		);
 		await reportDeliveryAttempted.promise;

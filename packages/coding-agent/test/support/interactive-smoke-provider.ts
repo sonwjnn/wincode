@@ -1,76 +1,81 @@
 import * as path from "node:path";
-import type { Provider, ProviderChatRequest } from "@wincode/ai";
+import {
+	createFauxProvider,
+	type FauxCall,
+	type FauxResponse,
+	fauxText,
+	type Provider,
+} from "@wincode/ai";
 import type { PluginFactory } from "@wincode/coding-agent";
 
-const PROVIDER_ID = "terminal-smoke";
-const MODEL_ID = "fake";
-
-const userPrompt = (request: ProviderChatRequest): string => {
-	const latestUserMessage = request.messages.findLast(
-		(message) => message.role === "user"
-	);
-	return (
-		latestUserMessage?.content
-			.filter((part) => part.type === "text")
-			.map((part) => part.text)
-			.join("\n") ?? ""
-	);
-};
-
-const createFakeProvider = (workspace: string): Provider => ({
-	id: PROVIDER_ID,
-	models: [
-		{
-			modelId: MODEL_ID,
-			capabilities: ["text", "tools"],
-			protocolId: "fake-plugin-provider",
-			providerId: PROVIDER_ID,
-		},
-	],
-	resolveAuthorization: () => ({ authorization: { kind: "local-test" } }),
-	async *streamChat(request, { signal }) {
-		const prompt = userPrompt(request);
+const createSmokeProvider = (workspace: string): Provider => {
+	const faux = createFauxProvider({ id: "terminal-smoke", modelId: "fake" });
+	const respond = ({ request }: FauxCall): FauxResponse => {
+		faux.appendResponses([respond]);
+		const prompt =
+			request.messages
+				.findLast((message) => message.role === "user")
+				?.content.filter((part) => part.type === "text")
+				.map((part) => part.text)
+				.join("\n") ?? "";
 		if (prompt.includes("terminal smoke cancel")) {
-			yield { delta: "cancel-pending", type: "text-delta" };
-			if (signal === undefined) {
-				throw new Error("The fake Provider needs an AbortSignal.");
-			}
-			const cancelled = Promise.withResolvers<void>();
-			const onAbort = (): void => {
-				void Bun.write(path.join(workspace, ".smoke-cancelled"), "aborted");
-				cancelled.resolve();
-			};
-			if (signal.aborted) {
-				onAbort();
-			} else {
-				signal.addEventListener("abort", onAbort, { once: true });
-			}
-			try {
-				await cancelled.promise;
-			} finally {
-				signal.removeEventListener("abort", onAbort);
-			}
-			return;
+			return { ...fauxText("cancel-pending"), waitForAbort: true };
 		}
 		if (prompt.includes("terminal smoke after cancel")) {
-			yield { delta: "after-cancel-ok", type: "text-delta" };
-			yield { type: "finish" };
-			return;
+			return fauxText("after-cancel-ok");
 		}
-		yield { delta: "smoke-stream-one", type: "text-delta" };
-		await Bun.sleep(1000);
-		yield { delta: "smoke-stream-two", type: "text-delta" };
-		yield { type: "finish" };
-	},
-});
+		if (prompt.includes("terminal smoke tool")) {
+			const result = request.messages.at(-1);
+			if (result?.role === "tool") {
+				if (!JSON.stringify(result.content).includes("smoke-file-content")) {
+					return { error: "Read tool did not return the smoke fixture" };
+				}
+				return fauxText("tool-roundtrip-ok");
+			}
+			return {
+				events: [
+					{
+						input: { path: "smoke-fixture.txt" },
+						toolCallId: "smoke-read",
+						toolName: "read",
+						type: "tool-call",
+					},
+				],
+			};
+		}
+		if (prompt.includes("terminal smoke error")) {
+			return { error: "smoke-scripted-outage" };
+		}
+		if (prompt.includes("terminal smoke recover")) {
+			return fauxText("error-recovery-ok");
+		}
+		return {
+			...fauxText("smoke-stream-one", "smoke-stream-two"),
+			delayMs: 1000,
+		};
+	};
+	faux.setResponses([respond]);
+	return {
+		...faux.provider,
+		async *streamChat(request, context) {
+			try {
+				yield* faux.provider.streamChat(request, context);
+			} finally {
+				if (context.signal?.aborted) {
+					await Bun.write(path.join(workspace, ".smoke-cancelled"), "aborted");
+				}
+			}
+		},
+	};
+};
 
 const interactiveSmokePlugin: PluginFactory = (api, context) => {
 	const plugin = api.definePlugin({ id: "interactive_smoke" });
 	plugin.registerProvider({
 		connect: async () => ({ kind: "local-test" }),
-		createProvider: () => createFakeProvider(context.workspace),
+		createProvider: () => createSmokeProvider(context.workspace),
 		displayName: "Interactive Smoke",
-		providerId: PROVIDER_ID,
+		providerId: "terminal-smoke",
 	});
 };
 

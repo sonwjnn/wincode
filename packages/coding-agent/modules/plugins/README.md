@@ -107,16 +107,16 @@ Plugins may register a status panel with `registerStatusPanel`. The host renders
 
 ## Session SDK
 
-The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. `handle.deliver({ idempotencyKey, text })` durably queues an idempotent message and wakes the Session at its next safe boundary; `handle.prompt(input)` also permits Agent/model selection. SDK callers select Plugins with explicit `pluginPaths`; the child does not inherit the parent's selected or file-loaded Plugin paths. For example, Subagents selects its own source so a child can submit its result:
+The public `createSessionSdk` API creates or reopens durable Sessions and returns caller-owned handles. `handle.deliver({ idempotencyKey, text })` durably queues an idempotent message and wakes the Session at its next safe boundary; `handle.prompt(input)` also permits Agent/model selection. SDK callers select file-backed Plugins with explicit `pluginPaths` or supply host-owned Plugin factories through `pluginFactories`; the child inherits neither selection automatically. Subagents supplies its own factory so a child can submit a result:
 
 ```ts
 const childSdk = await parentSdk.createSessionRuntime({
-  pluginPaths: [subagentsPluginPath],
+  pluginFactories: [{ factory: subagentsPluginFactory, id: "subagents" }],
 });
 const child = await childSdk.openSession(childSessionId);
 ```
 
-The Wincode distribution selects MCP and Subagents packages by default for application entry points. Direct SDK callers choose the packages they need by resolving their `@wincode/mcp/plugin` or `@wincode/subagents/plugin` entry points to explicit paths.
+The Wincode distribution includes MCP and Subagents factories by default for application entry points. Direct SDK callers select only the Plugins they need.
 
 Dispose child handles and child SDK runtimes when their work is complete. Coding and shell remain native Session tools; Skills remain native host capabilities.
 

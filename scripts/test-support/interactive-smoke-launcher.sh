@@ -2,6 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ "${WINCODE_SMOKE_LIVE:-0}" == 1 && "${WINCODE_SMOKE_APPROVED:-0}" != 1 ]]; then
+  printf 'Live smoke launcher requires explicit billable approval.\n' >&2
+  exit 1
+fi
+umask 077
 MANAGED_HOME=0
 if [[ -n "${WINCODE_SMOKE_HOME:-}" && -n "${WINCODE_SMOKE_BUN:-}" ]]; then
   TEST_HOME="$WINCODE_SMOKE_HOME"
@@ -13,11 +18,13 @@ else
   fi
   BUN_PATH="$(command -v bun)"
   TEST_HOME="$(mktemp -d)"
+  TEST_HOME="$(cd "$TEST_HOME" && pwd -P)"
   WORKSPACE="$TEST_HOME/workspace"
   mkdir -p "$TEST_HOME/data" "$TEST_HOME/config" "$TEST_HOME/tmp" \
     "$WORKSPACE/.wincode"
   cp "$ROOT/scripts/test-support/interactive-smoke-wincode.json" \
     "$WORKSPACE/.wincode/settings.json"
+  printf 'smoke-file-content\n' > "$WORKSPACE/smoke-fixture.txt"
   cd "$WORKSPACE"
   MANAGED_HOME=1
 fi
@@ -31,7 +38,18 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-PATH_VALUE="/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"
+WORKSPACE="$PWD"
+PATH_VALUE="$(dirname "$BUN_PATH"):/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"
+PREPARE="$ROOT/scripts/test-support/prepare-interactive-smoke-provider.ts"
+COMMAND=("$BUN_PATH" --no-env-file "$ROOT/packages/coding-agent/bin/wincode.ts")
+if [[ -n "${WINCODE_SMOKE_BINARY:-}" ]]; then
+  COMMAND=("$WINCODE_SMOKE_BINARY")
+fi
+PLUGIN_ARGS=(--plugin "${WINCODE_SMOKE_PLUGIN:-$ROOT/packages/coding-agent/test/support/interactive-smoke-provider.ts}")
+if [[ "${WINCODE_SMOKE_LIVE:-0}" == 1 ]]; then
+  PREPARE="$ROOT/scripts/test-support/prepare-live-smoke.ts"
+  PLUGIN_ARGS=()
+fi
 OS_USERNAME="${USER:-${LOGNAME:-$(id -un)}}"
 (
   cd "$ROOT/packages/coding-agent"
@@ -41,7 +59,12 @@ OS_USERNAME="${USER:-${LOGNAME:-$(id -un)}}"
     USER="$OS_USERNAME" \
     LOGNAME="$OS_USERNAME" \
     TMPDIR="$TEST_HOME/tmp" \
-    "$BUN_PATH" "$ROOT/scripts/test-support/prepare-interactive-smoke-provider.ts"
+    XDG_DATA_HOME="$TEST_HOME/data" \
+    APPDATA="$TEST_HOME/appdata" \
+    WINCODE_SMOKE_MODEL="${WINCODE_SMOKE_MODEL:-}" \
+    WINCODE_SMOKE_WORKSPACE="$WORKSPACE" \
+    WINCODE_SMOKE_HOME="$TEST_HOME" \
+    "$BUN_PATH" --no-env-file "$PREPARE"
 )
 env -i \
   PATH="$PATH_VALUE" \
@@ -56,8 +79,10 @@ env -i \
   HOME="$TEST_HOME" \
   XDG_DATA_HOME="$TEST_HOME/data" \
   XDG_CONFIG_HOME="$TEST_HOME/config" \
+  XDG_CACHE_HOME="$TEST_HOME/cache" \
+  NODE_ENV=test \
+  WINCODE_TEST_SESSION_INDEX_DIR="$TEST_HOME/session-indexes" \
   TMPDIR="$TEST_HOME/tmp" \
-  "$BUN_PATH" \
-  "$ROOT/packages/coding-agent/bin/wincode.ts" \
+  "${COMMAND[@]}" \
   --trust-project \
-  --plugin "$ROOT/packages/coding-agent/test/support/interactive-smoke-provider.ts"
+  ${PLUGIN_ARGS[@]+"${PLUGIN_ARGS[@]}"}
