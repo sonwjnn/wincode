@@ -46,6 +46,8 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
+      - name: Build workspace runtime dependency
+        run: bun run build:utils
       - name: Compile standalone Wincode executable
         shell: bash
         run: |
