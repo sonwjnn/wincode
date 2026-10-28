@@ -60,7 +60,12 @@ const createSteeringFixture = ({
 	let lane: readonly SessionSteeringMessage[] = [];
 	const cleared: AgentTurnId[] = [];
 	const settled: { id: string; reason?: string; status: string }[] = [];
-	const events: { kind: string; reason?: string }[] = [];
+	const events: {
+		kind: string;
+		messageId?: string;
+		reason?: string;
+		turnId?: string;
+	}[] = [];
 	const proposed: SessionSteeringTransition[] = [];
 	const runOptions: ({ reportFailure?: boolean } | undefined)[] = [];
 
@@ -86,7 +91,9 @@ const createSteeringFixture = ({
 			emitSubmissionEvent: (event) => {
 				events.push({
 					kind: event.kind,
+					...("messageId" in event ? { messageId: event.messageId } : {}),
 					...("reason" in event ? { reason: event.reason } : {}),
+					...("turnId" in event ? { turnId: event.turnId } : {}),
 				});
 			},
 			resolveCompactionSettings: async () =>
@@ -148,6 +155,7 @@ const createSteeringFixture = ({
 			);
 			pending.set(turnId, deliveries);
 			return {
+				messageIds: deliveries.map(({ source }) => source.message.id),
 				sourceIds: deliveries.map(({ source }) => source.id),
 				turnId,
 			};
@@ -168,11 +176,15 @@ test("acknowledging a turn settles its deliveries and clears only that turn", as
 	);
 	expect(fixture.clearedTurns()).toEqual([finished.turnId]);
 	expect(fixture.pendingFor(live.turnId)).toHaveLength(1);
-	// Consumers learn of each settled delivery; the live turn's is not announced.
-	expect(fixture.events).toEqual([
-		{ kind: "processed" },
-		{ kind: "processed" },
-	]);
+	// Each announcement names its own delivery: consumers attribute a settlement by
+	// message id, so echoing one delivery's id twice would settle the wrong message.
+	expect(fixture.events).toEqual(
+		finished.messageIds.map((messageId) => ({
+			kind: "processed",
+			messageId,
+			turnId: finished.turnId,
+		}))
+	);
 });
 
 test("a committed Submission that did not start a turn is reported as a steering failure", async () => {
@@ -195,7 +207,13 @@ test("a committed Submission that did not start a turn is reported as a steering
 		},
 	]);
 	expect(fixture.events).toEqual([
-		{ kind: "failed", reason: "the turn refused it" },
+		{
+			kind: "failed",
+			messageId: message.message.id,
+			reason: "the turn refused it",
+			// The workflow mints this turn's identity, so pin its presence only.
+			turnId: expect.any(String),
+		},
 	]);
 	// The steering path reports its own failure; the run must not report it again.
 	expect(fixture.runOptions).toEqual([{ reportFailure: false }]);
@@ -246,7 +264,9 @@ test("a Submission that succeeded without starting a turn is still reported as a
 	expect(fixture.events).toEqual([
 		{
 			kind: "failed",
+			messageId: message.message.id,
 			reason: "The committed Submission did not start an Agent Turn.",
+			turnId: expect.any(String),
 		},
 	]);
 });
