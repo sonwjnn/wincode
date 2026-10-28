@@ -56,11 +56,13 @@ const createSteeringFixture = ({
 	closed = false,
 	outcome = { rejected: true, reason: "the turn refused it" },
 	runThrows,
+	statusWritesFail,
 	turnStarts = false,
 }: Readonly<{
 	closed?: boolean;
 	outcome?: { rejected: true; reason: string } | { rejected: false };
 	runThrows?: unknown;
+	statusWritesFail?: Error;
 	turnStarts?: boolean;
 }> = {}) => {
 	const pending = new Map<AgentTurnId, PendingSteeringDelivery[]>();
@@ -143,6 +145,9 @@ const createSteeringFixture = ({
 			},
 			skills: { resolveSkill: async () => ({ ok: true }) },
 			updateSteeringStatus: async (source, updated, afterId) => {
+				if (statusWritesFail !== undefined) {
+					throw statusWritesFail;
+				}
 				settled.push({
 					...(afterId === undefined ? {} : { afterId }),
 					id: source.id,
@@ -402,6 +407,22 @@ test("a run that throws after arming the turn is reported as a steering failure"
 			turnId: fixture.runTurnIds[0],
 		},
 	]);
+});
+
+test("a turn whose delivery status cannot be written keeps its deliveries", async () => {
+	const fixture = createSteeringFixture({
+		statusWritesFail: new Error("the durable write failed"),
+	});
+	const turn = fixture.turnWithDeliveries("turn-unsettleable", 1);
+
+	await expect(
+		fixture.workflow.acknowledge(turn.turnId, "processed")
+	).rejects.toThrow("the durable write failed");
+
+	// Clearing first would strand the message at "processing" with nothing left to
+	// redeliver it from, because delivery recovery reads this record.
+	expect(fixture.clearedTurns()).toEqual([]);
+	expect(fixture.pendingFor(turn.turnId)).toHaveLength(1);
 });
 
 test("a failed Steering Message at the head is retried through the single-flight wrapper", async () => {
