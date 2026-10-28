@@ -9,16 +9,22 @@ import {
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import { createTestInputScheduler } from "../support/stateful-agent";
 
+/**
+ * A lane state the Session could actually publish. `canDrain` is derived, not
+ * chosen: every condition that stops a drain also marks the execution busy.
+ */
 const laneState = (
 	overrides: Partial<SessionInputLaneSnapshot["lane"]> = {}
-): SessionInputLaneSnapshot["lane"] => ({
-	canDrain: true,
-	closed: false,
-	executionBusy: false,
-	queueDraining: false,
-	submissionBusy: false,
-	...overrides,
-});
+): SessionInputLaneSnapshot["lane"] => {
+	const base = {
+		closed: false,
+		executionBusy: false,
+		queueDraining: false,
+		submissionBusy: false,
+		...overrides,
+	};
+	return { ...base, canDrain: overrides.canDrain ?? !base.executionBusy };
+};
 
 const snapshotOf = ({
 	lane = laneState(),
@@ -116,7 +122,9 @@ test("a Submission to an ended session is rejected before the scheduler sees it"
 test("a Submission admitted while the session is busy is queued, not started", async () => {
 	// A busy lane still holds a live turn, so it cannot drain either.
 	const lane = createLane(
-		snapshotOf({ lane: laneState({ canDrain: false, submissionBusy: true }) })
+		snapshotOf({
+			lane: laneState({ executionBusy: true, submissionBusy: true }),
+		})
 	);
 
 	const admission = await lane.lane.prompt(sendInput("while busy"));

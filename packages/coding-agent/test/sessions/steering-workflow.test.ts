@@ -49,14 +49,18 @@ const deliveryOf = (
  * transitions it proposes and which effects it asks for.
  */
 const createSteeringFixture = ({
+	outcome = { rejected: true, reason: "the turn refused it" },
 	turnStarts = false,
-}: Readonly<{ turnStarts?: boolean }> = {}) => {
+}: Readonly<{
+	outcome?: { rejected: true; reason: string } | { rejected: false };
+	turnStarts?: boolean;
+}> = {}) => {
 	const pending = new Map<AgentTurnId, PendingSteeringDelivery[]>();
 	const pendingStarts = new Map<AgentTurnId, SessionSteeringMessage>();
 	let lane: readonly SessionSteeringMessage[] = [];
 	const cleared: AgentTurnId[] = [];
-	const settled: { id: string; status: string }[] = [];
-	const events: { kind: string }[] = [];
+	const settled: { id: string; reason?: string; status: string }[] = [];
+	const events: { kind: string; reason?: string }[] = [];
 
 	const workflow = createSessionSteeringWorkflow({
 		apply: (transition: SessionSteeringTransition) => {
@@ -77,7 +81,10 @@ const createSteeringFixture = ({
 			attachments: { hydrate: async ({ messages }) => [...messages] },
 			commitSteeringRecord: async () => undefined,
 			emitSubmissionEvent: (event) => {
-				events.push({ kind: event.kind });
+				events.push({
+					kind: event.kind,
+					...("reason" in event ? { reason: event.reason } : {}),
+				});
 			},
 			resolveCompactionSettings: async () =>
 				fromPartial({ enabled: false, keepRecentTokens: 1 }),
@@ -85,16 +92,25 @@ const createSteeringFixture = ({
 			resolveSubmission: (input) => input,
 			runSteeringRetry: async (_retryingId, run) => await run(),
 			runSubmission: async (input) => {
-				if (turnStarts && input.turnId !== undefined) {
-					// The Session clears the arm once an Agent Turn begins, which is what
-					// tells the workflow this Submission did start one.
-					pendingStarts.delete(input.turnId);
+				// The Session clears the arm once an Agent Turn begins, which is what tells
+				// the workflow this Submission did start one. Requiring the delete to hit
+				// something keeps a turn the workflow never armed from passing.
+				if (
+					turnStarts &&
+					input.turnId !== undefined &&
+					!pendingStarts.delete(input.turnId)
+				) {
+					throw new Error("The workflow did not arm the turn it is running.");
 				}
-				return { rejected: true, reason: "the turn refused it" };
+				return outcome;
 			},
 			skills: { resolveSkill: async () => ({ ok: true }) },
 			updateSteeringStatus: async (source, updated) => {
-				settled.push({ id: source.id, status: updated.status });
+				settled.push({
+					id: source.id,
+					status: updated.status,
+					...(updated.reason === undefined ? {} : { reason: updated.reason }),
+				});
 			},
 		},
 		read: (): SessionSteeringSnapshot => ({
@@ -154,12 +170,21 @@ test("a committed Submission that did not start a turn is reported as a steering
 
 	const outcome = await fixture.workflow.runPendingMessage(message);
 
-	expect(outcome).toMatchObject({ rejected: true });
-	expect(fixture.settled.map(({ status }) => status)).toEqual([
-		"processing",
-		"failed",
+	expect(outcome).toEqual({
+		rejected: true,
+		reason: "the turn refused it",
+	});
+	expect(fixture.settled).toEqual([
+		{ id: "steering-unstarted", status: "processing" },
+		{
+			id: "steering-unstarted",
+			status: "failed",
+			reason: "the turn refused it",
+		},
 	]);
-	expect(fixture.events.map(({ kind }) => kind)).toEqual(["failed"]);
+	expect(fixture.events).toEqual([
+		{ kind: "failed", reason: "the turn refused it" },
+	]);
 });
 
 test("a Submission that started a turn is not reported as a steering failure", async () => {
@@ -175,6 +200,29 @@ test("a Submission that started a turn is not reported as a steering failure", a
 	expect(fixture.events).toEqual([]);
 });
 
+test("a Submission that succeeded without starting a turn is still reported as a failure", async () => {
+	const fixture = createSteeringFixture({
+		outcome: { rejected: false },
+		turnStarts: false,
+	});
+	const message = fixture.steeringMessage("steering-vanished");
+	fixture.setLane([message]);
+
+	const outcome = await fixture.workflow.runPendingMessage(message);
+
+	// Without this the message would sit at "processing" forever, with no reason
+	// for the user and no failed event.
+	expect(outcome).toEqual({
+		rejected: true,
+		reason: "The committed Submission did not start an Agent Turn.",
+	});
+	expect(fixture.settled.at(-1)).toEqual({
+		id: "steering-vanished",
+		reason: "The committed Submission did not start an Agent Turn.",
+		status: "failed",
+	});
+});
+
 test("a Steering Message that is not the lane head is refused without settling it", async () => {
 	const fixture = createSteeringFixture();
 	const head = fixture.steeringMessage("steering-head");
@@ -183,7 +231,12 @@ test("a Steering Message that is not the lane head is refused without settling i
 
 	const outcome = await fixture.workflow.runPendingMessage(queued);
 
-	expect(outcome).toMatchObject({ rejected: true });
+	// A live Session refuses the not-head case for its own reason; the shut-down
+	// reason belongs to a closed one.
+	expect(outcome).toEqual({
+		rejected: true,
+		reason: "The committed Submission is no longer waiting.",
+	});
 	expect(fixture.settled).toEqual([]);
 	expect(fixture.events).toEqual([]);
 });
