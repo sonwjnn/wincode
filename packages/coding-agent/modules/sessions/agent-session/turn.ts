@@ -19,6 +19,10 @@ import {
 	type SessionToolPart,
 	sanitizeInterruptedSessionMessages,
 } from "../message";
+import {
+	contextMeasurementForStep,
+	getSessionContextEpoch,
+} from "../usage/context-usage";
 import type { SessionExecution } from "./types";
 
 const INTERRUPTED_TOOL_ERROR = "Tool call interrupted";
@@ -123,7 +127,8 @@ const runtimeToolResultPart = (
 export const projectAgentTurnEvent = (
 	messages: readonly SessionMessage[],
 	execution: SessionExecution,
-	event: AgentTurnEvent
+	event: AgentTurnEvent,
+	contextEpoch = getSessionContextEpoch(messages)
 ):
 	| { readonly message: SessionMessage; readonly messages: SessionMessage[] }
 	| undefined => {
@@ -161,6 +166,24 @@ export const projectAgentTurnEvent = (
 			}
 			break;
 		}
+		case "model-step-finished": {
+			const stepStart = parts.findLastIndex(
+				(part) => part.type === "step-start"
+			);
+			const contextMeasurement = contextMeasurementForStep(
+				event,
+				contextEpoch,
+				parts.slice(stepStart + 1).some(isSessionToolPart)
+			);
+			const projected = {
+				...existing,
+				metadata: omitUndefined({ ...existing.metadata, contextMeasurement }),
+			};
+			return {
+				message: projected,
+				messages: replaceMessage(messages, projected),
+			};
+		}
 		case "tool-call-started":
 			parts.push(runtimeToolPart(event));
 			break;
@@ -184,7 +207,14 @@ export const projectAgentTurnEvent = (
 		default:
 			return;
 	}
-	const projected = { ...existing, parts };
+	const projected = {
+		...existing,
+		parts,
+		metadata: omitUndefined({
+			...existing.metadata,
+			contextMeasurement: undefined,
+		}),
+	};
 	return { message: projected, messages: replaceMessage(messages, projected) };
 };
 
@@ -223,7 +253,13 @@ const buildTerminalMessageMetadata = ({
 	const terminalOutcome = terminalOutcomeForEvent(event);
 	const baseHasChoice = !isUndefined(base.metadata?.thinkingLevel);
 	return {
-		...(base.metadata ?? {}),
+		...omitUndefined({
+			...base.metadata,
+			contextMeasurement:
+				event.type === "agent-turn-completed"
+					? base.metadata?.contextMeasurement
+					: undefined,
+		}),
 		agent: base.metadata?.agent ?? agent,
 		interrupted: event.type === "agent-turn-interrupted",
 		...omitUndefined({
@@ -259,13 +295,31 @@ const sanitizeFailedRuntimeMessages = (
 		};
 	});
 
+const sanitizeOutputLimitedRuntimeMessages = (
+	messages: readonly SessionMessage[],
+	assistantId: SessionMessageId
+): SessionMessage[] =>
+	messages.map((message) => {
+		if (message.id !== assistantId || message.role !== "assistant") {
+			return message;
+		}
+		const lastSettledToolIndex = message.parts.findLastIndex(
+			(part) => isSessionToolPart(part) && isTerminalSessionToolPart(part)
+		);
+		return lastSettledToolIndex === -1
+			? message
+			: { ...message, parts: message.parts.slice(0, lastSettledToolIndex + 1) };
+	});
+
 const sanitizeRuntimeMessagesForTerminal = (
 	messages: readonly SessionMessage[],
 	assistantId: SessionMessageId,
 	event: AgentTurnTerminalEvent
 ): SessionMessage[] => {
 	if (event.type === "agent-turn-completed") {
-		return [...messages];
+		return event.outputLimitReached === true
+			? sanitizeOutputLimitedRuntimeMessages(messages, assistantId)
+			: [...messages];
 	}
 	if (event.type === "agent-turn-interrupted") {
 		return sanitizeInterruptedSessionMessages(messages);

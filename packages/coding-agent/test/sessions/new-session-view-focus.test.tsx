@@ -44,11 +44,7 @@ import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { CompactNameList } from "@/modules/sessions/ui/components/startup-overview";
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
-import {
-	type ConfigRuntime,
-	type ConfigSnapshot,
-	createConfigStore,
-} from "@/shared/config/config-store";
+import { createConfigStore } from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -344,35 +340,29 @@ const renderHomeView = async (
 			? {}
 			: { pluginRuntime: options.pluginRuntime }),
 	});
-	const configValue =
-		options.defaultAgentId === undefined
-			? {
-					configStore: createConfigStore({
-						fs: {
-							readFile: async () =>
-								Promise.reject(
-									Object.assign(new Error("Test config is unavailable."), {
-										code: "ENOENT",
-									})
-								),
-						},
-					}),
-					homeRoot,
-					workspace,
-				}
-			: fromPartial<ConfigRuntime>({
-					configStore: {
-						getSnapshot: async () =>
-							fromPartial<ConfigSnapshot>({
-								diagnostics: [],
-								document: { default_agent: options.defaultAgentId },
-								sourceFor: () => undefined,
-								sources: [],
-							}),
-					},
-					homeRoot,
-					workspace,
-				});
+	const configValue = {
+		configStore: createConfigStore({
+			homeRoot,
+			trustedProjectRoots: [],
+			fs: {
+				readFile: async (file) => {
+					if (
+						options.defaultAgentId !== undefined &&
+						file === path.join(homeRoot, ".wincode", "settings.json")
+					) {
+						return JSON.stringify({ default_agent: options.defaultAgentId });
+					}
+					throw Object.assign(new Error("Test config is unavailable."), {
+						code: "ENOENT",
+					});
+				},
+			},
+		}),
+		homeRoot,
+		workspace,
+	};
+	// Application startup publishes configuration before mounting the TUI.
+	await configValue.configStore.getSnapshot(workspace);
 	const app = (
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<ConfigProvider value={configValue}>
@@ -409,29 +399,15 @@ const renderHomeView = async (
 
 const normalizeHomeFrame = (frame: string): string =>
 	frame.replaceAll(/[┃║│]/gu, " ").replaceAll(/\s+/gu, " ");
-
 const captureNormalizedHomeFrame = async (
 	setup: TestRendererSetup
 ): Promise<string> => normalizeHomeFrame(await waitForTestFrame(setup));
 
-const waitForHomeFrame = async (
+const waitForHomeFrame = (
 	setup: TestRendererSetup,
 	text: string
-): Promise<string | undefined> => {
-	let matchingFrame: string | undefined;
-	await act(async () => {
-		for (let attempt = 0; attempt < 50; attempt += 1) {
-			await Bun.sleep(10);
-			await setup.renderOnce();
-			const frame = await waitForTestFrame(setup);
-			if (normalizeHomeFrame(frame).includes(text)) {
-				matchingFrame = frame;
-				return;
-			}
-		}
-	});
-	return matchingFrame;
-};
+): Promise<string> =>
+	setup.waitForFrame((frame) => normalizeHomeFrame(frame).includes(text));
 
 const submitHomePrompt = async (setup: TestRendererSetup): Promise<void> => {
 	const composer = setup.renderer.root.findDescendantById(
@@ -570,22 +546,14 @@ describe("NewSessionView composer focus", () => {
 			if (currentExpanded) {
 				await toggleStartupDetails();
 				currentExpanded = false;
-				if (
-					(await waitForHomeFrame(setup, "Show details · Ctrl+O")) === undefined
-				) {
-					throw new Error("The startup overview did not collapse.");
-				}
+				await waitForHomeFrame(setup, "Show details · Ctrl+O");
 			}
 			await toggleStartupDetails();
 			currentExpanded = true;
-			if (
-				(await waitForHomeFrame(
-					setup,
-					"Ctrl+O to collapse startup help and resources"
-				)) === undefined
-			) {
-				throw new Error("The startup overview did not expand.");
-			}
+			await waitForHomeFrame(
+				setup,
+				"Ctrl+O to collapse startup help and resources"
+			);
 			const startupScrollbox = setup.renderer.root.findDescendantById(
 				"new-session-view-startup-scrollbox"
 			);
@@ -1132,7 +1100,10 @@ describe("NewSessionView composer focus", () => {
 			if (!(composer instanceof TextareaRenderable)) {
 				throw new Error("The new-session composer did not render.");
 			}
-			const lines = (await waitForTestFrame(setup)).split("\n");
+			const frame = await setup.waitForFrame((value) =>
+				value.includes("This project is not trusted.")
+			);
+			const lines = frame.split("\n");
 			const noticeLine = lines.findIndex((line) =>
 				line.includes("This project is not trusted.")
 			);
@@ -1259,15 +1230,21 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		});
 
 		try {
-			expect(await captureNormalizedHomeFrame(setup)).not.toContain(
+			const initialFrame = await setup.waitForFrame(
+				(frame) => !frame.includes("openai/gpt-5.6-luna")
+			);
+			expect(normalizeHomeFrame(initialFrame)).not.toContain(
 				"openai/gpt-5.6-luna"
 			);
 			await act(async () => {
 				pendingSnapshot.resolve([]);
 				await Promise.resolve();
 			});
-			await waitForHomeFrame(setup, "openai/gpt-5.6-luna:low");
-			expect(await captureNormalizedHomeFrame(setup)).toContain(
+			const selectedFrame = await waitForHomeFrame(
+				setup,
+				"openai/gpt-5.6-luna:low"
+			);
+			expect(normalizeHomeFrame(selectedFrame)).toContain(
 				"openai/gpt-5.6-luna:low"
 			);
 		} finally {
@@ -1567,8 +1544,11 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		try {
 			await waitForHomeModelStatus(setup);
 			await submitHomePrompt(setup);
-			await waitForHomeFrame(setup, "Connect a Provider");
-			expect(await captureNormalizedHomeFrame(setup)).not.toContain(
+			await setup.waitFor(
+				async () => (await sessionStore.listSessions()).length === 1
+			);
+			const frame = await setup.waitForFrame(() => true);
+			expect(normalizeHomeFrame(frame)).not.toContain(
 				"Provider Model openai/gpt-5.6-luna is unavailable. Connect a Provider and explicitly select an available Provider SDK Model."
 			);
 			expect(await sessionStore.listSessions()).toHaveLength(1);

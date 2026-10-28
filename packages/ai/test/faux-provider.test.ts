@@ -64,7 +64,13 @@ test("faux sends text, reasoning, tool calls and usage through the real SDK term
 	);
 	expect(received).toEqual([
 		...events.filter((event) => event.type !== "finish"),
-		{ type: "terminal", outcome: { status: "success" } },
+		{
+			type: "terminal",
+			outcome: {
+				completion: { kind: "unknown" },
+				status: "success",
+			},
+		},
 	]);
 });
 

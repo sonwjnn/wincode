@@ -9,6 +9,7 @@ import {
 	type Provider,
 	type ProviderModel,
 } from "@wincode/ai";
+import { normalizeModelFailure } from "../src/model-failures.ts";
 import { createInMemoryCredentialStore } from "./support/credential-store.ts";
 
 const sseResponse = (events: readonly Readonly<Record<string, unknown>>[]) =>
@@ -167,7 +168,10 @@ describe("public OpenAI-compatible SDK providers", () => {
 					totalTokens: 24,
 				},
 			},
-			{ outcome: { status: "success" }, type: "terminal" },
+			{
+				outcome: { completion: { kind: "completed" }, status: "success" },
+				type: "terminal",
+			},
 		]);
 		expect(JSON.stringify(events)).not.toContain("deepseek-test-key");
 
@@ -329,7 +333,10 @@ describe("public OpenAI-compatible SDK providers", () => {
 		expect(calls[1]?.body).not.toHaveProperty("prompt_cache_key");
 		expect(calls[1]?.body).not.toHaveProperty("prompt_cache_options");
 		expect(chatEvents.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 		expect(JSON.stringify(chatEvents)).not.toContain("openrouter-test-key");
@@ -620,6 +627,88 @@ describe("public OpenAI-compatible SDK providers", () => {
 			outcome: { failure: { code: "authentication" }, status: "failure" },
 			type: "terminal",
 		});
+	});
+
+	test("normalizes a provider overflow code before flattening its HTTP failure", async () => {
+		const sdk = createProviderCollection();
+		sdk.register(
+			createDeepSeekProvider({
+				fetch: async () =>
+					Response.json(
+						{
+							error: {
+								code: "request_too_large",
+								message: "private provider diagnostic",
+							},
+						},
+						{ status: 413 }
+					),
+			})
+		);
+		await sdk.setCredential("deepseek", {
+			apiKey: "overflow-test-secret",
+			kind: "api-key",
+		});
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [{ content: [{ text: "hello", type: "text" }], role: "user" }],
+			modelId: "deepseek-chat",
+			providerId: "deepseek",
+		})) {
+			events.push(event);
+		}
+		const terminal = events.at(-1);
+		if (
+			terminal?.type !== "terminal" ||
+			terminal.outcome.status !== "failure"
+		) {
+			throw new Error("Expected a terminal Provider failure.");
+		}
+		const { failure } = terminal.outcome;
+		expect(failure).toMatchObject({
+			code: "provider",
+			message: "The model context is too large.",
+			providerId: "deepseek",
+			statusCode: 413,
+		});
+		expect(normalizeModelFailure(failure).code).toBe("context-overflow");
+		expect(JSON.stringify(failure)).not.toContain(
+			"private provider diagnostic"
+		);
+		expect(JSON.stringify(failure)).not.toContain("overflow-test-secret");
+	});
+
+	test("does not infer context overflow from a bodyless compatible-provider 413", async () => {
+		const sdk = createProviderCollection();
+		sdk.register(
+			createDeepSeekProvider({
+				fetch: async () => new Response(null, { status: 413 }),
+			})
+		);
+		await sdk.setCredential("deepseek", {
+			apiKey: "overflow-test-secret",
+			kind: "api-key",
+		});
+
+		const events: ChatEvent[] = [];
+		for await (const event of sdk.chat({
+			messages: [{ content: [{ text: "hello", type: "text" }], role: "user" }],
+			modelId: "deepseek-chat",
+			providerId: "deepseek",
+		})) {
+			events.push(event);
+		}
+		const terminal = events.at(-1);
+		if (
+			terminal?.type !== "terminal" ||
+			terminal.outcome.status !== "failure"
+		) {
+			throw new Error("Expected a terminal Provider failure.");
+		}
+		expect(normalizeModelFailure(terminal.outcome.failure).code).not.toBe(
+			"context-overflow"
+		);
 	});
 
 	test("compatible provider HTTP failures and mid-stream aborts are terminal without credential leakage", async () => {

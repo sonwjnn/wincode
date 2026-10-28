@@ -32,6 +32,7 @@ import type {
 	ProviderProtocolRequest,
 } from "../sdk-private/protocols/request.ts";
 import { unreachableValue } from "../sdk-private/protocols/shared.ts";
+import { providerChatFinish } from "../sdk-private/provider-events.ts";
 
 const GOOGLE_PROVIDER_ID = "google";
 const GOOGLE_PROTOCOL_ID = "google";
@@ -234,12 +235,7 @@ const streamRequest = async function* (
 			if (part.usage) {
 				yield { type: "usage", usage: part.usage };
 			}
-			yield {
-				...(part.continuation === undefined
-					? {}
-					: { continuation: part.continuation }),
-				type: "finish",
-			};
+			yield providerChatFinish(part);
 		} else {
 			yield part;
 		}

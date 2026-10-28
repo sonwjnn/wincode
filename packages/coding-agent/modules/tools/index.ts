@@ -3,6 +3,8 @@
 export * from "./catalog";
 export { isRenderableEditDiff } from "./edit/diff";
 export { validateMultiEditPatch } from "./edit/multi";
+export type { ToolFileOperation } from "./file-operations";
+export { toolFileOperations } from "./file-operations";
 export { getReadResourcePath } from "./read/selector";
 export type {
 	ResourceLimitProfile,

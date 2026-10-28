@@ -2,13 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { createProviderCollection, type ProviderModel } from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { resolveCompactionSettings } from "@/modules/sessions/compaction/config";
+import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import {
 	summarizeSessionUsage,
 	turnCostUsd,
 } from "@/modules/sessions/usage/session-usage";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
 import {
+	compactionId,
 	modelId,
 	modelIdentity,
 	sessionId,
@@ -20,6 +24,13 @@ const model: ProviderModelSelection = {
 	modelId: modelId("claude-haiku-4-5"),
 	providerId: "anthropic",
 };
+const contextSnapshot = (contextWindowTokens: number): ConfigSnapshot => ({
+	diagnostics: [],
+	document: { contextWindowTokens },
+	sourceFor: () => undefined,
+	sources: [],
+});
+
 const anthropicModel: ProviderModel = {
 	limits: { contextWindowTokens: 200_000 },
 	modelId: model.modelId,
@@ -44,7 +55,13 @@ const assistant = (
 	selection: ProviderModelSelection = model
 ): SessionMessage => ({
 	id: sessionMessageId(id),
-	metadata: usage ? { model: selection, usage } : { model: selection },
+	metadata: usage
+		? {
+				model: selection,
+				usage,
+				contextMeasurement: { epoch: "initial", stepId: "step-1", usage },
+			}
+		: { model: selection },
 	parts: [{ text: id, type: "text" }],
 	role: "assistant",
 });
@@ -141,7 +158,109 @@ describe("turnCostUsd", () => {
 });
 
 describe("summarizeSessionUsage", () => {
-	test("uses the last completed Provider usage and its exact model context limit", () => {
+	test("uses compacted context for occupancy while preserving transcript billing and warm totals", () => {
+		const old = assistant("before", {
+			inputTokens: 90_000,
+			outputTokens: 100,
+			cacheReadTokens: 20_000,
+		});
+		const handoff: SessionMessage = {
+			id: sessionMessageId("compaction:usage-epoch"),
+			role: "user",
+			parts: [{ type: "text", text: "Short handoff" }],
+		};
+		const compacted = summarizeSessionUsage(
+			[old],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[],
+			[handoff, old]
+		);
+		expect(compacted).toMatchObject({
+			contextSource: "estimated",
+			cacheReadTokens: 20_000,
+			costedTurns: 1,
+		});
+		expect(compacted?.contextTokens).toBeLessThan(100);
+		const fresh: SessionMessage = {
+			...assistant("after", { inputTokens: 100, outputTokens: 10 }),
+			metadata: {
+				model,
+				usage: { inputTokens: 100, outputTokens: 10 },
+				contextMeasurement: {
+					epoch: handoff.id,
+					stepId: "step-1",
+					usage: { inputTokens: 100, outputTokens: 10 },
+				},
+			},
+		};
+		const measured = summarizeSessionUsage(
+			[old, fresh],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[],
+			[handoff, fresh]
+		);
+		expect(measured).toMatchObject({
+			contextTokens: 110,
+			contextSource: "measured",
+			costedTurns: 2,
+			cacheReadTokens: 20_000,
+		});
+		expect(measured?.costUsd).toBeCloseTo(0.075_65, 9);
+	});
+
+	test("switching models uses the selected model's context metadata", () => {
+		const selected: ProviderModelSelection = {
+			providerId: "google",
+			modelId: modelId("other-model"),
+		};
+		const result = summarizeSessionUsage(
+			[assistant("old-model", { inputTokens: 90_000, outputTokens: 100 })],
+			selected,
+			[],
+			"idle",
+			[
+				anthropicModel,
+				{
+					...selected,
+					protocolId: "fixture",
+					limits: { contextWindowTokens: 10_000 },
+				},
+			]
+		);
+		expect(result).toMatchObject({
+			contextLimit: 10_000,
+			contextSource: "estimated",
+			costedTurns: 1,
+		});
+		expect(result?.contextTokens).toBeLessThan(100);
+		expect(result?.costUsd).toBeCloseTo(0.0905, 9);
+	});
+
+	test("aggregate-only historical records are estimated rather than treated as request measurements", () => {
+		const historic: SessionMessage = {
+			id: sessionMessageId("legacy"),
+			role: "assistant",
+			parts: [{ type: "text", text: "Done" }],
+			metadata: { model, usage: { inputTokens: 90_000, outputTokens: 100 } },
+		};
+		const result = summarizeSessionUsage([historic], model, [], "idle", [
+			anthropicModel,
+		]);
+		expect(result).toMatchObject({
+			contextSource: "estimated",
+			costedTurns: 1,
+		});
+		expect(result?.contextTokens).toBeLessThan(100);
+		expect(result?.costUsd).toBeCloseTo(0.0905, 9);
+	});
+
+	test("uses Provider metadata when no explicit global override is set", () => {
 		const messages = [
 			assistant("assistant-1", { inputTokens: 90, outputTokens: 10 }),
 			{ id: sessionMessageId("user-2"), parts: [], role: "user" } as const,
@@ -157,13 +276,49 @@ describe("summarizeSessionUsage", () => {
 		});
 	});
 
-	test("shows unknown context when exact Provider Model metadata is absent", () => {
+	test("uses the 272k fallback when Provider Model metadata is absent", () => {
 		const summary = summarizeSessionUsage(
 			[assistant("assistant-1", { inputTokens: 90, outputTokens: 10 })],
 			model
 		);
 
-		expect(summary).toMatchObject({ contextLimit: null, contextPercent: null });
+		expect(summary).toMatchObject({
+			contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+			contextPercent: expect.any(Number),
+		});
+	});
+
+	test("uses the explicit context-window override for the occupancy percentage", () => {
+		const summary = summarizeSessionUsage(
+			[assistant("assistant-1", { inputTokens: 9000, outputTokens: 100 })],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[],
+			undefined,
+			contextSnapshot(10_000)
+		);
+
+		expect(summary).toMatchObject({ contextLimit: 10_000, contextPercent: 91 });
+	});
+
+	test("reports context occupancy above 100 when measured usage exceeds the limit", () => {
+		const summary = summarizeSessionUsage(
+			[assistant("over-limit", { inputTokens: 20_000, outputTokens: 0 })],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[],
+			undefined,
+			contextSnapshot(10_000)
+		);
+
+		expect(summary).toMatchObject({
+			contextLimit: 10_000,
+			contextPercent: 200,
+		});
 	});
 
 	test("shows session cache totals without reducing the latest context measure", () => {
@@ -187,10 +342,13 @@ describe("summarizeSessionUsage", () => {
 		]);
 
 		expect(summary).toMatchObject({
+			inputTokens: 190,
+			outputTokens: 15,
 			cacheReadTokens: 90,
 			cacheWriteTokens: 30,
 			contextTokens: 100,
 		});
+		expect(summary?.cacheHitPercent).toBeCloseTo(66.7, 1);
 		expect(messages).toEqual(transcript);
 	});
 
@@ -223,6 +381,8 @@ describe("summarizeSessionUsage", () => {
 		);
 
 		expect(summary).toMatchObject({
+			inputTokens: 1_000_100,
+			outputTokens: 6,
 			cacheReadTokens: 700_020,
 			cacheWarmingStatus: "scheduled",
 			contextTokens: 105,
@@ -240,6 +400,60 @@ describe("summarizeSessionUsage", () => {
 				model
 			)
 		).toBeNull();
+	});
+
+	test("includes compaction usage in session totals and pricing, not latest-turn context", () => {
+		const compaction: SessionCompaction = {
+			id: compactionId("compaction-1"),
+			sessionId: sessionId("compaction-session"),
+			sequence: 1,
+			summary: { coveredMessageIds: [], formatVersion: 1, text: "summary" },
+			firstKeptUiMessageId: sessionMessageId("assistant-2"),
+			throughMessageUiId: sessionMessageId("assistant-2"),
+			tokensBefore: 100,
+			estimatedTokensAfter: 20,
+			trigger: "manual",
+			summarizationModel: model,
+			summarizationUsage: {
+				cacheReadTokens: 5,
+				cacheWriteTokens: 4,
+				inputTokens: 20,
+				outputTokens: 3,
+			},
+			createdAt: new Date(0),
+			completedAt: new Date(0),
+		};
+		const summary = summarizeSessionUsage(
+			[
+				assistant("assistant-1", {
+					inputTokens: 100,
+					outputTokens: 5,
+					cacheReadTokens: 30,
+					cacheWriteTokens: 10,
+				}),
+				assistant("assistant-2", {
+					inputTokens: 90,
+					outputTokens: 10,
+					cacheReadTokens: 60,
+				}),
+			],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[compaction]
+		);
+
+		expect(summary).toMatchObject({
+			inputTokens: 210,
+			outputTokens: 18,
+			cacheReadTokens: 95,
+			cacheWriteTokens: 14,
+			contextTokens: 100,
+			costedCompactions: 1,
+		});
+		expect(summary?.cacheHitPercent).toBeCloseTo(66.7, 1);
+		expect(summary?.costUsd).toBeCloseTo(0.000_242_75, 9);
 	});
 
 	test("accumulates exact Provider Model prices across measured turns", () => {
@@ -388,7 +602,7 @@ describe("summarizeSessionUsage", () => {
 		});
 	});
 
-	test("rejects invalid context limits before usage and compaction calculations", async () => {
+	test("invalid Provider context metadata falls back while valid metadata sets the limit", async () => {
 		const providerId = "context-limit-fixture";
 		const selection: ProviderModelSelection = {
 			modelId: modelIdentity("context-limit-model"),
@@ -399,7 +613,6 @@ describe("summarizeSessionUsage", () => {
 			{ inputTokens: 5000, outputTokens: 0 },
 			selection
 		);
-		const collection = createProviderCollection();
 		const invalidLimits = [
 			0,
 			1.5,
@@ -408,45 +621,59 @@ describe("summarizeSessionUsage", () => {
 			Number.POSITIVE_INFINITY,
 			Number.NEGATIVE_INFINITY,
 		];
-		for (const contextWindowTokens of invalidLimits) {
-			expect(() =>
-				collection.register({
-					id: providerId,
-					models: [
-						{
-							limits: { contextWindowTokens },
-							modelId: selection.modelId,
-							protocolId: "fixture",
-							providerId,
-						},
-					],
-					resolveAuthorization: () => ({ authorization: "fixture-only" }),
-					async *streamChat() {
-						yield { type: "finish" };
+		for (const [index, contextWindowTokens] of invalidLimits.entries()) {
+			const invalidSelection: ProviderModelSelection = {
+				...selection,
+				modelId: modelIdentity(`invalid-context-model-${index}`),
+			};
+			const collection = createProviderCollection();
+			collection.register({
+				id: providerId,
+				models: [
+					{
+						limits: { contextWindowTokens },
+						modelId: invalidSelection.modelId,
+						protocolId: "fixture",
+						providerId,
 					},
-				})
-			).toThrow(`Invalid model identity for provider ${providerId}.`);
+				],
+				resolveAuthorization: () => ({ authorization: "fixture-only" }),
+				async *streamChat() {
+					yield { type: "finish" };
+				},
+			});
+			const providerModel = collection.getModel(
+				providerId,
+				invalidSelection.modelId
+			);
+			expect(providerModel?.limits?.contextWindowTokens).toBeUndefined();
 
+			const invalidMessage = assistant(
+				`context-limit-usage-${index}`,
+				{ inputTokens: 5000, outputTokens: 0 },
+				invalidSelection
+			);
 			const summary = summarizeSessionUsage(
-				[message],
-				selection,
+				[invalidMessage],
+				invalidSelection,
 				[],
 				"idle",
 				collection.getModels()
 			);
 			expect(summary).toMatchObject({
-				contextLimit: null,
-				contextPercent: null,
+				contextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
 			});
 			expect(
 				resolveCompactionSettings({ contextLimit: summary?.contextLimit })
 			).toMatchObject({
-				autoAvailable: false,
-				modelContextLimit: null,
-				thresholdTokens: null,
+				autoAvailable: true,
+				modelContextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
+				thresholdTokens: 255_616,
 			});
+			await collection.close();
 		}
 
+		const collection = createProviderCollection();
 		collection.register({
 			id: providerId,
 			models: [
@@ -484,7 +711,7 @@ describe("summarizeSessionUsage", () => {
 		await collection.close();
 	});
 
-	test("reports an unknown context limit instead of guessing one", () => {
+	test("uses the 272k fallback for an unknown Provider Model", () => {
 		const unknownModel: ProviderModelSelection = {
 			modelId: modelId("gemini-3-pro-preview"),
 			providerId: "google",
@@ -494,7 +721,7 @@ describe("summarizeSessionUsage", () => {
 			unknownModel
 		);
 
-		expect(summary?.contextLimit).toBeNull();
-		expect(summary?.contextPercent).toBeNull();
+		expect(summary?.contextLimit).toBe(DEFAULT_CONTEXT_WINDOW_TOKENS);
+		expect(summary?.contextPercent).not.toBeNull();
 	});
 });

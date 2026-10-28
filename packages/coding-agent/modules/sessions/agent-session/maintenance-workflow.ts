@@ -16,10 +16,11 @@ import type {
 import { SessionCompactionError } from "../compaction/error";
 import {
 	isContextOverflowFailure,
+	type OverflowContinuationSource,
 	OverflowRecoveryError,
+	prepareOverflowContinuationSource,
 	prepareOverflowRecoveryMessages,
 } from "../compaction/overflow-recovery";
-import type { SessionCompaction } from "../compaction/types";
 import type { SessionMessage } from "../message";
 import {
 	getSessionAttemptMessages,
@@ -27,7 +28,6 @@ import {
 } from "../session-retry";
 import { getReportableSessionFailureFields } from "./session-error-diagnostics";
 import type {
-	AgentSessionPorts,
 	SessionCompactionCommand,
 	SessionCompactionPort,
 	SessionOverflowContinuationOutcome,
@@ -37,6 +37,14 @@ import type {
 } from "./types";
 
 const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
+const recoveryTitle = (
+	trigger: SessionOverflowRecoveryCommand["trigger"]
+): string =>
+	trigger === "output-limit"
+		? "Output-limit recovery"
+		: "Context overflow recovery";
+const continuationFailureGuidance = (title: string): string =>
+	`${title} saved a compacted Session Context, but could not continue it. No new session was created, and completed tool effects were not replayed. Review the saved compaction and any completed tool results; do not resubmit the original request until its effects are checked.`;
 const compactionDiagnosticFields = (
 	command: SessionCompactionCommand,
 	phase: "started" | "completed" | "failed"
@@ -67,19 +75,21 @@ const logCompactionFailure = (
 		void logger.warn("Session compaction failed", record);
 	}
 };
-const logOverflowRecoveryFailure = (
+const logCompactionRecoveryFailure = (
 	error: unknown,
 	phase: "target-resolution" | "continuation",
+	trigger: SessionOverflowRecoveryCommand["trigger"],
 	turnId: AgentTurnId
 ): void => {
 	const fields = getReportableSessionFailureFields(error);
 	if (fields === null) {
 		return;
 	}
-	void logger.warn("Context overflow recovery failed", {
+	void logger.warn(`${recoveryTitle(trigger)} failed`, {
 		...fields,
 		operation: "session.compaction.overflow",
 		phase,
+		trigger,
 		turnId,
 	});
 };
@@ -92,39 +102,51 @@ export type SessionMaintenanceCommandState = {
 	registered: Promise<void>;
 };
 
+export type SessionMaintenanceSessionState = Readonly<{
+	closed: boolean;
+	id: SessionId;
+	shutdownSignal: AbortSignal;
+}>;
+
+export type SessionMaintenanceCommandTransition =
+	| {
+			kind: "started";
+			command: SessionMaintenanceCommandState;
+	  }
+	| {
+			kind: "phase";
+			command: SessionMaintenanceCommandState;
+			phase: SessionMaintenanceCommandState["phase"];
+	  }
+	| { kind: "settled"; command: SessionMaintenanceCommandState };
+
 /** Narrow state/effect capabilities supplied by the authoritative Agent Session. */
 export type SessionMaintenancePort = Readonly<{
-	addCompactionRequest: (request: Promise<CompactSessionResult>) => void;
-	addRecoveryAttempt: (messageId: SessionMessageId) => void;
-	hasAttemptedRecovery: (messageId: SessionMessageId) => boolean;
-	addRecoveryRun: (id: symbol) => void;
-	applyContext: (messages: readonly SessionMessage[]) => void;
+	applyCompactionResult: (result: CompactSessionResult) => void;
 	compaction: SessionCompactionPort;
-	drainQueuedSubmissions: () => Promise<void>;
-	finishCompactionCommand: (command: SessionMaintenanceCommandState) => void;
+	drainQueueInBackground: () => void;
 	getActiveCompaction: () => SessionMaintenanceCommandState | undefined;
 	getContext: () => readonly SessionMessage[];
-	getRecoveryGeneration: () => number;
+	hasAttemptedRecovery: (messageId: SessionMessageId) => boolean;
+	getSessionState: () => SessionMaintenanceSessionState;
 	getTranscript: () => readonly SessionMessage[];
-	isClosed: () => boolean;
+	isRecoveryCurrent: (generation: number) => boolean;
 	mergeTranscript: (
 		messages: readonly SessionMessage[]
 	) => readonly SessionMessage[];
-	recordCompaction: (entry: SessionCompaction) => void;
-	removeCompactionRequest: (request: Promise<CompactSessionResult>) => void;
-	removeRecoveryAttempt: (messageId: SessionMessageId) => void;
-	removeRecoveryRun: (id: symbol) => void;
-	requestOverheadTokens: () => number;
-	resolveCompactionSettings: AgentSessionPorts["resolveCompactionSettings"];
-	setActiveCompaction: (command: SessionMaintenanceCommandState) => void;
+	releaseRecoveryAttempt: (messageId: SessionMessageId) => void;
+	resolveCompactionSettings: (
+		model: CompactSessionInput["model"]
+	) => Promise<CompactSessionInput["settings"]>;
+	runTrackedOverflowRecovery: <T>(run: () => Promise<T>) => Promise<T>;
 	setCompactionError: (error: Error | null) => void;
-	setCompactionPhase: (
-		command: SessionMaintenanceCommandState,
-		phase: SessionMaintenanceCommandState["phase"]
+	startRecoveryAttempt: (messageId: SessionMessageId) => number;
+	trackCompactionRequest: (
+		request: Promise<CompactSessionResult>
+	) => Promise<CompactSessionResult>;
+	transitionCompactionCommand: (
+		transition: SessionMaintenanceCommandTransition
 	) => void;
-	shutdownSignal: AbortSignal;
-	sessionId: SessionId;
-	trackBackgroundTask: (task: Promise<unknown>) => void;
 	waitForExecutionEnd: (turnId: AgentTurnId) => Promise<void>;
 }>;
 
@@ -141,22 +163,6 @@ export type SessionMaintenanceWorkflow = Readonly<{
 export const createSessionMaintenanceWorkflow = (
 	port: SessionMaintenancePort
 ): SessionMaintenanceWorkflow => {
-	const compactionSettingsFor = async (
-		model: CompactSessionInput["model"]
-	): Promise<CompactSessionInput["settings"]> => {
-		const settings = await port.resolveCompactionSettings(model);
-		return {
-			compactionOverheadTokens: port.requestOverheadTokens(),
-			enabled: settings.enabled,
-			keepRecentTokens: settings.keepRecentTokens,
-			maxMediaAttachments: settings.maxMediaAttachments,
-			maxMediaBytes: settings.maxMediaBytes,
-			maxMediaTokens: settings.maxMediaTokens,
-			modelContextLimit: settings.modelContextLimit,
-			reserveTokens: settings.reserveTokens,
-			thresholdTokens: settings.thresholdTokens,
-		};
-	};
 	const compactionSource = (
 		command: SessionCompactionCommand
 	): readonly SessionMessage[] => {
@@ -174,12 +180,14 @@ export const createSessionMaintenanceWorkflow = (
 		signal: AbortSignal
 	): Promise<CompactSessionInput> => ({
 		model: command.model,
-		session: { messages, sessionId: port.sessionId },
-		settings: await compactionSettingsFor(command.model),
+		session: { messages, sessionId: port.getSessionState().id },
+		settings: await port.resolveCompactionSettings(command.model),
 		trigger: command.trigger,
 		...omitUndefined({
 			focus: command.focus,
+			protectedMessageIds: command.protectedMessageIds,
 			thinkingLevel: command.thinkingLevel,
+			turnId: command.turnId,
 		}),
 		signal,
 	});
@@ -188,6 +196,11 @@ export const createSessionMaintenanceWorkflow = (
 		messages: readonly SessionMessage[]
 	): Promise<CompactSessionResult> => {
 		const controller = new AbortController();
+		const signal = AbortSignal.any([
+			controller.signal,
+			port.getSessionState().shutdownSignal,
+			...(command.signal === undefined ? [] : [command.signal]),
+		]);
 		const registration = Promise.withResolvers<void>();
 		const { promise, reject, resolve } =
 			Promise.withResolvers<CompactSessionResult>();
@@ -197,37 +210,39 @@ export const createSessionMaintenanceWorkflow = (
 			promise,
 			registered: registration.promise,
 		};
-		port.setActiveCompaction(activeCommand);
+		port.transitionCompactionCommand({
+			kind: "started",
+			command: activeCommand,
+		});
 		void logger.debug(
 			"Session compaction started",
 			compactionDiagnosticFields(command, "started")
 		);
 		void (async () => {
 			try {
-				const request = await compactionRequest(
-					command,
-					messages,
-					AbortSignal.any([controller.signal, port.shutdownSignal])
-				);
-				if (controller.signal.aborted || port.isClosed()) {
+				const request = await compactionRequest(command, messages, signal);
+				if (signal.aborted || port.getSessionState().closed) {
 					throw new SessionCompactionError(
 						"cancelled",
 						SESSION_SHUT_DOWN_ERROR
 					);
 				}
 				const admitted = port.compaction.compact(request);
-				port.setCompactionPhase(activeCommand, "running");
+				port.transitionCompactionCommand({
+					kind: "phase",
+					command: activeCommand,
+					phase: "running",
+				});
 				registration.resolve();
 				const result = await admitted;
-				if (controller.signal.aborted || port.isClosed()) {
+				// Durable persistence is the commit point; reconcile it before honoring later cancellation.
+				port.applyCompactionResult(result);
+				if (signal.aborted || port.getSessionState().closed) {
 					throw new SessionCompactionError(
 						"cancelled",
 						SESSION_SHUT_DOWN_ERROR
 					);
 				}
-				port.applyContext(result.activeMessages);
-				port.recordCompaction(result.entry);
-				port.setCompactionError(null);
 				void logger.debug(
 					"Session compaction completed",
 					compactionDiagnosticFields(command, "completed")
@@ -238,10 +253,11 @@ export const createSessionMaintenanceWorkflow = (
 				registration.resolve();
 				reject(error);
 			} finally {
-				if (port.getActiveCompaction()?.promise === promise) {
-					port.finishCompactionCommand(activeCommand);
-				}
-				port.trackBackgroundTask(port.drainQueuedSubmissions());
+				port.transitionCompactionCommand({
+					kind: "settled",
+					command: activeCommand,
+				});
+				port.drainQueueInBackground();
 			}
 		})();
 		return promise;
@@ -257,15 +273,20 @@ export const createSessionMaintenanceWorkflow = (
 				return compact(command);
 			}
 		}
-		if (port.isClosed()) {
+		if (port.getSessionState().closed) {
 			throw new SessionCompactionError("cancelled", SESSION_SHUT_DOWN_ERROR);
 		}
 		const request = await compactionRequest(
 			command,
 			messages,
-			port.shutdownSignal
+			command.signal === undefined
+				? port.getSessionState().shutdownSignal
+				: AbortSignal.any([
+						port.getSessionState().shutdownSignal,
+						command.signal,
+					])
 		);
-		if (port.isClosed()) {
+		if (port.getSessionState().closed) {
 			throw new SessionCompactionError("cancelled", SESSION_SHUT_DOWN_ERROR);
 		}
 		if (owner !== undefined && owner.phase === "settled") {
@@ -277,36 +298,22 @@ export const createSessionMaintenanceWorkflow = (
 		}
 		return result;
 	};
-	const trackPendingCompaction = (
-		result: Promise<CompactSessionResult>
-	): Promise<CompactSessionResult> => {
-		port.addCompactionRequest(result);
-		void (async () => {
-			try {
-				await result;
-			} catch {
-				// The compaction caller observes the original rejection.
-			} finally {
-				port.removeCompactionRequest(result);
-			}
-		})();
-		return result;
-	};
 	const compact = (
 		command: SessionCompactionCommand
 	): Promise<CompactSessionResult> => {
-		if (port.isClosed()) {
+		if (port.getSessionState().closed) {
 			return Promise.reject(
 				new SessionCompactionError("cancelled", SESSION_SHUT_DOWN_ERROR)
 			);
 		}
 		const messages = compactionSource(command);
 		const running =
-			port.getActiveCompaction() ?? port.compaction.getInFlight(port.sessionId);
+			port.getActiveCompaction() ??
+			port.compaction.getInFlight(port.getSessionState().id);
 		const result = isNull(running)
 			? startCompaction(command, messages)
 			: joinCompaction(command, messages);
-		return trackPendingCompaction(result);
+		return port.trackCompactionRequest(result);
 	};
 	const cancelCompaction = (): void => {
 		const command = port.getActiveCompaction();
@@ -314,7 +321,11 @@ export const createSessionMaintenanceWorkflow = (
 			return;
 		}
 		command.abort();
-		port.setCompactionPhase(command, "cancelling");
+		port.transitionCompactionCommand({
+			kind: "phase",
+			command,
+			phase: "cancelling",
+		});
 	};
 	const settleCompaction = async (): Promise<Error | null> => {
 		while (true) {
@@ -330,14 +341,15 @@ export const createSessionMaintenanceWorkflow = (
 		}
 	};
 	const recoveryError = (
+		code: OverflowRecoveryError["code"],
 		message: string,
 		cause: unknown
 	): OverflowRecoveryError =>
-		new OverflowRecoveryError("continuation-failed", message, { cause });
+		new OverflowRecoveryError(code, message, { cause });
 	const failRecovery = (
 		error: OverflowRecoveryError
 	): SessionOverflowRecoveryOutcome => {
-		if (!port.isClosed()) {
+		if (!port.getSessionState().closed) {
 			port.setCompactionError(error);
 		}
 		return { kind: "failed", error };
@@ -346,9 +358,13 @@ export const createSessionMaintenanceWorkflow = (
 		command: SessionOverflowRecoveryCommand
 		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Recovery owns independent eligibility, compaction, and continuation failure boundaries.
 	): Promise<SessionOverflowRecoveryOutcome> => {
-		if (!isContextOverflowFailure(command.error)) {
+		if (
+			command.trigger === "context-overflow" &&
+			!isContextOverflowFailure(command.error)
+		) {
 			return { kind: "ineligible" };
 		}
+		const title = recoveryTitle(command.trigger);
 		if (port.hasAttemptedRecovery(command.originalMessageId)) {
 			return { kind: "exhausted" };
 		}
@@ -358,67 +374,89 @@ export const createSessionMaintenanceWorkflow = (
 				(message) =>
 					message.id === command.originalMessageId && message.role === "user"
 			);
-		if (
-			originalMessageIndex !== -1 &&
-			hasCompletedToolArtifact(
-				getSessionAttemptMessages(port.getContext(), originalMessageIndex)
-			)
-		) {
-			return { kind: "ineligible" };
-		}
-		port.addRecoveryAttempt(command.originalMessageId);
-		const recoveryEpoch = port.getRecoveryGeneration();
+		const attemptMessages =
+			originalMessageIndex === -1
+				? []
+				: getSessionAttemptMessages(port.getContext(), originalMessageIndex);
+		/**
+		 * Completed tools make prompt replay unsafe. Recovery instead compacts
+		 * older history and protects the newest settled assistant/tool batch.
+		 */
+		const usesContinuation = hasCompletedToolArtifact(attemptMessages);
+		const recoveryEpoch = port.startRecoveryAttempt(command.originalMessageId);
 		let target: SessionOverflowRecoveryTarget | null;
 		try {
 			target = await command.resolveTarget();
 		} catch (error) {
-			if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
+			if (!port.isRecoveryCurrent(recoveryEpoch)) {
 				return { kind: "ineligible" };
 			}
-			logOverflowRecoveryFailure(error, "target-resolution", command.turnId);
+			logCompactionRecoveryFailure(
+				error,
+				"target-resolution",
+				command.trigger,
+				command.turnId
+			);
 			return failRecovery(
 				recoveryError(
-					"Context overflow recovery could not resolve its compaction settings.",
+					"compaction-failed",
+					`${title} could not resolve its compaction settings. No compaction was committed. No new session was created, and completed tool effects were not replayed. Review the existing Session and model settings before continuing manually.`,
 					error
 				)
 			);
 		}
 		if (isNull(target)) {
-			port.removeRecoveryAttempt(command.originalMessageId);
+			port.releaseRecoveryAttempt(command.originalMessageId);
 			return { kind: "ineligible" };
 		}
-		if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
+		if (!port.isRecoveryCurrent(recoveryEpoch)) {
 			return { kind: "ineligible" };
+		}
+		// Snapshot the durable source after target resolution, so work settled
+		// while the settings loaded is compacted instead of being dropped.
+		let recoverySource: OverflowContinuationSource | null = null;
+		if (usesContinuation) {
+			recoverySource = prepareOverflowContinuationSource(port.getTranscript());
+			if (recoverySource === null) {
+				return { kind: "ineligible" };
+			}
 		}
 		let result: CompactSessionResult;
 		try {
 			result = await compact({
 				model: target.model,
-				sourceMessages: prepareOverflowRecoveryMessages(
-					port.getTranscript(),
-					command.originalMessageId
-				),
+				sourceMessages:
+					recoverySource?.sourceMessages ??
+					prepareOverflowRecoveryMessages(
+						port.getTranscript(),
+						command.originalMessageId
+					),
 				trigger: "overflow",
 				turnId: command.turnId,
 				...omitUndefined({
+					protectedMessageIds: recoverySource?.protectedMessageIds,
 					thinkingLevel: target.thinkingLevel,
 				}),
 			});
 		} catch (error) {
-			if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
+			if (!port.isRecoveryCurrent(recoveryEpoch)) {
 				return { kind: "ineligible" };
 			}
+			const detail = getErrorMessage(error, "");
+			const reason =
+				detail.length === 0
+					? "The existing history could not be summarized safely."
+					: detail;
 			return failRecovery(
-				error instanceof OverflowRecoveryError
-					? error
-					: recoveryError(
-							`Context overflow recovery could not compact the session.${getErrorMessage(error, "")}`,
-							error
-						)
+				recoveryError(
+					"compaction-failed",
+					`${title} could not compact this session: ${reason} No compaction was committed. No new session was created, and completed tool effects were not replayed. Review the existing Session and its tool results, reduce context or correct the compaction settings, then continue manually.`,
+					error
+				)
 			);
 		}
 		await port.waitForExecutionEnd(command.turnId);
-		if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
+		if (!port.isRecoveryCurrent(recoveryEpoch)) {
 			return { kind: "ineligible" };
 		}
 		let continuationOutcome: SessionOverflowContinuationOutcome;
@@ -427,27 +465,58 @@ export const createSessionMaintenanceWorkflow = (
 				originalMessageId: command.originalMessageId,
 			});
 		} catch (error) {
-			if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
+			if (!port.isRecoveryCurrent(recoveryEpoch)) {
 				return { kind: "ineligible" };
 			}
-			logOverflowRecoveryFailure(error, "continuation", command.turnId);
+			logCompactionRecoveryFailure(
+				error,
+				"continuation",
+				command.trigger,
+				command.turnId
+			);
 			return failRecovery(
 				recoveryError(
-					"Context overflow recovery could not continue the compacted Session Context.",
+					"continuation-failed",
+					continuationFailureGuidance(title),
 					error
 				)
 			);
 		}
-		if (port.isClosed() || recoveryEpoch !== port.getRecoveryGeneration()) {
+		if (!port.isRecoveryCurrent(recoveryEpoch)) {
 			return { kind: "ineligible" };
 		}
 		if (continuationOutcome.kind === "refused") {
 			const error = new OverflowRecoveryError(
 				"continuation-refused",
-				`Context overflow recovery could not continue the compacted Session Context: ${continuationOutcome.reason}`,
-				{ cause: command.error }
+				`${title} saved a compacted Session Context, but continuation was refused: ${continuationOutcome.reason}. No new session was created, and completed tool effects were not replayed. Review the saved compaction and any completed tool results; do not resubmit the original request until its effects are checked.`,
+				{
+					cause:
+						command.trigger === "context-overflow" ? command.error : undefined,
+				}
 			);
-			logOverflowRecoveryFailure(error, "continuation", command.turnId);
+			logCompactionRecoveryFailure(
+				error,
+				"continuation",
+				command.trigger,
+				command.turnId
+			);
+			return failRecovery(error);
+		}
+		if (continuationOutcome.kind === "failed") {
+			const error = new OverflowRecoveryError(
+				"continuation-failed",
+				continuationFailureGuidance(title),
+				{
+					cause:
+						command.trigger === "context-overflow" ? command.error : undefined,
+				}
+			);
+			logCompactionRecoveryFailure(
+				error,
+				"continuation",
+				command.trigger,
+				command.turnId
+			);
 			return failRecovery(error);
 		}
 		return { kind: "recovered", entry: result.entry };
@@ -455,18 +524,10 @@ export const createSessionMaintenanceWorkflow = (
 	const recoverOverflow = (
 		command: SessionOverflowRecoveryCommand
 	): Promise<SessionOverflowRecoveryOutcome> => {
-		if (port.isClosed()) {
+		if (port.getSessionState().closed) {
 			return Promise.resolve({ kind: "ineligible" });
 		}
-		const runId = Symbol("overflow-recovery-run");
-		port.addRecoveryRun(runId);
-		const recovery = runOverflowRecovery(command);
-		const settleRecovery = (): void => {
-			port.removeRecoveryRun(runId);
-			port.trackBackgroundTask(port.drainQueuedSubmissions());
-		};
-		void recovery.then(settleRecovery, settleRecovery);
-		return recovery;
+		return port.runTrackedOverflowRecovery(() => runOverflowRecovery(command));
 	};
 	return {
 		cancelCompaction,

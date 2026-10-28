@@ -191,31 +191,27 @@ test("reads its sources when the work needs them, not when it opens", async () =
 	await services.shutdown();
 });
 
-test("resolves compaction settings from the exact Provider Model metadata", async () => {
+test("resolves fallback, model metadata, and explicit override through Session Services", async () => {
 	const model: ProviderModelSelection = {
 		modelId: modelId("gpt-5.6-luna"),
 		providerId: "openai",
 	};
-	const providerModel = (contextWindowTokens: number): ProviderModel => ({
-		limits: { contextWindowTokens },
-		modelId: model.modelId,
-		protocolId: "fixture",
-		providerId: model.providerId,
-	});
-	const configured = (enabled: boolean): ConfigRuntime => ({
+	const configured = (
+		enabled: boolean,
+		contextWindowTokens: number
+	): ConfigRuntime => ({
 		...configRuntime,
 		configStore: {
 			...configRuntime.configStore,
 			getSnapshot: async () =>
 				fromPartial<ConfigSnapshot>({
 					diagnostics: [],
-					document: { compaction: { enabled } },
+					document: { compaction: { enabled }, contextWindowTokens },
 					sourceFor: () => undefined,
 					sources: [],
 				}),
 		},
 	});
-	let currentContextLimit = 100_000;
 	let currentConfig = configRuntime;
 	const services = await openSessionServices({
 		policy: { cwd: workspace, workspace },
@@ -226,18 +222,25 @@ test("resolves compaction settings from the exact Provider Model metadata", asyn
 		},
 	});
 
-	const first = await services.capabilities.getCompactionSettings(
-		model,
-		providerModel(currentContextLimit)
-	);
-	expect(first.modelContextLimit).toBe(100_000);
+	const first = await services.capabilities.getCompactionSettings(model);
+	expect(first.modelContextLimit).toBe(272_000);
 	expect(first.enabled).toBe(true);
 
-	currentContextLimit = 200_000;
-	currentConfig = configured(false);
+	const providerModel = fromPartial<ProviderModel>({
+		limits: { contextWindowTokens: 100_000 },
+		modelId: model.modelId,
+		providerId: model.providerId,
+	});
+	const fromModelMetadata = await services.capabilities.getCompactionSettings(
+		model,
+		providerModel
+	);
+	expect(fromModelMetadata.modelContextLimit).toBe(100_000);
+
+	currentConfig = configured(false, 200_000);
 	const second = await services.capabilities.getCompactionSettings(
 		model,
-		providerModel(currentContextLimit)
+		providerModel
 	);
 	expect(second.modelContextLimit).toBe(200_000);
 	expect(second.enabled).toBe(false);

@@ -1,5 +1,5 @@
 import type { ProviderModel } from "@wincode/ai";
-import { calculateModelUsageCostUsd, getModelContextTokens } from "@wincode/ai";
+import { calculateModelUsageCostUsd } from "@wincode/ai";
 import { isNull } from "@wincode/utils";
 import {
 	type ModelPricingEntry,
@@ -10,11 +10,18 @@ import {
 	isSameProviderModelIdentity,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
+import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import type {
 	SessionMessage,
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
+import {
+	estimateSessionContextTokens,
+	type SessionContextUsage,
+} from "./context-usage";
+import { resolveContextWindowTokens } from "./context-window";
 
 export type SessionUsageSummary = {
 	/** Estimated USD for measured usage with complete rates, or `null` when every rate is unknown. */
@@ -23,23 +30,29 @@ export type SessionUsageSummary = {
 	costCoverage: "complete" | "partial" | "unknown";
 	/** How many real Agent Turns contributed a cost estimate. */
 	costedTurns: number;
+	/** How many compaction summaries contributed a cost estimate. */
+	costedCompactions: number;
 	/** How many separate usage entries contributed a cost estimate. */
 	costedUsageEntries: number;
 	/** Current Session Host cache warmer state; never affects context usage. */
 	cacheWarmingStatus: CacheWarmingStatus;
+	/** Session-total input tokens, including cache reads and writes. */
+	inputTokens: number;
+	/** Session-total generated output tokens. */
+	outputTokens: number;
 	/** Session-total cache reads, kept separate from context usage. */
 	cacheReadTokens: number;
 	/** Session-total cache writes, kept separate from context usage. */
 	cacheWriteTokens: number;
-	/** `null` when the current Provider Model publishes no context limit. */
-	contextLimit: number | null;
-	/** `null` when `contextLimit` is unknown. */
-	contextPercent: number | null;
+	/** Latest assistant turn's cache-read share of its total input, or `null` when unknown. */
+	cacheHitPercent: number | null;
+	/** Effective context limit: explicit override, selected-model metadata, then fallback. */
+	contextLimit: number;
+	/** Rounded active-context occupancy; may exceed 100 when over the model limit. */
+	contextPercent: number;
 	contextTokens: number;
+	contextSource: SessionContextUsage["source"];
 };
-
-const clampPercent = (percent: number): number =>
-	Math.max(0, Math.min(100, Math.round(percent)));
 
 type MessageUsageState = {
 	lastSelection: ProviderModelSelection | null;
@@ -86,108 +99,178 @@ const resolveProviderModelPricing = (
 		: pricingEntryForProviderModel(providerModel);
 };
 
+type SessionUsageTotals = {
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	cost: number;
+	costedCompactions: number;
+	costedTurns: number;
+	costedUsageEntries: number;
+	inputTokens: number;
+	measuredUsageCount: number;
+	outputTokens: number;
+};
+
+const createSessionUsageTotals = (): SessionUsageTotals => ({
+	cacheReadTokens: 0,
+	cacheWriteTokens: 0,
+	cost: 0,
+	costedCompactions: 0,
+	costedTurns: 0,
+	costedUsageEntries: 0,
+	inputTokens: 0,
+	measuredUsageCount: 0,
+	outputTokens: 0,
+});
+
+const addUsageTokens = (
+	totals: SessionUsageTotals,
+	usage: SessionMessageUsage
+): void => {
+	totals.measuredUsageCount += 1;
+	totals.inputTokens += usage.inputTokens;
+	totals.outputTokens += usage.outputTokens;
+	totals.cacheReadTokens += usage.cacheReadTokens ?? 0;
+	totals.cacheWriteTokens += usage.cacheWriteTokens ?? 0;
+};
+
+const addUsageCost = (
+	totals: SessionUsageTotals,
+	pricing: ModelPricingEntry | undefined,
+	usage: SessionMessageUsage
+): boolean => {
+	const cost = turnCostUsd(pricing, usage);
+	if (isNull(cost)) {
+		return false;
+	}
+	totals.cost += cost;
+	return true;
+};
+
+const costCoverageFor = (
+	totals: SessionUsageTotals
+): SessionUsageSummary["costCoverage"] => {
+	const costedUsageCount =
+		totals.costedTurns + totals.costedUsageEntries + totals.costedCompactions;
+	if (costedUsageCount === 0) {
+		return "unknown";
+	}
+	return costedUsageCount < totals.measuredUsageCount ? "partial" : "complete";
+};
+
 const collectSessionUsage = (
 	messages: readonly SessionMessage[],
 	usageEntries: readonly SessionUsageEntry[],
+	compactions: readonly SessionCompaction[],
 	fallbackModel: ProviderModelSelection,
 	providerModels: readonly ProviderModel[] | undefined
 ): Pick<
 	SessionUsageSummary,
+	| "inputTokens"
+	| "outputTokens"
 	| "cacheReadTokens"
 	| "cacheWriteTokens"
 	| "costUsd"
 	| "costCoverage"
 	| "costedTurns"
+	| "costedCompactions"
 	| "costedUsageEntries"
 > => {
-	let total = 0;
-	let measuredTurns = 0;
-	let costedTurns = 0;
-	let costedUsageEntries = 0;
-	let cacheReadTokens = 0;
-	let cacheWriteTokens = 0;
+	const totals = createSessionUsageTotals();
 	for (const message of messages) {
 		const usage = message.metadata?.usage;
 		if (message.role !== "assistant" || !usage) {
 			continue;
 		}
-		measuredTurns += 1;
-		cacheReadTokens += usage.cacheReadTokens ?? 0;
-		cacheWriteTokens += usage.cacheWriteTokens ?? 0;
+		addUsageTokens(totals, usage);
 		const selection = message.metadata?.model ?? fallbackModel;
-		const entry = resolveProviderModelPricing(selection, providerModels);
-		const cost = turnCostUsd(entry ?? undefined, usage);
-		if (!isNull(cost)) {
-			total += cost;
-			costedTurns += 1;
+		const pricing = resolveProviderModelPricing(selection, providerModels);
+		if (addUsageCost(totals, pricing, usage)) {
+			totals.costedTurns += 1;
 		}
 	}
 	for (const entry of usageEntries) {
-		cacheReadTokens += entry.usage.cacheReadTokens ?? 0;
-		cacheWriteTokens += entry.usage.cacheWriteTokens ?? 0;
+		addUsageTokens(totals, entry.usage);
 		const pricing = resolveProviderModelPricing(entry.model, providerModels);
-		const cost = turnCostUsd(pricing ?? undefined, entry.usage);
-		if (!isNull(cost)) {
-			total += cost;
-			costedUsageEntries += 1;
+		if (addUsageCost(totals, pricing, entry.usage)) {
+			totals.costedUsageEntries += 1;
 		}
 	}
-	const costedUsageCount = costedTurns + costedUsageEntries;
-	const measuredUsageCount = measuredTurns + usageEntries.length;
-	let costCoverage: SessionUsageSummary["costCoverage"];
-	if (costedUsageCount === 0) {
-		costCoverage = "unknown";
-	} else if (costedUsageCount < measuredUsageCount) {
-		costCoverage = "partial";
-	} else {
-		costCoverage = "complete";
+	for (const compaction of compactions) {
+		const usage = compaction.summarizationUsage;
+		if (!usage) {
+			continue;
+		}
+		addUsageTokens(totals, usage);
+		const pricing = resolveProviderModelPricing(
+			compaction.summarizationModel,
+			providerModels
+		);
+		if (addUsageCost(totals, pricing, usage)) {
+			totals.costedCompactions += 1;
+		}
 	}
+	const costedUsageCount =
+		totals.costedTurns + totals.costedUsageEntries + totals.costedCompactions;
 	return {
-		cacheReadTokens,
-		cacheWriteTokens,
-		costUsd: costedUsageCount === 0 ? null : total,
-		costCoverage,
-		costedTurns,
-		costedUsageEntries,
+		inputTokens: totals.inputTokens,
+		outputTokens: totals.outputTokens,
+		cacheReadTokens: totals.cacheReadTokens,
+		cacheWriteTokens: totals.cacheWriteTokens,
+		costUsd: costedUsageCount === 0 ? null : totals.cost,
+		costCoverage: costCoverageFor(totals),
+		costedTurns: totals.costedTurns,
+		costedCompactions: totals.costedCompactions,
+		costedUsageEntries: totals.costedUsageEntries,
 	};
 };
 
-/**
- * Displays only the last completed provider usage for the context measure.
- * Compaction estimates are diagnostic metadata and never replace the usage
- * bar's provider measurement. Cost accumulates across the session instead,
- * because a per-turn figure answers a question nobody asked while a session
- * total answers the one everybody does.
- */
+/** Active-context occupancy is separate from full-transcript usage and billing totals. */
 export const summarizeSessionUsage = (
 	messages: readonly SessionMessage[],
 	fallbackModel: ProviderModelSelection,
 	usageEntries: readonly SessionUsageEntry[] = [],
 	cacheWarmingStatus: CacheWarmingStatus = "idle",
-	providerModels?: readonly ProviderModel[]
+	providerModels?: readonly ProviderModel[],
+	compactions: readonly SessionCompaction[] = [],
+	contextMessages: readonly SessionMessage[] = messages,
+	contextSnapshot?: ConfigSnapshot
 ): SessionUsageSummary | null => {
-	const { lastSelection, lastUsage } = collectMessageUsage(messages);
+	const { lastUsage } = collectMessageUsage(messages);
 	if (isNull(lastUsage)) {
 		return null;
 	}
-	const selection = lastSelection ?? fallbackModel;
-	const providerModel = providerModelForSelection(providerModels, selection);
-	const contextLimit = providerModel?.limits?.contextWindowTokens ?? null;
-	const contextTokens = getModelContextTokens(lastUsage);
-	const contextPercent =
-		!isNull(contextLimit) && contextLimit > 0
-			? clampPercent((contextTokens / contextLimit) * 100)
-			: null;
+	const selectedProviderModel = providerModelForSelection(
+		providerModels,
+		fallbackModel
+	);
+	const contextLimit = resolveContextWindowTokens(
+		contextSnapshot,
+		selectedProviderModel?.limits?.contextWindowTokens
+	).tokens;
+	const context = estimateSessionContextTokens(
+		contextMessages,
+		undefined,
+		fallbackModel
+	);
+	const contextTokens = context.tokens;
+	const contextPercent = Math.round((contextTokens / contextLimit) * 100);
 	return {
 		...collectSessionUsage(
 			messages,
 			usageEntries,
+			compactions,
 			fallbackModel,
 			providerModels
 		),
+		cacheHitPercent:
+			lastUsage.inputTokens > 0
+				? ((lastUsage.cacheReadTokens ?? 0) / lastUsage.inputTokens) * 100
+				: null,
 		cacheWarmingStatus,
 		contextLimit,
 		contextPercent,
 		contextTokens,
+		contextSource: context.source,
 	};
 };

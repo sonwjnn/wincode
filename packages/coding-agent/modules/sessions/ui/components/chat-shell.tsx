@@ -21,6 +21,7 @@ import {
 	AUTO_COMPACT_SETTING,
 	useSettingRegistryValue,
 } from "@/modules/settings";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
 import {
 	useKeyboardLayer,
 	useToggleShortcut,
@@ -89,6 +90,7 @@ type ChatShellProps = {
 	viewId: string;
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	cacheWarmingStatus?: CacheWarmingStatus;
+	contextSnapshot?: ConfigSnapshot;
 	/** Rendered at the bottom of the transcript; the shell never persists it. */
 	transcriptNotice?: ReactNode;
 };
@@ -177,6 +179,7 @@ export function ChatShell({
 	viewId,
 	sessionUsageEntries = [],
 	cacheWarmingStatus = "idle",
+	contextSnapshot,
 	transcriptNotice,
 }: ChatShellProps) {
 	const scrollboxRef = useRef<ScrollBoxRenderable>(null);
@@ -321,6 +324,8 @@ export function ChatShell({
 		!(isBusy || isUndefined(latestRetryMessageId)) &&
 		canRetryMessage(latestRetryMessageId) &&
 		!isUndefined(onRetry);
+	// The durable ledger includes successful and failed summary attempts;
+	// compaction records repeat successful usage and would inflate session totals.
 	const usage = useMemo(
 		() =>
 			summarizeSessionUsage(
@@ -328,14 +333,19 @@ export function ChatShell({
 				model,
 				sessionUsageEntries,
 				cacheWarmingStatus,
-				providerModels
+				providerModels,
+				[],
+				activeMessages ?? displayMessages,
+				contextSnapshot
 			),
 		[
 			displayMessages,
+			activeMessages,
 			model,
 			sessionUsageEntries,
 			cacheWarmingStatus,
 			providerModels,
+			contextSnapshot,
 		]
 	);
 	useEffect(() => {

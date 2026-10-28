@@ -7,7 +7,18 @@ import {
 	SessionDatabaseResetRequiredError,
 } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import { sessionId } from "../support/identifiers";
+import {
+	agentId,
+	agentTurnId,
+	modelId,
+	sessionId,
+	sessionMessageId,
+} from "../support/identifiers";
+
+const model = {
+	modelId: modelId("gpt-5.6-luna"),
+	providerId: "openai",
+} as const;
 
 test("initializes the current compaction schema in a fresh local database", async () => {
 	const directory = await fs.mkdtemp(
@@ -100,6 +111,60 @@ test("requires resetting local data instead of converting an incompatible reason
 			SessionDatabaseResetRequiredError
 		);
 	} finally {
+		await fs.rm(directory, { force: true, recursive: true });
+	}
+});
+
+test("reopens a compaction's cumulative file operations from durable storage", async () => {
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-compaction-files-")
+	);
+	const databasePath = path.join(directory, "session.sqlite");
+	const { db } = createDatabase(databasePath);
+	const store = createDrizzleSessionStore(db);
+	try {
+		const created = await store.createSession({
+			agent: agentId("build"),
+			message: {
+				id: sessionMessageId("files-user"),
+				parts: [{ text: "track files", type: "text" }],
+				role: "user",
+			},
+			model,
+			turnId: agentTurnId("files-turn"),
+		});
+		const entry = await store.appendCompaction({
+			estimatedTokensAfter: 10,
+			firstKeptUiMessageId: sessionMessageId("files-user"),
+			sessionId: created.id,
+			summary: {
+				coveredMessageIds: [],
+				fileOperations: {
+					modified: ["src/b.ts"],
+					read: ["src/a.ts"],
+				},
+				formatVersion: 1,
+				text: "tracked",
+			},
+			summarizationModel: model,
+			throughMessageUiId: sessionMessageId("files-user"),
+			tokensBefore: 100,
+			trigger: "manual",
+		});
+		expect(entry.summary.fileOperations).toEqual({
+			modified: ["src/b.ts"],
+			read: ["src/a.ts"],
+		});
+		// Reopening reads the same durable sets, so the next compaction carries them.
+		const reopened = await createDrizzleSessionStore(db).getLatestCompaction(
+			created.id
+		);
+		expect(reopened?.summary.fileOperations).toEqual({
+			modified: ["src/b.ts"],
+			read: ["src/a.ts"],
+		});
+	} finally {
+		db.$client.close();
 		await fs.rm(directory, { force: true, recursive: true });
 	}
 });

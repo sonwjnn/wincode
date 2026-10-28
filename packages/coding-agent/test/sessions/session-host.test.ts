@@ -26,6 +26,7 @@ import {
 	toSubmissionId,
 } from "@wincode/agent-core";
 import {
+	type ChatRequest,
 	createGoogleProvider,
 	createProviderCollection,
 	type GoogleProviderOptions,
@@ -56,10 +57,14 @@ import type {
 	SessionSubmissionEvent,
 } from "@/modules/sessions/agent-session/types";
 import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
-import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
+import {
+	type ResolvedCompactionSettings,
+	resolveCompactionSettings,
+} from "@/modules/sessions/compaction/config";
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
 import type {
 	AppendSessionCompactionInput,
+	SessionCompaction,
 	SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
 import {
@@ -90,6 +95,8 @@ import {
 	type SessionWriterLock,
 } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
+import { estimateSessionContextTokens } from "@/modules/sessions/usage/context-usage";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import { summarizeSessionUsage } from "@/modules/sessions/usage/session-usage";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
@@ -141,6 +148,7 @@ const cacheWarmingModel: ProviderModelSelection = {
 	providerId: "openai",
 };
 const cacheWarmingProviderModel: ProviderModel = {
+	limits: { contextWindowTokens: 200_000 },
 	modelId: cacheWarmingModel.modelId,
 	pricing: {
 		cacheReadPerMillionTokensUsd: 0.4,
@@ -149,6 +157,7 @@ const cacheWarmingProviderModel: ProviderModel = {
 	},
 	protocolId: "fixture",
 	providerId: "openai",
+	reasoningEfforts: ["high"],
 };
 const hostProviderModels: readonly ProviderModel[] = [
 	{
@@ -382,6 +391,53 @@ const seedSession = async (
 	};
 };
 
+const seedCompactionHistorySession = async (
+	prefix: string
+): Promise<{ sessionId: SessionId }> => {
+	const seeded = await seedSession(prefix, "completed");
+	for (let index = 0; index < 24; index += 1) {
+		const turnId = agentTurnId(`${prefix}-summary-turn-${index}`);
+		const userMessage = message(
+			`${prefix}-summary-user-${index}`,
+			"user",
+			`user evidence ${index} ${"u".repeat(700)}`
+		);
+		await store.commitSessionRecord({
+			record: buildUserSessionRecord({
+				agentId: buildId,
+				message: userMessage,
+				model,
+				turnId,
+			}),
+			sessionId: seeded.sessionId,
+		});
+		await store.commitSessionRecord({
+			record: {
+				agentId: buildId,
+				id: sessionRecordId(`${prefix}-summary-record-${index}`),
+				messages: [
+					{
+						id: sessionMessageId(`${prefix}-summary-assistant-${index}`),
+						parts: [
+							{
+								text: `assistant evidence ${index} ${"a".repeat(700)}`,
+								type: "text",
+							},
+						],
+						role: "assistant",
+					},
+				],
+				model,
+				outcome: completedOutcome(),
+				turnId,
+				version: 1,
+			},
+			sessionId: seeded.sessionId,
+		});
+	}
+	return { sessionId: seeded.sessionId };
+};
+
 const compactionModule = (summaryGenerator: SummaryGenerator) =>
 	createSessionCompaction({
 		estimateTokens: (messages) => messages.length,
@@ -483,7 +539,7 @@ const createCapabilities = (
 		getCapabilityCeiling: () => undefined,
 		getCompactionModule: () =>
 			compactionModule(async () => ({ text: "summary" })),
-		getCompactionSettings: async (_model, providerModel) =>
+		getCompactionSettings: async () =>
 			fromPartial<ResolvedCompactionSettings>({
 				autoAvailable: false,
 				enabled: true,
@@ -491,7 +547,7 @@ const createCapabilities = (
 				maxMediaAttachments: 4,
 				maxMediaBytes: 1024,
 				maxMediaTokens: 128,
-				modelContextLimit: providerModel?.limits?.contextWindowTokens ?? null,
+				modelContextLimit: DEFAULT_CONTEXT_WINDOW_TOKENS,
 				overflowRecoveryAvailable: false,
 				reserveTokens: 1000,
 				thresholdTokens: null,
@@ -1675,7 +1731,974 @@ test("Session Host reports an unavailable Skill target without activating it", a
 	}
 });
 
+const createLongLoopHost = async (
+	prefix: string,
+	summarize: () => Promise<string> = async () =>
+		"Earlier steps read files successfully. Continue the task.",
+	storePort: SessionStore = store,
+	options: {
+		autoCompact?: boolean;
+		overflowAtStep?: number;
+		providerInputTokens?: number;
+		toolOutput?: string;
+		toolSteps?: number;
+	} = {}
+) => {
+	const seeded = await seedSession(prefix, "completed");
+	const counts = { effects: 0, modelCalls: 0, summaries: 0 };
+	const requests: ProviderChatRequest[] = [];
+	const previousScript = recorder.stepScript;
+	recorder.stepScript = async function* (request) {
+		if (request.system?.includes("session summarizer")) {
+			counts.summaries += 1;
+			yield { type: "text-delta", delta: await summarize() };
+		} else {
+			requests.push(request);
+			counts.modelCalls += 1;
+			if (counts.modelCalls <= (options.toolSteps ?? 3)) {
+				yield {
+					type: "text-delta",
+					delta: `checkpoint text ${counts.modelCalls}`,
+				};
+				yield {
+					type: "tool-call",
+					toolCallId: `long-read-${counts.modelCalls}`,
+					toolName: "read",
+					input: { path: `file-${counts.modelCalls}.ts` },
+				};
+			} else {
+				yield { type: "text-delta", delta: "final answer" };
+			}
+			yield {
+				type: "usage",
+				usage: {
+					inputTokens:
+						counts.modelCalls === (options.overflowAtStep ?? 1)
+							? (options.providerInputTokens ?? 10)
+							: 10,
+					outputTokens: 2,
+				},
+			};
+		}
+		yield {
+			completion: { kind: "completed" },
+			continuation: { opaqueStep: counts.modelCalls },
+			type: "finish",
+		};
+	};
+	const document = {
+		compaction: {
+			auto: options.autoCompact ?? true,
+			keepRecentTokens: 2000,
+			overflowRecovery: true,
+			reserveTokens: 16_384,
+			summary: { maxOutputTokens: 512 },
+		},
+		contextWindowTokens: 200_000,
+	};
+	const capabilities: SessionCapabilities = {
+		...createCapabilities(storePort, document),
+		getCompactionModule: () => createSessionCompaction({ store: storePort }),
+		getCompactionSettings: async (selection) =>
+			resolveCompactionSettings({
+				model: selection,
+				snapshot: {
+					document,
+					sources: [],
+					diagnostics: [],
+					sourceFor: () => undefined,
+				},
+			}),
+		getTurnToolResolver: () => async () => [
+			{
+				definition: {
+					name: "read",
+					description: "Read test content",
+					inputSchema: z.object({ path: z.string() }),
+				},
+				execute: async () => {
+					counts.effects += 1;
+					return {
+						type: "success",
+						output: options.toolOutput ?? "tool payload ".repeat(23_000),
+					};
+				},
+			},
+		],
+	};
+	const host = await createSessionHost({
+		capabilities,
+		sessionId: seeded.sessionId,
+	});
+	return { counts, requests, previousScript, seeded, capabilities, host };
+};
+
 describe("Session Host opening", () => {
+	test("compacts a provider-accepted context overflow between tool steps without replaying effects", async () => {
+		const { counts, requests, previousScript, seeded, capabilities, host } =
+			await createLongLoopHost(
+				"silent-overflow",
+				async () =>
+					"Prior context compacted; continue with the completed tool result.",
+				store,
+				{
+					autoCompact: false,
+					overflowAtStep: 3,
+					providerInputTokens: 200_001,
+					toolOutput: "silent-overflow-tool-result ".repeat(23_000),
+					toolSteps: 3,
+				}
+			);
+		try {
+			const outcome = await host.agentSession.send(
+				sendInput(capabilities, "run the long task")
+			);
+
+			expect(outcome.rejected).toBe(false);
+			expect(host.getSnapshot().compactionError).toBeNull();
+			expect(host.getSnapshot().error).toBeNull();
+			expect(counts.effects).toBe(3);
+			expect(counts.modelCalls).toBe(4);
+			expect(counts.summaries).toBe(1);
+
+			const compactions = await store.getCompactions(seeded.sessionId);
+			expect(compactions).toHaveLength(2);
+			expect(compactions.at(-1)?.trigger).toBe("overflow");
+			const continuedRequest = requests.at(-1);
+			expect(JSON.stringify(continuedRequest)).toContain(
+				"Prior context compacted; continue with the completed tool result."
+			);
+			expect(JSON.stringify(continuedRequest)).toContain(
+				"silent-overflow-tool-result"
+			);
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	test("a long tool loop compacts between settled steps without replay and reopens its checkpointed text", async () => {
+		const { counts, requests, previousScript, seeded, capabilities, host } =
+			await createLongLoopHost("between-steps");
+		try {
+			expect(
+				await host.agentSession.send(
+					sendInput(capabilities, "run the long task")
+				)
+			).toEqual({ rejected: false });
+			expect(host.getSnapshot().compactionError).toBeNull();
+			expect(host.getSnapshot().error).toBeNull();
+			expect(counts.effects).toBe(3);
+			expect(counts.modelCalls).toBe(4);
+			expect(counts.summaries).toBe(1);
+			expect(
+				estimateSessionContextTokens(host.getSnapshot().context).source
+			).toBe("measured");
+			const lastRequest = requests.at(-1);
+			expect(JSON.stringify(lastRequest)).toContain(
+				"Earlier steps read files successfully"
+			);
+			expect(
+				lastRequest?.messages.findLast(
+					(message) => message.role === "assistant"
+				)?.continuation
+			).toEqual({ opaqueStep: 3 });
+			const records = await store.listSessionRecords(seeded.sessionId);
+			const ownRecords = records.filter(
+				(record) =>
+					record.turnId !== agentTurnId("between-steps-turn-1") &&
+					record.turnId !== agentTurnId("between-steps-turn-2")
+			);
+			expect(
+				ownRecords.filter((record) => record.outcome.kind === "checkpoint")
+			).toHaveLength(3);
+			expect(
+				ownRecords
+					.filter((record) => record.outcome.kind === "assistant")
+					.at(-1)?.messages[0]?.metadata?.usage
+			).toMatchObject({ inputTokens: 40, outputTokens: 8 });
+			expect(
+				textOf(
+					host.getSnapshot().transcript.flatMap((message) => message.parts)
+				)
+			).toContain("checkpoint text 1");
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+		const reopened = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		try {
+			const transcriptText = textOf(
+				reopened.getSnapshot().transcript.flatMap((message) => message.parts)
+			);
+			expect(transcriptText).toContain("checkpoint text 1");
+			expect(transcriptText).toContain("checkpoint text 2");
+			expect(transcriptText).toContain("checkpoint text 3");
+			expect(
+				estimateSessionContextTokens(reopened.getSnapshot().context).source
+			).toBe("measured");
+			expect(reopened.getSnapshot().context[0]?.parts).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						text: expect.stringContaining(
+							"Earlier steps read files successfully"
+						),
+					}),
+				])
+			);
+			expect(counts.effects).toBe(3);
+		} finally {
+			await reopened.shutdown();
+		}
+	});
+	test("the same live turn can compact twice without re-running a successful tool", async () => {
+		const { host, capabilities, seeded, counts, previousScript } =
+			await createLongLoopHost("repeat-preparation", undefined, store, {
+				toolSteps: 5,
+			});
+		try {
+			await host.agentSession.send(sendInput(capabilities));
+			expect(counts).toEqual({ effects: 5, modelCalls: 6, summaries: 2 });
+			expect(host.getSnapshot().compactionError).toBeNull();
+			expect(host.getSnapshot().compactions).toHaveLength(3);
+			const records = await store.listSessionRecords(seeded.sessionId);
+			expect(
+				records.filter((record) => record.outcome.kind === "checkpoint")
+			).toHaveLength(5);
+			expect(
+				records.filter((record) => record.outcome.kind === "assistant").at(-1)
+					?.messages[0]?.metadata?.usage
+			).toMatchObject({ inputTokens: 60, outputTokens: 12 });
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	test("an oversized newest tool batch fails closed instead of splitting or replaying its results", async () => {
+		const { host, capabilities, seeded, counts, previousScript } =
+			await createLongLoopHost("protected-too-large", undefined, store, {
+				toolOutput: "large ".repeat(200_000),
+			});
+		try {
+			await host.agentSession.send(sendInput(capabilities));
+			expect(counts).toEqual({ effects: 1, modelCalls: 1, summaries: 0 });
+			expect(host.getSnapshot().compactionError).toMatchObject({
+				code: "context-still-too-large",
+			});
+			expect((await store.getLatestCompaction(seeded.sessionId))?.id).toBe(
+				seeded.compaction
+			);
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	test("overflow recovery after completed tools continues the checkpointed context without a prompt replay", async () => {
+		const seeded = await seedSession("overflow-tools", "completed");
+		const counts = { effects: 0, modelCalls: 0, summaries: 0 };
+		const requests: ProviderChatRequest[] = [];
+		const previousScript = recorder.stepScript;
+		recorder.stepScript = async function* (request) {
+			if (request.system?.includes("session summarizer")) {
+				counts.summaries += 1;
+				yield { type: "text-delta", delta: "Earlier step read one file." };
+			} else {
+				requests.push(request);
+				counts.modelCalls += 1;
+				if (counts.modelCalls === 1) {
+					yield { type: "text-delta", delta: "checkpoint text" };
+					yield {
+						input: { path: "file.ts" },
+						toolCallId: "overflow-read-1",
+						toolName: "read",
+						type: "tool-call",
+					};
+				} else if (counts.modelCalls === 2) {
+					throw new Error("The prompt exceeds the model context window.");
+				} else {
+					yield { type: "text-delta", delta: "recovered answer" };
+				}
+				yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
+			}
+			yield { type: "finish" };
+		};
+		const document = {
+			compaction: {
+				keepRecentTokens: 1,
+				reserveTokens: 16_384,
+				summary: { maxOutputTokens: 512 },
+			},
+			contextWindowTokens: 200_000,
+		};
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(store, document),
+			getCompactionModule: () => createSessionCompaction({ store }),
+			getCompactionSettings: async (selection) =>
+				resolveCompactionSettings({
+					model: selection,
+					snapshot: {
+						document,
+						sources: [],
+						diagnostics: [],
+						sourceFor: () => undefined,
+					},
+				}),
+			getTurnToolResolver: () => async () => [
+				{
+					definition: {
+						name: "read",
+						description: "Read test content",
+						inputSchema: z.object({ path: z.string() }),
+					},
+					execute: async () => {
+						counts.effects += 1;
+						return { type: "success", output: "tool payload ".repeat(500) };
+					},
+				},
+			],
+		};
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const recovered = Promise.withResolvers<void>();
+		const hasRecovered = (): boolean =>
+			!host.getSnapshot().turnActive &&
+			host
+				.getSnapshot()
+				.transcript.some((message) =>
+					message.parts.some(
+						(part) => part.type === "text" && part.text === "recovered answer"
+					)
+				);
+		const unsubscribe = host.subscribe(() => {
+			if (hasRecovered()) {
+				recovered.resolve();
+			}
+		});
+		try {
+			expect(
+				await host.agentSession.send(sendInput(capabilities, "run the tools"))
+			).toEqual({ rejected: false });
+			if (hasRecovered()) {
+				recovered.resolve();
+			}
+			await recovered.promise;
+			// The completed Tool Call ran exactly once; recovery compacted and continued
+			// instead of answering the prompt again.
+			expect(counts.effects).toBe(1);
+			expect(counts.modelCalls).toBe(3);
+			expect(counts.summaries).toBe(1);
+			const continuation = requests.at(-1);
+			const serialized = JSON.stringify(continuation);
+			expect(serialized).toContain("Earlier step read one file.");
+			expect(serialized).toContain("tool payload");
+			expect(serialized).not.toContain("run the tools");
+			const latest = await store.getLatestCompaction(seeded.sessionId);
+			expect(latest?.trigger).toBe("overflow");
+			expect(latest?.id).not.toBe(seeded.compaction);
+			const records = await store.listSessionRecords(seeded.sessionId);
+			expect(
+				records.flatMap((record) =>
+					record.messages.flatMap((message) => message.parts)
+				)
+			).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ text: "recovered answer", type: "text" }),
+				])
+			);
+		} finally {
+			unsubscribe();
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	for (const failure of ["summary", "persistence", "checkpoint"] as const) {
+		test(`between-step ${failure} failure preserves settled tools and sends no next model request`, async () => {
+			const storePort: SessionStore = {
+				...store,
+				commitSessionRecord: async (input) => {
+					if (
+						failure === "checkpoint" &&
+						input.record.outcome.kind === "checkpoint"
+					) {
+						throw new Error("checkpoint unavailable");
+					}
+					await store.commitSessionRecord(input);
+				},
+				appendCompaction: async (input) => {
+					if (failure === "persistence") {
+						throw new Error("compaction persistence unavailable");
+					}
+					return store.appendCompaction(input);
+				},
+			};
+			const fixture = await createLongLoopHost(
+				`preparation-${failure}`,
+				async () => {
+					if (failure === "summary") {
+						throw new Error("summary unavailable");
+					}
+					return "Completed tools remain durable.";
+				},
+				storePort
+			);
+			const { host, capabilities, seeded, counts, previousScript } = fixture;
+			try {
+				await host.agentSession.send(sendInput(capabilities));
+				const expectedEffects = failure === "checkpoint" ? 1 : 3;
+				expect(counts.effects).toBe(expectedEffects);
+				expect(counts.modelCalls).toBe(expectedEffects);
+				expect((await store.getLatestCompaction(seeded.sessionId))?.id).toBe(
+					seeded.compaction
+				);
+				const records = await store.listSessionRecords(seeded.sessionId);
+				expect(
+					records.filter((record) => record.outcome.kind === "tool")
+				).toHaveLength(expectedEffects);
+				expect(
+					records.filter((record) => record.outcome.kind === "assistant").at(-1)
+						?.outcome
+				).toMatchObject({ terminal: { kind: "failed" } });
+			} finally {
+				await host.shutdown();
+				recorder.stepScript = previousScript;
+			}
+		});
+	}
+
+	test("cancelling a between-step summary preserves completed tools and never resumes the next model step", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<string>();
+		const { host, capabilities, seeded, counts, previousScript } =
+			await createLongLoopHost("cancel-preparation", async () => {
+				started.resolve();
+				return release.promise;
+			});
+		const sending = host.agentSession.send(sendInput(capabilities));
+		try {
+			await started.promise;
+			const interrupting = host.agentSession.interruptAll();
+			release.resolve("Discard this cancelled summary.");
+			await Promise.all([sending, interrupting]);
+			expect(counts.effects).toBe(3);
+			expect(counts.modelCalls).toBe(3);
+			expect((await store.getLatestCompaction(seeded.sessionId))?.id).toBe(
+				seeded.compaction
+			);
+			const records = await store.listSessionRecords(seeded.sessionId);
+			expect(
+				records.filter((record) => record.outcome.kind === "tool")
+			).toHaveLength(3);
+			expect(
+				records.filter((record) => record.outcome.kind === "checkpoint")
+			).toHaveLength(3);
+		} finally {
+			release.resolve("");
+			await sending;
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	for (const boundary of ["checkpoint", "compaction"] as const) {
+		test(`cancellation during ${boundary} persistence reconciles the durable winner without duplicate assistant IDs`, async () => {
+			const writeStarted = Promise.withResolvers<void>();
+			const releaseWrite = Promise.withResolvers<void>();
+			const storePort: SessionStore = {
+				...store,
+				commitSessionRecord: async (input) => {
+					if (
+						boundary === "checkpoint" &&
+						input.record.outcome.kind === "checkpoint"
+					) {
+						writeStarted.resolve();
+						await releaseWrite.promise;
+					}
+					await store.commitSessionRecord(input);
+				},
+				appendCompaction: async (input) => {
+					if (boundary === "compaction") {
+						writeStarted.resolve();
+						await releaseWrite.promise;
+					}
+					return store.appendCompaction(input);
+				},
+			};
+			const { host, seeded, capabilities, counts, previousScript } =
+				await createLongLoopHost(
+					`cancel-durable-${boundary}`,
+					undefined,
+					storePort
+				);
+			const sending = host.agentSession.send(sendInput(capabilities));
+			let liveIds: SessionMessage["id"][] = [];
+			try {
+				await writeStarted.promise;
+				const interrupting = host.agentSession.interruptAll();
+				releaseWrite.resolve();
+				await Promise.all([sending, interrupting]);
+				expect(counts.effects).toBe(boundary === "checkpoint" ? 1 : 3);
+				expect(counts.modelCalls).toBe(counts.effects);
+				const records = await store.listSessionRecords(seeded.sessionId);
+				const messageIds = records.flatMap((record) =>
+					record.messages.map((message) => message.id)
+				);
+				expect(new Set(messageIds).size).toBe(messageIds.length);
+				const latest = await store.getLatestCompaction(seeded.sessionId);
+				expect(host.getSnapshot().compactions.at(-1)?.id).toBe(latest?.id);
+				liveIds = host.getSnapshot().context.map((message) => message.id);
+			} finally {
+				releaseWrite.resolve();
+				await sending;
+				await host.shutdown();
+				recorder.stepScript = previousScript;
+			}
+			const reopened = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			try {
+				expect(
+					reopened.getSnapshot().context.map((message) => message.id)
+				).toEqual(liveIds);
+				expect(counts.modelCalls).toBe(counts.effects);
+			} finally {
+				await reopened.shutdown();
+			}
+		});
+	}
+
+	test("steering committed while between-step summarization waits is delivered once to the next request", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<string>();
+		const { host, capabilities, counts, requests, previousScript } =
+			await createLongLoopHost("steer-preparation", async () => {
+				started.resolve();
+				return release.promise;
+			});
+		const sending = host.agentSession.send(sendInput(capabilities));
+		try {
+			await started.promise;
+			expect(
+				await host.agentSession.prompt(
+					sendInput(capabilities, "steer while compacting")
+				)
+			).toMatchObject({ rejected: false, disposition: "queued" });
+			expect((await host.agentSession.steer()).kind).toBe("steered");
+			release.resolve("Earlier tools are complete.");
+			await sending;
+			expect(counts.modelCalls).toBe(4);
+			expect(counts.effects).toBe(3);
+			const delivered = requests
+				.at(-1)
+				?.messages.flatMap((message) => message.content)
+				.filter(
+					(part) =>
+						part.type === "text" && part.text === "steer while compacting"
+				);
+			expect(delivered).toHaveLength(1);
+			expect(host.getSnapshot().steeringMessages).toHaveLength(0);
+		} finally {
+			release.resolve("");
+			await sending;
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+
+	test("a stop-tool turn retains aggregate billing after earlier text was checkpointed", async () => {
+		const seeded = await seedSession("checkpoint-billing", "completed");
+		const previousScript = recorder.stepScript;
+		let calls = 0;
+		recorder.stepScript = async function* () {
+			calls += 1;
+			if (calls === 1) {
+				yield { type: "text-delta", delta: "checkpoint this text" };
+			}
+			yield {
+				type: "tool-call",
+				toolCallId: `billing-${calls}`,
+				toolName: "read",
+				input: { path: "a.ts" },
+			};
+			yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
+			yield { type: "finish" };
+		};
+		let effects = 0;
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(),
+			getTurnToolResolver: () => async () => [
+				{
+					definition: {
+						name: "read",
+						description: "read",
+						inputSchema: z.object({ path: z.string() }),
+					},
+					execute: async () => {
+						effects += 1;
+						return {
+							type: "success",
+							output: "read",
+							...(effects === 2 ? { stopTurn: true as const } : {}),
+						};
+					},
+				},
+			],
+		};
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		try {
+			await host.agentSession.send(sendInput(capabilities));
+			const records = await store.listSessionRecords(seeded.sessionId);
+			expect(host.getSnapshot().error).toBeNull();
+			expect(host.getSnapshot().compactionError).toBeNull();
+			expect(effects).toBe(2);
+			expect(
+				records.filter((record) => record.outcome.kind === "checkpoint")
+			).toHaveLength(1);
+			expect(
+				records.filter((record) => record.outcome.kind === "assistant").at(-1)
+					?.messages[0]?.metadata?.usage
+			).toMatchObject({ inputTokens: 20, outputTokens: 4 });
+		} finally {
+			await host.shutdown();
+			recorder.stepScript = previousScript;
+		}
+	});
+	test("a configured summary target does not change the Session Selection or the next chat target", async () => {
+		const seeded = await seedSession("summary-routing", "completed");
+		const document = {
+			compaction: {
+				keepRecentTokens: 1,
+				reserveTokens: 1000,
+				auto: false,
+				summary: { model: "openai/gpt-5.6", maxOutputTokens: 512 },
+			},
+			contextWindowTokens: 200_000,
+		};
+		const baseCapabilities = createCapabilities(store, document);
+		const requests: ChatRequest[] = [];
+		const capabilities: SessionCapabilities = {
+			...baseCapabilities,
+			createProviderCollection: async () => {
+				const collection = await createHostProviderCollection();
+				return {
+					...collection,
+					chat: (request: ChatRequest) => {
+						requests.push(request);
+						return collection.chat(request);
+					},
+				};
+			},
+			getCompactionSettings: async (selection) =>
+				resolveCompactionSettings({
+					model: selection,
+					snapshot: {
+						document,
+						diagnostics: [],
+						sources: [],
+						sourceFor: () => undefined,
+					},
+				}),
+		};
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const before = host.getSelection();
+		try {
+			const result = await host.agentSession.compact({
+				model,
+				thinkingLevel: "high",
+				trigger: "manual",
+			});
+			expect(result.entry.summarizationModel).toEqual(cacheWarmingModel);
+			expect(result.entry.summarizationThinkingLevel).toBe("high");
+			expect(host.getSelection()).toEqual(before);
+			expect(
+				await host.agentSession.send(
+					sendInput(capabilities, "chat remains selected")
+				)
+			).toEqual({ rejected: false });
+			expect(host.getSelection()?.model).toEqual(model);
+			expect(
+				requests.map(({ providerId, modelId }) => `${providerId}/${modelId}`)
+			).toEqual(["openai/gpt-5.6", "openai/gpt-5.6-luna"]);
+		} finally {
+			await host.shutdown();
+		}
+	});
+	test("single-request summaries commit once and restore from durable Session history", async () => {
+		const seeded = await seedCompactionHistorySession("single-summary-request");
+
+		const smallSummaryModel: ProviderModel = {
+			capabilities: ["text"],
+			limits: { contextWindowTokens: 20_000, maxOutputTokens: 8192 },
+			modelId: "gpt-5.6-summary-small",
+			pricing: { inputPerMillionTokensUsd: 1, outputPerMillionTokensUsd: 1 },
+			protocolId: "fixture",
+			providerId: "openai",
+		};
+		const collection = createFakeProviderCollection(
+			recorder,
+			hostProviderModels[0],
+			[...hostProviderModels.slice(1), smallSummaryModel]
+		);
+		const document = {
+			compaction: {
+				keepRecentTokens: 512,
+				reserveTokens: 512,
+				auto: false,
+				summary: {
+					maxOutputTokens: 512,
+					model: "openai/gpt-5.6-summary-small",
+				},
+			},
+			contextWindowTokens: 20_000,
+		};
+		const baseCapabilities = createCapabilities(store, document);
+		const snapshot: ConfigSnapshot = {
+			diagnostics: [],
+			document,
+			sourceFor: () => undefined,
+			sources: [],
+		};
+		const capabilities: SessionCapabilities = {
+			...baseCapabilities,
+			createProviderCollection: async () => collection,
+			getCompactionModule: () => createSessionCompaction({ store }),
+			getCompactionSettings: async (selection) =>
+				resolveCompactionSettings({ model: selection, snapshot }),
+		};
+		const previousStepScript = recorder.stepScript;
+		const summaryRequests: {
+			estimatedInputTokens: number;
+			maxOutputTokens: number;
+		}[] = [];
+		recorder.stepScript = async function* (request) {
+			if (request.system?.includes("session summarizer") !== true) {
+				yield { delta: "unused chat response", type: "text-delta" };
+				yield { type: "finish" };
+				return;
+			}
+			const promptText = request.messages
+				.flatMap(({ content }) => content)
+				.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n");
+			const estimatedInputTokens = Math.ceil(
+				((request.system?.length ?? 0) + promptText.length) / 4
+			);
+			summaryRequests.push({
+				estimatedInputTokens,
+				maxOutputTokens: request.maxOutputTokens ?? 0,
+			});
+			yield {
+				delta: `bounded handoff ${summaryRequests.length}`,
+				type: "text-delta",
+			};
+			yield {
+				type: "usage",
+				usage: { inputTokens: estimatedInputTokens, outputTokens: 3 },
+			};
+			yield { type: "finish" };
+		};
+
+		let host: SessionHost | undefined;
+		let reopenedHost: SessionHost | undefined;
+		try {
+			host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			const transcriptBefore = host
+				.getSnapshot()
+				.transcript.map(({ id }) => id);
+			const result = await host.agentSession.compact({
+				model,
+				trigger: "manual",
+			});
+
+			expect(summaryRequests).toHaveLength(1);
+			expect(
+				summaryRequests.every(
+					({ estimatedInputTokens, maxOutputTokens }) =>
+						estimatedInputTokens + 256 + maxOutputTokens <= 20_000
+				)
+			).toBe(true);
+			expect(summaryRequests[0]?.maxOutputTokens).toBeLessThanOrEqual(512);
+			expect(result.entry.summary.text).toBe(
+				`bounded handoff ${summaryRequests.length}`
+			);
+			expect(result.entry.summarizationUsage).toMatchObject({
+				inputTokens: summaryRequests.reduce(
+					(total, { estimatedInputTokens }) => total + estimatedInputTokens,
+					0
+				),
+				outputTokens: summaryRequests.length * 3,
+			});
+			const usageEntries = host.getSessionUsageEntries();
+			expect(usageEntries).toHaveLength(summaryRequests.length);
+			expect(usageEntries.map(({ kind }) => String(kind))).toEqual(
+				Array.from(
+					{ length: summaryRequests.length },
+					() => "compaction-summary"
+				)
+			);
+			const usageSummary = summarizeSessionUsage(
+				[
+					{
+						...message("bounded-summary-billing-turn", "assistant", "done"),
+						metadata: {
+							model,
+							usage: { inputTokens: 1, outputTokens: 1 },
+						},
+					},
+				],
+				model,
+				usageEntries,
+				host.getCacheWarmingStatus(),
+				[smallSummaryModel]
+			);
+			expect(usageSummary?.costedUsageEntries).toBe(summaryRequests.length);
+			expect(host.getSnapshot().transcript.map(({ id }) => id)).toEqual(
+				transcriptBefore
+			);
+			await host.shutdown();
+			host = undefined;
+
+			reopenedHost = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			expect(reopenedHost.getSnapshot().compactions.at(-1)).toEqual(
+				result.entry
+			);
+			expect(reopenedHost.getSessionUsageEntries()).toHaveLength(
+				summaryRequests.length
+			);
+			expect(
+				textOf(reopenedHost.getSnapshot().context[0]?.parts ?? [])
+			).toContain(result.entry.summary.text);
+		} finally {
+			recorder.stepScript = previousStepScript;
+			await reopenedHost?.shutdown();
+			await host?.shutdown();
+		}
+	});
+	test("failed summary requests retain reported usage without publishing partial context", async () => {
+		const seeded = await seedCompactionHistorySession("failed-summary-request");
+
+		const smallSummaryModel: ProviderModel = {
+			capabilities: ["text"],
+			limits: { contextWindowTokens: 20_000, maxOutputTokens: 8192 },
+			modelId: "gpt-5.6-summary-failing",
+			protocolId: "fixture",
+			providerId: "openai",
+		};
+		const collection = createFakeProviderCollection(
+			recorder,
+			hostProviderModels[0],
+			[...hostProviderModels.slice(1), smallSummaryModel]
+		);
+		const document = {
+			compaction: {
+				keepRecentTokens: 512,
+				reserveTokens: 512,
+				auto: false,
+				summary: {
+					maxOutputTokens: 512,
+					model: "openai/gpt-5.6-summary-failing",
+				},
+			},
+			contextWindowTokens: 20_000,
+		};
+		const baseCapabilities = createCapabilities(store, document);
+		const snapshot: ConfigSnapshot = {
+			diagnostics: [],
+			document,
+			sourceFor: () => undefined,
+			sources: [],
+		};
+		const capabilities: SessionCapabilities = {
+			...baseCapabilities,
+			createProviderCollection: async () => collection,
+			getCompactionModule: () => createSessionCompaction({ store }),
+			getCompactionSettings: async (selection) =>
+				resolveCompactionSettings({ model: selection, snapshot }),
+		};
+		const previousStepScript = recorder.stepScript;
+		let summaryAttempts = 0;
+		recorder.stepScript = async function* (request) {
+			if (request.system?.includes("session summarizer") !== true) {
+				yield { delta: "unused chat response", type: "text-delta" };
+				yield { type: "finish" };
+				return;
+			}
+			summaryAttempts += 1;
+			yield { delta: `partial handoff ${summaryAttempts}`, type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 150, outputTokens: 3 },
+			};
+			if (summaryAttempts === 1) {
+				throw new Error("synthetic summary transport failure");
+			}
+			yield { type: "finish" };
+		};
+
+		let host: SessionHost | undefined;
+		let reopenedHost: SessionHost | undefined;
+		try {
+			host = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			const contextBefore = host.getSnapshot().context;
+			const transcriptBefore = host.getSnapshot().transcript;
+			const compactionCountBefore = host.getSnapshot().compactions.length;
+			await expect(
+				host.agentSession.compact({ model, trigger: "manual" })
+			).rejects.toMatchObject({ code: "summary-failed" });
+
+			const usageEntries = host.getSessionUsageEntries();
+			expect(summaryAttempts).toBe(1);
+			expect(usageEntries).toHaveLength(1);
+			expect(usageEntries.map(({ kind }) => String(kind))).toEqual([
+				"compaction-summary",
+			]);
+			expect(usageEntries.map(({ usage }) => usage.outputTokens)).toEqual([3]);
+			expect(host.getSnapshot().context).toEqual(contextBefore);
+			expect(host.getSnapshot().transcript).toEqual(transcriptBefore);
+			expect(host.getSnapshot().compactions).toHaveLength(
+				compactionCountBefore
+			);
+			await host.shutdown();
+			host = undefined;
+
+			reopenedHost = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			expect(reopenedHost.getSessionUsageEntries()).toEqual(usageEntries);
+			expect(reopenedHost.getSnapshot().context).toEqual(contextBefore);
+			expect(reopenedHost.getSnapshot().compactions).toHaveLength(
+				compactionCountBefore
+			);
+		} finally {
+			recorder.stepScript = previousStepScript;
+			await reopenedHost?.shutdown();
+			await host?.shutdown();
+		}
+	});
 	test("opens the transcript, context, compactions, and Session Selection a consumer reads", async () => {
 		const seeded = await seedSession("open");
 		const capabilities = createCapabilities();
@@ -3175,6 +4198,102 @@ describe("Session Host lifetime", () => {
 			);
 		});
 	});
+	test("automatic compaction persists a generated summary when the credential cannot enforce an output cap", async () => {
+		const seeded = await seedSession("auto-plugin-summary", "completed");
+		const previousStepScript = recorder.stepScript;
+		const summaryRequests: ProviderChatRequest[] = [];
+		recorder.stepScript = async function* (request) {
+			if (request.system?.includes("session summarizer")) {
+				summaryRequests.push(request);
+				yield { delta: "model summary", type: "text-delta" };
+			} else {
+				yield { delta: "answered the request", type: "text-delta" };
+			}
+			yield {
+				type: "usage",
+				usage: { inputTokens: 10_000, outputTokens: 10 },
+			};
+			yield { type: "finish" };
+		};
+		const triggers: string[] = [];
+		const completed: SessionCompaction[] = [];
+		const capabilities: SessionCapabilities = {
+			...createCapabilities(),
+			getCompactionModule: () =>
+				createSessionCompaction({
+					lifecycle: {
+						before: async (context) => {
+							triggers.push(context.trigger);
+							return;
+						},
+						completed: async (entry) => {
+							completed.push(entry);
+						},
+					},
+					store,
+				}),
+			getCompactionSettings: async () =>
+				fromPartial<ResolvedCompactionSettings>({
+					autoAvailable: true,
+					enabled: true,
+					keepRecentTokens: 1,
+					maxMediaAttachments: 4,
+					maxMediaBytes: 1024,
+					maxMediaTokens: 128,
+					modelContextLimit: 65_536,
+					overflowRecoveryAvailable: false,
+					reserveTokens: 1000,
+					// Above the compacted estimate, below the measured live context:
+					// auto runs and the result also satisfies the safe-threshold check.
+					thresholdTokens: 5000,
+				}),
+			createProviderCollection: async () => {
+				const collection = await createHostProviderCollection();
+				// OpenAI OAuth cannot enforce a bounded summary request.
+				return {
+					...collection,
+					canEnforceMaxOutputTokens: async () => false,
+				};
+			},
+		};
+		const host = await createSessionHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+		});
+		const compacted = Promise.withResolvers<void>();
+		const unsubscribe = host.subscribe(() => {
+			if (
+				!host.getSnapshot().isCompacting &&
+				host.getSnapshot().compactions.length > 1
+			) {
+				compacted.resolve();
+			}
+		});
+		try {
+			expect(await host.agentSession.send(sendInput(capabilities))).toEqual({
+				rejected: false,
+			});
+			await compacted.promise;
+
+			const latest = await store.getLatestCompaction(seeded.sessionId);
+			if (latest === null) {
+				throw new Error("Automatic compaction did not persist an entry.");
+			}
+			// Subscription credentials may omit the cap but still publish a completed handoff.
+			expect(summaryRequests).toHaveLength(1);
+			expect(summaryRequests[0]).not.toHaveProperty("maxOutputTokens");
+			expect(triggers).toContain("threshold");
+			expect(latest.trigger).toBe("threshold");
+			expect(latest.id).not.toBe(seeded.compaction);
+			expect(latest.summary.text).toContain("model summary");
+			expect(completed.map(({ id }) => id)).toContain(latest.id);
+			expect(host.getSnapshot().compactionError).toBeNull();
+		} finally {
+			unsubscribe();
+			await host.shutdown();
+			recorder.stepScript = previousStepScript;
+		}
+	});
 	test("records background compaction failures without failing the completed turn", async () => {
 		const seeded = await seedSession("background-compaction");
 		const previousBeforeChat = recorder.beforeChat;
@@ -3189,6 +4308,7 @@ describe("Session Host lifetime", () => {
 				fromPartial<ResolvedCompactionSettings>({
 					autoAvailable: modelRequestStarted,
 					enabled: true,
+					modelContextLimit: 65_536,
 					thresholdTokens: 1,
 				}),
 		};
@@ -3277,6 +4397,7 @@ describe("Session Host lifetime", () => {
 				fromPartial<ResolvedCompactionSettings>({
 					autoAvailable: recorder.requests.length > modelRequestsBeforeTurn,
 					enabled: true,
+					modelContextLimit: 65_536,
 					thresholdTokens: 1,
 				}),
 		};

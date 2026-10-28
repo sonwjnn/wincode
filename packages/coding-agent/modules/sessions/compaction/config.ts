@@ -1,14 +1,19 @@
-import { getModelContextTokens } from "@wincode/ai";
 import {
 	isBoolean,
 	isNull,
-	isNumber,
 	isObjectLike,
+	isPositiveSafeInteger,
 	isUndefined,
+	omitUndefined,
 	pickTruthy,
 } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import { z } from "zod";
+import {
+	isSameProviderModelIdentity,
+	type ProviderModelSelection,
+	parseProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type {
 	ConfigDiagnostic,
 	ConfigOrigin,
@@ -25,6 +30,12 @@ import {
 	estimateAttachmentTokensForDataUrl,
 	getAttachmentReference,
 } from "../storage/attachment-store";
+import { resolveContextWindowTokens } from "../usage/context-window";
+
+import {
+	type CompactionSummarySettings,
+	resolveCompactionSummarySettings,
+} from "./summary-settings";
 
 export const DEFAULT_COMPACTION_SETTINGS = {
 	auto: true,
@@ -50,11 +61,7 @@ export type CompactionSettings = {
 };
 
 export type CompactionDiagnostic = {
-	code:
-		| ConfigDiagnostic["code"]
-		| "invalid-value"
-		| "invalid-record"
-		| "unknown-context-limit";
+	code: ConfigDiagnostic["code"] | "invalid-value" | "invalid-record";
 	configPath: readonly string[];
 	message: string;
 	origin?: ConfigOrigin;
@@ -65,6 +72,7 @@ export type CompactionSettingSource =
 	| { kind: "session" }
 	| (ConfigOrigin & { kind: "config" });
 export type ResolvedCompactionSettings = {
+	summary?: CompactionSummarySettings;
 	autoAvailable: boolean;
 	configPath: readonly string[];
 	desired: CompactionSettings;
@@ -73,7 +81,8 @@ export type ResolvedCompactionSettings = {
 	maxMediaAttachments: number;
 	maxMediaBytes: number;
 	maxMediaTokens: number;
-	modelContextLimit: number | null;
+	modelContextLimit: number;
+	contextWindowOverrideTokens?: number;
 	overflowRecoveryAvailable: boolean;
 	resolved: CompactionSettings;
 	reserveTokens: number;
@@ -86,7 +95,10 @@ export type ResolvedCompactionSettings = {
 };
 
 export type CompactionConfigurationInput = {
+	/** Selected Provider Model's published context-window metadata, if available. */
 	contextLimit?: number | null;
+	/** Conversation target whose exact-model policy applies to these settings. */
+	model?: ProviderModelSelection;
 	sessionOverrides?: Partial<CompactionSettings>;
 	snapshot?: ConfigSnapshot;
 };
@@ -96,9 +108,6 @@ type SettingsRecord = Readonly<Record<string, unknown>>;
 const settingsRecordSchema = z.record(z.string(), z.unknown());
 
 const BOOLEAN_SETTING_KEYS = ["enabled", "auto", "overflowRecovery"] as const;
-
-const isPositiveInteger = (value: unknown): value is number =>
-	isNumber(value) && Number.isSafeInteger(value) && value > 0;
 
 const isSettingKey = (value: string): value is CompactionSettingKey =>
 	Object.hasOwn(DEFAULT_COMPACTION_SETTINGS, value);
@@ -156,7 +165,7 @@ const settingValueIsValid = (
 	) {
 		return isBoolean(value);
 	}
-	return isPositiveInteger(value);
+	return isPositiveSafeInteger(value);
 };
 
 const includeConfigDiagnostics = (
@@ -198,9 +207,154 @@ const applySessionOverrides = (
 	}
 };
 
+const MODEL_OVERRIDE_SETTING_KEYS = [
+	"keepRecentTokens",
+	"reserveTokens",
+] as const;
+const isModelOverrideSettingKey = (
+	key: string
+): key is (typeof MODEL_OVERRIDE_SETTING_KEYS)[number] =>
+	MODEL_OVERRIDE_SETTING_KEYS.some((candidate) => candidate === key);
+
+/** Applies exact conversation-model budgets between ordinary and session policy. */
+type ModelOverrideSettingKey = (typeof MODEL_OVERRIDE_SETTING_KEYS)[number];
+type ModelOverrideResolutionState = {
+	diagnostics: CompactionDiagnostic[];
+	desired: CompactionSettings;
+	settingPaths: Record<CompactionSettingKey, readonly string[]>;
+	snapshot: ConfigSnapshot | undefined;
+	sources: Record<CompactionSettingKey, CompactionSettingSource>;
+};
+
+const diagnoseUnsupportedModelOverrideSettings = (
+	override: SettingsRecord,
+	overridePath: readonly string[],
+	state: ModelOverrideResolutionState
+): void => {
+	for (const key of Object.keys(override)) {
+		if (isModelOverrideSettingKey(key)) {
+			continue;
+		}
+		const settingPath = [...overridePath, key];
+		state.diagnostics.push(
+			diagnosticFor(
+				state.snapshot,
+				"invalid-value",
+				settingPath,
+				`${settingPath.join(".")} is not a supported per-model compaction setting.`
+			)
+		);
+	}
+};
+
+const applyModelOverrideSetting = (
+	key: ModelOverrideSettingKey,
+	value: unknown,
+	settingPath: readonly string[],
+	state: ModelOverrideResolutionState
+): void => {
+	if (!isPositiveSafeInteger(value)) {
+		state.diagnostics.push(
+			diagnosticFor(
+				state.snapshot,
+				"invalid-value",
+				settingPath,
+				`${settingPath.join(".")} must be a positive integer.`
+			)
+		);
+		return;
+	}
+	state.desired[key] = value;
+	state.sources[key] = sourceFor(state.snapshot, settingPath);
+	state.settingPaths[key] = settingPath;
+};
+
+const applyMatchingModelOverride = (
+	identity: string,
+	rawOverride: unknown,
+	modelOverridesPath: readonly string[],
+	state: ModelOverrideResolutionState
+): void => {
+	const overridePath = [...modelOverridesPath, identity];
+	const parsedOverride = settingsRecordSchema.safeParse(rawOverride);
+	if (!parsedOverride.success) {
+		state.diagnostics.push(
+			diagnosticFor(
+				state.snapshot,
+				"invalid-record",
+				overridePath,
+				`${overridePath.join(".")} must be an object.`
+			)
+		);
+		return;
+	}
+
+	diagnoseUnsupportedModelOverrideSettings(
+		parsedOverride.data,
+		overridePath,
+		state
+	);
+	for (const key of MODEL_OVERRIDE_SETTING_KEYS) {
+		if (!Object.hasOwn(parsedOverride.data, key)) {
+			continue;
+		}
+		applyModelOverrideSetting(
+			key,
+			parsedOverride.data[key],
+			[...overridePath, key],
+			state
+		);
+	}
+};
+
+const applyModelOverrides = (
+	model: ProviderModelSelection | undefined,
+	config: { path: readonly string[]; record: SettingsRecord | null } | null,
+	state: ModelOverrideResolutionState
+): void => {
+	const modelOverrides = config?.record?.modelOverrides;
+	if (isUndefined(modelOverrides)) {
+		return;
+	}
+	const path = [...(config?.path ?? ["compaction"]), "modelOverrides"];
+	const parsedOverrides = settingsRecordSchema.safeParse(modelOverrides);
+	if (!parsedOverrides.success) {
+		state.diagnostics.push(
+			diagnosticFor(
+				state.snapshot,
+				"invalid-record",
+				path,
+				`${path.join(".")} must be an object.`
+			)
+		);
+		return;
+	}
+
+	for (const [identity, rawOverride] of Object.entries(parsedOverrides.data)) {
+		const selection = parseProviderModelSelection(identity);
+		if (selection === null) {
+			const identityPath = [...path, identity];
+			state.diagnostics.push(
+				diagnosticFor(
+					state.snapshot,
+					"invalid-value",
+					identityPath,
+					`${identityPath.join(".")} must be a valid provider/model identity.`
+				)
+			);
+			continue;
+		}
+		if (model === undefined || !isSameProviderModelIdentity(selection, model)) {
+			continue;
+		}
+		applyMatchingModelOverride(identity, rawOverride, path, state);
+	}
+};
+
 const resolveDesiredSettings = (
 	snapshot: ConfigSnapshot | undefined,
-	sessionOverrides: Partial<CompactionSettings> | undefined
+	sessionOverrides: Partial<CompactionSettings> | undefined,
+	model: ProviderModelSelection | undefined
 ): {
 	configPath: readonly string[];
 	desired: CompactionSettings;
@@ -289,6 +443,13 @@ const resolveDesiredSettings = (
 			);
 		}
 	}
+	applyModelOverrides(model, config, {
+		diagnostics,
+		desired,
+		settingPaths,
+		snapshot,
+		sources,
+	});
 	applySessionOverrides(sessionOverrides, desired, sources, diagnostics);
 
 	return {
@@ -303,49 +464,55 @@ const resolveDesiredSettings = (
 export const resolveCompactionSettings = (
 	input: CompactionConfigurationInput = {}
 ): ResolvedCompactionSettings => {
-	const { contextLimit = null, sessionOverrides, snapshot } = input;
+	const {
+		contextLimit: requestedContextLimit,
+		model,
+		sessionOverrides,
+		snapshot,
+	} = input;
+	const contextWindow = resolveContextWindowTokens(
+		snapshot,
+		requestedContextLimit
+	);
+	const contextLimit = contextWindow.tokens;
 	const { configPath, desired, diagnostics, settingPaths, sources } =
-		resolveDesiredSettings(snapshot, sessionOverrides);
+		resolveDesiredSettings(snapshot, sessionOverrides, model);
 	const resolved = { ...desired };
 	let thresholdTokens: number | null = null;
 
-	if (isNull(contextLimit) || isUndefined(contextLimit)) {
+	if (contextWindow.invalid) {
 		diagnostics.push(
 			diagnosticFor(
 				snapshot,
-				"unknown-context-limit",
-				["compaction"],
-				"Automatic compaction is unavailable because the model context limit is unknown.",
-				"warning"
+				"invalid-value",
+				["contextWindowTokens"],
+				"contextWindowTokens must be a positive safe integer."
 			)
-		);
-	} else if (!Number.isSafeInteger(contextLimit) || contextLimit <= 0) {
-		diagnostics.push(
-			diagnosticFor(
-				snapshot,
-				"unknown-context-limit",
-				["compaction"],
-				"Automatic compaction is unavailable because the model context limit is invalid.",
-				"warning"
-			)
-		);
-	} else {
-		resolved.reserveTokens = Math.min(
-			desired.reserveTokens,
-			Math.floor(contextLimit / 2)
-		);
-		thresholdTokens = Math.max(0, contextLimit - resolved.reserveTokens);
-		resolved.keepRecentTokens = Math.min(
-			desired.keepRecentTokens,
-			Math.floor(thresholdTokens / 2)
 		);
 	}
 
+	resolved.reserveTokens = Math.min(
+		desired.reserveTokens,
+		Math.floor(contextLimit / 2)
+	);
+	thresholdTokens = Math.max(0, contextLimit - resolved.reserveTokens);
+	resolved.keepRecentTokens = Math.min(
+		desired.keepRecentTokens,
+		Math.floor(thresholdTokens / 2)
+	);
+
+	const config = snapshot ? getConfigRecord(snapshot) : null;
 	return {
+		summary: resolveCompactionSummarySettings(config?.record?.summary, [
+			...configPath,
+			"summary",
+		]),
 		configPath,
+		...omitUndefined({
+			contextWindowOverrideTokens: contextWindow.overrideTokens,
+		}),
 		auto: resolved.auto,
-		autoAvailable:
-			resolved.enabled && resolved.auto && !isNull(thresholdTokens),
+		autoAvailable: resolved.enabled && resolved.auto,
 		desired,
 		diagnostics,
 		enabled: resolved.enabled,
@@ -353,10 +520,7 @@ export const resolveCompactionSettings = (
 		maxMediaAttachments: resolved.maxMediaAttachments,
 		maxMediaBytes: resolved.maxMediaBytes,
 		maxMediaTokens: resolved.maxMediaTokens,
-		modelContextLimit:
-			!(isUndefined(contextLimit) || isNull(contextLimit)) && contextLimit > 0
-				? contextLimit
-				: null,
+		modelContextLimit: contextLimit,
 		overflowRecovery: resolved.overflowRecovery,
 		overflowRecoveryAvailable: resolved.enabled && resolved.overflowRecovery,
 		resolved,
@@ -527,42 +691,6 @@ const estimateCanonicalMessages = (
 		characters += 1;
 	}
 	return { characters, mediaTokens };
-};
-
-/**
- * Estimates the provider-visible session context without serializing the
- * application message objects. Provider usage is authoritative through the
- * latest measured assistant; only the unmeasured suffix is estimated.
- */
-export const estimateSessionContextTokens = (
-	messages: readonly SessionMessage[],
-	estimateTokens: (
-		messages: readonly SessionMessage[]
-	) => number = estimateCompactionTokens
-): {
-	lastUsageIndex: number;
-	providerTokens: number | null;
-	tokens: number;
-	trailingTokens: number;
-} => {
-	let lastUsageIndex = -1;
-	let providerTokens: number | null = null;
-	for (const [index, message] of messages.entries()) {
-		if (message.role !== "assistant" || isUndefined(message.metadata?.usage)) {
-			continue;
-		}
-		lastUsageIndex = index;
-		providerTokens = getModelContextTokens(message.metadata.usage);
-	}
-	const trailingTokens = estimateTokens(
-		lastUsageIndex === -1 ? messages : messages.slice(lastUsageIndex + 1)
-	);
-	return {
-		lastUsageIndex,
-		providerTokens,
-		tokens: Math.max(0, (providerTokens ?? 0) + trailingTokens),
-		trailingTokens,
-	};
 };
 
 /**

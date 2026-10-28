@@ -60,3 +60,6 @@ export const isNonNegativeInteger = (value: unknown): value is number =>
 
 export const isPositiveInteger = (value: unknown): value is number =>
 	isNonNegativeInteger(value) && value > 0;
+
+export const isPositiveSafeInteger = (value: unknown): value is number =>
+	isPositiveInteger(value) && Number.isSafeInteger(value);

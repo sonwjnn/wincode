@@ -11,6 +11,10 @@ import {
 	toSessionMessageId,
 } from "@wincode/agent-core";
 import type { McpSnapshotId } from "@wincode/mcp";
+import {
+	type ProviderModelSelection,
+	parseProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type {
 	CompactionId,
 	QueuedSubmissionId,
@@ -41,6 +45,16 @@ export const modelId = <const Value extends string>(
 export const modelIdentity = <const Value extends string>(
 	value: Value
 ): Value & ModelId => value as Value & ModelId;
+
+export const providerModelSelectionFixture = (
+	identity: string
+): ProviderModelSelection => {
+	const selection = parseProviderModelSelection(identity);
+	if (selection === null) {
+		throw new Error(`Invalid Provider Model fixture: ${identity}`);
+	}
+	return selection;
+};
 
 export const modelStepId = <const Value extends string>(
 	value: Value

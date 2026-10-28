@@ -7,6 +7,7 @@ import {
 	isSameProviderModelIdentity,
 } from "@/modules/providers/provider-model-selection";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
+import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import {
 	buildSkillToolDefinition,
 	createSkillExecution,
@@ -29,11 +30,13 @@ import {
 	assertPluginProviderSelectionOwner,
 	createAgentSessionTurnRunner,
 } from "./agent-session-turn-runner";
+import { resolveCompactionSummaryRoute } from "./compaction-summary-route";
 
 /** The Host inputs the adapters need on top of one Agent Turn's. */
 export type AgentSessionAdaptersOptions = AgentSessionTurnRunnerOptions &
 	Readonly<{
 		isShutDown: () => boolean;
+		usageLedger: Pick<SessionUsageLedger, "record">;
 		withSessionWork: (action: () => Promise<void>) => Promise<void>;
 	}>;
 
@@ -106,6 +109,7 @@ export const createAgentSessionAdapters = (
 		cacheWarming,
 		capabilities,
 		providerCollection,
+		usageLedger,
 		isShutDown,
 		withSessionWork,
 		sessionId,
@@ -287,22 +291,37 @@ export const createAgentSessionAdapters = (
 		updateSubmissionStatus: (input) =>
 			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
 		compaction: {
-			compact: (input) =>
+			compact: async (input) =>
 				capabilities.getCompactionModule().compact({
-					...input,
+					...(await resolveCompactionSummaryRoute(
+						input,
+						providerCollection,
+						capabilities,
+						sessionId
+					)),
 					...omitUndefined({ summaryGenerator }),
+					recordSummaryUsage: async ({ id, model, usage }) => {
+						await usageLedger.record({
+							id,
+							kind: "compaction-summary",
+							model,
+							usage,
+						});
+					},
 					assertAuthority: assertHostOpen,
 				}),
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
-			needsCompaction: (messages, settings) =>
-				capabilities.getCompactionModule().needsCompaction(messages, settings),
+			needsCompaction: (messages, settings, model) =>
+				capabilities
+					.getCompactionModule()
+					.needsCompaction(messages, settings, model),
 		},
 		resolveSubmission,
 		assertProviderModelSelection,
 		resolveCompactionSettings: (model) =>
 			capabilities.getCompactionSettings(
 				model,
-				providerCollection.getModel(model.providerId, model.modelId) ?? null
+				providerCollection.getModel(model.providerId, model.modelId)
 			),
 		resolveFileMentions: (text) => resolveFileMentionParts(text),
 		turnRunner: createAgentSessionTurnRunner(turnRunnerInputs),

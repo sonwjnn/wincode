@@ -9,9 +9,16 @@ import type {
 	PluginAgentRegistration,
 	PluginBeforeAgentTurnContext,
 	PluginBeforeAgentTurnHook,
+	PluginBeforeCompactionHook,
+	PluginBeforeCompactionResult,
 	PluginCommandContext,
 	PluginCommandHandler,
 	PluginCommandRegistration,
+	PluginCompactionCompletedContext,
+	PluginCompactionCompletedHook,
+	PluginCompactionContext,
+	PluginCompactionFailedContext,
+	PluginCompactionFailedHook,
 	PluginInputSchema,
 	PluginMcpServerRegistration,
 	PluginProcessContext,
@@ -85,6 +92,9 @@ export type LoadedPlugin = Readonly<{
 	providers?: readonly PluginProviderDescriptor[];
 	sourceIdentity?: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
+	onBeforeCompaction?: PluginBeforeCompactionHook;
+	onCompactionCompleted?: PluginCompactionCompletedHook;
+	onCompactionFailed?: PluginCompactionFailedHook;
 	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
@@ -141,6 +151,17 @@ export type PluginRuntime = Readonly<{
 		context: PluginBeforeAgentTurnContext,
 		hostContext?: unknown
 	) => Promise<readonly PluginToolDescriptor[]>;
+	/** The first Plugin decision that cancels or replaces the summary wins. */
+	runBeforeCompactionHooks: (
+		context: PluginCompactionContext
+	) => Promise<{ cancel?: string; summary?: string } | undefined>;
+	/** Reports a committed compaction; a hook failure cannot undo it. */
+	notifyCompactionCompleted: (
+		context: PluginCompactionCompletedContext
+	) => Promise<void>;
+	notifyCompactionFailed: (
+		context: PluginCompactionFailedContext
+	) => Promise<void>;
 	start: () => Promise<readonly PluginDiagnostic[]>;
 	shutdown: () => Promise<void>;
 	startSession: (context: PluginSessionContext) => Promise<void>;
@@ -671,6 +692,90 @@ export const createPluginRuntime = (
 			? undefined
 			: Object.freeze({ ...panel, pluginId, sourcePath: plugin.sourcePath });
 	};
+	const requestCompactionDecision = async (
+		plugin: LoadedPlugin,
+		context: PluginCompactionContext
+	): Promise<PluginBeforeCompactionResult> => {
+		try {
+			return await plugin.onBeforeCompaction?.(context);
+		} catch (error) {
+			await logPluginFailure(
+				"Plugin pre-compaction hook failed; compaction continued",
+				plugin,
+				"before-compaction",
+				error
+			);
+			return;
+		}
+	};
+	const compactionDecisionFor = async (
+		plugin: LoadedPlugin,
+		context: PluginCompactionContext
+	): Promise<{ cancel?: string; summary?: string } | undefined> => {
+		if (
+			plugin.onBeforeCompaction === undefined ||
+			!isEnabledForSession(plugin, context.sessionId)
+		) {
+			return;
+		}
+		const decision = await requestCompactionDecision(plugin, context);
+		const cancel =
+			typeof decision?.cancel === "string" ? decision.cancel.trim() : "";
+		if (cancel.length > 0) {
+			return Object.freeze({ cancel });
+		}
+		if (
+			typeof decision?.summary !== "string" ||
+			decision.summary.trim().length === 0
+		) {
+			return;
+		}
+		return Object.freeze({ summary: decision.summary });
+	};
+	const runBeforeCompactionHooks = async (
+		context: PluginCompactionContext
+	): Promise<{ cancel?: string; summary?: string } | undefined> => {
+		let summary: string | undefined;
+		for (const plugin of plugins) {
+			const decision = await compactionDecisionFor(plugin, context);
+			if (decision === undefined) {
+				continue;
+			}
+			if (decision.cancel !== undefined) {
+				return decision;
+			}
+			summary ??= decision.summary;
+		}
+		return summary === undefined ? undefined : Object.freeze({ summary });
+	};
+	const notifyCompactionHooks = async (
+		operation: "completed" | "failed",
+		context: PluginCompactionCompletedContext | PluginCompactionFailedContext
+	): Promise<void> => {
+		for (const plugin of plugins) {
+			if (!isEnabledForSession(plugin, context.sessionId)) {
+				continue;
+			}
+			try {
+				if (operation === "completed") {
+					await plugin.onCompactionCompleted?.(
+						context as PluginCompactionCompletedContext
+					);
+				} else {
+					await plugin.onCompactionFailed?.(
+						context as PluginCompactionFailedContext
+					);
+				}
+			} catch (error) {
+				await logPluginFailure(
+					`Plugin compaction ${operation} hook failed`,
+					plugin,
+					`compaction-${operation}`,
+					error
+				);
+			}
+		}
+	};
 
 	return Object.freeze({
 		get diagnostics() {
@@ -850,6 +955,11 @@ export const createPluginRuntime = (
 			}
 		},
 		resolveToolsForTurn,
+		runBeforeCompactionHooks,
+		notifyCompactionCompleted: (context) =>
+			notifyCompactionHooks("completed", context),
+		notifyCompactionFailed: (context) =>
+			notifyCompactionHooks("failed", context),
 		start,
 		async shutdown() {
 			if (shutdownPromise !== undefined) {

@@ -3,6 +3,7 @@ import type { UnknownRecord } from "type-fest";
 
 export class ProviderProtocolError extends Error {
 	readonly cacheControlRejected: boolean;
+	readonly providerCode: string | undefined;
 	readonly retryAfterMs: number | undefined;
 	readonly statusCode: number | undefined;
 
@@ -10,6 +11,7 @@ export class ProviderProtocolError extends Error {
 		message: string,
 		metadata: {
 			cacheControlRejected?: boolean;
+			providerCode?: string;
 			retryAfterMs?: number;
 			statusCode?: number;
 		} = {}
@@ -17,6 +19,7 @@ export class ProviderProtocolError extends Error {
 		super(message);
 		this.name = "ProviderProtocolError";
 		this.cacheControlRejected = metadata.cacheControlRejected ?? false;
+		this.providerCode = metadata.providerCode;
 		this.retryAfterMs = metadata.retryAfterMs;
 		this.statusCode = metadata.statusCode;
 	}
@@ -134,6 +137,22 @@ const messageFromPayload = (payload: unknown): string | undefined => {
 	);
 };
 
+const providerCodeFromPayload = (payload: unknown): string | undefined => {
+	const root = record(payload);
+	const response = record(root?.response);
+	const error = record(root?.error) ?? record(response?.error);
+	return [
+		error?.code,
+		error?.type,
+		root?.type,
+		root?.code,
+		response?.code,
+	].find(
+		(value): value is string =>
+			typeof value === "string" && value.trim().length > 0
+	);
+};
+
 export const isCacheControlRejectionDetails = (
 	message: string,
 	statusCode: number | undefined,
@@ -170,6 +189,27 @@ export const isCacheControlRejection = (
 ): error is ProviderProtocolError =>
 	error instanceof ProviderProtocolError && error.cacheControlRejected;
 
+export const httpErrorFromPayload = (
+	statusCode: number,
+	headers: Readonly<{ get: (name: string) => string | null }>,
+	payload: unknown,
+	fallbackBody = ""
+): ProviderProtocolError => {
+	const message =
+		messageFromPayload(payload) ?? fallbackBody.trim().slice(0, 512);
+	return new ProviderProtocolError(
+		message.length > 0
+			? `Model provider request failed (${statusCode}): ${message}`
+			: `Model provider request failed (${statusCode}).`,
+		{
+			cacheControlRejected: isCacheControlRejectionPayload(payload, statusCode),
+			providerCode: providerCodeFromPayload(payload),
+			retryAfterMs: retryAfterMsFromHeader(headers.get("retry-after")),
+			statusCode,
+		}
+	);
+};
+
 export const httpErrorFromResponse = async (
 	response: Response
 ): Promise<ProviderProtocolError> => {
@@ -180,20 +220,7 @@ export const httpErrorFromResponse = async (
 	} catch {
 		payload = undefined;
 	}
-	const message = messageFromPayload(payload) ?? body.trim().slice(0, 512);
-	return new ProviderProtocolError(
-		message.length > 0
-			? `Model provider request failed (${response.status}): ${message}`
-			: `Model provider request failed (${response.status}).`,
-		{
-			cacheControlRejected: isCacheControlRejectionPayload(
-				payload,
-				response.status
-			),
-			retryAfterMs: retryAfterMsFromHeader(response.headers.get("retry-after")),
-			statusCode: response.status,
-		}
-	);
+	return httpErrorFromPayload(response.status, response.headers, payload, body);
 };
 
 const retryAfterMsFromPayload = (
@@ -259,6 +286,7 @@ export const providerEventError = (
 			: message,
 		{
 			cacheControlRejected: isCacheControlRejectionPayload(payload, statusCode),
+			providerCode: providerCodeFromPayload(payload),
 			retryAfterMs,
 			statusCode,
 		}

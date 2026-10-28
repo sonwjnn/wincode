@@ -2,6 +2,7 @@ import type {
 	AgentId,
 	AgentTurnId,
 	AttachmentId,
+	SessionContextMeasurement,
 	SessionMessageId,
 	SessionSubmissionStatus,
 	SkillActivationSource,
@@ -12,6 +13,7 @@ import type {
 import {
 	agentIdSchema,
 	isToolCallId,
+	sessionContextMeasurementSchema,
 	toSessionMessageId,
 	toSubmissionId,
 } from "@wincode/agent-core";
@@ -166,6 +168,7 @@ export type SessionMessageMetadata = {
 	readonly submissionStatus?: SessionSubmissionStatus;
 	readonly terminalOutcome?: SessionMessageTerminalOutcome;
 	readonly usage?: SessionMessageUsage;
+	readonly contextMeasurement?: SessionContextMeasurement;
 	readonly thinkingLevel?: ThinkingLevel;
 };
 
@@ -260,6 +263,7 @@ export const sessionMessageMetadataSchema = z
 			.optional(),
 		terminalOutcome: z.enum(["cancelled", "failed", "interrupted"]).optional(),
 		usage: sessionMessageUsageSchema.optional(),
+		contextMeasurement: sessionContextMeasurementSchema.optional(),
 		thinkingLevel: thinkingLevelSchema.optional(),
 	})
 	.strict()

@@ -342,7 +342,14 @@ describe("public OpenAI SDK provider", () => {
 					totalTokens: 23,
 				},
 			},
-			{ outcome: { continuation, status: "success" }, type: "terminal" },
+			{
+				outcome: {
+					completion: { kind: "completed" },
+					continuation,
+					status: "success",
+				},
+				type: "terminal",
+			},
 		]);
 		expect(JSON.stringify(events)).not.toContain("openai-test-key");
 		const firstTerminal = events.at(-1);
@@ -395,7 +402,11 @@ describe("public OpenAI SDK provider", () => {
 			},
 		]);
 		expect(nextEvents.at(-1)).toEqual({
-			outcome: { continuation, status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				continuation,
+				status: "success",
+			},
 			type: "terminal",
 		});
 		for await (const _event of sdk.chat({
@@ -536,7 +547,10 @@ describe("public OpenAI SDK provider", () => {
 					totalTokens: 17,
 				},
 			},
-			{ outcome: { status: "success" }, type: "terminal" },
+			{
+				outcome: { completion: { kind: "completed" }, status: "success" },
+				type: "terminal",
+			},
 		]);
 	});
 
@@ -602,7 +616,11 @@ describe("public OpenAI SDK provider", () => {
 		expect(bodies[1]).not.toHaveProperty("prompt_cache_key");
 		expect(bodies[1]).not.toHaveProperty("prompt_cache_options");
 		expect(events.at(-1)).toEqual({
-			outcome: { continuation: [], status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				continuation: [],
+				status: "success",
+			},
 			type: "terminal",
 		});
 	});

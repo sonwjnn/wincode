@@ -5,7 +5,12 @@ import { normalizeModelUsage } from "../../model-usage.ts";
 import type { ProviderModel } from "../../sdk.ts";
 import { readSseEvents } from "../sse.ts";
 import { createAnthropicPromptCacheStrategy } from "./anthropic-prompt-cache.ts";
+import {
+	anthropicGenerationCompletion,
+	unknownGenerationCompletion,
+} from "./generation-completion.ts";
 import type {
+	ProtocolGenerationCompletion,
 	ProtocolPromptMessage,
 	ProtocolPromptPart,
 	ProtocolStreamPart,
@@ -193,6 +198,7 @@ const updateTextBlock = (
 type AnthropicStreamState = {
 	blocks: unknown[];
 	completed: boolean;
+	completion: ProtocolGenerationCompletion;
 	toolJsonByIndex: Map<number, string>;
 	usage: unknown;
 };
@@ -320,6 +326,11 @@ const anthropicEventParts = function* (
 			yield part;
 		}
 	} else if (type === "message_delta") {
+		const delta = record(value.delta);
+		const stopReason = stringValue(delta?.stop_reason);
+		if (stopReason !== undefined) {
+			state.completion = anthropicGenerationCompletion(stopReason);
+		}
 		const usageUpdate = anthropicUsage(value.usage);
 		if (usageUpdate) {
 			state.usage = mergeDefined(state.usage, usageUpdate);
@@ -334,6 +345,7 @@ const anthropicStream = async function* (
 	const state: AnthropicStreamState = {
 		blocks: [],
 		completed: false,
+		completion: unknownGenerationCompletion(),
 		toolJsonByIndex: new Map<number, string>(),
 		usage: undefined,
 	};
@@ -353,6 +365,7 @@ const anthropicStream = async function* (
 	const normalized = normalizeModelUsage(state.usage);
 	const continuation = state.blocks.filter((block) => block !== undefined);
 	yield {
+		completion: state.completion,
 		type: "finish",
 		...(normalized ? { usage: normalized } : {}),
 		...(continuation.length > 0 ? { continuation } : {}),

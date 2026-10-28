@@ -187,6 +187,37 @@ export type PluginProcessContext = Readonly<{
 	workspace: string;
 }>;
 
+/** Why compaction ran: an operator request, a threshold check, or overflow recovery. */
+export type PluginCompactionTrigger = "manual" | "overflow" | "threshold";
+
+export type PluginCompactionContext = PluginSessionContext &
+	Readonly<{
+		focus?: string;
+		signal: AbortSignal;
+		trigger: PluginCompactionTrigger;
+		turnId?: AgentTurnId;
+	}>;
+
+/**
+ * A pre-compaction decision. `cancel` refuses the compaction with its message.
+ * `summary` supplies the handoff text instead of calling a summary model; the
+ * Session Host still applies its own budgets, reduction and persistence rules.
+ */
+export type PluginBeforeCompactionResult =
+	| Readonly<{ cancel: string; summary?: never }>
+	| Readonly<{ cancel?: never; summary: string }>
+	| undefined;
+
+export type PluginCompactionCompletedContext = PluginCompactionContext &
+	Readonly<{
+		compactionId: string;
+		estimatedTokensAfter: number;
+		tokensBefore: number;
+	}>;
+
+export type PluginCompactionFailedContext = PluginCompactionContext &
+	Readonly<{ error: string }>;
+
 export type PluginToolContext = PluginSessionContext &
 	Readonly<{
 		agentId: AgentId;
@@ -253,6 +284,18 @@ export type PluginBeforeAgentTurnHook = (
 	api: PluginToolRegistrationAPI
 ) => void | Promise<void>;
 
+export type PluginBeforeCompactionHook = (
+	context: PluginCompactionContext
+) => PluginBeforeCompactionResult | Promise<PluginBeforeCompactionResult>;
+
+export type PluginCompactionCompletedHook = (
+	context: PluginCompactionCompletedContext
+) => void | Promise<void>;
+
+export type PluginCompactionFailedHook = (
+	context: PluginCompactionFailedContext
+) => void | Promise<void>;
+
 export type PluginShutdownHook = (
 	context: PluginProcessContext
 ) => void | Promise<void>;
@@ -271,6 +314,9 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 		onSessionStart: (handler: PluginSessionStartHook) => void;
 		onSessionShutdown: (handler: PluginSessionShutdownHook) => void;
 		onBeforeAgentTurn: (handler: PluginBeforeAgentTurnHook) => void;
+		onBeforeCompaction: (handler: PluginBeforeCompactionHook) => void;
+		onCompactionCompleted: (handler: PluginCompactionCompletedHook) => void;
+		onCompactionFailed: (handler: PluginCompactionFailedHook) => void;
 		onStart: (handler: PluginProcessStartHook) => void;
 		onShutdown: (handler: PluginShutdownHook) => void;
 	}>;

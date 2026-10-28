@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { formatModelTokenCount } from "@wincode/ai";
-import { isNull, isUndefined } from "@wincode/utils";
+import { isNull } from "@wincode/utils";
 import { useMemo } from "react";
 import { builtInAgents } from "@/modules/agents";
 import { PluginStatusSidebar } from "@/modules/plugins/ui/plugin-status-sidebar";
@@ -15,6 +15,7 @@ const CONTEXT_WARNING_PERCENT = 80;
 
 type SessionSidebarProps = {
 	messages: SessionMessage[];
+	context: readonly SessionMessage[];
 	sessionTitle: string;
 	width: `${number}%`;
 };
@@ -29,19 +30,28 @@ function SectionLabel({ text, color }: { text: string; color: string }) {
 
 export function SessionSidebar({
 	messages,
+	context,
 	sessionTitle,
 	width,
 }: SessionSidebarProps) {
 	const { colors } = useTheme();
 	const { model } = usePromptConfig();
 	const usage = useMemo(
-		() => summarizeSessionUsage(messages, model),
-		[messages, model]
+		() =>
+			summarizeSessionUsage(
+				messages,
+				model,
+				[],
+				"idle",
+				undefined,
+				[],
+				context
+			),
+		[messages, context, model]
 	);
 	const modelLabel = `${model.providerId}/${model.modelId}`;
 	const isContextWarning =
-		!(isNull(usage?.contextPercent) || isUndefined(usage?.contextPercent)) &&
-		usage.contextPercent >= CONTEXT_WARNING_PERCENT;
+		!isNull(usage) && usage.contextPercent >= CONTEXT_WARNING_PERCENT;
 
 	return (
 		<box
@@ -71,11 +81,9 @@ export function SessionSidebar({
 								<text fg={colors.textMuted}>
 									{`${formatModelTokenCount(usage.contextTokens)} tokens`}
 								</text>
-								{isNull(usage.contextPercent) ? null : (
-									<text
-										fg={isContextWarning ? colors.error : colors.textMuted}
-									>{`${usage.contextPercent}% used`}</text>
-								)}
+								<text fg={isContextWarning ? colors.error : colors.textMuted}>
+									{`${usage.contextPercent}% used`}
+								</text>
 							</>
 						) : (
 							<text fg={colors.textMuted}>No usage yet</text>

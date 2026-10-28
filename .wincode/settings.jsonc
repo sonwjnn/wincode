@@ -1,0 +1,31 @@
+{
+  // Optional settings override for all Provider Models, including chat and summary.
+  // When unset, use each model's context metadata; if missing or invalid, fall
+  // back to 272,000 tokens. Must be a positive safe integer.
+  // "contextWindowTokens": 272000,
+  // Global Settings defaults:
+  // - Auto-compact: true (also listed below)
+  // - Copy behavior: "select", except Windows defaults to "manual"
+  // - Hide thinking: false
+  // - Edit Mode: "hashline" per session; it is not stored in this file
+  // "clipboard": { "copy": "select" },
+  // "display": { "hideThinking": false },
+  // Compaction defaults (override only the values you need):
+  // "compaction": {
+  //   "enabled": true,
+  //   "auto": true,
+  //   "keepRecentTokens": 20000,
+  //   "maxMediaAttachments": 2,
+  //   "maxMediaBytes": 4194304,
+  //   "maxMediaTokens": 4096,
+  //   "overflowRecovery": true,
+  //   "reserveTokens": 16384,
+  //   "summary": {
+  //     // Omitted model uses the conversation model.
+  //     // Omitted maxOutputTokens defaults to 32000, capped by the Provider.
+  //     // Omitted thinkingLevel uses "off" only when supported.
+  //   }
+  // },
+  // Summary chaining also has host-enforced limits of 4 requests,
+  // 128000 estimated input tokens, and 32000 aggregate output tokens.
+}

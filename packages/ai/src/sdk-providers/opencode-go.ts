@@ -32,6 +32,7 @@ import type {
 } from "../sdk-private/protocols/request.ts";
 import { unreachableValue } from "../sdk-private/protocols/shared.ts";
 import type { ModelProtocolStrategy } from "../sdk-private/protocols/types.ts";
+import { providerChatFinish } from "../sdk-private/provider-events.ts";
 
 const OPENCODE_GO_PROVIDER_ID = "opencode-go";
 const openCodeGoAnthropicStrategy = createAnthropicStrategy();
@@ -295,12 +296,7 @@ const streamOpenCodeGoResponse = async function* (
 			if (part.usage) {
 				yield { type: "usage", usage: part.usage };
 			}
-			yield {
-				...(part.continuation === undefined
-					? {}
-					: { continuation: part.continuation }),
-				type: "finish",
-			};
+			yield providerChatFinish(part);
 		} else {
 			yield part;
 		}

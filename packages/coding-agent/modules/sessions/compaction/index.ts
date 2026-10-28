@@ -1,6 +1,7 @@
 export * from "./compaction";
 export * from "./config";
 export * from "./error";
+export * from "./file-operations";
 export * from "./settings-operations";
 export * from "./summary-generator";
 export * from "./summary-message";

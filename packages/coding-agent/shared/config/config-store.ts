@@ -2,11 +2,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	getErrorMessage,
 	isArray,
 	isNull,
 	isObjectLike,
 	isPlainObject,
 	isUndefined,
+	logger,
 	readUtf8File,
 } from "@wincode/utils";
 import {
@@ -44,6 +46,10 @@ export type ConfigSnapshot = {
 	readonly sources: readonly ConfigSource[];
 };
 export type ConfigStore = {
+	/** Last published settings snapshot, without starting I/O. */
+	readSnapshot(workspace: string): ConfigSnapshot | undefined;
+	/** Observes settings publication and starts the initial load if needed. */
+	subscribeSnapshot(workspace: string, listener: () => void): () => void;
 	getSnapshot(workspace: string): Promise<ConfigSnapshot>;
 	refreshSnapshot(workspace: string): Promise<ConfigSnapshot>;
 	getNamespaceSnapshot(
@@ -613,22 +619,34 @@ export const createConfigStore = (
 	const snapshots = new Map<string, Promise<ConfigSnapshot>>();
 	const namespaceSnapshots = new Map<string, Promise<ConfigSnapshot>>();
 	const writeQueues = new Map<string, Promise<void>>();
+	const publishedSnapshots = new Map<string, ConfigSnapshot>();
+	const snapshotListeners = new Map<string, Set<() => void>>();
+	const loadSettings = (key: string): Promise<ConfigSnapshot> => {
+		const pending = loadSnapshot(key, loadOptions, "settings", true).then(
+			(snapshot) => {
+				// A slower superseded load must not replace the newest settings.
+				if (snapshots.get(key) === pending) {
+					publishedSnapshots.set(key, snapshot);
+					for (const listener of snapshotListeners.get(key) ?? []) {
+						listener();
+					}
+				}
+				return snapshot;
+			}
+		);
+		snapshots.set(key, pending);
+		return pending;
+	};
 	const getSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
 		const key = path.resolve(workspace);
 		const existing = snapshots.get(key);
 		if (!isUndefined(existing)) {
 			return existing;
 		}
-		const loaded = loadSnapshot(key, loadOptions, "settings", true);
-		snapshots.set(key, loaded);
-		return loaded;
+		return loadSettings(key);
 	};
-	const refreshSnapshot = (workspace: string): Promise<ConfigSnapshot> => {
-		const key = path.resolve(workspace);
-		const snapshot = loadSnapshot(key, loadOptions, "settings", true);
-		snapshots.set(key, snapshot);
-		return snapshot;
-	};
+	const refreshSnapshot = (workspace: string): Promise<ConfigSnapshot> =>
+		loadSettings(path.resolve(workspace));
 	const assertNamespace = (namespace: string): void => {
 		if (!namespacePattern.test(namespace)) {
 			throw new Error("Config namespace must be a lowercase identifier.");
@@ -729,6 +747,29 @@ export const createConfigStore = (
 		return refresh(workspace);
 	};
 	return {
+		readSnapshot: (workspace) =>
+			publishedSnapshots.get(path.resolve(workspace)),
+		subscribeSnapshot: (workspace, listener) => {
+			const key = path.resolve(workspace);
+			let listeners = snapshotListeners.get(key);
+			if (listeners === undefined) {
+				listeners = new Set();
+				snapshotListeners.set(key, listeners);
+			}
+			listeners.add(listener);
+			void getSnapshot(key).catch((error: unknown) => {
+				logger.warn("Config snapshot load failed", {
+					error: getErrorMessage(error),
+					workspace: key,
+				});
+			});
+			return () => {
+				listeners.delete(listener);
+				if (listeners.size === 0) {
+					snapshotListeners.delete(key);
+				}
+			};
+		},
 		getSnapshot,
 		refreshSnapshot,
 		getNamespaceSnapshot,

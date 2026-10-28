@@ -1,4 +1,5 @@
 import {
+	type AgentContextPreparation,
 	type AgentId,
 	type AgentRole,
 	type AgentRuntime,
@@ -13,6 +14,7 @@ import {
 	type AgentTurnModel,
 	type AgentTurnPart,
 	type AgentTurnTerminalEvent,
+	agentTurnAssistantMessageId,
 	createAgentTurnAbortEvent,
 	createAgentTurnLifecycle,
 	createOperationalFailure,
@@ -20,6 +22,7 @@ import {
 	isAgentInvariantError,
 	isToolCallId,
 	type ResolvedTool,
+	type SessionContextMeasurement,
 	type SessionMessageId,
 	type SessionRecord,
 	type ToolCallId,
@@ -79,9 +82,14 @@ import {
 	getAttachmentReference,
 } from "../storage/attachment-store";
 import {
+	buildStepCheckpointSessionRecord,
 	buildTerminalSessionRecord,
 	buildToolSessionRecord,
 } from "../turn-records";
+import {
+	contextMeasurementForStep,
+	getSessionContextEpoch,
+} from "../usage/context-usage";
 
 const BASE_AGENT_INSTRUCTIONS =
 	"You are a basic coding agent running in a user's CLI.\nAll file tools are limited to the CLI workspace.";
@@ -635,6 +643,7 @@ export type SessionViewState = ReadonlyDeep<{
 }>;
 
 type AgentTurnEventConsumerOptions = {
+	prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	lifecycle?: AgentTurnLifecycle;
@@ -670,6 +679,7 @@ const consumeAgentTurnEvents = async ({
 	runtime,
 	modelStepObserver,
 	maximumModelSteps,
+	prepareNextStep,
 	promptCacheKey,
 	signal,
 	takeSteeringMessages,
@@ -718,6 +728,7 @@ const consumeAgentTurnEvents = async ({
 		...omitUndefined({
 			modelStepObserver,
 			maximumModelSteps,
+			prepareNextStep,
 			promptCacheKey,
 			takeSteeringMessages,
 		}),
@@ -805,6 +816,8 @@ export const runAgentTurnToText = async ({
 	onEvent,
 	onTerminal,
 	onToolCheckpoint,
+	onStepCheckpoint,
+	prepareNextStep,
 	onViewState,
 	runtime,
 	modelStepObserver,
@@ -820,6 +833,12 @@ export const runAgentTurnToText = async ({
 	onEvent?: (event: AgentTurnEvent) => void | Promise<void>;
 	onTerminal?: (event: AgentTurnTerminalEvent) => void | Promise<void>;
 	onToolCheckpoint?: CheckpointCommitter;
+	onStepCheckpoint?: (record: SessionRecord | undefined) => Promise<void>;
+	prepareNextStep?: (
+		input: AgentContextPreparation & {
+			protectedMessageIds: readonly SessionMessageId[];
+		}
+	) => Promise<readonly SessionMessage[] | undefined>;
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
@@ -833,9 +852,15 @@ export const runAgentTurnToText = async ({
 	turn: AgentTurn;
 }): Promise<string> => {
 	let assistantText = "";
+	let pendingAssistantText = "";
+	let hasCheckpointedText = false;
+	let stepMessageIds: SessionMessageId[] = [];
 	let terminal: AgentTurnTerminalEvent | undefined;
 	let lastSequence = -1;
 	let completedToolCalls = 0;
+	let stepHasToolCalls = false;
+	let contextMeasurement: SessionContextMeasurement | undefined;
+	let contextEpoch = getSessionContextEpoch(turn.input.messages);
 	const startedTools = new Map<
 		string,
 		{ readonly input: unknown; readonly toolName: string }
@@ -859,10 +884,24 @@ export const runAgentTurnToText = async ({
 	await consumeAgentTurnEvents({
 		onEvent: async (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);
+			if (event.type === "model-step-started") {
+				stepMessageIds = [];
+				stepHasToolCalls = false;
+				contextMeasurement = undefined;
+			}
+			if (event.type === "model-step-finished") {
+				contextMeasurement = contextMeasurementForStep(
+					event,
+					contextEpoch,
+					stepHasToolCalls
+				);
+			}
 			if (event.type === "text-delta") {
 				assistantText += event.delta;
+				pendingAssistantText += event.delta;
 			}
 			if (event.type === "tool-call-started") {
+				stepHasToolCalls = true;
 				startedTools.set(event.toolCallId, {
 					input: event.input,
 					toolName: event.toolName,
@@ -872,14 +911,15 @@ export const runAgentTurnToText = async ({
 				const started = startedTools.get(event.toolCallId);
 				if (!isUndefined(started)) {
 					completedToolCalls += 1;
-					await commit(
-						onToolCheckpoint,
-						buildToolSessionRecord({
-							event,
-							input: started.input,
-							sourceUserMessageId,
-							turn,
-						})
+					const toolRecord = buildToolSessionRecord({
+						event,
+						input: started.input,
+						sourceUserMessageId,
+						turn,
+					});
+					await commit(onToolCheckpoint, toolRecord);
+					stepMessageIds.push(
+						...toolRecord.messages.map((message) => message.id)
 					);
 					startedTools.delete(event.toolCallId);
 				}
@@ -894,13 +934,48 @@ export const runAgentTurnToText = async ({
 		runtime,
 		modelStepObserver,
 		maximumModelSteps,
+		prepareNextStep:
+			prepareNextStep === undefined
+				? undefined
+				: async (input) => {
+						const record = buildStepCheckpointSessionRecord({
+							assistantMessageId:
+								getAssistantMessageId?.() ??
+								agentTurnAssistantMessageId(turn.id),
+							text: pendingAssistantText,
+							sourceUserMessageId,
+							turn,
+						});
+						if (record !== undefined) {
+							stepMessageIds.push(
+								...record.messages.map((message) => message.id)
+							);
+						}
+						await onStepCheckpoint?.(record);
+						hasCheckpointedText ||= record !== undefined;
+						pendingAssistantText = "";
+						const prefix = await prepareNextStep({
+							...input,
+							protectedMessageIds: stepMessageIds,
+						});
+						if (prefix === undefined) {
+							return;
+						}
+						contextEpoch = getSessionContextEpoch(prefix);
+						return expandSessionMessagesForModel(prefix).flatMap(
+							toAgentTurnMessages
+						);
+					},
 		promptCacheKey,
 		signal,
 		...omitUndefined({
 			takeSteeringMessages: isUndefined(takeSteeringMessages)
 				? undefined
-				: async () =>
-						(await takeSteeringMessages()).flatMap(toAgentTurnMessages),
+				: async () => {
+						const messages = await takeSteeringMessages();
+						stepMessageIds.push(...messages.map((message) => message.id));
+						return messages.flatMap(toAgentTurnMessages);
+					},
 		}),
 		turn,
 	});
@@ -911,8 +986,11 @@ export const runAgentTurnToText = async ({
 	);
 	const record = buildTerminalSessionRecord({
 		assistantMessageId: getAssistantMessageId?.(),
-		assistantText,
+		assistantText:
+			onStepCheckpoint === undefined ? assistantText : pendingAssistantText,
 		hasCompletedToolCalls: completedToolCalls > 0,
+		hasCheckpointedText,
+		contextMeasurement,
 		event: terminalEvent,
 		sourceUserMessageId,
 		turn,

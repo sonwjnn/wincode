@@ -474,7 +474,11 @@ describe("public OpenCode Go SDK provider", () => {
 			},
 		]);
 		expect(secondEvents.at(-1)).toEqual({
-			outcome: { continuation: [], status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				continuation: [],
+				status: "success",
+			},
 			type: "terminal",
 		});
 	});

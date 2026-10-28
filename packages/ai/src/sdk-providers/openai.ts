@@ -40,6 +40,7 @@ import type {
 } from "../sdk-private/protocols/request.ts";
 import { unreachableValue } from "../sdk-private/protocols/shared.ts";
 import type { ModelProtocolStrategy } from "../sdk-private/protocols/types.ts";
+import { providerChatFinish } from "../sdk-private/provider-events.ts";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_RESPONSES_PROTOCOL = "openai-responses";
@@ -360,12 +361,7 @@ const streamWireRequest = async function* (
 			if (part.usage) {
 				yield { type: "usage", usage: part.usage };
 			}
-			yield {
-				...(part.continuation === undefined
-					? {}
-					: { continuation: part.continuation }),
-				type: "finish",
-			};
+			yield providerChatFinish(part);
 		} else {
 			yield part;
 		}

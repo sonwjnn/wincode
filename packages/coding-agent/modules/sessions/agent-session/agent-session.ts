@@ -9,7 +9,7 @@ import {
 	type ToolCallId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import { isUndefined, omitUndefined } from "@wincode/utils";
+import { getErrorMessage, isUndefined, omitUndefined } from "@wincode/utils";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import type { CompactSessionResult } from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
@@ -154,8 +154,13 @@ type AgentSessionOperationState = {
 		readonly submissionEvents: Set<(event: SessionSubmissionEvent) => void>;
 	};
 	readonly executions: {
+		/** Removed from the live view on interruption, retained until terminal persistence settles. */
+		readonly settling: Map<AgentTurnId, SessionExecution>;
 		readonly endWaiters: Map<AgentTurnId, (() => void)[]>;
-		readonly pendingSteering: Map<AgentTurnId, PendingSteeringDelivery[]>;
+		readonly pendingSteering: Map<
+			AgentTurnId,
+			readonly PendingSteeringDelivery[]
+		>;
 		readonly retryingSteering: Set<SessionSteeringMessage["id"]>;
 		readonly pendingSteeringStarts: Map<AgentTurnId, SessionSteeringMessage>;
 	};
@@ -597,6 +602,7 @@ export class AgentSessionImpl implements AgentSession {
 				submissionEvents: new Set(),
 			},
 			executions: {
+				settling: new Map(),
 				endWaiters: new Map(),
 				pendingSteering: new Map(),
 				pendingSteeringStarts: new Map(),
@@ -630,6 +636,9 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		const sessionState = this.#operationState;
 		const getAssistantMessageId = (turnId: AgentTurnId): SessionMessageId =>
+			this.#state.executions.find((execution) => execution.turnId === turnId)
+				?.assistantId ??
+			sessionState.executions.settling.get(turnId)?.assistantId ??
 			agentTurnAssistantMessageId(turnId);
 		const emitSubmissionEvent = (event: SessionSubmissionEvent): void => {
 			for (const listener of [...sessionState.events.submissionEvents]) {
@@ -849,7 +858,20 @@ export class AgentSessionImpl implements AgentSession {
 		};
 
 		/** Ends an execution and wakes everything waiting for it to end. */
-		const endExecution = (turnId: AgentTurnId): void => {
+		const endExecution = (
+			turnId: AgentTurnId,
+			retainForSettlement = false
+		): void => {
+			if (retainForSettlement) {
+				const execution = this.#state.executions.find(
+					(candidate) => candidate.turnId === turnId
+				);
+				if (execution !== undefined) {
+					sessionState.executions.settling.set(turnId, execution);
+				}
+			} else {
+				sessionState.executions.settling.delete(turnId);
+			}
 			const waiters = sessionState.executions.endWaiters.get(turnId);
 			if (!isUndefined(waiters)) {
 				sessionState.executions.endWaiters.delete(turnId);
@@ -1007,65 +1029,94 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		let inputLane: SessionInputLaneWorkflow;
 		const maintenancePort: SessionMaintenancePort = {
-			addCompactionRequest: (request) => {
-				sessionState.compaction.requests.add(request);
+			applyCompactionResult: (result) => {
+				applyContext(result.activeMessages);
+				recordCompaction(result.entry);
+				setCompactionError(null);
 			},
-			addRecoveryAttempt: (messageId) => {
-				sessionState.recovery.attemptedMessages.add(messageId);
-			},
-			addRecoveryRun: (id) => {
-				sessionState.recovery.activeRuns.add(id);
-			},
-			applyContext,
 			compaction: ports.compaction,
-			drainQueuedSubmissions: () => inputLane.drainQueuedSubmissions(),
-			finishCompactionCommand: (command) => {
-				if (
-					sessionState.compaction.activeCommand?.promise !== command.promise
-				) {
-					return;
-				}
-				command.phase = "settled";
-				sessionState.compaction.activeCommand = undefined;
-				publish({});
+			drainQueueInBackground: () => {
+				trackBackgroundTask(inputLane.drainQueuedSubmissions());
 			},
 			getActiveCompaction: () => sessionState.compaction.activeCommand,
 			getContext: () => this.#state.context,
-			getRecoveryGeneration: () => sessionState.recovery.generation,
+			getSessionState: () => ({
+				closed: sessionState.shutdown.closed,
+				id: sessionId,
+				shutdownSignal: sessionState.shutdown.controller.signal,
+			}),
 			getTranscript: () => this.#state.transcript,
 			hasAttemptedRecovery: (messageId) =>
 				sessionState.recovery.attemptedMessages.has(messageId),
-			isClosed: () => sessionState.shutdown.closed,
+			isRecoveryCurrent: (generation) =>
+				!sessionState.shutdown.closed &&
+				sessionState.recovery.generation === generation,
 			mergeTranscript,
-			recordCompaction,
-			removeCompactionRequest: (request) => {
-				sessionState.compaction.requests.delete(request);
-			},
-			removeRecoveryAttempt: (messageId) => {
+			releaseRecoveryAttempt: (messageId) => {
 				sessionState.recovery.attemptedMessages.delete(messageId);
 			},
-			removeRecoveryRun: (id) => {
-				sessionState.recovery.activeRuns.delete(id);
+			resolveCompactionSettings: async (model) => {
+				const settings = await ports.resolveCompactionSettings(model);
+				return {
+					...omitUndefined({
+						contextWindowOverrideTokens: settings.contextWindowOverrideTokens,
+						summary: settings.summary,
+					}),
+					compactionOverheadTokens: ports.turnRunner.requestOverheadTokens(),
+					enabled: settings.enabled,
+					keepRecentTokens: settings.keepRecentTokens,
+					maxMediaAttachments: settings.maxMediaAttachments,
+					maxMediaBytes: settings.maxMediaBytes,
+					maxMediaTokens: settings.maxMediaTokens,
+					modelContextLimit: settings.modelContextLimit,
+					reserveTokens: settings.reserveTokens,
+					thresholdTokens: settings.thresholdTokens,
+				};
 			},
-			requestOverheadTokens: ports.turnRunner.requestOverheadTokens,
-			resolveCompactionSettings: ports.resolveCompactionSettings,
-			setActiveCompaction: (command) => {
-				sessionState.compaction.activeCommand = command;
-				publish({});
+			runTrackedOverflowRecovery: (run) => {
+				const runId = Symbol("overflow-recovery-run");
+				sessionState.recovery.activeRuns.add(runId);
+				const recovery = run();
+				const settleRecovery = (): void => {
+					sessionState.recovery.activeRuns.delete(runId);
+					trackBackgroundTask(inputLane.drainQueuedSubmissions());
+				};
+				void recovery.then(settleRecovery, settleRecovery);
+				return recovery;
 			},
 			setCompactionError,
-			setCompactionPhase: (command, phase) => {
+			startRecoveryAttempt: (messageId) => {
+				sessionState.recovery.attemptedMessages.add(messageId);
+				return sessionState.recovery.generation;
+			},
+			trackCompactionRequest: (request) => {
+				sessionState.compaction.requests.add(request);
+				void request.then(
+					() => sessionState.compaction.requests.delete(request),
+					() => sessionState.compaction.requests.delete(request)
+				);
+				return request;
+			},
+			transitionCompactionCommand: (transition) => {
+				if (transition.kind === "started") {
+					sessionState.compaction.activeCommand = transition.command;
+					publish({});
+					return;
+				}
 				if (
-					sessionState.compaction.activeCommand?.promise !== command.promise
+					sessionState.compaction.activeCommand?.promise !==
+					transition.command.promise
 				) {
 					return;
 				}
-				command.phase = phase;
+				if (transition.kind === "phase") {
+					transition.command.phase = transition.phase;
+				} else {
+					transition.command.phase = "settled";
+					sessionState.compaction.activeCommand = undefined;
+				}
 				publish({});
 			},
-			shutdownSignal: sessionState.shutdown.controller.signal,
-			sessionId,
-			trackBackgroundTask,
 			waitForExecutionEnd,
 		};
 		maintenance = createSessionMaintenanceWorkflow(maintenancePort);
@@ -1077,8 +1128,54 @@ export class AgentSessionImpl implements AgentSession {
 			applyContext,
 			beginExecution,
 			getAssistantMessageId,
+			getError: () => this.#state.error,
+			finishModelStep: (turnId, record) => {
+				const assistantId = getAssistantMessageId(turnId);
+				const text =
+					record === undefined ? undefined : projectSessionRecords([record])[0];
+				const canonical = projectCommittedToolMessages(
+					this.#state.context,
+					sessionState.transcriptOrder
+				);
+				const next = canonical.flatMap((message) => {
+					if (message.id !== assistantId) {
+						return [message];
+					}
+					return text === undefined ? [] : [text];
+				});
+				applyContext(
+					orderSessionTranscript(next, sessionState.transcriptOrder)
+				);
+				if (text === undefined) {
+					publish({
+						transcript: this.#state.transcript.filter(
+							(message) => message.id !== assistantId
+						),
+					});
+				} else {
+					mergeTranscript([text]);
+				}
+				const nextAssistantId = toSessionMessageId(
+					`assistant-${crypto.randomUUID()}`
+				);
+				const settling = sessionState.executions.settling.get(turnId);
+				if (settling !== undefined) {
+					sessionState.executions.settling.set(turnId, {
+						...settling,
+						assistantId: nextAssistantId,
+					});
+				}
+				publish({
+					executions: this.#state.executions.map((execution) =>
+						execution.turnId === turnId
+							? { ...execution, assistantId: nextAssistantId }
+							: execution
+					),
+				});
+			},
 			compact,
-			continueContext: (input) => submissionCommand.continueContext(input),
+			continueContext: (input, onExecutionStarted) =>
+				submissionCommand.continueContext(input, onExecutionStarted),
 			endExecution,
 			acknowledgeSteeringMessages: (turnId, status, failure) =>
 				steering.acknowledge(turnId, status, failure),
@@ -1178,33 +1275,69 @@ export class AgentSessionImpl implements AgentSession {
 			}
 			trackBackgroundTask(inputLane.drainQueuedSubmissions());
 		};
+		const waitForCurrentActiveSend = async (): Promise<void> => {
+			while (this.#activeSend !== undefined) {
+				await this.#activeSend.promise.catch(() => undefined);
+			}
+		};
 		submissionCommand = createSessionSubmissionCommand({
-			beginSubmission,
+			runInSubmissionLane: async (input, options, run) => {
+				const { messageId, ownsTurnReservation } = beginSubmission(input);
+				try {
+					const outcome = await run();
+					if (outcome.rejected && options.reportFailure !== false) {
+						reportSubmissionFailure(input, messageId, outcome.reason);
+					}
+					return outcome;
+				} catch (error) {
+					if (options.reportFailure !== false) {
+						reportSubmissionFailure(
+							input,
+							messageId,
+							getErrorMessage(error, "The Submission failed.")
+						);
+					}
+					throw error;
+				} finally {
+					finishSubmission(input, ownsTurnReservation);
+				}
+			},
 			cancelCompaction: cancelCompactionCommand,
 			deadlineMs,
-			drainQueuedSubmissions: () => inputLane.drainQueuedSubmissions(),
-			finishSubmission,
 			getActiveSend: () => this.#activeSend,
-			isBusyForContinuation: () =>
-				this.#state.turnActive ||
-				this.#state.isCompacting ||
-				sessionState.compaction.activeCommand !== undefined,
-			isClosed: () => sessionState.shutdown.closed,
-			pipelineSend: (input, signal) => pipeline.send(input, signal),
-			publishError: (error) => publish({ error }),
-			rememberContinuationInput: (input) => {
-				sessionState.continuationInputs.add(input);
-			},
-			reportSubmissionFailure,
-			setActiveSend: (active) => {
-				this.#activeSend = active;
-			},
-			trackBackgroundTask,
-			waitForSubmissionLane: async () => {
+			prepareContinuation: async (input) => {
+				if (sessionState.shutdown.closed) {
+					return { kind: "closed" };
+				}
+				await waitForCurrentActiveSend();
 				while (sessionState.lane.runs > 0) {
 					await sessionState.lane.idle;
 				}
+				if (sessionState.shutdown.closed) {
+					return { kind: "closed" };
+				}
+				if (
+					this.#state.turnActive ||
+					this.#state.isCompacting ||
+					sessionState.compaction.activeCommand !== undefined
+				) {
+					return { kind: "busy" };
+				}
+				const continuationInput = {
+					...input,
+					turnId: input.turnId ?? createAgentTurnId(),
+				};
+				sessionState.continuationInputs.add(continuationInput);
+				return { kind: "ready", input: continuationInput };
 			},
+			isClosed: () => sessionState.shutdown.closed,
+			pipelineSend: (input, signal, onExecutionStarted) =>
+				pipeline.send(input, signal, onExecutionStarted),
+			publishError: (error) => publish({ error }),
+			setActiveSend: (active) => {
+				this.#activeSend = active;
+			},
+			waitForActiveSend: waitForCurrentActiveSend,
 		});
 		const abortActiveSend = submissionCommand.abortActiveSend;
 		const runSubmission = submissionCommand.runSubmission;
@@ -1287,75 +1420,113 @@ export class AgentSessionImpl implements AgentSession {
 				});
 			};
 		steering = createSessionSteeringWorkflow({
-			attachments: ports.attachments,
-			clearPendingSteering: (turnId) => {
-				sessionState.executions.pendingSteering.delete(turnId);
-			},
-			clearPendingSteeringStart: (turnId) => {
-				sessionState.executions.pendingSteeringStarts.delete(turnId);
-			},
-			clearRetryingSteering: (id) => {
-				sessionState.executions.retryingSteering.delete(id);
-			},
-			commitRecord,
+			attachments: { hydrate: ports.attachments.hydrate },
+			commitSteeringRecord: (record, input) =>
+				commitRecord({
+					record,
+					sessionId,
+					sessionModel: input.sessionModel,
+					...omitUndefined({
+						sessionThinkingLevel: input.sessionThinkingLevel,
+					}),
+				}),
 			emitSubmissionEvent,
 			getPendingSteering: (turnId) =>
 				sessionState.executions.pendingSteering.get(turnId),
-			getSnapshot: () => this.#state,
-			hasPendingSteeringStart: (turnId) =>
-				sessionState.executions.pendingSteeringStarts.has(turnId),
-			hasRetryingSteering: (id) =>
-				sessionState.executions.retryingSteering.has(id),
+			getSteeringSnapshot: () => ({
+				context: this.#state.context,
+				steeringMessages: this.#state.steeringMessages,
+				transcript: this.#state.transcript,
+			}),
 			isClosed: () => sessionState.shutdown.closed,
-			markRetryingSteering: (id) => {
-				sessionState.executions.retryingSteering.add(id);
-			},
-			publish,
+			publishSteeringSnapshot: publish,
 			resolveCompactionSettings: ports.resolveCompactionSettings,
 			resolveFileMentions: ports.resolveFileMentions,
 			resolveSubmission: ports.resolveSubmission,
-			runSubmission,
-			sessionId,
-			setPendingSteering: (turnId, deliveries) => {
-				sessionState.executions.pendingSteering.set(turnId, deliveries);
+			runSteeringRetry: async (id, run) => {
+				if (sessionState.executions.retryingSteering.has(id)) {
+					return null;
+				}
+				sessionState.executions.retryingSteering.add(id);
+				try {
+					return await run();
+				} finally {
+					sessionState.executions.retryingSteering.delete(id);
+				}
 			},
+			runSubmission,
 			setPendingSteeringStart: (turnId, source) => {
 				sessionState.executions.pendingSteeringStarts.set(turnId, source);
 			},
-			skills: ports.skills,
-			updateSubmissionStatus,
-		});
-		const inputLanePort: SessionInputLanePort = {
-			addExternalization: (id, controller, completion) => {
-				sessionState.queue.externalizations.set(id, { completion, controller });
+			skills: { resolveSkill: ports.skills.resolveSkill },
+			takePendingSteeringStart: (turnId) => {
+				const pending =
+					sessionState.executions.pendingSteeringStarts.get(turnId);
+				sessionState.executions.pendingSteeringStarts.delete(turnId);
+				return pending;
 			},
-			canDrainQueue: () =>
+			updatePendingSteering: (turnId, update) => {
+				const current = sessionState.executions.pendingSteering.get(turnId);
+				const next = update(current);
+				if (next === undefined) {
+					sessionState.executions.pendingSteering.delete(turnId);
+				} else {
+					sessionState.executions.pendingSteering.set(turnId, next);
+				}
+				return next;
+			},
+			updateSteeringStatus: async (source, updated, afterId) => {
+				await updateSubmissionStatus({
+					failure: updated.reason,
+					messageId: source.message.id,
+					recordId: source.recordId,
+					status: updated.status,
+					submissionId: source.input.submissionId,
+				});
+				const snapshot = this.#state;
+				const steeringMessages = snapshot.steeringMessages.filter(
+					(entry) => entry.id !== source.id
+				);
+				if (updated.status === "failed") {
+					const previousIndex =
+						afterId === undefined
+							? -1
+							: steeringMessages.findIndex((entry) => entry.id === afterId);
+					steeringMessages.splice(previousIndex + 1, 0, updated);
+				}
+				publish({
+					context:
+						updated.status === "failed"
+							? snapshot.context.filter(
+									(entry) => entry.id !== updated.message.id
+								)
+							: snapshot.context.map((entry) =>
+									entry.id === updated.message.id ? updated.message : entry
+								),
+					steeringMessages,
+					transcript: snapshot.transcript.map((entry) =>
+						entry.id === updated.message.id ? updated.message : entry
+					),
+				});
+			},
+		});
+		const getInputLaneState = () => ({
+			canDrain:
 				sessionState.lane.runs === 0 &&
 				!this.#state.turnActive &&
 				!this.#state.isCompacting &&
 				sessionState.compaction.activeCommand === undefined &&
 				sessionState.recovery.activeRuns.size === 0 &&
 				!ports.inputScheduler.hasPendingSubmissionTransition(),
-			commitSteeringSubmission,
-			completeSteeringSubmission,
-			emitSubmissionEvent,
-			externalizeAttachments: (messages, signal) =>
-				ports.attachments.externalize(messages, signal),
-			getExternalization: (id) => sessionState.queue.externalizations.get(id),
-			getSnapshot: () => this.#state,
-			inputScheduler: ports.inputScheduler,
-			resolveSubmission: ports.resolveSubmission,
-			assertProviderModelSelection: ports.assertProviderModelSelection,
-			isClosed: () => sessionState.shutdown.closed,
-			isExecutionBusy: () =>
+			closed: sessionState.shutdown.closed,
+			executionBusy:
 				sessionState.lane.runs > 0 ||
 				this.#state.turnActive ||
 				this.#state.isCompacting ||
 				sessionState.compaction.activeCommand !== undefined ||
 				sessionState.recovery.activeRuns.size > 0,
-			isExternalizing: (id) => sessionState.queue.externalizations.has(id),
-			isQueueDraining: () => sessionState.queue.drainPhase === "draining",
-			isSubmissionBusy: () =>
+			queueDraining: sessionState.queue.drainPhase === "draining",
+			submissionBusy:
 				sessionState.lane.runs > 0 ||
 				sessionState.queue.drainPhase === "draining" ||
 				this.#state.turnActive ||
@@ -1365,6 +1536,22 @@ export class AgentSessionImpl implements AgentSession {
 				sessionState.queue.externalizations.size > 0 ||
 				ports.inputScheduler.getQueuedSubmissions().length > 0 ||
 				this.#state.steeringMessages.length > 0,
+		});
+		const inputLanePort: SessionInputLanePort = {
+			addExternalization: (id, controller, completion) => {
+				sessionState.queue.externalizations.set(id, { completion, controller });
+			},
+			getLaneState: getInputLaneState,
+			commitSteeringSubmission,
+			completeSteeringSubmission,
+			emitSubmissionEvent,
+			externalizeAttachments: (messages, signal) =>
+				ports.attachments.externalize(messages, signal),
+			getExternalization: (id) => sessionState.queue.externalizations.get(id),
+			getSteeringMessages: () => this.#state.steeringMessages,
+			inputScheduler: ports.inputScheduler,
+			assertSubmissionSelection: (input) =>
+				ports.assertProviderModelSelection(ports.resolveSubmission(input)),
 			publishQueueChange: () => publish({}),
 			removeExternalization: (id) => {
 				sessionState.queue.externalizations.delete(id);
@@ -1396,7 +1583,7 @@ export class AgentSessionImpl implements AgentSession {
 			abortActiveSend("interrupted");
 			interruptLatestAssistantMessage(preserveToolCallId);
 			for (const execution of [...this.#state.executions]) {
-				endExecution(execution.turnId);
+				endExecution(execution.turnId, true);
 			}
 			return Promise.resolve();
 		};

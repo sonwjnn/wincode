@@ -1,11 +1,16 @@
 import { normalizeModelUsage } from "../../model-usage.ts";
 import { readSseEvents } from "../sse.ts";
 import {
+	openAiChatCompletion,
+	unknownGenerationCompletion,
+} from "./generation-completion.ts";
+import {
 	openAIPromptCacheControlsForRequest,
 	openAIPromptCacheStrategyFor,
 } from "./openai-prompt-cache.ts";
 import { openAIProtocolReasoningEffortFor } from "./provider-options.ts";
 import type {
+	ProtocolGenerationCompletion,
 	ProtocolPromptMessage,
 	ProtocolPromptPart,
 	ProtocolStreamPart,
@@ -199,6 +204,7 @@ const deltaText = (value: unknown): string | undefined => {
 
 type OpenAiChatState = {
 	completed: boolean;
+	completion: ProtocolGenerationCompletion;
 	emittedToolCalls: Set<number>;
 	toolCalls: Map<number, ChatToolCall>;
 	usage: unknown;
@@ -282,6 +288,7 @@ const openAiChatChoiceParts = function* (
 	}
 	if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
 		state.completed = true;
+		state.completion = openAiChatCompletion(stringValue(choice.finish_reason));
 		yield* flushOpenAiChatToolCalls(state);
 	}
 };
@@ -309,6 +316,7 @@ const openAiChatStream = async function* (
 ): AsyncIterable<ProtocolStreamPart> {
 	const state: OpenAiChatState = {
 		completed: false,
+		completion: unknownGenerationCompletion(),
 		emittedToolCalls: new Set<number>(),
 		toolCalls: new Map<number, ChatToolCall>(),
 		usage: undefined,
@@ -332,7 +340,11 @@ const openAiChatStream = async function* (
 	}
 	yield* flushOpenAiChatToolCalls(state);
 	const normalized = normalizeModelUsage(state.usage);
-	yield normalized ? { type: "finish", usage: normalized } : { type: "finish" };
+	yield {
+		completion: state.completion,
+		...(normalized ? { usage: normalized } : {}),
+		type: "finish",
+	};
 };
 export type OpenAICompatibleChatRequest = Readonly<{
 	maxOutputTokens?: number;
