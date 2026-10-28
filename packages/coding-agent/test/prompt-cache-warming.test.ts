@@ -17,6 +17,7 @@ import type {
 	CreateSessionUsageEntryInput,
 	SessionUsageEntry,
 } from "@/modules/sessions/storage/session-store";
+import { createSessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import { sessionId } from "./support/identifiers";
 
 const originalFetch = globalThis.fetch;
@@ -133,10 +134,12 @@ const createWarming = (
 	providerCollection: ProviderCollection = createDefaultProviderCollection()
 ) =>
 	createSessionCacheWarming({
-		initialUsageEntries: [],
 		providerCollection,
-		sessionId: sessionId("cache-warm-test"),
-		store,
+		usageLedger: createSessionUsageLedger({
+			initialEntries: [],
+			sessionId: sessionId("cache-warm-test"),
+			store,
+		}),
 	});
 
 describe("Session Cache Warming", () => {
@@ -214,7 +217,6 @@ describe("Session Cache Warming", () => {
 			model: { modelId: "gpt-5.6", providerId: "openai" },
 			usage: { cacheReadTokens: 90_000, inputTokens: 100_000, outputTokens: 1 },
 		});
-		expect(warming.getUsageEntries()).toEqual(entries);
 		expect(warming.getStatus()).toBe("scheduled");
 		await warming.dispose();
 	});
@@ -389,7 +391,6 @@ describe("Session Cache Warming", () => {
 			model: { modelId: "gpt-5.6", providerId: "openai" },
 			usage: { cacheReadTokens: 90_000, inputTokens: 100_000, outputTokens: 1 },
 		});
-		expect(warming.getUsageEntries()).toEqual(entries);
 		expect(warming.getStatus()).toBe("scheduled");
 		await warming.dispose();
 		await collection.close();

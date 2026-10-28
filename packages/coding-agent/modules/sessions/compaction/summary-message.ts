@@ -51,6 +51,6 @@ export const createCompactionSummaryMessage = (
 	role: "user",
 });
 
-export const isCompactionSummaryMessage = (
-	message: Pick<SessionMessage, "id">
-): boolean => message.id.startsWith("compaction:");
+export const isCompactionSummaryMessage = (message: {
+	readonly id: string;
+}): boolean => message.id.startsWith("compaction:");

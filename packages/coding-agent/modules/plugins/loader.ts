@@ -28,6 +28,9 @@ import type {
 	PluginAgentRegistration,
 	PluginAPI,
 	PluginBeforeAgentTurnHook,
+	PluginBeforeCompactionHook,
+	PluginCompactionCompletedHook,
+	PluginCompactionFailedHook,
 	PluginDefinitionAPI,
 	PluginFactory,
 	PluginJsonValue,
@@ -90,6 +93,9 @@ type MutablePluginDraft = {
 	statusPanels: Map<string, PluginStatusPanelRegistration>;
 	id: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
+	onBeforeCompaction?: PluginBeforeCompactionHook;
+	onCompactionCompleted?: PluginCompactionCompletedHook;
+	onCompactionFailed?: PluginCompactionFailedHook;
 	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
@@ -343,6 +349,42 @@ const createRegistrationAPI = (
 			}
 			plugin.onBeforeAgentTurn = handler;
 		},
+		onBeforeCompaction(handler) {
+			assertOpen();
+			if (
+				typeof handler !== "function" ||
+				plugin.onBeforeCompaction !== undefined
+			) {
+				throw new Error(
+					"Plugin hook 'onBeforeCompaction' must be registered once."
+				);
+			}
+			plugin.onBeforeCompaction = handler;
+		},
+		onCompactionCompleted(handler) {
+			assertOpen();
+			if (
+				typeof handler !== "function" ||
+				plugin.onCompactionCompleted !== undefined
+			) {
+				throw new Error(
+					"Plugin hook 'onCompactionCompleted' must be registered once."
+				);
+			}
+			plugin.onCompactionCompleted = handler;
+		},
+		onCompactionFailed(handler) {
+			assertOpen();
+			if (
+				typeof handler !== "function" ||
+				plugin.onCompactionFailed !== undefined
+			) {
+				throw new Error(
+					"Plugin hook 'onCompactionFailed' must be registered once."
+				);
+			}
+			plugin.onCompactionFailed = handler;
+		},
 		onStart(handler) {
 			registerProcessLifecycleHook(
 				handler,
@@ -593,6 +635,9 @@ const loadedPluginFromDraft = (
 		providers: Object.freeze(registeredProviders),
 		sourceIdentity,
 		onBeforeAgentTurn: draft.onBeforeAgentTurn,
+		onBeforeCompaction: draft.onBeforeCompaction,
+		onCompactionCompleted: draft.onCompactionCompleted,
+		onCompactionFailed: draft.onCompactionFailed,
 		onStart: draft.onStart,
 		onSessionShutdown: draft.onSessionShutdown,
 		onSessionStart: draft.onSessionStart,

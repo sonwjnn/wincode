@@ -43,6 +43,10 @@ import {
 import { restoreSelection } from "../selection";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionUsageEntry } from "../storage/session-store";
+import {
+	createSessionUsageLedger,
+	type SessionUsageLedger,
+} from "../usage/session-usage-ledger";
 import { createAgentSessionAdapters } from "./agent-session-adapters";
 import {
 	assertPluginProviderRegistrationSnapshot,
@@ -335,6 +339,7 @@ export const createSessionHost = async ({
 	let providerController: InteractiveProviderController | undefined;
 	// The warmer belongs to the loaded Host, not a single Agent Turn; retain it across idle turns.
 	let cacheWarming: SessionCacheWarming | undefined;
+	let usageLedger: SessionUsageLedger | undefined;
 	let unsubscribeContext: (() => void) | undefined;
 	let unsubscribeProviderComposition: (() => void) | undefined;
 
@@ -371,6 +376,7 @@ export const createSessionHost = async ({
 		unsubscribeContext?.();
 		unsubscribeProviderComposition?.();
 		const cacheWarmingShutdown = cacheWarming?.dispose() ?? Promise.resolve();
+		usageLedger?.dispose();
 		let agentSessionShutdown: Promise<void> = Promise.resolve();
 		if (activeAgentSession !== undefined) {
 			const snapshot = activeAgentSession.getSnapshot();
@@ -532,11 +538,15 @@ export const createSessionHost = async ({
 			);
 		}
 		await providerController.restoreModels(selectedHostModel?.providerId);
-		cacheWarming = createSessionCacheWarming({
-			initialUsageEntries: opened.usageEntries,
-			providerCollection: sessionProviderCollection,
+		const sessionUsageLedger = createSessionUsageLedger({
+			initialEntries: opened.usageEntries,
 			sessionId,
 			store: capabilities.getStore(),
+		});
+		usageLedger = sessionUsageLedger;
+		cacheWarming = createSessionCacheWarming({
+			providerCollection: sessionProviderCollection,
+			usageLedger: sessionUsageLedger,
 		});
 		if (isInteractiveSessionProviderCollection(sessionProviderCollection)) {
 			unsubscribeProviderComposition =
@@ -552,6 +562,7 @@ export const createSessionHost = async ({
 			createAgentSessionAdapters({
 				cacheWarming,
 				capabilities,
+				usageLedger: sessionUsageLedger,
 				providerCollection: sessionProviderCollection,
 				isShutDown: () => isShutDown,
 				sessionId,
@@ -689,7 +700,7 @@ export const createSessionHost = async ({
 			getSnapshot: openedAgentSession.getSnapshot,
 			getCacheWarmingStatus: () => cacheWarming?.getStatus() ?? "idle",
 			cancelCacheWarming: () => cacheWarming?.cancel(),
-			getSessionUsageEntries: () => cacheWarming?.getUsageEntries() ?? [],
+			getSessionUsageEntries: () => usageLedger?.getEntries() ?? [],
 			onEvent: (listener) => {
 				eventListeners.add(listener);
 				return () => eventListeners.delete(listener);
@@ -703,9 +714,11 @@ export const createSessionHost = async ({
 				};
 				const unsubscribeAgent = openedAgentSession.subscribe(notify);
 				const unsubscribeWarming = cacheWarming?.subscribe(notify);
+				const unsubscribeUsage = usageLedger?.subscribe(notify);
 				return () => {
 					unsubscribeAgent();
 					unsubscribeWarming?.();
+					unsubscribeUsage?.();
 				};
 			},
 		};

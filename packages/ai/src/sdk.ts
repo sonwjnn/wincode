@@ -1,4 +1,4 @@
-import { logger } from "@wincode/utils";
+import { logger, omitUndefined } from "@wincode/utils";
 import { z } from "zod";
 import { normalizeModelFailure } from "./model-failures.ts";
 import {
@@ -263,8 +263,20 @@ export type ProviderAuthorization = Readonly<{
 	credential?: unknown;
 }>;
 
-/** Provider finishes are folded into the SDK's one successful terminal outcome. */
+export type ProviderGenerationCompletion =
+	| Readonly<{ kind: "completed" }>
+	| Readonly<{
+			kind: "incomplete";
+			reason: "filtered" | "other" | "output-limit";
+	  }>
+	| Readonly<{ kind: "unknown" }>;
+
+/**
+ * Provider finishes are folded into the SDK's one successful terminal outcome.
+ * Omitted completion evidence becomes `unknown` at the collection boundary.
+ */
 export type ProviderChatFinish = Readonly<{
+	completion?: ProviderGenerationCompletion;
 	continuation?: unknown;
 	type: "finish";
 }>;
@@ -501,7 +513,11 @@ export type ChatFailure =
 	  }>;
 
 export type ChatOutcome =
-	| Readonly<{ continuation?: unknown; status: "success" }>
+	| Readonly<{
+			completion: ProviderGenerationCompletion;
+			continuation?: unknown;
+			status: "success";
+	  }>
 	| Readonly<{ failure: ChatFailure; status: "failure" }>
 	| Readonly<{ reason?: string; status: "aborted" }>;
 
@@ -808,7 +824,9 @@ const isOptionalProviderModelLimits = (value: unknown): boolean =>
 	(isRecord(value) &&
 		Object.entries(value).every(([key, candidate]) => {
 			if (key === "contextWindowTokens") {
-				return candidate === undefined || isPositiveSafeInteger(candidate);
+				// Context metadata is advisory; normalization drops invalid values so
+				// the consumer can use its documented fallback.
+				return true;
 			}
 			if (key === "maxOutputTokens") {
 				return candidate === undefined || isPositiveSafeInteger(candidate);
@@ -890,12 +908,22 @@ const isProviderModel = (value: unknown): value is ProviderModel =>
 	isOptionalProviderModelPricing(value.pricing);
 
 const normalizeProviderModel = (model: ProviderModel): ProviderModel => {
-	const pricing = model.pricing;
+	const limits = model.limits;
+	const normalizedModel =
+		limits !== undefined && !isPositiveSafeInteger(limits.contextWindowTokens)
+			? {
+					...model,
+					limits: omitUndefined({
+						maxOutputTokens: limits.maxOutputTokens,
+					}),
+				}
+			: model;
+	const pricing = normalizedModel.pricing;
 	if (pricing?.tiers === undefined) {
-		return model;
+		return normalizedModel;
 	}
 	return {
-		...model,
+		...normalizedModel,
 		pricing: {
 			...pricing,
 			tiers: [...pricing.tiers].sort(
@@ -989,13 +1017,15 @@ const failureForError = (
 				providerId,
 			};
 		}
+		const modelFailure = normalizeModelFailure(error, { modelId, providerId });
 		const statusCode =
-			error.code === "provider"
-				? normalizeModelFailure(error).details?.statusCode
-				: undefined;
+			error.code === "provider" ? modelFailure.details?.statusCode : undefined;
 		return {
 			code: error.code,
-			message: error.message,
+			message:
+				modelFailure.code === "context-overflow"
+					? modelFailure.message
+					: error.message,
 			providerId,
 			...(statusCode === undefined ? {} : { statusCode }),
 		};
@@ -1646,6 +1676,7 @@ export const createProviderCollection = (
 				headers = mergeProviderHeaders(headers, transformed);
 			}
 			const providerRequest = toProviderChatRequest(request);
+			let completion: ProviderGenerationCompletion = { kind: "unknown" };
 			let continuation: unknown | undefined;
 			for await (const event of provider.streamChat(providerRequest, {
 				...headerContext,
@@ -1653,6 +1684,7 @@ export const createProviderCollection = (
 			})) {
 				throwIfAborted(request.signal);
 				if (event.type === "finish") {
+					completion = event.completion ?? { kind: "unknown" };
 					continuation = event.continuation;
 					continue;
 				}
@@ -1660,6 +1692,7 @@ export const createProviderCollection = (
 			}
 			throwIfAborted(request.signal);
 			yield terminal({
+				completion,
 				...(continuation === undefined ? {} : { continuation }),
 				status: "success",
 			});

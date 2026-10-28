@@ -154,6 +154,8 @@ type AgentSessionOperationState = {
 		readonly submissionEvents: Set<(event: SessionSubmissionEvent) => void>;
 	};
 	readonly executions: {
+		/** Removed from the live view on interruption, retained until terminal persistence settles. */
+		readonly settling: Map<AgentTurnId, SessionExecution>;
 		readonly endWaiters: Map<AgentTurnId, (() => void)[]>;
 		readonly pendingSteering: Map<
 			AgentTurnId,
@@ -600,6 +602,7 @@ export class AgentSessionImpl implements AgentSession {
 				submissionEvents: new Set(),
 			},
 			executions: {
+				settling: new Map(),
 				endWaiters: new Map(),
 				pendingSteering: new Map(),
 				pendingSteeringStarts: new Map(),
@@ -633,6 +636,9 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		const sessionState = this.#operationState;
 		const getAssistantMessageId = (turnId: AgentTurnId): SessionMessageId =>
+			this.#state.executions.find((execution) => execution.turnId === turnId)
+				?.assistantId ??
+			sessionState.executions.settling.get(turnId)?.assistantId ??
 			agentTurnAssistantMessageId(turnId);
 		const emitSubmissionEvent = (event: SessionSubmissionEvent): void => {
 			for (const listener of [...sessionState.events.submissionEvents]) {
@@ -852,7 +858,20 @@ export class AgentSessionImpl implements AgentSession {
 		};
 
 		/** Ends an execution and wakes everything waiting for it to end. */
-		const endExecution = (turnId: AgentTurnId): void => {
+		const endExecution = (
+			turnId: AgentTurnId,
+			retainForSettlement = false
+		): void => {
+			if (retainForSettlement) {
+				const execution = this.#state.executions.find(
+					(candidate) => candidate.turnId === turnId
+				);
+				if (execution !== undefined) {
+					sessionState.executions.settling.set(turnId, execution);
+				}
+			} else {
+				sessionState.executions.settling.delete(turnId);
+			}
 			const waiters = sessionState.executions.endWaiters.get(turnId);
 			if (!isUndefined(waiters)) {
 				sessionState.executions.endWaiters.delete(turnId);
@@ -1038,6 +1057,10 @@ export class AgentSessionImpl implements AgentSession {
 			resolveCompactionSettings: async (model) => {
 				const settings = await ports.resolveCompactionSettings(model);
 				return {
+					...omitUndefined({
+						contextWindowOverrideTokens: settings.contextWindowOverrideTokens,
+						summary: settings.summary,
+					}),
 					compactionOverheadTokens: ports.turnRunner.requestOverheadTokens(),
 					enabled: settings.enabled,
 					keepRecentTokens: settings.keepRecentTokens,
@@ -1104,8 +1127,54 @@ export class AgentSessionImpl implements AgentSession {
 			applyContext,
 			beginExecution,
 			getAssistantMessageId,
+			getError: () => this.#state.error,
+			finishModelStep: (turnId, record) => {
+				const assistantId = getAssistantMessageId(turnId);
+				const text =
+					record === undefined ? undefined : projectSessionRecords([record])[0];
+				const canonical = projectCommittedToolMessages(
+					this.#state.context,
+					sessionState.transcriptOrder
+				);
+				const next = canonical.flatMap((message) => {
+					if (message.id !== assistantId) {
+						return [message];
+					}
+					return text === undefined ? [] : [text];
+				});
+				applyContext(
+					orderSessionTranscript(next, sessionState.transcriptOrder)
+				);
+				if (text === undefined) {
+					publish({
+						transcript: this.#state.transcript.filter(
+							(message) => message.id !== assistantId
+						),
+					});
+				} else {
+					mergeTranscript([text]);
+				}
+				const nextAssistantId = toSessionMessageId(
+					`assistant-${crypto.randomUUID()}`
+				);
+				const settling = sessionState.executions.settling.get(turnId);
+				if (settling !== undefined) {
+					sessionState.executions.settling.set(turnId, {
+						...settling,
+						assistantId: nextAssistantId,
+					});
+				}
+				publish({
+					executions: this.#state.executions.map((execution) =>
+						execution.turnId === turnId
+							? { ...execution, assistantId: nextAssistantId }
+							: execution
+					),
+				});
+			},
 			compact,
-			continueContext: (input) => submissionCommand.continueContext(input),
+			continueContext: (input, onExecutionStarted) =>
+				submissionCommand.continueContext(input, onExecutionStarted),
 			endExecution,
 			acknowledgeSteeringMessages: (turnId, status, failure) =>
 				steering.acknowledge(turnId, status, failure),
@@ -1261,7 +1330,8 @@ export class AgentSessionImpl implements AgentSession {
 				return { kind: "ready", input: continuationInput };
 			},
 			isClosed: () => sessionState.shutdown.closed,
-			pipelineSend: (input, signal) => pipeline.send(input, signal),
+			pipelineSend: (input, signal, onExecutionStarted) =>
+				pipeline.send(input, signal, onExecutionStarted),
 			publishError: (error) => publish({ error }),
 			setActiveSend: (active) => {
 				this.#activeSend = active;
@@ -1512,7 +1582,7 @@ export class AgentSessionImpl implements AgentSession {
 			abortActiveSend("interrupted");
 			interruptLatestAssistantMessage(preserveToolCallId);
 			for (const execution of [...this.#state.executions]) {
-				endExecution(execution.turnId);
+				endExecution(execution.turnId, true);
 			}
 			return Promise.resolve();
 		};

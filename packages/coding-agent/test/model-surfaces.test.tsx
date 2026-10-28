@@ -23,10 +23,7 @@ import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-mod
 import { SessionUsageBar } from "@/modules/sessions/ui/components/session-usage-bar";
 import type { SessionUsageSummary } from "@/modules/sessions/usage/session-usage";
 import { ConfigProvider } from "@/shared/config/config-provider";
-import type {
-	ConfigRuntime,
-	ConfigSnapshot,
-} from "@/shared/config/config-store";
+import { createConfigStore } from "@/shared/config/config-store";
 import {
 	type DialogContextValue,
 	DialogProvider,
@@ -271,25 +268,30 @@ test("Agent selection offers an exact available replacement without changing the
 		protocolId: "fixture",
 		providerId: "plugin-provider",
 	};
-	const snapshot = fromPartial<ConfigSnapshot>({
-		diagnostics: [],
-		document: {
-			agents: {
-				reviewer: {
-					description: "Reviews changes with a Provider Model.",
-					model: "plugin-provider/stale-model-v1",
-					role: "primary",
+	const config = {
+		configStore: createConfigStore({
+			homeRoot: "/tmp",
+			trustedProjectRoots: [],
+			fs: {
+				readFile: async (file) => {
+					if (file !== "/tmp/.wincode/settings.json") {
+						throw Object.assign(new Error("missing"), { code: "ENOENT" });
+					}
+					return JSON.stringify({
+						agents: {
+							reviewer: {
+								description: "Reviews changes with a Provider Model.",
+								model: "plugin-provider/stale-model-v1",
+								role: "primary",
+							},
+						},
+					});
 				},
 			},
-		},
-		sourceFor: () => undefined,
-		sources: [],
-	});
-	const config = fromPartial<ConfigRuntime>({
-		configStore: { getSnapshot: async () => snapshot },
+		}),
 		homeRoot: "/tmp",
 		workspace: "/tmp",
-	});
+	};
 	const selected = Promise.withResolvers<{
 		agent: AgentId;
 		model?: ProviderModelSelection;
@@ -353,7 +355,9 @@ test("Agent selection offers an exact available replacement without changing the
 			providerId: "plugin-provider",
 		},
 	});
-	expect(snapshot.document.agents).toMatchObject({
+	expect(
+		(await config.configStore.getSnapshot(config.workspace)).document.agents
+	).toMatchObject({
 		reviewer: { model: "plugin-provider/stale-model-v1" },
 	});
 });
@@ -448,6 +452,7 @@ describe("session usage bar", () => {
 		contextLimit: 200_000,
 		contextPercent: 42,
 		contextTokens: 84_000,
+		contextSource: "measured",
 		inputTokens: 0,
 		outputTokens: 0,
 		cacheReadTokens: 0,
@@ -507,6 +512,28 @@ describe("session usage bar", () => {
 		expect(frame.indexOf("CH45.0%")).toBeLessThan(frame.indexOf("~$1.23"));
 		expect(frame.indexOf("~$1.23")).toBeLessThan(frame.indexOf("42.0%/200k"));
 		expect(frame).not.toContain("W0");
+	});
+
+	test("displays context usage above 100% when it exceeds the model limit", async () => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar
+				summary={summary({
+					contextLimit: 200_000,
+					contextTokens: 400_000,
+				})}
+			/>
+		));
+		expect(setup.captureCharFrame()).toContain("200.0%/200k");
+	});
+
+	test.each([
+		"estimated",
+		"mixed",
+	] as const)("marks %s context as approximate rather than a provider measurement", async (contextSource) => {
+		const setup = await renderSurfaces(() => (
+			<SessionUsageBar summary={summary({ contextSource })} />
+		));
+		expect(setup.captureCharFrame()).toContain("~42.0%/200k");
 	});
 
 	test("shows cache warming status and cost without changing context", async () => {
@@ -607,15 +634,11 @@ describe("session usage bar", () => {
 		expect(setup.captureCharFrame()).toContain("~$1.25 (partial)");
 	});
 
-	test("shows used tokens when the current Provider Model has no context limit", async () => {
+	test("shows the 272k fallback when the current Provider Model has no context metadata", async () => {
 		const setup = await renderSurfaces(() => (
-			<SessionUsageBar
-				summary={summary({ contextLimit: null, contextPercent: null })}
-			/>
+			<SessionUsageBar summary={summary({ contextLimit: 272_000 })} />
 		));
 
-		const frame = setup.captureCharFrame();
-		expect(frame).toContain("84K");
-		expect(frame).not.toContain("42%");
+		expect(setup.captureCharFrame()).toContain("30.9%/272k");
 	});
 });

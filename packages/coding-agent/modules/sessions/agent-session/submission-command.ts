@@ -32,14 +32,18 @@ export type SessionSubmissionCommandPort = Readonly<{
 	isClosed: () => boolean;
 	pipelineSend: (
 		input: SessionSendInput,
-		signal: AbortSignal
+		signal: AbortSignal,
+		onExecutionStarted?: () => void
 	) => Promise<SessionSendOutcome>;
 	publishError: (error: Error) => void;
 	setActiveSend: (active: SessionActiveSend | undefined) => void;
 	waitForActiveSend: () => Promise<void>;
 }>;
 
-type RunSubmissionOptions = Readonly<{ reportFailure?: boolean }>;
+type RunSubmissionOptions = Readonly<{
+	onExecutionStarted?: () => void;
+	reportFailure?: boolean;
+}>;
 type SessionContinuationPreparation =
 	| { readonly kind: "closed" }
 	| { readonly kind: "busy" }
@@ -48,7 +52,10 @@ export type SessionSubmissionCommand = Readonly<{
 	abortActiveSend: (
 		reason: "cancelled" | "deadline-exceeded" | "interrupted"
 	) => void;
-	continueContext: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	continueContext: (
+		input: SessionSendInput,
+		onExecutionStarted: () => void
+	) => Promise<SessionSendOutcome>;
 	runSubmission: (
 		input: SessionSendInput,
 		options?: RunSubmissionOptions
@@ -71,7 +78,8 @@ export const createSessionSubmissionCommand = (
 		}
 	};
 	const runActiveSend = (
-		input: SessionSendInput
+		input: SessionSendInput,
+		onExecutionStarted?: () => void
 	): Promise<SessionSendOutcome> => {
 		if (port.getActiveSend() !== undefined) {
 			return Promise.resolve({
@@ -99,7 +107,11 @@ export const createSessionSubmissionCommand = (
 				};
 				controller.signal.addEventListener("abort", stop, { once: true });
 				try {
-					return await port.pipelineSend(input, controller.signal);
+					return await port.pipelineSend(
+						input,
+						controller.signal,
+						onExecutionStarted
+					);
 				} catch (error) {
 					if (!port.isClosed()) {
 						port.publishError(
@@ -126,9 +138,12 @@ export const createSessionSubmissionCommand = (
 		input: SessionSendInput,
 		options: RunSubmissionOptions = {}
 	): Promise<SessionSendOutcome> =>
-		port.runInSubmissionLane(input, options, () => runActiveSend(input));
+		port.runInSubmissionLane(input, options, () =>
+			runActiveSend(input, options.onExecutionStarted)
+		);
 	const continueContext = async (
-		input: SessionSendInput
+		input: SessionSendInput,
+		onExecutionStarted: () => void
 	): Promise<SessionSendOutcome> => {
 		const preparation = await port.prepareContinuation(input);
 		if (preparation.kind === "closed") {
@@ -137,7 +152,7 @@ export const createSessionSubmissionCommand = (
 		if (preparation.kind === "busy") {
 			return { rejected: true, reason: "The Agent Session is busy." };
 		}
-		return runSubmission(preparation.input);
+		return runSubmission(preparation.input, { onExecutionStarted });
 	};
 	return {
 		abortActiveSend,

@@ -1,4 +1,5 @@
 import type {
+	AgentContextPreparation,
 	AgentId,
 	AgentTurn,
 	AgentTurnEvent,
@@ -335,6 +336,8 @@ export type SessionAttachmentPort = Readonly<{
  * Durable Session Records the runtime produced through the Agent Session.
  */
 export type SessionTurnCallbacks = Readonly<{
+	/** Commits settled text and rotates the transient assistant before preparation. */
+	commitStep: (record: SessionRecord | undefined) => Promise<void>;
 	/** Commits the terminal Session Record of the execution. */
 	commitTerminal: (record: SessionRecord) => Promise<void>;
 	/** Commits each completed Tool Call as its own Session Record. */
@@ -347,8 +350,17 @@ export type SessionTurnCallbacks = Readonly<{
 	onViewState: (viewState: SessionViewState) => void;
 }>;
 
+export type SessionContextPreparation = AgentContextPreparation &
+	Readonly<{
+		protectedMessageIds: readonly SessionMessageId[];
+	}>;
+
 /** One Agent Turn execution the host runs against the Agent Runtime. */
 export type SessionTurnRequest = Readonly<{
+	/** Returns replacement history only; runtime retains the newest raw step suffix. */
+	prepareNextStep: (
+		input: SessionContextPreparation
+	) => Promise<readonly SessionMessage[] | undefined>;
 	/** The Skill catalog the submission armed for this execution. */
 	armedSkill: SessionSkillCatalog;
 	/** Reports what happens inside the execution back to the Agent Session. */
@@ -436,12 +448,13 @@ export type SessionOverflowContinuationInput = ReadonlyDeep<{
 }>;
 
 /**
- * What one context continuation reported: the Agent Turn it starts, or the
- * refusal that stopped it. A refusal — an active Session Command — is reported
- * instead of overlapped, and the recovery never queues it.
+ * What one context continuation reported: its Agent Turn started, failed after
+ * starting, or was refused before starting. A refusal — an active Session
+ * Command — is reported instead of overlapped, and recovery never queues it.
  */
 export type SessionOverflowContinuationOutcome =
 	| { readonly kind: "started" }
+	| { readonly kind: "failed" }
 	| { readonly kind: "refused"; readonly reason: string };
 
 /** The Provider Model selection one overflow recovery compacts and continues with. */
@@ -450,24 +463,33 @@ export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
 	thinkingLevel?: ThinkingLevel;
 }>;
 
-/** One provider refusal proposed to the Agent Session for overflow recovery. */
-export type SessionOverflowRecoveryCommand = ReadonlyDeep<{
-	/** The failure that ended the Agent Turn; anything but an overflow is ignored. */
-	error: unknown;
+type SessionOverflowRecoveryBase = ReadonlyDeep<{
 	/** The user message the failed Agent Turn answered; continuation resumes it. */
 	originalMessageId: SessionMessageId;
 	/**
 	 * The Provider Model selection the recovery's compaction runs against, or
-	 * null when that selection has no overflow recovery available.
+	 * null when that selection has no recovery available.
 	 */
 	resolveTarget: () => Promise<SessionOverflowRecoveryTarget | null>;
 	/** Continues the existing context once the recovery has compacted. */
 	continueContext: (
 		input: SessionOverflowContinuationInput
 	) => Promise<SessionOverflowContinuationOutcome>;
-	/** The Agent Turn whose provider request overflowed. */
+	/** The Agent Turn whose response could not continue safely. */
 	turnId: AgentTurnId;
 }>;
+
+/** One context overflow or final output-limit response proposed for safe recovery. */
+export type SessionOverflowRecoveryCommand =
+	| (SessionOverflowRecoveryBase & {
+			/** The provider or runtime reported a context overflow. */
+			error: unknown;
+			trigger: "context-overflow";
+	  })
+	| (SessionOverflowRecoveryBase & {
+			/** The final Provider response stopped at its output-token limit. */
+			trigger: "output-limit";
+	  });
 
 /**
  * What one overflow recovery did: it compacted and continued the existing
@@ -499,6 +521,10 @@ export type SessionCompactionCommand = ReadonlyDeep<{
 	nextMessages?: readonly SessionMessage[];
 	/** Compacted in place of the Session Transcript, when supplied. */
 	sourceMessages?: readonly SessionMessage[];
+	/** A live continuation may not summarize or split its newest settled step. */
+	protectedMessageIds?: readonly SessionMessageId[];
+	/** Cancels preparation together with the owning active turn. */
+	signal?: AbortSignal;
 	trigger: CompactionTriggerReason;
 	/** The Agent Turn that initiated this compaction, for diagnostics. */
 	turnId?: AgentTurnId;

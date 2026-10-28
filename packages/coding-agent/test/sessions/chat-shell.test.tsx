@@ -37,6 +37,7 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SettingsRegistryProvider } from "@/modules/settings";
@@ -61,6 +62,7 @@ import {
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
+	sessionUsageEntryId,
 } from "../support/identifiers";
 import { captureTestFrame, requireTestFrame } from "../support/opentui";
 
@@ -170,6 +172,7 @@ type ChatShellProbeProps = {
 	isCompacting?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
+	sessionUsageEntries?: readonly SessionUsageEntry[];
 	transcriptNotice?: ReactNode;
 };
 
@@ -195,6 +198,7 @@ function ChatShellProbe({
 	isCompacting: initialIsCompacting = false,
 	onRetry,
 	queuedSubmissions,
+	sessionUsageEntries,
 	transcriptNotice,
 }: ChatShellProbeProps) {
 	const { pop, push } = useKeyboardLayer();
@@ -232,6 +236,7 @@ function ChatShellProbe({
 				promptHistory={[]}
 				providerController={providerController}
 				queuedSubmissions={queuedSubmissions}
+				sessionUsageEntries={sessionUsageEntries}
 				transcriptNotice={transcriptNotice}
 				viewId="test"
 			/>
@@ -258,6 +263,7 @@ type ChatShellRenderOptions = {
 	isCompacting?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
+	sessionUsageEntries?: readonly SessionUsageEntry[];
 	transcriptNotice?: ReactNode;
 };
 
@@ -276,6 +282,7 @@ const renderChatShell = async (
 		isCompacting = false,
 		onRetry,
 		queuedSubmissions,
+		sessionUsageEntries,
 		transcriptNotice,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
@@ -356,6 +363,7 @@ const renderChatShell = async (
 													onRetry={onRetry}
 													providerController={providerController}
 													queuedSubmissions={queuedSubmissions}
+													sessionUsageEntries={sessionUsageEntries}
 													transcriptNotice={transcriptNotice}
 												/>
 											</CommandControllerProvider>
@@ -1281,6 +1289,11 @@ describe("ChatShell activity footer", () => {
 				metadata: {
 					model: selection,
 					usage: { inputTokens: 7336, outputTokens: 0 },
+					contextMeasurement: {
+						epoch: "initial",
+						stepId: "step-1",
+						usage: { inputTokens: 7336, outputTokens: 0 },
+					},
 				},
 			},
 		];
@@ -1309,6 +1322,70 @@ describe("ChatShell activity footer", () => {
 			expect(usageColumn).toBeGreaterThan(pathColumn);
 			const footerSpans = setup.captureSpans().lines[pathRow]?.spans ?? [];
 			expect(footerSpans.every((span) => span.bg.a === 0)).toBe(true);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("counts successful summary usage once when the ledger and compaction both retain it", async () => {
+		const selection = {
+			modelId: modelId("gpt-5.6-luna"),
+			providerId: "openai",
+		};
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailabilityRevision: () => 0,
+			getCompositionRevision: () => 0,
+			getKnownModels: async () => [
+				{
+					limits: { contextWindowTokens: 1_100_000 },
+					modelId: selection.modelId,
+					protocolId: "fake-provider",
+					providerId: selection.providerId,
+				},
+			],
+		});
+		const summaryUsage = { inputTokens: 2_000_000, outputTokens: 0 };
+		const compaction: SessionCompaction = {
+			...completedCompaction(),
+			summarizationModel: selection,
+			summarizationUsage: summaryUsage,
+		};
+		const sessionUsageEntries: SessionUsageEntry[] = [
+			{
+				createdAt: new Date("2026-09-06T09:06:25.000Z"),
+				id: sessionUsageEntryId("summary-usage"),
+				kind: "compaction-summary",
+				model: selection,
+				sessionId: sessionId("session-1"),
+				usage: summaryUsage,
+			},
+		];
+		const messages: SessionMessage[] = [
+			userMessage("user-1"),
+			{
+				...assistantMessage(
+					[{ text: "assistant usage", type: "text" }],
+					"assistant-usage"
+				),
+				metadata: {
+					model: selection,
+					usage: { inputTokens: 1_000_000, outputTokens: 0 },
+				},
+			},
+		];
+		const { setup } = await renderChatShell(messages, {
+			height: 24,
+			initialCompactions: [compaction],
+			providerController,
+			sessionUsageEntries,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = requireTestFrame(setup);
+			expect(frame).toContain("↑3M");
+			expect(frame).not.toContain("↑5M");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -1439,7 +1516,7 @@ describe("ChatShell activity footer", () => {
 		}
 	});
 
-	test("labels compaction as automatic while retaining provider usage", async () => {
+	test("labels automatic compaction against the configured global context window", async () => {
 		const messages: SessionMessage[] = [
 			userMessage("user-1"),
 			{
@@ -1453,6 +1530,11 @@ describe("ChatShell activity footer", () => {
 						providerId: "openai",
 					},
 					usage: { inputTokens: 7336, outputTokens: 0 },
+					contextMeasurement: {
+						epoch: "initial",
+						stepId: "step-1",
+						usage: { inputTokens: 7336, outputTokens: 0 },
+					},
 				},
 			},
 			userMessage("user-2"),
@@ -1470,10 +1552,10 @@ describe("ChatShell activity footer", () => {
 			expect(loadingFrame).toContain("Auto-compacting...");
 			expect(loadingFrame).not.toContain("Auto-compacting context");
 			expect(loadingFrame).not.toContain("esc to cancel");
-			expect(loadingFrame).toContain("7.3K");
+			expect(loadingFrame).toContain("~2.7%/272k");
 			expect(loadingFrame).toContain("(auto)");
 			expect(loadingFrame).toContain("cost unknown");
-			expect(loadingFrame).not.toContain("1%(7.3K/1.1M)");
+			expect(loadingFrame).not.toContain("1.1M");
 			expect(loadingFrame).toMatch(SPINNER_FRAME_REGEX);
 
 			await act(async () => {
@@ -1506,6 +1588,63 @@ describe("ChatShell activity footer", () => {
 			expect(frame).not.toContain("Compacting context");
 			expect(frame).not.toContain("esc to cancel");
 			expect(frame).not.toContain("(auto)");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("reveals the persisted file snapshot once and activates the divider from the keyboard", async () => {
+		const base = completedCompaction();
+		const compaction: SessionCompaction = {
+			...base,
+			summary: {
+				...base.summary,
+				fileOperations: {
+					modified: ["src/edited.ts"],
+					read: ["src/shared.ts"],
+				},
+				text: "Preserved model narrative.\n\n## Files\nRead: src/shared.ts\nModified: src/edited.ts\n\n## Files\nRead: src/shared.ts\nModified: src/edited.ts",
+			},
+		};
+		const { setup } = await renderChatShell([], {
+			height: 30,
+			initialCompactions: [compaction],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const collapsedFrame = requireTestFrame(setup);
+			expect(collapsedFrame).not.toContain("src/shared.ts");
+			expect(collapsedFrame).not.toContain("src/edited.ts");
+
+			const divider = setup.renderer.root.findDescendantById(
+				`compaction-divider-${compaction.id}`
+			);
+			expect(divider?.focusable).toBe(true);
+			if (!divider) {
+				throw new Error("Compaction divider was not rendered.");
+			}
+			await act(async () => {
+				divider.focus();
+				setup.mockInput.pressEnter();
+			});
+			await flushUi(setup);
+
+			const expandedFrame = requireTestFrame(setup);
+			expect(expandedFrame).toContain("Preserved model narrative.");
+			expect(expandedFrame).not.toContain("## Files");
+			expect(expandedFrame).toContain("Tracked file snapshot");
+			expect(expandedFrame).toContain("200 paths per group");
+			expect(expandedFrame).toContain("Read");
+			expect(expandedFrame).toContain("src/shared.ts");
+			expect(expandedFrame).toContain("Modified");
+			expect(expandedFrame).toContain("src/edited.ts");
+			await act(async () => {
+				await setup.mockMouse.click(divider.x + 1, divider.y);
+			});
+			await flushUi(setup);
+			expect(requireTestFrame(setup)).not.toContain("src/shared.ts");
 		} finally {
 			setup.renderer.destroy();
 		}

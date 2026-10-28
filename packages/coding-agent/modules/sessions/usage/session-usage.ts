@@ -1,5 +1,5 @@
 import type { ProviderModel } from "@wincode/ai";
-import { calculateModelUsageCostUsd, getModelContextTokens } from "@wincode/ai";
+import { calculateModelUsageCostUsd } from "@wincode/ai";
 import { isNull } from "@wincode/utils";
 import {
 	type ModelPricingEntry,
@@ -16,6 +16,12 @@ import type {
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { ConfigSnapshot } from "@/shared/config/config-store";
+import {
+	estimateSessionContextTokens,
+	type SessionContextUsage,
+} from "./context-usage";
+import { resolveContextWindowTokens } from "./context-window";
 
 export type SessionUsageSummary = {
 	/** Estimated USD for measured usage with complete rates, or `null` when every rate is unknown. */
@@ -40,15 +46,13 @@ export type SessionUsageSummary = {
 	cacheWriteTokens: number;
 	/** Latest assistant turn's cache-read share of its total input, or `null` when unknown. */
 	cacheHitPercent: number | null;
-	/** `null` when the current Provider Model publishes no context limit. */
-	contextLimit: number | null;
-	/** `null` when `contextLimit` is unknown. */
-	contextPercent: number | null;
+	/** Effective context limit: explicit override, selected-model metadata, then fallback. */
+	contextLimit: number;
+	/** Rounded active-context occupancy; may exceed 100 when over the model limit. */
+	contextPercent: number;
 	contextTokens: number;
+	contextSource: SessionContextUsage["source"];
 };
-
-const clampPercent = (percent: number): number =>
-	Math.max(0, Math.min(100, Math.round(percent)));
 
 type MessageUsageState = {
 	lastSelection: ProviderModelSelection | null;
@@ -221,31 +225,36 @@ const collectSessionUsage = (
 	};
 };
 
-/**
- * The context measure uses only the last completed provider usage. Session
- * totals include assistant turns, compaction summaries, and durable usage
- * entries; compaction and cache-warming work never replaces context usage.
- */
+/** Active-context occupancy is separate from full-transcript usage and billing totals. */
 export const summarizeSessionUsage = (
 	messages: readonly SessionMessage[],
 	fallbackModel: ProviderModelSelection,
 	usageEntries: readonly SessionUsageEntry[] = [],
 	cacheWarmingStatus: CacheWarmingStatus = "idle",
 	providerModels?: readonly ProviderModel[],
-	compactions: readonly SessionCompaction[] = []
+	compactions: readonly SessionCompaction[] = [],
+	contextMessages: readonly SessionMessage[] = messages,
+	contextSnapshot?: ConfigSnapshot
 ): SessionUsageSummary | null => {
-	const { lastSelection, lastUsage } = collectMessageUsage(messages);
+	const { lastUsage } = collectMessageUsage(messages);
 	if (isNull(lastUsage)) {
 		return null;
 	}
-	const selection = lastSelection ?? fallbackModel;
-	const providerModel = providerModelForSelection(providerModels, selection);
-	const contextLimit = providerModel?.limits?.contextWindowTokens ?? null;
-	const contextTokens = getModelContextTokens(lastUsage);
-	const contextPercent =
-		!isNull(contextLimit) && contextLimit > 0
-			? clampPercent((contextTokens / contextLimit) * 100)
-			: null;
+	const selectedProviderModel = providerModelForSelection(
+		providerModels,
+		fallbackModel
+	);
+	const contextLimit = resolveContextWindowTokens(
+		contextSnapshot,
+		selectedProviderModel?.limits?.contextWindowTokens
+	).tokens;
+	const context = estimateSessionContextTokens(
+		contextMessages,
+		undefined,
+		fallbackModel
+	);
+	const contextTokens = context.tokens;
+	const contextPercent = Math.round((contextTokens / contextLimit) * 100);
 	return {
 		...collectSessionUsage(
 			messages,
@@ -262,5 +271,6 @@ export const summarizeSessionUsage = (
 		contextLimit,
 		contextPercent,
 		contextTokens,
+		contextSource: context.source,
 	};
 };

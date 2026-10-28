@@ -22,7 +22,7 @@ sdk.register(
 					'event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call-1","name":"lookup","input":{}}}\n\n',
 					'event: content_block_delta\ndata: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\\"q\\":\\"weather\\"}"}}\n\n',
 					'event: content_block_stop\ndata: {"type":"content_block_stop","index":2}\n\n',
-					'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":3}}\n\n',
+					'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}\n\n',
 					'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 				].join(""),
 				{ headers: { "content-type": "text/event-stream" } }
@@ -62,6 +62,7 @@ assert.deepEqual(events, [
 	{
 		type: "terminal",
 		outcome: {
+			completion: { kind: "completed" },
 			continuation: [
 				{ thinking: "Reasoned", type: "thinking" },
 				{ text: "Hello from Claude", type: "text" },

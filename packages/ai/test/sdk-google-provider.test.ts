@@ -194,6 +194,7 @@ describe("public Google SDK provider", () => {
 			{
 				type: "terminal",
 				outcome: {
+					completion: { kind: "completed" },
 					continuation: [
 						{ text: "Reasoning first", thought: true },
 						{ text: "Forecast is sunny." },
@@ -374,7 +375,10 @@ describe("public Google SDK provider", () => {
 		}
 
 		expect(unsupportedCacheEvents.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 		expect(creates).toBe(0);
@@ -418,7 +422,10 @@ describe("public Google SDK provider", () => {
 			fallbackEvents.push(event);
 		}
 		expect(fallbackEvents.at(-1)).toEqual({
-			outcome: { status: "success" },
+			outcome: {
+				completion: { kind: "completed" },
+				status: "success",
+			},
 			type: "terminal",
 		});
 		expect(cacheCreationAttempts).toBe(1);

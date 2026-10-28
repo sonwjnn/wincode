@@ -335,6 +335,9 @@ describe("application dispatch", () => {
 			onBackgroundWorkChange: () => () => undefined,
 			waitForBackgroundWork: async () => undefined,
 			resolveToolsForTurn: async () => [],
+			runBeforeCompactionHooks: async () => undefined,
+			notifyCompactionCompleted: async () => undefined,
+			notifyCompactionFailed: async () => undefined,
 			start: async () => [],
 			shutdown: async () => undefined,
 			startSession: async () => undefined,
@@ -386,6 +389,9 @@ describe("application dispatch", () => {
 			onBackgroundWorkChange: () => () => undefined,
 			waitForBackgroundWork: async () => undefined,
 			resolveToolsForTurn: async () => [],
+			runBeforeCompactionHooks: async () => undefined,
+			notifyCompactionCompleted: async () => undefined,
+			notifyCompactionFailed: async () => undefined,
 			start: async () => [],
 			shutdown: async () => {
 				shutdownCount += 1;

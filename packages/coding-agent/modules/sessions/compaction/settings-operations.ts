@@ -46,6 +46,7 @@ export const createCompactionSettingsOperations = ({
 				: undefined;
 		return resolveCompactionSettings({
 			contextLimit: selectedProviderModel?.limits?.contextWindowTokens ?? null,
+			model,
 			snapshot,
 		});
 	};

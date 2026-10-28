@@ -3,10 +3,11 @@ import { fromPartial } from "@total-typescript/shoehorn";
 import { createOperationalFailure } from "@wincode/agent-core";
 import {
 	isContextOverflowFailure,
+	prepareOverflowContinuationSource,
 	prepareOverflowRecoveryMessages,
 } from "@/modules/sessions/compaction/overflow-recovery";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { sessionMessageId } from "../support/identifiers";
+import { sessionMessageId, toolCallId } from "../support/identifiers";
 
 const message = (
 	id: string,
@@ -48,7 +49,7 @@ test("refuses recovery when its original user message is gone", () => {
 		)
 	).toThrow(
 		expect.objectContaining({
-			code: "continuation-failed",
+			code: "compaction-failed",
 			message: expect.stringContaining("original user message"),
 		})
 	);
@@ -84,4 +85,74 @@ test("recognizes a provider failure the runtime reported as context overflow", (
 	expect(isContextOverflowFailure(new Error("authentication failed"))).toBe(
 		false
 	);
+});
+
+test("continuation source drops the failed row and protects the newest settled batch", () => {
+	const messages: SessionMessage[] = [
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("older-user"),
+			parts: [{ text: "older request", type: "text" }],
+			role: "user",
+		}),
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("older-assistant"),
+			parts: [{ text: "older answer", type: "text" }],
+			role: "assistant",
+		}),
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("attempt-user"),
+			parts: [{ text: "run the tools", type: "text" }],
+			role: "user",
+		}),
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("step-assistant"),
+			parts: [
+				{
+					input: { command: "pwd" },
+					output: { output: "/workspace" },
+					state: "output-available",
+					toolCallId: toolCallId("call-step"),
+					type: "tool-shell",
+				},
+			],
+			role: "assistant",
+		}),
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("failed-assistant"),
+			metadata: { terminalOutcome: "failed" },
+			parts: [{ text: "The prompt exceeds the context window.", type: "text" }],
+			role: "assistant",
+		}),
+	];
+
+	const source = prepareOverflowContinuationSource(messages);
+
+	// The failure row is not durable progress; it must not be summarized or continued from.
+	expect(source?.sourceMessages.map(({ id }) => id as string)).toEqual([
+		"older-user",
+		"older-assistant",
+		"attempt-user",
+		"step-assistant",
+	]);
+	// The completed Tool Call and its settled step survive compaction untouched.
+	expect(source?.protectedMessageIds.map((id) => id as string)).toEqual([
+		"step-assistant",
+	]);
+});
+
+test("a continuation source is unavailable without a completed tool batch", () => {
+	expect(
+		prepareOverflowContinuationSource([
+			fromPartial<SessionMessage>({
+				id: sessionMessageId("user-only"),
+				parts: [{ text: "no tools yet", type: "text" }],
+				role: "user",
+			}),
+			fromPartial<SessionMessage>({
+				id: sessionMessageId("assistant-text"),
+				parts: [{ text: "plain answer", type: "text" }],
+				role: "assistant",
+			}),
+		])
+	).toBeNull();
 });

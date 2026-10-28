@@ -128,6 +128,9 @@ What one compaction request asks for: its trigger and its focus, as distinct fro
 **Overflow Recovery**:
 The one recovery a context-overflow refusal buys for the Agent Turn it ended: the Agent Session compacts eligible history through that turn's original user message, sanitizes the interrupted turn, then continues the resulting Session Context without appending another user message. The attempt stays keyed to the original message, so its continuation cannot chain another recovery and no new send can reset it. _Avoid_: retry, resend
 
+**Provider-Reported Context Overflow**:
+A successfully completed Provider Model Step whose reported input-token count exceeds the effective context window resolved for the selected model. It differs from a context-overflow refusal, which the Provider rejects before success. _Avoid_: silent overflow
+
 **Live Session Snapshot**:
 The immutable application-facing view of one Stateful Agent's current conversation and transient execution state, including the core-owned uncommitted Submission queue and committed Steering Message status. Observers receive it from the live owner, never from persisted history alone. _Avoid_: Session Snapshot, Stored Session History, state dump
 

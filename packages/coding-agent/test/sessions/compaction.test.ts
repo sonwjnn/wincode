@@ -3,6 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fromAny, fromPartial } from "@total-typescript/shoehorn";
+import {
+	createProviderCollection,
+	type Provider,
+	type ProviderModel,
+} from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import {
@@ -12,10 +17,15 @@ import {
 } from "@/modules/sessions/compaction/compaction";
 import { estimateCompactionTokens } from "@/modules/sessions/compaction/config";
 import type { SessionCompactionError } from "@/modules/sessions/compaction/error";
+import { createProviderSummaryGenerator } from "@/modules/sessions/compaction/summary-generator";
 import type {
 	SessionCompaction,
 	SummaryGeneratorInput,
 } from "@/modules/sessions/compaction/types";
+import {
+	type AgentSessionAdaptersOptions,
+	createAgentSessionAdapters,
+} from "@/modules/sessions/host/agent-session-adapters";
 import {
 	type SessionMessage,
 	sanitizeSessionSkillToolPart,
@@ -100,6 +110,7 @@ const createAttachmentRepository = (): AttachmentMetadataRepository => {
 const settings = {
 	enabled: true,
 	keepRecentTokens: 1,
+	modelContextLimit: 65_536,
 	thresholdTokens: null,
 } as const;
 
@@ -156,6 +167,81 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 	);
 });
 
+test("compaction invalidates retained usage on reopen and reports the current projection on the next compact", async () => {
+	let sequence = 0;
+	const compaction = createSessionCompaction({
+		store: makeStore(),
+		generateId: () => compactionId(`epoch-${++sequence}`),
+		summaryGenerator: async () => ({ text: "Short handoff." }),
+	});
+	const messages: SessionMessage[] = [
+		message("u1", "user", "x".repeat(20_000)),
+		message("a1", "assistant", "y".repeat(20_000)),
+		message("u2", "user", "u".repeat(1000)),
+		{
+			...message("a2", "assistant", "a".repeat(1000)),
+			metadata: {
+				model,
+				usage: { inputTokens: 90_000, outputTokens: 100 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: { inputTokens: 90_000, outputTokens: 100 },
+				},
+			},
+		},
+	];
+	const policy = {
+		enabled: true,
+		keepRecentTokens: 600,
+		modelContextLimit: 65_536,
+		thresholdTokens: 80_000,
+	};
+	const first = await compaction.compact({
+		session: { sessionId: sessionId("epoch-session"), messages },
+		model,
+		settings: policy,
+		trigger: "threshold",
+	});
+	expect(compaction.needsCompaction(first.activeMessages, policy)).toBe(false);
+	expect(
+		compaction.needsCompaction(
+			rebuildActiveMessages(messages, first.entry),
+			policy
+		)
+	).toBe(false);
+	const fresh: SessionMessage[] = [
+		message("u3", "user", "n".repeat(1000)),
+		{
+			...message("a3", "assistant", "r".repeat(1000)),
+			metadata: {
+				model,
+				usage: { inputTokens: 40_000, outputTokens: 10 },
+				contextMeasurement: {
+					epoch: `compaction:${first.entry.id}`,
+					stepId: "step-2",
+					usage: { inputTokens: 40_000, outputTokens: 10 },
+				},
+			},
+		},
+	];
+	const transcript = [...messages, ...fresh];
+	const second = await compaction.compact({
+		session: { sessionId: sessionId("epoch-session"), messages: transcript },
+		model,
+		settings: policy,
+		trigger: "manual",
+	});
+	expect(second.entry.tokensBefore).toBe(40_010);
+	expect(
+		compaction.needsCompaction(
+			rebuildActiveMessages(transcript, second.entry),
+			policy
+		)
+	).toBe(false);
+	expect(messages.at(-1)?.metadata?.usage?.inputTokens).toBe(90_000);
+});
+
 test("keeps the turn a Steering Message joined whole", async () => {
 	const store = makeStore();
 	const compaction = createSessionCompaction({
@@ -179,7 +265,12 @@ test("keeps the turn a Steering Message joined whole", async () => {
 	const result = await compaction.compact({
 		session: { messages, sessionId: sessionId("session-1") },
 		model,
-		settings: { enabled: true, keepRecentTokens: 3, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 3,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 		trigger: "manual",
 	});
 
@@ -217,7 +308,12 @@ test("does not summarize history already covered by the recent budget", async ()
 				sessionId: sessionId("session-short"),
 			},
 			model,
-			settings: { enabled: true, keepRecentTokens: 10, thresholdTokens: null },
+			settings: {
+				enabled: true,
+				keepRecentTokens: 10,
+				modelContextLimit: 65_536,
+				thresholdTokens: null,
+			},
 			trigger: "manual",
 		})
 	).rejects.toMatchObject({ code: "history-too-short" });
@@ -245,7 +341,12 @@ test("does not summarize when all complete history fits recent budget", async ()
 				sessionId: sessionId("session-all-recent"),
 			},
 			model,
-			settings: { enabled: true, keepRecentTokens: 10, thresholdTokens: null },
+			settings: {
+				enabled: true,
+				keepRecentTokens: 10,
+				modelContextLimit: 65_536,
+				thresholdTokens: null,
+			},
 			trigger: "manual",
 		})
 	).rejects.toMatchObject({ code: "history-too-short" });
@@ -357,6 +458,103 @@ test("fails closed when a durable compaction boundary is missing", () => {
 	).toThrow("entry-invalid");
 });
 
+test("Host threshold checks carry forward same-epoch usage measured by the previous conversation model", () => {
+	const compaction = createSessionCompaction({
+		store: makeStore(),
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: () => 1,
+	});
+	const previousModel: ProviderModelSelection = {
+		modelId: modelId("old-model"),
+		providerId: "old-provider",
+	};
+	const selectedModel: ProviderModelSelection = {
+		modelId: modelId("selected-model"),
+		providerId: "selected-provider",
+	};
+	const messages: SessionMessage[] = [
+		message("u1", "user", "request"),
+		{
+			...message("a1", "assistant", "answer"),
+			metadata: {
+				model: previousModel,
+				usage: { inputTokens: 90_000, outputTokens: 100 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: { inputTokens: 90_000, outputTokens: 100 },
+				},
+			},
+		},
+	];
+	const adapters = createAgentSessionAdapters(
+		fromPartial<AgentSessionAdaptersOptions>({
+			capabilities: {
+				getCapabilityCeiling: () => undefined,
+				getCompactionModule: () => compaction,
+			},
+			cacheWarming: {},
+			isShutDown: () => false,
+			providerCollection: {},
+			sessionId: sessionId("host-model-forwarding"),
+			statefulAgent: {},
+			withSessionWork: async (action: () => Promise<void>) => action(),
+		})
+	);
+
+	expect(
+		adapters.compaction.needsCompaction(
+			messages,
+			{ enabled: true, thresholdTokens: 80_000 },
+			selectedModel
+		)
+	).toBe(true);
+});
+
+test("Host threshold estimates messages added after previous-model usage", () => {
+	const compaction = createSessionCompaction({
+		store: makeStore(),
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => messages.length * 500,
+	});
+	const previousModel: ProviderModelSelection = {
+		modelId: modelId("old-model"),
+		providerId: "old-provider",
+	};
+	const selectedModel: ProviderModelSelection = {
+		modelId: modelId("selected-model"),
+		providerId: "selected-provider",
+	};
+	const measuredUsage = { inputTokens: 70_000, outputTokens: 100 };
+	const messages: SessionMessage[] = [
+		message("u1", "user", "request"),
+		{
+			...message("a1", "assistant", "answer"),
+			metadata: {
+				model: previousModel,
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: measuredUsage,
+				},
+			},
+		},
+		message("u2", "user", "unmeasured follow-up"),
+		{
+			...message("a2", "assistant", "answer without a measurement"),
+			metadata: { model: selectedModel },
+		},
+	];
+
+	expect(
+		compaction.needsCompaction(
+			messages,
+			{ enabled: true, thresholdTokens: 70_700 },
+			selectedModel
+		)
+	).toBe(true);
+});
+
 test("uses provider-reported usage for threshold decisions", () => {
 	const compaction = createSessionCompaction({
 		store: makeStore(),
@@ -371,6 +569,11 @@ test("uses provider-reported usage for threshold decisions", () => {
 			metadata: {
 				model,
 				usage: { inputTokens: 90, outputTokens: 20 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: { inputTokens: 90, outputTokens: 20 },
+				},
 			},
 		},
 	];
@@ -399,6 +602,16 @@ test("counts cached input within the provider total for compaction thresholds", 
 					cacheWriteTokens: 10,
 					inputTokens: 90,
 					outputTokens: 20,
+				},
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: {
+						inputTokens: 90,
+						outputTokens: 20,
+						cacheReadTokens: 60,
+						cacheWriteTokens: 10,
+					},
 				},
 			},
 		},
@@ -431,6 +644,11 @@ test("adds estimated trailing context after the latest provider usage", () => {
 			metadata: {
 				model,
 				usage: { inputTokens: 90, outputTokens: 10 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "step-1",
+					usage: { inputTokens: 90, outputTokens: 10 },
+				},
 			},
 		},
 		message("u2", "user", "new request"),
@@ -498,7 +716,7 @@ test("fallback estimation follows canonical visible content", () => {
 	]);
 	expect(roleToolEstimate).toBeGreaterThan(shortEstimate);
 });
-test("derives one summary attempt from retained context and reserve", async () => {
+test("summary output is capped by 80% of the reserve even when more context room is available", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async (_input: SummaryGeneratorInput) => ({
 		text: "budgeted summary",
@@ -528,7 +746,7 @@ test("derives one summary attempt from retained context and reserve", async () =
 			compactionOverheadTokens: 10,
 			enabled: true,
 			keepRecentTokens: 20,
-			modelContextLimit: 330,
+			modelContextLimit: 2000,
 			reserveTokens: 800,
 			summaryMaxOutputTokens: 4096,
 			thresholdTokens: null,
@@ -537,7 +755,165 @@ test("derives one summary attempt from retained context and reserve", async () =
 	});
 
 	expect(summaryGenerator).toHaveBeenCalledTimes(1);
-	expect(summaryGenerator.mock.calls[0]?.[0].maxOutputTokens).toBe(300);
+	// The context has room for 1170 tokens, but Pi caps output at 80% of reserve.
+	expect(summaryGenerator.mock.calls[0]?.[0].maxOutputTokens).toBe(640);
+});
+
+test("limits summary size by the rebuilt conversation's real request overhead and reserve", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async (_input: SummaryGeneratorInput) => ({
+		text: "budgeted summary",
+	}));
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) =>
+			messages.some(({ id }) => id.startsWith("compaction:"))
+				? 30
+				: messages.length * 10,
+	});
+
+	await compaction.compact({
+		session: {
+			messages: [
+				message("u1", "user", "first"),
+				message("a1", "assistant", "answer"),
+				message("u2", "user", "current"),
+				message("a2", "assistant", "answer"),
+			],
+			sessionId: sessionId("session-summary-conversation-overhead"),
+		},
+		model,
+		settings: {
+			compactionOverheadTokens: 6500,
+			enabled: true,
+			keepRecentTokens: 20,
+			modelContextLimit: 8192,
+			reserveTokens: 1024,
+			summaryMaxOutputTokens: 4096,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
+	expect(summaryGenerator.mock.calls[0]?.[0].maxOutputTokens).toBe(648);
+});
+
+test("rejects an escaped summary request before generation or persistence", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "summary" }));
+	const compaction = createSessionCompaction({ store, summaryGenerator });
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: [
+					message("u1", "user", "&".repeat(40_000)),
+					message("a1", "assistant", "completed old task"),
+					message("u2", "user", "current request"),
+					message("a2", "assistant", "current response"),
+				],
+				sessionId: sessionId("session-oversized-summary-request"),
+			},
+			model,
+			settings: {
+				enabled: true,
+				keepRecentTokens: 100,
+				modelContextLimit: 8192,
+				reserveTokens: 1024,
+				thresholdTokens: null,
+			},
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "context-still-too-large" });
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("does not chain an oversized history into partial summary requests", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "partial handoff" }));
+	const compaction = createSessionCompaction({ store, summaryGenerator });
+	const messages = Array.from({ length: 32 }, (_, index) => [
+		message(
+			`summary-limit-user-${index}`,
+			"user",
+			`user evidence ${index} ${"historical user detail ".repeat(320)}`
+		),
+		message(
+			`summary-limit-assistant-${index}`,
+			"assistant",
+			`assistant evidence ${index} ${"historical assistant detail ".repeat(320)}`
+		),
+	]).flat();
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages,
+				sessionId: sessionId("session-summary-request-does-not-fit"),
+			},
+			model,
+			settings: {
+				...settings,
+				summaryContextLimit: 10_000,
+				summaryMaxOutputTokens: 1024,
+			},
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "context-still-too-large" });
+
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("sends the complete eligible history in one request when it fits the summary context", async () => {
+	const store = makeStore();
+	const summaryInputs: SummaryGeneratorInput[] = [];
+	const summaryGenerator = mock(async (input: SummaryGeneratorInput) => {
+		summaryInputs.push(input);
+		return { text: "single complete handoff" };
+	});
+	const compaction = createSessionCompaction({ store, summaryGenerator });
+	const largeTurn = (index: number) => [
+		message(
+			`summary-input-user-${index}`,
+			"user",
+			`history-user-${index} ${"x".repeat(80_000)}`
+		),
+		message(
+			`summary-input-assistant-${index}`,
+			"assistant",
+			`history-assistant-${index} ${"y".repeat(80_000)}`
+		),
+	];
+
+	const result = await compaction.compact({
+		session: {
+			messages: Array.from({ length: 12 }, (_, index) =>
+				largeTurn(index + 1)
+			).flat(),
+			sessionId: sessionId("session-summary-single-request"),
+		},
+		model,
+		settings: {
+			...settings,
+			keepRecentTokens: 1,
+			modelContextLimit: 1_000_000,
+			summaryContextLimit: 1_000_000,
+			summaryMaxOutputTokens: 4096,
+		},
+		trigger: "manual",
+	});
+
+	expect(summaryInputs).toHaveLength(1);
+	expect(summaryInputs[0]?.serializedMessages).toContain("history-user-1");
+	expect(summaryInputs[0]?.serializedMessages).toContain(
+		"history-assistant-11"
+	);
+	expect(summaryInputs[0]?.serializedMessages).not.toContain("history-user-12");
+	expect(result.entry.summary.text).toBe("single complete handoff");
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
 test("does not generate or persist when the summary budget is not viable", async () => {
@@ -574,9 +950,41 @@ test("does not generate or persist when the summary budget is not viable", async
 			},
 			trigger: "manual",
 		})
-	).rejects.toMatchObject({ code: "not-needed" });
+	).rejects.toMatchObject({ code: "context-still-too-large" });
 	expect(summaryGenerator).not.toHaveBeenCalled();
 	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("uses the global default context window when compaction settings omit one", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "summary" }));
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length * 10,
+	});
+
+	await compaction.compact({
+		session: {
+			messages: [
+				message("u1", "user", "first"),
+				message("a1", "assistant", "answer"),
+				message("u2", "user", "current"),
+				message("a2", "assistant", "answer"),
+			],
+			sessionId: sessionId("session-unknown-context-budget"),
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 20,
+			reserveTokens: 1024,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+	expect(summaryGenerator).toHaveBeenCalledTimes(1);
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
 test("repeated compaction passes the prior summary and only the new compacted span", async () => {
@@ -619,6 +1027,97 @@ test("repeated compaction passes the prior summary and only the new compacted sp
 			model,
 		})
 	);
+});
+
+test("accepts a completed summary above its planned output budget when it reduces context", async () => {
+	const store = makeStore();
+	const summaryText = "x".repeat(1200);
+	const summaryGenerator = mock(async () => ({ text: summaryText }));
+	const compaction = createSessionCompaction({ store, summaryGenerator });
+
+	const result = await compaction.compact({
+		session: {
+			messages: [
+				message("u1", "user", "a".repeat(20_000)),
+				message("a1", "assistant", "old answer"),
+				message("u2", "user", "current request"),
+				message("a2", "assistant", "current answer"),
+			],
+			sessionId: sessionId("session-summary-output-overrun"),
+		},
+		model,
+		settings: {
+			summaryMaxOutputTokens: 256,
+			enabled: true,
+			keepRecentTokens: 100,
+			modelContextLimit: 8192,
+			reserveTokens: 512,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
+	expect(summaryGenerator).toHaveBeenCalledWith(
+		expect.objectContaining({ maxOutputTokens: 256 })
+	);
+	expect(result.entry.summary.text).toBe(summaryText);
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+});
+
+test("a repeated compaction must reduce the current context, not the source transcript", async () => {
+	const store = makeStore();
+	let summaries = 0;
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: async () => ({
+			text: ++summaries === 1 ? "Short handoff." : "z".repeat(3000),
+		}),
+	});
+	const initialMessages = [
+		message("u1", "user", "x".repeat(20_000)),
+		message("a1", "assistant", "y".repeat(20_000)),
+		message("u2", "user", "u".repeat(1000)),
+		message("a2", "assistant", "a".repeat(1000)),
+	];
+	const policy = {
+		enabled: true,
+		keepRecentTokens: 600,
+		modelContextLimit: 65_536,
+		reserveTokens: 2048,
+		thresholdTokens: null,
+	};
+	const first = await compaction.compact({
+		session: {
+			sessionId: sessionId("session-reduction-projection"),
+			messages: initialMessages,
+		},
+		model,
+		settings: policy,
+		trigger: "manual",
+	});
+	const transcript = [
+		...initialMessages,
+		message("u3", "user", "n".repeat(1000)),
+		message("a3", "assistant", "r".repeat(1000)),
+	];
+
+	await expect(
+		compaction.compact({
+			session: {
+				sessionId: sessionId("session-reduction-projection"),
+				messages: transcript,
+			},
+			model,
+			settings: policy,
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "not-needed" });
+
+	expect(first.entry.estimatedTokensAfter).toBeLessThan(
+		first.entry.tokensBefore
+	);
+	expect(summaries).toBe(2);
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 });
 
 test("rejects compaction when its projected context is larger", async () => {
@@ -681,7 +1180,12 @@ test("uses the fallback estimate for strict reduction acceptance", async () => {
 		compaction.compact({
 			session: { messages, sessionId: sessionId("session-local-acceptance") },
 			model,
-			settings: { enabled: true, keepRecentTokens: 1, thresholdTokens: null },
+			settings: {
+				enabled: true,
+				keepRecentTokens: 1,
+				modelContextLimit: 65_536,
+				thresholdTokens: null,
+			},
 			trigger: "manual",
 		})
 	).rejects.toMatchObject({ code: "not-needed" });
@@ -736,6 +1240,126 @@ test("summary failure and cancellation do not append durable state", async () =>
 			signal: controller.signal,
 		})
 	).rejects.toMatchObject({ code: "cancelled" });
+});
+
+test("persists a completed Provider summary that exceeds its planned output budget", async () => {
+	const store = makeStore();
+	const oversizedHandoff = `completed handoff ${"x".repeat(1200)}`;
+	let requestedOutputTokens: number | undefined;
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 65_536, maxOutputTokens: 1024 },
+		modelId: "fixture-summary-over-budget",
+		protocolId: "fixture",
+		providerId: "fixture",
+	};
+	const provider: Provider = {
+		id: providerModel.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		canEnforceMaxOutputTokens: () => true,
+		async *streamChat(request) {
+			requestedOutputTokens = request.maxOutputTokens;
+			yield { delta: oversizedHandoff, type: "text-delta" };
+			yield {
+				type: "usage",
+				usage: { inputTokens: 12, outputTokens: 300 },
+			};
+			yield { completion: { kind: "completed" }, type: "finish" };
+		},
+	};
+	const collection = createProviderCollection();
+	collection.register(provider);
+	await collection.setCredential("fixture", { token: "fixture-only" });
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: createProviderSummaryGenerator(collection),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	try {
+		const result = await compaction.compact({
+			session: {
+				messages: [
+					message("u1", "user", "first"),
+					message("a1", "assistant", "answer"),
+					message("u2", "user", "second"),
+					message("a2", "assistant", "answer"),
+				],
+				sessionId: sessionId("session-completed-provider-summary-over-budget"),
+			},
+			model: {
+				modelId: modelId(providerModel.modelId),
+				providerId: providerModel.providerId,
+			},
+			settings: { ...settings, summaryMaxOutputTokens: 256 },
+			trigger: "manual",
+		});
+
+		expect(requestedOutputTokens).toBe(256);
+		expect(result.entry.summary.text).toContain(oversizedHandoff);
+		expect(result.entry.summarizationUsage).toMatchObject({
+			inputTokens: 12,
+			outputTokens: 300,
+		});
+		expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+	} finally {
+		await collection.close();
+	}
+});
+
+test("an output-limited Provider summary never becomes durable handoff context", async () => {
+	const store = makeStore();
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 512 },
+		modelId: "fixture-summary",
+		protocolId: "fixture",
+		providerId: "fixture",
+	};
+	const provider: Provider = {
+		id: providerModel.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			yield { delta: "partial handoff", type: "text-delta" };
+			yield {
+				completion: { kind: "incomplete", reason: "output-limit" },
+				type: "finish",
+			};
+		},
+	};
+	const collection = createProviderCollection();
+	collection.register(provider);
+	await collection.setCredential("fixture", { token: "fixture-only" });
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: createProviderSummaryGenerator(collection),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	try {
+		await expect(
+			compaction.compact({
+				session: {
+					messages: [
+						message("u1", "user", "first"),
+						message("a1", "assistant", "answer"),
+						message("u2", "user", "second"),
+						message("a2", "assistant", "answer"),
+					],
+					sessionId: sessionId("session-incomplete-summary"),
+				},
+				model: {
+					modelId: modelId(providerModel.modelId),
+					providerId: providerModel.providerId,
+				},
+				settings,
+				trigger: "manual",
+			})
+		).rejects.toMatchObject({ code: "summary-failed" });
+		expect(store.appendCompaction).not.toHaveBeenCalled();
+	} finally {
+		await collection.close();
+	}
 });
 
 test("persistence failure does not commit a compaction entry", async () => {
@@ -881,6 +1505,105 @@ test("refuses another intent instead of answering with the in-flight entry", asy
 	expect(summaryGenerator).toHaveBeenCalledTimes(1);
 });
 
+test("omits reasoning while preserving terminal tool outcomes beside bounded payloads", () => {
+	const serialized = serializeMessagesForCompaction([
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("u-tool-outcome"),
+			parts: [
+				{ text: "PRIVATE_REASONING_MARKER", type: "reasoning" },
+				{
+					errorText: "CRITICAL_OUTCOME_MARKER",
+					input: { command: "x".repeat(16_000) },
+					state: "output-error",
+					toolCallId: toolCallId("call-outcome"),
+					type: "tool-shell",
+				},
+			],
+			role: "assistant",
+		}),
+		fromAny<SessionMessage, object>({
+			id: sessionMessageId("tool-result-message"),
+			parts: [
+				{
+					output: { output: `${"x".repeat(16_000)}CRITICAL_TOOL_RESULT_TAIL` },
+					toolCallId: toolCallId("call-result"),
+					toolName: "shell",
+					type: "tool-result",
+				},
+			],
+			role: "tool",
+		}),
+	]);
+
+	expect(serialized).not.toContain("PRIVATE_REASONING_MARKER");
+	expect(serialized).toContain("call-outcome");
+	expect(serialized).toContain("output-error");
+	expect(serialized).toContain("CRITICAL_OUTCOME_MARKER");
+	expect(serialized).toContain("call-result");
+	expect(serialized).toContain('"toolName":"shell"');
+	expect(serialized).toContain("CRITICAL_TOOL_RESULT_TAIL");
+});
+
+test("keeps tool payload previews within their UTF-8 byte caps", () => {
+	const serialized = serializeMessagesForCompaction([
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("tool-call-byte-caps"),
+			parts: [
+				{
+					errorText: "é".repeat(20_000),
+					input: { value: "ié".repeat(10_000) },
+					output: "🙂".repeat(5000),
+					state: "output-error",
+					toolCallId: toolCallId("call-byte-caps"),
+					type: "tool-shell",
+				},
+			],
+			role: "assistant",
+		}),
+		fromAny<SessionMessage, object>({
+			id: sessionMessageId("tool-result-byte-caps"),
+			parts: [
+				{
+					errorText: "r🙂".repeat(10_000),
+					output: "ø".repeat(20_000),
+					toolCallId: toolCallId("result-byte-caps"),
+					type: "tool-result",
+				},
+			],
+			role: "tool",
+		}),
+	]);
+	const serializedToolParts = serialized
+		.split("\n")
+		.filter((line) => line.startsWith('{"type":"tool-'))
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+	const [toolCall, toolResult] = serializedToolParts;
+
+	expect(toolCall).toBeDefined();
+	expect(toolResult).toBeDefined();
+	if (!(toolCall && toolResult)) {
+		throw new Error("The serialized tool call or result is missing.");
+	}
+	expect(typeof toolCall.inputPreview).toBe("string");
+	if (typeof toolCall.inputPreview === "string") {
+		expect(
+			Buffer.byteLength(toolCall.inputPreview, "utf8")
+		).toBeLessThanOrEqual(2000);
+	}
+	for (const preview of [toolCall.outputPreview, toolResult.outputPreview]) {
+		expect(typeof preview).toBe("string");
+		if (typeof preview === "string") {
+			expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(4000);
+		}
+	}
+	for (const errorText of [toolCall.errorText, toolResult.errorText]) {
+		expect(typeof errorText).toBe("string");
+		if (typeof errorText === "string") {
+			expect(Buffer.byteLength(errorText, "utf8")).toBeLessThanOrEqual(2000);
+		}
+	}
+});
+
 test("serializes old attachments as bounded metadata", () => {
 	const serialized = serializeMessagesForCompaction([
 		fromPartial<SessionMessage>({
@@ -957,6 +1680,7 @@ test("serializes current-window attachments without hydrating payloads and persi
 			maxMediaAttachments: 1,
 			maxMediaBytes: 10_000,
 			maxMediaTokens: 10_000,
+			modelContextLimit: 65_536,
 			thresholdTokens: null,
 		},
 		trigger: "manual",
@@ -1050,7 +1774,12 @@ test("rejects a compaction that still exceeds the safe context limit", async () 
 				sessionId: sessionId("session-too-large"),
 			},
 			model,
-			settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: 2 },
+			settings: {
+				enabled: true,
+				keepRecentTokens: 2,
+				modelContextLimit: 65_536,
+				thresholdTokens: 2,
+			},
 			trigger: "manual",
 		})
 	).rejects.toMatchObject({ code: "context-still-too-large" });
@@ -1086,7 +1815,12 @@ test("splits an oversized single turn only at complete part boundaries", async (
 			sessionId: sessionId("session-split"),
 		},
 		model,
-		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 2,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 		trigger: "manual",
 	});
 
@@ -1134,7 +1868,12 @@ test("does not recompact an unchanged split transcript", async () => {
 	const compactionInput = {
 		session,
 		model,
-		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 2,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 		trigger: "manual" as const,
 	};
 
@@ -1149,12 +1888,12 @@ test("does not recompact an unchanged split transcript", async () => {
 
 test("splits the latest oversized turn without retaining older context", async () => {
 	const store = makeStore();
-	let serialized = "";
+	const serialized: string[] = [];
 	const compaction = createSessionCompaction({
 		generateId: () => compactionId("entry-latest-split"),
 		store,
 		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
-			serialized = input.serializedMessages;
+			serialized.push(input.serializedMessages);
 			return { text: "latest split summary" };
 		}),
 		estimateTokens: (messages) =>
@@ -1182,7 +1921,12 @@ test("splits the latest oversized turn without retaining older context", async (
 			sessionId: sessionId("session-latest-split"),
 		},
 		model,
-		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 2,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 		trigger: "manual",
 	});
 
@@ -1200,7 +1944,131 @@ test("splits the latest oversized turn without retaining older context", async (
 		sessionMessageId("u2"),
 		sessionMessageId("a2"),
 	]);
-	expect(serialized).toContain("old request");
+	expect(serialized).toHaveLength(2);
+	expect(serialized[0]).toContain("old request");
+	expect(serialized[0]).not.toContain("current request");
+	expect(serialized[1]).toContain("current request");
+	expect(serialized[1]).not.toContain("old request");
+});
+
+test("summarizes split-turn history and unfinished prefix in separate requests", async () => {
+	const store = makeStore();
+	const summaryInputs: SummaryGeneratorInput[] = [];
+	let generated = 0;
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
+			summaryInputs.push(input);
+			generated += 1;
+			return {
+				text: generated === 1 ? "history handoff" : "turn prefix handoff",
+				usage: { inputTokens: 10, outputTokens: 5 },
+			};
+		}),
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+	const assistant = fromPartial<SessionMessage>({
+		id: sessionMessageId("split-turn-assistant"),
+		parts: [
+			{ text: "prefix one", type: "text" },
+			{ text: "prefix two", type: "text" },
+			{ text: "recent suffix", type: "text" },
+		],
+		role: "assistant",
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: [
+				message("split-history-user", "user", "older request"),
+				message("split-history-assistant", "assistant", "older answer"),
+				message("split-current-user", "user", "current request"),
+				assistant,
+			],
+			sessionId: sessionId("session-split-turn-summary-requests"),
+		},
+		model,
+		settings: {
+			...settings,
+			keepRecentTokens: 2,
+			summaryMaxOutputTokens: 1024,
+		},
+		trigger: "manual",
+	});
+
+	expect(summaryInputs).toHaveLength(2);
+	expect(summaryInputs[0]?.serializedMessages).toContain("older request");
+	expect(summaryInputs[0]?.serializedMessages).not.toContain("current request");
+	expect(summaryInputs[1]?.serializedMessages).toContain("current request");
+	expect(summaryInputs[1]?.serializedMessages).toContain("prefix two");
+	expect(summaryInputs[1]?.serializedMessages).not.toContain("older request");
+	expect(result.entry.summary.text).toContain("history handoff");
+	expect(result.entry.summary.text).toContain("Turn Context (split turn)");
+	expect(result.entry.summary.text).toContain("turn prefix handoff");
+	expect(result.entry.summarizationUsage).toMatchObject({
+		inputTokens: 20,
+		outputTokens: 10,
+	});
+});
+
+test("a failed split-turn prefix request never commits the completed history handoff", async () => {
+	const store = makeStore();
+	const reportedUsage: { inputTokens: number; outputTokens: number }[] = [];
+	let requests = 0;
+	const summaryGenerator = mock(async () => {
+		requests += 1;
+		if (requests === 2) {
+			throw new Error("turn prefix summary unavailable");
+		}
+		return {
+			text: "completed history handoff",
+			usage: { inputTokens: 10, outputTokens: 5 },
+		};
+	});
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+	const assistant = fromPartial<SessionMessage>({
+		id: sessionMessageId("split-failure-assistant"),
+		parts: [
+			{ text: "prefix one", type: "text" },
+			{ text: "prefix two", type: "text" },
+			{ text: "recent suffix", type: "text" },
+		],
+		role: "assistant",
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: [
+					message("split-failure-history-user", "user", "older request"),
+					message(
+						"split-failure-history-assistant",
+						"assistant",
+						"older answer"
+					),
+					message("split-failure-current-user", "user", "current request"),
+					assistant,
+				],
+				sessionId: sessionId("session-split-turn-prefix-failure"),
+			},
+			model,
+			settings: { ...settings, keepRecentTokens: 2 },
+			trigger: "manual",
+			recordSummaryUsage: async ({ usage }) => {
+				reportedUsage.push(usage);
+			},
+		})
+	).rejects.toMatchObject({ code: "summary-failed" });
+
+	expect(summaryGenerator).toHaveBeenCalledTimes(2);
+	expect(reportedUsage).toEqual([{ inputTokens: 10, outputTokens: 5 }]);
+	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
 test("resumes the next summary span after a split-turn boundary", async () => {
@@ -1232,7 +2100,12 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 			sessionId: sessionId("session-split-resume"),
 		},
 		model,
-		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 2,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 		trigger: "manual",
 	});
 	expect(first.entry.firstKeptAssistantPartIndex).toBe(2);
@@ -1248,7 +2121,12 @@ test("resumes the next summary span after a split-turn boundary", async () => {
 			sessionId: sessionId("session-split-resume"),
 		},
 		model,
-		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 2,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 		trigger: "manual",
 	});
 	expect(second.entry.firstKeptUiMessageId).toBe(sessionMessageId("u2"));
@@ -1294,7 +2172,12 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 			sessionId: sessionId("session-split-twice"),
 		},
 		model,
-		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 2,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 		trigger: "manual",
 	});
 	const second = await compaction.compact({
@@ -1308,7 +2191,12 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 			sessionId: sessionId("session-split-twice"),
 		},
 		model,
-		settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 2,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 		trigger: "manual",
 	});
 
@@ -1317,9 +2205,12 @@ test("does not re-summarize a previously split assistant prefix", async () => {
 		sessionMessageId("u2"),
 		sessionMessageId("a2"),
 	]);
+	expect(serialized).toHaveLength(3);
 	expect(serialized[1]).toContain("first suffix");
 	expect(serialized[1]).not.toContain("first prefix");
-	expect(serialized[1]).toContain("second prefix");
+	expect(serialized[1]).not.toContain("second prefix");
+	expect(serialized[2]).toContain("second prefix");
+	expect(serialized[2]).not.toContain("first prefix");
 });
 
 test("keeps a split tool call paired with its result", async () => {
@@ -1372,7 +2263,12 @@ test("keeps a split tool call paired with its result", async () => {
 			sessionId: sessionId("session-tool-pair"),
 		},
 		model,
-		settings: { enabled: true, keepRecentTokens: 4, thresholdTokens: null },
+		settings: {
+			enabled: true,
+			keepRecentTokens: 4,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
 
 		trigger: "manual",
 	});
@@ -1428,7 +2324,12 @@ test("does not split a paired tool result beyond the recent budget", async () =>
 				sessionId: sessionId("session-tool-budget"),
 			},
 			model,
-			settings: { enabled: true, keepRecentTokens: 2, thresholdTokens: null },
+			settings: {
+				enabled: true,
+				keepRecentTokens: 2,
+				modelContextLimit: 65_536,
+				thresholdTokens: null,
+			},
 			trigger: "manual",
 		})
 	).rejects.toMatchObject({ code: "history-too-short" });
@@ -1505,6 +2406,7 @@ test("projects the newest attachment against the media budget for estimatedToken
 			maxMediaAttachments: 1,
 			maxMediaBytes: 10_000,
 			maxMediaTokens: 10_000,
+			modelContextLimit: 65_536,
 			thresholdTokens: null,
 		},
 		trigger: "manual",
@@ -1513,4 +2415,417 @@ test("projects the newest attachment against the media budget for estimatedToken
 	// ceil(5010/1000)+1(7) + suffix(1) = 10. Charging oldest-first would omit
 	// the large attachment and report 5 instead.
 	expect(result.entry.estimatedTokensAfter).toBe(10);
+});
+
+const toolMessage = (
+	id: string,
+	toolName: "edit" | "read" | "write",
+	output: unknown
+): SessionMessage =>
+	fromPartial<SessionMessage>({
+		id: sessionMessageId(id),
+		parts: [
+			{
+				output,
+				state: "output-available",
+				toolCallId: toolCallId(`call-${id}`),
+				type: `tool-${toolName}`,
+			},
+		],
+		role: "assistant",
+	});
+
+const fileVersionFixture = (seed: string): string =>
+	seed.repeat(32).slice(0, 32);
+
+test("summarizes deterministic read and modified files from completed Tool Calls", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "file summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: [
+				message("u1", "user", "read and edit"),
+				toolMessage("read-a", "read", {
+					content: "1 | a",
+					fileVersion: fileVersionFixture("a"),
+					path: "src/a.ts",
+				}),
+				toolMessage("read-dir", "read", {
+					content: "src/",
+					path: "src",
+				}),
+				toolMessage("edit-b", "edit", {
+					files: [
+						{
+							hunkCount: 1,
+							newFileVersion: fileVersionFixture("b"),
+							oldFileVersion: fileVersionFixture("c"),
+							path: "src/b.ts",
+							status: "committed",
+						},
+					],
+				}),
+				// The common one-file Edit shape reports no files list.
+				toolMessage("edit-single", "edit", {
+					newFileVersion: fileVersionFixture("d"),
+					oldFileVersion: fileVersionFixture("e"),
+					path: "src/c.ts",
+					replacements: 1,
+				}),
+				message("u2", "user", "current"),
+				message("a2", "assistant", "current answer"),
+			],
+			sessionId: sessionId("session-file-operations"),
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 1,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
+	// The directory read is not a file observation, and the deterministic
+	// handoff outlives the model's own prose.
+	expect(result.entry.summary.fileOperations).toEqual({
+		modified: ["src/b.ts", "src/c.ts"],
+		read: ["src/a.ts"],
+	});
+	expect(result.entry.summary.text).toEndWith(
+		"## Files\nRead: src/a.ts\nModified: src/b.ts, src/c.ts"
+	);
+});
+
+test("a repeated compaction carries the prior cumulative file sets forward", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: async () => ({ text: "carried summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+	const initialMessages = [
+		message("u1", "user", "first"),
+		toolMessage("read-a", "read", {
+			content: "1 | a",
+			fileVersion: fileVersionFixture("a"),
+			path: "src/a.ts",
+		}),
+		message("u2", "user", "second"),
+		message("a2", "assistant", "second answer"),
+	];
+	await compaction.compact({
+		session: {
+			messages: initialMessages,
+			sessionId: sessionId("session-carry"),
+		},
+		model,
+		settings,
+		trigger: "manual",
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: [
+				...initialMessages,
+				toolMessage("write-c", "write", {
+					bytesWritten: 3,
+					newFileVersion: fileVersionFixture("c"),
+					path: "src/c.ts",
+				}),
+				message("u3", "user", "third"),
+				message("a3", "assistant", "third answer"),
+			],
+			sessionId: sessionId("session-carry"),
+		},
+		model,
+		settings,
+		trigger: "threshold",
+	});
+
+	// The earlier Read is outside the new summary span but still tracked.
+	expect(result.entry.summary.fileOperations).toEqual({
+		modified: ["src/c.ts"],
+		read: ["src/a.ts"],
+	});
+});
+
+const lifecycleMessages = [
+	message("u1", "user", "first request"),
+	message("a1", "assistant", "first answer"),
+	message("u2", "user", "current request"),
+	message("a2", "assistant", "current answer"),
+];
+
+test("a Plugin cancellation refuses compaction before any summary call", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const failed = mock(async () => undefined);
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ cancel: "Compaction is paused." }),
+			failed,
+		},
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: lifecycleMessages,
+				sessionId: sessionId("session-plugin-cancel"),
+			},
+			model,
+			settings,
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({
+		code: "cancelled",
+		message: "Compaction is paused.",
+	});
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+	// A deliberate refusal is not a compaction failure.
+	expect(failed).not.toHaveBeenCalled();
+});
+
+test("a Plugin custom summary still passes host validation and persistence", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const completed: SessionCompaction[] = [];
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ summary: "Plugin handoff text." }),
+			completed: async (entry) => {
+				completed.push(entry);
+			},
+		},
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: lifecycleMessages,
+			sessionId: sessionId("session-plugin-summary"),
+		},
+		model,
+		settings,
+		trigger: "manual",
+	});
+
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(result.entry.summary.text).toContain("Plugin handoff text.");
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+	expect(completed).toEqual([result.entry]);
+});
+
+test("a Plugin summary above 80% of reserve is rejected before persistence", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ summary: "x".repeat(641 * 4) }),
+		},
+		store,
+		summaryGenerator: async () => ({ text: "generated" }),
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: [
+					message("u1", "user", "history ".repeat(400)),
+					message("a1", "assistant", "old answer"),
+					message("u2", "user", "current request"),
+					message("a2", "assistant", "current answer"),
+				],
+				sessionId: sessionId("session-plugin-summary-reserve-cap"),
+			},
+			model,
+			settings: {
+				enabled: true,
+				keepRecentTokens: 100,
+				modelContextLimit: 8192,
+				reserveTokens: 800,
+				thresholdTokens: null,
+			},
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "summary-failed" });
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("an oversized Plugin summary fails before persistence and reports the failure once", async () => {
+	const store = makeStore();
+	const failures: unknown[] = [];
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ summary: "x".repeat(1200) }),
+			failed: async ({ error }) => {
+				failures.push(error);
+			},
+		},
+		store,
+		summaryGenerator: async () => ({ text: "generated" }),
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: [
+					message("u1", "user", "a".repeat(20_000)),
+					message("a1", "assistant", "old answer"),
+					message("u2", "user", "current request"),
+					message("a2", "assistant", "current answer"),
+				],
+				sessionId: sessionId("session-plugin-summary-overrun"),
+			},
+			model,
+			settings: {
+				enabled: true,
+				keepRecentTokens: 100,
+				modelContextLimit: 8192,
+				reserveTokens: 256,
+				thresholdTokens: null,
+			},
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "summary-failed" });
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+	expect(failures).toHaveLength(1);
+});
+
+test("a failing persistence notifies the compaction failure hook once", async () => {
+	const store = {
+		appendCompaction: mock(async () => {
+			throw new Error("store unavailable");
+		}),
+		getLatestCompaction: mock(async () => null),
+	};
+	const failures: unknown[] = [];
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			failed: async ({ error }) => {
+				failures.push(error);
+			},
+		},
+		store,
+		summaryGenerator: async () => ({ text: "summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: lifecycleMessages,
+				sessionId: sessionId("session-plugin-persistence"),
+			},
+			model,
+			settings,
+			trigger: "threshold",
+		})
+	).rejects.toMatchObject({ code: "persistence-failed" });
+	expect(failures).toHaveLength(1);
+});
+
+test("a throwing completed observer cannot undo a committed compaction", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			completed: async () => {
+				throw new Error("observer exploded");
+			},
+		},
+		store,
+		summaryGenerator: async () => ({ text: "committed summary" }),
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: lifecycleMessages,
+			sessionId: sessionId("session-plugin-observer"),
+		},
+		model,
+		settings,
+		trigger: "manual",
+	});
+
+	expect(result.entry.summary.text).toContain("committed summary");
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+});
+
+test("a Plugin summary avoids invoking a summary generator", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const completed: SessionCompaction[] = [];
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ summary: "Plugin handoff without a model." }),
+			completed: async (entry) => {
+				completed.push(entry);
+			},
+		},
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: lifecycleMessages,
+			sessionId: sessionId("session-deferred-target"),
+		},
+		model,
+		settings,
+		trigger: "manual",
+	});
+
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(result.entry.summary.text).toContain(
+		"Plugin handoff without a model."
+	);
+	expect(completed).toEqual([result.entry]);
+});
+
+test("a Plugin summary needs no conversation context-window limit", async () => {
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "generated" }));
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({
+				summary: "Plugin handoff with an unknown window.",
+			}),
+		},
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+
+	const result = await compaction.compact({
+		session: {
+			messages: lifecycleMessages,
+			sessionId: sessionId("session-unknown-window"),
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 1,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
+	// The generation budget would have required a known conversation window.
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(result.entry.summary.text).toContain("unknown window");
 });

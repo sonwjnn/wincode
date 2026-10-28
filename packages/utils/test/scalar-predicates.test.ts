@@ -5,6 +5,7 @@ import {
 	isNonEmptyString,
 	isNonNegativeInteger,
 	isPositiveInteger,
+	isPositiveSafeInteger,
 	isString,
 	isUndefined,
 } from "../src/index";
@@ -64,5 +65,15 @@ describe("runtime scalar predicates", () => {
 		expect(isPositiveInteger(-1)).toBe(false);
 		expect(isPositiveInteger(1.5)).toBe(false);
 		expect(isPositiveInteger(Number.POSITIVE_INFINITY)).toBe(false);
+	});
+
+	test("accepts only positive safe integers", () => {
+		expect(isPositiveSafeInteger(1)).toBe(true);
+		expect(isPositiveSafeInteger(Number.MAX_SAFE_INTEGER)).toBe(true);
+		expect(isPositiveSafeInteger(Number.MAX_SAFE_INTEGER + 1)).toBe(false);
+		expect(isPositiveSafeInteger(0)).toBe(false);
+		expect(isPositiveSafeInteger(-1)).toBe(false);
+		expect(isPositiveSafeInteger(1.5)).toBe(false);
+		expect(isPositiveSafeInteger(Number.POSITIVE_INFINITY)).toBe(false);
 	});
 });

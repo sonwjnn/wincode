@@ -1,7 +1,7 @@
 import type { JsonObject } from "type-fest";
 import type { SupportedPromptCacheRetentionTier } from "../../model-metadata.ts";
 import type { ModelUsage } from "../../model-usage.ts";
-import type { ThinkingLevel } from "../../sdk.ts";
+import type { ProviderGenerationCompletion, ThinkingLevel } from "../../sdk.ts";
 
 export type ProtocolPromptPart =
 	| Readonly<{ text: string; type: "text" }>
@@ -69,7 +69,12 @@ export type ProtocolStreamPart =
 			type: "tool-call";
 	  }>
 	| Readonly<{
+			completion?: ProviderGenerationCompletion;
 			continuation?: unknown;
 			type: "finish";
 			usage?: ModelUsage;
 	  }>;
+
+export type ProtocolGenerationCompletion = NonNullable<
+	Extract<ProtocolStreamPart, { type: "finish" }>["completion"]
+>;

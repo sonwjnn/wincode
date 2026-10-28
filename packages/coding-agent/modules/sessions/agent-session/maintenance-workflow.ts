@@ -16,7 +16,9 @@ import type {
 import { SessionCompactionError } from "../compaction/error";
 import {
 	isContextOverflowFailure,
+	type OverflowContinuationSource,
 	OverflowRecoveryError,
+	prepareOverflowContinuationSource,
 	prepareOverflowRecoveryMessages,
 } from "../compaction/overflow-recovery";
 import type { SessionMessage } from "../message";
@@ -35,6 +37,14 @@ import type {
 } from "./types";
 
 const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
+const recoveryTitle = (
+	trigger: SessionOverflowRecoveryCommand["trigger"]
+): string =>
+	trigger === "output-limit"
+		? "Output-limit recovery"
+		: "Context overflow recovery";
+const continuationFailureGuidance = (title: string): string =>
+	`${title} saved a compacted Session Context, but could not continue it. No new session was created, and completed tool effects were not replayed. Review the saved compaction and any completed tool results; do not resubmit the original request until its effects are checked.`;
 const compactionDiagnosticFields = (
 	command: SessionCompactionCommand,
 	phase: "started" | "completed" | "failed"
@@ -65,19 +75,21 @@ const logCompactionFailure = (
 		void logger.warn("Session compaction failed", record);
 	}
 };
-const logOverflowRecoveryFailure = (
+const logCompactionRecoveryFailure = (
 	error: unknown,
 	phase: "target-resolution" | "continuation",
+	trigger: SessionOverflowRecoveryCommand["trigger"],
 	turnId: AgentTurnId
 ): void => {
 	const fields = getReportableSessionFailureFields(error);
 	if (fields === null) {
 		return;
 	}
-	void logger.warn("Context overflow recovery failed", {
+	void logger.warn(`${recoveryTitle(trigger)} failed`, {
 		...fields,
 		operation: "session.compaction.overflow",
 		phase,
+		trigger,
 		turnId,
 	});
 };
@@ -173,7 +185,9 @@ export const createSessionMaintenanceWorkflow = (
 		trigger: command.trigger,
 		...omitUndefined({
 			focus: command.focus,
+			protectedMessageIds: command.protectedMessageIds,
 			thinkingLevel: command.thinkingLevel,
+			turnId: command.turnId,
 		}),
 		signal,
 	});
@@ -182,6 +196,11 @@ export const createSessionMaintenanceWorkflow = (
 		messages: readonly SessionMessage[]
 	): Promise<CompactSessionResult> => {
 		const controller = new AbortController();
+		const signal = AbortSignal.any([
+			controller.signal,
+			port.getSessionState().shutdownSignal,
+			...(command.signal === undefined ? [] : [command.signal]),
+		]);
 		const registration = Promise.withResolvers<void>();
 		const { promise, reject, resolve } =
 			Promise.withResolvers<CompactSessionResult>();
@@ -201,15 +220,8 @@ export const createSessionMaintenanceWorkflow = (
 		);
 		void (async () => {
 			try {
-				const request = await compactionRequest(
-					command,
-					messages,
-					AbortSignal.any([
-						controller.signal,
-						port.getSessionState().shutdownSignal,
-					])
-				);
-				if (controller.signal.aborted || port.getSessionState().closed) {
+				const request = await compactionRequest(command, messages, signal);
+				if (signal.aborted || port.getSessionState().closed) {
 					throw new SessionCompactionError(
 						"cancelled",
 						SESSION_SHUT_DOWN_ERROR
@@ -223,13 +235,14 @@ export const createSessionMaintenanceWorkflow = (
 				});
 				registration.resolve();
 				const result = await admitted;
-				if (controller.signal.aborted || port.getSessionState().closed) {
+				// Durable persistence is the commit point; reconcile it before honoring later cancellation.
+				port.applyCompactionResult(result);
+				if (signal.aborted || port.getSessionState().closed) {
 					throw new SessionCompactionError(
 						"cancelled",
 						SESSION_SHUT_DOWN_ERROR
 					);
 				}
-				port.applyCompactionResult(result);
 				void logger.debug(
 					"Session compaction completed",
 					compactionDiagnosticFields(command, "completed")
@@ -266,7 +279,12 @@ export const createSessionMaintenanceWorkflow = (
 		const request = await compactionRequest(
 			command,
 			messages,
-			port.getSessionState().shutdownSignal
+			command.signal === undefined
+				? port.getSessionState().shutdownSignal
+				: AbortSignal.any([
+						port.getSessionState().shutdownSignal,
+						command.signal,
+					])
 		);
 		if (port.getSessionState().closed) {
 			throw new SessionCompactionError("cancelled", SESSION_SHUT_DOWN_ERROR);
@@ -323,10 +341,11 @@ export const createSessionMaintenanceWorkflow = (
 		}
 	};
 	const recoveryError = (
+		code: OverflowRecoveryError["code"],
 		message: string,
 		cause: unknown
 	): OverflowRecoveryError =>
-		new OverflowRecoveryError("continuation-failed", message, { cause });
+		new OverflowRecoveryError(code, message, { cause });
 	const failRecovery = (
 		error: OverflowRecoveryError
 	): SessionOverflowRecoveryOutcome => {
@@ -339,9 +358,13 @@ export const createSessionMaintenanceWorkflow = (
 		command: SessionOverflowRecoveryCommand
 		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Recovery owns independent eligibility, compaction, and continuation failure boundaries.
 	): Promise<SessionOverflowRecoveryOutcome> => {
-		if (!isContextOverflowFailure(command.error)) {
+		if (
+			command.trigger === "context-overflow" &&
+			!isContextOverflowFailure(command.error)
+		) {
 			return { kind: "ineligible" };
 		}
+		const title = recoveryTitle(command.trigger);
 		if (port.hasAttemptedRecovery(command.originalMessageId)) {
 			return { kind: "exhausted" };
 		}
@@ -351,14 +374,15 @@ export const createSessionMaintenanceWorkflow = (
 				(message) =>
 					message.id === command.originalMessageId && message.role === "user"
 			);
-		if (
-			originalMessageIndex !== -1 &&
-			hasCompletedToolArtifact(
-				getSessionAttemptMessages(port.getContext(), originalMessageIndex)
-			)
-		) {
-			return { kind: "ineligible" };
-		}
+		const attemptMessages =
+			originalMessageIndex === -1
+				? []
+				: getSessionAttemptMessages(port.getContext(), originalMessageIndex);
+		/**
+		 * Completed tools make prompt replay unsafe. Recovery instead compacts
+		 * older history and protects the newest settled assistant/tool batch.
+		 */
+		const usesContinuation = hasCompletedToolArtifact(attemptMessages);
 		const recoveryEpoch = port.startRecoveryAttempt(command.originalMessageId);
 		let target: SessionOverflowRecoveryTarget | null;
 		try {
@@ -367,10 +391,16 @@ export const createSessionMaintenanceWorkflow = (
 			if (!port.isRecoveryCurrent(recoveryEpoch)) {
 				return { kind: "ineligible" };
 			}
-			logOverflowRecoveryFailure(error, "target-resolution", command.turnId);
+			logCompactionRecoveryFailure(
+				error,
+				"target-resolution",
+				command.trigger,
+				command.turnId
+			);
 			return failRecovery(
 				recoveryError(
-					"Context overflow recovery could not resolve its compaction settings.",
+					"compaction-failed",
+					`${title} could not resolve its compaction settings. No compaction was committed. No new session was created, and completed tool effects were not replayed. Review the existing Session and model settings before continuing manually.`,
 					error
 				)
 			);
@@ -382,17 +412,29 @@ export const createSessionMaintenanceWorkflow = (
 		if (!port.isRecoveryCurrent(recoveryEpoch)) {
 			return { kind: "ineligible" };
 		}
+		// Snapshot the durable source after target resolution, so work settled
+		// while the settings loaded is compacted instead of being dropped.
+		let recoverySource: OverflowContinuationSource | null = null;
+		if (usesContinuation) {
+			recoverySource = prepareOverflowContinuationSource(port.getTranscript());
+			if (recoverySource === null) {
+				return { kind: "ineligible" };
+			}
+		}
 		let result: CompactSessionResult;
 		try {
 			result = await compact({
 				model: target.model,
-				sourceMessages: prepareOverflowRecoveryMessages(
-					port.getTranscript(),
-					command.originalMessageId
-				),
+				sourceMessages:
+					recoverySource?.sourceMessages ??
+					prepareOverflowRecoveryMessages(
+						port.getTranscript(),
+						command.originalMessageId
+					),
 				trigger: "overflow",
 				turnId: command.turnId,
 				...omitUndefined({
+					protectedMessageIds: recoverySource?.protectedMessageIds,
 					thinkingLevel: target.thinkingLevel,
 				}),
 			});
@@ -400,13 +442,17 @@ export const createSessionMaintenanceWorkflow = (
 			if (!port.isRecoveryCurrent(recoveryEpoch)) {
 				return { kind: "ineligible" };
 			}
+			const detail = getErrorMessage(error, "");
+			const reason =
+				detail.length === 0
+					? "The existing history could not be summarized safely."
+					: detail;
 			return failRecovery(
-				error instanceof OverflowRecoveryError
-					? error
-					: recoveryError(
-							`Context overflow recovery could not compact the session.${getErrorMessage(error, "")}`,
-							error
-						)
+				recoveryError(
+					"compaction-failed",
+					`${title} could not compact this session: ${reason} No compaction was committed. No new session was created, and completed tool effects were not replayed. Review the existing Session and its tool results, reduce context or correct the compaction settings, then continue manually.`,
+					error
+				)
 			);
 		}
 		await port.waitForExecutionEnd(command.turnId);
@@ -422,10 +468,16 @@ export const createSessionMaintenanceWorkflow = (
 			if (!port.isRecoveryCurrent(recoveryEpoch)) {
 				return { kind: "ineligible" };
 			}
-			logOverflowRecoveryFailure(error, "continuation", command.turnId);
+			logCompactionRecoveryFailure(
+				error,
+				"continuation",
+				command.trigger,
+				command.turnId
+			);
 			return failRecovery(
 				recoveryError(
-					"Context overflow recovery could not continue the compacted Session Context.",
+					"continuation-failed",
+					continuationFailureGuidance(title),
 					error
 				)
 			);
@@ -436,10 +488,35 @@ export const createSessionMaintenanceWorkflow = (
 		if (continuationOutcome.kind === "refused") {
 			const error = new OverflowRecoveryError(
 				"continuation-refused",
-				`Context overflow recovery could not continue the compacted Session Context: ${continuationOutcome.reason}`,
-				{ cause: command.error }
+				`${title} saved a compacted Session Context, but continuation was refused: ${continuationOutcome.reason}. No new session was created, and completed tool effects were not replayed. Review the saved compaction and any completed tool results; do not resubmit the original request until its effects are checked.`,
+				{
+					cause:
+						command.trigger === "context-overflow" ? command.error : undefined,
+				}
 			);
-			logOverflowRecoveryFailure(error, "continuation", command.turnId);
+			logCompactionRecoveryFailure(
+				error,
+				"continuation",
+				command.trigger,
+				command.turnId
+			);
+			return failRecovery(error);
+		}
+		if (continuationOutcome.kind === "failed") {
+			const error = new OverflowRecoveryError(
+				"continuation-failed",
+				continuationFailureGuidance(title),
+				{
+					cause:
+						command.trigger === "context-overflow" ? command.error : undefined,
+				}
+			);
+			logCompactionRecoveryFailure(
+				error,
+				"continuation",
+				command.trigger,
+				command.turnId
+			);
 			return failRecovery(error);
 		}
 		return { kind: "recovered", entry: result.entry };

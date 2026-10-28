@@ -521,6 +521,8 @@ export const createAgentSessionTurnRunner = ({
 			await runAgentTurnToText({
 				onCheckpoint: callbacks.commitTerminal,
 				onToolCheckpoint: callbacks.commitToolCall,
+				onStepCheckpoint: callbacks.commitStep,
+				prepareNextStep: request.prepareNextStep,
 				onEvent: (event: AgentTurnEvent) => callbacks.onEvent(event),
 				onTerminal: callbacks.onTerminal,
 				onViewState: (viewState) => callbacks.onViewState(viewState),

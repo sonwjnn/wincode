@@ -97,6 +97,7 @@ export type ToolCallFinishedEvent = AgentTurnEventBase &
 export type AgentTurnCompletedEvent = AgentTurnEventBase &
 	Readonly<{
 		finishedAt: number;
+		outputLimitReached?: true;
 		type: "agent-turn-completed";
 		usage?: ModelUsage;
 	}>;
@@ -221,6 +222,8 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 		case "agent-turn-completed":
 			return (
 				isFiniteNonNegativeNumber(event.finishedAt) &&
+				(isUndefined(event.outputLimitReached) ||
+					event.outputLimitReached === true) &&
 				(isUndefined(event.usage) || isUsage(event.usage))
 			);
 		case "agent-turn-cancelled":

@@ -5,6 +5,7 @@ import {
 	createProviderCollection,
 	type Provider,
 	type ProviderChatRequest,
+	type ProviderGenerationCompletion,
 	type ProviderModel,
 } from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
@@ -14,6 +15,9 @@ import type { SummaryGeneratorInput } from "@/modules/sessions/compaction/types"
 import type { SessionMessage } from "@/modules/sessions/message";
 import { modelId, sessionMessageId, toolCallId } from "../support/identifiers";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
+
+const MINIMUM_HANDOFF_OUTPUT_ERROR = /minimum.*256/i;
+const SUMMARY_CONTEXT_FIT_ERROR = /estimated.*context window/i;
 
 const selection: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -28,11 +32,12 @@ type SummaryCapture = Readonly<{
 const runSummary = async (
 	input: SummaryGeneratorInput,
 	providerModel: ProviderModel = {
-		limits: { maxOutputTokens: 128 },
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 2048 },
 		modelId: selection.modelId,
 		protocolId: "fixture",
 		providerId: selection.providerId,
-	}
+	},
+	completion: ProviderGenerationCompletion = { kind: "completed" }
 ): Promise<SummaryCapture> => {
 	let request: ProviderChatRequest | undefined;
 	const provider: Provider = {
@@ -46,7 +51,7 @@ const runSummary = async (
 				type: "usage",
 				usage: { inputTokens: 12, outputTokens: 4 },
 			};
-			yield { type: "finish" };
+			yield { completion, type: "finish" };
 		},
 	};
 	const collection = createProviderCollection();
@@ -78,7 +83,7 @@ test("summarizes with the exact invocable Provider Model and declared reasoning 
 		providerId: "fixture",
 	};
 	const providerModel: ProviderModel = {
-		limits: { maxOutputTokens: 128 },
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 512 },
 		modelId: providerModelId,
 		protocolId: "fixture",
 		providerId: "fixture",
@@ -96,7 +101,7 @@ test("summarizes with the exact invocable Provider Model and declared reasoning 
 
 	expect(text).toBe("provider summary");
 	expect(request).toMatchObject({
-		maxOutputTokens: 128,
+		maxOutputTokens: 256,
 		reasoningEffort: "high",
 	});
 });
@@ -111,10 +116,10 @@ test("uses the Provider default when reasoning support is not declared", async (
 	expect(request).not.toHaveProperty("reasoningEffort");
 });
 
-test("an explicit OAuth summary cap fails closed before provider network I/O", async () => {
-	let requests = 0;
+test("OpenAI OAuth can generate a completed summary without sending an unsupported output cap", async () => {
+	const requests: Record<string, unknown>[] = [];
 	const providerModel: ProviderModel = {
-		limits: { maxOutputTokens: 128 },
+		limits: { maxOutputTokens: 512 },
 		modelId: "gpt-5.6",
 		protocolId: "openai-responses",
 		providerId: "openai",
@@ -122,9 +127,31 @@ test("an explicit OAuth summary cap fails closed before provider network I/O", a
 	const collection = createProviderCollection();
 	collection.register(
 		createOpenAIProvider({
-			fetch: async () => {
-				requests += 1;
-				return new Response();
+			fetch: async (_url, init) => {
+				requests.push(
+					JSON.parse(String(init?.body)) as Record<string, unknown>
+				);
+				return new Response(
+					[
+						{
+							type: "response.output_text.delta",
+							delta: "Completed OAuth handoff.",
+						},
+						{
+							type: "response.completed",
+							response: {
+								status: "completed",
+								output: [],
+								usage: { input_tokens: 10, output_tokens: 5 },
+							},
+						},
+					]
+						.map((event) => `data: ${JSON.stringify(event)}\n\n`)
+						.join(""),
+					{
+						headers: { "content-type": "text/event-stream" },
+					}
+				);
 			},
 			models: [providerModel],
 		})
@@ -142,20 +169,19 @@ test("an explicit OAuth summary cap fails closed before provider network I/O", a
 	await expect(
 		generator({
 			model: { modelId: modelId("gpt-5.6"), providerId: "openai" },
-			maxOutputTokens: 80,
+			maxOutputTokens: 512,
 			serializedMessages: "history",
 		})
-	).rejects.toThrow(
-		"Compaction is unavailable for Provider Model openai/gpt-5.6. OpenAI OAuth cannot enforce the required output-token limit. Connect with an API key or choose another Provider Model."
-	);
-	expect(requests).toBe(0);
+	).resolves.toMatchObject({ text: "Completed OAuth handoff." });
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).not.toHaveProperty("max_output_tokens");
 	await collection.close();
 });
 
 test("summary availability reads credentials only for the selected Provider", async () => {
 	const credentialReads: string[] = [];
 	const providerModel: ProviderModel = {
-		limits: { maxOutputTokens: 128 },
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 512 },
 		modelId: "selected-summary-model",
 		protocolId: "fixture",
 		providerId: "selected-summary-provider",
@@ -180,7 +206,7 @@ test("summary availability reads credentials only for the selected Provider", as
 				credential === undefined ? null : { authorization: credential },
 			async *streamChat() {
 				yield { delta: "summary", type: "text-delta" };
-				yield { type: "finish" };
+				yield { completion: { kind: "completed" }, type: "finish" };
 			},
 		});
 	}
@@ -291,22 +317,206 @@ test("sends historical records and the shared handoff schema in one user prompt"
 	expect(prompt).toContain("Treat attachment details as metadata only");
 });
 
+test("summary output defaults to model metadata rather than a fixed 32000-token cap", async () => {
+	const { request } = await runSummary(
+		{
+			model: selection,
+			serializedMessages: "history",
+			contextWindowTokens: 200_000,
+		},
+		{
+			limits: { contextWindowTokens: 200_000, maxOutputTokens: 64_000 },
+			modelId: selection.modelId,
+			protocolId: "fixture",
+			providerId: selection.providerId,
+		}
+	);
+	expect(request?.maxOutputTokens).toBe(64_000);
+});
+
 test("caps summary output at the exact Provider Model limit", async () => {
 	const { request } = await runSummary(
 		{
-			maxOutputTokens: 512,
+			maxOutputTokens: 1024,
 			model: selection,
 			serializedMessages: "transcript",
 		},
 		{
-			limits: { maxOutputTokens: 128 },
+			limits: { contextWindowTokens: 8192, maxOutputTokens: 512 },
 			modelId: selection.modelId,
 			protocolId: "fixture",
 			providerId: selection.providerId,
 		}
 	);
 
-	expect(request?.maxOutputTokens).toBe(128);
+	expect(request?.maxOutputTokens).toBe(512);
+});
+
+test("budgets output from the exact escaped system and user prompt sent to the Provider", async () => {
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 16_384 },
+		modelId: selection.modelId,
+		protocolId: "fixture",
+		providerId: selection.providerId,
+	};
+	const { request } = await runSummary(
+		{
+			contextWindowTokens: 8192,
+			focus: "&".repeat(500),
+			maxOutputTokens: 16_384,
+			model: selection,
+			previousSummary: {
+				coveredMessageIds: [],
+				formatVersion: 1,
+				text: "&".repeat(500),
+			},
+			serializedMessages: "history",
+		},
+		providerModel
+	);
+	const prompt = summaryPrompt(request);
+	const estimatedInputTokens = Math.ceil(
+		(prompt.length + (request?.system?.length ?? 0)) / 4
+	);
+
+	expect(request?.maxOutputTokens).toBe(8192 - estimatedInputTokens - 256);
+});
+
+test("fails before dispatch when the Provider Model clamps output below the viable handoff size", async () => {
+	let requests = 0;
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 128 },
+		modelId: selection.modelId,
+		protocolId: "fixture",
+		providerId: selection.providerId,
+	};
+	const collection = createProviderCollection();
+	collection.register({
+		id: selection.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			requests += 1;
+			yield { delta: "too short", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	});
+	await collection.setCredential(selection.providerId, {
+		token: "fixture-only",
+	});
+
+	try {
+		await expect(
+			createProviderSummaryGenerator(collection)({
+				maxOutputTokens: 1024,
+				model: selection,
+				serializedMessages: "history",
+			})
+		).rejects.toThrow(MINIMUM_HANDOFF_OUTPUT_ERROR);
+		expect(requests).toBe(0);
+	} finally {
+		await collection.close();
+	}
+});
+
+test("uses the 272k Wincode default when Provider metadata omits a context window", async () => {
+	let requests = 0;
+	const providerModel: ProviderModel = {
+		limits: { maxOutputTokens: 1024 },
+		modelId: selection.modelId,
+		protocolId: "fixture",
+		providerId: selection.providerId,
+	};
+	const collection = createProviderCollection();
+	collection.register({
+		id: selection.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			requests += 1;
+			yield { delta: "summary", type: "text-delta" };
+			yield { completion: { kind: "completed" }, type: "finish" };
+		},
+	});
+	await collection.setCredential(selection.providerId, {
+		token: "fixture-only",
+	});
+
+	try {
+		await expect(
+			createProviderSummaryGenerator(collection)({
+				model: selection,
+				serializedMessages: "history",
+			})
+		).resolves.toMatchObject({ text: "summary" });
+		expect(requests).toBe(1);
+	} finally {
+		await collection.close();
+	}
+});
+
+test("uses the configured Wincode context window instead of smaller Provider metadata", async () => {
+	const { request } = await runSummary(
+		{
+			contextWindowTokens: 16_384,
+			maxOutputTokens: 1024,
+			model: selection,
+			serializedMessages: "x".repeat(36_000),
+		},
+		{
+			limits: { contextWindowTokens: 8192, maxOutputTokens: 2048 },
+			modelId: selection.modelId,
+			protocolId: "fixture",
+			providerId: selection.providerId,
+		}
+	);
+
+	expect(request?.maxOutputTokens).toBe(1024);
+});
+
+test("rejects an escaped summary prompt that cannot fit before provider dispatch", async () => {
+	let requests = 0;
+	const providerModel: ProviderModel = {
+		limits: { contextWindowTokens: 8192, maxOutputTokens: 1024 },
+		modelId: selection.modelId,
+		protocolId: "fixture",
+		providerId: selection.providerId,
+	};
+	const collection = createProviderCollection();
+	collection.register({
+		id: selection.providerId,
+		models: [providerModel],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			requests += 1;
+			yield { delta: "summary", type: "text-delta" };
+			yield { type: "finish" };
+		},
+	});
+	await collection.setCredential(selection.providerId, {
+		token: "fixture-only",
+	});
+
+	try {
+		await expect(
+			createProviderSummaryGenerator(collection)({
+				contextWindowTokens: 8192,
+				focus: "preserve this decision",
+				maxOutputTokens: 1024,
+				model: selection,
+				previousSummary: {
+					coveredMessageIds: [],
+					formatVersion: 1,
+					text: "prior summary",
+				},
+				preparedRequest: { estimatedInputTokens: 1, prompt: "forged" },
+				serializedMessages: "&".repeat(40_000),
+			})
+		).rejects.toThrow(SUMMARY_CONTEXT_FIT_ERROR);
+		expect(requests).toBe(0);
+	} finally {
+		await collection.close();
+	}
 });
 
 test("updates prior work and resolved progress in the shared handoff schema", async () => {
@@ -335,6 +545,32 @@ test("updates prior work and resolved progress in the shared handoff schema", as
 	expect(prompt).toContain("Update the schema docs.");
 	expect(prompt).toContain("## Progress");
 	expect(prompt).toContain("### Blocked");
+});
+
+test("refuses a summary when Provider generation completion is unknown", async () => {
+	await expect(
+		runSummary({ model: selection, serializedMessages: "history" }, undefined, {
+			kind: "unknown",
+		})
+	).rejects.toThrow("did not complete (unknown)");
+});
+
+test("refuses a nonempty summary stopped by the output-token limit", async () => {
+	await expect(
+		runSummary({ model: selection, serializedMessages: "history" }, undefined, {
+			kind: "incomplete",
+			reason: "output-limit",
+		})
+	).rejects.toThrow("did not complete (output-limit)");
+});
+
+test("refuses a nonempty summary stopped by provider filtering", async () => {
+	await expect(
+		runSummary({ model: selection, serializedMessages: "history" }, undefined, {
+			kind: "incomplete",
+			reason: "filtered",
+		})
+	).rejects.toThrow("did not complete (filtered)");
 });
 
 test("keeps transcript, prior-summary, and focus text inside their prompt boundaries", async () => {

@@ -31,7 +31,10 @@ import { logSessionPersistenceFailure } from "@/shared/utils/session-persistence
 import type { CompactSessionResult } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
 import { SessionCompactionError } from "../compaction/error";
-import { isContextOverflowFailure } from "../compaction/overflow-recovery";
+import {
+	isContextOverflowFailure,
+	isProviderReportedContextOverflow,
+} from "../compaction/overflow-recovery";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import {
 	createSessionUserMessage,
@@ -50,6 +53,7 @@ import {
 	buildAssistantFailureSessionRecord,
 	buildTerminalSessionRecord,
 } from "../turn-records";
+import { getSessionContextEpoch } from "../usage/context-usage";
 import { getReportableSessionFailureFields } from "./session-error-diagnostics";
 import { projectAgentTurnEvent, projectAgentTurnTerminal } from "./turn";
 import type {
@@ -74,6 +78,11 @@ export type SubmissionDeps = Readonly<{
 	compact: (command: SessionCompactionCommand) => Promise<CompactSessionResult>;
 	endExecution: (turnId: AgentTurnId) => void;
 	getAssistantMessageId: (turnId: AgentTurnId) => SessionMessageId;
+	getError: () => Error | null;
+	finishModelStep: (
+		turnId: AgentTurnId,
+		record: SessionRecord | undefined
+	) => void;
 	isShutDown: () => boolean;
 	/** Persists delivered Steering Message state transitions. */
 	acknowledgeSteeringMessages: (
@@ -92,7 +101,10 @@ export type SubmissionDeps = Readonly<{
 	recoverOverflow: (
 		command: SessionOverflowRecoveryCommand
 	) => Promise<SessionOverflowRecoveryOutcome>;
-	continueContext: (input: SessionSendInput) => Promise<SessionSendOutcome>;
+	continueContext: (
+		input: SessionSendInput,
+		onExecutionStarted: () => void
+	) => Promise<SessionSendOutcome>;
 	isContextContinuation: (input: SessionSendInput) => boolean;
 	sessionId: SessionId;
 	setCatalogDiagnostic: (diagnostic: string | null) => void;
@@ -224,9 +236,32 @@ const thresholdCompactionFailure = async (
 const needsThresholdCompaction = (
 	compaction: AgentSessionPorts["compaction"],
 	messages: readonly SessionMessage[],
-	settings: ResolvedCompactionSettings
+	settings: ResolvedCompactionSettings,
+	model: ProviderModelSelection
 ): boolean =>
-	settings.autoAvailable && compaction.needsCompaction(messages, settings);
+	settings.autoAvailable &&
+	compaction.needsCompaction(messages, settings, model);
+
+const getContextCompactionTrigger = (
+	compaction: AgentSessionPorts["compaction"],
+	messages: readonly SessionMessage[],
+	settings: ResolvedCompactionSettings,
+	model: ProviderModelSelection,
+	providerInputTokens: number | null
+): "overflow" | "threshold" | null => {
+	if (
+		settings.overflowRecoveryAvailable &&
+		isProviderReportedContextOverflow(
+			providerInputTokens,
+			settings.modelContextLimit
+		)
+	) {
+		return "overflow";
+	}
+	return needsThresholdCompaction(compaction, messages, settings, model)
+		? "threshold"
+		: null;
+};
 
 export const prepareCompactionBeforeSubmit = async ({
 	compaction,
@@ -253,7 +288,14 @@ export const prepareCompactionBeforeSubmit = async ({
 	// sends, so a compaction another caller owns is joined and the need
 	// re-checked against the settled context rather than raced.
 	while (true) {
-		if (!needsThresholdCompaction(compaction, getActiveMessages(), settings)) {
+		if (
+			!needsThresholdCompaction(
+				compaction,
+				getActiveMessages(),
+				settings,
+				model
+			)
+		) {
 			return { ok: true };
 		}
 		try {
@@ -292,6 +334,7 @@ const prepareSubmitContext = async ({
 	activeMessages,
 	armSkill,
 	input,
+	isContextContinuation,
 	resolveSkill,
 	signal,
 }: {
@@ -301,6 +344,7 @@ const prepareSubmitContext = async ({
 		signal: AbortSignal
 	) => Promise<SessionSkillCatalog>;
 	input: SessionSendInput;
+	isContextContinuation: boolean;
 	resolveSkill: AgentSessionPorts["skills"]["resolveSkill"];
 	signal: AbortSignal;
 }): Promise<SubmitContextResult> => {
@@ -318,7 +362,13 @@ const prepareSubmitContext = async ({
 	const anchoredMessage = isUndefined(input.messageId)
 		? undefined
 		: activeMessages.find(({ id }) => id === input.messageId);
-	if (!isUndefined(input.messageId) && anchoredMessage?.role !== "user") {
+	// A continuation of the existing context keeps its originating user message
+	// only for bookkeeping; compaction may already have summarized it away.
+	if (
+		!isUndefined(input.messageId) &&
+		anchoredMessage?.role !== "user" &&
+		!(isContextContinuation && isUndefined(anchoredMessage))
+	) {
 		return {
 			kind: "rejected",
 			reason: "The stored message to continue is unavailable",
@@ -530,6 +580,7 @@ const prepareSessionSubmission = async ({
 			activeMessages: deps.getContext(),
 			armSkill,
 			input,
+			isContextContinuation,
 			resolveSkill,
 			signal,
 		});
@@ -842,23 +893,127 @@ const failureRecordInput = (
 	turnId: execution.turnId,
 });
 
-/**
- * Proposes the one overflow recovery the Agent Session may run for the Agent
- * Turn a provider refused. The Agent Session owns the attempt and the
- * classification, so this supplies what recovery needs: where to compact
- * against and how to continue the existing Session Context.
- */
-const proposeOverflowRecovery = ({
-	context,
-	deps,
-	execution,
-	failure,
-}: {
+type OverflowRecoveryProposalInput = Readonly<{
 	context: Extract<SubmitContextResult, { kind: "ready" }>;
 	deps: SubmissionDeps;
 	execution: SessionExecution;
-	failure: unknown;
-}): void => {
+	failure?: unknown;
+	trigger: SessionOverflowRecoveryCommand["trigger"];
+}>;
+
+const maintainAfterUnrecoveredOutputLimit = ({
+	deps,
+	execution,
+	trigger,
+}: OverflowRecoveryProposalInput): void => {
+	if (trigger !== "output-limit" || deps.isShutDown()) {
+		return;
+	}
+	maintainAfterTurn(
+		deps,
+		deps.getContext(),
+		execution.model,
+		execution.turnId,
+		execution.thinkingLevel
+	);
+};
+
+const getOverflowRecoveryFailureReason = (
+	input: OverflowRecoveryProposalInput,
+	outcome: SessionOverflowRecoveryOutcome
+): string => {
+	if (outcome.kind === "failed") {
+		return outcome.error.message;
+	}
+	if (
+		input.trigger === "context-overflow" &&
+		isOperationalFailure(input.failure)
+	) {
+		return input.failure.message;
+	}
+	return getErrorMessage(
+		input.failure,
+		input.trigger === "output-limit"
+			? "The Provider response stopped at its output-token limit."
+			: "Context overflow recovery could not continue."
+	);
+};
+
+const recoverAfterProviderStop = (
+	input: OverflowRecoveryProposalInput,
+	originalMessageId: SessionMessageId
+): Promise<SessionOverflowRecoveryOutcome> => {
+	const { context, deps, execution, failure, trigger } = input;
+	const recoveryInput = {
+		originalMessageId,
+		continueContext: ({
+			originalMessageId: contextMessageId,
+		}: {
+			originalMessageId: SessionMessageId;
+		}) =>
+			continueOverflowContext({
+				context,
+				deps,
+				execution,
+				originalMessageId: contextMessageId,
+			}),
+		resolveTarget: async () => {
+			const settings = await deps.ports.resolveCompactionSettings(
+				execution.model
+			);
+			if (!settings.overflowRecoveryAvailable) {
+				return null;
+			}
+			return {
+				model: execution.model,
+				thinkingLevel: execution.thinkingLevel,
+			};
+		},
+		turnId: execution.turnId,
+	};
+	return trigger === "context-overflow"
+		? deps.recoverOverflow({ ...recoveryInput, error: failure, trigger })
+		: deps.recoverOverflow({ ...recoveryInput, trigger });
+};
+
+const runOverflowRecoveryProposal = async (
+	input: OverflowRecoveryProposalInput,
+	originalMessageId: SessionMessageId
+): Promise<void> => {
+	const { deps, execution, trigger } = input;
+	let outcome: SessionOverflowRecoveryOutcome;
+	try {
+		outcome = await recoverAfterProviderStop(input, originalMessageId);
+	} catch (error) {
+		await deps.acknowledgeSteeringMessages(
+			execution.turnId,
+			"failed",
+			getErrorMessage(
+				error,
+				trigger === "output-limit"
+					? "Output-limit recovery failed."
+					: "Context overflow recovery failed."
+			)
+		);
+		return;
+	}
+	if (outcome.kind !== "recovered") {
+		await deps.acknowledgeSteeringMessages(
+			execution.turnId,
+			"failed",
+			getOverflowRecoveryFailureReason(input, outcome)
+		);
+	}
+	if (outcome.kind === "ineligible") {
+		maintainAfterUnrecoveredOutputLimit(input);
+	}
+};
+
+/** Proposes one safe compaction recovery for a context overflow or output-limit stop. */
+const proposeOverflowRecovery = (
+	input: OverflowRecoveryProposalInput
+): void => {
+	const { deps, execution, failure, trigger } = input;
 	const originalMessageId = execution.sourceUserMessageId;
 	if (isNull(originalMessageId)) {
 		deps.trackBackgroundTask(
@@ -867,67 +1022,17 @@ const proposeOverflowRecovery = ({
 				"failed",
 				getErrorMessage(
 					failure,
-					"Context overflow recovery could not continue."
+					trigger === "output-limit"
+						? "The Provider response stopped at its output-token limit."
+						: "Context overflow recovery could not continue."
 				)
 			)
 		);
+		maintainAfterUnrecoveredOutputLimit(input);
 		return;
 	}
 	deps.trackBackgroundTask(
-		(async () => {
-			let outcome: SessionOverflowRecoveryOutcome;
-			try {
-				outcome = await deps.recoverOverflow({
-					error: failure,
-					originalMessageId,
-					continueContext: ({ originalMessageId: contextMessageId }) =>
-						continueOverflowContext({
-							context,
-							deps,
-							execution,
-							originalMessageId: contextMessageId,
-						}),
-					resolveTarget: async () => {
-						const settings = await deps.ports.resolveCompactionSettings(
-							execution.model
-						);
-						if (!settings.overflowRecoveryAvailable) {
-							return null;
-						}
-						return {
-							model: execution.model,
-							thinkingLevel: execution.thinkingLevel,
-						};
-					},
-					turnId: execution.turnId,
-				});
-			} catch (error) {
-				await deps.acknowledgeSteeringMessages(
-					execution.turnId,
-					"failed",
-					getErrorMessage(error, "Context overflow recovery failed.")
-				);
-				return;
-			}
-			if (outcome.kind !== "recovered") {
-				let reason: string;
-				if (outcome.kind === "failed") {
-					reason = outcome.error.message;
-				} else if (isOperationalFailure(failure)) {
-					reason = failure.message;
-				} else {
-					reason = getErrorMessage(
-						failure,
-						"Context overflow recovery could not continue."
-					);
-				}
-				await deps.acknowledgeSteeringMessages(
-					execution.turnId,
-					"failed",
-					reason
-				);
-			}
-		})()
+		runOverflowRecoveryProposal(input, originalMessageId)
 	);
 };
 
@@ -947,17 +1052,66 @@ const continueOverflowContext = async ({
 	execution: SessionExecution;
 	originalMessageId: SessionMessageId;
 }): Promise<SessionOverflowContinuationOutcome> => {
-	const outcome = await deps.continueContext({
-		agent: execution.agent,
-		messageId: originalMessageId,
-		model: execution.model,
-		resolvedAgent: context.resolvedAgent,
-		sessionModel: execution.sessionModel,
-		...omitUndefined({
-			sessionThinkingLevel: execution.sessionThinkingLevel,
-			thinkingLevel: execution.thinkingLevel,
-		}),
-	});
+	const previousError = deps.getError();
+	const previousMessageIds = new Set(deps.getTranscript().map(({ id }) => id));
+	let continuationStarted = false;
+	let outcome: SessionSendOutcome;
+	try {
+		outcome = await deps.continueContext(
+			{
+				agent: execution.agent,
+				messageId: originalMessageId,
+				model: execution.model,
+				resolvedAgent: context.resolvedAgent,
+				sessionModel: execution.sessionModel,
+				...omitUndefined({
+					sessionThinkingLevel: execution.sessionThinkingLevel,
+					thinkingLevel: execution.thinkingLevel,
+				}),
+			},
+			() => {
+				continuationStarted = true;
+			}
+		);
+	} catch (error) {
+		return continuationStarted
+			? { kind: "failed" }
+			: {
+					kind: "refused",
+					reason: getErrorMessage(error, "The continuation could not start."),
+				};
+	}
+	const continuationError = deps.getError();
+	if (!continuationStarted) {
+		let reason: string;
+		if (outcome.rejected) {
+			reason = outcome.reason;
+		} else if (
+			continuationError !== null &&
+			continuationError !== previousError
+		) {
+			reason = continuationError.message;
+		} else {
+			reason = "The continuation did not start.";
+		}
+		return { kind: "refused", reason };
+	}
+	const failedContinuation = deps
+		.getTranscript()
+		.some(
+			({ id, metadata, role }) =>
+				role === "assistant" &&
+				!previousMessageIds.has(id) &&
+				metadata?.sourceUserMessageId === originalMessageId &&
+				metadata?.terminalOutcome !== undefined
+		);
+	if (
+		(continuationError !== null &&
+			(!outcome.rejected || continuationError !== previousError)) ||
+		failedContinuation
+	) {
+		return { kind: "failed" };
+	}
 	return outcome.rejected
 		? { kind: "refused", reason: outcome.reason }
 		: { kind: "started" };
@@ -1109,6 +1263,7 @@ const handleTurnFailure = async ({
 				deps,
 				execution,
 				failure: terminalFailure ?? failure,
+				trigger: "context-overflow",
 			}),
 		signal,
 	});
@@ -1147,7 +1302,12 @@ const maintainAfterTurn = (
 		try {
 			settings = await deps.ports.resolveCompactionSettings(selection);
 			if (
-				!needsThresholdCompaction(deps.ports.compaction, messages, settings)
+				!needsThresholdCompaction(
+					deps.ports.compaction,
+					deps.getContext(),
+					settings,
+					selection
+				)
 			) {
 				return;
 			}
@@ -1182,6 +1342,7 @@ const runTurn = async ({
 	deps,
 	execution,
 	modelMessages,
+	onExecutionStarted,
 	onTurnFailure,
 	signal,
 }: {
@@ -1190,10 +1351,14 @@ const runTurn = async ({
 	deps: SubmissionDeps;
 	execution: SessionExecution;
 	modelMessages: readonly SessionMessage[];
+	onExecutionStarted?: () => void;
 	onTurnFailure: () => void;
 	signal: AbortSignal;
 }): Promise<SessionSendOutcome> => {
+	let contextEpoch = getSessionContextEpoch(modelMessages);
+	let lastModelStepInputTokens: number | null = null;
 	let executionActive = true;
+	let terminalCommitted = false;
 	const turnIsLive = (): boolean =>
 		executionActive && !deps.isShutDown() && !signal.aborted;
 	const commitRecord = async (record: SessionRecord): Promise<void> => {
@@ -1207,19 +1372,42 @@ const runTurn = async ({
 			return;
 		}
 		await commitExecutionRecord(deps, execution, record);
+		terminalCommitted = true;
 	};
 	let executionStarted = false;
+	const markExecutionStarted = (): void => {
+		if (executionStarted) {
+			return;
+		}
+		executionStarted = true;
+		onExecutionStarted?.();
+	};
 	let terminalObserved = false;
+	let terminalOutputLimitReached = false;
 	let terminalFailure: OperationalFailure | undefined;
 	const callbacks: SessionTurnCallbacks = {
+		commitStep: async (record) => {
+			if (!turnIsLive()) {
+				throw new SessionSendCancelledError();
+			}
+			if (record !== undefined) {
+				await commitRecord(record);
+			}
+			// A completed durable write wins cancellation: seal its identity before terminal persistence.
+			deps.finishModelStep(execution.turnId, record);
+			if (!turnIsLive()) {
+				throw new SessionSendCancelledError();
+			}
+		},
 		commitTerminal,
 		commitToolCall: commitRecord,
 		onEvent: async (event) => {
 			if (!turnIsLive()) {
 				return;
 			}
-			executionStarted = true;
+			markExecutionStarted();
 			if (event.type === "model-step-finished") {
+				lastModelStepInputTokens = event.usage?.inputTokens ?? null;
 				await deps.acknowledgeSteeringMessages(execution.turnId, "processed");
 			}
 			const currentExecution = {
@@ -1229,7 +1417,8 @@ const runTurn = async ({
 			const projected = projectAgentTurnEvent(
 				deps.getContext(),
 				currentExecution,
-				event
+				event,
+				contextEpoch
 			);
 			if (isUndefined(projected)) {
 				return;
@@ -1238,11 +1427,19 @@ const runTurn = async ({
 			deps.mergeTranscript([projected.message]);
 		},
 		onTerminal: async (event) => {
-			if (!turnIsLive()) {
+			// Only a committed terminal outcome may reconcile after cancellation; late Provider callbacks cannot.
+			if (
+				!executionActive ||
+				deps.isShutDown() ||
+				(signal.aborted && !terminalCommitted)
+			) {
 				return;
 			}
-			executionStarted = true;
+			markExecutionStarted();
 			terminalObserved = true;
+			terminalOutputLimitReached =
+				event.type === "agent-turn-completed" &&
+				event.outputLimitReached === true;
 			const failed = event.type !== "agent-turn-completed";
 			const deferSteeringFailure =
 				event.type === "agent-turn-failed" &&
@@ -1308,6 +1505,84 @@ const runTurn = async ({
 			callbacks,
 			execution,
 			getAssistantMessageId: () => deps.getAssistantMessageId(execution.turnId),
+			prepareNextStep: async ({ protectedMessageIds }) => {
+				assertSendNotCancelled(signal);
+				const pendingFailure = await deps.settleCompaction();
+				if (pendingFailure !== null) {
+					throw pendingFailure;
+				}
+				const settings = await deps.ports.resolveCompactionSettings(
+					execution.model
+				);
+				const trigger = getContextCompactionTrigger(
+					deps.ports.compaction,
+					deps.getContext(),
+					settings,
+					execution.model,
+					lastModelStepInputTokens
+				);
+				if (trigger === null) {
+					return;
+				}
+				const activeIds = new Set(
+					deps.getContext().map((message) => message.id)
+				);
+				const transcript = deps.getTranscript();
+				const durableIds = new Set(transcript.map((message) => message.id));
+				const protectedIds = protectedMessageIds.filter((id) =>
+					durableIds.has(id)
+				);
+				if (
+					protectedIds.length === 0 ||
+					protectedIds.some((id) => !activeIds.has(id))
+				) {
+					throw new Error(
+						"The current durable continuation checkpoint is missing from active context."
+					);
+				}
+				const sourceMessages = transcript.filter(
+					(message) =>
+						message.metadata?.joinedTurnId === undefined ||
+						activeIds.has(message.id)
+				);
+				try {
+					const result = await deps.compact({
+						model: execution.model,
+						sourceMessages,
+						protectedMessageIds: protectedIds,
+						signal,
+						trigger,
+						turnId: execution.turnId,
+						...omitUndefined({ thinkingLevel: execution.thinkingLevel }),
+					});
+					if (trigger === "overflow") {
+						lastModelStepInputTokens = null;
+					}
+					assertSendNotCancelled(signal);
+					const protectedSet = new Set(protectedIds);
+					const index = result.activeMessages.findIndex((message) =>
+						protectedSet.has(message.id)
+					);
+					if (index < 0) {
+						throw new Error(
+							"Compaction lost the protected continuation checkpoint."
+						);
+					}
+					contextEpoch = getSessionContextEpoch(result.activeMessages);
+					return deps.ports.attachments.hydrate({
+						budget: attachmentBudget,
+						messages: result.activeMessages.slice(0, index),
+						signal,
+					});
+				} catch (error) {
+					deps.setCompactionError(
+						isError(error)
+							? error
+							: new Error("Between-step compaction failed.")
+					);
+					throw error;
+				}
+			},
 			messages: hydrated,
 			resolvedAgent: context.resolvedAgent,
 			...omitUndefined({ skillRequest: context.skill }),
@@ -1327,13 +1602,22 @@ const runTurn = async ({
 				phase: "completed",
 				turnId: execution.turnId,
 			});
-			maintainAfterTurn(
-				deps,
-				deps.getTranscript(),
-				execution.model,
-				execution.turnId,
-				execution.thinkingLevel
-			);
+			if (terminalOutputLimitReached) {
+				proposeOverflowRecovery({
+					context,
+					deps,
+					execution,
+					trigger: "output-limit",
+				});
+			} else {
+				maintainAfterTurn(
+					deps,
+					deps.getContext(),
+					execution.model,
+					execution.turnId,
+					execution.thinkingLevel
+				);
+			}
 			return { rejected: false };
 		}
 		onTurnFailure();
@@ -1400,7 +1684,8 @@ const runTurn = async ({
 export type SubmissionPipeline = Readonly<{
 	send: (
 		input: SessionSendInput,
-		signal: AbortSignal
+		signal: AbortSignal,
+		onExecutionStarted?: () => void
 	) => Promise<SessionSendOutcome>;
 }>;
 
@@ -1427,7 +1712,8 @@ export const createSubmissionPipeline = (
 	};
 	const send = async (
 		input: SessionSendInput,
-		signal: AbortSignal
+		signal: AbortSignal,
+		onExecutionStarted?: () => void
 		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Each cancellation checkpoint fences one awaited state mutation.
 	): Promise<SessionSendOutcome> => {
 		if (deps.isShutDown() || signal.aborted) {
@@ -1480,7 +1766,9 @@ export const createSubmissionPipeline = (
 				executionInputForSubmit({
 					input: resolvedInput,
 					sourceUserMessageId:
-						context.anchoredMessage?.id ?? prepared.newMessage?.id,
+						context.anchoredMessage?.id ??
+						(isContextContinuation ? resolvedInput.messageId : undefined) ??
+						prepared.newMessage?.id,
 					startedAt,
 				})
 			);
@@ -1491,6 +1779,7 @@ export const createSubmissionPipeline = (
 				deps,
 				execution,
 				modelMessages,
+				onExecutionStarted,
 				onTurnFailure: () => {
 					failedTurnId = execution.turnId;
 				},

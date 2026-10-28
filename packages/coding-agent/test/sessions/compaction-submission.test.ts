@@ -6,10 +6,17 @@ import type {
 	CompactSessionResult,
 	SessionCompactionModule,
 } from "@/modules/sessions/compaction";
-import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
+import {
+	type ResolvedCompactionSettings,
+	resolveCompactionSettings,
+} from "@/modules/sessions/compaction/config";
 import { SessionCompactionError } from "@/modules/sessions/compaction/error";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { modelId, sessionMessageId } from "../support/identifiers";
+import {
+	modelId,
+	providerModelSelectionFixture,
+	sessionMessageId,
+} from "../support/identifiers";
 
 const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -112,6 +119,81 @@ test("compacts on its own when the joined compaction left the threshold unmet", 
 
 	expect(result).toEqual({ ok: true });
 	expect(compactionCalls).toEqual(["threshold", "threshold"]);
+});
+
+test("rechecks settled Context using the waiting model's exact policy", async () => {
+	const waitingModel = providerModelSelectionFixture(
+		"anthropic/claude-3-7-sonnet"
+	);
+	const waitingSettings = resolveCompactionSettings({
+		contextLimit: 100_000,
+		model: waitingModel,
+		snapshot: {
+			diagnostics: [],
+			document: {
+				compaction: {
+					modelOverrides: {
+						"anthropic/claude-3-7-sonnet": { reserveTokens: 24_000 },
+					},
+				},
+			},
+			sourceFor: () => undefined,
+			sources: [],
+		},
+	});
+	let activeMessages = [message("before-owner-settles")];
+	const observations: Array<{
+		messageIds: string[];
+		model: ProviderModelSelection | undefined;
+		thresholdTokens: number | null;
+	}> = [];
+	const needsCompaction = mock(
+		(
+			messages: readonly SessionMessage[],
+			currentSettings: Pick<
+				ResolvedCompactionSettings,
+				"enabled" | "thresholdTokens"
+			>,
+			currentModel?: ProviderModelSelection
+		) => {
+			observations.push({
+				messageIds: messages.map(({ id }) => id),
+				model: currentModel,
+				thresholdTokens: currentSettings.thresholdTokens,
+			});
+			return observations.length === 1;
+		}
+	);
+	const result = await prepareCompactionBeforeSubmit({
+		compaction: fromPartial<SessionCompactionModule>({ needsCompaction }),
+		getActiveMessages: () => activeMessages,
+		model: waitingModel,
+		runCompaction: async () => {
+			throw new SessionCompactionError(
+				"in-flight",
+				"A compaction for another Provider Model is already in flight."
+			);
+		},
+		settings: waitingSettings,
+		settleCompaction: async () => {
+			activeMessages = [message("after-owner-settles")];
+			return null;
+		},
+	});
+
+	expect(result).toEqual({ ok: true });
+	expect(observations).toEqual([
+		{
+			messageIds: [sessionMessageId("before-owner-settles")],
+			model: waitingModel,
+			thresholdTokens: 76_000,
+		},
+		{
+			messageIds: [sessionMessageId("after-owner-settles")],
+			model: waitingModel,
+			thresholdTokens: 76_000,
+		},
+	]);
 });
 
 test("reports a joined compaction's failure instead of starting a second one", async () => {

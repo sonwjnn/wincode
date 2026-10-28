@@ -26,6 +26,7 @@ import type {
 	ProviderProtocolRequest,
 } from "../sdk-private/protocols/request.ts";
 import { unreachableValue } from "../sdk-private/protocols/shared.ts";
+import { providerChatFinish } from "../sdk-private/provider-events.ts";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 const ANTHROPIC_PROTOCOL_ID = "anthropic";
@@ -263,12 +264,7 @@ const streamWireRequest = async function* (
 			if (part.usage) {
 				yield { type: "usage", usage: part.usage };
 			}
-			yield {
-				...(part.continuation === undefined
-					? {}
-					: { continuation: part.continuation }),
-				type: "finish",
-			};
+			yield providerChatFinish(part);
 		} else {
 			yield part;
 		}

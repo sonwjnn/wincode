@@ -1,11 +1,15 @@
+import type { AgentTurnId } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import { getModelFailureMessage } from "@wincode/ai";
 import {
+	getErrorMessage,
+	isNonEmptyString,
 	isNull,
 	isNumber,
 	isObjectLike,
 	isString,
 	isUndefined,
+	logger,
 	omitUndefined,
 	pickTruthy,
 } from "@wincode/utils";
@@ -14,11 +18,15 @@ import type { ProviderModelSelection } from "@/modules/providers/provider-model-
 import {
 	type CompactionId,
 	type SessionId,
+	type SessionUsageEntryId,
 	toCompactionId,
+	toSessionUsageEntryId,
 } from "@/shared/identifiers";
+import { keepTailUtf8, truncateUtf8 } from "../../tools/output-bounds";
 import {
 	isSessionToolPart,
 	type SessionMessage,
+	type SessionMessageUsage,
 	sanitizeInterruptedSessionMessages,
 	sanitizeSessionSkillToolParts,
 } from "../message";
@@ -32,16 +40,35 @@ import {
 } from "../storage/attachment-store";
 import type { SessionStore } from "../storage/session-store";
 import {
+	estimateSessionContextTokens,
+	estimateSessionContextTokensForThreshold,
+} from "../usage/context-usage";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../usage/context-window";
+import {
 	COMPACTION_REQUEST_OVERHEAD_TOKENS,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionTokens,
-	estimateSessionContextTokens,
 	type ResolvedCompactionSettings,
 } from "./config";
 import { SessionCompactionError } from "./error";
-import { createCompactionSummaryMessage } from "./summary-message";
+import {
+	type CompactionFileOperations,
+	collectCumulativeFileOperations,
+	withFileOperationsSection,
+} from "./file-operations";
+import {
+	createCompactionSummaryMessage,
+	isCompactionSummaryMessage,
+} from "./summary-message";
+import {
+	prepareSummaryRequest,
+	SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS,
+} from "./summary-prompt";
+import type { CompactionSummarySettings } from "./summary-settings";
 import {
 	type AppendSessionCompactionInput,
+	type CompactionLifecycle,
+	type CompactionLifecycleContext,
 	type CompactionSession,
 	type CompactionSummary,
 	type CompactionTriggerReason,
@@ -54,6 +81,11 @@ import {
 } from "./types";
 
 const MAX_SERIALIZED_PART_LENGTH = 12_000;
+const MAX_SERIALIZED_TOOL_INPUT_BYTES = 2000;
+const MAX_SERIALIZED_TOOL_OUTPUT_BYTES = 4000;
+const MAX_SERIALIZED_TOOL_ERROR_BYTES = 2000;
+const TRUNCATION_MARKER = "…[truncated]…";
+const TRUNCATION_MARKER_BYTES = Buffer.byteLength(TRUNCATION_MARKER, "utf8");
 const RAW_IMAGE_DATA_URL_PATTERN =
 	/data:image\/[^;,]+;base64,(?:(?:[A-Za-z0-9+/]\s*){4})*(?:(?:[A-Za-z0-9+/]\s*){2}==|(?:[A-Za-z0-9+/]\s*){3}=|(?:[A-Za-z0-9+/]\s*){1,4})(?![A-Za-z0-9+/=])/giu;
 const DATA_URL_PAYLOAD_PATTERN = /^data:[^,]+,(.*)$/su;
@@ -148,8 +180,11 @@ type CompactionStore = Pick<
 export type CompactSessionInput = {
 	session: CompactionSession;
 	model: ProviderModelSelection;
+	/** Resolved summary target; never changes conversation retention or thresholds. */
+	summaryModel?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	summaryGenerator?: SummaryGenerator;
+	protectedMessageIds?: readonly SessionMessage["id"][];
 	settings: Pick<
 		ResolvedCompactionSettings,
 		"enabled" | "keepRecentTokens" | "thresholdTokens"
@@ -161,15 +196,25 @@ export type CompactSessionInput = {
 				| "maxMediaBytes"
 				| "maxMediaTokens"
 				| "modelContextLimit"
+				| "contextWindowOverrideTokens"
 				| "reserveTokens"
 			>
 		> & {
 			compactionOverheadTokens?: number;
+			summary?: CompactionSummarySettings;
+			summaryContextLimit?: number;
 			summaryMaxOutputTokens?: number;
 		};
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	signal?: AbortSignal;
+	/** The Agent Turn that initiated this compaction, for diagnostics and lifecycle callbacks. */
+	turnId?: AgentTurnId;
+	recordSummaryUsage?: (input: {
+		id: SessionUsageEntryId;
+		model: ProviderModelSelection;
+		usage: SessionMessageUsage;
+	}) => Promise<void>;
 	/** Revalidates Session Host authority immediately before persistence. */
 	assertAuthority?: () => void;
 };
@@ -194,7 +239,8 @@ export type SessionCompactionModule = {
 	getInFlight: (sessionId: SessionId) => Promise<CompactSessionResult> | null;
 	needsCompaction: (
 		messages: readonly SessionMessage[],
-		settings: Pick<ResolvedCompactionSettings, "enabled" | "thresholdTokens">
+		settings: Pick<ResolvedCompactionSettings, "enabled" | "thresholdTokens">,
+		model?: ProviderModelSelection
 	) => boolean;
 };
 
@@ -228,6 +274,7 @@ const sameIntent = (left: CompactionIntent, right: CompactionIntent): boolean =>
 
 type CompactionModuleDependencies = {
 	attachmentStore?: SessionAttachmentStore;
+	lifecycle?: CompactionLifecycle;
 	store: CompactionStore;
 	summaryGenerator?: SummaryGenerator;
 	estimateTokens?: (messages: readonly SessionMessage[]) => number;
@@ -318,8 +365,112 @@ const replaceAttachmentPayload = (part: unknown) => {
 	};
 };
 
+const truncateHeadTailUtf8 = (value: string, maxBytes: number): string => {
+	const byteLimit = Math.max(0, Math.floor(maxBytes));
+	if (Buffer.byteLength(value, "utf8") <= byteLimit) {
+		return value;
+	}
+	if (byteLimit <= TRUNCATION_MARKER_BYTES) {
+		return truncateUtf8(TRUNCATION_MARKER, byteLimit);
+	}
+	const contentBytes = byteLimit - TRUNCATION_MARKER_BYTES;
+	const headBytes = Math.floor(contentBytes / 2);
+	const tailBytes = contentBytes - headBytes;
+	return `${truncateUtf8(value, headBytes)}${TRUNCATION_MARKER}${keepTailUtf8(value, tailBytes)}`;
+};
+
+const serializeBoundedJson = (value: unknown, maxBytes: number): string => {
+	let serialized: string;
+	try {
+		serialized = JSON.stringify(value) ?? "[unserializable value]";
+	} catch {
+		serialized = "[unserializable value]";
+	}
+	return truncateHeadTailUtf8(serialized, maxBytes);
+};
+
+const addBoundedToolResultFields = (
+	serializedPart: Record<string, string>,
+	output: unknown,
+	errorText: unknown
+): void => {
+	if (!isUndefined(output)) {
+		serializedPart.outputPreview = serializeBoundedJson(
+			output,
+			MAX_SERIALIZED_TOOL_OUTPUT_BYTES
+		);
+	}
+	if (isString(errorText)) {
+		serializedPart.errorText = truncateHeadTailUtf8(
+			errorText,
+			MAX_SERIALIZED_TOOL_ERROR_BYTES
+		);
+	}
+};
+
+const serializeToolResultPart = (part: unknown): string | null => {
+	if (
+		!(isObjectLike(part) && "type" in part) ||
+		part.type !== "tool-result" ||
+		!("toolCallId" in part) ||
+		!isString(part.toolCallId)
+	) {
+		return null;
+	}
+	const serializedPart: Record<string, string> = {
+		type: "tool-result",
+		toolCallId: part.toolCallId,
+	};
+	if ("toolName" in part && isString(part.toolName)) {
+		serializedPart.toolName = part.toolName;
+	}
+	addBoundedToolResultFields(
+		serializedPart,
+		"output" in part ? part.output : undefined,
+		"errorText" in part ? part.errorText : undefined
+	);
+	return JSON.stringify(serializedPart);
+};
+
+const serializeToolPart = (
+	part: Extract<SessionMessage["parts"][number], { state: string }>
+): string => {
+	const serializedPart: Record<string, string> = {
+		type: part.type,
+		toolCallId: part.toolCallId,
+		state: part.state,
+	};
+	if ("toolName" in part && typeof part.toolName === "string") {
+		serializedPart.toolName = part.toolName;
+	}
+	if (part.input !== undefined) {
+		serializedPart.inputPreview = serializeBoundedJson(
+			part.input,
+			MAX_SERIALIZED_TOOL_INPUT_BYTES
+		);
+	}
+	addBoundedToolResultFields(serializedPart, part.output, part.errorText);
+	if (part.failure !== undefined) {
+		serializedPart.failure = serializeBoundedJson(
+			part.failure,
+			MAX_SERIALIZED_TOOL_ERROR_BYTES
+		);
+	}
+	return JSON.stringify(serializedPart);
+};
+
 const serializePart = (part: SessionMessage["parts"][number]): string => {
+	const toolResult = serializeToolResultPart(part);
+	if (!isNull(toolResult)) {
+		return toolResult;
+	}
 	const type = getPartType(part);
+	if (type === "reasoning") {
+		return "";
+	}
+	if (isSessionToolPart(part)) {
+		return serializeToolPart(part);
+	}
 	const text = getTextFromPart(part);
 	if (!isNull(text)) {
 		return text;
@@ -835,43 +986,79 @@ const projectMessagesForEstimate = (
 		})
 		.toReversed();
 };
-const resolveSummaryOutputBudget = (
-	cutPoint: CutPoint,
-	settings: CompactSessionInput["settings"],
-	estimateTokens: (messages: readonly SessionMessage[]) => number
-): number => {
-	const retainedTokens = Math.max(
-		0,
-		estimateTokens(
-			projectMessagesForEstimate(cutPoint.activeMessages, settings)
-		)
-	);
-	const reserveTokens = Math.max(
-		0,
-		Math.floor(
-			settings.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens
-		)
-	);
-	const configuredMaximum = Math.max(
+const configuredSummaryOutputTokens = (
+	settings: CompactSessionInput["settings"]
+): number =>
+	Math.max(
 		0,
 		Math.floor(
 			settings.summaryMaxOutputTokens ??
 				DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
 		)
 	);
-	const overheadTokens = Math.max(
+
+const configuredReserveTokens = (
+	settings: CompactSessionInput["settings"]
+): number =>
+	Math.max(
+		0,
+		Math.floor(
+			settings.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens
+		)
+	);
+
+const reserveBoundSummaryOutputTokens = (
+	settings: CompactSessionInput["settings"]
+): number => Math.floor(configuredReserveTokens(settings) * 0.8);
+
+/**
+ * A host-owned handoff is not a summary request, so it is bounded by the
+ * configured output budget and the same reserve-derived ceiling without
+ * needing generated-prompt room.
+ */
+const resolveLifecycleSummaryBudget = (
+	settings: CompactSessionInput["settings"]
+): number =>
+	Math.min(
+		configuredSummaryOutputTokens(settings),
+		reserveBoundSummaryOutputTokens(settings)
+	);
+
+const resolveSummaryOutputBudget = (
+	cutPoint: CutPoint,
+	settings: CompactSessionInput["settings"],
+	estimateTokens: (messages: readonly SessionMessage[]) => number,
+	estimatedInputTokens: number
+): number => {
+	const contextLimit =
+		settings.modelContextLimit ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+	const reserveTokens = configuredReserveTokens(settings);
+	const configuredMaximum = configuredSummaryOutputTokens(settings);
+	const summaryContextAvailable =
+		(settings.summaryContextLimit ?? contextLimit) -
+		estimatedInputTokens -
+		SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS;
+	const retainedTokens = Math.max(
+		0,
+		estimateTokens(
+			projectMessagesForEstimate(cutPoint.activeMessages, settings)
+		)
+	);
+	const requestOverheadTokens = Math.max(
 		0,
 		Math.floor(
 			settings.compactionOverheadTokens ?? COMPACTION_REQUEST_OVERHEAD_TOKENS
 		)
 	);
-	const contextAvailable =
-		isUndefined(settings.modelContextLimit) ||
-		isNull(settings.modelContextLimit)
-			? Number.POSITIVE_INFINITY
-			: settings.modelContextLimit - retainedTokens - overheadTokens;
+	const conversationContextAvailable =
+		contextLimit - retainedTokens - requestOverheadTokens - reserveTokens;
 	return Math.floor(
-		Math.min(reserveTokens, configuredMaximum, contextAvailable)
+		Math.min(
+			configuredMaximum,
+			reserveBoundSummaryOutputTokens(settings),
+			summaryContextAvailable,
+			conversationContextAvailable
+		)
 	);
 };
 
@@ -879,6 +1066,7 @@ const appendInputFor = ({
 	attachmentMetadata,
 	session,
 	cutPoint,
+	fileOperations,
 	focus,
 	model,
 	previous,
@@ -894,6 +1082,7 @@ const appendInputFor = ({
 	attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 	session: CompactionSession;
 	cutPoint: CutPoint;
+	fileOperations?: CompactionFileOperations;
 	focus?: string;
 	thinkingLevel?: ThinkingLevel;
 	model: ProviderModelSelection;
@@ -923,8 +1112,11 @@ const appendInputFor = ({
 			? { attachments: [...attachmentMetadata] }
 			: {}),
 		coveredMessageIds: summarySpan.map((message) => message.id),
+		...omitUndefined({ fileOperations }),
 		formatVersion: 1,
-		text: sanitizeSummaryText(summarization.text),
+		text: sanitizeSummaryText(
+			withFileOperationsSection(summarization.text, fileOperations)
+		),
 		...omitUndefined({ focus: normalizedFocus }),
 	};
 	const nowValue = now();
@@ -942,8 +1134,13 @@ const appendInputFor = ({
 			createCompactionSummaryMessage({ id: entryId, summary }),
 			...projectMessagesForEstimate(cutPoint.activeMessages, settings),
 		]),
-		tokensBefore: estimateSessionContextTokens(session.messages, estimateTokens)
-			.tokens,
+		tokensBefore: estimateSessionContextTokens(
+			previous && !session.messages.some(isCompactionSummaryMessage)
+				? rebuildActiveMessages(session.messages, previous)
+				: session.messages,
+			estimateTokens,
+			model
+		).tokens,
 		trigger,
 		id: entryId,
 		priorCompactionId: previous?.id,
@@ -988,11 +1185,44 @@ const externalizeForCompaction = async (
 	}
 };
 
+/** Durable settled-step rows permit a cut inside the active user turn, never its newest batch. */
+const chooseCheckpointCutPoint = (
+	messages: SessionMessage[],
+	protectedStart: number,
+	keepRecentTokens: number,
+	estimateTokens: (messages: readonly SessionMessage[]) => number
+): CutPoint => {
+	let boundary = protectedStart;
+	while (
+		boundary > 0 &&
+		estimateTokens(messages.slice(boundary)) < keepRecentTokens
+	) {
+		boundary -= 1;
+	}
+	const safeBoundary = resolveToolSafeCutStart(messages, boundary);
+	if (
+		safeBoundary === null ||
+		safeBoundary <= 0 ||
+		safeBoundary > protectedStart
+	) {
+		throw new SessionCompactionError(
+			"history-too-short",
+			"There is no older durable step history that can be compacted while preserving the current continuation."
+		);
+	}
+	return {
+		activeMessages: messages.slice(safeBoundary),
+		firstKeptIndex: safeBoundary,
+		throughIndex: safeBoundary - 1,
+	};
+};
+
 const chooseCompactionSpan = (
 	messages: SessionMessage[],
 	previous: SessionCompaction | null,
 	keepRecentTokens: number,
-	estimateTokens: (messages: readonly SessionMessage[]) => number
+	estimateTokens: (messages: readonly SessionMessage[]) => number,
+	protectedMessageIds: readonly SessionMessage["id"][] = []
 ): { cutPoint: CutPoint; summarySpan: SessionMessage[] } => {
 	const previousIndex = isNull(previous)
 		? -1
@@ -1025,11 +1255,35 @@ const chooseCompactionSpan = (
 	const selectedMessages = previousSplitApplied
 		? applyDurableSplitBoundary(messages.slice(selectionStart), previous)
 		: messages.slice(selectionStart);
-	const selectedCutPoint = chooseCutPoint(
-		selectedMessages,
-		Math.max(1, keepRecentTokens),
-		estimateTokens
+	const protectedIds = new Set(protectedMessageIds);
+	const protectedStart = selectedMessages.findIndex((message) =>
+		protectedIds.has(message.id)
 	);
+	if (
+		protectedIds.size > 0 &&
+		(protectedStart < 0 ||
+			[...protectedIds].some(
+				(id) => !selectedMessages.some((message) => message.id === id)
+			))
+	) {
+		throw new SessionCompactionError(
+			"invalid-boundary",
+			"The protected continuation checkpoint is missing from compaction history."
+		);
+	}
+	const selectedCutPoint =
+		protectedStart < 0
+			? chooseCutPoint(
+					selectedMessages,
+					Math.max(1, keepRecentTokens),
+					estimateTokens
+				)
+			: chooseCheckpointCutPoint(
+					selectedMessages,
+					protectedStart,
+					keepRecentTokens,
+					estimateTokens
+				);
 	const cutPoint: CutPoint = {
 		...selectedCutPoint,
 		...(previousSplitApplied ? { previousSplitApplied: true } : {}),
@@ -1059,6 +1313,9 @@ const generateCompactionSummary = async (
 	let generated: SummaryGeneratorResult;
 	try {
 		generated = await summaryGenerator(input);
+		if (generated.usage !== undefined) {
+			await input.reportUsage?.(generated.usage);
+		}
 	} catch (error) {
 		if (input.signal?.aborted) {
 			throw new SessionCompactionError(
@@ -1084,8 +1341,250 @@ const generateCompactionSummary = async (
 	return generated;
 };
 
+const isExpectedCompactionCancellation = (error: unknown): boolean =>
+	error instanceof SessionCompactionError && error.code === "cancelled";
+
+/** Characters per output token the context estimator assumes. */
+const SUMMARY_CHARACTERS_PER_TOKEN = 4;
+
+/**
+ * A Plugin-supplied summary still has to fit the same output budget as a
+ * generated one; it never bypasses the host's reduction or persistence checks.
+ */
+const validateLifecycleSummary = (
+	summary: string,
+	{ maxOutputTokens }: { maxOutputTokens: number }
+): SummaryGeneratorResult => {
+	const text = summary.trim();
+	if (text.length === 0) {
+		throw new SessionCompactionError(
+			"summary-failed",
+			"The Plugin compaction summary was empty."
+		);
+	}
+	const budgetCharacters = maxOutputTokens * SUMMARY_CHARACTERS_PER_TOKEN;
+	if (text.length > budgetCharacters) {
+		throw new SessionCompactionError(
+			"summary-failed",
+			`The Plugin compaction summary exceeds its ${maxOutputTokens} output-token budget; shorten it or configure a larger summary budget.`
+		);
+	}
+	return { text };
+};
+
+const reportSummaryUsage = (
+	input: CompactSessionInput,
+	attemptId: SessionUsageEntryId
+): SummaryGeneratorInput["reportUsage"] => {
+	const recordUsage = input.recordSummaryUsage;
+	if (recordUsage === undefined) {
+		return;
+	}
+	return (usage) =>
+		recordUsage({
+			id: attemptId,
+			model: input.summaryModel ?? input.model,
+			usage,
+		});
+};
+
+const sumKnownUsageField = (
+	usages: readonly SessionMessageUsage[],
+	key:
+		| "cacheReadTokens"
+		| "cacheWriteTokens"
+		| "reasoningTokens"
+		| "totalTokens"
+): number | undefined => {
+	if (usages.some((usage) => usage[key] === undefined)) {
+		return;
+	}
+	return usages.reduce((total, usage) => total + (usage[key] ?? 0), 0);
+};
+
+const aggregateSummaryUsage = (
+	results: readonly SummaryGeneratorResult[]
+): SessionMessageUsage | undefined => {
+	if (results.some(({ usage }) => usage === undefined)) {
+		return;
+	}
+	const usages = results.flatMap(({ usage }) =>
+		usage === undefined ? [] : [usage]
+	);
+	if (usages.length === 0) {
+		return;
+	}
+	return {
+		inputTokens: usages.reduce((total, usage) => total + usage.inputTokens, 0),
+		outputTokens: usages.reduce(
+			(total, usage) => total + usage.outputTokens,
+			0
+		),
+		...omitUndefined({
+			cacheReadTokens: sumKnownUsageField(usages, "cacheReadTokens"),
+			cacheWriteTokens: sumKnownUsageField(usages, "cacheWriteTokens"),
+			reasoningTokens: sumKnownUsageField(usages, "reasoningTokens"),
+			totalTokens: sumKnownUsageField(usages, "totalTokens"),
+		}),
+	};
+};
+
+const generateSummaryRequest = async ({
+	cutPoint,
+	estimateTokens,
+	input,
+	summaryGenerator,
+	summaryInput,
+}: {
+	cutPoint: CutPoint;
+	estimateTokens: (messages: readonly SessionMessage[]) => number;
+	input: CompactSessionInput;
+	summaryGenerator: SummaryGenerator;
+	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
+}): Promise<SummaryGeneratorResult> => {
+	const preparedRequest = prepareSummaryRequest(summaryInput);
+	const maxOutputTokens = resolveSummaryOutputBudget(
+		cutPoint,
+		input.settings,
+		estimateTokens,
+		preparedRequest.estimatedInputTokens
+	);
+	if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
+		throw new SessionCompactionError(
+			"context-still-too-large",
+			`The complete summary request leaves only ${Math.max(0, maxOutputTokens)} output tokens, below the ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS}-token minimum; no partial summary was committed.`
+		);
+	}
+	const attemptReportUsage = reportSummaryUsage(
+		input,
+		toSessionUsageEntryId(randomUUIDv7())
+	);
+	return generateCompactionSummary(summaryGenerator, {
+		...summaryInput,
+		maxOutputTokens,
+		preparedRequest,
+		...omitUndefined({ reportUsage: attemptReportUsage }),
+	});
+};
+
+const splitTurnSummarySpan = (
+	summarySpan: readonly SessionMessage[]
+):
+	| Readonly<{
+			history: readonly SessionMessage[];
+			turnPrefix: readonly SessionMessage[];
+	  }>
+	| undefined => {
+	const assistantIndex = summarySpan.findLastIndex(
+		({ role }) => role === "assistant"
+	);
+	if (assistantIndex !== summarySpan.length - 1) {
+		return;
+	}
+	const userIndex = summarySpan.findLastIndex(
+		(message, index) =>
+			index < assistantIndex &&
+			message.role === "user" &&
+			isUndefined(message.metadata?.joinedTurnId)
+	);
+	if (userIndex < 0) {
+		return;
+	}
+	return {
+		history: summarySpan.slice(0, userIndex),
+		turnPrefix: summarySpan.slice(userIndex),
+	};
+};
+
+const produceCompactionSummary = async ({
+	cutPoint,
+	estimateTokens,
+	input,
+	lifecycleSummary,
+	summaryGenerator,
+	summaryInput,
+	summarySpan,
+}: {
+	cutPoint: CutPoint;
+	estimateTokens: (messages: readonly SessionMessage[]) => number;
+	input: CompactSessionInput;
+	lifecycleSummary: string | undefined;
+	summaryGenerator: SummaryGenerator | undefined;
+	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
+	summarySpan: readonly SessionMessage[];
+}): Promise<SummaryGeneratorResult> => {
+	if (isNonEmptyString(lifecycleSummary)) {
+		return validateLifecycleSummary(lifecycleSummary, {
+			maxOutputTokens: resolveLifecycleSummaryBudget(input.settings),
+		});
+	}
+	const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
+	if (selectedSummaryGenerator === undefined) {
+		throw new SessionCompactionError(
+			"summary-failed",
+			"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
+		);
+	}
+	if (cutPoint.firstKeptAssistantPartIndex !== undefined) {
+		const split = splitTurnSummarySpan(summarySpan);
+		if (split !== undefined) {
+			const historyResult =
+				split.history.length > 0
+					? await generateSummaryRequest({
+							cutPoint,
+							estimateTokens,
+							input,
+							summaryGenerator: selectedSummaryGenerator,
+							summaryInput: {
+								...summaryInput,
+								serializedMessages: serializeMessagesForCompaction(
+									split.history
+								),
+							},
+						})
+					: undefined;
+			const turnPrefixResult = await generateSummaryRequest({
+				cutPoint,
+				estimateTokens,
+				input,
+				summaryGenerator: selectedSummaryGenerator,
+				summaryInput: omitUndefined({
+					...summaryInput,
+					previousSummary: undefined,
+					serializedMessages: serializeMessagesForCompaction(split.turnPrefix),
+				}),
+			});
+			const historyText =
+				historyResult?.text ??
+				summaryInput.previousSummary?.text ??
+				"No prior history.";
+			const requestResults =
+				historyResult === undefined
+					? [turnPrefixResult]
+					: [historyResult, turnPrefixResult];
+			return {
+				text: `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`,
+				...omitUndefined({
+					usage: aggregateSummaryUsage(requestResults),
+				}),
+			};
+		}
+	}
+	return generateSummaryRequest({
+		cutPoint,
+		estimateTokens,
+		input,
+		summaryGenerator: selectedSummaryGenerator,
+		summaryInput: {
+			...summaryInput,
+			serializedMessages: serializeMessagesForCompaction(summarySpan),
+		},
+	});
+};
+
 export const createSessionCompaction = ({
 	attachmentStore,
+	lifecycle,
 	store,
 	summaryGenerator,
 	estimateTokens = estimateCompactionTokens,
@@ -1104,6 +1603,7 @@ export const createSessionCompaction = ({
 		cutPoint,
 		entryId,
 		estimateTokens: estimate,
+		fileOperations,
 		focus,
 		model,
 		now: nowFn,
@@ -1121,6 +1621,7 @@ export const createSessionCompaction = ({
 		cutPoint: CutPoint;
 		entryId: CompactionId;
 		estimateTokens: (messages: readonly SessionMessage[]) => number;
+		fileOperations?: CompactionFileOperations;
 		focus?: string;
 		model: ProviderModelSelection;
 		now: () => Date;
@@ -1143,6 +1644,7 @@ export const createSessionCompaction = ({
 			cutPoint,
 			entryId,
 			estimateTokens: estimate,
+			fileOperations,
 			focus,
 			model,
 			now: nowFn,
@@ -1153,8 +1655,12 @@ export const createSessionCompaction = ({
 			trigger,
 			thinkingLevel,
 		});
+		const currentMessages =
+			previous && !messages.some(isCompactionSummaryMessage)
+				? rebuildActiveMessages(messages, previous)
+				: messages;
 		const estimatedTokensBefore = estimate(
-			projectMessagesForEstimate(messages, settings)
+			projectMessagesForEstimate(currentMessages, settings)
 		);
 		if (entryInput.estimatedTokensAfter >= estimatedTokensBefore) {
 			throw new SessionCompactionError(
@@ -1214,45 +1720,57 @@ export const createSessionCompaction = ({
 			externalizedMessages,
 			previous,
 			input.settings.keepRecentTokens,
-			estimateTokens
+			estimateTokens,
+			input.protectedMessageIds
 		);
-		const maxOutputTokens = resolveSummaryOutputBudget(
-			cutPoint,
-			input.settings,
-			estimateTokens
-		);
-		if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
-			throw new SessionCompactionError(
-				"not-needed",
-				`Compaction summary budget is ${maxOutputTokens} tokens; at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} are required.`
-			);
-		}
-		const attachmentMetadata = attachmentStore
-			? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
-			: undefined;
 		const focus = normalizeFocus(input.focus);
-		const generatorInput: SummaryGeneratorInput = {
+		const summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {
 			...omitUndefined({
 				thinkingLevel: input.thinkingLevel,
 				focus,
 			}),
-			model: input.model,
+			model: input.summaryModel ?? input.model,
+			contextWindowTokens:
+				input.settings.summaryContextLimit ??
+				input.settings.modelContextLimit ??
+				DEFAULT_CONTEXT_WINDOW_TOKENS,
 			previousSummary: previous?.summary,
 			serializedMessages: serializeMessagesForCompaction(summarySpan),
-			maxOutputTokens,
 			signal: input.signal,
 		};
-		const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
-		if (selectedSummaryGenerator === undefined) {
-			throw new SessionCompactionError(
-				"summary-failed",
-				"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
-			);
+		const attachmentMetadata = attachmentStore
+			? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
+			: undefined;
+		const fileOperations = collectCumulativeFileOperations({
+			messages: summarySpan,
+			previous: previous?.summary.fileOperations,
+		});
+		const lifecycleContext: CompactionLifecycleContext = {
+			trigger: input.trigger,
+			sessionId: input.session.sessionId,
+			...omitUndefined({
+				focus,
+				signal: input.signal,
+				turnId: input.turnId,
+			}),
+		};
+		// The hook decides before any generation budget is spent, so a
+		// Plugin-supplied handoff never needs a usable summary target.
+		const decision = await lifecycle?.before?.(lifecycleContext);
+		if (isNonEmptyString(decision?.cancel)) {
+			throw new SessionCompactionError("cancelled", decision.cancel);
 		}
-		const generated = await generateCompactionSummary(
-			selectedSummaryGenerator,
-			generatorInput
-		);
+		assertNotAborted(input.signal);
+		const summaryWasSuppliedByPlugin = isNonEmptyString(decision?.summary);
+		const generated = await produceCompactionSummary({
+			cutPoint,
+			estimateTokens,
+			input,
+			lifecycleSummary: decision?.summary,
+			summaryGenerator,
+			summaryInput,
+			summarySpan,
+		});
 		assertNotAborted(input.signal);
 		const { activeMessages, entry } = await persistCompactionEntry({
 			assertAuthority: input.assertAuthority,
@@ -1262,16 +1780,30 @@ export const createSessionCompaction = ({
 			cutPoint,
 			entryId: createId(),
 			estimateTokens,
+			fileOperations,
 			focus,
-			model: input.model,
+			model: input.summaryModel ?? input.model,
 			now,
 			previous,
 			settings: input.settings,
 			summarySpan,
 			summarization: generated,
 			trigger: input.trigger,
-			thinkingLevel: input.thinkingLevel,
+			thinkingLevel: summaryWasSuppliedByPlugin
+				? undefined
+				: input.thinkingLevel,
 		});
+		try {
+			await lifecycle?.completed?.(entry, lifecycleContext);
+		} catch (error) {
+			// The entry is already durable: a lifecycle observer cannot undo it.
+			void logger.warn("Compaction lifecycle observer failed", {
+				cause: getErrorMessage(error, String(error)),
+				operation: "session.compaction",
+				phase: "completed",
+				trigger: input.trigger,
+			});
+		}
 		return { activeMessages, entry };
 	};
 
@@ -1292,7 +1824,32 @@ export const createSessionCompaction = ({
 			);
 		}
 		let operation: Promise<CompactSessionResult>;
-		operation = compactNow(input).finally(() => {
+		operation = (async () => {
+			try {
+				return await compactNow(input);
+			} catch (error) {
+				if (
+					lifecycle?.failed !== undefined &&
+					!isExpectedCompactionCancellation(error)
+				) {
+					try {
+						await lifecycle.failed({
+							error,
+							trigger: input.trigger,
+							sessionId: session,
+							...omitUndefined({
+								focus: normalizeFocus(input.focus),
+								signal: input.signal,
+								turnId: input.turnId,
+							}),
+						});
+					} catch {
+						// A failure observer cannot mask the compaction failure it observed.
+					}
+				}
+				throw error;
+			}
+		})().finally(() => {
 			if (inFlight.get(session)?.operation === operation) {
 				inFlight.delete(session);
 			}
@@ -1303,13 +1860,16 @@ export const createSessionCompaction = ({
 	return {
 		compact,
 		getInFlight: (sessionId) => inFlight.get(sessionId)?.operation ?? null,
-		needsCompaction: (messages, settings) => {
+		needsCompaction: (messages, settings, model) => {
 			if (!settings.enabled || isNull(settings.thresholdTokens)) {
 				return false;
 			}
 			return (
-				estimateSessionContextTokens(messages, estimateTokens).tokens >=
-				settings.thresholdTokens
+				estimateSessionContextTokensForThreshold(
+					messages,
+					estimateTokens,
+					model
+				).tokens >= settings.thresholdTokens
 			);
 		},
 	};

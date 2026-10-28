@@ -669,6 +669,83 @@ test("logs unexpected submission preparation failures without user content", asy
 	});
 });
 
+test("compacts against a smaller selected model before dispatching its provider request", async () => {
+	const previousModel: ProviderModelSelection = {
+		modelId: modelId("large-context"),
+		providerId: "large-provider",
+	};
+	const selectedModel: ProviderModelSelection = {
+		modelId: modelId("small-context"),
+		providerId: "small-provider",
+	};
+	const requestOrder: string[] = [];
+	const measuredUsage = { inputTokens: 90_000, outputTokens: 100 };
+	const initialTranscript: SessionMessage[] = [
+		message("u0", "earlier request"),
+		{ ...message("a0", "earlier answer"), role: "assistant" },
+		message("u1", "previous request"),
+		{
+			...message("a1", "previous answer"),
+			metadata: {
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "large-model-step",
+					usage: measuredUsage,
+				},
+				model: previousModel,
+				usage: measuredUsage,
+			},
+			role: "assistant",
+		},
+	];
+	const compaction = createCompactionModule(async () => {
+		requestOrder.push("compaction");
+		return { text: "handoff" };
+	});
+	const engine = createTestAgentSession(initialTranscript, compaction, {
+		resolveCompactionSettings: async (model) => {
+			const usesSelectedModel = model?.providerId === selectedModel.providerId;
+			return fromPartial<ResolvedCompactionSettings>({
+				autoAvailable: true,
+				enabled: true,
+				keepRecentTokens: 1,
+				maxMediaAttachments: 4,
+				maxMediaBytes: 1024,
+				maxMediaTokens: 128,
+				modelContextLimit: usesSelectedModel ? 100_000 : 1_000_000,
+				overflowRecoveryAvailable: false,
+				reserveTokens: 20_000,
+				thresholdTokens: usesSelectedModel ? 80_000 : 800_000,
+			});
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async ({ messages }) => {
+				requestOrder.push("conversation request");
+				expect(messages.map(({ id }) => id)).toContain(
+					compactionSummaryMessageId(compactionId("entry-compacted"))
+				);
+				return {};
+			},
+		},
+	});
+
+	try {
+		const outcome = await engine.send(
+			sendInput({
+				model: selectedModel,
+				sessionModel: selectedModel,
+				userText: "continue with the smaller model",
+			})
+		);
+
+		expect(outcome).toEqual({ rejected: false });
+		expect(requestOrder).toEqual(["compaction", "conversation request"]);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
+
 test("keeps the admission turn ID on preparation-triggered threshold diagnostics", async () => {
 	await withLoggerHome(async (home) => {
 		const turnId = agentTurnId("threshold-preparation-turn");
@@ -3496,13 +3573,14 @@ test("fails delivered steering when overflow recovery is refused", async () => {
 	}
 });
 
-test("does not recover a context overflow after a completed Tool Call", async () => {
+test("recovers a context overflow after a completed Tool Call without replaying it", async () => {
 	const toolId = toolCallId("overflow-completed-tool");
-	let turnStarted = false;
+	const continuation = Promise.withResolvers<readonly SessionMessage[]>();
+	let turns = 0;
 	let recoveryTargetRequested = false;
-	const engine = createOverflowTestSession([], {
+	const engine = createOverflowTestSession(compactionHistory(), {
 		resolveCompactionSettings: async () => {
-			if (turnStarted) {
+			if (turns > 0) {
 				recoveryTargetRequested = true;
 			}
 			return overflowRecoverySettings();
@@ -3510,7 +3588,11 @@ test("does not recover a context overflow after a completed Tool Call", async ()
 		turnRunner: {
 			...overflowTurnRunner,
 			run: async (request) => {
-				turnStarted = true;
+				turns += 1;
+				if (turns > 1) {
+					continuation.resolve(request.messages);
+					return { error: overflowFailure() };
+				}
 				reportTurnStarted(request);
 				request.callbacks.onEvent({
 					input: { path: "file.txt" },
@@ -3539,18 +3621,123 @@ test("does not recover a context overflow after a completed Tool Call", async ()
 	await expect(
 		engine.send(sendInput({ userText: "read a file" }))
 	).resolves.toEqual({ rejected: false });
+	const continuedMessages = await continuation.promise;
 
-	const completedTool = engine
+	const completedTools = engine
 		.getSnapshot()
 		.context.flatMap(({ parts }) => parts)
-		.find((part) => part.type === "tool-read" && part.toolCallId === toolId);
-	expect(completedTool).toMatchObject({
-		state: "output-available",
-		toolCallId: toolId,
-	});
-	expect(recoveryTargetRequested).toBe(false);
-	expect(engine.getSnapshot().compactions).toEqual([]);
+		.filter((part) => part.type === "tool-read" && part.toolCallId === toolId);
+	// The successful Tool Call survives recovery once, and the continuation
+	// resumes the settled batch instead of answering the prompt again.
+	expect(completedTools).toHaveLength(1);
+	expect(completedTools[0]).toMatchObject({ state: "output-available" });
+	expect(recoveryTargetRequested).toBe(true);
+	expect(
+		engine.getSnapshot().compactions.map(({ trigger }) => trigger)
+	).toEqual(["overflow"]);
+	const serialized = JSON.stringify(continuedMessages);
+	expect(serialized).toContain("completed side effect");
+	expect(serialized).not.toContain("read a file");
 	await engine.internalPort.shutdown();
+});
+
+test("reports a continuation turn failure after the overflow compaction is committed", async () => {
+	const prompts: string[] = [];
+	let runCount = 0;
+	const engine = createOverflowTestSession(compactionHistory(), {
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async (request) => {
+				runCount += 1;
+				prompts.push(promptOfTurn(request.messages));
+				reportTurnStarted(request);
+				return runCount === 1
+					? { error: overflowFailure() }
+					: { error: new Error("continuation provider failure") };
+			},
+		},
+	});
+
+	try {
+		await expect(
+			engine.send(sendInput({ userText: "original request" }))
+		).resolves.toEqual({ rejected: false });
+		for (
+			let attempt = 0;
+			engine.internalPort.hasPendingWork() && attempt < 100;
+			attempt += 1
+		) {
+			await Bun.sleep(0);
+		}
+		expect(engine.internalPort.hasPendingWork()).toBe(false);
+		expect(runCount).toBe(2);
+		const error = engine.getSnapshot().compactionError;
+		if (error === null) {
+			throw new Error("The failed continuation was not reported.");
+		}
+
+		expect(error).toMatchObject({ code: "continuation-failed" });
+		expect(error.message).toContain("saved a compacted Session Context");
+		expect(error.message).toContain("No new session was created");
+		expect(error.message).toContain("completed tool effects were not replayed");
+		expect(error.message).toContain("do not resubmit the original request");
+		expect(
+			engine.getSnapshot().compactions.map(({ trigger }) => trigger)
+		).toEqual(["overflow"]);
+		expect(prompts).toEqual(["original request", "original request"]);
+		expect(runCount).toBe(2);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
+
+test("reports a pre-start continuation failure as refused after overflow compaction", async () => {
+	const reason = "continuation model unavailable";
+	let runCount = 0;
+	const engine = createOverflowTestSession(compactionHistory(), {
+		assertProviderModelSelection: () => {
+			if (runCount > 0) {
+				throw new Error(reason);
+			}
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async (request) => {
+				runCount += 1;
+				reportTurnStarted(request);
+				return { error: overflowFailure() };
+			},
+		},
+	});
+
+	try {
+		await expect(
+			engine.send(sendInput({ userText: "original request" }))
+		).resolves.toEqual({ rejected: false });
+		for (
+			let attempt = 0;
+			engine.internalPort.hasPendingWork() && attempt < 100;
+			attempt += 1
+		) {
+			await Bun.sleep(0);
+		}
+		expect(engine.internalPort.hasPendingWork()).toBe(false);
+		expect(runCount).toBe(1);
+		expect(
+			engine.getSnapshot().compactions.map(({ trigger }) => trigger)
+		).toEqual(["overflow"]);
+		const error = engine.getSnapshot().compactionError;
+		if (error === null) {
+			throw new Error("The refused continuation was not reported.");
+		}
+
+		expect(error).toMatchObject({ code: "continuation-refused" });
+		expect(error.message).toContain("saved a compacted Session Context");
+		expect(error.message).toContain("continuation was refused");
+		expect(error.message).toContain(reason);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
 });
 
 test("does not run overflow recovery for an unrelated runtime failure", async () => {
@@ -3868,11 +4055,7 @@ test("refuses overflow continuation while a public compaction is active", async 
 				manualCompaction = engine.compact({ model, trigger: "manual" });
 			}
 			const error = snapshot.compactionError;
-			if (
-				error?.message.includes(
-					"could not continue the compacted Session Context"
-				)
-			) {
+			if (error?.message.includes("saved a compacted Session Context")) {
 				continuationRefused.resolve(error);
 			}
 		});
@@ -3954,7 +4137,7 @@ test("logs failed overflow compaction without continuation or payloads", async (
 			await engine.send(sendInput({ userText: "private overflow request" }));
 			const failure = await compactionError.promise;
 
-			expect(failure.message).toContain("could not compact the session");
+			expect(failure.message).toContain("could not compact this session");
 			expect(engine.getSnapshot().compactions).toEqual([]);
 			expect(runCount).toBe(1);
 

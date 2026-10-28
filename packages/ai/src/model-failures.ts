@@ -81,13 +81,13 @@ export const modelFailureSchema = z
 	.strict();
 
 const CONTEXT_OVERFLOW_PATTERN =
-	/(context[_ -]?(?:length|limit|window|size)|(?:maximum|max)[^\n]{0,48}(?:context|tokens?)|(?:prompt|input)[^\n]{0,32}(?:too large|too long|exceed)|too many tokens|token limit exceeded|request too large)/iu;
+	/(context[_ -]?(?:length|limit|window|size)|context(?: is)? too (?:large|long)|(?:maximum|max)[^\n]{0,48}(?:context|tokens?)|(?:prompt|input)[^\n]{0,32}(?:too large|too long|exceed)|maximum prompt length is \d+|exceeded model token limit|range of input length should be|too many tokens|token limit exceeded|request[_ -]too[_ -]large)/iu;
 const AUTHENTICATION_PATTERN =
 	/(?:(?:invalid|missing|expired|revoked|incorrect)[^\n]{0,32}(?:api[_ -]?key|token|credential)|authentication|unauthenticated|401\b)/iu;
 const AUTHORIZATION_PATTERN =
 	/(?:forbidden|not authorized|permission denied|access denied|403\b)/iu;
 const RATE_LIMIT_PATTERN =
-	/(?:rate[_ -]?limit|too many requests|quota exceeded|429\b)/iu;
+	/(?:rate[_ -]?limit|too many requests|too many tokens? per minute|tokens? per minute limit|quota exceeded|throttling error|429\b)/iu;
 const INVALID_REQUEST_PATTERN =
 	/(?:invalid request|bad request|malformed request|unsupported parameter|400\b)/iu;
 const NETWORK_PATTERN =
@@ -153,15 +153,12 @@ const getRetryAfterMs = (chain: readonly unknown[]): number | undefined => {
 };
 
 const getDiagnosticText = (value: unknown): string => {
-	if (isError(value)) {
-		return value.message;
-	}
-	const message = getProperty(value, "message");
-	if (isString(message)) {
-		return message;
-	}
+	const message = isError(value)
+		? value.message
+		: getProperty(value, "message");
 	const responseBody = getProperty(value, "responseBody");
-	return isString(responseBody) ? responseBody : "";
+	const providerCode = getProperty(value, "providerCode");
+	return [message, responseBody, providerCode].filter(isString).join("\n");
 };
 
 const getCombinedDiagnosticText = (chain: readonly unknown[]): string =>
@@ -195,11 +192,11 @@ const getFailureCode = (
 	if (statusCode === 403 || AUTHORIZATION_PATTERN.test(text)) {
 		return "authorization";
 	}
-	if (CONTEXT_OVERFLOW_PATTERN.test(text)) {
-		return "context-overflow";
-	}
 	if (statusCode === 429 || RATE_LIMIT_PATTERN.test(text)) {
 		return "rate-limited";
+	}
+	if (CONTEXT_OVERFLOW_PATTERN.test(text)) {
+		return "context-overflow";
 	}
 	if (
 		chain.some(

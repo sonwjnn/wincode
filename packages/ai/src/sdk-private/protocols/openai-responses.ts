@@ -2,10 +2,15 @@ import { isObjectLike } from "@wincode/utils";
 import { normalizeModelUsage } from "../../model-usage.ts";
 import { readSseEvents } from "../sse.ts";
 import {
+	openAiResponsesCompletion,
+	unknownGenerationCompletion,
+} from "./generation-completion.ts";
+import {
 	openAIPromptCacheControlsForRequest,
 	openAIPromptCacheStrategyFor,
 } from "./openai-prompt-cache.ts";
 import type {
+	ProtocolGenerationCompletion,
 	ProtocolPromptMessage,
 	ProtocolPromptPart,
 	ProtocolStreamPart,
@@ -255,6 +260,7 @@ const openAiUsage = (usageValue: unknown): unknown => {
 
 type OpenAiResponseState = {
 	completed: boolean;
+	completion: ProtocolGenerationCompletion;
 	continuation: unknown;
 	emittedToolCalls: Set<string>;
 	usage: unknown;
@@ -334,7 +340,12 @@ const openAiResponseEventParts = function* (
 	}
 	if (type === "response.completed" || type === "response.incomplete") {
 		const responseData = record(value.response);
+		const incompleteDetails = record(responseData?.incomplete_details);
 		state.completed = true;
+		state.completion = openAiResponsesCompletion(
+			type === "response.completed" ? "completed" : "incomplete",
+			stringValue(incompleteDetails?.reason)
+		);
 		state.continuation = Array.isArray(responseData?.output)
 			? responseData.output
 			: undefined;
@@ -348,6 +359,7 @@ const openAiResponseStream = async function* (
 ): AsyncIterable<ProtocolStreamPart> {
 	const state: OpenAiResponseState = {
 		completed: false,
+		completion: unknownGenerationCompletion(),
 		continuation: undefined,
 		emittedToolCalls: new Set<string>(),
 		usage: undefined,
@@ -372,6 +384,7 @@ const openAiResponseStream = async function* (
 	const normalized = normalizeModelUsage(state.usage);
 	yield {
 		type: "finish",
+		completion: state.completion,
 		...(normalized ? { usage: normalized } : {}),
 		...(state.continuation === undefined
 			? {}

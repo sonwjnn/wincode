@@ -1,7 +1,7 @@
 import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionMessageId } from "@wincode/agent-core";
-import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
+import type { ThinkingSelection } from "@wincode/ai";
 import {
 	getErrorMessage,
 	isNull,
@@ -23,7 +23,6 @@ import type { InteractiveProviderController } from "@/modules/providers/interact
 import {
 	isSameProviderModelIdentity,
 	normalizeProviderModelSelection,
-	normalizeProviderModelThinkingSelection,
 	type PluginProviderOwnerRegistration,
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
@@ -36,6 +35,7 @@ import {
 } from "@/modules/sessions/message";
 import { useSettingsHubDialog } from "@/modules/settings";
 import type { EditMode } from "@/modules/tools";
+import { useConfig } from "@/shared/config/config-provider";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
@@ -277,6 +277,7 @@ export function SessionView({
 		[host]
 	);
 	const dialog = useDialog();
+	const { snapshot: configSnapshot } = useConfig();
 	const sessionStore = useMemo(() => getSessionStore(), []);
 	const [editMode, setEditMode] = useState<EditMode>("hashline");
 	const editModeLoadRevisionRef = useRef(0);
@@ -662,14 +663,9 @@ export function SessionView({
 							? {}
 							: { thinkingLevel: effective.thinkingLevel };
 					const compactWithProviderModel = async (
-						selection: ProviderModelSelection,
-						providerModel: ProviderModel
+						selection: ProviderModelSelection
 					): Promise<void> => {
-						const normalizedThinking = normalizeProviderModelThinkingSelection(
-							providerModel,
-							thinkingSelection
-						);
-						await compact(focus, selection, normalizedThinking);
+						await compact(focus, selection, thinkingSelection);
 					};
 					const availableModels =
 						(await host.providerController?.getAvailableModels(
@@ -680,10 +676,7 @@ export function SessionView({
 						isSameProviderModelIdentity(providerModel, effective.model)
 					);
 					if (currentProviderModel !== undefined) {
-						await compactWithProviderModel(
-							effective.model,
-							currentProviderModel
-						);
+						await compactWithProviderModel(effective.model);
 						return true;
 					}
 					const providerController = host.providerController;
@@ -699,10 +692,10 @@ export function SessionView({
 							<ProviderModelsDialogContent
 								controller={providerController}
 								currentModel={effective.model}
-								onSelectModel={async (providerModel, selection) => {
+								onSelectModel={async (_providerModel, selection) => {
 									host.assertCurrentPluginProviderRegistrationSnapshot();
 									try {
-										await compactWithProviderModel(selection, providerModel);
+										await compactWithProviderModel(selection);
 									} catch (error) {
 										show({
 											message: getErrorMessage(error, "Compaction failed."),
@@ -998,6 +991,7 @@ export function SessionView({
 					activeMessages={activeMessages}
 					cacheWarmingStatus={cacheWarmingStatus}
 					compactions={snapshot.compactions}
+					contextSnapshot={configSnapshot}
 					draftKey={sessionId}
 					error={error}
 					isBusy={isBusy}

@@ -57,19 +57,15 @@ export function SessionUsageBar({
 	const { colors } = useTheme();
 	const tokensText = formatModelTokenCount(summary.contextTokens);
 	const contextPercent =
-		isNull(summary.contextPercent) ||
-		isNull(summary.contextLimit) ||
-		summary.contextLimit <= 0
-			? null
-			: Math.min(
-					100,
-					Math.max(0, (summary.contextTokens / summary.contextLimit) * 100)
-				);
+		summary.contextLimit > 0
+			? Math.max(0, (summary.contextTokens / summary.contextLimit) * 100)
+			: null;
 	const percentColor = colors[contextColorForPercent(contextPercent)];
+	const estimateMarker = summary.contextSource === "measured" ? "" : "~";
 	const contextText =
-		contextPercent === null || isNull(summary.contextLimit)
+		contextPercent === null
 			? tokensText
-			: `${contextPercent.toFixed(1)}%/${formatModelTokenCount(
+			: `${estimateMarker}${contextPercent.toFixed(1)}%/${formatModelTokenCount(
 					summary.contextLimit
 				).toLowerCase()}`;
 	const tokenStats = tokenStatsForSummary(summary);

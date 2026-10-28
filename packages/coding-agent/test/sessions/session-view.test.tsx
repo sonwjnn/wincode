@@ -28,9 +28,17 @@ import type {
 	ProviderCollection,
 	ProviderModel,
 	ThinkingLevel,
+	ThinkingSelection,
 } from "@wincode/ai";
 import { isNull, isUndefined } from "@wincode/utils";
-import { act, useCallback, useEffect, useRef, useState } from "react";
+import {
+	act,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
@@ -80,7 +88,11 @@ import type {
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SessionView } from "@/modules/sessions/ui/views/session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
-import { createConfigStore } from "@/shared/config/config-store";
+import {
+	type ConfigRuntime,
+	type ConfigStore,
+	createConfigStore,
+} from "@/shared/config/config-store";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import {
 	KeyboardLayerProvider,
@@ -126,6 +138,7 @@ type FakeSessionRun = {
 let activeFakeSessionRun: FakeSessionRun | null = null;
 let fakeCacheWarmCancellations = 0;
 let fakeCompactionModels: ProviderModelSelection[] = [];
+let fakeCompactionThinkingSelections: (ThinkingSelection | undefined)[] = [];
 /** The compositions the view accepted while the turn ran, in order. */
 let fakeWaitingTexts: string[] = [];
 /** The same messages' full compositions, so a round trip can be asserted. */
@@ -370,8 +383,12 @@ const fakeUseAgentSessionModule: Pick<
 			cacheWarmingStatus: "idle",
 			cancel: () => undefined,
 			cancelCompaction: async () => [],
-			compact: async (_focus, selection) => {
+			compact: async (_focus, selection, thinkingSelection) => {
 				fakeCompactionModels = [...fakeCompactionModels, selection];
+				fakeCompactionThinkingSelections = [
+					...fakeCompactionThinkingSelections,
+					thinkingSelection,
+				];
 				return fromPartial<CompactSessionResult>({
 					activeMessages: [],
 					entry: {},
@@ -585,6 +602,7 @@ afterEach(() => {
 	activeFakeSessionRun = null;
 	fakeCacheWarmCancellations = 0;
 	fakeCompactionModels = [];
+	fakeCompactionThinkingSelections = [];
 	fakeQueuedSeed = [];
 	fakeRunCompositions = [];
 	fakeRunInputs = [];
@@ -743,6 +761,69 @@ test("manual compaction replaces an unavailable Agent pin only with an available
 
 		expect(fakeCompactionModels).toEqual([
 			{ modelId: modelId("replacement-model"), providerId: "openai" },
+		]);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test("manual compaction preserves the Session thinking level when the summary model cannot honor it", async () => {
+	const summaryModel: ProviderModel = {
+		modelId: "low-only-summary-model",
+		protocolId: "fake-provider",
+		providerId: "openai",
+		reasoningEfforts: ["low"],
+	};
+	const summaryCandidate = providerModelCandidate(summaryModel);
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => [summaryModel],
+		getAvailableProviderModelSelectionCandidates: async () => [
+			summaryCandidate,
+		],
+		getKnownModels: async () => [],
+		selectProviderModelSelectionCandidate: async <Result,>(
+			candidate: ProviderModelSelectionCandidate,
+			action: (
+				model: ProviderModel,
+				selection: ProviderModelSelection
+			) => Result | Promise<Result>
+		): Promise<Result> => await action(candidate.model, candidate.selection),
+	});
+	const { setup } = await renderSessionView({
+		height: 30,
+		initialModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+		initialThinkingLevel: "high",
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitForFrame((frame) =>
+			frame.includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () =>
+			setup.mockInput.typeText("preserve the active thinking level")
+		);
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitForFrame((frame) =>
+			frame.includes("Choose Model for Compaction")
+		);
+		await setup.waitForFrame((frame) =>
+			frame.includes("low-only-summary-model")
+		);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitFor(() => fakeCompactionModels.length === 1);
+
+		expect(fakeCompactionModels).toEqual([
+			{ modelId: modelId("low-only-summary-model"), providerId: "openai" },
+		]);
+		expect(fakeCompactionThinkingSelections).toEqual([
+			{ thinkingLevel: "high" },
 		]);
 	} finally {
 		setup.renderer.destroy();
@@ -1809,13 +1890,34 @@ describe("SessionView initial submission", () => {
 	});
 });
 
+type MutableConfigProviderControl = {
+	replace: (config: ConfigRuntime) => void;
+};
+
+const MutableConfigProvider = ({
+	children,
+	control,
+	initial,
+}: {
+	children: ReactNode;
+	control: MutableConfigProviderControl;
+	initial: ConfigRuntime;
+}) => {
+	const [config, setConfig] = useState(initial);
+	control.replace = (next) => setConfig(next);
+	return <ConfigProvider value={config}>{children}</ConfigProvider>;
+};
+
 /** The provider stack one SessionView test renders under. */
 const renderSessionView = async ({
 	height,
 	initialTranscript,
 	initialAgent,
 	initialModel,
+	initialThinkingLevel,
 	configSettings,
+	configStore: providedConfigStore,
+	configProviderControl,
 	liveTranscript = initialTranscript,
 	onThinkingLevel,
 	providerController,
@@ -1827,7 +1929,10 @@ const renderSessionView = async ({
 	initialTranscript: SessionMessage[];
 	initialAgent?: AgentId;
 	initialModel?: ProviderModelSelection;
+	initialThinkingLevel?: ThinkingLevel;
 	configSettings?: Readonly<Record<string, unknown>>;
+	configStore?: ConfigStore;
+	configProviderControl?: MutableConfigProviderControl;
 	liveTranscript?: SessionMessage[];
 	onThinkingLevel?: (level: ThinkingLevel | undefined) => void;
 	providerController?: InteractiveProviderController;
@@ -1837,64 +1942,141 @@ const renderSessionView = async ({
 }) => {
 	const router = buildRouter();
 	await router.load();
-	const configStore = createTestConfigStore(configSettings);
+	const configStore =
+		providedConfigStore ?? createTestConfigStore(configSettings);
 	const workspace = process.cwd();
+	const configRuntime = { configStore, homeRoot: os.homedir(), workspace };
 	let registryIsReady = false;
 	const commandLayer = { isTop: false };
-	const setup = await testRenderWithClipboard(
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ConfigProvider
-				value={{ configStore, homeRoot: os.homedir(), workspace }}
+	const children = (
+		<ToastProvider>
+			<AgentRegistryProvider>
+				<KeyboardLayerProvider>
+					<PromptConfigProvider
+						{...(initialAgent === undefined ? {} : { initialAgent })}
+						{...(initialModel === undefined ? {} : { initialModel })}
+						{...(initialThinkingLevel === undefined
+							? {}
+							: { initialThinkingLevel })}
+					>
+						<DialogProvider>
+							<RouterContextProvider router={router}>
+								<CommandControllerProvider>
+									<SessionView
+										host={createFakeSessionHost(
+											liveTranscript,
+											providerController,
+											restoredSelection,
+											assertPluginSnapshot
+										)}
+										initialTranscript={initialTranscript}
+										sessionId={sessionId("session-1")}
+										sessionTitle="Queue a prompt"
+									/>
+									{onThinkingLevel === undefined ? null : (
+										<ThinkingLevelProbe onThinkingLevel={onThinkingLevel} />
+									)}
+									<AgentRegistryReadyProbe
+										onReady={() => {
+											registryIsReady = true;
+										}}
+									/>
+									<KeyboardLayerProbe
+										onLayer={(isCommandLayer) => {
+											commandLayer.isTop = isCommandLayer;
+										}}
+									/>
+								</CommandControllerProvider>
+							</RouterContextProvider>
+						</DialogProvider>
+					</PromptConfigProvider>
+				</KeyboardLayerProvider>
+			</AgentRegistryProvider>
+		</ToastProvider>
+	);
+	const configTree =
+		configProviderControl === undefined ? (
+			<ConfigProvider value={configRuntime}>{children}</ConfigProvider>
+		) : (
+			<MutableConfigProvider
+				control={configProviderControl}
+				initial={configRuntime}
 			>
-				<ToastProvider>
-					<AgentRegistryProvider>
-						<KeyboardLayerProvider>
-							<PromptConfigProvider
-								{...(initialAgent === undefined ? {} : { initialAgent })}
-								{...(initialModel === undefined ? {} : { initialModel })}
-							>
-								<DialogProvider>
-									<RouterContextProvider router={router}>
-										<CommandControllerProvider>
-											<SessionView
-												host={createFakeSessionHost(
-													liveTranscript,
-													providerController,
-													restoredSelection,
-													assertPluginSnapshot
-												)}
-												initialTranscript={initialTranscript}
-												sessionId={sessionId("session-1")}
-												sessionTitle="Queue a prompt"
-											/>
-											{onThinkingLevel === undefined ? null : (
-												<ThinkingLevelProbe onThinkingLevel={onThinkingLevel} />
-											)}
-											<AgentRegistryReadyProbe
-												onReady={() => {
-													registryIsReady = true;
-												}}
-											/>
-											<KeyboardLayerProbe
-												onLayer={(isCommandLayer) => {
-													commandLayer.isTop = isCommandLayer;
-												}}
-											/>
-										</CommandControllerProvider>
-									</RouterContextProvider>
-								</DialogProvider>
-							</PromptConfigProvider>
-						</KeyboardLayerProvider>
-					</AgentRegistryProvider>
-				</ToastProvider>
-			</ConfigProvider>
-		</ThemeProvider>,
+				{children}
+			</MutableConfigProvider>
+		);
+	const setup = await testRenderWithClipboard(
+		<ThemeProvider themeName={DEFAULT_THEME.name}>{configTree}</ThemeProvider>,
 		{ height, width }
 	);
 	await setup.waitFor(() => registryIsReady);
 	await flushUi(setup);
 	return { commandLayer, setup };
 };
+
+test("updates the usage-bar context window when the active ConfigStore refreshes", async () => {
+	const workspace = process.cwd();
+	const settings = { contextWindowTokens: 272_000 };
+	const currentConfigStore = createTestConfigStore(settings);
+	const transcript: SessionMessage[] = [
+		userMessage("usage-user", "review context"),
+		{
+			id: sessionMessageId("usage-assistant"),
+			metadata: {
+				agent: agentId("build"),
+				model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
+				usage: { inputTokens: 7336, outputTokens: 0 },
+				contextMeasurement: {
+					epoch: "initial",
+					stepId: "usage-step",
+					usage: { inputTokens: 7336, outputTokens: 0 },
+				},
+			},
+			parts: [{ text: "assistant response", type: "text" }],
+			role: "assistant",
+		},
+	];
+	const configProviderControl: MutableConfigProviderControl = {
+		replace: () => undefined,
+	};
+	const { setup } = await renderSessionView({
+		configProviderControl,
+		configStore: currentConfigStore,
+		height: 30,
+		initialTranscript: transcript,
+		liveTranscript: transcript,
+		width: 100,
+	});
+
+	try {
+		await setup.waitForFrame((frame) => frame.includes("2.7%/272k"));
+		await act(async () => {
+			settings.contextWindowTokens = 100_000;
+			await currentConfigStore.refreshSnapshot(workspace);
+		});
+		await setup.waitForFrame((frame) => frame.includes("7.3%/100k"));
+		await act(async () => {
+			const replacement = createTestConfigStore({
+				contextWindowTokens: 200_000,
+			});
+			await replacement.getSnapshot(workspace);
+			configProviderControl.replace({
+				configStore: replacement,
+				homeRoot: os.homedir(),
+				workspace,
+			});
+		});
+		await setup.waitForFrame((frame) => frame.includes("3.7%/200k"));
+		await act(async () => {
+			settings.contextWindowTokens = 50_000;
+			await currentConfigStore.refreshSnapshot(workspace);
+		});
+		await flushUi(setup);
+		expect(setup.captureCharFrame()).toContain("3.7%/200k");
+	} finally {
+		setup.renderer.destroy();
+	}
+});
 
 test("refreshes reasoning metadata after model discovery changes on a stable controller", async () => {
 	const model: ProviderModelSelection = {

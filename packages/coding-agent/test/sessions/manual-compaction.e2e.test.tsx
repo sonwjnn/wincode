@@ -60,6 +60,9 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 	let setup: TestRendererSetup | undefined;
 	try {
 		const rendered = await renderSession({
+			configDocument: JSON.stringify({
+				compaction: { keepRecentTokens: 2048, reserveTokens: 1024 },
+			}),
 			pricing: createE2ePricing(20_000),
 			sessionId,
 		});
