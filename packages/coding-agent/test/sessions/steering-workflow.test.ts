@@ -399,14 +399,15 @@ test("a run that throws after arming the turn is reported as a steering failure"
 	]);
 });
 
-test("a Submission that arrives after the session ended is refused for that reason", async () => {
-	// The lane checks the Session is open before it gets here, but that check can
-	// go stale across an await, so steering must refuse on its own.
+test("a retry that arrives after the session ended is refused for that reason", async () => {
+	// The lane checks the Session is open before it retries, then awaits the
+	// selection validation, so that check can go stale. Steering must refuse on
+	// its own rather than commit against a closed Session.
 	const fixture = createSteeringFixture({ closed: true });
-	const message = fixture.steeringMessage("steering-after-shutdown");
+	const message = fixture.steeringMessage("steering-after-shutdown", "failed");
 	fixture.setLane([message]);
 
-	const outcome = await fixture.workflow.runPendingMessage(message);
+	const outcome = await fixture.workflow.retryFailedMessage(message);
 
 	expect(outcome).toEqual({
 		rejected: true,
