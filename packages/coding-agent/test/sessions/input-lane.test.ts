@@ -10,8 +10,10 @@ import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import { createTestInputScheduler } from "../support/stateful-agent";
 
 /**
- * A lane state the Session could actually publish. `canDrain` is derived, not
- * chosen: every condition that stops a drain also marks the execution busy.
+ * A lane state consistent with the conditions this fixture models: `canDrain`
+ * is derived, not chosen, and holds only while nothing here is busy. Production
+ * also stops a drain while a submission transition is pending, which is not
+ * modelled because no test here publishes that state.
  */
 const laneState = (
 	overrides: Partial<SessionInputLaneSnapshot["lane"]> = {}
@@ -23,7 +25,7 @@ const laneState = (
 		submissionBusy: false,
 		...overrides,
 	};
-	return { ...base, canDrain: overrides.canDrain ?? !base.executionBusy };
+	return { ...base, canDrain: !base.executionBusy };
 };
 
 const snapshotOf = ({

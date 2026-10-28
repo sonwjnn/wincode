@@ -216,11 +216,20 @@ test("a Submission that succeeded without starting a turn is still reported as a
 		rejected: true,
 		reason: "The committed Submission did not start an Agent Turn.",
 	});
-	expect(fixture.settled.at(-1)).toEqual({
-		id: "steering-vanished",
-		reason: "The committed Submission did not start an Agent Turn.",
-		status: "failed",
-	});
+	expect(fixture.settled).toEqual([
+		{ id: "steering-vanished", status: "processing" },
+		{
+			id: "steering-vanished",
+			reason: "The committed Submission did not start an Agent Turn.",
+			status: "failed",
+		},
+	]);
+	expect(fixture.events).toEqual([
+		{
+			kind: "failed",
+			reason: "The committed Submission did not start an Agent Turn.",
+		},
+	]);
 });
 
 test("a Steering Message that is not the lane head is refused without settling it", async () => {
