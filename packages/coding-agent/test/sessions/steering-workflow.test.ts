@@ -53,12 +53,14 @@ const deliveryOf = (
  * transitions it proposes and which effects it asks for.
  */
 const createSteeringFixture = ({
+	closed = false,
 	outcome = { rejected: true, reason: "the turn refused it" },
 	runThrows,
 	turnStarts = false,
 }: Readonly<{
+	closed?: boolean;
 	outcome?: { rejected: true; reason: string } | { rejected: false };
-	runThrows?: Error;
+	runThrows?: unknown;
 	turnStarts?: boolean;
 }> = {}) => {
 	const pending = new Map<AgentTurnId, PendingSteeringDelivery[]>();
@@ -153,7 +155,7 @@ const createSteeringFixture = ({
 				steeringMessages: lane,
 			},
 		}),
-		signals: () => ({ closed: () => false }),
+		signals: () => ({ closed: () => closed }),
 	});
 
 	return {
@@ -397,6 +399,61 @@ test("a run that throws after arming the turn is reported as a steering failure"
 	]);
 });
 
+test("a Submission that arrives after the session ended is refused for that reason", async () => {
+	// The lane checks the Session is open before it gets here, but that check can
+	// go stale across an await, so steering must refuse on its own.
+	const fixture = createSteeringFixture({ closed: true });
+	const message = fixture.steeringMessage("steering-after-shutdown");
+	fixture.setLane([message]);
+
+	const outcome = await fixture.workflow.runPendingMessage(message);
+
+	expect(outcome).toEqual({
+		rejected: true,
+		reason: "The session has ended.",
+	});
+	expect(fixture.settled).toEqual([]);
+	expect(fixture.events).toEqual([]);
+});
+
+test("a run that throws after the turn started rethrows instead of claiming a steering failure", async () => {
+	const fixture = createSteeringFixture({
+		runThrows: new Error("the run blew up"),
+		turnStarts: true,
+	});
+	const message = fixture.steeringMessage("steering-rethrown");
+	fixture.setLane([message]);
+
+	// The turn ran, so its own failure is the one that counts; steering must not
+	// overwrite it with a "never started" reason.
+	await expect(fixture.workflow.runPendingMessage(message)).rejects.toThrow(
+		"the run blew up"
+	);
+	expect(fixture.settled).toEqual([
+		{ id: "steering-rethrown", status: "processing" },
+	]);
+	expect(fixture.events).toEqual([]);
+});
+
+test("a run that throws a non-error still reports the confirmation failure", async () => {
+	const fixture = createSteeringFixture({ runThrows: {}, turnStarts: false });
+	const message = fixture.steeringMessage("steering-opaque-throw");
+	fixture.setLane([message]);
+
+	const outcome = await fixture.workflow.runPendingMessage(message);
+
+	// A thrown value with no message cannot explain itself, so the fallback stands.
+	expect(outcome).toEqual({
+		rejected: true,
+		reason: "The committed Submission did not start an Agent Turn.",
+	});
+	expect(fixture.settled.at(-1)).toEqual({
+		id: "steering-opaque-throw",
+		reason: "The committed Submission did not start an Agent Turn.",
+		status: "failed",
+	});
+});
+
 test("a Steering Message that is not the lane head is refused without settling it", async () => {
 	const fixture = createSteeringFixture();
 	const head = fixture.steeringMessage("steering-head");
@@ -405,8 +462,7 @@ test("a Steering Message that is not the lane head is refused without settling i
 
 	const outcome = await fixture.workflow.runPendingMessage(queued);
 
-	// A live Session refuses the not-head case for its own reason; the shut-down
-	// reason belongs to a closed one.
+	// A live Session refuses the not-head case for its own reason.
 	expect(outcome).toEqual({
 		rejected: true,
 		reason: "The committed Submission is no longer waiting.",
