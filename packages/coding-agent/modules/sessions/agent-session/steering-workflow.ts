@@ -340,26 +340,26 @@ const prepareSteeringSkills = async (
 	return { prepared };
 };
 
-/**
- * The Agent Session authority the steering workflow may ask to transition.
- * Delivery bookkeeping maps stay owner-owned (ADR-0032).
- */
-/** The live steering view one step reads. */
-export type SessionSteeringSnapshot = Pick<
+/** The live steering view one step reads, as the Session currently publishes it. */
+export type SessionSteeringView = Pick<
 	LiveSessionSnapshot,
-	"context" | "steeringMessages" | "transcript"
+	"context" | "steeringMessages"
 >;
 
-/** Everything the Agent Session holds for steering, frozen at one moment. */
-export type SessionSteeringRead = Readonly<{
+/**
+ * What one steering step reads. The maps are copied, so a step that awaits
+ * cannot watch them change; the view is the published Snapshot, which the
+ * Session replaces rather than mutates.
+ */
+export type SessionSteeringSnapshot = Readonly<{
 	/** Deliveries recorded against a live Agent Turn Execution. */
 	pending: ReadonlyMap<AgentTurnId, readonly PendingSteeringDelivery[]>;
 	/** Steering sources a turn was armed with but has not consumed. */
 	pendingStarts: ReadonlyMap<AgentTurnId, SessionSteeringMessage>;
-	snapshot: SessionSteeringSnapshot;
+	view: SessionSteeringView;
 }>;
 
-/** The questions a frozen read cannot answer, because they change while a step awaits. */
+/** The questions a snapshot cannot answer, because they change while a step awaits. */
 export type SessionSteeringSignals = Readonly<{
 	closed: () => boolean;
 }>;
@@ -401,6 +401,10 @@ export type SessionSteeringEffects = Readonly<{
 		options?: { reportFailure?: boolean }
 	) => Promise<SessionSendOutcome>;
 	skills: Pick<AgentSessionPorts["skills"], "resolveSkill">;
+	/**
+	 * Persists one Steering Message's processing status and republishes the
+	 * steering view. It writes durably and publishes, so it is an effect.
+	 */
 	updateSteeringStatus: (
 		source: SessionSteeringMessage,
 		updated: SessionSteeringMessage,
@@ -415,7 +419,7 @@ export type SessionSteeringEffects = Readonly<{
 export type SessionSteeringWorkflowPort = Readonly<{
 	apply: (transition: SessionSteeringTransition) => void;
 	effects: SessionSteeringEffects;
-	read: () => SessionSteeringRead;
+	read: () => SessionSteeringSnapshot;
 	signals: () => SessionSteeringSignals;
 }>;
 
@@ -580,7 +584,7 @@ export const createSessionSteeringWorkflow = (
 		if (port.signals().closed()) {
 			return [];
 		}
-		const snapshot = port.read().snapshot;
+		const snapshot = port.read().view;
 		const recoveredSources = (
 			port.read().pending.get(execution.turnId) ?? []
 		).flatMap(({ source }) => {
@@ -792,7 +796,7 @@ export const createSessionSteeringWorkflow = (
 		const closed = port.signals().closed();
 		if (
 			closed ||
-			port.read().snapshot.steeringMessages[0]?.id !== source.id ||
+			port.read().view.steeringMessages[0]?.id !== source.id ||
 			source.status !== expectedStatus
 		) {
 			return {

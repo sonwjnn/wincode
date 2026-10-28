@@ -1542,10 +1542,9 @@ export class AgentSessionImpl implements AgentSession {
 			read: () => ({
 				pending: new Map(sessionState.steeringLane.pendingSteering),
 				pendingStarts: new Map(sessionState.steeringLane.pendingSteeringStarts),
-				snapshot: {
+				view: {
 					context: this.#state.context,
 					steeringMessages: this.#state.steeringMessages,
-					transcript: this.#state.transcript,
 				},
 			}),
 			signals: () => ({

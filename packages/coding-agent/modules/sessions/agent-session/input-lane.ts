@@ -60,8 +60,11 @@ export type SessionInputLaneState = Readonly<{
 	submissionBusy: boolean;
 }>;
 
-/** Everything the lane holds or derives, frozen at one moment. */
-export type SessionInputLaneRead = Readonly<{
+/**
+ * What one input-lane step reads. The externalizations map is copied, so a step
+ * that awaits cannot watch it change; the lane state is recomputed per read.
+ */
+export type SessionInputLaneSnapshot = Readonly<{
 	/** In-flight attachment externalizations, keyed by Queued Submission. */
 	externalizations: ReadonlyMap<
 		SessionQueuedSubmission["id"],
@@ -121,7 +124,7 @@ export type SessionInputLanePort = Readonly<{
 	apply: (transition: SessionInputLaneTransition) => void;
 	effects: SessionInputLaneEffects;
 	inputScheduler: AgentSessionPorts["inputScheduler"];
-	read: () => SessionInputLaneRead;
+	read: () => SessionInputLaneSnapshot;
 }>;
 
 export type SessionInputLaneWorkflow = Readonly<{
