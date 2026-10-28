@@ -10,7 +10,7 @@ Run release commands from the repository root.
 ## Preflight
 
 1. Read the release version from `packages/coding-agent/package.json`. The release tag must be exactly `v<version>`; the tag workflow enforces this.
-2. Require green CI for the exact commit: type checks, Default tests, E2E, the faux interactive smoke, and all five binary targets. Run `bun run test` and `bun run test:e2e` locally when preparing a release; CI is the gate for the full matrix.
+2. Require green CI for the exact commit: type checks, Default tests, E2E, and all five binary targets. Run `bun run test` and `bun run test:e2e` locally when preparing a release; the source-mode faux TUI smoke is optional locally, not a CI gate. Linux/macOS binary jobs still smoke-test compiled TUI startup and clean exit.
 3. For a local binary check, run `bash scripts/release-binary-smoke.sh /absolute/path/to/wincode` and `bun run test:tui --binary /absolute/path/to/wincode`. The latter verifies TUI startup and clean exit, not a real Provider request.
 4. A real Provider smoke is a separate, manual check and can incur charges. Ask for explicit approval before running it, then follow `.wincode/skills/interactive-testing/SKILL.md` against the actual release executable for the current host:
 

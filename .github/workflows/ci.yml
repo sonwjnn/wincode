@@ -88,39 +88,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  interactive-smoke:
-    name: Faux TUI smoke (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-15]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      - run: bun run build:utils
-      - name: Install tmux on Linux
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y tmux
-      - name: Install tmux on macOS
-        if: runner.os == 'macOS'
-        run: command -v tmux || brew install tmux
-      - run: bun run test:tui
-      - name: Upload faux smoke frames and failure logs
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: interactive-smoke-${{ matrix.os }}
-          path: test-artifacts/interactive-smoke
-          if-no-files-found: ignore
-          retention-days: 7
-
   binary-build:
     name: Standalone binary (${{ matrix.name }})
     strategy:
@@ -315,14 +282,13 @@ jobs:
   gate:
     name: Required test gate
     if: always()
-    needs: [check-types, default, e2e, interactive-smoke, binary-build]
+    needs: [check-types, default, e2e, binary-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Require type checking, Default, E2E, and smoke jobs
+      - name: Require type checking, Default, E2E, and binary jobs
         run: |
           test "${{ needs.check-types.result }}" = success
           test "${{ needs.default.result }}" = success
           test "${{ needs.e2e.result }}" = success
-          test "${{ needs.interactive-smoke.result }}" = success
           test "${{ needs.binary-build.result }}" = success

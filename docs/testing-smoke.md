@@ -47,9 +47,10 @@ empty tmux config. Only the owned server is stopped. OS lock failure is exit 2
 
 Checks streaming chunks, cancellation reaching the Provider, recovery after
 cancellation, a real read-tool roundtrip, Provider failure/recovery, preservation
-of a draft at 100×30, 60×20 and 80×24, and clean `/exit`. CI gates Linux and macOS
-on this smoke and uploads frames/failure logs under `test-artifacts/interactive-smoke`.
-Override the output directory with `WINCODE_SMOKE_ARTIFACT_DIR`.
+of a draft at 100×30, 60×20 and 80×24, and clean `/exit`. The source-mode
+smoke is an opt-in local check, not a CI gate; when run, it writes frames/failure
+logs under `test-artifacts/interactive-smoke`. Override the output directory with
+`WINCODE_SMOKE_ARTIFACT_DIR`.
 
 Project Trust is deliberately bypassed inside the generated workspace. Trust and
 auth-selection UI have separate application contracts; this smoke is not evidence
