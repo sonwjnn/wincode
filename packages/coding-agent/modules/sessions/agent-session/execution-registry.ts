@@ -13,13 +13,13 @@ import type { SessionExecution } from "./types";
  * execution's end.
  */
 export type ExecutionRegistry = Readonly<{
-	/** The assistant message a retained or live execution is reporting under. */
+	/** The assistant message a retained execution is reporting under. */
 	assistantIdFor: (turnId: AgentTurnId) => SessionMessageId | undefined;
 	/**
 	 * Ends the execution: retains it for the caller that still owes it terminal
 	 * persistence, forgets it otherwise, then wakes everything waiting on it.
 	 */
-	end: (turnId: AgentTurnId, retain?: SessionExecution) => void;
+	end: (turnId: AgentTurnId, retained?: SessionExecution) => void;
 	/** Re-points a retained execution at the assistant message that replaced its first attempt. */
 	reassignAssistantId: (
 		turnId: AgentTurnId,
@@ -40,7 +40,7 @@ export type ExecutionRegistryDependencies = Readonly<{
 export const createExecutionRegistry = ({
 	isLive,
 }: ExecutionRegistryDependencies): ExecutionRegistry => {
-	const settling = new Map<AgentTurnId, SessionExecution>();
+	const retained = new Map<AgentTurnId, SessionExecution>();
 	const endWaiters = new Map<AgentTurnId, (() => void)[]>();
 
 	const wake = (turnId: AgentTurnId): void => {
@@ -55,21 +55,23 @@ export const createExecutionRegistry = ({
 	};
 
 	return {
-		assistantIdFor: (turnId) => settling.get(turnId)?.assistantId,
-		end: (turnId, retain) => {
-			if (isUndefined(retain)) {
-				settling.delete(turnId);
+		assistantIdFor: (turnId) => retained.get(turnId)?.assistantId,
+		end: (turnId, retainedExecution) => {
+			if (isUndefined(retainedExecution)) {
+				retained.delete(turnId);
 			} else {
-				settling.set(turnId, retain);
+				// The execution's own turn is the key, so a caller cannot file its
+				// assistant message under another turn.
+				retained.set(retainedExecution.turnId, retainedExecution);
 			}
 			wake(turnId);
 		},
 		reassignAssistantId: (turnId, assistantId) => {
-			const retained = settling.get(turnId);
-			if (isUndefined(retained)) {
+			const current = retained.get(turnId);
+			if (isUndefined(current)) {
 				return;
 			}
-			settling.set(turnId, { ...retained, assistantId });
+			retained.set(turnId, { ...current, assistantId });
 		},
 		waitForEnd: (turnId) => {
 			if (!isLive(turnId)) {

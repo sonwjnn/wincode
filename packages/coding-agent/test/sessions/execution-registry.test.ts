@@ -14,6 +14,49 @@ const executionOf = (
 		turnId,
 	});
 
+test("every caller waiting for one execution's end resolves", async () => {
+	const registry = createExecutionRegistry({ isLive: () => true });
+	const turnId = agentTurnId("turn-many-waiters");
+	const woken: number[] = [];
+
+	const waiting = [0, 1, 2].map((index) =>
+		registry.waitForEnd(turnId).then(() => {
+			woken.push(index);
+		})
+	);
+	await Bun.sleep(0);
+	expect(woken).toEqual([]);
+
+	registry.end(turnId);
+	await Promise.all(waiting);
+
+	expect(woken).toEqual([0, 1, 2]);
+});
+
+test("reassigning an execution that ended without retention changes nothing", () => {
+	const registry = createExecutionRegistry({ isLive: () => true });
+	const turnId = agentTurnId("turn-not-retained");
+
+	registry.end(turnId, executionOf(turnId, "assistant-dropped"));
+	registry.end(turnId);
+	registry.reassignAssistantId(turnId, sessionMessageId("assistant-late"));
+
+	expect(registry.assistantIdFor(turnId)).toBeUndefined();
+});
+
+test("a retained execution is filed under its own turn, not the caller's", () => {
+	const registry = createExecutionRegistry({ isLive: () => true });
+	const askedFor = agentTurnId("turn-asked");
+	const owned = agentTurnId("turn-owned");
+
+	registry.end(askedFor, executionOf(owned, "assistant-owned"));
+
+	expect(registry.assistantIdFor(owned)).toBe(
+		sessionMessageId("assistant-owned")
+	);
+	expect(registry.assistantIdFor(askedFor)).toBeUndefined();
+});
+
 test("a caller waiting for an execution's end resolves when it ends", async () => {
 	const registry = createExecutionRegistry({ isLive: () => true });
 	const turnId = agentTurnId("turn-waited");

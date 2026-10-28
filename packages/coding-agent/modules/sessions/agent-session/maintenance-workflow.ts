@@ -124,13 +124,6 @@ export type SessionMaintenanceSnapshot = Readonly<{
 	shutdownSignal: AbortSignal;
 	/** The Session Transcript: what the user sees, including summarized history. */
 	transcript: readonly SessionMessage[];
-	/**
-	 * This moment's Transcript with a command's own record update laid over it,
-	 * so a caller that already appended a durable message compacts it too.
-	 */
-	withTranscriptOverlay: (
-		messages: readonly SessionMessage[]
-	) => readonly SessionMessage[];
 }>;
 
 /**
@@ -195,6 +188,14 @@ export type SessionMaintenanceEffects = Readonly<{
 	runTrackedRecovery: <Result>(run: () => Promise<Result>) => Promise<Result>;
 	/** Resolves after one Agent Turn Execution ends. */
 	waitForExecutionEnd: (turnId: AgentTurnId) => Promise<void>;
+	/**
+	 * Lays a command's own record update over the Session Transcript and returns
+	 * it, so a caller that already appended a durable message compacts it too.
+	 * It can publish, so it is an effect rather than part of the frozen read.
+	 */
+	withTranscriptOverlay: (
+		messages: readonly SessionMessage[]
+	) => readonly SessionMessage[];
 }>;
 
 /**
@@ -232,7 +233,7 @@ export const createSessionMaintenanceWorkflow = (
 			return [...command.sourceMessages];
 		}
 		if (!isUndefined(command.nextMessages)) {
-			return snapshot.withTranscriptOverlay(command.nextMessages);
+			return port.effects.withTranscriptOverlay(command.nextMessages);
 		}
 		return snapshot.transcript;
 	};
@@ -442,7 +443,7 @@ export const createSessionMaintenanceWorkflow = (
 		 * older history and protects the newest settled assistant/tool batch.
 		 */
 		const usesContinuation = hasCompletedToolArtifact(attemptMessages);
-		const recoveryEpoch = port.read().recovery.epoch;
+		const recoveryEpoch = opening.recovery.epoch;
 		port.apply({
 			kind: "recovery-begun",
 			messageId: command.originalMessageId,

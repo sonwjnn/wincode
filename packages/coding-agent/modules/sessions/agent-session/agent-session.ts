@@ -1106,6 +1106,7 @@ export class AgentSessionImpl implements AgentSession {
 					return recovery;
 				},
 				waitForExecutionEnd: executionRegistry.waitForEnd,
+				withTranscriptOverlay: mergeTranscript,
 			},
 			read: () => ({
 				activeCompaction: sessionState.compaction.activeCommand,
@@ -1118,7 +1119,6 @@ export class AgentSessionImpl implements AgentSession {
 				sessionId,
 				shutdownSignal: sessionState.shutdown.controller.signal,
 				transcript: this.#state.transcript,
-				withTranscriptOverlay: mergeTranscript,
 			}),
 			signals: () => ({
 				closed: () => sessionState.shutdown.closed,
