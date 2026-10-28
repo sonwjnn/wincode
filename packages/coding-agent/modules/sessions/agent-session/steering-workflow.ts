@@ -95,7 +95,7 @@ const hydrateSteeringBatch = (
 	port: SessionSteeringWorkflowPort,
 	signal: AbortSignal
 ): Promise<SessionMessage[]> =>
-	port.attachments.hydrate({
+	port.effects.attachments.hydrate({
 		budget,
 		failOnMissingAttachments: true,
 		messages: prepared.map(({ source }) => source.message),
@@ -235,7 +235,9 @@ const prepareSteeringBatch = async (
 	}
 	let budget: SessionAttachmentBudget;
 	try {
-		const settings = await port.resolveCompactionSettings(execution.model);
+		const settings = await port.effects.resolveCompactionSettings(
+			execution.model
+		);
 		budget = {
 			maxAttachments: settings.maxMediaAttachments,
 			maxBytes: settings.maxMediaBytes,
@@ -280,7 +282,7 @@ const prepareSteeringSkill = async (
 	armedSkill: SessionSkillCatalog,
 	port: SessionSteeringWorkflowPort
 ): Promise<SteeringSkillPreparation> => {
-	const resolution = await port.skills
+	const resolution = await port.effects.skills
 		.resolveSkill(source.input.skill, source.message, armedSkill)
 		.catch((error: unknown) => ({
 			ok: false as const,
@@ -342,24 +344,51 @@ const prepareSteeringSkills = async (
  * The Agent Session authority the steering workflow may ask to transition.
  * Delivery bookkeeping maps stay owner-owned (ADR-0032).
  */
+/** The live steering view one step reads. */
 export type SessionSteeringSnapshot = Pick<
 	LiveSessionSnapshot,
 	"context" | "steeringMessages" | "transcript"
 >;
 
-export type SessionSteeringWorkflowPort = ReadonlyDeep<{
+/** Everything the Agent Session holds for steering, frozen at one moment. */
+export type SessionSteeringRead = Readonly<{
+	/** Deliveries recorded against a live Agent Turn Execution. */
+	pending: ReadonlyMap<AgentTurnId, readonly PendingSteeringDelivery[]>;
+	/** Steering sources a turn was armed with but has not consumed. */
+	pendingStarts: ReadonlyMap<AgentTurnId, SessionSteeringMessage>;
+	snapshot: SessionSteeringSnapshot;
+}>;
+
+/** The questions a frozen read cannot answer, because they change while a step awaits. */
+export type SessionSteeringSignals = Readonly<{
+	closed: () => boolean;
+}>;
+
+/** A state transition only the Agent Session may apply. */
+export type SessionSteeringTransition =
+	| { kind: "delivery-cleared"; turnId: AgentTurnId }
+	| {
+			kind: "delivery-recorded";
+			delivery: PendingSteeringDelivery;
+			turnId: AgentTurnId;
+	  }
+	/** Sets one message in the steering view, replacing it by id. */
+	| { kind: "message-published"; message: SessionMessage }
+	| {
+			kind: "start-armed";
+			source: SessionSteeringMessage;
+			turnId: AgentTurnId;
+	  }
+	| { kind: "start-consumed"; turnId: AgentTurnId };
+
+/** The work steering hands back to the Agent Session. */
+export type SessionSteeringEffects = Readonly<{
 	attachments: Pick<AgentSessionPorts["attachments"], "hydrate">;
 	commitSteeringRecord: (
 		record: SessionRecord,
 		input: SessionSendInput
 	) => Promise<void>;
 	emitSubmissionEvent: (event: SessionSubmissionEvent) => void;
-	getPendingSteering: (
-		turnId: AgentTurnId
-	) => readonly PendingSteeringDelivery[] | undefined;
-	getSteeringSnapshot: () => SessionSteeringSnapshot;
-	isClosed: () => boolean;
-	publishSteeringSnapshot: (changes: Partial<SessionSteeringSnapshot>) => void;
 	resolveCompactionSettings: AgentSessionPorts["resolveCompactionSettings"];
 	resolveFileMentions: AgentSessionPorts["resolveFileMentions"];
 	resolveSubmission: AgentSessionPorts["resolveSubmission"];
@@ -371,25 +400,23 @@ export type SessionSteeringWorkflowPort = ReadonlyDeep<{
 		input: SessionSendInput,
 		options?: { reportFailure?: boolean }
 	) => Promise<SessionSendOutcome>;
-	setPendingSteeringStart: (
-		turnId: AgentTurnId,
-		source: SessionSteeringMessage
-	) => void;
 	skills: Pick<AgentSessionPorts["skills"], "resolveSkill">;
-	takePendingSteeringStart: (
-		turnId: AgentTurnId
-	) => SessionSteeringMessage | undefined;
-	updatePendingSteering: (
-		turnId: AgentTurnId,
-		update: (
-			current: readonly PendingSteeringDelivery[] | undefined
-		) => readonly PendingSteeringDelivery[] | undefined
-	) => readonly PendingSteeringDelivery[] | undefined;
 	updateSteeringStatus: (
 		source: SessionSteeringMessage,
 		updated: SessionSteeringMessage,
 		afterId?: SessionSteeringMessage["id"]
 	) => Promise<void>;
+}>;
+
+/**
+ * The Agent Session as steering sees it: what it may read, what it must ask
+ * again, the transitions it may propose, and the work it hands back.
+ */
+export type SessionSteeringWorkflowPort = Readonly<{
+	apply: (transition: SessionSteeringTransition) => void;
+	effects: SessionSteeringEffects;
+	read: () => SessionSteeringRead;
+	signals: () => SessionSteeringSignals;
 }>;
 
 export type SessionSteeringWorkflow = ReadonlyDeep<{
@@ -433,6 +460,19 @@ export type SessionSteeringWorkflow = ReadonlyDeep<{
 export const createSessionSteeringWorkflow = (
 	port: SessionSteeringWorkflowPort
 ): SessionSteeringWorkflow => {
+	/**
+	 * Takes the Steering Message a turn was armed with. The read supplies the
+	 * answer the caller branches on; the transition is what clears it.
+	 */
+	const consumeStart = (
+		turnId: AgentTurnId
+	): SessionSteeringMessage | undefined => {
+		const armed = port.read().pendingStarts.get(turnId);
+		if (armed !== undefined) {
+			port.apply({ kind: "start-consumed", turnId });
+		}
+		return armed;
+	};
 	const persistSteeringStatus = async (
 		source: SessionSteeringMessage,
 		status: SessionSteeringStatus,
@@ -453,7 +493,7 @@ export const createSessionSteeringWorkflow = (
 			status,
 			...omitUndefined({ reason: failure }),
 		};
-		await port.updateSteeringStatus(source, updated, afterId);
+		await port.effects.updateSteeringStatus(source, updated, afterId);
 		return updated;
 	};
 	const acknowledge = async (
@@ -461,7 +501,7 @@ export const createSessionSteeringWorkflow = (
 		status: "failed" | "processed",
 		reason?: string
 	): Promise<void> => {
-		const pending = port.getPendingSteering(turnId);
+		const pending = port.read().pending.get(turnId);
 		if (pending === undefined) {
 			return;
 		}
@@ -475,7 +515,7 @@ export const createSessionSteeringWorkflow = (
 			if (status === "failed") {
 				previousFailureId = source.id;
 			}
-			port.emitSubmissionEvent({
+			port.effects.emitSubmissionEvent({
 				kind: status,
 				messageId: source.message.id,
 				...omitUndefined({ reason: failure }),
@@ -483,7 +523,7 @@ export const createSessionSteeringWorkflow = (
 				turnId: execution.turnId,
 			});
 		}
-		port.updatePendingSteering(turnId, () => undefined);
+		port.apply({ kind: "delivery-cleared", turnId });
 	};
 	const failSteeringDelivery = async (
 		execution: SessionExecution,
@@ -491,7 +531,7 @@ export const createSessionSteeringWorkflow = (
 		reason: string
 	): Promise<SessionMessage[]> => {
 		await persistSteeringStatus(source, "failed", reason);
-		port.emitSubmissionEvent({
+		port.effects.emitSubmissionEvent({
 			kind: "failed",
 			messageId: source.message.id,
 			reason,
@@ -507,37 +547,22 @@ export const createSessionSteeringWorkflow = (
 	): Promise<SessionMessage[]> => {
 		const messages: SessionMessage[] = [];
 		for (const { hydrated, skillContext, source } of ready) {
-			if (port.isClosed() || signal.aborted) {
+			if (port.signals().closed() || signal.aborted) {
 				return messages;
 			}
 			const processing = await persistSteeringStatus(source, "processing");
-			const pending = port.getPendingSteering(execution.turnId) ?? [];
-			const pendingIndex = pending.findIndex(
-				(entry) => entry.source.id === processing.id
-			);
 			const delivery = {
 				execution,
 				message: processing.message,
 				source: processing,
 			};
-			port.updatePendingSteering(execution.turnId, (current) =>
-				pendingIndex === -1
-					? [...(current ?? []), delivery]
-					: (current ?? []).map((entry, index) =>
-							index === pendingIndex ? delivery : entry
-						)
-			);
-			const context = port.getSteeringSnapshot().context;
-			port.publishSteeringSnapshot({
-				context: context.some((message) => message.id === processing.message.id)
-					? context.map((message) =>
-							message.id === processing.message.id
-								? processing.message
-								: message
-						)
-					: [...context, processing.message],
+			port.apply({
+				delivery,
+				kind: "delivery-recorded",
+				turnId: execution.turnId,
 			});
-			port.emitSubmissionEvent({
+			port.apply({ kind: "message-published", message: processing.message });
+			port.effects.emitSubmissionEvent({
 				kind: "delivered",
 				messageId: processing.message.id,
 				submissionId: processing.input.submissionId,
@@ -552,12 +577,12 @@ export const createSessionSteeringWorkflow = (
 		armedSkill: SessionSkillCatalog,
 		signal: AbortSignal
 	): Promise<SessionMessage[]> => {
-		if (port.isClosed()) {
+		if (port.signals().closed()) {
 			return [];
 		}
-		const snapshot = port.getSteeringSnapshot();
+		const snapshot = port.read().snapshot;
 		const recoveredSources = (
-			port.getPendingSteering(execution.turnId) ?? []
+			port.read().pending.get(execution.turnId) ?? []
 		).flatMap(({ source }) => {
 			if (
 				source.status !== "processing" ||
@@ -575,7 +600,7 @@ export const createSessionSteeringWorkflow = (
 			port,
 			signal
 		);
-		if (port.isClosed() || signal.aborted) {
+		if (port.signals().closed() || signal.aborted) {
 			return [];
 		}
 		const preparation = await prepareSteeringBatch(
@@ -584,7 +609,7 @@ export const createSessionSteeringWorkflow = (
 			port,
 			signal
 		);
-		if (port.isClosed() || signal.aborted) {
+		if (port.signals().closed() || signal.aborted) {
 			return [];
 		}
 		const messages = await deliverSteeringMessages(
@@ -592,7 +617,7 @@ export const createSessionSteeringWorkflow = (
 			preparation.ready,
 			signal
 		);
-		if (port.isClosed() || signal.aborted) {
+		if (port.signals().closed() || signal.aborted) {
 			return messages;
 		}
 		const failure = preparation.failure ?? skills.failure;
@@ -605,11 +630,11 @@ export const createSessionSteeringWorkflow = (
 		record: SessionRecord,
 		input: SessionSendInput
 	): Promise<boolean> => {
-		if (port.isClosed()) {
+		if (port.signals().closed()) {
 			return false;
 		}
 		try {
-			await port.commitSteeringRecord(record, input);
+			await port.effects.commitSteeringRecord(record, input);
 			return true;
 		} catch (error) {
 			logSessionPersistenceFailure(
@@ -629,7 +654,7 @@ export const createSessionSteeringWorkflow = (
 		execution: SessionExecution | undefined,
 		activeInput: SessionSendInput | undefined
 	): Promise<SteeringRecordPreparation> => {
-		if (port.isClosed()) {
+		if (port.signals().closed()) {
 			return {
 				kind: "rejected",
 				messageId: queued.messageId,
@@ -639,7 +664,7 @@ export const createSessionSteeringWorkflow = (
 		}
 		const turnId =
 			execution?.turnId ?? activeInput?.turnId ?? queued.input.turnId;
-		const input = port.resolveSubmission({
+		const input = port.effects.resolveSubmission({
 			...queued.input,
 			agent: execution?.agent ?? activeInput?.agent ?? queued.input.agent,
 			model: execution?.model ?? activeInput?.model ?? queued.input.model,
@@ -660,8 +685,8 @@ export const createSessionSteeringWorkflow = (
 			userText: queued.input.userText ?? queued.input.composition.text,
 		});
 		const text = input.userText ?? queued.input.composition.text;
-		const fileMentions = await port.resolveFileMentions(text);
-		if (port.isClosed()) {
+		const fileMentions = await port.effects.resolveFileMentions(text);
+		if (port.signals().closed()) {
 			return {
 				kind: "rejected",
 				messageId: queued.messageId,
@@ -712,19 +737,12 @@ export const createSessionSteeringWorkflow = (
 	): Promise<SessionSendOutcome> => {
 		const turnId = createAgentTurnId();
 		const processing = await persistSteeringStatus(source, "processing");
-		const context = port.getSteeringSnapshot().context;
-		port.publishSteeringSnapshot({
-			context: context.some((message) => message.id === processing.message.id)
-				? context.map((message) =>
-						message.id === processing.message.id ? processing.message : message
-					)
-				: [...context, processing.message],
-		});
-		port.setPendingSteeringStart(turnId, processing);
+		port.apply({ kind: "message-published", message: processing.message });
+		port.apply({ kind: "start-armed", source: processing, turnId });
 		try {
-			const outcome = await port.runSubmission(
+			const outcome = await port.effects.runSubmission(
 				{
-					...port.resolveSubmission({
+					...port.effects.resolveSubmission({
 						...processing.input,
 						turnId,
 					}),
@@ -732,7 +750,7 @@ export const createSessionSteeringWorkflow = (
 				},
 				{ reportFailure: false }
 			);
-			if (port.takePendingSteeringStart(turnId) === undefined) {
+			if (consumeStart(turnId) === undefined) {
 				return outcome;
 			}
 			const reason =
@@ -740,7 +758,7 @@ export const createSessionSteeringWorkflow = (
 					? outcome.reason
 					: "The committed Submission did not start an Agent Turn.";
 			await persistSteeringStatus(processing, "failed", reason);
-			port.emitSubmissionEvent({
+			port.effects.emitSubmissionEvent({
 				kind: "failed",
 				messageId: source.message.id,
 				reason,
@@ -749,7 +767,7 @@ export const createSessionSteeringWorkflow = (
 			});
 			return { rejected: true, reason };
 		} catch (error) {
-			if (port.takePendingSteeringStart(turnId) === undefined) {
+			if (consumeStart(turnId) === undefined) {
 				throw error;
 			}
 			const reason = getErrorMessage(
@@ -757,7 +775,7 @@ export const createSessionSteeringWorkflow = (
 				"The committed Submission did not start an Agent Turn."
 			);
 			await persistSteeringStatus(processing, "failed", reason);
-			port.emitSubmissionEvent({
+			port.effects.emitSubmissionEvent({
 				kind: "failed",
 				messageId: source.message.id,
 				reason,
@@ -771,10 +789,10 @@ export const createSessionSteeringWorkflow = (
 		source: SessionSteeringMessage,
 		expectedStatus: "failed" | "pending"
 	): Promise<SessionSendOutcome> => {
-		const closed = port.isClosed();
+		const closed = port.signals().closed();
 		if (
 			closed ||
-			port.getSteeringSnapshot().steeringMessages[0]?.id !== source.id ||
+			port.read().snapshot.steeringMessages[0]?.id !== source.id ||
 			source.status !== expectedStatus
 		) {
 			return {
@@ -785,7 +803,7 @@ export const createSessionSteeringWorkflow = (
 			};
 		}
 		if (expectedStatus === "failed") {
-			const outcome = await port.runSteeringRetry(source.id, () =>
+			const outcome = await port.effects.runSteeringRetry(source.id, () =>
 				executeCommittedSteering(source)
 			);
 			return (

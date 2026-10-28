@@ -1422,95 +1422,135 @@ export class AgentSessionImpl implements AgentSession {
 				});
 			};
 		steering = createSessionSteeringWorkflow({
-			attachments: { hydrate: ports.attachments.hydrate },
-			commitSteeringRecord: (record, input) =>
-				commitRecord({
-					record,
-					sessionId,
-					sessionModel: input.sessionModel,
-					...omitUndefined({
-						sessionThinkingLevel: input.sessionThinkingLevel,
+			apply: (transition) => {
+				switch (transition.kind) {
+					case "delivery-cleared": {
+						sessionState.steeringLane.pendingSteering.delete(transition.turnId);
+						return;
+					}
+					case "delivery-recorded": {
+						const { delivery, turnId } = transition;
+						const current =
+							sessionState.steeringLane.pendingSteering.get(turnId) ?? [];
+						const index = current.findIndex(
+							(entry) => entry.source.id === delivery.source.id
+						);
+						sessionState.steeringLane.pendingSteering.set(
+							turnId,
+							index === -1
+								? [...current, delivery]
+								: current.map((entry, position) =>
+										position === index ? delivery : entry
+									)
+						);
+						return;
+					}
+					case "message-published": {
+						const { message } = transition;
+						const context = this.#state.context;
+						publish({
+							context: context.some((entry) => entry.id === message.id)
+								? context.map((entry) =>
+										entry.id === message.id ? message : entry
+									)
+								: [...context, message],
+						});
+						return;
+					}
+					case "start-armed": {
+						sessionState.steeringLane.pendingSteeringStarts.set(
+							transition.turnId,
+							transition.source
+						);
+						return;
+					}
+					case "start-consumed": {
+						sessionState.steeringLane.pendingSteeringStarts.delete(
+							transition.turnId
+						);
+						return;
+					}
+					default: {
+						// Defensive: the union is exhaustive, so TypeScript narrows this to never.
+						throw new Error("Unhandled Session steering transition.");
+					}
+				}
+			},
+			effects: {
+				attachments: { hydrate: ports.attachments.hydrate },
+				commitSteeringRecord: (record, input) =>
+					commitRecord({
+						record,
+						sessionId,
+						sessionModel: input.sessionModel,
+						...omitUndefined({
+							sessionThinkingLevel: input.sessionThinkingLevel,
+						}),
 					}),
-				}),
-			emitSubmissionEvent,
-			getPendingSteering: (turnId) =>
-				sessionState.steeringLane.pendingSteering.get(turnId),
-			getSteeringSnapshot: () => ({
-				context: this.#state.context,
-				steeringMessages: this.#state.steeringMessages,
-				transcript: this.#state.transcript,
+				emitSubmissionEvent,
+				resolveCompactionSettings: ports.resolveCompactionSettings,
+				resolveFileMentions: ports.resolveFileMentions,
+				resolveSubmission: ports.resolveSubmission,
+				runSteeringRetry: async (id, run) => {
+					if (sessionState.steeringLane.retryingSteering.has(id)) {
+						return null;
+					}
+					sessionState.steeringLane.retryingSteering.add(id);
+					try {
+						return await run();
+					} finally {
+						sessionState.steeringLane.retryingSteering.delete(id);
+					}
+				},
+				runSubmission,
+				skills: { resolveSkill: ports.skills.resolveSkill },
+				updateSteeringStatus: async (source, updated, afterId) => {
+					await updateSubmissionStatus({
+						failure: updated.reason,
+						messageId: source.message.id,
+						recordId: source.recordId,
+						status: updated.status,
+						submissionId: source.input.submissionId,
+					});
+					const snapshot = this.#state;
+					const steeringMessages = snapshot.steeringMessages.filter(
+						(entry) => entry.id !== source.id
+					);
+					if (updated.status === "failed") {
+						const previousIndex =
+							afterId === undefined
+								? -1
+								: steeringMessages.findIndex((entry) => entry.id === afterId);
+						steeringMessages.splice(previousIndex + 1, 0, updated);
+					}
+					publish({
+						context:
+							updated.status === "failed"
+								? snapshot.context.filter(
+										(entry) => entry.id !== updated.message.id
+									)
+								: snapshot.context.map((entry) =>
+										entry.id === updated.message.id ? updated.message : entry
+									),
+						steeringMessages,
+						transcript: snapshot.transcript.map((entry) =>
+							entry.id === updated.message.id ? updated.message : entry
+						),
+					});
+				},
+			},
+			read: () => ({
+				pending: new Map(sessionState.steeringLane.pendingSteering),
+				pendingStarts: new Map(sessionState.steeringLane.pendingSteeringStarts),
+				snapshot: {
+					context: this.#state.context,
+					steeringMessages: this.#state.steeringMessages,
+					transcript: this.#state.transcript,
+				},
 			}),
-			isClosed: () => sessionState.shutdown.closed,
-			publishSteeringSnapshot: publish,
-			resolveCompactionSettings: ports.resolveCompactionSettings,
-			resolveFileMentions: ports.resolveFileMentions,
-			resolveSubmission: ports.resolveSubmission,
-			runSteeringRetry: async (id, run) => {
-				if (sessionState.steeringLane.retryingSteering.has(id)) {
-					return null;
-				}
-				sessionState.steeringLane.retryingSteering.add(id);
-				try {
-					return await run();
-				} finally {
-					sessionState.steeringLane.retryingSteering.delete(id);
-				}
-			},
-			runSubmission,
-			setPendingSteeringStart: (turnId, source) => {
-				sessionState.steeringLane.pendingSteeringStarts.set(turnId, source);
-			},
-			skills: { resolveSkill: ports.skills.resolveSkill },
-			takePendingSteeringStart: (turnId) => {
-				const pending =
-					sessionState.steeringLane.pendingSteeringStarts.get(turnId);
-				sessionState.steeringLane.pendingSteeringStarts.delete(turnId);
-				return pending;
-			},
-			updatePendingSteering: (turnId, update) => {
-				const current = sessionState.steeringLane.pendingSteering.get(turnId);
-				const next = update(current);
-				if (next === undefined) {
-					sessionState.steeringLane.pendingSteering.delete(turnId);
-				} else {
-					sessionState.steeringLane.pendingSteering.set(turnId, next);
-				}
-				return next;
-			},
-			updateSteeringStatus: async (source, updated, afterId) => {
-				await updateSubmissionStatus({
-					failure: updated.reason,
-					messageId: source.message.id,
-					recordId: source.recordId,
-					status: updated.status,
-					submissionId: source.input.submissionId,
-				});
-				const snapshot = this.#state;
-				const steeringMessages = snapshot.steeringMessages.filter(
-					(entry) => entry.id !== source.id
-				);
-				if (updated.status === "failed") {
-					const previousIndex =
-						afterId === undefined
-							? -1
-							: steeringMessages.findIndex((entry) => entry.id === afterId);
-					steeringMessages.splice(previousIndex + 1, 0, updated);
-				}
-				publish({
-					context:
-						updated.status === "failed"
-							? snapshot.context.filter(
-									(entry) => entry.id !== updated.message.id
-								)
-							: snapshot.context.map((entry) =>
-									entry.id === updated.message.id ? updated.message : entry
-								),
-					steeringMessages,
-					transcript: snapshot.transcript.map((entry) =>
-						entry.id === updated.message.id ? updated.message : entry
-					),
-				});
-			},
+			signals: () => ({
+				closed: () => sessionState.shutdown.closed,
+			}),
 		});
 		const getInputLaneState = () => ({
 			canDrain:
