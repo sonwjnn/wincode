@@ -61,9 +61,12 @@ const createSteeringFixture = ({
 	const cleared: AgentTurnId[] = [];
 	const settled: { id: string; reason?: string; status: string }[] = [];
 	const events: { kind: string; reason?: string }[] = [];
+	const proposed: SessionSteeringTransition[] = [];
+	const runOptions: ({ reportFailure?: boolean } | undefined)[] = [];
 
 	const workflow = createSessionSteeringWorkflow({
 		apply: (transition: SessionSteeringTransition) => {
+			proposed.push(transition);
 			if (transition.kind === "start-armed") {
 				pendingStarts.set(transition.turnId, transition.source);
 				return;
@@ -91,7 +94,8 @@ const createSteeringFixture = ({
 			resolveFileMentions: async () => [],
 			resolveSubmission: (input) => input,
 			runSteeringRetry: async (_retryingId, run) => await run(),
-			runSubmission: async (input) => {
+			runSubmission: async (input, options) => {
+				runOptions.push(options);
 				// The Session clears the arm once an Agent Turn begins, which is what tells
 				// the workflow this Submission did start one. Requiring the delete to hit
 				// something keeps a turn the workflow never armed from passing.
@@ -125,6 +129,9 @@ const createSteeringFixture = ({
 	});
 
 	return {
+		/** Every transition the workflow proposed, in order. */
+		proposed: () => proposed,
+		runOptions,
 		/** Makes the lane's head the message a run is about to be given. */
 		setLane: (messages: readonly SessionSteeringMessage[]) => {
 			lane = messages;
@@ -161,6 +168,11 @@ test("acknowledging a turn settles its deliveries and clears only that turn", as
 	);
 	expect(fixture.clearedTurns()).toEqual([finished.turnId]);
 	expect(fixture.pendingFor(live.turnId)).toHaveLength(1);
+	// Consumers learn of each settled delivery; the live turn's is not announced.
+	expect(fixture.events).toEqual([
+		{ kind: "processed" },
+		{ kind: "processed" },
+	]);
 });
 
 test("a committed Submission that did not start a turn is reported as a steering failure", async () => {
@@ -185,6 +197,11 @@ test("a committed Submission that did not start a turn is reported as a steering
 	expect(fixture.events).toEqual([
 		{ kind: "failed", reason: "the turn refused it" },
 	]);
+	// The steering path reports its own failure; the run must not report it again.
+	expect(fixture.runOptions).toEqual([{ reportFailure: false }]);
+	expect(
+		fixture.proposed().filter(({ kind }) => kind === "message-published")
+	).toHaveLength(1);
 });
 
 test("a Submission that started a turn is not reported as a steering failure", async () => {
@@ -196,7 +213,9 @@ test("a Submission that started a turn is not reported as a steering failure", a
 
 	// The turn's own outcome stands; steering does not overwrite it with a failure.
 	expect(outcome).toEqual({ rejected: true, reason: "the turn refused it" });
-	expect(fixture.settled.map(({ status }) => status)).toEqual(["processing"]);
+	expect(fixture.settled).toEqual([
+		{ id: "steering-started", status: "processing" },
+	]);
 	expect(fixture.events).toEqual([]);
 });
 
@@ -260,4 +279,5 @@ test("acknowledging a turn with nothing pending settles nothing", async () => {
 
 	expect(fixture.settled).toEqual([]);
 	expect(fixture.clearedTurns()).toEqual([]);
+	expect(fixture.events).toEqual([]);
 });

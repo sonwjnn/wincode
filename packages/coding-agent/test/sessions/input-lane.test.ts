@@ -11,12 +11,12 @@ import { createTestInputScheduler } from "../support/stateful-agent";
 
 /**
  * A lane state consistent with the conditions this fixture models: `canDrain`
- * is derived, not chosen, and holds only while nothing here is busy. Production
+ * is derived, not chosen, and holds only while execution is not busy. Production
  * also stops a drain while a submission transition is pending, which is not
  * modelled because no test here publishes that state.
  */
 const laneState = (
-	overrides: Partial<SessionInputLaneSnapshot["lane"]> = {}
+	overrides: Omit<Partial<SessionInputLaneSnapshot["lane"]>, "canDrain"> = {}
 ): SessionInputLaneSnapshot["lane"] => {
 	const base = {
 		closed: false,
@@ -143,6 +143,34 @@ test("a Submission admitted while the session is busy is queued, not started", a
 	}
 	expect(admission.messageId).toBe(queued.messageId);
 	expect(admission.submissionId).toBe(queued.submissionId);
+});
+
+test("a Submission is queued on the queueing flag alone, not on a busy execution", async () => {
+	// Work can be queued while nothing is executing; the queueing gate is what
+	// decides, so a Submission must not jump ahead of the FIFO head here.
+	const lane = createLane(
+		snapshotOf({ lane: laneState({ submissionBusy: true }) })
+	);
+
+	const admission = await lane.lane.prompt(sendInput("behind the head"));
+
+	// Only the queueing flag decides this: gating on a busy execution instead
+	// would start the Submission ahead of the FIFO head, reporting "started".
+	expect(admission).toMatchObject({ disposition: "queued", rejected: false });
+	await lane.settle();
+});
+
+test("steer on a closed session is refused without committing a Submission", async () => {
+	const lane = createLane(snapshotOf({ lane: laneState({ closed: true }) }));
+
+	const admission = await lane.lane.steer();
+
+	expect(admission).toEqual({
+		kind: "rejected",
+		reason: "The session has ended.",
+	});
+	expect(lane.applied).toEqual([]);
+	expect(lane.scheduler.getQueuedSubmissions()).toHaveLength(0);
 });
 
 test("steer on an empty queue reports an empty queue without writing anything", async () => {
