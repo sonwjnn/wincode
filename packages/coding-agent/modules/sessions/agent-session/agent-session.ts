@@ -1344,7 +1344,7 @@ export class AgentSessionImpl implements AgentSession {
 		const abortActiveSend = submissionCommand.abortActiveSend;
 		const runSubmission = submissionCommand.runSubmission;
 		const waitForActiveSend = submissionCommand.waitForActiveSend;
-		const commitSteeringSubmission: SessionInputLanePort["commitSteeringSubmission"] =
+		const commitSteeringSubmission: SessionInputLanePort["effects"]["commitSteeringSubmission"] =
 			async (queued) => {
 				const prepared = await steering.prepareRecord(
 					queued,
@@ -1393,7 +1393,7 @@ export class AgentSessionImpl implements AgentSession {
 					steeringMessage,
 				};
 			};
-		const completeSteeringSubmission: SessionInputLanePort["completeSteeringSubmission"] =
+		const completeSteeringSubmission: SessionInputLanePort["effects"]["completeSteeringSubmission"] =
 			(queued, receipt) => {
 				if (receipt.kind !== "committed") {
 					return;
@@ -1580,36 +1580,59 @@ export class AgentSessionImpl implements AgentSession {
 				this.#state.steeringMessages.length > 0,
 		});
 		const inputLanePort: SessionInputLanePort = {
-			addExternalization: (id, controller, completion) => {
-				sessionState.queue.externalizations.set(id, { completion, controller });
+			apply: (transition) => {
+				switch (transition.kind) {
+					case "externalization-added": {
+						sessionState.queue.externalizations.set(transition.id, {
+							completion: transition.completion,
+							controller: transition.controller,
+						});
+						return;
+					}
+					case "externalization-removed": {
+						sessionState.queue.externalizations.delete(transition.id);
+						return;
+					}
+					case "queue-change-published": {
+						publish({});
+						return;
+					}
+					case "queue-draining-set": {
+						sessionState.queue.drainPhase = transition.draining
+							? "draining"
+							: "idle";
+						return;
+					}
+					default: {
+						// Defensive: the union is exhaustive, so TypeScript narrows this to never.
+						throw new Error("Unhandled Session input lane transition.");
+					}
+				}
 			},
-			getLaneState: getInputLaneState,
-			commitSteeringSubmission,
-			completeSteeringSubmission,
-			emitSubmissionEvent,
-			externalizeAttachments: (messages, signal) =>
-				ports.attachments.externalize(messages, signal),
-			getExternalization: (id) => sessionState.queue.externalizations.get(id),
-			getSteeringMessages: () => this.#state.steeringMessages,
+			effects: {
+				assertSubmissionSelection: (input) =>
+					ports.assertProviderModelSelection(ports.resolveSubmission(input)),
+				commitSteeringSubmission,
+				completeSteeringSubmission,
+				emitSubmissionEvent,
+				externalizeAttachments: (messages, signal) =>
+					ports.attachments.externalize(messages, signal),
+				releaseAttachments: (attachmentIds) =>
+					ports.attachments.release(attachmentIds),
+				reportSubmissionFailure,
+				retainAttachments: (attachmentIds) =>
+					ports.attachments.retain(attachmentIds),
+				retrySteeringMessage: (message) => steering.retryFailedMessage(message),
+				runSteeringMessage: (message) => steering.runPendingMessage(message),
+				runSubmission,
+				trackBackgroundTask,
+			},
 			inputScheduler: ports.inputScheduler,
-			assertSubmissionSelection: (input) =>
-				ports.assertProviderModelSelection(ports.resolveSubmission(input)),
-			publishQueueChange: () => publish({}),
-			removeExternalization: (id) => {
-				sessionState.queue.externalizations.delete(id);
-			},
-			reportSubmissionFailure,
-			retainAttachments: (attachmentIds) =>
-				ports.attachments.retain(attachmentIds),
-			releaseAttachments: (attachmentIds) =>
-				ports.attachments.release(attachmentIds),
-			runSubmission,
-			runSteeringMessage: (message) => steering.runPendingMessage(message),
-			retrySteeringMessage: (message) => steering.retryFailedMessage(message),
-			setQueueDraining: (draining) => {
-				sessionState.queue.drainPhase = draining ? "draining" : "idle";
-			},
-			trackBackgroundTask,
+			read: () => ({
+				externalizations: new Map(sessionState.queue.externalizations),
+				lane: getInputLaneState(),
+				steeringMessages: this.#state.steeringMessages,
+			}),
 		};
 		inputLane = createSessionInputLaneWorkflow(inputLanePort);
 		/**
