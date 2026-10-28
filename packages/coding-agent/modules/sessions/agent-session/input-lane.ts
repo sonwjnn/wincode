@@ -16,7 +16,6 @@ import type {
 } from "../submission-types";
 import type {
 	AgentSessionPorts,
-	LiveSessionSnapshot,
 	SessionQueuedSendInput,
 	SessionQueuedSubmission,
 	SessionSteeringAdmission,
@@ -43,6 +42,24 @@ type PreparedAdmission = Readonly<{
 	turnId: AgentTurnId;
 }>;
 
+type SubmissionValidationFailure = Readonly<{
+	rejected: true;
+	reason: string;
+}>;
+type SubmissionValidationResult =
+	| SubmissionValidationFailure
+	| undefined
+	| Promise<SubmissionValidationFailure | undefined>;
+
+/** Current owner-derived facts that govern the input lane. */
+export type SessionInputLaneState = Readonly<{
+	canDrain: boolean;
+	closed: boolean;
+	executionBusy: boolean;
+	queueDraining: boolean;
+	submissionBusy: boolean;
+}>;
+
 /** Application effects for opaque inputs scheduled by the Stateful Agent. */
 export type SessionInputLanePort = Readonly<{
 	addExternalization: (
@@ -50,7 +67,7 @@ export type SessionInputLanePort = Readonly<{
 		controller: AbortController,
 		completion: Promise<SessionSendOutcome>
 	) => void;
-	canDrainQueue: () => boolean;
+	getLaneState: () => SessionInputLaneState;
 	commitSteeringSubmission: (
 		submission: SessionQueuedSubmission
 	) => Promise<SessionSteeringCommitReceipt>;
@@ -61,15 +78,9 @@ export type SessionInputLanePort = Readonly<{
 	getExternalization: (
 		id: SessionQueuedSubmission["id"]
 	) => SessionInputExternalization | undefined;
-	getSnapshot: () => LiveSessionSnapshot;
+	getSteeringMessages: () => readonly SessionSteeringMessage[];
 	inputScheduler: AgentSessionPorts["inputScheduler"];
-	resolveSubmission: AgentSessionPorts["resolveSubmission"];
-	assertProviderModelSelection: AgentSessionPorts["assertProviderModelSelection"];
-	isClosed: () => boolean;
-	isExecutionBusy: () => boolean;
-	isExternalizing: (id: SessionQueuedSubmission["id"]) => boolean;
-	isQueueDraining: () => boolean;
-	isSubmissionBusy: () => boolean;
+	assertSubmissionSelection: (input: SessionSendInput) => void | Promise<void>;
 	publishQueueChange: () => void;
 	removeExternalization: (id: SessionQueuedSubmission["id"]) => void;
 	reportSubmissionFailure: (
@@ -198,7 +209,7 @@ export const createSessionInputLaneWorkflow = (
 	const drainQueuedHead = async (
 		next: SessionQueuedSubmission
 	): Promise<boolean> => {
-		if (port.isExternalizing(next.id)) {
+		if (port.getExternalization(next.id) !== undefined) {
 			return false;
 		}
 		const started = port.inputScheduler.takeQueuedSubmission(next.id);
@@ -221,17 +232,17 @@ export const createSessionInputLaneWorkflow = (
 	};
 	const drainQueueHead = async (): Promise<boolean> => {
 		if (
-			port.isClosed() ||
+			port.getLaneState().closed ||
 			port.inputScheduler.hasPendingSubmissionTransition()
 		) {
 			return false;
 		}
-		const snapshot = port.getSnapshot();
+		const steeringMessages = port.getSteeringMessages();
 		const nextInput = port.inputScheduler.selectNextInput({
-			hasSteeringMessages: snapshot.steeringMessages.length > 0,
+			hasSteeringMessages: steeringMessages.length > 0,
 		});
 		if (nextInput === "steering") {
-			const steering = snapshot.steeringMessages[0];
+			const steering = steeringMessages[0];
 			return steering === undefined ? false : drainSteeringHead(steering);
 		}
 		if (nextInput !== "submission") {
@@ -246,13 +257,8 @@ export const createSessionInputLaneWorkflow = (
 		}
 	};
 	const drainQueuedSubmissions = async (): Promise<void> => {
-		if (port.isQueueDraining()) {
-			return;
-		}
-		if (port.isClosed()) {
-			return;
-		}
-		if (!port.canDrainQueue()) {
+		const lane = port.getLaneState();
+		if (lane.queueDraining || lane.closed || !lane.canDrain) {
 			return;
 		}
 		port.setQueueDraining(true);
@@ -265,7 +271,7 @@ export const createSessionInputLaneWorkflow = (
 	const failQueuedSubmissionAttachments = (
 		queued: SessionQueuedSubmission
 	): SessionSendOutcome => {
-		const reason = port.isClosed()
+		const reason = port.getLaneState().closed
 			? SESSION_SHUT_DOWN_ERROR
 			: QUEUED_ATTACHMENT_ERROR;
 		const cleanup = port.inputScheduler
@@ -308,11 +314,12 @@ export const createSessionInputLaneWorkflow = (
 		const stillQueued = port.inputScheduler
 			.getQueuedSubmissions()
 			.some((submission) => submission.id === queued.id);
-		if (port.isClosed() || controller.signal.aborted || !stillQueued) {
+		const closed = port.getLaneState().closed;
+		if (closed || controller.signal.aborted || !stillQueued) {
 			if (newAttachmentIds.length > 0) {
 				port.releaseAttachments(newAttachmentIds);
 			}
-			return port.isClosed()
+			return closed
 				? { rejected: true, reason: SESSION_SHUT_DOWN_ERROR }
 				: { rejected: false };
 		}
@@ -446,9 +453,7 @@ export const createSessionInputLaneWorkflow = (
 					},
 				};
 			}
-			await port.assertProviderModelSelection(
-				port.resolveSubmission(current.input)
-			);
+			await port.assertSubmissionSelection(current.input);
 			return await port.commitSteeringSubmission(current);
 		} catch (error) {
 			return {
@@ -463,7 +468,7 @@ export const createSessionInputLaneWorkflow = (
 		}
 	};
 	const steer = async (): Promise<SessionSteeringAdmission> => {
-		if (port.isClosed()) {
+		if (port.getLaneState().closed) {
 			return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
 		}
 		const result = await port.inputScheduler.steerQueuedSubmission(
@@ -545,27 +550,33 @@ export const createSessionInputLaneWorkflow = (
 			turnId,
 		};
 	};
+	const validateSubmissionSelection = (
+		input: SessionSendInput
+	): SubmissionValidationResult => {
+		const selectionFailure = (error: unknown): SubmissionValidationFailure => ({
+			rejected: true,
+			reason: getErrorMessage(error, "Provider Model selection is not valid."),
+		});
+		try {
+			const validation = port.assertSubmissionSelection(input);
+			return validation instanceof Promise
+				? validation.then(() => undefined, selectionFailure)
+				: undefined;
+		} catch (error) {
+			return selectionFailure(error);
+		}
+	};
 	const prompt = async (
 		input: SessionSendInput
 	): Promise<SessionSubmissionAdmission> => {
-		if (port.isClosed()) {
+		if (port.getLaneState().closed) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
-		try {
-			const validation = port.assertProviderModelSelection(
-				port.resolveSubmission(input)
-			);
-			if (validation instanceof Promise) {
-				await validation;
-			}
-		} catch (error) {
-			return {
-				rejected: true,
-				reason: getErrorMessage(
-					error,
-					"Provider Model selection is not valid."
-				),
-			};
+		const validation = validateSubmissionSelection(input);
+		const failure =
+			validation instanceof Promise ? await validation : validation;
+		if (failure !== undefined) {
+			return failure;
 		}
 		const composition: SessionSubmissionComposition = input.composition ?? {
 			files: input.files ?? [],
@@ -575,7 +586,7 @@ export const createSessionInputLaneWorkflow = (
 			input,
 			composition
 		);
-		if (port.isSubmissionBusy()) {
+		if (port.getLaneState().submissionBusy) {
 			port.trackBackgroundTask(acceptQueuedSubmission(admittedInput));
 			return {
 				rejected: false,
@@ -595,36 +606,26 @@ export const createSessionInputLaneWorkflow = (
 		};
 	};
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
-		if (port.isClosed()) {
+		if (port.getLaneState().closed) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
-		try {
-			const validation = port.assertProviderModelSelection(
-				port.resolveSubmission(input)
-			);
-			if (validation instanceof Promise) {
-				await validation;
-			}
-		} catch (error) {
-			return {
-				rejected: true,
-				reason: getErrorMessage(
-					error,
-					"Provider Model selection is not valid."
-				),
-			};
+		const validation = validateSubmissionSelection(input);
+		const failure =
+			validation instanceof Promise ? await validation : validation;
+		if (failure !== undefined) {
+			return failure;
 		}
 		const composition: SessionSubmissionComposition = input.composition ?? {
 			files: input.files ?? [],
 			text: input.userText ?? "",
 		};
 		const { admittedInput } = prepareAdmission(input, composition);
-		const failedSteering = port.getSnapshot().steeringMessages[0];
+		const failedSteering = port.getSteeringMessages()[0];
 		if (
 			failedSteering?.status === "failed" &&
 			failedSteering.message.id === input.messageId
 		) {
-			if (port.isExecutionBusy()) {
+			if (port.getLaneState().executionBusy) {
 				return {
 					rejected: true,
 					reason: "The committed Submission can only be retried while idle.",
@@ -632,7 +633,7 @@ export const createSessionInputLaneWorkflow = (
 			}
 			return await port.retrySteeringMessage(failedSteering);
 		}
-		if (port.isSubmissionBusy()) {
+		if (port.getLaneState().submissionBusy) {
 			const pending = acceptQueuedSubmission(admittedInput);
 			port.trackBackgroundTask(pending);
 			return await pending;

@@ -324,6 +324,8 @@ export function ChatShell({
 		!(isBusy || isUndefined(latestRetryMessageId)) &&
 		canRetryMessage(latestRetryMessageId) &&
 		!isUndefined(onRetry);
+	// The durable ledger includes successful and failed summary attempts;
+	// compaction records repeat successful usage and would inflate session totals.
 	const usage = useMemo(
 		() =>
 			summarizeSessionUsage(
@@ -332,6 +334,7 @@ export function ChatShell({
 				sessionUsageEntries,
 				cacheWarmingStatus,
 				providerModels,
+				[],
 				activeMessages ?? displayMessages,
 				contextSnapshot
 			),

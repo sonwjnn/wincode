@@ -37,6 +37,7 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SettingsRegistryProvider } from "@/modules/settings";
@@ -61,6 +62,7 @@ import {
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
+	sessionUsageEntryId,
 } from "../support/identifiers";
 import { captureTestFrame, requireTestFrame } from "../support/opentui";
 
@@ -170,6 +172,7 @@ type ChatShellProbeProps = {
 	isCompacting?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
+	sessionUsageEntries?: readonly SessionUsageEntry[];
 	transcriptNotice?: ReactNode;
 };
 
@@ -195,6 +198,7 @@ function ChatShellProbe({
 	isCompacting: initialIsCompacting = false,
 	onRetry,
 	queuedSubmissions,
+	sessionUsageEntries,
 	transcriptNotice,
 }: ChatShellProbeProps) {
 	const { pop, push } = useKeyboardLayer();
@@ -232,6 +236,7 @@ function ChatShellProbe({
 				promptHistory={[]}
 				providerController={providerController}
 				queuedSubmissions={queuedSubmissions}
+				sessionUsageEntries={sessionUsageEntries}
 				transcriptNotice={transcriptNotice}
 				viewId="test"
 			/>
@@ -258,6 +263,7 @@ type ChatShellRenderOptions = {
 	isCompacting?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
+	sessionUsageEntries?: readonly SessionUsageEntry[];
 	transcriptNotice?: ReactNode;
 };
 
@@ -276,6 +282,7 @@ const renderChatShell = async (
 		isCompacting = false,
 		onRetry,
 		queuedSubmissions,
+		sessionUsageEntries,
 		transcriptNotice,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
@@ -356,6 +363,7 @@ const renderChatShell = async (
 													onRetry={onRetry}
 													providerController={providerController}
 													queuedSubmissions={queuedSubmissions}
+													sessionUsageEntries={sessionUsageEntries}
 													transcriptNotice={transcriptNotice}
 												/>
 											</CommandControllerProvider>
@@ -1314,6 +1322,70 @@ describe("ChatShell activity footer", () => {
 			expect(usageColumn).toBeGreaterThan(pathColumn);
 			const footerSpans = setup.captureSpans().lines[pathRow]?.spans ?? [];
 			expect(footerSpans.every((span) => span.bg.a === 0)).toBe(true);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("counts successful summary usage once when the ledger and compaction both retain it", async () => {
+		const selection = {
+			modelId: modelId("gpt-5.6-luna"),
+			providerId: "openai",
+		};
+		const providerController = fromPartial<InteractiveProviderController>({
+			getAvailabilityRevision: () => 0,
+			getCompositionRevision: () => 0,
+			getKnownModels: async () => [
+				{
+					limits: { contextWindowTokens: 1_100_000 },
+					modelId: selection.modelId,
+					protocolId: "fake-provider",
+					providerId: selection.providerId,
+				},
+			],
+		});
+		const summaryUsage = { inputTokens: 2_000_000, outputTokens: 0 };
+		const compaction: SessionCompaction = {
+			...completedCompaction(),
+			summarizationModel: selection,
+			summarizationUsage: summaryUsage,
+		};
+		const sessionUsageEntries: SessionUsageEntry[] = [
+			{
+				createdAt: new Date("2026-09-06T09:06:25.000Z"),
+				id: sessionUsageEntryId("summary-usage"),
+				kind: "compaction-summary",
+				model: selection,
+				sessionId: sessionId("session-1"),
+				usage: summaryUsage,
+			},
+		];
+		const messages: SessionMessage[] = [
+			userMessage("user-1"),
+			{
+				...assistantMessage(
+					[{ text: "assistant usage", type: "text" }],
+					"assistant-usage"
+				),
+				metadata: {
+					model: selection,
+					usage: { inputTokens: 1_000_000, outputTokens: 0 },
+				},
+			},
+		];
+		const { setup } = await renderChatShell(messages, {
+			height: 24,
+			initialCompactions: [compaction],
+			providerController,
+			sessionUsageEntries,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = requireTestFrame(setup);
+			expect(frame).toContain("↑3M");
+			expect(frame).not.toContain("↑5M");
 		} finally {
 			setup.renderer.destroy();
 		}

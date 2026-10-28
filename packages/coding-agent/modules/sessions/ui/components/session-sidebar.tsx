@@ -38,7 +38,15 @@ export function SessionSidebar({
 	const { model } = usePromptConfig();
 	const usage = useMemo(
 		() =>
-			summarizeSessionUsage(messages, model, [], "idle", undefined, context),
+			summarizeSessionUsage(
+				messages,
+				model,
+				[],
+				"idle",
+				undefined,
+				[],
+				context
+			),
 		[messages, context, model]
 	);
 	const modelLabel = `${model.providerId}/${model.modelId}`;
