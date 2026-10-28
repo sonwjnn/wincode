@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import { useTerminalDimensions } from "@opentui/react";
 import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -26,7 +27,8 @@ type ProjectTrustChoiceItem = Readonly<{
 
 const getTrustChoices = (
 	parentDirectory: string | undefined,
-	includeSessionOnly: boolean
+	includeSessionOnly: boolean,
+	homeRoot: string
 ): readonly ProjectTrustChoiceItem[] => [
 	{
 		action: "trust",
@@ -39,7 +41,7 @@ const getTrustChoices = (
 				{
 					action: "trust-parent" as const,
 					description: "Trust the parent folder and its descendant projects.",
-					label: `Trust parent folder (${shortenHomePath(parentDirectory)})`,
+					label: `Trust parent folder (${shortenHomePath(parentDirectory, homeRoot)})`,
 				},
 			]),
 	...(includeSessionOnly
@@ -70,20 +72,22 @@ const getTrustChoices = (
 ];
 
 const getSavedDecisionStatus = (
-	savedDecision: ProjectTrustRootStatus["savedDecision"]
+	savedDecision: ProjectTrustRootStatus["savedDecision"],
+	homeRoot: string
 ): string => {
 	if (savedDecision === undefined) {
 		return "none";
 	}
 	const decision = savedDecision.decision === "trust" ? "trusted" : "untrusted";
 	const inherited = savedDecision.inherited
-		? ` (inherited from ${shortenHomePath(savedDecision.directory)})`
+		? ` (inherited from ${shortenHomePath(savedDecision.directory, homeRoot)})`
 		: "";
 	return `${decision}${inherited}`;
 };
 
 type ProjectTrustRootDetailsProps = ProjectTrustRootStatus &
 	Readonly<{
+		homeRoot: string;
 		showTrustStatus: boolean;
 		workspace: string;
 	}>;
@@ -92,6 +96,7 @@ const ProjectTrustRootDetails = ({
 	currentSessionStatus,
 	projectRoot,
 	savedDecision,
+	homeRoot,
 	showTrustStatus,
 	workspace,
 }: ProjectTrustRootDetailsProps) => {
@@ -100,12 +105,12 @@ const ProjectTrustRootDetails = ({
 		<box flexDirection="column">
 			{projectRoot === workspace ? null : (
 				<text fg={colors.textMuted} wrapMode="word">
-					{`Protected root: ${shortenHomePath(projectRoot)}`}
+					{`Protected root: ${shortenHomePath(projectRoot, homeRoot)}`}
 				</text>
 			)}
 			{showTrustStatus ? (
 				<text fg={colors.textMuted} wrapMode="word">
-					{`Saved decision: ${getSavedDecisionStatus(savedDecision)}`}
+					{`Saved decision: ${getSavedDecisionStatus(savedDecision, homeRoot)}`}
 				</text>
 			) : null}
 			{showTrustStatus ? (
@@ -123,6 +128,7 @@ type ProjectTrustDialogContentProps = ProjectTrustPromptRequest &
 		onDecision: (choice: ProjectTrustSelection) => void;
 		/** The startup prompt offers throwaway decisions; /trust does not. */
 		includeSessionOnly?: boolean;
+		homeRoot?: string;
 		showTrustStatus: boolean;
 	}>;
 
@@ -133,6 +139,7 @@ export function ProjectTrustDialogContent({
 	onDecision,
 	parentDirectory,
 	includeSessionOnly = false,
+	homeRoot = os.homedir(),
 	showTrustStatus,
 }: ProjectTrustDialogContentProps) {
 	const dialog = useDialog();
@@ -150,8 +157,8 @@ export function ProjectTrustDialogContent({
 		)
 	);
 	const choices = useMemo(
-		() => getTrustChoices(parentDirectory, includeSessionOnly),
-		[parentDirectory, includeSessionOnly]
+		() => getTrustChoices(parentDirectory, includeSessionOnly, homeRoot),
+		[parentDirectory, includeSessionOnly, homeRoot]
 	);
 	const [highlightedChoice, setHighlightedChoice] = useState<
 		ProjectTrustChoiceItem | undefined
@@ -179,7 +186,7 @@ export function ProjectTrustDialogContent({
 			<DialogInset>
 				<box flexDirection="column" gap={1}>
 					<text fg={colors.textMuted} wrapMode="word">
-						{`Workspace: ${shortenHomePath(workspace)}`}
+						{`Workspace: ${shortenHomePath(workspace, homeRoot)}`}
 					</text>
 					{protectedRoots.length === 0 ? (
 						<text fg={colors.textMuted}>
@@ -195,6 +202,7 @@ export function ProjectTrustDialogContent({
 								<ProjectTrustRootDetails
 									key={root.projectRoot}
 									{...root}
+									homeRoot={homeRoot}
 									showTrustStatus={showTrustStatus}
 									workspace={workspace}
 								/>

@@ -474,7 +474,8 @@ const composeDefaultServices = async ({
 
 const sendInputFor = (
 	selection: ResolvedSelection,
-	text: string
+	text: string,
+	maximumModelSteps?: number
 ): SessionSendInput => ({
 	agent: selection.agent,
 	composition: { files: [], text },
@@ -491,6 +492,7 @@ const sendInputFor = (
 		? {}
 		: { selectionOverride: selection.selectionOverride }),
 	userText: text,
+	...omitUndefined({ maximumModelSteps }),
 });
 
 const emitJsonEvent = (
@@ -835,7 +837,7 @@ const runOneShot = async (
 		try {
 			submissionAttempted = true;
 			const outcome = await host.agentSession.send(
-				sendInputFor(selection, text)
+				sendInputFor(selection, text, context.invocation.maximumModelSteps)
 			);
 			if (outcome.rejected) {
 				throw new Error(outcome.reason);

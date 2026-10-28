@@ -179,6 +179,8 @@ export type AgentRuntimeRunOptions = Readonly<{
 	prepareNextStep?: PrepareAgentContext;
 	/** Session-owned notifications for streaming Model request lifecycle. */
 	modelStepObserver?: ModelStepObserver;
+	/** Hard ceiling on Provider SDK chat requests made by this Agent Turn. */
+	maximumModelSteps?: number;
 	/** Marks this individual request as a best-effort cache-warm replay. */
 	cacheWarming?: true;
 	/** Stable Session-scoped routing hint; Model Protocols emit it only when supported. */

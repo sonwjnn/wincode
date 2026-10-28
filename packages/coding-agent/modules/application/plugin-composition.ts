@@ -1,4 +1,5 @@
 import { createMcpPluginFactory } from "@wincode/mcp/plugin";
+import { subagentsPluginFactory } from "@wincode/subagents/plugin";
 import { createMcpSecretStore } from "@/modules/mcp/mcp-secret-store";
 import type { PluginPackageReference } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
@@ -10,6 +11,7 @@ import type { SessionServices } from "@/modules/sessions/host/session-services";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 
+// Bundled factories keep default Plugins available in standalone executables.
 const DISTRIBUTED_PLUGINS: readonly PluginPackageReference[] = Object.freeze([
 	{
 		factory: createMcpPluginFactory({
@@ -18,7 +20,11 @@ const DISTRIBUTED_PLUGINS: readonly PluginPackageReference[] = Object.freeze([
 		id: "mcp",
 		specifier: "@wincode/mcp/plugin",
 	},
-	{ id: "subagents", specifier: "@wincode/subagents/plugin" },
+	{
+		factory: subagentsPluginFactory,
+		id: "subagents",
+		specifier: "@wincode/subagents/plugin",
+	},
 ]);
 
 export type ApplicationPluginComposition = Readonly<{

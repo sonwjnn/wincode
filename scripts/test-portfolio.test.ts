@@ -349,4 +349,35 @@ test("completes successfully", () => {
 			await fs.rm(root, { force: true, recursive: true });
 		}
 	});
+
+	test("root test runs script contracts before the Default portfolio", async () => {
+		const packageDocument: unknown = await Bun.file(
+			path.join(repositoryRoot, "package.json")
+		).json();
+		const scripts = (packageDocument as { scripts: Record<string, string> })
+			.scripts;
+
+		expect(scripts["test:scripts"]).toBe(
+			"bun --no-env-file test scripts/*.test.ts"
+		);
+		expect(scripts.test).toBe(
+			"bun --no-env-file run test:scripts && bun --no-env-file scripts/test-portfolio.ts default"
+		);
+	});
+
+	test("Windows test entrypoints delegate safely and preserve arguments", async () => {
+		const [powerShellLauncher, batchLauncher] = await Promise.all([
+			Bun.file(path.join(repositoryRoot, "test.ps1")).text(),
+			Bun.file(path.join(repositoryRoot, "test.bat")).text(),
+		]);
+
+		expect(powerShellLauncher).toContain("WINCODE_TEST_SESSION_INDEX_DIR");
+		expect(powerShellLauncher).toContain("$testArguments = @($args)");
+		expect(powerShellLauncher).toContain("--no-env-file");
+		expect(powerShellLauncher).toContain(
+			"& $bunPath --no-env-file run test @testArguments"
+		);
+		expect(batchLauncher).toContain('"%~dp0test.ps1" %*');
+		expect(batchLauncher).toContain("exit /b %ERRORLEVEL%");
+	});
 });

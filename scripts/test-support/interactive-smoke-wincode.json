@@ -1,0 +1,12 @@
+{
+  "default_agent": "terminal-smoke",
+  "agents": {
+    "terminal-smoke": {
+      "description": "Read-only local terminal smoke agent.",
+      "instructions": "Reply to the prompt exactly as requested. Only the read tool is available.",
+      "model": "terminal-smoke/fake",
+      "role": "primary",
+      "tools": ["read"]
+    }
+  }
+}

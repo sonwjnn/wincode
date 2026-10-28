@@ -42,6 +42,7 @@ import {
 	type SessionSdkCreateOptions,
 	type SessionSdkHandle,
 	type SessionSdkOperations,
+	type SessionSdkPluginFactory,
 	type SessionSdkPrompt,
 	snapshotSessionSdkCapabilityCeiling,
 } from "./sdk-contract";
@@ -101,6 +102,7 @@ export type SessionSdkRuntimeOptions = Omit<
 		getPluginProviderSources?: (
 			providerIds: readonly string[]
 		) => readonly SessionSdkPluginProviderSource[];
+		pluginFactories?: readonly SessionSdkPluginFactory[];
 		pluginPaths?: readonly string[];
 		pluginProviderSources?: readonly SessionSdkPluginProviderSource[];
 		projectTrust?: "trust" | "deny";
@@ -174,12 +176,14 @@ const pluginProviderIdsForSources = (
 };
 
 const loadSessionSdkPluginRuntime = async ({
+	bundledPlugins,
 	configRuntime,
 	ignoreConfiguredPlugins,
 	pluginPaths,
 	selectedSources,
 	projectTrust,
 }: Readonly<{
+	bundledPlugins: readonly SessionSdkPluginFactory[];
 	configRuntime: ConfigRuntime;
 	ignoreConfiguredPlugins: boolean;
 	pluginPaths: readonly string[];
@@ -238,6 +242,7 @@ const loadSessionSdkPluginRuntime = async ({
 		}
 	}
 	const runtime = await loadPlugins({
+		bundledPlugins,
 		cliPaths: [
 			...new Set([
 				...explicitSources.map(({ sourceIdentity }) => sourceIdentity),
@@ -955,6 +960,7 @@ const createSessionSdkInternal = async (
 				};
 	const inheritedPluginProviderSources = options.pluginProviderSources;
 	const pluginRuntime = await loadSessionSdkPluginRuntime({
+		bundledPlugins: options.pluginFactories ?? [],
 		configRuntime,
 		ignoreConfiguredPlugins: shared?.ignoreConfiguredPlugins ?? false,
 		pluginPaths: options.pluginPaths ?? [],
@@ -970,6 +976,7 @@ const createSessionSdkInternal = async (
 		cwd: _cwd,
 		getPluginProviderSources,
 		model,
+		pluginFactories: _pluginFactories,
 		pluginPaths: _pluginPaths,
 		pluginProviderSources: _pluginProviderSources,
 		thinkingLevel,
@@ -1290,6 +1297,7 @@ const createSessionSdkInternal = async (
 			{
 				...optionsForSessionRuntime(options, runtimeCapabilityCeiling),
 				cwd,
+				pluginFactories: runtimeOptions.pluginFactories ?? [],
 				pluginPaths: runtimeOptions.pluginPaths ?? [],
 				pluginProviderSources: selectedPluginProviderSources,
 				...(runtimeOptions.projectTrust === undefined
@@ -1435,6 +1443,7 @@ export const createSessionSdkOperations = (
 						runtimeCapabilityCeiling
 					),
 					getPluginProviderSources: hostRuntimeOptions.getPluginProviderSources,
+					pluginFactories: runtimeOptions.pluginFactories ?? [],
 					pluginPaths: runtimeOptions.pluginPaths ?? [],
 					...(requestedProviderIds.length === 0
 						? {}

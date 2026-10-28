@@ -531,6 +531,7 @@ export const createAgentSessionTurnRunner = ({
 					? `wincode-session:${sessionId}`
 					: undefined,
 				modelStepObserver: cacheWarming.modelStepObserver,
+				maximumModelSteps: execution.maximumModelSteps,
 				runtime: statefulAgent,
 				signal,
 				...omitUndefined({

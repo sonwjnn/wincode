@@ -1,3 +1,4 @@
+import { APP_VERSION } from "@/shared/app-info";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import type { ProjectTrustPrompt } from "../project-trust/project-trust";
 import { type McpCliOptions, runMcpCli } from "./mcp-cli";
@@ -78,6 +79,7 @@ const HELP_TEXT = [
 	"      --session <id>   Continue a durable Session",
 	"      --agent <id>     Select an Agent",
 	"      --model <id>     Select a Model",
+	"      --max-model-steps <n>  Limit Provider requests for this turn",
 	"      --thinking-level <id>  Select a Thinking Level",
 	"      --trust-project  Trust project resources for this invocation",
 	"      --no-trust-project  Refuse project resources for this invocation",
@@ -86,15 +88,6 @@ const HELP_TEXT = [
 	"  -h, --help           Show this help",
 	"  -v, --version        Show the version",
 ].join("\n");
-
-const VERSION_URL = new URL("../../package.json", import.meta.url);
-
-const getVersion = async (): Promise<string> => {
-	const metadata = (await Bun.file(VERSION_URL).json()) as {
-		version?: unknown;
-	};
-	return typeof metadata.version === "string" ? metadata.version : "unknown";
-};
 
 const writeLine = (writer: TextWriter, text: string): void => {
 	writer.write(`${text}\n`);
@@ -147,6 +140,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	let agent: string | undefined;
 	let projectTrustOverride: "trust" | "deny" | undefined;
 	let model: string | undefined;
+	let maximumModelSteps: number | undefined;
 	let prompt: string | undefined;
 	let session: string | undefined;
 	let thinkingLevel: string | undefined;
@@ -249,6 +243,20 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			oneShotOption = true;
 			continue;
 		}
+		if (option === "--max-model-steps") {
+			const next = nextValue(args, index, option, inlineValue);
+			const parsed = Number(next.value);
+			if (!Number.isSafeInteger(parsed) || parsed < 1) {
+				throw new InvocationError(
+					"--max-model-steps must be a positive integer.",
+					USAGE_EXIT_CODE
+				);
+			}
+			index = next.index;
+			maximumModelSteps = parsed;
+			oneShotOption = true;
+			continue;
+		}
 		if (option === "--thinking-level") {
 			const next = nextValue(args, index, option, inlineValue);
 			index = next.index;
@@ -292,7 +300,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 	}
 	if (oneShotOption && mode !== "print" && mode !== "json") {
 		throw new InvocationError(
-			"Prompt, session, and selection options require print or json mode.",
+			"Prompt, session, selection, and model-step-limit options require print or json mode.",
 			USAGE_EXIT_CODE
 		);
 	}
@@ -303,6 +311,7 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			mode,
 			...(agent === undefined ? {} : { agent }),
 			...(model === undefined ? {} : { model }),
+			...(maximumModelSteps === undefined ? {} : { maximumModelSteps }),
 			...(prompt === undefined ? {} : { prompt }),
 			...(session === undefined ? {} : { session }),
 			...(thinkingLevel === undefined ? {} : { thinkingLevel }),
@@ -344,7 +353,7 @@ const writeEarlyResponse = async (
 		return 0;
 	}
 	if (parsed.version) {
-		writeLine(input.stdout, await getVersion());
+		writeLine(input.stdout, APP_VERSION);
 		return 0;
 	}
 };

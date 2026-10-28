@@ -144,6 +144,7 @@ export type SessionExecution = ReadonlyDeep<{
 	turnId: AgentTurnId;
 	thinkingLevel?: ThinkingLevel;
 	viewState?: SessionViewState;
+	maximumModelSteps?: number;
 }>;
 
 /**
@@ -235,6 +236,7 @@ export type SessionExecutionInput = ReadonlyDeep<{
 	/** The Session Context message this execution answers, when known. */
 	sourceUserMessageId?: SessionMessageId;
 	startedAt: number;
+	maximumModelSteps?: number;
 	/** The Agent Turn Identifier; generated when the caller has none yet. */
 	turnId?: AgentTurnId;
 	thinkingLevel?: ThinkingLevel;

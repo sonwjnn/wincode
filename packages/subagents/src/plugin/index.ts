@@ -6,6 +6,7 @@ import type {
 	PluginToolRegistrationAPI,
 	SessionSdkAgent,
 	SessionSdkOperations,
+	SessionSdkPluginFactory,
 } from "@wincode/coding-agent";
 import { logger } from "@wincode/utils";
 import { discoverSubagentAgents } from "../agents";
@@ -26,14 +27,13 @@ import { getSubagentsTaskCoordinator } from "./task-runtime";
 import { toSessionId } from "./task-types";
 
 /** Creates the Subagents Plugin with its own durable task/report store. */
-export const createSubagentsPluginFactory =
-	(
-		options: Readonly<{
-			databasePath?: string;
-			taskStore?: SubagentsTaskStore | Promise<SubagentsTaskStore>;
-		}> = {}
-	): PluginFactory =>
-	async (api, loadContext) => {
+export const createSubagentsPluginFactory = (
+	options: Readonly<{
+		databasePath?: string;
+		taskStore?: SubagentsTaskStore | Promise<SubagentsTaskStore>;
+	}> = {}
+): PluginFactory => {
+	const factory: PluginFactory = async (api, loadContext) => {
 		let durableTaskStore =
 			options.taskStore === undefined ? undefined : await options.taskStore;
 		let releaseTaskStore: (() => void) | undefined;
@@ -54,10 +54,10 @@ export const createSubagentsPluginFactory =
 			if (durableTaskStore === undefined) {
 				throw new Error("Subagents task store acquisition failed.");
 			}
-			coordinator = getSubagentsTaskCoordinator(
-				durableTaskStore,
-				loadContext.sourcePath
-			);
+			coordinator = getSubagentsTaskCoordinator(durableTaskStore, {
+				factory,
+				id: "subagents",
+			});
 		});
 		plugin.onShutdown(async () => {
 			coordinator = undefined;
@@ -118,7 +118,7 @@ export const createSubagentsPluginFactory =
 			return getActiveCoordinator().onSessionShutdown(context);
 		});
 		plugin.onBeforeAgentTurn(async (context, registration) => {
-			const turn = getSubagentsTurn(context, loadContext.sourcePath);
+			const turn = getSubagentsTurn(context, { factory, id: "subagents" });
 			if (turn === undefined) {
 				return;
 			}
@@ -130,6 +130,8 @@ export const createSubagentsPluginFactory =
 			registerSubagentsTools(registration, tools, turn, getActiveCoordinator());
 		});
 	};
+	return factory;
+};
 
 export const formatSubagents = (agents: readonly SessionSdkAgent[]): string => {
 	const subagents = agents
@@ -152,7 +154,7 @@ export const formatSubagents = (agents: readonly SessionSdkAgent[]): string => {
 
 const getSubagentsTurn = (
 	context: PluginBeforeAgentTurnContext,
-	pluginPath: string
+	pluginFactory: SessionSdkPluginFactory
 ): SubagentsTurnContext | undefined => {
 	if (context.sessionSdk === undefined || context.turnId === undefined) {
 		return;
@@ -162,7 +164,7 @@ const getSubagentsTurn = (
 		...(context.capabilityCeiling === undefined
 			? {}
 			: { capabilityCeiling: context.capabilityCeiling }),
-		pluginPath,
+		pluginFactory,
 		sessionId: toSessionId(context.sessionId),
 		sessionSdk: context.sessionSdk,
 		turnId: context.turnId,

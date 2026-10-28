@@ -5,6 +5,7 @@ import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkHandle,
 	SessionSdkOperations,
+	SessionSdkPluginFactory,
 } from "@wincode/coding-agent";
 import type { DelegationTask, SessionId } from "./task-types";
 
@@ -99,7 +100,7 @@ const createChildSession = (
 /** Owns Subagents' child-session setup while using the host's generic Session SDK. */
 export const createSubagentChildSessionFactory = (
 	sessionSdk: SessionSdkOperations,
-	pluginPath: string
+	pluginFactory: SessionSdkPluginFactory
 ): SubagentChildSessionFactory => {
 	const createChildRuntime = (
 		capabilityCeiling?: SessionSdkCapabilityCeiling,
@@ -110,7 +111,7 @@ export const createSubagentChildSessionFactory = (
 	) =>
 		sessionSdk.createSessionRuntime({
 			...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
-			pluginPaths: [pluginPath],
+			pluginFactories: [pluginFactory],
 			...(selection?.pluginProviderIds === undefined
 				? {}
 				: { pluginProviderIds: selection.pluginProviderIds }),
