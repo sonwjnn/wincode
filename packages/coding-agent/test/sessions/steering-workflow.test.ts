@@ -83,6 +83,7 @@ const createSteeringFixture = ({
 	const proposed: SessionSteeringTransition[] = [];
 	const runOptions: ({ reportFailure?: boolean } | undefined)[] = [];
 	const runTurnIds: (AgentTurnId | undefined)[] = [];
+	const retriedIds: string[] = [];
 
 	const workflow = createSessionSteeringWorkflow({
 		apply: (transition: SessionSteeringTransition) => {
@@ -118,7 +119,10 @@ const createSteeringFixture = ({
 				fromPartial({ enabled: false, keepRecentTokens: 1 }),
 			resolveFileMentions: async () => [],
 			resolveSubmission: (input) => input,
-			runSteeringRetry: async (_retryingId, run) => await run(),
+			runSteeringRetry: async (retryingId, run) => {
+				retriedIds.push(retryingId);
+				return await run();
+			},
 			runSubmission: async (input, options) => {
 				runOptions.push(options);
 				runTurnIds.push(input.turnId);
@@ -162,6 +166,7 @@ const createSteeringFixture = ({
 		/** Every transition the workflow proposed, in order. */
 		pendingStartCount: () => pendingStarts.size,
 		proposed: () => proposed,
+		retriedIds,
 		runOptions,
 		runTurnIds,
 		/** Makes the lane's head the message a run is about to be given. */
@@ -396,6 +401,22 @@ test("a run that throws after arming the turn is reported as a steering failure"
 			submissionId: message.input.submissionId,
 			turnId: fixture.runTurnIds[0],
 		},
+	]);
+});
+
+test("a failed Steering Message at the head is retried through the single-flight wrapper", async () => {
+	const fixture = createSteeringFixture({ turnStarts: true });
+	const message = fixture.steeringMessage("steering-retry", "failed");
+	fixture.setLane([message]);
+
+	const outcome = await fixture.workflow.retryFailedMessage(message);
+
+	// A retry must run, not be refused as "no longer waiting" for the wrong status,
+	// and it must go through the wrapper that keeps one retry per message in flight.
+	expect(outcome).toEqual({ rejected: true, reason: "the turn refused it" });
+	expect(fixture.retriedIds).toEqual(["steering-retry"]);
+	expect(fixture.settled).toEqual([
+		{ id: "steering-retry", status: "processing" },
 	]);
 });
 
