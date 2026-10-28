@@ -61,6 +61,8 @@ When authorized to create or edit a PR, follow the checklist below.
 
 For interactive TUI behavior checks, terminal smoke tests, or approved live-provider smoke runs, load and follow `.wincode/skills/interactive-testing/SKILL.md`.
 
+For release preparation, version tagging, draft inspection, or release recovery, load and follow `.wincode/skills/release/SKILL.md`.
+
 Tests **MUST BE** contract-first. Every test **MUST** defend one externally observable behavior,
 state transition, error mapping, precedence rule, or regression-prone boundary, and
 its name or nearby rationale must state the consumer-visible failure mode. If you cannot name the contract, **DO NOT** add the test.

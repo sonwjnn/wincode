@@ -1,153 +1,76 @@
 name: Release binaries
 
 on:
-  pull_request:
-    branches: [master]
   push:
-    branches: [master]
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-binaries-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x64
-            runner: ubuntu-latest
-            target: linux-x64
-            binary: wincode
-          - name: Linux ARM64
-            runner: ubuntu-24.04-arm
-            target: linux-arm64
-            binary: wincode
-          - name: macOS x64
-            runner: macos-15-intel
-            target: macos-x64
-            binary: wincode
-          - name: macOS ARM64
-            runner: macos-15
-            target: macos-arm64
-            binary: wincode
-          - name: Windows x64
-            runner: windows-latest
-            target: windows-x64
-            binary: wincode.exe
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      - name: Build workspace runtime dependency
-        run: bun run build:utils
-      - name: Compile standalone Wincode executable
-        shell: bash
-        run: |
-          mkdir -p build/release-bin build/release-assets
-          bun build packages/coding-agent/bin/wincode-interactive.ts \
-            --compile \
-            --outfile "build/release-bin/${{ matrix.binary }}"
-      - name: Smoke compiled CLI entrypoints
-        shell: bash
-        run: bash scripts/release-binary-smoke.sh "$(pwd -P)/build/release-bin/${{ matrix.binary }}"
-      - name: Install tmux on Linux
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y tmux
-      - name: Install tmux on macOS
-        if: runner.os == 'macOS'
-        run: command -v tmux || brew install tmux
-      - name: Smoke compiled TUI startup and teardown
-        if: runner.os != 'Windows'
-        run: bun run test:tui --binary "$(pwd -P)/build/release-bin/${{ matrix.binary }}"
-      - name: Package Unix executable and checksum
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          archive="wincode-${{ matrix.target }}.tar.gz"
-          tar -czf "build/release-assets/$archive" \
-            -C build/release-bin "${{ matrix.binary }}"
-          (
-            cd build/release-assets
-            if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$archive" > "$archive.sha256"
-            else
-              shasum -a 256 "$archive" > "$archive.sha256"
-            fi
-          )
-      - name: Package Windows executable and checksum
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $archive = 'build/release-assets/wincode-${{ matrix.target }}.zip'
-          Push-Location 'build/release-bin'
-          Compress-Archive -LiteralPath '${{ matrix.binary }}' -DestinationPath "../../$archive" -Force
-          Pop-Location
-          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $(Split-Path -Leaf $archive)" | Set-Content -LiteralPath "$archive.sha256" -Encoding ascii
-      - name: Upload release assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: wincode-${{ matrix.target }}
-          path: build/release-assets/*
-          if-no-files-found: error
-          retention-days: 14
-      - name: Upload TUI smoke failure details
-        if: failure() && runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-binary-smoke-failure-${{ matrix.target }}
-          path: test-artifacts/interactive-smoke
-          if-no-files-found: ignore
-          retention-days: 7
+  build-and-test:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
 
   draft-release:
     name: Create draft GitHub Release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: build-and-test
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Require the tag to match the Coding-Agent version
         shell: bash
         run: |
           expected_tag="v$(jq -r '.version' packages/coding-agent/package.json)"
           if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
-            printf 'Tag %s does not match package version %s.\n' \
-              "$GITHUB_REF_NAME" "$expected_tag" >&2
+            printf 'Tag %s does not match package version %s.\n' "$GITHUB_REF_NAME" "$expected_tag" >&2
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: wincode-*
           path: release-assets
           merge-multiple: true
+      - name: Validate all release assets and checksums
+        shell: bash
+        run: |
+          archives=(
+            wincode-linux-x64.tar.gz
+            wincode-linux-arm64.tar.gz
+            wincode-macos-x64.tar.gz
+            wincode-macos-arm64.tar.gz
+            wincode-windows-x64.zip
+          )
+          for archive in "${archives[@]}"; do
+            checksum="release-assets/$archive.sha256"
+            if [[ ! -s "release-assets/$archive" || ! -s "$checksum" ]]; then
+              printf 'Missing release asset or checksum: %s\n' "$archive" >&2
+              exit 1
+            fi
+            (cd release-assets && sha256sum -c "$(basename "$checksum")")
+          done
       - name: Create or update the draft release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           tag="$GITHUB_REF_NAME"
-          if is_draft="$(gh release view "$tag" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+          if is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
             if [[ "$is_draft" != 'true' ]]; then
               printf 'Release %s already exists and is published; refusing to replace its assets.\n' "$tag" >&2
               exit 1
             fi
-            gh release upload "$tag" release-assets/* \
-              --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$tag" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$tag" release-assets/* \
-              --draft --generate-notes --verify-tag \
-              --repo "$GITHUB_REPOSITORY"
+            gh release create "$tag" release-assets/* --draft --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"
           fi

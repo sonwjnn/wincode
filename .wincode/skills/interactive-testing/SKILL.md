@@ -51,7 +51,7 @@ environment variables to the TUI. The temp home is removed on exit. Both `--live
 
 A passing live smoke must submit the prompt, receive `smoke-live-ok`, and exit
 cleanly. Startup alone is not a pass. The smoke cannot guarantee token usage or
-cost, and does not verify cancellation or tool calls. Run it against each actual
-release artifact when available; a source run is not release proof. The current
-repo has no release-build pipeline, and headless tmux does not verify native
-Windows ConPTY.
+cost, and does not verify cancellation or tool calls. Run it against the actual
+release executable for the current host; a source run is not binary release
+proof. CI checks CLI entrypoints on all five targets and TUI startup/exit on
+Linux and macOS. Headless tmux does not verify native Windows ConPTY.

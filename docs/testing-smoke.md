@@ -58,12 +58,13 @@ interactive startup and the Windows launchers, not a real Windows terminal.
 
 ## Release binary pipeline
 
-`.github/workflows/release-binaries.yml` compiles the standalone executable on
-Linux x64/ARM64, macOS x64/ARM64, and Windows x64. Pull requests and pushes to
-`master` build and smoke the binaries; a `vX.Y.Z` tag also packages archives and
-SHA-256 checksums into a GitHub **draft** Release. Publishing remains a manual
-decision. A manual workflow run produces downloadable Actions artifacts without
-creating a Release.
+`.github/workflows/ci.yml` runs checks/tests and builds and smokes standalone
+executables on five platforms for pull requests and pushes to `master`. The
+tag-only `.github/workflows/release-binaries.yml` reuses that CI workflow,
+validates the tag/version and archive checksums, and creates or updates a GitHub
+**draft** Release. It never publishes. Manual CI runs produce Actions artifacts
+only; recover a failed tag run by rerunning it. Publishing remains a human
+decision.
 
 Every binary must pass isolated `--help` and `--version` checks. Linux and macOS
 also run the TUI startup-and-clean-exit smoke below; it sends no Provider request.
