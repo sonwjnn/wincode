@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { AgentTurnId } from "@wincode/agent-core";
+import { type AgentTurnId, toSubmissionId } from "@wincode/agent-core";
 import {
 	createSessionSteeringWorkflow,
 	type PendingSteeringDelivery,
@@ -19,11 +19,15 @@ import {
 	steeringMessageId,
 } from "../support/identifiers";
 
-const steeringMessage = (id: string): SessionSteeringMessage =>
+const steeringMessage = (
+	id: string,
+	status: SessionSteeringMessage["status"] = "pending"
+): SessionSteeringMessage =>
 	fromPartial<SessionSteeringMessage>({
 		id: steeringMessageId(id),
 		input: {
 			composition: { files: [], text: id },
+			submissionId: toSubmissionId(`submission-${id}`),
 			userText: id,
 		},
 		message: fromPartial<SessionMessage>({
@@ -32,7 +36,7 @@ const steeringMessage = (id: string): SessionSteeringMessage =>
 			role: "user",
 		}),
 		recordId: sessionRecordId(`record-${id}`),
-		status: "pending",
+		status,
 	});
 
 const deliveryOf = (
@@ -59,15 +63,22 @@ const createSteeringFixture = ({
 	const pendingStarts = new Map<AgentTurnId, SessionSteeringMessage>();
 	let lane: readonly SessionSteeringMessage[] = [];
 	const cleared: AgentTurnId[] = [];
-	const settled: { id: string; reason?: string; status: string }[] = [];
+	const settled: {
+		afterId?: string;
+		id: string;
+		reason?: string;
+		status: string;
+	}[] = [];
 	const events: {
 		kind: string;
 		messageId?: string;
 		reason?: string;
+		submissionId?: string;
 		turnId?: string;
 	}[] = [];
 	const proposed: SessionSteeringTransition[] = [];
 	const runOptions: ({ reportFailure?: boolean } | undefined)[] = [];
+	const runTurnIds: (AgentTurnId | undefined)[] = [];
 
 	const workflow = createSessionSteeringWorkflow({
 		apply: (transition: SessionSteeringTransition) => {
@@ -92,6 +103,9 @@ const createSteeringFixture = ({
 				events.push({
 					kind: event.kind,
 					...("messageId" in event ? { messageId: event.messageId } : {}),
+					...("submissionId" in event
+						? { submissionId: event.submissionId }
+						: {}),
 					...("reason" in event ? { reason: event.reason } : {}),
 					...("turnId" in event ? { turnId: event.turnId } : {}),
 				});
@@ -103,6 +117,7 @@ const createSteeringFixture = ({
 			runSteeringRetry: async (_retryingId, run) => await run(),
 			runSubmission: async (input, options) => {
 				runOptions.push(options);
+				runTurnIds.push(input.turnId);
 				// The Session clears the arm once an Agent Turn begins, which is what tells
 				// the workflow this Submission did start one. Requiring the delete to hit
 				// something keeps a turn the workflow never armed from passing.
@@ -116,8 +131,9 @@ const createSteeringFixture = ({
 				return outcome;
 			},
 			skills: { resolveSkill: async () => ({ ok: true }) },
-			updateSteeringStatus: async (source, updated) => {
+			updateSteeringStatus: async (source, updated, afterId) => {
 				settled.push({
+					...(afterId === undefined ? {} : { afterId }),
 					id: source.id,
 					status: updated.status,
 					...(updated.reason === undefined ? {} : { reason: updated.reason }),
@@ -137,8 +153,10 @@ const createSteeringFixture = ({
 
 	return {
 		/** Every transition the workflow proposed, in order. */
+		pendingStartCount: () => pendingStarts.size,
 		proposed: () => proposed,
 		runOptions,
+		runTurnIds,
 		/** Makes the lane's head the message a run is about to be given. */
 		setLane: (messages: readonly SessionSteeringMessage[]) => {
 			lane = messages;
@@ -156,6 +174,9 @@ const createSteeringFixture = ({
 			pending.set(turnId, deliveries);
 			return {
 				messageIds: deliveries.map(({ source }) => source.message.id),
+				submissionIds: deliveries.map(
+					({ source }) => source.input.submissionId
+				),
 				sourceIds: deliveries.map(({ source }) => source.id),
 				turnId,
 			};
@@ -179,12 +200,60 @@ test("acknowledging a turn settles its deliveries and clears only that turn", as
 	// Each announcement names its own delivery: consumers attribute a settlement by
 	// message id, so echoing one delivery's id twice would settle the wrong message.
 	expect(fixture.events).toEqual(
-		finished.messageIds.map((messageId) => ({
+		finished.messageIds.map((messageId, index) => ({
 			kind: "processed",
 			messageId,
+			submissionId: finished.submissionIds[index],
 			turnId: finished.turnId,
 		}))
 	);
+});
+
+test("acknowledging a turn as failed chains the retry order and names the reason", async () => {
+	const fixture = createSteeringFixture();
+	const failed = fixture.turnWithDeliveries("turn-failed", 2);
+	const [firstId, secondId] = failed.sourceIds;
+	if (firstId === undefined || secondId === undefined) {
+		throw new Error("The fixture did not create both deliveries.");
+	}
+
+	await fixture.workflow.acknowledge(failed.turnId, "failed");
+
+	// A shut-down turn supplies no reason, so the confirmation failure stands in;
+	// each later failure stacks behind the previous one so retry order is kept.
+	expect(fixture.settled).toEqual([
+		{
+			id: firstId,
+			reason: "The Agent Turn ended before confirming the Submission.",
+			status: "failed",
+		},
+		{
+			afterId: firstId,
+			id: secondId,
+			reason: "The Agent Turn ended before confirming the Submission.",
+			status: "failed",
+		},
+	]);
+	expect(fixture.clearedTurns()).toEqual([failed.turnId]);
+});
+
+test("a Steering Message already past pending is not run again", async () => {
+	const fixture = createSteeringFixture();
+	const settledElsewhere = fixture.steeringMessage(
+		"steering-processing",
+		"processing"
+	);
+	fixture.setLane([settledElsewhere]);
+
+	const outcome = await fixture.workflow.runPendingMessage(settledElsewhere);
+
+	// Re-running it would deliver a Submission the lane already handled.
+	expect(outcome).toEqual({
+		rejected: true,
+		reason: "The committed Submission is no longer waiting.",
+	});
+	expect(fixture.settled).toEqual([]);
+	expect(fixture.events).toEqual([]);
 });
 
 test("a committed Submission that did not start a turn is reported as a steering failure", async () => {
@@ -211,10 +280,13 @@ test("a committed Submission that did not start a turn is reported as a steering
 			kind: "failed",
 			messageId: message.message.id,
 			reason: "the turn refused it",
-			// The workflow mints this turn's identity, so pin its presence only.
-			turnId: expect.any(String),
+			submissionId: message.input.submissionId,
+			// The workflow mints the turn, so pin the identity it actually ran.
+			turnId: fixture.runTurnIds[0],
 		},
 	]);
+	// Taking the arm has to clear it, or the next look would see it still armed.
+	expect(fixture.pendingStartCount()).toBe(0);
 	// The steering path reports its own failure; the run must not report it again.
 	expect(fixture.runOptions).toEqual([{ reportFailure: false }]);
 	expect(
@@ -266,7 +338,8 @@ test("a Submission that succeeded without starting a turn is still reported as a
 			kind: "failed",
 			messageId: message.message.id,
 			reason: "The committed Submission did not start an Agent Turn.",
-			turnId: expect.any(String),
+			submissionId: message.input.submissionId,
+			turnId: fixture.runTurnIds[0],
 		},
 	]);
 });
