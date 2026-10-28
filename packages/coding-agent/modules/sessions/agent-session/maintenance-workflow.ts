@@ -27,6 +27,7 @@ import {
 	hasCompletedToolArtifact,
 } from "../session-retry";
 import { getReportableSessionFailureFields } from "./session-error-diagnostics";
+import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
 import type {
 	SessionCompactionCommand,
 	SessionCompactionPort,
@@ -36,7 +37,6 @@ import type {
 	SessionOverflowRecoveryTarget,
 } from "./types";
 
-const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
 const recoveryTitle = (
 	trigger: SessionOverflowRecoveryCommand["trigger"]
 ): string =>
