@@ -54,9 +54,11 @@ const deliveryOf = (
  */
 const createSteeringFixture = ({
 	outcome = { rejected: true, reason: "the turn refused it" },
+	runThrows,
 	turnStarts = false,
 }: Readonly<{
 	outcome?: { rejected: true; reason: string } | { rejected: false };
+	runThrows?: Error;
 	turnStarts?: boolean;
 }> = {}) => {
 	const pending = new Map<AgentTurnId, PendingSteeringDelivery[]>();
@@ -127,6 +129,9 @@ const createSteeringFixture = ({
 					!pendingStarts.delete(input.turnId)
 				) {
 					throw new Error("The workflow did not arm the turn it is running.");
+				}
+				if (runThrows !== undefined) {
+					throw runThrows;
 				}
 				return outcome;
 			},
@@ -211,10 +216,14 @@ test("acknowledging a turn settles its deliveries and clears only that turn", as
 
 test("acknowledging a turn as failed chains the retry order and names the reason", async () => {
 	const fixture = createSteeringFixture();
-	const failed = fixture.turnWithDeliveries("turn-failed", 2);
-	const [firstId, secondId] = failed.sourceIds;
-	if (firstId === undefined || secondId === undefined) {
-		throw new Error("The fixture did not create both deliveries.");
+	const failed = fixture.turnWithDeliveries("turn-failed", 3);
+	const [firstId, secondId, thirdId] = failed.sourceIds;
+	if (
+		firstId === undefined ||
+		secondId === undefined ||
+		thirdId === undefined
+	) {
+		throw new Error("The fixture did not create all three deliveries.");
 	}
 
 	await fixture.workflow.acknowledge(failed.turnId, "failed");
@@ -233,7 +242,23 @@ test("acknowledging a turn as failed chains the retry order and names the reason
 			reason: "The Agent Turn ended before confirming the Submission.",
 			status: "failed",
 		},
+		{
+			afterId: secondId,
+			id: thirdId,
+			reason: "The Agent Turn ended before confirming the Submission.",
+			status: "failed",
+		},
 	]);
+	// A failed acknowledge must announce failures, not recycle another status.
+	expect(fixture.events).toEqual(
+		failed.messageIds.map((messageId, index) => ({
+			kind: "failed",
+			messageId,
+			reason: "The Agent Turn ended before confirming the Submission.",
+			submissionId: failed.submissionIds[index],
+			turnId: failed.turnId,
+		}))
+	);
 	expect(fixture.clearedTurns()).toEqual([failed.turnId]);
 });
 
@@ -338,6 +363,34 @@ test("a Submission that succeeded without starting a turn is still reported as a
 			kind: "failed",
 			messageId: message.message.id,
 			reason: "The committed Submission did not start an Agent Turn.",
+			submissionId: message.input.submissionId,
+			turnId: fixture.runTurnIds[0],
+		},
+	]);
+});
+
+test("a run that throws after arming the turn is reported as a steering failure", async () => {
+	const fixture = createSteeringFixture({
+		runThrows: new Error("the run blew up"),
+		turnStarts: false,
+	});
+	const message = fixture.steeringMessage("steering-threw");
+	fixture.setLane([message]);
+
+	const outcome = await fixture.workflow.runPendingMessage(message);
+
+	// The Submission may have reached the provider, so the failure is recorded
+	// against it rather than escaping as an unhandled error.
+	expect(outcome).toEqual({ rejected: true, reason: "the run blew up" });
+	expect(fixture.settled).toEqual([
+		{ id: "steering-threw", status: "processing" },
+		{ id: "steering-threw", reason: "the run blew up", status: "failed" },
+	]);
+	expect(fixture.events).toEqual([
+		{
+			kind: "failed",
+			messageId: message.message.id,
+			reason: "the run blew up",
 			submissionId: message.input.submissionId,
 			turnId: fixture.runTurnIds[0],
 		},
