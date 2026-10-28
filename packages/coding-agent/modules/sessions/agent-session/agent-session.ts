@@ -21,6 +21,7 @@ import {
 } from "../message";
 import { projectSessionRecords } from "../storage/session-record";
 import type { SessionSendInput } from "../submission-types";
+import { createExecutionRegistry } from "./execution-registry";
 import {
 	createSessionInputLaneWorkflow,
 	type SessionInputExternalization,
@@ -153,10 +154,8 @@ type AgentSessionOperationState = {
 		readonly observers: Set<() => void>;
 		readonly submissionEvents: Set<(event: SessionSubmissionEvent) => void>;
 	};
-	readonly executions: {
-		/** Removed from the live view on interruption, retained until terminal persistence settles. */
-		readonly settling: Map<AgentTurnId, SessionExecution>;
-		readonly endWaiters: Map<AgentTurnId, (() => void)[]>;
+	/** Committed Steering Messages a live execution still owes a processing status. */
+	readonly steeringLane: {
 		readonly pendingSteering: Map<
 			AgentTurnId,
 			readonly PendingSteeringDelivery[]
@@ -182,7 +181,7 @@ type AgentSessionOperationState = {
 		readonly activeRuns: Set<symbol>;
 		readonly attemptedMessages: Set<SessionMessageId>;
 		readonly steeringContinuations: Set<AgentTurnId>;
-		generation: number;
+		epoch: symbol;
 	};
 	readonly shutdown: {
 		closed: boolean;
@@ -536,6 +535,12 @@ const orderSessionTranscript = (
 };
 
 /**
+ * Mints the identity of one overflow-recovery retention epoch. Every attempt
+ * begun under an epoch stops being current once a later epoch replaces it.
+ */
+const nextRecoveryEpoch = (): symbol => Symbol("recovery-epoch");
+
+/**
  * The single owner of one session's live state and the only writer to it.
  * Observers read a Session Snapshot and never write; the Agent Session replaces
  * it instead of mutating it.
@@ -601,9 +606,7 @@ export class AgentSessionImpl implements AgentSession {
 				observers: new Set(),
 				submissionEvents: new Set(),
 			},
-			executions: {
-				settling: new Map(),
-				endWaiters: new Map(),
+			steeringLane: {
 				pendingSteering: new Map(),
 				pendingSteeringStarts: new Map(),
 				retryingSteering: new Set(),
@@ -623,7 +626,7 @@ export class AgentSessionImpl implements AgentSession {
 				activeRuns: new Set(),
 				attemptedMessages: new Set(),
 				steeringContinuations: new Set(),
-				generation: 0,
+				epoch: nextRecoveryEpoch(),
 			},
 			shutdown: {
 				controller: new AbortController(),
@@ -635,10 +638,14 @@ export class AgentSessionImpl implements AgentSession {
 			},
 		};
 		const sessionState = this.#operationState;
+		const executionRegistry = createExecutionRegistry({
+			isLive: (turnId) =>
+				this.#state.executions.some((execution) => execution.turnId === turnId),
+		});
 		const getAssistantMessageId = (turnId: AgentTurnId): SessionMessageId =>
 			this.#state.executions.find((execution) => execution.turnId === turnId)
 				?.assistantId ??
-			sessionState.executions.settling.get(turnId)?.assistantId ??
+			executionRegistry.assistantIdFor(turnId) ??
 			agentTurnAssistantMessageId(turnId);
 		const emitSubmissionEvent = (event: SessionSubmissionEvent): void => {
 			for (const listener of [...sessionState.events.submissionEvents]) {
@@ -822,21 +829,6 @@ export class AgentSessionImpl implements AgentSession {
 			}
 			publish({ compactionError: error });
 		};
-		const waitForExecutionEnd = (turnId: AgentTurnId): Promise<void> => {
-			if (
-				!this.#state.executions.some((execution) => execution.turnId === turnId)
-			) {
-				return Promise.resolve();
-			}
-			const { promise, resolve } = Promise.withResolvers<void>();
-			const waiters = sessionState.executions.endWaiters.get(turnId);
-			if (isUndefined(waiters)) {
-				sessionState.executions.endWaiters.set(turnId, [resolve]);
-			} else {
-				waiters.push(resolve);
-			}
-			return promise;
-		};
 		let maintenance: SessionMaintenanceWorkflow;
 		const compact = (
 			command: SessionCompactionCommand
@@ -847,7 +839,7 @@ export class AgentSessionImpl implements AgentSession {
 		const recoverOverflow = async (
 			command: SessionOverflowRecoveryCommand
 		): Promise<SessionOverflowRecoveryOutcome> => {
-			if (sessionState.executions.pendingSteering.has(command.turnId)) {
+			if (sessionState.steeringLane.pendingSteering.has(command.turnId)) {
 				sessionState.recovery.steeringContinuations.add(command.turnId);
 			}
 			try {
@@ -862,23 +854,14 @@ export class AgentSessionImpl implements AgentSession {
 			turnId: AgentTurnId,
 			retainForSettlement = false
 		): void => {
-			if (retainForSettlement) {
-				const execution = this.#state.executions.find(
-					(candidate) => candidate.turnId === turnId
-				);
-				if (execution !== undefined) {
-					sessionState.executions.settling.set(turnId, execution);
-				}
-			} else {
-				sessionState.executions.settling.delete(turnId);
-			}
-			const waiters = sessionState.executions.endWaiters.get(turnId);
-			if (!isUndefined(waiters)) {
-				sessionState.executions.endWaiters.delete(turnId);
-				for (const resolveEnd of waiters) {
-					resolveEnd();
-				}
-			}
+			executionRegistry.end(
+				turnId,
+				retainForSettlement
+					? this.#state.executions.find(
+							(candidate) => candidate.turnId === turnId
+						)
+					: undefined
+			);
 			const executions = this.#state.executions.filter(
 				(execution) => execution.turnId !== turnId
 			);
@@ -905,9 +888,9 @@ export class AgentSessionImpl implements AgentSession {
 				turnId,
 			};
 			const initialSteering =
-				sessionState.executions.pendingSteeringStarts.get(turnId);
+				sessionState.steeringLane.pendingSteeringStarts.get(turnId);
 			if (initialSteering !== undefined) {
-				sessionState.executions.pendingSteeringStarts.delete(turnId);
+				sessionState.steeringLane.pendingSteeringStarts.delete(turnId);
 			}
 			const pendingSteering: PendingSteeringDelivery[] = [];
 			if (initialSteering !== undefined) {
@@ -919,11 +902,11 @@ export class AgentSessionImpl implements AgentSession {
 			}
 			for (const sourceTurnId of sessionState.recovery.steeringContinuations) {
 				const previous =
-					sessionState.executions.pendingSteering.get(sourceTurnId);
+					sessionState.steeringLane.pendingSteering.get(sourceTurnId);
 				if (previous === undefined) {
 					continue;
 				}
-				sessionState.executions.pendingSteering.delete(sourceTurnId);
+				sessionState.steeringLane.pendingSteering.delete(sourceTurnId);
 				sessionState.recovery.steeringContinuations.delete(sourceTurnId);
 				for (const { message, source } of previous) {
 					pendingSteering.push({ execution, message, source });
@@ -931,7 +914,7 @@ export class AgentSessionImpl implements AgentSession {
 				break;
 			}
 			if (pendingSteering.length > 0) {
-				sessionState.executions.pendingSteering.set(turnId, pendingSteering);
+				sessionState.steeringLane.pendingSteering.set(turnId, pendingSteering);
 			}
 			publish({ executions: [...this.#state.executions, execution] });
 			return execution;
@@ -1027,96 +1010,122 @@ export class AgentSessionImpl implements AgentSession {
 			}
 		};
 		let inputLane: SessionInputLaneWorkflow;
+		/** A transition for a command the Session already replaced must not resurrect it. */
+		const isSupersededCommand = (
+			command: SessionMaintenanceCommandState
+		): boolean =>
+			sessionState.compaction.activeCommand?.promise !== command.promise;
 		const maintenancePort: SessionMaintenancePort = {
-			applyCompactionResult: (result) => {
-				applyContext(result.activeMessages);
-				recordCompaction(result.entry);
-				setCompactionError(null);
+			apply: (transition) => {
+				switch (transition.kind) {
+					case "compaction-started": {
+						sessionState.compaction.activeCommand = transition.command;
+						publish({});
+						return;
+					}
+					case "compaction-phase":
+					case "compaction-settled": {
+						if (isSupersededCommand(transition.command)) {
+							return;
+						}
+						// The command the caller holds stays frozen; the Session owns the live phase.
+						sessionState.compaction.activeCommand =
+							transition.kind === "compaction-phase"
+								? { ...transition.command, phase: transition.phase }
+								: undefined;
+						publish({});
+						return;
+					}
+					case "compaction-applied": {
+						applyContext(transition.result.activeMessages);
+						recordCompaction(transition.result.entry);
+						setCompactionError(null);
+						return;
+					}
+					case "compaction-failed": {
+						setCompactionError(transition.error);
+						return;
+					}
+					case "compaction-request-tracked": {
+						const { request } = transition;
+						sessionState.compaction.requests.add(request);
+						void request.then(
+							() => sessionState.compaction.requests.delete(request),
+							() => sessionState.compaction.requests.delete(request)
+						);
+						return;
+					}
+					case "recovery-begun": {
+						sessionState.recovery.attemptedMessages.add(transition.messageId);
+						return;
+					}
+					case "recovery-released": {
+						sessionState.recovery.attemptedMessages.delete(
+							transition.messageId
+						);
+						return;
+					}
+					default: {
+						// Defensive: the union is exhaustive, so TypeScript narrows this to never.
+						throw new Error("Unhandled Session maintenance transition.");
+					}
+				}
 			},
 			compaction: ports.compaction,
-			drainQueueInBackground: () => {
-				trackBackgroundTask(inputLane.drainQueuedSubmissions());
-			},
-			getActiveCompaction: () => sessionState.compaction.activeCommand,
-			getContext: () => this.#state.context,
-			getSessionState: () => ({
-				closed: sessionState.shutdown.closed,
-				id: sessionId,
-				shutdownSignal: sessionState.shutdown.controller.signal,
-			}),
-			getTranscript: () => this.#state.transcript,
-			hasAttemptedRecovery: (messageId) =>
-				sessionState.recovery.attemptedMessages.has(messageId),
-			isRecoveryCurrent: (generation) =>
-				!sessionState.shutdown.closed &&
-				sessionState.recovery.generation === generation,
-			mergeTranscript,
-			releaseRecoveryAttempt: (messageId) => {
-				sessionState.recovery.attemptedMessages.delete(messageId);
-			},
-			resolveCompactionSettings: async (model) => {
-				const settings = await ports.resolveCompactionSettings(model);
-				return {
-					...omitUndefined({
-						contextWindowOverrideTokens: settings.contextWindowOverrideTokens,
-						summary: settings.summary,
-					}),
-					compactionOverheadTokens: ports.turnRunner.requestOverheadTokens(),
-					enabled: settings.enabled,
-					keepRecentTokens: settings.keepRecentTokens,
-					maxMediaAttachments: settings.maxMediaAttachments,
-					maxMediaBytes: settings.maxMediaBytes,
-					maxMediaTokens: settings.maxMediaTokens,
-					modelContextLimit: settings.modelContextLimit,
-					reserveTokens: settings.reserveTokens,
-					thresholdTokens: settings.thresholdTokens,
-				};
-			},
-			runTrackedOverflowRecovery: (run) => {
-				const runId = Symbol("overflow-recovery-run");
-				sessionState.recovery.activeRuns.add(runId);
-				const recovery = run();
-				const settleRecovery = (): void => {
-					sessionState.recovery.activeRuns.delete(runId);
+			effects: {
+				drainQueueInBackground: () => {
 					trackBackgroundTask(inputLane.drainQueuedSubmissions());
-				};
-				void recovery.then(settleRecovery, settleRecovery);
-				return recovery;
+				},
+				resolveCompactionSettings: async (model) => {
+					const settings = await ports.resolveCompactionSettings(model);
+					return {
+						...omitUndefined({
+							contextWindowOverrideTokens: settings.contextWindowOverrideTokens,
+							summary: settings.summary,
+						}),
+						compactionOverheadTokens: ports.turnRunner.requestOverheadTokens(),
+						enabled: settings.enabled,
+						keepRecentTokens: settings.keepRecentTokens,
+						maxMediaAttachments: settings.maxMediaAttachments,
+						maxMediaBytes: settings.maxMediaBytes,
+						maxMediaTokens: settings.maxMediaTokens,
+						modelContextLimit: settings.modelContextLimit,
+						reserveTokens: settings.reserveTokens,
+						thresholdTokens: settings.thresholdTokens,
+					};
+				},
+				runTrackedRecovery: (run) => {
+					const runId = Symbol("overflow-recovery-run");
+					sessionState.recovery.activeRuns.add(runId);
+					const recovery = run();
+					const settleRecovery = (): void => {
+						sessionState.recovery.activeRuns.delete(runId);
+						trackBackgroundTask(inputLane.drainQueuedSubmissions());
+					};
+					void recovery.then(settleRecovery, settleRecovery);
+					return recovery;
+				},
+				waitForExecutionEnd: executionRegistry.waitForEnd,
 			},
-			setCompactionError,
-			startRecoveryAttempt: (messageId) => {
-				sessionState.recovery.attemptedMessages.add(messageId);
-				return sessionState.recovery.generation;
-			},
-			trackCompactionRequest: (request) => {
-				sessionState.compaction.requests.add(request);
-				void request.then(
-					() => sessionState.compaction.requests.delete(request),
-					() => sessionState.compaction.requests.delete(request)
-				);
-				return request;
-			},
-			transitionCompactionCommand: (transition) => {
-				if (transition.kind === "started") {
-					sessionState.compaction.activeCommand = transition.command;
-					publish({});
-					return;
-				}
-				if (
-					sessionState.compaction.activeCommand?.promise !==
-					transition.command.promise
-				) {
-					return;
-				}
-				if (transition.kind === "phase") {
-					transition.command.phase = transition.phase;
-				} else {
-					transition.command.phase = "settled";
-					sessionState.compaction.activeCommand = undefined;
-				}
-				publish({});
-			},
-			waitForExecutionEnd,
+			read: () => ({
+				activeCompaction: sessionState.compaction.activeCommand,
+				context: this.#state.context,
+				recovery: {
+					// Copied so a snapshot taken before an await cannot change under its reader.
+					attempted: new Set(sessionState.recovery.attemptedMessages),
+					epoch: sessionState.recovery.epoch,
+				},
+				sessionId,
+				shutdownSignal: sessionState.shutdown.controller.signal,
+				transcript: this.#state.transcript,
+				withTranscriptOverlay: mergeTranscript,
+			}),
+			signals: () => ({
+				closed: () => sessionState.shutdown.closed,
+				recoveryCurrent: (epoch) =>
+					!sessionState.shutdown.closed &&
+					sessionState.recovery.epoch === epoch,
+			}),
 		};
 		maintenance = createSessionMaintenanceWorkflow(maintenancePort);
 
@@ -1157,13 +1166,7 @@ export class AgentSessionImpl implements AgentSession {
 				const nextAssistantId = toSessionMessageId(
 					`assistant-${crypto.randomUUID()}`
 				);
-				const settling = sessionState.executions.settling.get(turnId);
-				if (settling !== undefined) {
-					sessionState.executions.settling.set(turnId, {
-						...settling,
-						assistantId: nextAssistantId,
-					});
-				}
+				executionRegistry.reassignAssistantId(turnId, nextAssistantId);
 				publish({
 					executions: this.#state.executions.map((execution) =>
 						execution.turnId === turnId
@@ -1431,7 +1434,7 @@ export class AgentSessionImpl implements AgentSession {
 				}),
 			emitSubmissionEvent,
 			getPendingSteering: (turnId) =>
-				sessionState.executions.pendingSteering.get(turnId),
+				sessionState.steeringLane.pendingSteering.get(turnId),
 			getSteeringSnapshot: () => ({
 				context: this.#state.context,
 				steeringMessages: this.#state.steeringMessages,
@@ -1443,34 +1446,34 @@ export class AgentSessionImpl implements AgentSession {
 			resolveFileMentions: ports.resolveFileMentions,
 			resolveSubmission: ports.resolveSubmission,
 			runSteeringRetry: async (id, run) => {
-				if (sessionState.executions.retryingSteering.has(id)) {
+				if (sessionState.steeringLane.retryingSteering.has(id)) {
 					return null;
 				}
-				sessionState.executions.retryingSteering.add(id);
+				sessionState.steeringLane.retryingSteering.add(id);
 				try {
 					return await run();
 				} finally {
-					sessionState.executions.retryingSteering.delete(id);
+					sessionState.steeringLane.retryingSteering.delete(id);
 				}
 			},
 			runSubmission,
 			setPendingSteeringStart: (turnId, source) => {
-				sessionState.executions.pendingSteeringStarts.set(turnId, source);
+				sessionState.steeringLane.pendingSteeringStarts.set(turnId, source);
 			},
 			skills: { resolveSkill: ports.skills.resolveSkill },
 			takePendingSteeringStart: (turnId) => {
 				const pending =
-					sessionState.executions.pendingSteeringStarts.get(turnId);
-				sessionState.executions.pendingSteeringStarts.delete(turnId);
+					sessionState.steeringLane.pendingSteeringStarts.get(turnId);
+				sessionState.steeringLane.pendingSteeringStarts.delete(turnId);
 				return pending;
 			},
 			updatePendingSteering: (turnId, update) => {
-				const current = sessionState.executions.pendingSteering.get(turnId);
+				const current = sessionState.steeringLane.pendingSteering.get(turnId);
 				const next = update(current);
 				if (next === undefined) {
-					sessionState.executions.pendingSteering.delete(turnId);
+					sessionState.steeringLane.pendingSteering.delete(turnId);
 				} else {
-					sessionState.executions.pendingSteering.set(turnId, next);
+					sessionState.steeringLane.pendingSteering.set(turnId, next);
 				}
 				return next;
 			},
@@ -1576,7 +1579,7 @@ export class AgentSessionImpl implements AgentSession {
 		const interruptActiveWork = (
 			preserveToolCallId?: ToolCallId
 		): Promise<void> => {
-			sessionState.recovery.generation += 1;
+			sessionState.recovery.epoch = nextRecoveryEpoch();
 			this.#runState = { phase: "interrupted" };
 			publish({});
 			abortActiveSend("interrupted");
@@ -1737,7 +1740,7 @@ export class AgentSessionImpl implements AgentSession {
 			if (hasCompaction) {
 				cancelCompactionCommand();
 				if (!hasTurn) {
-					sessionState.recovery.generation += 1;
+					sessionState.recovery.epoch = nextRecoveryEpoch();
 				}
 			}
 			const pauseWrite = hasTurn ? interruptActiveWork() : Promise.resolve();
@@ -1811,7 +1814,7 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		this.continue = () => continueSession();
 		this.cancel = () => {
-			sessionState.recovery.generation += 1;
+			sessionState.recovery.epoch = nextRecoveryEpoch();
 			abortActiveSend("cancelled");
 		};
 		this.cancelCompaction = async () => {
@@ -1820,7 +1823,7 @@ export class AgentSessionImpl implements AgentSession {
 				this.#state.isCompacting ||
 				sessionState.recovery.activeRuns.size > 0
 			) {
-				sessionState.recovery.generation += 1;
+				sessionState.recovery.epoch = nextRecoveryEpoch();
 			}
 			cancelCompactionCommand();
 			const recall = inputLane.recallWaitingMessages();

@@ -5,6 +5,7 @@ import type { ProviderModelSelection } from "@/modules/providers/provider-model-
 import {
 	createSessionMaintenanceWorkflow,
 	type SessionMaintenancePort,
+	type SessionMaintenanceSnapshot,
 } from "@/modules/sessions/agent-session/maintenance-workflow";
 import type { SessionOverflowContinuationOutcome } from "@/modules/sessions/agent-session/types";
 import type {
@@ -57,41 +58,48 @@ const configuration: ConfigSnapshot = {
 	sources: [],
 };
 
+const RECOVERY_EPOCH = Symbol("recovery-epoch");
+
+/** The one Agent Session state a maintenance step reads, as frozen values. */
+const snapshotOf = ({
+	context = [sourceMessage],
+	transcript = [sourceMessage],
+	...overrides
+}: Partial<SessionMaintenanceSnapshot> = {}): SessionMaintenanceSnapshot => ({
+	activeCompaction: undefined,
+	context,
+	recovery: { attempted: new Set(), epoch: RECOVERY_EPOCH },
+	sessionId: sessionId("maintenance-policy"),
+	shutdownSignal: new AbortController().signal,
+	transcript,
+	withTranscriptOverlay: (messages) => messages,
+	...overrides,
+});
+
 const createWorkflow = (
 	compact: SessionMaintenancePort["compaction"]["compact"],
-	resolveCompactionSettings: SessionMaintenancePort["resolveCompactionSettings"]
+	resolveCompactionSettings: SessionMaintenancePort["effects"]["resolveCompactionSettings"],
+	read: () => SessionMaintenanceSnapshot = () => snapshotOf()
 ) =>
-	createSessionMaintenanceWorkflow(
-		fromPartial<SessionMaintenancePort>({
-			applyCompactionResult: () => undefined,
-			compaction: {
-				compact,
-				getInFlight: () => null,
-				needsCompaction: () => false,
-			},
+	createSessionMaintenanceWorkflow({
+		apply: () => undefined,
+		compaction: {
+			compact,
+			getInFlight: () => null,
+			needsCompaction: () => false,
+		},
+		effects: {
 			drainQueueInBackground: () => undefined,
-			getActiveCompaction: () => undefined,
-			getContext: () => [sourceMessage],
-			hasAttemptedRecovery: () => false,
-			getSessionState: () => ({
-				closed: false,
-				id: sessionId("maintenance-policy"),
-				shutdownSignal: new AbortController().signal,
-			}),
-			getTranscript: () => [sourceMessage],
-			isRecoveryCurrent: () => true,
-			mergeTranscript: (messages: readonly SessionMessage[]) => messages,
-			releaseRecoveryAttempt: () => undefined,
 			resolveCompactionSettings,
-			runTrackedOverflowRecovery: <T>(run: () => Promise<T>) => run(),
-			setCompactionError: () => undefined,
-			startRecoveryAttempt: () => 0,
-			trackCompactionRequest: (request: Promise<CompactSessionResult>) =>
-				request,
-			transitionCompactionCommand: () => undefined,
+			runTrackedRecovery: (run) => run(),
 			waitForExecutionEnd: async () => undefined,
-		})
-	);
+		},
+		read,
+		signals: () => ({
+			closed: () => false,
+			recoveryCurrent: () => true,
+		}),
+	});
 
 test("manual, threshold, and overflow compaction use the selected model policy", async () => {
 	const requests: CompactSessionInput[] = [];
@@ -245,44 +253,22 @@ const toolAttemptMessages: SessionMessage[] = [
 
 const createRecoveryWorkflow = (
 	compact: SessionMaintenancePort["compaction"]["compact"],
-	overrides: Partial<SessionMaintenancePort> = {}
-) =>
-	createSessionMaintenanceWorkflow(
-		fromPartial<SessionMaintenancePort>({
-			applyCompactionResult: () => undefined,
-			compaction: {
-				compact,
-				getInFlight: () => null,
-				needsCompaction: () => false,
-			},
-			drainQueueInBackground: () => undefined,
-			getActiveCompaction: () => undefined,
-			getContext: () => toolAttemptMessages,
-			hasAttemptedRecovery: () => false,
-			getSessionState: () => ({
-				closed: false,
-				id: sessionId("maintenance-overflow"),
-				shutdownSignal: new AbortController().signal,
-			}),
-			getTranscript: () => toolAttemptMessages,
-			isRecoveryCurrent: () => true,
-			mergeTranscript: (messages: readonly SessionMessage[]) => messages,
-			releaseRecoveryAttempt: () => undefined,
-			resolveCompactionSettings: async (model: ProviderModelSelection) =>
-				resolveCompactionSettings({
-					contextLimit: 100_000,
-					model,
-					snapshot: configuration,
-				}),
-			runTrackedOverflowRecovery: <T>(run: () => Promise<T>) => run(),
-			setCompactionError: () => undefined,
-			startRecoveryAttempt: () => 0,
-			trackCompactionRequest: (request: Promise<CompactSessionResult>) =>
-				request,
-			transitionCompactionCommand: () => undefined,
-			waitForExecutionEnd: async () => undefined,
-			...overrides,
+	read: () => SessionMaintenanceSnapshot = () =>
+		snapshotOf({
+			context: toolAttemptMessages,
+			transcript: toolAttemptMessages,
+			sessionId: sessionId("maintenance-overflow"),
 		})
+) =>
+	createWorkflow(
+		compact,
+		async (model: ProviderModelSelection) =>
+			resolveCompactionSettings({
+				contextLimit: 100_000,
+				model,
+				snapshot: configuration,
+			}),
+		read
 	);
 
 test("overflow recovery after completed tools continues the durable context", async () => {
@@ -465,7 +451,7 @@ test("post-commit continuation turn failure reports the saved-context recovery s
 });
 
 test("recovery compacts work settled while its target settings were loading", async () => {
-	const messages: SessionMessage[] = [...toolAttemptMessages];
+	let messages: readonly SessionMessage[] = [...toolAttemptMessages];
 	const requests: CompactSessionInput[] = [];
 	const workflow = createRecoveryWorkflow(
 		async (input) => {
@@ -478,10 +464,7 @@ test("recovery compacts work settled while its target settings were loading", as
 				}),
 			});
 		},
-		{
-			getContext: () => messages,
-			getTranscript: () => messages,
-		}
+		() => snapshotOf({ context: messages, transcript: messages })
 	);
 
 	const outcome = await workflow.recoverOverflow({
@@ -489,14 +472,17 @@ test("recovery compacts work settled while its target settings were loading", as
 		error: fromPartial<OperationalFailure>({ code: "context-overflow" }),
 		originalMessageId: sessionMessageId("attempt-user"),
 		resolveTarget: async () => {
-			// A steering message settles while the target's settings resolve.
-			messages.push(
+			// A steering message settles while the target's settings resolve. It
+			// replaces the transcript rather than mutating it, so a compaction that
+			// kept the snapshot it opened with would summarize the older history.
+			messages = [
+				...messages,
 				fromPartial<SessionMessage>({
 					id: sessionMessageId("late-steering"),
 					parts: [{ text: "also check the tests", type: "text" }],
 					role: "user",
-				})
-			);
+				}),
+			];
 			return { model: automaticModel };
 		},
 		turnId: agentTurnId("overflow-late-settlement"),

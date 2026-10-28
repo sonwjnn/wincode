@@ -149,6 +149,9 @@ One run of an Agent Turn with its identity, model selection, live view and turn-
 **Session View State**:
 The live, transient projection of one Agent Turn Execution for its conversation's UI. It is distinct from the Session Record and from another execution's view, including the parent execution of a delegated conversation. _Avoid_: streaming state, live buffer
 
+**Execution Registry**:
+The Agent Session's record of the Agent Turn Executions it must not forget yet and of the callers waiting for one to end. It owns only what the Live Session Snapshot cannot carry: an execution retained after its live removal so terminal persistence still finds it, and the waiters parked on that execution's end. It is not a second authority over what is running; the Snapshot remains that. _Avoid_: execution queue, run state
+
 **Submission**:
 An input unit admitted by a session: user-authored text, attachments, pasted text, explicit Skill intent, or a Custom Command invocation with its expanded prompt. _Avoid_: message, request
 
