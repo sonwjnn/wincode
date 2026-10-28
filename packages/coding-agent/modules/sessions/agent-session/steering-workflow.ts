@@ -16,6 +16,7 @@ import {
 } from "../message";
 import { buildUserSessionRecord } from "../storage/session-record";
 import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
+import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
 import type {
 	AgentSessionPorts,
 	LiveSessionSnapshot,
@@ -28,7 +29,6 @@ import type {
 	SessionSubmissionEvent,
 } from "./types";
 
-const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
 const STEERING_ATTACHMENT_PREPARATION_ERROR =
 	"Steered Submission attachments could not be prepared.";
 const STEERING_DELIVERY_CONFIRMATION_ERROR =
@@ -449,8 +449,8 @@ export type SessionSteeringWorkflow = ReadonlyDeep<{
 	runPendingMessage: (
 		message: SessionSteeringMessage
 	) => Promise<SessionSendOutcome>;
-	/** Delivers pending steering at a Model Step boundary. */
-	take: (
+	/** Delivers committed pending Steering Messages at a Model Step boundary. */
+	deliverPending: (
 		execution: SessionExecution,
 		armedSkill: SessionSkillCatalog,
 		signal: AbortSignal
@@ -576,7 +576,7 @@ export const createSessionSteeringWorkflow = (
 		}
 		return messages;
 	};
-	const take = async (
+	const deliverPending = async (
 		execution: SessionExecution,
 		armedSkill: SessionSkillCatalog,
 		signal: AbortSignal
@@ -825,6 +825,6 @@ export const createSessionSteeringWorkflow = (
 		persistRecord,
 		retryFailedMessage: (message) => runCommittedSteering(message, "failed"),
 		runPendingMessage: (message) => runCommittedSteering(message, "pending"),
-		take,
+		deliverPending,
 	};
 };

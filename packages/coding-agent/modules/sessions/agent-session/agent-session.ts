@@ -34,6 +34,7 @@ import {
 	type SessionMaintenancePort,
 	type SessionMaintenanceWorkflow,
 } from "./maintenance-workflow";
+import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
 import {
 	createSessionSteeringWorkflow,
 	type PendingSteeringDelivery,
@@ -72,7 +73,6 @@ import { exposedViewState, hasChanged, latestEntry } from "./utils";
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
 /** The reason a submission that arrives after the session ended is refused. */
-const SHUT_DOWN_SEND_ERROR = "The session has ended.";
 type ContinuationContextMessages =
 	| {
 			kind: "ready";
@@ -1201,7 +1201,7 @@ export class AgentSessionImpl implements AgentSession {
 			settleCompaction,
 			trackBackgroundTask,
 			takeSteeringMessages: (execution, armedSkill, signal) =>
-				steering.take(execution, armedSkill, signal),
+				steering.deliverPending(execution, armedSkill, signal),
 		});
 
 		const beginSubmission = (
@@ -1744,7 +1744,7 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		const continueSession = (): SessionContinuationOutcome => {
 			if (sessionState.shutdown.closed) {
-				return { kind: "rejected", reason: SHUT_DOWN_SEND_ERROR };
+				return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
 			}
 			if (
 				sessionState.lane.runs > 0 ||

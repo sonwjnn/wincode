@@ -55,6 +55,7 @@ import {
 } from "../turn-records";
 import { getSessionContextEpoch } from "../usage/context-usage";
 import { getReportableSessionFailureFields } from "./session-error-diagnostics";
+import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
 import { projectAgentTurnEvent, projectAgentTurnTerminal } from "./turn";
 import type {
 	AgentSessionPorts,
@@ -68,8 +69,6 @@ import type {
 	SessionSkillCatalog,
 	SessionTurnCallbacks,
 } from "./types";
-
-const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
 
 /** The Agent Session state and commands one submission runs against. */
 export type SubmissionDeps = Readonly<{

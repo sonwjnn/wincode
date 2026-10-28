@@ -14,6 +14,7 @@ import type {
 	SessionSendOutcome,
 	SessionSubmissionComposition,
 } from "../submission-types";
+import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
 import type {
 	AgentSessionPorts,
 	SessionQueuedSendInput,
@@ -27,7 +28,6 @@ import type {
 	SessionWaitingMessageId,
 } from "./types";
 
-const SESSION_SHUT_DOWN_ERROR = "The session has ended.";
 const QUEUED_ATTACHMENT_ERROR = "Attachment data could not be stored.";
 
 export type SessionInputExternalization = Readonly<{
@@ -128,9 +128,6 @@ export type SessionInputLanePort = Readonly<{
 }>;
 
 export type SessionInputLaneWorkflow = Readonly<{
-	acceptQueuedSubmission: (
-		input: SessionSendInput
-	) => Promise<SessionSendOutcome>;
 	drainQueuedSubmissions: () => Promise<void>;
 	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
 	recallFailedTurnMessages: () => void;
@@ -140,6 +137,30 @@ export type SessionInputLaneWorkflow = Readonly<{
 	send: (input: SessionSendInput) => Promise<SessionSendOutcome>;
 	steer: () => Promise<SessionSteeringAdmission>;
 }>;
+
+/** The identity one admitted Submission runs under. */
+type SubmissionIdentity = Readonly<{
+	messageId: SessionMessageId;
+	submissionId: SubmissionId;
+	turnId: AgentTurnId;
+}>;
+
+const identityOf = (input: SessionSendInput): SubmissionIdentity => ({
+	messageId:
+		input.messageId ??
+		input.reservedMessageId ??
+		toSessionMessageId(`msg-${crypto.randomUUID()}`),
+	submissionId:
+		input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`),
+	turnId: input.turnId ?? createAgentTurnId(),
+});
+
+/** The composition a Submission carries, defaulted from its raw fields. */
+const compositionOf = (input: SessionSendInput): SessionSubmissionComposition =>
+	input.composition ?? {
+		files: input.files ?? [],
+		text: input.userText ?? "",
+	};
 
 const queuedAttachmentIds = (input: SessionQueuedSendInput): string[] =>
 	input.composition.files.flatMap(({ attachmentId }) =>
@@ -389,17 +410,8 @@ export const createSessionInputLaneWorkflow = (
 	const acceptQueuedSubmission = (
 		input: SessionSendInput
 	): Promise<SessionSendOutcome> => {
-		const composition: SessionSubmissionComposition = input.composition ?? {
-			files: input.files ?? [],
-			text: input.userText ?? "",
-		};
-		const submissionId =
-			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
-		const messageId =
-			input.messageId ??
-			input.reservedMessageId ??
-			toSessionMessageId(`msg-${crypto.randomUUID()}`);
-		const turnId = input.turnId ?? createAgentTurnId();
+		const composition = compositionOf(input);
+		const { messageId, submissionId, turnId } = identityOf(input);
 		const queuedInput: SessionQueuedSendInput = {
 			...input,
 			composition,
@@ -557,13 +569,7 @@ export const createSessionInputLaneWorkflow = (
 		input: SessionSendInput,
 		composition: SessionSubmissionComposition
 	): PreparedAdmission => {
-		const submissionId =
-			input.submissionId ?? toSubmissionId(`submission-${crypto.randomUUID()}`);
-		const messageId =
-			input.messageId ??
-			input.reservedMessageId ??
-			toSessionMessageId(`msg-${crypto.randomUUID()}`);
-		const turnId = input.turnId ?? createAgentTurnId();
+		const { messageId, submissionId, turnId } = identityOf(input);
 		return {
 			admittedInput: {
 				...input,
@@ -610,10 +616,7 @@ export const createSessionInputLaneWorkflow = (
 		if (failure !== undefined) {
 			return failure;
 		}
-		const composition: SessionSubmissionComposition = input.composition ?? {
-			files: input.files ?? [],
-			text: input.userText ?? "",
-		};
+		const composition = compositionOf(input);
 		const { admittedInput, messageId, submissionId, turnId } = prepareAdmission(
 			input,
 			composition
@@ -647,10 +650,7 @@ export const createSessionInputLaneWorkflow = (
 		if (failure !== undefined) {
 			return failure;
 		}
-		const composition: SessionSubmissionComposition = input.composition ?? {
-			files: input.files ?? [],
-			text: input.userText ?? "",
-		};
+		const composition = compositionOf(input);
 		const { admittedInput } = prepareAdmission(input, composition);
 		const failedSteering = port.read().steeringMessages[0];
 		if (
@@ -673,7 +673,6 @@ export const createSessionInputLaneWorkflow = (
 		return await port.effects.runSubmission(admittedInput);
 	};
 	return {
-		acceptQueuedSubmission,
 		drainQueuedSubmissions,
 		prompt,
 		recallFailedTurnMessages,
