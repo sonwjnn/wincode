@@ -6,7 +6,6 @@ import {
 	type SessionInputLaneSnapshot,
 	type SessionInputLaneTransition,
 } from "@/modules/sessions/agent-session/input-lane";
-import { SESSION_SHUT_DOWN_ERROR } from "@/modules/sessions/agent-session/session-messages";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import { createTestInputScheduler } from "../support/stateful-agent";
 
@@ -108,30 +107,41 @@ test("a Submission to an ended session is rejected before the scheduler sees it"
 
 	expect(admission).toEqual({
 		rejected: true,
-		reason: SESSION_SHUT_DOWN_ERROR,
+		reason: "The session has ended.",
 	});
 	expect(lane.scheduler.getQueuedSubmissions()).toHaveLength(0);
 	expect(lane.applied).toEqual([]);
 });
 
 test("a Submission admitted while the session is busy is queued, not started", async () => {
+	// A busy lane still holds a live turn, so it cannot drain either.
 	const lane = createLane(
-		snapshotOf({ lane: laneState({ submissionBusy: true }) })
+		snapshotOf({ lane: laneState({ canDrain: false, submissionBusy: true }) })
 	);
 
 	const admission = await lane.lane.prompt(sendInput("while busy"));
+	await lane.settle();
 
+	const [queued] = lane.scheduler.getQueuedSubmissions();
 	expect(admission).toMatchObject({ disposition: "queued", rejected: false });
 	expect(lane.runs).toEqual([]);
-	expect(lane.scheduler.getQueuedSubmissions()).toHaveLength(1);
+	// The admission must name the same Submission the scheduler holds, or the
+	// optimistic UI message would be orphaned from the queued record.
+	expect(queued).toBeDefined();
+	if (admission.rejected || queued === undefined) {
+		throw new Error("The busy session did not queue the Submission.");
+	}
+	expect(admission.messageId).toBe(queued.messageId);
+	expect(admission.submissionId).toBe(queued.submissionId);
 });
 
-test("steer on an empty queue is rejected without writing anything", async () => {
+test("steer on an empty queue reports an empty queue without writing anything", async () => {
 	const lane = createLane();
 
 	const admission = await lane.lane.steer();
 
-	expect(admission.kind).not.toBe("steered");
+	// `empty` is silent for the composer; `rejected` renders an error toast.
+	expect(admission).toEqual({ kind: "empty" });
 	expect(lane.applied).toEqual([]);
 	expect(lane.scheduler.getQueuedSubmissions()).toHaveLength(0);
 });

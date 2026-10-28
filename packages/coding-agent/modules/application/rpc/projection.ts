@@ -581,10 +581,8 @@ const projectQueuedSubmission = (
 	disposition?: "queued"
 ): Record<string, unknown> => {
 	const input = submission.input;
-	const composition = input.composition ?? {
-		files: [],
-		text: input.userText ?? "",
-	};
+	// `SessionQueuedSendInput` requires a composition, so there is nothing to default.
+	const { composition } = input;
 	const skill = projectSkillIntent(input.skill);
 	return {
 		messageId: submission.messageId,

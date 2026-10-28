@@ -55,17 +55,13 @@ const createSteeringFixture = ({
 	const pendingStarts = new Map<AgentTurnId, SessionSteeringMessage>();
 	let lane: readonly SessionSteeringMessage[] = [];
 	const cleared: AgentTurnId[] = [];
-	const statuses: string[] = [];
+	const settled: { id: string; status: string }[] = [];
 	const events: { kind: string }[] = [];
 
 	const workflow = createSessionSteeringWorkflow({
 		apply: (transition: SessionSteeringTransition) => {
 			if (transition.kind === "start-armed") {
-				// A turn that starts takes the arm before the Submission returns, so the
-				// Session no longer holds it by the time the outcome is inspected.
-				if (!turnStarts) {
-					pendingStarts.set(transition.turnId, transition.source);
-				}
+				pendingStarts.set(transition.turnId, transition.source);
 				return;
 			}
 			if (transition.kind === "start-consumed") {
@@ -88,14 +84,17 @@ const createSteeringFixture = ({
 			resolveFileMentions: async () => [],
 			resolveSubmission: (input) => input,
 			runSteeringRetry: async (_retryingId, run) => await run(),
-			runSubmission: async () => ({
-				rejected: true,
-				reason: "the turn refused it",
-			}),
+			runSubmission: async (input) => {
+				if (turnStarts && input.turnId !== undefined) {
+					// The Session clears the arm once an Agent Turn begins, which is what
+					// tells the workflow this Submission did start one.
+					pendingStarts.delete(input.turnId);
+				}
+				return { rejected: true, reason: "the turn refused it" };
+			},
 			skills: { resolveSkill: async () => ({ ok: true }) },
 			updateSteeringStatus: async (source, updated) => {
-				void source;
-				statuses.push(updated.status);
+				settled.push({ id: source.id, status: updated.status });
 			},
 		},
 		read: (): SessionSteeringSnapshot => ({
@@ -117,15 +116,18 @@ const createSteeringFixture = ({
 		clearedTurns: () => cleared,
 		events,
 		pendingFor: (turnId: AgentTurnId) => pending.get(turnId) ?? [],
-		statuses,
+		settled,
 		steeringMessage,
 		turnWithDeliveries: (id: string, count: number) => {
 			const turnId = agentTurnId(id);
-			pending.set(
-				turnId,
-				Array.from({ length: count }, (_, index) => deliveryOf(turnId, index))
+			const deliveries = Array.from({ length: count }, (_, index) =>
+				deliveryOf(turnId, index)
 			);
-			return { turnId };
+			pending.set(turnId, deliveries);
+			return {
+				sourceIds: deliveries.map(({ source }) => source.id),
+				turnId,
+			};
 		},
 		workflow,
 	};
@@ -138,7 +140,9 @@ test("acknowledging a turn settles its deliveries and clears only that turn", as
 
 	await fixture.workflow.acknowledge(finished.turnId, "processed");
 
-	expect(fixture.statuses).toEqual(["processed", "processed"]);
+	expect(fixture.settled).toEqual(
+		finished.sourceIds.map((id) => ({ id, status: "processed" }))
+	);
 	expect(fixture.clearedTurns()).toEqual([finished.turnId]);
 	expect(fixture.pendingFor(live.turnId)).toHaveLength(1);
 });
@@ -151,7 +155,10 @@ test("a committed Submission that did not start a turn is reported as a steering
 	const outcome = await fixture.workflow.runPendingMessage(message);
 
 	expect(outcome).toMatchObject({ rejected: true });
-	expect(fixture.statuses).toEqual(["processing", "failed"]);
+	expect(fixture.settled.map(({ status }) => status)).toEqual([
+		"processing",
+		"failed",
+	]);
 	expect(fixture.events.map(({ kind }) => kind)).toEqual(["failed"]);
 });
 
@@ -164,7 +171,7 @@ test("a Submission that started a turn is not reported as a steering failure", a
 
 	// The turn's own outcome stands; steering does not overwrite it with a failure.
 	expect(outcome).toEqual({ rejected: true, reason: "the turn refused it" });
-	expect(fixture.statuses).toEqual(["processing"]);
+	expect(fixture.settled.map(({ status }) => status)).toEqual(["processing"]);
 	expect(fixture.events).toEqual([]);
 });
 
@@ -177,7 +184,7 @@ test("a Steering Message that is not the lane head is refused without settling i
 	const outcome = await fixture.workflow.runPendingMessage(queued);
 
 	expect(outcome).toMatchObject({ rejected: true });
-	expect(fixture.statuses).toEqual([]);
+	expect(fixture.settled).toEqual([]);
 	expect(fixture.events).toEqual([]);
 });
 
@@ -189,6 +196,6 @@ test("acknowledging a turn with nothing pending settles nothing", async () => {
 		"processed"
 	);
 
-	expect(fixture.statuses).toEqual([]);
+	expect(fixture.settled).toEqual([]);
 	expect(fixture.clearedTurns()).toEqual([]);
 });
