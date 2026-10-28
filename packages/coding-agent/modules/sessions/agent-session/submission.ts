@@ -893,23 +893,127 @@ const failureRecordInput = (
 	turnId: execution.turnId,
 });
 
-/**
- * Proposes the one overflow recovery the Agent Session may run for the Agent
- * Turn a provider refused. The Agent Session owns the attempt and the
- * classification, so this supplies what recovery needs: where to compact
- * against and how to continue the existing Session Context.
- */
-const proposeOverflowRecovery = ({
-	context,
-	deps,
-	execution,
-	failure,
-}: {
+type OverflowRecoveryProposalInput = Readonly<{
 	context: Extract<SubmitContextResult, { kind: "ready" }>;
 	deps: SubmissionDeps;
 	execution: SessionExecution;
-	failure: unknown;
-}): void => {
+	failure?: unknown;
+	trigger: SessionOverflowRecoveryCommand["trigger"];
+}>;
+
+const maintainAfterUnrecoveredOutputLimit = ({
+	deps,
+	execution,
+	trigger,
+}: OverflowRecoveryProposalInput): void => {
+	if (trigger !== "output-limit" || deps.isShutDown()) {
+		return;
+	}
+	maintainAfterTurn(
+		deps,
+		deps.getContext(),
+		execution.model,
+		execution.turnId,
+		execution.thinkingLevel
+	);
+};
+
+const getOverflowRecoveryFailureReason = (
+	input: OverflowRecoveryProposalInput,
+	outcome: SessionOverflowRecoveryOutcome
+): string => {
+	if (outcome.kind === "failed") {
+		return outcome.error.message;
+	}
+	if (
+		input.trigger === "context-overflow" &&
+		isOperationalFailure(input.failure)
+	) {
+		return input.failure.message;
+	}
+	return getErrorMessage(
+		input.failure,
+		input.trigger === "output-limit"
+			? "The Provider response stopped at its output-token limit."
+			: "Context overflow recovery could not continue."
+	);
+};
+
+const recoverAfterProviderStop = (
+	input: OverflowRecoveryProposalInput,
+	originalMessageId: SessionMessageId
+): Promise<SessionOverflowRecoveryOutcome> => {
+	const { context, deps, execution, failure, trigger } = input;
+	const recoveryInput = {
+		originalMessageId,
+		continueContext: ({
+			originalMessageId: contextMessageId,
+		}: {
+			originalMessageId: SessionMessageId;
+		}) =>
+			continueOverflowContext({
+				context,
+				deps,
+				execution,
+				originalMessageId: contextMessageId,
+			}),
+		resolveTarget: async () => {
+			const settings = await deps.ports.resolveCompactionSettings(
+				execution.model
+			);
+			if (!settings.overflowRecoveryAvailable) {
+				return null;
+			}
+			return {
+				model: execution.model,
+				thinkingLevel: execution.thinkingLevel,
+			};
+		},
+		turnId: execution.turnId,
+	};
+	return trigger === "context-overflow"
+		? deps.recoverOverflow({ ...recoveryInput, error: failure, trigger })
+		: deps.recoverOverflow({ ...recoveryInput, trigger });
+};
+
+const runOverflowRecoveryProposal = async (
+	input: OverflowRecoveryProposalInput,
+	originalMessageId: SessionMessageId
+): Promise<void> => {
+	const { deps, execution, trigger } = input;
+	let outcome: SessionOverflowRecoveryOutcome;
+	try {
+		outcome = await recoverAfterProviderStop(input, originalMessageId);
+	} catch (error) {
+		await deps.acknowledgeSteeringMessages(
+			execution.turnId,
+			"failed",
+			getErrorMessage(
+				error,
+				trigger === "output-limit"
+					? "Output-limit recovery failed."
+					: "Context overflow recovery failed."
+			)
+		);
+		return;
+	}
+	if (outcome.kind !== "recovered") {
+		await deps.acknowledgeSteeringMessages(
+			execution.turnId,
+			"failed",
+			getOverflowRecoveryFailureReason(input, outcome)
+		);
+	}
+	if (outcome.kind === "ineligible") {
+		maintainAfterUnrecoveredOutputLimit(input);
+	}
+};
+
+/** Proposes one safe compaction recovery for a context overflow or output-limit stop. */
+const proposeOverflowRecovery = (
+	input: OverflowRecoveryProposalInput
+): void => {
+	const { deps, execution, failure, trigger } = input;
 	const originalMessageId = execution.sourceUserMessageId;
 	if (isNull(originalMessageId)) {
 		deps.trackBackgroundTask(
@@ -918,67 +1022,17 @@ const proposeOverflowRecovery = ({
 				"failed",
 				getErrorMessage(
 					failure,
-					"Context overflow recovery could not continue."
+					trigger === "output-limit"
+						? "The Provider response stopped at its output-token limit."
+						: "Context overflow recovery could not continue."
 				)
 			)
 		);
+		maintainAfterUnrecoveredOutputLimit(input);
 		return;
 	}
 	deps.trackBackgroundTask(
-		(async () => {
-			let outcome: SessionOverflowRecoveryOutcome;
-			try {
-				outcome = await deps.recoverOverflow({
-					error: failure,
-					originalMessageId,
-					continueContext: ({ originalMessageId: contextMessageId }) =>
-						continueOverflowContext({
-							context,
-							deps,
-							execution,
-							originalMessageId: contextMessageId,
-						}),
-					resolveTarget: async () => {
-						const settings = await deps.ports.resolveCompactionSettings(
-							execution.model
-						);
-						if (!settings.overflowRecoveryAvailable) {
-							return null;
-						}
-						return {
-							model: execution.model,
-							thinkingLevel: execution.thinkingLevel,
-						};
-					},
-					turnId: execution.turnId,
-				});
-			} catch (error) {
-				await deps.acknowledgeSteeringMessages(
-					execution.turnId,
-					"failed",
-					getErrorMessage(error, "Context overflow recovery failed.")
-				);
-				return;
-			}
-			if (outcome.kind !== "recovered") {
-				let reason: string;
-				if (outcome.kind === "failed") {
-					reason = outcome.error.message;
-				} else if (isOperationalFailure(failure)) {
-					reason = failure.message;
-				} else {
-					reason = getErrorMessage(
-						failure,
-						"Context overflow recovery could not continue."
-					);
-				}
-				await deps.acknowledgeSteeringMessages(
-					execution.turnId,
-					"failed",
-					reason
-				);
-			}
-		})()
+		runOverflowRecoveryProposal(input, originalMessageId)
 	);
 };
 
@@ -1209,6 +1263,7 @@ const handleTurnFailure = async ({
 				deps,
 				execution,
 				failure: terminalFailure ?? failure,
+				trigger: "context-overflow",
 			}),
 		signal,
 	});
@@ -1328,6 +1383,7 @@ const runTurn = async ({
 		onExecutionStarted?.();
 	};
 	let terminalObserved = false;
+	let terminalOutputLimitReached = false;
 	let terminalFailure: OperationalFailure | undefined;
 	const callbacks: SessionTurnCallbacks = {
 		commitStep: async (record) => {
@@ -1381,6 +1437,9 @@ const runTurn = async ({
 			}
 			markExecutionStarted();
 			terminalObserved = true;
+			terminalOutputLimitReached =
+				event.type === "agent-turn-completed" &&
+				event.outputLimitReached === true;
 			const failed = event.type !== "agent-turn-completed";
 			const deferSteeringFailure =
 				event.type === "agent-turn-failed" &&
@@ -1543,13 +1602,22 @@ const runTurn = async ({
 				phase: "completed",
 				turnId: execution.turnId,
 			});
-			maintainAfterTurn(
-				deps,
-				deps.getContext(),
-				execution.model,
-				execution.turnId,
-				execution.thinkingLevel
-			);
+			if (terminalOutputLimitReached) {
+				proposeOverflowRecovery({
+					context,
+					deps,
+					execution,
+					trigger: "output-limit",
+				});
+			} else {
+				maintainAfterTurn(
+					deps,
+					deps.getContext(),
+					execution.model,
+					execution.turnId,
+					execution.thinkingLevel
+				);
+			}
 			return { rejected: false };
 		}
 		onTurnFailure();

@@ -1007,17 +1007,21 @@ const configuredReserveTokens = (
 		)
 	);
 
+const reserveBoundSummaryOutputTokens = (
+	settings: CompactSessionInput["settings"]
+): number => Math.floor(configuredReserveTokens(settings) * 0.8);
+
 /**
  * A host-owned handoff is not a summary request, so it is bounded by the
- * configured output budget and the conversation reserve rather than by the
- * prompt room a generated summary would need.
+ * configured output budget and the same reserve-derived ceiling without
+ * needing generated-prompt room.
  */
 const resolveLifecycleSummaryBudget = (
 	settings: CompactSessionInput["settings"]
 ): number =>
 	Math.min(
 		configuredSummaryOutputTokens(settings),
-		configuredReserveTokens(settings)
+		reserveBoundSummaryOutputTokens(settings)
 	);
 
 const resolveSummaryOutputBudget = (
@@ -1051,6 +1055,7 @@ const resolveSummaryOutputBudget = (
 	return Math.floor(
 		Math.min(
 			configuredMaximum,
+			reserveBoundSummaryOutputTokens(settings),
 			summaryContextAvailable,
 			conversationContextAvailable
 		)

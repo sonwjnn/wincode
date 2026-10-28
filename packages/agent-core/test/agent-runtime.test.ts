@@ -391,6 +391,32 @@ test("Agent Runtime streams model output and reports normalized step usage", asy
 	});
 });
 
+test("only an explicit Provider output-limit stop marks a terminal event for Session recovery", async () => {
+	const { providerCollection } = scriptedProvider((_request, index) =>
+		index === 0
+			? scriptedEvents(
+					{ delta: "partial", type: "text-delta" },
+					{
+						completion: { kind: "incomplete", reason: "output-limit" },
+						type: "finish",
+					}
+				)
+			: scriptedEvents(
+					{ delta: "complete", type: "text-delta" },
+					{ type: "finish" }
+				)
+	);
+	const runtime = createAgentRuntime({ providerCollection });
+	const outputLimited = await consume(runtime.run(buildTurn()));
+	const normallyCompleted = await consume(runtime.run(buildTurn()));
+
+	expect(outputLimited.at(-1)).toMatchObject({
+		outputLimitReached: true,
+		type: "agent-turn-completed",
+	});
+	expect(normallyCompleted.at(-1)).not.toHaveProperty("outputLimitReached");
+});
+
 test("Agent Runtime isolates Session request observers from active Turns", async () => {
 	const { providerCollection, requests } = scriptedProvider(() =>
 		scriptedEvents(

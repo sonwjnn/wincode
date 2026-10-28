@@ -216,13 +216,13 @@ test("an unauthenticated summary provider dispatches nothing without falling bac
 	expect(requests).toHaveLength(0);
 });
 
-test("summary output uses model metadata instead of the conversation reserve when the handoff fits", async () => {
+test("summary output is capped at 80% of the conversation reserve", async () => {
 	const { compact, requests } = fixture({ model: "anthropic/summary/large" });
 	await compact();
-	expect(requests[0]?.maxOutputTokens).toBe(4096);
+	expect(requests[0]?.maxOutputTokens).toBe(800);
 });
 
-test("a large-output summary model uses its declared output limit without a fallback cap", async () => {
+test("the conversation reserve caps a large-output summary model below its declared limit", async () => {
 	const { compact, requests } = fixture(
 		{ model: "anthropic/summary/large" },
 		messages,
@@ -235,7 +235,7 @@ test("a large-output summary model uses its declared output limit without a fall
 		200_000
 	);
 	await compact();
-	expect(requests[0]?.maxOutputTokens).toBe(64_000);
+	expect(requests[0]?.maxOutputTokens).toBe(800);
 });
 
 test("an invocable summary credential can compact without a provider-enforced output cap", async () => {

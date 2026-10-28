@@ -295,13 +295,31 @@ const sanitizeFailedRuntimeMessages = (
 		};
 	});
 
+const sanitizeOutputLimitedRuntimeMessages = (
+	messages: readonly SessionMessage[],
+	assistantId: SessionMessageId
+): SessionMessage[] =>
+	messages.map((message) => {
+		if (message.id !== assistantId || message.role !== "assistant") {
+			return message;
+		}
+		const lastSettledToolIndex = message.parts.findLastIndex(
+			(part) => isSessionToolPart(part) && isTerminalSessionToolPart(part)
+		);
+		return lastSettledToolIndex === -1
+			? message
+			: { ...message, parts: message.parts.slice(0, lastSettledToolIndex + 1) };
+	});
+
 const sanitizeRuntimeMessagesForTerminal = (
 	messages: readonly SessionMessage[],
 	assistantId: SessionMessageId,
 	event: AgentTurnTerminalEvent
 ): SessionMessage[] => {
 	if (event.type === "agent-turn-completed") {
-		return [...messages];
+		return event.outputLimitReached === true
+			? sanitizeOutputLimitedRuntimeMessages(messages, assistantId)
+			: [...messages];
 	}
 	if (event.type === "agent-turn-interrupted") {
 		return sanitizeInterruptedSessionMessages(messages);

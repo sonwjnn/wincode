@@ -40,7 +40,9 @@ With `overflowRecovery` enabled, a successful Provider response that reports inp
 
 If that protected batch cannot fit, or checkpointing/summarization/persistence fails, the turn stops rather than dispatching an unsafe next request. Cancellation propagates to preparation. If a durable checkpoint or compaction write has already succeeded, its complete result is reconciled before cancellation settles; cancellation does not roll back committed storage. Aggregate billing stays on the terminal turn record; non-terminal text checkpoints do not add billed usage.
 
-## Overflow recovery after completed tools
+## Context-overflow and output-limit recovery
+
+With `overflowRecovery` enabled, Wincode also recovers after a final Provider response explicitly marked incomplete because it hit the output-token limit. The partial assistant output is not treated as a completed answer: recovery compacts the existing Context, preserves the original user prompt, and continues it once. Generic Provider failures, arbitrary 4xx responses, and a bare `413` do not trigger recovery. Disabling `overflowRecovery` opts out of both Provider-reported context-overflow and output-limit recovery.
 
 Recovery keeps completed side effects. When the refused attempt already completed Tool Calls, recovery no longer replays the original prompt: it summarizes older durable history, protects the newest settled assistant/tool batch, and continues the compacted Session Context from that batch. The failed attempt's terminal row is dropped from that source. If no older history can be compacted while preserving the continuation, recovery fails closed instead of rerunning a tool. Without completed tools, the earlier prompt-anchored recovery applies unchanged.
 
@@ -59,7 +61,7 @@ Plugins may register `onBeforeCompaction`, `onCompactionCompleted`, and `onCompa
 Both `summary` fields are optional:
 
 - `model`: exact summary target. Omit it to use the conversation model; there is no automatic model fallback.
-- `maxOutputTokens`: optional positive integer ceiling. When omitted, the summary model's output-token metadata supplies the budget, falling back to 32,000 when absent. The effective budget also respects the summary request's context room and the rebuilt conversation's room for the handoff plus the next response reserve; the reserve is not itself an output cap. An effective budget below 256 tokens fails before dispatch.
+- `maxOutputTokens`: optional positive integer ceiling. When omitted, the summary model's output-token metadata supplies the budget, falling back to 32,000 when absent. The effective budget is also capped at 80% of the conversation reserve and respects the summary request's context room plus the rebuilt conversation's room for the handoff and next response reserve. An effective budget below 256 tokens fails before dispatch.
 
 The summary request inherits the active Session's thinking level; there is no summary-only thinking-level setting. If the summary model does not declare support for that level, compaction fails before dispatch rather than downgrading it or using the Provider default. If the Session has no thinking level, the Provider default applies.
 

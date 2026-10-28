@@ -463,24 +463,33 @@ export type SessionOverflowRecoveryTarget = ReadonlyDeep<{
 	thinkingLevel?: ThinkingLevel;
 }>;
 
-/** One provider refusal proposed to the Agent Session for overflow recovery. */
-export type SessionOverflowRecoveryCommand = ReadonlyDeep<{
-	/** The failure that ended the Agent Turn; anything but an overflow is ignored. */
-	error: unknown;
+type SessionOverflowRecoveryBase = ReadonlyDeep<{
 	/** The user message the failed Agent Turn answered; continuation resumes it. */
 	originalMessageId: SessionMessageId;
 	/**
 	 * The Provider Model selection the recovery's compaction runs against, or
-	 * null when that selection has no overflow recovery available.
+	 * null when that selection has no recovery available.
 	 */
 	resolveTarget: () => Promise<SessionOverflowRecoveryTarget | null>;
 	/** Continues the existing context once the recovery has compacted. */
 	continueContext: (
 		input: SessionOverflowContinuationInput
 	) => Promise<SessionOverflowContinuationOutcome>;
-	/** The Agent Turn whose provider request overflowed. */
+	/** The Agent Turn whose response could not continue safely. */
 	turnId: AgentTurnId;
 }>;
+
+/** One context overflow or final output-limit response proposed for safe recovery. */
+export type SessionOverflowRecoveryCommand =
+	| (SessionOverflowRecoveryBase & {
+			/** The provider or runtime reported a context overflow. */
+			error: unknown;
+			trigger: "context-overflow";
+	  })
+	| (SessionOverflowRecoveryBase & {
+			/** The final Provider response stopped at its output-token limit. */
+			trigger: "output-limit";
+	  });
 
 /**
  * What one overflow recovery did: it compacted and continued the existing

@@ -48,11 +48,11 @@ const CONFIG_DOCUMENT = `{
 	"compaction": { "keepRecentTokens": 1000, "reserveTokens": 2000 }
 }`;
 let turnCount = 0;
+let recoveryKind: "context-overflow" | "output-limit" = "context-overflow";
 
 /**
- * The first turn is refused by the provider as a context overflow; continuation
- * after compaction answers normally, proving the Agent Runtime received the
- * updated Session Context.
+ * The first turn is refused by the provider or stopped at its output limit;
+ * continuation after compaction proves the Host received the updated Context.
  */
 const overflowThenAnswer: FakeProviderStepScript = async function* (
 	request: ProviderChatRequest,
@@ -87,6 +87,13 @@ const overflowThenAnswer: FakeProviderStepScript = async function* (
 	});
 	if (turnCount === 1) {
 		yield { delta: "partial output", type: "text-delta" };
+		if (recoveryKind === "output-limit") {
+			yield {
+				completion: { kind: "incomplete", reason: "output-limit" },
+				type: "finish",
+			};
+			return;
+		}
 		throw new Error("The prompt exceeds the model context window.");
 	}
 	yield { delta: "E2E chat response", type: "text-delta" };
@@ -114,6 +121,11 @@ import {
 
 const store = createE2eStore();
 const { sessionId } = await seedCompactionHistory(store);
+const { sessionId: outputLimitSessionId } = await seedCompactionHistory(
+	store,
+	10,
+	"output-limit"
+);
 
 const waitForChatRequestCount = async (count: number): Promise<void> => {
 	await waitForSessionCondition(() => chatRequests().length >= count);
@@ -121,6 +133,8 @@ const waitForChatRequestCount = async (count: number): Promise<void> => {
 
 const chatRequests = () =>
 	recorder.requests.filter((request) => request.kind === "chat");
+const summaryRequests = () =>
+	recorder.requests.filter((request) => request.kind === "summary");
 
 test("continues the compacted Session Context after a provider context overflow", async () => {
 	let setup: TestRendererSetup | undefined;
@@ -200,6 +214,81 @@ test("continues the compacted Session Context after a provider context overflow"
 			)
 		).toHaveLength(1);
 	} finally {
+		if (setup) {
+			await writeE2EFrame(setup);
+			setup.renderer.destroy();
+		}
+		cleanupSessionRender();
+	}
+});
+
+test("compacts and continues after a final Provider output-limit stop", async () => {
+	let setup: TestRendererSetup | undefined;
+	const initialChatCount = chatRequests().length;
+	const initialSummaryCount = summaryRequests().length;
+	turnCount = 0;
+	recoveryKind = "output-limit";
+	try {
+		const rendered = await renderSession({
+			configDocument: CONFIG_DOCUMENT,
+			pricing: createE2ePricing(20_000),
+			sessionId: outputLimitSessionId,
+		});
+		const activeSetup = rendered.setup;
+		setup = activeSetup;
+		await rendered.registryReady;
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Ask anything...")
+		);
+		await act(async () => {
+			await activeSetup.flush();
+			await activeSetup.flush();
+		});
+
+		await act(async () => {
+			await activeSetup.mockInput.typeText(PROMPT);
+			await activeSetup.flush();
+			activeSetup.mockInput.pressEnter();
+		});
+
+		await waitForSessionCondition(
+			async () => (await store.getCompactions(outputLimitSessionId)).length > 0
+		);
+		const compactions = await store.getCompactions(outputLimitSessionId);
+		expect(compactions).toHaveLength(1);
+		expect(compactions[0]?.trigger).toBe("overflow");
+
+		await waitForChatRequestCount(initialChatCount + 2);
+		await settleSessionUi(activeSetup);
+		await act(async () => {
+			await activeSetup.waitForFrame(
+				(frame) => frame.includes("E2E chat response"),
+				{ maxPasses: 600 }
+			);
+		});
+
+		const [limited, continued] = chatRequests().slice(initialChatCount);
+		if (!(limited && continued)) {
+			throw new Error("The limited and continued requests were not recorded.");
+		}
+		const continuedText = continued.messages.map(({ text }) => text).join("\n");
+		expect(continuedText).toContain(PROMPT);
+		expect(continuedText).toContain(recorder.summaryText);
+		expect(continuedText).not.toContain("partial output");
+		expect(summaryRequests().slice(initialSummaryCount)).toHaveLength(1);
+
+		const records = await store.listSessionRecords(outputLimitSessionId);
+		expect(
+			records.filter((record) =>
+				record.messages.some((message) =>
+					message.parts.some(
+						(part) => part.type === "text" && part.text === PROMPT
+					)
+				)
+			)
+		).toHaveLength(1);
+	} finally {
+		recoveryKind = "context-overflow";
 		if (setup) {
 			await writeE2EFrame(setup);
 			setup.renderer.destroy();

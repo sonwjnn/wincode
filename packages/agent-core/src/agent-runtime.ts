@@ -5,6 +5,7 @@ import type {
 	ChatRequest,
 	ChatTool,
 	ProviderCollection,
+	ProviderGenerationCompletion,
 } from "@wincode/ai";
 import {
 	type ModelFailure,
@@ -380,6 +381,7 @@ export const createAgentRuntime = (
 
 type ModelStepOutput = Readonly<{
 	assistantParts: readonly AgentTurnPart[];
+	completion: ProviderGenerationCompletion;
 	continuation?: unknown;
 	toolCalls: readonly PendingToolCall[];
 	usage?: ModelUsage;
@@ -431,7 +433,11 @@ const resolveToolCall = (
 };
 
 type ProviderChatUpdate =
-	| Readonly<{ kind: "finish"; continuation?: unknown }>
+	| Readonly<{
+			completion: ProviderGenerationCompletion;
+			kind: "finish";
+			continuation?: unknown;
+	  }>
 	| Readonly<{
 			kind: "part";
 			part: Exclude<ChatEvent, { type: "terminal" | "usage" }>;
@@ -469,6 +475,7 @@ const parseProviderChatUpdate = (value: unknown): ProviderChatUpdate => {
 				throw new ProviderCollectionChatAbortedError();
 			}
 			return {
+				completion: value.outcome.completion ?? { kind: "unknown" },
 				kind: "finish",
 				...omitUndefined({ continuation: value.outcome.continuation }),
 			};
@@ -480,6 +487,13 @@ const parseProviderChatUpdate = (value: unknown): ProviderChatUpdate => {
 			);
 	}
 };
+
+const outputLimitReached = (
+	completion: ProviderGenerationCompletion
+): true | undefined =>
+	completion.kind === "incomplete" && completion.reason === "output-limit"
+		? true
+		: undefined;
 
 const drainModelStep = async function* ({
 	emit,
@@ -500,6 +514,7 @@ const drainModelStep = async function* ({
 	const toolCalls: PendingToolCall[] = [];
 	let bufferedText = "";
 	let usage: ModelUsage | undefined;
+	let completion: ProviderGenerationCompletion = { kind: "unknown" };
 	let continuation: unknown;
 	let finished = false;
 	try {
@@ -522,6 +537,7 @@ const drainModelStep = async function* ({
 			}
 			if (update.kind === "finish") {
 				finished = true;
+				completion = update.completion;
 				continuation = update.continuation;
 				continue;
 			}
@@ -582,6 +598,7 @@ const drainModelStep = async function* ({
 	appendTextPart(assistantParts, bufferedText);
 	return {
 		assistantParts,
+		completion,
 		...omitUndefined({ continuation, usage }),
 		toolCalls,
 	};
@@ -951,7 +968,10 @@ const runLoop = async function* ({
 				sequence: emit.nextSequence(),
 				turnId: turn.id,
 				type: "agent-turn-completed",
-				...omitUndefined({ usage: totalUsage }),
+				...omitUndefined({
+					outputLimitReached: outputLimitReached(output.completion),
+					usage: totalUsage,
+				}),
 			});
 			return;
 		}

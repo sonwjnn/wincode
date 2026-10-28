@@ -716,7 +716,7 @@ test("fallback estimation follows canonical visible content", () => {
 	]);
 	expect(roleToolEstimate).toBeGreaterThan(shortEstimate);
 });
-test("summary output leaves room for the retained conversation, overhead, and next response reserve", async () => {
+test("summary output is capped by 80% of the reserve even when more context room is available", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async (_input: SummaryGeneratorInput) => ({
 		text: "budgeted summary",
@@ -755,8 +755,8 @@ test("summary output leaves room for the retained conversation, overhead, and ne
 	});
 
 	expect(summaryGenerator).toHaveBeenCalledTimes(1);
-	// 2000 context - 20 retained - 10 request overhead - 800 next-response reserve.
-	expect(summaryGenerator.mock.calls[0]?.[0].maxOutputTokens).toBe(1170);
+	// The context has room for 1170 tokens, but Pi caps output at 80% of reserve.
+	expect(summaryGenerator.mock.calls[0]?.[0].maxOutputTokens).toBe(640);
 });
 
 test("limits summary size by the rebuilt conversation's real request overhead and reserve", async () => {
@@ -1051,7 +1051,7 @@ test("accepts a completed summary above its planned output budget when it reduce
 			enabled: true,
 			keepRecentTokens: 100,
 			modelContextLimit: 8192,
-			reserveTokens: 256,
+			reserveTokens: 512,
 			thresholdTokens: null,
 		},
 		trigger: "manual",
@@ -2627,6 +2627,41 @@ test("a Plugin custom summary still passes host validation and persistence", asy
 	expect(result.entry.summary.text).toContain("Plugin handoff text.");
 	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
 	expect(completed).toEqual([result.entry]);
+});
+
+test("a Plugin summary above 80% of reserve is rejected before persistence", async () => {
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		lifecycle: {
+			before: async () => ({ summary: "x".repeat(641 * 4) }),
+		},
+		store,
+		summaryGenerator: async () => ({ text: "generated" }),
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: [
+					message("u1", "user", "history ".repeat(400)),
+					message("a1", "assistant", "old answer"),
+					message("u2", "user", "current request"),
+					message("a2", "assistant", "current answer"),
+				],
+				sessionId: sessionId("session-plugin-summary-reserve-cap"),
+			},
+			model,
+			settings: {
+				enabled: true,
+				keepRecentTokens: 100,
+				modelContextLimit: 8192,
+				reserveTokens: 800,
+				thresholdTokens: null,
+			},
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "summary-failed" });
+	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
 test("an oversized Plugin summary fails before persistence and reports the failure once", async () => {

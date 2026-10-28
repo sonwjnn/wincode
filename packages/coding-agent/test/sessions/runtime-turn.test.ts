@@ -232,6 +232,50 @@ test("a two-step turn retains billed usage without inflating live or restored co
 	}
 });
 
+test("output-limit terminal cleanup keeps completed tool effects but drops later partial text", () => {
+	const turn = createTurn();
+	const assistantId = sessionMessageId(`assistant-${turn.id}`);
+	const toolResult = {
+		input: { path: "note.md" },
+		output: "completed read result",
+		state: "output-available" as const,
+		toolCallId: toolCallId("output-limit-read"),
+		type: "tool-read" as const,
+	};
+	const assistant: SessionMessage = {
+		id: assistantId,
+		metadata: { agent: turn.agent.id, model },
+		parts: [
+			{ text: "I inspected the file.", type: "text" },
+			toolResult,
+			{ text: "partial output after the tool", type: "text" },
+		],
+		role: "assistant",
+	};
+	const execution = {
+		agent: turn.agent.id,
+		assistantId,
+		model,
+		sessionModel: model,
+		sourceUserMessageId: sessionMessageId("message-user"),
+		startedAt: 100,
+		turnId: turn.id,
+	};
+
+	const projected = projectAgentTurnTerminal([assistant], execution, {
+		finishedAt: 101,
+		outputLimitReached: true,
+		sequence: 0,
+		turnId: turn.id,
+		type: "agent-turn-completed",
+	});
+
+	expect(projected[0]?.parts).toEqual([
+		{ text: "I inspected the file.", type: "text" },
+		toolResult,
+	]);
+});
+
 test.each([
 	"tool-results",
 	"missing-usage",

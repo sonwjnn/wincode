@@ -126,6 +126,7 @@ test("manual, threshold, and overflow compaction use the selected model policy",
 		originalMessageId: sourceMessage.id,
 		resolveTarget: async () => ({ model: automaticModel }),
 		turnId: agentTurnId("overflow-turn"),
+		trigger: "context-overflow",
 	});
 
 	expect(recovery.kind).toBe("recovered");
@@ -315,6 +316,7 @@ test("overflow recovery after completed tools continues the durable context", as
 		originalMessageId: sessionMessageId("attempt-user"),
 		resolveTarget: async () => ({ model: automaticModel }),
 		turnId: agentTurnId("overflow-tool-turn"),
+		trigger: "context-overflow",
 	});
 
 	expect(outcome.kind).toBe("recovered");
@@ -349,6 +351,7 @@ test("an unshortenable continuation fails closed instead of replaying tools", as
 		originalMessageId: sessionMessageId("attempt-user"),
 		resolveTarget: async () => ({ model: automaticModel }),
 		turnId: agentTurnId("overflow-unshortenable"),
+		trigger: "context-overflow",
 	});
 
 	expect(outcome.kind).toBe("failed");
@@ -368,6 +371,7 @@ test("overflow recovery guidance distinguishes compaction failure from saved-con
 		originalMessageId: sessionMessageId("attempt-user"),
 		resolveTarget: async () => ({ model: automaticModel }),
 		turnId: agentTurnId("overflow-compaction-guidance"),
+		trigger: "context-overflow",
 	});
 
 	expect(compactionFailure.kind).toBe("failed");
@@ -408,6 +412,7 @@ test("overflow recovery guidance distinguishes compaction failure from saved-con
 		originalMessageId: sessionMessageId("attempt-user"),
 		resolveTarget: async () => ({ model: automaticModel }),
 		turnId: agentTurnId("overflow-continuation-guidance"),
+		trigger: "context-overflow",
 	});
 
 	expect(continuationRefusal.kind).toBe("failed");
@@ -449,6 +454,7 @@ test("post-commit continuation turn failure reports the saved-context recovery s
 		originalMessageId: sessionMessageId("attempt-user"),
 		resolveTarget: async () => ({ model: automaticModel }),
 		turnId: agentTurnId("overflow-continuation-failed"),
+		trigger: "context-overflow",
 	});
 
 	expect(outcome.kind).toBe("failed");
@@ -502,6 +508,7 @@ test("recovery compacts work settled while its target settings were loading", as
 			return { model: automaticModel };
 		},
 		turnId: agentTurnId("overflow-late-settlement"),
+		trigger: "context-overflow",
 	});
 
 	expect(outcome.kind).toBe("recovered");
