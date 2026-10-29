@@ -218,7 +218,9 @@ done
 [[ "$(tmux display-message -p -t "$SESSION" '#{pane_dead}' 2>/dev/null || true)" == '1' ]] || \
   fail_with_frame 'the /exit command did not stop the TUI.'
 EXIT_STATUS="$(tmux display-message -p -t "$SESSION" '#{pane_dead_status}')"
-[[ "$EXIT_STATUS" == '0' ]] || fail_with_frame "TUI exited with status $EXIT_STATUS."
+EXIT_SIGNAL="$(tmux display-message -p -t "$SESSION" '#{pane_dead_signal}')"
+[[ "$EXIT_STATUS" == '0' ]] || \
+  fail_with_frame "TUI exited with status ${EXIT_STATUS:-unknown}${EXIT_SIGNAL:+ (signal $EXIT_SIGNAL)}."
 if [[ "$LIVE" == 1 ]]; then
   printf 'PASS: live Provider reply and clean /exit.\n'
 elif [[ -n "$BINARY" ]]; then
