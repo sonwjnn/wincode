@@ -12,7 +12,7 @@ const UNAVAILABLE_IMAGE = { unavailable: true } as const;
 export type PasteIntakeDependencies = Readonly<{
 	active: boolean;
 	applyTextPaste: (event: PasteEvent) => void;
-	document: ComposerDocument | null;
+	document: ComposerDocument;
 	onDocumentChange: () => void;
 	onError: (message: string) => void;
 	readClipboardImage: () => Promise<ClipboardImageResult>;
@@ -44,9 +44,6 @@ const insertImage = (
 		return;
 	}
 	const { document } = dependencies;
-	if (!document) {
-		return;
-	}
 	if (document.capture().files.length >= MAX_IMAGE_ATTACHMENTS) {
 		dependencies.onError(
 			`You can attach up to ${MAX_IMAGE_ATTACHMENTS} images.`
@@ -72,10 +69,6 @@ const insertPastedText = (
 	if (!summary) {
 		return false;
 	}
-	if (!dependencies.document) {
-		return true;
-	}
-
 	dependencies.document.insertPastedText(summary);
 	dependencies.onDocumentChange();
 	return true;

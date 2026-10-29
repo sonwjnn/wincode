@@ -1,3 +1,4 @@
+import { omitUndefined } from "@wincode/utils";
 import {
 	type OffsetRange,
 	rebaseTextRangesWithin,
@@ -6,6 +7,7 @@ import {
 } from "@/shared/utils/text-ranges";
 
 export type PastedText = { token: string; text: string };
+export type PastedTextMarker = PastedText & { start?: number };
 export type TrackedPastedText = PastedText & { start: number };
 
 const PASTED_TEXT_TOKEN_PATTERN = /\[Pasted ~\d+ lines\]/gu;
@@ -22,26 +24,43 @@ export const summarizePastedText = (value: string): PastedText | undefined => {
 	return { text, token: `[Pasted ~${trimmed.split("\n").length} lines]` };
 };
 
+export const shiftPastedTextRangesForTrimmedText = (
+	rawText: string,
+	pastedTexts: readonly PastedTextMarker[]
+): PastedTextMarker[] => {
+	const leadingTrim = rawText.length - rawText.trimStart().length;
+	return pastedTexts.map(({ start, ...pasted }) => ({
+		...pasted,
+		...omitUndefined({
+			start: start === undefined ? undefined : start - leadingTrim,
+		}),
+	}));
+};
+
 /** Rebases valid tracked marker ranges onto the trimmed visible composition. */
 export const normalizePastedTextRangesForTrimmedText = (
 	rawText: string,
 	pastedTexts: readonly TrackedPastedText[]
 ): TrackedPastedText[] => {
 	const text = rawText.trim();
-	const leadingTrim = rawText.length - rawText.trimStart().length;
-	return pastedTexts.flatMap((pasted) => {
-		const start = pasted.start - leadingTrim;
-		return start >= 0 &&
-			text.slice(start, start + pasted.token.length) === pasted.token
-			? [{ ...pasted, start }]
-			: [];
-	});
+	return shiftPastedTextRangesForTrimmedText(rawText, pastedTexts).flatMap(
+		(pasted) => {
+			if (pasted.start === undefined) {
+				return [];
+			}
+			return pasted.start >= 0 &&
+				text.slice(pasted.start, pasted.start + pasted.token.length) ===
+					pasted.token
+				? [{ ...pasted, start: pasted.start }]
+				: [];
+		}
+	);
 };
 
 /** Expands each composition marker once while preserving the remaining offsets. */
 export const expandPastedText = (
 	text: string,
-	markers: readonly { start?: number; token: string; text: string }[]
+	markers: readonly PastedTextMarker[]
 ): string => {
 	const occurrences: TextReplacementRange[] = [];
 	let cursor = 0;

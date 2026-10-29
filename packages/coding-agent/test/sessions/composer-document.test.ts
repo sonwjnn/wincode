@@ -52,6 +52,39 @@ describe("Composer Document", () => {
 		});
 	});
 
+	test("removed programmatic token ranges cannot rebind payloads to literal lookalikes", () => {
+		const imageToken = "[Image 1]";
+		const pastedToken = "[Pasted ~3 lines]";
+		const literalText = `${imageToken} literal; ${pastedToken} literal; `;
+		const text = `${literalText}${imageToken} ${pastedToken}`;
+		const editor = createMemoryComposerEditor();
+		const document = createComposerDocument(editor.adapter);
+		document.restore(
+			{
+				fileTokens: [{ start: literalText.length, token: imageToken }],
+				files: [imageFile("actual.png")],
+				pastedText: [
+					{
+						start: literalText.length + imageToken.length + 1,
+						text: "actual\npasted\ncontent",
+						token: pastedToken,
+					},
+				],
+				text,
+			},
+			text.length
+		);
+
+		const snapshot = document.replaceText(`${literalText}removed`, null);
+
+		expect(snapshot).toMatchObject({
+			fileTokens: [],
+			files: [],
+			pastedText: [],
+			text: `${literalText}removed`,
+		});
+	});
+
 	test("programmatic replacement keeps attachment and pasted payloads at their intended duplicate-token occurrences", () => {
 		const imageToken = "[Image 1]";
 		const pastedToken = "[Pasted ~3 lines]";

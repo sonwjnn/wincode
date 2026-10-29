@@ -19,29 +19,70 @@ export const isAttachmentTokenExtant = (
 	extmark: Pick<Extmark, "end" | "start">
 ) => text.slice(extmark.start, extmark.end) === token;
 
+const hasUniqueTokenOccurrence = (text: string, token: string): boolean => {
+	const first = text.indexOf(token);
+	return first !== -1 && first === text.lastIndexOf(token);
+};
+
+/** Keeps ambiguous tokens at their mapped range; only unique tokens can move. */
+const findTrackedTokenStart = (
+	text: string,
+	token: string,
+	candidates: readonly number[],
+	expectedStart: number | undefined,
+	previousText: string | undefined
+): number | undefined => {
+	if (isUndefined(expectedStart)) {
+		return candidates[0];
+	}
+	if (candidates.includes(expectedStart)) {
+		return expectedStart;
+	}
+	if (
+		previousText !== undefined &&
+		hasUniqueTokenOccurrence(previousText, token) &&
+		hasUniqueTokenOccurrence(text, token)
+	) {
+		return candidates[0];
+	}
+};
+
+const findUnclaimedTokenOccurrences = (
+	text: string,
+	token: string,
+	claimedStarts: ReadonlySet<number>
+): number[] => {
+	const candidates: number[] = [];
+	let start = text.indexOf(token);
+	while (start !== -1) {
+		if (!claimedStarts.has(start)) {
+			candidates.push(start);
+		}
+		start = text.indexOf(token, start + token.length);
+	}
+	return candidates;
+};
+
 export const locateTrackedTokenOccurrences = <T extends { token: string }>(
 	text: string,
 	records: readonly T[],
-	expectedStarts: readonly number[] = []
+	expectedStarts: readonly number[] = [],
+	previousText?: string
 ): Array<{ record: T; start: number }> => {
 	const claimedStarts = new Set<number>();
 	return records.flatMap((record, index) => {
-		const candidates: number[] = [];
-		let start = text.indexOf(record.token);
-		while (start !== -1) {
-			if (!claimedStarts.has(start)) {
-				candidates.push(start);
-			}
-			start = text.indexOf(record.token, start + record.token.length);
-		}
-
-		const expectedStart = expectedStarts[index];
-		const matchedStart = isUndefined(expectedStart)
-			? candidates[0]
-			: candidates.toSorted(
-					(left, right) =>
-						Math.abs(left - expectedStart) - Math.abs(right - expectedStart)
-				)[0];
+		const candidates = findUnclaimedTokenOccurrences(
+			text,
+			record.token,
+			claimedStarts
+		);
+		const matchedStart = findTrackedTokenStart(
+			text,
+			record.token,
+			candidates,
+			expectedStarts[index],
+			previousText
+		);
 		if (isUndefined(matchedStart)) {
 			return [];
 		}
