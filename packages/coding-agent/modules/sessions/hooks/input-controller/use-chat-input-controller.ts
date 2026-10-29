@@ -1,4 +1,4 @@
-import { isNull, isUndefined } from "@wincode/utils";
+import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	CommandSelection,
@@ -14,7 +14,10 @@ import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { normalizeFileTokensForTrimmedText } from "../../attachments";
-import { normalizePastedTextRangesForTrimmedText } from "../../pasted-text";
+import {
+	normalizePastedTextRangesForTrimmedText,
+	shiftPastedTextRangesForTrimmedText,
+} from "../../pasted-text";
 import { getSessionStore } from "../../storage/get-session-store";
 import { restoreComposerDraft, writeComposerDraft } from "./draft-store";
 import { removeTriggerText } from "./escape-trigger";
@@ -45,6 +48,76 @@ const EMPTY_OVERLAY: InputOverlayState = {
 	items: [],
 	kind: null,
 	selectedIndex: -1,
+};
+
+type RecalledCompositionAccumulator = {
+	fileTokens: Array<{ start: number; token: string }>;
+	files: SessionSubmissionComposition["files"][number][];
+	pastedText: NonNullable<SessionSubmissionComposition["pastedText"]>[number][];
+	text: string;
+};
+
+const normalizeDraftForRecall = (
+	draft: SessionSubmissionComposition
+): SessionSubmissionComposition => ({
+	fileTokens: normalizeFileTokensForTrimmedText(draft.text, [
+		...(draft.fileTokens ?? []),
+	]),
+	files: draft.files,
+	pastedText: shiftPastedTextRangesForTrimmedText(
+		draft.text,
+		draft.pastedText ?? []
+	),
+	text: draft.text.trim(),
+});
+
+const hasCompositionContent = (
+	composition: SessionSubmissionComposition
+): boolean => composition.text.length > 0 || composition.files.length > 0;
+
+const appendRecalledComposition = (
+	accumulator: RecalledCompositionAccumulator,
+	composition: SessionSubmissionComposition
+): void => {
+	if (accumulator.text.length > 0) {
+		accumulator.text += "\n\n";
+	}
+	const base = accumulator.text.length;
+	accumulator.text += composition.text;
+	for (const { start, token } of composition.fileTokens ?? []) {
+		accumulator.fileTokens.push({ start: base + start, token });
+	}
+	accumulator.files.push(...composition.files);
+	for (const pasted of composition.pastedText ?? []) {
+		accumulator.pastedText.push({
+			...pasted,
+			...omitUndefined({
+				start: isUndefined(pasted.start) ? undefined : base + pasted.start,
+			}),
+		});
+	}
+};
+
+const combineRecalledCompositions = (
+	draft: SessionSubmissionComposition,
+	entries: readonly SessionSubmissionComposition[]
+): RecalledCompositionAccumulator | null => {
+	const compositions = [normalizeDraftForRecall(draft), ...entries].filter(
+		hasCompositionContent
+	);
+	if (compositions.length === 0) {
+		return null;
+	}
+	const accumulator: RecalledCompositionAccumulator = {
+		fileTokens: [],
+		files: [],
+		pastedText: [],
+		text: "",
+	};
+	for (const composition of compositions) {
+		appendRecalledComposition(accumulator, composition);
+	}
+	return accumulator;
 };
 
 export function useChatInputController({
@@ -295,66 +368,13 @@ export function useChatInputController({
 			entries: readonly SessionSubmissionComposition[],
 			draft: SessionSubmissionComposition
 		) => {
-			const leadingTrim = draft.text.length - draft.text.trimStart().length;
-			const draftComposition: SessionSubmissionComposition = {
-				fileTokens: normalizeFileTokensForTrimmedText(draft.text, [
-					...(draft.fileTokens ?? []),
-				]),
-				files: draft.files,
-				pastedText: draft.pastedText?.map((pasted) => ({
-					...pasted,
-					...(isUndefined(pasted.start)
-						? {}
-						: { start: pasted.start - leadingTrim }),
-				})),
-				text: draft.text.trim(),
-			};
-			const compositions = [draftComposition, ...entries].filter(
-				(composition) =>
-					composition.text.length > 0 || composition.files.length > 0
-			);
-			if (compositions.length === 0) {
+			const composition = combineRecalledCompositions(draft, entries);
+			if (!composition) {
 				return;
 			}
-			let text = "";
-			const fileTokens: Array<{ start: number; token: string }> = [];
-			const files: SessionSubmissionComposition["files"][number][] = [];
-			const pastedText: Array<{ start?: number; text: string; token: string }> =
-				[];
-			for (const composition of compositions) {
-				if (text.length > 0) {
-					text += "\n\n";
-				}
-				const base = text.length;
-				text += composition.text;
-				for (const { start, token } of composition.fileTokens ?? []) {
-					fileTokens.push({ start: base + start, token });
-				}
-				files.push(...composition.files);
-				for (const pasted of composition.pastedText ?? []) {
-					pastedText.push({
-						...pasted,
-						...(isUndefined(pasted.start)
-							? {}
-							: { start: base + pasted.start }),
-					});
-				}
-			}
-
-			const composition: SessionSubmissionComposition = {
-				fileTokens,
-				files,
-				pastedText,
-				text,
-			};
 			historyIndexRef.current = -1;
-			draftRef.current = {
-				fileTokens,
-				files,
-				pastedText,
-				text,
-			};
-			setProgrammaticText(text, 0, null, composition);
+			draftRef.current = composition;
+			setProgrammaticText(composition.text, 0, null, composition);
 		},
 		[setProgrammaticText]
 	);

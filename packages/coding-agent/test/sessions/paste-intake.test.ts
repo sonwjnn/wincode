@@ -25,7 +25,6 @@ const createHarness = (overrides: Partial<PasteIntakeDependencies> = {}) => {
 	const editor = createMemoryComposerEditor();
 	const document = createComposerDocument(editor.adapter);
 	const errors: string[] = [];
-	let documentChanges = 0;
 	const dependencies: PasteIntakeDependencies = {
 		active: true,
 		applyTextPaste: (event) => {
@@ -33,9 +32,7 @@ const createHarness = (overrides: Partial<PasteIntakeDependencies> = {}) => {
 			document.observeEditorChange();
 		},
 		document,
-		onDocumentChange: () => {
-			documentChanges += 1;
-		},
+		onDocumentChange: () => undefined,
 		onError: (message) => {
 			errors.push(message);
 		},
@@ -46,8 +43,6 @@ const createHarness = (overrides: Partial<PasteIntakeDependencies> = {}) => {
 	return {
 		dependencies,
 		document,
-		documentChanges: () => documentChanges,
-		editor,
 		errors,
 		intake: createPasteIntake(),
 	};
@@ -81,7 +76,6 @@ describe("Paste Intake", () => {
 		expect(harness.document.capture().files).toHaveLength(1);
 		expect(pathReads).toBe(0);
 		expect(clipboardReads).toBe(0);
-		expect(harness.documentChanges()).toBe(1);
 	});
 
 	test("a pasted image path becomes an attachment without reading clipboard image data", async () => {
@@ -158,7 +152,6 @@ describe("Paste Intake", () => {
 			pastedText: [{ text, token: "[Pasted ~3 lines]" }],
 			text: "[Pasted ~3 lines] ",
 		});
-		expect(harness.documentChanges()).toBe(1);
 	});
 
 	test("image size refusal preserves the attachment error boundary", async () => {

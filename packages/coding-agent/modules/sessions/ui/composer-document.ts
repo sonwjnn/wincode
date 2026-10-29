@@ -1,5 +1,5 @@
 import type { Extmark, TextareaRenderable } from "@opentui/core";
-import { isUndefined } from "@wincode/utils";
+import { isUndefined, omitUndefined } from "@wincode/utils";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import {
@@ -82,10 +82,6 @@ type TrackedPastedText = {
 	token: string;
 };
 
-type ComposerDocumentOptions = Readonly<{
-	createId?: () => string;
-}>;
-
 const pastedTextMarks = (
 	text: string,
 	pastedText: SessionSubmissionComposition["pastedText"]
@@ -138,8 +134,7 @@ const attachmentTokenMarks = (
 };
 
 export const createComposerDocument = (
-	initialAdapter: ComposerDocumentEditorAdapter | null = null,
-	{ createId = () => crypto.randomUUID() }: ComposerDocumentOptions = {}
+	initialAdapter: ComposerDocumentEditorAdapter | null = null
 ): ComposerDocument => {
 	let adapter = initialAdapter;
 	let text = initialAdapter?.getText() ?? "";
@@ -228,7 +223,7 @@ export const createComposerDocument = (
 		file: SessionFilePart,
 		token: string,
 		start: number,
-		attachmentId = createId()
+		attachmentId: string = crypto.randomUUID()
 	): TrackedAttachment => ({
 		attachmentId,
 		file,
@@ -246,6 +241,24 @@ export const createComposerDocument = (
 		text: pasted.text,
 		token: pasted.token,
 	});
+
+	const recreateMarks = (): void => {
+		for (const attachment of attachments) {
+			attachment.markId = createMark(
+				"attachment",
+				attachment.start,
+				attachment.start + attachment.token.length,
+				attachment.attachmentId
+			);
+		}
+		for (const pasted of pastedTexts) {
+			pasted.markId = createMark(
+				"pasted-text",
+				pasted.start,
+				pasted.start + pasted.token.length
+			);
+		}
+	};
 
 	const capture = (): ComposerDocumentSnapshot => {
 		syncRecords();
@@ -316,21 +329,7 @@ export const createComposerDocument = (
 			const savedCursorOffset = cursorOffset;
 			writeText(text);
 			writeCursorOffset(savedCursorOffset);
-			for (const attachment of attachments) {
-				attachment.markId = createMark(
-					"attachment",
-					attachment.start,
-					attachment.start + attachment.token.length,
-					attachment.attachmentId
-				);
-			}
-			for (const pasted of pastedTexts) {
-				pasted.markId = createMark(
-					"pasted-text",
-					pasted.start,
-					pasted.start + pasted.token.length
-				);
-			}
+			recreateMarks();
 		}
 		return capture();
 	};
@@ -338,21 +337,7 @@ export const createComposerDocument = (
 	const refreshStyles = (): ComposerDocumentSnapshot => {
 		syncRecords();
 		deleteAllMarks();
-		for (const attachment of attachments) {
-			attachment.markId = createMark(
-				"attachment",
-				attachment.start,
-				attachment.start + attachment.token.length,
-				attachment.attachmentId
-			);
-		}
-		for (const pasted of pastedTexts) {
-			pasted.markId = createMark(
-				"pasted-text",
-				pasted.start,
-				pasted.start + pasted.token.length
-			);
-		}
+		recreateMarks();
 		return capture();
 	};
 
@@ -403,14 +388,16 @@ export const createComposerDocument = (
 		attachments = locateTrackedTokenOccurrences(
 			nextText,
 			previousAttachments.map(({ attachment }) => attachment),
-			attachmentStarts
+			attachmentStarts,
+			previousText
 		).map(({ record, start }) =>
 			createAttachment(record.file, record.token, start, record.attachmentId)
 		);
 		pastedTexts = locateTrackedTokenOccurrences(
 			nextText,
 			previousPastedTexts.map(({ pasted }) => pasted),
-			pastedStarts
+			pastedStarts,
+			previousText
 		).map(({ record, start }) => createPastedText(record, start));
 		if (nextCursorOffset !== null) {
 			writeCursorOffset(nextCursorOffset);
@@ -482,11 +469,12 @@ const createOpenTuiAdapter = (
 			start,
 			typeId: kind === "attachment" ? 1 : 0,
 			virtual: true,
-			...(kind === "attachment" ? { priority: 20 } : {}),
-			...(styleId === undefined ? {} : { styleId }),
-			...(attachmentId === undefined
-				? {}
-				: { data: attachmentId, metadata: { attachmentId } }),
+			...omitUndefined({
+				data: attachmentId,
+				metadata: isUndefined(attachmentId) ? undefined : { attachmentId },
+				priority: kind === "attachment" ? 20 : undefined,
+				styleId,
+			}),
 		});
 	},
 	deleteMark: (id) => {
