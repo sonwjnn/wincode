@@ -7,6 +7,7 @@ import type {
 } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import type { SessionId } from "../../shared/identifiers";
+import type { PluginFactory } from "../plugins/public";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
 
 /** Model-visible tool names a child Session is permitted to invoke. */
@@ -119,8 +120,14 @@ export type SessionSdkHandle = Readonly<{
 	subscribe: (listener: (snapshot: SessionSdkSnapshot) => void) => () => void;
 }>;
 
+export type SessionSdkPluginFactory = Readonly<{
+	factory: PluginFactory;
+	id: string;
+}>;
+
 export type SessionRuntimeOptions = Readonly<{
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
+	pluginFactories?: readonly SessionSdkPluginFactory[];
 	pluginPaths?: readonly string[];
 	pluginProviderIds?: readonly string[];
 	projectTrust?: "trust" | "deny";

@@ -64,7 +64,11 @@ import {
 	sessionMessageId,
 	sessionUsageEntryId,
 } from "../support/identifiers";
-import { captureTestFrame, requireTestFrame } from "../support/opentui";
+import {
+	captureTestFrame,
+	requireTestFrame,
+	waitForTestFrame,
+} from "../support/opentui";
 
 beforeAll(() => {
 	// Text parts map through MarkdownMessagePart; the mock client keeps block
@@ -679,8 +683,7 @@ describe("ChatShell composer focus", () => {
 				await setup.mockInput.typeText("before");
 			});
 			expect(composer.cursorOffset).toBe(6);
-			const transcriptRow = setup
-				.captureCharFrame()
+			const transcriptRow = (await waitForTestFrame(setup))
 				.split("\n")
 				.findIndex((row) => row.includes("No messages yet."));
 			expect(transcriptRow).toBeGreaterThanOrEqual(0);
@@ -815,8 +818,7 @@ describe("ChatShell composer focus", () => {
 				holder.current?.pushKeyboardLayer("dialog");
 			});
 			await flushUi(setup);
-			const transcriptRow = setup
-				.captureCharFrame()
+			const transcriptRow = (await waitForTestFrame(setup))
 				.split("\n")
 				.findIndex((row) => row.includes("No messages yet."));
 			expect(transcriptRow).toBeGreaterThanOrEqual(0);

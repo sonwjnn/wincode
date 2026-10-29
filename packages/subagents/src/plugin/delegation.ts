@@ -2,6 +2,7 @@ import type { AgentId, AgentTurnId } from "@wincode/agent-core";
 import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
+	SessionSdkPluginFactory,
 } from "@wincode/coding-agent";
 import type {
 	DelegationExecutor,
@@ -14,7 +15,7 @@ import type { DelegationTask, SessionId } from "./task-types";
 export type SubagentsTurnContext = Readonly<{
 	agentId: AgentId;
 	capabilityCeiling?: SessionSdkCapabilityCeiling;
-	pluginPath: string;
+	pluginFactory: SessionSdkPluginFactory;
 	sessionId: SessionId;
 	sessionSdk: SessionSdkOperations;
 	turnId: AgentTurnId;
@@ -87,7 +88,7 @@ export const createDelegationExecutor = ({
 			parentSessionId: sessionId,
 			parentToolCallId: request.parentToolCallId,
 			parentTurnId: turnId,
-			pluginPath: turn.pluginPath,
+			pluginFactory: turn.pluginFactory,
 			prompt: request.prompt,
 			sessionSdk,
 		});

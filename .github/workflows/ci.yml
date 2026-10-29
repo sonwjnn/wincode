@@ -1,0 +1,294 @@
+name: CI
+
+on:
+  workflow_call:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+permissions:
+  contents: read
+
+env:
+  AWS_ACCESS_KEY_ID: ""
+  AWS_SECRET_ACCESS_KEY: ""
+  AWS_SESSION_TOKEN: ""
+  AZURE_OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  COHERE_API_KEY: ""
+  DATABASE_URL: ""
+  GITHUB_TOKEN: ""
+  GOOGLE_APPLICATION_CREDENTIALS: ""
+  GOOGLE_API_KEY: ""
+  GOOGLE_GENERATIVE_AI_API_KEY: ""
+  GROQ_API_KEY: ""
+  MISTRAL_API_KEY: ""
+  OPENAI_API_KEY: ""
+  OPENCODE_API_KEY: ""
+  OPENCODE_GO_API_KEY: ""
+  OPENROUTER_API_KEY: ""
+  XAI_API_KEY: ""
+
+jobs:
+  check-types:
+    name: Type checking
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run check-types
+
+  default:
+    name: Default tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run test
+
+  e2e:
+    name: E2E tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run test:e2e
+      - name: Upload E2E failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-failure-artifacts
+          path: test-artifacts/e2e
+          if-no-files-found: ignore
+          retention-days: 7
+
+  binary-build:
+    name: Standalone binary (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-latest
+            platform: linux
+            arch: x64
+            target: linux-x64
+            binary: wincode
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            target: linux-arm64
+            binary: wincode
+          - name: macOS x64
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+            target: macos-x64
+            binary: wincode
+          - name: macOS ARM64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+            target: macos-arm64
+            binary: wincode
+          - name: Windows x64
+            runner: windows-latest
+            platform: win32
+            arch: x64
+            target: windows-x64
+            binary: wincode.exe
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - name: Verify native binary runner target
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: >-
+          bun -e 'if (process.platform !== process.env.EXPECTED_PLATFORM ||
+          process.arch !== process.env.EXPECTED_ARCH) {
+          throw new Error("Expected " + process.env.EXPECTED_PLATFORM + "/" +
+          process.env.EXPECTED_ARCH + ", got " + process.platform + "/" +
+          process.arch);
+          }'
+      - name: Build workspace runtime dependency
+        run: bun run build:utils
+      - name: Prepare isolated Windows test-entrypoint fixture
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'wincode test entrypoint fixture'
+          $testDirectory = Join-Path $fixtureRoot 'packages/probe/test'
+          New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null
+          $testSource = @'
+          import * as path from "node:path";
+          import { expect, test } from "bun:test";
+
+          test("Windows launchers isolate user data and provider credentials", async () => {
+            expect(process.env.OPENAI_API_KEY ?? "").toBe("");
+            expect(process.env.HOME).toBe(process.env.USERPROFILE);
+            const directoryNames = [
+              "HOME",
+              "USERPROFILE",
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "XDG_CACHE_HOME",
+              "APPDATA",
+              "LOCALAPPDATA",
+              "TEMP",
+              "TMP",
+              "TMPDIR",
+              "WINCODE_TEST_SESSION_INDEX_DIR",
+            ];
+            const directories = directoryNames.map((name) => process.env[name]);
+            for (const directory of directories) {
+              expect(directory).toBeDefined();
+              expect(path.isAbsolute(directory ?? "")).toBe(true);
+            }
+            await Bun.write(
+              path.resolve(import.meta.dir, "../../../test-entrypoint-paths.json"),
+              JSON.stringify(directories)
+            );
+          });
+          '@
+          Set-Content -LiteralPath (Join-Path $testDirectory 'entrypoint.test.ts') -Value $testSource -Encoding utf8
+      - name: Smoke PowerShell test entrypoint
+        if: runner.os == 'Windows'
+        env:
+          OPENAI_API_KEY: wrapper-smoke-secret
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'wincode test entrypoint fixture'
+          & .\test.ps1 --root $fixtureRoot --package probe
+      - name: Verify PowerShell entrypoint cleanup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'wincode test entrypoint fixture'
+          $marker = Join-Path $fixtureRoot 'test-entrypoint-paths.json'
+          $directories = @(Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json)
+          $remaining = @($directories | Where-Object { Test-Path -LiteralPath $_ })
+          if ($remaining.Count -gt 0) { throw "PowerShell test wrapper left temporary user data behind." }
+      - name: Smoke batch test entrypoint
+        if: runner.os == 'Windows'
+        env:
+          OPENAI_API_KEY: wrapper-smoke-secret
+        shell: cmd
+        run: test.bat --root "%RUNNER_TEMP%\wincode test entrypoint fixture" --package probe
+      - name: Verify batch test entrypoint cleanup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'wincode test entrypoint fixture'
+          $marker = Join-Path $fixtureRoot 'test-entrypoint-paths.json'
+          $directories = @(Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json)
+          $remaining = @($directories | Where-Object { Test-Path -LiteralPath $_ })
+          if ($remaining.Count -gt 0) { throw "Batch test wrapper left temporary user data behind." }
+      - name: Windows headless interactive startup contracts (not ConPTY)
+        if: runner.os == 'Windows'
+        run: bun test packages/coding-agent/test/application/cli-startup.test.ts --timeout=30000
+      - name: Compile standalone Wincode executable
+        shell: bash
+        run: >-
+          mkdir -p build/release-bin build/release-assets &&
+          bun build packages/coding-agent/bin/wincode-interactive.ts
+          --compile --outfile "build/release-bin/${{ matrix.binary }}"
+      - name: Smoke compiled CLI entrypoints
+        shell: bash
+        run: bash scripts/release-binary-smoke.sh "$(pwd -P)/build/release-bin/${{ matrix.binary }}"
+      - name: Install tmux on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux on macOS
+        if: runner.os == 'macOS'
+        run: command -v tmux || brew install tmux
+      - name: Smoke compiled TUI startup and teardown
+        if: runner.os != 'Windows'
+        run: bun run test:tui --binary "$(pwd -P)/build/release-bin/${{ matrix.binary }}"
+      - name: Package Unix executable and checksum
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          archive="wincode-${{ matrix.target }}.tar.gz"
+          tar -czf "build/release-assets/$archive" -C build/release-bin "${{ matrix.binary }}"
+          (
+            cd build/release-assets
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$archive" > "$archive.sha256"
+            else
+              shasum -a 256 "$archive" > "$archive.sha256"
+            fi
+          )
+      - name: Package Windows executable and checksum
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = 'build/release-assets/wincode-${{ matrix.target }}.zip'
+          Push-Location 'build/release-bin'
+          Compress-Archive -LiteralPath '${{ matrix.binary }}' -DestinationPath "../../$archive" -Force
+          Pop-Location
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path -Leaf $archive)" | Set-Content -NoNewline -LiteralPath "$archive.sha256" -Encoding ascii
+      - name: Upload release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wincode-${{ matrix.target }}
+          path: build/release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload TUI smoke failure details
+        if: failure() && runner.os != 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-binary-smoke-failure-${{ matrix.target }}
+          path: test-artifacts/interactive-smoke
+          if-no-files-found: ignore
+          retention-days: 7
+
+  gate:
+    name: Required test gate
+    if: always()
+    needs: [check-types, default, e2e, binary-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Require type checking, Default, E2E, and binary jobs
+        run: |
+          test "${{ needs.check-types.result }}" = success
+          test "${{ needs.default.result }}" = success
+          test "${{ needs.e2e.result }}" = success
+          test "${{ needs.binary-build.result }}" = success

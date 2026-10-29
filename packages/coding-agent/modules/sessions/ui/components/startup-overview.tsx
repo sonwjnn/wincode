@@ -45,6 +45,8 @@ type StartupResourceSectionsProps = Readonly<{
 
 let startupDetailsExpanded = false;
 
+const PATH_COMPONENT_BOUNDARY_REGEX = /(?<=[\\/])/u;
+
 const collectStartupDiagnostics = (
 	input: Readonly<{
 		commandDiagnostics: readonly string[];
@@ -298,7 +300,7 @@ type StartupSectionColors = Readonly<{
 	warning: string;
 }>;
 
-function ContextStartupSection({
+export function ContextStartupSection({
 	colors,
 	expanded,
 	homeRoot,
@@ -329,14 +331,12 @@ function ContextStartupSection({
 		<StartupSection color={colors.primary} title="Context">
 			{expanded ? (
 				sources.map(({ sourcePath }) => (
-					<text
-						fg={colors.textMuted}
+					<StartupPath
+						color={colors.textMuted}
+						homeRoot={homeRoot}
 						key={sourcePath}
-						paddingLeft={2}
-						wrapMode="word"
-					>
-						{shortenHomePath(sourcePath, homeRoot)}
-					</text>
+						path={path.resolve(instructions.snapshot.workspace, sourcePath)}
+					/>
 				))
 			) : (
 				<CompactNameList
@@ -397,7 +397,41 @@ function SkillsStartupSection({
 	);
 }
 
-function SkillSourceDetails({
+type StartupPathProps = Readonly<{
+	color: string;
+	homeRoot: string;
+	id?: string;
+	path: string;
+}>;
+
+function StartupPath({ color, homeRoot, id, path }: StartupPathProps) {
+	const displayPath = shortenHomePath(path, homeRoot);
+	let pathPrefix = "";
+	const pathSegments = displayPath
+		.split(PATH_COMPONENT_BOUNDARY_REGEX)
+		.map((segment) => {
+			pathPrefix += segment;
+			return { key: pathPrefix, segment };
+		});
+
+	return (
+		<box
+			flexDirection="row"
+			flexWrap="wrap"
+			id={id}
+			paddingLeft={2}
+			width="100%"
+		>
+			{pathSegments.map(({ key, segment }) => (
+				<text fg={color} flexShrink={0} key={key} wrapMode="none">
+					{segment}
+				</text>
+			))}
+		</box>
+	);
+}
+
+export function SkillSourceDetails({
 	colors,
 	homeRoot,
 	skills,
@@ -418,25 +452,13 @@ function SkillSourceDetails({
 						<text fg={colors.secondary}>
 							{scope === "global" ? "User" : "Project"}
 						</text>
-						{scopedSkills.map(({ filePath, name }) => (
-							<box
-								flexDirection="row"
+						{scopedSkills.map(({ filePath }) => (
+							<StartupPath
+								color={colors.textMuted}
+								homeRoot={homeRoot}
 								key={filePath}
-								paddingLeft={2}
-								width="100%"
-							>
-								<text fg={colors.text} flexShrink={0} wrapMode="none">
-									{name}
-								</text>
-								<text
-									fg={colors.textMuted}
-									flexGrow={1}
-									flexShrink={1}
-									wrapMode="word"
-								>
-									· {shortenHomePath(filePath, homeRoot)}
-								</text>
-							</box>
+								path={filePath}
+							/>
 						))}
 					</box>
 				);
@@ -506,7 +528,7 @@ function CommandsStartupSection({
 	);
 }
 
-function PluginsStartupSection({
+export function PluginsStartupSection({
 	colors,
 	expanded,
 	homeRoot,
@@ -524,25 +546,13 @@ function PluginsStartupSection({
 		<StartupSection color={colors.primary} title="Plugins">
 			{expanded ? (
 				plugins.map(({ id, sourcePath }) => (
-					<box
-						flexDirection="row"
+					<StartupPath
+						color={colors.textMuted}
+						homeRoot={homeRoot}
 						id={`startup-plugin-${id}`}
 						key={id}
-						paddingLeft={2}
-						width="100%"
-					>
-						<text fg={colors.text} flexShrink={0} wrapMode="none">
-							{id}
-						</text>
-						<text
-							fg={colors.textMuted}
-							flexGrow={1}
-							flexShrink={1}
-							wrapMode="word"
-						>
-							· {shortenHomePath(sourcePath, homeRoot)}
-						</text>
-					</box>
+						path={sourcePath}
+					/>
 				))
 			) : (
 				<CompactNameList

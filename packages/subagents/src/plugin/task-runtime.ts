@@ -10,6 +10,7 @@ import {
 	type SessionSdkDelivery,
 	type SessionSdkHandle,
 	type SessionSdkOperations,
+	type SessionSdkPluginFactory,
 	snapshotSessionSdkCapabilityCeiling,
 } from "@wincode/coding-agent";
 import { getErrorMessage } from "@wincode/utils";
@@ -34,7 +35,7 @@ export type StartSubagentsTaskInput = Readonly<{
 	parentToolCallId: DelegationTask["parentToolCallId"];
 	parentTurnId: DelegationTask["parentTurnId"];
 	model?: ProviderModelSelection;
-	pluginPath: string;
+	pluginFactory: SessionSdkPluginFactory;
 	prompt: string;
 	thinkingLevel?: ThinkingLevel;
 	sessionSdk: SessionSdkOperations;
@@ -133,7 +134,7 @@ const isTerminalEvent = (
 
 const createCoordinator = (
 	taskStore: SubagentsTaskStore,
-	pluginPath: string
+	pluginFactory: SessionSdkPluginFactory
 ): SubagentsTaskCoordinator => {
 	const activeTasks = new Map<DelegationTask["id"], ActiveTask>();
 	const activeSessions = new Map<SessionId, ActiveSession>();
@@ -276,7 +277,7 @@ const createCoordinator = (
 	): Promise<void> => {
 		const childSessions = createSubagentChildSessionFactory(
 			sessionSdk,
-			pluginPath
+			pluginFactory
 		);
 		for (const task of taskStore.listUnsettledTasks()) {
 			if (task.status === "awaiting_report" || activeTasks.has(task.id)) {
@@ -409,7 +410,7 @@ const createCoordinator = (
 			);
 			resources.childSession = await createSubagentChildSessionFactory(
 				input.sessionSdk,
-				input.pluginPath
+				input.pluginFactory
 			).create({
 				...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 				agentId: input.agentId,
@@ -463,11 +464,11 @@ const createCoordinator = (
 
 export const getSubagentsTaskCoordinator = (
 	taskStore: SubagentsTaskStore,
-	pluginPath: string
+	pluginFactory: SessionSdkPluginFactory
 ): SubagentsTaskCoordinator => {
 	let coordinator = coordinators.get(taskStore);
 	if (coordinator === undefined) {
-		coordinator = createCoordinator(taskStore, pluginPath);
+		coordinator = createCoordinator(taskStore, pluginFactory);
 		coordinators.set(taskStore, coordinator);
 	}
 	return coordinator;

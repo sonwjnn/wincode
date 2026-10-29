@@ -684,6 +684,7 @@ const executionInputForSubmit = ({
 		submissionId: input.submissionId,
 		turnId: input.turnId,
 		thinkingLevel: input.thinkingLevel,
+		maximumModelSteps: input.maximumModelSteps,
 	}),
 });
 

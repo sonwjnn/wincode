@@ -107,6 +107,30 @@ const createDatabasePathIndex = (
 	}
 };
 
+// A test run shares one temporary index across its processes, even when
+// individual fixtures change HOME. Production must keep the OS-wide index.
+const resolveDatabasePathIndexDirectory = (): string => {
+	const testIndexDirectory =
+		process.env.NODE_ENV === "test"
+			? process.env.WINCODE_TEST_SESSION_INDEX_DIR
+			: undefined;
+	if (
+		testIndexDirectory !== undefined &&
+		!path.isAbsolute(testIndexDirectory)
+	) {
+		throw new Error(
+			"The test Session database index directory must be absolute."
+		);
+	}
+	return (
+		testIndexDirectory ??
+		path.join(
+			resolveOperatingSystemUserDataDir(),
+			DATABASE_PATH_INDEX_DIRECTORY_NAME
+		)
+	);
+};
+
 /**
  * Gives SQLite one stable pathname per local database identity. WAL sidecars
  * are keyed by pathname, so processes and aliases use the first configured name.
@@ -146,10 +170,7 @@ export const resolveSessionDatabasePath = (databasePath: string): string => {
 			device: fileInfo.dev.toString(),
 			inode: fileInfo.ino.toString(),
 		};
-		const indexDirectory = path.join(
-			resolveOperatingSystemUserDataDir(),
-			DATABASE_PATH_INDEX_DIRECTORY_NAME
-		);
+		const indexDirectory = resolveDatabasePathIndexDirectory();
 		fs.mkdirSync(indexDirectory, { recursive: true });
 		const canonicalIndexDirectory = fs.realpathSync(indexDirectory);
 		const identityHash = new Bun.CryptoHasher("sha256")

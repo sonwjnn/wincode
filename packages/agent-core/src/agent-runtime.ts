@@ -28,7 +28,7 @@ import { AgentInvariantError, isAgentInvariantError } from "./errors";
 import type { AgentTurnEvent, AgentTurnTerminalEvent } from "./events";
 import type { OperationalFailure } from "./failures";
 import { createOperationalFailure } from "./failures";
-import { toModelStepId } from "./identifiers";
+import { type ModelStepId, toModelStepId } from "./identifiers";
 import { type AgentTurnLifecycle, createAgentTurnLifecycle } from "./lifecycle";
 import {
 	type AgentRuntime,
@@ -710,6 +710,7 @@ type ExecuteModelStepsOptions = Readonly<{
 	cacheWarming?: true;
 	emit: EventEmitter;
 	lifecycle: AgentTurnLifecycle;
+	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
 	invocation: AgentModelInvocation;
@@ -853,10 +854,132 @@ const prepareModelStepHistory = async (
 	);
 };
 
+type ProcessModelStepOutputOptions = BuildChatRequestOptions &
+	Readonly<{
+		emit: EventEmitter;
+		modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
+		output: ModelStepOutput;
+		prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
+		protectedFromIndex: number;
+		request: ChatRequest;
+		stepId: ModelStepId;
+		takeSteeringMessages?: AgentRuntimeRunOptions["takeSteeringMessages"];
+		totalUsage: ModelUsage | undefined;
+	}>;
+
+type ProcessModelStepOutputResult = Readonly<{
+	continueTurn: boolean;
+	totalUsage: ModelUsage | undefined;
+}>;
+
+const processModelStepOutput = async function* ({
+	cacheWarming,
+	emit,
+	modelMessages,
+	modelStepObserver,
+	output,
+	prepareNextStep,
+	protectedFromIndex,
+	promptCacheKey,
+	request,
+	runtimeSignal,
+	stepId,
+	takeSteeringMessages,
+	toolDefinitions,
+	totalUsage,
+	turn,
+}: ProcessModelStepOutputOptions): AsyncGenerator<
+	AgentTurnEvent,
+	ProcessModelStepOutputResult,
+	undefined
+> {
+	notifyModelStepFinished(modelStepObserver, request, output.usage);
+	let stopTurn = false;
+	if (output.toolCalls.length > 0) {
+		modelMessages.push({
+			...omitUndefined({ continuation: output.continuation }),
+			content: output.assistantParts,
+			role: "assistant",
+		});
+		const execution = yield* executeToolCalls({
+			calls: output.toolCalls,
+			emit,
+			...omitUndefined({ signal: runtimeSignal }),
+			turnId: turn.id,
+		});
+		modelMessages.push(...execution.messages);
+		stopTurn = execution.stopTurn;
+	}
+	yield emit({
+		modelId: turn.model.modelId,
+		sequence: emit.nextSequence(),
+		stepId,
+		turnId: turn.id,
+		type: "model-step-finished",
+		...omitUndefined({ usage: output.usage }),
+	});
+	const nextTotalUsage = sumUsage(totalUsage, output.usage);
+	if (stopTurn) {
+		yield emit({
+			finishedAt: Date.now(),
+			sequence: emit.nextSequence(),
+			turnId: turn.id,
+			type: "agent-turn-completed",
+			...omitUndefined({ usage: nextTotalUsage }),
+		});
+		return { continueTurn: false, totalUsage: nextTotalUsage };
+	}
+	const steeringMessages = await takeSteeringMessages?.();
+	const hasSteeringMessages =
+		steeringMessages !== undefined && steeringMessages.length > 0;
+	if (hasSteeringMessages) {
+		appendSteeringMessages(modelMessages, output, steeringMessages ?? []);
+	}
+	const additionalMessagesDelivered = await appendLateSteeringMessages(
+		modelMessages,
+		output,
+		output.toolCalls.length > 0 || hasSteeringMessages,
+		takeSteeringMessages
+	);
+	if (
+		output.toolCalls.length === 0 &&
+		!hasSteeringMessages &&
+		!additionalMessagesDelivered
+	) {
+		yield emit({
+			finishedAt: Date.now(),
+			sequence: emit.nextSequence(),
+			turnId: turn.id,
+			type: "agent-turn-completed",
+			...omitUndefined({
+				outputLimitReached: outputLimitReached(output.completion),
+				usage: nextTotalUsage,
+			}),
+		});
+		return { continueTurn: false, totalUsage: nextTotalUsage };
+	}
+	if (prepareNextStep !== undefined) {
+		await prepareModelStepHistory({
+			cacheWarming,
+			modelMessages,
+			output,
+			prepareNextStep,
+			protectedFromIndex,
+			promptCacheKey,
+			runtimeSignal,
+			takeSteeringMessages,
+			toolDefinitions,
+			turn,
+		});
+	}
+	return { continueTurn: true, totalUsage: nextTotalUsage };
+};
+
 const runLoop = async function* ({
 	cacheWarming,
 	emit,
 	lifecycle,
+	maximumModelSteps,
 	invocation,
 	modelMessages,
 	modelStepObserver,
@@ -877,6 +1000,21 @@ const runLoop = async function* ({
 			yield emit(
 				createAgentTurnAbortEvent(turn, runtimeSignal, emit.nextSequence())
 			);
+			return;
+		}
+		if (maximumModelSteps !== undefined && stepNumber > maximumModelSteps) {
+			yield emit({
+				failure: createOperationalFailure({
+					code: "model-step-limit",
+					details: getAgentTurnFailureDetails(turn),
+					retry: "never",
+					source: "runtime",
+				}),
+				finishedAt: Date.now(),
+				sequence: emit.nextSequence(),
+				turnId: turn.id,
+				type: "agent-turn-failed",
+			});
 			return;
 		}
 		const protectedFromIndex = modelMessages.length;
@@ -910,84 +1048,26 @@ const runLoop = async function* ({
 			yield lifecycle.interrupt(emit.nextSequence(), "lost-execution");
 			return;
 		}
-		notifyModelStepFinished(modelStepObserver, request, output.usage);
-		let stopTurn = false;
-		if (output.toolCalls.length > 0) {
-			modelMessages.push({
-				...omitUndefined({ continuation: output.continuation }),
-				content: output.assistantParts,
-				role: "assistant",
-			});
-			const execution = yield* executeToolCalls({
-				calls: output.toolCalls,
-				emit,
-				...omitUndefined({ signal: runtimeSignal }),
-				turnId: turn.id,
-			});
-			modelMessages.push(...execution.messages);
-			stopTurn = execution.stopTurn;
-		}
-		yield emit({
-			modelId: turn.model.modelId,
-			sequence: emit.nextSequence(),
-			stepId,
-			turnId: turn.id,
-			type: "model-step-finished",
-			...omitUndefined({ usage: output.usage }),
-		});
-		totalUsage = sumUsage(totalUsage, output.usage);
-		if (stopTurn) {
-			yield emit({
-				finishedAt: Date.now(),
-				sequence: emit.nextSequence(),
-				turnId: turn.id,
-				type: "agent-turn-completed",
-				...omitUndefined({ usage: totalUsage }),
-			});
-			return;
-		}
-		const steeringMessages = await takeSteeringMessages?.();
-		const hasSteeringMessages =
-			steeringMessages !== undefined && steeringMessages.length > 0;
-		if (hasSteeringMessages) {
-			appendSteeringMessages(modelMessages, output, steeringMessages ?? []);
-		}
-		const additionalMessagesDelivered = await appendLateSteeringMessages(
+		const stepResult = yield* processModelStepOutput({
+			cacheWarming,
+			emit,
 			modelMessages,
+			modelStepObserver,
 			output,
-			output.toolCalls.length > 0 || hasSteeringMessages,
-			takeSteeringMessages
-		);
-		if (
-			output.toolCalls.length === 0 &&
-			!hasSteeringMessages &&
-			!additionalMessagesDelivered
-		) {
-			yield emit({
-				finishedAt: Date.now(),
-				sequence: emit.nextSequence(),
-				turnId: turn.id,
-				type: "agent-turn-completed",
-				...omitUndefined({
-					outputLimitReached: outputLimitReached(output.completion),
-					usage: totalUsage,
-				}),
-			});
+			prepareNextStep,
+			protectedFromIndex,
+			promptCacheKey,
+			request,
+			runtimeSignal,
+			stepId,
+			takeSteeringMessages,
+			toolDefinitions,
+			totalUsage,
+			turn,
+		});
+		totalUsage = stepResult.totalUsage;
+		if (!stepResult.continueTurn) {
 			return;
-		}
-		if (prepareNextStep !== undefined) {
-			await prepareModelStepHistory({
-				cacheWarming,
-				modelMessages,
-				output,
-				prepareNextStep,
-				protectedFromIndex,
-				promptCacheKey,
-				runtimeSignal,
-				takeSteeringMessages,
-				toolDefinitions,
-				turn,
-			});
 		}
 		stepNumber += 1;
 	}
@@ -998,6 +1078,7 @@ const runAgentTurn = async function* (
 	{
 		cacheWarming,
 		deadlineMs,
+		maximumModelSteps,
 		modelStepObserver,
 		prepareNextStep,
 		promptCacheKey,
@@ -1039,6 +1120,7 @@ const runAgentTurn = async function* (
 			modelMessages,
 			...omitUndefined({
 				cacheWarming,
+				maximumModelSteps,
 				modelStepObserver,
 				prepareNextStep,
 				promptCacheKey,

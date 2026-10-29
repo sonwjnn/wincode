@@ -87,7 +87,7 @@ test("provider registration snapshots resolver functions before the Plugin retur
 	expect(tools.map(({ definition: tool }) => tool.name)).toEqual(["read"]);
 });
 
-test("the composition root injects MCP storage into its distributed Plugin factory", () => {
+test("the composition root provides both packaged Plugin factories without runtime resolution", () => {
 	const composition = createApplicationPluginComposition();
 	expect(
 		composition.distributionPlugins.map(({ id, specifier }) => ({
@@ -98,7 +98,9 @@ test("the composition root injects MCP storage into its distributed Plugin facto
 		{ id: "mcp", specifier: "@wincode/mcp/plugin" },
 		{ id: "subagents", specifier: "@wincode/subagents/plugin" },
 	]);
-	expect(typeof composition.distributionPlugins[0]?.factory).toBe("function");
+	expect(
+		composition.distributionPlugins.map(({ factory }) => typeof factory)
+	).toEqual(["function", "function"]);
 });
 
 test("native Skill tools join the same registry without being a Plugin", async () => {
