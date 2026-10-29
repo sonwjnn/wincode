@@ -41,8 +41,8 @@ import {
 	pluginProvidersFromRuntime,
 } from "../provider-collection";
 import { restoreSelection } from "../selection";
-import { projectSessionRecords } from "../storage/session-record";
 import type { SessionUsageEntry } from "../storage/session-store";
+import { projectSessionRecords } from "../transcript-projection";
 import {
 	createSessionUsageLedger,
 	type SessionUsageLedger,

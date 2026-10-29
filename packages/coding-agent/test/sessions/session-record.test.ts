@@ -16,10 +16,10 @@ import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
 	buildUserSessionRecord,
-	projectSessionRecords,
 	SessionRecordInvariantError,
 } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
 import type { SessionId } from "@/shared/identifiers";
 import {
 	agentId,

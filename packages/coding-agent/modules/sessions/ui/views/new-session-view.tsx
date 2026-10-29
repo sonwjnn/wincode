@@ -51,7 +51,7 @@ import {
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import { nextChatSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
-import { projectSessionRecords } from "../../storage/session-record";
+import { projectSessionRecords } from "../../transcript-projection";
 import { type ChatPromptSubmission, getMostRecentSession } from "../../utils";
 import { ChatTextArea } from "../components/chat-text-area";
 import { StartupOverview } from "../components/startup-overview";

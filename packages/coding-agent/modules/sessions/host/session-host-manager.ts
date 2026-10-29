@@ -3,7 +3,7 @@ import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProviderModelSelectionForHost } from "@/modules/providers/provider-model-selection";
 import type { SessionId } from "@/shared/identifiers";
 import { nextChatSelection, restoreSelection } from "../selection";
-import { projectSessionMessageRecords } from "../storage/session-record";
+import { projectSessionMessageRecords } from "../transcript-projection";
 import { createSessionHost } from "./session-host";
 import type {
 	PreparedSessionProviderComposition,
