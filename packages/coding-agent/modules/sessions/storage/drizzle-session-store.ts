@@ -115,7 +115,13 @@ const promptHistoryEntrySchema = z.object({
 		.optional(),
 	files: z.array(promptHistoryFileSchema),
 	pastedText: z
-		.array(z.object({ text: z.string(), token: z.string() }))
+		.array(
+			z.object({
+				start: z.number().optional(),
+				text: z.string(),
+				token: z.string(),
+			})
+		)
 		.optional(),
 });
 
@@ -181,7 +187,9 @@ const writePromptHistory = (
 		latest?.text === entry.text &&
 		JSON.stringify(latest.entry?.files ?? []) === JSON.stringify(entry.files) &&
 		JSON.stringify(latest.entry?.fileTokens ?? []) ===
-			JSON.stringify(entry.fileTokens ?? [])
+			JSON.stringify(entry.fileTokens ?? []) &&
+		JSON.stringify(latest.entry?.pastedText ?? []) ===
+			JSON.stringify(entry.pastedText ?? [])
 	) {
 		return;
 	}

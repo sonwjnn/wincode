@@ -1,23 +1,9 @@
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import {
-	decodePasteBytes,
-	type PasteEvent,
-	type TextareaRenderable,
-} from "@opentui/core";
+import type { PasteEvent, TextareaRenderable } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
-import type { ProviderModel, ThinkingSelection } from "@wincode/ai";
-import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
-import {
-	type ReactNode,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-	useSyncExternalStore,
-} from "react";
-import { createPluginPromptSelectionTarget } from "@/modules/application/plugin-prompt-selection";
+import type { ThinkingSelection } from "@wincode/ai";
+import { isNull } from "@wincode/utils";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
 import type { CommandSuggestion } from "@/modules/commands/command-controller";
 import { useCommandControllerFactory } from "@/modules/commands/command-controller-context";
 import type { CommandCapability } from "@/modules/commands/commands";
@@ -27,19 +13,9 @@ import {
 	findFileMentionRanges,
 	getFileMentionOptions,
 } from "@/modules/file-mentions";
-import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
-	clampProviderModelThinkingSelection,
-	isAvailableProviderModelSelection,
-	isSameProviderModelIdentity,
-	pluginProviderOwnerMatches,
-	supportedProviderThinkingLevels,
-} from "@/modules/providers/provider-model-selection";
-import {
-	type ClipboardReader,
 	registerClipboardTextTransform,
 	useClipboard,
 } from "@/shared/clipboard";
@@ -50,35 +26,26 @@ import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-lay
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getThinkingLevelBorderColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
-import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
 import { SelectableList } from "@/shared/ui/selectable-list";
 import {
 	areFileMentionExtmarksCurrent,
-	type ChatAttachment,
-	findImageTokenRanges,
-	getImageToken,
-	getNextImageLabel,
-	isAttachmentTokenExtant,
-	locateAttachmentTokens,
-	mapOffsetThroughTextReplacement,
 	normalizeFileTokensForTrimmedText,
 } from "../../attachments";
 import { readClipboardImage, readImagePath } from "../../clipboard-image";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
-import type { TrackedPastedText } from "../../hooks/input-controller/submit";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
-import {
-	expandPastedText,
-	expandPastedTextInRange,
-	summarizePastedText,
-} from "../../pasted-text";
+import { expandPastedText, expandPastedTextInRange } from "../../pasted-text";
 import type { SessionSubmissionComposition } from "../../submission-types";
 import type { ChatPromptSubmission } from "../../utils";
+import {
+	attachComposerDocumentToTextarea,
+	createComposerDocument,
+} from "../composer-document";
+import { createPasteIntake } from "../paste-intake";
+import { useComposerProviderSelection } from "../use-composer-provider-selection";
 import { useSyntaxStyle } from "../use-syntax-style";
 
-const MAX_IMAGE_ATTACHMENTS = 5;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const EMPTY_PROMPT_HISTORY: PromptHistoryEntry[] = [];
 const EMPTY_RECALLED_SUBMISSIONS: readonly SessionSubmissionComposition[] = [];
 const EMPTY_COMMAND_CAPABILITIES: readonly CommandCapability[] = [];
@@ -92,27 +59,6 @@ const toSelectableFileMentionItem = (item: FileMentionOption) => ({
 	id: item.path,
 	label: item.label,
 });
-
-const getAttachmentFileTokens = (
-	textarea: TextareaRenderable,
-	attachments: ChatAttachment[]
-): Array<{ start: number; token: string }> =>
-	attachments.flatMap((attachment) => {
-		const extmark = textarea.extmarks.get(attachment.extmarkId);
-		return extmark ? [{ start: extmark.start, token: attachment.token }] : [];
-	});
-
-const getTrackedPastedTexts = (
-	textarea: TextareaRenderable,
-	pastedTexts: Array<{ extmarkId: number; text: string; token: string }>
-): TrackedPastedText[] =>
-	pastedTexts.flatMap(({ extmarkId, text, token }) => {
-		const extmark = textarea.extmarks.get(extmarkId);
-		return extmark &&
-			isAttachmentTokenExtant(textarea.plainText, token, extmark)
-			? [{ end: extmark.end, start: extmark.start, text, token }]
-			: [];
-	});
 
 type ChatTextAreaProps = {
 	id: string;
@@ -187,24 +133,6 @@ function ComposerTopBorder({
 	);
 }
 
-const readPastedImageOrPath = async (
-	clipboard: ClipboardReader,
-	pastedText: string
-) => {
-	const pathImage = pastedText
-		? await readImagePath(pastedText, {
-				readFile: (path) => Bun.file(path).bytes(),
-				stat: async (path) => fs.stat(path),
-			})
-		: { unavailable: true as const };
-	return {
-		image:
-			!pastedText || "unavailable" in pathImage
-				? await readClipboardImage(clipboard)
-				: pathImage,
-		pathImage,
-	};
-};
 export function ChatTextArea({
 	id,
 	sessionId,
@@ -227,272 +155,31 @@ export function ChatTextArea({
 	sessionPromptHistory = EMPTY_PROMPT_HISTORY,
 }: ChatTextAreaProps) {
 	const {
-		agent,
 		cycleThinkingLevel,
-		model,
-		thinkingLevel,
-		setModelForFutureSubmissions,
-		setThinkingLevelForFutureSubmissions,
-	} = usePromptConfig();
-	const subscribeProviderComposition = useCallback(
-		(listener: () => void) =>
-			providerController?.subscribeComposition?.(listener) ?? (() => undefined),
-		[providerController]
-	);
-	const getProviderCompositionRevision = useCallback(
-		() => providerController?.getCompositionRevision?.() ?? 0,
-		[providerController]
-	);
-	const providerCompositionRevision = useSyncExternalStore(
-		subscribeProviderComposition,
-		getProviderCompositionRevision,
-		getProviderCompositionRevision
-	);
-	const subscribeProviderAvailability = useCallback(
-		(listener: () => void) =>
-			providerController?.subscribeAvailability?.(listener) ??
-			(() => undefined),
-		[providerController]
-	);
-	const getProviderAvailabilityRevision = useCallback(
-		() => providerController?.getAvailabilityRevision?.() ?? 0,
-		[providerController]
-	);
-	const providerAvailabilityRevision = useSyncExternalStore(
-		subscribeProviderAvailability,
-		getProviderAvailabilityRevision,
-		getProviderAvailabilityRevision
-	);
-	const [knownProviderModels, setKnownProviderModels] = useState<{
-		controller: InteractiveProviderController;
-		providerId: string;
-		compositionRevision: number;
-		availabilityRevision: number;
-		models: readonly ProviderModel[];
-	} | null>(null);
-	useEffect(() => {
-		let active = true;
-		if (providerController === undefined) {
-			setKnownProviderModels(null);
-			return () => {
-				active = false;
-			};
-		}
-		const requestedCompositionRevision = providerCompositionRevision;
-		const requestedAvailabilityRevision = providerAvailabilityRevision;
-		const isCurrentRevision = () =>
-			getProviderCompositionRevision() === requestedCompositionRevision &&
-			getProviderAvailabilityRevision() === requestedAvailabilityRevision;
-		void providerController
-			.getKnownModels(model.providerId)
-			.then((models) => {
-				if (active && isCurrentRevision()) {
-					setKnownProviderModels({
-						controller: providerController,
-						providerId: model.providerId,
-						compositionRevision: requestedCompositionRevision,
-						availabilityRevision: requestedAvailabilityRevision,
-						models,
-					});
-				}
-			})
-			.catch(() => {
-				if (active && isCurrentRevision()) {
-					setKnownProviderModels({
-						controller: providerController,
-						providerId: model.providerId,
-						compositionRevision: requestedCompositionRevision,
-						availabilityRevision: requestedAvailabilityRevision,
-						models: [],
-					});
-				}
-			});
-		return () => {
-			active = false;
-		};
-	}, [
-		getProviderAvailabilityRevision,
-		getProviderCompositionRevision,
-		providerAvailabilityRevision,
-		providerCompositionRevision,
-		providerController,
-		model.providerId,
-	]);
-	const isProviderStatusReady =
-		knownProviderModels !== null &&
-		knownProviderModels.controller === providerController &&
-		knownProviderModels.providerId === model.providerId &&
-		knownProviderModels.compositionRevision === providerCompositionRevision &&
-		knownProviderModels.availabilityRevision === providerAvailabilityRevision;
-	const selectedProviderModel = isProviderStatusReady
-		? knownProviderModels.models.find((providerModel) =>
-				isSameProviderModelIdentity(providerModel, model)
-			)
-		: undefined;
-	const initialThinkingResolved = useRef(false);
-	useEffect(() => {
-		if (
-			initialThinkingResolved.current ||
-			!isSelectionReady ||
-			selectedProviderModel === undefined
-		) {
-			return;
-		}
-		initialThinkingResolved.current = true;
-		if (
-			thinkingLevel !== undefined ||
-			statusBarThinkingSelection?.thinkingLevel !== undefined
-		) {
-			return;
-		}
-		const initialLevel = clampProviderModelThinkingSelection(
-			selectedProviderModel,
-			"low"
-		).thinkingLevel;
-		if (initialLevel !== undefined) {
-			setThinkingLevelForFutureSubmissions(selectedProviderModel, initialLevel);
-		}
-	}, [
-		isSelectionReady,
+		hasThinkingLevels,
+		isProviderStatusReady,
 		selectedProviderModel,
-		setThinkingLevelForFutureSubmissions,
-		statusBarThinkingSelection?.thinkingLevel,
+		setFutureProviderModelSelection,
 		thinkingLevel,
-	]);
-	const selectedProviderModelRef = useLatest(selectedProviderModel);
-	const previousAgent = useRef(agent);
-	useEffect(() => {
-		if (previousAgent.current === agent) {
-			return;
-		}
-
-		// Agent changes can replace system instructions and tools in the cached prefix.
-		onProviderModelChanged?.();
-		previousAgent.current = agent;
-	}, [agent, onProviderModelChanged]);
-	const {
-		modelId: selectedModelId,
-		pluginProviderSource,
-		providerId: selectedProviderId,
-	} = model;
-	const setFutureModelSelection = useCallback(
-		(
-			nextProviderModel: ProviderModel,
-			nextSelection: ProviderModelSelection
-		) => {
-			selectedProviderModelRef.current = nextProviderModel;
-			if (
-				!(
-					isSameProviderModelIdentity(
-						{ modelId: selectedModelId, providerId: selectedProviderId },
-						nextSelection
-					) &&
-					pluginProviderOwnerMatches(
-						pluginProviderSource,
-						nextSelection.pluginProviderSource
-					)
-				)
-			) {
-				onProviderModelChanged?.();
-			}
-			setModelForFutureSubmissions(nextProviderModel, nextSelection);
-		},
-		[
-			selectedModelId,
-			selectedProviderId,
-			pluginProviderSource,
-			onProviderModelChanged,
-			setModelForFutureSubmissions,
-		]
-	);
-	const setFutureProviderModelSelection = useCallback(
-		(nextModel: ProviderModel, selection: ProviderModelSelection) => {
-			setKnownProviderModels((current) =>
-				current === null ||
-				isAvailableProviderModelSelection(selection, current.models)
-					? current
-					: { ...current, models: [...current.models, nextModel] }
-			);
-			setFutureModelSelection(nextModel, selection);
-		},
-		[setFutureModelSelection]
-	);
-	const pluginRuntime = getInteractivePluginRuntime();
-	useEffect(() => {
-		if (
-			disabled ||
-			pluginRuntime === undefined ||
-			providerController === undefined
-		) {
-			return;
-		}
-		return pluginRuntime.bindPromptSelectionTarget(
-			createPluginPromptSelectionTarget(
-				providerController,
-				{
-					setModel: setFutureModelSelection,
-					setThinkingLevel: (level) =>
-						setThinkingLevelForFutureSubmissions(
-							selectedProviderModelRef.current,
-							level
-						),
-				},
-				() =>
-					getInteractivePluginRuntime()?.getProviderRegistrations(sessionId) ??
-					[]
-			)
-		);
-	}, [
+		unavailableCommandCapabilities,
+	} = useComposerProviderSelection({
 		disabled,
-		pluginRuntime,
-		providerController,
-		setFutureModelSelection,
-		setThinkingLevelForFutureSubmissions,
-		sessionId,
-	]);
-	const thinkingLevels =
-		selectedProviderModel === undefined
-			? []
-			: supportedProviderThinkingLevels(selectedProviderModel);
-	const hideThinkingLevel = thinkingLevels.length === 0;
-	const unavailableCommandCapabilities = useMemo(() => {
-		const unavailable = new Set<CommandCapability>(viewUnavailableCapabilities);
-		if (!onCompact) {
-			unavailable.add("compaction");
-		}
-		if (hideThinkingLevel) {
-			unavailable.add("thinking-level-selection");
-		}
-		if (providerController === undefined) {
-			unavailable.add("provider-sdk");
-		}
-		return [...unavailable];
-	}, [
-		hideThinkingLevel,
+		isSelectionReady,
 		onCompact,
+		onProviderModelChanged,
 		providerController,
-		viewUnavailableCapabilities,
-	]);
+		sessionId,
+		statusBarThinkingSelection,
+		unavailableCommandCapabilities: viewUnavailableCapabilities,
+	});
 	const textAreaRef = useRef<TextareaRenderable>(null);
+	const composerDocument = useMemo(createComposerDocument, []);
 	const ctrlCRef = useRef<() => boolean>(() => false);
-	const lastRecalledFilesRevisionRef = useRef(0);
 	const lastRecallRevisionRef = useRef(recallRevision);
-	const lastTextSyncRevisionRef = useRef(0);
-	const programmaticTextRef = useRef<string | null>(null);
 	const onSubmitRef = useRef<() => Promise<void>>(async () => undefined);
 	const onEmptySubmitRef = useLatest(onEmptySubmit);
-	const pasteSequenceRef = useRef(0);
-	const attachmentsRef = useRef<ChatAttachment[]>([]);
+	const pasteIntake = useMemo(createPasteIntake, []);
 	const fileMentionExtmarkIdsRef = useRef<number[]>([]);
-	const restoreAttachmentsAfterSetTextRef = useRef<
-		(
-			textarea: TextareaRenderable,
-			text: string,
-			attachments: ChatAttachment[],
-			expectedStarts: number[]
-		) => ChatAttachment[]
-	>(() => []);
-	const syncAttachmentsRef = useRef<() => ChatAttachment[]>(() => []);
 	const syncFileMentionExtmarksRef = useRef<() => void>(() => undefined);
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
@@ -501,40 +188,25 @@ export function ChatTextArea({
 	const { show } = useToast();
 	const commandControllerFactory = useCommandControllerFactory();
 	const mentionSyntaxStyle = useSyntaxStyle("composer");
-	const pastedTextStyleId = mentionSyntaxStyle.getStyleId("pastedText");
-	const pastedTextRef = useRef<
-		Array<{ extmarkId: number; text: string; token: string }>
-	>([]);
-	const syncPastedTexts = useCallback(() => {
-		const textarea = textAreaRef.current;
-		if (!textarea) {
-			return [];
-		}
-
-		pastedTextRef.current = pastedTextRef.current
-			.filter(({ extmarkId, token }) => {
-				const extmark = textarea.extmarks.get(extmarkId);
-				return (
-					!isNull(extmark) &&
-					isAttachmentTokenExtant(textarea.plainText, token, extmark)
-				);
-			})
-			.sort(
-				(left, right) =>
-					(textarea.extmarks.get(left.extmarkId)?.start ?? 0) -
-					(textarea.extmarks.get(right.extmarkId)?.start ?? 0)
-			);
-		return pastedTextRef.current;
-	}, []);
+	const composerStyleIdsRef = useLatest({
+		attachment: mentionSyntaxStyle.getStyleId("attachment") ?? undefined,
+		pastedText: mentionSyntaxStyle.getStyleId("pastedText") ?? undefined,
+	});
 
 	const attachTextArea = useCallback(
 		(textarea: TextareaRenderable | null) => {
 			textAreaRef.current = textarea;
 			if (textarea) {
+				attachComposerDocumentToTextarea(
+					composerDocument,
+					textarea,
+					() => composerStyleIdsRef.current
+				);
 				registerClipboardTextTransform(textarea, (text: string) => {
 					const selection = textarea.getSelection();
+					const pastedText = composerDocument.capture().pastedText;
 					if (!selection) {
-						return expandPastedText(text, pastedTextRef.current);
+						return expandPastedText(text, pastedText);
 					}
 					if (textarea.getSelectedText() !== text) {
 						return text;
@@ -542,12 +214,19 @@ export function ChatTextArea({
 					return expandPastedTextInRange(
 						text,
 						selection,
-						getTrackedPastedTexts(textarea, syncPastedTexts())
+						pastedText.map(({ start, text: pasted, token }) => ({
+							end: start + token.length,
+							start,
+							text: pasted,
+							token,
+						}))
 					);
 				});
+			} else {
+				composerDocument.attachEditor(null);
 			}
 		},
-		[syncPastedTexts]
+		[composerDocument]
 	);
 
 	const handleSubmitError = useCallback(
@@ -581,6 +260,7 @@ export function ChatTextArea({
 		]
 	);
 	const { actions, state } = useChatInputController({
+		composerDocument,
 		disabled,
 		commandController,
 		draftKey,
@@ -594,7 +274,6 @@ export function ChatTextArea({
 		sessionPromptHistory,
 	});
 	const commandEscapeRef = useLatest(actions.onEscape);
-	const currentTextRef = useLatest(state.text);
 
 	const handleTextareaContentChange = useCallback(() => {
 		const textarea = textAreaRef.current;
@@ -602,125 +281,35 @@ export function ChatTextArea({
 			return;
 		}
 
+		const editorChange = composerDocument.observeEditorChange();
+		if (!editorChange) {
+			return;
+		}
+		const { previousText, snapshot: observedSnapshot } = editorChange;
 		const mentionDelete = isNull(state.overlay.kind)
 			? deleteFileMentionAfterTrailingCharacterDelete(
-					currentTextRef.current,
+					previousText,
 					textarea.plainText,
 					textarea.cursorOffset
 				)
 			: null;
 		if (mentionDelete) {
-			const previousAttachments = attachmentsRef.current;
-			const previousText = textarea.plainText;
-			const previousStarts = getAttachmentFileTokens(
-				textarea,
-				previousAttachments
-			).map(({ start }) =>
-				mapOffsetThroughTextReplacement(previousText, mentionDelete.text, start)
-			);
-			textarea.setText(mentionDelete.text);
-			attachmentsRef.current = restoreAttachmentsAfterSetTextRef.current(
-				textarea,
+			const snapshot = composerDocument.replaceText(
 				mentionDelete.text,
-				previousAttachments,
-				previousStarts
+				mentionDelete.cursorOffset
 			);
-			textarea.cursorOffset = mentionDelete.cursorOffset;
-			actions.onTextChange(
-				mentionDelete.text,
-				mentionDelete.cursorOffset,
-				attachmentsRef.current.map((attachment) => attachment.file),
-				getAttachmentFileTokens(textarea, attachmentsRef.current)
-			);
+			actions.onTextChange(snapshot, snapshot.cursorOffset, previousText);
 			syncFileMentionExtmarksRef.current();
 			return;
 		}
 
-		if (programmaticTextRef.current === textarea.plainText) {
-			programmaticTextRef.current = null;
-			actions.onProgrammaticTextChange(
-				textarea.plainText,
-				textarea.cursorOffset
-			);
-			return;
-		}
-		const attachments = syncAttachmentsRef.current();
-		syncPastedTexts();
 		actions.onTextChange(
-			textarea.plainText,
-			textarea.cursorOffset,
-			attachments.map((attachment) => attachment.file),
-			getAttachmentFileTokens(textarea, attachments)
+			observedSnapshot,
+			observedSnapshot.cursorOffset,
+			previousText
 		);
 		syncFileMentionExtmarksRef.current();
-	}, [actions, state.overlay.kind, syncPastedTexts]);
-
-	const syncAttachments = useCallback(() => {
-		const textarea = textAreaRef.current;
-		if (!textarea) {
-			return [];
-		}
-
-		attachmentsRef.current = attachmentsRef.current
-			.filter((attachment) => {
-				const extmark = textarea.extmarks.get(attachment.extmarkId);
-				return (
-					!isNull(extmark) &&
-					isAttachmentTokenExtant(textarea.plainText, attachment.token, extmark)
-				);
-			})
-			.sort((left, right) => {
-				const leftStart = textarea.extmarks.get(left.extmarkId)?.start ?? 0;
-				const rightStart = textarea.extmarks.get(right.extmarkId)?.start ?? 0;
-				return leftStart - rightStart;
-			});
-		return attachmentsRef.current;
-	}, []);
-	syncAttachmentsRef.current = syncAttachments;
-
-	const createAttachmentExtmark = useCallback(
-		(
-			textarea: TextareaRenderable,
-			id: string,
-			token: string,
-			start: number
-		) => {
-			const styleId = mentionSyntaxStyle.getStyleId("attachment");
-			return textarea.extmarks.create({
-				data: id,
-				end: start + token.length,
-				metadata: { attachmentId: id },
-				priority: 20,
-				start,
-				typeId: 1,
-				virtual: true,
-				...omitUndefined({ styleId: styleId ?? undefined }),
-			});
-		},
-		[mentionSyntaxStyle]
-	);
-
-	const restoreAttachmentsAfterSetText = useCallback(
-		(
-			textarea: TextareaRenderable,
-			text: string,
-			attachments: ChatAttachment[],
-			expectedStarts: number[]
-		): ChatAttachment[] =>
-			locateAttachmentTokens(text, attachments, expectedStarts).map(
-				({ attachment, start }) => ({
-					...attachment,
-					extmarkId: createAttachmentExtmark(
-						textarea,
-						attachment.id,
-						attachment.token,
-						start
-					),
-				})
-			),
-		[createAttachmentExtmark]
-	);
-	restoreAttachmentsAfterSetTextRef.current = restoreAttachmentsAfterSetText;
+	}, [actions, composerDocument, state.overlay.kind]);
 
 	const syncFileMentionExtmarks = useCallback(() => {
 		const textarea = textAreaRef.current;
@@ -753,205 +342,15 @@ export function ChatTextArea({
 	syncFileMentionExtmarksRef.current = syncFileMentionExtmarks;
 
 	useEffect(() => {
-		if (lastTextSyncRevisionRef.current === state.textSyncRevision) {
-			return;
-		}
-
-		lastTextSyncRevisionRef.current = state.textSyncRevision;
-
-		const textarea = textAreaRef.current;
-		if (!textarea) {
-			return;
-		}
-
-		programmaticTextRef.current = state.text;
-		const previousAttachments = attachmentsRef.current;
-		const previousPastedTexts = syncPastedTexts();
-		const previousText = textarea.plainText;
-		const previousStarts = getAttachmentFileTokens(
-			textarea,
-			previousAttachments
-		).map(({ start }) =>
-			mapOffsetThroughTextReplacement(previousText, state.text, start)
-		);
-		const previousPastedStarts = getTrackedPastedTexts(
-			textarea,
-			previousPastedTexts
-		).map(({ start }) =>
-			mapOffsetThroughTextReplacement(previousText, state.text, start)
-		);
-		textarea.setText(state.text);
-		attachmentsRef.current = restoreAttachmentsAfterSetText(
-			textarea,
-			state.text,
-			previousAttachments,
-			previousStarts
-		);
-		const claimedPastedStarts = new Set<number>();
-		pastedTextRef.current = previousPastedTexts.flatMap((pasted, index) => {
-			const candidates: number[] = [];
-			let start = state.text.indexOf(pasted.token);
-			while (start !== -1) {
-				if (!claimedPastedStarts.has(start)) {
-					candidates.push(start);
-				}
-				start = state.text.indexOf(pasted.token, start + pasted.token.length);
-			}
-			const expectedStart = previousPastedStarts[index];
-			const matchedStart = candidates.toSorted(
-				(left, right) =>
-					Math.abs(left - (expectedStart ?? left)) -
-					Math.abs(right - (expectedStart ?? right))
-			)[0];
-			if (isUndefined(matchedStart)) {
-				return [];
-			}
-			claimedPastedStarts.add(matchedStart);
-			return [
-				{
-					...pasted,
-					extmarkId: textarea.extmarks.create({
-						end: matchedStart + pasted.token.length,
-						start: matchedStart,
-						virtual: true,
-						...omitUndefined({ styleId: pastedTextStyleId ?? undefined }),
-					}),
-				},
-			];
-		});
-		for (const id of fileMentionExtmarkIdsRef.current) {
-			textarea.extmarks.delete(id);
-		}
-		fileMentionExtmarkIdsRef.current = [];
-		syncFileMentionExtmarks();
-
-		if (!isNull(state.cursorOffset)) {
-			textarea.cursorOffset = state.cursorOffset;
-		}
-	}, [
-		restoreAttachmentsAfterSetText,
-		pastedTextStyleId,
-		state.cursorOffset,
-		state.text,
-		state.textSyncRevision,
-		syncPastedTexts,
-		syncFileMentionExtmarks,
-	]);
-
-	useEffect(() => {
-		if (lastRecalledFilesRevisionRef.current === state.recalledFilesRevision) {
-			return;
-		}
-		lastRecalledFilesRevisionRef.current = state.recalledFilesRevision;
-
-		const textarea = textAreaRef.current;
-		if (!textarea) {
-			return;
-		}
-
-		for (const attachment of attachmentsRef.current) {
-			textarea.extmarks.delete(attachment.extmarkId);
-		}
-		attachmentsRef.current = [];
-
-		const normalizedRecalledTokenRanges = state.recalledFileTokens.map(
-			({ start, token }) => ({ start, token: token.trimEnd() })
-		);
-		const recalledTokenRanges = normalizedRecalledTokenRanges.filter(
-			({ start, token }) =>
-				textarea.plainText.slice(start, start + token.length) === token
-		);
-		const parsedTokenRanges = findImageTokenRanges(textarea.plainText);
-		const tokenRanges =
-			state.recalledFileTokens.length === state.recalledFiles.length
-				? recalledTokenRanges
-				: parsedTokenRanges;
-		if (tokenRanges.length !== state.recalledFiles.length) {
-			return;
-		}
-
-		attachmentsRef.current = state.recalledFiles.map((file, index) => {
-			const range = tokenRanges[index];
-			if (!range) {
-				throw new Error("Missing recalled image token");
-			}
-
-			const id = crypto.randomUUID();
-			return {
-				extmarkId: createAttachmentExtmark(
-					textarea,
-					id,
-					range.token,
-					range.start
-				),
-				file,
-				id,
-				token: range.token,
-			};
-		});
-	}, [
-		createAttachmentExtmark,
-		state.recalledFiles,
-		state.recalledFileTokens,
-		state.recalledFilesRevision,
-	]);
-
-	useEffect(() => {
-		const textarea = textAreaRef.current;
-		if (!textarea || state.recalledPastedTextsRevision === 0) {
-			return;
-		}
-		for (const record of pastedTextRef.current) {
-			textarea.extmarks.delete(record.extmarkId);
-		}
-		pastedTextRef.current = [];
-		let searchStart = 0;
-		for (const pasted of state.recalledPastedTexts) {
-			const start = textarea.plainText.indexOf(pasted.token, searchStart);
-			if (start < 0) {
-				continue;
-			}
-			searchStart = start + pasted.token.length;
-			const extmarkId = textarea.extmarks.create({
-				end: start + pasted.token.length,
-				start,
-				virtual: true,
-				...omitUndefined({ styleId: pastedTextStyleId ?? undefined }),
-			});
-			pastedTextRef.current.push({ extmarkId, ...pasted });
-		}
-	}, [
-		pastedTextStyleId,
-		state.recalledPastedTexts,
-		state.recalledPastedTextsRevision,
-	]);
-
-	useEffect(() => {
-		const textarea = textAreaRef.current;
-		if (!textarea || lastRecallRevisionRef.current === recallRevision) {
+		if (lastRecallRevisionRef.current === recallRevision) {
 			return;
 		}
 		lastRecallRevisionRef.current = recallRevision;
 		if (recalledSubmissions.length === 0) {
 			return;
 		}
-		const attachments = syncAttachments();
-		actions.recall(recalledSubmissions, {
-			fileTokens: getAttachmentFileTokens(textarea, attachments),
-			files: attachments.map((attachment) => attachment.file),
-			pastedText: syncPastedTexts().map(({ text, token }) => ({
-				text,
-				token,
-			})),
-			text: textarea.plainText,
-		});
-	}, [
-		actions.recall,
-		recalledSubmissions,
-		recallRevision,
-		syncAttachments,
-		syncPastedTexts,
-	]);
+		actions.recall(recalledSubmissions, composerDocument.capture());
+	}, [actions.recall, composerDocument, recalledSubmissions, recallRevision]);
 
 	useEffect(() => {
 		const textarea = textAreaRef.current;
@@ -960,36 +359,20 @@ export function ChatTextArea({
 		}
 
 		textarea.syntaxStyle = mentionSyntaxStyle;
-
-		attachmentsRef.current = syncAttachments().map((attachment) => {
-			const extmark = textarea.extmarks.get(attachment.extmarkId);
-			if (!extmark) {
-				return attachment;
-			}
-
-			textarea.extmarks.delete(attachment.extmarkId);
-			return {
-				...attachment,
-				extmarkId: createAttachmentExtmark(
-					textarea,
-					attachment.id,
-					attachment.token,
-					extmark.start
-				),
-			};
-		});
+		composerDocument.refreshStyles();
 
 		for (const id of fileMentionExtmarkIdsRef.current) {
 			textarea.extmarks.delete(id);
 		}
 		fileMentionExtmarkIdsRef.current = [];
 		syncFileMentionExtmarks();
-	}, [
-		createAttachmentExtmark,
-		mentionSyntaxStyle,
-		syncAttachments,
-		syncFileMentionExtmarks,
-	]);
+	}, [composerDocument, mentionSyntaxStyle, syncFileMentionExtmarks]);
+
+	useEffect(() => {
+		if (composerDocument.capture().text === state.text) {
+			syncFileMentionExtmarks();
+		}
+	}, [composerDocument, state.text, syncFileMentionExtmarks]);
 
 	useEffect(() => {
 		const textarea = textAreaRef.current;
@@ -1012,57 +395,37 @@ export function ChatTextArea({
 			return;
 		}
 
-		const textarea = textAreaRef.current;
-		const rawText = textarea?.plainText ?? "";
-		const pastedTexts = textarea
-			? getTrackedPastedTexts(textarea, syncPastedTexts())
-			: [];
-		const attachments = syncAttachments();
+		const snapshot = composerDocument.capture();
+		const rawText = snapshot.text;
+		const pastedTexts = snapshot.pastedText.map(({ start, text, token }) => ({
+			end: start + token.length,
+			start,
+			text,
+			token,
+		}));
+		const files = snapshot.files;
+		const fileTokens = snapshot.fileTokens;
 		const submitEmpty = onEmptySubmitRef.current;
 		if (
 			submitEmpty &&
 			rawText.trim().length === 0 &&
-			attachments.length === 0 &&
+			files.length === 0 &&
 			pastedTexts.length === 0
 		) {
 			await submitEmpty();
 			return;
 		}
 		const accepted = await actions.submit({
-			fileTokens: textarea
-				? normalizeFileTokensForTrimmedText(
-						rawText,
-						getAttachmentFileTokens(textarea, attachments)
-					)
-				: [],
-			files: attachments.map((attachment) => attachment.file),
+			fileTokens: normalizeFileTokensForTrimmedText(rawText, fileTokens),
+			files: [...files],
 			pastedTexts,
 			rawText,
 		});
 		if (!accepted) {
 			return;
 		}
-
-		for (const attachment of attachmentsRef.current) {
-			textarea?.extmarks.delete(attachment.extmarkId);
-		}
-		for (const pastedText of pastedTextRef.current) {
-			textarea?.extmarks.delete(pastedText.extmarkId);
-		}
-		attachmentsRef.current = [];
-		textAreaRef.current?.setText("");
-		pastedTextRef.current = [];
 	};
-	ctrlCRef.current = () => {
-		const textarea = textAreaRef.current;
-		const attachments = syncAttachments();
-		const pastedTexts = textarea ? syncPastedTexts() : [];
-		return actions.onCtrlC(
-			attachments.map((attachment) => attachment.file),
-			textarea ? getAttachmentFileTokens(textarea, attachments) : [],
-			pastedTexts.map(({ text, token }) => ({ text, token }))
-		);
-	};
+	ctrlCRef.current = () => actions.onCtrlC(composerDocument.capture());
 
 	useEffect(() => {
 		if (isNull(state.overlay.kind)) {
@@ -1083,55 +446,6 @@ export function ChatTextArea({
 		return () => setResponder("base", null);
 	}, [setResponder]);
 
-	const stageImage = useCallback(
-		(bytes: Uint8Array, mediaType: string, filename = "clipboard") => {
-			if (bytes.byteLength > MAX_IMAGE_BYTES) {
-				show({
-					message: "Images must be 10 MiB or smaller.",
-					variant: "error",
-				});
-				return;
-			}
-
-			const textarea = textAreaRef.current;
-			if (!textarea) {
-				return;
-			}
-			const currentAttachments = syncAttachments();
-			if (currentAttachments.length >= MAX_IMAGE_ATTACHMENTS) {
-				show({
-					message: `You can attach up to ${MAX_IMAGE_ATTACHMENTS} images.`,
-					variant: "error",
-				});
-				return;
-			}
-
-			const id = crypto.randomUUID();
-			const token = getImageToken(getNextImageLabel(currentAttachments.length));
-			const start = textarea.cursorOffset;
-			textarea.insertText(`${token} `);
-			const extmarkId = createAttachmentExtmark(textarea, id, token, start);
-			attachmentsRef.current.push({
-				extmarkId,
-				file: {
-					filename,
-					mediaType,
-					type: "file",
-					url: `data:${mediaType};base64,${bytes.toBase64()}`,
-				},
-				id,
-				token,
-			});
-			handleTextareaContentChange();
-		},
-		[
-			createAttachmentExtmark,
-			handleTextareaContentChange,
-			show,
-			syncAttachments,
-		]
-	);
-
 	const applyTextPaste = useCallback(
 		(event: PasteEvent) => {
 			const textarea = textAreaRef.current;
@@ -1145,85 +459,22 @@ export function ChatTextArea({
 		[handleTextareaContentChange]
 	);
 
-	const stagePastedText = useCallback(
-		(pastedText: string): boolean => {
-			const summary = summarizePastedText(pastedText);
-			if (!summary) {
-				return false;
-			}
-
-			const textarea = textAreaRef.current;
-			if (!textarea) {
-				return true;
-			}
-
-			const start = textarea.cursorOffset;
-			textarea.insertText(`${summary.token} `);
-			const extmarkId = textarea.extmarks.create({
-				end: start + summary.token.length,
-				start,
-				...omitUndefined({ styleId: pastedTextStyleId ?? undefined }),
-				virtual: true,
-			});
-			pastedTextRef.current.push({ extmarkId, ...summary });
-			handleTextareaContentChange();
-			return true;
-		},
-		[handleTextareaContentChange, pastedTextStyleId]
-	);
-
-	const handlePasteEvent = useCallback(
-		async (event: PasteEvent) => {
-			const mediaType = event.metadata?.mimeType;
-			if (disabled || !(isTopLayer("base") || isTopLayer("command"))) {
-				return;
-			}
-			const pasteSequence = pasteSequenceRef.current + 1;
-			pasteSequenceRef.current = pasteSequence;
-			if (
-				event.metadata?.kind === "binary" &&
-				mediaType?.startsWith("image/")
-			) {
-				event.preventDefault();
-				stageImage(event.bytes, mediaType);
-				return;
-			}
-
-			event.preventDefault();
-			const pastedText = decodePasteBytes(event.bytes);
-			const { image, pathImage } = await readPastedImageOrPath(
-				clipboard,
-				pastedText
-			);
-			if (pasteSequence !== pasteSequenceRef.current) {
-				applyTextPaste(event);
-				return;
-			}
-			if ("unavailable" in image) {
-				if (!stagePastedText(pastedText)) {
-					applyTextPaste(event);
-				}
-				return;
-			}
-
-			stageImage(
-				image.bytes,
-				image.mimeType,
-				"unavailable" in pathImage ? "clipboard" : path.basename(pastedText)
-			);
-		},
-		[
-			applyTextPaste,
-			clipboard,
-			disabled,
-			isTopLayer,
-			stageImage,
-			stagePastedText,
-		]
-	);
-
 	usePaste((event) => {
-		handlePasteEvent(event).catch(() => applyTextPaste(event));
+		pasteIntake
+			.handle(event, {
+				active: !disabled && (isTopLayer("base") || isTopLayer("command")),
+				applyTextPaste,
+				document: composerDocument,
+				onDocumentChange: handleTextareaContentChange,
+				onError: (message) => show({ message, variant: "error" }),
+				readClipboardImage: () => readClipboardImage(clipboard),
+				readImagePath: (text) =>
+					readImagePath(text, {
+						readFile: (imagePath) => Bun.file(imagePath).bytes(),
+						stat: async (imagePath) => fs.stat(imagePath),
+					}),
+			})
+			.catch(() => applyTextPaste(event));
 	});
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keyboard priority branches are intentionally co-located.
@@ -1305,7 +556,7 @@ export function ChatTextArea({
 		isProviderStatusReady &&
 		isSelectionReady &&
 		(selectedProviderModel === undefined ||
-			supportedProviderThinkingLevels(selectedProviderModel).length === 0 ||
+			!hasThinkingLevels ||
 			thinkingLevel !== undefined ||
 			statusBarThinkingSelection?.thinkingLevel !== undefined);
 
