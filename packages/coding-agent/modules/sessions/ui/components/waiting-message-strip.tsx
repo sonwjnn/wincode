@@ -34,18 +34,11 @@ const describeSubmission = (
 ): string => {
 	const markers: Array<{ start: number; token: string }> = [
 		...(composition.fileTokens ?? []),
+		...(composition.pastedText ?? []).map(({ start, token }) => ({
+			start,
+			token,
+		})),
 	];
-	// Two pastes can produce the same marker, so each is located after the one
-	// before it rather than at its first occurrence.
-	let cursor = 0;
-	for (const { token } of composition.pastedText ?? []) {
-		const start = composition.text.indexOf(token, cursor);
-		if (start === -1) {
-			continue;
-		}
-		cursor = start + token.length;
-		markers.push({ start, token });
-	}
 	const replacements = markers.flatMap(({ start, token }) =>
 		composition.text.startsWith(token, start)
 			? [{ end: start + token.length, start, text: "" }]

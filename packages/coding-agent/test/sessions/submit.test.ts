@@ -390,7 +390,11 @@ describe("preparePromptSubmission", () => {
 			fileTokens: [{ start: 0, token: "[Image 1]" }],
 			files,
 			pastedText: [
-				{ text: "first line\nsecond line", token: "[Pasted ~2 lines]" },
+				{
+					start: 10,
+					text: "first line\nsecond line",
+					token: "[Pasted ~2 lines]",
+				},
 			],
 			text: "[Image 1] [Pasted ~2 lines] explain",
 		});
@@ -450,6 +454,58 @@ describe("preparePromptSubmission", () => {
 
 		expect(seen).toEqual(["line one\nline two summarize"]);
 		expect(accepted).toBe(true);
+	});
+
+	test("rebases the tracked pasted marker after trimming leading text without expanding a literal lookalike", async () => {
+		const token = "[Pasted ~3 lines]";
+		const rawText = `  ${token} is literal; ${token} is tracked`;
+		const trackedStart = rawText.lastIndexOf(token);
+		const payload = "one\ntwo\nthree";
+		const submissions: Array<{
+			composition?: unknown;
+			text: string;
+		}> = [];
+		const accepted = await submitPrompt(
+			createDependencies({
+				onSubmit: (submission) => {
+					submissions.push({
+						composition: submission.composition,
+						text: submission.text,
+					});
+				},
+			}),
+			{
+				...emptySnapshot(),
+				pastedTexts: [
+					{
+						end: trackedStart + token.length,
+						start: trackedStart,
+						text: payload,
+						token,
+					},
+				],
+				rawText,
+			}
+		);
+
+		expect(accepted).toBe(true);
+		expect(submissions).toEqual([
+			{
+				composition: {
+					fileTokens: [],
+					files: [],
+					pastedText: [
+						{
+							start: trackedStart - 2,
+							text: payload,
+							token,
+						},
+					],
+					text: rawText.trim(),
+				},
+				text: `${token} is literal; ${payload} is tracked`,
+			},
+		]);
 	});
 
 	test("maps a selected marker through pasted-text expansion", async () => {

@@ -317,6 +317,7 @@ type HomeProviderCollectionFactory = (
 
 type HomeViewOptions = Readonly<{
 	defaultAgentId?: AgentId;
+	height?: number;
 	homeRoot?: string;
 	pluginRuntime?: PluginRuntime;
 }>;
@@ -387,7 +388,7 @@ const renderHomeView = async (
 		</ThemeProvider>
 	);
 	const setup = await testRenderWithClipboard(app, {
-		height: 24,
+		height: options.height ?? 24,
 		width: 120,
 	});
 	await act(async () => {
@@ -486,6 +487,7 @@ describe("NewSessionView composer focus", () => {
 			"---\ndescription: Deploy code\n---\nDeploy the app."
 		);
 		const setup = await renderHomeView(createTestHomeProviderCollection, {
+			height: 40, // Leave room for project skills above the prompt path.
 			homeRoot,
 		});
 		let expanded = false;

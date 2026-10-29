@@ -3,6 +3,7 @@ import {
 	expandPastedText,
 	expandPastedTextInRange,
 	normalizePastedText,
+	restorePastedTextMarkers,
 	summarizePastedText,
 } from "@/modules/sessions/pasted-text";
 
@@ -16,11 +17,27 @@ describe("pasted text", () => {
 		);
 	});
 	test("expands repeated markers and wide text", () => {
-		const a = { token: "[Pasted ~3 lines]", text: "猫\n犬\n鳥" };
-		expect(expandPastedText(`前${a.token}中${a.token}後`, [a, a])).toBe(
+		const token = "[Pasted ~3 lines]";
+		const text = `前${token}中${token}後`;
+		const first = { start: text.indexOf(token), text: "猫\n犬\n鳥", token };
+		const second = {
+			start: text.lastIndexOf(token),
+			text: "猫\n犬\n鳥",
+			token,
+		};
+		expect(expandPastedText(text, [first, second])).toBe(
 			"前猫\n犬\n鳥中猫\n犬\n鳥後"
 		);
-		expect(expandPastedText(a.token, [a])).toBe(a.text);
+		expect(expandPastedText(token, [{ ...first, start: 0 }])).toBe(first.text);
+	});
+	test("expands only the tracked occurrence when a literal marker comes first", () => {
+		const token = "[Pasted ~3 lines]";
+		const text = `${token} is literal; actual ${token}`;
+		const start = text.lastIndexOf(token);
+
+		expect(
+			expandPastedText(text, [{ start, text: "one\ntwo\nthree", token }])
+		).toBe(`${token} is literal; actual one\ntwo\nthree`);
 	});
 	test("expands only the marker covered by the selected range", () => {
 		const token = "[Pasted ~3 lines]";
@@ -42,8 +59,17 @@ describe("pasted text", () => {
 			expandPastedTextInRange(selectedText, selection, [first, second])
 		).toBe(` ${second.text}`);
 	});
+	test("does not infer a legacy payload onto a token already tracked by another marker", () => {
+		const token = "[Pasted ~3 lines]";
+		const text = `Inspect ${token}`;
+		const tracked = { start: text.indexOf(token), text: "current", token };
+
+		expect(
+			restorePastedTextMarkers(text, [tracked, { text: "legacy", token }])
+		).toEqual([tracked]);
+	});
 	test("drops removed marker", () => {
-		const a = { token: "[Pasted ~3 lines]", text: "one\ntwo\nthree" };
+		const a = { start: 0, token: "[Pasted ~3 lines]", text: "one\ntwo\nthree" };
 		expect(expandPastedText("kept", [a])).toBe("kept");
 	});
 });

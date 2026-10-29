@@ -40,6 +40,14 @@ import {
 	useState,
 } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";
+import type {
+	CommandController,
+	CommandControllerFactory,
+	CommandPromptSubmit,
+	CommandSubmissionInput,
+	CommandSuggestion,
+} from "@/modules/commands/command-controller";
+import { CommandControllerFactoryProvider } from "@/modules/commands/command-controller-context";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";
 import {
@@ -1483,6 +1491,7 @@ describe("SessionView initial submission", () => {
 			release,
 			sendStarted,
 		};
+		let rendererDestroyed = false;
 		const router = buildRouter();
 		await router.load();
 		let registryIsReady = false;
@@ -1593,10 +1602,25 @@ describe("SessionView initial submission", () => {
 				selectionOverride: { model: selectedModel, thinking: {} },
 			});
 			expect(fakeRunInputs.at(-1)?.thinkingLevel).toBeUndefined();
+			await act(async () => setup.renderer.destroy());
+			rendererDestroyed = true;
+			await expect(
+				pluginRuntime.executeCommand(
+					"pinned_agent_plugin",
+					"select_model_and_thinking",
+					{
+						argument: "",
+						sessionId: "session-selection",
+						workspace,
+					}
+				)
+			).resolves.toBe("selection unavailable");
 		} finally {
 			release.resolve();
-			await flushUi(setup);
-			setup.renderer.destroy();
+			if (!rendererDestroyed) {
+				await flushUi(setup);
+				setup.renderer.destroy();
+			}
 			await pluginRuntime.shutdown();
 			setInteractiveRuntimeContext({ args: [], cwd: workspace });
 		}
@@ -1922,6 +1946,7 @@ const renderSessionView = async ({
 	onThinkingLevel,
 	providerController,
 	restoredSelection,
+	commandControllerFactory,
 	assertPluginSnapshot,
 	width,
 }: {
@@ -1937,6 +1962,7 @@ const renderSessionView = async ({
 	onThinkingLevel?: (level: ThinkingLevel | undefined) => void;
 	providerController?: InteractiveProviderController;
 	restoredSelection?: ResolvedSessionSelection | null;
+	commandControllerFactory?: CommandControllerFactory;
 	assertPluginSnapshot?: () => void;
 	width: number;
 }) => {
@@ -1948,6 +1974,19 @@ const renderSessionView = async ({
 	const configRuntime = { configStore, homeRoot: os.homedir(), workspace };
 	let registryIsReady = false;
 	const commandLayer = { isTop: false };
+	const sessionView = (
+		<SessionView
+			host={createFakeSessionHost(
+				liveTranscript,
+				providerController,
+				restoredSelection,
+				assertPluginSnapshot
+			)}
+			initialTranscript={initialTranscript}
+			sessionId={sessionId("session-1")}
+			sessionTitle="Queue a prompt"
+		/>
+	);
 	const children = (
 		<ToastProvider>
 			<AgentRegistryProvider>
@@ -1962,17 +2001,15 @@ const renderSessionView = async ({
 						<DialogProvider>
 							<RouterContextProvider router={router}>
 								<CommandControllerProvider>
-									<SessionView
-										host={createFakeSessionHost(
-											liveTranscript,
-											providerController,
-											restoredSelection,
-											assertPluginSnapshot
-										)}
-										initialTranscript={initialTranscript}
-										sessionId={sessionId("session-1")}
-										sessionTitle="Queue a prompt"
-									/>
+									{commandControllerFactory === undefined ? (
+										sessionView
+									) : (
+										<CommandControllerFactoryProvider
+											factory={commandControllerFactory}
+										>
+											{sessionView}
+										</CommandControllerFactoryProvider>
+									)}
 									{onThinkingLevel === undefined ? null : (
 										<ThinkingLevelProbe onThinkingLevel={onThinkingLevel} />
 									)}
@@ -2169,7 +2206,9 @@ test("renders unavailable attachment annotations over the unannotated Host trans
 });
 
 /** Renders the view with one Agent Turn already running. */
-const renderBusySessionView = async () => {
+const renderBusySessionView = async (
+	commandControllerFactory?: CommandControllerFactory
+) => {
 	const release = deferred<void>();
 	const sendStarted = deferred<void>();
 	activeFakeSessionRun = {
@@ -2179,6 +2218,7 @@ const renderBusySessionView = async () => {
 		sendStarted,
 	};
 	const { commandLayer, setup } = await renderSessionView({
+		commandControllerFactory,
 		height: 20,
 		initialTranscript: [],
 		width: 100,
@@ -2323,6 +2363,84 @@ describe("SessionView waiting messages", () => {
 		}
 	});
 
+	test("queued Skill selections stay runtime-only and survive composer recall", async () => {
+		const preparedIntents: CommandSubmissionInput["intents"][] = [];
+		const commandSuggestion = fromPartial<CommandSuggestion>({
+			description: "Select the review Skill.",
+			id: "review-skill" as CommandSuggestion["id"],
+			label: "review",
+		});
+		const commandControllerFactory = fromPartial<CommandControllerFactory>({
+			create: () =>
+				fromPartial<CommandController>({
+					getSuggestions: () => ({
+						allItems: [commandSuggestion],
+						items: [commandSuggestion],
+					}),
+					prepareSubmission: async (input: CommandSubmissionInput) => {
+						preparedIntents.push(input.intents);
+						return {
+							accept: async (submit: CommandPromptSubmit) => {
+								await submit({ text: input.text });
+								return true;
+							},
+							execute: async () => undefined,
+						};
+					},
+					select: (id: CommandSuggestion["id"]) =>
+						id === commandSuggestion.id
+							? {
+									intent: { kind: "skill", name: "review" },
+									invocation: "/skill:review",
+									kind: "insert",
+									reopen: false,
+								}
+							: undefined,
+				}),
+		});
+		const { release, setup } = await renderBusySessionView(
+			commandControllerFactory
+		);
+
+		try {
+			preparedIntents.length = 0;
+			await act(async () => setup.mockInput.typeText("/rev"));
+			await setup.waitForFrame((frame) => frame.includes("review"));
+			await act(() => setup.mockInput.pressTab());
+			await flushUi(setup);
+			await typePrompt(setup, "explain the issue");
+			setup.mockInput.pressEnter();
+			await waitFor(setup, () => fakeWaitingTexts.length === 1);
+
+			const selectedIntent = {
+				kind: "skill",
+				marker: "/skill:review",
+				name: "review",
+			};
+			expect(preparedIntents.at(-1)).toMatchObject([selectedIntent]);
+			expect(fakeWaitingCompositions[0]).not.toHaveProperty(
+				"commandSelections"
+			);
+
+			setup.mockInput.pressArrow("up", { meta: true });
+			await waitFor(setup, () => fakeSessionRecalls === 1);
+			await flushUi(setup);
+			await flushUi(setup);
+			preparedIntents.length = 0;
+			setup.mockInput.pressEnter();
+			await waitFor(setup, () => fakeWaitingCompositions.length === 1);
+
+			expect(preparedIntents.at(-1)).toMatchObject([selectedIntent]);
+			expect(fakeWaitingCompositions[0]).not.toHaveProperty(
+				"commandSelections"
+			);
+		} finally {
+			release.resolve();
+			await flushUi(setup);
+			setup.renderer.destroy();
+		}
+	});
+
 	test("recalls the queue into the composer on Alt+Up", async () => {
 		const { release, setup } = await renderBusySessionView();
 		try {
@@ -2427,6 +2545,7 @@ describe("SessionView waiting messages", () => {
 				files: [file],
 				pastedText: [
 					{
+						start: 10,
 						text: "pasted line one\npasted line two",
 						token: "[Pasted ~20 lines]",
 					},

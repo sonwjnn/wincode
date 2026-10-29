@@ -58,6 +58,31 @@ describe("prompt history rules", () => {
 		});
 	});
 
+	test("uses the latest explicit selection for consecutive identical prompt text", () => {
+		const marker = "/skill:review";
+		const selected: PromptHistoryEntry = {
+			commandSelections: [
+				{
+					end: marker.length,
+					kind: "skill",
+					marker,
+					name: "review",
+					start: 0,
+				},
+			],
+			files: [],
+			text: marker,
+		};
+		const literal: PromptHistoryEntry = {
+			commandSelections: [],
+			files: [],
+			text: marker,
+		};
+
+		expect(prependPrompt([selected], literal)).toEqual([literal]);
+		expect(prependPrompt([literal], selected)).toEqual([selected]);
+	});
+
 	test("applies exact Ctrl+C threshold and consecutive retention", () => {
 		expect(shouldRecordCtrlC("x".repeat(19))).toBe(false);
 		expect(shouldRecordCtrlC(`  ${"x".repeat(20)}`)).toBe(true);
@@ -188,9 +213,27 @@ describe("prompt history rules", () => {
 		]);
 	});
 
+	test("restores the tracked paste occurrence without rebinding a literal lookalike", () => {
+		const token = "[Pasted ~3 lines]";
+		const text = `${token} is literal; ${token} is tracked`;
+		const start = text.lastIndexOf(token);
+		const globalEntry = {
+			files: [],
+			pastedText: [{ start, text: "one\ntwo\nthree", token }],
+			text,
+		};
+
+		expect(
+			mergePromptHistory(
+				[entry(`${token} is literal; one\ntwo\nthree is tracked`)],
+				[globalEntry]
+			)
+		).toEqual([globalEntry]);
+	});
+
 	test("restores summarized pasted text instead of expanded session text", () => {
 		const token = "[Pasted ~3 lines]";
-		const pastedText = [{ text: "alpha\nbeta\ngamma", token }];
+		const pastedText = [{ start: 7, text: "alpha\nbeta\ngamma", token }];
 		const sessionEntry = entry("before alpha\nbeta\ngamma after");
 		const globalEntry = {
 			files: [],

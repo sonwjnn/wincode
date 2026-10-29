@@ -1,5 +1,22 @@
 export type OffsetRange = Readonly<{ end: number; start: number }>;
 
+/** Finds non-overlapping literal occurrences in document order. */
+export const getLeadingTrimLength = (text: string): number =>
+	text.length - text.trimStart().length;
+
+export const findTextOccurrences = (text: string, token: string): number[] => {
+	if (token.length === 0) {
+		return [];
+	}
+	const starts: number[] = [];
+	let start = text.indexOf(token);
+	while (start !== -1) {
+		starts.push(start);
+		start = text.indexOf(token, start + token.length);
+	}
+	return starts;
+};
+
 const WHITESPACE_PATTERN = /\s/u;
 
 /**

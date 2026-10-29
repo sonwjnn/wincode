@@ -10,14 +10,16 @@ import {
 	applyFileMentionReplacement,
 	filterFileMentionOptions,
 } from "@/modules/file-mentions";
-import type {
-	SessionFilePart,
-	SessionMessage,
-} from "@/modules/sessions/message";
+import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { normalizeFileTokensForTrimmedText } from "../../attachments";
+import {
+	normalizePastedTextRangesForTrimmedText,
+	shiftPastedTextRangesForTrimmedText,
+} from "../../pasted-text";
 import { getSessionStore } from "../../storage/get-session-store";
+import type { ChatPromptComposition } from "../../utils";
 import { restoreComposerDraft, writeComposerDraft } from "./draft-store";
 import { removeTriggerText } from "./escape-trigger";
 import {
@@ -33,6 +35,7 @@ import {
 import {
 	applyTextEdit,
 	commandInsertionSeparator,
+	normalizeCommandSelectionsForTrimmedText,
 	type TrackedCommandSelection,
 } from "./selections";
 import { preparePromptSubmission, type SubmitSnapshot } from "./submit";
@@ -49,7 +52,85 @@ const EMPTY_OVERLAY: InputOverlayState = {
 	selectedIndex: -1,
 };
 
+type RecalledCompositionAccumulator = {
+	commandSelections: TrackedCommandSelection[];
+	fileTokens: Array<{ start: number; token: string }>;
+	files: ChatPromptComposition["files"][number][];
+	pastedText: NonNullable<ChatPromptComposition["pastedText"]>[number][];
+	text: string;
+};
+
+const normalizeDraftForRecall = (
+	draft: ChatPromptComposition
+): ChatPromptComposition => ({
+	commandSelections: normalizeCommandSelectionsForTrimmedText(
+		draft.text,
+		draft.commandSelections ?? []
+	),
+	fileTokens: normalizeFileTokensForTrimmedText(draft.text, [
+		...(draft.fileTokens ?? []),
+	]),
+	files: draft.files,
+	pastedText: shiftPastedTextRangesForTrimmedText(
+		draft.text,
+		draft.pastedText ?? []
+	),
+	text: draft.text.trim(),
+});
+
+const hasCompositionContent = (composition: ChatPromptComposition): boolean =>
+	composition.text.length > 0 || composition.files.length > 0;
+
+const appendRecalledComposition = (
+	accumulator: RecalledCompositionAccumulator,
+	composition: ChatPromptComposition
+): void => {
+	if (accumulator.text.length > 0) {
+		accumulator.text += "\n\n";
+	}
+	const base = accumulator.text.length;
+	accumulator.text += composition.text;
+	for (const { start, token } of composition.fileTokens ?? []) {
+		accumulator.fileTokens.push({ start: base + start, token });
+	}
+	accumulator.files.push(...composition.files);
+	for (const pasted of composition.pastedText ?? []) {
+		accumulator.pastedText.push({ ...pasted, start: base + pasted.start });
+	}
+	for (const selection of composition.commandSelections ?? []) {
+		accumulator.commandSelections.push({
+			...selection,
+			end: base + selection.end,
+			start: base + selection.start,
+		});
+	}
+};
+
+const combineRecalledCompositions = (
+	draft: ChatPromptComposition,
+	entries: readonly ChatPromptComposition[]
+): RecalledCompositionAccumulator | null => {
+	const compositions = [normalizeDraftForRecall(draft), ...entries].filter(
+		hasCompositionContent
+	);
+	if (compositions.length === 0) {
+		return null;
+	}
+	const accumulator: RecalledCompositionAccumulator = {
+		commandSelections: [],
+		fileTokens: [],
+		files: [],
+		pastedText: [],
+		text: "",
+	};
+	for (const composition of compositions) {
+		appendRecalledComposition(accumulator, composition);
+	}
+	return accumulator;
+};
+
 export function useChatInputController({
+	composerDocument,
 	disabled,
 	commandController,
 	draftKey,
@@ -57,27 +138,22 @@ export function useChatInputController({
 	onSubmit,
 	onTab,
 	sessionPromptHistory,
+	promptHistoryStore,
 }: ChatInputControllerOptions): ChatInputController {
 	const initialDraft =
 		draftKey === undefined ? "" : restoreComposerDraft(draftKey);
-	const [textValue, setTextValue] = useState(initialDraft);
+	const [textValue, setTextValue] = useState(
+		() => composerDocument.replaceText(initialDraft, initialDraft.length).text
+	);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [overlayKind, setOverlayKind] =
 		useState<InputOverlayState["kind"]>(null);
 	const [activeTrigger, setActiveTrigger] = useState<ActiveTrigger | null>(
 		null
 	);
-	const [cursorOffset, setCursorOffset] = useState<number | null>(
-		initialDraft.length === 0 ? null : initialDraft.length
-	);
 	const [fileMentionOptions, setFileMentionOptions] = useState<
 		FileMentionOption[]
 	>([]);
-	// A restored draft must reach the textarea, whose sync effect skips the
-	// initial revision.
-	const [textSyncRevision, setTextSyncRevision] = useState(
-		initialDraft.length === 0 ? 0 : 1
-	);
 	const historyRef = useRef<PromptHistoryEntry[]>([]);
 	const historyIndexRef = useRef(-1);
 	const draftRef = useRef<PromptHistoryEntry>({
@@ -86,7 +162,6 @@ export function useChatInputController({
 	});
 	const promptRecordQueueRef = useRef(Promise.resolve());
 	const selectionsRef = useRef<TrackedCommandSelection[]>([]);
-	const textRef = useRef(initialDraft);
 	useEffect(() => {
 		if (draftKey === undefined) {
 			return;
@@ -98,35 +173,42 @@ export function useChatInputController({
 		historyIndexRef.current = baseline.index;
 		draftRef.current = baseline.draft;
 	}, []);
-	const rememberPrompt = useCallback((entry: PromptHistoryEntry) => {
-		const previousRecord = promptRecordQueueRef.current;
-		const currentRecord = (async () => {
-			await previousRecord;
-			try {
-				const store = getSessionStore();
-				const [externalized] = await store.externalizeAttachments([
-					{
-						id: "prompt-history",
-						parts: entry.files,
-						role: "user",
-					} as unknown as SessionMessage,
-				]);
-				const files = (externalized?.parts ?? []).filter(
-					(part): part is PromptHistoryEntry["files"][number] =>
-						part.type === "file"
-				);
-				const durableEntry = { ...entry, files };
-				await store.recordPrompt(durableEntry);
-				historyRef.current = prependPrompt(historyRef.current, durableEntry);
-			} catch {
-				// A prompt-history write must not retain an inline payload after failure.
-			}
-		})();
-		promptRecordQueueRef.current = currentRecord;
-	}, []);
+	const rememberPrompt = useCallback(
+		(entry: PromptHistoryEntry) => {
+			const previousRecord = promptRecordQueueRef.current;
+			const currentRecord = (async () => {
+				await previousRecord;
+				try {
+					const store = promptHistoryStore ?? getSessionStore();
+					const { commandSelections = [], ...storedEntry } = entry;
+					const [externalized] = await store.externalizeAttachments([
+						{
+							id: "prompt-history",
+							parts: entry.files,
+							role: "user",
+						} as unknown as SessionMessage,
+					]);
+					const files = (externalized?.parts ?? []).filter(
+						(part): part is PromptHistoryEntry["files"][number] =>
+							part.type === "file"
+					);
+					const durableEntry = { ...storedEntry, files };
+					await store.recordPrompt(durableEntry);
+					historyRef.current = prependPrompt(historyRef.current, {
+						...durableEntry,
+						commandSelections,
+					});
+				} catch {
+					// A prompt-history write must not retain an inline payload after failure.
+				}
+			})();
+			promptRecordQueueRef.current = currentRecord;
+		},
+		[promptHistoryStore]
+	);
 	useEffect(() => {
 		let active = true;
-		void getSessionStore()
+		void (promptHistoryStore ?? getSessionStore())
 			.getPromptHistory()
 			.then((globalEntries) => {
 				if (!active) {
@@ -148,38 +230,41 @@ export function useChatInputController({
 		return () => {
 			active = false;
 		};
-	}, [sessionPromptHistory]);
+	}, [promptHistoryStore, sessionPromptHistory]);
 	const selectedIndexRef = useLatest(selectedIndex);
 	const onSubmitRef = useLatest(onSubmit);
 	const setProgrammaticText = useCallback(
 		(
 			text: string,
 			nextCursorOffset: number | null,
-			nextSelections?: readonly TrackedCommandSelection[] | null
+			nextSelections?: readonly TrackedCommandSelection[] | null,
+			restoredComposition?: ChatPromptComposition
 		) => {
 			selectionsRef.current =
 				nextSelections === undefined
-					? applyTextEdit(selectionsRef.current, textRef.current, text)
+					? applyTextEdit(
+							selectionsRef.current,
+							composerDocument.capture().text,
+							text
+						)
 					: [...(nextSelections ?? [])];
-			textRef.current = text;
-			setTextValue(text);
-			setCursorOffset(nextCursorOffset);
-			setTextSyncRevision((revision) => revision + 1);
+			const snapshot =
+				restoredComposition === undefined
+					? composerDocument.replaceText(text, nextCursorOffset)
+					: composerDocument.restore(restoredComposition, nextCursorOffset);
+			if (historyIndexRef.current === -1) {
+				draftRef.current = {
+					commandSelections: [...selectionsRef.current],
+					fileTokens: snapshot.fileTokens,
+					files: [...snapshot.files],
+					pastedText: snapshot.pastedText,
+					text: snapshot.text,
+				};
+			}
+			setTextValue(snapshot.text);
 		},
-		[]
+		[composerDocument]
 	);
-	const [recalledFiles, setRecalledFiles] = useState<
-		PromptHistoryEntry["files"]
-	>([]);
-	const [recalledFileTokens, setRecalledFileTokens] = useState<
-		NonNullable<PromptHistoryEntry["fileTokens"]>
-	>([]);
-	const [recalledFilesRevision, setRecalledFilesRevision] = useState(0);
-	const [recalledPastedTexts, setRecalledPastedTexts] = useState<
-		NonNullable<PromptHistoryEntry["pastedText"]>
-	>([]);
-	const [recalledPastedTextsRevision, setRecalledPastedTextsRevision] =
-		useState(0);
 
 	useEffect(() => {
 		let active = true;
@@ -233,21 +318,25 @@ export function useChatInputController({
 
 	const onTextChange = useCallback(
 		(
-			text: string,
+			composition: SessionSubmissionComposition,
 			cursorOffset: number,
-			files: PromptHistoryEntry["files"],
-			fileTokens: NonNullable<PromptHistoryEntry["fileTokens"]>
+			previousText: string
 		) => {
+			const { files, fileTokens, pastedText, text } = composition;
 			historyIndexRef.current = -1;
-			draftRef.current = { fileTokens, files, text };
 			selectionsRef.current = applyTextEdit(
 				selectionsRef.current,
-				textRef.current,
+				previousText,
 				text
 			);
-			textRef.current = text;
+			draftRef.current = {
+				commandSelections: [...selectionsRef.current],
+				fileTokens: fileTokens?.map((entry) => ({ ...entry })),
+				files: [...files],
+				pastedText: pastedText?.map((entry) => ({ ...entry })),
+				text,
+			};
 			setTextValue(text);
-			setCursorOffset(null);
 			setSelectedIndex(0);
 
 			const nextTrigger = detectTrigger(text, cursorOffset);
@@ -256,20 +345,6 @@ export function useChatInputController({
 		},
 		[]
 	);
-	const onProgrammaticTextChange = useCallback(
-		(text: string, cursor: number) => {
-			selectionsRef.current = applyTextEdit(
-				selectionsRef.current,
-				textRef.current,
-				text
-			);
-			textRef.current = text;
-			setTextValue(text);
-			setCursorOffset(cursor);
-		},
-		[]
-	);
-
 	const navigateHistory = useCallback(
 		(direction: -1 | 1): boolean => {
 			const result = getHistoryNavigation(
@@ -287,13 +362,15 @@ export function useChatInputController({
 			setProgrammaticText(
 				result.entry.text,
 				direction < 0 ? 0 : result.entry.text.length,
-				null
+				result.entry.commandSelections ?? [],
+				{
+					commandSelections: result.entry.commandSelections,
+					fileTokens: result.entry.fileTokens,
+					files: result.entry.files,
+					pastedText: result.entry.pastedText,
+					text: result.entry.text,
+				}
 			);
-			setRecalledFiles(result.entry.files);
-			setRecalledFileTokens(result.entry.fileTokens ?? []);
-			setRecalledFilesRevision((revision) => revision + 1);
-			setRecalledPastedTexts(result.entry.pastedText ?? []);
-			setRecalledPastedTextsRevision((revision) => revision + 1);
 			return true;
 		},
 		[setProgrammaticText]
@@ -308,49 +385,29 @@ export function useChatInputController({
 	 */
 	const recall = useCallback(
 		(
-			entries: readonly SessionSubmissionComposition[],
-			draft: SessionSubmissionComposition
+			entries: readonly ChatPromptComposition[],
+			draft: ChatPromptComposition
 		) => {
-			const draftComposition: SessionSubmissionComposition = {
-				fileTokens: normalizeFileTokensForTrimmedText(draft.text, [
-					...(draft.fileTokens ?? []),
-				]),
-				files: draft.files,
-				pastedText: draft.pastedText,
-				text: draft.text.trim(),
-			};
-			const compositions = [draftComposition, ...entries].filter(
-				(composition) =>
-					composition.text.length > 0 || composition.files.length > 0
+			const composition = combineRecalledCompositions(
+				{
+					...draft,
+					commandSelections: draft.commandSelections ?? [
+						...selectionsRef.current,
+					],
+				},
+				entries
 			);
-			if (compositions.length === 0) {
+			if (!composition) {
 				return;
 			}
-			let text = "";
-			const fileTokens: Array<{ start: number; token: string }> = [];
-			const files: SessionFilePart[] = [];
-			const pastedText: Array<{ text: string; token: string }> = [];
-			for (const composition of compositions) {
-				if (text.length > 0) {
-					text += "\n\n";
-				}
-				const base = text.length;
-				text += composition.text;
-				for (const { start, token } of composition.fileTokens ?? []) {
-					fileTokens.push({ start: base + start, token });
-				}
-				files.push(...composition.files);
-				pastedText.push(...(composition.pastedText ?? []));
-			}
-
 			historyIndexRef.current = -1;
-			draftRef.current = { fileTokens, files, text };
-			setProgrammaticText(text, 0, null);
-			setRecalledFiles(files);
-			setRecalledFileTokens(fileTokens);
-			setRecalledFilesRevision((revision) => revision + 1);
-			setRecalledPastedTexts(pastedText);
-			setRecalledPastedTextsRevision((revision) => revision + 1);
+			draftRef.current = composition;
+			setProgrammaticText(
+				composition.text,
+				0,
+				composition.commandSelections,
+				composition
+			);
 		},
 		[setProgrammaticText]
 	);
@@ -368,18 +425,19 @@ export function useChatInputController({
 
 	const applyCommandInsertion = useCallback(
 		(selection: Extract<CommandSelection, { kind: "insert" }>) => {
+			const currentText = composerDocument.capture().text;
 			const trigger = activeTrigger?.kind === "command" ? activeTrigger : null;
-			const start = trigger?.start ?? textValue.length;
-			const end = trigger?.end ?? textValue.length;
+			const start = trigger?.start ?? currentText.length;
+			const end = trigger?.end ?? currentText.length;
 			// Keep one separator: the trailing space is only needed when the
 			// trigger did not already sit before whitespace.
 			const separator = commandInsertionSeparator(
-				textValue,
+				currentText,
 				end,
 				selection.reopen
 			);
 			const invocation = `${selection.invocation}${separator}`;
-			const nextText = `${textValue.slice(0, start)}${invocation}${textValue.slice(end)}`;
+			const nextText = `${currentText.slice(0, start)}${invocation}${currentText.slice(end)}`;
 			const cursor = start + invocation.length;
 			const tracked =
 				selection.intent === undefined || selection.reopen
@@ -392,7 +450,7 @@ export function useChatInputController({
 							start,
 						};
 			const nextSelections = [
-				...applyTextEdit(selectionsRef.current, textValue, nextText),
+				...applyTextEdit(selectionsRef.current, currentText, nextText),
 				...(tracked === undefined ? [] : [tracked]),
 			];
 			setProgrammaticText(nextText, cursor, nextSelections);
@@ -405,7 +463,7 @@ export function useChatInputController({
 			}
 			closeOverlay();
 		},
-		[activeTrigger, closeOverlay, setProgrammaticText, textValue]
+		[activeTrigger, closeOverlay, composerDocument, setProgrammaticText]
 	);
 
 	const selectCommandAtIndex = useCallback(
@@ -425,9 +483,10 @@ export function useChatInputController({
 				return;
 			}
 
+			const currentText = composerDocument.capture().text;
 			const nextText = activeTrigger
-				? removeTriggerText(textValue, activeTrigger)
-				: { cursorOffset: null, text: textValue };
+				? removeTriggerText(currentText, activeTrigger)
+				: { cursorOffset: null, text: currentText };
 			setProgrammaticText(nextText.text, nextText.cursorOffset);
 			closeOverlay();
 			void selection.execute();
@@ -439,7 +498,7 @@ export function useChatInputController({
 			commandController,
 			resolveCommand,
 			setProgrammaticText,
-			textValue,
+			composerDocument,
 		]
 	);
 
@@ -460,7 +519,7 @@ export function useChatInputController({
 
 			const isDirectory = option.type === "directory";
 			const replacement = applyFileMentionReplacement(
-				textValue,
+				composerDocument.capture().text,
 				activeTrigger,
 				`@${option.label}`,
 				{ addTrailingSpace: !isDirectory }
@@ -488,7 +547,7 @@ export function useChatInputController({
 			filteredFileMentions,
 			overlayKind,
 			setProgrammaticText,
-			textValue,
+			composerDocument,
 		]
 	);
 
@@ -515,11 +574,14 @@ export function useChatInputController({
 
 	const onEscape = useCallback(() => {
 		if (activeTrigger?.kind === "file-mention") {
-			const result = removeTriggerText(textValue, activeTrigger);
+			const result = removeTriggerText(
+				composerDocument.capture().text,
+				activeTrigger
+			);
 			setProgrammaticText(result.text, result.cursorOffset);
 		}
 		closeOverlay();
-	}, [activeTrigger, closeOverlay, setProgrammaticText, textValue]);
+	}, [activeTrigger, closeOverlay, composerDocument, setProgrammaticText]);
 
 	const submit = useCallback(
 		async (snapshot: SubmitSnapshot): Promise<boolean> => {
@@ -543,12 +605,20 @@ export function useChatInputController({
 			const prompt = snapshot.rawText.trim();
 			if (prompt.length > 0) {
 				rememberPrompt({
+					commandSelections: normalizeCommandSelectionsForTrimmedText(
+						snapshot.rawText,
+						selectionsRef.current
+					),
 					fileTokens: snapshot.fileTokens,
 					files: snapshot.files,
-					pastedText: snapshot.pastedTexts.map(({ text, token }) => ({
-						text,
-						token,
-					})),
+					pastedText: normalizePastedTextRangesForTrimmedText(
+						snapshot.rawText,
+						snapshot.pastedTexts.map(({ start, text, token }) => ({
+							start,
+							text,
+							token,
+						}))
+					),
 					text: prompt,
 				});
 			}
@@ -575,18 +645,24 @@ export function useChatInputController({
 	);
 
 	const onCtrlC = useCallback(
-		(
-			files: PromptHistoryEntry["files"],
-			fileTokens: NonNullable<PromptHistoryEntry["fileTokens"]>,
-			pastedText: NonNullable<PromptHistoryEntry["pastedText"]>
-		) => {
-			if (disabled || (textValue.length === 0 && isNull(overlayKind))) {
+		(composition: SessionSubmissionComposition) => {
+			const { files, pastedText, text } = composition;
+			if (disabled || (text.length === 0 && isNull(overlayKind))) {
 				return false;
 			}
 			if (
-				shouldRecordCtrlC(textValue, files.length > 0 || pastedText.length > 0)
+				shouldRecordCtrlC(
+					text,
+					files.length > 0 || (pastedText?.length ?? 0) > 0
+				)
 			) {
-				rememberPrompt({ fileTokens, files, pastedText, text: textValue });
+				rememberPrompt({
+					commandSelections: [...selectionsRef.current],
+					fileTokens: composition.fileTokens?.map((entry) => ({ ...entry })),
+					files: [...files],
+					pastedText: pastedText?.map((entry) => ({ ...entry })),
+					text,
+				});
 			}
 
 			resetHistoryBaseline("");
@@ -599,7 +675,6 @@ export function useChatInputController({
 			disabled,
 			overlayKind,
 			setProgrammaticText,
-			textValue,
 			rememberPrompt,
 			resetHistoryBaseline,
 		]
@@ -612,7 +687,7 @@ export function useChatInputController({
 					return false;
 				}
 				if (decideUpAction(cursor) === "moveToStart") {
-					setProgrammaticText(textValue, 0);
+					setProgrammaticText(composerDocument.capture().text, 0);
 					return true;
 				}
 				return navigateHistory(-1);
@@ -640,7 +715,7 @@ export function useChatInputController({
 			navigateHistory,
 			overlayKind,
 			setProgrammaticText,
-			textValue,
+			composerDocument,
 		]
 	);
 
@@ -651,7 +726,7 @@ export function useChatInputController({
 					!(isUndefined(cursor) || isUndefined(length)) &&
 					decideDownAction(cursor, length) === "moveToEnd"
 				) {
-					setProgrammaticText(textValue, length);
+					setProgrammaticText(composerDocument.capture().text, length);
 					return true;
 				}
 				if (cursor !== length) {
@@ -683,7 +758,7 @@ export function useChatInputController({
 			navigateHistory,
 			overlayKind,
 			setProgrammaticText,
-			textValue,
+			composerDocument,
 		]
 	);
 
@@ -771,20 +846,12 @@ export function useChatInputController({
 			onItemSelect,
 			onTab: handleTab,
 			onTextChange,
-			onProgrammaticTextChange,
 			recall,
 			submit,
 		},
 		state: {
-			cursorOffset,
 			overlay,
 			text: textValue,
-			textSyncRevision,
-			recalledFiles,
-			recalledFileTokens,
-			recalledFilesRevision,
-			recalledPastedTexts,
-			recalledPastedTextsRevision,
 		},
 	};
 }

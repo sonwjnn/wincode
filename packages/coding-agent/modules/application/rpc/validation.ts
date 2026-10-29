@@ -12,6 +12,7 @@ import {
 	MAX_ATTACHMENT_BYTES,
 } from "@/modules/sessions/attachment-reference";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import { findTextOccurrences } from "@/shared/utils/text-ranges";
 import type { RpcParams, RpcRequest } from "./protocol";
 import { RPC_ERROR_CODES } from "./protocol";
 import {
@@ -247,8 +248,55 @@ const readSubmissionFiles = async (
 	return files;
 };
 
+const readPastedTextMarkers = (
+	value: unknown,
+	text: string
+): RpcSubmissionDraft["composition"]["pastedText"] => {
+	if (value === undefined) {
+		return;
+	}
+	if (!Array.isArray(value)) {
+		throw rejectedSubmission("Composition pastedText is invalid.");
+	}
+	const markers = value.map((candidate) => {
+		const marker = asRecord(candidate);
+		if (
+			marker === undefined ||
+			!exactFields(marker, ["text", "token"]) ||
+			typeof marker.text !== "string" ||
+			typeof marker.token !== "string"
+		) {
+			throw rejectedSubmission("Composition pastedText is invalid.");
+		}
+		return { text: marker.text, token: marker.token };
+	});
+	const offsetsByToken = new Map<string, number[]>();
+	const markerCountsByToken = new Map<string, number>();
+	for (const { token } of markers) {
+		markerCountsByToken.set(token, (markerCountsByToken.get(token) ?? 0) + 1);
+		if (!offsetsByToken.has(token)) {
+			offsetsByToken.set(token, findTextOccurrences(text, token));
+		}
+	}
+	for (const [token, count] of markerCountsByToken) {
+		if (count !== 1 || offsetsByToken.get(token)?.length !== 1) {
+			throw rejectedSubmission(
+				"Composition pastedText markers must each occur exactly once in text."
+			);
+		}
+	}
+	return markers.map(({ text: pastedText, token }) => {
+		const start = offsetsByToken.get(token)?.[0];
+		if (start === undefined) {
+			throw rejectedSubmission("Composition pastedText markers are invalid.");
+		}
+		return { start, text: pastedText, token };
+	});
+};
+
 const readCompositionMarkers = (
-	record: Record<string, unknown>
+	record: Record<string, unknown>,
+	text: string
 ): Pick<RpcSubmissionDraft["composition"], "fileTokens" | "pastedText"> => {
 	const fileTokens = record.fileTokens;
 	if (
@@ -268,22 +316,7 @@ const readCompositionMarkers = (
 	) {
 		throw rejectedSubmission("Composition fileTokens are invalid.");
 	}
-	const pastedText = record.pastedText;
-	if (
-		pastedText !== undefined &&
-		(!Array.isArray(pastedText) ||
-			pastedText.some((value) => {
-				const marker = asRecord(value);
-				return (
-					marker === undefined ||
-					!exactFields(marker, ["text", "token"]) ||
-					typeof marker.text !== "string" ||
-					typeof marker.token !== "string"
-				);
-			}))
-	) {
-		throw rejectedSubmission("Composition pastedText is invalid.");
-	}
+	const pastedText = readPastedTextMarkers(record.pastedText, text);
 	return {
 		...(fileTokens === undefined
 			? {}
@@ -291,12 +324,7 @@ const readCompositionMarkers = (
 					fileTokens:
 						fileTokens as RpcSubmissionDraft["composition"]["fileTokens"],
 				}),
-		...(pastedText === undefined
-			? {}
-			: {
-					pastedText:
-						pastedText as RpcSubmissionDraft["composition"]["pastedText"],
-				}),
+		...(pastedText === undefined ? {} : { pastedText }),
 	};
 };
 
@@ -374,7 +402,7 @@ export const readSubmission = async (
 	const markers =
 		compositionRecord === undefined
 			? {}
-			: readCompositionMarkers(compositionRecord);
+			: readCompositionMarkers(compositionRecord, text);
 	return {
 		composition: { ...markers, files, text },
 		files,

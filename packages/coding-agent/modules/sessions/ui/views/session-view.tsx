@@ -51,11 +51,26 @@ import type {
 	SessionSubmissionComposition,
 	SessionSendInput as SessionSubmissionInput,
 } from "../../submission-types";
-import type { ChatPromptSubmission } from "../../utils";
+import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
+
+const restoreCommandSelections = (
+	selectionsBySubmissionId: Map<
+		string,
+		NonNullable<ChatPromptComposition["commandSelections"]>
+	>,
+	submissionId: string,
+	composition: SessionSubmissionComposition
+): ChatPromptComposition => {
+	const commandSelections = selectionsBySubmissionId.get(submissionId);
+	selectionsBySubmissionId.delete(submissionId);
+	return commandSelections === undefined
+		? composition
+		: { ...composition, commandSelections };
+};
 
 export type SessionInitialSubmission = {
 	messageId: SessionMessageId;
@@ -334,6 +349,9 @@ export function SessionView({
 	const submittedInitialMessageRef = useRef<SessionMessageId | null>(null);
 	const interruptResetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 	const interruptArmedRef = useRef(false);
+	const commandSelectionsBySubmissionIdRef = useRef(
+		new Map<string, NonNullable<ChatPromptComposition["commandSelections"]>>()
+	);
 	const [isStartingInitialTurn, setIsStartingInitialTurn] = useState(
 		!isUndefined(initialSubmission)
 	);
@@ -341,7 +359,7 @@ export function SessionView({
 		readonly SessionMessage[] | null
 	>(null);
 	const [recalledSubmissions, setRecalledSubmissions] = useState<
-		readonly SessionSubmissionComposition[]
+		readonly ChatPromptComposition[]
 	>([]);
 	const [recallRevision, setRecallRevision] = useState(0);
 	const [optimisticMessages, setOptimisticMessages] = useState<
@@ -373,7 +391,15 @@ export function SessionView({
 			if (recalled.length === 0) {
 				return;
 			}
-			setRecalledSubmissions(recalled.map(({ input }) => input.composition));
+			setRecalledSubmissions(
+				recalled.map(({ input, submissionId }) =>
+					restoreCommandSelections(
+						commandSelectionsBySubmissionIdRef.current,
+						submissionId,
+						input.composition
+					)
+				)
+			);
 			setRecallRevision((revision) => revision + 1);
 		} catch (error) {
 			show({
@@ -386,10 +412,18 @@ export function SessionView({
 		}
 	};
 	useEffect(() => {
-		const pending: SessionSubmissionComposition[] = [];
+		const pending: ChatPromptComposition[] = [];
 		let flushScheduled = false;
 		let active = true;
 		const unsubscribe = onSubmissionEvent((event) => {
+			if (
+				event.kind === "processed" ||
+				event.kind === "delivered" ||
+				event.kind === "steered" ||
+				event.kind === "failed"
+			) {
+				commandSelectionsBySubmissionIdRef.current.delete(event.submissionId);
+			}
 			if (event.kind === "failed") {
 				show({
 					message: event.reason ?? "Submission failed.",
@@ -397,14 +431,20 @@ export function SessionView({
 				});
 				return;
 			}
-			if (
-				event.kind !== "recalled" ||
-				event.reason !== "turn-failed" ||
-				event.composition === undefined
-			) {
+			if (event.kind !== "recalled" || event.reason !== "turn-failed") {
 				return;
 			}
-			pending.push(event.composition);
+			if (event.composition === undefined) {
+				commandSelectionsBySubmissionIdRef.current.delete(event.submissionId);
+				return;
+			}
+			pending.push(
+				restoreCommandSelections(
+					commandSelectionsBySubmissionIdRef.current,
+					event.submissionId,
+					event.composition
+				)
+			);
 			if (flushScheduled) {
 				return;
 			}
@@ -730,7 +770,12 @@ export function SessionView({
 		submission: ChatPromptSubmission,
 		activeRegistry: AgentRegistry
 	): Promise<boolean> => {
-		const { composition, files, skill, text } = submission;
+		const {
+			composition: { commandSelections, ...composition },
+			files,
+			skill,
+			text,
+		} = submission;
 		const userText = text.trim();
 		let effective: EffectiveAgentSelection;
 		let selectionOverride: AgentSelectionOverride;
@@ -796,6 +841,12 @@ export function SessionView({
 			if (outcome.rejected) {
 				show({ message: outcome.reason, variant: "error" });
 				return false;
+			}
+			if (commandSelections !== undefined && commandSelections.length > 0) {
+				commandSelectionsBySubmissionIdRef.current.set(
+					outcome.submissionId,
+					commandSelections
+				);
 			}
 			return true;
 		} catch {

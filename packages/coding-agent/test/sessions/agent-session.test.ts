@@ -2186,7 +2186,13 @@ test("interrupting an active turn recalls only uncommitted queued Submissions", 
 	const marked: SessionSubmissionComposition = {
 		fileTokens: [{ start: 0, token: "[Image 1] " }],
 		files: [],
-		pastedText: [{ text: "many lines", token: "[Pasted ~9 lines]" }],
+		pastedText: [
+			{
+				start: "[Image 1] ".length,
+				text: "many lines",
+				token: "[Pasted ~9 lines]",
+			},
+		],
 		text: "[Image 1] [Pasted ~9 lines] two",
 	};
 	await engine.send(sendInput({ composition: marked, userText: "two" }));

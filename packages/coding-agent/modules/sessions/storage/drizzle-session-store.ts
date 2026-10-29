@@ -45,6 +45,7 @@ import type {
 	SessionCompaction,
 } from "../compaction/types";
 import { type SessionMessage, withSubmissionStatus } from "../message";
+import { restorePastedTextMarkers } from "../pasted-text";
 import type {
 	AttachmentExternalizationOptions,
 	AttachmentHydrationOptions,
@@ -115,17 +116,31 @@ const promptHistoryEntrySchema = z.object({
 		.optional(),
 	files: z.array(promptHistoryFileSchema),
 	pastedText: z
-		.array(z.object({ text: z.string(), token: z.string() }))
+		.array(
+			z.object({
+				start: z.number().optional(),
+				text: z.string(),
+				token: z.string(),
+			})
+		)
 		.optional(),
 });
 
 const parsePromptHistoryEntry = (
 	entry: unknown,
 	text: string
-): PromptHistoryEntry => ({
-	...promptHistoryEntrySchema.parse(entry ?? { files: [] }),
-	text,
-});
+): PromptHistoryEntry => {
+	const { pastedText, ...parsed } = promptHistoryEntrySchema.parse(
+		entry ?? { files: [] }
+	);
+	return {
+		...parsed,
+		...(pastedText === undefined
+			? {}
+			: { pastedText: restorePastedTextMarkers(text, pastedText) }),
+		text,
+	};
+};
 
 const compactionSummarySchema = z.object({
 	attachments: z
@@ -181,7 +196,9 @@ const writePromptHistory = (
 		latest?.text === entry.text &&
 		JSON.stringify(latest.entry?.files ?? []) === JSON.stringify(entry.files) &&
 		JSON.stringify(latest.entry?.fileTokens ?? []) ===
-			JSON.stringify(entry.fileTokens ?? [])
+			JSON.stringify(entry.fileTokens ?? []) &&
+		JSON.stringify(latest.entry?.pastedText ?? []) ===
+			JSON.stringify(entry.pastedText ?? [])
 	) {
 		return;
 	}

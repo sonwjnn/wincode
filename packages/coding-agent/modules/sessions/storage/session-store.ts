@@ -35,7 +35,7 @@ export type PromptHistoryEntry = {
 	fileTokens?: Array<{ start: number; token: string }>;
 	files: SessionFilePart[];
 	text: string;
-	pastedText?: Array<{ token: string; text: string }>;
+	pastedText?: Array<{ start: number; token: string; text: string }>;
 };
 export type SessionRecordStorageOutcome = SessionRecordOutcome;
 
