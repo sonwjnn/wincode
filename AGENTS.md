@@ -4,6 +4,17 @@
 
 ## This repo contains multiple packages, but `packages/coding-agent/` is the primary focus. Unless otherwise specified, assume work refers to this package.
 
+## Conversational Style
+- Keep answers short and concise
+- No emojis in commits, issues, PR comments, or code
+- No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
+- Technical prose only, be direct
+- Use concise, clear, simple language. Define unavoidable jargon before using it.
+- Explain non-trivial designs and problems as: problem, concrete example or short trace, then solution. State why the solution is necessary and distinguish it from optional complexity.
+- Prefer concrete behavior and small illustrations over abstract summaries, dense terminology, or unexplained lists of changes.
+- When the user asks a question, answer it first before making edits or running implementation commands.
+- When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
+
 ### Package Structure
 
 
@@ -30,7 +41,7 @@ When authorized to create or edit a PR, follow the checklist below.
 ---
 
 ## Code Quality
-
+- Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
 - No `any` unless absolutely necessary.
 - **NEVER use `ReturnType<>`** — use the actual type name.
 - **NEVER use inline imports** — no `await import()`, no `import("pkg").Type` in type positions, no dynamic type imports. Always top-level.
@@ -53,15 +64,14 @@ When authorized to create or edit a PR, follow the checklist below.
 - Type check all workspaces — `bun check-types`
 - Run the Default test portfolio (CI Default lane) — `bun run test`
 - Run the E2E test portfolio (CI E2E lane) — `bun run test:e2e`
-- Start the CLI in watch mode — `bun dev:cli`
 
 ---
 
 ## Testing Guidance
 
-For interactive TUI behavior checks, terminal smoke tests, or approved live-provider smoke runs, load and follow `.wincode/skills/interactive-testing/SKILL.md`.
+For interactive TUI behavior checks, terminal smoke tests, or approved live-provider smoke runs, load and follow `.pi/skills/interactive-testing/SKILL.md`.
 
-For release preparation, version tagging, draft inspection, or release recovery, load and follow `.wincode/skills/release/SKILL.md`.
+For release preparation, version tagging, draft inspection, or release recovery, load and follow `.pi/skills/release/SKILL.md`.
 
 Tests **MUST BE** contract-first. Every test **MUST** defend one externally observable behavior,
 state transition, error mapping, precedence rule, or regression-prone boundary, and

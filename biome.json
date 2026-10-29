@@ -25,7 +25,8 @@
       "!**/.svelte-kit",
       "!**/wrangler.jsonc",
       "!**/.source",
-      "!**/convex/_generated"
+      "!**/convex/_generated",
+      "!**/ai/src/generated"
     ]
   },
   "formatter": {
@@ -61,17 +62,6 @@
         }
       },
       "style": {
-        "noExportedImports": "error",
-        "noParameterAssign": "error",
-        "useAsConstAssertion": "error",
-        "useDefaultParameterLast": "error",
-        "useEnumInitializers": "error",
-        "useSelfClosingElements": "error",
-        "useSingleVarDeclarator": "error",
-        "noUnusedTemplateLiteral": "error",
-        "useNumberNamespace": "error",
-        "noInferrableTypes": "error",
-        "noUselessElse": "error",
         "useConsistentTypeDefinitions": {
           "level": "error",
           "options": {
@@ -97,61 +87,5 @@
     },
     "globals": ["Bun"]
   },
-  "overrides": [
-    {
-      "includes": ["packages/coding-agent/modules/sessions/agent-session/**"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noRestrictedImports": {
-              "level": "error",
-              "options": {
-                "paths": {
-                  "@opentui/core": "The Agent Session is React-free and host-agnostic (ADR-0019).",
-                  "@opentui/react": "The Agent Session is React-free and host-agnostic (ADR-0019).",
-                  "react": "The Agent Session is React-free and host-agnostic (ADR-0019).",
-                  "react-dom": "The Agent Session is React-free and host-agnostic (ADR-0019)."
-                },
-                "patterns": [
-                  {
-                    "group": [
-                      "../compaction",
-                      "../compaction/index",
-                      "../compaction/index.ts",
-                      "./compaction",
-                      "./compaction/index",
-                      "@/modules/sessions/compaction",
-                      "@/modules/sessions/compaction/index"
-                    ],
-                    "message": "Import the React-free leaf instead of this barrel: the Agent Session stays host-agnostic and does not depend on the compaction module's whole graph (ADR-0019)."
-                  }
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "includes": ["packages/coding-agent/modules/application/rpc/**"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noRestrictedImports": {
-              "level": "error",
-              "options": {
-                "paths": {
-                  "@/modules/sessions/storage/attachment-store": "Resolve attachment references through the Session-owned contract instead of importing blob storage.",
-                  "@/modules/sessions/storage/attachment-store.ts": "Resolve attachment references through the Session-owned contract instead of importing blob storage.",
-                  "../../sessions/storage/attachment-store": "Resolve attachment references through the Session-owned contract instead of importing blob storage.",
-                  "../../sessions/storage/attachment-store.ts": "Resolve attachment references through the Session-owned contract instead of importing blob storage."
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  ],
   "extends": ["ultracite/biome/core", "ultracite/biome/react"]
 }
