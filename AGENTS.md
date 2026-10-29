@@ -4,23 +4,50 @@
 
 ## This repo contains multiple packages, but `packages/coding-agent/` is the primary focus. Unless otherwise specified, assume work refers to this package.
 
-### Package Structure
+### Conversational Style
+- Keep answers short and concise
+- No emojis in commits, issues, PR comments, or code
+- No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
+- Technical prose only, be direct
+- Use concise, clear, simple language. Define unavoidable jargon before using it.
+- Explain non-trivial designs and problems as: problem, concrete example or short trace, then solution. State why the solution is necessary and distinguish it from optional complexity.
+- Prefer concrete behavior and small illustrations over abstract summaries, dense terminology, or unexplained lists of changes.
+- When the user asks a question, answer it first before making edits or running implementation commands.
+- When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
 
+## Package Structure
 
 | Package                 | Description                                                      |
 | ----------------------- | ---------------------------------------------------------------- |
 | `packages/agent-core`   | Agent Turns, records, events, runtime and generic tool contracts |
 | `packages/ai`           | Model catalog, Multi-provider LLM client with streaming support  |
 | `packages/coding-agent` | Main CLI application, including Skills and concrete coding tools |
-| `packages/config`       | Shared configuration contracts and loaders                       |
 | `packages/utils`        | Shared utilities                                                 |
-
 
 ---
 
-## GitHub
+## Git
+Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
 
-### Pull requests
+Committing:
+
+- Only commit files YOU changed in THIS session.
+- Stage explicit paths (git add <path1> <path2>); never git add -A / git add ..
+- Before committing, run git status and verify you are only staging your files.
+packages/ai/src/models.generated.ts may always be included alongside your files.
+- Message format: {feat,fix,docs}[(ai,tui,agent,coding-agent)]: <commit message> (optionally multiple lines). Message is informative and concise.
+Never run (destroys other agents' work or bypasses checks):
+
+- git reset --hard, git checkout ., git clean -fd, git stash, git add -A, git add ., git commit --no-verify.
+If rebase conflicts occur:
+
+- Resolve conflicts only in files you modified.
+- If a conflict is in a file you did not modify, abort and ask the user.
+- Never force push.
+
+---
+
+## PRs
 
 When authorized to create or edit a PR, follow the checklist below.
 
@@ -30,7 +57,7 @@ When authorized to create or edit a PR, follow the checklist below.
 ---
 
 ## Code Quality
-
+- Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
 - No `any` unless absolutely necessary.
 - **NEVER use `ReturnType<>`** — use the actual type name.
 - **NEVER use inline imports** — no `await import()`, no `import("pkg").Type` in type positions, no dynamic type imports. Always top-level.
@@ -58,23 +85,18 @@ When authorized to create or edit a PR, follow the checklist below.
 ---
 
 ## Testing Guidance
-
-For interactive TUI behavior checks, terminal smoke tests, or approved live-provider smoke runs, load and follow `.wincode/skills/interactive-testing/SKILL.md`.
-
-For release preparation, version tagging, draft inspection, or release recovery, load and follow `.wincode/skills/release/SKILL.md`.
-
 Tests **MUST BE** contract-first. Every test **MUST** defend one externally observable behavior,
 state transition, error mapping, precedence rule, or regression-prone boundary, and
 its name or nearby rationale must state the consumer-visible failure mode. If you cannot name the contract, **DO NOT** add the test.
+
+### Testing pi Interactive Mode with tmux
+For testing pi's interactive mode, load and follow
 
 ---
 
 ## Central Utilities
 
-Before writing a helper, check whether one already exists — `packages/coding-agent/shared/utils/`, `@wincode/utils`, and the domain modules next to your callsite. This applies to **everything**.
-
-- Search first: `grep` for the operation before implementing it. Two implementations of the same thing is a bug even when both work.
-- Missing capability? Extend the central helper (new option, new sub-function on the namespace) and call it — don't fork its logic locally.
+Before writing a helper, **MUST** `grep` for an existing one in `packages/coding-agent/shared/utils/`, `@wincode/utils`, and nearby domain modules. Duplicates are a bug. If a capability is missing, extend the central helper rather than forking its logic.
 
 ---
 
@@ -193,14 +215,13 @@ logger.debug("LSP fallback triggered", { reason });
 Logs go to `~/.wincode/logs/wincode.YYYY-MM-DD.log`  or with WINCODE_DEBUG go to `./.wincode/logs/wincode.YYYY-MM-DD.log` with automatic rotation. Standalone CLI commands that exit without entering the TUI MAY use `console.*` or process streams for intentional user-facing output. Keep structured stdout clean. This exception is semantic, not filename-based; shared code must use `logger` or an explicit output sink.
 
 ---
+## Releasing
+For release preparation, publishing, verification, or recovery, load and follow .pi/skills/release.md.
+---
 
 ## Persistence rule
 
-This is a solo-dev project. The local SQLite schema is synchronized directly
-from the current Drizzle schema; Wincode does not maintain migration history.
-Use `bun run --cwd packages/coding-agent db:push` after schema changes. If a schema change
-cannot be reconciled safely, delete the local database and attachment data
-before restarting; no compatibility migration is provided.
+Solo-dev project: no migrations. Run `bun run --cwd packages/coding-agent db:push` after schema changes. If that fails, delete the local database and attachment data, then restart.
 
 ---
 
