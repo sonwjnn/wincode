@@ -22,6 +22,15 @@ describe("pasted text", () => {
 		);
 		expect(expandPastedText(a.token, [a])).toBe(a.text);
 	});
+	test("expands only the tracked occurrence when a literal marker comes first", () => {
+		const token = "[Pasted ~3 lines]";
+		const text = `${token} is literal; actual ${token}`;
+		const start = text.lastIndexOf(token);
+
+		expect(
+			expandPastedText(text, [{ start, text: "one\ntwo\nthree", token }])
+		).toBe(`${token} is literal; actual one\ntwo\nthree`);
+	});
 	test("expands only the marker covered by the selected range", () => {
 		const token = "[Pasted ~3 lines]";
 		const first = { end: token.length, start: 0, text: "a\nb\nc" };

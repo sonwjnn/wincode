@@ -19,20 +19,20 @@ export const isAttachmentTokenExtant = (
 	extmark: Pick<Extmark, "end" | "start">
 ) => text.slice(extmark.start, extmark.end) === token;
 
-export const locateAttachmentTokens = (
+export const locateTrackedTokenOccurrences = <T extends { token: string }>(
 	text: string,
-	attachments: ChatAttachment[],
-	expectedStarts: number[] = []
-): Array<{ attachment: ChatAttachment; start: number }> => {
+	records: readonly T[],
+	expectedStarts: readonly number[] = []
+): Array<{ record: T; start: number }> => {
 	const claimedStarts = new Set<number>();
-	return attachments.flatMap((attachment, index) => {
+	return records.flatMap((record, index) => {
 		const candidates: number[] = [];
-		let start = text.indexOf(attachment.token);
+		let start = text.indexOf(record.token);
 		while (start !== -1) {
 			if (!claimedStarts.has(start)) {
 				candidates.push(start);
 			}
-			start = text.indexOf(attachment.token, start + attachment.token.length);
+			start = text.indexOf(record.token, start + record.token.length);
 		}
 
 		const expectedStart = expectedStarts[index];
@@ -46,9 +46,18 @@ export const locateAttachmentTokens = (
 			return [];
 		}
 		claimedStarts.add(matchedStart);
-		return [{ attachment, start: matchedStart }];
+		return [{ record, start: matchedStart }];
 	});
 };
+
+export const locateAttachmentTokens = (
+	text: string,
+	attachments: readonly ChatAttachment[],
+	expectedStarts: readonly number[] = []
+): Array<{ attachment: ChatAttachment; start: number }> =>
+	locateTrackedTokenOccurrences(text, attachments, expectedStarts).map(
+		({ record: attachment, start }) => ({ attachment, start })
+	);
 
 export type TextEditRegion = Readonly<{
 	/** Characters identical at the start of both texts. */

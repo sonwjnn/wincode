@@ -2,6 +2,7 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import { expandPastedText } from "../../pasted-text";
 import type { PromptHistoryEntry } from "../../storage/session-store";
 
 export type { PromptHistoryEntry } from "../../storage/session-store";
@@ -21,10 +22,7 @@ const same = (a: PromptHistoryEntry, b: PromptHistoryEntry): boolean =>
 	JSON.stringify(a.pastedText ?? []) === JSON.stringify(b.pastedText ?? []) &&
 	sameFiles(a, b);
 const expandedText = (entry: PromptHistoryEntry): string =>
-	(entry.pastedText ?? []).reduce(
-		(text, pasted) => text.replace(pasted.token, pasted.text),
-		entry.text
-	);
+	expandPastedText(entry.text, entry.pastedText ?? []);
 
 export const derivePromptHistory = (
 	messages: readonly SessionMessage[]

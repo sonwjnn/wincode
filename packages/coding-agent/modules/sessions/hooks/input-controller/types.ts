@@ -3,8 +3,8 @@ import type {
 	CommandSuggestion,
 } from "@/modules/commands/command-controller";
 import type { FileMentionOption } from "@/modules/file-mentions";
-import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
+import type { ComposerDocument } from "../../ui/composer-document";
 import type { ChatPromptSubmission } from "../../utils";
 import type { PromptHistoryEntry } from "./history";
 import type { SubmitSnapshot } from "./submit";
@@ -20,37 +20,24 @@ export type InputOverlayState =
 	| { items: FileMentionOption[]; kind: "file-mention"; selectedIndex: number };
 
 export type ChatInputControllerState = {
-	cursorOffset: number | null;
 	overlay: InputOverlayState;
 	text: string;
-	textSyncRevision: number;
-	recalledFiles: SessionFilePart[];
-	recalledFileTokens: Array<{ start: number; token: string }>;
-	recalledFilesRevision: number;
-	recalledPastedTexts: NonNullable<PromptHistoryEntry["pastedText"]>;
-	recalledPastedTextsRevision: number;
 };
 
 export type ChatInputControllerActions = {
 	onArrowDown: (cursorOffset?: number, textLength?: number) => boolean;
 	onArrowUp: (cursorOffset?: number, textLength?: number) => boolean;
-	onCtrlC: (
-		files: SessionFilePart[],
-		fileTokens: Array<{ start: number; token: string }>,
-		pastedText: Array<{ text: string; token: string }>
-	) => boolean;
+	onCtrlC: (composition: SessionSubmissionComposition) => boolean;
 	onEnter: () => void;
 	onEscape: () => void;
 	onItemExecute: (index: number) => void;
 	onItemSelect: (index: number) => void;
 	onTab: (shift: boolean) => void;
 	onTextChange: (
-		text: string,
+		composition: SessionSubmissionComposition,
 		cursorOffset: number,
-		files: SessionFilePart[],
-		fileTokens: Array<{ start: number; token: string }>
+		previousText: string
 	) => void;
-	onProgrammaticTextChange: (text: string, cursorOffset: number) => void;
 	/**
 	 * Restores recalled compositions into the composer, oldest first and below
 	 * what the composer already holds. The draft carries the composer's own
@@ -69,6 +56,7 @@ export type ChatInputController = {
 };
 
 export type ChatInputControllerOptions = {
+	composerDocument: ComposerDocument;
 	disabled: boolean;
 	commandController: CommandController;
 	/** Ephemeral key whose composer text survives a remount (e.g. a session id). */

@@ -22,7 +22,7 @@ export type SessionSubmissionComposition = Readonly<{
 	fileTokens?: readonly { start: number; token: string }[];
 	files: readonly SessionFilePart[];
 	/** The pasted-text summaries in `text`, in the order they appear. */
-	pastedText?: readonly { text: string; token: string }[];
+	pastedText?: readonly { start?: number; text: string; token: string }[];
 	text: string;
 }>;
 

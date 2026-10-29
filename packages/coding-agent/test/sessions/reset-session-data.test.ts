@@ -26,7 +26,7 @@ const PNG_BYTES = new Uint8Array([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
 ]);
 
-test("resets session data while preserving prompt history", async () => {
+test("resets session data without conflating repeated pasted markers in prompt history", async () => {
 	const directory = await fs.mkdtemp(
 		path.join("/tmp", "wincode-session-reset-")
 	);
@@ -46,6 +46,20 @@ test("resets session data while preserving prompt history", async () => {
 		turnId: agentTurnId("turn-1"),
 	});
 	await store.recordPrompt({ files: [], text: "preserve this prompt" });
+	const pastedPrompt = {
+		files: [],
+		pastedText: [
+			{ start: 0, text: "first\nsecond\nthird", token: "[Pasted ~3 lines]" },
+		],
+		text: "[Pasted ~3 lines]",
+	};
+	await store.recordPrompt(pastedPrompt);
+	await store.recordPrompt({
+		...pastedPrompt,
+		pastedText: [
+			{ start: 0, text: "red\ngreen\nblue", token: "[Pasted ~3 lines]" },
+		],
+	});
 	const reference = await store.attachmentStore?.ingest({
 		bytes: PNG_BYTES,
 		filename: "reset.png",
@@ -73,6 +87,13 @@ test("resets session data while preserving prompt history", async () => {
 
 	expect(await store.listSessions()).toEqual([]);
 	expect(await store.getPromptHistory()).toEqual([
+		{
+			...pastedPrompt,
+			pastedText: [
+				{ start: 0, text: "red\ngreen\nblue", token: "[Pasted ~3 lines]" },
+			],
+		},
+		pastedPrompt,
 		{ files: [], text: "preserve this prompt" },
 	]);
 	expect(await store.getCompactions(sessionId)).toEqual([]);

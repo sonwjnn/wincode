@@ -5,6 +5,7 @@ import {
 	replaceTextRanges,
 	shiftOffsetThroughRanges,
 } from "@/shared/utils/text-ranges";
+import { normalizePastedTextRangesForTrimmedText } from "../../pasted-text";
 import type { ChatPromptSubmission } from "../../utils";
 import type { TrackedCommandSelection } from "./selections";
 
@@ -119,7 +120,10 @@ export async function preparePromptSubmission(
 			composition: {
 				fileTokens,
 				files,
-				pastedText: pastedTexts.map(({ text, token }) => ({ text, token })),
+				pastedText: normalizePastedTextRangesForTrimmedText(
+					rawText,
+					pastedTexts.map(({ start, text, token }) => ({ start, text, token }))
+				),
 				text: visibleText,
 			},
 			files,

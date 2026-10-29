@@ -2427,6 +2427,7 @@ describe("SessionView waiting messages", () => {
 				files: [file],
 				pastedText: [
 					{
+						start: 10,
 						text: "pasted line one\npasted line two",
 						token: "[Pasted ~20 lines]",
 					},
