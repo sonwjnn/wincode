@@ -1,15 +1,27 @@
-import type { CommandSelectionIntent } from "@/modules/commands/command-controller";
+import type { TrackedSubmissionIntent } from "@/modules/commands/submission-resolution";
 import { resolveTextEditRegion } from "@/modules/sessions/attachments";
+import { getLeadingTrimLength } from "@/shared/utils/text-ranges";
 import { isWhitespace } from "./triggers";
 
 /** A composer selection tracked by the marker it inserted into the text. */
-export type TrackedCommandSelection = Readonly<{
-	end: number;
-	kind: CommandSelectionIntent["kind"];
-	marker: string;
-	name: string;
-	start: number;
-}>;
+export type TrackedCommandSelection = TrackedSubmissionIntent;
+
+export const normalizeCommandSelectionsForTrimmedText = (
+	rawText: string,
+	selections: readonly TrackedCommandSelection[]
+): TrackedCommandSelection[] => {
+	const text = rawText.trim();
+	const leadingTrim = getLeadingTrimLength(rawText);
+	return selections.flatMap((selection) => {
+		const start = selection.start - leadingTrim;
+		const end = selection.end - leadingTrim;
+		return start >= 0 &&
+			end <= text.length &&
+			text.slice(start, end) === selection.marker
+			? [{ ...selection, end, start }]
+			: [];
+	});
+};
 
 /**
  * The trailing separator a completed invocation needs. The namespace chooser

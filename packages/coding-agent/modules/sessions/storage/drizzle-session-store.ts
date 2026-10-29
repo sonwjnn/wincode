@@ -45,6 +45,7 @@ import type {
 	SessionCompaction,
 } from "../compaction/types";
 import { type SessionMessage, withSubmissionStatus } from "../message";
+import { restorePastedTextMarkers } from "../pasted-text";
 import type {
 	AttachmentExternalizationOptions,
 	AttachmentHydrationOptions,
@@ -128,10 +129,18 @@ const promptHistoryEntrySchema = z.object({
 const parsePromptHistoryEntry = (
 	entry: unknown,
 	text: string
-): PromptHistoryEntry => ({
-	...promptHistoryEntrySchema.parse(entry ?? { files: [] }),
-	text,
-});
+): PromptHistoryEntry => {
+	const { pastedText, ...parsed } = promptHistoryEntrySchema.parse(
+		entry ?? { files: [] }
+	);
+	return {
+		...parsed,
+		...(pastedText === undefined
+			? {}
+			: { pastedText: restorePastedTextMarkers(text, pastedText) }),
+		text,
+	};
+};
 
 const compactionSummarySchema = z.object({
 	attachments: z

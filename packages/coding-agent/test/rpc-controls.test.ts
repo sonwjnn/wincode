@@ -351,6 +351,49 @@ test("session submit accepts structured bounded files and explicit Skill intent"
 	});
 });
 
+test("RPC infers an unambiguous pasted-text offset without changing its wire shape", async () => {
+	const submission = await readSubmission(
+		{
+			submission: {
+				composition: {
+					pastedText: [{ text: "API handlers", token: "[Pasted ~2 lines]" }],
+					text: "Inspect [Pasted ~2 lines] now",
+				},
+			},
+		},
+		"submission"
+	);
+
+	expect(submission.composition.pastedText).toEqual([
+		{ start: 8, text: "API handlers", token: "[Pasted ~2 lines]" },
+	]);
+});
+
+test("RPC rejects ambiguous pasted-text markers instead of rebinding literal lookalikes", async () => {
+	const token = "[Pasted ~2 lines]";
+	const cases = [
+		{
+			pastedText: [{ text: "payload", token }],
+			text: `${token} is literal; payload ${token}`,
+		},
+		{
+			pastedText: [
+				{ text: "first payload", token },
+				{ text: "second payload", token },
+			],
+			text: token,
+		},
+	];
+
+	for (const composition of cases) {
+		await expect(
+			readSubmission({ submission: { composition } }, "submission")
+		).rejects.toThrow(
+			"Composition pastedText markers must each occur exactly once in text."
+		);
+	}
+});
+
 test("session submit uses verified attachment dimensions instead of client metadata", async () => {
 	const attachmentId = `v1-${"a".repeat(64)}`;
 	const reference = {

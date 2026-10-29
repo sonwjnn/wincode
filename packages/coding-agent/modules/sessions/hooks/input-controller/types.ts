@@ -5,8 +5,8 @@ import type {
 import type { FileMentionOption } from "@/modules/file-mentions";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import type { ComposerDocument } from "../../ui/composer-document";
-import type { ChatPromptSubmission } from "../../utils";
-import type { PromptHistoryEntry } from "./history";
+import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
+import type { PromptHistoryEntry, PromptHistoryStore } from "./history";
 import type { SubmitSnapshot } from "./submit";
 
 export type InputOverlayState =
@@ -44,8 +44,8 @@ export type ChatInputControllerActions = {
 	 * state, because only the textarea knows its attachments and pasted text.
 	 */
 	recall: (
-		entries: readonly SessionSubmissionComposition[],
-		draft: SessionSubmissionComposition
+		entries: readonly ChatPromptComposition[],
+		draft: ChatPromptComposition
 	) => void;
 	submit: (snapshot: SubmitSnapshot) => Promise<boolean>;
 };
@@ -67,4 +67,5 @@ export type ChatInputControllerOptions = {
 	) => boolean | Promise<boolean> | void | Promise<void>;
 	onTab: (shift: boolean) => void;
 	sessionPromptHistory: PromptHistoryEntry[];
+	promptHistoryStore?: PromptHistoryStore;
 };

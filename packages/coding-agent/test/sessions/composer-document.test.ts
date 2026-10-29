@@ -98,7 +98,11 @@ describe("Composer Document", () => {
 				fileTokens: [{ start: actualImageStart, token: imageToken }],
 				files: [imageFile("actual.png")],
 				pastedText: [
-					{ text: "line one\nline two\nline three", token: pastedToken },
+					{
+						start: pastedStart,
+						text: "line one\nline two\nline three",
+						token: pastedToken,
+					},
 				],
 				text,
 			},
@@ -121,6 +125,48 @@ describe("Composer Document", () => {
 		expect(snapshot.text).toBe(replacement);
 		expect(snapshot.cursorOffset).toBe(replacement.length);
 		expect(pastedStart).toBeGreaterThan(actualImageStart);
+	});
+
+	test("inserted literal prefixes cannot capture tracked image or pasted-text payloads", () => {
+		const imageToken = "[Image 1]";
+		const pastedToken = "[Pasted ~3 lines]";
+		const originalText = `${imageToken} actual; ${pastedToken} actual`;
+		const originalPastedStart = originalText.indexOf(pastedToken);
+		const replacement = `${imageToken} literal; ${originalText}; ${pastedToken} literal`;
+		const editor = createMemoryComposerEditor();
+		const document = createComposerDocument(editor.adapter);
+		document.restore(
+			{
+				fileTokens: [{ start: 0, token: imageToken }],
+				files: [imageFile("actual.png")],
+				pastedText: [
+					{
+						start: originalPastedStart,
+						text: "line one\nline two\nline three",
+						token: pastedToken,
+					},
+				],
+				text: originalText,
+			},
+			replacement.length
+		);
+
+		const snapshot = document.replaceText(replacement, replacement.length);
+
+		expect(snapshot.fileTokens).toEqual([
+			{
+				start: replacement.indexOf(imageToken, imageToken.length),
+				token: imageToken,
+			},
+		]);
+		expect(snapshot.files).toEqual([imageFile("actual.png")]);
+		expect(snapshot.pastedText).toEqual([
+			{
+				start: replacement.indexOf(pastedToken),
+				text: "line one\nline two\nline three",
+				token: pastedToken,
+			},
+		]);
 	});
 
 	test("attachment order follows the edited order of image tokens", () => {
@@ -166,7 +212,11 @@ describe("Composer Document", () => {
 				],
 				files: [imageFile("second.png"), imageFile("first.png")],
 				pastedText: [
-					{ text: "one\ntwo\nthree\nfour", token: "[Pasted ~4 lines]" },
+					{
+						start: text.indexOf("[Pasted ~4 lines]"),
+						text: "one\ntwo\nthree\nfour",
+						token: "[Pasted ~4 lines]",
+					},
 				],
 				text,
 			},

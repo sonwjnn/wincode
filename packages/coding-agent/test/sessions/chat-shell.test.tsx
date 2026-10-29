@@ -30,6 +30,7 @@ import {
 	usePromptConfig,
 } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
@@ -169,6 +170,9 @@ type ChatShellProbeProps = {
 	activeMessages?: readonly SessionMessage[];
 	providerController?: InteractiveProviderController;
 	agentHolder: { current: string };
+	modelSetterHolder: {
+		current: ((model: ProviderModelSelection) => void) | null;
+	};
 	holder: { current: ChatShellProbeHandle | null };
 	initialCompactions?: SessionCompaction[];
 	initialMessages: SessionMessage[];
@@ -185,15 +189,25 @@ type ChatShellProbeProps = {
  * composer's Tab binding changes. It renders nothing, so the session frame is
  * exactly what ChatShell produced.
  */
-function PromptConfigProbe({ holder }: { holder: { current: string } }) {
-	const { agent } = usePromptConfig();
+function PromptConfigProbe({
+	holder,
+	modelSetterHolder,
+}: {
+	holder: { current: string };
+	modelSetterHolder: {
+		current: ((model: ProviderModelSelection) => void) | null;
+	};
+}) {
+	const { agent, setModel } = usePromptConfig();
 	holder.current = agent;
+	modelSetterHolder.current = setModel;
 	return null;
 }
 
 function ChatShellProbe({
 	activeMessages,
 	agentHolder,
+	modelSetterHolder,
 	holder,
 	initialCompactions = [],
 	initialMessages,
@@ -225,7 +239,10 @@ function ChatShellProbe({
 	}, [holder, pop, push]);
 	return (
 		<>
-			<PromptConfigProbe holder={agentHolder} />
+			<PromptConfigProbe
+				holder={agentHolder}
+				modelSetterHolder={modelSetterHolder}
+			/>
 			<ChatShell
 				activeMessages={activeMessages}
 				compactions={compactions}
@@ -251,6 +268,9 @@ function ChatShellProbe({
 type ChatShellSetup = {
 	/** The Agent the prompt configuration holds, read after each keypress. */
 	agent: { current: string };
+	modelSetterHolder: {
+		current: ((model: ProviderModelSelection) => void) | null;
+	};
 	holder: { current: ChatShellProbeHandle | null };
 	setup: TestRendererSetup;
 };
@@ -261,6 +281,7 @@ type ChatShellRenderOptions = {
 	width: number;
 	initialCompactions?: SessionCompaction[];
 	initialThinkingLevel?: ThinkingLevel;
+	initialModel?: ProviderModelSelection;
 	configuredAgent?: boolean;
 	autoCompact?: boolean;
 	isBusy?: boolean;
@@ -280,6 +301,7 @@ const renderChatShell = async (
 		width,
 		initialCompactions = [],
 		initialThinkingLevel,
+		initialModel,
 		configuredAgent = false,
 		autoCompact,
 		isBusy = false,
@@ -338,6 +360,9 @@ const renderChatShell = async (
 				},
 			});
 	const holder: { current: ChatShellProbeHandle | null } = { current: null };
+	const modelSetterHolder: {
+		current: ((model: ProviderModelSelection) => void) | null;
+	} = { current: null };
 	const router = buildTestRouter();
 	// Each rendered shell owns its composer draft key; drop drafts earlier cases left.
 	writeComposerDraft("draft-test-key", "");
@@ -352,6 +377,7 @@ const renderChatShell = async (
 							<KeyboardLayerProvider>
 								<PromptConfigProvider
 									initialThinkingLevel={initialThinkingLevel}
+									{...(initialModel === undefined ? {} : { initialModel })}
 								>
 									<DialogProvider>
 										<RouterContextProvider router={router}>
@@ -364,6 +390,7 @@ const renderChatShell = async (
 													initialMessages={initialMessages}
 													isBusy={isBusy}
 													isCompacting={isCompacting}
+													modelSetterHolder={modelSetterHolder}
 													onRetry={onRetry}
 													providerController={providerController}
 													queuedSubmissions={queuedSubmissions}
@@ -382,7 +409,7 @@ const renderChatShell = async (
 		</ThemeProvider>,
 		{ height, width }
 	);
-	return { agent, holder, setup };
+	return { agent, holder, modelSetterHolder, setup };
 };
 
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
@@ -966,7 +993,7 @@ describe("ChatShell waiting message strip", () => {
 		text: string,
 		files: SessionFilePart[] = [],
 		fileTokens: Array<{ start: number; token: string }> = [],
-		pastedText: Array<{ text: string; token: string }> = []
+		pastedText: Array<{ start: number; text: string; token: string }> = []
 	): SessionQueuedSubmission =>
 		fromPartial<SessionQueuedSubmission>({
 			id: queuedSubmissionId(id),
@@ -1048,7 +1075,13 @@ describe("ChatShell waiting message strip", () => {
 					"[Pasted ~20 lines]",
 					[],
 					[],
-					[{ text: "line 1\nline 2", token: "[Pasted ~20 lines]" }]
+					[
+						{
+							start: 0,
+							text: "line 1\nline 2",
+							token: "[Pasted ~20 lines]",
+						},
+					]
 				),
 			],
 			width: 100,
@@ -1059,6 +1092,39 @@ describe("ChatShell waiting message strip", () => {
 			const frame = requireTestFrame(setup);
 			expect(frame).toContain("[Pasted ~20 lines]");
 			expect(frame).not.toContain("0 files");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("leaves literal pasted-marker lookalikes in waiting descriptions", async () => {
+		const token = "[Pasted ~20 lines]";
+		const text = `${token} literal; ${token} explain`;
+		const { setup } = await renderChatShell([], {
+			height: 16,
+			queuedSubmissions: [
+				queuedSubmission(
+					"queued-1",
+					text,
+					[],
+					[],
+					[
+						{
+							start: text.lastIndexOf(token),
+							text: "line 1\nline 2",
+							token,
+						},
+					]
+				),
+			],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = requireTestFrame(setup);
+			expect(stripLine(frame, "literal;")).toContain(`${token} literal;`);
+			expect(stripLine(frame, "literal;")).toContain("explain");
 		} finally {
 			setup.renderer.destroy();
 		}
@@ -1190,6 +1256,77 @@ describe("ChatShell activity footer", () => {
 			expect(frame).toContain("openai/gpt-5.6-luna:low");
 		} finally {
 			pending.resolve([selectedModel]);
+			setup.renderer.destroy();
+		}
+	});
+
+	test("late Provider metadata from an old selection cannot hide the active status", async () => {
+		const previousSelection: ProviderModelSelection = {
+			modelId: modelId("previous-model"),
+			providerId: "previous-provider",
+		};
+		const activeSelection: ProviderModelSelection = {
+			modelId: modelId("active-model"),
+			providerId: "active-provider",
+		};
+		const previousRead = Promise.withResolvers<readonly ProviderModel[]>();
+		const activeRead = Promise.withResolvers<readonly ProviderModel[]>();
+		let previousReads = 0;
+		let activeReads = 0;
+		const providerController = fromPartial<InteractiveProviderController>({
+			getKnownModels: (providerId: string) => {
+				if (providerId === previousSelection.providerId) {
+					previousReads += 1;
+					return previousRead.promise;
+				}
+				if (providerId === activeSelection.providerId) {
+					activeReads += 1;
+					return activeRead.promise;
+				}
+				return Promise.resolve([]);
+			},
+		});
+		const activeProviderModel: ProviderModel = {
+			modelId: activeSelection.modelId,
+			protocolId: "fake-provider",
+			providerId: activeSelection.providerId,
+			reasoningEfforts: ["low"],
+		};
+		const { modelSetterHolder, setup } = await renderChatShell([], {
+			height: 24,
+			initialModel: previousSelection,
+			providerController,
+			width: 100,
+		});
+
+		try {
+			await setup.waitFor(() => previousReads === 1);
+			await act(() => {
+				modelSetterHolder.current?.(activeSelection);
+			});
+			await setup.waitFor(() => activeReads === 1);
+			activeRead.resolve([activeProviderModel]);
+			const activeStatus = "active-provider/active-model:low";
+			const activeFrame = await waitForFrameText(setup, activeStatus);
+			expect(activeFrame).toContain(activeStatus);
+
+			previousRead.resolve([
+				{
+					modelId: previousSelection.modelId,
+					protocolId: "fake-provider",
+					providerId: previousSelection.providerId,
+					reasoningEfforts: ["low"],
+				},
+			]);
+			await flushUi(setup);
+			const frameAfterPreviousRead = requireTestFrame(setup);
+			expect(frameAfterPreviousRead).toContain(activeStatus);
+			expect(frameAfterPreviousRead).not.toContain(
+				"previous-provider/previous-model"
+			);
+		} finally {
+			previousRead.resolve([]);
+			activeRead.resolve([activeProviderModel]);
 			setup.renderer.destroy();
 		}
 	});

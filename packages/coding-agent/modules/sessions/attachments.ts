@@ -1,6 +1,10 @@
 import type { Extmark } from "@opentui/core";
 import { isUndefined } from "@wincode/utils";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import {
+	findTextOccurrences,
+	getLeadingTrimLength,
+} from "@/shared/utils/text-ranges";
 
 export type ChatAttachment = {
 	extmarkId: number;
@@ -19,69 +23,114 @@ export const isAttachmentTokenExtant = (
 	extmark: Pick<Extmark, "end" | "start">
 ) => text.slice(extmark.start, extmark.end) === token;
 
-const hasUniqueTokenOccurrence = (text: string, token: string): boolean => {
-	const first = text.indexOf(token);
-	return first !== -1 && first === text.lastIndexOf(token);
+const hasUniqueTokenOccurrence = (text: string, token: string): boolean =>
+	findTextOccurrences(text, token).length === 1;
+
+const tokenContextScore = (
+	previousText: string,
+	previousStart: number,
+	nextText: string,
+	nextStart: number,
+	tokenLength: number
+): number => {
+	let score = 0;
+	for (
+		let distance = 1;
+		previousStart - distance >= 0 && nextStart - distance >= 0;
+		distance += 1
+	) {
+		if (
+			previousText[previousStart - distance] !== nextText[nextStart - distance]
+		) {
+			break;
+		}
+		score += 1;
+	}
+	for (
+		let offset = 0;
+		previousStart + tokenLength + offset < previousText.length &&
+		nextStart + tokenLength + offset < nextText.length;
+		offset += 1
+	) {
+		if (
+			previousText[previousStart + tokenLength + offset] !==
+			nextText[nextStart + tokenLength + offset]
+		) {
+			break;
+		}
+		score += 1;
+	}
+	return score;
 };
 
-/** Keeps ambiguous tokens at their mapped range; only unique tokens can move. */
-const findTrackedTokenStart = (
-	text: string,
-	token: string,
-	candidates: readonly number[],
-	expectedStart: number | undefined,
-	previousText: string | undefined
+/** Rebinds duplicate-looking markers only when their surrounding text is unique. */
+const findTrackedTokenStart = <T extends { start: number; token: string }>(
+	previousText: string,
+	nextText: string,
+	record: T,
+	candidates: readonly number[]
 ): number | undefined => {
-	if (isUndefined(expectedStart)) {
-		return candidates[0];
-	}
-	if (candidates.includes(expectedStart)) {
-		return expectedStart;
-	}
 	if (
-		previousText !== undefined &&
-		hasUniqueTokenOccurrence(previousText, token) &&
-		hasUniqueTokenOccurrence(text, token)
+		hasUniqueTokenOccurrence(previousText, record.token) &&
+		hasUniqueTokenOccurrence(nextText, record.token)
 	) {
 		return candidates[0];
 	}
+	if (
+		previousText.slice(record.start, record.start + record.token.length) !==
+		record.token
+	) {
+		return;
+	}
+
+	let bestStart: number | undefined;
+	let bestScore = 0;
+	let tied = false;
+	for (const candidate of candidates) {
+		const score = tokenContextScore(
+			previousText,
+			record.start,
+			nextText,
+			candidate,
+			record.token.length
+		);
+		if (score > bestScore) {
+			bestStart = candidate;
+			bestScore = score;
+			tied = false;
+		} else if (score === bestScore && score > 0) {
+			tied = true;
+		}
+	}
+	return tied || bestScore < 2 ? undefined : bestStart;
 };
 
 const findUnclaimedTokenOccurrences = (
 	text: string,
 	token: string,
 	claimedStarts: ReadonlySet<number>
-): number[] => {
-	const candidates: number[] = [];
-	let start = text.indexOf(token);
-	while (start !== -1) {
-		if (!claimedStarts.has(start)) {
-			candidates.push(start);
-		}
-		start = text.indexOf(token, start + token.length);
-	}
-	return candidates;
-};
+): number[] =>
+	findTextOccurrences(text, token).filter((start) => !claimedStarts.has(start));
 
-export const locateTrackedTokenOccurrences = <T extends { token: string }>(
-	text: string,
-	records: readonly T[],
-	expectedStarts: readonly number[] = [],
-	previousText?: string
+export const locateTrackedTokenOccurrences = <
+	T extends { start: number; token: string },
+>(
+	previousText: string,
+	nextText: string,
+	records: readonly T[]
 ): Array<{ record: T; start: number }> => {
 	const claimedStarts = new Set<number>();
-	return records.flatMap((record, index) => {
+	return records.flatMap((record) => {
 		const candidates = findUnclaimedTokenOccurrences(
-			text,
+			nextText,
 			record.token,
 			claimedStarts
 		);
 		const matchedStart = findTrackedTokenStart(
-			text,
-			record.token,
-			candidates,
-			expectedStarts[index],
-			previousText
+			previousText,
+			nextText,
+			record,
+			candidates
 		);
 		if (isUndefined(matchedStart)) {
 			return [];
@@ -94,11 +143,15 @@ export const locateTrackedTokenOccurrences = <T extends { token: string }>(
 export const locateAttachmentTokens = (
 	text: string,
 	attachments: readonly ChatAttachment[],
-	expectedStarts: readonly number[] = []
+	expectedStarts: readonly number[]
 ): Array<{ attachment: ChatAttachment; start: number }> =>
-	locateTrackedTokenOccurrences(text, attachments, expectedStarts).map(
-		({ record: attachment, start }) => ({ attachment, start })
-	);
+	attachments.flatMap((attachment, index) => {
+		const start = expectedStarts[index];
+		return !isUndefined(start) &&
+			text.slice(start, start + attachment.token.length) === attachment.token
+			? [{ attachment, start }]
+			: [];
+	});
 
 export type TextEditRegion = Readonly<{
 	/** Characters identical at the start of both texts. */
@@ -157,7 +210,7 @@ export const normalizeFileTokensForTrimmedText = (
 	fileTokens: Array<{ start: number; token: string }>
 ): Array<{ start: number; token: string }> => {
 	const text = rawText.trim();
-	const leadingTrimLength = rawText.length - rawText.trimStart().length;
+	const leadingTrimLength = getLeadingTrimLength(rawText);
 	return fileTokens.map(({ start: rawStart, token }) => {
 		const start = rawStart - leadingTrimLength;
 		return {

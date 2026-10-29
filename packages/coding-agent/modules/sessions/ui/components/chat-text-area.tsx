@@ -36,8 +36,7 @@ import { readClipboardImage, readImagePath } from "../../clipboard-image";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
 import { expandPastedText, expandPastedTextInRange } from "../../pasted-text";
-import type { SessionSubmissionComposition } from "../../submission-types";
-import type { ChatPromptSubmission } from "../../utils";
+import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
 import {
 	attachComposerDocumentToTextarea,
 	createComposerDocument,
@@ -47,7 +46,7 @@ import { useComposerProviderSelection } from "../use-composer-provider-selection
 import { useSyntaxStyle } from "../use-syntax-style";
 
 const EMPTY_PROMPT_HISTORY: PromptHistoryEntry[] = [];
-const EMPTY_RECALLED_SUBMISSIONS: readonly SessionSubmissionComposition[] = [];
+const EMPTY_RECALLED_SUBMISSIONS: readonly ChatPromptComposition[] = [];
 const EMPTY_COMMAND_CAPABILITIES: readonly CommandCapability[] = [];
 const toSelectableCommandItem = (item: CommandSuggestion) => ({
 	description: item.description,
@@ -76,7 +75,7 @@ type ChatTextAreaProps = {
 	isSelectionReady?: boolean;
 	statusBarThinkingSelection?: ThinkingSelection;
 	/** Compositions a Recall returned, oldest first, waiting to enter the composer. */
-	recalledSubmissions?: readonly SessionSubmissionComposition[];
+	recalledSubmissions?: readonly ChatPromptComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
 	sessionPromptHistory?: PromptHistoryEntry[];

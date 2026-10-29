@@ -39,9 +39,8 @@ import {
 	type SessionCompaction,
 } from "../../compaction";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
-import type { SessionSubmissionComposition } from "../../submission-types";
 import { summarizeSessionUsage } from "../../usage/session-usage";
-import type { ChatPromptSubmission } from "../../utils";
+import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";
 import { ChatMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
@@ -84,7 +83,7 @@ type ChatShellProps = {
 	/** Waiting submissions, oldest first; the strip shows them while they wait. */
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
 	/** Compositions a Recall returned, waiting to enter the composer. */
-	recalledSubmissions?: readonly SessionSubmissionComposition[];
+	recalledSubmissions?: readonly ChatPromptComposition[];
 	/** Changes whenever `recalledSubmissions` holds something new to restore. */
 	recallRevision?: number;
 	viewId: string;
