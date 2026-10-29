@@ -7,7 +7,6 @@ import {
 	getImageToken,
 	getNextImageLabel,
 	locateTrackedTokenOccurrences,
-	mapOffsetThroughTextReplacement,
 } from "../attachments";
 
 export type ComposerDocumentMarkKind = "attachment" | "pasted-text";
@@ -67,19 +66,21 @@ export type ComposerDocument = Readonly<{
 	) => ComposerDocumentSnapshot;
 }>;
 
-type TrackedAttachment = {
-	attachmentId: string;
-	file: SessionFilePart;
+type TrackedToken<Payload> = {
+	kind: ComposerDocumentMarkKind;
 	markId: number | undefined;
+	payload: Payload;
 	start: number;
 	token: string;
 };
 
-type TrackedPastedText = {
-	markId: number | undefined;
-	start: number;
-	text: string;
-	token: string;
+type TrackedAttachment = TrackedToken<{
+	attachmentId: string;
+	file: SessionFilePart;
+}> & { kind: "attachment" };
+
+type TrackedPastedText = TrackedToken<{ text: string }> & {
+	kind: "pasted-text";
 };
 
 const pastedTextMarks = (
@@ -89,9 +90,7 @@ const pastedTextMarks = (
 	let nextSearchStart = 0;
 	const marks: Array<{ start: number; text: string; token: string }> = [];
 	for (const pasted of pastedText ?? []) {
-		const start = isUndefined(pasted.start)
-			? text.indexOf(pasted.token, nextSearchStart)
-			: pasted.start;
+		const { start } = pasted;
 		if (
 			start < nextSearchStart ||
 			text.slice(start, start + pasted.token.length) !== pasted.token
@@ -158,10 +157,8 @@ export const createComposerDocument = (
 		return cursorOffset;
 	};
 
-	const recordMark = (
-		record:
-			| Pick<TrackedAttachment, "markId" | "start" | "token">
-			| Pick<TrackedPastedText, "markId" | "start" | "token">
+	const recordMark = <Payload>(
+		record: Pick<TrackedToken<Payload>, "markId" | "start" | "token">
 	): Pick<Extmark, "end" | "start"> | null =>
 		record.markId === undefined
 			? { end: record.start + record.token.length, start: record.start }
@@ -174,36 +171,30 @@ export const createComposerDocument = (
 		}
 	};
 
-	const syncRecords = (): void => {
+	const syncRecords = <Record extends TrackedToken<unknown>>(
+		records: Record[],
+		current: string
+	): Record[] =>
+		records
+			.flatMap((record) => {
+				const mark = recordMark(record);
+				if (
+					mark === null ||
+					current.slice(mark.start, mark.end) !== record.token
+				) {
+					deleteRecordMark(record);
+					return [];
+				}
+				record.start = mark.start;
+				return [record];
+			})
+			.toSorted((left, right) => left.start - right.start);
+
+	const syncAllRecords = (): void => {
 		const current = currentText();
 		currentCursorOffset();
-		attachments = attachments
-			.filter((attachment) => {
-				const mark = recordMark(attachment);
-				const valid =
-					mark !== null &&
-					current.slice(mark.start, mark.end) === attachment.token;
-				if (!valid) {
-					deleteRecordMark(attachment);
-					return false;
-				}
-				attachment.start = mark.start;
-				return true;
-			})
-			.sort((left, right) => left.start - right.start);
-		pastedTexts = pastedTexts
-			.filter((pasted) => {
-				const mark = recordMark(pasted);
-				const valid =
-					mark !== null && current.slice(mark.start, mark.end) === pasted.token;
-				if (!valid) {
-					deleteRecordMark(pasted);
-					return false;
-				}
-				pasted.start = mark.start;
-				return true;
-			})
-			.sort((left, right) => left.start - right.start);
+		attachments = syncRecords(attachments, current);
+		pastedTexts = syncRecords(pastedTexts, current);
 	};
 
 	const createMark = (
@@ -213,60 +204,71 @@ export const createComposerDocument = (
 		attachmentId?: string
 	): number | undefined =>
 		adapter?.createMark({
-			attachmentId,
+			...omitUndefined({ attachmentId }),
 			end,
 			kind,
 			start,
 		});
+
+	const createTrackedToken = <Kind extends ComposerDocumentMarkKind, Payload>(
+		kind: Kind,
+		payload: Payload,
+		token: string,
+		start: number,
+		attachmentId?: string
+	): TrackedToken<Payload> & { kind: Kind } => ({
+		kind,
+		markId: createMark(kind, start, start + token.length, attachmentId),
+		payload,
+		start,
+		token,
+	});
 
 	const createAttachment = (
 		file: SessionFilePart,
 		token: string,
 		start: number,
 		attachmentId: string = crypto.randomUUID()
-	): TrackedAttachment => ({
-		attachmentId,
-		file,
-		markId: createMark("attachment", start, start + token.length, attachmentId),
-		start,
-		token,
-	});
+	): TrackedAttachment =>
+		createTrackedToken(
+			"attachment",
+			{ attachmentId, file },
+			token,
+			start,
+			attachmentId
+		);
 
 	const createPastedText = (
 		pasted: { text: string; token: string },
 		start: number
-	): TrackedPastedText => ({
-		markId: createMark("pasted-text", start, start + pasted.token.length),
-		start,
-		text: pasted.text,
-		token: pasted.token,
-	});
+	): TrackedPastedText =>
+		createTrackedToken(
+			"pasted-text",
+			{ text: pasted.text },
+			pasted.token,
+			start
+		);
 
 	const recreateMarks = (): void => {
-		for (const attachment of attachments) {
-			attachment.markId = createMark(
-				"attachment",
-				attachment.start,
-				attachment.start + attachment.token.length,
-				attachment.attachmentId
-			);
-		}
-		for (const pasted of pastedTexts) {
-			pasted.markId = createMark(
-				"pasted-text",
-				pasted.start,
-				pasted.start + pasted.token.length
+		for (const record of [...attachments, ...pastedTexts]) {
+			const attachmentId =
+				record.kind === "attachment" ? record.payload.attachmentId : undefined;
+			record.markId = createMark(
+				record.kind,
+				record.start,
+				record.start + record.token.length,
+				attachmentId
 			);
 		}
 	};
 
 	const capture = (): ComposerDocumentSnapshot => {
-		syncRecords();
+		syncAllRecords();
 		return {
 			cursorOffset: currentCursorOffset(),
 			fileTokens: attachments.map(({ start, token }) => ({ start, token })),
-			files: attachments.map(({ file }) => file),
-			pastedText: pastedTexts.map(({ start, text, token }) => ({
+			files: attachments.map(({ payload: { file } }) => file),
+			pastedText: pastedTexts.map(({ payload: { text }, start, token }) => ({
 				start,
 				text,
 				token,
@@ -297,11 +299,8 @@ export const createComposerDocument = (
 	};
 
 	const deleteAllMarks = (): void => {
-		for (const attachment of attachments) {
-			deleteRecordMark(attachment);
-		}
-		for (const pasted of pastedTexts) {
-			deleteRecordMark(pasted);
+		for (const record of [...attachments, ...pastedTexts]) {
+			deleteRecordMark(record);
 		}
 	};
 
@@ -311,11 +310,8 @@ export const createComposerDocument = (
 		if (nextAdapter === null) {
 			adapter = null;
 			pendingProgrammaticText = null;
-			for (const attachment of attachments) {
-				attachment.markId = undefined;
-			}
-			for (const pasted of pastedTexts) {
-				pasted.markId = undefined;
+			for (const record of [...attachments, ...pastedTexts]) {
+				record.markId = undefined;
 			}
 			return capture();
 		}
@@ -335,7 +331,7 @@ export const createComposerDocument = (
 	};
 
 	const refreshStyles = (): ComposerDocumentSnapshot => {
-		syncRecords();
+		syncAllRecords();
 		deleteAllMarks();
 		recreateMarks();
 		return capture();
@@ -366,39 +362,33 @@ export const createComposerDocument = (
 		nextText: string,
 		nextCursorOffset: number | null
 	): ComposerDocumentSnapshot => {
-		syncRecords();
+		syncAllRecords();
 		const previousText = currentText();
 		const previousAttachments = attachments.map((attachment) => ({
-			attachment,
-			start: attachment.start,
+			...attachment,
 		}));
-		const previousPastedTexts = pastedTexts.map((pasted) => ({
-			pasted,
-			start: pasted.start,
-		}));
-		const attachmentStarts = previousAttachments.map(({ start }) =>
-			mapOffsetThroughTextReplacement(previousText, nextText, start)
-		);
-		const pastedStarts = previousPastedTexts.map(({ start }) =>
-			mapOffsetThroughTextReplacement(previousText, nextText, start)
-		);
-
+		const previousPastedTexts = pastedTexts.map((pasted) => ({ ...pasted }));
 		deleteAllMarks();
 		writeText(nextText);
 		attachments = locateTrackedTokenOccurrences(
+			previousText,
 			nextText,
-			previousAttachments.map(({ attachment }) => attachment),
-			attachmentStarts,
-			previousText
+			previousAttachments
 		).map(({ record, start }) =>
-			createAttachment(record.file, record.token, start, record.attachmentId)
+			createAttachment(
+				record.payload.file,
+				record.token,
+				start,
+				record.payload.attachmentId
+			)
 		);
 		pastedTexts = locateTrackedTokenOccurrences(
+			previousText,
 			nextText,
-			previousPastedTexts.map(({ pasted }) => pasted),
-			pastedStarts,
-			previousText
-		).map(({ record, start }) => createPastedText(record, start));
+			previousPastedTexts
+		).map(({ record, start }) =>
+			createPastedText({ ...record.payload, token: record.token }, start)
+		);
 		if (nextCursorOffset !== null) {
 			writeCursorOffset(nextCursorOffset);
 		}

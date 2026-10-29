@@ -2,12 +2,16 @@ import type { CommandController } from "@/modules/commands/command-controller";
 import type { SubmissionIntent } from "@/modules/commands/submission-resolution";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import {
+	getLeadingTrimLength,
 	replaceTextRanges,
 	shiftOffsetThroughRanges,
 } from "@/shared/utils/text-ranges";
 import { normalizePastedTextRangesForTrimmedText } from "../../pasted-text";
 import type { ChatPromptSubmission } from "../../utils";
-import type { TrackedCommandSelection } from "./selections";
+import {
+	normalizeCommandSelectionsForTrimmedText,
+	type TrackedCommandSelection,
+} from "./selections";
 
 export type TrackedPastedText = {
 	end: number;
@@ -69,7 +73,7 @@ export async function preparePromptSubmission(
 	const visibleText = rawText.trim();
 	// Marker offsets refer to the untrimmed text, so expand before trimming.
 	const expandedText = expandTrackedPastedText(rawText, pastedTexts);
-	const leadingTrim = expandedText.length - expandedText.trimStart().length;
+	const leadingTrim = getLeadingTrimLength(expandedText);
 	const text = expandedText.trim();
 
 	const intents = dependencies.selections
@@ -106,6 +110,10 @@ export async function preparePromptSubmission(
 		return REJECTED_SUBMISSION;
 	}
 
+	const commandSelections = normalizeCommandSelectionsForTrimmedText(
+		rawText,
+		dependencies.selections
+	);
 	const prepared = await dependencies.commandController.prepareSubmission({
 		hasAttachments: files.length > 0,
 		intents,
@@ -124,6 +132,7 @@ export async function preparePromptSubmission(
 					rawText,
 					pastedTexts.map(({ start, text, token }) => ({ start, text, token }))
 				),
+				...(commandSelections.length === 0 ? {} : { commandSelections }),
 				text: visibleText,
 			},
 			files,

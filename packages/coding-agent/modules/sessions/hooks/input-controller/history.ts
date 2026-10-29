@@ -1,11 +1,23 @@
+import type { TrackedSubmissionIntent } from "@/modules/commands/submission-resolution";
 import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
 import { expandPastedText } from "../../pasted-text";
-import type { PromptHistoryEntry } from "../../storage/session-store";
+import type {
+	SessionStore,
+	PromptHistoryEntry as StoredPromptHistoryEntry,
+} from "../../storage/session-store";
 
-export type { PromptHistoryEntry } from "../../storage/session-store";
+/** Prompt-history state enriched with transient composer-only command intent. */
+export type PromptHistoryEntry = StoredPromptHistoryEntry & {
+	commandSelections?: readonly TrackedSubmissionIntent[];
+};
+
+export type PromptHistoryStore = Pick<
+	SessionStore,
+	"externalizeAttachments" | "getPromptHistory" | "recordPrompt"
+>;
 
 const empty = (): PromptHistoryEntry => ({ text: "", files: [] });
 const sameFiles = (a: PromptHistoryEntry, b: PromptHistoryEntry): boolean =>
@@ -103,7 +115,15 @@ export const prependPrompt = (
 	prompt: PromptHistoryEntry
 ): PromptHistoryEntry[] => {
 	if (entries[0] && same(entries[0], prompt)) {
-		return entries;
+		return prompt.commandSelections === undefined
+			? entries
+			: [
+					{
+						...entries[0],
+						commandSelections: prompt.commandSelections,
+					},
+					...entries.slice(1),
+				];
 	}
 	return [prompt, ...entries].slice(0, 50);
 };

@@ -22,6 +22,10 @@ export type SubmissionIntent = Readonly<{
 	start?: number;
 }>;
 
+/** A composer-tracked command selection with its exact visible marker range. */
+export type TrackedSubmissionIntent = SubmissionIntent &
+	Readonly<{ end: number; marker: string; start: number }>;
+
 export type SubmissionPromptResolution =
 	| {
 			readonly kind: "ready";

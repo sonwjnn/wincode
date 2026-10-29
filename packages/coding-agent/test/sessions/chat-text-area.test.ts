@@ -70,7 +70,7 @@ describe("ChatTextArea", () => {
 		};
 
 		expect(
-			locateAttachmentTokens("Prompt [Image 1] @src/app.tsx", [attachment])
+			locateAttachmentTokens("Prompt [Image 1] @src/app.tsx", [attachment], [7])
 		).toEqual([{ attachment, start: 7 }]);
 
 		const promptWithLiteralToken =

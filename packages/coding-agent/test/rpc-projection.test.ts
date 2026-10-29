@@ -125,6 +125,39 @@ test("RPC recall preserves inline files in the submit wire shape", async () => {
 	});
 });
 
+test("RPC recall keeps pasted-text offsets private while retaining its existing input shape", async () => {
+	const token = "[Pasted ~3 lines]";
+	const text = `Inspect ${token}`;
+	const pastedText = "first\nsecond\nthird";
+	const recalled = submissionFromWaiting({
+		id: "queued-paste",
+		input: {
+			agent: "build",
+			composition: {
+				files: [],
+				pastedText: [{ start: 8, text: pastedText, token }],
+				text,
+			},
+			model: { modelId: "gpt-5.6-luna", providerId: "openai" },
+		},
+		messageId: "message-paste",
+		submissionId: "submission-paste",
+	} as unknown as Parameters<typeof submissionFromWaiting>[0]);
+
+	expect(recalled.composition).toMatchObject({
+		pastedText: [{ text: pastedText, token }],
+		text,
+	});
+	expect(recalled.composition).not.toHaveProperty("pastedText.0.start");
+	const submitted = await readSubmission(
+		{ submission: { composition: recalled.composition, text } },
+		"submission"
+	);
+	expect(submitted.composition.pastedText).toEqual([
+		{ start: 8, text: pastedText, token },
+	]);
+});
+
 test("RPC recall omits local URLs and oversized inline file content", () => {
 	const oversizedData = "A".repeat(Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4);
 	const recalled = submissionFromWaiting({

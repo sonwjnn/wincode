@@ -1,5 +1,6 @@
-import { omitUndefined } from "@wincode/utils";
 import {
+	findTextOccurrences,
+	getLeadingTrimLength,
 	type OffsetRange,
 	rebaseTextRangesWithin,
 	replaceTextRanges,
@@ -7,8 +8,7 @@ import {
 } from "@/shared/utils/text-ranges";
 
 export type PastedText = { token: string; text: string };
-export type PastedTextMarker = PastedText & { start?: number };
-export type TrackedPastedText = PastedText & { start: number };
+export type PastedTextMarker = PastedText & { start: number };
 
 const PASTED_TEXT_TOKEN_PATTERN = /\[Pasted ~\d+ lines\]/gu;
 
@@ -28,32 +28,76 @@ export const shiftPastedTextRangesForTrimmedText = (
 	rawText: string,
 	pastedTexts: readonly PastedTextMarker[]
 ): PastedTextMarker[] => {
-	const leadingTrim = rawText.length - rawText.trimStart().length;
-	return pastedTexts.map(({ start, ...pasted }) => ({
+	const leadingTrim = getLeadingTrimLength(rawText);
+	return pastedTexts.map((pasted) => ({
 		...pasted,
-		...omitUndefined({
-			start: start === undefined ? undefined : start - leadingTrim,
-		}),
+		start: pasted.start - leadingTrim,
 	}));
 };
 
 /** Rebases valid tracked marker ranges onto the trimmed visible composition. */
+export const restorePastedTextMarkers = (
+	text: string,
+	markers: readonly (PastedText & { start?: number })[]
+): PastedTextMarker[] => {
+	const occurrencesByToken = new Map<string, number[]>();
+	const markerCountsByToken = new Map<string, number>();
+	const missingByToken = new Map<string, number[]>();
+	for (const [index, marker] of markers.entries()) {
+		markerCountsByToken.set(
+			marker.token,
+			(markerCountsByToken.get(marker.token) ?? 0) + 1
+		);
+		if (!occurrencesByToken.has(marker.token)) {
+			occurrencesByToken.set(
+				marker.token,
+				findTextOccurrences(text, marker.token)
+			);
+		}
+		if (marker.start === undefined) {
+			const indices = missingByToken.get(marker.token) ?? [];
+			indices.push(index);
+			missingByToken.set(marker.token, indices);
+		}
+	}
+	const inferredStarts = new Map<number, number>();
+	for (const [token, indices] of missingByToken) {
+		const occurrences = occurrencesByToken.get(token) ?? [];
+		const [index] = indices;
+		const [start] = occurrences;
+		if (
+			markerCountsByToken.get(token) === 1 &&
+			indices.length === 1 &&
+			occurrences.length === 1 &&
+			index !== undefined &&
+			start !== undefined
+		) {
+			inferredStarts.set(index, start);
+		}
+	}
+	return markers.flatMap((marker, index) => {
+		const start = marker.start ?? inferredStarts.get(index);
+		return typeof start === "number" &&
+			Number.isInteger(start) &&
+			start >= 0 &&
+			text.slice(start, start + marker.token.length) === marker.token
+			? [{ ...marker, start }]
+			: [];
+	});
+};
+
 export const normalizePastedTextRangesForTrimmedText = (
 	rawText: string,
-	pastedTexts: readonly TrackedPastedText[]
-): TrackedPastedText[] => {
+	pastedTexts: readonly PastedTextMarker[]
+): PastedTextMarker[] => {
 	const text = rawText.trim();
 	return shiftPastedTextRangesForTrimmedText(rawText, pastedTexts).flatMap(
-		(pasted) => {
-			if (pasted.start === undefined) {
-				return [];
-			}
-			return pasted.start >= 0 &&
-				text.slice(pasted.start, pasted.start + pasted.token.length) ===
-					pasted.token
-				? [{ ...pasted, start: pasted.start }]
-				: [];
-		}
+		(pasted) =>
+			pasted.start >= 0 &&
+			text.slice(pasted.start, pasted.start + pasted.token.length) ===
+				pasted.token
+				? [pasted]
+				: []
 	);
 };
 
@@ -65,7 +109,7 @@ export const expandPastedText = (
 	const occurrences: TextReplacementRange[] = [];
 	let cursor = 0;
 	for (const marker of markers) {
-		const start = marker.start ?? text.indexOf(marker.token, cursor);
+		const { start } = marker;
 		if (
 			start < cursor ||
 			text.slice(start, start + marker.token.length) !== marker.token

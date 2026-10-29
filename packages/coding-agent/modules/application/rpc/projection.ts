@@ -122,7 +122,12 @@ const projectComposition = (
 			: { fileTokens: composition.fileTokens }),
 		...(composition.pastedText === undefined
 			? {}
-			: { pastedText: composition.pastedText }),
+			: {
+					pastedText: composition.pastedText.map(({ text, token }) => ({
+						text,
+						token,
+					})),
+				}),
 		text: composition.text,
 	};
 };

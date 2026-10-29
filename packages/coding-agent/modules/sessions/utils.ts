@@ -1,3 +1,4 @@
+import type { TrackedSubmissionIntent } from "@/modules/commands/submission-resolution";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import type { SkillContext } from "@/modules/skills";
@@ -16,6 +17,11 @@ export const getMostRecentSession = (
 		return sessionTime > latestTime ? session : latest;
 	}, undefined);
 
+export type ChatPromptComposition = SessionSubmissionComposition & {
+	/** Explicit selections stay inside the composer and its in-memory history. */
+	commandSelections?: readonly TrackedSubmissionIntent[];
+};
+
 export type ChatPromptSubmission = {
 	files: SessionFilePart[];
 	text: string;
@@ -26,5 +32,5 @@ export type ChatPromptSubmission = {
 	 * markers — so a submission accepted while the session is busy can be
 	 * recalled exactly as it was written.
 	 */
-	composition: SessionSubmissionComposition;
+	composition: ChatPromptComposition;
 };

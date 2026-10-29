@@ -1,4 +1,4 @@
-import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
+import { isNull, isUndefined } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	CommandSelection,
@@ -19,6 +19,7 @@ import {
 	shiftPastedTextRangesForTrimmedText,
 } from "../../pasted-text";
 import { getSessionStore } from "../../storage/get-session-store";
+import type { ChatPromptComposition } from "../../utils";
 import { restoreComposerDraft, writeComposerDraft } from "./draft-store";
 import { removeTriggerText } from "./escape-trigger";
 import {
@@ -34,6 +35,7 @@ import {
 import {
 	applyTextEdit,
 	commandInsertionSeparator,
+	normalizeCommandSelectionsForTrimmedText,
 	type TrackedCommandSelection,
 } from "./selections";
 import { preparePromptSubmission, type SubmitSnapshot } from "./submit";
@@ -51,15 +53,20 @@ const EMPTY_OVERLAY: InputOverlayState = {
 };
 
 type RecalledCompositionAccumulator = {
+	commandSelections: TrackedCommandSelection[];
 	fileTokens: Array<{ start: number; token: string }>;
-	files: SessionSubmissionComposition["files"][number][];
-	pastedText: NonNullable<SessionSubmissionComposition["pastedText"]>[number][];
+	files: ChatPromptComposition["files"][number][];
+	pastedText: NonNullable<ChatPromptComposition["pastedText"]>[number][];
 	text: string;
 };
 
 const normalizeDraftForRecall = (
-	draft: SessionSubmissionComposition
-): SessionSubmissionComposition => ({
+	draft: ChatPromptComposition
+): ChatPromptComposition => ({
+	commandSelections: normalizeCommandSelectionsForTrimmedText(
+		draft.text,
+		draft.commandSelections ?? []
+	),
 	fileTokens: normalizeFileTokensForTrimmedText(draft.text, [
 		...(draft.fileTokens ?? []),
 	]),
@@ -71,13 +78,12 @@ const normalizeDraftForRecall = (
 	text: draft.text.trim(),
 });
 
-const hasCompositionContent = (
-	composition: SessionSubmissionComposition
-): boolean => composition.text.length > 0 || composition.files.length > 0;
+const hasCompositionContent = (composition: ChatPromptComposition): boolean =>
+	composition.text.length > 0 || composition.files.length > 0;
 
 const appendRecalledComposition = (
 	accumulator: RecalledCompositionAccumulator,
-	composition: SessionSubmissionComposition
+	composition: ChatPromptComposition
 ): void => {
 	if (accumulator.text.length > 0) {
 		accumulator.text += "\n\n";
@@ -89,18 +95,20 @@ const appendRecalledComposition = (
 	}
 	accumulator.files.push(...composition.files);
 	for (const pasted of composition.pastedText ?? []) {
-		accumulator.pastedText.push({
-			...pasted,
-			...omitUndefined({
-				start: isUndefined(pasted.start) ? undefined : base + pasted.start,
-			}),
+		accumulator.pastedText.push({ ...pasted, start: base + pasted.start });
+	}
+	for (const selection of composition.commandSelections ?? []) {
+		accumulator.commandSelections.push({
+			...selection,
+			end: base + selection.end,
+			start: base + selection.start,
 		});
 	}
 };
 
 const combineRecalledCompositions = (
-	draft: SessionSubmissionComposition,
-	entries: readonly SessionSubmissionComposition[]
+	draft: ChatPromptComposition,
+	entries: readonly ChatPromptComposition[]
 ): RecalledCompositionAccumulator | null => {
 	const compositions = [normalizeDraftForRecall(draft), ...entries].filter(
 		hasCompositionContent
@@ -109,6 +117,7 @@ const combineRecalledCompositions = (
 		return null;
 	}
 	const accumulator: RecalledCompositionAccumulator = {
+		commandSelections: [],
 		fileTokens: [],
 		files: [],
 		pastedText: [],
@@ -129,6 +138,7 @@ export function useChatInputController({
 	onSubmit,
 	onTab,
 	sessionPromptHistory,
+	promptHistoryStore,
 }: ChatInputControllerOptions): ChatInputController {
 	const initialDraft =
 		draftKey === undefined ? "" : restoreComposerDraft(draftKey);
@@ -163,35 +173,42 @@ export function useChatInputController({
 		historyIndexRef.current = baseline.index;
 		draftRef.current = baseline.draft;
 	}, []);
-	const rememberPrompt = useCallback((entry: PromptHistoryEntry) => {
-		const previousRecord = promptRecordQueueRef.current;
-		const currentRecord = (async () => {
-			await previousRecord;
-			try {
-				const store = getSessionStore();
-				const [externalized] = await store.externalizeAttachments([
-					{
-						id: "prompt-history",
-						parts: entry.files,
-						role: "user",
-					} as unknown as SessionMessage,
-				]);
-				const files = (externalized?.parts ?? []).filter(
-					(part): part is PromptHistoryEntry["files"][number] =>
-						part.type === "file"
-				);
-				const durableEntry = { ...entry, files };
-				await store.recordPrompt(durableEntry);
-				historyRef.current = prependPrompt(historyRef.current, durableEntry);
-			} catch {
-				// A prompt-history write must not retain an inline payload after failure.
-			}
-		})();
-		promptRecordQueueRef.current = currentRecord;
-	}, []);
+	const rememberPrompt = useCallback(
+		(entry: PromptHistoryEntry) => {
+			const previousRecord = promptRecordQueueRef.current;
+			const currentRecord = (async () => {
+				await previousRecord;
+				try {
+					const store = promptHistoryStore ?? getSessionStore();
+					const { commandSelections = [], ...storedEntry } = entry;
+					const [externalized] = await store.externalizeAttachments([
+						{
+							id: "prompt-history",
+							parts: entry.files,
+							role: "user",
+						} as unknown as SessionMessage,
+					]);
+					const files = (externalized?.parts ?? []).filter(
+						(part): part is PromptHistoryEntry["files"][number] =>
+							part.type === "file"
+					);
+					const durableEntry = { ...storedEntry, files };
+					await store.recordPrompt(durableEntry);
+					historyRef.current = prependPrompt(historyRef.current, {
+						...durableEntry,
+						commandSelections,
+					});
+				} catch {
+					// A prompt-history write must not retain an inline payload after failure.
+				}
+			})();
+			promptRecordQueueRef.current = currentRecord;
+		},
+		[promptHistoryStore]
+	);
 	useEffect(() => {
 		let active = true;
-		void getSessionStore()
+		void (promptHistoryStore ?? getSessionStore())
 			.getPromptHistory()
 			.then((globalEntries) => {
 				if (!active) {
@@ -213,7 +230,7 @@ export function useChatInputController({
 		return () => {
 			active = false;
 		};
-	}, [sessionPromptHistory]);
+	}, [promptHistoryStore, sessionPromptHistory]);
 	const selectedIndexRef = useLatest(selectedIndex);
 	const onSubmitRef = useLatest(onSubmit);
 	const setProgrammaticText = useCallback(
@@ -221,7 +238,7 @@ export function useChatInputController({
 			text: string,
 			nextCursorOffset: number | null,
 			nextSelections?: readonly TrackedCommandSelection[] | null,
-			restoredComposition?: SessionSubmissionComposition
+			restoredComposition?: ChatPromptComposition
 		) => {
 			selectionsRef.current =
 				nextSelections === undefined
@@ -237,6 +254,7 @@ export function useChatInputController({
 					: composerDocument.restore(restoredComposition, nextCursorOffset);
 			if (historyIndexRef.current === -1) {
 				draftRef.current = {
+					commandSelections: [...selectionsRef.current],
 					fileTokens: snapshot.fileTokens,
 					files: [...snapshot.files],
 					pastedText: snapshot.pastedText,
@@ -306,17 +324,18 @@ export function useChatInputController({
 		) => {
 			const { files, fileTokens, pastedText, text } = composition;
 			historyIndexRef.current = -1;
-			draftRef.current = {
-				fileTokens: fileTokens?.map((entry) => ({ ...entry })),
-				files: [...files],
-				pastedText: pastedText?.map((entry) => ({ ...entry })),
-				text,
-			};
 			selectionsRef.current = applyTextEdit(
 				selectionsRef.current,
 				previousText,
 				text
 			);
+			draftRef.current = {
+				commandSelections: [...selectionsRef.current],
+				fileTokens: fileTokens?.map((entry) => ({ ...entry })),
+				files: [...files],
+				pastedText: pastedText?.map((entry) => ({ ...entry })),
+				text,
+			};
 			setTextValue(text);
 			setSelectedIndex(0);
 
@@ -343,8 +362,9 @@ export function useChatInputController({
 			setProgrammaticText(
 				result.entry.text,
 				direction < 0 ? 0 : result.entry.text.length,
-				null,
+				result.entry.commandSelections ?? [],
 				{
+					commandSelections: result.entry.commandSelections,
 					fileTokens: result.entry.fileTokens,
 					files: result.entry.files,
 					pastedText: result.entry.pastedText,
@@ -365,16 +385,29 @@ export function useChatInputController({
 	 */
 	const recall = useCallback(
 		(
-			entries: readonly SessionSubmissionComposition[],
-			draft: SessionSubmissionComposition
+			entries: readonly ChatPromptComposition[],
+			draft: ChatPromptComposition
 		) => {
-			const composition = combineRecalledCompositions(draft, entries);
+			const composition = combineRecalledCompositions(
+				{
+					...draft,
+					commandSelections: draft.commandSelections ?? [
+						...selectionsRef.current,
+					],
+				},
+				entries
+			);
 			if (!composition) {
 				return;
 			}
 			historyIndexRef.current = -1;
 			draftRef.current = composition;
-			setProgrammaticText(composition.text, 0, null, composition);
+			setProgrammaticText(
+				composition.text,
+				0,
+				composition.commandSelections,
+				composition
+			);
 		},
 		[setProgrammaticText]
 	);
@@ -572,6 +605,10 @@ export function useChatInputController({
 			const prompt = snapshot.rawText.trim();
 			if (prompt.length > 0) {
 				rememberPrompt({
+					commandSelections: normalizeCommandSelectionsForTrimmedText(
+						snapshot.rawText,
+						selectionsRef.current
+					),
 					fileTokens: snapshot.fileTokens,
 					files: snapshot.files,
 					pastedText: normalizePastedTextRangesForTrimmedText(
@@ -620,6 +657,7 @@ export function useChatInputController({
 				)
 			) {
 				rememberPrompt({
+					commandSelections: [...selectionsRef.current],
 					fileTokens: composition.fileTokens?.map((entry) => ({ ...entry })),
 					files: [...files],
 					pastedText: pastedText?.map((entry) => ({ ...entry })),
