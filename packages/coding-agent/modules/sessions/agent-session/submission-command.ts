@@ -4,6 +4,7 @@ import {
 } from "@wincode/agent-core";
 import { isError } from "@wincode/utils";
 import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
+import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
 import { sessionSendCancelled } from "./submission";
 
 export type SessionActiveSend = {
@@ -147,7 +148,7 @@ export const createSessionSubmissionCommand = (
 	): Promise<SessionSendOutcome> => {
 		const preparation = await port.prepareContinuation(input);
 		if (preparation.kind === "closed") {
-			return { rejected: true, reason: "The session has ended." };
+			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
 		if (preparation.kind === "busy") {
 			return { rejected: true, reason: "The Agent Session is busy." };

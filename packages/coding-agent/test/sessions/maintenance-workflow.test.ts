@@ -5,6 +5,9 @@ import type { ProviderModelSelection } from "@/modules/providers/provider-model-
 import {
 	createSessionMaintenanceWorkflow,
 	type SessionMaintenancePort,
+	type SessionMaintenanceSnapshot,
+	type SessionMaintenanceTransition,
+	type SessionMaintenanceWorkflow,
 } from "@/modules/sessions/agent-session/maintenance-workflow";
 import type { SessionOverflowContinuationOutcome } from "@/modules/sessions/agent-session/types";
 import type {
@@ -57,40 +60,128 @@ const configuration: ConfigSnapshot = {
 	sources: [],
 };
 
+const RECOVERY_EPOCH = Symbol("recovery-epoch");
+
+/** The one Agent Session state a maintenance step reads, as frozen values. */
+const snapshotOf = ({
+	context = [sourceMessage],
+	transcript = [sourceMessage],
+	...overrides
+}: Partial<SessionMaintenanceSnapshot> = {}): SessionMaintenanceSnapshot => ({
+	activeCompaction: undefined,
+	context,
+	recovery: { attempted: new Set(), epoch: RECOVERY_EPOCH },
+	sessionId: sessionId("maintenance-policy"),
+	shutdownSignal: new AbortController().signal,
+	transcript,
+	...overrides,
+});
+
+/**
+ * Applies one transition the way the Agent Session does, so the fixture's
+ * `apply` and `read` stay coupled: a test can observe a command settling
+ * mid-await instead of pinning one frozen snapshot for the workflow's life.
+ */
+const applyTo = (
+	state: SessionMaintenanceSnapshot,
+	transition: SessionMaintenanceTransition
+): SessionMaintenanceSnapshot => {
+	switch (transition.kind) {
+		case "compaction-started":
+			return { ...state, activeCompaction: transition.command };
+		case "compaction-phase":
+			return state.activeCompaction?.promise === transition.command.promise
+				? {
+						...state,
+						activeCompaction: {
+							...transition.command,
+							phase: transition.phase,
+						},
+					}
+				: state;
+		case "compaction-settled":
+			return state.activeCompaction?.promise === transition.command.promise
+				? { ...state, activeCompaction: undefined }
+				: state;
+		case "recovery-begun":
+			return {
+				...state,
+				recovery: {
+					...state.recovery,
+					attempted: new Set([
+						...state.recovery.attempted,
+						transition.messageId,
+					]),
+				},
+			};
+		case "recovery-released": {
+			const attempted = new Set(state.recovery.attempted);
+			attempted.delete(transition.messageId);
+			return { ...state, recovery: { ...state.recovery, attempted } };
+		}
+		default:
+			return state;
+	}
+};
+
+/** A workflow whose frozen state a test can advance, the way a peer would. */
+type WorkflowFixture = SessionMaintenanceWorkflow & {
+	/** Replaces part of the state the next read returns. */
+	update: (patch: Partial<SessionMaintenanceSnapshot>) => void;
+};
+
 const createWorkflow = (
 	compact: SessionMaintenancePort["compaction"]["compact"],
-	resolveCompactionSettings: SessionMaintenancePort["resolveCompactionSettings"]
-) =>
-	createSessionMaintenanceWorkflow(
-		fromPartial<SessionMaintenancePort>({
-			applyCompactionResult: () => undefined,
-			compaction: {
-				compact,
-				getInFlight: () => null,
-				needsCompaction: () => false,
-			},
+	resolveCompactionSettings: SessionMaintenancePort["effects"]["resolveCompactionSettings"],
+	initial: SessionMaintenanceSnapshot = snapshotOf()
+): WorkflowFixture => {
+	let state = initial;
+	const workflow = createSessionMaintenanceWorkflow({
+		apply: (transition) => {
+			state = applyTo(state, transition);
+		},
+		compaction: {
+			compact,
+			getInFlight: () => null,
+			needsCompaction: () => false,
+		},
+		effects: {
 			drainQueueInBackground: () => undefined,
-			getActiveCompaction: () => undefined,
-			getContext: () => [sourceMessage],
-			hasAttemptedRecovery: () => false,
-			getSessionState: () => ({
-				closed: false,
-				id: sessionId("maintenance-policy"),
-				shutdownSignal: new AbortController().signal,
-			}),
-			getTranscript: () => [sourceMessage],
-			isRecoveryCurrent: () => true,
-			mergeTranscript: (messages: readonly SessionMessage[]) => messages,
-			releaseRecoveryAttempt: () => undefined,
 			resolveCompactionSettings,
-			runTrackedOverflowRecovery: <T>(run: () => Promise<T>) => run(),
-			setCompactionError: () => undefined,
-			startRecoveryAttempt: () => 0,
-			trackCompactionRequest: (request: Promise<CompactSessionResult>) =>
-				request,
-			transitionCompactionCommand: () => undefined,
+			runTrackedRecovery: (run) => run(),
 			waitForExecutionEnd: async () => undefined,
-		})
+			withTranscriptOverlay: (messages) => messages,
+		},
+		read: () => state,
+		signals: () => ({
+			closed: () => false,
+			recoveryCurrent: () => true,
+		}),
+	});
+	return Object.assign(workflow, {
+		update: (patch: Partial<SessionMaintenanceSnapshot>) => {
+			state = { ...state, ...patch };
+		},
+	});
+};
+
+const createRecoveryWorkflow = (
+	compact: SessionMaintenancePort["compaction"]["compact"],
+	initial: SessionMaintenanceSnapshot = snapshotOf({
+		context: toolAttemptMessages,
+		transcript: toolAttemptMessages,
+		sessionId: sessionId("maintenance-overflow"),
+	})
+): WorkflowFixture =>
+	createWorkflow(
+		compact,
+		async (model: ProviderModelSelection) =>
+			resolveCompactionSettings({
+				contextLimit: 100_000,
+				model,
+				snapshot: configuration,
+			}),
+		initial
 	);
 
 test("manual, threshold, and overflow compaction use the selected model policy", async () => {
@@ -242,48 +333,6 @@ const toolAttemptMessages: SessionMessage[] = [
 		role: "assistant",
 	}),
 ];
-
-const createRecoveryWorkflow = (
-	compact: SessionMaintenancePort["compaction"]["compact"],
-	overrides: Partial<SessionMaintenancePort> = {}
-) =>
-	createSessionMaintenanceWorkflow(
-		fromPartial<SessionMaintenancePort>({
-			applyCompactionResult: () => undefined,
-			compaction: {
-				compact,
-				getInFlight: () => null,
-				needsCompaction: () => false,
-			},
-			drainQueueInBackground: () => undefined,
-			getActiveCompaction: () => undefined,
-			getContext: () => toolAttemptMessages,
-			hasAttemptedRecovery: () => false,
-			getSessionState: () => ({
-				closed: false,
-				id: sessionId("maintenance-overflow"),
-				shutdownSignal: new AbortController().signal,
-			}),
-			getTranscript: () => toolAttemptMessages,
-			isRecoveryCurrent: () => true,
-			mergeTranscript: (messages: readonly SessionMessage[]) => messages,
-			releaseRecoveryAttempt: () => undefined,
-			resolveCompactionSettings: async (model: ProviderModelSelection) =>
-				resolveCompactionSettings({
-					contextLimit: 100_000,
-					model,
-					snapshot: configuration,
-				}),
-			runTrackedOverflowRecovery: <T>(run: () => Promise<T>) => run(),
-			setCompactionError: () => undefined,
-			startRecoveryAttempt: () => 0,
-			trackCompactionRequest: (request: Promise<CompactSessionResult>) =>
-				request,
-			transitionCompactionCommand: () => undefined,
-			waitForExecutionEnd: async () => undefined,
-			...overrides,
-		})
-	);
 
 test("overflow recovery after completed tools continues the durable context", async () => {
 	const requests: CompactSessionInput[] = [];
@@ -465,38 +514,35 @@ test("post-commit continuation turn failure reports the saved-context recovery s
 });
 
 test("recovery compacts work settled while its target settings were loading", async () => {
-	const messages: SessionMessage[] = [...toolAttemptMessages];
 	const requests: CompactSessionInput[] = [];
-	const workflow = createRecoveryWorkflow(
-		async (input) => {
-			requests.push(input);
-			return fromPartial<CompactSessionResult>({
-				activeMessages: [...input.session.messages],
-				entry: fromPartial<SessionCompaction>({
-					id: compactionId("entry-late-settlement"),
-					trigger: "overflow",
-				}),
-			});
-		},
-		{
-			getContext: () => messages,
-			getTranscript: () => messages,
-		}
-	);
+	const workflow = createRecoveryWorkflow(async (input) => {
+		requests.push(input);
+		return fromPartial<CompactSessionResult>({
+			activeMessages: [...input.session.messages],
+			entry: fromPartial<SessionCompaction>({
+				id: compactionId("entry-late-settlement"),
+				trigger: "overflow",
+			}),
+		});
+	});
 
 	const outcome = await workflow.recoverOverflow({
 		continueContext: async () => ({ kind: "started" }),
 		error: fromPartial<OperationalFailure>({ code: "context-overflow" }),
 		originalMessageId: sessionMessageId("attempt-user"),
 		resolveTarget: async () => {
-			// A steering message settles while the target's settings resolve.
-			messages.push(
+			// A steering message settles while the target's settings resolve. It
+			// replaces the transcript rather than mutating it, so a recovery that
+			// kept the snapshot it opened with would summarize the older history.
+			const settled: readonly SessionMessage[] = [
+				...toolAttemptMessages,
 				fromPartial<SessionMessage>({
 					id: sessionMessageId("late-steering"),
 					parts: [{ text: "also check the tests", type: "text" }],
 					role: "user",
-				})
-			);
+				}),
+			];
+			workflow.update({ context: settled, transcript: settled });
 			return { model: automaticModel };
 		},
 		turnId: agentTurnId("overflow-late-settlement"),
@@ -507,4 +553,52 @@ test("recovery compacts work settled while its target settings were loading", as
 	expect(requests[0]?.session.messages.map(({ id }) => id as string)).toContain(
 		"late-steering"
 	);
+});
+
+test("a joiner whose owner settles while its settings load is answered with its own entry", async () => {
+	const entries: string[] = [];
+	const rejectSummary = Promise.withResolvers<never>();
+	const workflow = createWorkflow(
+		// The first command never finishes until the test cancels it.
+		(input) => {
+			if (entries.length === 0) {
+				entries.push("owner");
+				return rejectSummary.promise;
+			}
+			entries.push("joiner");
+			return Promise.resolve(
+				fromPartial<CompactSessionResult>({
+					activeMessages: [...input.session.messages],
+					entry: fromPartial<SessionCompaction>({
+						id: compactionId("entry-joiner"),
+						trigger: input.trigger,
+					}),
+				})
+			);
+		},
+		async (model) => {
+			if (entries.length > 0) {
+				// The owner settles while the joiner is still resolving its settings,
+				// so the joiner reads a Session with no compaction in flight.
+				workflow.update({ activeCompaction: undefined });
+			}
+			return resolveCompactionSettings({
+				contextLimit: 100_000,
+				model,
+				snapshot: configuration,
+			});
+		}
+	);
+
+	const owner = workflow.compact({ model: manualModel, trigger: "threshold" });
+	owner.catch(() => undefined);
+	await Bun.sleep(0);
+	const joined = workflow.compact({ model: manualModel, trigger: "threshold" });
+
+	const result = await joined;
+
+	// A caller is never answered with another caller's entry.
+	expect(result.entry.id).toBe(compactionId("entry-joiner"));
+	expect(entries).toEqual(["owner", "joiner"]);
+	rejectSummary.reject(new Error("owner cancelled"));
 });
