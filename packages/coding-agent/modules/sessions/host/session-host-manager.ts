@@ -11,6 +11,7 @@ import type {
 	SessionHost,
 	SessionHostManager,
 	SessionHostManagerEvent,
+	SessionHostManagerProviderSelectionCapabilities,
 	SessionHostOptions,
 } from "./types";
 
@@ -273,7 +274,7 @@ export const createSessionHostManager = (
 		return entry;
 	};
 	const assertProviderModelSelectionBeforeHost = async (
-		capabilities: SessionCapabilities,
+		capabilities: SessionHostManagerProviderSelectionCapabilities,
 		sessionId: SessionId,
 		providerModel: SessionHostOptions["providerModel"],
 		agentPinSelection: SessionHostOptions["providerModel"]

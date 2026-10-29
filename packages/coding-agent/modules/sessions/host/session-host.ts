@@ -53,9 +53,9 @@ import {
 	assertPluginProviderSelectionOwner,
 } from "./agent-session-turn-runner";
 import type {
-	SessionCapabilities,
 	SessionHost,
 	SessionHostOptions,
+	SessionOpeningCapabilities,
 } from "./types";
 
 /**
@@ -210,7 +210,7 @@ const restoreSteeringMessages = (
  * is the surface's, and never reaches what the model is sent.
  */
 const openSession = async (
-	capabilities: SessionCapabilities,
+	capabilities: SessionOpeningCapabilities,
 	sessionId: SessionHostOptions["sessionId"],
 	providerModel?: ProviderModelSelection
 ): Promise<OpenedSession> => {

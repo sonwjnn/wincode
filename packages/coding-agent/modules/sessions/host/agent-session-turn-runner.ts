@@ -63,7 +63,11 @@ import {
 	type TurnExecution,
 	type TurnExecutionSkill,
 } from "../turn-execution";
-import type { SessionCapabilities } from "./types";
+import type {
+	SessionPluginProviderTrustCapabilities,
+	SessionProviderCollectionValidationCapabilities,
+	SessionTurnRunnerCapabilities,
+} from "./types";
 
 type PluginTurnResolution = Readonly<{
 	options: Readonly<{
@@ -97,7 +101,7 @@ export const assertPluginProviderRegistrationSnapshot = (
 
 export const assertPluginProviderSelectionOwner = (
 	model: SessionExecution["model"],
-	capabilities: SessionCapabilities,
+	capabilities: SessionPluginProviderTrustCapabilities,
 	providerCollection: ProviderCollection | undefined,
 	sessionId: SessionId
 ): void => {
@@ -119,7 +123,7 @@ export const assertPluginProviderSelectionOwner = (
 
 export const createValidatedPluginProviderCollectionForSelection = async (
 	selection: ProviderModelSelection,
-	capabilities: SessionCapabilities,
+	capabilities: SessionProviderCollectionValidationCapabilities,
 	sessionId: SessionId,
 	allowedPluginProviderIds: readonly string[]
 ): Promise<ProviderCollection> => {
@@ -270,7 +274,7 @@ const collectExistingToolNames = (
 /** The Host inputs one Agent Turn execution needs. */
 export type AgentSessionTurnRunnerOptions = Readonly<{
 	cacheWarming: SessionCacheWarming;
-	capabilities: SessionCapabilities;
+	capabilities: SessionTurnRunnerCapabilities;
 	providerCollection: ProviderCollection;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
