@@ -25,7 +25,6 @@ import { prepareAgentTurnPrompt } from "@/modules/prompt-composition/composer";
 import { MAX_PROJECT_INSTRUCTION_TOTAL_BYTES } from "@/modules/prompt-composition/project-instructions";
 import {
 	arePluginProviderRegistrationsBoundToTrustedOwners,
-	isPluginProviderSelectionBoundToTrustedOwner,
 	normalizeProviderModelThinkingSelection,
 	type PluginProviderOwnerRegistration,
 	type ProviderModelSelection,
@@ -63,6 +62,7 @@ import {
 	type TurnExecution,
 	type TurnExecutionSkill,
 } from "../turn-execution";
+import { assertPluginProviderSelectionOwner } from "./provider-selection-ownership";
 import type { SessionCapabilities } from "./types";
 
 type PluginTurnResolution = Readonly<{
@@ -91,28 +91,6 @@ export const assertPluginProviderRegistrationSnapshot = (
 	) {
 		throw new Error(
 			"Session ProviderCollection Plugin Provider registrations do not match the current trusted registrations."
-		);
-	}
-};
-
-export const assertPluginProviderSelectionOwner = (
-	model: SessionExecution["model"],
-	capabilities: SessionCapabilities,
-	providerCollection: ProviderCollection | undefined,
-	sessionId: SessionId
-): void => {
-	const trustedRegistrations =
-		capabilities.getPluginRuntime?.()?.getProviderRegistrations(sessionId) ??
-		[];
-	if (
-		!isPluginProviderSelectionBoundToTrustedOwner(
-			model,
-			trustedRegistrations,
-			getPluginProviderRegistrationsFromCollection(providerCollection)
-		)
-	) {
-		throw new Error(
-			`Plugin Provider model selection ${model.providerId}/${model.modelId} is not bound to its trusted source in this Session Host.`
 		);
 	}
 };

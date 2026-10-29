@@ -2,10 +2,8 @@ import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { prepareCompactionBeforeSubmit } from "@/modules/sessions/agent-session/submission";
-import type {
-	CompactSessionResult,
-	SessionCompactionModule,
-} from "@/modules/sessions/compaction";
+import type { SessionCompactionPort } from "@/modules/sessions/agent-session/types";
+import type { CompactSessionResult } from "@/modules/sessions/compaction";
 import {
 	type ResolvedCompactionSettings,
 	resolveCompactionSettings,
@@ -44,7 +42,7 @@ const createSubmission = ({
 	settleCompaction: () => Promise<Error | null>;
 }) =>
 	prepareCompactionBeforeSubmit({
-		compaction: fromPartial<SessionCompactionModule>({
+		compaction: fromPartial<SessionCompactionPort>({
 			needsCompaction: mock(() => needs.shift() ?? false),
 		}),
 		getActiveMessages: () => [message("u1")],
@@ -59,7 +57,7 @@ test("skips threshold compaction when the model context limit is unknown", async
 		fromPartial<CompactSessionResult>({ activeMessages: [], entry: {} })
 	);
 	const result = await prepareCompactionBeforeSubmit({
-		compaction: fromPartial<SessionCompactionModule>({
+		compaction: fromPartial<SessionCompactionPort>({
 			needsCompaction: mock(() => true),
 		}),
 		getActiveMessages: () => [message("u1")],
@@ -165,7 +163,7 @@ test("rechecks settled Context using the waiting model's exact policy", async ()
 		}
 	);
 	const result = await prepareCompactionBeforeSubmit({
-		compaction: fromPartial<SessionCompactionModule>({ needsCompaction }),
+		compaction: fromPartial<SessionCompactionPort>({ needsCompaction }),
 		getActiveMessages: () => activeMessages,
 		model: waitingModel,
 		runCompaction: async () => {

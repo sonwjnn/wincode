@@ -64,9 +64,11 @@ const fixture = (
 		registered: readonly PluginProviderOwnerRegistration[];
 	} = { trusted: [], registered: [] },
 	lifecycle?: CompactionLifecycle,
-	contextWindowTokens?: number
+	contextWindowTokens?: number,
+	reserveTokens = 1000
 ) => {
 	const requests: ChatRequest[] = [];
+	const persistedEntries: unknown[] = [];
 	const summaryUsageEntries: unknown[] = [];
 	const recorder = createFakeProviderRecorder();
 	const baseCollection = createFakeProviderCollection(recorder, chatModel, [
@@ -81,7 +83,7 @@ const fixture = (
 		},
 	};
 	const document = {
-		compaction: { keepRecentTokens: 1, reserveTokens: 1000, summary },
+		compaction: { keepRecentTokens: 1, reserveTokens, summary },
 		...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
 	};
 	const settings = resolveCompactionSettings({
@@ -98,12 +100,14 @@ const fixture = (
 		...(lifecycle === undefined ? {} : { lifecycle }),
 		store: {
 			getLatestCompaction: async () => null,
-			appendCompaction: async (input) =>
-				fromPartial<SessionCompaction>({
+			appendCompaction: async (input) => {
+				persistedEntries.push(input);
+				return fromPartial<SessionCompaction>({
 					...input,
 					id: compactionId("routed"),
 					sequence: 1,
-				}),
+				});
+			},
 		},
 	});
 	const adapters = createAgentSessionAdapters(
@@ -135,7 +139,15 @@ const fixture = (
 			settings: { ...settings, compactionOverheadTokens: 256 },
 			trigger: "manual",
 		});
-	return { compact, requests, collection, settings, summaryUsageEntries };
+	return {
+		compact,
+		requests,
+		collection,
+		persistedEntries,
+		recorder,
+		settings,
+		summaryUsageEntries,
+	};
 };
 
 test("Host routes only the summary to the configured model and preserves the chat retention budget", async () => {
@@ -168,6 +180,27 @@ const shortHistory = messages.map((message) => ({
 		{ type: "text" as const, text: "short historical content ".repeat(30) },
 	],
 }));
+
+test("summary usage from an incomplete request keeps target identity without persisting a handoff", async () => {
+	const { compact, persistedEntries, recorder, summaryUsageEntries } =
+		fixture();
+	recorder.stepScript = async function* () {
+		yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } };
+		yield {
+			completion: { kind: "incomplete", reason: "output-limit" },
+			type: "finish",
+		};
+	};
+
+	await expect(compact()).rejects.toMatchObject({ code: "summary-failed" });
+	expect(summaryUsageEntries).toHaveLength(1);
+	expect(summaryUsageEntries[0]).toMatchObject({
+		kind: "compaction-summary",
+		model: summarizer,
+		usage: { inputTokens: 10, outputTokens: 2 },
+	});
+	expect(persistedEntries).toHaveLength(0);
+});
 
 test("without a summary target the Host uses chat identity and inherits chat thinking", async () => {
 	const { compact, requests } = fixture({}, shortHistory);
@@ -216,6 +249,35 @@ test("an unauthenticated summary provider dispatches nothing without falling bac
 	expect(requests).toHaveLength(0);
 });
 
+test("uses Provider output metadata when the summary target has no configured ceiling", async () => {
+	const { compact, requests } = fixture(
+		{ model: "anthropic/summary/large" },
+		messages,
+		{
+			...summaryModel,
+			limits: { contextWindowTokens: 200_000, maxOutputTokens: 512 },
+		}
+	);
+
+	await compact();
+	expect(requests[0]?.maxOutputTokens).toBe(512);
+});
+
+test("uses the 32,000-token application default without Provider output metadata", async () => {
+	const { compact, requests } = fixture(
+		{ model: "anthropic/summary/large" },
+		messages,
+		{ ...summaryModel, limits: { contextWindowTokens: 200_000 } },
+		{ trusted: [], registered: [] },
+		undefined,
+		200_000,
+		50_000
+	);
+
+	await compact();
+	expect(requests[0]?.maxOutputTokens).toBe(32_000);
+});
+
 test("summary output is capped at 80% of the conversation reserve", async () => {
 	const { compact, requests } = fixture({ model: "anthropic/summary/large" });
 	await compact();
@@ -261,6 +323,78 @@ const customOwner = {
 	pluginId: "summary-plugin",
 	sourceIdentity: "/trusted/summary-plugin.ts",
 };
+
+test("a summary target whose trusted owner changes before dispatch is not replaced or persisted", async () => {
+	const trustedOwners: PluginProviderOwnerRegistration[] = [customOwner];
+	const { compact, requests, persistedEntries } = fixture(
+		{ model: "custom/summary" },
+		messages,
+		{ ...summaryModel, providerId: "custom", modelId: "summary" },
+		{ trusted: trustedOwners, registered: [customOwner] },
+		{
+			before: async () => {
+				trustedOwners[0] = {
+					...customOwner,
+					sourceIdentity: "/replacement/summary-plugin.ts",
+				};
+				return;
+			},
+		}
+	);
+
+	await expect(compact()).rejects.toMatchObject({ code: "summary-failed" });
+	expect(requests).toHaveLength(0);
+	expect(persistedEntries).toHaveLength(0);
+});
+
+test("a Plugin owner change during async availability is rejected before dispatch", async () => {
+	const trustedOwners: PluginProviderOwnerRegistration[] = [customOwner];
+	const { compact, requests, collection, persistedEntries } = fixture(
+		{ model: "custom/summary" },
+		messages,
+		{ ...summaryModel, providerId: "custom", modelId: "summary" },
+		{ trusted: trustedOwners, registered: [customOwner] }
+	);
+	const getAvailable = collection.getAvailable.bind(collection);
+	let availabilityChecks = 0;
+	collection.getAvailable = async (providerId) => {
+		const available = await getAvailable(providerId);
+		if (providerId === "custom" && ++availabilityChecks === 2) {
+			trustedOwners[0] = {
+				...customOwner,
+				sourceIdentity: "/replacement/summary-plugin.ts",
+			};
+		}
+		return available;
+	};
+
+	await expect(compact()).rejects.toMatchObject({ code: "summary-failed" });
+	expect(requests).toHaveLength(0);
+	expect(persistedEntries).toHaveLength(0);
+});
+
+test("a summary target revoked before dispatch is not replaced or persisted", async () => {
+	let revoked = false;
+	const { compact, requests, collection, persistedEntries } = fixture(
+		{ model: "anthropic/summary/large" },
+		messages,
+		summaryModel,
+		{ trusted: [], registered: [] },
+		{
+			before: async () => {
+				revoked = true;
+				return;
+			},
+		}
+	);
+	const getAvailable = collection.getAvailable.bind(collection);
+	collection.getAvailable = async (providerId) =>
+		revoked ? [] : getAvailable(providerId);
+
+	await expect(compact()).rejects.toMatchObject({ code: "summary-failed" });
+	expect(requests).toHaveLength(0);
+	expect(persistedEntries).toHaveLength(0);
+});
 
 test("an explicitly selected custom summary target captures and persists its trusted Plugin owner", async () => {
 	const { compact, requests } = fixture(

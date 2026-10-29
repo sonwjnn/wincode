@@ -1,5 +1,5 @@
 import type { AgentId } from "@wincode/agent-core";
-import { isNull, isUndefined, omitUndefined } from "@wincode/utils";
+import { isNull, isUndefined, omitBy, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import {
@@ -21,16 +21,17 @@ import type {
 	SessionSkillCatalog,
 	SessionSkillResolution,
 } from "../agent-session/types";
+import type { CompactSessionInput } from "../compaction/compaction";
 import { SessionCompactionError } from "../compaction/error";
 import { createProviderSummaryGenerator } from "../compaction/summary-generator";
 import type { SessionMessage } from "../message";
 import { strictThinkingSelection } from "../selection";
 import {
 	type AgentSessionTurnRunnerOptions,
-	assertPluginProviderSelectionOwner,
 	createAgentSessionTurnRunner,
 } from "./agent-session-turn-runner";
-import { resolveCompactionSummaryRoute } from "./compaction-summary-route";
+import { resolveCompactionSummaryTarget } from "./compaction-summary-route";
+import { assertPluginProviderSelectionOwner } from "./provider-selection-ownership";
 
 /** The Host inputs the adapters need on top of one Agent Turn's. */
 export type AgentSessionAdaptersOptions = AgentSessionTurnRunnerOptions &
@@ -291,14 +292,22 @@ export const createAgentSessionAdapters = (
 		updateSubmissionStatus: (input) =>
 			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
 		compaction: {
-			compact: async (input) =>
-				capabilities.getCompactionModule().compact({
-					...(await resolveCompactionSummaryRoute(
-						input,
-						providerCollection,
-						capabilities,
-						sessionId
-					)),
+			compact: async (input) => {
+				const summaryTarget = await resolveCompactionSummaryTarget(
+					input,
+					providerCollection,
+					capabilities,
+					sessionId
+				);
+				const settings = omitBy(
+					input.settings,
+					(_value, key) => key === "summary" || key === "summaryMaxOutputTokens"
+				) as CompactSessionInput["settings"];
+				const { thinkingLevel: _thinkingLevel, ...compactionInput } = input;
+				return capabilities.getCompactionModule().compact({
+					...compactionInput,
+					settings,
+					summaryTarget,
 					...omitUndefined({ summaryGenerator }),
 					recordSummaryUsage: async ({ id, model, usage }) => {
 						await usageLedger.record({
@@ -309,7 +318,8 @@ export const createAgentSessionAdapters = (
 						});
 					},
 					assertAuthority: assertHostOpen,
-				}),
+				});
+			},
 			getInFlight: (id) => capabilities.getCompactionModule().getInFlight(id),
 			needsCompaction: (messages, settings, model) =>
 				capabilities

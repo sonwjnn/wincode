@@ -10,7 +10,7 @@ import {
 } from "@wincode/utils";
 import type { SessionId } from "@/shared/identifiers";
 import type {
-	CompactSessionInput,
+	CompactionRequestInput,
 	CompactSessionResult,
 } from "../compaction/compaction";
 import { SessionCompactionError } from "../compaction/error";
@@ -182,8 +182,8 @@ export type SessionMaintenanceEffects = Readonly<{
 	drainQueueInBackground: () => void;
 	/** Resolves the compaction settings the selected Provider Model runs with. */
 	resolveCompactionSettings: (
-		model: CompactSessionInput["model"]
-	) => Promise<CompactSessionInput["settings"]>;
+		model: CompactionRequestInput["model"]
+	) => Promise<CompactionRequestInput["settings"]>;
 	/** Tracks one recovery run so shutdown waits for it, then drains the queue. */
 	runTrackedRecovery: <Result>(run: () => Promise<Result>) => Promise<Result>;
 	/** Resolves after one Agent Turn Execution ends. */
@@ -241,7 +241,7 @@ export const createSessionMaintenanceWorkflow = (
 		command: SessionCompactionCommand,
 		messages: readonly SessionMessage[],
 		signal: AbortSignal
-	): Promise<CompactSessionInput> => ({
+	): Promise<CompactionRequestInput> => ({
 		model: command.model,
 		session: { messages, sessionId: port.read().sessionId },
 		settings: await port.effects.resolveCompactionSettings(command.model),
