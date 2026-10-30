@@ -65,7 +65,8 @@ const fixture = (
 	} = { trusted: [], registered: [] },
 	lifecycle?: CompactionLifecycle,
 	contextWindowTokens?: number,
-	reserveTokens = 1000
+	reserveTokens = 1000,
+	contextWindowModelOverrideTokens?: number
 ) => {
 	const requests: ChatRequest[] = [];
 	const persistedEntries: unknown[] = [];
@@ -83,7 +84,20 @@ const fixture = (
 		},
 	};
 	const document = {
-		compaction: { keepRecentTokens: 1, reserveTokens, summary },
+		compaction: {
+			keepRecentTokens: 1,
+			...(contextWindowModelOverrideTokens === undefined
+				? {}
+				: {
+						modelOverrides: {
+							"openai/chat": {
+								contextWindowTokens: contextWindowModelOverrideTokens,
+							},
+						},
+					}),
+			reserveTokens,
+			summary,
+		},
 		...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
 	};
 	const settings = resolveCompactionSettings({
@@ -200,6 +214,44 @@ test("summary usage from an incomplete request keeps target identity without per
 		usage: { inputTokens: 10, outputTokens: 2 },
 	});
 	expect(persistedEntries).toHaveLength(0);
+});
+
+test("a conversation context override does not expand a different summary target", async () => {
+	const constrainedSummaryModel: ProviderModel = {
+		...summaryModel,
+		limits: { contextWindowTokens: 1000, maxOutputTokens: 4096 },
+	};
+	const { compact, requests } = fixture(
+		{ model: "anthropic/summary/large", maxOutputTokens: 512 },
+		messages,
+		constrainedSummaryModel,
+		undefined,
+		undefined,
+		undefined,
+		1000,
+		500_000
+	);
+
+	await expect(compact()).rejects.toThrow(
+		"The complete summary request leaves only 0 output tokens"
+	);
+	expect(requests).toHaveLength(0);
+});
+
+test("the conversation model's context override also applies when it is the summary target", async () => {
+	const { compact, requests } = fixture(
+		{},
+		messages,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		1000,
+		500_000
+	);
+
+	await expect(compact()).resolves.toBeDefined();
+	expect(requests[0]).toMatchObject({ providerId: "openai", modelId: "chat" });
 });
 
 test("without a summary target the Host uses chat identity and inherits chat thinking", async () => {

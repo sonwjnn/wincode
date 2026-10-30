@@ -189,6 +189,7 @@ type CompactionRequestSettings = Pick<
 			| "maxMediaTokens"
 			| "modelContextLimit"
 			| "contextWindowOverrideTokens"
+			| "contextWindowModelOverrideTokens"
 			| "reserveTokens"
 		>
 	> & {

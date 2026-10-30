@@ -9,6 +9,7 @@ Configure compaction in global or project `.wincode/settings.json` (or `.jsonc`)
     "keepRecentTokens": 20000,
     "modelOverrides": {
       "openai/gpt-5.6": {
+        "contextWindowTokens": 1050000,
         "reserveTokens": 24000
       }
     },
@@ -24,11 +25,13 @@ Use exact, case-sensitive `providerId/modelId` identities from your configured P
 
 ## Conversation policy
 
-`contextWindowTokens` is an optional explicit settings override for every Provider Model, including the conversation and summary targets. When it is unset, Wincode uses the selected model's declared context-window metadata; if that metadata is missing or invalid, the fallback is **272,000** tokens. Set a positive safe integer in global or project `.wincode/settings.jsonc` to override model metadata. Project configuration takes precedence over global configuration. An explicit override that exceeds a Provider's actual limit may be rejected, so choose a value suitable for the models you use.
+`contextWindowTokens` is an optional global override for every Provider Model, including conversation and summary targets. By default, Wincode caps published context windows above **272,000** at 272,000 for Anthropic, OpenAI, DeepSeek, Google, and OpenCode Go GPT/DeepSeek models; smaller published limits are preserved. This is Wincode's effective usage/compaction limit, not a change to the Provider's technical API limit. Set a positive safe integer in global or project `.wincode/settings.jsonc` to override model metadata. Project configuration takes precedence over global configuration.
+
+To opt one conversation model into its larger published context, set `compaction.modelOverrides["providerId/modelId"].contextWindowTokens`, as in the example. This exact-model override takes precedence over the global setting for that conversation model. If the summary target is the same model, it uses the model override too; a different summary target uses the global override, its own declared limit, or the 272,000-token fallback. An override above a Provider's actual limit may be rejected, so choose a value suitable for that model.
 
 `reserveTokens` and `keepRecentTokens` govern the conversation target, not the summary target. Resolution uses built-in defaults, merged ordinary global/project values, the matching model override per field, session overrides, then clamps against the conversation model's effective context window (override, metadata, or fallback). File layering happens before model lookup, so a global model-specific setting can beat a project-wide fallback.
 
-Only reserve/recent budgets support model overrides. Invalid values and unsupported fields are diagnosed.
+`reserveTokens`, `keepRecentTokens`, and `contextWindowTokens` support exact-model overrides. Invalid values and unsupported fields are diagnosed.
 
 Threshold checks use the selected model's resolved compaction threshold and the latest valid context measurement in the current compaction epoch, even when another conversation model produced that measurement. Messages after that observation are estimated. Switching models does not compact immediately; the selected model's threshold is checked before its next request. The usage bar uses the selected model's effective context window (explicit override, model metadata, or fallback) and estimates context instead of presenting a different model's measurement as exact.
 

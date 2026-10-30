@@ -303,6 +303,38 @@ describe("summarizeSessionUsage", () => {
 		expect(summary).toMatchObject({ contextLimit: 10_000, contextPercent: 91 });
 	});
 
+	test("uses the exact model's context-window override in session usage", () => {
+		const snapshot: ConfigSnapshot = {
+			diagnostics: [],
+			document: {
+				compaction: {
+					modelOverrides: {
+						"anthropic/claude-haiku-4-5": {
+							contextWindowTokens: 500_000,
+						},
+					},
+				},
+			},
+			sourceFor: () => undefined,
+			sources: [],
+		};
+		const summary = summarizeSessionUsage(
+			[assistant("assistant-1", { inputTokens: 90, outputTokens: 10 })],
+			model,
+			[],
+			"idle",
+			[anthropicModel],
+			[],
+			undefined,
+			snapshot
+		);
+
+		expect(summary).toMatchObject({
+			contextLimit: 500_000,
+			contextPercent: 0,
+		});
+	});
+
 	test("reports context occupancy above 100 when measured usage exceeds the limit", () => {
 		const summary = summarizeSessionUsage(
 			[assistant("over-limit", { inputTokens: 20_000, outputTokens: 0 })],

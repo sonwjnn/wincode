@@ -246,7 +246,9 @@ export const summarizeSessionUsage = (
 	);
 	const contextLimit = resolveContextWindowTokens(
 		contextSnapshot,
-		selectedProviderModel?.limits?.contextWindowTokens
+		selectedProviderModel?.limits?.contextWindowTokens,
+		undefined,
+		fallbackModel
 	).tokens;
 	const context = estimateSessionContextTokens(
 		contextMessages,

@@ -1,6 +1,10 @@
 import * as path from "node:path";
 import { z } from "zod";
 import { type ProviderModel, providerModelCapabilityIds } from "../src/sdk.ts";
+import {
+	type ProviderModelFamilyId,
+	providerModelFamilyIds,
+} from "./model-families/types.ts";
 
 export const PROVIDER_MODEL_CATALOG_SOURCE_PATH = path.join(
 	import.meta.dir,
@@ -20,6 +24,7 @@ const modelOverrideSchema = z
 			.min(1)
 			.refine((values) => new Set(values).size === values.length)
 			.optional(),
+		modelFamily: z.enum(providerModelFamilyIds).optional(),
 		modelId: nonEmptyIdentity,
 		protocolId: nonEmptyIdentity.optional(),
 	})
@@ -28,6 +33,7 @@ const modelOverrideSchema = z
 const providerModelSchema = z.union([nonEmptyIdentity, modelOverrideSchema]);
 const providerSourceSchema = z
 	.object({
+		modelFamily: z.enum(providerModelFamilyIds).optional(),
 		models: z.array(providerModelSchema).min(1),
 		protocolId: nonEmptyIdentity,
 		providerId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
@@ -42,6 +48,8 @@ type ProviderModelCatalogInput = z.infer<
 >;
 
 export type ProviderModelCatalogSource = Readonly<{
+	/** Build-time classifications are separate from generated ProviderModel values. */
+	modelFamilies: ReadonlyMap<string, ProviderModelFamilyId>;
 	providers: readonly Readonly<{
 		models: readonly ProviderModel[];
 		providerId: string;
@@ -61,6 +69,7 @@ export const parseProviderModelCatalogSource = (
 	const source: ProviderModelCatalogInput =
 		providerModelCatalogSourceSchema.parse(input);
 	const providerIds = new Set<string>();
+	const modelFamilies = new Map<string, ProviderModelFamilyId>();
 
 	const providers = source.providers.map((provider) => {
 		if (providerIds.has(provider.providerId)) {
@@ -80,6 +89,17 @@ export const parseProviderModelCatalogSource = (
 				);
 			}
 			modelIds.add(model.modelId);
+			// Explicit model labels override a provider-wide family default.
+			const modelFamily =
+				typeof sourceModel === "string"
+					? provider.modelFamily
+					: (sourceModel.modelFamily ?? provider.modelFamily);
+			if (modelFamily !== undefined) {
+				modelFamilies.set(
+					`${provider.providerId}/${model.modelId}`,
+					modelFamily
+				);
+			}
 
 			return {
 				modelId: model.modelId,
@@ -92,7 +112,7 @@ export const parseProviderModelCatalogSource = (
 		});
 		return { models, providerId: provider.providerId };
 	});
-	return { providers };
+	return { modelFamilies, providers };
 };
 
 /** Renders deterministic, provider-scoped TypeScript from enriched model records. */

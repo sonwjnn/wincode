@@ -305,6 +305,75 @@ describe("resolveCompactionSettings", () => {
 		expect(settings.modelContextLimit).toBe(96_000);
 	});
 
+	test("a per-model context window overrides the global cap for only the selected model", () => {
+		const model = providerModelSelectionFixture("openai/gpt-5.6-luna");
+		const snapshotWithOverride = snapshot({
+			compaction: {
+				modelOverrides: {
+					"openai/gpt-5.6-luna": { contextWindowTokens: 1_050_000 },
+				},
+			},
+			contextWindowTokens: 180_000,
+		});
+
+		const selected = resolveCompactionSettings({
+			contextLimit: 272_000,
+			model,
+			snapshot: snapshotWithOverride,
+		});
+		const other = resolveCompactionSettings({
+			contextLimit: 272_000,
+			model: providerModelSelectionFixture("openai/gpt-5.6-sol"),
+			snapshot: snapshotWithOverride,
+		});
+
+		expect(selected).toMatchObject({
+			contextWindowOverrideTokens: 180_000,
+			contextWindowModelOverrideTokens: 1_050_000,
+			modelContextLimit: 1_050_000,
+			thresholdTokens: 1_033_616,
+		});
+		expect(selected.diagnostics).not.toContainEqual(
+			expect.objectContaining({
+				configPath: [
+					"compaction",
+					"modelOverrides",
+					"openai/gpt-5.6-luna",
+					"contextWindowTokens",
+				],
+			})
+		);
+		expect(other.modelContextLimit).toBe(180_000);
+	});
+
+	test("falls back from an invalid per-model context window and reports its exact config path", () => {
+		const identity = "openai/gpt-5.6-luna";
+		const settings = resolveCompactionSettings({
+			contextLimit: 272_000,
+			model: providerModelSelectionFixture(identity),
+			snapshot: snapshot({
+				compaction: {
+					modelOverrides: { [identity]: { contextWindowTokens: 0 } },
+				},
+			}),
+		});
+
+		expect(settings.modelContextLimit).toBe(272_000);
+		expect(settings.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "invalid-value",
+				configPath: [
+					"compaction",
+					"modelOverrides",
+					identity,
+					"contextWindowTokens",
+				],
+				message: `compaction.modelOverrides.${identity}.contextWindowTokens must be a positive safe integer.`,
+				severity: "error",
+			})
+		);
+	});
+
 	test("falls back to Provider metadata and diagnoses an invalid override", () => {
 		const settings = resolveCompactionSettings({
 			contextLimit: 96_000,

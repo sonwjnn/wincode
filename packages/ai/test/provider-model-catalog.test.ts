@@ -68,6 +68,30 @@ const withTemporaryCatalog = async (
 	}
 };
 
+const GENERATED_MODELS_PATTERN =
+	/export const providerModels = ([\s\S]*?) as const satisfies readonly ProviderModel\[\];/u;
+
+type GeneratedModel = Readonly<{
+	limits?: Readonly<{ contextWindowTokens?: number }>;
+	promptCache?: unknown;
+	modelFamily?: string;
+	modelId: string;
+}>;
+
+const generatedModelsFrom = async (
+	outputDirectory: string,
+	providerId: string
+): Promise<readonly GeneratedModel[]> => {
+	const contents = await Bun.file(
+		path.join(outputDirectory, `${providerId}.generated.ts`)
+	).text();
+	const serializedModels = contents.match(GENERATED_MODELS_PATTERN)?.[1];
+	if (serializedModels === undefined) {
+		throw new Error(`Could not read generated models for '${providerId}'.`);
+	}
+	return JSON.parse(serializedModels) as readonly GeneratedModel[];
+};
+
 const manifestFixture = {
 	providers: [
 		{
@@ -164,6 +188,150 @@ describe("combined provider model catalog generator", () => {
 				expect(regenerated.exitCode).toBe(0);
 				expect(await Bun.file(openAIOutput).exists()).toBe(true);
 				expect(await Bun.file(obsoleteOutput).exists()).toBe(false);
+			}
+		);
+	});
+
+	test("routed context policy follows explicit model family, not model name", async () => {
+		await withTemporaryCatalog(
+			"wincode-provider-model-family-policy-",
+			{
+				providers: [
+					{
+						models: [
+							{ modelFamily: "openai", modelId: "gpt-routed" },
+							{ modelFamily: "deepseek", modelId: "deepseek-routed" },
+							"gpt-unclassified",
+							{ modelFamily: "openai", modelId: "custom-openai-family" },
+						],
+						protocolId: "openai-compatible",
+						providerId: "opencode-go",
+					},
+					{
+						models: [{ modelFamily: "openai", modelId: "gpt-routed" }],
+						protocolId: "openai-compatible",
+						providerId: "openrouter",
+					},
+				],
+			},
+			{
+				"opencode-go": {
+					models: {
+						"gpt-routed": { limit: { context: 1_050_000 } },
+						"deepseek-routed": { limit: { context: 1_000_000 } },
+						"gpt-unclassified": { limit: { context: 1_000_000 } },
+						"custom-openai-family": { limit: { context: 1_000_000 } },
+					},
+				},
+				openrouter: {
+					models: {
+						"gpt-routed": { limit: { context: 1_000_000 } },
+					},
+				},
+			},
+			async ({ outputDirectory, run }) => {
+				const generated = await run();
+				expect(generated.exitCode).toBe(0);
+
+				const openCodeGoModels = await generatedModelsFrom(
+					outputDirectory,
+					"opencode-go"
+				);
+				const contextFor = (
+					models: readonly GeneratedModel[],
+					modelId: string
+				) =>
+					models.find((model) => model.modelId === modelId)?.limits
+						?.contextWindowTokens;
+				expect(contextFor(openCodeGoModels, "gpt-routed")).toBe(272_000);
+				expect(contextFor(openCodeGoModels, "deepseek-routed")).toBe(272_000);
+				expect(contextFor(openCodeGoModels, "gpt-unclassified")).toBe(
+					1_000_000
+				);
+				expect(contextFor(openCodeGoModels, "custom-openai-family")).toBe(
+					272_000
+				);
+				expect(
+					openCodeGoModels.every((model) => model.modelFamily === undefined)
+				).toBe(true);
+
+				const openRouterModels = await generatedModelsFrom(
+					outputDirectory,
+					"openrouter"
+				);
+				expect(contextFor(openRouterModels, "gpt-routed")).toBe(1_000_000);
+			}
+		);
+	});
+
+	test("family metadata stays scoped to its provider route", async () => {
+		await withTemporaryCatalog(
+			"wincode-provider-family-route-",
+			{
+				providers: [
+					{
+						modelFamily: "openai",
+						models: ["gpt-5.6-luna"],
+						protocolId: "openai-responses",
+						providerId: "openai",
+					},
+					{
+						models: [{ modelFamily: "openai", modelId: "gpt-5.6-luna" }],
+						protocolId: "openai-compatible",
+						providerId: "opencode-go",
+					},
+					{
+						models: [{ modelFamily: "openai", modelId: "gpt-5.6-luna" }],
+						protocolId: "openai-compatible",
+						providerId: "openrouter",
+					},
+				],
+			},
+			{
+				openai: {
+					models: {
+						"gpt-5.6-luna": { limit: { context: 1_050_000 } },
+					},
+				},
+				"opencode-go": {
+					models: {
+						"gpt-5.6-luna": { limit: { context: 1_050_000 } },
+					},
+				},
+				openrouter: {
+					models: {
+						"gpt-5.6-luna": { limit: { context: 1_000_000 } },
+					},
+				},
+			},
+			async ({ outputDirectory, run }) => {
+				const generated = await run();
+				expect(generated.exitCode).toBe(0);
+				const direct = await generatedModelsFrom(outputDirectory, "openai");
+				const routed = await generatedModelsFrom(
+					outputDirectory,
+					"opencode-go"
+				);
+				const proxied = await generatedModelsFrom(
+					outputDirectory,
+					"openrouter"
+				);
+				const directModel = direct.find(
+					(model) => model.modelId === "gpt-5.6-luna"
+				);
+				const routedModel = routed.find(
+					(model) => model.modelId === "gpt-5.6-luna"
+				);
+				const proxiedModel = proxied.find(
+					(model) => model.modelId === "gpt-5.6-luna"
+				);
+
+				expect(directModel?.limits?.contextWindowTokens).toBe(272_000);
+				expect(directModel).toHaveProperty("promptCache");
+				expect(routedModel?.limits?.contextWindowTokens).toBe(272_000);
+				expect(routedModel).not.toHaveProperty("promptCache");
+				expect(proxiedModel?.limits?.contextWindowTokens).toBe(1_000_000);
+				expect(proxiedModel).not.toHaveProperty("promptCache");
 			}
 		);
 	});

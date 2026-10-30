@@ -1,6 +1,7 @@
 import type { ProviderCollection } from "@wincode/ai";
 import { isPositiveSafeInteger } from "@wincode/utils";
 import {
+	isSameProviderModelIdentity,
 	type ProviderModelSelection,
 	providerModelReasoningEffort,
 	providerModelSelectionForProviderModel,
@@ -71,10 +72,15 @@ export const resolveCompactionSummaryTarget = async (
 		throw new SessionCompactionError("summary-failed", resolved.failure);
 	}
 	const { model } = resolved;
+	const modelOverrideTokens =
+		input.settings.contextWindowModelOverrideTokens !== undefined &&
+		isSameProviderModelIdentity(selection, input.model)
+			? input.settings.contextWindowModelOverrideTokens
+			: undefined;
 	const contextWindowTokens = resolveContextWindowTokens(
 		undefined,
 		model.limits?.contextWindowTokens,
-		input.settings.contextWindowOverrideTokens
+		modelOverrideTokens ?? input.settings.contextWindowOverrideTokens
 	).tokens;
 	const outputCeilingTokens = Math.floor(
 		Math.min(

@@ -5,10 +5,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { readUtf8File } from "@wincode/utils";
-import {
-	buildProviderModelsWithMetadata,
-	MANUAL_OVERLAYS,
-} from "./metadata-model.ts";
+import { MANUAL_OVERLAYS } from "./manual-model-overlays.ts";
+import { buildProviderModelsWithMetadata } from "./metadata-model.ts";
 import {
 	generateProviderModelCatalog,
 	PROVIDER_MODEL_CATALOG_SOURCE_PATH,
@@ -128,6 +126,7 @@ const catalogSource = parseProviderModelCatalogSource(catalogSourceInput);
 const modelsDev = await modelsDevPayloadFor(modelsDevDataPath);
 const declaredModels = catalogSource.providers.flatMap(({ models }) => models);
 const enriched = buildProviderModelsWithMetadata({
+	modelFamilies: catalogSource.modelFamilies,
 	overlays: MANUAL_OVERLAYS,
 	payload: modelsDev.payload,
 	providerModels: declaredModels,
