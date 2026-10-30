@@ -15,7 +15,7 @@ import {
 } from "../compaction/types";
 import { resolveContextWindowTokens } from "../usage/context-window";
 import { assertPluginProviderSelectionOwner } from "./provider-selection-ownership";
-import type { SessionCapabilities } from "./types";
+import type { PluginTrustCapabilities } from "./types";
 
 const freezeSelection = (
 	selection: ProviderModelSelection
@@ -35,7 +35,7 @@ const freezeSelection = (
 export const resolveCompactionSummaryTarget = async (
 	input: CompactionRequestInput,
 	collection: ProviderCollection,
-	capabilities: SessionCapabilities,
+	capabilities: PluginTrustCapabilities,
 	sessionId: SessionId
 ): Promise<CompactionSummaryTarget> => {
 	const policy = input.settings.summary;

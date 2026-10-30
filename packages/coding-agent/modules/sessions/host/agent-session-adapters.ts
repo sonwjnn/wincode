@@ -1,7 +1,9 @@
-import type { AgentId } from "@wincode/agent-core";
+import type { AgentId, StatefulAgent } from "@wincode/agent-core";
+import type { ProviderCollection } from "@wincode/ai";
 import { isNull, isUndefined, omitBy, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
+import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import {
 	isAvailableProviderModelSelection,
 	isSameProviderModelIdentity,
@@ -16,8 +18,10 @@ import {
 	type SkillContext,
 	type SkillExecution,
 } from "@/modules/skills";
+import type { SessionId } from "@/shared/identifiers";
 import type {
 	AgentSessionPorts,
+	SessionQueuedSubmission,
 	SessionSkillCatalog,
 	SessionSkillResolution,
 } from "../agent-session/types";
@@ -32,14 +36,19 @@ import {
 } from "./agent-session-turn-runner";
 import { resolveCompactionSummaryTarget } from "./compaction-summary-route";
 import { assertPluginProviderSelectionOwner } from "./provider-selection-ownership";
+import type { SessionAdapterCapabilities } from "./types";
 
-/** The Host inputs the adapters need on top of one Agent Turn's. */
-export type AgentSessionAdaptersOptions = AgentSessionTurnRunnerOptions &
-	Readonly<{
-		isShutDown: () => boolean;
-		usageLedger: Pick<SessionUsageLedger, "record">;
-		withSessionWork: (action: () => Promise<void>) => Promise<void>;
-	}>;
+/** The Host inputs consumed by the adapters and the turn runner they compose. */
+export type AgentSessionAdaptersOptions = Readonly<{
+	cacheWarming: SessionCacheWarming;
+	capabilities: SessionAdapterCapabilities;
+	providerCollection: ProviderCollection;
+	sessionId: SessionId;
+	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
+	isShutDown: () => boolean;
+	usageLedger: Pick<SessionUsageLedger, "record">;
+	withSessionWork: (action: () => Promise<void>) => Promise<void>;
+}>;
 
 const summarizeCatalogDiagnostics = (catalog: SkillCatalog): string | null => {
 	if (catalog.diagnostics.length === 0) {

@@ -53,6 +53,53 @@ export type SessionCapabilities = Readonly<{
 	getCapabilityCeiling: () => SessionSdkCapabilityCeiling | undefined;
 }>;
 
+/** The capabilities read while running one Agent Turn. */
+export type TurnRunnerCapabilities = Pick<
+	SessionCapabilities,
+	| "getCapabilityCeiling"
+	| "getConfig"
+	| "getPluginRuntime"
+	| "getRegistry"
+	| "getSessionSdk"
+	| "getStore"
+	| "getTurnToolResolver"
+>;
+
+/** The trusted Plugin runtime read while validating a selected Plugin Provider. */
+export type PluginTrustCapabilities = Pick<
+	SessionCapabilities,
+	"getPluginRuntime"
+>;
+
+/** The Plugin runtime and factory needed to create and validate a ProviderCollection. */
+export type ProviderCollectionCapabilities = Pick<
+	SessionCapabilities,
+	"createProviderCollection" | "getPluginRuntime"
+>;
+
+/** The capabilities used by Agent Session adapters and their composed turn runner. */
+export type SessionAdapterCapabilities = Pick<
+	SessionCapabilities,
+	| "getCapabilityCeiling"
+	| "getCompactionModule"
+	| "getCompactionSettings"
+	| "getConfig"
+	| "getPluginRuntime"
+	| "getRegistry"
+	| "getSessionSdk"
+	| "getStore"
+	| "getTurnToolResolver"
+>;
+
+/** The durable store used to project a Session's initial state. */
+export type SessionStoreCapabilities = Pick<SessionCapabilities, "getStore">;
+
+/** The Session Host Manager's preflight dependencies for a Provider selection. */
+export type HostManagerSelectionCapabilities = Pick<
+	SessionCapabilities,
+	"getPluginRuntime" | "getStore"
+>;
+
 /**
  * One open session and the assembly that owns its lifetime. The consumer that
  * constructs a Host owns calling `shutdown`; the Host holds no session state,

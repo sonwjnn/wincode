@@ -5,12 +5,12 @@ import {
 } from "@/modules/providers/provider-model-selection";
 import type { SessionId } from "@/shared/identifiers";
 import { getPluginProviderRegistrationsFromCollection } from "../provider-collection";
-import type { SessionCapabilities } from "./types";
+import type { PluginTrustCapabilities } from "./types";
 
 /** Rejects selections whose captured Plugin owner no longer matches this Host. */
 export const assertPluginProviderSelectionOwner = (
 	model: ProviderModelSelection,
-	capabilities: SessionCapabilities,
+	capabilities: PluginTrustCapabilities,
 	providerCollection: ProviderCollection | undefined,
 	sessionId: SessionId
 ): void => {

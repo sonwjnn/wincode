@@ -51,9 +51,9 @@ import { createAgentSessionAdapters } from "./agent-session-adapters";
 import { assertPluginProviderRegistrationSnapshot } from "./agent-session-turn-runner";
 import { assertPluginProviderSelectionOwner } from "./provider-selection-ownership";
 import type {
-	SessionCapabilities,
 	SessionHost,
 	SessionHostOptions,
+	SessionStoreCapabilities,
 } from "./types";
 
 /**
@@ -208,7 +208,7 @@ const restoreSteeringMessages = (
  * is the surface's, and never reaches what the model is sent.
  */
 const openSession = async (
-	capabilities: SessionCapabilities,
+	capabilities: SessionStoreCapabilities,
 	sessionId: SessionHostOptions["sessionId"],
 	providerModel?: ProviderModelSelection
 ): Promise<OpenedSession> => {

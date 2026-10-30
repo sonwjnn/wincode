@@ -6,6 +6,7 @@ import { nextChatSelection, restoreSelection } from "../selection";
 import { projectSessionMessageRecords } from "../storage/session-record";
 import { createSessionHost } from "./session-host";
 import type {
+	HostManagerSelectionCapabilities,
 	PreparedSessionProviderComposition,
 	SessionCapabilities,
 	SessionHost,
@@ -273,7 +274,7 @@ export const createSessionHostManager = (
 		return entry;
 	};
 	const assertProviderModelSelectionBeforeHost = async (
-		capabilities: SessionCapabilities,
+		capabilities: HostManagerSelectionCapabilities,
 		sessionId: SessionId,
 		providerModel: SessionHostOptions["providerModel"],
 		agentPinSelection: SessionHostOptions["providerModel"]
