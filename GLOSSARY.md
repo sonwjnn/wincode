@@ -137,6 +137,15 @@ The immutable application-facing view of one Stateful Agent's current conversati
 **Stored Session History**:
 The committed Session Records and compactions read from storage without opening a Session Host, including the durable status needed to reconcile accepted-but-unread Steering Messages. It excludes in-flight output and transient state, and reading it grants no authority to run Session Commands. _Avoid_: Live Session Snapshot, live transcript, session owner
 
+**Session Fork**:
+Một Session độc lập được tạo từ lịch sử hợp lệ của một Session nguồn tại checkpoint được chọn. Nó không kế thừa công việc đang chạy, nghĩa vụ xử lý input của nguồn hoặc tác động lên workspace. _Avoid_: Delegated Conversation, nhánh trong cùng Session
+
+**Session Rewind**:
+Thao tác tạo một Session Fork tại checkpoint cũ rồi chuyển người dùng sang Session mới, giữ nguyên lịch sử Session nguồn. Nó không hoàn tác file hoặc chạy lại Tool Calls. _Avoid_: rollback workspace, cắt transcript
+
+**Inherited Session History**:
+Phần lịch sử một Session Fork kế thừa từ nguồn, khác với nội dung và chi phí phát sinh trong Session mới. Nó là ngữ cảnh hội thoại, không phải hàng đợi hay nghĩa vụ giao nhận input của nguồn. _Avoid_: pending Steering Lane, new usage
+
 **Session Transcript**:
 The ordered messages a session presents to the user. A steered Submission enters the Transcript when its durable record is committed, before the Agent Turn processes it; an unsteered Queued Submission does not. Compaction summaries stay out of the Transcript even when they are part of the Session Context. _Avoid_: chat history, display messages, message log
 
