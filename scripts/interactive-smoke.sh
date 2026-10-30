@@ -142,10 +142,9 @@ wait_for_text() {
 }
 
 wait_for_text 'Ask anything...' 150
-if [[ "$LIVE" == 1 || -z "$BINARY" ]]; then
-  # The composer appears before Provider model selection has finished loading.
-  wait_for_text 'openai/gpt-5.6-luna:low' 150
-fi
+# The composer appears before Provider model selection has finished loading.
+# Wait for the loaded model before sending the first keyboard input in every mode.
+wait_for_text 'openai/gpt-5.6-luna:low' 150
 if [[ "$LIVE" == 1 ]]; then
   tmux send-keys -l -t "$SESSION" 'Reply only with smoke followed by a hyphen, live, a hyphen, and ok. Do not use tools.'
   tmux send-keys -t "$SESSION" Enter
@@ -218,7 +217,9 @@ done
 [[ "$(tmux display-message -p -t "$SESSION" '#{pane_dead}' 2>/dev/null || true)" == '1' ]] || \
   fail_with_frame 'the /exit command did not stop the TUI.'
 EXIT_STATUS="$(tmux display-message -p -t "$SESSION" '#{pane_dead_status}')"
-[[ "$EXIT_STATUS" == '0' ]] || fail_with_frame "TUI exited with status $EXIT_STATUS."
+EXIT_SIGNAL="$(tmux display-message -p -t "$SESSION" '#{pane_dead_signal}')"
+[[ "$EXIT_STATUS" == '0' ]] || \
+  fail_with_frame "TUI exited with status ${EXIT_STATUS:-unknown}${EXIT_SIGNAL:+ (signal $EXIT_SIGNAL)}."
 if [[ "$LIVE" == 1 ]]; then
   printf 'PASS: live Provider reply and clean /exit.\n'
 elif [[ -n "$BINARY" ]]; then

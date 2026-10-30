@@ -33,10 +33,8 @@ import {
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
-import {
-	assertPluginProviderSelectionOwner,
-	createValidatedPluginProviderCollectionForSelection,
-} from "../../../modules/sessions/host/agent-session-turn-runner";
+import { createValidatedPluginProviderCollectionForSelection } from "../../../modules/sessions/host/agent-session-turn-runner";
+import { assertPluginProviderSelectionOwner } from "../../../modules/sessions/host/provider-selection-ownership";
 import type { SessionServices } from "../../../modules/sessions/host/session-services";
 import type {
 	SessionHost,

@@ -59,20 +59,28 @@ export type AppendSessionCompactionInput = Except<
 	createdAt?: Date;
 	completedAt?: Date;
 };
+export type CompactionSummaryTarget = ReadonlyDeep<{
+	/** Exact Provider Model identity, including its trusted Plugin owner. */
+	model: ProviderModelSelection;
+	/** Effective Wincode context window resolved for this target. */
+	contextWindowTokens: number;
+	/** Target ceiling before request-specific prompt and retention budgets. */
+	outputCeilingTokens: number;
+	thinkingLevel?: ThinkingLevel;
+}>;
+
 export type PreparedSummaryRequest = Readonly<{
 	estimatedInputTokens: number;
 	prompt: string;
 }>;
 
 export type SummaryGeneratorInput = {
-	model: ProviderModelSelection;
-	/** Effective Wincode window for the selected summary target. */
-	contextWindowTokens?: number;
-	thinkingLevel?: ThinkingLevel;
+	target: CompactionSummaryTarget;
 	previousSummary?: CompactionSummary;
 	serializedMessages: string;
 	focus?: string;
-	maxOutputTokens?: number;
+	/** Request-specific allowance after prompt and rebuilt-conversation budgeting. */
+	maxOutputTokens: number;
 	preparedRequest?: PreparedSummaryRequest;
 	reportUsage?: (usage: SessionMessageUsage) => Promise<void>;
 	signal?: AbortSignal;

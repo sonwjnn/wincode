@@ -30,6 +30,7 @@ import type {
 	SteeringMessageId,
 } from "@/shared/identifiers";
 import type {
+	CompactionRequestInput,
 	CompactSessionResult,
 	SessionCompactionModule,
 } from "../compaction/compaction";
@@ -512,8 +513,11 @@ export type SessionOverflowRecoveryOutcome =
  */
 export type SessionCompactionPort = Pick<
 	SessionCompactionModule,
-	"compact" | "getInFlight" | "needsCompaction"
->;
+	"getInFlight" | "needsCompaction"
+> &
+	Readonly<{
+		compact: (input: CompactionRequestInput) => Promise<CompactSessionResult>;
+	}>;
 
 /** One compaction request as a Session Command the Agent Session runs. */
 export type SessionCompactionCommand = ReadonlyDeep<{

@@ -11,7 +11,7 @@ import {
 } from "@/modules/sessions/agent-session/maintenance-workflow";
 import type { SessionOverflowContinuationOutcome } from "@/modules/sessions/agent-session/types";
 import type {
-	CompactSessionInput,
+	CompactionRequestInput as CompactSessionInput,
 	CompactSessionResult,
 } from "@/modules/sessions/compaction";
 import {

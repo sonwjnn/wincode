@@ -71,8 +71,8 @@ import {
 	type CompactionLifecycleContext,
 	type CompactionSession,
 	type CompactionSummary,
+	type CompactionSummaryTarget,
 	type CompactionTriggerReason,
-	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	type SessionCompaction,
 	type SummaryGenerator,
@@ -177,34 +177,35 @@ type CompactionStore = Pick<
 	"appendCompaction" | "getLatestCompaction"
 >;
 
-export type CompactSessionInput = {
+type CompactionRequestSettings = Pick<
+	ResolvedCompactionSettings,
+	"enabled" | "keepRecentTokens" | "thresholdTokens"
+> &
+	Partial<
+		Pick<
+			ResolvedCompactionSettings,
+			| "maxMediaAttachments"
+			| "maxMediaBytes"
+			| "maxMediaTokens"
+			| "modelContextLimit"
+			| "contextWindowOverrideTokens"
+			| "reserveTokens"
+		>
+	> & {
+		compactionOverheadTokens?: number;
+		summary?: CompactionSummarySettings;
+		/** Internal ceiling retained for Host callers that already resolve one. */
+		summaryMaxOutputTokens?: number;
+	};
+
+/** Input at the Host adapter, before it resolves one exact summary target. */
+export type CompactionRequestInput = {
 	session: CompactionSession;
 	model: ProviderModelSelection;
-	/** Resolved summary target; never changes conversation retention or thresholds. */
-	summaryModel?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	summaryGenerator?: SummaryGenerator;
 	protectedMessageIds?: readonly SessionMessage["id"][];
-	settings: Pick<
-		ResolvedCompactionSettings,
-		"enabled" | "keepRecentTokens" | "thresholdTokens"
-	> &
-		Partial<
-			Pick<
-				ResolvedCompactionSettings,
-				| "maxMediaAttachments"
-				| "maxMediaBytes"
-				| "maxMediaTokens"
-				| "modelContextLimit"
-				| "contextWindowOverrideTokens"
-				| "reserveTokens"
-			>
-		> & {
-			compactionOverheadTokens?: number;
-			summary?: CompactionSummarySettings;
-			summaryContextLimit?: number;
-			summaryMaxOutputTokens?: number;
-		};
+	settings: CompactionRequestSettings;
 	trigger: CompactionTriggerReason;
 	focus?: string;
 	signal?: AbortSignal;
@@ -217,6 +218,18 @@ export type CompactSessionInput = {
 	}) => Promise<void>;
 	/** Revalidates Session Host authority immediately before persistence. */
 	assertAuthority?: () => void;
+};
+
+export type CompactSessionInput = Omit<
+	CompactionRequestInput,
+	"settings" | "thinkingLevel"
+> & {
+	settings: Omit<
+		CompactionRequestSettings,
+		"summary" | "summaryMaxOutputTokens"
+	>;
+	/** One Host-resolved target shared by generation, usage, and provenance. */
+	summaryTarget: CompactionSummaryTarget;
 };
 
 export type CompactSessionResult = {
@@ -986,17 +999,6 @@ const projectMessagesForEstimate = (
 		})
 		.toReversed();
 };
-const configuredSummaryOutputTokens = (
-	settings: CompactSessionInput["settings"]
-): number =>
-	Math.max(
-		0,
-		Math.floor(
-			settings.summaryMaxOutputTokens ??
-				DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
-		)
-	);
-
 const configuredReserveTokens = (
 	settings: CompactSessionInput["settings"]
 ): number =>
@@ -1013,29 +1015,29 @@ const reserveBoundSummaryOutputTokens = (
 
 /**
  * A host-owned handoff is not a summary request, so it is bounded by the
- * configured output budget and the same reserve-derived ceiling without
- * needing generated-prompt room.
+ * resolved target ceiling and reserve without needing generated-prompt room.
  */
 const resolveLifecycleSummaryBudget = (
-	settings: CompactSessionInput["settings"]
+	settings: CompactSessionInput["settings"],
+	target: CompactionSummaryTarget
 ): number =>
 	Math.min(
-		configuredSummaryOutputTokens(settings),
+		target.outputCeilingTokens,
 		reserveBoundSummaryOutputTokens(settings)
 	);
 
 const resolveSummaryOutputBudget = (
 	cutPoint: CutPoint,
 	settings: CompactSessionInput["settings"],
+	target: CompactionSummaryTarget,
 	estimateTokens: (messages: readonly SessionMessage[]) => number,
 	estimatedInputTokens: number
 ): number => {
 	const contextLimit =
 		settings.modelContextLimit ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
 	const reserveTokens = configuredReserveTokens(settings);
-	const configuredMaximum = configuredSummaryOutputTokens(settings);
 	const summaryContextAvailable =
-		(settings.summaryContextLimit ?? contextLimit) -
+		target.contextWindowTokens -
 		estimatedInputTokens -
 		SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS;
 	const retainedTokens = Math.max(
@@ -1054,7 +1056,7 @@ const resolveSummaryOutputBudget = (
 		contextLimit - retainedTokens - requestOverheadTokens - reserveTokens;
 	return Math.floor(
 		Math.min(
-			configuredMaximum,
+			target.outputCeilingTokens,
 			reserveBoundSummaryOutputTokens(settings),
 			summaryContextAvailable,
 			conversationContextAvailable
@@ -1383,7 +1385,7 @@ const reportSummaryUsage = (
 	return (usage) =>
 		recordUsage({
 			id: attemptId,
-			model: input.summaryModel ?? input.model,
+			model: input.summaryTarget.model,
 			usage,
 		});
 };
@@ -1446,6 +1448,7 @@ const generateSummaryRequest = async ({
 	const maxOutputTokens = resolveSummaryOutputBudget(
 		cutPoint,
 		input.settings,
+		input.summaryTarget,
 		estimateTokens,
 		preparedRequest.estimatedInputTokens
 	);
@@ -1515,7 +1518,10 @@ const produceCompactionSummary = async ({
 }): Promise<SummaryGeneratorResult> => {
 	if (isNonEmptyString(lifecycleSummary)) {
 		return validateLifecycleSummary(lifecycleSummary, {
-			maxOutputTokens: resolveLifecycleSummaryBudget(input.settings),
+			maxOutputTokens: resolveLifecycleSummaryBudget(
+				input.settings,
+				input.summaryTarget
+			),
 		});
 	}
 	const selectedSummaryGenerator = input.summaryGenerator ?? summaryGenerator;
@@ -1725,15 +1731,8 @@ export const createSessionCompaction = ({
 		);
 		const focus = normalizeFocus(input.focus);
 		const summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {
-			...omitUndefined({
-				thinkingLevel: input.thinkingLevel,
-				focus,
-			}),
-			model: input.summaryModel ?? input.model,
-			contextWindowTokens:
-				input.settings.summaryContextLimit ??
-				input.settings.modelContextLimit ??
-				DEFAULT_CONTEXT_WINDOW_TOKENS,
+			target: input.summaryTarget,
+			...omitUndefined({ focus }),
 			previousSummary: previous?.summary,
 			serializedMessages: serializeMessagesForCompaction(summarySpan),
 			signal: input.signal,
@@ -1782,7 +1781,7 @@ export const createSessionCompaction = ({
 			estimateTokens,
 			fileOperations,
 			focus,
-			model: input.summaryModel ?? input.model,
+			model: input.summaryTarget.model,
 			now,
 			previous,
 			settings: input.settings,
@@ -1791,7 +1790,7 @@ export const createSessionCompaction = ({
 			trigger: input.trigger,
 			thinkingLevel: summaryWasSuppliedByPlugin
 				? undefined
-				: input.thinkingLevel,
+				: input.summaryTarget.thinkingLevel,
 		});
 		try {
 			await lifecycle?.completed?.(entry, lifecycleContext);

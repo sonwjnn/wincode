@@ -26,12 +26,17 @@ import type {
 	SessionWaitingMessage,
 } from "@/modules/sessions/agent-session/types";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
-import { createSessionCompaction } from "@/modules/sessions/compaction/compaction";
+import {
+	type CompactionRequestInput,
+	createSessionCompaction,
+} from "@/modules/sessions/compaction/compaction";
 import type { ResolvedCompactionSettings } from "@/modules/sessions/compaction/config";
 import { compactionSummaryMessageId } from "@/modules/sessions/compaction/summary-message";
-import type {
-	AppendSessionCompactionInput,
-	SummaryGenerator,
+import {
+	type AppendSessionCompactionInput,
+	type CompactionSummaryTarget,
+	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
+	type SummaryGenerator,
 } from "@/modules/sessions/compaction/types";
 import type {
 	SessionFilePart,
@@ -91,8 +96,8 @@ const compactionHistory = (): SessionMessage[] => [
 	message("a2", "current answer"),
 ];
 
-const createCompactionModule = (summaryGenerator: SummaryGenerator) =>
-	createSessionCompaction({
+const createCompactionModule = (summaryGenerator: SummaryGenerator) => {
+	const module = createSessionCompaction({
 		estimateTokens: (messages) => messages.length,
 		generateId: () => compactionId("entry-compacted"),
 		store: {
@@ -107,6 +112,26 @@ const createCompactionModule = (summaryGenerator: SummaryGenerator) =>
 		},
 		summaryGenerator,
 	});
+	return {
+		...module,
+		compact: (input: CompactionRequestInput) => {
+			const { thinkingLevel: _thinkingLevel, ...compactionInput } = input;
+			const summaryTarget: CompactionSummaryTarget = {
+				model: input.model,
+				contextWindowTokens: 272_000,
+				outputCeilingTokens: DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
+				...(input.thinkingLevel === undefined
+					? {}
+					: { thinkingLevel: input.thinkingLevel }),
+			};
+			return module.compact({
+				...compactionInput,
+				settings: input.settings,
+				summaryTarget,
+			});
+		},
+	};
+};
 
 /** The ports one Agent Session test runs against, unless it overrides them. */
 const createPorts = ({
