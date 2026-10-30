@@ -12,6 +12,37 @@ Use `discoverModels` for account- or endpoint-specific inventories instead of ad
 
 Call `ProviderCollection.refreshModels()` explicitly to refresh every registered provider with `discoverModels`; pass `providerIds` to limit the refresh. Static providers are skipped. The result reports caller cancellation in `aborted` and per-provider failures in `errors`, so one provider's failure does not block other refreshes. Refresh failures preserve last-known snapshots. Call `restoreModels()` after registering providers to load persisted snapshots without network access.
 
+## User-configured compatible Providers
+
+For an endpoint that uses an existing wire protocol, users can declare a Provider in the global `~/.wincode/models.json` file. The `providers` object key is the exact Provider ID; each model `id` is preserved exactly. Provider IDs must start with a lowercase letter or digit and contain only lowercase letters, digits, `.`, `_`, or `-` (up to 128 characters); model IDs may contain `/`. Project-scoped `models.json` entries are intentionally ignored.
+
+```json
+{
+  "providers": {
+    "my-gateway": {
+      "api": "openai-completions",
+      "baseUrl": "https://gateway.example/v1",
+      "apiKey": "$MY_GATEWAY_API_KEY",
+      "models": [
+        {
+          "id": "vendor/model-name",
+          "name": "Model Name",
+          "contextWindow": 128000,
+          "maxTokens": 8192,
+          "input": ["text", "image"]
+        }
+      ]
+    }
+  }
+}
+```
+
+Supported `api` values are `openai-chat`, `openai-responses`, `openai-completions`/`openai-compatible`, `anthropic-messages`/`anthropic`, and `google-generative-ai`/`google`. A model may override its provider's `api` and `baseUrl`; OpenAI-compatible routes require a base URL. Optional model facts include `name`, `input`, `contextWindow`, `maxTokens`, `reasoning`, `reasoningEfforts`, and `cost` (`input`, `output`, `cacheRead`, `cacheWrite`). These facts are copied as declared, not inferred from a neighboring model.
+
+`apiKey` accepts a literal, `$NAME`, `${NAME}`, `$env:NAME`, or `!command`. Environment references are resolved when authorization is requested. A `!command` runs through the OS shell, is bounded to ten seconds and 64 KiB of output, and its successful output is cached for that Provider instance. Treat command entries as executable user configuration. The source value is not stored as a credential; a separately stored credential takes precedence over it. Auth availability means a source is configured, not that an environment variable or command has already produced a usable key.
+
+This config only composes authentication and protocols Wincode already implements. New authentication flows, protocol adapters, or other executable behavior belong in a trusted TypeScript Plugin; do not add arbitrary code loading to `models.json`.
+
 ## Provider implementation
 
 Add the implementation under `packages/ai/src/sdk-providers/`. Implement `resolveAuthorization` and `streamChat` against the Provider SDK contracts in `packages/ai/src/sdk.ts`; keep credentials in Provider authorization state, not in chat requests or model identity. HTTP Providers implement `getChatHeaders` to return protocol defaults and authorization-derived headers before dispatch, then send `ProviderChatContext.headers` verbatim; do not reapply defaults in `streamChat`. `ProviderCollection` merges those headers with provider, model, and request overrides case-insensitively before the optional asynchronous request transform. A `null` override removes a lower-level header. Treat the final transform as trusted code: it can replace auth headers, and secret-bearing values must not be logged. This pipeline applies to chat only, not discovery or OAuth. Factories must reject unsupported Provider or protocol IDs at construction so a bad manifest mapping cannot become selectable. Reuse protocol serializers, stream parsers, and errors from `packages/ai/src/sdk-private/` when appropriate. Do not introduce a Model Target, Model Client, Catalog adapter, or Connections execution fallback.

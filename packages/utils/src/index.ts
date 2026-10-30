@@ -1,3 +1,4 @@
+export * from "./config-value.ts";
 export * from "./display-sanitize.ts";
 export { getErrorMessage } from "./errors.ts";
 export * from "./file-io.ts";

@@ -1,5 +1,10 @@
 import * as path from "node:path";
-import { isPlainObject, isUndefined, omitUndefined } from "@wincode/utils";
+import {
+	isPlainObject,
+	isUndefined,
+	omitUndefined,
+	resolveConfigEnvironmentVariables,
+} from "@wincode/utils";
 import type { ZodError } from "zod";
 import {
 	DEFAULT_MCP_TIMEOUTS,
@@ -12,8 +17,6 @@ import {
 	resolvedServerSchema,
 } from "./schema";
 
-const VARIABLE_PATTERN =
-	/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$env:([A-Za-z_][A-Za-z0-9_]*)|\$([A-Za-z_][A-Za-z0-9_]*)|\$\$|\$!/gu;
 const PROJECT_OVERLAY_FIELDS = new Set(["enabled", "exposure", "toolExposure"]);
 
 export type McpConfigOrigin = Readonly<{
@@ -420,42 +423,19 @@ const resolveString = async (
 	if ((field[0] === "env" || field[0] === "headers") && value.startsWith("!")) {
 		return runConfigCommand(value.slice(1), context, field);
 	}
-	let missingVariable: string | undefined;
-	const resolved = value.replace(
-		VARIABLE_PATTERN,
-		(
-			match,
-			braced: string | undefined,
-			envName: string | undefined,
-			bare: string | undefined
-		) => {
-			if (match === "$$") {
-				return "$";
-			}
-			if (match === "$!") {
-				return "!";
-			}
-			const variable = braced ?? envName ?? bare ?? "";
-			const replacement = context.env[variable];
-			if (replacement === undefined) {
-				missingVariable = variable;
-				return "";
-			}
-			return replacement;
-		}
-	);
-	if (missingVariable !== undefined) {
+	const resolution = resolveConfigEnvironmentVariables(value, context.env);
+	if ("missingVariable" in resolution) {
 		addDiagnostic(
 			context.diagnostics,
 			context.source,
 			"missing-env",
-			`Missing environment variable ${missingVariable} for server ${context.name}`,
+			`Missing environment variable ${resolution.missingVariable} for server ${context.name}`,
 			serverPath(context.name, field),
 			context.name
 		);
 		return;
 	}
-	return resolved;
+	return resolution.value;
 };
 
 const resolveStringRecord = async (

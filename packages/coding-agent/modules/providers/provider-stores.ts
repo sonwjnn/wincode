@@ -15,10 +15,13 @@ import {
 const providerIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const fileWriteQueues = new Map<string, Promise<void>>();
 
+export const isValidProviderId = (providerId: string): boolean =>
+	providerIdPattern.test(providerId);
+
 export type ProviderSdkStoreOptions = Readonly<{ userDataDir?: string }>;
 
 const providerIdForStorage = (providerId: string): string => {
-	if (!providerIdPattern.test(providerId)) {
+	if (!isValidProviderId(providerId)) {
 		throw new Error("Invalid Provider ID for user-scoped storage.");
 	}
 	return providerId;
@@ -113,7 +116,7 @@ export const createProviderSdkCredentialStore = (
 				userDataDir,
 				async (document) =>
 					Object.entries(document.providers)
-						.filter(([id]) => providerIdPattern.test(id))
+						.filter(([id]) => isValidProviderId(id))
 						.map(([providerId, credential]) => ({
 							providerId,
 							type: credentialTypeFor(credential),

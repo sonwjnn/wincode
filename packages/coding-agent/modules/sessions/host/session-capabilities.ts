@@ -1,11 +1,21 @@
 import type { Database } from "bun:sqlite";
-import type { ProviderCollection, ProviderModel } from "@wincode/ai";
+import type {
+	CredentialStoreOptions,
+	ProviderAuthCheckResult,
+	ProviderCollection,
+	ProviderModel,
+} from "@wincode/ai";
+import { logger, omitUndefined } from "@wincode/utils";
 import {
 	type AgentRegistry,
 	applyCapabilityCeilingToAgentRegistry,
 	resolveAgentRegistry,
 } from "@/modules/agents/registry";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import {
+	loadUserModelsJsonProviders,
+	type ModelsJsonProvider,
+} from "@/modules/providers/models-json";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import { toWorkspaceId, type WorkspaceId } from "@/shared/identifiers";
@@ -149,22 +159,82 @@ const openSessionDatabase = async ({
  * for a long-lived JSONL process. Every owned resource is released together by
  * the returned shutdown function; injected resources remain caller-owned.
  */
+const closeConfiguredModelProviders = async (
+	configuredModelProviders: readonly ModelsJsonProvider[]
+): Promise<void> => {
+	await Promise.allSettled(
+		configuredModelProviders.map(({ provider }) =>
+			Promise.resolve().then(() => provider.close?.())
+		)
+	);
+};
+
+const attachConfiguredModelProviders = async (
+	collection: ProviderCollection,
+	configuredModelProviders: readonly ModelsJsonProvider[]
+): Promise<ProviderCollection> => {
+	const apiKeySourceProviderIds = new Set<string>();
+	for (const configured of configuredModelProviders) {
+		try {
+			collection.register(configured.provider);
+		} catch {
+			logger.warn("Skipping conflicting models.json Provider", {
+				providerId: configured.provider.id,
+			});
+			await closeConfiguredModelProviders([configured]);
+			continue;
+		}
+		if (configured.hasApiKeySource) {
+			apiKeySourceProviderIds.add(configured.provider.id);
+		}
+	}
+	const getAvailable = async (
+		selectedProviderId?: string
+	): Promise<readonly ProviderModel[]> => {
+		const available = await collection.getAvailable(selectedProviderId);
+		const availableIdentities = new Set(
+			available.map(({ modelId, providerId }) =>
+				JSON.stringify([providerId, modelId])
+			)
+		);
+		const configuredSourceModels = collection
+			.getModels()
+			.filter(
+				({ modelId, providerId }) =>
+					apiKeySourceProviderIds.has(providerId) &&
+					(selectedProviderId === undefined ||
+						providerId === selectedProviderId) &&
+					!availableIdentities.has(JSON.stringify([providerId, modelId]))
+			);
+		return [...available, ...configuredSourceModels];
+	};
+	const getConfiguredProviderIds = async (): Promise<readonly string[]> => [
+		...new Set([
+			...(await collection.getConfiguredProviderIds()),
+			...apiKeySourceProviderIds,
+		]),
+	];
+	const checkAuth = async (
+		providerId: string,
+		options?: CredentialStoreOptions
+	): Promise<ProviderAuthCheckResult> => {
+		const result = await collection.checkAuth(providerId, options);
+		return result.status === "missing" &&
+			apiKeySourceProviderIds.has(providerId)
+			? { source: "stored-credential", status: "configured" }
+			: result;
+	};
+	return Object.freeze({
+		...collection,
+		checkAuth,
+		getAvailable,
+		getConfiguredProviderIds,
+	});
+};
+
 export const createSessionCapabilities = async ({
 	getConfig: providedGetConfig,
-	createProviderCollection: providerCollectionFactory = (
-		pluginRuntime,
-		sessionId,
-		allowedPluginProviderIds,
-		allowedPluginProviderSources
-	) =>
-		createDefaultSessionProviderCollection(pluginRuntime, sessionId, {
-			...(allowedPluginProviderIds === undefined
-				? {}
-				: { allowedPluginProviderIds }),
-			...(allowedPluginProviderSources === undefined
-				? {}
-				: { allowedPluginProviderSources }),
-		}),
+	createProviderCollection: providedProviderCollectionFactory,
 	capabilityCeiling,
 	database: providedDatabase,
 	databasePath,
@@ -180,6 +250,53 @@ export const createSessionCapabilities = async ({
 	const { ownedByCaller, runtime: pluginRuntime } = plugin;
 	/** The configuration a capability reads, resolved per read so a reload lands. */
 	const readConfigRuntime = providedGetConfig;
+	const providerCollectionFactory: NonNullable<
+		SessionCapabilitiesOptions["createProviderCollection"]
+	> = async (
+		collectionPluginRuntime,
+		sessionId,
+		allowedPluginProviderIds,
+		allowedPluginProviderSources
+	) => {
+		const runtime = readConfigRuntime();
+		const configuredModelProviders = await loadUserModelsJsonProviders(
+			runtime.configStore,
+			runtime.workspace,
+			omitUndefined({ sessionId })
+		);
+		if (providedProviderCollectionFactory === undefined) {
+			return createDefaultSessionProviderCollection(
+				collectionPluginRuntime,
+				sessionId,
+				{
+					...(allowedPluginProviderIds === undefined
+						? {}
+						: { allowedPluginProviderIds }),
+					...(allowedPluginProviderSources === undefined
+						? {}
+						: { allowedPluginProviderSources }),
+					configuredModelProviders,
+				}
+			);
+		}
+		let collection: ProviderCollection | undefined;
+		try {
+			collection = await providedProviderCollectionFactory(
+				collectionPluginRuntime,
+				sessionId,
+				allowedPluginProviderIds,
+				allowedPluginProviderSources
+			);
+		} catch (error) {
+			await closeConfiguredModelProviders(configuredModelProviders);
+			throw error;
+		}
+		if (collection === undefined) {
+			await closeConfiguredModelProviders(configuredModelProviders);
+			return;
+		}
+		return attachConfiguredModelProviders(collection, configuredModelProviders);
+	};
 	let ownedDatabase: OpenedSessionDatabase | undefined;
 	try {
 		if (providedDatabase === undefined && providedStore === undefined) {

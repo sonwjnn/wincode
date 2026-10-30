@@ -38,6 +38,7 @@ const GOOGLE_PROVIDER_ID = "google";
 const GOOGLE_PROTOCOL_ID = "google";
 const GOOGLE_API_ROOT =
 	"https://generativelanguage.googleapis.com/v1beta/models";
+const TRAILING_SLASHES = /\/+$/u;
 const GOOGLE_FORWARDED_REASONING_EFFORTS = new Set([
 	"none",
 	"off",
@@ -53,6 +54,8 @@ export type GoogleFetch = (
 ) => Promise<Response>;
 
 export type GoogleProviderOptions = Readonly<{
+	/** API base URL; `/v1beta/models` is appended when it is not present. */
+	baseUrl?: string;
 	createCacheClient?: (apiKey: string) => GoogleCachedContentClient;
 	fetch?: GoogleFetch;
 	models?: readonly ProviderModel[];
@@ -177,8 +180,26 @@ const providerErrorFor = (error: unknown): ProviderError => {
 	});
 };
 
-const apiUrlFor = (modelId: string): string =>
-	`${GOOGLE_API_ROOT}/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
+const googleApiRootFor = (baseUrl: string | undefined): string => {
+	if (baseUrl === undefined) {
+		return GOOGLE_API_ROOT;
+	}
+	const url = new URL(baseUrl);
+	const path = url.pathname.replace(TRAILING_SLASHES, "");
+	if (path.endsWith("/models")) {
+		url.pathname = path;
+	} else if (path.endsWith("/v1beta")) {
+		url.pathname = `${path}/models`;
+	} else {
+		url.pathname = `${path}/v1beta/models`;
+	}
+	url.search = "";
+	url.hash = "";
+	return url.href.replace(TRAILING_SLASHES, "");
+};
+
+const apiUrlFor = (modelId: string, apiRoot: string): string =>
+	`${apiRoot}/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
 
 const googleProviderOptionsFor = (
 	reasoningEffort: ProviderProtocolRequest["reasoningEffort"]
@@ -201,7 +222,8 @@ const streamRequest = async function* (
 	request: ProviderProtocolRequest,
 	headers: Readonly<Record<string, string>>,
 	maxOutputTokens: number | undefined,
-	fetchImpl: GoogleFetch
+	fetchImpl: GoogleFetch,
+	apiRoot: string
 ): AsyncIterable<ProviderChatEvent> {
 	const body = googleStrategy.serialize({
 		maxOutputTokens,
@@ -210,7 +232,7 @@ const streamRequest = async function* (
 	});
 	let response: Response;
 	try {
-		response = await fetchImpl(apiUrlFor(request.modelId), {
+		response = await fetchImpl(apiUrlFor(request.modelId, apiRoot), {
 			body: JSON.stringify(body),
 			headers,
 			method: "POST",
@@ -275,7 +297,8 @@ const streamWithCacheFallback = async function* (
 	request: ProviderChatRequest,
 	context: ProviderChatContext,
 	selectedCache: GoogleCachedContentSelection | undefined,
-	fetchImpl: GoogleFetch
+	fetchImpl: GoogleFetch,
+	apiRoot: string
 ): AsyncIterable<ProviderChatEvent> {
 	let outputStarted = false;
 	const requestedMaxOutputTokens = maxOutputTokensForRequest(
@@ -288,7 +311,8 @@ const streamWithCacheFallback = async function* (
 			modelRequestFor(request, context, selectedCache),
 			context.headers,
 			maxOutputTokens,
-			fetchImpl
+			fetchImpl,
+			apiRoot
 		)) {
 			if (event.type !== "finish") {
 				outputStarted = true;
@@ -313,14 +337,16 @@ const streamWithCacheFallback = async function* (
 			modelRequestFor(request, context),
 			context.headers,
 			maxOutputTokens,
-			fetchImpl
+			fetchImpl,
+			apiRoot
 		);
 	}
 };
 
 const streamGoogle = (
 	fetchImpl: GoogleFetch,
-	cacheManager: GoogleCachedContentResourceManager
+	cacheManager: GoogleCachedContentResourceManager,
+	apiRoot: string
 ) =>
 	async function* (
 		request: ProviderChatRequest,
@@ -343,7 +369,8 @@ const streamGoogle = (
 				request,
 				context,
 				selectedCache,
-				fetchImpl
+				fetchImpl,
+				apiRoot
 			);
 		} catch (error) {
 			if (context.signal?.aborted) {
@@ -359,6 +386,7 @@ export const createGoogleProvider = (
 ): GoogleProvider => {
 	const fetchImpl: GoogleFetch =
 		options.fetch ?? globalThis.fetch.bind(globalThis);
+	const apiRoot = googleApiRootFor(options.baseUrl);
 	const models: readonly ProviderModel[] =
 		options.models ??
 		googleProviderModels.map((model: ProviderModel) =>
@@ -405,6 +433,6 @@ export const createGoogleProvider = (
 				: null;
 		},
 		getChatHeaders: googleChatHeadersFor,
-		streamChat: streamGoogle(fetchImpl, cacheManager),
+		streamChat: streamGoogle(fetchImpl, cacheManager, apiRoot),
 	};
 };
