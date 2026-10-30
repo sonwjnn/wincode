@@ -55,7 +55,7 @@ import {
 import type {
 	SessionHost,
 	SessionHostOptions,
-	SessionOpeningCapabilities,
+	SessionStoreCapabilities,
 } from "./types";
 
 /**
@@ -210,7 +210,7 @@ const restoreSteeringMessages = (
  * is the surface's, and never reaches what the model is sent.
  */
 const openSession = async (
-	capabilities: SessionOpeningCapabilities,
+	capabilities: SessionStoreCapabilities,
 	sessionId: SessionHostOptions["sessionId"],
 	providerModel?: ProviderModelSelection
 ): Promise<OpenedSession> => {

@@ -54,7 +54,7 @@ export type SessionCapabilities = Readonly<{
 }>;
 
 /** The capabilities read while running one Agent Turn. */
-export type SessionTurnRunnerCapabilities = Pick<
+export type TurnRunnerCapabilities = Pick<
 	SessionCapabilities,
 	| "getCapabilityCeiling"
 	| "getConfig"
@@ -66,19 +66,19 @@ export type SessionTurnRunnerCapabilities = Pick<
 >;
 
 /** The trusted Plugin runtime read while validating a selected Plugin Provider. */
-export type SessionPluginProviderTrustCapabilities = Pick<
+export type PluginTrustCapabilities = Pick<
 	SessionCapabilities,
 	"getPluginRuntime"
 >;
 
 /** The Plugin runtime and factory needed to create and validate a ProviderCollection. */
-export type SessionProviderCollectionValidationCapabilities = Pick<
+export type ProviderCollectionCapabilities = Pick<
 	SessionCapabilities,
 	"createProviderCollection" | "getPluginRuntime"
 >;
 
 /** The capabilities used by Agent Session adapters and their composed turn runner. */
-export type AgentSessionAdaptersCapabilities = Pick<
+export type SessionAdapterCapabilities = Pick<
 	SessionCapabilities,
 	| "getCapabilityCeiling"
 	| "getCompactionModule"
@@ -92,10 +92,10 @@ export type AgentSessionAdaptersCapabilities = Pick<
 >;
 
 /** The durable store used to project a Session's initial state. */
-export type SessionOpeningCapabilities = Pick<SessionCapabilities, "getStore">;
+export type SessionStoreCapabilities = Pick<SessionCapabilities, "getStore">;
 
 /** The Session Host Manager's preflight dependencies for a Provider selection. */
-export type SessionHostManagerProviderSelectionCapabilities = Pick<
+export type HostManagerSelectionCapabilities = Pick<
 	SessionCapabilities,
 	"getPluginRuntime" | "getStore"
 >;

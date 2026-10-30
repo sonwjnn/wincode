@@ -11,13 +11,13 @@ import { resolveInvocableSummaryModel } from "../compaction/summary-generator";
 import { DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS } from "../compaction/types";
 import { resolveContextWindowTokens } from "../usage/context-window";
 import { assertPluginProviderSelectionOwner } from "./agent-session-turn-runner";
-import type { SessionPluginProviderTrustCapabilities } from "./types";
+import type { PluginTrustCapabilities } from "./types";
 
 /** Captures the trusted summary target without replacing conversation policy. */
 export const resolveCompactionSummaryRoute = async (
 	input: CompactSessionInput,
 	collection: ProviderCollection,
-	capabilities: SessionPluginProviderTrustCapabilities,
+	capabilities: PluginTrustCapabilities,
 	sessionId: SessionId
 ): Promise<CompactSessionInput> => {
 	const policy = input.settings.summary;

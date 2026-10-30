@@ -35,12 +35,12 @@ import {
 	createAgentSessionTurnRunner,
 } from "./agent-session-turn-runner";
 import { resolveCompactionSummaryRoute } from "./compaction-summary-route";
-import type { AgentSessionAdaptersCapabilities } from "./types";
+import type { SessionAdapterCapabilities } from "./types";
 
 /** The Host inputs consumed by the adapters and the turn runner they compose. */
 export type AgentSessionAdaptersOptions = Readonly<{
 	cacheWarming: SessionCacheWarming;
-	capabilities: AgentSessionAdaptersCapabilities;
+	capabilities: SessionAdapterCapabilities;
 	providerCollection: ProviderCollection;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
