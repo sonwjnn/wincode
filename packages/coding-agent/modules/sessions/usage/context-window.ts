@@ -2,6 +2,7 @@ import {
 	isPlainObject,
 	isPositiveSafeInteger,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
@@ -83,14 +84,12 @@ export const resolveContextWindowTokens = (
 		: DEFAULT_CONTEXT_WINDOW_TOKENS;
 	return {
 		invalid: !isUndefined(configured) && globalOverride === undefined,
-		...(globalOverride === undefined ? {} : { overrideTokens: globalOverride }),
-		...(modelOverride.tokens === undefined
-			? {}
-			: { modelOverrideTokens: modelOverride.tokens }),
+		...omitUndefined({
+			overrideTokens: globalOverride,
+			modelOverrideTokens: modelOverride.tokens,
+			modelOverridePath: modelOverride.path,
+		}),
 		modelOverrideInvalid: modelOverride.invalid,
-		...(modelOverride.path === undefined
-			? {}
-			: { modelOverridePath: modelOverride.path }),
 		tokens: modelOverride.tokens ?? globalOverride ?? modelLimit,
 	};
 };
