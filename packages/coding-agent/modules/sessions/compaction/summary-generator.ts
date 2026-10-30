@@ -11,14 +11,12 @@ import {
 	type ProviderModelSelection,
 	providerModelReasoningEffort,
 } from "@/modules/providers/provider-model-selection";
-import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../usage/context-window";
 import {
 	COMPACTION_SUMMARY_SYSTEM_PROMPT,
 	resolvePreparedSummaryRequest,
 	SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS,
 } from "./summary-prompt";
 import {
-	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	type SummaryGenerator,
 	type SummaryGeneratorInput,
@@ -151,16 +149,26 @@ const collectProviderSummary = async (
 };
 
 const providerSummaryGenerator =
-	(collection: ProviderCollection): SummaryGenerator =>
+	(
+		collection: ProviderCollection,
+		assertTrustedSelection?: (model: ProviderModelSelection) => void
+	): SummaryGenerator =>
 	async (input) => {
-		const model = await requireInvocableProviderModel(collection, input.model);
+		const model = await requireInvocableProviderModel(
+			collection,
+			input.target.model
+		);
 		const canEnforceOutputLimit = await collection.canEnforceMaxOutputTokens(
 			model.providerId,
 			model.modelId
 		);
 		const preparedRequest = resolvePreparedSummaryRequest(input);
-		const contextWindowTokens =
-			input.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+		const contextWindowTokens = input.target.contextWindowTokens;
+		if (!isPositiveSafeInteger(input.target.outputCeilingTokens)) {
+			throw new Error(
+				`Cannot verify the summary output ceiling for Provider Model ${model.providerId}/${model.modelId}: the resolved target limit is invalid.`
+			);
+		}
 		if (!isPositiveSafeInteger(contextWindowTokens)) {
 			throw new Error(
 				`Cannot verify that the summary request fits Provider Model ${model.providerId}/${model.modelId}: the configured context-window limit is invalid.`
@@ -175,30 +183,37 @@ const providerSummaryGenerator =
 				`The summary prompt is estimated at ${preparedRequest.estimatedInputTokens} tokens; only ${Math.max(0, contextOutputBudget)} output tokens remain in the effective Wincode context window of ${contextWindowTokens}, below the ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS}-token minimum.`
 			);
 		}
-		const maxOutputTokens = Math.floor(
-			Math.min(
-				Math.max(
-					1,
-					Math.floor(
-						input.maxOutputTokens ??
-							model.limits?.maxOutputTokens ??
-							DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS
-					)
-				),
-				model.limits?.maxOutputTokens ?? Number.MAX_SAFE_INTEGER,
-				contextOutputBudget
-			)
+		const targetOutputLimit = Math.floor(
+			Math.min(input.target.outputCeilingTokens, contextOutputBudget)
 		);
-		if (maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
+		if (targetOutputLimit < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS) {
 			throw new Error(
-				`The selected Provider Model can provide only ${maxOutputTokens} summary output tokens, below the minimum of ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} required for a viable handoff.`
+				`The selected Provider Model can provide only ${targetOutputLimit} summary output tokens, below the minimum of ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} required for a viable handoff.`
 			);
 		}
+		if (
+			!isPositiveSafeInteger(input.maxOutputTokens) ||
+			input.maxOutputTokens < MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS
+		) {
+			throw new Error(
+				`The planned summary request must allow at least ${MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS} output tokens.`
+			);
+		}
+		if (input.maxOutputTokens > targetOutputLimit) {
+			throw new Error(
+				`The planned summary output allowance of ${input.maxOutputTokens} tokens exceeds the resolved target or request context limit of ${targetOutputLimit} tokens.`
+			);
+		}
+		// Revalidate after asynchronous availability/capability checks, immediately
+		// before dispatch can hand control to a changed Plugin registration.
+		assertTrustedSelection?.(input.target.model);
 		const events = collection.chat({
 			// Subscription routes may reject output caps. Omit unsupported caps and
 			// let the caller require explicit completion before accepting the handoff.
 			...omitUndefined({
-				maxOutputTokens: canEnforceOutputLimit ? maxOutputTokens : undefined,
+				maxOutputTokens: canEnforceOutputLimit
+					? input.maxOutputTokens
+					: undefined,
 			}),
 			messages: [
 				{
@@ -211,7 +226,7 @@ const providerSummaryGenerator =
 			...omitUndefined({
 				reasoningEffort: providerModelReasoningEffort(
 					model,
-					input.thinkingLevel
+					input.target.thinkingLevel
 				),
 				signal: input.signal,
 			}),
@@ -219,7 +234,7 @@ const providerSummaryGenerator =
 		});
 		return collectProviderSummary(
 			events,
-			input.model,
+			input.target.model,
 			input.signal,
 			input.reportUsage
 		);
@@ -229,10 +244,5 @@ const providerSummaryGenerator =
 export const createProviderSummaryGenerator = (
 	collection: ProviderCollection,
 	assertTrustedSelection?: (model: ProviderModelSelection) => void
-): SummaryGenerator => {
-	const generateSummary = providerSummaryGenerator(collection);
-	return (input) => {
-		assertTrustedSelection?.(input.model);
-		return generateSummary(input);
-	};
-};
+): SummaryGenerator =>
+	providerSummaryGenerator(collection, assertTrustedSelection);

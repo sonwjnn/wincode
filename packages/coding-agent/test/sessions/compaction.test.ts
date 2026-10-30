@@ -11,16 +11,19 @@ import {
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import {
-	createSessionCompaction,
+	type CompactSessionInput,
+	createSessionCompaction as createSessionCompactionEngine,
 	rebuildActiveMessages,
 	serializeMessagesForCompaction,
 } from "@/modules/sessions/compaction/compaction";
 import { estimateCompactionTokens } from "@/modules/sessions/compaction/config";
 import type { SessionCompactionError } from "@/modules/sessions/compaction/error";
 import { createProviderSummaryGenerator } from "@/modules/sessions/compaction/summary-generator";
-import type {
-	SessionCompaction,
-	SummaryGeneratorInput,
+import {
+	type CompactionSummaryTarget,
+	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
+	type SessionCompaction,
+	type SummaryGeneratorInput,
 } from "@/modules/sessions/compaction/types";
 import {
 	type AgentSessionAdaptersOptions,
@@ -49,6 +52,22 @@ import {
 const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
+};
+const engineTestTarget: CompactionSummaryTarget = Object.freeze({
+	model,
+	contextWindowTokens: 272_000,
+	outputCeilingTokens: DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
+});
+const createSessionCompaction = (
+	dependencies: Parameters<typeof createSessionCompactionEngine>[0],
+	target: CompactionSummaryTarget = engineTestTarget
+) => {
+	const engine = createSessionCompactionEngine(dependencies);
+	return {
+		...engine,
+		compact: (input: Omit<CompactSessionInput, "summaryTarget">) =>
+			engine.compact({ ...input, summaryTarget: target }),
+	};
 };
 test("rejects a skill tool part without a Tool Call Identifier", () => {
 	expect(() =>
@@ -162,7 +181,7 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 	expect(summaryGenerator).toHaveBeenCalledWith(
 		expect.objectContaining({
 			focus: "preserve the migration decision",
-			model,
+			target: engineTestTarget,
 		})
 	);
 });
@@ -748,7 +767,6 @@ test("summary output is capped by 80% of the reserve even when more context room
 			keepRecentTokens: 20,
 			modelContextLimit: 2000,
 			reserveTokens: 800,
-			summaryMaxOutputTokens: 4096,
 			thresholdTokens: null,
 		},
 		trigger: "manual",
@@ -790,7 +808,6 @@ test("limits summary size by the rebuilt conversation's real request overhead an
 			keepRecentTokens: 20,
 			modelContextLimit: 8192,
 			reserveTokens: 1024,
-			summaryMaxOutputTokens: 4096,
 			thresholdTokens: null,
 		},
 		trigger: "manual",
@@ -802,7 +819,10 @@ test("limits summary size by the rebuilt conversation's real request overhead an
 test("rejects an escaped summary request before generation or persistence", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "summary" }));
-	const compaction = createSessionCompaction({ store, summaryGenerator });
+	const compaction = createSessionCompaction(
+		{ store, summaryGenerator },
+		{ ...engineTestTarget, contextWindowTokens: 8192 }
+	);
 
 	await expect(
 		compaction.compact({
@@ -833,7 +853,14 @@ test("rejects an escaped summary request before generation or persistence", asyn
 test("does not chain an oversized history into partial summary requests", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "partial handoff" }));
-	const compaction = createSessionCompaction({ store, summaryGenerator });
+	const compaction = createSessionCompaction(
+		{ store, summaryGenerator },
+		{
+			...engineTestTarget,
+			contextWindowTokens: 10_000,
+			outputCeilingTokens: 1024,
+		}
+	);
 	const messages = Array.from({ length: 32 }, (_, index) => [
 		message(
 			`summary-limit-user-${index}`,
@@ -854,11 +881,7 @@ test("does not chain an oversized history into partial summary requests", async 
 				sessionId: sessionId("session-summary-request-does-not-fit"),
 			},
 			model,
-			settings: {
-				...settings,
-				summaryContextLimit: 10_000,
-				summaryMaxOutputTokens: 1024,
-			},
+			settings,
 			trigger: "manual",
 		})
 	).rejects.toMatchObject({ code: "context-still-too-large" });
@@ -874,7 +897,14 @@ test("sends the complete eligible history in one request when it fits the summar
 		summaryInputs.push(input);
 		return { text: "single complete handoff" };
 	});
-	const compaction = createSessionCompaction({ store, summaryGenerator });
+	const compaction = createSessionCompaction(
+		{ store, summaryGenerator },
+		{
+			...engineTestTarget,
+			contextWindowTokens: 1_000_000,
+			outputCeilingTokens: 4096,
+		}
+	);
 	const largeTurn = (index: number) => [
 		message(
 			`summary-input-user-${index}`,
@@ -900,8 +930,6 @@ test("sends the complete eligible history in one request when it fits the summar
 			...settings,
 			keepRecentTokens: 1,
 			modelContextLimit: 1_000_000,
-			summaryContextLimit: 1_000_000,
-			summaryMaxOutputTokens: 4096,
 		},
 		trigger: "manual",
 	});
@@ -1024,7 +1052,7 @@ test("repeated compaction passes the prior summary and only the new compacted sp
 		expect.objectContaining({
 			previousSummary: expect.objectContaining({ text: "new summary" }),
 			serializedMessages: expect.stringContaining("message id=u2"),
-			model,
+			target: engineTestTarget,
 		})
 	);
 });
@@ -1033,7 +1061,10 @@ test("accepts a completed summary above its planned output budget when it reduce
 	const store = makeStore();
 	const summaryText = "x".repeat(1200);
 	const summaryGenerator = mock(async () => ({ text: summaryText }));
-	const compaction = createSessionCompaction({ store, summaryGenerator });
+	const compaction = createSessionCompaction(
+		{ store, summaryGenerator },
+		{ ...engineTestTarget, outputCeilingTokens: 256 }
+	);
 
 	const result = await compaction.compact({
 		session: {
@@ -1047,7 +1078,6 @@ test("accepts a completed summary above its planned output budget when it reduce
 		},
 		model,
 		settings: {
-			summaryMaxOutputTokens: 256,
 			enabled: true,
 			keepRecentTokens: 100,
 			modelContextLimit: 8192,
@@ -1270,11 +1300,22 @@ test("persists a completed Provider summary that exceeds its planned output budg
 	const collection = createProviderCollection();
 	collection.register(provider);
 	await collection.setCredential("fixture", { token: "fixture-only" });
-	const compaction = createSessionCompaction({
-		store,
-		summaryGenerator: createProviderSummaryGenerator(collection),
-		estimateTokens: (messages) => messages.length,
-	});
+	const compaction = createSessionCompaction(
+		{
+			store,
+			summaryGenerator: createProviderSummaryGenerator(collection),
+			estimateTokens: (messages) => messages.length,
+		},
+		{
+			...engineTestTarget,
+			model: {
+				modelId: modelId(providerModel.modelId),
+				providerId: providerModel.providerId,
+			},
+			contextWindowTokens: 65_536,
+			outputCeilingTokens: 256,
+		}
+	);
 
 	try {
 		const result = await compaction.compact({
@@ -1291,7 +1332,7 @@ test("persists a completed Provider summary that exceeds its planned output budg
 				modelId: modelId(providerModel.modelId),
 				providerId: providerModel.providerId,
 			},
-			settings: { ...settings, summaryMaxOutputTokens: 256 },
+			settings,
 			trigger: "manual",
 		});
 
@@ -1330,11 +1371,22 @@ test("an output-limited Provider summary never becomes durable handoff context",
 	const collection = createProviderCollection();
 	collection.register(provider);
 	await collection.setCredential("fixture", { token: "fixture-only" });
-	const compaction = createSessionCompaction({
-		store,
-		summaryGenerator: createProviderSummaryGenerator(collection),
-		estimateTokens: (messages) => messages.length,
-	});
+	const compaction = createSessionCompaction(
+		{
+			store,
+			summaryGenerator: createProviderSummaryGenerator(collection),
+			estimateTokens: (messages) => messages.length,
+		},
+		{
+			...engineTestTarget,
+			model: {
+				modelId: modelId(providerModel.modelId),
+				providerId: providerModel.providerId,
+			},
+			contextWindowTokens: 8192,
+			outputCeilingTokens: 512,
+		}
+	);
 
 	try {
 		await expect(
@@ -1992,7 +2044,6 @@ test("summarizes split-turn history and unfinished prefix in separate requests",
 		settings: {
 			...settings,
 			keepRecentTokens: 2,
-			summaryMaxOutputTokens: 1024,
 		},
 		trigger: "manual",
 	});

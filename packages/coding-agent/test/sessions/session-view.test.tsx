@@ -79,7 +79,7 @@ import type {
 } from "@/modules/sessions/agent-session/types";
 import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import * as useAgentSessionModule from "@/modules/sessions/hooks/use-agent-session";
-import { assertPluginProviderSelectionOwner } from "@/modules/sessions/host/agent-session-turn-runner";
+import { assertPluginProviderSelectionOwner } from "@/modules/sessions/host/provider-selection-ownership";
 import type {
 	SessionCapabilities,
 	SessionHost,

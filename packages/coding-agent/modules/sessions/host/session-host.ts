@@ -48,10 +48,8 @@ import {
 	type SessionUsageLedger,
 } from "../usage/session-usage-ledger";
 import { createAgentSessionAdapters } from "./agent-session-adapters";
-import {
-	assertPluginProviderRegistrationSnapshot,
-	assertPluginProviderSelectionOwner,
-} from "./agent-session-turn-runner";
+import { assertPluginProviderRegistrationSnapshot } from "./agent-session-turn-runner";
+import { assertPluginProviderSelectionOwner } from "./provider-selection-ownership";
 import type {
 	SessionHost,
 	SessionHostOptions,
