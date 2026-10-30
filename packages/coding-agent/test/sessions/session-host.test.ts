@@ -85,16 +85,14 @@ import type { SessionSdkPluginProviderSource } from "@/modules/sessions/plugin-p
 import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import { createSessionSdkOperations } from "@/modules/sessions/sdk";
 import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
-import {
-	buildUserSessionRecord,
-	projectSessionRecords,
-} from "@/modules/sessions/storage/session-record";
+import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
 	SessionInUseError,
 	type SessionWriterLock,
 } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
+import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
 import { estimateSessionContextTokens } from "@/modules/sessions/usage/context-usage";
 import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import { summarizeSessionUsage } from "@/modules/sessions/usage/session-usage";

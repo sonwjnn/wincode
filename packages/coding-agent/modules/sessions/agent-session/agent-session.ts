@@ -19,8 +19,8 @@ import {
 	type SessionMessage,
 	type SessionToolPart,
 } from "../message";
-import { projectSessionRecords } from "../storage/session-record";
 import type { SessionSendInput } from "../submission-types";
+import { projectSessionRecords } from "../transcript-projection";
 import { createExecutionRegistry } from "./execution-registry";
 import {
 	createSessionInputLaneWorkflow,

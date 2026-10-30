@@ -46,12 +46,12 @@ import {
 	restoreSelection,
 } from "@/modules/sessions/selection";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
-import { projectSessionRecords } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
 	SessionInUseError,
 	type SessionWriterLockOwner,
 } from "@/modules/sessions/storage/session-writer-lock";
+import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";

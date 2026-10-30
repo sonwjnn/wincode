@@ -46,14 +46,12 @@ import {
 	createMemoryAttachmentMetadataRepository,
 	createSessionAttachmentStore,
 } from "@/modules/sessions/storage/attachment-store";
-import {
-	buildUserSessionRecord,
-	projectSessionRecords,
-} from "@/modules/sessions/storage/session-record";
+import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type {
 	SessionSendInput,
 	SessionSubmissionComposition,
 } from "@/modules/sessions/submission-types";
+import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
 import {
 	readLoggerRecords,
 	withDebugProject,

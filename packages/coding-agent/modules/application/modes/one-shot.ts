@@ -44,8 +44,8 @@ import {
 	type ResolvedSessionSelection,
 	restoreSelection,
 } from "../../../modules/sessions/selection";
-import { projectSessionMessageRecords } from "../../../modules/sessions/storage/session-record";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
+import { projectSessionMessageRecords } from "../../../modules/sessions/transcript-projection";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
 import { openApplicationSessionServices } from "../plugin-composition";
 import { projectAgentEvent } from "../rpc/projection";

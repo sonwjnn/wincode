@@ -73,9 +73,9 @@ import {
 	type SessionSdkSelectionDefaults,
 	sessionSelectionDefaults,
 } from "@/modules/sessions/selection";
-import { projectSessionMessageRecords } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
+import { projectSessionMessageRecords } from "@/modules/sessions/transcript-projection";
 import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { type SessionId, toSessionId } from "@/shared/identifiers";

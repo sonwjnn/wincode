@@ -29,9 +29,9 @@ import {
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
 	getSessionRecordValidationError,
-	projectSessionRecords,
 	toDurableSessionMessageRecord,
 } from "@/modules/sessions/storage/session-record";
+import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
 import { buildAssistantFailureSessionRecord } from "@/modules/sessions/turn-records";
 import { estimateSessionContextTokens } from "@/modules/sessions/usage/context-usage";
 import { summarizeSessionUsage } from "@/modules/sessions/usage/session-usage";
