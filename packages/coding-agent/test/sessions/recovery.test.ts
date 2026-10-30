@@ -180,6 +180,90 @@ test("restarts expose prepared transactions and reconcile with expected versions
 	}
 });
 
+test("delete and reset preserve unresolved recovery and keep its paths blocked after restart", async () => {
+	const root = await fs.mkdtemp(
+		path.join(process.cwd(), ".wincode-recovery-session-lifecycle-")
+	);
+	const databasePath = path.join(root, "sessions.sqlite");
+	const filePath = path.join(root, "note.txt");
+	let activeDatabase: OpenedStore["database"] | undefined;
+	try {
+		const originalBytes = new TextEncoder().encode("original\n");
+		const changedBytes = new TextEncoder().encode("changed\n");
+		await Bun.write(filePath, originalBytes);
+		const opened = openStore(root, databasePath);
+		activeDatabase = opened.database;
+		const { id: sessionId } = await createSession(opened.store);
+		const recovery = observationStoreFor(opened.store).recovery;
+		if (recovery === undefined) {
+			throw new Error("The session store has no recovery store.");
+		}
+		const transaction = await recovery.beginTransaction({
+			originSessionId: sessionId,
+			paths: [
+				{
+					canonicalPath: filePath,
+					displayPath: filePath,
+					newFileVersion: computeFileVersion(changedBytes),
+					originalBytes,
+					originalFileVersion: computeFileVersion(originalBytes),
+				},
+			],
+		});
+		await Bun.write(filePath, changedBytes);
+		await recovery.createUnresolvedRecovery({
+			reason: "A write outcome could not be confirmed.",
+			transactionId: transaction.id,
+			unresolvedPaths: [filePath],
+		});
+
+		await expect(opened.store.deleteSession(sessionId)).rejects.toMatchObject({
+			code: "session-recovery-required",
+		});
+		await expect(opened.store.resetSessionData()).rejects.toThrow(
+			"Reset is blocked until every workspace recovery is reconciled or discarded."
+		);
+
+		activeDatabase.sqlite.close();
+		activeDatabase = undefined;
+		const reopened = openStore(root, databasePath);
+		activeDatabase = reopened.database;
+		const restartedStore = observationStoreFor(reopened.store);
+		const unresolved =
+			await restartedStore.recovery?.listUnresolvedRecoveries();
+		const recoveryId = unresolved?.[0]?.id;
+		if (recoveryId === undefined) {
+			throw new Error("Session lifecycle operations lost unresolved recovery.");
+		}
+		expect(unresolved).toHaveLength(1);
+		const inspection =
+			await restartedStore.recovery?.getRecoveryInspection(recoveryId);
+		expect(inspection?.artifact.paths[0]?.originalBytes).toEqual(originalBytes);
+
+		await expect(
+			runWriteTool(
+				{
+					content: "blocked\n",
+					expectedVersion: computeFileVersion(changedBytes),
+					path: filePath,
+				},
+				{
+					resourceLimits: getToolResourceLimits(),
+					versionedEditing: {
+						editMode: "hashline",
+						sessionId,
+						store: restartedStore,
+					},
+				}
+			)
+		).rejects.toMatchObject({ code: "unresolved-recovery" });
+		expect(await Bun.file(filePath).text()).toBe("changed\n");
+	} finally {
+		activeDatabase?.sqlite.close();
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
 test("restore-original removes files that did not exist before the transaction", async () => {
 	const root = await fs.mkdtemp(
 		path.join(process.cwd(), ".wincode-recovery-create-")

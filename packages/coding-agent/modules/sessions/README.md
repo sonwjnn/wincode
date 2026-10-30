@@ -197,6 +197,14 @@ The durable pending/failed processing status of committed Steering
 Messages is reconciled from history so accepted-but-unread input continues
 with the same message identity and without duplication.
 
+The Session history row does not own workspace binding. `local_session_binding`
+keys local operational data by Session ID and workspace without copying title,
+selection, or transcript. File Observations, diff artifacts, and recovery
+origins refer to this local identity, so replacing a history row alone cannot
+cascade-delete recovery data. Session delete/reset explicitly checks unresolved
+recovery before removing local bindings. Prompt history remains global, and
+attachment ownership is unchanged.
+
 TODO(issue-86): define richer durable interrupted-turn metadata only with an
 explicit resume/retry contract. Until then, interrupted output is represented
 by the safe assistant outcome and retry remains explicit.
@@ -212,21 +220,23 @@ replays them.
 - `drizzle-session-store.ts` — Drizzle SQLite implementation.
 - `session-record.ts` — record validation and CLI presentation projection.
 - `attachment-store.ts` — image blob storage, integrity-checked hydration, compaction projection, and garbage collection.
-- `schema.ts` — SQLite schema and durable Session Record/compaction/attachment tables.
+- `schema.ts` — SQLite schema for Session history, local Session bindings, operational recovery, and attachments.
 - `path.ts` — platform-specific local database and attachment paths.
 - `client.ts` — SQLite connection, pragmas, and current-schema initialization.
 
 The database initializes the current `schema.ts` definition on open with
-idempotent `CREATE TABLE IF NOT EXISTS` statements. There is no migration
-directory or migration history.
+idempotent `CREATE TABLE IF NOT EXISTS` statements. Existing workspace bindings
+are reconciled into `local_session_binding` before the store opens. There is no
+migration directory or migration history.
 
 ## Solo-dev persistence rule
 
 Wincode is maintained by one developer, so schema changes are direct and
 reset-oriented. Run `bun run --cwd packages/coding-agent db:push` after changing
-`schema.ts`; if Drizzle cannot reconcile the change safely, remove the local
-database and attachment directory before restarting Wincode. Keep the
-initialization SQL in `client.ts` synchronized with the Drizzle schema.
+`schema.ts`. Keep the initialization SQL in `client.ts` synchronized with the
+Drizzle schema. Do not remove the local database, snapshots, or attachment data
+to get past a schema error while Unresolved Recovery exists; the Session reset
+guard must be allowed to preserve its recovery bytes and path blocks.
 
 The reset command only clears session data and is not a schema reset:
 

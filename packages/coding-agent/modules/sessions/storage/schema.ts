@@ -39,10 +39,6 @@ export const session = sqliteTable(
 	"session",
 	{
 		id: text("id").primaryKey(),
-		workspaceId: text("workspace_id").references(() => sessionWorkspace.id, {
-			onDelete: "set null",
-			onUpdate: "cascade",
-		}),
 		title: text("title"),
 		pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
@@ -62,6 +58,24 @@ export const session = sqliteTable(
 		index("idx_session_updated").on(table.updatedAt),
 	]
 );
+
+/** Local operational identity; deliberately independent of Session history rows. */
+export const localSessionBinding = sqliteTable(
+	"local_session_binding",
+	{
+		sessionId: text("session_id").primaryKey(),
+		workspaceId: text("workspace_id")
+			.notNull()
+			.references(() => sessionWorkspace.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+	},
+	(table) => [
+		index("idx_local_session_binding_workspace").on(table.workspaceId),
+	]
+);
+
 export const fileSnapshot = sqliteTable(
 	"file_snapshot",
 	{
@@ -84,7 +98,7 @@ export const fileObservation = sqliteTable(
 		id: text("id").primaryKey(),
 		sessionId: text("session_id")
 			.notNull()
-			.references(() => session.id, {
+			.references(() => localSessionBinding.sessionId, {
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
@@ -116,7 +130,7 @@ export const fullDiffArtifact = sqliteTable(
 		id: text("id").primaryKey(),
 		sessionId: text("session_id")
 			.notNull()
-			.references(() => session.id, {
+			.references(() => localSessionBinding.sessionId, {
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
@@ -152,10 +166,10 @@ export const fileTransaction = sqliteTable(
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
-		originSessionId: text("origin_session_id").references(() => session.id, {
-			onDelete: "set null",
-			onUpdate: "cascade",
-		}),
+		originSessionId: text("origin_session_id").references(
+			() => localSessionBinding.sessionId,
+			{ onDelete: "set null", onUpdate: "cascade" }
+		),
 		status: text("status").notNull(),
 		reason: text("reason"),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
@@ -209,10 +223,10 @@ export const recoveryArtifact = sqliteTable(
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
-		originSessionId: text("origin_session_id").references(() => session.id, {
-			onDelete: "set null",
-			onUpdate: "cascade",
-		}),
+		originSessionId: text("origin_session_id").references(
+			() => localSessionBinding.sessionId,
+			{ onDelete: "set null", onUpdate: "cascade" }
+		),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		pinned: integer("pinned", { mode: "boolean" }).notNull().default(true),
 	},
@@ -272,16 +286,16 @@ export const unresolvedRecovery = sqliteTable(
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
-		originSessionId: text("origin_session_id").references(() => session.id, {
-			onDelete: "set null",
-			onUpdate: "cascade",
-		}),
+		originSessionId: text("origin_session_id").references(
+			() => localSessionBinding.sessionId,
+			{ onDelete: "set null", onUpdate: "cascade" }
+		),
 		status: text("status").notNull(),
 		reason: text("reason").notNull(),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		resolvedAt: integer("resolved_at", { mode: "timestamp_ms" }),
 		reconciledBySessionId: text("reconciled_by_session_id").references(
-			() => session.id,
+			() => localSessionBinding.sessionId,
 			{ onDelete: "set null", onUpdate: "cascade" }
 		),
 	},
@@ -436,6 +450,7 @@ export const sessionSchema = {
 	recoveryArtifact,
 	recoveryArtifactPath,
 	sessionAttachment,
+	localSessionBinding,
 	sessionCompaction,
 	sessionRecord,
 	sessionUsageEntry,

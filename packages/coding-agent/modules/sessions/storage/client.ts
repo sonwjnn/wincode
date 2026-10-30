@@ -97,8 +97,6 @@ const initializeSchema = (
 
 		CREATE TABLE IF NOT EXISTS session (
 			id TEXT PRIMARY KEY NOT NULL,
-			workspace_id TEXT REFERENCES session_workspace(id)
-				ON UPDATE CASCADE ON DELETE SET NULL,
 			title TEXT,
 			pinned INTEGER DEFAULT 0 NOT NULL,
 			created_at INTEGER NOT NULL,
@@ -109,6 +107,14 @@ const initializeSchema = (
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS local_session_binding (
+			session_id TEXT PRIMARY KEY NOT NULL,
+			workspace_id TEXT NOT NULL REFERENCES session_workspace(id)
+				ON UPDATE CASCADE ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_local_session_binding_workspace
+			ON local_session_binding (workspace_id);
 
 		CREATE TABLE IF NOT EXISTS file_snapshot (
 			path TEXT NOT NULL,
@@ -125,7 +131,7 @@ const initializeSchema = (
 
 		CREATE TABLE IF NOT EXISTS file_observation (
 			id TEXT PRIMARY KEY NOT NULL,
-			session_id TEXT NOT NULL REFERENCES session(id)
+			session_id TEXT NOT NULL REFERENCES local_session_binding(session_id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
 			path TEXT NOT NULL,
 			file_version TEXT NOT NULL,
@@ -136,7 +142,7 @@ const initializeSchema = (
 		);
 		CREATE TABLE IF NOT EXISTS full_diff_artifact (
 			id TEXT PRIMARY KEY NOT NULL,
-			session_id TEXT NOT NULL REFERENCES session(id)
+			session_id TEXT NOT NULL REFERENCES local_session_binding(session_id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
 			byte_length INTEGER NOT NULL,
 			content TEXT NOT NULL,
@@ -160,7 +166,7 @@ const initializeSchema = (
 			id TEXT PRIMARY KEY NOT NULL,
 			workspace_id TEXT NOT NULL REFERENCES session_workspace(id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
-			origin_session_id TEXT REFERENCES session(id)
+			origin_session_id TEXT REFERENCES local_session_binding(session_id)
 				ON UPDATE CASCADE ON DELETE SET NULL,
 			status TEXT NOT NULL,
 			reason TEXT,
@@ -192,7 +198,7 @@ const initializeSchema = (
 				ON UPDATE CASCADE ON DELETE RESTRICT,
 			workspace_id TEXT NOT NULL REFERENCES session_workspace(id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
-			origin_session_id TEXT REFERENCES session(id)
+			origin_session_id TEXT REFERENCES local_session_binding(session_id)
 				ON UPDATE CASCADE ON DELETE SET NULL,
 			created_at INTEGER NOT NULL,
 			pinned INTEGER DEFAULT 1 NOT NULL
@@ -224,13 +230,13 @@ const initializeSchema = (
 				ON UPDATE CASCADE ON DELETE RESTRICT,
 			workspace_id TEXT NOT NULL REFERENCES session_workspace(id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
-			origin_session_id TEXT REFERENCES session(id)
+			origin_session_id TEXT REFERENCES local_session_binding(session_id)
 				ON UPDATE CASCADE ON DELETE SET NULL,
 			status TEXT NOT NULL,
 			reason TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
 			resolved_at INTEGER,
-			reconciled_by_session_id TEXT REFERENCES session(id)
+			reconciled_by_session_id TEXT REFERENCES local_session_binding(session_id)
 				ON UPDATE CASCADE ON DELETE SET NULL
 		);
 
@@ -312,6 +318,12 @@ const initializeSchema = (
 		CREATE INDEX IF NOT EXISTS idx_session_usage_entry_session_created
 			ON session_usage_entry (session_id, created_at);
 	`);
+	if (columnNames(sqlite, "session").has("workspace_id")) {
+		sqlite.exec(`
+			INSERT OR IGNORE INTO local_session_binding (session_id, workspace_id)
+			SELECT id, workspace_id FROM session WHERE workspace_id IS NOT NULL;
+		`);
+	}
 	if (
 		!(
 			allowIncompatibleSessionSchema ||
