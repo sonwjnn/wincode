@@ -3,6 +3,7 @@ export * from "./model-output-limit.ts";
 export * from "./model-usage.ts";
 export * from "./sdk.ts";
 export * from "./sdk-providers/anthropic.ts";
+export * from "./sdk-providers/configured.ts";
 export * from "./sdk-providers/deepseek.ts";
 export * from "./sdk-providers/faux.ts";
 export * from "./sdk-providers/google.ts";

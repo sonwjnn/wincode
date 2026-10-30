@@ -1,161 +1,17 @@
-// Combines manifest-declared Provider Models with exact models.dev facts and
-// manual overlays. Fetching and file generation live in sync-provider-model-catalog.ts.
+// Combines manifest-declared Provider Models with upstream metadata facts.
+// Family overlays and Wincode policies are applied as distinct catalog stages.
 
 import type { ModelMetadataEntry } from "../src/model-metadata";
 import { metadataForModel } from "../src/models-dev";
 import { modelsDevBlocksFromPayload } from "../src/models-dev-payload";
 import { withProviderModelMetadata } from "../src/provider-model-metadata.ts";
 import type { ProviderModel } from "../src/sdk.ts";
-
-// Anthropic documents explicit prompt caching for all active Claude models
-// on the Claude API, with 5-minute and 1-hour retention. The OpenCode Go models
-// are intentionally absent because their provider-specific cache capabilities
-// are not published by Anthropic. Source:
-// https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-const ANTHROPIC_EXPLICIT_PROMPT_CACHE = {
-	explicit: { retentionTiers: ["short", "long"] },
-} as const;
-
-// Gemini's Generate Content caching guide demonstrates CachedContent with
-// Gemini 3.8 Flash and a 300-second TTL, and documents the one-hour default.
-// Keep 3.6/3.7 and other TTLs absent until Google's Gemini API docs support them.
-// https://ai.google.dev/gemini-api/docs/generate-content/caching
-const GOOGLE_CACHED_CONTENT_PROMPT_CACHE = {
-	explicit: { retentionTiers: ["short", "long"] },
-	googleCachedContent: { ttl: { short: "300s", long: "3600s" } },
-} as const;
-
-// OpenAI's Responses API documents explicit breakpoints, 30-minute TTL, a
-// 1,024 visible-token minimum, and optional accounting keys for GPT-5.6 and
-// later. Do not apply this overlay to OpenCode Go: its proxy route's support
-// for these controls is not documented by OpenAI.
-const OPENAI_RESPONSES_PROMPT_CACHE = {
-	explicit: { retentionTiers: ["short"] },
-	protocols: {
-		"openai-responses": {
-			breakpoints: true,
-			eligibility: { minimumInputTokens: 1024 },
-			promptCacheKey: true,
-			retention: {
-				field: "prompt_cache_options.ttl",
-				values: { short: "30m" },
-			},
-		},
-	},
-} as const;
-
-/** Facts models.dev does not publish; these never add Provider Model identities. */
-export const MANUAL_OVERLAYS: Readonly<Record<string, ModelMetadataEntry>> = {
-	"anthropic/claude-opus-5.5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
-	"anthropic/claude-opus-4-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
-	"anthropic/claude-opus-4-5-20251101": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-	},
-	"anthropic/claude-opus-4-7": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
-	"anthropic/claude-sonnet-5": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
-	"anthropic/claude-opus-4-8": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
-	"anthropic/claude-fable-5": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-		thinking: { levelMap: { off: null } },
-	},
-	"anthropic/claude-fable-5-1": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-		thinking: { levelMap: { off: null } },
-	},
-	"anthropic/claude-opus-5": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-		thinking: { levelMap: { off: null } },
-	},
-	"anthropic/claude-opus-4-6": { promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE },
-	"anthropic/claude-sonnet-4-6": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-	},
-	"anthropic/claude-haiku-4-5": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-	},
-	"anthropic/claude-haiku-4-5-20251001": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-	},
-	"anthropic/claude-sonnet-4-5": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-	},
-	"anthropic/claude-sonnet-4-5-20250929": {
-		promptCache: ANTHROPIC_EXPLICIT_PROMPT_CACHE,
-	},
-	"google/gemini-3-pro-preview": {
-		thinking: { levels: ["low", "high"] },
-	},
-	"google/gemini-3.6-flash": { thinking: { levelMap: { off: null } } },
-	"google/gemini-3.7-flash": { thinking: { levelMap: { off: null } } },
-	"google/gemini-3.8-flash": {
-		promptCache: GOOGLE_CACHED_CONTENT_PROMPT_CACHE,
-		thinking: { levelMap: { off: null } },
-	},
-	"openai/gpt-5.6": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-5.6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-5.6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-5.6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-6-sol": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-6.1-sol": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		thinking: { levelMap: { off: null } },
-	},
-	"openai/gpt-6-luna": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-6-terra": { promptCache: OPENAI_RESPONSES_PROMPT_CACHE },
-	"openai/gpt-6-astra": {
-		promptCache: OPENAI_RESPONSES_PROMPT_CACHE,
-		thinking: { levelMap: { off: null } },
-	},
-	// Keep the last published models.dev facts while the manifest still declares this model.
-	"opencode-go/grok-4.6": {
-		cost: { input: 2, output: 6, cacheRead: 0.5 },
-		limits: { context: 500_000, output: 500_000 },
-		thinking: {
-			levels: ["low", "medium", "high", "xhigh"],
-			levelMap: { off: null },
-		},
-		tiers: [
-			{
-				inputTokensAbove: 200_000,
-				input: 4,
-				output: 12,
-				cacheRead: 1,
-			},
-		],
-	},
-	"opencode-go/gpt-5.6-luna": { thinking: { levelMap: { off: null } } },
-	"opencode-go/glm-5.3-flash": { thinking: { levelMap: { off: null } } },
-	"opencode-go/glm-5.3": { thinking: { levelMap: { off: null } } },
-	"opencode-go/glm-5.2": { thinking: { levelMap: { off: null } } },
-	"opencode-go/kimi-k3": { thinking: { levelMap: { off: null } } },
-	"opencode-go/muse-spark-1.3-contributor": {
-		thinking: { levelMap: { off: null } },
-	},
-	"opencode-go/muse-spark-1.2-contributor": {
-		thinking: { levelMap: { off: null } },
-	},
-	"opencode-go/deepseek-v4.1-flash": {
-		thinking: { levelMap: { off: null } },
-	},
-	"opencode-go/deepseek-v4-flash": {
-		thinking: {
-			levels: ["low", "high", "max"],
-			levelMap: { minimal: null, medium: null, xhigh: null },
-		},
-	},
-	"opencode-go/deepseek-v4-flash-vision-exp": {
-		thinking: {
-			levels: ["low", "high", "max"],
-			levelMap: { minimal: null, medium: null, xhigh: null },
-		},
-	},
-	"opencode-go/kimi-k2.7-code": { thinking: { toggle: true } },
-	"opencode-go/minimax-m2.7": { thinking: { toggle: true } },
-	"opencode-go/mimo-v2.5": { thinking: { toggle: true } },
-	"opencode-go/mimo-v2.5-pro": { thinking: { toggle: true } },
-};
+import type { ProviderModelFamilyId } from "./model-families/types.ts";
+import { applyWincodeContextWindowPolicy } from "./model-policies/context-window.ts";
 
 export type BuildInput = Readonly<{
+	/** Exact-identity classifications used only by Wincode's catalog policies. */
+	modelFamilies: ReadonlyMap<string, ProviderModelFamilyId>;
 	overlays: Readonly<Record<string, ModelMetadataEntry>>;
 	payload: unknown;
 	providerModels: readonly ProviderModel[];
@@ -252,7 +108,10 @@ export const buildProviderModelsWithMetadata = (
 		}
 		const metadata = mergeModelMetadata(upstreamMetadata, overlay);
 		entries[key] = metadata;
-		return withProviderModelMetadata(model, metadata);
+		return applyWincodeContextWindowPolicy(
+			withProviderModelMetadata(model, metadata),
+			input.modelFamilies.get(key)
+		);
 	});
 
 	return {

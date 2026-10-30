@@ -1,13 +1,13 @@
 import type { OpenAIBrowserLoginOptions, OpenAIProvider } from "@wincode/ai";
 import {
 	type CredentialStore,
-	type CredentialStoreOptions,
 	createProviderCollection,
 	type ModelStore,
 	type Provider,
 	type ProviderCollection,
 	type ProviderModel,
 } from "@wincode/ai";
+import { logger } from "@wincode/utils";
 import type {
 	PluginProviderDescriptor,
 	PluginRuntime,
@@ -19,6 +19,10 @@ import {
 	OPENAI_PROVIDER_ID,
 } from "@/modules/providers/built-in-provider-catalog";
 import type { PluginProviderComposition } from "@/modules/providers/interactive-provider-controller";
+import {
+	CONFIGURED_API_KEY_SOURCE_CREDENTIAL,
+	type ModelsJsonProvider,
+} from "@/modules/providers/models-json";
 import { pluginProviderIdentityMatches } from "@/modules/providers/provider-model-selection";
 import {
 	getProviderSdkStores,
@@ -61,6 +65,7 @@ export type InteractiveSessionProviderCollectionOptions =
 			credentialStore?: CredentialStore;
 			modelStore?: ModelStore;
 			pluginProviders?: readonly PluginProviderDescriptor[];
+			configuredModelProviders?: readonly ModelsJsonProvider[];
 			userDataDir?: string;
 		}>;
 
@@ -136,6 +141,7 @@ type ProviderCollectionBackend = Readonly<{
 	openAIProvider: OpenAIProvider | undefined;
 	pluginProviders: readonly PluginProviderDescriptor[];
 	discoverableProviderIds: Set<string>;
+	providerIdsByStorageId: Map<string, string>;
 	storageIds: Map<string, string>;
 }>;
 
@@ -156,6 +162,7 @@ const createFailClosedBackend = (): ProviderCollectionBackend =>
 		discoverableProviderIds: new Set<string>(),
 		openAIProvider: undefined,
 		pluginProviders: Object.freeze([]),
+		providerIdsByStorageId: new Map<string, string>(),
 		storageIds: new Map<string, string>(),
 	});
 
@@ -167,6 +174,29 @@ const closeProviderInstances = async (
 			Promise.resolve().then(() => provider.close?.())
 		)
 	);
+};
+
+const registerConfiguredModelProviders = async (
+	configuredProviders: readonly ModelsJsonProvider[],
+	registeredProviderIds: ReadonlyMap<string, string>,
+	addProvider: (provider: Provider, storageId?: string) => void,
+	configuredApiKeyProviderIds: Set<string>
+): Promise<void> => {
+	for (const configured of configuredProviders) {
+		const providerId = configured.provider.id;
+		if (
+			isBuiltInProviderId(providerId) ||
+			registeredProviderIds.has(providerId)
+		) {
+			logger.warn("Skipping conflicting models.json Provider", { providerId });
+			await closeProviderInstances([configured.provider]);
+			continue;
+		}
+		addProvider(configured.provider);
+		if (configured.hasApiKeySource) {
+			configuredApiKeyProviderIds.add(providerId);
+		}
+	}
 };
 
 const registerBuiltInProviders = (
@@ -193,6 +223,7 @@ const createProviderBackend = async (
 ): Promise<ProviderCollectionBackend> => {
 	const providers: Provider[] = [];
 	const storageIds = new Map<string, string>();
+	const configuredApiKeyProviderIds = new Set<string>();
 	const addProvider = (provider: Provider, storageId = provider.id): void => {
 		providers.push(provider);
 		if (storageIds.has(provider.id)) {
@@ -241,6 +272,12 @@ const createProviderBackend = async (
 				})
 			);
 		}
+		await registerConfiguredModelProviders(
+			options.configuredModelProviders ?? [],
+			storageIds,
+			addProvider,
+			configuredApiKeyProviderIds
+		);
 	} catch (error) {
 		await closeProviderInstances(providers);
 		throw error;
@@ -263,37 +300,59 @@ const createProviderBackend = async (
 		await closeProviderInstances(providers);
 		throw error;
 	}
-	const storageIdFor = (providerId: string): string => {
-		const storageId = storageIds.get(providerId);
-		if (storageId === undefined) {
-			throw new Error("Provider storage owner is not registered.");
-		}
-		return storageId;
-	};
 	const providerIdsByStorageId = new Map(
 		[...storageIds].map(([providerId, storageId]) => [storageId, providerId])
 	);
+	const storageIdFor = (providerId: string): string => {
+		const storageId = storageIds.get(providerId);
+		if (storageId !== undefined) {
+			return storageId;
+		}
+		providerIdsByStorageId.set(providerId, providerId);
+		return providerId;
+	};
 	const hasStoredCredential = backingCredentials.has;
 	const credentialStore: CredentialStore = Object.freeze({
 		delete: (providerId, storeOptions) =>
 			backingCredentials.delete(storageIdFor(providerId), storeOptions),
 		list: async (storeOptions) => {
 			const metadata = await backingCredentials.list(storeOptions);
-			return metadata.flatMap(({ providerId: storageId, type }) => {
+			const mapped = metadata.flatMap(({ providerId: storageId, type }) => {
 				const providerId = providerIdsByStorageId.get(storageId);
 				return providerId === undefined ? [] : [{ providerId, type }];
 			});
+			const mappedProviderIds = new Set(
+				mapped.map(({ providerId }) => providerId)
+			);
+			return [
+				...mapped,
+				...[...configuredApiKeyProviderIds]
+					.filter((providerId) => !mappedProviderIds.has(providerId))
+					.map((providerId) => ({
+						providerId,
+						type: "models-json-api-key-source",
+					})),
+			];
 		},
-		...(hasStoredCredential === undefined
-			? {}
-			: {
-					has: (providerId: string, storeOptions?: CredentialStoreOptions) =>
-						hasStoredCredential(storageIdFor(providerId), storeOptions),
-				}),
+		has: async (providerId, storeOptions) =>
+			configuredApiKeyProviderIds.has(providerId) ||
+			((await hasStoredCredential?.(storageIdFor(providerId), storeOptions)) ??
+				false),
 		modify: (providerId, update, storeOptions) =>
 			backingCredentials.modify(storageIdFor(providerId), update, storeOptions),
-		read: (providerId, storeOptions) =>
-			backingCredentials.read(storageIdFor(providerId), storeOptions),
+		read: async (providerId, storeOptions) => {
+			const credential = await backingCredentials.read(
+				storageIdFor(providerId),
+				storeOptions
+			);
+			if (credential !== undefined) {
+				return credential;
+			}
+			if (configuredApiKeyProviderIds.has(providerId)) {
+				return CONFIGURED_API_KEY_SOURCE_CREDENTIAL;
+			}
+			return;
+		},
 	});
 	const modelStore: ModelStore = Object.freeze({
 		get: (providerId) => backingModels.get(storageIdFor(providerId)),
@@ -319,6 +378,7 @@ const createProviderBackend = async (
 		),
 		openAIProvider,
 		pluginProviders: Object.freeze([...pluginProviders]),
+		providerIdsByStorageId,
 		storageIds,
 	});
 };
@@ -391,6 +451,7 @@ export const createInteractiveSessionProviderCollection = async (
 			}
 			current.collection.register(provider);
 			current.storageIds.set(provider.id, provider.id);
+			current.providerIdsByStorageId.set(provider.id, provider.id);
 			if (provider.discoverModels !== undefined) {
 				current.discoverableProviderIds.add(provider.id);
 			}

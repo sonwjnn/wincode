@@ -99,7 +99,7 @@ test("first-party Provider Models expose shared defaults and model-specific effo
 
 	expect(modelFor("openai", "gpt-5.6")).toMatchObject({
 		modelId: "gpt-5.6",
-		limits: { contextWindowTokens: 1_050_000, maxOutputTokens: 128_000 },
+		limits: { contextWindowTokens: 272_000, maxOutputTokens: 128_000 },
 		pricing: {
 			inputPerMillionTokensUsd: 4,
 			outputPerMillionTokensUsd: 20,
@@ -147,6 +147,9 @@ test("first-party Provider Models expose shared defaults and model-specific effo
 	expect(modelFor("anthropic", "claude-opus-5.5")).toMatchObject({
 		promptCacheRetentionTiers: ["short", "long"],
 	});
+	expect(
+		modelFor("anthropic", "claude-opus-4-8").limits?.contextWindowTokens
+	).toBe(272_000);
 	expect(modelFor("anthropic", "claude-opus-5.5")).not.toHaveProperty(
 		"reasoningEfforts"
 	);
@@ -164,7 +167,7 @@ test("first-party Provider Models expose shared defaults and model-specific effo
 		"promptCacheRetentionTiers"
 	);
 	expect(modelFor("google", "gemini-3.8-flash")).toMatchObject({
-		limits: { contextWindowTokens: 1_048_576, maxOutputTokens: 65_536 },
+		limits: { contextWindowTokens: 272_000, maxOutputTokens: 65_536 },
 		pricing: {
 			inputPerMillionTokensUsd: 0.75,
 			outputPerMillionTokensUsd: 3.75,
@@ -270,7 +273,7 @@ test("first-party Provider Models expose shared defaults and model-specific effo
 	]);
 
 	expect(modelFor("opencode-go", "gpt-5.6-luna")).toMatchObject({
-		limits: { contextWindowTokens: 1_050_000, maxOutputTokens: 128_000 },
+		limits: { contextWindowTokens: 272_000, maxOutputTokens: 128_000 },
 		pricing: {
 			inputPerMillionTokensUsd: 0.2,
 			outputPerMillionTokensUsd: 1.2,
@@ -294,6 +297,12 @@ test("first-party Provider Models expose shared defaults and model-specific effo
 			],
 		},
 	});
+	expect(
+		modelFor("opencode-go", "gpt-6-luna").limits?.contextWindowTokens
+	).toBe(272_000);
+	expect(
+		modelFor("opencode-go", "deepseek-v4-pro").limits?.contextWindowTokens
+	).toBe(272_000);
 	expect(modelFor("opencode-go", "grok-4.6")).toMatchObject({
 		limits: { contextWindowTokens: 500_000, maxOutputTokens: 500_000 },
 		modelId: "grok-4.6",

@@ -83,6 +83,7 @@ export type ResolvedCompactionSettings = {
 	maxMediaTokens: number;
 	modelContextLimit: number;
 	contextWindowOverrideTokens?: number;
+	contextWindowModelOverrideTokens?: number;
 	overflowRecoveryAvailable: boolean;
 	resolved: CompactionSettings;
 	reserveTokens: number;
@@ -211,10 +212,13 @@ const MODEL_OVERRIDE_SETTING_KEYS = [
 	"keepRecentTokens",
 	"reserveTokens",
 ] as const;
+const MODEL_CONTEXT_WINDOW_OVERRIDE_KEY = "contextWindowTokens";
 const isModelOverrideSettingKey = (
 	key: string
 ): key is (typeof MODEL_OVERRIDE_SETTING_KEYS)[number] =>
 	MODEL_OVERRIDE_SETTING_KEYS.some((candidate) => candidate === key);
+const isSupportedModelOverrideSetting = (key: string): boolean =>
+	isModelOverrideSettingKey(key) || key === MODEL_CONTEXT_WINDOW_OVERRIDE_KEY;
 
 /** Applies exact conversation-model budgets between ordinary and session policy. */
 type ModelOverrideSettingKey = (typeof MODEL_OVERRIDE_SETTING_KEYS)[number];
@@ -232,7 +236,7 @@ const diagnoseUnsupportedModelOverrideSettings = (
 	state: ModelOverrideResolutionState
 ): void => {
 	for (const key of Object.keys(override)) {
-		if (isModelOverrideSettingKey(key)) {
+		if (isSupportedModelOverrideSetting(key)) {
 			continue;
 		}
 		const settingPath = [...overridePath, key];
@@ -472,7 +476,9 @@ export const resolveCompactionSettings = (
 	} = input;
 	const contextWindow = resolveContextWindowTokens(
 		snapshot,
-		requestedContextLimit
+		requestedContextLimit,
+		undefined,
+		model
 	);
 	const contextLimit = contextWindow.tokens;
 	const { configPath, desired, diagnostics, settingPaths, sources } =
@@ -487,6 +493,19 @@ export const resolveCompactionSettings = (
 				"invalid-value",
 				["contextWindowTokens"],
 				"contextWindowTokens must be a positive safe integer."
+			)
+		);
+	}
+	if (
+		contextWindow.modelOverrideInvalid &&
+		contextWindow.modelOverridePath !== undefined
+	) {
+		diagnostics.push(
+			diagnosticFor(
+				snapshot,
+				"invalid-value",
+				contextWindow.modelOverridePath,
+				`${contextWindow.modelOverridePath.join(".")} must be a positive safe integer.`
 			)
 		);
 	}
@@ -510,6 +529,7 @@ export const resolveCompactionSettings = (
 		configPath,
 		...omitUndefined({
 			contextWindowOverrideTokens: contextWindow.overrideTokens,
+			contextWindowModelOverrideTokens: contextWindow.modelOverrideTokens,
 		}),
 		auto: resolved.auto,
 		autoAvailable: resolved.enabled && resolved.auto,

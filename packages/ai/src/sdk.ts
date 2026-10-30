@@ -112,6 +112,8 @@ export type ProviderModel = Readonly<{
 	headers?: ProviderHeaders;
 	/** When present, unsupported image/file/tool inputs fail before provider dispatch. */
 	capabilities?: readonly ProviderModelCapability[];
+	/** Optional user-facing name; model identity remains providerId/modelId. */
+	name?: string;
 	/** Exact provider-specific cache controls verified for this model. */
 	promptCache?: ModelPromptCacheCapabilities;
 	/** Cache retention choices this model explicitly supports. */
@@ -895,6 +897,7 @@ const isProviderModel = (value: unknown): value is ProviderModel =>
 	isNonEmptyString(value.providerId) &&
 	isNonEmptyString(value.modelId) &&
 	isNonEmptyString(value.protocolId) &&
+	(value.name === undefined || isNonEmptyString(value.name)) &&
 	isOptionalProviderHeaders(value.headers) &&
 	isOptionalStringArrayOf(value.capabilities, PROVIDER_MODEL_CAPABILITIES) &&
 	isOptionalStringArrayOf(value.reasoningEfforts, THINKING_LEVELS) &&

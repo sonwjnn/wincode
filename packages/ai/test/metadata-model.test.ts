@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildProviderModelsWithMetadata } from "../scripts/metadata-model";
+import type { ProviderModelFamilyId } from "../scripts/model-families/types";
 import type { ModelMetadataEntry } from "../src/model-metadata";
 import { modelMetadataEntrySchema } from "../src/model-metadata";
 import type { ProviderModel } from "../src/sdk";
@@ -47,6 +48,7 @@ const payload = {
 
 const build = (overlays: Readonly<Record<string, ModelMetadataEntry>> = {}) =>
 	buildProviderModelsWithMetadata({
+		modelFamilies: new Map(),
 		overlays,
 		payload,
 		providerModels,
@@ -97,6 +99,98 @@ describe("Provider Model metadata enrichment", () => {
 			outputPerMillionTokensUsd: 2,
 		});
 		expect(model?.limits).toEqual({ contextWindowTokens: 1000 });
+	});
+
+	test("caps long-context models only for the selected provider families", () => {
+		const fixtures = [
+			{
+				providerId: "openai",
+				modelId: "gpt-5.6",
+				context: 1_050_000,
+				expected: 272_000,
+			},
+			{
+				providerId: "opencode-go",
+				modelId: "gpt-5.6-luna",
+				context: 1_050_000,
+				expected: 272_000,
+			},
+			{
+				providerId: "opencode-go",
+				modelId: "deepseek-v4-pro",
+				context: 1_000_000,
+				expected: 272_000,
+			},
+			{
+				providerId: "anthropic",
+				modelId: "claude-long",
+				context: 1_000_000,
+				expected: 272_000,
+			},
+			{
+				providerId: "deepseek",
+				modelId: "deepseek-long",
+				context: 1_000_000,
+				expected: 272_000,
+			},
+			{
+				providerId: "google",
+				modelId: "gemini-long",
+				context: 1_000_000,
+				expected: 272_000,
+			},
+			{
+				providerId: "google",
+				modelId: "gemini-short",
+				context: 200_000,
+				expected: 200_000,
+			},
+			{
+				providerId: "opencode-go",
+				modelId: "claude-long",
+				context: 1_000_000,
+				expected: 1_000_000,
+			},
+			{
+				providerId: "opencode-go",
+				modelId: "grok-4.6",
+				context: 500_000,
+				expected: 500_000,
+			},
+			{
+				providerId: "openrouter",
+				modelId: "gpt-5.6",
+				context: 1_000_000,
+				expected: 1_000_000,
+			},
+		] as const;
+		const result = buildProviderModelsWithMetadata({
+			modelFamilies: new Map<string, ProviderModelFamilyId>([
+				["openai/gpt-5.6", "openai"],
+				["opencode-go/gpt-5.6-luna", "openai"],
+				["opencode-go/deepseek-v4-pro", "deepseek"],
+				["anthropic/claude-long", "anthropic"],
+				["deepseek/deepseek-long", "deepseek"],
+				["google/gemini-long", "google"],
+				["google/gemini-short", "google"],
+			]),
+			overlays: Object.fromEntries(
+				fixtures.map(({ providerId, modelId, context }) => [
+					`${providerId}/${modelId}`,
+					{ limits: { context } },
+				])
+			),
+			payload: {},
+			providerModels: fixtures.map(({ providerId, modelId }) => ({
+				modelId,
+				protocolId: "fixture",
+				providerId,
+			})),
+		});
+
+		expect(
+			result.providerModels.map((model) => model.limits?.contextWindowTokens)
+		).toEqual(fixtures.map(({ expected }) => expected));
 	});
 
 	test("manual reasoning overlays add a missing effort without hiding published levels", () => {
@@ -174,6 +268,7 @@ describe("Provider Model metadata enrichment", () => {
 			providerId: "google",
 		};
 		const result = buildProviderModelsWithMetadata({
+			modelFamilies: new Map(),
 			overlays: { "google/gemini-cache": { promptCache } },
 			payload: {},
 			providerModels: [googleModel],

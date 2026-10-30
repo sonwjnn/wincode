@@ -17,6 +17,7 @@ import {
 	pickTruthy,
 } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
+import { deepSeekEffortAliasFor } from "./model-families/deepseek.ts";
 import type {
 	ModelCost,
 	ModelCostTier,
@@ -64,18 +65,6 @@ const THINKING_LEVEL_IDS: ReadonlySet<string> = new Set(
 
 type ModelSource = Readonly<{ modelId: string; providerId: string }>;
 
-// DeepSeek publishes these only as aliases for the named models below.
-// `minimal` remains distinct for other Providers.
-const DEEPSEEK_EFFORT_ALIASES: Readonly<Record<string, ThinkingLevel>> = {
-	minimal: "low",
-	medium: "high",
-	xhigh: "high",
-};
-const DEEPSEEK_ALIAS_MODELS: Readonly<Record<string, true>> = {
-	"deepseek-flash": true,
-	"deepseek-v4-pro": true,
-};
-
 const asLevels = (
 	value: unknown,
 	source: ModelSource | undefined
@@ -83,17 +72,14 @@ const asLevels = (
 	if (!isArray(value)) {
 		return;
 	}
-	const aliases =
-		source?.providerId === "deepseek" &&
-		DEEPSEEK_ALIAS_MODELS[source.modelId] === true
-			? DEEPSEEK_EFFORT_ALIASES
-			: undefined;
 	const levels = new Set<ThinkingLevel>();
 	for (const rawLevel of value) {
 		if (!isString(rawLevel)) {
 			continue;
 		}
-		const canonical = aliases?.[rawLevel] ?? rawLevel;
+		const canonical =
+			deepSeekEffortAliasFor(source?.providerId, source?.modelId, rawLevel) ??
+			rawLevel;
 		if (THINKING_LEVEL_IDS.has(canonical)) {
 			levels.add(canonical as ThinkingLevel);
 		}

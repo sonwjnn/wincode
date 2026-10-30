@@ -31,6 +31,7 @@ import { providerChatFinish } from "../sdk-private/provider-events.ts";
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 const ANTHROPIC_PROTOCOL_ID = "anthropic";
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
+const TRAILING_SLASHES = /\/+$/u;
 const DEFAULT_MODELS: readonly ProviderModel[] = anthropicProviderModels.map(
 	(model: ProviderModel) =>
 		model.reasoningEfforts === undefined
@@ -51,6 +52,8 @@ export type AnthropicFetch = (
 ) => Promise<Response>;
 
 export type AnthropicProviderOptions = Readonly<{
+	/** API base URL; the provider appends `/v1/messages` unless already present. */
+	baseUrl?: string;
 	fetch?: AnthropicFetch;
 	models?: readonly ProviderModel[];
 }>;
@@ -236,11 +239,12 @@ const streamWireRequest = async function* (
 	wireRequest: AnthropicWireRequest,
 	headers: Readonly<Record<string, string>>,
 	fetchImpl: AnthropicFetch,
+	messagesUrl: string,
 	signal?: AbortSignal
 ): AsyncIterable<ProviderChatEvent> {
 	let response: Response;
 	try {
-		response = await fetchImpl(ANTHROPIC_MESSAGES_URL, {
+		response = await fetchImpl(messagesUrl, {
 			body: wireRequest.body,
 			headers,
 			method: "POST",
@@ -276,6 +280,7 @@ const streamWithCacheFallback = async function* (
 	context: ProviderChatContext,
 	model: ProviderModel,
 	fetchImpl: AnthropicFetch,
+	messagesUrl: string,
 	cachedRequest: AnthropicWireRequest
 ): AsyncIterable<ProviderChatEvent> {
 	let outputStarted = false;
@@ -284,6 +289,7 @@ const streamWithCacheFallback = async function* (
 			cachedRequest,
 			context.headers,
 			fetchImpl,
+			messagesUrl,
 			context.signal
 		)) {
 			if (event.type !== "finish") {
@@ -306,12 +312,13 @@ const streamWithCacheFallback = async function* (
 			uncachedRequest,
 			context.headers,
 			fetchImpl,
+			messagesUrl,
 			context.signal
 		);
 	}
 };
 
-const streamAnthropic = (fetchImpl: AnthropicFetch) =>
+const streamAnthropic = (fetchImpl: AnthropicFetch, messagesUrl: string) =>
 	async function* (
 		request: ProviderChatRequest,
 		context: ProviderChatContext
@@ -329,6 +336,7 @@ const streamAnthropic = (fetchImpl: AnthropicFetch) =>
 				context,
 				model,
 				fetchImpl,
+				messagesUrl,
 				cachedRequest
 			);
 		} catch (error) {
@@ -339,11 +347,32 @@ const streamAnthropic = (fetchImpl: AnthropicFetch) =>
 		}
 	};
 
+const anthropicMessagesUrlFor = (baseUrl: string | undefined): string => {
+	if (baseUrl === undefined) {
+		return ANTHROPIC_MESSAGES_URL;
+	}
+	const url = new URL(baseUrl);
+	const path = url.pathname.replace(TRAILING_SLASHES, "");
+	if (path.endsWith("/messages")) {
+		url.pathname = path;
+		url.search = "";
+		url.hash = "";
+		return url.href;
+	}
+	url.pathname = path.endsWith("/v1")
+		? `${path}/messages`
+		: `${path}/v1/messages`;
+	url.search = "";
+	url.hash = "";
+	return url.href;
+};
+
 export const createAnthropicProvider = (
 	options: AnthropicProviderOptions = {}
 ): Provider => {
 	const fetchImpl: AnthropicFetch =
 		options.fetch ?? globalThis.fetch.bind(globalThis);
+	const messagesUrl = anthropicMessagesUrlFor(options.baseUrl);
 	const models = options.models ?? DEFAULT_MODELS;
 	if (
 		models.some(
@@ -368,6 +397,6 @@ export const createAnthropicProvider = (
 				: null;
 		},
 		getChatHeaders: anthropicChatHeadersFor,
-		streamChat: streamAnthropic(fetchImpl),
+		streamChat: streamAnthropic(fetchImpl, messagesUrl),
 	};
 };
