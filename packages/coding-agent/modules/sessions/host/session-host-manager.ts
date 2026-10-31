@@ -63,11 +63,13 @@ export const createSessionHostManager = (
 		if (snapshot.turnActive || snapshot.isCompacting) {
 			return false;
 		}
+		if (!snapshot.projectionBlocked && snapshot.error !== null) {
+			return false;
+		}
 		return !(
 			snapshot.executions.length > 0 ||
 			snapshot.queuedSubmissions.length > 0 ||
-			snapshot.steeringMessages.length > 0 ||
-			snapshot.error !== null
+			(!snapshot.projectionBlocked && snapshot.steeringMessages.length > 0)
 		);
 	};
 	const maybeUnload = async (entry: ManagedHostEntry): Promise<void> => {

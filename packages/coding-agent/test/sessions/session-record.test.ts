@@ -18,7 +18,7 @@ import {
 	buildUserSessionRecord,
 	SessionRecordInvariantError,
 } from "@/modules/sessions/storage/session-record";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionProjectionStore } from "@/modules/sessions/storage/session-store";
 import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
 import type { SessionId } from "@/shared/identifiers";
 import {
@@ -133,7 +133,7 @@ const toolRecord = (id: string): SessionRecord => ({
 
 type TestStore = {
 	databasePath: string;
-	store: SessionStore;
+	store: SessionProjectionStore;
 };
 
 type CreatedSession = {
@@ -154,7 +154,7 @@ const createTestStore = async (): Promise<TestStore> => {
 };
 
 const createSession = async (
-	store: SessionStore,
+	store: SessionProjectionStore,
 	text = "hello"
 ): Promise<CreatedSession> => {
 	const { id } = await store.createSession({

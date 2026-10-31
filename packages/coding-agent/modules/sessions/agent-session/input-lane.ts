@@ -14,7 +14,10 @@ import type {
 	SessionSendOutcome,
 	SessionSubmissionComposition,
 } from "../submission-types";
-import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
+import {
+	SESSION_PROJECTION_BLOCKED_ERROR,
+	SESSION_SHUT_DOWN_ERROR,
+} from "./session-messages";
 import type {
 	AgentSessionPorts,
 	SessionQueuedSendInput,
@@ -58,6 +61,7 @@ export type SessionInputLaneState = Readonly<{
 	executionBusy: boolean;
 	queueDraining: boolean;
 	submissionBusy: boolean;
+	writeBlocked: boolean;
 }>;
 
 /**
@@ -512,6 +516,9 @@ export const createSessionInputLaneWorkflow = (
 		if (port.read().lane.closed) {
 			return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
 		}
+		if (port.read().lane.writeBlocked) {
+			return { kind: "rejected", reason: SESSION_PROJECTION_BLOCKED_ERROR };
+		}
 		const result = await port.inputScheduler.steerQueuedSubmission(
 			async (queued) => {
 				const receipt = await commitQueuedSteering(queued);
@@ -610,6 +617,9 @@ export const createSessionInputLaneWorkflow = (
 		if (port.read().lane.closed) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
+		if (port.read().lane.writeBlocked) {
+			return { rejected: true, reason: SESSION_PROJECTION_BLOCKED_ERROR };
+		}
 		const validation = validateSubmissionSelection(input);
 		const failure =
 			validation instanceof Promise ? await validation : validation;
@@ -643,6 +653,9 @@ export const createSessionInputLaneWorkflow = (
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
 		if (port.read().lane.closed) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
+		}
+		if (port.read().lane.writeBlocked) {
+			return { rejected: true, reason: SESSION_PROJECTION_BLOCKED_ERROR };
 		}
 		const validation = validateSubmissionSelection(input);
 		const failure =

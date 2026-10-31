@@ -14,6 +14,7 @@ import {
 	type SessionMessageMetadata,
 	withSubmissionStatus,
 } from "../message";
+import { SessionWriteOutcomeError } from "../storage/session-jsonl-store";
 import { buildUserSessionRecord } from "../storage/session-record";
 import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
 import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
@@ -641,6 +642,13 @@ export const createSessionSteeringWorkflow = (
 			await port.effects.commitSteeringRecord(record, input);
 			return true;
 		} catch (error) {
+			if (
+				error instanceof SessionWriteOutcomeError &&
+				error.outcome.kind === "committed" &&
+				error.outcome.projection === "blocked"
+			) {
+				return true;
+			}
 			logSessionPersistenceFailure(
 				"Steering message persistence failed",
 				error,

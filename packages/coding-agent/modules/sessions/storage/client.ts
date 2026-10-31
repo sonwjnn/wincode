@@ -83,6 +83,14 @@ const initializeSchema = (
 		CREATE UNIQUE INDEX IF NOT EXISTS session_workspace_root_path_unique
 			ON session_workspace (root_path);
 
+		CREATE TABLE IF NOT EXISTS session_projection_cursor (
+			session_id TEXT PRIMARY KEY NOT NULL,
+			log_id TEXT NOT NULL,
+			next_byte_offset INTEGER NOT NULL,
+			next_sequence INTEGER NOT NULL,
+			last_hash TEXT NOT NULL
+		);
+
 		CREATE TABLE IF NOT EXISTS session_attachment (
 			attachment_id TEXT PRIMARY KEY NOT NULL,
 			blob_key TEXT NOT NULL,

@@ -116,11 +116,20 @@ const fixture = (
 			getLatestCompaction: async () => null,
 			appendCompaction: async (input) => {
 				persistedEntries.push(input);
-				return fromPartial<SessionCompaction>({
-					...input,
-					id: compactionId("routed"),
-					sequence: 1,
-				});
+				return {
+					compaction: fromPartial<SessionCompaction>({
+						...input,
+						id: compactionId("routed"),
+						sequence: 1,
+					}),
+					writeOutcome: {
+						entryHash: "0".repeat(64),
+						kind: "committed",
+						operationId: "compaction-routed",
+						projection: "ready",
+						sequence: 1,
+					},
+				};
 			},
 		},
 	});

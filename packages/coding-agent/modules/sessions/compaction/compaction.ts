@@ -38,6 +38,7 @@ import {
 	getAttachmentReference,
 	type SessionAttachmentStore,
 } from "../storage/attachment-store";
+import { requireSessionWriteReady } from "../storage/session-jsonl-store";
 import type { SessionStore } from "../storage/session-store";
 import {
 	estimateSessionContextTokens,
@@ -1687,7 +1688,12 @@ export const createSessionCompaction = ({
 		assertAuthority?.();
 		let entry: SessionCompaction;
 		try {
-			entry = await store.appendCompaction(entryInput);
+			const result = await store.appendCompaction(entryInput);
+			requireSessionWriteReady(result.writeOutcome);
+			if (result.compaction === undefined) {
+				throw new Error("Committed compaction write has no durable entry.");
+			}
+			entry = result.compaction;
 		} catch (error) {
 			throw new SessionCompactionError(
 				"persistence-failed",

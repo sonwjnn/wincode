@@ -104,7 +104,16 @@ const makeStore = (initial: SessionCompaction | null = null) => {
 			sequence: (latest?.sequence ?? 0) + 1,
 		};
 		latest = entry;
-		return entry;
+		return {
+			compaction: entry,
+			writeOutcome: {
+				entryHash: "0".repeat(64),
+				kind: "committed" as const,
+				operationId: `compaction-${entry.id}`,
+				projection: "ready" as const,
+				sequence: entry.sequence,
+			},
+		};
 	});
 	return {
 		appendCompaction,

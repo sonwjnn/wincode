@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type {
 	CreateSessionUsageEntryInput,
 	SessionUsageEntry,
+	SessionWriteOutcome,
 } from "@/modules/sessions/storage/session-store";
 import {
 	createSessionUsageLedger,
@@ -43,8 +44,17 @@ test("records durable usage before publishing it to Session observers", async ()
 				expect(ledger.getEntries()).toEqual([initialEntry]);
 				storeCommitted = true;
 				return {
-					...input,
-					createdAt: input.createdAt ?? new Date("2026-10-02T00:00:00.000Z"),
+					entry: {
+						...input,
+						createdAt: input.createdAt ?? new Date("2026-10-02T00:00:00.000Z"),
+					},
+					writeOutcome: {
+						entryHash: "0".repeat(64),
+						kind: "committed",
+						operationId: `usage-${input.id}`,
+						projection: "ready",
+						sequence: 1,
+					} satisfies SessionWriteOutcome,
 				};
 			},
 		},

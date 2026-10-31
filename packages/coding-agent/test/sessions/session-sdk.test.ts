@@ -51,6 +51,11 @@ import type {
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
+} from "@/modules/sessions/storage/path";
+import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import {
 	type ConfigSnapshot,
 	createConfigStore,
 } from "@/shared/config/config-store";
@@ -81,10 +86,23 @@ await Promise.all(
 		fs.mkdir(directory, { recursive: true })
 	)
 );
-const database = createDatabase(path.join(storeRoot, "sessions.sqlite"));
-const store = createDrizzleSessionStore(database.db, {
-	workspaceRoot: workspace,
-});
+const databasePath = path.join(storeRoot, "sessions.sqlite");
+const database = createDatabase(databasePath);
+const projectionDatabase = createDatabase(
+	resolveLocalSessionProjectionPath(databasePath)
+);
+const sessionProjectionStore = createDrizzleSessionStore(
+	projectionDatabase.db,
+	{
+		operationalDatabase: database.db,
+		sessionLogRoot: resolveLocalSessionLogRoot(databasePath),
+		workspaceRoot: workspace,
+	}
+);
+const store = createSessionJsonlStore(
+	sessionProjectionStore,
+	resolveLocalSessionLogRoot(databasePath)
+);
 const configStore = createConfigStore({
 	homeRoot,
 	trustedProjectRoots: [path.join(root, "child-plugin-symlink-trust")],
@@ -1533,6 +1551,7 @@ test("public Session SDK creates durable Sessions using public options", async (
 
 afterAll(async () => {
 	database.sqlite.close();
+	projectionDatabase.sqlite.close();
 	await fs.rm(root, { force: true, recursive: true });
 });
 
@@ -1886,10 +1905,22 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 		restoredSdk = undefined;
 
 		const recordDatabase = createDatabase(databasePath);
+		const recordProjectionDatabase = createDatabase(
+			resolveLocalSessionProjectionPath(databasePath)
+		);
 		try {
-			const recordStore = createDrizzleSessionStore(recordDatabase.db, {
-				workspaceRoot: sdkWorkspace,
-			});
+			const recordProjectionStore = createDrizzleSessionStore(
+				recordProjectionDatabase.db,
+				{
+					operationalDatabase: recordDatabase.db,
+					sessionLogRoot: resolveLocalSessionLogRoot(databasePath),
+					workspaceRoot: sdkWorkspace,
+				}
+			);
+			const recordStore = createSessionJsonlStore(
+				recordProjectionStore,
+				resolveLocalSessionLogRoot(databasePath)
+			);
 			const records = await recordStore.listSessionRecords(createdSessionId);
 			const userRecords = records.filter(
 				({ outcome }) => outcome.kind === "user"
@@ -1907,6 +1938,7 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 			).toBe(true);
 		} finally {
 			recordDatabase.sqlite.close();
+			recordProjectionDatabase.sqlite.close();
 		}
 	} finally {
 		unsubscribe?.();

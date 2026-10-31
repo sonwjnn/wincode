@@ -41,6 +41,7 @@ import {
 	pluginProvidersFromRuntime,
 } from "../provider-collection";
 import { restoreSelection } from "../selection";
+import { requireSessionWriteReady } from "../storage/session-jsonl-store";
 import type { SessionUsageEntry } from "../storage/session-store";
 import { projectSessionRecords } from "../transcript-projection";
 import {
@@ -244,8 +245,10 @@ const openSession = async (
 	);
 	if (interrupted.length > 0) {
 		await Promise.all(
-			interrupted.map((submission) =>
-				store.updateSessionSubmission({ ...submission, sessionId })
+			interrupted.map(async (submission) =>
+				requireSessionWriteReady(
+					await store.updateSessionSubmission({ ...submission, sessionId })
+				)
 			)
 		);
 	}

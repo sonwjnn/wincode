@@ -12,7 +12,11 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import { getSessionStore } from "../../storage/get-session-store";
-import type { Session } from "../../storage/session-store";
+import {
+	projectSessionStorageError,
+	requireSessionWriteReady,
+} from "../../storage/session-jsonl-store";
+import type { Session, SessionCatalogIssue } from "../../storage/session-store";
 import { RenameSessionDialog } from "./rename-session-dialog";
 
 const MAX_VISIBLE_ITEMS = 10;
@@ -21,10 +25,14 @@ const CONFIRM_DELETE_BG = RGBA.fromInts(60, 20, 20, 255);
 
 type ListItem =
 	| { kind: "header"; label: string; sectionKey: string }
-	| { kind: "session"; session: Session };
+	| { kind: "session"; session: Session }
+	| { kind: "unavailable"; issue: SessionCatalogIssue };
 const getSessionSectionKey = (item: ListItem): string => {
 	if (item.kind === "header") {
 		return item.sectionKey;
+	}
+	if (item.kind === "unavailable") {
+		return "unavailable";
 	}
 	return item.session.pinned ? "pinned" : "recent";
 };
@@ -36,13 +44,21 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
 
 function buildListItems(
 	sessions: readonly Session[],
+	issues: readonly SessionCatalogIssue[],
 	isSearching: boolean
 ): ListItem[] {
+	const unavailableItems: ListItem[] = issues.map((issue) => ({
+		kind: "unavailable",
+		issue,
+	}));
 	if (isSearching) {
-		return sessions.map((session) => ({
-			kind: "session" as const,
-			session,
-		}));
+		return [
+			...sessions.map((session) => ({
+				kind: "session" as const,
+				session,
+			})),
+			...unavailableItems,
+		];
 	}
 
 	const pinned = sessions.filter((s) => s.pinned);
@@ -62,9 +78,37 @@ function buildListItems(
 			items.push({ kind: "session", session });
 		}
 	}
+	if (unavailableItems.length > 0) {
+		items.push({
+			kind: "header",
+			label: "Unavailable",
+			sectionKey: "unavailable",
+		});
+		items.push(...unavailableItems);
+	}
 
 	return items;
 }
+
+const getListItemKey = (item: ListItem): string => {
+	if (item.kind === "header") {
+		return `header:${item.label}`;
+	}
+	if (item.kind === "session") {
+		return item.session.id;
+	}
+	return `unavailable:${item.issue.sessionId}`;
+};
+
+const getListItemSearchText = (item: ListItem): string => {
+	if (item.kind === "session") {
+		return item.session.title;
+	}
+	if (item.kind === "unavailable") {
+		return `Unavailable Session ${item.issue.sessionId} ${item.issue.code} ${item.issue.message}`;
+	}
+	return "";
+};
 
 type SessionListItemProps = {
 	session: Session;
@@ -113,6 +157,7 @@ function SessionListItem({
 
 export const SessionsDialogContent = () => {
 	const [sessions, setSessions] = useState<Session[]>([]);
+	const [catalogIssues, setCatalogIssues] = useState<SessionCatalogIssue[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 	const pendingDeleteIdRef = useLatest(pendingDeleteId);
@@ -139,11 +184,12 @@ export const SessionsDialogContent = () => {
 	const fetchSessions = useCallback(
 		async (ignoreRef?: { current: boolean }) => {
 			try {
-				const data = await getSessionStore().listSessions();
+				const catalog = await getSessionStore().listSessionCatalog();
 				if (ignoreRef?.current) {
 					return;
 				}
-				setSessions(data);
+				setSessions(catalog.sessions);
+				setCatalogIssues(catalog.issues);
 				setLoading(false);
 			} catch (error) {
 				if (ignoreRef?.current) {
@@ -194,11 +240,19 @@ export const SessionsDialogContent = () => {
 
 			setSessions(updated);
 			try {
-				await getSessionStore().updateSession(session.id, {
-					pinned: !session.pinned,
-				});
+				requireSessionWriteReady(
+					await getSessionStore().updateSession(session.id, {
+						pinned: !session.pinned,
+					})
+				);
 			} catch (error) {
-				setSessions(original);
+				const writeOutcome =
+					error instanceof Error
+						? projectSessionStorageError(error)?.writeOutcome
+						: undefined;
+				if (writeOutcome?.kind !== "committed") {
+					setSessions(original);
+				}
 				show({
 					variant: "error",
 					message: getErrorMessage(error, "Failed to update session"),
@@ -214,9 +268,17 @@ export const SessionsDialogContent = () => {
 			setSessions((prev) => prev.filter((s) => s.id !== session.id));
 			setPendingDeleteId(null);
 			try {
-				await getSessionStore().deleteSession(session.id);
+				requireSessionWriteReady(
+					await getSessionStore().deleteSession(session.id)
+				);
 			} catch (error) {
-				setSessions(original);
+				const writeOutcome =
+					error instanceof Error
+						? projectSessionStorageError(error)?.writeOutcome
+						: undefined;
+				if (writeOutcome?.kind !== "committed") {
+					setSessions(original);
+				}
 				show({
 					variant: "error",
 					message: getErrorMessage(error, "Failed to delete session"),
@@ -292,10 +354,46 @@ export const SessionsDialogContent = () => {
 
 	const isConfirmDelete =
 		pendingDeleteId && pendingDeleteId === selectedSessionRef.current?.id;
+	let emptyText = "No matching sessions";
+	if (loading) {
+		emptyText = "Loading sessions...";
+	} else if (catalogIssues.length > 0) {
+		emptyText = "No usable sessions; see Unavailable below";
+	}
+	const renderItem = (
+		item: ListItem,
+		isSelected: boolean,
+		isActive: boolean
+	) => {
+		if (item.kind === "header") {
+			return (
+				<SelectableDialogItem>
+					<text fg={colors.primary}>{item.label}</text>
+				</SelectableDialogItem>
+			);
+		}
+		if (item.kind === "unavailable") {
+			return (
+				<SelectableDialogItem>
+					<text fg={colors.error} selectable={false}>
+						{`Session ${item.issue.sessionId} unavailable (${item.issue.code}): ${item.issue.message}`}
+					</text>
+				</SelectableDialogItem>
+			);
+		}
+		return (
+			<SessionListItem
+				isActiveRoute={isActive}
+				isPendingDelete={pendingDeleteId === item.session.id}
+				isSelected={isSelected}
+				session={item.session}
+			/>
+		);
+	};
 
 	return (
 		<SearchListDialogWrapper<ListItem>
-			emptyText={loading ? "Loading sessions..." : "No matching sessions"}
+			emptyText={emptyText}
 			footerHints={
 				<>
 					{!loading && isConfirmDelete ? (
@@ -324,17 +422,13 @@ export const SessionsDialogContent = () => {
 				return;
 			}}
 			getItemSectionKey={getSessionSectionKey}
-			getKey={(item) =>
-				item.kind === "header" ? `header:${item.label}` : item.session.id
-			}
-			getSearchText={(item) =>
-				item.kind === "session" ? item.session.title : ""
-			}
+			getKey={getListItemKey}
+			getSearchText={getListItemSearchText}
 			isItemActive={(item) =>
 				item.kind === "session" && item.session.id === currentSessionId
 			}
 			isItemSelectable={(item) => item.kind === "session"}
-			items={buildListItems(sessions, false)}
+			items={buildListItems(sessions, catalogIssues, false)}
 			maxVisibleItems={MAX_VISIBLE_ITEMS}
 			minVisibleItems={MIN_VISIBLE_ITEMS}
 			onHighlight={handleHighlight}
@@ -353,20 +447,7 @@ export const SessionsDialogContent = () => {
 				item.kind === "session" && navigateToSession(item.session)
 			}
 			placeholder="Search sessions"
-			renderItem={(item, isSelected, isActive) =>
-				item.kind === "header" ? (
-					<SelectableDialogItem>
-						<text fg={colors.primary}>{item.label}</text>
-					</SelectableDialogItem>
-				) : (
-					<SessionListItem
-						isActiveRoute={isActive}
-						isPendingDelete={pendingDeleteId === item.session.id}
-						isSelected={isSelected}
-						session={item.session}
-					/>
-				)
-			}
+			renderItem={renderItem}
 		/>
 	);
 };

@@ -9,6 +9,13 @@ import type { ThinkingLevel } from "@wincode/ai";
 import type { SessionId } from "../../shared/identifiers";
 import type { PluginFactory } from "../plugins/public";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
+import type { SessionWriteOutcome } from "./session-write-outcome";
+
+export type {
+	SessionWriteFailure,
+	SessionWriteOutcome,
+	SessionWriteReceipt,
+} from "./session-write-outcome";
 
 /** Model-visible tool names a child Session is permitted to invoke. */
 export type SessionSdkCapabilityCeiling = Readonly<{
@@ -75,13 +82,18 @@ export type SessionSdkAgent = Readonly<{
 }>;
 
 export type SessionSdkSubmissionAdmission =
-	| { readonly rejected: true; readonly reason: string }
+	| {
+			readonly rejected: true;
+			readonly reason: string;
+			readonly writeOutcome?: SessionWriteOutcome;
+	  }
 	| {
 			readonly rejected: false;
 			readonly disposition: "started" | "queued";
 			readonly messageId: SessionMessageId;
 			readonly submissionId: SubmissionId;
 			readonly turnId?: AgentTurnId;
+			readonly writeOutcome?: SessionWriteOutcome;
 	  };
 
 export type SessionSdkContinuationOutcome =
@@ -99,9 +111,13 @@ export type SessionSdkInterruptResult = Readonly<{
 	recalled: readonly object[];
 }>;
 
-/** Stable, public fields exposed when observing a live Session. */
 export type SessionSdkSnapshot = Readonly<{
 	context: readonly object[];
+	storageError: Readonly<{
+		code: string;
+		message: string;
+		writeOutcome?: SessionWriteOutcome;
+	}> | null;
 	transcript: readonly object[];
 	turnActive: boolean;
 }>;

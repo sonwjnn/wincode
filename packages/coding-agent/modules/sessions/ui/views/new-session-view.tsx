@@ -40,6 +40,7 @@ import {
 	getPluginProviderRegistrationsFromCollection,
 	type InteractiveSessionProviderCollection,
 } from "@/modules/sessions/provider-collection";
+import type { SessionWriteOutcome } from "@/modules/sessions/session-write-outcome";
 import { useSettingsHubDialog } from "@/modules/settings";
 import { createSkillSnapshot } from "@/modules/skills";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -83,6 +84,21 @@ export const hasChatPromptContent = ({
 	text,
 }: ChatPromptSubmission): boolean =>
 	text.trim().length > 0 || files.length > 0 || !isUndefined(skill);
+
+const sessionCreationWriteError = (
+	sessionId: string,
+	outcome: SessionWriteOutcome
+): string | undefined => {
+	if (outcome.kind === "committed") {
+		return outcome.projection === "ready"
+			? undefined
+			: `Your prompt is saved in Session ${sessionId}, but its SQLite projection is unavailable. No Agent work was started.`;
+	}
+	if (outcome.kind === "indeterminate") {
+		return `Could not confirm whether your prompt was saved in Session ${sessionId} (${outcome.error.code}). Reopen this Session to reconcile it; do not submit it as a new Session.`;
+	}
+	return `${outcome.error.code}: ${outcome.error.message}`;
+};
 
 const HOME_UNAVAILABLE_COMMAND_CAPABILITIES = ["compaction"] as const;
 
@@ -455,11 +471,9 @@ export function NewSessionView({
 		}
 	};
 
-	const createSession = async (
-		input: string,
-		files: ChatPromptSubmission["files"],
-		skill: ChatPromptSubmission["skill"]
-	): Promise<boolean> => {
+	const resolveReadySessionSelection = async (): Promise<
+		EffectiveAgentSelection | undefined
+	> => {
 		let effective: EffectiveAgentSelection;
 		try {
 			effective = resolveInteractiveAgentSelection(
@@ -478,15 +492,15 @@ export function NewSessionView({
 					"Could not verify the selected Provider SDK Model."
 				)
 			);
-			return false;
+			return;
 		}
 		if (effective.unavailableReason !== undefined) {
 			setError(effective.unavailableReason);
-			return false;
+			return;
 		}
 		if (providerController === undefined) {
 			setError("Provider SDK model selection is unavailable.");
-			return false;
+			return;
 		}
 		const trustedRegistrations =
 			pluginRuntime?.getProviderRegistrations() ?? [];
@@ -499,7 +513,7 @@ export function NewSessionView({
 			)
 		) {
 			setError(UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE);
-			return false;
+			return;
 		}
 		if (
 			!isPluginProviderSelectionBoundToTrustedOwner(
@@ -511,7 +525,7 @@ export function NewSessionView({
 			setError(
 				new ProviderModelSelectionOwnershipError(effective.model).message
 			);
-			return false;
+			return;
 		}
 		let currentlyAvailableModels: readonly ProviderModel[];
 		try {
@@ -523,7 +537,7 @@ export function NewSessionView({
 				)?.map(({ model }) => model) ?? [];
 		} catch {
 			setError("Could not verify the selected Provider SDK Model.");
-			return false;
+			return;
 		}
 		if (
 			!isAvailableProviderModelSelection(
@@ -534,6 +548,18 @@ export function NewSessionView({
 			setError(
 				`Provider Model ${effective.model.providerId}/${effective.model.modelId} is unavailable. Connect a Provider and explicitly select an available Provider SDK Model.`
 			);
+			return;
+		}
+		return effective;
+	};
+
+	const createSession = async (
+		input: string,
+		files: ChatPromptSubmission["files"],
+		skill: ChatPromptSubmission["skill"]
+	): Promise<boolean> => {
+		const effective = await resolveReadySessionSelection();
+		if (effective === undefined) {
 			return false;
 		}
 		const fileMentions = await resolveFileMentionParts(input);
@@ -555,13 +581,22 @@ export function NewSessionView({
 			{ rejectInvalid: true }
 		);
 		const durableMessage = externalized ?? initialMessage;
-		const { id } = await store.createSession({
+		const created = await store.createSession({
 			agent: effective.agent,
 			message: durableMessage,
 			model: effective.model,
 			turnId: createAgentTurnId(),
 			thinkingLevel: effective.thinkingLevel,
 		});
+		const writeError = sessionCreationWriteError(
+			created.id,
+			created.writeOutcome
+		);
+		if (writeError !== undefined) {
+			setError(writeError);
+			return created.writeOutcome.kind === "committed";
+		}
+		const { id } = created;
 		await router.navigate({
 			params: { id },
 			state: (previous) => ({

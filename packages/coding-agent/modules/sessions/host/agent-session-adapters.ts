@@ -9,6 +9,7 @@ import {
 	isSameProviderModelIdentity,
 } from "@/modules/providers/provider-model-selection";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
+import { requireSessionWriteReady } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import {
 	buildSkillToolDefinition,
@@ -297,9 +298,19 @@ export const createAgentSessionAdapters = (
 			retain: (attachmentIds) =>
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
-		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
-		updateSubmissionStatus: (input) =>
-			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
+		commitRecord: async (input) => {
+			requireSessionWriteReady(
+				await capabilities.getStore().commitSessionRecord(input)
+			);
+		},
+		updateSubmissionStatus: async (input) => {
+			requireSessionWriteReady(
+				await capabilities.getStore().updateSessionSubmission({
+					...input,
+					sessionId,
+				})
+			);
+		},
 		compaction: {
 			compact: async (input) => {
 				const summaryTarget = await resolveCompactionSummaryTarget(

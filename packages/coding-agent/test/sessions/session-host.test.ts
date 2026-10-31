@@ -85,6 +85,7 @@ import type { SessionSdkPluginProviderSource } from "@/modules/sessions/plugin-p
 import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import { createSessionSdkOperations } from "@/modules/sessions/sdk";
 import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
+import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import {
@@ -133,6 +134,10 @@ installFakeProviderRecorder(recorder);
 import { createSessionHost } from "@/modules/sessions/host/session-host";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+import {
+	failedSessionWriteOutcome,
+	sessionStoreWithSuccessfulWrites,
+} from "../support/session-write-store";
 
 const createSessionHostManager = () => createSessionHostManagerWithRuntime();
 const sessionHostManager = createSessionHostManager();
@@ -251,12 +256,14 @@ const installCacheWarmingStepScript = (): (() => void) => {
 };
 const buildId = agentId("build");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
-const store = createDrizzleSessionStore(
-	createDatabase(path.join(testDirectory, "sessions.db")).db,
-	{
-		attachmentRoot: path.join(testDirectory, "attachments"),
-		workspaceRoot: process.cwd(),
-	}
+const store = sessionStoreWithSuccessfulWrites(
+	createDrizzleSessionStore(
+		createDatabase(path.join(testDirectory, "sessions.db")).db,
+		{
+			attachmentRoot: path.join(testDirectory, "attachments"),
+			workspaceRoot: process.cwd(),
+		}
+	)
 );
 
 const message = (
@@ -369,7 +376,7 @@ const seedSession = async (
 		},
 		sessionId,
 	});
-	const compaction = await store.appendCompaction({
+	const compactionWrite = await store.appendCompaction({
 		estimatedTokensAfter: 100,
 		firstKeptUiMessageId: sessionMessageId(`${prefix}-user-2`),
 		sessionId,
@@ -383,8 +390,15 @@ const seedSession = async (
 		tokensBefore: 900,
 		trigger: "threshold",
 	} satisfies AppendSessionCompactionInput);
+	expect(compactionWrite.writeOutcome).toMatchObject({
+		kind: "committed",
+		projection: "ready",
+	});
+	if (compactionWrite.compaction === undefined) {
+		throw new Error("Compaction write returned no durable entry.");
+	}
 	return {
-		compaction: compaction.id,
+		compaction: compactionWrite.compaction.id,
 		sessionId,
 	};
 };
@@ -441,13 +455,25 @@ const compactionModule = (summaryGenerator: SummaryGenerator) =>
 		estimateTokens: (messages) => messages.length,
 		generateId: () => compactionId("entry-compacted"),
 		store: {
-			appendCompaction: async (input: AppendSessionCompactionInput) => ({
-				...input,
-				completedAt: new Date("2026-09-01T00:00:00.000Z"),
-				createdAt: new Date("2026-09-01T00:00:00.000Z"),
-				id: input.id ?? compactionId("entry-compacted"),
-				sequence: 1,
-			}),
+			appendCompaction: async (input: AppendSessionCompactionInput) => {
+				const entry = {
+					...input,
+					completedAt: new Date("2026-09-01T00:00:00.000Z"),
+					createdAt: new Date("2026-09-01T00:00:00.000Z"),
+					id: input.id ?? compactionId("entry-compacted"),
+					sequence: 1,
+				};
+				return {
+					compaction: entry,
+					writeOutcome: {
+						entryHash: "0".repeat(64),
+						kind: "committed" as const,
+						operationId: `compaction-${entry.id}`,
+						projection: "ready" as const,
+						sequence: entry.sequence,
+					},
+				};
+			},
 			getLatestCompaction: async () => null,
 		},
 		summaryGenerator,
@@ -586,7 +612,7 @@ const createDelayedTerminalStore = (base: SessionStore) => {
 				terminalCommitStarted.resolve();
 				await allowTerminalCommit.promise;
 			}
-			await base.commitSessionRecord(input);
+			return base.commitSessionRecord(input);
 		},
 	};
 	return { allowTerminalCommit, delayed, terminalCommitStarted };
@@ -705,7 +731,7 @@ test("Session Host rejects a missing Plugin Provider registration before model r
 		...store,
 		commitSessionRecord: async (input) => {
 			recordCommits += 1;
-			await store.commitSessionRecord(input);
+			return store.commitSessionRecord(input);
 		},
 	};
 	const capabilities: SessionCapabilities = {
@@ -910,7 +936,7 @@ test("Session Host rejects a missing or stale Plugin snapshot before reconciling
 			...store,
 			updateSessionSubmission: async (input) => {
 				reconciliationWrites += 1;
-				await store.updateSessionSubmission(input);
+				return store.updateSessionSubmission(input);
 			},
 		};
 		const baseCollection = createFakeProviderCollection(
@@ -1188,6 +1214,87 @@ test("retains an idle Session Host until registered Plugin background work finis
 	expect(shutdownCount).toBe(1);
 	await manager.shutdownAll();
 	await pluginRuntime.shutdown();
+});
+
+test("reopens an idle projection-blocked Host from durable Session state", async () => {
+	const manager = createSessionHostManager();
+	let blockAssistantRecord = true;
+	const blockedStore: SessionStore = {
+		...store,
+		commitSessionRecord: async (input) => {
+			const outcome = await store.commitSessionRecord(input);
+			if (!blockAssistantRecord || input.record.outcome.kind !== "assistant") {
+				return outcome;
+			}
+			blockAssistantRecord = false;
+			if (outcome.kind !== "committed") {
+				throw new Error("The test assistant record was not committed.");
+			}
+			throw new SessionWriteOutcomeError({
+				...outcome,
+				projection: "blocked",
+			});
+		},
+	};
+	const capabilities = createCapabilities(blockedStore, {}, manager);
+	const { id: openedSessionId } = await store.createSession({
+		agent: buildId,
+		message: message(
+			"projection-blocked-reopen-initial",
+			"user",
+			"Seed the Session before the Host blocks."
+		),
+		model,
+		turnId: agentTurnId("projection-blocked-reopen-initial-turn"),
+	});
+	const host = await manager.openHost({
+		capabilities,
+		sessionId: openedSessionId,
+		view: true,
+	});
+	const previousStepScript = recorder.stepScript;
+	let modelCalls = 0;
+	recorder.stepScript = async function* (): AsyncGenerator<ProviderChatEvent> {
+		modelCalls += 1;
+		yield { delta: "durable response", type: "text-delta" };
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { type: "finish" };
+	};
+
+	try {
+		await host.agentSession.send(
+			sendInput(capabilities, "Persist a response before projection recovery.")
+		);
+		expect(host.agentSession.getSnapshot()).toMatchObject({
+			projectionBlocked: true,
+			turnActive: false,
+		});
+		expect(modelCalls).toBe(1);
+
+		await manager.releaseView(openedSessionId);
+		const reopenedHost = await manager.openHost({
+			capabilities,
+			sessionId: openedSessionId,
+			view: true,
+		});
+		expect(reopenedHost).not.toBe(host);
+		expect(reopenedHost.agentSession.getSnapshot()).toMatchObject({
+			projectionBlocked: false,
+		});
+		expect(
+			reopenedHost.agentSession
+				.getSnapshot()
+				.transcript.some((entry) => textOf(entry.parts) === "durable response")
+		).toBe(true);
+		const resumed = await reopenedHost.agentSession.send(
+			sendInput(capabilities, "Continue after projection recovery.")
+		);
+		expect(resumed.rejected).toBe(false);
+		expect(modelCalls).toBe(2);
+	} finally {
+		recorder.stepScript = previousStepScript;
+		await manager.shutdownAll();
+	}
 });
 
 test("reload rejects while Session Plugin registration is still opening", async () => {
@@ -2126,9 +2233,13 @@ describe("Session Host opening", () => {
 						failure === "checkpoint" &&
 						input.record.outcome.kind === "checkpoint"
 					) {
-						throw new Error("checkpoint unavailable");
+						return failedSessionWriteOutcome(
+							`record-${input.record.id}`,
+							"session_log_write_not_committed",
+							"checkpoint unavailable"
+						);
 					}
-					await store.commitSessionRecord(input);
+					return store.commitSessionRecord(input);
 				},
 				appendCompaction: async (input) => {
 					if (failure === "persistence") {
@@ -2219,7 +2330,7 @@ describe("Session Host opening", () => {
 						writeStarted.resolve();
 						await releaseWrite.promise;
 					}
-					await store.commitSessionRecord(input);
+					return store.commitSessionRecord(input);
 				},
 				appendCompaction: async (input) => {
 					if (boundary === "compaction") {
@@ -2746,11 +2857,13 @@ describe("Session Host opening", () => {
 		const secondDatabase = createDatabase(
 			path.join(testDirectory, "sessions.db")
 		);
-		const secondStore = createDrizzleSessionStore(secondDatabase.db, {
-			attachmentRoot: path.join(testDirectory, "second-attachments"),
-			snapshotRoot: path.join(testDirectory, "second-snapshots"),
-			workspaceRoot: process.cwd(),
-		});
+		const secondStore = sessionStoreWithSuccessfulWrites(
+			createDrizzleSessionStore(secondDatabase.db, {
+				attachmentRoot: path.join(testDirectory, "second-attachments"),
+				snapshotRoot: path.join(testDirectory, "second-snapshots"),
+				workspaceRoot: process.cwd(),
+			})
+		);
 		const firstHost = await createSessionHost({
 			capabilities: createCapabilities(),
 			sessionId: seeded.sessionId,
@@ -3485,9 +3598,13 @@ describe("Session Host lifetime", () => {
 			...store,
 			commitSessionRecord: async (input) => {
 				if (input.record.outcome.kind === "assistant") {
-					throw new Error("The assistant record could not be saved.");
+					return failedSessionWriteOutcome(
+						`record-${input.record.id}`,
+						"session_log_write_not_committed",
+						"The assistant record could not be saved."
+					);
 				}
-				await store.commitSessionRecord(input);
+				return store.commitSessionRecord(input);
 			},
 		};
 		const capabilities = createCapabilities(failingStore);
