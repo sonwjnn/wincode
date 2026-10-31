@@ -1,5 +1,10 @@
 import { createDatabaseForSessionReset } from "./client";
 import { createDrizzleSessionStore } from "./drizzle-session-store";
+import {
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
+} from "./path";
+import { createSessionJsonlStore } from "./session-jsonl-store";
 
 export type ResetLocalSessionDataInput = Readonly<{
 	attachmentRoot: string;
@@ -17,27 +22,38 @@ export const resetLocalSessionData = async ({
 	snapshotRoot,
 	workspaceRoot,
 }: ResetLocalSessionDataInput): Promise<void> => {
-	const { db, sqlite } = createDatabaseForSessionReset(databasePath);
+	const operational = createDatabaseForSessionReset(databasePath);
 	try {
-		const store = createDrizzleSessionStore(db, {
-			attachmentRoot,
-			snapshotRoot,
-			...(workspaceRoot === undefined ? {} : { workspaceRoot }),
-		});
-		await store.resetSessionData();
-		const obsoleteSelectionColumns = [
-			["session", "variant"],
-			["session_compaction", "summarization_variant"],
-		] as const;
-		for (const [table, column] of obsoleteSelectionColumns) {
-			const columns = sqlite
-				.query(`PRAGMA table_info(${table})`)
-				.all() as Array<{ name: string }>;
-			if (columns.some((entry) => entry.name === column)) {
-				sqlite.exec(`ALTER TABLE ${table} DROP COLUMN ${column};`);
+		const projection = createDatabaseForSessionReset(
+			resolveLocalSessionProjectionPath(databasePath)
+		);
+		try {
+			const logRoot = resolveLocalSessionLogRoot(databasePath);
+			const projectionStore = createDrizzleSessionStore(projection.db, {
+				attachmentRoot,
+				operationalDatabase: operational.db,
+				sessionLogRoot: logRoot,
+				snapshotRoot,
+				...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+			});
+			const store = createSessionJsonlStore(projectionStore, logRoot);
+			await store.resetSessionData();
+			const obsoleteSelectionColumns = [
+				["session", "variant"],
+				["session_compaction", "summarization_variant"],
+			] as const;
+			for (const [table, column] of obsoleteSelectionColumns) {
+				const columns = projection.sqlite
+					.query(`PRAGMA table_info(${table})`)
+					.all() as Array<{ name: string }>;
+				if (columns.some((entry) => entry.name === column)) {
+					projection.sqlite.exec(`ALTER TABLE ${table} DROP COLUMN ${column};`);
+				}
 			}
+		} finally {
+			projection.sqlite.close();
 		}
 	} finally {
-		sqlite.close();
+		operational.sqlite.close();
 	}
 };

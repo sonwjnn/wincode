@@ -1,4 +1,8 @@
 import type { SessionId } from "@/shared/identifiers";
+import {
+	requireSessionWriteReady,
+	SessionWriteOutcomeError,
+} from "../storage/session-jsonl-store";
 import type {
 	CreateSessionUsageEntryInput,
 	SessionStore,
@@ -42,13 +46,20 @@ export const createSessionUsageLedger = ({
 		dispose: () => listeners.clear(),
 		getEntries: () => [...entries.values()],
 		record: async (input) => {
-			const entry = await store.createSessionUsageEntry({
+			const result = await store.createSessionUsageEntry({
 				...input,
 				sessionId,
 			});
-			entries.set(entry.id, entry);
+			const receipt = requireSessionWriteReady(result.writeOutcome);
+			if (result.entry === undefined) {
+				throw new SessionWriteOutcomeError(
+					{ ...receipt, projection: "blocked" },
+					new Error("Committed usage entry is missing from its projection.")
+				);
+			}
+			entries.set(result.entry.id, result.entry);
 			notifyListeners();
-			return entry;
+			return result.entry;
 		},
 		subscribe: (listener) => {
 			listeners.add(listener);

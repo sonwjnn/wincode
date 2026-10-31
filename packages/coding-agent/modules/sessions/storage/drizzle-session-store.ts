@@ -59,7 +59,11 @@ import {
 	isLegacyImagePart,
 } from "./attachment-store";
 import { createDatabase, type SessionDatabase } from "./client";
-import { resolveLocalAttachmentRoot, resolveLocalSnapshotRoot } from "./path";
+import {
+	resolveLocalAttachmentRoot,
+	resolveLocalSessionLogRoot,
+	resolveLocalSnapshotRoot,
+} from "./path";
 import {
 	localSessionBinding,
 	promptHistory,
@@ -67,10 +71,13 @@ import {
 	session,
 	sessionAttachment,
 	sessionCompaction,
+	sessionProjectionCursor,
 	sessionRecord,
 	sessionUsageEntry,
 	sessionWorkspace,
 } from "./schema";
+import type { SessionJsonlProjection } from "./session-jsonl-codec";
+import { createSessionJsonlProjection } from "./session-jsonl-projection";
 import {
 	getSessionRecordValidationError,
 	SessionRecordInvariantError,
@@ -82,7 +89,7 @@ import {
 	type CreateSessionUsageEntryInput,
 	type PromptHistoryEntry,
 	type Session,
-	type SessionStore,
+	type SessionProjectionStore,
 	type SessionUsageEntry,
 	UNTITLED_SESSION_TITLE,
 	type UpdateSessionInput,
@@ -381,6 +388,8 @@ const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
 export type DrizzleSessionStoreOptions = {
 	attachmentRoot?: string;
 	attachmentStore?: SessionAttachmentStore;
+	operationalDatabase?: SessionDatabase;
+	sessionLogRoot?: string;
 	snapshotRoot?: string;
 	workspaceRoot?: string;
 };
@@ -406,6 +415,39 @@ const ensureWorkspace = (db: SessionDatabase, rootPath: string) => {
 		.run();
 
 	return workspace;
+};
+
+const sessionIsBoundToWorkspace = (
+	db: SessionDatabase,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId
+): boolean => {
+	const binding = db
+		.select({ workspaceId: localSessionBinding.workspaceId })
+		.from(localSessionBinding)
+		.where(eq(localSessionBinding.sessionId, sessionId))
+		.get();
+	return binding?.workspaceId === workspaceId;
+};
+
+const assertSessionBinding = (
+	db: SessionDatabase,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId
+): void => {
+	const binding = db
+		.select({ sessionId: localSessionBinding.sessionId })
+		.from(localSessionBinding)
+		.where(
+			and(
+				eq(localSessionBinding.sessionId, sessionId),
+				eq(localSessionBinding.workspaceId, workspaceId)
+			)
+		)
+		.get();
+	if (binding === undefined) {
+		throw new Error("Session not found");
+	}
 };
 
 const deriveSessionTitle = (messages: SessionMessage[]): string => {
@@ -484,7 +526,10 @@ const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	}
 	return record as unknown as SessionRecord;
 };
-const collectLiveAttachmentIds = (db: SessionDatabase): Set<string> => {
+const collectLiveAttachmentIds = (
+	db: SessionDatabase,
+	operationalDb: SessionDatabase
+): Set<string> => {
 	const live = new Set<string>();
 	const recordRows = db
 		.select({ messages: sessionRecord.messagesJson })
@@ -499,7 +544,7 @@ const collectLiveAttachmentIds = (db: SessionDatabase): Set<string> => {
 			}
 		}
 	}
-	const historyRows = db
+	const historyRows = operationalDb
 		.select({ entry: promptHistory.entryJson })
 		.from(promptHistory)
 		.all();
@@ -516,23 +561,16 @@ const collectLiveAttachmentIds = (db: SessionDatabase): Set<string> => {
 
 const appendCompaction = (
 	db: SessionDatabase,
+	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId,
 	input: AppendSessionCompactionInput
-): SessionCompaction =>
-	db.transaction((tx) => {
+): SessionCompaction => {
+	assertSessionBinding(operationalDb, workspaceId, input.sessionId);
+	return db.transaction((tx) => {
 		const sessionRow = tx
 			.select({ id: session.id })
 			.from(session)
-			.innerJoin(
-				localSessionBinding,
-				eq(session.id, localSessionBinding.sessionId)
-			)
-			.where(
-				and(
-					eq(session.id, input.sessionId),
-					eq(localSessionBinding.workspaceId, workspaceId)
-				)
-			)
+			.where(eq(session.id, input.sessionId))
 			.get();
 		if (!sessionRow) {
 			throw new Error("Session not found");
@@ -571,9 +609,11 @@ const appendCompaction = (
 		tx.insert(sessionCompaction).values(row).run();
 		return toSessionCompaction(row);
 	});
+};
 
 const writeSessionRecordCheckpoint = (
 	db: SessionDatabase,
+	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId,
 	{
 		sessionModel,
@@ -592,20 +632,12 @@ const writeSessionRecordCheckpoint = (
 	const modelJson = serializeJson(
 		toSessionRecordModel(record.model, record.model.thinkingLevel)
 	);
+	assertSessionBinding(operationalDb, workspaceId, sessionId);
 	db.transaction((tx) => {
 		const sessionRow = tx
 			.select({ id: session.id })
 			.from(session)
-			.innerJoin(
-				localSessionBinding,
-				eq(session.id, localSessionBinding.sessionId)
-			)
-			.where(
-				and(
-					eq(session.id, sessionId),
-					eq(localSessionBinding.workspaceId, workspaceId)
-				)
-			)
+			.where(eq(session.id, sessionId))
 			.get();
 		if (!sessionRow) {
 			throw new Error("Session not found");
@@ -650,25 +682,18 @@ const writeSessionRecordCheckpoint = (
 };
 const writeSessionUsageEntry = (
 	db: SessionDatabase,
+	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId,
 	input: CreateSessionUsageEntryInput
 ): SessionUsageEntry => {
 	const createdAt = input.createdAt ?? new Date();
 	const usage = modelUsageSchema.parse(input.usage);
+	assertSessionBinding(operationalDb, workspaceId, input.sessionId);
 	return db.transaction((tx) => {
 		const sessionRow = tx
 			.select({ id: session.id })
 			.from(session)
-			.innerJoin(
-				localSessionBinding,
-				eq(session.id, localSessionBinding.sessionId)
-			)
-			.where(
-				and(
-					eq(session.id, input.sessionId),
-					eq(localSessionBinding.workspaceId, workspaceId)
-				)
-			)
+			.where(eq(session.id, input.sessionId))
 			.get();
 		if (!sessionRow) {
 			throw new Error("Session not found");
@@ -707,49 +732,40 @@ const writeSessionUsageEntry = (
 
 const readSessionUsageEntries = (
 	db: SessionDatabase,
+	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId,
 	sessionId: SessionId
-): SessionUsageEntry[] =>
-	db
+): SessionUsageEntry[] => {
+	if (!sessionIsBoundToWorkspace(operationalDb, workspaceId, sessionId)) {
+		return [];
+	}
+	return db
 		.select({ entry: sessionUsageEntry })
 		.from(sessionUsageEntry)
-		.innerJoin(session, eq(sessionUsageEntry.sessionId, session.id))
-		.innerJoin(
-			localSessionBinding,
-			eq(session.id, localSessionBinding.sessionId)
-		)
-		.where(
-			and(
-				eq(sessionUsageEntry.sessionId, sessionId),
-				eq(localSessionBinding.workspaceId, workspaceId)
-			)
-		)
+		.where(eq(sessionUsageEntry.sessionId, sessionId))
 		.orderBy(asc(sessionUsageEntry.createdAt), asc(sessionUsageEntry.id))
 		.all()
 		.map(({ entry }) => toSessionUsageEntry(entry));
+};
 
 const updateSessionSubmissionCheckpoint = (
 	db: SessionDatabase,
+	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId,
 	input: UpdateSessionSubmissionInput
 ): void => {
 	if (input.status === "failed" && !input.failure) {
 		throw new Error("A failed Submission requires a failure reason.");
 	}
+	assertSessionBinding(operationalDb, workspaceId, input.sessionId);
 	db.transaction((tx) => {
 		const row = tx
 			.select({ record: sessionRecord })
 			.from(sessionRecord)
-			.innerJoin(session, eq(sessionRecord.sessionId, session.id))
-			.innerJoin(
-				localSessionBinding,
-				eq(session.id, localSessionBinding.sessionId)
-			)
 			.where(
 				and(
 					eq(sessionRecord.recordId, input.recordId),
-					eq(sessionRecord.sessionId, input.sessionId),
-					eq(localSessionBinding.workspaceId, workspaceId)
+					eq(sessionRecord.sessionId, input.sessionId)
 				)
 			)
 			.get();
@@ -810,48 +826,58 @@ const updateSessionSubmissionCheckpoint = (
 
 const readSessionRecordRows = (
 	db: SessionDatabase,
+	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId,
 	sessionId: SessionId
-): SessionRecordRow[] =>
-	db
+): SessionRecordRow[] => {
+	if (!sessionIsBoundToWorkspace(operationalDb, workspaceId, sessionId)) {
+		return [];
+	}
+	return db
 		.select({ record: sessionRecord })
 		.from(sessionRecord)
-		.innerJoin(session, eq(sessionRecord.sessionId, session.id))
-		.innerJoin(
-			localSessionBinding,
-			eq(session.id, localSessionBinding.sessionId)
-		)
-		.where(
-			and(
-				eq(sessionRecord.sessionId, sessionId),
-				eq(localSessionBinding.workspaceId, workspaceId)
-			)
-		)
+		.where(eq(sessionRecord.sessionId, sessionId))
 		.orderBy(asc(sessionRecord.position))
 		.all()
 		.map(({ record }) => record);
+};
 
 const readSessionRecords = (
 	db: SessionDatabase,
+	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId,
 	sessionId: SessionId
 ): SessionRecord[] =>
-	readSessionRecordRows(db, workspaceId, sessionId).map(toSessionRecord);
+	readSessionRecordRows(db, operationalDb, workspaceId, sessionId).map(
+		toSessionRecord
+	);
+
+export type DrizzleSessionStore = SessionProjectionStore &
+	Readonly<{
+		jsonlProjection: SessionJsonlProjection;
+		setAttachmentCollectionBarrier: (barrier: () => Promise<void>) => void;
+	}>;
 
 export const createDrizzleSessionStore = (
 	database?: SessionDatabase,
 	options: DrizzleSessionStoreOptions = {}
-): SessionStore => {
+): DrizzleSessionStore => {
 	const db = database ?? createDatabase().db;
+	const operationalDb = options.operationalDatabase ?? db;
+	const sessionLogRoot =
+		options.sessionLogRoot ??
+		resolveLocalSessionLogRoot(operationalDb.$client.filename);
 
 	const attachmentRoot =
-		options.attachmentRoot ?? resolveLocalAttachmentRoot(db.$client.filename);
+		options.attachmentRoot ??
+		resolveLocalAttachmentRoot(operationalDb.$client.filename);
 	const snapshotRoot =
-		options.snapshotRoot ?? resolveLocalSnapshotRoot(db.$client.filename);
+		options.snapshotRoot ??
+		resolveLocalSnapshotRoot(operationalDb.$client.filename);
 	const attachmentStore =
 		options.attachmentStore ??
 		createSessionAttachmentStore({
-			repository: createDrizzleAttachmentMetadataRepository(db),
+			repository: createDrizzleAttachmentMetadataRepository(operationalDb),
 			root: attachmentRoot,
 		});
 	const externalizeAttachments = (
@@ -873,27 +899,41 @@ export const createDrizzleSessionStore = (
 		attachmentStore
 			? attachmentStore.hydrateMessages(messages, hydrationOptions)
 			: Promise.resolve([...messages]);
-	const promptHistoryStore = createPromptHistory(db, attachmentStore);
-	const workspace = ensureWorkspace(db, options.workspaceRoot ?? process.cwd());
-	const fileObservationStore = createDrizzleFileObservationStore(
+	const promptHistoryStore = createPromptHistory(
+		operationalDb,
+		attachmentStore
+	);
+	const workspace = ensureWorkspace(
+		operationalDb,
+		options.workspaceRoot ?? process.cwd()
+	);
+	const jsonlProjection = createSessionJsonlProjection(
 		db,
+		operationalDb,
+		workspace.id
+	);
+	const fileObservationStore = createDrizzleFileObservationStore(
+		operationalDb,
 		snapshotRoot,
 		workspace.id
 	);
-	const collectAttachments = (
+	let attachmentCollectionBarrier: (() => Promise<void>) | undefined;
+	const collectAttachments = async (
 		safetyWindowMs = 60_000
-	): Promise<AttachmentMaintenanceReport> =>
-		attachmentStore
+	): Promise<AttachmentMaintenanceReport> => {
+		await attachmentCollectionBarrier?.();
+		return attachmentStore
 			? attachmentStore.collect({
-					liveAttachmentIds: collectLiveAttachmentIds(db),
+					liveAttachmentIds: collectLiveAttachmentIds(db, operationalDb),
 					safetyWindowMs,
 				})
-			: Promise.resolve({
+			: {
 					orphanBytes: 0,
 					orphanCount: 0,
 					reclaimedBytes: 0,
 					reclaimedCount: 0,
-				});
+				};
+	};
 	const assertRecoveryResolvedForSessionDeletion = async (
 		sessionId: SessionId
 	): Promise<void> => {
@@ -920,8 +960,12 @@ export const createDrizzleSessionStore = (
 	};
 
 	return {
+		jsonlProjection,
+		setAttachmentCollectionBarrier: (barrier) => {
+			attachmentCollectionBarrier = barrier;
+		},
 		appendCompaction: (input) =>
-			Promise.resolve(appendCompaction(db, workspace.id, input)),
+			Promise.resolve(appendCompaction(db, operationalDb, workspace.id, input)),
 		getPromptHistory: () => promptHistoryStore.migrate(),
 		recordPrompt: async (entry) => {
 			await promptHistoryStore.record(entry);
@@ -932,7 +976,9 @@ export const createDrizzleSessionStore = (
 			await collectAttachments().catch(() => undefined);
 		},
 		createSession: async ({
+			createdAt,
 			id: requestedId,
+			initialRecord,
 			agent,
 			message,
 			model,
@@ -944,16 +990,19 @@ export const createDrizzleSessionStore = (
 				throw new Error("Initial session message has no durable parts.");
 			}
 			const id = requestedId ?? createSessionId();
-			const now = new Date();
+			const now = createdAt ?? new Date();
 			const recordModel = toSessionRecordModel(
-				message.metadata?.model ?? model,
-				message.metadata?.thinkingLevel ?? thinkingLevel
+				initialRecord?.model ?? message.metadata?.model ?? model,
+				initialRecord?.model.thinkingLevel ??
+					message.metadata?.thinkingLevel ??
+					thinkingLevel
 			);
 
+			operationalDb
+				.insert(localSessionBinding)
+				.values({ sessionId: id, workspaceId: workspace.id })
+				.run();
 			db.transaction((tx) => {
-				tx.insert(localSessionBinding)
-					.values({ sessionId: id, workspaceId: workspace.id })
-					.run();
 				tx.insert(session)
 					.values({
 						createdAt: now,
@@ -970,14 +1019,18 @@ export const createDrizzleSessionStore = (
 					.values({
 						agentId: agent,
 						createdAt: now,
-						messagesJson: serializeJson([durableMessage]),
+						messagesJson: serializeJson(
+							initialRecord?.messages ?? [durableMessage]
+						),
 						modelJson: serializeJson(recordModel),
-						outcomeJson: serializeJson({ kind: "user" }),
+						outcomeJson: serializeJson(
+							initialRecord?.outcome ?? { kind: "user" }
+						),
 						position: 0,
-						recordId: createSessionRecordId(),
+						recordId: initialRecord?.id ?? createSessionRecordId(),
 						sessionId: id,
-						turnId,
-						version: SESSION_RECORD_VERSION,
+						turnId: initialRecord?.turnId ?? turnId,
+						version: initialRecord?.version ?? SESSION_RECORD_VERSION,
 					})
 					.run();
 			});
@@ -985,19 +1038,21 @@ export const createDrizzleSessionStore = (
 			return { id };
 		},
 		createSessionUsageEntry: async (input) =>
-			writeSessionUsageEntry(db, workspace.id, input),
+			writeSessionUsageEntry(db, operationalDb, workspace.id, input),
 		listSessionUsageEntries: async (sessionId) =>
-			readSessionUsageEntries(db, workspace.id, sessionId),
+			readSessionUsageEntries(db, operationalDb, workspace.id, sessionId),
 		createEmptySession: async ({
+			createdAt,
 			id = createSessionId(),
 			model,
 			thinkingLevel,
 		}) => {
-			const now = new Date();
+			const now = createdAt ?? new Date();
+			operationalDb
+				.insert(localSessionBinding)
+				.values({ sessionId: id, workspaceId: workspace.id })
+				.run();
 			db.transaction((tx) => {
-				tx.insert(localSessionBinding)
-					.values({ sessionId: id, workspaceId: workspace.id })
-					.run();
 				tx.insert(session)
 					.values({
 						createdAt: now,
@@ -1016,29 +1071,24 @@ export const createDrizzleSessionStore = (
 
 		deleteSession: async (sessionId: SessionId) => {
 			await assertRecoveryResolvedForSessionDeletion(sessionId);
-			db.transaction((tx) => {
-				const row = tx
-					.select({ id: session.id })
-					.from(session)
-					.innerJoin(
-						localSessionBinding,
-						eq(session.id, localSessionBinding.sessionId)
+			const binding = operationalDb
+				.select({ sessionId: localSessionBinding.sessionId })
+				.from(localSessionBinding)
+				.where(
+					and(
+						eq(localSessionBinding.sessionId, sessionId),
+						eq(localSessionBinding.workspaceId, workspace.id)
 					)
-					.where(
-						and(
-							eq(session.id, sessionId),
-							eq(localSessionBinding.workspaceId, workspace.id)
-						)
-					)
-					.get();
-				if (row === undefined) {
-					return;
-				}
-				tx.delete(session).where(eq(session.id, sessionId)).run();
-				tx.delete(localSessionBinding)
-					.where(eq(localSessionBinding.sessionId, sessionId))
-					.run();
-			});
+				)
+				.get();
+			if (binding === undefined) {
+				return;
+			}
+			db.delete(session).where(eq(session.id, sessionId)).run();
+			operationalDb
+				.delete(localSessionBinding)
+				.where(eq(localSessionBinding.sessionId, sessionId))
+				.run();
 			await collectAttachments().catch(() => undefined);
 			const prune = fileObservationStore.pruneSnapshots;
 			if (prune) {
@@ -1061,6 +1111,9 @@ export const createDrizzleSessionStore = (
 				tx.delete(sessionRecord).run();
 				tx.delete(sessionUsageEntry).run();
 				tx.delete(session).run();
+				tx.delete(sessionProjectionCursor).run();
+			});
+			operationalDb.transaction((tx) => {
 				tx.delete(localSessionBinding).run();
 				tx.delete(sessionAttachment).run();
 			});
@@ -1072,22 +1125,13 @@ export const createDrizzleSessionStore = (
 		},
 
 		getCompactions: (sessionId: SessionId) => {
+			if (!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)) {
+				return Promise.resolve([]);
+			}
 			const rows = db
-				.select({
-					compaction: sessionCompaction,
-				})
+				.select({ compaction: sessionCompaction })
 				.from(sessionCompaction)
-				.innerJoin(session, eq(sessionCompaction.sessionId, session.id))
-				.innerJoin(
-					localSessionBinding,
-					eq(session.id, localSessionBinding.sessionId)
-				)
-				.where(
-					and(
-						eq(sessionCompaction.sessionId, sessionId),
-						eq(localSessionBinding.workspaceId, workspace.id)
-					)
-				)
+				.where(eq(sessionCompaction.sessionId, sessionId))
 				.orderBy(asc(sessionCompaction.sequence))
 				.all();
 			return Promise.resolve(
@@ -1096,22 +1140,13 @@ export const createDrizzleSessionStore = (
 		},
 
 		getLatestCompaction: (sessionId: SessionId) => {
+			if (!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)) {
+				return Promise.resolve(null);
+			}
 			const row = db
-				.select({
-					compaction: sessionCompaction,
-				})
+				.select({ compaction: sessionCompaction })
 				.from(sessionCompaction)
-				.innerJoin(session, eq(sessionCompaction.sessionId, session.id))
-				.innerJoin(
-					localSessionBinding,
-					eq(session.id, localSessionBinding.sessionId)
-				)
-				.where(
-					and(
-						eq(sessionCompaction.sessionId, sessionId),
-						eq(localSessionBinding.workspaceId, workspace.id)
-					)
-				)
+				.where(eq(sessionCompaction.sessionId, sessionId))
 				.orderBy(desc(sessionCompaction.sequence))
 				.limit(1)
 				.get();
@@ -1124,7 +1159,7 @@ export const createDrizzleSessionStore = (
 			record,
 			sessionId,
 		}) => {
-			writeSessionRecordCheckpoint(db, workspace.id, {
+			writeSessionRecordCheckpoint(db, operationalDb, workspace.id, {
 				sessionModel,
 				sessionThinkingLevel,
 				record,
@@ -1132,23 +1167,19 @@ export const createDrizzleSessionStore = (
 			});
 		},
 		listSessionRecords: async (sessionId: SessionId) =>
-			readSessionRecords(db, workspace.id, sessionId),
+			readSessionRecords(db, operationalDb, workspace.id, sessionId),
 		updateSessionSubmission: async (input) =>
-			updateSessionSubmissionCheckpoint(db, workspace.id, input),
+			updateSessionSubmissionCheckpoint(db, operationalDb, workspace.id, input),
 		getSession: (sessionId: SessionId) => {
+			try {
+				assertSessionBinding(operationalDb, workspace.id, sessionId);
+			} catch (error) {
+				return Promise.reject(error);
+			}
 			const row = db
 				.select({ session })
 				.from(session)
-				.innerJoin(
-					localSessionBinding,
-					eq(session.id, localSessionBinding.sessionId)
-				)
-				.where(
-					and(
-						eq(session.id, sessionId),
-						eq(localSessionBinding.workspaceId, workspace.id)
-					)
-				)
+				.where(eq(session.id, sessionId))
 				.get()?.session;
 
 			if (!row) {
@@ -1158,39 +1189,19 @@ export const createDrizzleSessionStore = (
 			return Promise.resolve(toSession(row));
 		},
 		acquireSessionWriter: (sessionId, writerOptions) =>
-			acquireSessionWriterLock(db.$client.filename, sessionId, writerOptions),
+			acquireSessionWriterLock(sessionLogRoot, sessionId, writerOptions),
 		getEditMode: async (sessionId: SessionId): Promise<EditMode> => {
+			assertSessionBinding(operationalDb, workspace.id, sessionId);
 			const row = db
 				.select({ editMode: session.editMode })
 				.from(session)
-				.innerJoin(
-					localSessionBinding,
-					eq(session.id, localSessionBinding.sessionId)
-				)
-				.where(
-					and(
-						eq(session.id, sessionId),
-						eq(localSessionBinding.workspaceId, workspace.id)
-					)
-				)
+				.where(eq(session.id, sessionId))
 				.get();
 			return row?.editMode ?? "hashline";
 		},
 		setEditMode: async (sessionId: SessionId, mode: EditMode) => {
+			assertSessionBinding(operationalDb, workspace.id, sessionId);
 			db.transaction((tx) => {
-				const binding = tx
-					.select({ sessionId: localSessionBinding.sessionId })
-					.from(localSessionBinding)
-					.where(
-						and(
-							eq(localSessionBinding.sessionId, sessionId),
-							eq(localSessionBinding.workspaceId, workspace.id)
-						)
-					)
-					.get();
-				if (binding === undefined) {
-					return;
-				}
 				tx.update(session)
 					.set({ editMode: mode, updatedAt: new Date() })
 					.where(eq(session.id, sessionId))
@@ -1198,20 +1209,24 @@ export const createDrizzleSessionStore = (
 			});
 		},
 		listSessions: () => {
+			const boundSessionIds = new Set(
+				operationalDb
+					.select({ sessionId: localSessionBinding.sessionId })
+					.from(localSessionBinding)
+					.where(eq(localSessionBinding.workspaceId, workspace.id))
+					.all()
+					.map(({ sessionId }) => sessionId)
+			);
 			const rows = db
 				.select({ session })
 				.from(session)
-				.innerJoin(
-					localSessionBinding,
-					eq(session.id, localSessionBinding.sessionId)
-				)
-				.where(eq(localSessionBinding.workspaceId, workspace.id))
 				.orderBy(
 					desc(session.pinned),
 					desc(session.lastMessageAt),
 					desc(session.createdAt)
 				)
-				.all();
+				.all()
+				.filter(({ session: row }) => boundSessionIds.has(row.id));
 
 			return Promise.resolve(rows.map(({ session: row }) => toSession(row)));
 		},
@@ -1219,21 +1234,24 @@ export const createDrizzleSessionStore = (
 			if (limit <= 0) {
 				return [];
 			}
+			const boundSessionIds = new Set(
+				operationalDb
+					.select({ sessionId: localSessionBinding.sessionId })
+					.from(localSessionBinding)
+					.where(eq(localSessionBinding.workspaceId, workspace.id))
+					.all()
+					.map(({ sessionId }) => sessionId)
+			);
 			const rows = db
 				.select({
 					createdAt: sessionRecord.createdAt,
 					model: sessionRecord.modelJson,
+					sessionId: sessionRecord.sessionId,
 				})
 				.from(sessionRecord)
-				.innerJoin(session, eq(sessionRecord.sessionId, session.id))
-				.innerJoin(
-					localSessionBinding,
-					eq(session.id, localSessionBinding.sessionId)
-				)
-				.where(eq(localSessionBinding.workspaceId, workspace.id))
 				.orderBy(desc(sessionRecord.createdAt))
-				.limit(Math.max(limit * 8, limit))
-				.all();
+				.all()
+				.filter(({ sessionId }) => boundSessionIds.has(sessionId));
 			const result: ProviderModelSelection[] = [];
 			const seen = new Set<string>();
 			for (const row of rows) {
@@ -1258,20 +1276,8 @@ export const createDrizzleSessionStore = (
 		},
 
 		updateSession: (sessionId: SessionId, data: UpdateSessionInput) => {
+			assertSessionBinding(operationalDb, workspace.id, sessionId);
 			db.transaction((tx) => {
-				const binding = tx
-					.select({ sessionId: localSessionBinding.sessionId })
-					.from(localSessionBinding)
-					.where(
-						and(
-							eq(localSessionBinding.sessionId, sessionId),
-							eq(localSessionBinding.workspaceId, workspace.id)
-						)
-					)
-					.get();
-				if (binding === undefined) {
-					return;
-				}
 				tx.update(session)
 					.set({
 						updatedAt: new Date(),

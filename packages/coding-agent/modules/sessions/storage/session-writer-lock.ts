@@ -113,14 +113,12 @@ export const resolveSessionWriterLockAdapter = (
 };
 
 /**
- * Acquires one process-owned lock for a local database file identity and Session ID.
- * Its persistent path sits beside the resolved database, so processes opening
- * the same database path share authority across user-data environment overrides.
- * The path must not be removed: processes could then lock different inodes for
- * the same Session ID.
+ * Acquires the process-owned lock for a canonical log-store root and Session ID.
+ * Lock identity is independent of the rebuildable SQLite projection. Persistent
+ * lock files are never removed because replacing one could split authority.
  */
 export const acquireSessionWriterLock = async (
-	databasePath: string,
+	logStoreRoot: string,
 	sessionId: SessionId,
 	options: SessionWriterLockOptions = {}
 ): Promise<SessionWriterLock> => {
@@ -130,21 +128,18 @@ export const acquireSessionWriterLock = async (
 	);
 	let lockPath: string;
 	try {
-		const canonicalDatabasePath = await fs.realpath(databasePath);
-		const databaseIdentity = await fs.stat(canonicalDatabasePath, {
-			bigint: true,
-		});
-		if (databaseIdentity.dev === 0n || databaseIdentity.ino === 0n) {
-			throw new Error("The database file has no stable local identity.");
-		}
+		const absoluteLogStoreRoot = path.resolve(logStoreRoot);
+		await fs.mkdir(absoluteLogStoreRoot, { mode: 0o700, recursive: true });
+		const canonicalLogStoreRoot = await fs.realpath(absoluteLogStoreRoot);
 		const lockDirectory = path.join(
-			path.dirname(canonicalDatabasePath),
-			".wincode-session-writer-locks"
+			path.dirname(canonicalLogStoreRoot),
+			"session-control",
+			"locks"
 		);
 		await fs.mkdir(lockDirectory, { mode: 0o700, recursive: true });
 		const canonicalLockDirectory = await fs.realpath(lockDirectory);
 		const lockName = new Bun.CryptoHasher("sha256")
-			.update(`${databaseIdentity.dev}:${databaseIdentity.ino}\0${sessionId}`)
+			.update(`${canonicalLogStoreRoot}\0${sessionId}`)
 			.digest("hex");
 		lockPath = path.join(canonicalLockDirectory, `${lockName}.lock`);
 	} catch (error) {

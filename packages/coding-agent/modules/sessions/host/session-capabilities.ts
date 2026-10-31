@@ -32,22 +32,18 @@ import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
 } from "../sdk-contract";
-import {
-	createDatabase,
-	type SessionDatabase,
-	SessionDatabaseResetRequiredError,
-} from "../storage/client";
+import { createDatabase, type SessionDatabase } from "../storage/client";
 import {
 	createDrizzleSessionStore,
 	type DrizzleSessionStoreOptions,
 } from "../storage/drizzle-session-store";
 import {
-	resolveLocalAttachmentRoot,
 	resolveLocalDatabasePath,
-	resolveLocalSnapshotRoot,
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
 	resolveSessionDatabasePath,
 } from "../storage/path";
-import { resetLocalSessionData } from "../storage/reset-local-session-data";
+import { createSessionJsonlStore } from "../storage/session-jsonl-store";
 import type { SessionStore } from "../storage/session-store";
 import { createPluginCompactionLifecycle } from "./plugin-compaction-lifecycle";
 import { createSessionHostManager } from "./session-host-manager";
@@ -123,7 +119,6 @@ const sessionHostManagerFor = (
 
 type OpenSessionDatabaseInput = Readonly<{
 	databasePath?: string;
-	workspace: string;
 }>;
 
 type OpenedSessionDatabase = {
@@ -133,26 +128,10 @@ type OpenedSessionDatabase = {
 
 const openSessionDatabase = async ({
 	databasePath,
-	workspace,
-}: OpenSessionDatabaseInput): Promise<OpenedSessionDatabase> => {
-	const localDatabasePath = resolveSessionDatabasePath(
-		databasePath ?? resolveLocalDatabasePath()
+}: OpenSessionDatabaseInput): Promise<OpenedSessionDatabase> =>
+	createDatabase(
+		resolveSessionDatabasePath(databasePath ?? resolveLocalDatabasePath())
 	);
-	try {
-		return createDatabase(localDatabasePath);
-	} catch (error) {
-		if (!(error instanceof SessionDatabaseResetRequiredError)) {
-			throw error;
-		}
-		await resetLocalSessionData({
-			attachmentRoot: resolveLocalAttachmentRoot(localDatabasePath),
-			databasePath: localDatabasePath,
-			snapshotRoot: resolveLocalSnapshotRoot(localDatabasePath),
-			workspaceRoot: workspace,
-		});
-		return createDatabase(localDatabasePath);
-	}
-};
 
 /**
  * Composes the same React-free capability graph used by Session Host, suitable
@@ -298,16 +277,34 @@ export const createSessionCapabilities = async ({
 		return attachConfiguredModelProviders(collection, configuredModelProviders);
 	};
 	let ownedDatabase: OpenedSessionDatabase | undefined;
+	let ownedProjectionDatabase: OpenedSessionDatabase | undefined;
 	try {
 		if (providedDatabase === undefined && providedStore === undefined) {
-			ownedDatabase = await openSessionDatabase({ databasePath, workspace });
+			ownedDatabase = await openSessionDatabase({ databasePath });
 		}
 		const database = providedDatabase ?? ownedDatabase?.db;
-		const store =
-			providedStore ??
-			createDrizzleSessionStore(database, {
-				workspaceRoot: workspace,
-			} satisfies DrizzleSessionStoreOptions);
+		let store: SessionStore;
+		if (providedStore === undefined) {
+			ownedProjectionDatabase = createDatabase(
+				resolveLocalSessionProjectionPath(database?.$client.filename)
+			);
+			const drizzleStore = createDrizzleSessionStore(
+				ownedProjectionDatabase.db,
+				{
+					operationalDatabase: database,
+					sessionLogRoot: resolveLocalSessionLogRoot(
+						database?.$client.filename
+					),
+					workspaceRoot: workspace,
+				} satisfies DrizzleSessionStoreOptions
+			);
+			store = createSessionJsonlStore(
+				drizzleStore,
+				resolveLocalSessionLogRoot(database?.$client.filename)
+			);
+		} else {
+			store = providedStore;
+		}
 		/**
 		 * The Agent registry a capability reads. A caller that supplies a source
 		 * is never read at open, so its registry is only resolved per use.
@@ -357,6 +354,7 @@ export const createSessionCapabilities = async ({
 						await pluginRuntime.shutdown();
 					}
 				} finally {
+					ownedProjectionDatabase?.sqlite.close();
 					ownedDatabase?.sqlite.close();
 				}
 			})();
@@ -393,6 +391,7 @@ export const createSessionCapabilities = async ({
 			workspaceId: workspaceIdentity(workspace),
 		};
 	} catch (error) {
+		ownedProjectionDatabase?.sqlite.close();
 		ownedDatabase?.sqlite.close();
 		throw error;
 	}

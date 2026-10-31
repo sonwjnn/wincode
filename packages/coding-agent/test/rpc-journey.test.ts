@@ -55,7 +55,13 @@ installFakeProviderRecorder(recorder);
 import { openSessionServices } from "../modules/sessions/host/session-services";
 import { createDatabase } from "../modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "../modules/sessions/storage/drizzle-session-store";
+import {
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
+} from "../modules/sessions/storage/path";
+import { createSessionJsonlStore } from "../modules/sessions/storage/session-jsonl-store";
 import type { ConfigSnapshot } from "../shared/config/config-store";
+import { toSessionId } from "../shared/identifiers";
 
 afterAll(async () => {
 	mock.restore();
@@ -361,9 +367,18 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		])
 	);
 	const reopened = createDatabase(databasePath);
-	const store = createDrizzleSessionStore(reopened.db, {
+	const reopenedProjection = createDatabase(
+		resolveLocalSessionProjectionPath(databasePath)
+	);
+	const projectionStore = createDrizzleSessionStore(reopenedProjection.db, {
+		operationalDatabase: reopened.db,
+		sessionLogRoot: resolveLocalSessionLogRoot(databasePath),
 		workspaceRoot: workspace,
 	});
+	const store = createSessionJsonlStore(
+		projectionStore,
+		resolveLocalSessionLogRoot(databasePath)
+	);
 	const sessions = await store.listSessions();
 	expect(sessions).toHaveLength(1);
 	const session = sessions[0];
@@ -389,6 +404,8 @@ test("raw JSONL drives a real Session Host through persistence", async () => {
 		)
 	).toBe(true);
 	expect(session.thinkingLevel).toBe("high");
+	reopened.sqlite.close();
+	reopenedProjection.sqlite.close();
 });
 
 test("RPC runs an explicitly selected Plugin Provider and emits a secret-free authentication failure", async () => {
@@ -1392,11 +1409,23 @@ test("RPC maps an unavailable Provider SDK composition to an actionable error", 
 test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 	const conflictDatabasePath = path.join(workspace, "writer-conflict.sqlite");
 	const ownerDatabase = createDatabase(conflictDatabasePath);
-	const ownerStore = createDrizzleSessionStore(ownerDatabase.db, {
-		attachmentRoot: path.join(workspace, "writer-conflict-attachments"),
-		snapshotRoot: path.join(workspace, "writer-conflict-snapshots"),
-		workspaceRoot: workspace,
-	});
+	const ownerProjectionDatabase = createDatabase(
+		resolveLocalSessionProjectionPath(conflictDatabasePath)
+	);
+	const ownerProjectionStore = createDrizzleSessionStore(
+		ownerProjectionDatabase.db,
+		{
+			attachmentRoot: path.join(workspace, "writer-conflict-attachments"),
+			operationalDatabase: ownerDatabase.db,
+			sessionLogRoot: resolveLocalSessionLogRoot(conflictDatabasePath),
+			snapshotRoot: path.join(workspace, "writer-conflict-snapshots"),
+			workspaceRoot: workspace,
+		}
+	);
+	const ownerStore = createSessionJsonlStore(
+		ownerProjectionStore,
+		resolveLocalSessionLogRoot(conflictDatabasePath)
+	);
 	const { id: sessionId } = await ownerStore.createSession({
 		agent: agentId("build"),
 		message: {
@@ -1465,6 +1494,373 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 		await ownerWriter.release();
 		await rpcAssembly.shutdown();
 		ownerDatabase.sqlite.close();
+		ownerProjectionDatabase.sqlite.close();
+	}
+});
+
+test("RPC session/open preserves the structured JSONL corruption code", async () => {
+	const storageErrorWorkspace = path.join(workspace, "storage-error");
+	await fs.mkdir(storageErrorWorkspace, { recursive: true });
+	const corruptionDatabasePath = path.join(
+		storageErrorWorkspace,
+		"session-log-corruption.sqlite"
+	);
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: storageErrorWorkspace,
+			databasePath: corruptionDatabasePath,
+			workspace: storageErrorWorkspace,
+		},
+		sources: {},
+	});
+	const { id: sessionId } = await assembly.store.createEmptySession({});
+	const logPath = path.join(
+		resolveLocalSessionLogRoot(corruptionDatabasePath),
+		sessionId,
+		"session.jsonl"
+	);
+	await fs.writeFile(logPath, '{"not":"a valid envelope"}\n');
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const input = [
+		new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "storage-error-test" },
+				cwd: storageErrorWorkspace,
+				protocolVersion: 4,
+			})}\n`
+		),
+		new TextEncoder().encode(
+			`${request("open", "session/open", { sessionId })}\n`
+		),
+		new TextEncoder().encode(`${request("shutdown", "server/shutdown", {})}\n`),
+	];
+
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		expect(exitCode).toBe(0);
+		expect(stderrFrames).toEqual([]);
+		expect(frames.find((frame) => frame.id === "open")?.error).toMatchObject({
+			data: {
+				code: "session_log_unavailable",
+				offset: 0,
+				sessionId,
+			},
+		});
+		expect(frames.some((frame) => frame.method === "server/fatal")).toBe(false);
+	} finally {
+		await assembly.shutdown();
+	}
+});
+
+test("RPC state preserves a committed-blocked submission receipt without scheduling", async () => {
+	const blockedWorkspace = path.join(workspace, "blocked-projection");
+	await fs.mkdir(blockedWorkspace, { recursive: true });
+	const blockedDatabasePath = path.join(blockedWorkspace, "sessions.sqlite");
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: blockedWorkspace,
+			databasePath: blockedDatabasePath,
+			workspace: blockedWorkspace,
+		},
+		sources: {
+			createProviderCollection: () =>
+				createFakeProviderCollection(recorder, rpcProviderModel),
+		},
+	});
+	const created = await assembly.store.createSession({
+		agent: agentId("build"),
+		id: toSessionId("rpc-blocked-projection-session"),
+		message: {
+			id: sessionMessageId("rpc-blocked-projection-initial"),
+			parts: [{ text: "Initial selection checkpoint.", type: "text" }],
+			role: "user",
+		},
+		model: { modelId: modelId(rpcProviderModel.modelId), providerId: "openai" },
+		turnId: agentTurnId("rpc-blocked-projection-initial-turn"),
+	});
+	expect(created.writeOutcome).toMatchObject({
+		kind: "committed",
+		projection: "ready",
+	});
+	const sessionId = created.id;
+	const projection = createDatabase(
+		resolveLocalSessionProjectionPath(blockedDatabasePath)
+	);
+	projection.sqlite.exec(`
+		CREATE TRIGGER reject_rpc_prompt_projection
+		BEFORE UPDATE ON session
+		BEGIN
+			SELECT RAISE(ABORT, 'injected RPC projection failure');
+		END;
+	`);
+	projection.sqlite.close();
+	const requestsBeforeSubmit = recorder.requests.length;
+	const initialized = Promise.withResolvers<void>();
+	const opened = Promise.withResolvers<void>();
+	const submitted = Promise.withResolvers<void>();
+	const blocked = Promise.withResolvers<void>();
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const input = (async function* (): AsyncGenerator<Uint8Array> {
+		yield new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "blocked-write-test" },
+				cwd: blockedWorkspace,
+				protocolVersion: 4,
+			})}\n`
+		);
+		await initialized.promise;
+		yield new TextEncoder().encode(
+			`${request("open", "session/open", { sessionId })}\n`
+		);
+		await opened.promise;
+		yield new TextEncoder().encode(
+			`${request("submit", "session/submit", {
+				submission: { text: "Persist before model dispatch." },
+			})}\n`
+		);
+		await submitted.promise;
+		await Promise.race([
+			blocked.promise,
+			Bun.sleep(5000).then(() => {
+				throw new Error("RPC did not publish the blocked write receipt.");
+			}),
+		]);
+		yield new TextEncoder().encode(
+			`${request("shutdown", "server/shutdown", {})}\n`
+		);
+	})();
+
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+					const frame = JSON.parse(text) as {
+						id?: string;
+						method?: string;
+						params?: {
+							state?: {
+								storageError?: {
+									code?: string;
+									writeOutcome?: {
+										kind?: string;
+										projection?: string;
+									};
+								};
+							};
+						};
+					};
+					if (frame.id === "initialize") {
+						initialized.resolve();
+					}
+					if (frame.id === "open") {
+						opened.resolve();
+					}
+					if (frame.id === "submit") {
+						submitted.resolve();
+					}
+					if (
+						frame.method === "session/stateChanged" &&
+						frame.params?.state?.storageError?.writeOutcome?.kind ===
+							"committed" &&
+						frame.params.state.storageError.writeOutcome.projection ===
+							"blocked"
+					) {
+						blocked.resolve();
+					}
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const blockedState = frames.find(
+			(frame) =>
+				frame.method === "session/stateChanged" &&
+				JSON.stringify(frame).includes("session_projection_unavailable")
+		) as
+			| {
+					params?: {
+						state?: {
+							storageError?: {
+								code?: string;
+								writeOutcome?: { kind?: string; projection?: string };
+							};
+						};
+					};
+			  }
+			| undefined;
+		expect(exitCode).toBe(0);
+		expect(stderrFrames).toEqual([]);
+		expect(blockedState?.params?.state?.storageError).toMatchObject({
+			code: "session_projection_unavailable",
+			writeOutcome: { kind: "committed", projection: "blocked" },
+		});
+		expect(recorder.requests.slice(requestsBeforeSubmit)).toEqual([]);
+	} finally {
+		await assembly.shutdown();
+	}
+});
+
+test("RPC returns a committed-blocked creation receipt without terminating", async () => {
+	const faultWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-rpc-create-projection-fault-")
+	);
+	const faultDatabasePath = path.join(faultWorkspace, "sessions.sqlite");
+	const recorder = createFakeProviderRecorder();
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: faultWorkspace,
+			databasePath: faultDatabasePath,
+			workspace: faultWorkspace,
+		},
+		sources: {
+			createProviderCollection: () =>
+				createFakeProviderCollection(recorder, rpcProviderModel),
+		},
+	});
+	const projection = createDatabase(
+		resolveLocalSessionProjectionPath(faultDatabasePath)
+	);
+	projection.sqlite.exec(`
+		CREATE TRIGGER reject_rpc_creation_projection
+		BEFORE UPDATE ON session
+		BEGIN
+			SELECT RAISE(ABORT, 'injected RPC creation projection failure');
+		END;
+	`);
+	projection.sqlite.close();
+
+	const frames: string[] = [];
+	const stderrFrames: string[] = [];
+	const initialized = Promise.withResolvers<void>();
+	const createResponded = Promise.withResolvers<void>();
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const input = (async function* (): AsyncGenerator<Uint8Array> {
+		yield new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "creation-projection-fault" },
+				cwd: faultWorkspace,
+				protocolVersion: 4,
+			})}\n`
+		);
+		await initialized.promise;
+		yield new TextEncoder().encode(
+			`${request("create", "session/create", {
+				initialSubmission: { text: "Save this before dispatch." },
+				selection: {
+					agentId: "build",
+					model: {
+						modelId: rpcProviderModel.modelId,
+						providerId: rpcProviderModel.providerId,
+					},
+					thinkingLevel: "high",
+				},
+			})}\n`
+		);
+		await createResponded.promise;
+		yield new TextEncoder().encode(
+			`${request("shutdown", "server/shutdown", {})}\n`
+		);
+	})();
+
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					frames.push(text);
+					const frame = JSON.parse(text) as {
+						id?: string;
+						error?: {
+							data?: {
+								code?: string;
+								outcome?: { kind?: string; projection?: string };
+							};
+						};
+					};
+					if (frame.id === "initialize") {
+						initialized.resolve();
+					}
+					if (frame.id === "create") {
+						createResponded.resolve();
+					}
+				},
+			},
+		});
+		const createResponse = frames
+			.map(
+				(frame) =>
+					JSON.parse(frame) as {
+						id?: string;
+						error?: {
+							data?: {
+								code?: string;
+								outcome?: { kind?: string; projection?: string };
+							};
+						};
+					}
+			)
+			.find(({ id }) => id === "create");
+
+		expect(exitCode).toBe(0);
+		expect(stderrFrames).toEqual([]);
+		expect(createResponse?.error?.data).toMatchObject({
+			code: "session_projection_unavailable",
+			outcome: { kind: "committed", projection: "blocked" },
+		});
+		expect(recorder.requests).toEqual([]);
+	} finally {
+		await assembly.shutdown();
+		await fs.rm(faultWorkspace, { force: true, recursive: true });
 	}
 });
 

@@ -10,6 +10,8 @@ import { SessionWriterLockFailureError } from "./session-writer-lock";
 const DATABASE_FILE_NAME = "sessions.db";
 const ATTACHMENT_DIRECTORY_NAME = "attachments";
 const SNAPSHOT_DIRECTORY_NAME = "file-snapshots";
+const SESSION_LOG_DIRECTORY_NAME = "session-logs";
+const SESSION_PROJECTION_FILE_NAME = "session-projection.sqlite";
 const DATABASE_PATH_INDEX_DIRECTORY_NAME = "session-writer-locks";
 const DATABASE_PATH_INDEX_VERSION = 2;
 type DatabaseIdentity = Readonly<{
@@ -206,3 +208,17 @@ export const resolveLocalAttachmentRoot = (
 export const resolveLocalSnapshotRoot = (
 	databasePath: string = resolveLocalDatabasePath()
 ): string => path.join(path.dirname(databasePath), SNAPSHOT_DIRECTORY_NAME);
+export const resolveLocalSessionLogRoot = (
+	databasePath: string = resolveLocalDatabasePath()
+): string =>
+	path.join(
+		path.dirname(resolveSessionDatabasePath(databasePath)),
+		SESSION_LOG_DIRECTORY_NAME
+	);
+export const resolveLocalSessionProjectionPath = (
+	databasePath: string = resolveLocalDatabasePath()
+): string =>
+	path.join(
+		path.dirname(resolveSessionDatabasePath(databasePath)),
+		SESSION_PROJECTION_FILE_NAME
+	);

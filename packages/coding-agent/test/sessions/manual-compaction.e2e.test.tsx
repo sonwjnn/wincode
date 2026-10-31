@@ -93,9 +93,8 @@ test("compacts manually through the UI and uses the summary on the next turn", a
 		});
 		await settleSessionUi(activeSetup);
 		await act(() => activeSetup.mockInput.pressEnter());
-		await activeSetup.waitFor(
-			async () => (await store.getCompactions(sessionId)).length > 0,
-			{ maxPasses: 200 }
+		await waitForSessionCondition(
+			async () => (await store.getCompactions(sessionId)).length > 0
 		);
 		await settleSessionUi(activeSetup);
 		await waitForSessionFrame(activeSetup, (frame) =>

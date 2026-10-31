@@ -46,6 +46,11 @@ import {
 	type InteractiveSessionProviderCollectionOptions,
 	pluginProvidersFromRuntime,
 } from "../modules/sessions/provider-collection";
+import { createDatabase } from "../modules/sessions/storage/client";
+import {
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
+} from "../modules/sessions/storage/path";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import {
 	createFakeProviderCollection,
@@ -485,7 +490,7 @@ afterAll(async () => {
 	await fs.rm(workspace, { force: true, recursive: true });
 });
 
-test("Print mode creates a durable One-Shot Session and writes assistant text only", async () => {
+test("Print mode checkpoints its initial prompt atomically before writing assistant text", async () => {
 	const stdout = writer();
 	const stderr = writer();
 	const exitCode = await runPrintMode(
@@ -517,6 +522,40 @@ test("Print mode creates a durable One-Shot Session and writes assistant text on
 	if (sessionId === undefined) {
 		throw new Error("Expected the Print mode session to have an id.");
 	}
+	const initialLogPath = path.join(
+		resolveLocalSessionLogRoot(path.join(workspace, "sessions.sqlite")),
+		sessionId,
+		"session.jsonl"
+	);
+	const entries = (await fs.readFile(initialLogPath, "utf8"))
+		.trimEnd()
+		.split("\n")
+		.map(
+			(line) =>
+				JSON.parse(line) as {
+					payload?: {
+						initialRecord?: {
+							messages?: Array<{ parts?: Array<{ text?: string }> }>;
+						};
+						record?: { outcome?: { kind?: string } };
+					};
+					type: string;
+				}
+		);
+	expect(entries[1]).toMatchObject({
+		payload: {
+			initialRecord: {
+				messages: [{ parts: [{ text: "hello from print" }] }],
+			},
+		},
+		type: "session.created",
+	});
+	expect(
+		entries.filter(
+			({ payload, type }) =>
+				type === "record.committed" && payload?.record?.outcome?.kind === "user"
+		)
+	).toHaveLength(0);
 
 	const continued = writer();
 	const continuedErrors = writer();
@@ -2033,6 +2072,74 @@ const noCapabilities: OneShotDependencies = {
 		throw new Error("capabilities should not be composed");
 	},
 };
+
+test("Print and JSON modes preserve committed-blocked write receipts", async () => {
+	for (const mode of ["print", "json"] as const) {
+		const faultWorkspace = await fs.mkdtemp(
+			path.join("/tmp", `wincode-one-shot-${mode}-projection-fault-`)
+		);
+		const recorder = createFakeProviderRecorder();
+		const composeBase = composeServicesDetailedFor(registry, () =>
+			createFakeProviderCollection(recorder)
+		);
+		const composeWithProjectionFault: NonNullable<
+			OneShotDependencies["composeServices"]
+		> = async (input) => {
+			const composed = await composeBase(input);
+			const databasePath = path.join(input.workspace, "sessions.sqlite");
+			const projection = createDatabase(
+				resolveLocalSessionProjectionPath(databasePath)
+			);
+			projection.sqlite.exec(`
+				CREATE TRIGGER reject_one_shot_prompt_projection
+				BEFORE UPDATE ON session
+				BEGIN
+					SELECT RAISE(ABORT, 'injected one-shot projection failure');
+				END;
+			`);
+			projection.sqlite.close();
+			return composed;
+		};
+		const stdout = writer();
+		const stderr = writer();
+		try {
+			const input = context(
+				mode,
+				"Persist before model dispatch.",
+				stdout.writer,
+				stderr.writer,
+				undefined,
+				undefined,
+				true,
+				{},
+				faultWorkspace
+			);
+			const exitCode =
+				mode === "json"
+					? await runJsonMode(input, {
+							composeServices: composeWithProjectionFault,
+						})
+					: await runPrintMode(input, {
+							composeServices: composeWithProjectionFault,
+						});
+			const output = mode === "json" ? stdout.text : stderr.text;
+			const frame = JSON.parse(output.trim()) as {
+				error?: {
+					code?: string;
+					writeOutcome?: { kind?: string; projection?: string };
+				};
+			};
+			expect(exitCode).toBe(1);
+			expect(frame.error).toMatchObject({
+				code: "session_projection_unavailable",
+				writeOutcome: { kind: "committed", projection: "blocked" },
+			});
+			expect(recorder.requests).toEqual([]);
+		} finally {
+			await fs.rm(faultWorkspace, { force: true, recursive: true });
+		}
+	}
+});
 
 test("one-shot keeps Print parent-only and tags JSON child Session events", async () => {
 	const printWorkspace = await fs.mkdtemp(

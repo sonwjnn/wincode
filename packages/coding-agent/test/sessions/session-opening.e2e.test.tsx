@@ -35,8 +35,11 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import {
 	resolveLocalAttachmentRoot,
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
 	resolveLocalSnapshotRoot,
 } from "@/modules/sessions/storage/path";
+import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import {
 	SessionInUseError,
 	SessionWriterLockFailureError,
@@ -1036,6 +1039,7 @@ test("offers read-only history during process contention and retries with fresh 
 		expect(initialFrame).not.toContain("Compact");
 
 		const refreshedMessage = "visible only after manual history refresh";
+		await contender.release();
 		await commitHistoryUserMessage(
 			historySession.sessionId,
 			"refresh-record",
@@ -1062,12 +1066,12 @@ test("offers read-only history during process contention and retries with fresh 
 		expect(retryConflictFrame).not.toContain("Ask anything...");
 
 		const freshHostMessage = "loaded by the newly opened writable host";
+		await contender.release();
 		await commitHistoryUserMessage(
 			historySession.sessionId,
 			"fresh-host-record",
 			freshHostMessage
 		);
-		await contender.release();
 		await activateSessionWriterAction(setup, "stored-session-history-open");
 		await waitForSessionFrame(
 			setup,
@@ -1186,32 +1190,41 @@ test("does not offer history when acquiring the OS writer lock fails", async () 
 		setup?.renderer.destroy();
 	}
 });
-test("shows committed WAL history when the writer owns a hard-linked database path", async () => {
+test("shows committed Session history while another process owns a hard-linked database path", async () => {
 	const historySession = await seedCompactionHistory(
 		store,
 		1,
 		"hard-link-history"
 	);
-	const aliasDatabase = createDatabase(aliasDatabasePath);
-	try {
-		const aliasStore = createDrizzleSessionStore(aliasDatabase.db, {
+	const aliasOperational = createDatabase(aliasDatabasePath);
+	const aliasProjection = createDatabase(
+		resolveLocalSessionProjectionPath(aliasDatabasePath)
+	);
+	const logRoot = resolveLocalSessionLogRoot(aliasDatabasePath);
+	const aliasStore = createSessionJsonlStore(
+		createDrizzleSessionStore(aliasProjection.db, {
 			attachmentRoot: resolveLocalAttachmentRoot(aliasDatabasePath),
+			operationalDatabase: aliasOperational.db,
+			sessionLogRoot: logRoot,
 			snapshotRoot: resolveLocalSnapshotRoot(aliasDatabasePath),
 			workspaceRoot: process.cwd(),
-		});
+		}),
+		logRoot
+	);
+	try {
+		const committedMessage = "committed through the owner's WAL alias";
+		await commitHistoryUserMessage(
+			historySession.sessionId,
+			"hard-link-owner",
+			committedMessage,
+			aliasStore
+		);
 		const contender = await startWriterContender(
 			historySession.sessionId,
 			aliasDatabasePath
 		);
 		let setup: TestRendererSetup | undefined;
 		try {
-			const committedMessage = "committed through the owner's WAL alias";
-			await commitHistoryUserMessage(
-				historySession.sessionId,
-				"hard-link-owner",
-				committedMessage,
-				aliasStore
-			);
 			const rendered = await renderSession({
 				pricing: createE2ePricing(200_000),
 				sessionId: historySession.sessionId,
@@ -1237,6 +1250,7 @@ test("shows committed WAL history when the writer owns a hard-linked database pa
 			setup?.renderer.destroy();
 		}
 	} finally {
-		aliasDatabase.sqlite.close();
+		aliasOperational.sqlite.close();
+		aliasProjection.sqlite.close();
 	}
 }, 15_000);

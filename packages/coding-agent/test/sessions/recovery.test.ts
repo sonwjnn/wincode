@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionProjectionStore } from "@/modules/sessions/storage/session-store";
 import {
 	computeFileVersion,
 	type FileObservationStore,
@@ -22,7 +22,7 @@ import {
 
 type OpenedStore = {
 	database: { sqlite: SqliteDatabase };
-	store: SessionStore;
+	store: SessionProjectionStore;
 };
 
 const model = {
@@ -40,14 +40,16 @@ const openStore = (root: string, databasePath: string): OpenedStore => {
 	return { database, store };
 };
 
-const observationStoreFor = (store: SessionStore): FileObservationStore => {
+const observationStoreFor = (
+	store: SessionProjectionStore
+): FileObservationStore => {
 	if (store.fileObservationStore === undefined) {
 		throw new Error("The session store has no file observation store.");
 	}
 	return store.fileObservationStore;
 };
 
-const createSession = async (store: SessionStore) =>
+const createSession = async (store: SessionProjectionStore) =>
 	await store.createSession({
 		agent: agentId("build"),
 		message: {

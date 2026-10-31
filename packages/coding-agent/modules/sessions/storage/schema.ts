@@ -19,6 +19,17 @@ import type {
 } from "./session-store";
 export type SerializedJson<T> = Jsonify<T>;
 
+export const sessionProjectionCursor = sqliteTable(
+	"session_projection_cursor",
+	{
+		sessionId: text("session_id").primaryKey(),
+		logId: text("log_id").notNull(),
+		nextByteOffset: integer("next_byte_offset").notNull(),
+		nextSequence: integer("next_sequence").notNull(),
+		lastHash: text("last_hash").notNull(),
+	}
+);
+
 export const sessionWorkspace = sqliteTable("session_workspace", {
 	id: text("id").primaryKey(),
 	rootPath: text("root_path").notNull().unique(),
@@ -453,6 +464,7 @@ export const sessionSchema = {
 	localSessionBinding,
 	sessionCompaction,
 	sessionRecord,
+	sessionProjectionCursor,
 	sessionUsageEntry,
 	session,
 	sessionWorkspace,

@@ -8,7 +8,8 @@ import {
 	type SessionDatabase,
 } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import { resolveLocalSessionLogRoot } from "@/modules/sessions/storage/path";
+import type { SessionProjectionStore } from "@/modules/sessions/storage/session-store";
 import {
 	acquireSessionWriterLock,
 	SessionInUseError,
@@ -31,10 +32,10 @@ type DatabaseHandle = Readonly<{
 
 type Fixture = Readonly<{
 	first: DatabaseHandle;
-	firstStore: SessionStore;
+	firstStore: SessionProjectionStore;
 	root: string;
 	second: DatabaseHandle;
-	secondStore: SessionStore;
+	secondStore: SessionProjectionStore;
 }>;
 
 const fixtures: Fixture[] = [];
@@ -61,7 +62,7 @@ const createFixture = (): Fixture => {
 	return fixture;
 };
 
-const createSession = async (store: SessionStore) =>
+const createSession = async (store: SessionProjectionStore) =>
 	store.createSession({
 		agent: agentId("build"),
 		message: {
@@ -282,6 +283,31 @@ describe("Session Writer process locks", () => {
 			await owner.stop();
 		}
 	});
+	test("changing the projection database does not open a second Session Writer", async () => {
+		const fixture = createFixture();
+		const session = await createSession(fixture.firstStore);
+		const projectionDatabase = createDatabase(
+			path.join(fixture.root, "session-projection.sqlite")
+		);
+		const projectionStore = createDrizzleSessionStore(projectionDatabase.db, {
+			operationalDatabase: fixture.first.db,
+			sessionLogRoot: resolveLocalSessionLogRoot(
+				path.join(fixture.root, "sessions.db")
+			),
+			workspaceRoot: fixture.root,
+		});
+		const owner = await fixture.firstStore.acquireSessionWriter(session.id);
+
+		try {
+			await expect(
+				projectionStore.acquireSessionWriter(session.id)
+			).rejects.toBeInstanceOf(SessionInUseError);
+		} finally {
+			await owner.release();
+			projectionDatabase.sqlite.close();
+		}
+	});
+
 	test("refuses a Session Writer through a hard-linked database path", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
@@ -305,33 +331,35 @@ describe("Session Writer process locks", () => {
 			await owner.release();
 		}
 	});
-	test("allows the same Session ID in separate local databases", async () => {
+	test("allows the same Session ID in separate canonical log roots", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
 		const firstDatabasePath = path.join(fixture.root, "sessions.db");
-		const secondDatabasePath = path.join(fixture.root, "other-sessions.db");
+		const secondRoot = path.join(fixture.root, "separate-data-root");
+		fs.mkdirSync(secondRoot);
+		const secondDatabasePath = path.join(secondRoot, "other-sessions.db");
 		const secondDatabase = createDatabase(secondDatabasePath);
 
 		try {
 			const firstWriter = await acquireSessionWriterLock(
-				firstDatabasePath,
+				resolveLocalSessionLogRoot(firstDatabasePath),
 				session.id
 			);
 			try {
 				const secondWriter = await acquireSessionWriterLock(
-					secondDatabasePath,
+					resolveLocalSessionLogRoot(secondDatabasePath),
 					session.id
 				);
 				try {
 					const firstConflict = await acquireSessionWriterLock(
-						firstDatabasePath,
+						resolveLocalSessionLogRoot(firstDatabasePath),
 						session.id
 					).then(
 						() => undefined,
 						(error: unknown) => error
 					);
 					const secondConflict = await acquireSessionWriterLock(
-						secondDatabasePath,
+						resolveLocalSessionLogRoot(secondDatabasePath),
 						session.id
 					).then(
 						() => undefined,
@@ -382,11 +410,14 @@ describe("Session Writer process locks", () => {
 		const databasePath = path.join(fixture.root, "sessions.db");
 		const aliasPath = path.join(fixture.root, "sessions-alias.db");
 		await fs.promises.symlink(databasePath, aliasPath);
-		const owner = await acquireSessionWriterLock(databasePath, session.id);
+		const owner = await acquireSessionWriterLock(
+			resolveLocalSessionLogRoot(databasePath),
+			session.id
+		);
 
 		try {
 			const conflict = await acquireSessionWriterLock(
-				aliasPath,
+				resolveLocalSessionLogRoot(aliasPath),
 				session.id
 			).then(
 				() => undefined,
@@ -402,20 +433,17 @@ describe("Session Writer process locks", () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
 
+		const blocker = path.join(fixture.root, "not-a-directory");
+		fs.writeFileSync(blocker, "");
+
 		await expect(
-			acquireSessionWriterLock(
-				path.join(fixture.root, "missing-database.db"),
-				session.id
-			)
+			acquireSessionWriterLock(path.join(blocker, "session-logs"), session.id)
 		).rejects.toMatchObject({ code: "session_lock_failed" });
 	});
 	test("fails closed when the Session Writer lock namespace cannot be created", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
-		fs.writeFileSync(
-			path.join(fixture.root, ".wincode-session-writer-locks"),
-			""
-		);
+		fs.writeFileSync(path.join(fixture.root, "session-control"), "");
 
 		await expect(
 			fixture.firstStore.acquireSessionWriter(session.id)

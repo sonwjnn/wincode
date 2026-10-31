@@ -1,7 +1,11 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentId, SubmissionId } from "@wincode/agent-core";
-import { toSubmissionId } from "@wincode/agent-core";
+import {
+	toAgentTurnId,
+	toSessionMessageId,
+	toSubmissionId,
+} from "@wincode/agent-core";
 import type {
 	ProviderCollection,
 	ProviderModel,
@@ -44,6 +48,7 @@ import {
 	type SessionSdkOperations,
 	type SessionSdkPluginFactory,
 	type SessionSdkPrompt,
+	type SessionSdkSnapshot,
 	snapshotSessionSdkCapabilityCeiling,
 } from "./sdk-contract";
 import type { SessionSdkOptions as PublicSessionSdkOptions } from "./sdk-options";
@@ -51,7 +56,10 @@ import type { SessionSdkOptions as PublicSessionSdkOptions } from "./sdk-options
 export type * from "./sdk-contract";
 export type { SessionSdkOptions } from "./sdk-options";
 
-import type { SessionSubmissionAdmission } from "@/modules/sessions/agent-session/types";
+import type {
+	LiveSessionSnapshot,
+	SessionSubmissionAdmission,
+} from "@/modules/sessions/agent-session/types";
 import { createValidatedPluginProviderCollectionForSelection } from "@/modules/sessions/host/agent-session-turn-runner";
 import {
 	createSessionCapabilities,
@@ -62,6 +70,7 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "@/modules/sessions/host/types";
+import { createSessionUserMessage } from "@/modules/sessions/message";
 import {
 	createDefaultSessionProviderCollection,
 	getPluginProviderRegistrationsFromCollection,
@@ -73,6 +82,10 @@ import {
 	type SessionSdkSelectionDefaults,
 	sessionSelectionDefaults,
 } from "@/modules/sessions/selection";
+import {
+	projectSessionStorageError,
+	requireSessionWriteReady,
+} from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import { projectSessionMessageRecords } from "@/modules/sessions/transcript-projection";
@@ -80,6 +93,13 @@ import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
 import { resolveUserWincodeDir } from "@/shared/paths/user-data-dir";
+
+const sdkSnapshotFor = (snapshot: LiveSessionSnapshot): SessionSdkSnapshot => ({
+	context: snapshot.context,
+	storageError: projectSessionStorageError(snapshot.error),
+	transcript: snapshot.transcript,
+	turnActive: snapshot.turnActive,
+});
 
 export type SessionSdkRuntimeOptions = Omit<
 	SessionCapabilitiesOptions,
@@ -803,19 +823,29 @@ const handleFor = (
 			if (accepted === undefined || settled) {
 				return;
 			}
-			const message = host
-				.getSnapshot()
-				.transcript.find(
-					(entry) => entry.metadata?.submissionId === submissionId
-				);
+			const snapshot = host.getSnapshot();
+			const writeOutcome = projectSessionStorageError(
+				snapshot.error
+			)?.writeOutcome;
+			const message = snapshot.transcript.find(
+				(entry) => entry.metadata?.submissionId === submissionId
+			);
 			if (message !== undefined) {
 				settled = true;
-				committed.resolve({ ...accepted, messageId: message.id });
+				committed.resolve({
+					...accepted,
+					messageId: message.id,
+					...(writeOutcome === undefined ? {} : { writeOutcome }),
+				});
 				return;
 			}
 			if (failureReason !== undefined) {
 				settled = true;
-				committed.resolve({ rejected: true, reason: failureReason });
+				committed.resolve({
+					rejected: true,
+					reason: failureReason,
+					...(writeOutcome === undefined ? {} : { writeOutcome }),
+				});
 			}
 		};
 		const unsubscribeSnapshot = host.subscribe(settle);
@@ -834,7 +864,13 @@ const handleFor = (
 		try {
 			const admission = await prompt();
 			if (admission.rejected) {
-				return admission;
+				const writeOutcome = projectSessionStorageError(
+					host.getSnapshot().error
+				)?.writeOutcome;
+				return {
+					...admission,
+					...(writeOutcome === undefined ? {} : { writeOutcome }),
+				};
 			}
 			accepted = admission;
 			settle();
@@ -907,8 +943,8 @@ const handleFor = (
 			if (disposed) {
 				return () => undefined;
 			}
-			listener(host.getSnapshot());
-			return host.subscribe(() => listener(host.getSnapshot()));
+			listener(sdkSnapshotFor(host.getSnapshot()));
+			return host.subscribe(() => listener(sdkSnapshotFor(host.getSnapshot())));
 		},
 	});
 };
@@ -1154,13 +1190,14 @@ const createSessionSdkInternal = async (
 				[selection.model.providerId]
 			);
 		try {
-			await assembly.store.createEmptySession(
+			const created = await assembly.store.createEmptySession(
 				omitUndefined({
 					id,
 					model: selection.model,
 					thinkingLevel: selection.thinkingLevel,
 				})
 			);
+			requireSessionWriteReady(created.writeOutcome);
 			return id;
 		} finally {
 			await providerCollection.close().catch(() => undefined);
@@ -1207,29 +1244,47 @@ const createSessionSdkInternal = async (
 					);
 				}
 			}
-			await assembly.store.createEmptySession(
-				omitUndefined({
+			let createdNew = true;
+			if (createOptions?.initialPrompt === undefined) {
+				const created = await assembly.store.createEmptySession(
+					omitUndefined({
+						id,
+						model: selection.model,
+						thinkingLevel:
+							createOptions?.thinkingLevel ?? selection.thinkingLevel,
+					})
+				);
+				requireSessionWriteReady(created.writeOutcome);
+				createdNew = created.created !== false;
+			} else {
+				const created = await assembly.store.createSession({
+					agent: selection.agent,
 					id,
+					message: createSessionUserMessage(
+						createOptions.initialPrompt,
+						{
+							agent: selection.agent,
+							model: selection.model,
+							...omitUndefined({
+								thinkingLevel:
+									createOptions.thinkingLevel ?? selection.thinkingLevel,
+							}),
+						},
+						[],
+						[],
+						toSessionMessageId(`initial-${id}`)
+					),
 					model: selection.model,
-					thinkingLevel:
-						createOptions?.thinkingLevel ?? selection.thinkingLevel,
-				})
-			);
+					thinkingLevel: createOptions.thinkingLevel ?? selection.thinkingLevel,
+					turnId: toAgentTurnId(`initial-${id}`),
+				});
+				requireSessionWriteReady(created.writeOutcome);
+				createdNew = created.created !== false;
+			}
 			providerCollectionTransferred = true;
 			const handle = await openSession(id, {}, selection, providerCollection);
-			if (createOptions?.initialPrompt !== undefined) {
-				const admission = await handle.prompt({
-					text: createOptions.initialPrompt,
-					...omitUndefined({
-						agent: createOptions.agent,
-						model: selection.model,
-						thinkingLevel: createOptions.thinkingLevel,
-					}),
-				});
-				if (admission.rejected) {
-					await handle.dispose();
-					throw new Error(admission.reason);
-				}
+			if (createOptions?.initialPrompt !== undefined && createdNew) {
+				handle.continue();
 			}
 			return handle;
 		} finally {

@@ -47,6 +47,7 @@ import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useAgentSession } from "../../hooks/use-agent-session";
 import type { ResolvedSessionSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
+import { requireSessionWriteReady } from "../../storage/session-jsonl-store";
 import type {
 	SessionSubmissionComposition,
 	SessionSendInput as SessionSubmissionInput,
@@ -305,7 +306,7 @@ export function SessionView({
 			if (sessionStore.setEditMode === undefined) {
 				throw new Error("Session storage does not support Edit Mode.");
 			}
-			await sessionStore.setEditMode(sessionId, mode);
+			requireSessionWriteReady(await sessionStore.setEditMode(sessionId, mode));
 		},
 		[sessionId, sessionStore]
 	);

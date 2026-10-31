@@ -4,12 +4,19 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isUndefined } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import { openSessionServices } from "@/modules/sessions/host/session-services";
 import {
-	openSessionServices,
-	type SessionServices,
-} from "@/modules/sessions/host/session-services";
-import { createDatabase } from "@/modules/sessions/storage/client";
+	createDatabase,
+	SessionDatabaseResetRequiredError,
+} from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+import {
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
+} from "@/modules/sessions/storage/path";
+import { resetLocalSessionData } from "@/modules/sessions/storage/reset-local-session-data";
+import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import { toSessionId } from "@/shared/identifiers";
 import {
 	agentId,
 	agentTurnId,
@@ -102,7 +109,71 @@ test("resets session data without conflating repeated pasted markers in prompt h
 	});
 	expect(await fs.readdir(attachmentRoot)).toEqual([]);
 });
-test("clears incompatible Sessions and attachments before Session Host startup", async () => {
+test("manual reset removes authoritative logs before clearing their projection", async () => {
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-session-jsonl-reset-")
+	);
+	const databasePath = path.join(directory, "session.sqlite");
+	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	const attachmentRoot = path.join(directory, "attachments");
+	const snapshotRoot = path.join(directory, "file-snapshots");
+	const sessionId = toSessionId("reset-authoritative-session");
+	const operational = createDatabase(databasePath);
+	const projection = createDatabase(
+		resolveLocalSessionProjectionPath(databasePath)
+	);
+	const store = createSessionJsonlStore(
+		createDrizzleSessionStore(projection.db, {
+			attachmentRoot,
+			operationalDatabase: operational.db,
+			sessionLogRoot: logRoot,
+			snapshotRoot,
+			workspaceRoot: directory,
+		}),
+		logRoot
+	);
+	try {
+		await store.createEmptySession({ id: sessionId });
+	} finally {
+		operational.sqlite.close();
+		projection.sqlite.close();
+	}
+
+	await resetLocalSessionData({
+		attachmentRoot,
+		databasePath,
+		snapshotRoot,
+		workspaceRoot: directory,
+	});
+
+	const resetOperational = createDatabase(databasePath);
+	const resetProjection = createDatabase(
+		resolveLocalSessionProjectionPath(databasePath)
+	);
+	const reopened = createSessionJsonlStore(
+		createDrizzleSessionStore(resetProjection.db, {
+			attachmentRoot,
+			operationalDatabase: resetOperational.db,
+			sessionLogRoot: logRoot,
+			snapshotRoot,
+			workspaceRoot: directory,
+		}),
+		logRoot
+	);
+	try {
+		expect(await reopened.listSessionCatalog()).toEqual({
+			issues: [],
+			sessions: [],
+		});
+		expect(await reopened.listSessions()).toEqual([]);
+	} finally {
+		resetOperational.sqlite.close();
+		resetProjection.sqlite.close();
+		await fs.rm(directory, { force: true, recursive: true });
+	}
+});
+
+test("incompatible local Session schema is refused without deleting user data", async () => {
 	const directory = await fs.mkdtemp(
 		path.join("/tmp", "wincode-session-incompatible-schema-")
 	);
@@ -110,7 +181,6 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 	const attachmentRoot = path.join(directory, "attachments");
 	const snapshotRoot = path.join(directory, "file-snapshots");
 	let sqlite: Database | undefined;
-	let assembly: SessionServices | undefined;
 	try {
 		const initial = createDatabase(databasePath);
 		sqlite = initial.sqlite;
@@ -123,7 +193,7 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 			agent: agentId("build"),
 			message: {
 				id: sessionMessageId("unsafe-reset-user"),
-				parts: [{ text: "clear this incompatible Session", type: "text" }],
+				parts: [{ text: "preserve incompatible Session", type: "text" }],
 				role: "user",
 			},
 			model,
@@ -137,7 +207,7 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 			summary: {
 				coveredMessageIds: [sessionMessageId("unsafe-reset-user")],
 				formatVersion: 1,
-				text: "discard with incompatible Session",
+				text: "preserve incompatible compaction",
 			},
 			throughMessageUiId: sessionMessageId("unsafe-reset-user"),
 			tokensBefore: 10,
@@ -150,8 +220,9 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 			mediaType: "image/png",
 		});
 		if (isUndefined(attachment)) {
-			throw new Error("The disposable reset attachment was not stored.");
+			throw new Error("The preservation fixture attachment was not stored.");
 		}
+		const attachmentFiles = await fs.readdir(attachmentRoot);
 		sqlite.close();
 		sqlite = undefined;
 
@@ -162,26 +233,26 @@ test("clears incompatible Sessions and attachments before Session Host startup",
 		`);
 		incompatibleSchema.close();
 
-		assembly = await openSessionServices({
-			policy: { cwd: directory, databasePath, workspace: directory },
-			sources: {},
-		});
-		expect(await assembly.store.listSessions()).toEqual([]);
-		expect(await assembly.store.getPromptHistory()).toEqual([
-			{ files: [], text: "keep prompt history" },
-		]);
-		expect(await fs.readdir(attachmentRoot)).toEqual([]);
-		await assembly.shutdown();
-		assembly = undefined;
+		await expect(
+			openSessionServices({
+				policy: { cwd: directory, databasePath, workspace: directory },
+				sources: {},
+			})
+		).rejects.toBeInstanceOf(SessionDatabaseResetRequiredError);
 
-		const reopened = createDatabase(databasePath);
-		sqlite = reopened.sqlite;
-		expect(sqlite.query("SELECT record_id FROM session_record").all()).toEqual(
-			[]
-		);
-		expect(sqlite.query("SELECT id FROM session_compaction").all()).toEqual([]);
+		sqlite = new Database(databasePath);
+		expect(sqlite.query("SELECT id FROM session").all()).toHaveLength(1);
+		expect(
+			sqlite.query("SELECT record_id FROM session_record").all()
+		).toHaveLength(1);
+		expect(
+			sqlite.query("SELECT id FROM session_compaction").all()
+		).toHaveLength(1);
+		expect(sqlite.query("SELECT prompt FROM prompt_history").all()).toEqual([
+			{ prompt: "keep prompt history" },
+		]);
+		expect(await fs.readdir(attachmentRoot)).toEqual(attachmentFiles);
 	} finally {
-		await assembly?.shutdown();
 		sqlite?.close();
 		await fs.rm(directory, { force: true, recursive: true });
 	}

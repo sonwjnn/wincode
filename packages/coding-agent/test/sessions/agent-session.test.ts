@@ -16,6 +16,7 @@ import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { AgentSessionImpl } from "@/modules/sessions/agent-session/agent-session";
+import { SESSION_PROJECTION_BLOCKED_ERROR } from "@/modules/sessions/agent-session/session-messages";
 import type {
 	AgentSessionPorts,
 	SessionInterruptResult,
@@ -46,6 +47,7 @@ import {
 	createMemoryAttachmentMetadataRepository,
 	createSessionAttachmentStore,
 } from "@/modules/sessions/storage/attachment-store";
+import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type {
 	SessionSendInput,
@@ -99,13 +101,25 @@ const createCompactionModule = (summaryGenerator: SummaryGenerator) => {
 		estimateTokens: (messages) => messages.length,
 		generateId: () => compactionId("entry-compacted"),
 		store: {
-			appendCompaction: async (input: AppendSessionCompactionInput) => ({
-				...input,
-				completedAt: new Date("2026-09-01T00:00:00.000Z"),
-				createdAt: new Date("2026-09-01T00:00:00.000Z"),
-				id: input.id ?? compactionId("entry-compacted"),
-				sequence: 1,
-			}),
+			appendCompaction: async (input: AppendSessionCompactionInput) => {
+				const entry = {
+					...input,
+					completedAt: new Date("2026-09-01T00:00:00.000Z"),
+					createdAt: new Date("2026-09-01T00:00:00.000Z"),
+					id: input.id ?? compactionId("entry-compacted"),
+					sequence: 1,
+				};
+				return {
+					compaction: entry,
+					writeOutcome: {
+						entryHash: "0".repeat(64),
+						kind: "committed" as const,
+						operationId: `compaction-${entry.id}`,
+						projection: "ready" as const,
+						sequence: entry.sequence,
+					},
+				};
+			},
 			getLatestCompaction: async () => null,
 		},
 		summaryGenerator,
@@ -577,6 +591,66 @@ test("places a committed tool checkpoint before a later steered prompt", async (
 		await engine.internalPort.shutdown();
 	}
 });
+test("committed-but-blocked steering stays durable without scheduling a new turn", async () => {
+	const firstTurnStarted = Promise.withResolvers<void>();
+	const releaseFirstTurn = Promise.withResolvers<void>();
+	let turnStarts = 0;
+	const engine = createTestAgentSession([], undefined, {
+		commitRecord: async ({ record }) => {
+			const isBlockedSteering = record.messages.some((message) =>
+				message.parts.some(
+					(part) =>
+						part.type === "text" && part.text === "blocked steering input"
+				)
+			);
+			if (isBlockedSteering) {
+				throw new SessionWriteOutcomeError({
+					entryHash: "a".repeat(64),
+					kind: "committed",
+					operationId: `record-${record.id}`,
+					projection: "blocked",
+					sequence: 2,
+				});
+			}
+		},
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async () => {
+				turnStarts += 1;
+				if (turnStarts === 1) {
+					firstTurnStarted.resolve();
+					await releaseFirstTurn.promise;
+				}
+				return {};
+			},
+		},
+	});
+	const active = engine.send(sendInput({ userText: "active turn" }));
+	try {
+		await firstTurnStarted.promise;
+		expect(
+			await engine.send(sendInput({ userText: "blocked steering input" }))
+		).toEqual({ rejected: false });
+		expect(await engine.steer()).toMatchObject({ kind: "steered" });
+		expect(userPrompts(engine.getSnapshot().transcript)).toContain(
+			"blocked steering input"
+		);
+		expect(engine.getSnapshot().steeringMessages).toHaveLength(1);
+		expect(turnStarts).toBe(1);
+		expect(
+			await engine.send(sendInput({ userText: "do not schedule this" }))
+		).toEqual({ rejected: true, reason: SESSION_PROJECTION_BLOCKED_ERROR });
+
+		releaseFirstTurn.resolve();
+		await expect(active).resolves.toEqual({ rejected: false });
+		await engine.internalPort.shutdown();
+		expect(turnStarts).toBe(1);
+	} finally {
+		releaseFirstTurn.resolve();
+		await engine.internalPort.shutdown();
+	}
+});
+
 test("removes a failed tool checkpoint from the live transcript and retains its error", async () => {
 	const callId = toolCallId("failed-order-checkpoint-call");
 	const records: SessionRecord[] = [];

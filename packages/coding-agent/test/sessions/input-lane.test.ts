@@ -11,9 +11,9 @@ import { createTestInputScheduler } from "../support/stateful-agent";
 
 /**
  * A lane state consistent with the conditions this fixture models: `canDrain`
- * is derived, not chosen, and holds only while execution is not busy. Production
- * also stops a drain while a submission transition is pending, which is not
- * modelled because no test here publishes that state.
+ * is derived, not chosen, and holds only while execution and persistence are
+ * ready. Production also stops a drain while a submission transition is pending,
+ * which is not modelled because no test here publishes that state.
  */
 const laneState = (
 	overrides: Omit<Partial<SessionInputLaneSnapshot["lane"]>, "canDrain"> = {}
@@ -23,9 +23,13 @@ const laneState = (
 		executionBusy: false,
 		queueDraining: false,
 		submissionBusy: false,
+		writeBlocked: false,
 		...overrides,
 	};
-	return { ...base, canDrain: !base.executionBusy };
+	return {
+		...base,
+		canDrain: !(base.executionBusy || base.writeBlocked),
+	};
 };
 
 const snapshotOf = ({

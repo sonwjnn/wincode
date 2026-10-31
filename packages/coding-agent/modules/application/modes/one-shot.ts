@@ -2,6 +2,8 @@ import {
 	type AgentId,
 	type AgentTurnEvent,
 	agentIdSchema,
+	toAgentTurnId,
+	toSessionMessageId,
 } from "@wincode/agent-core";
 import type { ProviderCollection, ProviderModel } from "@wincode/ai";
 import {
@@ -40,10 +42,15 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "../../../modules/sessions/host/types";
+import { createSessionUserMessage } from "../../../modules/sessions/message";
 import {
 	type ResolvedSessionSelection,
 	restoreSelection,
 } from "../../../modules/sessions/selection";
+import {
+	requireSessionWriteReady,
+	SessionWriteOutcomeError,
+} from "../../../modules/sessions/storage/session-jsonl-store";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { projectSessionMessageRecords } from "../../../modules/sessions/transcript-projection";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
@@ -473,8 +480,10 @@ const composeDefaultServices = async ({
 const sendInputFor = (
 	selection: ResolvedSelection,
 	text: string,
-	maximumModelSteps?: number
+	maximumModelSteps?: number,
+	messageId?: SessionSendInput["messageId"]
 ): SessionSendInput => ({
+	...omitUndefined({ messageId }),
 	agent: selection.agent,
 	composition: { files: [], text },
 	model: selection.model,
@@ -514,19 +523,47 @@ const plannedSessionIdForOneShot = (
 const initializeOneShotSession = async (
 	context: ApplicationContext,
 	services: SessionServices,
-	plannedSessionId: SessionId
-): Promise<{ isNewSession: boolean; sessionId: SessionId }> => {
+	plannedSessionId: SessionId,
+	text: string,
+	selection: ResolvedSelection | undefined
+): Promise<{
+	initialMessageId?: SessionSendInput["messageId"];
+	sessionId: SessionId;
+}> => {
 	const existingSessionId =
 		context.invocation.session === undefined
 			? undefined
 			: toSessionId(context.invocation.session);
 	if (existingSessionId !== undefined) {
-		return { isNewSession: false, sessionId: existingSessionId };
+		return { sessionId: existingSessionId };
 	}
-	const created = await services.store.createEmptySession({
+	if (selection === undefined) {
+		throw new Error("Fresh One-Shot Session selection was not resolved.");
+	}
+	const initialMessage = createSessionUserMessage(
+		text,
+		{
+			agent: selection.agent,
+			model: selection.model,
+			...omitUndefined({ thinkingLevel: selection.thinkingLevel }),
+		},
+		[],
+		[],
+		toSessionMessageId(`initial-${plannedSessionId}`)
+	);
+	const created = await services.store.createSession({
 		id: plannedSessionId,
+		agent: selection.agent,
+		message: initialMessage,
+		model: selection.model,
+		turnId: toAgentTurnId(`initial-${plannedSessionId}`),
+		...omitUndefined({ thinkingLevel: selection.thinkingLevel }),
 	});
-	return { isNewSession: true, sessionId: created.id };
+	requireSessionWriteReady(created.writeOutcome);
+	return {
+		initialMessageId: initialMessage.id,
+		sessionId: created.id,
+	};
 };
 
 type OneShotHostPreflight = Readonly<{
@@ -752,8 +789,7 @@ const runOneShot = async (
 	let manager: SessionHostManager | undefined;
 	let pendingProviderCollection: ProviderCollection | undefined;
 	let sessionId: SessionId | undefined;
-	let isNewSession = false;
-	let submissionAttempted = false;
+	let initialMessageId: SessionSendInput["messageId"];
 	let removeEventListener: (() => void) | undefined;
 	let terminalFailureMessage: string | undefined;
 	let terminalSucceeded = false;
@@ -778,10 +814,12 @@ const runOneShot = async (
 		const initializedSession = await initializeOneShotSession(
 			context,
 			services,
-			plannedSessionId
+			plannedSessionId,
+			text,
+			selection
 		);
 		sessionId = initializedSession.sessionId;
-		isNewSession = initializedSession.isNewSession;
+		initialMessageId = initializedSession.initialMessageId;
 		const sessionHostManager = services.capabilities.getSessionHostManager();
 		manager = sessionHostManager;
 		pendingProviderCollection = undefined;
@@ -833,11 +871,19 @@ const runOneShot = async (
 		const abort = () => host?.agentSession.cancel();
 		context.signal?.addEventListener("abort", abort, { once: true });
 		try {
-			submissionAttempted = true;
 			const outcome = await host.agentSession.send(
-				sendInputFor(selection, text, context.invocation.maximumModelSteps)
+				sendInputFor(
+					selection,
+					text,
+					context.invocation.maximumModelSteps,
+					initialMessageId
+				)
 			);
 			if (outcome.rejected) {
+				const storageError = host.getSnapshot().error;
+				if (storageError instanceof SessionWriteOutcomeError) {
+					throw storageError;
+				}
 				throw new Error(outcome.reason);
 			}
 			await services.waitForBackgroundWork(sessionId);
@@ -861,13 +907,7 @@ const runOneShot = async (
 				await manager.releaseView(sessionId);
 			}
 		} finally {
-			try {
-				if (isNewSession && !submissionAttempted && sessionId !== undefined) {
-					await services.store.deleteSession(sessionId);
-				}
-			} finally {
-				await services.shutdown();
-			}
+			await services.shutdown();
 		}
 	}
 };
@@ -880,9 +920,21 @@ export const runPrintMode = async (
 		const result = await runOneShot(context, "print", dependencies);
 		return result.terminalSucceeded ? 0 : 1;
 	} catch (error) {
-		context.stderr.write(
-			`error: ${getErrorMessage(error, "Print Mode failed.")}\n`
-		);
+		if (error instanceof SessionWriteOutcomeError) {
+			context.stderr.write(
+				`${JSON.stringify({
+					error: {
+						code: error.code,
+						message: error.message,
+						writeOutcome: error.outcome,
+					},
+				})}\n`
+			);
+		} else {
+			context.stderr.write(
+				`error: ${getErrorMessage(error, "Print Mode failed.")}\n`
+			);
+		}
 		return 1;
 	}
 };
@@ -901,9 +953,21 @@ export const runJsonMode = async (
 		}
 		return result.terminalSucceeded ? 0 : 1;
 	} catch (error) {
-		const message = getErrorMessage(error, "JSON Mode failed.");
-		context.stdout.write(`${JSON.stringify({ error: message })}\n`);
-		context.stderr.write(`error: ${message}\n`);
+		if (error instanceof SessionWriteOutcomeError) {
+			const output = {
+				error: {
+					code: error.code,
+					message: error.message,
+					writeOutcome: error.outcome,
+				},
+			};
+			context.stdout.write(`${JSON.stringify(output)}\n`);
+			context.stderr.write(`error: ${error.message}\n`);
+		} else {
+			const message = getErrorMessage(error, "JSON Mode failed.");
+			context.stdout.write(`${JSON.stringify({ error: message })}\n`);
+			context.stderr.write(`error: ${message}\n`);
+		}
 		return 1;
 	}
 };

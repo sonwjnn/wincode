@@ -6,6 +6,8 @@ import { isAvailableProviderModelSelection } from "@/modules/providers/provider-
 import type { AttachmentReferenceResolver } from "@/modules/sessions/attachment-reference";
 import { createValidatedPluginProviderCollectionForSelection } from "@/modules/sessions/host/agent-session-turn-runner";
 import { ProviderCollectionUnavailableError } from "@/modules/sessions/provider-collection";
+import { SessionLogError } from "@/modules/sessions/storage/session-jsonl-codec";
+import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
 import { createSkillSnapshot } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
@@ -103,6 +105,58 @@ const mapSessionWriterError = (
 			"The Session Writer OS lock could not be established.",
 			{ sessionId, stage: "host" }
 		);
+	}
+	if (error instanceof SessionWriteOutcomeError) {
+		let code: string;
+		switch (error.outcome.kind) {
+			case "committed":
+				code = "session_projection_unavailable";
+				break;
+			case "indeterminate":
+				code = "session_commit_indeterminate";
+				break;
+			case "not-committed":
+				if (error.outcome.error.code === "session_log_write_not_committed") {
+					code = "session_commit_not_committed";
+				} else {
+					code = error.outcome.error.code;
+				}
+				break;
+			default:
+				code = "session_commit_unknown";
+				break;
+		}
+		return appError(code, error.message, {
+			operationId: error.outcome.operationId,
+			outcome: error.outcome,
+			sessionId,
+		});
+	}
+	if (error instanceof SessionLogError) {
+		const data = {
+			offset: error.offset,
+			operationId: error.operationId,
+			sequence: error.sequence,
+			sessionId: error.sessionId,
+		};
+		switch (error.code) {
+			case "session_log_write_indeterminate":
+				return appError("session_commit_indeterminate", error.message, data);
+			case "session_log_write_not_committed":
+				return appError("session_commit_not_committed", error.message, data);
+			case "session_operation_conflict":
+				return appError("session_operation_conflict", error.message, data);
+			case "session_projection_blocked":
+				return appError("session_projection_unavailable", error.message, data);
+			case "session_deleted":
+				return appError("session_deleted", error.message, data);
+			case "session_log_corrupt":
+			case "session_log_truncated":
+			case "session_log_version_unsupported":
+				return appError("session_log_unavailable", error.message, data);
+			default:
+				return;
+		}
 	}
 	return;
 };
@@ -374,6 +428,15 @@ export const createRpcRequestHandler = (
 						? {}
 						: { thinkingLevel: selection.thinkingLevel }),
 				});
+				if (
+					created.writeOutcome.kind !== "committed" ||
+					created.writeOutcome.projection !== "ready"
+				) {
+					const writeError = new SessionWriteOutcomeError(created.writeOutcome);
+					throw (
+						mapSessionWriterError(writeError, String(created.id)) ?? writeError
+					);
+				}
 				const createdId = activeRuntime.toSessionId(String(created.id));
 				const previousSessionId = state.boundSessionId;
 				const manager = activeAssembly.capabilities.getSessionHostManager();
@@ -492,6 +555,10 @@ export const createRpcRequestHandler = (
 						"session_not_found",
 						"Session was not found in this Workspace."
 					);
+				}
+				const storageError = mapSessionWriterError(error, sessionId);
+				if (storageError !== undefined) {
+					throw storageError;
 				}
 				throw error;
 			}

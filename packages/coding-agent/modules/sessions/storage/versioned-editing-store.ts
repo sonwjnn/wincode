@@ -18,6 +18,7 @@ import {
 	FILE_VERSION_ALGORITHM,
 	lineRangeSchema,
 } from "@/modules/tools";
+import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
 import type { SessionDatabase } from "./client";
 import { createDrizzleRecoveryStore } from "./recovery-store";
 import {
@@ -476,28 +477,12 @@ const withPersistentPathLeases =
 		}
 	};
 
-const snapshotStoreLocks = new Map<string, Promise<void>>();
+const snapshotStoreQueue = createKeyedSerialQueue();
 
-const withSnapshotStoreLock = async <T>(
+const withSnapshotStoreLock = <T>(
 	lockKey: string,
 	operation: () => Promise<T>
-): Promise<T> => {
-	const previous = snapshotStoreLocks.get(lockKey) ?? Promise.resolve();
-	let release!: () => void;
-	const current = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	snapshotStoreLocks.set(lockKey, current);
-	await previous;
-	try {
-		return await operation();
-	} finally {
-		release();
-		if (snapshotStoreLocks.get(lockKey) === current) {
-			snapshotStoreLocks.delete(lockKey);
-		}
-	}
-};
+): Promise<T> => snapshotStoreQueue.run(lockKey, operation);
 
 export const createDrizzleFileObservationStore = (
 	db: SessionDatabase,
