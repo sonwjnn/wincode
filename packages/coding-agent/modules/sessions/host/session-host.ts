@@ -32,6 +32,7 @@ import type {
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
 import {
+	filterSessionMessagesForActiveContext,
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
 } from "../message";
@@ -259,11 +260,7 @@ const openSession = async (
 	const transcript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(records)
 	);
-	const active = transcript.filter(
-		(message) =>
-			message.metadata?.submissionStatus !== "pending" &&
-			message.metadata?.submissionStatus !== "failed"
-	);
+	const active = filterSessionMessagesForActiveContext(transcript);
 	return {
 		compactions,
 		context: rebuildActiveMessages(active, compactions.at(-1) ?? null),

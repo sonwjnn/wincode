@@ -1,8 +1,12 @@
 import type { AgentId, StatefulAgent } from "@wincode/agent-core";
-import type { ProviderCollection } from "@wincode/ai";
+import {
+	calculateModelUsageCostUsd,
+	type ProviderCollection,
+} from "@wincode/ai";
 import { isNull, isUndefined, omitBy, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
+import { pricingEntryForProviderModel } from "@/modules/model-pricing/model-pricing";
 import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import {
 	isAvailableProviderModelSelection,
@@ -329,8 +333,26 @@ export const createAgentSessionAdapters = (
 					settings,
 					summaryTarget,
 					...omitUndefined({ summaryGenerator }),
-					recordSummaryUsage: async ({ id, model, usage }) => {
+					recordSummaryUsage: async ({
+						compactionId,
+						createdAt,
+						id,
+						model,
+						usage,
+					}) => {
+						const providerModel = providerCollection.getModel(
+							model.providerId,
+							model.modelId
+						);
 						await usageLedger.record({
+							compactionId,
+							costUsd: calculateModelUsageCostUsd(
+								providerModel === undefined
+									? undefined
+									: pricingEntryForProviderModel(providerModel),
+								usage
+							),
+							createdAt,
 							id,
 							kind: "compaction-summary",
 							model,

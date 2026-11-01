@@ -99,6 +99,8 @@ describe("wincode executable", () => {
 					stateNotifications: true,
 					structuredSubmissions: true,
 					submissionEvents: true,
+					sessionCatalogPagination: true,
+					sessionHistoryPagination: true,
 					transcriptPagination: true,
 				},
 				protocolVersion: 4,

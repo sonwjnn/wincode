@@ -39,6 +39,22 @@ export const sessionStoreWithSuccessfulWrites = (
 		issues: [],
 		sessions: await projectionStore.listSessions(),
 	}),
+	listSessionsPage: async () => ({
+		readPoint: "test-read-point",
+		sessions: [],
+	}),
+	readSessionHistoryPage: async () => {
+		throw new Error("Session history pages are not used by this test store.");
+	},
+	listRecentModelSelections: async (limit) =>
+		await projectionStore.listRecentModelSelections(limit),
+	rebuildProjection: (_scope, withMaintenanceGate) =>
+		withMaintenanceGate(async () => ({
+			generation: 0,
+			issues: [],
+			rebuiltSessionIds: [],
+			skippedSessionIds: [],
+		})),
 	appendCompaction: async (input) => {
 		const compaction = await projectionStore.appendCompaction(input);
 		return {
@@ -67,6 +83,14 @@ export const sessionStoreWithSuccessfulWrites = (
 			writeOutcome: successfulSessionWriteOutcome(`create-${created.id}`),
 		};
 	},
+	createSessionWithExternalizedMessage: async (input) => {
+		const created = await projectionStore.createSession(input);
+		return {
+			...created,
+			message: input.message,
+			writeOutcome: successfulSessionWriteOutcome(`create-${created.id}`),
+		};
+	},
 	createSessionUsageEntry: async (input: CreateSessionUsageEntryInput) => ({
 		entry: await projectionStore.createSessionUsageEntry(input),
 		writeOutcome: successfulSessionWriteOutcome(`usage-${input.id}`),
@@ -75,6 +99,7 @@ export const sessionStoreWithSuccessfulWrites = (
 		await projectionStore.deleteSession(sessionId);
 		return successfulSessionWriteOutcome(`delete-${sessionId}`);
 	},
+	findSessionRecordBySubmissionId: async () => undefined,
 	setEditMode: async (sessionId, mode, operationId) => {
 		await projectionStore.setEditMode?.(sessionId, mode, operationId);
 		return successfulSessionWriteOutcome(operationId ?? randomUUIDv7());

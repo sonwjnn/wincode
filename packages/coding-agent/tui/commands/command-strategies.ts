@@ -31,7 +31,9 @@ export type CommandStrategyContext = {
 	clipboard: ClipboardWriter;
 	config: PromptConfig;
 	dialog: Pick<DialogContextValue, "open">;
-	getRecentModelSelections?: (limit: number) => ProviderModelSelection[];
+	getRecentModelSelections?: (
+		limit: number
+	) => Promise<ProviderModelSelection[]>;
 	navigateHome: () => void;
 	onSelectProviderModel?: (
 		model: ProviderModel,
@@ -162,9 +164,9 @@ const STRATEGIES = {
 		},
 	},
 	"model.select": {
-		kind: "dialog",
+		kind: "prepared-dialog",
 		title: "Select Model",
-		content: ({
+		content: async ({
 			config,
 			getRecentModelSelections,
 			onSelectProviderModel,
@@ -175,18 +177,19 @@ const STRATEGIES = {
 					"Provider Model selection is unavailable in this view."
 				);
 			}
+			const recentSelections = (await getRecentModelSelections?.(10)) ?? [];
 			return createElement(ProviderModelsDialogContent, {
 				controller: providerController,
 				currentModel: config.model,
 				onSelectModel: onSelectProviderModel,
-				recentSelections: getRecentModelSelections?.(10) ?? [],
+				recentSelections,
 			});
 		},
 	},
 	"provider.model.select": {
-		kind: "dialog",
+		kind: "prepared-dialog",
 		title: "Provider SDK Models",
-		content: ({
+		content: async ({
 			config,
 			getRecentModelSelections,
 			onSelectProviderModel,
@@ -197,11 +200,12 @@ const STRATEGIES = {
 					"Provider Model selection is unavailable in this view."
 				);
 			}
+			const recentSelections = (await getRecentModelSelections?.(10)) ?? [];
 			return createElement(ProviderModelsDialogContent, {
 				controller: providerController,
 				currentModel: config.model,
 				onSelectModel: onSelectProviderModel,
-				recentSelections: getRecentModelSelections?.(10) ?? [],
+				recentSelections,
 			});
 		},
 	},

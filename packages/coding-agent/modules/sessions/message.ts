@@ -179,6 +179,16 @@ export type SessionMessage = ReadonlyDeep<{
 	role: SessionMessageRole;
 }>;
 
+/** Keeps pending and failed Submissions out of replayed Agent Context. */
+export const filterSessionMessagesForActiveContext = (
+	messages: readonly SessionMessage[]
+): SessionMessage[] =>
+	messages.filter(
+		({ metadata }) =>
+			metadata?.submissionStatus !== "pending" &&
+			metadata?.submissionStatus !== "failed"
+	);
+
 type SubmissionStatusMessage = {
 	readonly metadata?: {
 		readonly submissionFailure?: string;

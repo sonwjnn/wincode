@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
 	agentIdSchema,
-	isSessionAttachmentReferencePart,
 	SESSION_RECORD_VERSION,
 	type SessionRecord,
 	type SessionRecordId,
@@ -19,7 +18,18 @@ import {
 	pickTruthy,
 } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
-import { and, asc, desc, eq } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	gt,
+	inArray,
+	isNull as isSqlNull,
+	lt,
+	lte,
+	or,
+} from "drizzle-orm";
 import { z } from "zod";
 import {
 	normalizeProviderModelSelection,
@@ -47,6 +57,7 @@ import type {
 import { type SessionMessage, withSubmissionStatus } from "../message";
 import { restorePastedTextMarkers } from "../pasted-text";
 import type {
+	AttachmentExternalizationLease,
 	AttachmentExternalizationOptions,
 	AttachmentHydrationOptions,
 	AttachmentMaintenanceReport,
@@ -70,14 +81,31 @@ import {
 	type SerializedJson,
 	session,
 	sessionAttachment,
+	sessionCatalogDeletionState,
+	sessionCatalogVersion,
 	sessionCompaction,
 	sessionProjectionCursor,
+	sessionProjectionState,
 	sessionRecord,
+	sessionRecordVersion,
 	sessionUsageEntry,
 	sessionWorkspace,
 } from "./schema";
-import type { SessionJsonlProjection } from "./session-jsonl-codec";
+import {
+	type SessionJsonlProjection,
+	SessionLogError,
+} from "./session-jsonl-codec";
 import { createSessionJsonlProjection } from "./session-jsonl-projection";
+import {
+	type SessionCatalogPageCursor,
+	type SessionCatalogPageKey,
+	type SessionCatalogReadPoint,
+	type SessionHistoryPageCursor,
+	type SessionHistoryReadPoint,
+	SessionPaginationError,
+	sessionCatalogReadPoint,
+	sessionHistoryReadPoint,
+} from "./session-pagination";
 import {
 	getSessionRecordValidationError,
 	SessionRecordInvariantError,
@@ -253,32 +281,46 @@ export const createPromptHistory = (
 
 	const externalizeFiles = async (
 		files: PromptHistoryEntry["files"]
-	): Promise<PromptHistoryEntry["files"]> => {
+	): Promise<
+		Readonly<{
+			files: PromptHistoryEntry["files"];
+			release: () => Promise<void>;
+		}>
+	> => {
 		if (!attachmentStore || files.length === 0) {
-			return files;
+			return { files, release: async () => undefined };
 		}
-		const [message] = await attachmentStore.externalizeMessages([
+		const lease = await attachmentStore.externalizeMessagesWithLease([
 			{
 				id: toSessionMessageId("prompt-history"),
 				parts: files,
 				role: "user",
 			} satisfies SessionMessage,
 		]);
-		return (message?.parts ?? []).filter(
-			(part): part is PromptHistoryEntry["files"][number] =>
-				part.type === "file"
-		);
+		return {
+			files: (lease.messages[0]?.parts ?? []).filter(
+				(part): part is PromptHistoryEntry["files"][number] =>
+					part.type === "file"
+			),
+			release: lease.release,
+		};
 	};
 	const migrateLegacyEntry = async (
 		entry: PromptHistoryEntry
-	): Promise<PromptHistoryEntry> => {
+	): Promise<
+		Readonly<{ entry: PromptHistoryEntry; release?: () => Promise<void> }>
+	> => {
 		if (!entry.files.some(isLegacyImagePart)) {
-			return entry;
+			return { entry };
 		}
 		try {
-			return { ...entry, files: await externalizeFiles(entry.files) };
+			const externalized = await externalizeFiles(entry.files);
+			return {
+				entry: { ...entry, files: externalized.files },
+				release: externalized.release,
+			};
 		} catch {
-			return entry;
+			return { entry };
 		}
 	};
 
@@ -300,38 +342,45 @@ export const createPromptHistory = (
 			entry: PromptHistoryEntry;
 			id: number;
 			changed: boolean;
+			release?: () => Promise<void>;
 		}> = [];
 		for (const row of rows) {
 			const original = parsePromptHistoryEntry(row.entry, row.text);
-			const migratedEntry = await migrateLegacyEntry(original);
+			const result = await migrateLegacyEntry(original);
 			migrated.push({
 				changed:
-					JSON.stringify(migratedEntry.files) !==
-					JSON.stringify(original.files),
-				entry: migratedEntry,
+					JSON.stringify(result.entry.files) !== JSON.stringify(original.files),
+				entry: result.entry,
 				id: row.id,
+				...omitUndefined({ release: result.release }),
 			});
 		}
 		const changes = migrated.filter(({ changed }) => changed);
-		if (changes.length > 0) {
-			db.transaction((tx) => {
-				for (const { entry, id } of changes) {
-					tx.update(promptHistory)
-						.set({
-							entryJson: serializeJson({
-								...pickTruthy({
-									fileTokens: entry.fileTokens,
-									pastedText: entry.pastedText,
+		try {
+			if (changes.length > 0) {
+				db.transaction((tx) => {
+					for (const { entry, id } of changes) {
+						tx.update(promptHistory)
+							.set({
+								entryJson: serializeJson({
+									...pickTruthy({
+										fileTokens: entry.fileTokens,
+										pastedText: entry.pastedText,
+									}),
+									files: entry.files,
 								}),
-								files: entry.files,
-							}),
-						})
-						.where(eq(promptHistory.id, id))
-						.run();
-				}
-			});
+							})
+							.where(eq(promptHistory.id, id))
+							.run();
+					}
+				});
+			}
+			return migrated.map(({ entry }) => entry);
+		} finally {
+			await Promise.all(
+				migrated.flatMap(({ release }) => (release ? [release()] : []))
+			);
 		}
-		return migrated.map(({ entry }) => entry);
 	};
 
 	const record = (entry: PromptHistoryEntry): Promise<void> => {
@@ -340,8 +389,12 @@ export const createPromptHistory = (
 			return Promise.resolve();
 		}
 		return (async () => {
-			const files = await externalizeFiles(entry.files);
-			writePromptHistory(db, { ...entry, files });
+			const externalized = await externalizeFiles(entry.files);
+			try {
+				writePromptHistory(db, { ...entry, files: externalized.files });
+			} finally {
+				await externalized.release();
+			}
 		})();
 	};
 
@@ -355,6 +408,32 @@ export const createPromptHistory = (
 type SessionRow = typeof session.$inferSelect;
 type CompactionRow = typeof sessionCompaction.$inferSelect;
 type SessionRecordRow = typeof sessionRecord.$inferSelect;
+
+export type SessionCatalogPageProjectionInput = Readonly<{
+	cursor?: SessionCatalogPageCursor;
+	limit: number;
+}>;
+
+export type SessionCatalogPageProjection = Readonly<{
+	hasMore: boolean;
+	lastKey?: SessionCatalogPageKey;
+	readPoint: SessionCatalogReadPoint;
+	sessions: Session[];
+}>;
+
+export type SessionHistoryPageProjectionInput = Readonly<{
+	cursor?: SessionHistoryPageCursor;
+	limit: number;
+}>;
+
+export type SessionHistoryPageProjection = Readonly<{
+	beforeSequence?: number;
+	compactions: SessionCompaction[];
+	hasMore: boolean;
+	readPoint: SessionHistoryReadPoint;
+	records: SessionRecord[];
+	session: Session;
+}>;
 type SessionUsageEntryRow = typeof sessionUsageEntry.$inferSelect;
 
 const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
@@ -499,6 +578,10 @@ const toSessionUsageEntry = (row: SessionUsageEntryRow): SessionUsageEntry => {
 		throw new Error(`Unsupported Session Usage Entry kind: ${row.kind}`);
 	}
 	return {
+		compactionId: row.compactionId
+			? toCompactionId(row.compactionId)
+			: undefined,
+		costUsd: row.costUsd,
 		createdAt: row.createdAt,
 		id: toSessionUsageEntryId(row.id),
 		kind: row.kind,
@@ -527,23 +610,9 @@ const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	return record as unknown as SessionRecord;
 };
 const collectLiveAttachmentIds = (
-	db: SessionDatabase,
 	operationalDb: SessionDatabase
 ): Set<string> => {
 	const live = new Set<string>();
-	const recordRows = db
-		.select({ messages: sessionRecord.messagesJson })
-		.from(sessionRecord)
-		.all();
-	for (const row of recordRows) {
-		for (const message of row.messages) {
-			for (const part of message.parts) {
-				if (isSessionAttachmentReferencePart(part)) {
-					live.add(part.attachmentId);
-				}
-			}
-		}
-	}
 	const historyRows = operationalDb
 		.select({ entry: promptHistory.entryJson })
 		.from(promptHistory)
@@ -598,6 +667,7 @@ const appendCompaction = (
 			priorCompactionId: input.priorCompactionId ?? null,
 			sequence,
 			sessionId: input.sessionId,
+			sourceSequence: 0,
 			summarizationModelJson: serializeJson(input.summarizationModel),
 			summarizationUsageJson: serializeJson(input.summarizationUsage ?? null),
 			summaryJson: serializeJson(input.summary),
@@ -700,6 +770,8 @@ const writeSessionUsageEntry = (
 		}
 		tx.insert(sessionUsageEntry)
 			.values({
+				compactionId: input.compactionId ?? null,
+				costUsd: input.costUsd,
 				createdAt,
 				id: input.id,
 				kind: input.kind,
@@ -721,6 +793,8 @@ const writeSessionUsageEntry = (
 		if (
 			persisted.sessionId !== input.sessionId ||
 			persisted.kind !== input.kind ||
+			persisted.compactionId !== input.compactionId ||
+			persisted.costUsd !== input.costUsd ||
 			!Bun.deepEquals(persisted.model, input.model, true) ||
 			!Bun.deepEquals(persisted.usage, usage, true)
 		) {
@@ -852,9 +926,571 @@ const readSessionRecords = (
 		toSessionRecord
 	);
 
+const toCatalogSession = (
+	row: typeof sessionCatalogVersion.$inferSelect
+): Session => {
+	const model = normalizeProviderModelSelection(row.modelJson) ?? undefined;
+	return {
+		createdAt: row.createdAt,
+		id: toSessionId(row.sessionId),
+		lastMessageAt: row.lastMessageAt,
+		pinned: row.pinned,
+		title: row.title,
+		...omitUndefined({
+			model,
+			thinkingLevel: row.thinkingLevel ?? undefined,
+		}),
+	};
+};
+
+const pageProjectionBlocked = (
+	sessionIds: readonly SessionId[],
+	message: string
+): never => {
+	const sessionId = sessionIds[0];
+	if (sessionId !== undefined) {
+		throw new SessionLogError("session_projection_blocked", sessionId, message);
+	}
+	const error = new Error(message) as Error & { code: string };
+	error.code = "session_projection_blocked";
+	throw error;
+};
+
+type SessionTransaction = Parameters<
+	SessionDatabase["transaction"]
+>[0] extends (transaction: infer Transaction) => unknown
+	? Transaction
+	: never;
+
+const recordDeletionCursorInvalidation = (
+	tx: SessionTransaction,
+	workspaceId: WorkspaceId
+): void => {
+	const state = tx
+		.select({ catalogRevision: sessionProjectionState.catalogRevision })
+		.from(sessionProjectionState)
+		.where(eq(sessionProjectionState.id, 1))
+		.get();
+	if (state === undefined || !Number.isSafeInteger(state.catalogRevision + 1)) {
+		throw new Error("Session catalog deletion revision is unavailable.");
+	}
+	const revision = state.catalogRevision + 1;
+	let projectionId: string | undefined;
+	try {
+		tx.insert(sessionCatalogDeletionState)
+			.values({ latestDeletionRevision: revision, workspaceId })
+			.onConflictDoUpdate({
+				set: { latestDeletionRevision: revision },
+				target: sessionCatalogDeletionState.workspaceId,
+			})
+			.run();
+	} catch {
+		projectionId = crypto.randomUUID();
+	}
+	tx.update(sessionProjectionState)
+		.set({
+			catalogRevision: revision,
+			latestDeletionRevision: revision,
+			...omitUndefined({ projectionId }),
+		})
+		.where(eq(sessionProjectionState.id, 1))
+		.run();
+};
+
+type SessionPaginationState = Pick<
+	typeof sessionProjectionState.$inferSelect,
+	| "catalogRevision"
+	| "generation"
+	| "paginationVersion"
+	| "projectionId"
+	| "status"
+>;
+
+type SessionPaginationMaintenanceState = SessionPaginationState &
+	Pick<typeof sessionProjectionState.$inferSelect, "latestDeletionRevision">;
+
+const requireReadyPaginationMaintenance = <
+	State extends SessionPaginationState,
+>(
+	maintenance: State | undefined,
+	sessionIds: readonly SessionId[],
+	message: string
+): State => {
+	if (maintenance === undefined) {
+		throw new Error("Session projection maintenance state is missing.");
+	}
+	if (maintenance.status !== "ready" || maintenance.paginationVersion !== 2) {
+		pageProjectionBlocked(sessionIds, message);
+	}
+	return maintenance;
+};
+
+const resolveCatalogReadPoint = (
+	cursor: SessionCatalogPageCursor | undefined,
+	workspaceId: WorkspaceId,
+	maintenance: SessionPaginationMaintenanceState
+): SessionCatalogReadPoint => {
+	if (cursor === undefined) {
+		return {
+			catalogRevision: maintenance.catalogRevision,
+			generation: maintenance.generation,
+			kind: "catalog-read-point",
+			latestDeletionRevision: maintenance.latestDeletionRevision,
+			projectionId: maintenance.projectionId,
+			version: 1,
+			workspaceId,
+		};
+	}
+	if (cursor.workspaceId !== workspaceId) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session cursor belongs to a different workspace."
+		);
+	}
+	if (cursor.projectionId !== maintenance.projectionId) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session cursor expired after the projection was reset."
+		);
+	}
+	if (cursor.generation !== maintenance.generation) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session cursor expired after projection maintenance."
+		);
+	}
+	if (cursor.catalogRevision > maintenance.catalogRevision) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session cursor refers to a future catalog revision."
+		);
+	}
+	if (maintenance.latestDeletionRevision > cursor.catalogRevision) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session cursor expired after a Session was deleted."
+		);
+	}
+	return sessionCatalogReadPoint(cursor);
+};
+
+const catalogPageAfter = (cursorPosition: SessionCatalogPageKey) => {
+	const afterCreatedAt = or(
+		lt(sessionCatalogVersion.createdAt, new Date(cursorPosition.createdAt)),
+		and(
+			eq(sessionCatalogVersion.createdAt, new Date(cursorPosition.createdAt)),
+			gt(sessionCatalogVersion.sessionId, cursorPosition.sessionId)
+		)
+	);
+	const afterLastMessageAt =
+		cursorPosition.lastMessageAt === null
+			? and(isSqlNull(sessionCatalogVersion.lastMessageAt), afterCreatedAt)
+			: or(
+					lt(
+						sessionCatalogVersion.lastMessageAt,
+						new Date(cursorPosition.lastMessageAt)
+					),
+					isSqlNull(sessionCatalogVersion.lastMessageAt),
+					and(
+						eq(
+							sessionCatalogVersion.lastMessageAt,
+							new Date(cursorPosition.lastMessageAt)
+						),
+						afterCreatedAt
+					)
+				);
+	return or(
+		lt(sessionCatalogVersion.pinned, cursorPosition.pinned),
+		and(
+			eq(sessionCatalogVersion.pinned, cursorPosition.pinned),
+			afterLastMessageAt
+		)
+	);
+};
+
+const readSessionCatalogPageProjection = (
+	db: SessionDatabase,
+	workspaceId: WorkspaceId,
+	input: SessionCatalogPageProjectionInput
+): SessionCatalogPageProjection =>
+	db.transaction((tx) => {
+		const projectionMaintenance = requireReadyPaginationMaintenance(
+			tx
+				.select({
+					catalogRevision: sessionProjectionState.catalogRevision,
+					generation: sessionProjectionState.generation,
+					projectionId: sessionProjectionState.projectionId,
+					latestDeletionRevision: sessionProjectionState.latestDeletionRevision,
+					paginationVersion: sessionProjectionState.paginationVersion,
+					status: sessionProjectionState.status,
+				})
+				.from(sessionProjectionState)
+				.where(eq(sessionProjectionState.id, 1))
+				.get(),
+			[],
+			"Session pagination projection is unavailable; run `wincode sessions rebuild --all` before reading Session pages."
+		);
+		const workspaceDeletionState = tx
+			.select({
+				latestDeletionRevision:
+					sessionCatalogDeletionState.latestDeletionRevision,
+			})
+			.from(sessionCatalogDeletionState)
+			.where(eq(sessionCatalogDeletionState.workspaceId, workspaceId))
+			.get();
+		const maintenance = {
+			...projectionMaintenance,
+			latestDeletionRevision:
+				workspaceDeletionState?.latestDeletionRevision ?? 0,
+		};
+		const cursor = input.cursor;
+		const readPoint = resolveCatalogReadPoint(cursor, workspaceId, maintenance);
+		const after =
+			cursor === undefined ? undefined : catalogPageAfter(cursor.after);
+		const snapshotFilter = and(
+			eq(sessionCatalogVersion.workspaceId, workspaceId),
+			lte(sessionCatalogVersion.validFromRevision, readPoint.catalogRevision),
+			or(
+				isSqlNull(sessionCatalogVersion.validToRevision),
+				gt(sessionCatalogVersion.validToRevision, readPoint.catalogRevision)
+			)
+		);
+		const rows = tx
+			.select()
+			.from(sessionCatalogVersion)
+			.where(after === undefined ? snapshotFilter : and(snapshotFilter, after))
+			.orderBy(
+				desc(sessionCatalogVersion.pinned),
+				desc(sessionCatalogVersion.lastMessageAt),
+				desc(sessionCatalogVersion.createdAt),
+				asc(sessionCatalogVersion.sessionId)
+			)
+			.limit(input.limit + 1)
+			.all();
+		const selectedRows = rows.slice(0, input.limit);
+		const lastRow = selectedRows.at(-1);
+		const lastKey =
+			lastRow === undefined
+				? undefined
+				: {
+						createdAt: lastRow.createdAt.getTime(),
+						lastMessageAt: lastRow.lastMessageAt?.getTime() ?? null,
+						pinned: lastRow.pinned,
+						sessionId: toSessionId(lastRow.sessionId),
+					};
+		return {
+			hasMore: rows.length > input.limit,
+			...(lastKey === undefined ? {} : { lastKey }),
+			readPoint,
+			sessions: selectedRows.map(toCatalogSession),
+		};
+	});
+
+type SessionHistoryProjectionCursor = Pick<
+	typeof sessionProjectionCursor.$inferSelect,
+	"generation" | "logId" | "nextSequence"
+>;
+
+type SessionHistoryPageSnapshot = Readonly<{
+	readPoint: SessionHistoryReadPoint;
+	sessionVersion: typeof sessionCatalogVersion.$inferSelect;
+}>;
+
+const assertHistoryCursorScope = (
+	cursor: SessionHistoryPageCursor | undefined,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId
+): void => {
+	if (
+		cursor !== undefined &&
+		(cursor.workspaceId !== workspaceId || cursor.sessionId !== sessionId)
+	) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session history cursor belongs to a different query scope."
+		);
+	}
+};
+
+const assertHistorySessionBound = (
+	operationalDb: SessionDatabase,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId,
+	cursor: SessionHistoryPageCursor | undefined
+): void => {
+	if (sessionIsBoundToWorkspace(operationalDb, workspaceId, sessionId)) {
+		return;
+	}
+	if (cursor !== undefined) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session history cursor expired because the Session is no longer available."
+		);
+	}
+	throw new Error("Session not found");
+};
+
+const assertHistoryCursorMatchesMaintenance = (
+	cursor: SessionHistoryPageCursor | undefined,
+	maintenance: SessionPaginationState
+): void => {
+	if (cursor === undefined) {
+		return;
+	}
+	if (cursor.projectionId !== maintenance.projectionId) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session history cursor expired after the projection was reset."
+		);
+	}
+	if (cursor.generation !== maintenance.generation) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session history cursor expired after projection maintenance."
+		);
+	}
+	if (cursor.catalogRevision > maintenance.catalogRevision) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session history cursor refers to a future catalog revision."
+		);
+	}
+};
+
+const resolveHistoryProjectionCursor = (
+	tx: SessionTransaction,
+	sessionId: SessionId,
+	generation: number,
+	cursor: SessionHistoryPageCursor | undefined
+): SessionHistoryProjectionCursor => {
+	const projectionCursor = tx
+		.select({
+			generation: sessionProjectionCursor.generation,
+			logId: sessionProjectionCursor.logId,
+			nextSequence: sessionProjectionCursor.nextSequence,
+		})
+		.from(sessionProjectionCursor)
+		.where(eq(sessionProjectionCursor.sessionId, sessionId))
+		.get();
+	if (projectionCursor === undefined) {
+		throw new SessionLogError(
+			"session_projection_blocked",
+			sessionId,
+			"Session history has no committed projection cursor."
+		);
+	}
+	if (projectionCursor.generation !== generation) {
+		throw new SessionLogError(
+			"session_projection_blocked",
+			sessionId,
+			"Session history projection is stale; retry after projection maintenance."
+		);
+	}
+	if (cursor !== undefined && cursor.logId !== projectionCursor.logId) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session history cursor no longer matches its captured log prefix."
+		);
+	}
+	if (
+		cursor !== undefined &&
+		cursor.readPointSequence > projectionCursor.nextSequence - 1
+	) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session history cursor no longer matches its captured log prefix."
+		);
+	}
+	return projectionCursor;
+};
+
+const readHistoryPageSnapshot = (
+	tx: SessionTransaction,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId,
+	cursor: SessionHistoryPageCursor | undefined
+): SessionHistoryPageSnapshot => {
+	const maintenance = requireReadyPaginationMaintenance(
+		tx
+			.select({
+				catalogRevision: sessionProjectionState.catalogRevision,
+				generation: sessionProjectionState.generation,
+				projectionId: sessionProjectionState.projectionId,
+				paginationVersion: sessionProjectionState.paginationVersion,
+				status: sessionProjectionState.status,
+			})
+			.from(sessionProjectionState)
+			.where(eq(sessionProjectionState.id, 1))
+			.get(),
+		[sessionId],
+		"Session history projection is unavailable; run `wincode sessions rebuild --all` before reading Session history."
+	);
+	const currentSession = tx
+		.select({ id: session.id })
+		.from(session)
+		.where(eq(session.id, sessionId))
+		.get();
+	if (currentSession === undefined) {
+		if (cursor !== undefined) {
+			throw new SessionPaginationError(
+				"cursor_expired",
+				"Session history cursor expired because the Session was deleted."
+			);
+		}
+		throw new SessionLogError(
+			"session_deleted",
+			sessionId,
+			"Session not found."
+		);
+	}
+	assertHistoryCursorMatchesMaintenance(cursor, maintenance);
+	const projectionCursor = resolveHistoryProjectionCursor(
+		tx,
+		sessionId,
+		maintenance.generation,
+		cursor
+	);
+	const readPoint: SessionHistoryReadPoint =
+		cursor === undefined
+			? {
+					catalogRevision: maintenance.catalogRevision,
+					generation: maintenance.generation,
+					kind: "history-read-point",
+					logId: projectionCursor.logId,
+					projectionId: maintenance.projectionId,
+					readPointSequence: projectionCursor.nextSequence - 1,
+					sessionId,
+					version: 1,
+					workspaceId,
+				}
+			: sessionHistoryReadPoint(cursor);
+	const sessionVersion = tx
+		.select()
+		.from(sessionCatalogVersion)
+		.where(
+			and(
+				eq(sessionCatalogVersion.sessionId, sessionId),
+				eq(sessionCatalogVersion.generation, readPoint.generation),
+				lte(sessionCatalogVersion.validFromRevision, readPoint.catalogRevision),
+				or(
+					isSqlNull(sessionCatalogVersion.validToRevision),
+					gt(sessionCatalogVersion.validToRevision, readPoint.catalogRevision)
+				)
+			)
+		)
+		.get();
+	if (sessionVersion === undefined) {
+		throw new SessionLogError(
+			"session_projection_blocked",
+			sessionId,
+			"Session metadata is missing from the captured projection revision."
+		);
+	}
+	return { readPoint, sessionVersion };
+};
+
+const readSessionHistoryPageProjection = (
+	db: SessionDatabase,
+	operationalDb: SessionDatabase,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId,
+	input: SessionHistoryPageProjectionInput
+): SessionHistoryPageProjection => {
+	const cursor = input.cursor;
+	assertHistoryCursorScope(cursor, workspaceId, sessionId);
+	assertHistorySessionBound(operationalDb, workspaceId, sessionId, cursor);
+	return db.transaction((tx) => {
+		const { readPoint, sessionVersion } = readHistoryPageSnapshot(
+			tx,
+			workspaceId,
+			sessionId,
+			cursor
+		);
+		const beforeSequence = cursor?.beforeSequence;
+		const recordFilter = and(
+			eq(sessionRecordVersion.sessionId, sessionId),
+			lte(sessionRecordVersion.sourceSequence, readPoint.readPointSequence),
+			lte(sessionRecordVersion.validFromSequence, readPoint.readPointSequence),
+			or(
+				isSqlNull(sessionRecordVersion.validToSequence),
+				gt(sessionRecordVersion.validToSequence, readPoint.readPointSequence)
+			),
+			...(beforeSequence === undefined
+				? []
+				: [lt(sessionRecordVersion.sourceSequence, beforeSequence)])
+		);
+		const rows = tx
+			.select({
+				messagesJson: sessionRecordVersion.messagesJson,
+				record: sessionRecord,
+				sourceSequence: sessionRecordVersion.sourceSequence,
+			})
+			.from(sessionRecordVersion)
+			.innerJoin(
+				sessionRecord,
+				eq(sessionRecord.recordId, sessionRecordVersion.recordId)
+			)
+			.where(recordFilter)
+			.orderBy(desc(sessionRecordVersion.sourceSequence))
+			.limit(input.limit + 1)
+			.all();
+		const selectedRows = rows.slice(0, input.limit);
+		const records = selectedRows
+			.toReversed()
+			.map(({ messagesJson, record }) =>
+				toSessionRecord({ ...record, messagesJson })
+			);
+		const messageIds = [
+			...new Set(
+				records.flatMap((record) => record.messages.map(({ id }) => id))
+			),
+		];
+		const compactionsById = new Map<string, SessionCompaction>();
+		for (let offset = 0; offset < messageIds.length; offset += 500) {
+			const chunk = messageIds.slice(offset, offset + 500);
+			const compactionRows = tx
+				.select({ compaction: sessionCompaction })
+				.from(sessionCompaction)
+				.where(
+					and(
+						eq(sessionCompaction.sessionId, sessionId),
+						lte(sessionCompaction.sourceSequence, readPoint.readPointSequence),
+						inArray(sessionCompaction.throughMessageUiId, chunk)
+					)
+				)
+				.orderBy(asc(sessionCompaction.sequence))
+				.all();
+			for (const { compaction } of compactionRows) {
+				compactionsById.set(compaction.id, toSessionCompaction(compaction));
+			}
+		}
+		const selectedOldest = selectedRows.at(-1);
+		return {
+			...(selectedRows.length === 0 || selectedOldest === undefined
+				? {}
+				: { beforeSequence: selectedOldest.sourceSequence }),
+			compactions: [...compactionsById.values()].sort(
+				(left, right) => left.sequence - right.sequence
+			),
+			hasMore: rows.length > input.limit,
+			readPoint,
+			records,
+			session: toCatalogSession(sessionVersion),
+		};
+	});
+};
+
 export type DrizzleSessionStore = SessionProjectionStore &
 	Readonly<{
 		jsonlProjection: SessionJsonlProjection;
+		markSessionDeleted: (sessionId: SessionId) => void;
+		readSessionCatalogPageProjection: (
+			input: SessionCatalogPageProjectionInput
+		) => SessionCatalogPageProjection;
+		readSessionHistoryPageProjection: (
+			sessionId: SessionId,
+			input: SessionHistoryPageProjectionInput
+		) => SessionHistoryPageProjection;
 		setAttachmentCollectionBarrier: (barrier: () => Promise<void>) => void;
 	}>;
 
@@ -877,6 +1513,7 @@ export const createDrizzleSessionStore = (
 	const attachmentStore =
 		options.attachmentStore ??
 		createSessionAttachmentStore({
+			lifecycleRoot: sessionLogRoot,
 			repository: createDrizzleAttachmentMetadataRepository(operationalDb),
 			root: attachmentRoot,
 		});
@@ -884,14 +1521,17 @@ export const createDrizzleSessionStore = (
 		messages: readonly SessionMessage[],
 		signal?: AbortSignal,
 		externalizationOptions?: AttachmentExternalizationOptions
-	): Promise<SessionMessage[]> =>
+	): Promise<AttachmentExternalizationLease> =>
 		attachmentStore
-			? attachmentStore.externalizeMessages(
+			? attachmentStore.externalizeMessagesWithLease(
 					messages,
 					signal,
 					externalizationOptions
 				)
-			: Promise.resolve([...messages]);
+			: Promise.resolve({
+					messages: [...messages],
+					release: async () => undefined,
+				});
 	const hydrateAttachments = (
 		messages: readonly SessionMessage[],
 		hydrationOptions: AttachmentHydrationOptions
@@ -924,7 +1564,7 @@ export const createDrizzleSessionStore = (
 		await attachmentCollectionBarrier?.();
 		return attachmentStore
 			? attachmentStore.collect({
-					liveAttachmentIds: collectLiveAttachmentIds(db, operationalDb),
+					liveAttachmentIds: () => collectLiveAttachmentIds(operationalDb),
 					safetyWindowMs,
 				})
 			: {
@@ -933,6 +1573,31 @@ export const createDrizzleSessionStore = (
 					reclaimedBytes: 0,
 					reclaimedCount: 0,
 				};
+	};
+	const markSessionDeleted = (sessionId: SessionId): void => {
+		const binding = operationalDb
+			.select({ workspaceId: localSessionBinding.workspaceId })
+			.from(localSessionBinding)
+			.where(eq(localSessionBinding.sessionId, sessionId))
+			.get();
+		if (binding?.workspaceId !== workspace.id) {
+			return;
+		}
+		const hasProjectedSession = db.transaction((tx) => {
+			const projected = tx
+				.select({ id: session.id })
+				.from(session)
+				.where(eq(session.id, sessionId))
+				.get();
+			if (projected === undefined) {
+				return false;
+			}
+			recordDeletionCursorInvalidation(tx, workspace.id);
+			return true;
+		});
+		if (hasProjectedSession) {
+			db.delete(session).where(eq(session.id, sessionId)).run();
+		}
 	};
 	const assertRecoveryResolvedForSessionDeletion = async (
 		sessionId: SessionId
@@ -1069,6 +1734,7 @@ export const createDrizzleSessionStore = (
 			return { id };
 		},
 
+		markSessionDeleted,
 		deleteSession: async (sessionId: SessionId) => {
 			await assertRecoveryResolvedForSessionDeletion(sessionId);
 			const binding = operationalDb
@@ -1084,7 +1750,7 @@ export const createDrizzleSessionStore = (
 			if (binding === undefined) {
 				return;
 			}
-			db.delete(session).where(eq(session.id, sessionId)).run();
+			markSessionDeleted(sessionId);
 			operationalDb
 				.delete(localSessionBinding)
 				.where(eq(localSessionBinding.sessionId, sessionId))
@@ -1107,11 +1773,33 @@ export const createDrizzleSessionStore = (
 				}
 			}
 			db.transaction((tx) => {
+				const currentState = tx
+					.select({ generation: sessionProjectionState.generation })
+					.from(sessionProjectionState)
+					.where(eq(sessionProjectionState.id, 1))
+					.get();
+				if (
+					currentState === undefined ||
+					!Number.isSafeInteger(currentState.generation + 1)
+				) {
+					throw new Error("Session projection generation is unavailable.");
+				}
 				tx.delete(sessionCompaction).run();
 				tx.delete(sessionRecord).run();
 				tx.delete(sessionUsageEntry).run();
 				tx.delete(session).run();
 				tx.delete(sessionProjectionCursor).run();
+				tx.delete(sessionCatalogDeletionState).run();
+				tx.update(sessionProjectionState)
+					.set({
+						catalogRevision: 0,
+						generation: currentState.generation + 1,
+						latestDeletionRevision: 0,
+						paginationVersion: 2,
+						status: "ready",
+					})
+					.where(eq(sessionProjectionState.id, 1))
+					.run();
 			});
 			operationalDb.transaction((tx) => {
 				tx.delete(localSessionBinding).run();
@@ -1168,6 +1856,14 @@ export const createDrizzleSessionStore = (
 		},
 		listSessionRecords: async (sessionId: SessionId) =>
 			readSessionRecords(db, operationalDb, workspace.id, sessionId),
+		readSessionHistoryPageProjection: (sessionId, input) =>
+			readSessionHistoryPageProjection(
+				db,
+				operationalDb,
+				workspace.id,
+				sessionId,
+				input
+			),
 		updateSessionSubmission: async (input) =>
 			updateSessionSubmissionCheckpoint(db, operationalDb, workspace.id, input),
 		getSession: (sessionId: SessionId) => {
@@ -1208,6 +1904,8 @@ export const createDrizzleSessionStore = (
 					.run();
 			});
 		},
+		readSessionCatalogPageProjection: (input) =>
+			readSessionCatalogPageProjection(db, workspace.id, input),
 		listSessions: () => {
 			const boundSessionIds = new Set(
 				operationalDb

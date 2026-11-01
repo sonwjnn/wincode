@@ -67,14 +67,16 @@ test("resets session data without conflating repeated pasted markers in prompt h
 			{ start: 0, text: "red\ngreen\nblue", token: "[Pasted ~3 lines]" },
 		],
 	});
-	const reference = await store.attachmentStore?.ingest({
+	const attachmentLease = await store.attachmentStore?.ingest({
 		bytes: PNG_BYTES,
 		filename: "reset.png",
 		mediaType: "image/png",
 	});
-	if (isUndefined(reference)) {
+	if (isUndefined(attachmentLease)) {
 		throw new Error("The attachment fixture was not stored.");
 	}
+	const reference = attachmentLease.reference;
+	await attachmentLease.release();
 	await store.appendCompaction({
 		firstKeptUiMessageId: sessionMessageId("initial-user"),
 		sessionId,
@@ -214,12 +216,12 @@ test("incompatible local Session schema is refused without deleting user data", 
 			estimatedTokensAfter: 5,
 			trigger: "manual",
 		});
-		const attachment = await store.attachmentStore?.ingest({
+		const attachmentLease = await store.attachmentStore?.ingest({
 			bytes: PNG_BYTES,
 			filename: "unsafe-reset.png",
 			mediaType: "image/png",
 		});
-		if (isUndefined(attachment)) {
+		if (isUndefined(attachmentLease)) {
 			throw new Error("The preservation fixture attachment was not stored.");
 		}
 		const attachmentFiles = await fs.readdir(attachmentRoot);

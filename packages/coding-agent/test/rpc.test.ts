@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import * as path from "node:path";
+import { fromPartial } from "@total-typescript/shoehorn";
 import { logger } from "@wincode/utils";
 import {
 	createLoggerHome,
@@ -18,6 +19,15 @@ import {
 	RpcOutputOverflowError,
 } from "../modules/application/rpc/types";
 import type { SessionCapabilities } from "../modules/sessions/host/session-rpc";
+import { SessionPaginationError } from "../modules/sessions/storage/session-pagination";
+import type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+	SessionStore,
+} from "../modules/sessions/storage/session-store";
+import { sessionId } from "./support/identifiers";
 
 const loggerHome = await createLoggerHome("rpc-logs-");
 const logHome = loggerHome.home;
@@ -98,6 +108,8 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 					stateNotifications: true,
 					structuredSubmissions: true,
 					submissionEvents: true,
+					sessionCatalogPagination: true,
+					sessionHistoryPagination: true,
 					transcriptPagination: true,
 				},
 				protocolVersion: 4,
@@ -111,6 +123,128 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 			result: { shutdown: true },
 		},
 	]);
+});
+
+test("RPC Session page methods forward opaque snapshot cursors to the shared store", async () => {
+	const session: Session = {
+		createdAt: new Date("2025-01-01T00:00:00.000Z"),
+		id: sessionId("rpc-page-session"),
+		lastMessageAt: null,
+		pinned: false,
+		title: "RPC page session",
+	};
+	const catalogPage: SessionCatalogPage = {
+		nextCursor: "catalog-next",
+		readPoint: "catalog-read-point",
+		sessions: [session],
+	};
+	const historyPage: SessionHistoryPage = {
+		compactions: [],
+		nextCursor: "history-next",
+		readPoint: "history-read-point",
+		records: [],
+		session,
+	};
+	const catalogOptions: SessionPageOptions[] = [];
+	const historyRequests: Array<{
+		options: SessionPageOptions;
+		sessionId: string;
+	}> = [];
+	const store = fromPartial<SessionStore>({
+		listSessionsPage: async (options?: SessionPageOptions) => {
+			catalogOptions.push(options ?? {});
+			if (options?.limit === 201) {
+				throw new SessionPaginationError(
+					"page_limit_invalid",
+					"Session page limit must be an integer from 1 to 200."
+				);
+			}
+			return catalogPage;
+		},
+		readSessionHistoryPage: async (
+			requestedSessionId: Session["id"],
+			options?: SessionPageOptions
+		) => {
+			historyRequests.push({
+				options: options ?? {},
+				sessionId: requestedSessionId,
+			});
+			return historyPage;
+		},
+	});
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const initialize = request("initialize", "initialize", {
+		capabilities: {},
+		clientInfo: { name: "pagination-test" },
+		cwd: process.cwd(),
+		protocolVersion: 4,
+	});
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeServices: async () => ({
+			capabilities: emptyCapabilities(),
+			shutdown: async () => undefined,
+			store,
+			workspace: process.cwd(),
+			workspaceId: "workspace-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${[
+					initialize,
+					request("catalog-page", "session/listPage", {
+						cursor: "catalog-cursor",
+						limit: 7,
+					}),
+					request("history-page", "session/getHistoryPage", {
+						cursor: "history-cursor",
+						limit: 9,
+						sessionId: "rpc-page-session",
+					}),
+					request("bad-limit", "session/listPage", { limit: 201 }),
+					request("shutdown", "server/shutdown", {}),
+				].join("\n")}\n`
+			),
+		],
+		stderr,
+		stdout,
+	});
+	const responses = stdout.frames.map(
+		(frame) => JSON.parse(frame) as Record<string, unknown>
+	);
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(catalogOptions).toEqual([
+		{ cursor: "catalog-cursor", limit: 7 },
+		{ limit: 201 },
+	]);
+	expect(historyRequests).toEqual([
+		{
+			options: { cursor: "history-cursor", limit: 9 },
+			sessionId: sessionId("rpc-page-session"),
+		},
+	]);
+	expect(responses[1]).toMatchObject({
+		id: "catalog-page",
+		result: { nextCursor: "catalog-next", readPoint: "catalog-read-point" },
+	});
+	expect(responses[2]).toMatchObject({
+		id: "history-page",
+		result: { nextCursor: "history-next", readPoint: "history-read-point" },
+	});
+	expect(responses[3]).toMatchObject({
+		error: {
+			data: { code: "page_limit_invalid" },
+			message: "Session page limit must be an integer from 1 to 200.",
+		},
+		id: "bad-limit",
+	});
 });
 
 test("RPC initialize preserves Session Writer lock infrastructure failures", async () => {

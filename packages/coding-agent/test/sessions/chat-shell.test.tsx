@@ -1491,6 +1491,8 @@ describe("ChatShell activity footer", () => {
 		};
 		const sessionUsageEntries: SessionUsageEntry[] = [
 			{
+				compactionId: compaction.id,
+				costUsd: 2,
 				createdAt: new Date("2026-09-06T09:06:25.000Z"),
 				id: sessionUsageEntryId("summary-usage"),
 				kind: "compaction-summary",

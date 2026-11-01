@@ -6,6 +6,9 @@ export type WorkspaceId = Tagged<string, "WorkspaceId">;
 export type CompactionId = Tagged<string, "CompactionId">;
 export type QueuedSubmissionId = Tagged<string, "QueuedSubmissionId">;
 export type SteeringMessageId = Tagged<string, "SteeringMessageId">;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*(?![\s\S])/u;
+export const isValidSessionId = (value: string): value is SessionId =>
+	SESSION_ID_PATTERN.test(value);
 export const toSessionId = (value: string): SessionId => value as SessionId;
 export const toSessionUsageEntryId = (value: string): SessionUsageEntryId =>
 	value as SessionUsageEntryId;

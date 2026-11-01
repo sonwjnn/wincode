@@ -42,6 +42,7 @@ import type {
 } from "../compaction/types";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import type { FileMentionPart, SessionMessage } from "../message";
+import type { AttachmentExternalizationLease } from "../storage/attachment-store";
 import type {
 	SessionSendInput,
 	SessionSendOutcome,
@@ -262,6 +263,7 @@ export type SessionCommitInput = {
 	sessionId: SessionId;
 	sessionModel?: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
+	externalizationLease?: AttachmentExternalizationLease;
 };
 export type SessionSubmissionStatusUpdate = Readonly<{
 	failure?: string;
@@ -323,16 +325,16 @@ export type SessionAttachmentPort = Readonly<{
 	externalize: (
 		messages: readonly SessionMessage[],
 		signal: AbortSignal
-	) => Promise<SessionMessage[]>;
+	) => Promise<AttachmentExternalizationLease>;
 	/** Hydrates the attachment data of the messages one Agent Turn sends. */
 	hydrate: (request: SessionHydrationRequest) => Promise<SessionMessage[]>;
 	/**
 	 * Keeps attachment blobs alive past the records and prompt history that
 	 * name them, so a waiting composition's attachments cannot be reclaimed.
 	 */
-	retain: (attachmentIds: readonly string[]) => void;
+	retain: (attachmentIds: readonly string[]) => void | Promise<void>;
 	/** Releases blobs the composition that needed them no longer holds. */
-	release: (attachmentIds: readonly string[]) => void;
+	release: (attachmentIds: readonly string[]) => void | Promise<void>;
 }>;
 
 /**

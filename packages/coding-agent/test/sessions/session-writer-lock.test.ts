@@ -13,6 +13,7 @@ import type { SessionProjectionStore } from "@/modules/sessions/storage/session-
 import {
 	acquireSessionWriterLock,
 	SessionInUseError,
+	withSessionCatalogLifecycleGate,
 } from "@/modules/sessions/storage/session-writer-lock";
 import {
 	agentId,
@@ -118,6 +119,30 @@ afterEach(async () => {
 });
 
 describe("Session Writer process locks", () => {
+	test("catalog lifecycle operations serialize through canonical log-root aliases", async () => {
+		const fixture = createFixture();
+		const logRoot = path.join(fixture.root, "session-logs");
+		const aliasRoot = path.join(fixture.root, "session-logs-alias");
+		await fs.promises.mkdir(logRoot);
+		await fs.promises.symlink(logRoot, aliasRoot, "dir");
+		const enteredFirst = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const first = withSessionCatalogLifecycleGate(logRoot, async () => {
+			enteredFirst.resolve();
+			await releaseFirst.promise;
+		});
+		await enteredFirst.promise;
+		let enteredSecond = false;
+		const second = withSessionCatalogLifecycleGate(aliasRoot, async () => {
+			enteredSecond = true;
+		});
+		await Bun.sleep(25);
+		expect(enteredSecond).toBe(false);
+		releaseFirst.resolve();
+		await Promise.all([first, second]);
+		expect(enteredSecond).toBe(true);
+	});
+
 	test("new Session databases omit the retired SQLite lease table", () => {
 		const fixture = createFixture();
 		const table = fixture.first.sqlite

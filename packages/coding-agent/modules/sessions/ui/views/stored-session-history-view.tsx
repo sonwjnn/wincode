@@ -14,10 +14,14 @@ import {
 
 type StoredSessionHistoryViewProps = Readonly<{
 	compactions: readonly SessionCompaction[];
+	hasMoreHistory: boolean;
+	historyError?: string;
+	isLoadingMore: boolean;
 	isRefreshing: boolean;
 	isRetrying: boolean;
 	isSelectingModel: boolean;
 	messages: readonly SessionMessage[];
+	onLoadMore: () => void;
 	onRefresh: () => void;
 	onRetry: () => void;
 	onReselectModel: () => void;
@@ -29,10 +33,14 @@ type StoredSessionHistoryViewProps = Readonly<{
 
 export function StoredSessionHistoryView({
 	compactions,
+	hasMoreHistory,
+	historyError,
+	isLoadingMore,
 	isRefreshing,
 	isRetrying,
 	isSelectingModel,
 	messages,
+	onLoadMore,
 	onRefresh,
 	onRetry,
 	onReselectModel,
@@ -47,7 +55,8 @@ export function StoredSessionHistoryView({
 		item.kind === "turn" ? [item.turn] : []
 	);
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
-	const isBusy = isRefreshing || isRetrying || isSelectingModel;
+	const isBusy =
+		isRefreshing || isRetrying || isSelectingModel || isLoadingMore;
 
 	return (
 		<box
@@ -82,6 +91,18 @@ export function StoredSessionHistoryView({
 				)}
 				<text fg={colors.text}>{sessionTitle}</text>
 				<box flexDirection="row" gap={2}>
+					{hasMoreHistory ? (
+						<SessionWriterAction
+							disabled={isBusy}
+							id="stored-session-history-load-more"
+							label={
+								isLoadingMore
+									? "Loading older history..."
+									: "Load older history"
+							}
+							onActivate={onLoadMore}
+						/>
+					) : null}
 					<SessionWriterAction
 						disabled={isBusy}
 						id="stored-session-history-refresh"
@@ -112,6 +133,9 @@ export function StoredSessionHistoryView({
 						/>
 					)}
 				</box>
+				{historyError === undefined ? null : (
+					<text fg={colors.error}>{historyError}</text>
+				)}
 			</box>
 			<scrollbox
 				flexGrow={1}

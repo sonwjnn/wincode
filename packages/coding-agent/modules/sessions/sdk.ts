@@ -11,7 +11,7 @@ import type {
 	ProviderModel,
 	ThinkingLevel,
 } from "@wincode/ai";
-import { omitUndefined } from "@wincode/utils";
+import { getErrorMessage, omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import {
 	resolveEffectiveAgentSelection,
@@ -49,6 +49,7 @@ import {
 	type SessionSdkPluginFactory,
 	type SessionSdkPrompt,
 	type SessionSdkSnapshot,
+	type SessionSdkSubmissionAdmission,
 	snapshotSessionSdkCapabilityCeiling,
 } from "./sdk-contract";
 import type { SessionSdkOptions as PublicSessionSdkOptions } from "./sdk-options";
@@ -689,9 +690,14 @@ const promptInputFor = async (
 	};
 };
 
+type SessionSdkDeliveryTransaction = Readonly<{
+	text: string;
+	promise: Promise<SessionSdkSubmissionAdmission>;
+}>;
+
 const deliveryTransactions = new WeakMap<
 	SessionHost,
-	Map<string, Promise<SessionSubmissionAdmission>>
+	Map<string, SessionSdkDeliveryTransaction>
 >();
 
 const handleFor = (
@@ -778,36 +784,54 @@ const handleFor = (
 		return toSubmissionId(`delivery-${digest}`);
 	};
 	const existingDeliveryAdmission = async (
-		submissionId: SessionSdkPrompt["submissionId"]
-	): Promise<SessionSubmissionAdmission | undefined> => {
-		if (submissionId === undefined) {
+		submissionId: SubmissionId,
+		text: string
+	): Promise<SessionSdkSubmissionAdmission | undefined> => {
+		const committed = await assembly.store.findSessionRecordBySubmissionId(
+			sessionId,
+			submissionId
+		);
+		if (committed === undefined) {
 			return;
 		}
-		const snapshot = host.getSnapshot();
-		for (const message of snapshot.transcript) {
-			if (message.metadata?.submissionId === submissionId) {
-				return {
-					disposition: "queued",
-					messageId: message.id,
-					rejected: false,
-					submissionId,
-				};
-			}
+		const committedText = committed.message.parts
+			.flatMap((part) => (part.type === "text" ? [part.text] : []))
+			.join("");
+		if (committedText !== text) {
+			return {
+				code: "session_operation_conflict",
+				reason: "The SDK delivery key was already used with different input.",
+				rejected: true,
+			};
 		}
-		const records = await assembly.store.listSessionRecords(sessionId);
-		for (const record of records) {
-			for (const message of record.messages) {
-				if (message.metadata?.submissionId === submissionId) {
-					return {
-						disposition: "queued",
-						messageId: message.id,
-						rejected: false,
-						submissionId,
-					};
-				}
-			}
-		}
-		return;
+		return {
+			disposition: "duplicate",
+			messageId: committed.message.id,
+			rejected: false,
+			submissionId,
+			writeOutcome: committed.writeOutcome,
+		};
+	};
+	const deliveryFailure = (error: unknown): SessionSdkSubmissionAdmission => {
+		const storageError = projectSessionStorageError(host.getSnapshot().error);
+		const errorCode =
+			typeof error === "object" && error !== null
+				? Reflect.get(error, "code")
+				: undefined;
+		return {
+			...(storageError?.writeOutcome === undefined
+				? {}
+				: { writeOutcome: storageError.writeOutcome }),
+			...omitUndefined({
+				code:
+					storageError?.code ??
+					(typeof errorCode === "string" ? errorCode : undefined),
+			}),
+			reason:
+				storageError?.message ??
+				getErrorMessage(error, "SDK delivery could not be reconciled."),
+			rejected: true,
+		};
 	};
 	const promptAndWaitForDurableDelivery = async (
 		submissionId: SubmissionId,
@@ -881,23 +905,35 @@ const handleFor = (
 		}
 	};
 	const deliver: SessionSdkHandle["deliver"] = (input) => {
+		const submissionId = deliverySubmissionId(input.idempotencyKey);
 		const previous = deliveries.get(input.idempotencyKey);
 		if (previous !== undefined) {
-			return previous;
+			if (previous.text !== input.text) {
+				return Promise.resolve({
+					code: "session_operation_conflict",
+					reason: "The SDK delivery key was already used with different input.",
+					rejected: true,
+				});
+			}
+			return previous.promise;
 		}
-		const submissionId = deliverySubmissionId(input.idempotencyKey);
-		const pending = (async () => {
-			const existing = await existingDeliveryAdmission(submissionId);
+		const pending = (async (): Promise<SessionSdkSubmissionAdmission> => {
+			let existing: SessionSdkSubmissionAdmission | undefined;
+			try {
+				existing = await existingDeliveryAdmission(submissionId, input.text);
+			} catch (error) {
+				return deliveryFailure(error);
+			}
 			if (existing !== undefined) {
 				return existing;
 			}
 			if (disposed) {
 				return {
 					reason: "Session handle is disposed.",
-					rejected: true as const,
+					rejected: true,
 				};
 			}
-			return promptAndWaitForDurableDelivery(
+			const admission = await promptAndWaitForDurableDelivery(
 				submissionId,
 				async () =>
 					(
@@ -909,15 +945,42 @@ const handleFor = (
 						)
 					).admission
 			);
+			if (admission.rejected) {
+				return admission;
+			}
+			try {
+				const committed = await assembly.store.findSessionRecordBySubmissionId(
+					sessionId,
+					submissionId
+				);
+				if (committed === undefined) {
+					return deliveryFailure(
+						new Error("Committed SDK delivery has no Session Record.")
+					);
+				}
+				return {
+					...admission,
+					writeOutcome: committed.writeOutcome,
+				};
+			} catch (error) {
+				return deliveryFailure(error);
+			}
 		})();
-		deliveries.set(input.idempotencyKey, pending);
+		deliveries.set(input.idempotencyKey, {
+			promise: pending,
+			text: input.text,
+		});
 		void pending.then(
-			(admission) => {
-				if (admission.rejected) {
+			() => {
+				if (deliveries.get(input.idempotencyKey)?.promise === pending) {
 					deliveries.delete(input.idempotencyKey);
 				}
 			},
-			() => deliveries.delete(input.idempotencyKey)
+			() => {
+				if (deliveries.get(input.idempotencyKey)?.promise === pending) {
+					deliveries.delete(input.idempotencyKey);
+				}
+			}
 		);
 		return pending;
 	};
@@ -1403,6 +1466,13 @@ const createSessionSdkInternal = async (
 	const sdkApi: SessionSdk = Object.freeze({
 		createSessionRuntime,
 		createEmptySession,
+		listSessionsPage: (pageOptions) =>
+			assembly.store.listSessionsPage(pageOptions),
+		readSessionHistoryPage: (sessionId, pageOptions) =>
+			assembly.store.readSessionHistoryPage(
+				toSessionId(sessionId),
+				pageOptions
+			),
 		getAgentCatalog,
 		createSession,
 		deliverToSession: async (sessionId, input) => {
@@ -1533,6 +1603,9 @@ export const createSessionSdkOperations = (
 			}),
 		getAgentCatalog: (catalogOptions) =>
 			withSessionRuntime((sdk) => sdk.getAgentCatalog(catalogOptions)),
+		listSessionsPage: (pageOptions) => store.listSessionsPage(pageOptions),
+		readSessionHistoryPage: (sessionId, pageOptions) =>
+			store.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
 		deliverToSession: (sessionId, input) =>
 			withSessionRuntime((sdk) => sdk.deliverToSession(sessionId, input)),
 		openSession: async (sessionId, openOptions) => {

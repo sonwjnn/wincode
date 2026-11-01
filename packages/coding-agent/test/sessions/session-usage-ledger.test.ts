@@ -17,6 +17,7 @@ import {
 const session = sessionId("usage-ledger");
 const model = providerModelSelectionFixture("openai/gpt-5.6");
 const initialEntry: SessionUsageEntry = {
+	costUsd: null,
 	createdAt: new Date("2026-10-01T00:00:00.000Z"),
 	id: sessionUsageEntryId("usage-initial"),
 	kind: "cache-warm",
@@ -25,6 +26,7 @@ const initialEntry: SessionUsageEntry = {
 	usage: { inputTokens: 100, outputTokens: 1 },
 };
 const summaryEntryInput: Omit<CreateSessionUsageEntryInput, "sessionId"> = {
+	costUsd: null,
 	id: sessionUsageEntryId("usage-summary"),
 	kind: "compaction-summary",
 	model,

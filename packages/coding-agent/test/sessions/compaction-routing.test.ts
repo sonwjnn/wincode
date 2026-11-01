@@ -119,7 +119,7 @@ const fixture = (
 				return {
 					compaction: fromPartial<SessionCompaction>({
 						...input,
-						id: compactionId("routed"),
+						id: input.id ?? compactionId("routed"),
 						sequence: 1,
 					}),
 					writeOutcome: {
@@ -187,6 +187,8 @@ test("Host routes only the summary to the configured model and preserves the cha
 	expect(result.entry.summarizationThinkingLevel).toBe("high");
 	expect(summaryUsageEntries).toHaveLength(1);
 	expect(summaryUsageEntries[0]).toMatchObject({
+		compactionId: result.entry.id,
+		costUsd: null,
 		kind: "compaction-summary",
 		model: summarizer,
 		usage: { inputTokens: 10, outputTokens: 2 },
@@ -195,6 +197,32 @@ test("Host routes only the summary to the configured model and preserves the cha
 		sessionMessageId("last-user"),
 		sessionMessageId("last-answer"),
 	]);
+});
+
+test("records summary usage at the configured Provider Model's published cost", async () => {
+	const pricedSummaryModel: ProviderModel = {
+		...summaryModel,
+		pricing: {
+			inputPerMillionTokensUsd: 1,
+			outputPerMillionTokensUsd: 5,
+		},
+	};
+	const { compact, summaryUsageEntries } = fixture(
+		{ model: "anthropic/summary/large", maxOutputTokens: 512 },
+		messages,
+		pricedSummaryModel
+	);
+
+	await compact();
+
+	expect(summaryUsageEntries[0]).toMatchObject({
+		kind: "compaction-summary",
+		usage: { inputTokens: 10, outputTokens: 2 },
+	});
+	expect((summaryUsageEntries[0] as { costUsd: number }).costUsd).toBeCloseTo(
+		0.000_02,
+		12
+	);
 });
 
 const shortHistory = messages.map((message) => ({
@@ -218,6 +246,8 @@ test("summary usage from an incomplete request keeps target identity without per
 	await expect(compact()).rejects.toMatchObject({ code: "summary-failed" });
 	expect(summaryUsageEntries).toHaveLength(1);
 	expect(summaryUsageEntries[0]).toMatchObject({
+		compactionId: expect.any(String),
+		costUsd: null,
 		kind: "compaction-summary",
 		model: summarizer,
 		usage: { inputTokens: 10, outputTokens: 2 },

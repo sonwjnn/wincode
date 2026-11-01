@@ -3,7 +3,6 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLatest } from "@/shared/hooks/use-latest";
-import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -16,25 +15,33 @@ import {
 	projectSessionStorageError,
 	requireSessionWriteReady,
 } from "../../storage/session-jsonl-store";
-import type { Session, SessionCatalogIssue } from "../../storage/session-store";
+import type { Session } from "../../storage/session-store";
 import { RenameSessionDialog } from "./rename-session-dialog";
 
 const MAX_VISIBLE_ITEMS = 10;
 const MIN_VISIBLE_ITEMS = 8;
 const CONFIRM_DELETE_BG = RGBA.fromInts(60, 20, 20, 255);
 
+const sessionCatalogErrorMessage = (error: unknown): string => {
+	const code = error instanceof Error ? Reflect.get(error, "code") : undefined;
+	return code === "cursor_expired"
+		? "Session list changed. Refresh sessions to start a new snapshot."
+		: getErrorMessage(error, "Failed to fetch sessions");
+};
+
 type ListItem =
 	| { kind: "header"; label: string; sectionKey: string }
-	| { kind: "session"; session: Session }
-	| { kind: "unavailable"; issue: SessionCatalogIssue };
+	| { kind: "load-more"; loading: boolean }
+	| { kind: "notice"; message: string }
+	| { kind: "session"; session: Session };
 const getSessionSectionKey = (item: ListItem): string => {
 	if (item.kind === "header") {
 		return item.sectionKey;
 	}
-	if (item.kind === "unavailable") {
-		return "unavailable";
+	if (item.kind === "session") {
+		return item.session.pinned ? "pinned" : "recent";
 	}
-	return item.session.pinned ? "pinned" : "recent";
+	return "pagination";
 };
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -44,21 +51,23 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
 
 function buildListItems(
 	sessions: readonly Session[],
-	issues: readonly SessionCatalogIssue[],
-	isSearching: boolean
+	isSearching: boolean,
+	hasMore: boolean,
+	loadingMore: boolean,
+	notice?: string
 ): ListItem[] {
-	const unavailableItems: ListItem[] = issues.map((issue) => ({
-		kind: "unavailable",
-		issue,
-	}));
 	if (isSearching) {
-		return [
-			...sessions.map((session) => ({
-				kind: "session" as const,
-				session,
-			})),
-			...unavailableItems,
-		];
+		const items: ListItem[] = sessions.map((session) => ({
+			kind: "session",
+			session,
+		}));
+		if (notice !== undefined) {
+			items.push({ kind: "notice", message: notice });
+		}
+		if (hasMore) {
+			items.push({ kind: "load-more", loading: loadingMore });
+		}
+		return items;
 	}
 
 	const pinned = sessions.filter((s) => s.pinned);
@@ -78,13 +87,11 @@ function buildListItems(
 			items.push({ kind: "session", session });
 		}
 	}
-	if (unavailableItems.length > 0) {
-		items.push({
-			kind: "header",
-			label: "Unavailable",
-			sectionKey: "unavailable",
-		});
-		items.push(...unavailableItems);
+	if (notice !== undefined) {
+		items.push({ kind: "notice", message: notice });
+	}
+	if (hasMore) {
+		items.push({ kind: "load-more", loading: loadingMore });
 	}
 
 	return items;
@@ -97,15 +104,21 @@ const getListItemKey = (item: ListItem): string => {
 	if (item.kind === "session") {
 		return item.session.id;
 	}
-	return `unavailable:${item.issue.sessionId}`;
+	if (item.kind === "load-more") {
+		return "catalog:load-more";
+	}
+	return "catalog:notice";
 };
 
 const getListItemSearchText = (item: ListItem): string => {
 	if (item.kind === "session") {
 		return item.session.title;
 	}
-	if (item.kind === "unavailable") {
-		return `Unavailable Session ${item.issue.sessionId} ${item.issue.code} ${item.issue.message}`;
+	if (item.kind === "load-more") {
+		return "Load more sessions";
+	}
+	if (item.kind === "notice") {
+		return item.message;
 	}
 	return "";
 };
@@ -157,9 +170,13 @@ function SessionListItem({
 
 export const SessionsDialogContent = () => {
 	const [sessions, setSessions] = useState<Session[]>([]);
-	const [catalogIssues, setCatalogIssues] = useState<SessionCatalogIssue[]>([]);
+	const [nextCursor, setNextCursor] = useState<string | undefined>();
+	const [readPoint, setReadPoint] = useState<string | undefined>();
+	const [catalogError, setCatalogError] = useState<string | undefined>();
 	const [loading, setLoading] = useState(true);
+	const [loadingMore, setLoadingMore] = useState(false);
 	const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+	const pageRequestIdRef = useRef(0);
 	const pendingDeleteIdRef = useLatest(pendingDeleteId);
 	const { close, open: openDialog } = useDialog();
 	const navigate = useNavigate();
@@ -183,26 +200,32 @@ export const SessionsDialogContent = () => {
 
 	const fetchSessions = useCallback(
 		async (ignoreRef?: { current: boolean }) => {
+			const requestId = ++pageRequestIdRef.current;
+			setLoading(true);
+			setLoadingMore(false);
+			setNextCursor(undefined);
+			setReadPoint(undefined);
+			setCatalogError(undefined);
 			try {
-				const catalog = await getSessionStore().listSessionCatalog();
-				if (ignoreRef?.current) {
+				const page = await getSessionStore().listSessionsPage();
+				if (ignoreRef?.current || requestId !== pageRequestIdRef.current) {
 					return;
 				}
-				setSessions(catalog.sessions);
-				setCatalogIssues(catalog.issues);
-				setLoading(false);
+				setSessions(page.sessions);
+				setNextCursor(page.nextCursor);
+				setReadPoint(page.readPoint);
 			} catch (error) {
-				if (ignoreRef?.current) {
+				if (ignoreRef?.current || requestId !== pageRequestIdRef.current) {
 					return;
 				}
-				show({
-					variant: "error",
-					message: getErrorMessage(error, "Failed to fetch sessions"),
-				});
-				close();
+				setCatalogError(sessionCatalogErrorMessage(error));
+			} finally {
+				if (!ignoreRef?.current && requestId === pageRequestIdRef.current) {
+					setLoading(false);
+				}
 			}
 		},
-		[close, show]
+		[]
 	);
 
 	useEffect(() => {
@@ -212,6 +235,46 @@ export const SessionsDialogContent = () => {
 			ignoreRef.current = true;
 		};
 	}, [fetchSessions]);
+
+	const loadMoreSessions = useCallback(async () => {
+		const cursor = nextCursor;
+		const requestId = pageRequestIdRef.current;
+		if (cursor === undefined || loadingMore) {
+			return;
+		}
+		setLoadingMore(true);
+		setCatalogError(undefined);
+		try {
+			const page = await getSessionStore().listSessionsPage({ cursor });
+			if (requestId !== pageRequestIdRef.current) {
+				return;
+			}
+			if (page.readPoint !== readPoint) {
+				setNextCursor(undefined);
+				setCatalogError(
+					"Session page did not match the captured snapshot. Refresh sessions to continue."
+				);
+				return;
+			}
+			setSessions((current) => [...current, ...page.sessions]);
+			setNextCursor(page.nextCursor);
+		} catch (error) {
+			if (requestId !== pageRequestIdRef.current) {
+				return;
+			}
+			if (
+				error instanceof Error &&
+				Reflect.get(error, "code") === "cursor_expired"
+			) {
+				setNextCursor(undefined);
+			}
+			setCatalogError(sessionCatalogErrorMessage(error));
+		} finally {
+			if (requestId === pageRequestIdRef.current) {
+				setLoadingMore(false);
+			}
+		}
+	}, [loadingMore, nextCursor, readPoint]);
 
 	const navigateToSession = useCallback(
 		(session: Session) => {
@@ -225,41 +288,21 @@ export const SessionsDialogContent = () => {
 
 	const togglePin = useCallback(
 		async (session: Session) => {
-			const original = sessions.slice();
-			const updated = original
-				.map((s) => (s.id === session.id ? { ...s, pinned: !s.pinned } : s))
-				.sort((a, b) => {
-					if (a.pinned !== b.pinned) {
-						return b.pinned ? 1 : -1;
-					}
-					return (
-						new Date(b.lastMessageAt ?? b.createdAt).getTime() -
-						new Date(a.lastMessageAt ?? a.createdAt).getTime()
-					);
-				});
-
-			setSessions(updated);
 			try {
 				requireSessionWriteReady(
 					await getSessionStore().updateSession(session.id, {
 						pinned: !session.pinned,
 					})
 				);
+				await fetchSessions();
 			} catch (error) {
-				const writeOutcome =
-					error instanceof Error
-						? projectSessionStorageError(error)?.writeOutcome
-						: undefined;
-				if (writeOutcome?.kind !== "committed") {
-					setSessions(original);
-				}
 				show({
 					variant: "error",
 					message: getErrorMessage(error, "Failed to update session"),
 				});
 			}
 		},
-		[sessions, show]
+		[fetchSessions, show]
 	);
 
 	const confirmDelete = useCallback(
@@ -271,12 +314,18 @@ export const SessionsDialogContent = () => {
 				requireSessionWriteReady(
 					await getSessionStore().deleteSession(session.id)
 				);
+				await fetchSessions();
 			} catch (error) {
 				const writeOutcome =
 					error instanceof Error
 						? projectSessionStorageError(error)?.writeOutcome
 						: undefined;
-				if (writeOutcome?.kind !== "committed") {
+				if (writeOutcome?.kind === "committed") {
+					setNextCursor(undefined);
+					setCatalogError(
+						"Session deleted. Refresh sessions to start a new snapshot."
+					);
+				} else {
 					setSessions(original);
 				}
 				show({
@@ -285,24 +334,19 @@ export const SessionsDialogContent = () => {
 				});
 			}
 		},
-		[sessions, show]
+		[fetchSessions, sessions, show]
 	);
 
-	const handleRenameSuccess = useCallback(
-		(sessionId: SessionId, newTitle: string) => {
-			setSessions((prev) =>
-				prev.map((s) => (s.id === sessionId ? { ...s, title: newTitle } : s))
-			);
-		},
-		[]
-	);
+	const handleRenameSuccess = useCallback(() => {
+		void fetchSessions();
+	}, [fetchSessions]);
 
 	const openRename = useCallback(
 		(session: Session) => {
 			openDialog({
 				children: (
 					<RenameSessionDialog
-						onSuccess={(newTitle) => handleRenameSuccess(session.id, newTitle)}
+						onSuccess={() => handleRenameSuccess()}
 						session={session}
 					/>
 				),
@@ -313,10 +357,18 @@ export const SessionsDialogContent = () => {
 	);
 
 	const handleActionKeysRef = useRef(
-		(_key: { ctrl: boolean; name: string }) => false as boolean
+		(_key: { ctrl: boolean; name: string; shift?: boolean }) => false as boolean
 	);
 
 	handleActionKeysRef.current = (key) => {
+		if (key.ctrl && key.shift && key.name.toLowerCase() === "r") {
+			void fetchSessions();
+			return true;
+		}
+		if (key.ctrl && key.name === "down") {
+			void loadMoreSessions();
+			return true;
+		}
 		const session = selectedSessionRef.current;
 		const pending = pendingDeleteIdRef.current;
 		if (!session) {
@@ -349,17 +401,16 @@ export const SessionsDialogContent = () => {
 		if (item.kind === "session") {
 			selectedSessionRef.current = item.session;
 			setPendingDeleteId(null);
+		} else {
+			selectedSessionRef.current = null;
 		}
 	}, []);
 
 	const isConfirmDelete =
 		pendingDeleteId && pendingDeleteId === selectedSessionRef.current?.id;
-	let emptyText = "No matching sessions";
-	if (loading) {
-		emptyText = "Loading sessions...";
-	} else if (catalogIssues.length > 0) {
-		emptyText = "No usable sessions; see Unavailable below";
-	}
+	const emptyText = loading
+		? "Loading sessions..."
+		: (catalogError ?? "No matching sessions");
 	const renderItem = (
 		item: ListItem,
 		isSelected: boolean,
@@ -372,11 +423,20 @@ export const SessionsDialogContent = () => {
 				</SelectableDialogItem>
 			);
 		}
-		if (item.kind === "unavailable") {
+		if (item.kind === "notice") {
 			return (
 				<SelectableDialogItem>
 					<text fg={colors.error} selectable={false}>
-						{`Session ${item.issue.sessionId} unavailable (${item.issue.code}): ${item.issue.message}`}
+						{item.message}
+					</text>
+				</SelectableDialogItem>
+			);
+		}
+		if (item.kind === "load-more") {
+			return (
+				<SelectableDialogItem>
+					<text fg={colors.primary} selectable={false}>
+						{item.loading ? "Loading more sessions..." : "Load more sessions"}
 					</text>
 				</SelectableDialogItem>
 			);
@@ -411,7 +471,13 @@ export const SessionsDialogContent = () => {
 							<DialogFooterHint label="pin/unpin" shortcut="ctrl+f" />
 							<DialogFooterHint label="delete" shortcut="ctrl+d" />
 							<DialogFooterHint label="rename" shortcut="ctrl+r" />
+							{nextCursor === undefined ? null : (
+								<DialogFooterHint label="load more" shortcut="ctrl+↓" />
+							)}
 						</>
+					)}
+					{isConfirmDelete ? null : (
+						<DialogFooterHint label="refresh" shortcut="ctrl+shift+r" />
 					)}
 				</>
 			}
@@ -427,8 +493,18 @@ export const SessionsDialogContent = () => {
 			isItemActive={(item) =>
 				item.kind === "session" && item.session.id === currentSessionId
 			}
-			isItemSelectable={(item) => item.kind === "session"}
-			items={buildListItems(sessions, catalogIssues, false)}
+			isItemSelectable={(item) =>
+				(item.kind === "session" || item.kind === "load-more") &&
+				!loading &&
+				!loadingMore
+			}
+			items={buildListItems(
+				sessions,
+				false,
+				nextCursor !== undefined,
+				loadingMore,
+				catalogError
+			)}
 			maxVisibleItems={MAX_VISIBLE_ITEMS}
 			minVisibleItems={MIN_VISIBLE_ITEMS}
 			onHighlight={handleHighlight}
@@ -443,9 +519,13 @@ export const SessionsDialogContent = () => {
 				}
 				return handleActionKeysRef.current(key);
 			}}
-			onSelect={(item) =>
-				item.kind === "session" && navigateToSession(item.session)
-			}
+			onSelect={(item) => {
+				if (item.kind === "session") {
+					navigateToSession(item.session);
+				} else if (item.kind === "load-more") {
+					void loadMoreSessions();
+				}
+			}}
 			placeholder="Search sessions"
 			renderItem={renderItem}
 		/>

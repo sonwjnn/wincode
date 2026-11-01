@@ -575,15 +575,9 @@ export function NewSessionView({
 			files
 		);
 		const store = getSessionStore();
-		const [externalized] = await store.externalizeAttachments(
-			[initialMessage],
-			undefined,
-			{ rejectInvalid: true }
-		);
-		const durableMessage = externalized ?? initialMessage;
-		const created = await store.createSession({
+		const created = await store.createSessionWithExternalizedMessage({
 			agent: effective.agent,
-			message: durableMessage,
+			message: initialMessage,
 			model: effective.model,
 			turnId: createAgentTurnId(),
 			thinkingLevel: effective.thinkingLevel,

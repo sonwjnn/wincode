@@ -11,6 +11,7 @@ const sessionId = toSessionId("codec-contract");
 const timestamp = "2025-02-03T04:05:06.000Z";
 const HASH_MISMATCH = /Session log entry hash does not match/u;
 const MISSING_LF = /without LF framing/u;
+const SAFE_IDENTIFIER_ERROR = /safe identifier/u;
 const RESURRECTION_AFTER_DELETION = /entry after its deletion checkpoint/u;
 
 const createLog = (title: string) => {
@@ -38,6 +39,18 @@ const createLog = (title: string) => {
 		headerBytes,
 	};
 };
+
+test("Session log encoding rejects identifiers ending in terminal line separators", () => {
+	const sessionIdWithTrailingCarriageReturn = toSessionId("codec-contract\r");
+
+	expect(() =>
+		createSessionLogHeader(
+			sessionIdWithTrailingCarriageReturn,
+			"log-identity",
+			timestamp
+		)
+	).toThrow(SAFE_IDENTIFIER_ERROR);
+});
 
 test("UTF-8 byte offsets and hash linkage remain correct for non-ASCII Session text", () => {
 	const { bytes, createdBytes, headerBytes } = createLog("Resume 🌊 café");
@@ -108,6 +121,37 @@ test("a complete checkpoint after deletion is rejected rather than resurrecting 
 	expect(() => decodeSessionLog(sessionId, invalidLog)).toThrow(
 		RESURRECTION_AFTER_DELETION
 	);
+});
+
+test("format-v1 usage events without cost snapshots remain readable", () => {
+	const { bytes } = createLog("legacy usage");
+	const state = decodeSessionLog(sessionId, bytes);
+	const previous = state.entries.at(-1)?.envelope;
+	if (previous === undefined) {
+		throw new Error("Expected a Session creation entry.");
+	}
+	const payload = {
+		createdAt: timestamp,
+		id: "legacy-summary-usage",
+		kind: "compaction-summary" as const,
+		model: { modelId: "gpt-4o", providerId: "openai" },
+		usage: { inputTokens: 12, outputTokens: 3 },
+	};
+	const usage = createSessionLogEvent({
+		operationId: "legacy-summary-usage-operation",
+		payload,
+		previousHash: previous.entryHash,
+		sequence: previous.sequence + 1,
+		sessionId,
+		timestamp,
+		type: "usage.committed",
+	});
+	const replayed = decodeSessionLog(
+		sessionId,
+		new Uint8Array([...bytes, ...encodeSessionLogLine(usage)])
+	);
+
+	expect(replayed.entries.at(-1)?.envelope.payload).toEqual(payload);
 });
 
 test("unknown format versions fail closed before hash validation", () => {

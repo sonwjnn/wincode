@@ -8,8 +8,13 @@ import { createValidatedPluginProviderCollectionForSelection } from "@/modules/s
 import { ProviderCollectionUnavailableError } from "@/modules/sessions/provider-collection";
 import { SessionLogError } from "@/modules/sessions/storage/session-jsonl-codec";
 import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
+import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import { createSkillSnapshot } from "@/modules/skills";
-import type { SessionId } from "@/shared/identifiers";
+import {
+	isValidSessionId,
+	type SessionId,
+	toSessionId,
+} from "@/shared/identifiers";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
 import type {
 	SessionHost,
@@ -48,6 +53,7 @@ import {
 	decodeCursor,
 	encodeCursor,
 	paramsOf,
+	readSessionPageOptions,
 	readSubmission,
 	rpcInvalidParams,
 	stringValue,
@@ -160,6 +166,14 @@ const mapSessionWriterError = (
 	}
 	return;
 };
+
+const mapSessionPaginationError = (
+	error: unknown
+): RpcApplicationError | undefined =>
+	error instanceof SessionPaginationError
+		? appError(error.code, error.message)
+		: undefined;
+
 const createAttachmentReferenceResolver = (
 	attachmentStore: NonNullable<RpcAssembly["store"]>["attachmentStore"]
 ): AttachmentReferenceResolver | undefined => {
@@ -301,6 +315,8 @@ export const createRpcRequestHandler = (
 					stateNotifications: true,
 					structuredSubmissions: true,
 					submissionEvents: true,
+					sessionCatalogPagination: true,
+					sessionHistoryPagination: true,
 					transcriptPagination: true,
 				},
 				protocolVersion: RPC_PROTOCOL_VERSION,
@@ -322,6 +338,51 @@ export const createRpcRequestHandler = (
 			);
 		}
 		requireInitialized();
+		if (request.method === "session/listPage") {
+			const store = state.assembly?.store;
+			if (store === undefined) {
+				throw appError("not_initialized", "Session storage is unavailable.");
+			}
+			const pageOptions = readSessionPageOptions(paramsOf(request));
+			try {
+				return success(request.id, await store.listSessionsPage(pageOptions));
+			} catch (error) {
+				const paginationError = mapSessionPaginationError(error);
+				if (paginationError !== undefined) {
+					throw paginationError;
+				}
+				throw error;
+			}
+		}
+		if (request.method === "session/getHistoryPage") {
+			const store = state.assembly?.store;
+			if (store === undefined) {
+				throw appError("not_initialized", "Session storage is unavailable.");
+			}
+			const params = paramsOf(request);
+			const pageOptions = readSessionPageOptions(params, ["sessionId"]);
+			const sessionIdValue = stringValue(params.sessionId);
+			if (sessionIdValue === undefined || !isValidSessionId(sessionIdValue)) {
+				throw rpcInvalidParams("sessionId must be a valid Session ID.");
+			}
+			const sessionId = toSessionId(sessionIdValue);
+			try {
+				return success(
+					request.id,
+					await store.readSessionHistoryPage(sessionId, pageOptions)
+				);
+			} catch (error) {
+				const paginationError = mapSessionPaginationError(error);
+				if (paginationError !== undefined) {
+					throw paginationError;
+				}
+				const writerError = mapSessionWriterError(error, sessionId);
+				if (writerError !== undefined) {
+					throw writerError;
+				}
+				throw error;
+			}
+		}
 		if (request.method === "session/create") {
 			if (state.assembly === undefined || state.assembly.store === undefined) {
 				throw appError(
@@ -404,12 +465,17 @@ export const createRpcRequestHandler = (
 					...baseMessage,
 					parts: [...baseMessage.parts, ...submission.files],
 				};
-				const [externalizedMessage] = await store.externalizeAttachments(
-					[initialMessage],
-					undefined,
-					{ rejectInvalid: true }
-				);
-				const message = externalizedMessage ?? initialMessage;
+				const created = await store.createSessionWithExternalizedMessage({
+					id: plannedSessionId,
+					agent: selection.agentId as SessionSendInput["agent"],
+					message: initialMessage,
+					model: selection.model,
+					turnId,
+					...(selection.thinkingLevel === undefined
+						? {}
+						: { thinkingLevel: selection.thinkingLevel }),
+				});
+				const message = created.message;
 				const messageFiles = message.parts.filter(
 					(part): part is SessionFilePart => part.type === "file"
 				);
@@ -418,16 +484,6 @@ export const createRpcRequestHandler = (
 					composition: { ...submission.composition, files: messageFiles },
 					files: messageFiles,
 				};
-				const created = await store.createSession({
-					id: plannedSessionId,
-					agent: selection.agentId as SessionSendInput["agent"],
-					message,
-					model: selection.model,
-					turnId,
-					...(selection.thinkingLevel === undefined
-						? {}
-						: { thinkingLevel: selection.thinkingLevel }),
-				});
 				if (
 					created.writeOutcome.kind !== "committed" ||
 					created.writeOutcome.projection !== "ready"

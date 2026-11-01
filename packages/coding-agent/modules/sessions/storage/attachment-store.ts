@@ -10,6 +10,7 @@ import {
 	isString,
 	isUndefined,
 	omitUndefined,
+	readUtf8File,
 } from "@wincode/utils";
 import { eq } from "drizzle-orm";
 import type { Except, Merge, UnknownRecord } from "type-fest";
@@ -18,6 +19,7 @@ import type {
 	SessionMessage,
 	SessionPart,
 } from "@/modules/sessions/message";
+import { isValidSessionId, toSessionId } from "@/shared/identifiers";
 import {
 	ATTACHMENT_ID_PATTERN,
 	type AttachmentReference,
@@ -32,9 +34,10 @@ import {
 	MAX_IMAGE_DIMENSION,
 	MAX_MEDIA_TYPE_LENGTH,
 } from "../attachment-reference";
-
 import type { SessionDatabase } from "./client";
 import { sessionAttachment } from "./schema";
+import { decodeSessionLog } from "./session-jsonl-codec";
+import { withSessionCatalogLifecycleGate } from "./session-writer-lock";
 
 export const ATTACHMENT_ID_DISPLAY_LENGTH = 16;
 export const DEFAULT_COMPACTION_ATTACHMENT_BUDGET = {
@@ -59,6 +62,10 @@ const IMAGE_MEDIA_TYPES = {
 	"image/webp": true,
 } as const;
 const TEMPORARY_BLOB_PATTERN = /^v1-[0-9a-f]{64}\.blob\.[^/]+\.tmp$/u;
+const ATTACHMENT_PIN_DIRECTORY_NAME = "attachment-pins";
+const ATTACHMENT_PIN_PATTERN =
+	/^pin-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/u;
+const TEMPORARY_ATTACHMENT_PIN_PATTERN = /^pin-[0-9a-f-]{36}\.tmp$/u;
 const DATA_URL_PATTERN = /^data:([^;,\s]+)(;base64)?,([\s\S]*)$/u;
 const BASE64_WHITESPACE_PATTERN = /\s/gu;
 const BASE64_PAYLOAD_PATTERN =
@@ -129,7 +136,16 @@ export const createDrizzleAttachmentMetadataRepository = (
 				integrityVersion: record.integrityVersion,
 				mediaType: record.mediaType,
 			})
-			.onConflictDoNothing()
+			.onConflictDoUpdate({
+				target: sessionAttachment.attachmentId,
+				set: {
+					blobKey: record.blobKey,
+					byteLength: record.byteLength,
+					createdAt: record.createdAt,
+					integrityVersion: record.integrityVersion,
+					mediaType: record.mediaType,
+				},
+			})
 			.run();
 	},
 });
@@ -195,6 +211,10 @@ export type AttachmentMaintenanceReport = {
 	orphanCount: number;
 };
 
+export type AttachmentLivenessSource =
+	| Iterable<string>
+	| (() => Iterable<string> | Promise<Iterable<string>>);
+
 export type CompactionAttachmentMetadata = Merge<
 	AttachmentReference,
 	Readonly<{
@@ -203,22 +223,33 @@ export type CompactionAttachmentMetadata = Merge<
 	}>
 >;
 
+export type AttachmentExternalizationLease = Readonly<{
+	messages: SessionMessage[];
+	release: () => Promise<void>;
+}>;
+
+export type AttachmentIngestLease = Readonly<{
+	reference: AttachmentReference;
+	release: () => Promise<void>;
+}>;
+
 export type SessionAttachmentStore = {
 	annotateMessagesForDisplay: (
 		messages: readonly SessionMessage[],
 		signal?: AbortSignal
 	) => Promise<SessionMessage[]>;
 	collect: (input: {
-		liveAttachmentIds: Iterable<string>;
+		/** Runs under the gate after pins are snapshotted; do not await Session Writer acquisition or Host unwind. */
+		liveAttachmentIds: AttachmentLivenessSource;
 		maxBytes?: number;
 		maxEntries?: number;
 		safetyWindowMs?: number;
 	}) => Promise<AttachmentMaintenanceReport>;
-	externalizeMessages: (
+	externalizeMessagesWithLease: (
 		messages: readonly SessionMessage[],
 		signal?: AbortSignal,
 		options?: AttachmentExternalizationOptions
-	) => Promise<SessionMessage[]>;
+	) => Promise<AttachmentExternalizationLease>;
 	getCompactionMetadata: (
 		messages: readonly SessionMessage[],
 		signal?: AbortSignal
@@ -237,16 +268,17 @@ export type SessionAttachmentStore = {
 	ingest: (
 		input: AttachmentInput,
 		signal?: AbortSignal
-	) => Promise<AttachmentReference>;
+	) => Promise<AttachmentIngestLease>;
 	/**
 	 * Keeps blobs alive past the records and prompt history that name them, so
 	 * maintenance cannot reclaim a composition that is still waiting to run.
-	 * Retention counts, so the same blob held by two compositions survives
-	 * either release order.
+	 * Each retained reference is a durable process-owned pin, so collection in
+	 * another process cannot reclaim a queued composition. Retention counts, so
+	 * the same blob held by two compositions survives either release order.
 	 */
-	retain: (attachmentIds: Iterable<string>) => void;
+	retain: (attachmentIds: Iterable<string>) => Promise<void>;
 	/** Releases blobs a composition no longer holds; an unknown id is a no-op. */
-	release: (attachmentIds: Iterable<string>) => void;
+	release: (attachmentIds: Iterable<string>) => Promise<void>;
 	resolve: (
 		reference: AttachmentReference,
 		signal?: AbortSignal
@@ -254,10 +286,12 @@ export type SessionAttachmentStore = {
 };
 
 export type SessionAttachmentStoreOptions = {
+	lifecycleRoot?: string;
 	maxBytes?: number;
 	now?: () => Date;
 	repository: AttachmentMetadataRepository;
 	root: string;
+	syncBlob?: (handle: fs.FileHandle) => Promise<void>;
 };
 
 type ImageFilePart = Extract<SessionMessage["parts"][number], { type: "file" }>;
@@ -500,6 +534,19 @@ export const isAttachmentReference = (
 ): value is AttachmentReference =>
 	attachmentReferenceSchema.safeParse(value).success;
 
+const parseAttachmentReferenceFields = (value: UnknownRecord) =>
+	attachmentReferenceSchema.safeParse({
+		attachmentId: value.attachmentId,
+		...omitUndefined({
+			available: value.available,
+			height: value.height,
+			width: value.width,
+		}),
+		byteLength: value.byteLength,
+		filename: value.filename,
+		mediaType: value.mediaType,
+	});
+
 export const getAttachmentReference = (
 	part: unknown
 ): AttachmentReference | null => {
@@ -507,17 +554,7 @@ export const getAttachmentReference = (
 		return null;
 	}
 	const candidate = part as UnknownRecord;
-	const parsed = attachmentReferenceSchema.safeParse({
-		attachmentId: candidate.attachmentId,
-		...omitUndefined({
-			available: candidate.available,
-			height: candidate.height,
-			width: candidate.width,
-		}),
-		byteLength: candidate.byteLength,
-		filename: candidate.filename,
-		mediaType: candidate.mediaType,
-	});
+	const parsed = parseAttachmentReferenceFields(candidate);
 	if (
 		!parsed.success ||
 		candidate.url !== attachmentReferenceUrl(parsed.data.attachmentId)
@@ -632,16 +669,363 @@ const resolveBlobPath = (root: string, blobKey: string): string => {
 	return resolvedPath;
 };
 
+const attachmentMetadataFromReference = (
+	reference: AttachmentReference,
+	createdAt: Date
+): AttachmentMetadataRecord => ({
+	attachmentId: reference.attachmentId,
+	blobKey: attachmentBlobKey(reference.attachmentId),
+	byteLength: reference.byteLength,
+	createdAt,
+	integrityVersion: 1,
+	mediaType: reference.mediaType,
+});
+
+const attachmentReferenceFromValue = (
+	value: unknown
+): AttachmentReference | undefined => {
+	if (!isPlainObject(value)) {
+		return;
+	}
+	const parsed = parseAttachmentReferenceFields(value);
+	if (!parsed.success) {
+		return;
+	}
+	const isFileReference =
+		value.type === "file" &&
+		value.url === attachmentReferenceUrl(parsed.data.attachmentId);
+	const isDurableReference = value.type === "attachment-reference";
+	const isCompactionReference =
+		value.payloadOmitted === true && typeof value.available === "boolean";
+	return isFileReference || isDurableReference || isCompactionReference
+		? parsed.data
+		: undefined;
+};
+
+const collectAttachmentIds = (
+	value: unknown,
+	attachmentIds: Set<string>
+): void => {
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			collectAttachmentIds(item, attachmentIds);
+		}
+		return;
+	}
+	if (!isPlainObject(value)) {
+		return;
+	}
+	const reference = attachmentReferenceFromValue(value);
+	if (reference !== undefined) {
+		attachmentIds.add(reference.attachmentId);
+	}
+	for (const item of Object.values(value)) {
+		collectAttachmentIds(item, attachmentIds);
+	}
+};
+
+// Attachment GC must replay published logs itself: the SQLite projection may lag
+// and cannot safely prove that a referenced blob is dead.
+const readAuthoritativeAttachmentIds = async (
+	lifecycleRoot: string
+): Promise<Set<string>> => {
+	let entries: nodeFs.Dirent[];
+	try {
+		entries = await fs.readdir(lifecycleRoot, { withFileTypes: true });
+	} catch (error) {
+		if (isNodeError(error, "ENOENT")) {
+			return new Set();
+		}
+		throw error;
+	}
+	const attachmentIds = new Set<string>();
+	for (const entry of entries) {
+		if (entry.name === ".staging") {
+			continue;
+		}
+		if (!(entry.isDirectory() && isValidSessionId(entry.name))) {
+			throw new Error(
+				"The published Session log catalog could not be verified."
+			);
+		}
+		const sessionId = toSessionId(entry.name);
+		const bytes = await Bun.file(
+			path.join(lifecycleRoot, entry.name, "session.jsonl")
+		).bytes();
+		const state = decodeSessionLog(sessionId, bytes);
+		if (
+			state.entries.some(({ envelope }) => envelope.type === "session.deleted")
+		) {
+			continue;
+		}
+		for (const { envelope } of state.entries) {
+			collectAttachmentIds(envelope.payload, attachmentIds);
+		}
+	}
+	return attachmentIds;
+};
+
+const syncDirectory = async (directory: string): Promise<void> => {
+	let handle: fs.FileHandle | undefined;
+	try {
+		handle = await fs.open(directory, "r");
+		await handle.sync();
+	} finally {
+		await handle?.close();
+	}
+};
+
+const ensureDirectoryDurable = async (directory: string): Promise<void> => {
+	const resolvedDirectory = path.resolve(directory);
+	const parent = path.dirname(resolvedDirectory);
+	if (parent !== resolvedDirectory) {
+		await ensureDirectoryDurable(parent);
+	}
+	try {
+		await fs.mkdir(resolvedDirectory, { mode: 0o700 });
+		await syncDirectory(parent);
+	} catch (error) {
+		if (!isNodeError(error, "EEXIST")) {
+			throw error;
+		}
+		const info = await fs.stat(resolvedDirectory);
+		if (!info.isDirectory()) {
+			throw new Error("Attachment storage path is not a directory.");
+		}
+	}
+};
+
+const resolveCanonicalLifecycleRoot = async (
+	lifecycleRoot: string
+): Promise<string> => {
+	const absoluteRoot = path.resolve(lifecycleRoot);
+	try {
+		return await fs.realpath(absoluteRoot);
+	} catch (error) {
+		if (!isNodeError(error, "ENOENT")) {
+			throw error;
+		}
+		return path.join(
+			await fs.realpath(path.dirname(absoluteRoot)),
+			path.basename(absoluteRoot)
+		);
+	}
+};
+
+const attachmentPinDirectory = async (lifecycleRoot: string): Promise<string> =>
+	path.join(
+		path.dirname(await resolveCanonicalLifecycleRoot(lifecycleRoot)),
+		"session-control",
+		ATTACHMENT_PIN_DIRECTORY_NAME
+	);
+
+const retainedAttachmentPins = new Map<string, Map<string, string[]>>();
+const stagingAttachmentPins = new Map<string, Map<string, string[]>>();
+
+const pinsForRoot = (
+	registry: Map<string, Map<string, string[]>>,
+	rootKey: string
+): Map<string, string[]> => {
+	let pins = registry.get(rootKey);
+	if (pins === undefined) {
+		pins = new Map();
+		registry.set(rootKey, pins);
+	}
+	return pins;
+};
+
+const retainedPinsForRoot = (rootKey: string): Map<string, string[]> =>
+	pinsForRoot(retainedAttachmentPins, rootKey);
+
+const stagingPinsForRoot = (rootKey: string): Map<string, string[]> =>
+	pinsForRoot(stagingAttachmentPins, rootKey);
+
+const writeAttachmentPin = async (
+	lifecycleRoot: string,
+	attachmentId: string,
+	kind: "retained" | "staging"
+): Promise<string> => {
+	const pinDirectory = await attachmentPinDirectory(lifecycleRoot);
+	const controlDirectory = path.dirname(pinDirectory);
+	await ensureDirectoryDurable(pinDirectory);
+	await syncDirectory(controlDirectory);
+	const pinId = crypto.randomUUID();
+	const temporaryPath = path.join(pinDirectory, `pin-${pinId}.tmp`);
+	const pinPath = path.join(pinDirectory, `pin-${pinId}.json`);
+	let handle: fs.FileHandle | undefined;
+	try {
+		handle = await fs.open(temporaryPath, "wx", 0o600);
+		await handle.writeFile(
+			JSON.stringify({ attachmentId, kind, processId: process.pid, version: 1 })
+		);
+		await handle.sync();
+		await handle.close();
+		handle = undefined;
+		await fs.rename(temporaryPath, pinPath);
+		await syncDirectory(pinDirectory);
+		return pinPath;
+	} catch (error) {
+		await fs.unlink(temporaryPath).catch(() => undefined);
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+};
+
+const registerStagingPin = (
+	rootKey: string,
+	attachmentId: string,
+	pinPath: string
+): void => {
+	const pins = stagingPinsForRoot(rootKey);
+	const attachmentPins = pins.get(attachmentId) ?? [];
+	attachmentPins.push(pinPath);
+	pins.set(attachmentId, attachmentPins);
+};
+
+const removeAttachmentPinPath = async (
+	rootKey: string,
+	attachmentId: string,
+	pinPath: string
+): Promise<void> => {
+	try {
+		await fs.unlink(pinPath);
+	} catch (error) {
+		if (!isNodeError(error, "ENOENT")) {
+			throw error;
+		}
+	}
+	for (const pins of [
+		stagingPinsForRoot(rootKey),
+		retainedPinsForRoot(rootKey),
+	]) {
+		const remaining = (pins.get(attachmentId) ?? []).filter(
+			(registeredPinPath) => registeredPinPath !== pinPath
+		);
+		if (remaining.length === 0) {
+			pins.delete(attachmentId);
+		} else {
+			pins.set(attachmentId, remaining);
+		}
+	}
+};
+
+const registerRetainedPin = (
+	rootKey: string,
+	attachmentId: string,
+	pinPath: string
+): void => {
+	const pins = retainedPinsForRoot(rootKey);
+	const attachmentPins = pins.get(attachmentId) ?? [];
+	attachmentPins.push(pinPath);
+	pins.set(attachmentId, attachmentPins);
+};
+
+const removeOnePin = async (
+	pinsByAttachment: Map<string, string[]>,
+	rootKey: string,
+	attachmentId: string
+): Promise<void> => {
+	const attachmentPins = pinsByAttachment.get(attachmentId);
+	if (attachmentPins === undefined) {
+		return;
+	}
+	const pinPath = attachmentPins.shift();
+	if (pinPath === undefined) {
+		return;
+	}
+	if (attachmentPins.length === 0) {
+		pinsByAttachment.delete(attachmentId);
+	}
+	try {
+		await removeAttachmentPinPath(rootKey, attachmentId, pinPath);
+	} catch (error) {
+		const remainingPins = pinsByAttachment.get(attachmentId);
+		if (remainingPins === undefined) {
+			pinsByAttachment.set(attachmentId, [pinPath]);
+		} else {
+			remainingPins.unshift(pinPath);
+		}
+		throw error;
+	}
+};
+
+const removeOneRetainedPin = async (
+	rootKey: string,
+	attachmentId: string
+): Promise<void> =>
+	removeOnePin(retainedPinsForRoot(rootKey), rootKey, attachmentId);
+
+type AttachmentPin = Readonly<{
+	attachmentId: string;
+	kind: "retained" | "staging";
+	path: string;
+	processId: number;
+}>;
+
+const readAttachmentPins = async (
+	lifecycleRoot: string
+): Promise<AttachmentPin[]> => {
+	const pinDirectory = await attachmentPinDirectory(lifecycleRoot);
+	let entries: nodeFs.Dirent[];
+	try {
+		entries = await fs.readdir(pinDirectory, { withFileTypes: true });
+	} catch (error) {
+		if (isNodeError(error, "ENOENT")) {
+			return [];
+		}
+		throw error;
+	}
+	const pins: AttachmentPin[] = [];
+	for (const entry of entries) {
+		if (TEMPORARY_ATTACHMENT_PIN_PATTERN.test(entry.name)) {
+			continue;
+		}
+		if (!(ATTACHMENT_PIN_PATTERN.test(entry.name) && entry.isFile())) {
+			throw new Error("The attachment ownership pins could not be verified.");
+		}
+		const pinPath = path.join(pinDirectory, entry.name);
+		const value: unknown = JSON.parse(await readUtf8File(pinPath));
+		if (
+			!isPlainObject(value) ||
+			value.version !== 1 ||
+			(value.kind !== "retained" && value.kind !== "staging") ||
+			!Number.isSafeInteger(value.processId) ||
+			(value.processId as number) <= 0 ||
+			!attachmentIdSchema.safeParse(value.attachmentId).success
+		) {
+			throw new Error("The attachment staging pin is invalid.");
+		}
+		pins.push({
+			attachmentId: value.attachmentId as string,
+			kind: value.kind,
+			path: pinPath,
+			processId: value.processId as number,
+		});
+	}
+	return pins;
+};
+
+const isProcessAlive = (processId: number): boolean => {
+	try {
+		process.kill(processId, 0);
+		return true;
+	} catch (error) {
+		return isNodeError(error, "EPERM");
+	}
+};
+
 const writeBlobAtomically = async (
 	root: string,
 	blobKey: string,
 	bytes: Uint8Array,
 	expectedAttachmentId: string,
+	syncBlob: (handle: fs.FileHandle) => Promise<void>,
 	signal?: AbortSignal
 ): Promise<void> => {
 	assertNotAborted(signal);
 	const targetPath = resolveBlobPath(root, blobKey);
-	await fs.mkdir(path.dirname(targetPath), { recursive: true });
+	await ensureDirectoryDurable(path.dirname(targetPath));
 	const temporaryPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
 	let handle: fs.FileHandle | null = null;
 	try {
@@ -655,7 +1039,7 @@ const writeBlobAtomically = async (
 			}
 			offset += result.bytesWritten;
 		}
-		await handle.sync();
+		await syncBlob(handle);
 		await handle.close();
 		const temporaryInfo = await fs.stat(temporaryPath);
 		if (temporaryInfo.size !== bytes.byteLength) {
@@ -673,6 +1057,7 @@ const writeBlobAtomically = async (
 				throw error;
 			}
 		}
+		await syncDirectory(path.dirname(targetPath));
 	} finally {
 		if (handle) {
 			try {
@@ -818,7 +1203,6 @@ const readVerifiedBlob = async (
 };
 const isStoredBlobPresent = async (
 	root: string,
-	repository: AttachmentMetadataRepository,
 	reference: AttachmentReference,
 	signal?: AbortSignal
 ): Promise<boolean> => {
@@ -826,14 +1210,7 @@ const isStoredBlobPresent = async (
 	if (reference.available === false) {
 		return false;
 	}
-	const record = repository.get(reference.attachmentId);
-	if (
-		!record ||
-		record.byteLength !== reference.byteLength ||
-		record.mediaType !== reference.mediaType
-	) {
-		return false;
-	}
+	const record = attachmentMetadataFromReference(reference, new Date(0));
 	try {
 		const info = await fs.stat(resolveBlobPath(root, record.blobKey));
 		return info.isFile() && info.size === reference.byteLength;
@@ -1053,15 +1430,54 @@ const buildHydrationStats = (
 	return stats;
 };
 
-export const createSessionAttachmentStore = ({
-	maxBytes = MAX_ATTACHMENT_BYTES,
-	now = () => new Date(),
-	repository,
-	root,
-}: SessionAttachmentStoreOptions): SessionAttachmentStore => {
-	const ingest = async (
+export const createSessionAttachmentStore = (
+	options: SessionAttachmentStoreOptions
+): SessionAttachmentStore => {
+	const {
+		lifecycleRoot: configuredLifecycleRoot,
+		maxBytes = MAX_ATTACHMENT_BYTES,
+		now = () => new Date(),
+		repository,
+		root,
+		syncBlob = (handle) => handle.sync(),
+	} = options;
+	const lifecycleRoot =
+		configuredLifecycleRoot ?? path.join(path.resolve(root), ".session-logs");
+	const rootKey = path.resolve(root);
+	const resolvedLifecycleRoot = path.resolve(lifecycleRoot);
+	const retain = async (attachmentIds: Iterable<string>): Promise<void> => {
+		await withSessionCatalogLifecycleGate(resolvedLifecycleRoot, async () => {
+			const createdPins: { attachmentId: string; path: string }[] = [];
+			try {
+				for (const id of attachmentIds) {
+					const attachmentId = attachmentIdSchema.parse(id);
+					const pinPath = await writeAttachmentPin(
+						resolvedLifecycleRoot,
+						attachmentId,
+						"retained"
+					);
+					registerRetainedPin(rootKey, attachmentId, pinPath);
+					createdPins.push({ attachmentId, path: pinPath });
+				}
+			} catch (error) {
+				await Promise.all(
+					createdPins.map((pin) =>
+						removeAttachmentPinPath(rootKey, pin.attachmentId, pin.path)
+					)
+				);
+				throw error;
+			}
+		});
+	};
+	const release = async (attachmentIds: Iterable<string>): Promise<void> => {
+		for (const attachmentId of attachmentIds) {
+			await removeOneRetainedPin(rootKey, attachmentId);
+		}
+	};
+	const publishAttachment = async (
 		input: AttachmentInput,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		onPinCreated?: (attachmentId: string, pinPath: string) => void
 	): Promise<AttachmentReference> => {
 		assertNotAborted(signal);
 		if (input.bytes.byteLength > maxBytes) {
@@ -1086,54 +1502,80 @@ export const createSessionAttachmentStore = ({
 			...(dimensions ?? {}),
 			mediaType,
 		});
-		const existing = repository.get(attachmentId);
-		if (existing) {
-			if (
-				existing.byteLength !== reference.byteLength ||
-				existing.mediaType !== reference.mediaType ||
-				existing.blobKey !== blobKey
-			) {
-				throw new Error(
-					"Attachment metadata conflicts with its content digest."
-				);
-			}
-			const existingBlob = await readVerifiedBlob(
-				root,
-				existing,
-				reference,
-				maxBytes,
+		const pinPath = await writeAttachmentPin(
+			resolvedLifecycleRoot,
+			attachmentId,
+			"staging"
+		);
+		registerStagingPin(rootKey, attachmentId, pinPath);
+		onPinCreated?.(attachmentId, pinPath);
+		try {
+			return await withSessionCatalogLifecycleGate(
+				resolvedLifecycleRoot,
+				async () => {
+					assertNotAborted(signal);
+					const record = attachmentMetadataFromReference(reference, now());
+					const existingBlob = await readVerifiedBlob(
+						root,
+						record,
+						reference,
+						maxBytes,
+						signal
+					);
+					if (isString(existingBlob)) {
+						await writeBlobAtomically(
+							root,
+							blobKey,
+							input.bytes,
+							attachmentId,
+							syncBlob,
+							signal
+						);
+					}
+					const publishedBlob = await readVerifiedBlob(
+						root,
+						record,
+						reference,
+						maxBytes,
+						signal
+					);
+					if (isString(publishedBlob)) {
+						throw new Error("Published attachment blob failed validation.");
+					}
+					repository.put(record);
+					return reference;
+				},
 				signal
 			);
-			if (isString(existingBlob)) {
-				await writeBlobAtomically(
-					root,
-					blobKey,
-					input.bytes,
-					attachmentId,
-					signal
-				);
-			}
-			// Refresh the reservation so a concurrent collection pass cannot
-			// reclaim a reused blob between this ingest and the reference commit.
-			repository.put({ ...existing, createdAt: now() });
-		} else {
-			await writeBlobAtomically(
-				root,
-				blobKey,
-				input.bytes,
-				attachmentId,
-				signal
-			);
-			repository.put({
-				attachmentId,
-				blobKey,
-				byteLength: input.bytes.byteLength,
-				createdAt: now(),
-				integrityVersion: 1,
-				mediaType,
-			});
+		} catch (error) {
+			await removeAttachmentPinPath(rootKey, attachmentId, pinPath);
+			throw error;
 		}
-		return reference;
+	};
+	const ingest = async (
+		input: AttachmentInput,
+		signal?: AbortSignal
+	): Promise<AttachmentIngestLease> => {
+		let stagingPin: { attachmentId: string; pinPath: string } | undefined;
+		const reference = await publishAttachment(
+			input,
+			signal,
+			(attachmentId, pinPath) => {
+				stagingPin = { attachmentId, pinPath };
+			}
+		);
+		return {
+			reference,
+			release: async () => {
+				if (stagingPin !== undefined) {
+					await removeAttachmentPinPath(
+						rootKey,
+						stagingPin.attachmentId,
+						stagingPin.pinPath
+					);
+				}
+			},
+		};
 	};
 
 	const resolveAttachment = async (
@@ -1144,17 +1586,8 @@ export const createSessionAttachmentStore = ({
 		if (reference.available === false) {
 			return { availability: "missing", reference };
 		}
-		const record = repository.get(reference.attachmentId);
-		if (
-			!record ||
-			record.byteLength !== reference.byteLength ||
-			record.mediaType !== reference.mediaType
-		) {
-			return {
-				availability: record ? "corrupt" : "missing",
-				reference,
-			};
-		}
+		const storedRecord = repository.get(reference.attachmentId);
+		const record = attachmentMetadataFromReference(reference, now());
 		const result = await readVerifiedBlob(
 			root,
 			record,
@@ -1164,6 +1597,15 @@ export const createSessionAttachmentStore = ({
 		);
 		if (isString(result)) {
 			return { availability: result, reference };
+		}
+		if (
+			storedRecord === undefined ||
+			storedRecord.blobKey !== record.blobKey ||
+			storedRecord.byteLength !== record.byteLength ||
+			storedRecord.mediaType !== record.mediaType ||
+			storedRecord.integrityVersion !== record.integrityVersion
+		) {
+			repository.put(record);
 		}
 		const canonicalReference = freezeReference(
 			omitUndefined({
@@ -1182,7 +1624,8 @@ export const createSessionAttachmentStore = ({
 	const externalizeImagePart = async (
 		part: ImageFilePart,
 		signal?: AbortSignal,
-		options?: AttachmentExternalizationOptions
+		options?: AttachmentExternalizationOptions,
+		onPinCreated?: (attachmentId: string, pinPath: string) => void
 	): Promise<SessionMessage["parts"][number]> => {
 		const parsed = parseDataUrl(part.url, maxBytes);
 		const valid =
@@ -1198,39 +1641,134 @@ export const createSessionAttachmentStore = ({
 			);
 		}
 		return attachmentReferenceToFilePart(
-			await ingest(
+			await publishAttachment(
 				{
 					bytes: parsed.bytes,
 					filename: part.filename,
 					mediaType: parsed.mediaType,
 				},
-				signal
+				signal,
+				onPinCreated
 			)
 		);
 	};
-	const externalizeMessages = async (
+	const externalizeMessagesWithLease = async (
 		messages: readonly SessionMessage[],
 		signal?: AbortSignal,
 		options?: AttachmentExternalizationOptions
-	): Promise<SessionMessage[]> => {
-		const partsByMessage = new Map<number, readonly SessionPart[]>();
-		for (const [messageIndex, message] of messages.entries()) {
+	): Promise<AttachmentExternalizationLease> => {
+		const stagedPins: { attachmentId: string; pinPath: string }[] = [];
+		const pinnedAttachmentIds = new Set<string>();
+		let releasePromise: Promise<void> | undefined;
+		const stageExistingAttachmentReference = async (
+			reference: AttachmentReference
+		): Promise<void> => {
+			if (pinnedAttachmentIds.has(reference.attachmentId)) {
+				return;
+			}
+			await withSessionCatalogLifecycleGate(
+				resolvedLifecycleRoot,
+				async () => {
+					assertNotAborted(signal);
+					const record = attachmentMetadataFromReference(reference, now());
+					const blob =
+						reference.available === false
+							? "missing"
+							: await readVerifiedBlob(
+									root,
+									record,
+									reference,
+									maxBytes,
+									signal
+								);
+					if (isString(blob)) {
+						throw new Error("Referenced attachment blob is unavailable.");
+					}
+					assertNotAborted(signal);
+					const pinPath = await writeAttachmentPin(
+						resolvedLifecycleRoot,
+						reference.attachmentId,
+						"staging"
+					);
+					registerStagingPin(rootKey, reference.attachmentId, pinPath);
+					stagedPins.push({
+						attachmentId: reference.attachmentId,
+						pinPath,
+					});
+					pinnedAttachmentIds.add(reference.attachmentId);
+				},
+				signal
+			);
+		};
+		const externalizeMessageParts = async (
+			message: SessionMessage
+		): Promise<SessionPart[] | undefined> => {
 			let changed = false;
 			const parts: SessionPart[] = [];
 			for (const part of message.parts) {
 				assertNotAborted(signal);
-				if (!(isImageFilePart(part) && !isAttachmentReferencePart(part))) {
+				if (isImageFilePart(part) && isAttachmentReferencePart(part)) {
+					const reference = getAttachmentReference(part);
+					if (reference !== null) {
+						await stageExistingAttachmentReference(reference);
+						assertNotAborted(signal);
+					}
 					parts.push(part);
 					continue;
 				}
-				parts.push(await externalizeImagePart(part, signal, options));
+				if (!isLegacyImagePart(part)) {
+					parts.push(part);
+					continue;
+				}
+				parts.push(
+					await externalizeImagePart(
+						part,
+						signal,
+						options,
+						(attachmentId, pinPath) =>
+							stagedPins.push({ attachmentId, pinPath })
+					)
+				);
+				assertNotAborted(signal);
 				changed = true;
 			}
-			if (changed) {
-				partsByMessage.set(messageIndex, parts);
+			return changed ? parts : undefined;
+		};
+		try {
+			const partsByMessage = new Map<number, readonly SessionPart[]>();
+			for (const [messageIndex, message] of messages.entries()) {
+				const parts = await externalizeMessageParts(message);
+				if (parts !== undefined) {
+					partsByMessage.set(messageIndex, parts);
+				}
 			}
+			return {
+				messages: copyMessagesWithParts(messages, partsByMessage),
+				release: () => {
+					if (releasePromise === undefined) {
+						const attempt = Promise.all(
+							stagedPins.map((pin) =>
+								removeAttachmentPinPath(rootKey, pin.attachmentId, pin.pinPath)
+							)
+						).then(() => undefined);
+						releasePromise = attempt;
+						void attempt.catch(() => {
+							if (releasePromise === attempt) {
+								releasePromise = undefined;
+							}
+						});
+					}
+					return releasePromise;
+				},
+			};
+		} catch (error) {
+			await Promise.all(
+				stagedPins.map((pin) =>
+					removeAttachmentPinPath(rootKey, pin.attachmentId, pin.pinPath)
+				)
+			);
+			throw error;
 		}
-		return copyMessagesWithParts(messages, partsByMessage);
 	};
 	const hydrateMessagesWithStats = async (
 		messages: readonly SessionMessage[],
@@ -1243,8 +1781,7 @@ export const createSessionAttachmentStore = ({
 		const selection = await selectAttachmentPayloads(
 			candidates,
 			resolveAttachment,
-			(reference, signal) =>
-				isStoredBlobPresent(root, repository, reference, signal),
+			(reference, signal) => isStoredBlobPresent(root, reference, signal),
 			resolveHydrationBudget(options),
 			options.priorityMessageId,
 			options.signal
@@ -1316,7 +1853,7 @@ export const createSessionAttachmentStore = ({
 				continue;
 			}
 			assertNotAborted(signal);
-			if (await isStoredBlobPresent(root, repository, reference, signal)) {
+			if (await isStoredBlobPresent(root, reference, signal)) {
 				continue;
 			}
 			parts ??= [...message.parts];
@@ -1446,10 +1983,15 @@ export const createSessionAttachmentStore = ({
 		isFile: () => boolean;
 		name: string;
 	};
+	type OrphanScanContext = Readonly<{
+		currentTime: number;
+		liveAttachmentIds: Set<string>;
+		metadataKeys: Set<string>;
+		safetyWindowMs: number;
+	}>;
 	const inspectTemporaryBlob = async (
 		path: string,
-		currentTime: number,
-		safetyWindowMs: number,
+		context: OrphanScanContext,
 		remainingEntries: number,
 		remainingBytes: number
 	): Promise<{ orphanBytes: number; orphanCount: number }> => {
@@ -1459,7 +2001,7 @@ export const createSessionAttachmentStore = ({
 		try {
 			const info = await fs.stat(path);
 			if (
-				currentTime - info.mtimeMs < safetyWindowMs ||
+				context.currentTime - info.mtimeMs < context.safetyWindowMs ||
 				info.size > remainingBytes
 			) {
 				return { orphanBytes: 0, orphanCount: 0 };
@@ -1474,16 +2016,15 @@ export const createSessionAttachmentStore = ({
 		path: string,
 		blobKey: string,
 		attachmentId: string,
-		metadataKeys: Set<string>,
-		currentTime: number,
-		safetyWindowMs: number,
+		context: OrphanScanContext,
 		remainingEntries: number,
 		remainingBytes: number
 	): Promise<Except<OrphanScan, "directories">> => {
 		if (
 			!ATTACHMENT_ID_PATTERN.test(attachmentId) ||
 			blobKey !== attachmentBlobKey(attachmentId) ||
-			metadataKeys.has(blobKey) ||
+			context.metadataKeys.has(blobKey) ||
+			context.liveAttachmentIds.has(attachmentId) ||
 			remainingEntries <= 0 ||
 			remainingBytes <= 0
 		) {
@@ -1492,7 +2033,7 @@ export const createSessionAttachmentStore = ({
 		try {
 			const info = await fs.stat(path);
 			if (
-				currentTime - info.mtimeMs < safetyWindowMs ||
+				context.currentTime - info.mtimeMs < context.safetyWindowMs ||
 				info.size > remainingBytes
 			) {
 				return { orphanBytes: 0, orphanCount: 0 };
@@ -1514,9 +2055,7 @@ export const createSessionAttachmentStore = ({
 	const inspectOrphanEntry = async (
 		directory: string,
 		entry: DirectoryEntry,
-		metadataKeys: Set<string>,
-		currentTime: number,
-		safetyWindowMs: number,
+		context: OrphanScanContext,
 		remainingEntries: number,
 		remainingBytes: number
 	): Promise<{
@@ -1534,8 +2073,7 @@ export const createSessionAttachmentStore = ({
 		if (TEMPORARY_BLOB_PATTERN.test(entry.name)) {
 			return inspectTemporaryBlob(
 				entryPath,
-				currentTime,
-				safetyWindowMs,
+				context,
 				remainingEntries,
 				remainingBytes
 			);
@@ -1547,18 +2085,14 @@ export const createSessionAttachmentStore = ({
 			entryPath,
 			path.relative(path.resolve(root), entryPath),
 			entry.name.slice(0, -".blob".length),
-			metadataKeys,
-			currentTime,
-			safetyWindowMs,
+			context,
 			remainingEntries,
 			remainingBytes
 		);
 	};
 	const scanDirectoryForOrphans = async (
 		directory: string,
-		metadataKeys: Set<string>,
-		currentTime: number,
-		safetyWindowMs: number,
+		context: OrphanScanContext,
 		maxEntries: number,
 		maxBytes: number
 	): Promise<OrphanScan> => {
@@ -1575,9 +2109,7 @@ export const createSessionAttachmentStore = ({
 				const result = await inspectOrphanEntry(
 					directory,
 					entry,
-					metadataKeys,
-					currentTime,
-					safetyWindowMs,
+					context,
 					maxEntries - orphanCount,
 					maxBytes - orphanBytes
 				);
@@ -1602,14 +2134,10 @@ export const createSessionAttachmentStore = ({
 	};
 
 	const reclaimOrphanBlobs = async (
-		currentTime: number,
-		safetyWindowMs: number,
+		context: OrphanScanContext,
 		maxEntries: number,
 		maxBytes: number
 	): Promise<{ orphanBytes: number; orphanCount: number }> => {
-		const metadataKeys = new Set(
-			repository.list().map((record) => record.blobKey)
-		);
 		const stack = [path.resolve(root)];
 		let orphanBytes = 0;
 		let orphanCount = 0;
@@ -1624,9 +2152,7 @@ export const createSessionAttachmentStore = ({
 			}
 			const result = await scanDirectoryForOrphans(
 				directory,
-				metadataKeys,
-				currentTime,
-				safetyWindowMs,
+				context,
 				maxEntries - orphanCount,
 				maxBytes - orphanBytes
 			);
@@ -1639,69 +2165,75 @@ export const createSessionAttachmentStore = ({
 		return { orphanBytes, orphanCount };
 	};
 
-	/**
-	 * Attachment ids something holds beyond the records and prompt history that
-	 * name them, counted: the same blob held twice survives one release.
-	 */
-	const retained = new Map<string, number>();
-	const retain = (attachmentIds: Iterable<string>): void => {
-		for (const attachmentId of attachmentIds) {
-			retained.set(attachmentId, (retained.get(attachmentId) ?? 0) + 1);
-		}
-	};
-	const release = (attachmentIds: Iterable<string>): void => {
-		for (const attachmentId of attachmentIds) {
-			const count = retained.get(attachmentId);
-			if (isUndefined(count)) {
-				continue;
-			}
-			if (count <= 1) {
-				retained.delete(attachmentId);
-			} else {
-				retained.set(attachmentId, count - 1);
-			}
-		}
-	};
-
 	const collect = async ({
 		liveAttachmentIds,
 		maxBytes = DEFAULT_ATTACHMENT_MAINTENANCE_LIMITS.maxBytes,
 		maxEntries = DEFAULT_ATTACHMENT_MAINTENANCE_LIMITS.maxEntries,
 		safetyWindowMs = 60_000,
 	}: {
-		liveAttachmentIds: Iterable<string>;
+		liveAttachmentIds: AttachmentLivenessSource;
 		maxBytes?: number;
 		maxEntries?: number;
 		safetyWindowMs?: number;
-	}): Promise<AttachmentMaintenanceReport> => {
-		const boundedEntries = Math.max(0, Math.floor(maxEntries));
-		const boundedBytes = Math.max(0, Math.floor(maxBytes));
-		const currentTime = now().getTime();
-		const reclaimed = await reclaimUnreferenced(
-			// A retained blob is live even though no Session Record or prompt
-			// history names it yet.
-			new Set([...liveAttachmentIds, ...retained.keys()]),
-			currentTime,
-			safetyWindowMs,
-			boundedEntries,
-			boundedBytes
-		);
-		const orphaned = await reclaimOrphanBlobs(
-			currentTime,
-			safetyWindowMs,
-			Math.max(0, boundedEntries - reclaimed.reclaimedCount),
-			Math.max(0, boundedBytes - reclaimed.reclaimedBytes)
-		);
-		return {
-			...reclaimed,
-			...orphaned,
-		};
-	};
+	}): Promise<AttachmentMaintenanceReport> =>
+		withSessionCatalogLifecycleGate(resolvedLifecycleRoot, async () => {
+			const canonicalLifecycleRoot = await resolveCanonicalLifecycleRoot(
+				resolvedLifecycleRoot
+			);
+			const liveIds = new Set<string>();
+			const pins = await readAttachmentPins(canonicalLifecycleRoot);
+			for (const pin of pins) {
+				if (isProcessAlive(pin.processId)) {
+					liveIds.add(pin.attachmentId);
+					continue;
+				}
+				await removeAttachmentPinPath(rootKey, pin.attachmentId, pin.path);
+			}
+			for (const attachmentId of await readAuthoritativeAttachmentIds(
+				canonicalLifecycleRoot
+			)) {
+				liveIds.add(attachmentId);
+			}
+			const additionalLiveIds =
+				typeof liveAttachmentIds === "function"
+					? await liveAttachmentIds()
+					: liveAttachmentIds;
+			for (const attachmentId of additionalLiveIds) {
+				liveIds.add(attachmentId);
+			}
+			const boundedEntries = Math.max(0, Math.floor(maxEntries));
+			const boundedBytes = Math.max(0, Math.floor(maxBytes));
+			const currentTime = now().getTime();
+			const reclaimed = await reclaimUnreferenced(
+				liveIds,
+				currentTime,
+				safetyWindowMs,
+				boundedEntries,
+				boundedBytes
+			);
+			const orphanContext: OrphanScanContext = {
+				currentTime,
+				liveAttachmentIds: liveIds,
+				metadataKeys: new Set(
+					repository.list().map((record) => record.blobKey)
+				),
+				safetyWindowMs,
+			};
+			const orphaned = await reclaimOrphanBlobs(
+				orphanContext,
+				Math.max(0, boundedEntries - reclaimed.reclaimedCount),
+				Math.max(0, boundedBytes - reclaimed.reclaimedBytes)
+			);
+			return {
+				...reclaimed,
+				...orphaned,
+			};
+		});
 
 	return {
 		annotateMessagesForDisplay,
 		collect,
-		externalizeMessages,
+		externalizeMessagesWithLease,
 		getCompactionMetadata,
 		hydrateMessages,
 		hydrateMessagesWithStats,

@@ -15,18 +15,40 @@ import type {
 	SessionMessage,
 } from "@/modules/sessions/message";
 import type { EditMode, FileObservationStore } from "@/modules/tools";
-import type { SessionId, SessionUsageEntryId } from "@/shared/identifiers";
+import type {
+	CompactionId,
+	SessionId,
+	SessionUsageEntryId,
+} from "@/shared/identifiers";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
-import type { SessionWriteOutcome } from "../session-write-outcome";
 import type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+} from "../session-pagination-types";
+import type {
+	SessionWriteOutcome,
+	SessionWriteReceipt,
+} from "../session-write-outcome";
+import type {
+	AttachmentExternalizationLease,
 	AttachmentExternalizationOptions,
 	AttachmentHydrationOptions,
 	AttachmentMaintenanceReport,
 	SessionAttachmentStore,
 } from "./attachment-store";
+
+export type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+} from "../session-pagination-types";
+
 import type {
 	SessionWriterLock,
 	SessionWriterLockOptions,
@@ -46,26 +68,34 @@ export type PromptHistoryEntry = {
 };
 export type SessionRecordStorageOutcome = SessionRecordOutcome;
 
-export type Session = {
-	createdAt: Date;
-	id: SessionId;
-	lastMessageAt: Date | null;
-	model?: ProviderModelSelection;
-	pinned: boolean;
-	title: string;
-	thinkingLevel?: ThinkingLevel;
-};
-
 export type SessionCatalogIssue = Readonly<{
 	code: string;
 	message: string;
+	offset?: number;
+	operationId?: string;
 	sessionId: SessionId;
+	sequence?: number;
 }>;
 
 export type SessionCatalogResult = Readonly<{
 	issues: SessionCatalogIssue[];
 	sessions: Session[];
 }>;
+
+export type SessionProjectionRebuildScope =
+	| Readonly<{ kind: "all" }>
+	| Readonly<{ kind: "session"; sessionId: SessionId }>;
+
+export type SessionProjectionRebuildResult = Readonly<{
+	generation: number;
+	issues: SessionCatalogIssue[];
+	rebuiltSessionIds: SessionId[];
+	skippedSessionIds: SessionId[];
+}>;
+
+export type SessionProjectionMaintenanceGate = <Result>(
+	operation: () => Promise<Result>
+) => Promise<Result>;
 
 export type CreateSessionInput = {
 	createdAt?: Date;
@@ -91,6 +121,8 @@ export type UpdateSessionInput = {
 
 /** Durable usage-only accounting that never projects into a Session Record. */
 export type SessionUsageEntry = Readonly<{
+	compactionId?: CompactionId;
+	costUsd: number | null;
 	createdAt: Date;
 	id: SessionUsageEntryId;
 	kind: "cache-warm" | "compaction-summary";
@@ -115,6 +147,7 @@ export type CreateSessionUsageEntryInput = Omit<
 export type CommitSessionRecordInput = {
 	sessionModel?: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
+	externalizationLease?: AttachmentExternalizationLease;
 	record: SessionRecord;
 	sessionId: SessionId;
 };
@@ -128,6 +161,12 @@ export type UpdateSessionSubmissionInput = {
 	status: SessionSubmissionStatus;
 	submissionId: SubmissionId;
 };
+
+export type SessionSubmissionRecordReceipt = Readonly<{
+	message: SessionRecord["messages"][number];
+	recordId: SessionRecordId;
+	writeOutcome: SessionWriteReceipt;
+}>;
 
 export type SessionProjectionStore = {
 	appendCompaction: (
@@ -186,7 +225,7 @@ export type SessionProjectionStore = {
 		messages: readonly SessionMessage[],
 		signal?: AbortSignal,
 		options?: AttachmentExternalizationOptions
-	) => Promise<SessionMessage[]>;
+	) => Promise<AttachmentExternalizationLease>;
 	collectAttachments: (
 		safetyWindowMs?: number
 	) => Promise<AttachmentMaintenanceReport>;
@@ -205,6 +244,8 @@ export type SessionStore = Omit<
 	| "createSession"
 	| "createSessionUsageEntry"
 	| "deleteSession"
+	| "findSessionRecordBySubmissionId"
+	| "listRecentModelSelections"
 	| "setEditMode"
 	| "updateSession"
 	| "updateSessionSubmission"
@@ -225,12 +266,36 @@ export type SessionStore = Omit<
 		id: SessionId;
 		writeOutcome: SessionWriteOutcome;
 	}>;
+	createSessionWithExternalizedMessage: (input: CreateSessionInput) => Promise<{
+		created?: boolean;
+		id: SessionId;
+		message: SessionMessage;
+		writeOutcome: SessionWriteOutcome;
+	}>;
 	createSessionUsageEntry: (input: CreateSessionUsageEntryInput) => Promise<{
 		entry?: SessionUsageEntry;
 		writeOutcome: SessionWriteOutcome;
 	}>;
 	deleteSession: (sessionId: SessionId) => Promise<SessionWriteOutcome>;
+	findSessionRecordBySubmissionId: (
+		sessionId: SessionId,
+		submissionId: SubmissionId
+	) => Promise<SessionSubmissionRecordReceipt | undefined>;
 	listSessionCatalog: () => Promise<SessionCatalogResult>;
+	listSessionsPage: (
+		options?: SessionPageOptions
+	) => Promise<SessionCatalogPage>;
+	readSessionHistoryPage: (
+		sessionId: SessionId,
+		options?: SessionPageOptions
+	) => Promise<SessionHistoryPage>;
+	listRecentModelSelections: (
+		limit: number
+	) => Promise<ProviderModelSelection[]>;
+	rebuildProjection: (
+		scope: SessionProjectionRebuildScope,
+		withMaintenanceGate: SessionProjectionMaintenanceGate
+	) => Promise<SessionProjectionRebuildResult>;
 	setEditMode?: (
 		sessionId: SessionId,
 		mode: EditMode,

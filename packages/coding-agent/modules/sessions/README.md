@@ -178,6 +178,41 @@ never resolves co-selected Skill or Custom Command intents.
 
 ## Storage seam
 
+### JSONL durability and verification
+
+The per-Session JSONL log is authoritative; SQLite is a rebuildable projection.
+Writable reopen and `wincode sessions verify <session-id> [--json]` use the
+same validated log decoder. Verification is read-only: it does not acquire
+Session Writer authority, sync or truncate the log, or create quarantine files.
+A valid log with a pending write marker reports `reconciliation_required`;
+truncated or corrupt logs report an error without repair. Writable reopen or a
+retry with the same operation identity performs reconciliation. An incomplete
+suffix is truncated only after its exact bytes and a metadata sidecar containing
+offset, prefix/suffix hashes, operation identity, and reason have been synced to
+the quarantine directory.
+
+Current Session Writer lock adapters are target-specific:
+
+| Target | Primitive | Result |
+| --- | --- | --- |
+| macOS arm64/x64 | `flock` | Exclusive process-owned lock |
+| Linux arm64/x64 | `flock` | Exclusive process-owned lock |
+| Windows x64 | `LockFileEx` | Exclusive process-owned lock |
+| Other OS/architecture pairs | None | Fail closed with `session_lock_failed` |
+
+An adapter target is not a promise for every filesystem. Commit durability
+requires successful file and containing-directory sync; unsupported or failed
+sync/locking is not downgraded to best effort. Lock contention is
+`session_in_use`, infrastructure/unsupported locking is `session_lock_failed`,
+and an unresolved write is `session_log_write_indeterminate`. Coordination is
+limited to processes on one machine using a local filesystem; network/shared
+filesystems are unsupported.
+
+Fault-injection tests exercise short writes, write/sync errors, restart points,
+and the ordering between quarantine durability and truncation. They validate
+application behavior at those I/O boundaries, not power-loss behavior, device
+or filesystem caches, a physically full disk, or network-filesystem semantics.
+
 `storage/` isolates local persistence behind the `SessionStore` interface.
 The local Drizzle store persists sessions, ordinary Wincode Session Records,
 compactions, and content-addressed attachment blobs.

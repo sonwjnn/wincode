@@ -1,20 +1,30 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type SessionRecord, toSessionRecordId } from "@wincode/agent-core";
+import {
+	type SessionRecord,
+	type SubmissionId,
+	toSessionRecordId,
+} from "@wincode/agent-core";
 import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
+import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { EditMode } from "@/modules/tools";
 import {
 	type CompactionId,
+	isValidSessionId,
 	type SessionId,
 	toCompactionId,
 	toSessionId,
+	toWorkspaceId,
+	type WorkspaceId,
 } from "@/shared/identifiers";
 import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
+import { assertCompactionMessageReferences } from "../compaction/validation";
+import type { AttachmentExternalizationLease } from "./attachment-store";
 import type { DrizzleSessionStore } from "./drizzle-session-store";
 import {
 	createSessionLogEvent,
@@ -33,6 +43,15 @@ import {
 	sessionLogOperationDigest,
 	sessionProjectionCursorsEqual,
 } from "./session-jsonl-codec";
+import { rebuildSessionJsonlProjection } from "./session-jsonl-rebuild";
+import {
+	decodeSessionPageToken,
+	encodeSessionPageToken,
+	parseSessionPageLimit,
+	type SessionCatalogPageCursor,
+	type SessionHistoryPageCursor,
+	SessionPaginationError,
+} from "./session-pagination";
 import { buildUserSessionRecord } from "./session-record";
 import type {
 	CommitSessionRecordInput,
@@ -41,8 +60,12 @@ import type {
 	CreateSessionUsageEntryInput,
 	Session,
 	SessionCatalogIssue,
+	SessionCatalogPage,
 	SessionCatalogResult,
+	SessionHistoryPage,
+	SessionPageOptions,
 	SessionStore,
+	SessionSubmissionRecordReceipt,
 	SessionUsageEntry,
 	SessionWriteOutcome,
 	SessionWriteReceipt,
@@ -55,10 +78,12 @@ import {
 	type SessionWriterLock,
 	SessionWriterLockFailureError,
 	type SessionWriterLockOptions,
+	withSessionCatalogLifecycleGate,
 } from "./session-writer-lock";
 
 export type SessionLogFileIo = Readonly<{
 	sync?: (filePath: string, handle: fs.FileHandle) => Promise<void>;
+	syncDirectory?: (directory: string, handle: fs.FileHandle) => Promise<void>;
 	write?: (
 		filePath: string,
 		handle: fs.FileHandle,
@@ -88,6 +113,42 @@ export class SessionWriteOutcomeError extends Error {
 		this.outcome = outcome;
 	}
 }
+
+export const isCommittedProjectionBlocked = (error: unknown): boolean => {
+	const seen = new Set<Error>();
+	let current = error;
+	while (current instanceof Error && !seen.has(current)) {
+		if (
+			current instanceof SessionWriteOutcomeError &&
+			current.outcome.kind === "committed" &&
+			current.outcome.projection === "blocked"
+		) {
+			return true;
+		}
+		seen.add(current);
+		current = current.cause;
+	}
+	return false;
+};
+
+export const isSessionWriteIndeterminate = (error: unknown): boolean => {
+	const seen = new Set<Error>();
+	let current = error;
+	while (current instanceof Error && !seen.has(current)) {
+		if (
+			(current instanceof SessionWriteOutcomeError &&
+				current.outcome.kind === "indeterminate") ||
+			(current instanceof SessionLogError &&
+				current.code === "session_log_write_indeterminate") ||
+			Reflect.get(current, "code") === "session_log_write_indeterminate"
+		) {
+			return true;
+		}
+		seen.add(current);
+		current = current.cause;
+	}
+	return false;
+};
 
 export type SessionStorageError = Readonly<{
 	code: string;
@@ -159,6 +220,7 @@ export const sessionWriteOutcomeFromError = (
 			code === "session_log_version_unsupported" ||
 			code === "session_checkpoint_unsupported" ||
 			code === "session_deleted" ||
+			code === "invalid-boundary" ||
 			code === "session_not_found" ||
 			code === "session-recovery-required"
 				? "do-not-retry"
@@ -181,11 +243,14 @@ type SessionWriteIntent = Readonly<{
 	operationId: string;
 	sequence: number;
 	sessionId: SessionId;
+	timestamp?: string;
 	type: SessionLogEventType;
+	workspaceId?: WorkspaceId;
 }>;
 
 type SessionCreation = Readonly<{
 	createdAt: Date;
+	createdAtIsExplicit: boolean;
 	editMode: EditMode;
 	initialRecord?: SessionRecord;
 	lastMessageAt: Date | null;
@@ -196,6 +261,7 @@ type SessionCreation = Readonly<{
 }>;
 
 type SessionWrite = Readonly<{
+	envelopeTimestamp?: string;
 	operationId: string;
 	payload: Readonly<Record<string, unknown>>;
 	type: Exclude<SessionLogEnvelope["type"], "session.header">;
@@ -209,13 +275,14 @@ type CommittedLogEntry = Readonly<{
 	state: SessionLogState;
 }>;
 
-const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const SESSION_OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,511}$/u;
+const operationIdFileStem = (operationId: string): string =>
+	new Bun.CryptoHasher("sha256").update(operationId).digest("hex");
 
 const appendQueue = createKeyedSerialQueue();
 
 const validSessionId = (sessionId: SessionId): string => {
-	if (!SESSION_ID_PATTERN.test(sessionId)) {
+	if (!isValidSessionId(sessionId)) {
 		throw new Error("Session ID is not safe for a Session log path.");
 	}
 	return sessionId;
@@ -297,9 +364,16 @@ const syncFile = async (
 	await handle.sync();
 };
 
-const syncDirectory = async (directory: string): Promise<void> => {
+const syncDirectory = async (
+	directory: string,
+	fileIo?: SessionLogFileIo
+): Promise<void> => {
 	const handle = await fs.open(directory, "r");
 	try {
+		if (fileIo?.syncDirectory !== undefined) {
+			await fileIo.syncDirectory(directory, handle);
+			return;
+		}
 		await handle.sync();
 	} finally {
 		await handle.close();
@@ -308,11 +382,12 @@ const syncDirectory = async (directory: string): Promise<void> => {
 
 const ensureDirectoryDurable = async (
 	directory: string,
-	mode = 0o700
+	mode = 0o700,
+	fileIo?: SessionLogFileIo
 ): Promise<void> => {
 	try {
 		await fs.mkdir(directory, { mode });
-		await syncDirectory(path.dirname(directory));
+		await syncDirectory(path.dirname(directory), fileIo);
 	} catch (error) {
 		if (!isCode(error, "EEXIST")) {
 			throw error;
@@ -321,6 +396,7 @@ const ensureDirectoryDurable = async (
 		if (!info.isDirectory()) {
 			throw new Error("Session log path is not a directory.");
 		}
+		await syncDirectory(path.dirname(directory), fileIo);
 	}
 };
 
@@ -328,7 +404,7 @@ const readLog = async (
 	logPath: string,
 	sessionId: SessionId
 ): Promise<Readonly<{ bytes: Uint8Array; state: SessionLogState }>> => {
-	const bytes = await fs.readFile(logPath);
+	const bytes = await Bun.file(logPath).bytes();
 	return { bytes, state: decodeSessionLog(sessionId, bytes) };
 };
 
@@ -354,6 +430,51 @@ const sessionWriteIntentPath = async (
 		`${validSessionId(sessionId)}.json`
 	);
 
+export type SessionLogVerification = Readonly<{
+	byteLength: number;
+	eventCount: number;
+	lastHash: string;
+	lastSequence: number;
+	logId: string;
+	reconciliationPending: boolean;
+	sessionId: SessionId;
+}>;
+
+/**
+ * Validates a Session log with the same decoder used by writable reopen. This
+ * inspection reads the log and pending marker only; it does not acquire writer
+ * authority, sync files, or repair an incomplete suffix.
+ */
+export const verifySessionJsonlLog = async (
+	logRoot: string,
+	sessionId: SessionId
+): Promise<SessionLogVerification> => {
+	const logPath = path.join(
+		path.resolve(logRoot),
+		validSessionId(sessionId),
+		"session.jsonl"
+	);
+	const { bytes, state } = await readLog(logPath, sessionId);
+	let reconciliationPending = false;
+	try {
+		await fs.access(await sessionWriteIntentPath(logRoot, sessionId));
+		reconciliationPending = true;
+	} catch (error) {
+		if (!isCode(error, "ENOENT")) {
+			throw error;
+		}
+	}
+	return {
+		byteLength: bytes.byteLength,
+		eventCount: Math.max(0, state.entries.length - 1),
+		lastHash: state.lastHash,
+		lastSequence: state.nextSequence - 1,
+		logId: state.logId,
+		reconciliationPending,
+		sessionId,
+	};
+};
+
 const isWritableSessionLogEventType = (
 	type: unknown
 ): type is SessionLogEventType =>
@@ -361,24 +482,71 @@ const isWritableSessionLogEventType = (
 	SESSION_LOG_EVENT_TYPES.includes(type as SessionLogEventType) &&
 	type !== "session.header";
 
+const isCanonicalTimestamp = (value: unknown): value is string => {
+	if (typeof value !== "string") {
+		return false;
+	}
+	const parsed = new Date(value);
+	return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+};
+
+const sessionWriteIntentMetadataFrom = (
+	value: object,
+	type: unknown,
+	sessionId: SessionId
+): Pick<SessionWriteIntent, "timestamp" | "workspaceId"> => {
+	const timestamp = Reflect.get(value, "timestamp");
+	const storedWorkspaceId = Reflect.get(value, "workspaceId");
+	const version = Reflect.get(value, "version");
+	const parsedTimestamp = isCanonicalTimestamp(timestamp)
+		? timestamp
+		: undefined;
+	const parsedWorkspaceId =
+		typeof storedWorkspaceId === "string" &&
+		storedWorkspaceId.length > 0 &&
+		storedWorkspaceId.length <= 256
+			? toWorkspaceId(storedWorkspaceId)
+			: undefined;
+	const validVersion = version === 1 || version === 2 || version === 3;
+	const validTimestamp =
+		version === 1
+			? timestamp === undefined || parsedTimestamp !== undefined
+			: (version === 2 || version === 3) && parsedTimestamp !== undefined;
+	const validWorkspaceId =
+		version === 3
+			? type === "session.created" && parsedWorkspaceId !== undefined
+			: storedWorkspaceId === undefined;
+	if (!(validVersion && validTimestamp && validWorkspaceId)) {
+		throw new SessionLogError(
+			"session_log_corrupt",
+			sessionId,
+			"Session has an invalid pending write marker."
+		);
+	}
+	return omitUndefined({
+		timestamp: parsedTimestamp,
+		workspaceId: parsedWorkspaceId,
+	});
+};
+
 const sessionWriteIntentFrom = (
 	value: unknown,
 	sessionId: SessionId
 ): SessionWriteIntent => {
-	const isObject =
-		typeof value === "object" && value !== null && !Array.isArray(value);
-	const type = isObject ? Reflect.get(value, "type") : undefined;
-	const operationId = isObject ? Reflect.get(value, "operationId") : undefined;
-	const storedSessionId = isObject
-		? Reflect.get(value, "sessionId")
-		: undefined;
-	const operationDigest = isObject
-		? Reflect.get(value, "operationDigest")
-		: undefined;
-	const expectedOffset = isObject
-		? Reflect.get(value, "expectedOffset")
-		: undefined;
-	const sequence = isObject ? Reflect.get(value, "sequence") : undefined;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new SessionLogError(
+			"session_log_corrupt",
+			sessionId,
+			"Session has an invalid pending write marker."
+		);
+	}
+	const type = Reflect.get(value, "type");
+	const operationId = Reflect.get(value, "operationId");
+	const storedSessionId = Reflect.get(value, "sessionId");
+	const operationDigest = Reflect.get(value, "operationDigest");
+	const expectedOffset = Reflect.get(value, "expectedOffset");
+	const sequence = Reflect.get(value, "sequence");
+	const metadata = sessionWriteIntentMetadataFrom(value, type, sessionId);
 	const validSequence =
 		type === "session.created" ? sequence === 1 : Number(sequence) >= 2;
 	const validOffset =
@@ -386,11 +554,7 @@ const sessionWriteIntentFrom = (
 			? expectedOffset === 0
 			: Number(expectedOffset) > 0;
 	if (
-		!isObject ||
-		Reflect.get(value, "version") !== 1 ||
-		!isWritableSessionLogEventType(type) ||
-		!validSequence ||
-		!validOffset ||
+		!(isWritableSessionLogEventType(type) && validSequence && validOffset) ||
 		typeof operationId !== "string" ||
 		!SESSION_OPERATION_ID_PATTERN.test(operationId) ||
 		storedSessionId !== sessionId ||
@@ -411,6 +575,7 @@ const sessionWriteIntentFrom = (
 		operationId,
 		sequence,
 		sessionId,
+		...metadata,
 		type,
 	};
 };
@@ -419,9 +584,10 @@ const assertSameSessionWriteIntent = (
 	intent: SessionWriteIntent,
 	expected: Pick<
 		SessionWriteIntent,
-		"operationDigest" | "operationId" | "type"
+		"operationDigest" | "operationId" | "type" | "workspaceId"
 	>,
-	sessionId: SessionId
+	sessionId: SessionId,
+	allowLegacyWorkspaceOwner = false
 ): void => {
 	if (intent.operationId !== expected.operationId) {
 		throw new SessionLogError(
@@ -437,7 +603,8 @@ const assertSameSessionWriteIntent = (
 	}
 	if (
 		intent.type !== expected.type ||
-		intent.operationDigest !== expected.operationDigest
+		intent.operationDigest !== expected.operationDigest ||
+		(intent.workspaceId !== expected.workspaceId && !allowLegacyWorkspaceOwner)
 	) {
 		throw new SessionLogError(
 			"session_operation_conflict",
@@ -539,7 +706,7 @@ const readSessionWriteIntent = async (
 
 const writeSessionWriteIntent = async (
 	logRoot: string,
-	intent: SessionWriteIntent,
+	intent: SessionWriteIntent & Readonly<{ timestamp: string }>,
 	fileIo: SessionLogFileIo
 ): Promise<void> => {
 	const controlRoot = await sessionControlRoot(logRoot);
@@ -552,21 +719,33 @@ const writeSessionWriteIntent = async (
 		intent.sessionId,
 		fileIo
 	);
+	const upgradeLegacyIntent =
+		existing !== undefined && existing.timestamp === undefined;
 	if (existing !== undefined) {
 		assertSameSessionWriteIntent(existing, intent, intent.sessionId);
-		return;
+		if (!upgradeLegacyIntent) {
+			return;
+		}
 	}
 	const temporaryPath = `${markerPath}.${randomUUIDv7()}.tmp`;
 	let handle: fs.FileHandle | undefined;
 	try {
 		handle = await fs.open(temporaryPath, "wx", 0o600);
 		const bytes = new TextEncoder().encode(
-			`${encodeCanonicalSessionJson({ ...intent, version: 1 })}\n`
+			`${encodeCanonicalSessionJson({
+				...intent,
+				version: intent.workspaceId === undefined ? 2 : 3,
+			})}\n`
 		);
 		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
 		await syncFile(temporaryPath, handle, fileIo);
 		await handle.close();
 		handle = undefined;
+		if (upgradeLegacyIntent) {
+			await fs.rename(temporaryPath, markerPath);
+			await syncDirectory(markerRoot);
+			return;
+		}
 		try {
 			await fs.link(temporaryPath, markerPath);
 		} catch (error) {
@@ -591,9 +770,13 @@ const writeSessionWriteIntent = async (
 			throw error;
 		}
 		throw new SessionLogError(
-			"session_log_write_not_committed",
+			upgradeLegacyIntent
+				? "session_log_write_indeterminate"
+				: "session_log_write_not_committed",
 			intent.sessionId,
-			"Session write could not persist its pending marker before log mutation.",
+			upgradeLegacyIntent
+				? "Session write could not durably upgrade its pending marker."
+				: "Session write could not persist its pending marker before log mutation.",
 			{
 				cause: error,
 				offset: intent.expectedOffset,
@@ -643,7 +826,7 @@ const syncAndVerifyLogPrefix = async (
 	} finally {
 		await handle.close();
 	}
-	const current = await fs.readFile(logPath);
+	const current = await Bun.file(logPath).bytes();
 	if (
 		current.byteLength < capturedBytes.byteLength ||
 		!equalBytes(current.subarray(0, capturedBytes.byteLength), capturedBytes)
@@ -653,6 +836,71 @@ const syncAndVerifyLogPrefix = async (
 			sessionId,
 			"Session log changed while its projection was being checked."
 		);
+	}
+};
+
+const ensureDurableQuarantineArtifact = async (
+	filePath: string,
+	directory: string,
+	expectedBytes: Uint8Array,
+	sessionId: SessionId,
+	intent: SessionWriteIntent,
+	fileIo: SessionLogFileIo
+): Promise<void> => {
+	const temporaryPath = `${filePath}.${randomUUIDv7()}.tmp`;
+	let handle: fs.FileHandle | undefined;
+	try {
+		try {
+			handle = await fs.open(filePath, "r");
+			const existing = await Bun.file(filePath).bytes();
+			if (!equalBytes(existing, expectedBytes)) {
+				throw new SessionLogError(
+					"session_log_corrupt",
+					sessionId,
+					"Quarantine artifact conflicts with the pending Session write.",
+					{
+						offset: intent.expectedOffset,
+						operationId: intent.operationId,
+						sequence: intent.sequence,
+					}
+				);
+			}
+			await syncFile(filePath, handle, fileIo);
+		} catch (error) {
+			if (!isCode(error, "ENOENT")) {
+				throw error;
+			}
+			await handle?.close().catch(() => undefined);
+			handle = await fs.open(temporaryPath, "wx", 0o600);
+			await writeFully(handle, expectedBytes, 0, temporaryPath, fileIo);
+			await syncFile(temporaryPath, handle, fileIo);
+			await handle.close();
+			handle = undefined;
+			try {
+				await fs.link(temporaryPath, filePath);
+			} catch (linkError) {
+				if (!isCode(linkError, "EEXIST")) {
+					throw linkError;
+				}
+				const existing = await Bun.file(filePath).bytes();
+				if (!equalBytes(existing, expectedBytes)) {
+					throw new SessionLogError(
+						"session_log_corrupt",
+						sessionId,
+						"Quarantine artifact conflicts with the pending Session write.",
+						{
+							offset: intent.expectedOffset,
+							operationId: intent.operationId,
+							sequence: intent.sequence,
+						}
+					);
+				}
+			}
+		}
+		await syncDirectory(directory, fileIo);
+	} finally {
+		await handle?.close().catch(() => undefined);
+		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
 	}
 };
 
@@ -705,67 +953,46 @@ const quarantinePartialLogAppend = async (
 		"quarantine",
 		validSessionId(sessionId)
 	);
-	await ensureDirectoryDurable(controlRoot);
-	await ensureDirectoryDurable(path.dirname(quarantineRoot));
-	await ensureDirectoryDurable(quarantineRoot);
+	await ensureDirectoryDurable(controlRoot, 0o700, fileIo);
+	await ensureDirectoryDurable(path.dirname(quarantineRoot), 0o700, fileIo);
+	await ensureDirectoryDurable(quarantineRoot, 0o700, fileIo);
 	const quarantinePath = path.join(
 		quarantineRoot,
-		`${intent.sequence}-${intent.operationId}.partial`
+		`${intent.sequence}-${operationIdFileStem(intent.operationId)}.partial`
 	);
 	const quarantineBytes = bytes.subarray(expectedOffset);
-	const temporaryPath = `${quarantinePath}.${randomUUIDv7()}.tmp`;
-	let quarantineHandle: fs.FileHandle | undefined;
-	try {
-		try {
-			quarantineHandle = await fs.open(quarantinePath, "r");
-			const existing = await fs.readFile(quarantinePath);
-			if (!equalBytes(existing, quarantineBytes)) {
-				throw new SessionLogError(
-					"session_log_corrupt",
-					sessionId,
-					"Quarantined Session log suffix conflicts with the pending write."
-				);
-			}
-			await syncFile(quarantinePath, quarantineHandle, fileIo);
-			await syncDirectory(quarantineRoot);
-		} catch (error) {
-			if (!isCode(error, "ENOENT")) {
-				throw error;
-			}
-			await quarantineHandle?.close().catch(() => undefined);
-			quarantineHandle = await fs.open(temporaryPath, "wx", 0o600);
-			await writeFully(
-				quarantineHandle,
-				quarantineBytes,
-				0,
-				temporaryPath,
-				fileIo
-			);
-			await syncFile(temporaryPath, quarantineHandle, fileIo);
-			await quarantineHandle.close();
-			quarantineHandle = undefined;
-			try {
-				await fs.link(temporaryPath, quarantinePath);
-			} catch (linkError) {
-				if (!isCode(linkError, "EEXIST")) {
-					throw linkError;
-				}
-				const existing = await fs.readFile(quarantinePath);
-				if (!equalBytes(existing, quarantineBytes)) {
-					throw new SessionLogError(
-						"session_log_corrupt",
-						sessionId,
-						"Quarantined Session log suffix conflicts with the pending write."
-					);
-				}
-			}
-			await syncDirectory(quarantineRoot);
-		}
-	} finally {
-		await quarantineHandle?.close().catch(() => undefined);
-		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-	}
-	const current = await fs.readFile(logPath);
+	await ensureDurableQuarantineArtifact(
+		quarantinePath,
+		quarantineRoot,
+		quarantineBytes,
+		sessionId,
+		intent,
+		fileIo
+	);
+	const quarantineMetadata = {
+		byteLength: quarantineBytes.byteLength,
+		offset: expectedOffset,
+		operationId: intent.operationId,
+		prefixHash: prefixState.lastHash,
+		reason: "incomplete-final-line",
+		sequence: intent.sequence,
+		sessionId,
+		suffixHash: new Bun.CryptoHasher("sha256")
+			.update(quarantineBytes)
+			.digest("hex"),
+		version: 1,
+	};
+	await ensureDurableQuarantineArtifact(
+		`${quarantinePath}.json`,
+		quarantineRoot,
+		new TextEncoder().encode(
+			`${encodeCanonicalSessionJson(quarantineMetadata)}\n`
+		),
+		sessionId,
+		intent,
+		fileIo
+	);
+	const current = await Bun.file(logPath).bytes();
 	if (!equalBytes(current, bytes)) {
 		throw new SessionLogError(
 			"session_log_write_indeterminate",
@@ -842,7 +1069,10 @@ const findCreationOperation = (
 	}
 	if (
 		previous.envelope.type !== "session.created" ||
-		creationDigest(previous.envelope.payload) !== creationDigest(write.payload)
+		creationDigest(previous.envelope.payload) !==
+			creationDigest(write.payload) ||
+		previous.envelope.payload.createdAt !== write.payload.createdAt ||
+		previous.envelope.payload.lastMessageAt !== write.payload.lastMessageAt
 	) {
 		throw new SessionLogError(
 			"session_operation_conflict",
@@ -973,7 +1203,7 @@ const ensureDurableReceipt = async (
 	await ensureDirectoryDurable(receiptRoot);
 	const receiptPath = path.join(
 		receiptRoot,
-		`${entry.envelope.operationId}.json`
+		`${operationIdFileStem(entry.envelope.operationId)}.json`
 	);
 	const receipt: DurableSessionReceipt = {
 		entryHash: entry.envelope.entryHash,
@@ -1056,11 +1286,150 @@ const stageSessionLog = async (
 	}
 };
 
+const sessionCreationTimestamps = (
+	creation: SessionCreation,
+	pendingIntent: SessionWriteIntent | undefined,
+	existingCreation: Readonly<Record<string, unknown>> | undefined,
+	operationId: string
+): Readonly<{ createdAt: string; lastMessageAt: string | null }> => {
+	const storedCreatedAt = isCanonicalTimestamp(existingCreation?.createdAt)
+		? new Date(existingCreation.createdAt)
+		: undefined;
+	const pendingCreatedAt =
+		pendingIntent?.operationId === operationId &&
+		pendingIntent.type === "session.created" &&
+		pendingIntent.timestamp !== undefined
+			? new Date(pendingIntent.timestamp)
+			: undefined;
+	const createdAt = creation.createdAtIsExplicit
+		? creation.createdAt
+		: (storedCreatedAt ?? pendingCreatedAt ?? creation.createdAt);
+	const lastMessageAt =
+		creation.lastMessageAt?.getTime() === creation.createdAt.getTime()
+			? createdAt
+			: creation.lastMessageAt;
+	return {
+		createdAt: createdAt.toISOString(),
+		lastMessageAt: lastMessageAt?.toISOString() ?? null,
+	};
+};
+
+const readExistingSessionLog = async (
+	logPath: string,
+	sessionId: SessionId
+): Promise<
+	Readonly<{ bytes: Uint8Array; state: SessionLogState }> | undefined
+> => {
+	try {
+		return await readLog(logPath, sessionId);
+	} catch (error) {
+		if (isCode(error, "ENOENT")) {
+			return;
+		}
+		throw error;
+	}
+};
+
+const assertCreationIntentTimestampMatches = (
+	creation: SessionCreation,
+	intent: SessionWriteIntent | undefined,
+	existingCreation: Readonly<Record<string, unknown>> | undefined,
+	operationId: string,
+	sessionId: SessionId
+): void => {
+	if (
+		intent?.operationId !== operationId ||
+		intent.type !== "session.created"
+	) {
+		return;
+	}
+	const persistedTimestamp =
+		intent.timestamp ??
+		(isCanonicalTimestamp(existingCreation?.createdAt)
+			? existingCreation.createdAt
+			: undefined);
+	if (persistedTimestamp === undefined) {
+		const explicitTimestamp = creation.createdAtIsExplicit;
+		throw new SessionLogError(
+			explicitTimestamp
+				? "session_operation_conflict"
+				: "session_log_write_indeterminate",
+			sessionId,
+			explicitTimestamp
+				? "A legacy Session creation intent cannot verify its explicit timestamp."
+				: "A legacy Session creation intent has no persisted timestamp to retry safely.",
+			{ offset: 0, operationId, sequence: 1 }
+		);
+	}
+	if (
+		creation.createdAtIsExplicit &&
+		persistedTimestamp !== creation.createdAt.toISOString()
+	) {
+		throw new SessionLogError(
+			"session_operation_conflict",
+			sessionId,
+			"A Session creation identity was reused with a different payload.",
+			{ offset: 0, operationId, sequence: 1 }
+		);
+	}
+};
+
+const assertSessionCreationOwnership = (
+	sessionId: SessionId,
+	operationId: string,
+	workspaceId: WorkspaceId,
+	pendingIntent: SessionWriteIntent | undefined,
+	hasPublishedLog: boolean,
+	isBoundToWorkspace: () => boolean,
+	isBoundToAnotherWorkspace: () => boolean
+): boolean => {
+	const boundToWorkspace = isBoundToWorkspace();
+	const intentWorkspaceId = pendingIntent?.workspaceId;
+	if (
+		isBoundToAnotherWorkspace() ||
+		(pendingIntent?.type === "session.created" &&
+			intentWorkspaceId !== undefined &&
+			intentWorkspaceId !== workspaceId)
+	) {
+		throw new SessionLogError(
+			"session_operation_conflict",
+			sessionId,
+			"Session creation belongs to another Workspace.",
+			{
+				offset: pendingIntent?.expectedOffset ?? 0,
+				operationId,
+				sequence: 1,
+			}
+		);
+	}
+	if (
+		(hasPublishedLog || pendingIntent?.type === "session.created") &&
+		!boundToWorkspace &&
+		intentWorkspaceId !== workspaceId
+	) {
+		throw new SessionLogError(
+			"session_operation_conflict",
+			sessionId,
+			"Cannot verify Workspace ownership of this published Session creation.",
+			{
+				offset: pendingIntent?.expectedOffset ?? 0,
+				operationId,
+				sequence: 1,
+			}
+		);
+	}
+	return boundToWorkspace;
+};
+
 const createLogDirectory = async (
 	logRoot: string,
 	sessionId: SessionId,
 	creation: SessionCreation,
-	fileIo: SessionLogFileIo
+	fileIo: SessionLogFileIo,
+	workspaceId: WorkspaceId,
+	isBoundToWorkspace: () => boolean,
+	isBoundToAnotherWorkspace: () => boolean,
+	bindSessionToWorkspace: () => void
 ): Promise<CommittedLogEntry> => {
 	const safeId = validSessionId(sessionId);
 	const operationId = `create-${safeId}`;
@@ -1088,11 +1457,43 @@ const createLogDirectory = async (
 	}
 	const targetDirectory = path.join(canonicalRoot, safeId);
 	const targetPath = path.join(targetDirectory, "session.jsonl");
-	const createdAt = creation.createdAt.toISOString();
+	const pendingIntent = await readSessionWriteIntent(
+		logRoot,
+		sessionId,
+		fileIo
+	);
+	const existingLog = await readExistingSessionLog(targetPath, sessionId);
+	const boundToWorkspace = assertSessionCreationOwnership(
+		sessionId,
+		operationId,
+		workspaceId,
+		pendingIntent,
+		existingLog !== undefined,
+		isBoundToWorkspace,
+		isBoundToAnotherWorkspace
+	);
+	const existingCreation = existingLog?.state.entries.find(
+		({ envelope }) =>
+			envelope.operationId === operationId &&
+			envelope.type === "session.created"
+	)?.envelope.payload;
+	const { createdAt, lastMessageAt } = sessionCreationTimestamps(
+		creation,
+		pendingIntent,
+		existingCreation,
+		operationId
+	);
+	assertCreationIntentTimestampMatches(
+		creation,
+		pendingIntent,
+		existingCreation,
+		operationId,
+		sessionId
+	);
 	const payload = {
 		createdAt,
 		editMode: creation.editMode,
-		lastMessageAt: creation.lastMessageAt?.toISOString() ?? null,
+		lastMessageAt,
 		model: creation.model,
 		pinned: creation.pinned,
 		thinkingLevel: creation.thinkingLevel,
@@ -1104,21 +1505,25 @@ const createLogDirectory = async (
 		payload,
 		type: "session.created",
 	};
-	const creationIntent: SessionWriteIntent = {
+	const creationIntent: SessionWriteIntent & Readonly<{ timestamp: string }> = {
 		expectedOffset: 0,
 		operationDigest: creationDigest(operation.payload),
 		operationId,
 		sequence: 1,
 		sessionId,
+		timestamp: createdAt,
 		type: "session.created",
+		workspaceId,
 	};
-	const pendingIntent = await readSessionWriteIntent(
-		logRoot,
-		sessionId,
-		fileIo
-	);
 	if (pendingIntent !== undefined) {
-		assertSameSessionWriteIntent(pendingIntent, creationIntent, sessionId);
+		assertSameSessionWriteIntent(
+			pendingIntent,
+			creationIntent,
+			sessionId,
+			pendingIntent.type === "session.created" &&
+				pendingIntent.workspaceId === undefined &&
+				boundToWorkspace
+		);
 	}
 	const withDurableReceipt = async (
 		createdNew: boolean,
@@ -1149,24 +1554,35 @@ const createLogDirectory = async (
 		}
 	};
 
-	try {
-		const existing = await readLog(targetPath, sessionId);
+	if (existingLog !== undefined) {
 		const previous = findCreationOperation(
-			existing.state,
+			existingLog.state,
 			operation,
 			sessionId
 		);
 		if (previous !== undefined) {
 			await syncAndVerifyLogPrefix(
 				targetPath,
-				existing.bytes,
+				existingLog.bytes,
 				sessionId,
 				fileIo
 			);
+			await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
+				assertSessionCreationOwnership(
+					sessionId,
+					operationId,
+					workspaceId,
+					pendingIntent,
+					true,
+					isBoundToWorkspace,
+					isBoundToAnotherWorkspace
+				);
+				bindSessionToWorkspace();
+			});
 			return await withDurableReceipt(
 				false,
 				previous,
-				existing.state,
+				existingLog.state,
 				pendingIntent
 			);
 		}
@@ -1175,10 +1591,6 @@ const createLogDirectory = async (
 			sessionId,
 			"Published Session log is missing its creation event."
 		);
-	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw error;
-		}
 	}
 
 	const header = createSessionLogHeader(sessionId, randomUUIDv7(), createdAt);
@@ -1203,14 +1615,23 @@ const createLogDirectory = async (
 		bytes,
 		fileIo
 	);
-	const intent = pendingIntent ?? creationIntent;
+	const intent: SessionWriteIntent & Readonly<{ timestamp: string }> =
+		pendingIntent === undefined
+			? creationIntent
+			: {
+					...pendingIntent,
+					timestamp: pendingIntent.timestamp ?? creationIntent.timestamp,
+				};
 	let published = false;
 	try {
 		await writeSessionWriteIntent(logRoot, intent, fileIo);
-		await fs.rename(staged.directory, targetDirectory);
-		published = true;
-		await syncDirectory(staged.root);
-		await syncDirectory(canonicalRoot);
+		await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
+			await fs.rename(staged.directory, targetDirectory);
+			published = true;
+			await syncDirectory(staged.root, fileIo);
+			await syncDirectory(canonicalRoot, fileIo);
+			bindSessionToWorkspace();
+		});
 		const { bytes: publishedBytes, state } = await readLog(
 			targetPath,
 			sessionId
@@ -1287,6 +1708,7 @@ const initialCreation = (
 	createdAt: Date
 ): SessionCreation => ({
 	createdAt,
+	createdAtIsExplicit: input.createdAt !== undefined,
 	editMode: "hashline",
 	lastMessageAt: null,
 	model: input.model,
@@ -1308,9 +1730,11 @@ const toReceipt = (
 
 const projectionMatchesState = (
 	cursor: SessionProjectionCursor | undefined,
-	state: SessionLogState
+	state: SessionLogState,
+	generation: number
 ): boolean =>
 	cursor !== undefined &&
+	cursor.generation === generation &&
 	cursor.logId === state.logId &&
 	cursor.nextSequence === state.nextSequence &&
 	cursor.nextByteOffset === state.nextOffset &&
@@ -1377,8 +1801,10 @@ const compactionForAppend = (
 			: (existingPayload.summarizationUsage as
 					| SessionCompaction["summarizationUsage"]
 					| undefined));
+	const { externalizationLease: _externalizationLease, ...compactionInput } =
+		input;
 	const compaction: SessionCompaction = {
-		...input,
+		...compactionInput,
 		completedAt,
 		createdAt,
 		firstKeptAssistantPartIndex,
@@ -1413,14 +1839,90 @@ const compactionForAppend = (
 	};
 };
 
+type SessionSubmissionRecordMatch = Readonly<{
+	entry: SessionLogEntry;
+	message: SessionRecord["messages"][number];
+	recordId: SessionRecord["id"];
+}>;
+
+const recordFromSessionLogEntry = (
+	entry: SessionLogEntry
+): SessionRecord | undefined => {
+	if (entry.envelope.type === "record.committed") {
+		return entry.envelope.payload.record as SessionRecord;
+	}
+	if (entry.envelope.type === "session.created") {
+		return entry.envelope.payload.initialRecord as SessionRecord | undefined;
+	}
+};
+
+const findSessionSubmissionRecord = (
+	entries: readonly SessionLogEntry[],
+	sessionId: SessionId,
+	submissionId: SubmissionId
+): SessionSubmissionRecordMatch | undefined => {
+	const matches = entries.flatMap((entry) => {
+		const record = recordFromSessionLogEntry(entry);
+		if (record === undefined) {
+			return [];
+		}
+		const message = record.messages.find(
+			(candidate) =>
+				candidate.role === "user" &&
+				candidate.metadata?.submissionId === submissionId
+		);
+		return message === undefined
+			? []
+			: [{ entry, message, recordId: record.id }];
+	});
+	if (matches.length > 1) {
+		throw new SessionLogError(
+			"session_log_corrupt",
+			sessionId,
+			"Session Submission identity is committed more than once."
+		);
+	}
+	return matches[0];
+};
+
 export const createSessionJsonlStore = (
 	projectionStore: DrizzleSessionStore,
 	logRoot: string,
 	fileIo: SessionLogFileIo = {}
 ): SessionStore => {
 	const projection = projectionStore.jsonlProjection;
+	const pendingCreationAttachmentLeases = new Map<
+		SessionId,
+		AttachmentExternalizationLease
+	>();
+	const pendingAttachmentLeases = new Map<
+		SessionId,
+		Set<{
+			operationId: string;
+			lease: AttachmentExternalizationLease;
+		}>
+	>();
 	const heldWriterKeys = new Set<string>();
 	const writerOperationQueue = createKeyedSerialQueue();
+
+	const withAppendQueues = async <Result>(
+		sessionIds: readonly SessionId[],
+		operation: () => Promise<Result>
+	): Promise<Result> => {
+		const keys = await Promise.all(
+			[...new Set(sessionIds)]
+				.sort()
+				.map(async (sessionId) => await lockKey(logRoot, sessionId))
+		);
+		const acquire = async (index: number): Promise<Result> => {
+			const key = keys[index];
+			if (key === undefined) {
+				return await operation();
+			}
+			return await appendQueue.run(key, async () => await acquire(index + 1));
+		};
+		return acquire(0);
+	};
 
 	const deletedMarkerPath = async (sessionId: SessionId): Promise<string> =>
 		path.join(
@@ -1452,6 +1954,18 @@ export const createSessionJsonlStore = (
 		}
 	};
 
+	const assertProjectionReady = (sessionId: SessionId): number => {
+		const maintenance = projection.getMaintenanceState();
+		if (maintenance.status !== "ready") {
+			throw new SessionLogError(
+				"session_projection_blocked",
+				sessionId,
+				"Session projection rebuild is incomplete; retry `wincode sessions rebuild` before opening Sessions."
+			);
+		}
+		return maintenance.generation;
+	};
+
 	const assertCursorDoesNotExceedLog = (
 		sessionId: SessionId,
 		cursor: SessionProjectionCursor | undefined,
@@ -1470,7 +1984,14 @@ export const createSessionJsonlStore = (
 			throw new SessionLogError(
 				"session_log_corrupt",
 				sessionId,
-				"SQLite projection cursor does not match the committed Session log."
+				"SQLite projection cursor does not match the committed Session log.",
+				{
+					...omitUndefined({
+						offset: cursor?.nextByteOffset,
+						sequence:
+							cursor === undefined ? undefined : cursor.nextSequence - 1,
+					}),
+				}
 			);
 		}
 	};
@@ -1497,15 +2018,25 @@ export const createSessionJsonlStore = (
 	): SessionProjectionCursor | undefined => {
 		let expectedCursor = cursor;
 		for (;;) {
+			const generation = projection.getMaintenanceState().generation;
+			const replace =
+				missingSession ||
+				expectedCursor === undefined ||
+				expectedCursor.generation !== generation;
 			const projectedSequence = expectedCursor?.nextSequence ?? 0;
-			const pending =
-				missingSession || expectedCursor === undefined
-					? state.entries
-					: state.entries.filter(
-							({ envelope }) => envelope.sequence >= projectedSequence
-						);
+			const pending = replace
+				? state.entries
+				: state.entries.filter(
+						({ envelope }) => envelope.sequence >= projectedSequence
+					);
 			try {
-				projection.projectEntries(sessionId, pending, state, expectedCursor);
+				projection.projectEntries(
+					sessionId,
+					pending,
+					state,
+					expectedCursor,
+					replace ? "replace" : "append"
+				);
 			} catch {
 				const latestCursor = projection.getCursor(sessionId);
 				if (sessionProjectionCursorsEqual(latestCursor, expectedCursor)) {
@@ -1520,7 +2051,13 @@ export const createSessionJsonlStore = (
 			}
 			const latestCursor = projection.getCursor(sessionId);
 			assertCursorDoesNotExceedLog(sessionId, latestCursor, state);
-			if (projectionMatchesState(latestCursor, state)) {
+			if (
+				projectionMatchesState(
+					latestCursor,
+					state,
+					projection.getMaintenanceState().generation
+				)
+			) {
 				return latestCursor;
 			}
 			expectedCursor = latestCursor;
@@ -1534,6 +2071,7 @@ export const createSessionJsonlStore = (
 	): void => {
 		if (
 			cursor === undefined ||
+			cursor.generation !== projection.getMaintenanceState().generation ||
 			cursor.nextSequence !== state.nextSequence ||
 			cursor.nextByteOffset !== state.nextOffset ||
 			cursor.lastHash !== state.lastHash ||
@@ -1615,6 +2153,22 @@ export const createSessionJsonlStore = (
 		if (intent === undefined) {
 			return;
 		}
+		if (
+			intent.type === "session.created" &&
+			intent.workspaceId !== undefined &&
+			intent.workspaceId !== projection.workspaceId
+		) {
+			throw new SessionLogError(
+				"session_operation_conflict",
+				sessionId,
+				"Session creation belongs to another Workspace.",
+				{
+					offset: intent.expectedOffset,
+					operationId: intent.operationId,
+					sequence: intent.sequence,
+				}
+			);
+		}
 		if (intent.type === "session.deleted") {
 			throw new SessionLogError(
 				"session_log_write_indeterminate",
@@ -1667,33 +2221,310 @@ export const createSessionJsonlStore = (
 		}
 	};
 
+	const releasePendingCreationAttachmentLease = async (
+		sessionId: SessionId,
+		lease: AttachmentExternalizationLease
+	): Promise<void> => {
+		try {
+			await lease.release();
+		} catch {
+			pendingCreationAttachmentLeases.set(sessionId, lease);
+			return;
+		}
+		if (pendingCreationAttachmentLeases.get(sessionId) === lease) {
+			pendingCreationAttachmentLeases.delete(sessionId);
+		}
+	};
+
+	const releaseReconciledAttachmentLeases = async (
+		sessionId: SessionId,
+		state: SessionLogState
+	): Promise<void> => {
+		const leases = pendingAttachmentLeases.get(sessionId);
+		if (leases === undefined) {
+			return;
+		}
+		const pendingIntent = await readSessionWriteIntent(
+			logRoot,
+			sessionId,
+			fileIo
+		);
+		const committedOperationIds = new Set(
+			state.entries.map(({ envelope }) => envelope.operationId)
+		);
+		for (const pending of leases) {
+			if (
+				!committedOperationIds.has(pending.operationId) &&
+				pendingIntent !== undefined
+			) {
+				continue;
+			}
+			try {
+				await pending.lease.release();
+			} catch {
+				continue;
+			}
+			leases.delete(pending);
+		}
+		if (leases.size === 0) {
+			pendingAttachmentLeases.delete(sessionId);
+		}
+	};
+
+	const logChangedSinceProjectionRead = async (
+		logPath: string,
+		capturedBytes: Uint8Array | undefined
+	): Promise<boolean> => {
+		if (capturedBytes === undefined) {
+			return false;
+		}
+		try {
+			return !equalBytes(capturedBytes, await Bun.file(logPath).bytes());
+		} catch {
+			return false;
+		}
+	};
+
+	const reconcileProjectionSessionSidecars = async (
+		sessionId: SessionId,
+		logPath: string,
+		bytes: Uint8Array,
+		state: SessionLogState
+	): Promise<void> => {
+		await reconcileVisibleWriteIntent(sessionId, logPath, bytes, state);
+		await releaseReconciledAttachmentLeases(sessionId, state);
+		const pendingCreationLease = pendingCreationAttachmentLeases.get(sessionId);
+		if (
+			pendingCreationLease !== undefined &&
+			state.entries.some(
+				({ envelope }) =>
+					envelope.operationId === `create-${sessionId}` &&
+					envelope.type === "session.created"
+			)
+		) {
+			await releasePendingCreationAttachmentLease(
+				sessionId,
+				pendingCreationLease
+			);
+		}
+	};
+
+	const shouldRetryProjectionRead = async (
+		error: unknown,
+		logPath: string,
+		capturedBytes: Uint8Array | undefined
+	): Promise<boolean> =>
+		error instanceof SessionLogError &&
+		(error.code === "session_log_corrupt" ||
+			error.code === "session_projection_blocked") &&
+		projection.getMaintenanceState().status === "ready" &&
+		(await logChangedSinceProjectionRead(logPath, capturedBytes));
+
 	const ensureProjected = async (
 		sessionId: SessionId
 	): Promise<SessionLogState> => {
+		const generation = assertProjectionReady(sessionId);
 		await checkDeletedMarker(sessionId);
-		if (projection.isBoundToAnotherWorkspace(sessionId)) {
-			throw new Error("Session not found");
-		}
 		const logPath = path.join(
 			await fs.realpath(logRoot),
 			validSessionId(sessionId),
 			"session.jsonl"
 		);
-		const { bytes, state } = await readLogForProjection(logPath, sessionId);
-		await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
-		await reconcileVisibleWriteIntent(sessionId, logPath, bytes, state);
-		let cursor = projection.getCursor(sessionId);
-		assertCursorDoesNotExceedLog(sessionId, cursor, state);
-		const missingSession = await projectionSessionIsMissing(sessionId);
-		if (
-			missingSession ||
-			cursor === undefined ||
-			cursor.nextSequence < state.nextSequence
-		) {
-			cursor = catchUpProjection(sessionId, state, cursor, missingSession);
+		if (!projection.isBoundToWorkspace(sessionId)) {
+			if (projection.isBoundToAnotherWorkspace(sessionId)) {
+				throw new Error("Session not found");
+			}
+			await fs.stat(logPath);
+			throw new Error("Session not found");
 		}
-		assertProjectionAtLogHead(sessionId, cursor, state);
-		return state;
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			let capturedBytes: Uint8Array | undefined;
+			try {
+				const snapshot = await readLogForProjection(logPath, sessionId);
+				capturedBytes = snapshot.bytes;
+				const { state } = snapshot;
+				await syncAndVerifyLogPrefix(logPath, capturedBytes, sessionId, fileIo);
+				await reconcileProjectionSessionSidecars(
+					sessionId,
+					logPath,
+					capturedBytes,
+					state
+				);
+				let cursor = projection.getCursor(sessionId);
+				assertCursorDoesNotExceedLog(sessionId, cursor, state);
+				const missingSession = await projectionSessionIsMissing(sessionId);
+				if (
+					missingSession ||
+					cursor === undefined ||
+					cursor.generation !== generation ||
+					cursor.nextSequence < state.nextSequence
+				) {
+					cursor = catchUpProjection(sessionId, state, cursor, missingSession);
+				}
+				assertProjectionAtLogHead(sessionId, cursor, state);
+				return state;
+			} catch (error) {
+				if (!(await shouldRetryProjectionRead(error, logPath, capturedBytes))) {
+					throw error;
+				}
+			}
+		}
+		throw new SessionLogError(
+			"session_projection_blocked",
+			sessionId,
+			"Session log kept changing while its projection was being refreshed."
+		);
+	};
+
+	const pendingAppendTimestamps = (
+		state: SessionLogState,
+		intent: SessionWriteIntent,
+		sessionId: SessionId
+	):
+		| Readonly<{ createdAt?: string; envelopeTimestamp?: string }>
+		| undefined => {
+		const entry = state.entries.find(
+			({ envelope }) => envelope.sequence === intent.sequence
+		);
+		if (entry === undefined) {
+			return;
+		}
+		assertSameSessionWriteIntent(
+			intent,
+			{
+				operationDigest: sessionLogOperationDigest(
+					entry.envelope.type,
+					entry.envelope.payload
+				),
+				operationId: entry.envelope.operationId,
+				type: entry.envelope.type,
+			},
+			sessionId
+		);
+		if (intent.type !== "compaction.committed") {
+			return;
+		}
+		const createdAt = entry.envelope.payload.createdAt;
+		const envelopeTimestamp = entry.envelope.timestamp;
+		if (
+			!(
+				isCanonicalTimestamp(createdAt) &&
+				isCanonicalTimestamp(envelopeTimestamp)
+			)
+		) {
+			throw new SessionLogError(
+				"session_log_write_indeterminate",
+				sessionId,
+				"Pending compaction timestamps cannot be recovered safely.",
+				{
+					offset: intent.expectedOffset,
+					operationId: intent.operationId,
+					sequence: intent.sequence,
+				}
+			);
+		}
+		return { createdAt, envelopeTimestamp };
+	};
+
+	const stateForPendingAppend = async (
+		sessionId: SessionId,
+		intent: SessionWriteIntent
+	): Promise<
+		Readonly<{
+			createdAt?: string;
+			envelopeTimestamp?: string;
+			state: SessionLogState;
+		}>
+	> => {
+		const logPath = path.join(
+			await fs.realpath(logRoot),
+			validSessionId(sessionId),
+			"session.jsonl"
+		);
+		const bytes = await Bun.file(logPath).bytes();
+		try {
+			const state = decodeSessionLog(sessionId, bytes);
+			return {
+				...pendingAppendTimestamps(state, intent, sessionId),
+				state,
+			};
+		} catch (error) {
+			if (
+				!(error instanceof SessionLogError) ||
+				error.code !== "session_log_truncated"
+			) {
+				throw error;
+			}
+		}
+		if (bytes.byteLength < intent.expectedOffset) {
+			throw new SessionLogError(
+				"session_log_write_indeterminate",
+				sessionId,
+				"Session log is shorter than its pending write boundary.",
+				{
+					offset: intent.expectedOffset,
+					operationId: intent.operationId,
+					sequence: intent.sequence,
+				}
+			);
+		}
+		const state = decodeSessionLog(
+			sessionId,
+			bytes.subarray(0, intent.expectedOffset)
+		);
+		if (
+			state.nextOffset !== intent.expectedOffset ||
+			state.nextSequence !== intent.sequence
+		) {
+			throw new SessionLogError(
+				"session_log_write_indeterminate",
+				sessionId,
+				"Session log prefix does not match its pending write boundary.",
+				{
+					offset: intent.expectedOffset,
+					operationId: intent.operationId,
+					sequence: intent.sequence,
+				}
+			);
+		}
+		let timestamps:
+			| Readonly<{
+					createdAt?: string;
+					envelopeTimestamp?: string;
+			  }>
+			| undefined;
+		const unframedBytes = new Uint8Array(bytes.byteLength + 1);
+		unframedBytes.set(bytes);
+		unframedBytes[bytes.byteLength] = 0x0a;
+		try {
+			const candidate = decodeSessionLog(sessionId, unframedBytes);
+			timestamps = pendingAppendTimestamps(candidate, intent, sessionId);
+		} catch (error) {
+			if (
+				error instanceof SessionLogError &&
+				error.code === "session_operation_conflict"
+			) {
+				throw error;
+			}
+		}
+		return { ...timestamps, state };
+	};
+
+	const trackIndeterminateAttachmentLease = async (
+		sessionId: SessionId,
+		operationId: string,
+		lease: AttachmentExternalizationLease
+	): Promise<void> => {
+		const leases = pendingAttachmentLeases.get(sessionId) ?? new Set();
+		leases.add({ operationId, lease });
+		pendingAttachmentLeases.set(sessionId, leases);
+		// A concurrent authoritative read may have reconciled before this result
+		// was registered. Re-read once so a settled operation cannot strand a pin.
+		try {
+			await ensureProjected(sessionId);
+		} catch {
+			// The retained lease remains available to a later authoritative read.
+		}
 	};
 
 	const ensureReceipt = async (
@@ -1722,7 +2553,13 @@ export const createSessionJsonlStore = (
 		try {
 			projection.projectEntries(sessionId, [entry], state, cursorBefore);
 		} catch (error) {
-			if (projectionMatchesState(projection.getCursor(sessionId), state)) {
+			if (
+				projectionMatchesState(
+					projection.getCursor(sessionId),
+					state,
+					projection.getMaintenanceState().generation
+				)
+			) {
 				return;
 			}
 			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
@@ -1821,6 +2658,89 @@ export const createSessionJsonlStore = (
 		}
 	};
 
+	const repairPendingAppendTail = async (
+		sessionId: SessionId,
+		logPath: string,
+		intent: SessionWriteIntent
+	): Promise<void> => {
+		const bytes = await Bun.file(logPath).bytes();
+		try {
+			await quarantinePartialLogAppend(
+				logRoot,
+				logPath,
+				sessionId,
+				intent,
+				bytes,
+				fileIo
+			);
+		} catch (repairError) {
+			if (
+				repairError instanceof SessionLogError &&
+				(repairError.code === "session_log_corrupt" ||
+					repairError.code === "session_log_write_indeterminate")
+			) {
+				throw repairError;
+			}
+			throw indeterminateLogWriteError(sessionId, intent, repairError);
+		}
+	};
+
+	const reconcileCommittedPendingAppend = async (
+		sessionId: SessionId,
+		logPath: string,
+		bytes: Uint8Array,
+		intent: SessionWriteIntent,
+		entry: SessionLogEntry
+	): Promise<SessionLogEntry> => {
+		if (
+			entry.envelope.sequence !== intent.sequence ||
+			entry.startOffset !== intent.expectedOffset
+		) {
+			throw new SessionLogError(
+				"session_log_write_indeterminate",
+				sessionId,
+				"Committed Session entry does not match its pending write boundary.",
+				{
+					offset: intent.expectedOffset,
+					operationId: intent.operationId,
+					sequence: intent.sequence,
+				}
+			);
+		}
+		await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
+		try {
+			await ensureReceipt(sessionId, entry);
+			await clearSessionWriteIntent(logRoot, intent, fileIo);
+		} catch (error) {
+			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
+		}
+		return entry;
+	};
+
+	const assertPendingAppendAtLogHead = (
+		sessionId: SessionId,
+		intent: SessionWriteIntent,
+		bytes: Uint8Array,
+		state: SessionLogState
+	): void => {
+		if (
+			state.nextSequence === intent.sequence &&
+			bytes.byteLength === intent.expectedOffset
+		) {
+			return;
+		}
+		throw new SessionLogError(
+			"session_log_write_indeterminate",
+			sessionId,
+			"Session log does not match the pending write boundary.",
+			{
+				offset: intent.expectedOffset,
+				operationId: intent.operationId,
+				sequence: intent.sequence,
+			}
+		);
+	};
+
 	const reconcilePendingAppend = async (
 		sessionId: SessionId,
 		logPath: string,
@@ -1846,62 +2766,21 @@ export const createSessionJsonlStore = (
 			) {
 				throw error;
 			}
-			const bytes = await fs.readFile(logPath);
-			await quarantinePartialLogAppend(
-				logRoot,
-				logPath,
-				sessionId,
-				intent,
-				bytes,
-				fileIo
-			);
+			await repairPendingAppendTail(sessionId, logPath, intent);
 			return;
 		}
 		const { bytes, state } = loaded;
 		const previous = findOperation(state, write, sessionId);
 		if (previous !== undefined) {
-			if (
-				previous.envelope.sequence !== intent.sequence ||
-				previous.startOffset !== intent.expectedOffset
-			) {
-				throw new SessionLogError(
-					"session_log_write_indeterminate",
-					sessionId,
-					"Committed Session entry does not match its pending write boundary.",
-					{
-						offset: intent.expectedOffset,
-						operationId: intent.operationId,
-						sequence: intent.sequence,
-					}
-				);
-			}
-			await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
-			try {
-				await ensureReceipt(sessionId, previous);
-				await clearSessionWriteIntent(logRoot, intent, fileIo);
-			} catch (error) {
-				throw new SessionWriteOutcomeError(
-					toReceipt(previous, "blocked"),
-					error
-				);
-			}
-			return previous;
-		}
-		if (
-			state.nextSequence !== intent.sequence ||
-			bytes.byteLength !== intent.expectedOffset
-		) {
-			throw new SessionLogError(
-				"session_log_write_indeterminate",
+			return reconcileCommittedPendingAppend(
 				sessionId,
-				"Session log does not match the pending write boundary.",
-				{
-					offset: intent.expectedOffset,
-					operationId: intent.operationId,
-					sequence: intent.sequence,
-				}
+				logPath,
+				bytes,
+				intent,
+				previous
 			);
 		}
+		assertPendingAppendAtLogHead(sessionId, intent, bytes, state);
 		await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
 	};
 
@@ -1935,7 +2814,14 @@ export const createSessionJsonlStore = (
 		try {
 			return await ensureProjected(sessionId);
 		} catch (error) {
-			if (pendingIntent !== undefined) {
+			if (
+				pendingIntent !== undefined ||
+				!(
+					isCommittedProjectionBlocked(error) ||
+					(error instanceof SessionLogError &&
+						error.code === "session_projection_blocked")
+				)
+			) {
 				throw error;
 			}
 			let state: SessionLogState;
@@ -1945,13 +2831,15 @@ export const createSessionJsonlStore = (
 				throw error;
 			}
 			const committed = await committedOperation(sessionId, write, state);
-			if (committed === undefined) {
-				throw error;
+			if (committed !== undefined) {
+				throw new SessionWriteOutcomeError(
+					toReceipt(committed.entry, "blocked"),
+					error
+				);
 			}
-			throw new SessionWriteOutcomeError(
-				toReceipt(committed.entry, "blocked"),
-				error
-			);
+			// JSONL is authoritative; a blocked read projection must not discard a
+			// separate completed side effect that still needs its durable checkpoint.
+			return state;
 		}
 	};
 
@@ -1980,14 +2868,28 @@ export const createSessionJsonlStore = (
 		cursorBefore: SessionProjectionCursor | undefined,
 		pendingIntent: SessionWriteIntent | undefined
 	): Promise<CommittedLogEntry> => {
-		const intent: SessionWriteIntent = pendingIntent ?? {
-			expectedOffset: bytes.byteLength,
-			operationDigest: sessionLogOperationDigest(write.type, write.payload),
-			operationId: write.operationId,
-			sequence: state.nextSequence,
-			sessionId,
-			type: write.type,
-		};
+		const payloadTimestamp = Reflect.get(write.payload, "createdAt");
+		const timestamp =
+			pendingIntent?.timestamp ??
+			write.envelopeTimestamp ??
+			(isCanonicalTimestamp(payloadTimestamp)
+				? payloadTimestamp
+				: new Date().toISOString());
+		const intent =
+			pendingIntent === undefined
+				? {
+						expectedOffset: bytes.byteLength,
+						operationDigest: sessionLogOperationDigest(
+							write.type,
+							write.payload
+						),
+						operationId: write.operationId,
+						sequence: state.nextSequence,
+						sessionId,
+						timestamp,
+						type: write.type,
+					}
+				: { ...pendingIntent, timestamp };
 		if (
 			intent.expectedOffset !== bytes.byteLength ||
 			intent.sequence !== state.nextSequence
@@ -2009,10 +2911,10 @@ export const createSessionJsonlStore = (
 			previousHash: state.lastHash,
 			sequence: state.nextSequence,
 			sessionId,
-			timestamp: new Date().toISOString(),
+			timestamp: intent.timestamp,
 			type: write.type,
 		});
-		if (pendingIntent === undefined) {
+		if (pendingIntent?.timestamp === undefined) {
 			await writeSessionWriteIntent(logRoot, intent, fileIo);
 		}
 		await writeAppendEntry(
@@ -2127,6 +3029,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		options?: SessionWriterLockOptions
 	): Promise<SessionWriterLock> => {
+		assertProjectionReady(sessionId);
 		const writer = await acquireSessionWriterLock(logRoot, sessionId, options);
 		const key = await lockKey(logRoot, sessionId);
 		heldWriterKeys.add(key);
@@ -2191,12 +3094,17 @@ export const createSessionJsonlStore = (
 		try {
 			const createdAt = input.createdAt ?? new Date();
 			return await withTemporaryWriter(sessionId, async () => {
+				assertProjectionReady(sessionId);
 				await assertSessionWritable(sessionId);
 				const created = await createLogDirectory(
 					logRoot,
 					sessionId,
 					initialCreation({ ...input, id: sessionId }, createdAt),
-					fileIo
+					fileIo,
+					projection.workspaceId,
+					() => projection.isBoundToWorkspace(sessionId),
+					() => projection.isBoundToAnotherWorkspace(sessionId),
+					() => projection.bindSessionToWorkspace(sessionId)
 				);
 				return {
 					created: created.createdNew,
@@ -2213,63 +3121,134 @@ export const createSessionJsonlStore = (
 		}
 	};
 
-	const createSession = async (input: CreateSessionInput) => {
+	const createSessionWithExternalizedMessage = async (
+		input: CreateSessionInput
+	) => {
 		const sessionId = input.id ?? toSessionId(randomUUIDv7());
 		const operationId = `create-${sessionId}`;
+		let message = input.message;
 		try {
-			const createdAt = input.createdAt ?? new Date();
-			const initialRecord =
-				input.initialRecord ?? initialRecordFor(input, sessionId);
-			const creation: SessionCreation = {
-				createdAt,
-				editMode: "hashline",
-				initialRecord,
-				lastMessageAt: createdAt,
-				model: input.model,
-				pinned: false,
-				thinkingLevel: input.thinkingLevel,
-				title: titleFor(input),
-			};
 			return await withTemporaryWriter(sessionId, async () => {
+				assertProjectionReady(sessionId);
 				await assertSessionWritable(sessionId);
-				const created = await createLogDirectory(
-					logRoot,
-					sessionId,
-					creation,
-					fileIo
-				);
-				return {
-					created: created.createdNew,
-					id: sessionId,
-					writeOutcome: projectCreation(created),
+				let lease = pendingCreationAttachmentLeases.get(sessionId);
+				if (
+					lease === undefined &&
+					projectionStore.attachmentStore !== undefined
+				) {
+					lease =
+						await projectionStore.attachmentStore.externalizeMessagesWithLease(
+							[input.message],
+							undefined,
+							{ rejectInvalid: true }
+						);
+				}
+				message = lease?.messages[0] ?? input.message;
+				const externalization = lease ?? {
+					messages: [message],
+					release: async () => undefined,
 				};
+				const externalizedInput = { ...input, message };
+				try {
+					const createdAt = input.createdAt ?? new Date();
+					const initialRecord =
+						input.initialRecord ??
+						initialRecordFor(externalizedInput, sessionId);
+					const creation: SessionCreation = {
+						createdAt,
+						createdAtIsExplicit: input.createdAt !== undefined,
+						editMode: "hashline",
+						initialRecord,
+						lastMessageAt: createdAt,
+						model: input.model,
+						pinned: false,
+						thinkingLevel: input.thinkingLevel,
+						title: titleFor(externalizedInput),
+					};
+					const created = await createLogDirectory(
+						logRoot,
+						sessionId,
+						creation,
+						fileIo,
+						projection.workspaceId,
+						() => projection.isBoundToWorkspace(sessionId),
+						() => projection.isBoundToAnotherWorkspace(sessionId),
+						() => projection.bindSessionToWorkspace(sessionId)
+					);
+					const writeOutcome = projectCreation(created);
+					if (writeOutcome.kind === "indeterminate") {
+						pendingCreationAttachmentLeases.set(sessionId, externalization);
+					} else {
+						await releasePendingCreationAttachmentLease(
+							sessionId,
+							externalization
+						);
+					}
+					return {
+						created: created.createdNew,
+						id: sessionId,
+						message,
+						writeOutcome,
+					};
+				} catch (error) {
+					const writeOutcome = sessionWriteOutcomeFromError(operationId, error);
+					if (writeOutcome.kind === "indeterminate") {
+						pendingCreationAttachmentLeases.set(sessionId, externalization);
+					} else {
+						await releasePendingCreationAttachmentLease(
+							sessionId,
+							externalization
+						);
+					}
+					return { created: false, id: sessionId, message, writeOutcome };
+				}
 			});
 		} catch (error) {
 			return {
 				created: false,
 				id: sessionId,
+				message,
 				writeOutcome: sessionWriteOutcomeFromError(operationId, error),
 			};
 		}
+	};
+	const createSession = async (input: CreateSessionInput) => {
+		const { message: _message, ...created } =
+			await createSessionWithExternalizedMessage(input);
+		return created;
 	};
 
 	const commitSessionRecord = async (
 		input: CommitSessionRecordInput
 	): Promise<SessionWriteOutcome> => {
 		const operationId = `record-${input.record.id}`;
-		return withWriteOutcome(input.sessionId, operationId, () =>
-			commitWrite(input.sessionId, {
-				operationId,
-				payload: {
-					record: input.record,
-					...omitUndefined({
-						sessionModel: input.sessionModel,
-						sessionThinkingLevel: input.sessionThinkingLevel,
-					}),
-				},
-				type: "record.committed",
-			})
+		const writeOutcome = await withWriteOutcome(
+			input.sessionId,
+			operationId,
+			() =>
+				commitWrite(input.sessionId, {
+					operationId,
+					payload: {
+						record: input.record,
+						...omitUndefined({
+							sessionModel: input.sessionModel,
+							sessionThinkingLevel: input.sessionThinkingLevel,
+						}),
+					},
+					type: "record.committed",
+				})
 		);
+		if (
+			writeOutcome.kind === "indeterminate" &&
+			input.externalizationLease !== undefined
+		) {
+			await trackIndeterminateAttachmentLease(
+				input.sessionId,
+				operationId,
+				input.externalizationLease
+			);
+		}
+		return writeOutcome;
 	};
 	const updateSessionSubmission = async (
 		input: UpdateSessionSubmissionInput
@@ -2317,30 +3296,119 @@ export const createSessionJsonlStore = (
 			})
 		);
 	};
+	const existingUsageCreatedAt = async (
+		input: CreateSessionUsageEntryInput,
+		operationId: string
+	): Promise<Date | undefined> => {
+		const logPath = path.join(
+			path.resolve(logRoot),
+			validSessionId(input.sessionId),
+			"session.jsonl"
+		);
+		const { state } = await readLog(logPath, input.sessionId);
+		const previous = state.entries.find(
+			({ envelope }) =>
+				envelope.operationId === operationId &&
+				envelope.type === "usage.committed"
+		);
+		if (previous === undefined) {
+			return;
+		}
+		const { createdAt, ...previousPayload } = previous.envelope.payload;
+		const previousSemanticPayload = {
+			compactionId: previousPayload.compactionId ?? null,
+			costUsd: previousPayload.costUsd ?? null,
+			id: previousPayload.id,
+			kind: previousPayload.kind,
+			model: previousPayload.model,
+			usage: previousPayload.usage,
+		};
+		const requestedSemanticPayload = {
+			compactionId: input.compactionId ?? null,
+			costUsd: input.costUsd,
+			id: input.id,
+			kind: input.kind,
+			model: input.model,
+			usage: input.usage,
+		};
+		if (
+			!isCanonicalTimestamp(createdAt) ||
+			sessionLogOperationDigest("usage.committed", previousSemanticPayload) !==
+				sessionLogOperationDigest("usage.committed", requestedSemanticPayload)
+		) {
+			return;
+		}
+		return new Date(createdAt);
+	};
+	const isLegacyPendingUsageTruncation = (
+		pendingIntent: SessionWriteIntent | undefined,
+		operationId: string,
+		error: unknown
+	): boolean =>
+		pendingIntent?.operationId === operationId &&
+		pendingIntent.type === "usage.committed" &&
+		pendingIntent.timestamp === undefined &&
+		error instanceof SessionLogError &&
+		error.code === "session_log_truncated";
+	const retryableUsageCreatedAt = async (
+		input: CreateSessionUsageEntryInput,
+		operationId: string
+	): Promise<Date> => {
+		if (input.createdAt !== undefined) {
+			return input.createdAt;
+		}
+		const pendingIntent = await readSessionWriteIntent(
+			logRoot,
+			input.sessionId,
+			fileIo
+		);
+		if (
+			pendingIntent?.operationId === operationId &&
+			pendingIntent.type === "usage.committed" &&
+			pendingIntent.timestamp !== undefined
+		) {
+			return new Date(pendingIntent.timestamp);
+		}
+		try {
+			return (await existingUsageCreatedAt(input, operationId)) ?? new Date();
+		} catch (error) {
+			if (
+				isCode(error, "ENOENT") ||
+				isLegacyPendingUsageTruncation(pendingIntent, operationId, error)
+			) {
+				return new Date();
+			}
+			throw error;
+		}
+	};
+
 	const createSessionUsageEntry = async (
 		input: CreateSessionUsageEntryInput
 	): Promise<{
 		entry?: SessionUsageEntry;
 		writeOutcome: SessionWriteOutcome;
 	}> => {
-		const createdAt = input.createdAt ?? new Date();
 		const operationId = `usage-${input.id}`;
-		const payload = {
-			createdAt: createdAt.toISOString(),
-			id: input.id,
-			kind: input.kind,
-			model: input.model,
-			usage: input.usage,
-		};
 		const writeOutcome = await withWriteOutcome(
 			input.sessionId,
 			operationId,
-			() =>
-				commitWrite(input.sessionId, {
+			async () => {
+				const createdAt = await retryableUsageCreatedAt(input, operationId);
+				const payload = {
+					compactionId: input.compactionId ?? null,
+					costUsd: input.costUsd,
+					createdAt: createdAt.toISOString(),
+					id: input.id,
+					kind: input.kind,
+					model: input.model,
+					usage: input.usage,
+				};
+				return commitWrite(input.sessionId, {
 					operationId,
 					payload,
 					type: "usage.committed",
-				})
+				});
+			}
 		);
 		if (
 			writeOutcome.kind !== "committed" ||
@@ -2363,33 +3431,180 @@ export const createSessionJsonlStore = (
 			writeOutcome: { ...writeOutcome, projection: "blocked" },
 		};
 	};
+	const assertCompactionRetryTimestampRecoverable = (
+		input: AppendSessionCompactionInput,
+		operationId: string,
+		matchingIntent: SessionWriteIntent | undefined,
+		retryCreatedAt: string | undefined
+	): void => {
+		if (
+			matchingIntent === undefined ||
+			retryCreatedAt !== undefined ||
+			input.createdAt !== undefined
+		) {
+			return;
+		}
+		throw new SessionLogError(
+			"session_log_write_indeterminate",
+			input.sessionId,
+			"Legacy pending compaction has no recoverable creation timestamp.",
+			{
+				offset: matchingIntent.expectedOffset,
+				operationId,
+				sequence: matchingIntent.sequence,
+			}
+		);
+	};
+
+	const prepareCompactionRetry = async (
+		input: AppendSessionCompactionInput,
+		operationId: string,
+		pendingIntent: SessionWriteIntent | undefined
+	): Promise<
+		Readonly<{
+			envelopeTimestamp?: string;
+			retryInput: AppendSessionCompactionInput;
+			state: SessionLogState;
+		}>
+	> => {
+		const matchingIntent =
+			pendingIntent?.operationId === operationId &&
+			pendingIntent.type === "compaction.committed"
+				? pendingIntent
+				: undefined;
+		const pendingAppend =
+			matchingIntent === undefined
+				? undefined
+				: await stateForPendingAppend(input.sessionId, matchingIntent);
+		const state =
+			pendingAppend?.state ?? (await ensureProjected(input.sessionId));
+		const retryCreatedAt =
+			pendingAppend?.createdAt ?? matchingIntent?.timestamp;
+		assertCompactionRetryTimestampRecoverable(
+			input,
+			operationId,
+			matchingIntent,
+			retryCreatedAt
+		);
+		const recoveredCreatedAt =
+			retryCreatedAt === undefined ? undefined : new Date(retryCreatedAt);
+		const envelopeTimestamp =
+			matchingIntent === undefined
+				? undefined
+				: (matchingIntent.timestamp ??
+					pendingAppend?.envelopeTimestamp ??
+					input.createdAt?.toISOString());
+		const retryInput =
+			recoveredCreatedAt === undefined
+				? input
+				: {
+						...input,
+						completedAt:
+							input.completedAt ?? input.createdAt ?? recoveredCreatedAt,
+						createdAt: input.createdAt ?? recoveredCreatedAt,
+					};
+		return {
+			...omitUndefined({ envelopeTimestamp }),
+			retryInput,
+			state,
+		};
+	};
+
+	const assertPendingCompactionMatches = (
+		pendingIntent: SessionWriteIntent | undefined,
+		operationId: string,
+		payload: Readonly<Record<string, unknown>>,
+		sessionId: SessionId
+	): void => {
+		if (
+			pendingIntent?.operationId !== operationId ||
+			pendingIntent.type !== "compaction.committed"
+		) {
+			return;
+		}
+		assertSameSessionWriteIntent(
+			pendingIntent,
+			{
+				operationDigest: sessionLogOperationDigest(
+					"compaction.committed",
+					payload
+				),
+				operationId,
+				type: "compaction.committed",
+			},
+			sessionId
+		);
+	};
+
+	const assertCompactionReferencesIfNew = (
+		state: SessionLogState,
+		compaction: SessionCompaction,
+		operationId: string
+	): void => {
+		if (
+			state.entries.some(({ envelope }) => envelope.operationId === operationId)
+		) {
+			return;
+		}
+		const availableMessageIds = new Set(
+			state.entries.flatMap(
+				(entry) =>
+					recordFromSessionLogEntry(entry)?.messages.map(({ id }) => id) ?? []
+			)
+		);
+		assertCompactionMessageReferences(compaction, availableMessageIds);
+	};
+
 	const appendCompaction = async (input: AppendSessionCompactionInput) => {
 		const id: CompactionId = input.id ?? toCompactionId(randomUUIDv7());
 		const operationId = `compaction-${id}`;
-		try {
-			return await withTemporaryWriter(input.sessionId, async () => {
-				await assertSessionWritable(input.sessionId);
-				const state = await ensureProjected(input.sessionId);
-				const { compaction, payload } = compactionForAppend(
-					input,
-					id,
-					operationId,
-					state
-				);
-				const writeOutcome = await commitWrite(input.sessionId, {
-					operationId,
-					payload,
-					type: "compaction.committed",
-				});
-				return writeOutcome.kind === "committed"
-					? { compaction, writeOutcome }
-					: { writeOutcome };
+		const result = await withTemporaryWriter(input.sessionId, async () => {
+			assertProjectionReady(input.sessionId);
+			await assertSessionWritable(input.sessionId);
+			const pendingIntent = await readSessionWriteIntent(
+				logRoot,
+				input.sessionId,
+				fileIo
+			);
+			const { envelopeTimestamp, retryInput, state } =
+				await prepareCompactionRetry(input, operationId, pendingIntent);
+			const { compaction, payload } = compactionForAppend(
+				retryInput,
+				id,
+				operationId,
+				state
+			);
+			assertPendingCompactionMatches(
+				pendingIntent,
+				operationId,
+				payload,
+				input.sessionId
+			);
+			assertCompactionReferencesIfNew(state, compaction, operationId);
+			const write: SessionWrite = omitUndefined({
+				envelopeTimestamp,
+				operationId,
+				payload,
+				type: "compaction.committed",
 			});
-		} catch (error) {
-			return {
-				writeOutcome: sessionWriteOutcomeFromError(operationId, error),
-			};
+			const writeOutcome = await commitWrite(input.sessionId, write);
+			return writeOutcome.kind === "committed"
+				? { compaction, writeOutcome }
+				: { writeOutcome };
+		}).catch((error) => ({
+			writeOutcome: sessionWriteOutcomeFromError(operationId, error),
+		}));
+		if (
+			result.writeOutcome.kind === "indeterminate" &&
+			input.externalizationLease !== undefined
+		) {
+			await trackIndeterminateAttachmentLease(
+				input.sessionId,
+				operationId,
+				input.externalizationLease
+			);
 		}
+		return result;
 	};
 	const deletionWrite = async (
 		sessionId: SessionId,
@@ -2447,18 +3662,44 @@ export const createSessionJsonlStore = (
 		}
 		return { logId: state.logId, receipt: writeOutcome };
 	};
-	const finalizeDeletion = async (
+	const removeDeletedSessionLog = async (
 		sessionId: SessionId,
-		receipt: SessionWriteReceipt
-	): Promise<SessionWriteOutcome> => {
+		marker?: Readonly<{
+			logId: string;
+			receipt: SessionDeletionReceipt;
+		}>
+	): Promise<boolean> => {
 		try {
 			await ensureDirectoryDurable(logRoot);
 			const root = await fs.realpath(logRoot);
+			if (marker !== undefined) {
+				await writeDeletedMarker(
+					logRoot,
+					sessionId,
+					marker.logId,
+					marker.receipt,
+					fileIo
+				);
+			}
 			await fs.rm(path.join(root, validSessionId(sessionId)), {
 				force: true,
 				recursive: true,
 			});
 			await syncDirectory(root);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const finalizeDeletion = async (
+		sessionId: SessionId,
+		receipt: SessionWriteReceipt,
+		logRemoved: boolean
+	): Promise<SessionWriteOutcome> => {
+		if (!logRemoved) {
+			return { ...receipt, projection: "blocked" };
+		}
+		try {
 			await projectionStore.deleteSession(sessionId);
 			return { ...receipt, projection: "ready" };
 		} catch {
@@ -2472,29 +3713,44 @@ export const createSessionJsonlStore = (
 		let receipt: SessionWriteReceipt | undefined;
 		try {
 			return await withTemporaryWriter(sessionId, async () => {
-				const marker = await readDeletedMarker(logRoot, sessionId);
-				if (marker !== undefined) {
-					receipt = { ...marker, kind: "committed", projection: "blocked" };
-					return finalizeDeletion(sessionId, receipt);
+				let logRemoved = false;
+				let writeOutcome: SessionWriteOutcome | undefined;
+				await withSessionCatalogLifecycleGate(logRoot, async () => {
+					const marker = await readDeletedMarker(logRoot, sessionId);
+					if (marker !== undefined) {
+						receipt = {
+							...marker,
+							kind: "committed",
+							projection: "blocked",
+						};
+						logRemoved = await removeDeletedSessionLog(sessionId);
+						projectionStore.markSessionDeleted(sessionId);
+						return;
+					}
+					await assertSessionWritable(sessionId);
+					const deletion = await deletionWrite(sessionId, operationId);
+					if ("writeOutcome" in deletion) {
+						writeOutcome = deletion.writeOutcome;
+						return;
+					}
+					receipt = {
+						...deletion.receipt,
+						kind: "committed",
+						projection: "blocked",
+					};
+					logRemoved = await removeDeletedSessionLog(sessionId, {
+						logId: deletion.logId,
+						receipt: deletion.receipt,
+					});
+					projectionStore.markSessionDeleted(sessionId);
+				});
+				if (writeOutcome !== undefined) {
+					return writeOutcome;
 				}
-				await assertSessionWritable(sessionId);
-				const deletion = await deletionWrite(sessionId, operationId);
-				if ("writeOutcome" in deletion) {
-					return deletion.writeOutcome;
+				if (receipt === undefined) {
+					throw new Error("The committed Session deletion receipt is missing.");
 				}
-				receipt = {
-					...deletion.receipt,
-					kind: "committed",
-					projection: "blocked",
-				};
-				await writeDeletedMarker(
-					logRoot,
-					sessionId,
-					deletion.logId,
-					deletion.receipt,
-					fileIo
-				);
-				return finalizeDeletion(sessionId, receipt);
+				return finalizeDeletion(sessionId, receipt, logRemoved);
 			});
 		} catch (error) {
 			return receipt === undefined
@@ -2549,6 +3805,37 @@ export const createSessionJsonlStore = (
 			.sort();
 	};
 
+	const findDeletedMarkerSessionIds = async (): Promise<SessionId[]> => {
+		const deletedRoot = path.join(await sessionControlRoot(logRoot), "deleted");
+		let entries: string[];
+		try {
+			entries = await fs.readdir(deletedRoot);
+		} catch (error) {
+			if (isCode(error, "ENOENT")) {
+				return [];
+			}
+			throw error;
+		}
+		return entries
+			.filter((entry) => entry.endsWith(".json"))
+			.map((entry) => toSessionId(entry.slice(0, -".json".length)))
+			.filter(isValidSessionId)
+			.sort();
+	};
+
+	const readCatalogSnapshot = async (): Promise<
+		Readonly<{ deleted: SessionId[]; published: SessionId[] }>
+	> => {
+		const boundSessionIds = new Set(projection.listAllBoundSessionIds());
+		const published = await findSessionLogIds();
+		return {
+			deleted: await findDeletedMarkerSessionIds(),
+			published: published.filter((sessionId) =>
+				boundSessionIds.has(sessionId)
+			),
+		};
+	};
+
 	const resetSessionLog = async (
 		root: string,
 		sessionId: SessionId
@@ -2557,8 +3844,10 @@ export const createSessionJsonlStore = (
 		const markerPath = await deletedMarkerPath(sessionId);
 		try {
 			await fs.access(markerPath);
-			await fs.rm(directory, { force: true, recursive: true });
-			await syncDirectory(root);
+			await withSessionCatalogLifecycleGate(logRoot, async () => {
+				await fs.rm(directory, { force: true, recursive: true });
+				await syncDirectory(root);
+			});
 			return;
 		} catch (error) {
 			if (!isCode(error, "ENOENT")) {
@@ -2566,41 +3855,43 @@ export const createSessionJsonlStore = (
 			}
 		}
 
-		const logPath = path.join(directory, "session.jsonl");
-		const state = (await readLog(logPath, sessionId)).state;
-		const operationId = `delete-${validSessionId(sessionId)}`;
-		const writeOutcome = await commitWrite(sessionId, {
-			operationId,
-			payload: {},
-			type: "session.deleted",
-		});
-		if (writeOutcome.kind !== "committed") {
-			throw new SessionWriteOutcomeError(writeOutcome);
-		}
-		const deletedLog = await readLog(logPath, sessionId);
-		const deletion = deletedLog.state.entries.find(
-			(entry) => entry.envelope.operationId === operationId
-		);
-		if (deletion === undefined) {
-			throw new SessionLogError(
-				"session_log_corrupt",
-				sessionId,
-				"Session deletion commit could not be verified."
+		await withSessionCatalogLifecycleGate(logRoot, async () => {
+			const logPath = path.join(directory, "session.jsonl");
+			const state = (await readLog(logPath, sessionId)).state;
+			const operationId = `delete-${validSessionId(sessionId)}`;
+			const writeOutcome = await commitWrite(sessionId, {
+				operationId,
+				payload: {},
+				type: "session.deleted",
+			});
+			if (writeOutcome.kind !== "committed") {
+				throw new SessionWriteOutcomeError(writeOutcome);
+			}
+			const deletedLog = await readLog(logPath, sessionId);
+			const deletion = deletedLog.state.entries.find(
+				(entry) => entry.envelope.operationId === operationId
 			);
-		}
-		await writeDeletedMarker(
-			logRoot,
-			sessionId,
-			state.logId,
-			{
-				entryHash: deletion.envelope.entryHash,
-				operationId: deletion.envelope.operationId,
-				sequence: deletion.envelope.sequence,
-			},
-			fileIo
-		);
-		await fs.rm(directory, { force: true, recursive: true });
-		await syncDirectory(root);
+			if (deletion === undefined) {
+				throw new SessionLogError(
+					"session_log_corrupt",
+					sessionId,
+					"Session deletion commit could not be verified."
+				);
+			}
+			await writeDeletedMarker(
+				logRoot,
+				sessionId,
+				state.logId,
+				{
+					entryHash: deletion.envelope.entryHash,
+					operationId: deletion.envelope.operationId,
+					sequence: deletion.envelope.sequence,
+				},
+				fileIo
+			);
+			await fs.rm(directory, { force: true, recursive: true });
+			await syncDirectory(root);
+		});
 	};
 
 	const resetSessionData = async (): Promise<void> => {
@@ -2664,7 +3955,20 @@ export const createSessionJsonlStore = (
 				code = errorCode;
 			}
 		}
-		return { code, message, sessionId };
+		return {
+			...omitUndefined(
+				error instanceof SessionLogError
+					? {
+							offset: error.offset,
+							operationId: error.operationId,
+							sequence: error.sequence,
+						}
+					: {}
+			),
+			code,
+			message,
+			sessionId,
+		};
 	};
 
 	const projectExistingSessionLogs = async (
@@ -2698,7 +4002,97 @@ export const createSessionJsonlStore = (
 		return { issues, sessionIds };
 	};
 
+	const ensureCatalogSessionProjected = async (
+		sessionId: SessionId
+	): Promise<void> => {
+		try {
+			await ensureProjected(sessionId);
+		} catch (error) {
+			if (isCode(error, "session_deleted")) {
+				return;
+			}
+			if (isCode(error, "ENOENT")) {
+				throw new SessionLogError(
+					"session_log_corrupt",
+					sessionId,
+					"A bound Session is missing its authoritative JSONL log.",
+					{ cause: error }
+				);
+			}
+			throw error;
+		}
+	};
+
+	const ensureBoundSessionProjectedIfStale = async (
+		sessionId: SessionId
+	): Promise<void> => {
+		const generation = assertProjectionReady(sessionId);
+		await checkDeletedMarker(sessionId);
+		if (!projection.isBoundToWorkspace(sessionId)) {
+			await ensureProjected(sessionId);
+			return;
+		}
+		await ensureDirectoryDurable(logRoot);
+		const logPath = path.join(
+			await fs.realpath(logRoot),
+			validSessionId(sessionId),
+			"session.jsonl"
+		);
+		const cursor = projection.getCursor(sessionId);
+		try {
+			const { size } = await fs.stat(logPath);
+			if (
+				cursor !== undefined &&
+				cursor.generation === generation &&
+				cursor.nextByteOffset === size
+			) {
+				return;
+			}
+		} catch (error) {
+			if (!isCode(error, "ENOENT")) {
+				throw error;
+			}
+		}
+		await ensureCatalogSessionProjected(sessionId);
+	};
+
+	const ensureBoundCatalogLogsProjected = async (): Promise<void> => {
+		await ensureDirectoryDurable(logRoot);
+		const root = await fs.realpath(logRoot);
+		const generation = projection.getMaintenanceState().generation;
+		for (const sessionId of projection.listBoundSessionIds()) {
+			const logPath = path.join(
+				root,
+				validSessionId(sessionId),
+				"session.jsonl"
+			);
+			const cursor = projection.getCursor(sessionId);
+			let size: number;
+			try {
+				({ size } = await fs.stat(logPath));
+			} catch (error) {
+				if (!isCode(error, "ENOENT")) {
+					throw error;
+				}
+				await ensureCatalogSessionProjected(sessionId);
+				continue;
+			}
+			if (
+				cursor === undefined ||
+				cursor.generation !== generation ||
+				cursor.nextByteOffset !== size
+			) {
+				await ensureCatalogSessionProjected(sessionId);
+			}
+		}
+	};
+
 	const listSessionCatalog = async (): Promise<SessionCatalogResult> => {
+		if (projection.getMaintenanceState().status !== "ready") {
+			throw new Error(
+				"Session projection rebuild is incomplete; retry `wincode sessions rebuild` before listing Sessions."
+			);
+		}
 		await ensureDirectoryDurable(logRoot);
 		const { issues, sessionIds } = await projectExistingSessionLogs(
 			await fs.realpath(logRoot)
@@ -2743,6 +4137,473 @@ export const createSessionJsonlStore = (
 	const listSessions = async (): Promise<Session[]> =>
 		(await listSessionCatalog()).sessions;
 
+	type RecentModelSelectionsRead = Readonly<{
+		cursors: readonly (SessionProjectionCursor | undefined)[];
+		generation: number;
+		selections: ProviderModelSelection[];
+	}>;
+	const ensureRecentModelSelectionsProjected = async (
+		sessionIds: readonly SessionId[]
+	): Promise<void> => {
+		for (const sessionId of sessionIds) {
+			await ensureProjected(sessionId);
+		}
+	};
+	const readRecentModelSelections = (
+		sessionIds: readonly SessionId[],
+		limit: number
+	): RecentModelSelectionsRead => {
+		const maintenance = projection.getMaintenanceState();
+		const cursors = sessionIds.map((sessionId) =>
+			projection.getCursor(sessionId)
+		);
+		const selections = projection.withReadyGenerationRead(sessionIds, () =>
+			projectionStore.listRecentModelSelections(limit)
+		);
+		return { cursors, generation: maintenance.generation, selections };
+	};
+	const recentModelSelectionsReadIsCurrent = (
+		sessionIds: readonly SessionId[],
+		read: RecentModelSelectionsRead
+	): boolean => {
+		const maintenance = projection.getMaintenanceState();
+		return (
+			maintenance.status === "ready" &&
+			maintenance.generation === read.generation &&
+			Bun.deepEquals(sessionIds, projection.listBoundSessionIds(), true) &&
+			sessionIds.every((sessionId, index) =>
+				sessionProjectionCursorsEqual(
+					read.cursors[index],
+					projection.getCursor(sessionId)
+				)
+			)
+		);
+	};
+	const isRetryableGenerationError = (error: unknown): boolean =>
+		isCode(error, "session_projection_blocked") &&
+		projection.getMaintenanceState().status === "ready";
+	type RecentModelSelectionsAttempt =
+		| Readonly<{ error?: SessionLogError; kind: "retry" }>
+		| Readonly<{ kind: "ready"; selections: ProviderModelSelection[] }>;
+	const readRecentModelSelectionsAttempt = async (
+		limit: number
+	): Promise<RecentModelSelectionsAttempt> => {
+		const sessionIds = projection.listBoundSessionIds();
+		await ensureRecentModelSelectionsProjected(sessionIds);
+		if (!Bun.deepEquals(sessionIds, projection.listBoundSessionIds(), true)) {
+			return { kind: "retry" };
+		}
+		let read: RecentModelSelectionsRead;
+		try {
+			read = readRecentModelSelections(sessionIds, limit);
+		} catch (error) {
+			if (!isRetryableGenerationError(error)) {
+				throw error;
+			}
+			return {
+				kind: "retry",
+				...(error instanceof SessionLogError ? { error } : {}),
+			};
+		}
+		await ensureRecentModelSelectionsProjected(sessionIds);
+		return recentModelSelectionsReadIsCurrent(sessionIds, read)
+			? { kind: "ready", selections: read.selections }
+			: { kind: "retry" };
+	};
+	const listRecentModelSelections = async (
+		limit: number
+	): Promise<ProviderModelSelection[]> => {
+		if (limit <= 0) {
+			return [];
+		}
+		let lastGenerationError: SessionLogError | undefined;
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			const result = await readRecentModelSelectionsAttempt(limit);
+			if (result.kind === "ready") {
+				return result.selections;
+			}
+			if (result.error !== undefined) {
+				lastGenerationError = result.error;
+			}
+		}
+		if (lastGenerationError !== undefined) {
+			throw lastGenerationError;
+		}
+		throw new Error(
+			"Session projections kept changing while reading recent Model selections."
+		);
+	};
+
+	const readCatalogPageInsideLifecycleGate = async (
+		cursor: SessionCatalogPageCursor | undefined,
+		limit: number
+	) =>
+		withSessionCatalogLifecycleGate(logRoot, async () => {
+			const page = projectionStore.readSessionCatalogPageProjection({
+				...(cursor === undefined ? {} : { cursor }),
+				limit,
+			});
+			for (const session of page.sessions) {
+				try {
+					await checkDeletedMarker(session.id);
+				} catch (error) {
+					if (isCode(error, "session_deleted")) {
+						throw new SessionPaginationError(
+							"cursor_expired",
+							"Session catalog changed while this page was being read. Refresh the catalog."
+						);
+					}
+					throw error;
+				}
+			}
+			return page;
+		});
+
+	const listSessionsPage = async (
+		options: SessionPageOptions = {}
+	): Promise<SessionCatalogPage> => {
+		const limit = parseSessionPageLimit(options.limit);
+		let cursor: SessionCatalogPageCursor | undefined;
+		if (options.cursor !== undefined) {
+			const decoded = decodeSessionPageToken(options.cursor, "catalog");
+			if (decoded.kind !== "catalog-page") {
+				throw new SessionPaginationError(
+					"cursor_invalid",
+					"Session cursor is invalid."
+				);
+			}
+			cursor = decoded;
+		}
+		if (cursor === undefined) {
+			await ensureBoundCatalogLogsProjected();
+		}
+		const page = await readCatalogPageInsideLifecycleGate(cursor, limit);
+		const nextCursor =
+			page.hasMore && page.lastKey !== undefined
+				? encodeSessionPageToken({
+						...page.readPoint,
+						after: page.lastKey,
+						kind: "catalog-page",
+					})
+				: undefined;
+		return {
+			...(nextCursor === undefined ? {} : { nextCursor }),
+			readPoint: encodeSessionPageToken(page.readPoint),
+			sessions: page.sessions,
+		};
+	};
+
+	const readSessionHistoryPage = async (
+		sessionId: SessionId,
+		options: SessionPageOptions = {}
+	): Promise<SessionHistoryPage> => {
+		const limit = parseSessionPageLimit(options.limit);
+		let cursor: SessionHistoryPageCursor | undefined;
+		if (options.cursor !== undefined) {
+			const decoded = decodeSessionPageToken(options.cursor, "history");
+			if (decoded.kind !== "history-page") {
+				throw new SessionPaginationError(
+					"cursor_invalid",
+					"Session history cursor is invalid."
+				);
+			}
+			cursor = decoded;
+		}
+		if (cursor === undefined) {
+			await ensureBoundSessionProjectedIfStale(sessionId);
+		}
+		return withSessionCatalogLifecycleGate(logRoot, async () => {
+			try {
+				await checkDeletedMarker(sessionId);
+			} catch (error) {
+				if (cursor !== undefined && isCode(error, "session_deleted")) {
+					throw new SessionPaginationError(
+						"cursor_expired",
+						"Session history cursor expired because the Session was deleted."
+					);
+				}
+				throw error;
+			}
+			const page = projectionStore.readSessionHistoryPageProjection(sessionId, {
+				...(cursor === undefined ? {} : { cursor }),
+				limit,
+			});
+			const nextCursor =
+				page.hasMore && page.beforeSequence !== undefined
+					? encodeSessionPageToken({
+							...page.readPoint,
+							beforeSequence: page.beforeSequence,
+							kind: "history-page",
+						})
+					: undefined;
+			return {
+				compactions: page.compactions,
+				...(nextCursor === undefined ? {} : { nextCursor }),
+				readPoint: encodeSessionPageToken(page.readPoint),
+				records: page.records,
+				session: page.session,
+			};
+		});
+	};
+
+	const logHasDeletionEvent = async (
+		sessionId: SessionId,
+		root: string
+	): Promise<boolean> => {
+		try {
+			const { state } = await readLog(
+				path.join(root, sessionId, "session.jsonl"),
+				sessionId
+			);
+			return state.entries.some(
+				({ envelope }) => envelope.type === "session.deleted"
+			);
+		} catch {
+			// Invalid logs remain visible to the rebuild as per-Session issues.
+			return false;
+		}
+	};
+
+	const reconcileDeletedSession = async (
+		sessionId: SessionId
+	): Promise<SessionCatalogIssue | undefined> => {
+		const outcome = await deleteSession(sessionId);
+		if (outcome.kind === "committed" && outcome.projection === "ready") {
+			return;
+		}
+		const failure =
+			outcome.kind === "committed"
+				? {
+						code: "session_projection_blocked",
+						message: "Deleted Session cleanup could not update the projection.",
+					}
+				: outcome.error;
+		return catalogIssue(
+			sessionId,
+			Object.assign(new Error(failure.message), { code: failure.code })
+		);
+	};
+
+	const reconcileDeletedSessions = async (): Promise<SessionCatalogIssue[]> => {
+		const snapshot = await readCatalogSnapshot();
+		const root = await fs.realpath(logRoot);
+		const deletedSessionIds = new Set(snapshot.deleted);
+		for (const sessionId of snapshot.published) {
+			if (
+				isValidSessionId(sessionId) &&
+				!deletedSessionIds.has(sessionId) &&
+				(await logHasDeletionEvent(sessionId, root))
+			) {
+				deletedSessionIds.add(sessionId);
+			}
+		}
+		const issues: SessionCatalogIssue[] = [];
+		for (const sessionId of [...deletedSessionIds].sort()) {
+			const issue = await reconcileDeletedSession(sessionId);
+			if (issue !== undefined) {
+				issues.push(issue);
+			}
+		}
+		return issues;
+	};
+
+	const acquireRebuildWriters = async (
+		sessionIds: readonly SessionId[]
+	): Promise<{
+		failure?: Readonly<{ error: unknown; sessionId: SessionId }>;
+		writers: SessionWriterLock[];
+	}> => {
+		const writers: SessionWriterLock[] = [];
+		let currentSessionId: SessionId | undefined;
+		try {
+			for (const sessionId of sessionIds) {
+				currentSessionId = sessionId;
+				const key = await lockKey(logRoot, sessionId);
+				if (heldWriterKeys.has(key)) {
+					continue;
+				}
+				writers.push(await acquireSessionWriterLock(logRoot, sessionId));
+			}
+		} catch (error) {
+			for (const writer of writers.reverse()) {
+				await writer.release();
+			}
+			if (currentSessionId === undefined) {
+				throw error;
+			}
+			return { failure: { error, sessionId: currentSessionId }, writers: [] };
+		}
+		return { writers };
+	};
+
+	const releaseRebuildWriters = async (
+		writers: readonly SessionWriterLock[]
+	): Promise<void> => {
+		for (const writer of [...writers].reverse()) {
+			await writer.release();
+		}
+	};
+
+	const projectRebuildSession = async (sessionId: SessionId): Promise<void> => {
+		const root = await fs.realpath(logRoot);
+		const logPath = path.join(root, sessionId, "session.jsonl");
+		const { bytes, state } = await readLogForProjection(logPath, sessionId);
+		if (
+			state.entries.some(({ envelope }) => envelope.type === "session.deleted")
+		) {
+			throw new SessionLogError(
+				"session_deleted",
+				sessionId,
+				"Session deletion must be reconciled before projection rebuild."
+			);
+		}
+		await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
+		await reconcileVisibleWriteIntent(sessionId, logPath, bytes, state);
+		const cursor = projection.getCursor(sessionId);
+		projection.projectEntries(
+			sessionId,
+			state.entries,
+			state,
+			cursor,
+			"maintenance"
+		);
+		assertProjectionAtLogHead(
+			sessionId,
+			projection.getCursor(sessionId),
+			state
+		);
+		await releaseReconciledAttachmentLeases(sessionId, state);
+		const creationLease = pendingCreationAttachmentLeases.get(sessionId);
+		if (
+			creationLease !== undefined &&
+			state.entries.some(
+				({ envelope }) =>
+					envelope.operationId === `create-${sessionId}` &&
+					envelope.type === "session.created"
+			)
+		) {
+			await releasePendingCreationAttachmentLease(sessionId, creationLease);
+		}
+	};
+
+	const rebuildProjection: SessionStore["rebuildProjection"] = (scope, gate) =>
+		rebuildSessionJsonlProjection(
+			{
+				acquireWriters: acquireRebuildWriters,
+				beginRebuild: projection.beginRebuild,
+				completeRebuild: projection.completeRebuild,
+				getGeneration: () => projection.getMaintenanceState().generation,
+				getMaintenanceState: projection.getMaintenanceState,
+				listProjectedSessionIds: async () => projection.listSessionIds(),
+				projectSession: projectRebuildSession,
+				readCatalogSnapshot,
+				reconcileDeletedSessions,
+				releaseWriters: releaseRebuildWriters,
+				withAppendQueues,
+				withCatalogLifecycleGate: (operation) =>
+					withSessionCatalogLifecycleGate(logRoot, operation),
+			},
+			scope,
+			gate
+		);
+
+	const receiptForSessionSubmission = async (
+		sessionId: SessionId,
+		submissionId: SubmissionId,
+		state: SessionLogState
+	): Promise<SessionSubmissionRecordReceipt | undefined> => {
+		const match = findSessionSubmissionRecord(
+			state.entries,
+			sessionId,
+			submissionId
+		);
+		if (match === undefined) {
+			const unresolvedIntent = await readSessionWriteIntent(
+				logRoot,
+				sessionId,
+				fileIo
+			);
+			if (
+				unresolvedIntent !== undefined &&
+				!state.entries.some(
+					({ envelope }) =>
+						envelope.operationId === unresolvedIntent.operationId
+				)
+			) {
+				throw new SessionLogError(
+					"session_log_write_indeterminate",
+					sessionId,
+					"Session write must be reconciled before SDK delivery can proceed.",
+					{
+						offset: unresolvedIntent.expectedOffset,
+						operationId: unresolvedIntent.operationId,
+						sequence: unresolvedIntent.sequence,
+					}
+				);
+			}
+			return;
+		}
+		let projectionStatus: SessionWriteReceipt["projection"] = "blocked";
+		try {
+			if (
+				projectionMatchesState(
+					projection.getCursor(sessionId),
+					state,
+					projection.getMaintenanceState().generation
+				)
+			) {
+				projectionStatus = "ready";
+			}
+		} catch {
+			// The Session log remains authoritative when the SQLite cursor is unreadable.
+		}
+		try {
+			await ensureDurableReceipt(logRoot, sessionId, match.entry, fileIo);
+		} catch (error) {
+			if (
+				error instanceof SessionLogError &&
+				error.code === "session_operation_conflict"
+			) {
+				throw error;
+			}
+			projectionStatus = "blocked";
+		}
+		return {
+			message: match.message,
+			recordId: match.recordId,
+			writeOutcome: toReceipt(match.entry, projectionStatus),
+		};
+	};
+
+	const findSessionRecordBySubmissionId = async (
+		sessionId: SessionId,
+		submissionId: SubmissionId
+	): Promise<SessionSubmissionRecordReceipt | undefined> =>
+		withTemporaryWriter(sessionId, async () => {
+			assertProjectionReady(sessionId);
+			await checkDeletedMarker(sessionId);
+			const logPath = path.join(
+				await fs.realpath(logRoot),
+				validSessionId(sessionId),
+				"session.jsonl"
+			);
+			const { bytes, state } = await readLogForProjection(logPath, sessionId);
+			await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
+			try {
+				await reconcileVisibleWriteIntent(sessionId, logPath, bytes, state);
+			} catch (error) {
+				if (
+					!(
+						error instanceof SessionWriteOutcomeError &&
+						error.outcome.kind === "committed"
+					)
+				) {
+					throw error;
+				}
+			}
+			return receiptForSessionSubmission(sessionId, submissionId, state);
+		});
+
 	projectionStore.setAttachmentCollectionBarrier(async () => {
 		const catalog = await listSessionCatalog();
 		if (catalog.issues.length > 0) {
@@ -2759,8 +4620,10 @@ export const createSessionJsonlStore = (
 		commitSessionRecord,
 		createEmptySession,
 		createSession,
+		createSessionWithExternalizedMessage,
 		createSessionUsageEntry,
 		deleteSession,
+		findSessionRecordBySubmissionId,
 		getCompactions: wrapRead(projectionStore.getCompactions),
 		getLatestCompaction: wrapRead(projectionStore.getLatestCompaction),
 		getSession: wrapRead(projectionStore.getSession),
@@ -2768,9 +4631,13 @@ export const createSessionJsonlStore = (
 			? {}
 			: { getEditMode: wrapRead(projectionStore.getEditMode) }),
 		listSessionCatalog,
+		listRecentModelSelections,
 		listSessionRecords: wrapRead(projectionStore.listSessionRecords),
+		listSessionsPage,
+		readSessionHistoryPage,
 		listSessionUsageEntries: wrapRead(projectionStore.listSessionUsageEntries),
 		listSessions,
+		rebuildProjection,
 		resetSessionData,
 		setEditMode,
 		updateSession,

@@ -865,6 +865,7 @@ export const runAgentTurnToText = async ({
 		string,
 		{ readonly input: unknown; readonly toolName: string }
 	>();
+	let toolCheckpointFailure: unknown;
 	const commit = async (
 		committer: CheckpointCommitter | undefined,
 		record: SessionRecord | undefined
@@ -917,7 +918,11 @@ export const runAgentTurnToText = async ({
 						sourceUserMessageId,
 						turn,
 					});
-					await commit(onToolCheckpoint, toolRecord);
+					try {
+						await commit(onToolCheckpoint, toolRecord);
+					} catch (error) {
+						toolCheckpointFailure ??= error;
+					}
 					stepMessageIds.push(
 						...toolRecord.messages.map((message) => message.id)
 					);
@@ -925,6 +930,12 @@ export const runAgentTurnToText = async ({
 				}
 			}
 			await onEvent?.(event);
+			if (
+				event.type === "model-step-finished" &&
+				toolCheckpointFailure !== undefined
+			) {
+				throw toolCheckpointFailure;
+			}
 		},
 		onTerminal: (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);

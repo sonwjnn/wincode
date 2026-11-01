@@ -9,7 +9,23 @@ import type { ThinkingLevel } from "@wincode/ai";
 import type { SessionId } from "../../shared/identifiers";
 import type { PluginFactory } from "../plugins/public";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
-import type { SessionWriteOutcome } from "./session-write-outcome";
+import type {
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+} from "./session-pagination-types";
+import type {
+	SessionWriteOutcome,
+	SessionWriteReceipt,
+} from "./session-write-outcome";
+
+export type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageCompaction,
+	SessionPageOptions,
+} from "./session-pagination-types";
 
 export type {
 	SessionWriteFailure,
@@ -85,6 +101,7 @@ export type SessionSdkSubmissionAdmission =
 	| {
 			readonly rejected: true;
 			readonly reason: string;
+			readonly code?: string;
 			readonly writeOutcome?: SessionWriteOutcome;
 	  }
 	| {
@@ -94,6 +111,13 @@ export type SessionSdkSubmissionAdmission =
 			readonly submissionId: SubmissionId;
 			readonly turnId?: AgentTurnId;
 			readonly writeOutcome?: SessionWriteOutcome;
+	  }
+	| {
+			readonly rejected: false;
+			readonly disposition: "duplicate";
+			readonly messageId: SessionMessageId;
+			readonly submissionId: SubmissionId;
+			readonly writeOutcome: SessionWriteReceipt;
 	  };
 
 export type SessionSdkContinuationOutcome =
@@ -151,6 +175,13 @@ export type SessionRuntimeOptions = Readonly<{
 }>;
 
 export type SessionSdk = Readonly<{
+	listSessionsPage: (
+		options?: SessionPageOptions
+	) => Promise<SessionCatalogPage>;
+	readSessionHistoryPage: (
+		sessionId: SessionId | string,
+		options?: SessionPageOptions
+	) => Promise<SessionHistoryPage>;
 	createSessionRuntime: (
 		options?: SessionRuntimeOptions
 	) => Promise<SessionSdk>;
@@ -174,6 +205,8 @@ export type SessionSdk = Readonly<{
 
 export type SessionSdkOperations = Pick<
 	SessionSdk,
+	| "listSessionsPage"
+	| "readSessionHistoryPage"
 	| "createSessionRuntime"
 	| "createEmptySession"
 	| "deliverToSession"

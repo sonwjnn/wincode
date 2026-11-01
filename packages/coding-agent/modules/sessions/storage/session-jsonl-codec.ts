@@ -4,7 +4,7 @@ import { z } from "zod";
 import { providerModelSelectionSchema } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceSchema } from "@/modules/sessions/attachment-reference";
 import { editModeSchema } from "@/modules/tools/versioned/contracts";
-import type { SessionId } from "@/shared/identifiers";
+import type { SessionId, WorkspaceId } from "@/shared/identifiers";
 import { getSessionRecordValidationError } from "./session-record";
 
 export const SESSION_LOG_FORMAT_VERSION = 1;
@@ -51,10 +51,20 @@ export type SessionLogState = Readonly<{
 }>;
 
 export type SessionProjectionCursor = Readonly<{
+	generation: number;
 	lastHash: string;
 	logId: string;
 	nextByteOffset: number;
 	nextSequence: number;
+}>;
+
+export type SessionProjectionMaintenanceState = Readonly<{
+	catalogRevision: number;
+	generation: number;
+	projectionId: string;
+	latestDeletionRevision: number;
+	paginationVersion: number;
+	status: "ready" | "rebuilding";
 }>;
 
 export const sessionProjectionCursorsEqual = (
@@ -64,19 +74,34 @@ export const sessionProjectionCursorsEqual = (
 	left === undefined
 		? right === undefined
 		: right !== undefined &&
+			left.generation === right.generation &&
 			left.logId === right.logId &&
 			left.nextSequence === right.nextSequence &&
 			left.nextByteOffset === right.nextByteOffset &&
 			left.lastHash === right.lastHash;
 
 export type SessionJsonlProjection = Readonly<{
+	beginRebuild: () => number;
+	workspaceId: WorkspaceId;
+	bindSessionToWorkspace: (sessionId: SessionId) => void;
+	completeRebuild: (generation: number) => void;
 	getCursor: (sessionId: SessionId) => SessionProjectionCursor | undefined;
+	getMaintenanceState: () => SessionProjectionMaintenanceState;
 	isBoundToAnotherWorkspace: (sessionId: SessionId) => boolean;
+	isBoundToWorkspace: (sessionId: SessionId) => boolean;
+	listAllBoundSessionIds: () => SessionId[];
+	listBoundSessionIds: () => SessionId[];
+	listSessionIds: () => SessionId[];
+	withReadyGenerationRead: <Result>(
+		sessionIds: readonly SessionId[],
+		operation: (maintenance: SessionProjectionMaintenanceState) => Result
+	) => Result;
 	projectEntries: (
 		sessionId: SessionId,
 		entries: readonly SessionLogEntry[],
 		state: SessionLogState,
-		expectedCursor: SessionProjectionCursor | undefined
+		expectedCursor: SessionProjectionCursor | undefined,
+		mode?: "append" | "replace" | "maintenance"
 	) => void;
 }>;
 
@@ -123,7 +148,7 @@ const safeIdentifierSchema = z
 	.string()
 	.min(1)
 	.max(512)
-	.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u);
+	.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*(?![\s\S])/u);
 
 const envelopeSchema = z
 	.object({
@@ -225,13 +250,21 @@ const compactionPayloadSchema = z
 
 const usageCommittedPayloadSchema = z
 	.object({
+		compactionId: safeIdentifierSchema.nullable().optional(),
+		costUsd: z.number().finite().nonnegative().nullable().optional(),
 		createdAt: z.string().datetime(),
 		id: safeIdentifierSchema,
 		kind: z.enum(["cache-warm", "compaction-summary"]),
 		model: providerModelSelectionSchema,
 		usage: modelUsageSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.compactionId === undefined ||
+			(payload.kind === "compaction-summary") ===
+				(payload.compactionId !== null)
+	);
 
 const eventPayloadSchemas: Readonly<
 	Record<Exclude<SessionLogEventType, "session.header">, z.ZodType>

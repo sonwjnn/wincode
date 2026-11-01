@@ -34,6 +34,32 @@ const ensureTextColumn = (
 	}
 };
 
+const ensureIntegerColumn = (
+	sqlite: Database,
+	table: string,
+	column: string,
+	definition: string
+): void => {
+	if (!columnNames(sqlite, table).has(column)) {
+		sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+	}
+};
+
+const migrateSessionPaginationContract = (sqlite: Database): void => {
+	const state = sqlite
+		.query<{ pagination_version: number }, []>(
+			"SELECT pagination_version FROM session_projection_state WHERE id = 1"
+		)
+		.get();
+	if (state !== null && state.pagination_version < 2) {
+		sqlite
+			.query(
+				"UPDATE session_projection_state SET pagination_version = 2, projection_id = ? WHERE id = 1"
+			)
+			.run(crypto.randomUUID());
+	}
+};
+
 const hasCurrentThinkingSelectionSchema = (sqlite: Database): boolean => {
 	const sessionColumns = columnNames(sqlite, "session");
 	const compactionColumns = columnNames(sqlite, "session_compaction");
@@ -83,12 +109,28 @@ const initializeSchema = (
 		CREATE UNIQUE INDEX IF NOT EXISTS session_workspace_root_path_unique
 			ON session_workspace (root_path);
 
+		CREATE TABLE IF NOT EXISTS session_projection_state (
+			id INTEGER PRIMARY KEY NOT NULL,
+			projection_id TEXT DEFAULT 'legacy' NOT NULL,
+			generation INTEGER DEFAULT 0 NOT NULL,
+			catalog_revision INTEGER DEFAULT 0 NOT NULL,
+			latest_deletion_revision INTEGER DEFAULT 0 NOT NULL,
+			pagination_version INTEGER DEFAULT 2 NOT NULL,
+			status TEXT DEFAULT 'ready' NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS session_catalog_deletion_state (
+			workspace_id TEXT PRIMARY KEY NOT NULL,
+			latest_deletion_revision INTEGER NOT NULL
+		);
+
 		CREATE TABLE IF NOT EXISTS session_projection_cursor (
 			session_id TEXT PRIMARY KEY NOT NULL,
 			log_id TEXT NOT NULL,
 			next_byte_offset INTEGER NOT NULL,
 			next_sequence INTEGER NOT NULL,
-			last_hash TEXT NOT NULL
+			last_hash TEXT NOT NULL,
+			generation INTEGER DEFAULT 0 NOT NULL
 		);
 
 		CREATE TABLE IF NOT EXISTS session_attachment (
@@ -114,6 +156,23 @@ const initializeSchema = (
 			thinking_level TEXT,
 			edit_mode TEXT DEFAULT 'hashline' NOT NULL
 		);
+
+		CREATE TABLE IF NOT EXISTS session_operation_lookup (
+			session_id TEXT NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			operation_id TEXT NOT NULL,
+			sequence INTEGER NOT NULL,
+			entry_hash TEXT NOT NULL,
+			type TEXT NOT NULL,
+			operation_digest TEXT NOT NULL,
+			PRIMARY KEY (session_id, operation_id)
+		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_operation_lookup_sequence
+			ON session_operation_lookup (session_id, sequence);
+
+		CREATE INDEX IF NOT EXISTS idx_session_operation_lookup_sequence
+			ON session_operation_lookup (session_id, sequence);
 
 		CREATE TABLE IF NOT EXISTS local_session_binding (
 			session_id TEXT PRIMARY KEY NOT NULL,
@@ -260,6 +319,29 @@ const initializeSchema = (
 		CREATE INDEX IF NOT EXISTS idx_session_updated
 			ON session (updated_at);
 
+		CREATE TABLE IF NOT EXISTS session_catalog_version (
+			session_id TEXT NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			workspace_id TEXT NOT NULL,
+			generation INTEGER NOT NULL,
+			valid_from_revision INTEGER NOT NULL,
+			valid_to_revision INTEGER,
+			title TEXT NOT NULL,
+			pinned INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			last_message_at INTEGER,
+			model_json TEXT,
+			thinking_level TEXT,
+			PRIMARY KEY (session_id, valid_from_revision)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_session_catalog_version_order
+			ON session_catalog_version (
+				workspace_id, pinned DESC, last_message_at DESC, created_at DESC,
+				session_id ASC, valid_from_revision, valid_to_revision
+			);
+
 		CREATE TABLE IF NOT EXISTS session_compaction (
 			id TEXT PRIMARY KEY NOT NULL,
 			session_id TEXT NOT NULL REFERENCES session(id)
@@ -270,6 +352,7 @@ const initializeSchema = (
 			first_kept_ui_message_id TEXT NOT NULL,
 			first_kept_assistant_part_index INTEGER,
 			through_message_ui_id TEXT NOT NULL,
+			source_sequence INTEGER DEFAULT 0 NOT NULL,
 			tokens_before INTEGER NOT NULL,
 			estimated_tokens_after INTEGER NOT NULL,
 			trigger TEXT NOT NULL,
@@ -285,6 +368,8 @@ const initializeSchema = (
 			ON session_compaction (session_id, sequence);
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_compaction_session_sequence
 			ON session_compaction (session_id, sequence);
+		CREATE INDEX IF NOT EXISTS idx_session_compaction_session_through_source
+			ON session_compaction (session_id, through_message_ui_id, source_sequence);
 
 		CREATE TABLE IF NOT EXISTS prompt_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -304,6 +389,7 @@ const initializeSchema = (
 			messages_json TEXT NOT NULL,
 			version INTEGER NOT NULL,
 			position INTEGER NOT NULL,
+			source_sequence INTEGER DEFAULT 0 NOT NULL,
 			created_at INTEGER NOT NULL
 		);
 
@@ -314,11 +400,31 @@ const initializeSchema = (
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_record_session_position
 			ON session_record (session_id, position);
 
+		CREATE TABLE IF NOT EXISTS session_record_version (
+			session_id TEXT NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			record_id TEXT NOT NULL REFERENCES session_record(record_id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			position INTEGER NOT NULL,
+			source_sequence INTEGER NOT NULL,
+			valid_from_sequence INTEGER NOT NULL,
+			valid_to_sequence INTEGER,
+			messages_json TEXT NOT NULL,
+			PRIMARY KEY (session_id, record_id, valid_from_sequence)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_session_record_version_page
+			ON session_record_version (
+				session_id, source_sequence DESC, valid_from_sequence DESC, valid_to_sequence
+			);
+
 		CREATE TABLE IF NOT EXISTS session_usage_entry (
 			id TEXT PRIMARY KEY NOT NULL,
 			session_id TEXT NOT NULL REFERENCES session(id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
 			kind TEXT NOT NULL,
+			compaction_id TEXT,
+			cost_usd REAL,
 			model_json TEXT NOT NULL,
 			usage_json TEXT NOT NULL,
 			created_at INTEGER NOT NULL
@@ -342,6 +448,48 @@ const initializeSchema = (
 	}
 	ensureSessionEditModeColumn(sqlite);
 	ensureThinkingSelectionColumns(sqlite);
+	ensureIntegerColumn(
+		sqlite,
+		"session_projection_cursor",
+		"generation",
+		"INTEGER DEFAULT 0 NOT NULL"
+	);
+	if (!columnNames(sqlite, "session_projection_state").has("projection_id")) {
+		sqlite.exec(
+			"ALTER TABLE session_projection_state ADD COLUMN projection_id TEXT DEFAULT 'legacy' NOT NULL;"
+		);
+	}
+	ensureIntegerColumn(
+		sqlite,
+		"session_projection_state",
+		"catalog_revision",
+		"INTEGER DEFAULT 0 NOT NULL"
+	);
+	ensureIntegerColumn(
+		sqlite,
+		"session_projection_state",
+		"latest_deletion_revision",
+		"INTEGER DEFAULT 0 NOT NULL"
+	);
+	ensureIntegerColumn(
+		sqlite,
+		"session_projection_state",
+		"pagination_version",
+		"INTEGER DEFAULT 0 NOT NULL"
+	);
+	migrateSessionPaginationContract(sqlite);
+	ensureIntegerColumn(
+		sqlite,
+		"session_compaction",
+		"source_sequence",
+		"INTEGER DEFAULT 0 NOT NULL"
+	);
+	ensureIntegerColumn(
+		sqlite,
+		"session_record",
+		"source_sequence",
+		"INTEGER DEFAULT 0 NOT NULL"
+	);
 };
 
 const openDatabase = (

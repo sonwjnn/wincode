@@ -46,7 +46,11 @@ import {
 	restoreSelection,
 } from "@/modules/sessions/selection";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
+import type {
+	SessionPageOptions,
+	SessionStore,
+} from "@/modules/sessions/storage/session-store";
 import {
 	SessionInUseError,
 	type SessionWriterLockOwner,
@@ -73,6 +77,8 @@ type OpenedSession = Readonly<{
 type StoredSessionHistory = Readonly<{
 	compactions: readonly SessionCompaction[];
 	model: ProviderModelSelection | undefined;
+	nextCursor: string | undefined;
+	readPoint: string;
 	sessionTitle: string;
 	transcript: readonly SessionMessage[];
 }>;
@@ -97,6 +103,8 @@ type SessionSurfaceState =
 	  }
 	| {
 			history: StoredSessionHistory;
+			historyError: string | undefined;
+			isLoadingMore: boolean;
 			isRefreshing: boolean;
 			isRetrying: boolean;
 			isSelectingModel: boolean;
@@ -204,27 +212,54 @@ const createProviderReselection = async (
 };
 
 const loadStoredSessionHistory = async (
-	sessionId: SessionId
+	sessionId: SessionId,
+	options?: SessionPageOptions
 ): Promise<StoredSessionHistory> => {
 	const store = getSessionStore();
-	const [row, records, compactions] = await Promise.all([
-		store.getSession(sessionId),
-		store.listSessionRecords(sessionId),
-		store.getCompactions(sessionId),
-	]);
+	const page = await store.readSessionHistoryPage(sessionId, options);
 	const savedTranscript = sanitizeInterruptedSessionMessages(
-		projectSessionRecords(records)
+		projectSessionRecords(page.records)
 	);
 	const transcript = store.attachmentStore
 		? await store.attachmentStore.annotateMessagesForDisplay(savedTranscript)
 		: savedTranscript;
 	return {
-		compactions,
-		model: restoreSelection({ messages: savedTranscript, row })?.model,
-		sessionTitle: row.title,
+		compactions: page.compactions,
+		model: restoreSelection({ messages: savedTranscript, row: page.session })
+			?.model,
+		nextCursor: page.nextCursor,
+		readPoint: page.readPoint,
+		sessionTitle: page.session.title,
 		transcript,
 	};
 };
+
+const appendStoredSessionHistory = (
+	current: StoredSessionHistory,
+	older: StoredSessionHistory
+): StoredSessionHistory => {
+	const compactions = new Map<string, SessionCompaction>();
+	for (const compaction of [...older.compactions, ...current.compactions]) {
+		compactions.set(compaction.id, compaction);
+	}
+	return {
+		...current,
+		compactions: [...compactions.values()].sort(
+			(left, right) => left.sequence - right.sequence
+		),
+		nextCursor: older.nextCursor,
+		transcript: [...older.transcript, ...current.transcript],
+	};
+};
+
+const clearStoredHistoryCursor = (
+	history: StoredSessionHistory
+): StoredSessionHistory => ({ ...history, nextCursor: undefined });
+
+const storedHistoryPageErrorMessage = (error: unknown): string =>
+	error instanceof Error && Reflect.get(error, "code") === "cursor_expired"
+		? "Stored history changed. Refresh history to start a new snapshot."
+		: getErrorMessage(error, "Could not load older Session history.");
 
 const resolveCurrentAgentPin = async ({
 	agent,
@@ -354,12 +389,16 @@ export function SessionSurface({
 	const surfaceRef = useRef(surface);
 	surfaceRef.current = surface;
 	const refreshHistoryRef = useRef<(() => void) | null>(null);
+	const loadMoreHistoryRef = useRef<(() => void) | null>(null);
 	const retryOpenRef = useRef<(() => void) | null>(null);
 	const reselectModelRef = useRef<(() => void) | null>(null);
 	const viewHistoryRef = useRef<(() => void) | null>(null);
 	const selectionDialogOpenRef = useRef(false);
 	const handleRefreshHistory = useCallback(() => {
 		refreshHistoryRef.current?.();
+	}, []);
+	const handleLoadMoreHistory = useCallback(() => {
+		loadMoreHistoryRef.current?.();
 	}, []);
 	const handleRetryOpen = useCallback(() => {
 		retryOpenRef.current?.();
@@ -493,6 +532,8 @@ export function SessionSurface({
 				if (!ignore) {
 					setSurface({
 						history,
+						historyError: undefined,
+						isLoadingMore: false,
 						isRefreshing: false,
 						isRetrying: false,
 						isSelectingModel: false,
@@ -607,6 +648,8 @@ export function SessionSurface({
 				(history) =>
 					setSurface({
 						history,
+						historyError: undefined,
+						isLoadingMore: false,
 						isRefreshing: false,
 						isRetrying: false,
 						isSelectingModel: false,
@@ -628,10 +671,83 @@ export function SessionSurface({
 				(history) =>
 					setSurface((current) =>
 						current.kind === "history"
-							? { ...current, history, isRefreshing: false }
+							? {
+									...current,
+									history,
+									historyError: undefined,
+									isLoadingMore: false,
+									isRefreshing: false,
+								}
 							: current
 					)
 			);
+		};
+
+		const loadMoreHistory = (): void => {
+			const currentSurface = surfaceRef.current;
+			if (
+				ignore ||
+				historyActionInFlight ||
+				currentSurface.kind !== "history" ||
+				currentSurface.history.nextCursor === undefined
+			) {
+				return;
+			}
+			const cursor = currentSurface.history.nextCursor;
+			const readPoint = currentSurface.history.readPoint;
+			historyActionInFlight = true;
+			setSurface((current) =>
+				current.kind === "history"
+					? { ...current, historyError: undefined, isLoadingMore: true }
+					: current
+			);
+			void (async () => {
+				try {
+					const older = await loadStoredSessionHistory(sessionId, { cursor });
+					if (older.readPoint !== readPoint) {
+						throw new SessionPaginationError(
+							"cursor_expired",
+							"Stored history snapshot changed. Refresh history to continue."
+						);
+					}
+					if (!ignore) {
+						setSurface((current) =>
+							current.kind === "history" &&
+							current.history.readPoint === readPoint
+								? {
+										...current,
+										history: appendStoredSessionHistory(current.history, older),
+										historyError: undefined,
+										isLoadingMore: false,
+									}
+								: current
+						);
+					}
+				} catch (error) {
+					if (!ignore) {
+						const cursorExpired =
+							error instanceof Error &&
+							Reflect.get(error, "code") === "cursor_expired";
+						setSurface((current) =>
+							current.kind === "history"
+								? {
+										...current,
+										history: cursorExpired
+											? clearStoredHistoryCursor({
+													...current.history,
+													nextCursor: undefined,
+												})
+											: current.history,
+										historyError: storedHistoryPageErrorMessage(error),
+										isLoadingMore: false,
+									}
+								: current
+						);
+					}
+				} finally {
+					historyActionInFlight = false;
+				}
+			})();
 		};
 
 		const retryOpen = (): void => {
@@ -726,6 +842,7 @@ export function SessionSurface({
 		};
 
 		refreshHistoryRef.current = refreshHistory;
+		loadMoreHistoryRef.current = loadMoreHistory;
 		retryOpenRef.current = retryOpen;
 		reselectModelRef.current = reselectModel;
 		viewHistoryRef.current = viewStoredHistory;
@@ -743,6 +860,7 @@ export function SessionSurface({
 		return () => {
 			ignore = true;
 			refreshHistoryRef.current = null;
+			loadMoreHistoryRef.current = null;
 			retryOpenRef.current = null;
 			reselectModelRef.current = null;
 			viewHistoryRef.current = null;
@@ -796,10 +914,14 @@ export function SessionSurface({
 		return (
 			<StoredSessionHistoryView
 				compactions={surface.history.compactions}
+				hasMoreHistory={surface.history.nextCursor !== undefined}
+				historyError={surface.historyError}
+				isLoadingMore={surface.isLoadingMore}
 				isRefreshing={surface.isRefreshing}
 				isRetrying={surface.isRetrying}
 				isSelectingModel={surface.isSelectingModel}
 				messages={surface.history.transcript}
+				onLoadMore={handleLoadMoreHistory}
 				onRefresh={handleRefreshHistory}
 				onReselectModel={handleReselectModel}
 				onRetry={handleRetryOpen}

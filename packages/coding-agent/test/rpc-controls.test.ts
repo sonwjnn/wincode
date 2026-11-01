@@ -575,7 +575,7 @@ test("RPC refuses fresh Session creation before persistence when its ProviderCol
 		},
 		externalizeAttachments: async (messages: readonly SessionMessage[]) => {
 			externalizationCalls += 1;
-			return [...messages];
+			return { messages: [...messages], release: async () => undefined };
 		},
 	});
 	const state: RpcSessionState = {

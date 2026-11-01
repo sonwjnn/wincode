@@ -55,6 +55,13 @@ import {
 	resolveLocalSessionProjectionPath,
 } from "@/modules/sessions/storage/path";
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+	SessionStore,
+} from "@/modules/sessions/storage/session-store";
 import {
 	type ConfigSnapshot,
 	createConfigStore,
@@ -859,6 +866,65 @@ test("Session SDK prompt rejects an unrelated stale Plugin snapshot before avail
 		await handle?.dispose();
 		await sdk.dispose();
 	}
+});
+
+test("Session SDK forwards opaque page cursors without opening a Host", async () => {
+	const storedSession: Session = {
+		createdAt: new Date("2025-01-01T00:00:00.000Z"),
+		id: sessionId("sdk-page-session"),
+		lastMessageAt: null,
+		pinned: false,
+		title: "Snapshot Session",
+	};
+	const catalogPage: SessionCatalogPage = {
+		nextCursor: "catalog-cursor",
+		readPoint: "catalog-read-point",
+		sessions: [storedSession],
+	};
+	const historyPage: SessionHistoryPage = {
+		compactions: [],
+		nextCursor: "history-cursor",
+		readPoint: "history-read-point",
+		records: [],
+		session: storedSession,
+	};
+	let catalogOptions: SessionPageOptions | undefined;
+	let historyRequest:
+		| { options?: SessionPageOptions; sessionId: string }
+		| undefined;
+	const sdkStore = fromPartial<SessionStore>({
+		listSessionsPage: async (options?: SessionPageOptions) => {
+			catalogOptions = options;
+			return catalogPage;
+		},
+		readSessionHistoryPage: async (
+			id: Session["id"],
+			options?: SessionPageOptions
+		) => {
+			historyRequest = { options, sessionId: id };
+			return historyPage;
+		},
+	});
+	const sdk = createSessionSdkOperations(
+		{ cwd: workspace, getRegistry: () => null, store: sdkStore, workspace },
+		createSessionHostManager(),
+		sdkStore
+	);
+
+	expect(
+		await sdk.listSessionsPage({ cursor: "catalog-cursor", limit: 7 })
+	).toBe(catalogPage);
+	expect(catalogOptions).toEqual({ cursor: "catalog-cursor", limit: 7 });
+	expect(
+		await sdk.readSessionHistoryPage("sdk-page-session", {
+			cursor: "history-cursor",
+			limit: 9,
+		})
+	).toBe(historyPage);
+	expect(historyRequest).toEqual({
+		options: { cursor: "history-cursor", limit: 9 },
+		sessionId: "sdk-page-session",
+	});
 });
 
 test("Session SDK holds a reload-blocking lease through Provider availability and prompt admission", async () => {

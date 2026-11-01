@@ -187,6 +187,7 @@ test("persists warm usage exactly once outside Session Records", async () => {
 	const { store } = await createTestStore();
 	const { id, initialRecord } = await createSession(store, "warm-session");
 	const input = {
+		costUsd: null,
 		id: sessionUsageEntryId("warm-usage-1"),
 		kind: "cache-warm" as const,
 		model,

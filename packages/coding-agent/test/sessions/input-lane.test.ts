@@ -22,13 +22,18 @@ const laneState = (
 		closed: false,
 		executionBusy: false,
 		queueDraining: false,
+		reconciliationRequired: false,
 		submissionBusy: false,
 		writeBlocked: false,
 		...overrides,
 	};
 	return {
 		...base,
-		canDrain: !(base.executionBusy || base.writeBlocked),
+		canDrain: !(
+			base.executionBusy ||
+			base.reconciliationRequired ||
+			base.writeBlocked
+		),
 	};
 };
 
@@ -42,16 +47,40 @@ const snapshotOf = ({
 	...overrides,
 });
 
-const sendInput = (userText: string): SessionSendInput =>
-	fromPartial<SessionSendInput>({ userText });
+const sendInput = (userText: string, attachmentId?: string): SessionSendInput =>
+	fromPartial<SessionSendInput>({
+		userText,
+		...(attachmentId === undefined
+			? {}
+			: {
+					composition: {
+						files: [{ attachmentId, type: "file" }],
+						text: userText,
+					},
+				}),
+	});
+
+type LaneOptions = Readonly<{
+	onRunSubmission?: (
+		input: SessionSendInput,
+		update: (patch: Partial<SessionInputLaneSnapshot>) => void
+	) => void | Promise<void>;
+}>;
 
 /** One input lane whose read surface a test can advance, and which records writes. */
-const createLane = (initial: SessionInputLaneSnapshot = snapshotOf()) => {
+const createLane = (
+	initial: SessionInputLaneSnapshot = snapshotOf(),
+	options: LaneOptions = {}
+) => {
 	let state = initial;
 	const applied: SessionInputLaneTransition[] = [];
 	const runs: SessionSendInput[] = [];
+	const releasedAttachmentIds: string[] = [];
 	const tracked: Promise<unknown>[] = [];
 	const scheduler = createTestInputScheduler();
+	const updateState = (patch: Partial<SessionInputLaneSnapshot>): void => {
+		state = { ...state, ...patch };
+	};
 
 	const port: SessionInputLanePort = {
 		apply: (transition) => {
@@ -81,14 +110,20 @@ const createLane = (initial: SessionInputLaneSnapshot = snapshotOf()) => {
 			commitSteeringSubmission: async () => fromPartial({ kind: "rejected" }),
 			completeSteeringSubmission: () => undefined,
 			emitSubmissionEvent: () => undefined,
-			externalizeAttachments: async (messages) => [...messages],
-			releaseAttachments: () => undefined,
+			externalizeAttachments: async (messages) => ({
+				messages: [...messages],
+				release: async () => undefined,
+			}),
+			releaseAttachments: (attachmentIds) => {
+				releasedAttachmentIds.push(...attachmentIds);
+			},
 			reportSubmissionFailure: () => undefined,
 			retainAttachments: () => undefined,
 			retrySteeringMessage: async () => ({ rejected: true, reason: "retry" }),
 			runSteeringMessage: async () => ({ rejected: true, reason: "steering" }),
 			runSubmission: async (input) => {
 				runs.push(input);
+				await options.onRunSubmission?.(input, updateState);
 				return { rejected: false };
 			},
 			trackBackgroundTask: (task) => {
@@ -104,11 +139,10 @@ const createLane = (initial: SessionInputLaneSnapshot = snapshotOf()) => {
 		lane: createSessionInputLaneWorkflow(port),
 		/** Waits for the admissions the lane deferred to the background. */
 		settle: () => Promise.allSettled(tracked),
+		releasedAttachmentIds,
 		runs,
 		scheduler,
-		update: (patch: Partial<SessionInputLaneSnapshot>) => {
-			state = { ...state, ...patch };
-		},
+		update: updateState,
 	};
 };
 
@@ -162,6 +196,69 @@ test("a Submission is queued on the queueing flag alone, not on a busy execution
 	// would start the Submission ahead of the FIFO head, reporting "started".
 	expect(admission).toMatchObject({ disposition: "queued", rejected: false });
 	await lane.settle();
+});
+
+test("Recall keeps a queued head reserved until an indeterminate write is reconciled", async () => {
+	const lane = createLane(
+		snapshotOf({
+			lane: laneState({ executionBusy: true, submissionBusy: true }),
+		})
+	);
+	await lane.lane.prompt(sendInput("input awaiting reconciliation"));
+	await lane.settle();
+	const queuedBeforeReconciliation = lane.scheduler.getQueuedSubmissions();
+	const transitionsBeforeRecall = lane.applied.length;
+	lane.update({
+		lane: laneState({ reconciliationRequired: true, writeBlocked: true }),
+	});
+
+	const recalled = await lane.lane.recallWaitingMessages();
+
+	expect(recalled).toEqual([]);
+	expect(lane.scheduler.getQueuedSubmissions()).toEqual(
+		queuedBeforeReconciliation
+	);
+	expect(lane.applied).toHaveLength(transitionsBeforeRecall);
+});
+
+test("draining stops before the next queue head after an indeterminate write blocks storage", async () => {
+	const lane = createLane(
+		snapshotOf({
+			lane: laneState({ executionBusy: true, submissionBusy: true }),
+		}),
+		{
+			onRunSubmission: (_input, update) => {
+				update({
+					lane: laneState({
+						reconciliationRequired: true,
+						writeBlocked: true,
+					}),
+				});
+			},
+		}
+	);
+	const first = await lane.lane.prompt(
+		sendInput("current queued head", "attachment-current")
+	);
+	const second = await lane.lane.prompt(
+		sendInput("later queue head", "attachment-later")
+	);
+	await lane.settle();
+	if (first.rejected || second.rejected) {
+		throw new Error("The test Submissions were not queued.");
+	}
+	expect(lane.scheduler.getQueuedSubmissions()).toHaveLength(2);
+
+	lane.update({ lane: laneState() });
+	await lane.lane.drainQueuedSubmissions();
+
+	expect(lane.runs.map(({ userText }) => userText)).toEqual([
+		"current queued head",
+	]);
+	expect(lane.scheduler.getQueuedSubmissions()).toMatchObject([
+		{ messageId: second.messageId, submissionId: second.submissionId },
+	]);
+	expect(lane.releasedAttachmentIds).toEqual(["attachment-current"]);
 });
 
 test("steer on a closed session is refused without committing a Submission", async () => {

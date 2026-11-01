@@ -60,6 +60,8 @@ export const SESSION_RPC_METHODS = new Set([
 	"session/recall",
 	"session/getState",
 	"session/getTranscript",
+	"session/listPage",
+	"session/getHistoryPage",
 ]);
 export const AGENT_EVENT_TYPES = new Set([
 	"agent-turn-started",

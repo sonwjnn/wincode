@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import { EXECUTION_MODES, type ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
+import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
 import type {
 	SessionWriterLockAdapter,
 	SessionWriterLockAdapterHandle,
@@ -56,6 +57,22 @@ export class SessionWriterLockFailureError extends Error {
 		this.name = "SessionWriterLockFailureError";
 	}
 }
+
+const catalogLifecycleQueue = createKeyedSerialQueue();
+
+const resolveCatalogLockPath = async (
+	logStoreRoot: string
+): Promise<string> => {
+	const absoluteRoot = path.resolve(logStoreRoot);
+	await fs.mkdir(absoluteRoot, { mode: 0o700, recursive: true });
+	const canonicalRoot = await fs.realpath(absoluteRoot);
+	const controlDirectory = path.join(
+		path.dirname(canonicalRoot),
+		"session-control"
+	);
+	await fs.mkdir(controlDirectory, { mode: 0o700, recursive: true });
+	return path.join(await fs.realpath(controlDirectory), "catalog.lock");
+};
 
 const readOwner = async (
 	lockPath: string
@@ -117,6 +134,62 @@ export const resolveSessionWriterLockAdapter = (
  * Lock identity is independent of the rebuildable SQLite projection. Persistent
  * lock files are never removed because replacing one could split authority.
  */
+const throwIfLifecycleAborted = (signal?: AbortSignal): void => {
+	if (!signal?.aborted) {
+		return;
+	}
+	throw signal.reason instanceof Error
+		? signal.reason
+		: new Error("Session lifecycle operation was cancelled.");
+};
+
+const acquireCatalogLifecycleLock = async (
+	lockPath: string,
+	signal?: AbortSignal
+): Promise<SessionWriterLockAdapterHandle> => {
+	const adapter = resolveSessionWriterLockAdapter(
+		process.platform,
+		process.arch
+	);
+	while (true) {
+		throwIfLifecycleAborted(signal);
+		try {
+			const acquiredLock = await adapter.acquire(lockPath);
+			if (acquiredLock !== undefined) {
+				return acquiredLock;
+			}
+		} catch (error) {
+			throw new SessionWriterLockFailureError(
+				error,
+				"The Session catalog lifecycle lock could not be established."
+			);
+		}
+		await Bun.sleep(10);
+	}
+};
+
+export const withSessionCatalogLifecycleGate = async <Result>(
+	logStoreRoot: string,
+	operation: () => Promise<Result>,
+	signal?: AbortSignal
+): Promise<Result> => {
+	let lockPath: string;
+	try {
+		lockPath = await resolveCatalogLockPath(logStoreRoot);
+	} catch (error) {
+		throw new SessionWriterLockFailureError(error);
+	}
+	return catalogLifecycleQueue.run(lockPath, async () => {
+		const acquiredLock = await acquireCatalogLifecycleLock(lockPath, signal);
+		try {
+			throwIfLifecycleAborted(signal);
+			return await operation();
+		} finally {
+			await acquiredLock.release();
+		}
+	});
+};
+
 export const acquireSessionWriterLock = async (
 	logStoreRoot: string,
 	sessionId: SessionId,

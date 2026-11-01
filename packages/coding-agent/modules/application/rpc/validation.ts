@@ -12,6 +12,7 @@ import {
 	MAX_ATTACHMENT_BYTES,
 } from "@/modules/sessions/attachment-reference";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import type { SessionPageOptions } from "@/modules/sessions/storage/session-store";
 import { findTextOccurrences } from "@/shared/utils/text-ranges";
 import type { RpcParams, RpcRequest } from "./protocol";
 import { RPC_ERROR_CODES } from "./protocol";
@@ -124,6 +125,28 @@ const exactFields = (
 	record: Record<string, unknown>,
 	allowed: readonly string[]
 ): boolean => Object.keys(record).every((key) => allowed.includes(key));
+
+export const readSessionPageOptions = (
+	params: RpcParams,
+	additionalFields: readonly string[] = []
+): SessionPageOptions => {
+	if (!exactFields(params, ["cursor", "limit", ...additionalFields])) {
+		throw rpcInvalidParams("Session page parameters contain unknown fields.");
+	}
+	const cursor = params.cursor;
+	if (cursor !== undefined && typeof cursor !== "string") {
+		throw rpcInvalidParams("cursor must be a string.");
+	}
+	const limit = params.limit;
+	if (limit !== undefined && typeof limit !== "number") {
+		throw rpcInvalidParams("limit must be a number.");
+	}
+	return {
+		...(cursor === undefined ? {} : { cursor }),
+		...(limit === undefined ? {} : { limit }),
+	};
+};
+
 const rejectedSubmission = (message: string): RpcApplicationError =>
 	appError("submission_rejected", message);
 

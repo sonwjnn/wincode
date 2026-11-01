@@ -397,6 +397,7 @@ describe("summarizeSessionUsage", () => {
 			id: sessionUsageEntryId("warm-entry-1"),
 			kind: "cache-warm",
 			model,
+			costUsd: 0.475_005,
 			sessionId: sessionId("warm-session"),
 			usage: {
 				cacheReadTokens: 700_000,
@@ -434,7 +435,7 @@ describe("summarizeSessionUsage", () => {
 		).toBeNull();
 	});
 
-	test("includes compaction usage in session totals and pricing, not latest-turn context", () => {
+	test("counts unlinked compaction usage in tokens without repricing historical usage", () => {
 		const compaction: SessionCompaction = {
 			id: compactionId("compaction-1"),
 			sessionId: sessionId("compaction-session"),
@@ -482,10 +483,102 @@ describe("summarizeSessionUsage", () => {
 			cacheReadTokens: 95,
 			cacheWriteTokens: 14,
 			contextTokens: 100,
-			costedCompactions: 1,
+			costedCompactions: 0,
+			costedUsageEntries: 0,
+			costCoverage: "partial",
 		});
 		expect(summary?.cacheHitPercent).toBeCloseTo(66.7, 1);
-		expect(summary?.costUsd).toBeCloseTo(0.000_242_75, 9);
+		expect(summary?.costUsd).toBeCloseTo(0.000_207_5, 9);
+	});
+
+	test("counts linked compaction summary usage once at its recorded cost", () => {
+		const id = compactionId("linked-summary-compaction");
+		const usage = {
+			cacheReadTokens: 5,
+			cacheWriteTokens: 4,
+			inputTokens: 20,
+			outputTokens: 3,
+		};
+		const compaction: SessionCompaction = {
+			id,
+			sessionId: sessionId("linked-summary-session"),
+			sequence: 1,
+			summary: { coveredMessageIds: [], formatVersion: 1, text: "summary" },
+			firstKeptUiMessageId: sessionMessageId("kept"),
+			throughMessageUiId: sessionMessageId("through"),
+			tokensBefore: 100,
+			estimatedTokensAfter: 20,
+			trigger: "manual",
+			summarizationModel: model,
+			summarizationUsage: usage,
+			createdAt: new Date(0),
+			completedAt: new Date(0),
+		};
+		const entry: SessionUsageEntry = {
+			createdAt: new Date(1),
+			id: sessionUsageEntryId("linked-summary-usage"),
+			kind: "compaction-summary",
+			model,
+			compactionId: id,
+			costUsd: 0.25,
+			sessionId: compaction.sessionId,
+			usage,
+		};
+		const summary = summarizeSessionUsage(
+			[assistant("linked-summary-turn", { inputTokens: 100, outputTokens: 5 })],
+			model,
+			[entry],
+			"idle",
+			[anthropicModel],
+			[compaction]
+		);
+
+		expect(summary).toMatchObject({
+			inputTokens: 120,
+			outputTokens: 8,
+			cacheReadTokens: 5,
+			cacheWriteTokens: 4,
+			costedTurns: 1,
+			costedCompactions: 0,
+			costedUsageEntries: 1,
+			costCoverage: "complete",
+		});
+		expect(summary?.costUsd).toBeCloseTo(0.250_125, 9);
+	});
+
+	test("does not apply today's prices to usage entries with unknown recorded cost", () => {
+		const unavailableTurnModel: ProviderModelSelection = {
+			modelId: modelId("historical-unavailable"),
+			providerId: "historical-provider",
+		};
+		const entry: SessionUsageEntry = {
+			createdAt: new Date(1),
+			id: sessionUsageEntryId("unknown-cost-usage"),
+			kind: "cache-warm",
+			model,
+			costUsd: null,
+			sessionId: sessionId("unknown-cost-session"),
+			usage: { inputTokens: 1_000_000, outputTokens: 1 },
+		};
+		const summary = summarizeSessionUsage(
+			[
+				assistant(
+					"unpriced-turn",
+					{ inputTokens: 1, outputTokens: 1 },
+					unavailableTurnModel
+				),
+			],
+			model,
+			[entry],
+			"idle",
+			[anthropicModel]
+		);
+
+		expect(summary).toMatchObject({
+			costUsd: null,
+			costCoverage: "unknown",
+			costedUsageEntries: 0,
+		});
 	});
 
 	test("accumulates exact Provider Model prices across measured turns", () => {

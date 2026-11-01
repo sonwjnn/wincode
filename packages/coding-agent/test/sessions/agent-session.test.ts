@@ -153,7 +153,7 @@ const createPorts = ({
 	compaction: AgentSessionPorts["compaction"];
 }): AgentSessionPorts => ({
 	attachments: {
-		externalize: async (messages) => [...messages],
+		externalize: async (messages) => externalizationLease(messages),
 		hydrate: async ({ messages }) => [...messages],
 		release: () => undefined,
 		retain: () => undefined,
@@ -189,6 +189,11 @@ const createPorts = ({
 	commitRecord: overrides.commitRecord ?? (async () => undefined),
 	updateSubmissionStatus:
 		overrides.updateSubmissionStatus ?? (async () => undefined),
+});
+
+const externalizationLease = <Message>(messages: readonly Message[]) => ({
+	messages: [...messages],
+	release: async () => undefined,
 });
 
 const createTestAgentSession = (
@@ -1497,6 +1502,66 @@ test("prompt queues a second submission instead of steering a live turn", async 
 	await engine.internalPort.shutdown();
 });
 
+test("cancellation after attachment preparation releases the prepared externalization lease", async () => {
+	let releases = 0;
+	let engine: AgentSessionImpl;
+	engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) => {
+				const lease = externalizationLease(messages);
+				engine.cancel();
+				return {
+					...lease,
+					release: async () => {
+						releases += 1;
+					},
+				};
+			},
+			hydrate: async ({ messages }) => [...messages],
+			release: () => undefined,
+			retain: () => undefined,
+		},
+	});
+
+	try {
+		await engine.send(sendInput({ userText: "cancel after externalization" }));
+		expect(releases).toBe(1);
+	} finally {
+		await engine.internalPort.shutdown();
+	}
+});
+
+test("session closure after attachment preparation releases the prepared lease", async () => {
+	let releases = 0;
+	let shutdown: Promise<void> | undefined;
+	let engine: AgentSessionImpl;
+	engine = createTestAgentSession([], undefined, {
+		attachments: {
+			externalize: async (messages) => {
+				const lease = externalizationLease(messages);
+				shutdown = engine.internalPort.shutdown();
+				return {
+					...lease,
+					release: async () => {
+						releases += 1;
+					},
+				};
+			},
+			hydrate: async ({ messages }) => [...messages],
+			release: () => undefined,
+			retain: () => undefined,
+		},
+	});
+
+	try {
+		await engine.send(sendInput({ userText: "close after externalization" }));
+		expect(releases).toBe(1);
+		await shutdown;
+	} finally {
+		await (shutdown ?? engine.internalPort.shutdown());
+	}
+});
+
 test("compatibility send queues while the active submission is still preparing", async () => {
 	const externalizeStarted = Promise.withResolvers<void>();
 	const allowExternalize = Promise.withResolvers<void>();
@@ -1506,7 +1571,7 @@ test("compatibility send queues while the active submission is still preparing",
 			externalize: async (messages) => {
 				externalizeStarted.resolve();
 				await allowExternalize.promise;
-				return [...messages];
+				return externalizationLease(messages);
 			},
 			hydrate: async ({ messages }) => [...messages],
 			release: () => undefined,
@@ -1563,7 +1628,7 @@ test("admits queued attachment prompts before externalization finishes in FIFO o
 				externalize: async (messages) => {
 					externalizeStarted.resolve();
 					await allowExternalize.promise;
-					return [...messages];
+					return externalizationLease(messages);
 				},
 				hydrate: async ({ messages }) => [...messages],
 				release: () => undefined,
@@ -1649,7 +1714,7 @@ test("interruptAll recalls queued attachments before externalization completes",
 					externalizeSignal = signal;
 					externalizeStarted.resolve();
 					await allowExternalize.promise;
-					return [...messages];
+					return externalizationLease(messages);
 				},
 				hydrate: async ({ messages }) => [...messages],
 				release: () => undefined,
@@ -2442,6 +2507,60 @@ test("does not acknowledge a steer when shutdown wins the durable-write race", a
 		await active.catch(() => undefined);
 	}
 });
+test("reports asynchronous steering attachment release failures", async () => {
+	await withLoggerHome(async (home) => {
+		const file = fromPartial<SessionFilePart>({
+			attachmentId: attachmentId("steering-release-failure"),
+			mediaType: "image/png",
+			type: "file",
+			url: `attachment://${attachmentId("steering-release-failure")}`,
+		});
+		const runtime = createQueuedRuntime({ boundary: true });
+		const engine = createTestAgentSession([], undefined, {
+			attachments: {
+				externalize: async (messages) => externalizationLease(messages),
+				hydrate: async ({ messages }) => [...messages],
+				release: async () => {
+					throw new Error("injected retained-pin unlink failure");
+				},
+				retain: () => undefined,
+			},
+			turnRunner: runtime.runtime,
+		});
+		const active = engine.send(sendInput({ userText: "active turn" }));
+		try {
+			await runtime.started(1);
+			await engine.send(
+				sendInput({
+					composition: compositionOf("correction", [file]),
+					files: [file],
+					userText: "correction",
+				})
+			);
+			expect(await engine.steer()).toMatchObject({ kind: "steered" });
+			for (
+				let attempt = 0;
+				engine.internalPort.hasPendingWork() && attempt < 100;
+				attempt += 1
+			) {
+				await Bun.sleep(0);
+			}
+			await logger.flush();
+			const records = await readLoggerRecords(home);
+			expect(
+				records.filter(
+					({ message: recordMessage }) =>
+						recordMessage === "Steering attachment release failed"
+				)
+			).toHaveLength(1);
+		} finally {
+			runtime.release();
+			await engine.internalPort.shutdown();
+			await active.catch(() => undefined);
+		}
+	});
+});
+
 test("shutdown defers queued attachment cleanup until steering commit settles", async () => {
 	for (const failCommit of [false, true]) {
 		const suffix = failCommit ? "failed" : "committed";
@@ -2466,10 +2585,14 @@ test("shutdown defers queued attachment cleanup until steering commit settles", 
 		const released: string[] = [];
 		const engine = createTestAgentSession([], undefined, {
 			attachments: {
-				externalize: async (messages) => [...messages],
+				externalize: async (messages) => externalizationLease(messages),
 				hydrate: async ({ messages }) => [...messages],
-				release: (ids) => released.push(...ids),
-				retain: (ids) => retained.push(...ids),
+				release: (ids) => {
+					released.push(...ids);
+				},
+				retain: (ids) => {
+					retained.push(...ids);
+				},
 			},
 			commitRecord: async ({ record }) => {
 				if (
@@ -2555,17 +2678,17 @@ test("applies the resolved attachment budget across a steering boundary", async 
 	const runtime = createQueuedRuntime({ boundary: true });
 	const files = await Promise.all(
 		Array.from({ length: 5 }, async (_, index) => {
-			const reference = await store.ingest({
+			const lease = await store.ingest({
 				bytes: new Uint8Array([...PNG_BYTES, index]),
 				filename: `image-${index}.png`,
 				mediaType: "image/png",
 			});
-			return attachmentReferenceToFilePart(reference);
+			return attachmentReferenceToFilePart(lease.reference);
 		})
 	);
 	const engine = createTestAgentSession([], undefined, {
 		attachments: {
-			externalize: async (messages) => [...messages],
+			externalize: async (messages) => externalizationLease(messages),
 			hydrate: ({
 				budget,
 				failOnMissingAttachments,
@@ -2654,7 +2777,7 @@ test("blocks later steering when an accepted attachment is unavailable", async (
 	const events: SessionSubmissionEvent[] = [];
 	const engine = createTestAgentSession([], undefined, {
 		attachments: {
-			externalize: async (messages) => [...messages],
+			externalize: async (messages) => externalizationLease(messages),
 			hydrate: async ({ failOnMissingAttachments, messages }) => {
 				if (failOnMissingAttachments) {
 					throw new Error(missingError);
@@ -2723,7 +2846,7 @@ test("rejects committed fallback when an accepted attachment is unavailable", as
 	const events: SessionSubmissionEvent[] = [];
 	const engine = createTestAgentSession([], undefined, {
 		attachments: {
-			externalize: async (messages) => [...messages],
+			externalize: async (messages) => externalizationLease(messages),
 			hydrate: async ({ failOnMissingAttachments, messages }) => {
 				if (messages.some(({ id }) => id === missingMessageId)) {
 					const strict = failOnMissingAttachments === true;
@@ -4286,25 +4409,29 @@ test("retains a queued submission's attachments until its turn runs", async () =
 		{
 			attachments: {
 				externalize: async (messages) =>
-					messages.map((sessionMessage) => ({
-						...sessionMessage,
-						parts: sessionMessage.parts.map((part) =>
-							part.type === "file"
-								? fromPartial<SessionFilePart>({
-										attachmentId: attachmentId("stored-blob"),
-										mediaType: part.mediaType,
-										type: "file",
-										url: "attachment://stored-blob",
-									})
-								: part
-						),
-					})),
+					externalizationLease(
+						messages.map((sessionMessage) => ({
+							...sessionMessage,
+							parts: sessionMessage.parts.map((part) =>
+								part.type === "file"
+									? fromPartial<SessionFilePart>({
+											attachmentId: attachmentId("stored-blob"),
+											mediaType: part.mediaType,
+											type: "file",
+											url: "attachment://stored-blob",
+										})
+									: part
+							),
+						}))
+					),
 				hydrate: async ({ messages }) => [...messages],
 				release: (attachmentIds) => {
 					released.push([...attachmentIds]);
 					holdEnded.resolve();
 				},
-				retain: (attachmentIds) => retained.push([...attachmentIds]),
+				retain: (attachmentIds) => {
+					retained.push([...attachmentIds]);
+				},
 			},
 			turnRunner: runtime.runtime,
 		}
@@ -4365,22 +4492,28 @@ test("releases queued attachment holds when queued preparation rejects", async (
 	const engine = createTestAgentSession([], undefined, {
 		attachments: {
 			externalize: async (messages) =>
-				messages.map((sessionMessage) => ({
-					...sessionMessage,
-					parts: sessionMessage.parts.map((part) =>
-						part.type === "file"
-							? fromPartial<SessionFilePart>({
-									attachmentId: attachmentId("failed-queued-blob"),
-									mediaType: part.mediaType,
-									type: "file",
-									url: "attachment://failed-queued-blob",
-								})
-							: part
-					),
-				})),
+				externalizationLease(
+					messages.map((sessionMessage) => ({
+						...sessionMessage,
+						parts: sessionMessage.parts.map((part) =>
+							part.type === "file"
+								? fromPartial<SessionFilePart>({
+										attachmentId: attachmentId("failed-queued-blob"),
+										mediaType: part.mediaType,
+										type: "file",
+										url: "attachment://failed-queued-blob",
+									})
+								: part
+						),
+					}))
+				),
 			hydrate: async ({ messages }) => [...messages],
-			release: (attachmentIds) => released.push([...attachmentIds]),
-			retain: (attachmentIds) => retained.push([...attachmentIds]),
+			release: (attachmentIds) => {
+				released.push([...attachmentIds]);
+			},
+			retain: (attachmentIds) => {
+				retained.push([...attachmentIds]);
+			},
 		},
 		resolveCompactionSettings: async () => {
 			settingsCount += 1;
@@ -4457,7 +4590,7 @@ test("waits for queued attachment externalization before shutdown settles", asyn
 				externalize: async (messages) => {
 					externalizeStarted.resolve();
 					await allowExternalize.promise;
-					return [...messages];
+					return externalizationLease(messages);
 				},
 				hydrate: async ({ messages }) => [...messages],
 				release: () => undefined,
@@ -4563,9 +4696,11 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 		createCompactionModule(summaryGenerator),
 		{
 			attachments: {
-				externalize: async (messages) => [...messages],
+				externalize: async (messages) => externalizationLease(messages),
 				hydrate: async ({ messages }) => [...messages],
-				release: (attachmentIds) => released.push([...attachmentIds]),
+				release: (attachmentIds) => {
+					released.push([...attachmentIds]);
+				},
 				retain: () => undefined,
 			},
 			turnRunner: runtime.runtime,
@@ -4586,11 +4721,11 @@ test("drops the queue and its attachment holds when the session shuts down", asy
 
 	const shutdown = engine.internalPort.shutdown();
 
-	expect(released).toEqual([["dropped-blob"]]);
 	expect(engine.getSnapshot().queuedSubmissions).toEqual([]);
 	release();
 	await expect(compaction).rejects.toMatchObject({ code: "cancelled" });
 	await shutdown;
+	expect(released).toEqual([["dropped-blob"]]);
 });
 
 test("refuses a submission once the session has shut down", async () => {
@@ -4632,9 +4767,11 @@ test("releases a recalled submission's attachment hold", async () => {
 		createCompactionModule(summaryGenerator),
 		{
 			attachments: {
-				externalize: async (messages) => [...messages],
+				externalize: async (messages) => externalizationLease(messages),
 				hydrate: async ({ messages }) => [...messages],
-				release: (attachmentIds) => released.push([...attachmentIds]),
+				release: (attachmentIds) => {
+					released.push([...attachmentIds]);
+				},
 				retain: () => undefined,
 			},
 			turnRunner: runtime.runtime,
@@ -4885,7 +5022,7 @@ test("retries a failed Steering Submission in place without duplicating its mess
 	let retry: Promise<unknown> | undefined;
 	const engine = createTestAgentSession([], undefined, {
 		attachments: {
-			externalize: async (messages) => [...messages],
+			externalize: async (messages) => externalizationLease(messages),
 			hydrate: async ({ failOnMissingAttachments, messages }) => {
 				if (messages.some(({ id }) => id === retryMessageId)) {
 					hydrationModes.push(failOnMissingAttachments === true);
@@ -5108,7 +5245,7 @@ test("deadline expiration aborts a preparing Agent Session send", async () => {
 					}
 					await released.promise;
 					signal.removeEventListener("abort", onAbort);
-					return [...messages];
+					return externalizationLease(messages);
 				},
 				hydrate: async ({ messages }) => [...messages],
 				release: () => undefined,

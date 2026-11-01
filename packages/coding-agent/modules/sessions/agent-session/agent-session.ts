@@ -9,7 +9,12 @@ import {
 	type ToolCallId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import { getErrorMessage, isUndefined, omitUndefined } from "@wincode/utils";
+import {
+	getErrorMessage,
+	isUndefined,
+	logger,
+	omitUndefined,
+} from "@wincode/utils";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import type { CompactSessionResult } from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
@@ -19,7 +24,11 @@ import {
 	type SessionMessage,
 	type SessionToolPart,
 } from "../message";
-import { SessionWriteOutcomeError } from "../storage/session-jsonl-store";
+import type { SessionWriteOutcome } from "../session-write-outcome";
+import {
+	isCommittedProjectionBlocked,
+	SessionWriteOutcomeError,
+} from "../storage/session-jsonl-store";
 import type { SessionSendInput } from "../submission-types";
 import { projectSessionRecords } from "../transcript-projection";
 import { createExecutionRegistry } from "./execution-registry";
@@ -152,10 +161,13 @@ type AgentSessionOperationState = {
 	};
 	readonly continuationInputs: WeakSet<SessionSendInput>;
 	readonly durableWrites: Set<Promise<void>>;
+	readonly durableWriteFailures: unknown[];
 	readonly transcriptOrder: SessionTranscriptOrder;
 	recordCommitTail: Promise<void>;
 	/** Reopen after projection recovery so compaction/context state is reloaded. */
 	projectionBlocked: boolean;
+	/** Do not Recall or retry input until an indeterminate log write is reconciled. */
+	storageUncertain: boolean;
 	readonly events: {
 		readonly observers: Set<() => void>;
 		readonly submissionEvents: Set<(event: SessionSubmissionEvent) => void>;
@@ -200,22 +212,28 @@ type AgentSessionConstructionOptions = AgentSessionOptions & {
 	readonly deadlineMs?: number;
 };
 
-const isCommittedProjectionBlocked = (error: unknown): boolean => {
+const storageWriteOutcomeFromError = (
+	error: unknown
+): SessionWriteOutcome | undefined => {
 	const seen = new Set<Error>();
 	let current = error;
 	while (current instanceof Error && !seen.has(current)) {
-		if (
-			current instanceof SessionWriteOutcomeError &&
-			current.outcome.kind === "committed" &&
-			current.outcome.projection === "blocked"
-		) {
-			return true;
+		if (current instanceof SessionWriteOutcomeError) {
+			return current.outcome;
 		}
 		seen.add(current);
 		current = current.cause;
 	}
-	return false;
 };
+
+const isStorageBlockedWrite = (error: unknown): boolean => {
+	const outcome = storageWriteOutcomeFromError(error);
+	return (
+		outcome?.kind === "indeterminate" ||
+		(outcome?.kind === "committed" && outcome.projection === "blocked")
+	);
+};
+
 type SessionTranscriptOrder = {
 	readonly committedMessageIds: Set<SessionMessageId>;
 	readonly messageIds: SessionMessageId[];
@@ -624,9 +642,11 @@ export class AgentSessionImpl implements AgentSession {
 			compaction: { activeCommand: undefined, requests: new Set() },
 			continuationInputs: new WeakSet(),
 			durableWrites: new Set(),
+			durableWriteFailures: [],
 			transcriptOrder: createSessionTranscriptOrder(initialTranscript),
 			recordCommitTail: Promise.resolve(),
 			projectionBlocked: false,
+			storageUncertain: false,
 			events: {
 				observers: new Set(),
 				submissionEvents: new Set(),
@@ -681,6 +701,15 @@ export class AgentSessionImpl implements AgentSession {
 				}
 			}
 		};
+		const trackShutdownWriteFailure = (error: unknown): void => {
+			if (
+				sessionState.shutdown.phase === "closing" &&
+				!this.#state.turnActive &&
+				!isCommittedProjectionBlocked(error)
+			) {
+				sessionState.durableWriteFailures.push(error);
+			}
+		};
 		const commitRecord: AgentSessionPorts["commitRecord"] = (input) => {
 			if (sessionState.shutdown.closed) {
 				return Promise.resolve();
@@ -728,9 +757,31 @@ export class AgentSessionImpl implements AgentSession {
 				.then(
 					() => publishCommittedRecord(),
 					(error) => {
-						if (isCommittedProjectionBlocked(error)) {
+						if (isStorageBlockedWrite(error)) {
 							sessionState.projectionBlocked = true;
-							publishCommittedRecord(error);
+							const outcome = storageWriteOutcomeFromError(error);
+							const writeError =
+								error instanceof Error
+									? error
+									: new Error(
+											getErrorMessage(error, "Session storage is blocked.")
+										);
+							if (outcome?.kind === "committed") {
+								publishCommittedRecord(writeError);
+							} else {
+								sessionState.storageUncertain = true;
+								const transcript = removeUncommittedSessionRecordMessages(
+									this.#state.transcript,
+									input.record,
+									sessionState.transcriptOrder,
+									assistantMessageId
+								);
+								publish({
+									error: writeError,
+									projectionBlocked: true,
+									transcript,
+								});
+							}
 						} else {
 							const transcript = removeUncommittedSessionRecordMessages(
 								this.#state.transcript,
@@ -752,23 +803,40 @@ export class AgentSessionImpl implements AgentSession {
 			sessionState.durableWrites.add(write);
 			void write.then(
 				() => sessionState.durableWrites.delete(write),
-				() => sessionState.durableWrites.delete(write)
+				(error) => {
+					trackShutdownWriteFailure(error);
+					sessionState.durableWrites.delete(write);
+				}
 			);
 			return write;
 		};
 		const updateSubmissionStatus: AgentSessionPorts["updateSubmissionStatus"] =
 			(input) => {
 				const write = ports.updateSubmissionStatus(input).catch((error) => {
-					if (isCommittedProjectionBlocked(error)) {
+					if (isStorageBlockedWrite(error)) {
 						sessionState.projectionBlocked = true;
-						publish({ projectionBlocked: true });
+						if (storageWriteOutcomeFromError(error)?.kind === "indeterminate") {
+							sessionState.storageUncertain = true;
+						}
+						publish({
+							error:
+								error instanceof Error
+									? error
+									: new Error(
+											getErrorMessage(error, "Session storage is blocked.")
+										),
+							projectionBlocked: true,
+						});
 					}
 					throw error;
 				});
 				sessionState.durableWrites.add(write);
 				void write.then(
 					() => sessionState.durableWrites.delete(write),
-					() => sessionState.durableWrites.delete(write)
+					(error) => {
+						trackShutdownWriteFailure(error);
+						sessionState.durableWrites.delete(write);
+					}
 				);
 				return write;
 			};
@@ -877,11 +945,15 @@ export class AgentSessionImpl implements AgentSession {
 			if (sessionState.shutdown.closed) {
 				return;
 			}
-			if (error !== null && isCommittedProjectionBlocked(error)) {
+			if (error !== null && isStorageBlockedWrite(error)) {
 				sessionState.projectionBlocked = true;
+				if (storageWriteOutcomeFromError(error)?.kind === "indeterminate") {
+					sessionState.storageUncertain = true;
+				}
 			}
 			publish({
 				compactionError: error,
+				...(error !== null && isStorageBlockedWrite(error) ? { error } : {}),
 				...(sessionState.projectionBlocked ? { projectionBlocked: true } : {}),
 			});
 		};
@@ -1026,6 +1098,10 @@ export class AgentSessionImpl implements AgentSession {
 			}
 			if (firstFailure !== undefined) {
 				throw firstFailure.reason;
+			}
+			const previousFailure = sessionState.durableWriteFailures[0];
+			if (previousFailure !== undefined) {
+				throw previousFailure;
 			}
 		};
 		const waitForCompactions = async (): Promise<void> => {
@@ -1435,7 +1511,7 @@ export class AgentSessionImpl implements AgentSession {
 					userText: text,
 				};
 				const steeringMessage: SessionSteeringMessage = {
-					id: toSteeringMessageId(crypto.randomUUID()),
+					id: toSteeringMessageId(`steering-${message.id}`),
 					input: steeringInput,
 					message,
 					recordId: record.id,
@@ -1471,7 +1547,17 @@ export class AgentSessionImpl implements AgentSession {
 					),
 				});
 				if (attachmentIds.length > 0) {
-					ports.attachments.release(attachmentIds);
+					trackBackgroundTask(
+						Promise.resolve()
+							.then(() => ports.attachments.release(attachmentIds))
+							.catch((error) => {
+								void logger.error("Steering attachment release failed", {
+									operation: "session.steering",
+									phase: "attachment-release",
+								});
+								throw error;
+							})
+					);
 				}
 				emitSubmissionEvent({
 					kind: "steered",
@@ -1638,6 +1724,7 @@ export class AgentSessionImpl implements AgentSession {
 				ports.inputScheduler.getQueuedSubmissions().length > 0 ||
 				this.#state.steeringMessages.length > 0,
 			writeBlocked: sessionState.projectionBlocked,
+			reconciliationRequired: sessionState.storageUncertain,
 		});
 		const inputLanePort: SessionInputLanePort = {
 			apply: (transition) => {
@@ -1818,6 +1905,9 @@ export class AgentSessionImpl implements AgentSession {
 		const continueSession = (): SessionContinuationOutcome => {
 			if (sessionState.shutdown.closed) {
 				return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
+			}
+			if (sessionState.projectionBlocked) {
+				return { kind: "rejected", reason: SESSION_PROJECTION_BLOCKED_ERROR };
 			}
 			if (
 				sessionState.lane.runs > 0 ||
