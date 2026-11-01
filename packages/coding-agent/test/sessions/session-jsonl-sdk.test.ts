@@ -6664,6 +6664,179 @@ test("rejects JSONL compaction checkpoints that reference messages outside the t
 	}
 });
 
+test("recovery completes a synced deletion event before catalog discovery can return the Session", async () => {
+	const databasePath = path.join(root, "sdk-delete-before-marker.sqlite");
+	const sessionId = toSessionId("delete-before-marker-session");
+	const markerPath = path.join(
+		root,
+		"session-control",
+		"deleted",
+		`${sessionId}.json`
+	);
+	let failMarkerSync = true;
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace,
+		{
+			sync: async (filePath, handle) => {
+				if (
+					failMarkerSync &&
+					filePath.endsWith(path.join("deleted", `${sessionId}.json`))
+				) {
+					failMarkerSync = false;
+					throw new Error("Injected crash before deletion marker sync.");
+				}
+				await handle.sync();
+			},
+		}
+	);
+	try {
+		await persistence.store.createEmptySession({ id: sessionId });
+		const deletion = await persistence.store.deleteSession(sessionId);
+		expect(deletion).toMatchObject({
+			kind: "committed",
+			projection: "blocked",
+		});
+		expect(
+			await Bun.file(
+				path.join(root, "session-logs", sessionId, "session.jsonl")
+			).text()
+		).toContain('"type":"session.deleted"');
+		await fs.rm(markerPath, { force: true });
+		persistence.close();
+
+		const reopenedPersistence = createSessionJsonlTestPersistence(
+			databasePath,
+			workspace
+		);
+		try {
+			await expect(
+				reopenedPersistence.store.getSession(sessionId)
+			).rejects.toMatchObject({
+				code: "session_deleted",
+			});
+			expect(await Bun.file(markerPath).exists()).toBe(true);
+			const catalog = await reopenedPersistence.store.listSessionCatalog();
+			expect(catalog.sessions.map(({ id }) => id)).not.toContain(sessionId);
+			expect(catalog.issues).toEqual([]);
+			expect(await Bun.file(markerPath).exists()).toBe(true);
+			await expect(
+				fs.access(path.join(root, "session-logs", sessionId))
+			).rejects.toMatchObject({ code: "ENOENT" });
+		} finally {
+			reopenedPersistence.close();
+		}
+	} finally {
+		persistence.close();
+	}
+});
+
+test("a durable deletion marker reports cleanup pending and the same operation retries to completion", async () => {
+	const databasePath = path.join(root, "sdk-delete-cleanup-pending.sqlite");
+	const sessionId = toSessionId("delete-cleanup-pending-session");
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const markerPath = path.join(
+		root,
+		"session-control",
+		"deleted",
+		`${sessionId}.json`
+	);
+	try {
+		await persistence.store.createEmptySession({ id: sessionId });
+		persistence.projection.sqlite.exec(`
+			CREATE TRIGGER fail_session_delete_cleanup
+			BEFORE DELETE ON session
+			BEGIN
+				SELECT RAISE(ABORT, 'injected Session projection cleanup failure');
+			END;
+		`);
+
+		const cleanupPending = await persistence.store.deleteSession(sessionId);
+		expect(cleanupPending).toMatchObject({
+			code: "session_cleanup_pending",
+			kind: "cleanup-pending",
+			operationId: `delete-${sessionId}`,
+		});
+		expect(await Bun.file(markerPath).exists()).toBe(true);
+		expect(
+			await Bun.file(path.join(root, "session-logs", sessionId)).exists()
+		).toBe(false);
+
+		persistence.projection.sqlite.exec(
+			"DROP TRIGGER fail_session_delete_cleanup"
+		);
+		const retried = await persistence.store.deleteSession(sessionId);
+		expect(retried).toMatchObject({
+			kind: "committed",
+			operationId: `delete-${sessionId}`,
+			projection: "ready",
+		});
+		expect(await persistence.store.listSessions()).toEqual([]);
+	} finally {
+		persistence.close();
+	}
+});
+
+test("deletion keeps its durable marker and reports cleanup pending when log removal fails", async () => {
+	const databasePath = path.join(root, "sdk-delete-log-removal-pending.sqlite");
+	const sessionId = toSessionId("delete-log-removal-pending-session");
+	let failRemoval = true;
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace,
+		{
+			remove: async (filePath, options) => {
+				if (failRemoval && filePath.endsWith(sessionId)) {
+					failRemoval = false;
+					throw new Error("Injected log removal failure.");
+				}
+				await fs.rm(filePath, options);
+			},
+		}
+	);
+	const markerPath = path.join(
+		root,
+		"session-control",
+		"deleted",
+		`${sessionId}.json`
+	);
+	const logDirectory = path.join(root, "session-logs", sessionId);
+	try {
+		await persistence.store.createEmptySession({ id: sessionId });
+		const pending = await persistence.store.deleteSession(sessionId);
+		expect(pending).toMatchObject({
+			code: "session_cleanup_pending",
+			kind: "cleanup-pending",
+			operationId: `delete-${sessionId}`,
+		});
+		expect(await Bun.file(markerPath).exists()).toBe(true);
+		expect(
+			await fs.stat(logDirectory).then(
+				() => true,
+				() => false
+			)
+		).toBe(true);
+
+		const retried = await persistence.store.deleteSession(sessionId);
+		expect(retried).toMatchObject({
+			kind: "committed",
+			operationId: `delete-${sessionId}`,
+			projection: "ready",
+		});
+		expect(
+			await fs.stat(logDirectory).then(
+				() => true,
+				() => false
+			)
+		).toBe(false);
+	} finally {
+		persistence.close();
+	}
+});
+
 test("Session deletion persists a tombstone receipt before removing the projection", async () => {
 	const databasePath = path.join(root, "sdk-delete-session.sqlite");
 	const services = await openSessionServices({

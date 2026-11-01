@@ -93,6 +93,16 @@ export type SessionProjectionRebuildResult = Readonly<{
 	skippedSessionIds: SessionId[];
 }>;
 
+export type SessionDeletionOutcome =
+	| SessionWriteOutcome
+	| Readonly<{
+			code: "session_cleanup_pending";
+			kind: "cleanup-pending";
+			message: string;
+			operationId: string;
+			receipt: SessionWriteReceipt;
+	  }>;
+
 export type SessionProjectionMaintenanceGate = <Result>(
 	operation: () => Promise<Result>
 ) => Promise<Result>;
@@ -276,7 +286,7 @@ export type SessionStore = Omit<
 		entry?: SessionUsageEntry;
 		writeOutcome: SessionWriteOutcome;
 	}>;
-	deleteSession: (sessionId: SessionId) => Promise<SessionWriteOutcome>;
+	deleteSession: (sessionId: SessionId) => Promise<SessionDeletionOutcome>;
 	findSessionRecordBySubmissionId: (
 		sessionId: SessionId,
 		submissionId: SubmissionId

@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isUndefined } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import {
 	createDatabase,
@@ -93,6 +94,7 @@ test("resets session data without conflating repeated pasted markers in prompt h
 	});
 
 	await store.resetSessionData();
+	await store.collectAttachments(0);
 
 	expect(await store.listSessions()).toEqual([]);
 	expect(await store.getPromptHistory()).toEqual([
@@ -109,8 +111,168 @@ test("resets session data without conflating repeated pasted markers in prompt h
 	expect(await store.attachmentStore?.resolve(reference)).toMatchObject({
 		availability: "missing",
 	});
-	expect(await fs.readdir(attachmentRoot)).toEqual([]);
+	expect(await fs.readdir(attachmentRoot)).toEqual(["v1"]);
 });
+test("reset preserves prompt-history attachment owners and collects unowned Session blobs", async () => {
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-session-reset-attachment-owners-")
+	);
+	const databasePath = path.join(directory, "sessions.sqlite");
+	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	const attachmentRoot = path.join(directory, "attachments");
+	const snapshotRoot = path.join(directory, "file-snapshots");
+	const sessionId = toSessionId("reset-attachment-owner-session");
+	const operational = createDatabase(databasePath);
+	const projection = createDatabase(
+		resolveLocalSessionProjectionPath(databasePath)
+	);
+	const store = createSessionJsonlStore(
+		createDrizzleSessionStore(projection.db, {
+			attachmentRoot,
+			operationalDatabase: operational.db,
+			sessionLogRoot: logRoot,
+			snapshotRoot,
+			workspaceRoot: directory,
+		}),
+		logRoot
+	);
+	try {
+		const promptHistoryLease = await store.attachmentStore?.ingest({
+			bytes: PNG_BYTES,
+			filename: "prompt-history-owner.png",
+			mediaType: "image/png",
+		});
+		const sessionOnlyLease = await store.attachmentStore?.ingest({
+			bytes: new Uint8Array([...PNG_BYTES, 0x01]),
+			filename: "session-only-owner.png",
+			mediaType: "image/png",
+		});
+		if (promptHistoryLease === undefined || sessionOnlyLease === undefined) {
+			throw new Error("The reset attachment fixtures were not stored.");
+		}
+		await store.recordPrompt({
+			files: [attachmentReferenceToFilePart(promptHistoryLease.reference)],
+			text: "prompt history retains its attachment",
+		});
+		await promptHistoryLease.release();
+		await sessionOnlyLease.release();
+		const created = await store.createSessionWithExternalizedMessage({
+			agent: agentId("build"),
+			id: sessionId,
+			message: {
+				id: sessionMessageId("reset-attachment-owner-message"),
+				parts: [
+					attachmentReferenceToFilePart(promptHistoryLease.reference),
+					attachmentReferenceToFilePart(sessionOnlyLease.reference),
+				],
+				role: "user",
+			},
+			model,
+			turnId: agentTurnId("reset-attachment-owner-turn"),
+		});
+		expect(created.writeOutcome.kind).toBe("committed");
+
+		await store.resetSessionData();
+
+		expect(await store.getPromptHistory()).toMatchObject([
+			{
+				files: [
+					{
+						attachmentId: promptHistoryLease.reference.attachmentId,
+					},
+				],
+				text: "prompt history retains its attachment",
+			},
+		]);
+		expect(
+			await store.attachmentStore?.resolve(promptHistoryLease.reference)
+		).toMatchObject({ availability: "available" });
+		expect(
+			await store.attachmentStore?.resolve(sessionOnlyLease.reference)
+		).toMatchObject({ availability: "missing" });
+		expect(
+			JSON.parse(
+				await fs.readFile(
+					path.join(
+						directory,
+						"session-control",
+						"deleted",
+						`${sessionId}.json`
+					),
+					"utf8"
+				)
+			)
+		).toMatchObject({ operationId: `delete-${sessionId}`, sessionId });
+	} finally {
+		operational.sqlite.close();
+		projection.sqlite.close();
+		await fs.rm(directory, { force: true, recursive: true });
+	}
+});
+
+test("reset reports committed cleanup pending and retries the same deletion identity", async () => {
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-session-reset-cleanup-pending-")
+	);
+	const databasePath = path.join(directory, "sessions.sqlite");
+	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	const sessionId = toSessionId("reset-cleanup-pending-session");
+	let failRemoval = true;
+	const operational = createDatabase(databasePath);
+	const projection = createDatabase(
+		resolveLocalSessionProjectionPath(databasePath)
+	);
+	const store = createSessionJsonlStore(
+		createDrizzleSessionStore(projection.db, {
+			attachmentRoot: path.join(directory, "attachments"),
+			operationalDatabase: operational.db,
+			sessionLogRoot: logRoot,
+			snapshotRoot: path.join(directory, "file-snapshots"),
+			workspaceRoot: directory,
+		}),
+		logRoot,
+		{
+			remove: async (filePath, options) => {
+				if (failRemoval && filePath.endsWith(sessionId)) {
+					failRemoval = false;
+					throw new Error("Injected reset log removal failure.");
+				}
+				await fs.rm(filePath, options);
+			},
+		}
+	);
+	const markerPath = path.join(
+		directory,
+		"session-control",
+		"deleted",
+		`${sessionId}.json`
+	);
+	try {
+		await store.createEmptySession({ id: sessionId });
+		await expect(store.resetSessionData()).rejects.toMatchObject({
+			code: "session_cleanup_pending",
+		});
+		expect(await Bun.file(markerPath).exists()).toBe(true);
+		expect(
+			await fs.stat(path.join(logRoot, sessionId)).then(
+				() => true,
+				() => false
+			)
+		).toBe(true);
+
+		await store.resetSessionData();
+		expect(JSON.parse(await fs.readFile(markerPath, "utf8"))).toMatchObject({
+			operationId: `delete-${sessionId}`,
+			sessionId,
+		});
+		expect(await store.listSessions()).toEqual([]);
+	} finally {
+		operational.sqlite.close();
+		projection.sqlite.close();
+		await fs.rm(directory, { force: true, recursive: true });
+	}
+});
+
 test("manual reset removes authoritative logs before clearing their projection", async () => {
 	const directory = await fs.mkdtemp(
 		path.join("/tmp", "wincode-session-jsonl-reset-")

@@ -1,5 +1,3 @@
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import {
 	agentIdSchema,
 	SESSION_RECORD_VERSION,
@@ -80,7 +78,6 @@ import {
 	promptHistory,
 	type SerializedJson,
 	session,
-	sessionAttachment,
 	sessionCatalogDeletionState,
 	sessionCatalogVersion,
 	sessionCompaction,
@@ -203,14 +200,6 @@ const compactionSummarySchema = z.object({
 
 const parseCompactionSummary = (value: unknown): SessionCompaction["summary"] =>
 	compactionSummarySchema.parse(value);
-
-const clearAttachmentRoot = async (root: string): Promise<void> => {
-	await fs.mkdir(root, { recursive: true });
-	const entries = await fs.readdir(root, { withFileTypes: true });
-	for (const entry of entries) {
-		await fs.rm(path.join(root, entry.name), { force: true, recursive: true });
-	}
-};
 
 const writePromptHistory = (
 	db: SessionDatabase,
@@ -1747,15 +1736,14 @@ export const createDrizzleSessionStore = (
 					)
 				)
 				.get();
-			if (binding === undefined) {
-				return;
+			if (binding !== undefined) {
+				markSessionDeleted(sessionId);
+				operationalDb
+					.delete(localSessionBinding)
+					.where(eq(localSessionBinding.sessionId, sessionId))
+					.run();
 			}
-			markSessionDeleted(sessionId);
-			operationalDb
-				.delete(localSessionBinding)
-				.where(eq(localSessionBinding.sessionId, sessionId))
-				.run();
-			await collectAttachments().catch(() => undefined);
+			await collectAttachments();
 			const prune = fileObservationStore.pruneSnapshots;
 			if (prune) {
 				await prune().catch(() => undefined);
@@ -1803,9 +1791,7 @@ export const createDrizzleSessionStore = (
 			});
 			operationalDb.transaction((tx) => {
 				tx.delete(localSessionBinding).run();
-				tx.delete(sessionAttachment).run();
 			});
-			await clearAttachmentRoot(attachmentRoot);
 			const prune = fileObservationStore.pruneSnapshots;
 			if (prune) {
 				await prune().catch(() => undefined);

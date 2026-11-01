@@ -62,6 +62,7 @@ import type {
 	SessionCatalogIssue,
 	SessionCatalogPage,
 	SessionCatalogResult,
+	SessionDeletionOutcome,
 	SessionHistoryPage,
 	SessionPageOptions,
 	SessionStore,
@@ -84,6 +85,10 @@ import {
 export type SessionLogFileIo = Readonly<{
 	sync?: (filePath: string, handle: fs.FileHandle) => Promise<void>;
 	syncDirectory?: (directory: string, handle: fs.FileHandle) => Promise<void>;
+	remove?: (
+		filePath: string,
+		options: Parameters<typeof fs.rm>[1]
+	) => Promise<void>;
 	write?: (
 		filePath: string,
 		handle: fs.FileHandle,
@@ -93,6 +98,20 @@ export type SessionLogFileIo = Readonly<{
 		position: number
 	) => Promise<number>;
 }>;
+
+export class SessionCleanupPendingError extends Error {
+	readonly code = "session_cleanup_pending" as const;
+	readonly operationIds: readonly string[];
+
+	constructor(operationIds: readonly string[], cause?: unknown) {
+		super(
+			"Session lifecycle cleanup is committed but has not completed.",
+			cause === undefined ? undefined : { cause }
+		);
+		this.name = "SessionCleanupPendingError";
+		this.operationIds = operationIds;
+	}
+}
 
 export class SessionWriteOutcomeError extends Error {
 	readonly code: string;
@@ -276,6 +295,8 @@ type CommittedLogEntry = Readonly<{
 }>;
 
 const SESSION_OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,511}$/u;
+const sessionDeletionOperationId = (sessionId: SessionId): string =>
+	`delete-${validSessionId(sessionId)}`;
 const operationIdFileStem = (operationId: string): string =>
 	new Bun.CryptoHasher("sha256").update(operationId).digest("hex");
 
@@ -3624,16 +3645,15 @@ export const createSessionJsonlStore = (
 			fileIo
 		);
 		if (pendingIntent?.operationId === operationId) {
+			const { state } = await readLog(logPath, sessionId);
 			const writeOutcome = await commitWrite(sessionId, {
 				operationId,
 				payload: {},
 				type: "session.deleted",
 			});
-			if (writeOutcome.kind !== "committed") {
-				return { writeOutcome };
-			}
-			const { state } = await readLog(logPath, sessionId);
-			return { logId: state.logId, receipt: writeOutcome };
+			return writeOutcome.kind === "committed"
+				? { logId: state.logId, receipt: writeOutcome }
+				: { writeOutcome };
 		}
 		const { state } = await readLog(logPath, sessionId);
 		const deletion = findOperation(
@@ -3664,53 +3684,64 @@ export const createSessionJsonlStore = (
 	};
 	const removeDeletedSessionLog = async (
 		sessionId: SessionId,
-		marker?: Readonly<{
-			logId: string;
-			receipt: SessionDeletionReceipt;
-		}>
-	): Promise<boolean> => {
+		marker: Readonly<{ logId: string; receipt: SessionDeletionReceipt }>
+	): Promise<Readonly<{ logRemoved: boolean; markerDurable: boolean }>> => {
+		let markerDurable = false;
 		try {
 			await ensureDirectoryDurable(logRoot);
 			const root = await fs.realpath(logRoot);
-			if (marker !== undefined) {
-				await writeDeletedMarker(
-					logRoot,
-					sessionId,
-					marker.logId,
-					marker.receipt,
-					fileIo
-				);
-			}
-			await fs.rm(path.join(root, validSessionId(sessionId)), {
-				force: true,
-				recursive: true,
-			});
-			await syncDirectory(root);
-			return true;
+			await writeDeletedMarker(
+				logRoot,
+				sessionId,
+				marker.logId,
+				marker.receipt,
+				fileIo
+			);
+			markerDurable = true;
+			const sessionDirectory = path.join(root, validSessionId(sessionId));
+			const remove = fileIo.remove ?? fs.rm;
+			await remove(sessionDirectory, { force: true, recursive: true });
+			await syncDirectory(root, fileIo);
+			return { logRemoved: true, markerDurable };
 		} catch {
-			return false;
+			return { logRemoved: false, markerDurable };
 		}
 	};
+	const deletionCleanupPending = (
+		receipt: SessionWriteReceipt
+	): SessionDeletionOutcome => ({
+		code: "session_cleanup_pending",
+		kind: "cleanup-pending",
+		message:
+			"Session deletion is committed, but local cleanup is still pending.",
+		operationId: receipt.operationId,
+		receipt,
+	});
 	const finalizeDeletion = async (
 		sessionId: SessionId,
 		receipt: SessionWriteReceipt,
+		markerDurable: boolean,
 		logRemoved: boolean
-	): Promise<SessionWriteOutcome> => {
-		if (!logRemoved) {
+	): Promise<SessionDeletionOutcome> => {
+		if (!markerDurable) {
 			return { ...receipt, projection: "blocked" };
+		}
+		if (!logRemoved) {
+			return deletionCleanupPending(receipt);
 		}
 		try {
 			await projectionStore.deleteSession(sessionId);
 			return { ...receipt, projection: "ready" };
 		} catch {
-			return { ...receipt, projection: "blocked" };
+			return deletionCleanupPending(receipt);
 		}
 	};
 	const deleteSession = async (
 		sessionId: SessionId
-	): Promise<SessionWriteOutcome> => {
-		const operationId = `delete-${sessionId}`;
+	): Promise<SessionDeletionOutcome> => {
+		const operationId = sessionDeletionOperationId(sessionId);
 		let receipt: SessionWriteReceipt | undefined;
+		let markerDurable = false;
 		try {
 			return await withTemporaryWriter(sessionId, async () => {
 				let logRemoved = false;
@@ -3719,12 +3750,21 @@ export const createSessionJsonlStore = (
 					const marker = await readDeletedMarker(logRoot, sessionId);
 					if (marker !== undefined) {
 						receipt = {
-							...marker,
+							entryHash: marker.entryHash,
 							kind: "committed",
+							operationId: marker.operationId,
 							projection: "blocked",
+							sequence: marker.sequence,
 						};
-						logRemoved = await removeDeletedSessionLog(sessionId);
-						projectionStore.markSessionDeleted(sessionId);
+						const cleanup = await removeDeletedSessionLog(sessionId, {
+							logId: marker.logId,
+							receipt: marker,
+						});
+						markerDurable = cleanup.markerDurable;
+						logRemoved = cleanup.logRemoved;
+						if (markerDurable) {
+							projectionStore.markSessionDeleted(sessionId);
+						}
 						return;
 					}
 					await assertSessionWritable(sessionId);
@@ -3738,11 +3778,15 @@ export const createSessionJsonlStore = (
 						kind: "committed",
 						projection: "blocked",
 					};
-					logRemoved = await removeDeletedSessionLog(sessionId, {
+					const cleanup = await removeDeletedSessionLog(sessionId, {
 						logId: deletion.logId,
 						receipt: deletion.receipt,
 					});
-					projectionStore.markSessionDeleted(sessionId);
+					markerDurable = cleanup.markerDurable;
+					logRemoved = cleanup.logRemoved;
+					if (markerDurable) {
+						projectionStore.markSessionDeleted(sessionId);
+					}
 				});
 				if (writeOutcome !== undefined) {
 					return writeOutcome;
@@ -3750,11 +3794,19 @@ export const createSessionJsonlStore = (
 				if (receipt === undefined) {
 					throw new Error("The committed Session deletion receipt is missing.");
 				}
-				return finalizeDeletion(sessionId, receipt, logRemoved);
+				return await finalizeDeletion(
+					sessionId,
+					receipt,
+					markerDurable,
+					logRemoved
+				);
 			});
 		} catch (error) {
-			return receipt === undefined
-				? sessionWriteOutcomeFromError(operationId, error)
+			if (receipt === undefined) {
+				return sessionWriteOutcomeFromError(operationId, error);
+			}
+			return markerDurable
+				? deletionCleanupPending(receipt)
 				: { ...receipt, projection: "blocked" };
 		}
 	};
@@ -3836,82 +3888,132 @@ export const createSessionJsonlStore = (
 		};
 	};
 
+	const findResetSessionIds = async (): Promise<SessionId[]> =>
+		[
+			...new Set([
+				...(await findSessionLogIds()),
+				...(await findDeletedMarkerSessionIds()),
+			]),
+		].sort();
+
 	const resetSessionLog = async (
 		root: string,
 		sessionId: SessionId
 	): Promise<void> => {
 		const directory = path.join(root, validSessionId(sessionId));
-		const markerPath = await deletedMarkerPath(sessionId);
-		try {
-			await fs.access(markerPath);
-			await withSessionCatalogLifecycleGate(logRoot, async () => {
-				await fs.rm(directory, { force: true, recursive: true });
-				await syncDirectory(root);
-			});
-			return;
-		} catch (error) {
-			if (!isCode(error, "ENOENT")) {
-				throw error;
-			}
-		}
-
-		await withSessionCatalogLifecycleGate(logRoot, async () => {
+		const existingMarker = await readDeletedMarker(logRoot, sessionId);
+		let logId: string;
+		let receipt: SessionDeletionReceipt;
+		if (existingMarker === undefined) {
 			const logPath = path.join(directory, "session.jsonl");
-			const state = (await readLog(logPath, sessionId)).state;
-			const operationId = `delete-${validSessionId(sessionId)}`;
+			const { state } = await readLog(logPath, sessionId);
 			const writeOutcome = await commitWrite(sessionId, {
-				operationId,
+				operationId: sessionDeletionOperationId(sessionId),
 				payload: {},
 				type: "session.deleted",
 			});
 			if (writeOutcome.kind !== "committed") {
 				throw new SessionWriteOutcomeError(writeOutcome);
 			}
-			const deletedLog = await readLog(logPath, sessionId);
-			const deletion = deletedLog.state.entries.find(
-				(entry) => entry.envelope.operationId === operationId
-			);
-			if (deletion === undefined) {
-				throw new SessionLogError(
-					"session_log_corrupt",
-					sessionId,
-					"Session deletion commit could not be verified."
-				);
+			logId = state.logId;
+			receipt = writeOutcome;
+			await writeDeletedMarker(logRoot, sessionId, logId, receipt, fileIo);
+		} else {
+			logId = existingMarker.logId;
+			receipt = existingMarker;
+			await writeDeletedMarker(logRoot, sessionId, logId, receipt, fileIo);
+		}
+		const remove = fileIo.remove ?? fs.rm;
+		await remove(directory, { force: true, recursive: true });
+		await syncDirectory(root, fileIo);
+	};
+
+	const resetSessionLogForLifecycle = async (
+		root: string,
+		sessionId: SessionId
+	): Promise<void> => {
+		try {
+			await resetSessionLog(root, sessionId);
+		} catch (error) {
+			const marker = await readDeletedMarker(logRoot, sessionId);
+			if (marker === undefined) {
+				throw error;
 			}
-			await writeDeletedMarker(
-				logRoot,
-				sessionId,
-				state.logId,
-				{
-					entryHash: deletion.envelope.entryHash,
-					operationId: deletion.envelope.operationId,
-					sequence: deletion.envelope.sequence,
-				},
-				fileIo
-			);
-			await fs.rm(directory, { force: true, recursive: true });
-			await syncDirectory(root);
-		});
+			try {
+				await writeDeletedMarker(
+					logRoot,
+					sessionId,
+					marker.logId,
+					marker,
+					fileIo
+				);
+			} catch {
+				throw error;
+			}
+			throw new SessionCleanupPendingError([marker.operationId], error);
+		}
+	};
+
+	const resetSessionDataUnderCatalogGate = async (
+		root: string,
+		lockedSessionIds: ReadonlySet<SessionId>
+	): Promise<boolean> => {
+		const latestSessionIds = await findResetSessionIds();
+		if (
+			latestSessionIds.some((sessionId) => !lockedSessionIds.has(sessionId))
+		) {
+			return false;
+		}
+		await assertResetAllowed();
+		for (const sessionId of latestSessionIds) {
+			await resetSessionLogForLifecycle(root, sessionId);
+		}
+		const operationIds = latestSessionIds.map(sessionDeletionOperationId);
+		try {
+			await projectionStore.resetSessionData();
+		} catch (error) {
+			throw new SessionCleanupPendingError(operationIds, error);
+		}
+		return true;
 	};
 
 	const resetSessionData = async (): Promise<void> => {
 		await assertResetAllowed();
-		const sessionIds = await findSessionLogIds();
-		const root = await fs.realpath(logRoot);
-		const writers: SessionWriterLock[] = [];
-		try {
-			for (const sessionId of sessionIds) {
-				writers.push(await acquireSessionWriterLock(logRoot, sessionId));
+		await ensureDirectoryDurable(logRoot);
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			const sessionIds = await findResetSessionIds();
+			const lockedSessionIds = new Set(sessionIds);
+			const writers: SessionWriterLock[] = [];
+			let resetCompleted = false;
+			try {
+				for (const sessionId of sessionIds) {
+					writers.push(await acquireSessionWriterLock(logRoot, sessionId));
+				}
+				const root = await fs.realpath(logRoot);
+				resetCompleted = await withSessionCatalogLifecycleGate(logRoot, () =>
+					resetSessionDataUnderCatalogGate(root, lockedSessionIds)
+				);
+				if (resetCompleted) {
+					try {
+						await projectionStore.collectAttachments(0);
+					} catch (error) {
+						throw new SessionCleanupPendingError(
+							sessionIds.map(sessionDeletionOperationId),
+							error
+						);
+					}
+					return;
+				}
+			} finally {
+				for (const writer of writers.reverse()) {
+					await writer.release();
+				}
 			}
-			for (const sessionId of sessionIds) {
-				await resetSessionLog(root, sessionId);
-			}
-			await projectionStore.resetSessionData();
-		} finally {
-			for (const writer of writers.reverse()) {
-				await writer.release();
-			}
+			await Bun.sleep(10);
 		}
+		throw new Error(
+			"Session catalog kept changing during reset; retry the operation."
+		);
 	};
 
 	const wrapRead =
@@ -3922,6 +4024,7 @@ export const createSessionJsonlStore = (
 			const sessionId = args[0];
 			if (typeof sessionId === "string") {
 				try {
+					await reconcileDeletedSessionIfNeeded(sessionId as SessionId);
 					await ensureProjected(sessionId as SessionId);
 				} catch (error) {
 					if (!isCode(error, "ENOENT")) {
@@ -4026,6 +4129,7 @@ export const createSessionJsonlStore = (
 	const ensureBoundSessionProjectedIfStale = async (
 		sessionId: SessionId
 	): Promise<void> => {
+		await reconcileDeletedSessionIfNeeded(sessionId);
 		const generation = assertProjectionReady(sessionId);
 		await checkDeletedMarker(sessionId);
 		if (!projection.isBoundToWorkspace(sessionId)) {
@@ -4087,17 +4191,11 @@ export const createSessionJsonlStore = (
 		}
 	};
 
-	const listSessionCatalog = async (): Promise<SessionCatalogResult> => {
-		if (projection.getMaintenanceState().status !== "ready") {
-			throw new Error(
-				"Session projection rebuild is incomplete; retry `wincode sessions rebuild` before listing Sessions."
-			);
-		}
-		await ensureDirectoryDurable(logRoot);
-		const { issues, sessionIds } = await projectExistingSessionLogs(
-			await fs.realpath(logRoot)
-		);
-		const projected = await projectionStore.listSessions();
+	const collectCatalogSessions = async (
+		projected: readonly Session[],
+		sessionIds: ReadonlySet<SessionId>,
+		issues: Map<SessionId, SessionCatalogIssue>
+	): Promise<Session[]> => {
 		const sessions: Session[] = [];
 		for (const session of projected) {
 			try {
@@ -4131,6 +4229,33 @@ export const createSessionJsonlStore = (
 			}
 			sessions.push(session);
 		}
+		return sessions;
+	};
+
+	const listSessionCatalog = async (
+		reconcileDeletions = true
+	): Promise<SessionCatalogResult> => {
+		if (projection.getMaintenanceState().status !== "ready") {
+			throw new Error(
+				"Session projection rebuild is incomplete; retry `wincode sessions rebuild` before listing Sessions."
+			);
+		}
+		await ensureDirectoryDurable(logRoot);
+		const deletionIssues = reconcileDeletions
+			? await reconcileDeletedSessions()
+			: [];
+		const { issues, sessionIds } = await projectExistingSessionLogs(
+			await fs.realpath(logRoot)
+		);
+		for (const issue of deletionIssues) {
+			issues.set(issue.sessionId, issue);
+		}
+		const projected = await projectionStore.listSessions();
+		const sessions = await collectCatalogSessions(
+			projected,
+			sessionIds,
+			issues
+		);
 		return { issues: [...issues.values()], sessions };
 	};
 
@@ -4146,6 +4271,7 @@ export const createSessionJsonlStore = (
 		sessionIds: readonly SessionId[]
 	): Promise<void> => {
 		for (const sessionId of sessionIds) {
+			await reconcileDeletedSessionIfNeeded(sessionId);
 			await ensureProjected(sessionId);
 		}
 	};
@@ -4262,6 +4388,7 @@ export const createSessionJsonlStore = (
 	const listSessionsPage = async (
 		options: SessionPageOptions = {}
 	): Promise<SessionCatalogPage> => {
+		await ensureDeletedSessionsReconciled();
 		const limit = parseSessionPageLimit(options.limit);
 		let cursor: SessionCatalogPageCursor | undefined;
 		if (options.cursor !== undefined) {
@@ -4297,6 +4424,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		options: SessionPageOptions = {}
 	): Promise<SessionHistoryPage> => {
+		await ensureDeletedSessionsReconciled();
 		const limit = parseSessionPageLimit(options.limit);
 		let cursor: SessionHistoryPageCursor | undefined;
 		if (options.cursor !== undefined) {
@@ -4371,6 +4499,12 @@ export const createSessionJsonlStore = (
 		if (outcome.kind === "committed" && outcome.projection === "ready") {
 			return;
 		}
+		if (outcome.kind === "cleanup-pending") {
+			return catalogIssue(
+				sessionId,
+				Object.assign(new Error(outcome.message), { code: outcome.code })
+			);
+		}
 		const failure =
 			outcome.kind === "committed"
 				? {
@@ -4405,6 +4539,36 @@ export const createSessionJsonlStore = (
 			}
 		}
 		return issues;
+	};
+
+	const reconcileDeletedSessionIfNeeded = async (
+		sessionId: SessionId
+	): Promise<void> => {
+		const marker = await readDeletedMarker(logRoot, sessionId);
+		const hasDeletionEvent =
+			marker !== undefined ||
+			(await logHasDeletionEvent(sessionId, await fs.realpath(logRoot)));
+		if (!hasDeletionEvent) {
+			return;
+		}
+		const issue = await reconcileDeletedSession(sessionId);
+		if (issue !== undefined) {
+			throw Object.assign(new Error(issue.message), {
+				code: issue.code,
+				sessionId,
+			});
+		}
+	};
+
+	const ensureDeletedSessionsReconciled = async (): Promise<void> => {
+		const issues = await reconcileDeletedSessions();
+		const firstIssue = issues[0];
+		if (firstIssue !== undefined) {
+			throw Object.assign(new Error(firstIssue.message), {
+				code: firstIssue.code,
+				sessionId: firstIssue.sessionId,
+			});
+		}
 	};
 
 	const acquireRebuildWriters = async (
@@ -4578,8 +4742,9 @@ export const createSessionJsonlStore = (
 	const findSessionRecordBySubmissionId = async (
 		sessionId: SessionId,
 		submissionId: SubmissionId
-	): Promise<SessionSubmissionRecordReceipt | undefined> =>
-		withTemporaryWriter(sessionId, async () => {
+	): Promise<SessionSubmissionRecordReceipt | undefined> => {
+		await reconcileDeletedSessionIfNeeded(sessionId);
+		return await withTemporaryWriter(sessionId, async () => {
 			assertProjectionReady(sessionId);
 			await checkDeletedMarker(sessionId);
 			const logPath = path.join(
@@ -4603,9 +4768,10 @@ export const createSessionJsonlStore = (
 			}
 			return receiptForSessionSubmission(sessionId, submissionId, state);
 		});
+	};
 
 	projectionStore.setAttachmentCollectionBarrier(async () => {
-		const catalog = await listSessionCatalog();
+		const catalog = await listSessionCatalog(false);
 		if (catalog.issues.length > 0) {
 			throw new Error(
 				"Attachment collection is blocked while authoritative Session logs are unavailable."
@@ -4651,10 +4817,13 @@ type SessionDeletionReceipt = Readonly<{
 	sequence: number;
 }>;
 
+type SessionDeletionMarker = SessionDeletionReceipt &
+	Readonly<{ logId: string }>;
+
 const readDeletedMarker = async (
 	logRoot: string,
 	sessionId: SessionId
-): Promise<SessionDeletionReceipt | undefined> => {
+): Promise<SessionDeletionMarker | undefined> => {
 	const markerPath = path.join(
 		await sessionControlRoot(logRoot),
 		"deleted",
@@ -4671,15 +4840,21 @@ const readDeletedMarker = async (
 	}
 	const value = JSON.parse(markerText) as {
 		entryHash?: unknown;
+		logId?: unknown;
 		operationId?: unknown;
 		sequence?: unknown;
 		sessionId?: unknown;
 	};
 	if (
 		value.sessionId !== sessionId ||
-		value.operationId !== `delete-${sessionId}` ||
+		value.operationId !== sessionDeletionOperationId(sessionId) ||
 		typeof value.entryHash !== "string" ||
-		typeof value.sequence !== "number"
+		!SESSION_LOG_HASH_PATTERN.test(value.entryHash) ||
+		typeof value.logId !== "string" ||
+		value.logId.length === 0 ||
+		typeof value.sequence !== "number" ||
+		!Number.isSafeInteger(value.sequence) ||
+		value.sequence < 2
 	) {
 		throw new SessionLogError(
 			"session_log_corrupt",
@@ -4689,6 +4864,7 @@ const readDeletedMarker = async (
 	}
 	return {
 		entryHash: value.entryHash,
+		logId: value.logId,
 		operationId: value.operationId,
 		sequence: value.sequence,
 	};
@@ -4710,7 +4886,13 @@ const writeDeletedMarker = async (
 		`${validSessionId(sessionId)}.json`
 	);
 	const bytes = new TextEncoder().encode(
-		`${encodeCanonicalSessionJson({ ...receipt, logId, sessionId })}\n`
+		`${encodeCanonicalSessionJson({
+			entryHash: receipt.entryHash,
+			logId,
+			operationId: receipt.operationId,
+			sequence: receipt.sequence,
+			sessionId,
+		})}\n`
 	);
 	let handle: fs.FileHandle | undefined;
 	try {
@@ -4733,6 +4915,13 @@ const writeDeletedMarker = async (
 				"A durable Session deletion marker conflicts with its operation."
 			);
 		}
+		const existingHandle = await fs.open(markerPath, "r");
+		try {
+			await syncFile(markerPath, existingHandle, fileIo);
+		} finally {
+			await existingHandle.close();
+		}
+		await syncDirectory(deletedRoot, fileIo);
 	}
 };
 

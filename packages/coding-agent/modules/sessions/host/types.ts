@@ -163,6 +163,13 @@ export type SessionWorkAdmission =
 export type SessionHostManager = Readonly<{
 	assertIdleForReload: () => Promise<void>;
 	tryAcquireSessionWork: () => SessionWorkAdmission;
+	withIdleForSessionLifecycle: <Result>(
+		sessionId: SessionId,
+		action: () => Promise<Result>
+	) => Promise<Result>;
+	withIdleForSessionDataReset: <Result>(
+		action: () => Promise<Result>
+	) => Promise<Result>;
 	withIdleForReload: <Result>(action: () => Promise<Result>) => Promise<Result>;
 	/** Rebind open Plugin Session scopes and idle Provider compositions. */
 	replacePluginRuntime: (

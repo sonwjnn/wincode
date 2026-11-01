@@ -4538,6 +4538,76 @@ describe("Session Host lifetime", () => {
 		});
 	});
 
+	test("Session deletion closes an idle same-process Host before taking storage authority", async () => {
+		const seeded = await seedSession("idle-delete-host-lifecycle");
+		const manager = createSessionHostManager();
+		const capabilities = createCapabilities(store, {}, manager);
+		const host = await manager.openHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+			view: true,
+		});
+		try {
+			const deletion = await manager.withIdleForSessionLifecycle(
+				seeded.sessionId,
+				async () => {
+					expect(manager.tryAcquireSessionWork()).toMatchObject({
+						kind: "rejected",
+					});
+					await expect(
+						manager.openHost({
+							capabilities,
+							sessionId: seeded.sessionId,
+						})
+					).rejects.toThrow("lifecycle operation");
+					return store.deleteSession(seeded.sessionId);
+				}
+			);
+			expect(deletion.kind).toBe("committed");
+			expect(
+				(await store.listSessions()).some(({ id }) => id === seeded.sessionId)
+			).toBe(false);
+			const writer = await store.acquireSessionWriter(seeded.sessionId);
+			await writer.release();
+			expect(host.getSnapshot().turnActive).toBe(false);
+		} finally {
+			await manager.shutdownAll();
+		}
+	});
+
+	test("Session reset closes every idle same-process Host before clearing storage", async () => {
+		const first = await seedSession("idle-reset-first-host-lifecycle");
+		const second = await seedSession("idle-reset-second-host-lifecycle");
+		const manager = createSessionHostManager();
+		const capabilities = createCapabilities(store, {}, manager);
+		try {
+			await Promise.all(
+				[first, second].map(({ sessionId }) =>
+					manager.openHost({
+						capabilities,
+						sessionId,
+						view: true,
+					})
+				)
+			);
+			await manager.withIdleForSessionDataReset(async () => {
+				expect(manager.tryAcquireSessionWork()).toMatchObject({
+					kind: "rejected",
+				});
+				await expect(
+					manager.openHost({
+						capabilities,
+						sessionId: first.sessionId,
+					})
+				).rejects.toThrow("lifecycle operation");
+				await store.resetSessionData();
+			});
+			expect(await store.listSessions()).toEqual([]);
+		} finally {
+			await manager.shutdownAll();
+		}
+	});
+
 	test("releases a completed idle Session writer after its last view", async () => {
 		const seeded = await seedSession("idle-view-release");
 		const manager = createSessionHostManager();
