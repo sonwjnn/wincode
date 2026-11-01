@@ -6669,6 +6669,87 @@ test("rejects JSONL compaction checkpoints that reference messages outside the t
 	}
 });
 
+test("a foreign unmarked deletion does not fail or delete Sessions in another Workspace", async () => {
+	const testRoot = path.join(root, "foreign-delete-before-marker");
+	const databasePath = path.join(testRoot, "sessions.sqlite");
+	const workspaceA = path.join(testRoot, "workspace-a");
+	const workspaceB = path.join(testRoot, "workspace-b");
+	await fs.mkdir(workspaceA, { recursive: true });
+	await fs.mkdir(workspaceB, { recursive: true });
+	const sessionA = toSessionId("foreign-delete-workspace-a");
+	const sessionB = toSessionId("foreign-delete-workspace-b");
+	const markerPath = path.join(
+		testRoot,
+		"session-control",
+		"deleted",
+		`${sessionB}.json`
+	);
+	let failMarkerSync = true;
+	const workspaceAStore = createSessionJsonlTestPersistence(
+		databasePath,
+		workspaceA
+	);
+	const workspaceBStore = createSessionJsonlTestPersistence(
+		databasePath,
+		workspaceB,
+		{
+			sync: async (filePath, handle) => {
+				if (
+					failMarkerSync &&
+					filePath.endsWith(path.join("deleted", `${sessionB}.json`))
+				) {
+					failMarkerSync = false;
+					throw new Error(
+						"Injected failure before foreign deletion marker sync."
+					);
+				}
+				await handle.sync();
+			},
+		}
+	);
+	try {
+		await workspaceAStore.store.createEmptySession({ id: sessionA });
+		await workspaceBStore.store.createEmptySession({ id: sessionB });
+
+		expect(await workspaceBStore.store.deleteSession(sessionB)).toMatchObject({
+			kind: "committed",
+			projection: "blocked",
+		});
+		await fs.rm(markerPath, { force: true });
+		expect(await Bun.file(markerPath).exists()).toBe(false);
+		expect(
+			await Bun.file(
+				path.join(testRoot, "session-logs", sessionB, "session.jsonl")
+			).text()
+		).toContain('"type":"session.deleted"');
+
+		await expect(
+			workspaceAStore.store.listSessionsPage()
+		).resolves.toMatchObject({
+			sessions: [{ id: sessionA }],
+		});
+		await expect(
+			workspaceAStore.store.readSessionHistoryPage(sessionA)
+		).resolves.toMatchObject({ session: { id: sessionA } });
+		await expect(
+			workspaceAStore.store.listSessionCatalog()
+		).resolves.toMatchObject({
+			issues: [],
+			sessions: [{ id: sessionA }],
+		});
+
+		expect(await Bun.file(markerPath).exists()).toBe(false);
+		expect(
+			await Bun.file(
+				path.join(testRoot, "session-logs", sessionB, "session.jsonl")
+			).exists()
+		).toBe(true);
+	} finally {
+		workspaceAStore.close();
+		workspaceBStore.close();
+	}
+});
+
 test("recovery completes a synced deletion event before catalog discovery can return the Session", async () => {
 	const databasePath = path.join(root, "sdk-delete-before-marker.sqlite");
 	const sessionId = toSessionId("delete-before-marker-session");

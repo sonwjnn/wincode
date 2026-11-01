@@ -73,6 +73,7 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSnapshotRoot,
 } from "./path";
+import { createDrizzleRecoveryStore } from "./recovery-store";
 import {
 	localSessionBinding,
 	promptHistory,
@@ -1674,6 +1675,7 @@ const readSessionStatisticsProjection = (
 
 export type DrizzleSessionStore = SessionProjectionStore &
 	Readonly<{
+		assertResetAllowed: () => Promise<void>;
 		jsonlProjection: SessionJsonlProjection;
 		markSessionDeleted: (sessionId: SessionId) => void;
 		readSessionCatalogPageProjection: (
@@ -1795,6 +1797,27 @@ export const createDrizzleSessionStore = (
 			db.delete(session).where(eq(session.id, sessionId)).run();
 		}
 	};
+	const assertResetAllowed = async (): Promise<void> => {
+		const workspaceIds = operationalDb
+			.select({ id: sessionWorkspace.id })
+			.from(sessionWorkspace)
+			.all()
+			.map(({ id }) => id)
+			.sort();
+		for (const workspaceId of workspaceIds) {
+			const recovery = createDrizzleRecoveryStore(
+				operationalDb,
+				snapshotRoot,
+				workspaceId
+			);
+			await recovery.ensureReady?.();
+			if ((await recovery.listUnresolvedRecoveries()).length > 0) {
+				throw new Error(
+					"Reset is blocked until every workspace recovery is reconciled or discarded."
+				);
+			}
+		}
+	};
 	const assertRecoveryResolvedForSessionDeletion = async (
 		sessionId: SessionId
 	): Promise<void> => {
@@ -1821,6 +1844,7 @@ export const createDrizzleSessionStore = (
 	};
 
 	return {
+		assertResetAllowed,
 		jsonlProjection,
 		setAttachmentCollectionBarrier: (barrier) => {
 			attachmentCollectionBarrier = barrier;
@@ -1957,16 +1981,7 @@ export const createDrizzleSessionStore = (
 			}
 		},
 		resetSessionData: async () => {
-			const recovery = fileObservationStore.recovery;
-			if (recovery !== undefined) {
-				await recovery.ensureReady?.();
-				const unresolved = await recovery.listUnresolvedRecoveries();
-				if (unresolved.length > 0) {
-					throw new Error(
-						"Reset is blocked until every workspace recovery is reconciled or discarded."
-					);
-				}
-			}
+			await assertResetAllowed();
 			db.transaction((tx) => {
 				const currentState = tx
 					.select({ generation: sessionProjectionState.generation })

@@ -2891,7 +2891,8 @@ export const createSessionJsonlStore = (
 		bytes: Uint8Array,
 		state: SessionLogState,
 		cursorBefore: SessionProjectionCursor | undefined,
-		pendingIntent: SessionWriteIntent | undefined
+		pendingIntent: SessionWriteIntent | undefined,
+		project = true
 	): Promise<CommittedLogEntry> => {
 		const payloadTimestamp = Reflect.get(write.payload, "createdAt");
 		const timestamp =
@@ -2954,19 +2955,86 @@ export const createSessionJsonlStore = (
 			envelope,
 			intent
 		);
-		await persistReceiptAndProjection(
-			sessionId,
-			verified.entry,
-			verified.state,
-			cursorBefore,
-			intent
-		);
+		if (project) {
+			await persistReceiptAndProjection(
+				sessionId,
+				verified.entry,
+				verified.state,
+				cursorBefore,
+				intent
+			);
+		} else {
+			await ensureReceipt(sessionId, verified.entry);
+			await clearSessionWriteIntent(logRoot, intent, fileIo);
+		}
 		return {
 			createdNew: false,
 			entry: verified.entry,
 			receiptBlocked: false,
 			state: verified.state,
 		};
+	};
+
+	const appendResetDeletion = async (
+		sessionId: SessionId
+	): Promise<Readonly<{ logId: string; receipt: SessionDeletionReceipt }>> => {
+		const operationId = sessionDeletionOperationId(sessionId);
+		const write: SessionWrite = {
+			operationId,
+			payload: {},
+			type: "session.deleted",
+		};
+		const key = await lockKey(logRoot, sessionId);
+		return serializeWrite(key, async () => {
+			const logPath = path.join(
+				await fs.realpath(logRoot),
+				validSessionId(sessionId),
+				"session.jsonl"
+			);
+			const pendingIntent = await readSessionWriteIntent(
+				logRoot,
+				sessionId,
+				fileIo
+			);
+			if (pendingIntent !== undefined) {
+				const recovered = await reconcilePendingAppend(
+					sessionId,
+					logPath,
+					write,
+					pendingIntent
+				);
+				if (recovered !== undefined) {
+					const { state } = await readLog(logPath, sessionId);
+					return {
+						logId: state.logId,
+						receipt: deletionReceiptFromEntry(recovered),
+					};
+				}
+			}
+			const { bytes, state } = await readLog(logPath, sessionId);
+			const previous = findOperation(state, write, sessionId);
+			if (previous !== undefined) {
+				await ensureReceipt(sessionId, previous);
+				return {
+					logId: state.logId,
+					receipt: deletionReceiptFromEntry(previous),
+				};
+			}
+			const appended = await appendNewOperation(
+				sessionId,
+				logPath,
+				write,
+				bytes,
+				state,
+				undefined,
+				pendingIntent,
+				false
+			);
+			return {
+				logId: appended.state.logId,
+				receipt: deletionReceiptFromEntry(appended.entry),
+			};
+		});
 	};
 
 	const append = async (
@@ -3838,18 +3906,8 @@ export const createSessionJsonlStore = (
 		};
 		throw error;
 	};
-	const assertResetAllowed = async (): Promise<void> => {
-		const recovery = projectionStore.fileObservationStore?.recovery;
-		if (recovery === undefined) {
-			return;
-		}
-		await recovery.ensureReady?.();
-		if ((await recovery.listUnresolvedRecoveries()).length > 0) {
-			throw new Error(
-				"Reset is blocked until every workspace recovery is reconciled or discarded."
-			);
-		}
-	};
+	const assertResetAllowed = (): Promise<void> =>
+		projectionStore.assertResetAllowed();
 
 	const findSessionLogIds = async (): Promise<SessionId[]> => {
 		await ensureDirectoryDurable(logRoot);
@@ -3892,6 +3950,21 @@ export const createSessionJsonlStore = (
 		};
 	};
 
+	const readWorkspaceCatalogSnapshot = async (): Promise<
+		Readonly<{ deleted: SessionId[]; published: SessionId[] }>
+	> => {
+		const boundSessionIds = new Set(projection.listBoundSessionIds());
+		const published = await findSessionLogIds();
+		return {
+			deleted: (await findDeletedMarkerSessionIds()).filter((sessionId) =>
+				boundSessionIds.has(sessionId)
+			),
+			published: published.filter((sessionId) =>
+				boundSessionIds.has(sessionId)
+			),
+		};
+	};
+
 	const findResetSessionIds = async (): Promise<SessionId[]> =>
 		[
 			...new Set([
@@ -3899,6 +3972,53 @@ export const createSessionJsonlStore = (
 				...(await findDeletedMarkerSessionIds()),
 			]),
 		].sort();
+
+	const preflightResetTargets = async (
+		sessionIds: readonly SessionId[]
+	): Promise<void> => {
+		const root = await fs.realpath(logRoot);
+		const published = new Set(await findSessionLogIds());
+		const bound = new Set(projection.listAllBoundSessionIds());
+		for (const sessionId of sessionIds) {
+			const marker = await readDeletedMarker(logRoot, sessionId);
+			if (!published.has(sessionId)) {
+				if (marker === undefined) {
+					throw new Error(
+						`Session reset target ${sessionId} has neither a published log nor a deletion marker.`
+					);
+				}
+				continue;
+			}
+			const { state } = await readLog(
+				path.join(root, validSessionId(sessionId), "session.jsonl"),
+				sessionId
+			);
+			if (marker === undefined) {
+				if (!bound.has(sessionId)) {
+					throw new Error(
+						`Session reset target ${sessionId} has no Workspace binding.`
+					);
+				}
+				continue;
+			}
+			const deletion = state.entries.find(
+				({ envelope }) => envelope.type === "session.deleted"
+			);
+			if (
+				state.logId !== marker.logId ||
+				deletion?.envelope.type !== "session.deleted" ||
+				deletion.envelope.entryHash !== marker.entryHash ||
+				deletion.envelope.operationId !== marker.operationId ||
+				deletion.envelope.sequence !== marker.sequence
+			) {
+				throw new SessionLogError(
+					"session_log_corrupt",
+					sessionId,
+					"Session deletion marker does not match its published log."
+				);
+			}
+		}
+	};
 
 	const resetSessionLog = async (
 		root: string,
@@ -3909,18 +4029,9 @@ export const createSessionJsonlStore = (
 		let logId: string;
 		let receipt: SessionDeletionReceipt;
 		if (existingMarker === undefined) {
-			const logPath = path.join(directory, "session.jsonl");
-			const { state } = await readLog(logPath, sessionId);
-			const writeOutcome = await commitWrite(sessionId, {
-				operationId: sessionDeletionOperationId(sessionId),
-				payload: {},
-				type: "session.deleted",
-			});
-			if (writeOutcome.kind !== "committed") {
-				throw new SessionWriteOutcomeError(writeOutcome);
-			}
-			logId = state.logId;
-			receipt = writeOutcome;
+			const deletion = await appendResetDeletion(sessionId);
+			logId = deletion.logId;
+			receipt = deletion.receipt;
 			await writeDeletedMarker(logRoot, sessionId, logId, receipt, fileIo);
 		} else {
 			logId = existingMarker.logId;
@@ -3969,6 +4080,7 @@ export const createSessionJsonlStore = (
 			return false;
 		}
 		await assertResetAllowed();
+		await preflightResetTargets(latestSessionIds);
 		for (const sessionId of latestSessionIds) {
 			await resetSessionLogForLifecycle(root, sessionId);
 		}
@@ -4563,8 +4675,21 @@ export const createSessionJsonlStore = (
 		);
 	};
 
+	const reconcileDeletedSessionIds = async (
+		sessionIds: ReadonlySet<SessionId>
+	): Promise<SessionCatalogIssue[]> => {
+		const issues: SessionCatalogIssue[] = [];
+		for (const sessionId of [...sessionIds].sort()) {
+			const issue = await reconcileDeletedSession(sessionId);
+			if (issue !== undefined) {
+				issues.push(issue);
+			}
+		}
+		return issues;
+	};
+
 	const reconcileDeletedSessions = async (): Promise<SessionCatalogIssue[]> => {
-		const snapshot = await readCatalogSnapshot();
+		const snapshot = await readWorkspaceCatalogSnapshot();
 		const root = await fs.realpath(logRoot);
 		const deletedSessionIds = new Set(snapshot.deleted);
 		for (const sessionId of snapshot.published) {
@@ -4576,19 +4701,34 @@ export const createSessionJsonlStore = (
 				deletedSessionIds.add(sessionId);
 			}
 		}
-		const issues: SessionCatalogIssue[] = [];
-		for (const sessionId of [...deletedSessionIds].sort()) {
-			const issue = await reconcileDeletedSession(sessionId);
-			if (issue !== undefined) {
-				issues.push(issue);
+		return reconcileDeletedSessionIds(deletedSessionIds);
+	};
+
+	const reconcileDeletedSessionsForRebuild = async (): Promise<
+		SessionCatalogIssue[]
+	> => {
+		const snapshot = await readCatalogSnapshot();
+		const root = await fs.realpath(logRoot);
+		const deletedSessionIds = new Set(snapshot.deleted);
+		for (const sessionId of snapshot.published) {
+			if (
+				projection.isBoundToWorkspace(sessionId) &&
+				isValidSessionId(sessionId) &&
+				!deletedSessionIds.has(sessionId) &&
+				(await logHasDeletionEvent(sessionId, root))
+			) {
+				deletedSessionIds.add(sessionId);
 			}
 		}
-		return issues;
+		return reconcileDeletedSessionIds(deletedSessionIds);
 	};
 
 	const reconcileDeletedSessionIfNeeded = async (
 		sessionId: SessionId
 	): Promise<void> => {
+		if (!projection.isBoundToWorkspace(sessionId)) {
+			return;
+		}
 		const marker = await readDeletedMarker(logRoot, sessionId);
 		const hasDeletionEvent =
 			marker !== undefined ||
@@ -4706,7 +4846,7 @@ export const createSessionJsonlStore = (
 				listProjectedSessionIds: async () => projection.listSessionIds(),
 				projectSession: projectRebuildSession,
 				readCatalogSnapshot,
-				reconcileDeletedSessions,
+				reconcileDeletedSessions: reconcileDeletedSessionsForRebuild,
 				releaseWriters: releaseRebuildWriters,
 				withAppendQueues,
 				withCatalogLifecycleGate: (operation) =>
@@ -4862,6 +5002,19 @@ type SessionDeletionReceipt = Readonly<{
 	operationId: string;
 	sequence: number;
 }>;
+
+function deletionReceiptFromEntry(
+	entry: SessionLogEntry
+): SessionDeletionReceipt {
+	if (entry.envelope.type !== "session.deleted") {
+		throw new Error("Session reset did not produce a deletion event.");
+	}
+	return {
+		entryHash: entry.envelope.entryHash,
+		operationId: entry.envelope.operationId,
+		sequence: entry.envelope.sequence,
+	};
+}
 
 type SessionDeletionMarker = SessionDeletionReceipt &
 	Readonly<{ logId: string }>;

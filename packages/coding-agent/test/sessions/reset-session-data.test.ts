@@ -17,6 +17,7 @@ import {
 } from "@/modules/sessions/storage/path";
 import { resetLocalSessionData } from "@/modules/sessions/storage/reset-local-session-data";
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import { computeFileVersion } from "@/modules/tools";
 import { toSessionId } from "@/shared/identifiers";
 import {
 	agentId,
@@ -33,6 +34,35 @@ const model: ProviderModelSelection = {
 const PNG_BYTES = new Uint8Array([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
 ]);
+
+const createResetPersistence = (
+	databasePath: string,
+	workspaceRoot: string
+) => {
+	const operational = createDatabase(databasePath);
+	const projection = createDatabase(
+		resolveLocalSessionProjectionPath(databasePath)
+	);
+	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	const store = createSessionJsonlStore(
+		createDrizzleSessionStore(projection.db, {
+			attachmentRoot: path.join(path.dirname(databasePath), "attachments"),
+			operationalDatabase: operational.db,
+			sessionLogRoot: logRoot,
+			snapshotRoot: path.join(path.dirname(databasePath), "file-snapshots"),
+			workspaceRoot,
+		}),
+		logRoot
+	);
+	return {
+		close: () => {
+			operational.sqlite.close();
+			projection.sqlite.close();
+		},
+		logRoot,
+		store,
+	};
+};
 
 test("resets session data without conflating repeated pasted markers in prompt history", async () => {
 	const directory = await fs.mkdtemp(
@@ -206,6 +236,134 @@ test("reset preserves prompt-history attachment owners and collects unowned Sess
 	} finally {
 		operational.sqlite.close();
 		projection.sqlite.close();
+		await fs.rm(directory, { force: true, recursive: true });
+	}
+});
+
+test("a recovery in one Workspace blocks global reset before any Session log changes", async () => {
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-session-reset-workspace-recovery-")
+	);
+	const databasePath = path.join(directory, "sessions.sqlite");
+	const workspaceA = path.join(directory, "workspace-a");
+	const workspaceB = path.join(directory, "workspace-b");
+	await fs.mkdir(workspaceA, { recursive: true });
+	await fs.mkdir(workspaceB, { recursive: true });
+	const firstSessionId = toSessionId("a-reset-global-session");
+	const secondSessionId = toSessionId("b-reset-global-session");
+	const first = createResetPersistence(databasePath, workspaceA);
+	const second = createResetPersistence(databasePath, workspaceB);
+	try {
+		await first.store.createEmptySession({ id: firstSessionId });
+		await second.store.createEmptySession({ id: secondSessionId });
+		const recovery = second.store.fileObservationStore?.recovery;
+		if (recovery === undefined) {
+			throw new Error("Workspace B has no recovery store.");
+		}
+		const filePath = path.join(workspaceB, "recovery.txt");
+		const originalBytes = new TextEncoder().encode("original\n");
+		const changedBytes = new TextEncoder().encode("changed\n");
+		await Bun.write(filePath, originalBytes);
+		const transaction = await recovery.beginTransaction({
+			originSessionId: secondSessionId,
+			paths: [
+				{
+					canonicalPath: filePath,
+					displayPath: filePath,
+					newFileVersion: computeFileVersion(changedBytes),
+					originalBytes,
+					originalFileVersion: computeFileVersion(originalBytes),
+				},
+			],
+		});
+		await Bun.write(filePath, changedBytes);
+		await recovery.createUnresolvedRecovery({
+			reason: "Reset must not discard this Workspace recovery.",
+			transactionId: transaction.id,
+			unresolvedPaths: [filePath],
+		});
+		const firstLogPath = path.join(
+			first.logRoot,
+			firstSessionId,
+			"session.jsonl"
+		);
+		const secondLogPath = path.join(
+			second.logRoot,
+			secondSessionId,
+			"session.jsonl"
+		);
+		const firstLogBefore = await Bun.file(firstLogPath).bytes();
+		const secondLogBefore = await Bun.file(secondLogPath).bytes();
+		const firstMarkerPath = path.join(
+			directory,
+			"session-control",
+			"deleted",
+			`${firstSessionId}.json`
+		);
+		const secondMarkerPath = path.join(
+			directory,
+			"session-control",
+			"deleted",
+			`${secondSessionId}.json`
+		);
+
+		await expect(first.store.resetSessionData()).rejects.toThrow(
+			"Reset is blocked until every workspace recovery is reconciled or discarded."
+		);
+
+		expect(await Bun.file(firstLogPath).bytes()).toEqual(firstLogBefore);
+		expect(await Bun.file(secondLogPath).bytes()).toEqual(secondLogBefore);
+		expect(await Bun.file(firstMarkerPath).exists()).toBe(false);
+		expect(await Bun.file(secondMarkerPath).exists()).toBe(false);
+		expect(await recovery.listUnresolvedRecoveries()).toHaveLength(1);
+	} finally {
+		first.close();
+		second.close();
+		await fs.rm(directory, { force: true, recursive: true });
+	}
+});
+
+test("global reset deletes Sessions bound to different Workspaces without partial failure", async () => {
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-session-reset-multi-workspace-")
+	);
+	const databasePath = path.join(directory, "sessions.sqlite");
+	const workspaceA = path.join(directory, "workspace-a");
+	const workspaceB = path.join(directory, "workspace-b");
+	await fs.mkdir(workspaceA, { recursive: true });
+	await fs.mkdir(workspaceB, { recursive: true });
+	const firstSessionId = toSessionId("a-reset-global-session");
+	const secondSessionId = toSessionId("b-reset-global-session");
+	const first = createResetPersistence(databasePath, workspaceA);
+	const second = createResetPersistence(databasePath, workspaceB);
+	try {
+		await first.store.createEmptySession({ id: firstSessionId });
+		await second.store.createEmptySession({ id: secondSessionId });
+
+		await first.store.resetSessionData();
+
+		for (const sessionId of [firstSessionId, secondSessionId]) {
+			expect(
+				await Bun.file(
+					path.join(first.logRoot, sessionId, "session.jsonl")
+				).exists()
+			).toBe(false);
+			const markerPath = path.join(
+				directory,
+				"session-control",
+				"deleted",
+				`${sessionId}.json`
+			);
+			expect(await Bun.file(markerPath).json()).toMatchObject({
+				operationId: `delete-${sessionId}`,
+				sessionId,
+			});
+		}
+		expect(await first.store.listSessions()).toEqual([]);
+		expect(await second.store.listSessions()).toEqual([]);
+	} finally {
+		first.close();
+		second.close();
 		await fs.rm(directory, { force: true, recursive: true });
 	}
 });
