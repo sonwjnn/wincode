@@ -1575,6 +1575,123 @@ test("RPC session/open preserves the structured JSONL corruption code", async ()
 	}
 });
 
+test("RPC session/open hides another Workspace's durable deletion marker", async () => {
+	const testRoot = path.join(workspace, "foreign-deleted-session");
+	const workspaceA = path.join(testRoot, "workspace-a");
+	const workspaceB = path.join(testRoot, "workspace-b");
+	const sharedDatabasePath = path.join(testRoot, "sessions.sqlite");
+	await fs.mkdir(workspaceA, { recursive: true });
+	await fs.mkdir(workspaceB, { recursive: true });
+	const foreignSessionId = toSessionId("rpc-foreign-deleted-session");
+	const missingSessionId = toSessionId("rpc-foreign-missing-session");
+	const markerPath = path.join(
+		testRoot,
+		"session-control",
+		"deleted",
+		`${foreignSessionId}.json`
+	);
+	const logPath = path.join(
+		testRoot,
+		"session-logs",
+		foreignSessionId,
+		"session.jsonl"
+	);
+	const workspaceBAssembly = await openSessionServices({
+		policy: {
+			cwd: workspaceB,
+			databasePath: sharedDatabasePath,
+			workspace: workspaceB,
+		},
+		sources: {},
+	});
+	try {
+		await workspaceBAssembly.store.createEmptySession({ id: foreignSessionId });
+		expect(
+			await workspaceBAssembly.store.deleteSession(foreignSessionId)
+		).toMatchObject({
+			kind: "committed",
+			projection: "ready",
+		});
+	} finally {
+		await workspaceBAssembly.shutdown();
+	}
+	const markerBefore = await Bun.file(markerPath).bytes();
+	expect(await Bun.file(logPath).exists()).toBe(false);
+
+	const workspaceAAssembly = await openSessionServices({
+		policy: {
+			cwd: workspaceA,
+			databasePath: sharedDatabasePath,
+			workspace: workspaceA,
+		},
+		sources: {},
+	});
+	const stdoutFrames: string[] = [];
+	const stderrFrames: string[] = [];
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const input = [
+		new TextEncoder().encode(
+			`${request("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "foreign-deletion-marker-test" },
+				cwd: workspaceA,
+				protocolVersion: 4,
+			})}\n`
+		),
+		new TextEncoder().encode(
+			`${request("open-deleted", "session/open", {
+				sessionId: foreignSessionId,
+			})}\n`
+		),
+		new TextEncoder().encode(
+			`${request("open-missing", "session/open", {
+				sessionId: missingSessionId,
+			})}\n`
+		),
+		new TextEncoder().encode(`${request("shutdown", "server/shutdown", {})}\n`),
+	];
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => workspaceAAssembly,
+			input,
+			stderr: {
+				write: (text: string): undefined => {
+					stderrFrames.push(text);
+				},
+			},
+			stdout: {
+				write: (text: string): undefined => {
+					stdoutFrames.push(text);
+				},
+			},
+		});
+		const frames = stdoutFrames.map(
+			(frame) => JSON.parse(frame) as Record<string, unknown>
+		);
+		const deletedOpenError = frames.find(
+			(frame) => frame.id === "open-deleted"
+		)?.error;
+		const missingOpenError = frames.find(
+			(frame) => frame.id === "open-missing"
+		)?.error;
+
+		expect(exitCode).toBe(0);
+		expect(stderrFrames).toEqual([]);
+		expect(deletedOpenError).toMatchObject({
+			data: { code: "session_not_found" },
+		});
+		expect(deletedOpenError).toEqual(missingOpenError);
+		expect(await Bun.file(markerPath).bytes()).toEqual(markerBefore);
+		expect(await Bun.file(logPath).exists()).toBe(false);
+	} finally {
+		await workspaceAAssembly.shutdown();
+	}
+});
+
 test("RPC state preserves a committed-blocked submission receipt without scheduling", async () => {
 	const blockedWorkspace = path.join(workspace, "blocked-projection");
 	await fs.mkdir(blockedWorkspace, { recursive: true });

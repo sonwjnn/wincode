@@ -1972,6 +1972,44 @@ export const createSessionJsonlStore = (
 		);
 	};
 
+	const assertSessionWorkspaceBinding = (sessionId: SessionId): void => {
+		if (!projection.isBoundToWorkspace(sessionId)) {
+			throw new Error("Session not found");
+		}
+	};
+
+	const assertSessionHistoryWorkspaceBinding = (
+		sessionId: SessionId,
+		cursor: SessionHistoryPageCursor | undefined
+	): void => {
+		if (projection.isBoundToWorkspace(sessionId)) {
+			return;
+		}
+		if (cursor !== undefined) {
+			throw new SessionPaginationError(
+				"cursor_expired",
+				"Session history cursor expired because the Session was deleted."
+			);
+		}
+		throw new Error("Session not found");
+	};
+
+	const assertSessionStatisticsWorkspaceBinding = (
+		sessionId: SessionId,
+		hasReadPoint: boolean
+	): void => {
+		if (projection.isBoundToWorkspace(sessionId)) {
+			return;
+		}
+		if (hasReadPoint) {
+			throw new SessionPaginationError(
+				"cursor_expired",
+				"Session statistics read point expired because the Session was deleted."
+			);
+		}
+		throw new Error("Session not found");
+	};
+
 	const assertSessionWritable = async (sessionId: SessionId): Promise<void> => {
 		await checkDeletedMarker(sessionId);
 		if (projection.isBoundToAnotherWorkspace(sessionId)) {
@@ -2349,7 +2387,6 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId
 	): Promise<SessionLogState> => {
 		const generation = assertProjectionReady(sessionId);
-		await checkDeletedMarker(sessionId);
 		const logPath = path.join(
 			await fs.realpath(logRoot),
 			validSessionId(sessionId),
@@ -2362,6 +2399,7 @@ export const createSessionJsonlStore = (
 			await fs.stat(logPath);
 			throw new Error("Session not found");
 		}
+		await checkDeletedMarker(sessionId);
 		for (let attempt = 0; attempt < 5; attempt += 1) {
 			let capturedBytes: Uint8Array | undefined;
 			try {
@@ -4247,11 +4285,8 @@ export const createSessionJsonlStore = (
 	): Promise<void> => {
 		await reconcileDeletedSessionIfNeeded(sessionId);
 		const generation = assertProjectionReady(sessionId);
+		assertSessionWorkspaceBinding(sessionId);
 		await checkDeletedMarker(sessionId);
-		if (!projection.isBoundToWorkspace(sessionId)) {
-			await ensureProjected(sessionId);
-			return;
-		}
 		await ensureDirectoryDurable(logRoot);
 		const logPath = path.join(
 			await fs.realpath(logRoot),
@@ -4557,6 +4592,7 @@ export const createSessionJsonlStore = (
 			await ensureBoundSessionProjectedIfStale(sessionId);
 		}
 		return withSessionCatalogLifecycleGate(logRoot, async () => {
+			assertSessionHistoryWorkspaceBinding(sessionId, cursor);
 			try {
 				await checkDeletedMarker(sessionId);
 			} catch (error) {
@@ -4602,6 +4638,10 @@ export const createSessionJsonlStore = (
 			await ensureBoundSessionProjectedIfStale(sessionId);
 		}
 		return withSessionCatalogLifecycleGate(logRoot, async () => {
+			assertSessionStatisticsWorkspaceBinding(
+				sessionId,
+				requestedReadPoint !== undefined
+			);
 			try {
 				await checkDeletedMarker(sessionId);
 			} catch (error) {
@@ -4616,17 +4656,18 @@ export const createSessionJsonlStore = (
 				}
 				throw error;
 			}
-			const projection = projectionStore.readSessionStatisticsProjection(
-				sessionId,
-				requestedReadPoint
-			);
+			const statisticsProjection =
+				projectionStore.readSessionStatisticsProjection(
+					sessionId,
+					requestedReadPoint
+				);
 			return buildSessionStatistics({
-				compactions: projection.compactions,
-				readPoint: encodeSessionPageToken(projection.readPoint),
-				records: projection.records,
+				compactions: statisticsProjection.compactions,
+				readPoint: encodeSessionPageToken(statisticsProjection.readPoint),
+				records: statisticsProjection.records,
 				sessionId,
 				...(options.turnId === undefined ? {} : { turnId: options.turnId }),
-				usageEntries: projection.usageEntries,
+				usageEntries: statisticsProjection.usageEntries,
 			});
 		});
 	};

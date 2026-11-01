@@ -5541,10 +5541,8 @@ test("projection rebuild reconciles deletion markers before rediscovery", async 
 		await expect(fs.access(orphanedDirectory)).rejects.toMatchObject({
 			code: "ENOENT",
 		});
-		await expect(persistence.store.getSession(sessionId)).rejects.toMatchObject(
-			{
-				code: "session_deleted",
-			}
+		await expect(persistence.store.getSession(sessionId)).rejects.toThrow(
+			"Session not found"
 		);
 	} finally {
 		persistence.close();
@@ -6750,6 +6748,77 @@ test("a foreign unmarked deletion does not fail or delete Sessions in another Wo
 	}
 });
 
+test("public history pages hide another Workspace's durable deletion marker", async () => {
+	const testRoot = path.join(root, "history-foreign-deleted-session");
+	const databasePath = path.join(testRoot, "sessions.sqlite");
+	const workspaceA = path.join(testRoot, "workspace-a");
+	const workspaceB = path.join(testRoot, "workspace-b");
+	await fs.mkdir(workspaceA, { recursive: true });
+	await fs.mkdir(workspaceB, { recursive: true });
+	const sessionB = toSessionId("history-foreign-deleted-session-b");
+	const missingSession = toSessionId("history-foreign-missing-session");
+	const markerPath = path.join(
+		testRoot,
+		"session-control",
+		"deleted",
+		`${sessionB}.json`
+	);
+	const logPath = path.join(
+		testRoot,
+		"session-logs",
+		sessionB,
+		"session.jsonl"
+	);
+	const workspaceBStore = createSessionJsonlTestPersistence(
+		databasePath,
+		workspaceB
+	);
+	try {
+		await workspaceBStore.store.createEmptySession({ id: sessionB });
+		expect(await workspaceBStore.store.deleteSession(sessionB)).toMatchObject({
+			kind: "committed",
+			projection: "ready",
+		});
+	} finally {
+		workspaceBStore.close();
+	}
+
+	const markerBefore = await Bun.file(markerPath).bytes();
+	expect(await Bun.file(logPath).exists()).toBe(false);
+	const sdk = await createSessionSdk({
+		cwd: workspaceA,
+		databasePath,
+		pluginPaths: [],
+		workspace: workspaceA,
+	});
+	const readError = async (sessionId: SessionId) => {
+		try {
+			await sdk.readSessionHistoryPage(sessionId);
+			return;
+		} catch (error) {
+			const code =
+				error instanceof Error ? Reflect.get(error, "code") : undefined;
+			return {
+				...(typeof code === "string" ? { code } : {}),
+				message: error instanceof Error ? error.message : String(error),
+			};
+		}
+	};
+	try {
+		const foreignError = await readError(sessionB);
+		const missingError = await readError(missingSession);
+
+		expect(foreignError).toBeDefined();
+		expect(missingError).toBeDefined();
+		expect(foreignError).toEqual(missingError);
+		expect(foreignError).not.toMatchObject({ code: "session_deleted" });
+		expect(await Bun.file(markerPath).bytes()).toEqual(markerBefore);
+		expect(await Bun.file(logPath).exists()).toBe(false);
+	} finally {
+		await sdk.dispose();
+	}
+});
+
 test("recovery completes a synced deletion event before catalog discovery can return the Session", async () => {
 	const databasePath = path.join(root, "sdk-delete-before-marker.sqlite");
 	const sessionId = toSessionId("delete-before-marker-session");
@@ -6798,9 +6867,7 @@ test("recovery completes a synced deletion event before catalog discovery can re
 		try {
 			await expect(
 				reopenedPersistence.store.getSession(sessionId)
-			).rejects.toMatchObject({
-				code: "session_deleted",
-			});
+			).rejects.toThrow("Session not found");
 			expect(await Bun.file(markerPath).exists()).toBe(true);
 			const catalog = await reopenedPersistence.store.listSessionCatalog();
 			expect(catalog.sessions.map(({ id }) => id)).not.toContain(sessionId);
