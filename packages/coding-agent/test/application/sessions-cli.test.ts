@@ -21,9 +21,15 @@ import type {
 	SessionProjectionMaintenanceGate,
 	SessionProjectionRebuildResult,
 	SessionProjectionRebuildScope,
+	SessionStatistics,
+	SessionStatisticsOptions,
 	SessionStore,
 } from "@/modules/sessions/storage/session-store";
 import { toSessionId } from "@/shared/identifiers";
+import {
+	agentTurnId,
+	providerModelSelectionFixture,
+} from "../support/identifiers";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-sessions-cli-"));
 
@@ -196,6 +202,133 @@ test("Sessions list and history preserve the shared cursor snapshot contract", a
 		command: "list",
 		error: { code: "page_limit_invalid" },
 	});
+});
+
+test("Sessions stats forwards the captured point and keeps unknown cost distinct from zero", async () => {
+	const id = toSessionId("cli-statistics-session");
+	const emptyTotals = {
+		byModel: [],
+		cacheReadTokens: null,
+		cacheWriteTokens: null,
+		contributionCount: 0,
+		costs: [],
+		inputTokens: null,
+		outputTokens: null,
+		reasoningTokens: null,
+		totalTokens: null,
+		unknownCostCount: 0,
+	};
+	const statistics: SessionStatistics = {
+		completedToolCallCount: 2,
+		recordCount: 4,
+		readPoint: "captured-history-token",
+		sessionId: id,
+		terminalOutcomeCounts: {
+			cancelled: 0,
+			completed: 1,
+			failed: 0,
+			interrupted: 0,
+		},
+		turn: {
+			completedToolCallCount: 0,
+			recordCount: 1,
+			terminalOutcome: { kind: "no-terminal-record" },
+			turnId: agentTurnId("cli-partial-turn"),
+		},
+		usage: {
+			actual: {
+				...emptyTotals,
+				contributionCount: 1,
+				inputTokens: 120,
+				outputTokens: 25,
+				unknownCostCount: 1,
+			},
+			auxiliary: emptyTotals,
+			inherited: {
+				...emptyTotals,
+				contributionCount: 1,
+				costs: [
+					{
+						amount: 0.12,
+						contributionCount: 1,
+						model: providerModelSelectionFixture(
+							"fixture-provider/fixture-model"
+						),
+						unit: "USD",
+					},
+				],
+				inputTokens: 900,
+				outputTokens: 80,
+			},
+		},
+	};
+	const requests: Array<{
+		options?: SessionStatisticsOptions;
+		sessionId: string;
+	}> = [];
+	const store = fromPartial<SessionStore>({
+		getSessionStatistics: async (
+			sessionId: string,
+			options?: SessionStatisticsOptions
+		) => {
+			requests.push({ options, sessionId });
+			return statistics;
+		},
+	});
+	const run = async (args: readonly string[]) => {
+		const stdout: string[] = [];
+		const stderr: string[] = [];
+		const code = await dispatch(
+			{
+				args,
+				cwd: root,
+				stderr: { write: (text) => stderr.push(text) },
+				stdinIsTTY: false,
+				stdout: { write: (text) => stdout.push(text) },
+			},
+			undefined,
+			{ sessionsCliDependencies: { store } }
+		);
+		return { code, stderr: stderr.join(""), stdout: stdout.join("") };
+	};
+
+	const json = await run([
+		"sessions",
+		"stats",
+		id,
+		"--turn-id",
+		"cli-partial-turn",
+		"--read-point",
+		"captured-history-token",
+		"--json",
+	]);
+	const text = await run(["sessions", "stats", id]);
+
+	expect(json.code).toBe(0);
+	expect(json.stderr).toBe("");
+	expect(JSON.parse(json.stdout)).toMatchObject({
+		command: "stats",
+		readPoint: "captured-history-token",
+		sessionId: id,
+		usage: { actual: { unknownCostCount: 1 }, inherited: { inputTokens: 900 } },
+	});
+	expect(text.code).toBe(0);
+	expect(text.stdout).toContain("Read point: captured-history-token");
+	expect(text.stdout).toContain(
+		"Inherited usage: 900 input / 80 output tokens; fixture-provider/fixture-model: 0.12 USD (historical source spend, not new Session spend)"
+	);
+	expect(text.stdout).toContain("1 cost unknown");
+	expect(text.stdout).not.toContain("0 USD");
+	expect(requests).toEqual([
+		{
+			options: {
+				readPoint: "captured-history-token",
+				turnId: agentTurnId("cli-partial-turn"),
+			},
+			sessionId: id,
+		},
+		{ options: {}, sessionId: id },
+	]);
 });
 
 test("Sessions verify rejects trailing CR in a Session ID before human output", async () => {

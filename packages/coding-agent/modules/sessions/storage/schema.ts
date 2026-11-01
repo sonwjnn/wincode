@@ -475,6 +475,7 @@ export const sessionUsageEntry = sqliteTable(
 		kind: text("kind").$type<SessionUsageEntry["kind"]>().notNull(),
 		compactionId: text("compaction_id"),
 		costUsd: real("cost_usd"),
+		sourceSequence: integer("source_sequence").notNull().default(0),
 		modelJson: text("model_json", { mode: "json" })
 			.$type<SerializedJson<SessionUsageEntry["model"]>>()
 			.notNull(),
@@ -487,6 +488,10 @@ export const sessionUsageEntry = sqliteTable(
 		index("idx_session_usage_entry_session_created").on(
 			table.sessionId,
 			table.createdAt
+		),
+		index("idx_session_usage_entry_session_sequence").on(
+			table.sessionId,
+			table.sourceSequence
 		),
 	]
 );

@@ -25,9 +25,11 @@ import type {
 	SessionCatalogPage,
 	SessionHistoryPage,
 	SessionPageOptions,
+	SessionStatistics,
+	SessionStatisticsOptions,
 	SessionStore,
 } from "../modules/sessions/storage/session-store";
-import { sessionId } from "./support/identifiers";
+import { agentTurnId, sessionId } from "./support/identifiers";
 
 const loggerHome = await createLoggerHome("rpc-logs-");
 const logHome = loggerHome.home;
@@ -110,6 +112,7 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 					submissionEvents: true,
 					sessionCatalogPagination: true,
 					sessionHistoryPagination: true,
+					sessionStatistics: true,
 					transcriptPagination: true,
 				},
 				protocolVersion: 4,
@@ -125,7 +128,7 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 	]);
 });
 
-test("RPC Session page methods forward opaque snapshot cursors to the shared store", async () => {
+test("RPC Session read methods forward snapshot read points and reject unknown statistics fields", async () => {
 	const session: Session = {
 		createdAt: new Date("2025-01-01T00:00:00.000Z"),
 		id: sessionId("rpc-page-session"),
@@ -150,6 +153,14 @@ test("RPC Session page methods forward opaque snapshot cursors to the shared sto
 		options: SessionPageOptions;
 		sessionId: string;
 	}> = [];
+	const statisticsRequests: Array<{
+		options: SessionStatisticsOptions;
+		sessionId: string;
+	}> = [];
+	const statistics = fromPartial<SessionStatistics>({
+		readPoint: "history-read-point",
+		sessionId: session.id,
+	});
 	const store = fromPartial<SessionStore>({
 		listSessionsPage: async (options?: SessionPageOptions) => {
 			catalogOptions.push(options ?? {});
@@ -170,6 +181,16 @@ test("RPC Session page methods forward opaque snapshot cursors to the shared sto
 				sessionId: requestedSessionId,
 			});
 			return historyPage;
+		},
+		getSessionStatistics: async (
+			requestedSessionId: Session["id"],
+			options?: SessionStatisticsOptions
+		) => {
+			statisticsRequests.push({
+				options: options ?? {},
+				sessionId: requestedSessionId,
+			});
+			return statistics;
 		},
 	});
 	const request = (
@@ -206,6 +227,16 @@ test("RPC Session page methods forward opaque snapshot cursors to the shared sto
 						limit: 9,
 						sessionId: "rpc-page-session",
 					}),
+					request("statistics", "session/getStatistics", {
+						readPoint: "history-read-point",
+						sessionId: "rpc-page-session",
+						turnId: agentTurnId("rpc-page-turn"),
+					}),
+					request("bad-statistics", "session/getStatistics", {
+						readPoint: "history-read-point",
+						sessionId: "rpc-page-session",
+						unexpected: true,
+					}),
 					request("bad-limit", "session/listPage", { limit: 201 }),
 					request("shutdown", "server/shutdown", {}),
 				].join("\n")}\n`
@@ -230,6 +261,15 @@ test("RPC Session page methods forward opaque snapshot cursors to the shared sto
 			sessionId: sessionId("rpc-page-session"),
 		},
 	]);
+	expect(statisticsRequests).toEqual([
+		{
+			options: {
+				readPoint: "history-read-point",
+				turnId: agentTurnId("rpc-page-turn"),
+			},
+			sessionId: sessionId("rpc-page-session"),
+		},
+	]);
 	expect(responses[1]).toMatchObject({
 		id: "catalog-page",
 		result: { nextCursor: "catalog-next", readPoint: "catalog-read-point" },
@@ -239,6 +279,17 @@ test("RPC Session page methods forward opaque snapshot cursors to the shared sto
 		result: { nextCursor: "history-next", readPoint: "history-read-point" },
 	});
 	expect(responses[3]).toMatchObject({
+		id: "statistics",
+		result: { readPoint: "history-read-point", sessionId: "rpc-page-session" },
+	});
+	expect(responses[4]).toMatchObject({
+		error: {
+			code: -32_602,
+			message: "Session statistics parameters contain unknown fields.",
+		},
+		id: "bad-statistics",
+	});
+	expect(responses[5]).toMatchObject({
 		error: {
 			data: { code: "page_limit_invalid" },
 			message: "Session page limit must be an integer from 1 to 200.",

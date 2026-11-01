@@ -427,10 +427,21 @@ const initializeSchema = (
 			cost_usd REAL,
 			model_json TEXT NOT NULL,
 			usage_json TEXT NOT NULL,
-			created_at INTEGER NOT NULL
+			created_at INTEGER NOT NULL,
+			source_sequence INTEGER DEFAULT 0 NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_session_usage_entry_session_created
 			ON session_usage_entry (session_id, created_at);
+	`);
+	ensureIntegerColumn(
+		sqlite,
+		"session_usage_entry",
+		"source_sequence",
+		"INTEGER DEFAULT 0 NOT NULL"
+	);
+	sqlite.exec(`
+		CREATE INDEX IF NOT EXISTS idx_session_usage_entry_session_sequence
+			ON session_usage_entry (session_id, source_sequence);
 	`);
 	if (columnNames(sqlite, "session").has("workspace_id")) {
 		sqlite.exec(`

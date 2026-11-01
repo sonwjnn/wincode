@@ -434,6 +434,13 @@ export type SessionHistoryPageProjection = Readonly<{
 	records: SessionRecord[];
 	session: Session;
 }>;
+
+export type SessionStatisticsProjection = Readonly<{
+	compactions: SessionCompaction[];
+	readPoint: SessionHistoryReadPoint;
+	records: SessionRecord[];
+	usageEntries: SessionUsageEntry[];
+}>;
 type SessionUsageEntryRow = typeof sessionUsageEntry.$inferSelect;
 
 const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
@@ -1480,6 +1487,202 @@ const readSessionHistoryPageProjection = (
 	});
 };
 
+const assertStatisticsSessionAvailable = (
+	tx: SessionTransaction,
+	operationalDb: SessionDatabase,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId,
+	readPoint?: SessionHistoryReadPoint
+): void => {
+	const available =
+		sessionIsBoundToWorkspace(operationalDb, workspaceId, sessionId) &&
+		tx
+			.select({ id: session.id })
+			.from(session)
+			.where(eq(session.id, sessionId))
+			.get() !== undefined;
+	if (available) {
+		return;
+	}
+	if (readPoint !== undefined) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session statistics read point expired because the Session is no longer available."
+		);
+	}
+	throw new SessionLogError("session_deleted", sessionId, "Session not found.");
+};
+
+const resolveSessionStatisticsReadPoint = (
+	tx: SessionTransaction,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId,
+	maintenance: SessionPaginationState,
+	requestedReadPoint?: SessionHistoryReadPoint
+): SessionHistoryReadPoint => {
+	const projectionCursor = tx
+		.select({
+			generation: sessionProjectionCursor.generation,
+			logId: sessionProjectionCursor.logId,
+			nextSequence: sessionProjectionCursor.nextSequence,
+		})
+		.from(sessionProjectionCursor)
+		.where(eq(sessionProjectionCursor.sessionId, sessionId))
+		.get();
+	if (
+		projectionCursor === undefined ||
+		projectionCursor.generation !== maintenance.generation
+	) {
+		throw new SessionLogError(
+			"session_projection_blocked",
+			sessionId,
+			"Session statistics projection is stale; retry after projection maintenance."
+		);
+	}
+	if (requestedReadPoint === undefined) {
+		return {
+			catalogRevision: maintenance.catalogRevision,
+			generation: maintenance.generation,
+			kind: "history-read-point",
+			logId: projectionCursor.logId,
+			projectionId: maintenance.projectionId,
+			readPointSequence: projectionCursor.nextSequence - 1,
+			sessionId,
+			version: 1,
+			workspaceId,
+		};
+	}
+	if (
+		requestedReadPoint.sessionId !== sessionId ||
+		requestedReadPoint.workspaceId !== workspaceId
+	) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session statistics read point belongs to a different query scope."
+		);
+	}
+	if (
+		requestedReadPoint.projectionId !== maintenance.projectionId ||
+		requestedReadPoint.generation !== maintenance.generation ||
+		requestedReadPoint.logId !== projectionCursor.logId
+	) {
+		throw new SessionPaginationError(
+			"cursor_expired",
+			"Session statistics read point expired after projection maintenance or log replacement."
+		);
+	}
+	if (
+		requestedReadPoint.catalogRevision > maintenance.catalogRevision ||
+		requestedReadPoint.readPointSequence > projectionCursor.nextSequence - 1
+	) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session statistics read point refers to a future projection prefix."
+		);
+	}
+	return requestedReadPoint;
+};
+
+const readSessionStatisticsProjection = (
+	db: SessionDatabase,
+	operationalDb: SessionDatabase,
+	workspaceId: WorkspaceId,
+	sessionId: SessionId,
+	requestedReadPoint?: SessionHistoryReadPoint
+): SessionStatisticsProjection =>
+	db.transaction((tx) => {
+		const maintenance = requireReadyPaginationMaintenance(
+			tx
+				.select({
+					catalogRevision: sessionProjectionState.catalogRevision,
+					generation: sessionProjectionState.generation,
+					projectionId: sessionProjectionState.projectionId,
+					paginationVersion: sessionProjectionState.paginationVersion,
+					status: sessionProjectionState.status,
+				})
+				.from(sessionProjectionState)
+				.where(eq(sessionProjectionState.id, 1))
+				.get(),
+			[sessionId],
+			"Session statistics projection is unavailable; run `wincode sessions rebuild --all` before reading Session statistics."
+		);
+		assertStatisticsSessionAvailable(
+			tx,
+			operationalDb,
+			workspaceId,
+			sessionId,
+			requestedReadPoint
+		);
+		const readPoint = resolveSessionStatisticsReadPoint(
+			tx,
+			workspaceId,
+			sessionId,
+			maintenance,
+			requestedReadPoint
+		);
+		const recordRows = tx
+			.select({
+				messagesJson: sessionRecordVersion.messagesJson,
+				record: sessionRecord,
+			})
+			.from(sessionRecordVersion)
+			.innerJoin(
+				sessionRecord,
+				eq(sessionRecord.recordId, sessionRecordVersion.recordId)
+			)
+			.where(
+				and(
+					eq(sessionRecordVersion.sessionId, sessionId),
+					lte(sessionRecordVersion.sourceSequence, readPoint.readPointSequence),
+					lte(
+						sessionRecordVersion.validFromSequence,
+						readPoint.readPointSequence
+					),
+					or(
+						isSqlNull(sessionRecordVersion.validToSequence),
+						gt(
+							sessionRecordVersion.validToSequence,
+							readPoint.readPointSequence
+						)
+					)
+				)
+			)
+			.orderBy(asc(sessionRecordVersion.sourceSequence))
+			.all();
+		const compactionRows = tx
+			.select({ compaction: sessionCompaction })
+			.from(sessionCompaction)
+			.where(
+				and(
+					eq(sessionCompaction.sessionId, sessionId),
+					lte(sessionCompaction.sourceSequence, readPoint.readPointSequence)
+				)
+			)
+			.orderBy(asc(sessionCompaction.sequence))
+			.all();
+		const usageEntryRows = tx
+			.select()
+			.from(sessionUsageEntry)
+			.where(
+				and(
+					eq(sessionUsageEntry.sessionId, sessionId),
+					lte(sessionUsageEntry.sourceSequence, readPoint.readPointSequence)
+				)
+			)
+			.orderBy(asc(sessionUsageEntry.sourceSequence))
+			.all();
+		return {
+			compactions: compactionRows.map(({ compaction }) =>
+				toSessionCompaction(compaction)
+			),
+			readPoint,
+			records: recordRows.map(({ messagesJson, record }) =>
+				toSessionRecord({ ...record, messagesJson })
+			),
+			usageEntries: usageEntryRows.map(toSessionUsageEntry),
+		};
+	});
+
 export type DrizzleSessionStore = SessionProjectionStore &
 	Readonly<{
 		jsonlProjection: SessionJsonlProjection;
@@ -1491,6 +1694,10 @@ export type DrizzleSessionStore = SessionProjectionStore &
 			sessionId: SessionId,
 			input: SessionHistoryPageProjectionInput
 		) => SessionHistoryPageProjection;
+		readSessionStatisticsProjection: (
+			sessionId: SessionId,
+			readPoint?: SessionHistoryReadPoint
+		) => SessionStatisticsProjection;
 		setAttachmentCollectionBarrier: (barrier: () => Promise<void>) => void;
 	}>;
 
@@ -1863,6 +2070,14 @@ export const createDrizzleSessionStore = (
 				workspace.id,
 				sessionId,
 				input
+			),
+		readSessionStatisticsProjection: (sessionId, readPoint) =>
+			readSessionStatisticsProjection(
+				db,
+				operationalDb,
+				workspace.id,
+				sessionId,
+				readPoint
 			),
 		updateSessionSubmission: async (input) =>
 			updateSessionSubmissionCheckpoint(db, operationalDb, workspace.id, input),

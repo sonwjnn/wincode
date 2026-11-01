@@ -24,6 +24,7 @@ import type {
 	SessionCompaction,
 } from "../compaction/types";
 import { assertCompactionMessageReferences } from "../compaction/validation";
+import { buildSessionStatistics } from "../usage/session-statistics";
 import type { AttachmentExternalizationLease } from "./attachment-store";
 import type { DrizzleSessionStore } from "./drizzle-session-store";
 import {
@@ -45,6 +46,7 @@ import {
 } from "./session-jsonl-codec";
 import { rebuildSessionJsonlProjection } from "./session-jsonl-rebuild";
 import {
+	decodeSessionHistoryReadPointToken,
 	decodeSessionPageToken,
 	encodeSessionPageToken,
 	parseSessionPageLimit,
@@ -64,6 +66,8 @@ import type {
 	SessionCatalogResult,
 	SessionHistoryPage,
 	SessionPageOptions,
+	SessionStatistics,
+	SessionStatisticsOptions,
 	SessionStore,
 	SessionSubmissionRecordReceipt,
 	SessionUsageEntry,
@@ -4346,6 +4350,47 @@ export const createSessionJsonlStore = (
 		});
 	};
 
+	const getSessionStatistics: SessionStore["getSessionStatistics"] = async (
+		sessionId,
+		options: SessionStatisticsOptions = {}
+	): Promise<SessionStatistics> => {
+		const requestedReadPoint =
+			options.readPoint === undefined
+				? undefined
+				: decodeSessionHistoryReadPointToken(options.readPoint);
+		if (requestedReadPoint === undefined) {
+			await ensureBoundSessionProjectedIfStale(sessionId);
+		}
+		return withSessionCatalogLifecycleGate(logRoot, async () => {
+			try {
+				await checkDeletedMarker(sessionId);
+			} catch (error) {
+				if (
+					requestedReadPoint !== undefined &&
+					isCode(error, "session_deleted")
+				) {
+					throw new SessionPaginationError(
+						"cursor_expired",
+						"Session statistics read point expired because the Session was deleted."
+					);
+				}
+				throw error;
+			}
+			const projection = projectionStore.readSessionStatisticsProjection(
+				sessionId,
+				requestedReadPoint
+			);
+			return buildSessionStatistics({
+				compactions: projection.compactions,
+				readPoint: encodeSessionPageToken(projection.readPoint),
+				records: projection.records,
+				sessionId,
+				...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+				usageEntries: projection.usageEntries,
+			});
+		});
+	};
+
 	const logHasDeletionEvent = async (
 		sessionId: SessionId,
 		root: string
@@ -4635,6 +4680,7 @@ export const createSessionJsonlStore = (
 		listSessionRecords: wrapRead(projectionStore.listSessionRecords),
 		listSessionsPage,
 		readSessionHistoryPage,
+		getSessionStatistics,
 		listSessionUsageEntries: wrapRead(projectionStore.listSessionUsageEntries),
 		listSessions,
 		rebuildProjection,

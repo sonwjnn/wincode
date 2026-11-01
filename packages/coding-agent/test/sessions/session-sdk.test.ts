@@ -60,6 +60,8 @@ import type {
 	SessionCatalogPage,
 	SessionHistoryPage,
 	SessionPageOptions,
+	SessionStatistics,
+	SessionStatisticsOptions,
 	SessionStore,
 } from "@/modules/sessions/storage/session-store";
 import {
@@ -74,7 +76,12 @@ import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
 } from "../support/e2e-fake-runtime";
-import { agentId, modelId, sessionId } from "../support/identifiers";
+import {
+	agentId,
+	agentTurnId,
+	modelId,
+	sessionId,
+} from "../support/identifiers";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
@@ -892,6 +899,34 @@ test("Session SDK forwards opaque page cursors without opening a Host", async ()
 	let historyRequest:
 		| { options?: SessionPageOptions; sessionId: string }
 		| undefined;
+	let statisticsRequest:
+		| { options?: SessionStatisticsOptions; sessionId: string }
+		| undefined;
+	const emptyUsage = {
+		byModel: [],
+		cacheReadTokens: null,
+		cacheWriteTokens: null,
+		contributionCount: 0,
+		costs: [],
+		inputTokens: null,
+		outputTokens: null,
+		reasoningTokens: null,
+		totalTokens: null,
+		unknownCostCount: 0,
+	} satisfies SessionStatistics["usage"]["actual"];
+	const statistics: SessionStatistics = {
+		completedToolCallCount: 0,
+		recordCount: 0,
+		readPoint: "history-read-point",
+		sessionId: storedSession.id,
+		terminalOutcomeCounts: {
+			cancelled: 0,
+			completed: 0,
+			failed: 0,
+			interrupted: 0,
+		},
+		usage: { actual: emptyUsage, auxiliary: emptyUsage, inherited: emptyUsage },
+	};
 	const sdkStore = fromPartial<SessionStore>({
 		listSessionsPage: async (options?: SessionPageOptions) => {
 			catalogOptions = options;
@@ -903,6 +938,13 @@ test("Session SDK forwards opaque page cursors without opening a Host", async ()
 		) => {
 			historyRequest = { options, sessionId: id };
 			return historyPage;
+		},
+		getSessionStatistics: async (
+			id: Session["id"],
+			options?: SessionStatisticsOptions
+		) => {
+			statisticsRequest = { options, sessionId: id };
+			return statistics;
 		},
 	});
 	const sdk = createSessionSdkOperations(
@@ -923,6 +965,19 @@ test("Session SDK forwards opaque page cursors without opening a Host", async ()
 	).toBe(historyPage);
 	expect(historyRequest).toEqual({
 		options: { cursor: "history-cursor", limit: 9 },
+		sessionId: "sdk-page-session",
+	});
+	expect(
+		await sdk.getSessionStatistics("sdk-page-session", {
+			readPoint: "history-read-point",
+			turnId: agentTurnId("sdk-page-turn"),
+		})
+	).toBe(statistics);
+	expect(statisticsRequest).toEqual({
+		options: {
+			readPoint: "history-read-point",
+			turnId: agentTurnId("sdk-page-turn"),
+		},
 		sessionId: "sdk-page-session",
 	});
 });

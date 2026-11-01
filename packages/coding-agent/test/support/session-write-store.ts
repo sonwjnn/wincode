@@ -2,6 +2,7 @@ import { randomUUIDv7 } from "bun";
 import type {
 	CreateSessionUsageEntryInput,
 	SessionProjectionStore,
+	SessionStatistics,
 	SessionStore,
 	SessionWriteOutcome,
 	UpdateSessionInput,
@@ -45,6 +46,47 @@ export const sessionStoreWithSuccessfulWrites = (
 	}),
 	readSessionHistoryPage: async () => {
 		throw new Error("Session history pages are not used by this test store.");
+	},
+	getSessionStatistics: async (sessionId, options) => {
+		const emptyUsage = {
+			byModel: [],
+			cacheReadTokens: null,
+			cacheWriteTokens: null,
+			contributionCount: 0,
+			costs: [],
+			inputTokens: null,
+			outputTokens: null,
+			reasoningTokens: null,
+			totalTokens: null,
+			unknownCostCount: 0,
+		} satisfies SessionStatistics["usage"]["actual"];
+		return {
+			completedToolCallCount: 0,
+			recordCount: 0,
+			readPoint: options?.readPoint ?? "test-read-point",
+			sessionId,
+			terminalOutcomeCounts: {
+				cancelled: 0,
+				completed: 0,
+				failed: 0,
+				interrupted: 0,
+			},
+			...(options?.turnId === undefined
+				? {}
+				: {
+						turn: {
+							completedToolCallCount: 0,
+							recordCount: 0,
+							terminalOutcome: { kind: "no-terminal-record" as const },
+							turnId: options.turnId,
+						},
+					}),
+			usage: {
+				actual: emptyUsage,
+				auxiliary: emptyUsage,
+				inherited: emptyUsage,
+			},
+		};
 	},
 	listRecentModelSelections: async (limit) =>
 		await projectionStore.listRecentModelSelections(limit),

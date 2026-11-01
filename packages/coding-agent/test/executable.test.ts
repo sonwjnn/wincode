@@ -101,6 +101,7 @@ describe("wincode executable", () => {
 					submissionEvents: true,
 					sessionCatalogPagination: true,
 					sessionHistoryPagination: true,
+					sessionStatistics: true,
 					transcriptPagination: true,
 				},
 				protocolVersion: 4,

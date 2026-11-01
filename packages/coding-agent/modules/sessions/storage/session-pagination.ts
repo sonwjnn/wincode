@@ -116,6 +116,39 @@ export const encodeSessionPageToken = (
 		.encode(JSON.stringify(value))
 		.toBase64({ alphabet: "base64url", omitPadding: true });
 
+export const decodeSessionHistoryReadPointToken = (
+	value: string
+): SessionHistoryReadPoint => {
+	if (value.length > MAX_CURSOR_LENGTH || !CURSOR_PATTERN.test(value)) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session history read point is invalid."
+		);
+	}
+	let decoded: unknown;
+	try {
+		decoded = JSON.parse(
+			new TextDecoder("utf-8", { fatal: true }).decode(
+				Uint8Array.fromBase64(value, { alphabet: "base64url" })
+			)
+		);
+	} catch (error) {
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session history read point is invalid.",
+			{ cause: error }
+		);
+	}
+	const parsed = historyReadPointSchema.safeParse(decoded);
+	if (parsed.success) {
+		return parsed.data;
+	}
+	throw new SessionPaginationError(
+		"cursor_invalid",
+		"Session history read point is invalid."
+	);
+};
+
 export const decodeSessionPageToken = (
 	value: string,
 	expectedKind: SessionPageCursorKind

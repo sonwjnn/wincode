@@ -1,3 +1,4 @@
+import type { AgentTurnId } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import { isPlainObject } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
@@ -12,7 +13,10 @@ import {
 	MAX_ATTACHMENT_BYTES,
 } from "@/modules/sessions/attachment-reference";
 import type { SessionFilePart } from "@/modules/sessions/message";
-import type { SessionPageOptions } from "@/modules/sessions/storage/session-store";
+import type {
+	SessionPageOptions,
+	SessionStatisticsOptions,
+} from "@/modules/sessions/storage/session-store";
 import { findTextOccurrences } from "@/shared/utils/text-ranges";
 import type { RpcParams, RpcRequest } from "./protocol";
 import { RPC_ERROR_CODES } from "./protocol";
@@ -125,6 +129,32 @@ const exactFields = (
 	record: Record<string, unknown>,
 	allowed: readonly string[]
 ): boolean => Object.keys(record).every((key) => allowed.includes(key));
+
+export const readSessionStatisticsOptions = (
+	params: RpcParams,
+	additionalFields: readonly string[] = []
+): SessionStatisticsOptions => {
+	if (!exactFields(params, ["readPoint", "turnId", ...additionalFields])) {
+		throw rpcInvalidParams(
+			"Session statistics parameters contain unknown fields."
+		);
+	}
+	const readPoint = params.readPoint;
+	if (readPoint !== undefined && typeof readPoint !== "string") {
+		throw rpcInvalidParams("readPoint must be a string.");
+	}
+	const turnId = params.turnId;
+	if (
+		turnId !== undefined &&
+		(typeof turnId !== "string" || turnId.length === 0)
+	) {
+		throw rpcInvalidParams("turnId must be a non-empty string.");
+	}
+	return {
+		...(readPoint === undefined ? {} : { readPoint }),
+		...(turnId === undefined ? {} : { turnId: turnId as AgentTurnId }),
+	};
+};
 
 export const readSessionPageOptions = (
 	params: RpcParams,

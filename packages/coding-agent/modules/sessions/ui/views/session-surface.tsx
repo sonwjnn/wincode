@@ -49,6 +49,7 @@ import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import type {
 	SessionPageOptions,
+	SessionStatistics,
 	SessionStore,
 } from "@/modules/sessions/storage/session-store";
 import {
@@ -79,6 +80,7 @@ type StoredSessionHistory = Readonly<{
 	model: ProviderModelSelection | undefined;
 	nextCursor: string | undefined;
 	readPoint: string;
+	statistics: SessionStatistics;
 	sessionTitle: string;
 	transcript: readonly SessionMessage[];
 }>;
@@ -217,6 +219,9 @@ const loadStoredSessionHistory = async (
 ): Promise<StoredSessionHistory> => {
 	const store = getSessionStore();
 	const page = await store.readSessionHistoryPage(sessionId, options);
+	const statistics = await store.getSessionStatistics(sessionId, {
+		readPoint: page.readPoint,
+	});
 	const savedTranscript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(page.records)
 	);
@@ -229,6 +234,7 @@ const loadStoredSessionHistory = async (
 			?.model,
 		nextCursor: page.nextCursor,
 		readPoint: page.readPoint,
+		statistics,
 		sessionTitle: page.session.title,
 		transcript,
 	};
@@ -929,6 +935,7 @@ export function SessionSurface({
 				selectionError={surface.selectionError}
 				selectionPickerError={surface.selectionPickerError}
 				sessionTitle={surface.history.sessionTitle}
+				statistics={surface.history.statistics}
 			/>
 		);
 	}

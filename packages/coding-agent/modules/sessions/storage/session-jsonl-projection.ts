@@ -785,6 +785,7 @@ export const createSessionJsonlProjection = (
 							createdAt: new Date(String(payload.createdAt)),
 							id: toSessionUsageEntryId(String(payload.id)),
 							kind: payload.kind as "cache-warm" | "compaction-summary",
+							sourceSequence: entry.envelope.sequence,
 							modelJson: serializeJson(model),
 							sessionId,
 							usageJson: serializeJson(usage),

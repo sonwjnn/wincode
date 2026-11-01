@@ -18,6 +18,10 @@ import type {
 	SessionWriteOutcome,
 	SessionWriteReceipt,
 } from "./session-write-outcome";
+import type {
+	SessionStatistics,
+	SessionStatisticsOptions,
+} from "./usage/session-statistics";
 
 export type {
 	Session,
@@ -26,12 +30,15 @@ export type {
 	SessionPageCompaction,
 	SessionPageOptions,
 } from "./session-pagination-types";
-
 export type {
 	SessionWriteFailure,
 	SessionWriteOutcome,
 	SessionWriteReceipt,
 } from "./session-write-outcome";
+export type {
+	SessionStatistics,
+	SessionStatisticsOptions,
+} from "./usage/session-statistics";
 
 /** Model-visible tool names a child Session is permitted to invoke. */
 export type SessionSdkCapabilityCeiling = Readonly<{
@@ -182,6 +189,10 @@ export type SessionSdk = Readonly<{
 		sessionId: SessionId | string,
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryPage>;
+	getSessionStatistics: (
+		sessionId: SessionId | string,
+		options?: SessionStatisticsOptions
+	) => Promise<SessionStatistics>;
 	createSessionRuntime: (
 		options?: SessionRuntimeOptions
 	) => Promise<SessionSdk>;
@@ -207,6 +218,7 @@ export type SessionSdkOperations = Pick<
 	SessionSdk,
 	| "listSessionsPage"
 	| "readSessionHistoryPage"
+	| "getSessionStatistics"
 	| "createSessionRuntime"
 	| "createEmptySession"
 	| "deliverToSession"

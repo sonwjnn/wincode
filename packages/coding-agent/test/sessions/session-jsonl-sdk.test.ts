@@ -4,7 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	type AgentTurnEvent,
+	type AgentTurnId,
+	SESSION_RECORD_VERSION,
 	type SessionMessageId,
+	type SessionRecord,
 	type SessionRecordId,
 	type SubmissionId,
 	toSubmissionId,
@@ -75,7 +78,9 @@ import {
 	compactionId,
 	modelId,
 	sessionMessageId,
+	sessionRecordId,
 	sessionUsageEntryId,
+	toolCallId,
 } from "../support/identifiers";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-jsonl-"));
@@ -6709,6 +6714,233 @@ test("Session deletion persists a tombstone receipt before removing the projecti
 		).rejects.toMatchObject({ code: "ENOENT" });
 	} finally {
 		await services.shutdown();
+	}
+});
+
+test("Session statistics share the history read point and report only persisted terminal usage", async () => {
+	const databasePath = path.join(root, "session-statistics-read-point.sqlite");
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const sessionId = toSessionId("session-statistics-read-point");
+	const completeTurnId = agentTurnId("session-statistics-complete-turn");
+	const partialTurnId = agentTurnId("session-statistics-partial-turn");
+	const usage = { inputTokens: 120, outputTokens: 25 };
+	const assistantRecord = (
+		id: string,
+		turnId: AgentTurnId,
+		outcome: SessionRecord["outcome"],
+		messageUsage?: typeof usage
+	): SessionRecord => ({
+		agentId: agentId("statistics-agent"),
+		id: sessionRecordId(id),
+		messages: [
+			{
+				id: sessionMessageId(`${id}-message`),
+				metadata: {
+					model: DEFAULT_PROVIDER_MODEL_SELECTION,
+					...(messageUsage === undefined ? {} : { usage: messageUsage }),
+				},
+				parts: [{ text: "Saved result", type: "text" }],
+				role: "assistant",
+			},
+		],
+		model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		outcome,
+		turnId,
+		version: SESSION_RECORD_VERSION,
+	});
+	const completedToolRecord: SessionRecord = {
+		agentId: agentId("statistics-agent"),
+		id: sessionRecordId("statistics-tool-record"),
+		messages: [
+			{
+				id: sessionMessageId("statistics-tool-message"),
+				metadata: { model: DEFAULT_PROVIDER_MODEL_SELECTION },
+				parts: [
+					{
+						input: { path: "README.md" },
+						outcome: { kind: "success", output: "read" },
+						sequence: 0,
+						toolCallId: toolCallId("statistics-tool-call"),
+						toolName: "read",
+						type: "tool-call",
+					},
+				],
+				role: "assistant",
+			},
+		],
+		model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		outcome: { kind: "tool" },
+		turnId: completeTurnId,
+		version: SESSION_RECORD_VERSION,
+	};
+	try {
+		await persistence.store.createEmptySession({ id: sessionId });
+		const userRecord = buildUserSessionRecord({
+			agentId: agentId("statistics-agent"),
+			message: {
+				id: sessionMessageId("statistics-user-message"),
+				parts: [{ text: "Count only saved records.", type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: completeTurnId,
+		});
+		const partialRecord = assistantRecord(
+			"statistics-partial-record",
+			partialTurnId,
+			{ kind: "checkpoint" }
+		);
+		const completedRecord = assistantRecord(
+			"statistics-completed-record",
+			completeTurnId,
+			{
+				kind: "assistant",
+				terminal: { finishedAt: 1234, kind: "completed", usage },
+			},
+			usage
+		);
+		for (const record of [
+			userRecord,
+			completedToolRecord,
+			partialRecord,
+			completedRecord,
+		]) {
+			expect(
+				await persistence.store.commitSessionRecord({ record, sessionId })
+			).toMatchObject({ kind: "committed", projection: "ready" });
+		}
+
+		const history = await persistence.store.readSessionHistoryPage(sessionId);
+		expect(history.readPoint).toBeString();
+		const otherSessionId = toSessionId("session-statistics-other-session");
+		await persistence.store.createEmptySession({ id: otherSessionId });
+		await expect(
+			persistence.store.getSessionStatistics(otherSessionId, {
+				readPoint: history.readPoint,
+			})
+		).rejects.toMatchObject({ code: "cursor_invalid" });
+		await expect(
+			persistence.store.getSessionStatistics(sessionId, {
+				readPoint: "not-a-history-read-point",
+			})
+		).rejects.toMatchObject({ code: "cursor_invalid" });
+		const delayedUsage = await persistence.store.createSessionUsageEntry({
+			costUsd: 0.25,
+			createdAt: new Date("2026-01-01T00:00:00.000Z"),
+			id: sessionUsageEntryId("statistics-cache-warm-late"),
+			kind: "cache-warm",
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			sessionId,
+			usage: { inputTokens: 40, outputTokens: 0 },
+		});
+		expect(delayedUsage.writeOutcome).toMatchObject({
+			kind: "committed",
+			projection: "ready",
+		});
+
+		const historical = await persistence.store.getSessionStatistics(sessionId, {
+			readPoint: history.readPoint,
+		});
+		expect(historical).toMatchObject({
+			completedToolCallCount: 1,
+			recordCount: 4,
+			readPoint: history.readPoint,
+			terminalOutcomeCounts: { completed: 1 },
+			usage: {
+				actual: {
+					contributionCount: 1,
+					costs: [],
+					inputTokens: 120,
+					outputTokens: 25,
+					unknownCostCount: 1,
+				},
+				auxiliary: { contributionCount: 0, inputTokens: null },
+				inherited: { contributionCount: 0, inputTokens: null },
+			},
+		});
+		const turn = await persistence.store.getSessionStatistics(sessionId, {
+			turnId: partialTurnId,
+		});
+		expect(turn).toMatchObject({
+			recordCount: 1,
+			turn: {
+				turnId: partialTurnId,
+				terminalOutcome: { kind: "no-terminal-record" },
+			},
+			usage: { actual: { contributionCount: 0, inputTokens: null } },
+		});
+
+		const current = await persistence.store.getSessionStatistics(sessionId);
+		expect(current).toMatchObject({
+			usage: {
+				actual: { inputTokens: 120, outputTokens: 25, costs: [] },
+				auxiliary: {
+					contributionCount: 1,
+					costs: [{ amount: 0.25, unit: "USD" }],
+					inputTokens: 40,
+				},
+			},
+		});
+
+		persistence.projection.sqlite.exec(`
+			CREATE TRIGGER reject_statistics_usage_projection
+			BEFORE INSERT ON session_usage_entry
+			BEGIN
+				SELECT RAISE(ABORT, 'injected statistics usage projection failure');
+			END;
+		`);
+		const blockedUsage = await persistence.store.createSessionUsageEntry({
+			costUsd: 0.5,
+			createdAt: new Date("2026-01-02T00:00:00.000Z"),
+			id: sessionUsageEntryId("statistics-cache-warm-catchup"),
+			kind: "cache-warm",
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			sessionId,
+			usage: { inputTokens: 1, outputTokens: 0 },
+		});
+		expect(blockedUsage.writeOutcome).toMatchObject({
+			kind: "committed",
+			projection: "blocked",
+		});
+		persistence.projection.sqlite.exec(
+			"DROP TRIGGER reject_statistics_usage_projection"
+		);
+		await expect(
+			persistence.store.getSessionStatistics(sessionId)
+		).resolves.toMatchObject({
+			usage: {
+				auxiliary: {
+					contributionCount: 2,
+					costs: [{ amount: 0.75, unit: "USD" }],
+					inputTokens: 41,
+				},
+			},
+		});
+
+		const rebuilt = await persistence.store.rebuildProjection(
+			{ kind: "session", sessionId },
+			(operation) => operation()
+		);
+		expect(rebuilt.issues).toEqual([]);
+		await expect(
+			persistence.store.getSessionStatistics(sessionId, {
+				readPoint: history.readPoint,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+		await expect(
+			persistence.store.getSessionStatistics(sessionId)
+		).resolves.toMatchObject({
+			recordCount: 4,
+			usage: {
+				actual: { inputTokens: 120 },
+				auxiliary: { contributionCount: 2, inputTokens: 41 },
+			},
+		});
+	} finally {
+		persistence.close();
 	}
 });
 

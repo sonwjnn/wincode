@@ -35,6 +35,10 @@ import type {
 	SessionWriteReceipt,
 } from "../session-write-outcome";
 import type {
+	SessionStatistics,
+	SessionStatisticsOptions,
+} from "../usage/session-statistics";
+import type {
 	AttachmentExternalizationLease,
 	AttachmentExternalizationOptions,
 	AttachmentHydrationOptions,
@@ -48,6 +52,10 @@ export type {
 	SessionHistoryPage,
 	SessionPageOptions,
 } from "../session-pagination-types";
+export type {
+	SessionStatistics,
+	SessionStatisticsOptions,
+} from "../usage/session-statistics";
 
 import type {
 	SessionWriterLock,
@@ -289,6 +297,10 @@ export type SessionStore = Omit<
 		sessionId: SessionId,
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryPage>;
+	getSessionStatistics: (
+		sessionId: SessionId,
+		options?: SessionStatisticsOptions
+	) => Promise<SessionStatistics>;
 	listRecentModelSelections: (
 		limit: number
 	) => Promise<ProviderModelSelection[]>;

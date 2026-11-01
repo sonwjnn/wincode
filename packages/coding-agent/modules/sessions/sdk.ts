@@ -1473,6 +1473,11 @@ const createSessionSdkInternal = async (
 				toSessionId(sessionId),
 				pageOptions
 			),
+		getSessionStatistics: (sessionId, statisticsOptions) =>
+			assembly.store.getSessionStatistics(
+				toSessionId(sessionId),
+				statisticsOptions
+			),
 		getAgentCatalog,
 		createSession,
 		deliverToSession: async (sessionId, input) => {
@@ -1606,6 +1611,8 @@ export const createSessionSdkOperations = (
 		listSessionsPage: (pageOptions) => store.listSessionsPage(pageOptions),
 		readSessionHistoryPage: (sessionId, pageOptions) =>
 			store.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
+		getSessionStatistics: (sessionId, statisticsOptions) =>
+			store.getSessionStatistics(toSessionId(sessionId), statisticsOptions),
 		deliverToSession: (sessionId, input) =>
 			withSessionRuntime((sdk) => sdk.deliverToSession(sessionId, input)),
 		openSession: async (sessionId, openOptions) => {

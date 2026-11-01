@@ -54,6 +54,7 @@ import {
 	encodeCursor,
 	paramsOf,
 	readSessionPageOptions,
+	readSessionStatisticsOptions,
 	readSubmission,
 	rpcInvalidParams,
 	stringValue,
@@ -317,6 +318,7 @@ export const createRpcRequestHandler = (
 					submissionEvents: true,
 					sessionCatalogPagination: true,
 					sessionHistoryPagination: true,
+					sessionStatistics: true,
 					transcriptPagination: true,
 				},
 				protocolVersion: RPC_PROTOCOL_VERSION,
@@ -370,6 +372,37 @@ export const createRpcRequestHandler = (
 				return success(
 					request.id,
 					await store.readSessionHistoryPage(sessionId, pageOptions)
+				);
+			} catch (error) {
+				const paginationError = mapSessionPaginationError(error);
+				if (paginationError !== undefined) {
+					throw paginationError;
+				}
+				const writerError = mapSessionWriterError(error, sessionId);
+				if (writerError !== undefined) {
+					throw writerError;
+				}
+				throw error;
+			}
+		}
+		if (request.method === "session/getStatistics") {
+			const store = state.assembly?.store;
+			if (store === undefined) {
+				throw appError("not_initialized", "Session storage is unavailable.");
+			}
+			const params = paramsOf(request);
+			const statisticsOptions = readSessionStatisticsOptions(params, [
+				"sessionId",
+			]);
+			const sessionIdValue = stringValue(params.sessionId);
+			if (sessionIdValue === undefined || !isValidSessionId(sessionIdValue)) {
+				throw rpcInvalidParams("sessionId must be a valid Session ID.");
+			}
+			const sessionId = toSessionId(sessionIdValue);
+			try {
+				return success(
+					request.id,
+					await store.getSessionStatistics(sessionId, statisticsOptions)
 				);
 			} catch (error) {
 				const paginationError = mapSessionPaginationError(error);

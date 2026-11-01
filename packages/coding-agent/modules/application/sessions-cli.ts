@@ -12,6 +12,8 @@ import type {
 	SessionProjectionMaintenanceGate,
 	SessionProjectionRebuildResult,
 	SessionProjectionRebuildScope,
+	SessionStatistics,
+	SessionStatisticsOptions,
 	SessionStore,
 } from "@/modules/sessions/storage/session-store";
 import { isValidSessionId, toSessionId } from "@/shared/identifiers";
@@ -22,12 +24,14 @@ const HELP_TEXT = [
 	"Usage:",
 	"  wincode sessions list [--cursor <cursor>] [--limit <limit>] [--json]",
 	"  wincode sessions history <session-id> [--cursor <cursor>] [--limit <limit>] [--json]",
+	"  wincode sessions stats <session-id> [--turn-id <turn-id>] [--read-point <token>] [--json]",
 	"  wincode sessions verify <session-id> [--json]",
 	"  wincode sessions rebuild <session-id|--all> [--json]",
 	"",
 	"Commands:",
 	"  list                       Read one snapshot page of the Session catalog",
 	"  history <session-id>       Read one snapshot page of stored Session history",
+	"  stats <session-id>         Read persisted Session or Agent Turn statistics",
 	"  verify <session-id>        Validate the authoritative Session JSONL log",
 	"  rebuild <session-id>       Rebuild one Session projection from its log",
 	"  rebuild --all              Rebuild projections from published Session logs",
@@ -47,7 +51,12 @@ export type SessionsCliIo = Readonly<{
 }>;
 
 type SessionsCliStore = Pick<SessionStore, "rebuildProjection"> &
-	Partial<Pick<SessionStore, "listSessionsPage" | "readSessionHistoryPage">>;
+	Partial<
+		Pick<
+			SessionStore,
+			"getSessionStatistics" | "listSessionsPage" | "readSessionHistoryPage"
+		>
+	>;
 
 export type SessionsCliDependencies = Readonly<{
 	store?: SessionsCliStore;
@@ -74,6 +83,12 @@ type ParsedSessionsCommand =
 			json: boolean;
 			kind: "history";
 			options: SessionPageOptions;
+			sessionId: string;
+	  }>
+	| Readonly<{
+			json: boolean;
+			kind: "stats";
+			options: SessionStatisticsOptions;
 			sessionId: string;
 	  }>
 	| Readonly<{ json: boolean; kind: "verify"; sessionId: string }>
@@ -278,6 +293,114 @@ const parsePageCommand = (
 	return { json: state.json, kind, options, sessionId: sessionId as string };
 };
 
+type StatisticsCommandArgumentState = {
+	json: boolean;
+	readPoint?: string;
+	sessionId?: string;
+	turnId?: string;
+};
+
+type StatisticsCommandArgumentResult =
+	| Readonly<{ consumed: number }>
+	| Readonly<{ message: string }>;
+
+const parseStatisticsOptionArgument = (
+	args: readonly string[],
+	index: number,
+	state: StatisticsCommandArgumentState
+): StatisticsCommandArgumentResult | undefined => {
+	const argument = args[index];
+	let option: "turnId" | "readPoint";
+	if (argument === "--turn-id") {
+		option = "turnId";
+	} else if (argument === "--read-point") {
+		option = "readPoint";
+	} else {
+		return;
+	}
+	if (state[option] !== undefined) {
+		return { message: pageCommandUnknownArgument(argument) };
+	}
+	const value = args[index + 1];
+	if (
+		value === undefined ||
+		value.startsWith("--") ||
+		(option === "turnId" && value.length === 0)
+	) {
+		return {
+			message:
+				option === "turnId"
+					? "The --turn-id option requires an Agent Turn ID."
+					: "The --read-point option requires a token.",
+		};
+	}
+	state[option] = value;
+	return { consumed: 1 };
+};
+
+const parseStatisticsCommandArgument = (
+	args: readonly string[],
+	index: number,
+	state: StatisticsCommandArgumentState
+): StatisticsCommandArgumentResult => {
+	const argument = args[index];
+	if (argument === "--json" && !state.json) {
+		state.json = true;
+		return { consumed: 0 };
+	}
+	const optionResult = parseStatisticsOptionArgument(args, index, state);
+	if (optionResult !== undefined) {
+		return optionResult;
+	}
+	if (
+		argument !== undefined &&
+		!argument.startsWith("-") &&
+		state.sessionId === undefined
+	) {
+		state.sessionId = argument;
+		return { consumed: 0 };
+	}
+	return { message: pageCommandUnknownArgument(argument) };
+};
+
+const parseStatisticsCommand = (
+	args: readonly string[],
+	jsonWasRequested: boolean
+): ParsedSessionsCommand => {
+	const state: StatisticsCommandArgumentState = { json: false };
+	for (let index = 1; index < args.length; index += 1) {
+		const result = parseStatisticsCommandArgument(args, index, state);
+		if ("message" in result) {
+			return pageCommandUsageError(
+				result.message,
+				state.json || jsonWasRequested
+			);
+		}
+		index += result.consumed;
+	}
+	if (state.sessionId === undefined) {
+		return pageCommandUsageError(
+			"The stats command requires a Session ID.",
+			state.json || jsonWasRequested
+		);
+	}
+	if (!isValidSessionId(state.sessionId)) {
+		return pageCommandUsageError(
+			"Session ID is not safe for a Session log path.",
+			state.json || jsonWasRequested
+		);
+	}
+	return {
+		json: state.json,
+		kind: "stats",
+		options: omitUndefined({
+			readPoint: state.readPoint,
+			turnId: state.turnId as SessionStatisticsOptions["turnId"],
+		}),
+		sessionId: state.sessionId,
+	};
+};
+
 const parseSessionsCommand = (
 	args: readonly string[]
 ): ParsedSessionsCommand => {
@@ -287,6 +410,9 @@ const parseSessionsCommand = (
 	const jsonWasRequested = args.includes("--json");
 	if (args[0] === "list" || args[0] === "history") {
 		return parsePageCommand(args[0], args, jsonWasRequested);
+	}
+	if (args[0] === "stats") {
+		return parseStatisticsCommand(args, jsonWasRequested);
 	}
 	if (args[0] === "rebuild") {
 		return parseRebuildCommand(args, jsonWasRequested);
@@ -509,9 +635,63 @@ const writeSessionPage = (
 	return 0;
 };
 
+const statisticsUsageText = (
+	usage: SessionStatistics["usage"]["actual"]
+): string => {
+	if (usage.contributionCount === 0) {
+		return "no persisted usage";
+	}
+	const costs = usage.costs.map(
+		({ amount, model, unit }) =>
+			`${sanitizeText(`${model.providerId}/${model.modelId}`)}: ${amount} ${sanitizeText(unit)}`
+	);
+	if (usage.unknownCostCount > 0) {
+		costs.push(`${usage.unknownCostCount} cost unknown`);
+	}
+	return `${usage.inputTokens ?? "unknown"} input / ${usage.outputTokens ?? "unknown"} output tokens; ${costs.length === 0 ? "cost unknown" : costs.join(", ")}`;
+};
+
+const writeSessionStatistics = (
+	statistics: SessionStatistics,
+	json: boolean,
+	io: SessionsCliIo
+): number => {
+	if (json) {
+		outputLine(io.stdout, JSON.stringify({ command: "stats", ...statistics }));
+		return 0;
+	}
+	const outcomes = Object.entries(statistics.terminalOutcomeCounts)
+		.filter(([, count]) => count > 0)
+		.map(([outcome, count]) => `${outcome}: ${count}`);
+	const noTerminalRecords =
+		statistics.turn?.terminalOutcome.kind === "no-terminal-record" ? 1 : 0;
+	outputLine(
+		io.stdout,
+		`Session ${sanitizeText(statistics.sessionId)} statistics: ${statistics.recordCount} committed record(s), ${statistics.completedToolCallCount} completed Tool Call(s).`
+	);
+	outputLine(io.stdout, `Read point: ${sanitizeText(statistics.readPoint)}`);
+	outputLine(
+		io.stdout,
+		`Terminal outcomes: ${outcomes.length === 0 ? "none recorded" : outcomes.join(", ")}${noTerminalRecords === 0 ? "" : `; ${noTerminalRecords} turn(s) have no terminal record`}.`
+	);
+	outputLine(
+		io.stdout,
+		`Actual usage: ${statisticsUsageText(statistics.usage.actual)}`
+	);
+	outputLine(
+		io.stdout,
+		`Inherited usage: ${statisticsUsageText(statistics.usage.inherited)} (historical source spend, not new Session spend)`
+	);
+	outputLine(
+		io.stdout,
+		`Auxiliary usage: ${statisticsUsageText(statistics.usage.auxiliary)}`
+	);
+	return 0;
+};
+
 const writeSessionPageFailure = (
 	error: unknown,
-	command: "list" | "history",
+	command: "list" | "history" | "stats",
 	json: boolean,
 	io: SessionsCliIo
 ): number => {
@@ -564,6 +744,11 @@ type SessionPageCommand = Extract<
 	{ kind: "list" | "history" }
 >;
 
+type SessionStatisticsCommand = Extract<
+	ParsedSessionsCommand,
+	{ kind: "stats" }
+>;
+
 type SessionRebuildCommand = Extract<
 	ParsedSessionsCommand,
 	{ kind: "rebuild" }
@@ -601,6 +786,29 @@ const runSessionPageCommand = async (
 		);
 	} catch (error) {
 		return writeSessionPageFailure(error, command.kind, command.json, io);
+	}
+};
+
+const runSessionStatisticsCommand = async (
+	command: SessionStatisticsCommand,
+	io: SessionsCliIo,
+	dependencies: SessionsCliDependencies
+): Promise<number> => {
+	const store = dependencies.store ?? getSessionStore();
+	try {
+		if (store.getSessionStatistics === undefined) {
+			throw new Error("Session statistics are unavailable.");
+		}
+		return writeSessionStatistics(
+			await store.getSessionStatistics(
+				toSessionId(command.sessionId),
+				command.options
+			),
+			command.json,
+			io
+		);
+	} catch (error) {
+		return writeSessionPageFailure(error, "stats", command.json, io);
 	}
 };
 
@@ -665,6 +873,8 @@ export const runSessionsCli = async (
 		case "list":
 		case "history":
 			return runSessionPageCommand(command, io, dependencies);
+		case "stats":
+			return runSessionStatisticsCommand(command, io, dependencies);
 		case "rebuild":
 			return runSessionRebuildCommand(command, io, dependencies);
 		case "verify":
