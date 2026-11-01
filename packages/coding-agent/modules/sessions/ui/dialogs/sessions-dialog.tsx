@@ -10,6 +10,7 @@ import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
+import { getInteractiveSessionHostManager } from "../../host/session-host-manager";
 import { getSessionStore } from "../../storage/get-session-store";
 import {
 	projectSessionStorageError,
@@ -311,9 +312,20 @@ export const SessionsDialogContent = () => {
 			setSessions((prev) => prev.filter((s) => s.id !== session.id));
 			setPendingDeleteId(null);
 			try {
-				requireSessionWriteReady(
-					await getSessionStore().deleteSession(session.id)
-				);
+				const deletion =
+					await getInteractiveSessionHostManager().withIdleForSessionLifecycle(
+						session.id,
+						() => getSessionStore().deleteSession(session.id)
+					);
+				if (deletion.kind === "cleanup-pending") {
+					setNextCursor(undefined);
+					setCatalogError(
+						"Session deletion is committed, but cleanup is pending. Refresh sessions to retry cleanup."
+					);
+					show({ variant: "error", message: deletion.message });
+					return;
+				}
+				requireSessionWriteReady(deletion);
 				await fetchSessions();
 			} catch (error) {
 				const writeOutcome =
@@ -323,7 +335,7 @@ export const SessionsDialogContent = () => {
 				if (writeOutcome?.kind === "committed") {
 					setNextCursor(undefined);
 					setCatalogError(
-						"Session deleted. Refresh sessions to start a new snapshot."
+						"Session deletion is committed, but cleanup is pending. Refresh sessions to retry cleanup."
 					);
 				} else {
 					setSessions(original);
