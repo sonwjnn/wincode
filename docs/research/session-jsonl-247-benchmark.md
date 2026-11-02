@@ -1,6 +1,6 @@
 # Session JSONL benchmark results
 
-Measured on 2026-11-02 with the repository benchmark harness, using temporary databases and logs. The project pins Bun 1.4.2; this host ran Bun 1.3.14, so these numbers are local measurements, not pinned-runtime release evidence.
+Measured on 2026-11-02 with the repository benchmark harness, using temporary databases and logs. At measurement time the project pinned Bun 1.4.2, while this host ran Bun 1.3.14. The repository pin has since moved to Bun 1.4.4; these numbers remain local measurements, not pinned-runtime release evidence.
 
 ## Environment
 

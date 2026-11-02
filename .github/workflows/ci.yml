@@ -88,6 +88,62 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  session-storage-platform:
+    name: Session storage (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - name: Windows x64
+            runner: windows-latest
+            platform: win32
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - name: Verify native test runner target
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: >-
+          bun --no-env-file -e 'if (process.platform !== process.env.EXPECTED_PLATFORM ||
+          process.arch !== process.env.EXPECTED_ARCH) {
+          throw new Error("Expected " + process.env.EXPECTED_PLATFORM + "/" +
+          process.env.EXPECTED_ARCH + ", got " + process.platform + "/" + process.arch);
+          }'
+      - name: Verify pinned Bun runtime
+        run: >-
+          bun --no-env-file -e 'if (Bun.version !== "1.4.4") {
+          throw new Error("Expected Bun 1.4.4, got " + Bun.version);
+          }'
+      - name: Verify native Session Writer locks
+        shell: bash
+        run: >-
+          bun --no-env-file test
+          packages/coding-agent/test/sessions/session-writer-lock.test.ts
+          packages/coding-agent/test/sessions/session-writer-lock-target.test.ts
+      - name: Verify JSONL sync and crash recovery
+        shell: bash
+        run: >-
+          bun --no-env-file test
+          packages/coding-agent/test/sessions/session-jsonl-codec.test.ts
+          packages/coding-agent/test/sessions/session-jsonl-sdk.test.ts
+
   binary-build:
     name: Standalone binary (${{ matrix.name }})
     strategy:
@@ -282,13 +338,14 @@ jobs:
   gate:
     name: Required test gate
     if: always()
-    needs: [check-types, default, e2e, binary-build]
+    needs: [check-types, default, e2e, session-storage-platform, binary-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Require type checking, Default, E2E, and binary jobs
+      - name: Require type checking, Default, E2E, storage-platform, and binary jobs
         run: |
           test "${{ needs.check-types.result }}" = success
           test "${{ needs.default.result }}" = success
           test "${{ needs.e2e.result }}" = success
+          test "${{ needs.session-storage-platform.result }}" = success
           test "${{ needs.binary-build.result }}" = success
