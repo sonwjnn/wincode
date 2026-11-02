@@ -435,7 +435,7 @@ test("keeps ownerless historical selection read-only instead of rebinding to the
 			const normalizedFrame = frame.replace(/\s+/g, " ");
 			return (
 				normalizedFrame.includes("Stored Session History · Read-only") &&
-				normalizedFrame.includes("no matching trusted source")
+				normalizedFrame.includes("has no matching trusted")
 			);
 		});
 		expect(fixture.activity).toMatchObject({

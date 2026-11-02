@@ -37,6 +37,7 @@ import type {
 import type {
 	SessionStatistics,
 	SessionStatisticsOptions,
+	SessionUsageContribution,
 } from "../usage/session-statistics";
 import type {
 	AttachmentExternalizationLease,
@@ -57,6 +58,11 @@ export type {
 	SessionStatisticsOptions,
 } from "../usage/session-statistics";
 
+import type { SessionBundleImportResult } from "../session-bundle-contract";
+import type {
+	PreparedSessionBundleExport,
+	SessionBundleImportFileSystem,
+} from "./session-bundle";
 import type {
 	SessionWriterLock,
 	SessionWriterLockOptions,
@@ -99,6 +105,49 @@ export type SessionProjectionRebuildResult = Readonly<{
 	issues: SessionCatalogIssue[];
 	rebuiltSessionIds: SessionId[];
 	skippedSessionIds: SessionId[];
+}>;
+
+export type SessionForkCheckpoint = Readonly<{
+	recordId: SessionRecordId;
+}>;
+
+export type SessionForkResult = Readonly<{
+	created: boolean;
+	id: SessionId;
+	checkpoint: Readonly<{
+		recordId: SessionRecordId;
+		sequence: number;
+		turnId: AgentTurnId;
+	}>;
+	writeOutcome: SessionWriteOutcome;
+}>;
+
+export type SessionForkSubmissionProvenance = Readonly<{
+	failure?: string;
+	sourceMessageId: SessionMessageId;
+	sourceRecordId: SessionRecordId;
+	sourceSubmissionId: SubmissionId;
+	status: SessionSubmissionStatus;
+	targetMessageId: SessionMessageId;
+	targetRecordId: SessionRecordId;
+	targetSubmissionId: SubmissionId;
+}>;
+
+export type SessionForkProvenance = Readonly<{
+	sourceAvailability?: "available" | "unavailable";
+	inheritedCompactionIds: readonly CompactionId[];
+	inheritedRecordIds: readonly SessionRecordId[];
+	inheritedSubmissions: readonly SessionForkSubmissionProvenance[];
+	inheritedUsage: readonly SessionUsageContribution[];
+	sourceLogId: string;
+	sourceMessageId: SessionMessageId;
+	sourceRecordId: SessionRecordId;
+	sourceSequence: number;
+	sourceSessionId: SessionId;
+	sourceTurnId: AgentTurnId;
+	targetMessageId: SessionMessageId;
+	targetRecordId: SessionRecordId;
+	targetTurnId: AgentTurnId;
 }>;
 
 export type SessionDeletionOutcome =
@@ -235,6 +284,21 @@ export type SessionProjectionStore = {
 	) => Promise<void>;
 	fileObservationStore?: FileObservationStore;
 	attachmentStore?: SessionAttachmentStore;
+	withSessionBundleExport?: <Result>(
+		sessionId: SessionId,
+		operation: (source: PreparedSessionBundleExport) => Promise<Result>,
+		options: Readonly<{ existingHostWriter: boolean; signal?: AbortSignal }>
+	) => Promise<Result>;
+	withSessionBundleImport?: (
+		bundlePath: string,
+		options: Readonly<{
+			fileSystem?: SessionBundleImportFileSystem;
+			signal?: AbortSignal;
+		}>
+	) => Promise<SessionBundleImportResult>;
+	isSessionImportActivationPending?: (sessionId: SessionId) => Promise<boolean>;
+	isSessionImported?: (sessionId: SessionId) => Promise<boolean>;
+	confirmSessionImportActivation?: (sessionId: SessionId) => Promise<void>;
 	hydrateAttachments: (
 		messages: readonly SessionMessage[],
 		options: AttachmentHydrationOptions
@@ -311,6 +375,31 @@ export type SessionStore = Omit<
 		sessionId: SessionId,
 		options?: SessionStatisticsOptions
 	) => Promise<SessionStatistics>;
+	getSessionForkProvenance: (
+		sessionId: SessionId
+	) => Promise<SessionForkProvenance | undefined>;
+	/** Keeps one UI action's retry ID durable until that action is acknowledged. */
+	getOrCreateSessionForkActionId: (
+		sourceSessionId: SessionId,
+		checkpoint: SessionForkCheckpoint
+	) => Promise<string>;
+	/** Clears the acknowledged UI action so a later deliberate fork gets a new ID. */
+	completeSessionForkAction: (
+		sourceSessionId: SessionId,
+		checkpoint: SessionForkCheckpoint,
+		operationId: string
+	) => Promise<void>;
+	forkSession: (
+		sourceSessionId: SessionId,
+		checkpoint: SessionForkCheckpoint,
+		operationId: string
+	) => Promise<SessionForkResult>;
+	/** Runs a fork through an idle Host that already holds the source writer. */
+	forkSessionWithHeldWriter: (
+		sourceSessionId: SessionId,
+		checkpoint: SessionForkCheckpoint,
+		operationId: string
+	) => Promise<SessionForkResult>;
 	listRecentModelSelections: (
 		limit: number
 	) => Promise<ProviderModelSelection[]>;

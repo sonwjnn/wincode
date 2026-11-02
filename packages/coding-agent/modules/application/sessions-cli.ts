@@ -1,5 +1,23 @@
+import { toSessionRecordId } from "@wincode/agent-core";
 import { omitUndefined, sanitizeText } from "@wincode/utils";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
+import type { SessionHost } from "@/modules/sessions/host/types";
+import type {
+	SessionBundleExportResult,
+	SessionBundleImportResult,
+} from "@/modules/sessions/session-bundle-contract";
+import {
+	createSessionBundleExportOperation,
+	SessionBundleExportError,
+	type SessionBundleExportOperation,
+} from "@/modules/sessions/session-bundle-export";
+import {
+	createSessionBundleImportOperation,
+	SessionBundleImportError,
+	type SessionBundleImportOperation,
+} from "@/modules/sessions/session-bundle-import";
+import { forkSessionThroughIdleHost } from "@/modules/sessions/session-fork-routing";
+import { isValidSessionLogIdentifier } from "@/modules/sessions/session-log-identifiers";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { resolveLocalSessionLogRoot } from "@/modules/sessions/storage/path";
 import { SessionLogError } from "@/modules/sessions/storage/session-jsonl-codec";
@@ -7,6 +25,7 @@ import type { SessionLogVerification } from "@/modules/sessions/storage/session-
 import { verifySessionJsonlLog } from "@/modules/sessions/storage/session-jsonl-store";
 import type {
 	SessionCatalogPage,
+	SessionForkResult,
 	SessionHistoryPage,
 	SessionPageOptions,
 	SessionProjectionMaintenanceGate,
@@ -16,7 +35,11 @@ import type {
 	SessionStatisticsOptions,
 	SessionStore,
 } from "@/modules/sessions/storage/session-store";
-import { isValidSessionId, toSessionId } from "@/shared/identifiers";
+import {
+	isValidSessionId,
+	type SessionId,
+	toSessionId,
+} from "@/shared/identifiers";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
 import type { TextWriter } from "./modes/types";
 
@@ -25,6 +48,9 @@ const HELP_TEXT = [
 	"  wincode sessions list [--cursor <cursor>] [--limit <limit>] [--json]",
 	"  wincode sessions history <session-id> [--cursor <cursor>] [--limit <limit>] [--json]",
 	"  wincode sessions stats <session-id> [--turn-id <turn-id>] [--read-point <token>] [--json]",
+	"  wincode sessions fork <session-id> <record-id> <operation-id> [--json]",
+	"  wincode sessions export <session-id> <directory> [--json]",
+	"  wincode sessions import <directory> [--json]",
 	"  wincode sessions verify <session-id> [--json]",
 	"  wincode sessions rebuild <session-id|--all> [--json]",
 	"",
@@ -32,6 +58,9 @@ const HELP_TEXT = [
 	"  list                       Read one snapshot page of the Session catalog",
 	"  history <session-id>       Read one snapshot page of stored Session history",
 	"  stats <session-id>         Read persisted Session or Agent Turn statistics",
+	"  fork <session-id> <record-id> <operation-id> Fork at a validated checkpoint; does not switch the active Session",
+	"  export <session-id> <dir>  Export an idle Session to a bundle directory",
+	"  import <dir>               Import a bundle into the current workspace",
 	"  verify <session-id>        Validate the authoritative Session JSONL log",
 	"  rebuild <session-id>       Rebuild one Session projection from its log",
 	"  rebuild --all              Rebuild projections from published Session logs",
@@ -54,12 +83,21 @@ type SessionsCliStore = Pick<SessionStore, "rebuildProjection"> &
 	Partial<
 		Pick<
 			SessionStore,
-			"getSessionStatistics" | "listSessionsPage" | "readSessionHistoryPage"
+			| "forkSession"
+			| "getSessionStatistics"
+			| "listSessionsPage"
+			| "readSessionHistoryPage"
 		>
 	>;
 
 export type SessionsCliDependencies = Readonly<{
+	exportSessionBundle?: SessionBundleExportOperation;
+	importSessionBundle?: SessionBundleImportOperation;
 	store?: SessionsCliStore;
+	withForkGate?: <Result>(
+		sessionId: SessionId,
+		operation: (host: SessionHost | undefined) => Promise<Result>
+	) => Promise<Result>;
 	withMaintenanceGate?: SessionProjectionMaintenanceGate;
 }>;
 
@@ -91,7 +129,21 @@ type ParsedSessionsCommand =
 			options: SessionStatisticsOptions;
 			sessionId: string;
 	  }>
+	| Readonly<{
+			checkpointRecordId: string;
+			json: boolean;
+			kind: "fork";
+			operationId: string;
+			sessionId: string;
+	  }>
 	| Readonly<{ json: boolean; kind: "verify"; sessionId: string }>
+	| Readonly<{
+			json: boolean;
+			kind: "export";
+			destination: string;
+			sessionId: string;
+	  }>
+	| Readonly<{ bundlePath: string; json: boolean; kind: "import" }>
 	| Readonly<{
 			json: boolean;
 			kind: "rebuild";
@@ -401,6 +453,158 @@ const parseStatisticsCommand = (
 	};
 };
 
+const parseForkCommand = (
+	args: readonly string[],
+	jsonWasRequested: boolean
+): ParsedSessionsCommand => {
+	let json = false;
+	const values: string[] = [];
+	for (let index = 1; index < args.length; index += 1) {
+		const argument = args[index];
+		if (argument === "--json" && !json) {
+			json = true;
+			continue;
+		}
+		if (
+			argument !== undefined &&
+			!argument.startsWith("-") &&
+			values.length < 3
+		) {
+			values.push(argument);
+			continue;
+		}
+		return {
+			json: json || jsonWasRequested,
+			kind: "usage-error",
+			message: `Unknown or repeated Sessions option '${argument}'.`,
+		};
+	}
+	const [sessionId, checkpointRecordId, operationId] = values;
+	if (
+		sessionId === undefined ||
+		checkpointRecordId === undefined ||
+		operationId === undefined
+	) {
+		return {
+			json: json || jsonWasRequested,
+			kind: "usage-error",
+			message:
+				"The fork command requires a Session ID, checkpoint Record ID, and operation ID.",
+		};
+	}
+	if (!isValidSessionId(sessionId)) {
+		return {
+			json: json || jsonWasRequested,
+			kind: "usage-error",
+			message: "Session ID is not safe for a Session log path.",
+		};
+	}
+	if (!isValidSessionLogIdentifier(checkpointRecordId)) {
+		return {
+			json: json || jsonWasRequested,
+			kind: "usage-error",
+			message: "Checkpoint Record ID is not a valid identifier.",
+		};
+	}
+	if (!isValidSessionLogIdentifier(operationId)) {
+		return {
+			json: json || jsonWasRequested,
+			kind: "usage-error",
+			message: "Operation ID is not a valid stable identifier.",
+		};
+	}
+	return {
+		checkpointRecordId,
+		json,
+		kind: "fork",
+		operationId,
+		sessionId,
+	};
+};
+
+type BundleCommandArguments =
+	| Readonly<{ json: boolean; positionals: string[] }>
+	| Readonly<{ json: boolean; message: string }>;
+
+const parseBundleCommandArguments = (
+	args: readonly string[],
+	command: "export" | "import",
+	jsonWasRequested: boolean
+): BundleCommandArguments => {
+	let json = false;
+	const positionals: string[] = [];
+	for (let index = 1; index < args.length; index += 1) {
+		const argument = args[index];
+		if (argument === "--json" && !json) {
+			json = true;
+			continue;
+		}
+		if (argument !== undefined && !argument.startsWith("-")) {
+			positionals.push(argument);
+			continue;
+		}
+		return {
+			json: json || jsonWasRequested,
+			message: `Unknown or repeated Sessions ${command} option '${argument}'.`,
+		};
+	}
+	return { json: json || jsonWasRequested, positionals };
+};
+
+const parseExportCommand = (
+	args: readonly string[],
+	jsonWasRequested: boolean
+): ParsedSessionsCommand => {
+	const parsed = parseBundleCommandArguments(args, "export", jsonWasRequested);
+	if ("message" in parsed) {
+		return { json: parsed.json, kind: "usage-error", message: parsed.message };
+	}
+	const { json, positionals } = parsed;
+	if (positionals.length !== 2) {
+		return {
+			json,
+			kind: "usage-error",
+			message:
+				"The export command requires a Session ID and destination directory.",
+		};
+	}
+	const [sessionId, destination] = positionals;
+	if (sessionId === undefined || !isValidSessionId(sessionId)) {
+		return {
+			json,
+			kind: "usage-error",
+			message: "Session ID is not safe for a Session log path.",
+		};
+	}
+	if (destination === undefined || destination.trim().length === 0) {
+		return {
+			json,
+			kind: "usage-error",
+			message: "The export command requires a destination directory.",
+		};
+	}
+	return { destination, json, kind: "export", sessionId };
+};
+
+const parseImportCommand = (
+	args: readonly string[],
+	jsonWasRequested: boolean
+): ParsedSessionsCommand => {
+	const parsed = parseBundleCommandArguments(args, "import", jsonWasRequested);
+	if ("message" in parsed) {
+		return { json: parsed.json, kind: "usage-error", message: parsed.message };
+	}
+	const { json, positionals } = parsed;
+	if (positionals.length !== 1 || positionals[0]?.trim().length === 0) {
+		return {
+			json,
+			kind: "usage-error",
+			message: "The import command requires one bundle directory.",
+		};
+	}
+	return { bundlePath: positionals[0] ?? "", json, kind: "import" };
+};
+
 const parseSessionsCommand = (
 	args: readonly string[]
 ): ParsedSessionsCommand => {
@@ -413,6 +617,15 @@ const parseSessionsCommand = (
 	}
 	if (args[0] === "stats") {
 		return parseStatisticsCommand(args, jsonWasRequested);
+	}
+	if (args[0] === "fork") {
+		return parseForkCommand(args, jsonWasRequested);
+	}
+	if (args[0] === "export") {
+		return parseExportCommand(args, jsonWasRequested);
+	}
+	if (args[0] === "import") {
+		return parseImportCommand(args, jsonWasRequested);
 	}
 	if (args[0] === "rebuild") {
 		return parseRebuildCommand(args, jsonWasRequested);
@@ -535,6 +748,15 @@ const writeVerificationFailure = (
 const withInteractiveMaintenanceGate: SessionProjectionMaintenanceGate = (
 	operation
 ) => getInteractiveSessionHostManager().withIdleForReload(operation);
+
+const withInteractiveForkGate = <Result>(
+	sessionId: SessionId,
+	operation: (host: SessionHost | undefined) => Promise<Result>
+): Promise<Result> =>
+	getInteractiveSessionHostManager().withIdleForSessionFork(
+		sessionId,
+		operation
+	);
 
 const sanitizedRebuildResponse = (result: SessionProjectionRebuildResult) => ({
 	command: "rebuild" as const,
@@ -689,6 +911,57 @@ const writeSessionStatistics = (
 	return 0;
 };
 
+const writeSessionForkResult = (
+	result: SessionForkResult,
+	sourceSessionId: string,
+	json: boolean,
+	io: SessionsCliIo
+): number => {
+	if (json) {
+		outputLine(
+			io.stdout,
+			JSON.stringify({ command: "fork", sourceSessionId, ...result })
+		);
+	} else {
+		outputLine(
+			io.stdout,
+			`Forked Session ${sanitizeText(result.id)} from ${sanitizeText(sourceSessionId)} at Record ${sanitizeText(result.checkpoint.recordId)}. Inherited usage remains historical and is not new Session spend.`
+		);
+	}
+	return 0;
+};
+
+const writeSessionForkFailure = (
+	error: unknown,
+	sessionId: string,
+	operationId: string,
+	json: boolean,
+	io: SessionsCliIo
+): number => {
+	const code = sanitizeText(getErrorCode(error) ?? "session_fork_failed");
+	const message =
+		error instanceof Error
+			? sanitizeText(error.message)
+			: "Session fork failed.";
+	if (json) {
+		outputLine(
+			io.stdout,
+			JSON.stringify({
+				command: "fork",
+				error: { code, message },
+				operationId: sanitizeText(operationId),
+				sourceSessionId: sanitizeText(sessionId),
+			})
+		);
+	} else {
+		outputLine(
+			io.stderr,
+			`Session fork failed (${code}) for ${sanitizeText(sessionId)}: ${message}`
+		);
+	}
+	return 1;
+};
+
 const writeSessionPageFailure = (
 	error: unknown,
 	command: "list" | "history" | "stats",
@@ -748,6 +1021,8 @@ type SessionStatisticsCommand = Extract<
 	ParsedSessionsCommand,
 	{ kind: "stats" }
 >;
+
+type SessionForkCommand = Extract<ParsedSessionsCommand, { kind: "fork" }>;
 
 type SessionRebuildCommand = Extract<
 	ParsedSessionsCommand,
@@ -809,6 +1084,202 @@ const runSessionStatisticsCommand = async (
 		);
 	} catch (error) {
 		return writeSessionPageFailure(error, "stats", command.json, io);
+	}
+};
+
+const writeSessionBundleExport = (
+	result: SessionBundleExportResult,
+	json: boolean,
+	io: SessionsCliIo
+): number => {
+	if (json) {
+		outputLine(io.stdout, JSON.stringify({ command: "export", ...result }));
+	} else {
+		outputLine(
+			io.stdout,
+			`Exported Session ${sanitizeText(result.sessionId)} to ${sanitizeText(result.destination)}.`
+		);
+	}
+	return 0;
+};
+
+const writeSessionBundleExportFailure = (
+	error: unknown,
+	sessionId: string,
+	json: boolean,
+	io: SessionsCliIo
+): number => {
+	const code = sanitizeText(getErrorCode(error) ?? "session_export_failed");
+	const message =
+		error instanceof Error
+			? sanitizeText(error.message)
+			: "Session bundle export failed.";
+	const logDiagnostics =
+		error instanceof SessionBundleExportError &&
+		(error.code === "session_log_corrupt" ||
+			error.code === "session_log_version_unsupported")
+			? {
+					offset: error.offset,
+					reason: error.reason,
+					sequence: error.sequence,
+				}
+			: undefined;
+	if (json) {
+		outputLine(
+			io.stdout,
+			JSON.stringify({
+				command: "export",
+				error: omitUndefined({
+					code,
+					message,
+					...logDiagnostics,
+					sessionId: sanitizeText(sessionId),
+				}),
+				status: "failed",
+			})
+		);
+	} else {
+		const location =
+			logDiagnostics === undefined
+				? ""
+				: ` at sequence ${logDiagnostics.sequence ?? "unknown"} / byte offset ${logDiagnostics.offset ?? "unknown"}`;
+		outputLine(
+			io.stderr,
+			`Session ${sanitizeText(sessionId)} export failed (${code})${location}: ${message}`
+		);
+	}
+	return 1;
+};
+
+const runSessionBundleExportCommand = async (
+	command: Extract<ParsedSessionsCommand, { kind: "export" }>,
+	io: SessionsCliIo,
+	dependencies: SessionsCliDependencies
+): Promise<number> => {
+	const exportSessionBundle =
+		dependencies.exportSessionBundle ??
+		createSessionBundleExportOperation(
+			getInteractiveSessionHostManager(),
+			getSessionStore()
+		);
+	try {
+		return writeSessionBundleExport(
+			await exportSessionBundle({
+				destination: command.destination,
+				sessionId: toSessionId(command.sessionId),
+				sourceWorkspacePath: process.cwd(),
+			}),
+			command.json,
+			io
+		);
+	} catch (error) {
+		return writeSessionBundleExportFailure(
+			error,
+			command.sessionId,
+			command.json,
+			io
+		);
+	}
+};
+
+const writeSessionBundleImport = (
+	result: SessionBundleImportResult,
+	json: boolean,
+	io: SessionsCliIo
+): number => {
+	if (json) {
+		outputLine(io.stdout, JSON.stringify({ command: "import", ...result }));
+	} else {
+		const description =
+			result.status === "unchanged" ? "already present" : "imported";
+		const activation = result.activationPending
+			? " It remains idle until explicitly continued or sent new input."
+			: "";
+		outputLine(
+			io.stdout,
+			`Session ${sanitizeText(result.sessionId)} ${description}.${activation}`
+		);
+	}
+	return 0;
+};
+
+const runSessionBundleImportCommand = async (
+	command: Extract<ParsedSessionsCommand, { kind: "import" }>,
+	io: SessionsCliIo,
+	dependencies: SessionsCliDependencies
+): Promise<number> => {
+	const importSessionBundle =
+		dependencies.importSessionBundle ??
+		createSessionBundleImportOperation(getSessionStore());
+	try {
+		return writeSessionBundleImport(
+			await importSessionBundle({ bundlePath: command.bundlePath }),
+			command.json,
+			io
+		);
+	} catch (error) {
+		const code = sanitizeText(getErrorCode(error) ?? "session_import_failed");
+		const message =
+			error instanceof Error
+				? sanitizeText(error.message)
+				: "Session bundle import failed.";
+		const sessionId =
+			error instanceof SessionBundleImportError ? error.sessionId : undefined;
+		if (command.json) {
+			outputLine(
+				io.stdout,
+				JSON.stringify({
+					command: "import",
+					error: omitUndefined({
+						code,
+						message,
+						sessionId:
+							sessionId === undefined ? undefined : sanitizeText(sessionId),
+					}),
+					status: "failed",
+				})
+			);
+		} else {
+			outputLine(
+				io.stderr,
+				`Session bundle import failed (${code}): ${message}`
+			);
+		}
+		return 1;
+	}
+};
+
+const runSessionForkCommand = async (
+	command: SessionForkCommand,
+	io: SessionsCliIo,
+	dependencies: SessionsCliDependencies
+): Promise<number> => {
+	const store = dependencies.store ?? getSessionStore();
+	const sourceSessionId = toSessionId(command.sessionId);
+	try {
+		const forkSession = store.forkSession;
+		if (forkSession === undefined) {
+			throw new Error("Session forking is unavailable.");
+		}
+		const checkpoint = {
+			recordId: toSessionRecordId(command.checkpointRecordId),
+		};
+		const result = await forkSessionThroughIdleHost(
+			dependencies.withForkGate ?? withInteractiveForkGate,
+			{ forkSession },
+			sourceSessionId,
+			checkpoint,
+			command.operationId
+		);
+		return writeSessionForkResult(result, command.sessionId, command.json, io);
+	} catch (error) {
+		return writeSessionForkFailure(
+			error,
+			command.sessionId,
+			command.operationId,
+			command.json,
+			io
+		);
 	}
 };
 
@@ -875,6 +1346,12 @@ export const runSessionsCli = async (
 			return runSessionPageCommand(command, io, dependencies);
 		case "stats":
 			return runSessionStatisticsCommand(command, io, dependencies);
+		case "fork":
+			return runSessionForkCommand(command, io, dependencies);
+		case "export":
+			return runSessionBundleExportCommand(command, io, dependencies);
+		case "import":
+			return runSessionBundleImportCommand(command, io, dependencies);
 		case "rebuild":
 			return runSessionRebuildCommand(command, io, dependencies);
 		case "verify":

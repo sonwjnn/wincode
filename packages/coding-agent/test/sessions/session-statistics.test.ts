@@ -9,6 +9,7 @@ import type {
 	SessionUsageContribution,
 } from "@/modules/sessions/usage/session-statistics";
 import {
+	aggregateSessionStatisticsUsage,
 	buildSessionStatistics,
 	reduceSessionUsageContributions,
 } from "@/modules/sessions/usage/session-statistics";
@@ -96,6 +97,58 @@ test("Session statistics keep inherited spend out of actual and count auxiliary 
 		outputTokens: 0,
 		costs: [{ amount: 0.04, unit: "USD" }],
 	});
+});
+
+test("source auxiliary usage stays auxiliary when a fork inherits the same identity", () => {
+	const sourceSession = session("statistics-auxiliary-source");
+	const forkSession = session("statistics-auxiliary-fork");
+	const entry: SessionUsageEntry = {
+		costUsd: 0.02,
+		createdAt: new Date("2026-01-01T00:00:00.000Z"),
+		id: usageEntryId("statistics-inherited-cache-warm"),
+		kind: "cache-warm",
+		model: sourceModel,
+		sessionId: sourceSession,
+		usage: usage(10, 1),
+	};
+	const inherited: SessionUsageContribution = {
+		cost: { amount: 0.02, unit: "USD" },
+		identity: {
+			entryId: entry.id,
+			kind: "usage-entry",
+			sessionId: sourceSession,
+		},
+		model: sourceModel,
+		usage: entry.usage,
+	};
+	const sourceStatistics = buildSessionStatistics({
+		compactions: [],
+		readPoint: "source-read-point",
+		records: [],
+		sessionId: sourceSession,
+		usageEntries: [entry],
+	});
+	const forkStatistics = buildSessionStatistics({
+		compactions: [],
+		inheritedUsage: [inherited],
+		readPoint: "fork-read-point",
+		records: [],
+		sessionId: forkSession,
+		usageEntries: [],
+	});
+
+	const combined = aggregateSessionStatisticsUsage([
+		sourceStatistics,
+		forkStatistics,
+	]);
+
+	expect(combined.auxiliary).toMatchObject({
+		contributionCount: 1,
+		costs: [{ amount: 0.02, unit: "USD" }],
+		inputTokens: 10,
+		outputTokens: 1,
+	});
+	expect(combined.inherited.contributionCount).toBe(0);
 });
 
 test("compaction summary usage and its linked auxiliary entry count once at the read point", () => {

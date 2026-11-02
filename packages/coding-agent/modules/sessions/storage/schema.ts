@@ -14,6 +14,7 @@ import type { Jsonify } from "type-fest";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { EditMode, FileVersion } from "@/modules/tools";
 import type { SessionCompaction } from "../compaction/types";
+import type { SessionForkedPayload } from "./session-jsonl-codec";
 import type {
 	PromptHistoryEntry,
 	SessionRecordStorageOutcome,
@@ -30,6 +31,7 @@ export const sessionProjectionState = sqliteTable("session_projection_state", {
 		.notNull()
 		.default(0),
 	paginationVersion: integer("pagination_version").notNull().default(2),
+	statisticsVersion: integer("statistics_version").notNull().default(0),
 	status: text("status")
 		.$type<"ready" | "rebuilding">()
 		.notNull()
@@ -159,6 +161,7 @@ export const sessionOperationLookup = sqliteTable(
 			table.sessionId,
 			table.sequence
 		),
+		index("idx_session_operation_lookup_type").on(table.sessionId, table.type),
 	]
 );
 
@@ -462,6 +465,48 @@ export const sessionCompaction = sqliteTable(
 	]
 );
 
+export const sessionRecordToolCall = sqliteTable(
+	"session_record_tool_call",
+	{
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		turnId: text("turn_id").notNull(),
+		toolCallId: text("tool_call_id").notNull(),
+		sourceSequence: integer("source_sequence").notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.sessionId, table.turnId, table.toolCallId],
+		}),
+		index("idx_session_record_tool_call_sequence").on(
+			table.sessionId,
+			table.sourceSequence
+		),
+		index("idx_session_record_tool_call_turn_sequence").on(
+			table.sessionId,
+			table.turnId,
+			table.sourceSequence
+		),
+	]
+);
+
+export const sessionForkProvenance = sqliteTable("session_fork_provenance", {
+	sessionId: text("session_id")
+		.primaryKey()
+		.references(() => session.id, {
+			onDelete: "cascade",
+			onUpdate: "cascade",
+		}),
+	sourceSequence: integer("source_sequence").notNull(),
+	provenanceJson: text("provenance_json", { mode: "json" })
+		.$type<SerializedJson<SessionForkedPayload>>()
+		.notNull(),
+});
+
 export const sessionUsageEntry = sqliteTable(
 	"session_usage_entry",
 	{
@@ -554,6 +599,38 @@ export const sessionRecord = sqliteTable(
 			table.position
 		),
 		index("idx_session_record_session_turn").on(table.sessionId, table.turnId),
+		index("idx_session_record_session_sequence").on(
+			table.sessionId,
+			table.sourceSequence
+		),
+		index("idx_session_record_session_turn_sequence").on(
+			table.sessionId,
+			table.turnId,
+			table.sourceSequence
+		),
+	]
+);
+
+export const sessionRecordMessageIdentity = sqliteTable(
+	"session_record_message_identity",
+	{
+		sessionId: text("session_id").notNull(),
+		recordId: text("record_id")
+			.notNull()
+			.references(() => sessionRecord.recordId, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		messageId: text("message_id").notNull(),
+		role: text("role").$type<SessionMessageRecord["role"]>().notNull(),
+		submissionId: text("submission_id"),
+	},
+	(table) => [
+		primaryKey({ columns: [table.sessionId, table.messageId] }),
+		index("idx_session_record_message_record").on(
+			table.sessionId,
+			table.recordId
+		),
 	]
 );
 
@@ -608,7 +685,10 @@ export const sessionSchema = {
 	sessionCompaction,
 	sessionOperationLookup,
 	sessionRecord,
+	sessionRecordMessageIdentity,
 	sessionRecordVersion,
+	sessionRecordToolCall,
+	sessionForkProvenance,
 	sessionProjectionCursor,
 	sessionProjectionState,
 	sessionUsageEntry,

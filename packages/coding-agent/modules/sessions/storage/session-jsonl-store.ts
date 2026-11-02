@@ -1,13 +1,25 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+	type AgentTurnId,
+	type ModelStepId,
+	type SessionMessageId,
 	type SessionRecord,
+	type SessionSubmissionStatus,
 	type SubmissionId,
+	toAgentTurnId,
+	toModelStepId,
+	toSessionMessageId,
 	toSessionRecordId,
+	toSubmissionId,
 } from "@wincode/agent-core";
-import { omitUndefined } from "@wincode/utils";
+import { omitUndefined, readUtf8File } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import { z } from "zod";
+import {
+	normalizeProviderModelSelection,
+	type ProviderModelSelection,
+} from "@/modules/providers/provider-model-selection";
 import type { EditMode } from "@/modules/tools";
 import {
 	type CompactionId,
@@ -15,26 +27,58 @@ import {
 	type SessionId,
 	toCompactionId,
 	toSessionId,
+	toSessionUsageEntryId,
 	toWorkspaceId,
 	type WorkspaceId,
 } from "@/shared/identifiers";
+import { throwIfAborted } from "@/shared/utils/abort";
 import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
 import { assertCompactionMessageReferences } from "../compaction/validation";
-import { buildSessionStatistics } from "../usage/session-statistics";
-import type { AttachmentExternalizationLease } from "./attachment-store";
+import type { SessionBundleImportResult } from "../session-bundle-contract";
+import { assessSessionForkCheckpoint } from "../session-fork-checkpoint-validation";
+import { isValidSessionLogIdentifier } from "../session-log-identifiers";
+import {
+	buildSessionStatistics,
+	type SessionUsageContribution,
+} from "../usage/session-statistics";
+import {
+	type AttachmentExternalizationLease,
+	type AttachmentIngestLease,
+	digestBytes,
+} from "./attachment-store";
 import type { DrizzleSessionStore } from "./drizzle-session-store";
+import {
+	type PreparedSessionBundleExport,
+	type PreparedSessionBundleImport,
+	prepareSessionBundleImport,
+	SessionBundleImportConflictError,
+	type SessionBundleImportFileSystem,
+	SessionBundleImportIndeterminateError,
+	SessionBundleValidationError,
+	validateSessionBundleLog,
+} from "./session-bundle";
+import {
+	AtomicDirectoryPublishError,
+	createAtomicDirectoryPublisher,
+} from "./session-bundle-publish";
 import {
 	createSessionLogEvent,
 	createSessionLogHeader,
 	decodeSessionLog,
+	decodeSessionLogSuffix,
 	encodeCanonicalSessionJson,
 	encodeSessionLogLine,
+	parseSessionCompactionPayload,
+	parseSessionForkedPayload,
+	parseSessionSubmissionStatusPayload,
 	SESSION_LOG_EVENT_TYPES,
 	SESSION_LOG_HASH_PATTERN,
+	type SessionCompactionPayload,
+	type SessionForkedPayload,
 	type SessionLogEntry,
 	type SessionLogEnvelope,
 	SessionLogError,
@@ -65,6 +109,10 @@ import type {
 	SessionCatalogPage,
 	SessionCatalogResult,
 	SessionDeletionOutcome,
+	SessionForkCheckpoint,
+	SessionForkProvenance,
+	SessionForkResult,
+	SessionForkSubmissionProvenance,
 	SessionHistoryPage,
 	SessionPageOptions,
 	SessionStatistics,
@@ -103,6 +151,10 @@ export type SessionLogFileIo = Readonly<{
 	) => Promise<number>;
 }>;
 
+type SessionJsonlStoreTestObserver = Readonly<{
+	onSessionDeletionWriterOperationEnqueued?: () => void;
+}>;
+
 export class SessionCleanupPendingError extends Error {
 	readonly code = "session_cleanup_pending" as const;
 	readonly operationIds: readonly string[];
@@ -114,6 +166,29 @@ export class SessionCleanupPendingError extends Error {
 		);
 		this.name = "SessionCleanupPendingError";
 		this.operationIds = operationIds;
+	}
+}
+
+export class SessionForkError extends Error {
+	readonly code:
+		| "session_busy"
+		| "session_checkpoint_invalid"
+		| "session_operation_conflict";
+	readonly operationId: string;
+	readonly sourceSessionId: SessionId;
+
+	constructor(
+		code: SessionForkError["code"],
+		message: string,
+		sourceSessionId: SessionId,
+		operationId: string,
+		options?: ErrorOptions
+	) {
+		super(message, options);
+		this.name = "SessionForkError";
+		this.code = code;
+		this.operationId = operationId;
+		this.sourceSessionId = sourceSessionId;
 	}
 }
 
@@ -134,6 +209,18 @@ export class SessionWriteOutcomeError extends Error {
 				? "session_projection_unavailable"
 				: outcome.error.code;
 		this.outcome = outcome;
+	}
+}
+
+export class SessionBundleExportCleanupError extends Error {
+	readonly code = "session_export_cleanup_failed" as const;
+
+	constructor(cause: unknown) {
+		super(
+			"Session bundle export finished with an attachment pin or writer cleanup failure.",
+			{ cause }
+		);
+		this.name = "SessionBundleExportCleanupError";
 	}
 }
 
@@ -298,13 +385,13 @@ type CommittedLogEntry = Readonly<{
 	state: SessionLogState;
 }>;
 
-const SESSION_OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,511}$/u;
 const sessionDeletionOperationId = (sessionId: SessionId): string =>
 	`delete-${validSessionId(sessionId)}`;
 const operationIdFileStem = (operationId: string): string =>
 	new Bun.CryptoHasher("sha256").update(operationId).digest("hex");
 
 const appendQueue = createKeyedSerialQueue();
+const forkOperationQueue = createKeyedSerialQueue();
 
 const validSessionId = (sessionId: SessionId): string => {
 	if (!isValidSessionId(sessionId)) {
@@ -433,17 +520,21 @@ const readLog = async (
 	return { bytes, state: decodeSessionLog(sessionId, bytes) };
 };
 
-const equalBytes = (left: Uint8Array, right: Uint8Array): boolean => {
-	if (left.byteLength !== right.byteLength) {
-		return false;
-	}
-	for (let index = 0; index < left.byteLength; index += 1) {
+const firstDifferentByteOffset = (
+	left: Uint8Array,
+	right: Uint8Array
+): number | undefined => {
+	const commonLength = Math.min(left.byteLength, right.byteLength);
+	for (let index = 0; index < commonLength; index += 1) {
 		if (left[index] !== right[index]) {
-			return false;
+			return index;
 		}
 	}
-	return true;
+	return left.byteLength === right.byteLength ? undefined : commonLength;
 };
+
+const equalBytes = (left: Uint8Array, right: Uint8Array): boolean =>
+	firstDifferentByteOffset(left, right) === undefined;
 
 const sessionWriteIntentPath = async (
 	logRoot: string,
@@ -581,7 +672,7 @@ const sessionWriteIntentFrom = (
 	if (
 		!(isWritableSessionLogEventType(type) && validSequence && validOffset) ||
 		typeof operationId !== "string" ||
-		!SESSION_OPERATION_ID_PATTERN.test(operationId) ||
+		!isValidSessionLogIdentifier(operationId) ||
 		storedSessionId !== sessionId ||
 		typeof operationDigest !== "string" ||
 		!SESSION_LOG_HASH_PATTERN.test(operationDigest) ||
@@ -814,6 +905,314 @@ const writeSessionWriteIntent = async (
 	}
 };
 
+const sessionForkIntentSchema = z
+	.object({
+		checkpointRecordId: z.string().min(1).max(512),
+		operationDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+		operationId: z.string().min(1).max(512),
+		sourceSessionId: z.string().min(1).max(512),
+		targetSessionId: z.string().min(1).max(512),
+		version: z.literal(1),
+	})
+	.strict();
+
+type SessionForkIntent = z.infer<typeof sessionForkIntentSchema>;
+
+const sessionForkIntentPath = async (
+	logRoot: string,
+	operationId: string
+): Promise<string> =>
+	path.join(
+		await sessionControlRoot(logRoot),
+		"forks",
+		`${operationIdFileStem(operationId)}.json`
+	);
+
+const readSessionForkIntent = async (
+	logRoot: string,
+	operationId: string,
+	sourceSessionId: SessionId
+): Promise<SessionForkIntent | undefined> => {
+	const intentPath = await sessionForkIntentPath(logRoot, operationId);
+	let value: unknown;
+	try {
+		value = JSON.parse(await Bun.file(intentPath).text());
+	} catch (error) {
+		if (isCode(error, "ENOENT")) {
+			return;
+		}
+		throw new SessionLogError(
+			"session_log_write_indeterminate",
+			sourceSessionId,
+			"Session fork operation intent could not be read.",
+			{ cause: error, operationId }
+		);
+	}
+	const parsed = sessionForkIntentSchema.safeParse(value);
+	if (!parsed.success || parsed.data.operationId !== operationId) {
+		throw new SessionLogError(
+			"session_log_write_indeterminate",
+			sourceSessionId,
+			"Session fork operation intent is invalid.",
+			{ operationId }
+		);
+	}
+	return parsed.data;
+};
+
+const publishCreateOnceJsonMarker = async <Value>({
+	directory,
+	fileIo,
+	markerPath,
+	missingRaceMessage,
+	readExisting,
+	value,
+}: Readonly<{
+	directory: string;
+	fileIo: SessionLogFileIo;
+	markerPath: string;
+	missingRaceMessage: string;
+	readExisting: () => Promise<Value | undefined>;
+	value: Value;
+}>): Promise<Value> => {
+	const temporaryPath = `${markerPath}.${randomUUIDv7()}.tmp`;
+	let handle: fs.FileHandle | undefined;
+	try {
+		handle = await fs.open(temporaryPath, "wx", 0o600);
+		const bytes = new TextEncoder().encode(
+			`${encodeCanonicalSessionJson(value)}\n`
+		);
+		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
+		await syncFile(temporaryPath, handle, fileIo);
+		await handle.close();
+		handle = undefined;
+		try {
+			await fs.link(temporaryPath, markerPath);
+		} catch (error) {
+			if (!isCode(error, "EEXIST")) {
+				throw error;
+			}
+			const raced = await readExisting();
+			if (raced === undefined) {
+				throw new Error(missingRaceMessage);
+			}
+			return raced;
+		}
+		await syncDirectory(directory, fileIo);
+		return value;
+	} finally {
+		await handle?.close().catch(() => undefined);
+		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+	}
+};
+
+const writeSessionForkIntent = async (
+	logRoot: string,
+	intent: SessionForkIntent,
+	sourceSessionId: SessionId,
+	fileIo: SessionLogFileIo
+): Promise<SessionForkIntent> => {
+	const markerPath = await sessionForkIntentPath(logRoot, intent.operationId);
+	const markerRoot = path.dirname(markerPath);
+	await ensureDirectoryDurable(markerRoot, 0o700, fileIo);
+	try {
+		return await publishCreateOnceJsonMarker({
+			directory: markerRoot,
+			fileIo,
+			markerPath,
+			missingRaceMessage: "Session fork operation intent disappeared.",
+			readExisting: async () =>
+				await readSessionForkIntent(
+					logRoot,
+					intent.operationId,
+					sourceSessionId
+				),
+			value: intent,
+		});
+	} catch (error) {
+		if (error instanceof SessionLogError) {
+			throw error;
+		}
+		throw new SessionLogError(
+			"session_log_write_not_committed",
+			sourceSessionId,
+			"Session fork operation intent could not be made durable.",
+			{ cause: error, operationId: intent.operationId }
+		);
+	}
+};
+
+const clearSessionForkIntent = async (
+	logRoot: string,
+	intent: SessionForkIntent,
+	sourceSessionId: SessionId,
+	fileIo: SessionLogFileIo
+): Promise<void> => {
+	const markerPath = await sessionForkIntentPath(logRoot, intent.operationId);
+	const existing = await readSessionForkIntent(
+		logRoot,
+		intent.operationId,
+		sourceSessionId
+	);
+	if (existing === undefined || !Bun.deepEquals(existing, intent, true)) {
+		return;
+	}
+	try {
+		await fs.unlink(markerPath);
+	} catch (error) {
+		if (!isCode(error, "ENOENT")) {
+			throw error;
+		}
+	}
+	await syncDirectory(path.dirname(markerPath), fileIo);
+};
+
+/** Pending UI retry identity is control metadata, not a source-log mutation. */
+const sessionForkActionSchema = z
+	.object({
+		checkpointRecordId: z.string().min(1).max(512),
+		operationId: z.string().min(1).max(512),
+		sourceSessionId: z.string().min(1).max(512),
+		version: z.literal(1),
+	})
+	.strict();
+
+type SessionForkAction = z.infer<typeof sessionForkActionSchema>;
+
+const sessionForkActionPath = async (
+	logRoot: string,
+	sourceSessionId: SessionId,
+	checkpoint: SessionForkCheckpoint
+): Promise<string> => {
+	const identity = new Bun.CryptoHasher("sha256")
+		.update(`${sourceSessionId}\0${checkpoint.recordId}`)
+		.digest("hex");
+	return path.join(
+		await sessionControlRoot(logRoot),
+		"fork-actions",
+		`${identity}.json`
+	);
+};
+
+const readSessionForkAction = async (
+	logRoot: string,
+	sourceSessionId: SessionId,
+	checkpoint: SessionForkCheckpoint
+): Promise<SessionForkAction | undefined> => {
+	const actionPath = await sessionForkActionPath(
+		logRoot,
+		sourceSessionId,
+		checkpoint
+	);
+	let value: unknown;
+	try {
+		value = JSON.parse(await Bun.file(actionPath).text());
+	} catch (error) {
+		if (isCode(error, "ENOENT")) {
+			return;
+		}
+		throw new SessionLogError(
+			"session_log_write_indeterminate",
+			sourceSessionId,
+			"Pending Session fork action could not be read.",
+			{ cause: error }
+		);
+	}
+	const parsed = sessionForkActionSchema.safeParse(value);
+	if (
+		!parsed.success ||
+		parsed.data.sourceSessionId !== sourceSessionId ||
+		parsed.data.checkpointRecordId !== checkpoint.recordId
+	) {
+		throw new SessionLogError(
+			"session_log_write_indeterminate",
+			sourceSessionId,
+			"Pending Session fork action is invalid."
+		);
+	}
+	return parsed.data;
+};
+
+const writeSessionForkAction = async (
+	logRoot: string,
+	action: SessionForkAction,
+	checkpoint: SessionForkCheckpoint,
+	fileIo: SessionLogFileIo
+): Promise<SessionForkAction> => {
+	const sourceSessionId = toSessionId(action.sourceSessionId);
+	const actionPath = await sessionForkActionPath(
+		logRoot,
+		sourceSessionId,
+		checkpoint
+	);
+	const actionRoot = path.dirname(actionPath);
+	await ensureDirectoryDurable(actionRoot, 0o700, fileIo);
+	try {
+		return await publishCreateOnceJsonMarker({
+			directory: actionRoot,
+			fileIo,
+			markerPath: actionPath,
+			missingRaceMessage: "Pending Session fork action disappeared.",
+			readExisting: async () =>
+				await readSessionForkAction(logRoot, sourceSessionId, checkpoint),
+			value: action,
+		});
+	} catch (error) {
+		if (error instanceof SessionLogError) {
+			throw error;
+		}
+		throw new SessionLogError(
+			"session_log_write_not_committed",
+			sourceSessionId,
+			"Session fork action could not be made durable.",
+			{ cause: error, operationId: action.operationId }
+		);
+	}
+};
+
+const clearSessionForkAction = async (
+	logRoot: string,
+	sourceSessionId: SessionId,
+	checkpoint: SessionForkCheckpoint,
+	operationId: string,
+	fileIo: SessionLogFileIo
+): Promise<void> => {
+	const existing = await readSessionForkAction(
+		logRoot,
+		sourceSessionId,
+		checkpoint
+	);
+	if (existing === undefined) {
+		return;
+	}
+	if (existing.operationId !== operationId) {
+		throw new SessionForkError(
+			"session_operation_conflict",
+			"Session fork action completion does not match its pending operation.",
+			sourceSessionId,
+			operationId
+		);
+	}
+	const actionPath = await sessionForkActionPath(
+		logRoot,
+		sourceSessionId,
+		checkpoint
+	);
+	try {
+		await fs.unlink(actionPath);
+	} catch (error) {
+		if (!isCode(error, "ENOENT")) {
+			throw new SessionLogError(
+				"session_log_write_indeterminate",
+				sourceSessionId,
+				"Completed Session fork action could not be cleared.",
+				{ cause: error, operationId }
+			);
+		}
+	}
+	await syncDirectory(path.dirname(actionPath), fileIo);
+};
+
 const clearSessionWriteIntent = async (
 	logRoot: string,
 	intent: SessionWriteIntent,
@@ -839,11 +1238,42 @@ const clearSessionWriteIntent = async (
 	await syncDirectory(path.dirname(markerPath));
 };
 
+const syncAndVerifyLogSuffix = async (
+	logPath: string,
+	startOffset: number,
+	capturedBytes: Uint8Array,
+	sessionId: SessionId,
+	fileIo: SessionLogFileIo
+): Promise<void> => {
+	const handle = await fs.open(logPath, "r");
+	try {
+		await syncFile(logPath, handle, fileIo);
+	} finally {
+		await handle.close();
+	}
+	const endOffset = startOffset + capturedBytes.byteLength;
+	const { size } = await fs.stat(logPath);
+	const current =
+		size < endOffset
+			? new Uint8Array()
+			: await Bun.file(logPath).slice(startOffset, endOffset).bytes();
+	if (!equalBytes(capturedBytes, current)) {
+		const offset = firstDifferentByteOffset(capturedBytes, current);
+		throw new SessionLogError(
+			"session_log_corrupt",
+			sessionId,
+			"Session log suffix changed while its projection was being checked.",
+			{ offset: startOffset + (offset ?? capturedBytes.byteLength) }
+		);
+	}
+};
+
 const syncAndVerifyLogPrefix = async (
 	logPath: string,
 	capturedBytes: Uint8Array,
 	sessionId: SessionId,
-	fileIo: SessionLogFileIo
+	fileIo: SessionLogFileIo,
+	sequence?: number
 ): Promise<void> => {
 	const handle = await fs.open(logPath, "r");
 	try {
@@ -856,10 +1286,15 @@ const syncAndVerifyLogPrefix = async (
 		current.byteLength < capturedBytes.byteLength ||
 		!equalBytes(current.subarray(0, capturedBytes.byteLength), capturedBytes)
 	) {
+		const offset = firstDifferentByteOffset(capturedBytes, current);
 		throw new SessionLogError(
 			"session_log_corrupt",
 			sessionId,
-			"Session log changed while its projection was being checked."
+			"Session log changed while its projection was being checked.",
+			{
+				offset: offset ?? capturedBytes.byteLength,
+				...omitUndefined({ sequence }),
+			}
 		);
 	}
 };
@@ -1753,6 +2188,15 @@ const toReceipt = (
 	sequence: entry.envelope.sequence,
 });
 
+const toForkReceipt = (
+	entry: SessionLogEntry,
+	operationId: string,
+	projection: SessionWriteReceipt["projection"]
+): SessionWriteReceipt => ({
+	...toReceipt(entry, projection),
+	operationId,
+});
+
 const projectionMatchesState = (
 	cursor: SessionProjectionCursor | undefined,
 	state: SessionLogState,
@@ -1881,8 +2325,636 @@ const recordFromSessionLogEntry = (
 	}
 };
 
+type SessionForkIdentityMap = Readonly<{
+	compactions: ReadonlyMap<string, CompactionId>;
+	records: ReadonlyMap<string, SessionRecord["id"]>;
+	messages: ReadonlyMap<string, SessionMessageId>;
+	turns: ReadonlyMap<string, AgentTurnId>;
+	submissions: ReadonlyMap<string, SubmissionId>;
+	toolBatches: ReadonlyMap<string, ModelStepId>;
+	toolCalls: ReadonlyMap<string, string>;
+}>;
+
+type MutableSessionForkIdentityMap = {
+	compactions: Map<string, CompactionId>;
+	records: Map<string, SessionRecord["id"]>;
+	messages: Map<string, SessionMessageId>;
+	turns: Map<string, AgentTurnId>;
+	submissions: Map<string, SubmissionId>;
+	toolBatches: Map<string, ModelStepId>;
+	toolCalls: Map<string, string>;
+};
+type SessionForkToolCallPart = Extract<
+	SessionRecord["messages"][number]["parts"][number],
+	{ type: "tool-call" }
+>;
+
+const remappedForkIdentity = (
+	targetSessionId: SessionId,
+	kind: string,
+	sourceId: string
+): string => {
+	const digest = new Bun.CryptoHasher("sha256")
+		.update(`${targetSessionId}\0${kind}\0${sourceId}`)
+		.digest("hex")
+		.slice(0, 32);
+	return `fork-${kind}-${digest}`;
+};
+
+const mapSessionForkCompactionIdentities = (
+	targetSessionId: SessionId,
+	compactionIds: readonly string[],
+	identities: MutableSessionForkIdentityMap
+): void => {
+	for (const compactionId of compactionIds) {
+		identities.compactions.set(
+			compactionId,
+			toCompactionId(
+				remappedForkIdentity(targetSessionId, "compaction", compactionId)
+			)
+		);
+	}
+};
+
+const mapSessionForkToolCallIdentities = (
+	part: SessionForkToolCallPart,
+	targetSessionId: SessionId,
+	identities: MutableSessionForkIdentityMap
+): void => {
+	if (!identities.toolCalls.has(part.toolCallId)) {
+		identities.toolCalls.set(
+			part.toolCallId,
+			remappedForkIdentity(targetSessionId, "tool", part.toolCallId)
+		);
+	}
+	if (part.toolBatch === undefined) {
+		return;
+	}
+	if (!identities.toolBatches.has(part.toolBatch.id)) {
+		identities.toolBatches.set(
+			part.toolBatch.id,
+			toModelStepId(
+				remappedForkIdentity(targetSessionId, "tool-batch", part.toolBatch.id)
+			)
+		);
+	}
+	for (const toolCallId of part.toolBatch.toolCallIds) {
+		if (!identities.toolCalls.has(toolCallId)) {
+			identities.toolCalls.set(
+				toolCallId,
+				remappedForkIdentity(targetSessionId, "tool", toolCallId)
+			);
+		}
+	}
+};
+
+const mapSessionForkRecordIdentities = (
+	record: SessionRecord,
+	targetSessionId: SessionId,
+	identities: MutableSessionForkIdentityMap
+): void => {
+	identities.records.set(
+		record.id,
+		toSessionRecordId(
+			remappedForkIdentity(targetSessionId, "record", record.id)
+		)
+	);
+	identities.turns.set(
+		record.turnId,
+		toAgentTurnId(remappedForkIdentity(targetSessionId, "turn", record.turnId))
+	);
+	for (const message of record.messages) {
+		identities.messages.set(
+			message.id,
+			toSessionMessageId(
+				remappedForkIdentity(targetSessionId, "message", message.id)
+			)
+		);
+		const submissionId = message.metadata?.submissionId;
+		if (
+			submissionId !== undefined &&
+			!identities.submissions.has(submissionId)
+		) {
+			identities.submissions.set(
+				submissionId,
+				toSubmissionId(
+					remappedForkIdentity(targetSessionId, "submission", submissionId)
+				)
+			);
+		}
+		for (const part of message.parts) {
+			if (part.type === "tool-call") {
+				mapSessionForkToolCallIdentities(part, targetSessionId, identities);
+			}
+		}
+	}
+};
+
+const createSessionForkIdentityMap = (
+	targetSessionId: SessionId,
+	records: readonly SessionRecord[],
+	compactionIds: readonly string[]
+): SessionForkIdentityMap => {
+	const identities: MutableSessionForkIdentityMap = {
+		compactions: new Map(),
+		messages: new Map(),
+		records: new Map(),
+		submissions: new Map(),
+		toolBatches: new Map(),
+		toolCalls: new Map(),
+		turns: new Map(),
+	};
+	mapSessionForkCompactionIdentities(
+		targetSessionId,
+		compactionIds,
+		identities
+	);
+	for (const record of records) {
+		mapSessionForkRecordIdentities(record, targetSessionId, identities);
+	}
+	return identities;
+};
+
+const toSessionUsageContribution = (
+	contribution: SessionForkedPayload["inheritedUsage"][number]
+): SessionUsageContribution => {
+	const identity = contribution.identity;
+	let mappedIdentity: SessionUsageContribution["identity"];
+	if (identity.kind === "record") {
+		mappedIdentity = {
+			kind: "record",
+			recordId: toSessionRecordId(identity.recordId),
+			sessionId: toSessionId(identity.sessionId),
+		};
+	} else if (identity.kind === "usage-entry") {
+		mappedIdentity = {
+			entryId: toSessionUsageEntryId(identity.entryId),
+			kind: "usage-entry",
+			sessionId: toSessionId(identity.sessionId),
+		};
+	} else {
+		mappedIdentity = {
+			compactionId: toCompactionId(identity.compactionId),
+			kind: "compaction",
+			sessionId: toSessionId(identity.sessionId),
+		};
+	}
+	return {
+		cost: contribution.cost,
+		identity: mappedIdentity,
+		model: contribution.model,
+		...omitUndefined({
+			turnId:
+				contribution.turnId === undefined
+					? undefined
+					: toAgentTurnId(contribution.turnId),
+		}),
+		usage: contribution.usage,
+	};
+};
+
+const toSessionForkProvenance = (value: unknown): SessionForkProvenance => {
+	const payload = parseSessionForkedPayload(value);
+	return {
+		inheritedCompactionIds: payload.inheritedCompactionIds.map(toCompactionId),
+		inheritedRecordIds: payload.inheritedRecordIds.map(toSessionRecordId),
+		inheritedSubmissions: payload.inheritedSubmissions.map((submission) => ({
+			...omitUndefined({ failure: submission.failure }),
+			sourceMessageId: toSessionMessageId(submission.sourceMessageId),
+			sourceRecordId: toSessionRecordId(submission.sourceRecordId),
+			sourceSubmissionId: toSubmissionId(submission.sourceSubmissionId),
+			status: submission.status,
+			targetMessageId: toSessionMessageId(submission.targetMessageId),
+			targetRecordId: toSessionRecordId(submission.targetRecordId),
+			targetSubmissionId: toSubmissionId(submission.targetSubmissionId),
+		})),
+		inheritedUsage: payload.inheritedUsage.map(toSessionUsageContribution),
+		sourceLogId: payload.sourceLogId,
+		sourceMessageId: toSessionMessageId(payload.sourceMessageId),
+		sourceRecordId: toSessionRecordId(payload.sourceRecordId),
+		sourceSequence: payload.sourceSequence,
+		sourceSessionId: toSessionId(payload.sourceSessionId),
+		sourceTurnId: toAgentTurnId(payload.sourceTurnId),
+		targetMessageId: toSessionMessageId(payload.targetMessageId),
+		targetRecordId: toSessionRecordId(payload.targetRecordId),
+		targetTurnId: toAgentTurnId(payload.targetTurnId),
+	};
+};
+
+const inheritedUsageAtFork = (
+	entries: readonly SessionLogEntry[],
+	records: readonly SessionRecord[],
+	sourceSessionId: SessionId
+): SessionUsageContribution[] => {
+	const sourceForkEntry = entries.find(
+		({ envelope }) => envelope.type === "session.forked"
+	);
+	const sourceFork =
+		sourceForkEntry?.envelope.type === "session.forked"
+			? toSessionForkProvenance(sourceForkEntry.envelope.payload)
+			: undefined;
+	const inheritedRecordIds = new Set(
+		sourceFork?.inheritedRecordIds.map(String) ?? []
+	);
+	const inheritedCompactionIds = new Set(
+		sourceFork?.inheritedCompactionIds.map(String) ?? []
+	);
+	const contributions = [...(sourceFork?.inheritedUsage ?? [])];
+	for (const record of records) {
+		if (
+			inheritedRecordIds.has(record.id) ||
+			record.outcome.kind !== "assistant" ||
+			record.outcome.terminal.kind !== "completed" ||
+			record.outcome.terminal.usage === undefined
+		) {
+			continue;
+		}
+		const model = normalizeProviderModelSelection(record.model);
+		if (model === null) {
+			throw new Error("Fork prefix contains an invalid Model identity.");
+		}
+		contributions.push({
+			cost: null,
+			identity: {
+				kind: "record",
+				recordId: record.id,
+				sessionId: sourceSessionId,
+			},
+			model,
+			turnId: record.turnId,
+			usage: record.outcome.terminal.usage,
+		});
+	}
+	const usageEntries = entries.flatMap((entry) => {
+		if (entry.envelope.type !== "usage.committed") {
+			return [];
+		}
+		const payload = entry.envelope.payload;
+		const model = normalizeProviderModelSelection(payload.model);
+		if (model === null) {
+			throw new Error("Fork prefix contains an invalid usage Model identity.");
+		}
+		return [
+			{
+				cost:
+					payload.costUsd === null || payload.costUsd === undefined
+						? null
+						: { amount: Number(payload.costUsd), unit: "USD" },
+				identity: {
+					entryId: toSessionUsageEntryId(String(payload.id)),
+					kind: "usage-entry" as const,
+					sessionId: sourceSessionId,
+				},
+				model,
+				usage: payload.usage as SessionUsageContribution["usage"],
+			},
+		];
+	});
+	contributions.push(...usageEntries);
+	const linkedCompactionIds = new Set(
+		entries.flatMap((entry) => {
+			if (
+				entry.envelope.type !== "usage.committed" ||
+				entry.envelope.payload.kind !== "compaction-summary" ||
+				entry.envelope.payload.compactionId === null ||
+				entry.envelope.payload.compactionId === undefined
+			) {
+				return [];
+			}
+			return [String(entry.envelope.payload.compactionId)];
+		})
+	);
+	for (const entry of entries) {
+		if (entry.envelope.type !== "compaction.committed") {
+			continue;
+		}
+		const compaction = parseSessionCompactionPayload(entry.envelope.payload);
+		if (
+			compaction.summarizationUsage === null ||
+			linkedCompactionIds.has(compaction.id) ||
+			inheritedCompactionIds.has(compaction.id)
+		) {
+			continue;
+		}
+		const model = normalizeProviderModelSelection(
+			compaction.summarizationModel
+		);
+		if (model === null) {
+			throw new Error(
+				"Fork prefix contains an invalid compaction Model identity."
+			);
+		}
+		contributions.push({
+			cost: null,
+			identity: {
+				compactionId: toCompactionId(compaction.id),
+				kind: "compaction",
+				sessionId: sourceSessionId,
+			},
+			model,
+			usage: compaction.summarizationUsage,
+		});
+	}
+	return contributions;
+};
+
+const remapForkCompactionPayload = (
+	compaction: SessionCompactionPayload,
+	sequence: number,
+	identityMap: SessionForkIdentityMap,
+	copiedSourceCompactionIds: ReadonlySet<string>
+): SessionCompactionPayload | undefined => {
+	const id = identityMap.compactions.get(compaction.id);
+	const firstKeptUiMessageId = identityMap.messages.get(
+		compaction.firstKeptUiMessageId
+	);
+	const throughMessageUiId = identityMap.messages.get(
+		compaction.throughMessageUiId
+	);
+	const coveredMessageIds = compaction.summary.coveredMessageIds.map(
+		(messageId) => identityMap.messages.get(messageId)
+	);
+	const priorCompactionId =
+		compaction.priorCompactionId === null
+			? null
+			: identityMap.compactions.get(compaction.priorCompactionId);
+	if (
+		id === undefined ||
+		firstKeptUiMessageId === undefined ||
+		throughMessageUiId === undefined ||
+		coveredMessageIds.some((messageId) => messageId === undefined) ||
+		(compaction.priorCompactionId !== null &&
+			(priorCompactionId === undefined ||
+				!copiedSourceCompactionIds.has(compaction.priorCompactionId)))
+	) {
+		return;
+	}
+	return {
+		...compaction,
+		firstKeptUiMessageId,
+		id,
+		priorCompactionId: priorCompactionId ?? null,
+		sequence,
+		summary: {
+			...compaction.summary,
+			coveredMessageIds:
+				coveredMessageIds as SessionCompactionPayload["summary"]["coveredMessageIds"],
+		},
+		throughMessageUiId,
+	};
+};
+
+const remapForkUsageTurnIds = (
+	contributions: readonly SessionUsageContribution[],
+	identityMap: SessionForkIdentityMap
+): SessionUsageContribution[] =>
+	contributions.map((contribution) => ({
+		...contribution,
+		...omitUndefined({
+			turnId:
+				contribution.turnId === undefined
+					? undefined
+					: (identityMap.turns.get(contribution.turnId) ?? contribution.turnId),
+		}),
+	}));
+
+const remapForkSessionMetadata = (
+	message: SessionRecord["messages"][number],
+	identityMap: SessionForkIdentityMap
+): SessionRecord["messages"][number]["metadata"] => {
+	const metadata = message.metadata;
+	if (metadata === undefined) {
+		return;
+	}
+	const submissionId =
+		metadata.submissionId === undefined
+			? undefined
+			: identityMap.submissions.get(metadata.submissionId);
+	const sourceUserMessageId =
+		metadata.sourceUserMessageId === undefined
+			? undefined
+			: identityMap.messages.get(metadata.sourceUserMessageId);
+	const joinedTurnId =
+		metadata.joinedTurnId === undefined
+			? undefined
+			: identityMap.turns.get(metadata.joinedTurnId);
+	if (
+		(metadata.submissionId !== undefined && submissionId === undefined) ||
+		(metadata.sourceUserMessageId !== undefined &&
+			sourceUserMessageId === undefined) ||
+		(metadata.joinedTurnId !== undefined && joinedTurnId === undefined)
+	) {
+		throw new Error("Fork prefix contains a dangling Session reference.");
+	}
+	const {
+		submissionFailure: _failure,
+		submissionStatus: _status,
+		...metadataWithoutSubmissionState
+	} = metadata;
+	return {
+		...metadataWithoutSubmissionState,
+		...omitUndefined({
+			joinedTurnId,
+			sourceUserMessageId,
+			submissionId,
+			submissionStatus:
+				message.role === "user" && submissionId !== undefined
+					? ("processed" as const)
+					: undefined,
+		}),
+	};
+};
+
+const remapForkSessionMessagePart = (
+	part: SessionRecord["messages"][number]["parts"][number],
+	identityMap: SessionForkIdentityMap
+): SessionRecord["messages"][number]["parts"][number] => {
+	if (part.type !== "tool-call") {
+		return part;
+	}
+	const toolCallId = identityMap.toolCalls.get(part.toolCallId);
+	const toolBatchId =
+		part.toolBatch === undefined
+			? undefined
+			: identityMap.toolBatches.get(part.toolBatch.id);
+	if (
+		toolCallId === undefined ||
+		(part.toolBatch !== undefined && toolBatchId === undefined)
+	) {
+		throw new Error("Fork prefix contains an unmapped Tool Call identity.");
+	}
+	let toolBatch: NonNullable<typeof part.toolBatch> | undefined;
+	if (part.toolBatch !== undefined) {
+		const toolCallIds = part.toolBatch.toolCallIds.map((sourceId) => {
+			const mappedId = identityMap.toolCalls.get(sourceId);
+			if (mappedId === undefined) {
+				throw new Error(
+					"Fork prefix contains an unmapped Tool Call batch reference."
+				);
+			}
+			return mappedId as NonNullable<
+				typeof part.toolBatch
+			>["toolCallIds"][number];
+		});
+		toolBatch = { id: toolBatchId as typeof part.toolBatch.id, toolCallIds };
+	}
+	return {
+		...part,
+		toolCallId: toolCallId as typeof part.toolCallId,
+		...omitUndefined({ toolBatch }),
+	};
+};
+
+const remapForkSessionMessage = (
+	message: SessionRecord["messages"][number],
+	identityMap: SessionForkIdentityMap
+): SessionRecord["messages"][number] => {
+	const messageId = identityMap.messages.get(message.id);
+	if (messageId === undefined) {
+		throw new Error("Fork prefix contains an unmapped message identity.");
+	}
+	return {
+		...message,
+		id: messageId,
+		...omitUndefined({
+			metadata: remapForkSessionMetadata(message, identityMap),
+		}),
+		parts: message.parts.map((part) =>
+			remapForkSessionMessagePart(part, identityMap)
+		),
+	};
+};
+
+const remapForkSessionRecord = (
+	record: SessionRecord,
+	identityMap: SessionForkIdentityMap
+): SessionRecord => {
+	const recordId = identityMap.records.get(record.id);
+	const turnId = identityMap.turns.get(record.turnId);
+	if (recordId === undefined || turnId === undefined) {
+		throw new Error(
+			"Fork prefix contains an unmapped Session Record identity."
+		);
+	}
+	return {
+		...record,
+		id: recordId,
+		turnId,
+		messages: record.messages.map((message) =>
+			remapForkSessionMessage(message, identityMap)
+		),
+	};
+};
+
+type SourceForkSubmissionStatus = Readonly<{
+	failure?: string;
+	messageId: SessionMessageId;
+	recordId: SessionRecord["id"];
+	status?: SessionSubmissionStatus;
+	submissionId: SubmissionId;
+}>;
+
+const inheritedForkSubmissionsAtCut = (
+	entries: readonly SessionLogEntry[],
+	records: readonly SessionRecord[],
+	identityMap: SessionForkIdentityMap,
+	sourceSessionId: SessionId,
+	operationId: string
+): SessionForkSubmissionProvenance[] => {
+	const submissions = new Map<SubmissionId, SourceForkSubmissionStatus>();
+	for (const record of records) {
+		for (const message of record.messages) {
+			const submissionId = message.metadata?.submissionId;
+			if (message.role !== "user" || submissionId === undefined) {
+				continue;
+			}
+			if (submissions.has(submissionId)) {
+				throw new SessionForkError(
+					"session_checkpoint_invalid",
+					"Fork prefix contains a duplicate source Submission identity.",
+					sourceSessionId,
+					operationId
+				);
+			}
+			submissions.set(submissionId, {
+				messageId: message.id,
+				recordId: record.id,
+				submissionId,
+				...omitUndefined({
+					failure: message.metadata?.submissionFailure,
+					status: message.metadata?.submissionStatus,
+				}),
+			});
+		}
+	}
+	for (const entry of entries) {
+		if (entry.envelope.type !== "submission.status-updated") {
+			continue;
+		}
+		const payload = parseSessionSubmissionStatusPayload(entry.envelope.payload);
+		const previous = submissions.get(toSubmissionId(payload.submissionId));
+		if (
+			previous === undefined ||
+			previous.messageId !== payload.messageId ||
+			previous.recordId !== payload.recordId
+		) {
+			throw new SessionForkError(
+				"session_checkpoint_invalid",
+				"Fork prefix contains a Submission status without its source message.",
+				sourceSessionId,
+				operationId
+			);
+		}
+		submissions.set(previous.submissionId, {
+			...previous,
+			...omitUndefined({
+				failure: payload.status === "failed" ? payload.failure : undefined,
+			}),
+			status: payload.status,
+		});
+	}
+	return [...submissions.values()].flatMap((submission) => {
+		if (submission.status === undefined) {
+			return [];
+		}
+		const targetMessageId = identityMap.messages.get(submission.messageId);
+		const targetRecordId = identityMap.records.get(submission.recordId);
+		const targetSubmissionId = identityMap.submissions.get(
+			submission.submissionId
+		);
+		if (
+			targetMessageId === undefined ||
+			targetRecordId === undefined ||
+			targetSubmissionId === undefined
+		) {
+			throw new SessionForkError(
+				"session_checkpoint_invalid",
+				"Fork prefix contains an unmapped source Submission reference.",
+				sourceSessionId,
+				operationId
+			);
+		}
+		return [
+			{
+				...omitUndefined({
+					failure:
+						submission.status === "failed" ? submission.failure : undefined,
+				}),
+				sourceMessageId: submission.messageId,
+				sourceRecordId: submission.recordId,
+				sourceSubmissionId: submission.submissionId,
+				status: submission.status,
+				targetMessageId,
+				targetRecordId,
+				targetSubmissionId,
+			},
+		];
+	});
+};
+
 const findSessionSubmissionRecord = (
 	entries: readonly SessionLogEntry[],
+
 	sessionId: SessionId,
 	submissionId: SubmissionId
 ): SessionSubmissionRecordMatch | undefined => {
@@ -1910,10 +2982,51 @@ const findSessionSubmissionRecord = (
 	return matches[0];
 };
 
+const requirePublishedForkEntries = (
+	state: SessionLogState,
+	sourceSessionId: SessionId,
+	checkpointRecordId: string,
+	operationId: string,
+	forkOperationLogId: string
+): Readonly<{
+	createdEntry: SessionLogEntry;
+	forked: SessionForkedPayload;
+	forkedEntry: SessionLogEntry;
+}> => {
+	const forkEntry = state.entries.find(
+		({ envelope }) =>
+			envelope.operationId === forkOperationLogId &&
+			envelope.type === "session.forked"
+	);
+	const createdEntry = state.entries.find(
+		({ envelope }) =>
+			envelope.sequence === 1 && envelope.type === "session.created"
+	);
+	if (
+		forkEntry?.envelope.type !== "session.forked" ||
+		createdEntry?.envelope.type !== "session.created" ||
+		forkEntry.envelope.payload.sourceSessionId !== sourceSessionId ||
+		forkEntry.envelope.payload.sourceRecordId !== checkpointRecordId
+	) {
+		throw new SessionForkError(
+			"session_operation_conflict",
+			"Published Session does not match its durable fork operation intent.",
+			sourceSessionId,
+			operationId
+		);
+	}
+	return {
+		createdEntry,
+		forked: parseSessionForkedPayload(forkEntry.envelope.payload),
+		forkedEntry: forkEntry,
+	};
+};
+
 export const createSessionJsonlStore = (
 	projectionStore: DrizzleSessionStore,
 	logRoot: string,
-	fileIo: SessionLogFileIo = {}
+	fileIo: SessionLogFileIo = {},
+	testObserver?: SessionJsonlStoreTestObserver
 ): SessionStore => {
 	const projection = projectionStore.jsonlProjection;
 	const pendingCreationAttachmentLeases = new Map<
@@ -2206,6 +3319,61 @@ export const createSessionJsonlStore = (
 		}
 	};
 
+	const readLogSuffixForProjection = async (
+		logPath: string,
+		sessionId: SessionId,
+		cursor: SessionProjectionCursor
+	): Promise<Readonly<{ bytes: Uint8Array; state: SessionLogState }>> => {
+		for (let attempt = 0; ; attempt += 1) {
+			try {
+				const { size } = await fs.stat(logPath);
+				if (
+					!(
+						Number.isSafeInteger(size) &&
+						Number.isSafeInteger(cursor.nextByteOffset)
+					) ||
+					cursor.nextByteOffset < 0 ||
+					size < cursor.nextByteOffset
+				) {
+					throw new SessionLogError(
+						"session_log_corrupt",
+						sessionId,
+						"Session projection cursor extends past its authoritative log.",
+						{ offset: cursor.nextByteOffset, sequence: cursor.nextSequence }
+					);
+				}
+				const bytes = await Bun.file(logPath)
+					.slice(cursor.nextByteOffset, size)
+					.bytes();
+				if (bytes.byteLength !== size - cursor.nextByteOffset) {
+					throw new SessionLogError(
+						"session_log_truncated",
+						sessionId,
+						"Session log changed while its projection suffix was read.",
+						{ offset: cursor.nextByteOffset, sequence: cursor.nextSequence }
+					);
+				}
+				const state = decodeSessionLogSuffix(sessionId, bytes, cursor);
+				await syncAndVerifyLogSuffix(
+					logPath,
+					cursor.nextByteOffset,
+					bytes,
+					sessionId,
+					fileIo
+				);
+				return { bytes, state };
+			} catch (error) {
+				if (
+					!(error instanceof SessionLogError) ||
+					error.code !== "session_log_truncated"
+				) {
+					throw error;
+				}
+				await waitForPendingLogAppend(sessionId, attempt, error);
+			}
+		}
+	};
+
 	const reconcileVisibleWriteIntent = async (
 		sessionId: SessionId,
 		logPath: string,
@@ -2225,18 +3393,6 @@ export const createSessionJsonlStore = (
 				"session_operation_conflict",
 				sessionId,
 				"Session creation belongs to another Workspace.",
-				{
-					offset: intent.expectedOffset,
-					operationId: intent.operationId,
-					sequence: intent.sequence,
-				}
-			);
-		}
-		if (intent.type === "session.deleted") {
-			throw new SessionLogError(
-				"session_log_write_indeterminate",
-				sessionId,
-				"Session deletion must be reconciled before reopening.",
 				{
 					offset: intent.expectedOffset,
 					operationId: intent.operationId,
@@ -2439,6 +3595,134 @@ export const createSessionJsonlStore = (
 		);
 	};
 
+	const assertProjectionSessionBound = async (
+		sessionId: SessionId,
+		logPath: string
+	): Promise<void> => {
+		if (projection.isBoundToWorkspace(sessionId)) {
+			return;
+		}
+		if (!projection.isBoundToAnotherWorkspace(sessionId)) {
+			await fs.stat(logPath);
+		}
+		throw new Error("Session not found");
+	};
+
+	const hasPendingProjectionRecovery = async (
+		sessionId: SessionId
+	): Promise<boolean> =>
+		pendingCreationAttachmentLeases.has(sessionId) ||
+		pendingAttachmentLeases.has(sessionId) ||
+		(await readSessionWriteIntent(logRoot, sessionId, fileIo)) !== undefined;
+
+	const isProjectionCursorReady = async (
+		sessionId: SessionId,
+		generation: number,
+		cursor: SessionProjectionCursor | undefined
+	): Promise<boolean> =>
+		cursor !== undefined &&
+		cursor.generation === generation &&
+		cursor.nextSequence >= 2 &&
+		!(await projectionSessionIsMissing(sessionId));
+
+	const projectionLogSize = async (
+		logPath: string
+	): Promise<number | undefined> => {
+		try {
+			return (await fs.stat(logPath)).size;
+		} catch {
+			return;
+		}
+	};
+
+	const tryReadProjectionSuffix = async (
+		logPath: string,
+		sessionId: SessionId,
+		cursor: SessionProjectionCursor
+	): Promise<
+		Readonly<{ bytes: Uint8Array; state: SessionLogState }> | undefined
+	> => {
+		try {
+			return await readLogSuffixForProjection(logPath, sessionId, cursor);
+		} catch {
+			return;
+		}
+	};
+
+	const suffixNeedsFullProjectionReplay = (state: SessionLogState): boolean =>
+		state.entries.length === 0 ||
+		state.entries.some(({ envelope }) =>
+			["session.created", "session.deleted", "session.forked"].includes(
+				envelope.type
+			)
+		);
+
+	const projectProjectionSuffix = (
+		sessionId: SessionId,
+		cursor: SessionProjectionCursor,
+		state: SessionLogState
+	): boolean => {
+		try {
+			projection.projectEntries(
+				sessionId,
+				state.entries,
+				state,
+				cursor,
+				"append"
+			);
+			assertProjectionAtLogHead(
+				sessionId,
+				projection.getCursor(sessionId),
+				state
+			);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	const ensureProjectionCaughtUp = async (
+		sessionId: SessionId
+	): Promise<void> => {
+		const generation = assertProjectionReady(sessionId);
+		const logPath = path.join(
+			await fs.realpath(logRoot),
+			validSessionId(sessionId),
+			"session.jsonl"
+		);
+		await reconcileDeletedSessionIfNeeded(sessionId);
+		await assertProjectionSessionBound(sessionId, logPath);
+		await checkDeletedMarker(sessionId);
+		if (await hasPendingProjectionRecovery(sessionId)) {
+			await ensureProjected(sessionId);
+			return;
+		}
+		const cursor = projection.getCursor(sessionId);
+		if (
+			cursor === undefined ||
+			!(await isProjectionCursorReady(sessionId, generation, cursor))
+		) {
+			await ensureProjected(sessionId);
+			return;
+		}
+		const logSize = await projectionLogSize(logPath);
+		if (logSize === cursor.nextByteOffset) {
+			return;
+		}
+		if (logSize === undefined || logSize < cursor.nextByteOffset) {
+			await ensureProjected(sessionId);
+			return;
+		}
+		const suffix = await tryReadProjectionSuffix(logPath, sessionId, cursor);
+		if (suffix === undefined || suffixNeedsFullProjectionReplay(suffix.state)) {
+			await ensureProjected(sessionId);
+			return;
+		}
+		if (!projectProjectionSuffix(sessionId, cursor, suffix.state)) {
+			await ensureProjected(sessionId);
+		}
+	};
+
 	const pendingAppendTimestamps = (
 		state: SessionLogState,
 		intent: SessionWriteIntent,
@@ -2638,7 +3922,9 @@ export const createSessionJsonlStore = (
 	): Promise<void> => {
 		try {
 			await ensureReceipt(sessionId, entry);
-			await clearSessionWriteIntent(logRoot, intent, fileIo);
+			if (entry.envelope.type !== "session.deleted") {
+				await clearSessionWriteIntent(logRoot, intent, fileIo);
+			}
 			projectCommittedEntry(sessionId, entry, state, cursorBefore);
 		} catch (error) {
 			if (error instanceof SessionWriteOutcomeError) {
@@ -2773,7 +4059,9 @@ export const createSessionJsonlStore = (
 		await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
 		try {
 			await ensureReceipt(sessionId, entry);
-			await clearSessionWriteIntent(logRoot, intent, fileIo);
+			if (intent.type !== "session.deleted") {
+				await clearSessionWriteIntent(logRoot, intent, fileIo);
+			}
 		} catch (error) {
 			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
 		}
@@ -2859,7 +4147,7 @@ export const createSessionJsonlStore = (
 		}
 		try {
 			await ensureReceipt(sessionId, entry);
-			if (intent !== undefined) {
+			if (intent !== undefined && intent.type !== "session.deleted") {
 				await clearSessionWriteIntent(logRoot, intent, fileIo);
 			}
 		} catch (error) {
@@ -2910,6 +4198,30 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		entry: SessionLogEntry
 	): Promise<CommittedLogEntry> => {
+		if (entry.envelope.type === "session.deleted") {
+			const logPath = path.join(
+				await fs.realpath(logRoot),
+				validSessionId(sessionId),
+				"session.jsonl"
+			);
+			const { state } = await readLog(logPath, sessionId);
+			const matchingEntry = state.entries.find(
+				({ envelope }) => envelope.entryHash === entry.envelope.entryHash
+			);
+			if (matchingEntry === undefined) {
+				throw new SessionLogError(
+					"session_log_corrupt",
+					sessionId,
+					"Recovered Session deletion no longer matches its authoritative log."
+				);
+			}
+			return {
+				createdNew: false,
+				entry: matchingEntry,
+				receiptBlocked: false,
+				state,
+			};
+		}
 		try {
 			return {
 				createdNew: false,
@@ -3003,7 +4315,9 @@ export const createSessionJsonlStore = (
 			);
 		} else {
 			await ensureReceipt(sessionId, verified.entry);
-			await clearSessionWriteIntent(logRoot, intent, fileIo);
+			if (intent.type !== "session.deleted") {
+				await clearSessionWriteIntent(logRoot, intent, fileIo);
+			}
 		}
 		return {
 			createdNew: false,
@@ -3141,19 +4455,40 @@ export const createSessionJsonlStore = (
 
 	const withTemporaryWriter = async <Result>(
 		sessionId: SessionId,
-		operation: () => Promise<Result>
+		operation: () => Promise<Result>,
+		onWriterReleaseFailure?: (error: unknown) => Error,
+		reuseHeldWriter = true,
+		onOperationEnqueued?: () => void
 	): Promise<Result> => {
 		const key = await lockKey(logRoot, sessionId);
-		return writerOperationQueue.run(key, async () => {
-			const writer = heldWriterKeys.has(key)
-				? undefined
-				: await acquireSessionWriterLock(logRoot, sessionId);
+		const queuedOperation = writerOperationQueue.run(key, async () => {
+			const writer =
+				reuseHeldWriter && heldWriterKeys.has(key)
+					? undefined
+					: await acquireSessionWriterLock(logRoot, sessionId);
+			const releaseWriter = async (): Promise<void> => {
+				try {
+					await writer?.release();
+				} catch (error) {
+					if (onWriterReleaseFailure !== undefined) {
+						throw onWriterReleaseFailure(error);
+					}
+					throw error;
+				}
+			};
+			let result: Result;
 			try {
-				return await operation();
-			} finally {
-				await writer?.release();
+				result = await operation();
+			} catch (error) {
+				await releaseWriter();
+				throw error;
 			}
+			await releaseWriter();
+			return result;
 		});
+		// queue.run stores the key's tail synchronously before returning.
+		onOperationEnqueued?.();
+		return queuedOperation;
 	};
 
 	const acquireWriter = async (
@@ -3177,6 +4512,719 @@ export const createSessionJsonlStore = (
 		};
 	};
 
+	const readSessionBundleExportSnapshot = async (
+		sessionId: SessionId,
+		signal?: AbortSignal
+	) => {
+		throwIfAborted(signal, "Session bundle export was cancelled.");
+		assertProjectionReady(sessionId);
+		await assertSessionWritable(sessionId);
+		const pendingIntent = await readSessionWriteIntent(
+			logRoot,
+			sessionId,
+			fileIo
+		);
+		if (pendingIntent !== undefined) {
+			throw new SessionLogError(
+				"session_log_write_indeterminate",
+				sessionId,
+				"Session export is blocked until the indeterminate write is reconciled.",
+				{
+					offset: pendingIntent.expectedOffset,
+					operationId: pendingIntent.operationId,
+					sequence: pendingIntent.sequence,
+				}
+			);
+		}
+		const canonicalRoot = await fs.realpath(logRoot);
+		const logPath = path.join(
+			canonicalRoot,
+			validSessionId(sessionId),
+			"session.jsonl"
+		);
+		let bytes: Uint8Array;
+		let state: SessionLogState;
+		try {
+			({ bytes, state } = await readLog(logPath, sessionId));
+		} catch (error) {
+			if (isCode(error, "ENOENT")) {
+				throw new SessionLogError(
+					"session_not_found",
+					sessionId,
+					"Session not found.",
+					{ cause: error }
+				);
+			}
+			throw error;
+		}
+		const checked = validateSessionBundleLog(sessionId, bytes, "source");
+		const generation = assertProjectionReady(sessionId);
+		const cursor = projection.getCursor(sessionId);
+		assertCursorDoesNotExceedLog(sessionId, cursor, state);
+		if (!projectionMatchesState(cursor, state, generation)) {
+			throw new SessionLogError(
+				"session_projection_blocked",
+				sessionId,
+				"Session projection is not at the verified JSONL cut; retry after projection recovery."
+			);
+		}
+		await projectionStore.getSession(sessionId);
+		await syncAndVerifyLogPrefix(
+			logPath,
+			bytes,
+			sessionId,
+			fileIo,
+			state.nextSequence - 1
+		);
+		throwIfAborted(signal, "Session bundle export was cancelled.");
+		const currentBytes = await Bun.file(logPath).bytes();
+		const changedOffset = firstDifferentByteOffset(bytes, currentBytes);
+		if (changedOffset !== undefined) {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				sessionId,
+				"Session log changed while its export cut was being synced.",
+				{ offset: changedOffset, sequence: state.nextSequence - 1 }
+			);
+		}
+		const attachmentStore = projectionStore.attachmentStore;
+		if (checked.attachments.length > 0 && attachmentStore === undefined) {
+			throw new SessionBundleValidationError(
+				"Session attachment storage is unavailable for bundle export."
+			);
+		}
+		return {
+			attachments: checked.attachments,
+			cut: { hash: state.lastHash, sequence: state.nextSequence - 1 },
+			...omitUndefined({ resolveAttachment: attachmentStore?.resolve }),
+			logBytes: bytes,
+			logId: state.logId,
+			sessionId,
+		};
+	};
+
+	const withSessionBundleExport = async <Result>(
+		sessionId: SessionId,
+		operation: (source: PreparedSessionBundleExport) => Promise<Result>,
+		options: Readonly<{ existingHostWriter: boolean; signal?: AbortSignal }>
+	): Promise<Result> =>
+		withTemporaryWriter(
+			sessionId,
+			async () => {
+				throwIfAborted(options.signal, "Session bundle export was cancelled.");
+				const source = await readSessionBundleExportSnapshot(
+					sessionId,
+					options.signal
+				);
+				const attachmentStore = projectionStore.attachmentStore;
+				const attachmentIds = [
+					...new Set(
+						source.attachments.map(({ attachmentId }) => attachmentId)
+					),
+				];
+				let retainedAttachmentIds: string[] = [];
+				const releasePins = async (): Promise<void> => {
+					if (
+						retainedAttachmentIds.length === 0 ||
+						attachmentStore === undefined
+					) {
+						return;
+					}
+					let firstError: unknown;
+					for (const attachmentId of retainedAttachmentIds) {
+						try {
+							await attachmentStore.release([attachmentId]);
+						} catch (error) {
+							firstError ??= error;
+						}
+					}
+					if (firstError !== undefined) {
+						throw firstError;
+					}
+				};
+				if (attachmentIds.length > 0 && attachmentStore !== undefined) {
+					await attachmentStore.retain(attachmentIds);
+					retainedAttachmentIds = attachmentIds;
+				}
+				const outcome = await (async () => {
+					throwIfAborted(
+						options.signal,
+						"Session bundle export was cancelled."
+					);
+					return await operation(source);
+				})().then(
+					(value) => ({ kind: "success" as const, value }),
+					(error: unknown) => ({ kind: "failure" as const, error })
+				);
+				try {
+					await releasePins();
+				} catch (error) {
+					throw new SessionBundleExportCleanupError(error);
+				}
+				if (outcome.kind === "failure") {
+					throw outcome.error;
+				}
+				return outcome.value;
+			},
+			(error) => new SessionBundleExportCleanupError(error),
+			options.existingHostWriter
+		);
+
+	const sessionBundleImportIdentity = (
+		prepared: PreparedSessionBundleImport
+	): string =>
+		digestBytes(
+			new TextEncoder().encode(
+				encodeCanonicalSessionJson({
+					attachments: prepared.bundle.manifest.attachments
+						.map(({ attachmentId, byteLength, sha256 }) => ({
+							attachmentId,
+							byteLength,
+							sha256,
+						}))
+						.sort((left, right) =>
+							left.attachmentId.localeCompare(right.attachmentId)
+						),
+					cut: prepared.bundle.cut,
+					logId: prepared.bundle.session.logId,
+					logSha256: prepared.bundle.manifest.sessionFile.sha256,
+					sessionId: prepared.bundle.session.id,
+				})
+			)
+		);
+
+	const inspectSessionBundleImportTarget = async (
+		sessionId: SessionId
+	): Promise<
+		| Readonly<{
+				bytes: Uint8Array;
+				state: SessionLogState;
+				targetDirectory: string;
+		  }>
+		| undefined
+	> => {
+		const root = await fs.realpath(logRoot);
+		const targetDirectory = path.join(root, validSessionId(sessionId));
+		try {
+			const directoryInfo = await fs.lstat(targetDirectory);
+			if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) {
+				throw new SessionBundleImportConflictError(
+					"The target Session ID is occupied by an unsafe log directory."
+				);
+			}
+		} catch (error) {
+			if (isCode(error, "ENOENT")) {
+				return;
+			}
+			throw error;
+		}
+		const logPath = path.join(targetDirectory, "session.jsonl");
+		try {
+			const logInfo = await fs.lstat(logPath);
+			if (!logInfo.isFile() || logInfo.isSymbolicLink()) {
+				throw new SessionBundleImportConflictError(
+					"The target Session log is not a regular file."
+				);
+			}
+		} catch (error) {
+			if (isCode(error, "ENOENT")) {
+				throw new SessionBundleImportConflictError(
+					"The target Session ID has an incomplete published log directory."
+				);
+			}
+			throw error;
+		}
+		const existing = await readLog(logPath, sessionId);
+		return { ...existing, targetDirectory };
+	};
+
+	const assertImportedBundleAttachmentsAvailable = async (
+		prepared: PreparedSessionBundleImport,
+		signal?: AbortSignal
+	): Promise<void> => {
+		if (prepared.attachments.length === 0) {
+			return;
+		}
+		const attachmentStore = projectionStore.attachmentStore;
+		if (attachmentStore === undefined) {
+			throw new SessionBundleImportConflictError(
+				"The existing Session attachment store is unavailable."
+			);
+		}
+		const checkedIds = new Set<string>();
+		for (const reference of prepared.attachments) {
+			if (checkedIds.has(reference.attachmentId)) {
+				continue;
+			}
+			checkedIds.add(reference.attachmentId);
+			const result = await attachmentStore.resolve(reference, signal);
+			if (result.availability !== "available") {
+				throw new SessionBundleImportConflictError(
+					`Existing Session attachment ${reference.attachmentId} is missing or corrupt.`
+				);
+			}
+		}
+	};
+
+	type SessionBundleImportTarget = Readonly<{
+		bytes: Uint8Array;
+		state: SessionLogState;
+		targetDirectory: string;
+	}>;
+	type SessionImportPublicationState = { logPublished: boolean };
+
+	const assertSessionImportMarkerMatchesBundle = (
+		marker: SessionImportActivationMarker,
+		prepared: PreparedSessionBundleImport,
+		identity: string
+	): void => {
+		if (
+			marker.bundleIdentity !== identity ||
+			marker.logId !== prepared.bundle.session.logId ||
+			marker.cutHash !== prepared.bundle.cut.hash ||
+			marker.cutSequence !== prepared.bundle.cut.sequence ||
+			marker.workspaceId !== projection.workspaceId
+		) {
+			throw new SessionBundleImportConflictError(
+				"A durable Session import activation marker conflicts with this bundle or workspace."
+			);
+		}
+	};
+
+	const assertSessionImportTargetMatchesBundle = (
+		target: SessionBundleImportTarget,
+		prepared: PreparedSessionBundleImport,
+		identity: string
+	): void => {
+		const cutEntry = target.state.entries.find(
+			({ envelope }) => envelope.sequence === prepared.bundle.cut.sequence
+		);
+		const hasImportedLogPrefix =
+			target.bytes.byteLength >= prepared.logBytes.byteLength &&
+			equalBytes(
+				target.bytes.subarray(0, prepared.logBytes.byteLength),
+				prepared.logBytes
+			);
+		if (
+			!hasImportedLogPrefix ||
+			target.state.logId !== prepared.bundle.session.logId ||
+			cutEntry?.envelope.entryHash !== prepared.bundle.cut.hash
+		) {
+			throw new SessionBundleImportConflictError(
+				"The target Session ID has different authoritative log content."
+			);
+		}
+		if (target.bytes.byteLength === prepared.logBytes.byteLength) {
+			return;
+		}
+		const hasMatchingActivation = target.state.entries.some(
+			({ envelope }) =>
+				envelope.type === "session.activation-confirmed" &&
+				envelope.sequence > prepared.bundle.cut.sequence &&
+				envelope.payload.bundleIdentity === identity
+		);
+		if (!hasMatchingActivation) {
+			throw new SessionBundleImportConflictError(
+				"The target Session ID has an unrelated extension after the imported log."
+			);
+		}
+	};
+
+	const assertSessionImportTargetAvailable = async (
+		sessionId: SessionId
+	): Promise<void> => {
+		if ((await readDeletedMarker(logRoot, sessionId)) !== undefined) {
+			throw new SessionBundleImportConflictError(
+				"A deleted Session ID cannot be reimported."
+			);
+		}
+		if (projection.isBoundToAnotherWorkspace(sessionId)) {
+			throw new SessionBundleImportConflictError(
+				"The Session ID is already bound to another local workspace."
+			);
+		}
+	};
+
+	const recoverExistingSessionImportUnderGate = async (
+		prepared: PreparedSessionBundleImport,
+		identity: string
+	): Promise<SessionBundleImportResult> => {
+		const sessionId = prepared.bundle.session.id;
+		await assertSessionImportTargetAvailable(sessionId);
+		const marker = await readSessionImportActivationMarker(logRoot, sessionId);
+		if (marker !== undefined) {
+			assertSessionImportMarkerMatchesBundle(marker, prepared, identity);
+		}
+		if (marker === undefined) {
+			throw new SessionBundleImportConflictError(
+				"The existing Session is not covered by a durable import activation marker."
+			);
+		}
+		const target = await inspectSessionBundleImportTarget(sessionId);
+		if (target === undefined) {
+			throw new SessionBundleImportConflictError(
+				"The target Session disappeared while its import was being recovered."
+			);
+		}
+		assertSessionImportTargetMatchesBundle(target, prepared, identity);
+		projection.bindSessionToWorkspace(sessionId);
+		await ensureProjected(sessionId);
+		return { activationPending: true, sessionId, status: "unchanged" };
+	};
+
+	const recoverExistingSessionImport = async (
+		prepared: PreparedSessionBundleImport,
+		options: Readonly<{ signal?: AbortSignal }>,
+		identity: string
+	): Promise<SessionBundleImportResult | undefined> => {
+		const sessionId = prepared.bundle.session.id;
+		await assertSessionImportTargetAvailable(sessionId);
+		const marker = await readSessionImportActivationMarker(logRoot, sessionId);
+		if (marker !== undefined) {
+			assertSessionImportMarkerMatchesBundle(marker, prepared, identity);
+		}
+		const target = await inspectSessionBundleImportTarget(sessionId);
+		if (target === undefined) {
+			return;
+		}
+		assertSessionImportTargetMatchesBundle(target, prepared, identity);
+		await assertImportedBundleAttachmentsAvailable(prepared, options.signal);
+		if (projection.isBoundToWorkspace(sessionId)) {
+			await ensureProjected(sessionId);
+			return {
+				activationPending: marker !== undefined,
+				sessionId,
+				status: "unchanged",
+			};
+		}
+		if (marker === undefined) {
+			throw new SessionBundleImportConflictError(
+				"An existing Session without a local import marker cannot be rebound."
+			);
+		}
+		return await withTemporaryWriter(
+			sessionId,
+			async () =>
+				await withSessionCatalogLifecycleGate(
+					logRoot,
+					async () =>
+						await recoverExistingSessionImportUnderGate(prepared, identity)
+				),
+			undefined,
+			false
+		);
+	};
+
+	const ingestSessionBundleAttachments = async (
+		prepared: PreparedSessionBundleImport,
+		options: Readonly<{ signal?: AbortSignal }>
+	): Promise<AttachmentIngestLease[]> => {
+		const attachmentStore = projectionStore.attachmentStore;
+		if (prepared.attachments.length > 0 && attachmentStore === undefined) {
+			throw new SessionBundleValidationError(
+				"Session attachment storage is unavailable for bundle import."
+			);
+		}
+		const attachmentEntries = new Map(
+			prepared.bundle.manifest.attachments.map((attachment) => [
+				attachment.attachmentId,
+				attachment,
+			])
+		);
+		const leases: AttachmentIngestLease[] = [];
+		const ingestedIds = new Set<string>();
+		try {
+			for (const reference of prepared.attachments) {
+				throwIfAborted(options.signal, "Session bundle import was cancelled.");
+				if (ingestedIds.has(reference.attachmentId)) {
+					continue;
+				}
+				ingestedIds.add(reference.attachmentId);
+				const entry = attachmentEntries.get(reference.attachmentId);
+				if (entry === undefined || attachmentStore === undefined) {
+					throw new SessionBundleValidationError(
+						"Session bundle is missing a referenced attachment."
+					);
+				}
+				const bytes = await prepared.readAttachment(reference.attachmentId);
+				const lease = await attachmentStore.ingest(
+					{
+						bytes,
+						filename: entry.filename,
+						mediaType: entry.mediaType,
+					},
+					options.signal
+				);
+				leases.push(lease);
+				if (
+					lease.reference.attachmentId !== reference.attachmentId ||
+					lease.reference.byteLength !== reference.byteLength ||
+					lease.reference.filename !== reference.filename ||
+					lease.reference.height !== reference.height ||
+					lease.reference.mediaType !== reference.mediaType ||
+					lease.reference.width !== reference.width
+				) {
+					throw new SessionBundleValidationError(
+						`Imported attachment ${reference.attachmentId} does not match its log reference.`
+					);
+				}
+			}
+		} catch (error) {
+			await Promise.allSettled(
+				leases.map(async (lease) => await lease.release())
+			);
+			throw error;
+		}
+		return leases;
+	};
+
+	const publishStagedSessionImportLog = async (
+		prepared: PreparedSessionBundleImport,
+		options: Readonly<{ fileSystem?: SessionBundleImportFileSystem }>,
+		staged: StagedSessionLog,
+		publication: SessionImportPublicationState
+	): Promise<void> => {
+		const sessionId = prepared.bundle.session.id;
+		const targetDirectory = path.join(
+			await fs.realpath(logRoot),
+			validSessionId(sessionId)
+		);
+		await options.fileSystem?.beforePublish?.(
+			staged.directory,
+			targetDirectory
+		);
+		try {
+			createAtomicDirectoryPublisher().publish(
+				staged.directory,
+				targetDirectory
+			);
+		} catch (error) {
+			if (
+				error instanceof AtomicDirectoryPublishError &&
+				error.kind === "destination_exists"
+			) {
+				throw new SessionBundleImportConflictError(
+					"The target Session ID was published concurrently."
+				);
+			}
+			throw error;
+		}
+		publication.logPublished = true;
+		try {
+			await syncDirectory(await fs.realpath(logRoot), fileIo);
+			await options.fileSystem?.afterPublish?.(targetDirectory);
+			await ensureProjected(sessionId);
+		} catch (error) {
+			throw new SessionBundleImportIndeterminateError(
+				"Session bundle log was published, but import recovery or projection did not complete.",
+				{ cause: error }
+			);
+		}
+	};
+
+	const publishSessionImportUnderGate = async (
+		prepared: PreparedSessionBundleImport,
+		options: Readonly<{
+			fileSystem?: SessionBundleImportFileSystem;
+			signal?: AbortSignal;
+		}>,
+		staged: StagedSessionLog,
+		identity: string,
+		publication: SessionImportPublicationState
+	): Promise<SessionBundleImportResult> => {
+		throwIfAborted(options.signal, "Session bundle import was cancelled.");
+		const sessionId = prepared.bundle.session.id;
+		await assertSessionImportTargetAvailable(sessionId);
+		const marker = await readSessionImportActivationMarker(logRoot, sessionId);
+		if (marker !== undefined) {
+			assertSessionImportMarkerMatchesBundle(marker, prepared, identity);
+		}
+		const current = await inspectSessionBundleImportTarget(sessionId);
+		if (current !== undefined) {
+			assertSessionImportTargetMatchesBundle(current, prepared, identity);
+			if (marker === undefined) {
+				if (!projection.isBoundToWorkspace(sessionId)) {
+					throw new SessionBundleImportConflictError(
+						"An existing Session without an import marker cannot be rebound."
+					);
+				}
+				await assertImportedBundleAttachmentsAvailable(
+					prepared,
+					options.signal
+				);
+				await ensureProjected(sessionId);
+				return { activationPending: false, sessionId, status: "unchanged" };
+			}
+			projection.bindSessionToWorkspace(sessionId);
+			await ensureProjected(sessionId);
+			return { activationPending: true, sessionId, status: "unchanged" };
+		}
+		projection.bindSessionToWorkspace(sessionId);
+		if (marker === undefined) {
+			await writeSessionImportActivationMarker(
+				logRoot,
+				{
+					activationOperationId: `import-activate-${randomUUIDv7()}`,
+					bundleIdentity: identity,
+					cutHash: prepared.bundle.cut.hash,
+					cutSequence: prepared.bundle.cut.sequence,
+					logId: prepared.bundle.session.logId,
+					sessionId,
+					version: 1,
+					workspaceId: projection.workspaceId,
+				},
+				fileIo
+			);
+		}
+		await options.fileSystem?.afterActivationMarker?.();
+		throwIfAborted(options.signal, "Session bundle import was cancelled.");
+		await publishStagedSessionImportLog(prepared, options, staged, publication);
+		return { activationPending: true, sessionId, status: "imported" };
+	};
+
+	const publishStagedSessionImport = async (
+		prepared: PreparedSessionBundleImport,
+		options: Readonly<{
+			fileSystem?: SessionBundleImportFileSystem;
+			signal?: AbortSignal;
+		}>,
+		staged: StagedSessionLog,
+		identity: string,
+		publication: SessionImportPublicationState
+	): Promise<SessionBundleImportResult> => {
+		const sessionId = prepared.bundle.session.id;
+		return await withTemporaryWriter(
+			sessionId,
+			async () =>
+				await withSessionCatalogLifecycleGate(
+					logRoot,
+					async () =>
+						await publishSessionImportUnderGate(
+							prepared,
+							options,
+							staged,
+							identity,
+							publication
+						)
+				),
+			undefined,
+			false
+		);
+	};
+
+	const releaseSessionImportResources = async (
+		leases: readonly AttachmentIngestLease[],
+		staged: StagedSessionLog | undefined,
+		publication: SessionImportPublicationState
+	): Promise<unknown | undefined> => {
+		let cleanupFailure: unknown;
+		for (const lease of leases) {
+			try {
+				await lease.release();
+			} catch (error) {
+				cleanupFailure ??= error;
+			}
+		}
+		if (staged !== undefined && !publication.logPublished) {
+			try {
+				await fs.rm(staged.directory, { force: true, recursive: true });
+				await syncDirectory(staged.root, fileIo);
+			} catch (error) {
+				cleanupFailure ??= error;
+			}
+		}
+		return cleanupFailure;
+	};
+
+	const importNewSessionBundle = async (
+		prepared: PreparedSessionBundleImport,
+		options: Readonly<{
+			fileSystem?: SessionBundleImportFileSystem;
+			signal?: AbortSignal;
+		}>,
+		identity: string
+	): Promise<SessionBundleImportResult> => {
+		const leases = await ingestSessionBundleAttachments(prepared, options);
+		const publication: SessionImportPublicationState = { logPublished: false };
+		let staged: StagedSessionLog | undefined;
+		let result: SessionBundleImportResult | undefined;
+		let failure: unknown;
+		try {
+			await options.fileSystem?.afterAttachmentsStaged?.();
+			throwIfAborted(options.signal, "Session bundle import was cancelled.");
+			staged = await stageSessionLog(
+				await fs.realpath(logRoot),
+				prepared.bundle.session.id,
+				validSessionId(prepared.bundle.session.id),
+				`import-${randomUUIDv7()}`,
+				prepared.logBytes,
+				fileIo
+			);
+			result = await publishStagedSessionImport(
+				prepared,
+				options,
+				staged,
+				identity,
+				publication
+			);
+		} catch (error) {
+			failure = error;
+		}
+		const cleanupFailure = await releaseSessionImportResources(
+			leases,
+			staged,
+			publication
+		);
+		if (cleanupFailure !== undefined) {
+			failure = publication.logPublished
+				? new SessionBundleImportIndeterminateError(
+						"Session bundle was published, but import cleanup did not complete.",
+						{ cause: cleanupFailure }
+					)
+				: (failure ?? cleanupFailure);
+		}
+		if (
+			failure !== undefined &&
+			publication.logPublished &&
+			!(failure instanceof SessionBundleImportIndeterminateError)
+		) {
+			failure = new SessionBundleImportIndeterminateError(
+				"Session bundle was published, but its import receipt could not be confirmed.",
+				{ cause: failure }
+			);
+		}
+		if (failure !== undefined) {
+			throw failure;
+		}
+		if (result === undefined) {
+			throw new Error("Session bundle import completed without a receipt.");
+		}
+		return result;
+	};
+
+	const importSessionBundle = async (
+		bundlePath: string,
+		options: Readonly<{
+			fileSystem?: SessionBundleImportFileSystem;
+			signal?: AbortSignal;
+		}>
+	): Promise<SessionBundleImportResult> => {
+		throwIfAborted(options.signal, "Session bundle import was cancelled.");
+		const prepared = await prepareSessionBundleImport(bundlePath);
+		throwIfAborted(options.signal, "Session bundle import was cancelled.");
+		const identity = sessionBundleImportIdentity(prepared);
+		await ensureDirectoryDurable(logRoot);
+		const existing = await recoverExistingSessionImport(
+			prepared,
+			options,
+			identity
+		);
+		if (existing !== undefined) {
+			return existing;
+		}
+		return await importNewSessionBundle(prepared, options, identity);
+	};
+
 	const commitWrite = async (
 		sessionId: SessionId,
 		write: SessionWrite
@@ -3189,20 +5237,123 @@ export const createSessionJsonlStore = (
 		}
 	};
 
+	const isSessionImportActivationPending = async (
+		sessionId: SessionId
+	): Promise<boolean> =>
+		(await readSessionImportActivationMarker(logRoot, sessionId)) !== undefined;
+
+	const isSessionImported = async (sessionId: SessionId): Promise<boolean> =>
+		(await isSessionImportActivationPending(sessionId)) ||
+		projection.isSessionImportActivationConfirmed(sessionId);
+
+	const confirmSessionImportActivation = async (
+		sessionId: SessionId
+	): Promise<void> =>
+		withTemporaryWriter(
+			sessionId,
+			async () => {
+				await checkDeletedMarker(sessionId);
+				const marker = await readSessionImportActivationMarker(
+					logRoot,
+					sessionId
+				);
+				if (marker === undefined) {
+					return;
+				}
+				if (
+					marker.workspaceId !== projection.workspaceId ||
+					!projection.isBoundToWorkspace(sessionId)
+				) {
+					throw new SessionBundleImportConflictError(
+						"Imported Session is not bound to this local workspace."
+					);
+				}
+				await ensureProjected(sessionId);
+				const logPath = path.join(
+					await fs.realpath(logRoot),
+					validSessionId(sessionId),
+					"session.jsonl"
+				);
+				const { state } = await readLog(logPath, sessionId);
+				const importedCut = state.entries.find(
+					({ envelope }) => envelope.sequence === marker.cutSequence
+				);
+				if (
+					state.logId !== marker.logId ||
+					importedCut?.envelope.entryHash !== marker.cutHash
+				) {
+					throw new SessionBundleImportConflictError(
+						"Imported Session log no longer matches its durable activation marker."
+					);
+				}
+				const previousActivation = state.entries.find(
+					({ envelope }) =>
+						envelope.operationId === marker.activationOperationId
+				);
+				if (previousActivation === undefined) {
+					const outcome = await commitWrite(sessionId, {
+						operationId: marker.activationOperationId,
+						payload: { bundleIdentity: marker.bundleIdentity },
+						type: "session.activation-confirmed",
+					});
+					requireSessionWriteReady(outcome);
+				} else if (
+					previousActivation.envelope.type !== "session.activation-confirmed" ||
+					previousActivation.envelope.sequence <= marker.cutSequence ||
+					previousActivation.envelope.payload.bundleIdentity !==
+						marker.bundleIdentity
+				) {
+					throw new SessionBundleImportConflictError(
+						"Imported Session activation operation conflicts with its historical log."
+					);
+				}
+				await ensureProjected(sessionId);
+				await removeSessionImportActivationMarker(logRoot, sessionId, fileIo);
+			},
+			undefined,
+			true
+		);
+
 	const projectCreation = (created: CommittedLogEntry): SessionWriteOutcome => {
 		if (created.receiptBlocked) {
 			return toReceipt(created.entry, "blocked");
 		}
+		const sessionId = created.entry.envelope.sessionId;
 		try {
-			const cursor = projection.getCursor(created.entry.envelope.sessionId);
+			const generation = projection.getMaintenanceState().generation;
+			const cursor = projection.getCursor(sessionId);
+			if (projectionMatchesState(cursor, created.state, generation)) {
+				return toReceipt(created.entry, "ready");
+			}
+			const replace = cursor === undefined || cursor.generation !== generation;
+			const pendingEntries = replace
+				? created.state.entries
+				: created.state.entries.filter(
+						({ envelope }) => envelope.sequence >= cursor.nextSequence
+					);
 			projection.projectEntries(
-				created.entry.envelope.sessionId,
-				created.state.entries,
+				sessionId,
+				pendingEntries,
 				created.state,
-				cursor
+				cursor,
+				replace ? "replace" : "append"
+			);
+			assertProjectionAtLogHead(
+				sessionId,
+				projection.getCursor(sessionId),
+				created.state
 			);
 			return toReceipt(created.entry, "ready");
 		} catch {
+			if (
+				projectionMatchesState(
+					projection.getCursor(sessionId),
+					created.state,
+					projection.getMaintenanceState().generation
+				)
+			) {
+				return toReceipt(created.entry, "ready");
+			}
 			return toReceipt(created.entry, "blocked");
 		}
 	};
@@ -3792,6 +5943,31 @@ export const createSessionJsonlStore = (
 		}
 		return { logId: state.logId, receipt: writeOutcome };
 	};
+	const clearPendingDeletionWriteIntent = async (
+		sessionId: SessionId,
+		operationId: string
+	): Promise<void> => {
+		const pendingIntent = await readSessionWriteIntent(
+			logRoot,
+			sessionId,
+			fileIo
+		);
+		if (pendingIntent === undefined) {
+			return;
+		}
+		if (
+			pendingIntent.type !== "session.deleted" ||
+			pendingIntent.operationId !== operationId
+		) {
+			throw new SessionLogError(
+				"session_operation_conflict",
+				sessionId,
+				"Session deletion conflicts with a different pending Session write."
+			);
+		}
+		await clearSessionWriteIntent(logRoot, pendingIntent, fileIo);
+	};
+
 	const removeDeletedSessionLog = async (
 		sessionId: SessionId,
 		marker: Readonly<{ logId: string; receipt: SessionDeletionReceipt }>
@@ -3808,6 +5984,10 @@ export const createSessionJsonlStore = (
 				fileIo
 			);
 			markerDurable = true;
+			await clearPendingDeletionWriteIntent(
+				sessionId,
+				marker.receipt.operationId
+			);
 			const sessionDirectory = path.join(root, validSessionId(sessionId));
 			const remove = fileIo.remove ?? fs.rm;
 			await remove(sessionDirectory, { force: true, recursive: true });
@@ -3853,64 +6033,72 @@ export const createSessionJsonlStore = (
 		let receipt: SessionWriteReceipt | undefined;
 		let markerDurable = false;
 		try {
-			return await withTemporaryWriter(sessionId, async () => {
-				let logRemoved = false;
-				let writeOutcome: SessionWriteOutcome | undefined;
-				await withSessionCatalogLifecycleGate(logRoot, async () => {
-					const marker = await readDeletedMarker(logRoot, sessionId);
-					if (marker !== undefined) {
+			return await withTemporaryWriter(
+				sessionId,
+				async () => {
+					let logRemoved = false;
+					let writeOutcome: SessionWriteOutcome | undefined;
+					await withSessionCatalogLifecycleGate(logRoot, async () => {
+						const marker = await readDeletedMarker(logRoot, sessionId);
+						if (marker !== undefined) {
+							receipt = {
+								entryHash: marker.entryHash,
+								kind: "committed",
+								operationId: marker.operationId,
+								projection: "blocked",
+								sequence: marker.sequence,
+							};
+							const cleanup = await removeDeletedSessionLog(sessionId, {
+								logId: marker.logId,
+								receipt: marker,
+							});
+							markerDurable = cleanup.markerDurable;
+							logRemoved = cleanup.logRemoved;
+							if (markerDurable) {
+								projectionStore.markSessionDeleted(sessionId);
+							}
+							return;
+						}
+						await assertSessionWritable(sessionId);
+						const deletion = await deletionWrite(sessionId, operationId);
+						if ("writeOutcome" in deletion) {
+							writeOutcome = deletion.writeOutcome;
+							return;
+						}
 						receipt = {
-							entryHash: marker.entryHash,
+							...deletion.receipt,
 							kind: "committed",
-							operationId: marker.operationId,
 							projection: "blocked",
-							sequence: marker.sequence,
 						};
 						const cleanup = await removeDeletedSessionLog(sessionId, {
-							logId: marker.logId,
-							receipt: marker,
+							logId: deletion.logId,
+							receipt: deletion.receipt,
 						});
 						markerDurable = cleanup.markerDurable;
 						logRemoved = cleanup.logRemoved;
 						if (markerDurable) {
 							projectionStore.markSessionDeleted(sessionId);
 						}
-						return;
-					}
-					await assertSessionWritable(sessionId);
-					const deletion = await deletionWrite(sessionId, operationId);
-					if ("writeOutcome" in deletion) {
-						writeOutcome = deletion.writeOutcome;
-						return;
-					}
-					receipt = {
-						...deletion.receipt,
-						kind: "committed",
-						projection: "blocked",
-					};
-					const cleanup = await removeDeletedSessionLog(sessionId, {
-						logId: deletion.logId,
-						receipt: deletion.receipt,
 					});
-					markerDurable = cleanup.markerDurable;
-					logRemoved = cleanup.logRemoved;
-					if (markerDurable) {
-						projectionStore.markSessionDeleted(sessionId);
+					if (writeOutcome !== undefined) {
+						return writeOutcome;
 					}
-				});
-				if (writeOutcome !== undefined) {
-					return writeOutcome;
-				}
-				if (receipt === undefined) {
-					throw new Error("The committed Session deletion receipt is missing.");
-				}
-				return await finalizeDeletion(
-					sessionId,
-					receipt,
-					markerDurable,
-					logRemoved
-				);
-			});
+					if (receipt === undefined) {
+						throw new Error(
+							"The committed Session deletion receipt is missing."
+						);
+					}
+					return await finalizeDeletion(
+						sessionId,
+						receipt,
+						markerDurable,
+						logRemoved
+					);
+				},
+				undefined,
+				true,
+				() => testObserver?.onSessionDeletionWriterOperationEnqueued?.()
+			);
 		} catch (error) {
 			if (receipt === undefined) {
 				return sessionWriteOutcomeFromError(operationId, error);
@@ -3988,19 +6176,47 @@ export const createSessionJsonlStore = (
 		};
 	};
 
-	const readWorkspaceCatalogSnapshot = async (): Promise<
-		Readonly<{ deleted: SessionId[]; published: SessionId[] }>
+	const findPendingDeletionIntentSessionIds = async (): Promise<
+		SessionId[]
 	> => {
-		const boundSessionIds = new Set(projection.listBoundSessionIds());
-		const published = await findSessionLogIds();
-		return {
-			deleted: (await findDeletedMarkerSessionIds()).filter((sessionId) =>
-				boundSessionIds.has(sessionId)
-			),
-			published: published.filter((sessionId) =>
-				boundSessionIds.has(sessionId)
-			),
-		};
+		const intentRoot = path.join(
+			await sessionControlRoot(logRoot),
+			"indeterminate"
+		);
+		let entries: string[];
+		try {
+			entries = await fs.readdir(intentRoot);
+		} catch (error) {
+			if (isCode(error, "ENOENT")) {
+				return [];
+			}
+			throw error;
+		}
+		const candidates = entries
+			.filter((entry) => entry.endsWith(".json"))
+			.map((entry) => toSessionId(entry.slice(0, -".json".length)))
+			.filter(
+				(sessionId) =>
+					isValidSessionId(sessionId) &&
+					projection.isBoundToWorkspace(sessionId)
+			)
+			.sort();
+		const pending: SessionId[] = [];
+		for (const sessionId of candidates) {
+			const intent = await readSessionWriteIntent(logRoot, sessionId, fileIo);
+			if (intent?.type !== "session.deleted") {
+				continue;
+			}
+			if (intent.operationId !== sessionDeletionOperationId(sessionId)) {
+				throw new SessionLogError(
+					"session_operation_conflict",
+					sessionId,
+					"Pending Session deletion intent has an unexpected operation ID."
+				);
+			}
+			pending.push(sessionId);
+		}
+		return pending;
 	};
 
 	const findResetSessionIds = async (): Promise<SessionId[]> =>
@@ -4076,6 +6292,7 @@ export const createSessionJsonlStore = (
 			receipt = existingMarker;
 			await writeDeletedMarker(logRoot, sessionId, logId, receipt, fileIo);
 		}
+		await clearPendingDeletionWriteIntent(sessionId, receipt.operationId);
 		const remove = fileIo.remove ?? fs.rm;
 		await remove(directory, { force: true, recursive: true });
 		await syncDirectory(root, fileIo);
@@ -4263,7 +6480,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId
 	): Promise<void> => {
 		try {
-			await ensureProjected(sessionId);
+			await ensureProjectionCaughtUp(sessionId);
 		} catch (error) {
 			if (isCode(error, "session_deleted")) {
 				return;
@@ -4311,9 +6528,122 @@ export const createSessionJsonlStore = (
 		await ensureCatalogSessionProjected(sessionId);
 	};
 
+	const listPendingSessionWriteIntentIds = async (): Promise<SessionId[]> => {
+		let markerNames: string[];
+		try {
+			markerNames = await fs.readdir(
+				path.join(await sessionControlRoot(logRoot), "indeterminate")
+			);
+		} catch (error) {
+			if (isCode(error, "ENOENT")) {
+				return [];
+			}
+			throw error;
+		}
+		const sessionIds: SessionId[] = [];
+		for (const markerName of markerNames) {
+			if (!markerName.endsWith(".json")) {
+				continue;
+			}
+			const sessionIdValue = markerName.slice(0, -".json".length);
+			if (isValidSessionId(sessionIdValue)) {
+				sessionIds.push(toSessionId(sessionIdValue));
+			}
+		}
+		return sessionIds;
+	};
+
+	const assertPublishedSessionCreationLogExists = async (
+		root: string,
+		sessionId: SessionId,
+		intent: SessionWriteIntent
+	): Promise<boolean> => {
+		const directoryPath = path.join(root, validSessionId(sessionId));
+		const directoryInfo = await fs.lstat(directoryPath).catch((error) => {
+			if (isCode(error, "ENOENT")) {
+				return;
+			}
+			throw error;
+		});
+		if (directoryInfo === undefined) {
+			return false;
+		}
+		if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				sessionId,
+				"Published Session creation has an invalid log directory."
+			);
+		}
+		const logPath = path.join(directoryPath, "session.jsonl");
+		const logInfo = await fs.lstat(logPath).catch((error) => {
+			if (isCode(error, "ENOENT")) {
+				throw new SessionLogError(
+					"session_log_corrupt",
+					sessionId,
+					"Published Session creation is missing its authoritative log.",
+					{
+						offset: intent.expectedOffset,
+						operationId: intent.operationId,
+						sequence: intent.sequence,
+					}
+				);
+			}
+			throw error;
+		});
+		if (!logInfo.isFile() || logInfo.isSymbolicLink()) {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				sessionId,
+				"Published Session creation has an invalid authoritative log file."
+			);
+		}
+		return true;
+	};
+
+	const assertNoUnresolvedOwnedSessionCreations = async (
+		root: string
+	): Promise<void> => {
+		for (const sessionId of await listPendingSessionWriteIntentIds()) {
+			if (
+				projection.isBoundToWorkspace(sessionId) ||
+				projection.isBoundToAnotherWorkspace(sessionId)
+			) {
+				continue;
+			}
+			const intent = await readSessionWriteIntent(logRoot, sessionId, fileIo);
+			if (
+				intent?.type !== "session.created" ||
+				intent.workspaceId !== projection.workspaceId
+			) {
+				continue;
+			}
+			if (
+				!(await assertPublishedSessionCreationLogExists(
+					root,
+					sessionId,
+					intent
+				))
+			) {
+				continue;
+			}
+			throw new SessionLogError(
+				"session_log_write_indeterminate",
+				sessionId,
+				"Published Session creation must be retried before its catalog entry can be read.",
+				{
+					offset: intent.expectedOffset,
+					operationId: intent.operationId,
+					sequence: intent.sequence,
+				}
+			);
+		}
+	};
+
 	const ensureBoundCatalogLogsProjected = async (): Promise<void> => {
 		await ensureDirectoryDurable(logRoot);
 		const root = await fs.realpath(logRoot);
+		await assertNoUnresolvedOwnedSessionCreations(root);
 		const generation = projection.getMaintenanceState().generation;
 		for (const sessionId of projection.listBoundSessionIds()) {
 			const logPath = path.join(
@@ -4626,6 +6956,855 @@ export const createSessionJsonlStore = (
 		});
 	};
 
+	const runForkSession = async (
+		sourceSessionId: SessionId,
+		checkpoint: SessionForkCheckpoint,
+		operationId: string,
+		sourceWriterAlreadyHeld: boolean
+	): Promise<SessionForkResult> => {
+		if (!isValidSessionLogIdentifier(operationId)) {
+			throw new SessionForkError(
+				"session_operation_conflict",
+				"Session fork operation ID is invalid.",
+				sourceSessionId,
+				operationId
+			);
+		}
+		const sourceKey = await lockKey(logRoot, sourceSessionId);
+		if (heldWriterKeys.has(sourceKey) !== sourceWriterAlreadyHeld) {
+			throw new SessionForkError(
+				"session_busy",
+				sourceWriterAlreadyHeld
+					? "Session Host does not hold the source writer."
+					: "Session cannot be forked while its Session Host owns the writer.",
+				sourceSessionId,
+				operationId
+			);
+		}
+		const operationDigest = sessionLogOperationDigest("session.forked", {
+			checkpointRecordId: checkpoint.recordId,
+			sourceSessionId,
+		});
+		return forkOperationQueue.run(
+			`${sourceKey}\0fork\0${operationId}`,
+			async () => {
+				const existingIntent = await withSessionCatalogLifecycleGate(
+					logRoot,
+					async () => {
+						const existing = await readSessionForkIntent(
+							logRoot,
+							operationId,
+							sourceSessionId
+						);
+						if (
+							existing !== undefined &&
+							(existing.sourceSessionId !== sourceSessionId ||
+								existing.checkpointRecordId !== checkpoint.recordId ||
+								existing.operationDigest !== operationDigest)
+						) {
+							throw new SessionForkError(
+								"session_operation_conflict",
+								"Session fork operation ID was reused for a different source or checkpoint.",
+								sourceSessionId,
+								operationId
+							);
+						}
+						return existing;
+					}
+				);
+				let operationIntent = existingIntent;
+				let targetSessionId = toSessionId(
+					operationIntent?.targetSessionId ?? randomUUIDv7()
+				);
+				const forkOperationLogId = `fork-${operationIdFileStem(operationId).slice(0, 40)}`;
+				let targetLogPath = path.join(
+					path.resolve(logRoot),
+					validSessionId(targetSessionId),
+					"session.jsonl"
+				);
+				const reconcilePublishedForkCreation = async (
+					createdEntry: SessionLogEntry,
+					publishedBytes: Uint8Array
+				): Promise<void> => {
+					const createdOperationId = `create-${targetSessionId}`;
+					const createdIntent: SessionWriteIntent &
+						Readonly<{ timestamp: string }> = {
+						expectedOffset: 0,
+						operationDigest: creationDigest(createdEntry.envelope.payload),
+						operationId: createdOperationId,
+						sequence: 1,
+						sessionId: targetSessionId,
+						timestamp: createdEntry.envelope.timestamp,
+						type: "session.created",
+						workspaceId: projection.workspaceId,
+					};
+					const pendingIntent = await readSessionWriteIntent(
+						logRoot,
+						targetSessionId,
+						fileIo
+					);
+					if (pendingIntent !== undefined) {
+						assertSameSessionWriteIntent(
+							pendingIntent,
+							createdIntent,
+							targetSessionId
+						);
+					}
+					try {
+						await syncAndVerifyLogPrefix(
+							targetLogPath,
+							publishedBytes,
+							targetSessionId,
+							fileIo
+						);
+						await ensureDurableReceipt(
+							logRoot,
+							targetSessionId,
+							createdEntry,
+							fileIo
+						);
+						if (pendingIntent !== undefined) {
+							await clearSessionWriteIntent(logRoot, createdIntent, fileIo);
+						}
+					} catch (error) {
+						throw indeterminateLogWriteError(
+							targetSessionId,
+							createdIntent,
+							error
+						);
+					}
+				};
+				const publishedForkProjectionReady = async (): Promise<boolean> => {
+					try {
+						await ensureProjected(targetSessionId);
+						return true;
+					} catch (error) {
+						if (!isCode(error, "session_projection_blocked")) {
+							throw error;
+						}
+						return false;
+					}
+				};
+				const returnPublishedFork = async (
+					state: SessionLogState,
+					publishedBytes: Uint8Array
+				): Promise<SessionForkResult> => {
+					const { createdEntry, forked, forkedEntry } =
+						requirePublishedForkEntries(
+							state,
+							sourceSessionId,
+							checkpoint.recordId,
+							operationId,
+							forkOperationLogId
+						);
+					await reconcilePublishedForkCreation(createdEntry, publishedBytes);
+					await checkDeletedMarker(targetSessionId);
+					if (projection.isBoundToAnotherWorkspace(targetSessionId)) {
+						throw new SessionForkError(
+							"session_operation_conflict",
+							"Published fork belongs to another Workspace.",
+							sourceSessionId,
+							operationId
+						);
+					}
+					if (!projection.isBoundToWorkspace(targetSessionId)) {
+						await withSessionCatalogLifecycleGate(logRoot, async () => {
+							await checkDeletedMarker(targetSessionId);
+							projection.bindSessionToWorkspace(targetSessionId);
+						});
+					}
+					const projectionReady = await publishedForkProjectionReady();
+					return {
+						created: false,
+						id: targetSessionId,
+						checkpoint: {
+							recordId: checkpoint.recordId,
+							sequence: forked.sourceSequence,
+							turnId: toAgentTurnId(forked.sourceTurnId),
+						},
+						writeOutcome: toForkReceipt(
+							forkedEntry,
+							operationId,
+							projectionReady ? "ready" : "blocked"
+						),
+					};
+				};
+				if (operationIntent !== undefined) {
+					const existingTarget = await readExistingSessionLog(
+						targetLogPath,
+						targetSessionId
+					);
+					if (existingTarget !== undefined) {
+						return returnPublishedFork(
+							existingTarget.state,
+							existingTarget.bytes
+						);
+					}
+				}
+
+				// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the held source writer spans cut validation, prefix remapping, and staged publication so no source mutation can invalidate the durable fork boundary
+				const forkWithSourceWriter = async (): Promise<SessionForkResult> => {
+					const currentIntent = await withSessionCatalogLifecycleGate(
+						logRoot,
+						() => readSessionForkIntent(logRoot, operationId, sourceSessionId)
+					);
+					if (
+						currentIntent !== undefined &&
+						(currentIntent.sourceSessionId !== sourceSessionId ||
+							currentIntent.checkpointRecordId !== checkpoint.recordId ||
+							currentIntent.operationDigest !== operationDigest)
+					) {
+						throw new SessionForkError(
+							"session_operation_conflict",
+							"Session fork operation ID was reused for a different source or checkpoint.",
+							sourceSessionId,
+							operationId
+						);
+					}
+					operationIntent = currentIntent;
+					if (currentIntent !== undefined) {
+						targetSessionId = toSessionId(currentIntent.targetSessionId);
+						targetLogPath = path.join(
+							path.resolve(logRoot),
+							validSessionId(targetSessionId),
+							"session.jsonl"
+						);
+						const publishedTarget = await readExistingSessionLog(
+							targetLogPath,
+							targetSessionId
+						);
+						if (publishedTarget !== undefined) {
+							return returnPublishedFork(
+								publishedTarget.state,
+								publishedTarget.bytes
+							);
+						}
+					}
+					assertProjectionReady(sourceSessionId);
+					await assertSessionWritable(sourceSessionId);
+					const sourceState = await ensureProjected(sourceSessionId);
+					const checkpointEntry = sourceState.entries.find(
+						(entry) =>
+							recordFromSessionLogEntry(entry)?.id === checkpoint.recordId
+					);
+					if (checkpointEntry === undefined) {
+						throw new SessionForkError(
+							"session_checkpoint_invalid",
+							"Checkpoint Record was not found in the source Session.",
+							sourceSessionId,
+							operationId
+						);
+					}
+					const sourcePrefixEntries = sourceState.entries.filter(
+						({ envelope }) =>
+							envelope.sequence <= checkpointEntry.envelope.sequence
+					);
+					const sourceRecords = sourcePrefixEntries.flatMap((entry) => {
+						const record = recordFromSessionLogEntry(entry);
+						return record === undefined ? [] : [record];
+					});
+					const checkpointAssessment = assessSessionForkCheckpoint(
+						sourceRecords,
+						checkpoint.recordId
+					);
+					if (checkpointAssessment.kind === "invalid") {
+						throw new SessionForkError(
+							"session_checkpoint_invalid",
+							checkpointAssessment.reason,
+							sourceSessionId,
+							operationId
+						);
+					}
+					const checkpointRecord = checkpointAssessment.record;
+					const sourceCreatedEntry = sourcePrefixEntries.find(
+						({ envelope }) => envelope.type === "session.created"
+					);
+					if (sourceCreatedEntry?.envelope.type !== "session.created") {
+						throw new SessionForkError(
+							"session_checkpoint_invalid",
+							"Source Session creation checkpoint is missing.",
+							sourceSessionId,
+							operationId
+						);
+					}
+					const sourceCompactions = sourcePrefixEntries.flatMap((entry) =>
+						entry.envelope.type === "compaction.committed"
+							? [parseSessionCompactionPayload(entry.envelope.payload)]
+							: []
+					);
+					const identityMap = createSessionForkIdentityMap(
+						targetSessionId,
+						sourceRecords,
+						sourceCompactions.map(({ id }) => id)
+					);
+					const copiedSourceCompactionIds = new Set<string>();
+					const remappedCompactions = new Map<
+						string,
+						SessionCompactionPayload
+					>();
+					for (const compaction of sourceCompactions) {
+						const remapped = remapForkCompactionPayload(
+							compaction,
+							remappedCompactions.size + 1,
+							identityMap,
+							copiedSourceCompactionIds
+						);
+						if (remapped !== undefined) {
+							remappedCompactions.set(compaction.id, remapped);
+							copiedSourceCompactionIds.add(compaction.id);
+						}
+					}
+					const remappedRecords = new Map(
+						sourceRecords.map((record) => [
+							record.id,
+							remapForkSessionRecord(record, identityMap),
+						])
+					);
+					const targetCheckpointRecord = remappedRecords.get(
+						checkpointRecord.id
+					);
+					const targetCheckpointMessage = targetCheckpointRecord?.messages[0];
+					const targetCheckpointRecordId = identityMap.records.get(
+						checkpointRecord.id
+					);
+					const targetCheckpointTurnId = identityMap.turns.get(
+						checkpointRecord.turnId
+					);
+					const targetCheckpointMessageId = identityMap.messages.get(
+						checkpointRecord.messages[0]?.id ?? ""
+					);
+					if (
+						targetCheckpointRecord === undefined ||
+						targetCheckpointMessage === undefined ||
+						targetCheckpointRecordId === undefined ||
+						targetCheckpointTurnId === undefined ||
+						targetCheckpointMessageId === undefined
+					) {
+						throw new SessionForkError(
+							"session_checkpoint_invalid",
+							"Terminal assistant checkpoint identities could not be remapped.",
+							sourceSessionId,
+							operationId
+						);
+					}
+					const sourceInitialRecord = sourceCreatedEntry.envelope.payload
+						.initialRecord as SessionRecord | undefined;
+					const targetInitialRecord =
+						sourceInitialRecord === undefined
+							? undefined
+							: remappedRecords.get(sourceInitialRecord.id);
+					const pendingTargetIntent = await readSessionWriteIntent(
+						logRoot,
+						targetSessionId,
+						fileIo
+					);
+					const createdAt =
+						pendingTargetIntent?.type === "session.created" &&
+						pendingTargetIntent.timestamp !== undefined
+							? pendingTargetIntent.timestamp
+							: new Date().toISOString();
+					const {
+						initialRecord: _sourceInitialRecord,
+						...sourceCreationPayload
+					} = sourceCreatedEntry.envelope.payload;
+					const creationPayload = {
+						...sourceCreationPayload,
+						createdAt,
+						...omitUndefined({ initialRecord: targetInitialRecord }),
+					};
+					const forkPayload = {
+						sourceLogId: sourceState.logId,
+						sourceMessageId: checkpointRecord.messages[0]?.id ?? "",
+						sourceRecordId: checkpointRecord.id,
+						sourceSequence: checkpointEntry.envelope.sequence,
+						sourceSessionId,
+						sourceTurnId: checkpointRecord.turnId,
+						targetMessageId: targetCheckpointMessageId,
+						targetRecordId: targetCheckpointRecordId,
+						targetTurnId: targetCheckpointTurnId,
+						inheritedRecordIds: sourceRecords.map((record) =>
+							String(identityMap.records.get(record.id))
+						),
+						inheritedCompactionIds: [...remappedCompactions.values()].map(
+							({ id }) => String(id)
+						),
+						inheritedSubmissions: inheritedForkSubmissionsAtCut(
+							sourcePrefixEntries,
+							sourceRecords,
+							identityMap,
+							sourceSessionId,
+							operationId
+						),
+						inheritedUsage: remapForkUsageTurnIds(
+							inheritedUsageAtFork(
+								sourcePrefixEntries,
+								sourceRecords,
+								sourceSessionId
+							),
+							identityMap
+						),
+					};
+					const logLines: Uint8Array[] = [];
+					let nextSequence = 0;
+					let nextOffset = 0;
+					let previousHash: string | null = null;
+					const appendLine = (envelope: SessionLogEnvelope): void => {
+						const line = encodeSessionLogLine(envelope);
+						logLines.push(line);
+						nextOffset += line.byteLength;
+						nextSequence += 1;
+						previousHash = envelope.entryHash;
+					};
+					const header = createSessionLogHeader(
+						targetSessionId,
+						randomUUIDv7(),
+						createdAt
+					);
+					appendLine(header);
+					const createdOperationId = `create-${targetSessionId}`;
+					const createdEnvelope = createSessionLogEvent({
+						operationId: createdOperationId,
+						payload: creationPayload,
+						previousHash,
+						sequence: nextSequence,
+						sessionId: targetSessionId,
+						timestamp: createdAt,
+						type: "session.created",
+					});
+					appendLine(createdEnvelope);
+					const forkEnvelope = createSessionLogEvent({
+						operationId: forkOperationLogId,
+						payload: forkPayload,
+						previousHash,
+						sequence: nextSequence,
+						sessionId: targetSessionId,
+						timestamp: createdAt,
+						type: "session.forked",
+					});
+					appendLine(forkEnvelope);
+					for (const entry of sourcePrefixEntries) {
+						if (entry.envelope.sequence <= 1) {
+							continue;
+						}
+						const sourceRecord = recordFromSessionLogEntry(entry);
+						if (
+							sourceRecord !== undefined &&
+							sourceRecord.id !== sourceInitialRecord?.id
+						) {
+							const record = remappedRecords.get(sourceRecord.id);
+							if (record === undefined) {
+								throw new SessionForkError(
+									"session_checkpoint_invalid",
+									"A source Session Record could not be remapped.",
+									sourceSessionId,
+									operationId
+								);
+							}
+							const sourcePayload = entry.envelope.payload;
+							const recordEnvelope = createSessionLogEvent({
+								operationId: `record-${record.id}`,
+								payload: {
+									record,
+									...omitUndefined({
+										sessionModel: sourcePayload.sessionModel,
+										sessionThinkingLevel: sourcePayload.sessionThinkingLevel,
+									}),
+								},
+								previousHash,
+								sequence: nextSequence,
+								sessionId: targetSessionId,
+								timestamp: entry.envelope.timestamp,
+								type: "record.committed",
+							});
+							appendLine(recordEnvelope);
+							continue;
+						}
+						if (entry.envelope.type === "compaction.committed") {
+							const sourceCompaction = parseSessionCompactionPayload(
+								entry.envelope.payload
+							);
+							const compaction = remappedCompactions.get(sourceCompaction.id);
+							if (compaction !== undefined) {
+								appendLine(
+									createSessionLogEvent({
+										operationId: `compaction-${compaction.id}`,
+										payload: compaction,
+										previousHash,
+										sequence: nextSequence,
+										sessionId: targetSessionId,
+										timestamp: entry.envelope.timestamp,
+										type: "compaction.committed",
+									})
+								);
+							}
+							continue;
+						}
+						if (entry.envelope.type === "session.metadata-updated") {
+							appendLine(
+								createSessionLogEvent({
+									operationId: `fork-metadata-${entry.envelope.sequence}`,
+									payload: entry.envelope.payload,
+									previousHash,
+									sequence: nextSequence,
+									sessionId: targetSessionId,
+									timestamp: entry.envelope.timestamp,
+									type: "session.metadata-updated",
+								})
+							);
+						}
+					}
+					const logBytes = new Uint8Array(nextOffset);
+					let byteOffset = 0;
+					for (const line of logLines) {
+						logBytes.set(line, byteOffset);
+						byteOffset += line.byteLength;
+					}
+					const targetState = decodeSessionLog(targetSessionId, logBytes);
+					const createdEntry = targetState.entries[1];
+					if (createdEntry === undefined) {
+						throw new SessionForkError(
+							"session_checkpoint_invalid",
+							"Staged fork is missing its creation checkpoint.",
+							sourceSessionId,
+							operationId
+						);
+					}
+					const createdIntent: SessionWriteIntent &
+						Readonly<{ timestamp: string }> = {
+						expectedOffset: 0,
+						operationDigest: creationDigest(creationPayload),
+						operationId: createdOperationId,
+						sequence: 1,
+						sessionId: targetSessionId,
+						timestamp: createdAt,
+						type: "session.created",
+						workspaceId: projection.workspaceId,
+					};
+					if (pendingTargetIntent !== undefined) {
+						assertSameSessionWriteIntent(
+							pendingTargetIntent,
+							createdIntent,
+							targetSessionId
+						);
+					}
+					const canonicalRoot = await fs.realpath(logRoot);
+					const forkIntentCandidate: SessionForkIntent = {
+						checkpointRecordId: checkpoint.recordId,
+						operationDigest,
+						operationId,
+						sourceSessionId,
+						targetSessionId,
+						version: 1,
+					};
+					let forkIntentCreated = false;
+					let publicationAttempted = false;
+					let published = false;
+					let staged: StagedSessionLog | undefined;
+					try {
+						let durableForkIntent = operationIntent;
+						if (durableForkIntent === undefined) {
+							durableForkIntent = await withSessionCatalogLifecycleGate(
+								canonicalRoot,
+								async () => {
+									const existing = await readSessionForkIntent(
+										logRoot,
+										operationId,
+										sourceSessionId
+									);
+									if (
+										existing !== undefined &&
+										(existing.sourceSessionId !== sourceSessionId ||
+											existing.checkpointRecordId !== checkpoint.recordId ||
+											existing.operationDigest !== operationDigest ||
+											existing.targetSessionId !== targetSessionId)
+									) {
+										throw new SessionForkError(
+											"session_operation_conflict",
+											"Session fork operation ID was reused for a different source or checkpoint.",
+											sourceSessionId,
+											operationId
+										);
+									}
+									if (existing !== undefined) {
+										return existing;
+									}
+									forkIntentCreated = true;
+									const created = await writeSessionForkIntent(
+										logRoot,
+										forkIntentCandidate,
+										sourceSessionId,
+										fileIo
+									);
+									if (!Bun.deepEquals(created, forkIntentCandidate, true)) {
+										throw new SessionForkError(
+											"session_operation_conflict",
+											"Session fork operation ID was reused for a different source or checkpoint.",
+											sourceSessionId,
+											operationId
+										);
+									}
+									return created;
+								}
+							);
+						}
+						if (durableForkIntent.targetSessionId !== targetSessionId) {
+							throw new SessionForkError(
+								"session_operation_conflict",
+								"Session fork operation ID was reused for a different target.",
+								sourceSessionId,
+								operationId
+							);
+						}
+						const stagedLog = await stageSessionLog(
+							canonicalRoot,
+							targetSessionId,
+							validSessionId(targetSessionId),
+							createdOperationId,
+							logBytes,
+							fileIo
+						);
+						staged = stagedLog;
+						await writeSessionWriteIntent(logRoot, createdIntent, fileIo);
+						await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
+							await checkDeletedMarker(targetSessionId);
+							if (projection.isBoundToAnotherWorkspace(targetSessionId)) {
+								throw new SessionForkError(
+									"session_operation_conflict",
+									"Fork target belongs to another Workspace.",
+									sourceSessionId,
+									operationId
+								);
+							}
+							publicationAttempted = true;
+							await fs.rename(
+								stagedLog.directory,
+								path.join(canonicalRoot, validSessionId(targetSessionId))
+							);
+							published = true;
+							await syncDirectory(stagedLog.root, fileIo);
+							await syncDirectory(canonicalRoot, fileIo);
+							projection.bindSessionToWorkspace(targetSessionId);
+						});
+						const publishedLog = await readLog(targetLogPath, targetSessionId);
+						await syncAndVerifyLogPrefix(
+							targetLogPath,
+							publishedLog.bytes,
+							targetSessionId,
+							fileIo
+						);
+						try {
+							await ensureDurableReceipt(
+								logRoot,
+								targetSessionId,
+								createdEntry,
+								fileIo
+							);
+							await clearSessionWriteIntent(logRoot, createdIntent, fileIo);
+						} catch (error) {
+							throw indeterminateLogWriteError(
+								targetSessionId,
+								createdIntent,
+								error
+							);
+						}
+						let projectionReady = true;
+						try {
+							projection.projectEntries(
+								targetSessionId,
+								publishedLog.state.entries,
+								publishedLog.state,
+								projection.getCursor(targetSessionId)
+							);
+						} catch {
+							projectionReady = projectionMatchesState(
+								projection.getCursor(targetSessionId),
+								publishedLog.state,
+								projection.getMaintenanceState().generation
+							);
+						}
+						const forkedEntry = publishedLog.state.entries.find(
+							({ envelope }) =>
+								envelope.type === "session.forked" &&
+								envelope.operationId === forkOperationLogId
+						);
+						if (forkedEntry?.envelope.type !== "session.forked") {
+							throw new SessionLogError(
+								"session_log_corrupt",
+								targetSessionId,
+								"Published fork is missing its provenance checkpoint.",
+								{ operationId }
+							);
+						}
+						return {
+							created: true,
+							id: targetSessionId,
+							checkpoint: {
+								recordId: checkpointRecord.id,
+								sequence: checkpointEntry.envelope.sequence,
+								turnId: checkpointRecord.turnId,
+							},
+							writeOutcome: toForkReceipt(
+								forkedEntry,
+								operationId,
+								projectionReady ? "ready" : "blocked"
+							),
+						};
+					} catch (error) {
+						if (published) {
+							if (
+								error instanceof SessionLogError &&
+								error.code === "session_operation_conflict"
+							) {
+								throw error;
+							}
+							throw indeterminateLogWriteError(
+								targetSessionId,
+								createdIntent,
+								error
+							);
+						}
+						if (forkIntentCreated && !publicationAttempted) {
+							try {
+								await clearSessionWriteIntent(logRoot, createdIntent, fileIo);
+								await withSessionCatalogLifecycleGate(canonicalRoot, () =>
+									clearSessionForkIntent(
+										logRoot,
+										forkIntentCandidate,
+										sourceSessionId,
+										fileIo
+									)
+								);
+							} catch (cleanupError) {
+								throw new SessionLogError(
+									"session_log_write_indeterminate",
+									targetSessionId,
+									"Fork failed before publication, but its operation intent could not be cleared.",
+									{ cause: cleanupError, operationId }
+								);
+							}
+						}
+						throw error;
+					} finally {
+						if (staged !== undefined) {
+							await fs
+								.rm(staged.directory, { force: true, recursive: true })
+								.catch(() => undefined);
+						}
+					}
+				};
+				return sourceWriterAlreadyHeld
+					? await forkWithSourceWriter()
+					: await withTemporaryWriter(sourceSessionId, forkWithSourceWriter);
+			}
+		);
+	};
+	const forkSession: SessionStore["forkSession"] = (
+		sourceSessionId,
+		checkpoint,
+		operationId
+	) => runForkSession(sourceSessionId, checkpoint, operationId, false);
+	const forkSessionWithHeldWriter: SessionStore["forkSessionWithHeldWriter"] = (
+		sourceSessionId,
+		checkpoint,
+		operationId
+	) => runForkSession(sourceSessionId, checkpoint, operationId, true);
+
+	const getSessionForkProvenance: SessionStore["getSessionForkProvenance"] =
+		async (sessionId) => {
+			await ensureBoundSessionProjectedIfStale(sessionId);
+			return withSessionCatalogLifecycleGate(logRoot, async () => {
+				await checkDeletedMarker(sessionId);
+				const { state } = await readLog(
+					path.join(
+						await fs.realpath(logRoot),
+						validSessionId(sessionId),
+						"session.jsonl"
+					),
+					sessionId
+				);
+				const forkEntry = state.entries.find(
+					({ envelope }) => envelope.type === "session.forked"
+				);
+				if (forkEntry?.envelope.type !== "session.forked") {
+					return;
+				}
+				const provenance = toSessionForkProvenance(forkEntry.envelope.payload);
+				if (!projection.isBoundToWorkspace(provenance.sourceSessionId)) {
+					return { ...provenance, sourceAvailability: "unavailable" };
+				}
+				try {
+					await checkDeletedMarker(provenance.sourceSessionId);
+					const sourceLog = await readLogForProjection(
+						path.join(
+							await fs.realpath(logRoot),
+							validSessionId(provenance.sourceSessionId),
+							"session.jsonl"
+						),
+						provenance.sourceSessionId
+					);
+					return {
+						...provenance,
+						sourceAvailability:
+							sourceLog.state.logId === provenance.sourceLogId
+								? "available"
+								: "unavailable",
+					};
+				} catch {
+					return { ...provenance, sourceAvailability: "unavailable" };
+				}
+			});
+		};
+	const getOrCreateSessionForkActionId: SessionStore["getOrCreateSessionForkActionId"] =
+		async (sourceSessionId, checkpoint) =>
+			withSessionCatalogLifecycleGate(logRoot, async () => {
+				const existing = await readSessionForkAction(
+					logRoot,
+					sourceSessionId,
+					checkpoint
+				);
+				if (existing !== undefined) {
+					return existing.operationId;
+				}
+				const candidate: SessionForkAction = {
+					checkpointRecordId: checkpoint.recordId,
+					operationId: `ui-fork-${randomUUIDv7()}`,
+					sourceSessionId,
+					version: 1,
+				};
+				const created = await writeSessionForkAction(
+					logRoot,
+					candidate,
+					checkpoint,
+					fileIo
+				);
+				if (
+					created.sourceSessionId !== sourceSessionId ||
+					created.checkpointRecordId !== checkpoint.recordId
+				) {
+					throw new SessionForkError(
+						"session_operation_conflict",
+						"Session fork action identity conflicts with its source checkpoint.",
+						sourceSessionId,
+						created.operationId
+					);
+				}
+				return created.operationId;
+			});
+	const completeSessionForkAction: SessionStore["completeSessionForkAction"] = (
+		sourceSessionId,
+		checkpoint,
+		operationId
+	) =>
+		withSessionCatalogLifecycleGate(logRoot, () =>
+			clearSessionForkAction(
+				logRoot,
+				sourceSessionId,
+				checkpoint,
+				operationId,
+				fileIo
+			)
+		);
+
 	const getSessionStatistics: SessionStore["getSessionStatistics"] = async (
 		sessionId,
 		options: SessionStatisticsOptions = {}
@@ -4659,35 +7838,30 @@ export const createSessionJsonlStore = (
 			const statisticsProjection =
 				projectionStore.readSessionStatisticsProjection(
 					sessionId,
-					requestedReadPoint
+					requestedReadPoint,
+					options.turnId
 				);
+			const forkProvenance =
+				statisticsProjection.forkProvenance === undefined
+					? undefined
+					: toSessionForkProvenance(statisticsProjection.forkProvenance);
 			return buildSessionStatistics({
 				compactions: statisticsProjection.compactions,
+				inheritedCompactionIds: new Set(
+					forkProvenance?.inheritedCompactionIds.map(String) ?? []
+				),
+				inheritedRecordIds: new Set(
+					forkProvenance?.inheritedRecordIds.map(String) ?? []
+				),
+				inheritedUsage: forkProvenance?.inheritedUsage,
 				readPoint: encodeSessionPageToken(statisticsProjection.readPoint),
 				records: statisticsProjection.records,
 				sessionId,
+				summary: statisticsProjection.summary,
 				...(options.turnId === undefined ? {} : { turnId: options.turnId }),
 				usageEntries: statisticsProjection.usageEntries,
 			});
 		});
-	};
-
-	const logHasDeletionEvent = async (
-		sessionId: SessionId,
-		root: string
-	): Promise<boolean> => {
-		try {
-			const { state } = await readLog(
-				path.join(root, sessionId, "session.jsonl"),
-				sessionId
-			);
-			return state.entries.some(
-				({ envelope }) => envelope.type === "session.deleted"
-			);
-		} catch {
-			// Invalid logs remain visible to the rebuild as per-Session issues.
-			return false;
-		}
 	};
 
 	const reconcileDeletedSession = async (
@@ -4730,17 +7904,13 @@ export const createSessionJsonlStore = (
 	};
 
 	const reconcileDeletedSessions = async (): Promise<SessionCatalogIssue[]> => {
-		const snapshot = await readWorkspaceCatalogSnapshot();
-		const root = await fs.realpath(logRoot);
-		const deletedSessionIds = new Set(snapshot.deleted);
-		for (const sessionId of snapshot.published) {
-			if (
-				isValidSessionId(sessionId) &&
-				!deletedSessionIds.has(sessionId) &&
-				(await logHasDeletionEvent(sessionId, root))
-			) {
-				deletedSessionIds.add(sessionId);
-			}
+		const deletedSessionIds = new Set(
+			(await findDeletedMarkerSessionIds()).filter((sessionId) =>
+				projection.isBoundToWorkspace(sessionId)
+			)
+		);
+		for (const sessionId of await findPendingDeletionIntentSessionIds()) {
+			deletedSessionIds.add(sessionId);
 		}
 		return reconcileDeletedSessionIds(deletedSessionIds);
 	};
@@ -4748,18 +7918,9 @@ export const createSessionJsonlStore = (
 	const reconcileDeletedSessionsForRebuild = async (): Promise<
 		SessionCatalogIssue[]
 	> => {
-		const snapshot = await readCatalogSnapshot();
-		const root = await fs.realpath(logRoot);
-		const deletedSessionIds = new Set(snapshot.deleted);
-		for (const sessionId of snapshot.published) {
-			if (
-				projection.isBoundToWorkspace(sessionId) &&
-				isValidSessionId(sessionId) &&
-				!deletedSessionIds.has(sessionId) &&
-				(await logHasDeletionEvent(sessionId, root))
-			) {
-				deletedSessionIds.add(sessionId);
-			}
+		const deletedSessionIds = new Set(await findDeletedMarkerSessionIds());
+		for (const sessionId of await findPendingDeletionIntentSessionIds()) {
+			deletedSessionIds.add(sessionId);
 		}
 		return reconcileDeletedSessionIds(deletedSessionIds);
 	};
@@ -4771,10 +7932,12 @@ export const createSessionJsonlStore = (
 			return;
 		}
 		const marker = await readDeletedMarker(logRoot, sessionId);
-		const hasDeletionEvent =
-			marker !== undefined ||
-			(await logHasDeletionEvent(sessionId, await fs.realpath(logRoot)));
-		if (!hasDeletionEvent) {
+		const pendingIntent = await readSessionWriteIntent(
+			logRoot,
+			sessionId,
+			fileIo
+		);
+		if (marker === undefined && pendingIntent?.type !== "session.deleted") {
 			return;
 		}
 		const issue = await reconcileDeletedSession(sessionId);
@@ -5016,6 +8179,11 @@ export const createSessionJsonlStore = (
 		createSessionUsageEntry,
 		deleteSession,
 		findSessionRecordBySubmissionId,
+		forkSession,
+		forkSessionWithHeldWriter,
+		getOrCreateSessionForkActionId,
+		completeSessionForkAction,
+		getSessionForkProvenance,
 		getCompactions: wrapRead(projectionStore.getCompactions),
 		getLatestCompaction: wrapRead(projectionStore.getLatestCompaction),
 		getSession: wrapRead(projectionStore.getSession),
@@ -5030,6 +8198,11 @@ export const createSessionJsonlStore = (
 		getSessionStatistics,
 		listSessionUsageEntries: wrapRead(projectionStore.listSessionUsageEntries),
 		listSessions,
+		withSessionBundleExport,
+		withSessionBundleImport: importSessionBundle,
+		isSessionImportActivationPending,
+		isSessionImported,
+		confirmSessionImportActivation,
 		rebuildProjection,
 		resetSessionData,
 		setEditMode,
@@ -5059,6 +8232,179 @@ function deletionReceiptFromEntry(
 
 type SessionDeletionMarker = SessionDeletionReceipt &
 	Readonly<{ logId: string }>;
+
+type SessionImportActivationMarker = Readonly<{
+	activationOperationId: string;
+	bundleIdentity: string;
+	cutHash: string;
+	cutSequence: number;
+	logId: string;
+	sessionId: SessionId;
+	version: 1;
+	workspaceId: WorkspaceId;
+}>;
+
+const sessionImportActivationMarkerPath = async (
+	logRoot: string,
+	sessionId: SessionId
+): Promise<string> =>
+	path.join(
+		await sessionControlRoot(logRoot),
+		"imports",
+		`${validSessionId(sessionId)}.json`
+	);
+
+const readSessionImportActivationMarker = async (
+	logRoot: string,
+	sessionId: SessionId
+): Promise<SessionImportActivationMarker | undefined> => {
+	const markerPath = await sessionImportActivationMarkerPath(
+		logRoot,
+		sessionId
+	);
+	let markerText: string;
+	try {
+		markerText = await readUtf8File(markerPath);
+	} catch (error) {
+		if (isCode(error, "ENOENT")) {
+			return;
+		}
+		throw error;
+	}
+	let value: unknown;
+	try {
+		value = JSON.parse(markerText) as unknown;
+	} catch (error) {
+		throw new SessionBundleImportConflictError(
+			"Session import activation marker is invalid.",
+			{ cause: error }
+		);
+	}
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new SessionBundleImportConflictError(
+			"Session import activation marker is invalid."
+		);
+	}
+	const marker = value as Record<string, unknown>;
+	const expectedKeys = [
+		"activationOperationId",
+		"bundleIdentity",
+		"cutHash",
+		"cutSequence",
+		"logId",
+		"sessionId",
+		"version",
+		"workspaceId",
+	].sort();
+	if (
+		Object.keys(marker).sort().join("\0") !== expectedKeys.join("\0") ||
+		marker.version !== 1 ||
+		marker.sessionId !== sessionId ||
+		typeof marker.workspaceId !== "string" ||
+		marker.workspaceId.length === 0 ||
+		typeof marker.logId !== "string" ||
+		marker.logId.length === 0 ||
+		typeof marker.activationOperationId !== "string" ||
+		!isValidSessionLogIdentifier(marker.activationOperationId) ||
+		typeof marker.bundleIdentity !== "string" ||
+		!SESSION_LOG_HASH_PATTERN.test(marker.bundleIdentity) ||
+		typeof marker.cutHash !== "string" ||
+		!SESSION_LOG_HASH_PATTERN.test(marker.cutHash) ||
+		typeof marker.cutSequence !== "number" ||
+		!Number.isSafeInteger(marker.cutSequence) ||
+		marker.cutSequence < 1
+	) {
+		throw new SessionBundleImportConflictError(
+			"Session import activation marker is invalid."
+		);
+	}
+	return {
+		activationOperationId: marker.activationOperationId,
+		bundleIdentity: marker.bundleIdentity,
+		cutHash: marker.cutHash,
+		cutSequence: marker.cutSequence,
+		logId: marker.logId,
+		sessionId,
+		version: 1,
+		workspaceId: toWorkspaceId(marker.workspaceId),
+	};
+};
+
+const writeSessionImportActivationMarker = async (
+	logRoot: string,
+	marker: SessionImportActivationMarker,
+	fileIo: SessionLogFileIo
+): Promise<void> => {
+	const controlRoot = await sessionControlRoot(logRoot);
+	const importRoot = path.join(controlRoot, "imports");
+	await ensureDirectoryDurable(controlRoot, 0o700, fileIo);
+	await ensureDirectoryDurable(importRoot, 0o700, fileIo);
+	const markerPath = await sessionImportActivationMarkerPath(
+		logRoot,
+		marker.sessionId
+	);
+	const temporaryPath = `${markerPath}.${randomUUIDv7()}.tmp`;
+	let handle: fs.FileHandle | undefined;
+	try {
+		handle = await fs.open(temporaryPath, "wx", 0o600);
+		const bytes = new TextEncoder().encode(
+			`${encodeCanonicalSessionJson(marker)}\n`
+		);
+		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
+		await syncFile(temporaryPath, handle, fileIo);
+		await handle.close();
+		handle = undefined;
+		try {
+			await fs.link(temporaryPath, markerPath);
+		} catch (error) {
+			if (!isCode(error, "EEXIST")) {
+				throw error;
+			}
+			const existing = await readSessionImportActivationMarker(
+				logRoot,
+				marker.sessionId
+			);
+			if (
+				existing === undefined ||
+				existing.bundleIdentity !== marker.bundleIdentity ||
+				existing.workspaceId !== marker.workspaceId ||
+				existing.logId !== marker.logId ||
+				existing.cutHash !== marker.cutHash ||
+				existing.cutSequence !== marker.cutSequence
+			) {
+				throw new SessionBundleImportConflictError(
+					"A durable Session import activation marker conflicts with this bundle."
+				);
+			}
+		}
+		await syncDirectory(importRoot, fileIo);
+		await fs.unlink(temporaryPath);
+		await syncDirectory(importRoot, fileIo);
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+		throw error;
+	}
+};
+
+const removeSessionImportActivationMarker = async (
+	logRoot: string,
+	sessionId: SessionId,
+	fileIo: SessionLogFileIo
+): Promise<void> => {
+	const markerPath = await sessionImportActivationMarkerPath(
+		logRoot,
+		sessionId
+	);
+	try {
+		await fs.unlink(markerPath);
+	} catch (error) {
+		if (!isCode(error, "ENOENT")) {
+			throw error;
+		}
+	}
+	await syncDirectory(path.dirname(markerPath), fileIo);
+};
 
 const readDeletedMarker = async (
 	logRoot: string,

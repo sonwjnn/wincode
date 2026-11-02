@@ -1519,7 +1519,7 @@ test("RPC session/open preserves the structured JSONL corruption code", async ()
 		sessionId,
 		"session.jsonl"
 	);
-	await fs.writeFile(logPath, '{"not":"a valid envelope"}\n');
+	await fs.writeFile(logPath, '{"formatVersion":1,"not":"a valid envelope"}\n');
 	const stdoutFrames: string[] = [];
 	const stderrFrames: string[] = [];
 	const request = (
@@ -1564,7 +1564,7 @@ test("RPC session/open preserves the structured JSONL corruption code", async ()
 		expect(stderrFrames).toEqual([]);
 		expect(frames.find((frame) => frame.id === "open")?.error).toMatchObject({
 			data: {
-				code: "session_log_unavailable",
+				code: "session_log_corrupt",
 				offset: 0,
 				sessionId,
 			},

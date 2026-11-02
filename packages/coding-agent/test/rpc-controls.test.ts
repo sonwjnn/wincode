@@ -22,6 +22,7 @@ import type {
 	AttachmentReferenceResolver,
 } from "../modules/sessions/attachment-reference";
 import type {
+	SessionCapabilities,
 	SessionHost,
 	SessionId,
 	SessionInterruptResult,
@@ -32,7 +33,9 @@ import type {
 	SessionSubmissionAdmission,
 } from "../modules/sessions/host/session-rpc";
 import type { SessionHostManager } from "../modules/sessions/host/types";
+import type { SessionForkResult } from "../modules/sessions/storage/session-store";
 import type { SessionSendOutcome } from "../modules/sessions/submission-types";
+import { sessionId, sessionRecordId } from "./support/identifiers";
 
 const model = fromPartial<Selection["model"]>({
 	modelId: "gpt-5.6-luna",
@@ -692,4 +695,121 @@ test("RPC refuses fresh Session creation before persistence when its ProviderCol
 	expect(state.host).toBeUndefined();
 	expect(state.boundSessionId).toBeUndefined();
 	expect(state.lifecycle).toBe("initialized");
+});
+
+test("RPC rewind switches active Session only after the fork can be opened", async () => {
+	const sourceSessionId = sessionId("rpc-rewind-source");
+	const targetSessionId = sessionId("rpc-rewind-target");
+	const checkpointRecordId = sessionRecordId("rpc-rewind-checkpoint");
+	const forkResult = fromPartial<SessionForkResult>({
+		created: true,
+		id: targetSessionId,
+		checkpoint: {
+			recordId: checkpointRecordId,
+			sequence: 12,
+			turnId: "rpc-rewind-turn",
+		},
+	});
+	const createHandler = (openTarget: () => Promise<SessionHost>) => {
+		const sourceHost = fromPartial<SessionHost>({
+			forkSession: async () => forkResult,
+		});
+		let sourceGateHeld = false;
+		const withIdleForSessionFork: SessionHostManager["withIdleForSessionFork"] =
+			async (_sourceId, operation) => {
+				sourceGateHeld = true;
+				try {
+					return await operation(sourceHost);
+				} finally {
+					sourceGateHeld = false;
+				}
+			};
+		const manager = fromPartial<SessionHostManager>({
+			releaseView: async () => undefined,
+			withIdleForSessionFork,
+		});
+		const capabilities = fromPartial<SessionCapabilities>({
+			getSessionHostManager: () => manager,
+		});
+		const state: RpcSessionState = {
+			assembly: fromPartial<RpcAssembly>({
+				capabilities,
+				shutdown: async () => undefined,
+				store: fromPartial<SessionStore>({}),
+				workspace: process.cwd(),
+				workspaceId: "rpc-rewind-workspace",
+			}),
+			boundSessionId: sourceSessionId,
+			host: sourceHost,
+			lifecycle: "bound",
+			shutdownRequested: false,
+			signalRequested: false,
+		};
+		const runtime = fromPartial<RuntimeModules>({
+			createSessionHost: async () => {
+				expect(sourceGateHeld).toBe(true);
+				return openTarget();
+			},
+			toSessionId: (value: string) => value as SessionId,
+			toSessionRecordId: (value: string) => sessionRecordId(value),
+		});
+		const boundSessionIds: SessionId[] = [];
+		const handler = createRpcRequestHandler({
+			bind: (host, boundId) => {
+				expect(sourceGateHeld).toBe(true);
+				state.host = host;
+				state.boundSessionId = boundId;
+				state.lifecycle = "bound";
+				boundSessionIds.push(boundId);
+			},
+			unbind: () => undefined,
+			currentState: () => ({ activeSessionId: state.boundSessionId }),
+			getRuntime: async () => runtime,
+			parseSelection: async (value) => value as Selection,
+			prepareSubmission: async (draft) => ({
+				composition: draft.composition,
+				files: draft.files,
+				userText: draft.composition.text,
+			}),
+			processId: "rpc-rewind-process",
+			requireBound: () => sourceHost,
+			requireInitialized: () => undefined,
+			sendInput: () => fromPartial<SessionSendInput>({}),
+			state,
+		});
+		return { boundSessionIds, handler, state };
+	};
+	const targetHost = fromPartial<SessionHost>({});
+	const active = createHandler(async () => targetHost);
+	const response = await active.handler(
+		request("rewind", "session/rewind", {
+			checkpointRecordId,
+			operationId: "rpc-rewind-operation",
+			sourceSessionId,
+		})
+	);
+	const failed = createHandler(async () => {
+		throw new Error("forked Session cannot be opened");
+	});
+
+	await expect(
+		failed.handler(
+			request("failed-rewind", "session/rewind", {
+				checkpointRecordId,
+				operationId: "rpc-rewind-failed-open",
+				sourceSessionId,
+			})
+		)
+	).rejects.toThrow("forked Session cannot be opened");
+	expect(response).toMatchObject({
+		result: {
+			activeSessionId: targetSessionId,
+			id: targetSessionId,
+			state: { activeSessionId: targetSessionId },
+		},
+	});
+	expect(active.state.boundSessionId).toBe(targetSessionId);
+	expect(active.boundSessionIds).toEqual([targetSessionId]);
+	expect(failed.state.boundSessionId).toBe(sourceSessionId);
+	expect(failed.boundSessionIds).toEqual([]);
 });

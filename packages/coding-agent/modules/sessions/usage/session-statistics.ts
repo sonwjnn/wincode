@@ -61,7 +61,7 @@ type SessionStatisticsUsageEntry = Readonly<{
 	usage: ModelUsage;
 }>;
 
-type SessionStatisticsCompaction = Readonly<{
+export type SessionStatisticsCompaction = Readonly<{
 	id: CompactionId;
 	summarizationModel: ProviderModelSelection;
 	summarizationUsage?: ModelUsage;
@@ -105,6 +105,11 @@ export type SessionStatisticsUsageCategory = Readonly<{
 export type SessionStatisticsUsage = Readonly<{
 	actual: SessionStatisticsUsageTotals;
 	auxiliary: SessionStatisticsUsageTotals;
+	contributions: Readonly<{
+		actual: readonly SessionUsageContribution[];
+		auxiliary: readonly SessionUsageContribution[];
+		inherited: readonly SessionUsageContribution[];
+	}>;
 	inherited: SessionStatisticsUsageTotals;
 }>;
 
@@ -122,6 +127,24 @@ export type SessionTurnStatistics = Readonly<{
 	recordCount: number;
 	terminalOutcome: SessionTurnTerminalOutcome;
 	turnId: AgentTurnId;
+}>;
+
+export type SessionStatisticsRecord = Pick<
+	SessionRecord,
+	"id" | "turnId" | "model" | "outcome"
+> &
+	Partial<Pick<SessionRecord, "messages">>;
+
+export type SessionStatisticsRecordSummary = Readonly<{
+	completedToolCallCount: number;
+	recordCount: number;
+	terminalOutcomeCounts: Readonly<{
+		cancelled: number;
+		completed: number;
+		failed: number;
+		interrupted: number;
+	}>;
+	turn?: SessionTurnStatistics;
 }>;
 
 export type SessionStatistics = Readonly<{
@@ -310,12 +333,17 @@ export const reduceSessionUsageContributions = (
 	return {
 		actual: categoryTotals(unique.actual),
 		auxiliary: categoryTotals(unique.auxiliary),
+		contributions: {
+			actual: unique.actual,
+			auxiliary: unique.auxiliary,
+			inherited: unique.inherited,
+		},
 		inherited: categoryTotals(unique.inherited),
 	};
 };
 
 const modelSelectionForRecord = (
-	record: SessionRecord
+	record: Pick<SessionRecord, "model">
 ): ProviderModelSelection => {
 	const selection = normalizeProviderModelSelection({
 		modelId: record.model.modelId,
@@ -330,10 +358,12 @@ const modelSelectionForRecord = (
 	return selection;
 };
 
-const recordToolCallIds = (records: readonly SessionRecord[]): Set<string> =>
+const recordToolCallIds = (
+	records: readonly SessionStatisticsRecord[]
+): Set<string> =>
 	new Set(
 		records.flatMap((record) =>
-			record.messages.flatMap((message) =>
+			(record.messages ?? []).flatMap((message) =>
 				message.parts.flatMap((part) =>
 					isSessionToolCallPart(part) ? [part.toolCallId] : []
 				)
@@ -342,7 +372,7 @@ const recordToolCallIds = (records: readonly SessionRecord[]): Set<string> =>
 	);
 
 const terminalOutcomeFor = (
-	records: readonly SessionRecord[]
+	records: readonly SessionStatisticsRecord[]
 ): SessionTurnTerminalOutcome => {
 	const terminalRecords = records.filter(
 		(record) => record.outcome.kind === "assistant"
@@ -365,13 +395,132 @@ const terminalOutcomeFor = (
 
 const turnStatistics = (
 	turnId: AgentTurnId,
-	records: readonly SessionRecord[]
+	records: readonly SessionStatisticsRecord[]
 ): SessionTurnStatistics => ({
 	completedToolCallCount: recordToolCallIds(records).size,
 	recordCount: records.length,
 	terminalOutcome: terminalOutcomeFor(records),
 	turnId,
 });
+
+/** Combines per-Session statistics without counting inherited usage twice. */
+export const aggregateSessionStatisticsUsage = (
+	statistics: readonly SessionStatistics[]
+): SessionStatisticsUsage => {
+	const actual = statistics.flatMap(({ usage }) => usage.contributions.actual);
+	const inherited = statistics.flatMap(
+		({ usage }) => usage.contributions.inherited
+	);
+	const auxiliary = statistics.flatMap(
+		({ usage }) => usage.contributions.auxiliary
+	);
+	const actualIdentities = new Set(
+		actual.map(({ identity }) => identityKey(identity))
+	);
+	const auxiliaryWithoutActual = auxiliary.filter(
+		({ identity }) => !actualIdentities.has(identityKey(identity))
+	);
+	const auxiliaryIdentities = new Set(
+		auxiliaryWithoutActual.map(({ identity }) => identityKey(identity))
+	);
+	const inheritedWithoutAccounted = inherited.filter(
+		({ identity }) =>
+			!(
+				actualIdentities.has(identityKey(identity)) ||
+				auxiliaryIdentities.has(identityKey(identity))
+			)
+	);
+	return reduceSessionUsageContributions({
+		actual,
+		auxiliary: auxiliaryWithoutActual,
+		inherited: inheritedWithoutAccounted,
+	});
+};
+
+const actualUsageContributions = (
+	records: readonly SessionStatisticsRecord[],
+	sessionId: SessionId,
+	inheritedRecordIds: ReadonlySet<string>
+): SessionUsageContribution[] =>
+	records.flatMap((record) => {
+		if (inheritedRecordIds.has(record.id)) {
+			return [];
+		}
+		const terminal =
+			record.outcome.kind === "assistant" ? record.outcome.terminal : undefined;
+		if (terminal?.kind !== "completed" || terminal.usage === undefined) {
+			return [];
+		}
+		return [
+			{
+				cost: null,
+				identity: {
+					kind: "record",
+					recordId: record.id,
+					sessionId,
+				},
+				model: modelSelectionForRecord(record),
+				turnId: record.turnId,
+				usage: terminal.usage,
+			},
+		];
+	});
+
+const auxiliaryUsageContributions = (
+	usageEntries: readonly SessionStatisticsUsageEntry[],
+	sessionId: SessionId
+): SessionUsageContribution[] =>
+	usageEntries.map((entry) => ({
+		cost:
+			entry.costUsd === null ? null : { amount: entry.costUsd, unit: "USD" },
+		identity: {
+			entryId: entry.id,
+			kind: "usage-entry",
+			sessionId,
+		},
+		model: entry.model,
+		usage: entry.usage,
+	}));
+
+const compactionUsageContributions = (
+	compactions: readonly SessionStatisticsCompaction[],
+	linkedCompactionIds: ReadonlySet<CompactionId>,
+	inheritedCompactionIds: ReadonlySet<string>,
+	sessionId: SessionId
+): SessionUsageContribution[] =>
+	compactions.flatMap((compaction) => {
+		if (
+			compaction.summarizationUsage === undefined ||
+			linkedCompactionIds.has(compaction.id) ||
+			inheritedCompactionIds.has(compaction.id)
+		) {
+			return [];
+		}
+		return [
+			{
+				cost: null,
+				identity: {
+					compactionId: compaction.id,
+					kind: "compaction",
+					sessionId,
+				},
+				model: compaction.summarizationModel,
+				usage: compaction.summarizationUsage,
+			},
+		];
+	});
+
+const terminalOutcomeCountsFor = (
+	records: readonly SessionStatisticsRecord[]
+): SessionStatisticsRecordSummary["terminalOutcomeCounts"] => {
+	const counts = { cancelled: 0, completed: 0, failed: 0, interrupted: 0 };
+	for (const record of records) {
+		if (record.outcome.kind === "assistant") {
+			counts[record.outcome.terminal.kind] += 1;
+		}
+	}
+	return counts;
+};
 
 /** Builds statistics from the committed records and usage entries at one read point. */
 export const buildSessionStatistics = ({
@@ -380,23 +529,29 @@ export const buildSessionStatistics = ({
 	readPoint,
 	records,
 	sessionId,
+	summary,
 	turnId,
 	usageEntries,
+	inheritedRecordIds = new Set<string>(),
+	inheritedCompactionIds = new Set<string>(),
 }: {
 	compactions: readonly SessionStatisticsCompaction[];
 	inheritedUsage?: readonly SessionUsageContribution[];
+	inheritedRecordIds?: ReadonlySet<string>;
+	inheritedCompactionIds?: ReadonlySet<string>;
 	readPoint: string;
-	records: readonly SessionRecord[];
+	records: readonly SessionStatisticsRecord[];
 	sessionId: SessionId;
+	summary?: SessionStatisticsRecordSummary;
 	turnId?: AgentTurnId;
 	usageEntries: readonly SessionStatisticsUsageEntry[];
 }): SessionStatistics => {
 	const selectedRecords =
 		turnId === undefined
-			? [...records]
+			? records
 			: records.filter((record) => record.turnId === turnId);
-	const selectedUsageEntries = turnId === undefined ? [...usageEntries] : [];
-	const selectedCompactions = turnId === undefined ? [...compactions] : [];
+	const selectedUsageEntries = turnId === undefined ? usageEntries : [];
+	const selectedCompactions = turnId === undefined ? compactions : [];
 	const linkedCompactionIds = new Set(
 		selectedUsageEntries.flatMap((entry) =>
 			entry.kind === "compaction-summary" && entry.compactionId !== undefined
@@ -404,86 +559,40 @@ export const buildSessionStatistics = ({
 				: []
 		)
 	);
-	const actual: SessionUsageContribution[] = selectedRecords.flatMap(
-		(record) => {
-			const terminal =
-				record.outcome.kind === "assistant"
-					? record.outcome.terminal
-					: undefined;
-			if (terminal?.kind !== "completed" || terminal.usage === undefined) {
-				return [];
-			}
-			return [
-				{
-					cost: null,
-					identity: {
-						kind: "record",
-						recordId: record.id,
-						sessionId,
-					},
-					model: modelSelectionForRecord(record),
-					turnId: record.turnId,
-					usage: terminal.usage,
-				},
-			];
-		}
+	const actual = actualUsageContributions(
+		selectedRecords,
+		sessionId,
+		inheritedRecordIds
 	);
-	const auxiliary: SessionUsageContribution[] = selectedUsageEntries.map(
-		(entry) => ({
-			cost:
-				entry.costUsd === null ? null : { amount: entry.costUsd, unit: "USD" },
-			identity: {
-				entryId: entry.id,
-				kind: "usage-entry",
-				sessionId,
-			},
-			model: entry.model,
-			usage: entry.usage,
-		})
-	);
-	for (const compaction of selectedCompactions) {
-		if (
-			compaction.summarizationUsage === undefined ||
-			linkedCompactionIds.has(compaction.id)
-		) {
-			continue;
-		}
-		auxiliary.push({
-			cost: null,
-			identity: {
-				compactionId: compaction.id,
-				kind: "compaction",
-				sessionId,
-			},
-			model: compaction.summarizationModel,
-			usage: compaction.summarizationUsage,
-		});
-	}
+	const auxiliary = [
+		...auxiliaryUsageContributions(selectedUsageEntries, sessionId),
+		...compactionUsageContributions(
+			selectedCompactions,
+			linkedCompactionIds,
+			inheritedCompactionIds,
+			sessionId
+		),
+	];
 	const selectedInherited =
 		turnId === undefined
-			? [...inheritedUsage]
+			? inheritedUsage
 			: inheritedUsage.filter((contribution) => contribution.turnId === turnId);
 	const usage = reduceSessionUsageContributions({
 		actual,
 		auxiliary,
 		inherited: selectedInherited,
 	});
-	const turn =
-		turnId === undefined ? undefined : turnStatistics(turnId, selectedRecords);
-	const terminalOutcomeCounts = {
-		cancelled: 0,
-		completed: 0,
-		failed: 0,
-		interrupted: 0,
-	};
-	for (const record of selectedRecords) {
-		if (record.outcome.kind === "assistant") {
-			terminalOutcomeCounts[record.outcome.terminal.kind] += 1;
-		}
+	let turn: SessionTurnStatistics | undefined;
+	if (turnId !== undefined) {
+		turn = summary?.turn ?? turnStatistics(turnId, selectedRecords);
 	}
+	const terminalOutcomeCounts =
+		summary?.terminalOutcomeCounts ?? terminalOutcomeCountsFor(selectedRecords);
 	return {
-		completedToolCallCount: recordToolCallIds(selectedRecords).size,
-		recordCount: selectedRecords.length,
+		completedToolCallCount:
+			summary?.completedToolCallCount ??
+			recordToolCallIds(selectedRecords).size,
+		recordCount: summary?.recordCount ?? selectedRecords.length,
 		readPoint,
 		sessionId,
 		terminalOutcomeCounts,

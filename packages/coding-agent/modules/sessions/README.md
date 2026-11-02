@@ -7,7 +7,8 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 ### Start a session
 
 `NewSessionView` collects user input and writes the accepted user message as
-an ordinary durable Session Record in the local SQLite store.
+an ordinary durable Session Record in the Session's authoritative JSONL log,
+with SQLite as a rebuildable projection.
 It then navigates to `/sessions/$id` with transient startup state. That state
 starts the first Agent Turn once. Opening later restores durable records and
 accepted SDK deliveries as ordinary user messages.
@@ -174,7 +175,13 @@ never resolves co-selected Skill or Custom Command intents.
 
 ### Session management
 
-`SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store.
+`SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store. `Ctrl+E` exports the selected Session as a local bundle directory; `Ctrl+I` imports a bundle into the current workspace.
+
+### Session bundles
+
+`wincode sessions export <session-id> <directory>` writes a portable bundle, and `wincode sessions import <directory>` validates and imports one. The public Session SDK and RPC expose the same import operation. Imports verify the manifest, log integrity and resource bounds, and require every referenced attachment to be present and valid before publishing Session history. Repeating the same import is a no-op; a different log using an existing Session ID is a conflict.
+
+Imported Sessions are bound locally but remain idle. A stored pending submission is not replayed during import, projection rebuild, or automatic Session open. The first explicit continuation or new input durably records activation before model work can start. Importing never resumes an interrupted Agent Turn.
 
 ## Storage seam
 
@@ -214,8 +221,9 @@ application behavior at those I/O boundaries, not power-loss behavior, device
 or filesystem caches, a physically full disk, or network-filesystem semantics.
 
 `storage/` isolates local persistence behind the `SessionStore` interface.
-The local Drizzle store persists sessions, ordinary Wincode Session Records,
-compactions, and content-addressed attachment blobs.
+The local Drizzle store maintains the rebuildable SQLite projection for
+Session history, compactions, selection, and usage; content-addressed attachment
+blobs remain in separate storage.
 `session_record` rows contain one durable user message, a terminal assistant
 outcome, or a completed Tool Call. The Subagents Plugin persists task outcomes
 and pending report deliveries in its own database file; Session storage has no

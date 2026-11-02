@@ -19,11 +19,8 @@ import { toSteeringMessageId } from "@/shared/identifiers";
 import type { CompactSessionResult } from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
-import {
-	isSessionToolPart,
-	type SessionMessage,
-	type SessionToolPart,
-} from "../message";
+import { findContinuationContextMessages } from "../continuation-context";
+import { isSessionToolPart, type SessionMessage } from "../message";
 import type { SessionWriteOutcome } from "../session-write-outcome";
 import {
 	isCommittedProjectionBlocked,
@@ -85,69 +82,6 @@ import { exposedViewState, hasChanged, latestEntry } from "./utils";
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
-/** The reason a submission that arrives after the session ended is refused. */
-type ContinuationContextMessages =
-	| {
-			kind: "ready";
-			anchor: SessionMessage;
-			lastMessage: SessionMessage;
-	  }
-	| { kind: "rejected"; reason: string };
-
-const isCompleteToolCall = (part: SessionToolPart): boolean =>
-	part.state === "output-denied" ||
-	(part.state === "output-available" && "output" in part) ||
-	(part.state === "output-error" &&
-		typeof part.errorText === "string" &&
-		part.errorText.length > 0);
-
-const findContinuationContextMessages = (
-	context: readonly SessionMessage[]
-): ContinuationContextMessages => {
-	const lastMessage = context.at(-1);
-	if (lastMessage === undefined) {
-		return {
-			kind: "rejected",
-			reason: "The Agent Session has no context to continue.",
-		};
-	}
-	const hasIncompleteToolCall = context.some(({ parts }) =>
-		parts.some((part) => isSessionToolPart(part) && !isCompleteToolCall(part))
-	);
-	if (hasIncompleteToolCall) {
-		return {
-			kind: "rejected",
-			reason: "Incomplete Tool Calls cannot be continued.",
-		};
-	}
-	const toolParts = lastMessage.parts.filter(isSessionToolPart);
-	const completeToolCall =
-		lastMessage.role === "assistant" &&
-		toolParts.length > 0 &&
-		toolParts.every(isCompleteToolCall);
-	if (!(lastMessage.role === "user" || completeToolCall)) {
-		return {
-			kind: "rejected",
-			reason:
-				"The Agent Session can only continue from a user message or completed Tool Call.",
-		};
-	}
-	let anchor: SessionMessage | undefined;
-	for (let index = context.length - 1; index >= 0; index -= 1) {
-		const candidate = context[index];
-		if (candidate?.role === "user") {
-			anchor = candidate;
-			break;
-		}
-	}
-	if (anchor === undefined) {
-		return {
-			kind: "rejected",
-			reason: "The Agent Session has no user message to continue.",
-		};
-	}
-	return { kind: "ready", anchor, lastMessage };
-};
 type AgentSessionRunState =
 	| { readonly phase: "idle" }
 	| {
@@ -608,6 +542,7 @@ export class AgentSessionImpl implements AgentSession {
 
 	constructor({
 		deadlineMs = AGENT_TURN_DEADLINE_MS,
+		forkContinuationMessageId,
 		initialCompactions = [],
 		initialAgent,
 		initialContext,
@@ -1932,7 +1867,11 @@ export class AgentSessionImpl implements AgentSession {
 			if (scheduledInput !== undefined) {
 				return scheduledInput;
 			}
-			const messages = findContinuationContextMessages(this.#state.context);
+			const messages = findContinuationContextMessages(this.#state.context, {
+				...(forkContinuationMessageId === undefined
+					? {}
+					: { terminalAssistantMessageId: forkContinuationMessageId }),
+			});
 			if (messages.kind === "rejected") {
 				return messages;
 			}
@@ -2037,7 +1976,7 @@ export class AgentSessionImpl implements AgentSession {
 			setExecutionViewState,
 			shutdown,
 		};
-		this.continue = () => continueSession();
+		this.continue = async () => continueSession();
 		this.cancel = () => {
 			sessionState.recovery.epoch = nextRecoveryEpoch();
 			abortActiveSend("cancelled");

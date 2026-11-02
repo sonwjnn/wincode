@@ -1,4 +1,5 @@
 import {
+	type AgentTurnId,
 	agentIdSchema,
 	SESSION_RECORD_VERSION,
 	type SessionRecord,
@@ -27,6 +28,7 @@ import {
 	lt,
 	lte,
 	or,
+	sql,
 } from "drizzle-orm";
 import { z } from "zod";
 import {
@@ -55,6 +57,11 @@ import type {
 import { type SessionMessage, withSubmissionStatus } from "../message";
 import { restorePastedTextMarkers } from "../pasted-text";
 import type {
+	SessionStatisticsCompaction,
+	SessionStatisticsRecord,
+	SessionStatisticsRecordSummary,
+} from "../usage/session-statistics";
+import type {
 	AttachmentExternalizationLease,
 	AttachmentExternalizationOptions,
 	AttachmentHydrationOptions,
@@ -82,14 +89,18 @@ import {
 	sessionCatalogDeletionState,
 	sessionCatalogVersion,
 	sessionCompaction,
+	sessionForkProvenance,
 	sessionProjectionCursor,
 	sessionProjectionState,
 	sessionRecord,
+	sessionRecordMessageIdentity,
+	sessionRecordToolCall,
 	sessionRecordVersion,
 	sessionUsageEntry,
 	sessionWorkspace,
 } from "./schema";
 import {
+	type SessionForkedPayload,
 	type SessionJsonlProjection,
 	SessionLogError,
 } from "./session-jsonl-codec";
@@ -105,6 +116,7 @@ import {
 	sessionHistoryReadPoint,
 } from "./session-pagination";
 import {
+	getSessionRecordStatisticsValidationError,
 	getSessionRecordValidationError,
 	SessionRecordInvariantError,
 	toDurableSessionMessageRecord,
@@ -426,9 +438,11 @@ export type SessionHistoryPageProjection = Readonly<{
 }>;
 
 export type SessionStatisticsProjection = Readonly<{
-	compactions: SessionCompaction[];
+	compactions: SessionStatisticsCompaction[];
+	forkProvenance?: SessionForkedPayload;
 	readPoint: SessionHistoryReadPoint;
-	records: SessionRecord[];
+	records: SessionStatisticsRecord[];
+	summary: SessionStatisticsRecordSummary;
 	usageEntries: SessionUsageEntry[];
 }>;
 type SessionUsageEntryRow = typeof sessionUsageEntry.$inferSelect;
@@ -1573,12 +1587,254 @@ const resolveSessionStatisticsReadPoint = (
 	return requestedReadPoint;
 };
 
+const sessionStatisticsRecordConditions = (
+	sessionId: SessionId,
+	readPointSequence: number,
+	turnId?: AgentTurnId
+) => [
+	eq(sessionRecord.sessionId, sessionId),
+	lte(sessionRecord.sourceSequence, readPointSequence),
+	...(turnId === undefined ? [] : [eq(sessionRecord.turnId, turnId)]),
+];
+
+const readSessionStatisticsTerminalOutcome = (
+	tx: SessionTransaction,
+	sessionId: SessionId,
+	readPointSequence: number,
+	turnId: AgentTurnId
+): NonNullable<SessionStatisticsRecordSummary["turn"]>["terminalOutcome"] => {
+	const rows = tx
+		.select({ outcome: sessionRecord.outcomeJson })
+		.from(sessionRecord)
+		.where(
+			and(
+				...sessionStatisticsRecordConditions(
+					sessionId,
+					readPointSequence,
+					turnId
+				),
+				sql`json_extract(${sessionRecord.outcomeJson}, '$.kind') = 'assistant'`
+			)
+		)
+		.limit(2)
+		.all();
+	if (rows.length === 0) {
+		return { kind: "no-terminal-record" };
+	}
+	if (rows.length > 1) {
+		return { kind: "multiple-terminal-records" };
+	}
+	const outcome = rows[0]?.outcome;
+	if (outcome?.kind !== "assistant") {
+		return { kind: "no-terminal-record" };
+	}
+	return {
+		finishedAt: outcome.terminal.finishedAt,
+		kind: outcome.terminal.kind,
+	};
+};
+
+const readSessionStatisticsRecordSummary = (
+	tx: SessionTransaction,
+	sessionId: SessionId,
+	readPointSequence: number,
+	turnId?: AgentTurnId
+): SessionStatisticsRecordSummary => {
+	const recordConditions = sessionStatisticsRecordConditions(
+		sessionId,
+		readPointSequence,
+		turnId
+	);
+	const recordCounts = tx
+		.select({
+			cancelled: sql<number>`coalesce(sum(case when json_extract(${sessionRecord.outcomeJson}, '$.kind') = 'assistant' and json_extract(${sessionRecord.outcomeJson}, '$.terminal.kind') = 'cancelled' then 1 else 0 end), 0)`,
+			completed: sql<number>`coalesce(sum(case when json_extract(${sessionRecord.outcomeJson}, '$.kind') = 'assistant' and json_extract(${sessionRecord.outcomeJson}, '$.terminal.kind') = 'completed' then 1 else 0 end), 0)`,
+			failed: sql<number>`coalesce(sum(case when json_extract(${sessionRecord.outcomeJson}, '$.kind') = 'assistant' and json_extract(${sessionRecord.outcomeJson}, '$.terminal.kind') = 'failed' then 1 else 0 end), 0)`,
+			recordCount: sql<number>`count(*)`,
+			interrupted: sql<number>`coalesce(sum(case when json_extract(${sessionRecord.outcomeJson}, '$.kind') = 'assistant' and json_extract(${sessionRecord.outcomeJson}, '$.terminal.kind') = 'interrupted' then 1 else 0 end), 0)`,
+		})
+		.from(sessionRecord)
+		.where(and(...recordConditions))
+		.get();
+	if (recordCounts === undefined) {
+		throw new SessionRecordInvariantError(
+			"Session statistics could not aggregate its committed records."
+		);
+	}
+	const toolCallCountExpression =
+		turnId === undefined
+			? sql<number>`count(distinct ${sessionRecordToolCall.toolCallId})`
+			: sql<number>`count(*)`;
+	const toolCallCount = tx
+		.select({ count: toolCallCountExpression })
+		.from(sessionRecordToolCall)
+		.where(
+			and(
+				eq(sessionRecordToolCall.sessionId, sessionId),
+				lte(sessionRecordToolCall.sourceSequence, readPointSequence),
+				...(turnId === undefined
+					? []
+					: [eq(sessionRecordToolCall.turnId, turnId)])
+			)
+		)
+		.get();
+	if (toolCallCount === undefined) {
+		throw new SessionRecordInvariantError(
+			"Session statistics could not aggregate completed Tool Calls."
+		);
+	}
+	const turn =
+		turnId === undefined
+			? undefined
+			: {
+					completedToolCallCount: toolCallCount.count,
+					recordCount: recordCounts.recordCount,
+					terminalOutcome: readSessionStatisticsTerminalOutcome(
+						tx,
+						sessionId,
+						readPointSequence,
+						turnId
+					),
+					turnId,
+				};
+	return {
+		completedToolCallCount: toolCallCount.count,
+		recordCount: recordCounts.recordCount,
+		terminalOutcomeCounts: {
+			cancelled: recordCounts.cancelled,
+			completed: recordCounts.completed,
+			failed: recordCounts.failed,
+			interrupted: recordCounts.interrupted,
+		},
+		...(turn === undefined ? {} : { turn }),
+	};
+};
+
+const readSessionStatisticsRecords = (
+	tx: SessionTransaction,
+	sessionId: SessionId,
+	readPointSequence: number,
+	turnId?: AgentTurnId
+): SessionStatisticsRecord[] =>
+	tx
+		.select({
+			agentId: sessionRecord.agentId,
+			id: sessionRecord.recordId,
+			model: sessionRecord.modelJson,
+			outcome: sessionRecord.outcomeJson,
+			turnId: sessionRecord.turnId,
+			version: sessionRecord.version,
+		})
+		.from(sessionRecord)
+		.where(
+			and(
+				...sessionStatisticsRecordConditions(
+					sessionId,
+					readPointSequence,
+					turnId
+				),
+				sql`json_extract(${sessionRecord.outcomeJson}, '$.kind') = 'assistant'`,
+				sql`json_extract(${sessionRecord.outcomeJson}, '$.terminal.kind') = 'completed'`,
+				sql`json_type(${sessionRecord.outcomeJson}, '$.terminal.usage') IS NOT NULL`
+			)
+		)
+		.orderBy(asc(sessionRecord.sourceSequence))
+		.all()
+		.map((row) => {
+			const recordFields = {
+				agentId: row.agentId,
+				id: row.id,
+				model: row.model,
+				outcome: row.outcome,
+				turnId: row.turnId,
+				version: row.version,
+			};
+			const validationError =
+				getSessionRecordStatisticsValidationError(recordFields);
+			if (validationError !== null) {
+				throw new SessionRecordInvariantError(
+					`Invalid persisted Session Record accounting data: ${validationError}`
+				);
+			}
+			return {
+				id: toSessionRecordId(row.id),
+				model: row.model as SessionRecord["model"],
+				outcome: row.outcome as SessionRecord["outcome"],
+				turnId: toAgentTurnId(row.turnId),
+			};
+		});
+
+const readSessionStatisticsCompactions = (
+	tx: SessionTransaction,
+	sessionId: SessionId,
+	readPointSequence: number
+): SessionStatisticsCompaction[] =>
+	tx
+		.select({
+			id: sessionCompaction.id,
+			model: sessionCompaction.summarizationModelJson,
+			usage: sessionCompaction.summarizationUsageJson,
+		})
+		.from(sessionCompaction)
+		.where(
+			and(
+				eq(sessionCompaction.sessionId, sessionId),
+				lte(sessionCompaction.sourceSequence, readPointSequence),
+				sql`${sessionCompaction.summarizationUsageJson} IS NOT NULL`
+			)
+		)
+		.orderBy(asc(sessionCompaction.sequence))
+		.all()
+		.map(({ id, model, usage }) => ({
+			id: toCompactionId(id),
+			summarizationModel: providerModelSelectionSchema.parse(model),
+			summarizationUsage: usage ?? undefined,
+		}));
+
+const readSessionStatisticsUsageEntries = (
+	tx: SessionTransaction,
+	sessionId: SessionId,
+	readPointSequence: number
+): SessionUsageEntry[] =>
+	tx
+		.select()
+		.from(sessionUsageEntry)
+		.where(
+			and(
+				eq(sessionUsageEntry.sessionId, sessionId),
+				lte(sessionUsageEntry.sourceSequence, readPointSequence)
+			)
+		)
+		.orderBy(asc(sessionUsageEntry.sourceSequence))
+		.all()
+		.map(toSessionUsageEntry);
+
+const readSessionForkProvenance = (
+	tx: SessionTransaction,
+	sessionId: SessionId,
+	readPointSequence: number
+): SessionForkedPayload | undefined => {
+	const row = tx
+		.select({
+			provenance: sessionForkProvenance.provenanceJson,
+			sourceSequence: sessionForkProvenance.sourceSequence,
+		})
+		.from(sessionForkProvenance)
+		.where(eq(sessionForkProvenance.sessionId, sessionId))
+		.get();
+	if (row === undefined || row.sourceSequence > readPointSequence) {
+		return;
+	}
+	return row.provenance;
+};
+
 const readSessionStatisticsProjection = (
 	db: SessionDatabase,
 	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId,
 	sessionId: SessionId,
-	requestedReadPoint?: SessionHistoryReadPoint
+	requestedReadPoint?: SessionHistoryReadPoint,
+	turnId?: AgentTurnId
 ): SessionStatisticsProjection =>
 	db.transaction((tx) => {
 		const maintenance = requireReadyPaginationMaintenance(
@@ -1588,6 +1844,7 @@ const readSessionStatisticsProjection = (
 					generation: sessionProjectionState.generation,
 					projectionId: sessionProjectionState.projectionId,
 					paginationVersion: sessionProjectionState.paginationVersion,
+					statisticsVersion: sessionProjectionState.statisticsVersion,
 					status: sessionProjectionState.status,
 				})
 				.from(sessionProjectionState)
@@ -1596,6 +1853,12 @@ const readSessionStatisticsProjection = (
 			[sessionId],
 			"Session statistics projection is unavailable; run `wincode sessions rebuild --all` before reading Session statistics."
 		);
+		if (maintenance.statisticsVersion !== 1) {
+			pageProjectionBlocked(
+				[sessionId],
+				"Session statistics projection is outdated; run `wincode sessions rebuild --all` before reading Session statistics."
+			);
+		}
 		assertStatisticsSessionAvailable(
 			tx,
 			operationalDb,
@@ -1610,66 +1873,46 @@ const readSessionStatisticsProjection = (
 			maintenance,
 			requestedReadPoint
 		);
-		const recordRows = tx
-			.select({
-				messagesJson: sessionRecordVersion.messagesJson,
-				record: sessionRecord,
-			})
-			.from(sessionRecordVersion)
-			.innerJoin(
-				sessionRecord,
-				eq(sessionRecord.recordId, sessionRecordVersion.recordId)
-			)
-			.where(
-				and(
-					eq(sessionRecordVersion.sessionId, sessionId),
-					lte(sessionRecordVersion.sourceSequence, readPoint.readPointSequence),
-					lte(
-						sessionRecordVersion.validFromSequence,
+		const summary = readSessionStatisticsRecordSummary(
+			tx,
+			sessionId,
+			readPoint.readPointSequence,
+			turnId
+		);
+		const records = readSessionStatisticsRecords(
+			tx,
+			sessionId,
+			readPoint.readPointSequence,
+			turnId
+		);
+		const compactions =
+			turnId === undefined
+				? readSessionStatisticsCompactions(
+						tx,
+						sessionId,
 						readPoint.readPointSequence
-					),
-					or(
-						isSqlNull(sessionRecordVersion.validToSequence),
-						gt(
-							sessionRecordVersion.validToSequence,
-							readPoint.readPointSequence
-						)
 					)
-				)
-			)
-			.orderBy(asc(sessionRecordVersion.sourceSequence))
-			.all();
-		const compactionRows = tx
-			.select({ compaction: sessionCompaction })
-			.from(sessionCompaction)
-			.where(
-				and(
-					eq(sessionCompaction.sessionId, sessionId),
-					lte(sessionCompaction.sourceSequence, readPoint.readPointSequence)
-				)
-			)
-			.orderBy(asc(sessionCompaction.sequence))
-			.all();
-		const usageEntryRows = tx
-			.select()
-			.from(sessionUsageEntry)
-			.where(
-				and(
-					eq(sessionUsageEntry.sessionId, sessionId),
-					lte(sessionUsageEntry.sourceSequence, readPoint.readPointSequence)
-				)
-			)
-			.orderBy(asc(sessionUsageEntry.sourceSequence))
-			.all();
+				: [];
+		const usageEntries =
+			turnId === undefined
+				? readSessionStatisticsUsageEntries(
+						tx,
+						sessionId,
+						readPoint.readPointSequence
+					)
+				: [];
+		const forkProvenance = readSessionForkProvenance(
+			tx,
+			sessionId,
+			readPoint.readPointSequence
+		);
 		return {
-			compactions: compactionRows.map(({ compaction }) =>
-				toSessionCompaction(compaction)
-			),
+			compactions,
+			...(forkProvenance === undefined ? {} : { forkProvenance }),
 			readPoint,
-			records: recordRows.map(({ messagesJson, record }) =>
-				toSessionRecord({ ...record, messagesJson })
-			),
-			usageEntries: usageEntryRows.map(toSessionUsageEntry),
+			records,
+			summary,
+			usageEntries,
 		};
 	});
 
@@ -1687,7 +1930,8 @@ export type DrizzleSessionStore = SessionProjectionStore &
 		) => SessionHistoryPageProjection;
 		readSessionStatisticsProjection: (
 			sessionId: SessionId,
-			readPoint?: SessionHistoryReadPoint
+			readPoint?: SessionHistoryReadPoint,
+			turnId?: AgentTurnId
 		) => SessionStatisticsProjection;
 		setAttachmentCollectionBarrier: (barrier: () => Promise<void>) => void;
 	}>;
@@ -1995,6 +2239,7 @@ export const createDrizzleSessionStore = (
 					throw new Error("Session projection generation is unavailable.");
 				}
 				tx.delete(sessionCompaction).run();
+				tx.delete(sessionRecordMessageIdentity).run();
 				tx.delete(sessionRecord).run();
 				tx.delete(sessionUsageEntry).run();
 				tx.delete(session).run();
@@ -2006,6 +2251,7 @@ export const createDrizzleSessionStore = (
 						generation: currentState.generation + 1,
 						latestDeletionRevision: 0,
 						paginationVersion: 2,
+						statisticsVersion: 1,
 						status: "ready",
 					})
 					.where(eq(sessionProjectionState.id, 1))
@@ -2072,13 +2318,14 @@ export const createDrizzleSessionStore = (
 				sessionId,
 				input
 			),
-		readSessionStatisticsProjection: (sessionId, readPoint) =>
+		readSessionStatisticsProjection: (sessionId, readPoint, turnId) =>
 			readSessionStatisticsProjection(
 				db,
 				operationalDb,
 				workspace.id,
 				sessionId,
-				readPoint
+				readPoint,
+				turnId
 			),
 		updateSessionSubmission: async (input) =>
 			updateSessionSubmissionCheckpoint(db, operationalDb, workspace.id, input),

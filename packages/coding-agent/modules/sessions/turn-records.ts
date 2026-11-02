@@ -14,6 +14,7 @@ import {
 	type SessionMessageId,
 	type SessionMessageMetadataRecord,
 	type SessionRecord,
+	type SessionToolCallBatch,
 	type SessionToolCallPart,
 	type ToolCallId,
 	type ToolFailureDetails,
@@ -60,6 +61,7 @@ const toDurableToolPart = (part: {
 				type: "success";
 		  };
 	sequence: number;
+	toolBatch?: SessionToolCallBatch;
 	toolCallId: ToolCallId;
 	toolName: string;
 }): SessionToolCallPart => ({
@@ -73,6 +75,7 @@ const toDurableToolPart = (part: {
 					kind: "failure",
 				},
 	sequence: part.sequence,
+	...omitUndefined({ toolBatch: part.toolBatch }),
 	toolCallId: part.toolCallId,
 	toolName: part.toolName,
 	type: "tool-call",
@@ -389,11 +392,13 @@ export const buildToolSessionRecord = ({
 	input,
 	event,
 	sourceUserMessageId,
+	toolBatch,
 	turn,
 }: {
 	event: Extract<AgentTurnEvent, { type: "tool-call-finished" }>;
 	input: unknown;
 	sourceUserMessageId?: SessionMessageId;
+	toolBatch?: SessionToolCallBatch;
 	turn: AgentTurn;
 }): SessionRecord => ({
 	agentId: turn.agent.id,
@@ -407,6 +412,7 @@ export const buildToolSessionRecord = ({
 					input,
 					outcome: event.outcome,
 					sequence: event.sequence,
+					...omitUndefined({ toolBatch }),
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
 				}),

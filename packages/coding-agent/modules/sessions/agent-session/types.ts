@@ -438,6 +438,7 @@ export type AgentSessionPorts = Readonly<{
 }>;
 
 export type AgentSessionOptions = Readonly<{
+	forkContinuationMessageId?: SessionMessageId;
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
@@ -569,8 +570,8 @@ export type AgentSession = Readonly<{
 	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
 	/** Durably accepts exactly the oldest Queued Submission for later delivery. */
 	steer: () => Promise<SessionSteeringAdmission>;
-	/** Resumes a valid idle context or starts the next waiting user input. */
-	continue: () => SessionContinuationOutcome;
+	/** Durably prepares and resumes the next waiting input in an idle context. */
+	continue: () => Promise<SessionContinuationOutcome>;
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
 	/**

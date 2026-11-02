@@ -1493,7 +1493,7 @@ test("prompt queues a second submission instead of steering a live turn", async 
 	expect(engine.getSnapshot().queuedSubmissions[0]?.input.composition).toEqual(
 		composition
 	);
-	expect(engine.continue().kind).toBe("rejected");
+	expect((await engine.continue()).kind).toBe("rejected");
 
 	runtime.release();
 	await runtime.started(2);
@@ -1782,7 +1782,7 @@ test("continue resumes the last user context without appending another prompt", 
 		turnRunner: runtime.runtime,
 	});
 
-	const outcome = engine.continue();
+	const outcome = await engine.continue();
 	expect(outcome.kind).toBe("resumed");
 	await runtime.started(1);
 
@@ -1848,7 +1848,7 @@ test("continue retains completed Tool Calls as context without rerunning them", 
 		},
 	});
 
-	expect(engine.continue().kind).toBe("resumed");
+	expect((await engine.continue()).kind).toBe("resumed");
 	await completed.promise;
 	await engine.internalPort.shutdown();
 
@@ -1913,7 +1913,7 @@ test("continue resumes retained denied Tool Calls without rerunning them", async
 		},
 	});
 
-	expect(engine.continue().kind).toBe("resumed");
+	expect((await engine.continue()).kind).toBe("resumed");
 	await completed.promise;
 	await engine.internalPort.shutdown();
 
@@ -1981,7 +1981,7 @@ test("continue rejects incomplete Tool Calls even when a later user is last", as
 		}
 	);
 
-	expect(engine.continue()).toMatchObject({ kind: "rejected" });
+	expect(await engine.continue()).toMatchObject({ kind: "rejected" });
 	expect(runtimeStarts).toBe(0);
 	await engine.internalPort.shutdown();
 });
@@ -2998,7 +2998,7 @@ test("preserves FIFO when committed Steering delivery fails without replaying la
 			"The model rejected the next step.",
 			"The model rejected the next step.",
 		]);
-		expect(engine.continue()).toMatchObject({ kind: "rejected" });
+		expect(await engine.continue()).toMatchObject({ kind: "rejected" });
 	} finally {
 		allowBoundary.resolve();
 		await engine.internalPort.shutdown();

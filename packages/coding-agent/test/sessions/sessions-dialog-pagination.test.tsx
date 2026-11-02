@@ -60,6 +60,55 @@ const createRouterForDialog = () => {
 	});
 };
 
+test("the Session picker asks for a destination before exporting the selected Session", async () => {
+	const page: SessionCatalogPage = {
+		readPoint: "catalog-export-read-point",
+		sessions: [makeSession("session-export-dialog", "Export candidate")],
+	};
+	const pageResult = Promise.withResolvers<SessionCatalogPage>();
+	const listSessionsPage = mock(async () => await pageResult.promise);
+	const store = fromPartial<SessionStore>({ listSessionsPage });
+	const getStoreSpy = spyOn(
+		sessionStoreModule,
+		"getSessionStore"
+	).mockReturnValue(store);
+	const router = createRouterForDialog();
+	const setup = await testRenderWithClipboard(
+		<ThemeProvider themeName={DEFAULT_THEME.name}>
+			<ToastProvider>
+				<KeyboardLayerProvider>
+					<DialogLayerProbe />
+					<DialogProvider>
+						<RouterContextProvider router={router}>
+							<SessionsDialogContent />
+						</RouterContextProvider>
+					</DialogProvider>
+				</KeyboardLayerProvider>
+			</ToastProvider>
+		</ThemeProvider>,
+		{ height: 24, kittyKeyboard: true, width: 100 }
+	);
+
+	try {
+		await setup.waitFor(() => listSessionsPage.mock.calls.length === 1);
+		await act(async () => {
+			pageResult.resolve(page);
+			await pageResult.promise;
+		});
+		await flushTestRenderer(setup, 2);
+		act(() => setup.mockInput.pressKey("e", { ctrl: true }));
+		await flushTestRenderer(setup, 2);
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("Export candidate");
+		expect(frame).toContain("local bundle directory");
+		expect(frame).toContain("./session-bundle");
+		expect(frame).toContain("export");
+	} finally {
+		getStoreSpy.mockRestore();
+		act(() => setup.renderer.destroy());
+	}
+});
+
 test("the stored Session list loads from its cursor and refreshes to a new snapshot", async () => {
 	const firstPage: SessionCatalogPage = {
 		nextCursor: "catalog-cursor-1",

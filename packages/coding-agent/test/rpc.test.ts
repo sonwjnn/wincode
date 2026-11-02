@@ -18,18 +18,31 @@ import {
 	type OutputWriter,
 	RpcOutputOverflowError,
 } from "../modules/application/rpc/types";
+import {
+	createSessionHostManager,
+	SessionForkBusyError,
+} from "../modules/sessions/host/session-host-manager";
 import type { SessionCapabilities } from "../modules/sessions/host/session-rpc";
+import type {
+	SessionHost,
+	SessionHostManager,
+} from "../modules/sessions/host/types";
+import { SessionBundleImportError } from "../modules/sessions/session-bundle-import";
+import { SessionLogError } from "../modules/sessions/storage/session-jsonl-codec";
 import { SessionPaginationError } from "../modules/sessions/storage/session-pagination";
 import type {
 	Session,
 	SessionCatalogPage,
+	SessionForkCheckpoint,
+	SessionForkResult,
 	SessionHistoryPage,
 	SessionPageOptions,
 	SessionStatistics,
 	SessionStatisticsOptions,
 	SessionStore,
 } from "../modules/sessions/storage/session-store";
-import { agentTurnId, sessionId } from "./support/identifiers";
+import { SessionInUseError } from "../modules/sessions/storage/session-writer-lock";
+import { agentTurnId, sessionId, sessionRecordId } from "./support/identifiers";
 
 const loggerHome = await createLoggerHome("rpc-logs-");
 const logHome = loggerHome.home;
@@ -113,6 +126,10 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 					sessionCatalogPagination: true,
 					sessionHistoryPagination: true,
 					sessionStatistics: true,
+					sessionBundleExport: true,
+					sessionBundleImport: true,
+					sessionFork: true,
+					sessionRewind: true,
 					transcriptPagination: true,
 				},
 				protocolVersion: 4,
@@ -126,6 +143,208 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 			result: { shutdown: true },
 		},
 	]);
+});
+
+test("RPC fork dispatch validates identifiers and runs against an idle source Session", async () => {
+	const sourceSessionId = sessionId("rpc-fork-source");
+	const busySessionId = sessionId("rpc-fork-busy");
+	const corruptSessionId = sessionId("rpc-fork-corrupt");
+	const unsupportedSessionId = sessionId("rpc-fork-unsupported");
+	const writerBusySessionId = sessionId("rpc-fork-writer-busy");
+	const forkResult = fromPartial<SessionForkResult>({
+		checkpoint: {
+			recordId: "forked-checkpoint",
+			sequence: 3,
+			turnId: "forked-turn",
+		},
+		created: true,
+		id: sessionId("rpc-fork-target"),
+		writeOutcome: {
+			entryHash: "fork-entry-hash",
+			kind: "committed",
+			operationId: "fork-operation",
+			projection: "ready",
+			sequence: 1,
+		},
+	});
+	const forkCalls: Array<{
+		checkpoint: { recordId: string };
+		operationId: string;
+		sourceSessionId: string;
+	}> = [];
+	const idleSources: string[] = [];
+	const forkSession: SessionStore["forkSession"] = async (
+		requestedSourceId,
+		checkpoint,
+		operationId
+	) => {
+		if (requestedSourceId === corruptSessionId) {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				requestedSourceId,
+				"Session log is corrupt."
+			);
+		}
+		if (requestedSourceId === unsupportedSessionId) {
+			throw new SessionLogError(
+				"session_log_version_unsupported",
+				requestedSourceId,
+				"Session log version is unsupported."
+			);
+		}
+		if (requestedSourceId === writerBusySessionId) {
+			throw new SessionInUseError();
+		}
+		forkCalls.push({
+			checkpoint,
+			operationId,
+			sourceSessionId: requestedSourceId,
+		});
+		return forkResult;
+	};
+	const store = fromPartial<SessionStore>({ forkSession });
+	const hostForkCalls: Array<{
+		checkpoint: SessionForkCheckpoint;
+		operationId: string;
+	}> = [];
+	const forkHost = fromPartial<SessionHost>({
+		forkSession: async (
+			checkpoint: SessionForkCheckpoint,
+			operationId: string
+		) => {
+			hostForkCalls.push({ checkpoint, operationId });
+			return forkResult;
+		},
+	});
+	const withIdleForSessionFork: SessionHostManager["withIdleForSessionFork"] =
+		async (requestedSourceId, operation) => {
+			idleSources.push(requestedSourceId);
+			if (requestedSourceId === busySessionId) {
+				throw new SessionForkBusyError(
+					busySessionId,
+					"Cannot fork a Session while its Host is busy."
+				);
+			}
+			return operation(
+				requestedSourceId === sourceSessionId ? forkHost : undefined
+			);
+		};
+	const capabilities = fromPartial<SessionCapabilities>({
+		getSessionHostManager: () => ({ withIdleForSessionFork }),
+	});
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeServices: async () => ({
+			capabilities,
+			shutdown: async () => undefined,
+			store,
+			workspace: process.cwd(),
+			workspaceId: "workspace-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${[
+					request("initialize", "initialize", {
+						capabilities: {},
+						clientInfo: { name: "fork-test" },
+						cwd: process.cwd(),
+						protocolVersion: 4,
+					}),
+					request("fork", "session/fork", {
+						checkpointRecordId: "source-checkpoint",
+						operationId: "fork-operation",
+						sourceSessionId,
+					}),
+					request("bad-fork", "session/fork", {
+						checkpointRecordId: "source-checkpoint",
+						operationId: "",
+						sourceSessionId,
+					}),
+					request("busy-fork", "session/fork", {
+						checkpointRecordId: "source-checkpoint",
+						operationId: "busy-operation",
+						sourceSessionId: busySessionId,
+					}),
+					request("corrupt-fork", "session/fork", {
+						checkpointRecordId: "source-checkpoint",
+						operationId: "corrupt-operation",
+						sourceSessionId: corruptSessionId,
+					}),
+					request("unsupported-fork", "session/fork", {
+						checkpointRecordId: "source-checkpoint",
+						operationId: "unsupported-operation",
+						sourceSessionId: unsupportedSessionId,
+					}),
+					request("writer-busy-fork", "session/fork", {
+						checkpointRecordId: "source-checkpoint",
+						operationId: "writer-busy-operation",
+						sourceSessionId: writerBusySessionId,
+					}),
+					request("shutdown", "server/shutdown", {}),
+				].join("\n")}\n`
+			),
+		],
+		stderr,
+		stdout,
+	});
+	const responses = stdout.frames.map(
+		(frame) => JSON.parse(frame) as Record<string, unknown>
+	);
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(idleSources).toEqual([
+		sourceSessionId,
+		busySessionId,
+		corruptSessionId,
+		unsupportedSessionId,
+		writerBusySessionId,
+	]);
+	expect(forkCalls).toEqual([]);
+	expect(hostForkCalls).toEqual([
+		{
+			checkpoint: { recordId: sessionRecordId("source-checkpoint") },
+			operationId: "fork-operation",
+		},
+	]);
+	expect(responses[0]).toMatchObject({
+		result: {
+			capabilities: { sessionFork: true, sessionRewind: true },
+		},
+	});
+	expect(responses[1]).toMatchObject({
+		id: "fork",
+		result: { created: true, id: "rpc-fork-target" },
+	});
+	expect(responses[2]).toMatchObject({
+		error: {
+			code: -32_602,
+			message: "operationId must be a stable operation identifier.",
+		},
+		id: "bad-fork",
+	});
+	expect(responses[3]).toMatchObject({
+		id: "busy-fork",
+		error: { data: { code: "session_busy" } },
+	});
+	expect(responses[4]).toMatchObject({
+		id: "corrupt-fork",
+		error: { data: { code: "session_log_corrupt" } },
+	});
+	expect(responses[5]).toMatchObject({
+		id: "unsupported-fork",
+		error: { data: { code: "session_log_version_unsupported" } },
+	});
+	expect(responses[6]).toMatchObject({
+		id: "writer-busy-fork",
+		error: { data: { code: "session_in_use" } },
+	});
 });
 
 test("RPC Session read methods forward snapshot read points and reject unknown statistics fields", async () => {
@@ -238,6 +457,11 @@ test("RPC Session read methods forward snapshot read points and reject unknown s
 						unexpected: true,
 					}),
 					request("bad-limit", "session/listPage", { limit: 201 }),
+					request("bad-export", "session/exportBundle", {
+						destination: "bundle",
+						sessionId: "../invalid",
+					}),
+					request("bad-import", "session/importBundle", {}),
 					request("shutdown", "server/shutdown", {}),
 				].join("\n")}\n`
 			),
@@ -295,6 +519,290 @@ test("RPC Session read methods forward snapshot read points and reject unknown s
 			message: "Session page limit must be an integer from 1 to 200.",
 		},
 		id: "bad-limit",
+	});
+	expect(responses[6]).toMatchObject({
+		error: {
+			code: -32_602,
+			message: "sessionId must be a valid Session ID.",
+		},
+		id: "bad-export",
+	});
+	expect(responses[7]).toMatchObject({
+		error: {
+			code: -32_602,
+			message: "bundlePath must be a non-empty directory path.",
+		},
+		id: "bad-import",
+	});
+});
+
+test("RPC Session export routes through the shared operation and preserves its typed error", async () => {
+	const manager = createSessionHostManager();
+	const capabilities = {
+		getSessionHostManager: () => manager,
+	} as SessionCapabilities;
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	) => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeServices: async () => ({
+			capabilities,
+			shutdown: () => manager.shutdownAll(),
+			store: fromPartial<SessionStore>({}),
+			workspace: process.cwd(),
+			workspaceId: "workspace-export-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${[
+					request("initialize", "initialize", {
+						capabilities: {},
+						clientInfo: { name: "session-export-test" },
+						cwd: process.cwd(),
+						protocolVersion: 4,
+					}),
+					request("export", "session/exportBundle", {
+						destination: path.join(process.cwd(), "rpc-export-test"),
+						sessionId: "rpc-export-session",
+					}),
+					request("shutdown", "server/shutdown", {}),
+				].join("\n")}\n`
+			),
+		],
+		stderr,
+		stdout,
+	});
+	const responses = stdout.frames.map(
+		(frame) => JSON.parse(frame) as Record<string, unknown>
+	);
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(responses[1]).toMatchObject({
+		error: {
+			code: -32_000,
+			data: { code: "session_export_unavailable" },
+		},
+		id: "export",
+	});
+});
+
+test("RPC Session import delegates to the shared operation and preserves conflicts", async () => {
+	const manager = createSessionHostManager();
+	const capabilities = {
+		getSessionHostManager: () => manager,
+	} as SessionCapabilities;
+	const bundlePath = path.join(process.cwd(), "rpc-import-bundle");
+	let requestedPath: string | undefined;
+	const withSessionBundleImport: NonNullable<
+		SessionStore["withSessionBundleImport"]
+	> = async (requestedBundlePath) => {
+		requestedPath = requestedBundlePath;
+		throw new SessionBundleImportError(
+			"session_import_conflict",
+			"The imported Session conflicts with local history."
+		);
+	};
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	) => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeServices: async () => ({
+			capabilities,
+			shutdown: () => manager.shutdownAll(),
+			store: fromPartial<SessionStore>({ withSessionBundleImport }),
+			workspace: process.cwd(),
+			workspaceId: "workspace-import-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${[
+					request("initialize", "initialize", {
+						capabilities: {},
+						clientInfo: { name: "session-import-test" },
+						cwd: process.cwd(),
+						protocolVersion: 4,
+					}),
+					request("import", "session/importBundle", { bundlePath }),
+					request("shutdown", "server/shutdown", {}),
+				].join("\n")}\n`
+			),
+		],
+		stderr,
+		stdout,
+	});
+	const responses = stdout.frames.map(
+		(frame) => JSON.parse(frame) as Record<string, unknown>
+	);
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(requestedPath).toBe(bundlePath);
+	expect(responses[1]).toMatchObject({
+		error: {
+			data: { code: "session_import_conflict" },
+		},
+		id: "import",
+	});
+});
+
+test("RPC bundle export preserves source corruption sequence and byte offset", async () => {
+	const manager = createSessionHostManager();
+	const capabilities = {
+		getSessionHostManager: () => manager,
+	} as SessionCapabilities;
+	const exportedSessionId = sessionId("rpc-corrupt-export-session");
+	const reason = "Session log contains a duplicate retained record identity.";
+	const withSessionBundleExport: NonNullable<
+		SessionStore["withSessionBundleExport"]
+	> = async () => {
+		throw new SessionLogError(
+			"session_log_corrupt",
+			exportedSessionId,
+			reason,
+			{
+				offset: 123,
+				sequence: 4,
+			}
+		);
+	};
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	) => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeServices: async () => ({
+			capabilities,
+			shutdown: () => manager.shutdownAll(),
+			store: fromPartial<SessionStore>({ withSessionBundleExport }),
+			workspace: process.cwd(),
+			workspaceId: "workspace-corrupt-export-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${[
+					request("initialize", "initialize", {
+						capabilities: {},
+						clientInfo: { name: "session-export-corrupt-test" },
+						cwd: process.cwd(),
+						protocolVersion: 4,
+					}),
+					request("export", "session/exportBundle", {
+						destination: path.join(process.cwd(), "rpc-corrupt-export-test"),
+						sessionId: exportedSessionId,
+					}),
+					request("shutdown", "server/shutdown", {}),
+				].join("\n")}\n`
+			),
+		],
+		stderr,
+		stdout,
+	});
+	const responses = stdout.frames.map(
+		(frame) => JSON.parse(frame) as Record<string, unknown>
+	);
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(responses[1]).toMatchObject({
+		error: {
+			code: -32_000,
+			data: {
+				code: "session_log_corrupt",
+				offset: 123,
+				reason,
+				sequence: 4,
+				sessionId: exportedSessionId,
+			},
+		},
+		id: "export",
+	});
+});
+
+test("RPC bundle export preserves unsupported-version sequence and byte offset", async () => {
+	const manager = createSessionHostManager();
+	const capabilities = {
+		getSessionHostManager: () => manager,
+	} as SessionCapabilities;
+	const exportedSessionId = sessionId("rpc-unsupported-export-session");
+	const reason = "Session log format version is not supported.";
+	const withSessionBundleExport: NonNullable<
+		SessionStore["withSessionBundleExport"]
+	> = async () => {
+		throw new SessionLogError(
+			"session_log_version_unsupported",
+			exportedSessionId,
+			reason,
+			{ offset: 256, sequence: 7 }
+		);
+	};
+	const request = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	) => JSON.stringify({ id, jsonrpc: "2.0", method, params });
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeServices: async () => ({
+			capabilities,
+			shutdown: () => manager.shutdownAll(),
+			store: fromPartial<SessionStore>({ withSessionBundleExport }),
+			workspace: process.cwd(),
+			workspaceId: "workspace-unsupported-export-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${[
+					request("initialize", "initialize", {
+						capabilities: {},
+						clientInfo: { name: "session-export-unsupported-test" },
+						cwd: process.cwd(),
+						protocolVersion: 4,
+					}),
+					request("export", "session/exportBundle", {
+						destination: path.join(
+							process.cwd(),
+							"rpc-unsupported-export-test"
+						),
+						sessionId: exportedSessionId,
+					}),
+					request("shutdown", "server/shutdown", {}),
+				].join("\n")}\n`
+			),
+		],
+		stderr,
+		stdout,
+	});
+	const responses = stdout.frames.map(
+		(frame) => JSON.parse(frame) as Record<string, unknown>
+	);
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(responses[1]).toMatchObject({
+		error: {
+			code: -32_000,
+			data: {
+				code: "session_log_version_unsupported",
+				offset: 256,
+				reason,
+				sequence: 7,
+				sessionId: exportedSessionId,
+			},
+		},
+		id: "export",
 	});
 });
 

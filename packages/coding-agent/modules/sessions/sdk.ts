@@ -53,6 +53,9 @@ import {
 	snapshotSessionSdkCapabilityCeiling,
 } from "./sdk-contract";
 import type { SessionSdkOptions as PublicSessionSdkOptions } from "./sdk-options";
+import { createSessionBundleExportOperation } from "./session-bundle-export";
+import { createSessionBundleImportOperation } from "./session-bundle-import";
+import { forkSessionThroughIdleHostAndThen } from "./session-fork-routing";
 
 export type * from "./sdk-contract";
 export type { SessionSdkOptions } from "./sdk-options";
@@ -62,6 +65,7 @@ import type {
 	SessionSubmissionAdmission,
 } from "@/modules/sessions/agent-session/types";
 import { createValidatedPluginProviderCollectionForSelection } from "@/modules/sessions/host/agent-session-turn-runner";
+import { assertImportedSessionAgentIsAvailable } from "@/modules/sessions/host/imported-session-agent";
 import {
 	createSessionCapabilities,
 	type SessionCapabilitiesAssembly,
@@ -294,31 +298,31 @@ const pluginProviderSourcesFor = (
 		| SessionSdkRuntimeOptions["getPluginProviderSources"]
 		| undefined
 ): readonly SessionSdkPluginProviderSource[] => {
+	// A caller-supplied resolver reflects the current composition after resource reloads;
+	// an SDK-owned PluginRuntime may still contain the previous registration.
+	if (getPluginProviderSources !== undefined) {
+		return getPluginProviderSources([providerId]).filter(
+			(source) => source.providerId === providerId
+		);
+	}
 	const registrations =
 		pluginRuntime
 			?.getProviderRegistrations()
 			.filter((registration) => registration.providerId === providerId) ?? [];
-	if (registrations.length > 0) {
-		return registrations.map(
-			({
-				pluginId,
-				providerId: registeredProviderId,
-				sourceIdentity,
-				sourcePath,
-				sourceScope,
-			}) => ({
-				pluginId,
-				providerId: registeredProviderId,
-				sourceIdentity,
-				sourcePath,
-				...(sourceScope === undefined ? {} : { sourceScope }),
-			})
-		);
-	}
-	return (
-		getPluginProviderSources?.([providerId]).filter(
-			(source) => source.providerId === providerId
-		) ?? []
+	return registrations.map(
+		({
+			pluginId,
+			providerId: registeredProviderId,
+			sourceIdentity,
+			sourcePath,
+			sourceScope,
+		}) => ({
+			pluginId,
+			providerId: registeredProviderId,
+			sourceIdentity,
+			sourcePath,
+			...(sourceScope === undefined ? {} : { sourceScope }),
+		})
 	);
 };
 
@@ -342,7 +346,7 @@ const currentSessionPluginProviderRegistration = (
 	if (registration === undefined) {
 		return;
 	}
-	if (selectedSources !== undefined) {
+	if (selectedSources !== undefined && getPluginProviderSources === undefined) {
 		const matchingSources = selectedSources.filter(
 			(source) => source.providerId === providerId
 		);
@@ -709,7 +713,11 @@ const handleFor = (
 	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
 	getPluginProviderSources:
 		| SessionSdkRuntimeOptions["getPluginProviderSources"]
-		| undefined
+		| undefined,
+	openForkedSession: (
+		sessionId: SessionId,
+		defaults: SessionSdkSelectionDefaults
+	) => Promise<SessionSdkHandle>
 ): SessionSdkHandle => {
 	const { capabilities } = assembly;
 	let disposed = false;
@@ -986,6 +994,22 @@ const handleFor = (
 	};
 	return Object.freeze({
 		continue: () => host.agentSession.continue(),
+		fork: async (checkpoint, operationId) => {
+			if (disposed) {
+				throw new Error("Session handle is disposed.");
+			}
+			return await forkSessionThroughIdleHostAndThen(
+				capabilities.getSessionHostManager().withIdleForSessionFork,
+				assembly.store,
+				sessionId,
+				checkpoint,
+				operationId,
+				async (result) => ({
+					...result,
+					handle: await openForkedSession(result.id, currentDefaults),
+				})
+			);
+		},
 		interrupt: () => host.agentSession.interruptAll(),
 		dispose: () => {
 			if (disposePromise !== undefined) {
@@ -1107,6 +1131,13 @@ const createSessionSdkInternal = async (
 	});
 	const handles = new Set<SessionSdkHandle>();
 	const sessionRuntimes = new Set<SessionSdk>();
+	const exportSessionBundleOperation = createSessionBundleExportOperation(
+		assembly.capabilities.getSessionHostManager(),
+		assembly.store
+	);
+	const importSessionBundleOperation = createSessionBundleImportOperation(
+		assembly.store
+	);
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
 	const unresolvedDefaultSelection = sessionSelectionDefaults(
@@ -1168,6 +1199,15 @@ const createSessionSdkInternal = async (
 					projectSessionMessageRecords(record.messages, record)
 				),
 			});
+			const isImportedSession =
+				(await assembly.store.isSessionImported?.(sessionId)) ??
+				(await assembly.store.isSessionImportActivationPending?.(sessionId)) ??
+				false;
+			assertImportedSessionAgentIsAvailable(
+				assembly.capabilities.getRegistry(),
+				priorSelection?.persistedAgent ?? records.at(-1)?.agentId,
+				isImportedSession
+			);
 			const hasStoredProviderModelSelection =
 				stored.model !== undefined || priorSelection !== null;
 			const fallbackSelection = hasStoredProviderModelSelection
@@ -1218,7 +1258,13 @@ const createSessionSdkInternal = async (
 				defaults,
 				pluginRuntime,
 				inheritedPluginProviderSources,
-				getPluginProviderSources
+				getPluginProviderSources,
+				(forkedSessionId, forkDefaults) =>
+					openSession(
+						forkedSessionId,
+						{ autoContinue: false, view: true },
+						forkDefaults
+					)
 			);
 			handles.add(handle);
 			return handle;
@@ -1347,7 +1393,7 @@ const createSessionSdkInternal = async (
 			providerCollectionTransferred = true;
 			const handle = await openSession(id, {}, selection, providerCollection);
 			if (createOptions?.initialPrompt !== undefined && createdNew) {
-				handle.continue();
+				await handle.continue();
 			}
 			return handle;
 		} finally {
@@ -1478,6 +1524,46 @@ const createSessionSdkInternal = async (
 				toSessionId(sessionId),
 				statisticsOptions
 			),
+		forkSession: async (sourceSessionId, checkpoint, operationId) => {
+			if (disposed) {
+				throw new Error("Session SDK is disposed.");
+			}
+			const sessionId = toSessionId(sourceSessionId);
+			return await forkSessionThroughIdleHostAndThen(
+				assembly.capabilities.getSessionHostManager().withIdleForSessionFork,
+				assembly.store,
+				sessionId,
+				checkpoint,
+				operationId,
+				async (result) => ({
+					...result,
+					handle: await openSession(result.id, {
+						autoContinue: false,
+						view: true,
+					}),
+				})
+			);
+		},
+		exportSessionBundle: async (sessionId, destination, exportOptions) => {
+			if (disposed) {
+				throw new Error("Session SDK is disposed.");
+			}
+			return await exportSessionBundleOperation({
+				destination,
+				sessionId,
+				sourceWorkspacePath: workspace,
+				...omitUndefined({ signal: exportOptions?.signal }),
+			});
+		},
+		importSessionBundle: async (bundlePath, importOptions) => {
+			if (disposed) {
+				throw new Error("Session SDK is disposed.");
+			}
+			return await importSessionBundleOperation({
+				bundlePath,
+				...omitUndefined({ signal: importOptions?.signal }),
+			});
+		},
 		getAgentCatalog,
 		createSession,
 		deliverToSession: async (sessionId, input) => {
@@ -1586,6 +1672,12 @@ export const createSessionSdkOperations = (
 				{ ignoreConfiguredPlugins: true, manager, store }
 			);
 		};
+	const exportSessionBundleOperation = createSessionBundleExportOperation(
+		manager,
+		store
+	);
+	const importSessionBundleOperation =
+		createSessionBundleImportOperation(store);
 	const withSessionRuntime = async <Result>(
 		operation: (sdk: SessionSdk) => Promise<Result>,
 		runtimeOptions?: SessionRuntimeOptions
@@ -1596,6 +1688,65 @@ export const createSessionSdkOperations = (
 		} finally {
 			await sdk.dispose();
 		}
+	};
+	const ownSdkHandle = (
+		sdk: SessionSdk,
+		initialHandle: SessionSdkHandle
+	): SessionSdkHandle => {
+		let handleCount = 0;
+		let activeOperations = 0;
+		let sdkDisposePromise: Promise<void> | undefined;
+		const disposeSdkWhenUnused = async (): Promise<void> => {
+			if (handleCount > 0 || activeOperations > 0) {
+				return;
+			}
+			sdkDisposePromise ??= sdk.dispose();
+			await sdkDisposePromise;
+		};
+		const withOperation = async <Result>(
+			operation: () => Promise<Result>
+		): Promise<Result> => {
+			activeOperations += 1;
+			try {
+				return await operation();
+			} finally {
+				activeOperations -= 1;
+				await disposeSdkWhenUnused();
+			}
+		};
+		const wrapHandle = (handle: SessionSdkHandle): SessionSdkHandle => {
+			handleCount += 1;
+			let handleDisposePromise: Promise<void> | undefined;
+			return Object.freeze({
+				continue: () => withOperation(handle.continue),
+				fork: (checkpoint, operationId) =>
+					withOperation(async () => {
+						const result = await handle.fork(checkpoint, operationId);
+						return { ...result, handle: wrapHandle(result.handle) };
+					}),
+				dispose: () => {
+					if (handleDisposePromise !== undefined) {
+						return handleDisposePromise;
+					}
+					handleDisposePromise = (async () => {
+						try {
+							await handle.dispose();
+						} finally {
+							handleCount -= 1;
+							await disposeSdkWhenUnused();
+						}
+					})();
+					return handleDisposePromise;
+				},
+				interrupt: () => withOperation(handle.interrupt),
+				deliver: (input) => withOperation(() => handle.deliver(input)),
+				onEvent: handle.onEvent,
+				prompt: (input) => withOperation(() => handle.prompt(input)),
+				sessionId: handle.sessionId,
+				subscribe: handle.subscribe,
+			});
+		};
+		return wrapHandle(initialHandle);
 	};
 	return {
 		createSessionRuntime,
@@ -1613,32 +1764,43 @@ export const createSessionSdkOperations = (
 			store.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
 		getSessionStatistics: (sessionId, statisticsOptions) =>
 			store.getSessionStatistics(toSessionId(sessionId), statisticsOptions),
+		forkSession: async (sourceSessionId, checkpoint, operationId) => {
+			const sessionId = toSessionId(sourceSessionId);
+			const sdk = await createSessionRuntime({ sessionId });
+			try {
+				const result = await sdk.forkSession(
+					sessionId,
+					checkpoint,
+					operationId
+				);
+				return { ...result, handle: ownSdkHandle(sdk, result.handle) };
+			} catch (error) {
+				await sdk.dispose();
+				throw error;
+			}
+		},
+		exportSessionBundle: (sessionId, destination, exportOptions) =>
+			exportSessionBundleOperation({
+				destination,
+				sessionId,
+				sourceWorkspacePath:
+					hostRuntimeOptions.workspace ??
+					hostRuntimeOptions.cwd ??
+					process.cwd(),
+				...omitUndefined({ signal: exportOptions?.signal }),
+			}),
+		importSessionBundle: (bundlePath, importOptions) =>
+			importSessionBundleOperation({
+				bundlePath,
+				...omitUndefined({ signal: importOptions?.signal }),
+			}),
 		deliverToSession: (sessionId, input) =>
 			withSessionRuntime((sdk) => sdk.deliverToSession(sessionId, input)),
 		openSession: async (sessionId, openOptions) => {
-			const sdk = await createSessionRuntime();
+			const sdk = await createSessionRuntime({ sessionId });
 			try {
 				const handle = await sdk.openSession(sessionId, openOptions);
-				let disposePromise: Promise<void> | undefined;
-				return Object.freeze({
-					continue: handle.continue,
-					deliver: handle.deliver,
-					dispose: () => {
-						if (disposePromise !== undefined) {
-							return disposePromise;
-						}
-						disposePromise = (async () => {
-							await handle.dispose();
-							await sdk.dispose();
-						})();
-						return disposePromise;
-					},
-					interrupt: handle.interrupt,
-					onEvent: handle.onEvent,
-					prompt: handle.prompt,
-					sessionId: handle.sessionId,
-					subscribe: handle.subscribe,
-				});
+				return ownSdkHandle(sdk, handle);
 			} catch (error) {
 				await sdk.dispose();
 				throw error;

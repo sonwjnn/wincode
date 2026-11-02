@@ -47,6 +47,27 @@ export const sessionStoreWithSuccessfulWrites = (
 	readSessionHistoryPage: async () => {
 		throw new Error("Session history pages are not used by this test store.");
 	},
+	forkSession: async () => {
+		throw new Error(
+			"Session forking is not used by this projection-only test store."
+		);
+	},
+	forkSessionWithHeldWriter: async () => {
+		throw new Error(
+			"Session forking is not used by this projection-only test store."
+		);
+	},
+	getSessionForkProvenance: async () => undefined,
+	getOrCreateSessionForkActionId: async () => {
+		throw new Error(
+			"Session fork action IDs are not used by this projection-only test store."
+		);
+	},
+	completeSessionForkAction: async () => {
+		throw new Error(
+			"Session fork action IDs are not used by this projection-only test store."
+		);
+	},
 	getSessionStatistics: async (sessionId, options) => {
 		const emptyUsage = {
 			byModel: [],
@@ -83,6 +104,7 @@ export const sessionStoreWithSuccessfulWrites = (
 					}),
 			usage: {
 				actual: emptyUsage,
+				contributions: { actual: [], auxiliary: [], inherited: [] },
 				auxiliary: emptyUsage,
 				inherited: emptyUsage,
 			},

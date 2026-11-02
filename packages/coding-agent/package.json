@@ -32,6 +32,7 @@
     "test:e2e": "bun ../../scripts/test-portfolio.ts e2e --package coding-agent",
     "check-types": "tsc --noEmit",
     "db:reset-sessions": "bun run scripts/reset-session-data.ts",
+    "bench:session-jsonl": "bun run scripts/session-jsonl-benchmark.ts",
     "db:push": "drizzle-kit push --config drizzle.config.ts",
     "db:studio": "drizzle-kit studio --config drizzle.config.ts",
     "generate-routes": "tsr generate"

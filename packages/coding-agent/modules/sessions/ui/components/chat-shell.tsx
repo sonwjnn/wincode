@@ -1,6 +1,10 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import type { AgentId, SessionMessageId } from "@wincode/agent-core";
+import type {
+	AgentId,
+	SessionMessageId,
+	SessionRecordId,
+} from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
 import {
@@ -16,6 +20,7 @@ import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
 	AUTO_COMPACT_SETTING,
@@ -63,6 +68,12 @@ const EMPTY_QUEUED_SUBMISSIONS: readonly SessionQueuedSubmission[] = [];
 
 type ChatShellProps = {
 	activeMessages?: readonly SessionMessage[];
+	forkCheckpoints?: ReadonlyMap<
+		SessionMessageId,
+		SessionForkCheckpointAssessment
+	>;
+	rewindingCheckpointId?: SessionRecordId;
+	onRewindCheckpoint?: (recordId: SessionRecordId) => void | Promise<void>;
 	compactions?: readonly SessionCompaction[];
 	draftKey?: string;
 	error?: unknown;
@@ -157,6 +168,9 @@ const resolveNoticeSlot = (
 
 export function ChatShell({
 	activeMessages,
+	forkCheckpoints,
+	rewindingCheckpointId,
+	onRewindCheckpoint,
 	compactions = [],
 	draftKey,
 	error,
@@ -441,8 +455,14 @@ export function ChatShell({
 							>
 								<ChatMessage
 									footerMessage={footerMessages.get(turn.id)}
+									forkCheckpoints={forkCheckpoints}
+									isRewindDisabled={
+										isBusy || rewindingCheckpointId !== undefined
+									}
 									messages={turn.messages}
 									onRetry={canRetryTurn ? onRetry : undefined}
+									onRewindCheckpoint={onRewindCheckpoint}
+									rewindingCheckpointId={rewindingCheckpointId}
 									streaming={isBusy && turn.id === turns.at(-1)?.id}
 								/>
 							</box>

@@ -4,6 +4,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { dispatch } from "@/modules/application/dispatch";
+import { runSessionsCli } from "@/modules/application/sessions-cli";
+import { SessionForkBusyError } from "@/modules/sessions/host/session-host-manager";
+import type { SessionHost } from "@/modules/sessions/host/types";
+import type {
+	SessionBundleExportResult,
+	SessionBundleImportResult,
+} from "@/modules/sessions/session-bundle-contract";
+import { SessionBundleExportError } from "@/modules/sessions/session-bundle-export";
+import { SessionBundleImportError } from "@/modules/sessions/session-bundle-import";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import { resolveLocalSessionProjectionPath } from "@/modules/sessions/storage/path";
@@ -16,6 +25,7 @@ import { SessionPaginationError } from "@/modules/sessions/storage/session-pagin
 import type {
 	Session,
 	SessionCatalogPage,
+	SessionForkResult,
 	SessionHistoryPage,
 	SessionPageOptions,
 	SessionProjectionMaintenanceGate,
@@ -25,6 +35,7 @@ import type {
 	SessionStatisticsOptions,
 	SessionStore,
 } from "@/modules/sessions/storage/session-store";
+import { SessionInUseError } from "@/modules/sessions/storage/session-writer-lock";
 import { toSessionId } from "@/shared/identifiers";
 import {
 	agentTurnId,
@@ -32,6 +43,122 @@ import {
 } from "../support/identifiers";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-sessions-cli-"));
+
+test("Sessions import CLI returns the shared activation-gated receipt as one JSON line", async () => {
+	const bundlePath = path.join(root, "portable-session");
+	const sessionId = toSessionId("cli-import-session");
+	const result: SessionBundleImportResult = {
+		activationPending: true,
+		sessionId,
+		status: "imported",
+	};
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	let requestedPath: string | undefined;
+	const code = await runSessionsCli(
+		["import", bundlePath, "--json"],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		{
+			importSessionBundle: async (input) => {
+				requestedPath = input.bundlePath;
+				return result;
+			},
+		}
+	);
+
+	expect(code).toBe(0);
+	expect(stderr).toEqual([]);
+	expect(JSON.parse(stdout[0] ?? "null")).toMatchObject({
+		command: "import",
+		activationPending: true,
+		sessionId,
+		status: "imported",
+	});
+	expect(requestedPath).toBe(bundlePath);
+});
+
+test("Sessions import CLI returns stable conflict codes in JSON output", async () => {
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	const code = await runSessionsCli(
+		["import", path.join(root, "conflicting-bundle"), "--json"],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		{
+			importSessionBundle: async () => {
+				throw new SessionBundleImportError(
+					"session_import_conflict",
+					"Same Session ID has different log content."
+				);
+			},
+		}
+	);
+
+	expect(code).toBe(1);
+	expect(stderr).toEqual([]);
+	expect(JSON.parse(stdout[0] ?? "null")).toMatchObject({
+		command: "import",
+		status: "failed",
+		error: { code: "session_import_conflict" },
+	});
+});
+
+test("Sessions export CLI returns the shared bundle result as one JSON line", async () => {
+	const sessionId = toSessionId("cli-export-session");
+	const destination = path.join(root, "exported-session");
+	const result: SessionBundleExportResult = {
+		destination,
+		manifest: {
+			attachments: [],
+			cut: { hash: "a".repeat(64), sequence: 1 },
+			format: "wincode-session-bundle",
+			session: { id: sessionId, logId: "cli-export-log" },
+			sessionFile: {
+				byteLength: 42,
+				path: "session.jsonl",
+				sha256: "b".repeat(64),
+			},
+			version: 1,
+		},
+		sessionId,
+		status: "exported",
+	};
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	let request: Readonly<{ destination: string; sessionId: string }> | undefined;
+	const code = await runSessionsCli(
+		["export", sessionId, destination, "--json"],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		{
+			exportSessionBundle: async (input) => {
+				request = input;
+				return result;
+			},
+		}
+	);
+
+	expect(code).toBe(0);
+	expect(stderr).toEqual([]);
+	expect(stdout).toHaveLength(1);
+	expect(JSON.parse(stdout[0] ?? "null")).toMatchObject({
+		command: "export",
+		destination,
+		sessionId,
+		status: "exported",
+	});
+	expect(request).toMatchObject({ destination, sessionId });
+});
 
 const createPersistence = (
 	databasePath: string,
@@ -81,6 +208,292 @@ const runVerify = async (
 	);
 	return { code, stderr: stderr.join(""), stdout: stdout.join("") };
 };
+
+test("Sessions export CLI reports corrupt-log sequence and byte offset", async () => {
+	const sessionId = toSessionId("cli-corrupt-export-session");
+	const reason = "Session log contains a duplicate retained record identity.";
+	const failure = new SessionBundleExportError(
+		"session_log_corrupt",
+		sessionId,
+		reason,
+		{ offset: 123, reason, sequence: 4 }
+	);
+	const exportSessionBundle = async () => {
+		throw failure;
+	};
+	const jsonStdout: string[] = [];
+	const jsonStderr: string[] = [];
+	const jsonCode = await runSessionsCli(
+		["export", sessionId, path.join(root, "bad-json-export"), "--json"],
+		{
+			stderr: { write: (text) => jsonStderr.push(text) },
+			stdout: { write: (text) => jsonStdout.push(text) },
+		},
+		undefined,
+		{ exportSessionBundle }
+	);
+	const humanStdout: string[] = [];
+	const humanStderr: string[] = [];
+	const humanCode = await runSessionsCli(
+		["export", sessionId, path.join(root, "bad-human-export")],
+		{
+			stderr: { write: (text) => humanStderr.push(text) },
+			stdout: { write: (text) => humanStdout.push(text) },
+		},
+		undefined,
+		{ exportSessionBundle }
+	);
+
+	expect(jsonCode).toBe(1);
+	expect(jsonStderr).toEqual([]);
+	expect(JSON.parse(jsonStdout.join(""))).toMatchObject({
+		command: "export",
+		error: {
+			code: "session_log_corrupt",
+			offset: 123,
+			reason,
+			sequence: 4,
+			sessionId,
+		},
+		status: "failed",
+	});
+	expect(humanCode).toBe(1);
+	expect(humanStdout).toEqual([]);
+	expect(humanStderr.join("")).toContain("sequence 4 / byte offset 123");
+	expect(humanStderr.join("")).toContain(reason);
+});
+
+test("Sessions export CLI preserves unsupported-version log diagnostics", async () => {
+	const sessionId = toSessionId("cli-unsupported-export-session");
+	const reason = "Session log format version is not supported.";
+	const failure = new SessionBundleExportError(
+		"session_log_version_unsupported",
+		sessionId,
+		reason,
+		{ offset: 256, reason, sequence: 7 }
+	);
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	const code = await runSessionsCli(
+		[
+			"export",
+			sessionId,
+			path.join(root, "unsupported-version-export"),
+			"--json",
+		],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		{
+			exportSessionBundle: async () => {
+				throw failure;
+			},
+		}
+	);
+
+	expect(code).toBe(1);
+	expect(stderr).toEqual([]);
+	expect(JSON.parse(stdout.join(""))).toMatchObject({
+		command: "export",
+		error: {
+			code: "session_log_version_unsupported",
+			offset: 256,
+			reason,
+			sequence: 7,
+			sessionId,
+		},
+		status: "failed",
+	});
+});
+
+test("Sessions fork gates a source checkpoint and emits durable fork identity as JSON", async () => {
+	const sourceSessionId = toSessionId("cli-fork-source");
+	const result = fromPartial<SessionForkResult>({
+		checkpoint: {
+			recordId: "target-checkpoint",
+			sequence: 1,
+			turnId: "target-turn",
+		},
+		created: true,
+		id: toSessionId("cli-fork-target"),
+		writeOutcome: {
+			entryHash: "fork-entry-hash",
+			kind: "committed",
+			operationId: "cli-fork-operation",
+			projection: "ready",
+			sequence: 1,
+		},
+	});
+	const forkCalls: Array<{
+		checkpoint: { recordId: string };
+		operationId: string;
+		sourceSessionId: string;
+	}> = [];
+	const idleSources: string[] = [];
+	const forkSession: SessionStore["forkSession"] = async () => {
+		throw new Error("The CLI must route through the open Session Host.");
+	};
+	const store = fromPartial<SessionStore>({ forkSession });
+	const hostForkSession: SessionHost["forkSession"] = async (
+		checkpoint,
+		operationId
+	) => {
+		forkCalls.push({
+			checkpoint,
+			operationId,
+			sourceSessionId,
+		});
+		return result;
+	};
+	const forkHost = fromPartial<SessionHost>({
+		forkSession: hostForkSession,
+	});
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	const code = await runSessionsCli(
+		["fork", sourceSessionId, "source-record", "cli-fork-operation", "--json"],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		{
+			store,
+			withForkGate: async (requestedSourceId, operation) => {
+				idleSources.push(requestedSourceId);
+				return operation(forkHost);
+			},
+		}
+	);
+
+	expect(code).toBe(0);
+	expect(stderr).toEqual([]);
+	expect(idleSources).toEqual([sourceSessionId]);
+	expect(forkCalls).toEqual([
+		{
+			checkpoint: { recordId: "source-record" },
+			operationId: "cli-fork-operation",
+			sourceSessionId,
+		},
+	]);
+	expect(JSON.parse(stdout.join(""))).toMatchObject({
+		checkpoint: { recordId: "target-checkpoint" },
+		command: "fork",
+		created: true,
+		id: "cli-fork-target",
+		sourceSessionId,
+	});
+});
+
+test("Sessions fork preserves session_busy when Host admission refuses the source", async () => {
+	const sourceSessionId = toSessionId("cli-busy-fork-source");
+	const forkSession: SessionStore["forkSession"] = async () => {
+		throw new Error("The fork store must not run for a busy Host.");
+	};
+	const store = fromPartial<SessionStore>({ forkSession });
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	const code = await runSessionsCli(
+		["fork", sourceSessionId, "source-record", "busy-operation", "--json"],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		{
+			store,
+			withForkGate: async () => {
+				throw new SessionForkBusyError(
+					sourceSessionId,
+					"Cannot fork a Session while its Host is busy."
+				);
+			},
+		}
+	);
+
+	expect(code).toBe(1);
+	expect(stderr).toEqual([]);
+	expect(JSON.parse(stdout.join(""))).toMatchObject({
+		command: "fork",
+		error: { code: "session_busy" },
+		sourceSessionId,
+	});
+});
+
+test("Sessions fork preserves session_in_use for a foreign writer", async () => {
+	const sourceSessionId = toSessionId("cli-writer-busy-fork-source");
+	const forkSession: SessionStore["forkSession"] = async () => {
+		throw new SessionInUseError();
+	};
+	const store = fromPartial<SessionStore>({ forkSession });
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	const code = await runSessionsCli(
+		[
+			"fork",
+			sourceSessionId,
+			"source-record",
+			"writer-busy-operation",
+			"--json",
+		],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		{
+			store,
+			withForkGate: async (_requestedSourceId, operation) =>
+				operation(undefined),
+		}
+	);
+
+	expect(code).toBe(1);
+	expect(stderr).toEqual([]);
+	expect(JSON.parse(stdout.join(""))).toMatchObject({
+		command: "fork",
+		error: { code: "session_in_use" },
+		sourceSessionId,
+	});
+});
+
+test("Sessions fork JSON failure retains the operation ID for indeterminate publication", async () => {
+	const sourceSessionId = toSessionId("cli-indeterminate-fork-source");
+	const operationId = "cli-indeterminate-fork-operation";
+	const failure = Object.assign(
+		new Error("Fork publication may have completed."),
+		{ code: "session_commit_indeterminate" }
+	);
+	const forkSession: SessionStore["forkSession"] = async () => {
+		throw failure;
+	};
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	const code = await runSessionsCli(
+		["fork", sourceSessionId, "source-record", operationId, "--json"],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		{
+			store: fromPartial<SessionStore>({ forkSession }),
+			withForkGate: async (_requestedSourceId, operation) =>
+				operation(undefined),
+		}
+	);
+
+	expect(code).toBe(1);
+	expect(stderr).toEqual([]);
+	expect(JSON.parse(stdout.join(""))).toMatchObject({
+		command: "fork",
+		error: { code: "session_commit_indeterminate" },
+		operationId,
+		sourceSessionId,
+	});
+});
 
 test("Sessions list and history preserve the shared cursor snapshot contract", async () => {
 	const sessionId = toSessionId("cli-page-session");
@@ -244,6 +657,11 @@ test("Sessions stats forwards the captured point and keeps unknown cost distinct
 				unknownCostCount: 1,
 			},
 			auxiliary: emptyTotals,
+			contributions: {
+				actual: [],
+				auxiliary: [],
+				inherited: [],
+			},
 			inherited: {
 				...emptyTotals,
 				contributionCount: 1,

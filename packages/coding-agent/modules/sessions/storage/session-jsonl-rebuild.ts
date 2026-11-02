@@ -37,7 +37,10 @@ export type SessionJsonlRebuildDependencies = Readonly<{
 		sessionIds: readonly SessionId[]
 	) => Promise<AcquiredWriters>;
 	beginRebuild: () => number;
-	completeRebuild: (generation: number) => void;
+	completeRebuild: (
+		generation: number,
+		completesStatisticsRebuild: boolean
+	) => void;
 	getGeneration: () => number;
 	getMaintenanceState: () => SessionProjectionMaintenanceState;
 	listProjectedSessionIds: () => Promise<SessionId[]>;
@@ -201,7 +204,7 @@ const runUnderLifecycleGate = async (
 		}
 	}
 	if (issues.length === 0) {
-		dependencies.completeRebuild(generation);
+		dependencies.completeRebuild(generation, scope.kind === "all");
 	}
 	return result(generation, issues, rebuiltSessionIds, plan.skippedSessionIds);
 };

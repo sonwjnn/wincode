@@ -22,13 +22,18 @@ import type {
 	AgentId,
 	AttachmentId,
 	ModelId,
+	ModelStepId,
 	SessionMessageId,
 	SessionRecordId,
 	SubmissionId,
 	ToolCallId,
 } from "./identifiers";
 import type { SkillActivationSource } from "./skill-activation";
-import { isToolFailureDetails, type ToolFailureDetails } from "./tools";
+import {
+	isToolCallId,
+	isToolFailureDetails,
+	type ToolFailureDetails,
+} from "./tools";
 import type {
 	AgentTurnId,
 	AgentTurnInterruptionReason,
@@ -56,10 +61,16 @@ export type ToolCallOutcomeRecord = ReadonlyDeep<
  * the settled outcome, and the Agent Turn event sequence of the outcome so
  * consumers can order durable content against the transient event stream.
  */
+export type SessionToolCallBatch = ReadonlyDeep<{
+	id: ModelStepId;
+	toolCallIds: readonly ToolCallId[];
+}>;
+
 export type SessionToolCallPart = ReadonlyDeep<{
 	input: unknown;
 	outcome: ToolCallOutcomeRecord;
 	sequence: number;
+	toolBatch?: SessionToolCallBatch;
 	toolCallId: ToolCallId;
 	toolName: string;
 	type: "tool-call";
@@ -394,6 +405,18 @@ export const isSessionToolCallPart = (
 		return false;
 	}
 	const outcome = value.outcome;
+	const toolBatch = value.toolBatch;
+	const validToolBatch =
+		isUndefined(toolBatch) ||
+		(isPlainObject(toolBatch) &&
+			Object.keys(toolBatch).every(
+				(key) => key === "id" || key === "toolCallIds"
+			) &&
+			isNonEmptyString(toolBatch.id) &&
+			isArray(toolBatch.toolCallIds) &&
+			toolBatch.toolCallIds.length > 0 &&
+			toolBatch.toolCallIds.every(isToolCallId) &&
+			new Set(toolBatch.toolCallIds).size === toolBatch.toolCallIds.length);
 	const validOutcome =
 		outcome.kind === "success"
 			? Object.keys(outcome).every(
@@ -411,6 +434,7 @@ export const isSessionToolCallPart = (
 				key === "input" ||
 				key === "outcome" ||
 				key === "sequence" ||
+				key === "toolBatch" ||
 				key === "toolCallId" ||
 				key === "toolName" ||
 				key === "type"
@@ -419,6 +443,7 @@ export const isSessionToolCallPart = (
 		isNonEmptyString(value.toolCallId) &&
 		isNonEmptyString(value.toolName) &&
 		isNonNegativeInteger(value.sequence) &&
+		validToolBatch &&
 		validOutcome &&
 		"input" in value
 	);

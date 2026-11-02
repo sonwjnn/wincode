@@ -16,9 +16,11 @@ export type FakeGenerationRequest =
 	| {
 			readonly kind: "chat";
 			readonly messages: readonly FakeMessageRequest[];
+			readonly model?: Readonly<Pick<ProviderModel, "modelId" | "providerId">>;
 	  }
 	| {
 			readonly kind: "summary";
+			readonly model?: Readonly<Pick<ProviderModel, "modelId" | "providerId">>;
 			readonly system: string;
 			readonly text: string;
 	  };
@@ -79,18 +81,16 @@ const requestMessages = (request: ProviderChatRequest): FakeMessageRequest[] =>
 const isSummaryRequest = (request: ProviderChatRequest): boolean =>
 	request.system?.includes("session summarizer") === true;
 
-const defaultProviderStepScript: FakeProviderStepScript = async function* (
-	request,
-	recorder
+const defaultProviderStepScript = async function* (
+	request: ProviderChatRequest,
+	recorder: FakeProviderRecorder,
+	model: ProviderModel
 ): AsyncGenerator<ProviderChatEvent> {
-	if (recorder.stepScript !== undefined) {
-		yield* recorder.stepScript(request, recorder);
-		return;
-	}
 	await recorder.beforeChat?.(request);
 	if (isSummaryRequest(request)) {
 		recorder.requests.push({
 			kind: "summary",
+			model: { modelId: model.modelId, providerId: model.providerId },
 			system: request.system ?? "",
 			text: requestText(request),
 		});
@@ -105,6 +105,7 @@ const defaultProviderStepScript: FakeProviderStepScript = async function* (
 	recorder.requests.push({
 		kind: "chat",
 		messages: requestMessages(request),
+		model: { modelId: model.modelId, providerId: model.providerId },
 	});
 	yield { delta: "E2E chat response", type: "text-delta" };
 	await recorder.afterTextDelta?.();
@@ -187,10 +188,12 @@ export const createFakeProviderCollection = (
 			models: providerModels,
 			resolveAuthorization: ({ credential }) =>
 				credential === undefined ? null : { authorization: credential },
-			async *streamChat(request): AsyncGenerator<ProviderChatEvent> {
-				for await (const event of (
-					recorder.stepScript ?? defaultProviderStepScript
-				)(request, recorder)) {
+			async *streamChat(request, context): AsyncGenerator<ProviderChatEvent> {
+				const events =
+					recorder.stepScript === undefined
+						? defaultProviderStepScript(request, recorder, context.model)
+						: recorder.stepScript(request, recorder);
+				for await (const event of events) {
 					yield event.type === "finish" && event.completion === undefined
 						? { ...event, completion: { kind: "completed" } }
 						: event;

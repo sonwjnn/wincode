@@ -1,5 +1,6 @@
 import {
 	agentIdSchema,
+	isSessionToolCallPart,
 	type SessionRecord,
 	toAgentTurnId,
 	toSessionMessageId,
@@ -32,16 +33,23 @@ import {
 	sessionCatalogDeletionState,
 	sessionCatalogVersion,
 	sessionCompaction,
+	sessionForkProvenance,
 	sessionOperationLookup,
 	sessionProjectionCursor,
 	sessionProjectionState,
 	sessionRecord,
+	sessionRecordMessageIdentity,
+	sessionRecordToolCall,
 	sessionRecordVersion,
 	sessionUsageEntry,
 } from "./schema";
 import {
+	parseSessionCompactionPayload,
+	parseSessionForkedPayload,
+	type SessionCompactionPayload,
 	type SessionJsonlProjection,
 	type SessionLogEntry,
+	type SessionLogEnvelope,
 	SessionLogError,
 	type SessionProjectionMaintenanceState,
 	sessionLogOperationDigest,
@@ -73,18 +81,225 @@ const assertProjectionMaintenanceMode = (
 	}
 };
 
-const sessionRecordIdentityMatches = (
-	existing: typeof sessionRecord.$inferSelect,
+type SessionProjectionTransaction = Parameters<
+	SessionDatabase["transaction"]
+>[0] extends (transaction: infer Transaction) => unknown
+	? Transaction
+	: never;
+
+const bindSessionProjectionWorkspace = (
+	operationalDb: SessionDatabase,
+	sessionId: SessionId,
+	workspaceId: WorkspaceId,
+	mode: "append" | "replace" | "maintenance"
+): string => {
+	const binding = operationalDb
+		.select({ workspaceId: localSessionBinding.workspaceId })
+		.from(localSessionBinding)
+		.where(eq(localSessionBinding.sessionId, sessionId))
+		.get();
+	const targetWorkspaceId =
+		mode !== "append" && binding !== undefined
+			? binding.workspaceId
+			: workspaceId;
+	if (binding === undefined) {
+		operationalDb
+			.insert(localSessionBinding)
+			.values({ sessionId, workspaceId })
+			.run();
+	} else if (binding.workspaceId !== targetWorkspaceId) {
+		throw new Error("Session is already bound to another workspace.");
+	}
+	return targetWorkspaceId;
+};
+
+const projectSessionRecordMessageIdentities = (
+	tx: SessionProjectionTransaction,
 	sessionId: SessionId,
 	record: SessionRecord
-): boolean =>
-	existing.sessionId === sessionId &&
-	existing.turnId === record.turnId &&
-	existing.agentId === record.agentId &&
-	existing.version === record.version &&
-	Bun.deepEquals(existing.modelJson, record.model, true) &&
-	Bun.deepEquals(existing.outcomeJson, record.outcome, true) &&
-	Bun.deepEquals(existing.messagesJson, record.messages, true);
+): string[] => {
+	const joinedTurnIds: string[] = [];
+	for (const message of record.messages) {
+		const sourceUserMessageId = message.metadata?.sourceUserMessageId;
+		if (sourceUserMessageId !== undefined) {
+			const sourceMessage = tx
+				.select({ role: sessionRecordMessageIdentity.role })
+				.from(sessionRecordMessageIdentity)
+				.where(
+					and(
+						eq(sessionRecordMessageIdentity.sessionId, sessionId),
+						eq(
+							sessionRecordMessageIdentity.messageId,
+							String(sourceUserMessageId)
+						)
+					)
+				)
+				.get();
+			if (sourceMessage?.role !== "user") {
+				throw new Error(
+					"Session Record context refers to a missing source User Message."
+				);
+			}
+		}
+		const joinedTurnId = message.metadata?.joinedTurnId;
+		if (joinedTurnId !== undefined) {
+			joinedTurnIds.push(String(joinedTurnId));
+		}
+		tx.insert(sessionRecordMessageIdentity)
+			.values({
+				messageId: String(message.id),
+				recordId: record.id,
+				role: message.role,
+				sessionId,
+				submissionId:
+					message.role === "user"
+						? (message.metadata?.submissionId ?? null)
+						: null,
+			})
+			.run();
+	}
+	return joinedTurnIds;
+};
+
+const assertProjectionOperationIdIsNew = (
+	tx: SessionProjectionTransaction,
+	sessionId: SessionId,
+	envelope: SessionLogEnvelope
+): void => {
+	if (
+		envelope.type === "session.header" ||
+		envelope.type === "session.deleted"
+	) {
+		return;
+	}
+	const existing = tx
+		.select({ operationId: sessionOperationLookup.operationId })
+		.from(sessionOperationLookup)
+		.where(
+			and(
+				eq(sessionOperationLookup.sessionId, sessionId),
+				eq(sessionOperationLookup.operationId, envelope.operationId)
+			)
+		)
+		.get();
+	if (existing !== undefined) {
+		throw new Error("Session log repeats a committed operation identity.");
+	}
+};
+
+const assertProjectedCompactionChain = (
+	tx: SessionProjectionTransaction,
+	sessionId: SessionId,
+	payload: SessionCompactionPayload
+): void => {
+	const previous = tx
+		.select({ id: sessionCompaction.id, sequence: sessionCompaction.sequence })
+		.from(sessionCompaction)
+		.where(eq(sessionCompaction.sessionId, sessionId))
+		.orderBy(desc(sessionCompaction.sequence))
+		.limit(1)
+		.get();
+	const existingId = tx
+		.select({ id: sessionCompaction.id })
+		.from(sessionCompaction)
+		.where(eq(sessionCompaction.id, toCompactionId(payload.id)))
+		.get();
+	if (
+		payload.sequence !== (previous?.sequence ?? 0) + 1 ||
+		payload.priorCompactionId !== (previous?.id ?? null) ||
+		existingId !== undefined
+	) {
+		throw new Error("Session log contains a broken compaction identity chain.");
+	}
+};
+
+const projectedCompactionMessageIds = (
+	tx: SessionProjectionTransaction,
+	sessionId: SessionId,
+	messageIds: readonly string[]
+): Set<SessionRecord["messages"][number]["id"]> => {
+	const availableMessageIds = new Set<
+		SessionRecord["messages"][number]["id"]
+	>();
+	for (const messageId of new Set(messageIds)) {
+		const message = tx
+			.select({ messageId: sessionRecordMessageIdentity.messageId })
+			.from(sessionRecordMessageIdentity)
+			.where(
+				and(
+					eq(sessionRecordMessageIdentity.sessionId, sessionId),
+					eq(sessionRecordMessageIdentity.messageId, messageId)
+				)
+			)
+			.get();
+		if (message !== undefined) {
+			availableMessageIds.add(toSessionMessageId(message.messageId));
+		}
+	}
+	return availableMessageIds;
+};
+
+const assertProjectionEntryIsSafe = (
+	tx: SessionProjectionTransaction,
+	sessionId: SessionId,
+	envelope: SessionLogEnvelope
+): void => {
+	if (envelope.sessionId !== sessionId) {
+		throw new Error("Session log projection contains a foreign entry.");
+	}
+	assertProjectionOperationIdIsNew(tx, sessionId, envelope);
+};
+
+const assertJoinedTurnReferencesExist = (
+	tx: SessionProjectionTransaction,
+	sessionId: SessionId,
+	turnIds: readonly string[]
+): void => {
+	for (const turnId of turnIds) {
+		const joinedTurn = tx
+			.select({ turnId: sessionRecord.turnId })
+			.from(sessionRecord)
+			.where(
+				and(
+					eq(sessionRecord.sessionId, sessionId),
+					eq(sessionRecord.turnId, turnId)
+				)
+			)
+			.limit(1)
+			.get();
+		if (joinedTurn === undefined) {
+			throw new Error(
+				"Session Record context refers to a missing joined Agent Turn."
+			);
+		}
+	}
+};
+
+const projectRecordToolCalls = (
+	tx: SessionProjectionTransaction,
+	sessionId: SessionId,
+	record: SessionRecord,
+	sourceSequence: number
+): void => {
+	const toolCallIds = new Set(
+		record.messages.flatMap((message) =>
+			message.parts.flatMap((part) =>
+				isSessionToolCallPart(part) ? [part.toolCallId] : []
+			)
+		)
+	);
+	for (const toolCallId of toolCallIds) {
+		tx.insert(sessionRecordToolCall)
+			.values({
+				sessionId,
+				sourceSequence,
+				toolCallId,
+				turnId: record.turnId,
+			})
+			.onConflictDoNothing()
+			.run();
+	}
+};
 
 export const createSessionJsonlProjection = (
 	db: SessionDatabase,
@@ -96,6 +311,7 @@ export const createSessionJsonlProjection = (
 			id: 1,
 			projectionId: crypto.randomUUID(),
 			generation: 0,
+			statisticsVersion: 1,
 			status: "ready",
 		})
 		.onConflictDoNothing()
@@ -137,7 +353,7 @@ export const createSessionJsonlProjection = (
 					.run();
 				return generation;
 			}),
-		completeRebuild: (generation) =>
+		completeRebuild: (generation, completesStatisticsRebuild) =>
 			db.transaction((tx) => {
 				const current = tx
 					.select()
@@ -152,7 +368,11 @@ export const createSessionJsonlProjection = (
 					throw new Error("Session projection rebuild generation changed.");
 				}
 				tx.update(sessionProjectionState)
-					.set({ paginationVersion: 2, status: "ready" })
+					.set({
+						paginationVersion: 2,
+						...(completesStatisticsRebuild ? { statisticsVersion: 1 } : {}),
+						status: "ready",
+					})
 					.where(
 						and(
 							eq(sessionProjectionState.id, 1),
@@ -194,6 +414,18 @@ export const createSessionJsonlProjection = (
 				.get();
 			return row;
 		},
+		isSessionImportActivationConfirmed: (sessionId) =>
+			db
+				.select({ operationId: sessionOperationLookup.operationId })
+				.from(sessionOperationLookup)
+				.where(
+					and(
+						eq(sessionOperationLookup.sessionId, sessionId),
+						eq(sessionOperationLookup.type, "session.activation-confirmed")
+					)
+				)
+				.limit(1)
+				.get() !== undefined,
 		isBoundToAnotherWorkspace: (sessionId) => {
 			const binding = operationalDb
 				.select({ workspaceId: localSessionBinding.workspaceId })
@@ -298,23 +530,12 @@ export const createSessionJsonlProjection = (
 				throw new Error("Session projection maintenance state is missing.");
 			}
 			assertProjectionMaintenanceMode(maintenance.status, mode);
-			const binding = operationalDb
-				.select({ workspaceId: localSessionBinding.workspaceId })
-				.from(localSessionBinding)
-				.where(eq(localSessionBinding.sessionId, sessionId))
-				.get();
-			const targetWorkspaceId =
-				mode !== "append" && binding !== undefined
-					? binding.workspaceId
-					: workspaceId;
-			if (binding === undefined) {
-				operationalDb
-					.insert(localSessionBinding)
-					.values({ sessionId, workspaceId })
-					.run();
-			} else if (binding.workspaceId !== targetWorkspaceId) {
-				throw new Error("Session is already bound to another workspace.");
-			}
+			const targetWorkspaceId = bindSessionProjectionWorkspace(
+				operationalDb,
+				sessionId,
+				workspaceId,
+				mode
+			);
 			db.transaction((tx) => {
 				const currentMaintenance = tx
 					.select({
@@ -350,6 +571,9 @@ export const createSessionJsonlProjection = (
 					tx.delete(sessionCompaction)
 						.where(eq(sessionCompaction.sessionId, sessionId))
 						.run();
+					tx.delete(sessionRecordMessageIdentity)
+						.where(eq(sessionRecordMessageIdentity.sessionId, sessionId))
+						.run();
 					tx.delete(sessionRecord)
 						.where(eq(sessionRecord.sessionId, sessionId))
 						.run();
@@ -375,6 +599,7 @@ export const createSessionJsonlProjection = (
 
 				let catalogRevision = currentMaintenance.catalogRevision;
 				let latestDeletionRevision = currentMaintenance.latestDeletionRevision;
+				const pendingJoinedTurnReferences: string[] = [];
 
 				const snapshotSession = (revision: number): void => {
 					const row = tx
@@ -430,12 +655,9 @@ export const createSessionJsonlProjection = (
 						.where(eq(sessionRecord.recordId, record.id))
 						.get();
 					if (existing !== undefined) {
-						if (!sessionRecordIdentityMatches(existing, sessionId, record)) {
-							throw new Error(
-								"Session Record identity was reused with new data."
-							);
-						}
-						return;
+						throw new Error(
+							"Session log contains a duplicate retained record identity."
+						);
 					}
 					const latest = tx
 						.select({ position: sessionRecord.position })
@@ -460,6 +682,9 @@ export const createSessionJsonlProjection = (
 							version: record.version as SessionRecord["version"],
 						})
 						.run();
+					pendingJoinedTurnReferences.push(
+						...projectSessionRecordMessageIdentities(tx, sessionId, record)
+					);
 					tx.insert(sessionRecordVersion)
 						.values({
 							messagesJson: serializeJson(record.messages),
@@ -470,6 +695,7 @@ export const createSessionJsonlProjection = (
 							validFromSequence: sourceSequence,
 						})
 						.run();
+					projectRecordToolCalls(tx, sessionId, record, sourceSequence);
 					tx.update(session)
 						.set({
 							lastMessageAt: timestamp,
@@ -689,6 +915,9 @@ export const createSessionJsonlProjection = (
 					tx.delete(sessionCompaction)
 						.where(eq(sessionCompaction.sessionId, sessionId))
 						.run();
+					tx.delete(sessionRecordMessageIdentity)
+						.where(eq(sessionRecordMessageIdentity.sessionId, sessionId))
+						.run();
 					tx.delete(sessionRecord)
 						.where(eq(sessionRecord.sessionId, sessionId))
 						.run();
@@ -700,7 +929,7 @@ export const createSessionJsonlProjection = (
 
 				const projectCompaction = (entry: SessionLogEntry): void => {
 					assertSessionBinding();
-					const payload = entry.envelope.payload;
+					const payload = parseSessionCompactionPayload(entry.envelope.payload);
 					const summarizationModel = providerModelSelectionSchema.parse(
 						payload.summarizationModel
 					);
@@ -708,25 +937,27 @@ export const createSessionJsonlProjection = (
 						payload.summarizationUsage === null
 							? null
 							: modelUsageSchema.parse(payload.summarizationUsage);
-					const id = toCompactionId(String(payload.id));
+					const id = toCompactionId(payload.id);
 					const firstKeptUiMessageId = toSessionMessageId(
-						String(payload.firstKeptUiMessageId)
+						payload.firstKeptUiMessageId
 					);
 					const throughMessageUiId = toSessionMessageId(
-						String(payload.throughMessageUiId)
+						payload.throughMessageUiId
 					);
-					const summary = payload.summary as SessionCompaction["summary"];
-					const availableMessageIds = new Set(
-						tx
-							.select({ messagesJson: sessionRecord.messagesJson })
-							.from(sessionRecord)
-							.where(eq(sessionRecord.sessionId, sessionId))
-							.all()
-							.flatMap(({ messagesJson }) =>
-								(messagesJson as SessionRecord["messages"]).map(
-									({ id: messageId }) => messageId
-								)
-							)
+					const summary: SessionCompaction["summary"] = {
+						...payload.summary,
+						coveredMessageIds:
+							payload.summary.coveredMessageIds.map(toSessionMessageId),
+					};
+					assertProjectedCompactionChain(tx, sessionId, payload);
+					const availableMessageIds = projectedCompactionMessageIds(
+						tx,
+						sessionId,
+						[
+							firstKeptUiMessageId,
+							throughMessageUiId,
+							...summary.coveredMessageIds,
+						]
 					);
 					assertCompactionMessageReferences(
 						{ firstKeptUiMessageId, id, summary, throughMessageUiId },
@@ -763,7 +994,7 @@ export const createSessionJsonlProjection = (
 						tokensBefore: Number(payload.tokensBefore),
 						trigger: payload.trigger as SessionCompaction["trigger"],
 					};
-					tx.insert(sessionCompaction).values(row).onConflictDoNothing().run();
+					tx.insert(sessionCompaction).values(row).run();
 				};
 
 				const projectUsage = (entry: SessionLogEntry): void => {
@@ -771,6 +1002,18 @@ export const createSessionJsonlProjection = (
 					const payload = entry.envelope.payload;
 					const model = providerModelSelectionSchema.parse(payload.model);
 					const usage = modelUsageSchema.parse(payload.usage);
+					const id = toSessionUsageEntryId(String(payload.id));
+					if (
+						tx
+							.select({ id: sessionUsageEntry.id })
+							.from(sessionUsageEntry)
+							.where(eq(sessionUsageEntry.id, id))
+							.get() !== undefined
+					) {
+						throw new Error(
+							"Session log contains a duplicate Usage Entry identity."
+						);
+					}
 					tx.insert(sessionUsageEntry)
 						.values({
 							compactionId:
@@ -783,14 +1026,36 @@ export const createSessionJsonlProjection = (
 									? null
 									: Number(payload.costUsd),
 							createdAt: new Date(String(payload.createdAt)),
-							id: toSessionUsageEntryId(String(payload.id)),
+							id,
 							kind: payload.kind as "cache-warm" | "compaction-summary",
 							sourceSequence: entry.envelope.sequence,
 							modelJson: serializeJson(model),
 							sessionId,
 							usageJson: serializeJson(usage),
 						})
-						.onConflictDoNothing()
+						.run();
+				};
+
+				const projectForkProvenance = (entry: SessionLogEntry): void => {
+					assertSessionBinding();
+					const provenance = parseSessionForkedPayload(entry.envelope.payload);
+					if (
+						tx
+							.select({ sessionId: sessionForkProvenance.sessionId })
+							.from(sessionForkProvenance)
+							.where(eq(sessionForkProvenance.sessionId, sessionId))
+							.get() !== undefined
+					) {
+						throw new Error(
+							"Session log contains multiple fork provenance checkpoints."
+						);
+					}
+					tx.insert(sessionForkProvenance)
+						.values({
+							provenanceJson: serializeJson(provenance),
+							sessionId,
+							sourceSequence: entry.envelope.sequence,
+						})
 						.run();
 				};
 
@@ -802,6 +1067,9 @@ export const createSessionJsonlProjection = (
 					switch (envelope.type) {
 						case "session.header":
 						case "session.activation-confirmed":
+							break;
+						case "session.forked":
+							projectForkProvenance(entry);
 							break;
 						case "session.created":
 							projectCreation(entry);
@@ -836,9 +1104,7 @@ export const createSessionJsonlProjection = (
 					revision: number
 				): void => {
 					const envelope = entry.envelope;
-					if (envelope.sessionId !== sessionId) {
-						throw new Error("Session log projection contains a foreign entry.");
-					}
+					assertProjectionEntryIsSafe(tx, sessionId, envelope);
 					const timestamp = new Date(envelope.timestamp);
 					dispatchProjectionEntry(entry, timestamp);
 					if (
@@ -876,7 +1142,6 @@ export const createSessionJsonlProjection = (
 								sessionId,
 								type: envelope.type,
 							})
-							.onConflictDoNothing()
 							.run();
 					}
 				};
@@ -887,6 +1152,11 @@ export const createSessionJsonlProjection = (
 					catalogRevision += 1;
 					projectEntry(entry, catalogRevision);
 				}
+				assertJoinedTurnReferencesExist(
+					tx,
+					sessionId,
+					pendingJoinedTurnReferences
+				);
 
 				tx.update(sessionProjectionState)
 					.set({ catalogRevision, latestDeletionRevision })

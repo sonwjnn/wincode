@@ -1,13 +1,29 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ProviderCollection } from "@wincode/ai";
+import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import { isAvailableProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { AttachmentReferenceResolver } from "@/modules/sessions/attachment-reference";
 import { createValidatedPluginProviderCollectionForSelection } from "@/modules/sessions/host/agent-session-turn-runner";
 import { ProviderCollectionUnavailableError } from "@/modules/sessions/provider-collection";
+import {
+	createSessionBundleExportOperation,
+	SessionBundleExportError,
+} from "@/modules/sessions/session-bundle-export";
+import {
+	createSessionBundleImportOperation,
+	SessionBundleImportError,
+} from "@/modules/sessions/session-bundle-import";
+import {
+	forkSessionThroughIdleHost,
+	forkSessionThroughIdleHostAndThen,
+} from "@/modules/sessions/session-fork-routing";
 import { SessionLogError } from "@/modules/sessions/storage/session-jsonl-codec";
-import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
+import {
+	SessionForkError,
+	SessionWriteOutcomeError,
+} from "@/modules/sessions/storage/session-jsonl-store";
 import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import { createSkillSnapshot } from "@/modules/skills";
 import {
@@ -53,6 +69,7 @@ import {
 	decodeCursor,
 	encodeCursor,
 	paramsOf,
+	readSessionForkInput,
 	readSessionPageOptions,
 	readSessionStatisticsOptions,
 	readSubmission,
@@ -96,10 +113,19 @@ const mapSessionWriterError = (
 	error: unknown,
 	sessionId: string
 ): RpcApplicationError | undefined => {
+	if (error instanceof SessionForkError) {
+		return appError(error.code, error.message, {
+			operationId: error.operationId,
+			sourceSessionId: error.sourceSessionId,
+		});
+	}
 	if (!(error instanceof Error)) {
 		return;
 	}
 	const errorCode = getErrorCode(error);
+	if (errorCode === "session_busy") {
+		return appError("session_busy", error.message, { sessionId });
+	}
 	if (errorCode === "session_in_use") {
 		return appError(
 			"session_in_use",
@@ -157,10 +183,13 @@ const mapSessionWriterError = (
 				return appError("session_projection_unavailable", error.message, data);
 			case "session_deleted":
 				return appError("session_deleted", error.message, data);
+			case "session_not_found":
+				return appError("session_not_found", error.message, data);
 			case "session_log_corrupt":
 			case "session_log_truncated":
+				return appError("session_log_corrupt", error.message, data);
 			case "session_log_version_unsupported":
-				return appError("session_log_unavailable", error.message, data);
+				return appError("session_log_version_unsupported", error.message, data);
 			default:
 				return;
 		}
@@ -319,6 +348,10 @@ export const createRpcRequestHandler = (
 					sessionCatalogPagination: true,
 					sessionHistoryPagination: true,
 					sessionStatistics: true,
+					sessionBundleExport: true,
+					sessionBundleImport: true,
+					sessionFork: true,
+					sessionRewind: true,
 					transcriptPagination: true,
 				},
 				protocolVersion: RPC_PROTOCOL_VERSION,
@@ -410,6 +443,160 @@ export const createRpcRequestHandler = (
 					throw paginationError;
 				}
 				const writerError = mapSessionWriterError(error, sessionId);
+				if (writerError !== undefined) {
+					throw writerError;
+				}
+				throw error;
+			}
+		}
+		if (request.method === "session/exportBundle") {
+			const assembly = state.assembly;
+			const store = assembly?.store;
+			if (assembly === undefined || store === undefined) {
+				throw appError("not_initialized", "Session storage is unavailable.");
+			}
+			const params = paramsOf(request);
+			const sessionIdValue = stringValue(params.sessionId);
+			const destination = stringValue(params.destination);
+			if (sessionIdValue === undefined || !isValidSessionId(sessionIdValue)) {
+				throw rpcInvalidParams("sessionId must be a valid Session ID.");
+			}
+			if (destination === undefined || destination.trim().length === 0) {
+				throw rpcInvalidParams(
+					"destination must be a non-empty directory path."
+				);
+			}
+			const sessionId = toSessionId(sessionIdValue);
+			const exportSessionBundle = createSessionBundleExportOperation(
+				assembly.capabilities.getSessionHostManager(),
+				store
+			);
+			try {
+				return success(
+					request.id,
+					await exportSessionBundle({
+						destination,
+						sessionId,
+						sourceWorkspacePath: assembly.workspace,
+					})
+				);
+			} catch (error) {
+				if (error instanceof SessionBundleExportError) {
+					throw appError(error.code, error.message, {
+						sessionId,
+						...(error.code === "session_log_corrupt" ||
+						error.code === "session_log_version_unsupported"
+							? omitUndefined({
+									offset: error.offset,
+									reason: error.reason,
+									sequence: error.sequence,
+								})
+							: {}),
+					});
+				}
+				throw error;
+			}
+		}
+		if (request.method === "session/importBundle") {
+			const assembly = state.assembly;
+			const store = assembly?.store;
+			if (assembly === undefined || store === undefined) {
+				throw appError("not_initialized", "Session storage is unavailable.");
+			}
+			const bundlePath = stringValue(paramsOf(request).bundlePath);
+			if (bundlePath === undefined || bundlePath.trim().length === 0) {
+				throw rpcInvalidParams(
+					"bundlePath must be a non-empty directory path."
+				);
+			}
+			const importSessionBundle = createSessionBundleImportOperation(store);
+			try {
+				return success(request.id, await importSessionBundle({ bundlePath }));
+			} catch (error) {
+				if (error instanceof SessionBundleImportError) {
+					throw appError(
+						error.code,
+						error.message,
+						omitUndefined({ sessionId: error.sessionId })
+					);
+				}
+				throw error;
+			}
+		}
+		if (
+			request.method === "session/fork" ||
+			request.method === "session/rewind"
+		) {
+			const activeAssembly = state.assembly;
+			if (activeAssembly?.store === undefined) {
+				throw appError("not_initialized", "Session storage is unavailable.");
+			}
+			const store = activeAssembly.store;
+			const runtime = await getRuntime();
+			const input = readSessionForkInput(paramsOf(request));
+			const sourceSessionId = runtime.toSessionId(input.sourceSessionId);
+			const checkpoint = {
+				recordId: runtime.toSessionRecordId(input.checkpointRecordId),
+			};
+			try {
+				const manager = activeAssembly.capabilities.getSessionHostManager();
+				if (request.method === "session/fork") {
+					const result = await forkSessionThroughIdleHost(
+						manager.withIdleForSessionFork,
+						store,
+						sourceSessionId,
+						checkpoint,
+						input.operationId
+					);
+					return success(request.id, result);
+				}
+
+				return await forkSessionThroughIdleHostAndThen(
+					manager.withIdleForSessionFork,
+					store,
+					sourceSessionId,
+					checkpoint,
+					input.operationId,
+					async (result) => {
+						const targetSessionId = runtime.toSessionId(String(result.id));
+						let targetHost: SessionHost | undefined;
+						try {
+							targetHost = await runtime.createSessionHost({
+								capabilities: activeAssembly.capabilities,
+								sessionId: targetSessionId,
+							});
+							if (
+								state.signalRequested ||
+								state.lifecycle === "closing" ||
+								state.lifecycle === "closed"
+							) {
+								await manager
+									.releaseView(targetSessionId)
+									.catch(() => undefined);
+								targetHost = undefined;
+								throw appError("server_closing", "The RPC server is closing.");
+							}
+							bind(targetHost, targetSessionId);
+							return success(request.id, {
+								...result,
+								activeSessionId: targetSessionId,
+								state: currentState(),
+							});
+						} catch (error) {
+							if (
+								targetHost !== undefined &&
+								state.boundSessionId !== targetSessionId
+							) {
+								await manager
+									.releaseView(targetSessionId)
+									.catch(() => undefined);
+							}
+							throw error;
+						}
+					}
+				);
+			} catch (error) {
+				const writerError = mapSessionWriterError(error, sourceSessionId);
 				if (writerError !== undefined) {
 					throw writerError;
 				}

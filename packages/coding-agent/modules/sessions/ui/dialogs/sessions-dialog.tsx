@@ -17,6 +17,8 @@ import {
 	requireSessionWriteReady,
 } from "../../storage/session-jsonl-store";
 import type { Session } from "../../storage/session-store";
+import { ExportSessionDialog } from "./export-session-dialog";
+import { ImportSessionDialog } from "./import-session-dialog";
 import { RenameSessionDialog } from "./rename-session-dialog";
 
 const MAX_VISIBLE_ITEMS = 10;
@@ -368,6 +370,51 @@ export const SessionsDialogContent = () => {
 		[openDialog, handleRenameSuccess]
 	);
 
+	const openExport = useCallback(
+		(session: Session) => {
+			openDialog({
+				children: <ExportSessionDialog session={session} />,
+				title: "Export Session Bundle",
+			});
+		},
+		[openDialog]
+	);
+
+	const openImport = useCallback(() => {
+		openDialog({
+			children: <ImportSessionDialog onImported={fetchSessions} />,
+			title: "Import Session Bundle",
+		});
+	}, [fetchSessions, openDialog]);
+
+	const handleSelectedSessionAction = (
+		key: { ctrl: boolean; name: string; shift?: boolean },
+		session: Session,
+		pendingDelete: string | null
+	): boolean => {
+		if (key.ctrl && key.name === "f") {
+			togglePin(session);
+			return true;
+		}
+		if (key.ctrl && key.name === "d") {
+			if (pendingDelete === session.id) {
+				confirmDelete(session);
+			} else {
+				setPendingDeleteId(session.id);
+			}
+			return true;
+		}
+		if (key.ctrl && key.name === "r") {
+			openRename(session);
+			return true;
+		}
+		if (key.ctrl && key.name === "e") {
+			openExport(session);
+			return true;
+		}
+		return false;
+	};
+
 	const handleActionKeysRef = useRef(
 		(_key: { ctrl: boolean; name: string; shift?: boolean }) => false as boolean
 	);
@@ -381,32 +428,14 @@ export const SessionsDialogContent = () => {
 			void loadMoreSessions();
 			return true;
 		}
+		if (key.ctrl && key.name === "i") {
+			openImport();
+			return true;
+		}
 		const session = selectedSessionRef.current;
-		const pending = pendingDeleteIdRef.current;
-		if (!session) {
-			return false;
-		}
-
-		if (key.ctrl && key.name === "f") {
-			togglePin(session);
-			return true;
-		}
-
-		if (key.ctrl && key.name === "d") {
-			if (pending === session.id) {
-				confirmDelete(session);
-			} else {
-				setPendingDeleteId(session.id);
-			}
-			return true;
-		}
-
-		if (key.ctrl && key.name === "r") {
-			openRename(session);
-			return true;
-		}
-
-		return false;
+		return session === null
+			? false
+			: handleSelectedSessionAction(key, session, pendingDeleteIdRef.current);
 	};
 
 	const handleHighlight = useCallback((item: ListItem) => {
@@ -483,6 +512,8 @@ export const SessionsDialogContent = () => {
 							<DialogFooterHint label="pin/unpin" shortcut="ctrl+f" />
 							<DialogFooterHint label="delete" shortcut="ctrl+d" />
 							<DialogFooterHint label="rename" shortcut="ctrl+r" />
+							<DialogFooterHint label="export bundle" shortcut="ctrl+e" />
+							<DialogFooterHint label="import bundle" shortcut="ctrl+i" />
 							{nextCursor === undefined ? null : (
 								<DialogFooterHint label="load more" shortcut="ctrl+↓" />
 							)}

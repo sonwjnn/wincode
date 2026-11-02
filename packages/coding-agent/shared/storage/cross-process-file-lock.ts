@@ -1,15 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { throwIfAborted } from "@/shared/utils/abort";
 import { getErrorCode } from "@/shared/utils/error-log-fields";
 
 const LOCK_RETRY_DELAY_MS = 25;
 const LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
-
-const throwIfAborted = (signal: AbortSignal | undefined): void => {
-	if (signal?.aborted) {
-		throw signal.reason ?? new DOMException("Aborted", "AbortError");
-	}
-};
 
 const awaitWithSignal = async <Result>(
 	operation: Promise<Result>,

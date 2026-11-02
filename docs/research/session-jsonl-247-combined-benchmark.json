@@ -1,0 +1,120 @@
+{
+  "benchmark": "Session JSONL integration fixture",
+  "measuredAt": "2026-11-02T09:59:56.580Z",
+  "data": {
+    "checkpointCount": 100000,
+    "sessionCount": 10000,
+    "sameTimestamp": "2026-10-31T00:00:00.000Z"
+  },
+  "environment": {
+    "architecture": "arm64",
+    "bun": "1.3.14",
+    "cpu": "Apple M1",
+    "memoryBytes": 17179869184,
+    "os": "darwin 24.6.0"
+  },
+  "fixtureSetup": {
+    "checkpointAppendMs": 1315.77,
+    "sessionSeedMs": 1835.41,
+    "syncPolicy": "fixture creation skips per-event sync; cold reads use default sync; appended catch-up event is synced"
+  },
+  "phases": {
+    "coldCatchup": {
+      "durationMs": 198.61,
+      "peakRssBytes": 913260544,
+      "visible": true
+    },
+    "coldDiscovery": {
+      "durationMs": 443288.45,
+      "peakRssBytes": 806764544,
+      "issueCount": 0,
+      "sessionCount": 10000
+    },
+    "coldRebuild": {
+      "durationMs": 429605.96,
+      "peakRssBytes": 1350565888,
+      "issueCount": 0,
+      "rebuiltSessionCount": 10000
+    },
+    "coldStatistics": {
+      "durationMs": 284.98,
+      "peakRssBytes": 316817408,
+      "recordCount": 100000,
+      "usageContributionCount": 0
+    },
+    "warmCatalog50": {
+      "afterRssBytes": 205815808,
+      "beforeRssBytes": 1309900800,
+      "latency": {
+        "count": 30,
+        "maxMs": 1054.3979999999283,
+        "medianMs": 595.358707999927,
+        "p95Ms": 967.514499999932,
+        "minMs": 579.5682079999242
+      }
+    },
+    "warmCatalog200": {
+      "afterRssBytes": 291160064,
+      "beforeRssBytes": 206192640,
+      "latency": {
+        "count": 30,
+        "maxMs": 870.327917000046,
+        "medianMs": 588.1160000000382,
+        "p95Ms": 859.9532500000205,
+        "minMs": 572.3209590000333
+      }
+    },
+    "warmHistory50": {
+      "afterRssBytes": 313786368,
+      "beforeRssBytes": 291209216,
+      "latency": {
+        "count": 30,
+        "maxMs": 198.52654200000688,
+        "medianMs": 15.994166000047699,
+        "p95Ms": 17.532833000062965,
+        "minMs": 15.203791999956593
+      }
+    },
+    "warmHistory200": {
+      "afterRssBytes": 316784640,
+      "beforeRssBytes": 313786368,
+      "latency": {
+        "count": 30,
+        "maxMs": 20.822582999942824,
+        "medianMs": 17.026375000015832,
+        "p95Ms": 18.69129200000316,
+        "minMs": 16.098832999938168
+      }
+    },
+    "warmStatistics": {
+      "afterRssBytes": 370278400,
+      "beforeRssBytes": 348225536,
+      "latency": {
+        "count": 30,
+        "maxMs": 129.57112500001676,
+        "medianMs": 69.36058400000911,
+        "p95Ms": 93.86383400007617,
+        "minMs": 66.31216700002551
+      }
+    }
+  },
+  "validation": {
+    "catalogPage50Count": 50,
+    "catalogPage200Count": 200,
+    "catalogStatusRevisionFixedByCursor": true,
+    "historyBoundaryChecks": [
+      {
+        "limit": 50,
+        "passed": true
+      },
+      {
+        "limit": 200,
+        "passed": true
+      }
+    ],
+    "historyPage50Count": 50,
+    "historyPage200Count": 200,
+    "sameTimestampCatalogOrder": true,
+    "sameTimestampHistoryOrder": true
+  }
+}

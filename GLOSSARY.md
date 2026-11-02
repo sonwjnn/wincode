@@ -107,6 +107,9 @@ The application-level conversation boundary that connects the Stateful Agent to 
 **Session SDK**:
 The public Coding-Agent interface for creating, reopening, driving, observing, and disposing Agent Sessions. A caller may choose Session capabilities and storage without taking ownership of the Stateful Agent's internal state. _Avoid_: Subagents runtime, raw Session object
 
+**Session Bundle**:
+A portable directory containing one Session's validated JSONL history and its referenced attachment bytes. It preserves historical identities but carries no credentials, trust, or execution permission; the destination must provide compatible Agent and Provider configuration. _Avoid_: SQLite snapshot, Session backup
+
 **Session Host**:
 The application-level composition that opens one Session and connects its Stateful Agent to the Session Capabilities assembled for it. Its lifetime is independent of which conversation the UI displays; it may release an idle runtime without deleting durable history. _Avoid_: UI view, Session Store, Stateful Agent
 

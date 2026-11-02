@@ -523,12 +523,14 @@ const createFakeSessionHost = (
 	transcript: readonly SessionMessage[],
 	providerController?: InteractiveProviderController,
 	selection?: ResolvedSessionSelection | null,
-	assertPluginSnapshot: () => void = () => undefined
+	assertPluginSnapshot: () => void = () => undefined,
+	importActivationPending = false
 ): SessionHost =>
 	fromPartial<SessionHost>({
 		...(providerController === undefined ? {} : { providerController }),
 		agentSession: {},
 		assertCurrentPluginProviderRegistrationSnapshot: assertPluginSnapshot,
+		isImportedSessionActivationPending: () => importActivationPending,
 		withSessionWork: <Result,>(action: () => Promise<Result>) => action(),
 		cancelCacheWarming: () => {
 			fakeCacheWarmCancellations += 1;
@@ -656,6 +658,47 @@ test("manual compaction scopes its stored model check before global replacement 
 		);
 		await setup.waitFor(() => modelReads.length >= 2);
 		expect(modelReads).toEqual(["selected:openai", "global-chooser"]);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test("manual compaction refuses an imported Session before Provider availability", async () => {
+	let availabilityReads = 0;
+	const providerModel: ProviderModel = {
+		modelId: "gpt-5.6-luna",
+		protocolId: "fake-provider",
+		providerId: "openai",
+	};
+	const providerController = fromPartial<InteractiveProviderController>({
+		getAvailableModels: async () => {
+			availabilityReads += 1;
+			return [providerModel];
+		},
+		getKnownModels: async () => [providerModel],
+	});
+	const { setup } = await renderSessionView({
+		height: 30,
+		importActivationPending: true,
+		initialTranscript: [],
+		providerController,
+		width: 100,
+	});
+
+	try {
+		await act(async () => setup.mockInput.typeText("/compact"));
+		await setup.waitForFrame((frame) =>
+			frame.includes("Compact session history")
+		);
+		await act(() => setup.mockInput.pressTab());
+		await flushUi(setup);
+		await act(async () => setup.mockInput.typeText("preserve the history"));
+		await flushUi(setup);
+		await act(() => setup.mockInput.pressEnter());
+		await setup.waitForFrame((frame) => frame.includes("before compaction."));
+
+		expect(availabilityReads).toBe(0);
+		expect(fakeCompactionModels).toHaveLength(0);
 	} finally {
 		setup.renderer.destroy();
 	}
@@ -1948,6 +1991,7 @@ const renderSessionView = async ({
 	restoredSelection,
 	commandControllerFactory,
 	assertPluginSnapshot,
+	importActivationPending = false,
 	width,
 }: {
 	height: number;
@@ -1964,6 +2008,7 @@ const renderSessionView = async ({
 	restoredSelection?: ResolvedSessionSelection | null;
 	commandControllerFactory?: CommandControllerFactory;
 	assertPluginSnapshot?: () => void;
+	importActivationPending?: boolean;
 	width: number;
 }) => {
 	const router = buildRouter();
@@ -1980,7 +2025,8 @@ const renderSessionView = async ({
 				liveTranscript,
 				providerController,
 				restoredSelection,
-				assertPluginSnapshot
+				assertPluginSnapshot,
+				importActivationPending
 			)}
 			initialTranscript={initialTranscript}
 			sessionId={sessionId("session-1")}

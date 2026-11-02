@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import { EXECUTION_MODES, type ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
+import { throwIfAborted } from "@/shared/utils/abort";
 import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
 import type {
 	SessionWriterLockAdapter,
@@ -135,12 +136,7 @@ export const resolveSessionWriterLockAdapter = (
  * lock files are never removed because replacing one could split authority.
  */
 const throwIfLifecycleAborted = (signal?: AbortSignal): void => {
-	if (!signal?.aborted) {
-		return;
-	}
-	throw signal.reason instanceof Error
-		? signal.reason
-		: new Error("Session lifecycle operation was cancelled.");
+	throwIfAborted(signal, "Session lifecycle operation was cancelled.");
 };
 
 const acquireCatalogLifecycleLock = async (

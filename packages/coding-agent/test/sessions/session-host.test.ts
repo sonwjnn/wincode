@@ -99,7 +99,11 @@ import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-
 import { summarizeSessionUsage } from "@/modules/sessions/usage/session-usage";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { createConfigStore } from "@/shared/config/config-store";
-import type { CompactionId, SessionId } from "@/shared/identifiers";
+import {
+	type CompactionId,
+	type SessionId,
+	toSessionId,
+} from "@/shared/identifiers";
 import {
 	getInteractiveRuntimeContext,
 	setInteractiveRuntimeContext,
@@ -675,6 +679,103 @@ test("SDK Session Host refuses a missing ProviderCollection instead of legacy ex
 	);
 });
 
+test("explicit Host continuation commits imported activation before provider work", async () => {
+	const seeded = await seedSession("host-import-activation", "completed");
+	const submissionId = toSubmissionId("host-import-activation-submission");
+	const pendingRecord = await store.commitSessionRecord({
+		record: buildUserSessionRecord({
+			agentId: buildId,
+			message: {
+				...message(
+					"host-import-activation-user",
+					"user",
+					"Resume this import."
+				),
+				metadata: { submissionId, submissionStatus: "pending" },
+			},
+			model,
+			turnId: agentTurnId("host-import-activation-turn"),
+		}),
+		sessionId: seeded.sessionId,
+	});
+	expect(pendingRecord.kind).toBe("committed");
+	const manager = createSessionHostManager();
+	let importActivationPending = true;
+	let activationConfirmations = 0;
+	let activationWasDurableBeforeProvider = false;
+	const importedStore: SessionStore = {
+		...store,
+		confirmSessionImportActivation: async (sessionId) => {
+			expect(sessionId).toBe(seeded.sessionId);
+			activationConfirmations += 1;
+			importActivationPending = false;
+		},
+		isSessionImportActivationPending: async (sessionId) =>
+			sessionId === seeded.sessionId && importActivationPending,
+	};
+	const capabilities = createCapabilities(importedStore, {}, manager);
+	const previousBeforeChat = recorder.beforeChat;
+	const providerStarted = Promise.withResolvers<void>();
+	recorder.beforeChat = async () => {
+		activationWasDurableBeforeProvider = !importActivationPending;
+		providerStarted.resolve();
+	};
+	let host: SessionHost | undefined;
+	try {
+		host = await manager.openHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+			view: true,
+		});
+		const continuation = await host.agentSession.continue();
+		expect(continuation).toMatchObject({ kind: "started-submission" });
+		await providerStarted.promise;
+		expect(activationConfirmations).toBe(1);
+		expect(activationWasDurableBeforeProvider).toBe(true);
+	} finally {
+		recorder.beforeChat = previousBeforeChat;
+		await manager.shutdownAll();
+	}
+});
+
+test("imported Host refuses manual compaction until explicit activation", async () => {
+	const seeded = await seedSession("host-import-compaction", "completed");
+	const compactionsBefore = await store.getCompactions(seeded.sessionId);
+	let importActivationPending = true;
+	let activationConfirmations = 0;
+	const importedStore: SessionStore = {
+		...store,
+		confirmSessionImportActivation: async (sessionId) => {
+			expect(sessionId).toBe(seeded.sessionId);
+			activationConfirmations += 1;
+			importActivationPending = false;
+		},
+		isSessionImportActivationPending: async (sessionId) =>
+			sessionId === seeded.sessionId && importActivationPending,
+	};
+	const manager = createSessionHostManager();
+	let host: SessionHost | undefined;
+	try {
+		host = await manager.openHost({
+			capabilities: createCapabilities(importedStore, {}, manager),
+			sessionId: seeded.sessionId,
+			view: true,
+		});
+		await expect(
+			host.agentSession.compact({ model, trigger: "manual" })
+		).rejects.toThrow(
+			"Imported Session must be continued or receive new input"
+		);
+		expect(activationConfirmations).toBe(0);
+		expect(importActivationPending).toBe(true);
+		expect(await store.getCompactions(seeded.sessionId)).toEqual(
+			compactionsBefore
+		);
+	} finally {
+		await manager.shutdownAll();
+	}
+});
+
 test("Session Host rejects a missing Plugin Provider registration before model restoration or availability", async () => {
 	const manager = createSessionHostManager();
 	const providerId = "host-collision-plugin-provider";
@@ -1216,7 +1317,7 @@ test("retains an idle Session Host until registered Plugin background work finis
 	await pluginRuntime.shutdown();
 });
 
-test("reopens an idle projection-blocked Host from durable Session state", async () => {
+test("projection-blocked Host refuses fork admission until it reopens", async () => {
 	const manager = createSessionHostManager();
 	let blockAssistantRecord = true;
 	const blockedStore: SessionStore = {
@@ -1270,6 +1371,12 @@ test("reopens an idle projection-blocked Host from durable Session state", async
 			turnActive: false,
 		});
 		expect(modelCalls).toBe(1);
+
+		await expect(
+			manager.withIdleForSessionFork(openedSessionId, async () => {
+				throw new Error("A projection-blocked Session must not be forked.");
+			})
+		).rejects.toMatchObject({ code: "session_busy" });
 
 		await manager.releaseView(openedSessionId);
 		const reopenedHost = await manager.openHost({
@@ -1530,6 +1637,46 @@ test("interactive reload preserves the displayed Session Host while changing Plu
 	}
 });
 
+test("Host opening rejects imported Sessions whose Agent is unavailable instead of falling back to Build", async () => {
+	const sessionId = toSessionId("imported-host-agent-identity");
+	const sourceAgent = agentId("source-only-agent");
+	await store.createSession({
+		agent: sourceAgent,
+		id: sessionId,
+		message: {
+			...message(
+				"imported-host-agent-message",
+				"user",
+				"Keep this Agent identity."
+			),
+			metadata: { agent: sourceAgent, model },
+		},
+		model,
+		turnId: agentTurnId("imported-host-agent-turn"),
+	});
+	const importAwareStore: SessionStore = {
+		...store,
+		isSessionImportActivationPending: async (requestedSessionId) =>
+			requestedSessionId === sessionId,
+	};
+	const manager = createSessionHostManager();
+	const capabilities = createCapabilities(importAwareStore, {}, manager);
+
+	try {
+		await expect(
+			manager.openHost({
+				autoContinue: false,
+				capabilities,
+				sessionId,
+			})
+		).rejects.toThrow(
+			"Imported Session Agent 'source-only-agent' is unavailable in this destination. Configure that Agent before opening the Session."
+		);
+	} finally {
+		await manager.shutdownAll();
+	}
+});
+
 test("reload gate blocks new Session Host opens until its action settles", async () => {
 	const manager = createSessionHostManager();
 	const reloadStarted = Promise.withResolvers<void>();
@@ -1610,7 +1757,7 @@ test("reload gate rejects work submitted through an existing Session Host", asyn
 				reason: expect.stringContaining("reloading"),
 				rejected: true,
 			});
-			expect(host.agentSession.continue()).toMatchObject({
+			expect(await host.agentSession.continue()).toMatchObject({
 				kind: "rejected",
 				reason: expect.stringContaining("reloading"),
 			});
@@ -3981,7 +4128,7 @@ describe("Session Host lifetime", () => {
 			expect(snapshot.context.some(({ id }) => id === steered.messageId)).toBe(
 				false
 			);
-			expect(host.agentSession.continue()).toMatchObject({
+			expect(await host.agentSession.continue()).toMatchObject({
 				kind: "rejected",
 			});
 			expect(recorder.requests).toHaveLength(callsBeforeReopen);
@@ -4538,6 +4685,152 @@ describe("Session Host lifetime", () => {
 		});
 	});
 
+	test("Session export preserves its idle Host and gates only that Session", async () => {
+		const seeded = await seedSession("idle-export-host-lifecycle");
+		const otherSession = await seedSession("other-export-host-lifecycle");
+		const manager = createSessionHostManager();
+		const capabilities = createCapabilities(store, {}, manager);
+		const host = await manager.openHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+			view: true,
+		});
+		await manager.openHost({
+			capabilities,
+			sessionId: otherSession.sessionId,
+			view: true,
+		});
+		try {
+			const pendingOtherAdmission = manager.tryAcquireSessionWork(
+				otherSession.sessionId
+			);
+			if (pendingOtherAdmission.kind !== "admitted") {
+				throw new Error("Unrelated Session work was unexpectedly rejected.");
+			}
+			try {
+				await manager.withIdleForSessionLifecycle(
+					seeded.sessionId,
+					async ({ existingHostWriter }) => {
+						expect(existingHostWriter).toBe(true);
+						expect(
+							manager.tryAcquireSessionWork(seeded.sessionId)
+						).toMatchObject({
+							kind: "rejected",
+						});
+						const otherAdmission = manager.tryAcquireSessionWork(
+							otherSession.sessionId
+						);
+						expect(otherAdmission.kind).toBe("admitted");
+						if (otherAdmission.kind === "admitted") {
+							otherAdmission.release();
+						}
+						await expect(
+							manager.openHost({
+								capabilities,
+								sessionId: seeded.sessionId,
+								view: true,
+							})
+						).rejects.toThrow("lifecycle operation");
+					},
+					"export"
+				);
+			} finally {
+				pendingOtherAdmission.release();
+			}
+			expect(
+				await manager.openHost({
+					capabilities,
+					sessionId: seeded.sessionId,
+					view: true,
+				})
+			).toBe(host);
+		} finally {
+			await manager.shutdownAll();
+		}
+	});
+
+	test("Session export and fork exclude each other on the same Host", async () => {
+		const source = await seedSession(
+			"export-fork-exclusion-source",
+			"completed"
+		);
+		const unrelated = await seedSession("export-fork-exclusion-unrelated");
+		const manager = createSessionHostManager();
+		const capabilities = createCapabilities(store, {}, manager);
+		const host = await manager.openHost({
+			capabilities,
+			sessionId: source.sessionId,
+			view: true,
+		});
+		const exportEntered = Promise.withResolvers<void>();
+		const releaseExport = Promise.withResolvers<void>();
+		const forkEntered = Promise.withResolvers<void>();
+		const releaseFork = Promise.withResolvers<void>();
+		const operations: Promise<unknown>[] = [];
+		try {
+			const exporting = manager.withIdleForSessionLifecycle(
+				source.sessionId,
+				async ({ existingHostWriter }) => {
+					expect(existingHostWriter).toBe(true);
+					exportEntered.resolve();
+					await releaseExport.promise;
+					return "exported";
+				},
+				"export"
+			);
+			operations.push(exporting);
+			await exportEntered.promise;
+			await expect(
+				manager.withIdleForSessionFork(source.sessionId, async () => "forked")
+			).rejects.toMatchObject({
+				code: "session_busy",
+				sourceSessionId: source.sessionId,
+			});
+			const unrelatedDuringExport = manager.tryAcquireSessionWork(
+				unrelated.sessionId
+			);
+			expect(unrelatedDuringExport.kind).toBe("admitted");
+			if (unrelatedDuringExport.kind === "admitted") {
+				unrelatedDuringExport.release();
+			}
+			releaseExport.resolve();
+			expect(await exporting).toBe("exported");
+
+			const forking = manager.withIdleForSessionFork(
+				source.sessionId,
+				async (routedHost) => {
+					expect(routedHost).toBe(host);
+					forkEntered.resolve();
+					await releaseFork.promise;
+					return "forked";
+				}
+			);
+			operations.push(forking);
+			await forkEntered.promise;
+			await expect(
+				manager.withIdleForSessionLifecycle(
+					source.sessionId,
+					async () => "exported",
+					"export"
+				)
+			).rejects.toThrow("another lifecycle operation is in progress");
+			const unrelatedDuringFork = manager.tryAcquireSessionWork(
+				unrelated.sessionId
+			);
+			expect(unrelatedDuringFork.kind).toBe("admitted");
+			if (unrelatedDuringFork.kind === "admitted") {
+				unrelatedDuringFork.release();
+			}
+			releaseFork.resolve();
+			expect(await forking).toBe("forked");
+		} finally {
+			releaseExport.resolve();
+			releaseFork.resolve();
+			await Promise.allSettled(operations);
+			await manager.shutdownAll();
+		}
+	});
+
 	test("Session deletion closes an idle same-process Host before taking storage authority", async () => {
 		const seeded = await seedSession("idle-delete-host-lifecycle");
 		const manager = createSessionHostManager();
@@ -4571,6 +4864,176 @@ describe("Session Host lifetime", () => {
 			await writer.release();
 			expect(host.getSnapshot().turnActive).toBe(false);
 		} finally {
+			await manager.shutdownAll();
+		}
+	});
+
+	test("Session fork gates work without closing its idle same-process Host", async () => {
+		const seeded = await seedSession("idle-fork-host-lifecycle", "completed");
+		const manager = createSessionHostManager();
+		const capabilities = createCapabilities(store, {}, manager);
+		const openedHost = await manager.openHost({
+			capabilities,
+			sessionId: seeded.sessionId,
+			view: true,
+		});
+		let forkActionStarted = false;
+		try {
+			const result = await manager.withIdleForSessionFork(
+				seeded.sessionId,
+				async (routedHost?: SessionHost) => {
+					forkActionStarted = true;
+					expect(routedHost).toBe(openedHost);
+					expect(manager.tryAcquireSessionWork(seeded.sessionId)).toMatchObject(
+						{ kind: "rejected" }
+					);
+					return "forked";
+				}
+			);
+			expect(result).toBe("forked");
+			expect(forkActionStarted).toBe(true);
+			expect(
+				await manager.openHost({
+					capabilities,
+					sessionId: seeded.sessionId,
+					view: false,
+				})
+			).toBe(openedHost);
+			await expect(
+				store.acquireSessionWriter(seeded.sessionId)
+			).rejects.toBeInstanceOf(SessionInUseError);
+		} finally {
+			await manager.shutdownAll();
+		}
+	});
+
+	test("Session fork admits an idle source with pending steering without changing it", async () => {
+		const seeded = await seedSession(
+			"fork-pending-steering-source",
+			"completed"
+		);
+		const submissionId = toSubmissionId("fork-pending-steering-submission");
+		const pendingMessage = {
+			...message(
+				"fork-pending-steering-message",
+				"user",
+				"This pending obligation must not make an idle source unforkable."
+			),
+			metadata: { submissionId, submissionStatus: "pending" as const },
+		};
+		const pendingRecord = await store.commitSessionRecord({
+			record: buildUserSessionRecord({
+				agentId: buildId,
+				message: pendingMessage,
+				model,
+				turnId: agentTurnId("fork-pending-steering-turn"),
+			}),
+			sessionId: seeded.sessionId,
+		});
+		expect(pendingRecord.kind).toBe("committed");
+
+		const manager = createSessionHostManager();
+		const capabilities = createCapabilities(store, {}, manager);
+		const host = await manager.openHost({
+			autoContinue: false,
+			capabilities,
+			sessionId: seeded.sessionId,
+			view: true,
+		});
+		const sourceSteering = host.getSnapshot().steeringMessages;
+		expect(sourceSteering).toMatchObject([{ status: "pending" }]);
+		try {
+			await expect(
+				manager.withIdleForSessionFork(seeded.sessionId, async () => "forked")
+			).resolves.toBe("forked");
+			expect(host.getSnapshot().steeringMessages).toEqual(sourceSteering);
+			expect(
+				(await store.listSessionRecords(seeded.sessionId)).at(-1)?.messages[0]
+					?.metadata?.submissionStatus
+			).toBe("pending");
+		} finally {
+			await manager.shutdownAll();
+		}
+	});
+
+	test("Session fork leaves unrelated work and lifecycle admission available", async () => {
+		const source = await seedSession("fork-isolation-source", "completed");
+		const unrelated = await seedSession("fork-isolation-unrelated");
+		const lifecycleTarget = await seedSession(
+			"fork-isolation-lifecycle-target"
+		);
+		const manager = createSessionHostManager();
+		const capabilities = createCapabilities(store, {}, manager);
+		const sourceHost = await manager.openHost({
+			capabilities,
+			sessionId: source.sessionId,
+			view: true,
+		});
+		const unrelatedAdmission = manager.tryAcquireSessionWork(
+			unrelated.sessionId
+		);
+		if (unrelatedAdmission.kind === "rejected") {
+			throw new Error(unrelatedAdmission.reason);
+		}
+		try {
+			const result = await manager.withIdleForSessionFork(
+				source.sessionId,
+				async (routedHost?: SessionHost) => {
+					expect(routedHost).toBe(sourceHost);
+					expect(manager.tryAcquireSessionWork(source.sessionId)).toMatchObject(
+						{ kind: "rejected" }
+					);
+					const unrelatedDuringFork = manager.tryAcquireSessionWork(
+						unrelated.sessionId
+					);
+					expect(unrelatedDuringFork.kind).toBe("admitted");
+					if (unrelatedDuringFork.kind === "admitted") {
+						unrelatedDuringFork.release();
+					}
+					const lifecycleResult = await manager.withIdleForSessionLifecycle(
+						lifecycleTarget.sessionId,
+						async () => {
+							const workOutsideLifecycle = manager.tryAcquireSessionWork(
+								unrelated.sessionId
+							);
+							expect(workOutsideLifecycle.kind).toBe("admitted");
+							if (workOutsideLifecycle.kind === "admitted") {
+								workOutsideLifecycle.release();
+							}
+							return "deleted";
+						}
+					);
+					expect(lifecycleResult).toBe("deleted");
+					return "forked";
+				}
+			);
+			expect(result).toBe("forked");
+		} finally {
+			unrelatedAdmission.release();
+			await manager.shutdownAll();
+		}
+	});
+
+	test("Session fork rejects work admission before starting its copy action", async () => {
+		const seeded = await seedSession("busy-fork-admission", "completed");
+		const manager = createSessionHostManager();
+		const admission = manager.tryAcquireSessionWork(seeded.sessionId);
+		if (admission.kind === "rejected") {
+			throw new Error(admission.reason);
+		}
+		let forkActionStarted = false;
+		try {
+			await expect(
+				manager.withIdleForSessionFork(seeded.sessionId, async () => {
+					forkActionStarted = true;
+				})
+			).rejects.toMatchObject({
+				code: "session_busy",
+				sourceSessionId: seeded.sessionId,
+			});
+			expect(forkActionStarted).toBe(false);
+		} finally {
+			admission.release();
 			await manager.shutdownAll();
 		}
 	});

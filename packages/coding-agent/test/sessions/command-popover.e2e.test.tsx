@@ -174,7 +174,9 @@ test("Tab opens a Built-in Command that does not accept invocation arguments", a
 		);
 
 		await act(() => activeSetup.mockInput.pressTab());
-		await settleSessionUi(activeSetup);
+		await waitForSessionFrame(activeSetup, (frame) =>
+			frame.includes("Select Model")
+		);
 		expect(activeSetup.captureCharFrame()).toContain("Select Model");
 	} finally {
 		if (setup) {

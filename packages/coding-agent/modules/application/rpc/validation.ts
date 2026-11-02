@@ -13,10 +13,12 @@ import {
 	MAX_ATTACHMENT_BYTES,
 } from "@/modules/sessions/attachment-reference";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import { isValidSessionLogIdentifier } from "@/modules/sessions/session-log-identifiers";
 import type {
 	SessionPageOptions,
 	SessionStatisticsOptions,
 } from "@/modules/sessions/storage/session-store";
+import { isValidSessionId } from "@/shared/identifiers";
 import { findTextOccurrences } from "@/shared/utils/text-ranges";
 import type { RpcParams, RpcRequest } from "./protocol";
 import { RPC_ERROR_CODES } from "./protocol";
@@ -154,6 +156,46 @@ export const readSessionStatisticsOptions = (
 		...(readPoint === undefined ? {} : { readPoint }),
 		...(turnId === undefined ? {} : { turnId: turnId as AgentTurnId }),
 	};
+};
+
+export type RpcSessionForkInput = Readonly<{
+	checkpointRecordId: string;
+	operationId: string;
+	sourceSessionId: string;
+}>;
+
+export const readSessionForkInput = (
+	params: RpcParams
+): RpcSessionForkInput => {
+	if (
+		!exactFields(params, [
+			"checkpointRecordId",
+			"operationId",
+			"sourceSessionId",
+		])
+	) {
+		throw rpcInvalidParams("Session fork parameters contain unknown fields.");
+	}
+	const checkpointRecordId = stringValue(params.checkpointRecordId);
+	const operationId = stringValue(params.operationId);
+	const sourceSessionId = stringValue(params.sourceSessionId);
+	if (
+		checkpointRecordId === undefined ||
+		!isValidSessionLogIdentifier(checkpointRecordId)
+	) {
+		throw rpcInvalidParams(
+			"checkpointRecordId must be a valid Session Record ID."
+		);
+	}
+	if (operationId === undefined || !isValidSessionLogIdentifier(operationId)) {
+		throw rpcInvalidParams(
+			"operationId must be a stable operation identifier."
+		);
+	}
+	if (sourceSessionId === undefined || !isValidSessionId(sourceSessionId)) {
+		throw rpcInvalidParams("sourceSessionId must be a valid Session ID.");
+	}
+	return { checkpointRecordId, operationId, sourceSessionId };
 };
 
 export const readSessionPageOptions = (

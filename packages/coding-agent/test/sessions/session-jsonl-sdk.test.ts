@@ -42,6 +42,7 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
 } from "@/modules/sessions/storage/path";
+import { validateSessionBundleDirectory } from "@/modules/sessions/storage/session-bundle";
 import {
 	createSessionLogEvent,
 	decodeSessionLog,
@@ -191,8 +192,228 @@ test("public SDK returns an empty Session only after its v1 JSONL log is publish
 	}
 });
 
-test("SDK delivery retries return one durable receipt and reject payload conflicts across restart", async () => {
-	const databasePath = path.join(root, "sdk-delivery-restart.sqlite");
+test("public Session SDK exports an idle Session through the authoritative bundle operation", async () => {
+	const databasePath = path.join(root, "sdk-session-export.sqlite");
+	const sdk = await createSessionSdk({
+		cwd: workspace,
+		databasePath,
+		pluginPaths: [],
+		workspace,
+	});
+	const destination = path.join(root, "sdk-session-export");
+	try {
+		const sessionId = await sdk.createEmptySession();
+		const result = await sdk.exportSessionBundle(sessionId, destination);
+		const validated = await validateSessionBundleDirectory(destination);
+
+		expect(result).toMatchObject({
+			destination,
+			sessionId,
+			status: "exported",
+		});
+		expect(result.manifest.source).toEqual({ workspacePath: workspace });
+		expect(validated.session).toEqual({
+			id: sessionId,
+			logId: result.manifest.session.logId,
+		});
+	} finally {
+		await sdk.dispose();
+	}
+});
+
+test("an SDK Session handle forks its committed terminal checkpoint into a new idle Session", async () => {
+	const databasePath = path.join(root, "sdk-handle-fork.sqlite");
+	const recorder = createFakeProviderRecorder();
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		pluginPaths: [],
+		workspace,
+	});
+	let handle: SessionSdkHandle | undefined;
+	let forkHandle: SessionSdkHandle | undefined;
+	try {
+		const sourceSessionId = await sdk.createEmptySession({
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		});
+		handle = await sdk.openSession(sourceSessionId, { autoContinue: false });
+		const turnTerminal = Promise.withResolvers<void>();
+		const unsubscribe = handle.onEvent((event) => {
+			if (isTerminalAgentTurnEvent(event)) {
+				turnTerminal.resolve();
+			}
+		});
+		const admission = await handle.deliver({
+			idempotencyKey: "sdk-handle-fork-delivery",
+			text: "Finish the source Agent Turn before creating a fork.",
+		});
+		await turnTerminal.promise;
+		unsubscribe();
+		expect(admission).toMatchObject({
+			disposition: "started",
+			rejected: false,
+		});
+		const sourceHistory = await sdk.readSessionHistoryPage(sourceSessionId);
+		const checkpoint = sourceHistory.records.at(-1);
+		if (checkpoint === undefined) {
+			throw new Error("The completed source Agent Turn has no checkpoint.");
+		}
+
+		const fork = await handle.fork(
+			{ recordId: checkpoint.id },
+			"sdk-handle-fork-operation"
+		);
+		const sdkFork = await sdk.forkSession(
+			sourceSessionId,
+			{ recordId: checkpoint.id },
+			"sdk-root-fork-operation"
+		);
+		const forkHistory = await sdk.readSessionHistoryPage(fork.id);
+		const forkStatistics = await sdk.getSessionStatistics(fork.id);
+
+		expect(fork.created).toBe(true);
+		expect(sdkFork.created).toBe(true);
+		expect(fork.handle.sessionId).toBe(fork.id);
+		expect(sdkFork.handle.sessionId).toBe(sdkFork.id);
+		let rootForkSnapshot: SessionSdkSnapshot | undefined;
+		const unsubscribeRootForkSnapshot = sdkFork.handle.subscribe((snapshot) => {
+			rootForkSnapshot = snapshot;
+		});
+		expect(rootForkSnapshot?.turnActive).toBe(false);
+		unsubscribeRootForkSnapshot();
+		expect(sdkFork.id).not.toBe(fork.id);
+		expect(fork.id).not.toBe(sourceSessionId);
+		expect(forkHistory.records.at(-1)?.messages.at(-1)?.role).toBe("assistant");
+		expect(forkStatistics.usage.actual.contributionCount).toBe(0);
+		expect(forkStatistics.usage.inherited.contributionCount).toBeGreaterThan(0);
+		expect(
+			await handle.deliver({
+				idempotencyKey: "sdk-handle-fork-source-continues",
+				text: "The source Host remains usable after forking.",
+			})
+		).toMatchObject({
+			disposition: "started",
+			rejected: false,
+		});
+		forkHandle = fork.handle;
+		let forkSnapshot: SessionSdkSnapshot | undefined;
+		forkHandle.subscribe((snapshot) => {
+			forkSnapshot = snapshot;
+		});
+		expect(forkSnapshot?.turnActive).toBe(false);
+		const forkTurnTerminal = Promise.withResolvers<void>();
+		const unsubscribeForkEvents = forkHandle.onEvent((event) => {
+			if (isTerminalAgentTurnEvent(event)) {
+				forkTurnTerminal.resolve();
+			}
+		});
+		expect(await forkHandle.continue()).toMatchObject({ kind: "resumed" });
+		await forkTurnTerminal.promise;
+		unsubscribeForkEvents();
+		const rootForkTurnTerminal = Promise.withResolvers<void>();
+		const unsubscribeRootForkEvents = sdkFork.handle.onEvent((event) => {
+			if (isTerminalAgentTurnEvent(event)) {
+				rootForkTurnTerminal.resolve();
+			}
+		});
+		expect(await sdkFork.handle.continue()).toMatchObject({ kind: "resumed" });
+		await rootForkTurnTerminal.promise;
+		unsubscribeRootForkEvents();
+		expect(recorder.requests).toHaveLength(4);
+		expect(recorder.requests.at(-1)).toMatchObject({
+			kind: "chat",
+			messages: [
+				{
+					role: "user",
+					text: "Finish the source Agent Turn before creating a fork.",
+				},
+				{ role: "assistant", text: "E2E chat response" },
+			],
+		});
+	} finally {
+		await forkHandle?.dispose();
+		await handle?.dispose();
+		await sdk.dispose();
+	}
+});
+
+test("Session services fork operation returns a usable SDK handle", async () => {
+	const databasePath = path.join(root, "session-services-fork.sqlite");
+	const recorder = createFakeProviderRecorder();
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const services = await openSessionServices({
+		policy: { cwd: workspace, databasePath, workspace },
+		sources: {
+			createProviderCollection: () => createFakeProviderCollection(recorder),
+			store: () => persistence.store,
+		},
+	});
+	let sourceHandle: SessionSdkHandle | undefined;
+	let forkHandle: SessionSdkHandle | undefined;
+	let unsubscribeSourceEvents: (() => void) | undefined;
+	let unsubscribeForkEvents: (() => void) | undefined;
+	try {
+		const sourceSessionId = await services.sessionSdk.createEmptySession({
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		});
+		sourceHandle = await services.sessionSdk.openSession(sourceSessionId, {
+			autoContinue: false,
+		});
+		const sourceTurnTerminal = Promise.withResolvers<void>();
+		unsubscribeSourceEvents = sourceHandle.onEvent((event) => {
+			if (isTerminalAgentTurnEvent(event)) {
+				sourceTurnTerminal.resolve();
+			}
+		});
+		await sourceHandle.deliver({
+			idempotencyKey: "session-services-fork-source",
+			text: "Complete the source turn before the service forks it.",
+		});
+		await sourceTurnTerminal.promise;
+		unsubscribeSourceEvents();
+		const history =
+			await services.sessionSdk.readSessionHistoryPage(sourceSessionId);
+		const checkpoint = history.records.at(-1);
+		if (checkpoint === undefined) {
+			throw new Error("The source Session has no completed checkpoint.");
+		}
+
+		const fork = await services.sessionSdk.forkSession(
+			sourceSessionId,
+			{ recordId: checkpoint.id },
+			"session-services-fork-operation"
+		);
+		forkHandle = fork.handle;
+		expect(fork.handle.sessionId).toBe(fork.id);
+		const forkTurnTerminal = Promise.withResolvers<void>();
+		unsubscribeForkEvents = forkHandle.onEvent((event) => {
+			if (isTerminalAgentTurnEvent(event)) {
+				forkTurnTerminal.resolve();
+			}
+		});
+		expect(await forkHandle.continue()).toMatchObject({ kind: "resumed" });
+		await forkTurnTerminal.promise;
+	} finally {
+		unsubscribeSourceEvents?.();
+		unsubscribeForkEvents?.();
+		await forkHandle?.dispose();
+		await sourceHandle?.dispose();
+		await services.shutdown();
+		persistence.close();
+	}
+});
+
+test("SDK delivery retries preserve one durable receipt across projection rebuild and restart", async () => {
+	const databasePath = path.join(
+		root,
+		"sdk-delivery-restart",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
 	const firstRecorder = createFakeProviderRecorder();
 	const firstSdk = await createSessionSdkWithRuntime({
 		createProviderCollection: () => createFakeProviderCollection(firstRecorder),
@@ -237,6 +458,20 @@ test("SDK delivery retries return one durable receipt and reject payload conflic
 		throw new Error("The first SDK delivery was not accepted.");
 	}
 
+	const rebuildPersistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	try {
+		const rebuilt = await rebuildPersistence.store.rebuildProjection(
+			{ kind: "all" },
+			async (operation) => await operation()
+		);
+		expect(rebuilt.issues).toEqual([]);
+	} finally {
+		rebuildPersistence.close();
+	}
+
 	const secondRecorder = createFakeProviderRecorder();
 	const secondSdk = await createSessionSdkWithRuntime({
 		createProviderCollection: () =>
@@ -253,7 +488,7 @@ test("SDK delivery retries return one durable receipt and reject payload conflic
 	try {
 		reopened = await secondSdk.openSession(sessionId, { autoContinue: false });
 		const unrelatedIntentPath = path.join(
-			root,
+			path.dirname(resolveLocalSessionLogRoot(databasePath)),
 			"session-control",
 			"indeterminate",
 			`${sessionId}.json`
@@ -307,7 +542,11 @@ test("SDK delivery retries return one durable receipt and reject payload conflic
 
 		const entries = (
 			await Bun.file(
-				path.join(root, "session-logs", sessionId, "session.jsonl")
+				path.join(
+					resolveLocalSessionLogRoot(databasePath),
+					sessionId,
+					"session.jsonl"
+				)
 			).text()
 		)
 			.trimEnd()
@@ -479,7 +718,12 @@ test("SDK delivery replays a synced Session record after the process exits befor
 });
 
 test("processing steering status reopens as a failed durable head with stable identities", async () => {
-	const databasePath = path.join(root, "sdk-steering-status-restart.sqlite");
+	const databasePath = path.join(
+		root,
+		"sdk-steering-status-restart",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
 	const recorder = createFakeProviderRecorder();
 	const persistence = createSessionJsonlTestPersistence(
 		databasePath,
@@ -556,6 +800,11 @@ test("processing steering status reopens as a failed durable head with stable id
 		databasePath,
 		workspace
 	);
+	const rebuilt = await reopenedPersistence.store.rebuildProjection(
+		{ kind: "all" },
+		async (operation) => await operation()
+	);
+	expect(rebuilt.issues).toEqual([]);
 	const reopenedServices = await openSessionServices({
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
@@ -2337,6 +2586,7 @@ test("the Session catalog reports one corrupt log without hiding healthy Session
 		expect(catalog.sessions.map(({ id }) => id)).not.toContain(corruptId);
 		expect(catalog.issues).toContainEqual({
 			offset: 0,
+			sequence: 0,
 			code: "session_log_version_unsupported",
 			message: expect.any(String),
 			sessionId: corruptId,
@@ -3436,7 +3686,6 @@ test("legacy projection cursors migrate into the ready rebuild generation", asyn
 	const projectionPath = resolveLocalSessionProjectionPath(databasePath);
 	const legacyProjection = createDatabase(projectionPath);
 	legacyProjection.sqlite.exec(`
-		DROP TABLE session_projection_state;
 		ALTER TABLE session_projection_cursor DROP COLUMN generation;
 		INSERT INTO session_projection_cursor (
 			session_id, log_id, next_byte_offset, next_sequence, last_hash
@@ -3885,12 +4134,32 @@ test("Session history pages keep status and log position at their captured prefi
 		"sessions.sqlite"
 	);
 	await fs.mkdir(path.dirname(databasePath), { recursive: true });
-	const persistence = createSessionJsonlTestPersistence(
-		databasePath,
-		workspace
-	);
 	const sessionId = toSessionId("history-page-snapshot");
 	const submissionId = toSubmissionId("history-page-first-submission");
+	const markerPath = path.join(
+		path.dirname(resolveLocalSessionLogRoot(databasePath)),
+		"session-control",
+		"deleted",
+		`${sessionId}.json`
+	);
+	let failDeletionMarkerSync = true;
+	let persistenceClosed = false;
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace,
+		{
+			sync: async (filePath, handle) => {
+				if (
+					failDeletionMarkerSync &&
+					filePath.endsWith(path.join("deleted", `${sessionId}.json`))
+				) {
+					failDeletionMarkerSync = false;
+					throw new Error("Injected crash before deletion marker sync.");
+				}
+				await handle.sync();
+			},
+		}
+	);
 	const makeRecord = (sequence: number, withSubmission = false) => {
 		const messageId = sessionMessageId(`history-page-message-${sequence}`);
 		const record = buildUserSessionRecord({
@@ -3980,8 +4249,31 @@ test("Session history pages keep status and log position at their captured prefi
 		expect(secondPage.records.map(({ id }) => id)).not.toContain(
 			appendedRecord.record.id
 		);
-	} finally {
+
+		const deletion = await persistence.store.deleteSession(sessionId);
+		expect(deletion).toMatchObject({
+			kind: "committed",
+			projection: "blocked",
+		});
+		await fs.rm(markerPath, { force: true });
 		persistence.close();
+		persistenceClosed = true;
+
+		const reopened = createSessionJsonlTestPersistence(databasePath, workspace);
+		try {
+			const catalog = await reopened.store.listSessionCatalog();
+			expect(catalog.sessions.map(({ id }) => id)).not.toContain(sessionId);
+			expect(catalog.issues).toEqual([]);
+			await expect(
+				reopened.store.readSessionHistoryPage(sessionId, { cursor })
+			).rejects.toMatchObject({ code: "cursor_expired" });
+		} finally {
+			reopened.close();
+		}
+	} finally {
+		if (!persistenceClosed) {
+			persistence.close();
+		}
 	}
 });
 
@@ -4103,7 +4395,7 @@ test("Session catalog pages keep ordering and metadata at their captured revisio
 	}
 });
 
-test("Session page keyset queries use ordering indexes without temporary sorts", async () => {
+test("Session page and statistics queries use scope indexes without temporary sorts", async () => {
 	const databasePath = path.join(
 		root,
 		"session-page-query-plans",
@@ -4147,11 +4439,35 @@ test("Session page keyset queries use ordering indexes without temporary sorts",
 			.all("session", 10, 10, 10, 51)
 			.map(({ detail }) => detail)
 			.join("\\n");
+		const statisticsPlan = persistence.projection.sqlite
+			.query<{ detail: string }, [string, number]>(`
+				EXPLAIN QUERY PLAN
+				SELECT COUNT(*) FROM session_record
+				WHERE session_id = ? AND source_sequence <= ?
+			`)
+			.all("session", 10)
+			.map(({ detail }) => detail)
+			.join("\\n");
+		const turnStatisticsPlan = persistence.projection.sqlite
+			.query<{ detail: string }, [string, string, number]>(`
+				EXPLAIN QUERY PLAN
+				SELECT COUNT(*) FROM session_record
+				WHERE session_id = ? AND turn_id = ? AND source_sequence <= ?
+			`)
+			.all("session", "turn", 10)
+			.map(({ detail }) => detail)
+			.join("\\n");
 
 		expect(catalogPlan).toContain("idx_session_catalog_version_order");
 		expect(historyPlan).toContain("idx_session_record_version_page");
+		expect(statisticsPlan).toContain("idx_session_record_session_sequence");
+		expect(turnStatisticsPlan).toContain(
+			"idx_session_record_session_turn_sequence"
+		);
 		expect(catalogPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 		expect(historyPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+		expect(statisticsPlan).not.toContain("SCAN session_record");
+		expect(turnStatisticsPlan).not.toContain("SCAN session_record");
 	} finally {
 		persistence.close();
 	}
@@ -4228,7 +4544,7 @@ test("a fresh catalog read cannot claim an unbound log during another Workspace'
 	}
 });
 
-test("another Workspace cannot claim a published Session after creation fails before binding", async () => {
+test("foreign Workspaces cannot claim an interrupted Session and owner catalog reads require retry", async () => {
 	const databasePath = path.join(
 		root,
 		"session-create-workspace-interrupted",
@@ -4307,6 +4623,9 @@ test("another Workspace cannot claim a published Session after creation fails be
 			workspaceA
 		);
 		try {
+			await expect(ownerRetry.store.listSessionsPage()).rejects.toMatchObject({
+				code: "session_log_write_indeterminate",
+			});
 			const recovered = await ownerRetry.store.createEmptySession({
 				id: sessionId,
 			});
@@ -4352,6 +4671,107 @@ test("a fresh history page stats an unchanged log instead of decoding full histo
 		const page = await persistence.store.readSessionHistoryPage(sessionId);
 		expect(page.records).toEqual([]);
 		expect(syncCount).toBe(0);
+	} finally {
+		persistence.close();
+	}
+});
+
+test("history-page catch-up rejects an appended record that reuses a retained Message identity", async () => {
+	const databasePath = path.join(
+		root,
+		"session-history-page-duplicate-message-catchup",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const sessionId = toSessionId("history-page-duplicate-message-catchup");
+	const messageId = sessionMessageId("history-page-duplicate-message");
+	const logPath = path.join(
+		resolveLocalSessionLogRoot(databasePath),
+		sessionId,
+		"session.jsonl"
+	);
+	try {
+		await persistence.store.createEmptySession({ id: sessionId });
+		const firstRecord = buildUserSessionRecord({
+			agentId: agentId("history-page-catchup-agent"),
+			message: createSessionUserMessage(
+				"First durable message.",
+				undefined,
+				[],
+				[],
+				messageId
+			),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-page-first-turn"),
+		});
+		const firstOutcome = await persistence.store.commitSessionRecord({
+			record: firstRecord,
+			sessionId,
+		});
+		if (firstOutcome.kind !== "committed") {
+			throw new Error("The history-page fixture record was not committed.");
+		}
+		const originalBytes = await Bun.file(logPath).bytes();
+		const state = decodeSessionLog(sessionId, originalBytes);
+		const duplicateRecord = buildUserSessionRecord({
+			agentId: agentId("history-page-catchup-agent"),
+			message: createSessionUserMessage(
+				"This duplicate identity must not be projected.",
+				undefined,
+				[],
+				[],
+				messageId
+			),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-page-duplicate-turn"),
+		});
+		const duplicateEvent = createSessionLogEvent({
+			operationId: "history-page-duplicate-message-event",
+			payload: { record: duplicateRecord },
+			previousHash: state.lastHash,
+			sequence: state.nextSequence,
+			sessionId,
+			timestamp: new Date().toISOString(),
+			type: "record.committed",
+		});
+		const cursorBefore = persistence.projection.sqlite
+			.query(
+				"SELECT generation, last_hash, log_id, next_byte_offset, next_sequence FROM session_projection_cursor WHERE session_id = ?"
+			)
+			.get(sessionId);
+		await Bun.write(
+			logPath,
+			new Uint8Array([
+				...originalBytes,
+				...encodeSessionLogLine(duplicateEvent),
+			])
+		);
+
+		await expect(
+			persistence.store.readSessionHistoryPage(sessionId)
+		).rejects.toMatchObject({
+			code: "session_log_corrupt",
+			offset: originalBytes.byteLength,
+			sequence: state.nextSequence,
+		});
+		expect(
+			persistence.projection.sqlite
+				.query(
+					"SELECT generation, last_hash, log_id, next_byte_offset, next_sequence FROM session_projection_cursor WHERE session_id = ?"
+				)
+				.get(sessionId)
+		).toEqual(cursorBefore);
+		expect(
+			persistence.projection.sqlite
+				.query(
+					"SELECT COUNT(*) AS count FROM session_record_message_identity WHERE session_id = ?"
+				)
+				.get(sessionId)
+		).toEqual({ count: 1 });
 	} finally {
 		persistence.close();
 	}
@@ -6266,7 +6686,7 @@ test("public SDK reports a committed-but-blocked prompt without scheduling model
 		expect(JSON.stringify(blockedSnapshot?.transcript)).toContain(
 			"Persist before dispatch."
 		);
-		expect(handle.continue()).toEqual({
+		expect(await handle.continue()).toEqual({
 			kind: "rejected",
 			reason:
 				"Session work is paused because its SQLite projection is unavailable. Close and reopen it after storage recovers.",
@@ -6828,6 +7248,12 @@ test("recovery completes a synced deletion event before catalog discovery can re
 		"deleted",
 		`${sessionId}.json`
 	);
+	const pendingIntentPath = path.join(
+		root,
+		"session-control",
+		"indeterminate",
+		`${sessionId}.json`
+	);
 	let failMarkerSync = true;
 	const persistence = createSessionJsonlTestPersistence(
 		databasePath,
@@ -6852,6 +7278,7 @@ test("recovery completes a synced deletion event before catalog discovery can re
 			kind: "committed",
 			projection: "blocked",
 		});
+		expect(await Bun.file(pendingIntentPath).exists()).toBe(true);
 		expect(
 			await Bun.file(
 				path.join(root, "session-logs", sessionId, "session.jsonl")
@@ -6869,6 +7296,7 @@ test("recovery completes a synced deletion event before catalog discovery can re
 				reopenedPersistence.store.getSession(sessionId)
 			).rejects.toThrow("Session not found");
 			expect(await Bun.file(markerPath).exists()).toBe(true);
+			expect(await Bun.file(pendingIntentPath).exists()).toBe(false);
 			const catalog = await reopenedPersistence.store.listSessionCatalog();
 			expect(catalog.sessions.map(({ id }) => id)).not.toContain(sessionId);
 			expect(catalog.issues).toEqual([]);
@@ -7136,6 +7564,37 @@ test("Session statistics share the history read point and report only persisted 
 
 		const history = await persistence.store.readSessionHistoryPage(sessionId);
 		expect(history.readPoint).toBeString();
+		const lateToolRecord: SessionRecord = {
+			agentId: agentId("statistics-agent"),
+			id: sessionRecordId("statistics-later-tool-record"),
+			messages: [
+				{
+					id: sessionMessageId("statistics-later-tool-message"),
+					metadata: { model: DEFAULT_PROVIDER_MODEL_SELECTION },
+					parts: [
+						{
+							input: { path: "AGENTS.md" },
+							outcome: { kind: "success", output: "read" },
+							sequence: 0,
+							toolCallId: toolCallId("statistics-later-tool-call"),
+							toolName: "read",
+							type: "tool-call",
+						},
+					],
+					role: "assistant",
+				},
+			],
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			outcome: { kind: "tool" },
+			turnId: agentTurnId("statistics-later-turn"),
+			version: SESSION_RECORD_VERSION,
+		};
+		expect(
+			await persistence.store.commitSessionRecord({
+				record: lateToolRecord,
+				sessionId,
+			})
+		).toMatchObject({ kind: "committed", projection: "ready" });
 		const otherSessionId = toSessionId("session-statistics-other-session");
 		await persistence.store.createEmptySession({ id: otherSessionId });
 		await expect(
@@ -7193,9 +7652,33 @@ test("Session statistics share the history read point and report only persisted 
 			},
 			usage: { actual: { contributionCount: 0, inputTokens: null } },
 		});
+		const completedTurn = await persistence.store.getSessionStatistics(
+			sessionId,
+			{ turnId: completeTurnId }
+		);
+		expect(completedTurn).toMatchObject({
+			completedToolCallCount: 1,
+			recordCount: 3,
+			terminalOutcomeCounts: { completed: 1 },
+			turn: {
+				completedToolCallCount: 1,
+				recordCount: 3,
+				terminalOutcome: { finishedAt: 1234, kind: "completed" },
+				turnId: completeTurnId,
+			},
+			usage: {
+				actual: {
+					contributionCount: 1,
+					inputTokens: 120,
+					outputTokens: 25,
+				},
+			},
+		});
 
 		const current = await persistence.store.getSessionStatistics(sessionId);
 		expect(current).toMatchObject({
+			completedToolCallCount: 2,
+			recordCount: 5,
 			usage: {
 				actual: { inputTokens: 120, outputTokens: 25, costs: [] },
 				auxiliary: {
@@ -7254,12 +7737,63 @@ test("Session statistics share the history read point and report only persisted 
 		await expect(
 			persistence.store.getSessionStatistics(sessionId)
 		).resolves.toMatchObject({
-			recordCount: 4,
+			completedToolCallCount: 2,
+			recordCount: 5,
 			usage: {
 				actual: { inputTokens: 120 },
 				auxiliary: { contributionCount: 2, inputTokens: 41 },
 			},
 		});
+	} finally {
+		persistence.close();
+	}
+});
+
+test("a Session-only rebuild keeps statistics blocked until the outdated projection is fully rebuilt", async () => {
+	const databasePath = path.join(
+		root,
+		"session-statistics-full-rebuild-gate",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const firstSessionId = toSessionId("statistics-rebuild-first-session");
+	const secondSessionId = toSessionId("statistics-rebuild-second-session");
+	try {
+		await persistence.store.createEmptySession({ id: firstSessionId });
+		await persistence.store.createEmptySession({ id: secondSessionId });
+		persistence.projection.sqlite.exec(
+			"UPDATE session_projection_state SET statistics_version = 0 WHERE id = 1"
+		);
+		await expect(
+			persistence.store.getSessionStatistics(firstSessionId)
+		).rejects.toMatchObject({ code: "session_projection_blocked" });
+
+		const sessionRebuild = await persistence.store.rebuildProjection(
+			{ kind: "session", sessionId: firstSessionId },
+			(operation) => operation()
+		);
+		expect(sessionRebuild.issues).toEqual([]);
+		for (const sessionId of [firstSessionId, secondSessionId]) {
+			await expect(
+				persistence.store.getSessionStatistics(sessionId)
+			).rejects.toMatchObject({ code: "session_projection_blocked" });
+		}
+
+		const fullRebuild = await persistence.store.rebuildProjection(
+			{ kind: "all" },
+			(operation) => operation()
+		);
+		expect(fullRebuild.issues).toEqual([]);
+		await expect(
+			persistence.store.getSessionStatistics(firstSessionId)
+		).resolves.toMatchObject({ recordCount: 0 });
+		await expect(
+			persistence.store.getSessionStatistics(secondSessionId)
+		).resolves.toMatchObject({ recordCount: 0 });
 	} finally {
 		persistence.close();
 	}

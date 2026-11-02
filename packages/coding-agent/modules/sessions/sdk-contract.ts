@@ -10,6 +10,12 @@ import type { SessionId } from "../../shared/identifiers";
 import type { PluginFactory } from "../plugins/public";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
 import type {
+	SessionBundleExportOptions,
+	SessionBundleExportResult,
+	SessionBundleImportOptions,
+	SessionBundleImportResult,
+} from "./session-bundle-contract";
+import type {
 	SessionCatalogPage,
 	SessionHistoryPage,
 	SessionPageOptions,
@@ -19,10 +25,24 @@ import type {
 	SessionWriteReceipt,
 } from "./session-write-outcome";
 import type {
+	SessionForkCheckpoint,
+	SessionForkResult,
+} from "./storage/session-store";
+import type {
 	SessionStatistics,
 	SessionStatisticsOptions,
 } from "./usage/session-statistics";
 
+export type {
+	SessionBundleAttachment,
+	SessionBundleCut,
+	SessionBundleExportOptions,
+	SessionBundleExportResult,
+	SessionBundleFile,
+	SessionBundleImportOptions,
+	SessionBundleImportResult,
+	SessionBundleManifest,
+} from "./session-bundle-contract";
 export type {
 	Session,
 	SessionCatalogPage,
@@ -35,6 +55,10 @@ export type {
 	SessionWriteOutcome,
 	SessionWriteReceipt,
 } from "./session-write-outcome";
+export type {
+	SessionForkCheckpoint,
+	SessionForkResult,
+} from "./storage/session-store";
 export type {
 	SessionStatistics,
 	SessionStatisticsOptions,
@@ -154,7 +178,11 @@ export type SessionSdkSnapshot = Readonly<{
 }>;
 
 export type SessionSdkHandle = Readonly<{
-	continue: () => SessionSdkContinuationOutcome;
+	continue: () => Promise<SessionSdkContinuationOutcome>;
+	fork: (
+		checkpoint: SessionForkCheckpoint,
+		operationId: string
+	) => Promise<SessionSdkForkResult>;
 	dispose: () => Promise<void>;
 	interrupt: () => Promise<SessionSdkInterruptResult>;
 	/** Queues FIFO input, starts an idle Session, and resolves after its Session Record commits. */
@@ -166,6 +194,9 @@ export type SessionSdkHandle = Readonly<{
 	sessionId: SessionId;
 	subscribe: (listener: (snapshot: SessionSdkSnapshot) => void) => () => void;
 }>;
+
+export type SessionSdkForkResult = SessionForkResult &
+	Readonly<{ handle: SessionSdkHandle }>;
 
 export type SessionSdkPluginFactory = Readonly<{
 	factory: PluginFactory;
@@ -193,6 +224,21 @@ export type SessionSdk = Readonly<{
 		sessionId: SessionId | string,
 		options?: SessionStatisticsOptions
 	) => Promise<SessionStatistics>;
+	forkSession: (
+		sessionId: SessionId | string,
+		checkpoint: SessionForkCheckpoint,
+		operationId: string
+	) => Promise<SessionSdkForkResult>;
+	exportSessionBundle: (
+		sessionId: SessionId | string,
+		destination: string,
+		options?: SessionBundleExportOptions
+	) => Promise<SessionBundleExportResult>;
+	/** Imports into this SDK's local workspace, keeping the Session activation-gated. */
+	importSessionBundle: (
+		bundlePath: string,
+		options?: SessionBundleImportOptions
+	) => Promise<SessionBundleImportResult>;
 	createSessionRuntime: (
 		options?: SessionRuntimeOptions
 	) => Promise<SessionSdk>;
@@ -219,6 +265,9 @@ export type SessionSdkOperations = Pick<
 	| "listSessionsPage"
 	| "readSessionHistoryPage"
 	| "getSessionStatistics"
+	| "forkSession"
+	| "exportSessionBundle"
+	| "importSessionBundle"
 	| "createSessionRuntime"
 	| "createEmptySession"
 	| "deliverToSession"

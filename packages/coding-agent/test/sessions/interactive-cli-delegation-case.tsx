@@ -279,15 +279,20 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 			parentSessionId,
 			status: "succeeded",
 		});
-		const childRecords = await store.listSessionRecords(task.childSessionId);
+		// Parent delivery can finish before the child writer projects the tool result.
+		const readChildSubmitResult = async () =>
+			(await store.listSessionRecords(task.childSessionId))
+				.flatMap(({ messages }) => messages)
+				.flatMap(({ parts }) => parts)
+				.find(
+					(part) =>
+						part.type === "tool-call" && part.toolName === "submit_result"
+				);
+		await waitForSessionCondition(
+			async () => (await readChildSubmitResult()) !== undefined
+		);
+		const childSubmitResult = await readChildSubmitResult();
 		const parentRecords = await store.listSessionRecords(parentSessionId);
-		// Tool-only turns persist the submit_result call, not their streaming text.
-		const childSubmitResult = childRecords
-			.flatMap(({ messages }) => messages)
-			.flatMap(({ parts }) => parts)
-			.find(
-				(part) => part.type === "tool-call" && part.toolName === "submit_result"
-			);
 		expect(childSubmitResult).toMatchObject({
 			outcome: { kind: "success" },
 		});

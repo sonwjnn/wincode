@@ -38,6 +38,35 @@ test("initializes the current compaction schema in a fresh local database", asyn
 	const store = createDrizzleSessionStore(db);
 	expect(await store.getCompactions(sessionId("missing-session"))).toEqual([]);
 });
+
+test("requires reset instead of adding a missing statistics version column at open", async () => {
+	const directory = await fs.mkdtemp(
+		path.join("/tmp", "wincode-statistics-schema-")
+	);
+	const databasePath = path.join(directory, "session.sqlite");
+	try {
+		createDatabase(databasePath).sqlite.close();
+		const oldDatabase = new Database(databasePath);
+		oldDatabase.exec(
+			"ALTER TABLE session_projection_state DROP COLUMN statistics_version;"
+		);
+		oldDatabase.close();
+
+		expect(() => {
+			createDatabase(databasePath).sqlite.close();
+		}).toThrow(SessionDatabaseResetRequiredError);
+
+		const verification = new Database(databasePath);
+		const columns = verification
+			.query("PRAGMA table_info(session_projection_state)")
+			.all() as Array<{ name: string }>;
+		expect(columns.map(({ name }) => name)).not.toContain("statistics_version");
+		verification.close();
+	} finally {
+		await fs.rm(directory, { force: true, recursive: true });
+	}
+});
+
 test("requires resetting local data instead of converting an incompatible reasoning schema", async () => {
 	const directory = await fs.mkdtemp(
 		path.join("/tmp", "wincode-edit-mode-schema-")

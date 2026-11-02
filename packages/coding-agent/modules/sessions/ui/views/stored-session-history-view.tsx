@@ -3,6 +3,7 @@ import type { SessionWriterLockOwner } from "@/modules/sessions/storage/session-
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionCompaction } from "../../compaction/types";
 import type { SessionMessage } from "../../message";
+import type { SessionForkProvenance } from "../../storage/session-store";
 import type {
 	SessionStatistics,
 	SessionStatisticsUsageTotals,
@@ -11,6 +12,7 @@ import { ChatMessage } from "../components/chat-message";
 import { buildSessionTimeline } from "../components/chat-timeline";
 import { resolveSessionTurnFooterMessages } from "../components/chat-turns";
 import { CompactionDivider } from "../components/compaction-divider";
+import { SessionForkProvenanceBanner } from "../components/session-fork-provenance-banner";
 import {
 	SessionWriterAction,
 	SessionWriterOwnerLabel,
@@ -18,6 +20,7 @@ import {
 
 type StoredSessionHistoryViewProps = Readonly<{
 	compactions: readonly SessionCompaction[];
+	forkProvenance?: SessionForkProvenance;
 	hasMoreHistory: boolean;
 	historyError?: string;
 	isLoadingMore: boolean;
@@ -38,6 +41,7 @@ type StoredSessionHistoryViewProps = Readonly<{
 
 export function StoredSessionHistoryView({
 	compactions,
+	forkProvenance,
 	hasMoreHistory,
 	historyError,
 	isLoadingMore,
@@ -118,6 +122,12 @@ export function StoredSessionHistoryView({
 					<text fg={colors.error}>{selectionPickerError}</text>
 				)}
 				<text fg={colors.text}>{sessionTitle}</text>
+				{forkProvenance === undefined ? null : (
+					<SessionForkProvenanceBanner
+						inheritedUsage={statistics.usage.inherited}
+						provenance={forkProvenance}
+					/>
+				)}
 				<text fg={colors.textMuted}>
 					{`Persisted statistics · read point ${statistics.readPoint.slice(0, 12)}… · ${statistics.recordCount} committed records · ${statistics.completedToolCallCount} completed Tool Calls`}
 				</text>

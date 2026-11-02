@@ -104,6 +104,7 @@ const createTestHomeProviderCollection = (pluginRuntime?: PluginRuntime) =>
 
 type AgentProviderFixture = Readonly<{
 	agentId: AgentId;
+	availableModel: ProviderModel;
 	credentialStorageId: string;
 	model: ProviderModelSelection;
 	pluginRuntime: PluginRuntime;
@@ -205,6 +206,7 @@ const createAgentProviderFixture = (
 	];
 	return {
 		agentId,
+		availableModel,
 		credentialStorageId: pluginProviderStorageId({
 			pluginId: "interactive-provider-plugin-0",
 			providerId,
@@ -1185,9 +1187,11 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		const fixture = createAgentProviderFixture({ operations });
 		const store = getSessionStore();
 		await store.resetSessionData();
-		const originalCreateSession = store.createSession;
-		store.createSession = async () => ({
+		const originalCreateSessionWithExternalizedMessage =
+			store.createSessionWithExternalizedMessage;
+		store.createSessionWithExternalizedMessage = async (input) => ({
 			id: toSessionId("home-blocked-session"),
+			message: input.message,
 			writeOutcome: {
 				entryHash: "0".repeat(64),
 				kind: "committed",
@@ -1223,7 +1227,8 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			expect(operations).not.toContain("chat");
 			expect(await store.listSessions()).toEqual([]);
 		} finally {
-			store.createSession = originalCreateSession;
+			store.createSessionWithExternalizedMessage =
+				originalCreateSessionWithExternalizedMessage;
 			await act(() => setup.renderer.destroy());
 			await fixture.pluginRuntime.shutdown();
 			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
@@ -1236,9 +1241,11 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		const fixture = createAgentProviderFixture({ operations });
 		const store = getSessionStore();
 		await store.resetSessionData();
-		const originalCreateSession = store.createSession;
-		store.createSession = async () => ({
+		const originalCreateSessionWithExternalizedMessage =
+			store.createSessionWithExternalizedMessage;
+		store.createSessionWithExternalizedMessage = async (input) => ({
 			id: toSessionId("home-indeterminate-session"),
+			message: input.message,
 			writeOutcome: {
 				error: {
 					code: "session_log_write_indeterminate",
@@ -1274,7 +1281,8 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			expect(operations).not.toContain("chat");
 			expect(await store.listSessions()).toEqual([]);
 		} finally {
-			store.createSession = originalCreateSession;
+			store.createSessionWithExternalizedMessage =
+				originalCreateSessionWithExternalizedMessage;
 			await act(() => setup.renderer.destroy());
 			await fixture.pluginRuntime.shutdown();
 			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
@@ -1333,7 +1341,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			counters,
 			"authoritative",
 			pendingSnapshot.promise,
-			"openai"
+			fixture.model.providerId
 		);
 		const store = getSessionStore();
 		await store.resetSessionData();
@@ -1350,9 +1358,10 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 				"openai/gpt-5.6-luna"
 			);
 			await act(async () => {
-				pendingSnapshot.resolve([]);
+				pendingSnapshot.resolve([fixture.availableModel]);
 				await Promise.resolve();
 			});
+			await flushTestRenderer(setup, 3);
 			const selectedFrame = await waitForHomeFrame(
 				setup,
 				"openai/gpt-5.6-luna:low"
@@ -1392,6 +1401,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		});
 
 		try {
+			await flushTestRenderer(setup, 3);
 			await waitForHomeFrame(setup, ":low");
 			expect(await captureNormalizedHomeFrame(setup)).toContain(":low");
 		} finally {
@@ -1462,6 +1472,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 				}
 			);
 			try {
+				await waitForHomeModelStatus(setup);
 				await waitForHomeFrame(setup, "do not match the current trusted");
 				expect(await captureNormalizedHomeFrame(setup)).toContain(
 					"do not match the current trusted"
@@ -1498,6 +1509,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			}
 		);
 		try {
+			await waitForHomeModelStatus(setup);
 			await waitForHomeFrame(setup, "has no matching trusted source");
 			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
@@ -1531,6 +1543,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			}
 		);
 		try {
+			await waitForHomeModelStatus(setup);
 			await waitForHomeFrame(setup, "has no matching trusted source");
 			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"

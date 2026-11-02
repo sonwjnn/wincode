@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AttachmentId, SessionMessageId } from "@wincode/agent-core";
 import {
-	isError,
 	isNull,
 	isObjectLike,
 	isPlainObject,
@@ -20,6 +19,7 @@ import type {
 	SessionPart,
 } from "@/modules/sessions/message";
 import { isValidSessionId, toSessionId } from "@/shared/identifiers";
+import { throwIfAborted } from "@/shared/utils/abort";
 import {
 	ATTACHMENT_ID_PATTERN,
 	type AttachmentReference,
@@ -304,18 +304,14 @@ type AttachmentCandidate = {
 	reference: AttachmentReference;
 };
 
-const isNodeError = (error: unknown, code: string): boolean =>
+export const isNodeError = (error: unknown, code: string): boolean =>
 	isObjectLike(error) && "code" in error && error.code === code;
 
 const assertNotAborted = (signal?: AbortSignal): void => {
-	if (signal?.aborted) {
-		throw isError(signal.reason)
-			? signal.reason
-			: new Error("Attachment operation was cancelled.");
-	}
+	throwIfAborted(signal, "Attachment operation was cancelled.");
 };
 
-const digestBytes = (bytes: Uint8Array): string =>
+export const digestBytes = (bytes: Uint8Array): string =>
 	new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
 const digestUnavailableInput = (value: string): string =>
@@ -702,25 +698,38 @@ const attachmentReferenceFromValue = (
 		: undefined;
 };
 
+export const collectSessionAttachmentReferences = (
+	value: unknown
+): AttachmentReference[] => {
+	const references: AttachmentReference[] = [];
+	const visit = (item: unknown): void => {
+		if (Array.isArray(item)) {
+			for (const child of item) {
+				visit(child);
+			}
+			return;
+		}
+		if (!isPlainObject(item)) {
+			return;
+		}
+		const reference = attachmentReferenceFromValue(item);
+		if (reference !== undefined) {
+			references.push(reference);
+		}
+		for (const child of Object.values(item)) {
+			visit(child);
+		}
+	};
+	visit(value);
+	return references;
+};
+
 const collectAttachmentIds = (
 	value: unknown,
 	attachmentIds: Set<string>
 ): void => {
-	if (Array.isArray(value)) {
-		for (const item of value) {
-			collectAttachmentIds(item, attachmentIds);
-		}
-		return;
-	}
-	if (!isPlainObject(value)) {
-		return;
-	}
-	const reference = attachmentReferenceFromValue(value);
-	if (reference !== undefined) {
+	for (const reference of collectSessionAttachmentReferences(value)) {
 		attachmentIds.add(reference.attachmentId);
-	}
-	for (const item of Object.values(value)) {
-		collectAttachmentIds(item, attachmentIds);
 	}
 };
 

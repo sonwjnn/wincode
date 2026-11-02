@@ -25,6 +25,7 @@ import {
 	type SessionContextMeasurement,
 	type SessionMessageId,
 	type SessionRecord,
+	type SessionToolCallBatch,
 	type ToolCallId,
 	type ToolCallOutput,
 	type ToolDefinition,
@@ -861,6 +862,8 @@ export const runAgentTurnToText = async ({
 	let stepHasToolCalls = false;
 	let contextMeasurement: SessionContextMeasurement | undefined;
 	let contextEpoch = getSessionContextEpoch(turn.input.messages);
+	let toolBatchId: SessionToolCallBatch["id"] | undefined;
+	let stepToolCallIds: ToolCallId[] = [];
 	const startedTools = new Map<
 		string,
 		{ readonly input: unknown; readonly toolName: string }
@@ -882,32 +885,38 @@ export const runAgentTurnToText = async ({
 			throw new Error(CHECKPOINT_FAILURE_MESSAGE, { cause: error });
 		}
 	};
+	const updateTurnEventState = (event: AgentTurnEvent): void => {
+		if (event.type === "model-step-started") {
+			stepMessageIds = [];
+			stepHasToolCalls = false;
+			contextMeasurement = undefined;
+			toolBatchId = event.stepId;
+			stepToolCallIds = [];
+		}
+		if (event.type === "model-step-finished") {
+			contextMeasurement = contextMeasurementForStep(
+				event,
+				contextEpoch,
+				stepHasToolCalls
+			);
+		}
+		if (event.type === "text-delta") {
+			assistantText += event.delta;
+			pendingAssistantText += event.delta;
+		}
+		if (event.type === "tool-call-started") {
+			stepHasToolCalls = true;
+			stepToolCallIds.push(event.toolCallId);
+			startedTools.set(event.toolCallId, {
+				input: event.input,
+				toolName: event.toolName,
+			});
+		}
+	};
 	await consumeAgentTurnEvents({
 		onEvent: async (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);
-			if (event.type === "model-step-started") {
-				stepMessageIds = [];
-				stepHasToolCalls = false;
-				contextMeasurement = undefined;
-			}
-			if (event.type === "model-step-finished") {
-				contextMeasurement = contextMeasurementForStep(
-					event,
-					contextEpoch,
-					stepHasToolCalls
-				);
-			}
-			if (event.type === "text-delta") {
-				assistantText += event.delta;
-				pendingAssistantText += event.delta;
-			}
-			if (event.type === "tool-call-started") {
-				stepHasToolCalls = true;
-				startedTools.set(event.toolCallId, {
-					input: event.input,
-					toolName: event.toolName,
-				});
-			}
+			updateTurnEventState(event);
 			if (event.type === "tool-call-finished") {
 				const started = startedTools.get(event.toolCallId);
 				if (!isUndefined(started)) {
@@ -916,6 +925,15 @@ export const runAgentTurnToText = async ({
 						event,
 						input: started.input,
 						sourceUserMessageId,
+						...omitUndefined({
+							toolBatch:
+								toolBatchId === undefined
+									? undefined
+									: {
+											id: toolBatchId,
+											toolCallIds: [...stepToolCallIds],
+										},
+						}),
 						turn,
 					});
 					try {

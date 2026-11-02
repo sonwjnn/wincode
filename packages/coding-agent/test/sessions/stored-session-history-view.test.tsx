@@ -1,5 +1,7 @@
 import { expect, mock, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import { act } from "react";
+import type { SessionForkProvenance } from "@/modules/sessions/storage/session-store";
 import { StoredSessionHistoryView } from "@/modules/sessions/ui/views/stored-session-history-view";
 import type { SessionStatistics } from "@/modules/sessions/usage/session-statistics";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -32,6 +34,7 @@ const statistics: SessionStatistics = {
 		interrupted: 0,
 	},
 	usage: {
+		contributions: { actual: [], auxiliary: [], inherited: [] },
 		actual: {
 			...emptyUsage,
 			contributionCount: 1,
@@ -69,6 +72,13 @@ test("stored history exposes load-older and refresh actions without editing cont
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<StoredSessionHistoryView
 				compactions={[]}
+				forkProvenance={fromPartial<SessionForkProvenance>({
+					sourceAvailability: "unavailable",
+					sourceMessageId: "source-message",
+					sourceRecordId: "source-record",
+					sourceSequence: 4,
+					sourceSessionId: "source-session",
+				})}
 				hasMoreHistory
 				isLoadingMore={false}
 				isRefreshing={false}
@@ -94,6 +104,14 @@ test("stored history exposes load-older and refresh actions without editing cont
 		expect(frame).toContain("Refresh history");
 		expect(frame).toContain("No saved messages.");
 		expect(frame).toContain("Persisted statistics");
+		expect(frame).toContain("Forked from Session source-session");
+		expect(frame).toContain("Record source-record");
+		expect(frame).toContain(
+			"Source Session is no longer available; inherited context and attachments remain available."
+		);
+		expect(frame).toContain(
+			"Inherited usage is historical, not new Session spend"
+		);
 		expect(frame).toContain("Inherited usage is historical source spend");
 		expect(frame).toContain("fixture-provider/fixture-model: 0.12 USD");
 		expect(frame).toContain(

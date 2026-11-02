@@ -1,4 +1,4 @@
-import type { AgentId } from "@wincode/agent-core";
+import type { AgentId, SessionRecordId } from "@wincode/agent-core";
 import type {
 	ProviderCollection,
 	ProviderModel,
@@ -48,6 +48,7 @@ import {
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
 import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import type {
+	SessionForkProvenance,
 	SessionPageOptions,
 	SessionStatistics,
 	SessionStore,
@@ -57,10 +58,12 @@ import {
 	type SessionWriterLockOwner,
 } from "@/modules/sessions/storage/session-writer-lock";
 import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
+import type { SessionStatisticsUsageTotals } from "@/modules/sessions/usage/session-statistics";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
+import { SessionForkProvenanceBanner } from "../components/session-fork-provenance-banner";
 import {
 	SessionWriterAction,
 	SessionWriterOwnerLabel,
@@ -69,7 +72,13 @@ import type { SessionInitialSubmission } from "./session-view";
 import { SessionView } from "./session-view";
 import { StoredSessionHistoryView } from "./stored-session-history-view";
 
+type SessionForkSummary = Readonly<{
+	inheritedUsage: SessionStatisticsUsageTotals;
+	provenance: SessionForkProvenance;
+}>;
+
 type OpenedSession = Readonly<{
+	forkSummary?: SessionForkSummary;
 	host: SessionHost;
 	initialSubmission?: SessionInitialSubmission;
 	sessionTitle: string;
@@ -77,6 +86,7 @@ type OpenedSession = Readonly<{
 }>;
 type StoredSessionHistory = Readonly<{
 	compactions: readonly SessionCompaction[];
+	forkProvenance: SessionForkProvenance | undefined;
 	model: ProviderModelSelection | undefined;
 	nextCursor: string | undefined;
 	readPoint: string;
@@ -207,10 +217,26 @@ const createProviderReselection = async (
 					?.getProviderRegistrations(sessionId) ?? [],
 			getTrustedPluginProviderRuntime: () => capabilities.getPluginRuntime?.(),
 			withSessionWork: (action) =>
-				withSessionManagerWork(capabilities.getSessionHostManager(), action),
+				withSessionManagerWork(
+					capabilities.getSessionHostManager(),
+					action,
+					sessionId
+				),
 		}),
 		providerCollection,
 	};
+};
+
+const loadSessionForkSummary = async (
+	store: SessionStore,
+	sessionId: SessionId
+): Promise<SessionForkSummary | undefined> => {
+	const provenance = await store.getSessionForkProvenance(sessionId);
+	if (provenance === undefined) {
+		return;
+	}
+	const statistics = await store.getSessionStatistics(sessionId);
+	return { inheritedUsage: statistics.usage.inherited, provenance };
 };
 
 const loadStoredSessionHistory = async (
@@ -218,7 +244,10 @@ const loadStoredSessionHistory = async (
 	options?: SessionPageOptions
 ): Promise<StoredSessionHistory> => {
 	const store = getSessionStore();
-	const page = await store.readSessionHistoryPage(sessionId, options);
+	const [page, forkProvenance] = await Promise.all([
+		store.readSessionHistoryPage(sessionId, options),
+		store.getSessionForkProvenance(sessionId),
+	]);
 	const statistics = await store.getSessionStatistics(sessionId, {
 		readPoint: page.readPoint,
 	});
@@ -230,6 +259,7 @@ const loadStoredSessionHistory = async (
 		: savedTranscript;
 	return {
 		compactions: page.compactions,
+		forkProvenance,
 		model: restoreSelection({ messages: savedTranscript, row: page.session })
 			?.model,
 		nextCursor: page.nextCursor,
@@ -415,6 +445,32 @@ export function SessionSurface({
 	const handleReselectModel = useCallback(() => {
 		reselectModelRef.current?.();
 	}, []);
+	const handleRewindCheckpoint = useCallback(
+		async (recordId: SessionRecordId) => {
+			const services = await sessionServicesHandle.open();
+			const sessionSdk = services.capabilities.getSessionSdk?.();
+			if (sessionSdk === undefined) {
+				throw new Error("Session Fork is unavailable.");
+			}
+			const store = getSessionStore();
+			const checkpoint = { recordId };
+			const operationId = await store.getOrCreateSessionForkActionId(
+				sessionId,
+				checkpoint
+			);
+			const result = await sessionSdk.forkSession(
+				sessionId,
+				checkpoint,
+				operationId
+			);
+			return {
+				complete: () =>
+					store.completeSessionForkAction(sessionId, checkpoint, operationId),
+				sessionId: result.id,
+			};
+		},
+		[sessionId, sessionServicesHandle]
+	);
 	const handleSelectionDialogDismiss = useCallback(() => {
 		selectionDialogOpenRef.current = false;
 		setSurface((current) =>
@@ -509,14 +565,16 @@ export function SessionSurface({
 			}
 			try {
 				const store = getSessionStore();
-				const [row, transcript] = await Promise.all([
+				const [row, transcript, forkSummary] = await Promise.all([
 					store.getSession(sessionId),
 					transcriptForDisplay(host, store),
+					loadSessionForkSummary(store, sessionId),
 				]);
 				if (ignore) {
 					return null;
 				}
 				return {
+					...(forkSummary === undefined ? {} : { forkSummary }),
 					host,
 					...(providerSelection?.providerModel === undefined
 						? { initialSubmission: initialSubmissionRef.current }
@@ -920,6 +978,7 @@ export function SessionSurface({
 		return (
 			<StoredSessionHistoryView
 				compactions={surface.history.compactions}
+				forkProvenance={surface.history.forkProvenance}
 				hasMoreHistory={surface.history.nextCursor !== undefined}
 				historyError={surface.historyError}
 				isLoadingMore={surface.isLoadingMore}
@@ -942,10 +1001,17 @@ export function SessionSurface({
 
 	return (
 		<box flexDirection="column" flexGrow={1} width="100%">
+			{surface.session.forkSummary === undefined ? null : (
+				<SessionForkProvenanceBanner
+					inheritedUsage={surface.session.forkSummary.inheritedUsage}
+					provenance={surface.session.forkSummary.provenance}
+				/>
+			)}
 			<SessionView
 				host={surface.session.host}
 				initialSubmission={surface.session.initialSubmission}
 				initialTranscript={surface.session.transcript}
+				onRewindCheckpoint={handleRewindCheckpoint}
 				sessionId={sessionId}
 				sessionTitle={surface.session.sessionTitle}
 			/>

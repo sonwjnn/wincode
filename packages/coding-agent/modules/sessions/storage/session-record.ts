@@ -185,13 +185,8 @@ export class SessionRecordInvariantError extends AgentInvariantError {
 	}
 }
 
-/**
- * Validates one Wincode Session Record before it is committed. Returns a
- * stable description of the first violation, or `null` when the record is a
- * safe durable unit. Raw provider material never reaches this shape, so no
- * redaction happens here.
- */
-export const getSessionRecordValidationError = (
+/** Validates the record identity and accounting fields without hydrating its message. */
+export const getSessionRecordStatisticsValidationError = (
 	value: unknown
 ): string | null => {
 	if (!isObjectLike(value)) {
@@ -216,6 +211,23 @@ export const getSessionRecordValidationError = (
 	if (!isSessionRecordOutcome(record.outcome)) {
 		return "record outcome is not a valid Session Record outcome";
 	}
+	return null;
+};
+
+/**
+ * Validates one Wincode Session Record before it is committed. Returns a
+ * stable description of the first violation, or `null` when the record is a
+ * safe durable unit. Raw provider material never reaches this shape, so no
+ * redaction happens here.
+ */
+export const getSessionRecordValidationError = (
+	value: unknown
+): string | null => {
+	const statisticsError = getSessionRecordStatisticsValidationError(value);
+	if (statisticsError !== null) {
+		return statisticsError;
+	}
+	const record = value as UnknownRecord & { outcome: SessionRecordOutcome };
 	if (
 		!(
 			isArray(record.messages) &&

@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Implementation: chưa triển khai; hợp đồng và acceptance criteria ở issue #232.
+Implementation: đang được tích hợp theo issue #232; release còn phụ thuộc clean-cutover và supported-platform evidence.
 
 Wincode cần lịch sử đọc được bằng editor, di chuyển được cùng attachments, nhưng vẫn truy vấn nhanh, pagination nhất quán và thống kê turn. Chọn log JSONL append-only cho trạng thái bền vững của mỗi Session và một SQLite database riêng làm projection. Không chọn SQLite làm nguồn chuẩn duy nhất vì tính di chuyển/inspect; không chọn JSONL + chỉ mục RAM kiểu Pi vì nhu cầu truy vấn. Chấp nhận chi phí đồng bộ, kiểm tra integrity và rebuild của hướng hybrid tương tự Codex.
 

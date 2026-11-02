@@ -69,6 +69,10 @@ const hasCurrentThinkingSelectionSchema = (sqlite: Database): boolean => {
 	);
 };
 
+const hasCurrentSessionSchema = (sqlite: Database): boolean =>
+	hasCurrentThinkingSelectionSchema(sqlite) &&
+	columnNames(sqlite, "session_projection_state").has("statistics_version");
+
 const ensureThinkingSelectionColumns = (sqlite: Database): void => {
 	ensureTextColumn(sqlite, "session", "thinking_level");
 	ensureTextColumn(
@@ -98,6 +102,19 @@ const initializeSchema = (
 	sqlite: Database,
 	allowIncompatibleSessionSchema: boolean
 ): void => {
+	const hasExistingSessionSchema = [
+		"session",
+		"session_compaction",
+		"session_record",
+		"session_usage_entry",
+	].some((table) => columnNames(sqlite, table).size > 0);
+	if (
+		!allowIncompatibleSessionSchema &&
+		hasExistingSessionSchema &&
+		!hasCurrentSessionSchema(sqlite)
+	) {
+		throw new SessionDatabaseResetRequiredError();
+	}
 	sqlite.exec(`
 		CREATE TABLE IF NOT EXISTS session_workspace (
 			id TEXT PRIMARY KEY NOT NULL,
@@ -116,6 +133,7 @@ const initializeSchema = (
 			catalog_revision INTEGER DEFAULT 0 NOT NULL,
 			latest_deletion_revision INTEGER DEFAULT 0 NOT NULL,
 			pagination_version INTEGER DEFAULT 2 NOT NULL,
+			statistics_version INTEGER DEFAULT 0 NOT NULL,
 			status TEXT DEFAULT 'ready' NOT NULL
 		);
 
@@ -173,6 +191,8 @@ const initializeSchema = (
 
 		CREATE INDEX IF NOT EXISTS idx_session_operation_lookup_sequence
 			ON session_operation_lookup (session_id, sequence);
+		CREATE INDEX IF NOT EXISTS idx_session_operation_lookup_type
+			ON session_operation_lookup (session_id, type);
 
 		CREATE TABLE IF NOT EXISTS local_session_binding (
 			session_id TEXT PRIMARY KEY NOT NULL,
@@ -368,9 +388,6 @@ const initializeSchema = (
 			ON session_compaction (session_id, sequence);
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_compaction_session_sequence
 			ON session_compaction (session_id, sequence);
-		CREATE INDEX IF NOT EXISTS idx_session_compaction_session_through_source
-			ON session_compaction (session_id, through_message_ui_id, source_sequence);
-
 		CREATE TABLE IF NOT EXISTS prompt_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
 			prompt TEXT NOT NULL,
@@ -400,6 +417,19 @@ const initializeSchema = (
 		CREATE UNIQUE INDEX IF NOT EXISTS uq_session_record_session_position
 			ON session_record (session_id, position);
 
+		CREATE TABLE IF NOT EXISTS session_record_message_identity (
+			session_id TEXT NOT NULL,
+			record_id TEXT NOT NULL REFERENCES session_record(record_id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			message_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			submission_id TEXT,
+			PRIMARY KEY (session_id, message_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_session_record_message_record
+			ON session_record_message_identity (session_id, record_id);
+
 		CREATE TABLE IF NOT EXISTS session_record_version (
 			session_id TEXT NOT NULL REFERENCES session(id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
@@ -417,6 +447,27 @@ const initializeSchema = (
 			ON session_record_version (
 				session_id, source_sequence DESC, valid_from_sequence DESC, valid_to_sequence
 			);
+
+		CREATE TABLE IF NOT EXISTS session_record_tool_call (
+			session_id TEXT NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			turn_id TEXT NOT NULL,
+			tool_call_id TEXT NOT NULL,
+			source_sequence INTEGER NOT NULL,
+			PRIMARY KEY (session_id, turn_id, tool_call_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_session_record_tool_call_sequence
+			ON session_record_tool_call (session_id, source_sequence);
+		CREATE INDEX IF NOT EXISTS idx_session_record_tool_call_turn_sequence
+			ON session_record_tool_call (session_id, turn_id, source_sequence);
+
+		CREATE TABLE IF NOT EXISTS session_fork_provenance (
+			session_id TEXT PRIMARY KEY NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			source_sequence INTEGER NOT NULL,
+			provenance_json TEXT NOT NULL
+		);
 
 		CREATE TABLE IF NOT EXISTS session_usage_entry (
 			id TEXT PRIMARY KEY NOT NULL,
@@ -449,12 +500,7 @@ const initializeSchema = (
 			SELECT id, workspace_id FROM session WHERE workspace_id IS NOT NULL;
 		`);
 	}
-	if (
-		!(
-			allowIncompatibleSessionSchema ||
-			hasCurrentThinkingSelectionSchema(sqlite)
-		)
-	) {
+	if (!(allowIncompatibleSessionSchema || hasCurrentSessionSchema(sqlite))) {
 		throw new SessionDatabaseResetRequiredError();
 	}
 	ensureSessionEditModeColumn(sqlite);
@@ -495,12 +541,22 @@ const initializeSchema = (
 		"source_sequence",
 		"INTEGER DEFAULT 0 NOT NULL"
 	);
+	sqlite.exec(`
+		CREATE INDEX IF NOT EXISTS idx_session_compaction_session_through_source
+			ON session_compaction (session_id, through_message_ui_id, source_sequence);
+	`);
 	ensureIntegerColumn(
 		sqlite,
 		"session_record",
 		"source_sequence",
 		"INTEGER DEFAULT 0 NOT NULL"
 	);
+	sqlite.exec(`
+		CREATE INDEX IF NOT EXISTS idx_session_record_session_sequence
+			ON session_record (session_id, source_sequence);
+		CREATE INDEX IF NOT EXISTS idx_session_record_session_turn_sequence
+			ON session_record (session_id, turn_id, source_sequence);
+	`);
 };
 
 const openDatabase = (
