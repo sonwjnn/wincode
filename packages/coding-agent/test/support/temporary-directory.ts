@@ -22,10 +22,13 @@ const listEntries = async (
 const describeError = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
-/** Reports remaining paths when Windows cannot release a test root for cleanup. */
+/** Collects deferred SQLite statement finalizers before Windows temp cleanup. */
 export const removeTemporaryDirectory = async (
 	directory: string
 ): Promise<void> => {
+	if (process.platform === "win32") {
+		Bun.gc(true);
+	}
 	try {
 		await fs.rm(directory, { force: true, recursive: true });
 	} catch (error) {
