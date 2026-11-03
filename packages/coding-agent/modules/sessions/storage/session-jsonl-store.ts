@@ -485,6 +485,10 @@ const syncFile = async (
 	await handle.sync();
 };
 
+/** Windows FlushFileBuffers requires GENERIC_WRITE, including for existing files. */
+const openFileForSync = (filePath: string): Promise<fs.FileHandle> =>
+	fs.open(filePath, process.platform === "win32" ? "r+" : "r");
+
 const syncDirectory = async (
 	directory: string,
 	fileIo?: SessionLogFileIo
@@ -785,7 +789,7 @@ const readSessionWriteIntent = async (
 	const intent = sessionWriteIntentFrom(value, sessionId);
 	let handle: fs.FileHandle;
 	try {
-		handle = await fs.open(markerPath, "r");
+		handle = await openFileForSync(markerPath);
 	} catch (error) {
 		if (isCode(error, "ENOENT")) {
 			return;
@@ -1273,7 +1277,7 @@ const syncAndVerifyLogSuffix = async (
 	sessionId: SessionId,
 	fileIo: SessionLogFileIo
 ): Promise<void> => {
-	const handle = await fs.open(logPath, "r");
+	const handle = await openFileForSync(logPath);
 	try {
 		await syncFile(logPath, handle, fileIo);
 	} finally {
@@ -1303,7 +1307,7 @@ const syncAndVerifyLogPrefix = async (
 	fileIo: SessionLogFileIo,
 	sequence?: number
 ): Promise<void> => {
-	const handle = await fs.open(logPath, "r");
+	const handle = await openFileForSync(logPath);
 	try {
 		await syncFile(logPath, handle, fileIo);
 	} finally {
@@ -1338,7 +1342,7 @@ const ensureDurableQuarantineArtifact = async (
 	let handle: fs.FileHandle | undefined;
 	try {
 		try {
-			handle = await fs.open(filePath, "r");
+			handle = await openFileForSync(filePath);
 			const existing = await Bun.file(filePath).bytes();
 			if (!equalBytes(existing, expectedBytes)) {
 				throw new SessionLogError(
@@ -1662,7 +1666,7 @@ const verifyOrRepairExistingReceipt = async (
 	}
 	let handle: fs.FileHandle;
 	try {
-		handle = await fs.open(receiptPath, "r");
+		handle = await openFileForSync(receiptPath);
 	} catch (error) {
 		if (!isCode(error, "ENOENT")) {
 			throw error;
@@ -8570,7 +8574,7 @@ const writeDeletedMarker = async (
 				"A durable Session deletion marker conflicts with its operation."
 			);
 		}
-		const existingHandle = await fs.open(markerPath, "r");
+		const existingHandle = await openFileForSync(markerPath);
 		try {
 			await syncFile(markerPath, existingHandle, fileIo);
 		} finally {
