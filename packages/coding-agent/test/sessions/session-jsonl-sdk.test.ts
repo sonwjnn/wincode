@@ -2977,7 +2977,9 @@ test("Workspace listing skips JSONL Sessions bound to another Workspace", async 
 
 test("SDK creation stores its initial chat text in the creation checkpoint before reopen", async () => {
 	const databasePath = path.join(root, "sdk-initial-chat.sqlite");
-	const sdk = await createSessionSdk({
+	const recorder = createFakeProviderRecorder();
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
 		cwd: workspace,
 		databasePath,
 		pluginPaths: [],
@@ -3037,7 +3039,9 @@ test("SDK creation stores its initial chat text in the creation checkpoint befor
 test("retrying initial SDK input with the same Session ID is a creation no-op", async () => {
 	const databasePath = path.join(root, "sdk-initial-retry.sqlite");
 	const sessionId = toSessionId("initial-retry-session");
-	const firstSdk = await createSessionSdk({
+	const firstRecorder = createFakeProviderRecorder();
+	const firstSdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(firstRecorder),
 		cwd: workspace,
 		databasePath,
 		pluginPaths: [],
@@ -3054,7 +3058,9 @@ test("retrying initial SDK input with the same Session ID is a creation no-op", 
 		await firstSdk.dispose();
 	}
 
-	const retrySdk = await createSessionSdk({
+	const retryRecorder = createFakeProviderRecorder();
+	const retrySdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(retryRecorder),
 		cwd: workspace,
 		databasePath,
 		pluginPaths: [],
@@ -7801,7 +7807,9 @@ test("a Session-only rebuild keeps statistics blocked until the outdated project
 
 test("reopening rebuilds a missing SQLite projection from the committed Session log", async () => {
 	const databasePath = path.join(root, "sdk-rebuild-projection.sqlite");
-	const firstSdk = await createSessionSdk({
+	const firstRecorder = createFakeProviderRecorder();
+	const firstSdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(firstRecorder),
 		cwd: workspace,
 		databasePath,
 		pluginPaths: [],
@@ -7827,7 +7835,10 @@ test("reopening rebuilds a missing SQLite projection from the committed Session 
 	projection.sqlite.query("DELETE FROM session WHERE id = ?").run(sessionId);
 	projection.sqlite.close();
 
-	const secondSdk = await createSessionSdk({
+	const secondRecorder = createFakeProviderRecorder();
+	const secondSdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () =>
+			createFakeProviderCollection(secondRecorder),
 		cwd: workspace,
 		databasePath,
 		pluginPaths: [],
