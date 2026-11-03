@@ -476,12 +476,20 @@ describe("Session Writer process locks", () => {
 		}
 	});
 	test("fails closed when the Session Writer lock namespace cannot be created", async () => {
-		const fixture = createFixture();
-		const session = await createSession(fixture.firstStore);
-		fs.writeFileSync(path.join(fixture.root, "session-control"), "");
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "wincode-session-writer-lock-path-")
+		);
 
-		await expect(
-			fixture.firstStore.acquireSessionWriter(session.id)
-		).rejects.toMatchObject({ code: "session_lock_failed" });
+		try {
+			fs.writeFileSync(path.join(root, "session-control"), "");
+			await expect(
+				acquireSessionWriterLock(
+					path.join(root, "session-logs"),
+					sessionId("blocked-lock-namespace")
+				)
+			).rejects.toMatchObject({ code: "session_lock_failed" });
+		} finally {
+			await removeFixtureDirectory(root);
+		}
 	});
 });
