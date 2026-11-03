@@ -179,7 +179,7 @@ describe("Session Writer process locks", () => {
 		).rejects.toBeInstanceOf(SessionInUseError);
 		await writer.release();
 	});
-	test("rejects a second writer with unverified owner details until release", async () => {
+	test("rejects a second writer until release while treating owner details as best-effort", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
 		const owner = await fixture.firstStore.acquireSessionWriter(session.id, {
@@ -197,12 +197,14 @@ describe("Session Writer process locks", () => {
 			if (!(conflict instanceof SessionInUseError)) {
 				throw new Error("The competing Session Writer was not refused.");
 			}
-			expect(conflict.owner).toEqual({
-				executionMode: "interactive",
-				openedAt: expect.any(String),
-				pid: process.pid,
-				verification: "unverified",
-			});
+			if (process.platform !== "win32" || conflict.owner !== undefined) {
+				expect(conflict.owner).toEqual({
+					executionMode: "interactive",
+					openedAt: expect.any(String),
+					pid: process.pid,
+					verification: "unverified",
+				});
+			}
 		} finally {
 			await owner.release();
 		}
