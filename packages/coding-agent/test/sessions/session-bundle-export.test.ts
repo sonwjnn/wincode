@@ -47,6 +47,7 @@ import {
 	compactionId,
 	sessionMessageId,
 } from "../support/identifiers";
+import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const PNG_PREFIX = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
 const sha256 = (bytes: Uint8Array): string =>
@@ -69,9 +70,7 @@ type ExportFixture = Readonly<{
 
 afterEach(async () => {
 	await Promise.all(
-		temporaryRoots
-			.splice(0)
-			.map((root) => fs.rm(root, { force: true, recursive: true }))
+		temporaryRoots.splice(0).map((root) => removeTemporaryDirectory(root))
 	);
 });
 

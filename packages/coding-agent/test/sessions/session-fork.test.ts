@@ -53,6 +53,7 @@ import {
 	sessionRecordId,
 	toolCallId,
 } from "../support/identifiers";
+import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const temporaryRoot = await fs.mkdtemp(
 	path.join(os.tmpdir(), "wincode-session-fork-")
@@ -61,7 +62,7 @@ const workspace = path.join(temporaryRoot, "workspace");
 await fs.mkdir(workspace, { recursive: true });
 
 afterAll(async () => {
-	await fs.rm(temporaryRoot, { force: true, recursive: true });
+	await removeTemporaryDirectory(temporaryRoot);
 });
 
 const createPersistence = (

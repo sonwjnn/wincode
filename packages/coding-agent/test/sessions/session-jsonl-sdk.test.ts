@@ -84,6 +84,7 @@ import {
 	sessionUsageEntryId,
 	toolCallId,
 } from "../support/identifiers";
+import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-jsonl-"));
 const workspace = path.join(root, "workspace");
@@ -103,12 +104,8 @@ const isTerminalAgentTurnEvent = (event: AgentTurnEvent): boolean =>
 	event.type === "agent-turn-interrupted";
 
 afterAll(async () => {
-	await fs.rm(root, { force: true, recursive: true });
-	await Promise.all(
-		workspaceToolFixtures.map((fixture) =>
-			fs.rm(fixture, { force: true, recursive: true })
-		)
-	);
+	await removeTemporaryDirectory(root);
+	await Promise.all(workspaceToolFixtures.map(removeTemporaryDirectory));
 });
 
 const createSessionJsonlTestPersistence = (
