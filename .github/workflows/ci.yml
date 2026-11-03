@@ -143,6 +143,11 @@ jobs:
         run: >-
           bun --no-env-file test
           packages/coding-agent/test/sessions/session-jsonl-codec.test.ts
+          packages/coding-agent/test/sessions/session-storage-durability.test.ts
+          packages/coding-agent/test/sessions/attachment-store.test.ts
+          packages/coding-agent/test/sessions/session-bundle-export.test.ts
+          packages/coding-agent/test/sessions/session-bundle-import.test.ts
+          packages/coding-agent/test/sessions/session-fork.test.ts
           packages/coding-agent/test/sessions/session-jsonl-sdk.test.ts
 
   binary-build:

@@ -855,7 +855,9 @@ test("a retry after publication returns the fork created before a durability fai
 				failPublicationSync = false;
 				throw new Error("injected post-publish directory sync failure");
 			}
-			await handle.sync();
+			if (process.platform !== "win32") {
+				await handle.sync();
+			}
 		},
 	});
 	const sourceTurnId = agentTurnId("post-publish-source-turn");

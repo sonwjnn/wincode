@@ -25,15 +25,20 @@ import {
 	isNodeError,
 } from "./attachment-store";
 import {
-	AtomicDirectoryPublishError,
-	createAtomicDirectoryPublisher,
-} from "./session-bundle-publish";
-import {
 	decodeSessionLog,
 	SESSION_LOG_HASH_PATTERN,
 	SessionLogError,
 	type SessionLogState,
 } from "./session-jsonl-codec";
+import {
+	createAtomicPathPublisher,
+	SessionPathPublishError,
+} from "./session-path-publish";
+import {
+	ensureSessionDirectoryTreeDurably,
+	publishSessionFileNoReplaceDurably,
+	syncDirectoryAfterDurablePathChange,
+} from "./session-storage-durability";
 
 export const SESSION_BUNDLE_FORMAT = "wincode-session-bundle" as const;
 export const SESSION_BUNDLE_VERSION = 1 as const;
@@ -759,6 +764,11 @@ export const validateSessionBundleDirectory = async (
 	(await prepareSessionBundleImport(bundlePath)).bundle;
 
 const syncDirectory = async (directory: string): Promise<void> => {
+	if (process.platform === "win32") {
+		throw new Error(
+			"Windows Session durability requires write-through path publication, not directory-handle sync."
+		);
+	}
 	const handle = await fs.open(directory, "r");
 	try {
 		await handle.sync();
@@ -771,9 +781,10 @@ const writeDurableFile = async (
 	filePath: string,
 	bytes: Uint8Array
 ): Promise<void> => {
+	const temporaryPath = `${filePath}.${crypto.randomUUID()}.tmp`;
 	let handle: fs.FileHandle | undefined;
 	try {
-		handle = await fs.open(filePath, "wx", 0o600);
+		handle = await fs.open(temporaryPath, "wx", 0o600);
 		let offset = 0;
 		while (offset < bytes.byteLength) {
 			const result = await handle.write(
@@ -790,9 +801,14 @@ const writeDurableFile = async (
 		await handle.sync();
 		await handle.close();
 		handle = undefined;
-		await syncDirectory(path.dirname(filePath));
+		await publishSessionFileNoReplaceDurably(
+			temporaryPath,
+			filePath,
+			syncDirectory
+		);
 	} finally {
 		await handle?.close();
+		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
 	}
 };
 
@@ -840,7 +856,11 @@ const stageSessionBundleAttachment = async (
 	}
 	const relativePath = `attachments/${reference.attachmentId}.blob`;
 	const targetPath = canonicalBundleFilePath(stagingPath, relativePath);
-	await fs.mkdir(path.dirname(targetPath), { mode: 0o700, recursive: true });
+	await ensureSessionDirectoryTreeDurably(
+		path.dirname(targetPath),
+		0o700,
+		syncDirectory
+	);
 	await writeDurableFile(targetPath, bytes);
 	return {
 		attachmentId: reference.attachmentId,
@@ -954,16 +974,16 @@ export const publishSessionBundleDirectory = async (
 			path.join(stagingPath, SESSION_BUNDLE_MANIFEST_PATH),
 			manifestBytes
 		);
-		await syncDirectory(stagingPath);
+		await syncDirectoryAfterDurablePathChange(stagingPath, syncDirectory);
 		await validateSessionBundleDirectory(stagingPath);
 		throwIfAborted(options.signal, "Session bundle export was cancelled.");
 		await ensureDestinationAvailable(destination);
 		try {
-			const atomicPublisher = createAtomicDirectoryPublisher();
+			const atomicPublisher = createAtomicPathPublisher();
 			await options.fileSystem?.beforePublish?.(stagingPath, destination);
 			atomicPublisher.publish(stagingPath, destination);
 		} catch (error) {
-			if (error instanceof AtomicDirectoryPublishError) {
+			if (error instanceof SessionPathPublishError) {
 				if (error.kind === "destination_exists") {
 					throw new SessionBundleDestinationExistsError(destination);
 				}
@@ -977,7 +997,7 @@ export const publishSessionBundleDirectory = async (
 		}
 		published = true;
 		try {
-			await syncDirectory(parent);
+			await syncDirectoryAfterDurablePathChange(parent, syncDirectory);
 		} catch (error) {
 			throw new SessionBundlePublishIndeterminateError(destination, error);
 		}

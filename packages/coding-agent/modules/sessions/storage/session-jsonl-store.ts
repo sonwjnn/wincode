@@ -62,10 +62,6 @@ import {
 	validateSessionBundleLog,
 } from "./session-bundle";
 import {
-	AtomicDirectoryPublishError,
-	createAtomicDirectoryPublisher,
-} from "./session-bundle-publish";
-import {
 	createSessionLogEvent,
 	createSessionLogHeader,
 	decodeSessionLog,
@@ -98,7 +94,20 @@ import {
 	type SessionHistoryPageCursor,
 	SessionPaginationError,
 } from "./session-pagination";
+import {
+	createAtomicPathPublisher,
+	SessionPathPublishError,
+} from "./session-path-publish";
 import { buildUserSessionRecord } from "./session-record";
+import {
+	ensureSessionDirectoryTreeDurably,
+	publishSessionDirectoryDurably,
+	publishSessionFileNoReplaceDurably,
+	removeSessionFileDurably,
+	replaceSessionFileDurably,
+	SESSION_DIRECTORY_STAGING_PREFIX,
+	syncDirectoryAfterDurablePathChange,
+} from "./session-storage-durability";
 import type {
 	CommitSessionRecordInput,
 	CreateEmptySessionInput,
@@ -480,6 +489,11 @@ const syncDirectory = async (
 	directory: string,
 	fileIo?: SessionLogFileIo
 ): Promise<void> => {
+	if (process.platform === "win32" && fileIo?.syncDirectory === undefined) {
+		throw new Error(
+			"Windows Session durability requires write-through path publication, not directory-handle sync."
+		);
+	}
 	const handle = await fs.open(directory, "r");
 	try {
 		if (fileIo?.syncDirectory !== undefined) {
@@ -492,25 +506,28 @@ const syncDirectory = async (
 	}
 };
 
+const syncDirectoryAfterDurablePublication = async (
+	directory: string,
+	fileIo?: SessionLogFileIo
+): Promise<void> =>
+	await syncDirectoryAfterDurablePathChange(
+		directory,
+		async (path) => await syncDirectory(path, fileIo),
+		fileIo?.syncDirectory !== undefined
+	);
+
 const ensureDirectoryDurable = async (
 	directory: string,
 	mode = 0o700,
 	fileIo?: SessionLogFileIo
-): Promise<void> => {
-	try {
-		await fs.mkdir(directory, { mode });
-		await syncDirectory(path.dirname(directory), fileIo);
-	} catch (error) {
-		if (!isCode(error, "EEXIST")) {
-			throw error;
-		}
-		const info = await fs.stat(directory);
-		if (!info.isDirectory()) {
-			throw new Error("Session log path is not a directory.");
-		}
-		await syncDirectory(path.dirname(directory), fileIo);
-	}
-};
+): Promise<void> =>
+	await ensureSessionDirectoryTreeDurably(
+		directory,
+		mode,
+		async (parent) => await syncDirectory(parent, fileIo),
+		fileIo?.syncDirectory !== undefined,
+		"Session log path is not a directory."
+	);
 
 const readLog = async (
 	logPath: string,
@@ -803,7 +820,10 @@ const readSessionWriteIntent = async (
 		await handle.close();
 	}
 	try {
-		await syncDirectory(path.dirname(markerPath));
+		await syncDirectoryAfterDurablePublication(
+			path.dirname(markerPath),
+			fileIo
+		);
 	} catch (error) {
 		throw new SessionLogError(
 			"session_log_write_indeterminate",
@@ -858,12 +878,21 @@ const writeSessionWriteIntent = async (
 		await handle.close();
 		handle = undefined;
 		if (upgradeLegacyIntent) {
-			await fs.rename(temporaryPath, markerPath);
-			await syncDirectory(markerRoot);
+			await replaceSessionFileDurably(
+				temporaryPath,
+				markerPath,
+				async (directory) => await syncDirectory(directory, fileIo),
+				fileIo.syncDirectory !== undefined
+			);
 			return;
 		}
 		try {
-			await fs.link(temporaryPath, markerPath);
+			await publishSessionFileNoReplaceDurably(
+				temporaryPath,
+				markerPath,
+				async (directory) => await syncDirectory(directory, fileIo),
+				fileIo.syncDirectory !== undefined
+			);
 		} catch (error) {
 			if (!isCode(error, "EEXIST")) {
 				throw error;
@@ -879,7 +908,6 @@ const writeSessionWriteIntent = async (
 			assertSameSessionWriteIntent(raced, intent, intent.sessionId);
 			return;
 		}
-		await syncDirectory(markerRoot);
 	} catch (error) {
 		await handle?.close().catch(() => undefined);
 		if (error instanceof SessionLogError) {
@@ -987,7 +1015,12 @@ const publishCreateOnceJsonMarker = async <Value>({
 		await handle.close();
 		handle = undefined;
 		try {
-			await fs.link(temporaryPath, markerPath);
+			await publishSessionFileNoReplaceDurably(
+				temporaryPath,
+				markerPath,
+				async (directory) => await syncDirectory(directory, fileIo),
+				fileIo.syncDirectory !== undefined
+			);
 		} catch (error) {
 			if (!isCode(error, "EEXIST")) {
 				throw error;
@@ -998,7 +1031,7 @@ const publishCreateOnceJsonMarker = async <Value>({
 			}
 			return raced;
 		}
-		await syncDirectory(directory, fileIo);
+		await syncDirectoryAfterDurablePublication(directory, fileIo);
 		return value;
 	} finally {
 		await handle?.close().catch(() => undefined);
@@ -1057,14 +1090,11 @@ const clearSessionForkIntent = async (
 	if (existing === undefined || !Bun.deepEquals(existing, intent, true)) {
 		return;
 	}
-	try {
-		await fs.unlink(markerPath);
-	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw error;
-		}
-	}
-	await syncDirectory(path.dirname(markerPath), fileIo);
+	await removeSessionFileDurably(
+		markerPath,
+		await sessionControlRoot(logRoot),
+		async (directory) => await syncDirectory(directory, fileIo)
+	);
 };
 
 /** Pending UI retry identity is control metadata, not a source-log mutation. */
@@ -1199,18 +1229,19 @@ const clearSessionForkAction = async (
 		checkpoint
 	);
 	try {
-		await fs.unlink(actionPath);
+		await removeSessionFileDurably(
+			actionPath,
+			await sessionControlRoot(logRoot),
+			async (directory) => await syncDirectory(directory, fileIo)
+		);
 	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw new SessionLogError(
-				"session_log_write_indeterminate",
-				sourceSessionId,
-				"Completed Session fork action could not be cleared.",
-				{ cause: error, operationId }
-			);
-		}
+		throw new SessionLogError(
+			"session_log_write_indeterminate",
+			sourceSessionId,
+			"Completed Session fork action could not be cleared.",
+			{ cause: error, operationId }
+		);
 	}
-	await syncDirectory(path.dirname(actionPath), fileIo);
 };
 
 const clearSessionWriteIntent = async (
@@ -1228,14 +1259,11 @@ const clearSessionWriteIntent = async (
 		return;
 	}
 	assertSameSessionWriteIntent(existing, intent, intent.sessionId);
-	try {
-		await fs.unlink(markerPath);
-	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw error;
-		}
-	}
-	await syncDirectory(path.dirname(markerPath));
+	await removeSessionFileDurably(
+		markerPath,
+		await sessionControlRoot(logRoot),
+		async (directory) => await syncDirectory(directory, fileIo)
+	);
 };
 
 const syncAndVerifyLogSuffix = async (
@@ -1301,7 +1329,6 @@ const syncAndVerifyLogPrefix = async (
 
 const ensureDurableQuarantineArtifact = async (
 	filePath: string,
-	directory: string,
 	expectedBytes: Uint8Array,
 	sessionId: SessionId,
 	intent: SessionWriteIntent,
@@ -1337,7 +1364,12 @@ const ensureDurableQuarantineArtifact = async (
 			await handle.close();
 			handle = undefined;
 			try {
-				await fs.link(temporaryPath, filePath);
+				await publishSessionFileNoReplaceDurably(
+					temporaryPath,
+					filePath,
+					async (directory) => await syncDirectory(directory, fileIo),
+					fileIo.syncDirectory !== undefined
+				);
 			} catch (linkError) {
 				if (!isCode(linkError, "EEXIST")) {
 					throw linkError;
@@ -1357,7 +1389,6 @@ const ensureDurableQuarantineArtifact = async (
 				}
 			}
 		}
-		await syncDirectory(directory, fileIo);
 	} finally {
 		await handle?.close().catch(() => undefined);
 		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -1423,7 +1454,6 @@ const quarantinePartialLogAppend = async (
 	const quarantineBytes = bytes.subarray(expectedOffset);
 	await ensureDurableQuarantineArtifact(
 		quarantinePath,
-		quarantineRoot,
 		quarantineBytes,
 		sessionId,
 		intent,
@@ -1444,7 +1474,6 @@ const quarantinePartialLogAppend = async (
 	};
 	await ensureDurableQuarantineArtifact(
 		`${quarantinePath}.json`,
-		quarantineRoot,
 		new TextEncoder().encode(
 			`${encodeCanonicalSessionJson(quarantineMetadata)}\n`
 		),
@@ -1475,7 +1504,7 @@ const quarantinePartialLogAppend = async (
 	} finally {
 		await logHandle.close();
 	}
-	await syncDirectory(path.dirname(logPath));
+	await syncDirectoryAfterDurablePublication(path.dirname(logPath), fileIo);
 	await syncAndVerifyLogPrefix(logPath, prefix, sessionId, fileIo);
 };
 
@@ -1570,7 +1599,6 @@ const isDurableSessionReceipt = (
 
 const publishReceiptReplacement = async (
 	receiptPath: string,
-	receiptRoot: string,
 	bytes: Uint8Array,
 	fileIo: SessionLogFileIo
 ): Promise<void> => {
@@ -1582,8 +1610,12 @@ const publishReceiptReplacement = async (
 		await syncFile(temporaryPath, handle, fileIo);
 		await handle.close();
 		handle = undefined;
-		await fs.rename(temporaryPath, receiptPath);
-		await syncDirectory(receiptRoot);
+		await replaceSessionFileDurably(
+			temporaryPath,
+			receiptPath,
+			async (directory) => await syncDirectory(directory, fileIo),
+			fileIo.syncDirectory !== undefined
+		);
 	} finally {
 		await handle?.close().catch(() => undefined);
 		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -1606,18 +1638,18 @@ const verifyOrRepairExistingReceipt = async (
 		if (!isCode(error, "ENOENT")) {
 			throw error;
 		}
-		await publishReceiptReplacement(receiptPath, receiptRoot, bytes, fileIo);
+		await publishReceiptReplacement(receiptPath, bytes, fileIo);
 		return;
 	}
 	let value: unknown;
 	try {
 		value = JSON.parse(existing);
 	} catch {
-		await publishReceiptReplacement(receiptPath, receiptRoot, bytes, fileIo);
+		await publishReceiptReplacement(receiptPath, bytes, fileIo);
 		return;
 	}
 	if (!isDurableSessionReceipt(value)) {
-		await publishReceiptReplacement(receiptPath, receiptRoot, bytes, fileIo);
+		await publishReceiptReplacement(receiptPath, bytes, fileIo);
 		return;
 	}
 	if (encodeCanonicalSessionJson(value) !== expectedText) {
@@ -1635,7 +1667,7 @@ const verifyOrRepairExistingReceipt = async (
 		if (!isCode(error, "ENOENT")) {
 			throw error;
 		}
-		await publishReceiptReplacement(receiptPath, receiptRoot, bytes, fileIo);
+		await publishReceiptReplacement(receiptPath, bytes, fileIo);
 		return;
 	}
 	try {
@@ -1643,7 +1675,7 @@ const verifyOrRepairExistingReceipt = async (
 	} finally {
 		await handle.close();
 	}
-	await syncDirectory(receiptRoot);
+	await syncDirectoryAfterDurablePublication(receiptRoot, fileIo);
 };
 
 const ensureDurableReceipt = async (
@@ -1678,14 +1710,20 @@ const ensureDurableReceipt = async (
 	};
 	const expectedText = encodeCanonicalSessionJson(receipt);
 	const bytes = new TextEncoder().encode(`${expectedText}\n`);
+	const temporaryPath = `${receiptPath}.${randomUUIDv7()}.tmp`;
 	let handle: fs.FileHandle | undefined;
 	try {
-		handle = await fs.open(receiptPath, "wx", 0o600);
-		await writeFully(handle, bytes, 0, receiptPath, fileIo);
-		await syncFile(receiptPath, handle, fileIo);
+		handle = await fs.open(temporaryPath, "wx", 0o600);
+		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
+		await syncFile(temporaryPath, handle, fileIo);
 		await handle.close();
 		handle = undefined;
-		await syncDirectory(receiptRoot);
+		await publishSessionFileNoReplaceDurably(
+			temporaryPath,
+			receiptPath,
+			async (directory) => await syncDirectory(directory, fileIo),
+			fileIo.syncDirectory !== undefined
+		);
 	} catch (error) {
 		await handle?.close().catch(() => undefined);
 		if (!isCode(error, "EEXIST")) {
@@ -1700,6 +1738,8 @@ const ensureDurableReceipt = async (
 			sessionId,
 			fileIo
 		);
+	} finally {
+		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
 	}
 };
 
@@ -1723,12 +1763,18 @@ const stageSessionLog = async (
 		await ensureDirectoryDurable(root);
 		directory = await fs.mkdtemp(path.join(root, `${safeId}.`));
 		const filePath = path.join(directory, "session.jsonl");
-		handle = await fs.open(filePath, "wx", 0o600);
-		await writeFully(handle, bytes, 0, filePath, fileIo);
-		await syncFile(filePath, handle, fileIo);
+		const temporaryPath = `${filePath}.${randomUUIDv7()}.tmp`;
+		handle = await fs.open(temporaryPath, "wx", 0o600);
+		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
+		await syncFile(temporaryPath, handle, fileIo);
 		await handle.close();
 		handle = undefined;
-		await syncDirectory(directory);
+		await publishSessionFileNoReplaceDurably(
+			temporaryPath,
+			filePath,
+			async (path) => await syncDirectory(path, fileIo),
+			fileIo.syncDirectory !== undefined
+		);
 		return { directory, root };
 	} catch (error) {
 		await handle?.close().catch(() => undefined);
@@ -2086,10 +2132,15 @@ const createLogDirectory = async (
 	try {
 		await writeSessionWriteIntent(logRoot, intent, fileIo);
 		await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
-			await fs.rename(staged.directory, targetDirectory);
-			published = true;
-			await syncDirectory(staged.root, fileIo);
-			await syncDirectory(canonicalRoot, fileIo);
+			await publishSessionDirectoryDurably(
+				staged.directory,
+				targetDirectory,
+				async (directory) => await syncDirectory(directory, fileIo),
+				fileIo.syncDirectory !== undefined,
+				() => {
+					published = true;
+				}
+			);
 			bindSessionToWorkspace();
 		});
 		const { bytes: publishedBytes, state } = await readLog(
@@ -4994,13 +5045,10 @@ export const createSessionJsonlStore = (
 			targetDirectory
 		);
 		try {
-			createAtomicDirectoryPublisher().publish(
-				staged.directory,
-				targetDirectory
-			);
+			createAtomicPathPublisher().publish(staged.directory, targetDirectory);
 		} catch (error) {
 			if (
-				error instanceof AtomicDirectoryPublishError &&
+				error instanceof SessionPathPublishError &&
 				error.kind === "destination_exists"
 			) {
 				throw new SessionBundleImportConflictError(
@@ -5011,7 +5059,10 @@ export const createSessionJsonlStore = (
 		}
 		publication.logPublished = true;
 		try {
-			await syncDirectory(await fs.realpath(logRoot), fileIo);
+			await syncDirectoryAfterDurablePublication(
+				await fs.realpath(logRoot),
+				fileIo
+			);
 			await options.fileSystem?.afterPublish?.(targetDirectory);
 			await ensureProjected(sessionId);
 		} catch (error) {
@@ -5128,7 +5179,7 @@ export const createSessionJsonlStore = (
 		if (staged !== undefined && !publication.logPublished) {
 			try {
 				await fs.rm(staged.directory, { force: true, recursive: true });
-				await syncDirectory(staged.root, fileIo);
+				await syncDirectoryAfterDurablePublication(staged.root, fileIo);
 			} catch (error) {
 				cleanupFailure ??= error;
 			}
@@ -5991,7 +6042,7 @@ export const createSessionJsonlStore = (
 			const sessionDirectory = path.join(root, validSessionId(sessionId));
 			const remove = fileIo.remove ?? fs.rm;
 			await remove(sessionDirectory, { force: true, recursive: true });
-			await syncDirectory(root, fileIo);
+			await syncDirectoryAfterDurablePublication(root, fileIo);
 			return { logRemoved: true, markerDurable };
 		} catch {
 			return { logRemoved: false, markerDurable };
@@ -6140,7 +6191,12 @@ export const createSessionJsonlStore = (
 		const root = await fs.realpath(logRoot);
 		const entries = await fs.readdir(root, { withFileTypes: true });
 		return entries
-			.filter((entry) => entry.isDirectory() && entry.name !== ".staging")
+			.filter(
+				(entry) =>
+					entry.isDirectory() &&
+					entry.name !== ".staging" &&
+					!entry.name.startsWith(SESSION_DIRECTORY_STAGING_PREFIX)
+			)
 			.map((entry) => toSessionId(entry.name))
 			.sort();
 	};
@@ -6295,7 +6351,7 @@ export const createSessionJsonlStore = (
 		await clearPendingDeletionWriteIntent(sessionId, receipt.operationId);
 		const remove = fileIo.remove ?? fs.rm;
 		await remove(directory, { force: true, recursive: true });
-		await syncDirectory(root, fileIo);
+		await syncDirectoryAfterDurablePublication(root, fileIo);
 	};
 
 	const resetSessionLogForLifecycle = async (
@@ -6455,7 +6511,11 @@ export const createSessionJsonlStore = (
 		const issues = new Map<SessionId, SessionCatalogIssue>();
 		const sessionIds = new Set<SessionId>();
 		for (const entry of entries) {
-			if (!entry.isDirectory() || entry.name === ".staging") {
+			if (
+				!entry.isDirectory() ||
+				entry.name === ".staging" ||
+				entry.name.startsWith(SESSION_DIRECTORY_STAGING_PREFIX)
+			) {
 				continue;
 			}
 			const sessionId = toSessionId(entry.name);
@@ -7576,13 +7636,15 @@ export const createSessionJsonlStore = (
 								);
 							}
 							publicationAttempted = true;
-							await fs.rename(
+							await publishSessionDirectoryDurably(
 								stagedLog.directory,
-								path.join(canonicalRoot, validSessionId(targetSessionId))
+								path.join(canonicalRoot, validSessionId(targetSessionId)),
+								async (directory) => await syncDirectory(directory, fileIo),
+								fileIo.syncDirectory !== undefined,
+								() => {
+									published = true;
+								}
 							);
-							published = true;
-							await syncDirectory(stagedLog.root, fileIo);
-							await syncDirectory(canonicalRoot, fileIo);
 							projection.bindSessionToWorkspace(targetSessionId);
 						});
 						const publishedLog = await readLog(targetLogPath, targetSessionId);
@@ -8355,7 +8417,12 @@ const writeSessionImportActivationMarker = async (
 		await handle.close();
 		handle = undefined;
 		try {
-			await fs.link(temporaryPath, markerPath);
+			await publishSessionFileNoReplaceDurably(
+				temporaryPath,
+				markerPath,
+				async (directory) => await syncDirectory(directory, fileIo),
+				fileIo.syncDirectory !== undefined
+			);
 		} catch (error) {
 			if (!isCode(error, "EEXIST")) {
 				throw error;
@@ -8377,9 +8444,8 @@ const writeSessionImportActivationMarker = async (
 				);
 			}
 		}
-		await syncDirectory(importRoot, fileIo);
-		await fs.unlink(temporaryPath);
-		await syncDirectory(importRoot, fileIo);
+		await fs.rm(temporaryPath, { force: true });
+		await syncDirectoryAfterDurablePublication(importRoot, fileIo);
 	} catch (error) {
 		await handle?.close().catch(() => undefined);
 		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -8396,14 +8462,11 @@ const removeSessionImportActivationMarker = async (
 		logRoot,
 		sessionId
 	);
-	try {
-		await fs.unlink(markerPath);
-	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw error;
-		}
-	}
-	await syncDirectory(path.dirname(markerPath), fileIo);
+	await removeSessionFileDurably(
+		markerPath,
+		await sessionControlRoot(logRoot),
+		async (directory) => await syncDirectory(directory, fileIo)
+	);
 };
 
 const readDeletedMarker = async (
@@ -8480,14 +8543,20 @@ const writeDeletedMarker = async (
 			sessionId,
 		})}\n`
 	);
+	const temporaryPath = `${markerPath}.${randomUUIDv7()}.tmp`;
 	let handle: fs.FileHandle | undefined;
 	try {
-		handle = await fs.open(markerPath, "wx", 0o600);
-		await writeFully(handle, bytes, 0, markerPath, fileIo);
-		await syncFile(markerPath, handle, fileIo);
+		handle = await fs.open(temporaryPath, "wx", 0o600);
+		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
+		await syncFile(temporaryPath, handle, fileIo);
 		await handle.close();
 		handle = undefined;
-		await syncDirectory(deletedRoot);
+		await publishSessionFileNoReplaceDurably(
+			temporaryPath,
+			markerPath,
+			async (directory) => await syncDirectory(directory, fileIo),
+			fileIo.syncDirectory !== undefined
+		);
 	} catch (error) {
 		await handle?.close().catch(() => undefined);
 		if (!isCode(error, "EEXIST")) {
@@ -8507,7 +8576,9 @@ const writeDeletedMarker = async (
 		} finally {
 			await existingHandle.close();
 		}
-		await syncDirectory(deletedRoot, fileIo);
+		await syncDirectoryAfterDurablePublication(deletedRoot, fileIo);
+	} finally {
+		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
 	}
 };
 

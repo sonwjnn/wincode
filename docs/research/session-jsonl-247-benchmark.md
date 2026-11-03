@@ -56,6 +56,29 @@ This fixture has 10,000 Sessions, with all 100,000 checkpoints in one Session. I
 
 The combined report confirms page sizes 50/200, same-timestamp ordering, fixed catalog/history snapshots after status revisions, and no rebuild issues. Query-plan index use is separately asserted by the Session SDK tests.
 
+## 10,000 Sessions / 100,000 checkpoints — Bun 1.4.4
+
+Rerun on 2026-11-03 with the pinned Bun 1.4.4 release binary. The binary was downloaded to a temporary directory and SHA-256 verified against the official GitHub release; the global Bun installation was not changed.
+
+- macOS Darwin 24.6.0, arm64, Apple M1, 16 GiB RAM; Bun 1.4.4
+- 10,000 Sessions and 100,000 checkpoints in one Session; 30 warm samples per query
+- Fixture seeding: 1.79 s for Session logs and 0.95 s for checkpoints
+- Raw report: [`session-jsonl-247-bun-1.4.4-combined-benchmark.json`](session-jsonl-247-bun-1.4.4-combined-benchmark.json)
+
+| Phase | Result | Peak RSS |
+| --- | ---: | ---: |
+| Cold discovery (10,000 Sessions, no issues) | 409.93 s | 961.5 MB |
+| Cold rebuild (10,000 Sessions, no issues) | 398.77 s | 773.6 MB |
+| Catch-up (one appended checkpoint) | 251.56 ms | 1,582.8 MB |
+| Cold statistics | 369 ms | 1,050.1 MB |
+| Warm catalog, limit 50 | median 442.36 ms; p95 632.01 ms | — |
+| Warm catalog, limit 200 | median 452.27 ms; p95 636.40 ms | — |
+| Warm history, limit 50 | median 14.71 ms; p95 26.18 ms | — |
+| Warm history, limit 200 | median 16.75 ms; p95 27.17 ms | — |
+| Warm statistics | median 69.31 ms; p95 86.84 ms | — |
+
+The run reported zero discovery/rebuild issues, 10,000 rebuilt Sessions, 100,000 statistics records, and passing catalog/history snapshot and same-timestamp ordering checks. This is pinned-runtime macOS performance evidence only; it does not replace native Linux/Windows correctness tests or power-loss testing.
+
 ## Limits and follow-up
 
 - These measurements cover macOS only. They do not establish Linux/Windows lock or sync behavior, nor guarantees for every filesystem or storage device.

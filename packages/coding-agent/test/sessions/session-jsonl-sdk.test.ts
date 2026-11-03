@@ -59,6 +59,7 @@ import {
 	encodeSessionPageToken,
 } from "@/modules/sessions/storage/session-pagination";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
+import { SESSION_DIRECTORY_STAGING_PREFIX } from "@/modules/sessions/storage/session-storage-durability";
 import type {
 	PromptHistoryEntry,
 	SessionStore,
@@ -3445,7 +3446,7 @@ test("same-operation retry repairs a partial durable receipt from the committed 
 		write: async (filePath, handle, bytes, offset, length, position) => {
 			if (
 				failReceiptWrite &&
-				filePath.endsWith(`${operationIdFileStem(operationId)}.json`)
+				filePath.includes(`${operationIdFileStem(operationId)}.json.`)
 			) {
 				failReceiptWrite = false;
 				await handle.write(bytes, offset, Math.min(length, 8), position);
@@ -4157,7 +4158,7 @@ test("Session history pages keep status and log position at their captured prefi
 			sync: async (filePath, handle) => {
 				if (
 					failDeletionMarkerSync &&
-					filePath.endsWith(path.join("deleted", `${sessionId}.json`))
+					filePath.includes(path.join("deleted", `${sessionId}.json.`))
 				) {
 					failDeletionMarkerSync = false;
 					throw new Error("Injected crash before deletion marker sync.");
@@ -4479,6 +4480,32 @@ test("Session page and statistics queries use scope indexes without temporary so
 	}
 });
 
+test("catalog reads ignore abandoned directory-publication staging paths", async () => {
+	const databasePath = path.join(root, "abandoned-directory-staging.sqlite");
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	await fs.mkdir(logRoot, { recursive: true });
+	const canonicalLogRoot = await fs.realpath(logRoot);
+	await fs.mkdir(
+		path.join(
+			canonicalLogRoot,
+			`${SESSION_DIRECTORY_STAGING_PREFIX}after-crash`
+		)
+	);
+
+	try {
+		await expect(persistence.store.listSessions()).resolves.toEqual([]);
+		await expect(
+			persistence.attachmentStore.collect({ liveAttachmentIds: [] })
+		).resolves.toMatchObject({ orphanCount: 0, reclaimedCount: 0 });
+	} finally {
+		persistence.close();
+	}
+});
+
 test("a fresh catalog read cannot claim an unbound log during another Workspace's Session creation", async () => {
 	const databasePath = path.join(
 		root,
@@ -4500,7 +4527,9 @@ test("a fresh catalog read cannot claim an unbound log during another Workspace'
 	let pausedAtPublishedLog = false;
 	const fileIo: SessionLogFileIo = {
 		syncDirectory: async (directory, handle) => {
-			await handle.sync();
+			if (process.platform !== "win32") {
+				await handle.sync();
+			}
 			if (directory !== canonicalLogRoot || pausedAtPublishedLog) {
 				return;
 			}
@@ -4569,7 +4598,9 @@ test("foreign Workspaces cannot claim an interrupted Session and owner catalog r
 	let failPublishedDirectorySync = true;
 	const fileIo: SessionLogFileIo = {
 		syncDirectory: async (directory, handle) => {
-			await handle.sync();
+			if (process.platform !== "win32") {
+				await handle.sync();
+			}
 			if (directory !== canonicalLogRoot || !failPublishedDirectorySync) {
 				return;
 			}
@@ -6429,7 +6460,9 @@ test("ENOSPC and quarantine sync failure preserve the log for reopened same-oper
 	let injectedPartialWrite = false;
 	const fileIo: SessionLogFileIo = {
 		syncDirectory: async (directory, handle) => {
-			await handle.sync();
+			if (process.platform !== "win32") {
+				await handle.sync();
+			}
 			if (directory.endsWith(quarantineRootSuffix)) {
 				quarantineDirectorySyncCount += 1;
 				if (failQuarantineDirectorySync && quarantineDirectorySyncCount === 2) {
@@ -7120,7 +7153,7 @@ test("a foreign unmarked deletion does not fail or delete Sessions in another Wo
 			sync: async (filePath, handle) => {
 				if (
 					failMarkerSync &&
-					filePath.endsWith(path.join("deleted", `${sessionB}.json`))
+					filePath.includes(path.join("deleted", `${sessionB}.json.`))
 				) {
 					failMarkerSync = false;
 					throw new Error(
@@ -7268,7 +7301,7 @@ test("recovery completes a synced deletion event before catalog discovery can re
 			sync: async (filePath, handle) => {
 				if (
 					failMarkerSync &&
-					filePath.endsWith(path.join("deleted", `${sessionId}.json`))
+					filePath.includes(path.join("deleted", `${sessionId}.json.`))
 				) {
 					failMarkerSync = false;
 					throw new Error("Injected crash before deletion marker sync.");

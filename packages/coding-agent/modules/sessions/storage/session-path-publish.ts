@@ -1,31 +1,49 @@
 import { dlopen, FFIType, read } from "bun:ffi";
 
-export type AtomicDirectoryPublishFailureKind =
+export type SessionPathPublishFailureKind =
 	| "destination_exists"
 	| "failed"
+	| "source_missing"
 	| "unavailable";
 
-export class AtomicDirectoryPublishError extends Error {
-	readonly kind: AtomicDirectoryPublishFailureKind;
+export class SessionPathPublishError extends Error {
+	readonly code: "EEXIST" | "ENOENT" | undefined;
+	readonly kind: SessionPathPublishFailureKind;
 
 	constructor(
-		kind: AtomicDirectoryPublishFailureKind,
+		kind: SessionPathPublishFailureKind,
 		message: string,
 		options?: ErrorOptions
 	) {
 		super(message, options);
-		this.name = "AtomicDirectoryPublishError";
+		this.name = "SessionPathPublishError";
+		if (kind === "destination_exists") {
+			this.code = "EEXIST";
+		} else if (kind === "source_missing") {
+			this.code = "ENOENT";
+		} else {
+			this.code = undefined;
+		}
 		this.kind = kind;
 	}
 }
 
-type AtomicDirectoryPublisher = Readonly<{
+type SessionPathPublisher = Readonly<{
 	publish: (stagingPath: string, destination: string) => void;
 }>;
 
-let cachedDarwinPublisher: AtomicDirectoryPublisher | undefined;
-let cachedLinuxPublisher: AtomicDirectoryPublisher | undefined;
-let cachedWindowsPublisher: AtomicDirectoryPublisher | undefined;
+type WindowsPathMover = Readonly<{
+	move: (
+		stagingPath: string,
+		destination: string,
+		replaceExisting: boolean
+	) => void;
+}>;
+
+let cachedDarwinPublisher: SessionPathPublisher | undefined;
+let cachedLinuxPublisher: SessionPathPublisher | undefined;
+let cachedWindowsPublisher: SessionPathPublisher | undefined;
+let cachedWindowsPathMover: WindowsPathMover | undefined;
 
 const encodeUtf8Path = (value: string): Uint8Array => {
 	const bytes = new TextEncoder().encode(value);
@@ -42,11 +60,11 @@ const encodeWindowsPath = (value: string): Uint16Array => {
 	return nulTerminated;
 };
 
-const unavailableError = (cause: unknown): AtomicDirectoryPublishError => {
+const unavailableError = (cause: unknown): SessionPathPublishError => {
 	const reason = cause instanceof Error ? cause.message : String(cause);
-	return new AtomicDirectoryPublishError(
+	return new SessionPathPublishError(
 		"unavailable",
-		`Atomic no-replace Session bundle publication is unavailable on ${process.platform}/${process.arch}: ${reason}`,
+		`Atomic Session path publication is unavailable on ${process.platform}/${process.arch}: ${reason}`,
 		{ cause }
 	);
 };
@@ -54,20 +72,26 @@ const unavailableError = (cause: unknown): AtomicDirectoryPublishError => {
 const failedError = (
 	api: string,
 	nativeErrorCode: number
-): AtomicDirectoryPublishError => {
+): SessionPathPublishError => {
 	if (nativeErrorCode === 17) {
-		return new AtomicDirectoryPublishError(
+		return new SessionPathPublishError(
 			"destination_exists",
-			`Atomic Session bundle publication refused an existing destination (${api}, error ${nativeErrorCode}).`
+			`Atomic Session path publication refused an existing destination (${api}, error ${nativeErrorCode}).`
 		);
 	}
-	return new AtomicDirectoryPublishError(
+	if (nativeErrorCode === 2) {
+		return new SessionPathPublishError(
+			"source_missing",
+			`Session path publication source does not exist (${api}, error ${nativeErrorCode}).`
+		);
+	}
+	return new SessionPathPublishError(
 		"failed",
-		`Atomic Session bundle publication failed (${api}, error ${nativeErrorCode}).`
+		`Atomic Session path publication failed (${api}, error ${nativeErrorCode}).`
 	);
 };
 
-const createDarwinPublisher = (): AtomicDirectoryPublisher => {
+const createDarwinPublisher = (): SessionPathPublisher => {
 	if (cachedDarwinPublisher !== undefined) {
 		return cachedDarwinPublisher;
 	}
@@ -79,7 +103,7 @@ const createDarwinPublisher = (): AtomicDirectoryPublisher => {
 				returns: FFIType.i32,
 			},
 		});
-		const publisher: AtomicDirectoryPublisher = {
+		const publisher: SessionPathPublisher = {
 			publish: (stagingPath, destination) => {
 				const result = library.symbols.renamex_np(
 					encodeUtf8Path(stagingPath),
@@ -89,7 +113,7 @@ const createDarwinPublisher = (): AtomicDirectoryPublisher => {
 				if (result !== 0) {
 					const errorPointer = library.symbols.__error();
 					if (errorPointer === null) {
-						throw new AtomicDirectoryPublishError(
+						throw new SessionPathPublishError(
 							"failed",
 							"renamex_np failed without an available native error code."
 						);
@@ -105,7 +129,7 @@ const createDarwinPublisher = (): AtomicDirectoryPublisher => {
 	}
 };
 
-const createLinuxPublisher = (): AtomicDirectoryPublisher => {
+const createLinuxPublisher = (): SessionPathPublisher => {
 	if (cachedLinuxPublisher !== undefined) {
 		return cachedLinuxPublisher;
 	}
@@ -123,7 +147,7 @@ const createLinuxPublisher = (): AtomicDirectoryPublisher => {
 				returns: FFIType.i32,
 			},
 		});
-		const publisher: AtomicDirectoryPublisher = {
+		const publisher: SessionPathPublisher = {
 			publish: (stagingPath, destination) => {
 				const result = library.symbols.renameat2(
 					-100,
@@ -135,7 +159,7 @@ const createLinuxPublisher = (): AtomicDirectoryPublisher => {
 				if (result !== 0) {
 					const errorPointer = library.symbols.__errno_location();
 					if (errorPointer === null) {
-						throw new AtomicDirectoryPublishError(
+						throw new SessionPathPublishError(
 							"failed",
 							"renameat2 failed without an available native error code."
 						);
@@ -151,9 +175,9 @@ const createLinuxPublisher = (): AtomicDirectoryPublisher => {
 	}
 };
 
-const createWindowsPublisher = (): AtomicDirectoryPublisher => {
-	if (cachedWindowsPublisher !== undefined) {
-		return cachedWindowsPublisher;
+const createWindowsPathMover = (): WindowsPathMover => {
+	if (cachedWindowsPathMover !== undefined) {
+		return cachedWindowsPathMover;
 	}
 	try {
 		const library = dlopen("kernel32.dll", {
@@ -163,36 +187,73 @@ const createWindowsPublisher = (): AtomicDirectoryPublisher => {
 				returns: FFIType.i32,
 			},
 		});
-		const publisher: AtomicDirectoryPublisher = {
-			publish: (stagingPath, destination) => {
+		const mover: WindowsPathMover = {
+			move: (stagingPath, destination, replaceExisting) => {
+				// biome-ignore lint/suspicious/noBitwiseOperators: Win32 flags are bit masks.
+				const flags = 0x8 | (replaceExisting ? 0x1 : 0);
 				const result = library.symbols.MoveFileExW(
 					encodeWindowsPath(stagingPath),
 					encodeWindowsPath(destination),
-					0
+					flags
 				);
 				if (result === 0) {
 					const nativeErrorCode = library.symbols.GetLastError();
 					if (nativeErrorCode === 80 || nativeErrorCode === 183) {
-						throw new AtomicDirectoryPublishError(
+						throw new SessionPathPublishError(
 							"destination_exists",
-							`Atomic Session bundle publication refused an existing destination (MoveFileExW, error ${nativeErrorCode}).`
+							`Atomic Session path publication refused an existing destination (MoveFileExW, error ${nativeErrorCode}).`
 						);
 					}
-					throw new AtomicDirectoryPublishError(
+					if (nativeErrorCode === 2 || nativeErrorCode === 3) {
+						throw new SessionPathPublishError(
+							"source_missing",
+							`Session path publication source does not exist (MoveFileExW, error ${nativeErrorCode}).`
+						);
+					}
+					throw new SessionPathPublishError(
 						"failed",
-						`Atomic Session bundle publication failed (MoveFileExW, error ${nativeErrorCode}).`
+						`Durable Session path move failed (MoveFileExW, error ${nativeErrorCode}).`
 					);
 				}
 			},
 		};
-		cachedWindowsPublisher = publisher;
-		return publisher;
+		cachedWindowsPathMover = mover;
+		return mover;
 	} catch (error) {
 		throw unavailableError(error);
 	}
 };
 
-export const createAtomicDirectoryPublisher = (): AtomicDirectoryPublisher => {
+const createWindowsPublisher = (): SessionPathPublisher => {
+	if (cachedWindowsPublisher !== undefined) {
+		return cachedWindowsPublisher;
+	}
+	const mover = createWindowsPathMover();
+	const publisher: SessionPathPublisher = {
+		publish: (stagingPath, destination) =>
+			mover.move(stagingPath, destination, false),
+	};
+	cachedWindowsPublisher = publisher;
+	return publisher;
+};
+
+/** Uses the documented MOVEFILE_WRITE_THROUGH flag for Windows path publication. */
+export const moveWindowsPathDurably = (
+	stagingPath: string,
+	destination: string,
+	replaceExisting = false
+): void => {
+	if (process.platform !== "win32" || process.arch !== "x64") {
+		throw unavailableError(
+			new Error(
+				"The Windows durable path mover is available only on Windows x64."
+			)
+		);
+	}
+	createWindowsPathMover().move(stagingPath, destination, replaceExisting);
+};
+
+export const createAtomicPathPublisher = (): SessionPathPublisher => {
 	if (
 		process.platform === "darwin" &&
 		(process.arch === "arm64" || process.arch === "x64")
@@ -209,6 +270,6 @@ export const createAtomicDirectoryPublisher = (): AtomicDirectoryPublisher => {
 		return createWindowsPublisher();
 	}
 	throw unavailableError(
-		new Error("No atomic no-replace directory primitive is configured.")
+		new Error("No atomic no-replace Session path primitive is configured.")
 	);
 };

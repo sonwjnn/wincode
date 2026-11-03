@@ -1379,7 +1379,9 @@ test("a published activation marker survives directory-sync failure for retry re
 				injectMarkerDirectorySyncFailure = false;
 				throw new Error("injected activation-marker directory sync failure");
 			}
-			await handle.sync();
+			if (process.platform !== "win32") {
+				await handle.sync();
+			}
 		},
 	};
 	const source = await createFixture("session-import-marker-sync-source");

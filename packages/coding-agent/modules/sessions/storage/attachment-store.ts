@@ -37,6 +37,13 @@ import {
 import type { SessionDatabase } from "./client";
 import { sessionAttachment } from "./schema";
 import { decodeSessionLog } from "./session-jsonl-codec";
+import {
+	ensureSessionDirectoryTreeDurably,
+	publishSessionFileNoReplaceDurably,
+	replaceSessionFileDurably,
+	SESSION_DIRECTORY_STAGING_PREFIX,
+	syncDirectoryAfterDurablePathChange,
+} from "./session-storage-durability";
 import { withSessionCatalogLifecycleGate } from "./session-writer-lock";
 
 export const ATTACHMENT_ID_DISPLAY_LENGTH = 16;
@@ -749,7 +756,10 @@ const readAuthoritativeAttachmentIds = async (
 	}
 	const attachmentIds = new Set<string>();
 	for (const entry of entries) {
-		if (entry.name === ".staging") {
+		if (
+			entry.name === ".staging" ||
+			entry.name.startsWith(SESSION_DIRECTORY_STAGING_PREFIX)
+		) {
 			continue;
 		}
 		if (!(entry.isDirectory() && isValidSessionId(entry.name))) {
@@ -775,6 +785,11 @@ const readAuthoritativeAttachmentIds = async (
 };
 
 const syncDirectory = async (directory: string): Promise<void> => {
+	if (process.platform === "win32") {
+		throw new Error(
+			"Windows Session durability requires write-through path publication, not directory-handle sync."
+		);
+	}
 	let handle: fs.FileHandle | undefined;
 	try {
 		handle = await fs.open(directory, "r");
@@ -784,25 +799,14 @@ const syncDirectory = async (directory: string): Promise<void> => {
 	}
 };
 
-const ensureDirectoryDurable = async (directory: string): Promise<void> => {
-	const resolvedDirectory = path.resolve(directory);
-	const parent = path.dirname(resolvedDirectory);
-	if (parent !== resolvedDirectory) {
-		await ensureDirectoryDurable(parent);
-	}
-	try {
-		await fs.mkdir(resolvedDirectory, { mode: 0o700 });
-		await syncDirectory(parent);
-	} catch (error) {
-		if (!isNodeError(error, "EEXIST")) {
-			throw error;
-		}
-		const info = await fs.stat(resolvedDirectory);
-		if (!info.isDirectory()) {
-			throw new Error("Attachment storage path is not a directory.");
-		}
-	}
-};
+const ensureDirectoryDurable = async (directory: string): Promise<void> =>
+	await ensureSessionDirectoryTreeDurably(
+		directory,
+		0o700,
+		syncDirectory,
+		false,
+		"Attachment storage path is not a directory."
+	);
 
 const resolveCanonicalLifecycleRoot = async (
 	lifecycleRoot: string
@@ -857,7 +861,7 @@ const writeAttachmentPin = async (
 	const pinDirectory = await attachmentPinDirectory(lifecycleRoot);
 	const controlDirectory = path.dirname(pinDirectory);
 	await ensureDirectoryDurable(pinDirectory);
-	await syncDirectory(controlDirectory);
+	await syncDirectoryAfterDurablePathChange(controlDirectory, syncDirectory);
 	const pinId = crypto.randomUUID();
 	const temporaryPath = path.join(pinDirectory, `pin-${pinId}.tmp`);
 	const pinPath = path.join(pinDirectory, `pin-${pinId}.json`);
@@ -870,8 +874,11 @@ const writeAttachmentPin = async (
 		await handle.sync();
 		await handle.close();
 		handle = undefined;
-		await fs.rename(temporaryPath, pinPath);
-		await syncDirectory(pinDirectory);
+		await publishSessionFileNoReplaceDurably(
+			temporaryPath,
+			pinPath,
+			syncDirectory
+		);
 		return pinPath;
 	} catch (error) {
 		await fs.unlink(temporaryPath).catch(() => undefined);
@@ -1059,14 +1066,21 @@ const writeBlobAtomically = async (
 			throw new Error("Attachment blob integrity validation failed.");
 		}
 		assertNotAborted(signal);
-		try {
-			await fs.rename(temporaryPath, targetPath);
-		} catch (error) {
-			if (!isNodeError(error, "EEXIST")) {
-				throw error;
+		if (process.platform === "win32") {
+			try {
+				await publishSessionFileNoReplaceDurably(
+					temporaryPath,
+					targetPath,
+					syncDirectory
+				);
+			} catch (error) {
+				if (!isNodeError(error, "EEXIST")) {
+					throw error;
+				}
 			}
+		} else {
+			await replaceSessionFileDurably(temporaryPath, targetPath, syncDirectory);
 		}
-		await syncDirectory(path.dirname(targetPath));
 	} finally {
 		if (handle) {
 			try {
