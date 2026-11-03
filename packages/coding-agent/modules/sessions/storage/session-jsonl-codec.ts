@@ -5,6 +5,7 @@ import {
 	type SessionSubmissionStatus,
 } from "@wincode/agent-core";
 import { modelUsageSchema, thinkingLevelSchema } from "@wincode/ai";
+import { stableStringifyJson } from "@wincode/utils";
 import { z } from "zod";
 import { providerModelSelectionSchema } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceSchema } from "@/modules/sessions/attachment-reference";
@@ -388,13 +389,6 @@ const eventPayloadSchemas: Readonly<
 	"session.deleted": z.object({}).strict(),
 };
 
-const compareCanonicalKeys = (left: string, right: string): number => {
-	if (left < right) {
-		return -1;
-	}
-	return left > right ? 1 : 0;
-};
-
 const recordFromEventPayload = (
 	type: SessionLogEventType,
 	payload: Readonly<Record<string, unknown>>
@@ -420,17 +414,20 @@ const canonicalValue = (value: unknown): unknown => {
 	return Object.fromEntries(
 		Object.entries(value)
 			.filter(([, item]) => item !== undefined)
-			.sort(([left], [right]) => compareCanonicalKeys(left, right))
 			.map(([key, item]) => [key, canonicalValue(item)])
 	);
 };
 
 export const encodeCanonicalSessionJson = (value: unknown): string => {
-	const encoded = JSON.stringify(canonicalValue(value));
-	if (encoded === undefined) {
+	const canonical = canonicalValue(value);
+	if (
+		canonical === undefined ||
+		typeof canonical === "function" ||
+		typeof canonical === "symbol"
+	) {
 		throw new Error("Session JSONL values must be JSON serializable.");
 	}
-	return encoded;
+	return stableStringifyJson(canonical);
 };
 
 const sha256 = (value: string | Uint8Array): string =>

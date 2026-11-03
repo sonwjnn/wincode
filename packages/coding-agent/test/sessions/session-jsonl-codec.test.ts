@@ -61,6 +61,44 @@ const createUserRecord = (messageId: string, turnId: string) =>
 		turnId: agentTurnId(turnId),
 	});
 
+const reverseJsonObjectKeys = (value: unknown): unknown => {
+	if (Array.isArray(value)) {
+		return value.map(reverseJsonObjectKeys);
+	}
+	if (value === null || typeof value !== "object") {
+		return value;
+	}
+	return Object.fromEntries(
+		Object.entries(value)
+			.reverse()
+			.map(([key, nestedValue]) => [key, reverseJsonObjectKeys(nestedValue)])
+	);
+};
+
+test("equivalent Session records with reordered JSON keys keep identical durable bytes", () => {
+	const record = createUserRecord(
+		"codec-canonical-order-message",
+		"codec-canonical-order-turn"
+	);
+	const createEvent = (record: unknown) =>
+		createSessionLogEvent({
+			operationId: "canonical-order-record-operation",
+			payload: { record },
+			previousHash: "a".repeat(64),
+			sequence: 2,
+			sessionId,
+			timestamp,
+			type: "record.committed",
+		});
+	const event = createEvent(record);
+	const reorderedEvent = createEvent(reverseJsonObjectKeys(record));
+
+	expect(reorderedEvent.entryHash).toBe(event.entryHash);
+	expect(encodeSessionLogLine(reorderedEvent)).toEqual(
+		encodeSessionLogLine(event)
+	);
+});
+
 const appendValidLogEvent = (
 	bytes: Uint8Array,
 	operationId: string,
