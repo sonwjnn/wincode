@@ -19,6 +19,7 @@ import {
 	agentId,
 	agentTurnId,
 	modelId,
+	sessionId,
 	sessionMessageId,
 } from "../support/identifiers";
 import {
@@ -100,7 +101,7 @@ const removeFixtureDirectory = async (directory: string): Promise<void> => {
 		} catch (error) {
 			if (
 				process.platform !== "win32" ||
-				attempt === 100 ||
+				attempt === 20 ||
 				!isBusyFileSystemError(error)
 			) {
 				throw error;
@@ -456,16 +457,23 @@ describe("Session Writer process locks", () => {
 		}
 	});
 
-	test("fails closed when the database identity cannot be read", async () => {
-		const fixture = createFixture();
-		const session = await createSession(fixture.firstStore);
+	test("fails closed when the canonical Session log root cannot be created", async () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "wincode-session-writer-lock-path-")
+		);
+		const blocker = path.join(root, "not-a-directory");
 
-		const blocker = path.join(fixture.root, "not-a-directory");
-		fs.writeFileSync(blocker, "");
-
-		await expect(
-			acquireSessionWriterLock(path.join(blocker, "session-logs"), session.id)
-		).rejects.toMatchObject({ code: "session_lock_failed" });
+		try {
+			fs.writeFileSync(blocker, "");
+			await expect(
+				acquireSessionWriterLock(
+					path.join(blocker, "session-logs"),
+					sessionId("blocked-log-root")
+				)
+			).rejects.toMatchObject({ code: "session_lock_failed" });
+		} finally {
+			await removeFixtureDirectory(root);
+		}
 	});
 	test("fails closed when the Session Writer lock namespace cannot be created", async () => {
 		const fixture = createFixture();
