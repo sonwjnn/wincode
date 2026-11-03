@@ -100,7 +100,7 @@ const removeFixtureDirectory = async (directory: string): Promise<void> => {
 		} catch (error) {
 			if (
 				process.platform !== "win32" ||
-				attempt === 20 ||
+				attempt === 100 ||
 				!isBusyFileSystemError(error)
 			) {
 				throw error;
