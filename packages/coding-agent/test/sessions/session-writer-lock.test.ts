@@ -26,6 +26,7 @@ import {
 	type SessionWriterContenderResult,
 	startSessionWriterContender,
 } from "../support/session-writer-process";
+import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 type DatabaseHandle = Readonly<{
 	db: SessionDatabase;
@@ -88,34 +89,11 @@ const startWriterContender = (
 		workspaceRoot: fixture.root,
 	});
 
-const isBusyFileSystemError = (error: unknown): boolean =>
-	typeof error === "object" &&
-	error !== null &&
-	Reflect.get(error, "code") === "EBUSY";
-
-const removeFixtureDirectory = async (directory: string): Promise<void> => {
-	for (let attempt = 0; ; attempt += 1) {
-		try {
-			await fs.promises.rm(directory, { force: true, recursive: true });
-			return;
-		} catch (error) {
-			if (
-				process.platform !== "win32" ||
-				attempt === 20 ||
-				!isBusyFileSystemError(error)
-			) {
-				throw error;
-			}
-			await Bun.sleep(100);
-		}
-	}
-};
-
 afterEach(async () => {
 	for (const fixture of fixtures.splice(0)) {
 		fixture.first.sqlite.close();
 		fixture.second.sqlite.close();
-		await removeFixtureDirectory(fixture.root);
+		await removeTemporaryDirectory(fixture.root);
 	}
 });
 
@@ -472,7 +450,7 @@ describe("Session Writer process locks", () => {
 				)
 			).rejects.toMatchObject({ code: "session_lock_failed" });
 		} finally {
-			await removeFixtureDirectory(root);
+			await removeTemporaryDirectory(root);
 		}
 	});
 	test("fails closed when the Session Writer lock namespace cannot be created", async () => {
@@ -489,7 +467,7 @@ describe("Session Writer process locks", () => {
 				)
 			).rejects.toMatchObject({ code: "session_lock_failed" });
 		} finally {
-			await removeFixtureDirectory(root);
+			await removeTemporaryDirectory(root);
 		}
 	});
 });

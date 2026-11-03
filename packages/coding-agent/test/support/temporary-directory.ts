@@ -22,22 +22,37 @@ const listEntries = async (
 const describeError = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
+const isBusyFileSystemError = (error: unknown): boolean =>
+	typeof error === "object" &&
+	error !== null &&
+	Reflect.get(error, "code") === "EBUSY";
+
 /** Collects deferred SQLite statement finalizers before Windows temp cleanup. */
 export const removeTemporaryDirectory = async (
 	directory: string
 ): Promise<void> => {
-	if (process.platform === "win32") {
-		Bun.gc(true);
-	}
-	try {
-		await fs.rm(directory, { force: true, recursive: true });
-	} catch (error) {
-		const remainingEntries = await listEntries(directory).catch(
-			(listingError) => [`<listing failed: ${describeError(listingError)}>`]
-		);
-		throw new Error(
-			`Failed to remove temporary test directory; remaining entries: ${remainingEntries.join(", ") || "<empty>"}.`,
-			{ cause: error }
-		);
+	for (let attempt = 0; ; attempt++) {
+		if (process.platform === "win32") {
+			Bun.gc(true);
+		}
+		try {
+			await fs.rm(directory, { force: true, recursive: true });
+			return;
+		} catch (error) {
+			if (
+				process.platform !== "win32" ||
+				attempt === 20 ||
+				!isBusyFileSystemError(error)
+			) {
+				const remainingEntries = await listEntries(directory).catch(
+					(listingError) => [`<listing failed: ${describeError(listingError)}>`]
+				);
+				throw new Error(
+					`Failed to remove temporary test directory; remaining entries: ${remainingEntries.join(", ") || "<empty>"}.`,
+					{ cause: error }
+				);
+			}
+			await Bun.sleep(100);
+		}
 	}
 };
