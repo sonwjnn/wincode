@@ -13,7 +13,7 @@ import {
 	toSessionRecordId,
 	toSubmissionId,
 } from "@wincode/agent-core";
-import { omitUndefined, readUtf8File } from "@wincode/utils";
+import { logger, omitUndefined, readUtf8File } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import { z } from "zod";
 import {
@@ -32,6 +32,7 @@ import {
 	type WorkspaceId,
 } from "@/shared/identifiers";
 import { throwIfAborted } from "@/shared/utils/abort";
+import { errorDiagnosticFields } from "@/shared/utils/error-log-fields";
 import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
 import type {
 	AppendSessionCompactionInput,
@@ -917,6 +918,12 @@ const writeSessionWriteIntent = async (
 		if (error instanceof SessionLogError) {
 			throw error;
 		}
+		logger.warn("Session pending write marker could not be persisted", {
+			...errorDiagnosticFields(error),
+			operationId: intent.operationId,
+			platform: process.platform,
+			sessionId: intent.sessionId,
+		});
 		throw new SessionLogError(
 			upgradeLegacyIntent
 				? "session_log_write_indeterminate"

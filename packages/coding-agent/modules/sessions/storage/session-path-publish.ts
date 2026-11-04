@@ -175,6 +175,12 @@ const createLinuxPublisher = (): SessionPathPublisher => {
 	}
 };
 
+const WINDOWS_MOVE_ATTEMPTS = 5;
+const isTransientWindowsMoveError = (nativeErrorCode: number): boolean =>
+	// A failing MoveFileExW performs no move, so a bounded retry is safe when a
+	// scanner or another handle briefly denies the namespace update.
+	nativeErrorCode === 5 || nativeErrorCode === 32 || nativeErrorCode === 33;
+
 const createWindowsPathMover = (): WindowsPathMover => {
 	if (cachedWindowsPathMover !== undefined) {
 		return cachedWindowsPathMover;
@@ -191,30 +197,39 @@ const createWindowsPathMover = (): WindowsPathMover => {
 			move: (stagingPath, destination, replaceExisting) => {
 				// biome-ignore lint/suspicious/noBitwiseOperators: Win32 flags are bit masks.
 				const flags = 0x8 | (replaceExisting ? 0x1 : 0);
-				const result = library.symbols.MoveFileExW(
-					encodeWindowsPath(stagingPath),
-					encodeWindowsPath(destination),
-					flags
-				);
-				if (result === 0) {
-					const nativeErrorCode = library.symbols.GetLastError();
-					if (nativeErrorCode === 80 || nativeErrorCode === 183) {
-						throw new SessionPathPublishError(
-							"destination_exists",
-							`Atomic Session path publication refused an existing destination (MoveFileExW, error ${nativeErrorCode}).`
-						);
+				let result = 0;
+				let nativeErrorCode = 0;
+				for (let attempt = 0; attempt < WINDOWS_MOVE_ATTEMPTS; attempt++) {
+					result = library.symbols.MoveFileExW(
+						encodeWindowsPath(stagingPath),
+						encodeWindowsPath(destination),
+						flags
+					);
+					if (result !== 0) {
+						return;
 					}
-					if (nativeErrorCode === 2 || nativeErrorCode === 3) {
-						throw new SessionPathPublishError(
-							"source_missing",
-							`Session path publication source does not exist (MoveFileExW, error ${nativeErrorCode}).`
-						);
+					nativeErrorCode = library.symbols.GetLastError();
+					if (!isTransientWindowsMoveError(nativeErrorCode)) {
+						break;
 					}
+					Bun.sleepSync(10 * 2 ** attempt);
+				}
+				if (nativeErrorCode === 80 || nativeErrorCode === 183) {
 					throw new SessionPathPublishError(
-						"failed",
-						`Durable Session path move failed (MoveFileExW, error ${nativeErrorCode}).`
+						"destination_exists",
+						`Atomic Session path publication refused an existing destination (MoveFileExW, error ${nativeErrorCode}).`
 					);
 				}
+				if (nativeErrorCode === 2 || nativeErrorCode === 3) {
+					throw new SessionPathPublishError(
+						"source_missing",
+						`Session path publication source does not exist (MoveFileExW, error ${nativeErrorCode}).`
+					);
+				}
+				throw new SessionPathPublishError(
+					"failed",
+					`Durable Session path move failed (MoveFileExW, error ${nativeErrorCode}).`
+				);
 			},
 		};
 		cachedWindowsPathMover = mover;
