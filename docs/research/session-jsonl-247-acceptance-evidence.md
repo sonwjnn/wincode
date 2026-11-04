@@ -163,15 +163,15 @@ Interactive smoke in tmux with the fake Provider:
 | Export | Pass: `./smoke-bundle` published with `manifest.json` and `session.jsonl` |
 | Import | Pass after fix: re-importing the same bundle reported `already present` and did not duplicate the Session |
 | Delete | Pass after fix: picker showed `No matching sessions`, `session-logs/<id>` was removed, and `session-control/deleted/<id>.json` retained identity only |
-| Load more | Not driven in tmux: the picker needs more Sessions than one page, which this smoke does not seed. Covered by `the stored Session list loads from its cursor and refreshes to a new snapshot` (`sessions-dialog-pagination.test.tsx`), which requests the next cursor and refreshes to a new snapshot |
-| Blocked or unknown commit | Not driven in tmux: it needs injected projection or log failure. Covered by `committed steering leaves its queue reservation settled when the projection blocks`, `a durably committed prompt is accepted when projection failure blocks model work`, and `an indeterminate steering write keeps its queue entry reserved until reconciliation` (`session-jsonl-steering.test.ts`, `session-jsonl-sdk.test.ts`) |
-| Fork/rewind | Not driven by tmux keystrokes; covered by rendered TUI tests `rewind control acts on a valid user checkpoint and warns that files stay unchanged` (`chat-shell.test.tsx`), `the active Session view changes only after the fork publishes`, and `a failed fork keeps the source Session view active and leaves retry state intact` (`session-rewind.test.ts`) | |
+| Load more | Pass: with 55 seeded Sessions the picker showed the `ctrl+↓` load-more hint; after pressing `ctrl+↓` the hint disappeared, showing the page-2 fetch exhausted the catalog cursor |
+| Blocked or unknown commit | Not driven in tmux: it needs injected projection or log failure, which the shipped binary has no hook for. Covered by `committed steering leaves its queue reservation settled when the projection blocks`, `a durably committed prompt is accepted when projection failure blocks model work`, and `an indeterminate steering write keeps its queue entry reserved until reconciliation` (`session-jsonl-steering.test.ts`, `session-jsonl-sdk.test.ts`) |
+| Fork/rewind | Not driven by tmux keystrokes; covered by rendered TUI tests `rewind control acts on a valid user checkpoint and warns that files stay unchanged` (`chat-shell.test.tsx`), `the active Session view changes only after the fork publishes`, and `a failed fork keeps the source Session view active and leaves retry state intact` (`session-rewind.test.ts`) |
 
 ### Defects found and fixed by the smoke run
 
 1. Bundle import was unreachable from a terminal. The picker bound import to
    `ctrl+i`, which legacy terminals transmit as Tab (0x09), so the handler never
-   fired. Import now also accepts `ctrl+o`, and the footer advertises it. Contract
+   fired. Import is now bound to `ctrl+o`, and the footer advertises it. Contract
    test: `the Session picker opens bundle import from a key legacy terminals can
    transmit`.
 2. Session delete confirmation never completed. Every highlight callback reset
@@ -200,6 +200,7 @@ not deferred to this ticket.
   unverified; no claim is made beyond the tested runner paths and process-crash
   recovery.
 - Windows coverage is x64 only.
-- Load-more, blocked/unknown commit, and fork/rewind were not driven through the
-  tmux smoke; their evidence is the rendered TUI control tests, the component
-  pagination test, and the storage/integration suites listed above.
+- Load-more was driven in tmux by seeding 55 Sessions into a reusable smoke home.
+  Blocked/unknown commit and fork/rewind were not driven through the tmux smoke;
+  their evidence is the rendered TUI control tests and the storage/integration
+  suites listed above.

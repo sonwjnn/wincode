@@ -51,6 +51,30 @@ const createRouterForDialog = () => {
 	});
 };
 
+const renderSessionPicker = async (store: SessionStore) => {
+	const getStoreSpy = spyOn(
+		sessionStoreModule,
+		"getSessionStore"
+	).mockReturnValue(store);
+	const router = createRouterForDialog();
+	const setup = await testRenderWithClipboard(
+		<ThemeProvider themeName={DEFAULT_THEME.name}>
+			<ToastProvider>
+				<KeyboardLayerProvider>
+					<DialogLayerProbe />
+					<DialogProvider>
+						<RouterContextProvider router={router}>
+							<SessionsDialogContent />
+						</RouterContextProvider>
+					</DialogProvider>
+				</KeyboardLayerProvider>
+			</ToastProvider>
+		</ThemeProvider>,
+		{ height: 24, kittyKeyboard: false, width: 100 }
+	);
+	return { getStoreSpy, setup };
+};
+
 test("the Session picker deletes only after a second confirmation keypress", async () => {
 	const page: SessionCatalogPage = {
 		readPoint: "catalog-delete-read-point",
@@ -79,26 +103,7 @@ test("the Session picker deletes only after a second confirmation keypress", asy
 		projection: "ready" as const,
 	}));
 	const store = fromPartial<SessionStore>({ deleteSession, listSessionsPage });
-	const getStoreSpy = spyOn(
-		sessionStoreModule,
-		"getSessionStore"
-	).mockReturnValue(store);
-	const router = createRouterForDialog();
-	const setup = await testRenderWithClipboard(
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ToastProvider>
-				<KeyboardLayerProvider>
-					<DialogLayerProbe />
-					<DialogProvider>
-						<RouterContextProvider router={router}>
-							<SessionsDialogContent />
-						</RouterContextProvider>
-					</DialogProvider>
-				</KeyboardLayerProvider>
-			</ToastProvider>
-		</ThemeProvider>,
-		{ height: 24, kittyKeyboard: false, width: 100 }
-	);
+	const { getStoreSpy, setup } = await renderSessionPicker(store);
 
 	try {
 		await setup.waitFor(() => pageReads === 1);
@@ -139,26 +144,7 @@ test("the Session picker opens bundle import from a key legacy terminals can tra
 	const pageResult = Promise.withResolvers<SessionCatalogPage>();
 	const listSessionsPage = mock(async () => await pageResult.promise);
 	const store = fromPartial<SessionStore>({ listSessionsPage });
-	const getStoreSpy = spyOn(
-		sessionStoreModule,
-		"getSessionStore"
-	).mockReturnValue(store);
-	const router = createRouterForDialog();
-	const setup = await testRenderWithClipboard(
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ToastProvider>
-				<KeyboardLayerProvider>
-					<DialogLayerProbe />
-					<DialogProvider>
-						<RouterContextProvider router={router}>
-							<SessionsDialogContent />
-						</RouterContextProvider>
-					</DialogProvider>
-				</KeyboardLayerProvider>
-			</ToastProvider>
-		</ThemeProvider>,
-		{ height: 24, kittyKeyboard: false, width: 100 }
-	);
+	const { getStoreSpy, setup } = await renderSessionPicker(store);
 
 	try {
 		await setup.waitFor(() => listSessionsPage.mock.calls.length === 1);

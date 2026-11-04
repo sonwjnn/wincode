@@ -108,6 +108,15 @@ afterAll(async () => {
 	await Promise.all(workspaceToolFixtures.map(removeTemporaryDirectory));
 });
 
+const readSessionLogLines = async <Payload>(
+	logRoot: string,
+	sessionId: SessionId
+): Promise<readonly Readonly<{ payload?: Payload; type: string }>[]> =>
+	(await Bun.file(path.join(logRoot, sessionId, "session.jsonl")).text())
+		.trimEnd()
+		.split("\n")
+		.map((line) => JSON.parse(line) as { payload?: Payload; type: string });
+
 const createSessionJsonlTestPersistence = (
 	databasePath: string,
 	workspaceRoot: string,
@@ -538,28 +547,11 @@ test("SDK delivery retries preserve one durable receipt across projection rebuil
 		});
 		expect(secondRecorder.requests).toEqual([]);
 
-		const entries = (
-			await Bun.file(
-				path.join(
-					resolveLocalSessionLogRoot(databasePath),
-					sessionId,
-					"session.jsonl"
-				)
-			).text()
-		)
-			.trimEnd()
-			.split("\n")
-			.map(
-				(line) =>
-					JSON.parse(line) as {
-						payload?: {
-							record?: {
-								messages?: Array<{ metadata?: { submissionId?: string } }>;
-							};
-						};
-						type: string;
-					}
-			);
+		const entries = await readSessionLogLines<{
+			record?: {
+				messages?: Array<{ metadata?: { submissionId?: string } }>;
+			};
+		}>(resolveLocalSessionLogRoot(databasePath), sessionId);
 		expect(
 			entries.filter(
 				(entry) =>
@@ -679,35 +671,17 @@ test("SDK delivery replays a synced Session record after the process exits befor
 		}
 		expect(recorder.requests).toEqual([]);
 		const entries = (
-			await Bun.file(
-				path.join(
-					resolveLocalSessionLogRoot(databasePath),
-					sessionId,
-					"session.jsonl"
-				)
-			).text()
-		)
-			.trimEnd()
-			.split("\n")
-			.map(
-				(line) =>
-					JSON.parse(line) as {
-						payload?: {
-							record?: {
-								messages?: Array<{
-									metadata?: { submissionId?: string };
-								}>;
-							};
-						};
-						type: string;
-					}
-			)
-			.filter(
-				(entry) =>
-					entry.type === "record.committed" &&
-					entry.payload?.record?.messages?.[0]?.metadata?.submissionId ===
-						duplicate.submissionId
-			);
+			await readSessionLogLines<{
+				record?: {
+					messages?: Array<{ metadata?: { submissionId?: string } }>;
+				};
+			}>(resolveLocalSessionLogRoot(databasePath), sessionId)
+		).filter(
+			(entry) =>
+				entry.type === "record.committed" &&
+				entry.payload?.record?.messages?.[0]?.metadata?.submissionId ===
+					duplicate.submissionId
+		);
 		expect(entries).toHaveLength(1);
 	} finally {
 		await reopened?.dispose();
@@ -997,30 +971,16 @@ test("a rebuilt failed Steering Message retries to one provider request without 
 			]);
 			expect(host.getSnapshot().steeringMessages).toEqual([]);
 			const durableEntries = (
-				await Bun.file(
-					path.join(
-						resolveLocalSessionLogRoot(databasePath),
-						sessionId,
-						"session.jsonl"
-					)
-				).text()
-			)
-				.trimEnd()
-				.split("\n")
-				.map(
-					(line) =>
-						JSON.parse(line) as {
-							payload?: { record?: { messages?: { id?: string }[] } };
-							type: string;
-						}
-				)
-				.filter(
-					(entry) =>
-						entry.type === "record.committed" &&
-						entry.payload?.record?.messages?.some(
-							(message) => message.id === messageId
-						) === true
-				);
+				await readSessionLogLines<{
+					record?: { messages?: Array<{ id?: string }> };
+				}>(resolveLocalSessionLogRoot(databasePath), sessionId)
+			).filter(
+				(entry) =>
+					entry.type === "record.committed" &&
+					entry.payload?.record?.messages?.some(
+						(message) => message.id === messageId
+					) === true
+			);
 			expect(durableEntries).toHaveLength(1);
 			expect(
 				await rebuiltPersistence.store.listSessionUsageEntries(sessionId)

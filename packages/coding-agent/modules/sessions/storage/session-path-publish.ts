@@ -176,6 +176,10 @@ const createLinuxPublisher = (): SessionPathPublisher => {
 };
 
 const ERROR_ACCESS_DENIED = 5;
+const ERROR_FILE_NOT_FOUND = 2;
+const ERROR_FILE_EXISTS = 80;
+const ERROR_PATH_NOT_FOUND = 3;
+const ERROR_ALREADY_EXISTS = 183;
 const ERROR_SHARING_VIOLATION = 32;
 const ERROR_LOCK_VIOLATION = 33;
 const WINDOWS_MOVE_ATTEMPTS = 5;
@@ -222,13 +226,19 @@ const createWindowsPathMover = (): WindowsPathMover => {
 					}
 					Bun.sleepSync(10 * 2 ** attempt);
 				}
-				if (nativeErrorCode === 80 || nativeErrorCode === 183) {
+				if (
+					nativeErrorCode === ERROR_FILE_EXISTS ||
+					nativeErrorCode === ERROR_ALREADY_EXISTS
+				) {
 					throw new SessionPathPublishError(
 						"destination_exists",
 						`Atomic Session path publication refused an existing destination (MoveFileExW, error ${nativeErrorCode}).`
 					);
 				}
-				if (nativeErrorCode === 2 || nativeErrorCode === 3) {
+				if (
+					nativeErrorCode === ERROR_FILE_NOT_FOUND ||
+					nativeErrorCode === ERROR_PATH_NOT_FOUND
+				) {
 					throw new SessionPathPublishError(
 						"source_missing",
 						`Session path publication source does not exist (MoveFileExW, error ${nativeErrorCode}).`
