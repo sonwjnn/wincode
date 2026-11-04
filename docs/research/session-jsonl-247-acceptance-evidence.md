@@ -99,7 +99,11 @@ emptied steering queue, and exactly one durable user record for that message.
 
 - Native matrix in `.github/workflows/ci.yml`: Linux x64, Linux ARM64, Windows
   x64, pinned to Bun 1.4.4. Run `41593575985` passed all three legs plus the
-  Required test gate.
+  Required test gate. Run `41794661925` (attempt 2) also passed all three legs
+  and the gate for this branch head; attempt 1 failed two Windows statistics
+  tests with a transient `session_log_write_not_committed` error while writing a
+  pending write marker, and the failed-job rerun passed without a code change.
+  That failure is recorded here as observed flakiness, not as a passing result.
 - Fault matrix rows from spec §12 are defended by the Session storage suites:
   short write and ENOSPC (`short writes are retried so Session creation and
   append remain complete`, `ENOSPC and quarantine sync failure preserve the log
@@ -154,7 +158,7 @@ Interactive smoke in tmux with the fake Provider:
 | Export | Pass: `./smoke-bundle` published with `manifest.json` and `session.jsonl` |
 | Import | Pass after fix: re-importing the same bundle reported `already present` and did not duplicate the Session |
 | Delete | Pass after fix: picker showed `No matching sessions`, `session-logs/<id>` was removed, and `session-control/deleted/<id>.json` retained identity only |
-| Fork/rewind | Not verified in tmux; covered by `session-fork.test.ts`, `session-fork-checkpoints.test.ts`, and `session-opening.e2e.test.tsx` |
+| Fork/rewind | Not driven by tmux keystrokes; covered by rendered TUI tests `rewind control acts on a valid user checkpoint and warns that files stay unchanged` (`chat-shell.test.tsx`), `the active Session view changes only after the fork publishes`, and `a failed fork keeps the source Session view active and leaves retry state intact` (`session-rewind.test.ts`) |
 
 ### Defects found and fixed by the smoke run
 
@@ -189,5 +193,5 @@ not deferred to this ticket.
   unverified; no claim is made beyond the tested runner paths and process-crash
   recovery.
 - Windows coverage is x64 only.
-- Fork/rewind was not driven through the tmux smoke; its evidence is the storage
-  and headless TUI suites listed above.
+- Fork/rewind was not driven through the tmux smoke; its evidence is the rendered
+  TUI control tests and the storage suites listed above.
