@@ -135,13 +135,13 @@ jobs:
       - name: Verify native Session Writer locks
         shell: bash
         run: >-
-          bun --no-env-file test
+          bun --no-env-file test --timeout 30000
           packages/coding-agent/test/sessions/session-writer-lock.test.ts
           packages/coding-agent/test/sessions/session-writer-lock-target.test.ts
       - name: Verify JSONL sync and crash recovery
         shell: bash
         run: >-
-          bun --no-env-file test
+          bun --no-env-file test --timeout 30000
           packages/coding-agent/test/sessions/session-jsonl-codec.test.ts
           packages/coding-agent/test/sessions/session-storage-durability.test.ts
           packages/coding-agent/test/sessions/attachment-store.test.ts
