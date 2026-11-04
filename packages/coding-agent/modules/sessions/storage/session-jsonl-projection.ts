@@ -301,21 +301,48 @@ const projectRecordToolCalls = (
 	}
 };
 
+const projectionStateExists = (db: SessionDatabase): boolean =>
+	db
+		.select({ id: sessionProjectionState.id })
+		.from(sessionProjectionState)
+		.where(eq(sessionProjectionState.id, 1))
+		.get() !== undefined;
+
+export class SessionProjectionUnavailableError extends Error {
+	readonly code = "session_projection_unavailable" as const;
+
+	constructor(cause: unknown) {
+		super(
+			"The Session projection cannot be initialized. Make the projection database writable, or clear local Session data with `wincode db:reset-sessions`.",
+			{ cause }
+		);
+		this.name = "SessionProjectionUnavailableError";
+	}
+}
+
 export const createSessionJsonlProjection = (
 	db: SessionDatabase,
 	operationalDb: SessionDatabase,
 	workspaceId: WorkspaceId
 ): SessionJsonlProjection => {
-	db.insert(sessionProjectionState)
-		.values({
-			id: 1,
-			projectionId: crypto.randomUUID(),
-			generation: 0,
-			statisticsVersion: 1,
-			status: "ready",
-		})
-		.onConflictDoNothing()
-		.run();
+	// A projection that already carries state must open for reads even when its
+	// file is not writable; a later commit then reports committed/blocked.
+	if (!projectionStateExists(db)) {
+		try {
+			db.insert(sessionProjectionState)
+				.values({
+					id: 1,
+					projectionId: crypto.randomUUID(),
+					generation: 0,
+					statisticsVersion: 1,
+					status: "ready",
+				})
+				.onConflictDoNothing()
+				.run();
+		} catch (error) {
+			throw new SessionProjectionUnavailableError(error);
+		}
+	}
 	return {
 		workspaceId,
 		bindSessionToWorkspace: (sessionId) => {

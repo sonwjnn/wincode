@@ -163,9 +163,14 @@ Interactive smoke in tmux with the fake Provider:
 | Export | Pass: `./smoke-bundle` published with `manifest.json` and `session.jsonl` |
 | Import | Pass after fix: re-importing the same bundle reported `already present` and did not duplicate the Session |
 | Delete | Pass after fix: picker showed `No matching sessions`, `session-logs/<id>` was removed, and `session-control/deleted/<id>.json` retained identity only |
-| Load more | Pass: with 55 seeded Sessions the picker showed the `ctrl+↓` load-more hint; after pressing `ctrl+↓` the hint disappeared, showing the page-2 fetch exhausted the catalog cursor |
-| Blocked or unknown commit | Not driven in tmux: it needs injected projection or log failure, which the shipped binary has no hook for. Covered by `committed steering leaves its queue reservation settled when the projection blocks`, `a durably committed prompt is accepted when projection failure blocks model work`, and `an indeterminate steering write keeps its queue entry reserved until reconciliation` (`session-jsonl-steering.test.ts`, `session-jsonl-sdk.test.ts`) |
-| Fork/rewind | Not driven by tmux keystrokes; covered by rendered TUI tests `rewind control acts on a valid user checkpoint and warns that files stay unchanged` (`chat-shell.test.tsx`), `the active Session view changes only after the fork publishes`, and `a failed fork keeps the source Session view active and leaves retry state intact` (`session-rewind.test.ts`) |
+| Load more | Pass: with 55 seeded Sessions the picker showed the `ctrl+↓` load-more hint; after pressing `ctrl+↓` the hint disappeared with no catalog error notice in the frame, showing the page-2 fetch exhausted the catalog cursor |
+| Blocked commit | Pass after fix: with `session-projection.sqlite` read-only, sending a prompt produced `Your prompt is saved in Session <id>, but its SQLite projection is unavailable. No Agent work was started.` The prompt is durable as the `session.created` checkpoint and nothing was dispatched. The repair that made this reachable is described under defect 3 |
+| Unknown (indeterminate) commit | Not driven in tmux: it needs a failed or partial log write, which the shipped binary exposes no hook for. Covered by `an indeterminate steering write keeps its queue entry reserved until reconciliation` (steering) and `SDK delivery replays a synced Session record after the process exits before acknowledgement` |
+| Fork/rewind | Not driven by tmux keystrokes; covered by the rendered control test `rewind control acts on a valid user checkpoint and warns that files stay unchanged` (`chat-shell.test.tsx`) plus the view-routing unit tests `the active Session view changes only after the fork publishes` and `a failed fork keeps the source Session view active and leaves retry state intact` (`session-rewind.test.ts`) |
+
+Rendered coverage for the blocked and rejected-commit states also exists in
+`new-session-view-focus.test.tsx` (`reports committed-but-blocked...` and
+`...without claiming it was saved`).
 
 ### Defects found and fixed by the smoke run
 
@@ -179,6 +184,14 @@ Interactive smoke in tmux with the fake Provider:
    confirming; the "ctrl+d again" hint never appeared. Highlighting the same row
    now preserves the pending confirmation. Contract test: `the Session picker
    deletes only after a second confirmation keypress`.
+3. A read-only projection crashed the TUI at startup with a raw
+   `SQLiteError: attempt to write a readonly database`: the store seeded the
+   projection-state row unconditionally at construction. It now seeds only when
+   the row is absent and maps a failed seed to
+   `SessionProjectionUnavailableError` (`session_projection_unavailable`). A
+   projection that already carries state opens for reads, and the next commit
+   reports `committed` with `projection: blocked`. Contract test: `a read-only
+   projection reopens for reads and reports its next commit blocked`.
 
 ### Observed but not changed
 
@@ -200,7 +213,7 @@ not deferred to this ticket.
   unverified; no claim is made beyond the tested runner paths and process-crash
   recovery.
 - Windows coverage is x64 only.
-- Load-more was driven in tmux by seeding 55 Sessions into a reusable smoke home.
-  Blocked/unknown commit and fork/rewind were not driven through the tmux smoke;
-  their evidence is the rendered TUI control tests and the storage/integration
-  suites listed above.
+- Load-more and blocked commits were driven in tmux (55 seeded Sessions; a
+  read-only projection). Unknown/indeterminate commits and fork/rewind were not
+  driven through the tmux smoke; their evidence is the rendered TUI control tests
+  and the storage/integration suites listed above.

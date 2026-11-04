@@ -1,79 +1,14 @@
-import { expect, mock, spyOn, test } from "bun:test";
-import {
-	createMemoryHistory,
-	createRootRoute,
-	createRoute,
-	createRouter,
-	RouterContextProvider,
-} from "@tanstack/react-router";
+import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
-import { act, useEffect } from "react";
-import * as sessionStoreModule from "@/modules/sessions/storage/get-session-store";
+import { act } from "react";
 import type {
 	Session,
 	SessionCatalogPage,
 	SessionStore,
 } from "@/modules/sessions/storage/session-store";
-import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
-import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
-import {
-	KeyboardLayerProvider,
-	useKeyboardLayer,
-} from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
-import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
-import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
-import { ToastProvider } from "@/shared/providers/toast/toast-provider";
-import { testRenderWithClipboard } from "../support/clipboard";
 import { sessionId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
-
-const DialogLayerProbe = () => {
-	const { pop, push } = useKeyboardLayer();
-
-	useEffect(() => {
-		push("dialog");
-		return () => pop("dialog");
-	}, [pop, push]);
-
-	return null;
-};
-
-const createRouterForDialog = () => {
-	const rootRoute = createRootRoute();
-	const sessionRoute = createRoute({
-		component: () => null,
-		getParentRoute: () => rootRoute,
-		path: "/sessions/$id",
-	});
-	return createRouter({
-		history: createMemoryHistory({ initialEntries: ["/sessions/current"] }),
-		routeTree: rootRoute.addChildren([sessionRoute]),
-	});
-};
-
-const renderSessionPicker = async (store: SessionStore) => {
-	const getStoreSpy = spyOn(
-		sessionStoreModule,
-		"getSessionStore"
-	).mockReturnValue(store);
-	const router = createRouterForDialog();
-	const setup = await testRenderWithClipboard(
-		<ThemeProvider themeName={DEFAULT_THEME.name}>
-			<ToastProvider>
-				<KeyboardLayerProvider>
-					<DialogLayerProbe />
-					<DialogProvider>
-						<RouterContextProvider router={router}>
-							<SessionsDialogContent />
-						</RouterContextProvider>
-					</DialogProvider>
-				</KeyboardLayerProvider>
-			</ToastProvider>
-		</ThemeProvider>,
-		{ height: 24, kittyKeyboard: false, width: 100 }
-	);
-	return { getStoreSpy, setup };
-};
+import { renderSessionPicker } from "../support/session-picker-harness";
 
 test("the Session picker deletes only after a second confirmation keypress", async () => {
 	const page: SessionCatalogPage = {
@@ -103,7 +38,10 @@ test("the Session picker deletes only after a second confirmation keypress", asy
 		projection: "ready" as const,
 	}));
 	const store = fromPartial<SessionStore>({ deleteSession, listSessionsPage });
-	const { getStoreSpy, setup } = await renderSessionPicker(store);
+	const { getStoreSpy, setup } = await renderSessionPicker({
+		kittyKeyboard: false,
+		store,
+	});
 
 	try {
 		await setup.waitFor(() => pageReads === 1);
@@ -144,7 +82,10 @@ test("the Session picker opens bundle import from a key legacy terminals can tra
 	const pageResult = Promise.withResolvers<SessionCatalogPage>();
 	const listSessionsPage = mock(async () => await pageResult.promise);
 	const store = fromPartial<SessionStore>({ listSessionsPage });
-	const { getStoreSpy, setup } = await renderSessionPicker(store);
+	const { getStoreSpy, setup } = await renderSessionPicker({
+		kittyKeyboard: false,
+		store,
+	});
 
 	try {
 		await setup.waitFor(() => listSessionsPage.mock.calls.length === 1);

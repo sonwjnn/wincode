@@ -6772,6 +6772,79 @@ test("a durable log commit reports its receipt when SQLite projection fails", as
 	}
 });
 
+test.skipIf(process.platform === "win32")(
+	"a read-only projection reopens for reads and reports its next commit blocked",
+	async () => {
+		const databasePath = path.join(root, "sdk-readonly-projection.sqlite");
+		const projectionPath = resolveLocalSessionProjectionPath(databasePath);
+		const persistence = createSessionJsonlTestPersistence(
+			databasePath,
+			workspace
+		);
+		let sessionId: SessionId;
+		try {
+			const created = await persistence.store.createEmptySession({
+				model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			});
+			if (created.writeOutcome.kind !== "committed") {
+				throw new Error("The test Session was not durably created.");
+			}
+			sessionId = created.id;
+		} finally {
+			persistence.close();
+		}
+		for (const suffix of ["", "-wal", "-shm"]) {
+			await fs
+				.chmod(`${projectionPath}${suffix}`, 0o444)
+				.catch(() => undefined);
+		}
+
+		try {
+			const readOnly = createSessionJsonlTestPersistence(
+				databasePath,
+				workspace
+			);
+			try {
+				const record = buildUserSessionRecord({
+					agentId: agentId("build"),
+					message: {
+						id: sessionMessageId("readonly-projection-message"),
+						parts: [
+							{ text: "Durable despite a read-only projection", type: "text" },
+						],
+						role: "user",
+					},
+					model: DEFAULT_PROVIDER_MODEL_SELECTION,
+					turnId: agentTurnId("readonly-projection-turn"),
+				});
+				expect(
+					await readOnly.store.commitSessionRecord({ record, sessionId })
+				).toMatchObject({ kind: "committed", projection: "blocked" });
+				const durable = await readSessionLogLines<{
+					record?: { messages?: Array<{ id?: string }> };
+				}>(resolveLocalSessionLogRoot(databasePath), sessionId);
+				expect(
+					durable.filter(
+						(entry) =>
+							entry.type === "record.committed" &&
+							entry.payload?.record?.messages?.some(
+								(message) => message.id === record.messages[0]?.id
+							) === true
+					)
+				).toHaveLength(1);
+			} finally {
+				readOnly.close();
+			}
+		} finally {
+			for (const suffix of ["", "-wal", "-shm"]) {
+				await fs
+					.chmod(`${projectionPath}${suffix}`, 0o644)
+					.catch(() => undefined);
+			}
+		}
+	}
+);
+
 test("public SDK reports a committed-but-blocked prompt without scheduling model work", async () => {
 	const databasePath = path.join(root, "sdk-blocked-prompt.sqlite");
 	const recorder = createFakeProviderRecorder();
