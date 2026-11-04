@@ -428,7 +428,7 @@ export const SessionsDialogContent = () => {
 			void loadMoreSessions();
 			return true;
 		}
-		if (key.ctrl && key.name === "i") {
+		if (key.ctrl && (key.name === "o" || key.name === "i")) {
 			openImport();
 			return true;
 		}
@@ -441,9 +441,12 @@ export const SessionsDialogContent = () => {
 	const handleHighlight = useCallback((item: ListItem) => {
 		if (item.kind === "session") {
 			selectedSessionRef.current = item.session;
-			setPendingDeleteId(null);
+			setPendingDeleteId((pending) =>
+				pending === item.session.id ? pending : null
+			);
 		} else {
 			selectedSessionRef.current = null;
+			setPendingDeleteId(null);
 		}
 	}, []);
 
@@ -513,7 +516,7 @@ export const SessionsDialogContent = () => {
 							<DialogFooterHint label="delete" shortcut="ctrl+d" />
 							<DialogFooterHint label="rename" shortcut="ctrl+r" />
 							<DialogFooterHint label="export bundle" shortcut="ctrl+e" />
-							<DialogFooterHint label="import bundle" shortcut="ctrl+i" />
+							<DialogFooterHint label="import bundle" shortcut="ctrl+o" />
 							{nextCursor === undefined ? null : (
 								<DialogFooterHint label="load more" shortcut="ctrl+↓" />
 							)}

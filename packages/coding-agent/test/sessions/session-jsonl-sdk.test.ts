@@ -881,6 +881,137 @@ test("processing steering status reopens as a failed durable head with stable id
 	}
 });
 
+test("a rebuilt failed Steering Message retries to one provider request without a duplicate user record", async () => {
+	const databasePath = path.join(
+		root,
+		"sdk-steering-retry-rebuild",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const recorder = createFakeProviderRecorder();
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	let sessionId: SessionId;
+	let messageId: SessionMessageId;
+	try {
+		const created = await persistence.store.createEmptySession({
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		});
+		if (created.writeOutcome.kind !== "committed") {
+			throw new Error("The test Session was not durably created.");
+		}
+		sessionId = created.id;
+		messageId = sessionMessageId("sdk-steering-retry-message");
+		const submissionId = toSubmissionId("sdk-steering-retry-submission");
+		const record = buildUserSessionRecord({
+			agentId: agentId("build"),
+			message: {
+				id: messageId,
+				metadata: {
+					agent: agentId("build"),
+					model: DEFAULT_PROVIDER_MODEL_SELECTION,
+					submissionId,
+					submissionStatus: "pending",
+				},
+				parts: [{ text: "retry steering after rebuild", type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("sdk-steering-retry-turn"),
+		});
+		expect(
+			await persistence.store.commitSessionRecord({
+				record,
+				sessionId: created.id,
+			})
+		).toMatchObject({ kind: "committed" });
+		persistence.projection.sqlite.exec(`
+			CREATE TRIGGER reject_steering_retry_projection
+			BEFORE UPDATE ON session_record
+			BEGIN
+				SELECT RAISE(ABORT, 'injected steering retry projection failure');
+			END;
+		`);
+		expect(
+			await persistence.store.updateSessionSubmission({
+				messageId,
+				recordId: record.id,
+				sessionId: created.id,
+				status: "processing",
+				submissionId,
+			})
+		).toMatchObject({ kind: "committed", projection: "blocked" });
+	} finally {
+		persistence.projection.sqlite.exec(
+			"DROP TRIGGER IF EXISTS reject_steering_retry_projection"
+		);
+		persistence.close();
+	}
+
+	const rebuiltPersistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	try {
+		const rebuilt = await rebuiltPersistence.store.rebuildProjection(
+			{ kind: "all" },
+			async (operation) => await operation()
+		);
+		expect(rebuilt.issues).toEqual([]);
+		const services = await openSessionServices({
+			policy: { cwd: workspace, databasePath, workspace },
+			sources: {
+				createProviderCollection: () => createFakeProviderCollection(recorder),
+				store: () => rebuiltPersistence.store,
+			},
+		});
+		let host: SessionHost | undefined;
+		try {
+			host = await services.capabilities.getSessionHostManager().openHost({
+				autoContinue: false,
+				capabilities: services.capabilities,
+				sessionId,
+				view: true,
+			});
+			expect(host.getSnapshot().steeringMessages).toMatchObject([
+				{ message: { id: messageId }, status: "failed" },
+			]);
+			const retried = await host.agentSession.send({
+				agent: agentId("build"),
+				composition: { files: [], text: "retry steering after rebuild" },
+				messageId,
+				model: DEFAULT_PROVIDER_MODEL_SELECTION,
+				sessionModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+				userText: "retry steering after rebuild",
+			});
+			expect(retried).toEqual({ rejected: false });
+			expect(recorder.requests).toMatchObject([
+				{
+					kind: "chat",
+					messages: expect.arrayContaining([
+						{ role: "user", text: "retry steering after rebuild" },
+					]),
+				},
+			]);
+			expect(host.getSnapshot().steeringMessages).toEqual([]);
+			const replayed =
+				await rebuiltPersistence.store.listSessionRecords(sessionId);
+			expect(
+				replayed
+					.flatMap(({ messages }) => messages)
+					.filter(({ id }) => id === messageId)
+			).toHaveLength(1);
+		} finally {
+			await host?.shutdown();
+			await services.shutdown();
+		}
+	} finally {
+		rebuiltPersistence.close();
+	}
+});
+
 test("another process cannot collect queued attachment blobs until each owning Submission releases them", async () => {
 	const testRoot = path.join(root, "cross-process-retained-attachments");
 	const testWorkspace = path.join(testRoot, "workspace");
