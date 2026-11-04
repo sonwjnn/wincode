@@ -175,7 +175,7 @@ never resolves co-selected Skill or Custom Command intents.
 
 ### Session management
 
-`SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store. `Ctrl+E` exports the selected Session as a local bundle directory; `Ctrl+I` imports a bundle into the current workspace.
+`SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store. `Ctrl+E` exports the selected Session as a local bundle directory; `Ctrl+O` imports a bundle into the current workspace.
 
 ### Session bundles
 

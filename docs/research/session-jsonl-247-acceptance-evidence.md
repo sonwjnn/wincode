@@ -7,8 +7,8 @@ unproven. Nothing here upgrades a test into a guarantee it does not make.
 
 ## Method
 
-- Repository: `/Users/thyhaly/orca/workspaces/wincode/session-jsonl-integration`,
-  branch `integration/session-jsonl-232`, PR #249.
+- Repository root: this worktree of `wincode`, branch `integration/session-jsonl-232`,
+  PR #249.
 - Local runtime: Bun 1.3.14, macOS Darwin 24.6.0 arm64 (Apple M1, 16 GiB).
 - Native platform evidence: GitHub Actions run `41593575985` (all matrix legs and
   the Required test gate green) plus the earlier runs recorded in
@@ -93,7 +93,8 @@ half-covered: a projection rebuild replayed a `processing` Steering Message into
 a failed durable head, but nothing proved the head could then be continued.
 The test rebuilds the projection, retries the failed head through
 `AgentSession.send({ messageId })`, and asserts one provider chat request, an
-emptied steering queue, and exactly one durable user record for that message.
+emptied steering queue, exactly one `record.committed` JSONL entry containing
+that message, and no new Session Usage Entry.
 
 ## 5. Supported-platform sync/OS-lock evidence and fault matrix
 
@@ -106,8 +107,8 @@ emptied steering queue, and exactly one durable user record for that message.
   one writer-lock test timed out under load. The bounded retry on transient
   `MoveFileExW` sharing/access errors and a 30-second per-test budget for these
   I/O-heavy suites followed. Run `41798904754` then passed every job, including
-  Windows Session storage, on both attempt 1 and attempt 2 without a rerun. The
-  earlier Windows failures remain recorded as observed flakiness.
+  Windows Session storage, on attempt 1, and its manual rerun (attempt 2) passed
+  again. The earlier Windows failures remain recorded as observed flakiness.
 - Fault matrix rows from spec §12 are defended by the Session storage suites:
   short write and ENOSPC (`short writes are retried so Session creation and
   append remain complete`, `ENOSPC and quarantine sync failure preserve the log
@@ -150,7 +151,7 @@ Local verification on the branch head:
 | --- | --- |
 | `bun fix` / `bun check` | clean, 838 files |
 | `bun check-types` | all six workspaces pass |
-| `bun run test` | 1,990 tests pass, 0 fail, 198 files (Default portfolio 252 files) |
+| `bun run test` | 1,990 tests pass, 0 fail; the portfolio executed 252 test files, including the 198-file batch that reports the count |
 | `bun run test:e2e` | 7 E2E files pass, 0 fail |
 
 Interactive smoke in tmux with the fake Provider:
@@ -162,7 +163,9 @@ Interactive smoke in tmux with the fake Provider:
 | Export | Pass: `./smoke-bundle` published with `manifest.json` and `session.jsonl` |
 | Import | Pass after fix: re-importing the same bundle reported `already present` and did not duplicate the Session |
 | Delete | Pass after fix: picker showed `No matching sessions`, `session-logs/<id>` was removed, and `session-control/deleted/<id>.json` retained identity only |
-| Fork/rewind | Not driven by tmux keystrokes; covered by rendered TUI tests `rewind control acts on a valid user checkpoint and warns that files stay unchanged` (`chat-shell.test.tsx`), `the active Session view changes only after the fork publishes`, and `a failed fork keeps the source Session view active and leaves retry state intact` (`session-rewind.test.ts`) |
+| Load more | Not driven in tmux: the picker needs more Sessions than one page, which this smoke does not seed. Covered by `the stored Session list loads from its cursor and refreshes to a new snapshot` (`sessions-dialog-pagination.test.tsx`), which requests the next cursor and refreshes to a new snapshot |
+| Blocked or unknown commit | Not driven in tmux: it needs injected projection or log failure. Covered by `committed steering leaves its queue reservation settled when the projection blocks`, `a durably committed prompt is accepted when projection failure blocks model work`, and `an indeterminate steering write keeps its queue entry reserved until reconciliation` (`session-jsonl-steering.test.ts`, `session-jsonl-sdk.test.ts`) |
+| Fork/rewind | Not driven by tmux keystrokes; covered by rendered TUI tests `rewind control acts on a valid user checkpoint and warns that files stay unchanged` (`chat-shell.test.tsx`), `the active Session view changes only after the fork publishes`, and `a failed fork keeps the source Session view active and leaves retry state intact` (`session-rewind.test.ts`) | |
 
 ### Defects found and fixed by the smoke run
 
@@ -197,5 +200,6 @@ not deferred to this ticket.
   unverified; no claim is made beyond the tested runner paths and process-crash
   recovery.
 - Windows coverage is x64 only.
-- Fork/rewind was not driven through the tmux smoke; its evidence is the rendered
-  TUI control tests and the storage suites listed above.
+- Load-more, blocked/unknown commit, and fork/rewind were not driven through the
+  tmux smoke; their evidence is the rendered TUI control tests, the component
+  pagination test, and the storage/integration suites listed above.

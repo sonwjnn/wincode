@@ -996,13 +996,35 @@ test("a rebuilt failed Steering Message retries to one provider request without 
 				},
 			]);
 			expect(host.getSnapshot().steeringMessages).toEqual([]);
-			const replayed =
-				await rebuiltPersistence.store.listSessionRecords(sessionId);
+			const durableEntries = (
+				await Bun.file(
+					path.join(
+						resolveLocalSessionLogRoot(databasePath),
+						sessionId,
+						"session.jsonl"
+					)
+				).text()
+			)
+				.trimEnd()
+				.split("\n")
+				.map(
+					(line) =>
+						JSON.parse(line) as {
+							payload?: { record?: { messages?: { id?: string }[] } };
+							type: string;
+						}
+				)
+				.filter(
+					(entry) =>
+						entry.type === "record.committed" &&
+						entry.payload?.record?.messages?.some(
+							(message) => message.id === messageId
+						) === true
+				);
+			expect(durableEntries).toHaveLength(1);
 			expect(
-				replayed
-					.flatMap(({ messages }) => messages)
-					.filter(({ id }) => id === messageId)
-			).toHaveLength(1);
+				await rebuiltPersistence.store.listSessionUsageEntries(sessionId)
+			).toEqual([]);
 		} finally {
 			await host?.shutdown();
 			await services.shutdown();

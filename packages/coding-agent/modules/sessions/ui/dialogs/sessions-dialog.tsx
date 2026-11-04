@@ -428,7 +428,7 @@ export const SessionsDialogContent = () => {
 			void loadMoreSessions();
 			return true;
 		}
-		if (key.ctrl && (key.name === "o" || key.name === "i")) {
+		if (key.ctrl && key.name === "o") {
 			openImport();
 			return true;
 		}

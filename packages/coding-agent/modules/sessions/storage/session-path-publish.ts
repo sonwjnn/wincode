@@ -175,11 +175,16 @@ const createLinuxPublisher = (): SessionPathPublisher => {
 	}
 };
 
+const ERROR_ACCESS_DENIED = 5;
+const ERROR_SHARING_VIOLATION = 32;
+const ERROR_LOCK_VIOLATION = 33;
 const WINDOWS_MOVE_ATTEMPTS = 5;
 const isTransientWindowsMoveError = (nativeErrorCode: number): boolean =>
 	// A failing MoveFileExW performs no move, so a bounded retry is safe when a
 	// scanner or another handle briefly denies the namespace update.
-	nativeErrorCode === 5 || nativeErrorCode === 32 || nativeErrorCode === 33;
+	nativeErrorCode === ERROR_ACCESS_DENIED ||
+	nativeErrorCode === ERROR_SHARING_VIOLATION ||
+	nativeErrorCode === ERROR_LOCK_VIOLATION;
 
 const createWindowsPathMover = (): WindowsPathMover => {
 	if (cachedWindowsPathMover !== undefined) {
@@ -209,7 +214,10 @@ const createWindowsPathMover = (): WindowsPathMover => {
 						return;
 					}
 					nativeErrorCode = library.symbols.GetLastError();
-					if (!isTransientWindowsMoveError(nativeErrorCode)) {
+					if (
+						!isTransientWindowsMoveError(nativeErrorCode) ||
+						attempt === WINDOWS_MOVE_ATTEMPTS - 1
+					) {
 						break;
 					}
 					Bun.sleepSync(10 * 2 ** attempt);
