@@ -99,15 +99,15 @@ emptied steering queue, and exactly one durable user record for that message.
 
 - Native matrix in `.github/workflows/ci.yml`: Linux x64, Linux ARM64, Windows
   x64, pinned to Bun 1.4.4. Run `41593575985` passed all three legs plus the
-  Required test gate. Runs `41794661925` and `41797963623` each needed a rerun:
-  Windows Session storage failed in earlier attempts with
+  Required test gate. Runs `41794661925` and `41797963623` each needed reruns:
+  Windows Session storage failed in some attempts with
   `session_log_write_not_committed` while writing a pending write marker (a
   statistics record commit, then Session creation in the import/fork test), and
-  the failed-job reruns passed. The bounded retry on transient `MoveFileExW`
-  sharing/access errors was added after those failures; with it, run
-  `41797963623` passed Windows Session storage on the first attempt and only the
-  unrelated Linux ARM64 standalone-binary TUI smoke needed a rerun. Both
-  Windows attempts are recorded as observed flakiness, not as clean results.
+  one writer-lock test timed out under load. The bounded retry on transient
+  `MoveFileExW` sharing/access errors and a 30-second per-test budget for these
+  I/O-heavy suites followed. Run `41798904754` then passed every job, including
+  Windows Session storage, on both attempt 1 and attempt 2 without a rerun. The
+  earlier Windows failures remain recorded as observed flakiness.
 - Fault matrix rows from spec §12 are defended by the Session storage suites:
   short write and ENOSPC (`short writes are retried so Session creation and
   append remain complete`, `ENOSPC and quarantine sync failure preserve the log
