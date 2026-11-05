@@ -15,7 +15,10 @@ import { SessionBundleExportError } from "@/modules/sessions/session-bundle-expo
 import { SessionBundleImportError } from "@/modules/sessions/session-bundle-import";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import { resolveLocalSessionProjectionPath } from "@/modules/sessions/storage/path";
+import {
+	resolveLocalSessionProjectionPath,
+	resolveSessionLogFilePath,
+} from "@/modules/sessions/storage/path";
 import { encodeCanonicalSessionJson } from "@/modules/sessions/storage/session-jsonl-codec";
 import {
 	createSessionJsonlStore,
@@ -807,7 +810,7 @@ test("Sessions verify is read-only and does not acquire writer authority", async
 
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
-		logPath = path.join(await fs.realpath(logRoot), sessionId, "session.jsonl");
+		logPath = resolveSessionLogFilePath(await fs.realpath(logRoot), sessionId);
 		const committedLog = await Bun.file(logPath).bytes();
 		failAppend = true;
 		const uncertain = await persistence.store.updateSession(sessionId, {
@@ -872,10 +875,9 @@ test("Sessions verify reports complete-line corruption with identity and offset 
 
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		const validBytes = await Bun.file(logPath).bytes();
 		const headerLength = validBytes.indexOf(0x0a) + 1;
@@ -924,10 +926,9 @@ test("human verification diagnostics cannot emit terminal controls from corrupt 
 
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		const existingBytes = await Bun.file(logPath).bytes();
 		const lines = new TextDecoder().decode(existingBytes).trimEnd().split("\n");
@@ -971,10 +972,9 @@ test("Sessions verify reports a truncated suffix without repairing or quarantini
 
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		await fs.appendFile(logPath, '{"text":"private-message-needle');
 		const bytesBeforeVerify = await Bun.file(logPath).bytes();

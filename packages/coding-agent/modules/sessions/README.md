@@ -188,6 +188,12 @@ Imported Sessions are bound locally but remain idle. A stored pending submission
 ### JSONL durability and verification
 
 The per-Session JSONL log is authoritative; SQLite is a rebuildable projection.
+Logs are flat files at `<data-root>/sessions/<session-id>.jsonl`, with each path
+constructed by the validated-ID resolver in `storage/path.ts`. Discovery accepts
+only non-hidden `.jsonl` files with valid Session IDs; legacy per-Session
+folders are ignored, not migrated. Deletion unlinks one log file and retains
+its tombstone under `session-control`.
+
 Writable reopen and `wincode sessions verify <session-id> [--json]` use the
 same validated log decoder. Verification is read-only: it does not acquire
 Session Writer authority, sync or truncate the log, or create quarantine files.

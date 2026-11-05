@@ -14,6 +14,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
+	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
 import { resetLocalSessionData } from "@/modules/sessions/storage/reset-local-session-data";
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
@@ -282,15 +283,13 @@ test("a recovery in one Workspace blocks global reset before any Session log cha
 			transactionId: transaction.id,
 			unresolvedPaths: [filePath],
 		});
-		const firstLogPath = path.join(
+		const firstLogPath = resolveSessionLogFilePath(
 			first.logRoot,
-			firstSessionId,
-			"session.jsonl"
+			firstSessionId
 		);
-		const secondLogPath = path.join(
+		const secondLogPath = resolveSessionLogFilePath(
 			second.logRoot,
-			secondSessionId,
-			"session.jsonl"
+			secondSessionId
 		);
 		const firstLogBefore = await Bun.file(firstLogPath).bytes();
 		const secondLogBefore = await Bun.file(secondLogPath).bytes();
@@ -345,7 +344,7 @@ test("global reset deletes Sessions bound to different Workspaces without partia
 		for (const sessionId of [firstSessionId, secondSessionId]) {
 			expect(
 				await Bun.file(
-					path.join(first.logRoot, sessionId, "session.jsonl")
+					resolveSessionLogFilePath(first.logRoot, sessionId)
 				).exists()
 			).toBe(false);
 			const markerPath = path.join(
@@ -391,7 +390,7 @@ test("reset reports committed cleanup pending and retries the same deletion iden
 		logRoot,
 		{
 			remove: async (filePath, options) => {
-				if (failRemoval && filePath.endsWith(sessionId)) {
+				if (failRemoval && filePath.endsWith(`${sessionId}.jsonl`)) {
 					failRemoval = false;
 					throw new Error("Injected reset log removal failure.");
 				}
@@ -412,7 +411,7 @@ test("reset reports committed cleanup pending and retries the same deletion iden
 		});
 		expect(await Bun.file(markerPath).exists()).toBe(true);
 		expect(
-			await fs.stat(path.join(logRoot, sessionId)).then(
+			await fs.stat(resolveSessionLogFilePath(logRoot, sessionId)).then(
 				() => true,
 				() => false
 			)

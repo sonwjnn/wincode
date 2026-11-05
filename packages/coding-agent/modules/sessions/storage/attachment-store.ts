@@ -18,7 +18,6 @@ import type {
 	SessionMessage,
 	SessionPart,
 } from "@/modules/sessions/message";
-import { isValidSessionId, toSessionId } from "@/shared/identifiers";
 import { throwIfAborted } from "@/shared/utils/abort";
 import {
 	ATTACHMENT_ID_PATTERN,
@@ -35,13 +34,13 @@ import {
 	MAX_MEDIA_TYPE_LENGTH,
 } from "../attachment-reference";
 import type { SessionDatabase } from "./client";
+import { parseSessionLogFileName, resolveSessionLogFilePath } from "./path";
 import { sessionAttachment } from "./schema";
 import { decodeSessionLog } from "./session-jsonl-codec";
 import {
 	ensureSessionDirectoryTreeDurably,
 	publishSessionFileNoReplaceDurably,
 	replaceSessionFileDurably,
-	SESSION_DIRECTORY_STAGING_PREFIX,
 	syncDirectoryAfterDurablePathChange,
 } from "./session-storage-durability";
 import { withSessionCatalogLifecycleGate } from "./session-writer-lock";
@@ -756,20 +755,15 @@ const readAuthoritativeAttachmentIds = async (
 	}
 	const attachmentIds = new Set<string>();
 	for (const entry of entries) {
-		if (
-			entry.name === ".staging" ||
-			entry.name.startsWith(SESSION_DIRECTORY_STAGING_PREFIX)
-		) {
+		if (!entry.isFile()) {
 			continue;
 		}
-		if (!(entry.isDirectory() && isValidSessionId(entry.name))) {
-			throw new Error(
-				"The published Session log catalog could not be verified."
-			);
+		const sessionId = parseSessionLogFileName(entry.name);
+		if (sessionId === undefined) {
+			continue;
 		}
-		const sessionId = toSessionId(entry.name);
 		const bytes = await Bun.file(
-			path.join(lifecycleRoot, entry.name, "session.jsonl")
+			resolveSessionLogFilePath(lifecycleRoot, sessionId)
 		).bytes();
 		const state = decodeSessionLog(sessionId, bytes);
 		if (

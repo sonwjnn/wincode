@@ -14,7 +14,10 @@ import {
 	type SessionDatabase,
 } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import { resolveLocalSessionLogRoot } from "@/modules/sessions/storage/path";
+import {
+	resolveLocalSessionLogRoot,
+	resolveSessionLogFilePath,
+} from "@/modules/sessions/storage/path";
 import {
 	createSessionLogEvent,
 	createSessionLogHeader,
@@ -188,9 +191,7 @@ const writeSessionFixture = async (
 	const bytes = new Uint8Array(headerLine.byteLength + createdLine.byteLength);
 	bytes.set(headerLine);
 	bytes.set(createdLine, headerLine.byteLength);
-	const directory = path.join(logRoot, id);
-	await fs.mkdir(directory, { recursive: true });
-	await Bun.write(path.join(directory, "session.jsonl"), bytes);
+	await Bun.write(resolveSessionLogFilePath(logRoot, id), bytes);
 };
 
 const writeFully = async (
@@ -414,10 +415,9 @@ try {
 	if (checkpointSessionId === undefined) {
 		throw new Error("The benchmark has no Session IDs.");
 	}
-	const checkpointPath = path.join(
+	const checkpointPath = resolveSessionLogFilePath(
 		logRoot,
-		checkpointSessionId,
-		"session.jsonl"
+		checkpointSessionId
 	);
 	const checkpointSeed = await measure(
 		async () =>

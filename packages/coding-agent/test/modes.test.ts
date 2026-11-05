@@ -12,6 +12,7 @@ import {
 	type ProviderCollection,
 	type ProviderModel,
 } from "@wincode/ai";
+import { resolveSessionLogFilePath } from "@/modules/sessions/storage/path";
 import {
 	type AgentRegistry,
 	buildAgentRegistry,
@@ -522,10 +523,9 @@ test("Print mode checkpoints its initial prompt atomically before writing assist
 	if (sessionId === undefined) {
 		throw new Error("Expected the Print mode session to have an id.");
 	}
-	const initialLogPath = path.join(
+	const initialLogPath = resolveSessionLogFilePath(
 		resolveLocalSessionLogRoot(path.join(workspace, "sessions.sqlite")),
-		sessionId,
-		"session.jsonl"
+		sessionId
 	);
 	const entries = (await fs.readFile(initialLogPath, "utf8"))
 		.trimEnd()

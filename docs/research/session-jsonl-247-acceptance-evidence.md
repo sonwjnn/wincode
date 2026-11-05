@@ -39,7 +39,8 @@ transcript projection lives in `session-projection.sqlite`. Contract test:
 `the Session projection stays out of the operational SQLite database`
 (`test/sessions/session-jsonl-sdk.test.ts`).
 
-Observed on disk during the smoke run:
+Historical observation from the #247 smoke run, before #250 changed the
+layout:
 
 ```text
 <data-root>/sessions.db                       operational
@@ -48,6 +49,12 @@ Observed on disk during the smoke run:
 <data-root>/session-logs/.staging/
 <data-root>/session-control/{locks,catalog.lock,deleted,imports,quarantine,receipts,indeterminate}
 ```
+
+Current layout after #250: authoritative files are
+`<data-root>/sessions/<session-id>.jsonl`; each Session log is flat, catalog and
+attachment discovery ignore directories and hidden files, and no migration or
+legacy-layout reader is provided. The `session-logs/<id>/session.jsonl` path
+below remains only as historical evidence of the earlier smoke run.
 
 No legacy transcript table, dual-write path, or SQLite-authoritative reader was
 found in production modules. `drizzle.config.ts` still points `db:push` at the
@@ -143,7 +150,7 @@ warm pagination and statistics, with latency, memory, and environment metadata.
   page catches up committed metadata when projection is blocked`,
   `a Session read refreshes its log snapshot when a writer advances the cursor`.
 
-## 8. Formatting, type checks, portfolios, and interactive smoke
+## 8. #247 verification before the #250 layout change
 
 Local verification on the branch head:
 
@@ -162,7 +169,7 @@ Interactive smoke in tmux with the fake Provider:
 | Session picker | Pass: recent Session listed with checkpoint hint |
 | Export | Pass: `./smoke-bundle` published with `manifest.json` and `session.jsonl` |
 | Import | Pass after fix: re-importing the same bundle reported `already present` and did not duplicate the Session |
-| Delete | Pass after fix: picker showed `No matching sessions`, `session-logs/<id>` was removed, and `session-control/deleted/<id>.json` retained identity only |
+| Delete | Pass in the #247 pre-#250 smoke: picker showed `No matching sessions`, the then-current `session-logs/<id>` directory was removed, and `session-control/deleted/<id>.json` retained identity only |
 | Load more | Pass: with 55 seeded Sessions the picker showed the `ctrl+↓` load-more hint; after pressing `ctrl+↓` the hint disappeared with no catalog error notice in the frame, showing the page-2 fetch exhausted the catalog cursor |
 | Blocked commit | Pass after fix: with `session-projection.sqlite` read-only, sending a prompt produced `Your prompt is saved in Session <id>, but its SQLite projection is unavailable. No Agent work was started.` The prompt is durable as the `session.created` checkpoint and nothing was dispatched. The repair that made this reachable is described under defect 3 |
 | Unknown (indeterminate) commit | Not driven in tmux: it needs a failed or partial log write, which the shipped binary exposes no hook for. Covered by `an indeterminate steering write keeps its queue entry reserved until reconciliation` (steering) and `SDK delivery replays a synced Session record after the process exits before acknowledgement` |

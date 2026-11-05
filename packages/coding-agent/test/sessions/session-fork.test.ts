@@ -23,6 +23,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
+	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
 import {
 	createSessionLogEvent,
@@ -370,10 +371,9 @@ test("a refused multi-message record leaves no fork checkpoint target", async ()
 				},
 			],
 		};
-		const sourceLogPath = path.join(
+		const sourceLogPath = resolveSessionLogFilePath(
 			persistence.logRoot,
-			created.id,
-			"session.jsonl"
+			created.id
 		);
 		const sourceLogBytes = await Bun.file(sourceLogPath).bytes();
 
@@ -512,10 +512,9 @@ test("rewinding from an accepted pending user keeps source JSONL and workspace b
 		const sourceRecords = await persistence.store.listSessionRecords(
 			created.id
 		);
-		const sourceLogPath = path.join(
+		const sourceLogPath = resolveSessionLogFilePath(
 			persistence.logRoot,
-			created.id,
-			"session.jsonl"
+			created.id
 		);
 		const sourceLogBytes = await Bun.file(sourceLogPath).bytes();
 		const checkpoint = sourceRecords[0];
@@ -591,10 +590,9 @@ test("fork refuses a Tool Call cut inside an incomplete parallel batch before pu
 			record: firstResult,
 			sessionId: created.id,
 		});
-		const sourceLogPath = path.join(
+		const sourceLogPath = resolveSessionLogFilePath(
 			persistence.logRoot,
-			created.id,
-			"session.jsonl"
+			created.id
 		);
 		const incompleteSourceBytes = await Bun.file(sourceLogPath).bytes();
 		const operationId = "incomplete-tool-batch-retry";
@@ -1276,10 +1274,9 @@ test("fork replay rejects dangling record, submission, and compaction provenance
 			{ recordId: terminalRecord.id },
 			"dangling-fork-provenance-operation"
 		);
-		const targetPath = path.join(
+		const targetPath = resolveSessionLogFilePath(
 			persistence.logRoot,
-			forked.id,
-			"session.jsonl"
+			forked.id
 		);
 		const targetBytes = await Bun.file(targetPath).bytes();
 		const targetState = decodeSessionLog(forked.id, targetBytes);
@@ -1458,7 +1455,7 @@ test("fork provenance waits for a concurrent source append before declaring it u
 			"fork-provenance-concurrent-append-operation"
 		);
 		sourceLogPath = await fs.realpath(
-			path.join(persistence.logRoot, source.id, "session.jsonl")
+			resolveSessionLogFilePath(persistence.logRoot, source.id)
 		);
 		pauseSourceAppend = true;
 		appendPromise = persistence.store.commitSessionRecord({

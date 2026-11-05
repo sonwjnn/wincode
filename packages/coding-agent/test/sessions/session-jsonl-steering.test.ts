@@ -10,6 +10,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
+	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
 import {
 	createSessionJsonlStore,
@@ -272,7 +273,7 @@ test("an indeterminate steering write keeps its queue entry reserved until recon
 				length,
 				position
 			);
-			if (failNextLogWrite && path.basename(filePath) === "session.jsonl") {
+			if (failNextLogWrite && path.extname(filePath) === ".jsonl") {
 				failNextLogWrite = false;
 				steeringWriteReached.resolve();
 				await releaseSteeringWrite.promise;
@@ -459,7 +460,7 @@ test("an unsteered queued Submission is neither logged nor replayed after reopen
 			throw new Error("The queued Submission was not admitted.");
 		}
 		const logBeforeRestart = await Bun.file(
-			path.join(logRoot, created.id, "session.jsonl")
+			resolveSessionLogFilePath(logRoot, created.id)
 		).text();
 		expect(logBeforeRestart).not.toContain(queued.submissionId);
 		expect(logBeforeRestart).not.toContain(

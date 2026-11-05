@@ -52,6 +52,7 @@ import {
 	digestBytes,
 } from "./attachment-store";
 import type { DrizzleSessionStore } from "./drizzle-session-store";
+import { parseSessionLogFileName, resolveSessionLogFilePath } from "./path";
 import {
 	type PreparedSessionBundleExport,
 	type PreparedSessionBundleImport,
@@ -95,18 +96,12 @@ import {
 	type SessionHistoryPageCursor,
 	SessionPaginationError,
 } from "./session-pagination";
-import {
-	createAtomicPathPublisher,
-	SessionPathPublishError,
-} from "./session-path-publish";
 import { buildUserSessionRecord } from "./session-record";
 import {
 	ensureSessionDirectoryTreeDurably,
-	publishSessionDirectoryDurably,
 	publishSessionFileNoReplaceDurably,
 	removeSessionFileDurably,
 	replaceSessionFileDurably,
-	SESSION_DIRECTORY_STAGING_PREFIX,
 	syncDirectoryAfterDurablePathChange,
 } from "./session-storage-durability";
 import type {
@@ -587,11 +582,7 @@ export const verifySessionJsonlLog = async (
 	logRoot: string,
 	sessionId: SessionId
 ): Promise<SessionLogVerification> => {
-	const logPath = path.join(
-		path.resolve(logRoot),
-		validSessionId(sessionId),
-		"session.jsonl"
-	);
+	const logPath = resolveSessionLogFilePath(path.resolve(logRoot), sessionId);
 	const { bytes, state } = await readLog(logPath, sessionId);
 	let reconciliationPending = false;
 	try {
@@ -1755,45 +1746,33 @@ const ensureDurableReceipt = async (
 };
 
 type StagedSessionLog = Readonly<{
-	directory: string;
+	filePath: string;
 	root: string;
 }>;
 
 const stageSessionLog = async (
 	canonicalRoot: string,
 	sessionId: SessionId,
-	safeId: string,
 	operationId: string,
 	bytes: Uint8Array,
 	fileIo: SessionLogFileIo
 ): Promise<StagedSessionLog> => {
 	const root = path.join(canonicalRoot, ".staging");
-	let directory: string | undefined;
+	const filePath = path.join(root, `${operationIdFileStem(operationId)}.jsonl`);
 	let handle: fs.FileHandle | undefined;
 	try {
 		await ensureDirectoryDurable(root);
-		directory = await fs.mkdtemp(path.join(root, `${safeId}.`));
-		const filePath = path.join(directory, "session.jsonl");
-		const temporaryPath = `${filePath}.${randomUUIDv7()}.tmp`;
-		handle = await fs.open(temporaryPath, "wx", 0o600);
-		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
-		await syncFile(temporaryPath, handle, fileIo);
+		// A prior process may have crashed after staging but before publishing.
+		await fs.rm(filePath, { force: true });
+		handle = await fs.open(filePath, "wx", 0o600);
+		await writeFully(handle, bytes, 0, filePath, fileIo);
+		await syncFile(filePath, handle, fileIo);
 		await handle.close();
 		handle = undefined;
-		await publishSessionFileNoReplaceDurably(
-			temporaryPath,
-			filePath,
-			async (path) => await syncDirectory(path, fileIo),
-			fileIo.syncDirectory !== undefined
-		);
-		return { directory, root };
+		return { filePath, root };
 	} catch (error) {
 		await handle?.close().catch(() => undefined);
-		if (directory !== undefined) {
-			await fs
-				.rm(directory, { force: true, recursive: true })
-				.catch(() => undefined);
-		}
+		await fs.rm(filePath, { force: true }).catch(() => undefined);
 		throw new SessionLogError(
 			"session_log_write_not_committed",
 			sessionId,
@@ -1938,7 +1917,7 @@ const assertSessionCreationOwnership = (
 	return boundToWorkspace;
 };
 
-const createLogDirectory = async (
+const createSessionLog = async (
 	logRoot: string,
 	sessionId: SessionId,
 	creation: SessionCreation,
@@ -1972,8 +1951,7 @@ const createLogDirectory = async (
 			{ cause: error, operationId }
 		);
 	}
-	const targetDirectory = path.join(canonicalRoot, safeId);
-	const targetPath = path.join(targetDirectory, "session.jsonl");
+	const targetPath = resolveSessionLogFilePath(canonicalRoot, sessionId);
 	const pendingIntent = await readSessionWriteIntent(
 		logRoot,
 		sessionId,
@@ -2127,7 +2105,6 @@ const createLogDirectory = async (
 	const staged = await stageSessionLog(
 		canonicalRoot,
 		sessionId,
-		safeId,
 		operation.operationId,
 		bytes,
 		fileIo
@@ -2143,15 +2120,16 @@ const createLogDirectory = async (
 	try {
 		await writeSessionWriteIntent(logRoot, intent, fileIo);
 		await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
-			await publishSessionDirectoryDurably(
-				staged.directory,
-				targetDirectory,
+			await publishSessionFileNoReplaceDurably(
+				staged.filePath,
+				targetPath,
 				async (directory) => await syncDirectory(directory, fileIo),
 				fileIo.syncDirectory !== undefined,
 				() => {
 					published = true;
 				}
 			);
+			await syncDirectoryAfterDurablePublication(staged.root, fileIo);
 			bindSessionToWorkspace();
 		});
 		const { bytes: publishedBytes, state } = await readLog(
@@ -2188,9 +2166,7 @@ const createLogDirectory = async (
 			{ cause: error, operationId: operation.operationId }
 		);
 	} finally {
-		await fs
-			.rm(staged.directory, { force: true, recursive: true })
-			.catch(() => undefined);
+		await fs.rm(staged.filePath, { force: true }).catch(() => undefined);
 	}
 };
 
@@ -3605,10 +3581,9 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId
 	): Promise<SessionLogState> => {
 		const generation = assertProjectionReady(sessionId);
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			validSessionId(sessionId),
-			"session.jsonl"
+			sessionId
 		);
 		if (!projection.isBoundToWorkspace(sessionId)) {
 			if (projection.isBoundToAnotherWorkspace(sessionId)) {
@@ -3747,10 +3722,9 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId
 	): Promise<void> => {
 		const generation = assertProjectionReady(sessionId);
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			validSessionId(sessionId),
-			"session.jsonl"
+			sessionId
 		);
 		await reconcileDeletedSessionIfNeeded(sessionId);
 		await assertProjectionSessionBound(sessionId, logPath);
@@ -3845,10 +3819,9 @@ export const createSessionJsonlStore = (
 			state: SessionLogState;
 		}>
 	> => {
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			validSessionId(sessionId),
-			"session.jsonl"
+			sessionId
 		);
 		const bytes = await Bun.file(logPath).bytes();
 		try {
@@ -4261,10 +4234,9 @@ export const createSessionJsonlStore = (
 		entry: SessionLogEntry
 	): Promise<CommittedLogEntry> => {
 		if (entry.envelope.type === "session.deleted") {
-			const logPath = path.join(
+			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(logRoot),
-				validSessionId(sessionId),
-				"session.jsonl"
+				sessionId
 			);
 			const { state } = await readLog(logPath, sessionId);
 			const matchingEntry = state.entries.find(
@@ -4400,10 +4372,9 @@ export const createSessionJsonlStore = (
 		};
 		const key = await lockKey(logRoot, sessionId);
 		return serializeWrite(key, async () => {
-			const logPath = path.join(
+			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(logRoot),
-				validSessionId(sessionId),
-				"session.jsonl"
+				sessionId
 			);
 			const pendingIntent = await readSessionWriteIntent(
 				logRoot,
@@ -4457,10 +4428,9 @@ export const createSessionJsonlStore = (
 	): Promise<CommittedLogEntry> => {
 		const key = await lockKey(logRoot, sessionId);
 		return serializeWrite(key, async () => {
-			const logPath = path.join(
+			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(logRoot),
-				validSessionId(sessionId),
-				"session.jsonl"
+				sessionId
 			);
 			const pendingIntent = await readSessionWriteIntent(
 				logRoot,
@@ -4599,11 +4569,7 @@ export const createSessionJsonlStore = (
 			);
 		}
 		const canonicalRoot = await fs.realpath(logRoot);
-		const logPath = path.join(
-			canonicalRoot,
-			validSessionId(sessionId),
-			"session.jsonl"
-		);
+		const logPath = resolveSessionLogFilePath(canonicalRoot, sessionId);
 		let bytes: Uint8Array;
 		let state: SessionLogState;
 		try {
@@ -4761,43 +4727,27 @@ export const createSessionJsonlStore = (
 		| Readonly<{
 				bytes: Uint8Array;
 				state: SessionLogState;
-				targetDirectory: string;
+				targetPath: string;
 		  }>
 		| undefined
 	> => {
 		const root = await fs.realpath(logRoot);
-		const targetDirectory = path.join(root, validSessionId(sessionId));
+		const targetPath = resolveSessionLogFilePath(root, sessionId);
 		try {
-			const directoryInfo = await fs.lstat(targetDirectory);
-			if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) {
+			const logInfo = await fs.lstat(targetPath);
+			if (!logInfo.isFile() || logInfo.isSymbolicLink()) {
 				throw new SessionBundleImportConflictError(
-					"The target Session ID is occupied by an unsafe log directory."
+					"The target Session log is not a regular file."
 				);
 			}
+			const existing = await readLog(targetPath, sessionId);
+			return { ...existing, targetPath };
 		} catch (error) {
 			if (isCode(error, "ENOENT")) {
 				return;
 			}
 			throw error;
 		}
-		const logPath = path.join(targetDirectory, "session.jsonl");
-		try {
-			const logInfo = await fs.lstat(logPath);
-			if (!logInfo.isFile() || logInfo.isSymbolicLink()) {
-				throw new SessionBundleImportConflictError(
-					"The target Session log is not a regular file."
-				);
-			}
-		} catch (error) {
-			if (isCode(error, "ENOENT")) {
-				throw new SessionBundleImportConflictError(
-					"The target Session ID has an incomplete published log directory."
-				);
-			}
-			throw error;
-		}
-		const existing = await readLog(logPath, sessionId);
-		return { ...existing, targetDirectory };
 	};
 
 	const assertImportedBundleAttachmentsAvailable = async (
@@ -4831,7 +4781,7 @@ export const createSessionJsonlStore = (
 	type SessionBundleImportTarget = Readonly<{
 		bytes: Uint8Array;
 		state: SessionLogState;
-		targetDirectory: string;
+		targetPath: string;
 	}>;
 	type SessionImportPublicationState = { logPublished: boolean };
 
@@ -5047,34 +4997,32 @@ export const createSessionJsonlStore = (
 		publication: SessionImportPublicationState
 	): Promise<void> => {
 		const sessionId = prepared.bundle.session.id;
-		const targetDirectory = path.join(
+		const targetPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			validSessionId(sessionId)
+			sessionId
 		);
-		await options.fileSystem?.beforePublish?.(
-			staged.directory,
-			targetDirectory
-		);
+		await options.fileSystem?.beforePublish?.(staged.filePath, targetPath);
 		try {
-			createAtomicPathPublisher().publish(staged.directory, targetDirectory);
+			await publishSessionFileNoReplaceDurably(
+				staged.filePath,
+				targetPath,
+				async (directory) => await syncDirectory(directory, fileIo),
+				fileIo.syncDirectory !== undefined,
+				() => {
+					publication.logPublished = true;
+				}
+			);
+			await syncDirectoryAfterDurablePublication(staged.root, fileIo);
 		} catch (error) {
-			if (
-				error instanceof SessionPathPublishError &&
-				error.kind === "destination_exists"
-			) {
+			if (isCode(error, "EEXIST")) {
 				throw new SessionBundleImportConflictError(
 					"The target Session ID was published concurrently."
 				);
 			}
 			throw error;
 		}
-		publication.logPublished = true;
 		try {
-			await syncDirectoryAfterDurablePublication(
-				await fs.realpath(logRoot),
-				fileIo
-			);
-			await options.fileSystem?.afterPublish?.(targetDirectory);
+			await options.fileSystem?.afterPublish?.(targetPath);
 			await ensureProjected(sessionId);
 		} catch (error) {
 			throw new SessionBundleImportIndeterminateError(
@@ -5189,7 +5137,7 @@ export const createSessionJsonlStore = (
 		}
 		if (staged !== undefined && !publication.logPublished) {
 			try {
-				await fs.rm(staged.directory, { force: true, recursive: true });
+				await fs.rm(staged.filePath, { force: true });
 				await syncDirectoryAfterDurablePublication(staged.root, fileIo);
 			} catch (error) {
 				cleanupFailure ??= error;
@@ -5217,7 +5165,6 @@ export const createSessionJsonlStore = (
 			staged = await stageSessionLog(
 				await fs.realpath(logRoot),
 				prepared.bundle.session.id,
-				validSessionId(prepared.bundle.session.id),
 				`import-${randomUUIDv7()}`,
 				prepared.logBytes,
 				fileIo
@@ -5331,10 +5278,9 @@ export const createSessionJsonlStore = (
 					);
 				}
 				await ensureProjected(sessionId);
-				const logPath = path.join(
+				const logPath = resolveSessionLogFilePath(
 					await fs.realpath(logRoot),
-					validSessionId(sessionId),
-					"session.jsonl"
+					sessionId
 				);
 				const { state } = await readLog(logPath, sessionId);
 				const importedCut = state.entries.find(
@@ -5440,7 +5386,7 @@ export const createSessionJsonlStore = (
 			return await withTemporaryWriter(sessionId, async () => {
 				assertProjectionReady(sessionId);
 				await assertSessionWritable(sessionId);
-				const created = await createLogDirectory(
+				const created = await createSessionLog(
 					logRoot,
 					sessionId,
 					initialCreation({ ...input, id: sessionId }, createdAt),
@@ -5509,7 +5455,7 @@ export const createSessionJsonlStore = (
 						thinkingLevel: input.thinkingLevel,
 						title: titleFor(externalizedInput),
 					};
-					const created = await createLogDirectory(
+					const created = await createSessionLog(
 						logRoot,
 						sessionId,
 						creation,
@@ -5644,10 +5590,9 @@ export const createSessionJsonlStore = (
 		input: CreateSessionUsageEntryInput,
 		operationId: string
 	): Promise<Date | undefined> => {
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			path.resolve(logRoot),
-			validSessionId(input.sessionId),
-			"session.jsonl"
+			input.sessionId
 		);
 		const { state } = await readLog(logPath, input.sessionId);
 		const previous = state.entries.find(
@@ -5957,10 +5902,9 @@ export const createSessionJsonlStore = (
 		| Readonly<{ logId: string; receipt: SessionDeletionReceipt }>
 		| Readonly<{ writeOutcome: SessionWriteOutcome }>
 	> => {
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			validSessionId(sessionId),
-			"session.jsonl"
+			sessionId
 		);
 		const pendingIntent = await readSessionWriteIntent(
 			logRoot,
@@ -6050,10 +5994,16 @@ export const createSessionJsonlStore = (
 				sessionId,
 				marker.receipt.operationId
 			);
-			const sessionDirectory = path.join(root, validSessionId(sessionId));
-			const remove = fileIo.remove ?? fs.rm;
-			await remove(sessionDirectory, { force: true, recursive: true });
-			await syncDirectoryAfterDurablePublication(root, fileIo);
+			const sessionLogPath = resolveSessionLogFilePath(root, sessionId);
+			const removeFile = fileIo.remove;
+			await removeSessionFileDurably(
+				sessionLogPath,
+				root,
+				async (directory) => await syncDirectory(directory, fileIo),
+				removeFile === undefined
+					? undefined
+					: async (filePath) => await removeFile(filePath, { force: true })
+			);
 			return { logRemoved: true, markerDurable };
 		} catch {
 			return { logRemoved: false, markerDurable };
@@ -6201,15 +6151,17 @@ export const createSessionJsonlStore = (
 		await ensureDirectoryDurable(logRoot);
 		const root = await fs.realpath(logRoot);
 		const entries = await fs.readdir(root, { withFileTypes: true });
-		return entries
-			.filter(
-				(entry) =>
-					entry.isDirectory() &&
-					entry.name !== ".staging" &&
-					!entry.name.startsWith(SESSION_DIRECTORY_STAGING_PREFIX)
-			)
-			.map((entry) => toSessionId(entry.name))
-			.sort();
+		const sessionIds: SessionId[] = [];
+		for (const entry of entries) {
+			if (!entry.isFile()) {
+				continue;
+			}
+			const sessionId = parseSessionLogFileName(entry.name);
+			if (sessionId !== undefined) {
+				sessionIds.push(sessionId);
+			}
+		}
+		return sessionIds.sort();
 	};
 
 	const findDeletedMarkerSessionIds = async (): Promise<SessionId[]> => {
@@ -6311,7 +6263,7 @@ export const createSessionJsonlStore = (
 				continue;
 			}
 			const { state } = await readLog(
-				path.join(root, validSessionId(sessionId), "session.jsonl"),
+				resolveSessionLogFilePath(root, sessionId),
 				sessionId
 			);
 			if (marker === undefined) {
@@ -6345,7 +6297,7 @@ export const createSessionJsonlStore = (
 		root: string,
 		sessionId: SessionId
 	): Promise<void> => {
-		const directory = path.join(root, validSessionId(sessionId));
+		const sessionLogPath = resolveSessionLogFilePath(root, sessionId);
 		const existingMarker = await readDeletedMarker(logRoot, sessionId);
 		let logId: string;
 		let receipt: SessionDeletionReceipt;
@@ -6360,9 +6312,15 @@ export const createSessionJsonlStore = (
 			await writeDeletedMarker(logRoot, sessionId, logId, receipt, fileIo);
 		}
 		await clearPendingDeletionWriteIntent(sessionId, receipt.operationId);
-		const remove = fileIo.remove ?? fs.rm;
-		await remove(directory, { force: true, recursive: true });
-		await syncDirectoryAfterDurablePublication(root, fileIo);
+		const removeFile = fileIo.remove;
+		await removeSessionFileDurably(
+			sessionLogPath,
+			root,
+			async (directory) => await syncDirectory(directory, fileIo),
+			removeFile === undefined
+				? undefined
+				: async (filePath) => await removeFile(filePath, { force: true })
+		);
 	};
 
 	const resetSessionLogForLifecycle = async (
@@ -6522,14 +6480,13 @@ export const createSessionJsonlStore = (
 		const issues = new Map<SessionId, SessionCatalogIssue>();
 		const sessionIds = new Set<SessionId>();
 		for (const entry of entries) {
-			if (
-				!entry.isDirectory() ||
-				entry.name === ".staging" ||
-				entry.name.startsWith(SESSION_DIRECTORY_STAGING_PREFIX)
-			) {
+			if (!entry.isFile()) {
 				continue;
 			}
-			const sessionId = toSessionId(entry.name);
+			const sessionId = parseSessionLogFileName(entry.name);
+			if (sessionId === undefined) {
+				continue;
+			}
 			sessionIds.add(sessionId);
 			try {
 				await ensureProjected(sessionId);
@@ -6576,10 +6533,9 @@ export const createSessionJsonlStore = (
 		assertSessionWorkspaceBinding(sessionId);
 		await checkDeletedMarker(sessionId);
 		await ensureDirectoryDurable(logRoot);
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
-			validSessionId(sessionId),
-			"session.jsonl"
+			sessionId
 		);
 		const cursor = projection.getCursor(sessionId);
 		try {
@@ -6629,44 +6585,26 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		intent: SessionWriteIntent
 	): Promise<boolean> => {
-		const directoryPath = path.join(root, validSessionId(sessionId));
-		const directoryInfo = await fs.lstat(directoryPath).catch((error) => {
+		const logPath = resolveSessionLogFilePath(root, sessionId);
+		const logInfo = await fs.lstat(logPath).catch((error) => {
 			if (isCode(error, "ENOENT")) {
 				return;
 			}
 			throw error;
 		});
-		if (directoryInfo === undefined) {
+		if (logInfo === undefined) {
 			return false;
 		}
-		if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) {
-			throw new SessionLogError(
-				"session_log_corrupt",
-				sessionId,
-				"Published Session creation has an invalid log directory."
-			);
-		}
-		const logPath = path.join(directoryPath, "session.jsonl");
-		const logInfo = await fs.lstat(logPath).catch((error) => {
-			if (isCode(error, "ENOENT")) {
-				throw new SessionLogError(
-					"session_log_corrupt",
-					sessionId,
-					"Published Session creation is missing its authoritative log.",
-					{
-						offset: intent.expectedOffset,
-						operationId: intent.operationId,
-						sequence: intent.sequence,
-					}
-				);
-			}
-			throw error;
-		});
 		if (!logInfo.isFile() || logInfo.isSymbolicLink()) {
 			throw new SessionLogError(
 				"session_log_corrupt",
 				sessionId,
-				"Published Session creation has an invalid authoritative log file."
+				"Published Session creation has an invalid authoritative log file.",
+				{
+					offset: intent.expectedOffset,
+					operationId: intent.operationId,
+					sequence: intent.sequence,
+				}
 			);
 		}
 		return true;
@@ -6717,11 +6655,7 @@ export const createSessionJsonlStore = (
 		await assertNoUnresolvedOwnedSessionCreations(root);
 		const generation = projection.getMaintenanceState().generation;
 		for (const sessionId of projection.listBoundSessionIds()) {
-			const logPath = path.join(
-				root,
-				validSessionId(sessionId),
-				"session.jsonl"
-			);
+			const logPath = resolveSessionLogFilePath(root, sessionId);
 			const cursor = projection.getCursor(sessionId);
 			let size: number;
 			try {
@@ -7088,10 +7022,9 @@ export const createSessionJsonlStore = (
 					operationIntent?.targetSessionId ?? randomUUIDv7()
 				);
 				const forkOperationLogId = `fork-${operationIdFileStem(operationId).slice(0, 40)}`;
-				let targetLogPath = path.join(
-					path.resolve(logRoot),
-					validSessionId(targetSessionId),
-					"session.jsonl"
+				let targetLogPath = resolveSessionLogFilePath(
+					await fs.realpath(logRoot),
+					targetSessionId
 				);
 				const reconcilePublishedForkCreation = async (
 					createdEntry: SessionLogEntry,
@@ -7235,10 +7168,9 @@ export const createSessionJsonlStore = (
 					operationIntent = currentIntent;
 					if (currentIntent !== undefined) {
 						targetSessionId = toSessionId(currentIntent.targetSessionId);
-						targetLogPath = path.join(
-							path.resolve(logRoot),
-							validSessionId(targetSessionId),
-							"session.jsonl"
+						targetLogPath = resolveSessionLogFilePath(
+							await fs.realpath(logRoot),
+							targetSessionId
 						);
 						const publishedTarget = await readExistingSessionLog(
 							targetLogPath,
@@ -7629,7 +7561,6 @@ export const createSessionJsonlStore = (
 						const stagedLog = await stageSessionLog(
 							canonicalRoot,
 							targetSessionId,
-							validSessionId(targetSessionId),
 							createdOperationId,
 							logBytes,
 							fileIo
@@ -7647,14 +7578,18 @@ export const createSessionJsonlStore = (
 								);
 							}
 							publicationAttempted = true;
-							await publishSessionDirectoryDurably(
-								stagedLog.directory,
-								path.join(canonicalRoot, validSessionId(targetSessionId)),
+							await publishSessionFileNoReplaceDurably(
+								stagedLog.filePath,
+								targetLogPath,
 								async (directory) => await syncDirectory(directory, fileIo),
 								fileIo.syncDirectory !== undefined,
 								() => {
 									published = true;
 								}
+							);
+							await syncDirectoryAfterDurablePublication(
+								stagedLog.root,
+								fileIo
 							);
 							projection.bindSessionToWorkspace(targetSessionId);
 						});
@@ -7760,7 +7695,7 @@ export const createSessionJsonlStore = (
 					} finally {
 						if (staged !== undefined) {
 							await fs
-								.rm(staged.directory, { force: true, recursive: true })
+								.rm(staged.filePath, { force: true })
 								.catch(() => undefined);
 						}
 					}
@@ -7788,11 +7723,7 @@ export const createSessionJsonlStore = (
 			return withSessionCatalogLifecycleGate(logRoot, async () => {
 				await checkDeletedMarker(sessionId);
 				const { state } = await readLog(
-					path.join(
-						await fs.realpath(logRoot),
-						validSessionId(sessionId),
-						"session.jsonl"
-					),
+					resolveSessionLogFilePath(await fs.realpath(logRoot), sessionId),
 					sessionId
 				);
 				const forkEntry = state.entries.find(
@@ -7808,10 +7739,9 @@ export const createSessionJsonlStore = (
 				try {
 					await checkDeletedMarker(provenance.sourceSessionId);
 					const sourceLog = await readLogForProjection(
-						path.join(
+						resolveSessionLogFilePath(
 							await fs.realpath(logRoot),
-							validSessionId(provenance.sourceSessionId),
-							"session.jsonl"
+							provenance.sourceSessionId
 						),
 						provenance.sourceSessionId
 					);
@@ -8072,7 +8002,7 @@ export const createSessionJsonlStore = (
 
 	const projectRebuildSession = async (sessionId: SessionId): Promise<void> => {
 		const root = await fs.realpath(logRoot);
-		const logPath = path.join(root, sessionId, "session.jsonl");
+		const logPath = resolveSessionLogFilePath(root, sessionId);
 		const { bytes, state } = await readLogForProjection(logPath, sessionId);
 		if (
 			state.entries.some(({ envelope }) => envelope.type === "session.deleted")
@@ -8209,10 +8139,9 @@ export const createSessionJsonlStore = (
 		return await withTemporaryWriter(sessionId, async () => {
 			assertProjectionReady(sessionId);
 			await checkDeletedMarker(sessionId);
-			const logPath = path.join(
+			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(logRoot),
-				validSessionId(sessionId),
-				"session.jsonl"
+				sessionId
 			);
 			const { bytes, state } = await readLogForProjection(logPath, sessionId);
 			await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);

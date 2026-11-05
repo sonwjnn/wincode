@@ -100,8 +100,8 @@ afterEach(async () => {
 describe("Session Writer process locks", () => {
 	test("catalog lifecycle operations serialize through canonical log-root aliases", async () => {
 		const fixture = createFixture();
-		const logRoot = path.join(fixture.root, "session-logs");
-		const aliasRoot = path.join(fixture.root, "session-logs-alias");
+		const logRoot = path.join(fixture.root, "sessions");
+		const aliasRoot = path.join(fixture.root, "sessions-alias");
 		await fs.promises.mkdir(logRoot);
 		await fs.promises.symlink(logRoot, aliasRoot, "dir");
 		const enteredFirst = Promise.withResolvers<void>();
@@ -445,7 +445,7 @@ describe("Session Writer process locks", () => {
 			fs.writeFileSync(blocker, "");
 			await expect(
 				acquireSessionWriterLock(
-					path.join(blocker, "session-logs"),
+					path.join(blocker, "sessions"),
 					sessionId("blocked-log-root")
 				)
 			).rejects.toMatchObject({ code: "session_lock_failed" });
@@ -462,7 +462,7 @@ describe("Session Writer process locks", () => {
 			fs.writeFileSync(path.join(root, "session-control"), "");
 			await expect(
 				acquireSessionWriterLock(
-					path.join(root, "session-logs"),
+					path.join(root, "sessions"),
 					sessionId("blocked-lock-namespace")
 				)
 			).rejects.toMatchObject({ code: "session_lock_failed" });

@@ -34,6 +34,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
+	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
 import { SESSION_BUNDLE_IMPORT_RESOURCE_BUDGETS } from "@/modules/sessions/storage/session-bundle";
 import {
@@ -323,7 +324,7 @@ test("import rejects an incomplete attachment closure without publishing a parti
 		expect(await target.store.listSessions()).toEqual([]);
 		expect(
 			await Bun.file(
-				path.join(target.logRoot, created.id, "session.jsonl")
+				resolveSessionLogFilePath(target.logRoot, created.id)
 			).exists()
 		).toBe(false);
 	} finally {
@@ -407,7 +408,7 @@ test("bundle rejects attachment metadata that disagrees with log references befo
 			expect(await target.store.listSessions()).toEqual([]);
 			expect(
 				await Bun.file(
-					path.join(target.logRoot, sessionId, "session.jsonl")
+					resolveSessionLogFilePath(target.logRoot, sessionId)
 				).exists()
 			).toBe(false);
 		}
@@ -442,7 +443,7 @@ test("a deleted Session ID remains reserved against repeated bundle imports", as
 			expect(await target.store.listSessions()).toEqual([]);
 			expect(
 				await Bun.file(
-					path.join(target.logRoot, sessionId, "session.jsonl")
+					resolveSessionLogFilePath(target.logRoot, sessionId)
 				).exists()
 			).toBe(false);
 		}
@@ -929,7 +930,7 @@ test("import activation remains pending across projection rebuild and is logged 
 		await confirmActivation(sessionId);
 		expect(await activationPending(sessionId)).toBe(false);
 		const logBytes = await Bun.file(
-			path.join(target.logRoot, sessionId, "session.jsonl")
+			resolveSessionLogFilePath(target.logRoot, sessionId)
 		).bytes();
 		const state = decodeSessionLog(sessionId, logBytes);
 		const activation = state.entries.at(-1);
@@ -997,7 +998,7 @@ test("imported pending work stays idle until explicit SDK continuation records a
 		const providerStarted = Promise.withResolvers<void>();
 		recorder.beforeChat = async () => {
 			const bytes = await Bun.file(
-				path.join(target.logRoot, sessionId, "session.jsonl")
+				resolveSessionLogFilePath(target.logRoot, sessionId)
 			).bytes();
 			activationWasDurableBeforeProvider = decodeSessionLog(
 				sessionId,
@@ -1195,7 +1196,7 @@ test("bundle rejects an unresolved submission status reference before publishing
 		expect(await target.store.listSessions()).toEqual([]);
 		expect(
 			await Bun.file(
-				path.join(target.logRoot, sessionId, "session.jsonl")
+				resolveSessionLogFilePath(target.logRoot, sessionId)
 			).exists()
 		).toBe(false);
 		expect(
@@ -1286,7 +1287,7 @@ test("bundle rejects processed Submission status returning to pending before imp
 		expect(await target.store.listSessions()).toEqual([]);
 		expect(
 			await Bun.file(
-				path.join(target.logRoot, sessionId, "session.jsonl")
+				resolveSessionLogFilePath(target.logRoot, sessionId)
 			).exists()
 		).toBe(false);
 		expect(
@@ -1341,7 +1342,7 @@ test("partial activation-marker writes are cleaned so a retry can publish", asyn
 		).toBe(false);
 		expect(
 			await Bun.file(
-				path.join(target.logRoot, sessionId, "session.jsonl")
+				resolveSessionLogFilePath(target.logRoot, sessionId)
 			).exists()
 		).toBe(false);
 		expect(await fs.readdir(path.join(target.logRoot, ".staging"))).toEqual([]);

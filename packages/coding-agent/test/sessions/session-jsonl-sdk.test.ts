@@ -41,6 +41,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
+	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
 import { validateSessionBundleDirectory } from "@/modules/sessions/storage/session-bundle";
 import {
@@ -112,7 +113,7 @@ const readSessionLogLines = async <Payload>(
 	logRoot: string,
 	sessionId: SessionId
 ): Promise<readonly Readonly<{ payload?: Payload; type: string }>[]> =>
-	(await Bun.file(path.join(logRoot, sessionId, "session.jsonl")).text())
+	(await Bun.file(resolveSessionLogFilePath(logRoot, sessionId)).text())
 		.trimEnd()
 		.split("\n")
 		.map((line) => JSON.parse(line) as { payload?: Payload; type: string });
@@ -171,7 +172,10 @@ test("public SDK returns an empty Session only after its v1 JSONL log is publish
 
 	try {
 		const sessionId = await sdk.createEmptySession();
-		const logPath = path.join(root, "session-logs", sessionId, "session.jsonl");
+		const logPath = resolveSessionLogFilePath(
+			path.join(root, "sessions"),
+			sessionId
+		);
 		const text = await readUtf8File(logPath);
 		const lines = text.split("\n");
 		const header = JSON.parse(lines[0] ?? "null") as Record<string, unknown>;
@@ -196,6 +200,52 @@ test("public SDK returns an empty Session only after its v1 JSONL log is publish
 		expect(created.previousHash).toBe(header.entryHash);
 	} finally {
 		await sdk.dispose();
+	}
+});
+
+test("retrying Session creation replaces its abandoned operation staging file before publication", async () => {
+	const databasePath = path.join(root, "sdk-session-staging-operation.sqlite");
+	const sessionId = toSessionId("staging-operation-session");
+	const operationId = `create-${sessionId}`;
+	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	await fs.mkdir(path.join(logRoot, ".staging"), { recursive: true });
+	const canonicalLogRoot = await fs.realpath(logRoot);
+	const expectedStagingPath = path.join(
+		canonicalLogRoot,
+		".staging",
+		`${operationIdFileStem(operationId)}.jsonl`
+	);
+	const stagedLogPaths: string[] = [];
+	await Bun.write(expectedStagingPath, "abandoned staging bytes");
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace,
+		{
+			sync: async (filePath, handle) => {
+				if (
+					path.dirname(filePath) === path.join(canonicalLogRoot, ".staging")
+				) {
+					stagedLogPaths.push(filePath);
+				}
+				await handle.sync();
+			},
+		}
+	);
+	try {
+		await persistence.store.createEmptySession({ id: sessionId });
+
+		expect(stagedLogPaths).toEqual([expectedStagingPath]);
+		expect(await Bun.file(expectedStagingPath).exists()).toBe(false);
+		expect(
+			await Bun.file(
+				resolveSessionLogFilePath(
+					resolveLocalSessionLogRoot(databasePath),
+					sessionId
+				)
+			).exists()
+		).toBe(true);
+	} finally {
+		persistence.close();
 	}
 });
 
@@ -808,10 +858,9 @@ test("processing steering status reopens as a failed durable head with stable id
 		expect(recorder.requests).toEqual([]);
 		const statusEvents = (
 			await Bun.file(
-				path.join(
+				resolveSessionLogFilePath(
 					resolveLocalSessionLogRoot(databasePath),
-					sessionId,
-					"session.jsonl"
+					sessionId
 				)
 			).text()
 		)
@@ -1222,7 +1271,7 @@ test("Session publication cannot race GC before its referenced attachment is dis
 			reclaimedCount: 0,
 		});
 		expect(
-			await Bun.file(path.join(logRoot, sessionId, "session.jsonl")).exists()
+			await Bun.file(resolveSessionLogFilePath(logRoot, sessionId)).exists()
 		).toBe(false);
 		allowStagedReferenceWrite.resolve();
 		const created = await creating;
@@ -1325,7 +1374,7 @@ test("Session creation rejects an existing attachment reclaimed before its lease
 			},
 		});
 		expect(
-			await Bun.file(path.join(logRoot, sessionId, "session.jsonl")).exists()
+			await Bun.file(resolveSessionLogFilePath(logRoot, sessionId)).exists()
 		).toBe(false);
 		expect(
 			await Bun.file(
@@ -1357,7 +1406,7 @@ test("Session deletion cannot race GC while its published log is being removed",
 	const fileIo: SessionLogFileIo = {
 		write: async (filePath, handle, bytes, offset, length, position) => {
 			const result = await handle.write(bytes, offset, length, position);
-			if (watchDeletion && filePath.endsWith("session.jsonl")) {
+			if (watchDeletion && path.extname(filePath) === ".jsonl") {
 				const text = new TextDecoder().decode(
 					bytes.subarray(offset, offset + length)
 				);
@@ -1418,7 +1467,7 @@ test("Session deletion cannot race GC while its published log is being removed",
 			Bun.sleep(20).then(() => true),
 		]);
 		expect(deletionStayedBehindGate).toBe(true);
-		const logPath = path.join(logRoot, sessionId, "session.jsonl");
+		const logPath = resolveSessionLogFilePath(logRoot, sessionId);
 		expect(await Bun.file(logPath).text()).not.toContain(
 			'"type":"session.deleted"'
 		);
@@ -1473,7 +1522,7 @@ test("public Host history hydrates accepted attachments from authoritative refer
 				bytes.subarray(offset, offset + length)
 			);
 			if (
-				filePath.endsWith("session.jsonl") &&
+				path.extname(filePath) === ".jsonl" &&
 				text.includes('"type":"attachment-reference"')
 			) {
 				const attachmentId = ATTACHMENT_ID_PATTERN.exec(text)?.[1];
@@ -1661,10 +1710,9 @@ test("a blob sync failure rejects the public Host input before it is acknowledge
 			expect(recorder.requests).toEqual([]);
 			expect(await services.store.listSessionRecords(created.id)).toEqual([]);
 			const log = await Bun.file(
-				path.join(
+				resolveSessionLogFilePath(
 					resolveLocalSessionLogRoot(databasePath),
-					created.id,
-					"session.jsonl"
+					created.id
 				)
 			).text();
 			expect(log).not.toContain("attachment-reference");
@@ -1788,10 +1836,9 @@ test("a projection failure during a tool batch keeps its completed side effect a
 
 			const logEntries = (
 				await Bun.file(
-					path.join(
+					resolveSessionLogFilePath(
 						resolveLocalSessionLogRoot(databasePath),
-						created.id,
-						"session.jsonl"
+						created.id
 					)
 				).text()
 			)
@@ -2187,7 +2234,10 @@ test("retrying the same Session creation identity does not append a duplicate ch
 		await expect(
 			sdk.createEmptySession({ sessionId, thinkingLevel: "high" })
 		).rejects.toMatchObject({ code: "session_operation_conflict" });
-		const logPath = path.join(root, "session-logs", sessionId, "session.jsonl");
+		const logPath = resolveSessionLogFilePath(
+			path.join(root, "sessions"),
+			sessionId
+		);
 		const entries = (await fs.readFile(logPath, "utf8"))
 			.trimEnd()
 			.split("\n")
@@ -2283,7 +2333,7 @@ test("a Session GC started before a prompt-history commit must preserve its atta
 	const testDirectory = path.join(root, "prompt-history-attachment-gc-race");
 	await fs.mkdir(testDirectory, { recursive: true });
 	const databasePath = path.join(testDirectory, "sessions.sqlite");
-	const logRoot = path.join(testDirectory, "session-logs");
+	const logRoot = path.join(testDirectory, "sessions");
 	const attachmentRoot = path.join(testDirectory, "attachments");
 	const operational = createDatabase(databasePath);
 	const projection = createDatabase(
@@ -2541,7 +2591,7 @@ test("attachment collection is blocked when the log is ahead of its projection",
 		});
 		expect(outcome).toMatchObject({ kind: "committed", projection: "blocked" });
 		const publishedLog = await readUtf8File(
-			path.join(logRoot, sessionId, "session.jsonl")
+			resolveSessionLogFilePath(logRoot, sessionId)
 		);
 		expect(publishedLog).toContain(reference.attachmentId);
 		expect(publishedLog).toContain('"type":"attachment-reference"');
@@ -2609,7 +2659,7 @@ test("a stale projection record cannot keep a deleted-log attachment alive", asy
 			kind: "committed",
 		});
 		expect(
-			await Bun.file(path.join(logRoot, sessionId, "session.jsonl")).exists()
+			await Bun.file(resolveSessionLogFilePath(logRoot, sessionId)).exists()
 		).toBe(false);
 		await persistence.attachmentStore.release([reference.attachmentId]);
 
@@ -2663,6 +2713,60 @@ test("a stale projection record cannot keep a deleted-log attachment alive", asy
 	}
 });
 
+test("the Session catalog discovers only flat JSONL files and ignores staging artifacts", async () => {
+	const databasePath = path.join(root, "sdk-flat-session-log-catalog.sqlite");
+	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	const operational = createDatabase(databasePath);
+	const projection = createDatabase(
+		resolveLocalSessionProjectionPath(databasePath)
+	);
+	const store = createSessionJsonlStore(
+		createDrizzleSessionStore(projection.db, {
+			operationalDatabase: operational.db,
+			sessionLogRoot: logRoot,
+			workspaceRoot: workspace,
+		}),
+		logRoot
+	);
+	const sessionId = toSessionId("flat-catalog-session");
+	const logPath = resolveSessionLogFilePath(logRoot, sessionId);
+
+	try {
+		await store.createEmptySession({ id: sessionId });
+		expect(await Bun.file(logPath).exists()).toBe(true);
+		expect(() => resolveSessionLogFilePath(logRoot, "../outside")).toThrow(
+			"Session ID is not safe for a Session log path."
+		);
+		await expect(fs.stat(path.join(logRoot, sessionId))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+
+		await fs.mkdir(path.join(logRoot, ".staging"), { recursive: true });
+		await Bun.write(
+			path.join(logRoot, ".staging", "abandoned-operation.jsonl"),
+			"not a published Session log"
+		);
+		await Bun.write(path.join(logRoot, ".hidden-session.jsonl"), "ignored");
+		await Bun.write(path.join(logRoot, "notes.txt"), "ignored");
+		await fs.mkdir(path.join(logRoot, "directory-session.jsonl"));
+		const legacyDirectory = path.join(logRoot, "legacy-directory-session");
+		await fs.mkdir(legacyDirectory);
+		await Bun.write(
+			path.join(legacyDirectory, "session.jsonl"),
+			"legacy layouts are not discovered"
+		);
+
+		const catalog = await store.listSessionCatalog();
+		expect(catalog).toMatchObject({
+			issues: [],
+			sessions: [{ id: sessionId }],
+		});
+	} finally {
+		operational.sqlite.close();
+		projection.sqlite.close();
+	}
+});
+
 test("the Session catalog reports one corrupt log without hiding healthy Sessions", async () => {
 	const databasePath = path.join(root, "sdk-catalog-corruption.sqlite");
 	const logRoot = path.join(root, "catalog-corruption-logs");
@@ -2684,8 +2788,7 @@ test("the Session catalog reports one corrupt log without hiding healthy Session
 	try {
 		await store.createEmptySession({ id: healthyId });
 		await store.createEmptySession({ id: corruptId });
-		const corruptLogPath = path.join(corruptId, "session.jsonl");
-		const logPath = path.join(logRoot, corruptLogPath);
+		const logPath = resolveSessionLogFilePath(logRoot, corruptId);
 		const lines = (await fs.readFile(logPath, "utf8")).split("\n");
 		const header = JSON.parse(lines[0] ?? "null") as Record<string, unknown>;
 		header.formatVersion = 2;
@@ -2788,10 +2891,7 @@ test("a concurrent catch-up cannot turn an already projected durable record into
 	const fileIo: SessionLogFileIo = {
 		sync: async (filePath, handle) => {
 			await handle.sync();
-			if (
-				!replayedConcurrentEntry &&
-				filePath.endsWith(path.join(sessionId, "session.jsonl"))
-			) {
+			if (!replayedConcurrentEntry && filePath.endsWith(`${sessionId}.jsonl`)) {
 				replayedConcurrentEntry = true;
 				await secondStore.getSession(sessionId);
 			}
@@ -2932,10 +3032,7 @@ test("two concurrent replay readers reload when one advances the projection curs
 	const fileIo: SessionLogFileIo = {
 		sync: async (filePath, handle) => {
 			await handle.sync();
-			if (
-				raceArmed &&
-				filePath.endsWith(path.join(sessionId, "session.jsonl"))
-			) {
+			if (raceArmed && filePath.endsWith(`${sessionId}.jsonl`)) {
 				readersAtBarrier += 1;
 				if (readersAtBarrier === 2) {
 					bothReaders.resolve();
@@ -3069,12 +3166,7 @@ test("Workspace listing skips JSONL Sessions bound to another Workspace", async 
 		});
 		expect((await firstStore.getSession(sessionId)).id).toBe(sessionId);
 		expect(
-			(
-				await fs.readFile(
-					path.join(logRoot, sessionId, "session.jsonl"),
-					"utf8"
-				)
-			)
+			(await fs.readFile(resolveSessionLogFilePath(logRoot, sessionId), "utf8"))
 				.trimEnd()
 				.split("\n")
 		).toHaveLength(2);
@@ -3105,7 +3197,10 @@ test("SDK creation stores its initial chat text in the creation checkpoint befor
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
 		const sessionId = created.sessionId;
-		const logPath = path.join(root, "session-logs", sessionId, "session.jsonl");
+		const logPath = resolveSessionLogFilePath(
+			path.join(root, "sessions"),
+			sessionId
+		);
 		const lines = (await fs.readFile(logPath, "utf8")).trimEnd().split("\n");
 		const entries = lines.map(
 			(line) => JSON.parse(line) as Record<string, unknown>
@@ -3185,7 +3280,7 @@ test("retrying initial SDK input with the same Session ID is a creation no-op", 
 		});
 		const entries = (
 			await fs.readFile(
-				path.join(root, "session-logs", sessionId, "session.jsonl"),
+				resolveSessionLogFilePath(path.join(root, "sessions"), sessionId),
 				"utf8"
 			)
 		)
@@ -3231,7 +3326,7 @@ test("a creation sync failure is tagged not committed and publishes no log", asy
 			error: { code: "session_log_write_not_committed" },
 		});
 		await expect(
-			fs.stat(path.join(logRoot, sessionId, "session.jsonl"))
+			fs.stat(resolveSessionLogFilePath(logRoot, sessionId))
 		).rejects.toMatchObject({ code: "ENOENT" });
 		expect(await projectionStore.listSessions()).toEqual([]);
 	} finally {
@@ -3249,10 +3344,9 @@ test("retry reconciles a published Session creation after sync verification fail
 	const sessionId = toSessionId("create-published-fault-session");
 	const logRoot = path.join(root, "create-published-fault-logs");
 	await fs.mkdir(logRoot, { recursive: true });
-	const logPath = path.join(
+	const logPath = resolveSessionLogFilePath(
 		await fs.realpath(logRoot),
-		sessionId,
-		"session.jsonl"
+		sessionId
 	);
 	let failPublishedSync = true;
 	const fileIo: SessionLogFileIo = {
@@ -3325,7 +3419,7 @@ test("indeterminate prompt writes retain externalization leases until JSONL reco
 		id: sessionId,
 	});
 	expect(sessionCreated.writeOutcome.kind).toBe("committed");
-	logPath = path.join(await fs.realpath(logRoot), sessionId, "session.jsonl");
+	logPath = resolveSessionLogFilePath(await fs.realpath(logRoot), sessionId);
 	const sourceLease = await persistence.attachmentStore.ingest({
 		bytes: PNG_BYTES,
 		filename: "indeterminate-prompt.png",
@@ -3404,7 +3498,7 @@ test("indeterminate compaction writes retain externalization leases until JSONL 
 		}
 	);
 	await persistence.store.createEmptySession({ id: sessionId });
-	logPath = path.join(await fs.realpath(logRoot), sessionId, "session.jsonl");
+	logPath = resolveSessionLogFilePath(await fs.realpath(logRoot), sessionId);
 	const sourceLease = await persistence.attachmentStore.ingest({
 		bytes: PNG_BYTES,
 		filename: "indeterminate-compaction.png",
@@ -3507,7 +3601,7 @@ test("same-operation retry reconciles a durable log entry after sync verificatio
 
 	try {
 		await store.createEmptySession({ id: sessionId });
-		logPath = path.join(await fs.realpath(logRoot), sessionId, "session.jsonl");
+		logPath = resolveSessionLogFilePath(await fs.realpath(logRoot), sessionId);
 		const uncertain = await store.updateSession(sessionId, {
 			title: "Recovered title",
 		});
@@ -3652,7 +3746,7 @@ test("failure to persist the write intent leaves JSONL untouched and readable", 
 
 	try {
 		await store.createEmptySession({ id: sessionId });
-		const logPath = path.join(logRoot, sessionId, "session.jsonl");
+		const logPath = resolveSessionLogFilePath(logRoot, sessionId);
 		const before = await fs.readFile(logPath);
 		failIntentSync = true;
 		const outcome = await store.updateSession(sessionId, {
@@ -3708,10 +3802,9 @@ test("compaction retry rejects changed payload before repairing the incomplete a
 
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
-		logPath = path.join(
+		logPath = resolveSessionLogFilePath(
 			await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		const coveredMessageId = sessionMessageId("compaction-tail-covered");
 		const keptMessageId = sessionMessageId("compaction-tail-kept");
@@ -4631,7 +4724,7 @@ test("a fresh catalog read cannot claim an unbound log during another Workspace'
 	const logRoot = resolveLocalSessionLogRoot(databasePath);
 	await fs.mkdir(logRoot, { recursive: true });
 	const canonicalLogRoot = await fs.realpath(logRoot);
-	const logPath = path.join(canonicalLogRoot, sessionId, "session.jsonl");
+	const logPath = resolveSessionLogFilePath(canonicalLogRoot, sessionId);
 	const published = Promise.withResolvers<void>();
 	const resumeCreation = Promise.withResolvers<void>();
 	let pausedAtPublishedLog = false;
@@ -4704,7 +4797,7 @@ test("foreign Workspaces cannot claim an interrupted Session and owner catalog r
 	const logRoot = resolveLocalSessionLogRoot(databasePath);
 	await fs.mkdir(logRoot, { recursive: true });
 	const canonicalLogRoot = await fs.realpath(logRoot);
-	const logPath = path.join(canonicalLogRoot, sessionId, "session.jsonl");
+	const logPath = resolveSessionLogFilePath(canonicalLogRoot, sessionId);
 	let failPublishedDirectorySync = true;
 	const fileIo: SessionLogFileIo = {
 		syncDirectory: async (directory, handle) => {
@@ -4836,10 +4929,9 @@ test("history-page catch-up rejects an appended record that reuses a retained Me
 	);
 	const sessionId = toSessionId("history-page-duplicate-message-catchup");
 	const messageId = sessionMessageId("history-page-duplicate-message");
-	const logPath = path.join(
+	const logPath = resolveSessionLogFilePath(
 		resolveLocalSessionLogRoot(databasePath),
-		sessionId,
-		"session.jsonl"
+		sessionId
 	);
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
@@ -5593,10 +5685,9 @@ test("an incomplete rebuild blocks reads until repaired logs are replayed", asyn
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
 		await persistence.store.createEmptySession({ id: healthySessionId });
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		const initialGeneration = (
 			persistence.projection.sqlite
@@ -5677,10 +5768,7 @@ test("a Session read refreshes its log snapshot when a writer advances the curso
 	let interceptSync = false;
 	const fileIo: SessionLogFileIo = {
 		sync: async (filePath, handle) => {
-			if (
-				interceptSync &&
-				filePath.endsWith(path.join(sessionId, "session.jsonl"))
-			) {
+			if (interceptSync && filePath.endsWith(`${sessionId}.jsonl`)) {
 				interceptSync = false;
 				syncStarted.resolve();
 				await releaseSync.promise;
@@ -5748,7 +5836,7 @@ test("fresh Session reads wait for the log durability barrier before projection 
 	const syncStarted = Promise.withResolvers<void>();
 	const releaseSync = Promise.withResolvers<void>();
 	let interceptReadSync = false;
-	const logPathSuffix = path.join(sessionId, "session.jsonl");
+	const logPathSuffix = `${sessionId}.jsonl`;
 	const fileIo: SessionLogFileIo = {
 		sync: async (filePath, handle) => {
 			if (interceptReadSync && filePath.endsWith(logPathSuffix)) {
@@ -5829,7 +5917,7 @@ test("an in-flight catch-up cannot publish projection rows during maintenance", 
 	let interceptRebuildSync = false;
 	const fileIo: SessionLogFileIo = {
 		sync: async (filePath, handle) => {
-			if (filePath.endsWith(path.join(sessionId, "session.jsonl"))) {
+			if (filePath.endsWith(`${sessionId}.jsonl`)) {
 				if (interceptReadSync) {
 					interceptReadSync = false;
 					readSyncStarted.resolve();
@@ -5929,7 +6017,7 @@ test("in-process writes wait until a held-writer Session projection rebuild comp
 			) {
 				writeIntentDuringMaintenance = true;
 			}
-			if (filePath.endsWith(path.join(sessionId, "session.jsonl"))) {
+			if (filePath.endsWith(`${sessionId}.jsonl`)) {
 				if (interceptSync) {
 					interceptSync = false;
 					logSyncEvents.push("rebuild-sync-started");
@@ -6011,10 +6099,7 @@ test("projection rebuild holds Session Writer authority against concurrent appen
 	let interceptSync = false;
 	const fileIo: SessionLogFileIo = {
 		sync: async (filePath, handle) => {
-			if (
-				interceptSync &&
-				filePath.endsWith(path.join(sessionId, "session.jsonl"))
-			) {
+			if (interceptSync && filePath.endsWith(`${sessionId}.jsonl`)) {
 				syncStarted.resolve();
 				await releaseSync.promise;
 				interceptSync = false;
@@ -6070,7 +6155,7 @@ test("projection rebuild holds Session Writer authority against concurrent appen
 	}
 });
 
-test("projection rebuild reconciles deletion markers before rediscovery", async () => {
+test("projection rebuild ignores a legacy Session directory after deletion", async () => {
 	const databasePath = path.join(
 		root,
 		"projection-rebuild-deletion",
@@ -6087,7 +6172,7 @@ test("projection rebuild reconciles deletion markers before rediscovery", async 
 		await persistence.store.createEmptySession({ id: sessionId });
 		const logRoot = await fs.realpath(resolveLocalSessionLogRoot(databasePath));
 		const logBytes = await Bun.file(
-			path.join(logRoot, sessionId, "session.jsonl")
+			resolveSessionLogFilePath(logRoot, sessionId)
 		).bytes();
 		const deleted = await persistence.store.deleteSession(sessionId);
 		expect(deleted).toMatchObject({ kind: "committed", projection: "ready" });
@@ -6105,9 +6190,7 @@ test("projection rebuild reconciles deletion markers before rediscovery", async 
 			rebuiltSessionIds: [],
 			skippedSessionIds: [sessionId],
 		});
-		await expect(fs.access(orphanedDirectory)).rejects.toMatchObject({
-			code: "ENOENT",
-		});
+		await expect(fs.access(orphanedDirectory)).resolves.toBeNull();
 		await expect(persistence.store.getSession(sessionId)).rejects.toThrow(
 			"Session not found"
 		);
@@ -6163,10 +6246,9 @@ test("projection rebuild failure rolls back replacement rows and cursor", async 
 		if (validCompaction.writeOutcome.kind !== "committed") {
 			throw new Error("The rollback test compaction did not commit.");
 		}
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		const validBytes = await Bun.file(logPath).bytes();
 		const state = decodeSessionLog(sessionId, validBytes);
@@ -6281,10 +6363,9 @@ test("legacy compaction retry preserves envelope and payload timestamps", async 
 
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
-		logPath = path.join(
+		logPath = resolveSessionLogFilePath(
 			await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		const coveredMessageId = sessionMessageId("compaction-v1-covered");
 		const keptMessageId = sessionMessageId("compaction-v1-kept");
@@ -6394,7 +6475,7 @@ test("a legacy timestamp-less creation intent refuses a changed explicit time", 
 		});
 		expect(template.writeOutcome.kind).toBe("committed");
 		const templateLog = await Bun.file(
-			path.join(logRoot, templateSessionId, "session.jsonl")
+			resolveSessionLogFilePath(logRoot, templateSessionId)
 		).text();
 		const templateCreation = JSON.parse(templateLog.split("\n")[1] ?? "{}") as {
 			payload: Record<string, unknown>;
@@ -6436,7 +6517,7 @@ test("a legacy timestamp-less creation intent refuses a changed explicit time", 
 			error: { code: "session_operation_conflict" },
 		});
 		expect(
-			await Bun.file(path.join(logRoot, sessionId, "session.jsonl")).exists()
+			await Bun.file(resolveSessionLogFilePath(logRoot, sessionId)).exists()
 		).toBe(false);
 		expect(await Bun.file(markerPath).json()).toMatchObject({ version: 1 });
 	} finally {
@@ -6474,10 +6555,9 @@ test("a pending usage retry reuses its original default timestamp", async () => 
 
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
-		logPath = path.join(
+		logPath = resolveSessionLogFilePath(
 			await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		const uncertain = await persistence.store.createSessionUsageEntry(input);
 		expect(uncertain.writeOutcome).toMatchObject({
@@ -6538,10 +6618,9 @@ test("short writes are retried so Session creation and append remain complete", 
 		expect((await persistence.store.getSession(sessionId)).title).toBe(
 			"All bytes were written"
 		);
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		expect((await Bun.file(logPath).text()).trimEnd().split("\n")).toHaveLength(
 			3
@@ -6608,7 +6687,7 @@ test("ENOSPC and quarantine sync failure preserve the log for reopened same-oper
 
 	try {
 		await store.createEmptySession({ id: sessionId });
-		logPath = path.join(await fs.realpath(logRoot), sessionId, "session.jsonl");
+		logPath = resolveSessionLogFilePath(await fs.realpath(logRoot), sessionId);
 		const expectedOffset = (await fs.stat(logPath)).size;
 		const prefixLines = (await Bun.file(logPath).text()).trimEnd().split("\n");
 		const prefixEnvelope = JSON.parse(prefixLines.at(-1) ?? "{}") as {
@@ -6758,7 +6837,7 @@ test("a durable log commit reports its receipt when SQLite projection fails", as
 		});
 		expect((await store.getSession(sessionId)).title).toBe("Durably committed");
 		const entries = (
-			await fs.readFile(path.join(logRoot, sessionId, "session.jsonl"), "utf8")
+			await fs.readFile(resolveSessionLogFilePath(logRoot, sessionId), "utf8")
 		)
 			.trimEnd()
 			.split("\n")
@@ -6923,7 +7002,7 @@ test("public SDK reports a committed-but-blocked prompt without scheduling model
 		const logRoot = resolveLocalSessionLogRoot(databasePath);
 		const entries = (
 			await fs.readFile(
-				path.join(logRoot, handle.sessionId, "session.jsonl"),
+				resolveSessionLogFilePath(logRoot, handle.sessionId),
 				"utf8"
 			)
 		)
@@ -6977,10 +7056,9 @@ test("a valid JSONL prefix below the projection cursor blocks Session reopen wit
 			title: "Projected beyond the surviving log",
 		});
 		expect(outcome).toMatchObject({ kind: "committed" });
-		const logPath = path.join(
+		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
-			sessionId,
-			"session.jsonl"
+			sessionId
 		);
 		const committedBytes = await Bun.file(logPath).bytes();
 		let newlineCount = 0;
@@ -7238,7 +7316,7 @@ test("compaction checkpoints replay from JSONL and retries reuse their durable r
 			sessionMessageId("jsonl-compaction-kept")
 		);
 		const log = await fs.readFile(
-			path.join(root, "session-logs", sessionId, "session.jsonl"),
+			resolveSessionLogFilePath(path.join(root, "sessions"), sessionId),
 			"utf8"
 		);
 		expect(
@@ -7295,7 +7373,7 @@ test("rejects JSONL compaction checkpoints that reference messages outside the t
 		});
 		expect(await services.store.getLatestCompaction(created.id)).toBeNull();
 		const log = await fs.readFile(
-			path.join(root, "session-logs", created.id, "session.jsonl"),
+			resolveSessionLogFilePath(path.join(root, "sessions"), created.id),
 			"utf8"
 		);
 		expect(
@@ -7359,7 +7437,7 @@ test("a foreign unmarked deletion does not fail or delete Sessions in another Wo
 		expect(await Bun.file(markerPath).exists()).toBe(false);
 		expect(
 			await Bun.file(
-				path.join(testRoot, "session-logs", sessionB, "session.jsonl")
+				resolveSessionLogFilePath(path.join(testRoot, "sessions"), sessionB)
 			).text()
 		).toContain('"type":"session.deleted"');
 
@@ -7381,7 +7459,7 @@ test("a foreign unmarked deletion does not fail or delete Sessions in another Wo
 		expect(await Bun.file(markerPath).exists()).toBe(false);
 		expect(
 			await Bun.file(
-				path.join(testRoot, "session-logs", sessionB, "session.jsonl")
+				resolveSessionLogFilePath(path.join(testRoot, "sessions"), sessionB)
 			).exists()
 		).toBe(true);
 	} finally {
@@ -7405,11 +7483,9 @@ test("public history pages hide another Workspace's durable deletion marker", as
 		"deleted",
 		`${sessionB}.json`
 	);
-	const logPath = path.join(
-		testRoot,
-		"session-logs",
-		sessionB,
-		"session.jsonl"
+	const logPath = resolveSessionLogFilePath(
+		path.join(testRoot, "sessions"),
+		sessionB
 	);
 	const workspaceBStore = createSessionJsonlTestPersistence(
 		databasePath,
@@ -7503,7 +7579,7 @@ test("recovery completes a synced deletion event before catalog discovery can re
 		expect(await Bun.file(pendingIntentPath).exists()).toBe(true);
 		expect(
 			await Bun.file(
-				path.join(root, "session-logs", sessionId, "session.jsonl")
+				resolveSessionLogFilePath(path.join(root, "sessions"), sessionId)
 			).text()
 		).toContain('"type":"session.deleted"');
 		await fs.rm(markerPath, { force: true });
@@ -7524,7 +7600,9 @@ test("recovery completes a synced deletion event before catalog discovery can re
 			expect(catalog.issues).toEqual([]);
 			expect(await Bun.file(markerPath).exists()).toBe(true);
 			await expect(
-				fs.access(path.join(root, "session-logs", sessionId))
+				fs.access(
+					resolveSessionLogFilePath(path.join(root, "sessions"), sessionId)
+				)
 			).rejects.toMatchObject({ code: "ENOENT" });
 		} finally {
 			reopenedPersistence.close();
@@ -7565,7 +7643,9 @@ test("a durable deletion marker reports cleanup pending and the same operation r
 		});
 		expect(await Bun.file(markerPath).exists()).toBe(true);
 		expect(
-			await Bun.file(path.join(root, "session-logs", sessionId)).exists()
+			await Bun.file(
+				resolveSessionLogFilePath(path.join(root, "sessions"), sessionId)
+			).exists()
 		).toBe(false);
 
 		persistence.projection.sqlite.exec(
@@ -7592,7 +7672,7 @@ test("deletion keeps its durable marker and reports cleanup pending when log rem
 		workspace,
 		{
 			remove: async (filePath, options) => {
-				if (failRemoval && filePath.endsWith(sessionId)) {
+				if (failRemoval && filePath.endsWith(`${sessionId}.jsonl`)) {
 					failRemoval = false;
 					throw new Error("Injected log removal failure.");
 				}
@@ -7606,7 +7686,10 @@ test("deletion keeps its durable marker and reports cleanup pending when log rem
 		"deleted",
 		`${sessionId}.json`
 	);
-	const logDirectory = path.join(root, "session-logs", sessionId);
+	const logPath = resolveSessionLogFilePath(
+		path.join(root, "sessions"),
+		sessionId
+	);
 	try {
 		await persistence.store.createEmptySession({ id: sessionId });
 		const pending = await persistence.store.deleteSession(sessionId);
@@ -7617,7 +7700,7 @@ test("deletion keeps its durable marker and reports cleanup pending when log rem
 		});
 		expect(await Bun.file(markerPath).exists()).toBe(true);
 		expect(
-			await fs.stat(logDirectory).then(
+			await fs.stat(logPath).then(
 				() => true,
 				() => false
 			)
@@ -7630,7 +7713,7 @@ test("deletion keeps its durable marker and reports cleanup pending when log rem
 			projection: "ready",
 		});
 		expect(
-			await fs.stat(logDirectory).then(
+			await fs.stat(logPath).then(
 				() => true,
 				() => false
 			)
@@ -7681,7 +7764,9 @@ test("Session deletion persists a tombstone receipt before removing the projecti
 		});
 		expect(await services.store.deleteSession(sessionId)).toEqual(deleted);
 		await expect(
-			fs.access(path.join(root, "session-logs", sessionId, "session.jsonl"))
+			fs.access(
+				resolveSessionLogFilePath(path.join(root, "sessions"), sessionId)
+			)
 		).rejects.toMatchObject({ code: "ENOENT" });
 	} finally {
 		await services.shutdown();

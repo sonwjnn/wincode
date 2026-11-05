@@ -120,9 +120,10 @@ export const ensureSessionDirectoryTreeDurably = async (
 export const removeSessionFileDurably = async (
 	filePath: string,
 	cleanupRoot: string,
-	syncDirectory: SessionDirectorySync
+	syncDirectory: SessionDirectorySync,
+	removeFile?: (filePath: string) => Promise<void>
 ): Promise<void> => {
-	if (process.platform === "win32") {
+	if (process.platform === "win32" && removeFile === undefined) {
 		const removedDirectory = path.join(cleanupRoot, ".removed");
 		await ensureSessionDirectoryTreeDurably(
 			removedDirectory,
@@ -148,7 +149,11 @@ export const removeSessionFileDurably = async (
 	}
 
 	try {
-		await fs.unlink(filePath);
+		if (removeFile === undefined) {
+			await fs.unlink(filePath);
+		} else {
+			await removeFile(filePath);
+		}
 	} catch (error) {
 		if (isCode(error, "ENOENT")) {
 			return;
@@ -171,7 +176,8 @@ export const publishSessionFileNoReplaceDurably = async (
 	stagingPath: string,
 	destination: string,
 	syncDirectory: SessionDirectorySync,
-	forceOnWindows = false
+	forceOnWindows = false,
+	afterPublish?: () => void
 ): Promise<void> => {
 	if (process.platform === "win32") {
 		moveWindowsPathDurably(stagingPath, destination);
@@ -183,6 +189,7 @@ export const publishSessionFileNoReplaceDurably = async (
 	} else {
 		await fs.link(stagingPath, destination);
 	}
+	afterPublish?.();
 	await syncDirectoryAfterDurablePathChange(
 		path.dirname(destination),
 		syncDirectory,

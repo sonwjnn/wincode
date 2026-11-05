@@ -34,7 +34,7 @@ const fileIo: SessionLogFileIo = {
 		await handle.sync();
 		if (
 			blockNextSessionLogSync &&
-			path.basename(filePath) === "session.jsonl" &&
+			path.extname(filePath) === ".jsonl" &&
 			(await Bun.file(filePath).text()).includes(deliveryText)
 		) {
 			blockNextSessionLogSync = false;

@@ -140,7 +140,7 @@ const planFor = (
 		.filter((sessionId) => !isValidSessionId(sessionId))
 		.map((sessionId) => ({
 			code: "session_id_invalid",
-			message: "Published Session directory has an invalid Session ID.",
+			message: "Published Session log has an invalid Session ID.",
 			sessionId,
 		}));
 	const candidateIds = snapshot.published.filter(

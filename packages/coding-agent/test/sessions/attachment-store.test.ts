@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { isObjectLike, isString } from "@wincode/utils";
+import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import {
 	type AttachmentReference,
 	attachmentReferenceToFilePart,
@@ -19,7 +20,15 @@ import {
 	getAttachmentReference,
 	type SessionAttachmentStore,
 } from "@/modules/sessions/storage/attachment-store";
-import { sessionMessageId } from "../support/identifiers";
+import { resolveSessionLogFilePath } from "@/modules/sessions/storage/path";
+import {
+	createSessionLogEvent,
+	createSessionLogHeader,
+	encodeSessionLogLine,
+} from "@/modules/sessions/storage/session-jsonl-codec";
+import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
+import { toSessionId } from "@/shared/identifiers";
+import { agentId, agentTurnId, sessionMessageId } from "../support/identifiers";
 
 const PNG_BYTES = new Uint8Array([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
@@ -487,9 +496,91 @@ test("separate blob roots cannot release each other's staging pins", async () =>
 	expect(firstRepository.get(staged.attachmentId)).toBeDefined();
 });
 
+test("attachment collection reads flat JSONL liveness and ignores non-log entries", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const lifecycleRoot = path.join(root, "sessions");
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		lifecycleRoot,
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root: path.join(root, "blobs"),
+	});
+	const lease = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "live.png",
+		mediaType: "image/png",
+	});
+	const reference = lease.reference;
+	await lease.release();
+	const sessionId = toSessionId("flat-attachment-liveness-session");
+	const timestamp = new Date().toISOString();
+	const header = createSessionLogHeader(
+		sessionId,
+		crypto.randomUUID(),
+		timestamp
+	);
+	const record = buildUserSessionRecord({
+		agentId: agentId("attachment-liveness-agent"),
+		message: fromPartial<SessionMessage>({
+			id: sessionMessageId("flat-attachment-liveness-message"),
+			parts: [attachmentReferenceToFilePart(reference)],
+			role: "user",
+		}),
+		model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		turnId: agentTurnId("flat-attachment-liveness-turn"),
+	});
+	const created = createSessionLogEvent({
+		operationId: `create-${sessionId}`,
+		payload: {
+			createdAt: timestamp,
+			editMode: "hashline",
+			initialRecord: record,
+			lastMessageAt: timestamp,
+			pinned: false,
+			title: "Untitled Session",
+		},
+		previousHash: header.entryHash,
+		sequence: 1,
+		sessionId,
+		timestamp,
+		type: "session.created",
+	});
+	try {
+		await Bun.write(
+			resolveSessionLogFilePath(lifecycleRoot, sessionId),
+			new Uint8Array([
+				...encodeSessionLogLine(header),
+				...encodeSessionLogLine(created),
+			])
+		);
+		const legacyDirectory = path.join(
+			lifecycleRoot,
+			"legacy-attachment-session"
+		);
+		await fs.mkdir(legacyDirectory, { recursive: true });
+		await Bun.write(
+			path.join(legacyDirectory, "session.jsonl"),
+			"not discovered as an authoritative log"
+		);
+		await Bun.write(path.join(lifecycleRoot, ".hidden.jsonl"), "ignored");
+		await Bun.write(path.join(lifecycleRoot, "notes.txt"), "ignored");
+		await fs.mkdir(path.join(lifecycleRoot, "directory.jsonl"));
+
+		const report = await attachments.collect({
+			liveAttachmentIds: [],
+			safetyWindowMs: 0,
+		});
+		expect(report.reclaimedCount).toBe(0);
+		expect(repository.get(reference.attachmentId)).toBeDefined();
+	} finally {
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
 test("reclaims an uncommitted blob after its staging owner process has exited", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
-	const lifecycleRoot = path.join(root, "session-logs");
+	const lifecycleRoot = path.join(root, "sessions");
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({
 		lifecycleRoot,

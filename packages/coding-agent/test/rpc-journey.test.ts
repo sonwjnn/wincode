@@ -10,6 +10,7 @@ import {
 	ProviderError,
 	type ProviderModel,
 } from "@wincode/ai";
+import { resolveSessionLogFilePath } from "@/modules/sessions/storage/path";
 import { buildAgentRegistry } from "../modules/agents/registry";
 import { runRpc } from "../modules/application/rpc/runner";
 import {
@@ -1514,10 +1515,9 @@ test("RPC session/open preserves the structured JSONL corruption code", async ()
 		sources: {},
 	});
 	const { id: sessionId } = await assembly.store.createEmptySession({});
-	const logPath = path.join(
+	const logPath = resolveSessionLogFilePath(
 		resolveLocalSessionLogRoot(corruptionDatabasePath),
-		sessionId,
-		"session.jsonl"
+		sessionId
 	);
 	await fs.writeFile(logPath, '{"formatVersion":1,"not":"a valid envelope"}\n');
 	const stdoutFrames: string[] = [];
@@ -1590,11 +1590,9 @@ test("RPC session/open hides another Workspace's durable deletion marker", async
 		"deleted",
 		`${foreignSessionId}.json`
 	);
-	const logPath = path.join(
-		testRoot,
-		"session-logs",
-		foreignSessionId,
-		"session.jsonl"
+	const logPath = resolveSessionLogFilePath(
+		path.join(testRoot, "sessions"),
+		foreignSessionId
 	);
 	const workspaceBAssembly = await openSessionServices({
 		policy: {

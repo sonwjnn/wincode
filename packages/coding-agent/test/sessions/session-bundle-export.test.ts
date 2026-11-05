@@ -21,6 +21,7 @@ import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-se
 import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
+	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
 import {
 	parseSessionBundleManifest,
@@ -456,7 +457,7 @@ test("source semantic corruption remains session_log_corrupt with its sequence a
 	try {
 		const { sessionId } = await createSessionWithRetainedAttachments(fixture);
 		const sourceBytes = await Bun.file(
-			path.join(fixture.logRoot, sessionId, "session.jsonl")
+			resolveSessionLogFilePath(fixture.logRoot, sessionId)
 		).bytes();
 		const state = decodeSessionLog(sessionId, sourceBytes);
 		const firstRecord = state.entries.find(
@@ -503,12 +504,12 @@ test("source semantic corruption remains session_log_corrupt with its sequence a
 
 test("export reports sync-time source mutation with sequence and first changed byte", async () => {
 	let mutateOnSync = false;
-	let sourceLogPath = "";
+	let sourceLogFileName = "";
 	let changedOffset = -1;
 	const fileIo: SessionLogFileIo = {
 		sync: async (filePath, handle) => {
 			await handle.sync();
-			if (!mutateOnSync || path.basename(filePath) !== "session.jsonl") {
+			if (!mutateOnSync || path.basename(filePath) !== sourceLogFileName) {
 				return;
 			}
 			mutateOnSync = false;
@@ -528,7 +529,8 @@ test("export reports sync-time source mutation with sequence and first changed b
 			throw new Error("The sync-race Session was not committed.");
 		}
 		const sessionId = created.id;
-		sourceLogPath = path.join(fixture.logRoot, sessionId, "session.jsonl");
+		sourceLogFileName = `${sessionId}.jsonl`;
+		const sourceLogPath = resolveSessionLogFilePath(fixture.logRoot, sessionId);
 		const sourceBytes = await Bun.file(sourceLogPath).bytes();
 		const expectedOffset = sourceBytes.byteLength - 2;
 		const expectedSequence =
@@ -595,7 +597,7 @@ test("export refuses corrupt authoritative history before publishing any bundle"
 	const fixture = await createFixture();
 	try {
 		const { sessionId } = await createSessionWithRetainedAttachments(fixture);
-		const logPath = path.join(fixture.logRoot, sessionId, "session.jsonl");
+		const logPath = resolveSessionLogFilePath(fixture.logRoot, sessionId);
 		const bytes = await Bun.file(logPath).bytes();
 		const corruptOffset = bytes.byteLength - 2;
 		bytes[corruptOffset] = ((bytes.at(-2) ?? 0) + 1) % 256;
@@ -734,10 +736,10 @@ test("GC cannot reclaim closure blobs while export copies pinned source attachme
 		);
 		exporting = exportSession({ destination, sessionId });
 		await started.promise;
-		const sourceDirectory = path.join(fixture.logRoot, sessionId);
+		const sourceLogPath = resolveSessionLogFilePath(fixture.logRoot, sessionId);
 		await fs.rename(
-			sourceDirectory,
-			path.join(fixture.root, "hidden-source-log")
+			sourceLogPath,
+			path.join(fixture.root, "hidden-source-log.jsonl")
 		);
 		const pinDirectory = path.join(
 			path.dirname(fixture.logRoot),
@@ -842,7 +844,7 @@ test("bundle validation refuses symlinked members instead of following files out
 		const logPath = path.join(destination, "session.jsonl");
 		await fs.rm(logPath);
 		await fs.symlink(
-			path.join(fixture.logRoot, sessionId, "session.jsonl"),
+			resolveSessionLogFilePath(fixture.logRoot, sessionId),
 			logPath
 		);
 
