@@ -18,7 +18,12 @@ import type {
 	SessionSdkOperations,
 } from "../sdk-contract";
 import type { SessionSelection } from "../selection";
-import type { SessionStore, SessionUsageEntry } from "../storage/session-store";
+import type {
+	SessionForkCheckpoint,
+	SessionForkResult,
+	SessionStore,
+	SessionUsageEntry,
+} from "../storage/session-store";
 /**
  * What one Session Host needs from the surface that constructed it, as lazy
  * getters rather than values: a session outlives the render that supplied its
@@ -97,7 +102,7 @@ export type SessionStoreCapabilities = Pick<SessionCapabilities, "getStore">;
 /** The Session Host Manager's preflight dependencies for a Provider selection. */
 export type HostManagerSelectionCapabilities = Pick<
 	SessionCapabilities,
-	"getPluginRuntime" | "getStore"
+	"getPluginRuntime" | "getRegistry" | "getStore"
 >;
 
 /**
@@ -107,6 +112,11 @@ export type HostManagerSelectionCapabilities = Pick<
  */
 export type SessionHost = Readonly<{
 	agentSession: AgentSession;
+	/** Forks while reusing this Host's held source writer; call through the manager's fork gate. */
+	forkSession: (
+		checkpoint: SessionForkCheckpoint,
+		operationId: string
+	) => Promise<SessionForkResult>;
 	/** Holds a reload-blocking lease across Host preflight and Session work admission. */
 	withSessionWork: <Result>(
 		action: () => Promise<Result>,
@@ -134,6 +144,10 @@ export type SessionHost = Readonly<{
 	/** Cancels scheduled/in-flight warming after its Provider Model changes. */
 	cancelCacheWarming: () => void;
 	getSessionUsageEntries: () => readonly SessionUsageEntry[];
+	/** Whether an imported Session still requires explicit local activation. */
+	isImportedSessionActivationPending: () => boolean;
+	/** Durably records explicit local activation before imported work may continue. */
+	activateImportedSession: () => Promise<void>;
 	/**
 	 * Observes Agent Turn Events the Agent Session emits, in order: the stream a
 	 * consumer renders without reading full Snapshots per token.
@@ -160,9 +174,25 @@ export type SessionWorkAdmission =
 	| Readonly<{ kind: "admitted"; release: () => void }>
 	| Readonly<{ kind: "rejected"; reason: string }>;
 
+export type SessionLifecycleContext = Readonly<{
+	existingHostWriter: boolean;
+}>;
+
 export type SessionHostManager = Readonly<{
 	assertIdleForReload: () => Promise<void>;
-	tryAcquireSessionWork: () => SessionWorkAdmission;
+	tryAcquireSessionWork: (sessionId?: SessionId) => SessionWorkAdmission;
+	withIdleForSessionLifecycle: <Result>(
+		sessionId: SessionId,
+		action: (context: SessionLifecycleContext) => Promise<Result>,
+		operation?: "delete" | "export"
+	) => Promise<Result>;
+	withIdleForSessionFork: <Result>(
+		sessionId: SessionId,
+		action: (host: SessionHost | undefined) => Promise<Result>
+	) => Promise<Result>;
+	withIdleForSessionDataReset: <Result>(
+		action: () => Promise<Result>
+	) => Promise<Result>;
 	withIdleForReload: <Result>(action: () => Promise<Result>) => Promise<Result>;
 	/** Rebind open Plugin Session scopes and idle Provider compositions. */
 	replacePluginRuntime: (

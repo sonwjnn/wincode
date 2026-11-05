@@ -32,6 +32,7 @@ import type {
 import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
 import {
+	filterSessionMessagesForActiveContext,
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
 } from "../message";
@@ -41,7 +42,11 @@ import {
 	pluginProvidersFromRuntime,
 } from "../provider-collection";
 import { restoreSelection } from "../selection";
-import type { SessionUsageEntry } from "../storage/session-store";
+import { requireSessionWriteReady } from "../storage/session-jsonl-store";
+import type {
+	SessionForkProvenance,
+	SessionUsageEntry,
+} from "../storage/session-store";
 import { projectSessionRecords } from "../transcript-projection";
 import {
 	createSessionUsageLedger,
@@ -49,6 +54,7 @@ import {
 } from "../usage/session-usage-ledger";
 import { createAgentSessionAdapters } from "./agent-session-adapters";
 import { assertPluginProviderRegistrationSnapshot } from "./agent-session-turn-runner";
+import { IMPORTED_SESSION_COMPACTION_ACTIVATION_REQUIRED_MESSAGE } from "./imported-session-agent";
 import { assertPluginProviderSelectionOwner } from "./provider-selection-ownership";
 import type {
 	SessionHost,
@@ -63,6 +69,7 @@ import type {
  */
 type OpenedSession = Readonly<{
 	compactions: SessionCompaction[];
+	forkProvenance: SessionForkProvenance | undefined;
 	context: SessionMessage[];
 	model: ProviderModelSelection | undefined;
 	steeringMessages: SessionSteeringMessage[];
@@ -213,14 +220,14 @@ const openSession = async (
 	providerModel?: ProviderModelSelection
 ): Promise<OpenedSession> => {
 	const store = capabilities.getStore();
-	const [session, compactions, loadedRecords, usageEntries] = await Promise.all(
-		[
+	const [session, compactions, loadedRecords, usageEntries, forkProvenance] =
+		await Promise.all([
 			store.getSession(sessionId),
 			store.getCompactions(sessionId),
 			store.listSessionRecords(sessionId),
 			store.listSessionUsageEntries(sessionId),
-		]
-	);
+			store.getSessionForkProvenance(sessionId),
+		]);
 	const interrupted = loadedRecords.flatMap((record) =>
 		record.messages.flatMap((message) => {
 			const submissionId = message.metadata?.submissionId;
@@ -244,8 +251,10 @@ const openSession = async (
 	);
 	if (interrupted.length > 0) {
 		await Promise.all(
-			interrupted.map((submission) =>
-				store.updateSessionSubmission({ ...submission, sessionId })
+			interrupted.map(async (submission) =>
+				requireSessionWriteReady(
+					await store.updateSessionSubmission({ ...submission, sessionId })
+				)
 			)
 		);
 	}
@@ -256,11 +265,7 @@ const openSession = async (
 	const transcript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(records)
 	);
-	const active = transcript.filter(
-		(message) =>
-			message.metadata?.submissionStatus !== "pending" &&
-			message.metadata?.submissionStatus !== "failed"
-	);
+	const active = filterSessionMessagesForActiveContext(transcript);
 	return {
 		compactions,
 		context: rebuildActiveMessages(active, compactions.at(-1) ?? null),
@@ -269,6 +274,7 @@ const openSession = async (
 		transcript,
 		thinkingLevel: session.thinkingLevel,
 		usageEntries,
+		forkProvenance,
 	};
 };
 
@@ -321,12 +327,11 @@ export const createSessionHost = async ({
 	sessionId,
 }: SessionHostOptions): Promise<SessionHost> => {
 	await waitForClosingHost(sessionId);
-	const sessionWriter = await capabilities
-		.getStore()
-		.acquireSessionWriter(
-			sessionId,
-			executionMode === undefined ? {} : { executionMode }
-		);
+	const sessionStore = capabilities.getStore();
+	const sessionWriter = await sessionStore.acquireSessionWriter(
+		sessionId,
+		executionMode === undefined ? {} : { executionMode }
+	);
 	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
 	let agentSession: AgentSession | undefined;
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
@@ -340,6 +345,34 @@ export const createSessionHost = async ({
 	let usageLedger: SessionUsageLedger | undefined;
 	let unsubscribeContext: (() => void) | undefined;
 	let unsubscribeProviderComposition: (() => void) | undefined;
+	let importActivationPending = false;
+	let importActivationInFlight: Promise<void> | undefined;
+	const activateImportedSession = async (): Promise<void> => {
+		if (!importActivationPending) {
+			return;
+		}
+		if (importActivationInFlight !== undefined) {
+			return await importActivationInFlight;
+		}
+		const confirmActivation = sessionStore.confirmSessionImportActivation;
+		if (confirmActivation === undefined) {
+			throw new Error(
+				"Imported Session activation cannot be recorded by this Session store."
+			);
+		}
+		const activation = (async () => {
+			await confirmActivation(sessionId);
+			importActivationPending = false;
+		})();
+		importActivationInFlight = activation;
+		try {
+			await activation;
+		} finally {
+			if (importActivationInFlight === activation) {
+				importActivationInFlight = undefined;
+			}
+		}
+	};
 
 	/**
 	 * Reports one event to the Host's observers. Everything the Agent Session
@@ -433,14 +466,17 @@ export const createSessionHost = async ({
 		return closingShutdown;
 	};
 	try {
-		const storedSession = await capabilities.getStore().getSession(sessionId);
+		importActivationPending =
+			(await sessionStore.isSessionImportActivationPending?.(sessionId)) ??
+			false;
+		const storedSession = await sessionStore.getSession(sessionId);
 		const selectedProviderModel = providerModel ?? storedSession.model;
 		const sessionWorkManager = capabilities.getSessionHostManager();
 		const withAsyncSessionWork = async <Result>(
 			action: () => Promise<Result>,
 			onRejected: (reason: string) => Result
 		): Promise<Result> => {
-			const admission = sessionWorkManager.tryAcquireSessionWork();
+			const admission = sessionWorkManager.tryAcquireSessionWork(sessionId);
 			if (admission.kind === "rejected") {
 				return onRejected(admission.reason);
 			}
@@ -576,6 +612,9 @@ export const createSessionHost = async ({
 		const openedAgentSession = new AgentSessionImpl({
 			initialCompactions: opened.compactions,
 			...omitUndefined({
+				forkContinuationMessageId: opened.forkProvenance?.targetMessageId,
+			}),
+			...omitUndefined({
 				initialAgent,
 				initialSessionModel: opened.model ?? initialSelection?.model,
 				initialSessionThinkingLevel:
@@ -600,37 +639,34 @@ export const createSessionHost = async ({
 		const initialSnapshot = openedAgentSession.getSnapshot();
 		if (
 			autoContinue &&
+			!importActivationPending &&
 			initialSnapshot.steeringMessages[0]?.status === "pending"
 		) {
-			openedAgentSession.continue();
+			await openedAgentSession.continue();
 		}
-		const withSyncSessionWork = <Result>(
-			action: () => Result,
-			onRejected: (reason: string) => Result
-		): Result => {
-			const admission = sessionWorkManager.tryAcquireSessionWork();
-			if (admission.kind === "rejected") {
-				return onRejected(admission.reason);
-			}
-			try {
-				return action();
-			} finally {
-				admission.release();
-			}
-		};
 		const guardedAgentSession: AgentSession = Object.freeze({
 			cancel: openedAgentSession.cancel,
 			cancelCompaction: openedAgentSession.cancelCompaction,
 			compact: (command) =>
 				withAsyncSessionWork(
-					() => openedAgentSession.compact(command),
+					() => {
+						if (importActivationPending) {
+							throw new Error(
+								IMPORTED_SESSION_COMPACTION_ACTIVATION_REQUIRED_MESSAGE
+							);
+						}
+						return openedAgentSession.compact(command);
+					},
 					(reason) => {
 						throw new Error(reason);
 					}
 				),
 			continue: () =>
-				withSyncSessionWork(
-					() => openedAgentSession.continue(),
+				withAsyncSessionWork(
+					async () => {
+						await activateImportedSession();
+						return await openedAgentSession.continue();
+					},
 					(reason) => ({ kind: "rejected" as const, reason })
 				),
 			getSnapshot: openedAgentSession.getSnapshot,
@@ -639,14 +675,20 @@ export const createSessionHost = async ({
 			onSubmissionEvent: openedAgentSession.onSubmissionEvent,
 			prompt: (input) =>
 				withAsyncSessionWork(
-					() => openedAgentSession.prompt(input),
+					async () => {
+						await activateImportedSession();
+						return await openedAgentSession.prompt(input);
+					},
 					(reason) => ({ rejected: true, reason })
 				),
 			recallWaitingMessages: openedAgentSession.recallWaitingMessages,
 			send: (input) =>
-				withSyncSessionWork(
-					() => openedAgentSession.send(input),
-					(reason) => Promise.resolve({ rejected: true as const, reason })
+				withAsyncSessionWork(
+					async () => {
+						await activateImportedSession();
+						return await openedAgentSession.send(input);
+					},
+					(reason) => ({ rejected: true as const, reason })
 				),
 			steer: () =>
 				withAsyncSessionWork(
@@ -667,6 +709,12 @@ export const createSessionHost = async ({
 
 		return {
 			agentSession: guardedAgentSession,
+			forkSession: (checkpoint, operationId) =>
+				sessionStore.forkSessionWithHeldWriter(
+					sessionId,
+					checkpoint,
+					operationId
+				),
 			withSessionWork: withAsyncSessionWork,
 			assertCurrentPluginProviderRegistrationSnapshot: () =>
 				assertPluginProviderRegistrationSnapshot(
@@ -699,6 +747,8 @@ export const createSessionHost = async ({
 			getCacheWarmingStatus: () => cacheWarming?.getStatus() ?? "idle",
 			cancelCacheWarming: () => cacheWarming?.cancel(),
 			getSessionUsageEntries: () => usageLedger?.getEntries() ?? [],
+			isImportedSessionActivationPending: () => importActivationPending,
+			activateImportedSession,
 			onEvent: (listener) => {
 				eventListeners.add(listener);
 				return () => eventListeners.delete(listener);

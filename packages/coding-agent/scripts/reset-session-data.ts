@@ -1,3 +1,4 @@
+import { getInteractiveSessionHostManager } from "../modules/sessions/host/session-host-manager";
 import {
 	resolveLocalAttachmentRoot,
 	resolveLocalDatabasePath,
@@ -6,8 +7,10 @@ import {
 import { resetLocalSessionData } from "../modules/sessions/storage/reset-local-session-data";
 
 const databasePath = resolveLocalDatabasePath();
-await resetLocalSessionData({
-	attachmentRoot: resolveLocalAttachmentRoot(databasePath),
-	databasePath,
-	snapshotRoot: resolveLocalSnapshotRoot(databasePath),
-});
+await getInteractiveSessionHostManager().withIdleForSessionDataReset(() =>
+	resetLocalSessionData({
+		attachmentRoot: resolveLocalAttachmentRoot(databasePath),
+		databasePath,
+		snapshotRoot: resolveLocalSnapshotRoot(databasePath),
+	})
+);

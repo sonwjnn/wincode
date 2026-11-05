@@ -769,8 +769,14 @@ test("checkpoints completed Tool Calls with the effective Plugin Provider owner"
 				type: "agent-turn-started",
 			};
 			yield {
-				input: { command: "git status" },
 				sequence: 1,
+				stepId: toModelStepId("tool-step-1"),
+				turnId: currentTurn.id,
+				type: "model-step-started",
+			};
+			yield {
+				input: { command: "git status" },
+				sequence: 2,
 				toolCallId: toolCallId("call-1"),
 				toolName: "shell",
 				turnId: currentTurn.id,
@@ -778,7 +784,7 @@ test("checkpoints completed Tool Calls with the effective Plugin Provider owner"
 			};
 			yield {
 				outcome: { output: { exitCode: 0 }, type: "success" },
-				sequence: 2,
+				sequence: 3,
 				toolCallId: toolCallId("call-1"),
 				toolName: "shell",
 				turnId: currentTurn.id,
@@ -786,13 +792,13 @@ test("checkpoints completed Tool Calls with the effective Plugin Provider owner"
 			};
 			yield {
 				delta: "Done",
-				sequence: 3,
+				sequence: 4,
 				turnId: currentTurn.id,
 				type: "text-delta",
 			};
 			yield {
 				finishedAt: 200,
-				sequence: 4,
+				sequence: 5,
 				turnId: currentTurn.id,
 				type: "agent-turn-completed",
 			};
@@ -824,7 +830,11 @@ test("checkpoints completed Tool Calls with the effective Plugin Provider owner"
 		{
 			input: { command: "git status" },
 			outcome: { kind: "success", output: { exitCode: 0 } },
-			sequence: 2,
+			sequence: 3,
+			toolBatch: {
+				id: toModelStepId("tool-step-1"),
+				toolCallIds: [toolCallId("call-1")],
+			},
 			toolCallId: toolCallId("call-1"),
 			toolName: "shell",
 			type: "tool-call",
@@ -835,7 +845,7 @@ test("checkpoints completed Tool Calls with the effective Plugin Provider owner"
 	]);
 });
 
-test("does not synthesize an assistant record for a tool-only turn", async () => {
+test("tool-only checkpoints retain complete parallel batch membership without synthesizing an assistant record", async () => {
 	const turn = createTurn();
 	const checkpoints: SessionRecord[] = [];
 	const runtime: AgentRuntime = {
@@ -848,24 +858,46 @@ test("does not synthesize an assistant record for a tool-only turn", async () =>
 				type: "agent-turn-started",
 			};
 			yield {
-				input: { command: "git status" },
 				sequence: 1,
-				toolCallId: toolCallId("call-tool-only"),
-				toolName: "shell",
+				stepId: toModelStepId("tool-only-step"),
+				turnId: currentTurn.id,
+				type: "model-step-started",
+			};
+			yield {
+				input: { path: "README.md" },
+				sequence: 2,
+				toolCallId: toolCallId("call-tool-only-first"),
+				toolName: "read",
 				turnId: currentTurn.id,
 				type: "tool-call-started",
 			};
 			yield {
-				outcome: { output: { exitCode: 0 }, type: "success" },
-				sequence: 2,
-				toolCallId: toolCallId("call-tool-only"),
-				toolName: "shell",
+				input: { path: "package.json" },
+				sequence: 3,
+				toolCallId: toolCallId("call-tool-only-second"),
+				toolName: "read",
+				turnId: currentTurn.id,
+				type: "tool-call-started",
+			};
+			yield {
+				outcome: { output: { path: "README.md" }, type: "success" },
+				sequence: 4,
+				toolCallId: toolCallId("call-tool-only-first"),
+				toolName: "read",
+				turnId: currentTurn.id,
+				type: "tool-call-finished",
+			};
+			yield {
+				outcome: { output: { path: "package.json" }, type: "success" },
+				sequence: 5,
+				toolCallId: toolCallId("call-tool-only-second"),
+				toolName: "read",
 				turnId: currentTurn.id,
 				type: "tool-call-finished",
 			};
 			yield {
 				finishedAt: 200,
-				sequence: 3,
+				sequence: 6,
 				turnId: currentTurn.id,
 				type: "agent-turn-completed",
 			};
@@ -884,7 +916,31 @@ test("does not synthesize an assistant record for a tool-only turn", async () =>
 			turn,
 		})
 	).toBe("");
-	expect(checkpoints.map(({ outcome }) => outcome.kind)).toEqual(["tool"]);
+	expect(checkpoints.map(({ outcome }) => outcome.kind)).toEqual([
+		"tool",
+		"tool",
+	]);
+	const toolParts = checkpoints.flatMap((record) =>
+		record.messages.flatMap((message) =>
+			message.parts.filter((part) => part.type === "tool-call")
+		)
+	);
+	expect(toolParts.map(({ toolBatch }) => toolBatch)).toEqual([
+		{
+			id: toModelStepId("tool-only-step"),
+			toolCallIds: [
+				toolCallId("call-tool-only-first"),
+				toolCallId("call-tool-only-second"),
+			],
+		},
+		{
+			id: toModelStepId("tool-only-step"),
+			toolCallIds: [
+				toolCallId("call-tool-only-first"),
+				toolCallId("call-tool-only-second"),
+			],
+		},
+	]);
 });
 
 test("persists an empty assistant outcome when no Tool Call ran", async () => {

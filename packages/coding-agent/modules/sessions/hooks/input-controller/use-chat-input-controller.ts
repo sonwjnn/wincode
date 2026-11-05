@@ -181,23 +181,27 @@ export function useChatInputController({
 				try {
 					const store = promptHistoryStore ?? getSessionStore();
 					const { commandSelections = [], ...storedEntry } = entry;
-					const [externalized] = await store.externalizeAttachments([
+					const externalization = await store.externalizeAttachments([
 						{
 							id: "prompt-history",
 							parts: entry.files,
 							role: "user",
 						} as unknown as SessionMessage,
 					]);
-					const files = (externalized?.parts ?? []).filter(
-						(part): part is PromptHistoryEntry["files"][number] =>
-							part.type === "file"
-					);
-					const durableEntry = { ...storedEntry, files };
-					await store.recordPrompt(durableEntry);
-					historyRef.current = prependPrompt(historyRef.current, {
-						...durableEntry,
-						commandSelections,
-					});
+					try {
+						const files = (externalization.messages[0]?.parts ?? []).filter(
+							(part): part is PromptHistoryEntry["files"][number] =>
+								part.type === "file"
+						);
+						const durableEntry = { ...storedEntry, files };
+						await store.recordPrompt(durableEntry);
+						historyRef.current = prependPrompt(historyRef.current, {
+							...durableEntry,
+							commandSelections,
+						});
+					} finally {
+						await externalization.release();
+					}
 				} catch {
 					// A prompt-history write must not retain an inline payload after failure.
 				}

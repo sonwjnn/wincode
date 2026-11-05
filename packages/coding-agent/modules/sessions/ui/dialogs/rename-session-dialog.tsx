@@ -14,6 +14,10 @@ import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
 import { getSessionStore } from "../../storage/get-session-store";
+import {
+	projectSessionStorageError,
+	requireSessionWriteReady,
+} from "../../storage/session-jsonl-store";
 
 type RenameSessionDialogProps = {
 	session: { id: SessionId; title: string };
@@ -46,12 +50,22 @@ export function RenameSessionDialog({
 		}
 
 		try {
-			await getSessionStore().updateSession(session.id, {
-				title: trimmed,
-			});
+			requireSessionWriteReady(
+				await getSessionStore().updateSession(session.id, {
+					title: trimmed,
+				})
+			);
 			onSuccess(trimmed);
 			close();
 		} catch (error) {
+			const writeOutcome =
+				error instanceof Error
+					? projectSessionStorageError(error)?.writeOutcome
+					: undefined;
+			if (writeOutcome?.kind === "committed") {
+				onSuccess(trimmed);
+				close();
+			}
 			show({
 				variant: "error",
 				message: getErrorMessage(error, "Failed to rename session"),

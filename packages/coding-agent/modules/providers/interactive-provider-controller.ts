@@ -36,6 +36,7 @@ import {
 	STALE_PROVIDER_MODEL_SELECTION_MESSAGE,
 	UNVERIFIED_PLUGIN_PROVIDER_REGISTRATIONS_MESSAGE,
 } from "@/modules/providers/provider-model-selection";
+import { getAbortError, isAborted, throwIfAborted } from "@/shared/utils/abort";
 
 const API_KEY_PROVIDER_OPTIONS = BUILT_IN_API_KEY_PROVIDER_OPTIONS;
 const API_KEY_PROVIDER_IDS = new Set<string>(
@@ -333,20 +334,6 @@ export type InteractiveProviderController = Readonly<{
 	subscribeAvailability?: (listener: () => void) => () => void;
 }>;
 
-const isAborted = (signal: AbortSignal | undefined): boolean =>
-	signal?.aborted === true;
-
-const abortReason = (signal: AbortSignal): Error =>
-	signal.reason instanceof Error
-		? signal.reason
-		: new DOMException("Aborted", "AbortError");
-
-const throwIfAborted = (signal: AbortSignal | undefined): void => {
-	if (signal?.aborted === true) {
-		throw abortReason(signal);
-	}
-};
-
 const refreshModelsForProvider = async (
 	collection: ProviderCollection,
 	providerId: string,
@@ -356,7 +343,7 @@ const refreshModelsForProvider = async (
 		...refreshOptions,
 		providerIds: [providerId],
 	});
-	throwIfAborted(refreshOptions?.signal);
+	throwIfAborted(refreshOptions?.signal, "Aborted", getAbortError);
 	const error = result.errors.get(providerId);
 	if (error !== undefined) {
 		throw error;
@@ -371,7 +358,7 @@ const throwIfRefreshFailed = (
 	result: RefreshModelsResult,
 	signal?: AbortSignal
 ): void => {
-	throwIfAborted(signal);
+	throwIfAborted(signal, "Aborted", getAbortError);
 	const successfulRefreshes = providerIds.filter(
 		(providerId) => !result.errors.has(providerId)
 	).length;
@@ -623,13 +610,13 @@ export const createInteractiveProviderController = (
 	}> = {}): Promise<
 		Readonly<{ providerIds: readonly string[]; result: RefreshModelsResult }>
 	> => {
-		throwIfAborted(refreshOptions?.signal);
+		throwIfAborted(refreshOptions?.signal, "Aborted", getAbortError);
 		let providerIds = getDiscoverableProviderIds();
 		if (configuredOnly) {
 			const configuredProviderIds = new Set(
 				await providers.getConfiguredProviderIds()
 			);
-			throwIfAborted(refreshOptions?.signal);
+			throwIfAborted(refreshOptions?.signal, "Aborted", getAbortError);
 			providerIds = providerIds.filter((providerId) =>
 				configuredProviderIds.has(providerId)
 			);
@@ -638,7 +625,7 @@ export const createInteractiveProviderController = (
 			...refreshOptions,
 			providerIds,
 		});
-		throwIfAborted(refreshOptions?.signal);
+		throwIfAborted(refreshOptions?.signal, "Aborted", getAbortError);
 		return { providerIds, result };
 	};
 	const refreshProviderModels = (
@@ -753,15 +740,15 @@ export const createInteractiveProviderController = (
 			if (login === undefined) {
 				throw new Error("OpenAI browser sign-in is unavailable.");
 			}
-			throwIfAborted(loginOptions.signal);
+			throwIfAborted(loginOptions.signal, "Aborted", getAbortError);
 			await restoreModels();
 			try {
 				const models = await login(loginOptions);
-				throwIfAborted(loginOptions.signal);
+				throwIfAborted(loginOptions.signal, "Aborted", getAbortError);
 				return models;
 			} catch {
 				if (loginOptions.signal?.aborted) {
-					throw abortReason(loginOptions.signal);
+					throw getAbortError(loginOptions.signal);
 				}
 				throw new Error("OpenAI browser sign-in failed.");
 			} finally {
@@ -778,7 +765,7 @@ export const createInteractiveProviderController = (
 				throw new Error("OpenRouter API key must not be empty.");
 			}
 			if (refreshOptions?.signal?.aborted === true) {
-				throw abortReason(refreshOptions.signal);
+				throw getAbortError(refreshOptions.signal);
 			}
 			await restoreModels();
 			await providers.setCredential(OPENROUTER_PROVIDER_ID, {
@@ -814,9 +801,9 @@ export const createInteractiveProviderController = (
 			if (trimmedApiKey.length === 0) {
 				throw new Error("Provider SDK API key must not be empty.");
 			}
-			throwIfAborted(signal);
+			throwIfAborted(signal, "Aborted", getAbortError);
 			await restoreModels();
-			throwIfAborted(signal);
+			throwIfAborted(signal, "Aborted", getAbortError);
 			try {
 				await providers.setCredential(providerId, {
 					apiKey: trimmedApiKey,

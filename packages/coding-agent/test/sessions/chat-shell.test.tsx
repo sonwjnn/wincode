@@ -19,7 +19,7 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { SessionMessageId } from "@wincode/agent-core";
+import type { SessionMessageId, SessionRecordId } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
 import type { ProviderModel, ThinkingLevel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
@@ -38,7 +38,9 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import { ChatMessage } from "@/modules/sessions/ui/components/chat-message";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SettingsRegistryProvider } from "@/modules/settings";
@@ -63,6 +65,7 @@ import {
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
+	sessionRecordId,
 	sessionUsageEntryId,
 } from "../support/identifiers";
 import {
@@ -761,6 +764,61 @@ describe("ChatShell composer focus", () => {
 			expect(retries).toEqual(["user-1"]);
 		} finally {
 			setup.renderer.destroy();
+		}
+	});
+	test("rewind control acts on a valid user checkpoint and warns that files stay unchanged", async () => {
+		const rewindUser = userMessage("rewind-user");
+		const checkpointRecordId = sessionRecordId("rewind-user-record");
+		const checkpoint: SessionForkCheckpointAssessment = {
+			kind: "user",
+			messageId: rewindUser.id,
+			recordId: checkpointRecordId,
+			status: "valid",
+		};
+		const checkpoints = new Map([[rewindUser.id, checkpoint]]);
+		const rewoundCheckpoints: SessionRecordId[] = [];
+		const messages = [
+			rewindUser,
+			assistantMessage([{ text: "completed turn", type: "text" }]),
+		];
+		const setup = await testRenderWithClipboard(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ChatMessage
+					forkCheckpoints={checkpoints}
+					messages={messages}
+					onRewindCheckpoint={(recordId) => {
+						rewoundCheckpoints.push(recordId);
+					}}
+				/>
+			</ThemeProvider>,
+			{ height: 30, width: 100 }
+		);
+
+		try {
+			await act(async () => {
+				await flushUi(setup);
+			});
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("Rewind to this checkpoint");
+			expect(frame).toContain("Workspace files will not be rolled back.");
+			const rewindControl = setup.renderer.root.findDescendantById(
+				`rewind-${checkpointRecordId}`
+			);
+			expect(rewindControl?.focusable).toBe(true);
+			if (!rewindControl) {
+				throw new Error("The valid checkpoint rewind action was not rendered.");
+			}
+			await act(async () => {
+				rewindControl.focus();
+				setup.mockInput.pressEnter();
+				await flushUi(setup);
+			});
+
+			expect(rewoundCheckpoints).toEqual([checkpointRecordId]);
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
 		}
 	});
 	test("keeps a focusable retry control active after a mouse click", async () => {
@@ -1491,6 +1549,8 @@ describe("ChatShell activity footer", () => {
 		};
 		const sessionUsageEntries: SessionUsageEntry[] = [
 			{
+				compactionId: compaction.id,
+				costUsd: 2,
 				createdAt: new Date("2026-09-06T09:06:25.000Z"),
 				id: sessionUsageEntryId("summary-usage"),
 				kind: "compaction-summary",

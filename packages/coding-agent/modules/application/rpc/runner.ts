@@ -2,6 +2,7 @@ import { logger } from "@wincode/utils";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { resolveSubmissionPrompt } from "@/modules/commands/submission-resolution";
 import { expandPastedText } from "@/modules/sessions/pasted-text";
+import { projectSessionStorageError } from "@/modules/sessions/storage/session-jsonl-store";
 import { discoverSkills } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
 import { errorLogFields } from "@/shared/utils/error-log-fields";
@@ -371,6 +372,7 @@ export async function runRpc({
 		}
 		const projected: Record<string, unknown> = {
 			activeCompaction: snapshot.isCompacting ? { active: true } : null,
+			storageError: projectSessionStorageError(snapshot.error),
 			activeExecution: primary
 				? (executions.find(
 						(execution) => execution.turnId === primary.turnId

@@ -191,24 +191,25 @@ const collectSessionUsage = (
 	}
 	for (const entry of usageEntries) {
 		addUsageTokens(totals, entry.usage);
-		const pricing = resolveProviderModelPricing(entry.model, providerModels);
-		if (addUsageCost(totals, pricing, entry.usage)) {
+		if (entry.costUsd !== null) {
+			totals.cost += entry.costUsd;
 			totals.costedUsageEntries += 1;
 		}
 	}
+	const linkedCompactionIds = new Set(
+		usageEntries.flatMap((entry) =>
+			entry.kind === "compaction-summary" && entry.compactionId !== undefined
+				? [entry.compactionId]
+				: []
+		)
+	);
 	for (const compaction of compactions) {
 		const usage = compaction.summarizationUsage;
-		if (!usage) {
+		if (!usage || linkedCompactionIds.has(compaction.id)) {
 			continue;
 		}
+		// Unlinked historical compaction usage has no durable price snapshot.
 		addUsageTokens(totals, usage);
-		const pricing = resolveProviderModelPricing(
-			compaction.summarizationModel,
-			providerModels
-		);
-		if (addUsageCost(totals, pricing, usage)) {
-			totals.costedCompactions += 1;
-		}
 	}
 	const costedUsageCount =
 		totals.costedTurns + totals.costedUsageEntries + totals.costedCompactions;

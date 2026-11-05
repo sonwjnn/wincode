@@ -2,6 +2,7 @@ import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isObjectLike, readUtf8File } from "@wincode/utils";
+import { throwIfAborted } from "@/shared/utils/abort";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -20,12 +21,6 @@ const assertSecureMode = (
 ): void => {
 	if (mode % 0o100 !== 0) {
 		throw new Error(`Refusing insecure ${label} permissions: ${filePath}`);
-	}
-};
-
-const throwIfAborted = (signal: AbortSignal | undefined): void => {
-	if (signal?.aborted) {
-		throw signal.reason ?? new DOMException("Aborted", "AbortError");
 	}
 };
 

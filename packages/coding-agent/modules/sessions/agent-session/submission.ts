@@ -46,6 +46,11 @@ import {
 	getSessionAttemptMessages,
 	hasCompletedToolArtifact,
 } from "../session-retry";
+import type { AttachmentExternalizationLease } from "../storage/attachment-store";
+import {
+	isCommittedProjectionBlocked,
+	isSessionWriteIndeterminate,
+} from "../storage/session-jsonl-store";
 import { buildUserSessionRecord } from "../storage/session-record";
 import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
 import {
@@ -162,6 +167,7 @@ type SubmitCompactionResult =
 type PreparedModelMessages =
 	| { readonly kind: "cancelled" }
 	| {
+			readonly externalization?: AttachmentExternalizationLease;
 			readonly kind: "ready";
 			readonly messages: SessionMessage[];
 			readonly newMessage?: SessionMessage;
@@ -191,6 +197,7 @@ type SessionPreparationResult =
 	| {
 			readonly attachmentBudget: SessionAttachmentBudget;
 			readonly context: Extract<SubmitContextResult, { kind: "ready" }>;
+			readonly externalization?: AttachmentExternalizationLease;
 			readonly kind: "ready";
 			readonly messages: SessionMessage[];
 			readonly newMessage?: SessionMessage;
@@ -404,7 +411,11 @@ const prepareNewSessionMessage = async ({
 	resolveFileMentions: AgentSessionPorts["resolveFileMentions"];
 	signal: AbortSignal;
 }): Promise<
-	| { readonly kind: "ready"; readonly message: SessionMessage }
+	| {
+			readonly externalization: AttachmentExternalizationLease;
+			readonly kind: "ready";
+			readonly message: SessionMessage;
+	  }
 	| { readonly kind: "cancelled" }
 	| { readonly kind: "rejected"; readonly reason: string }
 > => {
@@ -421,8 +432,12 @@ const prepareNewSessionMessage = async ({
 		input.reservedMessageId ?? input.messageId
 	);
 	try {
-		const [externalized] = await externalize([optimistic], signal);
-		return { kind: "ready", message: externalized ?? optimistic };
+		const externalization = await externalize([optimistic], signal);
+		return {
+			externalization,
+			kind: "ready",
+			message: externalization.messages[0] ?? optimistic,
+		};
 	} catch {
 		if (signal.aborted) {
 			return { kind: "cancelled" };
@@ -506,6 +521,7 @@ const prepareModelMessages = async ({
 		return preparedMessage;
 	}
 	return {
+		externalization: preparedMessage.externalization,
 		kind: "ready",
 		messages: [
 			...sanitizeSessionSkillToolParts(activeMessages),
@@ -603,7 +619,10 @@ const prepareSessionSubmission = async ({
 			context,
 			kind: "ready",
 			messages: prepared.messages,
-			...omitUndefined({ newMessage: prepared.newMessage }),
+			...omitUndefined({
+				externalization: prepared.externalization,
+				newMessage: prepared.newMessage,
+			}),
 		};
 	} catch (error) {
 		if (signal.aborted) {
@@ -702,10 +721,12 @@ const commitPromptRecord = async ({
 	thinkingLevel,
 	commitRecord,
 	diagnosticTurnId,
+	externalizationLease,
 }: {
 	agent: SessionSendInput["agent"];
 	commitRecord: AgentSessionPorts["commitRecord"];
 	diagnosticTurnId?: AgentTurnId;
+	externalizationLease?: AttachmentExternalizationLease;
 	message: SessionMessage;
 	model: SessionSendInput["model"];
 	sessionId: SessionId;
@@ -725,7 +746,7 @@ const commitPromptRecord = async ({
 			}),
 			sessionId,
 			sessionModel,
-			...omitUndefined({ sessionThinkingLevel }),
+			...omitUndefined({ externalizationLease, sessionThinkingLevel }),
 		});
 		return null;
 	} catch (error) {
@@ -741,11 +762,13 @@ const commitPreparedPrompt = async ({
 	deps,
 	input,
 	message,
+	externalizationLease,
 	signal,
 }: {
 	deps: SubmissionDeps;
 	input: SessionSendInput;
 	message: SessionMessage;
+	externalizationLease?: AttachmentExternalizationLease;
 	signal: AbortSignal;
 }): Promise<Error | null> => {
 	assertSendNotCancelled(signal);
@@ -754,6 +777,7 @@ const commitPreparedPrompt = async ({
 		agent: input.agent,
 		commitRecord: deps.ports.commitRecord,
 		message,
+		externalizationLease,
 		model: input.model,
 		sessionId: deps.sessionId,
 		sessionModel: input.sessionModel,
@@ -762,7 +786,6 @@ const commitPreparedPrompt = async ({
 			thinkingLevel: input.thinkingLevel,
 		}),
 	});
-	assertSessionOpen(deps);
 	return promptError;
 };
 
@@ -1620,6 +1643,9 @@ const runTurn = async ({
 			}
 			return { rejected: false };
 		}
+		if (isCommittedProjectionBlocked(outcome.error)) {
+			return { rejected: false };
+		}
 		onTurnFailure();
 		if (
 			!(terminalObserved || (executionStarted && isUndefined(outcome.turn)))
@@ -1723,6 +1749,8 @@ export const createSubmissionPipeline = (
 		}
 		deps.setCompactionError(null);
 		let failedTurnId: AgentTurnId | undefined;
+		let externalization: AttachmentExternalizationLease | undefined;
+		let keepExternalizationForReconciliation = false;
 		deps.setRunPhase("preparing");
 		try {
 			const startedAt = Date.now();
@@ -1736,6 +1764,9 @@ export const createSubmissionPipeline = (
 				resolveSkill: deps.ports.skills.resolveSkill,
 				signal,
 			});
+			if (prepared.kind === "ready") {
+				externalization = prepared.externalization;
+			}
 			assertSendNotCancelled(signal);
 			assertSessionOpen(deps);
 			if (prepared.kind !== "ready") {
@@ -1751,13 +1782,20 @@ export const createSubmissionPipeline = (
 					deps,
 					input: resolvedInput,
 					message: prepared.newMessage,
+					externalizationLease: prepared.externalization,
 					signal,
 				});
+				keepExternalizationForReconciliation =
+					isSessionWriteIndeterminate(promptError);
 				if (!isNull(promptError)) {
 					deps.setError(promptError);
+					if (isCommittedProjectionBlocked(promptError)) {
+						return { rejected: false };
+					}
 					return { rejected: true, reason: "Could not save the prompt." };
 				}
 			}
+			assertSessionOpen(deps);
 			applyPreparedMessages(deps, signal, modelMessages, hasCommittedPrompt);
 			if (signal.aborted) {
 				return sessionSendCancelled(signal);
@@ -1794,6 +1832,9 @@ export const createSubmissionPipeline = (
 			}
 			throw error;
 		} finally {
+			if (!keepExternalizationForReconciliation) {
+				await externalization?.release();
+			}
 			if (failedTurnId !== undefined) {
 				deps.recallFailedTurnMessages(failedTurnId);
 			}

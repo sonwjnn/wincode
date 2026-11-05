@@ -9,6 +9,7 @@ import type {
 } from "./modes/types";
 import { InvocationError } from "./modes/types";
 import type { OutputWriter as RpcOutputWriter } from "./rpc/types";
+import { runSessionsCli, type SessionsCliDependencies } from "./sessions-cli";
 import { formatStartupDiagnostics } from "./startup-diagnostics";
 
 export type DispatchInput = Readonly<{
@@ -52,6 +53,8 @@ export type DispatchProcessLauncher = (
 export type DispatchDependencies = Readonly<{
 	launchModeProcess?: DispatchProcessLauncher;
 	mcpCliOptions?: McpCliOptions;
+	sessionsCliDependencies?: SessionsCliDependencies;
+	sessionsCliLogRoot?: string;
 	initializeRuntime?: (input: {
 		cwd: string;
 		disabledPluginIds: readonly string[];
@@ -87,6 +90,10 @@ const HELP_TEXT = [
 	"      --no-plugin <id> Disable a distributed Plugin by Identifier",
 	"  -h, --help           Show this help",
 	"  -v, --version        Show the version",
+	"",
+	"Commands:",
+	"  sessions verify <id> [--json]  Validate an authoritative Session log",
+	"  sessions rebuild <id|--all>    Rebuild projection from authoritative logs",
 ].join("\n");
 
 const writeLine = (writer: TextWriter, text: string): void => {
@@ -342,8 +349,6 @@ const isJsonModeRequested = (args: readonly string[]): boolean => {
 	return mode === "json";
 };
 
-export const getCliHelpText = (): string => HELP_TEXT;
-
 const writeEarlyResponse = async (
 	parsed: ParsedInvocation,
 	input: DispatchInput
@@ -412,6 +417,14 @@ const dispatchParsedInvocation = async (
 				stdout: input.stdout,
 			},
 			dependencies.mcpCliOptions
+		);
+	}
+	if (input.args[0] === "sessions") {
+		return await runSessionsCli(
+			input.args.slice(1),
+			{ stderr: input.stderr, stdout: input.stdout },
+			dependencies.sessionsCliLogRoot,
+			dependencies.sessionsCliDependencies
 		);
 	}
 	const parsed = parseInvocation(input.args);

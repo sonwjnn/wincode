@@ -1,9 +1,11 @@
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ModelUsage, ThinkingLevel } from "@wincode/ai";
+import { asc, desc } from "drizzle-orm";
 import {
 	index,
 	integer,
 	primaryKey,
+	real,
 	sqliteTable,
 	text,
 	unique,
@@ -12,12 +14,49 @@ import type { Jsonify } from "type-fest";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { EditMode, FileVersion } from "@/modules/tools";
 import type { SessionCompaction } from "../compaction/types";
+import type { SessionForkedPayload } from "./session-jsonl-codec";
 import type {
 	PromptHistoryEntry,
 	SessionRecordStorageOutcome,
 	SessionUsageEntry,
 } from "./session-store";
 export type SerializedJson<T> = Jsonify<T>;
+
+export const sessionProjectionState = sqliteTable("session_projection_state", {
+	id: integer("id").primaryKey(),
+	projectionId: text("projection_id").notNull().default("legacy"),
+	generation: integer("generation").notNull().default(0),
+	catalogRevision: integer("catalog_revision").notNull().default(0),
+	latestDeletionRevision: integer("latest_deletion_revision")
+		.notNull()
+		.default(0),
+	paginationVersion: integer("pagination_version").notNull().default(2),
+	statisticsVersion: integer("statistics_version").notNull().default(0),
+	status: text("status")
+		.$type<"ready" | "rebuilding">()
+		.notNull()
+		.default("ready"),
+});
+
+export const sessionCatalogDeletionState = sqliteTable(
+	"session_catalog_deletion_state",
+	{
+		workspaceId: text("workspace_id").primaryKey(),
+		latestDeletionRevision: integer("latest_deletion_revision").notNull(),
+	}
+);
+
+export const sessionProjectionCursor = sqliteTable(
+	"session_projection_cursor",
+	{
+		sessionId: text("session_id").primaryKey(),
+		logId: text("log_id").notNull(),
+		nextByteOffset: integer("next_byte_offset").notNull(),
+		nextSequence: integer("next_sequence").notNull(),
+		lastHash: text("last_hash").notNull(),
+		generation: integer("generation").notNull().default(0),
+	}
+);
 
 export const sessionWorkspace = sqliteTable("session_workspace", {
 	id: text("id").primaryKey(),
@@ -39,10 +78,6 @@ export const session = sqliteTable(
 	"session",
 	{
 		id: text("id").primaryKey(),
-		workspaceId: text("workspace_id").references(() => sessionWorkspace.id, {
-			onDelete: "set null",
-			onUpdate: "cascade",
-		}),
 		title: text("title"),
 		pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
@@ -62,6 +97,90 @@ export const session = sqliteTable(
 		index("idx_session_updated").on(table.updatedAt),
 	]
 );
+
+export const sessionCatalogVersion = sqliteTable(
+	"session_catalog_version",
+	{
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		workspaceId: text("workspace_id").notNull(),
+		generation: integer("generation").notNull(),
+		validFromRevision: integer("valid_from_revision").notNull(),
+		validToRevision: integer("valid_to_revision"),
+		title: text("title").notNull(),
+		pinned: integer("pinned", { mode: "boolean" }).notNull(),
+		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+		updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+		lastMessageAt: integer("last_message_at", { mode: "timestamp_ms" }),
+		modelJson: text("model_json", {
+			mode: "json",
+		}).$type<SerializedJson<ProviderModelSelection> | null>(),
+		thinkingLevel: text("thinking_level").$type<ThinkingLevel>(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.sessionId, table.validFromRevision] }),
+		index("idx_session_catalog_version_order").on(
+			table.workspaceId,
+			desc(table.pinned),
+			desc(table.lastMessageAt),
+			desc(table.createdAt),
+			asc(table.sessionId),
+			table.validFromRevision,
+			table.validToRevision
+		),
+	]
+);
+
+/** Local operational identity; deliberately independent of Session history rows. */
+export const sessionOperationLookup = sqliteTable(
+	"session_operation_lookup",
+	{
+		entryHash: text("entry_hash").notNull(),
+		operationDigest: text("operation_digest").notNull(),
+		operationId: text("operation_id").notNull(),
+		sequence: integer("sequence").notNull(),
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		type: text("type").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.sessionId, table.operationId] }),
+		unique("uq_session_operation_lookup_sequence").on(
+			table.sessionId,
+			table.sequence
+		),
+		index("idx_session_operation_lookup_sequence").on(
+			table.sessionId,
+			table.sequence
+		),
+		index("idx_session_operation_lookup_type").on(table.sessionId, table.type),
+	]
+);
+
+export const localSessionBinding = sqliteTable(
+	"local_session_binding",
+	{
+		sessionId: text("session_id").primaryKey(),
+		workspaceId: text("workspace_id")
+			.notNull()
+			.references(() => sessionWorkspace.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+	},
+	(table) => [
+		index("idx_local_session_binding_workspace").on(table.workspaceId),
+	]
+);
+
 export const fileSnapshot = sqliteTable(
 	"file_snapshot",
 	{
@@ -84,7 +203,7 @@ export const fileObservation = sqliteTable(
 		id: text("id").primaryKey(),
 		sessionId: text("session_id")
 			.notNull()
-			.references(() => session.id, {
+			.references(() => localSessionBinding.sessionId, {
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
@@ -116,7 +235,7 @@ export const fullDiffArtifact = sqliteTable(
 		id: text("id").primaryKey(),
 		sessionId: text("session_id")
 			.notNull()
-			.references(() => session.id, {
+			.references(() => localSessionBinding.sessionId, {
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
@@ -152,10 +271,10 @@ export const fileTransaction = sqliteTable(
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
-		originSessionId: text("origin_session_id").references(() => session.id, {
-			onDelete: "set null",
-			onUpdate: "cascade",
-		}),
+		originSessionId: text("origin_session_id").references(
+			() => localSessionBinding.sessionId,
+			{ onDelete: "set null", onUpdate: "cascade" }
+		),
 		status: text("status").notNull(),
 		reason: text("reason"),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
@@ -209,10 +328,10 @@ export const recoveryArtifact = sqliteTable(
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
-		originSessionId: text("origin_session_id").references(() => session.id, {
-			onDelete: "set null",
-			onUpdate: "cascade",
-		}),
+		originSessionId: text("origin_session_id").references(
+			() => localSessionBinding.sessionId,
+			{ onDelete: "set null", onUpdate: "cascade" }
+		),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		pinned: integer("pinned", { mode: "boolean" }).notNull().default(true),
 	},
@@ -272,16 +391,16 @@ export const unresolvedRecovery = sqliteTable(
 				onDelete: "cascade",
 				onUpdate: "cascade",
 			}),
-		originSessionId: text("origin_session_id").references(() => session.id, {
-			onDelete: "set null",
-			onUpdate: "cascade",
-		}),
+		originSessionId: text("origin_session_id").references(
+			() => localSessionBinding.sessionId,
+			{ onDelete: "set null", onUpdate: "cascade" }
+		),
 		status: text("status").notNull(),
 		reason: text("reason").notNull(),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 		resolvedAt: integer("resolved_at", { mode: "timestamp_ms" }),
 		reconciledBySessionId: text("reconciled_by_session_id").references(
-			() => session.id,
+			() => localSessionBinding.sessionId,
 			{ onDelete: "set null", onUpdate: "cascade" }
 		),
 	},
@@ -312,6 +431,7 @@ export const sessionCompaction = sqliteTable(
 		firstKeptUiMessageId: text("first_kept_ui_message_id").notNull(),
 		firstKeptAssistantPartIndex: integer("first_kept_assistant_part_index"),
 		throughMessageUiId: text("through_message_ui_id").notNull(),
+		sourceSequence: integer("source_sequence").notNull().default(0),
 		tokensBefore: integer("tokens_before").notNull(),
 		estimatedTokensAfter: integer("estimated_tokens_after").notNull(),
 		trigger: text("trigger").$type<SessionCompaction["trigger"]>().notNull(),
@@ -337,8 +457,55 @@ export const sessionCompaction = sqliteTable(
 			table.sessionId,
 			table.sequence
 		),
+		index("idx_session_compaction_session_through_source").on(
+			table.sessionId,
+			table.throughMessageUiId,
+			table.sourceSequence
+		),
 	]
 );
+
+export const sessionRecordToolCall = sqliteTable(
+	"session_record_tool_call",
+	{
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		turnId: text("turn_id").notNull(),
+		toolCallId: text("tool_call_id").notNull(),
+		sourceSequence: integer("source_sequence").notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.sessionId, table.turnId, table.toolCallId],
+		}),
+		index("idx_session_record_tool_call_sequence").on(
+			table.sessionId,
+			table.sourceSequence
+		),
+		index("idx_session_record_tool_call_turn_sequence").on(
+			table.sessionId,
+			table.turnId,
+			table.sourceSequence
+		),
+	]
+);
+
+export const sessionForkProvenance = sqliteTable("session_fork_provenance", {
+	sessionId: text("session_id")
+		.primaryKey()
+		.references(() => session.id, {
+			onDelete: "cascade",
+			onUpdate: "cascade",
+		}),
+	sourceSequence: integer("source_sequence").notNull(),
+	provenanceJson: text("provenance_json", { mode: "json" })
+		.$type<SerializedJson<SessionForkedPayload>>()
+		.notNull(),
+});
 
 export const sessionUsageEntry = sqliteTable(
 	"session_usage_entry",
@@ -351,6 +518,9 @@ export const sessionUsageEntry = sqliteTable(
 				onUpdate: "cascade",
 			}),
 		kind: text("kind").$type<SessionUsageEntry["kind"]>().notNull(),
+		compactionId: text("compaction_id"),
+		costUsd: real("cost_usd"),
+		sourceSequence: integer("source_sequence").notNull().default(0),
 		modelJson: text("model_json", { mode: "json" })
 			.$type<SerializedJson<SessionUsageEntry["model"]>>()
 			.notNull(),
@@ -363,6 +533,10 @@ export const sessionUsageEntry = sqliteTable(
 		index("idx_session_usage_entry_session_created").on(
 			table.sessionId,
 			table.createdAt
+		),
+		index("idx_session_usage_entry_session_sequence").on(
+			table.sessionId,
+			table.sourceSequence
 		),
 	]
 );
@@ -412,6 +586,7 @@ export const sessionRecord = sqliteTable(
 			.notNull(),
 		version: integer("version").notNull(),
 		position: integer("position").notNull(),
+		sourceSequence: integer("source_sequence").notNull().default(0),
 		createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 	},
 	(table) => [
@@ -424,6 +599,74 @@ export const sessionRecord = sqliteTable(
 			table.position
 		),
 		index("idx_session_record_session_turn").on(table.sessionId, table.turnId),
+		index("idx_session_record_session_sequence").on(
+			table.sessionId,
+			table.sourceSequence
+		),
+		index("idx_session_record_session_turn_sequence").on(
+			table.sessionId,
+			table.turnId,
+			table.sourceSequence
+		),
+	]
+);
+
+export const sessionRecordMessageIdentity = sqliteTable(
+	"session_record_message_identity",
+	{
+		sessionId: text("session_id").notNull(),
+		recordId: text("record_id")
+			.notNull()
+			.references(() => sessionRecord.recordId, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		messageId: text("message_id").notNull(),
+		role: text("role").$type<SessionMessageRecord["role"]>().notNull(),
+		submissionId: text("submission_id"),
+	},
+	(table) => [
+		primaryKey({ columns: [table.sessionId, table.messageId] }),
+		index("idx_session_record_message_record").on(
+			table.sessionId,
+			table.recordId
+		),
+	]
+);
+
+export const sessionRecordVersion = sqliteTable(
+	"session_record_version",
+	{
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		recordId: text("record_id")
+			.notNull()
+			.references(() => sessionRecord.recordId, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		position: integer("position").notNull(),
+		sourceSequence: integer("source_sequence").notNull(),
+		validFromSequence: integer("valid_from_sequence").notNull(),
+		validToSequence: integer("valid_to_sequence"),
+		messagesJson: text("messages_json", { mode: "json" })
+			.$type<SerializedJson<SessionRecord["messages"]>>()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.sessionId, table.recordId, table.validFromSequence],
+		}),
+		index("idx_session_record_version_page").on(
+			table.sessionId,
+			desc(table.sourceSequence),
+			desc(table.validFromSequence),
+			table.validToSequence
+		),
 	]
 );
 export const sessionSchema = {
@@ -436,8 +679,18 @@ export const sessionSchema = {
 	recoveryArtifact,
 	recoveryArtifactPath,
 	sessionAttachment,
+	localSessionBinding,
+	sessionCatalogVersion,
+	sessionCatalogDeletionState,
 	sessionCompaction,
+	sessionOperationLookup,
 	sessionRecord,
+	sessionRecordMessageIdentity,
+	sessionRecordVersion,
+	sessionRecordToolCall,
+	sessionForkProvenance,
+	sessionProjectionCursor,
+	sessionProjectionState,
 	sessionUsageEntry,
 	session,
 	sessionWorkspace,

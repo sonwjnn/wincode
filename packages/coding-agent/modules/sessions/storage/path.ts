@@ -1,6 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+	isValidSessionId,
+	type SessionId,
+	toSessionId,
+} from "@/shared/identifiers";
+import {
 	resolveOperatingSystemUserDataDir,
 	resolveUserDataDir,
 } from "@/shared/paths/user-data-dir";
@@ -10,6 +15,9 @@ import { SessionWriterLockFailureError } from "./session-writer-lock";
 const DATABASE_FILE_NAME = "sessions.db";
 const ATTACHMENT_DIRECTORY_NAME = "attachments";
 const SNAPSHOT_DIRECTORY_NAME = "file-snapshots";
+const SESSION_LOG_DIRECTORY_NAME = "sessions";
+const SESSION_LOG_FILE_EXTENSION = ".jsonl";
+const SESSION_PROJECTION_FILE_NAME = "session-projection.sqlite";
 const DATABASE_PATH_INDEX_DIRECTORY_NAME = "session-writer-locks";
 const DATABASE_PATH_INDEX_VERSION = 2;
 type DatabaseIdentity = Readonly<{
@@ -206,3 +214,40 @@ export const resolveLocalAttachmentRoot = (
 export const resolveLocalSnapshotRoot = (
 	databasePath: string = resolveLocalDatabasePath()
 ): string => path.join(path.dirname(databasePath), SNAPSHOT_DIRECTORY_NAME);
+export const resolveLocalSessionLogRoot = (
+	databasePath: string = resolveLocalDatabasePath()
+): string =>
+	path.join(
+		path.dirname(resolveSessionDatabasePath(databasePath)),
+		SESSION_LOG_DIRECTORY_NAME
+	);
+
+export const resolveSessionLogFilePath = (
+	logRoot: string,
+	sessionId: string
+): string => {
+	if (!isValidSessionId(sessionId)) {
+		throw new Error("Session ID is not safe for a Session log path.");
+	}
+	return path.join(logRoot, `${sessionId}${SESSION_LOG_FILE_EXTENSION}`);
+};
+
+export const parseSessionLogFileName = (
+	fileName: string
+): SessionId | undefined => {
+	if (
+		fileName.startsWith(".") ||
+		!fileName.endsWith(SESSION_LOG_FILE_EXTENSION)
+	) {
+		return;
+	}
+	const sessionId = fileName.slice(0, -SESSION_LOG_FILE_EXTENSION.length);
+	return isValidSessionId(sessionId) ? toSessionId(sessionId) : undefined;
+};
+export const resolveLocalSessionProjectionPath = (
+	databasePath: string = resolveLocalDatabasePath()
+): string =>
+	path.join(
+		path.dirname(resolveSessionDatabasePath(databasePath)),
+		SESSION_PROJECTION_FILE_NAME
+	);

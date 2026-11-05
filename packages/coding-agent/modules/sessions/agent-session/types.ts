@@ -42,6 +42,7 @@ import type {
 } from "../compaction/types";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import type { FileMentionPart, SessionMessage } from "../message";
+import type { AttachmentExternalizationLease } from "../storage/attachment-store";
 import type {
 	SessionSendInput,
 	SessionSendOutcome,
@@ -217,6 +218,8 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 	 * after failure. Unlike queued Submissions, these cannot be recalled.
 	 */
 	steeringMessages: SessionSteeringMessage[];
+	/** The live Host must be reopened after its committed projection is recovered. */
+	projectionBlocked: boolean;
 	/** Whether the session is running a submission, from its command to its settle. */
 	turnActive: boolean;
 	/** Session Transcript: the messages the session presents to the user. */
@@ -260,6 +263,7 @@ export type SessionCommitInput = {
 	sessionId: SessionId;
 	sessionModel?: ProviderModelSelection;
 	sessionThinkingLevel?: ThinkingLevel;
+	externalizationLease?: AttachmentExternalizationLease;
 };
 export type SessionSubmissionStatusUpdate = Readonly<{
 	failure?: string;
@@ -321,16 +325,16 @@ export type SessionAttachmentPort = Readonly<{
 	externalize: (
 		messages: readonly SessionMessage[],
 		signal: AbortSignal
-	) => Promise<SessionMessage[]>;
+	) => Promise<AttachmentExternalizationLease>;
 	/** Hydrates the attachment data of the messages one Agent Turn sends. */
 	hydrate: (request: SessionHydrationRequest) => Promise<SessionMessage[]>;
 	/**
 	 * Keeps attachment blobs alive past the records and prompt history that
 	 * name them, so a waiting composition's attachments cannot be reclaimed.
 	 */
-	retain: (attachmentIds: readonly string[]) => void;
+	retain: (attachmentIds: readonly string[]) => void | Promise<void>;
 	/** Releases blobs the composition that needed them no longer holds. */
-	release: (attachmentIds: readonly string[]) => void;
+	release: (attachmentIds: readonly string[]) => void | Promise<void>;
 }>;
 
 /**
@@ -434,6 +438,7 @@ export type AgentSessionPorts = Readonly<{
 }>;
 
 export type AgentSessionOptions = Readonly<{
+	forkContinuationMessageId?: SessionMessageId;
 	initialCompactions?: readonly SessionCompaction[];
 	initialAgent?: AgentId;
 	initialContext?: readonly SessionMessage[];
@@ -565,8 +570,8 @@ export type AgentSession = Readonly<{
 	prompt: (input: SessionSendInput) => Promise<SessionSubmissionAdmission>;
 	/** Durably accepts exactly the oldest Queued Submission for later delivery. */
 	steer: () => Promise<SessionSteeringAdmission>;
-	/** Resumes a valid idle context or starts the next waiting user input. */
-	continue: () => SessionContinuationOutcome;
+	/** Durably prepares and resumes the next waiting input in an idle context. */
+	continue: () => Promise<SessionContinuationOutcome>;
 	/** Cancels the Agent Turn the session is running. */
 	cancel: () => void;
 	/**

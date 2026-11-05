@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fromAny, fromPartial } from "@total-typescript/shoehorn";
+import { toSubmissionId } from "@wincode/agent-core";
 import {
 	createProviderCollection,
 	type Provider,
@@ -30,6 +31,7 @@ import {
 	createAgentSessionAdapters,
 } from "@/modules/sessions/host/agent-session-adapters";
 import {
+	filterSessionMessagesForActiveContext,
 	type SessionMessage,
 	sanitizeSessionSkillToolPart,
 } from "@/modules/sessions/message";
@@ -104,7 +106,16 @@ const makeStore = (initial: SessionCompaction | null = null) => {
 			sequence: (latest?.sequence ?? 0) + 1,
 		};
 		latest = entry;
-		return entry;
+		return {
+			compaction: entry,
+			writeOutcome: {
+				entryHash: "0".repeat(64),
+				kind: "committed" as const,
+				operationId: `compaction-${entry.id}`,
+				projection: "ready" as const,
+				sequence: entry.sequence,
+			},
+		};
 	});
 	return {
 		appendCompaction,
@@ -184,6 +195,57 @@ test("compacts complete turns into a durable summary and recent tail", async () 
 			target: engineTestTarget,
 		})
 	);
+});
+
+test("compaction excludes failed and pending submissions so the checkpoint reopens", async () => {
+	const compaction = createSessionCompaction({
+		store: makeStore(),
+		generateId: () => compactionId("eligible-history"),
+		summaryGenerator: async () => ({ text: "Summary of eligible history." }),
+		estimateTokens: (messages) => messages.length,
+	});
+	const pending = {
+		...message("pending-submission", "user", "Do not summarize pending input."),
+		metadata: {
+			submissionId: toSubmissionId("pending-submission-id"),
+			submissionStatus: "pending" as const,
+		},
+	};
+	const failed = {
+		...message("failed-submission", "user", "Do not summarize failed input."),
+		metadata: {
+			submissionFailure: "Provider failed.",
+			submissionId: toSubmissionId("failed-submission-id"),
+			submissionStatus: "failed" as const,
+		},
+	};
+	const messages = [
+		pending,
+		failed,
+		message("u1", "user", "first request"),
+		message("a1", "assistant", "first answer"),
+		message("u2", "user", "current request"),
+		message("a2", "assistant", "current answer"),
+	];
+	const result = await compaction.compact({
+		session: { messages, sessionId: sessionId("eligible-history-session") },
+		model,
+		settings,
+		trigger: "manual",
+	});
+	const contextMessages = filterSessionMessagesForActiveContext(messages);
+
+	expect(result.entry.summary.coveredMessageIds).not.toContain(pending.id);
+	expect(result.entry.summary.coveredMessageIds).not.toContain(failed.id);
+	expect(result.entry.firstKeptUiMessageId).not.toBe(pending.id);
+	expect(result.entry.firstKeptUiMessageId).not.toBe(failed.id);
+	expect(result.entry.throughMessageUiId).not.toBe(pending.id);
+	expect(result.entry.throughMessageUiId).not.toBe(failed.id);
+	expect(() =>
+		rebuildActiveMessages(contextMessages, result.entry)
+	).not.toThrow();
+	expect(messages).toContain(pending);
+	expect(messages).toContain(failed);
 });
 
 test("compaction invalidates retained usage on reopen and reports the current projection on the next compact", async () => {
@@ -475,6 +537,38 @@ test("fails closed when a durable compaction boundary is missing", () => {
 	expect(() =>
 		rebuildActiveMessages([message("u1", "user", "current")], latest)
 	).toThrow("entry-invalid");
+});
+
+test("fails closed when compaction coverage references a missing transcript message", () => {
+	const latest: SessionCompaction = {
+		completedAt: new Date("2026-08-30T00:00:00.000Z"),
+		createdAt: new Date("2026-08-30T00:00:00.000Z"),
+		firstKeptUiMessageId: sessionMessageId("kept"),
+		id: compactionId("coverage-invalid"),
+		sequence: 1,
+		sessionId: sessionId("session-coverage-invalid"),
+		summarizationModel: model,
+		summary: {
+			coveredMessageIds: [sessionMessageId("missing-covered-message")],
+			formatVersion: 1,
+			text: "summary",
+		},
+		throughMessageUiId: sessionMessageId("a1"),
+		estimatedTokensAfter: 1,
+		tokensBefore: 2,
+		trigger: "manual",
+	};
+
+	expect(() =>
+		rebuildActiveMessages(
+			[
+				message("u1", "user", "covered"),
+				message("a1", "assistant", "boundary"),
+				message("kept", "user", "kept"),
+			],
+			latest
+		)
+	).toThrow("missing-covered-message");
 });
 
 test("Host threshold checks carry forward same-epoch usage measured by the previous conversation model", () => {
@@ -1689,13 +1783,14 @@ test("serializes current-window attachments without hydrating payloads and persi
 	});
 	const hydrateMessages = mock(attachmentStore.hydrateMessages);
 	attachmentStore.hydrateMessages = hydrateMessages;
-	const reference = await attachmentStore.ingest({
+	const referenceLease = await attachmentStore.ingest({
 		bytes: new Uint8Array([
 			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
 		]),
 		filename: "design.png",
 		mediaType: "image/png",
 	});
+	const reference = referenceLease.reference;
 	const imageMessage = fromPartial<SessionMessage>({
 		...message("u1", "user", "review [Image 1]"),
 		parts: [
@@ -2388,6 +2483,63 @@ test("does not split a paired tool result beyond the recent budget", async () =>
 	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
+test("passes the externalization lease to the store for indeterminate compaction reconciliation", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-compaction-lease-")
+	);
+	const attachmentStore = createSessionAttachmentStore({
+		repository: createAttachmentRepository(),
+		root,
+	});
+	const sourceLease = await attachmentStore.ingest({
+		bytes: new Uint8Array([
+			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
+		]),
+		filename: "history.png",
+		mediaType: "image/png",
+	});
+	await sourceLease.release();
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		attachmentStore,
+		generateId: () => compactionId("entry-lease-reconciliation"),
+		store,
+		summaryGenerator: mock(async () => ({ text: "summary with a held image" })),
+		estimateTokens: (messages) => messages.length,
+	});
+	const user = fromPartial<SessionMessage>({
+		id: sessionMessageId("lease-user"),
+		parts: [attachmentReferenceToFilePart(sourceLease.reference)],
+		role: "user",
+	});
+	await compaction.compact({
+		session: {
+			messages: [
+				user,
+				message("lease-assistant", "assistant", "old response"),
+				message("lease-recent-user", "user", "recent request"),
+				message("lease-recent-assistant", "assistant", "recent answer"),
+			],
+			sessionId: sessionId("session-lease-reconciliation"),
+		},
+		model,
+		settings: {
+			enabled: true,
+			keepRecentTokens: 1,
+			maxMediaAttachments: 2,
+			maxMediaBytes: 10_000,
+			maxMediaTokens: 10_000,
+			modelContextLimit: 65_536,
+			thresholdTokens: null,
+		},
+		trigger: "manual",
+	});
+
+	expect(
+		store.appendCompaction.mock.calls[0]?.[0].externalizationLease
+	).toBeDefined();
+});
+
 test("projects the newest attachment against the media budget for estimatedTokensAfter", async () => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-compaction-projection-")
@@ -2396,20 +2548,22 @@ test("projects the newest attachment against the media budget for estimatedToken
 		repository: createAttachmentRepository(),
 		root,
 	});
-	const oldReference = await attachmentStore.ingest({
+	const oldReferenceLease = await attachmentStore.ingest({
 		bytes: new Uint8Array([
 			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
 		]),
 		filename: "old.png",
 		mediaType: "image/png",
 	});
+	const oldReference = oldReferenceLease.reference;
 	const largeBytes = new Uint8Array(5010);
 	largeBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
-	const newReference = await attachmentStore.ingest({
+	const newReferenceLease = await attachmentStore.ingest({
 		bytes: largeBytes,
 		filename: "new.png",
 		mediaType: "image/png",
 	});
+	const newReference = newReferenceLease.reference;
 	const store = makeStore();
 	const compaction = createSessionCompaction({
 		attachmentStore,

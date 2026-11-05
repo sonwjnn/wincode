@@ -8,7 +8,10 @@ import type {
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
-import type { CompactionAttachmentMetadata } from "../storage/attachment-store";
+import type {
+	AttachmentExternalizationLease,
+	CompactionAttachmentMetadata,
+} from "../storage/attachment-store";
 import type { CompactionFileOperations } from "./file-operations";
 export const DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS =
 	MODEL_OUTPUT_TOKEN_LIMIT;
@@ -55,6 +58,7 @@ export type AppendSessionCompactionInput = Except<
 	SessionCompaction,
 	"completedAt" | "createdAt" | "id" | "sequence"
 > & {
+	externalizationLease?: AttachmentExternalizationLease;
 	id?: CompactionId;
 	createdAt?: Date;
 	completedAt?: Date;

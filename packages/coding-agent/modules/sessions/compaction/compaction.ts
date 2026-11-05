@@ -24,6 +24,7 @@ import {
 } from "@/shared/identifiers";
 import { keepTailUtf8, truncateUtf8 } from "../../tools/output-bounds";
 import {
+	filterSessionMessagesForActiveContext,
 	isSessionToolPart,
 	type SessionMessage,
 	type SessionMessageUsage,
@@ -31,6 +32,7 @@ import {
 	sanitizeSessionSkillToolParts,
 } from "../message";
 import {
+	type AttachmentExternalizationLease,
 	type CompactionAttachmentMetadata,
 	DEFAULT_COMPACTION_ATTACHMENT_BUDGET,
 	estimateAttachmentTokens,
@@ -38,6 +40,10 @@ import {
 	getAttachmentReference,
 	type SessionAttachmentStore,
 } from "../storage/attachment-store";
+import {
+	isSessionWriteIndeterminate,
+	requireSessionWriteReady,
+} from "../storage/session-jsonl-store";
 import type { SessionStore } from "../storage/session-store";
 import {
 	estimateSessionContextTokens,
@@ -79,6 +85,7 @@ import {
 	type SummaryGeneratorInput,
 	type SummaryGeneratorResult,
 } from "./types";
+import { assertCompactionMessageReferences } from "./validation";
 
 const MAX_SERIALIZED_PART_LENGTH = 12_000;
 const MAX_SERIALIZED_TOOL_INPUT_BYTES = 2000;
@@ -154,6 +161,8 @@ export const rebuildActiveMessages = (
 			`Compaction boundary "${latest.id}" references missing message "${latest.throughMessageUiId}".`
 		);
 	}
+	const availableMessageIds = new Set(replaySafeMessages.map(({ id }) => id));
+	assertCompactionMessageReferences(latest, availableMessageIds);
 	if (
 		(isUndefined(latest.firstKeptAssistantPartIndex) &&
 			throughIndex >= firstKeptIndex) ||
@@ -213,6 +222,8 @@ export type CompactionRequestInput = {
 	/** The Agent Turn that initiated this compaction, for diagnostics and lifecycle callbacks. */
 	turnId?: AgentTurnId;
 	recordSummaryUsage?: (input: {
+		compactionId: CompactionId;
+		createdAt: Date;
 		id: SessionUsageEntryId;
 		model: ProviderModelSelection;
 		usage: SessionMessageUsage;
@@ -1166,12 +1177,12 @@ const externalizeForCompaction = async (
 	attachmentStore: SessionAttachmentStore | undefined,
 	messages: SessionMessage[],
 	signal?: AbortSignal
-): Promise<SessionMessage[]> => {
+): Promise<AttachmentExternalizationLease> => {
 	if (!attachmentStore) {
-		return messages;
+		return { messages, release: async () => undefined };
 	}
 	try {
-		return await attachmentStore.externalizeMessages(messages, signal);
+		return await attachmentStore.externalizeMessagesWithLease(messages, signal);
 	} catch (error) {
 		if (signal?.aborted) {
 			throw new SessionCompactionError(
@@ -1377,7 +1388,9 @@ const validateLifecycleSummary = (
 
 const reportSummaryUsage = (
 	input: CompactSessionInput,
-	attemptId: SessionUsageEntryId
+	compactionId: CompactionId,
+	attemptId: SessionUsageEntryId,
+	createdAt: Date
 ): SummaryGeneratorInput["reportUsage"] => {
 	const recordUsage = input.recordSummaryUsage;
 	if (recordUsage === undefined) {
@@ -1385,6 +1398,8 @@ const reportSummaryUsage = (
 	}
 	return (usage) =>
 		recordUsage({
+			compactionId,
+			createdAt,
 			id: attemptId,
 			model: input.summaryTarget.model,
 			usage,
@@ -1436,12 +1451,14 @@ const generateSummaryRequest = async ({
 	cutPoint,
 	estimateTokens,
 	input,
+	entryId,
 	summaryGenerator,
 	summaryInput,
 }: {
 	cutPoint: CutPoint;
 	estimateTokens: (messages: readonly SessionMessage[]) => number;
 	input: CompactSessionInput;
+	entryId: CompactionId;
 	summaryGenerator: SummaryGenerator;
 	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
 }): Promise<SummaryGeneratorResult> => {
@@ -1461,7 +1478,9 @@ const generateSummaryRequest = async ({
 	}
 	const attemptReportUsage = reportSummaryUsage(
 		input,
-		toSessionUsageEntryId(randomUUIDv7())
+		entryId,
+		toSessionUsageEntryId(randomUUIDv7()),
+		new Date()
 	);
 	return generateCompactionSummary(summaryGenerator, {
 		...summaryInput,
@@ -1504,6 +1523,7 @@ const produceCompactionSummary = async ({
 	cutPoint,
 	estimateTokens,
 	input,
+	entryId,
 	lifecycleSummary,
 	summaryGenerator,
 	summaryInput,
@@ -1512,6 +1532,7 @@ const produceCompactionSummary = async ({
 	cutPoint: CutPoint;
 	estimateTokens: (messages: readonly SessionMessage[]) => number;
 	input: CompactSessionInput;
+	entryId: CompactionId;
 	lifecycleSummary: string | undefined;
 	summaryGenerator: SummaryGenerator | undefined;
 	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
@@ -1541,6 +1562,7 @@ const produceCompactionSummary = async ({
 							cutPoint,
 							estimateTokens,
 							input,
+							entryId,
 							summaryGenerator: selectedSummaryGenerator,
 							summaryInput: {
 								...summaryInput,
@@ -1554,6 +1576,7 @@ const produceCompactionSummary = async ({
 				cutPoint,
 				estimateTokens,
 				input,
+				entryId,
 				summaryGenerator: selectedSummaryGenerator,
 				summaryInput: omitUndefined({
 					...summaryInput,
@@ -1581,6 +1604,7 @@ const produceCompactionSummary = async ({
 		cutPoint,
 		estimateTokens,
 		input,
+		entryId,
 		summaryGenerator: selectedSummaryGenerator,
 		summaryInput: {
 			...summaryInput,
@@ -1605,6 +1629,7 @@ export const createSessionCompaction = ({
 	const persistCompactionEntry = async ({
 		assertAuthority,
 		attachmentMetadata,
+		externalizationLease,
 		messages,
 		sessionId,
 		cutPoint,
@@ -1623,6 +1648,7 @@ export const createSessionCompaction = ({
 	}: {
 		assertAuthority?: () => void;
 		attachmentMetadata?: readonly CompactionAttachmentMetadata[];
+		externalizationLease: AttachmentExternalizationLease;
 		messages: readonly SessionMessage[];
 		sessionId: SessionId;
 		cutPoint: CutPoint;
@@ -1645,23 +1671,26 @@ export const createSessionCompaction = ({
 		activeMessages: SessionMessage[];
 		entry: SessionCompaction;
 	}> => {
-		const entryInput = appendInputFor({
-			attachmentMetadata,
-			session: { messages, sessionId },
-			cutPoint,
-			entryId,
-			estimateTokens: estimate,
-			fileOperations,
-			focus,
-			model,
-			now: nowFn,
-			previous,
-			settings,
-			summarySpan,
-			summarization,
-			trigger,
-			thinkingLevel,
-		});
+		const entryInput: AppendSessionCompactionInput = {
+			...appendInputFor({
+				attachmentMetadata,
+				session: { messages, sessionId },
+				cutPoint,
+				entryId,
+				estimateTokens: estimate,
+				fileOperations,
+				focus,
+				model,
+				now: nowFn,
+				previous,
+				settings,
+				summarySpan,
+				summarization,
+				trigger,
+				thinkingLevel,
+			}),
+			externalizationLease,
+		};
 		const currentMessages =
 			previous && !messages.some(isCompactionSummaryMessage)
 				? rebuildActiveMessages(messages, previous)
@@ -1687,7 +1716,12 @@ export const createSessionCompaction = ({
 		assertAuthority?.();
 		let entry: SessionCompaction;
 		try {
-			entry = await store.appendCompaction(entryInput);
+			const result = await store.appendCompaction(entryInput);
+			requireSessionWriteReady(result.writeOutcome);
+			if (result.compaction === undefined) {
+				throw new Error("Committed compaction write has no durable entry.");
+			}
+			entry = result.compaction;
 		} catch (error) {
 			throw new SessionCompactionError(
 				"persistence-failed",
@@ -1713,98 +1747,112 @@ export const createSessionCompaction = ({
 		}
 		assertNotAborted(input.signal);
 		const replaySafeMessages = sanitizeSessionSkillToolParts(
-			sanitizeInterruptedSessionMessages([...input.session.messages])
+			filterSessionMessagesForActiveContext(
+				sanitizeInterruptedSessionMessages([...input.session.messages])
+			)
 		);
-		const externalizedMessages = attachmentStore
-			? await externalizeForCompaction(
-					attachmentStore,
-					replaySafeMessages,
-					input.signal
-				)
-			: replaySafeMessages;
-		const previous = await store.getLatestCompaction(input.session.sessionId);
-		const { cutPoint, summarySpan } = chooseCompactionSpan(
-			externalizedMessages,
-			previous,
-			input.settings.keepRecentTokens,
-			estimateTokens,
-			input.protectedMessageIds
+		const externalization = await externalizeForCompaction(
+			attachmentStore,
+			replaySafeMessages,
+			input.signal
 		);
-		const focus = normalizeFocus(input.focus);
-		const summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {
-			target: input.summaryTarget,
-			...omitUndefined({ focus }),
-			previousSummary: previous?.summary,
-			serializedMessages: serializeMessagesForCompaction(summarySpan),
-			signal: input.signal,
-		};
-		const attachmentMetadata = attachmentStore
-			? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
-			: undefined;
-		const fileOperations = collectCumulativeFileOperations({
-			messages: summarySpan,
-			previous: previous?.summary.fileOperations,
-		});
-		const lifecycleContext: CompactionLifecycleContext = {
-			trigger: input.trigger,
-			sessionId: input.session.sessionId,
-			...omitUndefined({
-				focus,
-				signal: input.signal,
-				turnId: input.turnId,
-			}),
-		};
-		// The hook decides before any generation budget is spent, so a
-		// Plugin-supplied handoff never needs a usable summary target.
-		const decision = await lifecycle?.before?.(lifecycleContext);
-		if (isNonEmptyString(decision?.cancel)) {
-			throw new SessionCompactionError("cancelled", decision.cancel);
-		}
-		assertNotAborted(input.signal);
-		const summaryWasSuppliedByPlugin = isNonEmptyString(decision?.summary);
-		const generated = await produceCompactionSummary({
-			cutPoint,
-			estimateTokens,
-			input,
-			lifecycleSummary: decision?.summary,
-			summaryGenerator,
-			summaryInput,
-			summarySpan,
-		});
-		assertNotAborted(input.signal);
-		const { activeMessages, entry } = await persistCompactionEntry({
-			assertAuthority: input.assertAuthority,
-			attachmentMetadata,
-			messages: externalizedMessages,
-			sessionId: input.session.sessionId,
-			cutPoint,
-			entryId: createId(),
-			estimateTokens,
-			fileOperations,
-			focus,
-			model: input.summaryTarget.model,
-			now,
-			previous,
-			settings: input.settings,
-			summarySpan,
-			summarization: generated,
-			trigger: input.trigger,
-			thinkingLevel: summaryWasSuppliedByPlugin
-				? undefined
-				: input.summaryTarget.thinkingLevel,
-		});
+		const externalizedMessages = externalization.messages;
+		let keepLeaseForReconciliation = false;
 		try {
-			await lifecycle?.completed?.(entry, lifecycleContext);
-		} catch (error) {
-			// The entry is already durable: a lifecycle observer cannot undo it.
-			void logger.warn("Compaction lifecycle observer failed", {
-				cause: getErrorMessage(error, String(error)),
-				operation: "session.compaction",
-				phase: "completed",
-				trigger: input.trigger,
+			const previous = await store.getLatestCompaction(input.session.sessionId);
+			const { cutPoint, summarySpan } = chooseCompactionSpan(
+				externalizedMessages,
+				previous,
+				input.settings.keepRecentTokens,
+				estimateTokens,
+				input.protectedMessageIds
+			);
+			const focus = normalizeFocus(input.focus);
+			const summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {
+				target: input.summaryTarget,
+				...omitUndefined({ focus }),
+				previousSummary: previous?.summary,
+				serializedMessages: serializeMessagesForCompaction(summarySpan),
+				signal: input.signal,
+			};
+			const attachmentMetadata = attachmentStore
+				? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
+				: undefined;
+			const fileOperations = collectCumulativeFileOperations({
+				messages: summarySpan,
+				previous: previous?.summary.fileOperations,
 			});
+			const lifecycleContext: CompactionLifecycleContext = {
+				trigger: input.trigger,
+				sessionId: input.session.sessionId,
+				...omitUndefined({
+					focus,
+					signal: input.signal,
+					turnId: input.turnId,
+				}),
+			};
+			// The hook decides before any generation budget is spent, so a
+			// Plugin-supplied handoff never needs a usable summary target.
+			const decision = await lifecycle?.before?.(lifecycleContext);
+			if (isNonEmptyString(decision?.cancel)) {
+				throw new SessionCompactionError("cancelled", decision.cancel);
+			}
+			assertNotAborted(input.signal);
+			const summaryWasSuppliedByPlugin = isNonEmptyString(decision?.summary);
+			const entryId = createId();
+			const generated = await produceCompactionSummary({
+				cutPoint,
+				estimateTokens,
+				input,
+				entryId,
+				lifecycleSummary: decision?.summary,
+				summaryGenerator,
+				summaryInput,
+				summarySpan,
+			});
+			assertNotAborted(input.signal);
+			const { activeMessages, entry } = await persistCompactionEntry({
+				assertAuthority: input.assertAuthority,
+				attachmentMetadata,
+				externalizationLease: externalization,
+				messages: externalizedMessages,
+				sessionId: input.session.sessionId,
+				cutPoint,
+				entryId,
+				estimateTokens,
+				fileOperations,
+				focus,
+				model: input.summaryTarget.model,
+				now,
+				previous,
+				settings: input.settings,
+				summarySpan,
+				summarization: generated,
+				trigger: input.trigger,
+				thinkingLevel: summaryWasSuppliedByPlugin
+					? undefined
+					: input.summaryTarget.thinkingLevel,
+			});
+			try {
+				await lifecycle?.completed?.(entry, lifecycleContext);
+			} catch (error) {
+				// The entry is already durable: a lifecycle observer cannot undo it.
+				void logger.warn("Compaction lifecycle observer failed", {
+					cause: getErrorMessage(error, String(error)),
+					operation: "session.compaction",
+					phase: "completed",
+					trigger: input.trigger,
+				});
+			}
+			return { activeMessages, entry };
+		} catch (error) {
+			keepLeaseForReconciliation = isSessionWriteIndeterminate(error);
+			throw error;
+		} finally {
+			if (!keepLeaseForReconciliation) {
+				await externalization.release();
+			}
 		}
-		return { activeMessages, entry };
 	};
 
 	const compact = (

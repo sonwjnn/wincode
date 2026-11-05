@@ -7,7 +7,8 @@ Chat session lifecycle: creation, messaging, streaming display, compaction, and 
 ### Start a session
 
 `NewSessionView` collects user input and writes the accepted user message as
-an ordinary durable Session Record in the local SQLite store.
+an ordinary durable Session Record in the Session's authoritative JSONL log,
+with SQLite as a rebuildable projection.
 It then navigates to `/sessions/$id` with transient startup state. That state
 starts the first Agent Turn once. Opening later restores durable records and
 accepted SDK deliveries as ordinary user messages.
@@ -174,13 +175,61 @@ never resolves co-selected Skill or Custom Command intents.
 
 ### Session management
 
-`SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store.
+`SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store. `Ctrl+E` exports the selected Session as a local bundle directory; `Ctrl+O` imports a bundle into the current workspace.
+
+### Session bundles
+
+`wincode sessions export <session-id> <directory>` writes a portable bundle, and `wincode sessions import <directory>` validates and imports one. The public Session SDK and RPC expose the same import operation. Imports verify the manifest, log integrity and resource bounds, and require every referenced attachment to be present and valid before publishing Session history. Repeating the same import is a no-op; a different log using an existing Session ID is a conflict.
+
+Imported Sessions are bound locally but remain idle. A stored pending submission is not replayed during import, projection rebuild, or automatic Session open. The first explicit continuation or new input durably records activation before model work can start. Importing never resumes an interrupted Agent Turn.
 
 ## Storage seam
 
+### JSONL durability and verification
+
+The per-Session JSONL log is authoritative; SQLite is a rebuildable projection.
+Logs are flat files at `<data-root>/sessions/<session-id>.jsonl`, with each path
+constructed by the validated-ID resolver in `storage/path.ts`. Discovery accepts
+only non-hidden `.jsonl` files with valid Session IDs; legacy per-Session
+folders are ignored, not migrated. Deletion unlinks one log file and retains
+its tombstone under `session-control`.
+
+Writable reopen and `wincode sessions verify <session-id> [--json]` use the
+same validated log decoder. Verification is read-only: it does not acquire
+Session Writer authority, sync or truncate the log, or create quarantine files.
+A valid log with a pending write marker reports `reconciliation_required`;
+truncated or corrupt logs report an error without repair. Writable reopen or a
+retry with the same operation identity performs reconciliation. An incomplete
+suffix is truncated only after its exact bytes and a metadata sidecar containing
+offset, prefix/suffix hashes, operation identity, and reason have been synced to
+the quarantine directory.
+
+Current Session Writer lock adapters are target-specific:
+
+| Target | Primitive | Result |
+| --- | --- | --- |
+| macOS arm64/x64 | `flock` | Exclusive process-owned lock |
+| Linux arm64/x64 | `flock` | Exclusive process-owned lock |
+| Windows x64 | `LockFileEx` | Exclusive process-owned lock |
+| Other OS/architecture pairs | None | Fail closed with `session_lock_failed` |
+
+An adapter target is not a promise for every filesystem. Commit durability
+requires successful file and containing-directory sync; unsupported or failed
+sync/locking is not downgraded to best effort. Lock contention is
+`session_in_use`, infrastructure/unsupported locking is `session_lock_failed`,
+and an unresolved write is `session_log_write_indeterminate`. Coordination is
+limited to processes on one machine using a local filesystem; network/shared
+filesystems are unsupported.
+
+Fault-injection tests exercise short writes, write/sync errors, restart points,
+and the ordering between quarantine durability and truncation. They validate
+application behavior at those I/O boundaries, not power-loss behavior, device
+or filesystem caches, a physically full disk, or network-filesystem semantics.
+
 `storage/` isolates local persistence behind the `SessionStore` interface.
-The local Drizzle store persists sessions, ordinary Wincode Session Records,
-compactions, and content-addressed attachment blobs.
+The local Drizzle store maintains the rebuildable SQLite projection for
+Session history, compactions, selection, and usage; content-addressed attachment
+blobs remain in separate storage.
 `session_record` rows contain one durable user message, a terminal assistant
 outcome, or a completed Tool Call. The Subagents Plugin persists task outcomes
 and pending report deliveries in its own database file; Session storage has no
@@ -197,6 +246,14 @@ The durable pending/failed processing status of committed Steering
 Messages is reconciled from history so accepted-but-unread input continues
 with the same message identity and without duplication.
 
+The Session history row does not own workspace binding. `local_session_binding`
+keys local operational data by Session ID and workspace without copying title,
+selection, or transcript. File Observations, diff artifacts, and recovery
+origins refer to this local identity, so replacing a history row alone cannot
+cascade-delete recovery data. Session delete/reset explicitly checks unresolved
+recovery before removing local bindings. Prompt history remains global, and
+attachment ownership is unchanged.
+
 TODO(issue-86): define richer durable interrupted-turn metadata only with an
 explicit resume/retry contract. Until then, interrupted output is represented
 by the safe assistant outcome and retry remains explicit.
@@ -212,21 +269,23 @@ replays them.
 - `drizzle-session-store.ts` — Drizzle SQLite implementation.
 - `session-record.ts` — record validation and CLI presentation projection.
 - `attachment-store.ts` — image blob storage, integrity-checked hydration, compaction projection, and garbage collection.
-- `schema.ts` — SQLite schema and durable Session Record/compaction/attachment tables.
+- `schema.ts` — SQLite schema for Session history, local Session bindings, operational recovery, and attachments.
 - `path.ts` — platform-specific local database and attachment paths.
 - `client.ts` — SQLite connection, pragmas, and current-schema initialization.
 
 The database initializes the current `schema.ts` definition on open with
-idempotent `CREATE TABLE IF NOT EXISTS` statements. There is no migration
-directory or migration history.
+idempotent `CREATE TABLE IF NOT EXISTS` statements. Existing workspace bindings
+are reconciled into `local_session_binding` before the store opens. There is no
+migration directory or migration history.
 
 ## Solo-dev persistence rule
 
 Wincode is maintained by one developer, so schema changes are direct and
 reset-oriented. Run `bun run --cwd packages/coding-agent db:push` after changing
-`schema.ts`; if Drizzle cannot reconcile the change safely, remove the local
-database and attachment directory before restarting Wincode. Keep the
-initialization SQL in `client.ts` synchronized with the Drizzle schema.
+`schema.ts`. Keep the initialization SQL in `client.ts` synchronized with the
+Drizzle schema. Do not remove the local database, snapshots, or attachment data
+to get past a schema error while Unresolved Recovery exists; the Session reset
+guard must be allowed to preserve its recovery bytes and path blocks.
 
 The reset command only clears session data and is not a schema reset:
 

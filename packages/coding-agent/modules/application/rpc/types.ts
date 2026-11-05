@@ -1,3 +1,4 @@
+import type { SessionRecordId } from "@wincode/agent-core";
 import type {
 	ProviderCollection,
 	ThinkingLevel,
@@ -52,7 +53,9 @@ export const RPC_PROTOCOL_VERSION = 4;
 export const SERVER_VERSION = "0.1.0";
 export const SESSION_RPC_METHODS = new Set([
 	"session/create",
+	"session/fork",
 	"session/open",
+	"session/rewind",
 	"session/retry",
 	"session/steer",
 	"session/submit",
@@ -60,6 +63,11 @@ export const SESSION_RPC_METHODS = new Set([
 	"session/recall",
 	"session/getState",
 	"session/getTranscript",
+	"session/listPage",
+	"session/getHistoryPage",
+	"session/getStatistics",
+	"session/exportBundle",
+	"session/importBundle",
 ]);
 export const AGENT_EVENT_TYPES = new Set([
 	"agent-turn-started",
@@ -147,6 +155,7 @@ export type RuntimeModules = Readonly<{
 	};
 	resolveWorkspaceRoot: (start: string) => string;
 	toSessionId: (value: string) => SessionId;
+	toSessionRecordId: (value: string) => SessionRecordId;
 }>;
 
 export type WireValue =

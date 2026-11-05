@@ -1,3 +1,4 @@
+import { toSessionRecordId } from "@wincode/agent-core";
 import { thinkingLevelSchema } from "@wincode/ai";
 import {
 	createAgentTurnId,
@@ -32,4 +33,5 @@ export const loadRuntime = async (
 	thinkingLevelSchema,
 	resolveWorkspaceRoot,
 	toSessionId,
+	toSessionRecordId,
 });
