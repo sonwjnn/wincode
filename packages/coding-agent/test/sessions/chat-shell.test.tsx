@@ -582,6 +582,8 @@ function SeedSessionNotifications() {
 		notify("Provider connection is degraded", "warning");
 		notify("Authentication failed", "error");
 		notify("Request failed", "error");
+		notify("Session renamed", "success");
+		notify("Session compacted", "success");
 	}, [notify]);
 	return null;
 }
@@ -624,6 +626,8 @@ describe("ChatShell notifications", () => {
 			expect(frame).toContain("Warning: Provider connection is degraded");
 			expect(frame).toContain("Error: Authentication failed");
 			expect(frame).toContain("Error: Request failed");
+			expect(frame).toContain("Session renamed");
+			expect(frame).toContain("Session compacted");
 		} finally {
 			await act(async () => {
 				setup.renderer.destroy();

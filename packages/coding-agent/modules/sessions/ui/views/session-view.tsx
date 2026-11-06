@@ -363,8 +363,8 @@ export function SessionView({
 		setStatus: setSessionStatus,
 	} = useSessionNotifications(sessionId);
 	const show = useCallback(
-		({ message, variant }: ToastOptions): void => {
-			notifySession(message, variant === "error" ? "error" : "info");
+		({ message, variant }: Pick<ToastOptions, "message" | "variant">): void => {
+			notifySession(message, variant ?? "info");
 		},
 		[notifySession]
 	);

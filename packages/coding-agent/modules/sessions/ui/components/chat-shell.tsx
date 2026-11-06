@@ -151,6 +151,7 @@ type TranscriptEntry = SessionTimelineItem | typeof TRANSCRIPT_NOTICE;
  */
 const NOTIFICATION_PREFIX: Record<UiNotificationLevel, string> = {
 	info: "",
+	success: "",
 	warning: "Warning: ",
 	error: "Error: ",
 };
@@ -160,6 +161,7 @@ function SessionNotificationMessages({ scope }: { scope: string }) {
 	const { colors } = useTheme();
 	const notificationColors: Record<UiNotificationLevel, string> = {
 		info: colors.textMuted,
+		success: colors.success,
 		warning: colors.warning,
 		error: colors.error,
 	};
