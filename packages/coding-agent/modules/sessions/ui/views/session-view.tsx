@@ -45,7 +45,8 @@ import { useConfig } from "@/shared/config/config-provider";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
-import { useToast } from "@/shared/providers/toast/toast-provider";
+import { useSessionNotifications } from "@/shared/providers/toast/toast-provider";
+import type { ToastOptions } from "@/shared/providers/toast/types";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import type { SessionWaitingMessage } from "../../agent-session/types";
 import { isSessionBusy } from "../../agent-session/utils";
@@ -356,7 +357,17 @@ export function SessionView({
 		}),
 		[editMode, model, persistSessionEditMode, sessionId, setSessionEditMode]
 	);
-	const { show } = useToast();
+	const {
+		clear: clearSessionNotifications,
+		notify: notifySession,
+		setStatus: setSessionStatus,
+	} = useSessionNotifications(sessionId);
+	const show = useCallback(
+		({ message, variant }: ToastOptions): void => {
+			notifySession(message, variant === "error" ? "error" : "info");
+		},
+		[notifySession]
+	);
 	const openSettings = useSettingsHubDialog(settingsRuntime);
 	const { isTopLayer } = useKeyboardLayer();
 	const submittedInitialMessageRef = useRef<SessionMessageId | null>(null);
@@ -398,6 +409,16 @@ export function SessionView({
 		cacheWarmingStatus,
 		sessionUsageEntries,
 	} = useAgentSession(host);
+	useEffect(() => {
+		setSessionStatus(
+			"prompt-cache-warming",
+			cacheWarmingStatus === "warming" ? "Warming prompt cache..." : undefined
+		);
+	}, [cacheWarmingStatus, setSessionStatus]);
+	useEffect(
+		() => () => clearSessionNotifications(),
+		[clearSessionNotifications]
+	);
 	/**
 	 * Hands recalled messages to the composer in Agent Session order. A Recall
 	 * that returns nothing — empty lanes, or messages already running — changes

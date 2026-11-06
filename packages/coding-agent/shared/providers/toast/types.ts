@@ -1,5 +1,18 @@
 export type ToastVariant = "success" | "error" | "info";
 
+export type UiNotificationLevel = "info" | "warning" | "error";
+
+export type UiNotification = Readonly<{
+	id: number;
+	level: UiNotificationLevel;
+	message: string;
+}>;
+
+export type UiStatus = Readonly<{
+	key: string;
+	message: string;
+}>;
+
 export type ToastOptions = {
 	message: string;
 	variant?: ToastVariant;

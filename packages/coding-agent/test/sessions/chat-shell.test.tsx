@@ -54,7 +54,10 @@ import {
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
-import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import {
+	ToastProvider,
+	useSessionNotifications,
+} from "@/shared/providers/toast/toast-provider";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import { testRenderWithClipboard } from "../support/clipboard";
 import {
@@ -293,6 +296,7 @@ type ChatShellRenderOptions = {
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	transcriptNotice?: ReactNode;
+	notificationSetup?: ReactNode;
 };
 
 const renderChatShell = async (
@@ -313,6 +317,7 @@ const renderChatShell = async (
 		queuedSubmissions,
 		sessionUsageEntries,
 		transcriptNotice,
+		notificationSetup,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
 	const workspace = process.cwd();
@@ -375,6 +380,7 @@ const renderChatShell = async (
 				value={{ configStore, homeRoot: os.homedir(), workspace }}
 			>
 				<ToastProvider>
+					{notificationSetup}
 					<SettingsRegistryProvider>
 						<AgentRegistryProvider>
 							<KeyboardLayerProvider>
@@ -568,6 +574,110 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+function SeedSessionNotifications() {
+	const { notify } = useSessionNotifications("test");
+	useEffect(() => {
+		notify("Scanning workspace", "info");
+		notify("Warming model cache", "info");
+		notify("Provider connection is degraded", "warning");
+		notify("Authentication failed", "error");
+		notify("Request failed", "error");
+	}, [notify]);
+	return null;
+}
+
+function SeedOtherSessionNotification() {
+	const { notify } = useSessionNotifications("another-session");
+	useEffect(() => {
+		notify("Other session failed", "error");
+	}, [notify]);
+	return null;
+}
+
+type SessionStatusControl = {
+	clear?: () => void;
+};
+
+function SeedSessionStatus({ control }: { control: SessionStatusControl }) {
+	const { setStatus } = useSessionNotifications("test");
+	useEffect(() => {
+		setStatus("cache-warming", "Prompt cache warming is scheduled");
+		setStatus("cache-warming", "Warming prompt cache");
+		control.clear = () => setStatus("cache-warming", undefined);
+	}, [control, setStatus]);
+	return null;
+}
+
+describe("ChatShell notifications", () => {
+	test("consecutive info notices collapse while warnings and errors remain distinct", async () => {
+		const { setup } = await renderChatShell([userMessage("user-1")], {
+			height: 24,
+			notificationSetup: <SeedSessionNotifications />,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("Warming model cache");
+			expect(frame).not.toContain("Scanning workspace");
+			expect(frame).toContain("Warning: Provider connection is degraded");
+			expect(frame).toContain("Error: Authentication failed");
+			expect(frame).toContain("Error: Request failed");
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("notifications from another session do not appear in the current chat", async () => {
+		const { setup } = await renderChatShell([userMessage("user-1")], {
+			height: 20,
+			notificationSetup: <SeedOtherSessionNotification />,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			expect(setup.captureCharFrame()).not.toContain("Other session failed");
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("keyed footer statuses replace and clear the status for their key", async () => {
+		const control: SessionStatusControl = {};
+		const { setup } = await renderChatShell([userMessage("user-1")], {
+			height: 24,
+			notificationSetup: <SeedSessionStatus control={control} />,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			let frame = setup.captureCharFrame();
+			expect(frame).toContain("Warming prompt cache");
+			expect(frame).not.toContain("Prompt cache warming is scheduled");
+			if (control.clear === undefined) {
+				throw new Error("The keyed status control was not initialized.");
+			}
+			await act(async () => {
+				control.clear?.();
+			});
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+			expect(frame).not.toContain("Warming prompt cache");
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+});
+
 describe("ChatShell transcript Markdown streaming", () => {
 	test("only the latest assistant message in the active turn remains streaming", async () => {
 		const messages = [

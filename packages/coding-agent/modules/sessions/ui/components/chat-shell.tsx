@@ -36,6 +36,8 @@ import {
 	getThinkingLevelBorderColor,
 	getThinkingLevelColor,
 } from "@/shared/providers/theme/themes";
+import { useSessionNotifications } from "@/shared/providers/toast/toast-provider";
+import type { UiNotificationLevel } from "@/shared/providers/toast/types";
 import { Spinner } from "@/shared/ui/spinner";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import type { SessionQueuedSubmission } from "../../agent-session/types";
@@ -147,6 +149,46 @@ type TranscriptEntry = SessionTimelineItem | typeof TRANSCRIPT_NOTICE;
  * down. The notice is never persisted: a fresh mount captures the anchor again
  * and renders it at the end of the loaded transcript.
  */
+const NOTIFICATION_PREFIX: Record<UiNotificationLevel, string> = {
+	info: "",
+	warning: "Warning: ",
+	error: "Error: ",
+};
+
+function SessionNotificationMessages({ scope }: { scope: string }) {
+	const { notifications } = useSessionNotifications(scope);
+	const { colors } = useTheme();
+	const notificationColors: Record<UiNotificationLevel, string> = {
+		info: colors.textMuted,
+		warning: colors.warning,
+		error: colors.error,
+	};
+	return notifications.map(({ id, level, message }) => (
+		<box key={id} paddingX={1} width="100%">
+			<text fg={notificationColors[level]} width="100%" wrapMode="word">
+				{`${NOTIFICATION_PREFIX[level]}${message}`}
+			</text>
+		</box>
+	));
+}
+
+function SessionFooterStatuses({ scope }: { scope: string }) {
+	const { statuses } = useSessionNotifications(scope);
+	const { colors } = useTheme();
+	if (statuses.length === 0) {
+		return null;
+	}
+	return (
+		<box flexDirection="column" paddingX={1} width="100%">
+			{statuses.map(({ key, message }) => (
+				<text fg={colors.textMuted} key={key} width="100%" wrapMode="word">
+					{message}
+				</text>
+			))}
+		</box>
+	);
+}
+
 const resolveNoticeSlot = (
 	timeline: readonly SessionTimelineItem[],
 	anchorMessageCount: number | undefined
@@ -468,6 +510,7 @@ export function ChatShell({
 							</box>
 						);
 					})}
+					<SessionNotificationMessages scope={viewId} />
 					{liveCompaction ? <CompactionDivider entry={liveCompaction} /> : null}
 					{isCompacting ? (
 						<CompactionStatus agent={agent} autoCompact={autoCompact} />
@@ -506,6 +549,7 @@ export function ChatShell({
 						sessionPromptHistory={promptHistory}
 					/>
 				</box>
+				<SessionFooterStatuses scope={viewId} />
 				<box
 					flexDirection="row"
 					flexShrink={0}
