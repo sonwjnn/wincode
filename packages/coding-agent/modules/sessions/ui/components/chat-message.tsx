@@ -65,12 +65,20 @@ export function ChatMessage({
 		void onRewindCheckpoint(recordId);
 	};
 	const renderCheckpoint = (
-		checkpoint: SessionForkCheckpointAssessment | undefined
+		checkpoint: SessionForkCheckpointAssessment | undefined,
+		message: SessionMessage
 	): ReactNode => {
 		if (checkpoint === undefined) {
 			return null;
 		}
 		if (checkpoint.status === "invalid") {
+			if (
+				checkpoint.kind === "assistant" &&
+				message.role === "assistant" &&
+				message.metadata?.terminalOutcome === "failed"
+			) {
+				return null;
+			}
 			return (
 				<text
 					fg={colors.textMuted}
@@ -131,7 +139,7 @@ export function ChatMessage({
 								streaming={streaming && message === latestAssistant}
 							/>
 						)}
-						{renderCheckpoint(forkCheckpoints?.get(message.id))}
+						{renderCheckpoint(forkCheckpoints?.get(message.id), message)}
 						{notificationsAfterMessage?.get(message.id)?.map((notification) => (
 							<ChatNotificationMessage
 								key={`session-notification-${notification.id}`}

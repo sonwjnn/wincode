@@ -998,6 +998,159 @@ describe("ChatShell composer focus", () => {
 			setup.renderer.destroy();
 		}
 	});
+	test("failed assistant errors show Retry without an invalid checkpoint refusal", async () => {
+		const user = userMessage("auth-failure-user");
+		const failedAssistant = {
+			...assistantMessage(
+				[{ text: "Model authentication failed.", type: "text" }],
+				"auth-failure-assistant"
+			),
+			metadata: { terminalOutcome: "failed" as const },
+		};
+		const userRecordId = sessionRecordId("auth-failure-user-record");
+		const assistantRecordId = sessionRecordId("auth-failure-record");
+		const retryCalls: SessionMessageId[] = [];
+		const rewindCalls: SessionRecordId[] = [];
+		const checkpoints = new Map([
+			[
+				user.id,
+				{
+					kind: "user" as const,
+					messageId: user.id,
+					recordId: userRecordId,
+					status: "valid" as const,
+				},
+			],
+			[
+				failedAssistant.id,
+				{
+					kind: "assistant" as const,
+					messageId: failedAssistant.id,
+					recordId: assistantRecordId,
+					status: "invalid" as const,
+					reason:
+						"Only completed terminal assistant outcomes are valid checkpoints.",
+				},
+			],
+		]);
+		const setup = await testRenderWithClipboard(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ChatMessage
+					forkCheckpoints={checkpoints}
+					messages={[user, failedAssistant]}
+					onRetry={(messageId) => {
+						retryCalls.push(messageId);
+					}}
+					onRewindCheckpoint={(recordId) => {
+						rewindCalls.push(recordId);
+					}}
+				/>
+			</ThemeProvider>,
+			{ height: 30, width: 100 }
+		);
+
+		try {
+			await act(async () => {
+				await flushUi(setup);
+			});
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("Model authentication failed.");
+			expect(frame).toContain("Retry");
+			expect(frame).toContain("Rewind to this checkpoint");
+			expect(frame).not.toContain("Cannot rewind here:");
+			expect(frame).not.toContain(
+				"Only completed terminal assistant outcomes are valid checkpoints."
+			);
+			expect(retryCalls).toEqual([]);
+			expect(rewindCalls).toEqual([]);
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("keeps refusal reasons for non-failed assistant checkpoints", async () => {
+		const completedMessage = assistantMessage(
+			[{ text: "Completed response", type: "text" }],
+			"invalid-completed-assistant"
+		);
+		const cancelledMessage = {
+			...assistantMessage(
+				[{ text: "Cancelled response", type: "text" }],
+				"cancelled-assistant"
+			),
+			metadata: { terminalOutcome: "cancelled" as const },
+		};
+		const interruptedMessage = {
+			...assistantMessage(
+				[{ text: "Interrupted response", type: "text" }],
+				"interrupted-assistant"
+			),
+			metadata: { terminalOutcome: "interrupted" as const },
+		};
+		const checkpoints = new Map([
+			[
+				completedMessage.id,
+				{
+					kind: "assistant" as const,
+					messageId: completedMessage.id,
+					recordId: sessionRecordId("invalid-completed-assistant-record"),
+					status: "invalid" as const,
+					reason: "Checkpoint does not end a valid Session context prefix.",
+				},
+			],
+			[
+				cancelledMessage.id,
+				{
+					kind: "assistant" as const,
+					messageId: cancelledMessage.id,
+					recordId: sessionRecordId("cancelled-assistant-record"),
+					status: "invalid" as const,
+					reason:
+						"Only completed terminal assistant outcomes are valid checkpoints.",
+				},
+			],
+			[
+				interruptedMessage.id,
+				{
+					kind: "assistant" as const,
+					messageId: interruptedMessage.id,
+					recordId: sessionRecordId("interrupted-assistant-record"),
+					status: "invalid" as const,
+					reason:
+						"Only completed terminal assistant outcomes are valid checkpoints.",
+				},
+			],
+		]);
+		const setup = await testRenderWithClipboard(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ChatMessage
+					forkCheckpoints={checkpoints}
+					messages={[completedMessage, cancelledMessage, interruptedMessage]}
+				/>
+			</ThemeProvider>,
+			{ height: 24, width: 100 }
+		);
+
+		try {
+			await act(async () => {
+				await flushUi(setup);
+			});
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain(
+				"Cannot rewind here: Checkpoint does not end a valid Session context prefix."
+			);
+			expect(frame).toContain(
+				"Cannot rewind here: Only completed terminal assistant outcomes are valid checkpoints."
+			);
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
 	test("rewind control acts on a valid user checkpoint and warns that files stay unchanged", async () => {
 		const rewindUser = userMessage("rewind-user");
 		const checkpointRecordId = sessionRecordId("rewind-user-record");
