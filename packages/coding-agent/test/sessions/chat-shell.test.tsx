@@ -653,7 +653,7 @@ describe("ChatShell notifications", () => {
 		}
 	});
 
-	test("later messages in the same turn and compactions follow earlier notices", async () => {
+	test("message- and compaction-anchored notices stay before later transcript entries", async () => {
 		const control: SessionNotificationControl = {};
 		const firstMessage = userMessage("first entry");
 		const laterAssistantMessage = assistantMessage(
@@ -661,6 +661,11 @@ describe("ChatShell notifications", () => {
 			"assistant-1"
 		);
 		const compaction = completedCompaction();
+		const laterUserMessage = userMessage("second entry");
+		const laterTurnAssistantMessage = assistantMessage(
+			[{ text: "Later turn answer", type: "text" }],
+			"assistant-2"
+		);
 		const { holder, setup } = await renderChatShell([firstMessage], {
 			height: 24,
 			notificationSetup: (
@@ -697,6 +702,24 @@ describe("ChatShell notifications", () => {
 				});
 			});
 			await flushUi(setup);
+			const initialLines = setup.captureCharFrame().split("\n");
+			const initialCompactionLine = initialLines.findIndex((line) =>
+				line.includes("Compacted (manual)")
+			);
+			const initialSecondStatusLine = initialLines.findIndex((line) =>
+				line.includes("Second status")
+			);
+			expect(initialSecondStatusLine).toBeGreaterThan(initialCompactionLine);
+			await act(async () => {
+				holder.current?.setMessages([
+					firstMessage,
+					laterAssistantMessage,
+					laterUserMessage,
+					laterTurnAssistantMessage,
+				]);
+				await setup.renderOnce();
+			});
+			await flushUi(setup);
 
 			const lines = setup.captureCharFrame().split("\n");
 			const firstEntryLine = lines.findIndex((line) =>
@@ -714,11 +737,15 @@ describe("ChatShell notifications", () => {
 			const secondStatusLine = lines.findIndex((line) =>
 				line.includes("Second status")
 			);
+			const secondEntryLine = lines.findIndex((line) =>
+				line.includes("second entry")
+			);
 			expect(firstEntryLine).toBeGreaterThan(-1);
 			expect(firstStatusLine).toBeGreaterThan(firstEntryLine);
 			expect(assistantLine).toBeGreaterThan(firstStatusLine);
-			expect(compactionLine).toBeGreaterThan(assistantLine);
-			expect(secondStatusLine).toBeGreaterThan(compactionLine);
+			expect(compactionLine).toBeGreaterThan(secondEntryLine);
+			expect(secondStatusLine).toBeGreaterThan(assistantLine);
+			expect(secondEntryLine).toBeGreaterThan(secondStatusLine);
 		} finally {
 			await act(async () => {
 				setup.renderer.destroy();

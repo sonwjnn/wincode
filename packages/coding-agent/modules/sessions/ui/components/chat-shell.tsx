@@ -183,7 +183,18 @@ const resolveNotificationSlot = (
 	timeline: readonly SessionTimelineItem[],
 	anchor: UiNotificationAnchor | undefined
 ): number => {
-	if (anchor?.afterCompactionId !== undefined) {
+	if (anchor === undefined) {
+		return timeline.length;
+	}
+	const currentMessageCount = timeline.reduce(
+		(count, item) =>
+			item.kind === "turn" ? count + item.turn.messages.length : count,
+		0
+	);
+	if (
+		anchor.afterCompactionId !== undefined &&
+		currentMessageCount === anchor.messageCount
+	) {
 		const compactionIndex = timeline.findIndex(
 			(item) =>
 				item.kind === "compaction" &&
@@ -193,9 +204,7 @@ const resolveNotificationSlot = (
 			return compactionIndex + 1;
 		}
 	}
-	return anchor === undefined
-		? timeline.length
-		: Math.max(0, Math.min(anchor.timelineItemCount, timeline.length));
+	return resolveNoticeSlot(timeline, anchor.messageCount);
 };
 
 const partitionNotificationsByMessage = (
