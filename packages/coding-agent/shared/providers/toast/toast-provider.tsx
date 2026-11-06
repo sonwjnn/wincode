@@ -13,6 +13,7 @@ import type {
 	ToastOptions,
 	ToastVariant,
 	UiNotification,
+	UiNotificationAnchor,
 	UiNotificationLevel,
 	UiStatus,
 } from "./types";
@@ -27,7 +28,12 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 type SessionNotificationStore = Readonly<{
 	notificationsByScope: ReadonlyMap<string, readonly UiNotification[]>;
 	statusesByScope: ReadonlyMap<string, readonly UiStatus[]>;
-	notify: (scope: string, message: string, level: UiNotificationLevel) => void;
+	notify: (
+		scope: string,
+		message: string,
+		level: UiNotificationLevel,
+		anchor?: UiNotificationAnchor
+	) => void;
 	setStatus: (scope: string, key: string, message: string | undefined) => void;
 	clearScope: (scope: string) => void;
 }>;
@@ -40,7 +46,11 @@ const EMPTY_UI_STATUSES: readonly UiStatus[] = [];
 export type SessionNotifications = Readonly<{
 	notifications: readonly UiNotification[];
 	statuses: readonly UiStatus[];
-	notify: (message: string, level?: UiNotificationLevel) => void;
+	notify: (
+		message: string,
+		level?: UiNotificationLevel,
+		anchor?: UiNotificationAnchor
+	) => void;
 	setStatus: (key: string, message: string | undefined) => void;
 	clear: () => void;
 }>;
@@ -62,8 +72,11 @@ export function useSessionNotifications(scope: string): SessionNotifications {
 		);
 	}
 	const notify = useCallback(
-		(message: string, level: UiNotificationLevel = "info") =>
-			store.notify(scope, message, level),
+		(
+			message: string,
+			level: UiNotificationLevel = "info",
+			anchor?: UiNotificationAnchor
+		) => store.notify(scope, message, level, anchor),
 		[scope, store.notify]
 	);
 	const setStatus = useCallback(
@@ -126,15 +139,29 @@ export function ToastProvider({ children }: ToastProviderProps) {
 	);
 
 	const notify = useCallback(
-		(scope: string, message: string, level: UiNotificationLevel): void => {
+		(
+			scope: string,
+			message: string,
+			level: UiNotificationLevel,
+			anchor?: UiNotificationAnchor
+		): void => {
 			const id = ++nextNotificationIdRef.current;
 			setNotificationsByScope((current) => {
 				const scopedNotifications = current.get(scope) ?? [];
 				const last = scopedNotifications.at(-1);
+				const sameAnchor =
+					last?.anchor?.messageCount === anchor?.messageCount &&
+					last?.anchor?.timelineItemCount === anchor?.timelineItemCount;
+				const nextNotification: UiNotification = {
+					id,
+					level,
+					message,
+					...(anchor === undefined ? {} : { anchor }),
+				};
 				const nextScopedNotifications =
-					level === "info" && last?.level === "info"
+					level === "info" && last?.level === "info" && sameAnchor
 						? [...scopedNotifications.slice(0, -1), { ...last, message }]
-						: [...scopedNotifications, { id, level, message }];
+						: [...scopedNotifications, nextNotification];
 				return new Map(current).set(scope, nextScopedNotifications);
 			});
 		},

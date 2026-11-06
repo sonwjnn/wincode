@@ -55,6 +55,7 @@ import {
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import {
+	type SessionNotifications,
 	ToastProvider,
 	useSessionNotifications,
 } from "@/shared/providers/toast/toast-provider";
@@ -577,14 +578,31 @@ const assertSummaryDiffClipping = async ({
 function SeedSessionNotifications() {
 	const { notify } = useSessionNotifications("test");
 	useEffect(() => {
-		notify("Scanning workspace", "info");
-		notify("Warming model cache", "info");
-		notify("Provider connection is degraded", "warning");
-		notify("Authentication failed", "error");
-		notify("Request failed", "error");
-		notify("Session renamed", "success");
-		notify("Session compacted", "success");
+		const anchor = { messageCount: 1, timelineItemCount: 1 };
+		notify("Scanning workspace", "info", anchor);
+		notify("Warming model cache", "info", anchor);
+		notify("Provider connection is degraded", "warning", anchor);
+		notify("Authentication failed", "error", anchor);
+		notify("Request failed", "error", anchor);
+		notify("Session renamed", "success", anchor);
+		notify("Session compacted", "success", anchor);
 	}, [notify]);
+	return null;
+}
+
+type SessionNotificationControl = {
+	notify?: SessionNotifications["notify"];
+};
+
+function CaptureSessionNotificationControl({
+	control,
+}: {
+	control: SessionNotificationControl;
+}) {
+	const { notify } = useSessionNotifications("test");
+	useEffect(() => {
+		control.notify = notify;
+	}, [control, notify]);
 	return null;
 }
 
@@ -628,6 +646,72 @@ describe("ChatShell notifications", () => {
 			expect(frame).toContain("Error: Request failed");
 			expect(frame).toContain("Session renamed");
 			expect(frame).toContain("Session compacted");
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("a later chat entry separates consecutive info notices", async () => {
+		const control: SessionNotificationControl = {};
+		const { holder, setup } = await renderChatShell(
+			[userMessage("first entry")],
+			{
+				height: 24,
+				notificationSetup: (
+					<CaptureSessionNotificationControl control={control} />
+				),
+				width: 100,
+			}
+		);
+
+		try {
+			await flushUi(setup);
+			if (control.notify === undefined) {
+				throw new Error(
+					"The session notification control was not initialized."
+				);
+			}
+			await act(async () => {
+				control.notify?.("First status", "info", {
+					messageCount: 1,
+					timelineItemCount: 1,
+				});
+			});
+			await flushUi(setup);
+			await act(async () => {
+				holder.current?.setMessages([
+					userMessage("first entry"),
+					userMessage("second entry"),
+				]);
+				await setup.renderOnce();
+			});
+			await act(async () => {
+				control.notify?.("Second status", "info", {
+					messageCount: 2,
+					timelineItemCount: 2,
+				});
+			});
+			await flushUi(setup);
+
+			const lines = setup.captureCharFrame().split("\n");
+			const firstEntryLine = lines.findIndex((line) =>
+				line.includes("first entry")
+			);
+			const firstStatusLine = lines.findIndex((line) =>
+				line.includes("First status")
+			);
+			const secondEntryLine = lines.findIndex((line) =>
+				line.includes("second entry")
+			);
+			const secondStatusLine = lines.findIndex((line) =>
+				line.includes("Second status")
+			);
+			expect(firstEntryLine).toBeGreaterThan(-1);
+			expect(firstStatusLine).toBeGreaterThan(firstEntryLine);
+			expect(secondEntryLine).toBeGreaterThan(firstStatusLine);
+			expect(secondStatusLine).toBeGreaterThan(secondEntryLine);
 		} finally {
 			await act(async () => {
 				setup.renderer.destroy();

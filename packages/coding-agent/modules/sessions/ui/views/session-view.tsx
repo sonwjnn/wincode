@@ -12,7 +12,14 @@ import {
 	isUndefined,
 	omitUndefined,
 } from "@wincode/utils";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	type AgentRegistry,
 	type AgentSelectionOverride,
@@ -61,6 +68,10 @@ import type {
 } from "../../submission-types";
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
+import {
+	getSessionTimelineAnchor,
+	type SessionTimelineAnchor,
+} from "../components/chat-timeline";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
 import { indexSessionForkCheckpoints } from "../session-fork-checkpoints";
 import { rewindSessionView, type SessionRewindAction } from "../session-rewind";
@@ -362,9 +373,12 @@ export function SessionView({
 		notify: notifySession,
 		setStatus: setSessionStatus,
 	} = useSessionNotifications(sessionId);
+	const notificationAnchorRef = useRef<SessionTimelineAnchor | undefined>(
+		undefined
+	);
 	const show = useCallback(
 		({ message, variant }: Pick<ToastOptions, "message" | "variant">): void => {
-			notifySession(message, variant ?? "info");
+			notifySession(message, variant ?? "info", notificationAnchorRef.current);
 		},
 		[notifySession]
 	);
@@ -553,6 +567,13 @@ export function SessionView({
 			...optimisticMessages.filter(({ id }) => !committedIds.has(id)),
 		];
 	}, [displayAnnotationsByMessage, optimisticMessages, snapshot.transcript]);
+	const notificationAnchor = useMemo(
+		() => getSessionTimelineAnchor(messages, snapshot.compactions),
+		[messages, snapshot.compactions]
+	);
+	useLayoutEffect(() => {
+		notificationAnchorRef.current = notificationAnchor;
+	}, [notificationAnchor]);
 	const error = snapshot.compactionError ?? snapshot.error;
 	// The session's own facts decide whether it is busy: a running turn or a
 	// compaction in flight.

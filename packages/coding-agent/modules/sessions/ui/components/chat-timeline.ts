@@ -9,6 +9,11 @@ export type SessionTimelineItem =
 	| { kind: "turn"; turn: SessionTurn }
 	| { kind: "compaction"; compaction: SessionCompaction };
 
+export type SessionTimelineAnchor = Readonly<{
+	messageCount: number;
+	timelineItemCount: number;
+}>;
+
 export const buildSessionTimeline = (
 	messages: readonly SessionMessage[],
 	compactions: readonly SessionCompaction[] = []
@@ -44,4 +49,18 @@ export const buildSessionTimeline = (
 	}
 
 	return timeline;
+};
+
+export const getSessionTimelineAnchor = (
+	messages: readonly SessionMessage[],
+	compactions: readonly SessionCompaction[] = []
+): SessionTimelineAnchor => {
+	const displayMessages = messages.filter(
+		(message) => !isCompactionSummaryMessage(message)
+	);
+	return {
+		messageCount: displayMessages.length,
+		timelineItemCount: buildSessionTimeline(displayMessages, compactions)
+			.length,
+	};
 };

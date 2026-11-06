@@ -37,7 +37,11 @@ import {
 	getThinkingLevelColor,
 } from "@/shared/providers/theme/themes";
 import { useSessionNotifications } from "@/shared/providers/toast/toast-provider";
-import type { UiNotificationLevel } from "@/shared/providers/toast/types";
+import type {
+	UiNotification,
+	UiNotificationAnchor,
+	UiNotificationLevel,
+} from "@/shared/providers/toast/types";
 import { Spinner } from "@/shared/ui/spinner";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import type { SessionQueuedSubmission } from "../../agent-session/types";
@@ -141,7 +145,10 @@ const findNewestCompaction = (
 
 const TRANSCRIPT_NOTICE = Symbol("transcript-notice");
 
-type TranscriptEntry = SessionTimelineItem | typeof TRANSCRIPT_NOTICE;
+type TranscriptEntry =
+	| SessionTimelineItem
+	| { kind: "notification"; notification: UiNotification }
+	| typeof TRANSCRIPT_NOTICE;
 
 /**
  * Slots the transient notice after every message that existed when it first
@@ -155,24 +162,6 @@ const NOTIFICATION_PREFIX: Record<UiNotificationLevel, string> = {
 	warning: "Warning: ",
 	error: "Error: ",
 };
-
-function SessionNotificationMessages({ scope }: { scope: string }) {
-	const { notifications } = useSessionNotifications(scope);
-	const { colors } = useTheme();
-	const notificationColors: Record<UiNotificationLevel, string> = {
-		info: colors.textMuted,
-		success: colors.success,
-		warning: colors.warning,
-		error: colors.error,
-	};
-	return notifications.map(({ id, level, message }) => (
-		<box key={id} paddingX={1} width="100%">
-			<text fg={notificationColors[level]} width="100%" wrapMode="word">
-				{`${NOTIFICATION_PREFIX[level]}${message}`}
-			</text>
-		</box>
-	));
-}
 
 function SessionFooterStatuses({ scope }: { scope: string }) {
 	const { statuses } = useSessionNotifications(scope);
@@ -208,6 +197,50 @@ const resolveNoticeSlot = (
 		}
 	}
 	return timeline.length;
+};
+
+const resolveNotificationSlot = (
+	timeline: readonly SessionTimelineItem[],
+	anchor: UiNotificationAnchor | undefined
+): number =>
+	anchor === undefined
+		? timeline.length
+		: Math.min(anchor.timelineItemCount, timeline.length);
+
+const buildTranscriptEntries = (
+	timeline: readonly SessionTimelineItem[],
+	notifications: readonly UiNotification[],
+	noticeAnchorMessageCount: number | undefined
+): readonly TranscriptEntry[] => {
+	const entriesAtSlot = new Map<number, TranscriptEntry[]>();
+	const appendAtSlot = (slot: number, entry: TranscriptEntry): void => {
+		const entries = entriesAtSlot.get(slot) ?? [];
+		entries.push(entry);
+		entriesAtSlot.set(slot, entries);
+	};
+
+	if (noticeAnchorMessageCount !== undefined) {
+		appendAtSlot(
+			resolveNoticeSlot(timeline, noticeAnchorMessageCount),
+			TRANSCRIPT_NOTICE
+		);
+	}
+	for (const notification of notifications) {
+		appendAtSlot(resolveNotificationSlot(timeline, notification.anchor), {
+			kind: "notification",
+			notification,
+		});
+	}
+
+	const transcriptEntries: TranscriptEntry[] = [];
+	for (let slot = 0; slot <= timeline.length; slot++) {
+		transcriptEntries.push(...(entriesAtSlot.get(slot) ?? []));
+		const item = timeline[slot];
+		if (item !== undefined) {
+			transcriptEntries.push(item);
+		}
+	}
+	return transcriptEntries;
 };
 
 export function ChatShell({
@@ -248,6 +281,13 @@ export function ChatShell({
 	const [scrollRequest, setScrollRequest] = useState(0);
 	const { agent, model, thinkingLevel } = usePromptConfig();
 	const { colors } = useTheme();
+	const { notifications } = useSessionNotifications(viewId);
+	const notificationColors: Record<UiNotificationLevel, string> = {
+		info: colors.textMuted,
+		success: colors.success,
+		warning: colors.warning,
+		error: colors.error,
+	};
 	const isComposerFocused = isTopLayer("base") || isTopLayer("command");
 	const defaultComposerBorderColor = isComposerFocused
 		? colors.borderActive
@@ -343,6 +383,10 @@ export function ChatShell({
 	);
 	const turns = groupMessagesBySessionTurn(displayMessages);
 	const timeline = buildSessionTimeline(displayMessages, historicalCompactions);
+	const transcriptTimeline: readonly SessionTimelineItem[] =
+		liveCompaction === undefined
+			? timeline
+			: [...timeline, { kind: "compaction", compaction: liveCompaction }];
 	const hasTranscriptNotice =
 		transcriptNotice !== undefined && transcriptNotice !== null;
 	const [hadTranscriptNotice, setHadTranscriptNotice] = useState(false);
@@ -357,14 +401,11 @@ export function ChatShell({
 			hasTranscriptNotice ? displayMessages.length : undefined
 		);
 	}
-	const noticeSlot = resolveNoticeSlot(timeline, noticeAnchorMessageCount);
-	const transcriptEntries: readonly TranscriptEntry[] = hasTranscriptNotice
-		? [
-				...timeline.slice(0, noticeSlot),
-				TRANSCRIPT_NOTICE,
-				...timeline.slice(noticeSlot),
-			]
-		: timeline;
+	const transcriptEntries = buildTranscriptEntries(
+		transcriptTimeline,
+		notifications,
+		hasTranscriptNotice ? noticeAnchorMessageCount : undefined
+	);
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
 	const retryableMessages = activeMessages ?? displayMessages;
 	const canRetryMessage = (messageId: SessionMessageId): boolean =>
@@ -477,6 +518,24 @@ export function ChatShell({
 								</box>
 							);
 						}
+						if (entry.kind === "notification") {
+							const { notification } = entry;
+							return (
+								<box
+									key={`session-notification-${notification.id}`}
+									paddingX={1}
+									width="100%"
+								>
+									<text
+										fg={notificationColors[notification.level]}
+										width="100%"
+										wrapMode="word"
+									>
+										{`${NOTIFICATION_PREFIX[notification.level]}${notification.message}`}
+									</text>
+								</box>
+							);
+						}
 						const item = entry;
 						if (item.kind === "compaction") {
 							return (
@@ -512,8 +571,6 @@ export function ChatShell({
 							</box>
 						);
 					})}
-					<SessionNotificationMessages scope={viewId} />
-					{liveCompaction ? <CompactionDivider entry={liveCompaction} /> : null}
 					{isCompacting ? (
 						<CompactionStatus agent={agent} autoCompact={autoCompact} />
 					) : null}

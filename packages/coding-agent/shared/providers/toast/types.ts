@@ -2,10 +2,16 @@ export type ToastVariant = "success" | "error" | "info";
 
 export type UiNotificationLevel = ToastVariant | "warning";
 
+export type UiNotificationAnchor = Readonly<{
+	messageCount: number;
+	timelineItemCount: number;
+}>;
+
 export type UiNotification = Readonly<{
 	id: number;
 	level: UiNotificationLevel;
 	message: string;
+	anchor?: UiNotificationAnchor;
 }>;
 
 export type UiStatus = Readonly<{
