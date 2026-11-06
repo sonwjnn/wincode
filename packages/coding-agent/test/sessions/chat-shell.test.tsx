@@ -653,18 +653,21 @@ describe("ChatShell notifications", () => {
 		}
 	});
 
-	test("a later chat entry separates consecutive info notices", async () => {
+	test("later messages in the same turn and compactions follow earlier notices", async () => {
 		const control: SessionNotificationControl = {};
-		const { holder, setup } = await renderChatShell(
-			[userMessage("first entry")],
-			{
-				height: 24,
-				notificationSetup: (
-					<CaptureSessionNotificationControl control={control} />
-				),
-				width: 100,
-			}
+		const firstMessage = userMessage("first entry");
+		const laterAssistantMessage = assistantMessage(
+			[{ text: "Later assistant answer", type: "text" }],
+			"assistant-1"
 		);
+		const compaction = completedCompaction();
+		const { holder, setup } = await renderChatShell([firstMessage], {
+			height: 24,
+			notificationSetup: (
+				<CaptureSessionNotificationControl control={control} />
+			),
+			width: 100,
+		});
 
 		try {
 			await flushUi(setup);
@@ -677,20 +680,20 @@ describe("ChatShell notifications", () => {
 				control.notify?.("First status", "info", {
 					messageCount: 1,
 					timelineItemCount: 1,
+					afterMessageId: firstMessage.id,
 				});
 			});
 			await flushUi(setup);
 			await act(async () => {
-				holder.current?.setMessages([
-					userMessage("first entry"),
-					userMessage("second entry"),
-				]);
+				holder.current?.setMessages([firstMessage, laterAssistantMessage]);
+				holder.current?.setCompactions([compaction]);
 				await setup.renderOnce();
 			});
 			await act(async () => {
 				control.notify?.("Second status", "info", {
 					messageCount: 2,
 					timelineItemCount: 2,
+					afterCompactionId: compaction.id,
 				});
 			});
 			await flushUi(setup);
@@ -702,16 +705,20 @@ describe("ChatShell notifications", () => {
 			const firstStatusLine = lines.findIndex((line) =>
 				line.includes("First status")
 			);
-			const secondEntryLine = lines.findIndex((line) =>
-				line.includes("second entry")
+			const assistantLine = lines.findIndex((line) =>
+				line.includes("Later assistant answer")
+			);
+			const compactionLine = lines.findIndex((line) =>
+				line.includes("Compacted (manual)")
 			);
 			const secondStatusLine = lines.findIndex((line) =>
 				line.includes("Second status")
 			);
 			expect(firstEntryLine).toBeGreaterThan(-1);
 			expect(firstStatusLine).toBeGreaterThan(firstEntryLine);
-			expect(secondEntryLine).toBeGreaterThan(firstStatusLine);
-			expect(secondStatusLine).toBeGreaterThan(secondEntryLine);
+			expect(assistantLine).toBeGreaterThan(firstStatusLine);
+			expect(compactionLine).toBeGreaterThan(assistantLine);
+			expect(secondStatusLine).toBeGreaterThan(compactionLine);
 		} finally {
 			await act(async () => {
 				setup.renderer.destroy();

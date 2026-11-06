@@ -40,7 +40,6 @@ import { useSessionNotifications } from "@/shared/providers/toast/toast-provider
 import type {
 	UiNotification,
 	UiNotificationAnchor,
-	UiNotificationLevel,
 } from "@/shared/providers/toast/types";
 import { Spinner } from "@/shared/ui/spinner";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
@@ -53,10 +52,10 @@ import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
 import { ErrorMessage } from "../messages";
-import { ChatMessage } from "./chat-message";
+import { ChatMessage, ChatNotificationMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
 import {
-	buildSessionTimeline,
+	buildSessionTranscriptTimeline,
 	type SessionTimelineItem,
 } from "./chat-timeline";
 import {
@@ -131,18 +130,6 @@ function ActivityFooter({
 		</box>
 	);
 }
-const findNewestCompaction = (
-	compactions: readonly SessionCompaction[]
-): SessionCompaction | undefined => {
-	let newest: SessionCompaction | undefined;
-	for (const compaction of compactions) {
-		if (isUndefined(newest) || compaction.sequence > newest.sequence) {
-			newest = compaction;
-		}
-	}
-	return newest;
-};
-
 const TRANSCRIPT_NOTICE = Symbol("transcript-notice");
 
 type TranscriptEntry =
@@ -156,13 +143,6 @@ type TranscriptEntry =
  * down. The notice is never persisted: a fresh mount captures the anchor again
  * and renders it at the end of the loaded transcript.
  */
-const NOTIFICATION_PREFIX: Record<UiNotificationLevel, string> = {
-	info: "",
-	success: "",
-	warning: "Warning: ",
-	error: "Error: ",
-};
-
 function SessionFooterStatuses({ scope }: { scope: string }) {
 	const { statuses } = useSessionNotifications(scope);
 	const { colors } = useTheme();
@@ -202,10 +182,44 @@ const resolveNoticeSlot = (
 const resolveNotificationSlot = (
 	timeline: readonly SessionTimelineItem[],
 	anchor: UiNotificationAnchor | undefined
-): number =>
-	anchor === undefined
+): number => {
+	if (anchor?.afterCompactionId !== undefined) {
+		const compactionIndex = timeline.findIndex(
+			(item) =>
+				item.kind === "compaction" &&
+				item.compaction.id === anchor.afterCompactionId
+		);
+		if (compactionIndex !== -1) {
+			return compactionIndex + 1;
+		}
+	}
+	return anchor === undefined
 		? timeline.length
-		: Math.min(anchor.timelineItemCount, timeline.length);
+		: Math.max(0, Math.min(anchor.timelineItemCount, timeline.length));
+};
+
+const partitionNotificationsByMessage = (
+	notifications: readonly UiNotification[],
+	messages: readonly SessionMessage[]
+): {
+	notificationsByMessageId: Map<string, UiNotification[]>;
+	timelineNotifications: UiNotification[];
+} => {
+	const messageIds = new Set<string>(messages.map(({ id }) => id));
+	const notificationsByMessageId = new Map<string, UiNotification[]>();
+	const timelineNotifications: UiNotification[] = [];
+	for (const notification of notifications) {
+		const messageId = notification.anchor?.afterMessageId;
+		if (messageId === undefined || !messageIds.has(messageId)) {
+			timelineNotifications.push(notification);
+			continue;
+		}
+		const anchoredNotifications = notificationsByMessageId.get(messageId) ?? [];
+		anchoredNotifications.push(notification);
+		notificationsByMessageId.set(messageId, anchoredNotifications);
+	}
+	return { notificationsByMessageId, timelineNotifications };
+};
 
 const buildTranscriptEntries = (
 	timeline: readonly SessionTimelineItem[],
@@ -282,12 +296,6 @@ export function ChatShell({
 	const { agent, model, thinkingLevel } = usePromptConfig();
 	const { colors } = useTheme();
 	const { notifications } = useSessionNotifications(viewId);
-	const notificationColors: Record<UiNotificationLevel, string> = {
-		info: colors.textMuted,
-		success: colors.success,
-		warning: colors.warning,
-		error: colors.error,
-	};
 	const isComposerFocused = isTopLayer("base") || isTopLayer("command");
 	const defaultComposerBorderColor = isComposerFocused
 		? colors.borderActive
@@ -377,16 +385,13 @@ export function ChatShell({
 	const displayMessages = messages.filter(
 		(message) => !isCompactionSummaryMessage(message)
 	);
-	const liveCompaction = findNewestCompaction(compactions);
-	const historicalCompactions = compactions.filter(
-		({ id }) => id !== liveCompaction?.id
-	);
 	const turns = groupMessagesBySessionTurn(displayMessages);
-	const timeline = buildSessionTimeline(displayMessages, historicalCompactions);
-	const transcriptTimeline: readonly SessionTimelineItem[] =
-		liveCompaction === undefined
-			? timeline
-			: [...timeline, { kind: "compaction", compaction: liveCompaction }];
+	const transcriptTimeline = buildSessionTranscriptTimeline(
+		messages,
+		compactions
+	);
+	const { notificationsByMessageId, timelineNotifications } =
+		partitionNotificationsByMessage(notifications, displayMessages);
 	const hasTranscriptNotice =
 		transcriptNotice !== undefined && transcriptNotice !== null;
 	const [hadTranscriptNotice, setHadTranscriptNotice] = useState(false);
@@ -403,7 +408,7 @@ export function ChatShell({
 	}
 	const transcriptEntries = buildTranscriptEntries(
 		transcriptTimeline,
-		notifications,
+		timelineNotifications,
 		hasTranscriptNotice ? noticeAnchorMessageCount : undefined
 	);
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
@@ -519,21 +524,11 @@ export function ChatShell({
 							);
 						}
 						if (entry.kind === "notification") {
-							const { notification } = entry;
 							return (
-								<box
-									key={`session-notification-${notification.id}`}
-									paddingX={1}
-									width="100%"
-								>
-									<text
-										fg={notificationColors[notification.level]}
-										width="100%"
-										wrapMode="word"
-									>
-										{`${NOTIFICATION_PREFIX[notification.level]}${notification.message}`}
-									</text>
-								</box>
+								<ChatNotificationMessage
+									key={`session-notification-${entry.notification.id}`}
+									notification={entry.notification}
+								/>
 							);
 						}
 						const item = entry;
@@ -553,7 +548,7 @@ export function ChatShell({
 						return (
 							<box
 								key={turn.id}
-								marginTop={item === timeline[0] ? 1 : 0}
+								marginTop={item === transcriptTimeline[0] ? 1 : 0}
 								width="100%"
 							>
 								<ChatMessage
@@ -563,6 +558,7 @@ export function ChatShell({
 										isBusy || rewindingCheckpointId !== undefined
 									}
 									messages={turn.messages}
+									notificationsAfterMessage={notificationsByMessageId}
 									onRetry={canRetryTurn ? onRetry : undefined}
 									onRewindCheckpoint={onRewindCheckpoint}
 									rewindingCheckpointId={rewindingCheckpointId}

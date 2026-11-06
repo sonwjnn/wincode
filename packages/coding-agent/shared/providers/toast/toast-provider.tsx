@@ -151,7 +151,9 @@ export function ToastProvider({ children }: ToastProviderProps) {
 				const last = scopedNotifications.at(-1);
 				const sameAnchor =
 					last?.anchor?.messageCount === anchor?.messageCount &&
-					last?.anchor?.timelineItemCount === anchor?.timelineItemCount;
+					last?.anchor?.timelineItemCount === anchor?.timelineItemCount &&
+					last?.anchor?.afterMessageId === anchor?.afterMessageId &&
+					last?.anchor?.afterCompactionId === anchor?.afterCompactionId;
 				const nextNotification: UiNotification = {
 					id,
 					level,

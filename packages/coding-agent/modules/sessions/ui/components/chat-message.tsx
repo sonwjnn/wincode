@@ -6,6 +6,10 @@ import { buildAgent } from "@/modules/agents";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
+import type {
+	UiNotification,
+	UiNotificationLevel,
+} from "@/shared/providers/toast/types";
 import {
 	BotMessageContent,
 	BotMessageFooter,
@@ -20,6 +24,7 @@ export function ChatMessage({
 	forkCheckpoints,
 	isRewindDisabled = false,
 	messages,
+	notificationsAfterMessage,
 	rewindingCheckpointId,
 	onRewindCheckpoint,
 	onRetry,
@@ -32,6 +37,7 @@ export function ChatMessage({
 	>;
 	isRewindDisabled?: boolean;
 	messages: SessionMessage[];
+	notificationsAfterMessage?: ReadonlyMap<string, readonly UiNotification[]>;
 	rewindingCheckpointId?: SessionRecordId;
 	onRewindCheckpoint?: (recordId: SessionRecordId) => void | Promise<void>;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
@@ -126,6 +132,12 @@ export function ChatMessage({
 							/>
 						)}
 						{renderCheckpoint(forkCheckpoints?.get(message.id))}
+						{notificationsAfterMessage?.get(message.id)?.map((notification) => (
+							<ChatNotificationMessage
+								key={`session-notification-${notification.id}`}
+								notification={notification}
+							/>
+						))}
 					</box>
 				))}
 			</box>
@@ -163,6 +175,38 @@ export function ChatMessage({
 					<BotMessageFooter message={footerMessage} />
 				</box>
 			) : null}
+		</box>
+	);
+}
+
+const NOTIFICATION_PREFIX: Record<UiNotificationLevel, string> = {
+	info: "",
+	success: "",
+	warning: "Warning: ",
+	error: "Error: ",
+};
+
+export function ChatNotificationMessage({
+	notification,
+}: {
+	notification: UiNotification;
+}) {
+	const { colors } = useTheme();
+	const notificationColors: Record<UiNotificationLevel, string> = {
+		info: colors.textMuted,
+		success: colors.success,
+		warning: colors.warning,
+		error: colors.error,
+	};
+	return (
+		<box paddingX={1} width="100%">
+			<text
+				fg={notificationColors[notification.level]}
+				width="100%"
+				wrapMode="word"
+			>
+				{`${NOTIFICATION_PREFIX[notification.level]}${notification.message}`}
+			</text>
 		</box>
 	);
 }

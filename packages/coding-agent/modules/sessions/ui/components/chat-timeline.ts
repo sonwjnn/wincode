@@ -1,4 +1,5 @@
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { UiNotificationAnchor } from "@/shared/providers/toast/types";
 import {
 	isCompactionSummaryMessage,
 	type SessionCompaction,
@@ -9,10 +10,7 @@ export type SessionTimelineItem =
 	| { kind: "turn"; turn: SessionTurn }
 	| { kind: "compaction"; compaction: SessionCompaction };
 
-export type SessionTimelineAnchor = Readonly<{
-	messageCount: number;
-	timelineItemCount: number;
-}>;
+export type SessionTimelineAnchor = UiNotificationAnchor;
 
 export const buildSessionTimeline = (
 	messages: readonly SessionMessage[],
@@ -51,16 +49,47 @@ export const buildSessionTimeline = (
 	return timeline;
 };
 
+export const buildSessionTranscriptTimeline = (
+	messages: readonly SessionMessage[],
+	compactions: readonly SessionCompaction[] = []
+): SessionTimelineItem[] => {
+	const newestCompaction = compactions.reduce<SessionCompaction | undefined>(
+		(newest, compaction) =>
+			newest === undefined || compaction.sequence > newest.sequence
+				? compaction
+				: newest,
+		undefined
+	);
+	const historicalCompactions = compactions.filter(
+		({ id }) => id !== newestCompaction?.id
+	);
+	const timeline = buildSessionTimeline(messages, historicalCompactions);
+	return newestCompaction === undefined
+		? timeline
+		: [...timeline, { kind: "compaction", compaction: newestCompaction }];
+};
+
 export const getSessionTimelineAnchor = (
 	messages: readonly SessionMessage[],
 	compactions: readonly SessionCompaction[] = []
 ): SessionTimelineAnchor => {
-	const displayMessages = messages.filter(
-		(message) => !isCompactionSummaryMessage(message)
+	const timeline = buildSessionTranscriptTimeline(messages, compactions);
+	const messageCount = timeline.reduce(
+		(count, item) =>
+			item.kind === "turn" ? count + item.turn.messages.length : count,
+		0
 	);
+	const lastItem = timeline.at(-1);
+	const lastTurnMessage =
+		lastItem?.kind === "turn" ? lastItem.turn.messages.at(-1) : undefined;
 	return {
-		messageCount: displayMessages.length,
-		timelineItemCount: buildSessionTimeline(displayMessages, compactions)
-			.length,
+		messageCount,
+		timelineItemCount: timeline.length,
+		...(lastTurnMessage === undefined
+			? {}
+			: { afterMessageId: lastTurnMessage.id }),
+		...(lastItem?.kind === "compaction"
+			? { afterCompactionId: lastItem.compaction.id }
+			: {}),
 	};
 };

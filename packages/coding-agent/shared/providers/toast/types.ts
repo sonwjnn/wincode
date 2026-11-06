@@ -5,6 +5,8 @@ export type UiNotificationLevel = ToastVariant | "warning";
 export type UiNotificationAnchor = Readonly<{
 	messageCount: number;
 	timelineItemCount: number;
+	afterMessageId?: string;
+	afterCompactionId?: string;
 }>;
 
 export type UiNotification = Readonly<{
