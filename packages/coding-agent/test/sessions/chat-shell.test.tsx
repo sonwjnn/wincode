@@ -19,7 +19,11 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { SessionMessageId, SessionRecordId } from "@wincode/agent-core";
+import type {
+	ModelRetryStatus,
+	SessionMessageId,
+	SessionRecordId,
+} from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
 import type { ProviderModel, ThinkingLevel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
@@ -32,6 +36,7 @@ import {
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
+import { CommittedAssistantError } from "@/modules/sessions/committed-assistant-error";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import type {
@@ -165,6 +170,7 @@ type ChatShellProbeHandle = {
 	setCompactions: (compactions: SessionCompaction[]) => void;
 	setCompacting: (isCompacting: boolean) => void;
 	setMessages: (messages: SessionMessage[]) => void;
+	setRetryStatus: (status: ModelRetryStatus | undefined) => void;
 };
 
 const buildTestRouter = () =>
@@ -183,6 +189,8 @@ type ChatShellProbeProps = {
 	holder: { current: ChatShellProbeHandle | null };
 	initialCompactions?: SessionCompaction[];
 	initialMessages: SessionMessage[];
+	error?: unknown;
+	retryStatus?: ModelRetryStatus;
 	isBusy?: boolean;
 	isCompacting?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
@@ -218,6 +226,8 @@ function ChatShellProbe({
 	holder,
 	initialCompactions = [],
 	initialMessages,
+	error,
+	retryStatus: initialRetryStatus,
 	isBusy = false,
 	providerController,
 	isCompacting: initialIsCompacting = false,
@@ -231,6 +241,7 @@ function ChatShellProbe({
 	const [composerRevision, setComposerRevision] = useState(0);
 	const [isCompacting, setCompacting] = useState(initialIsCompacting);
 	const [messages, setMessages] = useState(initialMessages);
+	const [retryStatus, setRetryStatus] = useState(initialRetryStatus);
 	useEffect(() => {
 		holder.current = {
 			popKeyboardLayer: pop,
@@ -239,6 +250,7 @@ function ChatShellProbe({
 			setCompactions,
 			setCompacting,
 			setMessages,
+			setRetryStatus,
 		};
 		return () => {
 			holder.current = null;
@@ -254,7 +266,8 @@ function ChatShellProbe({
 				activeMessages={activeMessages}
 				compactions={compactions}
 				draftKey="draft-test-key"
-				error={undefined}
+				error={error}
+				errorSource="turn"
 				isBusy={isBusy || isCompacting}
 				isCompacting={isCompacting}
 				key={composerRevision}
@@ -264,6 +277,7 @@ function ChatShellProbe({
 				promptHistory={[]}
 				providerController={providerController}
 				queuedSubmissions={queuedSubmissions}
+				retryStatus={retryStatus}
 				sessionUsageEntries={sessionUsageEntries}
 				transcriptNotice={transcriptNotice}
 				viewId="test"
@@ -286,7 +300,9 @@ type ChatShellRenderOptions = {
 	providerController?: InteractiveProviderController;
 	height: number;
 	width: number;
+	error?: unknown;
 	initialCompactions?: SessionCompaction[];
+	retryStatus?: ModelRetryStatus;
 	initialThinkingLevel?: ThinkingLevel;
 	initialModel?: ProviderModelSelection;
 	configuredAgent?: boolean;
@@ -307,8 +323,10 @@ const renderChatShell = async (
 		providerController,
 		height,
 		width,
+		error,
 		initialCompactions = [],
 		initialThinkingLevel,
+		retryStatus,
 		initialModel,
 		configuredAgent = false,
 		autoCompact,
@@ -395,6 +413,7 @@ const renderChatShell = async (
 												<ChatShellProbe
 													activeMessages={activeMessages}
 													agentHolder={agent}
+													error={error}
 													holder={holder}
 													initialCompactions={initialCompactions}
 													initialMessages={initialMessages}
@@ -404,6 +423,7 @@ const renderChatShell = async (
 													onRetry={onRetry}
 													providerController={providerController}
 													queuedSubmissions={queuedSubmissions}
+													retryStatus={retryStatus}
 													sessionUsageEntries={sessionUsageEntries}
 													transcriptNotice={transcriptNotice}
 												/>
@@ -983,6 +1003,8 @@ describe("ChatShell composer focus", () => {
 
 		try {
 			await flushUi(setup);
+			setup.mockInput.pressKey("w", { meta: true });
+			await flushUi(setup);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-1");
 			expect(retryControl?.focusable).toBe(true);
@@ -998,7 +1020,7 @@ describe("ChatShell composer focus", () => {
 			setup.renderer.destroy();
 		}
 	});
-	test("failed assistant errors show Retry without an invalid checkpoint refusal", async () => {
+	test("failed assistant errors are red transcript lines without persistent Retry or checkpoint controls", async () => {
 		const user = userMessage("auth-failure-user");
 		const failedAssistant = {
 			...assistantMessage(
@@ -1054,9 +1076,19 @@ describe("ChatShell composer focus", () => {
 				await flushUi(setup);
 			});
 			const frame = setup.captureCharFrame();
-			expect(frame).toContain("Model authentication failed.");
-			expect(frame).toContain("Retry");
-			expect(frame).toContain("Rewind to this checkpoint");
+			expect(frame).toContain("Error: Model authentication failed.");
+			expect(frame).not.toContain("Retry");
+			expect(frame).not.toContain("Rewind to this checkpoint");
+			expect(frame).not.toContain("Workspace files will not be rolled back.");
+			const errorSpan = setup
+				.captureSpans()
+				.lines.flatMap(({ spans }) => spans)
+				.find(({ text }) =>
+					text.includes("Error: Model authentication failed.")
+				);
+			expect(
+				errorSpan?.fg.equals(RGBA.fromHex(DEFAULT_THEME.colors.error))
+			).toBe(true);
 			expect(frame).not.toContain("Cannot rewind here:");
 			expect(frame).not.toContain(
 				"Only completed terminal assistant outcomes are valid checkpoints."
@@ -1128,6 +1160,7 @@ describe("ChatShell composer focus", () => {
 				<ChatMessage
 					forkCheckpoints={checkpoints}
 					messages={[completedMessage, cancelledMessage, interruptedMessage]}
+					showActions
 				/>
 			</ThemeProvider>,
 			{ height: 24, width: 100 }
@@ -1174,6 +1207,7 @@ describe("ChatShell composer focus", () => {
 					onRewindCheckpoint={(recordId) => {
 						rewoundCheckpoints.push(recordId);
 					}}
+					showActions
 				/>
 			</ThemeProvider>,
 			{ height: 30, width: 100 }
@@ -1225,6 +1259,8 @@ describe("ChatShell composer focus", () => {
 
 		try {
 			await flushUi(setup);
+			setup.mockInput.pressKey("w", { meta: true });
+			await flushUi(setup);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-1");
 			expect(retryControl?.focusable).toBe(true);
@@ -1260,6 +1296,8 @@ describe("ChatShell composer focus", () => {
 		);
 
 		try {
+			await flushUi(setup);
+			setup.mockInput.pressKey("w", { meta: true });
 			await flushUi(setup);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-1");
@@ -1309,6 +1347,48 @@ describe("ChatShell composer focus", () => {
 });
 
 describe("ChatShell retry controls", () => {
+	test.each([
+		false,
+		true,
+	])("a terminal model error is shown once with trailing steering=%s", async (hasTrailingSteering) => {
+		const message = {
+			...assistantMessage([
+				{ type: "text", text: "Model authentication failed." },
+			]),
+			metadata: { terminalOutcome: "failed" as const },
+		};
+		const steering: SessionMessage = {
+			...userMessage("trailing-steering"),
+			metadata: {
+				joinedTurnId: agentTurnId("failed-turn"),
+				submissionStatus: "failed",
+				submissionId: toSubmissionId("failed-steering"),
+			},
+		};
+		const { setup } = await renderChatShell(
+			[
+				userMessage("hello"),
+				message,
+				...(hasTrailingSteering ? [steering] : []),
+			],
+			{
+				height: 24,
+				width: 100,
+				error: new CommittedAssistantError(
+					"Model authentication failed.",
+					message.id
+				),
+			}
+		);
+		try {
+			await flushUi(setup);
+			expect(
+				requireTestFrame(setup).match(/Error: Model authentication failed\./gu)
+			).toHaveLength(1);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 	test("keeps older unanswered turns retryable and keyboard activatable", async () => {
 		const retries: string[] = [];
 		const { setup } = await renderChatShell(
@@ -1327,6 +1407,9 @@ describe("ChatShell retry controls", () => {
 		);
 
 		try {
+			await flushUi(setup);
+			expect(requireTestFrame(setup)).not.toContain("Retry");
+			setup.mockInput.pressKey("w", { meta: true });
 			await flushUi(setup);
 			expect(requireTestFrame(setup).match(/Retry/gu)).toHaveLength(1);
 			const retryControl =
@@ -1366,6 +1449,8 @@ describe("ChatShell retry controls", () => {
 		});
 
 		try {
+			await flushUi(setup);
+			setup.mockInput.pressKey("w", { meta: true });
 			await flushUi(setup);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-steer");
@@ -1675,6 +1760,33 @@ describe("ChatShell waiting message strip", () => {
 });
 
 describe("ChatShell activity footer", () => {
+	test("retry countdown replaces Working and disappears before the next request", async () => {
+		const { holder, setup } = await renderChatShell(
+			[userMessage("retry-user")],
+			{
+				height: 20,
+				width: 100,
+				isBusy: true,
+				retryStatus: { attempt: 1, maxAttempts: 3, retryAt: Date.now() + 1500 },
+			}
+		);
+		try {
+			await flushUi(setup);
+			const frame = requireTestFrame(setup);
+			expect(frame).toContain("Retrying (1/3) in 2s...");
+			expect(frame).toContain("esc to cancel");
+			expect(frame).not.toContain("Working...");
+			expect(
+				await waitForFrameText(setup, "Retrying (1/3) in 1s...")
+			).toContain("Retrying (1/3) in 1s...");
+			await act(() => holder.current?.setRetryStatus(undefined));
+			await flushUi(setup);
+			expect(requireTestFrame(setup)).toContain("Working...");
+			expect(requireTestFrame(setup)).not.toContain("Retrying");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 	test("shows model and thinking together only after selected Provider metadata loads", async () => {
 		const pending = Promise.withResolvers<readonly ProviderModel[]>();
 		const selectedModel: ProviderModel = {

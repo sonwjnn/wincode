@@ -170,6 +170,20 @@ export type PrepareAgentContext = (
 	input: AgentContextPreparation
 ) => Promise<readonly AgentTurnMessage[] | undefined>;
 
+/** Transient countdown for a model request retry; never a terminal outcome. */
+export type ModelRetryStatus = Readonly<{
+	attempt: number;
+	maxAttempts: number;
+	retryAt: number;
+}>;
+
+export type ModelRetryPolicy = Readonly<{
+	maxRetries: number;
+	baseDelayMs: number;
+	/** Observational only; undefined clears the countdown before a request or terminal. */
+	onStatus?: (status: ModelRetryStatus | undefined) => void;
+}>;
+
 /** Options for one Agent Runtime invocation. */
 export type AgentRuntimeRunOptions = Readonly<{
 	/** Awaited only when another Model Step is needed, after tools and steering settle.
@@ -179,6 +193,8 @@ export type AgentRuntimeRunOptions = Readonly<{
 	prepareNextStep?: PrepareAgentContext;
 	/** Session-owned notifications for streaming Model request lifecycle. */
 	modelStepObserver?: ModelStepObserver;
+	/** Retries only transient model failures before any output from that request. */
+	modelRetry?: ModelRetryPolicy;
 	/** Hard ceiling on Provider SDK chat requests made by this Agent Turn. */
 	maximumModelSteps?: number;
 	/** Marks this individual request as a best-effort cache-warm replay. */

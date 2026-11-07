@@ -71,12 +71,14 @@ import {
 	providerModelSelectionCandidateForModel,
 } from "@/modules/providers/provider-model-selection";
 import type {
+	LiveSessionSnapshot,
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
 	SessionSubmissionEvent,
 	SessionWaitingMessage,
 	SessionWaitingMessageId,
 } from "@/modules/sessions/agent-session/types";
+import { CommittedAssistantError } from "@/modules/sessions/committed-assistant-error";
 import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import * as useAgentSessionModule from "@/modules/sessions/hooks/use-agent-session";
 import { assertPluginProviderSelectionOwner } from "@/modules/sessions/host/provider-selection-ownership";
@@ -114,6 +116,7 @@ import { CommandControllerProvider } from "@/tui/commands/command-controller-pro
 import { testRenderWithClipboard } from "../support/clipboard";
 import {
 	agentId,
+	agentTurnId,
 	attachmentId,
 	modelId,
 	queuedSubmissionId,
@@ -161,6 +164,7 @@ let fakeRunInputs: SessionSendInput[] = [];
 let fakeRunCompositions: SessionSubmissionComposition[] = [];
 /** How many times the view asked the session to recall its waiting messages. */
 let fakeSessionRecalls = 0;
+let fakeSessionInterrupts = 0;
 const fakeSubmissionEventListeners = new Set<
 	(event: SessionSubmissionEvent) => void
 >();
@@ -402,7 +406,11 @@ const fakeUseAgentSessionModule: Pick<
 					entry: {},
 				});
 			},
-			interrupt: async () => [],
+			interrupt: async () => {
+				fakeSessionInterrupts += 1;
+				setTurnActive(false);
+				return [];
+			},
 			onSubmissionEvent: subscribeToFakeSubmissionEvents,
 			recallWaitingMessages,
 			prompt,
@@ -524,7 +532,8 @@ const createFakeSessionHost = (
 	providerController?: InteractiveProviderController,
 	selection?: ResolvedSessionSelection | null,
 	assertPluginSnapshot: () => void = () => undefined,
-	importActivationPending = false
+	importActivationPending = false,
+	snapshotOverrides: Partial<LiveSessionSnapshot> = {}
 ): SessionHost =>
 	fromPartial<SessionHost>({
 		...(providerController === undefined ? {} : { providerController }),
@@ -549,6 +558,7 @@ const createFakeSessionHost = (
 			transcript,
 			turnActive: false,
 			viewState: undefined,
+			...snapshotOverrides,
 		}),
 	});
 
@@ -620,6 +630,7 @@ afterEach(() => {
 	fakeWaitingTexts = [];
 	fakeRecalledPayload = null;
 	fakeSessionRecalls = 0;
+	fakeSessionInterrupts = 0;
 	fakeSubmissionEventListeners.clear();
 });
 
@@ -1992,6 +2003,7 @@ const renderSessionView = async ({
 	commandControllerFactory,
 	assertPluginSnapshot,
 	importActivationPending = false,
+	snapshotOverrides,
 	width,
 }: {
 	height: number;
@@ -2009,6 +2021,7 @@ const renderSessionView = async ({
 	commandControllerFactory?: CommandControllerFactory;
 	assertPluginSnapshot?: () => void;
 	importActivationPending?: boolean;
+	snapshotOverrides?: Partial<LiveSessionSnapshot>;
 	width: number;
 }) => {
 	const router = buildRouter();
@@ -2026,7 +2039,8 @@ const renderSessionView = async ({
 				providerController,
 				restoredSelection,
 				assertPluginSnapshot,
-				importActivationPending
+				importActivationPending,
+				snapshotOverrides
 			)}
 			initialTranscript={initialTranscript}
 			sessionId={sessionId("session-1")}
@@ -2096,6 +2110,67 @@ const renderSessionView = async ({
 	await flushUi(setup);
 	return { commandLayer, setup };
 };
+
+test("a new compaction error remains visible when an older model failure has the same text", async () => {
+	const failure: SessionMessage = {
+		id: sessionMessageId("previous-failure"),
+		role: "assistant",
+		metadata: { terminalOutcome: "failed" },
+		parts: [{ type: "text", text: "Model authentication failed." }],
+	};
+	const { setup } = await renderSessionView({
+		height: 24,
+		width: 100,
+		initialTranscript: [failure],
+		snapshotOverrides: {
+			compactionError: new Error("Model authentication failed."),
+		},
+	});
+	try {
+		expect(
+			setup.captureCharFrame().match(/Error: Model authentication failed\./gu)
+		).toHaveLength(2);
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+for (const { origin, expectedLines } of [
+	{ origin: "pre-start", expectedLines: 2 },
+	{ origin: "same-assistant", expectedLines: 1 },
+	{ origin: "different-assistant", expectedLines: 2 },
+] as const) {
+	test(`live ${origin} errors are deduplicated only for the identified committed assistant`, async () => {
+		const failure: SessionMessage = {
+			id: sessionMessageId("previous-prestart-failure"),
+			role: "assistant",
+			metadata: { terminalOutcome: "failed" },
+			parts: [{ type: "text", text: "Model authentication failed." }],
+		};
+		let error: Error = new Error("Model authentication failed.");
+		if (origin !== "pre-start") {
+			error = new CommittedAssistantError(
+				error.message,
+				origin === "same-assistant"
+					? failure.id
+					: sessionMessageId("different-assistant")
+			);
+		}
+		const { setup } = await renderSessionView({
+			height: 24,
+			width: 100,
+			initialTranscript: [failure],
+			snapshotOverrides: { error },
+		});
+		try {
+			expect(
+				setup.captureCharFrame().match(/Error: Model authentication failed\./gu)
+			).toHaveLength(expectedLines);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+}
 
 test("updates the usage-bar context window when the active ConfigStore refreshes", async () => {
 	const workspace = process.cwd();
@@ -2253,7 +2328,8 @@ test("renders unavailable attachment annotations over the unannotated Host trans
 
 /** Renders the view with one Agent Turn already running. */
 const renderBusySessionView = async (
-	commandControllerFactory?: CommandControllerFactory
+	commandControllerFactory?: CommandControllerFactory,
+	snapshotOverrides?: Partial<LiveSessionSnapshot>
 ) => {
 	const release = deferred<void>();
 	const sendStarted = deferred<void>();
@@ -2265,6 +2341,7 @@ const renderBusySessionView = async (
 	};
 	const { commandLayer, setup } = await renderSessionView({
 		commandControllerFactory,
+		snapshotOverrides,
 		height: 20,
 		initialTranscript: [],
 		width: 100,
@@ -2281,6 +2358,40 @@ const renderBusySessionView = async (
 	await flushUi(setup);
 	return { commandLayer, release, setup };
 };
+
+test("Escape belongs to an open overlay before cancelling a retry with one base-layer press", async () => {
+	const { commandLayer, release, setup } = await renderBusySessionView(
+		undefined,
+		{
+			viewState: {
+				lastSequence: 1,
+				reasoningText: "",
+				status: "streaming",
+				text: "",
+				turnId: agentTurnId("retry-turn"),
+				retry: { attempt: 1, maxAttempts: 3, retryAt: Date.now() + 60_000 },
+			},
+		}
+	);
+	try {
+		expect(setup.captureCharFrame()).toContain("Retrying (1/3)");
+		await act(async () => setup.mockInput.typeText("/"));
+		await setup.waitForFrame((frame) => frame.includes("Start a new session"));
+		await setup.waitFor(() => commandLayer.isTop);
+		await act(() => setup.mockInput.pressEscape());
+		await flushUi(setup);
+		expect(fakeSessionInterrupts).toBe(0);
+		await setup.waitFor(() => !commandLayer.isTop);
+		await act(() => setup.mockInput.pressEscape());
+		await flushUi(setup);
+		expect(fakeSessionInterrupts).toBe(1);
+		expect(setup.captureCharFrame()).not.toContain("Retrying");
+	} finally {
+		release.resolve();
+		await flushUi(setup);
+		setup.renderer.destroy();
+	}
+});
 
 describe("SessionView waiting messages", () => {
 	/**

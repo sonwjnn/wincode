@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type {
 	ChatEvent,
 	ChatFailure,
@@ -36,6 +37,8 @@ import {
 	type AgentTurnEventStream,
 	createAgentTurnAbortEvent,
 	getAgentTurnFailureDetails,
+	type ModelRetryPolicy,
+	type ModelRetryStatus,
 } from "./runtime";
 import {
 	isToolCallId,
@@ -100,7 +103,13 @@ const resolveTerminalFailure = (
 			});
 			return createOperationalFailure({
 				code: modelFailure.code,
-				details: getAgentTurnFailureDetails(turn),
+				details: {
+					...getAgentTurnFailureDetails(turn),
+					...omitUndefined({
+						retryAfterMs: modelFailure.details?.retryAfterMs,
+						statusCode: modelFailure.details?.statusCode,
+					}),
+				},
 				retry: modelFailure.retry,
 				source: "model",
 			});
@@ -118,7 +127,15 @@ const resolveTerminalFailure = (
 		const mapped = mapping[error.failure.code];
 		return createOperationalFailure({
 			code: mapped.code,
-			details: getAgentTurnFailureDetails(turn),
+			details: {
+				...getAgentTurnFailureDetails(turn),
+				...omitUndefined({
+					retryAfterMs:
+						"retryAfterMs" in error.failure
+							? error.failure.retryAfterMs
+							: undefined,
+				}),
+			},
 			retry: mapped.retry,
 			source: "model",
 		});
@@ -375,7 +392,22 @@ export const createAgentRuntime = (
 	const run = (
 		turn: AgentTurn,
 		runOptions: AgentRuntimeRunOptions = {}
-	): AgentTurnEventStream => runAgentTurn(turn, runOptions, invocation);
+	): AgentTurnEventStream => {
+		const policy = runOptions.modelRetry;
+		if (
+			policy !== undefined &&
+			(!Number.isSafeInteger(policy.maxRetries) ||
+				policy.maxRetries < 0 ||
+				!Number.isSafeInteger(policy.baseDelayMs) ||
+				policy.baseDelayMs < 0)
+		) {
+			throw new AgentInvariantError(
+				"invalid-runtime",
+				"Model retry budgets and delays must be non-negative safe integers."
+			);
+		}
+		return runAgentTurn(turn, runOptions, invocation);
+	};
 	return { run };
 };
 
@@ -395,6 +427,7 @@ type ModelStepStreamOptions = Readonly<{
 	emit: EventEmitter;
 	invocation: AgentModelInvocation;
 	request: ChatRequest;
+	onProgress?: () => void;
 	seenToolCallIds: Set<ToolCallId>;
 	signal?: AbortSignal;
 	toolsByName: ReadonlyMap<string, ResolvedTool>;
@@ -499,6 +532,7 @@ const drainModelStep = async function* ({
 	emit,
 	invocation,
 	request,
+	onProgress,
 	seenToolCallIds,
 	signal,
 	toolsByName,
@@ -531,6 +565,9 @@ const drainModelStep = async function* ({
 				);
 			}
 			const update = parseProviderChatUpdate(next.value);
+			if (update.kind !== "finish") {
+				onProgress?.();
+			}
 			if (update.kind === "usage") {
 				usage = sumUsage(usage, update.usage);
 				continue;
@@ -602,6 +639,91 @@ const drainModelStep = async function* ({
 		...omitUndefined({ continuation, usage }),
 		toolCalls,
 	};
+};
+
+const MAX_MODEL_RETRY_DELAY_MS = 60_000;
+
+const notifyRetryStatus = (
+	policy: ModelRetryPolicy,
+	status: ModelRetryStatus | undefined
+): void => {
+	try {
+		policy.onStatus?.(status);
+	} catch {
+		// Presentation observers cannot fail or restart a model request.
+	}
+};
+
+const drainModelStepWithRetry = async function* (
+	options: ModelStepStreamOptions & {
+		turn: AgentTurn;
+		policy: ModelRetryPolicy | undefined;
+		remainingRequests: number;
+		onRequest: () => ModelStepId;
+		modelStepObserver: AgentRuntimeRunOptions["modelStepObserver"];
+	}
+): AsyncGenerator<AgentTurnEvent, ModelStepOutput | null, undefined> {
+	const { policy, turn } = options;
+	const maxRetries = Math.min(
+		policy?.maxRetries ?? 0,
+		options.remainingRequests - 1
+	);
+	let hasProgress = false;
+	for (let attempt = 0; ; attempt += 1) {
+		if (options.signal?.aborted) {
+			throw createAbortError(options.signal.reason);
+		}
+		yield options.emit({
+			modelId: turn.model.modelId,
+			sequence: options.emit.nextSequence(),
+			stepId: options.onRequest(),
+			turnId: turn.id,
+			type: "model-step-started",
+		});
+		notifyModelStepStarted(options.modelStepObserver, options.request);
+		try {
+			return yield* drainModelStep({
+				...options,
+				onProgress: () => {
+					hasProgress = true;
+				},
+			});
+		} catch (error) {
+			if (
+				policy === undefined ||
+				hasProgress ||
+				attempt >= maxRetries ||
+				isAgentInvariantError(error) ||
+				error instanceof ProviderCollectionChatAbortedError ||
+				options.signal?.aborted
+			) {
+				throw error;
+			}
+			const failure = resolveTerminalFailure(error, turn);
+			if (
+				failure.source !== "model" ||
+				(failure.retry !== "after-delay" && failure.retry !== "immediate") ||
+				(failure.details?.retryAfterMs ?? 0) > MAX_MODEL_RETRY_DELAY_MS
+			) {
+				throw error;
+			}
+			const delayMs = Math.max(
+				Math.min(policy.baseDelayMs * 2 ** attempt, MAX_MODEL_RETRY_DELAY_MS),
+				failure.details?.retryAfterMs ?? 0
+			);
+			notifyRetryStatus(policy, {
+				attempt: attempt + 1,
+				maxAttempts: maxRetries,
+				retryAt: Date.now() + delayMs,
+			});
+			try {
+				// Bun.sleep cannot cancel its timer; abort must also release the backoff resource.
+				await sleep(delayMs, undefined, { signal: options.signal });
+			} finally {
+				notifyRetryStatus(policy, undefined);
+			}
+		}
+	}
 };
 
 type ExecuteToolCallsOptions = Readonly<{
@@ -712,6 +834,7 @@ type ExecuteModelStepsOptions = Readonly<{
 	lifecycle: AgentTurnLifecycle;
 	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
+	modelRetry?: ModelRetryPolicy;
 	prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
 	invocation: AgentModelInvocation;
 	modelMessages: ChatMessage[];
@@ -983,6 +1106,7 @@ const runLoop = async function* ({
 	invocation,
 	modelMessages,
 	modelStepObserver,
+	modelRetry,
 	prepareNextStep,
 	promptCacheKey,
 	runtimeSignal,
@@ -994,7 +1118,7 @@ const runLoop = async function* ({
 	let totalUsage: ModelUsage | undefined;
 	const seenToolCallIds = new Set<ToolCallId>();
 	const toolDefinitions = tools.map(toModelTool);
-	let stepNumber = 1;
+	let requestCount = 0;
 	while (true) {
 		if (runtimeSignal?.aborted) {
 			yield emit(
@@ -1002,7 +1126,7 @@ const runLoop = async function* ({
 			);
 			return;
 		}
-		if (maximumModelSteps !== undefined && stepNumber > maximumModelSteps) {
+		if (maximumModelSteps !== undefined && requestCount >= maximumModelSteps) {
 			yield emit({
 				failure: createOperationalFailure({
 					code: "model-step-limit",
@@ -1018,14 +1142,7 @@ const runLoop = async function* ({
 			return;
 		}
 		const protectedFromIndex = modelMessages.length;
-		const stepId = toModelStepId(`step-${stepNumber}`);
-		yield emit({
-			modelId: turn.model.modelId,
-			sequence: emit.nextSequence(),
-			stepId,
-			turnId: turn.id,
-			type: "model-step-started",
-		});
+		let stepId = toModelStepId(`step-${requestCount + 1}`);
 		const request = buildChatRequest({
 			cacheWarming,
 			modelMessages,
@@ -1034,8 +1151,17 @@ const runLoop = async function* ({
 			toolDefinitions,
 			turn,
 		});
-		notifyModelStepStarted(modelStepObserver, request);
-		const output = yield* drainModelStep({
+		const output = yield* drainModelStepWithRetry({
+			policy: cacheWarming ? undefined : modelRetry,
+			remainingRequests:
+				(maximumModelSteps ?? Number.POSITIVE_INFINITY) - requestCount,
+			modelStepObserver,
+			onRequest: () => {
+				requestCount += 1;
+				stepId = toModelStepId(`step-${requestCount}`);
+				return stepId;
+			},
+			turn,
 			emit,
 			invocation,
 			request,
@@ -1069,7 +1195,6 @@ const runLoop = async function* ({
 		if (!stepResult.continueTurn) {
 			return;
 		}
-		stepNumber += 1;
 	}
 };
 
@@ -1080,6 +1205,7 @@ const runAgentTurn = async function* (
 		deadlineMs,
 		maximumModelSteps,
 		modelStepObserver,
+		modelRetry,
 		prepareNextStep,
 		promptCacheKey,
 		signal,
@@ -1122,6 +1248,7 @@ const runAgentTurn = async function* (
 				cacheWarming,
 				maximumModelSteps,
 				modelStepObserver,
+				modelRetry,
 				prepareNextStep,
 				promptCacheKey,
 				runtimeSignal,

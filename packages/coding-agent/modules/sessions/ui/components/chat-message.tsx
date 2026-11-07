@@ -13,11 +13,41 @@ import type {
 import {
 	BotMessageContent,
 	BotMessageFooter,
+	ErrorMessage,
 	getAppliedSkill,
+	getAssistantFailureText,
 	UserMessage,
 } from "../messages";
 import { resolveRetryMessageId } from "./chat-turns";
 import { SessionWriterAction } from "./session-writer-controls";
+
+function AssistantTranscriptContent({
+	message,
+	streaming,
+}: {
+	message: SessionMessage;
+	streaming: boolean;
+}) {
+	const failureText = getAssistantFailureText(message);
+	if (failureText === undefined) {
+		return (
+			<BotMessageContent
+				agent={message.metadata?.agent ?? buildAgent.id}
+				parts={message.parts}
+				streaming={streaming}
+			/>
+		);
+	}
+	return (
+		<>
+			<ErrorMessage error={new Error(failureText)} />
+			<BotMessageContent
+				agent={message.metadata?.agent ?? buildAgent.id}
+				parts={message.parts.filter((part) => part.type !== "text")}
+			/>
+		</>
+	);
+}
 
 export function ChatMessage({
 	footerMessage,
@@ -28,6 +58,7 @@ export function ChatMessage({
 	rewindingCheckpointId,
 	onRewindCheckpoint,
 	onRetry,
+	showActions = false,
 	streaming = false,
 }: {
 	footerMessage?: SessionMessage;
@@ -41,6 +72,7 @@ export function ChatMessage({
 	rewindingCheckpointId?: SessionRecordId;
 	onRewindCheckpoint?: (recordId: SessionRecordId) => void | Promise<void>;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
+	showActions?: boolean;
 	streaming?: boolean;
 }) {
 	const { colors } = useTheme();
@@ -68,7 +100,7 @@ export function ChatMessage({
 		checkpoint: SessionForkCheckpointAssessment | undefined,
 		message: SessionMessage
 	): ReactNode => {
-		if (checkpoint === undefined) {
+		if (!showActions || checkpoint === undefined) {
 			return null;
 		}
 		if (checkpoint.status === "invalid") {
@@ -133,9 +165,8 @@ export function ChatMessage({
 								submissionFailure={message.metadata?.submissionFailure}
 							/>
 						) : (
-							<BotMessageContent
-								agent={message.metadata?.agent ?? buildAgent.id}
-								parts={message.parts}
+							<AssistantTranscriptContent
+								message={message}
 								streaming={streaming && message === latestAssistant}
 							/>
 						)}
@@ -149,7 +180,7 @@ export function ChatMessage({
 					</box>
 				))}
 			</box>
-			{retryMessageId && onRetry ? (
+			{showActions && retryMessageId && onRetry ? (
 				<box paddingX={3} width="100%">
 					{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse and keyboard events. */}
 					<box

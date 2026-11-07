@@ -512,6 +512,8 @@ export type ChatFailure =
 			message: string;
 			providerId: string;
 			statusCode?: number;
+			/** Normalized positive Retry-After delay, without raw Provider diagnostics. */
+			retryAfterMs?: number;
 	  }>;
 
 export type ChatOutcome =
@@ -1030,7 +1032,10 @@ const failureForError = (
 					? modelFailure.message
 					: error.message,
 			providerId,
-			...(statusCode === undefined ? {} : { statusCode }),
+			...omitUndefined({
+				statusCode,
+				retryAfterMs: modelFailure.details?.retryAfterMs,
+			}),
 		};
 	}
 	return { code: "provider", message: errorMessage(error), providerId };

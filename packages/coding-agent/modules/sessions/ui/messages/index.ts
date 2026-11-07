@@ -1,3 +1,3 @@
-export { BotMessageContent, BotMessageFooter } from "./bot-message";
-export { ErrorMessage } from "./error-message";
-export { getAppliedSkill, UserMessage } from "./user-message";
+export * from "./bot-message";
+export * from "./error-message";
+export * from "./user-message";

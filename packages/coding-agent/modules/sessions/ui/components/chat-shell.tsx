@@ -2,6 +2,7 @@ import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type {
 	AgentId,
+	ModelRetryStatus,
 	SessionMessageId,
 	SessionRecordId,
 } from "@wincode/agent-core";
@@ -51,7 +52,11 @@ import {
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
-import { ErrorMessage } from "../messages";
+import {
+	ErrorMessage,
+	repeatsTerminalError,
+	type SessionErrorSource,
+} from "../messages";
 import { ChatMessage, ChatNotificationMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
 import {
@@ -65,6 +70,7 @@ import {
 } from "./chat-turns";
 import { CompactionDivider } from "./compaction-divider";
 import { CompactionStatus } from "./compaction-status";
+import { ModelRetryIndicator } from "./model-retry-status";
 import { SessionUsageBar } from "./session-usage-bar";
 import { WaitingMessageStrip } from "./waiting-message-strip";
 import { WorkspacePath } from "./workspace-path";
@@ -82,6 +88,8 @@ type ChatShellProps = {
 	compactions?: readonly SessionCompaction[];
 	draftKey?: string;
 	error?: unknown;
+	/** Only a turn error can duplicate a terminal assistant error; other sources remain visible. */
+	errorSource?: SessionErrorSource;
 	isBusy: boolean;
 	isSelectionReady?: boolean;
 	isCompacting: boolean;
@@ -105,6 +113,7 @@ type ChatShellProps = {
 	viewId: string;
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	cacheWarmingStatus?: CacheWarmingStatus;
+	retryStatus?: ModelRetryStatus;
 	contextSnapshot?: ConfigSnapshot;
 	/** Rendered at the bottom of the transcript; the shell never persists it. */
 	transcriptNotice?: ReactNode;
@@ -114,12 +123,17 @@ function ActivityFooter({
 	agent,
 	autoCompact,
 	isCompacting,
+	retryStatus,
 }: {
 	accentColor: string;
 	agent: AgentId;
 	autoCompact: boolean;
 	isCompacting: boolean;
+	retryStatus?: ModelRetryStatus;
 }) {
+	if (retryStatus !== undefined) {
+		return <ModelRetryIndicator agent={agent} status={retryStatus} />;
+	}
 	const compactionLabel = autoCompact ? "Auto-compacting..." : "Compacting...";
 	return (
 		<box alignItems="center" flexDirection="row" gap={1}>
@@ -274,6 +288,7 @@ export function ChatShell({
 	compactions = [],
 	draftKey,
 	error,
+	errorSource,
 	isBusy,
 	isSelectionReady,
 	isCompacting,
@@ -292,6 +307,7 @@ export function ChatShell({
 	viewId,
 	sessionUsageEntries = [],
 	cacheWarmingStatus = "idle",
+	retryStatus,
 	contextSnapshot,
 	transcriptNotice,
 }: ChatShellProps) {
@@ -302,6 +318,12 @@ export function ChatShell({
 	const backgroundComponentIds = useMemo(() => [transcriptId], [transcriptId]);
 	const { isTopLayer } = useKeyboardLayer();
 	const [scrollRequest, setScrollRequest] = useState(0);
+	const [showActions, setShowActions] = useState(false);
+	useEffect(() => {
+		if (isBusy) {
+			setShowActions(false);
+		}
+	}, [isBusy]);
 	const { agent, model, thinkingLevel } = usePromptConfig();
 	const { colors } = useTheme();
 	const { notifications } = useSessionNotifications(viewId);
@@ -394,6 +416,11 @@ export function ChatShell({
 	const displayMessages = messages.filter(
 		(message) => !isCompactionSummaryMessage(message)
 	);
+	const isRepeatedTerminalError = repeatsTerminalError(
+		error,
+		displayMessages,
+		errorSource
+	);
 	const turns = groupMessagesBySessionTurn(displayMessages);
 	const transcriptTimeline = buildSessionTranscriptTimeline(
 		messages,
@@ -472,11 +499,21 @@ export function ChatShell({
 	});
 	useKeyboard((key) => {
 		if (
+			isTopLayer("base") &&
+			(key.option || key.meta) &&
+			key.name === "w" &&
+			!isBusy
+		) {
+			key.preventDefault();
+			setShowActions((visible) => !visible);
+			return;
+		}
+		if (
 			!canRetry ||
 			isUndefined(latestRetryMessageId) ||
 			isUndefined(onRetry) ||
 			!isTopLayer("base") ||
-			!key.option ||
+			!(key.option || key.meta) ||
 			key.name !== "r"
 		) {
 			return;
@@ -492,6 +529,7 @@ export function ChatShell({
 		if (accepted === false) {
 			return false;
 		}
+		setShowActions(false);
 		setScrollRequest((request) => request + 1);
 		return true;
 	};
@@ -571,6 +609,7 @@ export function ChatShell({
 									onRetry={canRetryTurn ? onRetry : undefined}
 									onRewindCheckpoint={onRewindCheckpoint}
 									rewindingCheckpointId={rewindingCheckpointId}
+									showActions={showActions && !isBusy}
 									streaming={isBusy && turn.id === turns.at(-1)?.id}
 								/>
 							</box>
@@ -579,7 +618,9 @@ export function ChatShell({
 					{isCompacting ? (
 						<CompactionStatus agent={agent} autoCompact={autoCompact} />
 					) : null}
-					{error ? <ErrorMessage error={error} /> : null}
+					{error && !isRepeatedTerminalError ? (
+						<ErrorMessage error={error} />
+					) : null}
 				</box>
 			</scrollbox>
 			<box flexDirection="column" flexShrink={0} paddingBottom={1} width="100%">
@@ -594,6 +635,7 @@ export function ChatShell({
 									agent={agent}
 									autoCompact={autoCompact}
 									isCompacting={isCompacting}
+									retryStatus={retryStatus}
 								/>
 							) : undefined
 						}

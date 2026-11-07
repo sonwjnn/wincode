@@ -765,6 +765,10 @@ export function SessionView({
 				return;
 			}
 			key.preventDefault();
+			if (snapshot.viewState?.retry !== undefined) {
+				void recallIntoComposer(interrupt());
+				return;
+			}
 			handleInterrupt();
 			return;
 		}
@@ -1192,6 +1196,7 @@ export function SessionView({
 					contextSnapshot={configSnapshot}
 					draftKey={sessionId}
 					error={error}
+					errorSource={isNull(snapshot.compactionError) ? "turn" : "compaction"}
 					forkCheckpoints={forkCheckpoints}
 					isBusy={isBusy}
 					isCompacting={snapshot.isCompacting}
@@ -1212,6 +1217,7 @@ export function SessionView({
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
+					retryStatus={snapshot.viewState?.retry}
 					rewindingCheckpointId={rewindingCheckpointId}
 					sessionUsageEntries={sessionUsageEntries}
 					transcriptNotice={<ProjectTrustNotice />}

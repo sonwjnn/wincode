@@ -12,6 +12,7 @@ import {
 	type ToolDefinition,
 	toAgentTurnId,
 	toModelId,
+	toModelStepId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai";
@@ -356,6 +357,259 @@ for (const stopsWithTool of [false, true]) {
 		expect(events.at(-1)?.type).toBe("agent-turn-completed");
 	});
 }
+
+test("invalid retry budgets fail before invoking a Provider", async () => {
+	const { providerCollection, requests } = scriptedProvider(() =>
+		scriptedEvents({ type: "finish" })
+	);
+	for (const maxRetries of [Number.POSITIVE_INFINITY, Number.NaN, -1, 1.5]) {
+		await expect(async () =>
+			consume(
+				createAgentRuntime({ providerCollection }).run(buildTurn(), {
+					modelRetry: { maxRetries, baseDelayMs: 1 },
+				})
+			)
+		).toThrow();
+	}
+	expect(requests).toEqual([]);
+});
+
+test("transient request failures retry within one turn without exposing intermediate failures", async () => {
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) => ({
+			async *[Symbol.asyncIterator]() {
+				if (index < 2) {
+					throw new ProviderError("transport", "private transport detail");
+				}
+				yield { type: "text-delta", delta: "Recovered" };
+				yield { type: "finish" };
+			},
+		})
+	);
+	const statuses: unknown[] = [];
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
+			modelRetry: {
+				maxRetries: 3,
+				baseDelayMs: 1,
+				onStatus: (status) => statuses.push(status),
+			},
+		})
+	);
+	expect(requests).toHaveLength(3);
+	expect(
+		events
+			.filter((event) => event.type === "model-step-started")
+			.map((event) => event.stepId)
+	).toEqual([
+		toModelStepId("step-1"),
+		toModelStepId("step-2"),
+		toModelStepId("step-3"),
+	]);
+	expect(statuses.filter(Boolean)).toMatchObject([
+		{ attempt: 1, maxAttempts: 3 },
+		{ attempt: 2, maxAttempts: 3 },
+	]);
+	expect(statuses.at(-1)).toBeUndefined();
+	expect(events.filter(({ type }) => type === "agent-turn-failed")).toEqual([]);
+	expect(events.at(-1)?.type).toBe("agent-turn-completed");
+	expect(requests[1]?.messages).toEqual(requests[0]?.messages);
+});
+
+for (const scenario of [
+	"exhaust",
+	"partial",
+	"authentication",
+	"warm",
+	"budget",
+	"cancel",
+] as const) {
+	test(`model retry ${scenario} cannot replay output or exceed its request boundary`, async () => {
+		const controller = new AbortController();
+		const statuses: unknown[] = [];
+		const { providerCollection, requests } = scriptedProvider(() => ({
+			async *[Symbol.asyncIterator]() {
+				if (scenario === "partial") {
+					yield { type: "text-delta", delta: "Already visible" };
+				}
+				throw new ProviderError(
+					scenario === "authentication" ? "authentication" : "transport",
+					"private detail"
+				);
+			},
+		}));
+		const events = await consume(
+			createAgentRuntime({ providerCollection }).run(buildTurn(), {
+				cacheWarming: scenario === "warm" ? true : undefined,
+				maximumModelSteps: scenario === "budget" ? 1 : undefined,
+				signal: controller.signal,
+				modelRetry: {
+					maxRetries: 2,
+					baseDelayMs: 1,
+					onStatus: (status) => {
+						statuses.push(status);
+						if (scenario === "cancel" && status !== undefined) {
+							controller.abort();
+						}
+					},
+				},
+			})
+		);
+		expect(requests).toHaveLength(scenario === "exhaust" ? 3 : 1);
+		expect(events.at(-1)?.type).toBe(
+			scenario === "cancel" ? "agent-turn-cancelled" : "agent-turn-failed"
+		);
+		expect(
+			events.filter(
+				({ type }) =>
+					type === "agent-turn-failed" || type === "agent-turn-cancelled"
+			)
+		).toHaveLength(1);
+		expect(statuses.at(-1)).toBeUndefined();
+	});
+}
+
+test("rate-limit countdown honors Retry-After and can be cancelled before another request", async () => {
+	const controller = new AbortController();
+	let failedAt = 0;
+	const { providerCollection, requests } = scriptedProvider(() => {
+		failedAt = Date.now();
+		throw new ProviderError("provider", "private rate-limit detail", {
+			cause: { statusCode: 429, retryAfterMs: 25 },
+		});
+	});
+	let retryAt = 0;
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
+			signal: controller.signal,
+			modelRetry: {
+				maxRetries: 2,
+				baseDelayMs: 1,
+				onStatus: (status) => {
+					if (status !== undefined) {
+						retryAt = status.retryAt;
+						controller.abort();
+					}
+				},
+			},
+		})
+	);
+	expect(retryAt).toBeGreaterThanOrEqual(failedAt + 25);
+	expect(requests).toHaveLength(1);
+	expect(events.at(-1)?.type).toBe("agent-turn-cancelled");
+});
+
+test("Retry-After beyond the retry delay ceiling fails instead of waiting indefinitely or retrying early", async () => {
+	const controller = new AbortController();
+	const { providerCollection, requests } = scriptedProvider(() => {
+		throw new ProviderError("provider", "Rate limited", {
+			cause: { statusCode: 429, retryAfterMs: 60_001 },
+		});
+	});
+	let scheduled = false;
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
+			signal: controller.signal,
+			modelRetry: {
+				maxRetries: 2,
+				baseDelayMs: 1,
+				onStatus: (status) => {
+					if (status !== undefined) {
+						scheduled = true;
+						controller.abort();
+					}
+				},
+			},
+		})
+	);
+	expect(scheduled).toBe(false);
+	expect(requests).toHaveLength(1);
+	expect(events.at(-1)?.type).toBe("agent-turn-failed");
+});
+
+test("cancelling a retry releases its timer so a one-shot process can exit immediately", async () => {
+	const script = `
+		import { createAgentRuntime } from "./src/index.ts";
+		import { createProviderCollection, ProviderError } from "@wincode/ai";
+		const providers = createProviderCollection();
+		providers.register({
+			id: "test-provider",
+			models: [{ modelId: "sdk-model", providerId: "test-provider", protocolId: "fake", capabilities: ["text"] }],
+			resolveAuthorization: () => ({ authorization: { kind: "fake" } }),
+			streamChat() { throw new ProviderError("transport", "temporary failure"); },
+		});
+		const controller = new AbortController();
+		for await (const event of createAgentRuntime({ providerCollection: providers }).run(${JSON.stringify(buildTurn())}, {
+			signal: controller.signal,
+			modelRetry: { maxRetries: 1, baseDelayMs: 60000, onStatus: (status) => { if (status) controller.abort(); } },
+		})) {}
+		await providers.close();
+	`;
+	const child = Bun.spawn([process.execPath, "-e", script], {
+		cwd: `${import.meta.dir}/..`,
+		stdout: "ignore",
+		stderr: "pipe",
+		timeout: 2000,
+	});
+	expect(await child.exited, await new Response(child.stderr).text()).toBe(0);
+});
+
+test("a billed request failure is not retried with its reported usage silently discarded", async () => {
+	const { providerCollection, requests } = scriptedProvider(() => ({
+		async *[Symbol.asyncIterator]() {
+			yield { type: "usage", usage: { inputTokens: 10, outputTokens: 1 } };
+			throw new ProviderError("transport", "transport failed after usage");
+		},
+	}));
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
+			modelRetry: { maxRetries: 2, baseDelayMs: 1 },
+		})
+	);
+	expect(requests).toHaveLength(1);
+	expect(events.at(-1)?.type).toBe("agent-turn-failed");
+});
+
+test("retrying a later model request does not replay previously settled tools", async () => {
+	let effects = 0;
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) => ({
+			async *[Symbol.asyncIterator]() {
+				if (index === 0) {
+					yield {
+						type: "tool-call",
+						toolCallId: "retry-read",
+						toolName: "read",
+						input: { path: "a.ts" },
+					};
+				} else if (index === 1) {
+					throw new ProviderError("transport", "temporary error");
+				} else {
+					yield { type: "text-delta", delta: "Finished" };
+				}
+				yield { type: "finish" };
+			},
+		})
+	);
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(
+			buildTurn([
+				{
+					definition: readDefinition,
+					execute: async () => {
+						effects += 1;
+						return { type: "success", output: "read result" };
+					},
+				},
+			]),
+			{ modelRetry: { maxRetries: 2, baseDelayMs: 1 } }
+		)
+	);
+	expect(effects).toBe(1);
+	expect(requests).toHaveLength(3);
+	expect(requests[2]?.messages).toEqual(requests[1]?.messages);
+	expect(events.at(-1)?.type).toBe("agent-turn-completed");
+});
 
 test("Agent Runtime streams model output and reports normalized step usage", async () => {
 	const { providerCollection } = scriptedProvider(() =>

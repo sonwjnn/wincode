@@ -21,6 +21,8 @@ import {
 	getAgentTurnFailureDetails,
 	isAgentInvariantError,
 	isToolCallId,
+	type ModelRetryPolicy,
+	type ModelRetryStatus,
 	type ResolvedTool,
 	type SessionContextMeasurement,
 	type SessionMessageId,
@@ -76,6 +78,7 @@ import {
 	type VersionedEditingContext,
 } from "@/modules/tools";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
+import { CommittedAssistantError } from "../committed-assistant-error";
 import type { SessionMessage } from "../message";
 import { expandSessionMessagesForModel } from "../message";
 import {
@@ -637,6 +640,7 @@ export const buildAgentTurn = ({
 export type SessionViewState = ReadonlyDeep<{
 	lastEventType?: AgentTurnEvent["type"];
 	lastSequence: number;
+	retry?: ModelRetryStatus;
 	reasoningText: string;
 	status: "idle" | "streaming" | "terminal";
 	text: string;
@@ -644,6 +648,7 @@ export type SessionViewState = ReadonlyDeep<{
 }>;
 
 type AgentTurnEventConsumerOptions = {
+	modelRetry?: Omit<ModelRetryPolicy, "onStatus">;
 	prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
@@ -679,6 +684,7 @@ const consumeAgentTurnEvents = async ({
 	onViewState,
 	runtime,
 	modelStepObserver,
+	modelRetry,
 	maximumModelSteps,
 	prepareNextStep,
 	promptCacheKey,
@@ -726,6 +732,20 @@ const consumeAgentTurnEvents = async ({
 		}
 	};
 	for await (const event of runtime.run(turn, {
+		modelRetry:
+			modelRetry === undefined
+				? undefined
+				: {
+						...modelRetry,
+						onStatus: (retry) => {
+							viewState = omitUndefined({ ...viewState, retry });
+							try {
+								onViewState?.(viewState);
+							} catch {
+								// Presentation subscribers are observational only.
+							}
+						},
+					},
 		...omitUndefined({
 			modelStepObserver,
 			maximumModelSteps,
@@ -822,6 +842,7 @@ export const runAgentTurnToText = async ({
 	onViewState,
 	runtime,
 	modelStepObserver,
+	modelRetry,
 	maximumModelSteps,
 	promptCacheKey,
 	signal,
@@ -843,6 +864,7 @@ export const runAgentTurnToText = async ({
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
+	modelRetry?: Omit<ModelRetryPolicy, "onStatus">;
 	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	promptCacheKey?: string;
 	signal?: AbortSignal;
@@ -962,6 +984,7 @@ export const runAgentTurnToText = async ({
 		onViewState,
 		runtime,
 		modelStepObserver,
+		modelRetry,
 		maximumModelSteps,
 		prepareNextStep:
 			prepareNextStep === undefined
@@ -1028,6 +1051,19 @@ export const runAgentTurnToText = async ({
 	await onTerminal?.(terminalEvent);
 	if (terminalEvent.type === "agent-turn-completed") {
 		return assistantText;
+	}
+	const assistant = record?.messages.find(
+		(message) => message.role === "assistant"
+	);
+	if (
+		terminalEvent.type === "agent-turn-failed" &&
+		onCheckpoint !== undefined &&
+		assistant !== undefined
+	) {
+		throw new CommittedAssistantError(
+			terminalEvent.failure.message,
+			assistant.id
+		);
 	}
 	throw new Error(terminalEvent.failure.message);
 };
