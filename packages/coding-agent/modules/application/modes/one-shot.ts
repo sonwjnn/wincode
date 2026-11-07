@@ -1,6 +1,5 @@
 import {
 	type AgentId,
-	type AgentTurnEvent,
 	agentIdSchema,
 	toAgentTurnId,
 	toSessionMessageId,
@@ -32,6 +31,7 @@ import {
 	pluginProviderOwnerMatches,
 	resolveProviderModelSelectionForHost,
 } from "@/modules/providers/provider-model-selection";
+import { formatModelRetryFailureText } from "@/modules/sessions/retry-policy";
 import { resolveWorkspaceRoot } from "@/modules/tools";
 import type { ConfigRuntime } from "@/shared/config/config-store";
 import type { AgentRegistry } from "../../../modules/agents/registry";
@@ -54,8 +54,9 @@ import {
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { projectSessionMessageRecords } from "../../../modules/sessions/transcript-projection";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";
+import type { SessionSdkEvent } from "../../sessions/session-events";
 import { openApplicationSessionServices } from "../plugin-composition";
-import { projectAgentEvent } from "../rpc/projection";
+import { projectSessionEvent } from "../rpc/projection";
 import type { ApplicationContext } from "./types";
 import { InvocationError } from "./types";
 
@@ -504,10 +505,10 @@ const sendInputFor = (
 
 const emitJsonEvent = (
 	context: ApplicationContext,
-	event: AgentTurnEvent,
-	sessionId?: SessionId
+	event: SessionSdkEvent,
+	sessionId: SessionId
 ): void => {
-	const projectedEvent = projectAgentEvent(event);
+	const projectedEvent = projectSessionEvent(event);
 	context.stdout.write(
 		`${JSON.stringify(
 			sessionId === undefined
@@ -839,7 +840,7 @@ const runOneShot = async (
 		);
 		selection ??= await resolveOpenedOneShotSelection(context, host, preflight);
 		removeEventListener = sessionHostManager.onEvent((managedEvent) => {
-			if (managedEvent.type !== "agent-turn-event") {
+			if (managedEvent.type !== "session-event") {
 				return;
 			}
 			const { event } = managedEvent;
@@ -855,15 +856,18 @@ const runOneShot = async (
 					terminalSucceeded = true;
 				} else {
 					terminalSucceeded = false;
-					terminalFailureMessage = event.failure.message;
+					terminalFailureMessage =
+						event.type === "agent-turn-failed"
+							? formatModelRetryFailureText(
+									event.failure.message,
+									event.modelStepAttempts,
+									event.modelStepAttemptsTruncated
+								)
+							: event.failure.message;
 				}
 			}
 			if (format === "json") {
-				emitJsonEvent(
-					context,
-					event,
-					isParentEvent ? undefined : managedEvent.sessionId
-				);
+				emitJsonEvent(context, event, managedEvent.sessionId);
 			} else if (isParentEvent && event.type === "text-delta") {
 				context.stdout.write(event.delta);
 			}

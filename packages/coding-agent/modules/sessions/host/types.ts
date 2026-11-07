@@ -1,4 +1,3 @@
-import type { AgentTurnEvent } from "@wincode/agent-core";
 import type { ProviderCollection, ProviderModel } from "@wincode/ai";
 import type { AgentRegistry } from "@/modules/agents/registry";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
@@ -18,6 +17,7 @@ import type {
 	SessionSdkOperations,
 } from "../sdk-contract";
 import type { SessionSelection } from "../selection";
+import type { SessionSdkEvent } from "../session-events";
 import type {
 	SessionForkCheckpoint,
 	SessionForkResult,
@@ -149,10 +149,10 @@ export type SessionHost = Readonly<{
 	/** Durably records explicit local activation before imported work may continue. */
 	activateImportedSession: () => Promise<void>;
 	/**
-	 * Observes Agent Turn Events the Agent Session emits, in order: the stream a
-	 * consumer renders without reading full Snapshots per token.
+	 * Observes Session SDK and Agent Turn Events in order without requiring a
+	 * full Snapshot for every streamed token.
 	 */
-	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
+	onEvent: (listener: (event: SessionSdkEvent) => void) => () => void;
 	/** Ends the session and resolves after active durable cleanup completes. */
 	shutdown: () => Promise<void>;
 	/** Notifies that session facts changed; no payload, as the Agent Session publishes. */
@@ -165,9 +165,9 @@ export type PreparedSessionProviderComposition = Readonly<{
 }>;
 
 export type SessionHostManagerEvent = Readonly<{
-	event: AgentTurnEvent;
+	event: SessionSdkEvent;
 	sessionId: SessionId;
-	type: "agent-turn-event";
+	type: "session-event";
 }>;
 
 export type SessionWorkAdmission =

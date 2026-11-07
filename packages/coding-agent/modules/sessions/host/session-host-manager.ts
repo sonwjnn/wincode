@@ -228,7 +228,7 @@ export const createSessionHostManager = (
 				(host) => {
 					entry.host = host;
 					entry.unsubscribeEvents = host.onEvent((event) =>
-						emit({ event, sessionId, type: "agent-turn-event" })
+						emit({ event, sessionId, type: "session-event" })
 					);
 					entry.unsubscribeSnapshot = host.subscribe(() => {
 						void maybeUnload(entry);

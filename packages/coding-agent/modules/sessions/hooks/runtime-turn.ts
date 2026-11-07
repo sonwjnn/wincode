@@ -490,9 +490,12 @@ const toAssistantTurnMessages = (
 ): AgentTurnMessage[] => {
 	const parts: AgentTurnPart[] = [];
 	const results: AgentTurnMessage[] = [];
+	const hasDisplayOnlyTerminalText =
+		message.metadata?.interrupted === true ||
+		message.metadata?.terminalOutcome !== undefined;
 	for (const part of message.parts) {
 		if (part.type === "text") {
-			if (part.text.length > 0) {
+			if (!hasDisplayOnlyTerminalText && part.text.length > 0) {
 				parts.push({ text: part.text, type: "text" });
 			}
 			continue;
@@ -648,7 +651,7 @@ export type SessionViewState = ReadonlyDeep<{
 }>;
 
 type AgentTurnEventConsumerOptions = {
-	modelRetry?: Omit<ModelRetryPolicy, "onStatus">;
+	modelRetry?: ModelRetryPolicy;
 	prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
@@ -700,8 +703,29 @@ const consumeAgentTurnEvents = async ({
 		text: "",
 		turnId: turn.id,
 	};
+	let modelStepViewBaseline = { reasoningText: "", text: "" };
 	const publishViewState = (event: AgentTurnEvent): void => {
-		if (event.type === "text-delta") {
+		if (event.type === "model-step-started") {
+			modelStepViewBaseline = {
+				reasoningText: viewState.reasoningText,
+				text: viewState.text,
+			};
+			viewState = {
+				...viewState,
+				lastEventType: event.type,
+				lastSequence: event.sequence,
+				status: "streaming",
+			};
+		} else if (event.type === "model-step-retry-scheduled") {
+			viewState = {
+				...viewState,
+				...modelStepViewBaseline,
+				lastEventType: event.type,
+				lastSequence: event.sequence,
+				status: "streaming",
+			};
+			return;
+		} else if (event.type === "text-delta") {
 			viewState = {
 				...viewState,
 				lastEventType: event.type,
@@ -738,7 +762,12 @@ const consumeAgentTurnEvents = async ({
 				: {
 						...modelRetry,
 						onStatus: (retry) => {
-							viewState = omitUndefined({ ...viewState, retry });
+							modelRetry.onStatus?.(retry);
+							viewState = omitUndefined({
+								...viewState,
+								...(retry === undefined ? {} : modelStepViewBaseline),
+								retry,
+							});
 							try {
 								onViewState?.(viewState);
 							} catch {
@@ -876,6 +905,8 @@ export const runAgentTurnToText = async ({
 }): Promise<string> => {
 	let assistantText = "";
 	let pendingAssistantText = "";
+	let assistantTextAtModelStepStart = "";
+	let pendingAssistantTextAtModelStepStart = "";
 	let hasCheckpointedText = false;
 	let stepMessageIds: SessionMessageId[] = [];
 	let terminal: AgentTurnTerminalEvent | undefined;
@@ -908,7 +939,13 @@ export const runAgentTurnToText = async ({
 		}
 	};
 	const updateTurnEventState = (event: AgentTurnEvent): void => {
+		if (event.type === "model-step-retry-scheduled") {
+			assistantText = assistantTextAtModelStepStart;
+			pendingAssistantText = pendingAssistantTextAtModelStepStart;
+		}
 		if (event.type === "model-step-started") {
+			assistantTextAtModelStepStart = assistantText;
+			pendingAssistantTextAtModelStepStart = pendingAssistantText;
 			stepMessageIds = [];
 			stepHasToolCalls = false;
 			contextMeasurement = undefined;
@@ -1060,8 +1097,11 @@ export const runAgentTurnToText = async ({
 		onCheckpoint !== undefined &&
 		assistant !== undefined
 	) {
+		const committedFailureText = assistant.parts
+			.flatMap((part) => (part.type === "text" ? [part.text] : []))
+			.join("\n");
 		throw new CommittedAssistantError(
-			terminalEvent.failure.message,
+			committedFailureText || terminalEvent.failure.message,
 			assistant.id
 		);
 	}

@@ -30,12 +30,20 @@ import type { AgentTurnEvent, AgentTurnTerminalEvent } from "./events";
 import type { OperationalFailure } from "./failures";
 import { createOperationalFailure } from "./failures";
 import { type ModelStepId, toModelStepId } from "./identifiers";
-import { type AgentTurnLifecycle, createAgentTurnLifecycle } from "./lifecycle";
+import { createAgentTurnLifecycle } from "./lifecycle";
+import { resolveModelRetryDelay } from "./model-retry";
+import {
+	MODEL_STEP_ATTEMPT_CONTENT_LIMIT,
+	MODEL_STEP_ATTEMPT_SUMMARY_LIMIT,
+	type ModelStepAttemptPartialOutput,
+	type ModelStepAttemptSummary,
+} from "./model-step";
 import {
 	type AgentRuntime,
 	type AgentRuntimeRunOptions,
 	type AgentTurnEventStream,
 	createAgentTurnAbortEvent,
+	getAgentTurnAbortDisposition,
 	getAgentTurnFailureDetails,
 	type ModelRetryPolicy,
 	type ModelRetryStatus,
@@ -80,6 +88,69 @@ class ProviderCollectionChatFailureError extends Error {
 	}
 }
 
+class ModelStepStreamFailure extends Error {
+	readonly partialOutput: ModelStepAttemptPartialOutput | undefined;
+	readonly usage: ModelUsage | undefined;
+
+	constructor(
+		cause: unknown,
+		usage: ModelUsage | undefined,
+		partialOutput: ModelStepAttemptPartialOutput | undefined
+	) {
+		super("Provider Model Step failed.", { cause });
+		this.name = "ModelStepStreamFailure";
+		this.partialOutput = partialOutput;
+		this.usage = usage;
+	}
+}
+
+class ModelStepRetryFailure extends Error {
+	readonly attempts: readonly ModelStepAttemptSummary[];
+	readonly terminalFailure: OperationalFailure;
+	readonly usage: ModelUsage | undefined;
+
+	constructor(
+		cause: unknown,
+		{
+			attempts,
+			terminalFailure,
+			usage,
+		}: {
+			attempts: readonly ModelStepAttemptSummary[];
+			terminalFailure: OperationalFailure;
+			usage: ModelUsage | undefined;
+		}
+	) {
+		super("Agent Runtime Model retry sequence stopped.", { cause });
+		this.name = "ModelStepRetryFailure";
+		this.attempts = attempts;
+		this.terminalFailure = terminalFailure;
+		this.usage = usage;
+	}
+}
+
+class AgentRuntimeExecutionFailure extends Error {
+	readonly usage: ModelUsage | undefined;
+
+	constructor(cause: unknown, usage: ModelUsage | undefined) {
+		super("Agent Runtime execution failed.", { cause });
+		this.name = "AgentRuntimeExecutionFailure";
+		this.usage = usage;
+	}
+}
+
+const unwrapAgentRuntimeError = (error: unknown): unknown => {
+	let current = error;
+	while (
+		current instanceof ModelStepStreamFailure ||
+		current instanceof ModelStepRetryFailure ||
+		current instanceof AgentRuntimeExecutionFailure
+	) {
+		current = current.cause;
+	}
+	return current;
+};
+
 const isAbortLike = (error: unknown): boolean =>
 	isObjectLike(error) && "name" in error && error.name === "AbortError";
 
@@ -87,7 +158,22 @@ const resolveTerminalFailure = (
 	error: unknown,
 	turn: AgentTurn
 ): OperationalFailure => {
-	if (isAbortLike(error)) {
+	let current = error;
+	while (
+		current instanceof ModelStepStreamFailure ||
+		current instanceof ModelStepRetryFailure ||
+		current instanceof AgentRuntimeExecutionFailure
+	) {
+		if (current instanceof ModelStepRetryFailure) {
+			return current.terminalFailure;
+		}
+		current = current.cause;
+	}
+	const normalizedError = unwrapAgentRuntimeError(error);
+	if (
+		normalizedError instanceof ProviderCollectionChatAbortedError ||
+		isAbortLike(normalizedError)
+	) {
 		return createOperationalFailure({
 			code: "cancelled",
 			details: getAgentTurnFailureDetails(turn),
@@ -95,12 +181,14 @@ const resolveTerminalFailure = (
 			source: "runtime",
 		});
 	}
-	if (error instanceof ProviderCollectionChatFailureError) {
-		if (error.failure.code === "provider") {
-			const modelFailure = normalizeModelFailure(error.failure, {
-				modelId: turn.model.modelId,
-				providerId: turn.model.providerId,
-			});
+	if (normalizedError instanceof ProviderCollectionChatFailureError) {
+		if (normalizedError.failure.code === "provider") {
+			const modelFailure =
+				normalizedError.failure.modelFailure ??
+				normalizeModelFailure(normalizedError.failure, {
+					modelId: turn.model.modelId,
+					providerId: turn.model.providerId,
+				});
 			return createOperationalFailure({
 				code: modelFailure.code,
 				details: {
@@ -124,15 +212,15 @@ const resolveTerminalFailure = (
 			transport: { code: "network", retry: "after-delay" },
 			"unsupported-capability": { code: "invalid-request", retry: "never" },
 		} as const;
-		const mapped = mapping[error.failure.code];
+		const mapped = mapping[normalizedError.failure.code];
 		return createOperationalFailure({
 			code: mapped.code,
 			details: {
 				...getAgentTurnFailureDetails(turn),
 				...omitUndefined({
 					retryAfterMs:
-						"retryAfterMs" in error.failure
-							? error.failure.retryAfterMs
+						"retryAfterMs" in normalizedError.failure
+							? normalizedError.failure.retryAfterMs
 							: undefined,
 				}),
 			},
@@ -140,7 +228,7 @@ const resolveTerminalFailure = (
 			source: "model",
 		});
 	}
-	const modelFailure: ModelFailure = normalizeModelFailure(error, {
+	const modelFailure: ModelFailure = normalizeModelFailure(normalizedError, {
 		modelId: turn.model.modelId,
 		providerId: turn.model.providerId,
 	});
@@ -158,24 +246,65 @@ const resolveTerminalFailure = (
 	});
 };
 
+const MAX_RUNTIME_DEADLINE_MS = 2_147_483_647;
+
+type RuntimeSignalLease = Readonly<{
+	dispose: () => void;
+	signal: AbortSignal | undefined;
+}>;
+
 const resolveRuntimeSignal = (
 	signal: AbortSignal | undefined,
 	deadlineMs: number | undefined
-): AbortSignal | undefined => {
+): RuntimeSignalLease => {
 	if (isUndefined(deadlineMs)) {
-		return signal;
+		return { dispose: () => undefined, signal };
 	}
-	if (!Number.isInteger(deadlineMs) || deadlineMs < 0) {
+	if (
+		!Number.isSafeInteger(deadlineMs) ||
+		deadlineMs < 0 ||
+		deadlineMs > MAX_RUNTIME_DEADLINE_MS
+	) {
 		throw new AgentInvariantError(
 			"invalid-runtime",
-			"Agent Runtime deadline must be a non-negative integer.",
+			"Agent Runtime deadline must be a non-negative integer within the timer limit.",
 			{ cause: deadlineMs }
 		);
 	}
-	const deadlineSignal = AbortSignal.timeout(deadlineMs);
-	return isUndefined(signal)
-		? deadlineSignal
-		: AbortSignal.any([signal, deadlineSignal]);
+	const deadlineController = new AbortController();
+	const runtimeSignal = isUndefined(signal)
+		? deadlineController.signal
+		: AbortSignal.any([signal, deadlineController.signal]);
+	const deadlineTimer =
+		deadlineMs === 0
+			? undefined
+			: setTimeout(
+					() =>
+						deadlineController.abort(
+							new DOMException(
+								"Agent Runtime deadline exceeded",
+								"TimeoutError"
+							)
+						),
+					deadlineMs
+				);
+	if (deadlineMs === 0) {
+		deadlineController.abort(
+			new DOMException("Agent Runtime deadline exceeded", "TimeoutError")
+		);
+	}
+	const dispose = (): void => {
+		if (deadlineTimer !== undefined) {
+			clearTimeout(deadlineTimer);
+		}
+		runtimeSignal.removeEventListener("abort", dispose);
+	};
+	if (runtimeSignal.aborted) {
+		dispose();
+	} else {
+		runtimeSignal.addEventListener("abort", dispose, { once: true });
+	}
+	return { dispose, signal: runtimeSignal };
 };
 
 const createAbortError = (reason: unknown): Error =>
@@ -365,6 +494,35 @@ const appendTextPart = (parts: AgentTurnPart[], text: string): void => {
 	}
 };
 
+const summarizePartialOutput = (
+	parts: readonly AgentTurnPart[],
+	bufferedText: string,
+	bufferedReasoning: string
+): ModelStepAttemptPartialOutput | undefined => {
+	const text = [
+		...parts.flatMap((part) => (part.type === "text" ? [part.text] : [])),
+		bufferedText,
+	].join("");
+	const truncated =
+		text.length > MODEL_STEP_ATTEMPT_CONTENT_LIMIT ||
+		bufferedReasoning.length > MODEL_STEP_ATTEMPT_CONTENT_LIMIT;
+	const partialOutput = {
+		...(text.length === 0
+			? {}
+			: { text: text.slice(0, MODEL_STEP_ATTEMPT_CONTENT_LIMIT) }),
+		...(bufferedReasoning.length === 0
+			? {}
+			: {
+					reasoning: bufferedReasoning.slice(
+						0,
+						MODEL_STEP_ATTEMPT_CONTENT_LIMIT
+					),
+				}),
+		...(truncated ? { truncated: true as const } : {}),
+	};
+	return Object.keys(partialOutput).length === 0 ? undefined : partialOutput;
+};
+
 type PendingToolCall = Readonly<{
 	input: unknown;
 	tool: ResolvedTool;
@@ -374,14 +532,22 @@ type PendingToolCall = Readonly<{
 const toAgentTurnTerminalEvent = (
 	turn: AgentTurn,
 	error: unknown,
-	sequence: number
+	sequence: number,
+	usage?: ModelUsage
 ): AgentTurnTerminalEvent => ({
 	failure: resolveTerminalFailure(error, turn),
 	finishedAt: Date.now(),
 	sequence,
 	turnId: turn.id,
 	type: "agent-turn-failed",
+	...omitUndefined({ usage }),
 });
+
+const terminalEventWithUsage = (
+	event: AgentTurnTerminalEvent,
+	usage: ModelUsage | undefined
+): AgentTurnTerminalEvent =>
+	usage === undefined ? event : { ...event, usage };
 
 export const createAgentRuntime = (
 	options: AgentRuntimeOptions
@@ -398,8 +564,12 @@ export const createAgentRuntime = (
 			policy !== undefined &&
 			(!Number.isSafeInteger(policy.maxRetries) ||
 				policy.maxRetries < 0 ||
+				policy.maxRetries > MAX_MODEL_RETRIES ||
 				!Number.isSafeInteger(policy.baseDelayMs) ||
-				policy.baseDelayMs < 0)
+				policy.baseDelayMs < 0 ||
+				!Number.isSafeInteger(policy.maxDelayMs) ||
+				policy.maxDelayMs < policy.baseDelayMs ||
+				policy.maxDelayMs > MAX_MODEL_RETRY_DELAY_MS)
 		) {
 			throw new AgentInvariantError(
 				"invalid-runtime",
@@ -413,6 +583,7 @@ export const createAgentRuntime = (
 
 type ModelStepOutput = Readonly<{
 	assistantParts: readonly AgentTurnPart[];
+	attemptPartialOutput?: ModelStepAttemptPartialOutput;
 	completion: ProviderGenerationCompletion;
 	continuation?: unknown;
 	toolCalls: readonly PendingToolCall[];
@@ -427,7 +598,6 @@ type ModelStepStreamOptions = Readonly<{
 	emit: EventEmitter;
 	invocation: AgentModelInvocation;
 	request: ChatRequest;
-	onProgress?: () => void;
 	seenToolCallIds: Set<ToolCallId>;
 	signal?: AbortSignal;
 	toolsByName: ReadonlyMap<string, ResolvedTool>;
@@ -528,18 +698,49 @@ const outputLimitReached = (
 		? true
 		: undefined;
 
+const failureForIncompleteCompletion = (
+	completion: ProviderGenerationCompletion,
+	turn: AgentTurn,
+	sequence: number,
+	usage: ModelUsage | undefined
+):
+	| Extract<AgentTurnTerminalEvent, { type: "agent-turn-failed" }>
+	| undefined => {
+	if (
+		completion.kind === "completed" ||
+		(completion.kind === "incomplete" && completion.reason === "output-limit")
+	) {
+		return;
+	}
+	return {
+		failure: createOperationalFailure({
+			code:
+				completion.kind === "incomplete" && completion.reason === "filtered"
+					? "filtered"
+					: "incomplete-response",
+			details: getAgentTurnFailureDetails(turn),
+			retry: "never",
+			source: "model",
+		}),
+		finishedAt: Date.now(),
+		sequence,
+		turnId: turn.id,
+		type: "agent-turn-failed",
+		...omitUndefined({ usage }),
+	};
+};
+
 const drainModelStep = async function* ({
 	emit,
 	invocation,
 	request,
-	onProgress,
 	seenToolCallIds,
 	signal,
 	toolsByName,
 	turnId,
 }: ModelStepStreamOptions): AsyncGenerator<
 	AgentTurnEvent,
-	ModelStepOutput | null,
+	ModelStepOutput,
 	undefined
 > {
 	const stream = createModelStepStream(invocation, request);
@@ -547,6 +748,7 @@ const drainModelStep = async function* ({
 	const assistantParts: AgentTurnPart[] = [];
 	const toolCalls: PendingToolCall[] = [];
 	let bufferedText = "";
+	let bufferedReasoning = "";
 	let usage: ModelUsage | undefined;
 	let completion: ProviderGenerationCompletion = { kind: "unknown" };
 	let continuation: unknown;
@@ -565,9 +767,6 @@ const drainModelStep = async function* ({
 				);
 			}
 			const update = parseProviderChatUpdate(next.value);
-			if (update.kind !== "finish") {
-				onProgress?.();
-			}
 			if (update.kind === "usage") {
 				usage = sumUsage(usage, update.usage);
 				continue;
@@ -590,6 +789,7 @@ const drainModelStep = async function* ({
 					});
 					break;
 				case "reasoning-delta":
+					bufferedReasoning += part.delta;
 					yield emit({
 						delta: part.delta,
 						sequence: emit.nextSequence(),
@@ -626,21 +826,43 @@ const drainModelStep = async function* ({
 					);
 			}
 		}
+	} catch (error) {
+		if (error instanceof ModelStepStreamFailure) {
+			throw error;
+		}
+		throw new ModelStepStreamFailure(
+			error,
+			usage,
+			summarizePartialOutput(assistantParts, bufferedText, bufferedReasoning)
+		);
 	} finally {
 		await closeModelStream(iterator);
 	}
 	if (!finished) {
-		return null;
+		throw new ModelStepStreamFailure(
+			new Error("Model stream ended before completion."),
+			usage,
+			summarizePartialOutput(assistantParts, bufferedText, bufferedReasoning)
+		);
 	}
 	appendTextPart(assistantParts, bufferedText);
 	return {
 		assistantParts,
+		...omitUndefined({
+			attemptPartialOutput: summarizePartialOutput(
+				assistantParts,
+				"",
+				bufferedReasoning
+			),
+			continuation,
+			usage,
+		}),
 		completion,
-		...omitUndefined({ continuation, usage }),
 		toolCalls,
 	};
 };
 
+const MAX_MODEL_RETRIES = 10;
 const MAX_MODEL_RETRY_DELAY_MS = 60_000;
 
 const notifyRetryStatus = (
@@ -654,6 +876,441 @@ const notifyRetryStatus = (
 	}
 };
 
+type ModelRetryDecision =
+	| Readonly<{
+			delayMs: number;
+			failure: OperationalFailure;
+			kind: "retry";
+			policy: ModelRetryPolicy;
+	  }>
+	| Readonly<{ failure: OperationalFailure; kind: "retry-delay-exceeds-limit" }>
+	| Readonly<{ failure: OperationalFailure; kind: "stopped" }>;
+
+type ModelStepRetryOutput = Readonly<{
+	attemptUsage?: ModelUsage;
+	attempts: readonly ModelStepAttemptSummary[];
+	output: ModelStepOutput;
+}>;
+
+type ModelStepAttemptHistory = {
+	entries: ModelStepAttemptSummary[];
+	truncated: boolean;
+};
+
+const appendAttemptHistory = (
+	history: ModelStepAttemptHistory,
+	attempts: readonly ModelStepAttemptSummary[]
+): void => {
+	for (const attempt of attempts) {
+		if (history.entries.length === MODEL_STEP_ATTEMPT_SUMMARY_LIMIT) {
+			history.truncated = true;
+			return;
+		}
+		history.entries.push(attempt);
+	}
+};
+
+const terminalEventWithAttempts = (
+	event: AgentTurnTerminalEvent,
+	history: ModelStepAttemptHistory
+): AgentTurnTerminalEvent => ({
+	...event,
+	...omitUndefined({
+		modelStepAttempts:
+			history.entries.length === 0 ? undefined : history.entries,
+		modelStepAttemptsTruncated: history.truncated ? true : undefined,
+	}),
+});
+
+const modelRetryDecisionFor = ({
+	attempt,
+	error,
+	maxRetries,
+	policy,
+	signal,
+	turn,
+}: {
+	attempt: number;
+	error: unknown;
+	maxRetries: number;
+	policy: ModelRetryPolicy | undefined;
+	signal: AbortSignal | undefined;
+	turn: AgentTurn;
+}): ModelRetryDecision => {
+	const cause = unwrapAgentRuntimeError(error);
+	const failure = resolveTerminalFailure(cause, turn);
+	if (
+		policy === undefined ||
+		attempt >= maxRetries ||
+		isAgentInvariantError(cause) ||
+		cause instanceof ProviderCollectionChatAbortedError ||
+		signal?.aborted
+	) {
+		return { failure, kind: "stopped" };
+	}
+	const retryDelay = resolveModelRetryDelay(failure, attempt, policy);
+	if (retryDelay.kind === "retry-delay-exceeds-limit") {
+		return { failure, kind: "retry-delay-exceeds-limit" };
+	}
+	if (retryDelay.kind === "not-retryable") {
+		return { failure, kind: "stopped" };
+	}
+	return {
+		delayMs: retryDelay.delayMs,
+		failure,
+		kind: "retry",
+		policy,
+	};
+};
+
+const retryEndedEvent = (
+	options: ModelStepStreamOptions & { turn: AgentTurn },
+	{
+		attempt,
+		failure,
+		maxAttempts,
+		outcome,
+		stepId,
+	}: {
+		attempt: number;
+		failure: OperationalFailure | undefined;
+		maxAttempts: number;
+		outcome: "cancelled" | "exhausted" | "stopped" | "success";
+		stepId: ModelStepId;
+	}
+): AgentTurnEvent =>
+	options.emit({
+		attempt,
+		...omitUndefined({ failure }),
+		maxAttempts,
+		outcome,
+		sequence: options.emit.nextSequence(),
+		stepId,
+		turnId: options.turn.id,
+		type: "model-step-retry-ended",
+	});
+
+type ModelStepRetryRecovery =
+	| Readonly<{ attemptUsage?: ModelUsage; kind: "retry"; retryCount: number }>
+	| Readonly<{ failure: ModelStepRetryFailure; kind: "stopped" }>;
+
+type ModelStepRetryRecoveryOptions = ModelStepStreamOptions & {
+	turn: AgentTurn;
+	policy: ModelRetryPolicy | undefined;
+};
+
+const retryEndOutcomeForFailure = ({
+	attempt,
+	cause,
+	failure,
+	maxRetries,
+	retryCount,
+	signal,
+}: {
+	attempt: number;
+	cause: unknown;
+	failure: OperationalFailure;
+	maxRetries: number;
+	retryCount: number;
+	signal: AbortSignal | undefined;
+}): "cancelled" | "exhausted" | "stopped" => {
+	if (signal?.aborted) {
+		return getAgentTurnAbortDisposition(signal.reason) === "cancelled"
+			? "cancelled"
+			: "stopped";
+	}
+	if (
+		failure.code === "cancelled" ||
+		cause instanceof ProviderCollectionChatAbortedError
+	) {
+		return "cancelled";
+	}
+	if (
+		retryCount > 0 &&
+		attempt >= maxRetries &&
+		(failure.retry === "after-delay" || failure.retry === "immediate")
+	) {
+		return "exhausted";
+	}
+	return "stopped";
+};
+
+const modelStepAttemptSummaryForFailure = ({
+	attempt,
+	failure,
+	maxRetries,
+	partialOutput,
+	retryDecision,
+	stepId,
+	usage,
+}: {
+	attempt: number;
+	failure: OperationalFailure;
+	maxRetries: number;
+	partialOutput: ModelStepAttemptPartialOutput | undefined;
+	retryDecision: "scheduled" | "stopped";
+	stepId: ModelStepId;
+	usage: ModelUsage | undefined;
+}): ModelStepAttemptSummary => ({
+	attempt,
+	failure,
+	maxRetries,
+	...omitUndefined({ partialOutput }),
+	retryDecision,
+	stepId,
+	...omitUndefined({ usage }),
+});
+
+const emitRetryScheduledEvent = (
+	options: ModelStepRetryRecoveryOptions,
+	{
+		attempt,
+		failure,
+		maxRetries,
+		partialOutput,
+		retryAt,
+		stepId,
+		usage,
+	}: {
+		attempt: number;
+		failure: OperationalFailure;
+		maxRetries: number;
+		partialOutput: ModelStepAttemptPartialOutput | undefined;
+		retryAt: number;
+		stepId: ModelStepId;
+		usage: ModelUsage | undefined;
+	}
+): AgentTurnEvent =>
+	options.emit({
+		attempt,
+		failure,
+		maxAttempts: maxRetries,
+		...omitUndefined({ partialOutput, usage }),
+		retryAt,
+		sequence: options.emit.nextSequence(),
+		stepId,
+		turnId: options.turn.id,
+		type: "model-step-retry-scheduled",
+	});
+
+const recoverModelStepFailure = async function* (
+	options: ModelStepRetryRecoveryOptions,
+	{
+		attempt,
+		attemptUsage,
+		attempts,
+		maxRetries,
+		retryCount,
+		stepId,
+		error,
+	}: {
+		attempt: number;
+		attemptUsage: ModelUsage | undefined;
+		attempts: ModelStepAttemptSummary[];
+		maxRetries: number;
+		retryCount: number;
+		stepId: ModelStepId;
+		error: unknown;
+	}
+): AsyncGenerator<AgentTurnEvent, ModelStepRetryRecovery, undefined> {
+	const cause = unwrapAgentRuntimeError(error);
+	if (isAgentInvariantError(cause)) {
+		throw cause;
+	}
+	const decision = modelRetryDecisionFor({
+		attempt,
+		error: cause,
+		maxRetries,
+		policy: options.policy,
+		signal: options.signal,
+		turn: options.turn,
+	});
+	const streamFailure =
+		error instanceof ModelStepStreamFailure ? error : undefined;
+	const terminalFailure =
+		decision.kind === "retry-delay-exceeds-limit"
+			? createOperationalFailure({
+					code: "retry-delay-exceeds-limit",
+					details: decision.failure.details,
+					retry: "never",
+					source: "runtime",
+				})
+			: decision.failure;
+	const attemptSummary = modelStepAttemptSummaryForFailure({
+		attempt: attempt + 1,
+		failure: terminalFailure,
+		maxRetries,
+		partialOutput: streamFailure?.partialOutput,
+		retryDecision: decision.kind === "retry" ? "scheduled" : "stopped",
+		stepId,
+		usage: streamFailure?.usage,
+	});
+	attempts.push(attemptSummary);
+	const nextAttemptUsage = sumUsage(attemptUsage, streamFailure?.usage);
+	if (decision.kind !== "retry") {
+		if (retryCount > 0) {
+			yield retryEndedEvent(options, {
+				attempt: retryCount,
+				failure: terminalFailure,
+				maxAttempts: maxRetries,
+				outcome: retryEndOutcomeForFailure({
+					attempt,
+					cause,
+					failure: terminalFailure,
+					maxRetries,
+					retryCount,
+					signal: options.signal,
+				}),
+				stepId,
+			});
+		}
+		return {
+			failure: new ModelStepRetryFailure(cause, {
+				attempts,
+				terminalFailure,
+				usage: nextAttemptUsage,
+			}),
+			kind: "stopped",
+		};
+	}
+	const retryAt = Date.now() + decision.delayMs;
+	const retryStatus = {
+		attempt: attempt + 1,
+		maxAttempts: maxRetries,
+		retryAt,
+	};
+	yield emitRetryScheduledEvent(options, {
+		attempt: retryStatus.attempt,
+		failure: decision.failure,
+		maxRetries,
+		partialOutput: attemptSummary.partialOutput,
+		retryAt: retryStatus.retryAt,
+		stepId,
+		usage: attemptSummary.usage,
+	});
+	notifyRetryStatus(decision.policy, retryStatus);
+	try {
+		// Bun.sleep cannot cancel its timer; abort must also release the backoff resource.
+		await sleep(decision.delayMs, undefined, { signal: options.signal });
+	} catch (sleepError) {
+		const sleepFailure = resolveTerminalFailure(sleepError, options.turn);
+		yield retryEndedEvent(options, {
+			attempt: retryStatus.attempt,
+			failure: sleepFailure,
+			maxAttempts: maxRetries,
+			outcome: retryEndOutcomeForFailure({
+				attempt,
+				cause: sleepError,
+				failure: sleepFailure,
+				maxRetries,
+				retryCount: retryStatus.attempt,
+				signal: options.signal,
+			}),
+			stepId,
+		});
+		return {
+			failure: new ModelStepRetryFailure(sleepError, {
+				attempts,
+				terminalFailure: sleepFailure,
+				usage: nextAttemptUsage,
+			}),
+			kind: "stopped",
+		};
+	} finally {
+		notifyRetryStatus(decision.policy, undefined);
+	}
+	return {
+		attemptUsage: nextAttemptUsage,
+		kind: "retry",
+		retryCount: retryStatus.attempt,
+	};
+};
+
+const finishModelStepRetrySequence = async function* (
+	options: ModelStepStreamOptions & { turn: AgentTurn },
+	{
+		attempt,
+		attemptUsage,
+		attempts,
+		maxRetries,
+		output,
+		retryCount,
+		stepId,
+	}: {
+		attempt: number;
+		attemptUsage: ModelUsage | undefined;
+		attempts: ModelStepAttemptSummary[];
+		maxRetries: number;
+		output: ModelStepOutput;
+		retryCount: number;
+		stepId: ModelStepId;
+	}
+): AsyncGenerator<AgentTurnEvent, ModelStepRetryOutput, undefined> {
+	const incompleteFailure = failureForIncompleteCompletion(
+		output.completion,
+		options.turn,
+		0,
+		output.usage
+	);
+	if (incompleteFailure !== undefined) {
+		attempts.push({
+			attempt: attempt + 1,
+			failure: incompleteFailure.failure,
+			maxRetries,
+			...omitUndefined({ partialOutput: output.attemptPartialOutput }),
+			retryDecision: "stopped",
+			stepId,
+			...omitUndefined({ usage: output.usage }),
+		});
+	}
+	if (retryCount > 0) {
+		yield retryEndedEvent(options, {
+			attempt: retryCount,
+			failure: incompleteFailure?.failure,
+			maxAttempts: maxRetries,
+			outcome: incompleteFailure === undefined ? "success" : "stopped",
+			stepId,
+		});
+	}
+	return { attempts, output, ...omitUndefined({ attemptUsage }) };
+};
+
+const abortModelStepRetrySequence = async function* (
+	options: ModelStepStreamOptions & { turn: AgentTurn },
+	{
+		attempts,
+		attemptUsage,
+		maxRetries,
+		retryCount,
+	}: {
+		attempts: ModelStepAttemptSummary[];
+		attemptUsage: ModelUsage | undefined;
+		maxRetries: number;
+		retryCount: number;
+	}
+): AsyncGenerator<AgentTurnEvent, never, undefined> {
+	const abortError = createAbortError(options.signal?.reason);
+	const terminalFailure = resolveTerminalFailure(abortError, options.turn);
+	if (retryCount === 0) {
+		throw abortError;
+	}
+	const lastAttempt = attempts.at(-1);
+	if (lastAttempt !== undefined) {
+		yield retryEndedEvent(options, {
+			attempt: retryCount,
+			failure: terminalFailure,
+			maxAttempts: maxRetries,
+			outcome: "cancelled",
+			stepId: lastAttempt.stepId,
+		});
+	}
+	throw new ModelStepRetryFailure(abortError, {
+		attempts,
+		terminalFailure,
+		usage: attemptUsage,
+	});
+};
+
 const drainModelStepWithRetry = async function* (
 	options: ModelStepStreamOptions & {
 		turn: AgentTurn;
@@ -662,66 +1319,66 @@ const drainModelStepWithRetry = async function* (
 		onRequest: () => ModelStepId;
 		modelStepObserver: AgentRuntimeRunOptions["modelStepObserver"];
 	}
-): AsyncGenerator<AgentTurnEvent, ModelStepOutput | null, undefined> {
+): AsyncGenerator<AgentTurnEvent, ModelStepRetryOutput, undefined> {
 	const { policy, turn } = options;
 	const maxRetries = Math.min(
 		policy?.maxRetries ?? 0,
 		options.remainingRequests - 1
 	);
-	let hasProgress = false;
+	const attempts: ModelStepAttemptSummary[] = [];
+	let attemptUsage: ModelUsage | undefined;
+	let retryCount = 0;
 	for (let attempt = 0; ; attempt += 1) {
 		if (options.signal?.aborted) {
-			throw createAbortError(options.signal.reason);
+			yield* abortModelStepRetrySequence(options, {
+				attempts,
+				attemptUsage,
+				maxRetries,
+				retryCount,
+			});
 		}
+		const stepId = options.onRequest();
 		yield options.emit({
 			modelId: turn.model.modelId,
 			sequence: options.emit.nextSequence(),
-			stepId: options.onRequest(),
+			stepId,
 			turnId: turn.id,
 			type: "model-step-started",
 		});
 		notifyModelStepStarted(options.modelStepObserver, options.request);
 		try {
-			return yield* drainModelStep({
+			const attemptToolCallIds = new Set(options.seenToolCallIds);
+			const output = yield* drainModelStep({
 				...options,
-				onProgress: () => {
-					hasProgress = true;
-				},
+				seenToolCallIds: attemptToolCallIds,
+			});
+			for (const toolCallId of attemptToolCallIds) {
+				options.seenToolCallIds.add(toolCallId);
+			}
+			return yield* finishModelStepRetrySequence(options, {
+				attempt,
+				attemptUsage,
+				attempts,
+				maxRetries,
+				output,
+				retryCount,
+				stepId,
 			});
 		} catch (error) {
-			if (
-				policy === undefined ||
-				hasProgress ||
-				attempt >= maxRetries ||
-				isAgentInvariantError(error) ||
-				error instanceof ProviderCollectionChatAbortedError ||
-				options.signal?.aborted
-			) {
-				throw error;
-			}
-			const failure = resolveTerminalFailure(error, turn);
-			if (
-				failure.source !== "model" ||
-				(failure.retry !== "after-delay" && failure.retry !== "immediate") ||
-				(failure.details?.retryAfterMs ?? 0) > MAX_MODEL_RETRY_DELAY_MS
-			) {
-				throw error;
-			}
-			const delayMs = Math.max(
-				Math.min(policy.baseDelayMs * 2 ** attempt, MAX_MODEL_RETRY_DELAY_MS),
-				failure.details?.retryAfterMs ?? 0
-			);
-			notifyRetryStatus(policy, {
-				attempt: attempt + 1,
-				maxAttempts: maxRetries,
-				retryAt: Date.now() + delayMs,
+			const recovery = yield* recoverModelStepFailure(options, {
+				attempt,
+				attemptUsage,
+				attempts,
+				maxRetries,
+				retryCount,
+				stepId,
+				error,
 			});
-			try {
-				// Bun.sleep cannot cancel its timer; abort must also release the backoff resource.
-				await sleep(delayMs, undefined, { signal: options.signal });
-			} finally {
-				notifyRetryStatus(policy, undefined);
+			if (recovery.kind === "stopped") {
+				throw recovery.failure;
 			}
+			retryCount = recovery.retryCount;
+			attemptUsage = recovery.attemptUsage;
 		}
 	}
 };
@@ -829,9 +1486,9 @@ const createToolsByName = (
 };
 
 type ExecuteModelStepsOptions = Readonly<{
+	attemptHistory: ModelStepAttemptHistory;
 	cacheWarming?: true;
 	emit: EventEmitter;
-	lifecycle: AgentTurnLifecycle;
 	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	modelRetry?: ModelRetryPolicy;
@@ -982,6 +1639,7 @@ type ProcessModelStepOutputOptions = BuildChatRequestOptions &
 		emit: EventEmitter;
 		modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 		output: ModelStepOutput;
+		attemptHistory: ModelStepAttemptHistory;
 		prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
 		protectedFromIndex: number;
 		request: ChatRequest;
@@ -1001,6 +1659,7 @@ const processModelStepOutput = async function* ({
 	modelMessages,
 	modelStepObserver,
 	output,
+	attemptHistory,
 	prepareNextStep,
 	protectedFromIndex,
 	promptCacheKey,
@@ -1043,13 +1702,18 @@ const processModelStepOutput = async function* ({
 	});
 	const nextTotalUsage = sumUsage(totalUsage, output.usage);
 	if (stopTurn) {
-		yield emit({
-			finishedAt: Date.now(),
-			sequence: emit.nextSequence(),
-			turnId: turn.id,
-			type: "agent-turn-completed",
-			...omitUndefined({ usage: nextTotalUsage }),
-		});
+		yield emit(
+			terminalEventWithAttempts(
+				{
+					finishedAt: Date.now(),
+					sequence: emit.nextSequence(),
+					turnId: turn.id,
+					type: "agent-turn-completed",
+					...omitUndefined({ usage: nextTotalUsage }),
+				},
+				attemptHistory
+			)
+		);
 		return { continueTurn: false, totalUsage: nextTotalUsage };
 	}
 	const steeringMessages = await takeSteeringMessages?.();
@@ -1069,16 +1733,21 @@ const processModelStepOutput = async function* ({
 		!hasSteeringMessages &&
 		!additionalMessagesDelivered
 	) {
-		yield emit({
-			finishedAt: Date.now(),
-			sequence: emit.nextSequence(),
-			turnId: turn.id,
-			type: "agent-turn-completed",
-			...omitUndefined({
-				outputLimitReached: outputLimitReached(output.completion),
-				usage: nextTotalUsage,
-			}),
-		});
+		yield emit(
+			terminalEventWithAttempts(
+				{
+					finishedAt: Date.now(),
+					sequence: emit.nextSequence(),
+					turnId: turn.id,
+					type: "agent-turn-completed",
+					...omitUndefined({
+						outputLimitReached: outputLimitReached(output.completion),
+						usage: nextTotalUsage,
+					}),
+				},
+				attemptHistory
+			)
+		);
 		return { continueTurn: false, totalUsage: nextTotalUsage };
 	}
 	if (prepareNextStep !== undefined) {
@@ -1098,10 +1767,35 @@ const processModelStepOutput = async function* ({
 	return { continueTurn: true, totalUsage: nextTotalUsage };
 };
 
+const hasReachedModelStepLimit = (
+	maximumModelSteps: number | undefined,
+	requestCount: number
+): boolean =>
+	maximumModelSteps !== undefined && requestCount >= maximumModelSteps;
+
+const toAgentRuntimeExecutionFailure = (
+	error: unknown,
+	totalUsage: ModelUsage | undefined,
+	attemptHistory: ModelStepAttemptHistory
+): Error => {
+	const cause = unwrapAgentRuntimeError(error);
+	if (isAgentInvariantError(cause)) {
+		return cause;
+	}
+	if (!(error instanceof ModelStepRetryFailure)) {
+		return new AgentRuntimeExecutionFailure(cause, totalUsage);
+	}
+	appendAttemptHistory(attemptHistory, error.attempts);
+	return new AgentRuntimeExecutionFailure(
+		error,
+		sumUsage(totalUsage, error.usage)
+	);
+};
+
 const runLoop = async function* ({
+	attemptHistory,
 	cacheWarming,
 	emit,
-	lifecycle,
 	maximumModelSteps,
 	invocation,
 	modelMessages,
@@ -1119,82 +1813,114 @@ const runLoop = async function* ({
 	const seenToolCallIds = new Set<ToolCallId>();
 	const toolDefinitions = tools.map(toModelTool);
 	let requestCount = 0;
-	while (true) {
-		if (runtimeSignal?.aborted) {
-			yield emit(
-				createAgentTurnAbortEvent(turn, runtimeSignal, emit.nextSequence())
-			);
-			return;
-		}
-		if (maximumModelSteps !== undefined && requestCount >= maximumModelSteps) {
-			yield emit({
-				failure: createOperationalFailure({
-					code: "model-step-limit",
-					details: getAgentTurnFailureDetails(turn),
-					retry: "never",
-					source: "runtime",
-				}),
-				finishedAt: Date.now(),
-				sequence: emit.nextSequence(),
-				turnId: turn.id,
-				type: "agent-turn-failed",
+	try {
+		while (true) {
+			if (runtimeSignal?.aborted) {
+				yield emit(
+					terminalEventWithAttempts(
+						terminalEventWithUsage(
+							createAgentTurnAbortEvent(
+								turn,
+								runtimeSignal,
+								emit.nextSequence()
+							),
+							totalUsage
+						),
+						attemptHistory
+					)
+				);
+				return;
+			}
+			if (hasReachedModelStepLimit(maximumModelSteps, requestCount)) {
+				yield emit(
+					terminalEventWithAttempts(
+						{
+							failure: createOperationalFailure({
+								code: "model-step-limit",
+								details: getAgentTurnFailureDetails(turn),
+								retry: "never",
+								source: "runtime",
+							}),
+							finishedAt: Date.now(),
+							sequence: emit.nextSequence(),
+							turnId: turn.id,
+							type: "agent-turn-failed",
+							...omitUndefined({ usage: totalUsage }),
+						},
+						attemptHistory
+					)
+				);
+				return;
+			}
+			const protectedFromIndex = modelMessages.length;
+			let stepId = toModelStepId(`step-${requestCount + 1}`);
+			const request = buildChatRequest({
+				cacheWarming,
+				modelMessages,
+				promptCacheKey,
+				runtimeSignal,
+				toolDefinitions,
+				turn,
 			});
-			return;
+			const retryResult = yield* drainModelStepWithRetry({
+				policy: cacheWarming ? undefined : modelRetry,
+				remainingRequests:
+					(maximumModelSteps ?? Number.POSITIVE_INFINITY) - requestCount,
+				modelStepObserver,
+				onRequest: () => {
+					requestCount += 1;
+					stepId = toModelStepId(`step-${requestCount}`);
+					return stepId;
+				},
+				turn,
+				emit,
+				invocation,
+				request,
+				seenToolCallIds,
+				...omitUndefined({ signal: runtimeSignal }),
+				toolsByName,
+				turnId: turn.id,
+			});
+			appendAttemptHistory(attemptHistory, retryResult.attempts);
+			totalUsage = sumUsage(totalUsage, retryResult.attemptUsage);
+			const output = retryResult.output;
+			const incompleteFailure = failureForIncompleteCompletion(
+				output.completion,
+				turn,
+				emit.nextSequence(),
+				sumUsage(totalUsage, output.usage)
+			);
+			if (incompleteFailure !== undefined) {
+				yield emit(
+					terminalEventWithAttempts(incompleteFailure, attemptHistory)
+				);
+				return;
+			}
+			const stepResult = yield* processModelStepOutput({
+				attemptHistory,
+				cacheWarming,
+				emit,
+				modelMessages,
+				modelStepObserver,
+				output,
+				prepareNextStep,
+				protectedFromIndex,
+				promptCacheKey,
+				request,
+				runtimeSignal,
+				stepId,
+				takeSteeringMessages,
+				toolDefinitions,
+				totalUsage,
+				turn,
+			});
+			totalUsage = stepResult.totalUsage;
+			if (!stepResult.continueTurn) {
+				return;
+			}
 		}
-		const protectedFromIndex = modelMessages.length;
-		let stepId = toModelStepId(`step-${requestCount + 1}`);
-		const request = buildChatRequest({
-			cacheWarming,
-			modelMessages,
-			promptCacheKey,
-			runtimeSignal,
-			toolDefinitions,
-			turn,
-		});
-		const output = yield* drainModelStepWithRetry({
-			policy: cacheWarming ? undefined : modelRetry,
-			remainingRequests:
-				(maximumModelSteps ?? Number.POSITIVE_INFINITY) - requestCount,
-			modelStepObserver,
-			onRequest: () => {
-				requestCount += 1;
-				stepId = toModelStepId(`step-${requestCount}`);
-				return stepId;
-			},
-			turn,
-			emit,
-			invocation,
-			request,
-			seenToolCallIds,
-			...omitUndefined({ signal: runtimeSignal }),
-			toolsByName,
-			turnId: turn.id,
-		});
-		if (output === null) {
-			yield lifecycle.interrupt(emit.nextSequence(), "lost-execution");
-			return;
-		}
-		const stepResult = yield* processModelStepOutput({
-			cacheWarming,
-			emit,
-			modelMessages,
-			modelStepObserver,
-			output,
-			prepareNextStep,
-			protectedFromIndex,
-			promptCacheKey,
-			request,
-			runtimeSignal,
-			stepId,
-			takeSteeringMessages,
-			toolDefinitions,
-			totalUsage,
-			turn,
-		});
-		totalUsage = stepResult.totalUsage;
-		if (!stepResult.continueTurn) {
-			return;
-		}
+	} catch (error) {
+		throw toAgentRuntimeExecutionFailure(error, totalUsage, attemptHistory);
 	}
 };
 
@@ -1214,10 +1940,15 @@ const runAgentTurn = async function* (
 	invocation: AgentModelInvocation
 ): AsyncGenerator<AgentTurnEvent, void, undefined> {
 	const lifecycle = createAgentTurnLifecycle(turn.id);
-	const runtimeSignal = resolveRuntimeSignal(signal, deadlineMs);
+	const runtimeSignalLease = resolveRuntimeSignal(signal, deadlineMs);
+	const runtimeSignal = runtimeSignalLease.signal;
 	const tools = turn.tools ?? [];
 	const toolsByName = createToolsByName(tools);
 	const modelMessages = turn.input.messages.map(modelPromptMessage);
+	const attemptHistory: ModelStepAttemptHistory = {
+		entries: [],
+		truncated: false,
+	};
 	const emit: EventEmitter = Object.assign(
 		(event: AgentTurnEvent) => {
 			lifecycle.apply(event);
@@ -1225,53 +1956,87 @@ const runAgentTurn = async function* (
 		},
 		{ nextSequence: () => lifecycle.getState().lastSequence + 1 }
 	);
-	yield emit({
-		agentId: turn.agent.id,
-		sequence: emit.nextSequence(),
-		startedAt: Date.now(),
-		turnId: turn.id,
-		type: "agent-turn-started",
-	});
-	if (runtimeSignal?.aborted) {
-		yield emit(
-			createAgentTurnAbortEvent(turn, runtimeSignal, emit.nextSequence())
-		);
-		return;
-	}
 	try {
-		yield* runLoop({
-			emit,
-			lifecycle,
-			invocation,
-			modelMessages,
-			...omitUndefined({
-				cacheWarming,
-				maximumModelSteps,
-				modelStepObserver,
-				modelRetry,
-				prepareNextStep,
-				promptCacheKey,
-				runtimeSignal,
-				takeSteeringMessages,
-			}),
-			tools,
-			toolsByName,
-			turn,
+		yield emit({
+			agentId: turn.agent.id,
+			sequence: emit.nextSequence(),
+			startedAt: Date.now(),
+			turnId: turn.id,
+			type: "agent-turn-started",
 		});
-	} catch (error) {
-		if (isAgentInvariantError(error)) {
-			throw error;
-		}
 		if (runtimeSignal?.aborted) {
 			yield emit(
 				createAgentTurnAbortEvent(turn, runtimeSignal, emit.nextSequence())
 			);
 			return;
 		}
-		if (error instanceof ProviderCollectionChatAbortedError) {
-			yield lifecycle.cancel(emit.nextSequence());
-			return;
+		try {
+			yield* runLoop({
+				attemptHistory,
+				emit,
+				invocation,
+				modelMessages,
+				...omitUndefined({
+					cacheWarming,
+					maximumModelSteps,
+					modelStepObserver,
+					modelRetry,
+					prepareNextStep,
+					promptCacheKey,
+					runtimeSignal,
+					takeSteeringMessages,
+				}),
+				tools,
+				toolsByName,
+				turn,
+			});
+		} catch (error) {
+			const executionFailure =
+				error instanceof AgentRuntimeExecutionFailure ? error : undefined;
+			const cause = executionFailure?.cause ?? error;
+			const underlyingCause = unwrapAgentRuntimeError(cause);
+			if (isAgentInvariantError(underlyingCause)) {
+				throw underlyingCause;
+			}
+			if (runtimeSignal?.aborted) {
+				yield emit(
+					terminalEventWithAttempts(
+						terminalEventWithUsage(
+							createAgentTurnAbortEvent(
+								turn,
+								runtimeSignal,
+								emit.nextSequence()
+							),
+							executionFailure?.usage
+						),
+						attemptHistory
+					)
+				);
+				return;
+			}
+			if (underlyingCause instanceof ProviderCollectionChatAbortedError) {
+				yield terminalEventWithAttempts(
+					terminalEventWithUsage(
+						lifecycle.cancel(emit.nextSequence()),
+						executionFailure?.usage
+					),
+					attemptHistory
+				);
+				return;
+			}
+			yield emit(
+				terminalEventWithAttempts(
+					toAgentTurnTerminalEvent(
+						turn,
+						cause,
+						emit.nextSequence(),
+						executionFailure?.usage
+					),
+					attemptHistory
+				)
+			);
 		}
-		yield emit(toAgentTurnTerminalEvent(turn, error, emit.nextSequence()));
+	} finally {
+		runtimeSignalLease.dispose();
 	}
 };

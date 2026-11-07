@@ -97,7 +97,16 @@ const scriptedProvider = (
 		resolveAuthorization: () => ({ authorization: { kind: "fake" } }),
 		streamChat(request, { signal }) {
 			requests.push(request);
-			return script(request, requests.length - 1, signal);
+			const events = script(request, requests.length - 1, signal);
+			return {
+				async *[Symbol.asyncIterator]() {
+					for await (const event of events) {
+						yield event.type === "finish" && event.completion === undefined
+							? { ...event, completion: { kind: "completed" as const } }
+							: event;
+					}
+				},
+			};
 		},
 	});
 	return { providerCollection, requests };
@@ -107,7 +116,11 @@ const scriptedEvents = (
 	...parts: ProviderChatEvent[]
 ): AsyncIterable<ProviderChatEvent> => ({
 	async *[Symbol.asyncIterator]() {
-		yield* parts;
+		yield* parts.map((part) =>
+			part.type === "finish" && part.completion === undefined
+				? { ...part, completion: { kind: "completed" as const } }
+				: part
+		);
 	},
 });
 
@@ -362,11 +375,17 @@ test("invalid retry budgets fail before invoking a Provider", async () => {
 	const { providerCollection, requests } = scriptedProvider(() =>
 		scriptedEvents({ type: "finish" })
 	);
-	for (const maxRetries of [Number.POSITIVE_INFINITY, Number.NaN, -1, 1.5]) {
+	for (const maxRetries of [
+		Number.POSITIVE_INFINITY,
+		Number.NaN,
+		-1,
+		1.5,
+		11,
+	]) {
 		await expect(async () =>
 			consume(
 				createAgentRuntime({ providerCollection }).run(buildTurn(), {
-					modelRetry: { maxRetries, baseDelayMs: 1 },
+					modelRetry: { maxRetries, baseDelayMs: 1, maxDelayMs: 60_000 },
 				})
 			)
 		).toThrow();
@@ -392,6 +411,7 @@ test("transient request failures retry within one turn without exposing intermed
 			modelRetry: {
 				maxRetries: 3,
 				baseDelayMs: 1,
+				maxDelayMs: 60_000,
 				onStatus: (status) => statuses.push(status),
 			},
 		})
@@ -411,6 +431,22 @@ test("transient request failures retry within one turn without exposing intermed
 		{ attempt: 2, maxAttempts: 3 },
 	]);
 	expect(statuses.at(-1)).toBeUndefined();
+	const retryEvents = events.filter(
+		(event) => event.type === "model-step-retry-scheduled"
+	);
+	expect(retryEvents).toMatchObject([
+		{
+			attempt: 1,
+			failure: { code: "network", retry: "after-delay" },
+			maxAttempts: 3,
+		},
+		{
+			attempt: 2,
+			failure: { code: "network", retry: "after-delay" },
+			maxAttempts: 3,
+		},
+	]);
+	expect(JSON.stringify(retryEvents)).not.toContain("private transport detail");
 	expect(events.filter(({ type }) => type === "agent-turn-failed")).toEqual([]);
 	expect(events.at(-1)?.type).toBe("agent-turn-completed");
 	expect(requests[1]?.messages).toEqual(requests[0]?.messages);
@@ -424,7 +460,7 @@ for (const scenario of [
 	"budget",
 	"cancel",
 ] as const) {
-	test(`model retry ${scenario} cannot replay output or exceed its request boundary`, async () => {
+	test(`model retry ${scenario} avoids duplicate effects and stays within its request boundary`, async () => {
 		const controller = new AbortController();
 		const statuses: unknown[] = [];
 		const { providerCollection, requests } = scriptedProvider(() => ({
@@ -446,6 +482,7 @@ for (const scenario of [
 				modelRetry: {
 					maxRetries: 2,
 					baseDelayMs: 1,
+					maxDelayMs: 60_000,
 					onStatus: (status) => {
 						statuses.push(status);
 						if (scenario === "cancel" && status !== undefined) {
@@ -455,7 +492,9 @@ for (const scenario of [
 				},
 			})
 		);
-		expect(requests).toHaveLength(scenario === "exhaust" ? 3 : 1);
+		expect(requests).toHaveLength(
+			scenario === "exhaust" || scenario === "partial" ? 3 : 1
+		);
 		expect(events.at(-1)?.type).toBe(
 			scenario === "cancel" ? "agent-turn-cancelled" : "agent-turn-failed"
 		);
@@ -466,6 +505,20 @@ for (const scenario of [
 			)
 		).toHaveLength(1);
 		expect(statuses.at(-1)).toBeUndefined();
+		const retryEnded = events.filter(
+			(event) => event.type === "model-step-retry-ended"
+		);
+		if (scenario === "exhaust" || scenario === "partial") {
+			expect(retryEnded).toMatchObject([
+				{ attempt: 2, maxAttempts: 2, outcome: "exhausted" },
+			]);
+		} else if (scenario === "cancel") {
+			expect(retryEnded).toMatchObject([
+				{ attempt: 1, maxAttempts: 2, outcome: "cancelled" },
+			]);
+		} else {
+			expect(retryEnded).toHaveLength(0);
+		}
 	});
 }
 
@@ -485,6 +538,7 @@ test("rate-limit countdown honors Retry-After and can be cancelled before anothe
 			modelRetry: {
 				maxRetries: 2,
 				baseDelayMs: 1,
+				maxDelayMs: 60_000,
 				onStatus: (status) => {
 					if (status !== undefined) {
 						retryAt = status.retryAt;
@@ -513,6 +567,7 @@ test("Retry-After beyond the retry delay ceiling fails instead of waiting indefi
 			modelRetry: {
 				maxRetries: 2,
 				baseDelayMs: 1,
+				maxDelayMs: 60_000,
 				onStatus: (status) => {
 					if (status !== undefined) {
 						scheduled = true;
@@ -524,7 +579,78 @@ test("Retry-After beyond the retry delay ceiling fails instead of waiting indefi
 	);
 	expect(scheduled).toBe(false);
 	expect(requests).toHaveLength(1);
-	expect(events.at(-1)?.type).toBe("agent-turn-failed");
+	expect(events.at(-1)).toMatchObject({
+		type: "agent-turn-failed",
+		failure: {
+			code: "retry-delay-exceeds-limit",
+			message:
+				"The provider requested a retry delay beyond the configured limit; automatic retry was not attempted.",
+		},
+	});
+});
+
+test("a deadline abort during retry backoff ends recovery without reporting cancellation", async () => {
+	const controller = new AbortController();
+	const { providerCollection, requests } = scriptedProvider(() => {
+		throw new ProviderError("transport", "temporary connection failure");
+	});
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
+			modelRetry: {
+				maxRetries: 2,
+				baseDelayMs: 500,
+				maxDelayMs: 1000,
+				onStatus: (status) => {
+					if (status !== undefined) {
+						controller.abort(
+							new DOMException("Agent Turn deadline exceeded", "TimeoutError")
+						);
+					}
+				},
+			},
+			signal: controller.signal,
+		})
+	);
+
+	expect(requests).toHaveLength(1);
+	expect(
+		events.filter((event) => event.type === "model-step-retry-ended")
+	).toMatchObject([{ outcome: "stopped" }]);
+	expect(events.at(-1)).toMatchObject({
+		failure: { code: "deadline-exceeded" },
+		type: "agent-turn-failed",
+	});
+});
+
+test("a runtime-owned deadline stops retry backoff before another Provider request", async () => {
+	const requestSignals: (AbortSignal | undefined)[] = [];
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, _index, signal) => {
+			requestSignals.push(signal);
+			throw new ProviderError("transport", "temporary connection failure");
+		}
+	);
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn(), {
+			deadlineMs: 20,
+			modelRetry: {
+				maxRetries: 2,
+				baseDelayMs: 500,
+				maxDelayMs: 1000,
+			},
+		})
+	);
+
+	expect(events.at(-1)).toMatchObject({
+		failure: { code: "deadline-exceeded" },
+		type: "agent-turn-failed",
+	});
+	expect(requestSignals[0]).toBeDefined();
+	expect(requestSignals[0]?.aborted).toBe(true);
+	expect(requests).toHaveLength(1);
+	expect(
+		events.filter((event) => event.type === "model-step-retry-ended")
+	).toMatchObject([{ outcome: "stopped" }]);
 });
 
 test("cancelling a retry releases its timer so a one-shot process can exit immediately", async () => {
@@ -541,7 +667,8 @@ test("cancelling a retry releases its timer so a one-shot process can exit immed
 		const controller = new AbortController();
 		for await (const event of createAgentRuntime({ providerCollection: providers }).run(${JSON.stringify(buildTurn())}, {
 			signal: controller.signal,
-			modelRetry: { maxRetries: 1, baseDelayMs: 60000, onStatus: (status) => { if (status) controller.abort(); } },
+			deadlineMs: 60000,
+			modelRetry: { maxRetries: 1, baseDelayMs: 60000, maxDelayMs: 60000, onStatus: (status) => { if (status) controller.abort(); } },
 		})) {}
 		await providers.close();
 	`;
@@ -554,20 +681,63 @@ test("cancelling a retry releases its timer so a one-shot process can exit immed
 	expect(await child.exited, await new Response(child.stderr).text()).toBe(0);
 });
 
-test("a billed request failure is not retried with its reported usage silently discarded", async () => {
-	const { providerCollection, requests } = scriptedProvider(() => ({
-		async *[Symbol.asyncIterator]() {
-			yield { type: "usage", usage: { inputTokens: 10, outputTokens: 1 } };
-			throw new ProviderError("transport", "transport failed after usage");
-		},
-	}));
-	const events = await consume(
-		createAgentRuntime({ providerCollection }).run(buildTurn(), {
-			modelRetry: { maxRetries: 2, baseDelayMs: 1 },
+test("a billed partial attempt retries safely, remains inspectable, and reports its usage once", async () => {
+	const { providerCollection, requests } = scriptedProvider(
+		(_request, index) => ({
+			async *[Symbol.asyncIterator]() {
+				if (index === 0) {
+					yield { type: "text-delta", delta: "Incomplete billed fragment" };
+					yield { type: "usage", usage: { inputTokens: 10, outputTokens: 1 } };
+					throw new ProviderError("transport", "transport failed after usage");
+				}
+				yield { type: "text-delta", delta: "Accepted answer" };
+				yield { type: "usage", usage: { inputTokens: 20, outputTokens: 2 } };
+				yield { type: "finish" };
+			},
 		})
 	);
-	expect(requests).toHaveLength(1);
-	expect(events.at(-1)?.type).toBe("agent-turn-failed");
+	const statefulAgent = createStatefulAgent({
+		runtime: createAgentRuntime({ providerCollection }),
+	});
+	const events = await consume(
+		statefulAgent.run(buildTurn(), {
+			modelRetry: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 60_000 },
+		})
+	);
+	expect(requests).toHaveLength(2);
+	expect(events.at(-1)).toMatchObject({
+		modelStepAttempts: [
+			{
+				attempt: 1,
+				failure: { code: "network" },
+				maxRetries: 2,
+				partialOutput: { text: "Incomplete billed fragment" },
+				retryDecision: "scheduled",
+				stepId: "step-1",
+				usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+			},
+		],
+		type: "agent-turn-completed",
+		usage: { inputTokens: 30, outputTokens: 3, totalTokens: 33 },
+	});
+	expect(events.map(({ type }) => String(type))).toContain(
+		"model-step-retry-ended"
+	);
+	expect(
+		events.find(({ type }) => String(type) === "model-step-retry-ended")
+	).toMatchObject({ attempt: 1, maxAttempts: 2, outcome: "success" });
+	expect(JSON.stringify(events)).not.toContain("transport failed after usage");
+	expect(
+		statefulAgent
+			.getSnapshot()
+			.context.filter((message) => message.role === "assistant")
+			.flatMap((message) =>
+				message.parts.flatMap((part) =>
+					part.type === "text" ? [part.text] : []
+				)
+			)
+			.join("")
+	).toBe("Accepted answer");
 });
 
 test("retrying a later model request does not replay previously settled tools", async () => {
@@ -602,7 +772,7 @@ test("retrying a later model request does not replay previously settled tools", 
 					},
 				},
 			]),
-			{ modelRetry: { maxRetries: 2, baseDelayMs: 1 } }
+			{ modelRetry: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 60_000 } }
 		)
 	);
 	expect(effects).toBe(1);
@@ -714,6 +884,20 @@ test("only an explicit Provider output-limit stop marks a terminal event for Ses
 	expect(normallyCompleted.at(-1)).not.toHaveProperty("outputLimitReached");
 });
 
+test("an unknown Provider completion is not committed as a completed Agent Turn", async () => {
+	const { providerCollection } = scriptedProvider(() =>
+		scriptedEvents({ type: "finish", completion: { kind: "unknown" } })
+	);
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn())
+	);
+
+	expect(events.at(-1)).toMatchObject({
+		failure: { code: "incomplete-response", retry: "never" },
+		type: "agent-turn-failed",
+	});
+});
+
 test("Agent Runtime isolates Session request observers from active Turns", async () => {
 	const { providerCollection, requests } = scriptedProvider(() =>
 		scriptedEvents(
@@ -791,6 +975,7 @@ test("SDK-backed Agent Runtime forwards request controls to the fake Provider", 
 		async *streamChat(request) {
 			requests.push(request);
 			yield { delta: "Controls arrived.", type: "text-delta" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	});
 	await providers.setCredential("test-provider", "fake-sdk-credential");
@@ -841,7 +1026,7 @@ test("SDK Agent Runtime forwards explicit reasoning off and leaves unset effort 
 		resolveAuthorization: () => ({ authorization: { kind: "test" } }),
 		async *streamChat(request) {
 			requests.push(request);
-			yield { type: "finish" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	});
 	await providers.setCredential("test-provider", "fake-sdk-credential");
@@ -1082,7 +1267,11 @@ test("SDK-backed Agent Runtime delivers late steering using Provider Model ident
 					type: "usage",
 					usage: { inputTokens: 10, outputTokens: 4 },
 				};
-				yield { continuation: { responseId: "sdk-step-one" }, type: "finish" };
+				yield {
+					completion: { kind: "completed" },
+					continuation: { responseId: "sdk-step-one" },
+					type: "finish",
+				};
 				return;
 			}
 			yield { delta: "Continued after steering.", type: "text-delta" };
@@ -1090,7 +1279,7 @@ test("SDK-backed Agent Runtime delivers late steering using Provider Model ident
 				type: "usage",
 				usage: { inputTokens: 14, outputTokens: 3 },
 			};
-			yield { type: "finish" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	});
 	await providers.setCredential("test-provider", "fake-sdk-credential");

@@ -1,4 +1,8 @@
-import type { AgentTurnId, SessionMessageId } from "@wincode/agent-core";
+import type {
+	AgentTurnId,
+	ModelRetryPolicy,
+	SessionMessageId,
+} from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "@wincode/ai";
 import type { Except, ReadonlyDeep } from "type-fest";
@@ -8,6 +12,7 @@ import type {
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
 import type { CompactionId, SessionId } from "@/shared/identifiers";
+import type { SessionCompactionRetryEvent } from "../session-events";
 import type {
 	AttachmentExternalizationLease,
 	CompactionAttachmentMetadata,
@@ -85,6 +90,12 @@ export type SummaryGeneratorInput = {
 	focus?: string;
 	/** Request-specific allowance after prompt and rebuilt-conversation budgeting. */
 	maxOutputTokens: number;
+	retryPolicy?: Omit<ModelRetryPolicy, "onStatus">;
+	retryContext?: Readonly<{
+		compactionId: CompactionId;
+		onEvent: (event: SessionCompactionRetryEvent) => void;
+		sessionId: SessionId;
+	}>;
 	preparedRequest?: PreparedSummaryRequest;
 	reportUsage?: (usage: SessionMessageUsage) => Promise<void>;
 	signal?: AbortSignal;

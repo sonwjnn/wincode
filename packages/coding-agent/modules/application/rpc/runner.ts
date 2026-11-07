@@ -14,10 +14,10 @@ import type {
 import { type DeferredNotification, SerializedWriter } from "./output";
 import {
 	operationalStatus,
-	projectAgentEvent,
 	projectExecution,
 	projectMessage,
 	projectQueued,
+	projectSessionEvent,
 	projectSteering,
 	projectSubmissionEvent,
 	selectionFromHost,
@@ -463,8 +463,11 @@ export async function runRpc({
 		boundUnsubscribers.push(
 			nextHost.onEvent((event) => {
 				try {
+					const kind = event.type.startsWith("compaction-summary-")
+						? "compaction-summary"
+						: "agent-turn";
 					emit("session/event", {
-						event: { kind: "agent-turn", event: projectAgentEvent(event) },
+						event: { kind, event: projectSessionEvent(event) },
 					});
 				} catch (error) {
 					void fatalShutdown(error);

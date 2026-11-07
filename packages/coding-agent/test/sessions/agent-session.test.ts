@@ -159,6 +159,7 @@ const createPorts = ({
 		retain: () => undefined,
 	},
 	inputScheduler: createTestInputScheduler(),
+	emitCompactionEvent: () => undefined,
 	resolveSubmission: (input) => input,
 	assertProviderModelSelection: () => undefined,
 	compaction,

@@ -1,6 +1,5 @@
 import type {
 	AgentId,
-	AgentTurnEvent,
 	AgentTurnId,
 	SessionMessageId,
 	SubmissionId,
@@ -15,6 +14,7 @@ import type {
 	SessionBundleImportOptions,
 	SessionBundleImportResult,
 } from "./session-bundle-contract";
+import type { SessionSdkEvent } from "./session-events";
 import type {
 	SessionCatalogPage,
 	SessionHistoryPage,
@@ -90,6 +90,8 @@ export const snapshotSessionSdkCapabilityCeiling = (
 
 export type SessionSdkPrompt = Readonly<{
 	agent?: AgentId | string;
+	/** Hard ceiling on Provider chat requests for this prompt, including retries. */
+	maximumModelSteps?: number;
 	model?: ProviderModelSelection;
 	thinkingLevel?: ThinkingLevel;
 	submissionId?: SubmissionId;
@@ -189,7 +191,7 @@ export type SessionSdkHandle = Readonly<{
 	deliver: (
 		input: SessionSdkDelivery
 	) => Promise<SessionSdkSubmissionAdmission>;
-	onEvent: (listener: (event: AgentTurnEvent) => void) => () => void;
+	onEvent: (listener: (event: SessionSdkEvent) => void) => () => void;
 	prompt: (input: SessionSdkPrompt) => Promise<SessionSdkSubmissionAdmission>;
 	sessionId: SessionId;
 	subscribe: (listener: (snapshot: SessionSdkSnapshot) => void) => () => void;

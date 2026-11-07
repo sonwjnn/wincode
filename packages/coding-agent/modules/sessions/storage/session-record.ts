@@ -4,8 +4,10 @@ import {
 	AgentInvariantError,
 	type AgentTurnId,
 	isAgentTurnMessageRecord,
+	isModelStepAttemptSummary,
 	isOperationalFailure,
 	isSessionToolCallPart,
+	MODEL_STEP_ATTEMPT_SUMMARY_LIMIT,
 	type OperationalFailure,
 	SESSION_RECORD_VERSION,
 	type SessionAttachmentReferencePart,
@@ -121,6 +123,25 @@ const isUsage = (value: unknown): boolean => {
 const isFailure = (value: unknown): value is OperationalFailure =>
 	isOperationalFailure(value);
 
+const hasValidAttemptSummaries = (outcome: UnknownRecord): boolean => {
+	const attempts = outcome.modelStepAttempts;
+	const truncated = outcome.modelStepAttemptsTruncated;
+	if (
+		(truncated !== undefined && truncated !== true) ||
+		(attempts !== undefined &&
+			(!Array.isArray(attempts) ||
+				attempts.length > MODEL_STEP_ATTEMPT_SUMMARY_LIMIT ||
+				!attempts.every(isModelStepAttemptSummary)))
+	) {
+		return false;
+	}
+	return (
+		truncated !== true ||
+		(Array.isArray(attempts) &&
+			attempts.length === MODEL_STEP_ATTEMPT_SUMMARY_LIMIT)
+	);
+};
+
 const isAgentTurnOutcome = (value: unknown): boolean => {
 	if (!isObjectLike(value)) {
 		return false;
@@ -132,17 +153,29 @@ const isAgentTurnOutcome = (value: unknown): boolean => {
 		reason?: unknown;
 		usage?: unknown;
 	};
-	if (!isFiniteNonNegativeNumber(outcome.finishedAt)) {
+	if (
+		!(
+			isFiniteNonNegativeNumber(outcome.finishedAt) &&
+			hasValidAttemptSummaries(value as UnknownRecord)
+		)
+	) {
 		return false;
 	}
 	if (outcome.kind === "completed") {
 		return isUndefined(outcome.usage) || isUsage(outcome.usage);
 	}
 	if (outcome.kind === "failed") {
-		return isFailure(outcome.failure);
+		return (
+			isFailure(outcome.failure) &&
+			(isUndefined(outcome.usage) || isUsage(outcome.usage))
+		);
 	}
 	if (outcome.kind === "cancelled") {
-		return isFailure(outcome.failure) && outcome.failure.code === "cancelled";
+		return (
+			isFailure(outcome.failure) &&
+			outcome.failure.code === "cancelled" &&
+			(isUndefined(outcome.usage) || isUsage(outcome.usage))
+		);
 	}
 	if (outcome.kind === "interrupted") {
 		return (
@@ -150,7 +183,8 @@ const isAgentTurnOutcome = (value: unknown): boolean => {
 			outcome.failure.code === "interrupted" &&
 			(AGENT_TURN_INTERRUPTION_REASONS as readonly string[]).includes(
 				String(outcome.reason)
-			)
+			) &&
+			(isUndefined(outcome.usage) || isUsage(outcome.usage))
 		);
 	}
 	return false;

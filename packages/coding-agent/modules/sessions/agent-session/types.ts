@@ -42,6 +42,10 @@ import type {
 } from "../compaction/types";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import type { FileMentionPart, SessionMessage } from "../message";
+import type {
+	CompactionSummaryRetryStatus,
+	SessionCompactionRetryEvent,
+} from "../session-events";
 import type { AttachmentExternalizationLease } from "../storage/attachment-store";
 import type {
 	SessionSendInput,
@@ -205,6 +209,7 @@ export type LiveSessionSnapshot = ReadonlyDeep<{
 	catalogDiagnostic: string | null;
 	compactions: SessionCompaction[];
 	compactionError: Error | null;
+	compactionRetryStatus?: CompactionSummaryRetryStatus;
 	/** Session Context: the messages the next Agent Turn sends to the model. */
 	context: SessionMessage[];
 	error: Error | null;
@@ -415,6 +420,8 @@ export type AgentSessionPorts = Readonly<{
 	inputScheduler: StatefulAgentInputScheduler<SessionQueuedSubmission>;
 	/** The Session Compaction module whose per-session in-flight map owns admission. */
 	compaction: SessionCompactionPort;
+	/** Publishes safe summary retry observations through the loaded Host. */
+	emitCompactionEvent: (event: SessionCompactionRetryEvent) => void;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
 	/** Persists one exact committed Submission's processing state. */

@@ -7,13 +7,22 @@ import {
 	isObjectLike,
 	isString,
 	isUndefined,
+	omitUndefined,
 } from "@wincode/utils";
 import type { UnknownRecord } from "type-fest";
 import { type AgentId, isAgentId } from "./agent";
 import type { OperationalFailure } from "./failures";
 import { isOperationalFailure } from "./failures";
 import type { ModelId } from "./identifiers";
-import type { ModelStepId } from "./model-step";
+import {
+	isModelStepAttemptSummary,
+	isModelStepRetryEndOutcome,
+	MODEL_STEP_ATTEMPT_SUMMARY_LIMIT,
+	type ModelStepAttemptPartialOutput,
+	type ModelStepAttemptSummary,
+	type ModelStepId,
+	type ModelStepRetryEndOutcome,
+} from "./model-step";
 import {
 	isToolCallId,
 	isToolCallOutput,
@@ -50,6 +59,30 @@ export type ModelStepStartedEvent = AgentTurnEventBase &
 		modelId?: ModelId;
 		stepId: ModelStepId;
 		type: "model-step-started";
+	}>;
+
+/** A transient retry was scheduled after a recoverable Model Step failure. */
+export type ModelStepRetryScheduledEvent = AgentTurnEventBase &
+	Readonly<{
+		attempt: number;
+		failure: OperationalFailure;
+		maxAttempts: number;
+		partialOutput?: ModelStepAttemptPartialOutput;
+		retryAt: number;
+		stepId: ModelStepId;
+		type: "model-step-retry-scheduled";
+		usage?: ModelUsage;
+	}>;
+
+/** One scheduled retry sequence reached a terminal recovery outcome. */
+export type ModelStepRetryEndedEvent = AgentTurnEventBase &
+	Readonly<{
+		attempt: number;
+		failure?: OperationalFailure;
+		maxAttempts: number;
+		outcome: ModelStepRetryEndOutcome;
+		stepId: ModelStepId;
+		type: "model-step-retry-ended";
 	}>;
 
 /** A streamed text delta from the current Model Step. */
@@ -93,6 +126,11 @@ export type ToolCallFinishedEvent = AgentTurnEventBase &
 		type: "tool-call-finished";
 	}>;
 
+type AgentTurnAttemptSummaryFields = Readonly<{
+	modelStepAttempts?: readonly ModelStepAttemptSummary[];
+	modelStepAttemptsTruncated?: true;
+}>;
+
 /** The turn reached its terminal `completed` outcome. */
 export type AgentTurnCompletedEvent = AgentTurnEventBase &
 	Readonly<{
@@ -100,7 +138,8 @@ export type AgentTurnCompletedEvent = AgentTurnEventBase &
 		outputLimitReached?: true;
 		type: "agent-turn-completed";
 		usage?: ModelUsage;
-	}>;
+	}> &
+	AgentTurnAttemptSummaryFields;
 
 /** The caller cancelled the turn. */
 export type AgentTurnCancelledEvent = AgentTurnEventBase &
@@ -108,7 +147,9 @@ export type AgentTurnCancelledEvent = AgentTurnEventBase &
 		failure: OperationalFailure;
 		finishedAt: number;
 		type: "agent-turn-cancelled";
-	}>;
+		usage?: ModelUsage;
+	}> &
+	AgentTurnAttemptSummaryFields;
 
 /** The turn stopped without completion, failure, or caller cancellation. */
 export type AgentTurnInterruptedEvent = AgentTurnEventBase &
@@ -117,7 +158,9 @@ export type AgentTurnInterruptedEvent = AgentTurnEventBase &
 		finishedAt: number;
 		reason: AgentTurnInterruptionReason;
 		type: "agent-turn-interrupted";
-	}>;
+		usage?: ModelUsage;
+	}> &
+	AgentTurnAttemptSummaryFields;
 
 /** The turn reached an expected operational failure. */
 export type AgentTurnFailedEvent = AgentTurnEventBase &
@@ -125,7 +168,9 @@ export type AgentTurnFailedEvent = AgentTurnEventBase &
 		failure: OperationalFailure;
 		finishedAt: number;
 		type: "agent-turn-failed";
-	}>;
+		usage?: ModelUsage;
+	}> &
+	AgentTurnAttemptSummaryFields;
 
 export type AgentTurnTerminalEvent =
 	| AgentTurnCancelledEvent
@@ -136,6 +181,8 @@ export type AgentTurnTerminalEvent =
 export type AgentTurnEvent =
 	| AgentTurnStartedEvent
 	| ModelStepStartedEvent
+	| ModelStepRetryScheduledEvent
+	| ModelStepRetryEndedEvent
 	| TextDeltaEvent
 	| ReasoningDeltaEvent
 	| ModelStepFinishedEvent
@@ -146,6 +193,8 @@ export type AgentTurnEvent =
 export const AGENT_TURN_EVENT_TYPES = [
 	"agent-turn-started",
 	"model-step-started",
+	"model-step-retry-scheduled",
+	"model-step-retry-ended",
 	"text-delta",
 	"reasoning-delta",
 	"model-step-finished",
@@ -166,6 +215,64 @@ export const AGENT_TURN_EVENT_TERMINAL_TYPES = [
 
 const isUsage = (value: unknown): value is ModelUsage =>
 	modelUsageSchema.safeParse(value).success;
+
+const hasValidOptionalUsage = (event: UnknownRecord): boolean =>
+	isUndefined(event.usage) || isUsage(event.usage);
+
+const hasValidOptionalAttempts = (event: UnknownRecord): boolean => {
+	const attempts = event.modelStepAttempts;
+	const truncated = event.modelStepAttemptsTruncated;
+	if (
+		(truncated !== undefined && truncated !== true) ||
+		(attempts !== undefined &&
+			(!Array.isArray(attempts) ||
+				attempts.length > MODEL_STEP_ATTEMPT_SUMMARY_LIMIT ||
+				!attempts.every(isModelStepAttemptSummary)))
+	) {
+		return false;
+	}
+	return (
+		truncated !== true ||
+		(Array.isArray(attempts) &&
+			attempts.length === MODEL_STEP_ATTEMPT_SUMMARY_LIMIT)
+	);
+};
+
+const hasValidRetryAttemptSummary = (event: UnknownRecord): boolean =>
+	isModelStepAttemptSummary({
+		attempt: event.attempt,
+		failure: event.failure,
+		maxRetries: event.maxAttempts,
+		...omitUndefined({ partialOutput: event.partialOutput }),
+		retryDecision: "scheduled",
+		stepId: event.stepId,
+		...omitUndefined({ usage: event.usage }),
+	});
+
+const isModelStepRetryScheduledEvent = (event: UnknownRecord): boolean =>
+	isNonNegativeInteger(event.attempt) &&
+	event.attempt > 0 &&
+	isNonNegativeInteger(event.maxAttempts) &&
+	event.maxAttempts > 0 &&
+	event.attempt <= event.maxAttempts &&
+	isFiniteNonNegativeNumber(event.retryAt) &&
+	isNonEmptyString(event.stepId) &&
+	isOperationalFailure(event.failure) &&
+	(event.failure.retry === "after-delay" ||
+		event.failure.retry === "immediate") &&
+	hasValidRetryAttemptSummary(event);
+
+const isModelStepRetryEndedEvent = (event: UnknownRecord): boolean =>
+	isNonNegativeInteger(event.attempt) &&
+	event.attempt > 0 &&
+	isNonNegativeInteger(event.maxAttempts) &&
+	event.maxAttempts > 0 &&
+	event.attempt <= event.maxAttempts &&
+	isNonEmptyString(event.stepId) &&
+	isModelStepRetryEndOutcome(event.outcome) &&
+	(event.outcome === "success"
+		? isUndefined(event.failure)
+		: isOperationalFailure(event.failure));
 
 const hasBaseEvent = (value: unknown): value is AgentTurnEventBase => {
 	if (!isObjectLike(value)) {
@@ -198,6 +305,10 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 				isNonEmptyString(event.stepId) &&
 				(isUndefined(event.modelId) || isNonEmptyString(event.modelId))
 			);
+		case "model-step-retry-scheduled":
+			return isModelStepRetryScheduledEvent(event);
+		case "model-step-retry-ended":
+			return isModelStepRetryEndedEvent(event);
 		case "text-delta":
 		case "reasoning-delta":
 			return isString(event.delta);
@@ -205,7 +316,7 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 			return (
 				isNonEmptyString(event.stepId) &&
 				(isUndefined(event.modelId) || isNonEmptyString(event.modelId)) &&
-				(isUndefined(event.usage) || isUsage(event.usage))
+				hasValidOptionalUsage(event)
 			);
 		case "tool-call-started":
 			return (
@@ -224,13 +335,16 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 				isFiniteNonNegativeNumber(event.finishedAt) &&
 				(isUndefined(event.outputLimitReached) ||
 					event.outputLimitReached === true) &&
-				(isUndefined(event.usage) || isUsage(event.usage))
+				hasValidOptionalUsage(event) &&
+				hasValidOptionalAttempts(event)
 			);
 		case "agent-turn-cancelled":
 			return (
 				isFiniteNonNegativeNumber(event.finishedAt) &&
 				isOperationalFailure(event.failure) &&
-				event.failure.code === "cancelled"
+				event.failure.code === "cancelled" &&
+				hasValidOptionalUsage(event) &&
+				hasValidOptionalAttempts(event)
 			);
 		case "agent-turn-interrupted":
 			return (
@@ -239,12 +353,16 @@ export const isAgentTurnEvent = (value: unknown): value is AgentTurnEvent => {
 				event.failure.code === "interrupted" &&
 				(AGENT_TURN_INTERRUPTION_REASONS as readonly string[]).includes(
 					String(event.reason)
-				)
+				) &&
+				hasValidOptionalUsage(event) &&
+				hasValidOptionalAttempts(event)
 			);
 		case "agent-turn-failed":
 			return (
 				isFiniteNonNegativeNumber(event.finishedAt) &&
-				isOperationalFailure(event.failure)
+				isOperationalFailure(event.failure) &&
+				hasValidOptionalUsage(event) &&
+				hasValidOptionalAttempts(event)
 			);
 		default:
 			return false;

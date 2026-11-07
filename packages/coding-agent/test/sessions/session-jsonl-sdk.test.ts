@@ -3,8 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	type AgentTurnEvent,
 	type AgentTurnId,
+	type AgentTurnTerminalEvent,
 	SESSION_RECORD_VERSION,
 	type SessionMessageId,
 	type SessionRecord,
@@ -12,7 +12,7 @@ import {
 	type SubmissionId,
 	toSubmissionId,
 } from "@wincode/agent-core";
-import { createSessionSdk } from "@wincode/coding-agent";
+import { createSessionSdk, type SessionSdkEvent } from "@wincode/coding-agent";
 import { readUtf8File } from "@wincode/utils";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
@@ -98,7 +98,9 @@ const PNG_BYTES = new Uint8Array([
 ]);
 await fs.mkdir(workspace, { recursive: true });
 
-const isTerminalAgentTurnEvent = (event: AgentTurnEvent): boolean =>
+const isTerminalAgentTurnEvent = (
+	event: SessionSdkEvent
+): event is AgentTurnTerminalEvent =>
 	event.type === "agent-turn-completed" ||
 	event.type === "agent-turn-failed" ||
 	event.type === "agent-turn-cancelled" ||

@@ -125,7 +125,7 @@ describe("provider-neutral model contracts", () => {
 		const failure = normalizeModelFailure(
 			new Error("rate limit; secret-api-key", {
 				cause: {
-					responseBody: JSON.stringify({ error: "429 quota exceeded" }),
+					responseBody: JSON.stringify({ error: "429 too many requests" }),
 					statusCode: 429,
 				},
 			}),
@@ -176,6 +176,60 @@ describe("provider-neutral model contracts", () => {
 				statusCode: 503,
 			}).code
 		).toBe("unavailable");
+	});
+
+	test("account quota exhaustion is not retried as generic HTTP 429 throttling", () => {
+		const quota = normalizeModelFailure({
+			message: "OpenAI request failed (429).",
+			responseBody: JSON.stringify({
+				error: {
+					message: "You exceeded your current quota.",
+					type: "insufficient_quota",
+				},
+			}),
+			statusCode: 429,
+		});
+		const throttled = normalizeModelFailure({
+			message: "Too many requests.",
+			statusCode: 429,
+		});
+
+		expect(quota).toMatchObject({
+			code: "account-limit",
+			message: "The model provider account has reached its usage limit.",
+			retry: "never",
+		});
+		expect(throttled).toMatchObject({
+			code: "rate-limited",
+			retry: "after-delay",
+		});
+	});
+
+	test("provider overload and request-scoped HTTP 408 are retryable, unlike an Agent Turn deadline", () => {
+		expect(
+			normalizeModelFailure(
+				new Error("overloaded_error: servers are currently busy")
+			)
+		).toMatchObject({ code: "unavailable", retry: "after-delay" });
+		expect(
+			normalizeModelFailure({
+				message: "Request timed out.",
+				statusCode: 408,
+			})
+		).toMatchObject({ code: "network", retry: "after-delay" });
+		expect(
+			normalizeModelFailure(
+				new DOMException("Request timed out", "TimeoutError")
+			)
+		).toMatchObject({ code: "network", retry: "after-delay" });
+		expect(
+			normalizeModelFailure(
+				new Error("openai-chat model stream ended before completion.")
+			)
+		).toMatchObject({ code: "network", retry: "after-delay" });
+		expect(
+			normalizeModelFailure(new Error("Agent Turn deadline exceeded"))
+		).toMatchObject({ code: "deadline-exceeded", retry: "never" });
 	});
 
 	test("classifies provider-specific prompt-limit wording as context overflow", () => {

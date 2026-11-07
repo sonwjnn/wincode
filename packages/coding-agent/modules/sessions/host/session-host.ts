@@ -1,6 +1,5 @@
 import {
 	type AgentId,
-	type AgentTurnEvent,
 	createAgentRuntime,
 	createStatefulAgent,
 	type SessionRecord,
@@ -42,6 +41,7 @@ import {
 	pluginProvidersFromRuntime,
 } from "../provider-collection";
 import { restoreSelection } from "../selection";
+import type { SessionSdkEvent } from "../session-events";
 import { requireSessionWriteReady } from "../storage/session-jsonl-store";
 import type {
 	SessionForkProvenance,
@@ -279,15 +279,15 @@ const openSession = async (
 };
 
 /**
- * Re-exposes Agent Turn Events the Agent Session receives: each event the
- * ports report is forwarded through its callbacks and to Host listeners, in
- * the order the turn produced them.
+ * Re-exposes Session and Agent Turn Events through Host listeners. Observers
+ * see each event after the owning Session has applied its state transition.
  */
 const withEventChannel = (
 	ports: AgentSessionPorts,
-	publish: (event: AgentTurnEvent) => void
+	publish: (event: SessionSdkEvent) => void
 ): AgentSessionPorts => ({
 	...ports,
+	emitCompactionEvent: publish,
 	turnRunner: {
 		...ports.turnRunner,
 		run: (request) =>
@@ -332,7 +332,7 @@ export const createSessionHost = async ({
 		sessionId,
 		executionMode === undefined ? {} : { executionMode }
 	);
-	const eventListeners = new Set<(event: AgentTurnEvent) => void>();
+	const eventListeners = new Set<(event: SessionSdkEvent) => void>();
 	let agentSession: AgentSession | undefined;
 	let agentSessionInternalPort: AgentSessionInternalPort | undefined;
 	let isShutDown = false;
@@ -381,7 +381,7 @@ export const createSessionHost = async ({
 	 * cannot change session state or stop the turn, as with the Agent Session's
 	 * own emitter.
 	 */
-	const publish = (event: AgentTurnEvent): void => {
+	const publish = (event: SessionSdkEvent): void => {
 		if (isShutDown) {
 			return;
 		}

@@ -147,7 +147,7 @@ test("a two-step turn retains billed usage without inflating live or restored co
 					usage: { inputTokens: 14_000, outputTokens: 3 },
 				};
 			}
-			yield { type: "finish" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	});
 	await providers.setCredential(model.providerId, "offline-test-credential");

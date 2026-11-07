@@ -744,6 +744,17 @@ describe("public OpenAI-compatible SDK providers", () => {
 					failure: {
 						code: "provider",
 						message: "DeepSeek request failed (503).",
+						modelFailure: {
+							code: "unknown",
+							details: {
+								modelId: "deepseek-chat",
+								providerId: "deepseek",
+							},
+							message: "The model request failed.",
+							retry: "never",
+							source: "runtime",
+							version: 1,
+						},
 						providerId: "deepseek",
 					},
 					status: "failure",

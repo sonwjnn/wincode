@@ -11,14 +11,36 @@ describe("getDisplayMessage", () => {
 
 		expect(getDisplayMessage(error)).toBe("The model rejected the request.");
 	});
-	test("maps authenticated provider failures to the reconnect guidance", () => {
+	test("does not label Provider authentication failures as expired Wincode login", () => {
 		const error = Object.assign(new Error("Unauthorized"), {
 			responseBody: '{"error":"private auth detail"}',
 			statusCode: 401,
 		});
 
 		expect(getDisplayMessage(error)).toBe(
-			"Wincode session invalid or expired. Run /connect to sign in again."
+			"Provider authentication failed. Check the selected Provider connection in /connect."
+		);
+		expect(getDisplayMessage(error)).not.toContain("private auth detail");
+	});
+
+	test("identifies the affected Provider Model for operational authentication failure", () => {
+		expect(
+			getDisplayMessage({
+				code: "authentication",
+				details: { modelId: "gpt-test", providerId: "openai" },
+				message: "Model authentication failed.",
+				retry: "never",
+				source: "model",
+				version: 1,
+			})
+		).toBe(
+			"Authentication failed for openai/gpt-test. Check that Provider connection in /connect."
+		);
+	});
+
+	test("uses neutral connection guidance for an unclassified unauthorized error", () => {
+		expect(getDisplayMessage(new Error("Unauthorized"))).toBe(
+			"Authentication failed. Check the relevant account or Provider connection in /connect."
 		);
 	});
 

@@ -15,16 +15,20 @@ export const OPERATIONAL_FAILURE_VERSION = 1 as const;
  * codes cover turn control and adapter-owned failures.
  */
 export const operationalFailureCodes = [
+	"account-limit",
 	"authentication",
 	"authorization",
 	"cancelled",
 	"context-overflow",
 	"deadline-exceeded",
 	"interrupted",
+	"filtered",
+	"incomplete-response",
 	"invalid-request",
 	"model-step-limit",
 	"network",
 	"rate-limited",
+	"retry-delay-exceeds-limit",
 	"unavailable",
 	"unknown",
 ] as const;
@@ -65,16 +69,21 @@ export type OperationalFailure = Readonly<{
 }>;
 
 const safeMessageByCode: Record<OperationalFailureCode, string> = {
+	"account-limit": "The model provider account has reached its usage limit.",
 	authentication: "Model authentication failed.",
 	authorization: "Model authorization was denied.",
 	cancelled: "The Agent Turn was cancelled.",
 	"context-overflow": "The model context is too large.",
 	"deadline-exceeded": "The model request exceeded its deadline.",
 	interrupted: "The Agent Turn was interrupted.",
+	filtered: "The model filtered its response.",
+	"incomplete-response": "The model returned an incomplete response.",
 	"invalid-request": "The model rejected the request.",
 	"model-step-limit": "The configured model request limit was reached.",
 	network: "The model connection failed.",
 	"rate-limited": "The model provider rate-limited the request.",
+	"retry-delay-exceeds-limit":
+		"The provider requested a retry delay beyond the configured limit; automatic retry was not attempted.",
 	unavailable: "The model provider is unavailable.",
 	unknown: "The model request failed.",
 };

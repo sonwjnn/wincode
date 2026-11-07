@@ -1,13 +1,11 @@
-import type {
-	AgentTurnEvent,
-	AgentTurnTerminalEvent,
-} from "@wincode/agent-core";
+import type { AgentTurnTerminalEvent } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import {
 	type PluginSessionContext,
 	type ProviderModelSelection,
 	type SessionSdkCapabilityCeiling,
 	type SessionSdkDelivery,
+	type SessionSdkEvent,
 	type SessionSdkHandle,
 	type SessionSdkOperations,
 	type SessionSdkPluginFactory,
@@ -125,7 +123,7 @@ const interruptionOutcome = (
 };
 
 const isTerminalEvent = (
-	event: AgentTurnEvent
+	event: SessionSdkEvent
 ): event is AgentTurnTerminalEvent =>
 	event.type === "agent-turn-completed" ||
 	event.type === "agent-turn-failed" ||

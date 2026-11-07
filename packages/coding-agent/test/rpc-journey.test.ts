@@ -2133,7 +2133,7 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 		.getSessionHostManager()
 		.onEvent((event) => {
 			if (
-				event.type === "agent-turn-event" &&
+				event.type === "session-event" &&
 				event.sessionId === firstSession.id &&
 				event.event.type === "agent-turn-completed"
 			) {

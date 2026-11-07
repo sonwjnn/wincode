@@ -1,3 +1,10 @@
+import {
+	isModelStepAttemptPartialOutput,
+	isModelStepAttemptSummary,
+	isModelStepRetryEndOutcome,
+	MODEL_STEP_ATTEMPT_SUMMARY_LIMIT,
+	operationalFailureCodes,
+} from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import {
@@ -319,6 +326,11 @@ const projectAgentUsage = (value: unknown): unknown => {
 	return safeJson(usage);
 };
 
+const projectOptionalAgentUsage = (
+	event: Record<string, unknown>
+): Record<string, unknown> =>
+	event.usage === undefined ? {} : { usage: projectAgentUsage(event.usage) };
+
 const projectToolFailureDetails = (value: unknown): unknown => {
 	const failure = asRecord(value);
 	if (
@@ -368,19 +380,7 @@ const projectToolOutcome = (value: unknown): unknown => {
 
 const projectOperationalFailure = (value: unknown): unknown => {
 	const failure = asRecord(value);
-	const codes = new Set([
-		"authentication",
-		"authorization",
-		"cancelled",
-		"context-overflow",
-		"deadline-exceeded",
-		"interrupted",
-		"invalid-request",
-		"network",
-		"rate-limited",
-		"unavailable",
-		"unknown",
-	]);
+	const codes = new Set<string>(operationalFailureCodes);
 	const retries = new Set([
 		"never",
 		"immediate",
@@ -439,6 +439,99 @@ const projectOperationalFailure = (value: unknown): unknown => {
 	return safeJson(failure);
 };
 
+const projectModelStepAttemptSummary = (
+	value: unknown
+): Record<string, unknown> => {
+	if (!isModelStepAttemptSummary(value)) {
+		throw new Error("Agent model attempt summary is invalid.");
+	}
+	return {
+		attempt: value.attempt,
+		failure: projectOperationalFailure(value.failure),
+		maxRetries: value.maxRetries,
+		...(value.partialOutput === undefined
+			? {}
+			: { partialOutput: safeJson(value.partialOutput) }),
+		retryDecision: value.retryDecision,
+		stepId: value.stepId,
+		...(value.usage === undefined
+			? {}
+			: { usage: projectAgentUsage(value.usage) }),
+	};
+};
+
+const projectOptionalModelStepAttempts = (
+	event: Record<string, unknown>
+): Record<string, unknown> => {
+	const attempts = event.modelStepAttempts;
+	const truncated = event.modelStepAttemptsTruncated;
+	if (attempts === undefined && truncated === undefined) {
+		return {};
+	}
+	if (
+		!Array.isArray(attempts) ||
+		attempts.length > MODEL_STEP_ATTEMPT_SUMMARY_LIMIT ||
+		!attempts.every(isModelStepAttemptSummary) ||
+		(truncated !== undefined && truncated !== true) ||
+		(truncated === true && attempts.length !== MODEL_STEP_ATTEMPT_SUMMARY_LIMIT)
+	) {
+		throw new Error("Agent model attempt summaries are invalid.");
+	}
+	return {
+		modelStepAttempts: attempts.map(projectModelStepAttemptSummary),
+		...(truncated === true ? { modelStepAttemptsTruncated: true } : {}),
+	};
+};
+
+const projectModelStepRetryScheduled = (
+	event: Record<string, unknown>,
+	base: Record<string, unknown>
+): Record<string, unknown> => {
+	if (
+		!("failure" in event) ||
+		(event.partialOutput !== undefined &&
+			!isModelStepAttemptPartialOutput(event.partialOutput))
+	) {
+		throw new Error("Agent model retry event is invalid.");
+	}
+	return {
+		...base,
+		attempt: requiredEventNumber(event, "attempt"),
+		failure: projectOperationalFailure(event.failure),
+		maxAttempts: requiredEventNumber(event, "maxAttempts"),
+		...(event.partialOutput === undefined
+			? {}
+			: { partialOutput: safeJson(event.partialOutput) }),
+		retryAt: requiredEventNumber(event, "retryAt"),
+		stepId: requiredEventString(event, "stepId"),
+		...projectOptionalAgentUsage(event),
+	};
+};
+
+const projectModelStepRetryEnded = (
+	event: Record<string, unknown>,
+	base: Record<string, unknown>
+): Record<string, unknown> => {
+	const outcome = event.outcome;
+	const hasFailure = event.failure !== undefined;
+	if (
+		!isModelStepRetryEndOutcome(outcome) ||
+		(outcome === "success" ? hasFailure : !hasFailure)
+	) {
+		throw new Error("Agent model retry terminal outcome is invalid.");
+	}
+	return {
+		...base,
+		attempt: requiredEventNumber(event, "attempt"),
+		...(hasFailure
+			? { failure: projectOperationalFailure(event.failure) }
+			: {}),
+		maxAttempts: requiredEventNumber(event, "maxAttempts"),
+		outcome,
+		stepId: requiredEventString(event, "stepId"),
+	};
+};
+
 export const projectAgentEvent = (value: unknown): Record<string, unknown> => {
 	const event = asRecord(value);
 	if (
@@ -468,6 +561,10 @@ export const projectAgentEvent = (value: unknown): Record<string, unknown> => {
 					: { modelId: requiredEventString(event, "modelId") }),
 				stepId: requiredEventString(event, "stepId"),
 			};
+		case "model-step-retry-scheduled":
+			return projectModelStepRetryScheduled(event, base);
+		case "model-step-retry-ended":
+			return projectModelStepRetryEnded(event, base);
 		case "text-delta":
 		case "reasoning-delta":
 			return { ...base, delta: requiredEventText(event, "delta") };
@@ -478,9 +575,7 @@ export const projectAgentEvent = (value: unknown): Record<string, unknown> => {
 					? {}
 					: { modelId: requiredEventString(event, "modelId") }),
 				stepId: requiredEventString(event, "stepId"),
-				...(event.usage === undefined
-					? {}
-					: { usage: projectAgentUsage(event.usage) }),
+				...projectOptionalAgentUsage(event),
 			};
 		case "tool-call-started":
 			if (!("input" in event)) {
@@ -506,9 +601,8 @@ export const projectAgentEvent = (value: unknown): Record<string, unknown> => {
 			return {
 				...base,
 				finishedAt: requiredEventNumber(event, "finishedAt"),
-				...(event.usage === undefined
-					? {}
-					: { usage: projectAgentUsage(event.usage) }),
+				...projectOptionalAgentUsage(event),
+				...projectOptionalModelStepAttempts(event),
 			};
 		case "agent-turn-failed":
 		case "agent-turn-cancelled":
@@ -523,9 +617,67 @@ export const projectAgentEvent = (value: unknown): Record<string, unknown> => {
 				...(event.reason === undefined
 					? {}
 					: { reason: requiredEventString(event, "reason") }),
+				...projectOptionalAgentUsage(event),
+				...projectOptionalModelStepAttempts(event),
 			};
 		default:
 			throw new Error("Unknown Agent Turn event discriminant.");
+	}
+};
+
+const SESSION_COMPACTION_EVENT_TYPES = new Set([
+	"compaction-summary-attempt-started",
+	"compaction-summary-retry-ended",
+	"compaction-summary-retry-scheduled",
+]);
+
+export const projectSessionEvent = (
+	value: unknown
+): Record<string, unknown> => {
+	const event = asRecord(value);
+	if (event === undefined || typeof event.type !== "string") {
+		throw new Error("Unknown Session event discriminant.");
+	}
+	if (AGENT_EVENT_TYPES.has(event.type)) {
+		return projectAgentEvent(value);
+	}
+	if (!SESSION_COMPACTION_EVENT_TYPES.has(event.type)) {
+		throw new Error("Unknown Session event discriminant.");
+	}
+	const base = {
+		attempt: requiredEventNumber(event, "attempt"),
+		compactionId: requiredEventString(event, "compactionId"),
+		maxRetries: requiredEventNumber(event, "maxRetries"),
+		modelId: requiredEventString(event, "modelId"),
+		providerId: requiredEventString(event, "providerId"),
+		sessionId: requiredEventString(event, "sessionId"),
+		stepId: requiredEventString(event, "stepId"),
+		type: event.type,
+	};
+	switch (event.type) {
+		case "compaction-summary-attempt-started":
+			return base;
+		case "compaction-summary-retry-scheduled":
+			return {
+				...base,
+				failure: projectOperationalFailure(event.failure),
+				retryAt: requiredEventNumber(event, "retryAt"),
+			};
+		case "compaction-summary-retry-ended": {
+			const outcome = event.outcome;
+			if (!isModelStepRetryEndOutcome(outcome)) {
+				throw new Error("Invalid compaction retry terminal outcome.");
+			}
+			return {
+				...base,
+				...(event.failure === undefined
+					? {}
+					: { failure: projectOperationalFailure(event.failure) }),
+				outcome,
+			};
+		}
+		default:
+			throw new Error("Unknown Session event discriminant.");
 	}
 };
 

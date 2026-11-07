@@ -7,9 +7,11 @@ import { Spinner } from "@/shared/ui/spinner";
 export function ModelRetryIndicator({
 	status,
 	agent,
+	operation = "agent-turn",
 }: {
 	status: ModelRetryStatus;
 	agent: AgentId;
+	operation?: "agent-turn" | "compaction-summary";
 }) {
 	const { colors } = useTheme();
 	const [now, setNow] = useState(Date.now);
@@ -18,12 +20,16 @@ export function ModelRetryIndicator({
 		return () => clearInterval(timer);
 	}, []);
 	const seconds = Math.max(0, Math.ceil((status.retryAt - now) / 1000));
+	const label =
+		operation === "compaction-summary"
+			? "Retrying compaction summary"
+			: "Retrying";
 	return (
 		<box alignItems="center" flexDirection="row" gap={1}>
 			<Spinner agent={agent} color={colors.warning} />
 			<text
 				fg={colors.textMuted}
-			>{`Retrying (${status.attempt}/${status.maxAttempts}) in ${seconds}s... (esc to cancel)`}</text>
+			>{`${label} (${status.attempt}/${status.maxAttempts}) in ${seconds}s... (esc to cancel)`}</text>
 		</box>
 	);
 }

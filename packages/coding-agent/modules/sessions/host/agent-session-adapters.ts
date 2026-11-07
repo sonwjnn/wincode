@@ -13,6 +13,7 @@ import {
 	isSameProviderModelIdentity,
 } from "@/modules/providers/provider-model-selection";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
+import { resolveSessionModelRetryPolicy } from "@/modules/sessions/retry-policy";
 import { requireSessionWriteReady } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import {
@@ -278,6 +279,7 @@ export const createAgentSessionAdapters = (
 
 	return {
 		inputScheduler: statefulAgent,
+		emitCompactionEvent: () => undefined,
 		attachments: {
 			externalize: (messages, signal) =>
 				capabilities.getStore().externalizeAttachments(messages, signal, {
@@ -317,6 +319,9 @@ export const createAgentSessionAdapters = (
 		},
 		compaction: {
 			compact: async (input) => {
+				const modelRetryPolicy = await resolveSessionModelRetryPolicy(
+					capabilities.getConfig()
+				);
 				const summaryTarget = await resolveCompactionSummaryTarget(
 					input,
 					providerCollection,
@@ -330,6 +335,7 @@ export const createAgentSessionAdapters = (
 				const { thinkingLevel: _thinkingLevel, ...compactionInput } = input;
 				return capabilities.getCompactionModule().compact({
 					...compactionInput,
+					modelRetryPolicy,
 					settings,
 					summaryTarget,
 					...omitUndefined({ summaryGenerator }),

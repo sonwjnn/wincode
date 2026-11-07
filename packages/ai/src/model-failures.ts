@@ -13,6 +13,7 @@ export const MODEL_FAILURE_VERSION = 1 as const;
 
 export const modelFailureCodes = [
 	"authentication",
+	"account-limit",
 	"authorization",
 	"cancelled",
 	"context-overflow",
@@ -86,16 +87,22 @@ const AUTHENTICATION_PATTERN =
 	/(?:(?:invalid|missing|expired|revoked|incorrect)[^\n]{0,32}(?:api[_ -]?key|token|credential)|authentication|unauthenticated|401\b)/iu;
 const AUTHORIZATION_PATTERN =
 	/(?:forbidden|not authorized|permission denied|access denied|403\b)/iu;
+const ACCOUNT_LIMIT_PATTERN =
+	/(?:insufficient[_ -]?quota|billing|payment required|credit balance|out of credits|account[_ -]?quota|spend limit|quota exceeded)/iu;
+const OVERLOAD_PATTERN =
+	/(?:overloaded(?:[_ -]?error)?|servers? (?:are )?(?:currently )?(?:busy|overloaded)|temporarily overloaded)/iu;
 const RATE_LIMIT_PATTERN =
 	/(?:rate[_ -]?limit|too many requests|too many tokens? per minute|tokens? per minute limit|quota exceeded|throttling error|429\b)/iu;
 const INVALID_REQUEST_PATTERN =
 	/(?:invalid request|bad request|malformed request|unsupported parameter|400\b)/iu;
 const NETWORK_PATTERN =
-	/(?:network|fetch|connection|socket|dns|econn|enotfound|offline)/iu;
-const DEADLINE_PATTERN = /(?:deadline|timed? ?out|timeout)/iu;
+	/(?:network|fetch|connection|socket|dns|econn|enotfound|offline|stream ended before completion)/iu;
+const DEADLINE_PATTERN = /deadline/iu;
+const TIMEOUT_PATTERN = /(?:timed? ?out|timeout)/iu;
 const CANCEL_PATTERN = /(?:abort|cancel|cancelled|canceled)/iu;
 
 const safeMessageByCode: Record<ModelFailureCode, string> = {
+	"account-limit": "The model provider account has reached its usage limit.",
 	authentication: "Model authentication failed.",
 	authorization: "Model authorization was denied.",
 	cancelled: "Model request was cancelled.",
@@ -164,6 +171,9 @@ const getDiagnosticText = (value: unknown): string => {
 const getCombinedDiagnosticText = (chain: readonly unknown[]): string =>
 	chain.map(getDiagnosticText).filter(Boolean).join("\n");
 
+const hasErrorName = (chain: readonly unknown[], name: string): boolean =>
+	chain.some((value) => isError(value) && value.name === name);
+
 const getStructuredFailureCode = (
 	chain: readonly unknown[]
 ): ModelFailureCode | undefined => {
@@ -181,16 +191,18 @@ const getStructuredFailureCode = (
 	}
 };
 
-const getFailureCode = (
-	chain: readonly unknown[],
+const getHighPriorityFailureCode = (
 	text: string,
 	statusCode: number | undefined
-): ModelFailureCode => {
+): ModelFailureCode | undefined => {
 	if (statusCode === 401 || AUTHENTICATION_PATTERN.test(text)) {
 		return "authentication";
 	}
 	if (statusCode === 403 || AUTHORIZATION_PATTERN.test(text)) {
 		return "authorization";
+	}
+	if (ACCOUNT_LIMIT_PATTERN.test(text)) {
+		return "account-limit";
 	}
 	if (statusCode === 429 || RATE_LIMIT_PATTERN.test(text)) {
 		return "rate-limited";
@@ -198,22 +210,34 @@ const getFailureCode = (
 	if (CONTEXT_OVERFLOW_PATTERN.test(text)) {
 		return "context-overflow";
 	}
+	if (statusCode === 408) {
+		return "network";
+	}
+	if (OVERLOAD_PATTERN.test(text)) {
+		return "unavailable";
+	}
+};
+
+const getFailureCode = (
+	chain: readonly unknown[],
+	text: string,
+	statusCode: number | undefined
+): ModelFailureCode => {
+	const highPriorityFailure = getHighPriorityFailureCode(text, statusCode);
+	if (highPriorityFailure !== undefined) {
+		return highPriorityFailure;
+	}
 	if (
-		chain.some(
-			(value) =>
-				isError(value) &&
-				(value.name === "TimeoutError" ||
-					value.name === "DeadlineExceededError")
-		) ||
+		hasErrorName(chain, "DeadlineExceededError") ||
 		DEADLINE_PATTERN.test(text)
 	) {
 		return "deadline-exceeded";
 	}
-	if (
-		chain.some((value) => isError(value) && value.name === "AbortError") ||
-		CANCEL_PATTERN.test(text)
-	) {
+	if (hasErrorName(chain, "AbortError") || CANCEL_PATTERN.test(text)) {
 		return "cancelled";
+	}
+	if (hasErrorName(chain, "TimeoutError") || TIMEOUT_PATTERN.test(text)) {
+		return "network";
 	}
 	if (
 		statusCode === 400 ||

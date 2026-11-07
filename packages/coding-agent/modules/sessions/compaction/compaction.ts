@@ -1,4 +1,4 @@
-import type { AgentTurnId } from "@wincode/agent-core";
+import type { AgentTurnId, ModelRetryPolicy } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import { getModelFailureMessage } from "@wincode/ai";
 import {
@@ -31,6 +31,7 @@ import {
 	sanitizeInterruptedSessionMessages,
 	sanitizeSessionSkillToolParts,
 } from "../message";
+import type { SessionCompactionRetryEvent } from "../session-events";
 import {
 	type AttachmentExternalizationLease,
 	type CompactionAttachmentMetadata,
@@ -62,6 +63,7 @@ import {
 	collectCumulativeFileOperations,
 	withFileOperationsSection,
 } from "./file-operations";
+import { CompactionSummaryGenerationFailure } from "./summary-generator";
 import {
 	createCompactionSummaryMessage,
 	isCompactionSummaryMessage,
@@ -218,6 +220,8 @@ export type CompactionRequestInput = {
 	settings: CompactionRequestSettings;
 	trigger: CompactionTriggerReason;
 	focus?: string;
+	modelRetryPolicy?: Omit<ModelRetryPolicy, "onStatus">;
+	onSummaryEvent?: (event: SessionCompactionRetryEvent) => void;
 	signal?: AbortSignal;
 	/** The Agent Turn that initiated this compaction, for diagnostics and lifecycle callbacks. */
 	turnId?: AgentTurnId;
@@ -1338,7 +1342,10 @@ const generateCompactionSummary = async (
 				{ cause: error }
 			);
 		}
-		const failureMessage = getModelFailureMessage(error);
+		const failureMessage =
+			error instanceof CompactionSummaryGenerationFailure
+				? error.failure.message
+				: getModelFailureMessage(error);
 		throw new SessionCompactionError(
 			"summary-failed",
 			`Compaction summary generation failed: ${failureMessage}`,
@@ -1768,12 +1775,24 @@ export const createSessionCompaction = ({
 				input.protectedMessageIds
 			);
 			const focus = normalizeFocus(input.focus);
+			const entryId = createId();
 			const summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {
 				target: input.summaryTarget,
 				...omitUndefined({ focus }),
 				previousSummary: previous?.summary,
 				serializedMessages: serializeMessagesForCompaction(summarySpan),
 				signal: input.signal,
+				...omitUndefined({
+					retryPolicy: input.modelRetryPolicy,
+					retryContext:
+						input.onSummaryEvent === undefined
+							? undefined
+							: {
+									compactionId: entryId,
+									onEvent: input.onSummaryEvent,
+									sessionId: input.session.sessionId,
+								},
+				}),
 			};
 			const attachmentMetadata = attachmentStore
 				? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
@@ -1799,7 +1818,6 @@ export const createSessionCompaction = ({
 			}
 			assertNotAborted(input.signal);
 			const summaryWasSuppliedByPlugin = isNonEmptyString(decision?.summary);
-			const entryId = createId();
 			const generated = await produceCompactionSummary({
 				cutPoint,
 				estimateTokens,

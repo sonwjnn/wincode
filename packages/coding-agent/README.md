@@ -27,12 +27,34 @@ idle; `Alt+R` retries the latest retryable input. Rewind creates a fork and does
 not roll back workspace files.
 
 Transient model request failures retry up to three times with exponential delays
-starting at two seconds. Retry-After can extend the delay up to 60 seconds;
-a longer requested delay ends the turn rather than retrying early. The composer
-shows one countdown; Escape cancels a pending retry immediately. Authentication and invalid-request errors do not
-retry. Requests that have already produced output, Tool Calls, or usage are not
-replayed, and retries never rerun previously settled tools. Cache-warm replays
-remain best-effort and do not use this retry loop.
+starting at two seconds. Reported usage and partial text or reasoning do not by
+themselves stop a safe retry: failed-attempt usage is counted once, and bounded
+attempt summaries remain inspectable on the terminal event and Session Record.
+Partial output is never added to the next request's Model Context. Each retry uses
+a fresh Model Step identity. A Model Step is retried only before its Tool Calls
+begin execution; a later Model Step can retry without replaying previously settled
+Tool Calls. Authentication, authorization, account-limit, and invalid-request
+failures do not retry. The composer shows one countdown; Escape cancels a pending
+retry immediately.
+Retry-After can extend the delay up to 60 seconds; a longer requested delay ends
+the turn rather than retrying early. Cache-warm replays remain best-effort and
+do not use this retry loop.
+
+The bounded policy can be changed in `modelRetry` settings:
+
+```json
+{
+  "modelRetry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 2000,
+    "maxDelayMs": 60000
+  }
+}
+```
+
+`maxRetries` excludes the initial request. Invalid settings disable automatic
+retries rather than falling back to a more permissive policy.
 
 ## Project trust
 

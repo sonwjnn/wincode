@@ -20,7 +20,6 @@ process.env.WINCODE_SUBAGENTS_DB_PATH = path.join(
 import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	type AgentId,
-	type AgentTurnEvent,
 	createOperationalFailure,
 	type SessionRecord,
 	toSubmissionId,
@@ -85,6 +84,7 @@ import type { SessionSdkPluginProviderSource } from "@/modules/sessions/plugin-p
 import { createDefaultSessionProviderCollection } from "@/modules/sessions/provider-collection";
 import { createSessionSdkOperations } from "@/modules/sessions/sdk";
 import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
+import type { SessionSdkEvent } from "@/modules/sessions/session-events";
 import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
@@ -3356,6 +3356,24 @@ describe("Session Host lifetime", () => {
 				method,
 				url,
 			});
+			if (url.includes(":streamGenerateContent")) {
+				return new Response(
+					`data: ${JSON.stringify({
+						candidates: [
+							{
+								content: { parts: [{ text: "Google response" }] },
+								finishReason: "STOP",
+							},
+						],
+						usageMetadata: {
+							candidatesTokenCount: 1,
+							promptTokenCount: 1,
+							totalTokenCount: 2,
+						},
+					})}\n\n`,
+					{ headers: { "content-type": "text/event-stream" }, status: 200 }
+				);
+			}
 			return new Response(
 				JSON.stringify(
 					method === "POST" ? { name: "cachedContents/session-prefix" } : {}
@@ -3572,7 +3590,7 @@ describe("Session Host lifetime", () => {
 			capabilities,
 			sessionId: seeded.sessionId,
 		});
-		const events: AgentTurnEvent[] = [];
+		const events: SessionSdkEvent[] = [];
 		host.onEvent((event) => events.push(event));
 		let snapshotChanges = 0;
 		host.subscribe(() => {

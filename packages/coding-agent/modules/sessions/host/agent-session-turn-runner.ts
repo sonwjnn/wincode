@@ -30,6 +30,7 @@ import {
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
 import { COMPACTION_REQUEST_OVERHEAD_TOKENS } from "@/modules/sessions/compaction/config";
+import { resolveSessionModelRetryPolicy } from "@/modules/sessions/retry-policy";
 import type { SkillRequestContext } from "@/modules/skills";
 import {
 	codingToolCatalog,
@@ -499,6 +500,9 @@ export const createAgentSessionTurnRunner = ({
 		try {
 			const sessionStore = capabilities.getStore();
 			turn = await prepareAgentTurn(request, scope, sessionStore);
+			const modelRetry = await resolveSessionModelRetryPolicy(
+				capabilities.getConfig()
+			);
 			await runAgentTurnToText({
 				onCheckpoint: callbacks.commitTerminal,
 				onToolCheckpoint: callbacks.commitToolCall,
@@ -512,7 +516,7 @@ export const createAgentSessionTurnRunner = ({
 					? `wincode-session:${sessionId}`
 					: undefined,
 				modelStepObserver: cacheWarming.modelStepObserver,
-				modelRetry: { maxRetries: 3, baseDelayMs: 2000 },
+				modelRetry,
 				maximumModelSteps: execution.maximumModelSteps,
 				runtime: statefulAgent,
 				signal,

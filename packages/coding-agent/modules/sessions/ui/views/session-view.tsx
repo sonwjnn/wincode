@@ -575,6 +575,22 @@ export function SessionView({
 		notificationAnchorRef.current = notificationAnchor;
 	}, [notificationAnchor]);
 	const error = snapshot.compactionError ?? snapshot.error;
+	const compactionRetry = snapshot.compactionRetryStatus;
+	const retryStatus =
+		snapshot.viewState?.retry ??
+		(compactionRetry === undefined
+			? undefined
+			: {
+					attempt: compactionRetry.attempt,
+					maxAttempts: compactionRetry.maxRetries,
+					retryAt: compactionRetry.retryAt,
+				});
+	let retryOperation: "agent-turn" | "compaction-summary" | undefined;
+	if (snapshot.viewState?.retry !== undefined) {
+		retryOperation = "agent-turn";
+	} else if (compactionRetry !== undefined) {
+		retryOperation = "compaction-summary";
+	}
 	// The session's own facts decide whether it is busy: a running turn or a
 	// compaction in flight.
 	const isBusy =
@@ -1217,7 +1233,8 @@ export function SessionView({
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
-					retryStatus={snapshot.viewState?.retry}
+					retryOperation={retryOperation}
+					retryStatus={retryStatus}
 					rewindingCheckpointId={rewindingCheckpointId}
 					sessionUsageEntries={sessionUsageEntries}
 					transcriptNotice={<ProjectTrustNotice />}

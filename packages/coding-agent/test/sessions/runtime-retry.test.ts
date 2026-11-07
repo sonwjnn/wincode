@@ -8,6 +8,7 @@ import {
 	runAgentTurnToText,
 	type SessionViewState,
 } from "@/modules/sessions/hooks/runtime-turn";
+import { getSessionRecordValidationError } from "@/modules/sessions/storage/session-record";
 import {
 	agentId,
 	agentTurnId,
@@ -40,6 +41,12 @@ for (const { scenario, expectedRequests, expectedCountdowns, terminalKind } of [
 		expectedCountdowns: 0,
 		terminalKind: "failed",
 	},
+	{
+		scenario: "usage",
+		expectedRequests: 3,
+		expectedCountdowns: 2,
+		terminalKind: "failed",
+	},
 ] as const) {
 	test(`model retry ${scenario} publishes transient countdowns and commits only one terminal checkpoint`, async () => {
 		const controller = new AbortController();
@@ -58,6 +65,13 @@ for (const { scenario, expectedRequests, expectedCountdowns, terminalKind } of [
 			resolveAuthorization: () => ({ authorization: { kind: "fake" } }),
 			async *streamChat() {
 				requests += 1;
+				if (scenario === "usage") {
+					yield {
+						type: "usage",
+						usage: { inputTokens: 10, outputTokens: 1 },
+					};
+					throw new ProviderError("transport", "private provider diagnostics");
+				}
 				if (scenario !== "recover" || requests === 1) {
 					throw new ProviderError(
 						scenario === "authentication" ? "authentication" : "transport",
@@ -65,7 +79,7 @@ for (const { scenario, expectedRequests, expectedCountdowns, terminalKind } of [
 					);
 				}
 				yield { type: "text-delta", delta: "Recovered response" };
-				yield { type: "finish" };
+				yield { completion: { kind: "completed" }, type: "finish" };
 			},
 		});
 		const turn = buildAgentTurn({
@@ -89,7 +103,7 @@ for (const { scenario, expectedRequests, expectedCountdowns, terminalKind } of [
 				turn,
 				signal: controller.signal,
 				getAssistantMessageId: () => sessionMessageId("retry-assistant"),
-				modelRetry: { maxRetries: 2, baseDelayMs: 1 },
+				modelRetry: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 60_000 },
 				onViewState: (view) => {
 					views.push(view);
 					if (scenario === "cancel" && view.retry !== undefined) {
@@ -128,6 +142,37 @@ for (const { scenario, expectedRequests, expectedCountdowns, terminalKind } of [
 				"private provider diagnostics"
 			);
 			expect(JSON.stringify(records)).not.toContain("retryAt");
+			if (scenario === "usage") {
+				expect(getSessionRecordValidationError(records[0])).toBeNull();
+				expect(records[0]?.messages[0]?.metadata?.usage).toEqual({
+					inputTokens: 30,
+					outputTokens: 3,
+					totalTokens: 33,
+				});
+				expect(records[0]?.outcome).toMatchObject({
+					terminal: {
+						kind: "failed",
+						modelStepAttempts: [
+							{
+								attempt: 1,
+								retryDecision: "scheduled",
+								usage: { inputTokens: 10 },
+							},
+							{
+								attempt: 2,
+								retryDecision: "scheduled",
+								usage: { inputTokens: 10 },
+							},
+							{
+								attempt: 3,
+								retryDecision: "stopped",
+								usage: { inputTokens: 10 },
+							},
+						],
+						usage: { inputTokens: 30, outputTokens: 3, totalTokens: 33 },
+					},
+				});
+			}
 		} finally {
 			await providers.close();
 		}

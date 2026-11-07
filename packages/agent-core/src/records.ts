@@ -28,6 +28,7 @@ import type {
 	SubmissionId,
 	ToolCallId,
 } from "./identifiers";
+import type { ModelStepAttemptSummary } from "./model-step";
 import type { SkillActivationSource } from "./skill-activation";
 import {
 	isToolCallId,
@@ -182,27 +183,35 @@ export type SessionMessageRecord = ReadonlyDeep<{
  * execution stopped without pretending a provider stream can be resumed.
  */
 export type AgentTurnOutcomeRecord = ReadonlyDeep<
-	| {
-			finishedAt: number;
-			kind: "completed";
-			usage?: ModelUsage;
-	  }
-	| {
-			failure: OperationalFailure;
-			finishedAt: number;
-			kind: "failed";
-	  }
-	| {
-			failure: OperationalFailure;
-			finishedAt: number;
-			kind: "cancelled";
-	  }
-	| {
-			failure: OperationalFailure;
-			finishedAt: number;
-			kind: "interrupted";
-			reason: AgentTurnInterruptionReason;
-	  }
+	(
+		| {
+				finishedAt: number;
+				kind: "completed";
+				usage?: ModelUsage;
+		  }
+		| {
+				failure: OperationalFailure;
+				finishedAt: number;
+				kind: "failed";
+				usage?: ModelUsage;
+		  }
+		| {
+				failure: OperationalFailure;
+				finishedAt: number;
+				kind: "cancelled";
+				usage?: ModelUsage;
+		  }
+		| {
+				failure: OperationalFailure;
+				finishedAt: number;
+				kind: "interrupted";
+				reason: AgentTurnInterruptionReason;
+				usage?: ModelUsage;
+		  }
+	) & {
+		modelStepAttempts?: readonly ModelStepAttemptSummary[];
+		modelStepAttemptsTruncated?: true;
+	}
 >;
 
 /**

@@ -257,7 +257,7 @@ const createCurrentAgentPinFixture = (ownerCount: number) => {
 			activity.streamCalls += 1;
 			yield { delta: "existing Agent pin succeeded", type: "text-delta" };
 			yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
-			yield { type: "finish" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	};
 	const registrations = Array.from(
@@ -644,7 +644,7 @@ test(
 				streamCalls += 1;
 				yield { delta: "continued with the trusted owner", type: "text-delta" };
 				yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
-				yield { type: "finish" };
+				yield { completion: { kind: "completed" }, type: "finish" };
 			},
 		};
 		const registration: PluginProviderDescriptor = {
@@ -829,7 +829,7 @@ test("historical reselection rejects missing or mismatched Host owners before mo
 			resolveAuthorization: ({ credential }) =>
 				credential === undefined ? null : { authorization: credential },
 			async *streamChat() {
-				yield { type: "finish" };
+				yield { completion: { kind: "completed" }, type: "finish" };
 			},
 		};
 		const registration: PluginProviderDescriptor = {

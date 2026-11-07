@@ -1,6 +1,6 @@
 import { logger, omitUndefined } from "@wincode/utils";
 import { z } from "zod";
-import { normalizeModelFailure } from "./model-failures.ts";
+import { type ModelFailure, normalizeModelFailure } from "./model-failures.ts";
 import {
 	type ModelPromptCacheCapabilities,
 	modelMetadataEntrySchema,
@@ -503,11 +503,19 @@ export type ChatFailure =
 			providerId: string;
 	  }>
 	| Readonly<{
+			code: "provider";
+			message: string;
+			modelFailure?: ModelFailure;
+			providerId: string;
+			statusCode?: number;
+			/** Normalized positive Retry-After delay, without raw Provider diagnostics. */
+			retryAfterMs?: number;
+	  }>
+	| Readonly<{
 			code:
 				| "authentication"
 				| "credential-store"
 				| "oauth-refresh"
-				| "provider"
 				| "transport";
 			message: string;
 			providerId: string;
@@ -1080,7 +1088,12 @@ const terminalForStreamError = (
 	}
 	const failure = failureForError(error, request.providerId, request.modelId);
 	const modelFailure =
-		failure.code === "provider" ? normalizeModelFailure(failure) : undefined;
+		failure.code === "provider"
+			? normalizeModelFailure(error, {
+					modelId: request.modelId,
+					providerId: request.providerId,
+				})
+			: undefined;
 	const statusCode = "statusCode" in failure ? failure.statusCode : undefined;
 	let cause: unknown;
 	if (isCredentialStoreFailure(error)) {
@@ -1112,7 +1125,13 @@ const terminalForStreamError = (
 			: { modelFailureCode: modelFailure.code }),
 		...(statusCode === undefined ? {} : { statusCode }),
 	});
-	return terminal({ failure, status: "failure" });
+	return terminal({
+		failure:
+			modelFailure === undefined || failure.code !== "provider"
+				? failure
+				: { ...failure, modelFailure },
+		status: "failure",
+	});
 };
 
 const selectChatTarget = (

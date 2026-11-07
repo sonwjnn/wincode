@@ -21,6 +21,7 @@ import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
 import { findContinuationContextMessages } from "../continuation-context";
 import { isSessionToolPart, type SessionMessage } from "../message";
+import type { CompactionSummaryRetryStatus } from "../session-events";
 import type { SessionWriteOutcome } from "../session-write-outcome";
 import {
 	isCommittedProjectionBlocked,
@@ -91,6 +92,7 @@ type AgentSessionOperationState = {
 	readonly backgroundTasks: Set<Promise<unknown>>;
 	readonly compaction: {
 		activeCommand: SessionMaintenanceCommandState | undefined;
+		retryStatus: CompactionSummaryRetryStatus | undefined;
 		readonly requests: Set<Promise<CompactSessionResult>>;
 	};
 	readonly continuationInputs: WeakSet<SessionSendInput>;
@@ -574,7 +576,11 @@ export class AgentSessionImpl implements AgentSession {
 		};
 		this.#operationState = {
 			backgroundTasks: new Set(),
-			compaction: { activeCommand: undefined, requests: new Set() },
+			compaction: {
+				activeCommand: undefined,
+				retryStatus: undefined,
+				requests: new Set(),
+			},
 			continuationInputs: new WeakSet(),
 			durableWrites: new Set(),
 			durableWriteFailures: [],
@@ -793,8 +799,14 @@ export class AgentSessionImpl implements AgentSession {
 				currentSubmissions.every(
 					(submission, index) => submission === scheduledSubmissions[index]
 				);
+			const compactionRetryStatusChanged =
+				this.#state.compactionRetryStatus !==
+				sessionState.compaction.retryStatus;
 			const projectedChanges: Partial<LiveSessionSnapshot> = {
 				...changes,
+				...(compactionRetryStatusChanged
+					? { compactionRetryStatus: sessionState.compaction.retryStatus }
+					: {}),
 				queuedSubmissions: queuedSubmissionsUnchanged
 					? currentSubmissions
 					: [...scheduledSubmissions],
@@ -1088,6 +1100,7 @@ export class AgentSessionImpl implements AgentSession {
 				switch (transition.kind) {
 					case "compaction-started": {
 						sessionState.compaction.activeCommand = transition.command;
+						sessionState.compaction.retryStatus = undefined;
 						publish({});
 						return;
 					}
@@ -1101,7 +1114,29 @@ export class AgentSessionImpl implements AgentSession {
 							transition.kind === "compaction-phase"
 								? { ...transition.command, phase: transition.phase }
 								: undefined;
+						if (transition.kind === "compaction-settled") {
+							sessionState.compaction.retryStatus = undefined;
+						}
 						publish({});
+						return;
+					}
+					case "compaction-summary-event": {
+						if (isSupersededCommand(transition.command)) {
+							return;
+						}
+						sessionState.compaction.retryStatus =
+							transition.event.type === "compaction-summary-retry-scheduled"
+								? {
+										attempt: transition.event.attempt,
+										compactionId: transition.event.compactionId,
+										maxRetries: transition.event.maxRetries,
+										modelId: transition.event.modelId,
+										providerId: transition.event.providerId,
+										retryAt: transition.event.retryAt,
+									}
+								: undefined;
+						publish({});
+						ports.emitCompactionEvent(transition.event);
 						return;
 					}
 					case "compaction-applied": {

@@ -15,6 +15,7 @@ import {
 } from "@/modules/sessions/host/agent-session-adapters";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
+import type { ConfigRuntime } from "@/shared/config/config-store";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
@@ -100,6 +101,16 @@ const fixture = (
 		},
 		...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
 	};
+	const configRuntime = fromPartial<ConfigRuntime>({
+		configStore: {
+			getSnapshot: async () => ({
+				diagnostics: [],
+				document: {},
+				sources: [],
+				sourceFor: () => undefined,
+			}),
+		},
+	});
 	const settings = resolveCompactionSettings({
 		contextLimit: chatModel.limits?.contextWindowTokens,
 		model: conversation,
@@ -138,6 +149,7 @@ const fixture = (
 			capabilities: {
 				getCapabilityCeiling: () => undefined,
 				getCompactionModule: () => compaction,
+				getConfig: () => configRuntime,
 				getPluginRuntime: () =>
 					fromPartial<PluginRuntime>({
 						getProviderRegistrations: () => owners.trusted,

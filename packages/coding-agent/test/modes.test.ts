@@ -10,6 +10,7 @@ import {
 	type ProviderChatEvent,
 	type ProviderChatRequest,
 	type ProviderCollection,
+	ProviderError,
 	type ProviderModel,
 } from "@wincode/ai";
 import { resolveSessionLogFilePath } from "@/modules/sessions/storage/path";
@@ -52,7 +53,10 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
 } from "../modules/sessions/storage/path";
-import type { ConfigSnapshot } from "../shared/config/config-store";
+import {
+	type ConfigSnapshot,
+	createConfigStore,
+} from "../shared/config/config-store";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
@@ -196,7 +200,7 @@ const oneShotPluginRegistration = (
 		async *streamChat() {
 			requests.push(sourceIdentity);
 			yield { delta: "Plugin response", type: "text-delta" };
-			yield { type: "finish" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	}),
 	displayName: "One-Shot fake Plugin Provider",
@@ -848,6 +852,9 @@ test("JSON mode emits projected Agent events without JSON-RPC envelopes", async 
 		"model-step-finished",
 		"agent-turn-completed",
 	]);
+	expect(frames.every((frame) => typeof frame.sessionId === "string")).toBe(
+		true
+	);
 	expect(frames.every((frame) => !("jsonrpc" in frame))).toBe(true);
 });
 
@@ -2073,6 +2080,79 @@ const noCapabilities: OneShotDependencies = {
 	},
 };
 
+test("Print mode reports the exhausted automatic retry count", async () => {
+	const printWorkspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-one-shot-retry-exhausted-")
+	);
+	const configStore = createConfigStore({
+		homeRoot: path.join(printWorkspace, "home"),
+		trustedProjectRoots: [printWorkspace],
+	});
+	await configStore.setValue(
+		printWorkspace,
+		"global",
+		["modelRetry", "baseDelayMs"],
+		0
+	);
+	await configStore.setValue(
+		printWorkspace,
+		"global",
+		["modelRetry", "maxDelayMs"],
+		0
+	);
+	await configStore.setValue(
+		printWorkspace,
+		"global",
+		["modelRetry", "maxRetries"],
+		2
+	);
+	const previousScript = fakeRecorder.stepScript;
+	let requestCount = 0;
+	fakeRecorder.stepScript =
+		async function* (): AsyncGenerator<ProviderChatEvent> {
+			requestCount += 1;
+			yield* [];
+			throw new ProviderError("transport", "private provider diagnostics");
+		};
+	const stdout = writer();
+	const stderr = writer();
+	try {
+		const exitCode = await runPrintMode(
+			{
+				...context(
+					"print",
+					"retry until the request budget is exhausted",
+					stdout.writer,
+					stderr.writer,
+					undefined,
+					undefined,
+					true,
+					{},
+					printWorkspace
+				),
+				configRuntime: {
+					configStore,
+					homeRoot: path.join(printWorkspace, "home"),
+					workspace: printWorkspace,
+				},
+			},
+			{ composeServices }
+		);
+
+		expect(exitCode).toBe(1);
+		expect(requestCount).toBe(3);
+		expect(stdout.text).toBe("");
+		expect(stderr.text).toContain("The model connection failed.");
+		expect(stderr.text).toContain(
+			"Automatic recovery stopped after 2 retries."
+		);
+		expect(stderr.text).not.toContain("private provider diagnostics");
+	} finally {
+		fakeRecorder.stepScript = previousScript;
+		await fs.rm(printWorkspace, { force: true, recursive: true });
+	}
+});
+
 test("Print and JSON modes preserve committed-blocked write receipts", async () => {
 	for (const mode of ["print", "json"] as const) {
 		const faultWorkspace = await fs.mkdtemp(
@@ -2141,7 +2221,7 @@ test("Print and JSON modes preserve committed-blocked write receipts", async () 
 	}
 });
 
-test("one-shot keeps Print parent-only and tags JSON child Session events", async () => {
+test("one-shot keeps Print parent-only and tags JSON events with Session IDs", async () => {
 	const printWorkspace = await fs.mkdtemp(
 		path.join("/tmp", "wincode-one-shot-delegation-print-")
 	);
@@ -2251,24 +2331,29 @@ test("one-shot keeps Print parent-only and tags JSON child Session events", asyn
 		expect(jsonExitCode).toBe(1);
 		expect(jsonStdout.text).toContain("Parent-only result.");
 		expect(jsonStdout.text).toContain("Child internal output.");
-		expect(
-			events.some(
-				({ type, delta, sessionId }) =>
-					type === "text-delta" &&
-					delta === "Child internal output." &&
-					typeof sessionId === "string"
-			)
-		).toBe(true);
+		const childTextEvent = events.find(
+			({ type, delta }) =>
+				type === "text-delta" && delta === "Child internal output."
+		);
+		const parentTextEvent = events.find(
+			({ type, delta }) =>
+				type === "text-delta" && delta === "Parent-only result."
+		);
+		const childSessionId = childTextEvent?.sessionId;
+		const parentSessionId = parentTextEvent?.sessionId;
+		expect(childSessionId).toEqual(expect.any(String));
+		expect(parentSessionId).toEqual(expect.any(String));
+		expect(parentSessionId).not.toBe(childSessionId);
 		expect(
 			events.some(
 				({ type, sessionId }) =>
-					type === "agent-turn-completed" && typeof sessionId === "string"
+					type === "agent-turn-completed" && sessionId === childSessionId
 			)
 		).toBe(true);
 		const parentTextDeltas = events
 			.filter(
 				({ type, sessionId }) =>
-					type === "text-delta" && sessionId === undefined
+					type === "text-delta" && sessionId === parentSessionId
 			)
 			.map(({ delta }) => delta);
 		expect(parentTextDeltas).toContain("Parent-only result.");

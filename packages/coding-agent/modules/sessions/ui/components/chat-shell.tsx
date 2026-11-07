@@ -114,6 +114,7 @@ type ChatShellProps = {
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	cacheWarmingStatus?: CacheWarmingStatus;
 	retryStatus?: ModelRetryStatus;
+	retryOperation?: "agent-turn" | "compaction-summary";
 	contextSnapshot?: ConfigSnapshot;
 	/** Rendered at the bottom of the transcript; the shell never persists it. */
 	transcriptNotice?: ReactNode;
@@ -124,15 +125,23 @@ function ActivityFooter({
 	autoCompact,
 	isCompacting,
 	retryStatus,
+	retryOperation,
 }: {
 	accentColor: string;
 	agent: AgentId;
 	autoCompact: boolean;
 	isCompacting: boolean;
 	retryStatus?: ModelRetryStatus;
+	retryOperation?: "agent-turn" | "compaction-summary";
 }) {
 	if (retryStatus !== undefined) {
-		return <ModelRetryIndicator agent={agent} status={retryStatus} />;
+		return (
+			<ModelRetryIndicator
+				agent={agent}
+				operation={retryOperation}
+				status={retryStatus}
+			/>
+		);
 	}
 	const compactionLabel = autoCompact ? "Auto-compacting..." : "Compacting...";
 	return (
@@ -308,6 +317,7 @@ export function ChatShell({
 	sessionUsageEntries = [],
 	cacheWarmingStatus = "idle",
 	retryStatus,
+	retryOperation,
 	contextSnapshot,
 	transcriptNotice,
 }: ChatShellProps) {
@@ -635,6 +645,7 @@ export function ChatShell({
 									agent={agent}
 									autoCompact={autoCompact}
 									isCompacting={isCompacting}
+									retryOperation={retryOperation}
 									retryStatus={retryStatus}
 								/>
 							) : undefined

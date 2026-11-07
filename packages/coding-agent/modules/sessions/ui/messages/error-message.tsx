@@ -43,15 +43,28 @@ const getProviderErrorMessage = (error: unknown): string | undefined => {
 	}
 	return normalizeModelFailure(error).message;
 };
-const isAuthenticationFailure = (error: unknown): boolean => {
+const authenticationGuidanceFor = (error: unknown): string | undefined => {
 	if (isOperationalFailure(error)) {
-		return error.code === "authentication" || error.code === "authorization";
+		if (error.code !== "authentication" && error.code !== "authorization") {
+			return;
+		}
+		if (error.source !== "model") {
+			return "Authentication failed. Check the relevant account or Provider connection in /connect.";
+		}
+		const identity = [error.details?.providerId, error.details?.modelId]
+			.filter(isString)
+			.join("/");
+		return identity.length > 0
+			? `Authentication failed for ${identity}. Check that Provider connection in /connect.`
+			: "Provider authentication failed. Check the selected Provider connection in /connect.";
 	}
 	if (!hasProviderDiagnostics(error)) {
-		return false;
+		return;
 	}
 	const { code } = normalizeModelFailure(error);
-	return code === "authentication" || code === "authorization";
+	return code === "authentication" || code === "authorization"
+		? "Provider authentication failed. Check the selected Provider connection in /connect."
+		: undefined;
 };
 
 export const getDisplayMessage = (error: unknown): string => {
@@ -69,8 +82,12 @@ export const getDisplayMessage = (error: unknown): string => {
 		}
 	}
 
-	if (unauthorizedPattern.test(message) || isAuthenticationFailure(error)) {
-		return "Wincode session invalid or expired. Run /connect to sign in again.";
+	const authenticationGuidance = authenticationGuidanceFor(error);
+	if (!isUndefined(authenticationGuidance)) {
+		return authenticationGuidance;
+	}
+	if (unauthorizedPattern.test(message)) {
+		return "Authentication failed. Check the relevant account or Provider connection in /connect.";
 	}
 	return message;
 };

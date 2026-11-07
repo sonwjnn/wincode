@@ -562,6 +562,15 @@ const promptInputFor = async (
 		| SessionSdkRuntimeOptions["getPluginProviderSources"]
 		| undefined
 ): Promise<SessionSendInput> => {
+	if (
+		input.maximumModelSteps !== undefined &&
+		(!Number.isSafeInteger(input.maximumModelSteps) ||
+			input.maximumModelSteps < 1)
+	) {
+		throw new Error(
+			"Session SDK model request budgets must be positive safe integers."
+		);
+	}
 	host.assertCurrentPluginProviderRegistrationSnapshot();
 	const resolvedSelection = resolveSessionSdkPromptSelection(input, defaults);
 	const resolveModelForHost = (
@@ -690,6 +699,7 @@ const promptInputFor = async (
 		...(input.submissionId === undefined
 			? {}
 			: { submissionId: input.submissionId }),
+		...omitUndefined({ maximumModelSteps: input.maximumModelSteps }),
 		userText: input.text,
 	};
 };

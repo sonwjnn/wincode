@@ -18,6 +18,7 @@ import {
 } from "@wincode/ai";
 import {
 	createSessionSdk as createPublicSessionSdk,
+	type SessionSdkEvent,
 	type SessionSdkOptions,
 } from "@wincode/coding-agent";
 import {
@@ -182,7 +183,7 @@ const createImplicitDefaultAgentPinSdk = async (
 				models: [{ modelId: "${selectedModelId}", protocolId: "fake-implicit-default-agent-pin", providerId: "${providerId}" }],
 				resolveAuthorization: ({ credential }) => credential === undefined ? null : { authorization: credential },
 				discoverModels: async () => { activity.discoveries += 1; return []; },
-				async *streamChat() { activity.streamCalls += 1; yield { type: "finish" }; },
+				async *streamChat() { activity.streamCalls += 1; yield { completion: { kind: "completed" }, type: "finish" }; },
 			};
 		},
 		displayName: "Implicit default Agent pin owner ${index}",
@@ -1407,6 +1408,7 @@ test("public Session SDK drives multiple Agent Model Steps through exact Provide
 					usage: { inputTokens: 3, outputTokens: 2, reasoningTokens: 1 },
 				};
 				yield {
+					completion: { kind: "completed" },
 					continuation: { responseId: "sdk-continuation-1" },
 					type: "finish",
 				};
@@ -1417,7 +1419,7 @@ test("public Session SDK drives multiple Agent Model Steps through exact Provide
 				type: "usage",
 				usage: { inputTokens: 5, outputTokens: 3 },
 			};
-			yield { type: "finish" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	});
 	const providerCollectionForHost =
@@ -1459,7 +1461,7 @@ test("public Session SDK drives multiple Agent Model Steps through exact Provide
 				throw new Error("The public Session SDK was not created.");
 			}
 			handles.push(handle);
-			const events: AgentTurnEvent[] = [];
+			const events: SessionSdkEvent[] = [];
 			const terminal = Promise.withResolvers<AgentTurnEvent>();
 			const partialOutput = Promise.withResolvers<void>();
 			const unsubscribe = handle.onEvent((event) => {
@@ -1918,7 +1920,7 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 						thinkingLevel: request.reasoningEffort,
 					});
 					yield { delta: "The selection was restored.", type: "text-delta" };
-					yield { type: "finish" };
+					yield { completion: { kind: "completed" }, type: "finish" };
 				},
 			});
 			const collection = Object.assign(providers, {

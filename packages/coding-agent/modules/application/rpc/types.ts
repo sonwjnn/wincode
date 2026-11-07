@@ -72,6 +72,8 @@ export const SESSION_RPC_METHODS = new Set([
 export const AGENT_EVENT_TYPES = new Set([
 	"agent-turn-started",
 	"model-step-started",
+	"model-step-retry-scheduled",
+	"model-step-retry-ended",
 	"text-delta",
 	"reasoning-delta",
 	"model-step-finished",

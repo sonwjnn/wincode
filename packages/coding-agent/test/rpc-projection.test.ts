@@ -1,11 +1,244 @@
 import { expect, test } from "bun:test";
 import {
 	projectAgentEvent,
+	projectSessionEvent,
 	projectSteering,
 	submissionFromWaiting,
 } from "../modules/application/rpc/projection";
 import { readSubmission } from "../modules/application/rpc/validation";
 import { MAX_ATTACHMENT_BYTES } from "../modules/sessions/attachment-reference";
+
+test("RPC retry events expose bounded timing and a safe failure without provider diagnostics", () => {
+	const projected = projectAgentEvent({
+		attempt: 1,
+		failure: {
+			code: "network",
+			details: { providerId: "openai", retryAfterMs: 500 },
+			message: "The model connection failed.",
+			retry: "after-delay",
+			source: "model",
+			version: 1,
+		},
+		maxAttempts: 3,
+		partialOutput: { text: "discarded fragment" },
+		retryAt: 10_500,
+		sequence: 2,
+		stepId: "step-1",
+		usage: { inputTokens: 10, outputTokens: 1 },
+		turnId: "turn-1",
+		type: "model-step-retry-scheduled",
+	});
+
+	expect(projected).toMatchObject({
+		attempt: 1,
+		failure: {
+			code: "network",
+			details: { providerId: "openai", retryAfterMs: 500 },
+			message: "The model connection failed.",
+			retry: "after-delay",
+			source: "model",
+			version: 1,
+		},
+		maxAttempts: 3,
+		partialOutput: { text: "discarded fragment" },
+		retryAt: 10_500,
+		sequence: 2,
+		stepId: "step-1",
+		turnId: "turn-1",
+		type: "model-step-retry-scheduled",
+		usage: { inputTokens: 10, outputTokens: 1 },
+	});
+	expect(JSON.stringify(projected)).not.toContain(
+		"private provider diagnostics"
+	);
+});
+
+test("Session event projection keeps compaction retry observations safe and bounded", () => {
+	const projected = projectSessionEvent({
+		attempt: 1,
+		compactionId: "compaction-1",
+		failure: {
+			code: "network",
+			details: { providerId: "openai", retryAfterMs: 500 },
+			message: "The model connection failed.",
+			retry: "after-delay",
+			source: "model",
+			version: 1,
+		},
+		maxRetries: 3,
+		modelId: "gpt-5.6-luna",
+		privateDiagnostic: "must not cross the RPC boundary",
+		providerId: "openai",
+		retryAt: 10_500,
+		sessionId: "session-1",
+		stepId: "step-1",
+		type: "compaction-summary-retry-scheduled",
+	});
+
+	expect(projected).toMatchObject({
+		attempt: 1,
+		compactionId: "compaction-1",
+		failure: { code: "network", message: "The model connection failed." },
+		maxRetries: 3,
+		modelId: "gpt-5.6-luna",
+		providerId: "openai",
+		retryAt: 10_500,
+		sessionId: "session-1",
+		stepId: "step-1",
+		type: "compaction-summary-retry-scheduled",
+	});
+	expect(projected).not.toHaveProperty("privateDiagnostic");
+	expect(JSON.stringify(projected)).not.toContain(
+		"private provider diagnostics"
+	);
+});
+
+test("RPC retry terminal events preserve the retry result and safe failure", () => {
+	const projected = projectAgentEvent({
+		attempt: 1,
+		failure: {
+			code: "network",
+			message: "The model connection failed.",
+			retry: "after-delay",
+			source: "model",
+			version: 1,
+		},
+		maxAttempts: 1,
+		outcome: "exhausted",
+		sequence: 3,
+		stepId: "step-2",
+		turnId: "turn-1",
+		type: "model-step-retry-ended",
+	});
+
+	expect(projected).toMatchObject({
+		attempt: 1,
+		failure: { code: "network" },
+		maxAttempts: 1,
+		outcome: "exhausted",
+		type: "model-step-retry-ended",
+	});
+});
+
+test("RPC projects non-retryable account-limit failures without throwing", () => {
+	const projected = projectAgentEvent({
+		failure: {
+			code: "account-limit",
+			message: "The model provider account has reached its usage limit.",
+			retry: "never",
+			source: "model",
+			version: 1,
+		},
+		finishedAt: 10_000,
+		sequence: 4,
+		turnId: "turn-1",
+		type: "agent-turn-failed",
+	});
+
+	expect(projected).toMatchObject({
+		failure: {
+			code: "account-limit",
+			message: "The model provider account has reached its usage limit.",
+			retry: "never",
+		},
+		type: "agent-turn-failed",
+	});
+});
+
+test("RPC failed Agent Turn projection preserves reported usage and safe failure text", () => {
+	const projected = projectAgentEvent({
+		modelStepAttempts: [
+			{
+				attempt: 1,
+				failure: {
+					code: "network",
+					message: "The model connection failed.",
+					retry: "after-delay",
+					source: "model",
+					version: 1,
+				},
+				maxRetries: 1,
+				partialOutput: { text: "discarded fragment" },
+				retryDecision: "scheduled",
+				stepId: "step-1",
+				usage: { inputTokens: 10, outputTokens: 1 },
+			},
+		],
+		failure: {
+			code: "network",
+			message: "The model connection failed.",
+			retry: "after-delay",
+			source: "model",
+			version: 1,
+		},
+		finishedAt: 10_000,
+		sequence: 3,
+		turnId: "turn-1",
+		type: "agent-turn-failed",
+		usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+	});
+
+	expect(projected).toMatchObject({
+		failure: {
+			code: "network",
+			message: "The model connection failed.",
+			retry: "after-delay",
+			source: "model",
+			version: 1,
+		},
+		finishedAt: 10_000,
+		modelStepAttempts: [
+			{
+				attempt: 1,
+				failure: {
+					code: "network",
+					message: "The model connection failed.",
+					retry: "after-delay",
+					source: "model",
+					version: 1,
+				},
+				maxRetries: 1,
+				partialOutput: { text: "discarded fragment" },
+				retryDecision: "scheduled",
+				stepId: "step-1",
+				usage: { inputTokens: 10, outputTokens: 1 },
+			},
+		],
+		sequence: 3,
+		turnId: "turn-1",
+		type: "agent-turn-failed",
+		usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+	});
+	expect(JSON.stringify(projected)).not.toContain(
+		"private provider diagnostics"
+	);
+});
+
+test("RPC preserves the safe explanation when a Retry-After exceeds the retry limit", () => {
+	const projected = projectAgentEvent({
+		failure: {
+			code: "retry-delay-exceeds-limit",
+			message:
+				"The provider requested a retry delay beyond the configured limit; automatic retry was not attempted.",
+			retry: "never",
+			source: "runtime",
+			version: 1,
+		},
+		finishedAt: 10_000,
+		sequence: 3,
+		turnId: "turn-1",
+		type: "agent-turn-failed",
+	});
+
+	expect(projected).toMatchObject({
+		failure: {
+			code: "retry-delay-exceeds-limit",
+			message:
+				"The provider requested a retry delay beyond the configured limit; automatic retry was not attempted.",
+		},
+		type: "agent-turn-failed",
+	});
+});
 
 test("public Agent Turn projection preserves empty delta events", () => {
 	for (const type of ["text-delta", "reasoning-delta"] as const) {
