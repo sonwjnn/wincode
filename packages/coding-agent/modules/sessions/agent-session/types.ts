@@ -424,6 +424,13 @@ export type AgentSessionPorts = Readonly<{
 	emitCompactionEvent: (event: SessionCompactionRetryEvent) => void;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
+	/**
+	 * Durably omits one failed Agent Turn's non-user messages from model context
+	 * and returns their ids, so a retry starts from its user message.
+	 */
+	omitFailedTurnContext: (
+		turnId: AgentTurnId
+	) => Promise<readonly SessionMessageId[]>;
 	/** Persists one exact committed Submission's processing state. */
 	updateSubmissionStatus: (
 		input: SessionSubmissionStatusUpdate

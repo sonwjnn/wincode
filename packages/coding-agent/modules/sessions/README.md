@@ -196,6 +196,14 @@ context, not their original durable references. Compaction summaries and
 messages already removed by compaction are not editable. A fork inherits only
 edits inside its checkpoint prefix, with target message IDs remapped.
 
+A terminal `failed` or `cancelled` Agent Turn uses the same mechanism: every
+non-user message it committed is omitted from model context with a
+turn-derived operation ID, so a retry starts from the user message instead of
+replaying the attempt's text and completed Tool Calls. The attempts stay in the
+Session Transcript, and nothing in the workspace is rolled back. Retrying a
+message whose *completed* turn ran Tool Calls is still refused; only a failed
+attempt becomes retryable.
+
 ### Session bundles
 
 `wincode sessions export <session-id> <directory>` writes a portable bundle, and `wincode sessions import <directory>` validates and imports one. The public Session SDK and RPC expose the same import operation. Imports verify the manifest, log integrity and resource bounds, and require every referenced attachment to be present and valid before publishing Session history. Repeating the same import is a no-op; a different log using an existing Session ID is a conflict.

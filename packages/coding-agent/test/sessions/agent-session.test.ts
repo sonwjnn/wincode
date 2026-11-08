@@ -160,6 +160,7 @@ const createPorts = ({
 	},
 	inputScheduler: createTestInputScheduler(),
 	emitCompactionEvent: () => undefined,
+	omitFailedTurnContext: async () => [],
 	resolveSubmission: (input) => input,
 	assertProviderModelSelection: () => undefined,
 	compaction,

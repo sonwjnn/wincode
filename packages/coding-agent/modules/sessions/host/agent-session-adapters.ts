@@ -1,9 +1,19 @@
-import type { AgentId, StatefulAgent } from "@wincode/agent-core";
+import type {
+	AgentId,
+	SessionMessageId,
+	StatefulAgent,
+} from "@wincode/agent-core";
 import {
 	calculateModelUsageCostUsd,
 	type ProviderCollection,
 } from "@wincode/ai";
-import { isNull, isUndefined, omitBy, omitUndefined } from "@wincode/utils";
+import {
+	isNull,
+	isUndefined,
+	logger,
+	omitBy,
+	omitUndefined,
+} from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import { pricingEntryForProviderModel } from "@/modules/model-pricing/model-pricing";
@@ -25,6 +35,7 @@ import {
 	type SkillExecution,
 } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
+import { errorLogFields } from "@/shared/utils/error-log-fields";
 import type {
 	AgentSessionPorts,
 	SessionQueuedSubmission,
@@ -308,6 +319,40 @@ export const createAgentSessionAdapters = (
 			requireSessionWriteReady(
 				await capabilities.getStore().commitSessionRecord(input)
 			);
+		},
+		omitFailedTurnContext: async (turnId) => {
+			const store = capabilities.getStore();
+			const records = await store.listSessionRecords(sessionId);
+			const messageIds = records
+				.filter((record) => record.turnId === turnId)
+				.flatMap((record) =>
+					record.messages
+						.filter((message) => message.role !== "user")
+						.map((message) => message.id)
+				);
+			const committed: SessionMessageId[] = [];
+			for (const messageId of messageIds) {
+				try {
+					requireSessionWriteReady(
+						await store.appendContextEdit(sessionId, {
+							operationId: `omit-failed-${turnId}-${messageId}`,
+							replacement: null,
+							targetId: messageId,
+						})
+					);
+					committed.push(messageId);
+				} catch (error) {
+					logger.warn("Failed attempt context omission write failed", {
+						...errorLogFields(error),
+						operation: "session.turn",
+						phase: "context-omission",
+						sessionId,
+						turnId,
+					});
+					break;
+				}
+			}
+			return committed;
 		},
 		updateSubmissionStatus: async (input) => {
 			requireSessionWriteReady(

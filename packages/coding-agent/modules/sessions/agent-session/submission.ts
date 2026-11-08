@@ -2,6 +2,7 @@ import {
 	type AgentId,
 	type AgentTurn,
 	type AgentTurnId,
+	type AgentTurnTerminalEvent,
 	createAgentTurnAbortEvent,
 	createAgentTurnId,
 	getAgentTurnAbortDisposition,
@@ -821,6 +822,52 @@ const commitExecutionRecord = (
 	});
 
 /**
+ * Drops a failed attempt from model context, keeping its durable transcript.
+ * The retry then starts from the user message instead of replaying tool work.
+ */
+/** Maps one terminal Agent Turn event to its failed-attempt omission. */
+const omitFailedTurnForEvent = async (
+	deps: SubmissionDeps,
+	execution: SessionExecution,
+	type: AgentTurnTerminalEvent["type"]
+): Promise<void> => {
+	switch (type) {
+		case "agent-turn-failed":
+			return await omitFailedAttemptContext(deps, execution, "failed");
+		case "agent-turn-cancelled":
+			return await omitFailedAttemptContext(deps, execution, "cancelled");
+		default:
+			return;
+	}
+};
+
+const omitFailedAttemptContext = async (
+	deps: SubmissionDeps,
+	execution: SessionExecution,
+	terminal: "cancelled" | "completed" | "failed" | "interrupted"
+): Promise<void> => {
+	if (terminal !== "failed" && terminal !== "cancelled") {
+		return;
+	}
+	try {
+		const omitted = new Set(
+			await deps.ports.omitFailedTurnContext(execution.turnId)
+		);
+		if (omitted.size === 0) {
+			return;
+		}
+		deps.applyContext(deps.getContext().filter(({ id }) => !omitted.has(id)));
+	} catch (error) {
+		void logger.warn("Failed attempt context omission could not be persisted", {
+			...errorLogFields(error),
+			operation: "session.turn",
+			phase: "context-omission",
+			turnId: execution.turnId,
+		});
+	}
+};
+
+/**
  * Commits the record of an execution that ended without publishing a safe
  * assistant message of its own, then presents that message: the turn ends
  * visibly even when it never reached the model.
@@ -898,6 +945,7 @@ const handleSafeAssistantOutcome = async ({
 	];
 	deps.applyContext(nextMessages);
 	deps.mergeTranscript([failureMessage]);
+	await omitFailedAttemptContext(deps, execution, terminal);
 	return { rejected: false };
 };
 
@@ -1494,6 +1542,7 @@ const runTurn = async ({
 			);
 			deps.applyContext(messages);
 			deps.mergeTranscript(messages);
+			await omitFailedTurnForEvent(deps, execution, event.type);
 		},
 		onViewState: (viewState) => {
 			if (!turnIsLive()) {

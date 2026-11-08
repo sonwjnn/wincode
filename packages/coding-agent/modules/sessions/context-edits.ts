@@ -34,7 +34,8 @@ const toolPartsWithContent = (
 
 /**
  * Replaces only the text the model reads. A message that also carries a Tool
- * Call keeps its call parts untouched, so the call/result pairing survives.
+ * Call keeps its call parts untouched unless it has no text, in which case the
+ * replacement becomes the Tool output.
  */
 const editedParts = (message: SessionMessage, text: string): SessionPart[] => {
 	const tools = message.parts.filter(isSessionToolPart);
@@ -59,7 +60,10 @@ const editedParts = (message: SessionMessage, text: string): SessionPart[] => {
 	return parts;
 };
 
-/** Last edit wins. Omitted content keeps any Tool Call/result protocol envelope. */
+/**
+ * Last edit wins. An omit drops the message from model context: its Tool Call and
+ * result live in the same message, so the pair leaves together.
+ */
 export const applySessionContextEdits = (
 	messages: readonly SessionMessage[],
 	edits: readonly SessionContextEdit[]
@@ -70,7 +74,7 @@ export const applySessionContextEdits = (
 		if (edit === undefined) {
 			return [message];
 		}
-		if (edit.replacement === null && !message.parts.some(isSessionToolPart)) {
+		if (edit.replacement === null) {
 			return [];
 		}
 		return [
