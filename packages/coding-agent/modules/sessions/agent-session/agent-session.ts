@@ -2008,6 +2008,15 @@ export class AgentSessionImpl implements AgentSession {
 			commitRecord,
 			endExecution,
 			hasPendingWork,
+			replaceContext: applyContext,
+			reportStorageError: (error) => {
+				if (isStorageBlockedWrite(error)) {
+					sessionState.projectionBlocked = true;
+					sessionState.storageUncertain ||=
+						storageWriteOutcomeFromError(error)?.kind === "indeterminate";
+				}
+				publish({ error, projectionBlocked: sessionState.projectionBlocked });
+			},
 			setExecutionViewState,
 			shutdown,
 		};

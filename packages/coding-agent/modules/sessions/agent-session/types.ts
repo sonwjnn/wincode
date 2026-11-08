@@ -564,6 +564,10 @@ export type AgentSessionInternalPort = Readonly<{
 	hasPendingWork: () => boolean;
 	/** Ends the session after active durable cleanup has completed. */
 	shutdown: () => Promise<void>;
+	/** Publishes a durable content-only context edit while the Host holds its idle gate. */
+	replaceContext: (messages: readonly SessionMessage[]) => void;
+	/** Surfaces a failed context edit so a blocked projection stops new scheduling. */
+	reportStorageError: (error: Error) => void;
 	/** Replaces one execution's Session View State, never another's. */
 	setExecutionViewState: (
 		turnId: AgentTurnId,

@@ -11,6 +11,7 @@ import { providerModelSelectionSchema } from "@/modules/providers/provider-model
 import { attachmentReferenceSchema } from "@/modules/sessions/attachment-reference";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import { assertCompactionMessageReferences } from "@/modules/sessions/compaction/validation";
+import { sessionContextEditSchema } from "@/modules/sessions/context-edits";
 import { SESSION_LOG_IDENTIFIER_PATTERN } from "@/modules/sessions/session-log-identifiers";
 import { editModeSchema } from "@/modules/tools/versioned/contracts";
 import type {
@@ -28,6 +29,7 @@ export const SESSION_LOG_EVENT_TYPES = [
 	"session.created",
 	"session.metadata-updated",
 	"record.committed",
+	"context.edited",
 	"submission.status-updated",
 	"compaction.committed",
 	"usage.committed",
@@ -379,6 +381,7 @@ const eventPayloadSchemas: Readonly<
 	"session.created": createdPayloadSchema,
 	"session.metadata-updated": metadataUpdatedPayloadSchema,
 	"record.committed": recordCommittedPayloadSchema,
+	"context.edited": sessionContextEditSchema,
 	"submission.status-updated": submissionStatusPayloadSchema,
 	"compaction.committed": compactionPayloadSchema,
 	"usage.committed": usageCommittedPayloadSchema,
@@ -1022,6 +1025,20 @@ const validateSessionLogReferences = (
 			addSessionRecordReferences(entry, sessionId, record, state);
 		}
 		switch (entry.envelope.type) {
+			case "context.edited": {
+				const edit = sessionContextEditSchema.parse(entry.envelope.payload);
+				if (
+					edit.operationId !== entry.envelope.operationId ||
+					!state.messageIds.has(edit.targetId)
+				) {
+					rejectInvalidSessionLogReference(
+						entry,
+						sessionId,
+						"Context edit references a missing message or inconsistent operation identity."
+					);
+				}
+				break;
+			}
 			case "submission.status-updated":
 				validateSubmissionReferences(entry, sessionId, state);
 				break;

@@ -58,6 +58,7 @@ export type {
 	SessionStatisticsOptions,
 } from "../usage/session-statistics";
 
+import type { SessionContextEdit } from "../context-edits";
 import type { SessionBundleImportResult } from "../session-bundle-contract";
 import type {
 	PreparedSessionBundleExport,
@@ -332,6 +333,13 @@ export type SessionStore = Omit<
 	| "updateSession"
 	| "updateSessionSubmission"
 > & {
+	appendContextEdit: (
+		sessionId: SessionId,
+		edit: SessionContextEdit
+	) => Promise<SessionWriteOutcome>;
+	getSessionContextEdits: (
+		sessionId: SessionId
+	) => Promise<SessionContextEdit[]>;
 	appendCompaction: (
 		input: AppendSessionCompactionInput
 	) => Promise<SessionCompactionWriteResult>;

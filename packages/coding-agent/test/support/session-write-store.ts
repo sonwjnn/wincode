@@ -36,6 +36,10 @@ export const sessionStoreWithSuccessfulWrites = (
 	projectionStore: SessionProjectionStore
 ): SessionStore => ({
 	...projectionStore,
+	appendContextEdit: async () => {
+		throw new Error("Context edits require the authoritative JSONL store.");
+	},
+	getSessionContextEdits: async () => [],
 	listSessionCatalog: async () => ({
 		issues: [],
 		sessions: await projectionStore.listSessions(),

@@ -177,6 +177,25 @@ never resolves co-selected Skill or Custom Command intents.
 
 `SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store. `Ctrl+E` exports the selected Session as a local bundle directory; `Ctrl+O` imports a bundle into the current workspace.
 
+### Context edits
+
+The SDK exposes append-only context edits as `handle.editContext({ operationId,
+ targetId, replacement })`, where replacement is `{ text }` or `null`. A
+replacement changes only the text the model sees for that message; `null`
+omits it. The original transcript and history pages stay unchanged. Retrying
+the same operation and payload is idempotent, and the latest committed edit for
+a target wins. An omitted message can be replaced again using its original ID.
+
+Edits require an idle Host and are appended as `context.edited` JSONL events.
+Resume and bundle import rebuild model context from the original messages plus
+these events. Tool output edits retain Tool Call IDs, names, inputs and success
+or failure status; omitting Tool content empties the output rather than dropping
+the protocol envelope, because an unpaired call or result fails the next
+request. Replacement text replaces attachments and file mentions in model
+context, not their original durable references. Compaction summaries and
+messages already removed by compaction are not editable. A fork inherits only
+edits inside its checkpoint prefix, with target message IDs remapped.
+
 ### Session bundles
 
 `wincode sessions export <session-id> <directory>` writes a portable bundle, and `wincode sessions import <directory>` validates and imports one. The public Session SDK and RPC expose the same import operation. Imports verify the manifest, log integrity and resource bounds, and require every referenced attachment to be present and valid before publishing Session history. Repeating the same import is a no-op; a different log using an existing Session ID is a conflict.

@@ -28,10 +28,14 @@ import type {
 	SessionQueuedSubmission,
 	SessionSteeringMessage,
 } from "../agent-session/types";
-import { rebuildActiveMessages } from "../compaction/compaction";
 import type { SessionCompaction } from "../compaction/types";
 import {
-	filterSessionMessagesForActiveContext,
+	applySessionContextEdits,
+	isEditableSessionContextTarget,
+	sessionContextEditSchema,
+} from "../context-edits";
+import { rebuildUneditedSessionContext } from "../context-projection";
+import {
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
 } from "../message";
@@ -265,10 +269,12 @@ const openSession = async (
 	const transcript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(records)
 	);
-	const active = filterSessionMessagesForActiveContext(transcript);
 	return {
 		compactions,
-		context: rebuildActiveMessages(active, compactions.at(-1) ?? null),
+		context: applySessionContextEdits(
+			rebuildUneditedSessionContext(transcript, compactions),
+			await store.getSessionContextEdits(sessionId)
+		),
 		model: providerModel ?? session.model,
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
@@ -709,6 +715,44 @@ export const createSessionHost = async ({
 
 		return {
 			agentSession: guardedAgentSession,
+			editContext: async (input) => {
+				const edit = sessionContextEditSchema.parse(input);
+				const snapshot = openedAgentSession.getSnapshot();
+				const rawContext = rebuildUneditedSessionContext(
+					snapshot.transcript,
+					snapshot.compactions
+				);
+				if (
+					!isEditableSessionContextTarget(
+						snapshot.transcript,
+						rawContext,
+						edit.targetId
+					)
+				) {
+					throw new Error(
+						"Context edit target is not an active durable message."
+					);
+				}
+				const previousEdits =
+					await sessionStore.getSessionContextEdits(sessionId);
+				const edits = previousEdits.some(
+					({ operationId }) => operationId === edit.operationId
+				)
+					? previousEdits
+					: [...previousEdits, edit];
+				const context = applySessionContextEdits(rawContext, edits);
+				try {
+					requireSessionWriteReady(
+						await sessionStore.appendContextEdit(sessionId, edit)
+					);
+				} catch (error) {
+					if (error instanceof Error) {
+						openedAgentSession.internalPort.reportStorageError(error);
+					}
+					throw error;
+				}
+				openedAgentSession.internalPort.replaceContext(context);
+			},
 			forkSession: (checkpoint, operationId) =>
 				sessionStore.forkSessionWithHeldWriter(
 					sessionId,

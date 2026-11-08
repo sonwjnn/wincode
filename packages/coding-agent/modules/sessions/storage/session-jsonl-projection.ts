@@ -1094,6 +1094,7 @@ export const createSessionJsonlProjection = (
 					switch (envelope.type) {
 						case "session.header":
 						case "session.activation-confirmed":
+						case "context.edited":
 							break;
 						case "session.forked":
 							projectForkProvenance(entry);

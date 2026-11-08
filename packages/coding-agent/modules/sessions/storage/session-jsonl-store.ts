@@ -39,6 +39,10 @@ import type {
 	SessionCompaction,
 } from "../compaction/types";
 import { assertCompactionMessageReferences } from "../compaction/validation";
+import {
+	type SessionContextEdit,
+	sessionContextEditSchema,
+} from "../context-edits";
 import type { SessionBundleImportResult } from "../session-bundle-contract";
 import { assessSessionForkCheckpoint } from "../session-fork-checkpoint-validation";
 import { isValidSessionLogIdentifier } from "../session-log-identifiers";
@@ -5540,6 +5544,32 @@ export const createSessionJsonlStore = (
 		}
 		return writeOutcome;
 	};
+	const appendContextEdit = async (
+		sessionId: SessionId,
+		input: SessionContextEdit
+	): Promise<SessionWriteOutcome> => {
+		const edit = sessionContextEditSchema.parse(input);
+		return withWriteOutcome(sessionId, edit.operationId, () =>
+			commitWrite(sessionId, {
+				operationId: edit.operationId,
+				payload: edit,
+				type: "context.edited",
+			})
+		);
+	};
+	const getSessionContextEdits = async (
+		sessionId: SessionId
+	): Promise<SessionContextEdit[]> => {
+		const { state } = await readLog(
+			resolveSessionLogFilePath(path.resolve(logRoot), sessionId),
+			sessionId
+		);
+		return state.entries.flatMap(({ envelope }) =>
+			envelope.type === "context.edited"
+				? [sessionContextEditSchema.parse(envelope.payload)]
+				: []
+		);
+	};
 	const updateSessionSubmission = async (
 		input: UpdateSessionSubmissionInput
 	): Promise<SessionWriteOutcome> => {
@@ -7442,6 +7472,31 @@ export const createSessionJsonlStore = (
 							}
 							continue;
 						}
+						if (entry.envelope.type === "context.edited") {
+							const edit = sessionContextEditSchema.parse(
+								entry.envelope.payload
+							);
+							const targetId = identityMap.messages.get(edit.targetId);
+							if (targetId !== undefined) {
+								const editOperationId = `fork-context-${entry.envelope.sequence}`;
+								appendLine(
+									createSessionLogEvent({
+										operationId: editOperationId,
+										payload: {
+											...edit,
+											operationId: editOperationId,
+											targetId,
+										},
+										previousHash,
+										sequence: nextSequence,
+										sessionId: targetSessionId,
+										timestamp: entry.envelope.timestamp,
+										type: "context.edited",
+									})
+								);
+							}
+							continue;
+						}
 						if (entry.envelope.type === "session.metadata-updated") {
 							appendLine(
 								createSessionLogEvent({
@@ -8173,6 +8228,8 @@ export const createSessionJsonlStore = (
 	return {
 		...projectionStore,
 		acquireSessionWriter: acquireWriter,
+		appendContextEdit,
+		getSessionContextEdits: wrapRead(getSessionContextEdits),
 		appendCompaction,
 		commitSessionRecord,
 		createEmptySession,
