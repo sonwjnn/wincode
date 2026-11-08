@@ -181,8 +181,11 @@ never resolves co-selected Skill or Custom Command intents.
 
 The SDK exposes append-only context edits as `handle.editContext({ operationId,
  targetId, replacement })`, where replacement is `{ text }` or `null`. A
-replacement changes only the text the model sees for that message; `null`
-omits it. The original transcript and history pages stay unchanged. Retrying
+replacement changes only the text the model sees for that message. A `null`
+edit removes a text-only message's content; for a message carrying a Tool
+Call it removes the other content, clears result or error text, and retains the
+protocol envelope. The original transcript and
+history pages stay unchanged. Retrying
 the same operation and payload is idempotent, and the latest committed edit for
 a target wins. An omitted message can be replaced again using its original ID.
 
@@ -199,10 +202,13 @@ edits inside its checkpoint prefix, with target message IDs remapped.
 A terminal `failed` or `cancelled` Agent Turn uses the same mechanism: every
 non-user message it committed is omitted from model context with a
 turn-derived operation ID, so a retry starts from the user message instead of
-replaying the attempt's text and completed Tool Calls. The attempts stay in the
-Session Transcript, and nothing in the workspace is rolled back. Retrying a
-message whose *completed* turn ran Tool Calls is still refused; only a failed
-attempt becomes retryable.
+replaying the attempt's text and completed Tool Calls. Operation IDs beginning
+with `omit-failed-` are reserved for this repair. The attempts stay in the
+Session Transcript, and nothing in the workspace is rolled back. If an omission
+write cannot be confirmed, the live Host blocks further scheduling; reopening
+reconciles missing omissions before rebuilding model context. Retrying a message
+whose *completed* turn ran Tool Calls is still refused; only a failed attempt
+becomes retryable.
 
 ### Session bundles
 

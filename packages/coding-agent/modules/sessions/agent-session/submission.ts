@@ -61,7 +61,10 @@ import {
 } from "../turn-records";
 import { getSessionContextEpoch } from "../usage/context-usage";
 import { getReportableSessionFailureFields } from "./session-error-diagnostics";
-import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
+import {
+	SESSION_PROJECTION_BLOCKED_ERROR,
+	SESSION_SHUT_DOWN_ERROR,
+} from "./session-messages";
 import { projectAgentTurnEvent, projectAgentTurnTerminal } from "./turn";
 import type {
 	AgentSessionPorts,
@@ -84,6 +87,8 @@ export type SubmissionDeps = Readonly<{
 	endExecution: (turnId: AgentTurnId) => void;
 	getAssistantMessageId: (turnId: AgentTurnId) => SessionMessageId;
 	getError: () => Error | null;
+	isProjectionBlocked: () => boolean;
+	blockFailedAttemptContext: (error: Error) => void;
 	finishModelStep: (
 		turnId: AgentTurnId,
 		record: SessionRecord | undefined
@@ -794,14 +799,17 @@ const applyPreparedMessages = (
 	deps: SubmissionDeps,
 	signal: AbortSignal,
 	messages: readonly SessionMessage[],
-	allowCancelled: boolean
+	allowCancelled: boolean,
+	committedPrompt: SessionMessage | undefined
 ): void => {
 	if (!allowCancelled) {
 		assertSendNotCancelled(signal);
 	}
 	assertSessionOpen(deps);
 	deps.applyContext(messages);
-	deps.mergeTranscript(messages);
+	if (committedPrompt !== undefined) {
+		deps.mergeTranscript([committedPrompt]);
+	}
 	if (!allowCancelled) {
 		assertSendNotCancelled(signal);
 	}
@@ -829,8 +837,12 @@ const commitExecutionRecord = (
 const omitFailedTurnForEvent = async (
 	deps: SubmissionDeps,
 	execution: SessionExecution,
-	type: AgentTurnTerminalEvent["type"]
+	type: AgentTurnTerminalEvent["type"],
+	deferred: boolean
 ): Promise<void> => {
+	if (deferred) {
+		return;
+	}
 	switch (type) {
 		case "agent-turn-failed":
 			return await omitFailedAttemptContext(deps, execution, "failed");
@@ -858,6 +870,13 @@ const omitFailedAttemptContext = async (
 		}
 		deps.applyContext(deps.getContext().filter(({ id }) => !omitted.has(id)));
 	} catch (error) {
+		const blockingError =
+			error instanceof Error
+				? error
+				: new Error(
+						getErrorMessage(error, "Failed attempt context omission failed.")
+					);
+		deps.blockFailedAttemptContext(blockingError);
 		void logger.warn("Failed attempt context omission could not be persisted", {
 			...errorLogFields(error),
 			operation: "session.turn",
@@ -1043,7 +1062,13 @@ const recoverAfterProviderStop = (
 		turnId: execution.turnId,
 	};
 	return trigger === "context-overflow"
-		? deps.recoverOverflow({ ...recoveryInput, error: failure, trigger })
+		? deps.recoverOverflow({
+				...recoveryInput,
+				error: failure,
+				trigger,
+				onUnrecovered: () =>
+					omitFailedAttemptContext(deps, execution, "failed"),
+			})
 		: deps.recoverOverflow({ ...recoveryInput, trigger });
 };
 
@@ -1056,6 +1081,9 @@ const runOverflowRecoveryProposal = async (
 	try {
 		outcome = await recoverAfterProviderStop(input, originalMessageId);
 	} catch (error) {
+		if (trigger === "context-overflow") {
+			await omitFailedAttemptContext(deps, execution, "failed");
+		}
 		await deps.acknowledgeSteeringMessages(
 			execution.turnId,
 			"failed",
@@ -1541,8 +1569,18 @@ const runTurn = async ({
 				event
 			);
 			deps.applyContext(messages);
-			deps.mergeTranscript(messages);
-			await omitFailedTurnForEvent(deps, execution, event.type);
+			const terminalAssistant = messages.find(
+				({ id }) => id === currentExecution.assistantId
+			);
+			if (terminalAssistant !== undefined) {
+				deps.mergeTranscript([terminalAssistant]);
+			}
+			await omitFailedTurnForEvent(
+				deps,
+				execution,
+				event.type,
+				deferSteeringFailure
+			);
 		},
 		onViewState: (viewState) => {
 			if (!turnIsLive()) {
@@ -1796,6 +1834,9 @@ export const createSubmissionPipeline = (
 				? sessionSendCancelled(signal)
 				: { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
+		if (deps.isProjectionBlocked()) {
+			return { rejected: true, reason: SESSION_PROJECTION_BLOCKED_ERROR };
+		}
 		deps.setCompactionError(null);
 		let failedTurnId: AgentTurnId | undefined;
 		let externalization: AttachmentExternalizationLease | undefined;
@@ -1845,7 +1886,13 @@ export const createSubmissionPipeline = (
 				}
 			}
 			assertSessionOpen(deps);
-			applyPreparedMessages(deps, signal, modelMessages, hasCommittedPrompt);
+			applyPreparedMessages(
+				deps,
+				signal,
+				modelMessages,
+				hasCommittedPrompt,
+				prepared.newMessage
+			);
 			if (signal.aborted) {
 				return sessionSendCancelled(signal);
 			}

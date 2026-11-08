@@ -7,13 +7,7 @@ import {
 	calculateModelUsageCostUsd,
 	type ProviderCollection,
 } from "@wincode/ai";
-import {
-	isNull,
-	isUndefined,
-	logger,
-	omitBy,
-	omitUndefined,
-} from "@wincode/utils";
+import { isNull, isUndefined, omitBy, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
 import { pricingEntryForProviderModel } from "@/modules/model-pricing/model-pricing";
@@ -22,6 +16,7 @@ import {
 	isAvailableProviderModelSelection,
 	isSameProviderModelIdentity,
 } from "@/modules/providers/provider-model-selection";
+import { failedAttemptContextEdit } from "@/modules/sessions/context-edits";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
 import { resolveSessionModelRetryPolicy } from "@/modules/sessions/retry-policy";
 import { requireSessionWriteReady } from "@/modules/sessions/storage/session-jsonl-store";
@@ -35,7 +30,6 @@ import {
 	type SkillExecution,
 } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
-import { errorLogFields } from "@/shared/utils/error-log-fields";
 import type {
 	AgentSessionPorts,
 	SessionQueuedSubmission,
@@ -332,25 +326,13 @@ export const createAgentSessionAdapters = (
 				);
 			const committed: SessionMessageId[] = [];
 			for (const messageId of messageIds) {
-				try {
-					requireSessionWriteReady(
-						await store.appendContextEdit(sessionId, {
-							operationId: `omit-failed-${turnId}-${messageId}`,
-							replacement: null,
-							targetId: messageId,
-						})
-					);
-					committed.push(messageId);
-				} catch (error) {
-					logger.warn("Failed attempt context omission write failed", {
-						...errorLogFields(error),
-						operation: "session.turn",
-						phase: "context-omission",
+				requireSessionWriteReady(
+					await store.appendContextEdit(
 						sessionId,
-						turnId,
-					});
-					break;
-				}
+						failedAttemptContextEdit(turnId, messageId)
+					)
+				);
+				committed.push(messageId);
 			}
 			return committed;
 		},

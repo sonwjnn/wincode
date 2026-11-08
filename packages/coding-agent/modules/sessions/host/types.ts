@@ -193,6 +193,10 @@ export type SessionHostManager = Readonly<{
 		sessionId: SessionId,
 		action: (host: SessionHost | undefined) => Promise<Result>
 	) => Promise<Result>;
+	withIdleForSessionContextEdit: <Result>(
+		sessionId: SessionId,
+		action: (host: SessionHost | undefined) => Promise<Result>
+	) => Promise<Result>;
 	withIdleForSessionDataReset: <Result>(
 		action: () => Promise<Result>
 	) => Promise<Result>;

@@ -40,6 +40,8 @@ import type {
 } from "../compaction/types";
 import { assertCompactionMessageReferences } from "../compaction/validation";
 import {
+	FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX,
+	isFailedAttemptContextEdit,
 	type SessionContextEdit,
 	sessionContextEditSchema,
 } from "../context-edits";
@@ -2716,6 +2718,12 @@ const remapForkCompactionPayload = (
 	const coveredMessageIds = compaction.summary.coveredMessageIds.map(
 		(messageId) => identityMap.messages.get(messageId)
 	);
+	const { overflowSourceTurnId: previousOverflowSourceTurnId, ...summary } =
+		compaction.summary;
+	const overflowSourceTurnId =
+		previousOverflowSourceTurnId === undefined
+			? undefined
+			: identityMap.turns.get(previousOverflowSourceTurnId);
 	const priorCompactionId =
 		compaction.priorCompactionId === null
 			? null
@@ -2738,7 +2746,8 @@ const remapForkCompactionPayload = (
 		priorCompactionId: priorCompactionId ?? null,
 		sequence,
 		summary: {
-			...compaction.summary,
+			...summary,
+			...omitUndefined({ overflowSourceTurnId }),
 			coveredMessageIds:
 				coveredMessageIds as SessionCompactionPayload["summary"]["coveredMessageIds"],
 		},
@@ -7465,7 +7474,11 @@ export const createSessionJsonlStore = (
 							);
 							const targetId = identityMap.messages.get(edit.targetId);
 							if (targetId !== undefined) {
-								const editOperationId = `fork-context-${entry.envelope.sequence}`;
+								const editOperationId = isFailedAttemptContextEdit(
+									edit.operationId
+								)
+									? `${FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX}fork-${entry.envelope.sequence}`
+									: `fork-context-${entry.envelope.sequence}`;
 								appendLine(
 									createSessionLogEvent({
 										operationId: editOperationId,

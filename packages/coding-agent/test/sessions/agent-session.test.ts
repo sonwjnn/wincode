@@ -16,7 +16,6 @@ import { logger } from "@wincode/utils";
 import type { ResolvedCodingAgent } from "@/modules/agents/built-ins";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { AgentSessionImpl } from "@/modules/sessions/agent-session/agent-session";
-import { SESSION_PROJECTION_BLOCKED_ERROR } from "@/modules/sessions/agent-session/session-messages";
 import type {
 	AgentSessionPorts,
 	SessionInterruptResult,
@@ -646,7 +645,11 @@ test("committed-but-blocked steering stays durable without scheduling a new turn
 		expect(turnStarts).toBe(1);
 		expect(
 			await engine.send(sendInput({ userText: "do not schedule this" }))
-		).toEqual({ rejected: true, reason: SESSION_PROJECTION_BLOCKED_ERROR });
+		).toEqual({
+			rejected: true,
+			reason:
+				"Session work is paused because durable state may be incomplete. Close and reopen the Session to reconcile storage before continuing.",
+		});
 
 		releaseFirstTurn.resolve();
 		await expect(active).resolves.toEqual({ rejected: false });

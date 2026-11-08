@@ -616,10 +616,31 @@ export const createSessionMaintenanceWorkflow = (
 	const recoverOverflow = (
 		command: SessionOverflowRecoveryCommand
 	): Promise<SessionOverflowRecoveryOutcome> => {
+		const run = async (): Promise<SessionOverflowRecoveryOutcome> => {
+			let outcome: SessionOverflowRecoveryOutcome;
+			try {
+				outcome = await runOverflowRecovery(command);
+			} catch (error) {
+				if (command.trigger === "context-overflow") {
+					await command.onUnrecovered?.();
+				}
+				throw error;
+			}
+			if (
+				outcome.kind !== "recovered" &&
+				command.trigger === "context-overflow"
+			) {
+				await command.onUnrecovered?.();
+			}
+			return outcome;
+		};
 		if (port.signals().closed()) {
-			return Promise.resolve({ kind: "ineligible" });
+			return command.trigger === "context-overflow" &&
+				command.onUnrecovered !== undefined
+				? command.onUnrecovered().then(() => ({ kind: "ineligible" }))
+				: Promise.resolve({ kind: "ineligible" });
 		}
-		return port.effects.runTrackedRecovery(() => runOverflowRecovery(command));
+		return port.effects.runTrackedRecovery(run);
 	};
 	return {
 		cancelCompaction,

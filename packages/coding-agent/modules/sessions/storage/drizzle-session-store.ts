@@ -209,6 +209,7 @@ const compactionSummarySchema = z.object({
 		.optional(),
 	formatVersion: z.literal(1),
 	focus: z.string().optional(),
+	overflowSourceTurnId: z.string().min(1).transform(toAgentTurnId).optional(),
 	text: z.string(),
 });
 

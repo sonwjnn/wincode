@@ -2250,8 +2250,42 @@ describe("Session Host opening", () => {
 		}
 	});
 
-	test("overflow recovery after completed tools continues the checkpointed context without a prompt replay", async () => {
+	test("reopening overflow recovery keeps completed tools when the compaction cut moves into earlier history", async () => {
 		const seeded = await seedSession("overflow-tools", "completed");
+		const earlierTurnId = agentTurnId("overflow-earlier-turn");
+		const earlierUser = message(
+			"overflow-earlier-user",
+			"user",
+			"earlier request"
+		);
+		const earlierAssistantId = sessionMessageId("overflow-earlier-assistant");
+		await store.commitSessionRecord({
+			record: buildUserSessionRecord({
+				agentId: buildId,
+				message: earlierUser,
+				model,
+				turnId: earlierTurnId,
+			}),
+			sessionId: seeded.sessionId,
+		});
+		await store.commitSessionRecord({
+			record: {
+				agentId: buildId,
+				id: sessionRecordId("overflow-earlier-answer-record"),
+				messages: [
+					{
+						id: earlierAssistantId,
+						parts: [{ text: "older history ".repeat(1200), type: "text" }],
+						role: "assistant",
+					},
+				],
+				model,
+				outcome: completedOutcome(),
+				turnId: earlierTurnId,
+				version: 1,
+			},
+			sessionId: seeded.sessionId,
+		});
 		const counts = { effects: 0, modelCalls: 0, summaries: 0 };
 		const requests: ProviderChatRequest[] = [];
 		const previousScript = recorder.stepScript;
@@ -2281,7 +2315,7 @@ describe("Session Host opening", () => {
 		};
 		const document = {
 			compaction: {
-				keepRecentTokens: 1,
+				keepRecentTokens: 3000,
 				reserveTokens: 16_384,
 				summary: { maxOutputTokens: 512 },
 			},
@@ -2350,11 +2384,18 @@ describe("Session Host opening", () => {
 			const serialized = JSON.stringify(continuation);
 			expect(serialized).toContain("Earlier step read one file.");
 			expect(serialized).toContain("tool payload");
-			expect(serialized).not.toContain("run the tools");
+			expect(serialized.match(/run the tools/g) ?? []).toHaveLength(1);
 			const latest = await store.getLatestCompaction(seeded.sessionId);
 			expect(latest?.trigger).toBe("overflow");
+			expect(latest?.firstKeptUiMessageId).toBe(earlierAssistantId);
 			expect(latest?.id).not.toBe(seeded.compaction);
 			const records = await store.listSessionRecords(seeded.sessionId);
+			const failedTurn = records.find(
+				(record) =>
+					record.outcome.kind === "assistant" &&
+					record.outcome.terminal.kind === "failed"
+			);
+			expect(latest?.summary.overflowSourceTurnId).toBe(failedTurn?.turnId);
 			expect(
 				records.flatMap((record) =>
 					record.messages.flatMap((message) => message.parts)
@@ -2364,6 +2405,25 @@ describe("Session Host opening", () => {
 					expect.objectContaining({ text: "recovered answer", type: "text" }),
 				])
 			);
+
+			await host.shutdown();
+			const reopened = await createSessionHost({
+				capabilities,
+				sessionId: seeded.sessionId,
+			});
+			try {
+				expect(
+					await reopened.agentSession.send(
+						sendInput(capabilities, "Use the completed tool result")
+					)
+				).toEqual({ rejected: false });
+				const afterReopen = JSON.stringify(requests.at(-1));
+				expect(afterReopen).toContain("tool payload");
+				expect(afterReopen).toContain("overflow-read-1");
+				expect(counts.effects).toBe(1);
+			} finally {
+				await reopened.shutdown();
+			}
 		} finally {
 			unsubscribe();
 			await host.shutdown();

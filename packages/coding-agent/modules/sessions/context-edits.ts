@@ -1,7 +1,12 @@
-import { type SessionMessageId, toSessionMessageId } from "@wincode/agent-core";
+import {
+	type AgentTurnId,
+	type SessionMessageId,
+	toSessionMessageId,
+} from "@wincode/agent-core";
 import { z } from "zod";
 import {
 	isSessionToolPart,
+	isTerminalSessionToolPart,
 	type SessionMessage,
 	type SessionPart,
 	type SessionToolPart,
@@ -18,6 +23,20 @@ export const sessionContextEditSchema = z
 
 export type SessionContextEdit = z.infer<typeof sessionContextEditSchema>;
 
+export const FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX = "omit-failed-";
+
+export const isFailedAttemptContextEdit = (operationId: string): boolean =>
+	operationId.startsWith(FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX);
+
+export const failedAttemptContextEdit = (
+	turnId: AgentTurnId,
+	targetId: SessionMessageId
+): SessionContextEdit => ({
+	operationId: `${FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX}${turnId}-${targetId}`,
+	replacement: null,
+	targetId,
+});
+
 const toolPartsWithContent = (
 	tools: readonly SessionToolPart[],
 	text: string
@@ -26,11 +45,17 @@ const toolPartsWithContent = (
 		if (part.state === "output-available") {
 			return { ...part, output: text };
 		}
-		if (part.state === "output-error") {
+		if (part.state === "output-error" || part.state === "output-denied") {
 			return { ...part, errorText: text };
 		}
-		throw new Error("Incomplete Tool Calls cannot be context-edited.");
+		throw new Error("Only completed Tool Call results can be context-edited.");
 	});
+
+const assertEditableToolParts = (tools: readonly SessionToolPart[]): void => {
+	if (tools.some((part) => !isTerminalSessionToolPart(part))) {
+		throw new Error("Only completed Tool Call results can be context-edited.");
+	}
+};
 
 /**
  * Replaces only the text the model reads. A message that also carries a Tool
@@ -39,6 +64,7 @@ const toolPartsWithContent = (
  */
 const editedParts = (message: SessionMessage, text: string): SessionPart[] => {
 	const tools = message.parts.filter(isSessionToolPart);
+	assertEditableToolParts(tools);
 	if (tools.length === 0) {
 		return [{ type: "text", text }];
 	}
@@ -61,8 +87,9 @@ const editedParts = (message: SessionMessage, text: string): SessionPart[] => {
 };
 
 /**
- * Last edit wins. An omit drops the message from model context: its Tool Call and
- * result live in the same message, so the pair leaves together.
+ * Last edit wins. A user omission clears Tool output while preserving its
+ * protocol envelope; failed-attempt omissions remove the whole message so a
+ * retry cannot replay the failed call.
  */
 export const applySessionContextEdits = (
 	messages: readonly SessionMessage[],
@@ -75,7 +102,14 @@ export const applySessionContextEdits = (
 			return [message];
 		}
 		if (edit.replacement === null) {
-			return [];
+			if (isFailedAttemptContextEdit(edit.operationId)) {
+				return [];
+			}
+			const tools = message.parts.filter(isSessionToolPart);
+			assertEditableToolParts(tools);
+			return tools.length === 0
+				? []
+				: [{ ...message, parts: toolPartsWithContent(tools, "") }];
 		}
 		return [
 			{ ...message, parts: editedParts(message, edit.replacement?.text ?? "") },

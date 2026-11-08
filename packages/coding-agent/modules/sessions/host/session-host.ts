@@ -1,9 +1,11 @@
 import {
 	type AgentId,
+	type AgentTurnId,
 	createAgentRuntime,
 	createStatefulAgent,
 	type SessionRecord,
 	type StatefulAgent,
+	toSessionMessageId,
 	toSubmissionId,
 } from "@wincode/agent-core";
 import type { ProviderCollection, ThinkingLevel } from "@wincode/ai";
@@ -31,11 +33,14 @@ import type {
 import type { SessionCompaction } from "../compaction/types";
 import {
 	applySessionContextEdits,
+	failedAttemptContextEdit,
 	isEditableSessionContextTarget,
+	isFailedAttemptContextEdit,
 	sessionContextEditSchema,
 } from "../context-edits";
 import { rebuildUneditedSessionContext } from "../context-projection";
 import {
+	isSessionToolPart,
 	type SessionMessage,
 	sanitizeInterruptedSessionMessages,
 } from "../message";
@@ -146,6 +151,70 @@ const sessionContextExtends = (
 
 const interruptedSteeringFailure =
 	"Session closed before provider processing could be confirmed; deliberate retry required.";
+
+/**
+ * Overflow recovery can finish a continuation with completed Tool Calls that
+ * remain active after compaction. The cut can move before their turn, so use the
+ * active durable Tool rows rather than the compaction's first-kept message.
+ */
+const recoveredContinuationTurnIds = (
+	records: readonly SessionRecord[],
+	compactions: readonly SessionCompaction[],
+	activeMessageIds: ReadonlySet<SessionMessage["id"]>
+): ReadonlySet<AgentTurnId> => {
+	const overflowRecoveryTurnIds = new Set(
+		compactions.flatMap((compaction) =>
+			compaction.trigger === "overflow" &&
+			compaction.summary.overflowSourceTurnId !== undefined
+				? [compaction.summary.overflowSourceTurnId]
+				: []
+		)
+	);
+	const retainedToolTurnIds = new Set<AgentTurnId>();
+	for (const record of records) {
+		if (
+			record.outcome.kind === "tool" &&
+			record.messages.some(({ id }) => activeMessageIds.has(id))
+		) {
+			retainedToolTurnIds.add(record.turnId);
+		}
+	}
+	const recoveredTurnIds = new Set<AgentTurnId>();
+	for (const [recordIndex, record] of records.entries()) {
+		if (
+			record.outcome.kind !== "assistant" ||
+			(record.outcome.terminal.kind !== "failed" &&
+				record.outcome.terminal.kind !== "cancelled") ||
+			!overflowRecoveryTurnIds.has(record.turnId) ||
+			!retainedToolTurnIds.has(record.turnId)
+		) {
+			continue;
+		}
+		const sourceUserMessageId = record.messages.find(
+			(message) =>
+				message.role === "assistant" &&
+				message.metadata?.sourceUserMessageId !== undefined
+		)?.metadata?.sourceUserMessageId;
+		if (sourceUserMessageId === undefined) {
+			continue;
+		}
+		const completedContinuation = records
+			.slice(recordIndex + 1)
+			.some(
+				(candidate) =>
+					candidate.outcome.kind === "assistant" &&
+					candidate.outcome.terminal.kind === "completed" &&
+					candidate.messages.some(
+						(message) =>
+							message.metadata?.sourceUserMessageId === sourceUserMessageId
+					)
+			);
+		if (completedContinuation) {
+			recoveredTurnIds.add(record.turnId);
+		}
+	}
+	return recoveredTurnIds;
+};
 
 const restoreSteeringMessages = (
 	records: readonly SessionRecord[],
@@ -269,12 +338,59 @@ const openSession = async (
 	const transcript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(records)
 	);
+	const contextEdits = await store.getSessionContextEdits(sessionId);
+	const latestContextEdits = new Map(
+		contextEdits.map((edit) => [edit.targetId, edit] as const)
+	);
+	const uneditedContext = rebuildUneditedSessionContext(
+		transcript,
+		compactions
+	);
+	const activeMessageIds = new Set(uneditedContext.map(({ id }) => id));
+	const recoveredTurnIds = recoveredContinuationTurnIds(
+		records,
+		compactions,
+		activeMessageIds
+	);
+	const failedTurnIds = new Set(
+		records.flatMap((record) =>
+			record.outcome.kind === "assistant" &&
+			(record.outcome.terminal.kind === "failed" ||
+				record.outcome.terminal.kind === "cancelled")
+				? [record.turnId]
+				: []
+		)
+	);
+	for (const record of records) {
+		if (
+			!failedTurnIds.has(record.turnId) ||
+			recoveredTurnIds.has(record.turnId)
+		) {
+			continue;
+		}
+		for (const message of record.messages) {
+			if (message.role === "user" || message.id === "skill-context") {
+				continue;
+			}
+			const targetId = toSessionMessageId(message.id);
+			const latestEdit = latestContextEdits.get(targetId);
+			if (
+				latestEdit?.replacement === null &&
+				(isFailedAttemptContextEdit(latestEdit.operationId) ||
+					!message.parts.some(isSessionToolPart))
+			) {
+				continue;
+			}
+			const edit = failedAttemptContextEdit(record.turnId, targetId);
+			requireSessionWriteReady(await store.appendContextEdit(sessionId, edit));
+			contextEdits.push(edit);
+			latestContextEdits.set(targetId, edit);
+		}
+	}
+	const context = applySessionContextEdits(uneditedContext, contextEdits);
 	return {
 		compactions,
-		context: applySessionContextEdits(
-			rebuildUneditedSessionContext(transcript, compactions),
-			await store.getSessionContextEdits(sessionId)
-		),
+		context,
 		model: providerModel ?? session.model,
 		steeringMessages: restoreSteeringMessages(records, transcript, session),
 		transcript,
@@ -594,10 +710,11 @@ export const createSessionHost = async ({
 					cacheWarming?.cancel()
 				);
 		}
-		statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
+		const openedStatefulAgent = createStatefulAgent<SessionQueuedSubmission>({
 			getQueuedSubmissionId: ({ id }) => id,
 			runtime: sessionRuntime,
 		});
+		statefulAgent = openedStatefulAgent;
 		const ports: AgentSessionPorts = withEventChannel(
 			createAgentSessionAdapters({
 				cacheWarming,
@@ -606,7 +723,7 @@ export const createSessionHost = async ({
 				providerCollection: sessionProviderCollection,
 				isShutDown: () => isShutDown,
 				sessionId,
-				statefulAgent,
+				statefulAgent: openedStatefulAgent,
 				withSessionWork: (action) =>
 					withAsyncSessionWork(action, (reason) => {
 						throw new Error(reason);
@@ -717,6 +834,22 @@ export const createSessionHost = async ({
 			agentSession: guardedAgentSession,
 			editContext: async (input) => {
 				const edit = sessionContextEditSchema.parse(input);
+				if (isFailedAttemptContextEdit(edit.operationId)) {
+					throw new Error("Context edit operation ID uses a reserved prefix.");
+				}
+				const previousEdits =
+					await sessionStore.getSessionContextEdits(sessionId);
+				const previousOperation = previousEdits.find(
+					({ operationId }) => operationId === edit.operationId
+				);
+				if (previousOperation !== undefined) {
+					if (!Bun.deepEquals(previousOperation, edit, true)) {
+						throw new Error(
+							"Context edit operation ID was already used with a different payload."
+						);
+					}
+					return;
+				}
 				const snapshot = openedAgentSession.getSnapshot();
 				const rawContext = rebuildUneditedSessionContext(
 					snapshot.transcript,
@@ -733,14 +866,10 @@ export const createSessionHost = async ({
 						"Context edit target is not an active durable message."
 					);
 				}
-				const previousEdits =
-					await sessionStore.getSessionContextEdits(sessionId);
-				const edits = previousEdits.some(
-					({ operationId }) => operationId === edit.operationId
-				)
-					? previousEdits
-					: [...previousEdits, edit];
-				const context = applySessionContextEdits(rawContext, edits);
+				const context = applySessionContextEdits(rawContext, [
+					...previousEdits,
+					edit,
+				]);
 				try {
 					requireSessionWriteReady(
 						await sessionStore.appendContextEdit(sessionId, edit)
@@ -752,6 +881,7 @@ export const createSessionHost = async ({
 					throw error;
 				}
 				openedAgentSession.internalPort.replaceContext(context);
+				openedStatefulAgent.invalidateContext();
 			},
 			forkSession: (checkpoint, operationId) =>
 				sessionStore.forkSessionWithHeldWriter(

@@ -102,6 +102,8 @@ const initializeSchema = (
 	sqlite: Database,
 	allowIncompatibleSessionSchema: boolean
 ): void => {
+	const contextEditProjectionWasMissing =
+		columnNames(sqlite, "session_context_edit").size === 0;
 	const hasExistingSessionSchema = [
 		"session",
 		"session_compaction",
@@ -547,6 +549,10 @@ const initializeSchema = (
 		"pagination_version",
 		"INTEGER DEFAULT 0 NOT NULL"
 	);
+	if (contextEditProjectionWasMissing) {
+		// JSONL may contain context.edited entries skipped by this projection cursor.
+		sqlite.exec("DELETE FROM session_projection_cursor;");
+	}
 	migrateSessionPaginationContract(sqlite);
 	ensureIntegerColumn(
 		sqlite,

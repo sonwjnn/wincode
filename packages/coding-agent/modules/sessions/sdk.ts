@@ -1010,7 +1010,7 @@ const handleFor = (
 			}
 			await capabilities
 				.getSessionHostManager()
-				.withIdleForSessionFork(sessionId, async (idleHost) => {
+				.withIdleForSessionContextEdit(sessionId, async (idleHost) => {
 					if (idleHost !== host) {
 						throw new Error("Session Host is no longer open.");
 					}

@@ -506,6 +506,8 @@ export type SessionOverflowRecoveryCommand =
 	| (SessionOverflowRecoveryBase & {
 			/** The provider or runtime reported a context overflow. */
 			error: unknown;
+			/** Omits failed attempt output before the recovery lane reopens. */
+			onUnrecovered?: () => Promise<void>;
 			trigger: "context-overflow";
 	  })
 	| (SessionOverflowRecoveryBase & {

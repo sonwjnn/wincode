@@ -252,6 +252,7 @@ const compactionSummarySchema = z
 			.optional(),
 		formatVersion: z.literal(1),
 		focus: z.string().optional(),
+		overflowSourceTurnId: safeIdentifierSchema.optional(),
 		text: z.string(),
 	})
 	.strict();

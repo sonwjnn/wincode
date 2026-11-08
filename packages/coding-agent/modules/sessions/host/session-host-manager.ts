@@ -34,12 +34,22 @@ type ManagedHostEntry = {
 	unloadCheck: Promise<void> | undefined;
 };
 
-export class SessionForkBusyError extends Error {
+export class SessionHostBusyError extends Error {
 	readonly code = "session_busy" as const;
+	readonly sessionId: SessionId;
+
+	constructor(sessionId: SessionId, message: string, cause?: unknown) {
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "SessionHostBusyError";
+		this.sessionId = sessionId;
+	}
+}
+
+export class SessionForkBusyError extends SessionHostBusyError {
 	readonly sourceSessionId: SessionId;
 
 	constructor(sourceSessionId: SessionId, message: string, cause?: unknown) {
-		super(message, cause === undefined ? undefined : { cause });
+		super(sourceSessionId, message, cause);
 		this.name = "SessionForkBusyError";
 		this.sourceSessionId = sourceSessionId;
 	}
@@ -51,10 +61,10 @@ export const createSessionHostManager = (
 	processPluginRuntime?: PluginRuntime
 ): SessionHostManager => {
 	const entries = new Map<SessionId, ManagedHostEntry>();
-	const forkingSessions = new Set<SessionId>();
+	const exclusiveSessionOperations = new Set<SessionId>();
 	const lifecycleSessionsInProgress = new Set<SessionId>();
 	const sessionLifecycleOperations = new Set<SessionId>();
-	const activeForkCompletions = new Set<Promise<void>>();
+	const activeExclusiveCompletions = new Set<Promise<void>>();
 	const openRequestsBySession = new Map<SessionId, number>();
 	const sessionWorkAdmissionsBySession = new Map<SessionId, number>();
 	let currentPluginRuntime = processPluginRuntime;
@@ -121,7 +131,7 @@ export const createSessionHostManager = (
 			lifecycleInProgress ||
 			sessionLifecycleOperations.has(entry.sessionId) ||
 			lifecycleSessionsInProgress.has(entry.sessionId) ||
-			forkingSessions.has(entry.sessionId) ||
+			exclusiveSessionOperations.has(entry.sessionId) ||
 			!entry.openingComplete
 		) {
 			return;
@@ -145,7 +155,7 @@ export const createSessionHostManager = (
 			if (
 				entry.views > 0 ||
 				lifecycleSessionsInProgress.has(entry.sessionId) ||
-				forkingSessions.has(entry.sessionId) ||
+				exclusiveSessionOperations.has(entry.sessionId) ||
 				entry.host !== host ||
 				entry.closing !== undefined ||
 				sessionLifecycleOperations.has(entry.sessionId) ||
@@ -421,10 +431,10 @@ export const createSessionHostManager = (
 		if (reloadInProgress) {
 			throw new Error("Cannot open a Session while resources are reloading.");
 		}
-		if (forkingSessions.has(sessionId)) {
-			throw new SessionForkBusyError(
+		if (exclusiveSessionOperations.has(sessionId)) {
+			throw new SessionHostBusyError(
 				sessionId,
-				"Cannot open a Session while it is being forked."
+				"Cannot open a Session while an exclusive Session operation is in progress."
 			);
 		}
 	};
@@ -497,7 +507,7 @@ export const createSessionHostManager = (
 		}
 		shuttingDown = true;
 		const closing = (async () => {
-			await Promise.allSettled([...activeForkCompletions]);
+			await Promise.allSettled([...activeExclusiveCompletions]);
 			const opened = await Promise.allSettled(
 				[...entries.values()].map((entry) => entry.opening)
 			);
@@ -552,10 +562,11 @@ export const createSessionHostManager = (
 				reason: "Cannot start Session work while resources are reloading.",
 			};
 		}
-		if (sessionId !== undefined && forkingSessions.has(sessionId)) {
+		if (sessionId !== undefined && exclusiveSessionOperations.has(sessionId)) {
 			return {
 				kind: "rejected",
-				reason: "Cannot start Session work while it is being forked.",
+				reason:
+					"Cannot start Session work during an exclusive Session operation.",
 			};
 		}
 		sessionWorkAdmissionsInProgress += 1;
@@ -599,9 +610,9 @@ export const createSessionHostManager = (
 				"Cannot reload resources while Session work is being admitted."
 			);
 		}
-		if (activeForkCompletions.size > 0) {
+		if (activeExclusiveCompletions.size > 0) {
 			throw new Error(
-				"Cannot reload resources while a Session fork is in progress."
+				"Cannot reload resources while an exclusive Session operation is in progress."
 			);
 		}
 	};
@@ -797,7 +808,7 @@ export const createSessionHostManager = (
 		if (
 			sessionLifecycleOperations.has(sessionId) ||
 			lifecycleSessionsInProgress.has(sessionId) ||
-			forkingSessions.has(sessionId)
+			exclusiveSessionOperations.has(sessionId)
 		) {
 			throw new Error(
 				"Cannot export a Session while another lifecycle operation is in progress."
@@ -829,9 +840,9 @@ export const createSessionHostManager = (
 				`Cannot ${operation} while this Session is in a lifecycle operation.`
 			);
 		}
-		if (forkingSessions.has(sessionId)) {
+		if (exclusiveSessionOperations.has(sessionId)) {
 			throw new Error(
-				`Cannot ${operation} while this Session is being forked.`
+				`Cannot ${operation} while an exclusive Session operation is in progress.`
 			);
 		}
 		if ((openRequestsBySession.get(sessionId) ?? 0) > 0) {
@@ -865,10 +876,17 @@ export const createSessionHostManager = (
 		}
 		assertSessionLifecycleAdmission(operation, sessionId);
 	};
-	const assertForkAdmission = (sessionId: SessionId): void => {
+	const assertExclusiveAdmission = (
+		sessionId: SessionId,
+		operation: "fork" | "context edit"
+	): void => {
 		const busy = (message: string, cause?: unknown): never => {
-			throw new SessionForkBusyError(sessionId, message, cause);
+			throw operation === "fork"
+				? new SessionForkBusyError(sessionId, message, cause)
+				: new SessionHostBusyError(sessionId, message, cause);
 		};
+		const action =
+			operation === "fork" ? "fork a Session" : "edit Session Context";
 		if (shuttingDown) {
 			busy("The Session Host manager is shutting down.");
 		}
@@ -877,19 +895,21 @@ export const createSessionHostManager = (
 			lifecycleSessionsInProgress.has(sessionId) ||
 			sessionLifecycleOperations.has(sessionId)
 		) {
-			busy("Cannot fork a Session during a lifecycle operation.");
+			busy(`Cannot ${action} during a lifecycle operation.`);
 		}
 		if (reloadInProgress) {
-			busy("Cannot fork a Session while resources are reloading.");
+			busy(`Cannot ${action} while resources are reloading.`);
 		}
-		if (forkingSessions.has(sessionId)) {
-			busy("A fork operation is already in progress for this Session.");
+		if (exclusiveSessionOperations.has(sessionId)) {
+			busy(
+				"Another exclusive operation is already in progress for this Session."
+			);
 		}
 		if ((openRequestsBySession.get(sessionId) ?? 0) > 0) {
-			busy("Cannot fork a Session while its Host is opening.");
+			busy(`Cannot ${action} while its Host is opening.`);
 		}
 		if ((sessionWorkAdmissionsBySession.get(sessionId) ?? 0) > 0) {
-			busy("Cannot fork a Session while its work is being admitted.");
+			busy(`Cannot ${action} while Session work is being admitted.`);
 		}
 	};
 	const assertEntryIdleForLifecycle = (
@@ -935,6 +955,29 @@ export const createSessionHostManager = (
 		}
 		if (!canUnload(entry, host, { allowPassiveSteeringMessages: true })) {
 			busy("Cannot fork a Session while its Host has active or pending work.");
+		}
+	};
+	const assertEntryIdleForContextEdit = (entry: ManagedHostEntry): void => {
+		const busy = (message: string): never => {
+			throw new SessionHostBusyError(entry.sessionId, message);
+		};
+		const host = entry.host;
+		if (!entry.openingComplete || host === undefined) {
+			throw new SessionHostBusyError(
+				entry.sessionId,
+				"Cannot edit Session Context while the Host is opening."
+			);
+		}
+		if (entry.closing !== undefined || entry.unloadCheck !== undefined) {
+			busy("Cannot edit Session Context while the Host is closing.");
+		}
+		if (host.getSnapshot().projectionBlocked) {
+			busy("Cannot edit Session Context with unresolved storage state.");
+		}
+		if (!canUnload(entry, host)) {
+			busy(
+				"Cannot edit Session Context while the Host has active or pending work."
+			);
 		}
 	};
 	const runLifecycleAction = async <Result>(
@@ -990,19 +1033,19 @@ export const createSessionHostManager = (
 				sessionId
 			);
 		};
-	const runSessionForkAction = async <Result>(
+	const runExclusiveSessionAction = async <Result>(
 		sessionId: SessionId,
 		entry: ManagedHostEntry | undefined,
 		action: (host: SessionHost | undefined) => Promise<Result>
 	): Promise<Result> => {
 		const completed = Promise.withResolvers<void>();
-		forkingSessions.add(sessionId);
-		activeForkCompletions.add(completed.promise);
+		exclusiveSessionOperations.add(sessionId);
+		activeExclusiveCompletions.add(completed.promise);
 		try {
 			return await action(entry?.host);
 		} finally {
-			forkingSessions.delete(sessionId);
-			activeForkCompletions.delete(completed.promise);
+			exclusiveSessionOperations.delete(sessionId);
+			activeExclusiveCompletions.delete(completed.promise);
 			completed.resolve();
 			if (entry?.views === 0) {
 				void maybeUnload(entry);
@@ -1011,12 +1054,21 @@ export const createSessionHostManager = (
 	};
 	const withIdleForSessionFork: SessionHostManager["withIdleForSessionFork"] =
 		async (sessionId, action) => {
-			assertForkAdmission(sessionId);
+			assertExclusiveAdmission(sessionId, "fork");
 			const entry = entries.get(sessionId);
 			if (entry !== undefined) {
 				assertEntryIdleForFork(entry);
 			}
-			return runSessionForkAction(sessionId, entry, action);
+			return runExclusiveSessionAction(sessionId, entry, action);
+		};
+	const withIdleForSessionContextEdit: SessionHostManager["withIdleForSessionContextEdit"] =
+		async (sessionId, action) => {
+			assertExclusiveAdmission(sessionId, "context edit");
+			const entry = entries.get(sessionId);
+			if (entry !== undefined) {
+				assertEntryIdleForContextEdit(entry);
+			}
+			return runExclusiveSessionAction(sessionId, entry, action);
 		};
 	const withIdleForSessionDataReset: SessionHostManager["withIdleForSessionDataReset"] =
 		async (action) => {
@@ -1060,6 +1112,7 @@ export const createSessionHostManager = (
 		tryAcquireSessionWork,
 		withIdleForSessionLifecycle,
 		withIdleForSessionFork,
+		withIdleForSessionContextEdit,
 		withIdleForSessionDataReset,
 		withIdleForReload,
 		replacePluginRuntime,

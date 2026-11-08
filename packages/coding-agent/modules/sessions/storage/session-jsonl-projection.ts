@@ -987,10 +987,20 @@ export const createSessionJsonlProjection = (
 					const throughMessageUiId = toSessionMessageId(
 						payload.throughMessageUiId
 					);
+					const {
+						overflowSourceTurnId: rawOverflowSourceTurnId,
+						...summaryPayload
+					} = payload.summary;
 					const summary: SessionCompaction["summary"] = {
-						...payload.summary,
+						...summaryPayload,
+						...omitUndefined({
+							overflowSourceTurnId:
+								rawOverflowSourceTurnId === undefined
+									? undefined
+									: toAgentTurnId(rawOverflowSourceTurnId),
+						}),
 						coveredMessageIds:
-							payload.summary.coveredMessageIds.map(toSessionMessageId),
+							summaryPayload.coveredMessageIds.map(toSessionMessageId),
 					};
 					assertProjectedCompactionChain(tx, sessionId, payload);
 					const availableMessageIds = projectedCompactionMessageIds(
