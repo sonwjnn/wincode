@@ -4,17 +4,31 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { isObjectLike, isString } from "@wincode/utils";
-import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
+import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
+import {
+	type AttachmentReference,
+	attachmentReferenceToFilePart,
+} from "@/modules/sessions/attachment-reference";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {
+	type AttachmentInput,
 	type AttachmentMetadataRecord,
 	type AttachmentMetadataRepository,
 	createSessionAttachmentStore,
 	estimateAttachmentTokens,
 	formatAttachmentUnavailableMarker,
 	getAttachmentReference,
+	type SessionAttachmentStore,
 } from "@/modules/sessions/storage/attachment-store";
-import { sessionMessageId } from "../support/identifiers";
+import { resolveSessionLogFilePath } from "@/modules/sessions/storage/path";
+import {
+	createSessionLogEvent,
+	createSessionLogHeader,
+	encodeSessionLogLine,
+} from "@/modules/sessions/storage/session-jsonl-codec";
+import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
+import { toSessionId } from "@/shared/identifiers";
+import { agentId, agentTurnId, sessionMessageId } from "../support/identifiers";
 
 const PNG_BYTES = new Uint8Array([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
@@ -24,6 +38,13 @@ const LARGE_PNG_BYTES = new Uint8Array([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44,
 	0x52, 0, 0, 4, 0, 0, 0, 4, 0,
 ]);
+
+const ingestReference = async (
+	attachments: SessionAttachmentStore,
+	input: AttachmentInput,
+	signal?: AbortSignal
+): Promise<AttachmentReference> =>
+	(await attachments.ingest(input, signal)).reference;
 
 const createRepository = (): AttachmentMetadataRepository => {
 	const records = new Map<string, AttachmentMetadataRecord>();
@@ -44,12 +65,12 @@ test("ingests exact bytes once and preserves per-reference filenames", async () 
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({ repository, root });
 
-	const first = await attachments.ingest({
+	const first = await ingestReference(attachments, {
 		bytes: PNG_BYTES,
 		filename: "first.png",
 		mediaType: "image/png",
 	});
-	const second = await attachments.ingest({
+	const second = await ingestReference(attachments, {
 		bytes: PNG_BYTES,
 		filename: "second.png",
 		mediaType: "image/png",
@@ -84,7 +105,7 @@ test("verified attachment dimensions override forged token-budget metadata", asy
 		repository: createRepository(),
 		root,
 	});
-	const storedReference = await attachments.ingest({
+	const storedReference = await ingestReference(attachments, {
 		bytes: LARGE_PNG_BYTES,
 		filename: "large.png",
 		mediaType: "image/png",
@@ -153,7 +174,10 @@ test("externalizes inline image parts and hydrates them only on request", async 
 		role: "user",
 	});
 
-	const persisted = await attachments.externalizeMessages([message]);
+	const externalization = await attachments.externalizeMessagesWithLease([
+		message,
+	]);
+	const persisted = externalization.messages;
 	const persistedPart = persisted[0]?.parts[1];
 	expect(getAttachmentReference(persistedPart)).not.toBeNull();
 	const parsedReference = getAttachmentReference(persistedPart);
@@ -179,13 +203,14 @@ test("externalizes inline image parts and hydrates them only on request", async 
 		purpose: "model",
 	});
 	expect(hydrated[0]?.parts[1]).toEqual(message.parts[1]);
+	await externalization.release();
 });
 
 test("returns bounded unavailable markers for missing or corrupted blobs", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({ repository, root });
-	const reference = await attachments.ingest({
+	const reference = await ingestReference(attachments, {
 		bytes: PNG_BYTES,
 		filename: "diagram.png",
 		mediaType: "image/png",
@@ -221,7 +246,7 @@ test("rejects required hydration when a committed attachment is corrupt", async 
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({ repository, root });
-	const reference = await attachments.ingest({
+	const reference = await ingestReference(attachments, {
 		bytes: PNG_BYTES,
 		filename: "missing.png",
 		mediaType: "image/png",
@@ -256,7 +281,7 @@ test("keeps only newest attachments within an explicit media budget", async () =
 	});
 	const references = await Promise.all(
 		["old.png", "new.png"].map((filename) =>
-			attachments.ingest({
+			ingestReference(attachments, {
 				bytes: PNG_BYTES,
 				filename,
 				mediaType: "image/png",
@@ -310,12 +335,12 @@ test("prioritizes the latest user turn over retained media limits", async () => 
 		repository: createRepository(),
 		root,
 	});
-	const oldReference = await attachments.ingest({
+	const oldReference = await ingestReference(attachments, {
 		bytes: PNG_BYTES,
 		filename: "old.png",
 		mediaType: "image/png",
 	});
-	const currentReference = await attachments.ingest({
+	const currentReference = await ingestReference(attachments, {
 		bytes: new Uint8Array([...PNG_BYTES, 0x04]),
 		filename: "current.png",
 		mediaType: "image/png",
@@ -354,24 +379,27 @@ test("collects only unreferenced blobs and reports bytes without content", async
 		repository,
 		root,
 	});
-	const live = await attachments.ingest({
+	const liveLease = await attachments.ingest({
 		bytes: PNG_BYTES,
 		filename: "live.png",
 		mediaType: "image/png",
 	});
-	const dead = await attachments.ingest({
+	const live = liveLease.reference;
+	const deadLease = await attachments.ingest({
 		bytes: new Uint8Array([...PNG_BYTES, 0x02]),
 		filename: "dead.png",
 		mediaType: "image/png",
 	});
+	const dead = deadLease.reference;
 	const orphanBytes = new Uint8Array(PNG_BYTES.byteLength + 1);
 	orphanBytes.set(PNG_BYTES);
 	orphanBytes[orphanBytes.length - 1] = 0x03;
-	const orphan = await attachments.ingest({
+	const orphanLease = await attachments.ingest({
 		bytes: orphanBytes,
 		filename: "orphan.png",
 		mediaType: "image/png",
 	});
+	const orphan = orphanLease.reference;
 	const orphanRecord = repository.get(orphan.attachmentId);
 	if (!orphanRecord) {
 		throw new Error("orphan attachment metadata missing");
@@ -380,6 +408,7 @@ test("collects only unreferenced blobs and reports bytes without content", async
 	await Bun.write(temporaryPath, PNG_BYTES);
 	expect((await fs.stat(temporaryPath)).size).toBe(PNG_BYTES.byteLength);
 	repository.delete(orphan.attachmentId);
+	await Promise.all([deadLease.release(), orphanLease.release()]);
 	const report = await attachments.collect({
 		liveAttachmentIds: [live.attachmentId],
 		safetyWindowMs: 0,
@@ -392,6 +421,339 @@ test("collects only unreferenced blobs and reports bytes without content", async
 		throw new Error("live attachment metadata missing");
 	}
 	expect(await fs.stat(path.join(root, liveRecord.blobKey))).toBeTruthy();
+	await liveLease.release();
+});
+
+test("a staging pin keeps a blob live until an uncommitted owner is released", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root,
+	});
+	const stagedLease = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "staged.png",
+		mediaType: "image/png",
+	});
+	const staged = stagedLease.reference;
+	const stagedRecord = repository.get(staged.attachmentId);
+	if (!stagedRecord) {
+		throw new Error("staged attachment metadata missing");
+	}
+
+	const pinnedReport = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(pinnedReport.reclaimedCount).toBe(0);
+	expect(await fs.stat(path.join(root, stagedRecord.blobKey))).toBeTruthy();
+
+	await stagedLease.release();
+	const cancelledReport = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(cancelledReport.reclaimedCount).toBe(1);
+});
+
+test("separate blob roots cannot release each other's staging pins", async () => {
+	const firstRoot = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-attachments-")
+	);
+	const secondRoot = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-attachments-")
+	);
+	const firstRepository = createRepository();
+	const firstStore = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository: firstRepository,
+		root: firstRoot,
+	});
+	const secondStore = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository: createRepository(),
+		root: secondRoot,
+	});
+	const stagedLease = await firstStore.ingest({
+		bytes: PNG_BYTES,
+		filename: "staged.png",
+		mediaType: "image/png",
+	});
+	const staged = stagedLease.reference;
+
+	await secondStore.collect({
+		liveAttachmentIds: [staged.attachmentId],
+		safetyWindowMs: 0,
+	});
+	const collection = await firstStore.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+
+	expect(collection.reclaimedCount).toBe(0);
+	expect(firstRepository.get(staged.attachmentId)).toBeDefined();
+});
+
+test("attachment collection reads flat JSONL liveness and ignores non-log entries", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const lifecycleRoot = path.join(root, "sessions");
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		lifecycleRoot,
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root: path.join(root, "blobs"),
+	});
+	const lease = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "live.png",
+		mediaType: "image/png",
+	});
+	const reference = lease.reference;
+	await lease.release();
+	const sessionId = toSessionId("flat-attachment-liveness-session");
+	const timestamp = new Date().toISOString();
+	const header = createSessionLogHeader(
+		sessionId,
+		crypto.randomUUID(),
+		timestamp
+	);
+	const record = buildUserSessionRecord({
+		agentId: agentId("attachment-liveness-agent"),
+		message: fromPartial<SessionMessage>({
+			id: sessionMessageId("flat-attachment-liveness-message"),
+			parts: [attachmentReferenceToFilePart(reference)],
+			role: "user",
+		}),
+		model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		turnId: agentTurnId("flat-attachment-liveness-turn"),
+	});
+	const created = createSessionLogEvent({
+		operationId: `create-${sessionId}`,
+		payload: {
+			createdAt: timestamp,
+			editMode: "hashline",
+			initialRecord: record,
+			lastMessageAt: timestamp,
+			pinned: false,
+			title: "Untitled Session",
+		},
+		previousHash: header.entryHash,
+		sequence: 1,
+		sessionId,
+		timestamp,
+		type: "session.created",
+	});
+	try {
+		await Bun.write(
+			resolveSessionLogFilePath(lifecycleRoot, sessionId),
+			new Uint8Array([
+				...encodeSessionLogLine(header),
+				...encodeSessionLogLine(created),
+			])
+		);
+		const legacyDirectory = path.join(
+			lifecycleRoot,
+			"legacy-attachment-session"
+		);
+		await fs.mkdir(legacyDirectory, { recursive: true });
+		await Bun.write(
+			path.join(legacyDirectory, "session.jsonl"),
+			"not discovered as an authoritative log"
+		);
+		await Bun.write(path.join(lifecycleRoot, ".hidden.jsonl"), "ignored");
+		await Bun.write(path.join(lifecycleRoot, "notes.txt"), "ignored");
+		await fs.mkdir(path.join(lifecycleRoot, "directory.jsonl"));
+
+		const report = await attachments.collect({
+			liveAttachmentIds: [],
+			safetyWindowMs: 0,
+		});
+		expect(report.reclaimedCount).toBe(0);
+		expect(repository.get(reference.attachmentId)).toBeDefined();
+	} finally {
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("reclaims an uncommitted blob after its staging owner process has exited", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const lifecycleRoot = path.join(root, "sessions");
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		lifecycleRoot,
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root: path.join(root, "blobs"),
+	});
+	const abandonedLease = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "abandoned.png",
+		mediaType: "image/png",
+	});
+	const abandoned = abandonedLease.reference;
+	const pinDirectory = path.join(root, "session-control", "attachment-pins");
+	const [pinName] = await fs.readdir(pinDirectory);
+	if (pinName === undefined) {
+		throw new Error("staging pin was not published");
+	}
+	const pinPath = path.join(pinDirectory, pinName);
+	const pin = (await Bun.file(pinPath).json()) as Record<string, unknown>;
+	await Bun.write(
+		pinPath,
+		JSON.stringify({ ...pin, processId: Number.MAX_SAFE_INTEGER })
+	);
+
+	const report = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(report.reclaimedCount).toBe(1);
+	expect(repository.get(abandoned.attachmentId)).toBeUndefined();
+});
+
+test("releasing a retained owner leaves a separate staged owner live", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root,
+	});
+	const inlineUrl = `data:image/png;base64,${PNG_BYTES.toBase64()}`;
+	const stagedOwner = await attachments.externalizeMessagesWithLease([
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("staged-owner"),
+			parts: [
+				{
+					filename: "shared.png",
+					mediaType: "image/png",
+					type: "file",
+					url: inlineUrl,
+				},
+			],
+			role: "user",
+		}),
+	]);
+	const reference = getAttachmentReference(stagedOwner.messages[0]?.parts[0]);
+	if (!reference) {
+		throw new Error("staged attachment was not externalized");
+	}
+	const record = repository.get(reference.attachmentId);
+	if (!record) {
+		throw new Error("staged attachment metadata missing");
+	}
+
+	await attachments.retain([reference.attachmentId]);
+	await attachments.release([reference.attachmentId]);
+	const stagedReport = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(stagedReport.reclaimedCount).toBe(0);
+	expect(await fs.stat(path.join(root, record.blobKey))).toBeTruthy();
+
+	await stagedOwner.release();
+	const releasedReport = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(releasedReport.reclaimedCount).toBe(1);
+});
+
+test("collection keeps a staged owner after another source references its blob", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root,
+	});
+	const stagedOwner = await attachments.externalizeMessagesWithLease([
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("staged-owner"),
+			parts: [
+				{
+					filename: "shared.png",
+					mediaType: "image/png",
+					type: "file",
+					url: `data:image/png;base64,${PNG_BYTES.toBase64()}`,
+				},
+			],
+			role: "user",
+		}),
+	]);
+	const reference = getAttachmentReference(stagedOwner.messages[0]?.parts[0]);
+	if (!reference) {
+		throw new Error("staged attachment was not externalized");
+	}
+
+	await attachments.collect({
+		liveAttachmentIds: [reference.attachmentId],
+		safetyWindowMs: 0,
+	});
+	const stillStaged = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(stillStaged.reclaimedCount).toBe(0);
+
+	await stagedOwner.release();
+	const released = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(released.reclaimedCount).toBe(1);
+});
+
+test("failed pin unlink rejects and keeps the owner available for retry", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({ repository, root });
+	const stagedOwner = await attachments.externalizeMessagesWithLease([
+		fromPartial<SessionMessage>({
+			id: sessionMessageId("unlink-failure-owner"),
+			parts: [
+				{
+					filename: "unlink-failure.png",
+					mediaType: "image/png",
+					type: "file",
+					url: `data:image/png;base64,${PNG_BYTES.toBase64()}`,
+				},
+			],
+			role: "user",
+		}),
+	]);
+	const reference = getAttachmentReference(stagedOwner.messages[0]?.parts[0]);
+	if (!reference) {
+		throw new Error("staged attachment was not externalized");
+	}
+	await attachments.retain([reference.attachmentId]);
+	const pinDirectory = path.join(root, "session-control", "attachment-pins");
+	const pinNames = await fs.readdir(pinDirectory);
+	let retainedPinPath: string | undefined;
+	for (const pinName of pinNames) {
+		const pinPath = path.join(pinDirectory, pinName);
+		const pin = (await Bun.file(pinPath).json()) as { kind?: string };
+		if (pin.kind === "retained") {
+			retainedPinPath = pinPath;
+			break;
+		}
+	}
+	if (retainedPinPath === undefined) {
+		throw new Error("retained attachment pin was not published");
+	}
+
+	await fs.unlink(retainedPinPath);
+	await fs.mkdir(retainedPinPath);
+	await expect(attachments.release([reference.attachmentId])).rejects.toThrow();
+	await fs.rmdir(retainedPinPath);
+	await expect(
+		attachments.release([reference.attachmentId])
+	).resolves.toBeUndefined();
+	await stagedOwner.release();
 });
 
 test("keeps a retained blob through collection until it is released", async () => {
@@ -402,11 +764,12 @@ test("keeps a retained blob through collection until it is released", async () =
 		repository,
 		root,
 	});
-	const held = await attachments.ingest({
+	const heldLease = await attachments.ingest({
 		bytes: PNG_BYTES,
 		filename: "held.png",
 		mediaType: "image/png",
 	});
+	const held = heldLease.reference;
 	const record = repository.get(held.attachmentId);
 	if (!record) {
 		throw new Error("held attachment metadata missing");
@@ -414,7 +777,8 @@ test("keeps a retained blob through collection until it is released", async () =
 
 	// A queued composition holds the blob, so a collection pass that would
 	// otherwise reclaim it leaves it alone.
-	attachments.retain([held.attachmentId]);
+	await attachments.retain([held.attachmentId]);
+	await heldLease.release();
 	const retainedReport = await attachments.collect({
 		liveAttachmentIds: [],
 		safetyWindowMs: 0,
@@ -424,13 +788,39 @@ test("keeps a retained blob through collection until it is released", async () =
 	expect(await fs.stat(path.join(root, record.blobKey))).toBeTruthy();
 
 	// Once the composition is gone, the same pass reclaims it.
-	attachments.release([held.attachmentId]);
+	await attachments.release([held.attachmentId]);
 	const releasedReport = await attachments.collect({
 		liveAttachmentIds: [],
 		safetyWindowMs: 0,
 	});
 	expect(releasedReport.reclaimedCount).toBe(1);
 	expect(repository.get(held.attachmentId)).toBeUndefined();
+});
+
+test("releases the final queued attachment pin before collection", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const repository = createRepository();
+	const attachments = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository,
+		root,
+	});
+	const queuedLease = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "queued.png",
+		mediaType: "image/png",
+	});
+	const queued = queuedLease.reference;
+	await attachments.retain([queued.attachmentId]);
+	await queuedLease.release();
+
+	await attachments.release([queued.attachmentId]);
+	const report = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+
+	expect(report.reclaimedCount).toBe(1);
 });
 
 test("holds a blob retained twice until both holds are released", async () => {
@@ -441,29 +831,60 @@ test("holds a blob retained twice until both holds are released", async () => {
 		repository,
 		root,
 	});
-	const shared = await attachments.ingest({
+	const sharedLease = await attachments.ingest({
 		bytes: PNG_BYTES,
 		filename: "shared.png",
 		mediaType: "image/png",
 	});
+	const shared = sharedLease.reference;
 
-	attachments.retain([shared.attachmentId]);
-	attachments.retain([shared.attachmentId]);
-	attachments.release([shared.attachmentId]);
+	await attachments.retain([shared.attachmentId]);
+	await attachments.retain([shared.attachmentId]);
+	await sharedLease.release();
+	await attachments.release([shared.attachmentId]);
 	const firstRelease = await attachments.collect({
 		liveAttachmentIds: [],
 		safetyWindowMs: 0,
 	});
 	expect(firstRelease.reclaimedCount).toBe(0);
 
-	attachments.release([shared.attachmentId]);
+	await attachments.release([shared.attachmentId]);
 	// Releasing a blob nothing holds any more changes nothing.
-	attachments.release([shared.attachmentId]);
+	await attachments.release([shared.attachmentId]);
 	const secondRelease = await attachments.collect({
 		liveAttachmentIds: [],
 		safetyWindowMs: 0,
 	});
 	expect(secondRelease.reclaimedCount).toBe(1);
+});
+
+test("concurrent attachment owners release distinct retained pins", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
+	const attachments = createSessionAttachmentStore({
+		now: () => new Date(Date.now() + 1000),
+		repository: createRepository(),
+		root,
+	});
+	const lease = await attachments.ingest({
+		bytes: PNG_BYTES,
+		filename: "shared.png",
+		mediaType: "image/png",
+	});
+	const { attachmentId } = lease.reference;
+	await attachments.retain([attachmentId]);
+	await attachments.retain([attachmentId]);
+	await lease.release();
+
+	await Promise.all([
+		attachments.release([attachmentId]),
+		attachments.release([attachmentId]),
+	]);
+
+	const report = await attachments.collect({
+		liveAttachmentIds: [],
+		safetyWindowMs: 0,
+	});
+	expect(report.reclaimedCount).toBe(1);
 });
 
 test("validates magic bytes, size, cancellation, and bounded filenames", async () => {
@@ -475,7 +896,7 @@ test("validates magic bytes, size, cancellation, and bounded filenames", async (
 	});
 
 	await expect(
-		attachments.ingest({
+		ingestReference(attachments, {
 			bytes: new Uint8Array([0xff, 0xd8, 0xff]),
 			filename: "../unsafe\\name.png",
 			mediaType: "image/png",
@@ -484,7 +905,8 @@ test("validates magic bytes, size, cancellation, and bounded filenames", async (
 	const controller = new AbortController();
 	controller.abort();
 	await expect(
-		attachments.ingest(
+		ingestReference(
+			attachments,
 			{
 				bytes: PNG_BYTES,
 				filename: "safe.png",
@@ -494,14 +916,14 @@ test("validates magic bytes, size, cancellation, and bounded filenames", async (
 		)
 	).rejects.toThrow();
 	await expect(
-		attachments.ingest({
+		ingestReference(attachments, {
 			bytes: new Uint8Array([...PNG_BYTES, 0x02]),
 			filename: "too-large.png",
 			mediaType: "image/png",
 		})
 	).rejects.toThrow("smaller");
 
-	const bounded = await attachments.ingest({
+	const bounded = await ingestReference(attachments, {
 		bytes: PNG_BYTES,
 		filename: "../unsafe\\name.png",
 		mediaType: "image/png",
@@ -515,7 +937,7 @@ test("annotates missing blobs without reading payload bytes", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-attachments-"));
 	const repository = createRepository();
 	const attachments = createSessionAttachmentStore({ repository, root });
-	const reference = await attachments.ingest({
+	const reference = await ingestReference(attachments, {
 		bytes: PNG_BYTES,
 		filename: "missing.png",
 		mediaType: "image/png",

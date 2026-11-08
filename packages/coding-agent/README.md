@@ -19,6 +19,43 @@ bun run bin/wincode.ts --help
 bun run bin/wincode.ts --mode print --prompt "hello"
 ```
 
+## Interactive errors and actions
+
+Model errors appear as red `Error: …` lines in the transcript, without persistent
+Retry or Rewind controls. `Alt+W` toggles transcript actions when the Session is
+idle; `Alt+R` retries the latest retryable input. Rewind creates a fork and does
+not roll back workspace files.
+
+Transient model request failures retry up to three times with exponential delays
+starting at two seconds. Reported usage and partial text or reasoning do not by
+themselves stop a safe retry: failed-attempt usage is counted once, and bounded
+attempt summaries remain inspectable on the terminal event and Session Record.
+Partial output is never added to the next request's Model Context. Each retry uses
+a fresh Model Step identity. A Model Step is retried only before its Tool Calls
+begin execution; a later Model Step can retry without replaying previously settled
+Tool Calls. Authentication, authorization, account-limit, and invalid-request
+failures do not retry. The composer shows one countdown; Escape cancels a pending
+retry immediately.
+Retry-After can extend the delay up to 60 seconds; a longer requested delay ends
+the turn rather than retrying early. Cache-warm replays remain best-effort and
+do not use this retry loop.
+
+The bounded policy can be changed in `modelRetry` settings:
+
+```json
+{
+  "modelRetry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 2000,
+    "maxDelayMs": 60000
+  }
+}
+```
+
+`maxRetries` excludes the initial request. Invalid settings disable automatic
+retries rather than falling back to a more permissive policy.
+
 ## Project trust
 
 Before loading protected project configuration and resources—including configured

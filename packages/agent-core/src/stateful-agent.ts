@@ -182,6 +182,11 @@ const createAgentTurnContextProjector = (
 			switch (event.type) {
 				case "model-step-started":
 					break;
+				case "model-step-retry-scheduled":
+					assistantParts = [];
+					break;
+				case "model-step-retry-ended":
+					break;
 				case "text-delta":
 					assistantParts.push({ text: event.delta, type: "text" });
 					break;
@@ -220,10 +225,13 @@ const createAgentTurnContextProjector = (
 				}
 				case "model-step-finished":
 				case "agent-turn-completed":
+					flushModelStep();
+					break;
 				case "agent-turn-cancelled":
 				case "agent-turn-failed":
 				case "agent-turn-interrupted":
-					flushModelStep();
+					assistantParts = [];
+					toolResults = [];
 					break;
 				case "agent-turn-started":
 					break;

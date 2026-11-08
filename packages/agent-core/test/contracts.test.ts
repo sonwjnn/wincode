@@ -42,6 +42,31 @@ const baseEvent = (type: AgentTurnEvent["type"]): AgentTurnEvent => {
 			return { ...common, agentId: agentId("build"), startedAt: 0, type };
 		case "model-step-started":
 			return { ...common, stepId: stepId("step-1"), type };
+		case "model-step-retry-scheduled":
+			return {
+				...common,
+				attempt: 1,
+				failure: {
+					code: "network",
+					message: "The model connection failed.",
+					retry: "after-delay",
+					source: "model",
+					version: OPERATIONAL_FAILURE_VERSION,
+				},
+				maxAttempts: 2,
+				retryAt: 10,
+				stepId: stepId("step-1"),
+				type,
+			};
+		case "model-step-retry-ended":
+			return {
+				...common,
+				attempt: 1,
+				maxAttempts: 2,
+				outcome: "success",
+				stepId: stepId("step-2"),
+				type,
+			};
 		case "text-delta":
 		case "reasoning-delta":
 			return { ...common, delta: "x", type };
@@ -143,6 +168,61 @@ describe("Agent Turn Event contract", () => {
 		expect(isAgentTurnEvent({ sequence: 1, type: "text-delta" })).toBe(false);
 		expect(
 			isAgentTurnEvent({ sequence: 1, turnId: 1, type: "text-delta" })
+		).toBe(false);
+	});
+
+	test("retry scheduling requires a bounded attempt and retryable failure", () => {
+		const retryEvent = baseEvent("model-step-retry-scheduled");
+		expect(isAgentTurnEvent({ ...retryEvent, attempt: 0 })).toBe(false);
+		expect(isAgentTurnEvent({ ...retryEvent, maxAttempts: 0 })).toBe(false);
+		expect(
+			isAgentTurnEvent({
+				...retryEvent,
+				failure: {
+					code: "authentication",
+					message: "Model authentication failed.",
+					retry: "never",
+					source: "model",
+					version: OPERATIONAL_FAILURE_VERSION,
+				},
+			})
+		).toBe(false);
+	});
+
+	test("retry terminal events require consistent outcomes and attempts", () => {
+		const retryEnded = baseEvent("model-step-retry-ended");
+		expect(isAgentTurnEvent(retryEnded)).toBe(true);
+		expect(isAgentTurnEvent({ ...retryEnded, outcome: "stopped" })).toBe(false);
+		expect(isAgentTurnEvent({ ...retryEnded, attempt: 3 })).toBe(false);
+	});
+
+	test("terminal attempt summaries are validated before persistence", () => {
+		const terminal = baseEvent("agent-turn-completed");
+		const summary = {
+			attempt: 1,
+			failure: {
+				code: "network",
+				message: "The model connection failed.",
+				retry: "after-delay",
+				source: "model",
+				version: OPERATIONAL_FAILURE_VERSION,
+			},
+			maxRetries: 2,
+			partialOutput: { text: "discarded fragment" },
+			retryDecision: "scheduled",
+			stepId: stepId("step-1"),
+			usage: { inputTokens: 3, outputTokens: 1 },
+		};
+		expect(
+			isAgentTurnEvent({ ...terminal, modelStepAttempts: [summary] })
+		).toBe(true);
+		expect(
+			isAgentTurnEvent({
+				...terminal,
+				modelStepAttempts: [
+					{ ...summary, partialOutput: { text: "x".repeat(4097) } },
+				],
+			})
 		).toBe(false);
 	});
 

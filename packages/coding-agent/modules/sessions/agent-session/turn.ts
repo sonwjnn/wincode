@@ -19,6 +19,7 @@ import {
 	type SessionToolPart,
 	sanitizeInterruptedSessionMessages,
 } from "../message";
+import { formatModelRetryFailureText } from "../retry-policy";
 import {
 	contextMeasurementForStep,
 	getSessionContextEpoch,
@@ -142,6 +143,15 @@ export const projectAgentTurnEvent = (
 		case "model-step-started":
 			parts.push({ type: "step-start" });
 			break;
+		case "model-step-retry-scheduled": {
+			const currentStep = parts.findLastIndex(
+				(part) => part.type === "step-start"
+			);
+			if (currentStep >= 0) {
+				parts.splice(currentStep);
+			}
+			break;
+		}
 		case "reasoning-delta": {
 			const last = parts.at(-1);
 			if (last?.type === "reasoning") {
@@ -327,7 +337,13 @@ const sanitizeRuntimeMessagesForTerminal = (
 	return sanitizeFailedRuntimeMessages(
 		messages,
 		assistantId,
-		event.failure.message
+		event.type === "agent-turn-failed"
+			? formatModelRetryFailureText(
+					event.failure.message,
+					event.modelStepAttempts,
+					event.modelStepAttemptsTruncated
+				)
+			: event.failure.message
 	);
 };
 

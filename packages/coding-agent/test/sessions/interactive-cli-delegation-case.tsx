@@ -43,14 +43,14 @@ import { captureTestFrame } from "../support/opentui";
 const waitForFrame = async (
 	setup: TestRendererSetup,
 	predicate: (frame: string) => boolean
-): Promise<void> => {
+): Promise<string> => {
 	// setup.waitForFrame breaks once the scheduler is idle, but this live TUI can
 	// be waiting on an external event while the frame still needs to change.
 	const deadline = Date.now() + 5000;
 	while (Date.now() < deadline) {
 		const frame = captureTestFrame(setup);
 		if (frame !== undefined && predicate(frame)) {
-			return;
+			return frame;
 		}
 		await Bun.sleep(10);
 	}
@@ -248,7 +248,7 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 			return false;
 		}).catch(async (error: unknown) => {
 			throw new Error(
-				`${error instanceof Error ? error.message : String(error)}\n${setup?.captureCharFrame()}\n${JSON.stringify(
+				`${error instanceof Error ? error.message : String(error)}\n${setup === undefined ? "" : (captureTestFrame(setup) ?? "")}\n${JSON.stringify(
 					{
 						sessions: await store.listSessions(),
 						tasks: (await store.listSessions()).flatMap(({ id }) =>
@@ -258,7 +258,9 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 				)}`
 			);
 		});
-		await waitForFrame(setup, (frame) => frame.includes(PARENT_OUTPUT));
+		const parentFrame = await waitForFrame(setup, (frame) =>
+			frame.includes(PARENT_OUTPUT)
+		);
 
 		if (parentSessionId === undefined) {
 			throw new Error("Interactive CLI did not create a delegated task.");
@@ -277,17 +279,23 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 			parentSessionId,
 			status: "succeeded",
 		});
-		const childRecords = await store.listSessionRecords(task.childSessionId);
+		// Parent delivery can finish before the child writer projects the tool result.
+		const readChildSubmitResult = async () =>
+			(await store.listSessionRecords(task.childSessionId))
+				.flatMap(({ messages }) => messages)
+				.flatMap(({ parts }) => parts)
+				.find(
+					(part) =>
+						part.type === "tool-call" && part.toolName === "submit_result"
+				);
+		await waitForSessionCondition(
+			async () => (await readChildSubmitResult()) !== undefined
+		);
+		const childSubmitResult = await readChildSubmitResult();
 		const parentRecords = await store.listSessionRecords(parentSessionId);
-		expect(
-			childRecords.some((record) =>
-				record.messages.some((message) =>
-					message.parts.some(
-						(part) => part.type === "text" && part.text.includes(CHILD_OUTPUT)
-					)
-				)
-			)
-		).toBe(true);
+		expect(childSubmitResult).toMatchObject({
+			outcome: { kind: "success" },
+		});
 		expect(
 			parentRecords.some((record) =>
 				record.messages.some((message) =>
@@ -323,8 +331,8 @@ test("default Interactive CLI dispatch incorporates a durable child report offli
 		expect(subagentsTaskStore.listPendingReports(parentSessionId)).toHaveLength(
 			0
 		);
-		expect(setup.captureCharFrame()).toContain(PARENT_OUTPUT);
-		expect(setup.captureCharFrame()).not.toContain(CHILD_OUTPUT);
+		expect(parentFrame).toContain(PARENT_OUTPUT);
+		expect(parentFrame).not.toContain(CHILD_OUTPUT);
 
 		setup.renderer.destroy();
 		expect(await cliRun).toBe(0);

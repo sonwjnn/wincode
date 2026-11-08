@@ -7,6 +7,7 @@ export * from "./events";
 export * from "./failures";
 export * from "./identifiers";
 export * from "./lifecycle";
+export * from "./model-retry";
 export * from "./model-step";
 export * from "./records";
 export * from "./runtime";

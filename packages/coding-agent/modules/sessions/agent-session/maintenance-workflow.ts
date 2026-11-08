@@ -22,6 +22,7 @@ import {
 	prepareOverflowRecoveryMessages,
 } from "../compaction/overflow-recovery";
 import type { SessionMessage } from "../message";
+import type { SessionCompactionRetryEvent } from "../session-events";
 import {
 	getSessionAttemptMessages,
 	hasCompletedToolArtifact,
@@ -156,6 +157,11 @@ export type SessionMaintenanceTransition =
 			command: SessionMaintenanceCommandState;
 	  }
 	| {
+			kind: "compaction-summary-event";
+			command: SessionMaintenanceCommandState;
+			event: SessionCompactionRetryEvent;
+	  }
+	| {
 			kind: "compaction-applied";
 			result: CompactSessionResult;
 	  }
@@ -240,12 +246,23 @@ export const createSessionMaintenanceWorkflow = (
 	const compactionRequest = async (
 		command: SessionCompactionCommand,
 		messages: readonly SessionMessage[],
-		signal: AbortSignal
+		signal: AbortSignal,
+		activeCommand: SessionMaintenanceCommandState | undefined
 	): Promise<CompactionRequestInput> => ({
 		model: command.model,
 		session: { messages, sessionId: port.read().sessionId },
 		settings: await port.effects.resolveCompactionSettings(command.model),
 		trigger: command.trigger,
+		...(activeCommand === undefined
+			? {}
+			: {
+					onSummaryEvent: (event) =>
+						port.apply({
+							command: activeCommand,
+							event,
+							kind: "compaction-summary-event",
+						}),
+				}),
 		...omitUndefined({
 			focus: command.focus,
 			protectedMessageIds: command.protectedMessageIds,
@@ -280,7 +297,12 @@ export const createSessionMaintenanceWorkflow = (
 		);
 		void (async () => {
 			try {
-				const request = await compactionRequest(command, messages, signal);
+				const request = await compactionRequest(
+					command,
+					messages,
+					signal,
+					activeCommand
+				);
 				if (signal.aborted || port.signals().closed()) {
 					throw new SessionCompactionError(
 						"cancelled",
@@ -340,7 +362,8 @@ export const createSessionMaintenanceWorkflow = (
 			messages,
 			command.signal === undefined
 				? port.read().shutdownSignal
-				: AbortSignal.any([port.read().shutdownSignal, command.signal])
+				: AbortSignal.any([port.read().shutdownSignal, command.signal]),
+			owner
 		);
 		if (port.signals().closed()) {
 			throw new SessionCompactionError("cancelled", SESSION_SHUT_DOWN_ERROR);

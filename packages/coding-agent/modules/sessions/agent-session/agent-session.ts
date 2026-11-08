@@ -9,16 +9,24 @@ import {
 	type ToolCallId,
 	toSessionMessageId,
 } from "@wincode/agent-core";
-import { getErrorMessage, isUndefined, omitUndefined } from "@wincode/utils";
+import {
+	getErrorMessage,
+	isUndefined,
+	logger,
+	omitUndefined,
+} from "@wincode/utils";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import type { CompactSessionResult } from "../compaction/compaction";
 import { isCompactionSummaryMessage } from "../compaction/summary-message";
 import type { SessionCompaction } from "../compaction/types";
+import { findContinuationContextMessages } from "../continuation-context";
+import { isSessionToolPart, type SessionMessage } from "../message";
+import type { CompactionSummaryRetryStatus } from "../session-events";
+import type { SessionWriteOutcome } from "../session-write-outcome";
 import {
-	isSessionToolPart,
-	type SessionMessage,
-	type SessionToolPart,
-} from "../message";
+	isCommittedProjectionBlocked,
+	SessionWriteOutcomeError,
+} from "../storage/session-jsonl-store";
 import type { SessionSendInput } from "../submission-types";
 import { projectSessionRecords } from "../transcript-projection";
 import { createExecutionRegistry } from "./execution-registry";
@@ -34,7 +42,10 @@ import {
 	type SessionMaintenancePort,
 	type SessionMaintenanceWorkflow,
 } from "./maintenance-workflow";
-import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
+import {
+	SESSION_PROJECTION_BLOCKED_ERROR,
+	SESSION_SHUT_DOWN_ERROR,
+} from "./session-messages";
 import {
 	createSessionSteeringWorkflow,
 	type PendingSteeringDelivery,
@@ -72,69 +83,6 @@ import { exposedViewState, hasChanged, latestEntry } from "./utils";
 
 /** The deadline one Agent Turn submission runs with. */
 const AGENT_TURN_DEADLINE_MS = 43_200_000;
-/** The reason a submission that arrives after the session ended is refused. */
-type ContinuationContextMessages =
-	| {
-			kind: "ready";
-			anchor: SessionMessage;
-			lastMessage: SessionMessage;
-	  }
-	| { kind: "rejected"; reason: string };
-
-const isCompleteToolCall = (part: SessionToolPart): boolean =>
-	part.state === "output-denied" ||
-	(part.state === "output-available" && "output" in part) ||
-	(part.state === "output-error" &&
-		typeof part.errorText === "string" &&
-		part.errorText.length > 0);
-
-const findContinuationContextMessages = (
-	context: readonly SessionMessage[]
-): ContinuationContextMessages => {
-	const lastMessage = context.at(-1);
-	if (lastMessage === undefined) {
-		return {
-			kind: "rejected",
-			reason: "The Agent Session has no context to continue.",
-		};
-	}
-	const hasIncompleteToolCall = context.some(({ parts }) =>
-		parts.some((part) => isSessionToolPart(part) && !isCompleteToolCall(part))
-	);
-	if (hasIncompleteToolCall) {
-		return {
-			kind: "rejected",
-			reason: "Incomplete Tool Calls cannot be continued.",
-		};
-	}
-	const toolParts = lastMessage.parts.filter(isSessionToolPart);
-	const completeToolCall =
-		lastMessage.role === "assistant" &&
-		toolParts.length > 0 &&
-		toolParts.every(isCompleteToolCall);
-	if (!(lastMessage.role === "user" || completeToolCall)) {
-		return {
-			kind: "rejected",
-			reason:
-				"The Agent Session can only continue from a user message or completed Tool Call.",
-		};
-	}
-	let anchor: SessionMessage | undefined;
-	for (let index = context.length - 1; index >= 0; index -= 1) {
-		const candidate = context[index];
-		if (candidate?.role === "user") {
-			anchor = candidate;
-			break;
-		}
-	}
-	if (anchor === undefined) {
-		return {
-			kind: "rejected",
-			reason: "The Agent Session has no user message to continue.",
-		};
-	}
-	return { kind: "ready", anchor, lastMessage };
-};
 type AgentSessionRunState =
 	| { readonly phase: "idle" }
 	| {
@@ -144,12 +92,18 @@ type AgentSessionOperationState = {
 	readonly backgroundTasks: Set<Promise<unknown>>;
 	readonly compaction: {
 		activeCommand: SessionMaintenanceCommandState | undefined;
+		retryStatus: CompactionSummaryRetryStatus | undefined;
 		readonly requests: Set<Promise<CompactSessionResult>>;
 	};
 	readonly continuationInputs: WeakSet<SessionSendInput>;
 	readonly durableWrites: Set<Promise<void>>;
+	readonly durableWriteFailures: unknown[];
 	readonly transcriptOrder: SessionTranscriptOrder;
 	recordCommitTail: Promise<void>;
+	/** Reopen after projection recovery so compaction/context state is reloaded. */
+	projectionBlocked: boolean;
+	/** Do not Recall or retry input until an indeterminate log write is reconciled. */
+	storageUncertain: boolean;
 	readonly events: {
 		readonly observers: Set<() => void>;
 		readonly submissionEvents: Set<(event: SessionSubmissionEvent) => void>;
@@ -193,6 +147,29 @@ type AgentSessionOperationState = {
 type AgentSessionConstructionOptions = AgentSessionOptions & {
 	readonly deadlineMs?: number;
 };
+
+const storageWriteOutcomeFromError = (
+	error: unknown
+): SessionWriteOutcome | undefined => {
+	const seen = new Set<Error>();
+	let current = error;
+	while (current instanceof Error && !seen.has(current)) {
+		if (current instanceof SessionWriteOutcomeError) {
+			return current.outcome;
+		}
+		seen.add(current);
+		current = current.cause;
+	}
+};
+
+const isStorageBlockedWrite = (error: unknown): boolean => {
+	const outcome = storageWriteOutcomeFromError(error);
+	return (
+		outcome?.kind === "indeterminate" ||
+		(outcome?.kind === "committed" && outcome.projection === "blocked")
+	);
+};
+
 type SessionTranscriptOrder = {
 	readonly committedMessageIds: Set<SessionMessageId>;
 	readonly messageIds: SessionMessageId[];
@@ -567,6 +544,7 @@ export class AgentSessionImpl implements AgentSession {
 
 	constructor({
 		deadlineMs = AGENT_TURN_DEADLINE_MS,
+		forkContinuationMessageId,
 		initialCompactions = [],
 		initialAgent,
 		initialContext,
@@ -592,16 +570,24 @@ export class AgentSessionImpl implements AgentSession {
 			steeringMessages: [...initialSteeringMessages],
 			transcript: [...initialTranscript],
 			transcriptRevision: 0,
+			projectionBlocked: false,
 			turnActive: false,
 			viewState: undefined,
 		};
 		this.#operationState = {
 			backgroundTasks: new Set(),
-			compaction: { activeCommand: undefined, requests: new Set() },
+			compaction: {
+				activeCommand: undefined,
+				retryStatus: undefined,
+				requests: new Set(),
+			},
 			continuationInputs: new WeakSet(),
 			durableWrites: new Set(),
+			durableWriteFailures: [],
 			transcriptOrder: createSessionTranscriptOrder(initialTranscript),
 			recordCommitTail: Promise.resolve(),
+			projectionBlocked: false,
+			storageUncertain: false,
 			events: {
 				observers: new Set(),
 				submissionEvents: new Set(),
@@ -656,6 +642,15 @@ export class AgentSessionImpl implements AgentSession {
 				}
 			}
 		};
+		const trackShutdownWriteFailure = (error: unknown): void => {
+			if (
+				sessionState.shutdown.phase === "closing" &&
+				!this.#state.turnActive &&
+				!isCommittedProjectionBlocked(error)
+			) {
+				sessionState.durableWriteFailures.push(error);
+			}
+		};
 		const commitRecord: AgentSessionPorts["commitRecord"] = (input) => {
 			if (sessionState.shutdown.closed) {
 				return Promise.resolve();
@@ -664,39 +659,80 @@ export class AgentSessionImpl implements AgentSession {
 				input.record.outcome.kind === "tool"
 					? getAssistantMessageId(input.record.turnId)
 					: undefined;
+			const publishCommittedRecord = (writeError?: Error): void => {
+				const committedMessages = registerCommittedSessionRecord(
+					sessionState.transcriptOrder,
+					input.record,
+					assistantMessageId
+				);
+				const projectedTranscript = projectCommittedToolMessages(
+					this.#state.transcript,
+					sessionState.transcriptOrder
+				);
+				const transcript = orderSessionTranscript(
+					appendMissingCommittedRecordMessages(
+						projectedTranscript,
+						committedMessages
+					),
+					sessionState.transcriptOrder
+				);
+				if (transcript !== this.#state.transcript) {
+					publish({
+						transcript,
+						...(sessionState.projectionBlocked
+							? { projectionBlocked: true }
+							: {}),
+						...(writeError === undefined ? {} : { error: writeError }),
+					});
+				} else if (writeError !== undefined) {
+					publish({
+						error: writeError,
+						...(sessionState.projectionBlocked
+							? { projectionBlocked: true }
+							: {}),
+					});
+				}
+			};
 			const write = sessionState.recordCommitTail
 				.then(() => ports.commitRecord(input))
 				.then(
-					() => {
-						const committedMessages = registerCommittedSessionRecord(
-							sessionState.transcriptOrder,
-							input.record,
-							assistantMessageId
-						);
-						const projectedTranscript = projectCommittedToolMessages(
-							this.#state.transcript,
-							sessionState.transcriptOrder
-						);
-						const transcript = orderSessionTranscript(
-							appendMissingCommittedRecordMessages(
-								projectedTranscript,
-								committedMessages
-							),
-							sessionState.transcriptOrder
-						);
-						if (transcript !== this.#state.transcript) {
-							publish({ transcript });
-						}
-					},
+					() => publishCommittedRecord(),
 					(error) => {
-						const transcript = removeUncommittedSessionRecordMessages(
-							this.#state.transcript,
-							input.record,
-							sessionState.transcriptOrder,
-							assistantMessageId
-						);
-						if (transcript !== this.#state.transcript) {
-							publish({ transcript });
+						if (isStorageBlockedWrite(error)) {
+							sessionState.projectionBlocked = true;
+							const outcome = storageWriteOutcomeFromError(error);
+							const writeError =
+								error instanceof Error
+									? error
+									: new Error(
+											getErrorMessage(error, "Session storage is blocked.")
+										);
+							if (outcome?.kind === "committed") {
+								publishCommittedRecord(writeError);
+							} else {
+								sessionState.storageUncertain = true;
+								const transcript = removeUncommittedSessionRecordMessages(
+									this.#state.transcript,
+									input.record,
+									sessionState.transcriptOrder,
+									assistantMessageId
+								);
+								publish({
+									error: writeError,
+									projectionBlocked: true,
+									transcript,
+								});
+							}
+						} else {
+							const transcript = removeUncommittedSessionRecordMessages(
+								this.#state.transcript,
+								input.record,
+								sessionState.transcriptOrder,
+								assistantMessageId
+							);
+							if (transcript !== this.#state.transcript) {
+								publish({ transcript });
+							}
 						}
 						throw error;
 					}
@@ -708,17 +744,40 @@ export class AgentSessionImpl implements AgentSession {
 			sessionState.durableWrites.add(write);
 			void write.then(
 				() => sessionState.durableWrites.delete(write),
-				() => sessionState.durableWrites.delete(write)
+				(error) => {
+					trackShutdownWriteFailure(error);
+					sessionState.durableWrites.delete(write);
+				}
 			);
 			return write;
 		};
 		const updateSubmissionStatus: AgentSessionPorts["updateSubmissionStatus"] =
 			(input) => {
-				const write = ports.updateSubmissionStatus(input);
+				const write = ports.updateSubmissionStatus(input).catch((error) => {
+					if (isStorageBlockedWrite(error)) {
+						sessionState.projectionBlocked = true;
+						if (storageWriteOutcomeFromError(error)?.kind === "indeterminate") {
+							sessionState.storageUncertain = true;
+						}
+						publish({
+							error:
+								error instanceof Error
+									? error
+									: new Error(
+											getErrorMessage(error, "Session storage is blocked.")
+										),
+							projectionBlocked: true,
+						});
+					}
+					throw error;
+				});
 				sessionState.durableWrites.add(write);
 				void write.then(
 					() => sessionState.durableWrites.delete(write),
-					() => sessionState.durableWrites.delete(write)
+					(error) => {
+						trackShutdownWriteFailure(error);
+						sessionState.durableWrites.delete(write);
+					}
 				);
 				return write;
 			};
@@ -740,8 +799,14 @@ export class AgentSessionImpl implements AgentSession {
 				currentSubmissions.every(
 					(submission, index) => submission === scheduledSubmissions[index]
 				);
+			const compactionRetryStatusChanged =
+				this.#state.compactionRetryStatus !==
+				sessionState.compaction.retryStatus;
 			const projectedChanges: Partial<LiveSessionSnapshot> = {
 				...changes,
+				...(compactionRetryStatusChanged
+					? { compactionRetryStatus: sessionState.compaction.retryStatus }
+					: {}),
 				queuedSubmissions: queuedSubmissionsUnchanged
 					? currentSubmissions
 					: [...scheduledSubmissions],
@@ -827,7 +892,17 @@ export class AgentSessionImpl implements AgentSession {
 			if (sessionState.shutdown.closed) {
 				return;
 			}
-			publish({ compactionError: error });
+			if (error !== null && isStorageBlockedWrite(error)) {
+				sessionState.projectionBlocked = true;
+				if (storageWriteOutcomeFromError(error)?.kind === "indeterminate") {
+					sessionState.storageUncertain = true;
+				}
+			}
+			publish({
+				compactionError: error,
+				...(error !== null && isStorageBlockedWrite(error) ? { error } : {}),
+				...(sessionState.projectionBlocked ? { projectionBlocked: true } : {}),
+			});
 		};
 		let maintenance: SessionMaintenanceWorkflow;
 		const compact = (
@@ -971,6 +1046,10 @@ export class AgentSessionImpl implements AgentSession {
 			if (firstFailure !== undefined) {
 				throw firstFailure.reason;
 			}
+			const previousFailure = sessionState.durableWriteFailures[0];
+			if (previousFailure !== undefined) {
+				throw previousFailure;
+			}
 		};
 		const waitForCompactions = async (): Promise<void> => {
 			while (sessionState.compaction.requests.size > 0) {
@@ -1021,6 +1100,7 @@ export class AgentSessionImpl implements AgentSession {
 				switch (transition.kind) {
 					case "compaction-started": {
 						sessionState.compaction.activeCommand = transition.command;
+						sessionState.compaction.retryStatus = undefined;
 						publish({});
 						return;
 					}
@@ -1034,7 +1114,29 @@ export class AgentSessionImpl implements AgentSession {
 							transition.kind === "compaction-phase"
 								? { ...transition.command, phase: transition.phase }
 								: undefined;
+						if (transition.kind === "compaction-settled") {
+							sessionState.compaction.retryStatus = undefined;
+						}
 						publish({});
+						return;
+					}
+					case "compaction-summary-event": {
+						if (isSupersededCommand(transition.command)) {
+							return;
+						}
+						sessionState.compaction.retryStatus =
+							transition.event.type === "compaction-summary-retry-scheduled"
+								? {
+										attempt: transition.event.attempt,
+										compactionId: transition.event.compactionId,
+										maxRetries: transition.event.maxRetries,
+										modelId: transition.event.modelId,
+										providerId: transition.event.providerId,
+										retryAt: transition.event.retryAt,
+									}
+								: undefined;
+						publish({});
+						ports.emitCompactionEvent(transition.event);
 						return;
 					}
 					case "compaction-applied": {
@@ -1202,7 +1304,9 @@ export class AgentSessionImpl implements AgentSession {
 			settleCompaction,
 			trackBackgroundTask,
 			takeSteeringMessages: (execution, armedSkill, signal) =>
-				steering.deliverPending(execution, armedSkill, signal),
+				sessionState.projectionBlocked
+					? Promise.resolve([])
+					: steering.deliverPending(execution, armedSkill, signal),
 		});
 
 		const beginSubmission = (
@@ -1377,7 +1481,7 @@ export class AgentSessionImpl implements AgentSession {
 					userText: text,
 				};
 				const steeringMessage: SessionSteeringMessage = {
-					id: toSteeringMessageId(crypto.randomUUID()),
+					id: toSteeringMessageId(`steering-${message.id}`),
 					input: steeringInput,
 					message,
 					recordId: record.id,
@@ -1413,7 +1517,17 @@ export class AgentSessionImpl implements AgentSession {
 					),
 				});
 				if (attachmentIds.length > 0) {
-					ports.attachments.release(attachmentIds);
+					trackBackgroundTask(
+						Promise.resolve()
+							.then(() => ports.attachments.release(attachmentIds))
+							.catch((error) => {
+								void logger.error("Steering attachment release failed", {
+									operation: "session.steering",
+									phase: "attachment-release",
+								});
+								throw error;
+							})
+					);
 				}
 				emitSubmissionEvent({
 					kind: "steered",
@@ -1554,6 +1668,7 @@ export class AgentSessionImpl implements AgentSession {
 		});
 		const getInputLaneState = () => ({
 			canDrain:
+				!sessionState.projectionBlocked &&
 				sessionState.lane.runs === 0 &&
 				!this.#state.turnActive &&
 				!this.#state.isCompacting &&
@@ -1578,6 +1693,8 @@ export class AgentSessionImpl implements AgentSession {
 				sessionState.queue.externalizations.size > 0 ||
 				ports.inputScheduler.getQueuedSubmissions().length > 0 ||
 				this.#state.steeringMessages.length > 0,
+			writeBlocked: sessionState.projectionBlocked,
+			reconciliationRequired: sessionState.storageUncertain,
 		});
 		const inputLanePort: SessionInputLanePort = {
 			apply: (transition) => {
@@ -1622,8 +1739,20 @@ export class AgentSessionImpl implements AgentSession {
 				reportSubmissionFailure,
 				retainAttachments: (attachmentIds) =>
 					ports.attachments.retain(attachmentIds),
-				retrySteeringMessage: (message) => steering.retryFailedMessage(message),
-				runSteeringMessage: (message) => steering.runPendingMessage(message),
+				retrySteeringMessage: (message) =>
+					sessionState.projectionBlocked
+						? Promise.resolve({
+								rejected: true,
+								reason: SESSION_PROJECTION_BLOCKED_ERROR,
+							})
+						: steering.retryFailedMessage(message),
+				runSteeringMessage: (message) =>
+					sessionState.projectionBlocked
+						? Promise.resolve({
+								rejected: true,
+								reason: SESSION_PROJECTION_BLOCKED_ERROR,
+							})
+						: steering.runPendingMessage(message),
 				runSubmission,
 				trackBackgroundTask,
 			},
@@ -1747,6 +1876,9 @@ export class AgentSessionImpl implements AgentSession {
 			if (sessionState.shutdown.closed) {
 				return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
 			}
+			if (sessionState.projectionBlocked) {
+				return { kind: "rejected", reason: SESSION_PROJECTION_BLOCKED_ERROR };
+			}
 			if (
 				sessionState.lane.runs > 0 ||
 				sessionState.queue.drainPhase === "draining" ||
@@ -1770,7 +1902,11 @@ export class AgentSessionImpl implements AgentSession {
 			if (scheduledInput !== undefined) {
 				return scheduledInput;
 			}
-			const messages = findContinuationContextMessages(this.#state.context);
+			const messages = findContinuationContextMessages(this.#state.context, {
+				...(forkContinuationMessageId === undefined
+					? {}
+					: { terminalAssistantMessageId: forkContinuationMessageId }),
+			});
 			if (messages.kind === "rejected") {
 				return messages;
 			}
@@ -1875,7 +2011,7 @@ export class AgentSessionImpl implements AgentSession {
 			setExecutionViewState,
 			shutdown,
 		};
-		this.continue = () => continueSession();
+		this.continue = async () => continueSession();
 		this.cancel = () => {
 			sessionState.recovery.epoch = nextRecoveryEpoch();
 			abortActiveSend("cancelled");

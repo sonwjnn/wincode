@@ -45,6 +45,7 @@ import { CompactNameList } from "@/modules/sessions/ui/components/startup-overvi
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
+import { toSessionId } from "@/shared/identifiers";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
@@ -62,16 +63,23 @@ import {
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const previousLocalDatabasePath = process.env.WINCODE_LOCAL_DB_PATH;
-process.env.WINCODE_LOCAL_DB_PATH = ":memory:";
+const testSessionDataRoot = await fs.mkdtemp(
+	path.join(os.tmpdir(), "wincode-new-session-view-")
+);
+process.env.WINCODE_LOCAL_DB_PATH = path.join(
+	testSessionDataRoot,
+	"sessions.sqlite"
+);
 
-// The in-memory override is file-wide, so hand the previous value back before
-// another test file observes it.
-afterAll(() => {
+// The temporary database and JSONL root are file-wide, so restore the previous
+// path before another test file observes the environment.
+afterAll(async () => {
 	if (previousLocalDatabasePath === undefined) {
 		delete process.env.WINCODE_LOCAL_DB_PATH;
 	} else {
 		process.env.WINCODE_LOCAL_DB_PATH = previousLocalDatabasePath;
 	}
+	await fs.rm(testSessionDataRoot, { force: true, recursive: true });
 });
 
 const createHomeProviderCollection = (
@@ -96,6 +104,7 @@ const createTestHomeProviderCollection = (pluginRuntime?: PluginRuntime) =>
 
 type AgentProviderFixture = Readonly<{
 	agentId: AgentId;
+	availableModel: ProviderModel;
 	credentialStorageId: string;
 	model: ProviderModelSelection;
 	pluginRuntime: PluginRuntime;
@@ -147,6 +156,7 @@ const createAgentProviderFixture = (
 					models: [availableModel],
 					resolveAuthorization: () => ({ authorization: { fake: true } }),
 					async *streamChat() {
+						options.operations?.push("chat");
 						yield { type: "finish" };
 					},
 				});
@@ -196,6 +206,7 @@ const createAgentProviderFixture = (
 	];
 	return {
 		agentId,
+		availableModel,
 		credentialStorageId: pluginProviderStorageId({
 			pluginId: "interactive-provider-plugin-0",
 			providerId,
@@ -1171,6 +1182,114 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		}
 	});
 
+	test("reports committed-but-blocked Session creation and does not start Agent work", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({ operations });
+		const store = getSessionStore();
+		await store.resetSessionData();
+		const originalCreateSessionWithExternalizedMessage =
+			store.createSessionWithExternalizedMessage;
+		store.createSessionWithExternalizedMessage = async (input) => ({
+			id: toSessionId("home-blocked-session"),
+			message: input.message,
+			writeOutcome: {
+				entryHash: "0".repeat(64),
+				kind: "committed",
+				operationId: "home-blocked-operation",
+				projection: "blocked",
+				sequence: 1,
+			},
+		});
+		const setup = await renderHomeView(
+			createTrackedHomeProviderCollectionFactory(
+				operations,
+				fixture.credentialStorageId,
+				{ collectionConstructions: 0, storeConstructions: 0 }
+			),
+			{
+				defaultAgentId: fixture.agentId,
+				pluginRuntime: fixture.pluginRuntime,
+			}
+		);
+
+		try {
+			await waitForHomeModelStatus(setup);
+			await submitHomePrompt(setup);
+			const frame = await waitForHomeFrame(
+				setup,
+				"Your prompt is saved in Session"
+			);
+			expect(normalizeHomeFrame(frame)).toContain(
+				"SQLite projection is unavailable"
+			);
+			expect(normalizeHomeFrame(frame)).toContain("No Agent work was started");
+			expect(normalizeHomeFrame(frame)).toContain("home-blocked-session");
+			expect(operations).not.toContain("chat");
+			expect(await store.listSessions()).toEqual([]);
+		} finally {
+			store.createSessionWithExternalizedMessage =
+				originalCreateSessionWithExternalizedMessage;
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
+		}
+	});
+
+	test("explains an indeterminate Session creation without claiming it was saved", async () => {
+		const operations: string[] = [];
+		const fixture = createAgentProviderFixture({ operations });
+		const store = getSessionStore();
+		await store.resetSessionData();
+		const originalCreateSessionWithExternalizedMessage =
+			store.createSessionWithExternalizedMessage;
+		store.createSessionWithExternalizedMessage = async (input) => ({
+			id: toSessionId("home-indeterminate-session"),
+			message: input.message,
+			writeOutcome: {
+				error: {
+					code: "session_log_write_indeterminate",
+					message: "The Session log write result is indeterminate.",
+				},
+				kind: "indeterminate",
+				operationId: "home-indeterminate-operation",
+				requiresReconciliation: true,
+			},
+		});
+		const setup = await renderHomeView(
+			createTrackedHomeProviderCollectionFactory(
+				operations,
+				fixture.credentialStorageId,
+				{ collectionConstructions: 0, storeConstructions: 0 }
+			),
+			{
+				defaultAgentId: fixture.agentId,
+				pluginRuntime: fixture.pluginRuntime,
+			}
+		);
+
+		try {
+			await waitForHomeModelStatus(setup);
+			await submitHomePrompt(setup);
+			const frame = await waitForHomeFrame(
+				setup,
+				"Could not confirm whether your prompt was saved"
+			);
+			const normalizedFrame = normalizeHomeFrame(frame);
+			expect(normalizedFrame).toContain("Reopen this Session to reconcile it");
+			expect(normalizedFrame).toContain("do not submit it as a new Session");
+			expect(operations).not.toContain("chat");
+			expect(await store.listSessions()).toEqual([]);
+		} finally {
+			store.createSessionWithExternalizedMessage =
+				originalCreateSessionWithExternalizedMessage;
+			await act(() => setup.renderer.destroy());
+			await fixture.pluginRuntime.shutdown();
+			setInteractiveRuntimeContext({ args: [], cwd: process.cwd() });
+			await store.resetSessionData();
+		}
+	});
+
 	test("initializes the available low thinking level before creating a new reasoning Session", async () => {
 		const operations: string[] = [];
 		const fixture = createAgentProviderFixture({
@@ -1222,7 +1341,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			counters,
 			"authoritative",
 			pendingSnapshot.promise,
-			"openai"
+			fixture.model.providerId
 		);
 		const store = getSessionStore();
 		await store.resetSessionData();
@@ -1239,9 +1358,10 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 				"openai/gpt-5.6-luna"
 			);
 			await act(async () => {
-				pendingSnapshot.resolve([]);
+				pendingSnapshot.resolve([fixture.availableModel]);
 				await Promise.resolve();
 			});
+			await flushTestRenderer(setup, 3);
 			const selectedFrame = await waitForHomeFrame(
 				setup,
 				"openai/gpt-5.6-luna:low"
@@ -1281,6 +1401,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		});
 
 		try {
+			await flushTestRenderer(setup, 3);
 			await waitForHomeFrame(setup, ":low");
 			expect(await captureNormalizedHomeFrame(setup)).toContain(":low");
 		} finally {
@@ -1351,6 +1472,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 				}
 			);
 			try {
+				await waitForHomeModelStatus(setup);
 				await waitForHomeFrame(setup, "do not match the current trusted");
 				expect(await captureNormalizedHomeFrame(setup)).toContain(
 					"do not match the current trusted"
@@ -1387,6 +1509,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			}
 		);
 		try {
+			await waitForHomeModelStatus(setup);
 			await waitForHomeFrame(setup, "has no matching trusted source");
 			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
@@ -1420,6 +1543,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			}
 		);
 		try {
+			await waitForHomeModelStatus(setup);
 			await waitForHomeFrame(setup, "has no matching trusted source");
 			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"
@@ -1456,6 +1580,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			}
 		);
 		try {
+			await waitForHomeModelStatus(setup);
 			await waitForHomeFrame(setup, "has no matching trusted source");
 			expect(await captureNormalizedHomeFrame(setup)).toContain(
 				"has no matching trusted source"

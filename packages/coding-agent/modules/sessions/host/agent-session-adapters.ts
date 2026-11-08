@@ -1,14 +1,20 @@
 import type { AgentId, StatefulAgent } from "@wincode/agent-core";
-import type { ProviderCollection } from "@wincode/ai";
+import {
+	calculateModelUsageCostUsd,
+	type ProviderCollection,
+} from "@wincode/ai";
 import { isNull, isUndefined, omitBy, omitUndefined } from "@wincode/utils";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { resolveFileMentionParts } from "@/modules/file-mentions/utils/resolve-file-mention-parts";
+import { pricingEntryForProviderModel } from "@/modules/model-pricing/model-pricing";
 import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
 import {
 	isAvailableProviderModelSelection,
 	isSameProviderModelIdentity,
 } from "@/modules/providers/provider-model-selection";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
+import { resolveSessionModelRetryPolicy } from "@/modules/sessions/retry-policy";
+import { requireSessionWriteReady } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import {
 	buildSkillToolDefinition,
@@ -273,6 +279,7 @@ export const createAgentSessionAdapters = (
 
 	return {
 		inputScheduler: statefulAgent,
+		emitCompactionEvent: () => undefined,
 		attachments: {
 			externalize: (messages, signal) =>
 				capabilities.getStore().externalizeAttachments(messages, signal, {
@@ -297,11 +304,24 @@ export const createAgentSessionAdapters = (
 			retain: (attachmentIds) =>
 				capabilities.getStore().attachmentStore?.retain(attachmentIds),
 		},
-		commitRecord: (input) => capabilities.getStore().commitSessionRecord(input),
-		updateSubmissionStatus: (input) =>
-			capabilities.getStore().updateSessionSubmission({ ...input, sessionId }),
+		commitRecord: async (input) => {
+			requireSessionWriteReady(
+				await capabilities.getStore().commitSessionRecord(input)
+			);
+		},
+		updateSubmissionStatus: async (input) => {
+			requireSessionWriteReady(
+				await capabilities.getStore().updateSessionSubmission({
+					...input,
+					sessionId,
+				})
+			);
+		},
 		compaction: {
 			compact: async (input) => {
+				const modelRetryPolicy = await resolveSessionModelRetryPolicy(
+					capabilities.getConfig()
+				);
 				const summaryTarget = await resolveCompactionSummaryTarget(
 					input,
 					providerCollection,
@@ -315,11 +335,30 @@ export const createAgentSessionAdapters = (
 				const { thinkingLevel: _thinkingLevel, ...compactionInput } = input;
 				return capabilities.getCompactionModule().compact({
 					...compactionInput,
+					modelRetryPolicy,
 					settings,
 					summaryTarget,
 					...omitUndefined({ summaryGenerator }),
-					recordSummaryUsage: async ({ id, model, usage }) => {
+					recordSummaryUsage: async ({
+						compactionId,
+						createdAt,
+						id,
+						model,
+						usage,
+					}) => {
+						const providerModel = providerCollection.getModel(
+							model.providerId,
+							model.modelId
+						);
 						await usageLedger.record({
+							compactionId,
+							costUsd: calculateModelUsageCostUsd(
+								providerModel === undefined
+									? undefined
+									: pricingEntryForProviderModel(providerModel),
+								usage
+							),
+							createdAt,
 							id,
 							kind: "compaction-summary",
 							model,

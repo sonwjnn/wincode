@@ -1,3 +1,4 @@
+import type { AgentTurnId } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
 import { isPlainObject } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
@@ -12,6 +13,12 @@ import {
 	MAX_ATTACHMENT_BYTES,
 } from "@/modules/sessions/attachment-reference";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import { isValidSessionLogIdentifier } from "@/modules/sessions/session-log-identifiers";
+import type {
+	SessionPageOptions,
+	SessionStatisticsOptions,
+} from "@/modules/sessions/storage/session-store";
+import { isValidSessionId } from "@/shared/identifiers";
 import { findTextOccurrences } from "@/shared/utils/text-ranges";
 import type { RpcParams, RpcRequest } from "./protocol";
 import { RPC_ERROR_CODES } from "./protocol";
@@ -124,6 +131,94 @@ const exactFields = (
 	record: Record<string, unknown>,
 	allowed: readonly string[]
 ): boolean => Object.keys(record).every((key) => allowed.includes(key));
+
+export const readSessionStatisticsOptions = (
+	params: RpcParams,
+	additionalFields: readonly string[] = []
+): SessionStatisticsOptions => {
+	if (!exactFields(params, ["readPoint", "turnId", ...additionalFields])) {
+		throw rpcInvalidParams(
+			"Session statistics parameters contain unknown fields."
+		);
+	}
+	const readPoint = params.readPoint;
+	if (readPoint !== undefined && typeof readPoint !== "string") {
+		throw rpcInvalidParams("readPoint must be a string.");
+	}
+	const turnId = params.turnId;
+	if (
+		turnId !== undefined &&
+		(typeof turnId !== "string" || turnId.length === 0)
+	) {
+		throw rpcInvalidParams("turnId must be a non-empty string.");
+	}
+	return {
+		...(readPoint === undefined ? {} : { readPoint }),
+		...(turnId === undefined ? {} : { turnId: turnId as AgentTurnId }),
+	};
+};
+
+export type RpcSessionForkInput = Readonly<{
+	checkpointRecordId: string;
+	operationId: string;
+	sourceSessionId: string;
+}>;
+
+export const readSessionForkInput = (
+	params: RpcParams
+): RpcSessionForkInput => {
+	if (
+		!exactFields(params, [
+			"checkpointRecordId",
+			"operationId",
+			"sourceSessionId",
+		])
+	) {
+		throw rpcInvalidParams("Session fork parameters contain unknown fields.");
+	}
+	const checkpointRecordId = stringValue(params.checkpointRecordId);
+	const operationId = stringValue(params.operationId);
+	const sourceSessionId = stringValue(params.sourceSessionId);
+	if (
+		checkpointRecordId === undefined ||
+		!isValidSessionLogIdentifier(checkpointRecordId)
+	) {
+		throw rpcInvalidParams(
+			"checkpointRecordId must be a valid Session Record ID."
+		);
+	}
+	if (operationId === undefined || !isValidSessionLogIdentifier(operationId)) {
+		throw rpcInvalidParams(
+			"operationId must be a stable operation identifier."
+		);
+	}
+	if (sourceSessionId === undefined || !isValidSessionId(sourceSessionId)) {
+		throw rpcInvalidParams("sourceSessionId must be a valid Session ID.");
+	}
+	return { checkpointRecordId, operationId, sourceSessionId };
+};
+
+export const readSessionPageOptions = (
+	params: RpcParams,
+	additionalFields: readonly string[] = []
+): SessionPageOptions => {
+	if (!exactFields(params, ["cursor", "limit", ...additionalFields])) {
+		throw rpcInvalidParams("Session page parameters contain unknown fields.");
+	}
+	const cursor = params.cursor;
+	if (cursor !== undefined && typeof cursor !== "string") {
+		throw rpcInvalidParams("cursor must be a string.");
+	}
+	const limit = params.limit;
+	if (limit !== undefined && typeof limit !== "number") {
+		throw rpcInvalidParams("limit must be a number.");
+	}
+	return {
+		...(cursor === undefined ? {} : { cursor }),
+		...(limit === undefined ? {} : { limit }),
+	};
+};
+
 const rejectedSubmission = (message: string): RpcApplicationError =>
 	appError("submission_rejected", message);
 

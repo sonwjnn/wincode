@@ -1,4 +1,4 @@
-import type { AgentId } from "@wincode/agent-core";
+import type { AgentId, SessionRecordId } from "@wincode/agent-core";
 import type {
 	ProviderCollection,
 	ProviderModel,
@@ -46,16 +46,24 @@ import {
 	restoreSelection,
 } from "@/modules/sessions/selection";
 import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
+import type {
+	SessionForkProvenance,
+	SessionPageOptions,
+	SessionStatistics,
+	SessionStore,
+} from "@/modules/sessions/storage/session-store";
 import {
 	SessionInUseError,
 	type SessionWriterLockOwner,
 } from "@/modules/sessions/storage/session-writer-lock";
 import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
+import type { SessionStatisticsUsageTotals } from "@/modules/sessions/usage/session-statistics";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
+import { SessionForkProvenanceBanner } from "../components/session-fork-provenance-banner";
 import {
 	SessionWriterAction,
 	SessionWriterOwnerLabel,
@@ -64,7 +72,13 @@ import type { SessionInitialSubmission } from "./session-view";
 import { SessionView } from "./session-view";
 import { StoredSessionHistoryView } from "./stored-session-history-view";
 
+type SessionForkSummary = Readonly<{
+	inheritedUsage: SessionStatisticsUsageTotals;
+	provenance: SessionForkProvenance;
+}>;
+
 type OpenedSession = Readonly<{
+	forkSummary?: SessionForkSummary;
 	host: SessionHost;
 	initialSubmission?: SessionInitialSubmission;
 	sessionTitle: string;
@@ -72,7 +86,11 @@ type OpenedSession = Readonly<{
 }>;
 type StoredSessionHistory = Readonly<{
 	compactions: readonly SessionCompaction[];
+	forkProvenance: SessionForkProvenance | undefined;
 	model: ProviderModelSelection | undefined;
+	nextCursor: string | undefined;
+	readPoint: string;
+	statistics: SessionStatistics;
 	sessionTitle: string;
 	transcript: readonly SessionMessage[];
 }>;
@@ -97,6 +115,8 @@ type SessionSurfaceState =
 	  }
 	| {
 			history: StoredSessionHistory;
+			historyError: string | undefined;
+			isLoadingMore: boolean;
 			isRefreshing: boolean;
 			isRetrying: boolean;
 			isSelectingModel: boolean;
@@ -197,34 +217,85 @@ const createProviderReselection = async (
 					?.getProviderRegistrations(sessionId) ?? [],
 			getTrustedPluginProviderRuntime: () => capabilities.getPluginRuntime?.(),
 			withSessionWork: (action) =>
-				withSessionManagerWork(capabilities.getSessionHostManager(), action),
+				withSessionManagerWork(
+					capabilities.getSessionHostManager(),
+					action,
+					sessionId
+				),
 		}),
 		providerCollection,
 	};
 };
 
-const loadStoredSessionHistory = async (
+const loadSessionForkSummary = async (
+	store: SessionStore,
 	sessionId: SessionId
+): Promise<SessionForkSummary | undefined> => {
+	const provenance = await store.getSessionForkProvenance(sessionId);
+	if (provenance === undefined) {
+		return;
+	}
+	const statistics = await store.getSessionStatistics(sessionId);
+	return { inheritedUsage: statistics.usage.inherited, provenance };
+};
+
+const loadStoredSessionHistory = async (
+	sessionId: SessionId,
+	options?: SessionPageOptions
 ): Promise<StoredSessionHistory> => {
 	const store = getSessionStore();
-	const [row, records, compactions] = await Promise.all([
-		store.getSession(sessionId),
-		store.listSessionRecords(sessionId),
-		store.getCompactions(sessionId),
+	const [page, forkProvenance] = await Promise.all([
+		store.readSessionHistoryPage(sessionId, options),
+		store.getSessionForkProvenance(sessionId),
 	]);
+	const statistics = await store.getSessionStatistics(sessionId, {
+		readPoint: page.readPoint,
+	});
 	const savedTranscript = sanitizeInterruptedSessionMessages(
-		projectSessionRecords(records)
+		projectSessionRecords(page.records)
 	);
 	const transcript = store.attachmentStore
 		? await store.attachmentStore.annotateMessagesForDisplay(savedTranscript)
 		: savedTranscript;
 	return {
-		compactions,
-		model: restoreSelection({ messages: savedTranscript, row })?.model,
-		sessionTitle: row.title,
+		compactions: page.compactions,
+		forkProvenance,
+		model: restoreSelection({ messages: savedTranscript, row: page.session })
+			?.model,
+		nextCursor: page.nextCursor,
+		readPoint: page.readPoint,
+		statistics,
+		sessionTitle: page.session.title,
 		transcript,
 	};
 };
+
+const appendStoredSessionHistory = (
+	current: StoredSessionHistory,
+	older: StoredSessionHistory
+): StoredSessionHistory => {
+	const compactions = new Map<string, SessionCompaction>();
+	for (const compaction of [...older.compactions, ...current.compactions]) {
+		compactions.set(compaction.id, compaction);
+	}
+	return {
+		...current,
+		compactions: [...compactions.values()].sort(
+			(left, right) => left.sequence - right.sequence
+		),
+		nextCursor: older.nextCursor,
+		transcript: [...older.transcript, ...current.transcript],
+	};
+};
+
+const clearStoredHistoryCursor = (
+	history: StoredSessionHistory
+): StoredSessionHistory => ({ ...history, nextCursor: undefined });
+
+const storedHistoryPageErrorMessage = (error: unknown): string =>
+	error instanceof Error && Reflect.get(error, "code") === "cursor_expired"
+		? "Stored history changed. Refresh history to start a new snapshot."
+		: getErrorMessage(error, "Could not load older Session history.");
 
 const resolveCurrentAgentPin = async ({
 	agent,
@@ -354,12 +425,16 @@ export function SessionSurface({
 	const surfaceRef = useRef(surface);
 	surfaceRef.current = surface;
 	const refreshHistoryRef = useRef<(() => void) | null>(null);
+	const loadMoreHistoryRef = useRef<(() => void) | null>(null);
 	const retryOpenRef = useRef<(() => void) | null>(null);
 	const reselectModelRef = useRef<(() => void) | null>(null);
 	const viewHistoryRef = useRef<(() => void) | null>(null);
 	const selectionDialogOpenRef = useRef(false);
 	const handleRefreshHistory = useCallback(() => {
 		refreshHistoryRef.current?.();
+	}, []);
+	const handleLoadMoreHistory = useCallback(() => {
+		loadMoreHistoryRef.current?.();
 	}, []);
 	const handleRetryOpen = useCallback(() => {
 		retryOpenRef.current?.();
@@ -370,6 +445,32 @@ export function SessionSurface({
 	const handleReselectModel = useCallback(() => {
 		reselectModelRef.current?.();
 	}, []);
+	const handleRewindCheckpoint = useCallback(
+		async (recordId: SessionRecordId) => {
+			const services = await sessionServicesHandle.open();
+			const sessionSdk = services.capabilities.getSessionSdk?.();
+			if (sessionSdk === undefined) {
+				throw new Error("Session Fork is unavailable.");
+			}
+			const store = getSessionStore();
+			const checkpoint = { recordId };
+			const operationId = await store.getOrCreateSessionForkActionId(
+				sessionId,
+				checkpoint
+			);
+			const result = await sessionSdk.forkSession(
+				sessionId,
+				checkpoint,
+				operationId
+			);
+			return {
+				complete: () =>
+					store.completeSessionForkAction(sessionId, checkpoint, operationId),
+				sessionId: result.id,
+			};
+		},
+		[sessionId, sessionServicesHandle]
+	);
 	const handleSelectionDialogDismiss = useCallback(() => {
 		selectionDialogOpenRef.current = false;
 		setSurface((current) =>
@@ -464,14 +565,16 @@ export function SessionSurface({
 			}
 			try {
 				const store = getSessionStore();
-				const [row, transcript] = await Promise.all([
+				const [row, transcript, forkSummary] = await Promise.all([
 					store.getSession(sessionId),
 					transcriptForDisplay(host, store),
+					loadSessionForkSummary(store, sessionId),
 				]);
 				if (ignore) {
 					return null;
 				}
 				return {
+					...(forkSummary === undefined ? {} : { forkSummary }),
 					host,
 					...(providerSelection?.providerModel === undefined
 						? { initialSubmission: initialSubmissionRef.current }
@@ -493,6 +596,8 @@ export function SessionSurface({
 				if (!ignore) {
 					setSurface({
 						history,
+						historyError: undefined,
+						isLoadingMore: false,
 						isRefreshing: false,
 						isRetrying: false,
 						isSelectingModel: false,
@@ -607,6 +712,8 @@ export function SessionSurface({
 				(history) =>
 					setSurface({
 						history,
+						historyError: undefined,
+						isLoadingMore: false,
 						isRefreshing: false,
 						isRetrying: false,
 						isSelectingModel: false,
@@ -628,10 +735,83 @@ export function SessionSurface({
 				(history) =>
 					setSurface((current) =>
 						current.kind === "history"
-							? { ...current, history, isRefreshing: false }
+							? {
+									...current,
+									history,
+									historyError: undefined,
+									isLoadingMore: false,
+									isRefreshing: false,
+								}
 							: current
 					)
 			);
+		};
+
+		const loadMoreHistory = (): void => {
+			const currentSurface = surfaceRef.current;
+			if (
+				ignore ||
+				historyActionInFlight ||
+				currentSurface.kind !== "history" ||
+				currentSurface.history.nextCursor === undefined
+			) {
+				return;
+			}
+			const cursor = currentSurface.history.nextCursor;
+			const readPoint = currentSurface.history.readPoint;
+			historyActionInFlight = true;
+			setSurface((current) =>
+				current.kind === "history"
+					? { ...current, historyError: undefined, isLoadingMore: true }
+					: current
+			);
+			void (async () => {
+				try {
+					const older = await loadStoredSessionHistory(sessionId, { cursor });
+					if (older.readPoint !== readPoint) {
+						throw new SessionPaginationError(
+							"cursor_expired",
+							"Stored history snapshot changed. Refresh history to continue."
+						);
+					}
+					if (!ignore) {
+						setSurface((current) =>
+							current.kind === "history" &&
+							current.history.readPoint === readPoint
+								? {
+										...current,
+										history: appendStoredSessionHistory(current.history, older),
+										historyError: undefined,
+										isLoadingMore: false,
+									}
+								: current
+						);
+					}
+				} catch (error) {
+					if (!ignore) {
+						const cursorExpired =
+							error instanceof Error &&
+							Reflect.get(error, "code") === "cursor_expired";
+						setSurface((current) =>
+							current.kind === "history"
+								? {
+										...current,
+										history: cursorExpired
+											? clearStoredHistoryCursor({
+													...current.history,
+													nextCursor: undefined,
+												})
+											: current.history,
+										historyError: storedHistoryPageErrorMessage(error),
+										isLoadingMore: false,
+									}
+								: current
+						);
+					}
+				} finally {
+					historyActionInFlight = false;
+				}
+			})();
 		};
 
 		const retryOpen = (): void => {
@@ -726,6 +906,7 @@ export function SessionSurface({
 		};
 
 		refreshHistoryRef.current = refreshHistory;
+		loadMoreHistoryRef.current = loadMoreHistory;
 		retryOpenRef.current = retryOpen;
 		reselectModelRef.current = reselectModel;
 		viewHistoryRef.current = viewStoredHistory;
@@ -743,6 +924,7 @@ export function SessionSurface({
 		return () => {
 			ignore = true;
 			refreshHistoryRef.current = null;
+			loadMoreHistoryRef.current = null;
 			retryOpenRef.current = null;
 			reselectModelRef.current = null;
 			viewHistoryRef.current = null;
@@ -796,10 +978,15 @@ export function SessionSurface({
 		return (
 			<StoredSessionHistoryView
 				compactions={surface.history.compactions}
+				forkProvenance={surface.history.forkProvenance}
+				hasMoreHistory={surface.history.nextCursor !== undefined}
+				historyError={surface.historyError}
+				isLoadingMore={surface.isLoadingMore}
 				isRefreshing={surface.isRefreshing}
 				isRetrying={surface.isRetrying}
 				isSelectingModel={surface.isSelectingModel}
 				messages={surface.history.transcript}
+				onLoadMore={handleLoadMoreHistory}
 				onRefresh={handleRefreshHistory}
 				onReselectModel={handleReselectModel}
 				onRetry={handleRetryOpen}
@@ -807,16 +994,24 @@ export function SessionSurface({
 				selectionError={surface.selectionError}
 				selectionPickerError={surface.selectionPickerError}
 				sessionTitle={surface.history.sessionTitle}
+				statistics={surface.history.statistics}
 			/>
 		);
 	}
 
 	return (
 		<box flexDirection="column" flexGrow={1} width="100%">
+			{surface.session.forkSummary === undefined ? null : (
+				<SessionForkProvenanceBanner
+					inheritedUsage={surface.session.forkSummary.inheritedUsage}
+					provenance={surface.session.forkSummary.provenance}
+				/>
+			)}
 			<SessionView
 				host={surface.session.host}
 				initialSubmission={surface.session.initialSubmission}
 				initialTranscript={surface.session.transcript}
+				onRewindCheckpoint={handleRewindCheckpoint}
 				sessionId={sessionId}
 				sessionTitle={surface.session.sessionTitle}
 			/>

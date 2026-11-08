@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { z } from "zod";
 import { EXECUTION_MODES, type ExecutionMode } from "@/shared/execution-mode";
 import type { SessionId } from "@/shared/identifiers";
+import { throwIfAborted } from "@/shared/utils/abort";
+import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
 import type {
 	SessionWriterLockAdapter,
 	SessionWriterLockAdapterHandle,
@@ -56,6 +58,22 @@ export class SessionWriterLockFailureError extends Error {
 		this.name = "SessionWriterLockFailureError";
 	}
 }
+
+const catalogLifecycleQueue = createKeyedSerialQueue();
+
+const resolveCatalogLockPath = async (
+	logStoreRoot: string
+): Promise<string> => {
+	const absoluteRoot = path.resolve(logStoreRoot);
+	await fs.mkdir(absoluteRoot, { mode: 0o700, recursive: true });
+	const canonicalRoot = await fs.realpath(absoluteRoot);
+	const controlDirectory = path.join(
+		path.dirname(canonicalRoot),
+		"session-control"
+	);
+	await fs.mkdir(controlDirectory, { mode: 0o700, recursive: true });
+	return path.join(await fs.realpath(controlDirectory), "catalog.lock");
+};
 
 const readOwner = async (
 	lockPath: string
@@ -113,14 +131,63 @@ export const resolveSessionWriterLockAdapter = (
 };
 
 /**
- * Acquires one process-owned lock for a local database file identity and Session ID.
- * Its persistent path sits beside the resolved database, so processes opening
- * the same database path share authority across user-data environment overrides.
- * The path must not be removed: processes could then lock different inodes for
- * the same Session ID.
+ * Acquires the process-owned lock for a canonical log-store root and Session ID.
+ * Lock identity is independent of the rebuildable SQLite projection. Persistent
+ * lock files are never removed because replacing one could split authority.
  */
+const throwIfLifecycleAborted = (signal?: AbortSignal): void => {
+	throwIfAborted(signal, "Session lifecycle operation was cancelled.");
+};
+
+const acquireCatalogLifecycleLock = async (
+	lockPath: string,
+	signal?: AbortSignal
+): Promise<SessionWriterLockAdapterHandle> => {
+	const adapter = resolveSessionWriterLockAdapter(
+		process.platform,
+		process.arch
+	);
+	while (true) {
+		throwIfLifecycleAborted(signal);
+		try {
+			const acquiredLock = await adapter.acquire(lockPath);
+			if (acquiredLock !== undefined) {
+				return acquiredLock;
+			}
+		} catch (error) {
+			throw new SessionWriterLockFailureError(
+				error,
+				"The Session catalog lifecycle lock could not be established."
+			);
+		}
+		await Bun.sleep(10);
+	}
+};
+
+export const withSessionCatalogLifecycleGate = async <Result>(
+	logStoreRoot: string,
+	operation: () => Promise<Result>,
+	signal?: AbortSignal
+): Promise<Result> => {
+	let lockPath: string;
+	try {
+		lockPath = await resolveCatalogLockPath(logStoreRoot);
+	} catch (error) {
+		throw new SessionWriterLockFailureError(error);
+	}
+	return catalogLifecycleQueue.run(lockPath, async () => {
+		const acquiredLock = await acquireCatalogLifecycleLock(lockPath, signal);
+		try {
+			throwIfLifecycleAborted(signal);
+			return await operation();
+		} finally {
+			await acquiredLock.release();
+		}
+	});
+};
+
 export const acquireSessionWriterLock = async (
-	databasePath: string,
+	logStoreRoot: string,
 	sessionId: SessionId,
 	options: SessionWriterLockOptions = {}
 ): Promise<SessionWriterLock> => {
@@ -130,21 +197,18 @@ export const acquireSessionWriterLock = async (
 	);
 	let lockPath: string;
 	try {
-		const canonicalDatabasePath = await fs.realpath(databasePath);
-		const databaseIdentity = await fs.stat(canonicalDatabasePath, {
-			bigint: true,
-		});
-		if (databaseIdentity.dev === 0n || databaseIdentity.ino === 0n) {
-			throw new Error("The database file has no stable local identity.");
-		}
+		const absoluteLogStoreRoot = path.resolve(logStoreRoot);
+		await fs.mkdir(absoluteLogStoreRoot, { mode: 0o700, recursive: true });
+		const canonicalLogStoreRoot = await fs.realpath(absoluteLogStoreRoot);
 		const lockDirectory = path.join(
-			path.dirname(canonicalDatabasePath),
-			".wincode-session-writer-locks"
+			path.dirname(canonicalLogStoreRoot),
+			"session-control",
+			"locks"
 		);
 		await fs.mkdir(lockDirectory, { mode: 0o700, recursive: true });
 		const canonicalLockDirectory = await fs.realpath(lockDirectory);
 		const lockName = new Bun.CryptoHasher("sha256")
-			.update(`${databaseIdentity.dev}:${databaseIdentity.ino}\0${sessionId}`)
+			.update(`${canonicalLogStoreRoot}\0${sessionId}`)
 			.digest("hex");
 		lockPath = path.join(canonicalLockDirectory, `${lockName}.lock`);
 	} catch (error) {

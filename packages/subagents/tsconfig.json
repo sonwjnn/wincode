@@ -5,6 +5,9 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
+    "paths": {
+      "@/*": ["../coding-agent/*"]
+    },
     "composite": true,
     "strictNullChecks": true,
     "types": ["bun"]

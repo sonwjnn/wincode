@@ -96,7 +96,7 @@ export default (api) => {
           await Bun.sleep(200);
         }
         yield { type: "text-delta", delta: "authorized:${owner}" };
-        yield { type: "finish" };
+        yield { completion: { kind: "completed" }, type: "finish" };
       },
     }),
     connect: async ({ requestTextInput, signal }) => {

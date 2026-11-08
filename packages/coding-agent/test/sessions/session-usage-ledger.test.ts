@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type {
 	CreateSessionUsageEntryInput,
 	SessionUsageEntry,
+	SessionWriteOutcome,
 } from "@/modules/sessions/storage/session-store";
 import {
 	createSessionUsageLedger,
@@ -16,6 +17,7 @@ import {
 const session = sessionId("usage-ledger");
 const model = providerModelSelectionFixture("openai/gpt-5.6");
 const initialEntry: SessionUsageEntry = {
+	costUsd: null,
 	createdAt: new Date("2026-10-01T00:00:00.000Z"),
 	id: sessionUsageEntryId("usage-initial"),
 	kind: "cache-warm",
@@ -24,6 +26,7 @@ const initialEntry: SessionUsageEntry = {
 	usage: { inputTokens: 100, outputTokens: 1 },
 };
 const summaryEntryInput: Omit<CreateSessionUsageEntryInput, "sessionId"> = {
+	costUsd: null,
 	id: sessionUsageEntryId("usage-summary"),
 	kind: "compaction-summary",
 	model,
@@ -43,8 +46,17 @@ test("records durable usage before publishing it to Session observers", async ()
 				expect(ledger.getEntries()).toEqual([initialEntry]);
 				storeCommitted = true;
 				return {
-					...input,
-					createdAt: input.createdAt ?? new Date("2026-10-02T00:00:00.000Z"),
+					entry: {
+						...input,
+						createdAt: input.createdAt ?? new Date("2026-10-02T00:00:00.000Z"),
+					},
+					writeOutcome: {
+						entryHash: "0".repeat(64),
+						kind: "committed",
+						operationId: `usage-${input.id}`,
+						projection: "ready",
+						sequence: 1,
+					} satisfies SessionWriteOutcome,
 				};
 			},
 		},

@@ -8,12 +8,14 @@ import {
 	type AgentTurnTerminalEvent,
 	agentTurnAssistantMessageId,
 	createOperationalFailure,
+	type ModelStepAttemptSummary,
 	normalizeOperationalFailure,
 	SESSION_RECORD_VERSION,
 	type SessionContextMeasurement,
 	type SessionMessageId,
 	type SessionMessageMetadataRecord,
 	type SessionRecord,
+	type SessionToolCallBatch,
 	type SessionToolCallPart,
 	type ToolCallId,
 	type ToolFailureDetails,
@@ -23,6 +25,7 @@ import {
 import { type ModelUsage, normalizeModelUsage } from "@wincode/ai";
 import { omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
+import { formatModelRetryFailureText } from "./retry-policy";
 
 /**
  * Durable Session Record synthesis for one Agent Turn: non-terminal assistant
@@ -31,21 +34,36 @@ import { randomUUIDv7 } from "bun";
  * durable shape of a turn is defined once.
  */
 
+const normalizeAttemptSummary = (
+	attempt: ModelStepAttemptSummary,
+	turn: AgentTurn
+): ModelStepAttemptSummary => ({
+	...attempt,
+	failure: normalizeOperationalFailure(attempt.failure, {
+		modelId: turn.model.modelId,
+		providerId: turn.model.providerId,
+	}),
+});
+
 const normalizeTerminalEvent = (
 	event: AgentTurnTerminalEvent,
 	turn: AgentTurn
-): AgentTurnTerminalEvent => {
-	if (event.type === "agent-turn-completed") {
-		return event;
-	}
-	return {
-		...event,
-		failure: normalizeOperationalFailure(event.failure, {
-			modelId: turn.model.modelId,
-			providerId: turn.model.providerId,
-		}),
-	};
-};
+): AgentTurnTerminalEvent => ({
+	...event,
+	...(event.type === "agent-turn-completed"
+		? {}
+		: {
+				failure: normalizeOperationalFailure(event.failure, {
+					modelId: turn.model.modelId,
+					providerId: turn.model.providerId,
+				}),
+			}),
+	...omitUndefined({
+		modelStepAttempts: event.modelStepAttempts?.map((attempt) =>
+			normalizeAttemptSummary(attempt, turn)
+		),
+	}),
+});
 
 const toDurableToolPart = (part: {
 	input: unknown;
@@ -60,6 +78,7 @@ const toDurableToolPart = (part: {
 				type: "success";
 		  };
 	sequence: number;
+	toolBatch?: SessionToolCallBatch;
 	toolCallId: ToolCallId;
 	toolName: string;
 }): SessionToolCallPart => ({
@@ -73,6 +92,7 @@ const toDurableToolPart = (part: {
 					kind: "failure",
 				},
 	sequence: part.sequence,
+	...omitUndefined({ toolBatch: part.toolBatch }),
 	toolCallId: part.toolCallId,
 	toolName: part.toolName,
 	type: "tool-call",
@@ -132,14 +152,19 @@ export const buildTerminalSessionRecord = ({
 	turn: AgentTurn;
 }): SessionRecord | undefined => {
 	const safeEvent = normalizeTerminalEvent(event, turn);
-	const safeUsage =
-		safeEvent.type === "agent-turn-completed"
-			? (normalizeModelUsage(safeEvent.usage) ?? undefined)
-			: undefined;
-	const text =
-		safeEvent.type === "agent-turn-completed"
-			? assistantText
-			: safeEvent.failure.message;
+	const safeUsage = normalizeModelUsage(safeEvent.usage) ?? undefined;
+	let text: string;
+	if (safeEvent.type === "agent-turn-completed") {
+		text = assistantText;
+	} else if (safeEvent.type === "agent-turn-failed") {
+		text = formatModelRetryFailureText(
+			safeEvent.failure.message,
+			safeEvent.modelStepAttempts,
+			safeEvent.modelStepAttemptsTruncated
+		);
+	} else {
+		text = safeEvent.failure.message;
+	}
 	if (
 		text.length === 0 &&
 		(safeEvent.type !== "agent-turn-completed" ||
@@ -149,18 +174,25 @@ export const buildTerminalSessionRecord = ({
 	}
 
 	let terminal: AgentTurnOutcomeRecord;
+	const attemptFields = omitUndefined({
+		modelStepAttempts: safeEvent.modelStepAttempts,
+		modelStepAttemptsTruncated: safeEvent.modelStepAttemptsTruncated,
+	});
 	switch (safeEvent.type) {
 		case "agent-turn-cancelled":
 			terminal = {
 				failure: safeEvent.failure,
 				finishedAt: safeEvent.finishedAt,
 				kind: "cancelled",
+				...attemptFields,
+				...omitUndefined({ usage: safeUsage }),
 			};
 			break;
 		case "agent-turn-completed":
 			terminal = {
 				finishedAt: safeEvent.finishedAt,
 				kind: "completed",
+				...attemptFields,
 				...omitUndefined({ usage: safeUsage }),
 			};
 			break;
@@ -169,6 +201,8 @@ export const buildTerminalSessionRecord = ({
 				failure: safeEvent.failure,
 				finishedAt: safeEvent.finishedAt,
 				kind: "failed",
+				...attemptFields,
+				...omitUndefined({ usage: safeUsage }),
 			};
 			break;
 		case "agent-turn-interrupted":
@@ -177,6 +211,8 @@ export const buildTerminalSessionRecord = ({
 				finishedAt: safeEvent.finishedAt,
 				kind: "interrupted",
 				reason: safeEvent.reason,
+				...attemptFields,
+				...omitUndefined({ usage: safeUsage }),
 			};
 			break;
 		default:
@@ -389,11 +425,13 @@ export const buildToolSessionRecord = ({
 	input,
 	event,
 	sourceUserMessageId,
+	toolBatch,
 	turn,
 }: {
 	event: Extract<AgentTurnEvent, { type: "tool-call-finished" }>;
 	input: unknown;
 	sourceUserMessageId?: SessionMessageId;
+	toolBatch?: SessionToolCallBatch;
 	turn: AgentTurn;
 }): SessionRecord => ({
 	agentId: turn.agent.id,
@@ -407,6 +445,7 @@ export const buildToolSessionRecord = ({
 					input,
 					outcome: event.outcome,
 					sequence: event.sequence,
+					...omitUndefined({ toolBatch }),
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
 				}),

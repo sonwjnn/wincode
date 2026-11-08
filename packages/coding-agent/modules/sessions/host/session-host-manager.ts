@@ -4,6 +4,7 @@ import { resolveProviderModelSelectionForHost } from "@/modules/providers/provid
 import type { SessionId } from "@/shared/identifiers";
 import { nextChatSelection, restoreSelection } from "../selection";
 import { projectSessionMessageRecords } from "../transcript-projection";
+import { assertImportedSessionAgentIsAvailable } from "./imported-session-agent";
 import { createSessionHost } from "./session-host";
 import type {
 	HostManagerSelectionCapabilities,
@@ -13,6 +14,7 @@ import type {
 	SessionHostManager,
 	SessionHostManagerEvent,
 	SessionHostOptions,
+	SessionLifecycleContext,
 } from "./types";
 
 type ManagedHostEntry = {
@@ -32,20 +34,49 @@ type ManagedHostEntry = {
 	unloadCheck: Promise<void> | undefined;
 };
 
+export class SessionForkBusyError extends Error {
+	readonly code = "session_busy" as const;
+	readonly sourceSessionId: SessionId;
+
+	constructor(sourceSessionId: SessionId, message: string, cause?: unknown) {
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "SessionForkBusyError";
+		this.sourceSessionId = sourceSessionId;
+	}
+}
+
 let interactiveManager: SessionHostManager | undefined;
 
 export const createSessionHostManager = (
 	processPluginRuntime?: PluginRuntime
 ): SessionHostManager => {
 	const entries = new Map<SessionId, ManagedHostEntry>();
+	const forkingSessions = new Set<SessionId>();
+	const lifecycleSessionsInProgress = new Set<SessionId>();
+	const sessionLifecycleOperations = new Set<SessionId>();
+	const activeForkCompletions = new Set<Promise<void>>();
+	const openRequestsBySession = new Map<SessionId, number>();
+	const sessionWorkAdmissionsBySession = new Map<SessionId, number>();
 	let currentPluginRuntime = processPluginRuntime;
 	const eventListeners = new Set<(event: SessionHostManagerEvent) => void>();
 	let shuttingDown = false;
 	let reloadInProgress = false;
+	let lifecycleInProgress = false;
 	let openRequestsInProgress = 0;
 	let sessionWorkAdmissionsInProgress = 0;
 	let shutdownPromise: Promise<void> | undefined;
-
+	const changeSessionCount = (
+		counts: Map<SessionId, number>,
+		sessionId: SessionId,
+		delta: 1 | -1
+	): void => {
+		const next = (counts.get(sessionId) ?? 0) + delta;
+		if (next === 0) {
+			counts.delete(sessionId);
+		} else {
+			counts.set(sessionId, next);
+		}
+	};
 	const emit = (event: SessionHostManagerEvent): void => {
 		for (const listener of [...eventListeners]) {
 			try {
@@ -55,23 +86,44 @@ export const createSessionHostManager = (
 			}
 		}
 	};
-	const canUnload = (entry: ManagedHostEntry, host: SessionHost): boolean => {
+	const canUnload = (
+		entry: ManagedHostEntry,
+		host: SessionHost,
+		{
+			allowPassiveSteeringMessages = false,
+		}: Readonly<{ allowPassiveSteeringMessages?: boolean }> = {}
+	): boolean => {
 		if (entry.pluginRuntime?.hasBackgroundWork(entry.sessionId) === true) {
 			return false;
 		}
 		const snapshot = host.agentSession.getSnapshot();
-		if (snapshot.turnActive || snapshot.isCompacting) {
+		if (
+			snapshot.turnActive ||
+			snapshot.isCompacting ||
+			snapshot.steeringMessages.some(({ status }) => status === "processing")
+		) {
+			return false;
+		}
+		if (!snapshot.projectionBlocked && snapshot.error !== null) {
 			return false;
 		}
 		return !(
 			snapshot.executions.length > 0 ||
 			snapshot.queuedSubmissions.length > 0 ||
-			snapshot.steeringMessages.length > 0 ||
-			snapshot.error !== null
+			(!(allowPassiveSteeringMessages || snapshot.projectionBlocked) &&
+				snapshot.steeringMessages.length > 0)
 		);
 	};
 	const maybeUnload = async (entry: ManagedHostEntry): Promise<void> => {
-		if (shuttingDown || reloadInProgress || !entry.openingComplete) {
+		if (
+			shuttingDown ||
+			reloadInProgress ||
+			lifecycleInProgress ||
+			sessionLifecycleOperations.has(entry.sessionId) ||
+			lifecycleSessionsInProgress.has(entry.sessionId) ||
+			forkingSessions.has(entry.sessionId) ||
+			!entry.openingComplete
+		) {
 			return;
 		}
 		if (entry.unloadCheck !== undefined) {
@@ -92,8 +144,11 @@ export const createSessionHostManager = (
 		try {
 			if (
 				entry.views > 0 ||
+				lifecycleSessionsInProgress.has(entry.sessionId) ||
+				forkingSessions.has(entry.sessionId) ||
 				entry.host !== host ||
 				entry.closing !== undefined ||
+				sessionLifecycleOperations.has(entry.sessionId) ||
 				!canUnload(entry, host)
 			) {
 				return;
@@ -173,7 +228,7 @@ export const createSessionHostManager = (
 				(host) => {
 					entry.host = host;
 					entry.unsubscribeEvents = host.onEvent((event) =>
-						emit({ event, sessionId, type: "agent-turn-event" })
+						emit({ event, sessionId, type: "session-event" })
 					);
 					entry.unsubscribeSnapshot = host.subscribe(() => {
 						void maybeUnload(entry);
@@ -245,10 +300,16 @@ export const createSessionHostManager = (
 		await awaitEntryOpening(entry, view);
 		return entry;
 	};
-	const continuePendingSteering = (entry: ManagedHostEntry): void => {
+	const continuePendingSteering = async (
+		entry: ManagedHostEntry
+	): Promise<void> => {
 		const host = entry.host;
-		if (host?.getSnapshot().steeringMessages[0]?.status === "pending") {
-			host.agentSession.continue();
+		if (
+			host !== undefined &&
+			!host.isImportedSessionActivationPending() &&
+			host.getSnapshot().steeringMessages[0]?.status === "pending"
+		) {
+			await host.agentSession.continue();
 		}
 	};
 	const reuseOpenEntry = async (
@@ -269,7 +330,7 @@ export const createSessionHostManager = (
 			return;
 		}
 		if (autoContinue) {
-			continuePendingSteering(entry);
+			await continuePendingSteering(entry);
 		}
 		return entry;
 	};
@@ -289,8 +350,18 @@ export const createSessionHostManager = (
 		);
 		// The Session's recorded tiers, and the newest message's own choice when
 		// an Agent pin has to be validated against every identity it may restore.
+		const latestSelection = nextChatSelection({ messages });
 		const restored = restoreSelection({ messages, row: session });
-		const lastMessageModel = nextChatSelection({ messages })?.model;
+		const lastMessageModel = latestSelection?.model;
+		const isImportedSession =
+			(await store.isSessionImported?.(sessionId)) ??
+			(await store.isSessionImportActivationPending?.(sessionId)) ??
+			false;
+		assertImportedSessionAgentIsAvailable(
+			capabilities.getRegistry(),
+			latestSelection?.persistedAgent ?? records.at(-1)?.agentId,
+			isImportedSession
+		);
 		const pluginRuntime =
 			capabilities.getPluginRuntime?.() ?? currentPluginRuntime;
 		const trustedRegistrations =
@@ -336,6 +407,27 @@ export const createSessionHostManager = (
 			}
 		}
 	};
+	const assertSessionOpenAdmission = (sessionId: SessionId): void => {
+		if (shuttingDown) {
+			throw new Error("The Session Host manager is shutting down.");
+		}
+		if (
+			lifecycleInProgress ||
+			lifecycleSessionsInProgress.has(sessionId) ||
+			sessionLifecycleOperations.has(sessionId)
+		) {
+			throw new Error("A Session lifecycle operation is in progress.");
+		}
+		if (reloadInProgress) {
+			throw new Error("Cannot open a Session while resources are reloading.");
+		}
+		if (forkingSessions.has(sessionId)) {
+			throw new SessionForkBusyError(
+				sessionId,
+				"Cannot open a Session while it is being forked."
+			);
+		}
+	};
 	const openHost: SessionHostManager["openHost"] = async ({
 		autoContinue = true,
 		capabilities,
@@ -349,13 +441,9 @@ export const createSessionHostManager = (
 		let providerCollectionTransferred = false;
 		let openRequestStarted = false;
 		try {
-			if (shuttingDown) {
-				throw new Error("The Session Host manager is shutting down.");
-			}
-			if (reloadInProgress) {
-				throw new Error("Cannot open a Session while resources are reloading.");
-			}
+			assertSessionOpenAdmission(sessionId);
 			openRequestsInProgress += 1;
+			changeSessionCount(openRequestsBySession, sessionId, 1);
 			openRequestStarted = true;
 			if (
 				entries.get(sessionId) === undefined ||
@@ -388,6 +476,7 @@ export const createSessionHostManager = (
 		} finally {
 			if (openRequestStarted) {
 				openRequestsInProgress -= 1;
+				changeSessionCount(openRequestsBySession, sessionId, -1);
 			}
 			if (!providerCollectionTransferred) {
 				await providerCollection?.close().catch(() => undefined);
@@ -408,6 +497,7 @@ export const createSessionHostManager = (
 		}
 		shuttingDown = true;
 		const closing = (async () => {
+			await Promise.allSettled([...activeForkCompletions]);
 			const opened = await Promise.allSettled(
 				[...entries.values()].map((entry) => entry.opening)
 			);
@@ -430,36 +520,76 @@ export const createSessionHostManager = (
 		shutdownPromise = closing;
 		return closing;
 	};
-	const tryAcquireSessionWork: SessionHostManager["tryAcquireSessionWork"] =
-		() => {
-			if (shuttingDown) {
-				return {
-					kind: "rejected",
-					reason: "The Session Host manager is shutting down.",
-				};
-			}
-			if (reloadInProgress) {
-				return {
-					kind: "rejected",
-					reason: "Cannot start Session work while resources are reloading.",
-				};
-			}
-			sessionWorkAdmissionsInProgress += 1;
-			let released = false;
-			return Object.freeze({
-				kind: "admitted" as const,
-				release: () => {
-					if (released) {
-						return;
-					}
-					released = true;
-					sessionWorkAdmissionsInProgress -= 1;
-				},
-			});
-		};
+	const tryAcquireSessionWork: SessionHostManager["tryAcquireSessionWork"] = (
+		sessionId
+	) => {
+		if (shuttingDown) {
+			return {
+				kind: "rejected",
+				reason: "The Session Host manager is shutting down.",
+			};
+		}
+		if (
+			lifecycleInProgress ||
+			(sessionId === undefined
+				? lifecycleSessionsInProgress.size > 0
+				: lifecycleSessionsInProgress.has(sessionId))
+		) {
+			return {
+				kind: "rejected",
+				reason: "Cannot start Session work during a lifecycle operation.",
+			};
+		}
+		if (sessionId !== undefined && sessionLifecycleOperations.has(sessionId)) {
+			return {
+				kind: "rejected",
+				reason: "Cannot start Session work during a lifecycle operation.",
+			};
+		}
+		if (reloadInProgress) {
+			return {
+				kind: "rejected",
+				reason: "Cannot start Session work while resources are reloading.",
+			};
+		}
+		if (sessionId !== undefined && forkingSessions.has(sessionId)) {
+			return {
+				kind: "rejected",
+				reason: "Cannot start Session work while it is being forked.",
+			};
+		}
+		sessionWorkAdmissionsInProgress += 1;
+		if (sessionId !== undefined) {
+			changeSessionCount(sessionWorkAdmissionsBySession, sessionId, 1);
+		}
+		let released = false;
+		return Object.freeze({
+			kind: "admitted" as const,
+			release: () => {
+				if (released) {
+					return;
+				}
+				released = true;
+				sessionWorkAdmissionsInProgress -= 1;
+				if (sessionId !== undefined) {
+					changeSessionCount(sessionWorkAdmissionsBySession, sessionId, -1);
+				}
+			},
+		});
+	};
 	const assertNoPendingAdmissions = (): void => {
 		if (shuttingDown) {
 			throw new Error("The Session Host manager is shutting down.");
+		}
+		if (lifecycleInProgress || lifecycleSessionsInProgress.size > 0) {
+			throw new Error(
+				"Cannot reload resources during a Session lifecycle operation."
+			);
+		}
+		if (sessionLifecycleOperations.size > 0) {
+			throw new Error(
+				"Cannot start another lifecycle operation while a Session export is in progress."
+			);
 		}
 		if (openRequestsInProgress > 0) {
 			throw new Error("Cannot reload resources while a Session is opening.");
@@ -467,6 +597,11 @@ export const createSessionHostManager = (
 		if (sessionWorkAdmissionsInProgress > 0) {
 			throw new Error(
 				"Cannot reload resources while Session work is being admitted."
+			);
+		}
+		if (activeForkCompletions.size > 0) {
+			throw new Error(
+				"Cannot reload resources while a Session fork is in progress."
 			);
 		}
 	};
@@ -629,6 +764,271 @@ export const createSessionHostManager = (
 			await Promise.all(prepared.map((composition) => composition.commit()));
 			updateEntryPluginRuntime(openEntries, runtime);
 		};
+	const closeEntryForLifecycle = async (
+		entry: ManagedHostEntry
+	): Promise<void> => {
+		const host = entry.host;
+		if (host === undefined) {
+			throw new Error(
+				"Cannot start a lifecycle operation while a Session is opening."
+			);
+		}
+		const closing = host.shutdown();
+		entry.closing = closing;
+		try {
+			await closing;
+		} finally {
+			await entry.pluginRuntime?.stopSession(entry.pluginSessionContext);
+			entry.unsubscribeEvents?.();
+			entry.unsubscribeSnapshot?.();
+			entry.unsubscribeBackgroundWork?.();
+			if (entries.get(entry.sessionId) === entry) {
+				entries.delete(entry.sessionId);
+			}
+		}
+	};
+	const assertExportLifecycleAdmission = (sessionId: SessionId): void => {
+		if (reloadInProgress) {
+			throw new Error("Cannot export a Session while resources are reloading.");
+		}
+		if (shuttingDown || lifecycleInProgress) {
+			throw new Error("Cannot export a Session during a lifecycle operation.");
+		}
+		if (
+			sessionLifecycleOperations.has(sessionId) ||
+			lifecycleSessionsInProgress.has(sessionId) ||
+			forkingSessions.has(sessionId)
+		) {
+			throw new Error(
+				"Cannot export a Session while another lifecycle operation is in progress."
+			);
+		}
+		if ((openRequestsBySession.get(sessionId) ?? 0) > 0) {
+			throw new Error("Cannot export a Session while it is opening.");
+		}
+		if ((sessionWorkAdmissionsBySession.get(sessionId) ?? 0) > 0) {
+			throw new Error(
+				"Cannot export a Session while its work is being admitted."
+			);
+		}
+	};
+	const assertSessionLifecycleAdmission = (
+		operation: "delete" | "reset",
+		sessionId: SessionId
+	): void => {
+		if (shuttingDown || lifecycleInProgress) {
+			throw new Error(
+				`Cannot ${operation} during a Session lifecycle operation.`
+			);
+		}
+		if (
+			lifecycleSessionsInProgress.has(sessionId) ||
+			sessionLifecycleOperations.has(sessionId)
+		) {
+			throw new Error(
+				`Cannot ${operation} while this Session is in a lifecycle operation.`
+			);
+		}
+		if (forkingSessions.has(sessionId)) {
+			throw new Error(
+				`Cannot ${operation} while this Session is being forked.`
+			);
+		}
+		if ((openRequestsBySession.get(sessionId) ?? 0) > 0) {
+			throw new Error(`Cannot ${operation} while this Session is opening.`);
+		}
+		if ((sessionWorkAdmissionsBySession.get(sessionId) ?? 0) > 0) {
+			throw new Error(
+				`Cannot ${operation} while this Session has work being admitted.`
+			);
+		}
+	};
+	const assertLifecycleAdmission = (
+		operation: "delete" | "export" | "reset",
+		sessionId?: SessionId
+	): void => {
+		if (operation === "export") {
+			if (sessionId === undefined) {
+				throw new Error("Cannot export a Session without its Session ID.");
+			}
+			assertExportLifecycleAdmission(sessionId);
+			return;
+		}
+		if (reloadInProgress) {
+			throw new Error(
+				`Cannot ${operation === "reset" ? "reset Session data" : "delete a Session"} while resources are reloading.`
+			);
+		}
+		if (sessionId === undefined) {
+			assertNoPendingAdmissions();
+			return;
+		}
+		assertSessionLifecycleAdmission(operation, sessionId);
+	};
+	const assertForkAdmission = (sessionId: SessionId): void => {
+		const busy = (message: string, cause?: unknown): never => {
+			throw new SessionForkBusyError(sessionId, message, cause);
+		};
+		if (shuttingDown) {
+			busy("The Session Host manager is shutting down.");
+		}
+		if (
+			lifecycleInProgress ||
+			lifecycleSessionsInProgress.has(sessionId) ||
+			sessionLifecycleOperations.has(sessionId)
+		) {
+			busy("Cannot fork a Session during a lifecycle operation.");
+		}
+		if (reloadInProgress) {
+			busy("Cannot fork a Session while resources are reloading.");
+		}
+		if (forkingSessions.has(sessionId)) {
+			busy("A fork operation is already in progress for this Session.");
+		}
+		if ((openRequestsBySession.get(sessionId) ?? 0) > 0) {
+			busy("Cannot fork a Session while its Host is opening.");
+		}
+		if ((sessionWorkAdmissionsBySession.get(sessionId) ?? 0) > 0) {
+			busy("Cannot fork a Session while its work is being admitted.");
+		}
+	};
+	const assertEntryIdleForLifecycle = (
+		entry: ManagedHostEntry,
+		operation: "delete" | "export" | "reset"
+	): void => {
+		const host = entry.host;
+		if (!entry.openingComplete || host === undefined) {
+			throw new Error(
+				"Cannot start a lifecycle operation while a Session is opening."
+			);
+		}
+		if (entry.closing !== undefined || entry.unloadCheck !== undefined) {
+			throw new Error(
+				"Cannot start a lifecycle operation while a Session is closing."
+			);
+		}
+		if (!canUnload(entry, host)) {
+			throw new Error(
+				operation === "reset"
+					? "Cannot reset Session data while a Host has active or pending work."
+					: `Cannot ${operation} a Session while its Host has active or pending work.`
+			);
+		}
+	};
+	const assertEntryIdleForFork = (entry: ManagedHostEntry): void => {
+		const busy = (message: string): never => {
+			throw new SessionForkBusyError(entry.sessionId, message);
+		};
+		const host = entry.host;
+		if (!entry.openingComplete || host === undefined) {
+			throw new SessionForkBusyError(
+				entry.sessionId,
+				"Cannot start a fork while the Session Host is opening."
+			);
+		}
+		if (entry.closing !== undefined || entry.unloadCheck !== undefined) {
+			busy("Cannot fork a Session while its Host is closing.");
+		}
+		const snapshot = host.getSnapshot();
+		if (snapshot.projectionBlocked) {
+			busy("Cannot fork a Session with unresolved storage state.");
+		}
+		if (!canUnload(entry, host, { allowPassiveSteeringMessages: true })) {
+			busy("Cannot fork a Session while its Host has active or pending work.");
+		}
+	};
+	const runLifecycleAction = async <Result>(
+		openEntries: readonly ManagedHostEntry[],
+		action: (context: SessionLifecycleContext) => Promise<Result>,
+		sessionId?: SessionId
+	): Promise<Result> => {
+		if (sessionId === undefined) {
+			lifecycleInProgress = true;
+		} else {
+			lifecycleSessionsInProgress.add(sessionId);
+		}
+		try {
+			for (const entry of openEntries) {
+				await closeEntryForLifecycle(entry);
+			}
+			return await action({ existingHostWriter: false });
+		} finally {
+			if (sessionId === undefined) {
+				lifecycleInProgress = false;
+			} else {
+				lifecycleSessionsInProgress.delete(sessionId);
+			}
+			for (const entry of entries.values()) {
+				if (entry.views === 0) {
+					void maybeUnload(entry);
+				}
+			}
+		}
+	};
+	const withIdleForSessionLifecycle: SessionHostManager["withIdleForSessionLifecycle"] =
+		async (sessionId, action, operation = "delete") => {
+			assertLifecycleAdmission(operation, sessionId);
+			const entry = entries.get(sessionId);
+			if (entry !== undefined) {
+				assertEntryIdleForLifecycle(entry, operation);
+			}
+			if (operation === "export") {
+				sessionLifecycleOperations.add(sessionId);
+				try {
+					return await action({ existingHostWriter: entry !== undefined });
+				} finally {
+					sessionLifecycleOperations.delete(sessionId);
+					const current = entries.get(sessionId);
+					if (current?.views === 0) {
+						void maybeUnload(current);
+					}
+				}
+			}
+			return runLifecycleAction(
+				entry === undefined ? [] : [entry],
+				action,
+				sessionId
+			);
+		};
+	const runSessionForkAction = async <Result>(
+		sessionId: SessionId,
+		entry: ManagedHostEntry | undefined,
+		action: (host: SessionHost | undefined) => Promise<Result>
+	): Promise<Result> => {
+		const completed = Promise.withResolvers<void>();
+		forkingSessions.add(sessionId);
+		activeForkCompletions.add(completed.promise);
+		try {
+			return await action(entry?.host);
+		} finally {
+			forkingSessions.delete(sessionId);
+			activeForkCompletions.delete(completed.promise);
+			completed.resolve();
+			if (entry?.views === 0) {
+				void maybeUnload(entry);
+			}
+		}
+	};
+	const withIdleForSessionFork: SessionHostManager["withIdleForSessionFork"] =
+		async (sessionId, action) => {
+			assertForkAdmission(sessionId);
+			const entry = entries.get(sessionId);
+			if (entry !== undefined) {
+				assertEntryIdleForFork(entry);
+			}
+			return runSessionForkAction(sessionId, entry, action);
+		};
+	const withIdleForSessionDataReset: SessionHostManager["withIdleForSessionDataReset"] =
+		async (action) => {
+			assertLifecycleAdmission("reset");
+			const openEntries = [...entries.values()].sort((left, right) =>
+				left.sessionId.localeCompare(right.sessionId)
+			);
+			for (const entry of openEntries) {
+				assertEntryIdleForLifecycle(entry, "reset");
+			}
+			return runLifecycleAction(openEntries, action);
+		};
 	const withIdleForReload: SessionHostManager["withIdleForReload"] = async (
 		action
 	) => {
@@ -637,6 +1037,9 @@ export const createSessionHostManager = (
 		}
 		if (reloadInProgress) {
 			throw new Error("A resource reload is already in progress.");
+		}
+		if (lifecycleInProgress) {
+			throw new Error("A Session lifecycle operation is in progress.");
 		}
 		reloadInProgress = true;
 		try {
@@ -655,6 +1058,9 @@ export const createSessionHostManager = (
 	return {
 		assertIdleForReload,
 		tryAcquireSessionWork,
+		withIdleForSessionLifecycle,
+		withIdleForSessionFork,
+		withIdleForSessionDataReset,
 		withIdleForReload,
 		replacePluginRuntime,
 		onEvent: (listener) => {
@@ -669,9 +1075,10 @@ export const createSessionHostManager = (
 
 export const withSessionManagerWork = async <Result>(
 	manager: Pick<SessionHostManager, "tryAcquireSessionWork">,
-	action: () => Promise<Result>
+	action: () => Promise<Result>,
+	sessionId?: SessionId
 ): Promise<Result> => {
-	const admission = manager.tryAcquireSessionWork();
+	const admission = manager.tryAcquireSessionWork(sessionId);
 	if (admission.kind === "rejected") {
 		throw new Error(admission.reason);
 	}

@@ -114,6 +114,7 @@ export const groupMessagesBySessionTurn = (
 
 	return turns;
 };
+
 const canRetryUser = (
 	messages: readonly SessionMessage[],
 	userIndex: number

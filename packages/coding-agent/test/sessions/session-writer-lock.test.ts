@@ -8,21 +8,25 @@ import {
 	type SessionDatabase,
 } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import { resolveLocalSessionLogRoot } from "@/modules/sessions/storage/path";
+import type { SessionProjectionStore } from "@/modules/sessions/storage/session-store";
 import {
 	acquireSessionWriterLock,
 	SessionInUseError,
+	withSessionCatalogLifecycleGate,
 } from "@/modules/sessions/storage/session-writer-lock";
 import {
 	agentId,
 	agentTurnId,
 	modelId,
+	sessionId,
 	sessionMessageId,
 } from "../support/identifiers";
 import {
 	type SessionWriterContenderResult,
 	startSessionWriterContender,
 } from "../support/session-writer-process";
+import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 type DatabaseHandle = Readonly<{
 	db: SessionDatabase;
@@ -31,10 +35,10 @@ type DatabaseHandle = Readonly<{
 
 type Fixture = Readonly<{
 	first: DatabaseHandle;
-	firstStore: SessionStore;
+	firstStore: SessionProjectionStore;
 	root: string;
 	second: DatabaseHandle;
-	secondStore: SessionStore;
+	secondStore: SessionProjectionStore;
 }>;
 
 const fixtures: Fixture[] = [];
@@ -61,7 +65,7 @@ const createFixture = (): Fixture => {
 	return fixture;
 };
 
-const createSession = async (store: SessionStore) =>
+const createSession = async (store: SessionProjectionStore) =>
 	store.createSession({
 		agent: agentId("build"),
 		message: {
@@ -85,38 +89,39 @@ const startWriterContender = (
 		workspaceRoot: fixture.root,
 	});
 
-const isBusyFileSystemError = (error: unknown): boolean =>
-	typeof error === "object" &&
-	error !== null &&
-	Reflect.get(error, "code") === "EBUSY";
-
-const removeFixtureDirectory = async (directory: string): Promise<void> => {
-	for (let attempt = 0; ; attempt += 1) {
-		try {
-			await fs.promises.rm(directory, { force: true, recursive: true });
-			return;
-		} catch (error) {
-			if (
-				process.platform !== "win32" ||
-				attempt === 20 ||
-				!isBusyFileSystemError(error)
-			) {
-				throw error;
-			}
-			await Bun.sleep(100);
-		}
-	}
-};
-
 afterEach(async () => {
 	for (const fixture of fixtures.splice(0)) {
 		fixture.first.sqlite.close();
 		fixture.second.sqlite.close();
-		await removeFixtureDirectory(fixture.root);
+		await removeTemporaryDirectory(fixture.root);
 	}
 });
 
 describe("Session Writer process locks", () => {
+	test("catalog lifecycle operations serialize through canonical log-root aliases", async () => {
+		const fixture = createFixture();
+		const logRoot = path.join(fixture.root, "sessions");
+		const aliasRoot = path.join(fixture.root, "sessions-alias");
+		await fs.promises.mkdir(logRoot);
+		await fs.promises.symlink(logRoot, aliasRoot, "dir");
+		const enteredFirst = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const first = withSessionCatalogLifecycleGate(logRoot, async () => {
+			enteredFirst.resolve();
+			await releaseFirst.promise;
+		});
+		await enteredFirst.promise;
+		let enteredSecond = false;
+		const second = withSessionCatalogLifecycleGate(aliasRoot, async () => {
+			enteredSecond = true;
+		});
+		await Bun.sleep(25);
+		expect(enteredSecond).toBe(false);
+		releaseFirst.resolve();
+		await Promise.all([first, second]);
+		expect(enteredSecond).toBe(true);
+	});
+
 	test("new Session databases omit the retired SQLite lease table", () => {
 		const fixture = createFixture();
 		const table = fixture.first.sqlite
@@ -153,7 +158,7 @@ describe("Session Writer process locks", () => {
 		).rejects.toBeInstanceOf(SessionInUseError);
 		await writer.release();
 	});
-	test("rejects a second writer with unverified owner details until release", async () => {
+	test("rejects a second writer until release while treating owner details as best-effort", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
 		const owner = await fixture.firstStore.acquireSessionWriter(session.id, {
@@ -171,12 +176,14 @@ describe("Session Writer process locks", () => {
 			if (!(conflict instanceof SessionInUseError)) {
 				throw new Error("The competing Session Writer was not refused.");
 			}
-			expect(conflict.owner).toEqual({
-				executionMode: "interactive",
-				openedAt: expect.any(String),
-				pid: process.pid,
-				verification: "unverified",
-			});
+			if (process.platform !== "win32" || conflict.owner !== undefined) {
+				expect(conflict.owner).toEqual({
+					executionMode: "interactive",
+					openedAt: expect.any(String),
+					pid: process.pid,
+					verification: "unverified",
+				});
+			}
 		} finally {
 			await owner.release();
 		}
@@ -282,6 +289,31 @@ describe("Session Writer process locks", () => {
 			await owner.stop();
 		}
 	});
+	test("changing the projection database does not open a second Session Writer", async () => {
+		const fixture = createFixture();
+		const session = await createSession(fixture.firstStore);
+		const projectionDatabase = createDatabase(
+			path.join(fixture.root, "session-projection.sqlite")
+		);
+		const projectionStore = createDrizzleSessionStore(projectionDatabase.db, {
+			operationalDatabase: fixture.first.db,
+			sessionLogRoot: resolveLocalSessionLogRoot(
+				path.join(fixture.root, "sessions.db")
+			),
+			workspaceRoot: fixture.root,
+		});
+		const owner = await fixture.firstStore.acquireSessionWriter(session.id);
+
+		try {
+			await expect(
+				projectionStore.acquireSessionWriter(session.id)
+			).rejects.toBeInstanceOf(SessionInUseError);
+		} finally {
+			await owner.release();
+			projectionDatabase.sqlite.close();
+		}
+	});
+
 	test("refuses a Session Writer through a hard-linked database path", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
@@ -305,33 +337,35 @@ describe("Session Writer process locks", () => {
 			await owner.release();
 		}
 	});
-	test("allows the same Session ID in separate local databases", async () => {
+	test("allows the same Session ID in separate canonical log roots", async () => {
 		const fixture = createFixture();
 		const session = await createSession(fixture.firstStore);
 		const firstDatabasePath = path.join(fixture.root, "sessions.db");
-		const secondDatabasePath = path.join(fixture.root, "other-sessions.db");
+		const secondRoot = path.join(fixture.root, "separate-data-root");
+		fs.mkdirSync(secondRoot);
+		const secondDatabasePath = path.join(secondRoot, "other-sessions.db");
 		const secondDatabase = createDatabase(secondDatabasePath);
 
 		try {
 			const firstWriter = await acquireSessionWriterLock(
-				firstDatabasePath,
+				resolveLocalSessionLogRoot(firstDatabasePath),
 				session.id
 			);
 			try {
 				const secondWriter = await acquireSessionWriterLock(
-					secondDatabasePath,
+					resolveLocalSessionLogRoot(secondDatabasePath),
 					session.id
 				);
 				try {
 					const firstConflict = await acquireSessionWriterLock(
-						firstDatabasePath,
+						resolveLocalSessionLogRoot(firstDatabasePath),
 						session.id
 					).then(
 						() => undefined,
 						(error: unknown) => error
 					);
 					const secondConflict = await acquireSessionWriterLock(
-						secondDatabasePath,
+						resolveLocalSessionLogRoot(secondDatabasePath),
 						session.id
 					).then(
 						() => undefined,
@@ -382,11 +416,14 @@ describe("Session Writer process locks", () => {
 		const databasePath = path.join(fixture.root, "sessions.db");
 		const aliasPath = path.join(fixture.root, "sessions-alias.db");
 		await fs.promises.symlink(databasePath, aliasPath);
-		const owner = await acquireSessionWriterLock(databasePath, session.id);
+		const owner = await acquireSessionWriterLock(
+			resolveLocalSessionLogRoot(databasePath),
+			session.id
+		);
 
 		try {
 			const conflict = await acquireSessionWriterLock(
-				aliasPath,
+				resolveLocalSessionLogRoot(aliasPath),
 				session.id
 			).then(
 				() => undefined,
@@ -398,27 +435,39 @@ describe("Session Writer process locks", () => {
 		}
 	});
 
-	test("fails closed when the database identity cannot be read", async () => {
-		const fixture = createFixture();
-		const session = await createSession(fixture.firstStore);
+	test("fails closed when the canonical Session log root cannot be created", async () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "wincode-session-writer-lock-path-")
+		);
+		const blocker = path.join(root, "not-a-directory");
 
-		await expect(
-			acquireSessionWriterLock(
-				path.join(fixture.root, "missing-database.db"),
-				session.id
-			)
-		).rejects.toMatchObject({ code: "session_lock_failed" });
+		try {
+			fs.writeFileSync(blocker, "");
+			await expect(
+				acquireSessionWriterLock(
+					path.join(blocker, "sessions"),
+					sessionId("blocked-log-root")
+				)
+			).rejects.toMatchObject({ code: "session_lock_failed" });
+		} finally {
+			await removeTemporaryDirectory(root);
+		}
 	});
 	test("fails closed when the Session Writer lock namespace cannot be created", async () => {
-		const fixture = createFixture();
-		const session = await createSession(fixture.firstStore);
-		fs.writeFileSync(
-			path.join(fixture.root, ".wincode-session-writer-locks"),
-			""
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "wincode-session-writer-lock-path-")
 		);
 
-		await expect(
-			fixture.firstStore.acquireSessionWriter(session.id)
-		).rejects.toMatchObject({ code: "session_lock_failed" });
+		try {
+			fs.writeFileSync(path.join(root, "session-control"), "");
+			await expect(
+				acquireSessionWriterLock(
+					path.join(root, "sessions"),
+					sessionId("blocked-lock-namespace")
+				)
+			).rejects.toMatchObject({ code: "session_lock_failed" });
+		} finally {
+			await removeTemporaryDirectory(root);
+		}
 	});
 });

@@ -22,7 +22,12 @@ import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionProviderCollectionFactory } from "@/modules/sessions/provider-collection";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import { resolveLocalAttachmentRoot } from "@/modules/sessions/storage/path";
+import {
+	resolveLocalAttachmentRoot,
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
+} from "@/modules/sessions/storage/path";
+import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
@@ -181,11 +186,18 @@ export const createE2eStore = (): SessionStore => {
 			"WINCODE_LOCAL_DB_PATH must be set before creating the E2E store."
 		);
 	}
-	const { db } = createDatabase(databasePath);
-	return createDrizzleSessionStore(db, {
+	const operational = createDatabase(databasePath);
+	const projection = createDatabase(
+		resolveLocalSessionProjectionPath(databasePath)
+	);
+	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	const projectionStore = createDrizzleSessionStore(projection.db, {
 		attachmentRoot: resolveLocalAttachmentRoot(databasePath),
+		operationalDatabase: operational.db,
+		sessionLogRoot: logRoot,
 		workspaceRoot: process.cwd(),
 	});
+	return createSessionJsonlStore(projectionStore, logRoot);
 };
 
 /**

@@ -594,6 +594,18 @@ describe("public SDK provider collection", () => {
 					failure: {
 						code: "provider",
 						message: "OpenAI request failed (503).",
+						modelFailure: {
+							code: "unavailable",
+							details: {
+								modelId: "status-model",
+								providerId: "status-provider",
+								statusCode: 503,
+							},
+							message: "The model provider is unavailable.",
+							retry: "after-delay",
+							source: "provider",
+							version: 1,
+						},
 						providerId: "status-provider",
 						statusCode: 503,
 					},

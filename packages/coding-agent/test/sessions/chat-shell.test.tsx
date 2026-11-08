@@ -19,7 +19,11 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { fromPartial } from "@total-typescript/shoehorn";
-import type { SessionMessageId } from "@wincode/agent-core";
+import type {
+	ModelRetryStatus,
+	SessionMessageId,
+	SessionRecordId,
+} from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
 import type { ProviderModel, ThinkingLevel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
@@ -32,13 +36,16 @@ import {
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
+import { CommittedAssistantError } from "@/modules/sessions/committed-assistant-error";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import { ChatMessage } from "@/modules/sessions/ui/components/chat-message";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SettingsRegistryProvider } from "@/modules/settings";
@@ -52,7 +59,11 @@ import {
 } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
-import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import {
+	type SessionNotifications,
+	ToastProvider,
+	useSessionNotifications,
+} from "@/shared/providers/toast/toast-provider";
 import { CommandControllerProvider } from "@/tui/commands/command-controller-provider";
 import { testRenderWithClipboard } from "../support/clipboard";
 import {
@@ -63,6 +74,7 @@ import {
 	queuedSubmissionId,
 	sessionId,
 	sessionMessageId,
+	sessionRecordId,
 	sessionUsageEntryId,
 } from "../support/identifiers";
 import {
@@ -158,6 +170,7 @@ type ChatShellProbeHandle = {
 	setCompactions: (compactions: SessionCompaction[]) => void;
 	setCompacting: (isCompacting: boolean) => void;
 	setMessages: (messages: SessionMessage[]) => void;
+	setRetryStatus: (status: ModelRetryStatus | undefined) => void;
 };
 
 const buildTestRouter = () =>
@@ -176,6 +189,8 @@ type ChatShellProbeProps = {
 	holder: { current: ChatShellProbeHandle | null };
 	initialCompactions?: SessionCompaction[];
 	initialMessages: SessionMessage[];
+	error?: unknown;
+	retryStatus?: ModelRetryStatus;
 	isBusy?: boolean;
 	isCompacting?: boolean;
 	onRetry?: (messageId: SessionMessageId) => void;
@@ -211,6 +226,8 @@ function ChatShellProbe({
 	holder,
 	initialCompactions = [],
 	initialMessages,
+	error,
+	retryStatus: initialRetryStatus,
 	isBusy = false,
 	providerController,
 	isCompacting: initialIsCompacting = false,
@@ -224,6 +241,7 @@ function ChatShellProbe({
 	const [composerRevision, setComposerRevision] = useState(0);
 	const [isCompacting, setCompacting] = useState(initialIsCompacting);
 	const [messages, setMessages] = useState(initialMessages);
+	const [retryStatus, setRetryStatus] = useState(initialRetryStatus);
 	useEffect(() => {
 		holder.current = {
 			popKeyboardLayer: pop,
@@ -232,6 +250,7 @@ function ChatShellProbe({
 			setCompactions,
 			setCompacting,
 			setMessages,
+			setRetryStatus,
 		};
 		return () => {
 			holder.current = null;
@@ -247,7 +266,8 @@ function ChatShellProbe({
 				activeMessages={activeMessages}
 				compactions={compactions}
 				draftKey="draft-test-key"
-				error={undefined}
+				error={error}
+				errorSource="turn"
 				isBusy={isBusy || isCompacting}
 				isCompacting={isCompacting}
 				key={composerRevision}
@@ -257,6 +277,7 @@ function ChatShellProbe({
 				promptHistory={[]}
 				providerController={providerController}
 				queuedSubmissions={queuedSubmissions}
+				retryStatus={retryStatus}
 				sessionUsageEntries={sessionUsageEntries}
 				transcriptNotice={transcriptNotice}
 				viewId="test"
@@ -279,7 +300,9 @@ type ChatShellRenderOptions = {
 	providerController?: InteractiveProviderController;
 	height: number;
 	width: number;
+	error?: unknown;
 	initialCompactions?: SessionCompaction[];
+	retryStatus?: ModelRetryStatus;
 	initialThinkingLevel?: ThinkingLevel;
 	initialModel?: ProviderModelSelection;
 	configuredAgent?: boolean;
@@ -290,6 +313,7 @@ type ChatShellRenderOptions = {
 	queuedSubmissions?: readonly SessionQueuedSubmission[];
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	transcriptNotice?: ReactNode;
+	notificationSetup?: ReactNode;
 };
 
 const renderChatShell = async (
@@ -299,8 +323,10 @@ const renderChatShell = async (
 		providerController,
 		height,
 		width,
+		error,
 		initialCompactions = [],
 		initialThinkingLevel,
+		retryStatus,
 		initialModel,
 		configuredAgent = false,
 		autoCompact,
@@ -310,6 +336,7 @@ const renderChatShell = async (
 		queuedSubmissions,
 		sessionUsageEntries,
 		transcriptNotice,
+		notificationSetup,
 	}: ChatShellRenderOptions
 ): Promise<ChatShellSetup> => {
 	const workspace = process.cwd();
@@ -372,6 +399,7 @@ const renderChatShell = async (
 				value={{ configStore, homeRoot: os.homedir(), workspace }}
 			>
 				<ToastProvider>
+					{notificationSetup}
 					<SettingsRegistryProvider>
 						<AgentRegistryProvider>
 							<KeyboardLayerProvider>
@@ -385,6 +413,7 @@ const renderChatShell = async (
 												<ChatShellProbe
 													activeMessages={activeMessages}
 													agentHolder={agent}
+													error={error}
 													holder={holder}
 													initialCompactions={initialCompactions}
 													initialMessages={initialMessages}
@@ -394,6 +423,7 @@ const renderChatShell = async (
 													onRetry={onRetry}
 													providerController={providerController}
 													queuedSubmissions={queuedSubmissions}
+													retryStatus={retryStatus}
 													sessionUsageEntries={sessionUsageEntries}
 													transcriptNotice={transcriptNotice}
 												/>
@@ -565,6 +595,231 @@ const assertSummaryDiffClipping = async ({
 		setup.renderer.destroy();
 	}
 };
+function SeedSessionNotifications() {
+	const { notify } = useSessionNotifications("test");
+	useEffect(() => {
+		const anchor = { messageCount: 1, timelineItemCount: 1 };
+		notify("Scanning workspace", "info", anchor);
+		notify("Warming model cache", "info", anchor);
+		notify("Provider connection is degraded", "warning", anchor);
+		notify("Authentication failed", "error", anchor);
+		notify("Request failed", "error", anchor);
+		notify("Session renamed", "success", anchor);
+		notify("Session compacted", "success", anchor);
+	}, [notify]);
+	return null;
+}
+
+type SessionNotificationControl = {
+	notify?: SessionNotifications["notify"];
+};
+
+function CaptureSessionNotificationControl({
+	control,
+}: {
+	control: SessionNotificationControl;
+}) {
+	const { notify } = useSessionNotifications("test");
+	useEffect(() => {
+		control.notify = notify;
+	}, [control, notify]);
+	return null;
+}
+
+function SeedOtherSessionNotification() {
+	const { notify } = useSessionNotifications("another-session");
+	useEffect(() => {
+		notify("Other session failed", "error");
+	}, [notify]);
+	return null;
+}
+
+type SessionStatusControl = {
+	clear?: () => void;
+};
+
+function SeedSessionStatus({ control }: { control: SessionStatusControl }) {
+	const { setStatus } = useSessionNotifications("test");
+	useEffect(() => {
+		setStatus("cache-warming", "Prompt cache warming is scheduled");
+		setStatus("cache-warming", "Warming prompt cache");
+		control.clear = () => setStatus("cache-warming", undefined);
+	}, [control, setStatus]);
+	return null;
+}
+
+describe("ChatShell notifications", () => {
+	test("consecutive info notices collapse while warnings and errors remain distinct", async () => {
+		const { setup } = await renderChatShell([userMessage("user-1")], {
+			height: 24,
+			notificationSetup: <SeedSessionNotifications />,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("Warming model cache");
+			expect(frame).not.toContain("Scanning workspace");
+			expect(frame).toContain("Warning: Provider connection is degraded");
+			expect(frame).toContain("Error: Authentication failed");
+			expect(frame).toContain("Error: Request failed");
+			expect(frame).toContain("Session renamed");
+			expect(frame).toContain("Session compacted");
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("message- and compaction-anchored notices stay before later transcript entries", async () => {
+		const control: SessionNotificationControl = {};
+		const firstMessage = userMessage("first entry");
+		const laterAssistantMessage = assistantMessage(
+			[{ text: "Later assistant answer", type: "text" }],
+			"assistant-1"
+		);
+		const compaction = completedCompaction();
+		const laterUserMessage = userMessage("second entry");
+		const laterTurnAssistantMessage = assistantMessage(
+			[{ text: "Later turn answer", type: "text" }],
+			"assistant-2"
+		);
+		const { holder, setup } = await renderChatShell([firstMessage], {
+			height: 24,
+			notificationSetup: (
+				<CaptureSessionNotificationControl control={control} />
+			),
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			if (control.notify === undefined) {
+				throw new Error(
+					"The session notification control was not initialized."
+				);
+			}
+			await act(async () => {
+				control.notify?.("First status", "info", {
+					messageCount: 1,
+					timelineItemCount: 1,
+					afterMessageId: firstMessage.id,
+				});
+			});
+			await flushUi(setup);
+			await act(async () => {
+				holder.current?.setMessages([firstMessage, laterAssistantMessage]);
+				holder.current?.setCompactions([compaction]);
+				await setup.renderOnce();
+			});
+			await act(async () => {
+				control.notify?.("Second status", "info", {
+					messageCount: 2,
+					timelineItemCount: 2,
+					afterCompactionId: compaction.id,
+				});
+			});
+			await flushUi(setup);
+			const initialLines = setup.captureCharFrame().split("\n");
+			const initialCompactionLine = initialLines.findIndex((line) =>
+				line.includes("Compacted (manual)")
+			);
+			const initialSecondStatusLine = initialLines.findIndex((line) =>
+				line.includes("Second status")
+			);
+			expect(initialSecondStatusLine).toBeGreaterThan(initialCompactionLine);
+			await act(async () => {
+				holder.current?.setMessages([
+					firstMessage,
+					laterAssistantMessage,
+					laterUserMessage,
+					laterTurnAssistantMessage,
+				]);
+				await setup.renderOnce();
+			});
+			await flushUi(setup);
+
+			const lines = setup.captureCharFrame().split("\n");
+			const firstEntryLine = lines.findIndex((line) =>
+				line.includes("first entry")
+			);
+			const firstStatusLine = lines.findIndex((line) =>
+				line.includes("First status")
+			);
+			const assistantLine = lines.findIndex((line) =>
+				line.includes("Later assistant answer")
+			);
+			const compactionLine = lines.findIndex((line) =>
+				line.includes("Compacted (manual)")
+			);
+			const secondStatusLine = lines.findIndex((line) =>
+				line.includes("Second status")
+			);
+			const secondEntryLine = lines.findIndex((line) =>
+				line.includes("second entry")
+			);
+			expect(firstEntryLine).toBeGreaterThan(-1);
+			expect(firstStatusLine).toBeGreaterThan(firstEntryLine);
+			expect(assistantLine).toBeGreaterThan(firstStatusLine);
+			expect(compactionLine).toBeGreaterThan(secondEntryLine);
+			expect(secondStatusLine).toBeGreaterThan(assistantLine);
+			expect(secondEntryLine).toBeGreaterThan(secondStatusLine);
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("notifications from another session do not appear in the current chat", async () => {
+		const { setup } = await renderChatShell([userMessage("user-1")], {
+			height: 20,
+			notificationSetup: <SeedOtherSessionNotification />,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			expect(setup.captureCharFrame()).not.toContain("Other session failed");
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("keyed footer statuses replace and clear the status for their key", async () => {
+		const control: SessionStatusControl = {};
+		const { setup } = await renderChatShell([userMessage("user-1")], {
+			height: 24,
+			notificationSetup: <SeedSessionStatus control={control} />,
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			let frame = setup.captureCharFrame();
+			expect(frame).toContain("Warming prompt cache");
+			expect(frame).not.toContain("Prompt cache warming is scheduled");
+			if (control.clear === undefined) {
+				throw new Error("The keyed status control was not initialized.");
+			}
+			await act(async () => {
+				control.clear?.();
+			});
+			await flushUi(setup);
+			frame = setup.captureCharFrame();
+			expect(frame).not.toContain("Warming prompt cache");
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+});
+
 describe("ChatShell transcript Markdown streaming", () => {
 	test("only the latest assistant message in the active turn remains streaming", async () => {
 		const messages = [
@@ -748,6 +1003,8 @@ describe("ChatShell composer focus", () => {
 
 		try {
 			await flushUi(setup);
+			setup.mockInput.pressKey("w", { meta: true });
+			await flushUi(setup);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-1");
 			expect(retryControl?.focusable).toBe(true);
@@ -761,6 +1018,226 @@ describe("ChatShell composer focus", () => {
 			expect(retries).toEqual(["user-1"]);
 		} finally {
 			setup.renderer.destroy();
+		}
+	});
+	test("failed assistant errors are red transcript lines without persistent Retry or checkpoint controls", async () => {
+		const user = userMessage("auth-failure-user");
+		const failedAssistant = {
+			...assistantMessage(
+				[{ text: "Model authentication failed.", type: "text" }],
+				"auth-failure-assistant"
+			),
+			metadata: { terminalOutcome: "failed" as const },
+		};
+		const userRecordId = sessionRecordId("auth-failure-user-record");
+		const assistantRecordId = sessionRecordId("auth-failure-record");
+		const retryCalls: SessionMessageId[] = [];
+		const rewindCalls: SessionRecordId[] = [];
+		const checkpoints = new Map([
+			[
+				user.id,
+				{
+					kind: "user" as const,
+					messageId: user.id,
+					recordId: userRecordId,
+					status: "valid" as const,
+				},
+			],
+			[
+				failedAssistant.id,
+				{
+					kind: "assistant" as const,
+					messageId: failedAssistant.id,
+					recordId: assistantRecordId,
+					status: "invalid" as const,
+					reason:
+						"Only completed terminal assistant outcomes are valid checkpoints.",
+				},
+			],
+		]);
+		const setup = await testRenderWithClipboard(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ChatMessage
+					forkCheckpoints={checkpoints}
+					messages={[user, failedAssistant]}
+					onRetry={(messageId) => {
+						retryCalls.push(messageId);
+					}}
+					onRewindCheckpoint={(recordId) => {
+						rewindCalls.push(recordId);
+					}}
+				/>
+			</ThemeProvider>,
+			{ height: 30, width: 100 }
+		);
+
+		try {
+			await act(async () => {
+				await flushUi(setup);
+			});
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("Error: Model authentication failed.");
+			expect(frame).not.toContain("Retry");
+			expect(frame).not.toContain("Rewind to this checkpoint");
+			expect(frame).not.toContain("Workspace files will not be rolled back.");
+			const errorSpan = setup
+				.captureSpans()
+				.lines.flatMap(({ spans }) => spans)
+				.find(({ text }) =>
+					text.includes("Error: Model authentication failed.")
+				);
+			expect(
+				errorSpan?.fg.equals(RGBA.fromHex(DEFAULT_THEME.colors.error))
+			).toBe(true);
+			expect(frame).not.toContain("Cannot rewind here:");
+			expect(frame).not.toContain(
+				"Only completed terminal assistant outcomes are valid checkpoints."
+			);
+			expect(retryCalls).toEqual([]);
+			expect(rewindCalls).toEqual([]);
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("keeps refusal reasons for non-failed assistant checkpoints", async () => {
+		const completedMessage = assistantMessage(
+			[{ text: "Completed response", type: "text" }],
+			"invalid-completed-assistant"
+		);
+		const cancelledMessage = {
+			...assistantMessage(
+				[{ text: "Cancelled response", type: "text" }],
+				"cancelled-assistant"
+			),
+			metadata: { terminalOutcome: "cancelled" as const },
+		};
+		const interruptedMessage = {
+			...assistantMessage(
+				[{ text: "Interrupted response", type: "text" }],
+				"interrupted-assistant"
+			),
+			metadata: { terminalOutcome: "interrupted" as const },
+		};
+		const checkpoints = new Map([
+			[
+				completedMessage.id,
+				{
+					kind: "assistant" as const,
+					messageId: completedMessage.id,
+					recordId: sessionRecordId("invalid-completed-assistant-record"),
+					status: "invalid" as const,
+					reason: "Checkpoint does not end a valid Session context prefix.",
+				},
+			],
+			[
+				cancelledMessage.id,
+				{
+					kind: "assistant" as const,
+					messageId: cancelledMessage.id,
+					recordId: sessionRecordId("cancelled-assistant-record"),
+					status: "invalid" as const,
+					reason:
+						"Only completed terminal assistant outcomes are valid checkpoints.",
+				},
+			],
+			[
+				interruptedMessage.id,
+				{
+					kind: "assistant" as const,
+					messageId: interruptedMessage.id,
+					recordId: sessionRecordId("interrupted-assistant-record"),
+					status: "invalid" as const,
+					reason:
+						"Only completed terminal assistant outcomes are valid checkpoints.",
+				},
+			],
+		]);
+		const setup = await testRenderWithClipboard(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ChatMessage
+					forkCheckpoints={checkpoints}
+					messages={[completedMessage, cancelledMessage, interruptedMessage]}
+					showActions
+				/>
+			</ThemeProvider>,
+			{ height: 24, width: 100 }
+		);
+
+		try {
+			await act(async () => {
+				await flushUi(setup);
+			});
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain(
+				"Cannot rewind here: Checkpoint does not end a valid Session context prefix."
+			);
+			expect(frame).toContain(
+				"Cannot rewind here: Only completed terminal assistant outcomes are valid checkpoints."
+			);
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
+		}
+	});
+
+	test("rewind control acts on a valid user checkpoint and warns that files stay unchanged", async () => {
+		const rewindUser = userMessage("rewind-user");
+		const checkpointRecordId = sessionRecordId("rewind-user-record");
+		const checkpoint: SessionForkCheckpointAssessment = {
+			kind: "user",
+			messageId: rewindUser.id,
+			recordId: checkpointRecordId,
+			status: "valid",
+		};
+		const checkpoints = new Map([[rewindUser.id, checkpoint]]);
+		const rewoundCheckpoints: SessionRecordId[] = [];
+		const messages = [
+			rewindUser,
+			assistantMessage([{ text: "completed turn", type: "text" }]),
+		];
+		const setup = await testRenderWithClipboard(
+			<ThemeProvider themeName={DEFAULT_THEME.name}>
+				<ChatMessage
+					forkCheckpoints={checkpoints}
+					messages={messages}
+					onRewindCheckpoint={(recordId) => {
+						rewoundCheckpoints.push(recordId);
+					}}
+					showActions
+				/>
+			</ThemeProvider>,
+			{ height: 30, width: 100 }
+		);
+
+		try {
+			await act(async () => {
+				await flushUi(setup);
+			});
+			const frame = setup.captureCharFrame();
+			expect(frame).toContain("Rewind to this checkpoint");
+			expect(frame).toContain("Workspace files will not be rolled back.");
+			const rewindControl = setup.renderer.root.findDescendantById(
+				`rewind-${checkpointRecordId}`
+			);
+			expect(rewindControl?.focusable).toBe(true);
+			if (!rewindControl) {
+				throw new Error("The valid checkpoint rewind action was not rendered.");
+			}
+			await act(async () => {
+				rewindControl.focus();
+				setup.mockInput.pressEnter();
+				await flushUi(setup);
+			});
+
+			expect(rewoundCheckpoints).toEqual([checkpointRecordId]);
+		} finally {
+			await act(async () => {
+				setup.renderer.destroy();
+			});
 		}
 	});
 	test("keeps a focusable retry control active after a mouse click", async () => {
@@ -781,6 +1258,8 @@ describe("ChatShell composer focus", () => {
 		);
 
 		try {
+			await flushUi(setup);
+			setup.mockInput.pressKey("w", { meta: true });
 			await flushUi(setup);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-1");
@@ -817,6 +1296,8 @@ describe("ChatShell composer focus", () => {
 		);
 
 		try {
+			await flushUi(setup);
+			setup.mockInput.pressKey("w", { meta: true });
 			await flushUi(setup);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-1");
@@ -866,6 +1347,48 @@ describe("ChatShell composer focus", () => {
 });
 
 describe("ChatShell retry controls", () => {
+	test.each([
+		false,
+		true,
+	])("a terminal model error is shown once with trailing steering=%s", async (hasTrailingSteering) => {
+		const message = {
+			...assistantMessage([
+				{ type: "text", text: "Model authentication failed." },
+			]),
+			metadata: { terminalOutcome: "failed" as const },
+		};
+		const steering: SessionMessage = {
+			...userMessage("trailing-steering"),
+			metadata: {
+				joinedTurnId: agentTurnId("failed-turn"),
+				submissionStatus: "failed",
+				submissionId: toSubmissionId("failed-steering"),
+			},
+		};
+		const { setup } = await renderChatShell(
+			[
+				userMessage("hello"),
+				message,
+				...(hasTrailingSteering ? [steering] : []),
+			],
+			{
+				height: 24,
+				width: 100,
+				error: new CommittedAssistantError(
+					"Model authentication failed.",
+					message.id
+				),
+			}
+		);
+		try {
+			await flushUi(setup);
+			expect(
+				requireTestFrame(setup).match(/Error: Model authentication failed\./gu)
+			).toHaveLength(1);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 	test("keeps older unanswered turns retryable and keyboard activatable", async () => {
 		const retries: string[] = [];
 		const { setup } = await renderChatShell(
@@ -884,6 +1407,9 @@ describe("ChatShell retry controls", () => {
 		);
 
 		try {
+			await flushUi(setup);
+			expect(requireTestFrame(setup)).not.toContain("Retry");
+			setup.mockInput.pressKey("w", { meta: true });
 			await flushUi(setup);
 			expect(requireTestFrame(setup).match(/Retry/gu)).toHaveLength(1);
 			const retryControl =
@@ -923,6 +1449,8 @@ describe("ChatShell retry controls", () => {
 		});
 
 		try {
+			await flushUi(setup);
+			setup.mockInput.pressKey("w", { meta: true });
 			await flushUi(setup);
 			const retryControl =
 				setup.renderer.root.findDescendantById("retry-user-steer");
@@ -1232,6 +1760,33 @@ describe("ChatShell waiting message strip", () => {
 });
 
 describe("ChatShell activity footer", () => {
+	test("retry countdown replaces Working and disappears before the next request", async () => {
+		const { holder, setup } = await renderChatShell(
+			[userMessage("retry-user")],
+			{
+				height: 20,
+				width: 100,
+				isBusy: true,
+				retryStatus: { attempt: 1, maxAttempts: 3, retryAt: Date.now() + 1500 },
+			}
+		);
+		try {
+			await flushUi(setup);
+			const frame = requireTestFrame(setup);
+			expect(frame).toContain("Retrying (1/3) in 2s...");
+			expect(frame).toContain("esc to cancel");
+			expect(frame).not.toContain("Working...");
+			expect(
+				await waitForFrameText(setup, "Retrying (1/3) in 1s...")
+			).toContain("Retrying (1/3) in 1s...");
+			await act(() => holder.current?.setRetryStatus(undefined));
+			await flushUi(setup);
+			expect(requireTestFrame(setup)).toContain("Working...");
+			expect(requireTestFrame(setup)).not.toContain("Retrying");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 	test("shows model and thinking together only after selected Provider metadata loads", async () => {
 		const pending = Promise.withResolvers<readonly ProviderModel[]>();
 		const selectedModel: ProviderModel = {
@@ -1491,6 +2046,8 @@ describe("ChatShell activity footer", () => {
 		};
 		const sessionUsageEntries: SessionUsageEntry[] = [
 			{
+				compactionId: compaction.id,
+				costUsd: 2,
 				createdAt: new Date("2026-09-06T09:06:25.000Z"),
 				id: sessionUsageEntryId("summary-usage"),
 				kind: "compaction-summary",

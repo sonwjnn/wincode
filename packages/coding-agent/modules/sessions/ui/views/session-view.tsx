@@ -1,6 +1,10 @@
 import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
-import type { AgentId, SessionMessageId } from "@wincode/agent-core";
+import type {
+	AgentId,
+	SessionMessageId,
+	SessionRecordId,
+} from "@wincode/agent-core";
 import type { ThinkingSelection } from "@wincode/ai";
 import {
 	getErrorMessage,
@@ -8,7 +12,14 @@ import {
 	isUndefined,
 	omitUndefined,
 } from "@wincode/utils";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	type AgentRegistry,
 	type AgentSelectionOverride,
@@ -27,19 +38,22 @@ import {
 	type ProviderModelSelection,
 } from "@/modules/providers/provider-model-selection";
 import { ProviderModelsDialogContent } from "@/modules/providers/ui/provider-models-dialog";
+import { IMPORTED_SESSION_COMPACTION_ACTIVATION_REQUIRED_MESSAGE } from "@/modules/sessions/host/imported-session-agent";
 import type { SessionHost } from "@/modules/sessions/host/types";
 import {
 	createSessionUserMessage,
 	type SessionFilePart,
 	type SessionMessage,
 } from "@/modules/sessions/message";
+import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import { useSettingsHubDialog } from "@/modules/settings";
 import type { EditMode } from "@/modules/tools";
 import { useConfig } from "@/shared/config/config-provider";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
-import { useToast } from "@/shared/providers/toast/toast-provider";
+import { useSessionNotifications } from "@/shared/providers/toast/toast-provider";
+import type { ToastOptions } from "@/shared/providers/toast/types";
 import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import type { SessionWaitingMessage } from "../../agent-session/types";
 import { isSessionBusy } from "../../agent-session/utils";
@@ -47,13 +61,20 @@ import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useAgentSession } from "../../hooks/use-agent-session";
 import type { ResolvedSessionSelection } from "../../selection";
 import { getSessionStore } from "../../storage/get-session-store";
+import { requireSessionWriteReady } from "../../storage/session-jsonl-store";
 import type {
 	SessionSubmissionComposition,
 	SessionSendInput as SessionSubmissionInput,
 } from "../../submission-types";
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
+import {
+	getSessionTimelineAnchor,
+	type SessionTimelineAnchor,
+} from "../components/chat-timeline";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
+import { indexSessionForkCheckpoints } from "../session-fork-checkpoints";
+import { rewindSessionView, type SessionRewindAction } from "../session-rewind";
 
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 3000;
 
@@ -79,6 +100,9 @@ export type SessionInitialSubmission = {
 type SessionViewProps = {
 	/** The already-open session this view renders and sends through. */
 	host: SessionHost;
+	onRewindCheckpoint?: (
+		recordId: SessionRecordId
+	) => Promise<SessionRewindAction>;
 	initialSubmission?: SessionInitialSubmission;
 	/**
 	 * Session Transcript as the session opened, display-annotated by the
@@ -252,6 +276,7 @@ const resolveInitialSessionSelection = ({
 
 export function SessionView({
 	host,
+	onRewindCheckpoint,
 	initialSubmission,
 	initialTranscript,
 	sessionId,
@@ -305,7 +330,7 @@ export function SessionView({
 			if (sessionStore.setEditMode === undefined) {
 				throw new Error("Session storage does not support Edit Mode.");
 			}
-			await sessionStore.setEditMode(sessionId, mode);
+			requireSessionWriteReady(await sessionStore.setEditMode(sessionId, mode));
 		},
 		[sessionId, sessionStore]
 	);
@@ -343,7 +368,20 @@ export function SessionView({
 		}),
 		[editMode, model, persistSessionEditMode, sessionId, setSessionEditMode]
 	);
-	const { show } = useToast();
+	const {
+		clear: clearSessionNotifications,
+		notify: notifySession,
+		setStatus: setSessionStatus,
+	} = useSessionNotifications(sessionId);
+	const notificationAnchorRef = useRef<SessionTimelineAnchor | undefined>(
+		undefined
+	);
+	const show = useCallback(
+		({ message, variant }: Pick<ToastOptions, "message" | "variant">): void => {
+			notifySession(message, variant ?? "info", notificationAnchorRef.current);
+		},
+		[notifySession]
+	);
 	const openSettings = useSettingsHubDialog(settingsRuntime);
 	const { isTopLayer } = useKeyboardLayer();
 	const submittedInitialMessageRef = useRef<SessionMessageId | null>(null);
@@ -365,6 +403,13 @@ export function SessionView({
 	const [optimisticMessages, setOptimisticMessages] = useState<
 		readonly SessionMessage[]
 	>([]);
+	const [forkCheckpoints, setForkCheckpoints] = useState<
+		ReadonlyMap<SessionMessageId, SessionForkCheckpointAssessment>
+	>(new Map());
+	const [rewindingCheckpointId, setRewindingCheckpointId] = useState<
+		SessionRecordId | undefined
+	>();
+	const rewindInFlightRef = useRef(false);
 	const {
 		cancelCompaction,
 		compact,
@@ -378,6 +423,16 @@ export function SessionView({
 		cacheWarmingStatus,
 		sessionUsageEntries,
 	} = useAgentSession(host);
+	useEffect(() => {
+		setSessionStatus(
+			"prompt-cache-warming",
+			cacheWarmingStatus === "warming" ? "Warming prompt cache..." : undefined
+		);
+	}, [cacheWarmingStatus, setSessionStatus]);
+	useEffect(
+		() => () => clearSessionNotifications(),
+		[clearSessionNotifications]
+	);
 	/**
 	 * Hands recalled messages to the composer in Agent Session order. A Recall
 	 * that returns nothing — empty lanes, or messages already running — changes
@@ -512,10 +567,111 @@ export function SessionView({
 			...optimisticMessages.filter(({ id }) => !committedIds.has(id)),
 		];
 	}, [displayAnnotationsByMessage, optimisticMessages, snapshot.transcript]);
+	const notificationAnchor = useMemo(
+		() => getSessionTimelineAnchor(messages, snapshot.compactions),
+		[messages, snapshot.compactions]
+	);
+	useLayoutEffect(() => {
+		notificationAnchorRef.current = notificationAnchor;
+	}, [notificationAnchor]);
 	const error = snapshot.compactionError ?? snapshot.error;
+	const compactionRetry = snapshot.compactionRetryStatus;
+	const retryStatus =
+		snapshot.viewState?.retry ??
+		(compactionRetry === undefined
+			? undefined
+			: {
+					attempt: compactionRetry.attempt,
+					maxAttempts: compactionRetry.maxRetries,
+					retryAt: compactionRetry.retryAt,
+				});
+	let retryOperation: "agent-turn" | "compaction-summary" | undefined;
+	if (snapshot.viewState?.retry !== undefined) {
+		retryOperation = "agent-turn";
+	} else if (compactionRetry !== undefined) {
+		retryOperation = "compaction-summary";
+	}
 	// The session's own facts decide whether it is busy: a running turn or a
 	// compaction in flight.
-	const isBusy = isSessionBusy(snapshot) || isStartingInitialTurn;
+	const isBusy =
+		isSessionBusy(snapshot) ||
+		isStartingInitialTurn ||
+		rewindingCheckpointId !== undefined;
+	useEffect(() => {
+		if (isBusy) {
+			return;
+		}
+		let active = true;
+		void sessionStore
+			.listSessionRecords(sessionId)
+			.then((records) => {
+				if (active) {
+					setForkCheckpoints(indexSessionForkCheckpoints(records));
+				}
+			})
+			.catch((error: unknown) => {
+				if (active) {
+					show({
+						message: getErrorMessage(
+							error,
+							"Could not load rewind checkpoints."
+						),
+						variant: "error",
+					});
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, [isBusy, sessionId, sessionStore, show]);
+	const handleRewindFailure = (
+		error: unknown,
+		fallbackMessage: string
+	): void => {
+		rewindInFlightRef.current = false;
+		setRewindingCheckpointId(undefined);
+		show({
+			message: getErrorMessage(error, fallbackMessage),
+			variant: "error",
+		});
+	};
+	const rewindCheckpoint = async (recordId: SessionRecordId): Promise<void> => {
+		if (
+			onRewindCheckpoint === undefined ||
+			isBusy ||
+			rewindInFlightRef.current
+		) {
+			return;
+		}
+		rewindInFlightRef.current = true;
+		setRewindingCheckpointId(recordId);
+		let forkPublished = false;
+		let viewSwitched = false;
+		try {
+			await rewindSessionView({
+				createFork: async () => {
+					const action = await onRewindCheckpoint(recordId);
+					forkPublished = true;
+					return action;
+				},
+				navigate: async (targetSessionId) => {
+					await router.navigate({
+						params: { id: targetSessionId },
+						to: "/sessions/$id",
+					});
+					viewSwitched = true;
+				},
+			});
+		} catch (error) {
+			let fallbackMessage = "Could not fork at this checkpoint.";
+			if (forkPublished) {
+				fallbackMessage = viewSwitched
+					? "Fork opened, but retry state could not be cleared."
+					: "Fork created, but could not open it.";
+			}
+			handleRewindFailure(error, fallbackMessage);
+		}
+	};
 	const promptHistory = useMemo(
 		() => derivePromptHistory(initialTranscript),
 		[initialTranscript]
@@ -625,6 +781,10 @@ export function SessionView({
 				return;
 			}
 			key.preventDefault();
+			if (snapshot.viewState?.retry !== undefined) {
+				void recallIntoComposer(interrupt());
+				return;
+			}
 			handleInterrupt();
 			return;
 		}
@@ -669,6 +829,13 @@ export function SessionView({
 	);
 
 	const runManualCompaction = async (focus?: string): Promise<boolean> => {
+		if (host.isImportedSessionActivationPending()) {
+			show({
+				message: IMPORTED_SESSION_COMPACTION_ACTIVATION_REQUIRED_MESSAGE,
+				variant: "error",
+			});
+			return false;
+		}
 		if (isBusy || isNull(registry) || !isPromptConfigRestored) {
 			show({
 				message: "Compaction is unavailable while the session is active.",
@@ -1045,6 +1212,8 @@ export function SessionView({
 					contextSnapshot={configSnapshot}
 					draftKey={sessionId}
 					error={error}
+					errorSource={isNull(snapshot.compactionError) ? "turn" : "compaction"}
+					forkCheckpoints={forkCheckpoints}
 					isBusy={isBusy}
 					isCompacting={snapshot.isCompacting}
 					isSelectionReady={isPromptConfigRestored}
@@ -1055,12 +1224,18 @@ export function SessionView({
 					onOpenSettings={openSettings}
 					onProviderModelChanged={host.cancelCacheWarming}
 					onRetry={retryMessage}
+					onRewindCheckpoint={
+						onRewindCheckpoint === undefined ? undefined : rewindCheckpoint
+					}
 					onSubmit={submitMessage}
 					promptHistory={promptHistory}
 					providerController={host.providerController}
 					queuedSubmissions={snapshot.queuedSubmissions}
 					recalledSubmissions={recalledSubmissions}
 					recallRevision={recallRevision}
+					retryOperation={retryOperation}
+					retryStatus={retryStatus}
+					rewindingCheckpointId={rewindingCheckpointId}
 					sessionUsageEntries={sessionUsageEntries}
 					transcriptNotice={<ProjectTrustNotice />}
 					viewId={sessionId}

@@ -3,10 +3,16 @@ import type { SessionWriterLockOwner } from "@/modules/sessions/storage/session-
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionCompaction } from "../../compaction/types";
 import type { SessionMessage } from "../../message";
+import type { SessionForkProvenance } from "../../storage/session-store";
+import type {
+	SessionStatistics,
+	SessionStatisticsUsageTotals,
+} from "../../usage/session-statistics";
 import { ChatMessage } from "../components/chat-message";
 import { buildSessionTimeline } from "../components/chat-timeline";
 import { resolveSessionTurnFooterMessages } from "../components/chat-turns";
 import { CompactionDivider } from "../components/compaction-divider";
+import { SessionForkProvenanceBanner } from "../components/session-fork-provenance-banner";
 import {
 	SessionWriterAction,
 	SessionWriterOwnerLabel,
@@ -14,10 +20,15 @@ import {
 
 type StoredSessionHistoryViewProps = Readonly<{
 	compactions: readonly SessionCompaction[];
+	forkProvenance?: SessionForkProvenance;
+	hasMoreHistory: boolean;
+	historyError?: string;
+	isLoadingMore: boolean;
 	isRefreshing: boolean;
 	isRetrying: boolean;
 	isSelectingModel: boolean;
 	messages: readonly SessionMessage[];
+	onLoadMore: () => void;
 	onRefresh: () => void;
 	onRetry: () => void;
 	onReselectModel: () => void;
@@ -25,14 +36,20 @@ type StoredSessionHistoryViewProps = Readonly<{
 	selectionError?: string;
 	selectionPickerError?: string;
 	sessionTitle: string;
+	statistics: SessionStatistics;
 }>;
 
 export function StoredSessionHistoryView({
 	compactions,
+	forkProvenance,
+	hasMoreHistory,
+	historyError,
+	isLoadingMore,
 	isRefreshing,
 	isRetrying,
 	isSelectingModel,
 	messages,
+	onLoadMore,
 	onRefresh,
 	onRetry,
 	onReselectModel,
@@ -40,6 +57,7 @@ export function StoredSessionHistoryView({
 	selectionError,
 	selectionPickerError,
 	sessionTitle,
+	statistics,
 }: StoredSessionHistoryViewProps) {
 	const { colors } = useTheme();
 	const timeline = buildSessionTimeline(messages, compactions);
@@ -47,7 +65,30 @@ export function StoredSessionHistoryView({
 		item.kind === "turn" ? [item.turn] : []
 	);
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
-	const isBusy = isRefreshing || isRetrying || isSelectingModel;
+	const isBusy =
+		isRefreshing || isRetrying || isSelectingModel || isLoadingMore;
+	const costLabel = (usage: SessionStatisticsUsageTotals): string => {
+		const recordedCosts = usage.costs.map(
+			({ amount, model, unit }) =>
+				`${model.providerId}/${model.modelId}: ${amount} ${unit}`
+		);
+		if (usage.unknownCostCount > 0) {
+			recordedCosts.push(`${usage.unknownCostCount} cost unknown`);
+		}
+		if (recordedCosts.length > 0) {
+			return recordedCosts.join(", ");
+		}
+		return usage.contributionCount === 0
+			? "no persisted usage"
+			: "cost unknown";
+	};
+	const usageLabel = (
+		label: string,
+		usage: SessionStatisticsUsageTotals
+	): string =>
+		usage.contributionCount === 0
+			? `${label}: no persisted usage`
+			: `${label}: ${usage.inputTokens ?? "unknown"} input / ${usage.outputTokens ?? "unknown"} output tokens; ${costLabel(usage)}`;
 
 	return (
 		<box
@@ -81,7 +122,41 @@ export function StoredSessionHistoryView({
 					<text fg={colors.error}>{selectionPickerError}</text>
 				)}
 				<text fg={colors.text}>{sessionTitle}</text>
+				{forkProvenance === undefined ? null : (
+					<SessionForkProvenanceBanner
+						inheritedUsage={statistics.usage.inherited}
+						provenance={forkProvenance}
+					/>
+				)}
+				<text fg={colors.textMuted}>
+					{`Persisted statistics · read point ${statistics.readPoint.slice(0, 12)}… · ${statistics.recordCount} committed records · ${statistics.completedToolCallCount} completed Tool Calls`}
+				</text>
+				<text fg={colors.textMuted}>
+					{usageLabel("Actual", statistics.usage.actual)}
+				</text>
+				<text fg={colors.textMuted}>
+					Inherited usage is historical source spend, not new spend in this
+					Session.
+				</text>
+				<text fg={colors.textMuted}>
+					{usageLabel("Inherited", statistics.usage.inherited)}
+				</text>
+				<text fg={colors.textMuted}>
+					{usageLabel("Auxiliary", statistics.usage.auxiliary)}
+				</text>
 				<box flexDirection="row" gap={2}>
+					{hasMoreHistory ? (
+						<SessionWriterAction
+							disabled={isBusy}
+							id="stored-session-history-load-more"
+							label={
+								isLoadingMore
+									? "Loading older history..."
+									: "Load older history"
+							}
+							onActivate={onLoadMore}
+						/>
+					) : null}
 					<SessionWriterAction
 						disabled={isBusy}
 						id="stored-session-history-refresh"
@@ -112,6 +187,9 @@ export function StoredSessionHistoryView({
 						/>
 					)}
 				</box>
+				{historyError === undefined ? null : (
+					<text fg={colors.error}>{historyError}</text>
+				)}
 			</box>
 			<scrollbox
 				flexGrow={1}

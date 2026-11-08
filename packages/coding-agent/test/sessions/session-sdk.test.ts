@@ -18,6 +18,7 @@ import {
 } from "@wincode/ai";
 import {
 	createSessionSdk as createPublicSessionSdk,
+	type SessionSdkEvent,
 	type SessionSdkOptions,
 } from "@wincode/coding-agent";
 import {
@@ -51,6 +52,20 @@ import type {
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
+	resolveLocalSessionLogRoot,
+	resolveLocalSessionProjectionPath,
+} from "@/modules/sessions/storage/path";
+import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+	SessionStatistics,
+	SessionStatisticsOptions,
+	SessionStore,
+} from "@/modules/sessions/storage/session-store";
+import {
 	type ConfigSnapshot,
 	createConfigStore,
 } from "@/shared/config/config-store";
@@ -62,7 +77,12 @@ import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
 } from "../support/e2e-fake-runtime";
-import { agentId, modelId, sessionId } from "../support/identifiers";
+import {
+	agentId,
+	agentTurnId,
+	modelId,
+	sessionId,
+} from "../support/identifiers";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
@@ -81,10 +101,23 @@ await Promise.all(
 		fs.mkdir(directory, { recursive: true })
 	)
 );
-const database = createDatabase(path.join(storeRoot, "sessions.sqlite"));
-const store = createDrizzleSessionStore(database.db, {
-	workspaceRoot: workspace,
-});
+const databasePath = path.join(storeRoot, "sessions.sqlite");
+const database = createDatabase(databasePath);
+const projectionDatabase = createDatabase(
+	resolveLocalSessionProjectionPath(databasePath)
+);
+const sessionProjectionStore = createDrizzleSessionStore(
+	projectionDatabase.db,
+	{
+		operationalDatabase: database.db,
+		sessionLogRoot: resolveLocalSessionLogRoot(databasePath),
+		workspaceRoot: workspace,
+	}
+);
+const store = createSessionJsonlStore(
+	sessionProjectionStore,
+	resolveLocalSessionLogRoot(databasePath)
+);
 const configStore = createConfigStore({
 	homeRoot,
 	trustedProjectRoots: [path.join(root, "child-plugin-symlink-trust")],
@@ -150,7 +183,7 @@ const createImplicitDefaultAgentPinSdk = async (
 				models: [{ modelId: "${selectedModelId}", protocolId: "fake-implicit-default-agent-pin", providerId: "${providerId}" }],
 				resolveAuthorization: ({ credential }) => credential === undefined ? null : { authorization: credential },
 				discoverModels: async () => { activity.discoveries += 1; return []; },
-				async *streamChat() { activity.streamCalls += 1; yield { type: "finish" }; },
+				async *streamChat() { activity.streamCalls += 1; yield { completion: { kind: "completed" }, type: "finish" }; },
 			};
 		},
 		displayName: "Implicit default Agent pin owner ${index}",
@@ -843,6 +876,118 @@ test("Session SDK prompt rejects an unrelated stale Plugin snapshot before avail
 	}
 });
 
+test("Session SDK forwards opaque page cursors without opening a Host", async () => {
+	const storedSession: Session = {
+		createdAt: new Date("2025-01-01T00:00:00.000Z"),
+		id: sessionId("sdk-page-session"),
+		lastMessageAt: null,
+		pinned: false,
+		title: "Snapshot Session",
+	};
+	const catalogPage: SessionCatalogPage = {
+		nextCursor: "catalog-cursor",
+		readPoint: "catalog-read-point",
+		sessions: [storedSession],
+	};
+	const historyPage: SessionHistoryPage = {
+		compactions: [],
+		nextCursor: "history-cursor",
+		readPoint: "history-read-point",
+		records: [],
+		session: storedSession,
+	};
+	let catalogOptions: SessionPageOptions | undefined;
+	let historyRequest:
+		| { options?: SessionPageOptions; sessionId: string }
+		| undefined;
+	let statisticsRequest:
+		| { options?: SessionStatisticsOptions; sessionId: string }
+		| undefined;
+	const emptyUsage = {
+		byModel: [],
+		cacheReadTokens: null,
+		cacheWriteTokens: null,
+		contributionCount: 0,
+		costs: [],
+		inputTokens: null,
+		outputTokens: null,
+		reasoningTokens: null,
+		totalTokens: null,
+		unknownCostCount: 0,
+	} satisfies SessionStatistics["usage"]["actual"];
+	const statistics: SessionStatistics = {
+		completedToolCallCount: 0,
+		recordCount: 0,
+		readPoint: "history-read-point",
+		sessionId: storedSession.id,
+		terminalOutcomeCounts: {
+			cancelled: 0,
+			completed: 0,
+			failed: 0,
+			interrupted: 0,
+		},
+		usage: {
+			actual: emptyUsage,
+			auxiliary: emptyUsage,
+			contributions: { actual: [], auxiliary: [], inherited: [] },
+			inherited: emptyUsage,
+		},
+	};
+	const sdkStore = fromPartial<SessionStore>({
+		listSessionsPage: async (options?: SessionPageOptions) => {
+			catalogOptions = options;
+			return catalogPage;
+		},
+		readSessionHistoryPage: async (
+			id: Session["id"],
+			options?: SessionPageOptions
+		) => {
+			historyRequest = { options, sessionId: id };
+			return historyPage;
+		},
+		getSessionStatistics: async (
+			id: Session["id"],
+			options?: SessionStatisticsOptions
+		) => {
+			statisticsRequest = { options, sessionId: id };
+			return statistics;
+		},
+	});
+	const sdk = createSessionSdkOperations(
+		{ cwd: workspace, getRegistry: () => null, store: sdkStore, workspace },
+		createSessionHostManager(),
+		sdkStore
+	);
+
+	expect(
+		await sdk.listSessionsPage({ cursor: "catalog-cursor", limit: 7 })
+	).toBe(catalogPage);
+	expect(catalogOptions).toEqual({ cursor: "catalog-cursor", limit: 7 });
+	expect(
+		await sdk.readSessionHistoryPage("sdk-page-session", {
+			cursor: "history-cursor",
+			limit: 9,
+		})
+	).toBe(historyPage);
+	expect(historyRequest).toEqual({
+		options: { cursor: "history-cursor", limit: 9 },
+		sessionId: "sdk-page-session",
+	});
+	expect(
+		await sdk.getSessionStatistics("sdk-page-session", {
+			readPoint: "history-read-point",
+			turnId: agentTurnId("sdk-page-turn"),
+		})
+	).toBe(statistics);
+	expect(statisticsRequest).toEqual({
+		options: {
+			readPoint: "history-read-point",
+			turnId: agentTurnId("sdk-page-turn"),
+		},
+		sessionId: "sdk-page-session",
+	});
+});
+
 test("Session SDK holds a reload-blocking lease through Provider availability and prompt admission", async () => {
 	const availabilityStarted = Promise.withResolvers<void>();
 	const releaseAvailability = Promise.withResolvers<void>();
@@ -1263,6 +1408,7 @@ test("public Session SDK drives multiple Agent Model Steps through exact Provide
 					usage: { inputTokens: 3, outputTokens: 2, reasoningTokens: 1 },
 				};
 				yield {
+					completion: { kind: "completed" },
 					continuation: { responseId: "sdk-continuation-1" },
 					type: "finish",
 				};
@@ -1273,7 +1419,7 @@ test("public Session SDK drives multiple Agent Model Steps through exact Provide
 				type: "usage",
 				usage: { inputTokens: 5, outputTokens: 3 },
 			};
-			yield { type: "finish" };
+			yield { completion: { kind: "completed" }, type: "finish" };
 		},
 	});
 	const providerCollectionForHost =
@@ -1315,7 +1461,7 @@ test("public Session SDK drives multiple Agent Model Steps through exact Provide
 				throw new Error("The public Session SDK was not created.");
 			}
 			handles.push(handle);
-			const events: AgentTurnEvent[] = [];
+			const events: SessionSdkEvent[] = [];
 			const terminal = Promise.withResolvers<AgentTurnEvent>();
 			const partialOutput = Promise.withResolvers<void>();
 			const unsubscribe = handle.onEvent((event) => {
@@ -1533,6 +1679,7 @@ test("public Session SDK creates durable Sessions using public options", async (
 
 afterAll(async () => {
 	database.sqlite.close();
+	projectionDatabase.sqlite.close();
 	await fs.rm(root, { force: true, recursive: true });
 });
 
@@ -1773,7 +1920,7 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 						thinkingLevel: request.reasoningEffort,
 					});
 					yield { delta: "The selection was restored.", type: "text-delta" };
-					yield { type: "finish" };
+					yield { completion: { kind: "completed" }, type: "finish" };
 				},
 			});
 			const collection = Object.assign(providers, {
@@ -1886,10 +2033,22 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 		restoredSdk = undefined;
 
 		const recordDatabase = createDatabase(databasePath);
+		const recordProjectionDatabase = createDatabase(
+			resolveLocalSessionProjectionPath(databasePath)
+		);
 		try {
-			const recordStore = createDrizzleSessionStore(recordDatabase.db, {
-				workspaceRoot: sdkWorkspace,
-			});
+			const recordProjectionStore = createDrizzleSessionStore(
+				recordProjectionDatabase.db,
+				{
+					operationalDatabase: recordDatabase.db,
+					sessionLogRoot: resolveLocalSessionLogRoot(databasePath),
+					workspaceRoot: sdkWorkspace,
+				}
+			);
+			const recordStore = createSessionJsonlStore(
+				recordProjectionStore,
+				resolveLocalSessionLogRoot(databasePath)
+			);
 			const records = await recordStore.listSessionRecords(createdSessionId);
 			const userRecords = records.filter(
 				({ outcome }) => outcome.kind === "user"
@@ -1907,6 +2066,7 @@ test("the public Session SDK restores non-default Agent, provider, model, and Th
 			).toBe(true);
 		} finally {
 			recordDatabase.sqlite.close();
+			recordProjectionDatabase.sqlite.close();
 		}
 	} finally {
 		unsubscribe?.();

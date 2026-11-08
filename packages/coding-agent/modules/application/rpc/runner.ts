@@ -2,6 +2,7 @@ import { logger } from "@wincode/utils";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { resolveSubmissionPrompt } from "@/modules/commands/submission-resolution";
 import { expandPastedText } from "@/modules/sessions/pasted-text";
+import { projectSessionStorageError } from "@/modules/sessions/storage/session-jsonl-store";
 import { discoverSkills } from "@/modules/skills";
 import type { SessionId } from "@/shared/identifiers";
 import { errorLogFields } from "@/shared/utils/error-log-fields";
@@ -13,10 +14,10 @@ import type {
 import { type DeferredNotification, SerializedWriter } from "./output";
 import {
 	operationalStatus,
-	projectAgentEvent,
 	projectExecution,
 	projectMessage,
 	projectQueued,
+	projectSessionEvent,
 	projectSteering,
 	projectSubmissionEvent,
 	selectionFromHost,
@@ -371,6 +372,7 @@ export async function runRpc({
 		}
 		const projected: Record<string, unknown> = {
 			activeCompaction: snapshot.isCompacting ? { active: true } : null,
+			storageError: projectSessionStorageError(snapshot.error),
 			activeExecution: primary
 				? (executions.find(
 						(execution) => execution.turnId === primary.turnId
@@ -461,8 +463,11 @@ export async function runRpc({
 		boundUnsubscribers.push(
 			nextHost.onEvent((event) => {
 				try {
+					const kind = event.type.startsWith("compaction-summary-")
+						? "compaction-summary"
+						: "agent-turn";
 					emit("session/event", {
-						event: { kind: "agent-turn", event: projectAgentEvent(event) },
+						event: { kind, event: projectSessionEvent(event) },
 					});
 				} catch (error) {
 					void fatalShutdown(error);

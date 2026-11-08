@@ -118,9 +118,10 @@ const createPromptHistoryStore = (
 	recorded: StoredPromptHistoryEntry[]
 ): PromptHistoryStore =>
 	fromPartial<PromptHistoryStore>({
-		externalizeAttachments: async (messages: readonly SessionMessage[]) => [
-			...messages,
-		],
+		externalizeAttachments: async (messages: readonly SessionMessage[]) => ({
+			messages: [...messages],
+			release: async () => undefined,
+		}),
 		getPromptHistory: async (): Promise<StoredPromptHistoryEntry[]> => [],
 		recordPrompt: async (entry: StoredPromptHistoryEntry) => {
 			recorded.push(entry);

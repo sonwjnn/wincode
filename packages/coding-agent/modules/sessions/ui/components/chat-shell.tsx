@@ -1,6 +1,11 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import type { AgentId, SessionMessageId } from "@wincode/agent-core";
+import type {
+	AgentId,
+	ModelRetryStatus,
+	SessionMessageId,
+	SessionRecordId,
+} from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
 import { isUndefined } from "@wincode/utils";
 import {
@@ -16,6 +21,7 @@ import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
 import {
 	AUTO_COMPACT_SETTING,
@@ -31,6 +37,11 @@ import {
 	getThinkingLevelBorderColor,
 	getThinkingLevelColor,
 } from "@/shared/providers/theme/themes";
+import { useSessionNotifications } from "@/shared/providers/toast/toast-provider";
+import type {
+	UiNotification,
+	UiNotificationAnchor,
+} from "@/shared/providers/toast/types";
 import { Spinner } from "@/shared/ui/spinner";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import type { SessionQueuedSubmission } from "../../agent-session/types";
@@ -41,11 +52,15 @@ import {
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
-import { ErrorMessage } from "../messages";
-import { ChatMessage } from "./chat-message";
+import {
+	ErrorMessage,
+	repeatsTerminalError,
+	type SessionErrorSource,
+} from "../messages";
+import { ChatMessage, ChatNotificationMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
 import {
-	buildSessionTimeline,
+	buildSessionTranscriptTimeline,
 	type SessionTimelineItem,
 } from "./chat-timeline";
 import {
@@ -55,6 +70,7 @@ import {
 } from "./chat-turns";
 import { CompactionDivider } from "./compaction-divider";
 import { CompactionStatus } from "./compaction-status";
+import { ModelRetryIndicator } from "./model-retry-status";
 import { SessionUsageBar } from "./session-usage-bar";
 import { WaitingMessageStrip } from "./waiting-message-strip";
 import { WorkspacePath } from "./workspace-path";
@@ -63,9 +79,17 @@ const EMPTY_QUEUED_SUBMISSIONS: readonly SessionQueuedSubmission[] = [];
 
 type ChatShellProps = {
 	activeMessages?: readonly SessionMessage[];
+	forkCheckpoints?: ReadonlyMap<
+		SessionMessageId,
+		SessionForkCheckpointAssessment
+	>;
+	rewindingCheckpointId?: SessionRecordId;
+	onRewindCheckpoint?: (recordId: SessionRecordId) => void | Promise<void>;
 	compactions?: readonly SessionCompaction[];
 	draftKey?: string;
 	error?: unknown;
+	/** Only a turn error can duplicate a terminal assistant error; other sources remain visible. */
+	errorSource?: SessionErrorSource;
 	isBusy: boolean;
 	isSelectionReady?: boolean;
 	isCompacting: boolean;
@@ -89,6 +113,8 @@ type ChatShellProps = {
 	viewId: string;
 	sessionUsageEntries?: readonly SessionUsageEntry[];
 	cacheWarmingStatus?: CacheWarmingStatus;
+	retryStatus?: ModelRetryStatus;
+	retryOperation?: "agent-turn" | "compaction-summary";
 	contextSnapshot?: ConfigSnapshot;
 	/** Rendered at the bottom of the transcript; the shell never persists it. */
 	transcriptNotice?: ReactNode;
@@ -98,12 +124,25 @@ function ActivityFooter({
 	agent,
 	autoCompact,
 	isCompacting,
+	retryStatus,
+	retryOperation,
 }: {
 	accentColor: string;
 	agent: AgentId;
 	autoCompact: boolean;
 	isCompacting: boolean;
+	retryStatus?: ModelRetryStatus;
+	retryOperation?: "agent-turn" | "compaction-summary";
 }) {
+	if (retryStatus !== undefined) {
+		return (
+			<ModelRetryIndicator
+				agent={agent}
+				operation={retryOperation}
+				status={retryStatus}
+			/>
+		);
+	}
 	const compactionLabel = autoCompact ? "Auto-compacting..." : "Compacting...";
 	return (
 		<box alignItems="center" flexDirection="row" gap={1}>
@@ -114,21 +153,12 @@ function ActivityFooter({
 		</box>
 	);
 }
-const findNewestCompaction = (
-	compactions: readonly SessionCompaction[]
-): SessionCompaction | undefined => {
-	let newest: SessionCompaction | undefined;
-	for (const compaction of compactions) {
-		if (isUndefined(newest) || compaction.sequence > newest.sequence) {
-			newest = compaction;
-		}
-	}
-	return newest;
-};
-
 const TRANSCRIPT_NOTICE = Symbol("transcript-notice");
 
-type TranscriptEntry = SessionTimelineItem | typeof TRANSCRIPT_NOTICE;
+type TranscriptEntry =
+	| SessionTimelineItem
+	| { kind: "notification"; notification: UiNotification }
+	| typeof TRANSCRIPT_NOTICE;
 
 /**
  * Slots the transient notice after every message that existed when it first
@@ -136,6 +166,23 @@ type TranscriptEntry = SessionTimelineItem | typeof TRANSCRIPT_NOTICE;
  * down. The notice is never persisted: a fresh mount captures the anchor again
  * and renders it at the end of the loaded transcript.
  */
+function SessionFooterStatuses({ scope }: { scope: string }) {
+	const { statuses } = useSessionNotifications(scope);
+	const { colors } = useTheme();
+	if (statuses.length === 0) {
+		return null;
+	}
+	return (
+		<box flexDirection="column" paddingX={1} width="100%">
+			{statuses.map(({ key, message }) => (
+				<text fg={colors.textMuted} key={key} width="100%" wrapMode="word">
+					{message}
+				</text>
+			))}
+		</box>
+	);
+}
+
 const resolveNoticeSlot = (
 	timeline: readonly SessionTimelineItem[],
 	anchorMessageCount: number | undefined
@@ -155,11 +202,102 @@ const resolveNoticeSlot = (
 	return timeline.length;
 };
 
+const resolveNotificationSlot = (
+	timeline: readonly SessionTimelineItem[],
+	anchor: UiNotificationAnchor | undefined
+): number => {
+	if (anchor === undefined) {
+		return timeline.length;
+	}
+	const currentMessageCount = timeline.reduce(
+		(count, item) =>
+			item.kind === "turn" ? count + item.turn.messages.length : count,
+		0
+	);
+	if (
+		anchor.afterCompactionId !== undefined &&
+		currentMessageCount === anchor.messageCount
+	) {
+		const compactionIndex = timeline.findIndex(
+			(item) =>
+				item.kind === "compaction" &&
+				item.compaction.id === anchor.afterCompactionId
+		);
+		if (compactionIndex !== -1) {
+			return compactionIndex + 1;
+		}
+	}
+	return resolveNoticeSlot(timeline, anchor.messageCount);
+};
+
+const partitionNotificationsByMessage = (
+	notifications: readonly UiNotification[],
+	messages: readonly SessionMessage[]
+): {
+	notificationsByMessageId: Map<string, UiNotification[]>;
+	timelineNotifications: UiNotification[];
+} => {
+	const messageIds = new Set<string>(messages.map(({ id }) => id));
+	const notificationsByMessageId = new Map<string, UiNotification[]>();
+	const timelineNotifications: UiNotification[] = [];
+	for (const notification of notifications) {
+		const messageId = notification.anchor?.afterMessageId;
+		if (messageId === undefined || !messageIds.has(messageId)) {
+			timelineNotifications.push(notification);
+			continue;
+		}
+		const anchoredNotifications = notificationsByMessageId.get(messageId) ?? [];
+		anchoredNotifications.push(notification);
+		notificationsByMessageId.set(messageId, anchoredNotifications);
+	}
+	return { notificationsByMessageId, timelineNotifications };
+};
+
+const buildTranscriptEntries = (
+	timeline: readonly SessionTimelineItem[],
+	notifications: readonly UiNotification[],
+	noticeAnchorMessageCount: number | undefined
+): readonly TranscriptEntry[] => {
+	const entriesAtSlot = new Map<number, TranscriptEntry[]>();
+	const appendAtSlot = (slot: number, entry: TranscriptEntry): void => {
+		const entries = entriesAtSlot.get(slot) ?? [];
+		entries.push(entry);
+		entriesAtSlot.set(slot, entries);
+	};
+
+	if (noticeAnchorMessageCount !== undefined) {
+		appendAtSlot(
+			resolveNoticeSlot(timeline, noticeAnchorMessageCount),
+			TRANSCRIPT_NOTICE
+		);
+	}
+	for (const notification of notifications) {
+		appendAtSlot(resolveNotificationSlot(timeline, notification.anchor), {
+			kind: "notification",
+			notification,
+		});
+	}
+
+	const transcriptEntries: TranscriptEntry[] = [];
+	for (let slot = 0; slot <= timeline.length; slot++) {
+		transcriptEntries.push(...(entriesAtSlot.get(slot) ?? []));
+		const item = timeline[slot];
+		if (item !== undefined) {
+			transcriptEntries.push(item);
+		}
+	}
+	return transcriptEntries;
+};
+
 export function ChatShell({
 	activeMessages,
+	forkCheckpoints,
+	rewindingCheckpointId,
+	onRewindCheckpoint,
 	compactions = [],
 	draftKey,
 	error,
+	errorSource,
 	isBusy,
 	isSelectionReady,
 	isCompacting,
@@ -178,6 +316,8 @@ export function ChatShell({
 	viewId,
 	sessionUsageEntries = [],
 	cacheWarmingStatus = "idle",
+	retryStatus,
+	retryOperation,
 	contextSnapshot,
 	transcriptNotice,
 }: ChatShellProps) {
@@ -188,8 +328,15 @@ export function ChatShell({
 	const backgroundComponentIds = useMemo(() => [transcriptId], [transcriptId]);
 	const { isTopLayer } = useKeyboardLayer();
 	const [scrollRequest, setScrollRequest] = useState(0);
+	const [showActions, setShowActions] = useState(false);
+	useEffect(() => {
+		if (isBusy) {
+			setShowActions(false);
+		}
+	}, [isBusy]);
 	const { agent, model, thinkingLevel } = usePromptConfig();
 	const { colors } = useTheme();
+	const { notifications } = useSessionNotifications(viewId);
 	const isComposerFocused = isTopLayer("base") || isTopLayer("command");
 	const defaultComposerBorderColor = isComposerFocused
 		? colors.borderActive
@@ -279,12 +426,18 @@ export function ChatShell({
 	const displayMessages = messages.filter(
 		(message) => !isCompactionSummaryMessage(message)
 	);
-	const liveCompaction = findNewestCompaction(compactions);
-	const historicalCompactions = compactions.filter(
-		({ id }) => id !== liveCompaction?.id
+	const isRepeatedTerminalError = repeatsTerminalError(
+		error,
+		displayMessages,
+		errorSource
 	);
 	const turns = groupMessagesBySessionTurn(displayMessages);
-	const timeline = buildSessionTimeline(displayMessages, historicalCompactions);
+	const transcriptTimeline = buildSessionTranscriptTimeline(
+		messages,
+		compactions
+	);
+	const { notificationsByMessageId, timelineNotifications } =
+		partitionNotificationsByMessage(notifications, displayMessages);
 	const hasTranscriptNotice =
 		transcriptNotice !== undefined && transcriptNotice !== null;
 	const [hadTranscriptNotice, setHadTranscriptNotice] = useState(false);
@@ -299,14 +452,11 @@ export function ChatShell({
 			hasTranscriptNotice ? displayMessages.length : undefined
 		);
 	}
-	const noticeSlot = resolveNoticeSlot(timeline, noticeAnchorMessageCount);
-	const transcriptEntries: readonly TranscriptEntry[] = hasTranscriptNotice
-		? [
-				...timeline.slice(0, noticeSlot),
-				TRANSCRIPT_NOTICE,
-				...timeline.slice(noticeSlot),
-			]
-		: timeline;
+	const transcriptEntries = buildTranscriptEntries(
+		transcriptTimeline,
+		timelineNotifications,
+		hasTranscriptNotice ? noticeAnchorMessageCount : undefined
+	);
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
 	const retryableMessages = activeMessages ?? displayMessages;
 	const canRetryMessage = (messageId: SessionMessageId): boolean =>
@@ -359,11 +509,21 @@ export function ChatShell({
 	});
 	useKeyboard((key) => {
 		if (
+			isTopLayer("base") &&
+			(key.option || key.meta) &&
+			key.name === "w" &&
+			!isBusy
+		) {
+			key.preventDefault();
+			setShowActions((visible) => !visible);
+			return;
+		}
+		if (
 			!canRetry ||
 			isUndefined(latestRetryMessageId) ||
 			isUndefined(onRetry) ||
 			!isTopLayer("base") ||
-			!key.option ||
+			!(key.option || key.meta) ||
 			key.name !== "r"
 		) {
 			return;
@@ -379,6 +539,7 @@ export function ChatShell({
 		if (accepted === false) {
 			return false;
 		}
+		setShowActions(false);
 		setScrollRequest((request) => request + 1);
 		return true;
 	};
@@ -419,6 +580,14 @@ export function ChatShell({
 								</box>
 							);
 						}
+						if (entry.kind === "notification") {
+							return (
+								<ChatNotificationMessage
+									key={`session-notification-${entry.notification.id}`}
+									notification={entry.notification}
+								/>
+							);
+						}
 						const item = entry;
 						if (item.kind === "compaction") {
 							return (
@@ -436,23 +605,32 @@ export function ChatShell({
 						return (
 							<box
 								key={turn.id}
-								marginTop={item === timeline[0] ? 1 : 0}
+								marginTop={item === transcriptTimeline[0] ? 1 : 0}
 								width="100%"
 							>
 								<ChatMessage
 									footerMessage={footerMessages.get(turn.id)}
+									forkCheckpoints={forkCheckpoints}
+									isRewindDisabled={
+										isBusy || rewindingCheckpointId !== undefined
+									}
 									messages={turn.messages}
+									notificationsAfterMessage={notificationsByMessageId}
 									onRetry={canRetryTurn ? onRetry : undefined}
+									onRewindCheckpoint={onRewindCheckpoint}
+									rewindingCheckpointId={rewindingCheckpointId}
+									showActions={showActions && !isBusy}
 									streaming={isBusy && turn.id === turns.at(-1)?.id}
 								/>
 							</box>
 						);
 					})}
-					{liveCompaction ? <CompactionDivider entry={liveCompaction} /> : null}
 					{isCompacting ? (
 						<CompactionStatus agent={agent} autoCompact={autoCompact} />
 					) : null}
-					{error ? <ErrorMessage error={error} /> : null}
+					{error && !isRepeatedTerminalError ? (
+						<ErrorMessage error={error} />
+					) : null}
 				</box>
 			</scrollbox>
 			<box flexDirection="column" flexShrink={0} paddingBottom={1} width="100%">
@@ -467,6 +645,8 @@ export function ChatShell({
 									agent={agent}
 									autoCompact={autoCompact}
 									isCompacting={isCompacting}
+									retryOperation={retryOperation}
+									retryStatus={retryStatus}
 								/>
 							) : undefined
 						}
@@ -486,6 +666,7 @@ export function ChatShell({
 						sessionPromptHistory={promptHistory}
 					/>
 				</box>
+				<SessionFooterStatuses scope={viewId} />
 				<box
 					flexDirection="row"
 					flexShrink={0}

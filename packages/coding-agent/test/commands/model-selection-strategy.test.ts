@@ -28,7 +28,7 @@ const readElement = (
 	}>;
 };
 
-test("model selection keeps its legacy title and recent Provider Model history", () => {
+test("model selection keeps its legacy title and recent Provider Model history", async () => {
 	let dialogChildren: unknown;
 	let dialogTitle: string | undefined;
 	const recentSelection = fromPartial<ProviderModelSelection>({
@@ -48,12 +48,12 @@ test("model selection keeps its legacy title and recent Provider Model history",
 				dialogTitle = title;
 			},
 		},
-		getRecentModelSelections: () => [recentSelection],
+		getRecentModelSelections: async () => [recentSelection],
 		onSelectProviderModel: () => undefined,
 		providerController,
 	});
 
-	createCommandHandlers(context)["model.select"]();
+	await createCommandHandlers(context)["model.select"]();
 
 	const element = readElement(dialogChildren);
 	expect(dialogTitle).toBe("Select Model");
@@ -62,7 +62,7 @@ test("model selection keeps its legacy title and recent Provider Model history",
 	expect(element.props.recentSelections).toEqual([recentSelection]);
 });
 
-test("model selection fails closed when its Provider controller is unavailable", () => {
+test("model selection fails closed when its Provider controller is unavailable", async () => {
 	const context = fromPartial<CommandStrategyContext>({
 		config: fromPartial<PromptConfig>({
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
@@ -71,7 +71,7 @@ test("model selection fails closed when its Provider controller is unavailable",
 		onSelectProviderModel: () => undefined,
 	});
 
-	expect(() => createCommandHandlers(context)["model.select"]()).toThrow(
-		"Provider Model selection is unavailable in this view."
-	);
+	await expect(
+		createCommandHandlers(context)["model.select"]()
+	).rejects.toThrow("Provider Model selection is unavailable in this view.");
 });

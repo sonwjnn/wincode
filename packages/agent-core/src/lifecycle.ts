@@ -168,6 +168,8 @@ const activeStepIdForEvent = (
 ): ModelStepId | undefined => {
 	switch (event.type) {
 		case "model-step-finished":
+		case "model-step-retry-scheduled":
+		case "model-step-retry-ended":
 			return;
 		case "model-step-started":
 			return event.stepId;

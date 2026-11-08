@@ -14,7 +14,10 @@ import type {
 	SessionSendOutcome,
 	SessionSubmissionComposition,
 } from "../submission-types";
-import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";
+import {
+	SESSION_PROJECTION_BLOCKED_ERROR,
+	SESSION_SHUT_DOWN_ERROR,
+} from "./session-messages";
 import type {
 	AgentSessionPorts,
 	SessionQueuedSendInput,
@@ -42,6 +45,10 @@ type PreparedAdmission = Readonly<{
 	turnId: AgentTurnId;
 }>;
 
+type QueuedSubmissionAcceptance =
+	| Readonly<{ completion: Promise<SessionSendOutcome>; rejected: false }>
+	| Readonly<{ reason: string; rejected: true }>;
+
 type SubmissionValidationFailure = Readonly<{
 	rejected: true;
 	reason: string;
@@ -57,7 +64,9 @@ export type SessionInputLaneState = Readonly<{
 	closed: boolean;
 	executionBusy: boolean;
 	queueDraining: boolean;
+	reconciliationRequired: boolean;
 	submissionBusy: boolean;
+	writeBlocked: boolean;
 }>;
 
 /**
@@ -99,13 +108,15 @@ export type SessionInputLaneEffects = Readonly<{
 	) => void;
 	emitSubmissionEvent: (event: SessionSubmissionEvent) => void;
 	externalizeAttachments: AgentSessionPorts["attachments"]["externalize"];
-	releaseAttachments: (attachmentIds: readonly string[]) => void;
+	releaseAttachments: (
+		attachmentIds: readonly string[]
+	) => void | Promise<void>;
 	reportSubmissionFailure: (
 		input: SessionSendInput,
 		messageId: SessionMessageId | undefined,
 		reason: string
 	) => void;
-	retainAttachments: (attachmentIds: readonly string[]) => void;
+	retainAttachments: (attachmentIds: readonly string[]) => void | Promise<void>;
 	retrySteeringMessage: (
 		message: SessionSteeringMessage
 	) => Promise<SessionSendOutcome>;
@@ -217,30 +228,35 @@ const recalledSubmissionEvent = (
 export const createSessionInputLaneWorkflow = (
 	port: SessionInputLanePort
 ): SessionInputLaneWorkflow => {
-	const releaseQueuedAttachments = (
+	const releaseQueuedAttachments = async (
 		submissions: readonly SessionQueuedSubmission[]
-	): void => {
+	): Promise<void> => {
 		const attachmentIds = submissions.flatMap(({ input }) =>
 			queuedAttachmentIds(input)
 		);
 		if (attachmentIds.length > 0) {
-			port.effects.releaseAttachments(attachmentIds);
+			await port.effects.releaseAttachments(attachmentIds);
 		}
 	};
 	const storeCompositionFiles = async (
 		files: readonly SessionFilePart[],
 		signal: AbortSignal
-	): Promise<SessionFilePart[]> => {
+	): Promise<
+		Readonly<{ files: SessionFilePart[]; release: () => Promise<void> }>
+	> => {
 		if (files.every((file) => !isUndefined(file.attachmentId))) {
-			return [...files];
+			return { files: [...files], release: async () => undefined };
 		}
-		const [stored] = await port.effects.externalizeAttachments(
+		const lease = await port.effects.externalizeAttachments(
 			[createSessionUserMessage("", undefined, [], [...files])],
 			signal
 		);
-		return (stored?.parts ?? []).filter(
-			(part): part is SessionFilePart => part.type === "file"
-		);
+		return {
+			files: (lease.messages[0]?.parts ?? []).filter(
+				(part): part is SessionFilePart => part.type === "file"
+			),
+			release: lease.release,
+		};
 	};
 	const drainSteeringHead = async (
 		steering: SessionSteeringMessage
@@ -271,13 +287,16 @@ export const createSessionInputLaneWorkflow = (
 			recallFailedTurnMessages();
 			return false;
 		} finally {
-			releaseQueuedAttachments([started]);
+			await releaseQueuedAttachments([started]);
 		}
 		return true;
 	};
 	const drainQueueHead = async (): Promise<boolean> => {
+		const lane = port.read().lane;
 		if (
-			port.read().lane.closed ||
+			lane.closed ||
+			lane.writeBlocked ||
+			lane.reconciliationRequired ||
 			port.inputScheduler.hasPendingSubmissionTransition()
 		) {
 			return false;
@@ -321,7 +340,7 @@ export const createSessionInputLaneWorkflow = (
 			: QUEUED_ATTACHMENT_ERROR;
 		const cleanup = port.inputScheduler
 			.recallQueuedSubmissions((submission) => submission.id === queued.id)
-			.then((removed) => {
+			.then(async (removed) => {
 				if (removed.length === 0) {
 					return;
 				}
@@ -329,7 +348,7 @@ export const createSessionInputLaneWorkflow = (
 				for (const submission of removed) {
 					port.read().externalizations.get(submission.id)?.controller.abort();
 				}
-				releaseQueuedAttachments(removed);
+				await releaseQueuedAttachments(removed);
 				port.effects.reportSubmissionFailure(
 					queued.input,
 					queued.messageId,
@@ -340,16 +359,38 @@ export const createSessionInputLaneWorkflow = (
 		port.effects.trackBackgroundTask(cleanup);
 		return { rejected: true, reason };
 	};
-	const publishQueuedSubmissionAttachments = (
+	const retainExternalizedAttachments = async (
+		attachmentIds: readonly string[],
+		releaseStagePins: () => Promise<void>
+	): Promise<void> => {
+		if (attachmentIds.length === 0) {
+			await releaseStagePins();
+			return;
+		}
+		await port.effects.retainAttachments(attachmentIds);
+		try {
+			await releaseStagePins();
+		} catch (error) {
+			await port.effects.releaseAttachments(attachmentIds);
+			throw error;
+		}
+	};
+	const publishQueuedSubmissionAttachments = async (
 		queued: SessionQueuedSubmission,
 		controller: AbortController,
 		originalAttachmentIds: readonly string[],
-		files: SessionFilePart[]
-	): SessionSendOutcome => {
+		externalization: Readonly<{
+			files: SessionFilePart[];
+			release: () => Promise<void>;
+		}>
+	): Promise<SessionSendOutcome> => {
 		const input: SessionQueuedSendInput = {
 			...queued.input,
-			composition: { ...queued.input.composition, files },
-			files,
+			composition: {
+				...queued.input.composition,
+				files: externalization.files,
+			},
+			files: externalization.files,
 		};
 		const storedAttachmentIds = queuedAttachmentIds(input);
 		const newAttachmentIds = subtractAttachmentIds(
@@ -360,27 +401,28 @@ export const createSessionInputLaneWorkflow = (
 			originalAttachmentIds,
 			storedAttachmentIds
 		);
+		await retainExternalizedAttachments(
+			newAttachmentIds,
+			externalization.release
+		);
 		const stillQueued = port.inputScheduler
 			.getQueuedSubmissions()
 			.some((submission) => submission.id === queued.id);
 		const closed = port.read().lane.closed;
 		if (closed || controller.signal.aborted || !stillQueued) {
 			if (newAttachmentIds.length > 0) {
-				port.effects.releaseAttachments(newAttachmentIds);
+				await port.effects.releaseAttachments(newAttachmentIds);
 			}
 			return closed
 				? { rejected: true, reason: SESSION_SHUT_DOWN_ERROR }
 				: { rejected: false };
 		}
-		if (newAttachmentIds.length > 0) {
-			port.effects.retainAttachments(newAttachmentIds);
-		}
 		if (releasedAttachmentIds.length > 0) {
-			port.effects.releaseAttachments(releasedAttachmentIds);
+			await port.effects.releaseAttachments(releasedAttachmentIds);
 		}
 		if (!port.inputScheduler.replaceQueuedSubmission({ ...queued, input })) {
 			if (newAttachmentIds.length > 0) {
-				port.effects.releaseAttachments(newAttachmentIds);
+				await port.effects.releaseAttachments(newAttachmentIds);
 			}
 			return { rejected: false };
 		}
@@ -393,23 +435,23 @@ export const createSessionInputLaneWorkflow = (
 		originalAttachmentIds: readonly string[]
 	): Promise<SessionSendOutcome> => {
 		try {
-			const files = await storeCompositionFiles(
+			const externalization = await storeCompositionFiles(
 				queued.input.composition.files,
 				controller.signal
 			);
-			return publishQueuedSubmissionAttachments(
+			return await publishQueuedSubmissionAttachments(
 				queued,
 				controller,
 				originalAttachmentIds,
-				files
+				externalization
 			);
 		} catch {
 			return failQueuedSubmissionAttachments(queued);
 		}
 	};
-	const acceptQueuedSubmission = (
+	const acceptQueuedSubmission = async (
 		input: SessionSendInput
-	): Promise<SessionSendOutcome> => {
+	): Promise<QueuedSubmissionAcceptance> => {
 		const composition = compositionOf(input);
 		const { messageId, submissionId, turnId } = identityOf(input);
 		const queuedInput: SessionQueuedSendInput = {
@@ -427,8 +469,15 @@ export const createSessionInputLaneWorkflow = (
 			submissionId,
 		};
 		const originalAttachmentIds = queuedAttachmentIds(queuedInput);
-		if (originalAttachmentIds.length > 0) {
-			port.effects.retainAttachments(originalAttachmentIds);
+		try {
+			if (originalAttachmentIds.length > 0) {
+				await port.effects.retainAttachments(originalAttachmentIds);
+			}
+		} catch (error) {
+			return {
+				reason: getErrorMessage(error, QUEUED_ATTACHMENT_ERROR),
+				rejected: true,
+			};
 		}
 		const attachmentController = new AbortController();
 		const completion = Promise.withResolvers<SessionSendOutcome>();
@@ -440,11 +489,8 @@ export const createSessionInputLaneWorkflow = (
 		});
 		if (!port.inputScheduler.enqueueSubmission(queued)) {
 			port.apply({ id: queued.id, kind: "externalization-removed" });
-			releaseQueuedAttachments([queued]);
-			return Promise.resolve({
-				rejected: true,
-				reason: SESSION_SHUT_DOWN_ERROR,
-			});
+			await releaseQueuedAttachments([queued]);
+			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
 		port.apply({ kind: "queue-change-published" });
 		const pending = finishQueuedSubmissionAttachments(
@@ -458,10 +504,11 @@ export const createSessionInputLaneWorkflow = (
 				reason: getErrorMessage(error, QUEUED_ATTACHMENT_ERROR),
 			})
 		);
-		return pending.finally(() => {
+		const settled = pending.finally(() => {
 			port.apply({ id: queued.id, kind: "externalization-removed" });
 			port.effects.trackBackgroundTask(drainQueuedSubmissions());
 		});
+		return { completion: settled, rejected: false };
 	};
 	const commitQueuedSteering = async (
 		queued: SessionQueuedSubmission
@@ -512,6 +559,9 @@ export const createSessionInputLaneWorkflow = (
 		if (port.read().lane.closed) {
 			return { kind: "rejected", reason: SESSION_SHUT_DOWN_ERROR };
 		}
+		if (port.read().lane.writeBlocked) {
+			return { kind: "rejected", reason: SESSION_PROJECTION_BLOCKED_ERROR };
+		}
 		const result = await port.inputScheduler.steerQueuedSubmission(
 			async (queued) => {
 				const receipt = await commitQueuedSteering(queued);
@@ -533,15 +583,18 @@ export const createSessionInputLaneWorkflow = (
 		ids: readonly SessionWaitingMessageId[] | undefined,
 		reason: "recall" | "turn-failed"
 	): Promise<SessionWaitingMessage[]> => {
+		if (port.read().lane.reconciliationRequired) {
+			return Promise.resolve([]);
+		}
 		const recalled = port.inputScheduler.recallQueuedSubmissions(
 			(submission) =>
+				!port.read().lane.reconciliationRequired &&
 				waitingMessageMatches(ids, submission.id, submission.submissionId),
 			(submissions) => {
 				port.apply({ kind: "queue-change-published" });
 				for (const submission of submissions) {
 					port.read().externalizations.get(submission.id)?.controller.abort();
 				}
-				releaseQueuedAttachments(submissions);
 				for (const submission of submissions) {
 					port.effects.emitSubmissionEvent(
 						recalledSubmissionEvent(submission, reason)
@@ -549,8 +602,9 @@ export const createSessionInputLaneWorkflow = (
 				}
 			}
 		);
-		return recalled.then((submissions) => {
+		return recalled.then(async (submissions) => {
 			if (submissions.length > 0) {
+				await releaseQueuedAttachments(submissions);
 				port.effects.trackBackgroundTask(drainQueuedSubmissions());
 			}
 			return [...submissions];
@@ -610,6 +664,9 @@ export const createSessionInputLaneWorkflow = (
 		if (port.read().lane.closed) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
 		}
+		if (port.read().lane.writeBlocked) {
+			return { rejected: true, reason: SESSION_PROJECTION_BLOCKED_ERROR };
+		}
 		const validation = validateSubmissionSelection(input);
 		const failure =
 			validation instanceof Promise ? await validation : validation;
@@ -622,7 +679,11 @@ export const createSessionInputLaneWorkflow = (
 			composition
 		);
 		if (port.read().lane.submissionBusy) {
-			port.effects.trackBackgroundTask(acceptQueuedSubmission(admittedInput));
+			const acceptance = await acceptQueuedSubmission(admittedInput);
+			if (acceptance.rejected) {
+				return acceptance;
+			}
+			port.effects.trackBackgroundTask(acceptance.completion);
 			return {
 				rejected: false,
 				disposition: "queued",
@@ -643,6 +704,9 @@ export const createSessionInputLaneWorkflow = (
 	const send = async (input: SessionSendInput): Promise<SessionSendOutcome> => {
 		if (port.read().lane.closed) {
 			return { rejected: true, reason: SESSION_SHUT_DOWN_ERROR };
+		}
+		if (port.read().lane.writeBlocked) {
+			return { rejected: true, reason: SESSION_PROJECTION_BLOCKED_ERROR };
 		}
 		const validation = validateSubmissionSelection(input);
 		const failure =
@@ -666,9 +730,12 @@ export const createSessionInputLaneWorkflow = (
 			return await port.effects.retrySteeringMessage(failedSteering);
 		}
 		if (port.read().lane.submissionBusy) {
-			const pending = acceptQueuedSubmission(admittedInput);
-			port.effects.trackBackgroundTask(pending);
-			return await pending;
+			const acceptance = await acceptQueuedSubmission(admittedInput);
+			if (acceptance.rejected) {
+				return acceptance;
+			}
+			port.effects.trackBackgroundTask(acceptance.completion);
+			return await acceptance.completion;
 		}
 		return await port.effects.runSubmission(admittedInput);
 	};

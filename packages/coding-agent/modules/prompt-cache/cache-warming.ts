@@ -222,13 +222,17 @@ export const createSessionCacheWarming = ({
 	};
 
 	const persistWarmUsage = async (
-		model: ProviderModelSelection,
+		replay: CacheWarmReplayRequest,
 		usage: ModelUsage
 	): Promise<void> => {
 		await usageLedger.record({
+			costUsd: calculateModelUsageCostUsd(
+				pricingEntryForProviderModel(replay.providerModel),
+				usage
+			),
 			id: toSessionUsageEntryId(randomUUIDv7()),
 			kind: "cache-warm",
-			model,
+			model: replay.model,
 			usage,
 		});
 	};
@@ -288,7 +292,7 @@ export const createSessionCacheWarming = ({
 			if (usage === undefined) {
 				return false;
 			}
-			await persistWarmUsage(replay.model, usage);
+			await persistWarmUsage(replay, usage);
 			return hasExpectedCacheWarmSavings(replay, usage, usage.outputTokens);
 		} catch {
 			if (!controller.signal.aborted) {

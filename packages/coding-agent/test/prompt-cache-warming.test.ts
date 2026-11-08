@@ -16,6 +16,7 @@ import {
 import type {
 	CreateSessionUsageEntryInput,
 	SessionUsageEntry,
+	SessionWriteOutcome,
 } from "@/modules/sessions/storage/session-store";
 import { createSessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import { sessionId } from "./support/identifiers";
@@ -138,7 +139,18 @@ const createWarming = (
 		usageLedger: createSessionUsageLedger({
 			initialEntries: [],
 			sessionId: sessionId("cache-warm-test"),
-			store,
+			store: {
+				createSessionUsageEntry: async (input) => ({
+					entry: await store.createSessionUsageEntry(input),
+					writeOutcome: {
+						entryHash: "0".repeat(64),
+						kind: "committed",
+						operationId: `usage-${input.id}`,
+						projection: "ready",
+						sequence: 0,
+					} satisfies SessionWriteOutcome,
+				}),
+			},
 		}),
 	});
 
@@ -213,6 +225,7 @@ describe("Session Cache Warming", () => {
 		expect(JSON.stringify(entries)).not.toContain("discarded warm output");
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({
+			costUsd: 0.076_02,
 			kind: "cache-warm",
 			model: { modelId: "gpt-5.6", providerId: "openai" },
 			usage: { cacheReadTokens: 90_000, inputTokens: 100_000, outputTokens: 1 },

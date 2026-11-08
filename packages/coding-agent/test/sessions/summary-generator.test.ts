@@ -16,7 +16,14 @@ import type {
 	SummaryGeneratorInput,
 } from "@/modules/sessions/compaction/types";
 import type { SessionMessage } from "@/modules/sessions/message";
-import { modelId, sessionMessageId, toolCallId } from "../support/identifiers";
+import type { SessionCompactionRetryEvent } from "@/modules/sessions/session-events";
+import {
+	compactionId,
+	modelId,
+	sessionId,
+	sessionMessageId,
+	toolCallId,
+} from "../support/identifiers";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
 
 const MINIMUM_HANDOFF_OUTPUT_ERROR = /minimum.*256/i;
@@ -136,6 +143,86 @@ test("summarizes with the exact invocable Provider Model and declared reasoning 
 		maxOutputTokens: 256,
 		reasoningEffort: "high",
 	});
+});
+
+test("retries a transient summary failure without accepting failed partial output", async () => {
+	let requestCount = 0;
+	const reportedUsage: { inputTokens: number; outputTokens: number }[] = [];
+	const events: SessionCompactionRetryEvent[] = [];
+	const provider: Provider = {
+		id: selection.providerId,
+		models: [
+			{
+				limits: { contextWindowTokens: 8192, maxOutputTokens: 2048 },
+				modelId: selection.modelId,
+				protocolId: "fixture",
+				providerId: selection.providerId,
+			},
+		],
+		resolveAuthorization: () => ({ authorization: "fixture-only" }),
+		async *streamChat() {
+			requestCount += 1;
+			if (requestCount === 1) {
+				yield { delta: "failed partial summary", type: "text-delta" };
+				yield {
+					type: "usage",
+					usage: { inputTokens: 20, outputTokens: 2 },
+				};
+				throw new DOMException("Request timed out", "TimeoutError");
+			}
+			yield { delta: "Recovered summary", type: "text-delta" };
+			yield { completion: { kind: "completed" }, type: "finish" };
+		},
+	};
+	const collection = createProviderCollection();
+	collection.register(provider);
+	await collection.setCredential(selection.providerId, {
+		token: "fixture-only",
+	});
+	try {
+		const result = await createProviderSummaryGenerator(collection)({
+			target: resolvedTarget(),
+			maxOutputTokens: 1024,
+			serializedMessages: "history",
+			reportUsage: async (usage) => {
+				reportedUsage.push(usage);
+			},
+			retryPolicy: {
+				baseDelayMs: 0,
+				maxDelayMs: 10,
+				maxRetries: 1,
+			},
+			retryContext: {
+				compactionId: compactionId("summary-retry-compaction"),
+				onEvent: (event) => events.push(event),
+				sessionId: sessionId("summary-retry-session"),
+			},
+		});
+
+		expect(requestCount).toBe(2);
+		expect(result.text).toBe("Recovered summary");
+		expect(reportedUsage).toEqual([{ inputTokens: 20, outputTokens: 2 }]);
+		const started = events.filter(
+			(event) => event.type === "compaction-summary-attempt-started"
+		);
+		expect(started).toHaveLength(2);
+		expect(started[0]?.stepId).not.toBe(started[1]?.stepId);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				failure: expect.objectContaining({ code: "network" }),
+				type: "compaction-summary-retry-scheduled",
+			})
+		);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				outcome: "success",
+				type: "compaction-summary-retry-ended",
+			})
+		);
+		expect(JSON.stringify(events)).not.toContain("failed partial summary");
+	} finally {
+		await collection.close();
+	}
 });
 
 test("uses the Provider default when reasoning support is not declared", async () => {
@@ -609,7 +696,7 @@ test("refuses a summary when Provider generation completion is unknown", async (
 		runSummary({ serializedMessages: "history" }, undefined, {
 			kind: "unknown",
 		})
-	).rejects.toThrow("did not complete (unknown)");
+	).rejects.toThrow("The model returned an incomplete response.");
 });
 
 test("refuses a nonempty summary stopped by the output-token limit", async () => {
@@ -618,7 +705,7 @@ test("refuses a nonempty summary stopped by the output-token limit", async () =>
 			kind: "incomplete",
 			reason: "output-limit",
 		})
-	).rejects.toThrow("did not complete (output-limit)");
+	).rejects.toThrow("The model returned an incomplete response.");
 });
 
 test("refuses a nonempty summary stopped by provider filtering", async () => {
@@ -627,7 +714,7 @@ test("refuses a nonempty summary stopped by provider filtering", async () => {
 			kind: "incomplete",
 			reason: "filtered",
 		})
-	).rejects.toThrow("did not complete (filtered)");
+	).rejects.toThrow("The model returned an incomplete response.");
 });
 
 test("keeps transcript, prior-summary, and focus text inside their prompt boundaries", async () => {

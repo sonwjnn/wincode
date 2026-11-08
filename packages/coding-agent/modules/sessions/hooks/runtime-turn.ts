@@ -21,10 +21,13 @@ import {
 	getAgentTurnFailureDetails,
 	isAgentInvariantError,
 	isToolCallId,
+	type ModelRetryPolicy,
+	type ModelRetryStatus,
 	type ResolvedTool,
 	type SessionContextMeasurement,
 	type SessionMessageId,
 	type SessionRecord,
+	type SessionToolCallBatch,
 	type ToolCallId,
 	type ToolCallOutput,
 	type ToolDefinition,
@@ -75,6 +78,7 @@ import {
 	type VersionedEditingContext,
 } from "@/modules/tools";
 import type { ResolvedCodingAgent } from "../../agents/built-ins";
+import { CommittedAssistantError } from "../committed-assistant-error";
 import type { SessionMessage } from "../message";
 import { expandSessionMessagesForModel } from "../message";
 import {
@@ -486,9 +490,12 @@ const toAssistantTurnMessages = (
 ): AgentTurnMessage[] => {
 	const parts: AgentTurnPart[] = [];
 	const results: AgentTurnMessage[] = [];
+	const hasDisplayOnlyTerminalText =
+		message.metadata?.interrupted === true ||
+		message.metadata?.terminalOutcome !== undefined;
 	for (const part of message.parts) {
 		if (part.type === "text") {
-			if (part.text.length > 0) {
+			if (!hasDisplayOnlyTerminalText && part.text.length > 0) {
 				parts.push({ text: part.text, type: "text" });
 			}
 			continue;
@@ -636,6 +643,7 @@ export const buildAgentTurn = ({
 export type SessionViewState = ReadonlyDeep<{
 	lastEventType?: AgentTurnEvent["type"];
 	lastSequence: number;
+	retry?: ModelRetryStatus;
 	reasoningText: string;
 	status: "idle" | "streaming" | "terminal";
 	text: string;
@@ -643,6 +651,7 @@ export type SessionViewState = ReadonlyDeep<{
 }>;
 
 type AgentTurnEventConsumerOptions = {
+	modelRetry?: ModelRetryPolicy;
 	prepareNextStep?: AgentRuntimeRunOptions["prepareNextStep"];
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
@@ -678,6 +687,7 @@ const consumeAgentTurnEvents = async ({
 	onViewState,
 	runtime,
 	modelStepObserver,
+	modelRetry,
 	maximumModelSteps,
 	prepareNextStep,
 	promptCacheKey,
@@ -693,8 +703,29 @@ const consumeAgentTurnEvents = async ({
 		text: "",
 		turnId: turn.id,
 	};
+	let modelStepViewBaseline = { reasoningText: "", text: "" };
 	const publishViewState = (event: AgentTurnEvent): void => {
-		if (event.type === "text-delta") {
+		if (event.type === "model-step-started") {
+			modelStepViewBaseline = {
+				reasoningText: viewState.reasoningText,
+				text: viewState.text,
+			};
+			viewState = {
+				...viewState,
+				lastEventType: event.type,
+				lastSequence: event.sequence,
+				status: "streaming",
+			};
+		} else if (event.type === "model-step-retry-scheduled") {
+			viewState = {
+				...viewState,
+				...modelStepViewBaseline,
+				lastEventType: event.type,
+				lastSequence: event.sequence,
+				status: "streaming",
+			};
+			return;
+		} else if (event.type === "text-delta") {
 			viewState = {
 				...viewState,
 				lastEventType: event.type,
@@ -725,6 +756,25 @@ const consumeAgentTurnEvents = async ({
 		}
 	};
 	for await (const event of runtime.run(turn, {
+		modelRetry:
+			modelRetry === undefined
+				? undefined
+				: {
+						...modelRetry,
+						onStatus: (retry) => {
+							modelRetry.onStatus?.(retry);
+							viewState = omitUndefined({
+								...viewState,
+								...(retry === undefined ? {} : modelStepViewBaseline),
+								retry,
+							});
+							try {
+								onViewState?.(viewState);
+							} catch {
+								// Presentation subscribers are observational only.
+							}
+						},
+					},
 		...omitUndefined({
 			modelStepObserver,
 			maximumModelSteps,
@@ -821,6 +871,7 @@ export const runAgentTurnToText = async ({
 	onViewState,
 	runtime,
 	modelStepObserver,
+	modelRetry,
 	maximumModelSteps,
 	promptCacheKey,
 	signal,
@@ -842,6 +893,7 @@ export const runAgentTurnToText = async ({
 	onViewState?: (state: SessionViewState) => void;
 	runtime: AgentRuntime;
 	modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
+	modelRetry?: Omit<ModelRetryPolicy, "onStatus">;
 	maximumModelSteps?: AgentRuntimeRunOptions["maximumModelSteps"];
 	promptCacheKey?: string;
 	signal?: AbortSignal;
@@ -853,6 +905,8 @@ export const runAgentTurnToText = async ({
 }): Promise<string> => {
 	let assistantText = "";
 	let pendingAssistantText = "";
+	let assistantTextAtModelStepStart = "";
+	let pendingAssistantTextAtModelStepStart = "";
 	let hasCheckpointedText = false;
 	let stepMessageIds: SessionMessageId[] = [];
 	let terminal: AgentTurnTerminalEvent | undefined;
@@ -861,10 +915,13 @@ export const runAgentTurnToText = async ({
 	let stepHasToolCalls = false;
 	let contextMeasurement: SessionContextMeasurement | undefined;
 	let contextEpoch = getSessionContextEpoch(turn.input.messages);
+	let toolBatchId: SessionToolCallBatch["id"] | undefined;
+	let stepToolCallIds: ToolCallId[] = [];
 	const startedTools = new Map<
 		string,
 		{ readonly input: unknown; readonly toolName: string }
 	>();
+	let toolCheckpointFailure: unknown;
 	const commit = async (
 		committer: CheckpointCommitter | undefined,
 		record: SessionRecord | undefined
@@ -881,32 +938,44 @@ export const runAgentTurnToText = async ({
 			throw new Error(CHECKPOINT_FAILURE_MESSAGE, { cause: error });
 		}
 	};
+	const updateTurnEventState = (event: AgentTurnEvent): void => {
+		if (event.type === "model-step-retry-scheduled") {
+			assistantText = assistantTextAtModelStepStart;
+			pendingAssistantText = pendingAssistantTextAtModelStepStart;
+		}
+		if (event.type === "model-step-started") {
+			assistantTextAtModelStepStart = assistantText;
+			pendingAssistantTextAtModelStepStart = pendingAssistantText;
+			stepMessageIds = [];
+			stepHasToolCalls = false;
+			contextMeasurement = undefined;
+			toolBatchId = event.stepId;
+			stepToolCallIds = [];
+		}
+		if (event.type === "model-step-finished") {
+			contextMeasurement = contextMeasurementForStep(
+				event,
+				contextEpoch,
+				stepHasToolCalls
+			);
+		}
+		if (event.type === "text-delta") {
+			assistantText += event.delta;
+			pendingAssistantText += event.delta;
+		}
+		if (event.type === "tool-call-started") {
+			stepHasToolCalls = true;
+			stepToolCallIds.push(event.toolCallId);
+			startedTools.set(event.toolCallId, {
+				input: event.input,
+				toolName: event.toolName,
+			});
+		}
+	};
 	await consumeAgentTurnEvents({
 		onEvent: async (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);
-			if (event.type === "model-step-started") {
-				stepMessageIds = [];
-				stepHasToolCalls = false;
-				contextMeasurement = undefined;
-			}
-			if (event.type === "model-step-finished") {
-				contextMeasurement = contextMeasurementForStep(
-					event,
-					contextEpoch,
-					stepHasToolCalls
-				);
-			}
-			if (event.type === "text-delta") {
-				assistantText += event.delta;
-				pendingAssistantText += event.delta;
-			}
-			if (event.type === "tool-call-started") {
-				stepHasToolCalls = true;
-				startedTools.set(event.toolCallId, {
-					input: event.input,
-					toolName: event.toolName,
-				});
-			}
+			updateTurnEventState(event);
 			if (event.type === "tool-call-finished") {
 				const started = startedTools.get(event.toolCallId);
 				if (!isUndefined(started)) {
@@ -915,9 +984,22 @@ export const runAgentTurnToText = async ({
 						event,
 						input: started.input,
 						sourceUserMessageId,
+						...omitUndefined({
+							toolBatch:
+								toolBatchId === undefined
+									? undefined
+									: {
+											id: toolBatchId,
+											toolCallIds: [...stepToolCallIds],
+										},
+						}),
 						turn,
 					});
-					await commit(onToolCheckpoint, toolRecord);
+					try {
+						await commit(onToolCheckpoint, toolRecord);
+					} catch (error) {
+						toolCheckpointFailure ??= error;
+					}
 					stepMessageIds.push(
 						...toolRecord.messages.map((message) => message.id)
 					);
@@ -925,6 +1007,12 @@ export const runAgentTurnToText = async ({
 				}
 			}
 			await onEvent?.(event);
+			if (
+				event.type === "model-step-finished" &&
+				toolCheckpointFailure !== undefined
+			) {
+				throw toolCheckpointFailure;
+			}
 		},
 		onTerminal: (event) => {
 			lastSequence = Math.max(lastSequence, event.sequence);
@@ -933,6 +1021,7 @@ export const runAgentTurnToText = async ({
 		onViewState,
 		runtime,
 		modelStepObserver,
+		modelRetry,
 		maximumModelSteps,
 		prepareNextStep:
 			prepareNextStep === undefined
@@ -999,6 +1088,22 @@ export const runAgentTurnToText = async ({
 	await onTerminal?.(terminalEvent);
 	if (terminalEvent.type === "agent-turn-completed") {
 		return assistantText;
+	}
+	const assistant = record?.messages.find(
+		(message) => message.role === "assistant"
+	);
+	if (
+		terminalEvent.type === "agent-turn-failed" &&
+		onCheckpoint !== undefined &&
+		assistant !== undefined
+	) {
+		const committedFailureText = assistant.parts
+			.flatMap((part) => (part.type === "text" ? [part.text] : []))
+			.join("\n");
+		throw new CommittedAssistantError(
+			committedFailureText || terminalEvent.failure.message,
+			assistant.id
+		);
 	}
 	throw new Error(terminalEvent.failure.message);
 };
