@@ -462,6 +462,19 @@ const initializeSchema = (
 		CREATE INDEX IF NOT EXISTS idx_session_record_tool_call_turn_sequence
 			ON session_record_tool_call (session_id, turn_id, source_sequence);
 
+		CREATE TABLE IF NOT EXISTS session_context_edit (
+			session_id TEXT NOT NULL REFERENCES session(id)
+				ON UPDATE CASCADE ON DELETE CASCADE,
+			sequence INTEGER NOT NULL,
+			operation_id TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			replacement_text TEXT,
+			PRIMARY KEY (session_id, sequence)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_session_context_edit_target
+			ON session_context_edit (session_id, target_id, sequence);
+
 		CREATE TABLE IF NOT EXISTS session_fork_provenance (
 			session_id TEXT PRIMARY KEY NOT NULL REFERENCES session(id)
 				ON UPDATE CASCADE ON DELETE CASCADE,

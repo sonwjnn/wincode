@@ -494,6 +494,31 @@ export const sessionRecordToolCall = sqliteTable(
 	]
 );
 
+export const sessionContextEdit = sqliteTable(
+	"session_context_edit",
+	{
+		sessionId: text("session_id")
+			.notNull()
+			.references(() => session.id, {
+				onDelete: "cascade",
+				onUpdate: "cascade",
+			}),
+		sequence: integer("sequence").notNull(),
+		operationId: text("operation_id").notNull(),
+		targetId: text("target_id").notNull(),
+		/** Null omits the target from model context. */
+		replacementText: text("replacement_text"),
+	},
+	(table) => [
+		primaryKey({ columns: [table.sessionId, table.sequence] }),
+		index("idx_session_context_edit_target").on(
+			table.sessionId,
+			table.targetId,
+			table.sequence
+		),
+	]
+);
+
 export const sessionForkProvenance = sqliteTable("session_fork_provenance", {
 	sessionId: text("session_id")
 		.primaryKey()
@@ -683,6 +708,7 @@ export const sessionSchema = {
 	sessionCatalogVersion,
 	sessionCatalogDeletionState,
 	sessionCompaction,
+	sessionContextEdit,
 	sessionOperationLookup,
 	sessionRecord,
 	sessionRecordMessageIdentity,

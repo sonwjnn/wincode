@@ -5557,19 +5557,6 @@ export const createSessionJsonlStore = (
 			})
 		);
 	};
-	const getSessionContextEdits = async (
-		sessionId: SessionId
-	): Promise<SessionContextEdit[]> => {
-		const { state } = await readLog(
-			resolveSessionLogFilePath(path.resolve(logRoot), sessionId),
-			sessionId
-		);
-		return state.entries.flatMap(({ envelope }) =>
-			envelope.type === "context.edited"
-				? [sessionContextEditSchema.parse(envelope.payload)]
-				: []
-		);
-	};
 	const updateSessionSubmission = async (
 		input: UpdateSessionSubmissionInput
 	): Promise<SessionWriteOutcome> => {
@@ -8229,7 +8216,6 @@ export const createSessionJsonlStore = (
 		...projectionStore,
 		acquireSessionWriter: acquireWriter,
 		appendContextEdit,
-		getSessionContextEdits: wrapRead(getSessionContextEdits),
 		appendCompaction,
 		commitSessionRecord,
 		createEmptySession,

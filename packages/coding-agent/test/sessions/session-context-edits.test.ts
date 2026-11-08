@@ -465,3 +465,38 @@ test("a fork remaps edits in its checkpoint prefix and exports them independentl
 		await sdk.dispose();
 	}
 });
+
+test("a failed attempt is omitted from the next provider request but stays in history", async () => {
+	const recorder = createFakeProviderRecorder();
+	let providerDown = true;
+	recorder.beforeChat = async () => {
+		if (!providerDown) {
+			return;
+		}
+		providerDown = false;
+		throw new Error("Provider is unavailable");
+	};
+	const { sdk } = await sdkIn("failed-attempt", recorder);
+	const { handle, sessionId } = await openSession(sdk);
+	try {
+		await finishPrompt(handle, "First attempt");
+		await finishPrompt(handle, "Second attempt");
+		const request = recorder.requests.at(-1);
+		if (request?.kind !== "chat") {
+			throw new Error("Missing provider request.");
+		}
+		expect(
+			request.messages.some((message) =>
+				message.text.includes("The Agent Turn failed")
+			)
+		).toBe(false);
+		expect(
+			request.messages.some((message) => message.text.includes("First attempt"))
+		).toBe(true);
+		expect(transcriptText(handle)).toContain("First attempt");
+		expect(await durableText(sdk, sessionId)).toContain("First attempt");
+	} finally {
+		await handle.dispose();
+		await sdk.dispose();
+	}
+});

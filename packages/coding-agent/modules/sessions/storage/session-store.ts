@@ -249,6 +249,9 @@ export type SessionProjectionStore = {
 	listSessionUsageEntries: (
 		sessionId: SessionId
 	) => Promise<SessionUsageEntry[]>;
+	getSessionContextEdits: (
+		sessionId: SessionId
+	) => Promise<SessionContextEdit[]>;
 	createEmptySession: (
 		input: CreateEmptySessionInput
 	) => Promise<{ created?: boolean; id: SessionId }>;
@@ -337,9 +340,6 @@ export type SessionStore = Omit<
 		sessionId: SessionId,
 		edit: SessionContextEdit
 	) => Promise<SessionWriteOutcome>;
-	getSessionContextEdits: (
-		sessionId: SessionId
-	) => Promise<SessionContextEdit[]>;
 	appendCompaction: (
 		input: AppendSessionCompactionInput
 	) => Promise<SessionCompactionWriteResult>;
