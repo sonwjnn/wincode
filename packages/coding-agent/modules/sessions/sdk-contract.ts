@@ -8,6 +8,7 @@ import type { ThinkingLevel } from "@wincode/ai";
 import type { SessionId } from "../../shared/identifiers";
 import type { PluginFactory } from "../plugins/public";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
+import type { SessionContextEdit } from "./context-edits";
 import type {
 	SessionBundleExportOptions,
 	SessionBundleExportResult,
@@ -33,6 +34,7 @@ import type {
 	SessionStatisticsOptions,
 } from "./usage/session-statistics";
 
+export type { SessionContextEdit } from "./context-edits";
 export type {
 	SessionBundleAttachment,
 	SessionBundleCut,
@@ -180,6 +182,8 @@ export type SessionSdkSnapshot = Readonly<{
 }>;
 
 export type SessionSdkHandle = Readonly<{
+	/** Appends an idle-only context edit without changing the original transcript. */
+	editContext: (edit: SessionContextEdit) => Promise<void>;
 	continue: () => Promise<SessionSdkContinuationOutcome>;
 	fork: (
 		checkpoint: SessionForkCheckpoint,

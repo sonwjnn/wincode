@@ -24,6 +24,7 @@ import {
 } from "@/shared/identifiers";
 import type { SessionCompaction } from "../compaction/types";
 import { assertCompactionMessageReferences } from "../compaction/validation";
+import { sessionContextEditSchema } from "../context-edits";
 import { withSubmissionStatus } from "../message";
 import type { SessionDatabase } from "./client";
 import type { SerializedJson } from "./schema";
@@ -33,6 +34,7 @@ import {
 	sessionCatalogDeletionState,
 	sessionCatalogVersion,
 	sessionCompaction,
+	sessionContextEdit,
 	sessionForkProvenance,
 	sessionOperationLookup,
 	sessionProjectionCursor,
@@ -954,6 +956,20 @@ export const createSessionJsonlProjection = (
 					tx.delete(session).where(eq(session.id, sessionId)).run();
 				};
 
+				const projectContextEdit = (entry: SessionLogEntry): void => {
+					assertSessionBinding();
+					const edit = sessionContextEditSchema.parse(entry.envelope.payload);
+					tx.insert(sessionContextEdit)
+						.values({
+							operationId: edit.operationId,
+							replacementText: edit.replacement?.text ?? null,
+							sequence: entry.envelope.sequence,
+							sessionId,
+							targetId: edit.targetId,
+						})
+						.run();
+				};
+
 				const projectCompaction = (entry: SessionLogEntry): void => {
 					assertSessionBinding();
 					const payload = parseSessionCompactionPayload(entry.envelope.payload);
@@ -971,10 +987,20 @@ export const createSessionJsonlProjection = (
 					const throughMessageUiId = toSessionMessageId(
 						payload.throughMessageUiId
 					);
+					const {
+						overflowSourceTurnId: rawOverflowSourceTurnId,
+						...summaryPayload
+					} = payload.summary;
 					const summary: SessionCompaction["summary"] = {
-						...payload.summary,
+						...summaryPayload,
+						...omitUndefined({
+							overflowSourceTurnId:
+								rawOverflowSourceTurnId === undefined
+									? undefined
+									: toAgentTurnId(rawOverflowSourceTurnId),
+						}),
 						coveredMessageIds:
-							payload.summary.coveredMessageIds.map(toSessionMessageId),
+							summaryPayload.coveredMessageIds.map(toSessionMessageId),
 					};
 					assertProjectedCompactionChain(tx, sessionId, payload);
 					const availableMessageIds = projectedCompactionMessageIds(
@@ -1094,6 +1120,9 @@ export const createSessionJsonlProjection = (
 					switch (envelope.type) {
 						case "session.header":
 						case "session.activation-confirmed":
+							break;
+						case "context.edited":
+							projectContextEdit(entry);
 							break;
 						case "session.forked":
 							projectForkProvenance(entry);

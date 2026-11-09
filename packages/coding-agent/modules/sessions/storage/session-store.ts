@@ -58,6 +58,7 @@ export type {
 	SessionStatisticsOptions,
 } from "../usage/session-statistics";
 
+import type { SessionContextEdit } from "../context-edits";
 import type { SessionBundleImportResult } from "../session-bundle-contract";
 import type {
 	PreparedSessionBundleExport,
@@ -248,6 +249,9 @@ export type SessionProjectionStore = {
 	listSessionUsageEntries: (
 		sessionId: SessionId
 	) => Promise<SessionUsageEntry[]>;
+	getSessionContextEdits: (
+		sessionId: SessionId
+	) => Promise<SessionContextEdit[]>;
 	createEmptySession: (
 		input: CreateEmptySessionInput
 	) => Promise<{ created?: boolean; id: SessionId }>;
@@ -332,6 +336,10 @@ export type SessionStore = Omit<
 	| "updateSession"
 	| "updateSessionSubmission"
 > & {
+	appendContextEdit: (
+		sessionId: SessionId,
+		edit: SessionContextEdit
+	) => Promise<SessionWriteOutcome>;
 	appendCompaction: (
 		input: AppendSessionCompactionInput
 	) => Promise<SessionCompactionWriteResult>;

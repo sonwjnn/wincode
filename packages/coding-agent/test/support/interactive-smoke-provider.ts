@@ -8,6 +8,15 @@ import {
 } from "@wincode/ai";
 import type { PluginFactory } from "@wincode/coding-agent";
 
+/** Successful smoke turns must distinguish completion from unknown. */
+const completedResponse = (response: FauxResponse): FauxResponse => ({
+	...response,
+	events: [
+		...(response.events ?? []),
+		{ completion: { kind: "completed" }, type: "finish" },
+	],
+});
+
 const createSmokeProvider = (workspace: string): Provider => {
 	const faux = createFauxProvider({ id: "terminal-smoke", modelId: "fake" });
 	const respond = ({ request }: FauxCall): FauxResponse => {
@@ -22,7 +31,7 @@ const createSmokeProvider = (workspace: string): Provider => {
 			return { ...fauxText("cancel-pending"), waitForAbort: true };
 		}
 		if (prompt.includes("terminal smoke after cancel")) {
-			return fauxText("after-cancel-ok");
+			return completedResponse(fauxText("after-cancel-ok"));
 		}
 		if (prompt.includes("terminal smoke tool")) {
 			const result = request.messages.at(-1);
@@ -30,9 +39,9 @@ const createSmokeProvider = (workspace: string): Provider => {
 				if (!JSON.stringify(result.content).includes("smoke-file-content")) {
 					return { error: "Read tool did not return the smoke fixture" };
 				}
-				return fauxText("tool-roundtrip-ok");
+				return completedResponse(fauxText("tool-roundtrip-ok"));
 			}
-			return {
+			return completedResponse({
 				events: [
 					{
 						input: { path: "smoke-fixture.txt" },
@@ -41,16 +50,16 @@ const createSmokeProvider = (workspace: string): Provider => {
 						type: "tool-call",
 					},
 				],
-			};
+			});
 		}
 		if (prompt.includes("terminal smoke error")) {
 			return { error: "smoke-scripted-outage" };
 		}
 		if (prompt.includes("terminal smoke recover")) {
-			return fauxText("error-recovery-ok");
+			return completedResponse(fauxText("error-recovery-ok"));
 		}
 		return {
-			...fauxText("smoke-stream-one", "smoke-stream-two"),
+			...completedResponse(fauxText("smoke-stream-one", "smoke-stream-two")),
 			delayMs: 1000,
 		};
 	};

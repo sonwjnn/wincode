@@ -10,6 +10,7 @@ import type { SessionId } from "@/shared/identifiers";
 import type { AgentSession, LiveSessionSnapshot } from "../agent-session/types";
 import type { SessionCompactionModule } from "../compaction/compaction";
 import type { ResolvedCompactionSettings } from "../compaction/config";
+import type { SessionContextEdit } from "../context-edits";
 import type { TurnToolResolver } from "../hooks/runtime-turn";
 import type { SessionSdkPluginProviderSource } from "../plugin-provider-source";
 import type {
@@ -111,6 +112,8 @@ export type HostManagerSelectionCapabilities = Pick<
  * so every observed fact comes from the Agent Session it assembled.
  */
 export type SessionHost = Readonly<{
+	/** Called only while the manager holds the Session's idle mutation gate. */
+	editContext: (edit: SessionContextEdit) => Promise<void>;
 	agentSession: AgentSession;
 	/** Forks while reusing this Host's held source writer; call through the manager's fork gate. */
 	forkSession: (
@@ -187,6 +190,10 @@ export type SessionHostManager = Readonly<{
 		operation?: "delete" | "export"
 	) => Promise<Result>;
 	withIdleForSessionFork: <Result>(
+		sessionId: SessionId,
+		action: (host: SessionHost | undefined) => Promise<Result>
+	) => Promise<Result>;
+	withIdleForSessionContextEdit: <Result>(
 		sessionId: SessionId,
 		action: (host: SessionHost | undefined) => Promise<Result>
 	) => Promise<Result>;

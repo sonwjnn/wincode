@@ -1240,6 +1240,13 @@ export class AgentSessionImpl implements AgentSession {
 			beginExecution,
 			getAssistantMessageId,
 			getError: () => this.#state.error,
+			isProjectionBlocked: () => sessionState.projectionBlocked,
+			blockFailedAttemptContext: (error) => {
+				sessionState.projectionBlocked = true;
+				sessionState.storageUncertain ||=
+					storageWriteOutcomeFromError(error)?.kind === "indeterminate";
+				publish({ error, projectionBlocked: true });
+			},
 			finishModelStep: (turnId, record) => {
 				const assistantId = getAssistantMessageId(turnId);
 				const text =
@@ -2008,6 +2015,15 @@ export class AgentSessionImpl implements AgentSession {
 			commitRecord,
 			endExecution,
 			hasPendingWork,
+			replaceContext: applyContext,
+			reportStorageError: (error) => {
+				if (isStorageBlockedWrite(error)) {
+					sessionState.projectionBlocked = true;
+					sessionState.storageUncertain ||=
+						storageWriteOutcomeFromError(error)?.kind === "indeterminate";
+				}
+				publish({ error, projectionBlocked: sessionState.projectionBlocked });
+			},
 			setExecutionViewState,
 			shutdown,
 		};

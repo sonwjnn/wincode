@@ -36,6 +36,8 @@ export type CompactionSummary = ReadonlyDeep<{
 	fileOperations?: CompactionFileOperations;
 	formatVersion: 1;
 	focus?: string;
+	/** The Agent Turn whose context overflow initiated this recovery compaction. */
+	overflowSourceTurnId?: AgentTurnId;
 	text: string;
 }>;
 

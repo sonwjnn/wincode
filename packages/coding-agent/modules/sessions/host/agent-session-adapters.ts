@@ -1,4 +1,8 @@
-import type { AgentId, StatefulAgent } from "@wincode/agent-core";
+import type {
+	AgentId,
+	SessionMessageId,
+	StatefulAgent,
+} from "@wincode/agent-core";
 import {
 	calculateModelUsageCostUsd,
 	type ProviderCollection,
@@ -12,6 +16,7 @@ import {
 	isAvailableProviderModelSelection,
 	isSameProviderModelIdentity,
 } from "@/modules/providers/provider-model-selection";
+import { failedAttemptContextEdit } from "@/modules/sessions/context-edits";
 import { sessionMessageSkillSchema } from "@/modules/sessions/message";
 import { resolveSessionModelRetryPolicy } from "@/modules/sessions/retry-policy";
 import { requireSessionWriteReady } from "@/modules/sessions/storage/session-jsonl-store";
@@ -308,6 +313,28 @@ export const createAgentSessionAdapters = (
 			requireSessionWriteReady(
 				await capabilities.getStore().commitSessionRecord(input)
 			);
+		},
+		omitFailedTurnContext: async (turnId) => {
+			const store = capabilities.getStore();
+			const records = await store.listSessionRecords(sessionId);
+			const messageIds = records
+				.filter((record) => record.turnId === turnId)
+				.flatMap((record) =>
+					record.messages
+						.filter((message) => message.role !== "user")
+						.map((message) => message.id)
+				);
+			const committed: SessionMessageId[] = [];
+			for (const messageId of messageIds) {
+				requireSessionWriteReady(
+					await store.appendContextEdit(
+						sessionId,
+						failedAttemptContextEdit(turnId, messageId)
+					)
+				);
+				committed.push(messageId);
+			}
+			return committed;
 		},
 		updateSubmissionStatus: async (input) => {
 			requireSessionWriteReady(

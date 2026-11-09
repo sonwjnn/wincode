@@ -223,7 +223,7 @@ export type CompactionRequestInput = {
 	modelRetryPolicy?: Omit<ModelRetryPolicy, "onStatus">;
 	onSummaryEvent?: (event: SessionCompactionRetryEvent) => void;
 	signal?: AbortSignal;
-	/** The Agent Turn that initiated this compaction, for diagnostics and lifecycle callbacks. */
+	/** The initiating Agent Turn; overflow compactions persist it as recovery provenance. */
 	turnId?: AgentTurnId;
 	recordSummaryUsage?: (input: {
 		compactionId: CompactionId;
@@ -1096,6 +1096,7 @@ const appendInputFor = ({
 	now,
 	summarization,
 	thinkingLevel,
+	turnId,
 }: {
 	attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 	session: CompactionSession;
@@ -1108,6 +1109,7 @@ const appendInputFor = ({
 	settings: CompactSessionInput["settings"];
 	summarySpan: readonly SessionMessage[];
 	trigger: CompactionTriggerReason;
+	turnId?: AgentTurnId;
 	estimateTokens: (messages: readonly SessionMessage[]) => number;
 	entryId: CompactionId;
 	now: () => Date;
@@ -1132,6 +1134,9 @@ const appendInputFor = ({
 		coveredMessageIds: summarySpan.map((message) => message.id),
 		...omitUndefined({ fileOperations }),
 		formatVersion: 1,
+		...omitUndefined({
+			overflowSourceTurnId: trigger === "overflow" ? turnId : undefined,
+		}),
 		text: sanitizeSummaryText(
 			withFileOperationsSection(summarization.text, fileOperations)
 		),
@@ -1652,6 +1657,7 @@ export const createSessionCompaction = ({
 		summarization,
 		trigger,
 		thinkingLevel,
+		turnId,
 	}: {
 		assertAuthority?: () => void;
 		attachmentMetadata?: readonly CompactionAttachmentMetadata[];
@@ -1674,6 +1680,7 @@ export const createSessionCompaction = ({
 		};
 		trigger: CompactionTriggerReason;
 		thinkingLevel?: ThinkingLevel;
+		turnId?: AgentTurnId;
 	}): Promise<{
 		activeMessages: SessionMessage[];
 		entry: SessionCompaction;
@@ -1695,6 +1702,7 @@ export const createSessionCompaction = ({
 				summarization,
 				trigger,
 				thinkingLevel,
+				turnId,
 			}),
 			externalizationLease,
 		};
@@ -1850,6 +1858,7 @@ export const createSessionCompaction = ({
 				thinkingLevel: summaryWasSuppliedByPlugin
 					? undefined
 					: input.summaryTarget.thinkingLevel,
+				turnId: input.turnId,
 			});
 			try {
 				await lifecycle?.completed?.(entry, lifecycleContext);

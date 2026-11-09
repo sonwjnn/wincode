@@ -39,6 +39,12 @@ import type {
 	SessionCompaction,
 } from "../compaction/types";
 import { assertCompactionMessageReferences } from "../compaction/validation";
+import {
+	FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX,
+	isFailedAttemptContextEdit,
+	type SessionContextEdit,
+	sessionContextEditSchema,
+} from "../context-edits";
 import type { SessionBundleImportResult } from "../session-bundle-contract";
 import { assessSessionForkCheckpoint } from "../session-fork-checkpoint-validation";
 import { isValidSessionLogIdentifier } from "../session-log-identifiers";
@@ -2712,6 +2718,12 @@ const remapForkCompactionPayload = (
 	const coveredMessageIds = compaction.summary.coveredMessageIds.map(
 		(messageId) => identityMap.messages.get(messageId)
 	);
+	const { overflowSourceTurnId: previousOverflowSourceTurnId, ...summary } =
+		compaction.summary;
+	const overflowSourceTurnId =
+		previousOverflowSourceTurnId === undefined
+			? undefined
+			: identityMap.turns.get(previousOverflowSourceTurnId);
 	const priorCompactionId =
 		compaction.priorCompactionId === null
 			? null
@@ -2734,7 +2746,8 @@ const remapForkCompactionPayload = (
 		priorCompactionId: priorCompactionId ?? null,
 		sequence,
 		summary: {
-			...compaction.summary,
+			...summary,
+			...omitUndefined({ overflowSourceTurnId }),
 			coveredMessageIds:
 				coveredMessageIds as SessionCompactionPayload["summary"]["coveredMessageIds"],
 		},
@@ -5540,6 +5553,19 @@ export const createSessionJsonlStore = (
 		}
 		return writeOutcome;
 	};
+	const appendContextEdit = async (
+		sessionId: SessionId,
+		input: SessionContextEdit
+	): Promise<SessionWriteOutcome> => {
+		const edit = sessionContextEditSchema.parse(input);
+		return withWriteOutcome(sessionId, edit.operationId, () =>
+			commitWrite(sessionId, {
+				operationId: edit.operationId,
+				payload: edit,
+				type: "context.edited",
+			})
+		);
+	};
 	const updateSessionSubmission = async (
 		input: UpdateSessionSubmissionInput
 	): Promise<SessionWriteOutcome> => {
@@ -7442,6 +7468,35 @@ export const createSessionJsonlStore = (
 							}
 							continue;
 						}
+						if (entry.envelope.type === "context.edited") {
+							const edit = sessionContextEditSchema.parse(
+								entry.envelope.payload
+							);
+							const targetId = identityMap.messages.get(edit.targetId);
+							if (targetId !== undefined) {
+								const editOperationId = isFailedAttemptContextEdit(
+									edit.operationId
+								)
+									? `${FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX}fork-${entry.envelope.sequence}`
+									: `fork-context-${entry.envelope.sequence}`;
+								appendLine(
+									createSessionLogEvent({
+										operationId: editOperationId,
+										payload: {
+											...edit,
+											operationId: editOperationId,
+											targetId,
+										},
+										previousHash,
+										sequence: nextSequence,
+										sessionId: targetSessionId,
+										timestamp: entry.envelope.timestamp,
+										type: "context.edited",
+									})
+								);
+							}
+							continue;
+						}
 						if (entry.envelope.type === "session.metadata-updated") {
 							appendLine(
 								createSessionLogEvent({
@@ -8173,6 +8228,7 @@ export const createSessionJsonlStore = (
 	return {
 		...projectionStore,
 		acquireSessionWriter: acquireWriter,
+		appendContextEdit,
 		appendCompaction,
 		commitSessionRecord,
 		createEmptySession,

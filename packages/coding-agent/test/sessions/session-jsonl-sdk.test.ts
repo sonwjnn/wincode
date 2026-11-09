@@ -6992,7 +6992,7 @@ test("public SDK reports a committed-but-blocked prompt without scheduling model
 		expect(await handle.continue()).toEqual({
 			kind: "rejected",
 			reason:
-				"Session work is paused because its SQLite projection is unavailable. Close and reopen it after storage recovers.",
+				"Session work is paused because durable state may be incomplete. Close and reopen the Session to reconcile storage before continuing.",
 		});
 		const laterAdmission = await handle.deliver({
 			idempotencyKey: "blocked-later-delivery",
@@ -7158,6 +7158,7 @@ test("metadata and selection replay from JSONL after the Session projection is l
 
 test("compaction checkpoints replay from JSONL and retries reuse their durable receipt", async () => {
 	const databasePath = path.join(root, "sdk-replay-compaction.sqlite");
+	const overflowSourceTurnId = agentTurnId("jsonl-overflow-source-turn");
 	const services = await openSessionServices({
 		policy: { cwd: workspace, databasePath, workspace },
 	});
@@ -7201,11 +7202,12 @@ test("compaction checkpoints replay from JSONL and retries reuse their durable r
 			summary: {
 				coveredMessageIds: [coveredMessageId],
 				formatVersion: 1 as const,
+				overflowSourceTurnId,
 				text: "Durably stored summary.",
 			},
 			throughMessageUiId: coveredMessageId,
 			tokensBefore: 256,
-			trigger: "threshold" as const,
+			trigger: "overflow" as const,
 			summarizationUsage: {
 				inputTokens: 12,
 				outputTokens: 3,
@@ -7279,7 +7281,10 @@ test("compaction checkpoints replay from JSONL and retries reuse their durable r
 		).toMatchObject({
 			id: compactionId("jsonl-compaction-retry"),
 			sequence: 1,
-			summary: { text: "Durably stored summary." },
+			summary: {
+				overflowSourceTurnId,
+				text: "Durably stored summary.",
+			},
 			summarizationUsage: { inputTokens: 12, outputTokens: 3 },
 		});
 		expect(

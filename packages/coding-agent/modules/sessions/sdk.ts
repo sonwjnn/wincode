@@ -1004,6 +1004,19 @@ const handleFor = (
 	};
 	return Object.freeze({
 		continue: () => host.agentSession.continue(),
+		editContext: async (edit) => {
+			if (disposed) {
+				throw new Error("Session handle is disposed.");
+			}
+			await capabilities
+				.getSessionHostManager()
+				.withIdleForSessionContextEdit(sessionId, async (idleHost) => {
+					if (idleHost !== host) {
+						throw new Error("Session Host is no longer open.");
+					}
+					await host.editContext(edit);
+				});
+		},
 		fork: async (checkpoint, operationId) => {
 			if (disposed) {
 				throw new Error("Session handle is disposed.");
@@ -1729,6 +1742,7 @@ export const createSessionSdkOperations = (
 			let handleDisposePromise: Promise<void> | undefined;
 			return Object.freeze({
 				continue: () => withOperation(handle.continue),
+				editContext: (edit) => withOperation(() => handle.editContext(edit)),
 				fork: (checkpoint, operationId) =>
 					withOperation(async () => {
 						const result = await handle.fork(checkpoint, operationId);

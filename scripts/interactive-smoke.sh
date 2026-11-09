@@ -120,6 +120,10 @@ fail_with_frame() {
 wait_for_text() {
   local text="$1"
   local attempts="${2:-120}"
+  capture_frame
+  # Prior scripted errors can remain visible while waiting for recovery output.
+  local initial_errors
+  initial_errors="$(printf '%s\n' "$FRAME" | grep -Ei '(^|[[:space:]])error:' | LC_ALL=C sort || true)"
   for ((attempt = 0; attempt < attempts; attempt++)); do
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
       fail_with_frame "tmux session exited before '$text' appeared."
@@ -133,8 +137,12 @@ wait_for_text() {
     if printf '%s\n' "$FRAME" | grep -Fq "$text"; then
       return 0
     fi
-    if printf '%s\n' "$FRAME" | grep -Eqi '(^|[[:space:]])error:'; then
-      fail_with_frame 'Wincode displayed a startup error.'
+    local current_errors
+    current_errors="$(printf '%s\n' "$FRAME" | grep -Ei '(^|[[:space:]])error:' | LC_ALL=C sort || true)"
+    local new_errors
+    new_errors="$(comm -13 <(printf '%s\n' "$initial_errors") <(printf '%s\n' "$current_errors") || true)"
+    if [[ -n "$new_errors" ]]; then
+      fail_with_frame 'Wincode displayed a new error while waiting.'
     fi
     sleep 0.1
   done

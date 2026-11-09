@@ -103,7 +103,7 @@ test("terminal smoke plugin uses the latest prompt after cancellation", async ()
 		}
 		expect(events).toEqual([
 			{ delta: "after-cancel-ok", type: "text-delta" },
-			{ type: "finish" },
+			{ completion: { kind: "completed" }, type: "finish" },
 		]);
 	} finally {
 		await fs.rm(workspace, { force: true, recursive: true });

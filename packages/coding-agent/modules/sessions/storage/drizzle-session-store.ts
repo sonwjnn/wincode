@@ -89,6 +89,7 @@ import {
 	sessionCatalogDeletionState,
 	sessionCatalogVersion,
 	sessionCompaction,
+	sessionContextEdit,
 	sessionForkProvenance,
 	sessionProjectionCursor,
 	sessionProjectionState,
@@ -208,6 +209,7 @@ const compactionSummarySchema = z.object({
 		.optional(),
 	formatVersion: z.literal(1),
 	focus: z.string().optional(),
+	overflowSourceTurnId: z.string().min(1).transform(toAgentTurnId).optional(),
 	text: z.string(),
 });
 
@@ -2278,6 +2280,28 @@ export const createDrizzleSessionStore = (
 				.all();
 			return Promise.resolve(
 				rows.map(({ compaction }) => toSessionCompaction(compaction))
+			);
+		},
+
+		getSessionContextEdits: (sessionId: SessionId) => {
+			if (!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)) {
+				return Promise.resolve([]);
+			}
+			const rows = db
+				.select({ edit: sessionContextEdit })
+				.from(sessionContextEdit)
+				.where(eq(sessionContextEdit.sessionId, sessionId))
+				.orderBy(asc(sessionContextEdit.sequence))
+				.all();
+			return Promise.resolve(
+				rows.map(({ edit }) => ({
+					operationId: edit.operationId,
+					replacement:
+						edit.replacementText === null
+							? null
+							: { text: edit.replacementText },
+					targetId: toSessionMessageId(edit.targetId),
+				}))
 			);
 		},
 

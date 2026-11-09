@@ -424,6 +424,13 @@ export type AgentSessionPorts = Readonly<{
 	emitCompactionEvent: (event: SessionCompactionRetryEvent) => void;
 	/** Writes one durable Session Record. */
 	commitRecord: (input: SessionCommitInput) => Promise<void>;
+	/**
+	 * Durably omits one failed Agent Turn's non-user messages from model context
+	 * and returns their ids, so a retry starts from its user message.
+	 */
+	omitFailedTurnContext: (
+		turnId: AgentTurnId
+	) => Promise<readonly SessionMessageId[]>;
 	/** Persists one exact committed Submission's processing state. */
 	updateSubmissionStatus: (
 		input: SessionSubmissionStatusUpdate
@@ -499,6 +506,8 @@ export type SessionOverflowRecoveryCommand =
 	| (SessionOverflowRecoveryBase & {
 			/** The provider or runtime reported a context overflow. */
 			error: unknown;
+			/** Omits failed attempt output before the recovery lane reopens. */
+			onUnrecovered?: () => Promise<void>;
 			trigger: "context-overflow";
 	  })
 	| (SessionOverflowRecoveryBase & {
@@ -564,6 +573,10 @@ export type AgentSessionInternalPort = Readonly<{
 	hasPendingWork: () => boolean;
 	/** Ends the session after active durable cleanup has completed. */
 	shutdown: () => Promise<void>;
+	/** Publishes a durable content-only context edit while the Host holds its idle gate. */
+	replaceContext: (messages: readonly SessionMessage[]) => void;
+	/** Surfaces a failed context edit so a blocked projection stops new scheduling. */
+	reportStorageError: (error: Error) => void;
 	/** Replaces one execution's Session View State, never another's. */
 	setExecutionViewState: (
 		turnId: AgentTurnId,

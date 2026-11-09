@@ -197,3 +197,34 @@ test("Stateful Agent owns live model context across turns and rebases compacted 
 	]);
 	await agent.shutdown();
 });
+
+test("invalidating context rebases same-ID edits before the next model request", async () => {
+	const runtimeInputs: (readonly AgentTurnMessage[])[] = [];
+	const runtime: AgentRuntime = {
+		run(turn) {
+			runtimeInputs.push(turn.input.messages);
+			return {
+				async *[Symbol.asyncIterator]() {
+					yield {
+						finishedAt: 1,
+						sequence: 0,
+						turnId: turn.id,
+						type: "agent-turn-completed",
+					};
+				},
+			};
+		},
+	};
+	const agent = createStatefulAgent({ runtime });
+	const originalUser = message("user-1", "user", "original context");
+	await consume(agent.run(buildTurn("turn-1", [originalUser])));
+
+	const editedUser = message("user-1", "user", "edited context");
+	const nextUser = message("user-2", "user", "next request");
+	agent.invalidateContext();
+	await consume(agent.run(buildTurn("turn-2", [editedUser, nextUser])));
+
+	expect(runtimeInputs[0]).toEqual([originalUser]);
+	expect(runtimeInputs[1]).toEqual([editedUser, nextUser]);
+	await agent.shutdown();
+});

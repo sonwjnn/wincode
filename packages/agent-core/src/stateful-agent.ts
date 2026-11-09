@@ -47,6 +47,8 @@ export type StatefulAgent<TQueuedSubmission = never> = Readonly<{
 	steer: (message: AgentTurnMessage) => void;
 	getQueuedSubmissions: () => readonly TQueuedSubmission[];
 	getSnapshot: () => StatefulAgentSnapshot<TQueuedSubmission>;
+	/** Rebase the next run from its supplied model messages. */
+	invalidateContext: () => void;
 	hasPendingSubmissionTransition: () => boolean;
 	/** Selects the next idle input lane when an application explicitly requests execution. */
 	selectNextInput: (pending: {
@@ -260,6 +262,7 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 	let activeTurnId: AgentTurnId | null = null;
 	let closed = false;
 	let context: readonly AgentTurnMessage[] = [];
+	let contextInvalidated = false;
 	const steeringMessages: AgentTurnMessage[] = [];
 	const queuedSubmissions: TQueuedSubmission[] = [];
 	let queuedSubmissionCommitId: string | undefined;
@@ -523,6 +526,15 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 			);
 		}
 	};
+	const invalidateContext = (): void => {
+		if (activeTurnId !== null) {
+			throw new AgentInvariantError(
+				"invalid-transition",
+				"A Stateful Agent cannot invalidate model context during an Agent Turn."
+			);
+		}
+		contextInvalidated = true;
+	};
 	const prepareRuntimeTurn = (turn: AgentTurn): AgentTurn => {
 		const transientContextId = toSessionMessageId("skill-context");
 		const inputMessages = turn.input.messages.filter(
@@ -536,11 +548,13 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 			lastTerminalEvent !== null &&
 			lastTerminalEvent.type !== "agent-turn-completed";
 		const requiresContextRebase =
+			contextInvalidated ||
 			context.length === 0 ||
 			priorTurnFailed ||
 			context.some(({ id }) => !inputIds.has(id));
 		if (requiresContextRebase) {
 			context = inputMessages;
+			contextInvalidated = false;
 		} else {
 			const newUserMessages = inputMessages.filter(
 				(message) => message.role === "user" && !existingUserIds.has(message.id)
@@ -651,6 +665,7 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 		enqueueSubmission,
 		getQueuedSubmissions,
 		getSnapshot,
+		invalidateContext,
 		hasPendingSubmissionTransition,
 		selectNextInput,
 		replaceQueuedSubmission,

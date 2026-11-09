@@ -177,6 +177,39 @@ never resolves co-selected Skill or Custom Command intents.
 
 `SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store. `Ctrl+E` exports the selected Session as a local bundle directory; `Ctrl+O` imports a bundle into the current workspace.
 
+### Context edits
+
+The SDK exposes append-only context edits as `handle.editContext({ operationId,
+ targetId, replacement })`, where replacement is `{ text }` or `null`. A
+replacement changes only the text the model sees for that message. A `null`
+edit removes a text-only message's content; for a message carrying a Tool
+Call it removes the other content, clears result or error text, and retains the
+protocol envelope. The original transcript and
+history pages stay unchanged. Retrying
+the same operation and payload is idempotent, and the latest committed edit for
+a target wins. An omitted message can be replaced again using its original ID.
+
+Edits require an idle Host and are appended as `context.edited` JSONL events.
+Resume and bundle import rebuild model context from the original messages plus
+these events. Tool output edits retain Tool Call IDs, names, inputs and success
+or failure status; omitting Tool content empties the output rather than dropping
+the protocol envelope, because an unpaired call or result fails the next
+request. Replacement text replaces attachments and file mentions in model
+context, not their original durable references. Compaction summaries and
+messages already removed by compaction are not editable. A fork inherits only
+edits inside its checkpoint prefix, with target message IDs remapped.
+
+A terminal `failed` or `cancelled` Agent Turn uses the same mechanism: every
+non-user message it committed is omitted from model context with a
+turn-derived operation ID, so a retry starts from the user message instead of
+replaying the attempt's text and completed Tool Calls. Operation IDs beginning
+with `omit-failed-` are reserved for this repair. The attempts stay in the
+Session Transcript, and nothing in the workspace is rolled back. If an omission
+write cannot be confirmed, the live Host blocks further scheduling; reopening
+reconciles missing omissions before rebuilding model context. Retrying a message
+whose *completed* turn ran Tool Calls is still refused; only a failed attempt
+becomes retryable.
+
 ### Session bundles
 
 `wincode sessions export <session-id> <directory>` writes a portable bundle, and `wincode sessions import <directory>` validates and imports one. The public Session SDK and RPC expose the same import operation. Imports verify the manifest, log integrity and resource bounds, and require every referenced attachment to be present and valid before publishing Session history. Repeating the same import is a no-op; a different log using an existing Session ID is a conflict.
